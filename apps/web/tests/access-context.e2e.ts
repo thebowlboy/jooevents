@@ -124,7 +124,23 @@ test('a malformed or failed context remains a recoverable connection problem', a
 });
 
 test('pending review names the workspace and retains context when sign-out fails', async ({ page }) => {
-  await page.route('**/api/me/access-context', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(pending) }));
+  let contextRequests = 0;
+  let releaseRefresh!: () => void;
+  const refreshGate = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+  await page.route('**/api/me/access-context', async (route) => {
+    contextRequests += 1;
+    if (contextRequests === 1) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(pending) });
+      return;
+    }
+    await refreshGate;
+    await route.fulfill({
+      status: 502,
+      contentType: 'application/json',
+      headers: { 'x-correlation-id': 'corr_status' },
+      body: JSON.stringify({ code: 'upstream_failed', message: 'Internal status adapter failed', retryable: true })
+    });
+  });
   await page.route('**/api/entry/sign-out', (route) => route.fulfill({
     status: 502,
     contentType: 'application/json',
@@ -135,7 +151,24 @@ test('pending review names the workspace and retains context when sign-out fails
   await expect(page).toHaveURL('/access/pending');
   await expect(page.getByRole('heading', { name: 'Your access request is under review' })).toBeVisible();
   await expect(page.getByText('Summit Operations')).toBeVisible();
-  await expect(page.getByText(/approval email will be sent to ada@example.com/)).toBeVisible();
+  await expect(page.getByText('ada@example.com')).toBeVisible();
+  await expect(page.getByText("We'll email this address when your access is approved.")).toBeVisible();
+  await expect(page.locator('.ui-avatar')).toHaveCount(0);
+  const panelBeforeRefresh = await page.locator('.entry-panel').boundingBox();
+  const checkStatus = page.getByRole('button', { name: 'Check status' });
+  await checkStatus.click();
+  await expect(page.getByRole('heading', { name: 'Your access request is under review' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Checking status' })).toHaveAttribute('aria-busy', 'true');
+  const panelDuringRefresh = await page.locator('.entry-panel').boundingBox();
+  expect(Math.abs((panelBeforeRefresh?.height ?? 0) - (panelDuringRefresh?.height ?? 0))).toBeLessThan(2);
+  releaseRefresh();
+  await expect(checkStatus).toBeEnabled();
+  await expect(page.getByRole('alert')).toContainText("Couldn't check status");
+  await expect(page.getByRole('alert')).toContainText('Your access has not changed.');
+  await expect(page.getByText(/upstream|adapter|upstream_failed|502/)).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Your access request is under review' })).toBeVisible();
+  const pendingAlignment = await page.getByRole('heading', { name: 'Your access request is under review' }).evaluate((heading) => getComputedStyle(heading).textAlign);
+  expect(pendingAlignment).toBe('center');
   await page.getByRole('button', { name: 'Sign out' }).click();
   await expect(page.getByText('You are still signed in.')).toBeVisible();
   await expect(page.getByText('Ada Lovelace')).toBeVisible();

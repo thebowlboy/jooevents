@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Alert, Avatar, Badge, Button } from '$lib/ui';
+  import { Alert, Badge, Button } from '$lib/ui';
   import { RefreshCw } from 'lucide-svelte';
   import type { AccessEntryState, BlockedState, PendingState } from '../AccessEntryController';
   import { blockedCopy, noticeCopy } from '../copy';
@@ -56,15 +56,20 @@
     {/if}
     <p class="support">Support code: <code>{state.correlationId}</code></p>
   {:else if pending}
-    <Avatar name={pending.user.displayName} size="lg" />
-    <Badge tone="warning">Awaiting approval</Badge>
-    <h1 data-entry-heading tabindex="-1">Your access request is under review</h1>
-    <p><strong>{pending.workspace.name}</strong> needs to approve your membership before you can see event data.</p>
-    <div class="identity"><strong>{pending.user.displayName}</strong>{#if pending.user.primaryEmail}<span>{pending.user.primaryEmail}</span>{/if}</div>
-    <Alert title="We'll let you know" message={`An approval email will be sent to ${pending.user.primaryEmail ?? 'your signed-in address'}.`} tone="info" />
+    <div class="pending-intro">
+      <Badge tone="warning">Awaiting approval</Badge>
+      <h1 data-entry-heading tabindex="-1">Your access request is under review</h1>
+      <p><strong>{pending.workspace.name}</strong> needs to approve your membership before you can see event data.</p>
+    </div>
+    <div class="pending-account">
+      <span class="pending-account__label">Signed in as</span>
+      <strong>{pending.user.displayName}</strong>
+      {#if pending.user.primaryEmail}<span>{pending.user.primaryEmail}</span>{/if}
+      <p>We'll email {pending.user.primaryEmail ? 'this address' : 'your signed-in address'} when your access is approved.</p>
+    </div>
     {#if state.kind === 'sign_out_error'}<Alert title="Sign-out could not finish" message="You are still signed in. Check your connection and try again." tone="danger" />{/if}
-    <div class="actions"><Button onclick={onCheck}><RefreshCw aria-hidden="true" /> Check status</Button><Button variant="secondary" onclick={onSignOut}>Sign out</Button></div>
-    <a class="help" href="/help">Get help</a>
+    <div class="actions"><Button onclick={onCheck} loading={pending.checking}><RefreshCw aria-hidden="true" /> {pending.checking ? 'Checking status' : 'Check status'}</Button><Button variant="secondary" onclick={onSignOut}>Sign out</Button></div>
+    {#if pending.checkError}<Alert title="Couldn't check status" message="Your access has not changed. Check your connection and try again." tone="danger" />{/if}
   {:else if blocked}
     {@const copy = blockedCopy[blocked.code]}
     <h1 data-entry-heading tabindex="-1">{copy.heading}</h1>

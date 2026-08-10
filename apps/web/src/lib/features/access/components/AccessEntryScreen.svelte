@@ -25,6 +25,10 @@
     : state.kind === 'blocked' || state.kind === 'sign_out_error' ? 'Workspace access unavailable · JooEvents'
     : state.kind === 'context_error' ? 'Access check problem · JooEvents'
     : 'Checking access · JooEvents');
+  const contentLed = $derived(
+    state.kind === 'pending_review' ||
+    (state.kind === 'sign_out_error' && state.previous.kind === 'pending_review')
+  );
 
   $effect(() => {
     controller.setRoute({
@@ -65,12 +69,12 @@
   <meta name="robots" content="noindex, nofollow" />
 </svelte:head>
 
-<AccessEntryFrame>
+<AccessEntryFrame {contentLed}>
   <EntryState
     {state}
     onGoogle={() => userAction(() => controller.startGoogle())}
     onRetry={() => userAction(() => controller.resolve())}
-    onCheck={() => userAction(() => controller.checkStatus())}
+    onCheck={() => void controller.checkStatus()}
     onSignOut={() => userAction(() => controller.signOut())}
   />
 </AccessEntryFrame>

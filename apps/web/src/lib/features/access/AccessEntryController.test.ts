@@ -41,3 +41,30 @@ test('failed sign-out preserves the pending server-backed view', async () => {
   if (instance.state.kind === 'sign_out_error') expect(instance.state.previous.kind).toBe('pending_review');
   instance.dispose();
 });
+
+test('checking pending access preserves the screen until the refreshed context arrives', async () => {
+  const pending: AccessContext = { state: 'pending_review', user: { id: 'user_ada', displayName: 'Ada' }, membership: { id: 'membership_ada', workspaceId: 'workspace_summit', status: 'pending_review', version: 1 }, workspace: { id: 'workspace_summit', name: 'Summit Operations' } };
+  let requestCount = 0;
+  let releaseRefresh!: (context: AccessContext) => void;
+  const instance = new AccessEntryController({
+    getContext: async () => {
+      requestCount += 1;
+      if (requestCount === 1) return { kind: 'success', data: pending };
+      return new Promise((resolve) => { releaseRefresh = (context) => resolve({ kind: 'success', data: context }); });
+    },
+    startGoogle: async () => ({ kind: 'error', error: { code: 'start_failed', retryable: true } }),
+    signOut: async () => ({ kind: 'error', error: { code: 'sign_out_failed', retryable: true } }),
+    navigate: () => undefined
+  });
+  instance.setRoute({ path: '/access/pending' });
+  await instance.resolve({ announceDelay: false });
+
+  const refresh = instance.checkStatus();
+  expect(instance.state.kind).toBe('pending_review');
+  if (instance.state.kind === 'pending_review') expect(instance.state.checking).toBe(true);
+  releaseRefresh(pending);
+  await refresh;
+  expect(instance.state.kind).toBe('pending_review');
+  if (instance.state.kind === 'pending_review') expect(instance.state.checking).toBe(false);
+  instance.dispose();
+});

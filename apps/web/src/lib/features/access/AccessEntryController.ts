@@ -3,7 +3,13 @@ import type { ApiResult, SafeApiError } from '$lib/api/client';
 import type { EntryNotice } from './copy';
 import { safeOperatorReturnPath } from './return-path';
 
-export type PendingState = { readonly kind: 'pending_review'; readonly user: SafeUser; readonly workspace: SafeWorkspace };
+export type PendingState = {
+  readonly kind: 'pending_review';
+  readonly user: SafeUser;
+  readonly workspace: SafeWorkspace;
+  readonly checking: boolean;
+  readonly checkError?: SafeApiError;
+};
 export type BlockedState = { readonly kind: 'blocked'; readonly code: 'suspended' | 'deactivated' | 'not_admitted'; readonly correlationId?: string };
 
 export type AccessEntryState =
@@ -55,17 +61,20 @@ export class AccessEntryController {
     this.#notice = input.notice;
   }
 
-  async resolve(options: { readonly announceDelay?: boolean } = {}) {
+  async resolve(options: { readonly announceDelay?: boolean; readonly retainState?: boolean; readonly reportFailure?: boolean } = {}) {
     if (this.#disposed) return;
     this.#clearRetry();
     this.#abort?.abort('superseded');
     const abort = new AbortController();
     this.#abort = abort;
     const generation = ++this.#generation;
-    this.#set({ kind: 'resolving', delayed: false });
-    this.#resolverDelay = setTimeout(() => {
-      if (generation === this.#generation && this.#state.kind === 'resolving') this.#set({ kind: 'resolving', delayed: true });
-    }, options.announceDelay === false ? 10_000 : 300);
+    const retainedState = options.retainState ? this.#state : undefined;
+    if (!retainedState) {
+      this.#set({ kind: 'resolving', delayed: false });
+      this.#resolverDelay = setTimeout(() => {
+        if (generation === this.#generation && this.#state.kind === 'resolving') this.#set({ kind: 'resolving', delayed: true });
+      }, options.announceDelay === false ? 10_000 : 300);
+    }
 
     let result: ApiResult<AccessContext>;
     try {
@@ -77,6 +86,18 @@ export class AccessEntryController {
     if (generation !== this.#generation || abort.signal.aborted || this.#disposed) return;
     this.#clearResolverDelay();
     if (result.kind === 'error') {
+      if (retainedState) {
+        if (retainedState.kind === 'pending_review') {
+          this.#set({
+            ...retainedState,
+            checking: false,
+            ...(options.reportFailure ? { checkError: result.error } : {})
+          });
+        } else {
+          this.#set(retainedState);
+        }
+        return;
+      }
       this.#set({ kind: 'context_error', error: result.error });
       return;
     }
@@ -103,14 +124,21 @@ export class AccessEntryController {
     this.#set({ kind: 'anonymous', notice: 'signed_out' });
   }
 
-  async checkStatus() { await this.resolve(); }
+  async checkStatus() {
+    const current = this.#state.kind === 'sign_out_error' ? this.#state.previous : this.#state;
+    if (current.kind !== 'pending_review' || current.checking) return;
+    this.#set({ ...current, checking: true, checkError: undefined });
+    await this.resolve({ retainState: true, reportFailure: true });
+  }
 
   handleVisibility(visible: boolean) {
     if (!visible) {
       this.#clearRetry();
       return;
     }
-    if (this.#state.kind === 'provisioning' || this.#state.kind === 'pending_review' || this.#state.kind === 'blocked') void this.resolve({ announceDelay: false });
+    if (this.#state.kind === 'provisioning' || this.#state.kind === 'pending_review' || this.#state.kind === 'blocked') {
+      void this.resolve({ announceDelay: false, retainState: true });
+    }
   }
 
   dispose() {
@@ -135,7 +163,7 @@ export class AccessEntryController {
         return;
       case 'pending_review':
         this.#provisioningStartedAt = undefined;
-        this.#set({ kind: 'pending_review', user: context.user, workspace: context.workspace });
+        this.#set({ kind: 'pending_review', user: context.user, workspace: context.workspace, checking: false });
         if (this.#currentPath !== '/access/pending') await this.dependencies.navigate('/access/pending', true);
         return;
       case 'blocked':
