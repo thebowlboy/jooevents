@@ -1,0 +1,191 @@
+/* Entry is part of the eagerly loaded shell so a client-rendered route cannot paint
+   before its geometry and async-state contract are available. */
+@layer je.features {
+  .entry-page {
+    min-height: 100svh;
+    /* Anchored to an optically centered top offset rather than true centering:
+       any state growth (errors, notices, long copy) extends downward only, so
+       nothing above the primary action ever moves. */
+    padding: max(clamp(3rem, 16svh, 9rem), env(safe-area-inset-top)) max(var(--je-space-4), env(safe-area-inset-right)) max(var(--je-space-5), env(safe-area-inset-bottom)) max(var(--je-space-4), env(safe-area-inset-left));
+    display: grid;
+    grid-template-columns: minmax(0, 27rem);
+    place-content: start center;
+    gap: var(--je-space-5);
+    /* Sunrise horizon: a soft coral dawn rising from the bottom edge, kept below
+       the panel so the glow never competes with the task. */
+    background:
+      radial-gradient(85rem 44rem at 50% 118%, var(--je-color-action-soft), transparent 72%),
+      radial-gradient(55rem 26rem at 50% 122%, color-mix(in srgb, var(--je-color-action-soft-hover) 75%, transparent), transparent 64%),
+      linear-gradient(180deg, var(--je-color-canvas), var(--je-color-page));
+  }
+
+  .entry-main,
+  .entry-panel { width: 100%; }
+
+  /* Identity lives on the page; the panel is only the task. */
+  .entry-main {
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr);
+  }
+
+  .entry-panel {
+    --je-entry-alignment: center;
+    display: grid;
+    /* The content row takes leftover height, so when the panel fills the mobile
+       viewport the composition centers instead of floating above dead space. */
+    grid-template-rows: minmax(0, 1fr);
+    padding: clamp(var(--je-space-6), 6vw, var(--je-space-10));
+    border: 1px solid color-mix(in srgb, var(--je-color-action) 18%, var(--je-color-border));
+    border-radius: var(--je-radius-lg);
+    background: var(--je-color-surface);
+    box-shadow:
+      0 24px 64px color-mix(in srgb, var(--je-color-action) 12%, rgb(42 37 34 / 0.1)),
+      0 6px 18px rgb(42 37 34 / 0.06);
+  }
+
+  /* Identity group: mark, wordmark, and tagline sit tight (space-2); the group is
+     separated from the task block by a section break (space-10 on the tagline). */
+  .entry-brand {
+    width: min(100%, 13.5rem);
+    display: block;
+    margin: 0 auto var(--je-space-2);
+    text-decoration: none;
+  }
+
+  .entry-brand img {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+
+  .entry-tagline {
+    max-width: 30ch;
+    margin: 0 auto var(--je-space-6);
+    color: var(--je-color-text-muted);
+    font-size: var(--je-font-size-sm);
+    line-height: var(--je-leading-snug);
+    text-align: center;
+    text-wrap: balance;
+  }
+
+  .entry-content {
+    min-width: 0;
+    /* Reserves the larger of the delayed resolver (skeleton plus status line) and
+       the ordinary anonymous composition, so no entry state moves the panel. */
+    min-block-size: 9.5rem;
+    display: grid;
+    text-align: var(--je-entry-alignment);
+  }
+
+  /* Task block: siblings sit at space-4; the L1 provider button earns extra
+     surrounding space through its own margin-block. Top-aligned inside the
+     reserved footprint so any growth extends strictly downward. */
+  .entry-state {
+    min-width: 0;
+    display: grid;
+    align-content: start;
+    justify-items: var(--je-entry-alignment, center);
+    gap: var(--je-space-4);
+    text-align: var(--je-entry-alignment, center);
+  }
+
+  .entry-state h1 { max-width: 17ch; margin: 0; font-family: var(--je-font-body); font-size: var(--je-font-size-xl); font-weight: 700; line-height: var(--je-leading-tight); letter-spacing: -.01em; }
+  .entry-state h1:focus { outline: none; }
+  .entry-state p { max-width: 42ch; margin: 0; color: var(--je-color-text-muted); line-height: 1.65; overflow-wrap: anywhere; }
+  .entry-state .ui-alert, .entry-state .ui-button, .entry-state .google-button { max-width: 100%; }
+  .entry-state > .google-button { margin-block: var(--je-space-2); }
+  .entry-state .identity { display: grid; justify-items: var(--je-entry-alignment, center); gap: var(--je-space-1); max-width: 100%; }
+  .entry-state .identity span { color: var(--je-color-text-muted); overflow-wrap: anywhere; }
+  .entry-state .actions { width: 100%; display: flex; align-items: center; justify-content: var(--je-entry-alignment, center); flex-wrap: wrap; gap: var(--je-space-3); }
+  .entry-state .help { color: var(--je-color-action); font-weight: 700; padding: .4rem 0; }
+  .entry-state .help:focus-visible { outline: 3px solid var(--je-color-focus); outline-offset: 3px; }
+  .entry-state .support, .entry-state .status { font-size: var(--je-font-size-sm); }
+  .entry-state .entry-aside { max-width: none; color: var(--je-color-text-muted); font-size: var(--je-font-size-sm); }
+
+  /* Action failure sits directly under the control that failed: a soft centered
+     danger panel, title plus next step, with the support code grouped beneath. */
+  .entry-state .entry-error {
+    display: grid;
+    gap: var(--je-space-1);
+    width: 100%;
+    padding: var(--je-space-3) var(--je-space-4);
+    border-radius: var(--je-radius-surface);
+    background: color-mix(in srgb, var(--je-color-danger-soft) 70%, var(--je-color-surface));
+    font-size: var(--je-font-size-sm);
+    /* A fresh failure re-fades briefly (keyed on the error) so "it changed" is
+       visible without any movement; retries keep the previous message steady. */
+    animation: je-error-in var(--je-duration-fast) var(--je-ease-out);
+  }
+
+  .entry-state .entry-error strong { color: var(--je-color-danger); }
+  .entry-state .entry-error span { color: var(--je-color-text-muted); }
+  .entry-state code { overflow-wrap: anywhere; }
+  .entry-state .resolver { width: 100%; display: grid; gap: var(--je-space-3); padding-block: var(--je-space-2); }
+  .entry-state .resolver span { height: 1rem; margin-inline: auto; border-radius: var(--je-radius-round); background: var(--je-color-surface-sunken); }
+  .entry-state .resolver span:nth-child(1) { width: 38%; height: 1.65rem; }
+  .entry-state .resolver span:nth-child(2) { width: 100%; height: 3rem; border-radius: var(--je-radius-control); }
+  .entry-state .entry-progress { width: 100%; height: .35rem; overflow: hidden; border-radius: var(--je-radius-round); background: var(--je-color-surface-sunken); }
+  .entry-state .entry-progress span { display: block; width: 45%; height: 100%; background: var(--je-color-info); animation: je-entry-progress var(--je-duration-loop) var(--je-ease) infinite alternate; }
+
+  /* Google-mandated identity (standard G, white surface, border gray, label) with
+     the system's button affordances: control radius, resting elevation, hover and
+     press response, and token-driven motion. */
+  .google-button {
+    position: relative;
+    width: 100%;
+    min-height: var(--je-control-height-lg);
+    padding: .65rem 3rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #747775;
+    border-radius: var(--je-radius-control);
+    color: #1f1f1f;
+    background: #fff;
+    font: 600 .875rem/1.25 Arial, sans-serif;
+    letter-spacing: .01em;
+    cursor: pointer;
+    box-shadow: var(--je-shadow-xs);
+    transition:
+      background var(--je-duration-fast) var(--je-ease),
+      border-color var(--je-duration-fast) var(--je-ease),
+      box-shadow var(--je-duration-fast) var(--je-ease),
+      transform var(--je-duration-fast) var(--je-ease);
+  }
+  .google-button:hover:not(:disabled) { background: #f8faff; border-color: #5f6368; box-shadow: var(--je-shadow-sm); }
+  @media (prefers-reduced-motion: no-preference) {
+    .google-button:hover:not(:disabled) { transform: translateY(-1px); }
+    .google-button:active:not(:disabled) { transform: translateY(0); }
+  }
+  .google-button:focus-visible { outline: 3px solid var(--je-color-focus); outline-offset: 3px; }
+  .google-button:disabled { cursor: wait; opacity: .72; box-shadow: none; }
+  .google-button__icon { position: absolute; left: .9rem; display: grid; width: 1.125rem; height: 1.125rem; }
+  .google-button svg { width: 100%; height: 100%; }
+  .google-button__spinner { position: absolute; right: 1rem; width: 1rem; height: 1rem; border: 2px solid #dadce0; border-top-color: #4285f4; border-radius: 50%; animation: je-spin var(--je-duration-spin) linear infinite; }
+
+  @media (max-width: 36rem) {
+    .entry-page {
+      grid-template-columns: minmax(0, 1fr);
+      place-content: stretch;
+      padding: max(var(--je-space-6), env(safe-area-inset-top)) max(var(--je-space-5), env(safe-area-inset-right)) max(var(--je-space-8), env(safe-area-inset-bottom)) max(var(--je-space-5), env(safe-area-inset-left));
+      background: var(--je-color-surface);
+    }
+    .entry-panel { border: 0; border-radius: 0; box-shadow: none; padding: 0; }
+    /* A fixed upper offset instead of viewport-centering: the stack sits in the
+       upper middle and stays put when states grow. */
+    .entry-state { padding-block-start: clamp(2rem, 14svh, 8rem); }
+  }
+
+  @media (max-width: 28rem) {
+    .entry-state .actions { align-items: stretch; flex-direction: column; }
+    .entry-state .actions .ui-button, .entry-state .actions .help { width: 100%; text-align: center; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .entry-state .entry-progress span { width: 100%; animation: none; }
+    .google-button__spinner { border-color: #4285f4; animation: none; }
+  }
+}
+
+@keyframes je-entry-progress { from { transform: translateX(-15%); } to { transform: translateX(140%); } }
+@keyframes je-error-in { from { opacity: 0; } }

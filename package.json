@@ -1,0 +1,23 @@
+{
+  "name": "jooevents",
+  "private": true,
+  "version": "0.0.0",
+  "license": "Apache-2.0",
+  "packageManager": "bun@1.3.6",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "bun run --cwd apps/web dev",
+    "dev:server": "bun run --cwd apps/server dev",
+    "start:server": "bun run apps/server/src/entry/bun.ts",
+    "build": "bun run --cwd apps/web build",
+    "check": "bun run --workspaces check && ./scripts/check-motion.sh",
+    "check:motion": "./scripts/check-motion.sh",
+    "check:public-boundary": "./scripts/check-public-boundary.sh",
+    "test": "bun test",
+    "test:e2e": "bun run --cwd apps/web test:e2e",
+    "preview": "bun run --cwd apps/web preview"
+  }
+}

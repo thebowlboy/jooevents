@@ -1,0 +1,26 @@
+node_modules/
+.svelte-kit/
+dist/
+.env
+.env.*
+!.env.example
+playwright-report/
+test-results/
+*.log
+.DS_Store
+
+# Public repository boundary. Private workspace tooling may mount ignored
+# symlinks at these paths for local development.
+/apps/web/build
+/apps/web/static/reviews
+/apps/web/tests/private
+/skills
+
+# Internal agent instructions and development-process documentation live in the
+# sibling private repository. Public docs are limited to user/operator/reference use.
+/AGENTS.md
+/CLAUDE.md
+/docs/development/
+/docs/internal/
+/docs/decisions/
+/docs/implementation/

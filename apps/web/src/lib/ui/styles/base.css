@@ -1,0 +1,107 @@
+@layer reset {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html {
+    font-size: var(--je-font-size-root);
+    scroll-padding-top: calc(var(--je-topbar-height) + 0.5rem);
+    scrollbar-gutter: stable;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    html {
+      scroll-behavior: smooth;
+    }
+  }
+
+  html,
+  body {
+    min-height: 100%;
+    margin: 0;
+  }
+
+  body {
+    background: var(--je-color-canvas);
+    color: var(--je-color-text);
+    font-family: var(--je-font-body);
+    font-size: var(--je-font-size-base);
+    line-height: var(--je-leading-normal);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    color: inherit;
+    font: inherit;
+  }
+
+  button,
+  a {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  img,
+  svg {
+    display: block;
+    max-width: 100%;
+  }
+
+  a {
+    color: var(--je-color-link);
+    text-underline-offset: 0.18em;
+  }
+
+  ::selection {
+    background: var(--je-color-action-soft-hover);
+    color: var(--je-color-text);
+  }
+}
+
+@layer je.base {
+  h1,
+  h2,
+  h3,
+  p {
+    margin-block-start: 0;
+  }
+
+  h1,
+  h2,
+  h3 {
+    color: var(--je-color-text);
+    line-height: var(--je-leading-tight);
+  }
+
+  code,
+  kbd,
+  pre {
+    font-family: var(--je-font-mono);
+  }
+
+  kbd {
+    min-width: 1.5rem;
+    padding: 0.125rem 0.35rem;
+    border: 1px solid var(--je-color-border-strong);
+    border-bottom-width: 2px;
+    border-radius: var(--je-radius-xs);
+    background: var(--je-color-surface);
+    color: var(--je-color-text-muted);
+    font-size: var(--je-font-size-2xs);
+    line-height: 1.4;
+    text-align: center;
+  }
+
+  :focus-visible {
+    outline: 2px solid transparent;
+    box-shadow: var(--je-focus-ring);
+  }
+}

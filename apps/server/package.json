@@ -1,0 +1,20 @@
+{
+  "name": "@jooevents/server",
+  "private": true,
+  "version": "0.0.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": { "check": "tsc --noEmit", "test": "bun test", "dev": "bun --watch src/entry/bun.ts", "start": "bun src/entry/bun.ts" },
+  "dependencies": {
+    "@hono/zod-openapi": "1.5.2",
+    "@jooevents/application": "workspace:*",
+    "@jooevents/contracts": "workspace:*",
+    "@jooevents/identity-access": "workspace:*",
+    "@jooevents/persistence": "workspace:*",
+    "better-auth": "1.6.26",
+    "drizzle-orm": "0.45.2",
+    "hono": "4.13.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": { "bun-types": "1.3.6", "typescript": "6.0.3" }
+}
