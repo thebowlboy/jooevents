@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import {
+    AlertTriangle,
     ArrowDown,
     ArrowRight,
     Bell,
@@ -10,6 +11,7 @@
     ChevronLeft,
     ChevronRight,
     Clock,
+    Columns2,
     Command,
     Copy,
     Download,
@@ -47,17 +49,73 @@
     Badge,
     Button,
     Checkbox,
+    ClampedText,
+    DatePicker,
+    DescribedSelect,
     Field,
+    Marked,
     Modal,
+    Popover,
     Progress,
     Radio,
-    Switch
+    markArrival,
+    statusIcon,
+    Switch,
+    Term,
+    TimezoneCombobox
   } from '$lib/ui';
+  import { matchFields, parseSearch, type MatchRange } from '$lib/api/search';
   import type { Density } from '$lib/theme/theme-contract';
   import SectionHeading from './SectionHeading.svelte';
   import ShowcaseCard from './ShowcaseCard.svelte';
   import ThemeStudio from './ThemeStudio.svelte';
   import TokenSwatch from './TokenSwatch.svelte';
+
+  /* One query per row, because each row demonstrates a different reach: a hit
+     in the title, a hit in body text the title never showed, and a hit on a
+     name that plain ASCII should still reach. Terms combine with AND across a
+     record, so a single query spanning all three would have to appear in all
+     three — which is a different claim than the one being made here. */
+  const SEARCH_SPECIMEN = [
+    {
+      query: 'kubernetes',
+      title: 'Scaling Kubernetes Without a Platform Team',
+      abstract: 'What broke first, what we kept, and the runbook that survived.',
+      speaker: 'Marc Dubois'
+    },
+    {
+      query: 'queue',
+      title: 'Durable Agent Jobs: A Queueing Confession',
+      abstract: 'Retries at scale, and the queue we should have built instead.',
+      speaker: 'Tomás Rivera'
+    },
+    {
+      query: 'sorensen',
+      title: 'Consensus Under Partition',
+      abstract: 'Where quorum maths stops helping and operations starts.',
+      speaker: 'Mikkel Sørensen'
+    }
+  ];
+
+  /* The whole row is matched at once, exactly as a real row does it, so the
+     specimen cannot drift from the behaviour it is demonstrating. */
+  function specimenMatch(row: (typeof SEARCH_SPECIMEN)[number]) {
+    return matchFields(
+      [
+        { text: row.title, space: 'body', weight: 'primary' },
+        { text: row.abstract, space: 'body', weight: 'secondary' },
+        { text: row.speaker, space: 'identity', weight: 'primary' }
+      ],
+      parseSearch(row.query)
+    );
+  }
+
+  function fieldRanges(
+    match: ReturnType<typeof specimenMatch>,
+    index: number
+  ): readonly MatchRange[] {
+    return match?.fields[index]?.ranges ?? [];
+  }
 
   const navItems = [
     { id: 'foundations', label: 'Foundations', hint: 'Color, type, spacing' },
@@ -96,6 +154,7 @@
   let reviewMode = $state('assigned');
   let showPassword = $state(false);
   let modalOpen = $state(false);
+  let compareOpen = $state(false);
   let drawerOpen = $state(false);
   let toastVisible = $state(false);
   let announcement = $state('');
@@ -163,6 +222,15 @@
 
   function removeTrack(track: string) {
     selectedTracks = selectedTracks.filter((candidate) => candidate !== track);
+  }
+
+  // The arrival mark is time-based, so the specimen is driven rather than static:
+  // pressing "Take me to it" marks the row exactly as a scoped link would, and the
+  // release behaviour (hold, then go on the next real activity) is the thing to
+  // watch. `markArrival` returns its own release, so the demo needs no timer.
+  let arrivalRow = $state<HTMLElement>();
+  function demoArrival() {
+    markArrival(arrivalRow ?? null);
   }
 
   function badgeTone(status: string): 'success' | 'warning' | 'danger' | 'info' | 'lavender' {
@@ -257,7 +325,7 @@
           </div>
         </ShowcaseCard>
 
-        <ShowcaseCard title="Typography" description="Merriweather creates a few human moments. Open Sans does the operational work.">
+        <ShowcaseCard title="Typography" description="Merriweather creates a few human moments. Inter does the operational work.">
           <div class="type-specimens">
             <div class="type-specimens__display"><span>Display / 700</span><strong>A schedule people trust.</strong></div>
             <div><span>Body / 400</span><p>Speaker information remains readable even when the surrounding interface is dense.</p></div>
@@ -409,11 +477,28 @@
             <Field id="event-track" label="Track">
               {#snippet children({ id, describedBy })}<select class="ui-select" {id} aria-describedby={describedBy}><option>Operations</option><option>Design</option><option>AI</option><option>Community</option></select>{/snippet}
             </Field>
+            <Field id="busy-select" label="Applying a change" description="The waiting control marks itself; its siblings merely disable.">
+              {#snippet children({ id, describedBy })}<span class="ui-select-wait"><select class="ui-select" {id} aria-describedby={describedBy} disabled aria-busy="true"><option>Speaker Reviewer</option></select><span class="ui-select-wait__spinner" aria-hidden="true"><span class="ui-spinner"></span></span></span>{/snippet}
+            </Field>
             <Field id="speaker-company" label="Company" description="Browser-native autocomplete in the baseline.">
               {#snippet children({ id, describedBy })}<input class="ui-control" {id} list="companies" aria-describedby={describedBy} value="Aperture Labs" /><datalist id="companies"><option value="Aperture Labs"></option><option value="Northstar Studio"></option><option value="Common Ground"></option></datalist>{/snippet}
             </Field>
             <Field id="assigned-owner" label="Assigned owner">
               {#snippet children({ id, describedBy })}<select class="ui-select" {id} aria-describedby={describedBy}><option>Mina Lee</option><option>Arun Kumar</option><option>Jamie Smith</option></select>{/snippet}
+            </Field>
+            <Field id="described-visibility" label="Visibility" description="A described select explains each choice before it is made; touch gets a full-height sheet to read through.">
+              {#snippet children({ id, describedBy })}
+                <DescribedSelect
+                  {id}
+                  {describedBy}
+                  label="Visibility"
+                  value="team"
+                  options={[
+                    { value: 'draft', label: 'Draft', description: 'Only you can see it while it takes shape.' },
+                    { value: 'team', label: 'Team', description: 'Every workspace member can read it; owners can edit.' },
+                    { value: 'public', label: 'Public', description: 'Published to the event page for anyone with the link.' }
+                  ]} />
+              {/snippet}
             </Field>
           </div>
         </ShowcaseCard>
@@ -483,12 +568,26 @@
           <div class="mode-preview"><span>{editorMode} mode</span><p>{editorMode === 'Write' ? 'Fields are editable and autosave as a draft.' : editorMode === 'Preview' ? 'This is how the public session will appear.' : 'Review changes against the last published version.'}</p></div>
         </ShowcaseCard>
 
+        <ShowcaseCard title="Date picker" description="Compact fixed-size popover with month and year grids two taps away; the input accepts typing; min/max and the opening month are set per context. Coarse pointers get the platform's native picker." full>
+          <div class="form-grid form-grid--four">
+            <Field id="dp-open" label="Any date">
+              {#snippet children({ id, describedBy })}<DatePicker {id} {describedBy} label="any date" value="2026-10-15" />{/snippet}
+            </Field>
+            <Field id="dp-future" label="Future only" description="Past days are disabled, not hidden.">
+              {#snippet children({ id, describedBy })}<DatePicker {id} {describedBy} label="future date" min="2026-08-10" />{/snippet}
+            </Field>
+            <Field id="dp-window" label="Within the event" description="Opens at the event's first day.">
+              {#snippet children({ id, describedBy })}<DatePicker {id} {describedBy} label="event date" min="2026-10-15" max="2026-10-16" defaultFocus="2026-10-15" />{/snippet}
+            </Field>
+          </div>
+        </ShowcaseCard>
+
         <ShowcaseCard title="Date, time & range" description="Dates inherit the event timezone and show it beside—not hidden inside—the control." full>
           <div class="form-grid form-grid--four">
             <Field id="session-date" label="Session date" required>{#snippet children({ id, describedBy })}<input class="ui-control" type="date" {id} aria-describedby={describedBy} value="2026-09-18" />{/snippet}</Field>
             <Field id="start-time" label="Starts" meta="SGT">{#snippet children({ id, describedBy })}<input class="ui-control" type="time" {id} aria-describedby={describedBy} value="09:30" />{/snippet}</Field>
             <Field id="end-time" label="Ends" meta="45 min">{#snippet children({ id, describedBy })}<input class="ui-control" type="time" {id} aria-describedby={describedBy} value="10:15" />{/snippet}</Field>
-            <Field id="event-timezone" label="Timezone">{#snippet children({ id, describedBy })}<select class="ui-select" {id} aria-describedby={describedBy}><option>Asia/Singapore</option><option>Europe/London</option><option>America/New_York</option></select>{/snippet}</Field>
+            <Field id="event-timezone" label="Timezone">{#snippet children({ id, describedBy })}<TimezoneCombobox {id} {describedBy} value="Asia/Singapore" />{/snippet}</Field>
           </div>
           <div class="range-field">
             <div><strong>Minimum review score</strong><span>4.2 and above</span></div>
@@ -501,9 +600,68 @@
     <section class="ds-section" id="feedback">
       <SectionHeading index="06" title="Feedback & status" description="State always has text, not just color. Calm surfaces reserve stronger interruption for consequential failures." />
       <div class="ds-showcase-grid">
-        <ShowcaseCard title="Status badges" description="Short nouns or past-tense facts work best." full>
+        <ShowcaseCard title="Status badges" description="Short nouns or past-tense facts work best. Solid emphasis badges are the act-now tier — spend them on states that demand a response." full>
           <div class="component-row component-row--wrap">
             <Badge>Draft</Badge><Badge tone="action" dot>Active</Badge><Badge tone="success" dot>Confirmed</Badge><Badge tone="warning" dot>Needs reply</Badge><Badge tone="danger" dot>Cancelled</Badge><Badge tone="info">In review</Badge><Badge tone="lavender">Waitlisted</Badge><Badge tone="sea">Synced</Badge>
+          </div>
+          <div class="component-row component-row--wrap">
+            <Badge tone="danger" emphasis>Act now</Badge><Badge tone="warning" emphasis>Due soon</Badge><Badge tone="success" emphasis>Go</Badge>
+          </div>
+        </ShowcaseCard>
+
+        <ShowcaseCard title="Status glyphs" description="A badge may lead with a glyph from the shared statusIcon vocabulary so the state is recognised before it is read. The word still carries the state and the glyph is aria-hidden, so this is recognition support, never the encoding. One meaning keeps one symbol on every surface — Waitlisted and Invited share the hourglass because both mean waiting on someone else. The glyph supersedes the dot; never render both." full>
+          <div class="component-row component-row--wrap">
+            <Badge tone="success" icon={statusIcon.accepted}>Accepted</Badge><Badge tone="lavender" icon={statusIcon.waitlisted}>Waitlisted</Badge><Badge tone="neutral" icon={statusIcon.declined}>Declined</Badge><Badge tone="neutral" icon={statusIcon.withdrawn}>Withdrawn</Badge><Badge tone="info" icon={statusIcon.invited}>Invited</Badge><Badge tone="sea" icon={statusIcon.published}>Public</Badge><Badge tone="neutral" icon={statusIcon.unpublished}>Hidden</Badge>
+          </div>
+          <div class="component-row component-row--wrap">
+            <Badge tone="neutral" icon={statusIcon.draft}>Draft</Badge><Badge tone="info" icon={statusIcon.scheduled}>Scheduled</Badge><Badge tone="success" icon={statusIcon.sent}>Sent</Badge><Badge tone="warning" icon={statusIcon.held} emphasis>Held</Badge><Badge tone="warning" icon={statusIcon.unnotified} emphasis>Un-notified</Badge><Badge tone="danger" icon={statusIcon.blocking} emphasis>Blocking</Badge>
+          </div>
+        </ShowcaseCard>
+
+        <ShowcaseCard title="Attention surfaces" description="Area treatments for the act-now tier: color arrives before reading. The tinted card with an emphasis plate is the banner default; thin edge stripes are reserved for cards inside dense grids." full>
+          <div class="ds-attention-stack">
+            <div class="ds-attention ds-attention--tinted">
+              <span class="ds-attention__plate" aria-hidden="true"><AlertTriangle size={16} /></span>
+              <div class="ds-attention__copy">
+                <p class="ds-attention__title">Speaker requested cancellation</p>
+                <p class="ds-attention__detail">Tinted surface + emphasis plate — the banner default.</p>
+              </div>
+              <Button variant="primary" size="sm">Review</Button>
+            </div>
+            <div class="ds-attention ds-attention--tinted je-critical">
+              <span class="ds-attention__plate" aria-hidden="true"><AlertTriangle size={16} /></span>
+              <div class="ds-attention__copy">
+                <p class="ds-attention__title">Hard deadline in 6 hours — 3 required tasks open</p>
+                <p class="ds-attention__detail">Critical halo — reserved tier, dormant by default. It attaches only via the escalation registry, at most one per view, and reduced motion renders the ring static.</p>
+              </div>
+              <Button variant="primary" size="sm">Open tasks</Button>
+            </div>
+            <div class="ds-attention ds-attention--ring">
+              <div class="ds-attention__copy">
+                <p class="ds-attention__title">2 blocking conflicts before publish</p>
+                <p class="ds-attention__detail">Emphasis ring — when the surface must stay white, e.g. directly above dense data.</p>
+              </div>
+              <Button variant="secondary" size="sm">Open conflicts</Button>
+            </div>
+            <div class="ds-attention ds-attention--stripe">
+              <div class="ds-attention__copy">
+                <p class="ds-attention__title">Edge stripe</p>
+                <p class="ds-attention__detail">Not a banner treatment. Reserved for schedule/grid cards where only an edge fits.</p>
+              </div>
+            </div>
+          </div>
+        </ShowcaseCard>
+
+        <ShowcaseCard title="Ghost — the draft layer" description="Proposed-but-uncommitted state renders in the real surface with one treatment (.je-ghost): a dashed action boundary over a soft action wash. The schedule's placement aim preview uses it; agent-drafted placements and imports reuse it, so “not committed yet” reads identically everywhere. Content stays full-ink — a ghost is being adjusted, not disabled." full>
+          <div class="ds-ghost-demo">
+            <div class="ds-ghost-demo__card ds-ghost-demo__card--committed">
+              <p class="ds-ghost-demo__title">Opening Keynote</p>
+              <p class="ds-ghost-demo__time">09:00–10:00 · committed</p>
+            </div>
+            <div class="ds-ghost-demo__card je-ghost">
+              <p class="ds-ghost-demo__title">Context Caching Without Tears</p>
+              <p class="ds-ghost-demo__time">10:00–10:30 · Right after “Opening Keynote”</p>
+            </div>
           </div>
         </ShowcaseCard>
 
@@ -514,6 +672,177 @@
             <Alert tone="warning" title="Speaker reply overdue" message="No response for seven days. Review the draft reminder before sending." />
             <Alert tone="danger" title="Room conflict" message="Studio A already contains a session from 10:00–10:45." />
           </div>
+        </ShowcaseCard>
+
+        <ShowcaseCard title="Unavailable, explained in place" description="An action the system would refuse stays visible and says why before anything is attempted. The control keeps its place and takes aria-disabled rather than disabled, so it stays focusable and the reason is reachable by keyboard; the reason itself is the same reviewed sentence the server would answer with, shown on hover or focus and mirrored to a live region. Hiding the control would delete the “why”, and when the refusal is permanent the why is the one thing worth teaching. Rows whose action is genuinely available carry the live control." full>
+          <ul class="ds-unavailable">
+            <li class="ds-unavailable__row">
+              <span class="ds-unavailable__text">
+                <span class="ds-unavailable__name">Applied AI</span>
+                <span class="ds-unavailable__meta">18 submissions · 4 sessions</span>
+              </span>
+              <button
+                type="button"
+                class="ui-button ui-button--secondary ui-button--sm"
+                aria-label="Delete Applied AI"
+                aria-disabled="true"
+                aria-describedby="ds-unavailable-reason"
+                onclick={() => showToast('18 submissions and sessions reference this track. Retire it to stop new use — everything already using it keeps rendering.')}>Delete</button>
+              <p class="ds-unavailable__reason" id="ds-unavailable-reason">
+                18 submissions and sessions reference this track. Retire it to stop new use — everything already using it keeps rendering.
+              </p>
+            </li>
+            <li class="ds-unavailable__row">
+              <span class="ds-unavailable__text">
+                <span class="ds-unavailable__name">Fireside</span>
+                <span class="ds-unavailable__meta">not used yet</span>
+              </span>
+              <Button variant="secondary" size="sm" aria-label="Delete Fireside" onclick={() => showToast('Deleted track “Fireside”')}>Delete</Button>
+            </li>
+          </ul>
+        </ShowcaseCard>
+
+        <ShowcaseCard title="Reason on press, never on hover" description="A reason that varies per row lives behind the mark that carries it: a real button with aria-expanded, opened by press or keyboard, closed by Escape, and mirrored to the polite live region. Hover is not an option — on a touch device it never happens, and on a disabled control a native tooltip never arrives at all. The panel is positioned against the viewport so it survives inside a scrolling table or a schedule grid. The affordance follows the medium: a mark is already a box and takes the ring, a word takes an underline, and a figure — a chart or a bare numeral, which is neither — takes a soft plate built from padding and a cancelling negative margin, so hovering it cannot move the row." full>
+          <div class="ds-popovers">
+            <Popover
+              label="Product pitch 0.88 — why this signal is on “Ship Faster With Our DevEx Platform”"
+              onreveal={() => showToast('Product pitch 0.88. Vendor demo with pricing; no transferable technique. Source: Screen run #4. Confidence 0.88.')}>
+              {#snippet trigger()}<span class="ui-badge ui-badge--warning">Product pitch 0.88</span>{/snippet}
+              {#snippet children()}
+                <p class="ds-popover__body">Vendor demo with pricing; no transferable technique.</p>
+                <p class="ds-popover__meta">Screen run #4 · confidence 0.88</p>
+              {/snippet}
+            </Popover>
+            <Popover
+              label="Conflict — why “Ship It Anyway” is blocking"
+              onreveal={() => showToast('Ship It Anyway is blocking: overlaps “Edge Caching Without Tears” in Main Hall.')}>
+              {#snippet trigger()}<span class="ui-badge ui-badge--danger ui-badge--solid">Conflict</span>{/snippet}
+              {#snippet children()}
+                <p class="ds-popover__body">Overlaps “Edge Caching Without Tears” in Main Hall.</p>
+                <p class="ds-popover__meta">Publication stays blocked until this is resolved.</p>
+              {/snippet}
+            </Popover>
+            <!-- A bare numeral is neither a box nor running text: the ring would
+                 hug it at zero padding, an underline would say nothing. -->
+            <Popover
+              kind="figure"
+              label="4.6 of 5 — standing details"
+              onreveal={() => showToast('4.6 average of 3 reviews. Higher than 93% of 46 scored.')}>
+              {#snippet trigger()}<span class="ds-figure">4.6</span>{/snippet}
+              {#snippet children()}
+                <p class="ds-popover__body">4.6 average of 3 reviews.</p>
+                <p class="ds-popover__meta">Higher than 93% of 46 scored · median 3.8</p>
+              {/snippet}
+            </Popover>
+          </div>
+        </ShowcaseCard>
+
+        <ShowcaseCard title="A term of art carries its own definition" description="Product vocabulary is a loan against future exposure: it pays off for people who come back every cycle, and never for someone here once for one round. So a term of art may be used, but it owes its meaning where it is used. Dotted underline at rest, solid on hover, focus, and while open — the same grammar as every other in-place disclosure, where solid and action-coloured navigates and dotted and ink tells you more right here. Inside a sentence it sits on the text baseline and stays selectable through a drag, though it is atomic: it moves to the next line whole rather than breaking across one, so a term has to fit its narrowest column. A badge is a box, not a word, so it takes the ring instead." full>
+          <div class="ds-terms">
+            <p class="ds-term-prose">
+              Reviews close in 18 days. Ask the <Term
+                term="chair"
+                definition="The person running this review round — they set the plan up and decide who reviews what."
+                onreveal={() => showToast('Chair: the person running this review round.')} /> to
+              distribute the remaining submissions, then <Term
+                term="commit"
+                definition="Committing finalises your score and comment, and unlocks the other reviewers'. Drafts save as you type; nothing is committed until you press the button."
+                onreveal={() => showToast('Commit finalises your review and unlocks peer reviews.')} /> yours
+              before the deadline. Late entries go to the <Term
+                term="CFP"
+                expansion="Call for Proposals"
+                definition="The open window where speakers submit talks. It closes on a date you set, and late arrivals land in their own tray."
+                onreveal={() => showToast('CFP: call for proposals, the open submission window.')} /> overflow
+              tray.
+            </p>
+            <div class="ds-table-wrap ui-table-wrap">
+              <table class="ui-table">
+                <thead>
+                  <tr><th>Reviewer</th><th class="ui-table__number">Done</th></tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>
+                      <span class="ui-table__primary"><strong>Elif Aydın</strong></span>
+                      <span class="ds-term-gap">
+                        <Popover
+                          label="2 need another reviewer — why"
+                          onreveal={() => showToast('2 reviews nobody is covering. Elif Aydın stepped back from 2 over a conflict of interest.')}>
+                          {#snippet trigger()}
+                            <Badge tone="warning" icon={statusIcon.needsReviewer}>2 need another reviewer</Badge>
+                          {/snippet}
+                          {#snippet children()}
+                            <p class="ds-popover__body">2 reviews nobody is covering. Elif Aydın stepped back from 2 in this plan because of a conflict of interest — they know or work with the submitter.</p>
+                          {/snippet}
+                        </Popover>
+                      </span>
+                    </td>
+                    <td class="ui-table__number">12 / 40</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </ShowcaseCard>
+
+        <ShowcaseCard title="A search says what it looked at" description="Three things a list owes anyone who types into it. The marks answer “why is this row here” in place, which also teaches the scope without a legend — a hit landing in the abstract is how you learn the abstract is searched. The count answers it for the result set, in past tense, naming the fields rather than leaving them to be guessed. And folding is part of the contract, not a nicety: NFKD decomposes José but leaves Sørensen, Aydın, and Straße untouched, so those letters carry an explicit map and plain ASCII reaches them. Marks paint behind the text in the row's own ink, holding their space with a cancelling negative margin, so a marked title still reads as a title and nothing on the line moves." full>
+          <div class="ds-search">
+            <p class="ds-search-status">
+              <strong>3</strong> of 14 submissions match
+              <span class="ds-search-scope">· searched title, abstract, and speaker</span>
+            </p>
+            <div class="ds-table-wrap ui-table-wrap">
+              <table class="ui-table ui-table--multiline">
+                <thead>
+                  <tr><th>Query</th><th>Submission</th><th>Speaker</th></tr>
+                </thead>
+                <tbody>
+                  {#each SEARCH_SPECIMEN as row (row.title)}
+                    {@const match = specimenMatch(row)}
+                    <tr>
+                      <td><span class="ds-search-query">“{row.query}”</span></td>
+                      <td>
+                        <span class="ui-table__primary">
+                          <Marked text={row.title} ranges={fieldRanges(match, 0)} />
+                        </span>
+                        <span class="ui-table__secondary">
+                          <Marked text={row.abstract} ranges={fieldRanges(match, 1)} />
+                        </span>
+                      </td>
+                      <td><Marked text={row.speaker} ranges={fieldRanges(match, 2)} /></td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+            <p class="ds-search-note">
+              The last row is the one that matters: the query is plain ASCII, and the mark lands on
+              the spelling the person actually wrote.
+            </p>
+          </div>
+        </ShowcaseCard>
+
+        <ShowcaseCard title="Clamped text & disclosure" description="Rows take their natural height; the marker anchors to the first text line, so the rail stays straight and nothing moves when an entry expands. The timestamp ends the sentence inline. The footer line and its toggle render only for text genuinely cut off; on touch the whole entry activates it." full>
+          <ul class="ds-clamp-list">
+            <li class="ds-clamp-row">
+              <span class="ui-avatar ui-avatar--sm" aria-hidden="true">SB</span>
+              <ClampedText lines={2} expandFromSurface label="Sofia Berg">
+                {#snippet children()}<strong>Sofia Berg</strong> committed 6 reviews in Round 1 <span class="ds-clamp-time">· 24 min ago</span>{/snippet}
+              </ClampedText>
+            </li>
+            <li class="ds-clamp-row">
+              <span class="ui-avatar ui-avatar--sm" aria-hidden="true">JW</span>
+              <ClampedText lines={2} expandFromSurface label="Jonas Weber">
+                {#snippet children()}<strong>Jonas Weber</strong> accepted 3 submissions <span class="ds-clamp-time">· 2 h ago</span>{/snippet}
+              </ClampedText>
+            </li>
+            <li class="ds-clamp-row">
+              <span class="ui-avatar ui-avatar--sm" aria-hidden="true">SI</span>
+              <ClampedText lines={2} expandFromSurface label="Schedule import">
+                {#snippet children()}<strong>Schedule import</strong> drafted 24 placements across 3 rooms from “agenda-draft.xlsx” — 2 unresolved room names (“Main Hall B”, “Studio 2”) and 1 possible duplicate session need a decision before this changeset can commit <span class="ds-clamp-time">· 1 h ago</span>{/snippet}
+              </ClampedText>
+            </li>
+          </ul>
         </ShowcaseCard>
 
         <ShowcaseCard title="Progress & loading" description="Known progress uses a bar. Unknown waits use a compact spinner or reserved structure.">
@@ -547,6 +876,23 @@
         <ShowcaseCard title="Breadcrumbs" description="Use for hierarchy, not browser history.">
           <nav class="ui-breadcrumbs" aria-label="Breadcrumb"><a href="#top">Events</a><ChevronRight /><a href="#patterns">Future of Care</a><ChevronRight /><span aria-current="page">Speakers</span></nav>
           <nav class="ui-breadcrumbs" aria-label="Breadcrumb"><a href="#top">Settings</a><ChevronRight /><span aria-current="page">Airtable connection</span></nav>
+        </ShowcaseCard>
+
+        <ShowcaseCard
+          title="Arrival mark"
+          description="What a scoped link leaves behind. Landing is not arriving: among rows that look alike, the scroll moves the view but not the answer to “which one?”. A still ring in the action colour, held — never a pulse, because a mark that keeps animating keeps re-asking for attention already given. It releases on the first press, key, wheel, or real pointer travel, and never before its minimum, so it cannot strobe away unseen. Mark only where the destination cannot answer for itself: not a named panel, not a list filtered to one match. It is decoration over a navigation that already worked, so anywhere it cannot draw cleanly — inline boxes, table rows, elements already using ::after — it draws nothing at all."
+          full>
+          <div class="component-row">
+            <Button variant="secondary" size="sm" onclick={demoArrival}>Take me to it</Button>
+            <span class="ds-hint">Then move the pointer, or press a key, to release it.</span>
+          </div>
+          <ul class="ds-arrival-list">
+            <li class="ds-arrival-row">Panel: Who Owns Frontend Performance?</li>
+            <li class="ds-arrival-row" bind:this={arrivalRow} tabindex="-1">
+              Closing Panel: Ship It Anyway
+            </li>
+            <li class="ds-arrival-row">Opening Keynote: The Boring Web Wins</li>
+          </ul>
         </ShowcaseCard>
 
         <ShowcaseCard title="Pagination" description="Cursor-backed APIs can retain the same visual contract.">
@@ -600,6 +946,7 @@
         <ShowcaseCard title="Overlay triggers" description="Every overlay is functional in this workbench." full>
           <div class="component-row component-row--wrap">
             <Button onclick={() => (modalOpen = true)}><Trash2 /> Open confirmation</Button>
+            <Button variant="secondary" onclick={() => (compareOpen = true)}><Columns2 /> Open comparison</Button>
             <Button variant="secondary" onclick={() => (drawerOpen = true)}><PanelRight /> Open inspector</Button>
             <Button variant="soft" onclick={() => showToast()}><Bell /> Show toast</Button>
             <Button variant="ghost" onclick={openCommand}><Command /> Command menu <kbd>⌘ K</kbd></Button>
@@ -681,6 +1028,35 @@
     {#snippet children({ id, describedBy })}<textarea class="ui-textarea" {id} aria-describedby={describedBy} placeholder="Explain why the session is being cancelled…"></textarea>{/snippet}
   </Field>
   {#snippet footer(close)}<Button variant="ghost" onclick={close}>Keep session</Button><Button variant="danger" onclick={() => { close(); showToast('Cancellation request created'); }}>Request cancellation</Button>{/snippet}
+</Modal>
+
+<!-- The inspection variant: wide enough to hold a reference beside the set it is
+     read against, and left by a press outside because looking is finished when
+     you stop looking. A decision dialog keeps the default width and stays. -->
+<Modal bind:open={compareOpen} title="Line-up: “Calm systems under pressure”" size="lg" dismissible>
+  <div class="compare">
+    <div class="compare__card compare__card--anchor">
+      <p class="compare__role">Anchor</p>
+      <h3 class="compare__title">Calm systems under pressure</h3>
+      <p class="compare__meta">Platform engineering</p>
+      <span class="compare__score">4</span>
+      <div class="component-row"><Button variant="secondary" size="sm">Revise score</Button></div>
+    </div>
+    <div class="compare__list">
+      <div class="compare__card">
+        <h3 class="compare__title">Deterministic replay for distributed bugs</h3>
+        <p class="compare__meta">Platform engineering</p>
+        <span class="compare__score">5</span>
+        <div class="component-row"><Button variant="secondary" size="sm">Revise score</Button></div>
+      </div>
+      <div class="compare__card">
+        <h3 class="compare__title">The type system ate my deadline</h3>
+        <p class="compare__meta">Platform engineering</p>
+        <span class="compare__score">3</span>
+        <div class="component-row"><Button variant="secondary" size="sm">Revise score</Button></div>
+      </div>
+    </div>
+  </div>
 </Modal>
 
 {#if drawerOpen}

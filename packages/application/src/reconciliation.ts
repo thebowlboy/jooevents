@@ -1,4 +1,10 @@
-import type { AccessContext, SafeMembership, SafeUser, SafeWorkspace } from '@jooevents/contracts';
+import {
+  gatewayAuthorityProjectionSchema,
+  type AccessContext,
+  type SafeMembership,
+  type SafeUser,
+  type SafeWorkspace
+} from '@jooevents/contracts';
 import {
   failure,
   normalizeEmail,
@@ -33,6 +39,20 @@ export interface CommittedAccessState {
   readonly workspace: SafeWorkspace;
 }
 
+/**
+ * Optional until a deployment explicitly composes purpose-specific gateway key
+ * profiles. The provider reloads complete current disclosure evidence server-side;
+ * these stable IDs are lookup coordinates, never caller input.
+ */
+export interface GatewayAuthorityProjectionProvider {
+  project(input: {
+    readonly userId: string;
+    readonly membershipId: string;
+    readonly membershipVersion: number;
+    readonly workspaceId: string;
+  }): Promise<unknown>;
+}
+
 export interface ProvisioningStore {
   findAuthUserLink(authUserId: string): Promise<AuthUserLink | undefined>;
   loadSignInEvidence(input: {
@@ -62,9 +82,26 @@ export interface EnsureProvisionedInput {
   readonly now: string;
 }
 
-function contextFromCommitted(state: CommittedAccessState): AccessContext {
+async function contextFromCommitted(
+  state: CommittedAccessState,
+  gatewayAuthority: GatewayAuthorityProjectionProvider | undefined
+): Promise<AccessContext> {
   if (state.membership.status === 'active') {
-    return { state: 'active', user: state.user, workspace: state.workspace };
+    const active: AccessContext = { state: 'active', user: state.user, workspace: state.workspace };
+    if (!gatewayAuthority) return active;
+    try {
+      const projected = await gatewayAuthority.project({
+        userId: state.user.id,
+        membershipId: state.membership.id,
+        membershipVersion: state.membership.version,
+        workspaceId: state.workspace.id
+      });
+      const parsed = gatewayAuthorityProjectionSchema.safeParse(projected);
+      return parsed.success ? { ...active, gatewayAuthority: parsed.data } : active;
+    } catch {
+      // Gateway persistence is fail-closed independently of ordinary active access.
+      return active;
+    }
   }
   if (state.membership.status === 'pending_review' || state.membership.status === 'invited') {
     return {
@@ -99,17 +136,25 @@ export function createProvisioningService(dependencies: {
   readonly principals: AuthPrincipalEvidenceReader;
   readonly store: ProvisioningStore;
   readonly admission: AdmissionPolicy;
+  readonly gatewayAuthority?: GatewayAuthorityProjectionProvider;
 }) {
   return {
     async ensureAuthPrincipalProvisioned(input: EnsureProvisionedInput): Promise<AdapterOutcome<AccessContext>> {
       const existingLink = await dependencies.store.findAuthUserLink(input.authUserId);
       if (existingLink?.provisioningState === 'ready') {
         const committed = await dependencies.store.readCommittedAccess(input.authUserId, input.workspaceId);
-        if (committed.kind === 'success') return success(contextFromCommitted(committed.data), committed.notices);
+        if (committed.kind === 'success') {
+          return success(
+            await contextFromCommitted(committed.data, dependencies.gatewayAuthority),
+            committed.notices
+          );
+        }
         if (committed.kind === 'error') return failure(committed.error, committed.notices);
         return {
           kind: 'needs_confirmation',
-          ...(committed.proposed ? { proposed: contextFromCommitted(committed.proposed) } : {}),
+          ...(committed.proposed ? {
+            proposed: await contextFromCommitted(committed.proposed, dependencies.gatewayAuthority)
+          } : {}),
           confirmation: committed.confirmation,
           notices: committed.notices
         };
@@ -152,12 +197,17 @@ export function createProvisioningService(dependencies: {
           now: input.now
         });
         if (committed.kind === 'success') {
-          return success(contextFromCommitted(committed.data), [...principal.notices, ...committed.notices]);
+          return success(
+            await contextFromCommitted(committed.data, dependencies.gatewayAuthority),
+            [...principal.notices, ...committed.notices]
+          );
         }
         if (committed.kind === 'needs_confirmation') {
           return {
             kind: 'needs_confirmation',
-            ...(committed.proposed ? { proposed: contextFromCommitted(committed.proposed) } : {}),
+            ...(committed.proposed ? {
+              proposed: await contextFromCommitted(committed.proposed, dependencies.gatewayAuthority)
+            } : {}),
             confirmation: committed.confirmation,
             notices: [...principal.notices, ...committed.notices]
           };

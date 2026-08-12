@@ -11,7 +11,9 @@ test('keeps the design reference interactive and agent-themeable', async ({ page
 
   await expect(page.getByRole('heading', { level: 1, name: /Operations, without/ })).toBeVisible();
   await expect(page.locator('input')).not.toHaveCount(0);
-  await expect(page.getByRole('table')).toBeVisible();
+  // The workbench carries more than one table specimen; this asserts that table
+  // rendering works at all, not that exactly one exists.
+  await expect(page.getByRole('table').first()).toBeVisible();
 
   await page.getByRole('button', { name: 'Theme', exact: true }).click();
   const themeStudio = page.getByRole('dialog', { name: 'Theme studio' });
@@ -34,4 +36,13 @@ test('keeps the design reference interactive and agent-themeable', async ({ page
   await page.getByRole('button', { name: 'Keep session' }).click();
 
   expect(browserErrors).toEqual([]);
+});
+
+test('shows the critical-halo reference among the attention surfaces', async ({ page }) => {
+  await page.goto('/design-system');
+
+  const halo = page.locator('.je-critical');
+  await expect(halo).toBeVisible();
+  await expect(halo).toContainText('Hard deadline in 6 hours');
+  await expect(halo).toContainText('Critical halo — reserved tier, dormant by default');
 });

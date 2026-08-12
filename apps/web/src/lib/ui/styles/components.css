@@ -69,12 +69,19 @@
     border-color: var(--je-color-border-strong);
     background: var(--je-color-surface);
     color: var(--je-color-text);
-    box-shadow: var(--je-shadow-xs);
+    box-shadow:
+      var(--je-shadow-sm),
+      inset 0 -1px 0 var(--je-color-border);
   }
 
   .ui-button--secondary:hover:not(:disabled) {
     border-color: color-mix(in srgb, var(--je-color-action) 45%, var(--je-color-border-strong));
     background: var(--je-color-surface-selected);
+  }
+
+  .ui-button--secondary:active:not(:disabled) {
+    background: var(--je-color-surface-sunken);
+    box-shadow: inset 0 1px 2px var(--je-color-border);
   }
 
   .ui-button--soft {
@@ -131,6 +138,11 @@
 
   .ui-button--icon.ui-button--lg {
     width: var(--je-control-height-lg);
+  }
+
+  /* Variant box-shadows must not swallow the focus ring. */
+  .ui-button:focus-visible:not(:disabled) {
+    box-shadow: var(--je-focus-ring);
   }
 
   .ui-spinner {
@@ -278,6 +290,29 @@
       calc(100% - 0.65rem) 50%;
     background-repeat: no-repeat;
     background-size: 0.3rem 0.3rem, 0.3rem 0.3rem;
+  }
+
+  /* Busy select: the wrapper's spinner replaces the chevron while a change is
+     in flight, so the one control that is waiting marks itself visibly. */
+  .ui-select-wait {
+    position: relative;
+    display: block;
+    min-width: 0;
+  }
+
+  .ui-select-wait__spinner {
+    position: absolute;
+    inset-block-start: 50%;
+    inset-inline-end: 0.45rem;
+    translate: 0 -50%;
+    display: grid;
+    place-items: center;
+    inline-size: 1.4rem;
+    block-size: 1.4rem;
+    border-radius: var(--je-radius-round);
+    background: var(--je-color-surface-sunken);
+    color: var(--je-color-text-muted);
+    pointer-events: none;
   }
 
   .ui-input-wrap {
@@ -539,6 +574,16 @@
     background: currentColor;
   }
 
+  /* Status glyph. Sized just above the 2xs label so the shape resolves at a
+     glance without outweighing the word it supports; the heavier stroke keeps
+     it legible once a 24px grid is drawn at 12px. */
+  .ui-badge__icon {
+    width: 0.75rem;
+    height: 0.75rem;
+    flex: 0 0 auto;
+    stroke-width: 2.4;
+  }
+
   .ui-badge--neutral {
     border-color: var(--je-color-border);
   }
@@ -570,12 +615,31 @@
 
   .ui-badge--lavender {
     background: var(--je-color-accent-lavender-soft);
-    color: var(--je-color-accent-lavender);
+    color: var(--je-color-accent-lavender-strong);
   }
 
   .ui-badge--sea {
     background: var(--je-color-accent-sea-soft);
-    color: color-mix(in srgb, var(--je-color-accent-sea) 72%, #000000);
+    color: var(--je-color-accent-sea-strong);
+  }
+
+  /* Solid emphasis badges: the act-now tier of the status ladder. */
+  .ui-badge--success.ui-badge--solid {
+    border-color: transparent;
+    background: var(--je-color-success-emphasis);
+    color: var(--je-color-success-emphasis-contrast);
+  }
+
+  .ui-badge--warning.ui-badge--solid {
+    border-color: transparent;
+    background: var(--je-color-warning-emphasis);
+    color: var(--je-color-warning-emphasis-contrast);
+  }
+
+  .ui-badge--danger.ui-badge--solid {
+    border-color: transparent;
+    background: var(--je-color-danger-emphasis);
+    color: var(--je-color-danger-emphasis-contrast);
   }
 
   .ui-alert {
@@ -825,7 +889,7 @@
     color: var(--je-color-text-muted);
     font-size: var(--je-font-size-2xs);
     font-weight: 750;
-    letter-spacing: 0.045em;
+    letter-spacing: var(--je-tracking-caps);
     text-transform: uppercase;
     white-space: nowrap;
   }
@@ -870,7 +934,11 @@
     white-space: nowrap;
   }
 
-  .ui-table--multiline tbody td {
+  /* Row-header cells carry the most content in a multiline table (name, state,
+     progress), so they must breathe like their siblings. Scoping this to `td`
+     left the one cell that needed it most with no vertical padding at all. */
+  .ui-table--multiline tbody td,
+  .ui-table--multiline tbody th {
     height: auto;
     padding-block: var(--je-space-2);
     border-bottom-color: var(--je-color-border);
@@ -970,6 +1038,93 @@
     accent-color: var(--je-color-action);
   }
 
+  /*
+   * Row selection in a table.
+   *
+   * A bare checkbox is a 13x13px box sitting in a 42x64px cell, so 94% of the
+   * cell fell through to the row's own click — and on these tables that click
+   * expands the row. Selecting meant aiming, and missing did something else.
+   *
+   * The label fills the cell, so the target is the whole column rather than the
+   * box: ~16x the area, and past 24px on both axes. `label` is already in the
+   * row-press ignore list, so a press here can never also expand the row.
+   *
+   * An enlarged target is invisible, which is the other half of the problem —
+   * you cannot aim at something you cannot see, and you will not trust it until
+   * it answers. So the box itself takes a hover ring while the pointer is
+   * anywhere in the zone: it lights up as you approach, which both says "this
+   * click selects, not expands" and shows how far the target reaches. On a
+   * coarse pointer there is no hover to give, and none is needed — the enlarged
+   * area is the whole fix there.
+   */
+  .ui-pick-cell {
+    position: relative;
+  }
+
+  /* The zone inherits the column's width, and on a narrow viewport that column
+     squeezed to 22px — under the 24px minimum on the one pointer with no hover
+     to fall back on. The column gets a floor there rather than the label
+     spilling sideways, which would take clicks belonging to the next cell. */
+  @media (pointer: coarse) {
+    .ui-pick-cell {
+      min-inline-size: 2.75rem;
+    }
+  }
+
+  .ui-pick {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+  }
+
+  .ui-pick input {
+    cursor: pointer;
+  }
+
+  /*
+   * The cue is a tint, not a ring. "Marked things tint" is the language this
+   * system already uses for a thing under the pointer, and a 2px ring offset
+   * from a 13px box reads as a focus state — which it is not, and which the
+   * input's own focus ring already owns.
+   *
+   * The plate is deliberately wider than the checkbox: it is the only thing
+   * that shows the target is bigger than the box, which is the fact the person
+   * needs in order to stop aiming.
+   */
+  .ui-pick::before {
+    content: '';
+    position: absolute;
+    inline-size: 1.6rem;
+    block-size: 1.6rem;
+    border-radius: var(--je-radius-sm);
+    background: transparent;
+    transition: background var(--je-duration-fast) var(--je-ease);
+  }
+
+  /*
+   * A step past `action-soft`: the row underneath already tints coral on hover,
+   * so the softer step disappeared into it and the cue said nothing.
+   *
+   * `:focus-visible`, never `:focus-within`. A mouse click focuses the checkbox,
+   * so `:focus-within` kept the plate lit after the pointer had gone — a cue
+   * about where the pointer *is*, outliving the pointer, and redundant besides:
+   * the row's own `data-selected` tint is what says the row is selected.
+   * `:focus-visible` is the engine's own answer to "did this focus arrive in a
+   * way that deserves a visible indicator" — no for a click, yes for a Tab —
+   * which is exactly the line this cue needs.
+   */
+  .ui-pick:hover::before,
+  .ui-pick:has(input:focus-visible)::before {
+    background: var(--je-color-action-soft-hover);
+  }
+
+  /* Above the plate, which is a positioned pseudo-element. */
+  .ui-pick input {
+    position: relative;
+  }
+
   .ui-dialog {
     width: min(34rem, calc(100vw - 2rem));
     max-height: min(42rem, calc(100dvh - 2rem));
@@ -983,12 +1138,39 @@
     box-shadow: var(--je-shadow-lg);
   }
 
+  /* Inspection width. Reading one record against several others needs the room
+     to hold them side by side, and the height is declared rather than derived:
+     a surface whose cards arrive in batches must not grow and shrink around
+     them, so it takes its full height up front and scrolls its body. */
+  .ui-dialog--lg {
+    width: min(64rem, calc(100vw - 2rem));
+    max-width: min(64rem, calc(100vw - 2rem));
+    height: min(48rem, calc(100dvh - 2rem));
+    max-height: calc(100dvh - 2rem);
+  }
+
+  /* Where there is no room beside it, an inspection surface is the screen. */
+  @media (max-width: 720px) {
+    .ui-dialog--lg {
+      width: 100vw;
+      max-width: 100vw;
+      height: 100dvh;
+      max-height: 100dvh;
+      border: 0;
+      border-radius: 0;
+    }
+  }
+
   .ui-dialog::backdrop {
     background: var(--je-color-scrim);
     backdrop-filter: blur(2px);
   }
 
+  /* An open dialog is a column so the body owns the leftover height and can
+     actually scroll; header and footer stay pinned. */
   .ui-dialog[open] {
+    display: flex;
+    flex-direction: column;
     animation: je-dialog-in var(--je-duration-normal) var(--je-ease-out);
   }
 
@@ -1017,12 +1199,266 @@
   }
 
   .ui-dialog__body {
+    flex: 1 1 auto;
+    min-block-size: 0;
     padding: 1rem;
     overflow-y: auto;
+  }
+
+  /* An addressable unit of an editable preview. The cue is a quiet dashed
+     outline in muted ink, painted only under a resting pointer, on keyboard
+     focus, or while the unit's editor is open — the preview never renders
+     covered in handles. Outline and offset hold their geometry at all times;
+     only the paint changes. */
+  .ui-editable {
+    cursor: pointer;
+    outline: 1px dashed transparent;
+    outline-offset: 3px;
+    border-radius: var(--je-radius-xs);
+    transition: outline-color var(--je-duration-fast) var(--je-ease);
+  }
+
+  /* A text run takes the text cursor; layout and question units keep the pointer. */
+  .ui-editable--text {
+    cursor: text;
+  }
+
+  /* Hover is a fine-pointer cue only: on touch the first tap selects instead. */
+  @media (hover: hover) {
+    .ui-editable:hover {
+      outline-color: var(--je-color-text-muted);
+    }
+  }
+
+  /* Held while the unit's editor is open — the selected state both pointers share. */
+  .ui-editable--active {
+    outline-color: var(--je-color-text-muted);
+  }
+
+  /* A press anywhere on a unit must reach the unit: a preview's disabled
+     controls would otherwise swallow the click without ever raising it. */
+  .ui-editable :disabled {
+    pointer-events: none;
+  }
+
+  .ui-editable:focus-visible {
+    outline: 2px solid transparent;
+    outline-offset: 2px;
+    box-shadow: var(--je-focus-ring);
   }
 }
 
 @layer je.utilities {
+  /* "This is the thing you asked for."
+
+     Drawn as a pseudo-element, not an outline or a box-shadow. Component styles
+     in Svelte are unlayered and therefore beat every @layer here, and the two
+     properties a ring would naturally use are exactly the two that focusable
+     surfaces reset: `outline: none` plus a box-shadow focus ring. A pseudo
+     nothing else targets is the only treatment that survives being applied to
+     an arbitrary element. It also takes no layout space, so marking a card
+     cannot shift the grid it sits in.
+
+     Still by design — no pulse or glow. See arrival.svelte.ts. */
+  .ui-arrival::after {
+    content: '';
+    position: absolute;
+    /* Inside the element's own box on purpose. A ring drawn outside is clipped by
+       any ancestor that hides overflow, and a half-drawn ring reads as a
+       rendering fault. The soft halo is the only part that extends past the box,
+       and a clipped tint degrades invisibly. */
+    inset: 0;
+    z-index: 2;
+    border: 2px solid var(--je-color-action);
+    border-radius: inherit;
+    box-shadow: 0 0 0 3px var(--je-color-action-soft);
+    pointer-events: none;
+  }
+
+  .ui-arrival--leaving::after {
+    border-color: transparent;
+    box-shadow: 0 0 0 3px transparent;
+    transition:
+      border-color var(--je-duration-slow) var(--je-ease),
+      box-shadow var(--je-duration-slow) var(--je-ease);
+  }
+
+  /* The value stays plain selectable text; only the trailing control is new, and
+     it holds its place in the row at all times so revealing it cannot shift the
+     line under the pointer. Opacity is the only thing hover changes. */
+  /* The value stays plain selectable text; only the trailing control is new, and
+     it holds its place in the row at all times so revealing it cannot shift the
+     line under the pointer. Opacity is the only thing hover changes. */
+  .ui-copy {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--je-space-1);
+    min-width: 0;
+  }
+
+  .ui-copy__value {
+    min-width: 0;
+    overflow: hidden;
+    border-radius: var(--je-radius-xs);
+    text-overflow: ellipsis;
+    /* Confirmation lights the value itself, so the person sees which one went to
+       the clipboard. Background and colour only — nothing here can move a row. */
+    box-shadow: 0 0 0 0.15rem transparent;
+    background: transparent;
+    transition:
+      background var(--je-duration-slow) var(--je-ease),
+      box-shadow var(--je-duration-slow) var(--je-ease);
+  }
+
+  .ui-copy--copied .ui-copy__value {
+    background: var(--je-color-action-soft);
+    box-shadow: 0 0 0 0.15rem var(--je-color-action-soft);
+    transition-duration: var(--je-duration-fast);
+  }
+
+  .ui-copy__button {
+    position: relative;
+    display: grid;
+    flex: 0 0 auto;
+    place-items: center;
+    width: 1.25rem;
+    height: 1.25rem;
+    padding: 0;
+    border: 0;
+    border-radius: var(--je-radius-xs);
+    background: transparent;
+    color: var(--je-color-text-subtle);
+    cursor: pointer;
+    opacity: 0;
+    transition:
+      opacity var(--je-duration-fast) var(--je-ease),
+      color var(--je-duration-fast) var(--je-ease),
+      background var(--je-duration-fast) var(--je-ease);
+  }
+
+  /* Both glyphs occupy one grid cell, so swapping them cross-fades in place
+     instead of replacing a node and popping. */
+  .ui-copy__glyphs {
+    display: grid;
+    place-items: center;
+  }
+
+  .ui-copy__glyphs > .ui-copy__glyph {
+    grid-area: 1 / 1;
+    width: 0.8125rem;
+    height: 0.8125rem;
+    transition: opacity var(--je-duration-fast) var(--je-ease);
+  }
+
+  .ui-copy__glyphs > .ui-copy__glyph--done {
+    opacity: 0;
+  }
+
+  .ui-copy__button--done .ui-copy__glyphs > .ui-copy__glyph--rest {
+    opacity: 0;
+  }
+
+  .ui-copy__button--done .ui-copy__glyphs > .ui-copy__glyph--done {
+    opacity: 1;
+  }
+
+  /* Revealed by hovering anywhere in the row that owns it, or by focus. */
+  .ui-copy:hover .ui-copy__button,
+  .ui-copy__button:focus-visible,
+  tr:hover .ui-copy__button,
+  li:hover .ui-copy__button {
+    opacity: 1;
+  }
+
+  .ui-copy__button:hover {
+    background: var(--je-color-surface-sunken);
+    color: var(--je-color-text);
+  }
+
+  .ui-copy__button:focus-visible {
+    outline: none;
+    box-shadow: var(--je-focus-ring);
+  }
+
+  /* The glyph is deliberately small so it does not shout inside a line of text,
+     but the target must still clear the 24px minimum. The pseudo-element takes
+     no layout, so the address beside it never moves; on a fine pointer it stays
+     modest, because a target much larger than its row would start stealing
+     presses from the rows above and below. */
+  .ui-copy__button::before {
+    content: '';
+    position: absolute;
+    inset-block-start: 50%;
+    inset-inline-start: 50%;
+    translate: -50% -50%;
+    inline-size: 1.5rem;
+    block-size: 1.5rem;
+  }
+
+  /* Confirmation is the control itself, so it must be visible while it says so —
+     and it must outrank :hover, since the pointer is still resting on the button
+     that was just pressed. */
+  .ui-copy__button.ui-copy__button--done,
+  .ui-copy__button.ui-copy__button--done:hover {
+    opacity: 1;
+    background: transparent;
+    color: var(--je-color-success);
+  }
+
+  .ui-copy__button.ui-copy__button--failed,
+  .ui-copy__button.ui-copy__button--failed:hover {
+    opacity: 1;
+    color: var(--je-color-danger);
+  }
+
+  /* The words, in the top layer so no clamped cell can clip them. Placed by
+     script, so the popover UA box is neutralised rather than inherited; the
+     z-index only matters where the top layer is unavailable. Laid out on the
+     first frame and painted on the second, so it never flashes at the origin. */
+  .ui-copy__flag {
+    position: fixed;
+    inset: auto;
+    margin: 0;
+    z-index: 60;
+    padding: 0.1rem 0.4rem;
+    border: 0;
+    border-radius: var(--je-radius-xs);
+    background: var(--je-color-text);
+    color: var(--je-color-text-inverse);
+    font-size: var(--je-font-size-2xs);
+    font-weight: 650;
+    white-space: nowrap;
+    pointer-events: none;
+    visibility: hidden;
+    opacity: 0;
+    transition: opacity var(--je-duration-fast) var(--je-ease);
+  }
+
+  .ui-copy__flag--placed {
+    visibility: visible;
+    opacity: 1;
+  }
+
+  /* No hover to reveal with, so it simply stands. The glyph stays small so the
+     row keeps its rhythm, but a finger gets the full coarse-pointer target —
+     expanded with a pseudo-element, which takes no layout and so cannot push the
+     address it sits beside. */
+  @media (hover: none) {
+    .ui-copy__button {
+      opacity: 1;
+    }
+
+    .ui-copy__button::before {
+      content: '';
+      position: absolute;
+      inset-block-start: 50%;
+      inset-inline-start: 50%;
+      translate: -50% -50%;
+      inline-size: var(--je-control-height);
+      block-size: var(--je-control-height);
+    }
+  }
+
   .ui-sr-only {
     position: absolute !important;
     width: 1px !important;
@@ -1040,9 +1476,103 @@
     white-space: nowrap;
   }
 
+  .ui-clamp {
+    position: relative;
+    display: grid;
+    min-width: 0;
+    gap: var(--je-space-1);
+  }
+
+  .ui-clamp__body {
+    min-width: 0;
+  }
+
+  .ui-clamp__body--clipped {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: var(--ui-clamp-lines, 2);
+    line-clamp: var(--ui-clamp-lines, 2);
+    overflow: hidden;
+  }
+
+  /* The footer renders only when it has a job (metadata, or a toggle for
+     genuinely clipped text); its min-height keeps the toggle line steady
+     between "Show more" and "Show less". */
+  .ui-clamp__footer {
+    display: flex;
+    min-width: 0;
+    min-height: 1.35rem;
+    align-items: center;
+    gap: var(--je-space-2);
+    color: var(--je-color-text-muted);
+    font-size: var(--je-font-size-xs);
+  }
+
+  .ui-clamp__toggle {
+    margin-inline-start: auto;
+    padding: 0;
+    border: 0;
+    border-radius: var(--je-radius-xs);
+    background: transparent;
+    color: var(--je-color-link);
+    font-size: var(--je-font-size-xs);
+    font-weight: 650;
+    white-space: nowrap;
+    text-decoration: underline;
+    text-underline-offset: 0.18em;
+    cursor: pointer;
+  }
+
+  .ui-clamp__toggle:hover {
+    color: var(--je-color-action-hover);
+  }
+
+  /* Thumbs are imprecise: on touch the whole surface activates the toggle, so
+     the small label never has to be hit exactly. Pointer devices keep the text
+     selectable and only the label is clickable. */
+  @media (pointer: coarse) {
+    .ui-clamp--surface .ui-clamp__toggle::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+    }
+  }
+
   .ui-mono {
     font-family: var(--je-font-mono);
     font-size: 0.92em;
+  }
+
+  /* Ghost: the draft layer's one visual voice — proposed-but-uncommitted state
+     rendered in the real surface (the placement mode's aim preview today;
+     agent-drafted placements and imports reuse it when they land, so "not
+     committed yet" reads identically everywhere). A dashed action boundary
+     over a soft action wash: clearly not committed, still fully readable —
+     a ghost is being adjusted, not disabled. Features compose this onto their
+     own card geometry. */
+  .je-ghost {
+    border: 1px dashed var(--je-color-action);
+    background: color-mix(in srgb, var(--je-color-action-soft) 70%, var(--je-color-surface));
+  }
+
+  /* Critical halo, reserved for situations named by the escalation registry
+     (`$lib/api/escalation`) — at most one per view, and dormant by default
+     because every registry switch ships off. This is the product's only
+     ambient animation: the ring and glow paint once and only their opacity
+     breathes; nothing moves or resizes. */
+  .je-critical {
+    position: relative;
+  }
+
+  .je-critical::after {
+    content: '';
+    position: absolute;
+    inset: -4px;
+    border: 2px solid var(--je-color-danger-emphasis);
+    border-radius: calc(var(--je-radius-surface) + 4px);
+    box-shadow: 0 0 12px 2px color-mix(in srgb, var(--je-color-danger-emphasis) 45%, transparent);
+    pointer-events: none;
+    animation: je-critical-pulse calc(var(--je-duration-slow) * 8) var(--je-ease) infinite;
   }
 }
 
@@ -1055,9 +1585,23 @@
   to { transform: translateX(280%); }
 }
 
+/* Indeterminate travel for a bounded track: a partial fill crossing its rail.
+   Shared by the access-entry progress bar and the workspace shell's arrival
+   hairline — the consumer owns the track, the fill width, and the color. */
+@keyframes je-indeterminate {
+  from { transform: translateX(-15%); }
+  to { transform: translateX(140%); }
+}
+
 @keyframes je-dialog-in {
   from { opacity: 0; transform: translateY(8px) scale(0.985); }
   to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Opacity only: the critical ring and glow paint once; nothing moves or resizes. */
+@keyframes je-critical-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1067,6 +1611,14 @@
     .ui-spinner,
     .ui-skeleton::after {
       animation: none;
+    }
+  }
+
+  @layer je.utilities {
+    /* Static ring at full strength: the same information, stiller. */
+    .je-critical::after {
+      animation: none;
+      opacity: 1;
     }
   }
 }

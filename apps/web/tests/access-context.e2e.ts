@@ -116,6 +116,7 @@ test('a malformed or failed context remains a recoverable connection problem', a
   await expect(page.getByRole('heading', { name: "We couldn't check your access" })).toBeVisible();
   await expect(page.getByText('Your access has not changed.')).toBeVisible();
   await expect(page.getByText(/corr_context_502/)).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Get help' })).toHaveCount(0);
   const supportFontSize = await page
     .getByText(/corr_context_502/)
     .evaluate((support) => getComputedStyle(support).fontSize);

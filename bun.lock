@@ -13,6 +13,7 @@
         "@jooevents/application": "workspace:*",
         "@jooevents/contracts": "workspace:*",
         "@jooevents/identity-access": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
         "@jooevents/persistence": "workspace:*",
         "better-auth": "1.6.26",
         "drizzle-orm": "0.45.2",
@@ -20,6 +21,8 @@
         "zod": "4.4.3",
       },
       "devDependencies": {
+        "@jooevents/mcp": "workspace:*",
+        "@jooevents/program": "workspace:*",
         "bun-types": "1.3.6",
         "typescript": "6.0.3",
       },
@@ -28,13 +31,25 @@
       "name": "@jooevents/web",
       "version": "0.0.0",
       "dependencies": {
-        "@fontsource-variable/open-sans": "5.3.0",
+        "@fontsource-variable/inter": "5.3.0",
         "@fontsource/merriweather": "5.3.0",
         "@jooevents/contracts": "workspace:*",
         "lucide-svelte": "1.0.1",
         "zod": "4.4.3",
       },
       "devDependencies": {
+        "@fontsource-variable/bitter": "^5.3.0",
+        "@fontsource-variable/figtree": "^5.3.0",
+        "@fontsource-variable/fraunces": "^5.3.0",
+        "@fontsource-variable/ibm-plex-sans": "^5.3.0",
+        "@fontsource-variable/lora": "^5.3.0",
+        "@fontsource-variable/newsreader": "^5.3.0",
+        "@fontsource-variable/nunito-sans": "^5.3.0",
+        "@fontsource-variable/open-sans": "5.3.0",
+        "@fontsource-variable/public-sans": "^5.3.0",
+        "@fontsource-variable/source-sans-3": "^5.3.0",
+        "@fontsource-variable/source-serif-4": "^5.3.0",
+        "@fontsource/atkinson-hyperlegible": "^5.3.0",
         "@playwright/test": "1.62.1",
         "@sveltejs/adapter-static": "3.0.10",
         "@sveltejs/kit": "2.70.2",
@@ -52,6 +67,21 @@
       "dependencies": {
         "@jooevents/contracts": "workspace:*",
         "@jooevents/identity-access": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/changesets": {
+      "name": "@jooevents/changesets",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "zod": "4.4.3",
       },
       "devDependencies": {
         "bun-types": "1.3.6",
@@ -62,6 +92,7 @@
       "name": "@jooevents/contracts",
       "version": "0.0.0",
       "dependencies": {
+        "@jooevents/kernel": "workspace:*",
         "zod": "4.4.3",
       },
       "devDependencies": {
@@ -72,6 +103,40 @@
     "packages/identity-access": {
       "name": "@jooevents/identity-access",
       "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/kernel": "workspace:*",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/kernel": {
+      "name": "@jooevents/kernel",
+      "version": "0.0.0",
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/mcp": {
+      "name": "@jooevents/mcp",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/model-adapter": {
+      "name": "@jooevents/model-adapter",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/kernel": "workspace:*",
+      },
       "devDependencies": {
         "bun-types": "1.3.6",
         "typescript": "6.0.3",
@@ -82,8 +147,39 @@
       "version": "0.0.0",
       "dependencies": {
         "@jooevents/application": "workspace:*",
+        "@jooevents/changesets": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
         "@jooevents/identity-access": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "@jooevents/model-adapter": "workspace:*",
+        "@jooevents/program": "workspace:*",
+        "@jooevents/reliability": "workspace:*",
         "drizzle-orm": "0.45.2",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/program": {
+      "name": "@jooevents/program",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/changesets": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/reliability": {
+      "name": "@jooevents/reliability",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/kernel": "workspace:*",
       },
       "devDependencies": {
         "bun-types": "1.3.6",
@@ -112,7 +208,31 @@
 
     "@better-fetch/fetch": ["@better-fetch/fetch@1.3.1", "", {}, "sha512-ABkD1WhyfPZprKRQI3bhATjeiFuNWC9PXhfGWqL+sg/gKrM977oFrYkdb4msM3hgUGonr7KlOsOFT5TU2rht9g=="],
 
+    "@fontsource-variable/bitter": ["@fontsource-variable/bitter@5.3.0", "", {}, "sha512-TNGusdX+fjWE2b8pTG7kH1A615DbjjSj8/PwVm+iyiFiLFtioHXt6eH5jIFE2kmiA3Ogp03jEyZDsukotzC+4Q=="],
+
+    "@fontsource-variable/figtree": ["@fontsource-variable/figtree@5.3.0", "", {}, "sha512-VRVodD7OiG7apQwE8/2fMjaqpY/a0qRJqL5HtYj8CKIVps+9amaFcdfKmDIf7iqYQx6iPLlArVXAfKeIZmVcNQ=="],
+
+    "@fontsource-variable/fraunces": ["@fontsource-variable/fraunces@5.3.0", "", {}, "sha512-9BYGySn4AHEJdgp9Z28tQ3X+laJMEOITXkQarZXeloWQZDq5oOvXJ3kDA8c7MGIfpogIaZfjrQBqmda8POOCKA=="],
+
+    "@fontsource-variable/ibm-plex-sans": ["@fontsource-variable/ibm-plex-sans@5.3.0", "", {}, "sha512-agG8tXFEo0hD9+J7npa4vbbWult52eMLVaQ6WQRlhs/iCAojrMAoejru85W9HTVXHfyUj96KM7gp/KGAS87XaQ=="],
+
+    "@fontsource-variable/inter": ["@fontsource-variable/inter@5.3.0", "", {}, "sha512-OupL48va4JNofb97w6NYeF9S7W/kHNKM0Er8Dem5nqi4jeOLrVJDoE8tZEpnMJmtkvNbB1EIPPwHcdkF6b1oUA=="],
+
+    "@fontsource-variable/lora": ["@fontsource-variable/lora@5.3.0", "", {}, "sha512-2ph8KiZ8Bn141hWuC3ErtpJ+Ui8p2MJQn8TJNRSRmLmnCIOCtHfiBM9R7WLRPeUG/q6hXyHOxWQ8DvRSX+ixvQ=="],
+
+    "@fontsource-variable/newsreader": ["@fontsource-variable/newsreader@5.3.0", "", {}, "sha512-rrzYi43qMpbzwuFtf9OkWH8sxAPVPcQQQEwXpPtwaKYeJ8yVg5aLs5kawmo1f2Q1t1M38TLmEKCkGVDsYwgdFw=="],
+
+    "@fontsource-variable/nunito-sans": ["@fontsource-variable/nunito-sans@5.3.0", "", {}, "sha512-Vk1PSfckNDwgw2yGcsvJP3o/0zEW8Rp6KzbD8Ql/6iRHQshnhhAjt+cSIfAUyp5vQuSlleGHFW2LfYaaex0diw=="],
+
     "@fontsource-variable/open-sans": ["@fontsource-variable/open-sans@5.3.0", "", {}, "sha512-VOfhZfLIOBVa6K/dTEu7scqQXYdGa4jBX8quFpQ0S6574B+W2EOBJf9PkqyVtMEI7WWIWNEbpvPc3vY1mN2mmQ=="],
+
+    "@fontsource-variable/public-sans": ["@fontsource-variable/public-sans@5.3.0", "", {}, "sha512-AVfkmAt50BMXWpOO21FAntiJFKGX6xTc2dSL8dxtDteONe9IuRXJWGbs0EbG955vAMCq23ENeuopuW87cGWDSQ=="],
+
+    "@fontsource-variable/source-sans-3": ["@fontsource-variable/source-sans-3@5.3.0", "", {}, "sha512-dpi0GZk7EQe2tYpg6Q0Fx0OmUgnuGu+0rHPgtXqtKhglYmJuP7jZ12Mu1uN+NfRaJRY1Emn8AQJEWzmoZ4wa9g=="],
+
+    "@fontsource-variable/source-serif-4": ["@fontsource-variable/source-serif-4@5.3.0", "", {}, "sha512-9vch9WqxjaaA+1o9Ur8pOgIGbCYLjRReOUel23A6lOpD1syptgjtkORevvNmldJ5kGXQL29onQUqI5Ltz0s3bQ=="],
+
+    "@fontsource/atkinson-hyperlegible": ["@fontsource/atkinson-hyperlegible@5.3.0", "", {}, "sha512-Sp8Ve8+rQmENY2Lv02VH7sLpntzTTvnncnJMTbRE7DX6TLxGraN4ykZfzaUWIoCFmaomwkvNiqmlPkrKBuDoSA=="],
 
     "@fontsource/merriweather": ["@fontsource/merriweather@5.3.0", "", {}, "sha512-9LpPsNTYzRALj468Uj1K9Usl5eXk991L/kKmcpdWbTF1na9NfMyAXMgUABlMReViU1MYBz9kJ8jEzEOtX9qGDg=="],
 
@@ -122,11 +242,23 @@
 
     "@jooevents/application": ["@jooevents/application@workspace:packages/application"],
 
+    "@jooevents/changesets": ["@jooevents/changesets@workspace:packages/changesets"],
+
     "@jooevents/contracts": ["@jooevents/contracts@workspace:packages/contracts"],
 
     "@jooevents/identity-access": ["@jooevents/identity-access@workspace:packages/identity-access"],
 
+    "@jooevents/kernel": ["@jooevents/kernel@workspace:packages/kernel"],
+
+    "@jooevents/mcp": ["@jooevents/mcp@workspace:packages/mcp"],
+
+    "@jooevents/model-adapter": ["@jooevents/model-adapter@workspace:packages/model-adapter"],
+
     "@jooevents/persistence": ["@jooevents/persistence@workspace:packages/persistence"],
+
+    "@jooevents/program": ["@jooevents/program@workspace:packages/program"],
+
+    "@jooevents/reliability": ["@jooevents/reliability@workspace:packages/reliability"],
 
     "@jooevents/server": ["@jooevents/server@workspace:apps/server"],
 

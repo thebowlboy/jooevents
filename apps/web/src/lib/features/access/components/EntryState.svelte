@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Alert, Badge, Button } from '$lib/ui';
+  import { Alert, Badge, Button, CopyValue } from '$lib/ui';
   import { RefreshCw } from 'lucide-svelte';
   import type { AccessEntryState, BlockedState, PendingState } from '../AccessEntryController';
   import { blockedCopy, noticeCopy } from '../copy';
@@ -54,7 +54,7 @@
       <Alert title="This is taking longer than expected" message="Your access has not changed. You can safely retry the check." tone="info" />
       <Button variant="secondary" onclick={onRetry}><RefreshCw aria-hidden="true" /> Retry</Button>
     {/if}
-    <p class="support">Support code: <code>{state.correlationId}</code></p>
+    <p class="support">Support code: <CopyValue value={state.correlationId} label="support code" /></p>
   {:else if pending}
     <div class="pending-intro">
       <Badge tone="warning">Awaiting approval</Badge>
@@ -75,13 +75,12 @@
     <h1 data-entry-heading tabindex="-1">{copy.heading}</h1>
     <p>{copy.body}</p>
     {#if state.kind === 'sign_out_error'}<Alert title="Sign-out could not finish" message="You are still signed in. Check your connection and try again." tone="danger" />{/if}
-    <div class="actions"><Button variant="secondary" onclick={onSignOut}>{blocked.code === 'not_admitted' ? 'Use another Google account' : 'Sign out'}</Button><a class="help" href="/help">Get help</a></div>
-    {#if state.kind === 'sign_out_error' && state.error.correlationId}<p class="support">Support code: <code>{state.error.correlationId}</code></p>{/if}
+    <div class="actions"><Button variant="secondary" onclick={onSignOut}>{blocked.code === 'not_admitted' ? 'Use another Google account' : 'Sign out'}</Button></div>
+    {#if state.kind === 'sign_out_error' && state.error.correlationId}<p class="support">Support code: <CopyValue value={state.error.correlationId} label="support code" /></p>{/if}
   {:else if state.kind === 'context_error'}
     <h1 data-entry-heading tabindex="-1">We couldn't check your access</h1>
     <p>Your access has not changed. Check your connection and try again.</p>
     <Button onclick={onRetry}><RefreshCw aria-hidden="true" /> Retry</Button>
-    <a class="help" href="/help">Get help</a>
-    {#if state.error.correlationId}<p class="support">Support code: <code>{state.error.correlationId}</code></p>{/if}
+    {#if state.error.correlationId}<p class="support">Support code: <CopyValue value={state.error.correlationId} label="support code" /></p>{/if}
   {/if}
 </div>

@@ -9,8 +9,10 @@ if [ ! -d "${repository_root}/.git" ]; then
   exit 1
 fi
 
-tracked_existing_paths() {
-  git -C "${repository_root}" ls-files -- "$@" | while IFS= read -r path; do
+publishable_existing_paths() {
+  # Include untracked, non-ignored files: a local release check must not report a
+  # false green merely because newly implemented product files have not been staged.
+  git -C "${repository_root}" ls-files --cached --others --exclude-standard -- "$@" | while IFS= read -r path; do
     if [ -e "${repository_root}/${path}" ] || [ -L "${repository_root}/${path}" ]; then
       printf '%s\n' "${path}"
     fi
@@ -18,7 +20,7 @@ tracked_existing_paths() {
 }
 
 tracked_private_paths="$(
-  tracked_existing_paths \
+  publishable_existing_paths \
     'AGENTS.md' \
     'apps/web/build' \
     'apps/web/build/**' \
@@ -41,7 +43,7 @@ fi
 # the sibling private repository. Add a path here only when it is genuinely needed by
 # users, installers, operators, integrators, releases, or security reporters.
 unexpected_public_docs="$(
-  tracked_existing_paths '*.md' 'docs/**' | awk '
+  publishable_existing_paths '*.md' 'docs/**' | awk '
     $0 == "README.md" ||
     $0 == "CHANGELOG.md" ||
     $0 == "SECURITY.md" ||

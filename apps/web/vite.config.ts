@@ -1,6 +1,7 @@
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig, loadEnv } from 'vite';
 import type { Plugin } from 'vite';
+import { createBackendProxyConfig } from './vite-routing.js';
 
 const securityHeaders = {
   'Cache-Control': 'no-store, max-age=0',
@@ -51,14 +52,14 @@ export default defineConfig(({ mode }) => {
       port: 5176,
       strictPort: true,
       ...hostPolicy,
-      proxy: { '/api': 'http://127.0.0.1:5177' }
+      proxy: createBackendProxyConfig()
     },
     preview: {
       host: '0.0.0.0',
       port: 5176,
       strictPort: true,
       ...hostPolicy,
-      proxy: { '/api': 'http://127.0.0.1:5177' }
+      proxy: createBackendProxyConfig()
     }
   };
 });

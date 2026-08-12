@@ -770,6 +770,46 @@
 
   .modal-copy { margin: 0 0 1rem; color: var(--je-color-text-muted); font-size: var(--je-font-size-sm); }
 
+  /* The wide dialog exists so two records can be read against each other; the
+     reference keeps its column while the rest of the set scrolls past it. */
+  .compare { display: grid; gap: 1rem; }
+
+  .compare__card {
+    display: grid;
+    gap: 0.4rem;
+    padding: 1rem;
+    border: 1px solid var(--je-color-border);
+    border-radius: var(--je-radius-surface);
+    background: var(--je-color-surface);
+  }
+
+  .compare__card--anchor { border-color: var(--je-color-border-strong); }
+
+  .compare__role {
+    margin: 0;
+    font-size: var(--je-font-size-2xs);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: var(--je-tracking-caps);
+    color: var(--je-color-text-muted);
+  }
+
+  .compare__title { margin: 0; font-size: var(--je-font-size-base); font-weight: 600; }
+
+  .compare__meta { margin: 0; font-size: var(--je-font-size-xs); color: var(--je-color-text-muted); }
+
+  .compare__score {
+    font-size: var(--je-font-size-2xl);
+    font-weight: 700;
+    line-height: var(--je-leading-tight);
+    font-variant-numeric: tabular-nums;
+  }
+
+  @media (min-width: 920px) {
+    .compare { grid-template-columns: 20rem minmax(0, 1fr); align-items: start; }
+    .compare__list { display: grid; gap: 1rem; }
+  }
+
   .access-card,
   .submission-card { display: grid; gap: 1rem; }
 
@@ -1101,4 +1141,213 @@
   .rhythm-card__facts { display: grid; gap: var(--je-space-2); }
   .rhythm-card__actions { display: flex; flex-wrap: wrap; gap: var(--je-space-2); }
   .budget-row { display: flex; flex-wrap: wrap; gap: var(--je-space-2); }
+
+  .ds-popovers { display: flex; flex-wrap: wrap; gap: var(--je-space-3); }
+  .ds-figure { font-size: var(--je-font-size-base); font-weight: 700; font-variant-numeric: tabular-nums; }
+  .ds-popover__body { margin: 0; }
+  .ds-popover__meta { margin: 0; font-size: var(--je-font-size-xs); color: var(--je-color-text-muted); }
+
+  /* Narrow on purpose: a term has to survive wrapping mid-sentence, which is
+     exactly what an atomic inline-flex trigger cannot do. */
+  .ds-terms { display: grid; gap: var(--je-space-4); }
+  .ds-term-prose { margin: 0; max-inline-size: 26rem; }
+  .ds-term-gap { display: block; margin-block-start: var(--je-space-1); }
+  .ds-terms .ds-table-wrap { max-inline-size: 22rem; }
+
+  .ds-search { display: grid; gap: var(--je-space-3); }
+  .ds-search-status {
+    margin: 0;
+    font-size: var(--je-font-size-sm);
+    color: var(--je-color-text-muted);
+  }
+  .ds-search-status strong { color: var(--je-color-text); font-variant-numeric: tabular-nums; }
+  .ds-search-scope { white-space: nowrap; }
+  .ds-search-query { color: var(--je-color-text); white-space: nowrap; }
+  .ds-search-note {
+    margin: 0;
+    max-inline-size: 34rem;
+    font-size: var(--je-font-size-xs);
+    color: var(--je-color-text-muted);
+  }
+
+  .ds-clamp-list { list-style: none; margin: 0; padding: 0; max-inline-size: 22rem; }
+  .ds-clamp-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    gap: var(--je-space-2);
+    padding-block: var(--je-space-2);
+    font-size: var(--je-font-size-sm);
+    color: var(--je-color-text-muted);
+  }
+  .ds-clamp-row + .ds-clamp-row { border-top: 1px solid var(--je-color-border-subtle); }
+  /* Centred on the first text line, so the rail stays straight across natural
+     row heights and the mark holds still when an entry expands downward. */
+  .ds-clamp-row .ui-avatar {
+    margin-block-start: calc((var(--je-font-size-sm) * var(--je-leading-normal) - 1.5rem) / 2);
+  }
+  .ds-clamp-row strong { color: var(--je-color-text); font-weight: 600; }
+  .ds-clamp-time { color: var(--je-color-text-subtle); white-space: nowrap; }
+
+  .ds-unavailable { list-style: none; margin: 0; padding: 0; max-inline-size: 26rem; }
+  .ds-unavailable__row {
+    position: relative;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--je-space-2);
+    padding-block: var(--je-space-2);
+  }
+  .ds-unavailable__row + .ds-unavailable__row { border-top: 1px solid var(--je-color-border-subtle); }
+  .ds-unavailable__text { display: grid; gap: 2px; min-inline-size: 0; }
+  .ds-unavailable__name { font-size: var(--je-font-size-md); font-weight: 500; }
+  .ds-unavailable__meta { font-size: var(--je-font-size-xs); color: var(--je-color-text-muted); }
+  /* Always in the document so the control can point at it; revealed beside the
+     control on hover or focus, floating so the list never shifts under a
+     travelling pointer. */
+  .ds-unavailable__reason {
+    position: absolute;
+    margin: 0;
+    inline-size: 1px;
+    block-size: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .ds-unavailable__row:hover .ds-unavailable__reason,
+  .ds-unavailable__row:focus-within .ds-unavailable__reason {
+    z-index: 6;
+    inset-block-start: calc(100% - var(--je-space-1));
+    inset-inline: 0;
+    inline-size: auto;
+    block-size: auto;
+    overflow: visible;
+    clip-path: none;
+    padding: var(--je-space-2) var(--je-space-3);
+    border: 1px solid var(--je-color-border-strong);
+    border-radius: var(--je-radius-control);
+    background: var(--je-color-surface);
+    box-shadow: var(--je-shadow-md);
+    font-size: var(--je-font-size-sm);
+    color: var(--je-color-text-muted);
+  }
+  @media (pointer: coarse) {
+    .ds-unavailable__reason,
+    .ds-unavailable__row:hover .ds-unavailable__reason,
+    .ds-unavailable__row:focus-within .ds-unavailable__reason {
+      grid-column: 1 / -1;
+      position: static;
+      inline-size: auto;
+      block-size: auto;
+      overflow: visible;
+      clip-path: none;
+      margin: var(--je-space-1) 0 0;
+      padding: 0;
+      border: 0;
+      background: none;
+      box-shadow: none;
+      font-size: var(--je-font-size-xs);
+      color: var(--je-color-text-muted);
+    }
+  }
+
+  .ds-attention-stack { display: grid; gap: var(--je-space-3); }
+
+  .ds-attention {
+    display: flex;
+    align-items: center;
+    gap: var(--je-space-3);
+    padding: var(--je-space-3) var(--je-space-4);
+    border: 1px solid var(--je-color-border);
+    border-radius: var(--je-radius-surface);
+    background: var(--je-color-surface);
+  }
+
+  .ds-attention__plate {
+    display: grid;
+    place-items: center;
+    inline-size: 2rem;
+    block-size: 2rem;
+    flex-shrink: 0;
+    border-radius: var(--je-radius-control);
+    background: var(--je-color-danger-emphasis);
+    color: var(--je-color-danger-emphasis-contrast);
+  }
+
+  .ds-attention__copy { flex: 1; min-width: 0; }
+  .ds-attention__title { margin: 0; font-size: var(--je-font-size-md); font-weight: 600; }
+  .ds-attention__detail { margin: 0; color: var(--je-color-text-muted); font-size: var(--je-font-size-sm); }
+
+  .ds-attention--tinted {
+    border-color: color-mix(in srgb, var(--je-color-danger-fill) 38%, transparent);
+    background:
+      linear-gradient(var(--je-color-danger-soft), var(--je-color-danger-soft)),
+      var(--je-color-surface);
+  }
+
+  .ds-attention--ring {
+    border: 2px solid var(--je-color-danger-emphasis);
+  }
+
+  .ds-attention--stripe {
+    border-inline-start: 3px solid var(--je-color-danger-fill);
+  }
+
+  .ds-ghost-demo {
+    display: grid;
+    gap: var(--je-space-2);
+    max-inline-size: 24rem;
+  }
+
+  /* The committed card mirrors a schedule card's geometry so the ghost beside
+     it demonstrates the treatment on the composition that actually wears it.
+     Paint lives on the committed modifier only: je.workbench outranks
+     je.utilities, so border/background on the shared class would silently
+     override the .je-ghost treatment this example exists to show. */
+  .ds-ghost-demo__card {
+    padding: var(--je-space-2) var(--je-space-3);
+    border-radius: var(--je-radius-control);
+  }
+
+  .ds-ghost-demo__card--committed {
+    border: 1px solid var(--je-color-border-strong);
+    background: var(--je-color-surface);
+  }
+
+  .ds-ghost-demo__title { margin: 0; font-size: var(--je-font-size-sm); font-weight: 650; }
+
+  .ds-ghost-demo__time {
+    margin: 0;
+    font-size: var(--je-font-size-2xs);
+    color: var(--je-color-text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.ds-hint {
+  font-size: var(--je-font-size-xs);
+  color: var(--je-color-text-muted);
+}
+
+/* Arrival specimen: rows that look alike, which is the only case where the mark
+   earns its place. Bordered and positioned so the ring has a real box to sit in. */
+.ds-arrival-list {
+  list-style: none;
+  margin: var(--je-space-3) 0 0;
+  padding: 0;
+  display: grid;
+  gap: var(--je-space-2);
+}
+
+.ds-arrival-row {
+  position: relative;
+  padding: var(--je-space-2) var(--je-space-3);
+  border: 1px solid var(--je-color-border);
+  border-radius: var(--je-radius-control);
+  background: var(--je-color-surface);
+  font-size: var(--je-font-size-sm);
+}
+
+.ds-arrival-row:focus-visible {
+  outline: none;
+  box-shadow: var(--je-focus-ring);
 }

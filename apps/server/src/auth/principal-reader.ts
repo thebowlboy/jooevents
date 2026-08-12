@@ -6,7 +6,6 @@ import {
   type ExternalIdentityClaims
 } from '@jooevents/identity-access';
 import type { AuthPrincipalEvidenceReader } from '@jooevents/application';
-import type { ServerConfig } from '../config';
 
 interface PrincipalRow {
   readonly auth_user_id: string;
@@ -20,7 +19,7 @@ interface PrincipalRow {
 }
 
 /** Maps Better Auth's already-validated Google principal to provider-neutral claims. */
-export function createSQLiteAuthPrincipalReader(sqlite: Database, config: ServerConfig): AuthPrincipalEvidenceReader {
+export function createSQLiteAuthPrincipalReader(sqlite: Database): AuthPrincipalEvidenceReader {
   return {
     async getVerifiedClaims(authUserId: string): Promise<AdapterOutcome<ExternalIdentityClaims>> {
       const row = sqlite.query<PrincipalRow, [string]>(`
@@ -41,9 +40,8 @@ export function createSQLiteAuthPrincipalReader(sqlite: Database, config: Server
         email: row.email,
         emailVerified: true,
         displayName: row.name,
-        ...(config.admissionMode === 'workspace_domain' && config.googleHostedDomain
-          ? { hostedDomain: config.googleHostedDomain }
-          : {}),
+        // The current auth records do not retain Google's verified `hd` claim. Omitting
+        // it keeps workspace-domain admission closed until such evidence is available.
         ...(row.image
           ? { avatar: { provider: 'google', url: row.image, observedAt } }
           : {}),

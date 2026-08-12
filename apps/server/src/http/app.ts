@@ -1,9 +1,11 @@
 import { createRoute, OpenAPIHono } from '@hono/zod-openapi';
 import type { AccessContext } from '@jooevents/contracts';
 import { accessContextSchema } from '@jooevents/contracts';
+import { classifyRoutePath } from '@jooevents/contracts/route-namespaces';
 import { z } from 'zod';
 import type { ReturnTypeOrPromise } from './types';
 import type { JooEventsAuth } from '../auth/better-auth';
+import { backendRouteNotFoundResponse, protectBackendNotFoundResponse } from './backend-not-found';
 
 export interface AccessContextService {
   ensureAuthPrincipalProvisioned(input: {
@@ -28,6 +30,16 @@ export function createHttpApp(input: {
     context.header('x-correlation-id', correlationId);
     context.set('correlationId' as never, correlationId as never);
     await next();
+  });
+
+  app.use('*', async (context, next) => {
+    await next();
+    if (classifyRoutePath(context.req.path).kind === 'backend') {
+      context.res = protectBackendNotFoundResponse(
+        context.res,
+        context.get('correlationId' as never) as string | undefined
+      );
+    }
   });
 
   app.use('/api/*', async (context, next) => {
@@ -128,5 +140,6 @@ export function createHttpApp(input: {
     openapi: '3.1.0',
     info: { title: 'JooEvents API', version: '0.1.0' }
   });
+  app.notFound((context) => backendRouteNotFoundResponse(correlation(context)));
   return app;
 }

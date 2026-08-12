@@ -75,10 +75,31 @@ describe('HTTP/auth composition', () => {
       .run('auth_ada', 'Ada Lovelace', 'ada@example.com', 'https://lh3.googleusercontent.com/a/ada', timestamp, timestamp);
     opened.sqlite.query(`insert into auth_accounts (id, account_id, provider_id, user_id, created_at, updated_at) values (?, ?, 'google', ?, ?, ?)`)
       .run('account_ada', 'google-subject-ada', 'auth_ada', timestamp, timestamp);
-    const result = await createSQLiteAuthPrincipalReader(opened.sqlite, config).getVerifiedClaims('auth_ada');
+    const result = await createSQLiteAuthPrincipalReader(opened.sqlite).getVerifiedClaims('auth_ada');
     expect(result.kind).toBe('success');
     if (result.kind === 'success') {
       expect(result.data).toMatchObject({ provider: 'google', issuer: 'https://accounts.google.com', subject: 'google-subject-ada', emailVerified: true });
+    }
+  });
+
+  test('returns a disclosure-safe structured 404 instead of HTML for unknown backend paths', async () => {
+    const opened = openSQLite(':memory:');
+    databases.push(opened);
+    const auth = createAuth(config, opened.db);
+    const app = createHttpApp({
+      auth,
+      baseUrl: config.baseUrl,
+      workspaceId: 'workspace_summit',
+      accessContext: { ensureAuthPrincipalProvisioned: async () => { throw new Error('must not provision unknown routes'); } }
+    });
+
+    for (const path of ['/api/unknown', '/api/auth/unknown', '/mcp/unknown', '/.well-known/unknown', '/webhooks/unknown', '/health/unknown']) {
+      const response = await app.request(path, { headers: { accept: 'text/html' } });
+      expect(response.status).toBe(404);
+      expect(response.headers.get('content-type')).toContain('application/json');
+      expect(response.headers.get('cache-control')).toContain('no-store');
+      expect(response.headers.get('x-correlation-id')).toBeTruthy();
+      expect(await response.json()).toMatchObject({ code: 'route_not_found', retryable: false });
     }
   });
 });

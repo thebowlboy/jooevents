@@ -18,6 +18,9 @@
   );
 </script>
 
-<span class="ui-avatar ui-avatar--{size}" title={name} aria-label={name}>
+<!-- No `title`: a hover tooltip never reaches a touch device and arrives too late
+     everywhere else, so the mark carries its name to assistive technology and the
+     composition around it carries the name people read. -->
+<span class="ui-avatar ui-avatar--{size}" aria-label={name}>
   {#if src}<img alt="" {src} />{:else}{initials}{/if}
 </span>

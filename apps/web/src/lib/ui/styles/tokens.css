@@ -33,11 +33,13 @@
     --je-palette-lavender-300: #c2b3df;
     --je-palette-lavender-500: #a899c7;
     --je-palette-lavender-700: #7e6fa3;
+    --je-palette-lavender-800: #5e527c;
 
     --je-palette-sea-50: #ecf6f7;
     --je-palette-sea-100: #dbeeef;
     --je-palette-sea-300: #8dc4c8;
     --je-palette-sea-500: #4f9498;
+    --je-palette-sea-700: #35686c;
 
     /* Public semantic theme contract. Custom themes override only these. */
     --je-color-canvas: var(--je-palette-cream-50);
@@ -69,7 +71,7 @@
     --je-color-success: #3d7a52;
     --je-color-success-fill: #6fa07f;
     --je-color-success-soft: rgb(139 191 159 / 0.16);
-    --je-color-warning: #8a6914;
+    --je-color-warning: #806112;
     --je-color-warning-fill: #d9a441;
     --je-color-warning-soft: rgb(229 192 123 / 0.20);
     --je-color-danger: #8a3d35;
@@ -79,9 +81,27 @@
     --je-color-info-fill: #6f93b8;
     --je-color-info-soft: rgb(123 163 196 / 0.16);
 
+    /* The span a query matched. Its own token rather than a borrowed
+       `warning-soft`: a hit is not a caution, and the two would drift the
+       moment either wanted tuning. Translucent so it composites over a row's
+       own hover and selected tints instead of punching a hole through them,
+       and hue-neutral so it stays legible under every accent theme. */
+    --je-color-search-match: rgb(229 192 123 / 0.38);
+
+    /* Emphasis tier: saturated act-now surfaces. Each pair is AA-checked for
+       its contrast partner (danger/success carry white, warning carries ink). */
+    --je-color-success-emphasis: #3d7a52;
+    --je-color-success-emphasis-contrast: #ffffff;
+    --je-color-warning-emphasis: #d9a441;
+    --je-color-warning-emphasis-contrast: #2a2522;
+    --je-color-danger-emphasis: #b8493f;
+    --je-color-danger-emphasis-contrast: #ffffff;
+
     --je-color-accent-lavender: var(--je-palette-lavender-700);
+    --je-color-accent-lavender-strong: var(--je-palette-lavender-800);
     --je-color-accent-lavender-soft: var(--je-palette-lavender-100);
     --je-color-accent-sea: var(--je-palette-sea-500);
+    --je-color-accent-sea-strong: var(--je-palette-sea-700);
     --je-color-accent-sea-soft: var(--je-palette-sea-100);
 
     --je-color-danger-contrast: #ffffff;
@@ -90,7 +110,7 @@
     --je-color-code-surface: #262321;
     --je-color-code-text: #f7f1eb;
 
-    --je-font-body: 'Open Sans Variable', 'Open Sans', system-ui, -apple-system, sans-serif;
+    --je-font-body: 'Inter Variable', Inter, system-ui, -apple-system, sans-serif;
     --je-font-display: 'Merriweather', ui-serif, Georgia, serif;
     --je-font-mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
     --je-font-size-root: 16px;
@@ -141,7 +161,12 @@
     --je-shadow-sm: 0 1px 3px rgb(42 37 34 / 0.06), 0 1px 1px rgb(42 37 34 / 0.03);
     --je-shadow-md: 0 10px 28px rgb(42 37 34 / 0.08), 0 2px 5px rgb(42 37 34 / 0.04);
     --je-shadow-lg: 0 24px 64px rgb(42 37 34 / 0.14), 0 6px 18px rgb(42 37 34 / 0.06);
-    --je-focus-ring: 0 0 0 3px color-mix(in srgb, var(--je-color-focus) 46%, transparent);
+    /* Two-tone ring: an inner surface gap keeps the outer action ring visible
+       (>= 3:1) on white, cream, tinted, and solid-coral backgrounds alike. */
+    --je-focus-ring:
+      0 0 0 2px var(--je-color-surface),
+      0 0 0 4px var(--je-color-action);
+    --je-tracking-caps: 0.045em;
 
     --je-duration-fast: 120ms;
     --je-duration-normal: 180ms;

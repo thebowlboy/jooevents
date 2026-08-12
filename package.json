@@ -16,7 +16,11 @@
     "check": "bun run --workspaces check && ./scripts/check-motion.sh",
     "check:motion": "./scripts/check-motion.sh",
     "check:public-boundary": "./scripts/check-public-boundary.sh",
+    "db:migrate": "bun packages/persistence/src/sqlite/cli.ts migrate",
+    "db:status": "bun packages/persistence/src/sqlite/cli.ts status",
     "test": "bun test",
+    "test:foundation": "bun test packages/kernel packages/identity-access packages/contracts packages/application packages/changesets packages/reliability packages/model-adapter packages/mcp packages/program packages/persistence/src apps/server/src",
+    "test:foundation-db": "bun test packages/persistence/src/sqlite",
     "test:e2e": "bun run --cwd apps/web test:e2e",
     "preview": "bun run --cwd apps/web preview"
   }

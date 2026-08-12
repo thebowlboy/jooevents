@@ -109,8 +109,6 @@
   .entry-state .ui-alert, .entry-state .ui-button, .entry-state .google-button { max-width: 100%; }
   .entry-state > .google-button { margin-block: var(--je-space-2); }
   .entry-state .actions { width: 100%; display: flex; align-items: center; justify-content: var(--je-entry-alignment, center); flex-wrap: wrap; gap: var(--je-space-3); }
-  .entry-state .help { color: var(--je-color-action); font-weight: 700; padding: .4rem 0; }
-  .entry-state .help:focus-visible { outline: 3px solid var(--je-color-focus); outline-offset: 3px; }
   .entry-state .support, .entry-state .status { font-size: var(--je-font-size-sm); }
   .entry-state .entry-aside { max-width: none; color: var(--je-color-text-muted); font-size: var(--je-font-size-sm); }
 
@@ -159,7 +157,7 @@
   .entry-state .resolver span:nth-child(1) { width: 38%; height: 1.65rem; }
   .entry-state .resolver span:nth-child(2) { width: 100%; height: 3rem; border-radius: var(--je-radius-control); }
   .entry-state .entry-progress { width: 100%; height: .35rem; overflow: hidden; border-radius: var(--je-radius-round); background: var(--je-color-surface-sunken); }
-  .entry-state .entry-progress span { display: block; width: 45%; height: 100%; background: var(--je-color-info); animation: je-entry-progress var(--je-duration-loop) var(--je-ease) infinite alternate; }
+  .entry-state .entry-progress span { display: block; width: 45%; height: 100%; background: var(--je-color-info); animation: je-indeterminate var(--je-duration-loop) var(--je-ease) infinite alternate; }
 
   /* Google-mandated identity (standard G, white surface, border gray, label) with
      the system's button affordances: control radius, resting elevation, hover and
@@ -214,7 +212,7 @@
 
   @media (max-width: 28rem) {
     .entry-state .actions { align-items: stretch; flex-direction: column; }
-    .entry-state .actions .ui-button, .entry-state .actions .help { width: 100%; text-align: center; }
+    .entry-state .actions .ui-button { width: 100%; text-align: center; }
   }
 
   @media (prefers-reduced-motion: reduce) {
@@ -223,5 +221,4 @@
   }
 }
 
-@keyframes je-entry-progress { from { transform: translateX(-15%); } to { transform: translateX(140%); } }
 @keyframes je-error-in { from { opacity: 0; } }

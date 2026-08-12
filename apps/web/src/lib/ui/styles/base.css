@@ -31,6 +31,7 @@
     font-family: var(--je-font-body);
     font-size: var(--je-font-size-base);
     line-height: var(--je-leading-normal);
+    overflow-wrap: break-word;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;

@@ -32,8 +32,11 @@
   }: Props = $props();
 
   const descriptionId = $derived(description ? `${id}-description` : undefined);
+  const metaId = $derived(meta ? `${id}-meta` : undefined);
   const messageId = $derived(error || success ? `${id}-message` : undefined);
-  const describedBy = $derived([descriptionId, messageId].filter(Boolean).join(' ') || undefined);
+  const describedBy = $derived(
+    [descriptionId, metaId, messageId].filter(Boolean).join(' ') || undefined
+  );
 </script>
 
 <div class="ui-field">
@@ -43,7 +46,7 @@
       {#if required}<span class="ui-label__required" aria-hidden="true"> *</span>{/if}
       {#if optional}<span class="ui-label__optional"> (optional)</span>{/if}
     </label>
-    {#if meta}<span class="ui-field__meta">{meta}</span>{/if}
+    {#if meta}<span class="ui-field__meta" id={metaId}>{meta}</span>{/if}
   </div>
   {#if description}<p class="ui-field__description" id={descriptionId}>{description}</p>{/if}
   {@render children({ id, describedBy, invalid: Boolean(error) })}

@@ -1,0 +1,10 @@
+{
+  "name": "@jooevents/kernel",
+  "private": true,
+  "version": "0.0.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "check": "tsc --noEmit", "test": "bun test" },
+  "devDependencies": { "bun-types": "1.3.6", "typescript": "6.0.3" }
+}

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { gatewayAuthorityProjectionSchema } from './gateway-authority';
 
 export const safeUserSchema = z.object({
   id: z.string().min(1),
@@ -20,24 +21,27 @@ export const safeWorkspaceSchema = z.object({
 });
 
 export const accessContextSchema = z.discriminatedUnion('state', [
-  z.object({ state: z.literal('anonymous') }),
-  z.object({
+  z.strictObject({ state: z.literal('anonymous') }),
+  z.strictObject({
     state: z.literal('provisioning'),
     retryAfterSeconds: z.number().int().positive(),
     correlationId: z.string().min(1)
   }),
-  z.object({
+  z.strictObject({
     state: z.literal('pending_review'),
     user: safeUserSchema,
     membership: safeMembershipSchema.extend({ status: z.literal('pending_review') }),
     workspace: safeWorkspaceSchema
   }),
-  z.object({
+  z.strictObject({
     state: z.literal('active'),
     user: safeUserSchema,
-    workspace: safeWorkspaceSchema
+    workspace: safeWorkspaceSchema,
+    // Deployments without configured gateway key profiles omit this projection.
+    // Browser persistence treats absence as unavailable and never derives a fallback.
+    gatewayAuthority: gatewayAuthorityProjectionSchema.optional()
   }),
-  z.object({
+  z.strictObject({
     state: z.literal('blocked'),
     code: z.enum(['suspended', 'deactivated', 'not_admitted'])
   })

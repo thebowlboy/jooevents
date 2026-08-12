@@ -6,6 +6,7 @@ import { createAuth } from '../auth/better-auth';
 import { createSQLiteAuthPrincipalReader } from '../auth/principal-reader';
 import { loadConfig } from '../config';
 import { createHttpApp } from '../http/app';
+import { createRuntimeRequestHandler, resolveBunListenerConfiguration } from '../runtime/request-handler';
 
 const config = loadConfig(Bun.env);
 if (config.databaseDriver !== 'sqlite' || !config.databasePath || !config.dataDirectory) {
@@ -27,7 +28,7 @@ const bootstrap = bootstrapEmptyInstall({
 });
 const auth = createAuth(config, opened.db);
 const accessContext = createProvisioningService({
-  principals: createSQLiteAuthPrincipalReader(opened.sqlite, config),
+  principals: createSQLiteAuthPrincipalReader(opened.sqlite),
   store: createSQLiteProvisioningStore(opened.sqlite),
   admission: {
     mode: config.admissionMode,
@@ -35,13 +36,16 @@ const accessContext = createProvisioningService({
   }
 });
 const app = createHttpApp({ auth, accessContext, workspaceId: bootstrap.workspaceId, baseUrl: config.baseUrl });
-
-const internalPort = Bun.env.JOOEVENTS_INTERNAL_HTTP_PORT ? Number(Bun.env.JOOEVENTS_INTERNAL_HTTP_PORT) : 5176;
-if (!Number.isInteger(internalPort) || internalPort < 1 || internalPort > 65_535) throw new Error('JOOEVENTS_INTERNAL_HTTP_PORT must be a valid TCP port');
+const listener = resolveBunListenerConfiguration(Bun.env);
+const fetch = createRuntimeRequestHandler({
+  mode: listener.mode,
+  backend: app.fetch,
+  buildDirectory: resolve(import.meta.dir, '../../../web/build')
+});
 
 Bun.serve({
-  hostname: Bun.env.JOOEVENTS_INTERNAL_HTTP_PORT ? '127.0.0.1' : '0.0.0.0',
-  port: internalPort,
-  development: Bun.env.NODE_ENV !== 'production',
-  fetch: app.fetch
+  hostname: listener.hostname,
+  port: listener.port,
+  development: listener.development,
+  fetch
 });
