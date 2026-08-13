@@ -1,15 +1,15 @@
 # JooEvents trademark policy
 
-Effective: 10 August 2026
+Effective: 12 August 2026
 
-JooEvents is open source, and its copyright license deliberately permits broad
-reuse and modification. Trademark rights serve a narrower purpose: helping
+JooEvents is source available, and its copyright license deliberately permits
+substantial reuse and modification. Trademark rights serve a narrower purpose: helping
 people distinguish official JooEvents releases from other products and forks.
 
-This policy describes uses that the owner of the JooEvents marks, publishing
-under the pseudonym Bowlboy, permits without separate written approval. It does
-not limit fair use, fair dealing, nominative use, or any other use that
-applicable law permits.
+This policy describes uses that the owner of the JooEvents marks, JooCorp
+Private Limited, publishing under the name Bowlboy, permits without separate
+written approval. It does not limit fair use, fair dealing, nominative use, or
+any other use that applicable law permits.
 
 ## Covered marks
 
@@ -20,11 +20,11 @@ This policy covers the following marks, whether registered or unregistered:
 - the name **Bowlboy**, the Bowlboy character, and official Bowlboy depictions
   when they are used to identify JooEvents or an official JooEvents release.
 
-The Apache License 2.0 grants copyright permission to copy and adapt the
-first-party artwork included in this repository. As stated in section 6 of that
-license, it does not grant trademark permission. Artistic reuse is welcome; a
-use that identifies the source of a product or service must also follow this
-policy.
+The JooEvents Community and Small Organization License grants copyright
+permission to copy and adapt the first-party artwork included in this
+repository for uses allowed by that license. It does not grant trademark
+permission. Artistic reuse is welcome within those terms; a use that identifies
+the source of a product or service must also follow this policy.
 
 ## Guiding rule
 
@@ -54,12 +54,12 @@ You may:
 
 ## Modified versions and forks
 
-You may modify and distribute JooEvents under the Apache License 2.0. A
-substantively modified version must use a distinct primary product name and
-branding, clearly identify itself as modified and unofficial, and avoid using
-the official JooEvents wordmark or official Bowlboy depiction as its own source
-identifier. It may still make a truthful statement such as "derived from
-JooEvents."
+You may modify and distribute JooEvents as permitted by the license shipped
+with your version. A substantively modified version must use a distinct primary
+product name and branding, clearly identify itself as modified and unofficial,
+and avoid using the official JooEvents wordmark or official Bowlboy depiction
+as its own source identifier. It may still make a truthful statement such as
+"derived from JooEvents."
 
 A suitable independence statement is:
 

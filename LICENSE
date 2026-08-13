@@ -1,202 +1,241 @@
+JooEvents Community and Small Organization License 1.0
 
-                                 Apache License
-                           Version 2.0, January 2004
-                        http://www.apache.org/licenses/
+Copyright 2026 JooCorp Private Limited
 
-   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+These terms apply to the JooEvents software, documentation, and first-party
+artwork distributed with this license (the "Software"), except for material
+that identifies a different license.
 
-   1. Definitions.
+1. Definitions
 
-      "License" shall mean the terms and conditions for use, reproduction,
-      and distribution as defined by Sections 1 through 9 of this document.
+"You" means the individual or Organization exercising rights under these
+terms.
 
-      "Licensor" shall mean the copyright owner or entity authorized by
-      the copyright owner that is granting the License.
+"Licensor" means the copyright owner or an entity authorized by the copyright
+owner to offer the relevant part of the Software under these terms.
 
-      "Legal Entity" shall mean the union of the acting entity and all
-      other entities that control, are controlled by, or are under common
-      control with that entity. For the purposes of this definition,
-      "control" means (i) the power, direct or indirect, to cause the
-      direction or management of such entity, whether by contract or
-      otherwise, or (ii) ownership of fifty percent (50%) or more of the
-      outstanding shares, or (iii) beneficial ownership of such entity.
+"JooEvents project steward" means the original copyright owner publishing as
+Bowlboy, or a successor publicly identified as steward by the canonical
+JooEvents repository.
 
-      "You" (or "Your") shall mean an individual or Legal Entity
-      exercising permissions granted by this License.
+"Organization" means any legal entity, sole proprietorship, unincorporated
+association, public body, or other organization, together with every entity
+that controls, is controlled by, or is under common control with it. "Control"
+means the direct or indirect power to direct management or policies, or
+ownership of fifty percent or more of the voting or beneficial interests.
 
-      "Source" form shall mean the preferred form for making modifications,
-      including but not limited to software source code, documentation
-      source, and configuration files.
+"Worker" means an employee or an independent contractor who regularly works
+for an Organization. Part-time Workers count as individuals, not fractions.
 
-      "Object" form shall mean any form resulting from mechanical
-      transformation or translation of a Source form, including but
-      not limited to compiled object code, generated documentation,
-      and conversions to other media types.
+"Annual Resources" means the greater of an Organization's consolidated gross
+revenue and its consolidated annual operating budget for its most recently
+completed fiscal year. If the Organization has not completed a fiscal year,
+use a reasonable good-faith estimate for its first year.
 
-      "Work" shall mean the work of authorship, whether in Source or
-      Object form, made available under the License, as indicated by a
-      copyright notice that is included in or attached to the work
-      (an example is provided in the Appendix below).
+"Small Organization" means an Organization that has both:
 
-      "Derivative Works" shall mean any work, whether in Source or Object
-      form, that is based on (or derived from) the Work and for which the
-      editorial revisions, annotations, elaborations, or other modifications
-      represent, as a whole, an original work of authorship. For the purposes
-      of this License, Derivative Works shall not include works that remain
-      separable from, or merely link (or bind by name) to the interfaces of,
-      the Work and Derivative Works thereof.
+  (a) fewer than 50 Workers; and
+  (b) less than US$5,000,000 in Annual Resources.
 
-      "Contribution" shall mean any work of authorship, including
-      the original version of the Work and any modifications or additions
-      to that Work or Derivative Works thereof, that is intentionally
-      submitted to Licensor for inclusion in the Work by the copyright owner
-      or by an individual or Legal Entity authorized to submit on behalf of
-      the copyright owner. For the purposes of this definition, "submitted"
-      means any form of electronic, verbal, or written communication sent
-      to the Licensor or its representatives, including but not limited to
-      communication on electronic mailing lists, source code control systems,
-      and issue tracking systems that are managed by, or on behalf of, the
-      Licensor for the purpose of discussing and improving the Work, but
-      excluding communication that is conspicuously marked or otherwise
-      designated in writing by the copyright owner as "Not a Contribution."
+"Production Use" means use of the Software for an Organization's operations,
+or to provide a live service, as opposed to evaluation, development, testing,
+security research, or demonstration.
 
-      "Contributor" shall mean Licensor and any individual or Legal Entity
-      on behalf of whom a Contribution has been received by Licensor and
-      subsequently incorporated within the Work.
+"Commercial Offering" means any product or service in which You, directly or
+indirectly for payment or commercial advantage:
 
-   2. Grant of Copyright License. Subject to the terms and conditions of
-      this License, each Contributor hereby grants to You a perpetual,
-      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
-      copyright license to reproduce, prepare Derivative Works of,
-      publicly display, publicly perform, sublicense, and distribute the
-      Work and such Derivative Works in Source or Object form.
+  (a) sell, license, rent, lease, or otherwise provide the Software or a
+      modified version of it;
+  (b) provide third parties with hosted or managed access to a substantial
+      portion of the Software's functionality;
+  (c) embed a substantial portion of the Software in a product or service
+      offered to third parties; or
+  (d) white-label or resell the Software or its functionality.
 
-   3. Grant of Patent License. Subject to the terms and conditions of
-      this License, each Contributor hereby grants to You a perpetual,
-      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
-      (except as stated in this section) patent license to make, have made,
-      use, offer to sell, sell, import, and otherwise transfer the Work,
-      where such license applies only to those patent claims licensable
-      by such Contributor that are necessarily infringed by their
-      Contribution(s) alone or by combination of their Contribution(s)
-      with the Work to which such Contribution(s) was submitted. If You
-      institute patent litigation against any entity (including a
-      cross-claim or counterclaim in a lawsuit) alleging that the Work
-      or a Contribution incorporated within the Work constitutes direct
-      or contributory patent infringement, then any patent licenses
-      granted to You under this License for that Work shall terminate
-      as of the date such litigation is filed.
+Charging for consulting, installation, migration, customization, training, or
+support is not by itself a Commercial Offering when the customer separately
+has the right to use the Software and the deployment is dedicated to and
+controlled by that customer.
 
-   4. Redistribution. You may reproduce and distribute copies of the
-      Work or Derivative Works thereof in any medium, with or without
-      modifications, and in Source or Object form, provided that You
-      meet the following conditions:
+Using the Software to organize an Organization's own events—including access
+for its applicants, speakers, reviewers, attendees, sponsors, volunteers, and
+staff—is not by itself a Commercial Offering, even when the Organization
+charges admission, sponsorship, participation, or submission fees. Operating
+events for customers as a hosted, white-labelled, or managed JooEvents service
+may still be a Commercial Offering.
 
-      (a) You must give any other recipients of the Work or
-          Derivative Works a copy of this License; and
+"Source Form" means the preferred form for making modifications. "Object
+Form" means any form produced by mechanical transformation or translation of
+Source Form.
 
-      (b) You must cause any modified files to carry prominent notices
-          stating that You changed the files; and
+"Modified Work" means any work based on or derived from the Software. It does
+not include a work that merely communicates with the Software through its
+documented interfaces and is otherwise separable from it.
 
-      (c) You must retain, in the Source form of any Derivative Works
-          that You distribute, all copyright, patent, trademark, and
-          attribution notices from the Source form of the Work,
-          excluding those notices that do not pertain to any part of
-          the Derivative Works; and
+2. Rights available to everyone
 
-      (d) If the Work includes a "NOTICE" text file as part of its
-          distribution, then any Derivative Works that You distribute must
-          include a readable copy of the attribution notices contained
-          within such NOTICE file, excluding those notices that do not
-          pertain to any part of the Derivative Works, in at least one
-          of the following places: within a NOTICE text file distributed
-          as part of the Derivative Works; within the Source form or
-          documentation, if provided along with the Derivative Works; or,
-          within a display generated by the Derivative Works, if and
-          wherever such third-party notices normally appear. The contents
-          of the NOTICE file are for informational purposes only and
-          do not modify the License. You may add Your own attribution
-          notices within Derivative Works that You distribute, alongside
-          or as an addendum to the NOTICE text from the Work, provided
-          that such additional attribution notices cannot be construed
-          as modifying the License.
+Subject to these terms, the Licensor grants You a worldwide, non-exclusive,
+royalty-free copyright license to:
 
-      You may add Your own copyright statement to Your modifications and
-      may provide additional or different license terms and conditions
-      for use, reproduction, or distribution of Your modifications, or
-      for any such Derivative Works as a whole, provided Your use,
-      reproduction, and distribution of the Work otherwise complies with
-      the conditions stated in this License.
+  (a) inspect, evaluate, develop, test, study, and demonstrate the Software;
+  (b) reproduce and modify the Software for those purposes; and
+  (c) distribute the Software or a Modified Work, in Source or Object Form,
+      without charge and not as part of a Commercial Offering.
 
-   5. Submission of Contributions. Unless You explicitly state otherwise,
-      any Contribution intentionally submitted for inclusion in the Work
-      by You to the Licensor shall be under the terms and conditions of
-      this License, without any additional terms or conditions.
-      Notwithstanding the above, nothing herein shall supersede or modify
-      the terms of any separate license agreement you may have executed
-      with Licensor regarding such Contributions.
+This means that public, noncommercial forks are welcome. Donations or
+sponsorships that are not required to receive or use a copy do not, by
+themselves, make a distribution commercial.
 
-   6. Trademarks. This License does not grant permission to use the trade
-      names, trademarks, service marks, or product names of the Licensor,
-      except as required for reasonable and customary use in describing the
-      origin of the Work and reproducing the content of the NOTICE file.
+3. Free Production Use
 
-   7. Disclaimer of Warranty. Unless required by applicable law or
-      agreed to in writing, Licensor provides the Work (and each
-      Contributor provides its Contributions) on an "AS IS" BASIS,
-      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
-      implied, including, without limitation, any warranties or conditions
-      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
-      PARTICULAR PURPOSE. You are solely responsible for determining the
-      appropriateness of using or redistributing the Work and assume any
-      risks associated with Your exercise of permissions under this License.
+Subject to these terms, the Licensor also grants You a worldwide,
+non-exclusive, royalty-free copyright license to make Production Use of the
+Software when either:
 
-   8. Limitation of Liability. In no event and under no legal theory,
-      whether in tort (including negligence), contract, or otherwise,
-      unless required by applicable law (such as deliberate and grossly
-      negligent acts) or agreed to in writing, shall any Contributor be
-      liable to You for damages, including any direct, indirect, special,
-      incidental, or consequential damages of any character arising as a
-      result of this License or out of the use or inability to use the
-      Work (including but not limited to damages for loss of goodwill,
-      work stoppage, computer failure or malfunction, or any and all
-      other commercial damages or losses), even if such Contributor
-      has been advised of the possibility of such damages.
+  (a) You are an individual acting on Your own behalf, not for the benefit of
+      an Organization or as a business, for personal, educational, research,
+      volunteer, or community purposes; or
+  (b) the Organization benefiting from the Production Use is a Small
+      Organization.
 
-   9. Accepting Warranty or Additional Liability. While redistributing
-      the Work or Derivative Works thereof, You may choose to offer,
-      and charge a fee for, acceptance of support, warranty, indemnity,
-      or other liability obligations and/or rights consistent with this
-      License. However, in accepting such obligations, You may act only
-      on Your own behalf and on Your sole responsibility, not on behalf
-      of any other Contributor, and only if You agree to indemnify,
-      defend, and hold each Contributor harmless for any liability
-      incurred by, or claims asserted against, such Contributor by reason
-      of your accepting any such warranty or additional liability.
+This Section does not permit a Commercial Offering. A separate commercial
+license is required for a Commercial Offering regardless of the size of the
+person or Organization providing it.
 
-   END OF TERMS AND CONDITIONS
+4. Consultants and service providers
 
-   APPENDIX: How to apply the Apache License to your work.
+You may charge for professional services relating to the Software without
+obtaining a reseller license when:
 
-      To apply the Apache License to your work, attach the following
-      boilerplate notice, with the fields enclosed by brackets "[]"
-      replaced with your own identifying information. (Don't include
-      the brackets!)  The text should be enclosed in the appropriate
-      comment syntax for the file format. We also recommend that a
-      file or class name and description of purpose be included on the
-      same "printed page" as the copyright notice for easier
-      identification within third-party archives.
+  (a) the customer has rights to make Production Use under Section 3,
+      Section 6, or a separate commercial license;
+  (b) each deployment is dedicated to and controlled by that customer; and
+  (c) You do not sublicense the Software, provide shared hosted access, or
+      present Yourself as an official JooEvents provider.
 
-   Copyright [yyyy] [name of copyright owner]
+5. Conditions on distribution and forks
 
-   Licensed under the Apache License, Version 2.0 (the "License");
-   you may not use this file except in compliance with the License.
-   You may obtain a copy of the License at
+Every distribution permitted by Section 2 must:
 
-       http://www.apache.org/licenses/LICENSE-2.0
+  (a) include a complete copy of these terms;
+  (b) retain applicable copyright, patent, attribution, and legal notices;
+  (c) identify files You materially changed; and
+  (d) license the Software and every Modified Work, as a whole, under these
+      same terms.
 
-   Unless required by applicable law or agreed to in writing, software
-   distributed under the License is distributed on an "AS IS" BASIS,
-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-   See the License for the specific language governing permissions and
-   limitations under the License.
+Recipients receive their rights directly from the Licensor under these terms.
+You may not impose terms that restrict or conflict with the rights granted by
+these terms. Separate works that merely communicate with the Software through
+documented interfaces are not subject to this Section.
+
+6. Larger-organization courtesy grant and commercial offerings
+
+Subject to these terms, an Organization that is not a Small Organization may
+make Production Use of the Software for its own operations and events without
+first obtaining a separate commercial license. This is a worldwide,
+non-exclusive, royalty-free copyright license that continues unless and until
+the Licensor sends that Organization a written Commercial License Notice.
+
+A Commercial License Notice is valid only if it:
+
+  (a) is sent from bowlboy@joocorp.com to an email address the Organization
+      has provided or publicly identifies for legal, licensing, or general
+      business inquiries;
+  (b) identifies the Organization and this Section; and
+  (c) asks the Organization to obtain a separate commercial license or stop
+      Production Use.
+
+After receiving a valid Commercial License Notice, the Organization may
+continue its existing Production Use for 180 days while the parties discuss a
+commercial license or the Organization prepares to stop that use. No fee,
+royalty, damages, or other payment is owed for Production Use authorized before
+or during that 180-day period. If the parties do not agree on a separate
+license, the courtesy grant terminates when the period ends and the Organization
+must stop Production Use, but may retain copies and continue the non-production
+activities permitted by Section 2. Stopping by the deadline fully satisfies the
+notice; no retroactive license fee is due.
+
+The courtesy grant in this Section does not permit a Commercial Offering.
+Every Commercial Offering requires a separate written commercial license from
+the Licensor or an authorized licensing representative before it begins.
+Commercial licenses may use a fixed fee, a per-customer or per-deployment fee,
+royalties, or another mutually agreed structure. Pricing is not publicly
+disclosed. Commercial-license inquiries may be sent to bowlboy@joocorp.com.
+
+These terms do not obligate the Licensor to offer a commercial license or any
+particular commercial terms.
+
+7. Patent license and patent defense
+
+For activities permitted by these terms, each contributor grants You a
+worldwide, non-exclusive, royalty-free patent license under patent claims that
+the contributor can license and that are necessarily infringed by that
+contributor's contribution alone or in combination with the Software.
+
+If You or Your Organization institute patent litigation alleging that the
+Software or a contribution infringes a patent, every patent license granted to
+You under these terms terminates when the litigation is filed.
+
+8. Contributions
+
+Unless You conspicuously state otherwise in writing before submission, any
+contribution You intentionally submit to the canonical JooEvents project for
+inclusion in the Software is offered under these terms. You also grant the
+JooEvents project steward a perpetual, worldwide, non-exclusive, royalty-free,
+irrevocable license to use, reproduce, modify, distribute, sublicense, and
+relicense that contribution, including under commercial terms or an
+OSI-approved open-source license.
+
+"Submitted" includes a pull request or other communication sent to a source
+control system, issue tracker, or communication channel managed for the purpose
+of improving JooEvents. This Section does not override a separate written
+contributor agreement.
+
+9. Trademarks
+
+These terms do not grant permission to use the JooEvents, Bowlboy, or other
+trade names, trademarks, service marks, product names, logos, or character
+depictions except as necessary to identify the origin of the Software and make
+truthful nominative statements. The separate trademark policy distributed with
+the Software applies.
+
+10. Compliance, cure, and termination
+
+Your rights under these terms terminate automatically if You materially breach
+them. The first time You are notified of a breach, Your rights will be
+reinstated retroactively if You cure the breach and take reasonable steps to
+correct its consequences within 30 days after receiving notice. A deliberate
+or repeated breach is not entitled to this cure.
+
+Sections that by their nature should survive termination, including Sections
+9, 11, and 12, survive.
+
+11. No warranty
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE SOFTWARE IS PROVIDED "AS IS" AND
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING
+WITHOUT LIMITATION WARRANTIES OF TITLE, NON-INFRINGEMENT, MERCHANTABILITY, OR
+FITNESS FOR A PARTICULAR PURPOSE. YOU ARE RESPONSIBLE FOR DETERMINING WHETHER
+THE SOFTWARE IS SUITABLE FOR YOUR USE AND ASSUME THE RISKS OF USING IT.
+
+12. Limitation of liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY LAW, NO COPYRIGHT HOLDER OR CONTRIBUTOR WILL
+BE LIABLE UNDER ANY LEGAL THEORY FOR ANY DIRECT, INDIRECT, SPECIAL, INCIDENTAL,
+CONSEQUENTIAL, OR EXEMPLARY DAMAGES ARISING FROM THESE TERMS OR THE SOFTWARE,
+EVEN IF ADVISED OF THE POSSIBILITY OF THOSE DAMAGES.
+
+13. Other versions and third-party material
+
+These terms apply only to a version of the Software distributed with these
+terms. Rights already granted for an earlier version under the Apache License
+2.0 or another license are not withdrawn or changed. Third-party material
+remains under its identified license.
+
+14. Severability
+
+If a provision of these terms is held unenforceable, it will be reformed only
+to the minimum extent necessary, and the remaining provisions will continue in
+effect.
+
+This is a source-available license, not an OSI-approved open-source license.
