@@ -57,7 +57,10 @@ function policy(overrides: Partial<PublicMutationContinuationPolicy> = {}): Publ
     scope: Object.freeze({ kind: 'event' as const, workspaceId, eventId }),
     purpose: 'cfp.submission',
     action: 'submit',
-    actionAnchorId: 'pma_0123456789abcdef',
+    resourceBindings: Object.freeze([
+      Object.freeze({ kind: 'intake_form', id: '01890f47-9abc-7def-8123-456789abc010' }),
+      Object.freeze({ kind: 'intake_form_version', id: '01890f47-9abc-7def-8123-456789abc011' })
+    ]),
     lifetimeMs: 5 * 60 * 1_000,
     bootstrapVerifier: verifierRef,
     originPolicy: Object.freeze({ key: 'security.origin.public-form', version: parseContractVersion(1) }),
@@ -178,6 +181,7 @@ function harness(input: {
   readonly installSchema?: boolean;
   readonly time?: ReturnType<typeof mutableClock>;
   readonly idBase?: number;
+  readonly newActionAnchorId?: () => string;
 } = {}): Harness {
   const sqlite = input.sqlite ?? new Database(':memory:');
   sqlite.exec('PRAGMA foreign_keys = ON');
@@ -187,6 +191,7 @@ function harness(input: {
   let currentPolicy: PublicMutationContinuationPolicy | undefined = input.policy ?? policy();
   let auditSequence = input.idBase ?? 100;
   let ceremonySequence = (input.idBase ?? 100) + 100;
+  let actionAnchorSequence = (input.idBase ?? 100) + 10_000;
   let completionSequence = 1;
   const policies: PublicMutationContinuationPolicyRegistry = Object.freeze({
     resolve(reference: Parameters<PublicMutationContinuationPolicyRegistry['resolve']>[0]) {
@@ -228,11 +233,15 @@ function harness(input: {
       bootstrapVerifiers: registry,
       store,
       clock: time.clock,
+      newActionAnchorId: input.newActionAnchorId
+        ?? (() => uuid('ceremony', actionAnchorSequence++) as string),
       newCeremonyEvidenceId: () => uuid('ceremony', ceremonySequence++) as CeremonyEvidenceId,
       newAuditEventId: () => uuid('audit', auditSequence++) as AuditEventId,
-      randomBytes: (size) => Uint8Array.from({ length: size }, (_, index) => (randomCall + index * 13) % 256)
+      randomBytes: (size) => {
+        const seed = randomCall++;
+        return Uint8Array.from({ length: size }, (_, index) => (seed + index * 13) % 256);
+      }
     });
-    randomCall += 1;
     return { store, boundary };
   };
   const initial = make(verifier, input.faults, 7);
@@ -281,7 +290,7 @@ async function mint(h: Harness, evidence: ProtocolEvidence = validProtocol) {
 }
 
 describe('disposable public mutation continuation proof', () => {
-  test('mints one 256-bit short-lived capability and returns its raw value only once', async () => {
+  test('mints one 256-bit short-lived capability per ceremony and returns each raw value only once', async () => {
     const h = harness();
     const issued = await mint(h);
     expect(issued.continuation).toMatch(/^gsr_[A-Za-z0-9_-]{43}$/);
@@ -307,7 +316,7 @@ describe('disposable public mutation continuation proof', () => {
     expect(tableCount(h.sqlite, 'public_mutation_effect_proofs_trial')).toBe(0);
 
     // If the first raw response was lost, the server cannot recover that secret.
-    // Expiry does not make a blind replacement safe for the same action anchor.
+    // Expiry does not make a blind replacement safe for the same verified bootstrap.
     h.time.set('2026-08-11T00:05:00.000Z');
     const afterExpiryVerifier = new FakeBootstrapVerifier();
     afterExpiryVerifier.enforceReplay = false;
@@ -317,8 +326,8 @@ describe('disposable public mutation continuation proof', () => {
     expect(afterExpiry.kind).toBe('already_issued');
     expect('continuation' in afterExpiry).toBe(false);
 
-    // Dropping the anonymous browser partition and replay nonce cannot create a
-    // second capability for the same server-held action anchor either.
+    // Distinct verified bootstrap material represents another ceremony. It receives
+    // another durable server-owned action anchor under the same static policy.
     const replacementAttempt = await h.restart({ verifier: new FakeBootstrapVerifier() }).boundary.mint({
       protocolEvidence: {
         ...validProtocol,
@@ -326,8 +335,9 @@ describe('disposable public mutation continuation proof', () => {
         nonce: 'different-bootstrap-nonce'
       }
     });
-    expect(replacementAttempt.kind).toBe('already_issued');
-    expect('continuation' in replacementAttempt).toBe(false);
+    expect(replacementAttempt.kind).toBe('issued');
+    expect('continuation' in replacementAttempt).toBe(true);
+    expect(tableCount(h.sqlite, 'public_mutation_continuations_trial')).toBe(2);
     expect(tableCount(h.sqlite, 'public_mutation_effect_proofs_trial')).toBe(0);
     expect(
       h.sqlite.query<{ disposition: string }, []>(`
@@ -337,7 +347,7 @@ describe('disposable public mutation continuation proof', () => {
       { disposition: 'mint_issued' },
       { disposition: 'mint_already_issued' },
       { disposition: 'mint_already_issued' },
-      { disposition: 'mint_already_issued' }
+      { disposition: 'mint_issued' }
     ]);
   });
 
@@ -374,6 +384,66 @@ describe('disposable public mutation continuation proof', () => {
       reopenedDatabase.close();
     } finally {
       rmSync(directory, { recursive: true });
+    }
+  });
+
+  test('keeps two applicant ceremonies isolated across restart and exact terminal replay', async () => {
+    const h = harness();
+    const first = await mint(h, validProtocol);
+    const second = await mint(h, {
+      ...validProtocol,
+      session: 'another-anonymous-action-session',
+      nonce: 'another-bootstrap-replay-nonce'
+    });
+    expect(first.continuation).not.toBe(second.continuation);
+    expect(tableCount(h.sqlite, 'public_mutation_continuations_trial')).toBe(2);
+
+    const restarted = h.restart();
+    const firstAdmission = restarted.boundary.admit({ continuation: first.continuation });
+    const secondAdmission = restarted.boundary.admit({ continuation: second.continuation });
+    if (firstAdmission.kind !== 'ready' || secondAdmission.kind !== 'ready') {
+      throw new TypeError('expected two independently ready ceremonies');
+    }
+    const firstMaterial = restarted.boundary.sealReader.open(firstAdmission.evidence);
+    const secondMaterial = restarted.boundary.sealReader.open(secondAdmission.evidence);
+    expect(firstMaterial?.configuration.actionAnchorId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    );
+    expect(secondMaterial?.configuration.actionAnchorId).not.toBe(
+      firstMaterial?.configuration.actionAnchorId
+    );
+    expect(restarted.store.commitProvingEffect({
+      evidence: firstAdmission.evidence,
+      sealReader: restarted.boundary.sealReader
+    })).toMatchObject({ kind: 'terminal', replay: false });
+
+    const afterCommit = h.restart();
+    expect(afterCommit.boundary.admit({ continuation: first.continuation }))
+      .toMatchObject({ kind: 'terminal' });
+    const stillReady = afterCommit.boundary.admit({ continuation: second.continuation });
+    expect(stillReady.kind).toBe('ready');
+
+    const replayVerifier = new FakeBootstrapVerifier();
+    replayVerifier.enforceReplay = false;
+    expect(await h.restart({ verifier: replayVerifier }).boundary.mint({
+      protocolEvidence: validProtocol
+    })).toEqual({ kind: 'already_issued', expiresAt: first.expiresAt });
+    expect(tableCount(h.sqlite, 'public_mutation_continuations_trial')).toBe(2);
+  });
+
+  test('refuses malformed, uppercase, and unsupported UUID action anchors before storage', async () => {
+    const invalidAnchors = [
+      'not-an-action-anchor',
+      '01890F47-9ABC-7DEF-8123-456789ABC100',
+      '01890f47-9abc-1def-8123-456789abc100',
+      '01890f47-9abc-7def-7123-456789abc100'
+    ];
+    for (const invalidAnchor of invalidAnchors) {
+      const h = harness({ newActionAnchorId: () => invalidAnchor });
+      expect(await h.boundary.mint({ protocolEvidence: validProtocol }))
+        .toEqual({ kind: 'unavailable' });
+      expect(tableCount(h.sqlite, 'public_mutation_continuations_trial')).toBe(0);
+      expect(tableCount(h.sqlite, 'public_mutation_security_audits_trial')).toBe(0);
     }
   });
 
@@ -493,7 +563,11 @@ describe('disposable public mutation continuation proof', () => {
     const expiredIssued = await mint(expired);
     const expiredAdmission = expired.boundary.admit({ continuation: expiredIssued.continuation });
     if (expiredAdmission.kind !== 'ready') throw new TypeError('expected ready continuation');
+    expect(expired.boundary.resolveCurrent(expiredAdmission.evidence.ceremonyEvidenceId))
+      .toMatchObject({ ceremonyEvidenceId: expiredAdmission.evidence.ceremonyEvidenceId });
     expired.time.set('2026-08-11T00:05:00.000Z');
+    expect(expired.boundary.resolveCurrent(expiredAdmission.evidence.ceremonyEvidenceId))
+      .toBeUndefined();
     expect(expired.store.commitProvingEffect({
       evidence: expiredAdmission.evidence,
       sealReader: expired.boundary.sealReader
@@ -507,6 +581,8 @@ describe('disposable public mutation continuation proof', () => {
     const revokedAdmission = revoked.boundary.admit({ continuation: revokedIssued.continuation });
     if (revokedAdmission.kind !== 'ready') throw new TypeError('expected ready continuation');
     expect(revoked.store.revokeForTrial(onlyCeremonyId(revoked.sqlite))).toBe(true);
+    expect(revoked.boundary.resolveCurrent(revokedAdmission.evidence.ceremonyEvidenceId))
+      .toBeUndefined();
     expect(revoked.store.commitProvingEffect({
       evidence: revokedAdmission.evidence,
       sealReader: revoked.boundary.sealReader
@@ -522,6 +598,8 @@ describe('disposable public mutation continuation proof', () => {
     changed.currentPolicy = policy({
       publicPolicyRevisionId: parsePublicPolicyRevisionId('01890f47-9abc-7def-8123-456789abc099')
     });
+    expect(changed.boundary.resolveCurrent(changedAdmission.evidence.ceremonyEvidenceId))
+      .toBeUndefined();
     expect(changed.store.commitProvingEffect({
       evidence: changedAdmission.evidence,
       sealReader: changed.boundary.sealReader
@@ -549,7 +627,10 @@ describe('disposable public mutation continuation proof', () => {
       policy({ scope: { kind: 'event', workspaceId, eventId: parseEventId('01890f47-9abc-7def-8123-456789abc778') } }),
       policy({ purpose: 'cfp.withdrawal' }),
       policy({ action: 'withdraw' }),
-      policy({ actionAnchorId: 'pma_fedcba9876543210' })
+      policy({ resourceBindings: [
+        { kind: 'intake_form', id: '01890f47-9abc-7def-8123-456789abc099' },
+        { kind: 'intake_form_version', id: '01890f47-9abc-7def-8123-456789abc011' }
+      ] })
     ];
     for (const changedPolicy of mutations) {
       h.currentPolicy = changedPolicy;

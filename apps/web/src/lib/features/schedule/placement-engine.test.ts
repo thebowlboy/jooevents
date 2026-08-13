@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'bun:test';
-import type { ScheduleState, SessionItem } from '$lib/api/types';
+import type { Placement, ScheduleState, SessionItem } from '$lib/api/types';
 import {
 	AIM_STEP_MIN,
 	ANCHOR_CAPTURE_MIN,
 	columnSegments,
 	defaultStart,
+	landsOnOrigin,
 	neighborsAt,
 	preflight,
 	quickPicks,
@@ -20,26 +21,29 @@ function fixture(): { schedule: ScheduleState; session: SessionItem } {
 	const session: SessionItem = {
 		id: 'ses-place',
 		title: 'Placing this',
-		speakerNames: ['Ada'],
+		speakers: [{ name: 'Ada', email: 'ada@fixture.test' }],
 		trackId: 'trk',
 		formatId: 'fmt',
-		durationMin: 30
+		durationMin: 30,
+		state: 'programmed'
 	};
 	const keynote: SessionItem = {
 		id: 'ses-keynote',
 		title: 'Keynote',
-		speakerNames: ['Grace'],
+		speakers: [{ name: 'Grace', email: 'grace@fixture.test' }],
 		trackId: 'trk',
 		formatId: 'fmt',
-		durationMin: 60
+		durationMin: 60,
+		state: 'programmed'
 	};
 	const adaTalk: SessionItem = {
 		id: 'ses-ada',
 		title: 'Ada elsewhere',
-		speakerNames: ['Ada'],
+		speakers: [{ name: 'Ada', email: 'ada@fixture.test' }],
 		trackId: 'trk',
 		formatId: 'fmt',
-		durationMin: 30
+		durationMin: 30,
+		state: 'programmed'
 	};
 	const usage = { submissions: 0, sessions: 0, placements: 0 };
 	const schedule: ScheduleState = {
@@ -252,5 +256,33 @@ describe('quickPicks', () => {
 		const { schedule, session } = fixture();
 		schedule.rooms[1].status = 'retired';
 		expect(quickPicks(schedule, session, 10).some((pick) => pick.roomId === 'room-b')).toBe(false);
+	});
+});
+
+describe('landsOnOrigin', () => {
+	const origin: Placement = {
+		sessionId: 'ses-1',
+		dayKey: 'day-1',
+		roomId: 'room-a',
+		startMin: 90,
+		conflicts: []
+	};
+
+	test('the origin slot is recognised, so a move back onto it has nothing to confirm', () => {
+		expect(landsOnOrigin(origin, 'day-1', 'room-a', 90)).toBe(true);
+	});
+
+	test('one aim step away is a real move, not a near-miss to be swallowed', () => {
+		expect(landsOnOrigin(origin, 'day-1', 'room-a', 90 + AIM_STEP_MIN)).toBe(false);
+		expect(landsOnOrigin(origin, 'day-1', 'room-a', 89)).toBe(false);
+	});
+
+	test('same time in another room, or another day, is a move', () => {
+		expect(landsOnOrigin(origin, 'day-1', 'room-b', 90)).toBe(false);
+		expect(landsOnOrigin(origin, 'day-2', 'room-a', 90)).toBe(false);
+	});
+
+	test('a session from the pool has no origin to land on', () => {
+		expect(landsOnOrigin(null, 'day-1', 'room-a', 90)).toBe(false);
 	});
 });

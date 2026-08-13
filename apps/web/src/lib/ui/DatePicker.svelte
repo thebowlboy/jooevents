@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { tick } from 'svelte';
 	import { Calendar, ChevronLeft, ChevronRight } from 'lucide-svelte';
+	import { lower, placeNear, raise } from './anchored.svelte';
 
 	interface Props {
 		/** ISO date (yyyy-mm-dd) or empty string. */
@@ -92,7 +93,7 @@
 
 	let open = $state(false);
 	let view = $state<'days' | 'months' | 'years'>('days');
-	let side = $state<'bottom' | 'top'>('bottom');
+	let placed = $state(false);
 	let focusYmd = $state(initialFocus());
 	let yearPageStart = $state(0);
 	let text = $state(value);
@@ -110,16 +111,21 @@
 		focusYmd = initialFocus();
 		view = 'days';
 		open = true;
+		placed = false;
 		await tick();
-		if (root && panel) {
-			const anchor = root.getBoundingClientRect();
-			const height = panel.getBoundingClientRect().height;
-			side = anchor.bottom + height + 8 > window.innerHeight && anchor.top > height + 8 ? 'top' : 'bottom';
-		}
+		// The top layer, not in-flow stacking: the picker sits inside dialog
+		// bodies and table wrappers whose overflow would clip an absolutely
+		// positioned panel. Same shared placement as every other anchored panel;
+		// the three views share one fixed geometry, so one placement holds.
+		raise(panel);
+		placeNear(root, panel);
+		placed = true;
 		panel?.querySelector<HTMLButtonElement>('[data-focus-target]')?.focus();
 	}
 
 	function closePanel(refocus = true) {
+		lower(panel);
+		placed = false;
 		open = false;
 		if (refocus) inputEl?.focus();
 	}
@@ -279,7 +285,7 @@
 		{#if open}
 			<div
 				class="panel"
-				class:panel--top={side === 'top'}
+				class:panel--placed={placed}
 				bind:this={panel}
 				role="dialog"
 				tabindex="-1"
@@ -398,24 +404,26 @@
 	}
 
 	/* One fixed compact geometry for all three views: the panel can never grow
-	   with content, so placement only has to pick a side and stay on screen. */
+	   with content, so the shared anchored placement holds across view switches.
+	   Fixed + top layer (see openPanel), so no ancestor overflow can clip it;
+	   hidden until placed so the measuring frame never paints at the origin. */
 	.panel {
-		position: absolute;
-		inset-inline-start: 0;
-		inset-block-start: calc(100% + var(--je-space-1));
-		z-index: 50;
+		position: fixed;
+		inset: auto;
+		z-index: 60;
 		inline-size: 17.5rem;
 		max-inline-size: calc(100vw - var(--je-space-8));
+		margin: 0;
 		padding: var(--je-space-2);
 		background: var(--je-color-surface);
 		border: 1px solid var(--je-color-border-strong);
 		border-radius: var(--je-radius-surface);
 		box-shadow: var(--je-shadow-md);
+		visibility: hidden;
 	}
 
-	.panel--top {
-		inset-block-start: auto;
-		inset-block-end: calc(100% + var(--je-space-1));
+	.panel--placed {
+		visibility: visible;
 	}
 
 	.head {
@@ -504,13 +512,13 @@
 	}
 
 	.day--selected {
-		background: var(--je-color-action);
-		color: var(--je-color-action-contrast);
+		background: var(--je-color-mark-ink);
+		color: var(--je-color-mark-contrast);
 		font-weight: 650;
 	}
 
 	.day--selected:hover:not(:disabled) {
-		background: var(--je-color-action-hover);
+		background: var(--je-color-mark-ink-hover);
 	}
 
 	.day:disabled {
@@ -539,7 +547,7 @@
 	}
 
 	.cell--current {
-		box-shadow: inset 0 0 0 1px var(--je-color-action);
+		box-shadow: inset 0 0 0 1px var(--je-color-mark-border);
 		font-weight: 650;
 	}
 

@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import {
   linkSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync
@@ -10,6 +12,10 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BACKEND_ROUTE_NAMESPACES } from '@jooevents/contracts/route-namespaces';
+import {
+  LIVE_BUILD_IDENTITY_SCOPE,
+  type LiveBuildIdentity
+} from '@jooevents/contracts/live-build-identity';
 import {
   createProductionRequestHandler,
   createRuntimeRequestHandler,
@@ -40,6 +46,23 @@ function buildFixture(): { readonly directory: string; readonly root: string } {
 
 function request(path: string, init?: RequestInit): Request {
   return new Request(`http://example.test${path}`, init);
+}
+
+function buildIdentity(root: string, files: readonly string[]): LiveBuildIdentity {
+  return {
+    formatVersion: 1,
+    kind: 'live',
+    scope: LIVE_BUILD_IDENTITY_SCOPE,
+    files: files.map((path) => {
+      const bytes = readFileSync(join(root, path));
+      return {
+        path,
+        bytes: bytes.byteLength,
+        sha256: createHash('sha256').update(bytes).digest('hex')
+      };
+    }),
+    digestSha256: '0'.repeat(64)
+  };
 }
 
 describe('production request routing', () => {
@@ -102,6 +125,32 @@ describe('production request routing', () => {
     expect(publicFile.status).toBe(200);
     expect(publicFile.headers.get('cache-control')).toBe('public, max-age=0, must-revalidate');
     expect(await publicFile.text()).toContain('User-agent');
+  });
+
+  test('serves only files named by a verified build identity while retaining navigation fallback', async () => {
+    const fixture = buildFixture();
+    writeFileSync(join(fixture.root, 'private-review.html'), '<title>private review</title>');
+    const handler = createProductionRequestHandler({
+      buildDirectory: fixture.root,
+      backend: () => Response.json({ ok: true }),
+      buildIdentity: buildIdentity(fixture.root, ['index.html', '_app/immutable/app.A1B2.js'])
+    });
+
+    expect((await handler(request('/_app/immutable/app.A1B2.js'))).status).toBe(200);
+    const privateFile = await handler(request('/private-review.html'));
+    expect(privateFile.status).toBe(404);
+    expect(await privateFile.text()).not.toContain('private review');
+
+    const navigation = await handler(request('/app/schedule', {
+      headers: { accept: 'text/html', 'sec-fetch-mode': 'navigate' }
+    }));
+    expect(navigation.status).toBe(200);
+    expect(await navigation.text()).toContain('JooEvents shell');
+
+    writeFileSync(join(fixture.root, '_app', 'immutable', 'app.A1B2.js'), 'tampered-payload-value');
+    const changed = await handler(request('/_app/immutable/app.A1B2.js'));
+    expect(changed.status).toBe(503);
+    expect(await changed.text()).not.toContain('tampered-payload-value');
   });
 
   test('uses the shell only for non-backend GET or HEAD HTML navigations', async () => {

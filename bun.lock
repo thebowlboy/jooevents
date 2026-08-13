@@ -11,10 +11,26 @@
       "dependencies": {
         "@hono/zod-openapi": "1.5.2",
         "@jooevents/application": "workspace:*",
+        "@jooevents/changeset-operations": "workspace:*",
+        "@jooevents/cloudflare-email": "workspace:*",
+        "@jooevents/communication-operations": "workspace:*",
+        "@jooevents/communications": "workspace:*",
         "@jooevents/contracts": "workspace:*",
+        "@jooevents/deadline-operations": "workspace:*",
+        "@jooevents/event": "workspace:*",
+        "@jooevents/event-operations": "workspace:*",
+        "@jooevents/field-registry": "workspace:*",
         "@jooevents/identity-access": "workspace:*",
+        "@jooevents/intake": "workspace:*",
+        "@jooevents/intake-operations": "workspace:*",
         "@jooevents/kernel": "workspace:*",
         "@jooevents/persistence": "workspace:*",
+        "@jooevents/program": "workspace:*",
+        "@jooevents/program-operations": "workspace:*",
+        "@jooevents/schedule": "workspace:*",
+        "@jooevents/schedule-operations": "workspace:*",
+        "@jooevents/submission-triage": "workspace:*",
+        "@jooevents/workspace-operations": "workspace:*",
         "better-auth": "1.6.26",
         "drizzle-orm": "0.45.2",
         "hono": "4.13.1",
@@ -22,7 +38,6 @@
       },
       "devDependencies": {
         "@jooevents/mcp": "workspace:*",
-        "@jooevents/program": "workspace:*",
         "bun-types": "1.3.6",
         "typescript": "6.0.3",
       },
@@ -75,6 +90,22 @@
         "typescript": "6.0.3",
       },
     },
+    "packages/changeset-operations": {
+      "name": "@jooevents/changeset-operations",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/application": "workspace:*",
+        "@jooevents/changesets": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/identity-access": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
     "packages/changesets": {
       "name": "@jooevents/changesets",
       "version": "0.0.0",
@@ -88,10 +119,128 @@
         "typescript": "6.0.3",
       },
     },
+    "packages/cloudflare-email": {
+      "name": "@jooevents/cloudflare-email",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/communications": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/communication-operations": {
+      "name": "@jooevents/communication-operations",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/application": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/identity-access": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/communications": {
+      "name": "@jooevents/communications",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "@noble/hashes": "2.3.0",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
     "packages/contracts": {
       "name": "@jooevents/contracts",
       "version": "0.0.0",
       "dependencies": {
+        "@jooevents/kernel": "workspace:*",
+        "@noble/hashes": "2.3.0",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/deadline": {
+      "name": "@jooevents/deadline",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/changesets": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/deadline-operations": {
+      "name": "@jooevents/deadline-operations",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/application": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/deadline": "workspace:*",
+        "@jooevents/identity-access": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/event": {
+      "name": "@jooevents/event",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/changesets": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/event-operations": {
+      "name": "@jooevents/event-operations",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/application": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/event": "workspace:*",
+        "@jooevents/identity-access": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/field-registry": {
+      "name": "@jooevents/field-registry",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/application": "workspace:*",
+        "@jooevents/changesets": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/identity-access": "workspace:*",
         "@jooevents/kernel": "workspace:*",
         "zod": "4.4.3",
       },
@@ -104,7 +253,42 @@
       "name": "@jooevents/identity-access",
       "version": "0.0.0",
       "dependencies": {
+        "@jooevents/contracts": "workspace:*",
         "@jooevents/kernel": "workspace:*",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/intake": {
+      "name": "@jooevents/intake",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/application": "workspace:*",
+        "@jooevents/changesets": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/deadline": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/intake-operations": {
+      "name": "@jooevents/intake-operations",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/application": "workspace:*",
+        "@jooevents/changeset-operations": "workspace:*",
+        "@jooevents/changesets": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/identity-access": "workspace:*",
+        "@jooevents/intake": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "zod": "4.4.3",
       },
       "devDependencies": {
         "bun-types": "1.3.6",
@@ -147,18 +331,35 @@
       "version": "0.0.0",
       "dependencies": {
         "@jooevents/application": "workspace:*",
+        "@jooevents/changeset-operations": "workspace:*",
         "@jooevents/changesets": "workspace:*",
+        "@jooevents/communication-operations": "workspace:*",
+        "@jooevents/communications": "workspace:*",
         "@jooevents/contracts": "workspace:*",
+        "@jooevents/deadline": "workspace:*",
+        "@jooevents/deadline-operations": "workspace:*",
+        "@jooevents/event": "workspace:*",
+        "@jooevents/event-operations": "workspace:*",
+        "@jooevents/field-registry": "workspace:*",
         "@jooevents/identity-access": "workspace:*",
+        "@jooevents/intake": "workspace:*",
+        "@jooevents/intake-operations": "workspace:*",
         "@jooevents/kernel": "workspace:*",
         "@jooevents/model-adapter": "workspace:*",
         "@jooevents/program": "workspace:*",
+        "@jooevents/program-operations": "workspace:*",
         "@jooevents/reliability": "workspace:*",
+        "@jooevents/review": "workspace:*",
+        "@jooevents/schedule": "workspace:*",
+        "@jooevents/schedule-operations": "workspace:*",
+        "@jooevents/session": "workspace:*",
+        "@jooevents/submission-triage": "workspace:*",
         "drizzle-orm": "0.45.2",
       },
       "devDependencies": {
         "bun-types": "1.3.6",
         "typescript": "6.0.3",
+        "zod": "4.4.3",
       },
     },
     "packages/program": {
@@ -175,11 +376,154 @@
         "typescript": "6.0.3",
       },
     },
+    "packages/program-operations": {
+      "name": "@jooevents/program-operations",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/application": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/identity-access": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "@jooevents/program": "workspace:*",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
     "packages/reliability": {
       "name": "@jooevents/reliability",
       "version": "0.0.0",
       "dependencies": {
         "@jooevents/kernel": "workspace:*",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/review": {
+      "name": "@jooevents/review",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/changesets": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/review-operations": {
+      "name": "@jooevents/review-operations",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/application": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/identity-access": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "@jooevents/review": "workspace:*",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/schedule": {
+      "name": "@jooevents/schedule",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/changesets": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "@jooevents/program": "workspace:*",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/schedule-operations": {
+      "name": "@jooevents/schedule-operations",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/application": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/identity-access": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "@jooevents/schedule": "workspace:*",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/session": {
+      "name": "@jooevents/session",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/changesets": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/intake": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "@jooevents/program": "workspace:*",
+        "@jooevents/review": "workspace:*",
+        "@jooevents/schedule": "workspace:*",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/session-operations": {
+      "name": "@jooevents/session-operations",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/application": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/identity-access": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "@jooevents/session": "workspace:*",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/submission-triage": {
+      "name": "@jooevents/submission-triage",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/application": "workspace:*",
+        "@jooevents/changeset-operations": "workspace:*",
+        "@jooevents/changesets": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/identity-access": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/workspace-operations": {
+      "name": "@jooevents/workspace-operations",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/application": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/identity-access": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "zod": "4.4.3",
       },
       "devDependencies": {
         "bun-types": "1.3.6",
@@ -242,11 +586,33 @@
 
     "@jooevents/application": ["@jooevents/application@workspace:packages/application"],
 
+    "@jooevents/changeset-operations": ["@jooevents/changeset-operations@workspace:packages/changeset-operations"],
+
     "@jooevents/changesets": ["@jooevents/changesets@workspace:packages/changesets"],
+
+    "@jooevents/cloudflare-email": ["@jooevents/cloudflare-email@workspace:packages/cloudflare-email"],
+
+    "@jooevents/communication-operations": ["@jooevents/communication-operations@workspace:packages/communication-operations"],
+
+    "@jooevents/communications": ["@jooevents/communications@workspace:packages/communications"],
 
     "@jooevents/contracts": ["@jooevents/contracts@workspace:packages/contracts"],
 
+    "@jooevents/deadline": ["@jooevents/deadline@workspace:packages/deadline"],
+
+    "@jooevents/deadline-operations": ["@jooevents/deadline-operations@workspace:packages/deadline-operations"],
+
+    "@jooevents/event": ["@jooevents/event@workspace:packages/event"],
+
+    "@jooevents/event-operations": ["@jooevents/event-operations@workspace:packages/event-operations"],
+
+    "@jooevents/field-registry": ["@jooevents/field-registry@workspace:packages/field-registry"],
+
     "@jooevents/identity-access": ["@jooevents/identity-access@workspace:packages/identity-access"],
+
+    "@jooevents/intake": ["@jooevents/intake@workspace:packages/intake"],
+
+    "@jooevents/intake-operations": ["@jooevents/intake-operations@workspace:packages/intake-operations"],
 
     "@jooevents/kernel": ["@jooevents/kernel@workspace:packages/kernel"],
 
@@ -258,11 +624,29 @@
 
     "@jooevents/program": ["@jooevents/program@workspace:packages/program"],
 
+    "@jooevents/program-operations": ["@jooevents/program-operations@workspace:packages/program-operations"],
+
     "@jooevents/reliability": ["@jooevents/reliability@workspace:packages/reliability"],
+
+    "@jooevents/review": ["@jooevents/review@workspace:packages/review"],
+
+    "@jooevents/review-operations": ["@jooevents/review-operations@workspace:packages/review-operations"],
+
+    "@jooevents/schedule": ["@jooevents/schedule@workspace:packages/schedule"],
+
+    "@jooevents/schedule-operations": ["@jooevents/schedule-operations@workspace:packages/schedule-operations"],
 
     "@jooevents/server": ["@jooevents/server@workspace:apps/server"],
 
+    "@jooevents/session": ["@jooevents/session@workspace:packages/session"],
+
+    "@jooevents/session-operations": ["@jooevents/session-operations@workspace:packages/session-operations"],
+
+    "@jooevents/submission-triage": ["@jooevents/submission-triage@workspace:packages/submission-triage"],
+
     "@jooevents/web": ["@jooevents/web@workspace:apps/web"],
+
+    "@jooevents/workspace-operations": ["@jooevents/workspace-operations@workspace:packages/workspace-operations"],
 
     "@jridgewell/gen-mapping": ["@jridgewell/gen-mapping@0.3.13", "", { "dependencies": { "@jridgewell/sourcemap-codec": "^1.5.0", "@jridgewell/trace-mapping": "^0.3.24" } }, "sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA=="],
 

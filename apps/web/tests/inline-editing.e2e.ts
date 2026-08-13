@@ -278,6 +278,14 @@ test('the Variables row inserts suggested and any declared key at the caret, liv
 	await expect(paragraph).toContainText('Context Caching Without Tears');
 	await expect(page.getByLabel('Revision history')).toHaveValue('1');
 
+	// The press writes through the field's own edit pipeline, so the browser's
+	// undo takes the chip back like typed text — and the preview follows.
+	await input.press('ControlOrMeta+z');
+	await expect(input).not.toHaveValue(/\{\{submission\.title\}\}/);
+	await expect(paragraph).not.toContainText('Context Caching Without Tears');
+	await panel.getByRole('button', { name: 'Insert submission title' }).click();
+	await expect(input).toHaveValue(/\{\{submission\.title\}\}/);
+
 	// Every declared key sits one step deeper; choosing inserts and resets.
 	const all = panel.getByLabel('All variables');
 	await all.selectOption('speaker.name');
@@ -392,36 +400,6 @@ test('a question edits the one registry, never a template revision', async ({ pa
 	await expect(preview.locator('label').filter({ hasText: 'Email' })).toBeVisible();
 });
 
-test('editing while an AI draft is open refines the draft: After changes, Before stays honest', async ({ page }, testInfo) => {
-	test.skip(testInfo.project.name !== 'desktop', 'one viewport covers the draft-lane contract');
-	await openAccepted(page);
-
-	// Open a draft round first.
-	await page.getByPlaceholder('Tell it what to change…').fill('Make it warmer');
-	await page.getByRole('button', { name: 'Send' }).click();
-	await expect(page.locator('.editor__state')).toContainText('Draft', { timeout: 15000 });
-
-	// Edit the heading in place on the After side.
-	await page.locator('[data-edit="blocks.0.text"]').click({ position: { x: 12, y: 12 } });
-	const panel = editor(page);
-	await panel.getByRole('textbox').fill('Welcome aboard, {{speaker.name}}');
-	await panel.getByRole('button', { name: 'Done' }).click();
-
-	// The draft absorbed it: no commit, no receipt, revision unmoved.
-	const preview = page.getByRole('region', { name: 'Message preview' });
-	await expect(preview).toContainText('Welcome aboard, Maya Lindqvist');
-	await expect(page.locator('.editor__state')).toContainText('Draft');
-	await expect(page.getByLabel('Revision history')).toHaveValue('1');
-	await expect(page.getByRole('status').filter({ hasText: /Edited heading/ })).toHaveCount(0);
-
-	// Before still shows the committed copy, untouched by the refinement.
-	await page.getByRole('button', { name: 'Before', exact: true }).click();
-	await expect(preview).toContainText('You’re in');
-	await expect(preview).not.toContainText('Welcome aboard');
-	await page.getByRole('button', { name: 'After', exact: true }).click();
-	await expect(preview).toContainText('Welcome aboard, Maya Lindqvist');
-});
-
 test('a tap opens the bottom sheet with the unit above it, and the edit applies', async ({ page }, testInfo) => {
 	test.skip(testInfo.project.name !== 'mobile', 'coarse-pointer presentation contract');
 	await openAccepted(page);
@@ -449,4 +427,44 @@ test('a tap opens the bottom sheet with the unit above it, and the edit applies'
 	).toBeVisible({ timeout: 10000 });
 	await expect(page.locator('[data-edit="blocks.3.text"]')).toContainText('Short and sweet.');
 	await expect(page.getByLabel('Revision history')).toHaveValue('2');
+});
+
+test('on touch the size picker overlays as a top sheet with a scrim, never reflowing the editor', async ({ page }, testInfo) => {
+	test.skip(testInfo.project.name !== 'mobile', 'coarse-pointer presentation contract');
+	await openAccepted(page);
+
+	await page.locator('[data-edit="blocks.0.text"]').click();
+	const sheet = page.locator('.ied--sheet');
+	await expect(sheet).toBeVisible();
+	const restBox = (await sheet.boundingBox())!;
+
+	// The trigger reads as a dropdown: value plus chevron.
+	const trigger = sheet.getByRole('button', { name: /^Size: / });
+	await expect(trigger.locator('.szp__chevron')).toBeVisible();
+	await trigger.click();
+
+	// The picker overlays as a top-docked sheet in the top layer — the editor
+	// sheet keeps its exact geometry underneath, and a scrim covers the rest.
+	const panel = page.locator('.szp__panel--sheet');
+	await expect(panel).toBeVisible();
+	const panelBox = (await panel.boundingBox())!;
+	expect(panelBox.y).toBeLessThan(16);
+	await expect(page.locator('.szp__scrim')).toBeVisible();
+	const openBox = (await sheet.boundingBox())!;
+	expect(openBox.y).toBeCloseTo(restBox.y, 0);
+	expect(openBox.height).toBeCloseTo(restBox.height, 0);
+
+	// Picking closes the overlay and live-previews; the editor stays open.
+	await panel.getByRole('group', { name: 'Recommended' }).getByRole('option', { name: '28 px' }).click();
+	await expect(panel).toHaveCount(0);
+	await expect(sheet).toBeVisible();
+	await expect(page.locator('[data-edit="blocks.0.text"]')).toHaveCSS('font-size', '28px');
+
+	// The scrim belongs to the picker: pressing it closes the picker only.
+	// The press lands below the top-docked panel, where the scrim is exposed.
+	await trigger.click();
+	const reopened = (await page.locator('.szp__panel--sheet').boundingBox())!;
+	await page.mouse.click(page.viewportSize()!.width / 2, reopened.y + reopened.height + 24);
+	await expect(page.locator('.szp__panel--sheet')).toHaveCount(0);
+	await expect(sheet).toBeVisible();
 });

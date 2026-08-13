@@ -1,14 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 import {
   createOperationAutonomyPolicy,
-  createEffectInvocationBuilder,
   createEffectInvocationContextBuilder,
-  createEffectOperationExecutor,
+  createApplicationOperationRuntime,
+  composeOperationRegistryModules,
   createHmacRequestHashSealer,
-  createOperationRegistry,
   createSingleUnitOfWorkConformanceFixture,
   isSealedInvocationContext,
   type EffectInvocationContext,
+  type ApplicationOperationRuntime,
   type InvocationEvidence,
   type OperationRegistrySource,
   type ShortOperationAuditRecord
@@ -72,7 +72,8 @@ const correlationIds = [
   '018f0f47-7a86-7d36-8a25-9f86589c7003',
   '018f0f47-7a86-7d36-8a25-9f86589c7004',
   '018f0f47-7a86-7d36-8a25-9f86589c7005',
-  '018f0f47-7a86-7d36-8a25-9f86589c7006'
+  '018f0f47-7a86-7d36-8a25-9f86589c7006',
+  '018f0f47-7a86-7d36-8a25-9f86589c7007'
 ] as const;
 
 const receiptIds = [
@@ -87,6 +88,7 @@ const credentials = {
   graceAlpha: 'session-secret-grace-alpha',
   adaBeta: 'session-secret-ada-beta',
   sharedIdempotency: 'idempotency-secret-shared',
+  transactionRevoked: 'idempotency-secret-transaction-revoked',
   deniedIdempotency: 'idempotency-secret-denied'
 } as const;
 
@@ -273,6 +275,8 @@ interface Faults {
 
 interface Tracker {
   authorityResolutionCount: number;
+  transactionAuthorityResolutionCount: number;
+  readonly transactionAuthorityStates: boolean[];
   handlerCalls: number;
   projectionCalls: number;
   domainCalls: number;
@@ -288,8 +292,8 @@ interface Harness {
   readonly tracker: Tracker;
   readonly faults: Faults;
   readonly revokedSessions: Set<string>;
-  readonly builder: ReturnType<typeof createEffectInvocationBuilder>;
-  readonly executor: ReturnType<typeof createEffectOperationExecutor>;
+  readonly builder: ApplicationOperationRuntime['effectBuilder'];
+  readonly executor: ApplicationOperationRuntime['effectExecutor'];
   readonly unitOfWork: SQLiteTrialEffectUnitOfWorkPort;
   readonly shortAudits: ShortOperationAuditRecord[];
   readonly invocationIdControl: { override: string | undefined };
@@ -309,6 +313,8 @@ async function createHarness(): Promise<Harness> {
 
   const tracker: Tracker = {
     authorityResolutionCount: 0,
+    transactionAuthorityResolutionCount: 0,
+    transactionAuthorityStates: [],
     handlerCalls: 0,
     projectionCalls: 0,
     domainCalls: 0,
@@ -344,6 +350,61 @@ async function createHarness(): Promise<Harness> {
           scope: input.scope,
           grants: [{ kind: 'permission', key: 'foundation.note.draft' }],
           evidenceIds: [`membership-current:${session.membershipId}`],
+          authorityCitationIds: [],
+          evaluatedAt: input.evaluatedAt
+        }
+      };
+    }
+  };
+  sqlite.exec(`
+    CREATE TABLE foundation_trial_current_operator_authority (
+      session_handle TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      membership_id TEXT NOT NULL,
+      state TEXT NOT NULL CHECK(state IN ('active', 'revoked'))
+    );
+  `);
+  const seedAuthority = sqlite.query<never, [string, string, string, string]>(`
+    INSERT INTO foundation_trial_current_operator_authority (
+      session_handle, workspace_id, user_id, membership_id, state
+    ) VALUES (?, ?, ?, ?, 'active')
+  `);
+  for (const [sessionHandle, session] of sessionDirectory) {
+    seedAuthority.run(sessionHandle, session.workspaceId, session.userId, session.membershipId);
+  }
+  const transactionAuthorityResolver: CurrentAuthorityResolver<InvocationEvidence> = {
+    resolve(input) {
+      tracker.transactionAuthorityResolutionCount += 1;
+      tracker.transactionAuthorityStates.push(sqlite.inTransaction);
+      if (!sqlite.inTransaction) throw new TypeError('transaction authority read escaped SQLite transaction');
+      if (input.evidence.kind !== 'operator') return { kind: 'denied', reason: 'lane_mismatch' };
+      const session = sqlite.query<{
+        readonly workspace_id: string;
+        readonly user_id: string;
+        readonly membership_id: string;
+        readonly state: 'active' | 'revoked';
+      }, [string]>(`
+        SELECT workspace_id, user_id, membership_id, state
+          FROM foundation_trial_current_operator_authority
+         WHERE session_handle = ?
+      `).get(input.evidence.sessionHandle);
+      if (!session) return { kind: 'denied', reason: 'missing' };
+      if (session.state === 'revoked') return { kind: 'denied', reason: 'revoked' };
+      if (input.scope.workspaceId !== session.workspace_id) return { kind: 'denied', reason: 'cross_scope' };
+      return {
+        kind: 'authorized',
+        authority: {
+          actor: { kind: 'workspace_user', userId: parseUserId(session.user_id) },
+          principal: {
+            kind: 'workspace_user',
+            userId: parseUserId(session.user_id),
+            membershipId: parseMembershipId(session.membership_id)
+          },
+          lane: input.lane,
+          scope: input.scope,
+          grants: [{ kind: 'permission', key: 'foundation.note.draft' }],
+          evidenceIds: [`membership-current:${session.membership_id}`],
           authorityCitationIds: [],
           evaluatedAt: input.evaluatedAt
         }
@@ -580,8 +641,10 @@ async function createHarness(): Promise<Harness> {
   };
 
   try {
-    const registry = await createOperationRegistry(source);
     const unitOfWork = new SQLiteTrialEffectUnitOfWorkPort(sqlite, domain, {
+      resolveAuthority: transactionAuthorityResolver.resolve.bind(transactionAuthorityResolver),
+      now: () => now
+    }, {
       afterTerminalAuditInserted: () => {
         if (faults.terminalAudit) throw new Error('injected_foundation_terminal_audit_failure');
       },
@@ -589,6 +652,17 @@ async function createHarness(): Promise<Harness> {
         shortAudits.push(record);
         if (faults.shortAudit) throw new Error('injected_foundation_short_audit_failure');
       }
+    });
+    const runtime = await createApplicationOperationRuntime({
+      source: composeOperationRegistryModules([{ id: 'foundation-note-proof', source }]),
+      read: {
+        operationalTrace: { emit() {} },
+        immutableAudit: { append() {} },
+        clock: { now: () => now },
+        newInvocationId: () => parseInvocationId(crypto.randomUUID())
+      },
+      unitOfWork,
+      newReceiptId: () => receiptIds[nextReceiptId++] ?? crypto.randomUUID()
     });
     return {
       sqlite,
@@ -598,12 +672,8 @@ async function createHarness(): Promise<Harness> {
       unitOfWork,
       shortAudits,
       invocationIdControl,
-      builder: createEffectInvocationBuilder(registry),
-      executor: createEffectOperationExecutor({
-        registry,
-        unitOfWork,
-        newReceiptId: () => receiptIds[nextReceiptId++] ?? crypto.randomUUID()
-      })
+      builder: runtime.effectBuilder,
+      executor: runtime.effectExecutor
     };
   } catch (error) {
     sqlite.close();
@@ -765,9 +835,29 @@ describe('strong invocation pipeline with real disposable SQLite', () => {
         await hmacSha256('foundation-proof-idempotency-v1', credentials.sharedIdempotency)
       );
 
-      harness.revokedSessions.add(credentials.adaAlpha);
-      const denied = await harness.executor.execute(await buildInvocation(harness, {
+      const builtBeforeRevocation = await buildInvocation(harness, {
         correlationId: correlationIds[5],
+        rawIdempotencyKey: credentials.transactionRevoked
+      });
+      harness.revokedSessions.add(credentials.adaAlpha);
+      const revokedInTransaction = await harness.executor.execute(builtBeforeRevocation);
+      expect(revokedInTransaction).toEqual({
+        kind: 'outcome',
+        outcome: {
+          class: 'access_denied',
+          kind: 'authority.revoked',
+          retryable: false,
+          subjects: [],
+          detail: null,
+          detailSchemaVersion: 1
+        },
+        terminal: false,
+        correlationId: correlationIds[5]
+      });
+      expect(databaseCounts(harness.sqlite)).toEqual({ claims: 0, receipts: 3, children: 3, audits: 6, notes: 3 });
+
+      const denied = await harness.executor.execute(await buildInvocation(harness, {
+        correlationId: correlationIds[6],
         rawIdempotencyKey: credentials.deniedIdempotency
       }));
       expect(denied).toEqual({
@@ -781,18 +871,21 @@ describe('strong invocation pipeline with real disposable SQLite', () => {
           detailSchemaVersion: 1
         },
         terminal: false,
-        correlationId: correlationIds[5]
+        correlationId: correlationIds[6]
       });
-      expect(harness.tracker.authorityResolutionCount).toBe(7);
+      expect(harness.tracker.authorityResolutionCount).toBe(15);
+      expect(harness.tracker.transactionAuthorityResolutionCount).toBe(3);
+      expect(harness.tracker.transactionAuthorityStates).toEqual(Array(3).fill(true));
       expect(harness.tracker.sealedIdempotencyCredentials).toEqual([
         credentials.sharedIdempotency,
         credentials.sharedIdempotency,
         credentials.sharedIdempotency,
         credentials.sharedIdempotency,
         credentials.sharedIdempotency,
-        credentials.sharedIdempotency
+        credentials.sharedIdempotency,
+        credentials.transactionRevoked
       ]);
-      expect(databaseCounts(harness.sqlite)).toEqual({ claims: 0, receipts: 3, children: 3, audits: 6, notes: 3 });
+      expect(databaseCounts(harness.sqlite)).toEqual({ claims: 0, receipts: 3, children: 3, audits: 7, notes: 3 });
       expect(harness.sqlite.query<{
         readonly disposition: string;
         readonly receipt_id: string | null;
@@ -807,6 +900,7 @@ describe('strong invocation pipeline with real disposable SQLite', () => {
         { disposition: 'idempotency_conflict', receipt_id: null, related_receipt_id: null },
         { disposition: 'terminal_new', receipt_id: receiptIds[1], related_receipt_id: null },
         { disposition: 'terminal_new', receipt_id: receiptIds[2], related_receipt_id: null },
+        { disposition: 'nonterminal_progress', receipt_id: null, related_receipt_id: null },
         { disposition: 'context_denied', receipt_id: null, related_receipt_id: null }
       ]);
       expect(harness.tracker.handlerContexts.every((context) =>
@@ -825,6 +919,45 @@ describe('strong invocation pipeline with real disposable SQLite', () => {
       for (const frame of harness.tracker.requestBindingFrames) {
         expect(persistentRows).not.toContain(await sha256Bytes(frame));
       }
+    } finally {
+      harness.sqlite.close();
+    }
+  });
+
+  test('a transaction-time authority loss returns a typed zero-write refusal', async () => {
+    const harness = await createHarness();
+    try {
+      const invocation = await buildInvocation(harness, {
+        rawIdempotencyKey: credentials.transactionRevoked
+      });
+      harness.sqlite.query<never, [string]>(`
+        UPDATE foundation_trial_current_operator_authority
+           SET state = 'revoked'
+         WHERE session_handle = ?
+      `).run(credentials.adaAlpha);
+
+      const result = await harness.executor.execute(invocation);
+      expect(result).toMatchObject({
+        kind: 'outcome',
+        terminal: false,
+        outcome: {
+          class: 'access_denied',
+          kind: 'authority.revoked',
+          retryable: false
+        }
+      });
+      expect(harness.tracker.authorityResolutionCount).toBe(2);
+      expect(harness.tracker.transactionAuthorityResolutionCount).toBe(1);
+      expect(harness.tracker.transactionAuthorityStates).toEqual([true]);
+      expect(databaseCounts(harness.sqlite)).toEqual({
+        claims: 0, receipts: 0, children: 0, audits: 1, notes: 0
+      });
+      expect(harness.sqlite.query<{ readonly disposition: string; readonly record_json: string }, []>(
+        'SELECT disposition, record_json FROM foundation_trial_operation_audits'
+      ).get()).toMatchObject({
+        disposition: 'nonterminal_progress',
+        record_json: expect.stringContaining('authority_recheck')
+      });
     } finally {
       harness.sqlite.close();
     }

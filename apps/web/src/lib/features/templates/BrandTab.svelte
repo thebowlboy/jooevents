@@ -1,20 +1,20 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { Button, Field } from '$lib/ui';
-	import { useWorkspaceGateway } from '$lib/api/workspace-gateway';
+	import type { TemplatesPagePort } from '$lib/api/templates-page-port';
 	import { contrastRatio, contrastText } from '$lib/theme/theme-contract';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
 	import type { EventTheme, MessageTemplate } from '$lib/api/types';
 	import { brandPresets, matchPreset, themesEqual, type BrandPreset } from './brand-presets';
 	import EmailRender from './EmailRender.svelte';
 
-	const { api } = useWorkspaceGateway();
-
 	interface Props {
+		port: TemplatesPagePort;
 		/** Called after the brand is stored, so the surrounding page can refresh the copy it renders previews with. */
 		onSaved?: () => void;
 	}
-	let { onSaved }: Props = $props();
+	let { port, onSaved }: Props = $props();
+	const api = $derived(port);
 
 	/** The color choices a recipe exposes, in the order a brand is judged. */
 	const colorFields = [
@@ -379,8 +379,8 @@
 	}
 
 	.preset--active {
-		border-color: var(--je-color-action);
-		background: var(--je-color-surface-selected);
+		border-color: var(--je-color-mark-border);
+		background: var(--je-color-mark-surface);
 		color: var(--je-color-text);
 	}
 

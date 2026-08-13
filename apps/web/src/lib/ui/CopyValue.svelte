@@ -28,6 +28,7 @@
   import { tick } from 'svelte';
   import { Check, Copy } from 'lucide-svelte';
   import { lower, placeNear, raise } from './anchored.svelte';
+  import { writeToClipboard } from './clipboard';
 
   interface Props {
     /** The exact text placed on the clipboard. */
@@ -68,48 +69,9 @@
     placed = false;
   }
 
-  /**
-   * The async clipboard exists only in a secure context, and the shared
-   * development origin is plain HTTP on the tailnet — so on the URL the team
-   * actually uses, `navigator.clipboard` is `undefined`. The legacy selection
-   * path is the one that works there, and it is the fallback rather than the
-   * default because it briefly takes the selection, which must then be given
-   * back: this component's whole promise is that it does not disturb what the
-   * person had selected by hand.
-   */
-  async function write(text: string): Promise<boolean> {
-    if (navigator.clipboard?.writeText) {
-      try {
-        await navigator.clipboard.writeText(text);
-        return true;
-      } catch {
-        /* Permission refused; try the selection path before giving up. */
-      }
-    }
-    const area = document.createElement('textarea');
-    area.value = text;
-    area.setAttribute('readonly', '');
-    area.style.cssText = 'position:fixed;top:0;opacity:0;pointer-events:none';
-    document.body.append(area);
-    const selection = document.getSelection();
-    const held = selection && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
-    try {
-      area.select();
-      return document.execCommand('copy');
-    } catch {
-      return false;
-    } finally {
-      area.remove();
-      if (held && selection) {
-        selection.removeAllRanges();
-        selection.addRange(held);
-      }
-    }
-  }
-
   async function copy() {
     clearTimeout(timer);
-    if (await write(value)) {
+    if (await writeToClipboard(value)) {
       copied = true;
       failed = false;
       oncopy?.(value);

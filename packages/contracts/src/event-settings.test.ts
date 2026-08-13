@@ -1,0 +1,188 @@
+import { describe, expect, test } from 'bun:test';
+import {
+  currentEventSettingsReadResultSchema,
+  eventSettingsSafeDiffSchema,
+  eventSettingsEventRequiredOutcomeSchema,
+  eventSettingsSchema,
+  eventSettingsScopeSchema,
+  eventSettingsWorkspaceIdSchema,
+  eventSettingsUpdateDraftInputSchema,
+  eventSettingsUpdateDraftOperationResultSchema
+} from './event-settings';
+
+const eventId = '019c2582-aee8-7c51-8d2f-0d27f67dc111';
+const changesetId = '019c2582-aee8-7c51-8d2f-0d27f67dc112';
+const revisionId = '019c2582-aee8-7c51-8d2f-0d27f67dc113';
+const receiptId = '019c2582-aee8-7c51-8d2f-0d27f67dc114';
+const correlationId = '019c2582-aee8-7c51-8d2f-0d27f67dc115';
+
+const before = {
+  schemaVersion: 1,
+  eventId,
+  eventSetVersion: 2,
+  eventVersion: 4,
+  name: 'JooConf 2027',
+  timezone: 'Asia/Singapore',
+  startDate: '2027-04-16',
+  endDate: '2027-04-18',
+  location: 'Singapore',
+  venueNote: 'Load-in from 07:00.'
+} as const;
+
+const after = {
+  ...before,
+  eventVersion: 5,
+  name: 'JooConf 2027 Live',
+  venueNote: 'Load-in from 06:30.\nUse the east entrance.'
+} as const;
+
+describe('Event settings wire contracts', () => {
+  test('owns workspace scope separately and requires canonical application IDs', () => {
+    const workspaceId = '550e8400-e29b-41d4-a716-446655440000';
+    expect(eventSettingsScopeSchema.shape.workspaceId).toBe(eventSettingsWorkspaceIdSchema);
+    const parsed = eventSettingsScopeSchema.parse({ workspaceId, eventId });
+    expect(parsed.workspaceId).toBe(workspaceId);
+    expect(parsed.eventId).toBe(eventId);
+    expect(eventSettingsScopeSchema.safeParse({
+      workspaceId: workspaceId.toUpperCase(),
+      eventId
+    }).success).toBe(false);
+  });
+
+  test('projects exactly the six tuned settings fields plus current guards', () => {
+    expect(eventSettingsSchema.parse(before)).toEqual(before);
+    expect(eventSettingsSchema.safeParse({ ...before, publicIndexing: true }).success).toBe(false);
+    expect(eventSettingsSchema.safeParse({ ...before, endDate: '2027-04-15' }).success).toBe(false);
+
+    expect(currentEventSettingsReadResultSchema.safeParse({
+      kind: 'success',
+      data: before,
+      correlationId
+    }).success).toBe(true);
+    expect(eventSettingsEventRequiredOutcomeSchema.parse({
+      class: 'conflict',
+      kind: 'event.settings.event_required',
+      retryable: false,
+      subjects: [],
+      detail: null,
+      detailSchemaVersion: 1
+    })).toEqual({
+      class: 'conflict',
+      kind: 'event.settings.event_required',
+      retryable: false,
+      subjects: [],
+      detail: null,
+      detailSchemaVersion: 1
+    });
+  });
+
+  test('normalizes authored text while keeping identity and attribution server-owned', () => {
+    const parsed = eventSettingsUpdateDraftInputSchema.parse({
+      expectedEventId: eventId,
+      expectedEventSetVersion: 2,
+      expectedEventVersion: 4,
+      name: '  JooConf   2027 Live ',
+      timezone: 'Asia/Singapore',
+      startDate: '2027-04-16',
+      endDate: '2027-04-18',
+      location: '  Marina   Bay  ',
+      venueNote: '  Load-in from 06:30.\r\nUse the east entrance.  '
+    });
+    expect(parsed.name).toBe('JooConf   2027 Live');
+    expect(parsed.location).toBe('Marina Bay');
+    expect(parsed.venueNote).toBe('Load-in from 06:30.\nUse the east entrance.');
+    expect(eventSettingsUpdateDraftInputSchema.safeParse({
+      ...parsed,
+      workspaceId: eventId
+    }).success).toBe(false);
+    expect(eventSettingsUpdateDraftInputSchema.safeParse({
+      ...parsed,
+      updatedByUserId: eventId
+    }).success).toBe(false);
+    expect(eventSettingsUpdateDraftInputSchema.safeParse({
+      ...parsed,
+      publicIndexing: true
+    }).success).toBe(false);
+  });
+
+  test('rejects oversize text, unsafe controls, and malformed Unicode', () => {
+    const input = {
+      expectedEventId: eventId,
+      expectedEventSetVersion: 2,
+      expectedEventVersion: 4,
+      name: 'JooConf 2027 Live',
+      timezone: 'Asia/Singapore',
+      startDate: '2027-04-16',
+      endDate: '2027-04-18',
+      location: 'Marina Bay',
+      venueNote: 'Use the east entrance.'
+    };
+    for (const candidate of [
+      { ...input, location: 'x'.repeat(501) },
+      { ...input, venueNote: 'x'.repeat(8_001) },
+      { ...input, location: 'Hall\u0000A' },
+      { ...input, location: 'Hall\nA' },
+      { ...input, venueNote: 'Hall\u0007A' },
+      { ...input, venueNote: 'Hall\tA' },
+      { ...input, venueNote: 'Hall\ud800A' }
+    ]) {
+      expect(eventSettingsUpdateDraftInputSchema.safeParse(candidate).success).toBe(false);
+    }
+    expect(eventSettingsUpdateDraftInputSchema.parse({
+      ...input,
+      venueNote: 'Hall A\r\nHall B'
+    }).venueNote).toBe('Hall A\nHall B');
+  });
+
+  test('binds the safe diff to one exact current selection and version advance', () => {
+    const diff = {
+      action: 'update',
+      before,
+      after,
+      selection: { eventId, eventSetVersion: 2 }
+    } as const;
+    expect(eventSettingsSafeDiffSchema.parse(diff)).toEqual(diff);
+    expect(eventSettingsSafeDiffSchema.safeParse({
+      ...diff,
+      after: { ...after, eventVersion: 6 }
+    }).success).toBe(false);
+    expect(eventSettingsSafeDiffSchema.safeParse({
+      ...diff,
+      selection: { eventId, eventSetVersion: 3 }
+    }).success).toBe(false);
+  });
+
+  test('requires a terminal receipt for a persisted settings draft', () => {
+    const payload = {
+      kind: 'success',
+      data: {
+        schemaVersion: 1,
+        action: 'update',
+        changesetId,
+        headVersion: 1,
+        status: 'draft',
+        revision: { id: revisionId, number: 1, digestSha256: 'a'.repeat(64) },
+        riskTier: 'low',
+        approvalPolicy: {
+          reference: { key: 'event.settings.ordinary', version: 1 },
+          definitionDigestSha256: 'b'.repeat(64),
+          requirement: 'none'
+        },
+        safeDiff: {
+          action: 'update', before, after,
+          selection: { eventId, eventSetVersion: 2 }
+        }
+      },
+      receipt: {
+        id: receiptId,
+        operationName: 'event.settings.update.draft',
+        operationVersion: 1
+      },
+      correlationId
+    } as const;
+    expect(eventSettingsUpdateDraftOperationResultSchema.safeParse(payload).success).toBe(true);
+    const { receipt: _receipt, ...withoutReceipt } = payload;
+    expect(eventSettingsUpdateDraftOperationResultSchema.safeParse(withoutReceipt).success)
+      .toBe(false);
+  });
+});

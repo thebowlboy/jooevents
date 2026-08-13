@@ -16,6 +16,10 @@ import {
   type SignInPlan,
   type UserReference
 } from '@jooevents/identity-access';
+import type {
+  WorkspaceTeamProvisioningGuard,
+  WorkspaceTeamProvisioningSynchronizationPort
+} from './workspace-team';
 
 type Row = Record<string, string | number | null>;
 
@@ -88,7 +92,12 @@ function readState(sqlite: Database, authUserId: string, workspaceId: string): A
   });
 }
 
-export function createSQLiteProvisioningStore(sqlite: Database): ProvisioningStore {
+export function createSQLiteProvisioningStore(
+  sqlite: Database,
+  options: {
+    readonly workspaceTeam?: WorkspaceTeamProvisioningSynchronizationPort;
+  } = {}
+): ProvisioningStore {
   function userIdFor(reference: UserReference, newUserId: string | undefined): string {
     if (reference.kind === 'existing') return reference.userId;
     if (!newUserId) throw new Error('Mutation references the new user before create_user');
@@ -236,6 +245,8 @@ export function createSQLiteProvisioningStore(sqlite: Database): ProvisioningSto
     async commitSignInPlan(input: { authUserId: string; workspaceId: string; plan: SignInPlan; correlationId: string; now: string }): Promise<AdapterOutcome<CommittedAccessState>> {
       const nowMs = Date.parse(input.now);
       const run = sqlite.transaction(() => {
+        const teamGuard: WorkspaceTeamProvisioningGuard | undefined =
+          options.workspaceTeam?.captureWithinTransaction(input.workspaceId);
         bind(sqlite, `insert into auth_user_links (auth_user_id, provisioning_state, attempts, created_at, updated_at)
           values (?, 'pending', 1, ?, ?)
           on conflict(auth_user_id) do update set provisioning_state = 'pending', attempts = auth_user_links.attempts + 1, last_error_code = null, updated_at = excluded.updated_at`, input.authUserId, nowMs, nowMs);
@@ -251,6 +262,7 @@ export function createSQLiteProvisioningStore(sqlite: Database): ProvisioningSto
             (id, type, version, payload_json, aggregate_type, aggregate_id, idempotency_key, status, attempts, next_attempt_at, created_at, updated_at)
             values (?, 'access.requested', 1, ?, 'user', ?, ?, 'pending', 0, ?, ?, ?)`, id(), JSON.stringify({ userId: resolvedUserId, workspaceId: input.workspaceId }), resolvedUserId, `access.requested:${input.workspaceId}:${resolvedUserId}`, nowMs, nowMs, nowMs);
         }
+        if (teamGuard) options.workspaceTeam!.synchronizeWithinTransaction(teamGuard);
       });
       try {
         run();

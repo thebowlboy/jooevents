@@ -2,7 +2,7 @@
   "name": "jooevents",
   "private": true,
   "version": "0.0.0",
-  "license": "Apache-2.0",
+  "license": "SEE LICENSE IN LICENSE",
   "packageManager": "bun@1.3.6",
   "workspaces": [
     "apps/*",
@@ -18,8 +18,11 @@
     "check:public-boundary": "./scripts/check-public-boundary.sh",
     "db:migrate": "bun packages/persistence/src/sqlite/cli.ts migrate",
     "db:status": "bun packages/persistence/src/sqlite/cli.ts status",
+    "db:backup": "bun packages/persistence/src/sqlite/cli.ts backup",
+    "db:restore-rehearsal": "bun packages/persistence/src/sqlite/cli.ts restore-rehearsal",
     "test": "bun test",
-    "test:foundation": "bun test packages/kernel packages/identity-access packages/contracts packages/application packages/changesets packages/reliability packages/model-adapter packages/mcp packages/program packages/persistence/src apps/server/src",
+    "test:backend": "bun test packages/kernel packages/identity-access packages/contracts packages/application packages/changesets packages/changeset-operations packages/reliability packages/model-adapter packages/mcp packages/event packages/event-operations packages/deadline packages/deadline-operations packages/program packages/program-operations packages/schedule packages/schedule-operations packages/intake packages/intake-operations packages/field-registry packages/submission-triage packages/review packages/review-operations packages/communications packages/communication-operations packages/cloudflare-email packages/workspace-operations packages/persistence/src apps/server/src",
+    "test:foundation": "bun run test:backend",
     "test:foundation-db": "bun test packages/persistence/src/sqlite",
     "test:e2e": "bun run --cwd apps/web test:e2e",
     "preview": "bun run --cwd apps/web preview"

@@ -27,6 +27,7 @@ const quiet: WorkspaceDataset = {
 			submissions: '268',
 			review: '100%',
 			speakers: '28',
+			reviewers: '5',
 			messages: '2'
 		},
 		stats: [
@@ -86,7 +87,7 @@ const quiet: WorkspaceDataset = {
 				deadlineLabel: 'published Sep 22',
 				deadlineIso: '2026-09-22'
 			},
-			{ key: 'comms', label: 'Comms', headline: '6', sub: 'in the outbox · 2 scheduled', state: 'ok' }
+			{ key: 'comms', label: 'Comms', headline: '6', sub: '4 sent · 2 scheduled', state: 'ok' }
 		],
 		deadlines: [
 			{ label: 'Final AV walkthrough', absolute: 'Oct 9, 14:00 EDT', relative: 'in 11 days', tone: 'ok' },
@@ -135,9 +136,12 @@ const quiet: WorkspaceDataset = {
 		{ id: 'trk-infra', name: 'Models & Infrastructure', accent: 'neutral' }
 	],
 	formats: [
-		{ id: 'fmt-talk', name: 'Talk · 30 min' },
-		{ id: 'fmt-workshop', name: 'Workshop · 90 min' },
-		{ id: 'fmt-panel', name: 'Panel · 45 min' }
+		{ id: 'fmt-talk', name: 'Talk · 30 min', defaultDurationMin: 30 },
+		{ id: 'fmt-workshop', name: 'Workshop · 90 min', defaultDurationMin: 90 },
+		{ id: 'fmt-panel', name: 'Panel · 45 min', defaultDurationMin: 45 },
+		/* Retired mid-planning; Tomás's scope still names it, so it keeps
+		   rendering (flagged) while never being offered for new scoping. */
+		{ id: 'fmt-lightning', name: 'Lightning · 10 min', status: 'retired' }
 	],
 
 	submissions: [
@@ -151,6 +155,7 @@ const quiet: WorkspaceDataset = {
 			formatId: 'fmt-talk',
 			submittedAt: 'Jun 15',
 			source: 'direct_entry',
+			enteredBy: 'Jere K.',
 			tray: 'inbox',
 			decision: 'accepted',
 			notified: true,
@@ -359,11 +364,13 @@ const quiet: WorkspaceDataset = {
 			done: 536,
 			total: 536,
 			antiAnchoring: true,
+			// Roster ids are member ids; the rows sum to the plan's done and
+			// total, closed or not.
 			reviewers: [
-				{ id: 'rev-1', name: 'Sofia Berg', assigned: 134, done: 134, steppedBack: 1, awaitingReassignment: 0 },
-				{ id: 'rev-2', name: 'Jonas Weber', assigned: 134, done: 134, steppedBack: 0, awaitingReassignment: 0 },
-				{ id: 'rev-3', name: 'Priya Nair', assigned: 134, done: 134, steppedBack: 2, awaitingReassignment: 0 },
-				{ id: 'rev-4', name: 'Tomás Rivera', assigned: 134, done: 134, steppedBack: 0, awaitingReassignment: 0 }
+				{ id: 'mem-2', name: 'Sofia Berg', assigned: 134, done: 134, steppedBack: 1, awaitingReassignment: 0 },
+				{ id: 'mem-3', name: 'Jonas Weber', assigned: 134, done: 134, steppedBack: 0, awaitingReassignment: 0 },
+				{ id: 'mem-7', name: 'Priya Nair', assigned: 134, done: 134, steppedBack: 2, awaitingReassignment: 0 },
+				{ id: 'mem-8', name: 'Tomás Rivera', assigned: 134, done: 134, steppedBack: 0, awaitingReassignment: 0 }
 			]
 		},
 		{
@@ -376,11 +383,36 @@ const quiet: WorkspaceDataset = {
 			total: 174,
 			antiAnchoring: true,
 			reviewers: [
-				{ id: 'rev-1', name: 'Sofia Berg', assigned: 58, done: 58, steppedBack: 0, awaitingReassignment: 0 },
-				{ id: 'rev-3', name: 'Priya Nair', assigned: 58, done: 58, steppedBack: 1, awaitingReassignment: 0 },
-				{ id: 'rev-5', name: 'Ines Moreau', assigned: 58, done: 58, steppedBack: 0, awaitingReassignment: 0 }
+				{ id: 'mem-2', name: 'Sofia Berg', assigned: 58, done: 58, steppedBack: 0, awaitingReassignment: 0 },
+				{ id: 'mem-7', name: 'Priya Nair', assigned: 58, done: 58, steppedBack: 1, awaitingReassignment: 0 },
+				{ id: 'mem-5', name: 'Ines Moreau', assigned: 58, done: 58, steppedBack: 0, awaitingReassignment: 0 }
 			]
 		}
+	],
+	/* A small, settled roster: three generalists, two track scopes, everything
+	   covered and nothing awaiting reassignment. Tomás's union also names the
+	   retired lightning format — the ref outlives the entry's retirement. */
+	reviewers: [
+		{ id: 'mem-2', name: 'Sofia Berg', email: 'sofia@perfpanel.se', status: 'active', scope: [] },
+		{ id: 'mem-3', name: 'Jonas Weber', email: 'jonas.weber@metricsense.de', status: 'active', scope: [] },
+		{
+			id: 'mem-7',
+			name: 'Priya Nair',
+			email: 'priya.nair@reviewlab.ai',
+			status: 'active',
+			scope: [{ kind: 'track', id: 'trk-ai' }]
+		},
+		{
+			id: 'mem-8',
+			name: 'Tomás Rivera',
+			email: 'tomas@queueless.dev',
+			status: 'active',
+			scope: [
+				{ kind: 'track', id: 'trk-infra' },
+				{ kind: 'format', id: 'fmt-lightning' }
+			]
+		},
+		{ id: 'mem-5', name: 'Ines Moreau', email: 'ines@gridworks.fr', status: 'active', scope: [] }
 	],
 	myQueue: [
 		{
@@ -645,30 +677,30 @@ const quiet: WorkspaceDataset = {
 		slotMinutes: 30,
 		slotsPerDay: 16,
 		sessions: [
-			{ id: 'ses-1', title: 'Opening Keynote: Ten Years of Reliable AI Systems', speakerNames: ['Ravi Chandran'], trackId: 'trk-web', formatId: 'fmt-talk', durationMin: 60 },
-			{ id: 'ses-2', title: 'Serving 100k-Token Contexts Without Melting the App', speakerNames: ['Ines Moreau'], trackId: 'trk-web', formatId: 'fmt-talk', durationMin: 30 },
-			{ id: 'ses-3', title: 'Typed Tool Contracts Between Agents That Never Meet', speakerNames: ['Amara Okafor'], trackId: 'trk-web', formatId: 'fmt-talk', durationMin: 30 },
-			{ id: 'ses-4', title: 'The Prompt Scaffold That Survived Three Model Upgrades', speakerNames: ['Nora Visser'], trackId: 'trk-web', formatId: 'fmt-talk', durationMin: 30 },
-			{ id: 'ses-5', title: 'Panel: Who Owns Agent Reliability?', speakerNames: ['Sofia Berg', 'Lukas Brandt'], trackId: 'trk-web', formatId: 'fmt-panel', durationMin: 45 },
-			{ id: 'ses-6', title: 'Deterministic Replay for Agent Failures', speakerNames: ['Ingrid Halvorsen'], trackId: 'trk-infra', formatId: 'fmt-talk', durationMin: 30 },
-			{ id: 'ses-7', title: 'Durable Agent Jobs: A Queueing Confession', speakerNames: ['Daniel Kim'], trackId: 'trk-infra', formatId: 'fmt-talk', durationMin: 30 },
-			{ id: 'ses-8', title: 'Cutting Our Eval Run From 22 Minutes to 4', speakerNames: ['Oskar Lind'], trackId: 'trk-infra', formatId: 'fmt-talk', durationMin: 30 },
-			{ id: 'ses-9', title: 'Agent Handoffs: Who Owns the Write?', speakerNames: ['Priya Nair'], trackId: 'trk-ai', formatId: 'fmt-talk', durationMin: 30 },
-			{ id: 'ses-10', title: 'Tracing an Agent Run in Anger', speakerNames: ['Mikkel Sørensen'], trackId: 'trk-infra', formatId: 'fmt-talk', durationMin: 30 },
-			{ id: 'ses-11', title: 'Hands-on: Vector Search Plans for People Who Fear Them', speakerNames: ['Tomás Rivera'], trackId: 'trk-infra', formatId: 'fmt-workshop', durationMin: 90 },
-			{ id: 'ses-12', title: 'Hands-on: AI Interface Audits That Stick', speakerNames: ['Elif Aydın', 'Marc Dubois'], trackId: 'trk-web', formatId: 'fmt-workshop', durationMin: 90 },
-			{ id: 'ses-13', title: 'Day Two Keynote: What We Owe the Next Agent', speakerNames: ['Astrid Holm'], trackId: 'trk-web', formatId: 'fmt-talk', durationMin: 45 },
-			{ id: 'ses-14', title: 'Streaming Agent UIs Without a State Machine Meltdown', speakerNames: ['Deniz Kaya'], trackId: 'trk-web', formatId: 'fmt-talk', durationMin: 30 },
-			{ id: 'ses-15', title: 'Designing Agent Interfaces People Can Actually Trust', speakerNames: ['Hana Sato'], trackId: 'trk-web', formatId: 'fmt-talk', durationMin: 30 },
-			{ id: 'ses-16', title: 'Componentizing the Agent Stack', speakerNames: ['Elena Petrova'], trackId: 'trk-infra', formatId: 'fmt-talk', durationMin: 30 },
-			{ id: 'ses-17', title: 'Closing Panel: Can We Ship Reliable Agents?', speakerNames: ['Sofia Berg', 'Priya Nair'], trackId: 'trk-web', formatId: 'fmt-panel', durationMin: 45 },
-			{ id: 'ses-18', title: 'Evaluating Agents Without a Golden Dataset', speakerNames: ['Hanna Virtanen'], trackId: 'trk-ai', formatId: 'fmt-talk', durationMin: 30 },
-			{ id: 'ses-19', title: 'Prompt Contracts: Versioning What You Ask the Model', speakerNames: ['Yusuf Demir'], trackId: 'trk-ai', formatId: 'fmt-talk', durationMin: 30 },
-			{ id: 'ses-20', title: 'Running Small Models at the Edge', speakerNames: ['Rosa Delgado'], trackId: 'trk-infra', formatId: 'fmt-talk', durationMin: 30 },
-			{ id: 'ses-21', title: 'The Agent Incident Review That Changed Our Roadmap', speakerNames: ['Oskar Lind'], trackId: 'trk-infra', formatId: 'fmt-talk', durationMin: 30 },
-			{ id: 'ses-22', title: 'Boring Agent Deploys: 40 Releases a Day', speakerNames: ['Pekka Ranta'], trackId: 'trk-infra', formatId: 'fmt-talk', durationMin: 30 },
-			{ id: 'ses-23', title: 'Hands-on: Reading Your Own Agent Traces', speakerNames: ['Britta Lange'], trackId: 'trk-infra', formatId: 'fmt-workshop', durationMin: 90 },
-			{ id: 'ses-24', title: 'Hands-on: Writing Agent Skills That Hold Up', speakerNames: ['Nadia Farrow'], trackId: 'trk-web', formatId: 'fmt-workshop', durationMin: 90 }
+			{ id: 'ses-1', title: 'Opening Keynote: Ten Years of Reliable AI Systems', speakers: [{ name: 'Ravi Chandran', email: 'ravi@keynote.example' }], trackId: 'trk-web', formatId: 'fmt-talk', durationMin: 60, state: 'programmed' },
+			{ id: 'ses-2', title: 'Serving 100k-Token Contexts Without Melting the App', speakers: [{ name: 'Ines Moreau', email: 'ines@gridworks.fr' }], trackId: 'trk-web', formatId: 'fmt-talk', durationMin: 30, state: 'programmed' },
+			{ id: 'ses-3', title: 'Typed Tool Contracts Between Agents That Never Meet', speakers: [{ name: 'Amara Okafor', email: 'amara@contractual.io' }], trackId: 'trk-web', formatId: 'fmt-talk', durationMin: 30, state: 'programmed' },
+			{ id: 'ses-4', title: 'The Prompt Scaffold That Survived Three Model Upgrades', speakers: [{ name: 'Nora Visser', email: 'nora@tokenslab.nl' }], trackId: 'trk-web', formatId: 'fmt-talk', durationMin: 30, state: 'programmed' },
+			{ id: 'ses-5', title: 'Panel: Who Owns Agent Reliability?', speakers: [{ name: 'Sofia Berg', email: 'sofia@perfpanel.se' }, { name: 'Lukas Brandt', email: 'lukas@perfpanel.se' }], trackId: 'trk-web', formatId: 'fmt-panel', durationMin: 45, state: 'programmed' },
+			{ id: 'ses-6', title: 'Deterministic Replay for Agent Failures', speakers: [{ name: 'Ingrid Halvorsen', email: 'ingrid@nordicscale.no' }], trackId: 'trk-infra', formatId: 'fmt-talk', durationMin: 30, state: 'programmed' },
+			{ id: 'ses-7', title: 'Durable Agent Jobs: A Queueing Confession', speakers: [{ name: 'Daniel Kim', email: 'daniel@edgequery.dev' }], trackId: 'trk-infra', formatId: 'fmt-talk', durationMin: 30, state: 'programmed' },
+			{ id: 'ses-8', title: 'Cutting Our Eval Run From 22 Minutes to 4', speakers: [{ name: 'Oskar Lind', email: 'oskar@steadystate.se' }], trackId: 'trk-infra', formatId: 'fmt-talk', durationMin: 30, state: 'programmed' },
+			{ id: 'ses-9', title: 'Agent Handoffs: Who Owns the Write?', speakers: [{ name: 'Priya Nair', email: 'priya.nair@reviewlab.ai' }], trackId: 'trk-ai', formatId: 'fmt-talk', durationMin: 30, state: 'programmed' },
+			{ id: 'ses-10', title: 'Tracing an Agent Run in Anger', speakers: [{ name: 'Mikkel Sørensen', email: 'mikkel@boxfresh.dk' }], trackId: 'trk-infra', formatId: 'fmt-talk', durationMin: 30, state: 'programmed' },
+			{ id: 'ses-11', title: 'Hands-on: Vector Search Plans for People Who Fear Them', speakers: [{ name: 'Tomás Rivera', email: 'tomas@queueless.dev' }], trackId: 'trk-infra', formatId: 'fmt-workshop', durationMin: 90, state: 'programmed' },
+			{ id: 'ses-12', title: 'Hands-on: AI Interface Audits That Stick', speakers: [{ name: 'Elif Aydın', email: 'elif@a11ycraft.eu' }, { name: 'Marc Dubois', email: 'marc@a11ycraft.eu' }], trackId: 'trk-web', formatId: 'fmt-workshop', durationMin: 90, state: 'programmed' },
+			{ id: 'ses-13', title: 'Day Two Keynote: What We Owe the Next Agent', speakers: [{ name: 'Astrid Holm', email: 'astrid@holmdesign.dk' }], trackId: 'trk-web', formatId: 'fmt-talk', durationMin: 45, state: 'programmed' },
+			{ id: 'ses-14', title: 'Streaming Agent UIs Without a State Machine Meltdown', speakers: [{ name: 'Deniz Kaya', email: 'deniz@ingestworks.io' }], trackId: 'trk-web', formatId: 'fmt-talk', durationMin: 30, state: 'programmed' },
+			{ id: 'ses-15', title: 'Designing Agent Interfaces People Can Actually Trust', speakers: [{ name: 'Hana Sato', email: 'hana@streamcraft.jp' }], trackId: 'trk-web', formatId: 'fmt-talk', durationMin: 30, state: 'programmed' },
+			{ id: 'ses-16', title: 'Componentizing the Agent Stack', speakers: [{ name: 'Elena Petrova', email: 'elena@sandboxworks.example' }], trackId: 'trk-infra', formatId: 'fmt-talk', durationMin: 30, state: 'programmed' },
+			{ id: 'ses-17', title: 'Closing Panel: Can We Ship Reliable Agents?', speakers: [{ name: 'Sofia Berg', email: 'sofia@perfpanel.se' }, { name: 'Priya Nair', email: 'priya.nair@reviewlab.ai' }], trackId: 'trk-web', formatId: 'fmt-panel', durationMin: 45, state: 'programmed' },
+			{ id: 'ses-18', title: 'Evaluating Agents Without a Golden Dataset', speakers: [{ name: 'Hanna Virtanen', email: 'hanna@evalset.fi' }], trackId: 'trk-ai', formatId: 'fmt-talk', durationMin: 30, state: 'programmed' },
+			{ id: 'ses-19', title: 'Prompt Contracts: Versioning What You Ask the Model', speakers: [{ name: 'Yusuf Demir', email: 'yusuf@promptline.dev' }], trackId: 'trk-ai', formatId: 'fmt-talk', durationMin: 30, state: 'programmed' },
+			{ id: 'ses-20', title: 'Running Small Models at the Edge', speakers: [{ name: 'Rosa Delgado', email: 'rosa@replicalabs.es' }], trackId: 'trk-infra', formatId: 'fmt-talk', durationMin: 30, state: 'programmed' },
+			{ id: 'ses-21', title: 'The Agent Incident Review That Changed Our Roadmap', speakers: [{ name: 'Oskar Lind', email: 'oskar@steadystate.se' }], trackId: 'trk-infra', formatId: 'fmt-talk', durationMin: 30, state: 'programmed' },
+			{ id: 'ses-22', title: 'Boring Agent Deploys: 40 Releases a Day', speakers: [{ name: 'Pekka Ranta', email: 'pekka@releaseworks.fi' }], trackId: 'trk-infra', formatId: 'fmt-talk', durationMin: 30, state: 'programmed' },
+			{ id: 'ses-23', title: 'Hands-on: Reading Your Own Agent Traces', speakers: [{ name: 'Britta Lange', email: 'britta@tracewerk.de' }], trackId: 'trk-infra', formatId: 'fmt-workshop', durationMin: 90, state: 'programmed' },
+			{ id: 'ses-24', title: 'Hands-on: Writing Agent Skills That Hold Up', speakers: [{ name: 'Nadia Farrow', email: 'nadia@farrowlabs.uk' }], trackId: 'trk-web', formatId: 'fmt-workshop', durationMin: 90, state: 'programmed' }
 		],
 		placements: [
 			{ sessionId: 'ses-1', dayKey: 'day-1', roomId: 'room-main', startMin: 0, conflicts: [] },
@@ -700,13 +732,16 @@ const quiet: WorkspaceDataset = {
 		published: true
 	},
 
-	outbox: [
+	communications: [
 		{
 			id: 'msg-1',
 			subject: 'One week out: what to expect',
 			audience: 'Registered attendees',
 			audienceCount: 940,
 			state: 'scheduled',
+			purpose: 'Attendee update',
+			cause: 'Standing pre-event sequence: the one-week-out note goes to everyone registered',
+			actor: 'policy',
 			sentAt: 'Sends Oct 8, 09:00',
 			deliveredCount: 0,
 			bouncedCount: 0,
@@ -718,6 +753,10 @@ const quiet: WorkspaceDataset = {
 			audience: 'Confirmed speakers',
 			audienceCount: 28,
 			state: 'scheduled',
+			purpose: 'Speaker logistics',
+			cause: 'Day-one logistics for the confirmed roster, timed to land the morning before doors',
+			causeHref: '/app/speakers?filter=confirmed',
+			actor: 'you',
 			sentAt: 'Sends Oct 13, 09:00',
 			deliveredCount: 0,
 			bouncedCount: 0,
@@ -729,6 +768,11 @@ const quiet: WorkspaceDataset = {
 			audience: 'Submitters and subscribers',
 			audienceCount: 1240,
 			state: 'sent',
+			purpose: 'Schedule announcement',
+			cause: 'The schedule was published on Sep 22 — every submitter and subscriber was told',
+			causeHref: '/app/schedule',
+			actor: 'you',
+			templateId: 'tpl-schedule-announcement',
 			sentAt: 'Sep 22, 10:00',
 			deliveredCount: 1240,
 			bouncedCount: 0,
@@ -740,6 +784,10 @@ const quiet: WorkspaceDataset = {
 			audience: 'Confirmed speakers',
 			audienceCount: 28,
 			state: 'sent',
+			purpose: 'Speaker logistics',
+			cause: 'Publishing the schedule fixed every session time — each speaker got their own slot',
+			causeHref: '/app/schedule',
+			actor: 'you',
 			sentAt: 'Sep 22, 10:05',
 			deliveredCount: 28,
 			bouncedCount: 0,
@@ -751,6 +799,10 @@ const quiet: WorkspaceDataset = {
 			audience: 'Waitlisted submitters',
 			audienceCount: 12,
 			state: 'sent',
+			purpose: 'Decision notice',
+			cause: '12 submissions stayed waitlisted after the final decision pass',
+			causeHref: '/app/decisions',
+			actor: 'you',
 			sentAt: 'Sep 15, 09:00',
 			deliveredCount: 12,
 			bouncedCount: 0,
@@ -762,12 +814,76 @@ const quiet: WorkspaceDataset = {
 			audience: 'Final decline batch',
 			audienceCount: 44,
 			state: 'sent',
+			purpose: 'Decision notice',
+			cause: '44 submissions were declined in the final pass and their submitters told',
+			causeHref: '/app/decisions',
+			actor: 'you',
+			templateId: 'tpl-decision-declined',
 			sentAt: 'Sep 8, 17:30',
 			deliveredCount: 44,
 			bouncedCount: 0,
 			bounces: []
 		}
 	],
+	threads: {
+		'spk-1': [
+			{
+				id: 'thr-1-1',
+				messageId: 'msg-2',
+				at: 'Sends Oct 13, 09:00',
+				purpose: 'Speaker logistics',
+				subject: 'Green room, load-in, and who to find',
+				outcome: 'scheduled',
+				actor: 'you'
+			},
+			{
+				id: 'thr-1-2',
+				messageId: 'msg-4',
+				at: 'Sep 22, 10:05',
+				purpose: 'Speaker logistics',
+				subject: 'Your session time and room',
+				outcome: 'delivered',
+				actor: 'you'
+			},
+			{
+				id: 'thr-1-3',
+				messageId: 'msg-3',
+				at: 'Sep 22, 10:00',
+				purpose: 'Schedule announcement',
+				subject: 'The full schedule is live',
+				outcome: 'delivered',
+				actor: 'you'
+			}
+		],
+		'spk-2': [
+			{
+				id: 'thr-2-1',
+				messageId: 'msg-2',
+				at: 'Sends Oct 13, 09:00',
+				purpose: 'Speaker logistics',
+				subject: 'Green room, load-in, and who to find',
+				outcome: 'scheduled',
+				actor: 'you'
+			},
+			{
+				id: 'thr-2-2',
+				messageId: 'msg-4',
+				at: 'Sep 22, 10:05',
+				purpose: 'Speaker logistics',
+				subject: 'Your session time and room',
+				outcome: 'delivered',
+				actor: 'you'
+			},
+			{
+				id: 'thr-2-3',
+				at: 'Sep 8, 17:35',
+				purpose: 'Decision notice',
+				subject: 'Good news about “Serving 100k-Token Contexts Without Melting the App”',
+				outcome: 'delivered',
+				actor: 'you'
+			}
+		]
+	},
 	readiness: { provider: 'Resend', outbound: 'ready', callbacks: 'ready', inbound: 'ready' },
 
 	templates: starterTemplates(),
@@ -776,9 +892,52 @@ const quiet: WorkspaceDataset = {
 	theme: defaultEventTheme('AI Engineer NYC 2026'),
 
 	forms: [
-		{ id: 'form-cfp', name: 'Call for Proposals', target: 'general', status: 'closed', version: 4, submissionCount: 267, fieldCount: 12 },
-		{ id: 'form-late', name: 'Late submission request', target: 'general', status: 'closed', version: 1, submissionCount: 1, fieldCount: 5 },
-		{ id: 'form-evergreen', name: 'Speak at a Future AI Engineer Event', target: 'evergreen', status: 'open', version: 3, submissionCount: 58, fieldCount: 5 }
+		{ id: 'form-cfp', name: 'Call for Proposals', target: { kind: 'general' }, status: 'closed', version: 4, submissionCount: 267 },
+		{
+			id: 'form-late',
+			name: 'Late submission request',
+			target: { kind: 'general' },
+			status: 'closed',
+			version: 1,
+			submissionCount: 1,
+			composition: {
+				excludedFieldIds: [
+					'fld-headline',
+					'fld-location',
+					'fld-link',
+					'fld-website',
+					'fld-linkedin',
+					'fld-x',
+					'fld-github',
+					'fld-format',
+					'fld-notes',
+					'fld-consent'
+				]
+			}
+		},
+		{
+			id: 'form-evergreen',
+			name: 'Speak at a Future AI Engineer Event',
+			target: { kind: 'general' },
+			status: 'open',
+			version: 3,
+			submissionCount: 58,
+			composition: {
+				excludedFieldIds: [
+					'fld-headline',
+					'fld-location',
+					'fld-link',
+					'fld-website',
+					'fld-linkedin',
+					'fld-x',
+					'fld-github',
+					'fld-format',
+					'fld-notes',
+					'fld-consent'
+				],
+				requiredOverrides: { 'fld-abstract': false }
+			}
+		}
 	],
 
 	settings: {
@@ -796,7 +955,9 @@ const quiet: WorkspaceDataset = {
 		{ id: 'mem-3', name: 'Jonas Weber', email: 'jonas.weber@metricsense.de', role: 'Speaker Reviewer', status: 'active' },
 		{ id: 'mem-4', name: 'Linnea Koski', email: 'linnea@aie-demo.example', role: 'Speaker Manager', status: 'active' },
 		{ id: 'mem-5', name: 'Ines Moreau', email: 'ines@gridworks.fr', role: 'Speaker Reviewer', status: 'active' },
-		{ id: 'mem-6', name: 'Aleks Rinne', email: 'aleks@aie-demo.example', role: 'Communications Coordinator', status: 'active' }
+		{ id: 'mem-6', name: 'Aleks Rinne', email: 'aleks@aie-demo.example', role: 'Communications Coordinator', status: 'active' },
+		{ id: 'mem-7', name: 'Priya Nair', email: 'priya.nair@reviewlab.ai', role: 'Speaker Reviewer', status: 'active' },
+		{ id: 'mem-8', name: 'Tomás Rivera', email: 'tomas@queueless.dev', role: 'Speaker Reviewer', status: 'active' }
 	]
 };
 

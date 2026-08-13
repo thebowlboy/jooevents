@@ -1,8 +1,17 @@
 <script lang="ts">
-	import { Undo2 } from 'lucide-svelte';
+	/**
+	 * The receipt bus, docked. Every surface that commits renders one of these;
+	 * the presentation itself is the shared `Receipt` primitive, so the operator
+	 * workspace and the participant portal cannot drift into two grammars for
+	 * the same guarantee.
+	 */
+	import { Receipt } from '$lib/ui';
 	import { latestReceipt, undoReceipt } from '../actions.svelte';
 
-	let { onUndone }: { onUndone?: () => void } = $props();
+	let {
+		onUndone,
+		placement = 'rail'
+	}: { onUndone?: () => void; placement?: 'rail' | 'column' } = $props();
 
 	const receipt = $derived(latestReceipt());
 	let shownId = $state<number | null>(null);
@@ -34,51 +43,12 @@
 </script>
 
 {#if receipt && shownId === receipt.id}
-	<div class="receipt" role="status">
-		<p class="receipt__label">{receipt.label}</p>
-		{#if receipt.undo}
-			<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={undoing} onclick={undo}>
-				<Undo2 size={13} aria-hidden="true" />{undoing ? 'Undoing…' : 'Undo'}
-			</button>
-		{:else if receipt.notUndoableReason}
-			<p class="receipt__final">{receipt.notUndoableReason}</p>
-		{/if}
-	</div>
+	<Receipt
+		label={receipt.label}
+		href={receipt.href}
+		hrefLabel={receipt.hrefLabel}
+		{placement}
+		{undoing}
+		onundo={receipt.undo ? undo : undefined}
+		finalNote={receipt.notUndoableReason} />
 {/if}
-
-<style>
-	.receipt {
-		position: fixed;
-		inset-block-end: var(--je-space-4);
-		inset-inline-start: calc(var(--je-sidebar-width) + var(--je-space-6));
-		z-index: 70;
-		display: flex;
-		align-items: center;
-		gap: var(--je-space-3);
-		max-inline-size: min(34rem, calc(100vw - 2rem));
-		padding: var(--je-space-2) var(--je-space-3);
-		background: var(--je-color-surface);
-		border: 1px solid var(--je-color-border-strong);
-		border-radius: var(--je-radius-surface);
-		box-shadow: var(--je-shadow-md);
-	}
-
-	.receipt__label {
-		margin: 0;
-		font-size: var(--je-font-size-sm);
-		min-width: 0;
-	}
-
-	.receipt__final {
-		margin: 0;
-		font-size: var(--je-font-size-xs);
-		color: var(--je-color-text-muted);
-	}
-
-	@media (max-width: 920px) {
-		.receipt {
-			inset-inline-start: var(--je-space-3);
-			inset-inline-end: var(--je-space-3);
-		}
-	}
-</style>

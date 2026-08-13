@@ -279,6 +279,32 @@ export function starterSurfaceTemplates(eventName: string): SurfaceTemplate[] {
 			usedBy: ['Public schedule · standalone & embed']
 		},
 		{
+			id: 'srf-speaker-roster',
+			kind: 'speaker-roster',
+			name: 'Speaker roster',
+			purpose: 'Who is speaking, in the order you set — the whole lineup or any one person.',
+			blocks: [
+				{
+					type: 'hero',
+					title: `Speaking at ${eventName}`,
+					intro:
+						'The people taking the stage this year. More join as sessions are confirmed, so this page keeps changing until the doors open.'
+				},
+				{
+					type: 'roster-list',
+					layout: 'grid',
+					grouping: 'category',
+					showHeadline: true,
+					showSessions: true,
+					showLinks: true,
+					density: 'cozy'
+				}
+			],
+			revision: 1,
+			revisions: [starterRevision()],
+			usedBy: ['Speaker roster · standalone & embed']
+		},
+		{
 			id: 'srf-application-form',
 			kind: 'application-form',
 			name: 'Speaker application form',

@@ -16,20 +16,6 @@ async function reachNav(page: Page, projectName: string) {
 	await expect(page.getByRole('button', { name: 'Close navigation' })).toBeFocused();
 }
 
-/** Runs one quick iteration round and applies it, returning at revision 2. */
-async function applyQuickRound(page: Page) {
-	const input = page.getByPlaceholder('Tell it what to change…');
-	await input.fill('Make it warmer');
-	await page.getByRole('button', { name: 'Send' }).click();
-
-	await expect(page.locator('.editor__state')).toContainText('Draft', { timeout: 15000 });
-	await page.getByRole('button', { name: 'Apply', exact: true }).click();
-	await expect(
-		page.getByRole('status').filter({ hasText: /Applied revision 2 to “Decision — accepted”/ })
-	).toBeVisible({ timeout: 10000 });
-	await expect(page.getByLabel('Revision history')).toHaveValue('2');
-}
-
 test('the starter list shows all six templates with purpose, flows, and revision', async ({ page }) => {
 	await page.goto('/app/templates');
 
@@ -70,87 +56,41 @@ test('opening a template lands in the editor with the branded preview, merge chi
 	await expect(preview).toContainText(/receiving this as a speaker\/submitter/);
 });
 
-test('an instruction routes, streams a draft, shows the structural diff, and applies as a new revision', async ({ page }) => {
+test('the assistant panel is present but paused: coming soon named, controls inert, no chips', async ({ page }) => {
 	await page.goto('/app/templates?template=tpl-decision-accepted');
 	await expect(page.getByRole('heading', { name: 'Decision — accepted' })).toBeVisible({ timeout: 15000 });
 
-	const input = page.getByPlaceholder('Tell it what to change…');
-	const send = page.getByRole('button', { name: 'Send' });
-	// Empty instruction: nothing to send.
-	await expect(send).toBeDisabled();
+	// The panel keeps its place and says why it does nothing yet.
+	const assistant = page.getByRole('region', { name: 'Change it with AI' });
+	await expect(assistant).toBeVisible();
+	await expect(assistant).toContainText('Coming soon');
+	await expect(assistant).toContainText('describe a change here');
 
-	await input.fill('Make it warmer');
-	await expect(send).toBeEnabled();
-	await send.click();
+	// Every control is inert — input, send, and the model pick.
+	await expect(page.getByPlaceholder('Tell it what to change…')).toBeDisabled();
+	await expect(assistant.getByRole('button', { name: 'Send' })).toBeDisabled();
+	await expect(page.getByLabel('Model')).toBeDisabled();
 
-	// The routing decision renders as a quiet badge with its reason in words.
-	await expect(page.locator('.bar__profile')).toContainText('Quick touch', { timeout: 10000 });
-	await expect(page.locator('.bar__routing')).toContainText('Wording-only change');
-	// While drafting the send is disabled and the stream reports live tokens.
-	await expect(send).toBeDisabled();
-	await expect(page.locator('.bar__progress')).toContainText(/tokens/, { timeout: 10000 });
-
-	// Done: the preview flips to the draft and the diff strip appears.
-	await expect(page.locator('.editor__state')).toContainText('Draft', { timeout: 15000 });
-	const diff = page.getByRole('region', { name: 'What changed' });
-	await expect(diff).toBeVisible();
-	await expect(diff).toContainText('Edited');
-	await expect(diff).toContainText('Paragraph');
-	await expect(diff.getByRole('button', { name: 'Refine' })).toBeVisible();
-	await expect(diff.getByRole('button', { name: 'Discard' })).toBeVisible();
-
-	// The Before/After reveal: After is the default and shows the drafted text;
-	// Before swaps the same reserved container to the committed copy.
-	const preview = page.getByRole('region', { name: 'Message preview' });
-	const before = page.getByRole('button', { name: 'Before', exact: true });
-	const after = page.getByRole('button', { name: 'After', exact: true });
-	await expect(after).toHaveAttribute('aria-pressed', 'true');
-	await expect(preview).toContainText('genuinely good to be writing to you');
-	// Document-space position of the toggle: swapping sides must not move it.
-	const togglePlace = () =>
-		page.evaluate(() => {
-			const el = document.querySelector('.editor__sides');
-			return el ? el.getBoundingClientRect().top + window.scrollY : -1;
-		});
-	const placeOnAfter = await togglePlace();
-
-	await before.click();
-	await expect(before).toHaveAttribute('aria-pressed', 'true');
-	await expect(preview).toContainText('is confirmed for');
-	await expect(preview).not.toContainText('genuinely good to be writing to you');
-	// Before is flagged as the committed copy, and nothing moved: the toggle
-	// sits exactly where it was.
-	await expect(page.locator('.editor__state')).toContainText('Current');
-	expect(Math.abs((await togglePlace()) - placeOnAfter)).toBeLessThanOrEqual(1);
-
-	await after.click();
-	await expect(preview).toContainText('genuinely good to be writing to you');
-	await expect(preview).not.toContainText('is confirmed for');
-	// The diff strip's long before→after lines wrap inside the rail; they never
-	// widen the document.
-	const overflow = await page.evaluate(
-		() => document.documentElement.scrollWidth - document.documentElement.clientWidth
-	);
-	expect(overflow).toBeLessThanOrEqual(1);
-
-	// Apply commits it as revision 2, with a receipt that can undo.
-	await diff.getByRole('button', { name: 'Apply', exact: true }).click();
-	const receipt = page
-		.getByRole('status')
-		.filter({ hasText: /Applied revision 2 to “Decision — accepted”/ });
-	await expect(receipt).toBeVisible({ timeout: 10000 });
-	await expect(receipt.getByRole('button', { name: 'Undo' })).toBeVisible();
-	// The revision dropdown now names the applied copy as current.
-	const revisions = page.getByLabel('Revision history');
-	await expect(revisions).toHaveValue('2');
-	await expect(revisions.locator('option', { hasText: 'rev 2 · current' })).toHaveCount(1);
-	await expect(page.locator('.editor__state')).toContainText('revision 2');
+	// The starter suggestion chips are gone, not merely hidden.
+	await expect(assistant.locator('.bar__chip')).toHaveCount(0);
+	await expect(assistant.getByRole('button', { name: 'Warmer tone' })).toHaveCount(0);
 });
 
 test('an older revision reads back from the history dropdown and restores on top', async ({ page }) => {
 	await page.goto('/app/templates?template=tpl-decision-accepted');
 	await expect(page.getByRole('heading', { name: 'Decision — accepted' })).toBeVisible({ timeout: 15000 });
-	await applyQuickRound(page);
+
+	// Revision 2 comes from the direct lane: one inline edit, committed on Done.
+	const preview = page.getByRole('region', { name: 'Message preview' });
+	await expect(preview).toContainText('You’re in', { timeout: 15000 });
+	await page.locator('[data-edit="blocks.0.text"]').click({ position: { x: 12, y: 12 } });
+	const editorPanel = page.locator('.ied');
+	await editorPanel.getByRole('textbox').fill('Welcome aboard, {{speaker.name}}');
+	await editorPanel.getByRole('button', { name: 'Done' }).click();
+	await expect(
+		page.getByRole('status').filter({ hasText: /Edited heading in “Decision — accepted”/ })
+	).toBeVisible({ timeout: 10000 });
+	await expect(page.getByLabel('Revision history')).toHaveValue('2');
 
 	// One compact control: the closed dropdown names the current copy, each
 	// option is a single line of who revised and why.
@@ -172,37 +112,6 @@ test('an older revision reads back from the history dropdown and restores on top
 	await expect(page.locator('.editor__state')).toContainText('revision 3');
 });
 
-test('suggestion chips fill the input, and a pinned model routes as your pick', async ({ page }) => {
-	await page.goto('/app/templates?template=tpl-decision-accepted');
-	await expect(page.getByRole('heading', { name: 'Decision — accepted' })).toBeVisible({ timeout: 15000 });
-
-	// The assistant panel identity carries the loop; its starter chips sit
-	// under the input while there is nothing to report.
-	const assistant = page.getByRole('region', { name: 'Change it with AI' });
-	await expect(assistant).toBeVisible();
-	const chip = assistant.getByRole('button', { name: 'Warmer tone' });
-	await expect(chip).toBeVisible({ timeout: 10000 });
-	await expect(assistant.getByRole('button', { name: 'Add a deadline row' })).toBeVisible();
-
-	// Pressing a chip fills and focuses the input — it never sends by itself —
-	// and the filled input hands the chips' slot back to status.
-	await chip.click();
-	const input = page.getByPlaceholder('Tell it what to change…');
-	await expect(input).toHaveValue('Warmer tone');
-	await expect(input).toBeFocused();
-	await expect(chip).toBeHidden();
-	await expect(page.locator('.bar__progress')).not.toContainText('tokens');
-
-	// The model select defaults to the routing choice; a pinned model bypasses
-	// routing and the badge credits the pick.
-	const model = page.getByLabel('Model');
-	await expect(model).toHaveValue('auto');
-	await model.selectOption({ label: 'Opus 5' });
-	await page.getByRole('button', { name: 'Send' }).click();
-	await expect(page.locator('.bar__profile')).toContainText('Your pick · Opus 5', { timeout: 10000 });
-	await expect(page.locator('.editor__state')).toContainText('Draft', { timeout: 20000 });
-});
-
 test('a template deep link lands directly in its editor', async ({ page }) => {
 	await page.goto('/app/templates?template=tpl-task-reminder');
 	await expect(page.getByRole('heading', { name: 'Task reminder' })).toBeVisible({ timeout: 15000 });
@@ -215,20 +124,24 @@ test('the brand tab is addressable', async ({ page }) => {
 	await expect(page.getByRole('button', { name: 'Save brand' })).toBeVisible();
 });
 
-test('the surfaces tab lists both surfaces as rows that open their editors', async ({ page }) => {
+test('the surfaces tab lists every surface as a row that opens its editor', async ({ page }) => {
 	await page.goto('/app/templates?tab=surfaces');
 	const list = page.getByRole('region', { name: 'Public surfaces' });
 	await expect(list).toContainText('Public schedule', { timeout: 15000 });
-	await expect(list.locator('.tpl-row')).toHaveCount(2);
+	await expect(list.locator('.tpl-row')).toHaveCount(3);
+	await expect(list).toContainText('Speaker roster');
 	await expect(list).toContainText('Speaker application form');
 	// Each row carries its revision and the surfaces that render from it.
 	await expect(list.getByText('rev 1').first()).toBeVisible();
 	await expect(list).toContainText('Public schedule · standalone & embed');
+	await expect(list).toContainText('Speaker roster · standalone & embed');
 	await expect(list).toContainText('CFP form · standalone & embed');
-	// The honest line: publishing routes are not here yet.
-	await expect(list).toContainText(
-		'Standalone and embed routes publish from these surfaces — arriving with the public-surfaces slice.'
-	);
+	// This list owns what a page says; the code that carries it onto somebody
+	// else's site is one door away, per row and in the closing line.
+	await expect(
+		list.locator('.tpl-pair', { hasText: 'Public schedule' }).getByRole('link')
+	).toHaveAttribute('href', '/app/embeds?embed=srf-schedule');
+	await expect(list.getByRole('link', { name: 'Embeds' })).toHaveAttribute('href', '/app/embeds');
 
 	await list.locator('.tpl-row').filter({ hasText: 'Public schedule' }).click();
 	await expect(page).toHaveURL(/template=srf-schedule/);
@@ -257,42 +170,6 @@ test('the schedule surface editor previews the real program grouped by day', asy
 	expect(overflow).toBeLessThanOrEqual(1);
 });
 
-test('a schedule surface instruction routes comprehensive, diffs the grouping, and applies', async ({ page }) => {
-	await page.goto('/app/templates?tab=surfaces&template=srf-schedule');
-	await expect(page.getByRole('heading', { name: 'Public schedule' })).toBeVisible({ timeout: 15000 });
-
-	const input = page.getByPlaceholder('Tell it what to change…');
-	await input.fill('group tracks together');
-	await page.getByRole('button', { name: 'Send' }).click();
-
-	// A structural surface instruction routes to the full pass.
-	await expect(page.locator('.bar__profile')).toContainText('Full pass', { timeout: 10000 });
-	await expect(page.locator('.bar__routing')).toContainText('Structural change across blocks');
-
-	// The diff names the edited option, before → after.
-	await expect(page.locator('.editor__state')).toContainText('Draft', { timeout: 30000 });
-	const diff = page.getByRole('region', { name: 'What changed' });
-	await expect(diff).toContainText('Edited');
-	await expect(diff).toContainText('Schedule layout · grouping');
-	await expect(diff.locator('.diff__before')).toContainText('day');
-	await expect(diff.locator('.diff__after')).toContainText('track');
-
-	await diff.getByRole('button', { name: 'Apply', exact: true }).click();
-	const receipt = page
-		.getByRole('status')
-		.filter({ hasText: /Applied revision 2 to “Public schedule”/ });
-	await expect(receipt).toBeVisible({ timeout: 10000 });
-	await expect(receipt.getByRole('button', { name: 'Undo' })).toBeVisible();
-	await expect(page.getByLabel('Revision history')).toHaveValue('2');
-
-	// The committed preview now groups by track: vocabulary names head the groups.
-	const preview = page.getByRole('region', { name: 'Surface preview' });
-	await expect(preview.locator('.schedule__group-heading').filter({ hasText: 'Agents & Tools' })).toBeVisible();
-	await expect(
-		preview.locator('.schedule__group-heading').filter({ hasText: 'Models & Infrastructure' })
-	).toBeVisible();
-});
-
 test('the application form editor renders sections with inert fields and the consent checkbox', async ({ page }) => {
 	await page.goto('/app/templates?tab=surfaces&template=srf-application-form');
 	await expect(page.getByRole('heading', { name: 'Speaker application form' })).toBeVisible({ timeout: 15000 });
@@ -309,58 +186,10 @@ test('the application form editor renders sections with inert fields and the con
 	const consent = preview.getByRole('checkbox');
 	await expect(consent).toBeDisabled();
 	await expect(preview).toContainText('I agree to the code of conduct');
-	// Selects resolve their options from the field pool (pronouns, format, and track).
-	await expect(preview.locator('select')).toHaveCount(3);
+	// Selects resolve their options from the field pool (format and track);
+	// their choices are the live event vocabularies.
+	await expect(preview.locator('select')).toHaveCount(2);
 	await expect(preview.locator('select').first()).toBeDisabled();
-});
-
-test('a form chip drafts real field work that lands in the registry on apply', async ({ page }, testInfo) => {
-	test.skip(testInfo.project.name !== 'desktop', 'one viewport covers the registry-sync contract');
-	await page.goto('/app/templates?tab=surfaces&template=srf-application-form');
-	await expect(page.getByRole('heading', { name: 'Speaker application form' })).toBeVisible({
-		timeout: 15000
-	});
-
-	// The form's starter chips are field work; pressing one fills the input.
-	const assistant = page.getByRole('region', { name: 'Change it with AI' });
-	const chip = assistant.getByRole('button', { name: 'Add a travel question' });
-	await expect(chip).toBeVisible({ timeout: 10000 });
-	await chip.click();
-	await expect(page.getByPlaceholder('Tell it what to change…')).toHaveValue('Add a travel question');
-	await page.getByRole('button', { name: 'Send' }).click();
-
-	// The draft's After side asks the new question in the form preview…
-	await expect(page.locator('.editor__state')).toContainText('Draft', { timeout: 30000 });
-	const preview = page.getByRole('region', { name: 'Surface preview' });
-	const travelLabel = preview.locator('label').filter({ hasText: 'Travel plans' });
-	await expect(travelLabel).toBeVisible();
-	// …and the diff names it by label. Draft only: Before does not ask it.
-	await expect(page.getByRole('region', { name: 'What changed' })).toContainText('Travel plans');
-	await page.getByRole('button', { name: 'Before', exact: true }).click();
-	await expect(travelLabel).toHaveCount(0);
-	await page.getByRole('button', { name: 'After', exact: true }).click();
-	await expect(travelLabel).toBeVisible();
-
-	await page.getByRole('region', { name: 'What changed' }).getByRole('button', { name: 'Apply', exact: true }).click();
-	await expect(
-		page.getByRole('status').filter({ hasText: /Applied revision 2 to “Speaker application form”/ })
-	).toBeVisible({ timeout: 10000 });
-	await expect(travelLabel).toBeVisible();
-
-	// The question is now a registry fact: Settings → Speaker fields lists it
-	// where the advisor placed it — in the logistics run, after the last
-	// logistics field and before materials. In-app navigation keeps the
-	// session's working copy alive.
-	await page.locator('.side__link[href="/app/settings"]').click();
-	const panel = page.getByRole('region', { name: 'Speaker fields' });
-	await expect(panel.getByRole('heading', { name: 'Speaker fields' })).toBeVisible({ timeout: 15000 });
-	await expect(panel.getByRole('listitem').filter({ hasText: 'Travel plans' })).toBeVisible({
-		timeout: 15000
-	});
-	const names = await panel.locator('.frow__label').allInnerTexts();
-	const travel = names.indexOf('Travel plans');
-	expect(travel).toBeGreaterThan(names.indexOf('Dietary needs'));
-	expect(travel).toBeLessThan(names.indexOf('Headshot'));
 });
 
 test('a surface revision restores as a new revision on top', async ({ page }) => {
@@ -370,18 +199,16 @@ test('a surface revision restores as a new revision on top', async ({ page }) =>
 	const preview = page.getByRole('region', { name: 'Surface preview' });
 	await expect(preview).toContainText('Main Stage', { timeout: 15000 });
 
-	// A quick round that hides the rooms, applied as revision 2.
-	const input = page.getByPlaceholder('Tell it what to change…');
-	await input.fill('Hide the rooms');
-	await page.getByRole('button', { name: 'Send' }).click();
-	await expect(page.locator('.editor__state')).toContainText('Draft', { timeout: 15000 });
-	const diff = page.getByRole('region', { name: 'What changed' });
-	await expect(diff).toContainText('Schedule layout · showRoom');
-	await diff.getByRole('button', { name: 'Apply', exact: true }).click();
+	// Revision 2 comes from the direct lane: retitle the hero inline.
+	await page.locator('[data-edit="blocks.0.title"]').click({ position: { x: 12, y: 12 } });
+	const editorPanel = page.locator('.ied');
+	await editorPanel.getByRole('textbox').fill('The program, hour by hour');
+	await editorPanel.getByRole('button', { name: 'Done' }).click();
 	await expect(
-		page.getByRole('status').filter({ hasText: /Applied revision 2 to “Public schedule”/ })
+		page.getByRole('status').filter({ hasText: /Edited title in “Public schedule”/ })
 	).toBeVisible({ timeout: 10000 });
-	await expect(preview).not.toContainText('Main Stage');
+	await expect(page.getByLabel('Revision history')).toHaveValue('2');
+	await expect(preview).toContainText('The program, hour by hour');
 
 	// Reading revision 1 is a read-only view; restoring moves history forward.
 	await page.getByLabel('Revision history').selectOption('1');
@@ -391,7 +218,7 @@ test('a surface revision restores as a new revision on top', async ({ page }) =>
 		page.getByRole('status').filter({ hasText: /Restored revision 1 of “Public schedule”/ })
 	).toBeVisible({ timeout: 10000 });
 	await expect(page.getByLabel('Revision history')).toHaveValue('3');
-	await expect(preview).toContainText('Main Stage');
+	await expect(preview).not.toContainText('The program, hour by hour');
 });
 
 test('the schedule page doors into the public schedule template editor', async ({ page }) => {

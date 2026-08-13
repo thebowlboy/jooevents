@@ -7,6 +7,7 @@
 import type { Icon } from 'lucide-svelte';
 import {
 	CalendarDays,
+	CodeXml,
 	FileText,
 	Inbox,
 	LayoutDashboard,
@@ -15,9 +16,15 @@ import {
 	Send,
 	Settings,
 	Stamp,
+	UserPen,
 	Users
 } from 'lucide-svelte';
 import type { AreaKey, NavCounts } from '$lib/api/types';
+
+/** Viewer facts needed to shape navigation, independent of any data source. */
+export type WorkspaceNavigationViewer =
+	| { readonly kind: 'organizer' }
+	| { readonly kind: 'reviewer'; readonly reviewerId: string };
 
 export type IconComponent = typeof Icon;
 
@@ -53,6 +60,7 @@ export const navGroups: NavGroup[] = [
 		label: 'People',
 		items: [
 			{ key: 'speakers', label: 'Speakers', href: '/app/speakers', icon: Users },
+			{ key: 'reviewers', label: 'Reviewers', href: '/app/reviewers', icon: UserPen },
 			{ key: 'tasks', label: 'Tasks', href: '/app/tasks', icon: ListChecks }
 		]
 	},
@@ -60,9 +68,19 @@ export const navGroups: NavGroup[] = [
 		label: 'Event',
 		items: [
 			{ key: 'schedule', label: 'Schedule', href: '/app/schedule', icon: CalendarDays },
-			{ key: 'messages', label: 'Messages', href: '/app/messages', icon: Send },
+			{ key: 'messages', label: 'Communications', href: '/app/messages', icon: Send },
 			{ key: 'forms', label: 'Forms', href: '/app/forms', icon: FileText },
-			{ key: 'templates', label: 'Templates', href: '/app/templates', icon: LayoutTemplate }
+			{ key: 'templates', label: 'Templates', href: '/app/templates', icon: LayoutTemplate },
+			/*
+			 * Embeds is its own row rather than a fourth tab under Templates. The
+			 * word is what someone hunting for this feature actually looks for —
+			 * "Templates" names how the pages are authored, not that they can be
+			 * put on your own site — and the job is genuinely a different one:
+			 * Templates decides what a public page says, Embeds hands you the code
+			 * that carries it onto somebody else's page. Every surface's snippet
+			 * resolves here, from all four directions.
+			 */
+			{ key: 'embeds', label: 'Embeds', href: '/app/embeds', icon: CodeXml }
 		]
 	}
 ];
@@ -75,6 +93,47 @@ export const settingsItem: NavItem = {
 };
 
 const allItems = [overviewItem, ...navGroups.flatMap((group) => group.items), settingsItem];
+
+/**
+ * The rail, for whoever is looking at it.
+ *
+ * A reviewer holds review permissions and nothing else, so every other row
+ * would be a door that refuses. They are absent rather than locked: the locked
+ * treatment promises "not yet" — it is how the shell says an area opens once an
+ * event exists — and for this person it never opens. Absent is also the only
+ * honest option for the areas whose surfaces are organizer projections through
+ * and through; a reviewer-shaped Submissions or Overview does not exist, and a
+ * row leading to sample-looking rows they may not read would be worse than no
+ * row at all.
+ *
+ * The organizer model returns the shared items unchanged, so the rail it
+ * renders is the same one it rendered before this projection existed.
+ */
+export interface NavModel {
+	/** Where the wordmark goes: the viewer's own first surface. */
+	home: string;
+	/** Present when the viewer has an overview projection to land on. */
+	overview?: NavItem;
+	groups: NavGroup[];
+	/** Present when the viewer administers the workspace. */
+	settings?: NavItem;
+}
+
+/** The areas a reviewer-only principal has a surface for. */
+const reviewerAreas: readonly AreaKey[] = ['review'];
+
+export function navModel(viewer: WorkspaceNavigationViewer): NavModel {
+	if (viewer.kind === 'organizer') {
+		return { home: overviewItem.href, overview: overviewItem, groups: navGroups, settings: settingsItem };
+	}
+	const groups = navGroups
+		.map((group) => ({
+			label: group.label,
+			items: group.items.filter((item) => reviewerAreas.includes(item.key))
+		}))
+		.filter((group) => group.items.length > 0);
+	return { home: groups[0]?.items[0]?.href ?? overviewItem.href, groups };
+}
 
 /** Overview matches only itself; every other destination owns its subtree. */
 export function isActive(pathname: string, href: string): boolean {
@@ -127,6 +186,8 @@ export function navMeta(
 			return counts.decisions;
 		case 'speakers':
 			return counts.speakers ? { value: counts.speakers } : undefined;
+		case 'reviewers':
+			return counts.reviewers ? { value: counts.reviewers } : undefined;
 		case 'tasks':
 			return counts.tasks;
 		case 'schedule':

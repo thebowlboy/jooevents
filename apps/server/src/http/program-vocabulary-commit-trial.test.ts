@@ -10,6 +10,7 @@ import {
   createOperationRegistry,
   createReviewedChangesetCommitHandler,
   createSingleUnitOfWorkConformanceFixture,
+  type EffectAuthorityRecheckSource,
   type InvocationEvidence,
   type OperationRegistrySource
 } from '@jooevents/application';
@@ -257,6 +258,19 @@ async function harness(failAt?: ProgramVocabularyReviewedCommitTrialFailurePoint
   installFoundationTrialUnitOfWorkSchema(sqlite);
   installProgramVocabularyTrialSchema(sqlite);
   installProgramVocabularyReviewedCommitTrialSchema(sqlite);
+  sqlite.exec(`
+    CREATE TABLE program_reviewed_http_current_authority_trial (
+      session_handle TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      event_id TEXT NOT NULL,
+      state TEXT NOT NULL CHECK (state IN ('active', 'revoked'))
+    ) STRICT;
+    INSERT INTO program_reviewed_http_current_authority_trial
+      (session_handle, workspace_id, event_id, state)
+    VALUES
+      ('operator-session-current', '${workspaceId}', '${eventId}', 'active'),
+      ('operator-session-revoked', '${workspaceId}', '${eventId}', 'revoked');
+  `);
   sqlite.query<never, [string, string, number]>(`
     INSERT INTO program_vocabulary_trial_sets (workspace_id, event_id, set_version)
     VALUES (?, ?, ?)
@@ -301,8 +315,21 @@ async function harness(failAt?: ProgramVocabularyReviewedCommitTrialFailurePoint
     resolve(input) {
       tracker.authorityChecks += 1;
       if (input.evidence.kind !== 'operator') return { kind: 'denied', reason: 'lane_mismatch' };
-      if (input.evidence.sessionHandle === 'operator-session-revoked') return { kind: 'denied', reason: 'revoked' };
-      if (input.evidence.sessionHandle !== 'operator-session-current') return { kind: 'denied', reason: 'missing' };
+      const current = sqlite.query<{
+        readonly workspace_id: string;
+        readonly event_id: string;
+        readonly state: 'active' | 'revoked';
+      }, [string]>(`
+        SELECT workspace_id, event_id, state
+          FROM program_reviewed_http_current_authority_trial
+         WHERE session_handle = ?
+      `).get(input.evidence.sessionHandle);
+      if (!current) return { kind: 'denied', reason: 'missing' };
+      if (current.state === 'revoked') return { kind: 'denied', reason: 'revoked' };
+      if (input.scope.workspaceId !== current.workspace_id
+        || input.scope.eventId !== current.event_id) {
+        return { kind: 'denied', reason: 'cross_scope' };
+      }
       return {
         kind: 'authorized',
         authority: {
@@ -347,6 +374,10 @@ async function harness(failAt?: ProgramVocabularyReviewedCommitTrialFailurePoint
         };
       }
     }
+  });
+  const transactionAuthority: EffectAuthorityRecheckSource = Object.freeze({
+    resolveAuthority: authorityResolver.resolve,
+    now: () => now
   });
   const autonomy = createOperationAutonomyPolicy({
     definition: refs.autonomy,
@@ -472,7 +503,7 @@ async function harness(failAt?: ProgramVocabularyReviewedCommitTrialFailurePoint
     control,
     () => '018f7d5a-4b3c-7abc-8def-0123456789e1'
   );
-  const unitOfWork = new SQLiteTrialEffectUnitOfWorkPort(sqlite, adapter, {
+  const unitOfWork = new SQLiteTrialEffectUnitOfWorkPort(sqlite, adapter, transactionAuthority, {
     afterTerminalAuditInserted: (record) => adapter.afterTerminalAuditInserted(record)
   });
   const builder = createEffectInvocationBuilder(registry);
@@ -563,7 +594,7 @@ describe('disposable Program Vocabulary reviewed commit HTTP composition', () =>
         correlationId
       });
       expect(target.tracker.verifiedSessions).toEqual(['operator-session-current']);
-      expect(target.tracker.authorityChecks).toBe(1);
+      expect(target.tracker.authorityChecks).toBe(3);
       expect(target.adapter.trace).toEqual([
         'snapshot', 'prepare', 'domain', 'parent', 'audit',
         'fact', 'outbox', 'timeline', 'claim_release', 'commit'

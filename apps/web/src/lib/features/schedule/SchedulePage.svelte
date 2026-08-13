@@ -1,16 +1,18 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
 	import Modal from '$lib/ui/Modal.svelte';
-	import { Button, Field, Popover, revealTarget, statusIcon, trackPending } from '$lib/ui';
-	import { useWorkspaceGateway } from '$lib/api/workspace-gateway';
+	import { Button, Field, Popover, Radio, revealTarget, statusIcon, trackPending } from '$lib/ui';
+	import type { SchedulePagePort } from '$lib/api/schedule-page-port';
+	import { presentProgramRoomCapacity } from '$lib/api/program-vocabulary-presentation';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
-	import { applyParams, param } from '$lib/features/workspace/url-state.svelte';
+	import { applyParams, clearParams, param } from '$lib/features/workspace/url-state.svelte';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
 	import ProfilePeek from '$lib/features/workspace/components/ProfilePeek.svelte';
 	import {
 		columnSegments,
 		dayLengthMin,
 		defaultStart,
+		landsOnOrigin,
 		neighborsAt,
 		preflight,
 		snapStart,
@@ -18,6 +20,14 @@
 		type NeighborAnchors,
 		type SnapResult
 	} from './placement-engine';
+	import {
+		groupHeading,
+		isRoundupTray,
+		programGrouping,
+		trayLabel,
+		type ProgramGroupRow,
+		type RoundupTray
+	} from './program-roundup';
 	import type {
 		BreakBlock,
 		Format,
@@ -25,12 +35,20 @@
 		PlacementConflict,
 		ScheduleState,
 		SessionItem,
+		SessionSpeaker,
+		SessionState,
 		SpeakerProfile,
 		SpeakerRow,
+		Submission,
 		Track
 	} from '$lib/api/types';
 
-	const { api } = useWorkspaceGateway();
+	interface Props {
+		port: SchedulePagePort;
+	}
+
+	let { port }: Props = $props();
+	const api = $derived(port);
 
 	let schedule = $state.raw<ScheduleState | null>(null);
 	let tracks = $state.raw<Track[]>([]);
@@ -40,6 +58,7 @@
 	let publishReason = $state('');
 	let announcement = $state('');
 	let conflictsPanel = $state<HTMLElement>();
+	let programPanel = $state<HTMLElement>();
 
 	// A placement, removal, or publish re-reads the schedule. That is a reload,
 	// not a first load: the grid and its panels keep what they are showing and
@@ -56,38 +75,23 @@
 	/** Only the newest pass may replace the map, so an older read cannot clobber it. */
 	let profileSeq = 0;
 
-	/**
-	 * A session names its speakers as text, so the address a profile is keyed by
-	 * has to come back from the roster. Only a name held by exactly one roster
-	 * entry resolves; two people spelled alike would otherwise open one of them
-	 * under the other's name, which is worse than a plain word.
-	 */
-	const rosterByName = $derived.by(() => {
-		const found = new Map<string, SpeakerRow | null>();
-		for (const speaker of roster) {
-			found.set(speaker.name, found.has(speaker.name) ? null : speaker);
-		}
-		return found;
-	});
-
-	function profileOf(name: string): SpeakerProfile | null {
-		const speaker = rosterByName.get(name);
-		return speaker ? (profiles[speaker.email] ?? null) : null;
+	function profileOf(speaker: SessionSpeaker): SpeakerProfile | null {
+		return profiles[speaker.email] ?? null;
 	}
 
 	/**
-	 * One pass for the whole board, after the sessions are on screen. Only
-	 * addresses this session has never asked about are read, so the re-read that
-	 * follows every placement, publish, and undo costs nothing.
+	 * One pass for the whole board, after the sessions are on screen. A session
+	 * speaker carries their address, so the lookup is direct; only addresses
+	 * this session has never asked about are read, so the re-read that follows
+	 * every placement, publish, and undo costs nothing.
 	 */
 	async function loadProfiles() {
 		const seq = ++profileSeq;
 		const emails = [
 			...new Set(
-				(schedule?.sessions ?? [])
-					.flatMap((session) => session.speakerNames)
-					.map((name) => rosterByName.get(name)?.email)
-					.filter((email) => email !== undefined)
+				(schedule?.sessions ?? []).flatMap((session) =>
+					session.speakers.map((speaker) => speaker.email)
+				)
 			)
 		].filter((email) => !(email in profiles));
 		if (emails.length === 0) return;
@@ -98,13 +102,27 @@
 		profiles = next;
 	}
 
+	/**
+	 * Open proposals per collecting session — an honest total counted by the
+	 * API over the whole submission table, never a row-window filter here.
+	 */
+	let proposals = $state.raw<Record<string, number>>({});
+
 	async function load() {
 		refreshing = true;
 		try {
-			const next = await api.schedule.state();
+			const [next, targets, people] = await Promise.all([
+				api.schedule.state(),
+				api.schedule.proposalTargets(),
+				// Graduation and direct entry grow the roster from other surfaces,
+				// so the board's copy travels with every re-read.
+				api.speakers.list()
+			]);
 			// The page owns a snapshot of the returned state so a committed placement
 			// renders immediately without a full route reload.
 			schedule = { ...next, placements: [...next.placements], breaks: [...next.breaks] };
+			proposals = targets;
+			roster = people;
 		} finally {
 			refreshing = false;
 		}
@@ -162,11 +180,6 @@
 	let placingOrigin = $state.raw<Placement | null>(null);
 	let boardRegion = $state<HTMLElement>();
 
-	/** The viewports that get the bottom mode strip instead of in-page cues. */
-	const compactViewport = () =>
-		typeof window !== 'undefined' &&
-		window.matchMedia('(max-width: 920px), (pointer: coarse)').matches;
-
 	/**
 	 * Where the pointer (or keyboard focus) is currently proposing to land.
 	 * The source decides whether the ghost carries the Enter cue: it teaches a
@@ -175,6 +188,17 @@
 	let aim = $state.raw<
 		({ dayKey: string; roomId: string; source: 'pointer' | 'keyboard' } & SnapResult) | null
 	>(null);
+
+	/**
+	 * The aim has walked back onto the slot the session already occupies.
+	 *
+	 * The ghost stands for what will be true after the click, so here it must
+	 * stop promising a move: landing on the origin commits nothing and stands the
+	 * mode down. Same rectangle, different claim — "unchanged", not "new".
+	 */
+	const aimOnOrigin = $derived(
+		aim !== null && landsOnOrigin(placingOrigin, aim.dayKey, aim.roomId, aim.startMin)
+	);
 
 	let confirmOpen = $state(false);
 	let confirmDay = $state('');
@@ -237,7 +261,14 @@
 		const here = openingsPerDay.get(dayKey) ?? 0;
 		announcement = `${placingOrigin ? 'Moving' : 'Placing'} “${session.title}” — ${here} opening${here === 1 ? '' : 's'} highlighted on ${dayLabel(dayKey)}; the day buttons count the others. Choose an opening; Escape cancels.`;
 		await tick();
-		if (compactViewport()) boardRegion?.scrollIntoView({ block: 'start' });
+		// The pool panel can grow tall, so "Place…" can be pressed far beneath
+		// the calendar. Entering the mode brings the board back only when
+		// its top has actually been scrolled past — a board already in view stays
+		// exactly where it is. One rule for every viewport; on a single-column
+		// layout the pool is always below, so this is also the mobile scroll.
+		if ((boardRegion?.getBoundingClientRect().top ?? 0) < 0) {
+			boardRegion?.scrollIntoView({ block: 'start' });
+		}
 		if (viaKeyboard) {
 			const opening = boardRegion?.querySelector<HTMLElement>('.opening');
 			if (opening) {
@@ -273,6 +304,28 @@
 		exitPlacement(true);
 	}
 
+	/**
+	 * The pointer's way out, matching Escape's.
+	 *
+	 * Aiming is a mode entered with the pointer, and until now it could only be
+	 * left with the keyboard or by finding the Cancel control that moved with the
+	 * card. The press that means "not this" on every other grid means it here.
+	 * An armed removal stands down first, exactly as Escape treats it, so one
+	 * press never does two things.
+	 */
+	function cancelOnRightClick(event: MouseEvent) {
+		if (confirmOpen || breakOpen) return;
+		if (armedRemoveId || armedBreakId) {
+			event.preventDefault();
+			disarmRemove();
+			disarmBreak();
+			return;
+		}
+		if (!placing) return;
+		event.preventDefault();
+		cancelPlacement();
+	}
+
 	// Dialogs own their Escape; a press while an in-place popover has focus is
 	// that popover closing itself. Everything else exits the mode. Enter in the
 	// confirm dialog commits from anywhere that is not a button — a button keeps
@@ -285,9 +338,15 @@
 			void commitPlacement();
 			return;
 		}
-		if (event.key !== 'Escape' || !placing || confirmOpen || breakOpen) return;
+		if (event.key !== 'Escape' || confirmOpen || breakOpen) return;
 		if (event.target instanceof Element && event.target.closest('.ui-popover')) return;
-		cancelPlacement();
+		// An armed removal stands down first; the mode survives the same press.
+		if (armedRemoveId || armedBreakId) {
+			disarmRemove();
+			disarmBreak();
+			return;
+		}
+		if (placing) cancelPlacement();
 	}
 
 	function segmentAt(event: { currentTarget: EventTarget | null; clientY: number }, segment: ColumnSegment): number {
@@ -327,7 +386,19 @@
 		openConfirm(day, room, snapped);
 	}
 
+	/**
+	 * The confirm dialog exists to get a decision about a change. A move that
+	 * lands on its origin has none to decide, so the mode stands down and says
+	 * so — asking anyway trains someone to dismiss the one dialog they are meant
+	 * to read. Only a move reaches this: a session from the pool has no origin.
+	 */
 	function openConfirm(day: string, room: string, snapped: SnapResult) {
+		const session = placing;
+		if (session && landsOnOrigin(placingOrigin, day, room, snapped.startMin)) {
+			announcement = `Move cancelled — “${session.title}” is already at ${dayLabel(day)} ${clockLabel(snapped.startMin)}, ${roomName(room)}.`;
+			exitPlacement(true);
+			return;
+		}
 		confirmDay = day;
 		confirmRoom = room;
 		confirmStart = snapped.startMin;
@@ -386,6 +457,16 @@
 		if (!session || busy || confirmBlocked) return;
 		const previous = placingOrigin;
 		const day = confirmDay;
+		// The dialog's typed and nudged time can walk back onto the origin after
+		// the aim landed somewhere else, so the no-op is caught here too. Left
+		// alone it would spend a write and an undo receipt on a change the
+		// schedule already reflects — a worse outcome than the pointless dialog,
+		// because the receipt claims something happened.
+		if (landsOnOrigin(previous, day, confirmRoom, confirmStart)) {
+			announcement = `Move cancelled — “${session.title}” is already at ${dayLabel(day)} ${clockLabel(confirmStart)}, ${roomName(confirmRoom)}.`;
+			exitPlacement(true);
+			return;
+		}
 		busy = true;
 		await api.schedule.place(session.id, day, confirmRoom, confirmStart);
 		recordAction({
@@ -479,20 +560,27 @@
 		addingBreak = false;
 	}
 
-	// A break removal arms exactly like a session removal: destructive single
-	// row → arm in place, then a receipt whose undo re-adds it.
+	// A break removal arms exactly like a session removal: the armed state veils
+	// the block itself with an explicit confirm (see armRemove for the rationale).
 	let armedBreakId = $state<string | null>(null);
 	let disarmBreakTimer: ReturnType<typeof setTimeout> | undefined;
 
-	function armOrRemoveBreak(brk: BreakBlock) {
-		if (armedBreakId !== brk.id) {
-			armedBreakId = brk.id;
-			clearTimeout(disarmBreakTimer);
-			disarmBreakTimer = setTimeout(() => (armedBreakId = null), 4000);
-			return;
-		}
+	function armBreak(brk: BreakBlock) {
+		armedBreakId = brk.id;
+		armedRemoveId = null;
+		clearTimeout(disarmBreakTimer);
+		disarmBreakTimer = setTimeout(() => (armedBreakId = null), 6000);
+		announcement = `Confirm removing the “${brk.label}” break.`;
+		void tick().then(() => document.getElementById(`confirm-break-${brk.id}`)?.focus());
+	}
+
+	function disarmBreak() {
 		clearTimeout(disarmBreakTimer);
 		armedBreakId = null;
+	}
+
+	function confirmBreakRemoval(brk: BreakBlock) {
+		disarmBreak();
 		void removeBreakNow(brk);
 	}
 
@@ -544,7 +632,7 @@
 		const room = await api.vocab.addRoom(newRoomName.trim(), newRoomCapacity ?? 0);
 		recordAction({
 			area: 'schedule',
-			label: `Added room “${room.name}” — ${room.capacity} seats`,
+			label: `Added room “${room.name}” — ${presentProgramRoomCapacity(room.capacity).label}`,
 			undo: async () => {
 				await api.vocab.removeRoom(room.id);
 			}
@@ -557,8 +645,334 @@
 	}
 
 	const placedIds = $derived(new Set((schedule?.placements ?? []).map((p) => p.sessionId)));
-	const unscheduled = $derived((schedule?.sessions ?? []).filter((s) => !placedIds.has(s.id)));
 	const dayPlacements = $derived((schedule?.placements ?? []).filter((p) => p.dayKey === dayKey));
+
+	// ------------------------------------------------------------------
+	// The Program panel: the round-up worklist. Grouped by what still stands
+	// between each session and done — placed, peopled, decided — so the pool is
+	// the single home of remaining program work, not only of unplaced rows.
+	// A collecting session is placeable as a planned slot (16 §6); placement
+	// never implies publication.
+
+	const grouping = $derived(
+		schedule ? programGrouping(schedule, new Map(Object.entries(proposals))) : null
+	);
+
+	/**
+	 * A scoped arrival (`?tray=…`) filters the panel to the tray it names, with
+	 * the scope visible as a dismissible chip. The scope lives only in the URL.
+	 */
+	const trayFilter = $derived.by<RoundupTray | null>(() => {
+		const asked = param('tray');
+		return isRoundupTray(asked) ? asked : null;
+	});
+
+	const trayRows = $derived.by<ProgramGroupRow[]>(() => {
+		if (!grouping || !trayFilter) return [];
+		const rows: ProgramGroupRow[] = [];
+		for (const group of grouping.order) {
+			for (const row of grouping.groups.get(group) ?? []) {
+				if (row.trays.includes(trayFilter)) rows.push(row);
+			}
+		}
+		return rows;
+	});
+
+	/** A row offers Place… only while it holds no slot; drafts stay sketches. */
+	function placeable(row: ProgramGroupRow): boolean {
+		return !row.placed && row.session.state !== 'draft';
+	}
+
+	function proposalsLabel(count: number): string {
+		return count === 0 ? 'no proposals yet' : `${count} proposal${count === 1 ? '' : 's'}`;
+	}
+
+	// ------------------------------------------------------------------
+	// New session: direct creation — the fixed keynote entered as fact, the
+	// private sketch, the collecting container opened before any submission.
+	// Speakers are deliberately absent here; attribution has one grammar (the
+	// speakers panel), so a free-text name field cannot reintroduce strings.
+	//
+	// One form, two doors: the Program panel header (the worklist home — a
+	// created session starts unplaced there) and the board's Add row (standing
+	// at the grid, so its primary is Create and place…). Same label, same
+	// form, one open instance — never two controls that read as two features.
+
+	let newSessionOpen = $state<false | 'panel' | 'board'>(false);
+	let creatingSession = $state(false);
+	let nsTitle = $state('');
+	let nsFormatId = $state('');
+	let nsTrackId = $state('');
+	let nsDuration = $state('30');
+	let nsDurationTouched = $state(false);
+	let nsState = $state<SessionState>('programmed');
+	let nsTitleInput = $state<HTMLInputElement>();
+
+	const nsReady = $derived(
+		nsTitle.trim().length > 0 && nsFormatId !== '' && Number(nsDuration) > 0
+	);
+
+	/** Enter commits the door's own primary: place-bound from the board, pool-bound from the panel. */
+	const nsPlaceIsPrimary = $derived(newSessionOpen === 'board' && nsState !== 'draft');
+
+	async function openNewSession(origin: 'panel' | 'board') {
+		newSessionOpen = newSessionOpen === origin ? false : origin;
+		if (!newSessionOpen) return;
+		nsTitle = '';
+		nsFormatId = formats.find((format) => format.status === 'active')?.id ?? '';
+		nsTrackId = '';
+		nsDurationTouched = false;
+		nsDuration = String(formatDefault(nsFormatId));
+		nsState = 'programmed';
+		await tick();
+		nsTitleInput?.focus();
+	}
+
+	function formatDefault(formatId: string): number {
+		return formats.find((format) => format.id === formatId)?.defaultDurationMin ?? slotMinutes;
+	}
+
+	/** The format's planned length fills the field until a typed value owns it. */
+	function onNsFormatChange() {
+		if (!nsDurationTouched) nsDuration = String(formatDefault(nsFormatId));
+	}
+
+	async function createSession(andPlace: boolean) {
+		if (!nsReady || creatingSession) return;
+		creatingSession = true;
+		const created = await api.schedule.createSession({
+			title: nsTitle.trim(),
+			trackId: nsTrackId,
+			formatId: nsFormatId,
+			durationMin: Number(nsDuration),
+			state: nsState
+		});
+		recordAction({
+			area: 'schedule',
+			label: `Created “${created.title}” — ${
+				nsState === 'draft' ? 'draft' : nsState === 'collecting' ? 'collecting proposals' : 'in the program'
+			}`,
+			undo: async () => {
+				const outcome = await api.schedule.removeSession(created.id);
+				if (!outcome.ok) announcement = `Could not undo the creation — ${outcome.reason}.`;
+			}
+		});
+		newSessionOpen = false;
+		await load();
+		creatingSession = false;
+		if (andPlace) {
+			const session = schedule?.sessions.find((entry) => entry.id === created.id);
+			if (session) {
+				await enterPlacement(session);
+				return;
+			}
+		}
+		void tick().then(() => reveal(document.getElementById(`pool-${created.id}`)));
+	}
+
+	/**
+	 * The lifecycle writer's manual door: a draft or collecting session joins
+	 * the program as editorial fact. Open proposals are never decided by this —
+	 * the confirm copy says so where it matters (the button's own label names
+	 * the consequence; proposals stay in Decisions).
+	 */
+	async function addToProgram(row: ProgramGroupRow) {
+		if (busy) return;
+		busy = true;
+		const session = row.session;
+		const wasState = session.state;
+		const outcome = await api.schedule.transitionSession(session.id, 'programmed');
+		if (outcome.ok) {
+			recordAction({
+				area: 'schedule',
+				label: `Added “${session.title}” to the program${
+					row.proposalCount > 0
+						? ` — ${proposalsLabel(row.proposalCount)} stay in Decisions`
+						: ''
+				}`,
+				undo: async () => {
+					await api.schedule.transitionSession(session.id, wasState);
+				}
+			});
+		} else {
+			announcement = outcome.reason;
+		}
+		await load();
+		busy = false;
+	}
+
+	// ------------------------------------------------------------------
+	// The speakers panel: attribution's home (21 §5), addressable as
+	// `?panel=speakers&session=…`, opened from a named control — never from a
+	// card body. One grammar: attach an accepted submission, direct entry, or
+	// an editorial roster edit; a placeholder stays honestly empty until then.
+
+	const speakersForId = $derived(param('panel') === 'speakers' ? param('session') : null);
+	const speakersSession = $derived(
+		speakersForId ? (schedule?.sessions.find((entry) => entry.id === speakersForId) ?? null) : null
+	);
+	let speakersPanel = $state<HTMLElement>();
+
+	/** Provenance per origin submission, loaded with the panel. */
+	let origins = $state.raw<{ id: string; title: string; source: Submission['source']; speakerEmails: string[] }[]>([]);
+	let attachable = $state.raw<Submission[]>([]);
+	let originsSeq = 0;
+
+	async function loadSpeakersPanel(sessionId: string) {
+		const seq = ++originsSeq;
+		const [nextOrigins, nextAttachable] = await Promise.all([
+			api.schedule.sessionOrigins(sessionId),
+			api.schedule.attachCandidates(sessionId)
+		]);
+		if (seq !== originsSeq) return;
+		origins = nextOrigins;
+		attachable = nextAttachable;
+	}
+
+	function openSpeakers(session: SessionItem) {
+		void applyParams({ panel: 'speakers', session: session.id }, { history: 'push' });
+	}
+
+	function closeSpeakers() {
+		void clearParams(['panel', 'session']);
+	}
+
+	function provenanceOf(speaker: SessionSpeaker): string {
+		const origin = origins.find((entry) => entry.speakerEmails.includes(speaker.email));
+		if (!origin) return 'added from the roster';
+		if (origin.source === 'direct_entry') return 'direct entry';
+		return `via “${origin.title}”`;
+	}
+
+	/**
+	 * Roster people not yet on this session — the editorial-add candidates.
+	 * Offered only while their engagement is standing: someone who declined,
+	 * cancelled, or asked to cancel is not proposed for more program.
+	 */
+	const rosterCandidates = $derived.by(() => {
+		const session = speakersSession;
+		if (!session) return [];
+		const held = new Set(session.speakers.map((speaker) => speaker.email));
+		return roster.filter(
+			(row) => !held.has(row.email) && (row.state === 'invited' || row.state === 'confirmed')
+		);
+	});
+
+	/** Closed copy for the engagement words a candidate row may show. */
+	const engagementCopy: Record<SpeakerRow['state'], string> = {
+		invited: 'invited',
+		confirmed: 'confirmed',
+		declined: 'declined',
+		cancel_requested: 'asked to cancel',
+		cancelled: 'cancelled'
+	};
+
+	let addPersonOpen = $state(false);
+	let apName = $state('');
+	let apEmail = $state('');
+	let attributing = $state(false);
+	const apReady = $derived(apName.trim().length > 0 && apEmail.includes('@'));
+
+	async function afterAttribution(sessionId: string) {
+		await load();
+		await loadSpeakersPanel(sessionId);
+		attributing = false;
+	}
+
+	async function attach(session: SessionItem, submission: Submission) {
+		if (attributing) return;
+		attributing = true;
+		const outcome = await api.schedule.attachSubmission(session.id, submission.id);
+		if (outcome.ok) {
+			recordAction({
+				area: 'schedule',
+				label: `Attached “${submission.title}” to “${session.title}”`,
+				undo: async () => {
+					await api.schedule.detachSubmission(session.id, submission.id);
+				}
+			});
+		} else {
+			announcement = outcome.reason;
+		}
+		await afterAttribution(session.id);
+	}
+
+	async function addDirect(event: SubmitEvent) {
+		event.preventDefault();
+		const session = speakersSession;
+		if (!session || !apReady || attributing) return;
+		attributing = true;
+		const person = { name: apName.trim(), email: apEmail.trim() };
+		const outcome = await api.schedule.addDirectParticipant(session.id, person);
+		if (outcome.ok) {
+			recordAction({
+				area: 'schedule',
+				label: `Added ${person.name} to “${session.title}” — direct entry`,
+				undo: async () => {
+					await api.schedule.removeParticipant(session.id, person.email);
+				}
+			});
+			apName = '';
+			apEmail = '';
+			addPersonOpen = false;
+		} else {
+			announcement = outcome.reason;
+		}
+		await afterAttribution(session.id);
+	}
+
+	async function addFromRoster(session: SessionItem, row: SpeakerRow) {
+		if (attributing) return;
+		attributing = true;
+		const outcome = await api.schedule.addParticipantFromRoster(session.id, row.id);
+		if (outcome.ok) {
+			recordAction({
+				area: 'schedule',
+				label: `Added ${row.name} to “${session.title}”`,
+				undo: async () => {
+					await api.schedule.removeParticipant(session.id, row.email);
+				}
+			});
+		} else {
+			announcement = outcome.reason;
+		}
+		await afterAttribution(session.id);
+	}
+
+	// Removal arms in place (R6): the first press turns the control into the
+	// question; anywhere else disarms. Fully undoable via the receipt either way.
+	let armedParticipant = $state<string | null>(null);
+	let disarmParticipantTimer: ReturnType<typeof setTimeout> | undefined;
+
+	function armParticipant(email: string) {
+		armedParticipant = email;
+		clearTimeout(disarmParticipantTimer);
+		disarmParticipantTimer = setTimeout(() => (armedParticipant = null), 4000);
+	}
+
+	async function removeParticipant(session: SessionItem, speaker: SessionSpeaker) {
+		clearTimeout(disarmParticipantTimer);
+		armedParticipant = null;
+		if (attributing) return;
+		attributing = true;
+		const outcome = await api.schedule.removeParticipant(session.id, speaker.email);
+		if (outcome.ok) {
+			recordAction({
+				area: 'schedule',
+				label: `Removed ${speaker.name} from “${session.title}”`,
+				// Restore through the roster row the person kept, so undo returns
+				// the same identity rather than minting a second record for them.
+				undo: async () => {
+					const row = (await api.speakers.list()).find((entry) => entry.email === speaker.email);
+					if (row) await api.schedule.addParticipantFromRoster(session.id, row.id);
+					else await api.schedule.addDirectParticipant(session.id, speaker);
+				}
+			});
+		} else {
+			announcement = outcome.reason;
+		}
+		await afterAttribution(session.id);
+	}
 
 	interface ConflictRow {
 		key: string;
@@ -633,21 +1047,43 @@
 			.join(' · ');
 	}
 
-	// Remove arms on the first press and fires on the second, then leaves a
-	// receipt whose undo puts the session back in its exact slot.
+	// Remove still arms in place, but the armed state veils the card's own face
+	// with an explicit confirmation. The confirm control sits at a different
+	// position than the trigger, so an accidental double-click cannot remove;
+	// Keep, Escape, focus leaving, or the timer all stand down.
 	let armedRemoveId = $state<string | null>(null);
 	let disarmTimer: ReturnType<typeof setTimeout> | undefined;
 
-	function armOrRemove(session: SessionItem, placement: Placement) {
-		if (armedRemoveId !== session.id) {
-			armedRemoveId = session.id;
-			clearTimeout(disarmTimer);
-			disarmTimer = setTimeout(() => (armedRemoveId = null), 4000);
-			return;
-		}
+	function armRemove(session: SessionItem) {
+		armedRemoveId = session.id;
+		armedBreakId = null;
+		clearTimeout(disarmTimer);
+		disarmTimer = setTimeout(() => (armedRemoveId = null), 6000);
+		announcement = `Confirm removing “${session.title}” from the schedule.`;
+		void tick().then(() => document.getElementById(`confirm-remove-${session.id}`)?.focus());
+	}
+
+	function disarmRemove() {
 		clearTimeout(disarmTimer);
 		armedRemoveId = null;
+	}
+
+	function keepPlacement(session: SessionItem) {
+		disarmRemove();
+		document.getElementById(`placed-${session.id}`)?.focus();
+	}
+
+	function confirmRemoval(session: SessionItem, placement: Placement) {
+		disarmRemove();
 		void remove(session, placement);
+	}
+
+	/** Standing down when focus leaves the veil for anywhere outside it. */
+	function veilFocusout(event: FocusEvent) {
+		const next = event.relatedTarget as Node | null;
+		if (next && (event.currentTarget as HTMLElement).contains(next)) return;
+		disarmRemove();
+		disarmBreak();
 	}
 
 	async function remove(session: SessionItem, placement: Placement) {
@@ -712,7 +1148,9 @@
 	$effect(() => {
 		const id = askedSession;
 		const ready = schedule;
-		if (!ready || !id) {
+		// While the speakers panel names the session, the address means the
+		// panel, not a second scroll-and-mark arrival on the same record.
+		if (!ready || !id || askedPanel === 'speakers') {
 			revealedSession = null;
 			return;
 		}
@@ -723,7 +1161,7 @@
 		if (!session) return;
 		announcement = placement
 			? `${session.title} — ${dayLabel(placement.dayKey)} ${clockLabel(placement.startMin)}, ${roomName(placement.roomId)}.`
-			: `${session.title} is not placed yet; it is waiting in Unscheduled.`;
+			: `${session.title} is not placed yet; it is waiting in the program pool.`;
 		if (placement) void showOnGrid(placement);
 		else void tick().then(() => reveal(document.getElementById(`pool-${id}`)));
 	});
@@ -739,12 +1177,48 @@
 		revealedPanel = panel;
 		void tick().then(() => reveal(conflictsPanel ?? null, { mark: false }));
 	});
+
+	// A scoped tray arrival lands on the Program panel the way `?panel=conflicts`
+	// lands on Conflicts: by name, no mark.
+	let revealedTray: string | null = null;
+
+	$effect(() => {
+		const tray = trayFilter;
+		const ready = schedule;
+		if (!ready || !tray) {
+			revealedTray = null;
+			return;
+		}
+		if (revealedTray === tray) return;
+		revealedTray = tray;
+		announcement = `Program pool scoped to ${trayLabel[tray].toLowerCase()} — ${trayRows.length} session${trayRows.length === 1 ? '' : 's'}.`;
+		void tick().then(() => reveal(programPanel ?? null, { mark: false }));
+	});
+
+	// The speakers panel's data travels with its address: arriving, switching
+	// sessions, and every attribution all re-read through the same door.
+	let loadedSpeakersFor: string | null = null;
+
+	$effect(() => {
+		const id = speakersForId;
+		if (!id) {
+			loadedSpeakersFor = null;
+			return;
+		}
+		if (loadedSpeakersFor === id) return;
+		loadedSpeakersFor = id;
+		origins = [];
+		attachable = [];
+		addPersonOpen = false;
+		void loadSpeakersPanel(id);
+		void tick().then(() => reveal(speakersPanel ?? null, { mark: false }));
+	});
 </script>
 
 <svelte:window onkeydown={onWindowKeydown} />
 
 {#if !schedule}
-	{@const known = api.workspace.summarySnapshot()}
+	{@const attentionExpected = api.workspace.scheduleAttentionExpectedSnapshot() === true}
 	<!-- Every placeholder here is the resolved composition's own markup holding
 	     skeleton fills: the day switch and publish action keep control height,
 	     the grid keeps the room rail and slot rhythm inside the same scrolling
@@ -779,12 +1253,29 @@
 		<div class="aside">
 			<section class="panel" aria-hidden="true">
 				<header class="panel__head">
+					<h2>Program</h2>
+					<span class="panel__count"><span class="ui-skeleton skeleton-line" style="inline-size: 0.75rem"></span></span>
+				</header>
+				<ul class="pool">
+					{#each Array(1) as _row, rowIndex (rowIndex)}
+						<li class="pool__row">
+							<div class="pool__copy">
+								<p class="pool__title"><span class="ui-skeleton skeleton-line" style="inline-size: 10rem"></span></p>
+								<p class="pool__meta"><span class="ui-skeleton skeleton-line" style="inline-size: 12rem"></span></p>
+							</div>
+							<span class="ui-skeleton skeleton-action pool__action"></span>
+						</li>
+					{/each}
+				</ul>
+			</section>
+			<section class="panel" aria-hidden="true">
+				<header class="panel__head">
 					<h2>Conflicts</h2>
 					<span class="panel__count"><span class="ui-skeleton skeleton-line" style="inline-size: 0.75rem"></span></span>
 				</header>
 				<!-- A conflict count in the shell's summary is the evidence that this
 				     panel resolves to rows rather than to its calm line. -->
-				{#if known?.navCounts.schedule}
+				{#if attentionExpected}
 					<ul class="conflicts">
 						{#each Array(1) as _row, rowIndex (rowIndex)}
 							<li class="conflicts__row">
@@ -800,23 +1291,6 @@
 				{:else}
 					<p class="panel__calm"><span class="ui-skeleton skeleton-line" style="inline-size: 12rem"></span></p>
 				{/if}
-			</section>
-			<section class="panel" aria-hidden="true">
-				<header class="panel__head">
-					<h2>Unscheduled</h2>
-					<span class="panel__count"><span class="ui-skeleton skeleton-line" style="inline-size: 0.75rem"></span></span>
-				</header>
-				<ul class="pool">
-					{#each Array(1) as _row, rowIndex (rowIndex)}
-						<li class="pool__row">
-							<div class="pool__copy">
-								<p class="pool__title"><span class="ui-skeleton skeleton-line" style="inline-size: 10rem"></span></p>
-								<p class="pool__meta"><span class="ui-skeleton skeleton-line" style="inline-size: 12rem"></span></p>
-							</div>
-							<span class="ui-skeleton skeleton-action pool__action"></span>
-						</li>
-					{/each}
-				</ul>
 			</section>
 		</div>
 	</div>
@@ -875,7 +1349,16 @@
 	</div>
 
 	<div class="layout" class:is-refreshing={reload.visible} aria-busy={refreshing || undefined}>
-		<section class="board-region" aria-label="Schedule grid" bind:this={boardRegion}>
+		<!-- Right-click stands the mode down, the same way Escape does. While a
+		     session is in hand the board is aiming, not browsing, so the platform
+		     menu has nothing to offer here and the press is better spent on the
+		     way out. Suppressed only while aiming: with nothing in hand the menu
+		     behaves normally, and the confirm dialog owns its own dismissal. -->
+		<section
+			class="board-region"
+			aria-label="Schedule grid"
+			bind:this={boardRegion}
+			oncontextmenu={cancelOnRightClick}>
 			{#if !boardReady}
 				<div class="blank">
 					<h2 class="blank__title">Nothing is scheduled yet</h2>
@@ -910,7 +1393,7 @@
 								<!-- A retired room keeps its column: nothing already placed in it
 								     moves, it is simply no longer offered for new placements. -->
 								<span class="board__room-cap"
-									>{room.capacity} seats{room.status === 'retired' ? ' · retired' : ''}</span>
+									>{presentProgramRoomCapacity(room.capacity).label}{room.status === 'retired' ? ' · retired' : ''}</span>
 							</div>
 						{/each}
 
@@ -918,6 +1401,16 @@
 							{#each Array(schedule.slotsPerDay) as _, slot (slot)}
 								<span class="board__time">{clockLabel(slot * slotMinutes)}</span>
 							{/each}
+							{#if placing && aim}
+								<!-- The aim's readout on the time axis itself: the gutter is
+								     where the eye checks times, so the shifted-to start rides
+								     there at its exact height — action ink and a tick, clearly
+								     provisional against the fixed slot labels. -->
+								<span
+									class="board__time-marker"
+									aria-hidden="true"
+									style="--start: {aim.startMin / slotMinutes}">{clockLabel(aim.startMin)}</span>
+							{/if}
 						</div>
 
 						{#each rooms as room (room.id)}
@@ -928,14 +1421,22 @@
 										{#if placing?.id === session.id}
 											<!-- The slot being left, kept visible while choosing the next
 											     one — and the mode's exit lives here, exactly where Move
-											     was pressed, instead of in a bar somewhere else. -->
+											     was pressed, instead of in a bar somewhere else.
+
+											     When the aim comes back to this slot it is also the answer,
+											     so it takes the aimed treatment and says so rather than
+											     letting a ghost draw a second rectangle over it. Two
+											     outlines on one rectangle meaning one thing was the
+											     redundancy; this is the one that already carries a label
+											     and a control. -->
 											<article
 												class="card card--origin"
+												class:card--origin-aimed={aimOnOrigin}
 												style="--start: {placement.startMin / slotMinutes}; --span: {session.durationMin / slotMinutes}">
 												<p class="card__title">{session.title}</p>
 												<p class="card__when">
 													<span class="card__time">{rangeLabel(placement.startMin, session.durationMin)}</span>
-													<span>· current slot</span>
+													<span>· {aimOnOrigin ? 'leave it here' : 'current slot'}</span>
 												</p>
 												<div class="card__actions card__actions--standing">
 													<button
@@ -949,10 +1450,13 @@
 										{:else}
 											{@const blocked = placement.conflicts.some((c) => c.severity === 'block')}
 											{@const warned = placement.conflicts.some((c) => c.severity === 'warn')}
+											{@const collecting = session.state === 'collecting'}
 											<article
 												class="card"
 												class:card--blocked={blocked}
 												class:card--context={placing !== null}
+												class:card--armed={armedRemoveId === session.id}
+												class:card--collecting={collecting}
 												id={`placed-${placement.sessionId}`}
 												tabindex="-1"
 												style="--start: {placement.startMin / slotMinutes}; --span: {session.durationMin / slotMinutes}">
@@ -1005,13 +1509,23 @@
 												<!-- The card is the session's own composition — it already carries
 												     the conflict disclosures and the move/remove controls — so the
 												     speaker line is where the peek belongs. The grid labels around
-												     it (room, capacity, clock) name no person and the unscheduled
-												     pool lists none, so nothing else on this board gains a trigger.
-												     A name the roster does not resolve stays plain text. -->
-												<p class="card__who"
-													>{#each session.speakerNames as name, index (name)}{@const profile =
-														profileOf(name)}{#if index > 0}{', '}{/if}{#if profile}<ProfilePeek
-															{profile} />{:else}{name}{/if}{/each}</p>
+												     it (room, capacity, clock) name no person, so nothing else on
+												     this board gains a trigger. A held collecting slot has no
+												     roster by design; its line says what it is waiting on instead,
+												     and the pool row carries the one door to those proposals. -->
+												{#if collecting}
+													<p class="card__who card__who--collecting"
+														>Collecting — {proposalsLabel(proposals[session.id] ?? 0)}</p>
+												{:else if session.speakers.length === 0}
+													<!-- A placeholder is a plan, not a failure: quiet ink, stated
+													     honestly, completed from the speakers panel. -->
+													<p class="card__who">No speakers yet</p>
+												{:else}
+													<p class="card__who"
+														>{#each session.speakers as speaker, index (speaker.email)}{@const profile =
+															profileOf(speaker)}{#if index > 0}{', '}{/if}{#if profile}<ProfilePeek
+																{profile} />{:else}{speaker.name}{/if}{/each}</p>
+												{/if}
 												<div class="card__actions">
 													<button
 														type="button"
@@ -1022,13 +1536,47 @@
 													<button
 														type="button"
 														class="ui-button ui-button--danger ui-button--sm"
-														aria-label={armedRemoveId === session.id
-															? `Press again to remove “${session.title}”`
-															: `Remove “${session.title}” from the schedule`}
+														aria-label={`Remove “${session.title}” from the schedule`}
 														disabled={busy || placing !== null}
-														onblur={() => (armedRemoveId = null)}
-														onclick={() => armOrRemove(session, placement)}>{armedRemoveId === session.id ? 'Remove?' : 'Remove'}</button>
+														onclick={() => armRemove(session)}>Remove</button>
+													{#if !collecting}
+														<!-- The named door to the session's people (R3): detail on a
+														     spatial workspace opens from a control, never the card body. -->
+														<button
+															type="button"
+															class="ui-button ui-button--ghost ui-button--sm"
+															aria-label={`Speakers on “${session.title}”`}
+															disabled={busy || placing !== null}
+															onclick={() => openSpeakers(session)}>Speakers</button>
+													{/if}
 												</div>
+												{#if armedRemoveId === session.id}
+													<!-- The armed state is the card's own face turned into the
+													     question: unmistakable, in place, and the confirm sits at
+													     a different position than the trigger, so a double-click
+													     can never remove by accident. -->
+													<div
+														class="confirm-veil"
+														role="group"
+														aria-label={`Remove “${session.title}” from the schedule?`}
+														onfocusout={veilFocusout}>
+														<p class="confirm-veil__q">Remove from the schedule?</p>
+														<div class="confirm-veil__actions">
+															<button
+																type="button"
+																class="ui-button ui-button--danger ui-button--sm"
+																id={`confirm-remove-${session.id}`}
+																aria-label={`Remove “${session.title}” — confirm`}
+																disabled={busy}
+																onclick={() => confirmRemoval(session, placement)}>Remove</button>
+															<button
+																type="button"
+																class="ui-button ui-button--secondary ui-button--sm"
+																aria-label={`Keep “${session.title}” on the schedule`}
+																onclick={() => keepPlacement(session)}>Keep</button>
+														</div>
+													</div>
+												{/if}
 											</article>
 										{/if}
 									{/if}
@@ -1037,6 +1585,7 @@
 								{#each schedule.breaks.filter((b) => b.dayKey === dayKey && b.roomId === room.id) as brk (brk.id)}
 									<div
 										class="brk"
+										class:brk--armed={armedBreakId === brk.id}
 										style="--start: {brk.startMin / slotMinutes}; --span: {brk.durationMin / slotMinutes}">
 										<p class="brk__copy">
 											<span class="brk__label">{brk.label}</span>
@@ -1045,12 +1594,32 @@
 										<button
 											type="button"
 											class="ui-button ui-button--ghost ui-button--sm brk__remove"
-											aria-label={armedBreakId === brk.id
-												? `Press again to remove “${brk.label}”`
-												: `Remove “${brk.label}” — ${dayLabel(brk.dayKey)} ${clockLabel(brk.startMin)}, ${roomName(brk.roomId)}`}
+											aria-label={`Remove “${brk.label}” — ${dayLabel(brk.dayKey)} ${clockLabel(brk.startMin)}, ${roomName(brk.roomId)}`}
 											disabled={busy || placing !== null}
-											onblur={() => (armedBreakId = null)}
-											onclick={() => armOrRemoveBreak(brk)}>{armedBreakId === brk.id ? 'Remove?' : 'Remove'}</button>
+											onclick={() => armBreak(brk)}>Remove</button>
+										{#if armedBreakId === brk.id}
+											<div
+												class="confirm-veil"
+												role="group"
+												aria-label={`Remove the “${brk.label}” break?`}
+												onfocusout={veilFocusout}>
+												<p class="confirm-veil__q">Remove this break?</p>
+												<div class="confirm-veil__actions">
+													<button
+														type="button"
+														class="ui-button ui-button--danger ui-button--sm"
+														id={`confirm-break-${brk.id}`}
+														aria-label={`Remove “${brk.label}” — confirm`}
+														disabled={busy}
+														onclick={() => confirmBreakRemoval(brk)}>Remove</button>
+													<button
+														type="button"
+														class="ui-button ui-button--secondary ui-button--sm"
+														aria-label={`Keep the “${brk.label}” break`}
+														onclick={disarmBreak}>Keep</button>
+												</div>
+											</div>
+										{/if}
 									</div>
 									{/each}
 
@@ -1088,7 +1657,7 @@
 												</div>
 											{/if}
 										{/each}
-										{#if aim && aim.dayKey === dayKey && aim.roomId === room.id}
+										{#if aim && aim.dayKey === dayKey && aim.roomId === room.id && !aimOnOrigin}
 											<!-- The following ghost, pointer-transparent so aiming stays live.
 											     A held flush anchor is shown spatially — the touching edge goes
 											     solid — never captioned: the neighbour it touches is already on
@@ -1104,11 +1673,15 @@
 												<p class="card__when">
 													<span class="card__time">{rangeLabel(aim.startMin, placing.durationMin)}</span>
 												</p>
-												{#if aim.source === 'keyboard'}
-													<!-- Taught only to someone driving by keyboard: what the key
-													     does is invisible, unlike the geometry around it. -->
-													<p class="ghost__cue"><kbd>Enter</kbd> selects</p>
-												{/if}
+												<!-- Key cues ride the ghost because that is where the eyes
+												     are. Static content moves with the thing being watched
+												     without churning; keys are invisible facts, unlike the
+												     geometry around them. Touch hides the Esc half. -->
+												<p class="ghost__cue">
+													{#if aim.source === 'keyboard'}<kbd>Enter</kbd> selects<span
+															class="ghost__cue-sep"> · </span>{/if}<span class="ghost__cue-esc"
+														><kbd>Esc</kbd> cancels</span>
+												</p>
 											</article>
 										{/if}
 									{/if}
@@ -1139,6 +1712,17 @@
 
 				<div class="board-add">
 					<div class="board-add__actions">
+						<!-- The board's own door to the same creation form the Program
+						     panel opens — one label, one form, so it can never read as
+						     a second feature. Standing here, the form leads with
+						     Create and place…. -->
+						<button
+							type="button"
+							class="ui-button ui-button--secondary ui-button--sm"
+							aria-expanded={newSessionOpen === 'board'}
+							aria-controls="new-session-form"
+							disabled={placing !== null}
+							onclick={() => void openNewSession('board')}>New session…</button>
 						<button
 							type="button"
 							class="ui-button ui-button--secondary ui-button--sm"
@@ -1151,6 +1735,9 @@
 							disabled={placing !== null}
 							onclick={openAddBreak}>Add break…</button>
 					</div>
+					{#if newSessionOpen === 'board'}
+						<div class="board-add__panel">{@render newSessionForm()}</div>
+					{/if}
 					{#if addRoomOpen}
 						<div class="board-add__panel" id="board-add-room">{@render roomForm()}</div>
 					{/if}
@@ -1159,8 +1746,214 @@
 		</section>
 
 		<div class="aside">
-			<!-- Addressable: `?panel=conflicts` lands here with the caret on the panel,
-			     which is where a blocking count on the rail or the overview points. -->
+			{#if speakersSession}
+				{@const session = speakersSession}
+				<!-- Attribution's home: addressable (`?panel=speakers&session=…`),
+				     opened from a named control, never from a card body (R3). One
+				     grammar — attach an accepted submission, direct entry, or an
+				     editorial roster edit — and every act leaves an undoable receipt. -->
+				<section
+					class="panel"
+					aria-label={`Speakers — ${session.title}`}
+					tabindex="-1"
+					bind:this={speakersPanel}>
+					<header class="panel__head">
+						<h2>Speakers</h2>
+						<span class="panel__count">{session.speakers.length}</span>
+						<button
+							type="button"
+							class="ui-button ui-button--ghost ui-button--sm panel__head-action"
+							aria-label={`Close speakers on “${session.title}”`}
+							onclick={closeSpeakers}>Close</button>
+					</header>
+					<p class="speakers__session">{session.title}</p>
+					{#if session.speakers.length === 0}
+						<p class="panel__calm">
+							No speakers yet — a placeholder is fine. Attach an accepted proposal or add the
+							person directly when they are known.
+						</p>
+					{:else}
+						<ul class="speakers">
+							{#each session.speakers as speaker (speaker.email)}
+								<li class="speakers__row">
+									<div class="speakers__copy">
+										<p class="speakers__name">{speaker.name}</p>
+										<!-- Provenance renders in place (R4): how this person got
+										     here, not a hover secret. -->
+										<p class="speakers__provenance">{provenanceOf(speaker)}</p>
+									</div>
+									{#if armedParticipant === speaker.email}
+										<button
+											type="button"
+											class="ui-button ui-button--danger ui-button--sm speakers__action"
+											disabled={attributing}
+											aria-label={`Remove ${speaker.name} — confirm`}
+											onclick={() => removeParticipant(session, speaker)}>Remove?</button>
+									{:else}
+										<button
+											type="button"
+											class="ui-button ui-button--ghost ui-button--sm speakers__action"
+											disabled={attributing}
+											aria-label={`Remove ${speaker.name} from “${session.title}”`}
+											onclick={() => armParticipant(speaker.email)}>Remove</button>
+									{/if}
+								</li>
+							{/each}
+						</ul>
+					{/if}
+
+					{#if attachable.length > 0}
+						<h3 class="speakers__group">Attach an accepted proposal</h3>
+						<ul class="speakers">
+							{#each attachable as submission (submission.id)}
+								<li class="speakers__row">
+									<div class="speakers__copy">
+										<p class="speakers__name">{submission.title}</p>
+										<p class="speakers__provenance">
+											{submission.speakers.map((speaker) => speaker.name).join(', ')}
+										</p>
+									</div>
+									<button
+										type="button"
+										class="ui-button ui-button--secondary ui-button--sm speakers__action"
+										disabled={attributing}
+										aria-label={`Attach “${submission.title}” to “${session.title}”`}
+										onclick={() => attach(session, submission)}>Attach</button>
+								</li>
+							{/each}
+						</ul>
+					{/if}
+
+					{#if rosterCandidates.length > 0}
+						<h3 class="speakers__group">Add from the roster</h3>
+						<ul class="speakers">
+							{#each rosterCandidates as row (row.id)}
+								<li class="speakers__row">
+									<div class="speakers__copy">
+										<p class="speakers__name">{row.name}</p>
+										<p class="speakers__provenance">{engagementCopy[row.state]}</p>
+									</div>
+									<button
+										type="button"
+										class="ui-button ui-button--secondary ui-button--sm speakers__action"
+										disabled={attributing}
+										aria-label={`Add ${row.name} to “${session.title}”`}
+										onclick={() => addFromRoster(session, row)}>Add</button>
+								</li>
+							{/each}
+						</ul>
+					{/if}
+
+					<div class="speakers__direct">
+						<button
+							type="button"
+							class="ui-button ui-button--secondary ui-button--sm"
+							aria-expanded={addPersonOpen}
+							aria-controls="speakers-direct-form"
+							onclick={() => (addPersonOpen = !addPersonOpen)}>Add a new person…</button>
+						{#if addPersonOpen}
+							<!-- Direct entry (04 §3), whole: person, accepted direct-entry
+							     record, invited engagement, and the attribution in one commit. -->
+							<form class="speakers__form" id="speakers-direct-form" onsubmit={addDirect}>
+								<Field id="speakers-direct-name" label="Name">
+									{#snippet children({ id, describedBy })}
+										<input
+											class="ui-control"
+											type="text"
+											{id}
+											aria-describedby={describedBy}
+											disabled={attributing}
+											bind:value={apName} />
+									{/snippet}
+								</Field>
+								<Field id="speakers-direct-email" label="Email">
+									{#snippet children({ id, describedBy })}
+										<input
+											class="ui-control"
+											type="email"
+											{id}
+											aria-describedby={describedBy}
+											disabled={attributing}
+											bind:value={apEmail} />
+									{/snippet}
+								</Field>
+								<Button type="submit" size="sm" disabled={!apReady || attributing}>
+									Add to session
+								</Button>
+							</form>
+						{/if}
+					</div>
+				</section>
+			{/if}
+
+			<!-- The round-up worklist: what still stands between the program and
+			     done. Groups partition the pool so every unfinished session renders
+			     exactly once; a second gap is named on the row, never by a second
+			     row. Placement stays this panel's verb; deciding and attributing
+			     each keep their one door. -->
+			<section class="panel" aria-label="Program" tabindex="-1" bind:this={programPanel}>
+				<header class="panel__head">
+					<h2>Program</h2>
+					<span class="panel__count">{grouping?.total ?? 0}</span>
+					<button
+						type="button"
+						class="ui-button ui-button--secondary ui-button--sm panel__head-action"
+						aria-expanded={newSessionOpen === 'panel'}
+						aria-controls="new-session-form"
+						onclick={() => void openNewSession('panel')}>New session…</button>
+				</header>
+
+				{#if newSessionOpen === 'panel'}
+					{@render newSessionForm()}
+				{/if}
+
+				{#if trayFilter}
+					<p class="panel__scope">
+						<span class="ui-badge">{trayLabel[trayFilter]}</span>
+						<button
+							type="button"
+							class="ui-button ui-button--ghost ui-button--sm"
+							aria-label={`Clear the ${trayLabel[trayFilter].toLowerCase()} scope`}
+							onclick={() => void applyParams({ tray: null }, { history: 'push' })}>Clear</button>
+					</p>
+					{#if trayRows.length === 0}
+						<p class="panel__calm">Nothing is waiting here.</p>
+					{:else}
+						<ul class="pool">
+							{#each trayRows as row (row.session.id)}
+								{@render programRow(row)}
+							{/each}
+						</ul>
+					{/if}
+				{:else if grouping && grouping.total > 0}
+					{#each grouping.order as group (group)}
+						<section class="pool-group" aria-label={groupHeading[group]}>
+							<h3 class="pool-group__title">
+								{groupHeading[group]}
+								<span class="panel__count">{(grouping.groups.get(group) ?? []).length}</span>
+							</h3>
+							<ul class="pool">
+								{#each grouping.groups.get(group) ?? [] as row (row.session.id)}
+									{@render programRow(row)}
+								{/each}
+							</ul>
+						</section>
+					{/each}
+				{:else}
+					<p class="panel__calm">
+						Every session is placed, peopled, and decided. Accepted proposals and new sessions
+						arrive here on their way to the grid.
+					</p>
+				{/if}
+			</section>
+
+			<!-- Below the worklist deliberately: the head row's blocking count and
+			     the nav badge already keep broken physics impossible to miss, and
+			     with nothing broken this panel is one calm line — the standing
+			     round-up work outranks the usually-empty exception list.
+			     Addressable: `?panel=conflicts` lands here with the caret on the
+			     panel, which is where a blocking count on the rail or the
+			     overview points. -->
 			<section class="panel" aria-label="Conflicts" tabindex="-1" bind:this={conflictsPanel}>
 				<header class="panel__head">
 					<h2>Conflicts</h2>
@@ -1197,55 +1990,211 @@
 					</ul>
 				{/if}
 			</section>
-
-			<section class="panel" aria-label="Unscheduled">
-				<header class="panel__head">
-					<h2>Unscheduled</h2>
-					<span class="panel__count">{unscheduled.length}</span>
-				</header>
-				{#if unscheduled.length === 0}
-					<p class="panel__calm">
-						Every session has a slot. Newly accepted sessions arrive here waiting to be placed.
-					</p>
-				{:else}
-					<ul class="pool">
-						{#each unscheduled as session (session.id)}
-							<li
-								class="pool__row"
-								class:pool__row--active={placing?.id === session.id}
-								id={`pool-${session.id}`}
-								tabindex="-1"
-								style="--track: {trackColor(session.trackId)}">
-								<div class="pool__copy">
-									<p class="pool__title">{session.title}</p>
-									<p class="pool__meta">
-										{session.durationMin} min · {formatName(session.formatId)} · {trackName(session.trackId)}
-									</p>
-								</div>
-								<!-- One element for both faces, so the pointer that pressed
-								     Place… is already resting on Cancel: entering the mode moves
-								     neither layout nor focus. -->
-								<button
-									type="button"
-									class="ui-button ui-button--secondary ui-button--sm pool__action"
-									aria-label={placing?.id === session.id
-										? `Cancel placing “${session.title}”`
-										: `Place “${session.title}”`}
-									disabled={busy}
-									onclick={(event) =>
-										placing?.id === session.id
-											? cancelPlacement()
-											: enterPlacement(session, event.detail === 0)}
-									>{#if placing?.id === session.id}Cancel <kbd aria-hidden="true">Esc</kbd
-										>{:else}Place…{/if}</button>
-							</li>
-						{/each}
-					</ul>
-				{/if}
-			</section>
 		</div>
 	</div>
 {/if}
+
+{#snippet newSessionForm()}
+	<!-- Rendered by whichever door opened it; one instance at a time, so the
+	     field ids stay unique. Enter submits the door's own primary. -->
+	<form
+		class="new-session"
+		id="new-session-form"
+		onsubmit={(event) => {
+			event.preventDefault();
+			void createSession(nsPlaceIsPrimary);
+		}}>
+		<Field id="new-session-title" label="Title">
+			{#snippet children({ id, describedBy })}
+				<input
+					class="ui-control"
+					type="text"
+					{id}
+					aria-describedby={describedBy}
+					disabled={creatingSession}
+					bind:this={nsTitleInput}
+					bind:value={nsTitle} />
+			{/snippet}
+		</Field>
+		<div class="new-session__vocab">
+			<Field id="new-session-format" label="Format">
+				{#snippet children({ id, describedBy })}
+					<select
+						class="ui-control"
+						{id}
+						aria-describedby={describedBy}
+						disabled={creatingSession}
+						bind:value={nsFormatId}
+						onchange={onNsFormatChange}>
+						{#each formats.filter((format) => format.status === 'active') as format (format.id)}
+							<option value={format.id}>{format.name}</option>
+						{/each}
+					</select>
+				{/snippet}
+			</Field>
+			<Field id="new-session-track" label="Track">
+				{#snippet children({ id, describedBy })}
+					<select
+						class="ui-control"
+						{id}
+						aria-describedby={describedBy}
+						disabled={creatingSession}
+						bind:value={nsTrackId}>
+						<option value="">No track yet</option>
+						{#each tracks.filter((track) => track.status === 'active') as track (track.id)}
+							<option value={track.id}>{track.name}</option>
+						{/each}
+					</select>
+				{/snippet}
+			</Field>
+			<Field id="new-session-duration" label="Minutes">
+				{#snippet children({ id, describedBy })}
+					<input
+						class="ui-control"
+						type="number"
+						min="5"
+						step="5"
+						{id}
+						aria-describedby={describedBy}
+						disabled={creatingSession}
+						bind:value={nsDuration}
+						oninput={() => (nsDurationTouched = true)} />
+				{/snippet}
+			</Field>
+		</div>
+		<fieldset class="new-session__state">
+			<legend>Starts as</legend>
+			<Radio
+				name="new-session-state"
+				value="programmed"
+				label="In the program"
+				description="An editorial fact — a fixed keynote, a known workshop."
+				bind:group={nsState}
+				disabled={creatingSession} />
+			<Radio
+				name="new-session-state"
+				value="collecting"
+				label="Collecting proposals"
+				description="An open call people can apply to; nothing public yet."
+				bind:group={nsState}
+				disabled={creatingSession} />
+			<Radio
+				name="new-session-state"
+				value="draft"
+				label="Private sketch"
+				description="Visible to organizers only, off the grid for now."
+				bind:group={nsState}
+				disabled={creatingSession} />
+		</fieldset>
+		<!-- One creation, one placement, zero re-finding it in a list: Create
+		     and place… commits, then the new session is already in hand. The
+		     door decides the emphasis — standing at the board, placing is the
+		     point; in the panel, landing unplaced is. Enter always takes the
+		     leading action, and Escape after committing still leaves a real,
+		     honestly-pooled session. A private sketch stays off the grid, so
+		     only Create is offered for it. -->
+		<div class="new-session__actions">
+			{#if nsPlaceIsPrimary}
+				<Button type="submit" size="sm" disabled={!nsReady || creatingSession}>
+					Create and place…
+				</Button>
+				<Button
+					type="button"
+					size="sm"
+					variant="secondary"
+					disabled={!nsReady || creatingSession}
+					onclick={() => void createSession(false)}>Create</Button>
+			{:else}
+				<Button type="submit" size="sm" disabled={!nsReady || creatingSession}>Create</Button>
+				{#if nsState !== 'draft'}
+					<Button
+						type="button"
+						size="sm"
+						variant="secondary"
+						disabled={!nsReady || creatingSession}
+						onclick={() => void createSession(true)}>Create and place…</Button>
+				{/if}
+			{/if}
+		</div>
+	</form>
+{/snippet}
+
+{#snippet programRow(row: ProgramGroupRow)}
+	{@const session = row.session}
+	{@const placement = schedule?.placements.find((entry) => entry.sessionId === session.id)}
+	<li
+		class="pool__row"
+		class:pool__row--active={placing?.id === session.id}
+		id={`pool-${session.id}`}
+		tabindex="-1"
+		style="--track: {trackColor(session.trackId)}">
+		<div class="pool__copy">
+			<p class="pool__title">{session.title}</p>
+			<p class="pool__meta">
+				{session.durationMin} min · {formatName(session.formatId)} · {trackName(session.trackId)}{#if placement}
+					· {dayLabel(placement.dayKey)}
+					{clockLabel(placement.startMin)}{/if}
+			</p>
+			{#if session.state === 'collecting'}
+				<!-- The one door to this session's proposals (R2): the count lands
+				     on Decisions scoped to exactly these rows. Zero is stated, not
+				     linked — there is nothing to decide yet. -->
+				{#if row.proposalCount > 0}
+					<p class="pool__fact">
+						<a href={`/app/decisions?target=${session.id}`}
+							>{proposalsLabel(row.proposalCount)} to decide</a>
+					</p>
+				{:else}
+					<p class="pool__fact">No proposals yet</p>
+				{/if}
+			{:else if row.trays.includes('needs-speakers')}
+				<p class="pool__fact">No speakers yet</p>
+			{/if}
+		</div>
+		<div class="pool__actions">
+			{#if placeable(row)}
+				<!-- One element for both faces, so the pointer that pressed Place…
+				     is already resting on Cancel: entering the mode moves neither
+				     layout nor focus. -->
+				<button
+					type="button"
+					class="ui-button ui-button--secondary ui-button--sm"
+					aria-label={placing?.id === session.id
+						? `Cancel placing “${session.title}”`
+						: `Place “${session.title}”`}
+					disabled={busy}
+					onclick={(event) =>
+						placing?.id === session.id
+							? cancelPlacement()
+							: enterPlacement(session, event.detail === 0)}
+					>{#if placing?.id === session.id}Cancel <kbd aria-hidden="true">Esc</kbd
+						>{:else}Place…{/if}</button>
+			{/if}
+			{#if placement}
+				<button
+					type="button"
+					class="ui-button ui-button--secondary ui-button--sm"
+					disabled={placing !== null}
+					onclick={() => showOnGrid(placement)}>Show on {dayLabel(placement.dayKey)}</button>
+			{/if}
+			{#if session.state !== 'programmed'}
+				<button
+					type="button"
+					class="ui-button ui-button--ghost ui-button--sm"
+					aria-label={`Add “${session.title}” to the program`}
+					disabled={busy || placing !== null}
+					onclick={() => addToProgram(row)}>Add to program</button>
+			{:else}
+				<button
+					type="button"
+					class="ui-button ui-button--ghost ui-button--sm"
+					aria-label={`Speakers on “${session.title}”`}
+					disabled={placing !== null}
+					onclick={() => openSpeakers(session)}>Speakers</button>
+			{/if}
+		</div>
+	</li>
+{/snippet}
 
 {#snippet roomForm()}
 	<form class="add-room" onsubmit={addRoom}>
@@ -1583,10 +2532,11 @@
 	/* A key chip teaches a key that exists: touch has no Esc or Enter, so every
 	   chip comes off there (narrow desktop windows keep them). */
 	@media (pointer: coarse) {
-		.pool__action kbd,
+		.pool__actions kbd,
 		.card__actions--standing kbd,
 		.confirm__cancel kbd,
-		.confirm__commit kbd {
+		.confirm__commit kbd,
+		.ghost__cue-esc {
 			display: none;
 		}
 	}
@@ -1626,6 +2576,7 @@
 	.board-wrap {
 		max-block-size: min(50rem, 78vh);
 	}
+
 
 	.board {
 		--gutter: 3.5rem;
@@ -1687,6 +2638,29 @@
 		text-align: end;
 	}
 
+	/* The aim's live start on the axis. Its top edge is the exact minute (the
+	   tick), the digits mirror the slot labels' geometry one weight and one ink
+	   step apart, and the surface fill masks a fixed label it lands on so the
+	   two never overprint. Position follows the aim instantly — it is direct
+	   manipulation, not motion. */
+	.board__time-marker {
+		position: absolute;
+		inset-block-start: calc(var(--start) * var(--slot-h));
+		inset-inline: 0;
+		block-size: 1lh;
+		box-sizing: content-box;
+		padding-block-start: var(--je-space-1);
+		padding-inline-end: var(--je-space-2);
+		border-block-start: 2px solid var(--je-color-action);
+		background: var(--je-color-surface);
+		font-size: var(--je-font-size-2xs);
+		font-weight: 650;
+		color: var(--je-color-link);
+		font-variant-numeric: tabular-nums;
+		text-align: end;
+		pointer-events: none;
+	}
+
 	/* Half-hour rules sit under stronger hour rules so the eye finds the hour. */
 	.board__col {
 		position: relative;
@@ -1746,6 +2720,20 @@
 		border-color: var(--je-color-danger-fill);
 	}
 
+	/* A held planned slot: hollow and dashed, deliberately not the action-
+	   colored ghost — a ghost is an uncommitted draft, while this slot is a
+	   committed reservation whose *content* is still being collected. Neutral
+	   ink, sunken fill, dashed boundary (16 §6's direction; ⚠ default pending
+	   Q32's grid-voice residual). */
+	.card--collecting {
+		border-style: dashed;
+		background: var(--je-color-surface-sunken);
+	}
+
+	.card__who--collecting {
+		font-style: italic;
+	}
+
 	/* While placing, committed cards are context: still readable — the pattern
 	   of the day is exactly what the mode exists to show — but visually behind
 	   the openings, and their controls rest. */
@@ -1763,6 +2751,39 @@
 		border-style: dashed;
 		background: var(--je-color-surface-sunken);
 		opacity: 0.8;
+		/* While a session is in hand the pointer belongs to the aim, not to the
+		   slot being left. Without this the origin's own content wins the hit test
+		   over the opening drawn through it, so crossing into its own slot fires
+		   the opening's `pointerleave`, clears the aim, and drops the ghost — then
+		   the pointer lands back on the opening and re-aims. The enter/leave pair
+		   repeats faster than the eye separates and reads as flicker, exactly over
+		   the one position a move is most likely to be aimed at.
+
+		   Same reasoning as the row-note overlay in the design record: an element
+		   that appears under the cursor must not take it. Its one control is the
+		   deliberate exception. */
+		pointer-events: none;
+		/* Above the openings drawn through it, so its Cancel stays clickable and
+		   its focus ring stays visible; below a focused opening, which owns the
+		   ring while the keyboard is aiming. */
+		z-index: 2;
+	}
+
+	/* The aim has come back to this slot. Nothing will change if it lands here, so
+	   the marker keeps its neutral fill — coral would promise a move — and takes a
+	   quiet ring to confirm it is what the pointer is on. The line beside the time
+	   carries the meaning; the ring alone never does. */
+	.card--origin-aimed {
+		border-style: solid;
+		border-color: var(--je-color-action);
+		opacity: 1;
+	}
+
+	/* The button, not its padded wrapper: every pixel handed back to the marker is
+	   a pixel the aim goes dead, and the wrapper's leading padding sits right
+	   where the ghost is read. */
+	.card--origin .card__actions button {
+		pointer-events: auto;
 	}
 
 	.card__title {
@@ -1846,10 +2867,24 @@
 		box-shadow: var(--card-ring), var(--je-shadow-md);
 	}
 
-	/* Context and origin cards do not lift: nothing under them answers. */
+	/* Context and origin cards do not lift: nothing under them answers.
+
+	   `:focus-within` matters as much as `:hover` here. Entering a move with the
+	   pointer hands focus to the origin's own Cancel, so the marker sat lifted to
+	   z-index 3 for the whole mode — above the ghost at 2. Aiming back at the
+	   slot then drew the ghost behind the thing it was standing in for. */
 	.card--context:hover,
-	.card--origin:hover {
+	.card--context:focus-within {
 		z-index: 1;
+		box-shadow: var(--card-ring), var(--je-shadow-xs);
+	}
+
+	/* The origin keeps its own stable level rather than the lift: entering a move
+	   with the pointer hands focus to its Cancel, so `:focus-within` held it
+	   lifted for the whole mode. */
+	.card--origin:hover,
+	.card--origin:focus-within {
+		z-index: 2;
 		box-shadow: var(--card-ring), var(--je-shadow-xs);
 	}
 
@@ -1862,6 +2897,47 @@
 	.card:focus-visible {
 		outline: none;
 		box-shadow: var(--je-focus-ring);
+	}
+
+	/* The armed removal: the object's own face becomes the question. Anchored to
+	   the block's top and at least its full height, growing downward when a short
+	   block cannot hold the question — the parent lifts and releases its clip so
+	   the veil is never truncated. */
+	.card--armed,
+	.brk--armed {
+		z-index: 3;
+		overflow: visible;
+	}
+
+	.confirm-veil {
+		position: absolute;
+		inset-inline: 0;
+		inset-block-start: 0;
+		z-index: 4;
+		min-block-size: 100%;
+		display: grid;
+		align-content: center;
+		justify-items: start;
+		gap: var(--je-space-2);
+		padding: var(--je-space-2);
+		border-radius: var(--je-radius-control);
+		background:
+			linear-gradient(var(--je-color-danger-soft), var(--je-color-danger-soft)),
+			var(--je-color-surface);
+		box-shadow:
+			inset 0 0 0 1px var(--je-color-danger-fill),
+			var(--je-shadow-md);
+	}
+
+	.confirm-veil__q {
+		margin: 0;
+		font-size: var(--je-font-size-sm);
+		font-weight: 650;
+	}
+
+	.confirm-veil__actions {
+		display: flex;
+		gap: var(--je-space-2);
 	}
 
 	/* The aim ghost rides above cards and never intercepts the pointer.
@@ -1922,10 +2998,13 @@
 		background: color-mix(in srgb, var(--je-color-action-soft) 62%, transparent);
 	}
 
+	/* Above the ghost, not level with it: at equal z-index the ghost is later in
+	   the DOM and would paint over the focus ring — and a keyboard aim that lands
+	   on the origin puts the ghost on exactly the opening being focused. */
 	.opening:focus-visible {
 		outline: none;
 		box-shadow: var(--je-focus-ring);
-		z-index: 2;
+		z-index: 3;
 	}
 
 	/* Space that refuses the session in hand: visible, hatched, and carrying its
@@ -2200,7 +3279,7 @@
 	/* The session in hand is marked among its peers, not lifted: chosen-for-now
 	   is metadata, and the board is where the work is happening. */
 	.pool__row--active {
-		background: var(--je-color-surface-selected);
+		background: var(--je-color-mark-surface);
 	}
 
 	.pool__copy {
@@ -2222,6 +3301,151 @@
 		margin: 0;
 		font-size: var(--je-font-size-xs);
 		color: var(--je-color-text-muted);
+	}
+
+	/* A gap named on the row: quiet ink for a plan ("No speakers yet"), a link
+	   only where a door exists (proposals to decide). */
+	.pool__fact {
+		margin: var(--je-space-1) 0 0;
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
+	}
+
+	.pool__actions {
+		grid-area: action;
+		display: flex;
+		flex-direction: column;
+		align-items: stretch;
+		gap: var(--je-space-1);
+	}
+
+	.pool-group + .pool-group {
+		margin-block-start: var(--je-space-4);
+	}
+
+	.pool-group__title {
+		display: flex;
+		align-items: baseline;
+		gap: var(--je-space-2);
+		margin: 0 0 var(--je-space-1);
+		font-size: var(--je-font-size-xs);
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: var(--je-tracking-caps);
+		color: var(--je-color-text-muted);
+	}
+
+	/* The scope a link arrived with, visible and dismissible (Q23 fill 1). */
+	.panel__scope {
+		display: flex;
+		align-items: center;
+		gap: var(--je-space-2);
+		margin: 0 0 var(--je-space-2);
+	}
+
+	.panel__head-action {
+		margin-inline-start: auto;
+	}
+
+	.new-session {
+		display: grid;
+		gap: var(--je-space-3);
+		padding: var(--je-space-3);
+		margin-block-end: var(--je-space-3);
+		border: 1px solid var(--je-color-border);
+		border-radius: var(--je-radius-control);
+		background: var(--je-color-surface-sunken);
+	}
+
+	/* Three fields while they fit, wrapping to fewer columns on a narrow aside
+	   rather than squeezing selects below a usable width. */
+	.new-session__vocab {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+		gap: var(--je-space-3);
+	}
+
+	.new-session__state {
+		display: grid;
+		gap: var(--je-space-2);
+		margin: 0;
+		padding: 0;
+		border: 0;
+	}
+
+	.new-session__state legend {
+		padding: 0;
+		margin-block-end: var(--je-space-1);
+		font-size: var(--je-font-size-xs);
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: var(--je-tracking-caps);
+		color: var(--je-color-text-muted);
+	}
+
+	.new-session__actions {
+		display: flex;
+		gap: var(--je-space-2);
+	}
+
+	/* The speakers panel: people rows with their provenance in place. */
+	.speakers {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+	}
+
+	.speakers__session {
+		margin: 0 0 var(--je-space-3);
+		font-size: var(--je-font-size-md);
+		font-weight: 600;
+	}
+
+	.speakers__row {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) max-content;
+		align-items: center;
+		gap: var(--je-space-3);
+		padding-block: var(--je-space-2);
+	}
+
+	.speakers__row + .speakers__row {
+		border-block-start: 1px solid var(--je-color-border);
+	}
+
+	.speakers__copy {
+		min-inline-size: 0;
+	}
+
+	.speakers__name {
+		margin: 0;
+		font-size: var(--je-font-size-sm);
+		font-weight: 600;
+	}
+
+	.speakers__provenance {
+		margin: 0;
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
+	}
+
+	.speakers__group {
+		margin: var(--je-space-4) 0 var(--je-space-1);
+		font-size: var(--je-font-size-xs);
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: var(--je-tracking-caps);
+		color: var(--je-color-text-muted);
+	}
+
+	.speakers__direct {
+		margin-block-start: var(--je-space-4);
+	}
+
+	.speakers__form {
+		display: grid;
+		gap: var(--je-space-3);
+		margin-block-start: var(--je-space-3);
 	}
 
 	/* The confirm dialog: where, exactly when, and what the preflight says. */
@@ -2412,9 +3636,9 @@
 			grid-template-columns: minmax(0, 1fr);
 		}
 
-		.head__publish {
-			margin-inline-start: 0;
-		}
+		/* The head wraps here, but the publish cluster keeps its auto margin:
+		   actions stay on the right on the wrapped row, exactly as they sit at
+		   full width, instead of stringing out after the conflict counts. */
 
 		/* The head wraps to two rows at this width; the resolver wraps with it. */
 		.sk-days {

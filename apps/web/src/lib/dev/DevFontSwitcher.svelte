@@ -320,8 +320,8 @@
 	}
 
 	.fonts__item--active {
-		border-color: var(--je-color-action);
-		background: var(--je-color-surface-selected);
+		border-color: var(--je-color-mark-border);
+		background: var(--je-color-mark-surface);
 	}
 
 	.fonts__name {

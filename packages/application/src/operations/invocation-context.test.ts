@@ -42,7 +42,10 @@ import { createEffectInvocationBuilder, createEffectOperationExecutor } from './
 import { createReadOperationExecutor, OperationExecutionError, OperationInputError } from './executor';
 import {
   InvocationContextError,
+  consumeEffectInvocationCurrentAuthorityRecheck,
   createEffectInvocationContextBuilder,
+  createHmacIdempotencyCredentialSealer,
+  recheckEffectInvocationCurrentAuthority,
   createHmacRequestHashSealer,
   createReadInvocationContextBuilder,
   getTrustedInvocationBuilderBinding,
@@ -250,6 +253,7 @@ class MemoryUnitOfWork implements EffectUnitOfWorkPort {
   async runInUnitOfWork<Value>(work: (unitOfWork: EffectUnitOfWork) => Promise<Value>): Promise<Value> {
     const receipts = this.receipts;
     return work({
+      recheckCurrentAuthority: (context) => recheckEffectInvocationCurrentAuthority(context),
       acquireExecutionClaim: () => ({ kind: 'acquired' }),
       findTerminalReceipt: (identity) => receipts.get(identityKey(identity)),
       openHandlerSnapshot: () => ({ allowed: true }),
@@ -694,6 +698,88 @@ describe('trusted operation invocation', () => {
     expect(harness.sealedKeys).toEqual(['profile-rotation-must-fail-closed']);
   });
 
+  test('set-valued current-authority evidence is canonical across order and duplicates', async () => {
+    let resolution = 0;
+    const authorityResolver: CurrentAuthorityResolver<InvocationEvidence> = {
+      resolve(input) {
+        resolution += 1;
+        const initial = resolution === 1;
+        return {
+          kind: 'authorized',
+          authority: {
+            actor: { kind: 'workspace_user', userId: ids.user },
+            principal: {
+              kind: 'workspace_user',
+              userId: ids.user,
+              membershipId: ids.membership
+            },
+            lane: input.lane,
+            scope: input.scope,
+            grants: initial
+              ? [
+                  { kind: 'permission' as const, key: 'test.zeta' },
+                  { kind: 'permission' as const, key: 'test.alpha' },
+                  { kind: 'permission' as const, key: 'test.alpha' }
+                ]
+              : [
+                  { kind: 'permission' as const, key: 'test.alpha' },
+                  { kind: 'permission' as const, key: 'test.zeta' }
+                ],
+            evidenceIds: initial
+              ? ['membership:zeta', 'membership:alpha', 'membership:alpha']
+              : ['membership:alpha', 'membership:zeta'],
+            authorityCitationIds: [],
+            evaluatedAt: input.evaluatedAt
+          }
+        };
+      }
+    };
+    const builder = createEffectInvocationContextBuilder({
+      reference: definitionRef('context.canonical-authority'),
+      operation: { name: 'canonical-authority.draft', version: 1 },
+      effect: 'draft',
+      lanes: [lane('operator')],
+      scopeResolver: { resolve: () => scope() },
+      authorityResolver,
+      clock: { now: () => now },
+      newInvocationId: () => ids.invocation,
+      authorityPrincipalKeyProfile: profile,
+      scopePartitionProfile: profile,
+      requestCanonicalizationProfile: profile,
+      requestHashProfile: refs.requestHash,
+      requestHashSealer: createHmacRequestHashSealer({
+        profile: refs.requestHash,
+        keyBytes: new Uint8Array(32).fill(0x35)
+      }),
+      idempotencyCredentialProfile: profile,
+      idempotencyCredentialSealer: {
+        seal: async (raw) => ({
+          verifierProfile: profile,
+          verifierSha256: await sha256(raw)
+        })
+      },
+      deniedAuthorityOutcome: authorityOutcome
+    });
+    const built = await builder.build({
+      operationName: 'canonical-authority.draft',
+      operationVersion: 1,
+      surface: 'operator_http',
+      correlationId,
+      businessInput: { value: 'same' },
+      verifiedEvidence: operatorEvidence,
+      rawIdempotencyKey: 'canonical-authority'
+    });
+    expect(built.kind).toBe('ready');
+    if (built.kind !== 'ready') throw new Error('expected ready invocation context');
+    const context = built.context as InvocationContext;
+    const recheck = await recheckEffectInvocationCurrentAuthority(context);
+    expect(consumeEffectInvocationCurrentAuthorityRecheck(context, recheck)).toEqual({
+      kind: 'authorized',
+      evaluatedAt: now
+    });
+    expect(resolution).toBe(2);
+  });
+
   test('request bindings are repeatable keyed seals and reject plain digests or runtime profile substitution', async () => {
     const bytes = new TextEncoder().encode('low-entropy-classified-request');
     const sealer = createHmacRequestHashSealer({
@@ -731,6 +817,32 @@ describe('trusted operation invocation', () => {
       expect(harness.effectHandlerCalls).toBe(0);
       expect(harness.contexts).toHaveLength(0);
     }
+  });
+
+  test('idempotency credentials use a repeatable server-keyed verifier without retaining the raw key', async () => {
+    const firstSecret = new Uint8Array(32).fill(0x51);
+    const secondSecret = new Uint8Array(32).fill(0x52);
+    const first = createHmacIdempotencyCredentialSealer({
+      profile,
+      keyBytes: firstSecret
+    });
+    const sameKey = await first.seal('browser-retry-key');
+
+    expect(await first.seal('browser-retry-key')).toEqual(sameKey);
+    expect(await first.seal('another-retry-key')).not.toEqual(sameKey);
+    expect(await createHmacIdempotencyCredentialSealer({
+      profile,
+      keyBytes: secondSecret
+    }).seal('browser-retry-key')).not.toEqual(sameKey);
+    expect(sameKey.verifierProfile).toEqual(profile);
+    expect(sameKey.verifierSha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(sameKey)).not.toContain('browser-retry-key');
+    expect(() => createHmacIdempotencyCredentialSealer({
+      profile,
+      keyBytes: new Uint8Array(31)
+    })).toThrow(InvocationContextError);
+    await expect(first.seal('')).rejects.toThrow(InvocationContextError);
+    await expect(first.seal('x'.repeat(513))).rejects.toThrow(InvocationContextError);
   });
 
   test('actor, scope, and every structural approval claim fail before permissive schemas can strip them', async () => {

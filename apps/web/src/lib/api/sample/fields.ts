@@ -27,7 +27,10 @@ export function baselineFieldRegistry(): RegistryField[] {
 			label: 'Pronouns',
 			help: 'Optional — shown on your speaker page and badge if you share them.',
 			required: {},
-			collectAt: ['apply', 'onboard', 'profile'],
+			/* Owner call 2026-08-12: not asked on the application — it matters at
+			 * onboarding and on the profile, where badges and speaker pages need
+			 * it, and the apply funnel stays lighter without it. */
+			collectAt: ['onboard', 'profile'],
 			options: ['She/her', 'He/him', 'They/them', 'Prefer to self-describe', 'Prefer not to say'],
 			group: 'identity',
 			position: 1
@@ -76,6 +79,43 @@ export function baselineFieldRegistry(): RegistryField[] {
 			position: 5
 		},
 		{
+			id: 'fld-website',
+			kind: 'url',
+			label: 'Website',
+			help: 'Your personal or company site.',
+			required: {},
+			collectAt: ['apply', 'onboard', 'profile'],
+			group: 'presence',
+			position: 6
+		},
+		{
+			id: 'fld-linkedin',
+			kind: 'url',
+			label: 'LinkedIn',
+			required: {},
+			collectAt: ['apply', 'onboard', 'profile'],
+			group: 'presence',
+			position: 7
+		},
+		{
+			id: 'fld-x',
+			kind: 'url',
+			label: 'X account',
+			required: {},
+			collectAt: ['apply', 'onboard', 'profile'],
+			group: 'presence',
+			position: 8
+		},
+		{
+			id: 'fld-github',
+			kind: 'url',
+			label: 'GitHub',
+			required: {},
+			collectAt: ['apply', 'onboard', 'profile'],
+			group: 'presence',
+			position: 9
+		},
+		{
 			id: 'fld-title',
 			kind: 'text',
 			label: 'Talk title',
@@ -83,7 +123,7 @@ export function baselineFieldRegistry(): RegistryField[] {
 			required: { apply: true },
 			collectAt: ['apply'],
 			group: 'talk',
-			position: 6
+			position: 10
 		},
 		{
 			id: 'fld-abstract',
@@ -93,7 +133,7 @@ export function baselineFieldRegistry(): RegistryField[] {
 			required: { apply: true },
 			collectAt: ['apply'],
 			group: 'talk',
-			position: 7
+			position: 11
 		},
 		{
 			id: 'fld-format',
@@ -102,9 +142,11 @@ export function baselineFieldRegistry(): RegistryField[] {
 			help: 'Pick the closest fit — length can be adjusted together later.',
 			required: { apply: true },
 			collectAt: ['apply'],
-			options: ['Talk · 30 min', 'Workshop · 90 min', 'Panel · 45 min'],
+			/* Options are the event's format vocabulary, served live — never a
+			 * typed-in copy that drifts when Settings changes. */
+			optionSource: 'formats',
 			group: 'talk',
-			position: 8
+			position: 12
 		},
 		{
 			id: 'fld-track',
@@ -113,9 +155,9 @@ export function baselineFieldRegistry(): RegistryField[] {
 			help: 'Your best guess is enough; the program team may move it.',
 			required: { apply: true },
 			collectAt: ['apply'],
-			options: ['Agents & Tools', 'Evals & Reliability', 'Models & Infrastructure'],
+			optionSource: 'tracks',
 			group: 'talk',
-			position: 9
+			position: 13
 		},
 		{
 			id: 'fld-notes',
@@ -125,7 +167,7 @@ export function baselineFieldRegistry(): RegistryField[] {
 			required: {},
 			collectAt: ['apply'],
 			group: 'talk',
-			position: 10
+			position: 14
 		},
 		{
 			id: 'fld-arrival',
@@ -135,7 +177,7 @@ export function baselineFieldRegistry(): RegistryField[] {
 			required: { onboard: true },
 			collectAt: ['onboard'],
 			group: 'logistics',
-			position: 11
+			position: 15
 		},
 		{
 			id: 'fld-dietary',
@@ -145,7 +187,7 @@ export function baselineFieldRegistry(): RegistryField[] {
 			required: {},
 			collectAt: ['onboard'],
 			group: 'logistics',
-			position: 12
+			position: 16
 		},
 		{
 			id: 'fld-headshot',
@@ -155,7 +197,7 @@ export function baselineFieldRegistry(): RegistryField[] {
 			required: { onboard: true },
 			collectAt: ['onboard', 'profile'],
 			group: 'materials',
-			position: 13
+			position: 17
 		},
 		{
 			id: 'fld-consent',
@@ -165,7 +207,7 @@ export function baselineFieldRegistry(): RegistryField[] {
 			required: { apply: true },
 			collectAt: ['apply'],
 			group: 'consent',
-			position: 14
+			position: 18
 		}
 	];
 }

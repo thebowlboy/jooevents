@@ -47,6 +47,7 @@ import {
 import type {
   EffectContextBuilderRegistration,
   EffectHandlerRegistration,
+  EffectOperationBindingDefinition,
   OperationRegistrySource,
   OperationRegistry,
   OperationAuditTargetRegistration,
@@ -68,9 +69,16 @@ import type {
   RegisteredOperationSchema,
   RegisteredOperatorHttpEffectBinding,
   RegisteredOperatorHttpReadBinding,
+  RegisteredPublicHttpEffectBinding,
+  RegisteredPublicHttpReadBinding,
   RegisteredReadOperationBinding,
   RegistryValidationIssue
 } from './types';
+import {
+  isPublicEffectConformanceActivation,
+  isPublicEffectConformanceBuilderFor,
+  type PublicEffectConformanceActivation
+} from './public-effect-conformance-activation';
 
 interface CompiledBinding {
   readonly public: RegisteredReadOperationBinding;
@@ -117,6 +125,16 @@ export interface CompiledOperatorHttpEffectBinding {
   readonly projectedResultSchema: RegisteredOperationSchema;
 }
 
+export interface CompiledPublicHttpEffectBinding {
+  readonly surface: 'public_http';
+  readonly method: 'POST';
+  readonly path: string;
+  readonly input: 'body';
+  readonly browserResumption: RegisteredPublicHttpEffectBinding['browserResumption'];
+  readonly projection: ReadProjectionRegistration;
+  readonly projectedResultSchema: RegisteredOperationSchema;
+}
+
 export interface CompiledAppModelEffectBinding {
   readonly surface: 'app_model';
   readonly toolName: string;
@@ -126,6 +144,7 @@ export interface CompiledAppModelEffectBinding {
 
 export type CompiledEffectBinding =
   | CompiledOperatorHttpEffectBinding
+  | CompiledPublicHttpEffectBinding
   | CompiledAppModelEffectBinding;
 
 export interface CompiledRegisteredConsumerEffectBinding {
@@ -436,7 +455,8 @@ function laneIdentity(lane: OperationAccessLane): string {
 
 function normalizeOperationAccessLanes(
   operation: ReadOperationDefinition | OrdinaryEffectOperationDefinition,
-  issues: RegistryValidationIssue[]
+  issues: RegistryValidationIssue[],
+  publicEffectConformanceActivation?: PublicEffectConformanceActivation
 ): readonly OperationAccessLane[] {
   const raw = (operation as { readonly accessLanes?: unknown }).accessLanes;
   if (!Array.isArray(raw)) {
@@ -504,7 +524,11 @@ function normalizeOperationAccessLanes(
       });
     }
   }
-  if (operation.effect !== 'read' && parsed.some((lane) => lane.kind === 'public_open' || lane.kind === 'public_ceremony')) {
+  if (operation.effect !== 'read' && parsed.some((lane) =>
+    lane.kind === 'public_open'
+    || (lane.kind === 'public_ceremony'
+      && !isPublicEffectConformanceActivation(publicEffectConformanceActivation))
+  )) {
     issues.push({
       code: 'public_effect_lane_unactivated',
       detail: 'Effectful public lanes remain unactivated.',
@@ -535,6 +559,7 @@ function validateTrustedContextBuilder(input: {
   readonly operation: ReadOperationDefinition | OrdinaryEffectOperationDefinition;
   readonly accessLanes: readonly OperationAccessLane[];
   readonly issues: RegistryValidationIssue[];
+  readonly publicEffectConformanceActivation?: PublicEffectConformanceActivation;
 }): void {
   if (!input.builder) return;
   const binding = getTrustedInvocationBuilderBinding(input.builder);
@@ -559,6 +584,19 @@ function validateTrustedContextBuilder(input: {
     input.issues.push({
       code: 'context_builder_access_lane_mismatch',
       detail: 'Context builder and operation must have the exact same access-lane set.',
+      operationName: input.operation.name,
+      operationVersion: input.operation.version
+    });
+  }
+  if (input.operation.effect !== 'read'
+      && input.accessLanes.some((lane) => lane.kind === 'public_ceremony')
+      && !isPublicEffectConformanceBuilderFor(
+        input.builder,
+        input.publicEffectConformanceActivation
+      )) {
+    input.issues.push({
+      code: 'public_effect_context_unactivated',
+      detail: 'A public ceremony effect requires the same isolated activation as its registry.',
       operationName: input.operation.name,
       operationVersion: input.operation.version
     });
@@ -640,16 +678,20 @@ function sealedReadDefinition(
               target: { ...operation.observability.immutableAudit.target }
             }
     },
-    bindings: operation.bindings.map((binding) => binding.surface === 'operator_http'
-      ? {
-          ...binding,
-          browserResumption: { ...binding.browserResumption },
-          projection: { ...binding.projection }
-        }
-      : {
-          ...binding,
-          projection: { ...binding.projection }
-        })
+    bindings: operation.bindings.map((binding) => {
+      switch (binding.surface) {
+        case 'operator_http':
+        case 'public_http':
+          return {
+            ...binding,
+            browserResumption: { ...binding.browserResumption },
+            projection: { ...binding.projection }
+          };
+        case 'external_mcp':
+        case 'app_model':
+          return { ...binding, projection: { ...binding.projection } };
+      }
+    })
   });
 }
 
@@ -689,16 +731,28 @@ function sealedEffectDefinition(
       terminalization: { ...operation.execution.terminalization },
       autonomyPreflight: { ...operation.execution.autonomyPreflight }
     },
-    bindings: operation.bindings.map((binding) => binding.surface === 'operator_http'
-      ? {
-          ...binding,
-          browserResumption: { ...binding.browserResumption },
-          projection: { ...binding.projection }
-        }
-      : {
-          ...binding,
-          projection: { ...binding.projection }
-        }),
+    bindings: operation.bindings.map<EffectOperationBindingDefinition>((binding) => {
+      switch (binding.surface) {
+        case 'operator_http':
+          return {
+            ...binding,
+            browserResumption: { kind: 'none' },
+            projection: { ...binding.projection }
+          };
+        case 'public_http':
+          return {
+            ...binding,
+            browserResumption: {
+              ...binding.browserResumption,
+              referenceSchema: { ...binding.browserResumption.referenceSchema },
+              requestCodec: { ...binding.browserResumption.requestCodec }
+            },
+            projection: { ...binding.projection }
+          };
+        case 'app_model':
+          return { ...binding, projection: { ...binding.projection } };
+      }
+    }),
     registeredConsumerBindings: (operation.registeredConsumerBindings ?? []).map((binding) => ({
       ...binding,
       consumer: { ...binding.consumer },
@@ -725,7 +779,13 @@ function idempotencyConflictFixture(detailSchemaVersion: number) {
   };
 }
 
-export async function createOperationRegistry(source: OperationRegistrySource): Promise<OperationRegistry> {
+export async function createOperationRegistry(
+  source: OperationRegistrySource,
+  publicEffectConformanceActivation?: PublicEffectConformanceActivation
+): Promise<OperationRegistry> {
+  const publicEffectActivation = isPublicEffectConformanceActivation(
+    publicEffectConformanceActivation
+  ) ? publicEffectConformanceActivation : undefined;
   const issues: RegistryValidationIssue[] = [];
   const registeredAutonomyPolicies = source.autonomyPolicies ?? [];
   const autonomyPolicies = referenceMap({
@@ -1035,7 +1095,7 @@ export async function createOperationRegistry(source: OperationRegistrySource): 
   const effectAccessLanes = new Map<string, readonly OperationAccessLane[]>();
   const effectAutonomyPolicies = new Map<string, OperationAutonomyPolicy>();
   for (const operation of source.effectOperations ?? []) {
-    const accessLanes = normalizeOperationAccessLanes(operation, issues);
+    const accessLanes = normalizeOperationAccessLanes(operation, issues, publicEffectActivation);
     const autonomyPolicy = findAutonomyPolicy({ policies: autonomyPolicies, operation, issues });
     const metadata = {
       name: operation.name,
@@ -1287,23 +1347,32 @@ export async function createOperationRegistry(source: OperationRegistrySource): 
       }
       seenSurfaces.add(binding.surface);
       let publicBinding: RegisteredReadOperationBinding;
-      if (binding.surface === 'operator_http') {
+      if (binding.surface === 'operator_http' || binding.surface === 'public_http') {
         const routeKey = `${binding.method} ${binding.path}`;
         if (routes.has(routeKey)) {
           issues.push({ code: 'duplicate_http_binding', detail: `HTTP binding ${routeKey} is duplicated.`, operationName: operation.name, operationVersion: operation.version });
         }
         routes.add(routeKey);
         if (binding.method !== 'GET' || binding.input !== 'query' || binding.browserResumption.kind !== 'none') {
-          issues.push({ code: 'unsupported_read_binding', detail: 'Operator read bindings require GET/query with no browser resumption.', operationName: operation.name, operationVersion: operation.version });
+          issues.push({ code: 'unsupported_read_binding', detail: 'HTTP read bindings require GET/query with no browser resumption.', operationName: operation.name, operationVersion: operation.version });
         }
-        publicBinding = {
-          operationName: operation.name,
-          operationVersion: operation.version,
-          surface: binding.surface,
-          method: binding.method,
-          path: binding.path,
-          input: binding.input
-        } satisfies RegisteredOperatorHttpReadBinding;
+        publicBinding = binding.surface === 'operator_http'
+          ? {
+              operationName: operation.name,
+              operationVersion: operation.version,
+              surface: binding.surface,
+              method: binding.method,
+              path: binding.path,
+              input: binding.input
+            } satisfies RegisteredOperatorHttpReadBinding
+          : {
+              operationName: operation.name,
+              operationVersion: operation.version,
+              surface: binding.surface,
+              method: binding.method,
+              path: binding.path,
+              input: binding.input
+            } satisfies RegisteredPublicHttpReadBinding;
       } else if (binding.surface === 'external_mcp') {
         if (mcpTools.has(binding.toolName)) {
           issues.push({ code: 'duplicate_mcp_binding', detail: `MCP tool ${binding.toolName} is duplicated.`, operationName: operation.name, operationVersion: operation.version });
@@ -1394,7 +1463,15 @@ export async function createOperationRegistry(source: OperationRegistrySource): 
     const contributionSchema = findSchema(schemas, operation.contributionSchema, 'handler contribution', issues, operation);
     const canonicalResultSchema = findSchema(schemas, operation.canonicalResultSchema, 'canonical result', issues, operation);
     const contextBuilder = findDefinition({ map: effectContextBuilders, reference: operation.contextBuilder, usage: 'effect context builder', issues, operation });
-    validateTrustedContextBuilder({ builder: contextBuilder, operation, accessLanes, issues });
+    validateTrustedContextBuilder({
+      builder: contextBuilder,
+      operation,
+      accessLanes,
+      issues,
+      ...(publicEffectActivation === undefined
+        ? {}
+        : { publicEffectConformanceActivation: publicEffectActivation })
+    });
     const handler = findDefinition({ map: effectHandlers, reference: operation.handler, usage: 'effect handler', issues, operation });
     if (handler && handler.effect !== operation.effect) {
       issues.push({ code: 'handler_effect_mismatch', detail: 'The handler effect does not match the operation effect.', operationName: operation.name, operationVersion: operation.version });
@@ -1693,6 +1770,23 @@ export async function createOperationRegistry(source: OperationRegistrySource): 
         if (binding.method !== 'POST' || binding.input !== 'body' || binding.browserResumption.kind !== 'none') {
           issues.push({ code: 'unsupported_effect_binding', detail: 'Operator effect bindings require POST/body with explicit no-resumption policy.', operationName: operation.name, operationVersion: operation.version });
         }
+      } else if (binding.surface === 'public_http') {
+        const routeKey = `${binding.method} ${binding.path}`;
+        if (routes.has(routeKey)) {
+          issues.push({ code: 'duplicate_http_binding', detail: `HTTP binding ${routeKey} is duplicated.`, operationName: operation.name, operationVersion: operation.version });
+        }
+        routes.add(routeKey);
+        if (!publicEffectActivation
+            || binding.method !== 'POST'
+            || binding.input !== 'body'
+            || binding.browserResumption.kind !== 'server_ref') {
+          issues.push({
+            code: 'unsupported_public_effect_binding',
+            detail: 'Closed-harness public effects require POST/body and an exact server-reference resumption contract.',
+            operationName: operation.name,
+            operationVersion: operation.version
+          });
+        }
       } else {
         if (operation.effect !== 'draft') {
           issues.push({ code: 'app_model_commit_forbidden', detail: 'App-model effect bindings may expose draft operations only.', operationName: operation.name, operationVersion: operation.version });
@@ -1721,21 +1815,33 @@ export async function createOperationRegistry(source: OperationRegistrySource): 
         }).success) {
           issues.push({ code: 'idempotency_conflict_projection_mismatch', detail: 'The projected result schema must admit the nonterminal request-changed outcome.', operationName: operation.name, operationVersion: operation.version });
         }
-        compiledBindings.set(binding.surface, binding.surface === 'operator_http'
-          ? {
-              surface: binding.surface,
-              method: binding.method,
-              path: binding.path,
-              input: binding.input,
-              projection,
-              projectedResultSchema
-            }
-          : {
-              surface: binding.surface,
-              toolName: binding.toolName,
-              projection,
-              projectedResultSchema
-            });
+        if (binding.surface === 'operator_http') {
+          compiledBindings.set(binding.surface, {
+            surface: binding.surface,
+            method: binding.method,
+            path: binding.path,
+            input: binding.input,
+            projection,
+            projectedResultSchema
+          });
+        } else if (binding.surface === 'public_http') {
+          compiledBindings.set(binding.surface, {
+            surface: binding.surface,
+            method: binding.method,
+            path: binding.path,
+            input: binding.input,
+            browserResumption: binding.browserResumption,
+            projection,
+            projectedResultSchema
+          });
+        } else {
+          compiledBindings.set(binding.surface, {
+            surface: binding.surface,
+            toolName: binding.toolName,
+            projection,
+            projectedResultSchema
+          });
+        }
       }
     }
 
@@ -2020,8 +2126,9 @@ export async function createOperationRegistry(source: OperationRegistrySource): 
       idempotency: { required: false },
       concurrency: { kind: 'read_snapshot' },
       outcomes: [...operation.definition.outcomes].sort((left, right) => left.class.localeCompare(right.class) || left.kind.localeCompare(right.kind)),
-      enabledBindings: [...operation.bindings.values()].map((binding) => binding.public.surface === 'operator_http'
-        ? {
+      enabledBindings: [...operation.bindings.values()].map((binding) => {
+        if (binding.public.surface === 'operator_http' || binding.public.surface === 'public_http') {
+          return {
             surface: binding.public.surface,
             protocol: 'http' as const,
             method: binding.public.method,
@@ -2029,13 +2136,15 @@ export async function createOperationRegistry(source: OperationRegistrySource): 
             input: binding.public.input,
             resultSchema: binding.projectedResultSchema.reference,
             browserResumption: { kind: 'none' as const }
-          }
-        : {
-            surface: binding.public.surface,
-            protocol: 'tool' as const,
-            toolName: binding.public.toolName,
-            resultSchema: binding.projectedResultSchema.reference
-          }).sort((left, right) => {
+          };
+        }
+        return {
+          surface: binding.public.surface,
+          protocol: 'tool' as const,
+          toolName: binding.public.toolName,
+          resultSchema: binding.projectedResultSchema.reference
+        };
+      }).sort((left, right) => {
             const surface = left.surface.localeCompare(right.surface);
             if (surface !== 0) return surface;
             const leftSelector = left.protocol === 'http' ? `${left.method} ${left.path}` : left.toolName;
@@ -2058,8 +2167,9 @@ export async function createOperationRegistry(source: OperationRegistrySource): 
       idempotency: { required: true, ...operation.definition.idempotency },
       concurrency: { kind: 'registered', definition: operation.definition.concurrency },
       outcomes: [...operation.definition.outcomes].sort((left, right) => left.class.localeCompare(right.class) || left.kind.localeCompare(right.kind)),
-      enabledBindings: [...operation.bindings.values()].map((binding) => binding.surface === 'operator_http'
-        ? {
+      enabledBindings: [...operation.bindings.values()].map((binding) => {
+        if (binding.surface === 'operator_http') {
+          return {
             surface: binding.surface,
             protocol: 'http' as const,
             method: binding.method,
@@ -2067,13 +2177,26 @@ export async function createOperationRegistry(source: OperationRegistrySource): 
             input: binding.input,
             resultSchema: binding.projectedResultSchema.reference,
             browserResumption: { kind: 'none' as const }
-          }
-        : {
+          };
+        }
+        if (binding.surface === 'public_http') {
+          return {
             surface: binding.surface,
-            protocol: 'tool' as const,
-            toolName: binding.toolName,
-            resultSchema: binding.projectedResultSchema.reference
-          }).sort((left, right) => {
+            protocol: 'http' as const,
+            method: binding.method,
+            path: binding.path,
+            input: binding.input,
+            resultSchema: binding.projectedResultSchema.reference,
+            browserResumption: binding.browserResumption
+          };
+        }
+        return {
+          surface: binding.surface,
+          protocol: 'tool' as const,
+          toolName: binding.toolName,
+          resultSchema: binding.projectedResultSchema.reference
+        };
+      }).sort((left, right) => {
             const surface = left.surface.localeCompare(right.surface);
             if (surface !== 0) return surface;
             const leftSelector = left.protocol === 'http' ? `${left.method} ${left.path}` : left.toolName;
@@ -2148,6 +2271,11 @@ export async function createOperationRegistry(source: OperationRegistrySource): 
       .map((binding) => binding.public)
       .filter((binding): binding is RegisteredOperatorHttpReadBinding => binding.surface === 'operator_http'))
     .sort((left, right) => left.path.localeCompare(right.path) || left.operationName.localeCompare(right.operationName) || left.operationVersion - right.operationVersion));
+  const publicHttpBindings = deepFreeze([...compiled.values()]
+    .flatMap((operation) => [...operation.bindings.values()]
+      .map((binding) => binding.public)
+      .filter((binding): binding is RegisteredPublicHttpReadBinding => binding.surface === 'public_http'))
+    .sort((left, right) => left.path.localeCompare(right.path) || left.operationName.localeCompare(right.operationName) || left.operationVersion - right.operationVersion));
   const appModelReadBindings = deepFreeze([...compiled.values()]
     .flatMap((operation) => [...operation.bindings.values()]
       .map((binding) => binding.public)
@@ -2169,6 +2297,21 @@ export async function createOperationRegistry(source: OperationRegistrySource): 
     .sort((left, right) => left.path.localeCompare(right.path)
       || left.operationName.localeCompare(right.operationName)
       || left.operationVersion - right.operationVersion));
+  const publicHttpEffectBindings = deepFreeze([...compiledEffects.values()]
+    .flatMap((operation) => [...operation.bindings.values()]
+      .filter((binding): binding is CompiledPublicHttpEffectBinding => binding.surface === 'public_http')
+      .map((binding) => ({
+        operationName: operation.definition.name,
+        operationVersion: operation.definition.version,
+        surface: binding.surface,
+        method: binding.method,
+        path: binding.path,
+        input: binding.input,
+        browserResumption: binding.browserResumption
+      } satisfies RegisteredPublicHttpEffectBinding)))
+    .sort((left, right) => left.path.localeCompare(right.path)
+      || left.operationName.localeCompare(right.operationName)
+      || left.operationVersion - right.operationVersion));
   const appModelEffectBindings = deepFreeze([...compiledEffects.values()]
     .flatMap((operation) => [...operation.bindings.values()]
       .filter((binding): binding is CompiledAppModelEffectBinding => binding.surface === 'app_model')
@@ -2187,8 +2330,10 @@ export async function createOperationRegistry(source: OperationRegistrySource): 
     internalManifest,
     internalManifestDigestSha256,
     operatorHttpBindings,
+    publicHttpBindings,
     appModelReadBindings,
     operatorHttpEffectBindings,
+    publicHttpEffectBindings,
     appModelEffectBindings
   });
   registryStates.set(registry, {
@@ -2223,6 +2368,7 @@ export async function createReadOperationRegistry(source: ReadOperationRegistryS
     safeManifest: registry.safeManifest,
     manifestDigestSha256: registry.manifestDigestSha256,
     operatorHttpBindings: registry.operatorHttpBindings,
+    publicHttpBindings: registry.publicHttpBindings,
     appModelReadBindings: registry.appModelReadBindings
   });
   const state = registryStates.get(registry);

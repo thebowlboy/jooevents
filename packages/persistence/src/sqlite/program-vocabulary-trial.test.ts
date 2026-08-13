@@ -236,6 +236,7 @@ async function commit(
       expectedHeadVersion: proposedHead.version,
       expectedRevisionDigest: revision.digest,
       now: '2026-08-11T05:00:00.000Z',
+      approvalRequirement: approval === undefined ? 'none' : 'distinct_current_human',
       ...(approval === undefined
         ? {}
         : { approval, approverCurrentlyAuthorized: true })

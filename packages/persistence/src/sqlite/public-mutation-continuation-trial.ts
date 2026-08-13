@@ -1,6 +1,7 @@
 import {
   type PublicMutationContinuationAlias,
   type PublicMutationContinuationConfigurationSnapshot,
+  type PublicMutationContinuationConfigurationTemplateSnapshot,
   type PublicMutationContinuationEvidence,
   type PublicMutationContinuationProfileSnapshot,
   type PublicMutationContinuationSealReader,
@@ -78,6 +79,7 @@ interface CeremonyRow {
   readonly event_id: string;
   readonly purpose_key: string;
   readonly action_key: string;
+  readonly resource_bindings_json: string;
   readonly action_anchor_id: string;
   readonly lifetime_ms: number;
   readonly bootstrap_verifier_key: string;
@@ -156,6 +158,34 @@ function configurationFrom(
   );
   const first = continuationProfiles[0];
   if (!first) throw new SQLitePublicMutationContinuationTrialError('corrupt_ceremony', 'Stored continuation aliases are empty.');
+  let resourceBindings: PublicMutationContinuationConfigurationSnapshot['resourceBindings'];
+  try {
+    const candidate: unknown = JSON.parse(row.resource_bindings_json);
+    if (!Array.isArray(candidate) || candidate.length === 0 || candidate.length > 8) throw new TypeError();
+    const parsed = candidate.map((binding) => {
+      if (!binding || typeof binding !== 'object' || Array.isArray(binding)
+          || Object.keys(binding).sort().join(',') !== 'id,kind') throw new TypeError();
+      const value = binding as { readonly kind?: unknown; readonly id?: unknown };
+      if (typeof value.kind !== 'string' || !safeCodePattern.test(value.kind)
+          || typeof value.id !== 'string' || value.id.length === 0 || value.id.length > 240
+          || value.id.trim() !== value.id || value.id.normalize('NFC') !== value.id
+          || value.id.includes('\0')) throw new TypeError();
+      return Object.freeze({ kind: value.kind, id: value.id });
+    });
+    if (parsed.some((value, index) => index > 0 && (
+      parsed[index - 1]!.kind > value.kind
+      || (parsed[index - 1]!.kind === value.kind && parsed[index - 1]!.id >= value.id)
+    ))) throw new TypeError();
+    if (canonicalJsonText(parsed) !== row.resource_bindings_json) throw new TypeError();
+    resourceBindings = Object.freeze(parsed);
+  } catch {
+    throw new SQLitePublicMutationContinuationTrialError('corrupt_ceremony', 'Stored resource bindings are invalid.');
+  }
+  const actionAnchorId = row.action_anchor_id;
+  if (!/^pma_[A-Za-z0-9_-]{16,240}$/.test(actionAnchorId) &&
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[47][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(actionAnchorId)) {
+    throw new SQLitePublicMutationContinuationTrialError('corrupt_ceremony', 'Stored action anchor is invalid.');
+  }
   return Object.freeze({
     version: 1 as const,
     binding: ref(row.binding_key, row.binding_version),
@@ -171,7 +201,8 @@ function configurationFrom(
     }),
     purpose: row.purpose_key,
     action: row.action_key,
-    actionAnchorId: row.action_anchor_id,
+    resourceBindings,
+    actionAnchorId,
     lifetimeMs: row.lifetime_ms,
     bootstrapVerifier: ref(row.bootstrap_verifier_key, row.bootstrap_verifier_version),
     originPolicy: ref(row.origin_policy_key, row.origin_policy_version),
@@ -223,6 +254,20 @@ function exactConfiguration(
   return canonicalJsonText(left) === canonicalJsonText(right);
 }
 
+function configurationTemplate(
+  configuration: PublicMutationContinuationConfigurationSnapshot
+): PublicMutationContinuationConfigurationTemplateSnapshot {
+  const { actionAnchorId: _dynamicActionAnchorId, ...template } = configuration;
+  return Object.freeze(template);
+}
+
+function exactTemplate(
+  left: PublicMutationContinuationConfigurationSnapshot,
+  right: PublicMutationContinuationConfigurationTemplateSnapshot
+): boolean {
+  return canonicalJsonText(configurationTemplate(left)) === canonicalJsonText(right);
+}
+
 function auditMatchesConfiguration(
   audit: PublicMutationContinuationSecurityAuditInput,
   configuration: PublicMutationContinuationConfigurationSnapshot
@@ -245,10 +290,11 @@ function insertAudit(
     INSERT INTO public_mutation_security_audits_trial (
       audit_event_id, ceremony_evidence_id, binding_key, binding_version,
       public_policy_revision_id, operation_name, operation_version,
-      workspace_id, event_id, purpose_key, action_key, action_anchor_id,
+      workspace_id, event_id, purpose_key, action_key, resource_bindings_json,
+      action_anchor_id,
       disposition, reason_code, recorded_at_ms,
       origin_evidence_id, csrf_evidence_id, rate_limit_evidence_id, replay_evidence_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     input.auditEventId,
     input.ceremonyEvidenceId,
@@ -261,6 +307,7 @@ function insertAudit(
     input.configuration.scope.eventId,
     input.configuration.purpose,
     input.configuration.action,
+    canonicalJsonText(input.configuration.resourceBindings),
     input.configuration.actionAnchorId,
     input.disposition,
     input.reasonCode,
@@ -293,8 +340,7 @@ function auditFor(
   });
 }
 
-export function installSQLitePublicMutationContinuationTrial(sqlite: Database): void {
-  sqlite.exec(`
+export const PUBLIC_MUTATION_CONTINUATION_TRIAL_SQL = `
     CREATE TABLE public_mutation_continuations_trial (
       ceremony_evidence_id TEXT PRIMARY KEY,
       binding_key TEXT NOT NULL,
@@ -306,7 +352,25 @@ export function installSQLitePublicMutationContinuationTrial(sqlite: Database): 
       event_id TEXT NOT NULL,
       purpose_key TEXT NOT NULL,
       action_key TEXT NOT NULL,
-      action_anchor_id TEXT NOT NULL CHECK (action_anchor_id GLOB 'pma_*'),
+      resource_bindings_json TEXT NOT NULL CHECK(
+        json_valid(resource_bindings_json)
+        AND json_type(resource_bindings_json) = 'array'
+        AND json_array_length(resource_bindings_json) BETWEEN 1 AND 8
+      ),
+      action_anchor_id TEXT NOT NULL CHECK (
+        action_anchor_id GLOB 'pma_*'
+        OR (
+          length(action_anchor_id) = 36
+          AND action_anchor_id = lower(action_anchor_id)
+          AND substr(action_anchor_id, 9, 1) = '-'
+          AND substr(action_anchor_id, 14, 1) = '-'
+          AND substr(action_anchor_id, 19, 1) = '-'
+          AND substr(action_anchor_id, 24, 1) = '-'
+          AND substr(action_anchor_id, 15, 1) IN ('4', '7')
+          AND substr(action_anchor_id, 20, 1) IN ('8', '9', 'a', 'b')
+          AND replace(action_anchor_id, '-', '') NOT GLOB '*[^0-9a-f]*'
+        )
+      ),
       lifetime_ms INTEGER NOT NULL CHECK (lifetime_ms > 0 AND lifetime_ms <= 900000),
       bootstrap_verifier_key TEXT NOT NULL,
       bootstrap_verifier_version INTEGER NOT NULL CHECK (bootstrap_verifier_version > 0),
@@ -370,6 +434,11 @@ export function installSQLitePublicMutationContinuationTrial(sqlite: Database): 
       event_id TEXT NOT NULL,
       purpose_key TEXT NOT NULL,
       action_key TEXT NOT NULL,
+      resource_bindings_json TEXT NOT NULL CHECK(
+        json_valid(resource_bindings_json)
+        AND json_type(resource_bindings_json) = 'array'
+        AND json_array_length(resource_bindings_json) BETWEEN 1 AND 8
+      ),
       action_anchor_id TEXT NOT NULL,
       disposition TEXT NOT NULL CHECK (disposition IN (
         'bootstrap_rejected', 'mint_issued', 'mint_already_issued',
@@ -437,6 +506,7 @@ export function installSQLitePublicMutationContinuationTrial(sqlite: Database): 
       OR OLD.event_id != NEW.event_id
       OR OLD.purpose_key != NEW.purpose_key
       OR OLD.action_key != NEW.action_key
+      OR OLD.resource_bindings_json != NEW.resource_bindings_json
       OR OLD.action_anchor_id != NEW.action_anchor_id
       OR OLD.lifetime_ms != NEW.lifetime_ms
       OR OLD.bootstrap_verifier_key != NEW.bootstrap_verifier_key
@@ -476,7 +546,10 @@ export function installSQLitePublicMutationContinuationTrial(sqlite: Database): 
           THEN RAISE(ABORT, 'public_mutation_revocation_immutable')
       END;
     END;
-  `);
+  `;
+
+export function installSQLitePublicMutationContinuationTrial(sqlite: Database): void {
+  sqlite.exec(PUBLIC_MUTATION_CONTINUATION_TRIAL_SQL);
 }
 
 export class SQLitePublicMutationContinuationTrial implements PublicMutationContinuationStore {
@@ -560,7 +633,7 @@ export class SQLitePublicMutationContinuationTrial implements PublicMutationCont
         const row = this.#row(existingId.ceremony_evidence_id);
         if (!row) throw new SQLitePublicMutationContinuationTrialError('corrupt_ceremony', 'Existing ceremony disappeared.');
         const ceremony = this.#stored(row);
-        const exactReplay = exactConfiguration(ceremony.configuration, input.configuration) &&
+        const exactReplay = exactTemplate(ceremony.configuration, configurationTemplate(input.configuration)) &&
           ceremony.principalPartitionKey === input.principalPartitionKey &&
           row.bootstrap_replay_verifier === input.bootstrapReplayVerifier;
         insertAudit(this.#sqlite, {
@@ -578,7 +651,7 @@ export class SQLitePublicMutationContinuationTrial implements PublicMutationCont
         INSERT INTO public_mutation_continuations_trial (
           ceremony_evidence_id, binding_key, binding_version, public_policy_revision_id,
           operation_name, operation_version, workspace_id, event_id, purpose_key,
-          action_key, action_anchor_id, lifetime_ms, bootstrap_verifier_key,
+          action_key, resource_bindings_json, action_anchor_id, lifetime_ms, bootstrap_verifier_key,
           bootstrap_verifier_version, origin_policy_key, origin_policy_version,
           csrf_policy_key, csrf_policy_version, rate_limit_policy_key,
           rate_limit_policy_version, replay_policy_key, replay_policy_version,
@@ -586,7 +659,7 @@ export class SQLitePublicMutationContinuationTrial implements PublicMutationCont
           replay_profile_key, replay_profile_version, replay_key_verifier,
           principal_partition_key, bootstrap_replay_verifier, created_at_ms,
           expires_at_ms, revoked_at_ms, state, completion_reference
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'ready', NULL)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'ready', NULL)
       `).run(
         input.ceremonyEvidenceId,
         config.binding.key,
@@ -598,6 +671,7 @@ export class SQLitePublicMutationContinuationTrial implements PublicMutationCont
         config.scope.eventId,
         config.purpose,
         config.action,
+        canonicalJsonText(config.resourceBindings),
         config.actionAnchorId,
         config.lifetimeMs,
         config.bootstrapVerifier.key,
@@ -654,7 +728,7 @@ export class SQLitePublicMutationContinuationTrial implements PublicMutationCont
   }
 
   resolve(input: {
-    readonly configuration: PublicMutationContinuationConfigurationSnapshot;
+    readonly template: PublicMutationContinuationConfigurationTemplateSnapshot;
     readonly aliases: readonly [PublicMutationContinuationAlias, ...PublicMutationContinuationAlias[]];
     readonly now: Instant;
     readonly auditEventId: AuditEventId;
@@ -690,7 +764,7 @@ export class SQLitePublicMutationContinuationTrial implements PublicMutationCont
         ));
         return Object.freeze({ kind: 'stopped' as const, reason });
       };
-      if (!exactConfiguration(ceremony.configuration, input.configuration)) {
+      if (!exactTemplate(ceremony.configuration, input.template)) {
         return stop('not_available', 'binding_mismatch');
       }
       if (row.revoked_at_ms !== null) return stop('revoked', 'revoked');
@@ -720,6 +794,30 @@ export class SQLitePublicMutationContinuationTrial implements PublicMutationCont
       return Object.freeze({ kind: 'ready' as const, ceremony });
     });
     return run.immediate();
+  }
+
+  recheckCurrent(input: {
+    readonly ceremonyEvidenceId: CeremonyEvidenceId;
+    readonly template: PublicMutationContinuationConfigurationTemplateSnapshot;
+    readonly now: Instant;
+  }):
+    | { readonly kind: 'ready'; readonly ceremony: PublicMutationStoredCeremony }
+    | { readonly kind: 'stopped'; readonly reason: 'not_available' | 'expired' | 'revoked' | 'policy_changed' } {
+    const row = this.#row(parseCeremonyEvidenceId(input.ceremonyEvidenceId));
+    if (!row) return Object.freeze({ kind: 'stopped', reason: 'not_available' });
+    const ceremony = this.#stored(row);
+    if (!exactTemplate(ceremony.configuration, input.template)) {
+      return Object.freeze({ kind: 'stopped', reason: 'policy_changed' });
+    }
+    const now = parseInstant(input.now);
+    if (row.revoked_at_ms !== null) return Object.freeze({ kind: 'stopped', reason: 'revoked' });
+    if (Date.parse(now) >= row.expires_at_ms) {
+      return Object.freeze({ kind: 'stopped', reason: 'expired' });
+    }
+    if (row.state !== 'ready' || row.completion_reference !== null) {
+      return Object.freeze({ kind: 'stopped', reason: 'not_available' });
+    }
+    return Object.freeze({ kind: 'ready', ceremony });
   }
 
   /** Internal disposable-fixture revocation. There is deliberately no public route or lookup API. */

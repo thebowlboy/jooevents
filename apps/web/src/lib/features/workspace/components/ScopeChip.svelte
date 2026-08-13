@@ -22,7 +22,7 @@
 
 <div class="scope">
 	<span class="scope__lede">Showing</span>
-	<span class="ui-badge ui-badge--info scope__chip">
+	<span class="ui-badge ui-badge--mark scope__chip">
 		{label}
 		<button
 			type="button"

@@ -99,6 +99,39 @@ describe('evaluateAccess', () => {
     expect(decision.explanation).toContain('Conflict of interest');
   });
 
+  test('does not invent attribution or change policy when legacy access evidence has no user actor', () => {
+    const unattributedAssignment: RoleAssignment = {
+      id: 'assignment_legacy',
+      userId: 'user_ada',
+      roleId: role.id,
+      scope: { kind: 'event', workspaceId, eventId },
+      assignedAt: now
+    };
+    const unattributedDeny: PermissionOverride = {
+      id: 'override_legacy',
+      userId: 'user_ada',
+      permissionId: 'submission.score',
+      effect: 'deny',
+      scope: { kind: 'event', workspaceId, eventId },
+      reason: 'Retained conflict restriction',
+      decidedAt: now
+    };
+
+    const decision = evaluateAccess({
+      userId: 'user_ada',
+      permissionId: 'submission.score',
+      requestedScope: { kind: 'event', workspaceId, eventId },
+      membership,
+      roles: [role],
+      assignments: [unattributedAssignment],
+      overrides: [unattributedDeny],
+      now
+    });
+
+    expect(decision).toMatchObject({ allowed: false, code: 'denied_directly' });
+    expect(decision.evidence[0]?.id).toBe('override_legacy');
+  });
+
   test('requires active membership before considering any grant', () => {
     const pending = { ...membership, status: 'pending_review' as const };
     const decision = decide('submission.score', [], eventId, pending);

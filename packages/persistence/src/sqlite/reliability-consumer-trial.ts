@@ -44,6 +44,14 @@ import {
   type SafeFailure
 } from '@jooevents/reliability';
 
+const RELIABILITY_CONSUMER_IMMUTABLE_TABLES = [
+  'reliability_domain_facts_trial',
+  'reliability_outbox_pointers_trial',
+  'reliability_consumer_attempts_trial',
+  'reliability_consumer_attempt_completions_trial',
+  'reliability_projection_results_trial'
+] as const;
+
 type TrialDeliveryState = ConsumerDelivery['state'];
 type FailureCompletion = Extract<
   ConsumerDeliveryCompletion,
@@ -231,7 +239,11 @@ function leaseExpiry(now: Instant, durationMs: number): Instant {
 }
 
 function immutableTrigger(sqlite: Database, table: string): void {
-  sqlite.exec(`
+  sqlite.exec(reliabilityConsumerImmutableTriggerSql(table));
+}
+
+function reliabilityConsumerImmutableTriggerSql(table: string): string {
+  return `
     CREATE TRIGGER ${table}_reject_update
     BEFORE UPDATE ON ${table}
     BEGIN
@@ -243,13 +255,11 @@ function immutableTrigger(sqlite: Database, table: string): void {
     BEGIN
       SELECT RAISE(ABORT, '${table}_immutable');
     END;
-  `);
+  `;
 }
 
 /** Installs an isolated reliability schema into a caller-owned disposable database. */
-export function installSQLiteReliabilityConsumerTrial(sqlite: Database): void {
-  sqlite.exec('PRAGMA foreign_keys = ON;');
-  sqlite.exec(`
+export const RELIABILITY_CONSUMER_TRIAL_SQL = `
     CREATE TABLE reliability_domain_facts_trial (
       fact_id TEXT PRIMARY KEY,
       source_identity TEXT NOT NULL UNIQUE,
@@ -377,15 +387,17 @@ export function installSQLiteReliabilityConsumerTrial(sqlite: Database): void {
       ON reliability_consumer_deliveries_trial(pointer_key, consumer_key, consumer_version);
     CREATE INDEX reliability_attempts_delivery_trial
       ON reliability_consumer_attempts_trial(delivery_id, attempt_number);
-  `);
+  `;
 
-  for (const table of [
-    'reliability_domain_facts_trial',
-    'reliability_outbox_pointers_trial',
-    'reliability_consumer_attempts_trial',
-    'reliability_consumer_attempt_completions_trial',
-    'reliability_projection_results_trial'
-  ]) {
+export const RELIABILITY_CONSUMER_IMMUTABILITY_TRIAL_SQL = RELIABILITY_CONSUMER_IMMUTABLE_TABLES
+  .map(reliabilityConsumerImmutableTriggerSql)
+  .join('\n');
+
+export function installSQLiteReliabilityConsumerTrial(sqlite: Database): void {
+  sqlite.exec('PRAGMA foreign_keys = ON;');
+  sqlite.exec(RELIABILITY_CONSUMER_TRIAL_SQL);
+
+  for (const table of RELIABILITY_CONSUMER_IMMUTABLE_TABLES) {
     immutableTrigger(sqlite, table);
   }
 }

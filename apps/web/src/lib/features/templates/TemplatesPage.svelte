@@ -1,14 +1,15 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
-	import { ArrowLeft, Bot, Sparkles } from 'lucide-svelte';
+	import { ArrowLeft, Bot, CodeXml, Sparkles } from 'lucide-svelte';
 	import { Button } from '$lib/ui';
-	import { useWorkspaceGateway } from '$lib/api/workspace-gateway';
+	import type { TemplatesPagePort } from '$lib/api/templates-page-port';
 	import { applyParams, clearParams, param, paramIn } from '$lib/features/workspace/url-state.svelte';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
 	import EmailRender from './EmailRender.svelte';
 	import ScheduleSurfaceRender from './ScheduleSurfaceRender.svelte';
 	import FormSurfaceRender from './FormSurfaceRender.svelte';
+	import RosterSurfaceRender from './RosterSurfaceRender.svelte';
 	import BrandTab from './BrandTab.svelte';
 	import InlineEditor from './InlineEditor.svelte';
 	import { diffAnyTemplate, type TemplateDiffEntry } from './template-diff';
@@ -16,6 +17,7 @@
 		editableUnits,
 		resolveUnit,
 		withMergeEdit,
+		withRosterKnobs,
 		withScheduleKnobs,
 		withTextStyle,
 		withTextValue,
@@ -23,26 +25,34 @@
 		type InlineUnit
 	} from './inline-edit';
 	import { sameTextStyle, styleChangeSummary } from './text-style';
+	import { applyFormLens } from '$lib/api/fields';
 	import { isSurfaceTemplate } from '$lib/api/types';
 	import type {
 		AnyTemplate,
 		EditClassification,
 		EventTheme,
+		FormSummary,
 		MergeFieldDef,
 		MessageTemplate,
 		ModelChoice,
+		PublicSpeakerCard,
 		RegistryField,
 		ReviseProgress,
 		ScheduleState,
+		SpeakerCategory,
 		SurfaceBlock,
 		SurfaceField,
 		SurfaceTemplate,
 		TemplateBlock,
-		TemplateSuggestion,
 		Track
 	} from '$lib/api/types';
 
-	const { api } = useWorkspaceGateway();
+	interface Props {
+		port: TemplatesPagePort;
+	}
+
+	let { port }: Props = $props();
+	const api = $derived(port);
 
 	type TabKey = 'messages' | 'surfaces' | 'brand';
 	/**
@@ -53,6 +63,14 @@
 	type TemplateContent =
 		| { subject: string; blocks: TemplateBlock[]; mergeFields: MergeFieldDef[] }
 		| { blocks: SurfaceBlock[]; fields?: SurfaceField[]; submitLabel?: string };
+
+	/**
+	 * The assistant lane is paused (owner, 2026-08-12): the panel stays — it
+	 * names what is coming and keeps the layout honest — but its controls are
+	 * inert until the lane ships. The revise/draft machinery underneath is
+	 * untouched and unit-tested; only this door is closed.
+	 */
+	const assistantPaused = true;
 
 	const tabKeys = ['messages', 'surfaces', 'brand'] as const;
 	const tabs: { key: TabKey; label: string }[] = [
@@ -74,7 +92,8 @@
 		const [list, brand, summary] = await Promise.all([
 			api.templates.list(),
 			api.theme.get(),
-			api.workspace.summary()
+			api.workspace.summary(),
+			registry ? reloadRegistry() : Promise.resolve()
 		]);
 		library = {
 			messages: list.messages.map((template) => ({ ...template })),
@@ -122,6 +141,73 @@
 		});
 	});
 
+	/**
+	 * The real lineup a roster surface previews — the same public projection the
+	 * published page reads, so the operator is always looking at their actual
+	 * roster in their actual order. Template edits never change who is on it.
+	 */
+	let lineup = $state<{ roster: PublicSpeakerCard[]; categories: SpeakerCategory[] } | null>(null);
+	$effect(() => {
+		if (lineup || !current || !isSurfaceTemplate(current) || current.kind !== 'speaker-roster') {
+			return;
+		}
+		void Promise.all([api.speakers.publicRoster(), api.vocab.speakerCategories()]).then(
+			([roster, categories]) => (lineup = { roster, categories })
+		);
+	});
+
+	/**
+	 * The surface decides how the application looks; the forms decide what is
+	 * asked. The picker below previews this one template as any of the event's
+	 * forms — a display lens over the served projection, applied client-side so
+	 * switching forms is instant. The form in view is shareable state, so it
+	 * lives in the address (`?form=`), which is also what the Forms page's
+	 * Preview door writes.
+	 */
+	let formList = $state<FormSummary[] | null>(null);
+	$effect(() => {
+		if (formList || !current || !isSurfaceTemplate(current) || current.kind !== 'application-form')
+			return;
+		void api.forms.list().then((list) => (formList = list));
+	});
+	const lensId = $derived(param('form'));
+	const isApplicationSurface = $derived(
+		current !== null && isSurfaceTemplate(current) && current.kind === 'application-form'
+	);
+	const lensForm = $derived(
+		isApplicationSurface && lensId
+			? (formList?.find((form) => form.id === lensId) ?? null)
+			: null
+	);
+
+	/**
+	 * The field registry, preloaded alongside the application-form surface so
+	 * pressing a question opens its editor in the same frame — a press must
+	 * never pay a fetch for data the surface already implied. Refreshed by
+	 * every path that writes the registry (inline field commits, applied AI
+	 * revisions, and receipt undos, all of which pass through `reload`).
+	 */
+	let registry = $state<RegistryField[] | null>(null);
+	async function reloadRegistry() {
+		registry = await api.fields.list();
+	}
+	$effect(() => {
+		if (registry || !isApplicationSurface) return;
+		void reloadRegistry();
+	});
+
+	/** How a non-open form names its state in the picker. */
+	const statusWord: Record<FormSummary['status'], string> = {
+		open: 'open',
+		closed: 'closed',
+		draft: 'draft'
+	};
+
+	function onLensPick(event: Event) {
+		const value = (event.currentTarget as HTMLSelectElement).value;
+		void applyParams({ form: value || null });
+	}
+
 	function lastRevision(template: AnyTemplate) {
 		return template.revisions[template.revisions.length - 1];
 	}
@@ -153,8 +239,6 @@
 	let draftSide = $state<'before' | 'after'>('after');
 	/** The pinned model for the next round; `auto` means routing decides. */
 	let modelId = $state('auto');
-	/** Starter instructions for the open template's kind, from the api. */
-	let suggestions = $state<TemplateSuggestion[]>([]);
 	/** What the current draft is diffed against: committed, or the prior draft when refining. */
 	let diffBase = $state<AnyTemplate | null>(null);
 	/** Every instruction of the chain so a refine round builds on the draft, not the committed copy. */
@@ -215,34 +299,10 @@
 		inlinePreview = null;
 	});
 
-	// The starter suggestions belong to the template kind the address names.
-	$effect(() => {
-		const id = selectedId;
-		suggestions = [];
-		if (!id) return;
-		void api.templates.suggestions(id).then((list) => {
-			if (selectedId === id) suggestions = list;
-		});
-	});
-
 	const streaming = $derived(phase !== 'idle');
 	const diff = $derived<TemplateDiffEntry[]>(
 		draft && diffBase ? diffAnyTemplate(diffBase, draft) : []
 	);
-	/**
-	 * Suggestions occupy the status slot only while it has nothing to say:
-	 * before a round starts, with an empty input and no draft under review.
-	 * During generation and review the routing/stream lines take the same slot.
-	 */
-	const showSuggestions = $derived(
-		phase === 'idle' &&
-			!draft &&
-			!classification &&
-			!progress &&
-			!instruction.trim() &&
-			suggestions.length > 0
-	);
-
 	const viewedMeta = $derived(
 		current && viewedRevision !== null
 			? (current.revisions.find((revision) => revision.number === viewedRevision) ?? null)
@@ -269,6 +329,20 @@
 		// it answers “what does the template say right now”.
 		if (draft && draftSide === 'before') return current;
 		return inlinePreview ?? draft ?? current;
+	});
+
+	/**
+	 * What the preview actually paints: the working copy, seen through the form
+	 * lens when one is selected. A draft suspends the lens — the draft edits the
+	 * shared template and the registry, so its Before/After compare is honest
+	 * only over the standard application; the row above the preview says so.
+	 */
+	const displayTemplate = $derived.by<AnyTemplate | null>(() => {
+		if (!previewTemplate) return null;
+		if (!lensForm || draft) return previewTemplate;
+		const snap = $state.snapshot(previewTemplate) as AnyTemplate;
+		if (!isSurfaceTemplate(snap) || snap.kind !== 'application-form') return previewTemplate;
+		return applyFormLens(snap, lensForm);
 	});
 
 	async function refocus() {
@@ -348,10 +422,15 @@
 		const doc = draft ?? current;
 		if (path.startsWith('fields.')) {
 			// A question unit edits the registry record itself (one registry,
-			// many doors), so the editor opens over the full definition.
+			// many doors), so the editor opens over the full definition — from
+			// the preloaded cache, in the same frame as the press. The fallback
+			// fetch runs only if a press beats the preload on a cold open.
 			const id = path.slice('fields.'.length);
-			const registry = await api.fields.list();
-			const record = registry.find((entry) => entry.id === id);
+			let record = registry?.find((entry) => entry.id === id) ?? null;
+			if (!record) {
+				await reloadRegistry();
+				record = registry?.find((entry) => entry.id === id) ?? null;
+			}
 			if (!record) return;
 			inlineField = record;
 			inlineUnit = { type: 'field', path, fieldId: id };
@@ -372,6 +451,7 @@
 			return result.insertKey ? 'Inserted a merge field' : 'Swapped a merge field';
 		}
 		if (result.type === 'knobs') return 'Edited schedule layout';
+		if (result.type === 'roster-knobs') return 'Edited roster layout';
 		if (unit.type === 'text') {
 			// A style change names itself in the note: 'Edited heading (size: 24px → 28px)'.
 			const styled =
@@ -402,6 +482,9 @@
 		}
 		if (result.type === 'knobs' && unit.type === 'knobs') {
 			return withScheduleKnobs(base as SurfaceTemplate, unit.blockIndex, result.knobs);
+		}
+		if (result.type === 'roster-knobs' && unit.type === 'roster-knobs') {
+			return withRosterKnobs(base as SurfaceTemplate, unit.blockIndex, result.knobs);
 		}
 		if (result.type === 'field' && unit.type === 'field') {
 			// A question is a registry fact; the working copy patches only the
@@ -519,6 +602,12 @@
 				return;
 			}
 			next = withScheduleKnobs(base as SurfaceTemplate, unit.blockIndex, result.knobs);
+		} else if (result.type === 'roster-knobs' && unit.type === 'roster-knobs') {
+			if (JSON.stringify(result.knobs) === JSON.stringify(unit.knobs)) {
+				closeInline();
+				return;
+			}
+			next = withRosterKnobs(base as SurfaceTemplate, unit.blockIndex, result.knobs);
 		}
 		if (!next) {
 			closeInline();
@@ -561,6 +650,10 @@
 	}
 
 	async function send(event: SubmitEvent) {
+		if (assistantPaused) {
+			event.preventDefault();
+			return;
+		}
 		event.preventDefault();
 		const text = instruction.trim();
 		if (!text || streaming || !current || viewedRevision !== null) return;
@@ -672,12 +765,6 @@
 		progress = null;
 	}
 
-	/** A pressed suggestion fills the input for review; it never sends itself. */
-	async function fillSuggestion(text: string) {
-		instruction = text;
-		await refocus();
-	}
-
 	async function discard() {
 		discardDraftState();
 		error = '';
@@ -734,27 +821,29 @@
 	};
 </script>
 
-{#snippet templateRow(template: AnyTemplate)}
+{#snippet rowButton(template: AnyTemplate)}
 	{@const last = lastRevision(template)}
-	<li>
-		<button type="button" class="tpl-row" onclick={() => openTemplate(template.id)}>
-			<span class="tpl-row__main">
-				<span class="tpl-row__name">{template.name}</span>
-				<span class="tpl-row__purpose">{template.purpose}</span>
-			</span>
-			<span class="tpl-row__used">
-				{#each template.usedBy as flow (flow)}
-					<span class="ui-badge ui-badge--neutral">{flow}</span>
-				{/each}
-			</span>
-			<span class="ui-badge ui-badge--neutral tpl-row__rev">
-				{#if last?.by === 'agent'}
-					<Bot size={12} aria-hidden="true" /><span class="ui-sr-only">last revised by the agent, </span>
-				{/if}
-				rev {template.revision}
-			</span>
-		</button>
-	</li>
+	<button type="button" class="tpl-row" onclick={() => openTemplate(template.id)}>
+		<span class="tpl-row__main">
+			<span class="tpl-row__name">{template.name}</span>
+			<span class="tpl-row__purpose">{template.purpose}</span>
+		</span>
+		<span class="tpl-row__used">
+			{#each template.usedBy as flow (flow)}
+				<span class="ui-badge ui-badge--neutral">{flow}</span>
+			{/each}
+		</span>
+		<span class="ui-badge ui-badge--neutral tpl-row__rev">
+			{#if last?.by === 'agent'}
+				<Bot size={12} aria-hidden="true" /><span class="ui-sr-only">last revised by the agent, </span>
+			{/if}
+			rev {template.revision}
+		</span>
+	</button>
+{/snippet}
+
+{#snippet templateRow(template: AnyTemplate)}
+	<li>{@render rowButton(template)}</li>
 {/snippet}
 
 <nav class="chips" aria-label="Template areas">
@@ -773,7 +862,7 @@
 {#if tab === 'brand'}
 	<!-- A saved brand re-reads the shared copy, so an editor opened next previews
 	     the new brand without a full page load — the same path undo already takes. -->
-	<BrandTab onSaved={reload} />
+	<BrandTab {port} onSaved={reload} />
 {:else if !library}
 	{#if selectedId}
 		<!-- The editor's composition with skeleton fills: header lines, the
@@ -846,6 +935,39 @@
 					{/each}
 				</select>
 			</div>
+			{#if isApplicationSurface}
+				<!-- Which form this surface is being previewed as. The surface is the
+				     shared presentation; each form composes its own question set,
+				     configured on the Forms page — the door beside the picker. -->
+				<div class="revsel editor__lens">
+					<label class="revsel__label" for="tpl-form-lens">Previewing as</label>
+					<select
+						id="tpl-form-lens"
+						class="ui-select editor__lens-select"
+						value={lensId ?? ''}
+						disabled={Boolean(draft)}
+						onchange={onLensPick}>
+						<option value="">Standard application</option>
+						{#each formList ?? [] as lensChoice (lensChoice.id)}
+							<option value={lensChoice.id}>
+								{lensChoice.name}{lensChoice.status === 'open' ? '' : ` — ${statusWord[lensChoice.status]}`}
+							</option>
+						{/each}
+					</select>
+					{#if draft}
+						<p class="editor__lens-note">
+							A draft previews the standard application; the form view resumes after Apply or
+							Discard.
+						</p>
+					{:else if lensForm}
+						<a class="editor__lens-door" href={`/app/forms?form=${lensForm.id}`}>
+							Configure its questions
+						</a>
+					{:else}
+						<a class="editor__lens-door" href="/app/forms">Forms decide what’s asked</a>
+					{/if}
+				</div>
+			{/if}
 		</header>
 
 		<div class="editor__work">
@@ -889,8 +1011,8 @@
 					class="editor__reserve"
 					bind:this={reserveEl}
 					use:editableUnits={{ enabled: inlineEnabled, onPress: onUnitPress }}>
-					{#if previewTemplate}
-						{@const shown = previewTemplate}
+					{#if displayTemplate}
+						{@const shown = displayTemplate}
 						{#if isSurfaceTemplate(shown)}
 							{#if shown.kind === 'schedule'}
 								{#if program}
@@ -904,6 +1026,19 @@
 										editable={inlineEnabled} />
 								{:else}
 									<!-- The program is still on its way; the reserve keeps the room. -->
+									<span class="ui-skeleton sk-preview" aria-hidden="true"></span>
+								{/if}
+							{:else if shown.kind === 'speaker-roster'}
+								{#if lineup}
+									<RosterSurfaceRender
+										template={shown}
+										{theme}
+										{eventName}
+										{eventMeta}
+										roster={lineup.roster}
+										categories={lineup.categories}
+										editable={inlineEnabled} />
+								{:else}
 									<span class="ui-skeleton sk-preview" aria-hidden="true"></span>
 								{/if}
 							{:else}
@@ -977,9 +1112,17 @@
 								<Sparkles size={15} />
 							</span>
 							<div class="assistant__id">
-								<h3 class="assistant__title">Change it with AI</h3>
+								<h3 class="assistant__title">
+									Change it with AI
+									{#if assistantPaused}<span class="ui-badge ui-badge--neutral">Coming soon</span>{/if}
+								</h3>
 								<p class="assistant__sub">
-									Each instruction is routed to the lightest profile that can do it.
+									{#if assistantPaused}
+										Soon you'll describe a change here and review a drafted revision before
+										anything is applied.
+									{:else}
+										Each instruction is routed to the lightest profile that can do it.
+									{/if}
 								</p>
 							</div>
 						</div>
@@ -992,10 +1135,15 @@
 									type="text"
 									placeholder="Tell it what to change…"
 									autocomplete="off"
+									disabled={assistantPaused}
 									readonly={streaming}
 									bind:this={inputEl}
 									bind:value={instruction} />
-								<Button type="submit" size="md" disabled={!instruction.trim() || streaming} loading={streaming}>
+								<Button
+									type="submit"
+									size="md"
+									disabled={assistantPaused || !instruction.trim() || streaming}
+									loading={streaming}>
 									Send
 								</Button>
 							</div>
@@ -1004,17 +1152,18 @@
 								<select
 									id="tpl-model"
 									class="ui-select bar__model-select"
-									disabled={streaming}
+									disabled={assistantPaused || streaming}
 									bind:value={modelId}>
 									{#each modelChoices as choice (choice.id)}
 										<option value={choice.id} title={choice.sub}>{choice.label}</option>
 									{/each}
 								</select>
 							</div>
-							<!-- One reserved slot: starter suggestions while there is nothing
-							     to report, the routing and stream lines from the moment a
-							     round starts. Content swaps; the height holds. -->
-							<div class="bar__slot">
+							<!-- One reserved slot for the routing and stream lines from the
+							     moment a round starts. Content swaps; the height holds. No round
+							     can start while the lane is paused, so the slot rests. -->
+							{#if !assistantPaused}
+								<div class="bar__slot">
 								<div
 									class="bar__status"
 									class:bar__status--live={phase !== 'idle' || !!classification || !!progress}
@@ -1043,21 +1192,8 @@
 										{/if}
 									</p>
 								</div>
-								{#if showSuggestions}
-									<ul class="bar__suggest" aria-label="Suggestions">
-										{#each suggestions as suggestion (suggestion.text)}
-											<li>
-												<button
-													type="button"
-													class="bar__chip"
-													onclick={() => fillSuggestion(suggestion.text)}>
-													{suggestion.text}
-												</button>
-											</li>
-										{/each}
-									</ul>
-								{/if}
 							</div>
+							{/if}
 							{#if error}<p class="rail__error" role="alert">{error}</p>{/if}
 						</form>
 					</section>
@@ -1118,12 +1254,24 @@
 			<header class="card__head"><h2 class="card__title">Public surfaces</h2></header>
 			<ul class="tpl-rows">
 				{#each library.surfaces as surface (surface.id)}
-					{@render templateRow(surface)}
+					<li class="tpl-pair">
+						{@render rowButton(surface)}
+						<!-- One page, two jobs: this list edits what it says, Embeds hands
+						     you the code that puts it on your own site. R2 keeps the door
+						     single — this is the only exit from a surface row to its
+						     snippet, and it resolves to the same address the Speakers,
+						     Schedule, and Forms doors resolve to. -->
+						<a class="ui-button ui-button--ghost ui-button--sm tpl-pair__door"
+							href={`/app/embeds?embed=${surface.id}`}>
+							<CodeXml size={14} aria-hidden="true" />Embed<span class="ui-sr-only">
+								{surface.name} on your site</span>
+						</a>
+					</li>
 				{/each}
 			</ul>
 			<p class="tpl-note">
-				Standalone and embed routes publish from these surfaces — arriving with the public-surfaces
-				slice.
+				Wording, layout, and brand live here. The code that puts one of these on your own website
+				lives in <a href="/app/embeds">Embeds</a>.
 			</p>
 		</section>
 	{/if}
@@ -1173,8 +1321,8 @@
 	}
 
 	.chips__tab--active {
-		background: var(--je-color-surface-selected);
-		border-color: var(--je-color-border);
+		background: var(--je-color-mark-surface);
+		border-color: var(--je-color-mark-border);
 		color: var(--je-color-text);
 		font-weight: 600;
 	}
@@ -1295,6 +1443,20 @@
 		font-variant-numeric: tabular-nums;
 	}
 
+	/* A surface row and its one exit share a line: the row is the whole width it
+	   can be, the door keeps its own target rather than living inside the row's
+	   press area — two outcomes never share one target. */
+	.tpl-pair {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) max-content;
+		align-items: center;
+		gap: var(--je-space-2);
+	}
+
+	.tpl-pair__door {
+		flex: none;
+	}
+
 	/* Editor */
 	.editor {
 		display: grid;
@@ -1370,6 +1532,30 @@
 	/* One row, always present: which copy the preview shows, and the Before/After
 	   switch while a draft is under review. Its minimum height fits the segmented
 	   control, so the switch appearing never moves the preview below. */
+	.editor__lens {
+		margin-block-start: 0;
+	}
+
+	.editor__lens-select {
+		max-inline-size: 20rem;
+	}
+
+	.editor__lens-door {
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
+	}
+
+	.editor__lens-door:hover {
+		color: var(--je-color-text);
+	}
+
+	/* The reason the picker is inert while a draft is open, stated in place. */
+	.editor__lens-note {
+		margin: 0;
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
+	}
+
 	.editor__top {
 		display: flex;
 		flex-wrap: wrap;
@@ -1572,8 +1758,7 @@
 		align-items: start;
 	}
 
-	.bar__status,
-	.bar__suggest {
+	.bar__status {
 		grid-area: 1 / 1;
 	}
 
@@ -1585,41 +1770,6 @@
 		align-content: start;
 	}
 
-	.bar__suggest {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-		display: flex;
-		flex-wrap: wrap;
-		align-content: flex-start;
-		gap: var(--je-space-1);
-	}
-
-	.bar__chip {
-		display: inline-flex;
-		align-items: center;
-		padding: 0.125rem var(--je-space-2);
-		border: 1px solid var(--je-color-border);
-		border-radius: var(--je-radius-round);
-		background: var(--je-color-surface);
-		font-size: var(--je-font-size-xs);
-		color: var(--je-color-text-muted);
-		cursor: pointer;
-		transition:
-			background var(--je-duration-fast) var(--je-ease),
-			border-color var(--je-duration-fast) var(--je-ease),
-			color var(--je-duration-fast) var(--je-ease);
-	}
-
-	.bar__chip:hover {
-		border-color: var(--je-color-border-strong);
-		background: var(--je-color-surface-sunken);
-		color: var(--je-color-text);
-	}
-
-	.bar__chip:active {
-		background: var(--je-color-surface-selected);
-	}
 
 	.bar__routing {
 		display: flex;
@@ -1824,7 +1974,7 @@
 		}
 
 		.chips__tab--active {
-			background: var(--je-color-surface-selected);
+			background: var(--je-color-mark-surface);
 		}
 
 		.tpl-row {

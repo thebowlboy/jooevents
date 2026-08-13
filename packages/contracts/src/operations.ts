@@ -1,14 +1,33 @@
-import { OPERATION_SURFACES, type OperationSurface } from '@jooevents/kernel';
+import { encodeCanonicalJson, OPERATION_SURFACES, type OperationSurface } from '@jooevents/kernel';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex } from '@noble/hashes/utils.js';
 import { z } from 'zod';
 
 const stableKeyPattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
 const sha256Pattern = /^[a-f0-9]{64}$/;
 const httpPathPattern = /^\/api\/(?:[A-Za-z0-9._~-]+\/?)*$/;
+const httpIdempotencyKeyPattern = /^[\x21-\x2b\x2d-\x7e]+$/;
+
+function isCanonicalHttpPath(path: string): boolean {
+  const segments = path.split('/').slice(2).filter((segment) => segment.length > 0);
+  return segments.length > 0
+    && segments.every((segment) => segment !== '.' && segment !== '..')
+    && new URL(path, 'https://jooevents.invalid').pathname === path;
+}
 
 export const operationNameSchema = z.string().trim().min(1).max(160).regex(stableKeyPattern);
 export const definitionKeySchema = z.string().trim().min(1).max(160).regex(stableKeyPattern);
 export const operationVersionSchema = z.number().int().positive();
 export const correlationIdSchema = z.uuid();
+
+/**
+ * One bounded wire contract for effectful HTTP requests. Commas are excluded so
+ * duplicate header values cannot be mistaken for one credential after joining.
+ */
+export const operationHttpIdempotencyKeySchema = z.string()
+  .min(1)
+  .max(256)
+  .regex(httpIdempotencyKeyPattern);
 
 export const versionedDefinitionRefSchema = z.strictObject({
   key: definitionKeySchema,
@@ -18,6 +37,52 @@ export const versionedDefinitionRefSchema = z.strictObject({
 export const safeSchemaManifestRefSchema = versionedDefinitionRefSchema.extend({
   digestSha256: z.string().regex(sha256Pattern)
 });
+
+/**
+ * Builds the disclosure-safe identity for one Zod schema without a Node-only
+ * crypto dependency, so registries and browser clients can share exact refs.
+ */
+export function createSafeSchemaManifestRef(
+  key: string,
+  schema: z.ZodType,
+  version = 1
+): Readonly<z.infer<typeof safeSchemaManifestRefSchema>> {
+  const jsonSchema = JSON.parse(JSON.stringify(
+    z.toJSONSchema(schema, { target: 'draft-2020-12', unrepresentable: 'any' })
+  )) as unknown;
+  return Object.freeze(safeSchemaManifestRefSchema.parse({
+    key,
+    version,
+    digestSha256: bytesToHex(sha256(encodeCanonicalJson(jsonSchema)))
+  }));
+}
+
+export interface OperationSchemaManifestRefs {
+  readonly inputSchema: Readonly<z.infer<typeof safeSchemaManifestRefSchema>>;
+  readonly resultSchema: Readonly<z.infer<typeof safeSchemaManifestRefSchema>>;
+}
+
+/** Defines the two schema identities a browser must match before invoking a binding. */
+export function createOperationSchemaManifestRefs(input: {
+  readonly inputKey: string;
+  readonly inputSchema: z.ZodType;
+  readonly resultKey: string;
+  readonly resultSchema: z.ZodType;
+  readonly version?: number;
+}): Readonly<OperationSchemaManifestRefs> {
+  return Object.freeze({
+    inputSchema: createSafeSchemaManifestRef(
+      input.inputKey,
+      input.inputSchema,
+      input.version ?? 1
+    ),
+    resultSchema: createSafeSchemaManifestRef(
+      input.resultKey,
+      input.resultSchema,
+      input.version ?? 1
+    )
+  });
+}
 
 export const operationEffectSchema = z.enum(['read', 'draft', 'commit']);
 export const operationRiskSchema = z.enum(['low', 'normal', 'consequential']);
@@ -196,7 +261,7 @@ export const browserResumptionSchema = z.discriminatedUnion('kind', [
 const httpBindingFields = {
   protocol: z.literal('http'),
   method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']),
-  path: z.string().min(6).max(512).regex(httpPathPattern),
+  path: z.string().min(6).max(512).regex(httpPathPattern).refine(isCanonicalHttpPath),
   input: z.enum(['query', 'body']),
   resultSchema: safeSchemaManifestRefSchema,
   browserResumption: browserResumptionSchema
@@ -261,6 +326,7 @@ export type StructuredOutcomeClass = z.infer<typeof structuredOutcomeClassSchema
 export type OutcomeSubject = z.infer<typeof outcomeSubjectSchema>;
 export type StructuredOutcome = z.infer<typeof structuredOutcomeSchema>;
 export type OperationReceiptRef = z.infer<typeof operationReceiptRefSchema>;
+export type OperationHttpIdempotencyKey = z.infer<typeof operationHttpIdempotencyKeySchema>;
 export type ReadOperationResult = z.infer<typeof readOperationResultSchema>;
 export type EffectfulOperationResult = z.infer<typeof effectfulOperationResultSchema>;
 export type OperationResult = z.infer<typeof operationResultSchema>;

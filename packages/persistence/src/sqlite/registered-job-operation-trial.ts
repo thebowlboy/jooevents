@@ -6,6 +6,7 @@ import {
   getCompiledRegisteredJobEffectOperation,
   listCompiledRegisteredJobEffectOperations,
   resolveTerminalEffectReceipt,
+  type EffectAuthorityRecheckSource,
   type OperationRegistry,
   type TerminalEffectReceipt
 } from '@jooevents/application';
@@ -352,9 +353,7 @@ export async function sealRegisteredJobOperationTrialDispositionPolicy(
 }
 
 /** Installs only disposable job-input evidence for the registered-job proof. */
-export function installSQLiteRegisteredJobOperationTrial(sqlite: Database): void {
-  sqlite.exec('PRAGMA foreign_keys = ON;');
-  sqlite.exec(`
+export const REGISTERED_JOB_OPERATION_TRIAL_SQL = `
     CREATE TABLE registered_job_inputs_trial (
       payload_ref_id TEXT PRIMARY KEY,
       job_key TEXT NOT NULL,
@@ -378,7 +377,11 @@ export function installSQLiteRegisteredJobOperationTrial(sqlite: Database): void
     BEGIN
       SELECT RAISE(ABORT, 'registered_job_input_immutable');
     END;
-  `);
+  `;
+
+export function installSQLiteRegisteredJobOperationTrial(sqlite: Database): void {
+  sqlite.exec('PRAGMA foreign_keys = ON;');
+  sqlite.exec(REGISTERED_JOB_OPERATION_TRIAL_SQL);
 }
 
 export class SQLiteRegisteredJobInputTrial {
@@ -504,6 +507,7 @@ export async function createSQLiteRegisteredJobOperationTrialRunner(input: {
   readonly inputProjectors: readonly RegisteredJobInputProjectionRegistration[];
   readonly dispositionPolicies: readonly RegisteredJobOperationTrialDispositionPolicy[];
   readonly domain: SQLiteTrialEffectDomainAdapter;
+  readonly transactionAuthority: EffectAuthorityRecheckSource;
   readonly auditHooks?: SQLiteTrialEffectAuditHooks;
   readonly workerKey: string;
   readonly newAttemptId: (jobId: JobId) => InvocationId;
@@ -962,6 +966,7 @@ export async function createSQLiteRegisteredJobOperationTrialRunner(input: {
       const unitOfWork = new SQLiteTrialEffectUnitOfWorkPort(
         input.sqlite,
         domain,
+        input.transactionAuthority,
         input.auditHooks
       );
       const executor = createEffectOperationExecutor({

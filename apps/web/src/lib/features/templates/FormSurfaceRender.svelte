@@ -17,9 +17,35 @@
 		 * every other consumer of this preview stays inert.
 		 */
 		editable?: boolean;
+		/**
+		 * Whether the surface paints its own surroundings.
+		 *
+		 * `page` is the editor's preview: a muted backdrop standing in for the
+		 * browser viewport around the published page. `bare` is what a host page
+		 * gets — the page alone, because in an embed the surroundings belong to
+		 * somebody else's site, and painting our own there is the one thing that
+		 * makes an embed look bolted on rather than part of the page.
+		 */
+		frame?: 'page' | 'bare';
+		/**
+		 * Who is looking. `preview` is an organizer judging the artifact;
+		 * `published` is a visitor on the hosted page, where calling the surface
+		 * a preview would be simply untrue. It changes the accessible name that
+		 * explains why the controls take no input, and nothing else — the reason
+		 * they are inert is the same in both, and the page above states it.
+		 */
+		context?: 'preview' | 'published';
 	}
 
-	let { template, theme, eventName, eventMeta, editable = false }: Props = $props();
+	let {
+		template,
+		theme,
+		eventName,
+		eventMeta,
+		editable = false,
+		frame = 'page',
+		context = 'preview'
+	}: Props = $props();
 
 	const submitLabel = $derived(template.submitLabel ?? 'Submit application');
 
@@ -73,7 +99,7 @@
 		>{/if}
 {/snippet}
 
-<div class="form" style={brandStyle}>
+<div class="form" class:form--bare={frame === 'bare'} style={brandStyle}>
 	<article class="form__page">
 		<header class="form__brand">
 			{#if markText}<span class="form__mark" aria-hidden="true">{markText}</span>{/if}
@@ -93,7 +119,9 @@
 			role="group"
 			aria-label={editable
 				? 'Preview — press a question to edit it'
-				: 'Preview — fields are not interactive'}>
+				: context === 'published'
+					? 'The questions this call asks — not yet accepting answers'
+					: 'Preview — fields are not interactive'}>
 			{#each template.blocks as block, index (index)}
 				{#if block.type === 'hero'}
 					<div class="form__hero">
@@ -414,8 +442,38 @@
 	}
 
 	/* The unchosen select reads as a placeholder, like an untouched live form. */
+	/*
+	 * The same chevron the product's own selects draw, in the artifact's own
+	 * scale. The native control was the odd one out: a UA arrow is painted
+	 * against the border box, so `padding-inline` cannot move it and it sits
+	 * hard against the edge — which is both cramped and a second visual answer
+	 * to a question the design system has already answered.
+	 *
+	 * Geometry is `em` rather than `rem` on purpose: this page declares its own
+	 * 16px base and must not inherit the operator's density scale, so the
+	 * chevron has to stay proportional to the artifact rather than to the app.
+	 * The values are the design system's, converted at that base.
+	 */
 	.form__select {
 		color: var(--je-color-text-muted);
+		appearance: none;
+		padding-inline-end: calc(var(--je-space-3) + 1.35em);
+		background-image:
+			linear-gradient(45deg, transparent 50%, var(--je-color-text-muted) 50%),
+			linear-gradient(135deg, var(--je-color-text-muted) 50%, transparent 50%);
+		background-position:
+			calc(100% - var(--je-space-3) - 0.55em) 50%,
+			calc(100% - var(--je-space-3) - 0.3em) 50%;
+		background-repeat: no-repeat;
+		background-size: 0.3em 0.3em;
+	}
+
+	/* A multi-select is an open list, not a collapsed one: it has no chevron to
+	   draw and no gutter to reserve for it. */
+	.form__select[multiple] {
+		appearance: auto;
+		padding-inline-end: var(--je-space-3);
+		background-image: none;
 	}
 
 	/* A multi-select shows a few options at rest instead of one collapsed row. */
@@ -526,5 +584,21 @@
 		.form__section {
 			padding: var(--je-space-4);
 		}
+	}
+
+	/*
+	 * Bare: the page alone. Only the preview's own surroundings come off; every
+	 * decision inside is unchanged.
+	 */
+	.form--bare {
+		background: transparent;
+		border: 0;
+		border-radius: 0;
+		padding: 0;
+	}
+
+	.form--bare .form__page {
+		max-inline-size: none;
+		box-shadow: none;
 	}
 </style>

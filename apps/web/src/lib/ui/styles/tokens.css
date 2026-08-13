@@ -97,6 +97,22 @@
     --je-color-danger-emphasis: #b8493f;
     --je-color-danger-emphasis-contrast: #ffffff;
 
+    /* Marking: chosen among peers — a selected row, an applied filter, a
+       reviewer's scope, a picked option. Deliberately NOT derived from
+       `action`: the default action ramp is coral (hue ~7deg) and `danger` is
+       hue ~6deg, so an action-derived selection tint is the same hue as an
+       error and reads as one. Sea is the only palette family carrying no
+       status meaning — success owns green, warning amber, danger red, info
+       blue, lavender agent attribution — so it can say "chosen" without also
+       claiming a state. `surface-selected` stays coral for the nav's current
+       section, which is brand placement rather than marking. */
+    --je-color-mark-surface: #eff5f6;
+    --je-color-mark-surface-hover: #e3eeef;
+    --je-color-mark-border: var(--je-palette-sea-500);
+    --je-color-mark-ink: var(--je-palette-sea-700);
+    --je-color-mark-ink-hover: #2d575b;
+    --je-color-mark-contrast: #ffffff;
+
     --je-color-accent-lavender: var(--je-palette-lavender-700);
     --je-color-accent-lavender-strong: var(--je-palette-lavender-800);
     --je-color-accent-lavender-soft: var(--je-palette-lavender-100);
@@ -214,6 +230,14 @@
     --je-color-action-soft-hover: #b6dde0;
     --je-color-focus: #69acb0;
     --je-color-link: #2d5c60;
+    /* Harbor's action is already sea, so marking moves to lavender to keep
+       "chosen" separable from "actionable". Plum's action is violet and needs
+       no override — the default sea marking is far from it. */
+    --je-color-mark-surface: #f5f3f8;
+    --je-color-mark-surface-hover: #ece9f3;
+    --je-color-mark-border: var(--je-palette-lavender-700);
+    --je-color-mark-ink: var(--je-palette-lavender-800);
+    --je-color-mark-ink-hover: #4f4568;
   }
 
   :root[data-theme='plum'] {

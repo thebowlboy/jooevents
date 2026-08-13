@@ -14,10 +14,11 @@
 	 * close without applying, and the host snaps the preview back.
 	 */
 	import { tick } from 'svelte';
+	import { ChevronDown } from 'lucide-svelte';
 	import { Button, Checkbox, Radio } from '$lib/ui';
 	import { ANCHOR_EDGE, lower, placeNear, raise } from '$lib/ui/anchored.svelte';
 	import type { FieldContext, MergeFieldDef, RegistryField } from '$lib/api/types';
-	import type { InlineEditResult, InlineUnit, ScheduleKnobs } from './inline-edit';
+	import type { InlineEditResult, InlineUnit, RosterKnobs, ScheduleKnobs } from './inline-edit';
 	import {
 		SIZE_MAX,
 		SIZE_MIN,
@@ -85,6 +86,14 @@
 		showTrack: true,
 		showSpeakers: true
 	});
+	let rosterKnobs = $state<RosterKnobs>({
+		layout: 'grid',
+		grouping: 'category',
+		density: 'cozy',
+		showHeadline: true,
+		showSessions: true,
+		showLinks: true
+	});
 	let fieldLabel = $state('');
 	let fieldHelp = $state('');
 	let fieldOptions = $state('');
@@ -105,6 +114,7 @@
 			}
 		} else if (from.type === 'merge') swapKey = from.key;
 		else if (from.type === 'knobs') knobs = { ...from.knobs };
+		else if (from.type === 'roster-knobs') rosterKnobs = { ...from.knobs };
 		else if (record) {
 			fieldLabel = record.label;
 			fieldHelp = record.help ?? '';
@@ -127,7 +137,9 @@
 				? 'Merge field'
 				: unit.type === 'knobs'
 					? 'Schedule layout'
-					: 'Question'
+					: unit.type === 'roster-knobs'
+						? 'Roster layout'
+						: 'Question'
 	);
 
 	const requiredLabels: Record<FieldContext, string> = {
@@ -145,12 +157,36 @@
 	let sizeOpen = $state(false);
 	let sizeTriggerEl = $state<HTMLButtonElement>();
 	let sizeListEl = $state<HTMLElement>();
+	let sizePanelEl = $state<HTMLElement>();
+	let sizeScrimEl = $state<HTMLElement>();
 
 	function closeSizePicker(refocusTrigger: boolean) {
 		if (!sizeOpen) return;
 		sizeOpen = false;
 		if (refocusTrigger) sizeTriggerEl?.focus();
 	}
+
+	// On a coarse pointer the picker overlays as a top sheet in the top layer —
+	// the same shape as the timezone picker, and for the same reason: the sheet
+	// scrolls, an in-flow panel reflows it, and the virtual keyboard summoned by
+	// the Custom entry would cover a bottom-docked panel. The scrim goes up
+	// first so the panel paints above it.
+	$effect(() => {
+		if (!sizeOpen || !asSheet || !sizePanelEl) return;
+		raise(sizeScrimEl);
+		raise(sizePanelEl);
+		const size = () => {
+			const viewport = window.visualViewport?.height ?? window.innerHeight;
+			if (sizePanelEl) sizePanelEl.style.maxBlockSize = `${Math.max(160, viewport - 16)}px`;
+		};
+		size();
+		window.visualViewport?.addEventListener('resize', size);
+		return () => {
+			window.visualViewport?.removeEventListener('resize', size);
+			lower(sizePanelEl);
+			lower(sizeScrimEl);
+		};
+	});
 
 	function pickSize(px: number) {
 		styleSize = clampSize(px);
@@ -225,6 +261,17 @@
 	function insertVar(key: string) {
 		const token = `{{${key}}}`;
 		const el = textEl;
+		if (el) {
+			// Insert through the browser's own edit pipeline so the field's native
+			// undo history records the press — Ctrl/Cmd+Z takes the chip back like
+			// any typed text. The fired input event keeps the binding in sync.
+			const start = el.selectionStart ?? textValue.length;
+			const end = el.selectionEnd ?? textValue.length;
+			el.focus();
+			el.setSelectionRange(start, end);
+			if (document.execCommand('insertText', false, token)) return;
+		}
+		// Fallback for engines that refuse the command: splice without undo.
 		const start = el?.selectionStart ?? textValue.length;
 		const end = el?.selectionEnd ?? textValue.length;
 		textValue = `${textValue.slice(0, start)}${token}${textValue.slice(end)}`;
@@ -314,6 +361,9 @@
 		}
 		if (unit.type === 'merge') return { type: 'merge', swapKey, insertKey };
 		if (unit.type === 'knobs') return { type: 'knobs', knobs: { ...$state.snapshot(knobs) } };
+		if (unit.type === 'roster-knobs') {
+			return { type: 'roster-knobs', knobs: { ...$state.snapshot(rosterKnobs) } };
+		}
 		const options = fieldOptions
 			.split('\n')
 			.map((line) => line.trim())
@@ -342,9 +392,16 @@
 
 	function onWindowPointerdown(event: PointerEvent) {
 		const target = event.target as Node;
+		const element = event.target as Element | null;
+		// The scrim belongs to the picker: pressing it closes the picker and
+		// nothing else — the editor underneath stays open.
+		if (element?.closest?.('.szp__scrim')) {
+			closeSizePicker(true);
+			return;
+		}
 		// A press outside the open size picker closes the picker; whether it
 		// also closes the editor follows from where the press landed.
-		if (sizeOpen && !(event.target as Element | null)?.closest?.('.szp')) closeSizePicker(false);
+		if (sizeOpen && !element?.closest?.('.szp')) closeSizePicker(false);
 		if (panel?.contains(target) || anchor.contains(target)) return;
 		oncancel();
 	}
@@ -430,11 +487,22 @@
 							aria-haspopup="listbox"
 							aria-expanded={sizeOpen}
 							onclick={() => (sizeOpen = !sizeOpen)}>
-							{styleSize} px
+							<span class="szp__value">{styleSize} px</span>
+							<span class="szp__chevron" class:szp__chevron--open={sizeOpen} aria-hidden="true">
+								<ChevronDown size={14} />
+							</span>
 						</button>
 					</div>
 					{#if sizeOpen}
-						<div class="szp__panel" class:szp__panel--inline={asSheet}>
+						{#if asSheet}
+							<button
+								type="button"
+								class="szp__scrim"
+								bind:this={sizeScrimEl}
+								aria-hidden="true"
+								tabindex="-1"></button>
+						{/if}
+						<div class="szp__panel" class:szp__panel--sheet={asSheet} bind:this={sizePanelEl}>
 							<!-- Focus lives on the option buttons; the listbox itself is
 							     focusable only programmatically, for completeness. -->
 							<div
@@ -575,6 +643,69 @@
 				<Checkbox label="Track chips" bind:checked={knobs.showTrack} />
 				<Checkbox label="Speakers" bind:checked={knobs.showSpeakers} />
 			</fieldset>
+		{:else if unit.type === 'roster-knobs'}
+			<div class="ied__row">
+				<span class="ied__legend" id="{uid}-layout">Layout</span>
+				<div class="ui-segmented" role="group" aria-labelledby="{uid}-layout">
+					<button
+						type="button"
+						class="ui-segmented__item"
+						aria-pressed={rosterKnobs.layout === 'grid'}
+						onclick={() => (rosterKnobs.layout = 'grid')}>Cards</button>
+					<button
+						type="button"
+						class="ui-segmented__item"
+						aria-pressed={rosterKnobs.layout === 'list'}
+						onclick={() => (rosterKnobs.layout = 'list')}>Rows</button>
+					<button
+						type="button"
+						class="ui-segmented__item"
+						aria-pressed={rosterKnobs.layout === 'strip'}
+						onclick={() => (rosterKnobs.layout = 'strip')}>Names</button>
+				</div>
+			</div>
+			<div class="ied__row">
+				<span class="ied__legend" id="{uid}-rgrouping">Group by</span>
+				<div class="ui-segmented" role="group" aria-labelledby="{uid}-rgrouping">
+					<button
+						type="button"
+						class="ui-segmented__item"
+						aria-pressed={rosterKnobs.grouping === 'none'}
+						onclick={() => (rosterKnobs.grouping = 'none')}>One list</button>
+					<button
+						type="button"
+						class="ui-segmented__item"
+						aria-pressed={rosterKnobs.grouping === 'category'}
+						onclick={() => (rosterKnobs.grouping = 'category')}>Speaker group</button>
+				</div>
+			</div>
+			<div class="ied__row">
+				<span class="ied__legend" id="{uid}-rdensity">Density</span>
+				<div class="ui-segmented" role="group" aria-labelledby="{uid}-rdensity">
+					<button
+						type="button"
+						class="ui-segmented__item"
+						aria-pressed={rosterKnobs.density === 'cozy'}
+						onclick={() => (rosterKnobs.density = 'cozy')}>Cozy</button>
+					<button
+						type="button"
+						class="ui-segmented__item"
+						aria-pressed={rosterKnobs.density === 'compact'}
+						onclick={() => (rosterKnobs.density = 'compact')}>Compact</button>
+				</div>
+			</div>
+			<fieldset class="ied__group">
+				<legend class="ied__legend">Show</legend>
+				<Checkbox label="One-line bio" bind:checked={rosterKnobs.showHeadline} />
+				<Checkbox label="Their sessions" bind:checked={rosterKnobs.showSessions} />
+				<Checkbox label="Their links" bind:checked={rosterKnobs.showLinks} />
+			</fieldset>
+			<!-- Who is on the lineup and what order they are in is roster state,
+			     shared by every presentation of it; this panel only decides how it
+			     is laid out. The door says where the other half lives. -->
+			<p class="ied__aside">
+				Order and grouping come from <a href="/app/speakers?view=lineup">the lineup</a>.
+			</p>
 		{:else}
 			<div class="ied__stack">
 				<label class="ied__legend" for="{uid}-label">Label</label>
@@ -584,7 +715,14 @@
 				<label class="ied__legend" for="{uid}-help">Help text</label>
 				<input id="{uid}-help" class="ui-control" type="text" bind:value={fieldHelp} />
 			</div>
-			{#if field?.options}
+			{#if field?.optionSource}
+				<!-- Sourced options are the event vocabulary, not text to retype:
+				     the definition lives in Settings, per-form exposure with the form. -->
+				<p class="ied__note">
+					Options come from your event's {field.optionSource} — manage them in Settings, or choose
+					which ones a form offers on its Forms page.
+				</p>
+			{:else if field?.options}
 				<div class="ied__stack">
 					<label class="ied__legend" for="{uid}-options">Options — one per line</label>
 					<textarea
@@ -711,6 +849,13 @@
 		color: var(--je-color-text-muted);
 	}
 
+	/* One quiet line naming the surface that owns the half this panel does not. */
+	.ied__aside {
+		margin: 0;
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
+	}
+
 	.ied__actions {
 		display: flex;
 		gap: var(--je-space-2);
@@ -768,8 +913,9 @@
 	.szp__trigger {
 		display: inline-flex;
 		align-items: center;
+		gap: var(--je-space-2);
 		block-size: var(--je-control-height-sm);
-		padding-inline: var(--je-space-3);
+		padding-inline: var(--je-space-3) var(--je-space-2);
 		border: 1px solid var(--je-color-border);
 		border-radius: var(--je-radius-control);
 		background: var(--je-color-surface);
@@ -782,6 +928,16 @@
 	.szp__trigger:hover {
 		border-color: var(--je-color-border-strong);
 		background: var(--je-color-surface-sunken);
+	}
+
+	.szp__chevron {
+		display: inline-flex;
+		color: var(--je-color-text-subtle);
+		transition: transform var(--je-duration-fast) var(--je-ease);
+	}
+
+	.szp__chevron--open {
+		transform: rotate(180deg);
 	}
 
 	.szp__panel {
@@ -798,11 +954,30 @@
 		box-shadow: var(--je-shadow-md);
 	}
 
-	/* Inside the sheet the panel expands in place and the sheet scrolls. */
-	.szp__panel--inline {
-		position: static;
-		box-shadow: none;
-		border-color: var(--je-color-border);
+	/* On a coarse pointer the panel is a top sheet in the top layer: the
+	   popover UA style is fit-content with auto margins, so the sheet states
+	   its own edge-to-edge geometry. Top-docked because the Custom entry
+	   summons the keyboard, which covers anything docked at the bottom. */
+	.szp__panel--sheet {
+		position: fixed;
+		inset: 0.5rem 0.5rem auto;
+		inline-size: auto;
+		max-inline-size: none;
+		margin: 0;
+		overflow: auto;
+	}
+
+	.szp__scrim {
+		position: fixed;
+		inset: 0;
+		/* Raised into the top layer, the popover UA style would shrink this to
+		   fit-content; explicit auto sizing keeps it covering the viewport. */
+		inline-size: auto;
+		block-size: auto;
+		margin: 0;
+		border: 0;
+		padding: 0;
+		background: color-mix(in srgb, var(--je-color-text) 32%, transparent);
 	}
 
 	.szp__list {
@@ -841,7 +1016,7 @@
 	}
 
 	.szp__option[aria-selected='true'] {
-		background: var(--je-color-surface-selected);
+		background: var(--je-color-mark-surface);
 		font-weight: 600;
 	}
 

@@ -124,3 +124,50 @@ test('a speaker row opens the task matrix already scoped to that speaker', async
 	await expect(page).toHaveURL(/\/app\/tasks$/);
 	await expect(page.getByText('Overdue · Elena Petrova')).toHaveCount(0);
 });
+
+/**
+ * Where the arrival mark lands. The rule this covers is that the mark belongs
+ * to whatever a person reads as "the record" — which in a table is the row, not
+ * the addressable block inside a cell that the surface happened to use to find
+ * it. Both halves were silently wrong before: the roster ringed a name, and the
+ * decisions table, whose anchor was already the row, drew nothing at all
+ * because a row could not host the mark.
+ *
+ * Timing matters here. The mark is held for `ARRIVAL_MIN_MS` and then released
+ * by the first press, key, wheel, or real pointer travel — so these assertions
+ * must not touch the page before making them.
+ */
+test('a scoped link marks the whole row, not the name inside it', async ({ page }) => {
+	await page.setViewportSize({ width: 1440, height: 900 });
+	await page.goto('/app/reviewers?reviewer=mem-7');
+
+	const roster = page.getByRole('region', { name: 'Reviewer roster' });
+	const marked = roster.locator('tr.ui-arrival--row');
+	await expect(marked).toHaveCount(1, { timeout: 15000 });
+	await expect(marked).toContainText('Elif Aydın');
+	// The band is drawn on the cells, which is the only shape a row can take it in.
+	await expect(marked.locator('td').first()).toHaveCSS('position', 'relative');
+	// The anchor keeps the caret and the scroll; it does not keep the ring.
+	await expect(roster.locator('[data-reviewer].ui-arrival')).toHaveCount(0);
+});
+
+test('the decisions table marks the row a ?submission= link names', async ({ page }) => {
+	await page.setViewportSize({ width: 1440, height: 900 });
+	await page.goto('/app/decisions?submission=sub-101');
+
+	const candidates = page.getByRole('region', { name: 'Candidates' });
+	const marked = candidates.locator('tr.ui-arrival--row');
+	await expect(marked).toHaveCount(1, { timeout: 15000 });
+	await expect(marked).toContainText('Context Caching Without Tears');
+});
+
+test('a marked arrival shows one indicator, not a focus ring beside the mark', async ({ page }) => {
+	await page.setViewportSize({ width: 760, height: 900 });
+	await page.goto('/app/reviewers?reviewer=mem-7');
+
+	// Narrow renders cards, where the host is the card itself and the focus ring
+	// would otherwise be drawn around the same box the mark already rings.
+	const card = page.locator('li.card.ui-arrival');
+	await expect(card).toHaveCount(1, { timeout: 15000 });
+	await expect(card).toHaveCSS('box-shadow', 'none');
+});

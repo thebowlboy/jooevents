@@ -22,8 +22,9 @@
 		eventMeta: string;
 		/**
 		 * The real schedule state: the preview renders the scenario's actual
-		 * program, joined from placements and sessions. Unplaced sessions never
-		 * appear — the public surface shows the published program only.
+		 * program, joined from placements and sessions. Unplaced or still-
+		 * collecting sessions never appear — the public surface shows the
+		 * published program only.
 		 */
 		schedule: ScheduleState;
 		/** Track vocabulary for names and accent families; unknown tracks render neutral. */
@@ -34,10 +35,28 @@
 		 * default so every other consumer of this preview stays inert.
 		 */
 		editable?: boolean;
+		/**
+		 * Whether the surface paints its own surroundings.
+		 *
+		 * `page` is the editor's preview: a muted backdrop standing in for the
+		 * browser viewport around the published page. `bare` is what a host page
+		 * gets — the page alone, because in an embed the surroundings belong to
+		 * somebody else's site, and painting our own there is the one thing that
+		 * makes an embed look bolted on rather than part of the page.
+		 */
+		frame?: 'page' | 'bare';
 	}
 
-	let { template, theme, eventName, eventMeta, schedule, tracks = [], editable = false }: Props =
-		$props();
+	let {
+		template,
+		theme,
+		eventName,
+		eventMeta,
+		schedule,
+		tracks = [],
+		editable = false,
+		frame = 'page'
+	}: Props = $props();
 
 	// The event brand is applied as custom properties on this component's root
 	// only, so every --je-* consumption inside the preview resolves to the brand
@@ -55,10 +74,11 @@
 		session: SessionItem;
 	}
 
+	// Placed programmed sessions only: a still-collecting slot is never public program.
 	const placed: PlacedEntry[] = $derived(
 		schedule.placements.flatMap((placement) => {
 			const session = schedule.sessions.find((entry) => entry.id === placement.sessionId);
-			return session ? [{ placement, session }] : [];
+			return session && session.state === 'programmed' ? [{ placement, session }] : [];
 		})
 	);
 
@@ -149,8 +169,8 @@
 			withDay ? dayLabel(entry.placement.dayKey) : null,
 			rangeLabel(entry),
 			block.showRoom ? roomName(entry.placement.roomId) : null,
-			block.showSpeakers && entry.session.speakerNames.length > 0
-				? entry.session.speakerNames.join(', ')
+			block.showSpeakers && entry.session.speakers.length > 0
+				? entry.session.speakers.map((speaker) => speaker.name).join(', ')
 				: null
 		];
 		return parts.filter((part) => part !== null).join(' · ');
@@ -188,15 +208,17 @@
 						{#if showChip}{@render trackChip(entry.session.trackId)}{/if}
 					</p>
 				{/if}
-				{#if block.showSpeakers && entry.session.speakerNames.length > 0}
-					<p class="schedule__session-speakers">{entry.session.speakerNames.join(', ')}</p>
+				{#if block.showSpeakers && entry.session.speakers.length > 0}
+					<p class="schedule__session-speakers">
+						{entry.session.speakers.map((speaker) => speaker.name).join(', ')}
+					</p>
 				{/if}
 			</div>
 		</article>
 	{/if}
 {/snippet}
 
-<div class="schedule" style={brandStyle}>
+<div class="schedule" class:schedule--bare={frame === 'bare'} style={brandStyle}>
 	<article class="schedule__page">
 		<header class="schedule__brand">
 			{#if markText}<span class="schedule__mark" aria-hidden="true">{markText}</span>{/if}
@@ -567,5 +589,21 @@
 			align-items: baseline;
 			gap: var(--je-space-2);
 		}
+	}
+
+	/*
+	 * Bare: the page alone. Only the preview's own surroundings come off; every
+	 * decision inside is unchanged.
+	 */
+	.schedule--bare {
+		background: transparent;
+		border: 0;
+		border-radius: 0;
+		padding: 0;
+	}
+
+	.schedule--bare .schedule__page {
+		max-inline-size: none;
+		box-shadow: none;
 	}
 </style>

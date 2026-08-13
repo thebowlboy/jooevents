@@ -1,7 +1,7 @@
 <script lang="ts">
-	import SchedulePage from '$lib/features/schedule/SchedulePage.svelte';
+	import OperatorPage from 'jooevents-operator-page';
 </script>
 
 <svelte:head><title>Schedule · JooEvents</title></svelte:head>
 
-<SchedulePage />
+<OperatorPage area="schedule" />

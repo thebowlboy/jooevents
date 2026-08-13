@@ -115,6 +115,7 @@ describe('changeset lifecycle', () => {
       currentGuardVersions: new Map([['program:index', 8]]),
       currentGuardDigests: new Map([['program:index', 'guard-a']]),
       now: '2026-08-11T01:00:00.000Z',
+      approvalRequirement: 'distinct_current_human',
       approval: approval(revision.id, revision.digest),
       approverCurrentlyAuthorized: true
     } as const;
@@ -146,6 +147,7 @@ describe('changeset lifecycle', () => {
       currentGuardVersions: new Map([['program:index', 8]]),
       currentGuardDigests: new Map([['program:index', 'guard-a']]),
       now: '2026-08-11T01:00:00.000Z',
+      approvalRequirement: 'distinct_current_human',
       approval: approval(revision.id, revision.digest),
       approverCurrentlyAuthorized: true
     } as const;
@@ -185,6 +187,48 @@ describe('changeset lifecycle', () => {
     )).toThrow('invalid_validated_changeset_commit');
   });
 
+  test('the captured policy threshold is independent of calculated risk', () => {
+    const consequential = proposeChangeset(
+      createChangeset({ id: 'cs:policy-none', workspaceId: 'w', eventId: 'e' }, draft('rev:policy-none')),
+      1
+    );
+    const consequentialRevision = consequential.revisions.at(-1)!;
+    const common = {
+      expectedHeadVersion: consequential.version,
+      expectedRevisionDigest: consequentialRevision.digest,
+      currentAggregateVersions: new Map([['program:source', 3]]),
+      currentGuardVersions: new Map([['program:index', 8]]),
+      currentGuardDigests: new Map([['program:index', 'guard-a']]),
+      now: '2026-08-11T01:00:00.000Z'
+    } as const;
+    expect(validateExactCommit(consequential, {
+      ...common,
+      approvalRequirement: 'none'
+    }).kind).toBe('ready');
+
+    const normalDraft = draft('rev:policy-distinct', '');
+    const normal = proposeChangeset(
+      createChangeset({ id: 'cs:policy-distinct', workspaceId: 'w', eventId: 'e' }, normalDraft),
+      1
+    );
+    const normalRevision = normal.revisions.at(-1)!;
+    const strict = {
+      ...common,
+      expectedHeadVersion: normal.version,
+      expectedRevisionDigest: normalRevision.digest,
+      approvalRequirement: 'distinct_current_human' as const
+    };
+    expect(validateExactCommit(normal, strict)).toEqual({
+      kind: 'refused',
+      refusal: { kind: 'approval_missing' }
+    });
+    expect(validateExactCommit(normal, {
+      ...strict,
+      approval: approval(normalRevision.id, normalRevision.digest),
+      approverCurrentlyAuthorized: true
+    }).kind).toBe('ready');
+  });
+
   test('rehydrated revision tampering is refused even when the stored digest is left unchanged', () => {
     const created = createChangeset({ id: 'cs:1', workspaceId: 'w', eventId: 'e' }, draft('rev:1'));
     const original = proposeChangeset(created, created.version);
@@ -196,6 +240,7 @@ describe('changeset lifecycle', () => {
       currentGuardVersions: new Map([['program:index', 8]]),
       currentGuardDigests: new Map([['program:index', 'guard-a']]),
       now: '2026-08-11T01:00:00.000Z',
+      approvalRequirement: 'distinct_current_human',
       approval: approval(revision.id, revision.digest),
       approverCurrentlyAuthorized: true
     } as const;
@@ -238,6 +283,7 @@ describe('changeset lifecycle', () => {
       currentGuardVersions: new Map([['program:index', 8]]),
       currentGuardDigests: new Map([['program:index', 'guard-a']]),
       now: '2026-08-11T01:00:00.000Z',
+      approvalRequirement: 'distinct_current_human',
       approval: approval(revision.id, revision.digest),
       approverCurrentlyAuthorized: true
     } as const;
@@ -268,5 +314,16 @@ describe('changeset lifecycle', () => {
       'Retained group dependent depends on replanned work'
     );
     expect(() => assertReplanSelection(revision, new Set(['independent']))).not.toThrow();
+  });
+
+  test('duplicate dependencies are rejected before a revision can be persisted', () => {
+    expect(() => createChangeset({ id: 'cs:duplicate', workspaceId: 'w' }, {
+      ...draft('rev:duplicate'),
+      dependencyGroups: [
+        { key: 'source', dependsOn: [] },
+        { key: 'dependent', dependsOn: ['source', 'source'] },
+        { key: 'independent', dependsOn: [] }
+      ]
+    })).toThrow('Duplicate dependency in group: dependent');
   });
 });

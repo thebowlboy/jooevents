@@ -1,4 +1,4 @@
-import type { PlacementConflict, ScheduleState, SessionItem } from '$lib/api/types';
+import type { Placement, PlacementConflict, ScheduleState, SessionItem } from '$lib/api/types';
 
 /**
  * The aim model for manual placement, UI-free. This is the declared client
@@ -117,12 +117,15 @@ function speakerBusy(
 		if (placement.sessionId === session.id || placement.dayKey !== dayKey) continue;
 		const other = schedule.sessions.find((s) => s.id === placement.sessionId);
 		if (!other) continue;
-		const shared = session.speakerNames.find((name) => other.speakerNames.includes(name));
+		// Email-keyed: the band belongs to a person, not to a spelling of them.
+		const shared = session.speakers.find((speaker) =>
+			other.speakers.some((entry) => entry.email === speaker.email)
+		);
 		if (!shared) continue;
 		busy.push({
 			startMin: placement.startMin,
 			endMin: placement.startMin + other.durationMin,
-			reason: `${shared} is speaking in ${roomName(schedule, placement.roomId)} then`
+			reason: `${shared.name} is speaking in ${roomName(schedule, placement.roomId)} then`
 		});
 	}
 	return busy.sort((a, b) => a.startMin - b.startMin);
@@ -256,6 +259,32 @@ export function snapStart(
 }
 
 /** The keyboard/touch proposal for an opening: flush after whatever precedes it. */
+/**
+ * Whether a proposed placement is the one the session already has.
+ *
+ * A move's origin is excluded from its own openings, so the slot a session is
+ * sitting in offers itself back as somewhere to drop it. Landing there changes
+ * nothing: there is no diff to show, nothing to commit, and no decision to ask
+ * for.
+ *
+ * Exact minutes, deliberately. A start one aim step away is a real move, and a
+ * tolerance here would silently discard it — the failure this guards against is
+ * a pointless dialog, not a near-miss.
+ */
+export function landsOnOrigin(
+	origin: Placement | null,
+	dayKey: string,
+	roomId: string,
+	startMin: number
+): boolean {
+	return (
+		origin !== null &&
+		origin.dayKey === dayKey &&
+		origin.roomId === roomId &&
+		origin.startMin === startMin
+	);
+}
+
 export function defaultStart(segment: ColumnSegment, durationMin?: number): SnapResult {
 	return {
 		startMin: segment.startMin,
@@ -330,11 +359,13 @@ export function preflight(
 				reason: `Overlaps “${other.title}” in ${roomName(schedule, roomId)}`
 			});
 		} else {
-			const shared = session.speakerNames.find((name) => other.speakerNames.includes(name));
+			const shared = session.speakers.find((speaker) =>
+				other.speakers.some((entry) => entry.email === speaker.email)
+			);
 			if (shared) {
 				found.push({
 					severity: 'block',
-					reason: `${shared} is scheduled in another room at the same time`
+					reason: `${shared.name} is scheduled in another room at the same time`
 				});
 			}
 		}

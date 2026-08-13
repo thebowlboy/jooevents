@@ -1,8 +1,10 @@
 import {
   sealReviewedChangesetCommitPreparation,
+  resolveEffectInvocationCurrentAuthorityRecheckTime,
   type EffectHandlerSnapshot,
   type EffectInvocationContext,
   type EffectOperationIdentity,
+  type SealedEffectAuthorityRecheckResult,
   type TerminalNewOperationAuditRecord,
   type TerminalEffectReceipt
 } from '@jooevents/application';
@@ -405,7 +407,8 @@ function currentCommitInput(
     currentAggregateVersions,
     currentGuardVersions,
     currentGuardDigests,
-    now
+    now,
+    approvalRequirement: 'none'
   };
 }
 
@@ -552,7 +555,8 @@ implements SQLiteTrialEffectDomainAdapter {
 
   openHandlerSnapshot(
     capability: { readonly key: string; readonly version: number },
-    context: EffectInvocationContext
+    context: EffectInvocationContext,
+    authorityRecheck: SealedEffectAuthorityRecheckResult
   ): EffectHandlerSnapshot {
     if (!this.sqlite.inTransaction) throw new TypeError('reviewed_commit_trial_transaction_required');
     if (capability.key !== this.handlerCapability.key || capability.version !== this.handlerCapability.version) {
@@ -562,6 +566,7 @@ implements SQLiteTrialEffectDomainAdapter {
     this.#prepared.clear();
     this.#active = undefined;
     this.#expectedIdentity = undefined;
+    const evaluatedAt = resolveEffectInvocationCurrentAuthorityRecheckTime(context, authorityRecheck);
     return sealReviewedChangesetCommitPreparation({
       capability,
       preparation: {
@@ -577,7 +582,7 @@ implements SQLiteTrialEffectDomainAdapter {
           ) throw new TypeError('reviewed_commit_trial_authority_scope_mismatch');
           const exact = validateExactCommit(
             head,
-            currentCommitInput(this.store, head, request, sealedContext.receivedAt)
+            currentCommitInput(this.store, head, request, evaluatedAt)
           );
           if (exact.kind === 'refused') throw new TypeError(`reviewed_commit_trial_refused:${exact.refusal.kind}`);
           const preparedResult = prepareChangesetCommitSynchronous({
@@ -627,7 +632,7 @@ implements SQLiteTrialEffectDomainAdapter {
             timelineId: `${revision.id}:timeline`,
             sourceKind: 'domain_fact',
             factId,
-            occurredAtMs: Date.parse(sealedContext.receivedAt)
+            occurredAtMs: Date.parse(evaluatedAt)
           }]);
           const handle = this.newPreparationHandle();
           const prepared: PreparedCommit = {

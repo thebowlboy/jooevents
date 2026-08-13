@@ -1,9 +1,17 @@
 import { z } from 'zod';
+import {
+  DurableCryptoProfileConfigurationError,
+  createDurableCryptoProfileComposition,
+  type DurableCryptoProfileComposition
+} from './runtime/durable-crypto-profiles';
 
 const environmentSchema = z.object({
   JOOEVENTS_BASE_URL: z.url(),
   JOOEVENTS_TRUSTED_ORIGINS: z.string().default(''),
   JOOEVENTS_AUTH_SECRETS: z.string().min(1),
+  JOOEVENTS_REQUEST_HASH_KEYS: z.string().optional(),
+  JOOEVENTS_IDEMPOTENCY_KEYS: z.string().optional(),
+  JOOEVENTS_CLASSIFIED_PAYLOAD_KEYS: z.string().optional(),
   JOOEVENTS_GOOGLE_CLIENT_ID: z.string().min(1),
   JOOEVENTS_GOOGLE_CLIENT_SECRET: z.string().min(1),
   JOOEVENTS_ADMISSION_MODE: z.enum(['pending', 'workspace_domain', 'reservation_only']),
@@ -28,6 +36,8 @@ export interface ServerConfig {
   readonly baseUrl: string;
   readonly trustedOrigins: readonly string[];
   readonly authSecrets: readonly AuthSecret[];
+  /** Present only for configured retained runtimes; contains no enumerable key material. */
+  readonly durableCryptoProfiles?: DurableCryptoProfileComposition;
   readonly googleClientId: string;
   readonly googleClientSecret: string;
   readonly admissionMode: 'pending' | 'workspace_domain' | 'reservation_only';
@@ -41,6 +51,10 @@ export interface ServerConfig {
   readonly linkTokenTtlSeconds: number;
   readonly linkReauthMaxAgeSeconds: number;
   readonly linkRequireAuthTime: boolean;
+}
+
+export interface ConfiguredServerConfig extends ServerConfig {
+  readonly durableCryptoProfiles: DurableCryptoProfileComposition;
 }
 
 export class ConfigurationError extends Error {
@@ -89,8 +103,10 @@ function parseOrigins(value: string, issues: string[]): string[] {
   return origins;
 }
 
-/** Validates all startup configuration in one pass so operators see every missing duty. */
-export function loadConfig(environment: Record<string, string | undefined>): ServerConfig {
+function parseConfig(
+  environment: Record<string, string | undefined>,
+  lifetime: 'configured' | 'ephemeral'
+): ServerConfig {
   const parsed = environmentSchema.safeParse(environment);
   const issues = parsed.success
     ? []
@@ -99,6 +115,22 @@ export function loadConfig(environment: Record<string, string | undefined>): Ser
 
   const env = parsed.data;
   const secrets = parseSecrets(env.JOOEVENTS_AUTH_SECRETS, issues);
+  let durableCryptoProfiles: DurableCryptoProfileComposition | undefined;
+  if (lifetime === 'configured') {
+    try {
+      durableCryptoProfiles = createDurableCryptoProfileComposition({
+        requestHashKeys: env.JOOEVENTS_REQUEST_HASH_KEYS,
+        idempotencyKeys: env.JOOEVENTS_IDEMPOTENCY_KEYS,
+        classifiedPayloadKeys: env.JOOEVENTS_CLASSIFIED_PAYLOAD_KEYS
+      });
+    } catch (error) {
+      if (error instanceof DurableCryptoProfileConfigurationError) {
+        issues.push(...error.issues.map((issue) => `${issue.duty}: ${issue.code}`));
+      } else {
+        issues.push('durable crypto profile configuration failed');
+      }
+    }
+  }
   const trustedOrigins = parseOrigins(env.JOOEVENTS_TRUSTED_ORIGINS, issues);
   const baseUrl = new URL(env.JOOEVENTS_BASE_URL);
   if (baseUrl.origin !== env.JOOEVENTS_BASE_URL) issues.push('JOOEVENTS_BASE_URL must be a canonical origin without a path');
@@ -108,14 +140,17 @@ export function loadConfig(environment: Record<string, string | undefined>): Ser
   if (env.JOOEVENTS_ADMISSION_MODE === 'workspace_domain' && !env.JOOEVENTS_GOOGLE_HOSTED_DOMAIN) {
     issues.push('JOOEVENTS_GOOGLE_HOSTED_DOMAIN is required for workspace_domain admission');
   }
-  if (env.JOOEVENTS_DATABASE_DRIVER === 'sqlite' && !env.JOOEVENTS_DATABASE_PATH) {
+  if (lifetime === 'configured' && env.JOOEVENTS_DATABASE_DRIVER === 'sqlite' && !env.JOOEVENTS_DATABASE_PATH) {
     issues.push('JOOEVENTS_DATABASE_PATH is required for the sqlite database driver');
   }
-  if (env.JOOEVENTS_DATABASE_DRIVER === 'postgres' && !env.JOOEVENTS_DATABASE_URL) {
+  if (lifetime === 'configured' && env.JOOEVENTS_DATABASE_DRIVER === 'postgres' && !env.JOOEVENTS_DATABASE_URL) {
     issues.push('JOOEVENTS_DATABASE_URL is required for the postgres database driver');
   }
-  if ((env.JOOEVENTS_DATABASE_DRIVER === 'sqlite' || env.JOOEVENTS_BLOB_DRIVER === 'filesystem') && !env.JOOEVENTS_DATA_DIRECTORY) {
+  if (lifetime === 'configured' && (env.JOOEVENTS_DATABASE_DRIVER === 'sqlite' || env.JOOEVENTS_BLOB_DRIVER === 'filesystem') && !env.JOOEVENTS_DATA_DIRECTORY) {
     issues.push('JOOEVENTS_DATA_DIRECTORY is required for SQLite or filesystem blobs');
+  }
+  if (lifetime === 'ephemeral' && env.JOOEVENTS_DATABASE_DRIVER !== 'sqlite') {
+    issues.push('The ephemeral server requires the SQLite database driver');
   }
   if (issues.length > 0) throw new ConfigurationError(issues);
 
@@ -123,18 +158,31 @@ export function loadConfig(environment: Record<string, string | undefined>): Ser
     baseUrl: env.JOOEVENTS_BASE_URL,
     trustedOrigins,
     authSecrets: secrets,
+    ...(durableCryptoProfiles === undefined ? {} : { durableCryptoProfiles }),
     googleClientId: env.JOOEVENTS_GOOGLE_CLIENT_ID,
     googleClientSecret: env.JOOEVENTS_GOOGLE_CLIENT_SECRET,
     admissionMode: env.JOOEVENTS_ADMISSION_MODE,
     ...(env.JOOEVENTS_GOOGLE_HOSTED_DOMAIN ? { googleHostedDomain: env.JOOEVENTS_GOOGLE_HOSTED_DOMAIN } : {}),
     bootstrapOwnerEmail: env.JOOEVENTS_BOOTSTRAP_OWNER_EMAIL,
     databaseDriver: env.JOOEVENTS_DATABASE_DRIVER,
-    ...(env.JOOEVENTS_DATABASE_PATH ? { databasePath: env.JOOEVENTS_DATABASE_PATH } : {}),
-    ...(env.JOOEVENTS_DATABASE_URL ? { databaseUrl: env.JOOEVENTS_DATABASE_URL } : {}),
+    ...(lifetime === 'configured' && env.JOOEVENTS_DATABASE_PATH ? { databasePath: env.JOOEVENTS_DATABASE_PATH } : {}),
+    ...(lifetime === 'configured' && env.JOOEVENTS_DATABASE_URL ? { databaseUrl: env.JOOEVENTS_DATABASE_URL } : {}),
     blobDriver: env.JOOEVENTS_BLOB_DRIVER,
-    ...(env.JOOEVENTS_DATA_DIRECTORY ? { dataDirectory: env.JOOEVENTS_DATA_DIRECTORY } : {}),
+    ...(lifetime === 'configured' && env.JOOEVENTS_DATA_DIRECTORY ? { dataDirectory: env.JOOEVENTS_DATA_DIRECTORY } : {}),
     linkTokenTtlSeconds: env.JOOEVENTS_LINK_TOKEN_TTL_SECONDS,
     linkReauthMaxAgeSeconds: env.JOOEVENTS_LINK_REAUTH_MAX_AGE_SECONDS,
     linkRequireAuthTime: env.JOOEVENTS_LINK_REQUIRE_AUTH_TIME === 'true'
   };
+}
+
+/** Validates configured-path startup in one pass so operators see every missing duty. */
+export function loadConfig(environment: Record<string, string | undefined>): ConfiguredServerConfig {
+  return parseConfig(environment, 'configured') as ConfiguredServerConfig;
+}
+
+/** Validates an isolated runtime without accepting a database or data-directory path. */
+export function loadEphemeralLiveConfig(
+  environment: Record<string, string | undefined>
+): ServerConfig {
+  return parseConfig(environment, 'ephemeral');
 }

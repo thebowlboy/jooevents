@@ -4,6 +4,7 @@ import {
   createEffectfulOperationResultSchema,
   createReadOperationResultSchema,
   operationEffectSchema,
+  operationHttpIdempotencyKeySchema,
   safeOperationAutonomySchema,
   safeOperationManifestSchema,
   structuredOutcomeSchema
@@ -51,6 +52,14 @@ describe('operation result contracts', () => {
     expect(schema.safeParse({ kind: 'outcome', outcome, correlationId, terminal: true }).success).toBe(false);
     expect(schema.safeParse({ kind: 'outcome', outcome, correlationId, terminal: false, receipt }).success).toBe(false);
   });
+});
+
+test('effectful HTTP idempotency keys use one bounded non-joinable wire shape', () => {
+  expect(operationHttpIdempotencyKeySchema.safeParse('browser-action_01').success).toBe(true);
+  expect(operationHttpIdempotencyKeySchema.safeParse('x'.repeat(256)).success).toBe(true);
+  for (const value of ['', 'x'.repeat(257), 'contains space', 'first,second', 'line\nbreak']) {
+    expect(operationHttpIdempotencyKeySchema.safeParse(value).success).toBe(false);
+  }
 });
 
 test('safe autonomy metadata uses one closed intervention vocabulary', () => {
@@ -127,6 +136,15 @@ test('the safe manifest is JSON-only and rejects executable or internal fields',
 
   const parsed = safeOperationManifestSchema.parse(manifest);
   expect(z.json().safeParse(parsed).success).toBe(true);
+  for (const path of ['/api/./test', '/api/test/../other', '/api/test//other']) {
+    expect(safeOperationManifestSchema.safeParse({
+      ...manifest,
+      operations: [{
+        ...manifest.operations[0],
+        enabledBindings: [{ ...manifest.operations[0]!.enabledBindings[0]!, path }]
+      }]
+    }).success).toBe(false);
+  }
   const { autonomy: _autonomy, ...withoutAutonomy } = manifest.operations[0]!;
   expect(safeOperationManifestSchema.safeParse({
     ...manifest,

@@ -446,12 +446,12 @@
 	}
 
 	.dsel__option--selected {
-		background: var(--je-color-surface-selected);
+		background: var(--je-color-mark-surface);
 	}
 
 	.dsel__option--selected.dsel__option--active,
 	.dsel__option--selected:hover {
-		background: color-mix(in srgb, var(--je-color-surface-selected) 70%, var(--je-color-surface-sunken));
+		background: color-mix(in srgb, var(--je-color-mark-surface) 70%, var(--je-color-surface-sunken));
 	}
 
 	.dsel__option:focus-visible {
@@ -485,6 +485,6 @@
 	.dsel__check {
 		display: grid;
 		place-items: center;
-		color: var(--je-color-action);
+		color: var(--je-color-mark-ink);
 	}
 </style>

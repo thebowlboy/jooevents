@@ -201,6 +201,38 @@
     line-height: 1.5;
   }
 
+  /* The references that are whole surfaces rather than components: they live on
+     their own routes, so the sidebar has to name them or nobody finds them. */
+  .ds-sidebar__surfaces {
+    display: grid;
+    gap: 0.1rem;
+    margin: 0.75rem 0.55rem 0;
+    padding-top: 0.6rem;
+    border-top: 1px solid var(--je-color-border);
+  }
+
+  .ds-sidebar__surfaces > span {
+    padding: 0 0.55rem 0.25rem;
+    color: var(--je-color-text-subtle);
+    font-size: var(--je-font-size-2xs);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .ds-sidebar__surfaces a {
+    padding: 0.35rem 0.55rem;
+    border-radius: var(--je-radius-control);
+    color: var(--je-color-text-muted);
+    font-size: var(--je-font-size-sm);
+    text-decoration: none;
+  }
+
+  .ds-sidebar__surfaces a:hover {
+    background: var(--je-color-surface);
+    color: var(--je-color-text);
+  }
+
   .ds-sidebar__note {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
@@ -721,6 +753,42 @@
   .range-field strong { font-size: var(--je-font-size-sm); }
   .range-field span { color: var(--je-color-text-muted); font-size: var(--je-font-size-xs); }
 
+  /* Marking reference: the same chip, badge, and row treatments the operator
+     surfaces use, kept beside a primary action so the two families can be
+     compared at a glance. */
+  .ds-mark-chip {
+    min-block-size: 1.75rem;
+    padding: 0.125rem var(--je-space-3);
+    border: 1px solid var(--je-color-border);
+    border-radius: var(--je-radius-round);
+    background: var(--je-color-surface);
+    font-size: var(--je-font-size-sm);
+    color: var(--je-color-text);
+    cursor: pointer;
+  }
+
+  .ds-mark-chip--on {
+    border-color: var(--je-color-mark-border);
+    background: var(--je-color-mark-surface);
+    font-weight: 600;
+  }
+
+  .ds-mark-rows {
+    display: grid;
+    border: 1px solid var(--je-color-border);
+    border-radius: var(--je-radius-surface);
+    overflow: hidden;
+  }
+
+  .ds-mark-row {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--je-color-border-subtle);
+    background: var(--je-color-surface);
+  }
+
+  .ds-mark-row:last-child { border-bottom: 0; }
+  .ds-mark-row[data-selected='true'] { background: var(--je-color-mark-surface); }
+
   .alert-stack,
   .progress-stack { display: grid; gap: 0.65rem; }
   .loading-line { display: flex; align-items: center; gap: 0.5rem; color: var(--je-color-text-muted); font-size: var(--je-font-size-xs); }
@@ -752,7 +820,8 @@
 
   .table-search { width: min(18rem, 100%); }
   .table-check { width: 2.4rem; padding-right: 0; }
-  .table-check .ui-choice__copy { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+  /* Row-selection boxes take their accessible name from the Checkbox
+     `hideLabel` variant — no local clipping needed. */
   .ui-table th svg { display: inline; width: 0.68rem; height: 0.68rem; margin-left: 0.2rem; vertical-align: -0.1rem; }
   .table-person { display: flex; min-width: 10rem; align-items: center; gap: 0.5rem; }
 
@@ -1351,3 +1420,29 @@
   outline: none;
   box-shadow: var(--je-focus-ring);
 }
+
+/* The declared-host specimen. The table's own min-width is what makes the
+   sideways-scroll case visible in the workbench at narrow widths, which is the
+   reason the anchor stays on the name rather than moving up to the row. */
+.ds-arrival-table {
+  margin-top: var(--je-space-3);
+}
+
+  /* Drag-to-reorder demo list. */
+  .ds-draglist {
+    position: relative;
+    display: grid;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .ds-dragrow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.15rem 0.25rem;
+    border-block-end: 1px solid var(--je-color-border-subtle);
+    font-size: var(--je-font-size-sm);
+  }

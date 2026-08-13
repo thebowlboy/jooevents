@@ -1,6 +1,8 @@
 import type { AccessContext, SafeUser, SafeWorkspace } from '@jooevents/contracts';
+import type { OperatorEntryDependencies } from '$lib/api/composition/entry-dependencies';
 import type { ApiResult, SafeApiError } from '$lib/api/client';
 import type { EntryNotice } from './copy';
+import { isEmailShaped } from './link-request';
 import { safeOperatorReturnPath } from './return-path';
 
 export type PendingState = {
@@ -12,24 +14,44 @@ export type PendingState = {
 };
 export type BlockedState = { readonly kind: 'blocked'; readonly code: 'suspended' | 'deactivated' | 'not_admitted'; readonly correlationId?: string };
 
+/**
+ * The resting card. Both sign-in choices stand in it at once: the magic-link
+ * field carries `email`/`busy`/`invalid`/`requestError`, while `actionError`
+ * stays the provider's.
+ */
+export type AnonymousState = {
+  readonly kind: 'anonymous';
+  readonly email: string;
+  readonly busy: boolean;
+  readonly invalid: boolean;
+  readonly notice?: EntryNotice;
+  readonly actionError?: SafeApiError;
+  readonly requestError?: SafeApiError;
+};
+/** One acknowledgement for every address, matched or not. */
+export type LinkRequestedState = { readonly kind: 'link_requested'; readonly email: string; readonly actionError?: SafeApiError };
+export type EntrySurfaceState = AnonymousState | LinkRequestedState;
+
 export type AccessEntryState =
   | { readonly kind: 'resolving'; readonly delayed: boolean }
-  | { readonly kind: 'anonymous'; readonly notice?: EntryNotice; readonly actionError?: SafeApiError }
-  /* Carries the previous failure through the attempt so the message never
-     flickers away on retry; only success (navigation) or a new failure ends it. */
-  | { readonly kind: 'starting_google'; readonly actionError?: SafeApiError }
+  | EntrySurfaceState
+  /* Carries the surface it started from — including any previous failure and
+     the typed address — so nothing disappears during the attempt; only success
+     (navigation) or a new failure ends it. */
+  | { readonly kind: 'starting_google'; readonly previous: EntrySurfaceState }
   | { readonly kind: 'provisioning'; readonly retryAfterSeconds: number; readonly correlationId: string; readonly delayed: boolean }
   | PendingState
   | BlockedState
   | { readonly kind: 'context_error'; readonly error: SafeApiError }
   | { readonly kind: 'sign_out_error'; readonly previous: PendingState | BlockedState; readonly error: SafeApiError };
 
-export interface AccessEntryDependencies {
-  readonly getContext: (options?: { readonly signal?: AbortSignal }) => Promise<ApiResult<AccessContext>>;
-  readonly startGoogle: (input: { readonly provider: 'google'; readonly returnTo: string }) => Promise<ApiResult<{ readonly redirecting: true }>>;
-  readonly signOut: () => Promise<ApiResult<{ readonly signedOut: true }>>;
+export interface AccessEntryDependencies extends OperatorEntryDependencies {
   readonly navigate: (path: string, replace: boolean) => void | Promise<void>;
   readonly now?: () => number;
+}
+
+function withActionError(surface: EntrySurfaceState, error: SafeApiError): EntrySurfaceState {
+  return { ...surface, actionError: error };
 }
 
 export class AccessEntryController {
@@ -105,11 +127,43 @@ export class AccessEntryController {
   }
 
   async startGoogle() {
-    if (this.#state.kind !== 'anonymous') return;
     const previous = this.#state;
-    this.#set({ kind: 'starting_google', ...(previous.actionError ? { actionError: previous.actionError } : {}) });
+    if (previous.kind !== 'anonymous' && previous.kind !== 'link_requested') return;
+    if (previous.kind === 'anonymous' && previous.busy) return;
+    this.#set({ kind: 'starting_google', previous });
     const result = await this.dependencies.startGoogle({ provider: 'google', returnTo: this.#returnTo });
-    if (result.kind === 'error') this.#set({ ...previous, actionError: result.error });
+    if (result.kind === 'error') this.#set(withActionError(previous, result.error));
+  }
+
+  setLinkEmail(email: string) {
+    const current = this.#state;
+    if (current.kind !== 'anonymous' || current.busy) return;
+    this.#set({ ...current, email, invalid: false, requestError: undefined });
+  }
+
+  async requestSignInLink() {
+    const current = this.#state;
+    if (current.kind !== 'anonymous' || current.busy) return;
+    const email = current.email.trim();
+    if (!isEmailShaped(email)) {
+      this.#set({ ...current, email, invalid: true, requestError: undefined });
+      return;
+    }
+    this.#set({ ...current, email, busy: true, invalid: false, requestError: undefined });
+    const result = await this.dependencies.requestSignInLink({ email });
+    const pending = this.#state;
+    if (this.#disposed || pending.kind !== 'anonymous' || !pending.busy) return;
+    if (result.kind === 'error') {
+      this.#set({ ...pending, busy: false, requestError: result.error });
+      return;
+    }
+    this.#set({ kind: 'link_requested', email });
+  }
+
+  useDifferentAddress() {
+    const current = this.#state;
+    if (current.kind !== 'link_requested') return;
+    this.#set({ kind: 'anonymous', email: current.email, busy: false, invalid: false });
   }
 
   async signOut() {
@@ -121,7 +175,7 @@ export class AccessEntryController {
       return;
     }
     await this.dependencies.navigate('/sign-in?notice=signed_out', false);
-    this.#set({ kind: 'anonymous', notice: 'signed_out' });
+    this.#set({ kind: 'anonymous', email: '', busy: false, invalid: false, notice: 'signed_out' });
   }
 
   async checkStatus() {
@@ -154,7 +208,7 @@ export class AccessEntryController {
     switch (context.state) {
       case 'anonymous':
         this.#provisioningStartedAt = undefined;
-        this.#set({ kind: 'anonymous', ...(this.#notice ? { notice: this.#notice } : {}) });
+        this.#set({ kind: 'anonymous', email: '', busy: false, invalid: false, ...(this.#notice ? { notice: this.#notice } : {}) });
         if (this.#currentPath !== '/sign-in') await this.dependencies.navigate('/sign-in', true);
         return;
       case 'active':

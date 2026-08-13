@@ -9,7 +9,7 @@ import { Database } from 'bun:sqlite';
 const eventKind = 'read_immutable_audit' as const;
 const maximumRecordBytes = 131_072;
 
-/** Disposable SQLite proof schema. It is not part of the retained migration chain. */
+/** Ephemeral-runtime schema; it is intentionally absent from the retained migration chain. */
 export const READ_IMMUTABLE_AUDIT_TRIAL_SQL = `
 CREATE TABLE _trial_read_immutable_audits (
   event_id TEXT NOT NULL CHECK(length(event_id) = 36),
@@ -73,10 +73,10 @@ export function installReadImmutableAuditTrialSchema(sqlite: Database): void {
 }
 
 /**
- * Capability-limited append seam for the disposable SQLite proof. It accepts only
+ * Capability-limited append seam for the ephemeral SQLite store. It accepts only
  * application-sealed records and never exposes a SQL handle or stored row.
  */
-export class SQLiteTrialReadImmutableAuditPort implements ReadImmutableAuditPort {
+export class SQLiteReadImmutableAuditPort implements ReadImmutableAuditPort {
   constructor(private readonly sqlite: Database) {}
 
   append(record: ReadImmutableAuditRecord): void {
@@ -130,3 +130,6 @@ export class SQLiteTrialReadImmutableAuditPort implements ReadImmutableAuditPort
     }
   }
 }
+
+/** Compatibility name for existing isolated conformance callers. */
+export const SQLiteTrialReadImmutableAuditPort = SQLiteReadImmutableAuditPort;

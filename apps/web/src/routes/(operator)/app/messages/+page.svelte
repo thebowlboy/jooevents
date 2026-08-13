@@ -1,7 +1,7 @@
 <script lang="ts">
-	import MessagesPage from '$lib/features/messages/MessagesPage.svelte';
+	import OperatorPage from 'jooevents-operator-page';
 </script>
 
-<svelte:head><title>Messages · JooEvents</title></svelte:head>
+<svelte:head><title>Communications · JooEvents</title></svelte:head>
 
-<MessagesPage />
+<OperatorPage area="communications" />

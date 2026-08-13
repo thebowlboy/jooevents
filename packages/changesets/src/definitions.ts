@@ -349,7 +349,7 @@ function aggregateKind(id: string): string {
   return separator > 0 ? id.slice(0, separator) : id;
 }
 
-export async function planChangesetOperation(input: {
+interface PlanChangesetOperationInput {
   readonly registry: ChangesetDefinitionRegistry;
   readonly kind: string;
   readonly version: number;
@@ -357,7 +357,13 @@ export async function planChangesetOperation(input: {
   readonly dependencyGroup: string;
   readonly snapshot: ChangesetPlanningSnapshot;
   readonly compensationLineage?: CompensationLineage;
-}): Promise<FrozenChangesetOperation> {
+}
+
+function planningContext(input: PlanChangesetOperationInput): {
+  readonly definition: AnyDefinition;
+  readonly author: unknown;
+  readonly snapshot: ChangesetPlanningSnapshot;
+} {
   const definition = input.registry.get(input.kind, input.version);
   if (!definition) throw new TypeError('unknown_changeset_operation');
   const authorSchema = input.registry.getSchema(definition.schemas.authorInput);
@@ -372,7 +378,17 @@ export async function planChangesetOperation(input: {
       return input.snapshot.getPort(key);
     }
   });
-  const planned = await definition.plan(author, restrictedSnapshot);
+  return { definition, author, snapshot: restrictedSnapshot };
+}
+
+function freezePlannedOperation(
+  input: PlanChangesetOperationInput,
+  definition: AnyDefinition,
+  planned: PlannedChangesetOperation<unknown>
+): FrozenChangesetOperation {
+  const planSchema = input.registry.getSchema(definition.schemas.plan);
+  const diffSchema = input.registry.getSchema(definition.schemas.diff);
+  if (!planSchema || !diffSchema) throw new TypeError('changeset_registry_incomplete');
   const parsedPlan = planSchema.schema.parse(planned.plan);
   const projected = definition.projectDiff(parsedPlan);
   if (projected && typeof (projected as { then?: unknown }).then === 'function') {
@@ -413,6 +429,31 @@ export async function planChangesetOperation(input: {
       ? {}
       : { compensationLineage: { ...input.compensationLineage } })
   });
+}
+
+export async function planChangesetOperation(
+  input: PlanChangesetOperationInput
+): Promise<FrozenChangesetOperation> {
+  const context = planningContext(input);
+  const planned = await context.definition.plan(context.author, context.snapshot);
+  return freezePlannedOperation(input, context.definition, planned);
+}
+
+/** Synchronous planning for transaction-local single-unit-of-work handlers. */
+export function planChangesetOperationSynchronous(
+  input: PlanChangesetOperationInput
+): FrozenChangesetOperation {
+  const context = planningContext(input);
+  const planned = context.definition.plan(context.author, context.snapshot);
+  if (planned && typeof planned === 'object' && 'then' in planned
+    && typeof (planned as { readonly then?: unknown }).then === 'function') {
+    throw new TypeError('async_changeset_planning_forbidden_in_single_unit_of_work');
+  }
+  return freezePlannedOperation(
+    input,
+    context.definition,
+    planned as PlannedChangesetOperation<unknown>
+  );
 }
 
 interface PreparedEntry {
@@ -607,6 +648,49 @@ export async function applyPreparedChangeset(
         result: parsedResult,
         facts: contribution.facts.map((fact) => ({ ...fact, payload: canonicalJsonValue(fact.payload) })),
         effects: contribution.effects.map((effect) => ({ ...effect, payload: canonicalJsonValue(effect.payload) }))
+      }));
+    }
+    if (!completeValidatedChangesetApply(state.authorization)) throw new TypeError('invalid_prepared_changeset');
+    return Object.freeze(contributions);
+  } catch (error) {
+    spendValidatedChangesetCommit(state.authorization);
+    throw error;
+  }
+}
+
+/**
+ * Synchronous counterpart for a transaction that forbids asynchronous domain
+ * contributors. It fails closed before acknowledging an asynchronous contribution.
+ */
+export function applyPreparedChangesetSynchronous(
+  prepared: PreparedChangesetCommit
+): readonly ChangesetApplyContribution<unknown>[] {
+  const state = preparedChangesetCommits.get(prepared);
+  if (!state || prepared[preparedCommitBrand] !== true) throw new TypeError('invalid_prepared_changeset');
+  preparedChangesetCommits.delete(prepared);
+  if (!beginValidatedChangesetApply(state.authorization)) throw new TypeError('invalid_prepared_changeset');
+  try {
+    const contributions: ChangesetApplyContribution<unknown>[] = [];
+    for (const entry of state.entries) {
+      const contribution = entry.definition.applyWithin(entry.validated, entry.transaction);
+      if (contribution && typeof contribution === 'object' && 'then' in contribution
+        && typeof (contribution as { readonly then?: unknown }).then === 'function') {
+        throw new TypeError('async_changeset_apply_forbidden_in_single_unit_of_work');
+      }
+      const synchronousContribution = contribution as Exclude<typeof contribution, Promise<unknown>>;
+      const parsedResult = entry.resultSchema.schema.parse(synchronousContribution.result);
+      for (const fact of synchronousContribution.facts) {
+        if (!declaredKind(entry.definition.allowedFacts, fact.kind, fact.version)) throw new TypeError('undeclared_changeset_fact');
+        canonicalJsonValue(fact.payload);
+      }
+      for (const effect of synchronousContribution.effects) {
+        if (!declaredKind(entry.definition.allowedEffects, effect.kind, effect.version)) throw new TypeError('undeclared_changeset_effect');
+        canonicalJsonValue(effect.payload);
+      }
+      contributions.push(deepFreeze({
+        result: parsedResult,
+        facts: synchronousContribution.facts.map((fact) => ({ ...fact, payload: canonicalJsonValue(fact.payload) })),
+        effects: synchronousContribution.effects.map((effect) => ({ ...effect, payload: canonicalJsonValue(effect.payload) }))
       }));
     }
     if (!completeValidatedChangesetApply(state.authorization)) throw new TypeError('invalid_prepared_changeset');

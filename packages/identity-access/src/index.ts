@@ -9,3 +9,4 @@ export * from './permissions';
 export * from './persistence';
 export * from './profile-media';
 export * from './sign-in';
+export * from './workspace-team';

@@ -29,7 +29,7 @@
 	import { Flame, Gem, Star, Zap } from 'lucide-svelte';
 	import { ClampedText, situationIcon, trackPending } from '$lib/ui';
 	import type { IconComponent } from '$lib/ui';
-	import { useWorkspaceGateway } from '$lib/api/workspace-gateway';
+	import type { ReviewPagePort } from '$lib/api/review-page-port';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
 	import StandingMark from '$lib/features/workspace/components/StandingMark.svelte';
 	import type {
@@ -40,9 +40,8 @@
 		ScoreStanding
 	} from '$lib/api/types';
 
-	const { api } = useWorkspaceGateway();
-
 	interface Props {
+		port: ReviewPagePort;
 		/** The committed review everything else is read against; null has nothing to compare. */
 		anchorId: string | null;
 		slice: SliceKey;
@@ -56,6 +55,7 @@
 	}
 
 	let {
+		port,
 		anchorId,
 		slice,
 		onSliceChange,
@@ -63,6 +63,8 @@
 		surface = 'page',
 		onReviewChange
 	}: Props = $props();
+
+	const api = $derived(port);
 
 	const slices: { key: SliceKey; label: string }[] = [
 		{ key: 'track', label: 'Same track' },

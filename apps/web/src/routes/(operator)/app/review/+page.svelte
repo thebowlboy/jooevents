@@ -1,7 +1,7 @@
 <script lang="ts">
-	import ReviewPage from '$lib/features/review/ReviewPage.svelte';
+	import OperatorPage from 'jooevents-operator-page';
 </script>
 
 <svelte:head><title>Review · JooEvents</title></svelte:head>
 
-<ReviewPage />
+<OperatorPage area="review" />

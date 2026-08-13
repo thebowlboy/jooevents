@@ -156,7 +156,7 @@ test('the locked email field shows its lock and refuses removal with the reason'
 	await expect(email.locator('.frow__label')).toHaveText('Email');
 });
 
-test('up and down own the order, and the order survives leaving and returning', async ({
+test('the reorder handle owns the order — arrow keys move, and the order survives leaving and returning', async ({
 	page
 }, testInfo) => {
 	const panel = await openSettings(page);
@@ -166,19 +166,28 @@ test('up and down own the order, and the order survives leaving and returning', 
 	expect(at).toBeGreaterThan(-1);
 	expect(before[at + 1]).toBe('Abstract');
 
-	await panel.getByRole('button', { name: 'Move “Talk title” down' }).click();
+	// The keyboard path is the drag's equal: one arrow press, one step.
+	const grip = panel.getByRole('button', { name: 'Reorder “Talk title” — drag, or press the arrow keys' });
+	await grip.focus();
+	await grip.press('ArrowDown');
 	await expect(panel.locator('.frow__label').nth(at)).toHaveText('Abstract');
 	await expect(panel.locator('.frow__label').nth(at + 1)).toHaveText('Talk title');
 	await expect(
 		page.getByRole('status').filter({ hasText: 'Moved “Talk title” down' }).first()
 	).toBeVisible();
+	// Focus travels with the moved row.
+	await expect(grip).toBeFocused();
 
 	await leaveAndReturn(page, testInfo.project.name);
 	const returned = panelOf(page).locator('.frow__label');
 	await expect(returned.nth(at)).toHaveText('Abstract');
 	await expect(returned.nth(at + 1)).toHaveText('Talk title');
 
-	await panelOf(page).getByRole('button', { name: 'Move “Talk title” up' }).click();
+	const gripBack = panelOf(page).getByRole('button', {
+		name: 'Reorder “Talk title” — drag, or press the arrow keys'
+	});
+	await gripBack.focus();
+	await gripBack.press('ArrowUp');
 	await expect(returned.nth(at)).toHaveText('Talk title');
 	await expect(returned.nth(at + 1)).toHaveText('Abstract');
 });

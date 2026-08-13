@@ -139,6 +139,8 @@ export interface CommitValidationInput {
   readonly currentGuardVersions: ReadonlyMap<string, number>;
   readonly currentGuardDigests: ReadonlyMap<string, string>;
   readonly now: string;
+  /** Frozen by the policy resolver for this exact revision. */
+  readonly approvalRequirement: 'none' | 'distinct_current_human';
   readonly approval?: ApprovalReceipt;
   readonly approverCurrentlyAuthorized?: boolean;
 }
@@ -214,6 +216,9 @@ function validateGroups(groups: readonly DependencyGroup[], operations: readonly
     keys.add(group.key);
   }
   for (const group of groups) {
+    if (group.dependsOn.length !== new Set(group.dependsOn).size) {
+      throw new TypeError(`Duplicate dependency in group: ${group.key}`);
+    }
     for (const dependency of group.dependsOn) {
       if (!keys.has(dependency) || dependency === group.key) throw new TypeError(`Invalid dependency ${group.key} -> ${dependency}`);
     }
@@ -328,6 +333,15 @@ function revisionChainIntegrityMatches(head: ChangesetHead): boolean {
   return true;
 }
 
+/**
+ * Verifies the complete immutable revision chain without minting commit authority.
+ * Durable adapters use this after strict structural decoding and before treating
+ * stored bytes as a canonical changeset.
+ */
+export function changesetHeadIntegrityMatches(head: ChangesetHead): boolean {
+  return revisionChainIntegrityMatches(head);
+}
+
 export function createChangeset(
   scope: { readonly id: string; readonly workspaceId: string; readonly eventId?: string },
   draft: RevisionDraft
@@ -427,7 +441,7 @@ export function validateExactCommit(head: ChangesetHead, input: CommitValidation
   }
 
   const approval = input.approval;
-  const needsApproval = revision.riskTier === 'consequential';
+  const needsApproval = input.approvalRequirement === 'distinct_current_human';
   if (needsApproval && !approval) return { kind: 'refused', refusal: { kind: 'approval_missing' } };
   if (approval) {
     assertInstant(approval.issuedAt, 'approval.issuedAt');
@@ -476,6 +490,25 @@ export function markChangesetCommitted(
   readonly head: ChangesetHead;
   readonly source: CommittedChangesetSource;
 } {
+  const parsedReceiptId = parseOperationReceiptId(commitReceiptId);
+  const committedHead = markChangesetCommittedHead(head, authorization);
+  const revision = committedHead.revisions.at(-1);
+  if (!revision) throw new TypeError('invalid_validated_changeset_commit');
+  return Object.freeze({
+    head: committedHead,
+    source: issueCommittedChangesetSource({
+      changesetId: head.id,
+      revision,
+      commitReceiptId: parsedReceiptId
+    })
+  });
+}
+
+/** Consumes exact commit authority without minting post-commit correction authority. */
+export function markChangesetCommittedHead(
+  head: ChangesetHead,
+  authorization: ValidatedChangesetCommit
+): ChangesetHead {
   if (head.status !== 'proposed') throw new TypeError(`Cannot commit ${head.status} changeset`);
   const revision = head.revisions.at(-1);
   if (
@@ -488,7 +521,6 @@ export function markChangesetCommitted(
   ) {
     throw new TypeError('invalid_validated_changeset_commit');
   }
-  const parsedReceiptId = parseOperationReceiptId(commitReceiptId);
   const validated = claimAppliedChangesetCommit(authorization);
   if (
     !validated
@@ -499,18 +531,38 @@ export function markChangesetCommitted(
   ) {
     throw new TypeError('invalid_validated_changeset_commit');
   }
-  const committedHead: ChangesetHead = deepFreeze({
+  return deepFreeze({
     ...head,
     version: head.version + 1,
     status: 'committed' as const
   });
-  return Object.freeze({
-    head: committedHead,
-    source: issueCommittedChangesetSource({
-      changesetId: head.id,
-      revision: validated.revision,
-      commitReceiptId: parsedReceiptId
-    })
+}
+
+/**
+ * Reconstitutes the process-local compensation capability from an exact durable
+ * committed head and its terminal receipt link. The caller remains responsible for
+ * loading both records from one trusted persistence snapshot.
+ */
+export function rehydrateCommittedChangesetSource(input: {
+  readonly head: ChangesetHead;
+  readonly revisionId: string;
+  readonly revisionDigest: string;
+  readonly commitReceiptId: OperationReceiptId;
+}): CommittedChangesetSource {
+  const head = input.head;
+  if (head.status !== 'committed' || !revisionChainIntegrityMatches(head)) {
+    throw new TypeError('invalid_committed_changeset_head');
+  }
+  const revision = head.revisions.at(-1);
+  if (
+    !revision
+    || revision.id !== input.revisionId
+    || revision.digest !== input.revisionDigest
+  ) throw new TypeError('committed_changeset_revision_mismatch');
+  return issueCommittedChangesetSource({
+    changesetId: head.id,
+    revision,
+    commitReceiptId: parseOperationReceiptId(input.commitReceiptId)
   });
 }
 

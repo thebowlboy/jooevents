@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { flip } from 'svelte/animate';
   import { tick } from 'svelte';
   import {
     AlertTriangle,
@@ -49,6 +50,8 @@
     Badge,
     Button,
     Checkbox,
+    createRowDrag,
+    motionMs,
     ClampedText,
     DatePicker,
     DescribedSelect,
@@ -59,6 +62,7 @@
     Progress,
     Radio,
     markArrival,
+    revealTarget,
     statusIcon,
     Switch,
     Term,
@@ -159,6 +163,26 @@
   let toastVisible = $state(false);
   let announcement = $state('');
   let notificationsEnabled = $state(true);
+
+  /* Marking demo: an applied filter, a scoped badge, and picked rows, shown
+     beside the action colour they used to borrow. */
+  const markFilters = ['Everyone', 'Needs cover', 'Invited'];
+  const markRows = ['Ada Okafor', 'Ravi Menon', 'Jonna Virtanen'];
+  let markFilter = $state('Needs cover');
+  let markSelected = $state(['Ravi Menon']);
+
+  /* Drag-to-reorder demo: a local list, the shared row-drag primitive, and a
+     FLIP settle on the motion tokens — the same recipe the field lists use. */
+  let reorderItems = $state(['Talk title', 'Abstract', 'Track', 'Anything else?']);
+  const reorderDrag = createRowDrag({
+    rowSelector: '.ds-dragrow',
+    onMove: (from, to) => {
+      const next = [...reorderItems];
+      const [picked] = next.splice(from, 1);
+      next.splice(to, 0, picked);
+      reorderItems = next;
+    }
+  });
   let publishImmediately = $state(false);
   let abstractText = $state(
     'A practical session about designing event operations that remain calm when schedules, speakers, and plans change at the same time.'
@@ -233,6 +257,20 @@
     markArrival(arrivalRow ?? null);
   }
 
+  // The declared-host specimen. `revealTarget` is handed the *name block*, the
+  // way a surface hands it whatever element it can address; the ring lands on
+  // the row above it because the row declares `data-arrival-host`. Marking the
+  // middle row is what makes the point — the two beside it look the same.
+  const arrivalPeople = [
+    { name: 'Priya Raghavan', email: 'priya@example.org', scope: 'Everything', load: '9 / 14' },
+    { name: 'Tomás Iglesias', email: 'tomas@example.org', scope: 'Platform track', load: '6 / 11' },
+    { name: 'Dana Whitfield', email: 'dana@example.org', scope: 'Everything', load: '12 / 12' }
+  ];
+  const arrivalNames: Record<string, HTMLElement | undefined> = $state({});
+  function demoRowArrival() {
+    revealTarget(arrivalNames['tomas@example.org'] ?? null);
+  }
+
   function badgeTone(status: string): 'success' | 'warning' | 'danger' | 'info' | 'lavender' {
     if (status === 'Confirmed') return 'success';
     if (status === 'Needs reply') return 'warning';
@@ -289,6 +327,15 @@
         </a>
       {/each}
     </nav>
+    <div class="ds-sidebar__surfaces">
+      <span>Whole surfaces</span>
+      <a href="/design-system/portal-shell">Participant portal</a>
+      <a href="/design-system/participant-portal">Portal states</a>
+      <a href="/design-system/entry-links">Sign-in link states</a>
+      <a href="/design-system/dashboard">Operator shell</a>
+      <a href="/design-system/loading">Waiting treatments</a>
+    </div>
+
     <div class="ds-sidebar__note">
       <Sparkles />
       <p><strong>Stable baseline</strong><br />Change semantic tokens first. Keep component states and structure intact.</p>
@@ -551,6 +598,22 @@
             <Switch label="Publish immediately" description="Bypasses the draft schedule." bind:checked={publishImmediately} />
           </div>
         </ShowcaseCard>
+        <ShowcaseCard title="Drag to reorder" description="The handle owns the gesture — vertical drag or arrow keys — and a slot line names the landing.">
+          <ul class="ds-draglist" use:reorderDrag.container>
+            {#each reorderItems as item (item)}
+              <li class="ds-dragrow" animate:flip={{ duration: motionMs('normal') }}>
+                <span>{item}</span>
+                <button
+                  type="button"
+                  class="ui-button ui-button--ghost ui-button--icon ui-button--sm ui-drag-handle"
+                  aria-label={`Reorder “${item}” — drag, or press the arrow keys`}
+                  use:reorderDrag.handle>
+                  <GripVertical size={14} aria-hidden="true" />
+                </button>
+              </li>
+            {/each}
+          </ul>
+        </ShowcaseCard>
 
         <ShowcaseCard title="Radio groups" description="Use when exactly one visible option is required.">
           <fieldset class="choice-fieldset">
@@ -592,6 +655,40 @@
           <div class="range-field">
             <div><strong>Minimum review score</strong><span>4.2 and above</span></div>
             <input class="ui-range" type="range" min="1" max="5" value="4.2" step="0.1" aria-label="Minimum review score" />
+          </div>
+        </ShowcaseCard>
+
+        <ShowcaseCard title="Marking vs. action" description="Chosen among peers — an applied filter, a reviewer's scope, a picked row — is its own colour family, never the action colour. The default action ramp is coral and the danger family shares its hue, so an action-tinted selection reads as an error: an applied filter looked like a failed one. Marking answers in sea, which carries no status meaning. Action stays coral for the thing that commits." full>
+          <div class="component-row component-row--wrap">
+            {#each markFilters as entry}
+              <button
+                type="button"
+                class="ds-mark-chip"
+                class:ds-mark-chip--on={markFilter === entry}
+                aria-pressed={markFilter === entry}
+                onclick={() => (markFilter = entry)}>{entry}</button>
+            {/each}
+          </div>
+          <div class="component-row component-row--wrap">
+            <Badge tone="mark">Scoped to Platform track</Badge>
+            <Badge tone="danger" dot>Cancelled</Badge>
+            <Badge tone="action" dot>Active</Badge>
+          </div>
+          <div class="ds-mark-rows">
+            {#each markRows as row}
+              <div class="ds-mark-row" data-selected={markSelected.includes(row) ? 'true' : undefined}>
+                <Checkbox
+                  label={row}
+                  checked={markSelected.includes(row)}
+                  onchange={() =>
+                    (markSelected = markSelected.includes(row)
+                      ? markSelected.filter((entry) => entry !== row)
+                      : [...markSelected, row])} />
+              </div>
+            {/each}
+          </div>
+          <div class="component-row">
+            <button class="ui-button ui-button--primary" type="button">Assign {markSelected.length} reviewers</button>
           </div>
         </ShowcaseCard>
       </div>
@@ -880,7 +977,7 @@
 
         <ShowcaseCard
           title="Arrival mark"
-          description="What a scoped link leaves behind. Landing is not arriving: among rows that look alike, the scroll moves the view but not the answer to “which one?”. A still ring in the action colour, held — never a pulse, because a mark that keeps animating keeps re-asking for attention already given. It releases on the first press, key, wheel, or real pointer travel, and never before its minimum, so it cannot strobe away unseen. Mark only where the destination cannot answer for itself: not a named panel, not a list filtered to one match. It is decoration over a navigation that already worked, so anywhere it cannot draw cleanly — inline boxes, table rows, elements already using ::after — it draws nothing at all."
+          description="What a scoped link leaves behind. Landing is not arriving: among rows that look alike, the scroll moves the view but not the answer to “which one?”. A still ring in the action colour, held — never a pulse, because a mark that keeps animating keeps re-asking for attention already given. It releases on the first press, key, wheel, or real pointer travel, and never before its minimum, so it cannot strobe away unseen. Mark only where the destination cannot answer for itself: not a named panel, not a list filtered to one match. It is decoration over a navigation that already worked, so anywhere it cannot draw cleanly — inline boxes, elements already using ::after — it draws nothing at all."
           full>
           <div class="component-row">
             <Button variant="secondary" size="sm" onclick={demoArrival}>Take me to it</Button>
@@ -893,6 +990,37 @@
             </li>
             <li class="ds-arrival-row">Opening Keynote: The Boring Web Wins</li>
           </ul>
+        </ShowcaseCard>
+
+        <ShowcaseCard
+          title="Arrival mark: the host is declared, not assumed"
+          description="A surface addresses a record by whatever element it can name — here the name block inside the first cell. That is the anchor: where the scroll and the caret stop, kept deliberately precise so a table that scrolls sideways still opens on the column the link was about. What a person recognises as “the record” is bigger, so the row declares itself with data-arrival-host and wears the mark. A row is the one host drawn on its own cells rather than on a single pseudo-element — position: relative on a tr is exactly the case engines disagree about — and it carries no halo, which would print a seam down every column boundary."
+          full>
+          <div class="component-row">
+            <Button variant="secondary" size="sm" onclick={demoRowArrival}>Take me to the row</Button>
+            <span class="ds-hint">The ring bands the whole row; the caret lands on the name.</span>
+          </div>
+          <div class="ui-table-wrap ds-arrival-table">
+            <table class="ui-table">
+              <thead>
+                <tr><th>Reviewer</th><th>Reviews</th><th>Load</th></tr>
+              </thead>
+              <tbody>
+                {#each arrivalPeople as person (person.email)}
+                  <tr data-arrival-host>
+                    <td>
+                      <div class="ui-table__primary" bind:this={arrivalNames[person.email]}>
+                        <strong>{person.name}</strong>
+                        <span class="ui-table__secondary">{person.email}</span>
+                      </div>
+                    </td>
+                    <td>{person.scope}</td>
+                    <td class="ui-table__number">{person.load}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
         </ShowcaseCard>
 
         <ShowcaseCard title="Pagination" description="Cursor-backed APIs can retain the same visual contract.">
@@ -919,11 +1047,11 @@
         </div>
         <div class="ui-table-wrap">
           <table class="ui-table ui-table--multiline">
-            <thead><tr><th class="table-check"><Checkbox label="Select all speakers" checked={allSelected} mixed={someSelected} onchange={selectAll} /></th><th>Speaker</th><th>Proposal <ArrowDown /></th><th>Track</th><th>Status</th><th>Score</th><th>Owner</th><th><span class="ui-sr-only">Actions</span></th></tr></thead>
+            <thead><tr><th class="table-check"><Checkbox label="Select all speakers" hideLabel checked={allSelected} mixed={someSelected} onchange={selectAll} /></th><th>Speaker</th><th>Proposal <ArrowDown /></th><th>Track</th><th>Status</th><th>Score</th><th>Owner</th><th><span class="ui-sr-only">Actions</span></th></tr></thead>
             <tbody>
               {#each speakers as speaker}
                 <tr data-selected={speaker.selected}>
-                  <td class="table-check"><Checkbox label="Select {speaker.name}" bind:checked={speaker.selected} /></td>
+                  <td class="table-check"><Checkbox label="Select {speaker.name}" hideLabel bind:checked={speaker.selected} /></td>
                   <td><div class="table-person"><Avatar name={speaker.name} size="sm" /><div class="ui-table__primary"><strong>{speaker.name}</strong><span class="ui-table__secondary">{speaker.email}</span></div></div></td>
                   <td><div class="ui-table__primary"><strong>{speaker.proposal}</strong><span class="ui-table__secondary">45-minute session</span></div></td>
                   <td>{speaker.track}</td>

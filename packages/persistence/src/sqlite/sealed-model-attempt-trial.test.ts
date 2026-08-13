@@ -16,6 +16,8 @@ import {
   type ClassifiedPayloadProfileRef,
   type ClassifiedPayloadProfiles,
   type ClassifiedPayloadStageStore,
+  type EffectAuthorityRecheckSource,
+  type InvocationEvidence,
   type OperationRegistrySource,
   type PayloadStageAdoptionResult,
   type StageReconciliationPolicyRef
@@ -26,7 +28,10 @@ import {
   type SafeSchemaManifestRef,
   type VersionedDefinitionRef
 } from '@jooevents/contracts';
-import { parseOperationAccessLane } from '@jooevents/identity-access';
+import {
+  parseOperationAccessLane,
+  type CurrentAuthorityResolver
+} from '@jooevents/identity-access';
 import {
   calculateModelProfileDigest,
   calculateModelScaffoldDigest,
@@ -386,7 +391,7 @@ function modelScaffold(): ModelScaffoldRevision {
   return Object.freeze({ ...candidate, digest: calculateModelScaffoldDigest(candidate) });
 }
 
-async function operationRegistry(sqlite: Database, clock: Clock): Promise<Awaited<ReturnType<typeof createOperationRegistry>>> {
+async function operationRuntime(sqlite: Database, clock: Clock) {
   const autonomy = createOperationAutonomyPolicy({
     definition: operationRefs.autonomy,
     operation: { name: 'note.draft', version: 1 },
@@ -408,6 +413,43 @@ async function operationRegistry(sqlite: Database, clock: Clock): Promise<Awaite
     },
     requiresSeparateApproval: false
   });
+  const resolveAuthority: CurrentAuthorityResolver<InvocationEvidence>['resolve'] = (authorityInput) => {
+    if (authorityInput.evidence.kind !== 'app_model') {
+      return { kind: 'denied' as const, reason: 'lane_mismatch' as const };
+    }
+    const evidence = authorityInput.evidence;
+    const current = sqlite.query<{
+      readonly operation_name: string;
+      readonly operation_version: number;
+    }, [string, string, string]>(`
+      SELECT operation_name, operation_version FROM model_tool_calls_trial
+       WHERE run_id = ? AND attempt_id = ? AND tool_call_id = ?
+    `).get(evidence.agentRunId, evidence.modelAttemptId, evidence.modelToolCallId);
+    if (!current || current.operation_name !== 'note.draft' || current.operation_version !== 1) {
+      return { kind: 'denied' as const, reason: 'not_authorized' as const };
+    }
+    return {
+      kind: 'authorized' as const,
+      authority: {
+        actor: {
+          kind: 'app_model_run' as const,
+          agentRunId: evidence.agentRunId,
+          delegatedByPrincipalId: `workspace-user:${ids.user}`
+        },
+        principal: {
+          kind: 'workspace_user' as const,
+          userId: ids.user,
+          membershipId: ids.membership
+        },
+        lane: authorityInput.lane,
+        scope: authorityInput.scope,
+        grants: [{ kind: 'permission' as const, key: 'test.note.draft' }],
+        evidenceIds: [`model-tool-current:${evidence.modelToolCallId}`],
+        authorityCitationIds: [],
+        evaluatedAt: authorityInput.evaluatedAt
+      }
+    };
+  };
   const context = createEffectInvocationContextBuilder({
     reference: operationRefs.context,
     operation: { name: 'note.draft', version: 1 },
@@ -430,36 +472,7 @@ async function operationRegistry(sqlite: Database, clock: Clock): Promise<Awaite
         };
       }
     },
-    authorityResolver: {
-      resolve: (authorityInput) => {
-        if (authorityInput.evidence.kind !== 'app_model') return { kind: 'denied' as const, reason: 'lane_mismatch' as const };
-        const evidence = authorityInput.evidence;
-        const current = sqlite.query<{ readonly operation_name: string; readonly operation_version: number }, [string, string, string]>(`
-          SELECT operation_name, operation_version FROM model_tool_calls_trial
-           WHERE run_id = ? AND attempt_id = ? AND tool_call_id = ?
-        `).get(evidence.agentRunId, evidence.modelAttemptId, evidence.modelToolCallId);
-        if (!current || current.operation_name !== 'note.draft' || current.operation_version !== 1) {
-          return { kind: 'denied' as const, reason: 'not_authorized' as const };
-        }
-        return {
-          kind: 'authorized' as const,
-          authority: {
-            actor: {
-              kind: 'app_model_run' as const,
-              agentRunId: evidence.agentRunId,
-              delegatedByPrincipalId: `workspace-user:${ids.user}`
-            },
-            principal: { kind: 'workspace_user' as const, userId: ids.user, membershipId: ids.membership },
-            lane: authorityInput.lane,
-            scope: authorityInput.scope,
-            grants: [{ kind: 'permission' as const, key: 'test.note.draft' }],
-            evidenceIds: [`model-tool-current:${evidence.modelToolCallId}`],
-            authorityCitationIds: [],
-            evaluatedAt: authorityInput.evaluatedAt
-          }
-        };
-      }
-    },
+    authorityResolver: { resolve: resolveAuthority },
     clock,
     newInvocationId: () => parseInvocationId(crypto.randomUUID()),
     authorityPrincipalKeyProfile: keyProfile,
@@ -571,7 +584,16 @@ async function operationRegistry(sqlite: Database, clock: Clock): Promise<Awaite
       bindings: [{ surface: 'app_model', toolName: 'note_draft', projection: operationRefs.projection }]
     }]
   };
-  return createOperationRegistry(source);
+  const registry = await createOperationRegistry(source);
+  const transactionResolve: typeof resolveAuthority = (input) => {
+    if (!sqlite.inTransaction) throw new Error('transaction_authority_outside_unit_of_work');
+    return resolveAuthority(input);
+  };
+  const transactionAuthority: EffectAuthorityRecheckSource = Object.freeze({
+    resolveAuthority: transactionResolve,
+    now: () => clock.now()
+  });
+  return Object.freeze({ registry, transactionAuthority });
 }
 
 class OneShotFaults implements SealedModelAttemptTrialFaults {
@@ -654,7 +676,7 @@ async function harness(input: {
     scaffolds: [scaffold],
     purposes: [{ purpose: scaffold.purpose, profile, scaffold }]
   });
-  const registeredOperations = await operationRegistry(sqlite, clock);
+  const registeredOperations = await operationRuntime(sqlite, clock);
   const unitOfWork = new SQLiteTrialEffectUnitOfWorkPort(sqlite, {
     openHandlerSnapshot: () => Object.freeze({ current: null }),
     applyDomainContribution: (contribution) => {
@@ -663,7 +685,7 @@ async function harness(input: {
       }
       sqlite.query('INSERT INTO sealed_note_domain_trial (accepted) VALUES (1)').run();
     }
-  });
+  }, registeredOperations.transactionAuthority);
   const faults = new OneShotFaults(input.fault);
   const admission: RegisteredModelAttemptAdmission = Object.freeze({
     registration: ref('admission.sealed-model'),
@@ -681,7 +703,7 @@ async function harness(input: {
     clock,
     adapter,
     vault,
-    operationRegistry: registeredOperations,
+    operationRegistry: registeredOperations.registry,
     unitOfWork,
     profile,
     scaffold,
@@ -698,7 +720,7 @@ async function harness(input: {
     binding: { profile: bindingProfile, keyBytes: bindingKey },
     clock,
     modelRegistry,
-    operationRegistry: registeredOperations,
+    operationRegistry: registeredOperations.registry,
     classifiedStageStore: vault,
     classifiedProfiles: profiles,
     reconciliationPolicy,

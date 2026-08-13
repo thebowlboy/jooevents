@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { AlertTriangle } from 'lucide-svelte';
 	import { statusIcon } from '$lib/ui';
 	import {
@@ -9,24 +9,43 @@
 		overviewItem,
 		settingsItem
 	} from '$lib/features/workspace/navigation';
-	import { useWorkspaceGateway } from '$lib/api/workspace-gateway';
-	import type { AreaKey, PipelineStage, WorkspaceSummary } from '$lib/api/types';
+	import type {
+		OverviewPagePort,
+		OverviewPageSummary,
+		OverviewPipelineStage
+	} from '$lib/api/overview-page-port';
+	import type { AreaKey } from '$lib/api/types';
 	import ActivityFeed from './ActivityFeed.svelte';
+	import NewEventModal from './NewEventModal.svelte';
 	import TrayLedger from './TrayLedger.svelte';
 
-	const { api } = useWorkspaceGateway();
+	let { port }: { readonly port: OverviewPagePort } = $props();
 
-	let summary = $state<WorkspaceSummary | null>(null);
+	let summary = $state<OverviewPageSummary | null>(null);
+	let loadError = $state('');
+	let newEventOpen = $state(false);
 
-	onMount(async () => {
-		summary = await api.workspace.summary();
-	});
+	onMount(load);
+
+	async function load() {
+		loadError = '';
+		const result = await port.read();
+		if (result.kind === 'success') {
+			summary = result.data;
+			return;
+		}
+		loadError = result.kind === 'transport_error'
+			? result.retryable
+				? 'The overview could not be reached. Try again.'
+				: 'The overview response could not be loaded.'
+			: result.message;
+	}
 
 	// What the shell already knows about this workspace shapes the placeholder.
 	// Two regions here can resolve to absent — the act-now banner, and the whole
 	// dashboard body on a workspace with no event — and a placeholder for either
 	// would collapse everything below it the moment the summary lands.
-	const known = api.workspace.summarySnapshot();
+	const known = untrack(() => port.snapshot());
 	const expectEvent = known?.event != null;
 	const expectBanner = known?.attention.some((item) => item.severity === 'now') ?? false;
 	// The banner takes the first act-now item; the rest stay in the list.
@@ -72,14 +91,15 @@
 	const stageIcon = {
 		ok: statusIcon.ready,
 		attention: statusIcon.warning,
-		blocked: statusIcon.blocking
+		blocked: statusIcon.blocking,
+		unavailable: statusIcon.notConfigured
 	} as const;
 
 	const navItemByKey = Object.fromEntries(navItems.map((item) => [item.key, item]));
 
 	/* The area whose screen answers for each stage's facts. Collect and triage
 	   both resolve on the submissions screen; comms resolves on messages. */
-	const stageArea: Record<PipelineStage['key'], AreaKey> = {
+	const stageArea: Record<OverviewPipelineStage['key'], AreaKey> = {
 		collect: 'submissions',
 		triage: 'submissions',
 		review: 'review',
@@ -94,13 +114,13 @@
 	 * badge re-aims to for the same area. One fact, one door — a blocked
 	 * schedule opens the conflicts panel here exactly as it does in the nav.
 	 */
-	function laneDoor(stage: PipelineStage, counts: WorkspaceSummary['navCounts']) {
+	function laneDoor(stage: OverviewPipelineStage, counts: OverviewPageSummary['navCounts']) {
 		const item = navItemByKey[stageArea[stage.key]];
 		return { href: navHref(item, navMeta(counts, item.key)), area: item.label };
 	}
 
 	/* Only deviation speaks: ahead/on lanes carry no pace word. */
-	function paceWord(stage: PipelineStage): 'behind' | 'overdue' | undefined {
+	function paceWord(stage: OverviewPipelineStage): 'behind' | 'overdue' | undefined {
 		return stage.paceTone === 'behind' || stage.paceTone === 'overdue'
 			? stage.paceTone
 			: undefined;
@@ -108,7 +128,7 @@
 
 	/* The meter's fill answers the governing deadline, not the fraction: a high
 	   fraction due tomorrow still fills in warning. */
-	function meterTone(stage: PipelineStage): 'neutral' | 'warning' | 'danger' {
+	function meterTone(stage: OverviewPipelineStage): 'neutral' | 'warning' | 'danger' {
 		if (stage.paceTone === 'overdue') return 'danger';
 		if (stage.paceTone === 'behind') return 'warning';
 		return 'neutral';
@@ -119,7 +139,7 @@
 		return Math.max(0, Math.min(100, Math.round((progress.done / progress.required) * 100)));
 	}
 
-	function laneName(stage: PipelineStage, area: string): string {
+	function laneName(stage: OverviewPipelineStage, area: string): string {
 		const figure = stage.progress
 			? `${stage.progress.done} of ${stage.progress.required}`
 			: stage.headline;
@@ -129,7 +149,13 @@
 	}
 </script>
 
-{#if !summary}
+{#if !summary && loadError}
+	<section class="welcome" aria-label="Overview unavailable">
+		<h2 class="welcome__title">The overview could not be loaded</h2>
+		<p class="welcome__copy">{loadError}</p>
+		<button type="button" class="ui-button ui-button--secondary" onclick={() => void load()}>Try again</button>
+	</section>
+{:else if !summary}
 	<section class="loading" aria-label="Loading overview">
 		{#if expectEvent && known}
 			<!-- Every placeholder below is the resolved composition's own markup
@@ -277,6 +303,13 @@
 					<span class="ui-skeleton skeleton-action skeleton-action--lg"></span>
 				</div>
 			</section>
+		{:else}
+			<!-- The live source has not resolved whether an Event exists, so this
+			     neutral resolver claims neither the dashboard nor the first-run state. -->
+			<section class="welcome welcome--loading" aria-hidden="true">
+				<p class="welcome__title sk-head"><span class="ui-skeleton skeleton-line" style="inline-size: 18rem"></span></p>
+				<p class="welcome__copy"><span class="ui-skeleton skeleton-line" style="inline-size: 24rem"></span></p>
+			</section>
 		{/if}
 	</section>
 {:else if !summary.event}
@@ -288,8 +321,16 @@
 			up as soon as the event exists.
 		</p>
 		<div class="welcome__actions">
-			<button type="button" class="ui-button ui-button--primary" disabled title="Event creation arrives with the next slice">Create event</button>
-			<button type="button" class="ui-button ui-button--secondary" disabled title="Event creation arrives with the next slice">Fill in details myself</button>
+			<button
+				type="button"
+				class="ui-button ui-button--primary"
+				disabled
+				title="AI-assisted event drafting is not available yet">Create event</button>
+			<button
+				type="button"
+				class="ui-button ui-button--secondary"
+				aria-haspopup="dialog"
+				onclick={() => (newEventOpen = true)}>Fill in details myself</button>
 		</div>
 	</section>
 {:else}
@@ -323,7 +364,9 @@
 					<h2>Needs attention</h2>
 					<span class="panel__count">{listItems.length}</span>
 				</header>
-				{#if listItems.length === 0}
+				{#if summary.sections.attention.kind === 'unavailable'}
+					<p class="panel__calm">{summary.sections.attention.message}</p>
+				{:else if listItems.length === 0}
 					<p class="panel__calm">Nothing is waiting on you right now.</p>
 				{:else}
 					<ul class="attention">
@@ -354,16 +397,28 @@
 				<ul class="stages">
 					{#each summary.pipeline as stage (stage.key)}
 						{@const Health = stageIcon[stage.state]}
-						{@const door = laneDoor(stage, summary.navCounts)}
-						{@const pace = paceWord(stage)}
 						<li class="stages__item">
-							<!-- The whole lane is one door; nothing inside it is separately
-							     pressable, so the row can be a plain link. -->
-							<a
-								class="lane"
-								href={door.href}
-								data-stage={stage.key}
-								aria-label={laneName(stage, door.area)}>
+							{#if stage.availability.kind === 'unavailable'}
+								<!-- Capability availability is not event progress. The neutral
+								     lane keeps the tuned map visible without becoming a false door. -->
+								<span class="lane" data-stage={stage.key}>
+									<span class="lane__mark lane__mark--unavailable" aria-hidden="true"
+										><Health size={14} /></span
+									>
+									<span class="lane__label">{stage.label}</span>
+									<span class="lane__headline">{stage.headline}</span>
+									<span class="lane__sub">{stage.sub}</span>
+								</span>
+							{:else}
+								{@const door = laneDoor(stage, summary.navCounts)}
+								{@const pace = paceWord(stage)}
+								<!-- The whole lane is one door; nothing inside it is separately
+								     pressable, so the row can be a plain link. -->
+								<a
+									class="lane"
+									href={door.href}
+									data-stage={stage.key}
+									aria-label={laneName(stage, door.area)}>
 								<span class="lane__mark lane__mark--{stage.state}" aria-hidden="true"
 									><Health size={14} /></span
 								>
@@ -396,7 +451,8 @@
 										{/if}
 									</span>
 								{/if}
-							</a>
+								</a>
+							{/if}
 						</li>
 					{/each}
 				</ul>
@@ -406,31 +462,54 @@
 		<div class="columns__aside">
 			<section class="panel" aria-label="Deadlines">
 				<header class="panel__head"><h2>Deadlines</h2></header>
-				<ul class="dates">
-					{#each summary.deadlines as deadline (deadline.label)}
-						<li class="dates__row">
-							<span class="dates__label">{deadline.label}</span>
-							<span
-								class="dates__relative"
-								class:dates__relative--warning={deadline.tone === 'warning'}
-								class:dates__relative--blocked={deadline.tone === 'blocked'}>{deadline.relative}</span>
-							<span class="dates__absolute">{deadline.absolute}</span>
-						</li>
-					{/each}
-				</ul>
+				{#if summary.sections.deadlines.kind === 'unavailable'}
+					<p class="panel__calm">{summary.sections.deadlines.message}</p>
+				{:else if summary.deadlines.length === 0}
+					<p class="panel__calm">No event deadlines are recorded.</p>
+				{:else}
+					<ul class="dates">
+						{#each summary.deadlines as deadline (deadline.label)}
+							<li class="dates__row">
+								<span class="dates__label">{deadline.label}</span>
+								<span
+									class="dates__relative"
+									class:dates__relative--warning={deadline.tone === 'warning'}
+									class:dates__relative--blocked={deadline.tone === 'blocked'}>{deadline.relative}</span>
+								<span class="dates__absolute">{deadline.absolute}</span>
+							</li>
+						{/each}
+					</ul>
+				{/if}
 			</section>
 
 			<section class="panel" aria-label="Activity">
 				<header class="panel__head"><h2>Activity</h2></header>
-				<ActivityFeed items={summary.activity} />
+				{#if summary.sections.activity.kind === 'unavailable'}
+					<p class="panel__calm">{summary.sections.activity.message}</p>
+				{:else if summary.activity.length === 0}
+					<p class="panel__calm">No recorded activity yet.</p>
+				{:else}
+					<ActivityFeed items={summary.activity} />
+				{/if}
 			</section>
 
 			<section class="panel" aria-label="Everything has a place">
 				<header class="panel__head"><h2>Everything has a place</h2></header>
-				<TrayLedger trays={summary.trays} />
+				{#if summary.sections.trays.kind === 'unavailable'}
+					<p class="panel__calm">{summary.sections.trays.message}</p>
+				{:else}
+					<TrayLedger trays={summary.trays} />
+				{/if}
 			</section>
 		</div>
 	</div>
+{/if}
+
+{#if newEventOpen}
+	<NewEventModal
+		bind:open={newEventOpen}
+		createEvent={(input) => port.createEvent(input)}
+		oncreated={() => location.assign('/app')} />
 {/if}
 
 <style>
@@ -562,6 +641,11 @@
 		flex-wrap: wrap;
 		gap: var(--je-space-2);
 		justify-content: center;
+	}
+
+	.welcome--loading {
+		min-block-size: 12rem;
+		align-content: center;
 	}
 
 	/* Banner: the single act-now surface. The red is carried by the area
@@ -794,6 +878,10 @@
 
 	.lane__mark--blocked {
 		color: var(--je-color-danger);
+	}
+
+	.lane__mark--unavailable {
+		color: var(--je-color-text-subtle);
 	}
 
 	.lane__label {

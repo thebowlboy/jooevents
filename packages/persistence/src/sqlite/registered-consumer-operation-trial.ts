@@ -4,6 +4,7 @@ import {
   createEffectOperationExecutor,
   getCompiledRegisteredConsumerEffectOperation,
   listCompiledRegisteredConsumerEffectOperations,
+  type EffectAuthorityRecheckSource,
   type OperationRegistry,
   type TerminalEffectReceipt
 } from '@jooevents/application';
@@ -163,9 +164,7 @@ function isPromiseLike(value: unknown): boolean {
 }
 
 /** Installs only disposable source-payload evidence for the registered-consumer proof. */
-export function installSQLiteRegisteredConsumerOperationTrial(sqlite: Database): void {
-  sqlite.exec('PRAGMA foreign_keys = ON;');
-  sqlite.exec(`
+export const REGISTERED_CONSUMER_OPERATION_TRIAL_SQL = `
     CREATE TABLE registered_consumer_source_payloads_trial (
       pointer_key TEXT PRIMARY KEY,
       source_kind TEXT NOT NULL CHECK(source_kind IN ('domain_fact', 'effect', 'job')),
@@ -194,7 +193,11 @@ export function installSQLiteRegisteredConsumerOperationTrial(sqlite: Database):
     BEGIN
       SELECT RAISE(ABORT, 'registered_consumer_source_payload_immutable');
     END;
-  `);
+  `;
+
+export function installSQLiteRegisteredConsumerOperationTrial(sqlite: Database): void {
+  sqlite.exec('PRAGMA foreign_keys = ON;');
+  sqlite.exec(REGISTERED_CONSUMER_OPERATION_TRIAL_SQL);
 }
 
 export class SQLiteRegisteredConsumerSourcePayloadTrial {
@@ -322,6 +325,7 @@ export function createSQLiteRegisteredConsumerOperationTrialRunner(input: {
   readonly inputProjectors: readonly RegisteredConsumerInputProjectionRegistration[];
   readonly authority: readonly RegisteredConsumerAuthorityRegistration[];
   readonly domain: SQLiteTrialEffectDomainAdapter;
+  readonly transactionAuthority: EffectAuthorityRecheckSource;
   readonly workerKey: string;
   readonly newAttemptId: (deliveryId: ConsumerDeliveryId) => ConsumerAttemptId;
   readonly newCorrelationId: (
@@ -628,7 +632,7 @@ export function createSQLiteRegisteredConsumerOperationTrialRunner(input: {
       });
       const executor = createEffectOperationExecutor({
         registry: input.operationRegistry,
-        unitOfWork: new SQLiteTrialEffectUnitOfWorkPort(input.sqlite, domain),
+        unitOfWork: new SQLiteTrialEffectUnitOfWorkPort(input.sqlite, domain, input.transactionAuthority),
         ...(input.newReceiptId ? { newReceiptId: input.newReceiptId } : {})
       });
       const result = await executor.execute(invocation);

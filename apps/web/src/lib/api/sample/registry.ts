@@ -1,5 +1,9 @@
 import type { WorkspaceDataset } from './dataset';
+import { formatDateRange } from './dataset';
 import type { Residency } from '../residency';
+import type { WorkspaceEventOption } from '../types';
+import type { WorkspaceViewer } from '../workspace-gateway';
+import { newEventDataset, type CreatedEventSeed } from './new-event';
 import flight from './flight';
 import opening from './opening';
 import crunch from './crunch';
@@ -7,9 +11,11 @@ import quiet from './quiet';
 import fresh from './fresh';
 
 /**
- * Sample-data scenarios. The build always ships with the default scenario as
- * its data source until the real transport lands; alternative scenarios are a
- * development aid and are only selectable in dev builds (cookie-driven).
+ * Sample-data scenarios. The build ships with the default scenario as its data
+ * source until the real transport lands. The scenario cookie stopped being a
+ * dev-only aid when the sidebar event switcher started writing it (an event's
+ * data lives in the scenario that renders it), so it is honored in any sample
+ * build; the key is still validated against the known scenarios.
  */
 export const scenarios: WorkspaceDataset[] = [flight, opening, crunch, quiet, fresh];
 
@@ -18,19 +24,117 @@ export const defaultScenarioKey = 'flight';
 const COOKIE_NAME = 'je-scenario';
 
 export function activeScenarioKey(): string {
-	if (!import.meta.env.DEV || typeof document === 'undefined') return defaultScenarioKey;
+	if (typeof document === 'undefined') return defaultScenarioKey;
 	const match = document.cookie.match(/(?:^|;\s*)je-scenario=([^;]+)/);
 	const key = match?.[1];
-	return key && scenarios.some((scenario) => scenario.key === key) ? key : defaultScenarioKey;
+	if (!key) return defaultScenarioKey;
+	if (scenarios.some((scenario) => scenario.key === key)) return key;
+	if (createdEventSeeds().some((seed) => `created:${seed.id}` === key)) return key;
+	return defaultScenarioKey;
 }
 
 export function resolveDataset(): WorkspaceDataset {
 	const key = activeScenarioKey();
+	if (key.startsWith('created:')) {
+		const seed = createdEventSeeds().find((entry) => `created:${entry.id}` === key);
+		if (seed) return newEventDataset(seed);
+	}
 	return scenarios.find((scenario) => scenario.key === key) ?? scenarios[0];
+}
+
+// ---------------------------------------------------------------------------
+// Events created in this browser. They live client-side so they survive the
+// reload an event switch performs; the real backend replaces this store with
+// the event-creation operation and serves the list from the workspace.
+
+const CREATED_EVENTS_KEY = 'je-created-events';
+
+export function createdEventSeeds(): CreatedEventSeed[] {
+	if (typeof localStorage === 'undefined') return [];
+	try {
+		const raw = localStorage.getItem(CREATED_EVENTS_KEY);
+		const parsed: unknown = raw ? JSON.parse(raw) : [];
+		if (!Array.isArray(parsed)) return [];
+		return parsed.filter(
+			(entry): entry is CreatedEventSeed =>
+				typeof entry === 'object' &&
+				entry !== null &&
+				typeof (entry as CreatedEventSeed).id === 'string' &&
+				typeof (entry as CreatedEventSeed).name === 'string' &&
+				typeof (entry as CreatedEventSeed).timezone === 'string' &&
+				typeof (entry as CreatedEventSeed).startDate === 'string' &&
+				typeof (entry as CreatedEventSeed).endDate === 'string'
+		);
+	} catch {
+		return [];
+	}
+}
+
+export function persistCreatedEvent(seed: CreatedEventSeed): void {
+	if (typeof localStorage === 'undefined') return;
+	localStorage.setItem(CREATED_EVENTS_KEY, JSON.stringify([...createdEventSeeds(), seed]));
 }
 
 export function setScenarioCookie(key: string): void {
 	document.cookie = `${COOKIE_NAME}=${key}; path=/; max-age=31536000; samesite=lax`;
+}
+
+/**
+ * The workspace's events, one entry per distinct event id across the sample
+ * scenarios. Several scenarios are moments in the life of one event, so the
+ * active scenario represents its own event and the first scenario carrying an
+ * event represents it otherwise — dev scenario switching and the product event
+ * switcher compose instead of fighting.
+ */
+export function workspaceEvents(): WorkspaceEventOption[] {
+	const activeKey = activeScenarioKey();
+	const byEvent = new Map<string, WorkspaceEventOption>();
+	for (const scenario of scenarios) {
+		const event = scenario.summary.event;
+		if (!event) continue;
+		const existing = byEvent.get(event.id);
+		if (existing && scenario.key !== activeKey) continue;
+		byEvent.set(event.id, {
+			id: event.id,
+			name: event.name,
+			dates: event.dates,
+			location: event.location,
+			scenarioKey: scenario.key,
+			current: scenario.key === activeKey
+		});
+	}
+	const options = [...byEvent.values()];
+	for (const seed of createdEventSeeds()) {
+		options.push({
+			id: seed.id,
+			name: seed.name,
+			dates: formatDateRange(seed.startDate, seed.endDate),
+			location: '',
+			scenarioKey: `created:${seed.id}`,
+			current: `created:${seed.id}` === activeKey
+		});
+	}
+	return options;
+}
+
+const VIEWER_COOKIE = 'je-viewer';
+
+/**
+ * Whose eyes the workspace is seen through. A reviewer projection borrows a
+ * real roster entry from the loaded scenario, so a scenario with nobody
+ * reviewing yields the organizer projection rather than a reviewer who does
+ * not exist. Live builds will derive the same projection server-side.
+ */
+export function sampleViewer(): WorkspaceViewer {
+	if (!import.meta.env.DEV || typeof document === 'undefined') return { kind: 'organizer' };
+	const match = document.cookie.match(/(?:^|;\s*)je-viewer=(organizer|reviewer)/);
+	if (match?.[1] !== 'reviewer') return { kind: 'organizer' };
+	const reviewerId = resolveDataset().reviewers.find((reviewer) => reviewer.status === 'active')?.id;
+	return reviewerId ? { kind: 'reviewer', reviewerId } : { kind: 'organizer' };
+}
+
+export function setViewerCookie(kind: WorkspaceViewer['kind']): void {
+	document.cookie = `${VIEWER_COOKIE}=${kind}; path=/; max-age=31536000; samesite=lax`;
 }
 
 const RESIDENCY_COOKIE = 'je-residency';

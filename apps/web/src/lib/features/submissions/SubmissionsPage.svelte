@@ -1,13 +1,13 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { ChevronDown, Search } from 'lucide-svelte';
-	import { useWorkspaceGateway } from '$lib/api/workspace-gateway';
+	import type { SubmissionsPagePort } from '$lib/api/submissions-page-port';
 	import {
 		createSettler,
-		CopyValue,
 		Marked,
 		markIcon,
 		Popover,
+		shouldIgnoreRowPress,
 		statusIcon,
 		submissionTrayIcon,
 		trackPending
@@ -20,8 +20,11 @@
 		SUBMISSION_FIELD_TITLE,
 		SUBMISSION_SEARCH_SCOPE
 	} from '$lib/api/searchable';
-	import ResourceList from '$lib/features/workspace/components/ResourceList.svelte';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
+	import AddDirectEntryModal from './AddDirectEntryModal.svelte';
+	import SubmissionDetail, {
+		signalTone
+	} from '$lib/features/workspace/components/SubmissionDetail.svelte';
 	import ProfilePeek from '$lib/features/workspace/components/ProfilePeek.svelte';
 	import StandingMark from '$lib/features/workspace/components/StandingMark.svelte';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
@@ -37,7 +40,7 @@
 		TrayKey
 	} from '$lib/api/types';
 
-	const { api } = useWorkspaceGateway();
+	let { port }: { readonly port: SubmissionsPagePort } = $props();
 
 	let data = $state<SubmissionPage | null>(null);
 	let tracks = $state<Track[]>([]);
@@ -46,6 +49,7 @@
 	let selected = $state<string[]>([]);
 	let busy = $state(false);
 	let announcement = $state('');
+	let addOpen = $state(false);
 
 	/* Plain words, because these four are the fates an operator sorts into and
 	   none of them is a decision the submitter ever sees. "Set aside" replaced
@@ -167,7 +171,7 @@
 			...new Set(rows.flatMap((row) => row.speakers.map((speaker) => speaker.email)))
 		].filter((email) => !(email in profiles));
 		if (emails.length === 0) return;
-		const found = await Promise.all(emails.map((email) => api.speakers.profile(email)));
+		const found = await Promise.all(emails.map((email) => port.speakers.profile(email)));
 		if (ticket !== request) return;
 		const next = { ...profiles };
 		emails.forEach((email, index) => (next[email] = found[index]));
@@ -185,7 +189,7 @@
 		refreshing = true;
 		let landed: Submission[] = [];
 		try {
-			const next = await api.submissions.list(query);
+			const next = await port.submissions.list(query);
 			if (ticket !== request) return;
 			data = next;
 			landed = next.rows;
@@ -208,7 +212,7 @@
 		// The standing marks and the submitter profiles are two independent reads
 		// of the same landed rows, so neither waits on the other.
 		const [marks] = await Promise.all([
-			api.review.standings(landed.map((row) => row.id)),
+			port.review.standings(landed.map((row) => row.id)),
 			loadProfiles(landed, ticket)
 		]);
 		if (ticket !== request) return;
@@ -216,8 +220,17 @@
 		standingsRead = true;
 	}
 
-	onMount(async () => {
-		[tracks, formats] = await Promise.all([api.vocab.tracks(), api.vocab.formats()]);
+	// Read at least once: the entry dialog's selects must be able to tell
+	// "still loading" from "this event truly has no tracks yet".
+	let vocabLoaded = $state(false);
+
+	async function reloadVocab() {
+		[tracks, formats] = await Promise.all([port.vocab.tracks(), port.vocab.formats()]);
+		vocabLoaded = true;
+	}
+
+	onMount(() => {
+		void reloadVocab();
 	});
 
 	// Re-reads whenever the query in the address changes, including the first
@@ -289,7 +302,7 @@
 		const moved = (data?.rows ?? []).filter((row) => ids.includes(row.id));
 		const before = moved.map((row) => ({ id: row.id, tray: row.tray, setAsideBy: row.setAsideBy }));
 		busy = true;
-		await api.submissions[action](ids);
+		await port.submissions[action](ids);
 		recordAction({
 			area: 'submissions',
 			label:
@@ -297,7 +310,7 @@
 					? `${triageCopy[action]} “${moved[0].title}”`
 					: `${triageCopy[action]} ${moved.length} submissions`,
 			undo: async () => {
-				await api.submissions.restoreTray(before);
+				await port.submissions.restoreTray(before);
 			}
 		});
 		selected = [];
@@ -329,31 +342,15 @@
 		return accent === 'lavender' ? 'lavender' : accent === 'sea' ? 'sea' : 'neutral';
 	}
 
-	const signalTone: Record<string, string> = { quality: 'sea', draw: 'lavender', integrity: 'warning' };
-
-	/**
-	 * Everything in a row that can be pressed on its own. A press landing on one
-	 * of these — or anywhere inside one — belongs to it, so the checkbox, the
-	 * signal disclosures, the badge popovers and the chevron all keep their
-	 * press, and the row can safely claim the space left over.
-	 *
-	 * The surfaces those disclosures open over the row count too. A panel or a
-	 * dialog is painted in the top layer but still descends from the row in the
-	 * DOM, so without naming them here a press on a profile's own words would
-	 * also toggle the detail hidden behind it.
-	 */
-	const INTERACTIVE =
-		'a, button, input, label, select, textarea, [role="button"], .ui-popover__panel, dialog';
-
 	/**
 	 * The row is a bigger door to the same detail, for the pointer only. The
 	 * chevron stays the one focusable switch carrying `aria-expanded`, so the
 	 * accessible tree gains nothing to disambiguate and the keyboard path is
-	 * exactly what it was.
+	 * exactly what it was. Which presses belong to the row's own controls — or
+	 * to a text selection — is the shared row-press contract in `$lib/ui`.
 	 */
 	function onRowPress(event: MouseEvent, id: string) {
-		const target = event.target as Element | null;
-		if (target?.closest(INTERACTIVE)) return;
+		if (shouldIgnoreRowPress(event)) return;
 		expandedId = expandedId === id ? null : id;
 	}
 
@@ -442,8 +439,10 @@
 			{/each}
 		</select>
 		<span class="ui-toolbar__spacer"></span>
-		<button type="button" class="ui-button ui-button--secondary ui-button--sm">Add direct entry</button>
-		<button type="button" class="ui-button ui-button--secondary ui-button--sm">Import</button>
+		<button
+			type="button"
+			class="ui-button ui-button--secondary ui-button--sm"
+			onclick={() => (addOpen = true)}>Add direct entry</button>
 	</div>
 
 	<!-- What the search did, in past tense, for the eye and for assistive tech at
@@ -529,8 +528,8 @@
 								{:else}
 									<p class="empty__title">Nothing in {trayLabels[tray]} yet.</p>
 									<p class="empty__hint">
-										Adjust the filters, or paste a spreadsheet on the Import action to bring
-										submissions in.
+										Adjust the filters, share the application form, or add a direct entry to
+										bring a submission in yourself.
 									</p>
 								{/if}
 							</div>
@@ -582,7 +581,10 @@
 												ranges={nameRanges} />{/if}{/each}</span>
 									· {formatName(row.formatId)}
 									{#if row.source === 'direct_entry'}
-										· <span class="direct">direct entry</span>
+										<!-- Provenance in one phrase — this row is here because an
+										     organizer put it here, and that person vouches for it. -->
+										· <span class="direct"
+											>direct entry{#if row.enteredBy}{' '}by {row.enteredBy}{/if}</span>
 									{/if}
 								</span>
 							</td>
@@ -681,64 +683,30 @@
 							</td>
 						</tr>
 						{#if expandedId === row.id}
+							{#snippet trayActions()}
+								{#if row.tray === 'set-aside'}
+									<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('returnToInbox', [row.id])}>Move back to inbox</button>
+								{:else if row.tray === 'discarded'}
+									<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('restore', [row.id])}>Restore to inbox</button>
+								{:else}
+									<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('setAside', [row.id])}>Set aside</button>
+									<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('discard', [row.id])}>Discard</button>
+								{/if}
+							{/snippet}
+							<!-- Two buttons of equal weight; what they differ in and what either
+							     costs is stated here, at the point of action. -->
+							{#snippet fates()}
+								Neither is sent to the submitter and both can be undone. Set aside is
+								the softer one and an agent may do it for you; discard is firmer and
+								only a person can. Either way the submission leaves the decision
+								board.
+							{/snippet}
 							<tr class="detail-row">
 								<td colspan="6">
-									<div class="detail">
-										<div class="detail__main">
-											<h3 class="detail__heading">Abstract</h3>
-											<p class="detail__abstract">{row.abstract}</p>
-											<p class="detail__meta">Submitted {row.submittedAt}</p>
-											<ul class="detail__people">
-												{#each row.speakers as speaker (speaker.email)}
-													<li class="person">
-														<span class="person__name">{speaker.name}</span>
-														<CopyValue value={speaker.email} label="email address" />
-													</li>
-												{/each}
-											</ul>
-											<h3 class="detail__heading detail__heading--materials">Materials</h3>
-											<ResourceList resources={row.resources} />
-										</div>
-										<div class="detail__side">
-											{#if row.signals.length > 0}
-												<h3 class="detail__heading">Signals</h3>
-												<ul class="detail__signals">
-													{#each row.signals as signal (signal.key)}
-														<li>
-															<span class="ui-badge ui-badge--{signalTone[signal.family]}">{signal.label}</span>
-															<p class="detail__rationale">{signal.rationale}</p>
-															<p class="detail__source">{signal.source}</p>
-														</li>
-													{/each}
-												</ul>
-											{/if}
-											{#if row.appealCount}
-												<p class="detail__appeal">{row.appealCount} appeal from this submitter</p>
-											{/if}
-											<div class="detail__actions">
-												{#if row.tray === 'set-aside'}
-													<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('returnToInbox', [row.id])}>Move back to inbox</button>
-												{:else if row.tray === 'discarded'}
-													<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('restore', [row.id])}>Restore to inbox</button>
-												{:else}
-													<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('setAside', [row.id])}>Set aside</button>
-													<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('discard', [row.id])}>Discard</button>
-												{/if}
-											</div>
-											<!-- Two buttons of equal weight, and until now nothing said how
-											     they differ or what either costs. The consequence lived on
-											     Decisions, which is the one place you are not standing when
-											     you press these. Stated here, at the point of action. -->
-											{#if row.tray !== 'set-aside' && row.tray !== 'discarded'}
-												<p class="detail__fates">
-													Neither is sent to the submitter and both can be undone. Set aside is
-													the softer one and an agent may do it for you; discard is firmer and
-													only a person can. Either way the submission leaves the decision
-													board.
-												</p>
-											{/if}
-										</div>
-									</div>
+									<SubmissionDetail
+										submission={row}
+										actions={trayActions}
+										footnote={row.tray !== 'set-aside' && row.tray !== 'discarded' ? fates : undefined} />
 								</td>
 							</tr>
 						{/if}
@@ -766,7 +734,9 @@
 			{:else}
 				Showing {data.rows.length} of {data.trayTotals[tray]}
 			{/if}
-			in {trayLabels[tray].toLowerCase()} — sample window until live data lands.
+			in {trayLabels[tray].toLowerCase()}{port.source.kind === 'sample'
+				? ' — sample window until live data lands.'
+				: '.'}
 		</p>
 	{/if}
 </section>
@@ -785,6 +755,17 @@
 		<button type="button" class="ui-button ui-button--ghost ui-button--sm" onclick={() => (selected = [])}>Clear</button>
 	</div>
 {/if}
+
+<AddDirectEntryModal
+	bind:open={addOpen}
+	{port}
+	{tracks}
+	{formats}
+	vocabReady={vocabLoaded}
+	defaultTrackId={trackId}
+	defaultFormatId={formatId}
+	onvocabchanged={reloadVocab}
+	onadded={() => void load()} />
 
 <CommitReceipt onUndone={load} />
 
@@ -823,8 +804,8 @@
 	}
 
 	.trays__tab--active {
-		background: var(--je-color-surface-selected);
-		border-color: var(--je-color-border);
+		background: var(--je-color-mark-surface);
+		border-color: var(--je-color-mark-border);
 		color: var(--je-color-text);
 		font-weight: 600;
 	}
@@ -1106,104 +1087,6 @@
 		transition: opacity var(--je-duration-fast) var(--je-ease);
 	}
 
-	.detail {
-		display: grid;
-		grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-		gap: var(--je-space-6);
-		padding: var(--je-space-3) var(--je-space-2) var(--je-space-4);
-	}
-
-	.detail__heading {
-		margin: 0 0 var(--je-space-2);
-		font-size: var(--je-font-size-xs);
-		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: var(--je-tracking-caps);
-		color: var(--je-color-text-muted);
-	}
-
-	.detail__abstract {
-		margin: 0;
-		font-size: var(--je-font-size-md);
-		line-height: var(--je-leading-normal);
-		white-space: normal;
-	}
-
-	.detail__meta {
-		margin: var(--je-space-3) 0 0;
-		font-size: var(--je-font-size-xs);
-		color: var(--je-color-text-muted);
-		font-variant-numeric: tabular-nums;
-	}
-
-	/* One person per line. An address is a value someone transports, so it gets its
-	   own selectable run instead of sitting between angle brackets inside a
-	   sentence — and the interpunct goes back to separating one item's attributes. */
-	.detail__people {
-		list-style: none;
-		margin: var(--je-space-1) 0 0;
-		padding: 0;
-		display: grid;
-		gap: 2px;
-	}
-
-	.person {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: var(--je-space-1) var(--je-space-2);
-		font-size: var(--je-font-size-xs);
-		color: var(--je-color-text-muted);
-	}
-
-	.person__name {
-		color: var(--je-color-text);
-	}
-
-	.detail__heading--materials {
-		margin-block-start: var(--je-space-4);
-	}
-
-	.detail__signals {
-		list-style: none;
-		margin: 0 0 var(--je-space-3);
-		padding: 0;
-		display: grid;
-		gap: var(--je-space-3);
-	}
-
-	.detail__rationale {
-		margin: var(--je-space-1) 0 0;
-		font-size: var(--je-font-size-sm);
-		white-space: normal;
-	}
-
-	.detail__source {
-		margin: 0;
-		font-size: var(--je-font-size-xs);
-		color: var(--je-color-text-muted);
-	}
-
-	.detail__appeal {
-		margin: 0 0 var(--je-space-3);
-		font-size: var(--je-font-size-sm);
-		color: var(--je-color-warning);
-		font-weight: 600;
-	}
-
-	.detail__fates {
-		margin: var(--je-space-2) 0 0;
-		max-inline-size: 46ch;
-		font-size: var(--je-font-size-xs);
-		color: var(--je-color-text-muted);
-	}
-
-	.detail__actions {
-		display: flex;
-		flex-wrap: wrap;
-		gap: var(--je-space-2);
-	}
-
 	.window-note {
 		margin: var(--je-space-2) 0 0;
 		font-size: var(--je-font-size-xs);
@@ -1238,11 +1121,6 @@
 
 		.toolbar__search {
 			inline-size: 100%;
-		}
-
-		.detail {
-			grid-template-columns: 1fr;
-			gap: var(--je-space-4);
 		}
 
 		.bulkbar {

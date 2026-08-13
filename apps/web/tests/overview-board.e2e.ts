@@ -159,6 +159,6 @@ test.describe('the first days of a CFP', () => {
 
 		await expect(review.locator('.lane__track')).toHaveCount(0);
 		await expect(review.locator('.lane__pace')).toHaveCount(0);
-		await expect(review).toContainText('no review plan yet');
+		await expect(review).toContainText('round not open yet');
 	});
 });

@@ -8,6 +8,7 @@ import {
   parseInstant,
   parsePublicPolicyRevisionId,
   parseWorkspaceId,
+  isApplicationId,
   type AuditEventId,
   type CeremonyEvidenceId,
   type Clock,
@@ -16,7 +17,7 @@ import {
   type Instant,
   type PublicPolicyRevisionId
 } from '@jooevents/kernel';
-import { createHmac, randomBytes as secureRandomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes as secureRandomBytes } from 'node:crypto';
 
 const stableKeyPattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
 const opaqueActionAnchorPattern = /^pma_[A-Za-z0-9_-]{16,240}$/;
@@ -32,8 +33,14 @@ export const PUBLIC_MUTATION_CONTINUATION_LIMITS = Object.freeze({
   continuationEntropyBytes: 32,
   maximumLifetimeMs: 15 * 60 * 1_000,
   maximumVerificationProfiles: 8,
-  maximumVerifierMaterialBytes: 512
+  maximumVerifierMaterialBytes: 512,
+  maximumResourceBindings: 8
 });
+
+export interface PublicMutationContinuationResourceBinding {
+  readonly kind: string;
+  readonly id: string;
+}
 
 export interface PublicMutationContinuationKeyProfile {
   readonly reference: VersionedDefinitionRef;
@@ -50,8 +57,8 @@ export interface PublicMutationContinuationPolicy {
   readonly scope: EventScopeRef;
   readonly purpose: string;
   readonly action: string;
-  /** Opaque server-held action/draft identity. It is never selected by a request body. */
-  readonly actionAnchorId: string;
+  /** Canonical server-owned resource pins required to resolve this ceremony. */
+  readonly resourceBindings: readonly PublicMutationContinuationResourceBinding[];
   readonly lifetimeMs: number;
   readonly bootstrapVerifier: VersionedDefinitionRef;
   readonly originPolicy: VersionedDefinitionRef;
@@ -66,6 +73,12 @@ export interface PublicMutationContinuationPolicy {
   readonly principalPartitionProfile: PublicMutationContinuationKeyProfile;
   readonly bootstrapReplayProfile: PublicMutationContinuationKeyProfile;
 }
+
+/**
+ * Static current policy. A fresh server-owned action anchor is bound to each stored
+ * ceremony, rather than rotating this template for every public participant.
+ */
+export type PublicMutationContinuationPolicyTemplate = PublicMutationContinuationPolicy;
 
 export interface PublicMutationContinuationPolicyRegistry {
   resolve(binding: VersionedDefinitionRef): PublicMutationContinuationPolicy | undefined;
@@ -134,6 +147,7 @@ export interface PublicMutationContinuationConfigurationSnapshot {
   readonly scope: EventScopeRef;
   readonly purpose: string;
   readonly action: string;
+  readonly resourceBindings: readonly PublicMutationContinuationResourceBinding[];
   readonly actionAnchorId: string;
   readonly lifetimeMs: number;
   readonly bootstrapVerifier: VersionedDefinitionRef;
@@ -148,6 +162,11 @@ export interface PublicMutationContinuationConfigurationSnapshot {
   readonly principalPartitionProfile: PublicMutationContinuationProfileSnapshot;
   readonly bootstrapReplayProfile: PublicMutationContinuationProfileSnapshot;
 }
+
+export type PublicMutationContinuationConfigurationTemplateSnapshot = Omit<
+  PublicMutationContinuationConfigurationSnapshot,
+  'actionAnchorId'
+>;
 
 export interface PublicMutationContinuationAlias {
   readonly profile: PublicMutationContinuationProfileSnapshot;
@@ -206,7 +225,7 @@ export interface PublicMutationContinuationStore {
     | { readonly kind: 'issued'; readonly ceremony: PublicMutationStoredCeremony }
     | { readonly kind: 'already_issued'; readonly ceremony: PublicMutationStoredCeremony };
   resolve(input: {
-    readonly configuration: PublicMutationContinuationConfigurationSnapshot;
+    readonly template: PublicMutationContinuationConfigurationTemplateSnapshot;
     readonly aliases: readonly [
       PublicMutationContinuationAlias,
       ...PublicMutationContinuationAlias[]
@@ -220,6 +239,16 @@ export interface PublicMutationContinuationStore {
         readonly ceremony: PublicMutationStoredCeremony;
         readonly completionReference: string;
       }
+    | {
+        readonly kind: 'stopped';
+        readonly reason: 'not_available' | 'expired' | 'revoked' | 'policy_changed';
+      };
+  recheckCurrent(input: {
+    readonly ceremonyEvidenceId: CeremonyEvidenceId;
+    readonly template: PublicMutationContinuationConfigurationTemplateSnapshot;
+    readonly now: Instant;
+  }):
+    | { readonly kind: 'ready'; readonly ceremony: PublicMutationStoredCeremony }
     | {
         readonly kind: 'stopped';
         readonly reason: 'not_available' | 'expired' | 'revoked' | 'policy_changed';
@@ -270,6 +299,9 @@ export interface PublicMutationContinuationBoundary {
   readonly sealReader: PublicMutationContinuationSealReader;
   mint(input: { readonly protocolEvidence: unknown }): Promise<PublicMutationContinuationMintResult>;
   admit(input: { readonly continuation: string }): PublicMutationContinuationAdmissionResult;
+  /** Current, durable material only for a ceremony admitted by this boundary instance. */
+  resolveCurrent(ceremonyEvidenceId: CeremonyEvidenceId):
+    SealedPublicMutationContinuationMaterial | undefined;
 }
 
 export interface PublicMutationContinuationBoundaryOptions {
@@ -278,6 +310,8 @@ export interface PublicMutationContinuationBoundaryOptions {
   readonly bootstrapVerifiers: PublicMutationBootstrapVerifierRegistry;
   readonly store: PublicMutationContinuationStore;
   readonly clock: Clock;
+  /** Returns a new opaque server-owned action/draft identity for one ceremony. */
+  readonly newActionAnchorId: () => string;
   readonly newCeremonyEvidenceId: () => CeremonyEvidenceId;
   readonly newAuditEventId: () => AuditEventId;
   readonly randomBytes?: (size: number) => Uint8Array;
@@ -344,13 +378,40 @@ function keyProfile(value: PublicMutationContinuationKeyProfile): NormalizedKeyP
   });
 }
 
+function resourceBindings(
+  values: readonly PublicMutationContinuationResourceBinding[]
+): readonly PublicMutationContinuationResourceBinding[] {
+  if (!Array.isArray(values) || values.length === 0
+      || values.length > PUBLIC_MUTATION_CONTINUATION_LIMITS.maximumResourceBindings) {
+    throw new TypeError('public mutation resource binding set is invalid');
+  }
+  const normalized = values.map((value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+        || Object.keys(value).sort().join(',') !== 'id,kind'
+        || typeof value.kind !== 'string' || !stableKeyPattern.test(value.kind)
+        || typeof value.id !== 'string' || value.id.length === 0 || value.id.length > 240
+        || value.id.trim() !== value.id || value.id.normalize('NFC') !== value.id
+        || value.id.includes('\0')) {
+      throw new TypeError('public mutation resource binding is invalid');
+    }
+    return Object.freeze({ kind: value.kind, id: value.id });
+  }).sort((left, right) => left.kind < right.kind ? -1 : left.kind > right.kind ? 1
+    : left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
+  if (normalized.some((value, index) => index > 0
+      && value.kind === normalized[index - 1]!.kind
+      && value.id === normalized[index - 1]!.id)) {
+    throw new TypeError('public mutation resource bindings must be unique');
+  }
+  return Object.freeze(normalized);
+}
+
 function normalizePolicy(value: PublicMutationContinuationPolicy): NormalizedPolicy {
   if (!Number.isSafeInteger(value.lifetimeMs) || value.lifetimeMs <= 0 ||
     value.lifetimeMs > PUBLIC_MUTATION_CONTINUATION_LIMITS.maximumLifetimeMs) {
     throw new TypeError('public mutation continuation lifetime is invalid');
   }
   if (!stableKeyPattern.test(value.operation.name) || !stableKeyPattern.test(value.purpose) ||
-    !stableKeyPattern.test(value.action) || !opaqueActionAnchorPattern.test(value.actionAnchorId)) {
+    !stableKeyPattern.test(value.action)) {
     throw new TypeError('public mutation action binding is invalid');
   }
   if (value.continuationProfiles.length === 0 ||
@@ -378,7 +439,7 @@ function normalizePolicy(value: PublicMutationContinuationPolicy): NormalizedPol
     }),
     purpose: value.purpose,
     action: value.action,
-    actionAnchorId: value.actionAnchorId,
+    resourceBindings: resourceBindings(value.resourceBindings),
     lifetimeMs: value.lifetimeMs,
     bootstrapVerifier: definitionRef(value.bootstrapVerifier),
     originPolicy: definitionRef(value.originPolicy),
@@ -425,7 +486,17 @@ function profileSnapshot(
   });
 }
 
-function configurationSnapshot(policy: NormalizedPolicy): PublicMutationContinuationConfigurationSnapshot {
+function actionAnchorId(value: unknown): string {
+  if (typeof value !== 'string' ||
+    (!opaqueActionAnchorPattern.test(value) && !isApplicationId(value))) {
+    throw new TypeError('public mutation action anchor is invalid');
+  }
+  return value;
+}
+
+function configurationTemplateSnapshot(
+  policy: NormalizedPolicy
+): PublicMutationContinuationConfigurationTemplateSnapshot {
   const continuationProfiles = policy.continuationProfiles.map((profile) =>
     profileSnapshot(
       profile,
@@ -442,7 +513,7 @@ function configurationSnapshot(policy: NormalizedPolicy): PublicMutationContinua
     scope: policy.scope,
     purpose: policy.purpose,
     action: policy.action,
-    actionAnchorId: policy.actionAnchorId,
+    resourceBindings: policy.resourceBindings,
     lifetimeMs: policy.lifetimeMs,
     bootstrapVerifier: policy.bootstrapVerifier,
     originPolicy: policy.originPolicy,
@@ -466,7 +537,20 @@ function configurationSnapshot(policy: NormalizedPolicy): PublicMutationContinua
   });
 }
 
-function bindingContext(snapshot: PublicMutationContinuationConfigurationSnapshot): unknown {
+function configurationSnapshot(
+  template: PublicMutationContinuationConfigurationTemplateSnapshot,
+  anchor: string
+): PublicMutationContinuationConfigurationSnapshot {
+  return Object.freeze({
+    ...template,
+    actionAnchorId: actionAnchorId(anchor)
+  });
+}
+
+function bindingContext(
+  snapshot: PublicMutationContinuationConfigurationTemplateSnapshot
+    | PublicMutationContinuationConfigurationSnapshot
+): unknown {
   return {
     binding: snapshot.binding,
     publicPolicyRevisionId: snapshot.publicPolicyRevisionId,
@@ -474,13 +558,13 @@ function bindingContext(snapshot: PublicMutationContinuationConfigurationSnapsho
     scope: snapshot.scope,
     purpose: snapshot.purpose,
     action: snapshot.action,
-    actionAnchorId: snapshot.actionAnchorId
+    resourceBindings: snapshot.resourceBindings
   };
 }
 
 function continuationAliases(
   policy: NormalizedPolicy,
-  snapshot: PublicMutationContinuationConfigurationSnapshot,
+  snapshot: PublicMutationContinuationConfigurationTemplateSnapshot,
   continuation: string
 ): readonly [PublicMutationContinuationAlias, ...PublicMutationContinuationAlias[]] {
   const aliases = policy.continuationProfiles.map((profile, index) => Object.freeze({
@@ -559,6 +643,18 @@ function instantAfter(value: Instant, milliseconds: number): Instant {
   return parseInstant(new Date(Date.parse(value) + milliseconds).toISOString());
 }
 
+export function publicMutationAuthorityPartitionDigest(
+  principalPartitionKey: string
+): string {
+  if (!/^ppv1_[a-f0-9]{64}$/.test(principalPartitionKey)) {
+    throw new TypeError('public mutation principal partition key is invalid');
+  }
+  return createHash('sha256')
+    .update('jooevents.public-mutation.authority-partition.v1\0', 'utf8')
+    .update(principalPartitionKey, 'utf8')
+    .digest('hex');
+}
+
 /**
  * Builds one unactivated, binding-specific security boundary. It mints and verifies
  * evidence only; it has no application-operation dispatch or domain mutation API.
@@ -568,9 +664,10 @@ export function createPublicMutationContinuationBoundary(
 ): PublicMutationContinuationBoundary {
   const bound = definitionRef(options.binding);
   const seals = new WeakMap<object, SealedPublicMutationContinuationMaterial>();
+  const admittedById = new Map<CeremonyEvidenceId, SealedPublicMutationContinuationMaterial>();
   const random = options.randomBytes ?? ((size: number) => Uint8Array.from(secureRandomBytes(size)));
 
-  const current = (): { readonly policy: NormalizedPolicy; readonly snapshot: PublicMutationContinuationConfigurationSnapshot; readonly verifier: RegisteredPublicMutationBootstrapVerifier } | undefined => {
+  const current = (): { readonly policy: NormalizedPolicy; readonly template: PublicMutationContinuationConfigurationTemplateSnapshot; readonly verifier: RegisteredPublicMutationBootstrapVerifier } | undefined => {
     try {
       const candidate = options.policies.resolve(bound);
       if (!candidate) return undefined;
@@ -578,7 +675,7 @@ export function createPublicMutationContinuationBoundary(
       if (!sameRef(policy.binding, bound)) return undefined;
       const verifier = options.bootstrapVerifiers.resolve(policy.bootstrapVerifier);
       if (!verifier || !sameRef(definitionRef(verifier.reference), policy.bootstrapVerifier)) return undefined;
-      return Object.freeze({ policy, snapshot: configurationSnapshot(policy), verifier });
+      return Object.freeze({ policy, template: configurationTemplateSnapshot(policy), verifier });
     } catch {
       return undefined;
     }
@@ -595,7 +692,11 @@ export function createPublicMutationContinuationBoundary(
       const material = seals.get(evidence);
       if (!material || Date.parse(now()) >= Date.parse(material.expiresAt)) return undefined;
       const registered = current();
-      if (!registered || canonicalJsonText(registered.snapshot) !== canonicalJsonText(material.configuration)) {
+      if (!registered) {
+        return undefined;
+      }
+      const { actionAnchorId: _storedAnchor, ...storedTemplate } = material.configuration;
+      if (canonicalJsonText(registered.template) !== canonicalJsonText(storedTemplate)) {
         return undefined;
       }
       return material;
@@ -604,20 +705,52 @@ export function createPublicMutationContinuationBoundary(
 
   return Object.freeze({
     sealReader,
+    resolveCurrent(ceremonyEvidenceId: CeremonyEvidenceId) {
+      const parsedId = parseCeremonyEvidenceId(ceremonyEvidenceId);
+      const material = admittedById.get(parsedId);
+      if (!material) return undefined;
+      const registered = current();
+      if (!registered) return undefined;
+      const { actionAnchorId: _storedAnchor, ...storedTemplate } = material.configuration;
+      if (canonicalJsonText(registered.template) !== canonicalJsonText(storedTemplate)) {
+        return undefined;
+      }
+      const result = options.store.recheckCurrent({
+        ceremonyEvidenceId: parsedId,
+        template: registered.template,
+        now: now()
+      });
+      if (result.kind !== 'ready') return undefined;
+      const ceremony = result.ceremony;
+      if (canonicalJsonText(ceremony.configuration) !== canonicalJsonText(material.configuration)
+          || ceremony.principalPartitionKey !== material.principalPartitionKey
+          || ceremony.createdAt !== material.createdAt
+          || ceremony.expiresAt !== material.expiresAt) return undefined;
+      return material;
+    },
     async mint(input: { readonly protocolEvidence: unknown }): Promise<PublicMutationContinuationMintResult> {
       const registered = current();
       if (!registered) return Object.freeze({ kind: 'unavailable' });
       const receivedAt = now();
+      let configuration: PublicMutationContinuationConfigurationSnapshot;
+      try {
+        configuration = configurationSnapshot(
+          registered.template,
+          options.newActionAnchorId()
+        );
+      } catch {
+        return Object.freeze({ kind: 'unavailable' });
+      }
       let verification: NormalizedPublicMutationBootstrapVerification;
       try {
         verification = normalizeVerification(await registered.verifier.verify({
           protocolEvidence: input.protocolEvidence,
           receivedAt,
-          binding: registered.snapshot.binding,
-          originPolicy: registered.snapshot.originPolicy,
-          csrfPolicy: registered.snapshot.csrfPolicy,
-          rateLimitPolicy: registered.snapshot.rateLimitPolicy,
-          replayPolicy: registered.snapshot.replayPolicy
+          binding: registered.template.binding,
+          originPolicy: registered.template.originPolicy,
+          csrfPolicy: registered.template.csrfPolicy,
+          rateLimitPolicy: registered.template.rateLimitPolicy,
+          replayPolicy: registered.template.replayPolicy
         }));
       } catch {
         verification = { kind: 'rejected', reason: 'verifier_invalid' };
@@ -626,7 +759,7 @@ export function createPublicMutationContinuationBoundary(
         options.store.recordBootstrapRejection({
           auditEventId: auditId(),
           ceremonyEvidenceId: null,
-          configuration: registered.snapshot,
+          configuration,
           disposition: 'bootstrap_rejected',
           reasonCode: verification.reason,
           recordedAt: receivedAt,
@@ -642,14 +775,14 @@ export function createPublicMutationContinuationBoundary(
         registered.policy.principalPartitionProfile.keyBytes,
         'jooevents.public-mutation.principal-partition.v1',
         registered.policy.principalPartitionProfile.reference,
-        bindingContext(registered.snapshot),
+        bindingContext(registered.template),
         verification.principalPartitionMaterial
       )}`;
       const bootstrapReplayVerifier = `prv1_${hmac(
         registered.policy.bootstrapReplayProfile.keyBytes,
         'jooevents.public-mutation.bootstrap-replay-verifier.v1',
         registered.policy.bootstrapReplayProfile.reference,
-        bindingContext(registered.snapshot),
+        bindingContext(registered.template),
         verification.bootstrapReplayMaterial
       )}`;
       const entropy = random(PUBLIC_MUTATION_CONTINUATION_LIMITS.continuationEntropyBytes);
@@ -661,12 +794,12 @@ export function createPublicMutationContinuationBoundary(
       if (!rawContinuationPattern.test(continuation)) {
         throw new TypeError('public mutation continuation encoding is invalid');
       }
-      const aliases = continuationAliases(registered.policy, registered.snapshot, continuation);
+      const aliases = continuationAliases(registered.policy, registered.template, continuation);
       const expiresAt = instantAfter(receivedAt, registered.policy.lifetimeMs);
       const ceremonyEvidenceId = parseCeremonyEvidenceId(options.newCeremonyEvidenceId());
       const stored = options.store.mint({
         ceremonyEvidenceId,
-        configuration: registered.snapshot,
+        configuration,
         principalPartitionKey,
         bootstrapReplayVerifier,
         aliases,
@@ -675,7 +808,7 @@ export function createPublicMutationContinuationBoundary(
         audit: {
           auditEventId: auditId(),
           ceremonyEvidenceId,
-          configuration: registered.snapshot,
+          configuration,
           disposition: 'mint_issued',
           reasonCode: 'issued',
           recordedAt: receivedAt,
@@ -696,10 +829,10 @@ export function createPublicMutationContinuationBoundary(
         return Object.freeze({ kind: 'stopped', reason: 'not_available' });
       }
       const result = options.store.resolve({
-        configuration: registered.snapshot,
+        template: registered.template,
         aliases: continuationAliases(
           registered.policy,
-          registered.snapshot,
+          registered.template,
           input.continuation
         ),
         now: now(),
@@ -723,6 +856,7 @@ export function createPublicMutationContinuationBoundary(
         ceremonyEvidenceId: result.ceremony.ceremonyEvidenceId
       }) as PublicMutationContinuationEvidence;
       seals.set(evidence, material);
+      admittedById.set(result.ceremony.ceremonyEvidenceId, material);
       return Object.freeze({ kind: 'ready', evidence });
     }
   });

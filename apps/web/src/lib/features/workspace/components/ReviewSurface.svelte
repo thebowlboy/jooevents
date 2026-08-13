@@ -36,7 +36,8 @@
 	import type { Snippet } from 'svelte';
 	import { Search } from 'lucide-svelte';
 	import { CopyValue, Marked } from '$lib/ui';
-	import { matchFields, parseSearch } from '$lib/api/search';
+	import { matchFields, parseSearch, type MatchRange } from '$lib/api/search';
+	import type { RecipientRow } from '$lib/api/types';
 
 	interface Props {
 		/** Null while the projection is still loading; the shell keeps its footprint. */
@@ -49,6 +50,14 @@
 		subject?: Snippet;
 		/** Door behind the template fact (see `templateDoor`); null keeps it plain text. */
 		templateDoor?: { href: string; name: string } | null;
+		/**
+		 * Lets the host render one included recipient's whole email: the sample
+		 * line becomes the press that asks for it. Excluded and blocked rows can
+		 * never request content, so their reasons stay plain text.
+		 */
+		onPreview?: (recipient: RecipientRow) => void;
+		/** The recipient whose preview is currently open, by email. */
+		previewingEmail?: string | null;
 	}
 
 	let {
@@ -56,7 +65,9 @@
 		readiness = null,
 		previewLabel = 'What they see',
 		subject,
-		templateDoor: door = null
+		templateDoor: door = null,
+		onPreview,
+		previewingEmail = null
 	}: Props = $props();
 
 	const uid = $props.id();
@@ -145,6 +156,29 @@
 		return recipient.state === 'included' ? (recipient.mergeSample ?? '') : (recipient.reason ?? '');
 	}
 </script>
+
+{#snippet sampleCell(recipient: RecipientRow, ranges: readonly MatchRange[], inline: boolean)}
+	{#if onPreview && recipient.state === 'included' && line(recipient)}
+		<!-- Dotted underline, row ink: this tells more in place — the whole
+		     rendered email opens below the table, nothing navigates. -->
+		<button
+			type="button"
+			class="sample sample--door"
+			class:sample--inline={inline}
+			aria-pressed={previewingEmail === recipient.email}
+			aria-label={`Preview the email for ${recipient.name}`}
+			onclick={() => onPreview?.(recipient)}>
+			<Marked text={line(recipient)} {ranges} />
+		</button>
+	{:else}
+		<span
+			class="sample"
+			class:sample--inline={inline}
+			class:sample--reason={recipient.state !== 'included'}>
+			<Marked text={line(recipient)} {ranges} />
+		</span>
+	{/if}
+{/snippet}
 
 {#if subject}
 	<div class="subject">{@render subject()}</div>
@@ -289,16 +323,12 @@
 											ranges={match?.fields[RECIPIENT_FIELD_NAME]?.ranges ?? []} /></span>
 									<span class="mail"><CopyValue value={recipient.email} label="recipient address" /></span>
 									{#if narrow}
-										<span class="sample sample--inline" class:sample--reason={recipient.state !== 'included'}>
-											<Marked text={line(recipient)} ranges={match?.fields[lineField]?.ranges ?? []} />
-										</span>
+										{@render sampleCell(recipient, match?.fields[lineField]?.ranges ?? [], true)}
 									{/if}
 								</td>
 								{#if !narrow}
 									<td>
-										<span class="sample" class:sample--reason={recipient.state !== 'included'}>
-											<Marked text={line(recipient)} ranges={match?.fields[lineField]?.ranges ?? []} />
-										</span>
+										{@render sampleCell(recipient, match?.fields[lineField]?.ranges ?? [], false)}
 									</td>
 								{/if}
 								<td>
@@ -589,6 +619,29 @@
 
 	.sample--inline {
 		margin-block-start: 0.15rem;
+	}
+
+	/* The in-place disclosure grammar: dotted underline in the row's own ink.
+	   Open state tints like a marked thing — chosen, not a status. */
+	.sample--door {
+		padding: 0;
+		border: 0;
+		background: none;
+		font: inherit;
+		color: inherit;
+		text-align: start;
+		cursor: pointer;
+		text-decoration: underline dotted;
+		text-underline-offset: 0.18em;
+	}
+
+	.sample--door:hover {
+		text-decoration-style: solid;
+	}
+
+	.sample--door[aria-pressed='true'] {
+		background: var(--je-color-mark-surface);
+		color: var(--je-color-mark-ink);
 	}
 
 	/* The exclusion reason takes the place of the preview: what they would have

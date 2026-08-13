@@ -8,6 +8,7 @@ import {
   createOperationAutonomyPolicy,
   createOperationRegistry,
   createSingleUnitOfWorkConformanceFixture,
+  type EffectAuthorityRecheckSource,
   type EffectInvocationContext,
   type OperationRegistry,
   type OperationRegistrySource,
@@ -233,6 +234,53 @@ interface HarnessState {
   readonly trace: string[];
 }
 
+function createJobAuthorityResolver(input: {
+  readonly jobs: SQLiteReliabilityJobTrial;
+  readonly definition: JobDefinition;
+  readonly state: HarnessState;
+}): EffectAuthorityRecheckSource['resolveAuthority'] {
+  return (resolution) => {
+    if (resolution.evidence.kind !== 'registered_job') {
+      return { kind: 'denied' as const, reason: 'lane_mismatch' as const };
+    }
+    const record = input.jobs.read(resolution.evidence.jobId);
+    const lease = record?.job.lease;
+    if (!input.state.authorized) {
+      return { kind: 'denied' as const, reason: 'revoked' as const };
+    }
+    if (
+      !record
+      || record.job.state !== 'leased'
+      || !lease
+      || record.job.capabilityRevisionId !== input.definition.capabilityRevisionId
+      || !sameRef(record.job.authorityCitation, input.definition.authorityCitation)
+      || record.authorityCitationId !== ids.citation
+    ) return { kind: 'denied' as const, reason: 'stale' as const };
+    return {
+      kind: 'authorized' as const,
+      authority: {
+        actor: {
+          kind: 'system_job' as const,
+          jobId: record.job.id,
+          registeredCapabilityRevisionId: record.job.capabilityRevisionId
+        },
+        principal: {
+          kind: 'registered_job' as const,
+          jobId: record.job.id,
+          capabilityRevisionId: record.job.capabilityRevisionId,
+          authorityCitationId: record.authorityCitationId
+        },
+        lane: resolution.lane,
+        scope: resolution.scope,
+        grants: [{ kind: 'registered_capability' as const, key: record.job.capabilityRevisionId }],
+        evidenceIds: [`job-current:${record.job.id}:${lease.attemptId}`],
+        authorityCitationIds: [record.authorityCitationId],
+        evaluatedAt: resolution.evaluatedAt
+      }
+    };
+  };
+}
+
 interface Harness {
   readonly sqlite: Database;
   readonly clock: TrialClock;
@@ -246,6 +294,7 @@ interface Harness {
   readonly projectors: readonly RegisteredJobInputProjectionRegistration[];
   readonly policy: RegisteredJobOperationTrialDispositionPolicy;
   readonly domain: SQLiteTrialEffectDomainAdapter;
+  readonly transactionAuthority: EffectAuthorityRecheckSource;
   readonly nextAttemptId: (jobId: JobId) => InvocationId;
   readonly nextCorrelationId: (jobId: JobId, attemptId: InvocationId) => string;
   readonly nextReceiptId: () => string;
@@ -339,6 +388,11 @@ async function harness(options: {
     rawKeys: [],
     trace: []
   };
+  const resolveAuthority = createJobAuthorityResolver({ jobs, definition, state });
+  const transactionAuthority = {
+    resolveAuthority,
+    now: () => clock.now()
+  } satisfies EffectAuthorityRecheckSource;
   const lane = parseOperationAccessLane({
     kind: 'registered_job',
     surface: 'application_job',
@@ -365,44 +419,7 @@ async function harness(options: {
       }
     },
     authorityResolver: {
-      resolve: (resolution) => {
-        if (resolution.evidence.kind !== 'registered_job') {
-          return { kind: 'denied' as const, reason: 'lane_mismatch' as const };
-        }
-        const record = jobs.read(resolution.evidence.jobId);
-        const lease = record?.job.lease;
-        if (!state.authorized) return { kind: 'denied' as const, reason: 'revoked' as const };
-        if (
-          !record
-          || record.job.state !== 'leased'
-          || !lease
-          || record.job.capabilityRevisionId !== definition.capabilityRevisionId
-          || !sameRef(record.job.authorityCitation, definition.authorityCitation)
-          || record.authorityCitationId !== ids.citation
-        ) return { kind: 'denied' as const, reason: 'stale' as const };
-        return {
-          kind: 'authorized' as const,
-          authority: {
-            actor: {
-              kind: 'system_job' as const,
-              jobId: record.job.id,
-              registeredCapabilityRevisionId: record.job.capabilityRevisionId
-            },
-            principal: {
-              kind: 'registered_job' as const,
-              jobId: record.job.id,
-              capabilityRevisionId: record.job.capabilityRevisionId,
-              authorityCitationId: record.authorityCitationId
-            },
-            lane: resolution.lane,
-            scope: resolution.scope,
-            grants: [{ kind: 'registered_capability' as const, key: record.job.capabilityRevisionId }],
-            evidenceIds: [`job-current:${record.job.id}:${lease.attemptId}`],
-            authorityCitationIds: [record.authorityCitationId],
-            evaluatedAt: resolution.evaluatedAt
-          }
-        };
-      }
+      resolve: resolveAuthority
     },
     clock,
     newInvocationId: () => parseInvocationId(nextUuid()),
@@ -657,6 +674,7 @@ async function harness(options: {
       inputProjectors: projectors,
       dispositionPolicies: [policy],
       domain,
+      transactionAuthority,
       auditHooks: {
         afterTerminalAuditInserted: () => {
           const job = jobs.read(activeJobId as JobId);
@@ -681,6 +699,7 @@ async function harness(options: {
     projectors,
     policy,
     domain,
+    transactionAuthority,
     nextAttemptId,
     nextCorrelationId,
     nextReceiptId,
@@ -796,7 +815,11 @@ describe('disposable registered-job operation join', () => {
     });
     const executor = createEffectOperationExecutor({
       registry: test.operationRegistry,
-      unitOfWork: new SQLiteTrialEffectUnitOfWorkPort(test.sqlite, test.domain),
+      unitOfWork: new SQLiteTrialEffectUnitOfWorkPort(
+        test.sqlite,
+        test.domain,
+        test.transactionAuthority
+      ),
       newReceiptId: test.nextReceiptId
     });
     const first = await executor.execute(invocation);
@@ -970,6 +993,7 @@ describe('disposable registered-job operation join', () => {
       inputProjectors: [mismatchedProjector],
       dispositionPolicies: [test.policy],
       domain: test.domain,
+      transactionAuthority: test.transactionAuthority,
       workerKey: 'worker.registered-job-a',
       newAttemptId: test.nextAttemptId,
       newCorrelationId: test.nextCorrelationId
@@ -989,6 +1013,7 @@ describe('disposable registered-job operation join', () => {
       inputProjectors: test.projectors,
       dispositionPolicies: [forgedPolicy],
       domain: test.domain,
+      transactionAuthority: test.transactionAuthority,
       workerKey: 'worker.registered-job-a',
       newAttemptId: test.nextAttemptId,
       newCorrelationId: test.nextCorrelationId

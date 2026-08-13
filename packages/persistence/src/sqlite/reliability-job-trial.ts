@@ -43,6 +43,12 @@ import {
   type SchemaRef
 } from '@jooevents/reliability';
 
+const RELIABILITY_JOB_IMMUTABLE_TABLES = [
+  'reliability_job_attempts_trial',
+  'reliability_job_attempt_completions_trial',
+  'reliability_job_dispositions_trial'
+] as const;
+
 export const TRIAL_JOB_DISPOSITIONS = [
   'safe_retry',
   'reconcile',
@@ -337,7 +343,11 @@ function failureFromRow(row: AttemptRow): SafeFailure | null {
 }
 
 function immutableTrigger(sqlite: Database, table: string): void {
-  sqlite.exec(`
+  sqlite.exec(reliabilityJobImmutableTriggerSql(table));
+}
+
+function reliabilityJobImmutableTriggerSql(table: string): string {
+  return `
     CREATE TRIGGER ${table}_reject_update
     BEFORE UPDATE ON ${table}
     BEGIN
@@ -349,13 +359,11 @@ function immutableTrigger(sqlite: Database, table: string): void {
     BEGIN
       SELECT RAISE(ABORT, '${table}_immutable');
     END;
-  `);
+  `;
 }
 
 /** Installs only a disposable SQLite proof schema; it is not a retained migration. */
-export function installSQLiteReliabilityJobTrial(sqlite: Database): void {
-  sqlite.exec('PRAGMA foreign_keys = ON;');
-  sqlite.exec(`
+export const RELIABILITY_JOB_TRIAL_SQL = `
     CREATE TABLE reliability_jobs_trial (
       job_id TEXT PRIMARY KEY,
       definition_key TEXT NOT NULL,
@@ -551,13 +559,17 @@ export function installSQLiteReliabilityJobTrial(sqlite: Database): void {
     BEGIN
       SELECT RAISE(ABORT, 'reliability_job_binding_immutable');
     END;
-  `);
+  `;
 
-  for (const table of [
-    'reliability_job_attempts_trial',
-    'reliability_job_attempt_completions_trial',
-    'reliability_job_dispositions_trial'
-  ]) {
+export const RELIABILITY_JOB_IMMUTABILITY_TRIAL_SQL = RELIABILITY_JOB_IMMUTABLE_TABLES
+  .map(reliabilityJobImmutableTriggerSql)
+  .join('\n');
+
+export function installSQLiteReliabilityJobTrial(sqlite: Database): void {
+  sqlite.exec('PRAGMA foreign_keys = ON;');
+  sqlite.exec(RELIABILITY_JOB_TRIAL_SQL);
+
+  for (const table of RELIABILITY_JOB_IMMUTABLE_TABLES) {
     immutableTrigger(sqlite, table);
   }
 }

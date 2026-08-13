@@ -1,4 +1,11 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import {
+  createApplicationOperationRuntime,
+  type EffectUnitOfWorkPort,
+  type OperationRegistrySource
+} from '@jooevents/application';
+import { correlationIdSchema, safeOperationManifestSchema } from '@jooevents/contracts';
+import { parseInstant, parseInvocationId } from '@jooevents/kernel';
 import { openSQLite } from '@jooevents/persistence';
 import { createAuth } from '../auth/better-auth';
 import { createSQLiteAuthPrincipalReader } from '../auth/principal-reader';
@@ -10,6 +17,9 @@ const config = loadConfig({
   JOOEVENTS_BASE_URL: 'http://localhost:5176',
   JOOEVENTS_TRUSTED_ORIGINS: '',
   JOOEVENTS_AUTH_SECRETS: '1:Q7m!2vK9#pL4@xR8%tN5&cW3*zF6$hJ1',
+  JOOEVENTS_REQUEST_HASH_KEYS: `1:${Buffer.alloc(32, 1).toString('base64url')}`,
+  JOOEVENTS_IDEMPOTENCY_KEYS: `1:${Buffer.alloc(32, 2).toString('base64url')}`,
+  JOOEVENTS_CLASSIFIED_PAYLOAD_KEYS: `1:${Buffer.alloc(32, 3).toString('base64url')}`,
   JOOEVENTS_GOOGLE_CLIENT_ID: 'google-client',
   JOOEVENTS_GOOGLE_CLIENT_SECRET: 'google-secret',
   JOOEVENTS_ADMISSION_MODE: 'pending',
@@ -25,6 +35,47 @@ afterEach(() => {
 });
 
 describe('HTTP/auth composition', () => {
+  test('mounts an injected operator registry manifest under one UUID correlation boundary', async () => {
+    const opened = openSQLite(':memory:');
+    databases.push(opened);
+    const auth = createAuth(config, opened.db);
+    const emptySource: OperationRegistrySource = {
+      autonomyPolicies: [], schemas: [], contextBuilders: [], readCapabilities: [],
+      handlers: [], projections: [], operations: []
+    };
+    const unopened: EffectUnitOfWorkPort = {
+      findTerminalReceipt() { throw new Error('unexpected receipt lookup'); },
+      recordShortOperationAudit() { throw new Error('unexpected audit append'); },
+      runInUnitOfWork() { throw new Error('unexpected transaction'); }
+    };
+    const operations = await createApplicationOperationRuntime({
+      source: emptySource,
+      read: {
+        operationalTrace: { emit() {} }, immutableAudit: { append() {} },
+        clock: { now: () => parseInstant('2026-08-12T00:00:00.000Z') },
+        newInvocationId: () => parseInvocationId('018f0f47-7a86-7d36-8a25-9f86589c7001')
+      },
+      unitOfWork: unopened
+    });
+    const app = createHttpApp({
+      auth,
+      baseUrl: config.baseUrl,
+      workspaceId: 'workspace_summit',
+      accessContext: { ensureAuthPrincipalProvisioned: async () => { throw new Error('must not provision manifest requests'); } },
+      operatorOperations: {
+        operations,
+        evidence: { verify: () => ({ kind: 'rejected', reason: 'unauthenticated' }) }
+      }
+    });
+
+    const response = await app.request('/api/operations/manifest', {
+      headers: { 'x-correlation-id': 'formerly-accepted-but-not-a-uuid' }
+    });
+    expect(response.status).toBe(200);
+    expect(correlationIdSchema.safeParse(response.headers.get('x-correlation-id')).success).toBe(true);
+    expect(safeOperationManifestSchema.parse(await response.json())).toEqual(operations.registry.safeManifest);
+  });
+
   test('returns the closed anonymous context and a correlation ID without a session', async () => {
     const opened = openSQLite(':memory:');
     databases.push(opened);

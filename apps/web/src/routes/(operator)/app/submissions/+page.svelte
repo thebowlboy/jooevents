@@ -1,7 +1,7 @@
 <script lang="ts">
-	import SubmissionsPage from '$lib/features/submissions/SubmissionsPage.svelte';
+	import OperatorPage from 'jooevents-operator-page';
 </script>
 
 <svelte:head><title>Submissions · JooEvents</title></svelte:head>
 
-<SubmissionsPage />
+<OperatorPage area="submissions" />

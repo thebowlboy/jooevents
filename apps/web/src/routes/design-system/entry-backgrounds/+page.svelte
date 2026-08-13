@@ -3,7 +3,7 @@
   import EntryState from '$lib/features/access/components/EntryState.svelte';
   import type { AccessEntryState } from '$lib/features/access/AccessEntryController';
 
-  const anonymous: AccessEntryState = { kind: 'anonymous' };
+  const anonymous: AccessEntryState = { kind: 'anonymous', email: '', busy: false, invalid: false };
   const noop = () => {};
 
   const variants = [

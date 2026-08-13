@@ -1,12 +1,13 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
-	import { ChevronDown, ChevronUp, Lock } from 'lucide-svelte';
-	import { Button, Checkbox, Field } from '$lib/ui';
-	import { useWorkspaceGateway } from '$lib/api/workspace-gateway';
+	import { flip } from 'svelte/animate';
+	import { GripVertical, Lock } from 'lucide-svelte';
+	import { Button, Checkbox, Field, createRowDrag, motionMs } from '$lib/ui';
+	import type { SettingsPageFieldsPort } from '$lib/api/settings-page-port';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
 	import type { FieldContext, FieldGroup, FieldKind, RegistryField } from '$lib/api/types';
 
-	const { api } = useWorkspaceGateway();
+	let { fields: fieldPort }: { readonly fields: SettingsPageFieldsPort } = $props();
 
 	/** How each answer kind names itself, on the row chip and in the composer. */
 	const kindLabels: Record<FieldKind, string> = {
@@ -81,7 +82,7 @@
 
 	/** Re-reads the registry; also the refresh hook a receipt's undo calls. */
 	export async function reload() {
-		fields = await api.fields.list();
+		fields = await fieldPort.list();
 	}
 
 	const count = $derived(fields?.length ?? 0);
@@ -143,7 +144,7 @@
 		const next = asked ? before.filter((entry) => entry !== context) : [...before, context];
 		begin(`${field.id}-${context}`);
 		refusals = clearRefusal(refusals, field.id);
-		const outcome = await api.fields.update(field.id, { collectAt: next });
+		const outcome = await fieldPort.update(field.id, { collectAt: next });
 		if (outcome.ok) {
 			await reload();
 			const said = asked
@@ -154,7 +155,7 @@
 				area: 'settings',
 				label: said,
 				undo: async () => {
-					await api.fields.update(field.id, { collectAt: before });
+					await fieldPort.update(field.id, { collectAt: before });
 				}
 			});
 		} else {
@@ -164,33 +165,43 @@
 		pending = '';
 	}
 
-	async function move(field: RegistryField, from: number, delta: -1 | 1) {
-		if (pending) return;
+	/**
+	 * One completed reorder — a drop, or one arrow-key step on the handle. The
+	 * list shows the whole registry, so the row's list index is its registry
+	 * index. The row lands optimistically; commit and reload confirm it.
+	 */
+	const rowDrag = createRowDrag({
+		rowSelector: '.frow',
+		onMove: (from, to) => void moveTo(from, to)
+	});
+
+	async function moveTo(from: number, to: number) {
+		if (pending || !fields) return;
+		const field = fields[from];
+		if (!field || from === to) return;
+		const next = [...fields];
+		const [picked] = next.splice(from, 1);
+		next.splice(to, 0, picked);
+		fields = next;
 		begin(`move-${field.id}`);
 		refusals = clearRefusal(refusals, field.id);
-		const outcome = await api.fields.move(field.id, from + delta);
+		const outcome = await fieldPort.move(field.id, to);
 		if (outcome.ok) {
 			await reload();
+			const said = `Moved “${field.label}” ${to < from ? 'up' : 'down'}`;
+			message = said;
 			recordAction({
 				area: 'settings',
-				label: `Moved “${field.label}” ${delta === -1 ? 'up' : 'down'}`,
+				label: said,
 				undo: async () => {
-					await api.fields.move(field.id, from);
+					await fieldPort.move(field.id, from);
 				}
 			});
-			// Focus travels with the moved row. At a boundary the pressed control
-			// has gone disabled, so its inverse — the only move still offered —
-			// takes the focus instead.
+			// Focus travels with the moved row.
 			await tick();
-			const pressed = document.getElementById(
-				`field-${delta === -1 ? 'up' : 'down'}-${field.id}`
-			);
-			const inverse = document.getElementById(
-				`field-${delta === -1 ? 'down' : 'up'}-${field.id}`
-			);
-			if (pressed instanceof HTMLButtonElement && !pressed.disabled) pressed.focus();
-			else inverse?.focus();
+			document.getElementById(`grip-${field.id}`)?.focus();
 		} else {
+			await reload();
 			refusals = { ...refusals, [field.id]: outcome.reason };
 			message = outcome.reason;
 		}
@@ -204,14 +215,14 @@
 		const keep = $state.snapshot(field) as RegistryField;
 		begin(`remove-${field.id}`);
 		refusals = clearRefusal(refusals, field.id);
-		const outcome = await api.fields.remove(field.id);
+		const outcome = await fieldPort.remove(field.id);
 		if (outcome.ok) {
 			await reload();
 			recordAction({
 				area: 'settings',
 				label: `Removed field “${field.label}”`,
 				undo: async () => {
-					await api.fields.restore(keep, index);
+					await fieldPort.restore(keep, index);
 				}
 			});
 		} else {
@@ -225,7 +236,7 @@
 		event.preventDefault();
 		if (!addReady || pending) return;
 		begin('add');
-		const { field, placement } = await api.fields.add({
+		const { field, placement } = await fieldPort.add({
 			kind: newKind,
 			label: newLabel.trim(),
 			...(newHelp.trim() ? { help: newHelp.trim() } : {}),
@@ -240,7 +251,7 @@
 			area: 'settings',
 			label: `Added field “${field.label}”`,
 			undo: async () => {
-				await api.fields.remove(field.id);
+				await fieldPort.remove(field.id);
 			}
 		});
 		newKind = 'text';
@@ -286,7 +297,7 @@
 		{#if count === 0}
 			<p class="none">No fields yet — the first question you add starts the list.</p>
 		{:else}
-			<div class="fgroups">
+			<div class="fgroups" use:rowDrag.container>
 				{#each segments as segment (segment.key)}
 					<h3 class="fgroup__label" id={`fgroup-${segment.key}`}>
 						{groupHeadings[segment.group]}
@@ -295,7 +306,7 @@
 						{#each segment.rows as row (row.field.id)}
 							{@const field = row.field}
 							{@const refusal = refusals[field.id] ?? ''}
-							<li class="frow">
+							<li class="frow" animate:flip={{ duration: motionMs('normal') }}>
 								<div class="frow__line">
 									<span class="frow__name">
 										<span class="frow__label">{field.label}</span>
@@ -335,28 +346,15 @@
 										<!-- One cluster, so a narrow viewport wraps the reorder and
 										     remove controls together instead of stranding one. -->
 										<span class="frow__tail">
-											<span class="frow__order">
-												<button
-													type="button"
-													class="ui-button ui-button--ghost ui-button--icon ui-button--sm"
-													id={`field-up-${field.id}`}
-													aria-label={`Move “${field.label}” up`}
-													disabled={row.index === 0 ||
-														(pending !== '' && pending !== `move-${field.id}`)}
-													onclick={() => move(field, row.index, -1)}>
-													<ChevronUp size={14} aria-hidden="true" />
-												</button>
-												<button
-													type="button"
-													class="ui-button ui-button--ghost ui-button--icon ui-button--sm"
-													id={`field-down-${field.id}`}
-													aria-label={`Move “${field.label}” down`}
-													disabled={row.index === count - 1 ||
-														(pending !== '' && pending !== `move-${field.id}`)}
-													onclick={() => move(field, row.index, 1)}>
-													<ChevronDown size={14} aria-hidden="true" />
-												</button>
-											</span>
+											<button
+												type="button"
+												id={`grip-${field.id}`}
+												class="ui-button ui-button--ghost ui-button--icon ui-button--sm ui-drag-handle"
+												aria-label={`Reorder “${field.label}” — drag, or press the arrow keys`}
+												disabled={pending !== '' && pending !== `move-${field.id}`}
+												use:rowDrag.handle>
+												<GripVertical size={14} aria-hidden="true" />
+											</button>
 											{#if field.locked}
 											<!-- Removal would be refused, so the control says so instead
 											     of succeeding: it stays reachable, and pressing it asks —
@@ -542,6 +540,8 @@
 	}
 
 	.fgroups {
+		/* The drag slot indicator positions against this box. */
+		position: relative;
 		display: grid;
 		gap: var(--je-space-3);
 	}
@@ -604,11 +604,6 @@
 		display: inline-flex;
 		align-items: center;
 		gap: var(--je-space-2);
-	}
-
-	.frow__order {
-		display: inline-flex;
-		gap: 2px;
 	}
 
 	.frow__req {

@@ -41,6 +41,7 @@ export type OperationExecutionPhase =
   | 'unit_of_work'
   | 'execution_claim'
   | 'receipt_recheck'
+  | 'authority_recheck'
   | 'write_snapshot'
   | 'domain_contribution'
   | 'receipt_parent'

@@ -9,6 +9,10 @@ export interface ActionReceiptInput {
 	/** Names the exact object acted on, e.g. `Removed “X” from Thu 10:30`. */
 	label: string;
 	area: string;
+	/** Scoped address of where the result landed, when that is another surface. */
+	href?: string;
+	/** The door's short verb phrase, e.g. `Place them`; present exactly with `href`. */
+	hrefLabel?: string;
 	/** Compensating operation; present exactly when the action is undoable. */
 	undo?: () => Promise<void>;
 	/** Why this action cannot be undone; present exactly when `undo` is not. */

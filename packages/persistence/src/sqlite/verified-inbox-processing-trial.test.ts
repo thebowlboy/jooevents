@@ -10,6 +10,7 @@ import {
   createOperationAutonomyPolicy,
   createOperationRegistry,
   createSingleUnitOfWorkConformanceFixture,
+  type EffectAuthorityRecheckSource,
   type EffectInvocationContext,
   type OperationRegistrySource,
   type RegisteredOperationSchema
@@ -225,6 +226,48 @@ class TrialClock implements Clock {
   advance(durationMs: number): void { this.value += durationMs; }
 }
 
+function createInboxJobAuthorityResolver(input: {
+  readonly jobs: SQLiteReliabilityJobTrial;
+  readonly jobDefinition: JobDefinition;
+}): EffectAuthorityRecheckSource['resolveAuthority'] {
+  return (resolution) => {
+    if (resolution.evidence.kind !== 'registered_job') {
+      return { kind: 'denied' as const, reason: 'lane_mismatch' as const };
+    }
+    const record = input.jobs.require(resolution.evidence.jobId);
+    const lease = record.job.lease;
+    if (
+      record.job.state !== 'leased'
+      || !lease
+      || record.job.capabilityRevisionId !== input.jobDefinition.capabilityRevisionId
+      || !sameRef(record.job.authorityCitation, input.jobDefinition.authorityCitation)
+      || record.authorityCitationId !== ids.citation
+    ) return { kind: 'denied' as const, reason: 'stale' as const };
+    return {
+      kind: 'authorized' as const,
+      authority: {
+        actor: {
+          kind: 'system_job' as const,
+          jobId: record.job.id,
+          registeredCapabilityRevisionId: record.job.capabilityRevisionId
+        },
+        principal: {
+          kind: 'registered_job' as const,
+          jobId: record.job.id,
+          capabilityRevisionId: record.job.capabilityRevisionId,
+          authorityCitationId: record.authorityCitationId
+        },
+        lane: resolution.lane,
+        scope: resolution.scope,
+        grants: [{ kind: 'registered_capability' as const, key: record.job.capabilityRevisionId }],
+        evidenceIds: [`inbox-job-current:${record.job.id}:${lease.attemptId}`],
+        authorityCitationIds: [record.authorityCitationId],
+        evaluatedAt: resolution.evaluatedAt
+      }
+    };
+  };
+}
+
 let uuidCounter = 100;
 function nextUuid(): string {
   return `018f0f47-7a86-7d36-8a25-${String(uuidCounter++).padStart(12, '0')}`;
@@ -344,6 +387,11 @@ async function createHarness(options: {
     policy: { key: 'authority.fake-inbox-processing', version: 1 }
   });
   const profile = { key: 'fake-inbox-processing', version: parseContractVersion(1) };
+  const resolveAuthority = createInboxJobAuthorityResolver({ jobs, jobDefinition });
+  const transactionAuthority = {
+    resolveAuthority,
+    now: () => clock.now()
+  } satisfies EffectAuthorityRecheckSource;
   const contextBuilder = createEffectInvocationContextBuilder({
     reference: appRefs.context,
     operation: { name: refs.operation.key, version: refs.operation.version },
@@ -365,42 +413,7 @@ async function createHarness(options: {
       }
     },
     authorityResolver: {
-      resolve: (resolution) => {
-        if (resolution.evidence.kind !== 'registered_job') {
-          return { kind: 'denied' as const, reason: 'lane_mismatch' as const };
-        }
-        const record = jobs.require(resolution.evidence.jobId);
-        const lease = record.job.lease;
-        if (
-          record.job.state !== 'leased'
-          || !lease
-          || record.job.capabilityRevisionId !== jobDefinition.capabilityRevisionId
-          || !sameRef(record.job.authorityCitation, jobDefinition.authorityCitation)
-          || record.authorityCitationId !== ids.citation
-        ) return { kind: 'denied' as const, reason: 'stale' as const };
-        return {
-          kind: 'authorized' as const,
-          authority: {
-            actor: {
-              kind: 'system_job' as const,
-              jobId: record.job.id,
-              registeredCapabilityRevisionId: record.job.capabilityRevisionId
-            },
-            principal: {
-              kind: 'registered_job' as const,
-              jobId: record.job.id,
-              capabilityRevisionId: record.job.capabilityRevisionId,
-              authorityCitationId: record.authorityCitationId
-            },
-            lane: resolution.lane,
-            scope: resolution.scope,
-            grants: [{ kind: 'registered_capability' as const, key: record.job.capabilityRevisionId }],
-            evidenceIds: [`inbox-job-current:${record.job.id}:${lease.attemptId}`],
-            authorityCitationIds: [record.authorityCitationId],
-            evaluatedAt: resolution.evaluatedAt
-          }
-        };
-      }
+      resolve: resolveAuthority
     },
     clock,
     newInvocationId: () => parseInvocationId(nextUuid()),
@@ -600,6 +613,7 @@ async function createHarness(options: {
     inputProjectors: projectors,
     dispositionPolicies: [dispositionPolicy],
     domain: withVerifiedInboxProcessingTerminalReduction(processing, baseDomain),
+    transactionAuthority,
     workerKey: 'worker.fake-inbox-processor',
     newAttemptId: () => parseInvocationId(nextUuid()),
     newCorrelationId: () => nextUuid(),

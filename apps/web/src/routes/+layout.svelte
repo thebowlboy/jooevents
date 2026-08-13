@@ -7,10 +7,11 @@
 
   let { children } = $props();
 
-  // Dev-only tooling; the conditional imports are eliminated from prod builds.
+  // Scenario tooling belongs only to the sample composition. Conditional
+  // imports also keep it out of production bundles.
   let DevScenarioSwitcher = $state<Component | null>(null);
   let DevFontSwitcher = $state<Component | null>(null);
-  if (import.meta.env.DEV) {
+  if (import.meta.env.DEV && import.meta.env.MODE !== 'live') {
     import('$lib/dev/DevScenarioSwitcher.svelte').then((module) => {
       DevScenarioSwitcher = module.default;
     });

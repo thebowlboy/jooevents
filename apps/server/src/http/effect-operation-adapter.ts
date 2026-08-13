@@ -3,32 +3,43 @@ import {
   type EffectInvocationBuilder,
   type EffectOperationExecutor,
   type OperationRegistry,
-  type RegisteredOperatorHttpEffectBinding
+  type RegisteredOperatorHttpEffectBinding,
+  type RegisteredPublicHttpEffectBinding
 } from '@jooevents/application';
 import {
   correlationIdSchema,
   effectfulOperationResultSchema,
+  operationHttpIdempotencyKeySchema,
   operationTransportErrorSchema
 } from '@jooevents/contracts';
 import { Hono } from 'hono';
 import type { ReturnTypeOrPromise } from './types';
 
 const maxJsonBodyBytes = 1024 * 1024;
-const idempotencyKeyPattern = /^[\x21-\x2b\x2d-\x7e]{1,256}$/;
 
-export type OperatorEffectProtocolEvidenceResult =
+type HttpEffectBinding = RegisteredOperatorHttpEffectBinding | RegisteredPublicHttpEffectBinding;
+
+export type EffectProtocolEvidenceResult =
   | { readonly kind: 'verified'; readonly evidence: unknown }
   | { readonly kind: 'rejected'; readonly reason: 'unauthenticated' | 'forbidden' };
 
-export interface OperatorEffectProtocolEvidenceVerifier {
+export interface EffectProtocolEvidenceVerifier<Binding extends HttpEffectBinding = HttpEffectBinding> {
   verify(input: {
     readonly request: Request;
     readonly correlationId: string;
-    readonly binding: RegisteredOperatorHttpEffectBinding;
-  }): ReturnTypeOrPromise<OperatorEffectProtocolEvidenceResult>;
+    readonly binding: Binding;
+  }): ReturnTypeOrPromise<EffectProtocolEvidenceResult>;
 }
 
-function correlationId(request: Request): string {
+export type OperatorEffectProtocolEvidenceResult = EffectProtocolEvidenceResult;
+export type OperatorEffectProtocolEvidenceVerifier =
+  EffectProtocolEvidenceVerifier<RegisteredOperatorHttpEffectBinding>;
+export type PublicEffectProtocolEvidenceVerifier =
+  EffectProtocolEvidenceVerifier<RegisteredPublicHttpEffectBinding>;
+
+function correlationId(request: Request, shared?: unknown): string {
+  const inherited = correlationIdSchema.safeParse(shared);
+  if (inherited.success) return inherited.data;
   const incoming = correlationIdSchema.safeParse(request.headers.get('x-correlation-id'));
   return incoming.success ? incoming.data : crypto.randomUUID();
 }
@@ -38,8 +49,10 @@ function isJsonRequest(request: Request): boolean {
 }
 
 function idempotencyKey(request: Request): string | undefined {
-  const candidate = request.headers.get('idempotency-key');
-  return candidate !== null && idempotencyKeyPattern.test(candidate) ? candidate : undefined;
+  const candidate = operationHttpIdempotencyKeySchema.safeParse(
+    request.headers.get('idempotency-key')
+  );
+  return candidate.success ? candidate.data : undefined;
 }
 
 async function boundedJsonBody(request: Request): Promise<unknown> {
@@ -80,23 +93,26 @@ async function boundedJsonBody(request: Request): Promise<unknown> {
   }
 }
 
-export function createOperatorEffectHttpAdapter(input: {
-  readonly registry: OperationRegistry;
+function createEffectHttpAdapter<Binding extends HttpEffectBinding>(input: {
+  readonly bindings: readonly Binding[];
   readonly builder: EffectInvocationBuilder;
   readonly executor: EffectOperationExecutor;
-  readonly evidence: OperatorEffectProtocolEvidenceVerifier;
+  readonly evidence: EffectProtocolEvidenceVerifier<Binding>;
 }) {
   const app = new Hono();
 
   app.use('*', async (context, next) => {
-    const id = correlationId(context.req.raw);
+    const id = correlationId(
+      context.req.raw,
+      context.get('correlationId' as never) as unknown
+    );
     context.header('x-correlation-id', id);
     context.header('cache-control', 'no-store, max-age=0');
     context.header('pragma', 'no-cache');
     await next();
   });
 
-  for (const binding of input.registry.operatorHttpEffectBindings) {
+  for (const binding of input.bindings) {
     app.post(binding.path, async (context) => {
       const id = context.res.headers.get('x-correlation-id') ?? crypto.randomUUID();
       try {
@@ -124,7 +140,7 @@ export function createOperatorEffectHttpAdapter(input: {
         });
         const result = await input.executor.execute(invocation);
         const parsed = effectfulOperationResultSchema.safeParse(result);
-        if (!parsed.success || parsed.data.correlationId !== id) {
+        if (!parsed.success) {
           throw new TypeError('Executor returned an invalid effect result.');
         }
         return context.json(parsed.data);
@@ -143,4 +159,32 @@ export function createOperatorEffectHttpAdapter(input: {
   }
 
   return app;
+}
+
+export function createOperatorEffectHttpAdapter(input: {
+  readonly registry: OperationRegistry;
+  readonly builder: EffectInvocationBuilder;
+  readonly executor: EffectOperationExecutor;
+  readonly evidence: OperatorEffectProtocolEvidenceVerifier;
+}) {
+  return createEffectHttpAdapter({
+    bindings: input.registry.operatorHttpEffectBindings,
+    builder: input.builder,
+    executor: input.executor,
+    evidence: input.evidence
+  });
+}
+
+export function createPublicEffectHttpAdapter(input: {
+  readonly registry: OperationRegistry;
+  readonly builder: EffectInvocationBuilder;
+  readonly executor: EffectOperationExecutor;
+  readonly evidence: PublicEffectProtocolEvidenceVerifier;
+}) {
+  return createEffectHttpAdapter({
+    bindings: input.registry.publicHttpEffectBindings,
+    builder: input.builder,
+    executor: input.executor,
+    evidence: input.evidence
+  });
 }

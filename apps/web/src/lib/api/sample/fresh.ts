@@ -18,11 +18,13 @@ const fresh: WorkspaceDataset = {
 			'review',
 			'decisions',
 			'speakers',
+			'reviewers',
 			'tasks',
 			'schedule',
 			'messages',
 			'templates',
 			'forms',
+			'embeds',
 			'settings'
 		],
 		navCounts: {},
@@ -56,6 +58,8 @@ const fresh: WorkspaceDataset = {
 	submissionTrayTotals: { inbox: 0, 'set-aside': 0, late: 0, discarded: 0 },
 
 	reviewPlans: [],
+	/* No event, so nobody has been invited to review anything. */
+	reviewers: [],
 	myQueue: [],
 	/* No event, so no track exists to hold a population. */
 	reviewDistributions: {},
@@ -77,7 +81,8 @@ const fresh: WorkspaceDataset = {
 		published: false
 	},
 
-	outbox: [],
+	communications: [],
+	threads: {},
 	readiness: { provider: 'Not connected', outbound: 'unknown', callbacks: 'unknown', inbound: 'unknown' },
 
 	/* Templates arrive with the event; no event, so none exist yet. */

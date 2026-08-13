@@ -1,11 +1,20 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
 	import { Button, CopyValue, DatePicker, DescribedSelect, Field, Modal, TimezoneCombobox } from '$lib/ui';
-	import { useWorkspaceGateway } from '$lib/api/workspace-gateway';
+	import { presentProgramRoomCapacity } from '$lib/api/program-vocabulary-presentation';
+	import type { SettingsPagePort } from '$lib/api/settings-page-port';
 	import { removalBlockReason, usageLabel, type VocabKind } from '$lib/api/vocab';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
 	import SpeakerFieldsSection from './SpeakerFieldsSection.svelte';
+	import {
+		ATTRIBUTION_PLACEMENT,
+		COPYRIGHT_FULL,
+		LICENSE_NAME,
+		LICENSE_POSTURE,
+		MAKER,
+		SOURCE_URL
+	} from '$lib/brand/attribution';
 	import { rolePresetDescriptions, rolePresets } from '$lib/api/types';
 	import type {
 		EventSettings,
@@ -19,7 +28,7 @@
 		VocabUsage
 	} from '$lib/api/types';
 
-	const { api } = useWorkspaceGateway();
+	let { port }: { readonly port: SettingsPagePort } = $props();
 
 	/** The identity form owns every field except `dates`, which the API derives. */
 	interface IdentityDraft {
@@ -125,27 +134,31 @@
 
 	// What the shell already knows decides which composition holds the space: a
 	// workspace with no event resolves to the start panel, not to these three.
-	const known = api.workspace.summarySnapshot();
-	const expectEvent = known?.event != null;
+	const known = $derived(port.workspace.summarySnapshot());
+	const expectEvent = $derived(known?.event != null);
 
 	onMount(async () => {
 		const [current, memberRows] = await Promise.all([
-			api.settings.get(),
-			api.settings.members(),
-			loadVocab()
+			port.event.get(),
+			port.team.members()
 		]);
 		settings = current ? { ...current } : null;
 		if (current) draft = toDraft(current);
-		members = memberRows.map((member) => ({ ...member }));
+		if (memberRows.kind === 'success') {
+			members = memberRows.members.map((member) => ({ ...member }));
+		} else {
+			teamMessage = memberRows.reason;
+		}
+		if (current) await loadVocab();
 		loaded = true;
 	});
 
 	/** Usage travels with every entry, so the lists are re-read as a set. */
 	async function loadVocab() {
 		const [roomRows, trackRows, formatRows] = await Promise.all([
-			api.vocab.rooms(),
-			api.vocab.tracks(),
-			api.vocab.formats()
+			port.vocab.rooms(),
+			port.vocab.tracks(),
+			port.vocab.formats()
 		]);
 		rooms = roomRows;
 		tracks = trackRows;
@@ -194,25 +207,25 @@
 		}
 	> = {
 		room: {
-			remove: (id) => api.vocab.removeRoom(id),
-			retire: (id) => api.vocab.retireRoom(id),
-			restore: (id) => api.vocab.restoreRoom(id),
+			remove: (id) => port.vocab.removeRoom(id),
+			retire: (id) => port.vocab.retireRoom(id),
+			restore: (id) => port.vocab.restoreRoom(id),
 			drop: (id) => (rooms = rooms.filter((room) => room.id !== id)),
 			mark: (id, status) =>
 				(rooms = rooms.map((room) => (room.id === id ? { ...room, status } : room)))
 		},
 		track: {
-			remove: (id) => api.vocab.removeTrack(id),
-			retire: (id) => api.vocab.retireTrack(id),
-			restore: (id) => api.vocab.restoreTrack(id),
+			remove: (id) => port.vocab.removeTrack(id),
+			retire: (id) => port.vocab.retireTrack(id),
+			restore: (id) => port.vocab.restoreTrack(id),
 			drop: (id) => (tracks = tracks.filter((track) => track.id !== id)),
 			mark: (id, status) =>
 				(tracks = tracks.map((track) => (track.id === id ? { ...track, status } : track)))
 		},
 		format: {
-			remove: (id) => api.vocab.removeFormat(id),
-			retire: (id) => api.vocab.retireFormat(id),
-			restore: (id) => api.vocab.restoreFormat(id),
+			remove: (id) => port.vocab.removeFormat(id),
+			retire: (id) => port.vocab.retireFormat(id),
+			restore: (id) => port.vocab.restoreFormat(id),
 			drop: (id) => (formats = formats.filter((format) => format.id !== id)),
 			mark: (id, status) =>
 				(formats = formats.map((format) => (format.id === id ? { ...format, status } : format)))
@@ -220,7 +233,7 @@
 	};
 
 	const roomEntries: VocabEntry[] = $derived(
-		rooms.map((room) => entryOf('room', room, `${room.capacity} seats`))
+		rooms.map((room) => entryOf('room', room, presentProgramRoomCapacity(room.capacity).label))
 	);
 	const trackEntries: VocabEntry[] = $derived(tracks.map((track) => entryOf('track', track)));
 	const formatEntries: VocabEntry[] = $derived(formats.map((format) => entryOf('format', format)));
@@ -270,7 +283,7 @@
 			return;
 		}
 		saving = true;
-		const next = await api.settings.update({
+		const next = await port.event.update({
 			name: draft.name.trim(),
 			location: draft.location,
 			timezone: draft.timezone,
@@ -377,7 +390,7 @@
 		if (!roomReady || vocabPending) return;
 		const name = newRoomName.trim();
 		const capacity = newRoomCapacity ?? 0;
-		addEntry('room', () => api.vocab.addRoom(name, capacity), () => {
+		addEntry('room', () => port.vocab.addRoom(name, capacity), () => {
 			newRoomName = '';
 			newRoomCapacity = null;
 		});
@@ -387,14 +400,14 @@
 		event.preventDefault();
 		if (!trackReady || vocabPending) return;
 		const name = newTrackName.trim();
-		addEntry('track', () => api.vocab.addTrack(name), () => (newTrackName = ''));
+		addEntry('track', () => port.vocab.addTrack(name), () => (newTrackName = ''));
 	}
 
 	function addFormat(event: SubmitEvent) {
 		event.preventDefault();
 		if (!formatReady || vocabPending) return;
 		const name = newFormatName.trim();
-		addEntry('format', () => api.vocab.addFormat(name), () => (newFormatName = ''));
+		addEntry('format', () => port.vocab.addFormat(name), () => (newFormatName = ''));
 	}
 
 	async function changeRole(member: Member, control: HTMLSelectElement) {
@@ -403,12 +416,12 @@
 		teamPending = member.id;
 		teamMessage = '';
 		teamRefusals = clearRefusal(teamRefusals, member.id);
-		const outcome = await api.settings.changeRole(member.id, nextRole);
+		const outcome = await port.team.changeRole(member.id, nextRole);
 		if (outcome.ok) {
-			members = members.map((entry) =>
-				entry.id === member.id ? { ...entry, role: nextRole } : entry
-			);
-			teamMessage = `${member.name} is now ${nextRole}`;
+			members = outcome.members
+				? outcome.members.map((entry) => ({ ...entry }))
+				: members.map((entry) => entry.id === member.id ? { ...entry, role: nextRole } : entry);
+			teamMessage = outcome.message;
 		} else {
 			// The refused change never happened, so the control returns to the role
 			// the person still holds.
@@ -431,10 +444,12 @@
 		teamPending = member.id;
 		teamMessage = '';
 		teamRefusals = clearRefusal(teamRefusals, member.id);
-		const outcome = await api.settings.removeMember(member.id);
+		const outcome = await port.team.removeMember(member.id);
 		if (outcome.ok) {
-			members = members.filter((entry) => entry.id !== member.id);
-			teamMessage = `${member.name} removed`;
+			members = outcome.members
+				? outcome.members.map((entry) => ({ ...entry }))
+				: members.filter((entry) => entry.id !== (outcome.removedId ?? member.id));
+			teamMessage = outcome.message;
 		} else {
 			teamRefusals = { ...teamRefusals, [member.id]: outcome.reason };
 			teamMessage = outcome.reason;
@@ -472,11 +487,19 @@
 			return;
 		}
 		inviting = true;
-		const member = await api.settings.invite(email, inviteRole);
-		members = [...members, { ...member }];
+		const outcome = await port.team.invite(email, inviteRole);
 		inviting = false;
-		inviteOpen = false;
-		teamMessage = `Invitation sent to ${email}`;
+		if (outcome.ok) {
+			members = outcome.members
+				? outcome.members.map((entry) => ({ ...entry }))
+				: outcome.member ? [...members, { ...outcome.member }] : members;
+			inviteOpen = false;
+			teamMessage = outcome.message;
+		} else {
+			inviteError = outcome.reason;
+			teamMessage = outcome.reason;
+			inviteInput?.focus();
+		}
 	}
 </script>
 
@@ -632,7 +655,7 @@
 		onclick={() => askRemove(member)}>Remove</Button>
 {/snippet}
 
-{#if !loaded && !expectEvent}
+{#if !loaded && known !== null && !expectEvent}
 	{#if known}
 		<!-- Evidence says this workspace has no event yet, so the start panel is
 		     the composition that holds the space. -->
@@ -1112,9 +1135,9 @@
 	<Modal bind:open={removeOpen} title="Remove this member?">
 		{#if removeTarget}
 			<p class="modal__copy">
-				{removeTarget.name} loses access to this workspace straight away — sign-in, notifications, and
-				anything still assigned to them. Their past activity stays in the record, and you can invite
-				them again.
+				{removeTarget.name} loses workspace access when this change commits. Existing sessions are
+				revoked separately and may remain active briefly. Their past activity stays in the record,
+				and you can invite them again.
 			</p>
 		{/if}
 		{#snippet footer(close)}
@@ -1135,7 +1158,40 @@
      is not torn down and refetched when the panels above resolve. A workspace
      without an event resolves to the start panel alone, this section included. -->
 {#if loaded ? settings !== null : expectEvent}
-	<SpeakerFieldsSection bind:this={fieldsSection} />
+	<SpeakerFieldsSection fields={port.fields} bind:this={fieldsSection} />
+{/if}
+
+<!-- Last on the page and never conditional on an event: this describes the
+     software, not the workspace, so it is the one panel that still reads
+     correctly before anything has been set up. It is also the only place in the
+     product carrying every maker link — someone who scrolled here is looking for
+     the source or the person, which no one signing in is. -->
+{#if ATTRIBUTION_PLACEMENT.about}
+	<section class="panel about" aria-label="About JooEvents">
+		<header class="panel__head">
+			<div class="panel__title"><h2>About</h2></div>
+		</header>
+
+		<dl class="about__facts">
+			<dt>Licence</dt>
+			<dd>{LICENSE_POSTURE} — {LICENSE_NAME}</dd>
+			<dt>Copyright</dt>
+			<dd>{COPYRIGHT_FULL}</dd>
+			<dt>Made by</dt>
+			<dd>
+				<span class="about__maker">{MAKER.name}</span>
+				<span class="about__links">
+					<a href={MAKER.x.href} target="_blank" rel="me noopener" aria-label={MAKER.x.label}
+						>{MAKER.x.handle}</a>
+					<a href={MAKER.github.href} target="_blank" rel="me noopener" aria-label={MAKER.github.label}
+						>GitHub</a>
+					{#if SOURCE_URL}
+						<a href={SOURCE_URL} target="_blank" rel="noopener">Source</a>
+					{/if}
+				</span>
+			</dd>
+		</dl>
+	</section>
 {/if}
 
 <style>
@@ -1196,6 +1252,52 @@
 		border: 1px solid var(--je-color-border);
 		border-radius: var(--je-radius-surface);
 		padding: var(--je-space-4);
+	}
+
+	/* A reference list rather than a settings form: the labels stay quiet, the
+	   values carry the ink, and nothing here takes a control — the panel is read
+	   once and must not invite editing. */
+	.about__facts {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr);
+		gap: var(--je-space-2) var(--je-space-4);
+		margin: 0;
+		font-size: var(--je-font-size-sm);
+	}
+
+	.about__facts dt {
+		color: var(--je-color-text-muted);
+	}
+
+	.about__facts dd {
+		margin: 0;
+	}
+
+	.about__maker {
+		font-weight: 600;
+	}
+
+	.about__links {
+		display: inline-flex;
+		flex-wrap: wrap;
+		gap: var(--je-space-3);
+		margin-inline-start: var(--je-space-3);
+	}
+
+	.about__links a {
+		color: var(--je-color-action);
+		text-decoration: underline;
+		text-underline-offset: 0.2em;
+		border-radius: var(--je-radius-sm);
+	}
+
+	.about__links a:hover {
+		color: var(--je-color-action-hover);
+	}
+
+	.about__links a:focus-visible {
+		outline: 2px solid var(--je-color-focus);
+		outline-offset: 2px;
 	}
 
 	.panel__head {
@@ -1659,6 +1761,17 @@
 			display: grid;
 			grid-template-columns: 1fr;
 			inline-size: 100%;
+		}
+
+		/* One column: the licence value is long enough that a label column at this
+		   width leaves it wrapping in a few characters. */
+		.about__facts {
+			grid-template-columns: minmax(0, 1fr);
+			gap: var(--je-space-1);
+		}
+
+		.about__facts dd:not(:last-of-type) {
+			margin-block-end: var(--je-space-3);
 		}
 	}
 </style>

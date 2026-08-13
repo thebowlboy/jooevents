@@ -85,7 +85,7 @@ export function createSingleUnitOfWorkConformanceFixture(input: {
     reference: evidenceResolver,
     operation,
     resolve: ({ subject }) => ({
-      evaluatedAt: subject.receivedAt,
+      evaluatedAt: subject.evaluatedAt,
       hardBounds: {
         scopeKeys: [...subject.scopeKeys],
         maximumSpendMicros: 0,

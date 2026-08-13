@@ -1,15 +1,68 @@
 import { z } from 'zod';
-import { createReadOperationResultSchema, structuredOutcomeSchema } from './operations';
+import {
+  createEffectfulOperationResultSchema,
+  createOperationSchemaManifestRefs,
+  createReadOperationResultSchema,
+  structuredOutcomeSchema,
+  versionedDefinitionRefSchema
+} from './operations';
+
+const PROGRAM_VOCABULARY_NAME_LIMIT = 200;
+const APPLICATION_UUID_INPUT =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[47][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const APPLICATION_UUID_CANONICAL =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[47][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+function normalizedProgramVocabularyName(value: string): string {
+  return value.normalize('NFC').trim().replace(/\s+/gu, ' ');
+}
+
+function isAcceptedProgramVocabularyNameInput(value: string): boolean {
+  const normalized = normalizedProgramVocabularyName(value);
+  return normalized.length > 0 && normalized.length <= PROGRAM_VOCABULARY_NAME_LIMIT;
+}
+
+/** Returns the deterministic stored form accepted for a Program Vocabulary name. */
+export function normalizeProgramVocabularyNameInput(value: string): string {
+  const normalized = normalizedProgramVocabularyName(value);
+  if (normalized.length === 0 || normalized.length > PROGRAM_VOCABULARY_NAME_LIMIT) {
+    throw new TypeError('program vocabulary name must contain 1 to 200 characters');
+  }
+  return normalized;
+}
+
+/** Tests canonical output/storage bytes without changing them. */
+export function isCanonicalProgramVocabularyName(value: string): boolean {
+  return value.length > 0
+    && value.length <= PROGRAM_VOCABULARY_NAME_LIMIT
+    && normalizedProgramVocabularyName(value) === value;
+}
 
 export const programVocabularyKindSchema = z.enum(['room', 'track', 'format']);
 export const programVocabularyStatusSchema = z.enum(['active', 'retired']);
-export const programVocabularyVersionSchema = z.number().int().positive();
-export const programVocabularyIdSchema = z.uuid();
-export const programVocabularyNameSchema = z.string().trim().min(1).max(200);
+export const programTrackAccentSchema = z.enum(['lavender', 'sea', 'neutral']);
+export const programVocabularyVersionSchema = z.number().int().positive().safe();
+export const programVocabularyIdInputSchema = z.string()
+  .regex(APPLICATION_UUID_INPUT)
+  .overwrite((value) => value.toLowerCase());
+export const programVocabularyIdSchema = z.string().regex(APPLICATION_UUID_CANONICAL);
+
+/** Stable presentation voice derived from an immutable canonical Track identity. */
+export function deriveProgramTrackAccent(
+  id: string
+): z.infer<typeof programTrackAccentSchema> {
+  const canonicalId = programVocabularyIdSchema.parse(id);
+  const finalByte = Number.parseInt(canonicalId.slice(-2), 16);
+  return (['lavender', 'sea', 'neutral'] as const)[finalByte % 3]!;
+}
+export const programVocabularyNameInputSchema = z.string()
+  .refine(isAcceptedProgramVocabularyNameInput)
+  .overwrite(normalizeProgramVocabularyNameInput);
+export const programVocabularyNameSchema = z.string().refine(isCanonicalProgramVocabularyName);
 
 export const programVocabularyScopeSchema = z.strictObject({
-  workspaceId: z.uuid(),
-  eventId: z.uuid()
+  workspaceId: programVocabularyIdSchema,
+  eventId: programVocabularyIdSchema
 });
 
 export const programVocabularyUsageSchema = z.strictObject({
@@ -43,7 +96,16 @@ export const programRoomSchema = z.strictObject({
 
 export const programTrackSchema = z.strictObject({
   kind: z.literal('track'),
-  ...commonItemFields
+  ...commonItemFields,
+  accent: programTrackAccentSchema
+}).superRefine((track, context) => {
+  if (track.accent !== deriveProgramTrackAccent(track.id)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['accent'],
+      message: 'track accent must match its immutable identity'
+    });
+  }
 });
 
 export const programFormatSchema = z.strictObject({
@@ -57,6 +119,64 @@ export const programVocabularyItemSchema = z.discriminatedUnion('kind', [
   programFormatSchema
 ]);
 
+function compareCanonicalText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function addSnapshotIssues(
+  snapshot: {
+    readonly rooms: readonly z.infer<typeof programRoomSchema>[];
+    readonly tracks: readonly z.infer<typeof programTrackSchema>[];
+    readonly formats: readonly z.infer<typeof programFormatSchema>[];
+  },
+  context: z.core.$RefinementCtx
+): void {
+  const allIds = new Set<string>();
+  for (const [family, items] of [
+    ['rooms', snapshot.rooms],
+    ['tracks', snapshot.tracks],
+    ['formats', snapshot.formats]
+  ] as const) {
+    for (const [index, item] of items.entries()) {
+      if (index > 0 && compareCanonicalText(items[index - 1]!.id, item.id) >= 0) {
+        context.addIssue({
+          code: 'custom',
+          path: [family, index, 'id'],
+          message: 'items must be uniquely ordered by canonical id'
+        });
+      }
+      if (allIds.has(item.id)) {
+        context.addIssue({
+          code: 'custom',
+          path: [family, index, 'id'],
+          message: 'item ids must be unique across vocabulary kinds'
+        });
+      }
+      allIds.add(item.id);
+      if (item.kind === 'track' && item.accent !== deriveProgramTrackAccent(item.id)) {
+        context.addIssue({
+          code: 'custom',
+          path: [family, index, 'accent'],
+          message: 'track accent must match its immutable identity'
+        });
+      }
+      const eligible = item.usage.current === 0 && item.usage.historicalPins === 0;
+      const coherent = item.deleteEligibility.kind === 'eligible'
+        ? eligible
+        : !eligible
+          && item.deleteEligibility.currentReferences === item.usage.current
+          && item.deleteEligibility.historicalPins === item.usage.historicalPins;
+      if (!coherent) {
+        context.addIssue({
+          code: 'custom',
+          path: [family, index, 'deleteEligibility'],
+          message: 'delete eligibility must match current usage'
+        });
+      }
+    }
+  }
+}
+
 export const programVocabularySnapshotSchema = z.strictObject({
   schemaVersion: z.literal(1),
   scope: programVocabularyScopeSchema,
@@ -64,7 +184,7 @@ export const programVocabularySnapshotSchema = z.strictObject({
   rooms: z.array(programRoomSchema),
   tracks: z.array(programTrackSchema),
   formats: z.array(programFormatSchema)
-});
+}).superRefine(addSnapshotIssues);
 
 /** The current event target is resolved from verified invocation evidence, not request data. */
 export const programVocabularySnapshotReadInputSchema = z.strictObject({});
@@ -95,8 +215,8 @@ const roomCreateInputSchema = z.strictObject({
   expectedSetVersion: programVocabularyVersionSchema,
   item: z.strictObject({
     kind: z.literal('room'),
-    id: programVocabularyIdSchema,
-    name: programVocabularyNameSchema,
+    id: programVocabularyIdInputSchema,
+    name: programVocabularyNameInputSchema,
     capacity: z.number().int().positive().nullable()
   })
 });
@@ -107,8 +227,8 @@ const trackCreateInputSchema = z.strictObject({
   expectedSetVersion: programVocabularyVersionSchema,
   item: z.strictObject({
     kind: z.literal('track'),
-    id: programVocabularyIdSchema,
-    name: programVocabularyNameSchema
+    id: programVocabularyIdInputSchema,
+    name: programVocabularyNameInputSchema
   })
 });
 
@@ -118,8 +238,8 @@ const formatCreateInputSchema = z.strictObject({
   expectedSetVersion: programVocabularyVersionSchema,
   item: z.strictObject({
     kind: z.literal('format'),
-    id: programVocabularyIdSchema,
-    name: programVocabularyNameSchema
+    id: programVocabularyIdInputSchema,
+    name: programVocabularyNameInputSchema
   })
 });
 
@@ -130,30 +250,30 @@ export const programVocabularyCreateDraftInputSchema = z.union([
 ]);
 
 const roomEditFields = z.strictObject({
-  name: programVocabularyNameSchema,
+  name: programVocabularyNameInputSchema,
   capacity: z.number().int().positive().nullable()
 });
-const namedEditFields = z.strictObject({ name: programVocabularyNameSchema });
+const namedEditFields = z.strictObject({ name: programVocabularyNameInputSchema });
 
 export const programVocabularyEditDraftInputSchema = z.discriminatedUnion('kind', [
   z.strictObject({
     action: z.literal('edit'),
     kind: z.literal('room'),
-    id: programVocabularyIdSchema,
+    id: programVocabularyIdInputSchema,
     ...guardedItemFields,
     changes: roomEditFields
   }),
   z.strictObject({
     action: z.literal('edit'),
     kind: z.literal('track'),
-    id: programVocabularyIdSchema,
+    id: programVocabularyIdInputSchema,
     ...guardedItemFields,
     changes: namedEditFields
   }),
   z.strictObject({
     action: z.literal('edit'),
     kind: z.literal('format'),
-    id: programVocabularyIdSchema,
+    id: programVocabularyIdInputSchema,
     ...guardedItemFields,
     changes: namedEditFields
   })
@@ -163,7 +283,7 @@ function lifecycleDraftInput<Action extends 'retire' | 'restore' | 'delete'>(act
   return z.strictObject({
     action: z.literal(action),
     kind: programVocabularyKindSchema,
-    id: programVocabularyIdSchema,
+    id: programVocabularyIdInputSchema,
     ...guardedItemFields
   });
 }
@@ -176,8 +296,8 @@ export const programVocabularyMergeDraftInputSchema = z.strictObject({
   action: z.literal('merge'),
   scope: programVocabularyScopeSchema,
   kind: programVocabularyKindSchema,
-  sourceId: programVocabularyIdSchema,
-  targetId: programVocabularyIdSchema,
+  sourceId: programVocabularyIdInputSchema,
+  targetId: programVocabularyIdInputSchema,
   expectedSetVersion: programVocabularyVersionSchema,
   expectedSourceVersion: programVocabularyVersionSchema,
   expectedTargetVersion: programVocabularyVersionSchema
@@ -206,6 +326,7 @@ const safeDiffItemSchema = z.discriminatedUnion('kind', [
     id: programVocabularyIdSchema,
     name: programVocabularyNameSchema,
     status: programVocabularyStatusSchema,
+    accent: programTrackAccentSchema,
     version: programVocabularyVersionSchema
   }),
   z.strictObject({
@@ -260,7 +381,24 @@ export const programVocabularySafeDiffSchema = z.discriminatedUnion('action', [
     liveRepoints: z.number().int().nonnegative(),
     historicalPinsPreserved: z.number().int().nonnegative()
   })
-]);
+]).superRefine((diff, context) => {
+  const items = diff.action === 'create'
+    ? [diff.after]
+    : diff.action === 'edit' || diff.action === 'retire' || diff.action === 'restore'
+      ? [diff.before, diff.after]
+      : diff.action === 'delete'
+        ? [diff.before]
+        : [diff.sourceBefore, diff.sourceAfter, diff.target];
+  for (const [index, item] of items.entries()) {
+    if (item.kind === 'track' && item.accent !== deriveProgramTrackAccent(item.id)) {
+      context.addIssue({
+        code: 'custom',
+        path: [index, 'accent'],
+        message: 'track accent must match its immutable identity'
+      });
+    }
+  }
+});
 
 export const programVocabularyChangeResultSchema = z.strictObject({
   action: z.enum(['create', 'edit', 'retire', 'restore', 'delete', 'merge', 'merge_compensation']),
@@ -270,8 +408,158 @@ export const programVocabularyChangeResultSchema = z.strictObject({
   liveRepoints: z.number().int().nonnegative()
 });
 
+/*
+ * Browser-safe operator operation contracts. These intentionally exclude trusted
+ * scope, generated ids, preparation handles, and internal contribution records;
+ * the application resolves or creates those below the transport boundary.
+ */
+const programVocabularyOperationApplicationIdSchema = z.uuid().refine(
+  (value) => value === value.toLowerCase(),
+  { message: 'Application IDs must use canonical lowercase bytes.' }
+);
+
+export const programVocabularyCreateDraftRequestSchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    kind: z.literal('room'),
+    expectedSetVersion: programVocabularyVersionSchema,
+    name: programVocabularyNameInputSchema,
+    capacity: z.number().int().positive().safe().nullable()
+  }),
+  z.strictObject({
+    kind: z.literal('track'),
+    expectedSetVersion: programVocabularyVersionSchema,
+    name: programVocabularyNameInputSchema
+  }),
+  z.strictObject({
+    kind: z.literal('format'),
+    expectedSetVersion: programVocabularyVersionSchema,
+    name: programVocabularyNameInputSchema
+  })
+]);
+
+export const programVocabularyEditDraftRequestSchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    kind: z.literal('room'),
+    id: programVocabularyIdInputSchema,
+    expectedSetVersion: programVocabularyVersionSchema,
+    expectedItemVersion: programVocabularyVersionSchema,
+    changes: z.strictObject({
+      name: programVocabularyNameInputSchema,
+      capacity: z.number().int().positive().safe().nullable()
+    })
+  }),
+  z.strictObject({
+    kind: z.literal('track'),
+    id: programVocabularyIdInputSchema,
+    expectedSetVersion: programVocabularyVersionSchema,
+    expectedItemVersion: programVocabularyVersionSchema,
+    changes: z.strictObject({ name: programVocabularyNameInputSchema })
+  }),
+  z.strictObject({
+    kind: z.literal('format'),
+    id: programVocabularyIdInputSchema,
+    expectedSetVersion: programVocabularyVersionSchema,
+    expectedItemVersion: programVocabularyVersionSchema,
+    changes: z.strictObject({ name: programVocabularyNameInputSchema })
+  })
+]);
+
+function programVocabularyLifecycleDraftRequestSchema() {
+  return z.strictObject({
+    kind: programVocabularyKindSchema,
+    id: programVocabularyIdInputSchema,
+    expectedSetVersion: programVocabularyVersionSchema,
+    expectedItemVersion: programVocabularyVersionSchema
+  });
+}
+
+export const programVocabularyRetireDraftRequestSchema =
+  programVocabularyLifecycleDraftRequestSchema();
+export const programVocabularyRestoreDraftRequestSchema =
+  programVocabularyLifecycleDraftRequestSchema();
+export const programVocabularyDeleteDraftRequestSchema =
+  programVocabularyLifecycleDraftRequestSchema();
+export const programVocabularyMergeDraftRequestSchema = z.strictObject({
+  kind: programVocabularyKindSchema,
+  sourceId: programVocabularyIdInputSchema,
+  targetId: programVocabularyIdInputSchema,
+  expectedSetVersion: programVocabularyVersionSchema,
+  expectedSourceVersion: programVocabularyVersionSchema,
+  expectedTargetVersion: programVocabularyVersionSchema
+});
+
+export const programVocabularyDraftDataSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  action: z.enum(['create', 'edit', 'retire', 'restore', 'delete', 'merge']),
+  changesetId: programVocabularyOperationApplicationIdSchema,
+  headVersion: programVocabularyVersionSchema,
+  status: z.literal('draft'),
+  revision: z.strictObject({
+    id: programVocabularyOperationApplicationIdSchema,
+    number: programVocabularyVersionSchema,
+    digestSha256: z.string().regex(/^[a-f0-9]{64}$/)
+  }),
+  riskTier: z.enum(['low', 'normal', 'consequential']),
+  approvalPolicy: z.strictObject({
+    reference: versionedDefinitionRefSchema,
+    definitionDigestSha256: z.string().regex(/^[a-f0-9]{64}$/),
+    requirement: z.enum(['none', 'distinct_current_human'])
+  }),
+  safeDiff: programVocabularySafeDiffSchema
+}).superRefine((data, context) => {
+  if (data.safeDiff.action !== data.action) {
+    context.addIssue({
+      code: 'custom',
+      path: ['safeDiff', 'action'],
+      message: 'Draft action and safe diff action must match.'
+    });
+  }
+});
+
+export const programVocabularyDraftCanonicalResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success'), data: programVocabularyDraftDataSchema }),
+  z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
+]);
+
+export const programVocabularyDraftOperationResultSchema =
+  createEffectfulOperationResultSchema(programVocabularyDraftDataSchema);
+
+const programVocabularyDraftRequestSchemas = Object.freeze({
+  create: programVocabularyCreateDraftRequestSchema,
+  edit: programVocabularyEditDraftRequestSchema,
+  retire: programVocabularyRetireDraftRequestSchema,
+  restore: programVocabularyRestoreDraftRequestSchema,
+  delete: programVocabularyDeleteDraftRequestSchema,
+  merge: programVocabularyMergeDraftRequestSchema
+});
+
+/** Exact public schema identities projected into the operator operation manifest. */
+export const PROGRAM_VOCABULARY_OPERATION_SCHEMA_REFS = Object.freeze({
+  snapshotRead: createOperationSchemaManifestRefs({
+    inputKey: 'schema.program_vocabulary.snapshot-read.input',
+    inputSchema: programVocabularySnapshotReadInputSchema,
+    resultKey: 'schema.program_vocabulary.snapshot-read.operator-result',
+    resultSchema: programVocabularySnapshotReadResultSchema
+  }),
+  drafts: Object.freeze(Object.fromEntries(
+    Object.entries(programVocabularyDraftRequestSchemas).map(([action, inputSchema]) => [
+      action,
+      createOperationSchemaManifestRefs({
+        inputKey: `schema.program_vocabulary.${action}-draft.input`,
+        inputSchema,
+        resultKey: 'schema.program_vocabulary.changeset-draft.operator-result',
+        resultSchema: programVocabularyDraftOperationResultSchema
+      })
+    ])
+  ) as {
+    readonly [Action in keyof typeof programVocabularyDraftRequestSchemas]:
+      ReturnType<typeof createOperationSchemaManifestRefs>;
+  })
+});
+
 export type ProgramVocabularyKind = z.infer<typeof programVocabularyKindSchema>;
 export type ProgramVocabularyStatus = z.infer<typeof programVocabularyStatusSchema>;
+export type ProgramTrackAccent = z.infer<typeof programTrackAccentSchema>;
 export type ProgramVocabularyScopeDto = z.infer<typeof programVocabularyScopeSchema>;
 export type ProgramVocabularyUsageDto = z.infer<typeof programVocabularyUsageSchema>;
 export type ProgramVocabularyDeleteEligibilityDto = z.infer<typeof programVocabularyDeleteEligibilitySchema>;
@@ -292,3 +580,20 @@ export type ProgramVocabularyMergeDraftInput = z.infer<typeof programVocabularyM
 export type ProgramVocabularyDraftInput = z.infer<typeof programVocabularyDraftInputSchema>;
 export type ProgramVocabularySafeDiff = z.infer<typeof programVocabularySafeDiffSchema>;
 export type ProgramVocabularyChangeResult = z.infer<typeof programVocabularyChangeResultSchema>;
+export type ProgramVocabularyCreateDraftRequest =
+  z.infer<typeof programVocabularyCreateDraftRequestSchema>;
+export type ProgramVocabularyEditDraftRequest =
+  z.infer<typeof programVocabularyEditDraftRequestSchema>;
+export type ProgramVocabularyRetireDraftRequest =
+  z.infer<typeof programVocabularyRetireDraftRequestSchema>;
+export type ProgramVocabularyRestoreDraftRequest =
+  z.infer<typeof programVocabularyRestoreDraftRequestSchema>;
+export type ProgramVocabularyDeleteDraftRequest =
+  z.infer<typeof programVocabularyDeleteDraftRequestSchema>;
+export type ProgramVocabularyMergeDraftRequest =
+  z.infer<typeof programVocabularyMergeDraftRequestSchema>;
+export type ProgramVocabularyDraftData = z.infer<typeof programVocabularyDraftDataSchema>;
+export type ProgramVocabularyDraftCanonicalResult =
+  z.infer<typeof programVocabularyDraftCanonicalResultSchema>;
+export type ProgramVocabularyDraftOperationResult =
+  z.infer<typeof programVocabularyDraftOperationResultSchema>;

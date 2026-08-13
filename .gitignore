@@ -12,6 +12,7 @@ test-results/
 # Public repository boundary. Private workspace tooling may mount ignored
 # symlinks at these paths for local development.
 /apps/web/build
+/apps/web/build-live
 /apps/web/static/reviews
 /apps/web/tests/private
 /skills

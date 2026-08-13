@@ -36,8 +36,10 @@ describe('starter surface set', () => {
 			expect(schedule!.revision).toBe(1);
 			expect(schedule!.usedBy).toEqual(['Public schedule · standalone & embed']);
 
+			// The hero titles from the scenario's own event — `opening` is the
+			// London event, the other moments are NYC.
 			const hero = schedule!.blocks.find((block) => block.type === 'hero');
-			expect(hero?.title).toBe('AI Engineer NYC 2026 schedule');
+			expect(hero?.title).toBe(`${scenario.summary.event?.name} schedule`);
 
 			expect(scheduleListing(schedule!)).toMatchObject({
 				grouping: 'day',
@@ -59,8 +61,10 @@ describe('starter surface set', () => {
 		expect(form.usedBy).toEqual(['CFP form · standalone & embed']);
 		expect(form.fields!.length).toBeGreaterThanOrEqual(10);
 
+		// Choice questions are vocabulary-sourced: the stored seed declares the
+		// source, and options resolve from the live vocabulary at serve time.
 		const select = form.fields!.find((field) => field.kind === 'select');
-		expect(select?.options?.length).toBeGreaterThan(1);
+		expect(select?.optionSource).toBe('formats');
 		const consent = form.fields!.find((field) => field.kind === 'checkbox');
 		expect(consent?.required).toBe(true);
 		expect(form.fields!.some((field) => (field.help ?? '').length > 0)).toBe(true);
@@ -79,7 +83,11 @@ describe('surfaces ride the same facade', () => {
 	test('list returns both collections side by side', async () => {
 		const { messages, surfaces } = await api.templates.list();
 		expect(messages.length).toBe(6);
-		expect(surfaces.map((surface) => surface.kind)).toEqual(['schedule', 'application-form']);
+		expect(surfaces.map((surface) => surface.kind)).toEqual([
+			'schedule',
+			'speaker-roster',
+			'application-form'
+		]);
 	});
 
 	test('classify treats structural surface words as comprehensive', async () => {

@@ -14,9 +14,11 @@ export { default as Modal } from './Modal.svelte';
 export { default as Popover } from './Popover.svelte';
 export { default as Progress } from './Progress.svelte';
 export { default as Radio } from './Radio.svelte';
+export { default as Receipt } from './Receipt.svelte';
 export { default as Switch } from './Switch.svelte';
 export { default as Term } from './Term.svelte';
 export { default as TimezoneCombobox } from './TimezoneCombobox.svelte';
+export { writeToClipboard } from './clipboard';
 export { createSettler } from './settle';
 export type { Settler } from './settle';
 export { ARRIVAL_MAX_MS, ARRIVAL_MIN_MS, arrival, markArrival, revealTarget } from './arrival.svelte';
@@ -31,6 +33,9 @@ export {
 	trayIcon
 } from './status-icons';
 export type { IconComponent, ResourceKind, StatusIconKey } from './status-icons';
+export { INTERACTIVE, shouldIgnoreRowPress } from './row-press';
+export { createRowDrag, motionMs } from './drag-reorder.svelte';
+export type { RowDrag, RowDragOptions } from './drag-reorder.svelte';
 export {
 	PENDING_GRACE_MS,
 	PENDING_MIN_VISIBLE_MS,

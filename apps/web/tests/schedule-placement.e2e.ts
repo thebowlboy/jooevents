@@ -6,8 +6,10 @@ import { expect, test } from '@playwright/test';
  * time; the confirm dialog is the commit step whose typed time is the precision
  * path; breaks are typed reservations whose edges the aim snaps against.
  *
- * The flight dataset leaves exactly one session unscheduled ("Typed Tool
- * Contracts…", 30 min) and reserves 12:00–13:00 lunch in every room.
+ * The flight dataset reserves 12:00–13:00 lunch in every room. Its Program
+ * panel holds several unfinished sessions; "Typed Tool Contracts…" (30 min)
+ * is the unplaced one these tests place. The panel's grouping, creation, and
+ * attribution behavior is covered in program-roundup.e2e.ts.
  */
 
 test('placing surfaces no new box: the pressed control becomes Cancel and the board stays put', async ({ page }, testInfo) => {
@@ -36,6 +38,14 @@ test('placing surfaces no new box: the pressed control becomes Cancel and the bo
 	// Desktop never shows the compact-viewport strip.
 	await expect(page.locator('.mode-strip')).toBeHidden();
 
+	// Aiming writes the shifted-to time onto the axis, and the ghost — where the
+	// eyes are — carries the Esc cue; leaving the opening clears both.
+	await page.getByRole('button', { name: 'Opening 10:00–10:30 — Main Stage, Tue Oct 13' }).hover();
+	await expect(page.locator('.board__time-marker')).toHaveText('10:00');
+	await expect(page.locator('.ghost .ghost__cue')).toContainText('Esc');
+	await page.locator('.board__corner').hover();
+	await expect(page.locator('.board__time-marker')).toHaveCount(0);
+
 	// The day switcher is the cross-day map: each day counts its openings for the
 	// session in hand, and switching swaps the board's day without leaving the mode.
 	await expect(page.getByRole('button', { name: /Tue Oct 13 — \d+ openings for this session/ })).toBeVisible();
@@ -50,6 +60,20 @@ test('placing surfaces no new box: the pressed control becomes Cancel and the bo
 	await page.keyboard.press('Escape');
 	await expect(page.getByRole('button', { name: /Place “Typed Tool Contracts/ })).toBeVisible();
 	await expect(page.getByRole('button', { name: /openings for this session/ })).toHaveCount(0);
+
+	// A long aside can push the pool far below the calendar; pressing Place…
+	// from down there brings the board back into view. The app scrolls
+	// smoothly, so the position is polled until the scroll settles.
+	await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+	await page.getByRole('button', { name: /Place “Typed Tool Contracts/ }).click();
+	await expect(page.getByRole('button', { name: /Cancel placing/ })).toBeVisible();
+	await expect
+		.poll(() =>
+			page
+				.locator('section[aria-label="Schedule grid"]')
+				.evaluate((el) => el.getBoundingClientRect().top)
+		)
+		.toBeGreaterThanOrEqual(0);
 });
 
 test('moving anchors its cancel on the origin card, where Move was pressed', async ({ page }, testInfo) => {
@@ -70,6 +94,153 @@ test('moving anchors its cancel on the origin card, where Move was pressed', asy
 	await page.keyboard.press('Escape');
 	await expect(page.locator('#placed-ses-2')).toBeVisible();
 	await expect(originCancel).toHaveCount(0);
+});
+
+test('a move that lands back on its own slot cancels instead of asking', async ({ page }, testInfo) => {
+	test.skip(testInfo.project.name !== 'desktop', 'one viewport covers the no-op contract');
+
+	await page.goto('/app/schedule');
+	const card = page.locator('#placed-ses-2');
+	await expect(card).toBeVisible({ timeout: 15000 });
+	await expect(card).toContainText('10:30–11:00');
+	await card.hover();
+	await card.getByRole('button', { name: 'Move “Context Caching Without Tears”', exact: true }).click();
+
+	// Vacating its own slot merges it into the gap after the keynote, so the
+	// opening spans 10:00–11:00 — but the origin marker still renders over its
+	// own half of that span. The reachable route to "same spot" is the anchor
+	// capture just above the marker's edge: aiming within ANCHOR_CAPTURE_MIN of
+	// 10:30 snaps to 10:30, which is exactly where the session already is.
+	const opening = page.getByRole('button', { name: 'Opening 10:00–11:00 — Main Stage, Tue Oct 13' });
+	const openingBox = await opening.boundingBox();
+	// The placed card is replaced by the origin marker for the duration of the
+	// mode, so the marker is what carries the slot's geometry here.
+	const originBox = await page.locator('.card--origin').boundingBox();
+	const aimX = (openingBox?.x ?? 0) + (openingBox?.width ?? 0) / 2;
+	const aimY = (originBox?.y ?? 0) - 4;
+	await page.mouse.move(aimX, aimY);
+	await expect(page.locator('.board__time-marker')).toHaveText('10:30');
+
+	// No second rectangle over the slot: the marker already stands for "the
+	// session is here", so it takes the aimed treatment and says what landing
+	// does, instead of a ghost drawing the same rectangle on top of it.
+	await expect(page.locator('.ghost')).toHaveCount(0);
+	const marker = page.locator('.card--origin');
+	await expect(marker).toHaveClass(/card--origin-aimed/);
+	await expect(marker).toContainText('leave it here');
+
+	await page.mouse.click(aimX, aimY);
+
+	// No dialog, no commit, no receipt — and the mode is over.
+	await expect(page.getByRole('button', { name: /Cancel moving/ })).toHaveCount(0);
+	await expect(page.getByRole('dialog')).toHaveCount(0);
+	await expect(page.getByRole('button', { name: /^Opening / })).toHaveCount(0);
+	await expect(page.locator('#placed-ses-2')).toContainText('10:30–11:00');
+	await expect(page.locator('p.ui-sr-only[role="status"]')).toHaveText(
+		'Move cancelled — “Context Caching Without Tears” is already at Tue Oct 13 10:30, Main Stage.'
+	);
+
+	// Aiming clear of the capture window is a genuine move and still confirms.
+	await card.hover();
+	await card.getByRole('button', { name: 'Move “Context Caching Without Tears”', exact: true }).click();
+	const again = await opening.boundingBox();
+	await page.mouse.click((again?.x ?? 0) + (again?.width ?? 0) / 2, (again?.y ?? 0) + 4);
+	await expect(page.getByRole('dialog')).toBeVisible();
+	await expect(page.getByRole('dialog')).toContainText('ends 10:30');
+});
+
+test('nudging the dialog’s time back onto the origin cancels rather than committing a no-op', async ({
+	page
+}, testInfo) => {
+	test.skip(testInfo.project.name !== 'desktop', 'one viewport covers the no-op contract');
+
+	await page.goto('/app/schedule');
+	const card = page.locator('#placed-ses-2');
+	await expect(card).toBeVisible({ timeout: 15000 });
+	await card.hover();
+	await card.getByRole('button', { name: 'Move “Context Caching Without Tears”', exact: true }).click();
+
+	// Land the aim at the top of the opening (10:00), then walk the typed time
+	// back to 10:30 — the path the aim itself cannot reach.
+	const opening = page.getByRole('button', { name: 'Opening 10:00–11:00 — Main Stage, Tue Oct 13' });
+	const box = await opening.boundingBox();
+	await page.mouse.click((box?.x ?? 0) + (box?.width ?? 0) / 2, (box?.y ?? 0) + 4);
+	const dialog = page.getByRole('dialog');
+	await expect(dialog).toContainText('ends 10:30');
+	for (let step = 0; step < 6; step++) await dialog.getByRole('button', { name: '+5 min' }).click();
+	await expect(dialog).toContainText('ends 11:00');
+
+	await dialog.getByRole('button', { name: 'Move session' }).click();
+
+	// Nothing was written: no receipt to undo, and the session never moved.
+	await expect(dialog).toHaveCount(0);
+	await expect(page.getByRole('button', { name: /Cancel moving/ })).toHaveCount(0);
+	await expect(page.locator('#placed-ses-2')).toContainText('10:30–11:00');
+	await expect(page.getByRole('button', { name: /^Undo/ })).toHaveCount(0);
+});
+
+test('aiming across the vacated slot holds the ghost instead of strobing it', async ({
+	page
+}, testInfo) => {
+	test.skip(testInfo.project.name !== 'desktop', 'a hit-test loop is a pointer defect');
+
+	await page.goto('/app/schedule');
+	const card = page.locator('#placed-ses-2');
+	await expect(card).toBeVisible({ timeout: 15000 });
+	await card.hover();
+	await card.getByRole('button', { name: 'Move “Context Caching Without Tears”', exact: true }).click();
+
+	const opening = page.getByRole('button', { name: 'Opening 10:00–11:00 — Main Stage, Tue Oct 13' });
+	const openingBox = await opening.boundingBox();
+	const originBox = await page.locator('.card--origin').boundingBox();
+	const aimX = (openingBox?.x ?? 0) + (openingBox?.width ?? 0) / 2;
+
+	// Just inside the vacated slot. Before the marker was made pointer-transparent
+	// it took the cursor back off the opening — the aim cleared, the treatment
+	// dropped, the opening re-entered, and the pair looped several times a second.
+	await page.mouse.move(aimX, (originBox?.y ?? 0) + 8);
+	await expect(page.locator('.card--origin-aimed')).toHaveCount(1);
+
+	// Held still, the aim must be a fixed point: sample across several frames and
+	// require one single state, not an alternation.
+	const states = new Set<string>();
+	for (let sample = 0; sample < 10; sample++) {
+		await page.waitForTimeout(50);
+		states.add(
+			await page.evaluate(
+				() =>
+					`${document.querySelectorAll('.card--origin-aimed').length}|` +
+					`${document.querySelectorAll('.ghost').length}|` +
+					`${document.querySelectorAll('.opening:hover').length}`
+			)
+		);
+	}
+	expect([...states]).toEqual(['1|0|1']);
+
+	// The marker's one control is the deliberate exception and still works.
+	await page.getByRole('button', { name: 'Cancel moving “Context Caching Without Tears”' }).click();
+	await expect(page.getByRole('button', { name: /^Opening / })).toHaveCount(0);
+	await expect(page.locator('#placed-ses-2')).toContainText('10:30–11:00');
+});
+
+test('right-click on the board is the pointer’s way out of the mode', async ({ page }, testInfo) => {
+	test.skip(testInfo.project.name !== 'desktop', 'the context menu is a pointer affordance');
+
+	await page.goto('/app/schedule');
+	const card = page.locator('#placed-ses-2');
+	await expect(card).toBeVisible({ timeout: 15000 });
+	await card.hover();
+	await card.getByRole('button', { name: 'Move “Context Caching Without Tears”', exact: true }).click();
+
+	const originCancel = page.getByRole('button', { name: 'Cancel moving “Context Caching Without Tears”' });
+	await expect(originCancel).toBeVisible();
+
+	// The mode ends and the session is untouched — a cancel, not a commit.
+	await page.locator('.board-region').click({ button: 'right', position: { x: 8, y: 8 } });
+	await expect(originCancel).toHaveCount(0);
+	await expect(page.locator('#placed-ses-2')).toBeVisible();
+	await expect(page.getByRole('dialog')).toHaveCount(0);
+	await expect(page.getByRole('button', { name: /^Opening / })).toHaveCount(0);
 });
 
 test('mobile: a bottom strip carries the mode name and its cancel', async ({ page }, testInfo) => {

@@ -743,6 +743,7 @@ export interface ProgramVocabularyTrialExactCommitInput {
   readonly expectedHeadVersion: number;
   readonly expectedRevisionDigest: string;
   readonly now: string;
+  readonly approvalRequirement: 'none' | 'distinct_current_human';
   readonly approval?: ApprovalReceipt;
   readonly approverCurrentlyAuthorized?: boolean;
 }
@@ -856,6 +857,7 @@ function exactValidationInput(
     currentGuardVersions,
     currentGuardDigests,
     now: exact.now,
+    approvalRequirement: exact.approvalRequirement,
     ...(exact.approval === undefined ? {} : { approval: exact.approval }),
     ...(exact.approverCurrentlyAuthorized === undefined
       ? {}

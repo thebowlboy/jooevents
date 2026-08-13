@@ -20,6 +20,22 @@
  *
  * Only one arrival is ever marked; a second call clears the first.
  *
+ * **The anchor is not always the host.** A surface finds its record by some
+ * element it can address — a name block, an id on a card — but the thing a
+ * person recognises as "the record" is often larger than that: the whole row,
+ * the whole card. Marking the addressable element instead draws a ring around a
+ * name inside a cell, which answers "which name?" rather than "which one?".
+ *
+ * So the two roles are separate. The **anchor** is what the surface hands in:
+ * it is what gets scrolled to and focused, and staying precise there is the
+ * point — centring a full-width row inside a table that scrolls sideways would
+ * carry the identity column off screen. The **host** is what wears the mark,
+ * and it is declared in markup with `data-arrival-host` on the exact element.
+ * Resolution is `closest()`, so the host may be any ancestor at any depth, and
+ * an inner element that wants the mark for itself simply declares itself. With
+ * no declaration anywhere the anchor is its own host — every surface that never
+ * needed the distinction is unaffected.
+ *
  * Three ways in, so any surface can adopt it:
  *
  * - `markArrival(el)` — mark something already on screen.
@@ -46,7 +62,40 @@ export interface ArrivalOptions {
 }
 
 const MARK = 'ui-arrival';
+const ROW = 'ui-arrival--row';
 const LEAVING = 'ui-arrival--leaving';
+
+/** Declares, in markup, which element wears the mark. See the module note. */
+const HOST_ATTR = 'data-arrival-host';
+
+/**
+ * The element that should wear the mark for this anchor.
+ *
+ * `closest()` starts at the anchor itself, so declaring the attribute on an
+ * inner element is how that element keeps the mark when an ancestor also
+ * declares one.
+ */
+function resolveHost(anchor: HTMLElement): HTMLElement {
+	try {
+		return anchor.closest<HTMLElement>(`[${HOST_ATTR}]`) ?? anchor;
+	} catch {
+		return anchor;
+	}
+}
+
+/** Cells of a row host, which is where a row's ring is actually drawn. */
+function rowCells(row: HTMLElement): HTMLElement[] {
+	return Array.from(row.children).filter(
+		(child): child is HTMLElement =>
+			child instanceof HTMLElement && (child.tagName === 'TD' || child.tagName === 'TH')
+	);
+}
+
+/** Whether an element already spends its own `::after` on something. */
+function ownsAfter(element: HTMLElement): boolean {
+	const after = getComputedStyle(element, '::after').content;
+	return Boolean(after) && after !== 'none' && after !== 'normal';
+}
 
 /**
  * Whether an element can host the ring without the result looking broken.
@@ -61,14 +110,23 @@ function canHostRing(element: HTMLElement): boolean {
 	try {
 		if (!element.isConnected) return false;
 
-		// Table structure positions pseudo-elements inconsistently across engines.
-		if (['TR', 'TBODY', 'THEAD', 'TABLE', 'COL', 'COLGROUP'].includes(element.tagName)) {
-			return false;
-		}
-
 		const box = element.getBoundingClientRect();
 		// Nothing meaningful to draw around: collapsed, hidden, or not laid out.
 		if (box.width < 4 || box.height < 4) return false;
+
+		// A row is the one host whose ring is drawn on its cells rather than on
+		// itself, so the ::after test has to move down with it — and a row with no
+		// cells has nothing to draw on.
+		if (element.tagName === 'TR') {
+			const cells = rowCells(element);
+			return cells.length > 0 && !cells.some(ownsAfter);
+		}
+
+		// The rest of the table box tree positions pseudo-elements inconsistently
+		// across engines, and none of it is ever the thing a link points at.
+		if (['TBODY', 'THEAD', 'TFOOT', 'TABLE', 'COL', 'COLGROUP'].includes(element.tagName)) {
+			return false;
+		}
 
 		const style = getComputedStyle(element);
 		// An inline box fragments across lines, so the ring would too.
@@ -79,8 +137,7 @@ function canHostRing(element: HTMLElement): boolean {
 		// The component already uses ::after for something of its own. Unlayered
 		// component CSS outranks ours, so this is either a silent no-op or a fight
 		// over one pseudo — either way, stay out of it.
-		const after = getComputedStyle(element, '::after').content;
-		if (after && after !== 'none' && after !== 'normal') return false;
+		if (ownsAfter(element)) return false;
 
 		return true;
 	} catch {
@@ -91,14 +148,16 @@ function canHostRing(element: HTMLElement): boolean {
 let release: (() => void) | null = null;
 
 /**
- * Marks `element` as the thing just navigated to. Returns a function that
- * clears the mark early; calling it twice is safe.
+ * Marks the host of `element` as the thing just navigated to — itself unless
+ * some ancestor declares `data-arrival-host`. Returns a function that clears the
+ * mark early; calling it twice is safe.
  */
 export function markArrival(element: HTMLElement | null, options: ArrivalOptions = {}): () => void {
 	release?.();
 	if (!element || typeof window === 'undefined') return () => {};
+	const host = resolveHost(element);
 	// Decoration must never be the reason a navigation misbehaves.
-	if (!canHostRing(element)) return () => {};
+	if (!canHostRing(host)) return () => {};
 
 	const minMs = options.minMs ?? ARRIVAL_MIN_MS;
 	const maxMs = Math.max(options.maxMs ?? ARRIVAL_MAX_MS, minMs);
@@ -108,28 +167,33 @@ export function markArrival(element: HTMLElement | null, options: ArrivalOptions
 	let origin: { x: number; y: number } | null = null;
 	const timers: ReturnType<typeof setTimeout>[] = [];
 
+	// A row wears the ring as a band across its own cells, so the containing
+	// blocks it needs are the cells, and the stylesheet establishes them.
+	const isRow = host.tagName === 'TR';
+	const mark = isRow ? ROW : MARK;
+
 	// The ring is an absolutely positioned pseudo-element, so it needs a
 	// positioned ancestor. Setting this in CSS would re-position anything already
 	// laid out as `absolute` — a schedule card, for one — so it is applied here,
 	// only when needed, and undone on release.
-	const positioned = getComputedStyle(element).position !== 'static';
-	if (!positioned) element.style.position = 'relative';
+	const positioned = isRow || getComputedStyle(host).position !== 'static';
+	if (!positioned) host.style.position = 'relative';
 
-	element.classList.add(MARK);
+	host.classList.add(mark);
 
 	const finish = () => {
 		if (settled) return;
 		settled = true;
 		stopListening();
 		timers.forEach(clearTimeout);
-		element.classList.add(LEAVING);
+		host.classList.add(LEAVING);
 		// The token is 0ms under reduced motion, so this lands on the next tick
 		// rather than animating.
 		const fade = getComputedStyle(document.documentElement).getPropertyValue('--je-duration-slow');
 		const ms = fade.trim().endsWith('ms') ? Number.parseFloat(fade) : 280;
 		setTimeout(() => {
-			element.classList.remove(MARK, LEAVING);
-			if (!positioned) element.style.removeProperty('position');
+			host.classList.remove(mark, LEAVING);
+			if (!positioned) host.style.removeProperty('position');
 		}, Number.isFinite(ms) ? ms : 280);
 		if (release === finish) release = null;
 	};
@@ -183,38 +247,59 @@ export interface RevealOptions extends ArrivalOptions {
 	mark?: boolean;
 	/** Where the target sits once scrolled. Centre reads as "here it is". */
 	block?: ScrollLogicalPosition;
+	/**
+	 * Sideways placement, for a target inside something that scrolls
+	 * horizontally. Defaults to centring, except for a row: a row spans its
+	 * table, so centring it in a table wider than its scrollport would carry the
+	 * name column — the whole reason the person followed the link — off screen.
+	 */
+	inline?: ScrollLogicalPosition;
 }
 
 /**
  * The whole arrival: bring the target into view, put the caret on it, and mark
  * it. Returns a function that releases the mark early.
  *
+ * The element handed in is the *anchor*: what is scrolled to. The caret and the
+ * mark go to its host, which is the anchor itself unless something above it
+ * declares `data-arrival-host` — see the module note.
+ *
  * The scroll is motion-aware, and an element that cannot take focus is given
  * `tabindex="-1"` so the keyboard and the screen reader travel with the eye —
- * without it, a deep link moves the view but leaves the caret behind.
+ * without it, a deep link moves the view but leaves the caret behind. The caret
+ * follows the mark rather than the anchor because they answer the same question:
+ * a screen reader landing on the row reads the record, where landing on the name
+ * block inside it reads a fragment, and a sighted person gets one indicator
+ * instead of a focus ring drawn tight around a name inside a marked row.
  */
 export function revealTarget(element: HTMLElement | null, options: RevealOptions = {}): () => void {
 	if (!element || typeof window === 'undefined') return () => {};
-	const { mark = true, block = 'center', ...arrivalOptions } = options;
+	const {
+		mark = true,
+		block = 'center',
+		inline = element.tagName === 'TR' ? 'nearest' : 'center',
+		...arrivalOptions
+	} = options;
 
 	try {
 		const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-		element.scrollIntoView({ block, inline: 'center', behavior: still ? 'auto' : 'smooth' });
+		element.scrollIntoView({ block, inline, behavior: still ? 'auto' : 'smooth' });
 	} catch {
 		// Synthetic or detached elements still land somewhere useful.
 		element.scrollIntoView?.();
 	}
 
+	const host = resolveHost(element);
 	try {
-		if (!element.hasAttribute('tabindex') && element.tabIndex < 0) {
-			element.setAttribute('tabindex', '-1');
+		if (!host.hasAttribute('tabindex') && host.tabIndex < 0) {
+			host.setAttribute('tabindex', '-1');
 		}
-		element.focus({ preventScroll: true });
+		host.focus({ preventScroll: true });
 	} catch {
 		/* Not focusable, and that is survivable: the view still moved. */
 	}
 
-	return mark ? markArrival(element, arrivalOptions) : () => {};
+	return mark ? markArrival(host, arrivalOptions) : () => {};
 }
 
 /**

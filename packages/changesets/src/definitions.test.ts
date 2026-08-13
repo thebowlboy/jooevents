@@ -80,7 +80,8 @@ function authorize(operations: readonly FrozenChangesetOperation[]) {
     currentGuardVersions: new Map(operations.flatMap((operation) =>
       operation.guardRefs.map((reference) => [reference.id, reference.version] as const)
     )),
-    now: '2026-08-11T00:01:00.000Z'
+    now: '2026-08-11T00:01:00.000Z',
+    approvalRequirement: 'none'
   });
   if (validation.kind !== 'ready') throw new Error(`unexpected refusal: ${validation.refusal.kind}`);
   return { authorization: validation.authorization, head: proposed };
@@ -472,7 +473,8 @@ describe('changeset definition registry', () => {
       currentAggregateVersions: new Map([['room:a', 1]]),
       currentGuardDigests: new Map([['room_index:all', 'guard-v1']]),
       currentGuardVersions: new Map([['room_index:all', 1]]),
-      now: '2026-08-11T00:01:00.000Z'
+      now: '2026-08-11T00:01:00.000Z',
+      approvalRequirement: 'none'
     });
     if (validation.kind !== 'ready') throw new Error('unexpected refusal');
     (mutableHead.revisions[0]!.operations[0]!.plan as { nextName: string }).nextName = 'Injected';

@@ -34,6 +34,7 @@ export interface PermissionDefinition {
 export const PERMISSIONS = [
   { id: 'event.read', group: 'events', label: 'View events', description: 'Read event settings and operating details.', risk: 'routine', allowedScopes: ['workspace', 'event'] },
   { id: 'event.manage', group: 'events', label: 'Manage events', description: 'Create events and change event settings.', risk: 'sensitive', allowedScopes: ['workspace', 'event'] },
+  { id: 'program.vocabulary.manage', group: 'events', label: 'Manage program vocabulary', description: 'Create and change an event\'s rooms, tracks, and formats.', risk: 'sensitive', allowedScopes: ['workspace', 'event'] },
   { id: 'speaker.directory.read', group: 'speakers', label: 'View speaker directory', description: 'Read names, biographies, and public profile details.', risk: 'routine', allowedScopes: ['workspace', 'event'] },
   { id: 'speaker.contact.read', group: 'speakers', label: 'View speaker contact details', description: 'Read private email addresses, phone numbers, and contact notes.', risk: 'sensitive', allowedScopes: ['workspace', 'event'] },
   { id: 'speaker.profile.manage', group: 'speakers', label: 'Manage speaker profiles', description: 'Create speakers and edit profile or contact details.', risk: 'sensitive', allowedScopes: ['workspace', 'event'] },
@@ -46,6 +47,7 @@ export const PERMISSIONS = [
   { id: 'schedule.publish', group: 'schedule', label: 'Publish schedule', description: 'Make a schedule revision visible to attendees.', risk: 'consequential', allowedScopes: ['workspace', 'event'] },
   { id: 'communication.draft', group: 'communications', label: 'Draft communications', description: 'Prepare messages without sending them.', risk: 'routine', allowedScopes: ['workspace', 'event'] },
   { id: 'communication.send', group: 'communications', label: 'Send communications', description: 'Send a message to speakers, reviewers, or attendees.', risk: 'consequential', allowedScopes: ['workspace', 'event'] },
+  { id: 'communication.provider.manage', group: 'communications', label: 'Manage email providers', description: 'Read and manage email provider connections, readiness, sender profiles, and routing.', risk: 'sensitive', allowedScopes: ['workspace'] },
   { id: 'access.users.read', group: 'access', label: 'View users', description: 'Read users, membership states, and effective roles.', risk: 'sensitive', allowedScopes: ['workspace'] },
   { id: 'access.users.invite', group: 'access', label: 'Invite users', description: 'Create pre-approved email reservations.', risk: 'sensitive', allowedScopes: ['workspace'] },
   { id: 'access.users.approve', group: 'access', label: 'Approve users', description: 'Admit or reject people waiting for review.', risk: 'consequential', allowedScopes: ['workspace'] },
@@ -57,6 +59,32 @@ export const PERMISSIONS = [
 ] as const satisfies readonly PermissionDefinition[];
 
 export type PermissionId = (typeof PERMISSIONS)[number]['id'];
+
+/** Version 1 is immutable: later permission definitions require an explicit grant decision. */
+const WORKSPACE_ADMIN_V1_PERMISSION_IDS = [
+  'event.read',
+  'event.manage',
+  'speaker.directory.read',
+  'speaker.contact.read',
+  'speaker.profile.manage',
+  'submission.read',
+  'submission.score',
+  'submission.comment',
+  'submission.decision',
+  'schedule.read',
+  'schedule.manage',
+  'schedule.publish',
+  'communication.draft',
+  'communication.send',
+  'access.users.read',
+  'access.users.invite',
+  'access.users.approve',
+  'access.roles.manage',
+  'access.users.suspend',
+  'integration.airtable.read',
+  'integration.airtable.manage',
+  'audit.read'
+] as const satisfies readonly PermissionId[];
 
 export type AccessScope =
   | { readonly kind: 'workspace'; readonly workspaceId: WorkspaceId }
@@ -78,7 +106,8 @@ export interface RoleAssignment {
   readonly userId: UserId;
   readonly roleId: string;
   readonly scope: AccessScope;
-  readonly assignedByUserId: UserId;
+  /** Present only when the durable assignment identifies a concrete user actor. */
+  readonly assignedByUserId?: UserId;
   readonly assignedAt: ISODateTime;
   readonly expiresAt?: ISODateTime;
 }
@@ -90,7 +119,8 @@ export interface PermissionOverride {
   readonly effect: 'grant' | 'deny';
   readonly scope: AccessScope;
   readonly reason: string;
-  readonly decidedByUserId: UserId;
+  /** Present only when the durable override identifies a concrete user actor. */
+  readonly decidedByUserId?: UserId;
   readonly decidedAt: ISODateTime;
   readonly expiresAt?: ISODateTime;
 }
@@ -132,7 +162,7 @@ export const ROLE_PRESETS = [
     version: 1,
     name: 'Workspace Admin',
     description: 'Runs the workspace, including users, integrations, and consequential actions.',
-    permissionIds: PERMISSIONS.map((permission) => permission.id)
+    permissionIds: WORKSPACE_ADMIN_V1_PERMISSION_IDS
   },
   {
     key: 'event_manager',

@@ -1,10 +1,7 @@
 <script lang="ts">
-	import { setWorkspaceGateway } from '$lib/api/workspace-gateway';
-	import { sampleWorkspaceGateway } from '$lib/api/sample/gateway';
-	import WorkspaceShell from '$lib/features/workspace/components/WorkspaceShell.svelte';
+	import OperatorWorkspaceRoot from 'jooevents-operator-workspace-root';
 
 	let { children } = $props();
-	setWorkspaceGateway(sampleWorkspaceGateway);
 
 	// The shell is chrome, not content: owning it here keeps one sidebar instance
 	// alive across every in-app navigation. A per-page shell had to be rebuilt on
@@ -22,6 +19,6 @@
 	});
 </script>
 
-<WorkspaceShell>
+<OperatorWorkspaceRoot>
 	{@render children()}
-</WorkspaceShell>
+</OperatorWorkspaceRoot>

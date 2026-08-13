@@ -8,8 +8,9 @@ const destinations = [
 	{ path: '/app/speakers', title: 'Speakers' },
 	{ path: '/app/tasks', title: 'Tasks' },
 	{ path: '/app/schedule', title: 'Schedule' },
-	{ path: '/app/messages', title: 'Messages' },
+	{ path: '/app/messages', title: 'Communications' },
 	{ path: '/app/forms', title: 'Forms' },
+	{ path: '/app/embeds', title: 'Embeds' },
 	{ path: '/app/settings', title: 'Settings' }
 ];
 
@@ -19,7 +20,11 @@ for (const destination of destinations) {
 		page.on('pageerror', (error) => errors.push(error.message));
 
 		await page.goto(destination.path);
-		await expect(page.getByRole('heading', { level: 1, name: destination.title })).toBeVisible();
+		// The shell destination title is the cross-page invariant. A domain page
+		// may also own a content heading with the same visible label.
+		await expect(
+			page.getByRole('banner').getByRole('heading', { level: 1, name: destination.title })
+		).toBeVisible();
 		await expect(page.getByRole('navigation', { name: 'Workspace' })).toBeAttached();
 
 		// Let the sample transport resolve so the settled composition is measured.

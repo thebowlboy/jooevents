@@ -1,28 +1,52 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
-const pending = {
-  state: 'pending_review',
-  user: { id: 'user_ada', displayName: 'Ada Lovelace', primaryEmail: 'ada@example.com' },
-  membership: { id: 'membership_ada', workspaceId: 'workspace_summit', status: 'pending_review', version: 1 },
-  workspace: { id: 'workspace_summit', name: 'Summit Operations' }
-};
+/* Sample fulfillment drives the entry surfaces here: the composition, its
+   geometry contract, and the non-enumerating link answer. Transport failures,
+   provisioning, pending, and blocked states are served states and are covered
+   against the live composition in access-entry.live.ts. */
 
-test('anonymous entry is neutral, secure, and usable without horizontal overflow', async ({ page }) => {
-  let releaseContext!: () => void;
-  const contextGate = new Promise<void>((resolve) => { releaseContext = resolve; });
-  await page.route('**/api/me/access-context', async (route) => {
-    await contextGate;
-    await route.fulfill({
-    status: 200,
-    contentType: 'application/json',
-    headers: { 'x-correlation-id': 'corr_anonymous' },
-    body: JSON.stringify({ state: 'anonymous' })
-    });
+async function useSampleEntry(page: Page, baseURL: string | undefined, cookies: Record<string, string> = {}) {
+  await page.context().addCookies(
+    Object.entries({ 'je-entry-auth': 'anonymous', ...cookies }).map(([name, value]) => ({
+      name,
+      value,
+      url: baseURL ?? 'http://127.0.0.1:4173'
+    }))
+  );
+}
+
+async function panelGeometry(page: Page) {
+  return page.locator('.entry-panel').evaluate((panel) => {
+    const box = panel.getBoundingClientRect();
+    return { left: box.left + window.scrollX, top: box.top + window.scrollY, width: box.width };
   });
+}
+
+/* Whether the composition currently on screen fits the footprint the state
+   reserves — the property the resolver-to-card transition depends on. */
+async function reserve(page: Page) {
+  return page.locator('.entry-state').evaluate((state) => {
+    const top = state.getBoundingClientRect().top;
+    const used = [...state.children].reduce(
+      (deepest, child) => Math.max(deepest, child.getBoundingClientRect().bottom - top),
+      0
+    );
+    return { fits: used <= parseFloat(getComputedStyle(state).minBlockSize) };
+  });
+}
+
+function expectSamePlace(before: { left: number; top: number; width: number }, after: { left: number; top: number; width: number }) {
+  expect(Math.abs(before.left - after.left)).toBeLessThan(2);
+  expect(Math.abs(before.top - after.top)).toBeLessThan(2);
+  expect(Math.abs(before.width - after.width)).toBeLessThan(2);
+}
+
+test('anonymous entry is neutral, secure, and usable without horizontal overflow', async ({ page, baseURL }, testInfo) => {
+  await useSampleEntry(page, baseURL, { 'je-latency': '1200' });
   const response = await page.goto('/');
   await expect(page.getByLabel('Checking access')).toBeVisible();
-  const resolvingPanel = await page.locator('.entry-panel').boundingBox();
-  releaseContext();
+  const resolvingPanel = await panelGeometry(page);
+  const resolvingBox = await page.locator('.entry-panel').boundingBox();
   await expect(page).toHaveURL('/sign-in');
   await expect(page.getByRole('heading', { name: 'Sign in', exact: true })).toBeVisible();
   const brandImage = page.getByRole('link', { name: 'JooEvents home' }).locator('img');
@@ -34,17 +58,32 @@ test('anonymous entry is neutral, secure, and usable without horizontal overflow
     naturalWidth: image.naturalWidth,
     naturalHeight: image.naturalHeight
   }))).toEqual({ complete: true, naturalWidth: 512, naturalHeight: 94 });
-  const resolvedPanel = await page.locator('.entry-panel').boundingBox();
-  expect(resolvingPanel).not.toBeNull();
-  expect(resolvedPanel).not.toBeNull();
-  expect(Math.abs((resolvingPanel?.width ?? 0) - (resolvedPanel?.width ?? 0))).toBeLessThan(2);
-  expect(Math.abs((resolvingPanel?.height ?? 0) - (resolvedPanel?.height ?? 0))).toBeLessThan(2);
+  const resolvedPanel = await panelGeometry(page);
+  const resolvedBox = await page.locator('.entry-panel').boundingBox();
+  expectSamePlace(resolvingPanel, resolvedPanel);
+  expect(Math.abs((resolvingBox?.height ?? 0) - (resolvedBox?.height ?? 0))).toBeLessThan(2);
+  // On a desktop card the reserve is the mechanism: the resting composition
+  // fits the footprint the resolver was already holding. A narrow viewport
+  // gets its stillness from a panel that fills the screen instead.
+  if (testInfo.project.name === 'desktop') expect(await reserve(page)).toEqual({ fits: true });
   await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeVisible();
   await expect(page.getByText("Events for people who don't want to manage events.")).toBeVisible();
   await expect(page.getByText('Entry is for those who know.')).toBeVisible();
   await expect(page.getByText(/checks your workspace access separately/)).toHaveCount(0);
   await expect(page.getByText('New here?', { exact: true })).toHaveCount(0);
-  await expect(page.getByRole('contentinfo')).toHaveCount(0);
+  // The maker's byline is the one piece of chrome this page carries, and the
+  // neutrality this test protects is about what it must not become: it stays a
+  // single line outside the panel, and it opens no route back into a sign-up or
+  // marketing path. Owner direction, 2026-08-12.
+  const byline = page.getByRole('contentinfo');
+  await expect(byline).toHaveCount(1);
+  await expect(byline).toContainText('A Bowlboy project');
+  await expect(byline).toContainText('© 2026 JooCorp');
+  await expect(page.locator('.entry-panel').getByRole('contentinfo')).toHaveCount(0);
+  const follow = byline.getByRole('link', { name: 'Bowlboy on X (@thebowlboy)' });
+  await expect(follow).toHaveAttribute('href', 'https://x.com/thebowlboy');
+  await expect(follow).toHaveAttribute('target', '_blank');
+  await expect(follow).toHaveAttribute('rel', /noopener/);
   const asideFontSize = await page
     .getByText('Entry is for those who know.')
     .evaluate((aside) => getComputedStyle(aside).fontSize);
@@ -66,124 +105,127 @@ test('anonymous entry is neutral, secure, and usable without horizontal overflow
   expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false);
 });
 
-test('a failed Google start shows reviewed copy beside the button and leaks no server text', async ({ page }) => {
-  await page.route('**/api/me/access-context', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ state: 'anonymous' }) }));
-  let attempts = 0;
-  await page.route('**/api/entry/google/start', async (route) => {
-    attempts += 1;
-    if (attempts > 1) await new Promise((resolve) => setTimeout(resolve, 400));
-    await route.fulfill({
-      status: 502,
-      contentType: 'application/json',
-      headers: { 'x-correlation-id': 'corr_google_start' },
-      body: JSON.stringify({ code: 'provider_unavailable', message: 'upstream gateway timeout at adapter', retryable: true })
-    });
-  });
-  await page.goto('/');
-  const googleButton = page.locator('.google-button');
-  const beforeFailure = await googleButton.boundingBox();
-  await googleButton.click();
-  const failure = page.getByRole('alert');
-  await expect(failure).toContainText("Couldn't open Google");
-  await expect(failure).toContainText('Check your connection and try again.');
-  const afterFailure = await googleButton.boundingBox();
-  expect(Math.abs((beforeFailure?.y ?? 0) - (afterFailure?.y ?? 0))).toBeLessThan(2);
-  await expect(page.getByText(/Support code/)).toHaveCount(0);
-  await expect(page.getByText(/upstream|gateway|adapter|provider_unavailable|502/)).toHaveCount(0);
-  const order = await page.evaluate(() => {
-    const button = document.querySelector('.google-button');
-    const error = document.querySelector('.entry-error');
-    return button && error ? Boolean(button.compareDocumentPosition(error) & Node.DOCUMENT_POSITION_FOLLOWING) : false;
-  });
-  expect(order).toBe(true);
-  await googleButton.click();
-  await expect(googleButton).toHaveAttribute('aria-busy', 'true');
-  await expect(failure).toBeVisible();
-  await expect(googleButton).not.toHaveAttribute('aria-busy', 'true');
-  await expect(failure).toBeVisible();
-  await expect(googleButton).toBeEnabled();
-});
+test('the magic link stands first and equal, answers identically, and never moves the panel', async ({ page, baseURL }) => {
+  await useSampleEntry(page, baseURL);
+  await page.goto('/sign-in');
+  await expect(page.getByRole('heading', { name: 'Sign in', exact: true })).toBeVisible();
+  const anonymousPanel = await panelGeometry(page);
 
-test('a malformed or failed context remains a recoverable connection problem', async ({ page }) => {
-  await page.route('**/api/me/access-context', (route) => route.fulfill({
-    status: 502,
-    contentType: 'application/json',
-    headers: { 'x-correlation-id': 'corr_context_502' },
-    body: JSON.stringify({ code: 'upstream_failed', message: 'Unavailable', retryable: true })
-  }));
-  await page.goto('/access/pending');
-  await expect(page.getByRole('heading', { name: "We couldn't check your access" })).toBeVisible();
-  await expect(page.getByText('Your access has not changed.')).toBeVisible();
-  await expect(page.getByText(/corr_context_502/)).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Get help' })).toHaveCount(0);
-  const supportFontSize = await page
-    .getByText(/corr_context_502/)
-    .evaluate((support) => getComputedStyle(support).fontSize);
-  expect(supportFontSize).toBe('13px');
-  await expect(page.getByRole('button', { name: 'Continue with Google' })).toHaveCount(0);
-});
+  // Both choices stand in the resting card; neither is behind a reveal.
+  const emailField = page.getByLabel('Email address');
+  await expect(emailField).toBeVisible();
+  const submit = page.getByRole('button', { name: 'Email me a magic link' });
+  await expect(submit).toBeVisible();
+  await expect(submit).toHaveClass(/ui-button--primary/);
+  await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeVisible();
+  await expect(page.locator('.entry-or')).toHaveText('or');
 
-test('pending review names the workspace and retains context when sign-out fails', async ({ page }) => {
-  let contextRequests = 0;
-  let releaseRefresh!: () => void;
-  const refreshGate = new Promise<void>((resolve) => { releaseRefresh = resolve; });
-  await page.route('**/api/me/access-context', async (route) => {
-    contextRequests += 1;
-    if (contextRequests === 1) {
-      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(pending) });
-      return;
-    }
-    await refreshGate;
-    await route.fulfill({
-      status: 502,
-      contentType: 'application/json',
-      headers: { 'x-correlation-id': 'corr_status' },
-      body: JSON.stringify({ code: 'upstream_failed', message: 'Internal status adapter failed', retryable: true })
-    });
+  // The group names the method, so the field can stay plain and the helper can
+  // sell the method instead of instructing the typist.
+  await expect(page.getByRole('heading', { name: 'Magic link' })).toBeVisible();
+  await expect(
+    page.getByText("We'll email you a link that signs you in — no password, nothing to remember.")
+  ).toBeVisible();
+  await expect(page.getByText('Use the address your workspace access is registered to.')).toHaveCount(0);
+  await expect(page.locator('#entry-link-email')).toHaveAttribute(
+    'aria-describedby',
+    /entry-method-help/
+  );
+
+  // Composition order, in the document and on the screen: email above Google.
+  const composition = await page.evaluate(() => {
+    const field = document.querySelector('#entry-link-email');
+    const action = document.querySelector('form.entry-link .ui-button');
+    const provider = document.querySelector('.google-button');
+    if (!field || !action || !provider) return null;
+    return {
+      fieldBeforeProvider: Boolean(field.compareDocumentPosition(provider) & Node.DOCUMENT_POSITION_FOLLOWING),
+      actionBeforeProvider: Boolean(action.compareDocumentPosition(provider) & Node.DOCUMENT_POSITION_FOLLOWING),
+      actionBottom: action.getBoundingClientRect().bottom,
+      providerTop: provider.getBoundingClientRect().top
+    };
   });
-  await page.route('**/api/entry/sign-out', (route) => route.fulfill({
-    status: 502,
-    contentType: 'application/json',
-    headers: { 'x-correlation-id': 'corr_signout' },
-    body: JSON.stringify({ code: 'sign_out_failed', message: 'Unavailable', retryable: true })
-  }));
-  await page.goto('/');
-  await expect(page).toHaveURL('/access/pending');
-  await expect(page.getByRole('heading', { name: 'Your access request is under review' })).toBeVisible();
-  await expect(page.getByText('Summit Operations')).toBeVisible();
+  expect(composition?.fieldBeforeProvider).toBe(true);
+  expect(composition?.actionBeforeProvider).toBe(true);
+  expect(composition!.actionBottom).toBeLessThanOrEqual(composition!.providerTop);
+
+  // Entry glyphs are recognition support beside the words that carry the
+  // meaning: hidden from the accessibility tree, inked by their text, still.
+  const glyphs = await page.locator('.entry-glyph').evaluateAll((nodes) =>
+    nodes.map((node) => {
+      const style = getComputedStyle(node);
+      return {
+        hidden: node.getAttribute('aria-hidden'),
+        inheritsInk: style.stroke === style.color,
+        animated:
+          style.animationName !== 'none' ||
+          style.transitionDuration.split(',').some((duration) => parseFloat(duration) > 0)
+      };
+    })
+  );
+  expect(glyphs.length).toBeGreaterThan(0);
+  for (const glyph of glyphs) {
+    expect(glyph.hidden).toBe('true');
+    expect(glyph.inheritsInk).toBe(true);
+    expect(glyph.animated).toBe(false);
+  }
+
+  await emailField.fill('ada@');
+  await submit.click();
+  await expect(page.getByText('Enter an email address like name@example.com')).toBeVisible();
+  await expect(emailField).toHaveAttribute('aria-invalid', 'true');
+  await expect(page.getByRole('heading', { name: 'Check your email' })).toHaveCount(0);
+  const rejectedPanel = await panelGeometry(page);
+  expectSamePlace(anonymousPanel, rejectedPanel);
+
+  await emailField.fill('ada@example.com');
+  await submit.click();
+  const confirmation = page.getByRole('heading', { name: 'Check your email' });
+  await expect(confirmation).toBeVisible();
+  await expect(confirmation).toBeFocused();
+  // Focus moves so the new state is announced; it is not a control, so it must
+  // not wear a control's focus ring.
+  await expect(confirmation).toHaveCSS('box-shadow', 'none');
+  // The envelope joins the heading without renaming it: the words stay the
+  // accessible name, and the heading names no method so a code can share the
+  // room later.
+  await expect(confirmation.locator('.entry-glyph')).toHaveCount(1);
+  await expect(page.getByRole('heading', { name: 'Magic link sent' })).toHaveCount(0);
+  await expect(page.getByText('If an account exists for this address, a magic link is on its way.')).toBeVisible();
   await expect(page.getByText('ada@example.com')).toBeVisible();
-  await expect(page.getByText("We'll email this address when your access is approved.")).toBeVisible();
-  await expect(page.locator('.ui-avatar')).toHaveCount(0);
-  const panelBeforeRefresh = await page.locator('.entry-panel').boundingBox();
-  const checkStatus = page.getByRole('button', { name: 'Check status' });
-  await checkStatus.click();
-  await expect(page.getByRole('heading', { name: 'Your access request is under review' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Checking status' })).toHaveAttribute('aria-busy', 'true');
-  const panelDuringRefresh = await page.locator('.entry-panel').boundingBox();
-  expect(Math.abs((panelBeforeRefresh?.height ?? 0) - (panelDuringRefresh?.height ?? 0))).toBeLessThan(2);
-  releaseRefresh();
-  await expect(checkStatus).toBeEnabled();
-  await expect(page.getByRole('alert')).toContainText("Couldn't check status");
-  await expect(page.getByRole('alert')).toContainText('Your access has not changed.');
-  await expect(page.getByText(/upstream|adapter|upstream_failed|502/)).toHaveCount(0);
-  await expect(page.getByRole('heading', { name: 'Your access request is under review' })).toBeVisible();
-  const pendingAlignment = await page.getByRole('heading', { name: 'Your access request is under review' }).evaluate((heading) => getComputedStyle(heading).textAlign);
-  expect(pendingAlignment).toBe('center');
-  await page.getByRole('button', { name: 'Sign out' }).click();
-  await expect(page.getByText('You are still signed in.')).toBeVisible();
-  await expect(page.getByText('Ada Lovelace')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeVisible();
+  const confirmedPanel = await panelGeometry(page);
+  expectSamePlace(anonymousPanel, confirmedPanel);
+  expect(await page.title()).toContain('Check your email');
+  const matched = (await page.locator('.entry-state').innerText()).replace('ada@example.com', '');
+
+  await page.getByRole('button', { name: 'Use a different address' }).click();
+  await expect(emailField).toBeFocused();
+  await expect(emailField).toHaveValue('ada@example.com');
+  await emailField.fill('nobody@example.invalid');
+  await submit.click();
+  await expect(confirmation).toBeVisible();
+  const missed = (await page.locator('.entry-state').innerText()).replace('nobody@example.invalid', '');
+  expect(missed).toBe(matched);
+  await expect(page.getByText(/unknown|not found|no account|isn't registered/i)).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false);
 });
 
-test('active context replaces entry with a validated operator return path', async ({ page }) => {
-  await page.route('**/api/me/access-context', (route) => route.fulfill({
-    status: 200,
-    contentType: 'application/json',
-    body: JSON.stringify({ state: 'active', user: { id: 'user_ada', displayName: 'Ada' }, workspace: { id: 'workspace_summit', name: 'Summit Operations' } })
-  }));
-  await page.goto('/sign-in?returnTo=%2Fapp%2Fschedule');
-  await expect(page).toHaveURL('/app/schedule');
-  await page.goto('/sign-in?returnTo=https%3A%2F%2Fevil.example');
-  await expect(page).toHaveURL('/app');
+test('a spent sign-in link explains itself and offers a fresh request', async ({ page, baseURL }) => {
+  await useSampleEntry(page, baseURL);
+  for (const [notice, title] of [
+    ['link_expired', 'That link has expired'],
+    ['link_used', 'That link was already used'],
+    ['link_invalid', "That link didn't work"]
+  ] as const) {
+    await page.goto(`/auth/complete?notice=${notice}`);
+    await expect(page).toHaveURL('/sign-in');
+    await expect(page.getByText(title)).toBeVisible();
+    // The notice sits above the field it points at; both choices stay offered.
+    await expect(page.getByLabel('Email address')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Email me a magic link' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeVisible();
+    await expect(page.getByText(/token|expired at|jwt/i)).toHaveCount(0);
+  }
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false);
 });

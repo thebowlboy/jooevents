@@ -19,11 +19,8 @@ export interface EventInfo {
 	today: string;
 }
 
-/**
- * How many records point at a vocabulary entry right now, counted by the
- * server. A client renders these numbers; it never derives them.
- */
-export interface VocabUsage {
+/** Counts retained by the resettable sample workflow projection. */
+export interface WorkflowVocabUsage {
 	/** Submissions carrying this track or format. */
 	submissions: number;
 	/** Sessions carrying this track or format. */
@@ -31,6 +28,20 @@ export interface VocabUsage {
 	/** Scheduled sessions sitting in this room. */
 	placements: number;
 }
+
+/** Reference evidence returned by the canonical Program Vocabulary projection. */
+export interface ReferenceVocabUsage {
+	/** Mutable effective-state references which a reviewed merge may repoint. */
+	currentReferences: number;
+	/** Immutable published/versioned references which must remain resolvable. */
+	historicalPins: number;
+}
+
+/**
+ * Server-counted vocabulary usage. Sample and live sources retain their exact
+ * factual units rather than translating one set of counts into the other.
+ */
+export type VocabUsage = WorkflowVocabUsage | ReferenceVocabUsage;
 
 /**
  * A retired entry is no longer offered for new use; everything already
@@ -51,14 +62,45 @@ export interface Format {
 	name: string;
 	status: VocabStatus;
 	usage: VocabUsage;
+	/**
+	 * The planned length a new session of this format starts from — a default
+	 * the creation form fills in, never a constraint. Absent means the format
+	 * carries no opinion and creation falls back to the grid's slot length.
+	 */
+	defaultDurationMin?: number;
 }
 
 export interface Room {
 	id: string;
 	name: string;
-	capacity: number;
+	/** Null means the organizer has not set a capacity; it never means zero. */
+	capacity: number | null;
 	status: VocabStatus;
 	usage: VocabUsage;
+}
+
+/**
+ * How the public roster groups the people on it — "Keynotes", "Workshop
+ * leads", "Panel". Event vocabulary like tracks and formats, not a speaker
+ * attribute invented per surface: one list names the groups, every public
+ * presentation reads that list, and its order is the order they appear in.
+ *
+ * A category is a *presentation* grouping, deliberately separate from track
+ * (which is what a session is about) and from engagement state (which is where
+ * a person stands with the organizer). Those already exist and answer other
+ * questions.
+ */
+export interface SpeakerCategory {
+	id: string;
+	name: string;
+	accent: 'lavender' | 'sea' | 'neutral';
+	status: VocabStatus;
+	/**
+	 * Roster entries filed under this group. A plain count rather than a
+	 * {@link WorkflowVocabUsage}: that shape counts submissions, sessions, and
+	 * placements, and a category is pointed at by none of the three.
+	 */
+	speakerCount: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -72,11 +114,13 @@ export type AreaKey =
 	| 'review'
 	| 'decisions'
 	| 'speakers'
+	| 'reviewers'
 	| 'tasks'
 	| 'schedule'
 	| 'messages'
 	| 'templates'
 	| 'forms'
+	| 'embeds'
 	| 'settings';
 
 export interface AttentionItem {
@@ -168,6 +212,7 @@ export interface NavCounts {
 	review?: string;
 	decisions?: { value: string; tone: 'warning' | 'danger' };
 	speakers?: string;
+	reviewers?: string;
 	tasks?: { value: string; tone: 'warning' | 'danger' };
 	schedule?: { value: string; tone: 'warning' | 'danger' };
 	messages?: string;
@@ -224,6 +269,21 @@ export interface Submission {
 	formatId: string;
 	submittedAt: string;
 	source: 'cfp' | 'direct_entry' | 'import';
+	/**
+	 * Who keyed this record in, for rows that did not arrive through the public
+	 * form — the "direct entry by whom" provenance grammar. A display name
+	 * projected from the creating commit's attribution, never client-declared;
+	 * absent on `cfp` rows, whose provenance is the submitter themselves.
+	 */
+	enteredBy?: string;
+	/**
+	 * The collecting session this proposal asks to join, when the submitter
+	 * (or the form's fixed target) named one. Routing state, not membership:
+	 * the proposer reaches the session's roster only if this submission is
+	 * accepted, and acceptance into a target that has since closed re-offers
+	 * spawn/re-target instead of failing silently.
+	 */
+	targetSessionId?: string;
 	tray: TrayKey;
 	setAsideBy?: string;
 	decision: DecisionState;
@@ -235,6 +295,28 @@ export interface Submission {
 	reviewAverage?: number;
 	reviewCount: number;
 	appealCount?: number;
+}
+
+/**
+ * What the organizer supplies when keying a submission in by hand. Everything
+ * else the row carries — source, attribution, arrival date, tray — is the
+ * server's to state, so it is absent here by construction.
+ */
+export interface DirectEntryInput {
+	title: string;
+	/** Optional on purpose: the organizer often knows the talk before the paragraph exists. */
+	abstract?: string;
+	speakers: SubmissionSpeaker[];
+	trackId: string;
+	formatId: string;
+	/**
+	 * Where the entry lands: the review inbox as an undecided candidate that
+	 * competes like any other arrival, or accepted at creation — the invited
+	 * path, which graduates into the program immediately.
+	 */
+	disposition: 'inbox' | 'accepted';
+	/** A still-collecting session this entry proposes to join. */
+	targetSessionId?: string;
 }
 
 export interface SubmissionQuery {
@@ -315,6 +397,25 @@ export interface ReviewPlan {
  * is legitimate, but silently rewriting what you committed before you saw the
  * peers would erase the only evidence that the change was post-unlock.
  */
+/**
+ * What opening the review round will do, counted from current records by the
+ * API: the active reviewer pool, the submissions in play, and the reviews the
+ * scope-match hand-out produces. The dialog renders these numbers; it never
+ * derives them.
+ */
+export interface ReviewRoundSetup {
+	/** Reviewers who accepted and will receive a queue the moment the round opens. */
+	activeReviewers: number;
+	/** Invited but not yet accepted — named so the hand-out states who is not in it. */
+	invitedReviewers: number;
+	/** Submissions in the inbox right now. */
+	submissions: number;
+	/** Total reviews the hand-out produces (sum of per-reviewer loads). */
+	expectedReviews: number;
+	/** Who gets how many, by scope match; generalists carry everything. */
+	perReviewer: { id: string; name: string; assigned: number }[];
+}
+
 export interface ReviewRevision {
 	score: number;
 	comment: string;
@@ -386,6 +487,117 @@ export interface ComparableCard {
 	standing: ScoreStanding | null;
 }
 
+/**
+ * One committed review on a submission, as a review-read surface (the decision
+ * table's expansion, a submission detail) shows it. Reviewer identity is the
+ * plan-local label, never a name; the caller's own committed review is the one
+ * exception, marked `mine` and labeled accordingly.
+ */
+export interface SubmissionReview {
+	/** Plan-local reviewer label ("Reviewer B"), or "You" when `mine`. */
+	reviewer: string;
+	/** True when this is the caller's own committed review. */
+	mine?: boolean;
+	score: number;
+	comment?: string;
+	committedAt: string;
+	/**
+	 * The score this one replaced, present only when the change happened after
+	 * peer content unlocked — the delta a chair reads as calibration evidence.
+	 */
+	amendedFrom?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Reviewer roster and scope
+
+/** The kinds of governed records a reviewer scope may reference. */
+export type ScopeRefKind = 'track' | 'format' | 'session';
+
+/**
+ * One entry in a reviewer's scope: a typed reference to a record that exists —
+ * a track, a format, or a session — never a free-floating tag. The referenced
+ * entry's own lifecycle applies: a retired track keeps rendering inside an
+ * existing scope, it is just not offered for new scoping.
+ */
+export interface ScopeRef {
+	kind: ScopeRefKind;
+	id: string;
+}
+
+/**
+ * A reviewer's lifecycle, deliberately thin: invited (access reservation
+ * recorded, not yet arrived) → active. Removal takes the record off the
+ * roster rather than adding a third state.
+ */
+export type ReviewerStatus = 'invited' | 'active';
+
+/**
+ * One person on the reviewer roster. A reviewer is a workspace member (the
+ * Speaker Reviewer preset, or another role that includes review), so `id` is
+ * that member's id — one identity across the roster, the review plans, and
+ * Settings.
+ *
+ * `scope` is a union: a submission is in scope when it matches *any* ref. An
+ * empty scope is the generalist default — this reviewer reviews everything.
+ * Scope narrows workload only; it never adjusts visibility policy or a plan's
+ * blind/peer gates.
+ *
+ * The load numbers are server-counted sums across every review plan; a client
+ * renders them, never derives them. Invariants: `awaitingReassignment <=
+ * steppedBack`, and an uncovered review stays inside the original reviewer's
+ * `assigned`, so a plan's denominator never moves when someone steps back
+ * over a conflict of interest.
+ */
+export interface Reviewer {
+	id: string;
+	name: string;
+	email: string;
+	status: ReviewerStatus;
+	scope: ScopeRef[];
+	assigned: number;
+	done: number;
+	steppedBack: number;
+	awaitingReassignment: number;
+}
+
+/**
+ * Coverage for one scope target, server-counted. `reviewers` counts active
+ * reviewers holding the ref in scope — generalists are deliberately not
+ * folded in, so a zero here is answered by the roster's generalist count
+ * rather than hidden by it. `submissions` counts what falls inside the ref
+ * today.
+ */
+export interface CoverageRow {
+	ref: ScopeRef;
+	/** The referenced entity's own name: track/format name, session title. */
+	label: string;
+	/** Present when the ref points at a retired entry — it keeps rendering and keeps filtering; the flag suggests re-scoping. */
+	retired?: boolean;
+	reviewers: number;
+	submissions: number;
+}
+
+/**
+ * The reviewers surface's one read: the roster, the generalist count, and the
+ * coverage projection. `generalists` counts active reviewers with no scope,
+ * kept beside the coverage rows so "zero scoped reviewers" and "uncovered"
+ * stay distinct claims.
+ */
+export interface ReviewerRoster {
+	reviewers: Reviewer[];
+	generalists: number;
+	coverage: CoverageRow[];
+}
+
+/**
+ * One address's outcome from a reviewer invite. A multi-address invite
+ * reports per line, so one bad address never hides what happened to the rest.
+ */
+export type ReviewerInviteLine =
+	| { email: string; ok: true; reviewer: Reviewer }
+	| { email: string; ok: false; reason: string };
+
 // ---------------------------------------------------------------------------
 // Speakers and tasks
 
@@ -418,6 +630,42 @@ export interface SpeakerRow {
 	publiclyVisible: boolean;
 	contentApproved: boolean;
 	note?: string;
+	/**
+	 * Where this person sits in the public lineup, ascending. Roster state, not
+	 * surface state: one order serves the standalone page, every embed of it,
+	 * and anything else that lists speakers, so a reorder is never re-done per
+	 * surface. Dense and unique within the roster; the API owns renumbering.
+	 */
+	position: number;
+	/** The public grouping this person appears under; absent means ungrouped. */
+	categoryId?: string;
+}
+
+/**
+ * One person as the public roster shows them: what they said about themselves
+ * joined to what they are in this event, already ordered and already filtered
+ * to who may be shown.
+ *
+ * A named public projection rather than a filtered `SpeakerRow`: the roster row
+ * carries organizer-only facts (address, task counts, cancellation notes) that
+ * must not travel to a surface at all, and a surface that received the whole row
+ * could render them by accident. Everything here is publishable by construction.
+ */
+export interface PublicSpeakerCard {
+	id: string;
+	name: string;
+	/** Their own one-line description. Absent while nothing is approved to show. */
+	headline?: string;
+	location?: string;
+	links: SpeakerLink[];
+	sessions: SpeakerSession[];
+	categoryId?: string;
+	/**
+	 * True when this person is published but their content is not approved yet —
+	 * the roster's existing "shows as TBA" state, carried so the surface can say
+	 * so rather than inventing a biography.
+	 */
+	provisional: boolean;
 }
 
 /**
@@ -489,13 +737,42 @@ export interface ScheduleDayInfo {
 	label: string;
 }
 
+/**
+ * Where a session stands in its lifecycle. A `draft` is a private editorial
+ * sketch, visible to organizers only. A `collecting` session is a slot still
+ * gathering applicants — a legitimate reviewer-scope target, since the
+ * reviewers scoped to it see everyone who applied — while a `programmed`
+ * session has its content settled. Placement is orthogonal to state: a
+ * collecting session may hold a planned slot on the grid, and only program
+ * releases make anything public.
+ */
+export type SessionState = 'draft' | 'collecting' | 'programmed';
+
+/**
+ * One person on a session's roster. Email-keyed deliberately: the address is
+ * the identity that survives graduation from a submission, joins the roster
+ * row it belongs to, and keeps two people who spell their names alike from
+ * ever being conflated by conflict checks or profile lookups.
+ */
+export interface SessionSpeaker {
+	name: string;
+	email: string;
+}
+
 export interface SessionItem {
 	id: string;
 	title: string;
-	speakerNames: string[];
+	speakers: SessionSpeaker[];
 	trackId: string;
 	formatId: string;
 	durationMin: number;
+	state: SessionState;
+	/**
+	 * The accepted submissions this session grew from — the spawn or attach
+	 * provenance the speakers panel narrates. Absent on purely editorial
+	 * sessions; never a membership list (the roster is `speakers`).
+	 */
+	originSubmissionIds?: string[];
 }
 
 export interface PlacementConflict {
@@ -550,7 +827,14 @@ export interface SlotSuggestion {
 // ---------------------------------------------------------------------------
 // Communications
 
-export type OutboxState = 'draft' | 'scheduled' | 'sending' | 'sent' | 'held';
+export type CommunicationState = 'draft' | 'scheduled' | 'sending' | 'sent' | 'held';
+
+/**
+ * Who authorized a send: the operator, an agent draft the operator committed,
+ * or a standing policy acting on a recorded rule. Attribution renders in the
+ * established vocabulary (lavender marks agents; policy reads as automatic).
+ */
+export type CommunicationActor = 'you' | 'agent' | 'policy';
 
 export interface RecipientRow {
 	name: string;
@@ -567,6 +851,12 @@ export interface RecipientRow {
 	reason?: string;
 	/** Sample resolved merge value shown in the per-recipient preview. */
 	mergeSample?: string;
+	/**
+	 * This person's own resolved merge values, keyed by merge-field key. Feeds
+	 * the rendered per-recipient preview; the recipient's name resolves
+	 * `speaker.name` implicitly, so only values beyond it need stating.
+	 */
+	mergeValues?: Record<string, string>;
 }
 
 /**
@@ -584,12 +874,21 @@ export interface MessageReview {
 	irreversibleNote: string;
 }
 
-export interface OutboxMessage {
+export interface CommunicationMessage {
 	id: string;
 	subject: string;
 	audience: string;
 	audienceCount: number;
-	state: OutboxState;
+	state: CommunicationState;
+	/** Registered purpose the send is authorized under — the row's scan key. */
+	purpose: string;
+	/** One sentence of provenance: the fact or intent that made this send exist. */
+	cause: string;
+	/** Door to the causal record when its rows live on another surface. */
+	causeHref?: string;
+	actor: CommunicationActor;
+	/** The stored template the content came from, when one was used. */
+	templateId?: string;
 	sentAt?: string;
 	/** Present while held: the reason and next remedy (e.g. provider not ready). */
 	heldReason?: string;
@@ -598,6 +897,57 @@ export interface OutboxMessage {
 	bounces: { email: string; reason: string }[];
 	/** Present on drafts: the reviewable batch projection. */
 	review?: MessageReview;
+}
+
+/**
+ * A currently actionable condition on the communications surface — a derived,
+ * rebuildable projection, never a fire-once flag. Each item names its reason,
+ * how many people it affects, and the one safe next action.
+ */
+export interface CommunicationAttentionItem {
+	id: string;
+	/** `action` is act-now/blocked (danger); `soon` needs attention (warning). */
+	severity: 'action' | 'soon';
+	reason: string;
+	/** The remedy or what happens next, stated in place. */
+	detail: string;
+	/** Affected people, when the condition counts them. */
+	count?: number;
+	/** The message row carrying the evidence, when one does. */
+	messageId?: string;
+	action: { label: string; kind: 'review' | 'open-message' | 'setup' };
+}
+
+/**
+ * One entry in a person's communications thread — the per-recipient projection,
+ * so `outcome` is this person's own fact (their copy bounced) rather than the
+ * batch state. Organizer-visible, non-security mail only.
+ */
+export interface CommunicationThreadEntry {
+	id: string;
+	/** The batch row in history this entry came from, when it is still listed. */
+	messageId?: string;
+	at: string;
+	purpose: string;
+	subject: string;
+	outcome: 'delivered' | 'sent' | 'bounced' | 'scheduled';
+	actor: CommunicationActor;
+}
+
+/** A person's communications thread: who it is about plus their entries, newest first. */
+export interface CommunicationThread {
+	personId: string;
+	personName: string;
+	entries: CommunicationThreadEntry[];
+}
+
+/** A sendable audience, resolved and counted by the API from current records. */
+export interface AudienceOption {
+	id: string;
+	label: string;
+	count: number;
+	/** Present when the audience is one person (a scoped compose). */
+	personId?: string;
 }
 
 export type ReadinessState = 'ready' | 'action_required' | 'unknown' | 'not_applicable';
@@ -763,6 +1113,9 @@ export type FieldKind =
  */
 export type FieldContext = 'apply' | 'onboard' | 'profile';
 
+/** The event vocabularies a choice field can draw its options from. */
+export type FieldOptionSource = 'tracks' | 'formats';
+
 /**
  * The canonical placement ladder a field list is organized by, in its fixed
  * order. Consent always renders last.
@@ -790,6 +1143,13 @@ export interface RegistryField {
 	collectAt: FieldContext[];
 	/** Choices, for `select` and `multiselect` fields only. */
 	options?: string[];
+	/**
+	 * Where a choice field's options come from when they are event vocabulary
+	 * rather than typed-in strings. A sourced field serves the live vocabulary at
+	 * read time — options are never copied into the field — so adding a track
+	 * changes every form that offers the question. `options` is ignored when set.
+	 */
+	optionSource?: FieldOptionSource;
 	group: FieldGroup;
 	/** Order within the whole list, user-owned after first placement. */
 	position: number;
@@ -803,7 +1163,7 @@ export interface RegistryField {
 // Public surface templates
 
 /** Which public surface a template describes. */
-export type SurfaceKind = 'schedule' | 'application-form';
+export type SurfaceKind = 'schedule' | 'application-form' | 'speaker-roster';
 
 /**
  * One block of a public surface template. The same revisable-block shape
@@ -820,6 +1180,21 @@ export type SurfaceBlock =
 			showRoom: boolean;
 			showTrack: boolean;
 			showSpeakers: boolean;
+			density: 'cozy' | 'compact';
+	  }
+	| {
+			type: 'roster-list';
+			/**
+			 * How the people are laid out. `profile` is the single-person
+			 * presentation — one card with the whole biography — and is what an
+			 * embed scoped to one speaker renders; it is authorable too, because a
+			 * one-person roster is a real thing (a keynote page).
+			 */
+			layout: 'grid' | 'list' | 'strip' | 'profile';
+			grouping: 'none' | 'category';
+			showHeadline: boolean;
+			showSessions: boolean;
+			showLinks: boolean;
 			density: 'cozy' | 'compact';
 	  }
 	| {
@@ -847,6 +1222,18 @@ export interface SurfaceField {
 	options?: string[];
 	/** Short guidance rendered beside the control. */
 	help?: string;
+	/** The ladder group the question classifies into, so a per-form view can rebuild section membership. */
+	group: FieldGroup;
+	/** Names the one form this question belongs to; absent for shared questions. */
+	formScope?: string;
+	/** Present when the options are served from an event vocabulary. */
+	optionSource?: FieldOptionSource;
+	/**
+	 * The live vocabulary behind a sourced field's options — id and name per
+	 * active entry — so a per-form view can offer a subset without re-reading
+	 * the vocabulary. `options` already carries the resolved names.
+	 */
+	optionChoices?: { id: string; name: string }[];
 }
 
 /**
@@ -883,19 +1270,206 @@ export function isSurfaceTemplate(template: AnyTemplate): template is SurfaceTem
 }
 
 // ---------------------------------------------------------------------------
+// Embeds
+
+/**
+ * Which slice of a surface's data one embed shows.
+ *
+ * A closed union rather than a query string: an embed is a public request path,
+ * so what it may ask for is enumerated here and validated at the boundary. It
+ * selects among the surface's own published projections; it never carries a
+ * filter expression, a field list, or anything an organizer-only projection
+ * could satisfy.
+ */
+export type EmbedScope =
+	| { kind: 'all' }
+	/** The public roster, narrowed to one speaker category. */
+	| { kind: 'category'; categoryId: string }
+	/** One person's public card — the individual-speaker embed. */
+	| { kind: 'speaker'; speakerId: string }
+	/** The schedule, narrowed to one day. */
+	| { kind: 'day'; dayKey: string }
+	/** One application form's questions, rendered through the shared surface. */
+	| { kind: 'form'; formId: string };
+
+/**
+ * How the embed's code reaches the host page. Three mechanisms, because host
+ * pages differ in what they permit and each one costs something different:
+ *
+ * - `inline` — a custom element rendered into a shadow root. Our styles cannot
+ *   leak out and the host's cannot leak in, the block grows with its content
+ *   (no fixed height, no nested scrollbar), and the content is part of the host
+ *   document. Needs the host to allow one script tag.
+ * - `frame` — an iframe. Same isolation from a separate document, and it works
+ *   where scripts are stripped, but the host must be told a height and
+ *   `match-site` styling is impossible across the document boundary.
+ *
+ * A third option — an anchor to the hosted page — is deliberately *not* a
+ * delivery: the hosted page has its own address, handed out as a link rather
+ * than as markup, and offering the same thing twice in two shapes is one
+ * control too many.
+ */
+export type EmbedDelivery = 'inline' | 'frame';
+
+/**
+ * Where the embed's look comes from.
+ *
+ * `event` paints the event's own brand, so the embed reads as a continuation of
+ * the event. `match-site` leaves the two inherited properties that carry a
+ * site's voice — font family and text colour — undeclared at the embed root, so
+ * the host page's own cascade supplies them while every structural decision
+ * (layout, spacing, radii, borders, accent) stays ours. Unavailable through
+ * `frame`, where nothing inherits across the document boundary.
+ */
+export type EmbedStyleMode = 'event' | 'match-site';
+
+/** How the embed sits in whatever box the host page gives it. */
+export interface EmbedFit {
+	/** Widest the content may run, in px; null lets it fill the host's box. */
+	maxWidth: number | null;
+	align: 'start' | 'center';
+}
+
+/**
+ * One embed, as an organizer configures it. Everything a snippet needs and
+ * nothing a snippet must not carry: no session, no capability token, no
+ * organizer projection, no style payload.
+ */
+export interface EmbedSpec {
+	surfaceId: string;
+	kind: SurfaceKind;
+	scope: EmbedScope;
+	fit: EmbedFit;
+	style: EmbedStyleMode;
+	delivery: EmbedDelivery;
+	/**
+	 * The host origins allowed to frame this embed. Empty means any origin, which
+	 * only a read-only surface may choose; a surface that accepts submissions
+	 * always carries an allowlist.
+	 */
+	allowedOrigins: string[];
+}
+
+/** One thing an organizer can put on their site, as the picker lists it. */
+export interface EmbedTarget {
+	/** Stable key for the address (`?embed=`): the surface, plus the scope when the scope names the target. */
+	key: string;
+	surfaceId: string;
+	kind: SurfaceKind;
+	scope: EmbedScope;
+	name: string;
+	/** One line: what a visitor sees. */
+	purpose: string;
+	/** How many records it currently shows — an empty embed is worth knowing about before pasting it. */
+	count: number;
+	/** What `count` counts, singular ('session', 'speaker', 'question'). */
+	countNoun: string;
+	/** True when the surface accepts submissions, which binds the origin allowlist. */
+	acceptsSubmissions: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // Forms
 
-export type FormTarget = 'general' | 'category' | 'slot' | 'evergreen';
+/**
+ * Where accepted submissions go — routing, never placement authority. A
+ * category or session target names its reference; the referenced name is
+ * resolved live at render time, never copied onto the form. Availability
+ * (whether and when intake closes) is a separate axis: any target can run
+ * without a close date.
+ */
+export type FormTarget =
+	| { kind: 'general' }
+	| { kind: 'category'; category: 'track' | 'format'; id: string }
+	| { kind: 'session'; sessionId: string };
+
+/**
+ * How one form composes the shared field registry: which apply-context
+ * questions it leaves out, where its requiredness differs from the registry
+ * default, and which vocabulary options its sourced choice fields offer.
+ * A form that keeps all three empty asks the standard application — the
+ * baseline is the product's opinion, and deviation is the opt-in.
+ */
+export interface FormComposition {
+	/** Shared apply-context questions this form does not ask. Never the locked email field. */
+	excludedFieldIds: string[];
+	/** Per-form requiredness where it differs from the registry's apply default. */
+	requiredOverrides: Record<string, boolean>;
+	/**
+	 * Per sourced field, the vocabulary entry ids this form offers. A field
+	 * absent here offers every current and future active entry — the live
+	 * default; a listed subset is pinned and new entries stay out until chosen.
+	 */
+	optionExposure: Record<string, string[]>;
+}
 
 export interface FormSummary {
 	id: string;
 	name: string;
 	target: FormTarget;
 	status: 'draft' | 'open' | 'closed';
-	closesRelative?: string;
+	/**
+	 * ISO date (yyyy-mm-dd) after which normal intake ends — the materialized
+	 * fixed-anchor close deadline. Absent = no close date: the form stays open
+	 * until closed by hand (the evergreen availability). Close semantics are
+	 * soft by default: on-time editing locks, late arrivals join the late tray.
+	 */
+	closesAt?: string;
 	version: number;
 	submissionCount: number;
+	/** Questions this form effectively asks — derived from the registry and the composition, never stored. */
 	fieldCount: number;
+	composition: FormComposition;
+}
+
+/**
+ * One registry question as a form's configuration surface sees it: the shared
+ * definition plus this form's answer to "asked here?", "required here?", and —
+ * for vocabulary-sourced choice fields — "which options are offered?".
+ */
+export interface FormFieldRow {
+	field: RegistryField;
+	/** Whether this form asks the question. */
+	included: boolean;
+	/** Effective requiredness on this form (override or registry default). */
+	required: boolean;
+	/** True when `required` comes from a per-form override rather than the registry. */
+	requiredOverridden: boolean;
+	/** For vocabulary-sourced fields: every active entry, with this form's exposure. */
+	options?: { id: string; name: string; exposed: boolean }[];
+	/** True when the form offers all current and future entries (no pinned subset). */
+	exposureAll: boolean;
+}
+
+/** One event as the sidebar switcher offers it — a serve-time projection. */
+export interface WorkspaceEventOption {
+	id: string;
+	name: string;
+	dates: string;
+	location: string;
+	/** Which data source renders this event; switching activates it. */
+	scenarioKey: string;
+	current: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Account — the signed-in person, as the account menu sees them.
+
+/**
+ * An email change in flight. The change commits only after both mailboxes
+ * confirm — the current address approves it, the new address proves receipt —
+ * and until then the account keeps its current address.
+ */
+export interface AccountEmailChange {
+	newEmail: string;
+	confirmedCurrent: boolean;
+	confirmedNew: boolean;
+}
+
+export interface AccountInfo {
+	name: string;
+	email: string;
+	pendingEmailChange: AccountEmailChange | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -954,6 +1528,17 @@ export interface EventSettings {
 	location: string;
 	timezone: string;
 	venueNote: string;
+	/**
+	 * Whether the hosted public pages ask to be indexed by search engines.
+	 *
+	 * Off until the organizer turns it on, and deliberately so: a call for
+	 * proposals, a half-built programme, and a lineup that is still being
+	 * announced are all pages an event wants to *hand out* long before it wants
+	 * them found by strangers — and un-indexing a page that has already been
+	 * crawled is far harder than indexing one that has not. The link works
+	 * either way; this only governs the robots directive.
+	 */
+	publicIndexing?: boolean;
 }
 
 /** Structured outcome for operations that can be legitimately refused. */

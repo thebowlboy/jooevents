@@ -1,7 +1,7 @@
 <script lang="ts">
-	import TasksPage from '$lib/features/tasks/TasksPage.svelte';
+	import OperatorPage from 'jooevents-operator-page';
 </script>
 
 <svelte:head><title>Tasks · JooEvents</title></svelte:head>
 
-<TasksPage />
+<OperatorPage area="tasks" />

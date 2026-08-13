@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { ArrowDown, ArrowUp, Flame, Gem, MailWarning, Star, Zap } from 'lucide-svelte';
+	import { onMount, tick } from 'svelte';
+	import { ArrowDown, ArrowUp, ChevronDown, Flame, Gem, MailWarning, Star, Zap } from 'lucide-svelte';
 	// The situation glyph for a surface whose measurement has not been set up.
 	import { CircleDashed as NoPlan } from 'lucide-svelte';
 	import {
@@ -10,6 +10,8 @@
 		Modal,
 		PENDING_MIN_VISIBLE_MS,
 		Popover,
+		revealTarget,
+		shouldIgnoreRowPress,
 		statusIcon,
 		trackPending
 	} from '$lib/ui';
@@ -21,10 +23,11 @@
 	} from '$lib/features/workspace/components/ReviewSurface.svelte';
 	import ScopeChip from '$lib/features/workspace/components/ScopeChip.svelte';
 	import StandingMark from '$lib/features/workspace/components/StandingMark.svelte';
+	import SubmissionDetail from '$lib/features/workspace/components/SubmissionDetail.svelte';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
 	import { clearParams, param } from '$lib/features/workspace/url-state.svelte';
-	import { useWorkspaceGateway } from '$lib/api/workspace-gateway';
+	import type { DecisionsPagePort } from '$lib/api/decisions-page-port';
 	import type {
 		AccoladeDef,
 		AccoladeKey,
@@ -35,10 +38,16 @@
 		ScoreStanding,
 		SpeakerProfile,
 		Submission,
+		SubmissionReview,
 		Track
 	} from '$lib/api/types';
 
-	const { api } = useWorkspaceGateway();
+	interface Props {
+		port: DecisionsPagePort;
+	}
+
+	let { port }: Props = $props();
+	const api = $derived(port);
 
 	/** The three decisions an organizer applies here. `withdrawn` is submitter-owned. */
 	type Verdict = 'accepted' | 'waitlisted' | 'declined';
@@ -46,7 +55,18 @@
 	let rows = $state<Submission[] | null>(null);
 	let tracks = $state<Track[]>([]);
 	let selected = $state<string[]>([]);
+	let expandedId = $state<string | null>(null);
 	let sortDir = $state<'asc' | 'desc'>('desc');
+	let announcement = $state('');
+
+	// The committed reviews behind a row's average, read once per submission the
+	// first time its row opens. A decision re-read does not change any review,
+	// so an entry never goes stale within a session.
+	let reviewsBy = $state<Record<string, SubmissionReview[]>>({});
+	/** The plan's scale, for inking each review's score chip. */
+	let scaleMax = $state(5);
+	/** Submissions the current person holds a committed review on. */
+	let myCommitted = $state<string[]>([]);
 	/** In-flight notification send; decisions track their own rows via `pendingIds`. */
 	let busy = $state(false);
 
@@ -79,7 +99,7 @@
 	// Evidence from the already-fetched workspace summary decides whether the
 	// conditional banner deserves a placeholder: a skeleton for a banner that
 	// resolves to absent would collapse the page upward when data arrives.
-	const expectBanner = api.workspace.summarySnapshot()?.navCounts.decisions !== undefined;
+	const expectBanner = $derived(api.workspace.decisionAttentionExpectedSnapshot() === true);
 
 	const verdicts: { value: Verdict; label: string }[] = [
 		{ value: 'accepted', label: 'Accept' },
@@ -186,6 +206,9 @@
 			if (seq !== loadSeq) return;
 			landed = [...inbox.rows, ...late.rows];
 			rows = landed;
+			// An open row that the newest result set no longer holds would show a
+			// detail for a candidate the operator can no longer see.
+			if (expandedId !== null && !landed.some((row) => row.id === expandedId)) expandedId = null;
 			// The marks already on screen stay on screen: a decision re-read does
 			// not change any average, and blanking them back to a pending figure
 			// would flash the whole column for nothing. Only the flag reopens, so
@@ -230,8 +253,10 @@
 		// need completely different things from the organizer.
 		hasPlan = planList.length > 0;
 		plansRead = true;
+		scaleMax = planList[0]?.scaleMax ?? 5;
 		if (settings) subject = `Your submission decision — ${settings.name}`;
 		accoladeDefs = defs;
+		myCommitted = queue.filter((item) => item.committed).map((item) => item.submissionId);
 		myAccolades = Object.fromEntries(
 			queue
 				.filter((item) => item.accolades && item.accolades.length > 0)
@@ -262,13 +287,136 @@
 	// its scope in the address, so the table opens on exactly those twelve. The
 	// chip says so on the surface and clears it in one press.
 	const scoped = $derived(param('scope') === 'unnotified');
-	const visible = $derived(scoped ? unnotified : sorted);
 	const scopeLabel = 'Decided · not yet notified';
+
+	// The schedule pool's "collecting — N proposals" count lands here the same
+	// way, with its session in the address: the table narrows to the proposals
+	// aimed at that target. The scope lives only in the URL; both scopes stack.
+	const targetScope = $derived(param('target'));
+	const targeted = $derived(
+		targetScope ? sorted.filter((row) => row.targetSessionId === targetScope) : sorted
+	);
+	const visible = $derived(
+		scoped ? targeted.filter((row) => isDecided(row) && !row.notified) : targeted
+	);
+
+	/** The targeted session's title, read once per target so the chip can name it. */
+	let targetTitle = $state<string | null>(null);
+	// A plain let, outside the graph: which target the title read has answered,
+	// so a repaint cannot re-issue the read.
+	let titleReadFor: string | null = null;
+	$effect(() => {
+		const id = targetScope;
+		if (!id) {
+			titleReadFor = null;
+			targetTitle = null;
+			return;
+		}
+		if (titleReadFor === id) return;
+		titleReadFor = id;
+		targetTitle = null;
+		void api.schedule.state().then((state) => {
+			if (titleReadFor !== id) return;
+			targetTitle = state.sessions.find((session) => session.id === id)?.title ?? null;
+		});
+	});
+
+	// The chip names the session as soon as the title read lands; until then it
+	// still names the scope's shape, so the filter is never anonymous.
+	const targetLabel = $derived(
+		targetTitle ? `Proposals for “${targetTitle}”` : 'Proposals for one session'
+	);
 
 	function clearScope() {
 		selected = [];
 		// Pushed, so the Back button returns to the scoped view it came from.
 		void clearParams(['scope'], { history: 'push' });
+	}
+
+	function clearTargetScope() {
+		selected = [];
+		void clearParams(['target'], { history: 'push' });
+	}
+
+	async function loadReviews(row: Submission) {
+		if (row.reviewCount === 0 || row.id in reviewsBy) return;
+		const landed = await api.review.forSubmission(row.id);
+		reviewsBy = { ...reviewsBy, [row.id]: landed };
+	}
+
+	function toggleRow(id: string) {
+		const next = expandedId === id ? null : id;
+		expandedId = next;
+		// The address named one candidate; the moment the operator opens or closes
+		// a row themselves, what is showing is theirs rather than the link's — so
+		// the scope leaves the address, and Back puts the scoped arrival back.
+		if (askedSubmission && askedSubmission !== next) {
+			void clearParams(['submission'], { history: 'push' });
+		}
+		if (next) {
+			const row = rows?.find((entry) => entry.id === next);
+			if (row) void loadReviews(row);
+		}
+	}
+
+	/**
+	 * The row is a bigger door to the same detail, for the pointer only. The
+	 * chevron stays the one focusable switch carrying `aria-expanded`; which
+	 * presses belong to the row's own controls — or to a text selection — is the
+	 * shared row-press contract in `$lib/ui`.
+	 */
+	function onRowPress(event: MouseEvent, id: string) {
+		if (shouldIgnoreRowPress(event)) return;
+		toggleRow(id);
+	}
+
+	function onKeydown(event: KeyboardEvent) {
+		const target = event.target as HTMLElement | null;
+		if (target && /^(input|textarea|select)$/i.test(target.tagName)) return;
+		if (visible.length === 0 || (event.key !== 'j' && event.key !== 'k')) return;
+		const index = visible.findIndex((row) => row.id === expandedId);
+		const next = event.key === 'j' ? Math.min(index + 1, visible.length - 1) : Math.max(index - 1, 0);
+		const row = visible[next];
+		if (!row || row.id === expandedId) return;
+		toggleRow(row.id);
+	}
+
+	/**
+	 * Arriving from elsewhere: `?submission=` lands on that candidate's row —
+	 * open, scrolled to, and marked — so a link handed over by an alert or an
+	 * agent keeps its promise instead of dropping someone at the top of a table.
+	 * The candidates are a crowd of alike rows, so the arrival is marked.
+	 */
+	const askedSubmission = $derived(param('submission'));
+
+	// A plain let, deliberately outside the graph: it records which arrival has
+	// already been answered, so a repaint cannot steal focus back a second time.
+	let revealedSubmission: string | null = null;
+
+	$effect(() => {
+		const id = askedSubmission;
+		const ready = rows;
+		if (!ready || !id) {
+			revealedSubmission = null;
+			return;
+		}
+		if (revealedSubmission === id) return;
+		const row = ready.find((entry) => entry.id === id);
+		if (!row) return;
+		revealedSubmission = id;
+		expandedId = id;
+		void loadReviews(row);
+		announcement = `“${row.title}” — its candidate row is open.`;
+		void showRow(row);
+	});
+
+	async function showRow(row: Submission) {
+		// A scope the link never asked for can hide the row it did ask for, so the
+		// table widens to the full candidate list rather than landing on nothing.
+		if (scoped && !(isDecided(row) && !row.notified)) await clearParams(['scope']);
+		if (targetScope && row.targetSessionId !== targetScope) await clearParams(['target']);
+		await tick();
+		revealTarget(document.querySelector<HTMLElement>(`[data-submission="${row.id}"]`));
 	}
 
 	const allSelected = $derived(visible.length > 0 && selected.length === visible.length);
@@ -319,14 +467,41 @@
 		if (pendingIds.length === 0 && !deciding.visible && dimmedIds.length > 0) dimmedIds = [];
 	});
 
+	/**
+	 * Accepting is a graduation: a row that names a still-collecting session
+	 * joins it, and every other acceptance lands a new unplaced session in the
+	 * program pool. The receipt states where each landed and carries the door
+	 * there, so the organizer can keep batching without losing the placement
+	 * debt. Undo is the ordinary decision compensator; the seam reverses the
+	 * graduation with it.
+	 */
+	function acceptanceReceipt(committed: Submission[]) {
+		const joined = committed.filter((row) => row.targetSessionId).length;
+		const pooled = committed.length - joined;
+		const head =
+			committed.length === 1 ? `Accepted “${committed[0].title}”` : `Accepted ${committed.length}`;
+		const landing =
+			joined === 0
+				? 'added to the program pool'
+				: pooled === 0
+					? committed.length === 1
+						? 'joined its session'
+						: 'joined their sessions'
+					: `${pooled} new in the program pool, ${joined} joined ${joined === 1 ? 'a session' : 'sessions'}`;
+		return {
+			label: `${head} — ${landing}`,
+			href: '/app/schedule?tray=unplaced',
+			hrefLabel: committed.length === 1 ? 'Place it' : 'Place them'
+		};
+	}
+
 	async function decide(ids: string[], decision: DecisionState, label: string) {
 		// A row already committing is dropped rather than committed twice.
 		const targets = ids.filter((id) => !pendingIds.includes(id));
 		if (targets.length === 0) return;
+		const committed = (rows ?? []).filter((row) => targets.includes(row.id));
 		// The compensator restores each submission's decision as it stood.
-		const previous = (rows ?? [])
-			.filter((row) => targets.includes(row.id))
-			.map((row) => ({ id: row.id, decision: row.decision }));
+		const previous = committed.map((row) => ({ id: row.id, decision: row.decision }));
 		pendingIds = [...pendingIds, ...targets];
 		dimmedIds = [...new Set([...dimmedIds, ...targets])];
 		try {
@@ -338,9 +513,12 @@
 				void load().catch(() => {});
 				throw error;
 			}
+			const graduation = decision === 'accepted' ? acceptanceReceipt(committed) : null;
 			recordAction({
 				area: 'decisions',
-				label,
+				label: graduation?.label ?? label,
+				href: graduation?.href,
+				hrefLabel: graduation?.hrefLabel,
 				undo: async () => {
 					for (const entry of previous) {
 						await api.decisions.decide([entry.id], entry.decision);
@@ -392,7 +570,7 @@
 		notifyOpen = true;
 		const [projection, delivery] = await Promise.all([
 			api.decisions.reviewNotification(ids),
-			api.messages.readiness()
+			api.communications.readiness()
 		]);
 		if (!notifyOpen || notifyIds !== ids) return;
 		notifyReview = projection;
@@ -416,6 +594,8 @@
 		}
 	}
 </script>
+
+<svelte:window onkeydown={onKeydown} />
 
 {#if !rows}
 	{#if expectBanner}
@@ -449,16 +629,23 @@
 
 <CommitReceipt onUndone={load} />
 
+<p class="ui-sr-only" role="status">{announcement}</p>
+
 <section class="table-region" aria-labelledby="{uid}-heading">
 	<header class="head">
 		<h2 class="head__title" id="{uid}-heading">Candidates</h2>
 		{#if scoped}
 			<ScopeChip label={scopeLabel} onclear={clearScope} />
 		{/if}
+		{#if targetScope}
+			<ScopeChip label={targetLabel} onclear={clearTargetScope} />
+		{/if}
 		{#if rows}
 			<p class="head__note">
 				{#if scoped}
 					{plural(visible.length, 'decision')} waiting on a notification, of {plural(sorted.length, 'candidate')}.
+				{:else if targetScope}
+					{plural(visible.length, 'proposal')} aimed at this session, of {plural(sorted.length, 'candidate')}.
 				{:else}
 					{plural(sorted.length, 'candidate')} from inbox and late · {decidedCount} decided ·
 					{sorted.length - decidedCount} undecided — set-aside and discarded submissions are not decided here.
@@ -513,6 +700,7 @@
 					</th>
 					<th>Decision</th>
 					<th>Set decision</th>
+					<th class="col-expand"><span class="ui-sr-only">Details</span></th>
 				</tr>
 			</thead>
 			<tbody>
@@ -536,11 +724,12 @@
 							</td>
 							<td><span class="ui-skeleton skeleton-chip"></span></td>
 							<td><span class="ui-skeleton skeleton-action skeleton-action--rowacts"></span></td>
+							<td class="col-expand"><span class="ui-skeleton skeleton-action skeleton-action--icon"></span></td>
 						</tr>
 					{/each}
 				{:else if visible.length === 0}
 					<tr>
-						<td colspan="6">
+						<td colspan="7">
 							<div class="empty">
 								{#if scoped}
 									<p class="empty__title">Every decision here has been sent.</p>
@@ -549,6 +738,18 @@
 										{plural(sorted.length, 'candidate')} is one press away.
 									</p>
 									<button type="button" class="ui-button ui-button--secondary ui-button--sm" onclick={clearScope}>
+										Show all candidates
+									</button>
+								{:else if targetScope}
+									<p class="empty__title">No proposals aim at this session.</p>
+									<p class="empty__hint">
+										Nothing in the candidate list targets it. The full list of
+										{plural(sorted.length, 'candidate')} is one press away.
+									</p>
+									<button
+										type="button"
+										class="ui-button ui-button--secondary ui-button--sm"
+										onclick={clearTargetScope}>
 										Show all candidates
 									</button>
 								{:else}
@@ -570,10 +771,21 @@
 						{@const rowPending = pendingIds.includes(row.id)}
 						{@const pinned = pinnedFor(row.id)}
 						{@const standing = standings[row.id]}
+						<!-- The pointer target is the row; the switch is still the chevron
+						     inside it, which is why no role or tabindex is added here. The row
+						     is also the arrival anchor and its own mark host for
+						     `?submission=`: nothing smaller answers "which one?" here, where
+						     every row carries the same four columns. -->
+						<!-- svelte-ignore a11y_click_events_have_key_events -->
+						<!-- svelte-ignore a11y_no_static_element_interactions -->
 						<tr
+							class="row"
+							class:is-open={expandedId === row.id}
+							data-submission={row.id}
 							data-selected={selected.includes(row.id) ? 'true' : undefined}
 							class:is-deciding={deciding.visible && dimmedIds.includes(row.id)}
-							aria-busy={rowPending || undefined}>
+							aria-busy={rowPending || undefined}
+							onclick={(event) => onRowPress(event, row.id)}>
 							<td class="col-check ui-pick-cell">
 								<label class="ui-pick">
 									<input
@@ -699,7 +911,39 @@
 									{/each}
 								</span>
 							</td>
+							<td class="col-expand">
+								<button
+									type="button"
+									class="ui-button ui-button--ghost ui-button--icon ui-button--sm expand"
+									class:expand--open={expandedId === row.id}
+									aria-expanded={expandedId === row.id}
+									aria-label={`Details for “${row.title}”`}
+									onclick={() => toggleRow(row.id)}>
+									<ChevronDown size={15} />
+								</button>
+							</td>
 						</tr>
+						{#if expandedId === row.id}
+							<!-- The way out to the deeper comparison surface. Only a committed
+							     review of my own can anchor the line-up, so the door renders
+							     only when it opens onto something. -->
+							{#snippet lineupAction()}
+								<a
+									class="ui-button ui-button--secondary ui-button--sm"
+									href={`/app/review/lineup?anchor=${row.id}&slice=track`}>
+									Line up with my other reviews
+								</a>
+							{/snippet}
+							<tr class="detail-row">
+								<td colspan="7">
+									<SubmissionDetail
+										submission={row}
+										reviews={row.reviewCount === 0 ? undefined : (reviewsBy[row.id] ?? 'loading')}
+										{scaleMax}
+										actions={myCommitted.includes(row.id) ? lineupAction : undefined} />
+								</td>
+							</tr>
+						{/if}
 					{/each}
 				{/if}
 			</tbody>
@@ -766,7 +1010,7 @@
 		<Alert
 			tone="success"
 			title={`${plural(sentCount, 'email')} sent`}
-			message="Delivery state per recipient is tracked in the outbox. These submissions no longer count as un-notified." />
+			message="Delivery state per recipient is tracked in Communications. These submissions no longer count as un-notified." />
 	{/if}
 	{#snippet footer(close)}
 		{#if sentCount === null}
@@ -812,6 +1056,10 @@
 
 	.skeleton-action--rowacts {
 		inline-size: 11.5rem;
+	}
+
+	.skeleton-action--icon {
+		inline-size: var(--je-control-height-sm);
 	}
 
 	/* The single attention surface on this page: tinted card plus a solid plate,
@@ -908,6 +1156,56 @@
 	tbody tr.is-deciding {
 		opacity: 0.55;
 		pointer-events: none;
+	}
+
+	.col-expand {
+		inline-size: 2.5rem;
+	}
+
+	.expand :global(svg) {
+		transition: rotate var(--je-duration-fast) var(--je-ease);
+	}
+
+	.expand--open :global(svg) {
+		rotate: 180deg;
+	}
+
+	/* The whole row opens its detail, so the whole row says so. Only the data
+	   rows: the detail, the empty state and the skeletons are not doors. The
+	   hover tint the table already gives every row is the other half of the
+	   affordance and is left alone. */
+	tr.row {
+		cursor: pointer;
+	}
+
+	/* Marked things tint; open things lift. The row being worked on keeps full
+	   surface brightness and a lifted boundary frames row and expansion as one
+	   raised unit — built from cell borders, because the table collapses them. */
+	tr.is-open td {
+		border-bottom-color: transparent;
+		background: var(--je-color-surface);
+		border-top: 2px solid var(--je-color-border-strong);
+	}
+
+	tr.is-open td:first-child {
+		border-inline-start: 2px solid var(--je-color-border-strong);
+	}
+
+	tr.is-open td:last-child {
+		border-inline-end: 2px solid var(--je-color-border-strong);
+	}
+
+	.detail-row td {
+		background: var(--je-color-surface);
+		border-bottom: 2px solid var(--je-color-border-strong);
+	}
+
+	.detail-row td:first-child {
+		border-inline-start: 2px solid var(--je-color-border-strong);
+	}
+
+	.detail-row td:last-child {
+		border-inline-end: 2px solid var(--je-color-border-strong);
 	}
 
 	.empty {
@@ -1015,10 +1313,12 @@
 	   wrapper so the header cell and the body cells cannot disagree; the strip's
 	   width is added to it at the only widths that can pay for it. */
 	.ui-table-wrap {
-		/* Sized to the phrase this table actually shows — “Higher than 93% of 46
-		   scored” — beside the numeral. Longer sentences ellipsize into the
-		   popover, which is where the full evidence lives anyway. */
-		--avg-w: 12.25rem;
+		/* Below the strip's breakpoint the mark is the quiet figure alone, so the
+		   reservation covers the column's real widest content there: the sort
+		   header and the “No reviews yet” absence note. Every sentence lives in
+		   the panel. The strip's width joins at the only widths that can pay for
+		   it, below. */
+		--avg-w: 7rem;
 	}
 
 	/* Column width stated once, so auto layout keeps it across skeleton,
@@ -1081,16 +1381,20 @@
 		min-inline-size: 0;
 	}
 
-	/* Measured, not guessed: at 1280 the strip's column forces the table past its
-	   own wrapper and squeezes the title to its min-content, so the strip starts
-	   where it costs the title nothing it does not already pay today. */
+	/* Measured, not guessed: below this the strip's column squeezes titles into
+	   a second line, so the strip starts where it costs the title nothing it
+	   does not already pay today — re-measured after the details column joined
+	   the row. */
 	.avg__wide {
 		display: none;
 	}
 
-	@media (min-width: 1440px) {
+	@media (min-width: 1536px) {
 		.ui-table-wrap {
-			--avg-w: 21rem;
+			/* Measured, not guessed: the quiet strip-and-figure pair renders at
+			   ~11.2rem, so the reservation covers it with the cell's own slack
+			   rather than holding a phrase the quiet form never draws. */
+			--avg-w: 12rem;
 		}
 
 		.avg__wide {

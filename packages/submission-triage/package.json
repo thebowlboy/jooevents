@@ -1,0 +1,19 @@
+{
+  "name": "@jooevents/submission-triage",
+  "private": true,
+  "version": "0.0.0",
+  "license": "SEE LICENSE IN LICENSE",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "check": "tsc --noEmit", "test": "bun test" },
+  "dependencies": {
+    "@jooevents/application": "workspace:*",
+    "@jooevents/changeset-operations": "workspace:*",
+    "@jooevents/changesets": "workspace:*",
+    "@jooevents/contracts": "workspace:*",
+    "@jooevents/identity-access": "workspace:*",
+    "@jooevents/kernel": "workspace:*",
+    "zod": "4.4.3"
+  },
+  "devDependencies": { "bun-types": "1.3.6", "typescript": "6.0.3" }
+}

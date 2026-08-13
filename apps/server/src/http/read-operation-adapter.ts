@@ -1,8 +1,10 @@
 import {
+  getCompiledReadOperation,
   OperationInputError,
   type ReadOperationExecutor,
   type ReadOperationRegistry,
-  type RegisteredOperatorHttpReadBinding
+  type RegisteredOperatorHttpReadBinding,
+  type RegisteredPublicHttpReadBinding
 } from '@jooevents/application';
 import {
   correlationIdSchema,
@@ -10,44 +12,49 @@ import {
   readOperationResultSchema
 } from '@jooevents/contracts';
 import { Hono } from 'hono';
+import { createSchemaAwareQueryInputDecoder } from './schema-aware-query-input';
 import type { ReturnTypeOrPromise } from './types';
 
-export type OperatorProtocolEvidenceResult =
+type HttpReadBinding = RegisteredOperatorHttpReadBinding | RegisteredPublicHttpReadBinding;
+
+export type ReadProtocolEvidenceResult =
   | { readonly kind: 'verified'; readonly evidence: unknown }
   | { readonly kind: 'rejected'; readonly reason: 'unauthenticated' | 'forbidden' };
 
-export interface OperatorProtocolEvidenceVerifier {
+export interface ReadProtocolEvidenceVerifier<Binding extends HttpReadBinding = HttpReadBinding> {
   verify(input: {
     readonly request: Request;
     readonly correlationId: string;
-    readonly binding: RegisteredOperatorHttpReadBinding;
-  }): ReturnTypeOrPromise<OperatorProtocolEvidenceResult>;
+    readonly binding: Binding;
+  }): ReturnTypeOrPromise<ReadProtocolEvidenceResult>;
 }
 
-function queryInput(request: Request): Record<string, string | readonly string[]> {
-  const values: Record<string, string | readonly string[]> = Object.create(null) as Record<string, string | readonly string[]>;
-  const search = new URL(request.url).searchParams;
-  for (const key of new Set(search.keys())) {
-    const candidates = search.getAll(key);
-    values[key] = candidates.length === 1 ? candidates[0] as string : candidates;
-  }
-  return values;
-}
+export type OperatorProtocolEvidenceResult = ReadProtocolEvidenceResult;
+export type OperatorProtocolEvidenceVerifier =
+  ReadProtocolEvidenceVerifier<RegisteredOperatorHttpReadBinding>;
+export type PublicReadProtocolEvidenceVerifier =
+  ReadProtocolEvidenceVerifier<RegisteredPublicHttpReadBinding>;
 
-function correlationId(request: Request): string {
+function correlationId(request: Request, shared?: unknown): string {
+  const inherited = correlationIdSchema.safeParse(shared);
+  if (inherited.success) return inherited.data;
   const incoming = correlationIdSchema.safeParse(request.headers.get('x-correlation-id'));
   return incoming.success ? incoming.data : crypto.randomUUID();
 }
 
-export function createOperatorReadHttpAdapter(input: {
+function createReadHttpAdapter<Binding extends HttpReadBinding>(input: {
   readonly registry: ReadOperationRegistry;
+  readonly bindings: readonly Binding[];
   readonly executor: ReadOperationExecutor;
-  readonly evidence: OperatorProtocolEvidenceVerifier;
+  readonly evidence: ReadProtocolEvidenceVerifier<Binding>;
 }) {
   const app = new Hono();
 
   app.use('*', async (context, next) => {
-    const id = correlationId(context.req.raw);
+    const id = correlationId(
+      context.req.raw,
+      context.get('correlationId' as never) as unknown
+    );
     context.set('operationCorrelationId' as never, id as never);
     context.header('x-correlation-id', id);
     context.header('cache-control', 'no-store, max-age=0');
@@ -55,8 +62,30 @@ export function createOperatorReadHttpAdapter(input: {
     await next();
   });
 
-  for (const binding of input.registry.operatorHttpBindings) {
+  const routes = input.bindings.map((binding) => {
+    const resolved = getCompiledReadOperation(
+      input.registry,
+      binding.operationName,
+      binding.operationVersion,
+      binding.surface
+    );
+    if (!resolved) throw new TypeError('Registered read binding is unavailable.');
+    try {
+      return {
+        binding,
+        query: createSchemaAwareQueryInputDecoder(resolved.operation.inputSchema.schema)
+      } as const;
+    } catch (error) {
+      throw new TypeError(
+        `Registered GET query input is unsupported for ${binding.operationName}@${binding.operationVersion}.`,
+        { cause: error }
+      );
+    }
+  });
+
+  for (const { binding, query } of routes) {
     app.get(binding.path, async (context) => {
+      if (context.req.method !== 'GET') return context.body(null, 405);
       const id = context.res.headers.get('x-correlation-id') ?? crypto.randomUUID();
       try {
         const evidence = await input.evidence.verify({ request: context.req.raw, correlationId: id, binding });
@@ -77,11 +106,13 @@ export function createOperatorReadHttpAdapter(input: {
           operationVersion: binding.operationVersion,
           surface: binding.surface,
           correlationId: id,
-          businessInput: queryInput(context.req.raw),
+          businessInput: query.decode(new URL(context.req.url).searchParams),
           verifiedEvidence: evidence.evidence
         });
         const parsed = readOperationResultSchema.safeParse(result);
-        if (!parsed.success) throw new TypeError('Executor returned an invalid read result.');
+        if (!parsed.success || parsed.data.correlationId !== id) {
+          throw new TypeError('Executor returned an invalid read result.');
+        }
         return context.json(parsed.data);
       } catch (error) {
         if (error instanceof OperationInputError) {
@@ -97,4 +128,30 @@ export function createOperatorReadHttpAdapter(input: {
   }
 
   return app;
+}
+
+export function createOperatorReadHttpAdapter(input: {
+  readonly registry: ReadOperationRegistry;
+  readonly executor: ReadOperationExecutor;
+  readonly evidence: OperatorProtocolEvidenceVerifier;
+}) {
+  return createReadHttpAdapter({
+    registry: input.registry,
+    bindings: input.registry.operatorHttpBindings,
+    executor: input.executor,
+    evidence: input.evidence
+  });
+}
+
+export function createPublicReadHttpAdapter(input: {
+  readonly registry: ReadOperationRegistry;
+  readonly executor: ReadOperationExecutor;
+  readonly evidence: PublicReadProtocolEvidenceVerifier;
+}) {
+  return createReadHttpAdapter({
+    registry: input.registry,
+    bindings: input.registry.publicHttpBindings,
+    executor: input.executor,
+    evidence: input.evidence
+  });
 }

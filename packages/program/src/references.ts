@@ -9,14 +9,21 @@ import {
 import { encodeCanonicalJson, parseAggregateVersion, type AggregateVersion } from '@jooevents/kernel';
 import { z } from 'zod';
 import {
+  compareProgramVocabularyCanonicalText,
   resolveProgramVocabularyItem,
   sameProgramVocabularyScope,
   type ProgramVocabularyScope,
   type ProgramVocabularyState
 } from './model';
+import {
+  isIssuedProgramReferenceSnapshot,
+  registerIssuedProgramReferenceSnapshot
+} from './reference-auth';
 
 const stableKey = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
 const digest = /^[a-f0-9]{64}$/;
+const completeProgramReferenceSnapshot: unique symbol = Symbol('CompleteProgramReferenceSnapshot');
+const programReferenceRegistries = new WeakSet<object>();
 
 export interface ProgramReferenceContributorRef {
   readonly key: string;
@@ -44,6 +51,7 @@ export interface ProgramReferenceContributorSnapshot {
 }
 
 export interface CompleteProgramReferenceSnapshot {
+  readonly [completeProgramReferenceSnapshot]: true;
   readonly registryDigestSha256: string;
   readonly contributors: readonly ProgramReferenceContributorSnapshot[];
 }
@@ -80,7 +88,15 @@ export class ProgramReferenceRegistryValidationError extends Error {
 }
 
 export class ProgramReferenceSnapshotError extends Error {
-  readonly code: 'missing_contributor' | 'invalid_snapshot' | 'wrong_contributor' | 'wrong_scope' | 'duplicate_reference' | 'duplicate_guard' | 'unknown_item';
+  readonly code:
+    | 'missing_contributor'
+    | 'invalid_snapshot'
+    | 'wrong_contributor'
+    | 'wrong_scope'
+    | 'duplicate_reference'
+    | 'duplicate_guard'
+    | 'unknown_item'
+    | 'invalid_registry';
 
   constructor(code: ProgramReferenceSnapshotError['code']) {
     super(code);
@@ -89,8 +105,13 @@ export class ProgramReferenceSnapshotError extends Error {
   }
 }
 
+const canonicalBoundedText = (maximum: number) => z.string()
+  .min(1)
+  .max(maximum)
+  .refine((value) => value.trim() === value);
+
 const referenceSchema = z.strictObject({
-  referenceKey: z.string().trim().min(1).max(300),
+  referenceKey: canonicalBoundedText(300),
   version: z.number().int().positive(),
   item: z.strictObject({
     kind: programVocabularyKindSchema,
@@ -98,8 +119,8 @@ const referenceSchema = z.strictObject({
   }),
   mode: z.enum(['current', 'historical']),
   destination: z.strictObject({
-    kind: z.string().trim().min(1).max(160).regex(stableKey),
-    id: z.string().trim().min(1).max(300)
+    kind: z.string().min(1).max(160).regex(stableKey),
+    id: canonicalBoundedText(300)
   })
 });
 
@@ -159,7 +180,7 @@ function parseSnapshot(
         mode: reference.mode,
         destination: { ...reference.destination }
       }))
-      .sort((left, right) => left.referenceKey.localeCompare(right.referenceKey))
+      .sort((left, right) => compareProgramVocabularyCanonicalText(left.referenceKey, right.referenceKey))
   });
 }
 
@@ -198,14 +219,16 @@ export function createProgramReferenceContributorRegistry(input: {
   }
   if (issues.length > 0) throw new ProgramReferenceRegistryValidationError(issues);
 
-  const ordered = [...contributors.values()].sort((left, right) => contributorIdentity(left).localeCompare(contributorIdentity(right)));
+  const ordered = [...contributors.values()].sort((left, right) =>
+    compareProgramVocabularyCanonicalText(contributorIdentity(left), contributorIdentity(right))
+  );
   const registryDigestSha256 = sha256({ schemaVersion: 1, contributors: ordered });
-  return Object.freeze({
+  const registry: ProgramReferenceContributorRegistry = Object.freeze({
     registryDigestSha256,
     contributors: Object.freeze(ordered),
     capture(scope: ProgramVocabularyScope, source: ProgramReferenceSnapshotSource) {
       const snapshots = ordered.map((contributor) => parseSnapshot(
-        source.readContributor(contributor, scope),
+        readSynchronousContributor(source, contributor, scope),
         contributor,
         scope
       ));
@@ -213,18 +236,70 @@ export function createProgramReferenceContributorRegistry(input: {
       if (new Set(guardIds).size !== guardIds.length) {
         throw new ProgramReferenceSnapshotError('duplicate_guard');
       }
-      return deepFreeze({
+      const snapshot = deepFreeze({
+        [completeProgramReferenceSnapshot]: true as const,
         registryDigestSha256,
         contributors: snapshots
       });
+      return registerIssuedProgramReferenceSnapshot(snapshot);
     }
   });
+  programReferenceRegistries.add(registry);
+  return registry;
+}
+
+function readSynchronousContributor(
+  source: ProgramReferenceSnapshotSource,
+  contributor: ProgramReferenceContributorRef,
+  scope: ProgramVocabularyScope
+): unknown {
+  const value = source.readContributor(contributor, scope);
+  if (value && typeof value === 'object'
+      && typeof (value as { readonly then?: unknown }).then === 'function') {
+    throw new ProgramReferenceSnapshotError('invalid_snapshot');
+  }
+  return value;
+}
+
+/** Refuses registries that were not constructed and authenticated by this module. */
+export function assertProgramReferenceContributorRegistry(
+  registry: ProgramReferenceContributorRegistry
+): void {
+  if (!programReferenceRegistries.has(registry)) {
+    throw new ProgramReferenceSnapshotError('invalid_registry');
+  }
+}
+
+/** Captures current evidence only through a module-authenticated registry. */
+export function captureRegisteredProgramReferences(input: {
+  readonly registry: ProgramReferenceContributorRegistry;
+  readonly scope: ProgramVocabularyScope;
+  readonly source: ProgramReferenceSnapshotSource;
+}): CompleteProgramReferenceSnapshot {
+  assertProgramReferenceContributorRegistry(input.registry);
+  return input.registry.capture(input.scope, input.source);
+}
+
+export function isCompleteProgramReferenceSnapshot(
+  value: CompleteProgramReferenceSnapshot | undefined
+): value is CompleteProgramReferenceSnapshot {
+  return value?.[completeProgramReferenceSnapshot] === true
+    && isIssuedProgramReferenceSnapshot(value);
+}
+
+export function assertCompleteProgramReferenceSnapshot(
+  value: CompleteProgramReferenceSnapshot
+): void {
+  if (!isCompleteProgramReferenceSnapshot(value)) {
+    throw new ProgramReferenceSnapshotError('invalid_snapshot');
+  }
 }
 
 export function validateProgramReferenceTargets(
   state: ProgramVocabularyState,
   snapshot: CompleteProgramReferenceSnapshot
 ): void {
+  assertCompleteProgramReferenceSnapshot(snapshot);
   for (const contributor of snapshot.contributors) {
     if (!sameProgramVocabularyScope(state.scope, contributor.scope)) {
       throw new ProgramReferenceSnapshotError('wrong_scope');
@@ -241,6 +316,7 @@ export function programReferenceUsage(
   snapshot: CompleteProgramReferenceSnapshot,
   item: { readonly kind: ProgramVocabularyKind; readonly id: string }
 ): { readonly current: number; readonly historicalPins: number } {
+  assertCompleteProgramReferenceSnapshot(snapshot);
   let current = 0;
   let historicalPins = 0;
   for (const contributor of snapshot.contributors) {

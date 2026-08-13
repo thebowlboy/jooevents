@@ -351,9 +351,7 @@ export function verifiedInboxTrialProcessingContractFromDefinition(
 }
 
 /** Installs namespaced test tables into the caller-supplied SQLite database. */
-export function installSQLiteVerifiedInboxProcessingTrial(sqlite: Database): void {
-  sqlite.exec('PRAGMA foreign_keys = ON;');
-  sqlite.exec(`
+export const VERIFIED_INBOX_PROCESSING_TRIAL_SQL = `
     CREATE TABLE verified_inbox_processing_heads_trial (
       processing_ref TEXT NOT NULL UNIQUE CHECK(
         length(processing_ref) = 49 AND substr(processing_ref, 1, 6) = 'vipr1_'
@@ -479,7 +477,11 @@ export function installSQLiteVerifiedInboxProcessingTrial(sqlite: Database): voi
 
     CREATE INDEX verified_inbox_processing_discovery_trial
       ON verified_inbox_processing_pointers_trial(created_at_ms, processing_pointer_id);
-  `);
+  `;
+
+export function installSQLiteVerifiedInboxProcessingTrial(sqlite: Database): void {
+  sqlite.exec('PRAGMA foreign_keys = ON;');
+  sqlite.exec(VERIFIED_INBOX_PROCESSING_TRIAL_SQL);
 }
 
 function encodeOpaque(prefix: string, key: Uint8Array, purpose: string, value: unknown): string {

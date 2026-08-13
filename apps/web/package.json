@@ -2,14 +2,20 @@
   "name": "@jooevents/web",
   "private": true,
   "version": "0.0.0",
-  "license": "Apache-2.0",
+  "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "scripts": {
     "dev": "vite dev",
+    "dev:live": "vite dev --mode live",
     "build": "vite build",
+    "build:live": "JOOEVENTS_WEB_BUILD_KIND=live vite build --mode live && bun scripts/assert-live-build.ts",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:sample:proof": "playwright test --config playwright.sample.config.ts",
+    "test:e2e:live": "playwright test --config playwright.live.config.ts",
+    "test:e2e:live:joined": "bun run build:live && playwright test --config playwright.joined-live.config.ts",
+    "test:e2e:event:joined": "bun run build:live && playwright test --config playwright.event-joined.config.ts"
   },
   "dependencies": {
     "@fontsource-variable/inter": "5.3.0",

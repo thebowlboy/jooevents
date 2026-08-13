@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { ChevronDown, Flame, Gem, Lock, Star, Zap } from 'lucide-svelte';
 	import {
 		Badge,
@@ -15,29 +15,51 @@
 		trackPending
 	} from '$lib/ui';
 	import type { IconComponent } from '$lib/ui';
-	import { useWorkspaceGateway } from '$lib/api/workspace-gateway';
+	import type { ReviewPagePort } from '$lib/api/review-page-port';
 	import { composeCapRefusal } from '$lib/api/accolades';
-	import { tintStep } from '$lib/api/standing';
+	import { composeStepBackRefusal } from '$lib/api/reviewers';
 	import ResourceList from '$lib/features/workspace/components/ResourceList.svelte';
+	import { isTopScore, scoreTone } from '$lib/features/workspace/components/score-tone';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
 	import ProfilePeek from '$lib/features/workspace/components/ProfilePeek.svelte';
 	import StandingMark from '$lib/features/workspace/components/StandingMark.svelte';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
 	import { applyParams, param, paramIn } from '$lib/features/workspace/url-state.svelte';
+	import ScopeChips from '$lib/features/reviewers/ScopeChips.svelte';
+	import { resolveScope, type ScopeEntities } from '$lib/features/reviewers/scope-display';
 	import LineupPanel, { sliceKeys } from './LineupPanel.svelte';
 	import type { SliceKey } from './LineupPanel.svelte';
+	import RoundSetup from './RoundSetup.svelte';
+	import { ANONYMIZED_MEANS } from './copy';
 	import type {
 		AccoladeDef,
 		AccoladeKey,
 		MyReviewItem,
 		ReviewPlan,
+		ReviewRoundSetup,
 		ReviewerProgress,
+		ScopeRef,
 		ScoreStanding,
 		SpeakerProfile,
 		Submission
 	} from '$lib/api/types';
 
-	const { api } = useWorkspaceGateway();
+	interface Props {
+		port: ReviewPagePort;
+	}
+
+	let { port }: Props = $props();
+	const api = $derived(port);
+	const viewer = $derived(port.viewer);
+
+	/**
+	 * Whose surface this is. A reviewer holds their own queue and nothing else,
+	 * so the chair's half of this screen — the roster, its reminders, the way
+	 * into managing people, the setup panel that creates a plan — is not
+	 * rendered for them. The projection comes from the gateway; the screen never
+	 * infers authority from the data it was handed.
+	 */
+	const reviewerView = $derived(viewer.kind === 'reviewer');
 
 	interface QueueRow {
 		item: MyReviewItem;
@@ -89,21 +111,6 @@
 		bold_bet: Zap
 	};
 
-	/**
-	 * A peer score is inked by its own value on the absolute good/bad ramp, in
-	 * the badge tones the system already carries — so a row of weak peer scores
-	 * looks weak at a glance instead of reading as five identical chips. The
-	 * steps come from `tintStep`, the same arithmetic the standing mark beside
-	 * them tints its points with, so the two cannot drift apart.
-	 */
-	const peerTones = [
-		'ui-badge--danger',
-		'ui-badge--warning',
-		'ui-badge--neutral',
-		'ui-badge--success',
-		'ui-badge--success'
-	];
-
 	let loaded = $state(false);
 	let plan = $state<ReviewPlan | null>(null);
 	let rows = $state<QueueRow[]>([]);
@@ -113,6 +120,19 @@
 	let committingId = $state<string | null>(null);
 	let materialsOpenId = $state<string | null>(null);
 	let status = $state('');
+
+	/** One fill per policy line the resolved brief states, at its own length. */
+	const policyFills = [
+		'min(34rem, 100%)',
+		'min(38rem, 100%)',
+		'min(26rem, 100%)',
+		'min(42rem, 100%)'
+	];
+
+	/** The reviewer's own scope, read only when this is a reviewer's surface. */
+	let scope = $state<ScopeRef[]>([]);
+	let scopeEntities = $state<ScopeEntities>({ tracks: [], formats: [], sessions: [] });
+	let briefLoaded = $state(false);
 
 	let accoladeDefs = $state<AccoladeDef[]>([]);
 	let accoladeBusy = $state<string | null>(null);
@@ -127,13 +147,44 @@
 	// What the shell already knows decides which composition holds the space: a
 	// review count in the workspace summary means a plan exists, and without one
 	// this screen resolves to its no-plan panel instead of the plan and columns.
-	const known = api.workspace.summarySnapshot();
-	const expectPlan = known ? known.navCounts.review !== undefined : false;
+	const planExpectation = $derived(api.workspace.reviewPlanExpectedSnapshot());
+	const known = $derived(planExpectation !== null);
+	const expectPlan = $derived(planExpectation === true);
 
 	let planReloading = $state(false);
 	const planReload = trackPending(() => planReloading);
 
+	/** Counts behind the one setup action; null until the no-round panel needs them. */
+	let roundSetup = $state<ReviewRoundSetup | null>(null);
+	let setupOpen = $state(false);
+
+	/**
+	 * The round just opened: the plan header and roster take over from the
+	 * setup panel, and the receipt records the act — undoable exactly until
+	 * the first review is committed, which is when discarding starts erasing
+	 * other people's work.
+	 */
+	async function roundOpened(opened: ReviewPlan) {
+		plan = { ...opened };
+		setupOpen = false;
+		recordAction({
+			area: 'review',
+			label: `Opened round 1 — ${opened.total} review${opened.total === 1 ? '' : 's'} across ${opened.reviewers.length} reviewer${opened.reviewers.length === 1 ? '' : 's'}`,
+			undo: async () => {
+				await api.review.discardRound(opened.id);
+				const plans = await api.review.plans();
+				const current = plans[plans.length - 1];
+				plan = current ? { ...current } : null;
+				if (!plan) roundSetup = await api.review.roundSetup();
+			}
+		});
+	}
+
 	onMount(async () => {
+		// The scope line answers a question about the person, not about the
+		// queue, so it resolves on its own rather than holding the cards back.
+		if (viewer.kind === 'reviewer') void loadBrief(viewer.reviewerId);
+
 		// The mark vocabulary travels with the queue rather than after it: it is
 		// the same four keys for every card, so a card that has arrived should
 		// arrive complete instead of growing its marks a moment later.
@@ -142,8 +193,17 @@
 			api.review.myQueue(),
 			api.review.accoladeDefs()
 		]);
-		plan = plans[0] ? { ...plans[0] } : null;
+		// Rounds append, so the newest plan is the round in play; earlier ones
+		// are closed history.
+		const current = plans[plans.length - 1];
+		plan = current ? { ...current } : null;
 		accoladeDefs = defs;
+
+		// Setting a round up is the chair's work: the counts behind the one
+		// action resolve only when there is no round and someone who can open it.
+		if (!current && !reviewerView) {
+			void api.review.roundSetup().then((counts) => (roundSetup = counts));
+		}
 
 		const submissions = await Promise.all(
 			queue.map((entry) => api.submissions.get(entry.submissionId))
@@ -207,6 +267,57 @@
 		emails.forEach((email, index) => (next[email] = found[index]));
 		profiles = next;
 	}
+
+	/**
+	 * What this reviewer is asked to review, in the referenced records' own
+	 * words. A generalist holds no refs at all, so nothing else is read: the
+	 * vocabulary behind the chips is fetched only when there are chips, and the
+	 * schedule only when a session is actually in scope.
+	 */
+	async function loadBrief(reviewerId: string) {
+		const refs = await api.review.myScope(reviewerId);
+		if (refs.length === 0) {
+			briefLoaded = true;
+			return;
+		}
+		const [tracks, formats, schedule] = await Promise.all([
+			api.vocab.tracks(),
+			api.vocab.formats(),
+			refs.some((ref) => ref.kind === 'session') ? api.schedule.state() : undefined
+		]);
+		scope = refs;
+		scopeEntities = { tracks, formats, sessions: schedule?.sessions ?? [] };
+		briefLoaded = true;
+	}
+
+	const scopeDisplay = $derived(resolveScope(scope, scopeEntities));
+
+	/**
+	 * What this plan lets a reviewer see, and who reads what they write — the
+	 * compact form of the same policy the Anonymized badge states in full. A
+	 * reviewer here for one round has no other place to learn it, and it decides
+	 * whether a candid comment is safe to write, so it is on the surface rather
+	 * than behind a press. Only axes the plan actually carries are claimed.
+	 */
+	const visibilityPolicy = $derived.by(() => {
+		if (!plan) return [];
+		const lines = [
+			plan.anonymized
+				? 'You do not see who submitted, and submitters never see who reviewed them.'
+				: 'You see who submitted; submitters never see who reviewed them.',
+			'Your score and comment go to the other reviewers and the people running this round — never to the speaker.'
+		];
+		if (plan.antiAnchoring) {
+			lines.push('Other reviewers’ scores stay hidden until you commit your own.');
+		}
+		// The term of art, taught once where it is first needed, so the control on
+		// every card can stay two words. "Conflict of interest" is what
+		// practitioners say; the sentence behind it is what makes it actionable.
+		lines.push(
+			'Know or work with whoever submitted something? That is a conflict of interest — step back from the card and it goes to another reviewer.'
+		);
+		return lines;
+	});
 
 	function percent(done: number, total: number): number {
 		return total > 0 ? Math.round((done / total) * 100) : 0;
@@ -402,7 +513,8 @@
 		}
 		planReloading = true;
 		try {
-			const refreshed = (await api.review.plans())[0];
+			const plans = await api.review.plans();
+			const refreshed = plans[plans.length - 1];
 			if (refreshed) plan = { ...refreshed };
 		} finally {
 			planReloading = false;
@@ -413,6 +525,68 @@
 		if (committed) {
 			await loadStandings([submissionId]);
 		}
+	}
+
+	/* Stepping back is the reviewer's own act on their own card, and it is
+	   consequential: the review leaves the queue and becomes work nobody holds.
+	   So it arms in place — the control turns into the question, and the confirm
+	   sits at a different position than the trigger, which is what keeps a
+	   double-press from stepping back by accident. Keep, Escape, focus leaving,
+	   or the timer all stand it down. */
+	let armedStepBackId = $state<string | null>(null);
+	let steppingBackId = $state<string | null>(null);
+	let disarmTimer: ReturnType<typeof setTimeout> | undefined;
+
+	function armStepBack(row: QueueRow) {
+		armedStepBackId = row.item.submissionId;
+		clearTimeout(disarmTimer);
+		disarmTimer = setTimeout(() => (armedStepBackId = null), 6000);
+		status = `Confirm stepping back from “${row.submission.title}”.`;
+		void tick().then(() =>
+			document.getElementById(`confirm-step-back-${row.item.submissionId}`)?.focus()
+		);
+	}
+
+	function disarmStepBack() {
+		clearTimeout(disarmTimer);
+		armedStepBackId = null;
+	}
+
+	function keepReview(row: QueueRow) {
+		disarmStepBack();
+		document.getElementById(`step-back-${row.item.submissionId}`)?.focus();
+	}
+
+	/** Standing down when focus leaves the armed question for anywhere outside it. */
+	function armFocusout(event: FocusEvent) {
+		const next = event.relatedTarget as Node | null;
+		if (next && (event.currentTarget as HTMLElement).contains(next)) return;
+		disarmStepBack();
+	}
+
+	/**
+	 * A conflict of interest, declared: the card leaves the queue and the
+	 * receipt says what left and where it went. The operation is the authority
+	 * on whether it happened — the card is dropped only after it answers.
+	 */
+	async function stepBack(row: QueueRow) {
+		if (viewer.kind !== 'reviewer' || steppingBackId) return;
+		const id = row.item.submissionId;
+		const title = row.submission.title;
+		disarmStepBack();
+		steppingBackId = id;
+		const outcome = await api.review.stepBack(id, viewer.reviewerId);
+		if (outcome.ok) {
+			rows = rows.filter((entry) => entry.item.submissionId !== id);
+			recordAction({
+				area: 'review',
+				label: `Stepped back from “${title}” — conflict of interest`,
+				notUndoableReason: 'The review has left your queue and is waiting for another reviewer.'
+			});
+		} else {
+			status = outcome.reason;
+		}
+		steppingBackId = null;
 	}
 
 	async function remind(reviewerId: string, name: string) {
@@ -431,8 +605,6 @@
 	 * ring rather than a `Term`, because the affordance follows the medium: a
 	 * badge is already a box, and only running text takes a text affordance.
 	 */
-	const ANONYMIZED_MEANS =
-		'Reviewers do not see who submitted, and submitters never see who reviewed them. Comments go to the chair and the other reviewers, never to the speaker.';
 
 	function isBehind(assigned: number, done: number): boolean {
 		return assigned > 0 && done / assigned < 0.5;
@@ -454,6 +626,12 @@
 		return `${reviews} nobody is covering. ${reviewer.name} stepped back from ${back} in this plan because of a conflict of interest — they know or work with the submitter.${carried}`;
 	}
 </script>
+
+<!-- An armed question stands down the same way every other one does. -->
+<svelte:window
+	onkeydown={(event) => {
+		if (event.key === 'Escape' && armedStepBackId) disarmStepBack();
+	}} />
 
 <!-- Saves and reminders are announced once, from here; a commit answers with its
      own receipt, which names what it did and why it is final. -->
@@ -477,15 +655,19 @@
 				<span class="ui-skeleton skeleton-line" style="inline-size: 100%"></span>
 				<span class="ui-skeleton skeleton-line" style="inline-size: 45%"></span>
 			</p>
-			<p class="opening__copy">
-				<span class="ui-skeleton skeleton-line" style="inline-size: 100%"></span>
-				<span class="ui-skeleton skeleton-line" style="inline-size: 100%"></span>
-				<span class="ui-skeleton skeleton-line" style="inline-size: 60%"></span>
-			</p>
-			<div class="opening__actions">
-				<span class="ui-skeleton skeleton-action skeleton-action--lg"></span>
-				<span class="ui-skeleton skeleton-action skeleton-action--lg"></span>
-			</div>
+			<!-- A reviewer's version of this panel is one paragraph and no setup
+			     actions, so its placeholder stops where the panel does. -->
+			{#if !reviewerView}
+				<p class="opening__copy">
+					<span class="ui-skeleton skeleton-line" style="inline-size: 100%"></span>
+					<span class="ui-skeleton skeleton-line" style="inline-size: 100%"></span>
+					<span class="ui-skeleton skeleton-line" style="inline-size: 60%"></span>
+				</p>
+				<div class="opening__actions">
+					<span class="ui-skeleton skeleton-action skeleton-action--lg"></span>
+					<span class="ui-skeleton skeleton-action skeleton-action--lg"></span>
+				</div>
+			{/if}
 		</section>
 	{/if}
 {:else if !loaded}
@@ -511,36 +693,50 @@
 			</div>
 		</div>
 	</section>
-	<div class="columns">
-		<section class="column" aria-label="Loading reviewers">
-			<div class="column__head">
-				<h2 class="column__title">Reviewers</h2>
-				<p class="column__note"><span class="ui-skeleton skeleton-line" style="inline-size: 4.5rem"></span></p>
-			</div>
-			<div class="ui-table-wrap">
-				<table class="ui-table ui-table--multiline reviewers">
-					<thead>
-						<tr>
-							<th>Reviewer</th>
-							<th class="ui-table__number">Done</th>
-							<th class="col-remind"><span class="ui-sr-only">Reminder</span></th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each Array(6) as _, index (index)}
-							<tr aria-hidden="true">
-								<td><span class="ui-table__primary"><span class="ui-skeleton skeleton-line" style="inline-size: 8rem"></span></span></td>
-								<td class="ui-table__number">
-									<span class="rev__count"><span class="ui-skeleton skeleton-line" style="inline-size: 2.5rem"></span></span>
-									<span class="ui-progress__track rev__bar"></span>
-								</td>
-								<td class="col-remind"><span class="rev__action"></span></td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-			</div>
+	{#if reviewerView}
+		<!-- The brief holds its own lines while the scope resolves, so the queue
+		     below it does not move once it does. -->
+		<section class="brief" aria-label="Loading what you review">
+			<p class="brief__scope"><span class="ui-skeleton skeleton-line" style="inline-size: 16rem"></span></p>
+			<ul class="brief__policy">
+				{#each policyFills as fill, index (index)}
+					<li><span class="ui-skeleton skeleton-line" style="inline-size: {fill}"></span></li>
+				{/each}
+			</ul>
 		</section>
+	{/if}
+	<div class="columns" class:columns--queue-only={reviewerView}>
+		{#if !reviewerView}
+			<section class="column" aria-label="Loading reviewers">
+				<div class="column__head">
+					<h2 class="column__title">Reviewers</h2>
+					<p class="column__note"><span class="ui-skeleton skeleton-line" style="inline-size: 4.5rem"></span></p>
+				</div>
+				<div class="ui-table-wrap">
+					<table class="ui-table ui-table--multiline reviewers">
+						<thead>
+							<tr>
+								<th>Reviewer</th>
+								<th class="ui-table__number">Done</th>
+								<th class="col-remind"><span class="ui-sr-only">Reminder</span></th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each Array(6) as _, index (index)}
+								<tr aria-hidden="true">
+									<td><span class="ui-table__primary"><span class="ui-skeleton skeleton-line" style="inline-size: 8rem"></span></span></td>
+									<td class="ui-table__number">
+										<span class="rev__count"><span class="ui-skeleton skeleton-line" style="inline-size: 2.5rem"></span></span>
+										<span class="ui-progress__track rev__bar"></span>
+									</td>
+									<td class="col-remind"><span class="rev__action"></span></td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			</section>
+		{/if}
 		<section class="column" aria-label="Loading my queue">
 			<div class="column__head">
 				<h2 class="column__title">My queue</h2>
@@ -576,6 +772,11 @@
 							<p class="card__lock"><span class="ui-skeleton skeleton-line" style="inline-size: 15rem"></span></p>
 							<span class="ui-skeleton skeleton-action card__commit"></span>
 						</div>
+						{#if reviewerView}
+							<div class="stepback">
+								<span class="ui-skeleton skeleton-action stepback__fill"></span>
+							</div>
+						{/if}
 					</li>
 				{/each}
 			</ul>
@@ -583,19 +784,61 @@
 	</div>
 {:else if !plan}
 	<section class="opening" aria-labelledby="opening-heading">
-		<h2 class="opening__title" id="opening-heading">No review plan yet</h2>
-		<p class="opening__copy">
-			A review plan decides who reviews which submissions, on what scale, and by when. Until one
-			exists, nothing is assigned and no reviewer sees a queue.
-		</p>
-		<p class="opening__copy">
-			Describe your review process to draft a plan — who reviews, how many reviews per submission,
-			and the deadline — or configure it manually field by field.
-		</p>
-		<div class="opening__actions">
-			<button type="button" class="ui-button ui-button--primary">Describe your review process</button>
-			<button type="button" class="ui-button ui-button--secondary">Configure manually</button>
-		</div>
+		{#if reviewerView}
+			<!-- Setting a round up is the chair's work, so a reviewer is told what
+			     is true for them and offered nothing they cannot do. -->
+			<h2 class="opening__title" id="opening-heading">No review round yet</h2>
+			<p class="opening__copy">
+				Nothing is assigned to you. Once the organizers open a round and hand out submissions,
+				your queue appears here.
+			</p>
+		{:else}
+			<h2 class="opening__title" id="opening-heading">No review round yet</h2>
+			<p class="opening__copy">
+				Review is one path: open the round, and every submission in the inbox goes to each reviewer
+				whose scope covers it — their queues appear the moment it opens, and new submissions are
+				handed out the same way as they arrive.
+			</p>
+			{#if roundSetup}
+				{#if roundSetup.activeReviewers === 0}
+					<!-- The round needs reviewers before it can hand anything out, so
+					     the one action here is the prerequisite, not a disabled wish. -->
+					<p class="opening__copy">
+						Nobody is on the review roster yet{roundSetup.invitedReviewers > 0
+							? ` — ${roundSetup.invitedReviewers} invited, none accepted so far`
+							: ''}. Reviews need reviewers before the round can open.
+					</p>
+					<div class="opening__actions">
+						<a class="ui-button ui-button--primary" href="/app/reviewers">Invite reviewers</a>
+					</div>
+				{:else}
+					<p class="opening__facts">
+						{roundSetup.activeReviewers} reviewer{roundSetup.activeReviewers === 1 ? '' : 's'} ready ·
+						{roundSetup.submissions} submission{roundSetup.submissions === 1 ? '' : 's'} in the inbox ·
+						<a href="/app/reviewers">Manage reviewers</a>
+					</p>
+					<div class="opening__actions">
+						<button
+							type="button"
+							class="ui-button ui-button--primary"
+							onclick={() => (setupOpen = true)}>
+							Open the review round
+						</button>
+					</div>
+				{/if}
+			{:else}
+				<!-- The counts behind the action, still resolving: same composition,
+				     skeleton fills, so the panel never reflows when they land. -->
+				<p class="opening__facts" aria-hidden="true">
+					<span class="ui-skeleton skeleton-line" style="inline-size: 20rem"></span>
+				</p>
+				<div class="opening__actions">
+					<button type="button" class="ui-button ui-button--primary" disabled>
+						Open the review round
+					</button>
+				</div>
+			{/if}
+		{/if}
 	</section>
 {:else}
 	<section class="plan" aria-labelledby="plan-heading">
@@ -633,79 +876,118 @@
 		</div>
 	</section>
 
-	<div class="columns">
-		<section class="column" aria-labelledby="reviewers-heading">
-			<div class="column__head">
-				<h2 class="column__title" id="reviewers-heading">Reviewers</h2>
-				<p class="column__note">{plan.reviewers.length} assigned</p>
-			</div>
-			<div
-				class="ui-table-wrap"
-				class:is-refreshing={planReload.visible}
-				aria-busy={planReloading || undefined}>
-				<table class="ui-table ui-table--multiline reviewers">
-					<thead>
-						<tr>
-							<th>Reviewer</th>
-							<th class="ui-table__number">Done</th>
-							<th class="col-remind"><span class="ui-sr-only">Reminder</span></th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each plan.reviewers as reviewer (reviewer.id)}
-							<tr>
-								<td>
-									<span class="ui-table__primary"><strong>{reviewer.name}</strong></span>
-									<!-- Only the uncovered part earns a badge. A step-back that someone
-									     else has already picked up is this reviewer's biography, and a
-									     roster is a work surface, not a history. The mark carries the
-									     reason, so the count keeps the word count of a task. -->
-									{#if reviewer.awaitingReassignment > 0}
-										<span class="rev__gap">
-											<Popover
-												label="{reviewer.awaitingReassignment} need another reviewer — why"
-												onreveal={() => (status = coverageGap(reviewer))}>
-												{#snippet trigger()}
-													<Badge tone="warning" icon={statusIcon.needsReviewer}>
-														{reviewer.awaitingReassignment} need another reviewer
-													</Badge>
-												{/snippet}
-												{#snippet children()}
-													<p class="rev__why">{coverageGap(reviewer)}</p>
-												{/snippet}
-											</Popover>
-										</span>
-									{/if}
-								</td>
-								<td class="ui-table__number">
-									<span class="rev__count">{reviewer.done} / {reviewer.assigned}</span>
-									<span class="ui-progress__track rev__bar" aria-hidden="true">
-										<span
-											class="ui-progress__value"
-											style:transform="scaleX({percent(reviewer.done, reviewer.assigned) / 100})"
-										></span>
-									</span>
-								</td>
-								<td class="col-remind">
-									<span class="rev__action">
-										{#if remindedIds.includes(reviewer.id)}
-											<span class="rev__sent">Reminder sent</span>
-										{:else if isBehind(reviewer.assigned, reviewer.done)}
-											<button
-												type="button"
-												class="ui-button ui-button--secondary ui-button--sm"
-												disabled={remindingId !== null}
-												aria-busy={remindingId === reviewer.id}
-												onclick={() => remind(reviewer.id, reviewer.name)}>Remind</button>
-										{/if}
-									</span>
-								</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-			</div>
+	{#if reviewerView}
+		<!-- First arrival: what this person is here to review, and what this plan
+		     lets them see. Both are read once, at the top, before the queue. -->
+		<section class="brief" aria-labelledby="brief-scope">
+			<p class="brief__scope" id="brief-scope">
+				{#if briefLoaded}
+					{#if scopeDisplay.length > 0}<span class="brief__lede">You review:</span>{/if}
+					<ScopeChips entries={scopeDisplay} allLabel="You review everything" />
+				{:else}
+					<span class="ui-skeleton skeleton-line" style="inline-size: 16rem"></span>
+				{/if}
+			</p>
+			<ul class="brief__policy">
+				{#each visibilityPolicy as line (line)}
+					<li>{line}</li>
+				{/each}
+			</ul>
 		</section>
+	{/if}
+
+	<div class="columns" class:columns--queue-only={reviewerView}>
+		{#if !reviewerView}
+			<section class="column" aria-labelledby="reviewers-heading">
+				<div class="column__head">
+					<h2 class="column__title" id="reviewers-heading">Reviewers</h2>
+					<!-- This roster shows plan progress; the people behind the rows —
+					     invites, scope, coverage — are managed on the Reviewers surface. -->
+					<p class="column__note">
+						{plan.reviewers.length} assigned · <a href="/app/reviewers">Manage reviewers</a>
+					</p>
+				</div>
+				<div
+					class="ui-table-wrap"
+					class:is-refreshing={planReload.visible}
+					aria-busy={planReloading || undefined}>
+					<table class="ui-table ui-table--multiline reviewers">
+						<thead>
+							<tr>
+								<th>Reviewer</th>
+								<th class="ui-table__number">Done</th>
+								<th class="col-remind"><span class="ui-sr-only">Reminder</span></th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each plan.reviewers as reviewer (reviewer.id)}
+								<tr>
+									<td>
+										<!-- Solid underline + action colour: this name navigates — it is
+										     the door to this reviewer's record (scope, coverage, invite
+										     state) on the Reviewers surface. -->
+										<span class="ui-table__primary"
+											><strong
+												><a
+													href="/app/reviewers?reviewer={reviewer.id}"
+													aria-label="{reviewer.name} — open in Reviewers">{reviewer.name}</a
+												></strong
+											></span>
+										<!-- Only the uncovered part earns a badge. A step-back that someone
+										     else has already picked up is this reviewer's biography, and a
+										     roster is a work surface, not a history. The mark carries the
+										     reason, so the count keeps the word count of a task. -->
+										{#if reviewer.awaitingReassignment > 0}
+											<span class="rev__gap">
+												<Popover
+													label="{reviewer.awaitingReassignment} need another reviewer — why"
+													onreveal={() => (status = coverageGap(reviewer))}>
+													{#snippet trigger()}
+														<Badge tone="warning" icon={statusIcon.needsReviewer}>
+															{reviewer.awaitingReassignment} need another reviewer
+														</Badge>
+													{/snippet}
+													{#snippet children()}
+														<p class="rev__why">{coverageGap(reviewer)}</p>
+													{/snippet}
+												</Popover>
+											</span>
+										{/if}
+									</td>
+									<td class="ui-table__number">
+										<span class="rev__count">{reviewer.done} / {reviewer.assigned}</span>
+										<span class="ui-progress__track rev__bar" aria-hidden="true">
+											<span
+												class="ui-progress__value"
+												style:transform="scaleX({percent(reviewer.done, reviewer.assigned) / 100})"
+											></span>
+										</span>
+									</td>
+									<td class="col-remind">
+										<span class="rev__action">
+											{#if remindedIds.includes(reviewer.id)}
+												<span class="rev__sent">Reminder sent</span>
+												<!-- A nudge is for falling behind the others, so it waits for
+												     the round to have movement: a round opened a minute ago
+												     offers no one to be behind. Deadline-aware pace is the
+												     recorded later refinement. -->
+											{:else if plan.done > 0 && isBehind(reviewer.assigned, reviewer.done)}
+												<button
+													type="button"
+													class="ui-button ui-button--secondary ui-button--sm"
+													disabled={remindingId !== null}
+													aria-busy={remindingId === reviewer.id}
+													onclick={() => remind(reviewer.id, reviewer.name)}>Remind</button>
+											{/if}
+										</span>
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			</section>
+		{/if}
 
 		<section class="column" aria-labelledby="queue-heading">
 			<div class="column__head">
@@ -726,17 +1008,27 @@
 			{#if rows.length === 0}
 				<div class="queue-empty">
 					<p class="queue-empty__title">Nothing is assigned to you.</p>
-					<!-- This tells a blocked person to go ask someone, so the one
-					     word they need is the one naming who. "Chair" appears
-					     nowhere in the product's own role names. -->
-					<p class="queue-empty__hint">
-						Ask the <Term
-							term="chair"
-							definition="The person running this review round — they set the plan up and decide who reviews what. In your workspace they hold the Event Manager or Workspace Admin role."
-							onreveal={() => (status = 'Chair: the person running this review round.')} /> to
-						distribute this plan's submissions, or pick up unassigned ones from Submissions once
-						assignment opens.
-					</p>
+					{#if reviewerView}
+						<!-- This tells a blocked person to go ask someone, so the one
+						     word they need is the one naming who. "Chair" appears
+						     nowhere in the product's own role names. -->
+						<p class="queue-empty__hint">
+							Ask the <Term
+								term="chair"
+								definition="The person running this review round — they set the plan up and decide who reviews what. In your workspace they hold the Event Manager or Workspace Admin role."
+								onreveal={() => (status = 'Chair: the person running this review round.')} /> to
+							distribute this plan's submissions, or pick up unassigned ones from Submissions once
+							assignment opens.
+						</p>
+					{:else}
+						<!-- The organizer opened the round without being in its pool:
+						     true, ordinary, and not a fault — the work shows up as the
+						     reviewers commit it. -->
+						<p class="queue-empty__hint">
+							You are running this round rather than reviewing in it. Progress lands beside each
+							reviewer as they commit.
+						</p>
+					{/if}
 				</div>
 			{:else}
 				<ul class="queue">
@@ -810,10 +1102,9 @@
 										<dd class="verdict__peers">
 											{#if row.item.peerScores && row.item.peerScores.length > 0}
 												{#each row.item.peerScores as peerScore, index (index)}
-													{@const step = tintStep(peerScore, plan.scaleMax)}
 													<span
-														class="ui-badge {peerTones[step]}"
-														class:verdict__peer--top={step === 4}>{peerScore}</span>
+														class="ui-badge {scoreTone(peerScore, plan.scaleMax)}"
+														class:verdict__peer--top={isTopScore(peerScore, plan.scaleMax)}>{peerScore}</span>
 												{/each}
 											{:else}
 												<span class="verdict__none">No peer review committed yet</span>
@@ -987,6 +1278,67 @@
 									</button>
 								</div>
 							{/if}
+
+							{#if reviewerView}
+								{@const refusal = row.item.committed
+									? composeStepBackRefusal(row.submission.title)
+									: undefined}
+								<div class="stepback">
+									{#if refusal}
+										<!-- The refusal is a state of the control that would have
+										     acted, kept focusable so the reason is readable. -->
+										<span class="marks__slot" {@attach unavailable}>
+											<Popover
+												label={`Step back from “${row.submission.title}” — why this is unavailable`}
+												onreveal={() => (status = refusal)}>
+												{#snippet trigger()}
+													<span class="ui-button ui-button--ghost ui-button--sm stepback__spent">
+														Step back
+													</span>
+												{/snippet}
+												{#snippet children()}
+													<p class="marks__reason">{refusal}</p>
+												{/snippet}
+											</Popover>
+										</span>
+									{:else if armedStepBackId === id}
+										<div
+											class="stepback__armed"
+											role="group"
+											aria-label={`Step back from “${row.submission.title}”?`}
+											onfocusout={armFocusout}>
+											<p class="stepback__q">
+												Step back from this review? It leaves your queue and waits for another
+												reviewer.
+											</p>
+											<div class="stepback__actions">
+												<button
+													type="button"
+													class="ui-button ui-button--secondary ui-button--sm"
+													id={`confirm-step-back-${id}`}
+													aria-label={`Step back from “${row.submission.title}” — confirm`}
+													aria-busy={steppingBackId === id || undefined}
+													disabled={steppingBackId !== null}
+													onclick={() => stepBack(row)}>Step back</button>
+												<button
+													type="button"
+													class="ui-button ui-button--ghost ui-button--sm"
+													aria-label={`Keep “${row.submission.title}” in your queue`}
+													onclick={() => keepReview(row)}>Keep it</button>
+											</div>
+										</div>
+									{:else}
+									<!-- The verb only: what it is for is stated once, on arrival,
+									     rather than under every card in the queue. -->
+										<button
+											type="button"
+											class="ui-button ui-button--ghost ui-button--sm"
+											id={`step-back-${id}`}
+											aria-label={`Step back from “${row.submission.title}”`}
+											onclick={() => armStepBack(row)}>Step back</button>
+									{/if}
+								</div>
+							{/if}
 						</li>
 					{/each}
 				</ul>
@@ -1000,6 +1352,7 @@
 <Modal bind:open={lineupOpen} title={lineupTitle} size="lg" dismissible>
 	{#if lineupId}
 		<LineupPanel
+			{port}
 			anchorId={lineupId}
 			slice={lineupSlice}
 			surface="modal"
@@ -1008,6 +1361,8 @@
 		<CommitReceipt />
 	{/if}
 </Modal>
+
+<RoundSetup {port} bind:open={setupOpen} setup={roundSetup} onOpened={roundOpened} />
 
 <style>
 	/* Skeleton fills borrow their geometry from the composition they stand in
@@ -1136,12 +1491,52 @@
 		font-variant-numeric: tabular-nums;
 	}
 
+	/* First arrival, for the person whose queue this is: what they were asked to
+	   review, then what this plan lets them see. Quiet type on the page's own
+	   ground — it is read once and then stops competing with the cards. */
+	.brief {
+		display: grid;
+		gap: var(--je-space-2);
+	}
+
+	.brief__scope {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--je-space-1) var(--je-space-2);
+		margin: 0;
+		font-size: var(--je-font-size-sm);
+	}
+
+	.brief__lede {
+		color: var(--je-color-text-muted);
+	}
+
+	.brief__policy {
+		list-style: none;
+		display: grid;
+		gap: var(--je-space-1);
+		margin: 0;
+		padding: 0;
+		max-inline-size: 78ch;
+		font-size: var(--je-font-size-xs);
+		line-height: var(--je-leading-normal);
+		color: var(--je-color-text-muted);
+	}
+
 	/* Two working columns: chair oversight beside the reviewer's own queue. */
 	.columns {
 		display: grid;
 		grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr);
 		gap: var(--je-space-6);
 		align-items: start;
+	}
+
+	/* Without the oversight column there is nothing to sit beside, so the queue
+	   takes the width rather than leaving a column-shaped hole. */
+	.columns--queue-only {
+		grid-template-columns: minmax(0, 1fr);
+		max-inline-size: 52rem;
 	}
 
 	.column {
@@ -1530,12 +1925,14 @@
 		gap: var(--je-space-2);
 	}
 
-	/* Pinned is a held state, not a hover: the key keeps the action tint for as
-	   long as the mark is on this submission. */
+	/* Pinned is a held state, not a hover: the key keeps the marking tint for as
+	   long as the mark is on this submission. Marking, not action — an accolade
+	   held in the action colour read as a flagged problem on the very surface
+	   where accept and decline live. */
 	.marks__key[aria-pressed='true'] {
-		border-color: color-mix(in srgb, var(--je-color-action) 45%, var(--je-color-border-strong));
-		background: var(--je-color-action-soft);
-		color: var(--je-color-link);
+		border-color: var(--je-color-mark-border);
+		background: var(--je-color-mark-surface);
+		color: var(--je-color-mark-ink);
 	}
 
 	.marks__key :global(svg) {
@@ -1569,6 +1966,53 @@
 		max-inline-size: 52ch;
 		font-size: var(--je-font-size-xs);
 		color: var(--je-color-text-muted);
+	}
+
+	/* Declaring a conflict of interest is ordinary professional conduct, not a
+	   destructive act, so it sits as a quiet footer action under the card's own
+	   dividing rule rather than competing with Commit. */
+	.stepback {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--je-space-1) var(--je-space-2);
+		border-block-start: 1px solid var(--je-color-border);
+		padding-block-start: var(--je-space-3);
+	}
+
+	/* Already committed: the control keeps its place and its word, and the
+	   reason is behind the same control. */
+	.stepback__spent {
+		opacity: 0.48;
+		cursor: not-allowed;
+	}
+
+	/* The armed question replaces the trigger in place and takes the row, so the
+	   confirm never lands where the trigger just was. */
+	.stepback__armed {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--je-space-2) var(--je-space-3);
+		inline-size: 100%;
+	}
+
+	.stepback__q {
+		margin: 0;
+		max-inline-size: 44ch;
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
+	}
+
+	.stepback__actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--je-space-2);
+	}
+
+	.stepback__fill {
+		inline-size: 6rem;
 	}
 
 	.queue-empty,
@@ -1611,6 +2055,13 @@
 		font-size: var(--je-font-size-md);
 		color: var(--je-color-text-muted);
 		line-height: var(--je-leading-normal);
+	}
+
+	.opening__facts {
+		margin: 0;
+		font-size: var(--je-font-size-sm);
+		font-variant-numeric: tabular-nums;
+		color: var(--je-color-text-muted);
 	}
 
 	.opening__actions {

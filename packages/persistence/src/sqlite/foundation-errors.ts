@@ -1,6 +1,10 @@
 export type SQLiteFoundationErrorCode =
   | 'artifact_checksum_mismatch'
   | 'artifact_invalid_encoding'
+  | 'backup_invalid'
+  | 'backup_missing'
+  | 'backup_refused'
+  | 'backup_too_large'
   | 'database_class_mismatch'
   | 'database_class_required'
   | 'database_busy'
@@ -11,12 +15,14 @@ export type SQLiteFoundationErrorCode =
   | 'migration_required'
   | 'migration_transaction_failed'
   | 'owner_record_malformed'
+  | 'platform_unsupported'
   | 'receipt_chain_malformed'
   | 'runner_schema_malformed'
   | 'schema_drift'
   | 'status_unstable'
   | 'rebuild_refused'
-  | 'recovery_required';
+  | 'recovery_required'
+  | 'restore_refused';
 
 export class SQLiteFoundationError extends Error {
   readonly code: SQLiteFoundationErrorCode;

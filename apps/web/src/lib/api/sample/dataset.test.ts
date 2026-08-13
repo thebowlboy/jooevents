@@ -7,8 +7,12 @@ import crunch from './crunch';
 const aieScenarios = [opening, flight, quiet, crunch];
 
 describe('AI Engineer demo scenarios', () => {
-	test('all operating moments belong to the same event', () => {
-		for (const scenario of aieScenarios) {
+	// The event switcher made the workspace hold two real events (decision:
+	// implementation/account-menu-and-event-switcher.md §4): three scenarios
+	// are NYC moments, `opening` is London just-opened, and each scenario is
+	// internally coherent about which event it belongs to.
+	test('three moments share the NYC event; opening is the distinct London event', () => {
+		for (const scenario of [flight, quiet, crunch]) {
 			expect(scenario.summary.event).toMatchObject({
 				id: 'evt_aie-nyc-2026',
 				name: 'AI Engineer NYC 2026',
@@ -22,6 +26,22 @@ describe('AI Engineer demo scenarios', () => {
 				endDate: '2026-10-14'
 			});
 		}
+		expect(opening.summary.event).toMatchObject({
+			id: 'evt_aie-london-2027',
+			name: 'AI Engineer London 2027',
+			dates: 'Mar 3–4, 2027',
+			location: 'London',
+			timezone: 'Europe/London'
+		});
+		expect(opening.settings).toMatchObject({
+			name: 'AI Engineer London 2027',
+			startDate: '2027-03-03',
+			endDate: '2027-03-04'
+		});
+		// Two events, not an accidental third: the switcher projects one entry
+		// per distinct id.
+		const ids = new Set(aieScenarios.map((scenario) => scenario.summary.event?.id));
+		expect(ids).toEqual(new Set(['evt_aie-nyc-2026', 'evt_aie-london-2027']));
 	});
 
 	test('the archived fiction does not leak into the active dataset', () => {

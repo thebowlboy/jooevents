@@ -279,15 +279,26 @@
     resize: vertical;
   }
 
+  /*
+   * The chevron sits the same distance from the right edge as the value sits
+   * from the left. It was a fixed 0.35rem inset while the text inset is
+   * density-scaled, so the glyph was pinned to the border and drifted further
+   * out of symmetry the roomier the density got — most visible on a wide field,
+   * where the eye has the whole width to compare the two ends against.
+   *
+   * Expressed against `--je-control-padding-x` it is symmetric at every density
+   * by construction: the right tip lands exactly at that inset, and the text
+   * gutter clears the glyph's far edge with room to spare.
+   */
   .ui-select {
-    padding-right: 2rem;
+    padding-right: calc(var(--je-control-padding-x) + 1.35rem);
     appearance: none;
     background-image:
       linear-gradient(45deg, transparent 50%, var(--je-color-text-muted) 50%),
       linear-gradient(135deg, var(--je-color-text-muted) 50%, transparent 50%);
     background-position:
-      calc(100% - 0.9rem) 50%,
-      calc(100% - 0.65rem) 50%;
+      calc(100% - var(--je-control-padding-x) - 0.55rem) 50%,
+      calc(100% - var(--je-control-padding-x) - 0.3rem) 50%;
     background-repeat: no-repeat;
     background-size: 0.3rem 0.3rem, 0.3rem 0.3rem;
   }
@@ -403,7 +414,7 @@
     border: 1px solid var(--je-color-border-strong);
     border-radius: 4px;
     background: var(--je-color-surface);
-    color: var(--je-color-action-contrast);
+    color: var(--je-color-mark-contrast);
     transition:
       background var(--je-duration-fast) var(--je-ease),
       border-color var(--je-duration-fast) var(--je-ease),
@@ -429,15 +440,15 @@
 
   .ui-choice input:checked + .ui-choice__control,
   .ui-choice input:indeterminate + .ui-choice__control {
-    border-color: var(--je-color-action);
-    background: var(--je-color-action);
+    border-color: var(--je-color-mark-ink);
+    background: var(--je-color-mark-ink);
   }
 
   .ui-choice input:checked + .ui-choice__control--radio::after {
     width: 0.42rem;
     height: 0.42rem;
     border-radius: 50%;
-    background: var(--je-color-action-contrast);
+    background: var(--je-color-mark-contrast);
     content: '';
   }
 
@@ -505,13 +516,13 @@
   }
 
   .ui-switch input:checked + .ui-switch__track {
-    border-color: var(--je-color-action);
-    background: var(--je-color-action);
+    border-color: var(--je-color-mark-ink);
+    background: var(--je-color-mark-ink);
   }
 
   .ui-switch input:checked + .ui-switch__track .ui-switch__thumb {
     transform: translateX(0.9rem);
-    background: var(--je-color-action-contrast);
+    background: var(--je-color-mark-contrast);
   }
 
   .ui-switch input:focus-visible + .ui-switch__track {
@@ -621,6 +632,14 @@
   .ui-badge--sea {
     background: var(--je-color-accent-sea-soft);
     color: var(--je-color-accent-sea-strong);
+  }
+
+  /* Marking, not status: what a surface is currently filtered or scoped to.
+     Shares the family every selected chip and row uses, so "what is narrowed"
+     answers in one colour wherever it is stated. */
+  .ui-badge--mark {
+    background: var(--je-color-mark-surface-hover);
+    color: var(--je-color-mark-ink);
   }
 
   /* Solid emphasis badges: the act-now tier of the status ladder. */
@@ -903,7 +922,7 @@
   }
 
   .ui-table tbody tr[data-selected='true'] {
-    background: var(--je-color-surface-selected);
+    background: var(--je-color-mark-surface);
   }
 
   .ui-table tbody tr:last-child td {
@@ -1035,7 +1054,7 @@
 
   .ui-range {
     width: 100%;
-    accent-color: var(--je-color-action);
+    accent-color: var(--je-color-mark-ink);
   }
 
   /*
@@ -1071,6 +1090,48 @@
     }
   }
 
+  /* Drag-to-reorder rows (see $lib/ui drag-reorder). The handle owns the
+     gesture: touch-action none so a touch drag never becomes a scroll, and a
+     coarse pointer gets a full-size target without the icon growing. */
+  .ui-drag-handle {
+    cursor: grab;
+    touch-action: none;
+    color: var(--je-color-text-subtle);
+  }
+
+  .ui-drag-handle:active {
+    cursor: grabbing;
+  }
+
+  @media (pointer: coarse) {
+    .ui-drag-handle {
+      min-inline-size: 2.75rem;
+      min-block-size: 2.75rem;
+    }
+  }
+
+  /* The row in flight: lifted (open things lift), above its siblings, and
+     inert to hit-testing so the slot math reads the rows underneath. */
+  .ui-dragrow {
+    position: relative;
+    z-index: 30;
+    background: var(--je-color-surface);
+    box-shadow: var(--je-shadow-md);
+    pointer-events: none;
+  }
+
+  /* Where the drop would land: a slot line in the action color. */
+  .ui-drag-indicator {
+    position: absolute;
+    inset-inline: 0;
+    block-size: 2px;
+    margin-block-start: -1px;
+    border-radius: 1px;
+    background: var(--je-color-action);
+    pointer-events: none;
+    z-index: 29;
+  }
+
   .ui-pick {
     position: absolute;
     inset: 0;
@@ -1104,8 +1165,11 @@
   }
 
   /*
-   * A step past `action-soft`: the row underneath already tints coral on hover,
-   * so the softer step disappeared into it and the cue said nothing.
+   * A step past `mark-surface`: the row underneath already tints on hover, so
+   * the softer step disappeared into it and the cue said nothing. The plate is
+   * in the marking family rather than the action family because what it points
+   * at is a selection target, and it sits directly beside a checkbox that
+   * turns `mark-ink` when it is checked.
    *
    * `:focus-visible`, never `:focus-within`. A mouse click focuses the checkbox,
    * so `:focus-within` kept the plate lit after the pointer had gone — a cue
@@ -1117,7 +1181,7 @@
    */
   .ui-pick:hover::before,
   .ui-pick:has(input:focus-visible)::before {
-    background: var(--je-color-action-soft-hover);
+    background: var(--je-color-mark-surface-hover);
   }
 
   /* Above the plate, which is a positioned pseudo-element. */
@@ -1129,7 +1193,11 @@
     width: min(34rem, calc(100vw - 2rem));
     max-height: min(42rem, calc(100dvh - 2rem));
     padding: 0;
-    overflow: hidden;
+    /* Clip, not hidden: a hidden box is still a programmatic scroll container,
+       and focus/scroll-into-view on below-fold body content would scroll the
+       dialog frame itself — unpinning the header and footer. Clip forbids it;
+       only the body scrolls. */
+    overflow: clip;
     border: 1px solid var(--je-color-border);
     border-radius: var(--je-radius-lg);
     outline: 0;
@@ -1269,9 +1337,13 @@
        and a clipped tint degrades invisibly. */
     inset: 0;
     z-index: 2;
-    border: 2px solid var(--je-color-action);
+    /* The marking family, not the action family. A solid coral ring around one
+       row in a table said "this row is wrong" rather than "this is the row you
+       asked for" — the same hue the danger family uses, drawn at the loudest
+       weight the product has. */
+    border: 2px solid var(--je-color-mark-border);
     border-radius: inherit;
-    box-shadow: 0 0 0 3px var(--je-color-action-soft);
+    box-shadow: 0 0 0 3px var(--je-color-mark-surface-hover);
     pointer-events: none;
   }
 
@@ -1281,6 +1353,57 @@
     transition:
       border-color var(--je-duration-slow) var(--je-ease),
       box-shadow var(--je-duration-slow) var(--je-ease);
+  }
+
+  /* While the mark is up, it *is* the "you are here" indicator, and the caret is
+     on the same box — so a focus ring beside it states the same thing twice, in
+     a second colour, tight around a box the mark has already ringed. It comes
+     back the moment the mark starts leaving, which is the moment the person has
+     taken over and the keyboard position becomes the thing worth showing. */
+  .ui-arrival:focus-visible:not(.ui-arrival--leaving),
+  .ui-arrival--row:focus-visible:not(.ui-arrival--leaving) {
+    box-shadow: none;
+  }
+
+  /* The same mark, drawn on a row.
+
+     A row is what the eye reads as "this record" in every table we have, so it
+     has to be markable — but it is the one host that cannot carry the ring on
+     its own pseudo: `position: relative` on a `tr` under `border-collapse:
+     collapse` is exactly the case engines disagree about. Drawn on the cells
+     instead, the segments meet at the collapsed cell edges and read as one
+     band. Cells are positioned by this rule rather than from script, so the
+     containing blocks appear and disappear with the class. */
+  .ui-arrival--row > td,
+  .ui-arrival--row > th {
+    position: relative;
+  }
+
+  .ui-arrival--row > td::after,
+  .ui-arrival--row > th::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    border-block: 2px solid var(--je-color-mark-border);
+    pointer-events: none;
+  }
+
+  .ui-arrival--row > :is(td, th):first-child::after {
+    border-inline-start: 2px solid var(--je-color-mark-border);
+  }
+
+  .ui-arrival--row > :is(td, th):last-child::after {
+    border-inline-end: 2px solid var(--je-color-mark-border);
+  }
+
+  /* No halo on a row. The soft outer tint would be drawn once per cell, so it
+     would print a seam down every column boundary — and a band spanning the
+     full width needs no help being seen. */
+  .ui-arrival--row.ui-arrival--leaving > td::after,
+  .ui-arrival--row.ui-arrival--leaving > th::after {
+    border-color: transparent;
+    transition: border-color var(--je-duration-slow) var(--je-ease);
   }
 
   /* The value stays plain selectable text; only the trailing control is new, and

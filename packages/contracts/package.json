@@ -2,15 +2,27 @@
   "name": "@jooevents/contracts",
   "private": true,
   "version": "0.0.0",
-  "license": "Apache-2.0",
+  "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./route-namespaces": "./src/route-namespaces.ts"
+    "./communications/organizer": "./src/communications/organizer.ts",
+    "./deadlines": "./src/deadlines.ts",
+    "./field-registry": "./src/field-registry.ts",
+    "./live-build-identity": "./src/live-build-identity.ts",
+    "./route-namespaces": "./src/route-namespaces.ts",
+    "./reviewer-roster": "./src/reviewer-roster.ts",
+    "./reviews": "./src/reviews.ts",
+    "./schedule-placement": "./src/schedule-placement.ts",
+    "./sessions": "./src/sessions.ts",
+    "./submission-triage": "./src/submission-triage.ts",
+    "./workspace-team": "./src/workspace-team.ts",
+    "./workspace-overview": "./src/workspace-overview.ts"
   },
   "scripts": { "check": "tsc --noEmit", "test": "bun test" },
   "dependencies": {
     "@jooevents/kernel": "workspace:*",
+    "@noble/hashes": "2.3.0",
     "zod": "4.4.3"
   },
   "devDependencies": { "bun-types": "1.3.6", "typescript": "6.0.3" }

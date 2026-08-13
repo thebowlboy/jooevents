@@ -3,8 +3,11 @@
 	import { ChevronDown, TriangleAlert } from 'lucide-svelte';
 	import { CopyValue, revealTarget, situationIcon, statusIcon } from '$lib/ui';
 	import type { IconComponent } from '$lib/ui';
-	import { useWorkspaceGateway } from '$lib/api/workspace-gateway';
+	import type { SpeakersPagePort } from '$lib/api/speakers-page-port';
 	import { applyParams, clearParams, param, paramIn } from '$lib/features/workspace/url-state.svelte';
+	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
+	import SpeakerCommunications from './SpeakerCommunications.svelte';
+	import SpeakerLineup from './SpeakerLineup.svelte';
 	import type {
 		AssignmentState,
 		EngagementState,
@@ -13,9 +16,37 @@
 		TaskDef
 	} from '$lib/api/types';
 
-	const { api } = useWorkspaceGateway();
+	interface Props {
+		port: SpeakersPagePort;
+	}
+
+	let { port }: Props = $props();
+	const api = $derived(port);
 
 	type FilterKey = 'all' | 'confirmed' | 'awaiting' | 'attention' | 'incomplete';
+
+	/**
+	 * The roster answers two different questions and they want different shapes.
+	 * `roster` chases people — states, tasks, cancellations, one row per person
+	 * with its own disclosure. `lineup` curates what the public sees — one
+	 * ordered sequence, groups, who is on it at all. Same records, so this is a
+	 * view of one surface rather than two surfaces; and it is shareable state,
+	 * so it lives in the address.
+	 */
+	const viewKeys = ['roster', 'lineup'] as const;
+	type ViewKey = (typeof viewKeys)[number];
+	const view = $derived(paramIn('view', viewKeys, 'roster'));
+
+	function switchView(next: ViewKey) {
+		if (view === next) return;
+		expandedId = null;
+		// A view change replaces the scope the other view was carrying: a filter
+		// and a single-speaker arrival both belong to the roster view.
+		void applyParams({
+			view: next === 'roster' ? null : next,
+			...(next === 'lineup' ? { filter: null, speaker: null } : {})
+		});
+	}
 
 	let speakers = $state<SpeakerRow[] | null>(null);
 	let taskDefs = $state<TaskDef[]>([]);
@@ -340,6 +371,8 @@
 				</ul>
 			{/if}
 
+			<SpeakerCommunications {port} speakerId={row.id} />
+
 			{#if row.note}
 				<h3 class="detail__heading detail__heading--spaced">Note</h3>
 				<p class="detail__note">{row.note}</p>
@@ -358,7 +391,7 @@
 					<div class="ui-alert ui-alert--danger">
 						<span class="ui-alert__icon plate" aria-hidden="true"><TriangleAlert size={16} /></span>
 						<div class="ui-alert__copy">
-							<p class="ui-alert__title">Nothing has been sent yet</p>
+							<p class="ui-alert__title">Nothing about this has been sent</p>
 							<p class="ui-alert__message">
 								The request is recorded here only. No speaker message, public update, or schedule
 								change happens until you commit one — call first if you want to.
@@ -389,8 +422,11 @@
 							onclick={() => acceptCancellation(row)}>Accept cancellation</button>
 					{/if}
 					{#if hasNextStep(row)}
-						<!-- The compose dialog opens scoped; a GET never sends anything. -->
-						<a class="ui-button ui-button--secondary ui-button--sm" href="/app/messages?compose=1">
+						<!-- The compose dialog opens scoped to this person; a GET never
+						     sends anything. -->
+						<a
+							class="ui-button ui-button--secondary ui-button--sm"
+							href={`/app/messages?compose=1&person=${row.id}`}>
 							Compose email
 						</a>
 					{/if}
@@ -400,6 +436,24 @@
 	</div>
 {/snippet}
 
+<div class="views">
+	<div class="ui-segmented" role="group" aria-label="What this page is for">
+		<button
+			type="button"
+			class="ui-segmented__item"
+			aria-pressed={view === 'roster'}
+			onclick={() => switchView('roster')}>Roster</button>
+		<button
+			type="button"
+			class="ui-segmented__item"
+			aria-pressed={view === 'lineup'}
+			onclick={() => switchView('lineup')}>Public lineup</button>
+	</div>
+</div>
+
+{#if view === 'lineup'}
+	<SpeakerLineup {port} {speakers} onChanged={load} />
+{:else}
 <div class="head">
 	<nav class="chips" aria-label="Speaker filters">
 		{#each filters as entry (entry.key)}
@@ -512,10 +566,14 @@
 						{/each}
 					{:else}
 						{#each filtered as row (row.id)}
-							<tr class:is-open={expandedId === row.id}>
+							<!-- `data-arrival-host`: the mark for `?speaker=` belongs to the
+							     whole row, which is what the eye reads as "this person" —
+							     the anchor inside it only says where to land. -->
+							<tr class:is-open={expandedId === row.id} data-arrival-host>
 								<td class="col-speaker">
-									<!-- The arrival target for `?speaker=`: a table row cannot carry the
-									     mark, and this block is what the eye reads as "this person". -->
+									<!-- The arrival anchor for `?speaker=`: the scroll and the caret
+									     stop on the name, so a table scrolled sideways still opens on
+									     the column the link was about. -->
 									<div class="who" data-speaker={row.id}>
 										<span class="ui-avatar who__mark" aria-hidden="true">{initials(row.name)}</span>
 										<span class="who__copy">
@@ -619,10 +677,19 @@
 		</ul>
 	{/if}
 </section>
+{/if}
 
 <p class="ui-sr-only" role="status">{announcement}</p>
 
+<CommitReceipt onUndone={load} />
+
 <style>
+	/* The one control that says which of the roster's two jobs is on screen. */
+	.views {
+		display: flex;
+		margin-block-end: var(--je-space-4);
+	}
+
 	.head {
 		display: grid;
 		grid-template-columns: minmax(0, 1fr) auto;
@@ -659,8 +726,8 @@
 	}
 
 	.chips__tab--active {
-		background: var(--je-color-surface-selected);
-		border-color: var(--je-color-border);
+		background: var(--je-color-mark-surface);
+		border-color: var(--je-color-mark-border);
 		color: var(--je-color-text);
 		font-weight: 600;
 	}
@@ -1107,7 +1174,7 @@
 		}
 
 		.chips__tab--active {
-			background: var(--je-color-surface-selected);
+			background: var(--je-color-mark-surface);
 		}
 
 		/* Five chips in two columns would leave a dangler; the naughty list takes

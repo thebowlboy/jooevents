@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { programVocabularySnapshotSchema } from '@jooevents/contracts';
-import { mapProgramVocabularySnapshot } from './program-vocabulary';
+import {
+	programVocabularyDraftDataSchema,
+	programVocabularySnapshotSchema
+} from '@jooevents/contracts';
+import { mapProgramVocabularyDraft, mapProgramVocabularySnapshot } from './program-vocabulary';
 
 const snapshot = programVocabularySnapshotSchema.parse({
 	schemaVersion: 1,
@@ -36,10 +39,11 @@ const snapshot = programVocabularySnapshotSchema.parse({
 			kind: 'track',
 			id: '018f7d5a-4b3c-7abc-8def-0123456789b2',
 			name: 'Applied AI',
+			accent: 'sea',
 			status: 'retired',
 			version: 2,
 			usage: { current: 8, historicalPins: 13 },
-			deleteEligibility: { kind: 'blocked', currentReferences: 7, historicalPins: 12 }
+			deleteEligibility: { kind: 'blocked', currentReferences: 8, historicalPins: 13 }
 		}
 	],
 	formats: [
@@ -98,13 +102,14 @@ describe('Program Vocabulary canonical-to-view mapping', () => {
 					kind: 'track',
 					id: snapshot.tracks[0]?.id,
 					name: 'Applied AI',
+					accent: 'sea',
 					status: 'retired',
 					version: 2,
 					usage: { currentReferences: 8, historicalPins: 13 },
 					deleteAvailability: {
 						kind: 'unavailable',
-						currentReferences: 7,
-						historicalPins: 12
+						currentReferences: 8,
+						historicalPins: 13
 					}
 				}
 			],
@@ -128,6 +133,7 @@ describe('Program Vocabulary canonical-to-view mapping', () => {
 		if (!track) throw new TypeError('expected_track');
 
 		expect(Object.keys(track).sort()).toEqual([
+			'accent',
 			'deleteAvailability',
 			'id',
 			'kind',
@@ -137,7 +143,7 @@ describe('Program Vocabulary canonical-to-view mapping', () => {
 			'version'
 		]);
 		expect(Object.keys(track.usage).sort()).toEqual(['currentReferences', 'historicalPins']);
-		expect('accent' in track).toBe(false);
+		expect(track.accent).toBe('sea');
 		expect('submissions' in track.usage).toBe(false);
 		expect('sessions' in track.usage).toBe(false);
 		expect('placements' in track.usage).toBe(false);
@@ -147,5 +153,69 @@ describe('Program Vocabulary canonical-to-view mapping', () => {
 		expect(Object.isFrozen(view)).toBe(true);
 		expect(Object.isFrozen(view.rooms)).toBe(true);
 		expect(Object.isFrozen(view.rooms[0])).toBe(true);
+	});
+
+	test('projects an inert draft receipt without implying an effective vocabulary mutation', () => {
+		const draft = programVocabularyDraftDataSchema.parse({
+			schemaVersion: 1,
+			action: 'create',
+			changesetId: '018f7d5a-4b3c-7abc-8def-0123456789b4',
+			headVersion: 1,
+			status: 'draft',
+			revision: {
+				id: '018f7d5a-4b3c-7abc-8def-0123456789b5',
+				number: 1,
+				digestSha256: 'a'.repeat(64)
+			},
+			riskTier: 'low',
+			approvalPolicy: {
+				reference: { key: 'approval.program_vocabulary.default', version: 1 },
+				definitionDigestSha256: 'b'.repeat(64),
+				requirement: 'none'
+			},
+			safeDiff: {
+				action: 'create',
+				before: null,
+				after: {
+					kind: 'room',
+					id: '018f7d5a-4b3c-7abc-8def-0123456789b6',
+					name: 'Breakout room',
+					status: 'active',
+					capacity: null,
+					version: 1
+				}
+			}
+		});
+
+		const view = mapProgramVocabularyDraft(draft);
+		expect(view).toEqual({
+			schemaVersion: 1,
+			changesetId: draft.changesetId,
+			headVersion: 1,
+			status: 'draft',
+			revision: draft.revision,
+			riskTier: 'low',
+			approvalPolicy: {
+				key: 'approval.program_vocabulary.default',
+				version: 1,
+				definitionDigestSha256: 'b'.repeat(64),
+				requirement: 'none'
+			},
+			change: {
+				action: 'create',
+				before: null,
+				after: {
+					kind: 'room',
+					id: '018f7d5a-4b3c-7abc-8def-0123456789b6',
+					name: 'Breakout room',
+					status: 'active',
+					capacity: null,
+					version: 1
+				}
+			}
+		});
+		expect('setVersion' in view).toBe(false);
+		expect(Object.isFrozen(view)).toBe(true);
+		expect(Object.isFrozen(view.change)).toBe(true);
 	});
 });

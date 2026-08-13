@@ -1,0 +1,1136 @@
+<script lang="ts">
+	import { onMount, tick } from 'svelte';
+	import { ChevronDown } from 'lucide-svelte';
+	import {
+		Badge,
+		CopyValue,
+		Modal,
+		Popover,
+		revealTarget,
+		shouldIgnoreRowPress,
+		situationIcon,
+		statusIcon
+	} from '$lib/ui';
+	import type { ReviewersPagePort } from '$lib/api/reviewers-page-port';
+	import {
+		applyParams,
+		clearParams,
+		param,
+		paramIn
+	} from '$lib/features/workspace/url-state.svelte';
+	import { recordAction } from '$lib/features/workspace/actions.svelte';
+	import { sessionCoveredBy } from '$lib/api/reviewers';
+	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
+	import ScopeChip from '$lib/features/workspace/components/ScopeChip.svelte';
+	import type {
+		Format,
+		Reviewer,
+		ReviewerRoster,
+		ReviewerStatus,
+		ScopeRef,
+		SessionItem,
+		Track
+	} from '$lib/api/types';
+	import CoveragePanel from './CoveragePanel.svelte';
+	import InviteReviewersModal from './InviteReviewersModal.svelte';
+	import ScopeChips from './ScopeChips.svelte';
+	import ScopePicker from './ScopePicker.svelte';
+	import { parseScopeParam, resolveRef, resolveScope, scopeKey } from './scope-display';
+
+	interface Props {
+		port: ReviewersPagePort;
+	}
+
+	let { port }: Props = $props();
+	const api = $derived(port);
+
+	type FilterKey = 'all' | 'invited' | 'needs-cover';
+
+	let roster = $state<ReviewerRoster | null>(null);
+	let tracks = $state<Track[]>([]);
+	let formats = $state<Format[]>([]);
+	let sessions = $state<SessionItem[]>([]);
+	let expandedId = $state<string | null>(null);
+	/** The expanded row's scope draft; applied as one consequential write. */
+	let draft = $state<ScopeRef[]>([]);
+	let scopeError = $state('');
+	let busyId = $state<string | null>(null);
+	let inviteOpen = $state(false);
+	let removeOpen = $state(false);
+	let removeTarget = $state<Reviewer | null>(null);
+	let announcement = $state('');
+
+	const filterKeys = ['all', 'invited', 'needs-cover'] as const;
+
+	/** The roster's filter is shareable state, so it lives in the address. */
+	const filter = $derived(paramIn('filter', filterKeys, 'all'));
+
+	const filters: { key: FilterKey; label: string }[] = [
+		{ key: 'all', label: 'All' },
+		{ key: 'invited', label: 'Invited' },
+		/* This view isolates reviewers whose assigned work still needs coverage. */
+		{ key: 'needs-cover', label: 'Need another reviewer' }
+	];
+
+	/* The same states, names, and tones the Settings member list uses: a
+	   reviewer is a workspace member, so one state keeps one name. */
+	const statusBadge: Record<ReviewerStatus, { label: string; tone: 'success' | 'info' }> = {
+		active: { label: 'Active', tone: 'success' },
+		invited: { label: 'Invited', tone: 'info' }
+	};
+
+	const entities = $derived({ tracks, formats, sessions });
+
+	/**
+	 * A deep filter by scope entity: `?scope=track:trk-ai` shows the reviewers
+	 * holding that ref. A session address widens to implied coverage — the
+	 * reviewers whose scope covers the session through its own ref, its track,
+	 * or its format — because that is the population the coverage door counted:
+	 * the number on the door and the list behind it must agree. Generalists
+	 * deliberately stay out — the empty state answers with the generalist count
+	 * instead of pretending they are scoped.
+	 */
+	const scopeRef = $derived(parseScopeParam(param('scope')));
+	const scopeLabel = $derived(scopeRef ? resolveRef(scopeRef, entities).label : null);
+
+	function inScope(row: Reviewer): boolean {
+		if (!scopeRef) return true;
+		if (scopeRef.kind === 'session') {
+			const session = sessions.find((entry) => entry.id === scopeRef.id);
+			if (session) return sessionCoveredBy(row.scope, session);
+		}
+		return row.scope.some((ref) => ref.kind === scopeRef.kind && ref.id === scopeRef.id);
+	}
+
+	function matchesFilter(row: Reviewer, key: FilterKey): boolean {
+		if (key === 'invited') return row.status === 'invited';
+		// Uncovered work only: a step-back someone else already picked up is
+		// history, and the roster is a work surface.
+		if (key === 'needs-cover') return row.awaitingReassignment > 0;
+		return true;
+	}
+
+	const reviewers = $derived(roster?.reviewers ?? []);
+	const scoped = $derived(reviewers.filter(inScope));
+	const filtered = $derived(scoped.filter((row) => matchesFilter(row, filter)));
+	const counts = $derived<Record<FilterKey, number>>({
+		all: scoped.length,
+		invited: scoped.filter((row) => row.status === 'invited').length,
+		'needs-cover': scoped.filter((row) => row.awaitingReassignment > 0).length
+	});
+	const activeCount = $derived(reviewers.filter((row) => row.status === 'active').length);
+
+	async function load() {
+		roster = await api.reviewers.list();
+	}
+
+	onMount(async () => {
+		// The scope vocabulary loads with the roster: chips, the editor, and the
+		// `?scope=` label all resolve refs against these records.
+		const [trackList, formatList, schedule] = await Promise.all([
+			api.vocab.tracks(),
+			api.vocab.formats(),
+			api.schedule.state()
+		]);
+		tracks = trackList;
+		formats = formatList;
+		// Collecting and programmed sessions are scope targets; a draft slot
+		// stays organizer-only and is never offered.
+		sessions = schedule.sessions.filter(
+			(session) => session.state === 'collecting' || session.state === 'programmed'
+		);
+		await load();
+	});
+
+	function switchFilter(next: FilterKey) {
+		if (filter === next) return;
+		expandedId = null;
+		// One navigation: a filter pass replaces whatever single reviewer the
+		// address was scoped to, and both facts change together.
+		applyParams({ filter: next === 'all' ? null : next, reviewer: null });
+	}
+
+	function clearScope() {
+		void clearParams(['scope'], { history: 'push' });
+	}
+
+	function startDraft(id: string) {
+		const row = reviewers.find((entry) => entry.id === id);
+		draft = row ? row.scope.map((ref) => ({ ...ref })) : [];
+		scopeError = '';
+	}
+
+	function toggleRow(id: string) {
+		if (expandedId === id) {
+			expandedId = null;
+		} else {
+			expandedId = id;
+			startDraft(id);
+		}
+		// The address named one reviewer; the moment the operator opens or closes
+		// a row themselves, what is showing is theirs rather than the link's.
+		if (askedReviewer && askedReviewer !== expandedId) {
+			void clearParams(['reviewer'], { history: 'push' });
+		}
+	}
+
+	/**
+	 * The row is a bigger door to the same detail, for the pointer only. The
+	 * chevron stays the one focusable switch carrying `aria-expanded`, so the
+	 * accessible tree gains nothing to disambiguate and the keyboard path is
+	 * exactly what it was. The press routes through `toggleRow`, so opening by
+	 * row seeds the scope draft and hands back a `?reviewer=` arrival exactly
+	 * as the chevron does. Which presses belong to the row's own controls — or
+	 * to a text selection — is the shared row-press contract in `$lib/ui`.
+	 */
+	function onRowPress(event: MouseEvent, id: string) {
+		if (shouldIgnoreRowPress(event)) return;
+		toggleRow(id);
+	}
+
+	/**
+	 * Arriving from elsewhere: `?reviewer=` lands on that person's row — open,
+	 * scrolled to, and marked — so a link handed over by the review plan keeps
+	 * its promise instead of dropping someone at the top of a list to search.
+	 */
+	const askedReviewer = $derived(param('reviewer'));
+
+	// A plain let, deliberately outside the graph: it records which arrival has
+	// already been answered, so a repaint cannot steal focus back a second time.
+	let revealedReviewer: string | null = null;
+
+	$effect(() => {
+		const id = askedReviewer;
+		const ready = roster;
+		if (!ready || !id) {
+			revealedReviewer = null;
+			return;
+		}
+		if (revealedReviewer === id) return;
+		revealedReviewer = id;
+		const row = ready.reviewers.find((entry) => entry.id === id);
+		if (!row) return;
+		expandedId = id;
+		startDraft(id);
+		announcement = `${row.name} — their reviewer row is open.`;
+		void showRow(row);
+	});
+
+	async function showRow(row: Reviewer) {
+		// A filter the link never asked for can hide the row it did ask for, so
+		// the roster widens rather than landing on an empty state.
+		if (!matchesFilter(row, filter) || !inScope(row)) {
+			await applyParams({ filter: null, scope: null });
+		}
+		await tick();
+		// The roster renders twice — a table and, below a breakpoint, cards —
+		// and only one of the two is laid out; the arrival goes to whichever is
+		// actually on screen.
+		const shown = Array.from(
+			document.querySelectorAll<HTMLElement>(`[data-reviewer="${row.id}"]`)
+		).find((element) => element.offsetWidth > 0);
+		revealTarget(shown ?? null);
+	}
+
+	// ------------------------------------------------------------------ scope
+
+	function draftEquals(row: Reviewer): boolean {
+		const a = draft.map(scopeKey).sort().join('|');
+		const b = row.scope.map(scopeKey).sort().join('|');
+		return a === b;
+	}
+
+	function toggleDraftRef(ref: ScopeRef) {
+		const key = scopeKey(ref);
+		draft = draft.some((entry) => scopeKey(entry) === key)
+			? draft.filter((entry) => scopeKey(entry) !== key)
+			: [...draft, ref];
+		scopeError = '';
+	}
+
+	function scopeReceiptLabel(row: Reviewer, next: ScopeRef[]): string {
+		if (next.length === 0) return `Cleared ${row.name}’s scope — they review everything`;
+		const head = resolveRef(next[0], entities).label;
+		const rest = next.length - 1;
+		return `Scoped ${row.name} to ${head}${rest > 0 ? ` and ${rest} more` : ''}`;
+	}
+
+	async function applyScope(row: Reviewer) {
+		const before = row.scope.map((ref) => ({ ...ref }));
+		const next = draft.map((ref) => ({ ...ref }));
+		busyId = row.id;
+		try {
+			const outcome = await api.reviewers.setScope(row.id, next);
+			if (!outcome.ok) {
+				scopeError = outcome.reason;
+				return;
+			}
+			const label = scopeReceiptLabel(row, next);
+			recordAction({
+				label,
+				area: 'Reviewers',
+				undo: () => api.reviewers.restoreScope(row.id, before)
+			});
+			await load();
+			announcement = `${label}.`;
+		} finally {
+			busyId = null;
+		}
+	}
+
+	function resetDraft(row: Reviewer) {
+		draft = row.scope.map((ref) => ({ ...ref }));
+		scopeError = '';
+	}
+
+	// ----------------------------------------------------------------- roster
+
+	function openRemove(row: Reviewer) {
+		removeTarget = row;
+		removeOpen = true;
+	}
+
+	async function confirmRemove() {
+		const target = removeTarget;
+		if (!target || !roster) return;
+		const index = roster.reviewers.findIndex((entry) => entry.id === target.id);
+		const snapshot: Reviewer = { ...target, scope: target.scope.map((ref) => ({ ...ref })) };
+		removeOpen = false;
+		busyId = target.id;
+		try {
+			await api.reviewers.remove(target.id);
+			recordAction({
+				label: `Removed ${target.name} from the reviewer roster`,
+				area: 'Reviewers',
+				undo: () => api.reviewers.restore(snapshot, Math.max(0, index))
+			});
+			expandedId = null;
+			await load();
+			announcement = `${target.name} is off the reviewer roster.`;
+		} finally {
+			busyId = null;
+			removeTarget = null;
+		}
+	}
+
+	function onInvited(added: number) {
+		void load();
+		announcement = `${added} reviewer ${added === 1 ? 'invitation' : 'invitations'} recorded.`;
+	}
+
+	/**
+	 * The sentence behind the uncovered badge, in the chair's order: what is
+	 * uncovered, then why it came free. Loads here are sums across plans, so
+	 * the wording claims no single plan.
+	 */
+	function coverageGap(row: Reviewer): string {
+		const gap = row.awaitingReassignment;
+		const covered = row.steppedBack - gap;
+		const reviews = `${gap} ${gap === 1 ? 'review' : 'reviews'}`;
+		const carried = covered > 0 ? ` The other ${covered} already moved to another reviewer.` : '';
+		return `${reviews} nobody is covering. ${row.name} stepped back from ${row.steppedBack} because of a conflict of interest — they know or work with the submitter.${carried} Uncovered reviews stay in their assigned count until someone picks them up.`;
+	}
+</script>
+
+{#snippet status(row: Reviewer)}
+	{@const badge = statusBadge[row.status]}
+	<Badge tone={badge.tone}>{badge.label}</Badge>
+{/snippet}
+
+{#snippet scopeCell(row: Reviewer, allLabel: string)}
+	<!-- Stored refs only — the minimal truth. Sessions a track or format ref
+	     implies are derived where they are needed (editor, coverage), never
+	     minted into chips. -->
+	<ScopeChips entries={resolveScope(row.scope, entities)} {allLabel} />
+{/snippet}
+
+{#snippet loadCell(row: Reviewer)}
+	{#if row.assigned > 0}
+		<span class="load__count">{row.done} / {row.assigned}</span>
+		<span class="ui-progress__track load__bar" aria-hidden="true">
+			<span class="ui-progress__value" style:transform="scaleX({row.done / row.assigned})"></span>
+		</span>
+		{#if row.awaitingReassignment > 0}
+			<!-- Rendered only while uncovered: covered step-backs are biography,
+			     and the uncovered reviews stay inside this row's assigned count —
+			     the denominator never moves when someone steps back. -->
+			<span class="load__gap">
+				<Popover
+					label="{row.awaitingReassignment} need another reviewer — why"
+					onreveal={() => (announcement = coverageGap(row))}>
+					{#snippet trigger()}
+						<Badge tone="warning" icon={statusIcon.needsReviewer}>
+							{row.awaitingReassignment} need another reviewer
+						</Badge>
+					{/snippet}
+					{#snippet children()}
+						<p class="load__why">{coverageGap(row)}</p>
+					{/snippet}
+				</Popover>
+			</span>
+		{/if}
+	{:else}
+		<span class="load__none">Nothing assigned</span>
+	{/if}
+{/snippet}
+
+{#snippet detail(row: Reviewer)}
+	<!-- The editor is what this expansion is for, so it takes the full width
+	     and leads; roster removal is real but rare, and sits demoted in the
+	     quiet footer row below — destructive voice kept, ceremony unchanged. -->
+	<div class="detail">
+		<div class="detail__main">
+			<h3 class="detail__heading">What they review</h3>
+			<p class="detail__hint">
+				{#if row.scope.length === 0}
+					Reviews everything — every submission in each plan they join lands in their queue.
+					Selecting tracks, formats, or sessions narrows that: the set becomes the reviewer’s
+					scope.
+				{:else}
+					A submission lands in their queue when it matches any selection — that set is the
+					reviewer’s scope. Clear every selection and they review everything.
+				{/if}
+			</p>
+			<ScopePicker {tracks} {formats} {sessions} selected={draft} ontoggle={toggleDraftRef} />
+			{#if scopeError}
+				<p class="detail__error" role="alert">{scopeError}</p>
+			{/if}
+			<div class="detail__actions">
+				<button
+					type="button"
+					class="ui-button ui-button--secondary ui-button--sm"
+					disabled={busyId !== null || draftEquals(row)}
+					aria-busy={busyId === row.id}
+					onclick={() => applyScope(row)}>Apply scope</button>
+				{#if !draftEquals(row)}
+					<button
+						type="button"
+						class="ui-button ui-button--ghost ui-button--sm"
+						disabled={busyId !== null}
+						onclick={() => resetDraft(row)}>Reset</button>
+				{/if}
+			</div>
+		</div>
+		<div class="detail__footer">
+			<p class="detail__footer-copy">
+				Removing {row.name} takes them off this roster only: reviews they committed stay, and
+				anything still assigned to them keeps counting until another reviewer covers it. Their
+				workspace membership is managed in Settings.
+			</p>
+			<button
+				type="button"
+				class="ui-button ui-button--danger ui-button--sm"
+				disabled={busyId !== null}
+				onclick={() => openRemove(row)}>Remove from roster</button>
+		</div>
+	</div>
+{/snippet}
+
+<div class="head">
+	<nav class="chips" aria-label="Reviewer filters">
+		{#each filters as entry (entry.key)}
+			<button
+				type="button"
+				class="chips__tab"
+				class:chips__tab--active={filter === entry.key}
+				aria-pressed={filter === entry.key}
+				onclick={() => switchFilter(entry.key)}>
+				{entry.label}
+				<span
+					class="chips__count"
+					class:chips__count--attention={entry.key === 'needs-cover' && counts['needs-cover'] > 0}
+					>{roster ? counts[entry.key] : '–'}</span>
+			</button>
+		{/each}
+	</nav>
+	<button
+		type="button"
+		class="ui-button ui-button--secondary ui-button--sm head__invite"
+		onclick={() => (inviteOpen = true)}>
+		Invite reviewers
+	</button>
+	<p class="head__note">
+		Scope narrows what lands in a reviewer’s queue — never what a plan lets them see. Loads count
+		every review plan together.
+	</p>
+</div>
+
+{#if roster && scopeRef}
+	<ScopeChip label={`Scoped to ${scopeLabel}`} onclear={clearScope} />
+{/if}
+
+<section aria-label="Reviewer roster">
+	{#if roster && filtered.length === 0}
+		<div class="panel">
+			{#if reviewers.length === 0}
+				{@const Situation = situationIcon.emptyRoster}
+				<span class="panel__mark" aria-hidden="true"><Situation size={22} /></span>
+				<p class="panel__title">No reviewers yet</p>
+				<p class="panel__copy">
+					Reviewers are workspace members with review access. Invite them by email here — each one
+					reviews everything until you narrow their scope to tracks, formats, or sessions.
+				</p>
+				<button
+					type="button"
+					class="ui-button ui-button--secondary ui-button--sm"
+					onclick={() => (inviteOpen = true)}>Invite reviewers</button>
+			{:else if scopeRef && scoped.length === 0}
+				{@const Situation = situationIcon.filteredEmpty}
+				<span class="panel__mark" aria-hidden="true"><Situation size={22} /></span>
+				<p class="panel__title">Nobody is scoped to {scopeLabel}</p>
+				<p class="panel__copy">
+					{#if roster.generalists > 0}
+						{roster.generalists}
+						{roster.generalists === 1 ? 'generalist still reviews' : 'generalists still review'}
+						everything, this included. Scope someone here from their row, or invite a reviewer with
+						this as their initial scope.
+					{:else}
+						No generalists cover it either. Scope someone from their row, or invite a reviewer
+						with this as their initial scope.
+					{/if}
+				</p>
+				<button
+					type="button"
+					class="ui-button ui-button--secondary ui-button--sm"
+					onclick={clearScope}>Show all reviewers</button>
+			{:else if filter === 'needs-cover'}
+				{@const Situation = situationIcon.allClear}
+				<span class="panel__mark panel__mark--clear" aria-hidden="true"><Situation size={22} /></span>
+				<p class="panel__title">Nothing needs covering</p>
+				<p class="panel__copy">
+					No reviews are waiting on another reviewer across {scoped.length}
+					{scoped.length === 1 ? 'reviewer' : 'reviewers'}.
+				</p>
+				<button
+					type="button"
+					class="ui-button ui-button--secondary ui-button--sm"
+					onclick={() => switchFilter('all')}>Show the full roster</button>
+			{:else}
+				{@const Situation = situationIcon.filteredEmpty}
+				<span class="panel__mark" aria-hidden="true"><Situation size={22} /></span>
+				<p class="panel__title">No open invitations</p>
+				<p class="panel__copy">
+					Everyone on the roster has arrived. Inviting more reviewers adds them here.
+				</p>
+				<button
+					type="button"
+					class="ui-button ui-button--secondary ui-button--sm"
+					onclick={() => switchFilter('all')}>Show the full roster</button>
+			{/if}
+		</div>
+	{:else}
+		<div class="ui-table-wrap roster__table">
+			<table class="ui-table ui-table--multiline">
+				<thead>
+					<tr>
+						<th class="col-reviewer">Reviewer</th>
+						<th class="col-status">Status</th>
+						<th>Reviews</th>
+						<th class="col-load ui-table__number">Done</th>
+						<th class="col-expand"><span class="ui-sr-only">Details</span></th>
+					</tr>
+				</thead>
+				<tbody>
+					{#if !roster}
+						{#each Array(5) as _, index (index)}
+							<!-- Mirrors the resolved multiline row cell-for-cell, so the row
+							     height is set by the same table metrics as real rows. -->
+							<tr aria-hidden="true">
+								<td class="col-reviewer">
+									<span class="ui-table__primary"><span class="ui-skeleton skeleton-line" style="inline-size: 8rem"></span></span>
+									<span class="ui-table__secondary"><span class="ui-skeleton skeleton-line" style="inline-size: 11rem"></span></span>
+								</td>
+								<td><span class="ui-skeleton skeleton-chip skeleton-chip--narrow"></span></td>
+								<td><span class="ui-skeleton skeleton-chip"></span></td>
+								<td class="ui-table__number">
+									<span class="load__count"><span class="ui-skeleton skeleton-line" style="inline-size: 2.5rem"></span></span>
+									<span class="ui-progress__track load__bar"></span>
+								</td>
+								<td class="col-expand"><span class="ui-skeleton skeleton-action--icon"></span></td>
+							</tr>
+						{/each}
+					{:else}
+						{#each filtered as row (row.id)}
+							<!-- The pointer target is the row; the switch is still the chevron
+							     inside it, which is why no role or tabindex is added here. -->
+							<!-- svelte-ignore a11y_click_events_have_key_events -->
+							<!-- svelte-ignore a11y_no_static_element_interactions -->
+							<!-- `data-arrival-host`: the mark for `?reviewer=` belongs to the
+							     whole row, which is what the eye reads as "this person" —
+							     the anchor inside it only says where to land. -->
+							<tr
+								class="row"
+								class:is-open={expandedId === row.id}
+								data-arrival-host
+								onclick={(event) => onRowPress(event, row.id)}>
+								<td class="col-reviewer">
+									<!-- The arrival anchor for `?reviewer=`: the scroll and the caret
+									     stop on the name, so a table scrolled sideways still opens on
+									     the column the link was about. -->
+									<div class="who" data-reviewer={row.id}>
+										<span class="ui-table__primary"><strong>{row.name}</strong></span>
+										<span class="ui-table__secondary"
+											><CopyValue value={row.email} label="email address" /></span>
+									</div>
+								</td>
+								<td>{@render status(row)}</td>
+								<!-- Under the "Reviews" header, "Everything" completes the
+								     sentence the column started. -->
+								<td>{@render scopeCell(row, 'Everything')}</td>
+								<td class="ui-table__number">{@render loadCell(row)}</td>
+								<td class="col-expand">
+									<button
+										type="button"
+										class="ui-button ui-button--ghost ui-button--icon ui-button--sm expand"
+										class:expand--open={expandedId === row.id}
+										aria-expanded={expandedId === row.id}
+										aria-label={`Details for ${row.name}`}
+										onclick={() => toggleRow(row.id)}>
+										<ChevronDown size={15} />
+									</button>
+								</td>
+							</tr>
+							{#if expandedId === row.id}
+								<tr class="detail-row">
+									<td colspan="5">{@render detail(row)}</td>
+								</tr>
+							{/if}
+						{/each}
+					{/if}
+				</tbody>
+			</table>
+		</div>
+
+		<!-- Narrow composition: the same roster restructured so name, status, and
+		     the disclosure never compete for one crushed line. -->
+		<ul class="roster__cards">
+			{#if !roster}
+				{#each Array(4) as _, index (index)}
+					<li class="card" aria-hidden="true">
+						<div class="card__head">
+							<span class="card__copy">
+								<span class="card__name"><span class="ui-skeleton skeleton-line" style="inline-size: 8rem"></span></span>
+								<span class="card__email"><span class="ui-skeleton skeleton-line" style="inline-size: 11rem"></span></span>
+							</span>
+							<span class="card__toggle ui-skeleton skeleton-action--icon"></span>
+							<span class="card__tags">
+								<span class="ui-skeleton skeleton-chip skeleton-chip--narrow"></span>
+								<span class="ui-skeleton skeleton-chip"></span>
+							</span>
+						</div>
+					</li>
+				{/each}
+			{:else}
+				{#each filtered as row (row.id)}
+					<li class="card" data-reviewer={row.id}>
+						<!-- The whole summary — everything above the expanded editor — is
+						     the door; the toggle inside it stays the one focusable switch,
+						     which is why no role or tabindex is added here. -->
+						<!-- svelte-ignore a11y_click_events_have_key_events -->
+						<!-- svelte-ignore a11y_no_static_element_interactions -->
+						<div class="card__head card__head--door" onclick={(event) => onRowPress(event, row.id)}>
+							<span class="card__copy">
+								<span class="card__name">{row.name}</span>
+								<span class="card__email"><CopyValue value={row.email} label="email address" /></span>
+							</span>
+							<button
+								type="button"
+								class="ui-button ui-button--ghost ui-button--icon ui-button--sm expand card__toggle"
+								class:expand--open={expandedId === row.id}
+								aria-expanded={expandedId === row.id}
+								aria-label={`Details for ${row.name}`}
+								onclick={() => toggleRow(row.id)}>
+								<ChevronDown size={15} />
+							</button>
+							<span class="card__tags">
+								{@render status(row)}
+								{#if row.assigned > 0}
+									<span class="card__load">{row.done} / {row.assigned} done</span>
+								{:else}
+									<span class="card__load">Nothing assigned</span>
+								{/if}
+								{#if row.awaitingReassignment > 0}
+									<Badge tone="warning" icon={statusIcon.needsReviewer}>
+										{row.awaitingReassignment} need another reviewer
+									</Badge>
+								{/if}
+							</span>
+							<!-- Cards have no column header, so the words carry the whole
+							     sentence: "Reviews everything". -->
+							<span class="card__scope">{@render scopeCell(row, 'Reviews everything')}</span>
+						</div>
+						{#if expandedId === row.id}
+							<div class="card__detail">{@render detail(row)}</div>
+						{/if}
+					</li>
+				{/each}
+			{/if}
+		</ul>
+	{/if}
+</section>
+
+{#if roster && reviewers.length > 0}
+	<CoveragePanel
+		coverage={roster.coverage}
+		generalists={roster.generalists}
+		{activeCount}
+		invitedCount={reviewers.length - activeCount} />
+{/if}
+
+<InviteReviewersModal {port} bind:open={inviteOpen} {tracks} {formats} {sessions} oninvited={onInvited} />
+
+<Modal bind:open={removeOpen} title="Remove this reviewer?">
+	{#if removeTarget}
+		<p class="modal__copy">
+			{removeTarget.name} comes off the reviewer roster. Reviews they committed stay in every plan,
+			and anything still assigned to them keeps counting until another reviewer covers it. Their
+			workspace membership is unchanged — manage that in Settings.
+		</p>
+	{/if}
+	{#snippet footer(close)}
+		<button type="button" class="ui-button ui-button--ghost" onclick={close}>Keep reviewer</button>
+		<button type="button" class="ui-button ui-button--danger" onclick={confirmRemove}>
+			Remove reviewer
+		</button>
+	{/snippet}
+</Modal>
+
+<!-- After an undo the roster is re-read, and the open row's editor resyncs to
+     the restored truth — a stale draft would claim a pending edit nobody made. -->
+<CommitReceipt
+	onUndone={async () => {
+		await load();
+		if (expandedId) startDraft(expandedId);
+	}} />
+
+<p class="ui-sr-only" role="status">{announcement}</p>
+
+<style>
+	.head {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		align-items: center;
+		gap: var(--je-space-2) var(--je-space-4);
+	}
+
+	.chips {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--je-space-1);
+	}
+
+	.head__invite {
+		justify-self: end;
+	}
+
+	.chips__tab {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--je-space-2);
+		padding: var(--je-space-1) var(--je-space-3);
+		border: 1px solid transparent;
+		border-radius: var(--je-radius-round);
+		background: transparent;
+		font-size: var(--je-font-size-md);
+		color: var(--je-color-text-muted);
+		cursor: pointer;
+	}
+
+	.chips__tab:hover {
+		background: var(--je-color-surface);
+		color: var(--je-color-text);
+	}
+
+	.chips__tab--active {
+		background: var(--je-color-mark-surface);
+		border-color: var(--je-color-mark-border);
+		color: var(--je-color-text);
+		font-weight: 600;
+	}
+
+	.chips__count {
+		font-size: var(--je-font-size-xs);
+		font-variant-numeric: tabular-nums;
+	}
+
+	/* The uncovered count climbs one rung of the status ladder while work is
+	   actually waiting on a chair. */
+	.chips__count--attention {
+		padding: 0.0625rem var(--je-space-2);
+		border-radius: var(--je-radius-round);
+		font-weight: 650;
+		background: var(--je-color-warning-soft);
+		color: var(--je-color-warning);
+	}
+
+	.head__note {
+		grid-column: 1 / -1;
+		margin: 0;
+		max-inline-size: 72ch;
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
+	}
+
+	/* Empty states say which kind of empty this is before the sentence is read:
+	   a roster that never started, a filter hiding data, or a clear queue. */
+	.panel {
+		display: grid;
+		justify-items: center;
+		align-content: center;
+		gap: var(--je-space-3);
+		min-block-size: 14rem;
+		padding: var(--je-space-8) var(--je-space-4);
+		border: 1px solid var(--je-color-border);
+		border-radius: var(--je-radius-surface);
+		background: var(--je-color-surface);
+		text-align: center;
+	}
+
+	.panel__mark {
+		display: grid;
+		place-items: center;
+		color: var(--je-color-text-subtle);
+	}
+
+	.panel__mark--clear {
+		color: var(--je-color-text-muted);
+	}
+
+	.panel__title {
+		margin: 0;
+		font-weight: 600;
+	}
+
+	.panel__copy {
+		margin: 0;
+		max-inline-size: 52ch;
+		font-size: var(--je-font-size-sm);
+		line-height: var(--je-leading-normal);
+		color: var(--je-color-text-muted);
+	}
+
+	/* Skeleton fills borrow their geometry from the composition they stand in
+	   for: a text line is one line box tall, a chip is badge-height, an action
+	   is control-height. Free-standing sized rectangles drift; these cannot. */
+	.skeleton-line {
+		display: inline-block;
+		block-size: 1em;
+		block-size: 1lh;
+		max-inline-size: 100%;
+		vertical-align: bottom;
+	}
+
+	.skeleton-chip {
+		display: inline-block;
+		block-size: 1.35rem;
+		inline-size: 6.5rem;
+	}
+
+	.skeleton-chip--narrow {
+		inline-size: 4rem;
+	}
+
+	.skeleton-action--icon {
+		display: inline-block;
+		block-size: var(--je-control-height-sm);
+		inline-size: var(--je-control-height-sm);
+		border-radius: var(--je-radius-control);
+	}
+
+	.who {
+		display: grid;
+		min-inline-size: 0;
+	}
+
+	.col-reviewer {
+		inline-size: 16rem;
+	}
+
+	.col-status {
+		inline-size: 6.5rem;
+	}
+
+	.col-load {
+		inline-size: 12rem;
+	}
+
+	.col-expand {
+		inline-size: 2.5rem;
+	}
+
+	/* The same load voice as the review plan roster: the figure, then the bar
+	   spanning its column so every row's fill is measured against the same end
+	   points. */
+	.load__count {
+		display: block;
+		font-size: var(--je-font-size-sm);
+		font-variant-numeric: tabular-nums;
+	}
+
+	.load__bar {
+		display: block;
+		block-size: 0.25rem;
+		inline-size: 100%;
+		margin-block-start: var(--je-space-1);
+	}
+
+	.load__bar .ui-progress__value {
+		display: block;
+	}
+
+	.load__gap {
+		display: block;
+		margin-block-start: var(--je-space-1);
+	}
+
+	.load__why {
+		margin: 0;
+	}
+
+	.load__none {
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
+	}
+
+	.expand :global(svg) {
+		transition: rotate var(--je-duration-fast) var(--je-ease);
+	}
+
+	.expand--open :global(svg) {
+		rotate: 180deg;
+	}
+
+	/* The whole row opens its detail, so the whole row says so. Only the data
+	   rows: the detail and the skeletons are not doors. The hover tint the
+	   table already gives every row is the other half of the affordance and
+	   is left alone. */
+	tr.row {
+		cursor: pointer;
+	}
+
+	/* Marked things tint; open things lift. The open pair keeps the table's
+	   full surface brightness and gains a lifted boundary framing row and
+	   expansion as one raised unit. */
+	tr.is-open td {
+		border-bottom-color: transparent;
+		background: var(--je-color-surface);
+		border-top: 2px solid var(--je-color-border-strong);
+	}
+
+	tr.is-open td:first-child {
+		border-inline-start: 2px solid var(--je-color-border-strong);
+	}
+
+	tr.is-open td:last-child {
+		border-inline-end: 2px solid var(--je-color-border-strong);
+	}
+
+	.detail-row td {
+		background: var(--je-color-surface);
+		border-bottom: 2px solid var(--je-color-border-strong);
+	}
+
+	.detail-row td:first-child {
+		border-inline-start: 2px solid var(--je-color-border-strong);
+	}
+
+	.detail-row td:last-child {
+		border-inline-end: 2px solid var(--je-color-border-strong);
+	}
+
+	/* The editor leads the expansion at full width; the removal footer is a
+	   separated quiet row beneath it. */
+	.detail {
+		display: grid;
+		gap: var(--je-space-4);
+		padding: var(--je-space-3) var(--je-space-2) var(--je-space-4);
+	}
+
+	.detail__footer {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--je-space-2) var(--je-space-4);
+		padding-block-start: var(--je-space-3);
+		border-block-start: 1px solid var(--je-color-border);
+	}
+
+	.detail__footer-copy {
+		margin: 0;
+		max-inline-size: 64ch;
+		font-size: var(--je-font-size-xs);
+		line-height: var(--je-leading-normal);
+		color: var(--je-color-text-muted);
+	}
+
+	.detail__heading {
+		margin: 0 0 var(--je-space-2);
+		font-size: var(--je-font-size-xs);
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: var(--je-tracking-caps);
+		color: var(--je-color-text-muted);
+	}
+
+	.detail__hint {
+		margin: 0 0 var(--je-space-3);
+		max-inline-size: 56ch;
+		font-size: var(--je-font-size-sm);
+		line-height: var(--je-leading-normal);
+		color: var(--je-color-text-muted);
+	}
+
+	.detail__error {
+		margin: var(--je-space-2) 0 0;
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-danger);
+	}
+
+	.detail__actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--je-space-2);
+		margin-block-start: var(--je-space-3);
+	}
+
+	.modal__copy {
+		margin: 0;
+		font-size: var(--je-font-size-sm);
+		line-height: var(--je-leading-normal);
+		color: var(--je-color-text-muted);
+	}
+
+	/* Narrow cards */
+	.roster__cards {
+		display: none;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+		border: 1px solid var(--je-color-border);
+		border-radius: var(--je-radius-surface);
+		background: var(--je-color-surface);
+	}
+
+	.card {
+		padding: var(--je-space-3);
+		border-block-end: 1px solid var(--je-color-border);
+	}
+
+	.card:last-child {
+		border-block-end: 0;
+	}
+
+	.card__head {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		grid-template-areas:
+			'copy toggle'
+			'tags tags'
+			'scope scope';
+		column-gap: var(--je-space-3);
+		row-gap: var(--je-space-2);
+		align-items: center;
+	}
+
+	/* The card's summary is the table row's door in the narrow composition; a
+	   skeleton head is not one, which is what the modifier separates. These
+	   cards mostly meet a coarse pointer, so no chrome is added beyond the
+	   cursor — the toggle's own states already carry the affordance. */
+	.card__head--door {
+		cursor: pointer;
+	}
+
+	.card__copy {
+		grid-area: copy;
+		display: grid;
+		min-inline-size: 0;
+	}
+
+	.card__name {
+		font-size: var(--je-font-size-md);
+		font-weight: 650;
+		line-height: var(--je-leading-snug);
+	}
+
+	.card__email {
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
+		overflow-wrap: anywhere;
+	}
+
+	.card__toggle {
+		grid-area: toggle;
+	}
+
+	.card__tags {
+		grid-area: tags;
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--je-space-2);
+	}
+
+	.card__load {
+		font-size: var(--je-font-size-sm);
+		font-variant-numeric: tabular-nums;
+		color: var(--je-color-text-muted);
+	}
+
+	.card__scope {
+		grid-area: scope;
+	}
+
+	.card__detail {
+		margin-block-start: var(--je-space-3);
+		padding-block-start: var(--je-space-3);
+		border-block-start: 1px solid var(--je-color-border);
+	}
+
+	@media (max-width: 920px) {
+		.head {
+			grid-template-columns: minmax(0, 1fr);
+		}
+
+		/* Three filters ragged-wrapping read as debris; a grid keeps one rhythm
+		   and gives every chip a touch-sized target. The wide third chip takes
+		   the whole last row so the layout reads 2+1 on purpose. */
+		.chips {
+			display: grid;
+			grid-template-columns: 1fr 1fr;
+			gap: var(--je-space-2);
+		}
+
+		.chips__tab {
+			justify-content: space-between;
+			min-block-size: 2.75rem;
+			border-color: var(--je-color-border);
+			background: var(--je-color-surface);
+			font-size: var(--je-font-size-sm);
+		}
+
+		.chips__tab--active {
+			background: var(--je-color-mark-surface);
+		}
+
+		.chips__tab:last-child {
+			grid-column: 1 / -1;
+		}
+
+		.head__invite {
+			justify-self: stretch;
+		}
+
+		.roster__table {
+			display: none;
+		}
+
+		.roster__cards {
+			display: block;
+		}
+
+		.detail {
+			padding: 0;
+		}
+	}
+</style>

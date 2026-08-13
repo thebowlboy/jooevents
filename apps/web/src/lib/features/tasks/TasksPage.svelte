@@ -3,7 +3,7 @@
 	import { Check } from 'lucide-svelte';
 	import { Button, CopyValue, Field, Modal, statusIcon, trackPending } from '$lib/ui';
 	import type { IconComponent } from '$lib/ui';
-	import { useWorkspaceGateway } from '$lib/api/workspace-gateway';
+	import type { TasksPagePort } from '$lib/api/tasks-page-port';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
 	import ProfilePeek from '$lib/features/workspace/components/ProfilePeek.svelte';
 	import ScopeChip from '$lib/features/workspace/components/ScopeChip.svelte';
@@ -19,7 +19,12 @@
 		TaskDef
 	} from '$lib/api/types';
 
-	const { api } = useWorkspaceGateway();
+	interface Props {
+		port: TasksPagePort;
+	}
+
+	let { port }: Props = $props();
+	const api = $derived(port);
 
 	type FilterKey = 'all' | 'incomplete' | 'overdue';
 
@@ -1002,10 +1007,14 @@
 		box-shadow: var(--je-focus-ring);
 	}
 
+	/* Open, not marked: the cell whose editor is showing keeps full surface
+	   brightness and lifts on a strong border instead of tinting. A tint here
+	   both dimmed the thing in hand and, in the action colour, read as a fault
+	   on the assignment. */
 	.cell-trigger--open {
 		border-style: solid;
-		border-color: var(--je-color-action);
-		background: var(--je-color-surface-selected);
+		border-color: var(--je-color-border-strong);
+		background: var(--je-color-surface);
 	}
 
 	.cell-dash {
@@ -1041,8 +1050,8 @@
 	}
 
 	.card[data-selected='true'] {
-		border-color: var(--je-color-action);
-		background: var(--je-color-surface-selected);
+		border-color: var(--je-color-mark-border);
+		background: var(--je-color-mark-surface);
 	}
 
 	/* The pick column keeps its width when a speaker has nothing outstanding, so

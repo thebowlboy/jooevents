@@ -1,7 +1,7 @@
 <script lang="ts">
-	import TemplatesPage from '$lib/features/templates/TemplatesPage.svelte';
+	import OperatorPage from 'jooevents-operator-page';
 </script>
 
 <svelte:head><title>Templates · JooEvents</title></svelte:head>
 
-<TemplatesPage />
+<OperatorPage area="templates" />

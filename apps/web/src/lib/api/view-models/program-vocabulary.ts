@@ -32,6 +32,7 @@ export interface ProgramRoomView extends ProgramVocabularyItemView {
 
 export interface ProgramTrackView extends ProgramVocabularyItemView {
 	readonly kind: 'track';
+	readonly accent: 'lavender' | 'sea' | 'neutral';
 }
 
 export interface ProgramFormatView extends ProgramVocabularyItemView {
@@ -45,4 +46,75 @@ export interface ProgramVocabularySnapshotView {
 	readonly rooms: readonly ProgramRoomView[];
 	readonly tracks: readonly ProgramTrackView[];
 	readonly formats: readonly ProgramFormatView[];
+}
+
+export type ProgramVocabularyDiffItemView =
+	| {
+			readonly kind: 'room';
+			readonly id: string;
+			readonly name: string;
+			readonly status: 'active' | 'retired';
+			readonly version: number;
+			readonly capacity: number | null;
+	  }
+	| {
+			readonly kind: 'track';
+			readonly id: string;
+			readonly name: string;
+			readonly accent: 'lavender' | 'sea' | 'neutral';
+			readonly status: 'active' | 'retired';
+			readonly version: number;
+	  }
+	| {
+			readonly kind: 'format';
+			readonly id: string;
+			readonly name: string;
+			readonly status: 'active' | 'retired';
+			readonly version: number;
+	  };
+
+export type ProgramVocabularyDraftChangeView =
+	| {
+			readonly action: 'create';
+			readonly before: null;
+			readonly after: ProgramVocabularyDiffItemView;
+	  }
+	| {
+			readonly action: 'edit' | 'retire' | 'restore';
+			readonly before: ProgramVocabularyDiffItemView;
+			readonly after: ProgramVocabularyDiffItemView;
+	  }
+	| {
+			readonly action: 'delete';
+			readonly before: ProgramVocabularyDiffItemView;
+			readonly after: null;
+			readonly usage: ProgramVocabularyUsageView;
+	  }
+	| {
+			readonly action: 'merge';
+			readonly sourceBefore: ProgramVocabularyDiffItemView;
+			readonly sourceAfter: ProgramVocabularyDiffItemView;
+			readonly target: ProgramVocabularyDiffItemView;
+			readonly liveRepoints: number;
+			readonly historicalPinsPreserved: number;
+	  };
+
+export interface ProgramVocabularyDraftView {
+	readonly schemaVersion: 1;
+	readonly changesetId: string;
+	readonly headVersion: number;
+	readonly status: 'draft';
+	readonly revision: {
+		readonly id: string;
+		readonly number: number;
+		readonly digestSha256: string;
+	};
+	readonly riskTier: 'low' | 'normal' | 'consequential';
+	readonly approvalPolicy: {
+		readonly key: string;
+		readonly version: number;
+		readonly definitionDigestSha256: string;
+		readonly requirement: 'none' | 'distinct_current_human';
+	};
+	readonly change: ProgramVocabularyDraftChangeView;
 }

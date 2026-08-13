@@ -1,0 +1,122 @@
+import { CHANGESET_LIFECYCLE_SQL } from './changeset-lifecycle';
+import { FOUNDATION_TRIAL_UOW_SQL } from './foundation-trial-uow';
+import { EVENT_SPINE_SQL } from './event-spine';
+import { EVENT_CREATION_CHANGESET_EFFECT_SQL } from './event-changeset-effect-domain';
+import { EVENT_CREATE_DRAFT_EFFECT_SQL } from './event-create-draft-effect-domain';
+import { EVENT_SETTINGS_SQL } from './event-settings';
+import { EVENT_SETTINGS_CHANGESET_EFFECT_SQL } from './event-settings-changeset-effect-domain';
+import { EVENT_SETTINGS_UPDATE_DRAFT_EFFECT_SQL } from './event-settings-draft-effect-domain';
+import { DEADLINE_CHANGESET_EFFECT_SQL } from './deadline-changeset-effect-domain';
+import { DEADLINE_DRAFT_EFFECT_SQL } from './deadline-draft-effect-domain';
+import { DEADLINE_SQL } from './deadline';
+import { FIELD_REGISTRY_CHANGESET_EFFECT_SQL } from './field-registry-changeset-effect-domain';
+import { FIELD_REGISTRY_DRAFT_EFFECT_SQL } from './field-registry-draft-effect-domain';
+import { FIELD_REGISTRY_SQL } from './field-registry';
+import { INTAKE_FORM_CHANGESET_EFFECT_SQL } from './intake-form-changeset-effect-domain';
+import { INTAKE_FORM_DRAFT_EFFECT_SQL } from './intake-form-draft-effect-domain';
+import { SQLITE_INTAKE_SQL } from './intake';
+import { SUBMISSION_TRIAGE_CHANGESET_EFFECT_SQL } from './submission-triage-changeset-effect-domain';
+import { SQLITE_SUBMISSION_TRIAGE_DRAFT_EFFECT_SQL } from './submission-triage-draft-effect-domain';
+import { SQLITE_SUBMISSION_TRIAGE_SQL } from './submission-triage';
+import {
+  createEphemeralSQLiteRuntime,
+  type EphemeralSQLiteRuntime,
+  type EphemeralSQLiteSchemaArtifact
+} from './ephemeral-sqlite-runtime';
+import { MODEL_DURABILITY_TRIAL_SQL } from './model-durability-trial';
+import { SQLITE_ORGANIZER_AUDIENCE_PREVIEW_SQL } from './communications/audience-preview';
+import { SQLITE_ORGANIZER_COMMUNICATION_AUTHORING_SQL } from './communications/organizer-authoring';
+import { SQLITE_ORGANIZER_COMMUNICATION_AUTHORING_EFFECT_SQL } from './communications/organizer-authoring-effect-domain';
+import { SQLITE_EMAIL_PROVIDER_CONFIGURATION_SQL } from './communications/provider-configuration';
+import { PROGRAM_VOCABULARY_DRAFT_EFFECT_SQL } from './program-vocabulary-draft-effect-domain';
+import { PROGRAM_VOCABULARY_CHANGESET_EFFECT_SQL } from './program-vocabulary-changeset-effect-domain';
+import { PROGRAM_VOCABULARY_REVIEWED_COMMIT_TRIAL_SQL } from './program-vocabulary-reviewed-commit-trial';
+import { PROGRAM_VOCABULARY_TRIAL_SQL } from './program-vocabulary-trial';
+import { PROGRAM_VOCABULARY_SQL } from './program-vocabulary';
+import { SCHEDULE_PLACEMENT_CHANGESET_EFFECT_SQL } from './schedule-placement-changeset-effect-domain';
+import { SCHEDULE_PLACEMENT_DRAFT_EFFECT_SQL } from './schedule-placement-draft-effect-domain';
+import { SCHEDULE_PLACEMENT_SQL } from './schedule-placement';
+import { PUBLIC_MUTATION_CONTINUATION_TRIAL_SQL } from './public-mutation-continuation-trial';
+import { READ_IMMUTABLE_AUDIT_TRIAL_SQL } from './read-immutable-audit-trial';
+import { REGISTERED_CONSUMER_OPERATION_TRIAL_SQL } from './registered-consumer-operation-trial';
+import { REGISTERED_JOB_OPERATION_TRIAL_SQL } from './registered-job-operation-trial';
+import {
+  RELIABILITY_CONSUMER_IMMUTABILITY_TRIAL_SQL,
+  RELIABILITY_CONSUMER_TRIAL_SQL
+} from './reliability-consumer-trial';
+import { RELIABILITY_FACT_EFFECT_TRIAL_SQL } from './reliability-fact-effect-trial';
+import {
+  RELIABILITY_JOB_IMMUTABILITY_TRIAL_SQL,
+  RELIABILITY_JOB_TRIAL_SQL
+} from './reliability-job-trial';
+import { VERIFIED_INBOX_PROCESSING_TRIAL_SQL } from './verified-inbox-processing-trial';
+import { VERIFIED_INBOX_TRIAL_SQL } from './verified-inbox-trial';
+import { SQLITE_CLASSIFIED_PAYLOAD_STORE_SQL } from './sqlite-classified-payload-store';
+import { WORKSPACE_TEAM_SQL } from './workspace-team';
+import { WORKSPACE_TEAM_DRAFT_EFFECT_SQL } from './workspace-team-draft-effect-domain';
+import { WORKSPACE_TEAM_CHANGESET_EFFECT_SQL } from './workspace-team-changeset-effect-domain';
+
+function schemaArtifact(id: string, sql: string): EphemeralSQLiteSchemaArtifact {
+  return Object.freeze({ id, sql });
+}
+
+/** Exact ordered additive schema installed by the ephemeral Foundation runtime. */
+export const FOUNDATION_EPHEMERAL_SCHEMA_ARTIFACTS: readonly EphemeralSQLiteSchemaArtifact[] =
+  Object.freeze([
+    schemaArtifact('foundation-uow', FOUNDATION_TRIAL_UOW_SQL),
+    schemaArtifact('event-spine', EVENT_SPINE_SQL),
+    schemaArtifact('event-settings-domain', EVENT_SETTINGS_SQL),
+    schemaArtifact('deadline-domain', DEADLINE_SQL),
+    schemaArtifact('changeset-lifecycle', CHANGESET_LIFECYCLE_SQL),
+    schemaArtifact('deadline-draft-effect', DEADLINE_DRAFT_EFFECT_SQL),
+    schemaArtifact('deadline-changeset-effect', DEADLINE_CHANGESET_EFFECT_SQL),
+    schemaArtifact('event-create-draft-effect', EVENT_CREATE_DRAFT_EFFECT_SQL),
+    schemaArtifact('event-creation-changeset-effect', EVENT_CREATION_CHANGESET_EFFECT_SQL),
+    schemaArtifact('event-settings-draft-effect', EVENT_SETTINGS_UPDATE_DRAFT_EFFECT_SQL),
+    schemaArtifact('event-settings-changeset-effect', EVENT_SETTINGS_CHANGESET_EFFECT_SQL),
+    schemaArtifact('program-vocabulary-domain', PROGRAM_VOCABULARY_SQL),
+    schemaArtifact('schedule-placement-domain', SCHEDULE_PLACEMENT_SQL),
+    schemaArtifact('program-vocabulary-draft-effect', PROGRAM_VOCABULARY_DRAFT_EFFECT_SQL),
+    schemaArtifact('program-vocabulary-changeset-effect', PROGRAM_VOCABULARY_CHANGESET_EFFECT_SQL),
+    schemaArtifact('schedule-placement-draft-effect', SCHEDULE_PLACEMENT_DRAFT_EFFECT_SQL),
+    schemaArtifact('schedule-placement-changeset-effect', SCHEDULE_PLACEMENT_CHANGESET_EFFECT_SQL),
+    schemaArtifact('classified-payload-store', SQLITE_CLASSIFIED_PAYLOAD_STORE_SQL),
+    schemaArtifact('communication-organizer-authoring', SQLITE_ORGANIZER_COMMUNICATION_AUTHORING_SQL),
+    schemaArtifact(
+      'communication-organizer-authoring-effect',
+      SQLITE_ORGANIZER_COMMUNICATION_AUTHORING_EFFECT_SQL
+    ),
+    schemaArtifact('communication-organizer-audience-preview', SQLITE_ORGANIZER_AUDIENCE_PREVIEW_SQL),
+    schemaArtifact('communication-email-provider-configuration', SQLITE_EMAIL_PROVIDER_CONFIGURATION_SQL),
+    schemaArtifact('workspace-team-domain', WORKSPACE_TEAM_SQL),
+    schemaArtifact('workspace-team-draft-effect', WORKSPACE_TEAM_DRAFT_EFFECT_SQL),
+    schemaArtifact('workspace-team-changeset-effect', WORKSPACE_TEAM_CHANGESET_EFFECT_SQL),
+    schemaArtifact('intake-domain', SQLITE_INTAKE_SQL),
+    schemaArtifact('intake-form-draft-effect', INTAKE_FORM_DRAFT_EFFECT_SQL),
+    schemaArtifact('intake-form-changeset-effect', INTAKE_FORM_CHANGESET_EFFECT_SQL),
+    schemaArtifact('submission-triage-domain', SQLITE_SUBMISSION_TRIAGE_SQL),
+    schemaArtifact('submission-triage-draft-effect', SQLITE_SUBMISSION_TRIAGE_DRAFT_EFFECT_SQL),
+    schemaArtifact('submission-triage-changeset-effect', SUBMISSION_TRIAGE_CHANGESET_EFFECT_SQL),
+    schemaArtifact('field-registry-domain', FIELD_REGISTRY_SQL),
+    schemaArtifact('field-registry-draft-effect', FIELD_REGISTRY_DRAFT_EFFECT_SQL),
+    schemaArtifact('field-registry-changeset-effect', FIELD_REGISTRY_CHANGESET_EFFECT_SQL),
+    schemaArtifact('read-audit', READ_IMMUTABLE_AUDIT_TRIAL_SQL),
+    schemaArtifact('reliability-fact-effect', RELIABILITY_FACT_EFFECT_TRIAL_SQL),
+    schemaArtifact('reliability-consumer', RELIABILITY_CONSUMER_TRIAL_SQL),
+    schemaArtifact('reliability-consumer-immutability', RELIABILITY_CONSUMER_IMMUTABILITY_TRIAL_SQL),
+    schemaArtifact('registered-consumer', REGISTERED_CONSUMER_OPERATION_TRIAL_SQL),
+    schemaArtifact('reliability-job', RELIABILITY_JOB_TRIAL_SQL),
+    schemaArtifact('reliability-job-immutability', RELIABILITY_JOB_IMMUTABILITY_TRIAL_SQL),
+    schemaArtifact('registered-job', REGISTERED_JOB_OPERATION_TRIAL_SQL),
+    schemaArtifact('model-durability', MODEL_DURABILITY_TRIAL_SQL),
+    schemaArtifact('verified-inbox', VERIFIED_INBOX_TRIAL_SQL),
+    schemaArtifact('verified-inbox-processing', VERIFIED_INBOX_PROCESSING_TRIAL_SQL),
+    schemaArtifact('public-mutation-continuation', PUBLIC_MUTATION_CONTINUATION_TRIAL_SQL),
+    schemaArtifact('program-vocabulary', PROGRAM_VOCABULARY_TRIAL_SQL),
+    schemaArtifact('program-vocabulary-reviewed-commit', PROGRAM_VOCABULARY_REVIEWED_COMMIT_TRIAL_SQL)
+  ]);
+
+/** Opens one isolated runtime with the exact ordered Foundation schema. */
+export function createFoundationEphemeralSQLiteRuntime(): EphemeralSQLiteRuntime {
+  return createEphemeralSQLiteRuntime(FOUNDATION_EPHEMERAL_SCHEMA_ARTIFACTS);
+}

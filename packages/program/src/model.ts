@@ -7,7 +7,20 @@ import {
   type EventId,
   type WorkspaceId
 } from '@jooevents/kernel';
-import type { ProgramVocabularyKind, ProgramVocabularyStatus } from '@jooevents/contracts';
+import {
+  deriveProgramTrackAccent,
+  isCanonicalProgramVocabularyName,
+  normalizeProgramVocabularyNameInput,
+  programVocabularyIdSchema,
+  programVocabularyNameSchema,
+  programVocabularyScopeSchema,
+  programVocabularyStatusSchema,
+  programVocabularyVersionSchema,
+  type ProgramTrackAccent,
+  type ProgramVocabularyKind,
+  type ProgramVocabularyStatus
+} from '@jooevents/contracts';
+import { z } from 'zod';
 
 export type ProgramVocabularyId<Kind extends ProgramVocabularyKind> =
   Brand<string, `ProgramVocabularyId:${Kind}`>;
@@ -25,6 +38,16 @@ export function parseProgramVocabularyId<Kind extends ProgramVocabularyKind>(
     throw new TypeError(`${kind} id must be a UUIDv4 or UUIDv7`);
   }
   return value.toLowerCase() as ProgramVocabularyId<Kind>;
+}
+
+export function parseCanonicalProgramVocabularyId<Kind extends ProgramVocabularyKind>(
+  kind: Kind,
+  value: unknown
+): ProgramVocabularyId<Kind> {
+  if (!programVocabularyIdSchema.safeParse(value).success) {
+    throw new TypeError(`${kind} id must be a canonical lowercase UUIDv4 or UUIDv7`);
+  }
+  return value as ProgramVocabularyId<Kind>;
 }
 
 export interface ProgramVocabularyScope {
@@ -45,7 +68,9 @@ export interface ProgramRoom extends ProgramItemBase<'room'> {
   readonly capacity: number | null;
 }
 
-export interface ProgramTrack extends ProgramItemBase<'track'> {}
+export interface ProgramTrack extends ProgramItemBase<'track'> {
+  readonly accent: ProgramTrackAccent;
+}
 
 export interface ProgramFormat extends ProgramItemBase<'format'> {}
 
@@ -85,11 +110,19 @@ export type ProgramVocabularyStateInput = {
 
 export function normalizeProgramVocabularyName(value: unknown): string {
   if (typeof value !== 'string') throw new TypeError('program vocabulary name must be a string');
-  const normalized = value.normalize('NFC').trim().replace(/\s+/gu, ' ');
-  if (normalized.length === 0 || normalized.length > 200) {
+  const normalized = normalizeProgramVocabularyNameInput(value);
+  if (!isCanonicalProgramVocabularyName(normalized)) {
     throw new TypeError('program vocabulary name must contain 1 to 200 characters');
   }
   return normalized;
+}
+
+export function parseCanonicalProgramVocabularyName(value: unknown): string {
+  const parsed = programVocabularyNameSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new TypeError('program vocabulary name must use its canonical stored form');
+  }
+  return parsed.data;
 }
 
 export function parseRoomCapacity(value: unknown): number | null {
@@ -107,8 +140,13 @@ function parseScope(input: { readonly workspaceId: string; readonly eventId: str
   });
 }
 
+/** Compares canonical text by JavaScript code units, independent of locale. */
+export function compareProgramVocabularyCanonicalText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function compareItems(left: ProgramVocabularyItem, right: ProgramVocabularyItem): number {
-  return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
+  return compareProgramVocabularyCanonicalText(left.id, right.id);
 }
 
 function parseStatus(value: unknown): ProgramVocabularyStatus {
@@ -129,14 +167,18 @@ export function createProgramVocabularyState(input: ProgramVocabularyStateInput)
     status: parseStatus(item.status),
     version: parseAggregateVersion(item.version)
   })).sort(compareItems);
-  const tracks = (input.tracks ?? []).map((item): ProgramTrack => Object.freeze({
-    kind: 'track',
-    id: parseProgramVocabularyId('track', item.id),
-    scope,
-    name: normalizeProgramVocabularyName(item.name),
-    status: parseStatus(item.status),
-    version: parseAggregateVersion(item.version)
-  })).sort(compareItems);
+  const tracks = (input.tracks ?? []).map((item): ProgramTrack => {
+    const id = parseProgramVocabularyId('track', item.id);
+    return Object.freeze({
+      kind: 'track',
+      id,
+      scope,
+      name: normalizeProgramVocabularyName(item.name),
+      accent: deriveProgramTrackAccent(id),
+      status: parseStatus(item.status),
+      version: parseAggregateVersion(item.version)
+    });
+  }).sort(compareItems);
   const formats = (input.formats ?? []).map((item): ProgramFormat => Object.freeze({
     kind: 'format',
     id: parseProgramVocabularyId('format', item.id),
@@ -154,6 +196,92 @@ export function createProgramVocabularyState(input: ProgramVocabularyStateInput)
     tracks,
     formats
   });
+}
+
+const canonicalRoomStateInputSchema = z.strictObject({
+  id: programVocabularyIdSchema,
+  name: programVocabularyNameSchema,
+  capacity: z.number().int().positive().safe().nullable(),
+  status: programVocabularyStatusSchema,
+  version: programVocabularyVersionSchema
+});
+const canonicalNamedStateInputSchema = z.strictObject({
+  id: programVocabularyIdSchema,
+  name: programVocabularyNameSchema,
+  status: programVocabularyStatusSchema,
+  version: programVocabularyVersionSchema
+});
+const canonicalProgramVocabularyItemSchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    kind: z.literal('room'),
+    scope: programVocabularyScopeSchema,
+    ...canonicalRoomStateInputSchema.shape
+  }),
+  z.strictObject({
+    kind: z.literal('track'),
+    scope: programVocabularyScopeSchema,
+    ...canonicalNamedStateInputSchema.shape
+  }),
+  z.strictObject({
+    kind: z.literal('format'),
+    scope: programVocabularyScopeSchema,
+    ...canonicalNamedStateInputSchema.shape
+  })
+]);
+const canonicalStateInputSchema = z.strictObject({
+  scope: programVocabularyScopeSchema,
+  setVersion: programVocabularyVersionSchema,
+  rooms: z.array(canonicalRoomStateInputSchema),
+  tracks: z.array(canonicalNamedStateInputSchema),
+  formats: z.array(canonicalNamedStateInputSchema)
+}).superRefine((state, context) => {
+  const seen = new Set<string>();
+  for (const [family, items] of [
+    ['rooms', state.rooms],
+    ['tracks', state.tracks],
+    ['formats', state.formats]
+  ] as const) {
+    for (const [index, item] of items.entries()) {
+      if (index > 0 && compareProgramVocabularyCanonicalText(items[index - 1]!.id, item.id) >= 0) {
+        context.addIssue({
+          code: 'custom',
+          path: [family, index, 'id'],
+          message: 'items must be uniquely ordered by canonical id'
+        });
+      }
+      if (seen.has(item.id)) {
+        context.addIssue({
+          code: 'custom',
+          path: [family, index, 'id'],
+          message: 'item ids must be unique across vocabulary kinds'
+        });
+      }
+      seen.add(item.id);
+    }
+  }
+});
+
+/** Parses already-canonical stored state without trimming, normalizing, sorting, or repairing it. */
+export function parseProgramVocabularyState(value: unknown): ProgramVocabularyState {
+  const parsed = canonicalStateInputSchema.safeParse(value);
+  if (!parsed.success) throw new TypeError('invalid_canonical_program_vocabulary_state');
+  return createProgramVocabularyState(parsed.data);
+}
+
+/** Parses one already-canonical domain item without changing its stored representation. */
+export function parseProgramVocabularyItem(value: unknown): ProgramVocabularyItem {
+  const parsed = canonicalProgramVocabularyItemSchema.safeParse(value);
+  if (!parsed.success) throw new TypeError('invalid_canonical_program_vocabulary_item');
+  const state = createProgramVocabularyState({
+    scope: parsed.data.scope,
+    setVersion: 1,
+    rooms: parsed.data.kind === 'room' ? [parsed.data] : [],
+    tracks: parsed.data.kind === 'track' ? [parsed.data] : [],
+    formats: parsed.data.kind === 'format' ? [parsed.data] : []
+  });
+  const item = programVocabularyItems(state)[0];
+  if (!item) throw new TypeError('invalid_canonical_program_vocabulary_item');
+  return item;
 }
 
 export function sameProgramVocabularyScope(

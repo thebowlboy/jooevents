@@ -6,6 +6,7 @@ import type {
   EffectfulOperationResult,
   OperationReceiptRef,
   ReadOperationResult,
+  BrowserResumption,
   SafeOperationManifest,
   SafeSchemaManifestRef,
   StructuredOutcome,
@@ -41,7 +42,8 @@ import type {
   DeniedEffectAuditAttempt,
   InvocationClientRef,
   InvocationContext,
-  InvocationProvenance
+  InvocationProvenance,
+  SealedEffectAuthorityRecheckResult
 } from './invocation-context';
 
 export type ReturnTypeOrPromise<Value> = Value | Promise<Value>;
@@ -108,6 +110,15 @@ export interface OperatorHttpReadBindingDefinition {
   readonly projection: VersionedDefinitionRef;
 }
 
+export interface PublicHttpReadBindingDefinition {
+  readonly surface: 'public_http';
+  readonly method: 'GET';
+  readonly path: string;
+  readonly input: 'query';
+  readonly browserResumption: { readonly kind: 'none' };
+  readonly projection: VersionedDefinitionRef;
+}
+
 export interface ExternalMcpReadBindingDefinition {
   readonly surface: 'external_mcp';
   readonly toolName: string;
@@ -122,6 +133,7 @@ export interface AppModelReadBindingDefinition {
 
 export type ReadOperationBindingDefinition =
   | OperatorHttpReadBindingDefinition
+  | PublicHttpReadBindingDefinition
   | ExternalMcpReadBindingDefinition
   | AppModelReadBindingDefinition;
 
@@ -197,6 +209,15 @@ export interface RegisteredOperatorHttpReadBinding {
   readonly input: 'query';
 }
 
+export interface RegisteredPublicHttpReadBinding {
+  readonly operationName: string;
+  readonly operationVersion: number;
+  readonly surface: 'public_http';
+  readonly method: 'GET';
+  readonly path: string;
+  readonly input: 'query';
+}
+
 export interface RegisteredExternalMcpReadBinding {
   readonly operationName: string;
   readonly operationVersion: number;
@@ -213,6 +234,7 @@ export interface RegisteredAppModelReadBinding {
 
 export type RegisteredReadOperationBinding =
   | RegisteredOperatorHttpReadBinding
+  | RegisteredPublicHttpReadBinding
   | RegisteredExternalMcpReadBinding
   | RegisteredAppModelReadBinding;
 
@@ -220,6 +242,7 @@ export interface ReadOperationRegistry {
   readonly safeManifest: SafeOperationManifest;
   readonly manifestDigestSha256: string;
   readonly operatorHttpBindings: readonly RegisteredOperatorHttpReadBinding[];
+  readonly publicHttpBindings: readonly RegisteredPublicHttpReadBinding[];
   readonly appModelReadBindings: readonly RegisteredAppModelReadBinding[];
 }
 
@@ -317,6 +340,15 @@ export interface OperatorHttpEffectBindingDefinition {
   readonly projection: VersionedDefinitionRef;
 }
 
+export interface PublicHttpEffectBindingDefinition {
+  readonly surface: 'public_http';
+  readonly method: 'POST';
+  readonly path: string;
+  readonly input: 'body';
+  readonly browserResumption: Extract<BrowserResumption, { readonly kind: 'server_ref' }>;
+  readonly projection: VersionedDefinitionRef;
+}
+
 export interface AppModelEffectBindingDefinition {
   readonly surface: 'app_model';
   readonly toolName: string;
@@ -325,6 +357,7 @@ export interface AppModelEffectBindingDefinition {
 
 export type EffectOperationBindingDefinition =
   | OperatorHttpEffectBindingDefinition
+  | PublicHttpEffectBindingDefinition
   | AppModelEffectBindingDefinition;
 
 /**
@@ -418,6 +451,16 @@ export interface RegisteredOperatorHttpEffectBinding {
   readonly input: 'body';
 }
 
+export interface RegisteredPublicHttpEffectBinding {
+  readonly operationName: string;
+  readonly operationVersion: number;
+  readonly surface: 'public_http';
+  readonly method: 'POST';
+  readonly path: string;
+  readonly input: 'body';
+  readonly browserResumption: Extract<BrowserResumption, { readonly kind: 'server_ref' }>;
+}
+
 export interface RegisteredAppModelEffectBinding {
   readonly operationName: string;
   readonly operationVersion: number;
@@ -427,6 +470,7 @@ export interface RegisteredAppModelEffectBinding {
 
 export interface OperationRegistry extends ReadOperationRegistry {
   readonly operatorHttpEffectBindings: readonly RegisteredOperatorHttpEffectBinding[];
+  readonly publicHttpEffectBindings: readonly RegisteredPublicHttpEffectBinding[];
   readonly appModelEffectBindings: readonly RegisteredAppModelEffectBinding[];
   /** Executable internal bindings, deliberately separate from the public safe manifest. */
   readonly internalManifest: InternalOperationManifest;
@@ -722,6 +766,10 @@ export type NonterminalProgressReason =
       readonly autonomyDisposition: NonProceedAutonomyDisposition;
     }
   | { readonly kind: 'same_request_contended' }
+  | {
+      readonly kind: 'authority_recheck';
+      readonly denialReason: CurrentAuthorityDenialReason;
+    }
   | { readonly kind: 'phase_nonterminal' };
 
 export interface NonterminalProgressOperationAuditRecord extends AuthorizedOperationAuditRecordBase {
@@ -752,11 +800,19 @@ export interface EffectUnitOfWork {
     | { readonly kind: 'contended_changed_request' }
   >;
   findTerminalReceipt(identity: EffectOperationIdentity): ReturnTypeOrPromise<TerminalEffectReceipt | undefined>;
+  /** Reloads exact current authority through the transaction-bound adapter view. */
+  recheckCurrentAuthority(
+    context: EffectInvocationContext
+  ): ReturnTypeOrPromise<SealedEffectAuthorityRecheckResult>;
   openHandlerSnapshot(
     capability: VersionedDefinitionRef,
-    context: EffectInvocationContext
+    context: EffectInvocationContext,
+    authorityRecheck: SealedEffectAuthorityRecheckResult
   ): ReturnTypeOrPromise<EffectHandlerSnapshot>;
-  applyDomainContribution(contribution: unknown): ReturnTypeOrPromise<void>;
+  applyDomainContribution(
+    capability: VersionedDefinitionRef,
+    contribution: unknown
+  ): ReturnTypeOrPromise<void>;
   insertReceiptParent(receipt: TerminalEffectReceipt): ReturnTypeOrPromise<void>;
   insertTerminalNewOperationAudit(record: TerminalNewOperationAuditRecord): ReturnTypeOrPromise<void>;
   insertReceiptChild(receiptId: string, contribution: unknown): ReturnTypeOrPromise<void>;

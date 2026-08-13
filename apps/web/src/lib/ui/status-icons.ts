@@ -44,6 +44,7 @@ import {
 	Link2,
 	Lock,
 	LockOpen,
+	MailCheck,
 	MailOpen,
 	MailWarning,
 	MailX,
@@ -77,12 +78,14 @@ export type StatusIconKey =
 	// Public visibility.
 	| 'published'
 	| 'unpublished'
-	// Outbox lifecycle.
+	// Communication lifecycle.
 	| 'draft'
 	| 'scheduled'
 	| 'sending'
 	| 'sent'
 	| 'held'
+	| 'delivered'
+	| 'bounced'
 	// Email delivery readiness.
 	| 'ready'
 	| 'actionRequired'
@@ -128,6 +131,10 @@ export const statusIcon: Record<StatusIconKey, IconComponent> = {
 	sending: CircleEllipsis,
 	sent: Send,
 	held: CirclePause,
+	delivered: MailCheck,
+	// Shares the ledger's bounced-recipients glyph deliberately: one concept,
+	// one symbol, whether it appears as a tray or as a person's own outcome.
+	bounced: MailX,
 
 	ready: CircleCheck,
 	actionRequired: TriangleAlert,

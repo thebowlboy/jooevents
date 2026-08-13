@@ -35,7 +35,7 @@ export interface AutonomyResolutionSubject {
   readonly authorityPrincipalKey: string;
   readonly scopeKeys: readonly string[];
   readonly scopeSubjects: InvocationContext['scope']['subjects'];
-  readonly receivedAt: UtcInstant;
+  readonly evaluatedAt: UtcInstant;
   readonly requestHashSha256: string;
   readonly maximumRisk: OperationRisk;
   readonly registeredConsequenceTags: readonly string[];
@@ -434,6 +434,7 @@ function subjectFor(context: InvocationContext, input: {
   readonly maximumRisk: OperationRisk;
   readonly consequenceTags: readonly string[];
   readonly requestHashSha256: string;
+  readonly evaluatedAt: UtcInstant;
 }): AutonomyResolutionSubject {
   const authorityKind: AutonomyInvocation['authority']['kind'] = context.provenance.kind === 'operator'
     ? 'human'
@@ -463,7 +464,7 @@ function subjectFor(context: InvocationContext, input: {
     authorityPrincipalKey: context.authorityPrincipalKey,
     scopeKeys: scopeKeys.sort(),
     scopeSubjects: structuredClone(context.scope.subjects),
-    receivedAt: context.receivedAt as UtcInstant,
+    evaluatedAt: parseUtcInstant(input.evaluatedAt),
     requestHashSha256: input.requestHashSha256,
     maximumRisk: input.maximumRisk,
     registeredConsequenceTags: [...new Set(input.consequenceTags)].sort()
@@ -482,7 +483,7 @@ function syntheticSubject(input: {
     authorityPrincipalKey: 'principal.synthetic',
     scopeKeys: ['workspace.synthetic'],
     scopeSubjects: [],
-    receivedAt: '2026-01-01T00:00:00.000Z' as UtcInstant,
+    evaluatedAt: '2026-01-01T00:00:00.000Z' as UtcInstant,
     requestHashSha256: 'a'.repeat(64),
     maximumRisk: input.maximumRisk,
     registeredConsequenceTags: [...new Set(input.consequenceTags)].sort()
@@ -750,6 +751,9 @@ export function probeAutonomyRegistrations(input: {
     resolve: () => input.evidenceResolver.resolve({ subject, risk }),
     parse: parseEnvelope
   });
+  if (envelope.evaluatedAt !== subject.evaluatedAt) {
+    throw new TypeError('autonomy evidence was not evaluated at the trusted transaction time');
+  }
   const invocation = invocationFor({ subject, risk, envelope });
   const approval = approvalPair({
     resolver: input.approvalResolver,
@@ -781,6 +785,7 @@ export function executeAutonomyPreflight(input: {
   readonly maximumRisk: OperationRisk;
   readonly consequenceTags: readonly string[];
   readonly requestHashSha256: string;
+  readonly evaluatedAt: UtcInstant;
 }): SealedAutonomyPreflightDecision {
   if (!sha256.test(input.requestHashSha256)) throw new TypeError('autonomy preflight requires a sealed request hash');
   const subject = subjectFor(input.context, input);
@@ -798,6 +803,9 @@ export function executeAutonomyPreflight(input: {
     resolve: () => input.evidenceResolver.resolve({ subject, risk }),
     parse: parseEnvelope
   });
+  if (envelope.evaluatedAt !== subject.evaluatedAt) {
+    throw new TypeError('autonomy evidence was not evaluated at the trusted transaction time');
+  }
   const invocation = invocationFor({ subject, risk, envelope });
   const approval = approvalPair({
     resolver: input.approvalResolver,

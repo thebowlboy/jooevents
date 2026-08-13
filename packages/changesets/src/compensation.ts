@@ -9,6 +9,7 @@ import type {
 import { resolveCommittedChangesetSource } from './commit-authorization';
 import {
   planChangesetOperation,
+  planChangesetOperationSynchronous,
   type ChangesetDefinitionRegistry,
   type ChangesetPlanningSnapshot,
   type ChangesetReadPortKey,
@@ -37,6 +38,39 @@ export interface CompensationRemediation {
   readonly remediationKey: string;
 }
 
+/**
+ * Complete, ordered evidence for every source operation considered by a correction
+ * planner. Aggregate notes/conflicts/blockers/remediations remain convenient result
+ * summaries; this ledger is the durable proof that no sibling operation disappeared
+ * when one operation determines the overall result kind.
+ */
+export type CompensationOperationEvidence =
+  | { readonly lineage: CompensationLineage; readonly kind: 'exact'; readonly draftable: true }
+  | {
+      readonly lineage: CompensationLineage;
+      readonly kind: 'semantic';
+      readonly draftable: true;
+      readonly noteKey: string;
+    }
+  | {
+      readonly lineage: CompensationLineage;
+      readonly kind: 'partial';
+      readonly draftable: true;
+      readonly conflictKeys: readonly string[];
+    }
+  | {
+      readonly lineage: CompensationLineage;
+      readonly kind: 'blocked';
+      readonly draftable: false;
+      readonly reasonKey: string;
+    }
+  | {
+      readonly lineage: CompensationLineage;
+      readonly kind: 'irreversible';
+      readonly draftable: boolean;
+      readonly remediationKey: string;
+    };
+
 export interface CompensatingChangesetDraft {
   readonly source: {
     readonly changesetId: string;
@@ -45,27 +79,38 @@ export interface CompensatingChangesetDraft {
     readonly commitReceiptId: string;
   };
   readonly operations: readonly FrozenChangesetOperation[];
+  /** Exact registered author inputs used to derive the operations, in operation order. */
+  readonly authorInputs: readonly unknown[];
   /** Dependencies are reversed so dependents compensate before their prerequisites. */
   readonly dependencyGroups: readonly DependencyGroup[];
 }
 
 export type CompensationPlanningResult =
-  | { readonly kind: 'exact'; readonly draft: CompensatingChangesetDraft }
+  | {
+      readonly kind: 'exact';
+      readonly draft: CompensatingChangesetDraft;
+      readonly operationEvidence: readonly CompensationOperationEvidence[];
+    }
   | {
       readonly kind: 'semantic';
       readonly draft: CompensatingChangesetDraft;
       readonly notes: readonly CompensationNote[];
+      readonly operationEvidence: readonly CompensationOperationEvidence[];
     }
   | {
       readonly kind: 'partial';
       readonly draft: CompensatingChangesetDraft;
       readonly conflicts: readonly CompensationConflict[];
       readonly notes: readonly CompensationNote[];
+      readonly operationEvidence: readonly CompensationOperationEvidence[];
     }
   | {
       readonly kind: 'blocked';
       readonly blockers: readonly CompensationBlocker[];
       readonly remediations: readonly CompensationRemediation[];
+      readonly conflicts: readonly CompensationConflict[];
+      readonly notes: readonly CompensationNote[];
+      readonly operationEvidence: readonly CompensationOperationEvidence[];
     }
   | {
       readonly kind: 'irreversible';
@@ -73,6 +118,7 @@ export type CompensationPlanningResult =
       readonly remediations: readonly CompensationRemediation[];
       readonly conflicts: readonly CompensationConflict[];
       readonly notes: readonly CompensationNote[];
+      readonly operationEvidence: readonly CompensationOperationEvidence[];
     };
 
 interface OrderedSourceOperation {
@@ -301,6 +347,43 @@ function remediationFor(entry: DerivedSourceOperation): CompensationRemediation 
     : undefined;
 }
 
+function bySourceOperation(
+  left: { readonly lineage: CompensationLineage },
+  right: { readonly lineage: CompensationLineage }
+): number {
+  return left.lineage.sourceOperationIndex - right.lineage.sourceOperationIndex;
+}
+
+function operationEvidenceFor(entry: DerivedSourceOperation): CompensationOperationEvidence {
+  switch (entry.derivation.kind) {
+    case 'exact': return { lineage: entry.lineage, kind: 'exact', draftable: true };
+    case 'semantic': return {
+      lineage: entry.lineage,
+      kind: 'semantic',
+      draftable: true,
+      noteKey: entry.derivation.noteKey
+    };
+    case 'partial': return {
+      lineage: entry.lineage,
+      kind: 'partial',
+      draftable: true,
+      conflictKeys: [...entry.derivation.conflicts].sort()
+    };
+    case 'blocked': return {
+      lineage: entry.lineage,
+      kind: 'blocked',
+      draftable: false,
+      reasonKey: entry.derivation.reasonKey
+    };
+    case 'irreversible': return {
+      lineage: entry.lineage,
+      kind: 'irreversible',
+      draftable: entry.derivation.authorInput !== undefined,
+      remediationKey: entry.derivation.remediationKey
+    };
+  }
+}
+
 function deepFreeze<Value>(value: Value): Value {
   if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
     Object.freeze(value);
@@ -343,27 +426,47 @@ export async function planChangesetCompensation(input: {
     derived.push({ ...source, derivation });
   }
 
-  const remediations = derived.map(remediationFor).filter((value): value is CompensationRemediation => value !== undefined);
+  const remediations = derived
+    .map(remediationFor)
+    .filter((value): value is CompensationRemediation => value !== undefined)
+    .sort(bySourceOperation);
+  const operationEvidence = derived.map(operationEvidenceFor).sort(bySourceOperation);
+  const notes = derived
+    .map(noteFor)
+    .filter((value): value is CompensationNote => value !== undefined)
+    .sort(bySourceOperation);
+  const conflicts = derived
+    .map(conflictFor)
+    .filter((value): value is CompensationConflict => value !== undefined)
+    .sort(bySourceOperation);
   const blockers = derived
     .filter((entry) => entry.derivation.kind === 'blocked')
-    .map((entry) => ({ lineage: entry.lineage, reasonKey: (entry.derivation as Extract<CompensationDerivation<unknown>, { kind: 'blocked' }>).reasonKey }));
+    .map((entry) => ({ lineage: entry.lineage, reasonKey: (entry.derivation as Extract<CompensationDerivation<unknown>, { kind: 'blocked' }>).reasonKey }))
+    .sort(bySourceOperation);
   if (blockers.length > 0) {
-    return deepFreeze({ kind: 'blocked', blockers, remediations });
+    return deepFreeze({
+      kind: 'blocked',
+      blockers,
+      remediations,
+      conflicts,
+      notes,
+      operationEvidence
+    });
   }
 
   const hasUnplannableIrreversible = derived.some(
     (entry) => entry.derivation.kind === 'irreversible' && entry.derivation.authorInput === undefined
   );
-  const notes = derived.map(noteFor).filter((value): value is CompensationNote => value !== undefined);
-  const conflicts = derived.map(conflictFor).filter((value): value is CompensationConflict => value !== undefined);
   if (hasUnplannableIrreversible) {
-    return deepFreeze({ kind: 'irreversible', draft: null, remediations, conflicts, notes });
+    return deepFreeze({ kind: 'irreversible', draft: null, remediations, conflicts, notes, operationEvidence });
   }
 
   const operations: FrozenChangesetOperation[] = [];
+  const authorInputs: unknown[] = [];
   for (const entry of derived) {
     if (entry.derivation.kind === 'blocked') throw new TypeError('unreachable_blocked_compensation');
     const authorInput = entry.derivation.authorInput;
+    authorInputs.push(deepFreeze(structuredClone(authorInput)));
     operations.push(await planChangesetOperation({
       registry: input.registry,
       kind: entry.operation.kind,
@@ -382,14 +485,134 @@ export async function planChangesetCompensation(input: {
       commitReceiptId: committedSource.commitReceiptId
     },
     operations,
+    authorInputs,
     dependencyGroups: ordered.dependencyGroups
   });
   if (remediations.length > 0) {
-    return deepFreeze({ kind: 'irreversible', draft, remediations, conflicts, notes });
+    return deepFreeze({ kind: 'irreversible', draft, remediations, conflicts, notes, operationEvidence });
   }
   if (conflicts.length > 0) {
-    return deepFreeze({ kind: 'partial', draft, conflicts, notes });
+    return deepFreeze({ kind: 'partial', draft, conflicts, notes, operationEvidence });
   }
-  if (notes.length > 0) return deepFreeze({ kind: 'semantic', draft, notes });
-  return deepFreeze({ kind: 'exact', draft });
+  if (notes.length > 0) return deepFreeze({ kind: 'semantic', draft, notes, operationEvidence });
+  return deepFreeze({ kind: 'exact', draft, operationEvidence });
+}
+
+/**
+ * Transaction-local counterpart used by single-unit-of-work adapters. Every
+ * compensation derivation and operation plan must remain synchronous; a definition
+ * that crosses an asynchronous boundary is refused before any effective write.
+ */
+export function planChangesetCompensationSynchronous(input: {
+  readonly registry: ChangesetDefinitionRegistry;
+  readonly source: CommittedChangesetSource;
+  readonly snapshot: ChangesetPlanningSnapshot;
+}): CompensationPlanningResult {
+  const committedSource = resolveCommittedChangesetSource(input.source);
+  if (!committedSource) throw new TypeError('invalid_committed_changeset_source');
+  const sourceRevision = committedSource.revision;
+  const ordered = reverseCompensationOrder(sourceRevision);
+  const derived: DerivedSourceOperation[] = [];
+  for (const source of ordered.operations) {
+    const definition = input.registry.get(source.operation.kind, source.operation.version);
+    if (definition === undefined) throw new TypeError('unknown_compensation_definition');
+    if (!sameSchemaReference(definition.schemas.plan, source.operation.planSchema)
+        || !sameSchemaReference(definition.schemas.diff, source.operation.diffSchema)
+        || !sameSchemaReference(definition.schemas.result, source.operation.resultSchema)) {
+      throw new TypeError('changeset_definition_changed');
+    }
+    const planSchema = input.registry.getSchema(source.operation.planSchema);
+    if (planSchema === undefined) throw new TypeError('compensation_plan_schema_missing');
+    const sourcePlan = planSchema.schema.parse(source.operation.plan);
+    const candidate = definition.deriveCompensation(
+      sourcePlan,
+      restrictSnapshot(definition, input.snapshot)
+    );
+    if (candidate && typeof candidate === 'object' && 'then' in candidate
+        && typeof (candidate as { readonly then?: unknown }).then === 'function') {
+      throw new TypeError('async_changeset_compensation_forbidden_in_single_unit_of_work');
+    }
+    const derivation = parseDerivation(
+      candidate as Exclude<typeof candidate, Promise<unknown>>
+    );
+    derived.push({ ...source, derivation });
+  }
+
+  const remediations = derived
+    .map(remediationFor)
+    .filter((value): value is CompensationRemediation => value !== undefined)
+    .sort(bySourceOperation);
+  const operationEvidence = derived.map(operationEvidenceFor).sort(bySourceOperation);
+  const notes = derived
+    .map(noteFor)
+    .filter((value): value is CompensationNote => value !== undefined)
+    .sort(bySourceOperation);
+  const conflicts = derived
+    .map(conflictFor)
+    .filter((value): value is CompensationConflict => value !== undefined)
+    .sort(bySourceOperation);
+  const blockers = derived
+    .filter((entry) => entry.derivation.kind === 'blocked')
+    .map((entry) => ({
+      lineage: entry.lineage,
+      reasonKey: (entry.derivation as Extract<CompensationDerivation<unknown>, { kind: 'blocked' }>).reasonKey
+    }))
+    .sort(bySourceOperation);
+  if (blockers.length > 0) {
+    return deepFreeze({
+      kind: 'blocked', blockers, remediations, conflicts, notes, operationEvidence
+    });
+  }
+
+  const hasUnplannableIrreversible = derived.some(
+    (entry) => entry.derivation.kind === 'irreversible'
+      && entry.derivation.authorInput === undefined
+  );
+  if (hasUnplannableIrreversible) {
+    return deepFreeze({
+      kind: 'irreversible', draft: null, remediations, conflicts, notes, operationEvidence
+    });
+  }
+
+  const operations: FrozenChangesetOperation[] = [];
+  const authorInputs: unknown[] = [];
+  for (const entry of derived) {
+    if (entry.derivation.kind === 'blocked') {
+      throw new TypeError('unreachable_blocked_compensation');
+    }
+    const authorInput = entry.derivation.authorInput;
+    authorInputs.push(deepFreeze(structuredClone(authorInput)));
+    operations.push(planChangesetOperationSynchronous({
+      registry: input.registry,
+      kind: entry.operation.kind,
+      version: entry.operation.version,
+      authorInput,
+      dependencyGroup: entry.operation.dependencyGroup,
+      snapshot: input.snapshot,
+      compensationLineage: entry.lineage
+    }));
+  }
+  const draft = deepFreeze({
+    source: {
+      changesetId: committedSource.changesetId,
+      id: sourceRevision.id,
+      digest: sourceRevision.digest,
+      commitReceiptId: committedSource.commitReceiptId
+    },
+    operations,
+    authorInputs,
+    dependencyGroups: ordered.dependencyGroups
+  });
+  if (remediations.length > 0) {
+    return deepFreeze({
+      kind: 'irreversible', draft, remediations, conflicts, notes, operationEvidence
+    });
+  }
+  if (conflicts.length > 0) {
+    return deepFreeze({ kind: 'partial', draft, conflicts, notes, operationEvidence });
+  }
+  if (notes.length > 0) {
+    return deepFreeze({ kind: 'semantic', draft, notes, operationEvidence });
+  }
+  return deepFreeze({ kind: 'exact', draft, operationEvidence });
 }

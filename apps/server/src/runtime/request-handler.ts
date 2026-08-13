@@ -1,7 +1,9 @@
+import { createHash } from 'node:crypto';
 import { lstatSync, realpathSync } from 'node:fs';
-import { lstat, realpath } from 'node:fs/promises';
+import { lstat, readFile, realpath } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { classifyRoutePath } from '@jooevents/contracts/route-namespaces';
+import type { LiveBuildIdentity } from '@jooevents/contracts/live-build-identity';
 import { protectBackendNotFoundResponse } from '../http/backend-not-found';
 
 export type WebFetchHandler = (request: Request) => Response | Promise<Response>;
@@ -16,6 +18,12 @@ export class StaticBuildError extends Error {
 interface StaticBuild {
   readonly root: string;
   readonly indexPath: string;
+  readonly allowedFiles?: ReadonlyMap<string, LiveBuildIdentity['files'][number]>;
+}
+
+interface StaticFile {
+  readonly path: string;
+  readonly descriptor?: LiveBuildIdentity['files'][number];
 }
 
 function staysInside(root: string, candidate: string): boolean {
@@ -23,7 +31,10 @@ function staysInside(root: string, candidate: string): boolean {
   return pathFromRoot === '' || (!pathFromRoot.startsWith('..') && !isAbsolute(pathFromRoot));
 }
 
-function validateStaticBuild(buildDirectory: string): StaticBuild {
+function validateStaticBuild(
+  buildDirectory: string,
+  identity?: LiveBuildIdentity
+): StaticBuild {
   let root: string;
   try {
     const rootStat = lstatSync(buildDirectory);
@@ -42,14 +53,24 @@ function validateStaticBuild(buildDirectory: string): StaticBuild {
     throw new StaticBuildError('The production web build must contain a direct index.html file.');
   }
 
-  return { root, indexPath };
+  const allowedFiles = identity
+    ? new Map(identity.files.map((file) => [file.path, file] as const))
+    : undefined;
+  if (allowedFiles && !allowedFiles.has('index.html')) {
+    throw new StaticBuildError('The production web build identity must include index.html.');
+  }
+
+  return { root, indexPath, ...(allowedFiles ? { allowedFiles } : {}) };
 }
 
-async function resolveStaticFile(build: StaticBuild, pathname: string): Promise<string | undefined> {
+async function resolveStaticFile(build: StaticBuild, pathname: string): Promise<StaticFile | undefined> {
   const segments = pathname.split('/').slice(1);
   if (segments.length === 0 || segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
     return undefined;
   }
+  const relativePath = segments.join('/');
+  const descriptor = build.allowedFiles?.get(relativePath);
+  if (build.allowedFiles && !descriptor) return undefined;
 
   let cursor = build.root;
   for (const segment of segments) {
@@ -68,7 +89,9 @@ async function resolveStaticFile(build: StaticBuild, pathname: string): Promise<
     const observed = await lstat(cursor);
     if (!observed.isFile() || observed.isSymbolicLink() || observed.nlink !== 1) return undefined;
     const canonical = await realpath(cursor);
-    return canonical === cursor && staysInside(build.root, canonical) ? canonical : undefined;
+    return canonical === cursor && staysInside(build.root, canonical)
+      ? { path: canonical, ...(descriptor ? { descriptor } : {}) }
+      : undefined;
   } catch {
     return undefined;
   }
@@ -87,15 +110,37 @@ function staticCacheControl(pathname: string, isFallback: boolean): string {
   return 'public, max-age=0, must-revalidate';
 }
 
-function staticResponse(request: Request, path: string, pathname: string, isFallback: boolean): Response {
-  const file = Bun.file(path);
+async function staticResponse(
+  request: Request,
+  file: StaticFile,
+  pathname: string,
+  isFallback: boolean
+): Promise<Response> {
+  const source = Bun.file(file.path);
   const headers = new Headers({
     'cache-control': staticCacheControl(pathname, isFallback),
-    'content-length': String(file.size),
-    'content-type': file.type || 'application/octet-stream',
+    'content-length': String(source.size),
+    'content-type': source.type || 'application/octet-stream',
     'x-content-type-options': 'nosniff'
   });
-  return new Response(request.method === 'HEAD' ? null : file, { status: 200, headers });
+  if (!file.descriptor) {
+    return new Response(request.method === 'HEAD' ? null : source, { status: 200, headers });
+  }
+
+  const bytes = await readFile(file.path);
+  const digest = createHash('sha256').update(bytes).digest('hex');
+  if (bytes.byteLength !== file.descriptor.bytes || digest !== file.descriptor.sha256) {
+    return new Response('Application files changed after startup.', {
+      status: 503,
+      headers: {
+        'cache-control': 'no-store, max-age=0',
+        'content-type': 'text/plain; charset=utf-8',
+        'x-content-type-options': 'nosniff'
+      }
+    });
+  }
+  headers.set('content-length', String(bytes.byteLength));
+  return new Response(request.method === 'HEAD' ? null : bytes, { status: 200, headers });
 }
 
 function safePlainNotFound(): Response {
@@ -129,8 +174,9 @@ function invalidPathResponse(): Response {
 export function createProductionRequestHandler(input: {
   readonly backend: WebFetchHandler;
   readonly buildDirectory: string;
+  readonly buildIdentity?: LiveBuildIdentity;
 }): WebFetchHandler {
-  const build = validateStaticBuild(input.buildDirectory);
+  const build = validateStaticBuild(input.buildDirectory, input.buildIdentity);
 
   return async (request) => {
     const classification = classifyRoutePath(new URL(request.url).pathname);
@@ -144,7 +190,11 @@ export function createProductionRequestHandler(input: {
       const staticPath = await resolveStaticFile(build, classification.pathname);
       if (staticPath) return staticResponse(request, staticPath, classification.pathname, false);
       if (acceptsHtmlNavigation(request)) {
-        return staticResponse(request, build.indexPath, classification.pathname, true);
+        const indexDescriptor = build.allowedFiles?.get('index.html');
+        return staticResponse(request, {
+          path: build.indexPath,
+          ...(indexDescriptor ? { descriptor: indexDescriptor } : {})
+        }, classification.pathname, true);
       }
     }
 
@@ -183,8 +233,13 @@ export function createRuntimeRequestHandler(input: {
   readonly mode: BunRuntimeMode;
   readonly backend: WebFetchHandler;
   readonly buildDirectory: string;
+  readonly buildIdentity?: LiveBuildIdentity;
 }): WebFetchHandler {
   return input.mode === 'production'
-    ? createProductionRequestHandler({ backend: input.backend, buildDirectory: input.buildDirectory })
+    ? createProductionRequestHandler({
+        backend: input.backend,
+        buildDirectory: input.buildDirectory,
+        ...(input.buildIdentity ? { buildIdentity: input.buildIdentity } : {})
+      })
     : input.backend;
 }

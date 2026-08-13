@@ -7,12 +7,23 @@ import type {
   ProgramVocabularyStatus
 } from '@jooevents/contracts';
 import {
+  deriveProgramTrackAccent,
+  programVocabularyIdSchema,
+  programVocabularyKindSchema,
+  programVocabularyNameSchema,
+  programVocabularyScopeSchema,
+  programVocabularyStatusSchema,
+  programVocabularyVersionSchema,
+  programTrackAccentSchema
+} from '@jooevents/contracts';
+import {
   encodeCanonicalJson,
   parseAggregateVersion,
   type AggregateVersion
 } from '@jooevents/kernel';
 import {
   createProgramVocabularyState,
+  compareProgramVocabularyCanonicalText,
   nextAggregateVersion,
   normalizeProgramVocabularyName,
   parseProgramVocabularyId,
@@ -24,7 +35,10 @@ import {
   type ProgramVocabularyScope,
   type ProgramVocabularyState
 } from './model';
+import { z } from 'zod';
 import {
+  assertCompleteProgramReferenceSnapshot,
+  captureRegisteredProgramReferences,
   programReferenceUsage,
   sameContributorGuard,
   validateProgramReferenceTargets,
@@ -35,6 +49,7 @@ import {
   type ProgramReferenceSnapshotSource,
   type SafeProgramReferenceDestination
 } from './references';
+import { registerIssuedProgramReferenceSnapshot } from './reference-auth';
 
 export type PlannedProgramVocabularyItem =
   | {
@@ -49,6 +64,7 @@ export type PlannedProgramVocabularyItem =
       readonly kind: 'track';
       readonly id: string;
       readonly name: string;
+      readonly accent: 'lavender' | 'sea' | 'neutral';
       readonly status: ProgramVocabularyStatus;
       readonly version: number;
     }
@@ -165,6 +181,7 @@ export interface ProgramMergeCompensationInput {
 export type ProgramVocabularyAuthorInput = ProgramVocabularyDraftInput | ProgramMergeCompensationInput;
 
 export type ProgramVocabularyPlanningErrorCode =
+  | 'invalid_plan'
   | 'wrong_scope'
   | 'stale_set'
   | 'item_exists'
@@ -189,6 +206,236 @@ function sha256(value: unknown): string {
   return createHash('sha256').update(encodeCanonicalJson(value)).digest('hex');
 }
 
+const canonicalBoundedText = (maximum: number) => z.string()
+  .min(1)
+  .max(maximum)
+  .refine((value) => value.trim() === value);
+const digestSchema = z.string().regex(/^[a-f0-9]{64}$/);
+const stableKeySchema = z.string().regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/);
+const plannedItemSchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    kind: z.literal('room'),
+    id: programVocabularyIdSchema,
+    name: programVocabularyNameSchema,
+    status: programVocabularyStatusSchema,
+    version: programVocabularyVersionSchema,
+    capacity: z.number().int().positive().safe().nullable()
+  }),
+  z.strictObject({
+    kind: z.literal('track'),
+    id: programVocabularyIdSchema,
+    name: programVocabularyNameSchema,
+    accent: programTrackAccentSchema,
+    status: programVocabularyStatusSchema,
+    version: programVocabularyVersionSchema
+  }),
+  z.strictObject({
+    kind: z.literal('format'),
+    id: programVocabularyIdSchema,
+    name: programVocabularyNameSchema,
+    status: programVocabularyStatusSchema,
+    version: programVocabularyVersionSchema
+  })
+]);
+const referenceTargetSchema = z.strictObject({
+  kind: programVocabularyKindSchema,
+  id: programVocabularyIdSchema
+});
+const safeDestinationSchema = z.strictObject({
+  kind: stableKeySchema,
+  id: canonicalBoundedText(300)
+});
+const contributorSchema = z.strictObject({
+  key: stableKeySchema,
+  version: programVocabularyVersionSchema
+});
+const referenceContributionSchema = z.strictObject({
+  contributor: contributorSchema,
+  guard: z.strictObject({
+    id: z.string().regex(/^program_reference:[A-Za-z0-9._~:-]+$/),
+    version: programVocabularyVersionSchema,
+    digest: digestSchema
+  }),
+  liveRepoints: z.array(z.strictObject({
+    referenceKey: canonicalBoundedText(300),
+    expectedVersion: programVocabularyVersionSchema,
+    from: referenceTargetSchema,
+    to: referenceTargetSchema,
+    destination: safeDestinationSchema
+  })),
+  historicalPins: z.array(z.strictObject({
+    referenceKey: canonicalBoundedText(300),
+    version: programVocabularyVersionSchema,
+    item: referenceTargetSchema,
+    destination: safeDestinationSchema
+  }))
+});
+const planBaseSchema = {
+  scope: programVocabularyScopeSchema,
+  expectedSetVersion: programVocabularyVersionSchema,
+  setGuardDigest: digestSchema
+} as const;
+const referencePlanSchema = {
+  referenceRegistryDigest: digestSchema,
+  references: z.array(referenceContributionSchema)
+} as const;
+const rawProgramVocabularyMutationPlanSchema = z.discriminatedUnion('action', [
+  z.strictObject({ action: z.literal('create'), ...planBaseSchema, after: plannedItemSchema }),
+  z.strictObject({ action: z.literal('edit'), ...planBaseSchema, before: plannedItemSchema, after: plannedItemSchema }),
+  z.strictObject({ action: z.literal('retire'), ...planBaseSchema, before: plannedItemSchema, after: plannedItemSchema }),
+  z.strictObject({ action: z.literal('restore'), ...planBaseSchema, before: plannedItemSchema, after: plannedItemSchema }),
+  z.strictObject({ action: z.literal('delete'), ...planBaseSchema, before: plannedItemSchema, ...referencePlanSchema }),
+  z.strictObject({
+    action: z.literal('merge'),
+    ...planBaseSchema,
+    sourceBefore: plannedItemSchema,
+    sourceAfter: plannedItemSchema,
+    target: plannedItemSchema,
+    ...referencePlanSchema
+  }),
+  z.strictObject({
+    action: z.literal('merge_compensation'),
+    ...planBaseSchema,
+    sourceBefore: plannedItemSchema,
+    sourceAfter: plannedItemSchema,
+    target: plannedItemSchema,
+    restoreSource: z.boolean(),
+    ...referencePlanSchema
+  })
+]);
+
+function sameCanonicalValue(left: unknown, right: unknown): boolean {
+  return sha256(left) === sha256(right);
+}
+
+function sameItemIdentity(
+  left: PlannedProgramVocabularyItem,
+  right: PlannedProgramVocabularyItem
+): boolean {
+  return left.kind === right.kind && left.id === right.id;
+}
+
+function sameItemExcept(
+  left: PlannedProgramVocabularyItem,
+  right: PlannedProgramVocabularyItem,
+  omitted: ReadonlySet<string>
+): boolean {
+  const strip = (item: PlannedProgramVocabularyItem) => Object.fromEntries(
+    Object.entries(item).filter(([key]) => !omitted.has(key))
+  );
+  return sameCanonicalValue(strip(left), strip(right));
+}
+
+function areStrictlyOrderedBy<Value>(
+  values: readonly Value[],
+  identity: (value: Value) => string
+): boolean {
+  return values.every((value, index) => index === 0
+    || compareProgramVocabularyCanonicalText(identity(values[index - 1]!), identity(value)) < 0);
+}
+
+function contributionIdentity(value: { readonly contributor: ProgramReferenceContributorRef }): string {
+  return `${value.contributor.key}@${value.contributor.version}`;
+}
+
+function referencesAreCanonical(
+  references: readonly ProgramReferenceContributionPlan[],
+  source: Pick<PlannedProgramVocabularyItem, 'kind' | 'id'>,
+  target: Pick<PlannedProgramVocabularyItem, 'kind' | 'id'> | undefined,
+  direction: 'forward' | 'reverse' | 'none'
+): boolean {
+  if (!areStrictlyOrderedBy(references, contributionIdentity)) return false;
+  const guardIds = new Set<string>();
+  for (const contribution of references) {
+    if (guardIds.has(contribution.guard.id)) return false;
+    guardIds.add(contribution.guard.id);
+    if (!areStrictlyOrderedBy(contribution.liveRepoints, (value) => value.referenceKey)
+        || !areStrictlyOrderedBy(contribution.historicalPins, (value) => value.referenceKey)) return false;
+    const keys = [
+      ...contribution.liveRepoints.map((value) => value.referenceKey),
+      ...contribution.historicalPins.map((value) => value.referenceKey)
+    ];
+    if (new Set(keys).size !== keys.length) return false;
+    if (direction === 'none' && (contribution.liveRepoints.length !== 0 || contribution.historicalPins.length !== 0)) {
+      return false;
+    }
+    for (const repoint of contribution.liveRepoints) {
+      const from = direction === 'reverse' ? target : source;
+      const to = direction === 'reverse' ? source : target;
+      if (!from || !to
+          || repoint.from.kind !== from.kind || repoint.from.id !== from.id
+          || repoint.to.kind !== to.kind || repoint.to.id !== to.id) return false;
+    }
+    for (const pin of contribution.historicalPins) {
+      if (pin.item.kind !== source.kind || pin.item.id !== source.id) return false;
+    }
+  }
+  return true;
+}
+
+function mutationPlanIsCoherent(plan: ProgramVocabularyMutationPlan): boolean {
+  const items = plan.action === 'create'
+    ? [plan.after]
+    : plan.action === 'edit' || plan.action === 'retire' || plan.action === 'restore'
+      ? [plan.before, plan.after]
+      : plan.action === 'delete'
+        ? [plan.before]
+        : [plan.sourceBefore, plan.sourceAfter, plan.target];
+  if (items.some((item) => item.kind === 'track'
+      && item.accent !== deriveProgramTrackAccent(item.id))) return false;
+  if (plan.action === 'create') {
+    return plan.after.status === 'active' && plan.after.version === 1;
+  }
+  if (plan.action === 'edit') {
+    return sameItemIdentity(plan.before, plan.after)
+      && plan.before.status === plan.after.status
+      && plan.after.version === plan.before.version + 1;
+  }
+  if (plan.action === 'retire' || plan.action === 'restore') {
+    const beforeStatus = plan.action === 'retire' ? 'active' : 'retired';
+    const afterStatus = plan.action === 'retire' ? 'retired' : 'active';
+    return sameItemIdentity(plan.before, plan.after)
+      && plan.before.status === beforeStatus
+      && plan.after.status === afterStatus
+      && plan.after.version === plan.before.version + 1
+      && sameItemExcept(plan.before, plan.after, new Set(['status', 'version']));
+  }
+  if (plan.action === 'delete') {
+    return referencesAreCanonical(plan.references, plan.before, undefined, 'none');
+  }
+  const sameKind = plan.sourceBefore.kind === plan.sourceAfter.kind
+    && plan.sourceBefore.kind === plan.target.kind;
+  if (!sameKind || plan.sourceBefore.id === plan.target.id
+      || !sameItemIdentity(plan.sourceBefore, plan.sourceAfter)) return false;
+  if (plan.action === 'merge') {
+    return plan.sourceAfter.status === 'retired'
+      && plan.sourceAfter.version === plan.sourceBefore.version + 1
+      && plan.target.status === 'active'
+      && sameItemExcept(plan.sourceBefore, plan.sourceAfter, new Set(['status', 'version']))
+      && referencesAreCanonical(plan.references, plan.sourceBefore, plan.target, 'forward');
+  }
+  const sourceTransition = plan.restoreSource
+    ? plan.sourceAfter.status === 'active'
+      && plan.sourceAfter.version === plan.sourceBefore.version + 1
+      && sameItemExcept(plan.sourceBefore, plan.sourceAfter, new Set(['status', 'version']))
+    : sameCanonicalValue(plan.sourceBefore, plan.sourceAfter);
+  return sourceTransition
+    && referencesAreCanonical(plan.references, plan.sourceBefore, plan.target, 'reverse');
+}
+
+/** Parses immutable mutation evidence without normalizing or repairing any field. */
+export function parseProgramVocabularyMutationPlan(value: unknown): ProgramVocabularyMutationPlan {
+  const parsed = rawProgramVocabularyMutationPlanSchema.safeParse(value);
+  if (!parsed.success || !mutationPlanIsCoherent(parsed.data as ProgramVocabularyMutationPlan)) {
+    throw new ProgramVocabularyPlanningError('invalid_plan');
+  }
+  return deepFreeze(parsed.data as ProgramVocabularyMutationPlan);
+}
+
+export function programVocabularyMutationPlanDigest(value: unknown): string {
+  return sha256(parseProgramVocabularyMutationPlan(value));
+}
+
 function scopeDto(scope: ProgramVocabularyScope): ProgramVocabularyScopeDto {
   return { workspaceId: scope.workspaceId, eventId: scope.eventId };
 }
@@ -206,7 +453,8 @@ export function plannedProgramVocabularyItem(item: ProgramVocabularyItem): Plann
   }
   if (item.kind === 'track') {
     return Object.freeze({
-      kind: 'track', id: item.id, name: item.name, status: item.status, version: item.version
+      kind: 'track', id: item.id, name: item.name, accent: item.accent,
+      status: item.status, version: item.version
     });
   }
   return Object.freeze({
@@ -299,7 +547,7 @@ function captureReferences(
   registry: ProgramReferenceContributorRegistry,
   source: ProgramReferenceSnapshotSource
 ): CompleteProgramReferenceSnapshot {
-  const snapshot = registry.capture(state.scope, source);
+  const snapshot = captureRegisteredProgramReferences({ registry, scope: state.scope, source });
   validateProgramReferenceTargets(state, snapshot);
   return snapshot;
 }
@@ -309,10 +557,10 @@ function planCreate(
   state: ProgramVocabularyState
 ): ProgramCreatePlan {
   requireSetGuard(state, input.scope, input.expectedSetVersion);
-  if (resolveProgramVocabularyItem(state, input.item.kind, input.item.id)) {
+  const id = parseProgramVocabularyId(input.item.kind, input.item.id);
+  if (programVocabularyItems(state).some((item) => item.id === id)) {
     throw new ProgramVocabularyPlanningError('item_exists');
   }
-  const id = parseProgramVocabularyId(input.item.kind, input.item.id);
   const after: PlannedProgramVocabularyItem = input.item.kind === 'room'
     ? {
         kind: 'room', id, name: normalizeProgramVocabularyName(input.item.name),
@@ -321,7 +569,7 @@ function planCreate(
     : input.item.kind === 'track'
       ? {
           kind: 'track', id, name: normalizeProgramVocabularyName(input.item.name),
-          status: 'active', version: 1
+          accent: deriveProgramTrackAccent(id), status: 'active', version: 1
         }
       : {
           kind: 'format', id, name: normalizeProgramVocabularyName(input.item.name),
@@ -489,44 +737,94 @@ function itemMatches(item: ProgramVocabularyItem | undefined, expected: PlannedP
   return item !== undefined && itemDigest(item) === itemDigest(expected);
 }
 
+function referencePlansMatch(
+  left: readonly ProgramReferenceContributionPlan[],
+  right: readonly ProgramReferenceContributionPlan[]
+): boolean {
+  return sameCanonicalValue(left, right);
+}
+
+function expectedReferencePlans(
+  plan: ProgramDeletePlan | ProgramMergePlan | ProgramMergeCompensationPlan,
+  current: CompleteProgramReferenceSnapshot
+): readonly ProgramReferenceContributionPlan[] | undefined {
+  if (plan.action === 'delete') {
+    if (programReferenceUsage(current, plan.before).current !== 0
+        || programReferenceUsage(current, plan.before).historicalPins !== 0) return undefined;
+    return current.contributors.map((contributor) => contributorPlan(contributor, plan.before));
+  }
+  if (plan.action === 'merge') {
+    return current.contributors.map((contributor) => contributorPlan(
+      contributor,
+      plan.sourceBefore,
+      plan.target
+    ));
+  }
+  const plannedByContributor = new Map(plan.references.map((contribution) => [
+    contributionIdentity(contribution),
+    contribution
+  ]));
+  return current.contributors.map((contributor) => {
+    const planned = plannedByContributor.get(contributionIdentity(contributor));
+    if (!planned) return contributorPlan(contributor, plan.target, plan.sourceBefore, new Set());
+    const selected = new Set(planned.liveRepoints.map((repoint) => repoint.referenceKey));
+    const targetContribution = contributorPlan(
+      contributor,
+      plan.target,
+      plan.sourceBefore,
+      selected
+    );
+    return deepFreeze({
+      ...targetContribution,
+      historicalPins: contributorPlan(contributor, plan.sourceBefore).historicalPins
+    });
+  });
+}
+
 export function validateProgramVocabularyPlan(
   state: ProgramVocabularyState,
   plan: ProgramVocabularyMutationPlan,
   registry: ProgramReferenceContributorRegistry,
   source: ProgramReferenceSnapshotSource
 ): ProgramVocabularyPlanningErrorCode | null {
-  if (!sameScopeDto(state.scope, plan.scope)) return 'wrong_scope';
-  if (state.setVersion !== plan.expectedSetVersion || programVocabularySetDigest(state) !== plan.setGuardDigest) {
+  let parsedPlan: ProgramVocabularyMutationPlan;
+  try {
+    parsedPlan = parseProgramVocabularyMutationPlan(plan);
+  } catch {
+    return 'invalid_plan';
+  }
+  if (!sameScopeDto(state.scope, parsedPlan.scope)) return 'wrong_scope';
+  if (state.setVersion !== parsedPlan.expectedSetVersion
+      || programVocabularySetDigest(state) !== parsedPlan.setGuardDigest) {
     return 'stale_set';
   }
-  if (plan.action === 'create') {
-    return resolveProgramVocabularyItem(state, plan.after.kind, plan.after.id) ? 'item_exists' : null;
+  if (parsedPlan.action === 'create') {
+    return programVocabularyItems(state).some((item) => item.id === parsedPlan.after.id) ? 'item_exists' : null;
   }
-  const expected = plan.action === 'merge' || plan.action === 'merge_compensation'
-    ? plan.sourceBefore
-    : plan.before;
+  const expected = parsedPlan.action === 'merge' || parsedPlan.action === 'merge_compensation'
+    ? parsedPlan.sourceBefore
+    : parsedPlan.before;
   if (!itemMatches(resolveProgramVocabularyItem(state, expected.kind, expected.id), expected)) return 'stale_item';
-  if (plan.action === 'merge' || plan.action === 'merge_compensation') {
-    if (!itemMatches(resolveProgramVocabularyItem(state, plan.target.kind, plan.target.id), plan.target)) return 'stale_item';
+  if (parsedPlan.action === 'merge' || parsedPlan.action === 'merge_compensation') {
+    if (!itemMatches(
+      resolveProgramVocabularyItem(state, parsedPlan.target.kind, parsedPlan.target.id),
+      parsedPlan.target
+    )) return 'stale_item';
   }
-  if (plan.action === 'delete' || plan.action === 'merge' || plan.action === 'merge_compensation') {
-    if (registry.registryDigestSha256 !== plan.referenceRegistryDigest) return 'stale_reference';
+  if (parsedPlan.action === 'delete'
+      || parsedPlan.action === 'merge'
+      || parsedPlan.action === 'merge_compensation') {
+    if (registry.registryDigestSha256 !== parsedPlan.referenceRegistryDigest) return 'stale_reference';
     let current: CompleteProgramReferenceSnapshot;
     try {
       current = captureReferences(state, registry, source);
     } catch {
       return 'stale_reference';
     }
-    if (current.registryDigestSha256 !== plan.referenceRegistryDigest
-        || current.contributors.length !== plan.references.length) return 'stale_reference';
-    for (const expectedContributor of plan.references) {
-      const actual = current.contributors.find((entry) =>
-        entry.contributor.key === expectedContributor.contributor.key
-        && entry.contributor.version === expectedContributor.contributor.version
-      );
-      if (!actual || !sameContributorGuard(actual, expectedContributor)) {
-        return 'stale_reference';
-      }
+    if (current.registryDigestSha256 !== parsedPlan.referenceRegistryDigest) return 'stale_reference';
+    const expectedReferences = expectedReferencePlans(parsedPlan, current);
+    if (!expectedReferences || !referencePlansMatch(parsedPlan.references, expectedReferences)) {
+      return 'stale_reference';
     }
   }
   return null;
@@ -562,38 +860,51 @@ export function applyProgramVocabularyPlan(
   state: ProgramVocabularyState,
   plan: ProgramVocabularyMutationPlan
 ): ProgramVocabularyState {
-  if (!sameScopeDto(state.scope, plan.scope) || state.setVersion !== plan.expectedSetVersion
-      || programVocabularySetDigest(state) !== plan.setGuardDigest) {
+  const parsedPlan = parseProgramVocabularyMutationPlan(plan);
+  if (!sameScopeDto(state.scope, parsedPlan.scope) || state.setVersion !== parsedPlan.expectedSetVersion
+      || programVocabularySetDigest(state) !== parsedPlan.setGuardDigest) {
     throw new ProgramVocabularyPlanningError('stale_set');
   }
   const items = programVocabularyItems(state).map(plannedProgramVocabularyItem);
-  if (plan.action === 'create') {
-    if (items.some((item) => item.id === plan.after.id)) throw new ProgramVocabularyPlanningError('item_exists');
-    items.push(plan.after);
+  if (parsedPlan.action === 'create') {
+    if (items.some((item) => item.id === parsedPlan.after.id)) throw new ProgramVocabularyPlanningError('item_exists');
+    items.push(parsedPlan.after);
   } else {
-    const before = plan.action === 'merge' || plan.action === 'merge_compensation'
-      ? plan.sourceBefore
-      : plan.before;
+    const before = parsedPlan.action === 'merge' || parsedPlan.action === 'merge_compensation'
+      ? parsedPlan.sourceBefore
+      : parsedPlan.before;
     const index = items.findIndex((item) => item.kind === before.kind && item.id === before.id);
     if (index < 0 || itemDigest(items[index]!) !== itemDigest(before)) {
       throw new ProgramVocabularyPlanningError('stale_item');
     }
-    if (plan.action === 'delete') items.splice(index, 1);
-    else if (plan.action === 'merge' || plan.action === 'merge_compensation') items[index] = plan.sourceAfter;
-    else items[index] = plan.after;
+    if (parsedPlan.action === 'merge' || parsedPlan.action === 'merge_compensation') {
+      const target = resolveProgramVocabularyItem(state, parsedPlan.target.kind, parsedPlan.target.id);
+      if (!itemMatches(target, parsedPlan.target)) throw new ProgramVocabularyPlanningError('stale_item');
+    }
+    if (parsedPlan.action === 'delete') items.splice(index, 1);
+    else if (parsedPlan.action === 'merge' || parsedPlan.action === 'merge_compensation') {
+      items[index] = parsedPlan.sourceAfter;
+    } else items[index] = parsedPlan.after;
   }
   return createProgramVocabularyState(stateInputFrom(state, items));
 }
 
 export function applyProgramReferenceRepoints(
   current: CompleteProgramReferenceSnapshot,
-  plan: Pick<ProgramMergePlan | ProgramMergeCompensationPlan, 'referenceRegistryDigest' | 'references'>
+  plan: ProgramMergePlan | ProgramMergeCompensationPlan
 ): CompleteProgramReferenceSnapshot {
-  if (current.registryDigestSha256 !== plan.referenceRegistryDigest) {
+  assertCompleteProgramReferenceSnapshot(current);
+  const parsedPlan = parseProgramVocabularyMutationPlan(plan);
+  if (parsedPlan.action !== 'merge' && parsedPlan.action !== 'merge_compensation') {
+    throw new ProgramVocabularyPlanningError('invalid_plan');
+  }
+  const expectedReferences = expectedReferencePlans(parsedPlan, current);
+  if (current.registryDigestSha256 !== parsedPlan.referenceRegistryDigest
+      || !expectedReferences || !referencePlansMatch(parsedPlan.references, expectedReferences)) {
     throw new ProgramVocabularyPlanningError('stale_reference');
   }
   const contributors = current.contributors.map((contributor) => {
-    const expected = plan.references.find((entry) =>
+    const expected = parsedPlan.references.find((entry) =>
       entry.contributor.key === contributor.contributor.key
       && entry.contributor.version === contributor.contributor.version
     );
@@ -628,7 +939,7 @@ export function applyProgramReferenceRepoints(
       references
     });
   });
-  return deepFreeze({ registryDigestSha256: current.registryDigestSha256, contributors });
+  return registerIssuedProgramReferenceSnapshot(deepFreeze({ ...current, contributors }));
 }
 
 export function mutationAffectedItems(plan: ProgramVocabularyMutationPlan): readonly PlannedProgramVocabularyItem[] {

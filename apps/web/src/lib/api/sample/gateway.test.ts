@@ -14,4 +14,9 @@ describe('sample workspace gateway', () => {
 		expect(Object.isFrozen(sampleWorkspaceGateway.source)).toBe(true);
 		expect(Object.isFrozen(sampleWorkspaceGateway.source.scenario)).toBe(true);
 	});
+
+	test('carries the viewer projection, organizer until a reviewer is selected', () => {
+		expect(sampleWorkspaceGateway.viewer).toEqual({ kind: 'organizer' });
+		expect(Object.isFrozen(sampleWorkspaceGateway.viewer)).toBe(true);
+	});
 });

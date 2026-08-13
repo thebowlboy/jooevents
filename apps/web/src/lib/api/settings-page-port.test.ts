@@ -1,0 +1,253 @@
+import { describe, expect, test } from 'bun:test';
+import type { OperationReceiptRef } from '@jooevents/contracts';
+import { createSampleEventProgramPort } from './event-program/sample';
+import { configuredEventProgramFixture } from './event-program/fixtures';
+import { createProgramVocabularySettingsAdapter } from './program-vocabulary-settings-adapter';
+import type { WorkspaceTeamLiveReadResult } from './operations/workspace-team-live';
+import { sampleWorkspaceGateway } from './sample/gateway';
+import {
+	createLiveSettingsPagePort,
+	createSampleSettingsPagePort
+} from './settings-page-port';
+import type {
+	WorkspaceTeamSettingsMutationResult,
+	WorkspaceTeamSettingsPort
+} from './workspace-team-settings-adapter';
+import type {
+	WorkspaceTeamMemberView,
+	WorkspaceTeamRoleView,
+	WorkspaceTeamSnapshotView
+} from './view-models/workspace-team';
+
+const id = (value: number) =>
+	`00000000-0000-4000-8000-${value.toString(16).padStart(12, '0')}`;
+const digest = (value: string) => value.repeat(64);
+
+const role: WorkspaceTeamRoleView = {
+	key: 'workspace_admin',
+	name: 'Workspace Admin',
+	version: 1
+};
+
+const member: WorkspaceTeamMemberView = {
+	id: id(1),
+	kind: 'member',
+	userId: id(2),
+	name: 'Ada Lovelace',
+	email: 'ada@example.test',
+	role,
+	status: 'active',
+	version: 1,
+	hasAdditionalAccess: false,
+	subject: { kind: 'member', membershipId: id(1), version: 1 }
+};
+
+const invitation: WorkspaceTeamMemberView = {
+	id: id(3),
+	kind: 'invitation',
+	name: 'Pending invitation',
+	email: 'reviewer@example.test',
+	role,
+	status: 'invited',
+	delivery: 'awaiting_activation',
+	version: 1,
+	hasAdditionalAccess: false,
+	subject: { kind: 'invitation', reservationId: id(3), version: 1 }
+};
+
+const before: WorkspaceTeamSnapshotView = {
+	schemaVersion: 1,
+	version: 1,
+	digestSha256: digest('a'),
+	roles: [role],
+	members: [member]
+};
+
+const afterInvite: WorkspaceTeamSnapshotView = {
+	...before,
+	version: 2,
+	digestSha256: digest('b'),
+	members: [member, invitation]
+};
+
+const receipt: OperationReceiptRef = {
+	id: id(20),
+	operationName: 'changeset.commit',
+	operationVersion: 1
+};
+
+const readSuccess: WorkspaceTeamLiveReadResult = {
+	kind: 'success',
+	data: before,
+	correlationId: id(21)
+};
+
+const refused: WorkspaceTeamSettingsMutationResult = {
+	kind: 'refused',
+	code: 'subject_missing',
+	reason: 'That team entry is no longer present.'
+};
+
+function teamPort(input: {
+	readonly read?: WorkspaceTeamLiveReadResult;
+	readonly invite?: WorkspaceTeamSettingsMutationResult;
+	readonly changeRole?: WorkspaceTeamSettingsMutationResult;
+	readonly remove?: WorkspaceTeamSettingsMutationResult;
+} = {}): WorkspaceTeamSettingsPort {
+	return Object.freeze({
+		source: Object.freeze({ kind: 'live' as const }),
+		async members() {
+			return input.read ?? readSuccess;
+		},
+		async invite() {
+			return input.invite ?? refused;
+		},
+		async changeRole() {
+			return input.changeRole ?? refused;
+		},
+		async removeMember() {
+			return input.remove ?? refused;
+		}
+	});
+}
+
+function vocabulary(kind: 'sample' | 'live') {
+	const sample = createSampleEventProgramPort({ fixture: configuredEventProgramFixture });
+	const adapter = createProgramVocabularySettingsAdapter({
+		program: sample.port,
+		changesets: sample.changesets
+	});
+	return kind === 'sample'
+		? adapter
+		: Object.freeze({ ...adapter, source: Object.freeze({ kind: 'live' as const }) });
+}
+
+function committedInvite(): WorkspaceTeamSettingsMutationResult {
+	return {
+		kind: 'success',
+		data: {
+			committed: {
+				action: 'invite',
+				changesetId: id(22),
+				revisionId: id(23),
+				revisionDigest: digest('c'),
+				committedHeadVersion: 2,
+				change: {
+					action: 'invite',
+					recipientHint: 'recipient-0123456789ab',
+					role,
+					invitationStatus: 'recorded',
+					delivery: 'awaiting_activation'
+				}
+			},
+			team: afterInvite,
+			effect: {
+				action: 'invite',
+				invitationStatus: 'recorded',
+				delivery: 'awaiting_activation',
+				recipientHint: 'recipient-0123456789ab',
+				currentInvitation: invitation
+			}
+		},
+		receipt,
+		correlationId: id(24)
+	};
+}
+
+function createLivePort(team: WorkspaceTeamSettingsPort = teamPort()) {
+	return createLiveSettingsPagePort({
+		event: {
+			get: sampleWorkspaceGateway.api.settings.get,
+			update: sampleWorkspaceGateway.api.settings.update
+		},
+		team,
+		vocab: vocabulary('live'),
+		fields: sampleWorkspaceGateway.api.fields
+	});
+}
+
+describe('tuned Settings page source seam', () => {
+	test('keeps the resettable sample on the same page contract', async () => {
+		const port = createSampleSettingsPagePort(sampleWorkspaceGateway.api);
+
+		expect(port.source).toEqual({ kind: 'sample' });
+		expect(port.workspace.summarySnapshot()).toBe(sampleWorkspaceGateway.api.workspace.summarySnapshot());
+		expect(await port.team.members()).toMatchObject({ kind: 'success' });
+	});
+
+	test('refuses a sample vocabulary inside the live composition', () => {
+		expect(() => createLiveSettingsPagePort({
+			event: {
+				get: sampleWorkspaceGateway.api.settings.get,
+				update: sampleWorkspaceGateway.api.settings.update
+			},
+			team: teamPort(),
+			vocab: vocabulary('sample'),
+			fields: sampleWorkspaceGateway.api.fields
+		})).toThrow('live_settings_source_required');
+	});
+
+	test('maps canonical reference usage and nullable room capacity without inventing workflow counts', async () => {
+		const port = createLivePort();
+		const [rooms, tracks, team] = await Promise.all([
+			port.vocab.rooms(),
+			port.vocab.tracks(),
+			port.team.members()
+		]);
+
+		expect(rooms.find((room) => room.name === 'Workshop room')).toMatchObject({
+			capacity: null,
+			usage: { currentReferences: 0, historicalPins: 0 }
+		});
+		expect(Object.keys(tracks[0]!.usage).sort()).toEqual([
+			'currentReferences', 'historicalPins'
+		]);
+		expect(team).toEqual({
+			kind: 'success',
+			members: [{
+				id: member.id,
+				name: member.name,
+				email: member.email,
+				role: member.role.name,
+				status: member.status
+			}]
+		});
+	});
+
+	test('reports a recorded invitation as awaiting activation rather than sent', async () => {
+		const port = createLivePort(teamPort({ invite: committedInvite() }));
+		const result = await port.team.invite('reviewer@example.test', 'Workspace Admin');
+
+		expect(result).toMatchObject({
+			ok: true,
+			committed: true,
+			message: 'Invitation recorded for reviewer@example.test. Delivery is awaiting activation.',
+			members: [{ id: member.id }, { id: invitation.id, status: 'invited' }]
+		});
+		expect(JSON.stringify(result)).not.toContain('Invitation sent');
+	});
+
+	test('keeps a committed change committed when its refresh cannot reconcile', async () => {
+		const committed = committedInvite();
+		if (committed.kind !== 'success') throw new TypeError('expected_committed_invite');
+		const port = createLivePort(teamPort({
+			invite: {
+				kind: 'committed_refresh_failed',
+				committed: committed.data.committed,
+				receipt: committed.receipt,
+				correlationId: committed.correlationId,
+				refresh: {
+					kind: 'unavailable',
+					operation: 'members',
+					reason: 'operation_not_active'
+				}
+			}
+		}));
+
+		expect(await port.team.invite('reviewer@example.test', 'Workspace Admin')).toEqual({
+			ok: true,
+			committed: true,
+			message: 'The team change was committed. Refresh to reconcile the latest team list.'
+		});
+	});
+});

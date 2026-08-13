@@ -11,10 +11,17 @@
 	 * without an anchor there is nothing to compare and the panel says so rather
 	 * than rendering an empty frame.
 	 */
+	import type { ReviewPagePort } from '$lib/api/review-page-port';
 	import { applyParams, param, paramIn } from '$lib/features/workspace/url-state.svelte';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
 	import LineupPanel, { sliceKeys } from './LineupPanel.svelte';
 	import type { SliceKey } from './LineupPanel.svelte';
+
+	interface Props {
+		port: ReviewPagePort;
+	}
+
+	let { port }: Props = $props();
 
 	const anchorId = $derived(param('anchor'));
 	const slice = $derived(paramIn('slice', sliceKeys, 'track'));
@@ -28,4 +35,4 @@
 
 <CommitReceipt />
 
-<LineupPanel {anchorId} {slice} onSliceChange={switchSlice} heading="Line-up" />
+<LineupPanel {port} {anchorId} {slice} onSliceChange={switchSlice} heading="Line-up" />

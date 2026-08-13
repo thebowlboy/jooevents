@@ -3,6 +3,8 @@ import type {
 	ProgramRoomDto,
 	ProgramTrackDto,
 	ProgramVocabularyDeleteEligibilityDto,
+	ProgramVocabularyDraftData,
+	ProgramVocabularySafeDiff,
 	ProgramVocabularySnapshotDto,
 	ProgramVocabularyUsageDto
 } from '@jooevents/contracts';
@@ -11,6 +13,9 @@ import type {
 	ProgramRoomView,
 	ProgramTrackView,
 	ProgramVocabularyDeleteAvailabilityView,
+	ProgramVocabularyDiffItemView,
+	ProgramVocabularyDraftChangeView,
+	ProgramVocabularyDraftView,
 	ProgramVocabularySnapshotView,
 	ProgramVocabularyUsageView
 } from '../view-models/program-vocabulary';
@@ -76,7 +81,7 @@ function mapRoom(room: ProgramRoomDto): ProgramRoomView {
 }
 
 function mapTrack(track: ProgramTrackDto): ProgramTrackView {
-	return Object.freeze({ kind: 'track', ...mapCommon(track) });
+	return Object.freeze({ kind: 'track', ...mapCommon(track), accent: track.accent });
 }
 
 function mapFormat(format: ProgramFormatDto): ProgramFormatView {
@@ -93,5 +98,96 @@ export function mapProgramVocabularySnapshot(
 		rooms: Object.freeze(snapshot.rooms.map(mapRoom)),
 		tracks: Object.freeze(snapshot.tracks.map(mapTrack)),
 		formats: Object.freeze(snapshot.formats.map(mapFormat))
+	});
+}
+
+type SafeDiffItem = Extract<ProgramVocabularySafeDiff, { action: 'create' }>['after'];
+
+function mapDiffItem(item: SafeDiffItem): ProgramVocabularyDiffItemView {
+	switch (item.kind) {
+		case 'room':
+			return Object.freeze({
+				kind: item.kind,
+				id: item.id,
+				name: item.name,
+				status: item.status,
+				version: item.version,
+				capacity: item.capacity
+			});
+		case 'track':
+			return Object.freeze({
+				kind: item.kind,
+				id: item.id,
+				name: item.name,
+				accent: item.accent,
+				status: item.status,
+				version: item.version
+			});
+		case 'format':
+			return Object.freeze({
+				kind: item.kind,
+				id: item.id,
+				name: item.name,
+				status: item.status,
+				version: item.version
+			});
+		default:
+			return unreachable(item);
+	}
+}
+
+function mapDraftChange(diff: ProgramVocabularySafeDiff): ProgramVocabularyDraftChangeView {
+	switch (diff.action) {
+		case 'create':
+			return Object.freeze({ action: diff.action, before: null, after: mapDiffItem(diff.after) });
+		case 'edit':
+		case 'retire':
+		case 'restore':
+			return Object.freeze({
+				action: diff.action,
+				before: mapDiffItem(diff.before),
+				after: mapDiffItem(diff.after)
+			});
+		case 'delete':
+			return Object.freeze({
+				action: diff.action,
+				before: mapDiffItem(diff.before),
+				after: null,
+				usage: mapUsage(diff.usage)
+			});
+		case 'merge':
+			return Object.freeze({
+				action: diff.action,
+				sourceBefore: mapDiffItem(diff.sourceBefore),
+				sourceAfter: mapDiffItem(diff.sourceAfter),
+				target: mapDiffItem(diff.target),
+				liveRepoints: diff.liveRepoints,
+				historicalPinsPreserved: diff.historicalPinsPreserved
+			});
+		case 'merge_compensation':
+			throw new TypeError('A draft result cannot contain a merge compensation diff.');
+		default:
+			return unreachable(diff);
+	}
+}
+
+export function mapProgramVocabularyDraft(draft: ProgramVocabularyDraftData): ProgramVocabularyDraftView {
+	if (draft.safeDiff.action !== draft.action) {
+		throw new TypeError('Program Vocabulary draft action does not match its safe diff.');
+	}
+	return Object.freeze({
+		schemaVersion: draft.schemaVersion,
+		changesetId: draft.changesetId,
+		headVersion: draft.headVersion,
+		status: draft.status,
+		revision: Object.freeze({ ...draft.revision }),
+		riskTier: draft.riskTier,
+		approvalPolicy: Object.freeze({
+			key: draft.approvalPolicy.reference.key,
+			version: draft.approvalPolicy.reference.version,
+			definitionDigestSha256: draft.approvalPolicy.definitionDigestSha256,
+			requirement: draft.approvalPolicy.requirement
+		}),
+		change: mapDraftChange(draft.safeDiff)
 	});
 }

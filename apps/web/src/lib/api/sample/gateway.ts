@@ -1,5 +1,6 @@
 import type { WorkspaceGateway } from '../workspace-gateway';
 import { api, sampleScenario } from '../workspace';
+import { sampleViewer } from './registry';
 
 const source = Object.freeze({
 	kind: 'sample' as const,
@@ -8,5 +9,6 @@ const source = Object.freeze({
 
 export const sampleWorkspaceGateway = Object.freeze({
 	api,
-	source
+	source,
+	viewer: Object.freeze(sampleViewer())
 }) satisfies WorkspaceGateway;

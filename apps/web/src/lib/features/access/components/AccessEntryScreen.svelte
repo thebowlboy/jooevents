@@ -2,23 +2,23 @@
   import { onMount, tick } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
-  import { getAccessContext } from '$lib/api/access';
-  import { signOut, startExternalSignIn } from '$lib/api/auth';
+  import { entryDependencies } from 'jooevents-entry-deps';
   import { AccessEntryController, type AccessEntryState } from '../AccessEntryController';
   import { parseEntryNotice } from '../copy';
   import AccessEntryFrame from './AccessEntryFrame.svelte';
   import EntryState from './EntryState.svelte';
 
   let state = $state<AccessEntryState>({ kind: 'resolving', delayed: false });
-  let focusNextHeading = false;
+  type FocusTarget = 'heading' | 'link-email' | 'confirmation';
+  let focusNext: FocusTarget | null = null;
   const controller = new AccessEntryController({
-    getContext: getAccessContext,
-    startGoogle: startExternalSignIn,
-    signOut,
+    ...entryDependencies.operator,
     navigate: (path, replace) => goto(path, { replaceState: replace, noScroll: true, keepFocus: true })
   });
 
-  const title = $derived(state.kind === 'anonymous' || state.kind === 'starting_google'
+  const title = $derived(state.kind === 'link_requested'
+    ? 'Check your email · JooEvents'
+    : state.kind === 'anonymous' || state.kind === 'starting_google'
     ? 'Sign in · JooEvents'
     : state.kind === 'provisioning' ? 'Preparing your workspace · JooEvents'
     : state.kind === 'pending_review' ? 'Access under review · JooEvents'
@@ -38,19 +38,42 @@
     });
   });
 
-  function userAction(action: () => void | Promise<void>) {
-    focusNextHeading = true;
+  function userAction(action: () => void | Promise<void>, focus: FocusTarget = 'heading') {
+    focusNext = focus;
     void action();
+  }
+
+  async function moveFocus(selector: string) {
+    await tick();
+    document.querySelector<HTMLElement>(selector)?.focus();
   }
 
   onMount(() => {
     const unsubscribe = controller.subscribe(async (next) => {
       state = next;
-      if (focusNextHeading && next.kind !== 'resolving' && next.kind !== 'starting_google') {
-        focusNextHeading = false;
-        await tick();
-        document.querySelector<HTMLElement>('[data-entry-heading]')?.focus();
+      const target = focusNext;
+      if (!target || next.kind === 'resolving' || next.kind === 'starting_google') return;
+      // Returning to the card puts the caret back in the field; a rejected
+      // address returns focus to the field to correct; every other transition
+      // speaks through its new heading. Failures announce as alerts instead.
+      if (target === 'link-email') {
+        if (next.kind !== 'anonymous') return;
+        focusNext = null;
+        await moveFocus('#entry-link-email');
+        return;
       }
+      if (target === 'confirmation') {
+        if (next.kind === 'anonymous' && next.busy) return;
+        focusNext = null;
+        if (next.kind === 'anonymous') {
+          if (next.invalid) await moveFocus('#entry-link-email');
+          return;
+        }
+        if (next.kind === 'link_requested') await moveFocus('[data-entry-heading]');
+        return;
+      }
+      focusNext = null;
+      await moveFocus('[data-entry-heading]');
     });
     const visibility = () => controller.handleVisibility(document.visibilityState === 'visible');
     document.addEventListener('visibilitychange', visibility);
@@ -76,5 +99,8 @@
     onRetry={() => userAction(() => controller.resolve())}
     onCheck={() => void controller.checkStatus()}
     onSignOut={() => userAction(() => controller.signOut())}
+    onLinkEmail={(email) => controller.setLinkEmail(email)}
+    onSubmitLink={() => userAction(() => controller.requestSignInLink(), 'confirmation')}
+    onDifferentAddress={() => userAction(() => controller.useDifferentAddress(), 'link-email')}
   />
 </AccessEntryFrame>

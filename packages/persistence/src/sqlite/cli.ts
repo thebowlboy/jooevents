@@ -1,5 +1,11 @@
 import { openSQLite } from './database';
 import type { SQLiteDatabaseClass } from './migration-runner';
+import {
+  createRetainedSQLiteBackup,
+  createVerifiedRetainedSQLiteRestoreCandidate,
+  verifyRetainedSQLiteBackup,
+  type RetainedSQLiteDatabaseClass
+} from './retained-backup';
 import { statusSQLite } from './status';
 
 function flag(arguments_: readonly string[], name: string): string | undefined {
@@ -12,6 +18,8 @@ function usage(): never {
     'Usage:',
     '  jooevents-db status --database /absolute/path.sqlite',
     '  jooevents-db migrate --database /absolute/path.sqlite [--class retained_development|frozen_release]',
+    '  jooevents-db backup --database /absolute/path.sqlite --backup /absolute/path.backup.sqlite --expected-database-id ID --class retained_development|frozen_release --max-bytes N',
+    '  jooevents-db restore-rehearsal --backup /absolute/path.backup.sqlite --candidate /absolute/restored.sqlite --expected-database-id ID --expected-sha256 SHA256 --class retained_development|frozen_release --max-bytes N',
     ''
   ].join('\n'));
   process.exit(64);
@@ -20,15 +28,17 @@ function usage(): never {
 export function runSQLiteCli(arguments_: readonly string[]): number {
   const [command] = arguments_;
   const databasePath = flag(arguments_, '--database');
-  if (!command || !databasePath) usage();
+  if (!command) usage();
 
   if (command === 'status') {
+    if (!databasePath) usage();
     const status = statusSQLite(databasePath);
     process.stdout.write(`${JSON.stringify(status)}\n`);
     return status.kind === 'compatible' || status.kind === 'missing' || status.kind === 'migration_required' ? 0 : 2;
   }
 
   if (command === 'migrate') {
+    if (!databasePath) usage();
     const requestedClass = flag(arguments_, '--class');
     if (
       requestedClass !== undefined && requestedClass !== 'retained_development' &&
@@ -43,6 +53,59 @@ export function runSQLiteCli(arguments_: readonly string[]): number {
     } finally {
       opened.sqlite.close();
     }
+    return 0;
+  }
+
+  if (command === 'backup') {
+    const backupPath = flag(arguments_, '--backup');
+    const expectedDatabaseId = flag(arguments_, '--expected-database-id');
+    const requestedClass = flag(arguments_, '--class');
+    const maximumSerializeBytes = Number(flag(arguments_, '--max-bytes'));
+    if (
+      !databasePath || !backupPath || !expectedDatabaseId ||
+      (requestedClass !== 'retained_development' && requestedClass !== 'frozen_release') ||
+      !Number.isSafeInteger(maximumSerializeBytes) || maximumSerializeBytes < 1
+    ) usage();
+    const descriptor = createRetainedSQLiteBackup({
+      databasePath,
+      backupPath,
+      expectedDatabaseId,
+      expectedDatabaseClass: requestedClass,
+      maximumSerializeBytes
+    });
+    process.stdout.write(`${JSON.stringify(descriptor)}\n`);
+    return 0;
+  }
+
+  if (command === 'restore-rehearsal') {
+    const backupPath = flag(arguments_, '--backup');
+    const candidatePath = flag(arguments_, '--candidate');
+    const expectedDatabaseId = flag(arguments_, '--expected-database-id');
+    const expectedSha256 = flag(arguments_, '--expected-sha256');
+    const requestedClass = flag(arguments_, '--class');
+    const maximumBytes = Number(flag(arguments_, '--max-bytes'));
+    if (
+      !backupPath || !candidatePath || !expectedDatabaseId ||
+      !expectedSha256 || !/^[0-9a-f]{64}$/.test(expectedSha256) ||
+      (requestedClass !== 'retained_development' && requestedClass !== 'frozen_release') ||
+      !Number.isSafeInteger(maximumBytes) || maximumBytes < 1
+    ) usage();
+    const verified = verifyRetainedSQLiteBackup({
+      backupPath,
+      expectedDatabaseId,
+      expectedDatabaseClass: requestedClass as RetainedSQLiteDatabaseClass,
+      maximumBytes
+    });
+    if (verified.sha256 !== expectedSha256) {
+      throw new Error('The retained SQLite backup does not match the expected SHA-256 digest.');
+    }
+    const descriptor = createVerifiedRetainedSQLiteRestoreCandidate({
+      backupPath,
+      restoreCandidatePath: candidatePath,
+      expectedDescriptor: verified,
+      maximumBytes
+    });
+    process.stdout.write(`${JSON.stringify(descriptor)}\n`);
     return 0;
   }
 

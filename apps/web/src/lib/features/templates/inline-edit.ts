@@ -24,6 +24,16 @@ export interface ScheduleKnobs {
 	showSpeakers: boolean;
 }
 
+/** The same, for a roster listing. */
+export interface RosterKnobs {
+	layout: 'grid' | 'list' | 'strip' | 'profile';
+	grouping: 'none' | 'category';
+	density: 'cozy' | 'compact';
+	showHeadline: boolean;
+	showSessions: boolean;
+	showLinks: boolean;
+}
+
 /** One addressable unit of a template preview, resolved from its `data-edit` path. */
 export type InlineUnit =
 	| {
@@ -46,6 +56,7 @@ export type InlineUnit =
 	  }
 	| { type: 'merge'; path: string; blockIndex: number; tokenIndex: number; key: string }
 	| { type: 'knobs'; path: string; blockIndex: number; knobs: ScheduleKnobs }
+	| { type: 'roster-knobs'; path: string; blockIndex: number; knobs: RosterKnobs }
 	| { type: 'field'; path: string; fieldId: string };
 
 /** What a mini-editor session produced when Done was pressed. */
@@ -53,6 +64,7 @@ export type InlineEditResult =
 	| { type: 'text'; value: string; style?: TextStyle }
 	| { type: 'merge'; swapKey: string; insertKey: string }
 	| { type: 'knobs'; knobs: ScheduleKnobs }
+	| { type: 'roster-knobs'; knobs: RosterKnobs }
 	| { type: 'field'; patch: Partial<Pick<RegistryField, 'label' | 'help' | 'options' | 'required'>> };
 
 function textUnit(
@@ -90,14 +102,25 @@ export function resolveUnit(template: AnyTemplate, path: string): InlineUnit | n
 	const block = template.blocks[blockIndex];
 	if (!block) return null;
 	if (parts.length === 2) {
-		if (block.type !== 'schedule-days') return null;
-		const { grouping, density, showRoom, showTrack, showSpeakers } = block;
-		return {
-			type: 'knobs',
-			path,
-			blockIndex,
-			knobs: { grouping, density, showRoom, showTrack, showSpeakers }
-		};
+		if (block.type === 'schedule-days') {
+			const { grouping, density, showRoom, showTrack, showSpeakers } = block;
+			return {
+				type: 'knobs',
+				path,
+				blockIndex,
+				knobs: { grouping, density, showRoom, showTrack, showSpeakers }
+			};
+		}
+		if (block.type === 'roster-list') {
+			const { layout, grouping, density, showHeadline, showSessions, showLinks } = block;
+			return {
+				type: 'roster-knobs',
+				path,
+				blockIndex,
+				knobs: { layout, grouping, density, showHeadline, showSessions, showLinks }
+			};
+		}
+		return null;
 	}
 	if (parts[2] === 'merge') {
 		if (isSurfaceTemplate(template) || block.type !== 'paragraph') return null;
@@ -248,6 +271,18 @@ export function withScheduleKnobs(
 	const next = structuredClone(template);
 	const block = next.blocks[blockIndex];
 	if (block?.type === 'schedule-days') Object.assign(block, knobs);
+	return next;
+}
+
+/** The document with one roster listing's display options replaced. */
+export function withRosterKnobs(
+	template: SurfaceTemplate,
+	blockIndex: number,
+	knobs: RosterKnobs
+): SurfaceTemplate {
+	const next = structuredClone(template);
+	const block = next.blocks[blockIndex];
+	if (block?.type === 'roster-list') Object.assign(block, knobs);
 	return next;
 }
 

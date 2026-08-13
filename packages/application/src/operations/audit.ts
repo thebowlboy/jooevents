@@ -1,11 +1,15 @@
 import { AUTONOMY_DISPOSITIONS, type EffectfulOperationResult } from '@jooevents/contracts';
 import { canonicalJsonText } from '@jooevents/kernel';
+import { CURRENT_AUTHORITY_DENIAL_REASONS } from '@jooevents/identity-access';
 import {
   isExactSealedDeniedEffectAuditOutcome,
   isSealedDeniedEffectAuditAttempt,
   isSealedInvocationContext,
+  resolveEffectInvocationAuthorityRecheckAttribution,
+  resolveEffectInvocationCurrentAuthorityRecheckTime,
   type DeniedEffectAuditAttempt,
-  type InvocationContext
+  type InvocationContext,
+  type SealedEffectAuthorityRecheckResult
 } from './invocation-context';
 import type {
   ContextDeniedOperationAuditRecord,
@@ -140,6 +144,20 @@ function exactReason(
     }
     return Object.freeze({ kind: 'same_request_contended' });
   }
+  if (candidate.kind === 'authority_recheck') {
+    if (Object.keys(candidate).sort().join(',') !== 'denialReason,kind'
+      || typeof candidate.denialReason !== 'string'
+      || !CURRENT_AUTHORITY_DENIAL_REASONS.includes(candidate.denialReason as never)
+      || result.outcome.class !== 'access_denied'
+      || result.outcome.kind !== `authority.${candidate.denialReason}`
+      || result.outcome.retryable !== false) {
+      throw new TypeError('invalid_nonterminal_progress_reason');
+    }
+    return Object.freeze({
+      kind: 'authority_recheck',
+      denialReason: candidate.denialReason
+    }) as NonterminalProgressReason;
+  }
   if (candidate.kind === 'phase_nonterminal' && Object.keys(candidate).length === 1) {
     return Object.freeze({ kind: 'phase_nonterminal' });
   }
@@ -203,12 +221,18 @@ function authorizedBase(input: {
   readonly auditTarget: OperationAuditTargetRegistration;
   readonly auditRecordProfile: OperationAuditRecordProfileRegistration;
   readonly result: EffectfulOperationResult;
+  readonly authorityRecheck: SealedEffectAuthorityRecheckResult;
 }) {
   const { context } = input;
   if (!isSealedInvocationContext(context) || context.operation.effect === 'read') {
     throw new TypeError('unsealed_operation_audit_context');
   }
   assertDeclaredOutcome(input.definition, input.result);
+  const attributionAuthority = resolveEffectInvocationAuthorityRecheckAttribution(
+    context,
+    input.authorityRecheck
+  );
+  const recordedAt = resolveEffectInvocationCurrentAuthorityRecheckTime(context, input.authorityRecheck);
   const operation: DeniedEffectAuditAttempt['operation'] = {
     name: context.operation.name,
     version: context.operation.version,
@@ -220,7 +244,7 @@ function authorizedBase(input: {
     surface: context.surface,
     accessLane: context.authority.lane,
     correlationId: context.correlationId,
-    recordedAt: context.receivedAt,
+    recordedAt,
     client: { ...context.client },
     provenance: { ...context.provenance },
     scope: auditScope(context.scope),
@@ -229,11 +253,11 @@ function authorizedBase(input: {
       'scope_resolution_evidence'
     ),
     resultSummary: resultSummary(input.result),
-    actor: { ...context.actor },
+    actor: { ...attributionAuthority.actor },
     authorityPrincipalKey: context.authorityPrincipalKey,
-    authorityEvidenceIds: boundedSortedReferences(context.authority.evidenceIds, 'authority_evidence'),
+    authorityEvidenceIds: boundedSortedReferences(attributionAuthority.evidenceIds, 'authority_evidence'),
     authorityCitationIds: boundedSortedReferences(
-      context.authority.authorityCitationIds,
+      attributionAuthority.authorityCitationIds,
       'authority_citations'
     )
   } as const;
@@ -246,6 +270,7 @@ export function createTerminalNewOperationAuditRecord(input: {
   readonly auditRecordProfile: OperationAuditRecordProfileRegistration;
   readonly result: EffectfulOperationResult;
   readonly receiptId: string;
+  readonly authorityRecheck: SealedEffectAuthorityRecheckResult;
 }): TerminalNewOperationAuditRecord {
   if (typeof input.receiptId !== 'string' || input.receiptId.length === 0) {
     throw new TypeError('invalid_operation_audit_receipt');
@@ -265,6 +290,7 @@ export function createTerminalReplayOperationAuditRecord(input: {
   readonly auditRecordProfile: OperationAuditRecordProfileRegistration;
   readonly result: EffectfulOperationResult;
   readonly relatedReceiptId: string;
+  readonly authorityRecheck: SealedEffectAuthorityRecheckResult;
 }): TerminalReplayOperationAuditRecord {
   if (typeof input.relatedReceiptId !== 'string' || input.relatedReceiptId.length === 0) {
     throw new TypeError('invalid_operation_audit_receipt');
@@ -287,6 +313,7 @@ export function createIdempotencyConflictOperationAuditRecord(input: {
   readonly auditTarget: OperationAuditTargetRegistration;
   readonly auditRecordProfile: OperationAuditRecordProfileRegistration;
   readonly result: EffectfulOperationResult;
+  readonly authorityRecheck: SealedEffectAuthorityRecheckResult;
 }): IdempotencyConflictOperationAuditRecord {
   exactIdempotencyConflictResult(input.result);
   return seal<IdempotencyConflictOperationAuditRecord>({
@@ -302,6 +329,7 @@ export function createNonterminalProgressOperationAuditRecord(input: {
   readonly auditRecordProfile: OperationAuditRecordProfileRegistration;
   readonly result: EffectfulOperationResult;
   readonly reason: NonterminalProgressReason;
+  readonly authorityRecheck: SealedEffectAuthorityRecheckResult;
 }): NonterminalProgressOperationAuditRecord {
   return seal<NonterminalProgressOperationAuditRecord>({
     ...authorizedBase(input),

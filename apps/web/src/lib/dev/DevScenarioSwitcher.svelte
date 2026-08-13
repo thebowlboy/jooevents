@@ -4,32 +4,79 @@
 	import {
 		activeScenarioKey,
 		sampleLatencyMs,
+		sampleViewer,
 		scenarios,
 		setLatencyCookie,
-		setScenarioCookie
+		setScenarioCookie,
+		setViewerCookie
 	} from '$lib/api/sample/registry';
+	import {
+		activePortalScenarioKey,
+		portalAuthState,
+		portalLinkOutcome,
+		portalScenarios,
+		setPortalAuthCookie,
+		setPortalLinkCookie,
+		setPortalScenarioCookie
+	} from '$lib/api/portal/sample/registry';
+	import { operatorEntryAuthState, setOperatorEntryAuthCookie } from '$lib/api/composition/entry-deps';
 
 	// The tool rests as a corner pill and expands only while choosing, so it
 	// never sits on top of the page being experienced.
 	let open = $state(false);
 	let root = $state<HTMLElement>();
 	const active = activeScenarioKey();
+	const activePortal = activePortalScenarioKey();
 	const latency = sampleLatencyMs();
+	const viewer = sampleViewer().kind;
+	const portalAuth = portalAuthState();
+	const linkOutcome = portalLinkOutcome();
+	const entryAuth = operatorEntryAuthState();
 
 	const latencyOptions = [
-		{ ms: 160, label: 'Fast' },
-		{ ms: 600, label: 'Pending' },
-		{ ms: 2000, label: 'Slow' }
+		{ value: '160', label: 'Fast' },
+		{ value: '600', label: 'Pending' },
+		{ value: '2000', label: 'Slow' }
 	];
 
-	function setLatency(ms: number) {
-		if (ms === latency) return;
-		setLatencyCookie(ms);
+	const viewerOptions = [
+		{ value: 'organizer', label: 'Organizer' },
+		{ value: 'reviewer', label: 'Reviewer' }
+	];
+
+	const portalAuthOptions = [
+		{ value: 'active', label: 'Signed in' },
+		{ value: 'anonymous', label: 'Signed out' },
+		{ value: 'expired', label: 'Expired' }
+	];
+
+	const linkOptions = [
+		{ value: 'signed_in', label: 'Valid' },
+		{ value: 'link_expired', label: 'Expired' },
+		{ value: 'link_used', label: 'Used' },
+		{ value: 'link_invalid', label: 'Invalid' }
+	];
+
+	const entryAuthOptions = [
+		{ value: 'anonymous', label: 'Signed out' },
+		{ value: 'active', label: 'Signed in' }
+	];
+
+	// Which world the current route belongs to. Controls for the other lane are
+	// noise on a surface that cannot show their effect.
+	const lane = $derived(
+		/^\/portal(\/|$)/.test(page.url.pathname)
+			? 'portal'
+			: /^\/(app|design-system)(\/|$)/.test(page.url.pathname)
+				? 'workspace'
+				: /^\/(sign-in|auth|access)(\/|$)/.test(page.url.pathname)
+					? 'entry'
+					: null
+	);
+
+	function reload(): void {
 		location.reload();
 	}
-
-	// Scenarios only affect workspace surfaces; stay out of entry/public flows.
-	const relevant = $derived(/^\/(app|design-system)(\/|$)/.test(page.url.pathname));
 
 	function toggle() {
 		open = !open;
@@ -41,7 +88,16 @@
 			return;
 		}
 		setScenarioCookie(key);
-		location.reload();
+		reload();
+	}
+
+	function activatePortal(key: string) {
+		if (key === activePortal) {
+			open = false;
+			return;
+		}
+		setPortalScenarioCookie(key);
+		reload();
 	}
 
 	function onWindowPointerdown(event: PointerEvent) {
@@ -55,7 +111,29 @@
 
 <svelte:window onpointerdown={onWindowPointerdown} onkeydown={onWindowKeydown} />
 
-{#if !relevant}
+{#snippet choice(
+	label: string,
+	options: { value: string; label: string }[],
+	current: string,
+	select: (value: string) => void
+)}
+	<div class="dev__choice">
+		<span class="dev__choice-label">{label}</span>
+		<div class="ui-segmented" role="group" aria-label={label}>
+			{#each options as option (option.value)}
+				<button
+					type="button"
+					class="ui-segmented__item"
+					aria-pressed={current === option.value}
+					onclick={() => {
+						if (current !== option.value) select(option.value);
+					}}>{option.label}</button>
+			{/each}
+		</div>
+	</div>
+{/snippet}
+
+{#if lane === null}
 	<!-- Not a sample-data surface. -->
 {:else if open}
 	<div class="dev" role="group" aria-label="Sample-data scenario switcher (dev only)" bind:this={root}>
@@ -66,37 +144,71 @@
 				<Minus size={13} />
 			</button>
 		</header>
-		<ul class="dev__list">
-			{#each scenarios as scenario (scenario.key)}
-				<li>
-					<button
-						type="button"
-						class="dev__item"
-						class:dev__item--active={scenario.key === active}
-						aria-pressed={scenario.key === active}
-						onclick={() => activate(scenario.key)}>
-						<span class="dev__name">
-							{scenario.name}
-							{#if scenario.key === active}<span class="dev__now">active</span>{/if}
-						</span>
-						<span class="dev__desc">{scenario.description}</span>
-					</button>
-				</li>
-			{/each}
-		</ul>
-		<div class="dev__latency">
-			<span class="dev__latency-label">Sample latency</span>
-			<div class="ui-segmented" role="group" aria-label="Sample transport latency">
-				{#each latencyOptions as option (option.ms)}
-					<button
-						type="button"
-						class="ui-segmented__item"
-						aria-pressed={latency === option.ms}
-						onclick={() => setLatency(option.ms)}>{option.label}</button>
+		{#if lane === 'workspace'}
+			<ul class="dev__list">
+				{#each scenarios as scenario (scenario.key)}
+					<li>
+						<button
+							type="button"
+							class="dev__item"
+							class:dev__item--active={scenario.key === active}
+							aria-pressed={scenario.key === active}
+							onclick={() => activate(scenario.key)}>
+							<span class="dev__name">
+								{scenario.name}
+								{#if scenario.key === active}<span class="dev__now">active</span>{/if}
+							</span>
+							<span class="dev__desc">{scenario.description}</span>
+						</button>
+					</li>
 				{/each}
-			</div>
-		</div>
-		<p class="dev__hint"><RotateCw size={11} aria-hidden="true" />Selecting reloads the page with the scenario cookie set.</p>
+			</ul>
+			{@render choice('Viewing as', viewerOptions, viewer, (value) => {
+				setViewerCookie(value as 'organizer' | 'reviewer');
+				reload();
+			})}
+		{:else if lane === 'portal'}
+			<ul class="dev__list">
+				{#each portalScenarios as scenario (scenario.key)}
+					<li>
+						<button
+							type="button"
+							class="dev__item"
+							class:dev__item--active={scenario.key === activePortal}
+							aria-pressed={scenario.key === activePortal}
+							onclick={() => activatePortal(scenario.key)}>
+							<span class="dev__name">
+								{scenario.name}
+								{#if scenario.key === activePortal}<span class="dev__now">active</span>{/if}
+							</span>
+							<span class="dev__desc">{scenario.description}</span>
+						</button>
+					</li>
+				{/each}
+			</ul>
+			{@render choice('Portal access', portalAuthOptions, portalAuth, (value) => {
+				setPortalAuthCookie(value as 'anonymous' | 'active' | 'expired');
+				reload();
+			})}
+			{@render choice('Emailed link', linkOptions, linkOutcome, (value) => {
+				setPortalLinkCookie(value as 'signed_in' | 'link_expired' | 'link_used' | 'link_invalid');
+				reload();
+			})}
+		{:else}
+			{@render choice('Workspace access', entryAuthOptions, entryAuth, (value) => {
+				setOperatorEntryAuthCookie(value as 'anonymous' | 'active');
+				reload();
+			})}
+			{@render choice('Emailed link', linkOptions, linkOutcome, (value) => {
+				setPortalLinkCookie(value as 'signed_in' | 'link_expired' | 'link_used' | 'link_invalid');
+				reload();
+			})}
+		{/if}
+		{@render choice('Sample latency', latencyOptions, String(latency), (value) => {
+			setLatencyCookie(Number(value));
+			reload();
+		})}
+		<p class="dev__hint"><RotateCw size={11} aria-hidden="true" />Selecting reloads the page with the cookie set.</p>
 	</div>
 {:else}
 	<button type="button" class="dev dev--pill" aria-label="Open scenario switcher" onclick={toggle}>
@@ -206,8 +318,8 @@
 	}
 
 	.dev__item--active {
-		border-color: var(--je-color-action);
-		background: var(--je-color-surface-selected);
+		border-color: var(--je-color-mark-border);
+		background: var(--je-color-mark-surface);
 	}
 
 	.dev__name {
@@ -229,14 +341,14 @@
 		color: var(--je-color-text-muted);
 	}
 
-	.dev__latency {
+	.dev__choice {
 		display: grid;
 		gap: var(--je-space-1);
 		padding: var(--je-space-2) var(--je-space-3);
 		border-block-start: 1px solid var(--je-color-border);
 	}
 
-	.dev__latency-label {
+	.dev__choice-label {
 		font-size: var(--je-font-size-2xs);
 		font-weight: 600;
 		text-transform: uppercase;

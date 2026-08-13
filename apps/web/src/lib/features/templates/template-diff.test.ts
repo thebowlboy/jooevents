@@ -105,8 +105,8 @@ describe('diffTemplate', () => {
 });
 
 const surfaceFields: SurfaceField[] = [
-	{ id: 'name', label: 'Your name', kind: 'text', required: true },
-	{ id: 'notes', label: 'Anything else?', kind: 'textarea', required: false }
+	{ id: 'name', label: 'Your name', kind: 'text', required: true, group: 'identity' },
+	{ id: 'notes', label: 'Anything else?', kind: 'textarea', required: false, group: 'talk' }
 ];
 
 const surfaceBlocks: SurfaceBlock[] = [

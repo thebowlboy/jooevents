@@ -1,7 +1,7 @@
 <script lang="ts">
-	import OverviewDashboard from '$lib/features/workspace/components/OverviewDashboard.svelte';
+	import OperatorPage from 'jooevents-operator-page';
 </script>
 
 <svelte:head><title>Overview · JooEvents</title></svelte:head>
 
-<OverviewDashboard />
+<OperatorPage area="overview" />

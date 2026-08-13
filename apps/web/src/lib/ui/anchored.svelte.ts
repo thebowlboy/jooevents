@@ -1,11 +1,13 @@
 /**
  * Putting a floating element beside the thing it belongs to.
  *
- * Two components need this and they must not drift apart: the explanation
- * `Popover`, and the "Copied" flag on `CopyValue`. Both sit inside dense table
- * wrappers and schedule grids that clip and contain their children, so both need
- * the same two things — the top layer to escape that clipping, and viewport
- * arithmetic that flips rather than running off the edge.
+ * The components that float something beside an anchor share this and must not
+ * drift apart: the explanation `Popover`, the "Copied" flag on `CopyValue`, the
+ * `DescribedSelect` listbox, and the `DatePicker` calendar. All sit inside
+ * dense table wrappers, dialog bodies, and schedule grids that clip and contain
+ * their children, so all need the same two things — the top layer to escape
+ * that clipping, and viewport arithmetic that flips rather than running off the
+ * edge.
  *
  * One placement, deliberately without options: the app has a single way of
  * standing something next to an anchor. Below and start-aligned, flipped above

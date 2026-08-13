@@ -3,6 +3,9 @@
 
   interface Props {
     label: string;
+    /** Visually hides the label while keeping it as the accessible name — for
+     * rows whose visible text already names the thing the box acts on. */
+    hideLabel?: boolean;
     description?: string;
     checked?: boolean;
     mixed?: boolean;
@@ -14,6 +17,7 @@
 
   let {
     label,
+    hideLabel = false,
     description,
     checked = $bindable(false),
     mixed = false,
@@ -39,7 +43,7 @@
   <span class="ui-choice__control" aria-hidden="true">
     {#if mixed}<Minus />{:else}<Check />{/if}
   </span>
-  <span class="ui-choice__copy">
+  <span class="ui-choice__copy" class:ui-sr-only={hideLabel}>
     <span>{label}</span>
     {#if description}<span class="ui-choice__description">{description}</span>{/if}
   </span>

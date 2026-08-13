@@ -18,11 +18,15 @@ import {
   parseInstant,
   parseInvocationId,
   parseMembershipId,
+  parsePublicPolicyRevisionId,
   parseUserId,
   parseWorkspaceId
 } from '@jooevents/kernel';
 import { z } from 'zod';
-import { createOperatorReadHttpAdapter } from './read-operation-adapter';
+import {
+  createOperatorReadHttpAdapter,
+  createPublicReadHttpAdapter
+} from './read-operation-adapter';
 
 const requestedCorrelationId = '018f0f47-7a86-7d36-8a25-9f86589c7a4d';
 const digest = (seed: string) => seed.repeat(64);
@@ -41,7 +45,11 @@ const refs = {
   recordProfile: { key: 'record-profile.adapter-proof-read', version: 1 }
 } as const;
 
-const inputSchema = z.strictObject({ mode: z.enum(['success', 'outcome', 'explode']).default('success') });
+const inputSchema = z.strictObject({
+  mode: z.enum(['success', 'outcome', 'explode']).default('success'),
+  limit: z.number().int().positive().optional(),
+  enabled: z.boolean().optional()
+});
 const canonicalSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('success'), data: z.strictObject({ actor: z.string(), workspaceId: z.string() }) }),
   z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
@@ -52,7 +60,8 @@ const authorityIds = {
   workspace: parseWorkspaceId('550e8400-e29b-41d4-a716-446655440000'),
   user: parseUserId('01890f47-9abc-7def-8123-456789abc001'),
   membership: parseMembershipId('01890f47-9abc-7def-8123-456789abc002'),
-  invocation: parseInvocationId('01890f47-9abc-7def-8123-456789abc003')
+  invocation: parseInvocationId('01890f47-9abc-7def-8123-456789abc003'),
+  publicPolicy: parsePublicPolicyRevisionId('01890f47-9abc-7def-8123-456789abc004')
 } as const;
 const authorityInstant = parseInstant('2026-08-11T00:00:00.000Z');
 const keyProfile = { key: 'server-adapter-test', version: parseContractVersion(1) } as const;
@@ -61,13 +70,18 @@ const operatorLane = parseOperationAccessLane({
   surface: 'operator_http',
   policy: { key: 'authority.server-adapter-test', version: 1 }
 });
+const publicLane = parseOperationAccessLane({
+  kind: 'public_open',
+  surface: 'public_http',
+  policy: { key: 'authority.server-public-adapter-test', version: 1 }
+});
 
 function provingSource(): ReadOperationRegistrySource {
   const contextBuilder = createReadInvocationContextBuilder({
     reference: refs.context,
     operation: { name: 'adapter-proof.read', version: 1 },
     effect: 'read',
-    lanes: [operatorLane],
+    lanes: [operatorLane, publicLane],
     scopeResolver: {
       resolve: () => ({
         workspaceId: authorityIds.workspace,
@@ -76,19 +90,45 @@ function provingSource(): ReadOperationRegistrySource {
       })
     },
     authorityResolver: {
-      resolve: (input) => ({
-        kind: 'authorized',
-        authority: {
-          actor: { kind: 'workspace_user', userId: authorityIds.user },
-          principal: { kind: 'workspace_user', userId: authorityIds.user, membershipId: authorityIds.membership },
-          lane: input.lane,
-          scope: input.scope,
-          grants: [{ kind: 'permission', key: 'test.adapter.read' }],
-          evidenceIds: ['membership-current:v1'],
-          authorityCitationIds: [],
-          evaluatedAt: input.evaluatedAt
-        }
-      })
+      resolve: (input) => input.lane.kind === 'public_open'
+        ? ({
+            kind: 'authorized',
+            authority: {
+              actor: {
+                kind: 'public_request',
+                publicPolicyRevisionId: authorityIds.publicPolicy,
+                authority: { kind: 'open_policy' }
+              },
+              principal: {
+                kind: 'public_capability',
+                publicPolicyRevisionId: authorityIds.publicPolicy,
+                authority: { kind: 'open_policy' }
+              },
+              lane: input.lane,
+              scope: input.scope,
+              grants: [{ kind: 'public_policy', key: 'test.adapter.read' }],
+              evidenceIds: ['public-policy-current:v1'],
+              authorityCitationIds: [],
+              evaluatedAt: input.evaluatedAt
+            }
+          })
+        : ({
+            kind: 'authorized',
+            authority: {
+              actor: { kind: 'workspace_user', userId: authorityIds.user },
+              principal: {
+                kind: 'workspace_user',
+                userId: authorityIds.user,
+                membershipId: authorityIds.membership
+              },
+              lane: input.lane,
+              scope: input.scope,
+              grants: [{ kind: 'permission', key: 'test.adapter.read' }],
+              evidenceIds: ['membership-current:v1'],
+              authorityCitationIds: [],
+              evaluatedAt: input.evaluatedAt
+            }
+          })
     },
     clock: { now: () => authorityInstant },
     newInvocationId: () => authorityIds.invocation,
@@ -151,10 +191,22 @@ function provingSource(): ReadOperationRegistrySource {
             }
           };
         }
-        if (context.actor.kind !== 'workspace_user' || context.actor.userId !== authorityIds.user || context.scope.workspaceId !== authorityIds.workspace) {
+        if (context.scope.workspaceId !== authorityIds.workspace) {
           throw new Error('trusted context mismatch');
         }
-        return { kind: 'success', data: { actor: 'user_server_resolved', workspaceId: 'workspace_server_resolved' } };
+        if (context.actor.kind === 'public_request') {
+          return {
+            kind: 'success',
+            data: { actor: 'public_server_resolved', workspaceId: 'workspace_server_resolved' }
+          };
+        }
+        if (context.actor.kind !== 'workspace_user' || context.actor.userId !== authorityIds.user) {
+          throw new Error('trusted actor mismatch');
+        }
+        return {
+          kind: 'success',
+          data: { actor: 'user_server_resolved', workspaceId: 'workspace_server_resolved' }
+        };
       }
     }],
     projections: [{
@@ -175,7 +227,7 @@ function provingSource(): ReadOperationRegistrySource {
       inputSchema: refs.input,
       canonicalResultSchema: refs.canonical,
       outcomes: [{ class: 'access_denied', kind: 'workspace.revoked', retryable: false, detailSchema: refs.detail }],
-      accessLanes: [operatorLane],
+      accessLanes: [operatorLane, publicLane],
       contextBuilder: refs.context,
       readCapability: refs.capability,
       handler: refs.handler,
@@ -187,6 +239,13 @@ function provingSource(): ReadOperationRegistrySource {
         surface: 'operator_http',
         method: 'GET',
         path: '/api/test/adapter-proof',
+        input: 'query',
+        browserResumption: { kind: 'none' },
+        projection: refs.projection
+      }, {
+        surface: 'public_http',
+        method: 'GET',
+        path: '/api/public/test/adapter-proof',
         input: 'query',
         browserResumption: { kind: 'none' },
         projection: refs.projection
@@ -228,6 +287,30 @@ async function harness() {
   });
 }
 
+async function publicHarness() {
+  const registry = await createReadOperationRegistry(provingSource());
+  return createPublicReadHttpAdapter({
+    registry,
+    executor: createReadOperationExecutor(registry, {
+      operationalTrace: { emit: () => undefined },
+      immutableAudit: { append: () => undefined },
+      clock: { now: () => authorityInstant },
+      newInvocationId: () => authorityIds.invocation
+    }),
+    evidence: {
+      verify: () => ({
+        kind: 'verified',
+        evidence: {
+          kind: 'public_open',
+          surface: 'public_http',
+          client: { key: 'web.public-test' },
+          publicPolicyRevisionId: authorityIds.publicPolicy
+        }
+      })
+    }
+  });
+}
+
 function trustedHeaders(): HeadersInit {
   return { 'x-test-session': 'valid', 'x-correlation-id': requestedCorrelationId };
 }
@@ -243,6 +326,18 @@ describe('generic operator read HTTP adapter', () => {
       kind: 'success',
       data: { actor: 'user_server_resolved', workspaceId: 'workspace_server_resolved' },
       correlationId: requestedCorrelationId
+    });
+  });
+
+  test('decodes registered scalar query types before operator execution', async () => {
+    const response = await (await harness()).request(
+      '/api/test/adapter-proof?mode=success&limit=2&enabled=false',
+      { headers: trustedHeaders() }
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      kind: 'success',
+      data: { actor: 'user_server_resolved' }
     });
   });
 
@@ -280,5 +375,30 @@ describe('generic operator read HTTP adapter', () => {
     });
     expect(response.status).toBe(401);
     expect(await response.json()).toMatchObject({ kind: 'transport_error', code: 'unauthenticated', retryable: false });
+  });
+
+  test('does not execute an undeclared implicit HEAD variant of a GET operation', async () => {
+    const response = await (await harness()).request('/api/test/adapter-proof?mode=explode', {
+      method: 'HEAD',
+      headers: trustedHeaders()
+    });
+    expect(response.status).toBe(405);
+    expect(await response.text()).toBe('');
+  });
+});
+
+describe('generic public read HTTP adapter', () => {
+  test('uses the same registered schema-aware query transport', async () => {
+    const response = await (await publicHarness()).request(
+      '/api/public/test/adapter-proof?mode=success&limit=2&enabled=true',
+      { headers: { 'x-correlation-id': requestedCorrelationId } }
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-correlation-id')).toBe(requestedCorrelationId);
+    expect(await response.json()).toEqual({
+      kind: 'success',
+      data: { actor: 'public_server_resolved', workspaceId: 'workspace_server_resolved' },
+      correlationId: requestedCorrelationId
+    });
   });
 });

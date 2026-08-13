@@ -31,7 +31,11 @@ function projectItem(
     version: item.version,
     usage,
     deleteEligibility,
-    ...(item.kind === 'room' ? { capacity: item.capacity } : {})
+    ...(item.kind === 'room'
+      ? { capacity: item.capacity }
+      : item.kind === 'track'
+        ? { accent: item.accent }
+        : {})
   } as ProgramVocabularyItemDto;
 }
 

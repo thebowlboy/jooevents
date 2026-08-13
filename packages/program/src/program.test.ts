@@ -25,11 +25,23 @@ import {
   activeProgramVocabularyItems,
   applyProgramReferenceRepoints,
   applyProgramVocabularyPlan,
+  assertCompleteProgramReferenceSnapshot,
+  assertProgramReferenceContributorRegistry,
+  assertProgramVocabularyOrdinaryChangesetBundle,
+  assertProgramVocabularyOrdinaryPolicy,
+  captureProgramVocabularyOrdinaryApprovalPolicy,
+  captureRegisteredProgramReferences,
   createProgramReferenceContributorRegistry,
+  createProgramVocabularyOrdinaryChangesetBundle,
   createProgramVocabularyValidationView,
   createProgramVocabularyChangesetBundle,
   createProgramVocabularyState,
   mergeReferenceCounts,
+  issueProgramVocabularyOrdinaryPolicy,
+  parseProgramVocabularyOrdinaryAuthorInput,
+  parseProgramVocabularyMutationPlan,
+  parseProgramVocabularyItem,
+  parseProgramVocabularyState,
   planProgramVocabularyMutation,
   programVocabularyTransactionPort,
   programVocabularyValidationPort,
@@ -37,11 +49,14 @@ import {
   projectProgramVocabularySnapshot,
   requireActiveProgramVocabularyAssignment,
   resolveProgramVocabularyItem,
+  validateProgramVocabularyPlan,
   type CompleteProgramReferenceSnapshot,
   type ProgramReferenceContributorRef,
   type ProgramReferenceContributorSnapshot,
   type ProgramReferenceSnapshotSource,
   type ProgramVocabularyChangesetBundle,
+  type ProgramVocabularyOrdinaryChangesetBundle,
+  type ProgramVocabularyOrdinaryPolicy,
   type ProgramVocabularyMutationPlan,
   type ProgramVocabularyState,
   ProgramReferenceRegistryValidationError,
@@ -243,6 +258,31 @@ function bundle(referenceRegistry = registry()): ProgramVocabularyChangesetBundl
   });
 }
 
+function ordinaryPolicy(input?: {
+  readonly ordinaryRisk?: 'low' | 'normal';
+  readonly mergeRisk?: 'normal' | 'consequential';
+  readonly ordinaryApproval?: 'none' | 'distinct_current_human';
+  readonly mergeApproval?: 'none' | 'distinct_current_human';
+}): ProgramVocabularyOrdinaryPolicy {
+  return issueProgramVocabularyOrdinaryPolicy({
+    key: 'program_vocabulary.bounded',
+    version: 1,
+    ordinaryRisk: input?.ordinaryRisk ?? 'low',
+    mergeRisk: input?.mergeRisk ?? 'consequential',
+    approval: {
+      ordinary: input?.ordinaryApproval ?? 'none',
+      merge: input?.mergeApproval ?? 'none'
+    }
+  });
+}
+
+function ordinaryBundle(
+  policy = ordinaryPolicy(),
+  referenceRegistry = registry()
+): ProgramVocabularyOrdinaryChangesetBundle {
+  return createProgramVocabularyOrdinaryChangesetBundle({ policy, referenceRegistry });
+}
+
 function planningSnapshot(store: TrialStore): ChangesetPlanningSnapshot {
   return { getPort: <Port>() => store as unknown as Port };
 }
@@ -260,6 +300,21 @@ function transaction(store: TrialStore): ChangesetCommitTransaction {
 
 async function plan(
   changesets: ProgramVocabularyChangesetBundle,
+  store: TrialStore,
+  authorInput: ProgramVocabularyDraftInput
+): Promise<FrozenChangesetOperation> {
+  return planChangesetOperation({
+    registry: changesets.registry,
+    kind: 'program.vocabulary.mutate',
+    version: 1,
+    authorInput,
+    dependencyGroup: 'program_vocabulary',
+    snapshot: planningSnapshot(store)
+  });
+}
+
+async function planOrdinary(
+  changesets: ProgramVocabularyOrdinaryChangesetBundle,
   store: TrialStore,
   authorInput: ProgramVocabularyDraftInput
 ): Promise<FrozenChangesetOperation> {
@@ -315,6 +370,7 @@ function authorize(operations: readonly FrozenChangesetOperation[]) {
       operation.guardRefs.map((reference) => [reference.id, reference.version] as const)
     )),
     now: '2026-08-11T04:02:00.000Z',
+    approvalRequirement: revision.riskTier === 'consequential' ? 'distinct_current_human' : 'none',
     ...(revision.riskTier === 'consequential'
       ? { approval, approverCurrentlyAuthorized: true }
       : {})
@@ -348,6 +404,184 @@ async function apply(
     committedSource: committed.source
   };
 }
+
+describe('Program Vocabulary ordinary changeset policy', () => {
+  test('only module-issued immutable policies and bundles activate the ordinary registry', () => {
+    const policy = ordinaryPolicy();
+    const changesets = ordinaryBundle(policy);
+
+    expect(Object.isFrozen(policy)).toBe(true);
+    expect(Object.isFrozen(policy.approval)).toBe(true);
+    expect(Object.isFrozen(changesets)).toBe(true);
+    expect(() => assertProgramVocabularyOrdinaryPolicy(policy)).not.toThrow();
+    expect(() => assertProgramVocabularyOrdinaryChangesetBundle(changesets)).not.toThrow();
+
+    const copiedPolicy = structuredClone(policy) as ProgramVocabularyOrdinaryPolicy;
+    expect(() => assertProgramVocabularyOrdinaryPolicy(copiedPolicy))
+      .toThrow('invalid_program_vocabulary_ordinary_policy');
+    expect(() => ordinaryBundle(copiedPolicy))
+      .toThrow('invalid_program_vocabulary_ordinary_policy');
+    expect(() => assertProgramVocabularyOrdinaryChangesetBundle({
+      ...changesets
+    } as ProgramVocabularyOrdinaryChangesetBundle))
+      .toThrow('invalid_program_vocabulary_ordinary_bundle');
+    expect(() => createProgramVocabularyOrdinaryChangesetBundle({
+      referenceRegistry: registry(),
+      policy: {
+        activation: 'test_only'
+      } as unknown as ProgramVocabularyOrdinaryPolicy
+    })).toThrow('invalid_program_vocabulary_ordinary_policy');
+  });
+
+  test('plans exactly the six ordinary author actions through the authenticated bundle', async () => {
+    const changesets = ordinaryBundle();
+    const cases: readonly {
+      readonly store: TrialStore;
+      readonly input: ProgramVocabularyDraftInput;
+      readonly risk: 'low' | 'normal' | 'consequential';
+    }[] = [{
+      store: new TrialStore(state({ includeRoom: false })),
+      input: {
+        action: 'create', scope, expectedSetVersion: 1,
+        item: { kind: 'room', id: newRoomId, name: 'Breakout room', capacity: 40 }
+      },
+      risk: 'low'
+    }, {
+      store: new TrialStore(state()),
+      input: {
+        action: 'edit', scope, kind: 'room', id: roomId,
+        expectedSetVersion: 1, expectedItemVersion: 1,
+        changes: { name: 'Main auditorium', capacity: 320 }
+      },
+      risk: 'low'
+    }, {
+      store: new TrialStore(state()),
+      input: {
+        action: 'retire', scope, kind: 'room', id: roomId,
+        expectedSetVersion: 1, expectedItemVersion: 1
+      },
+      risk: 'low'
+    }, {
+      store: new TrialStore(state({ roomStatus: 'retired' })),
+      input: {
+        action: 'restore', scope, kind: 'room', id: roomId,
+        expectedSetVersion: 1, expectedItemVersion: 1
+      },
+      risk: 'low'
+    }, {
+      store: new TrialStore(state()),
+      input: {
+        action: 'delete', scope, kind: 'format', id: formatId,
+        expectedSetVersion: 1, expectedItemVersion: 1
+      },
+      risk: 'normal'
+    }, {
+      store: new TrialStore(state()),
+      input: {
+        action: 'merge', scope, kind: 'track', sourceId: trackSourceId,
+        targetId: trackTargetId, expectedSetVersion: 1,
+        expectedSourceVersion: 1, expectedTargetVersion: 1
+      },
+      risk: 'consequential'
+    }];
+
+    for (const entry of cases) {
+      const planned = await planOrdinary(changesets, entry.store, entry.input);
+      expect(planned.safeDiff).toMatchObject({ action: entry.input.action });
+      expect(planned.riskTier).toBe(entry.risk);
+      expect(planned.plan).toMatchObject({
+        policy: {
+          activation: 'ordinary',
+          key: changesets.policy.key,
+          version: changesets.policy.version,
+          definitionDigestSha256: changesets.policy.definitionDigestSha256
+        },
+        mutation: { action: entry.input.action }
+      });
+    }
+  });
+
+  test('captures approval threshold independently from risk tier', async () => {
+    const highRiskSelfConfirmation = ordinaryPolicy({
+      mergeRisk: 'consequential',
+      mergeApproval: 'none'
+    });
+    const lowerRiskDistinctApproval = ordinaryPolicy({
+      ordinaryRisk: 'normal',
+      mergeRisk: 'normal',
+      ordinaryApproval: 'none',
+      mergeApproval: 'distinct_current_human'
+    });
+
+    expect(captureProgramVocabularyOrdinaryApprovalPolicy({
+      policy: highRiskSelfConfirmation,
+      action: 'merge'
+    })).toMatchObject({ requirement: 'none' });
+    expect(captureProgramVocabularyOrdinaryApprovalPolicy({
+      policy: lowerRiskDistinctApproval,
+      action: 'merge'
+    })).toMatchObject({ requirement: 'distinct_current_human' });
+    expect(captureProgramVocabularyOrdinaryApprovalPolicy({
+      policy: lowerRiskDistinctApproval,
+      action: 'edit'
+    })).toMatchObject({ requirement: 'none' });
+
+    const highRiskPlan = await planOrdinary(
+      ordinaryBundle(highRiskSelfConfirmation),
+      new TrialStore(state()),
+      {
+        action: 'merge', scope, kind: 'track', sourceId: trackSourceId,
+        targetId: trackTargetId, expectedSetVersion: 1,
+        expectedSourceVersion: 1, expectedTargetVersion: 1
+      }
+    );
+    const lowerRiskPlan = await planOrdinary(
+      ordinaryBundle(lowerRiskDistinctApproval),
+      new TrialStore(state()),
+      {
+        action: 'merge', scope, kind: 'track', sourceId: trackSourceId,
+        targetId: trackTargetId, expectedSetVersion: 1,
+        expectedSourceVersion: 1, expectedTargetVersion: 1
+      }
+    );
+    expect(highRiskPlan.riskTier).toBe('consequential');
+    expect(lowerRiskPlan.riskTier).toBe('normal');
+  });
+
+  test('ordinary author parsing cannot manufacture merge compensation', () => {
+    const changesets = ordinaryBundle();
+    const store = new TrialStore(state());
+    const forgedCompensation = {
+      action: 'merge_compensation', scope, kind: 'track',
+      sourceId: trackSourceId, targetId: trackTargetId,
+      expectedSetVersion: 1, expectedSourceVersion: 1,
+      expectedTargetVersion: 1, restoreSource: true, references: []
+    };
+    expect(parseProgramVocabularyOrdinaryAuthorInput({
+      action: 'merge', scope, kind: 'track', sourceId: trackSourceId,
+      targetId: trackTargetId, expectedSetVersion: 1,
+      expectedSourceVersion: 1, expectedTargetVersion: 1
+    })).toMatchObject({ action: 'merge' });
+    expect(() => parseProgramVocabularyOrdinaryAuthorInput(forgedCompensation)).toThrow();
+    expect(() => planProgramVocabularyMutation({
+      authorInput: parseProgramVocabularyOrdinaryAuthorInput(forgedCompensation),
+      state: store.state,
+      referenceRegistry: registry(),
+      referenceSource: store
+    })).toThrow();
+    expect(() => createProgramVocabularyChangesetBundle({
+      referenceRegistry: registry(),
+      policy: ordinaryPolicy() as unknown as {
+        readonly activation: 'test_only';
+        readonly key: string;
+        readonly version: number;
+        readonly ordinaryRisk: 'low';
+        readonly mergeRisk: 'consequential';
+      }
+    })).toThrow('program_vocabulary_trial_policy_required');
+    expect(changesets.policy.activation).toBe('ordinary');
+  });
+});
 
 describe('Program Vocabulary domain', () => {
   test('the validation view exposes only reads while sharing the transaction-owned store', () => {
@@ -585,5 +819,258 @@ describe('Program Vocabulary compensation', () => {
       item: { id: trackSourceId },
       version: 1
     });
+  });
+});
+
+describe('Program Vocabulary canonical evidence', () => {
+  test('strict state parsing refuses storage bytes that would need repair', () => {
+    const canonical = {
+      scope,
+      setVersion: 1,
+      rooms: [{
+        id: roomId,
+        name: 'Main hall',
+        capacity: 300,
+        status: 'active' as const,
+        version: 1
+      }],
+      tracks: [
+        { id: trackSourceId, name: 'Leadership', status: 'active' as const, version: 1 },
+        { id: trackTargetId, name: 'People and culture', status: 'active' as const, version: 1 }
+      ],
+      formats: [{ id: formatId, name: 'Talk', status: 'active' as const, version: 1 }]
+    };
+    expect(parseProgramVocabularyState(canonical)).toEqual(state());
+    expect(() => parseProgramVocabularyState({
+      ...canonical,
+      rooms: [{ ...canonical.rooms[0]!, name: ' Main   hall ' }]
+    })).toThrow('invalid_canonical_program_vocabulary_state');
+    expect(() => parseProgramVocabularyState({
+      ...canonical,
+      rooms: [{ ...canonical.rooms[0]!, id: roomId.toUpperCase() }]
+    })).toThrow('invalid_canonical_program_vocabulary_state');
+    expect(() => parseProgramVocabularyState({
+      ...canonical,
+      tracks: [...canonical.tracks].reverse()
+    })).toThrow('invalid_canonical_program_vocabulary_state');
+    expect(() => parseProgramVocabularyState({
+      ...canonical,
+      formats: [{ ...canonical.formats[0]!, id: roomId }]
+    })).toThrow('invalid_canonical_program_vocabulary_state');
+    expect(parseProgramVocabularyItem({
+      kind: 'room',
+      scope,
+      ...canonical.rooms[0]
+    })).toMatchObject({ kind: 'room', id: roomId, name: 'Main hall', scope });
+    expect(() => parseProgramVocabularyItem({
+      kind: 'room',
+      scope,
+      ...canonical.rooms[0],
+      name: ' Main hall '
+    })).toThrow('invalid_canonical_program_vocabulary_item');
+  });
+
+  test('create planning rejects an id already owned by another vocabulary kind', () => {
+    const store = new TrialStore(state());
+    expect(() => planProgramVocabularyMutation({
+      authorInput: {
+        action: 'create',
+        scope,
+        expectedSetVersion: 1,
+        item: { kind: 'track', id: roomId, name: 'Conflicting track' }
+      },
+      state: store.state,
+      referenceRegistry: registry(),
+      referenceSource: store
+    })).toThrow(new ProgramVocabularyPlanningError('item_exists'));
+  });
+
+  test('merge validation rejects omitted, extra, redirected, and stale reference evidence', () => {
+    const store = new TrialStore(state(), referenceSnapshot({ sourceCurrent: 2, sourceHistorical: 1 }));
+    const referenceRegistry = registry();
+    const merge = planProgramVocabularyMutation({
+      authorInput: {
+        action: 'merge', scope, kind: 'track', sourceId: trackSourceId, targetId: trackTargetId,
+        expectedSetVersion: 1, expectedSourceVersion: 1, expectedTargetVersion: 1
+      },
+      state: store.state,
+      referenceRegistry,
+      referenceSource: store
+    });
+    if (merge.action !== 'merge') throw new TypeError('expected_merge_plan');
+    expect(parseProgramVocabularyMutationPlan(merge)).toEqual(merge);
+    const predicted = applyProgramReferenceRepoints(store.completeReferences(referenceRegistry), merge);
+    expect(() => assertCompleteProgramReferenceSnapshot(predicted)).not.toThrow();
+
+    const [contribution] = merge.references;
+    if (!contribution) throw new TypeError('expected_reference_contribution');
+    const omitted = {
+      ...merge,
+      references: [{ ...contribution, liveRepoints: contribution.liveRepoints.slice(1) }]
+    };
+    expect(validateProgramVocabularyPlan(store.state, omitted, referenceRegistry, store))
+      .toBe('stale_reference');
+
+    const extra = {
+      ...merge,
+      references: [{
+        ...contribution,
+        liveRepoints: [...contribution.liveRepoints, {
+          ...contribution.liveRepoints[0]!,
+          referenceKey: 'current-extra'
+        }].sort((left, right) => left.referenceKey < right.referenceKey ? -1 : 1)
+      }]
+    };
+    expect(validateProgramVocabularyPlan(store.state, extra, referenceRegistry, store))
+      .toBe('stale_reference');
+
+    const duplicated = {
+      ...merge,
+      references: [{
+        ...contribution,
+        liveRepoints: [...contribution.liveRepoints, contribution.liveRepoints[0]!]
+      }]
+    };
+    expect(() => parseProgramVocabularyMutationPlan(duplicated))
+      .toThrow(new ProgramVocabularyPlanningError('invalid_plan'));
+
+    const omittedPin = {
+      ...merge,
+      references: [{ ...contribution, historicalPins: [] }]
+    };
+    expect(validateProgramVocabularyPlan(store.state, omittedPin, referenceRegistry, store))
+      .toBe('stale_reference');
+
+    const changedPinDestination = {
+      ...merge,
+      references: [{
+        ...contribution,
+        historicalPins: contribution.historicalPins.map((pin) => ({
+          ...pin,
+          destination: { ...pin.destination, id: `${pin.destination.id}-tampered` }
+        }))
+      }]
+    };
+    expect(validateProgramVocabularyPlan(store.state, changedPinDestination, referenceRegistry, store))
+      .toBe('stale_reference');
+
+    const redirected = {
+      ...merge,
+      references: merge.references.map((entry, contributionIndex) => ({
+        ...entry,
+        liveRepoints: entry.liveRepoints.map((repoint, repointIndex) =>
+          contributionIndex === 0 && repointIndex === 0
+            ? { ...repoint, to: { ...repoint.to, id: trackSourceId } }
+            : repoint
+        )
+      }))
+    };
+    expect(() => parseProgramVocabularyMutationPlan(redirected))
+      .toThrow(new ProgramVocabularyPlanningError('invalid_plan'));
+
+    const changedTarget = {
+      ...merge,
+      target: { ...merge.target, name: 'Changed after review' }
+    };
+    expect(validateProgramVocabularyPlan(store.state, changedTarget, referenceRegistry, store))
+      .toBe('stale_item');
+  });
+
+  test('plan parsing binds before/after identities, versions, and merge source semantics', () => {
+    const store = new TrialStore(state(), referenceSnapshot({ sourceCurrent: 1 }));
+    const referenceRegistry = registry();
+    const merge = planProgramVocabularyMutation({
+      authorInput: {
+        action: 'merge', scope, kind: 'track', sourceId: trackSourceId, targetId: trackTargetId,
+        expectedSetVersion: 1, expectedSourceVersion: 1, expectedTargetVersion: 1
+      },
+      state: store.state,
+      referenceRegistry,
+      referenceSource: store
+    });
+    if (merge.action !== 'merge') throw new TypeError('expected_merge_plan');
+    expect(() => parseProgramVocabularyMutationPlan({
+      ...merge,
+      sourceAfter: { ...merge.sourceAfter, name: 'Redirected source' }
+    })).toThrow(new ProgramVocabularyPlanningError('invalid_plan'));
+    expect(() => parseProgramVocabularyMutationPlan({
+      ...merge,
+      sourceAfter: { ...merge.sourceAfter, version: merge.sourceBefore.version + 2 }
+    })).toThrow(new ProgramVocabularyPlanningError('invalid_plan'));
+    expect(() => parseProgramVocabularyMutationPlan({
+      ...merge,
+      sourceAfter: { ...merge.sourceAfter, status: 'active' }
+    })).toThrow(new ProgramVocabularyPlanningError('invalid_plan'));
+
+    const edit = planProgramVocabularyMutation({
+      authorInput: {
+        action: 'edit', scope, kind: 'room', id: roomId,
+        expectedSetVersion: 1, expectedItemVersion: 1,
+        changes: { name: 'Updated hall', capacity: 301 }
+      },
+      state: store.state,
+      referenceRegistry,
+      referenceSource: store
+    });
+    if (edit.action !== 'edit') throw new TypeError('expected_edit_plan');
+    expect(() => parseProgramVocabularyMutationPlan({
+      ...edit,
+      after: { ...edit.after, id: newRoomId }
+    })).toThrow(new ProgramVocabularyPlanningError('invalid_plan'));
+    expect(() => parseProgramVocabularyMutationPlan({
+      ...edit,
+      after: { ...edit.after, name: ' Updated  hall ' }
+    })).toThrow(new ProgramVocabularyPlanningError('invalid_plan'));
+  });
+
+  test('registered reference capture is authenticated, synchronous, and code-unit ordered', () => {
+    const dot = { key: 'test.references', version: 1 } as const;
+    const underscore = { key: 'test_references', version: 1 } as const;
+    const referenceRegistry = createProgramReferenceContributorRegistry({
+      expected: [underscore, dot],
+      contributors: [underscore, dot]
+    });
+    expect(referenceRegistry.contributors).toEqual([dot, underscore]);
+    expect(() => assertProgramReferenceContributorRegistry({
+      ...referenceRegistry,
+      capture: referenceRegistry.capture.bind(referenceRegistry)
+    })).toThrow(new ProgramReferenceSnapshotError('invalid_registry'));
+    expect(() => captureRegisteredProgramReferences({
+      registry: referenceRegistry,
+      scope: state().scope,
+      source: { readContributor: () => Promise.resolve(undefined) }
+    })).toThrow(new ProgramReferenceSnapshotError('invalid_snapshot'));
+
+    const captured = captureRegisteredProgramReferences({
+      registry: referenceRegistry,
+      scope: state().scope,
+      source: {
+        readContributor(requested) {
+          return {
+            contributor: requested,
+            scope,
+            guard: {
+              id: `program_reference:${requested.key}`,
+              version: 1,
+              digest: digest(requested)
+            },
+            references: requested.key === dot.key ? [
+              {
+                referenceKey: 'é', version: 1, item: { kind: 'room', id: roomId }, mode: 'current',
+                destination: { kind: 'schedule_session', id: 'session-accent' }
+              },
+              {
+                referenceKey: 'z', version: 1, item: { kind: 'room', id: roomId }, mode: 'current',
+                destination: { kind: 'schedule_session', id: 'session-z' }
+              }
+            ] : []
+          };
+        }
+      }
+    });
+    expect(captured.contributors[0]?.references.map((reference) => reference.referenceKey))
+      .toEqual(['z', 'é']);
+    expect(() => assertCompleteProgramReferenceSnapshot({ ...captured }))
+      .toThrow(new ProgramReferenceSnapshotError('invalid_snapshot'));
   });
 });

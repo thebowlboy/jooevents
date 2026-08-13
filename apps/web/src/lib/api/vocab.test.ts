@@ -9,6 +9,7 @@ import {
 	usageTotal,
 	type VocabUsageSource
 } from './vocab';
+import { scopeRefCount } from './reviewers';
 import { scenarios } from './sample/registry';
 import type { WorkspaceDataset } from './sample/dataset';
 
@@ -97,6 +98,21 @@ describe('vocabulary usage', () => {
 			'3 submissions and sessions use this format. It stays retired and keeps rendering wherever it is used.'
 		);
 	});
+
+	test('keeps canonical reference evidence in its own factual units', () => {
+		expect(usageTotal({ currentReferences: 2, historicalPins: 1 })).toBe(3);
+		expect(usageLabel('track', { currentReferences: 2, historicalPins: 1 })).toBe(
+			'2 current references · 1 historical pin'
+		);
+		expect(usageLabel('room', { currentReferences: 0, historicalPins: 0 })).toBe(
+			'not used yet'
+		);
+		expect(
+			removalBlockReason('track', { currentReferences: 2, historicalPins: 1 })
+		).toBe(
+			'2 current references · 1 historical pin keep this track resolvable. Retire it to stop new use — existing records keep resolving it.'
+		);
+	});
 });
 
 describe('vocabulary namespace', () => {
@@ -138,10 +154,18 @@ describe('vocabulary namespace', () => {
 		}
 	});
 
-	test('refuses a delete exactly when the listed usage says it would', async () => {
+	test('refuses a delete exactly when the listed usage and reviewer scopes say it would', async () => {
+		// The same roster the server counts scope refs from, so the recomputed
+		// sentence and the refusal can never disagree.
+		const { reviewers } = await api.reviewers.list();
 		for (const track of await api.vocab.tracks()) {
 			const outcome = await api.vocab.removeTrack(track.id);
-			const reason = removalBlockReason('track', track.usage, track.status);
+			const reason = removalBlockReason(
+				'track',
+				track.usage,
+				track.status,
+				scopeRefCount('track', track.id, reviewers)
+			);
 			expect(outcome.ok).toBe(reason === null);
 			if (!outcome.ok) expect(outcome.reason).toBe(reason ?? '');
 		}

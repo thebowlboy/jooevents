@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
+	programVocabularyDraftOperationResultSchema,
+	PROGRAM_VOCABULARY_OPERATION_SCHEMA_REFS,
 	programVocabularySnapshotReadResultSchema,
 	safeOperationManifestSchema,
 	type SafeOperationManifest,
@@ -8,44 +10,52 @@ import {
 } from '@jooevents/contracts';
 import {
 	createProgramVocabularyLiveClient,
+	PROGRAM_VOCABULARY_DRAFT_OPERATIONS,
 	PROGRAM_VOCABULARY_SNAPSHOT_READ_OPERATION,
+	type ProgramVocabularyDraftRequest,
 	type ProgramVocabularyLiveClient,
-	type ProgramVocabularyUnavailableReason
+	type ProgramVocabularyLiveRequester
 } from './program-vocabulary-live';
 
 const correlationId = '018f0f47-7a86-7d36-8a25-9f86589c7a4d';
-const scope = {
-	workspaceId: '550e8400-e29b-41d4-a716-446655440000',
-	eventId: '018f7d5a-4b3c-7abc-8def-0123456789ab'
-} as const;
+const workspaceId = '550e8400-e29b-41d4-a716-446655440000';
+const eventId = '018f7d5a-4b3c-7abc-8def-0123456789ab';
+const firstId = '018f7d5a-4b3c-7abc-8def-0123456789b0';
+const secondId = '018f7d5a-4b3c-7abc-8def-0123456789b1';
 
-function schemaRef(key: string, seed: string) {
-	return { key, version: 1, digestSha256: seed.repeat(64) } as const;
+function binding(input: {
+	method: 'GET' | 'POST';
+	path: string;
+	requestInput: 'query' | 'body';
+	resultSchema: SafePublicOperationBinding['resultSchema'];
+}): SafePublicOperationBinding {
+	return {
+		surface: 'operator_http',
+		protocol: 'http',
+		method: input.method,
+		path: input.path,
+		input: input.requestInput,
+		resultSchema: input.resultSchema,
+		browserResumption: { kind: 'none' }
+	};
 }
 
-const resultSchema = schemaRef('schema.program_vocabulary.snapshot_read.result', 'b');
-const operatorBinding = {
-	surface: 'operator_http',
-	protocol: 'http',
-	method: 'GET',
-	path: '/api/operations/program-vocabulary',
-	input: 'query',
-	resultSchema,
-	browserResumption: { kind: 'none' }
-} as const satisfies SafePublicOperationBinding;
-
-function operation(
-	overrides: Partial<SafeOperationManifestEntry> = {}
-): SafeOperationManifestEntry {
+function operation(input: {
+	identity: { readonly name: string; readonly version: number };
+	effect: 'read' | 'draft';
+	binding: SafePublicOperationBinding;
+	schemas: typeof PROGRAM_VOCABULARY_OPERATION_SCHEMA_REFS.snapshotRead;
+	overrides?: Partial<SafeOperationManifestEntry>;
+}): SafeOperationManifestEntry {
 	return {
-		name: PROGRAM_VOCABULARY_SNAPSHOT_READ_OPERATION.name,
-		version: PROGRAM_VOCABULARY_SNAPSHOT_READ_OPERATION.version,
+		name: input.identity.name,
+		version: input.identity.version,
 		lifecycle: { status: 'active' },
-		summary: 'Read the current event Program Vocabulary snapshot.',
-		effect: 'read',
+		summary: 'Program Vocabulary operation.',
+		effect: input.effect,
 		maxRisk: 'low',
 		autonomy: {
-			policy: { key: 'autonomy.program_vocabulary.snapshot_read', version: 1 },
+			policy: { key: `autonomy.${input.identity.name}`, version: 1 },
 			riskFloor: 'low',
 			unattendedRiskCeiling: 'low',
 			requiresSeparateApproval: false,
@@ -61,17 +71,71 @@ function operation(
 				terminal_failure: 'block'
 			}
 		},
-		consequenceTags: ['disclosure'],
-		inputSchema: schemaRef('schema.program_vocabulary.snapshot_read.input', 'a'),
-		idempotency: { required: false },
-		concurrency: { kind: 'read_snapshot' },
+		consequenceTags: [],
+		inputSchema: input.schemas.inputSchema,
+		idempotency:
+			input.effect === 'read'
+				? { required: false }
+				: {
+						required: true,
+						keySource: { key: 'idempotency.operator_header', version: 1 },
+						credentialVerifierProfile: { key: 'idempotency.operator', version: 1 },
+						requestHashProfile: { key: 'request_hash.program_vocabulary', version: 1 }
+					},
+		concurrency:
+			input.effect === 'read'
+				? { kind: 'read_snapshot' }
+				: { kind: 'registered', definition: { key: 'concurrency.program_vocabulary', version: 1 } },
 		outcomes: [],
-		enabledBindings: [operatorBinding],
-		...overrides
+		enabledBindings: [input.binding],
+		...input.overrides
 	};
 }
 
-function manifest(operations: readonly SafeOperationManifestEntry[] = [operation()]): SafeOperationManifest {
+const readBinding = binding({
+	method: 'GET', path: '/api/events/current/program-vocabulary', requestInput: 'query',
+	resultSchema: PROGRAM_VOCABULARY_OPERATION_SCHEMA_REFS.snapshotRead.resultSchema
+});
+const readPath = '/api/events/current/program-vocabulary';
+
+const draftPaths = {
+	create: '/api/events/current/program-vocabulary/drafts/create',
+	edit: '/api/events/current/program-vocabulary/drafts/edit',
+	retire: '/api/events/current/program-vocabulary/drafts/retire',
+	restore: '/api/events/current/program-vocabulary/drafts/restore',
+	delete: '/api/events/current/program-vocabulary/drafts/delete',
+	merge: '/api/events/current/program-vocabulary/drafts/merge'
+} as const;
+
+function defaultOperations(): SafeOperationManifestEntry[] {
+	return [
+		operation({
+			identity: PROGRAM_VOCABULARY_SNAPSHOT_READ_OPERATION,
+			effect: 'read',
+			binding: readBinding,
+			schemas: PROGRAM_VOCABULARY_OPERATION_SCHEMA_REFS.snapshotRead
+		}),
+		...Object.entries(PROGRAM_VOCABULARY_DRAFT_OPERATIONS).map(([action, identity]) =>
+			operation({
+				identity,
+				effect: 'draft',
+				binding: binding({
+					method: 'POST',
+					path: draftPaths[action as keyof typeof draftPaths],
+					requestInput: 'body',
+					resultSchema: PROGRAM_VOCABULARY_OPERATION_SCHEMA_REFS.drafts[
+						action as keyof typeof draftPaths
+					].resultSchema
+				}),
+				schemas: PROGRAM_VOCABULARY_OPERATION_SCHEMA_REFS.drafts[
+					action as keyof typeof draftPaths
+				]
+			})
+		)
+	];
+}
+
+function manifest(operations: readonly SafeOperationManifestEntry[] = defaultOperations()): SafeOperationManifest {
 	return safeOperationManifestSchema.parse({
 		schemaVersion: 1,
 		registryDigestSha256: 'f'.repeat(64),
@@ -79,164 +143,241 @@ function manifest(operations: readonly SafeOperationManifestEntry[] = [operation
 	});
 }
 
-const successResult = programVocabularySnapshotReadResultSchema.parse({
+const readSuccess = programVocabularySnapshotReadResultSchema.parse({
 	kind: 'success',
 	correlationId,
 	data: {
 		schemaVersion: 1,
-		scope,
+		scope: { workspaceId, eventId },
 		setVersion: 4,
-		rooms: [
-			{
-				kind: 'room',
-				id: '018f7d5a-4b3c-7abc-8def-0123456789b0',
-				name: 'Flexible room',
-				status: 'active',
-				version: 2,
-				capacity: null,
-				usage: { current: 2, historicalPins: 5 },
-				deleteEligibility: { kind: 'blocked', currentReferences: 2, historicalPins: 5 }
-			}
-		],
+		rooms: [{
+			kind: 'room', id: firstId, name: 'Flexible room', status: 'active', version: 2,
+			capacity: null,
+			usage: { current: 2, historicalPins: 5 },
+			deleteEligibility: { kind: 'blocked', currentReferences: 2, historicalPins: 5 }
+		}],
 		tracks: [],
 		formats: []
 	}
 });
 
+const draftOutcome = programVocabularyDraftOperationResultSchema.parse({
+	kind: 'outcome',
+	terminal: false,
+	correlationId,
+	outcome: {
+		class: 'stale_revision',
+		kind: 'program_vocabulary.set_changed',
+		retryable: false,
+		subjects: [],
+		detail: null,
+		detailSchemaVersion: 1
+	}
+});
+if (draftOutcome.kind !== 'outcome') throw new TypeError('expected_draft_outcome_fixture');
+
+const createSuccess = programVocabularyDraftOperationResultSchema.parse({
+	kind: 'success',
+	correlationId,
+	receipt: {
+		id: secondId,
+		operationName: PROGRAM_VOCABULARY_DRAFT_OPERATIONS.create.name,
+		operationVersion: 1
+	},
+	data: {
+		schemaVersion: 1,
+		action: 'create',
+		changesetId: firstId,
+		headVersion: 1,
+		status: 'draft',
+		revision: { id: secondId, number: 1, digestSha256: 'c'.repeat(64) },
+		riskTier: 'low',
+		approvalPolicy: {
+			reference: { key: 'approval.program_vocabulary.default', version: 1 },
+			definitionDigestSha256: 'd'.repeat(64),
+			requirement: 'none'
+		},
+		safeDiff: {
+			action: 'create',
+			before: null,
+			after: {
+				kind: 'room', id: firstId, name: 'Flexible room', status: 'active',
+				version: 1, capacity: null
+			}
+		}
+	}
+});
+
+const requests: readonly ProgramVocabularyDraftRequest[] = [
+	{ action: 'create', input: { kind: 'room', expectedSetVersion: 4, name: 'Workshop room', capacity: 80 } },
+	{ action: 'edit', input: {
+		kind: 'room', id: firstId, expectedSetVersion: 4, expectedItemVersion: 2,
+		changes: { name: 'Flexible room', capacity: 120 }
+	} },
+	{ action: 'retire', input: { kind: 'room', id: firstId, expectedSetVersion: 4, expectedItemVersion: 2 } },
+	{ action: 'restore', input: { kind: 'room', id: firstId, expectedSetVersion: 4, expectedItemVersion: 2 } },
+	{ action: 'delete', input: { kind: 'room', id: firstId, expectedSetVersion: 4, expectedItemVersion: 2 } },
+	{ action: 'merge', input: {
+		kind: 'room', sourceId: firstId, targetId: secondId, expectedSetVersion: 4,
+		expectedSourceVersion: 2, expectedTargetVersion: 1
+	} }
+];
+
+function requester(input: {
+	read?: ProgramVocabularyLiveRequester['read'];
+	draft?: ProgramVocabularyLiveRequester['draft'];
+} = {}): ProgramVocabularyLiveRequester {
+	return {
+		read: input.read ?? (async () => ({ kind: 'success', data: readSuccess })),
+		draft: input.draft ?? (async () => ({ kind: 'success', data: draftOutcome }))
+	};
+}
+
 function noAuthorityInputSurface(_client: ProgramVocabularyLiveClient): void {
-	type Options = NonNullable<Parameters<ProgramVocabularyLiveClient['read']>[0]>;
-	type Forbidden = Extract<keyof Options, 'actor' | 'scope' | 'authority' | 'approval' | 'role'>;
+	type ReadOptions = NonNullable<Parameters<ProgramVocabularyLiveClient['read']>[0]>;
+	type DraftBusinessInput = ProgramVocabularyDraftRequest['input'];
+	type Forbidden = Extract<
+		keyof ReadOptions | keyof DraftBusinessInput,
+		'actor' | 'scope' | 'authority' | 'approval' | 'role' | 'workspaceId' | 'eventId'
+	>;
 	const forbidden: readonly Forbidden[] = [];
 	expect(forbidden).toEqual([]);
 }
 
 describe('pure-live Program Vocabulary operation client', () => {
-	test('uses the registry binding relative path and maps canonical success without business authority input', async () => {
+	test('maps the canonical snapshot through the exact manifest path without authority input', async () => {
 		const calls: Array<Record<string, unknown>> = [];
 		const abort = new AbortController();
 		const client = createProgramVocabularyLiveClient({
 			manifest: manifest(),
-			request: async (input) => {
+			request: requester({ read: async (input) => {
 				calls.push(input as unknown as Record<string, unknown>);
-				return { kind: 'success', data: successResult };
-			}
+				return { kind: 'success', data: readSuccess };
+			} })
 		});
 		noAuthorityInputSurface(client);
 
-		const result = await client.read({ signal: abort.signal });
-		expect(calls).toHaveLength(1);
-		expect(calls[0]).toMatchObject({
-			path: operatorBinding.path,
-			method: 'GET',
-			schema: programVocabularySnapshotReadResultSchema,
-			signal: abort.signal
-		});
-		expect(Object.keys(calls[0] ?? {}).sort()).toEqual(['method', 'path', 'schema', 'signal']);
-		expect(result).toEqual({
+		expect(await client.read({ signal: abort.signal })).toMatchObject({
 			kind: 'success',
 			correlationId,
 			data: {
-				schemaVersion: 1,
-				scope,
 				setVersion: 4,
-				rooms: [
-					{
-						kind: 'room',
-						id: successResult.kind === 'success' ? successResult.data.rooms[0]?.id : '',
-						name: 'Flexible room',
-						status: 'active',
-						version: 2,
-						capacity: null,
-						usage: { currentReferences: 2, historicalPins: 5 },
-						deleteAvailability: {
-							kind: 'unavailable',
-							currentReferences: 2,
-							historicalPins: 5
-						}
-					}
-				],
-				tracks: [],
-				formats: []
+				rooms: [{
+					name: 'Flexible room',
+					usage: { currentReferences: 2, historicalPins: 5 },
+					deleteAvailability: { kind: 'unavailable', currentReferences: 2, historicalPins: 5 }
+				}]
 			}
+		});
+		expect(calls[0]).toMatchObject({
+			path: readPath, method: 'GET', schema: programVocabularySnapshotReadResultSchema,
+			signal: abort.signal
 		});
 	});
 
-	test('keeps a structured outcome distinct from transport failure and success', async () => {
-		const outcomeResult = programVocabularySnapshotReadResultSchema.parse({
-			kind: 'outcome',
-			correlationId,
-			outcome: {
-				class: 'access_denied',
-				kind: 'program_vocabulary.not_authorized',
-				retryable: false,
-				subjects: [{ type: 'event', id: scope.eventId }],
-				detail: { reason: 'current_authority_required' },
-				detailSchemaVersion: 1
-			}
-		});
+	test('resolves all six draft operations independently and sends idempotency as metadata only', async () => {
+		const calls: Array<Record<string, unknown>> = [];
 		const client = createProgramVocabularyLiveClient({
 			manifest: manifest(),
-			request: async () => ({ kind: 'success', data: outcomeResult })
+			request: requester({ draft: async (input) => {
+				calls.push(input as unknown as Record<string, unknown>);
+				return { kind: 'success', data: draftOutcome };
+			} })
 		});
-		if (outcomeResult.kind !== 'outcome') throw new TypeError('expected_outcome');
 
-		expect(await client.read()).toEqual({
-			kind: 'outcome',
-			outcome: outcomeResult.outcome,
+		for (const [index, request] of requests.entries()) {
+			const idempotencyKey = `program-vocabulary-${request.action}-${index}`;
+			expect(await client.draft(request, { idempotencyKey })).toEqual({
+				kind: 'outcome',
+				outcome: draftOutcome.outcome,
+				terminal: false,
+				correlationId
+			});
+			const call = calls[index];
+			expect(call).toMatchObject({
+				path: draftPaths[request.action],
+				method: 'POST',
+				body: request.input,
+				idempotencyKey
+			});
+			expect((call?.body as Record<string, unknown>).idempotencyKey).toBeUndefined();
+			expect((call?.body as Record<string, unknown>).scope).toBeUndefined();
+		}
+	});
+
+	test('maps a successful draft to an inert changeset projection, not effective state', async () => {
+		const client = createProgramVocabularyLiveClient({
+			manifest: manifest(),
+			request: requester({ draft: async () => ({ kind: 'success', data: createSuccess }) })
+		});
+		const result = await client.draft(requests[0]!, { idempotencyKey: 'draft-create-success' });
+		expect(result).toMatchObject({
+			kind: 'success',
+			data: {
+				changesetId: firstId,
+				status: 'draft',
+				change: { action: 'create', before: null, after: { name: 'Flexible room' } }
+			},
+			receipt: { operationName: PROGRAM_VOCABULARY_DRAFT_OPERATIONS.create.name },
 			correlationId
 		});
+		if (result.kind !== 'success') throw new TypeError('expected_success');
+		expect('setVersion' in result.data).toBe(false);
 	});
 
-	test('keeps safe transport failure separate and does not manufacture canonical data', async () => {
-		const error = { code: 'network_unavailable', retryable: true } as const;
-		const client = createProgramVocabularyLiveClient({
+	test('keeps safe transport errors separate and fails a missing draft capability closed', async () => {
+		const transportClient = createProgramVocabularyLiveClient({
 			manifest: manifest(),
-			request: async () => ({ kind: 'error', error })
+			request: requester({ read: async () => ({
+				kind: 'error', error: { code: 'network_unavailable', retryable: true }
+			}) })
+		});
+		expect(await transportClient.read()).toEqual({
+			kind: 'transport_error', error: { code: 'network_unavailable', retryable: true }
 		});
 
-		expect(await client.read()).toEqual({ kind: 'transport_error', error });
+		let requested = false;
+		const missingClient = createProgramVocabularyLiveClient({
+			manifest: manifest(defaultOperations().filter(
+				(candidate) => candidate.name !== PROGRAM_VOCABULARY_DRAFT_OPERATIONS.delete.name
+			)),
+			request: requester({ draft: async () => {
+				requested = true;
+				return { kind: 'success', data: draftOutcome };
+			} })
+		});
+		expect(await missingClient.draft(requests[4]!, { idempotencyKey: 'missing-delete' })).toEqual({
+			kind: 'unavailable', reason: 'operation_not_registered'
+		});
+		expect(requested).toBe(false);
 	});
 
-	test('fails closed for every unavailable manifest/binding class without requesting', async () => {
-		const externalBinding = {
-			surface: 'external_mcp',
-			protocol: 'tool',
-			toolName: 'program_vocabulary_snapshot_read',
-			resultSchema
-		} as const satisfies SafePublicOperationBinding;
-		const unsupportedBinding = {
-			...operatorBinding,
-			method: 'POST',
-			input: 'body'
-		} as const satisfies SafePublicOperationBinding;
-		const cases: readonly [unknown, ProgramVocabularyUnavailableReason][] = [
-			[{}, 'invalid_operation_manifest'],
-			[manifest([]), 'operation_not_registered'],
-			[manifest([operation(), operation()]), 'operation_registration_ambiguous'],
-			[manifest([operation({ lifecycle: { status: 'replay_only' } })]), 'operation_not_active'],
-			[manifest([operation({ effect: 'draft' })]), 'operation_contract_mismatch'],
-			[manifest([operation({ enabledBindings: [externalBinding] })]), 'operator_http_binding_not_registered'],
-			[
-				manifest([operation({ enabledBindings: [operatorBinding, operatorBinding] })]),
-				'operator_http_binding_ambiguous'
-			],
-			[
-				manifest([operation({ enabledBindings: [unsupportedBinding] })]),
-				'operator_http_binding_unsupported'
-			]
-		];
+	test('fails a drifted draft schema ref closed before dispatch', async () => {
+		const operations = defaultOperations();
+		const createIndex = operations.findIndex(
+			(candidate) => candidate.name === PROGRAM_VOCABULARY_DRAFT_OPERATIONS.create.name
+		);
+		if (createIndex < 0) throw new TypeError('create_operation_fixture_missing');
+		const create = operations[createIndex]!;
+		operations[createIndex] = {
+			...create,
+			inputSchema: {
+				...create.inputSchema,
+				key: 'schema.program_vocabulary.changed-create-draft.input'
+			}
+		};
+		let requested = false;
+		const client = createProgramVocabularyLiveClient({
+			manifest: manifest(operations),
+			request: requester({ draft: async () => {
+				requested = true;
+				return { kind: 'success', data: draftOutcome };
+			} })
+		});
 
-		for (const [candidate, reason] of cases) {
-			let requested = false;
-			const client = createProgramVocabularyLiveClient({
-				manifest: candidate,
-				request: async () => {
-					requested = true;
-					return { kind: 'success', data: successResult };
-				}
-			});
-			expect(await client.read()).toEqual({ kind: 'unavailable', reason });
-			expect(requested).toBe(false);
-		}
+		expect(await client.draft(requests[0]!, { idempotencyKey: 'drifted-create' })).toEqual({
+			kind: 'unavailable', reason: 'operation_contract_mismatch'
+		});
+		expect(requested).toBe(false);
 	});
 });

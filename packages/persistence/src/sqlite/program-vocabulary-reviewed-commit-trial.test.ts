@@ -10,6 +10,7 @@ import {
   createOperationRegistry,
   createReviewedChangesetCommitHandler,
   createSingleUnitOfWorkConformanceFixture,
+  type EffectAuthorityRecheckSource,
   type InvocationEvidence,
   type OperationRegistrySource
 } from '@jooevents/application';
@@ -237,6 +238,19 @@ async function harness(failAt?: ProgramVocabularyReviewedCommitTrialFailurePoint
   installFoundationTrialUnitOfWorkSchema(sqlite);
   installProgramVocabularyTrialSchema(sqlite);
   installProgramVocabularyReviewedCommitTrialSchema(sqlite);
+  sqlite.exec(`
+    CREATE TABLE program_reviewed_current_authority_trial (
+      membership_id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      event_id TEXT NOT NULL,
+      state TEXT NOT NULL CHECK (state IN ('active', 'revoked'))
+    ) STRICT;
+  `);
+  sqlite.query<never, [string, string, string]>(`
+    INSERT INTO program_reviewed_current_authority_trial (
+      membership_id, workspace_id, event_id, state
+    ) VALUES (?, ?, ?, 'active')
+  `).run(membershipId, workspaceId, eventId);
   seedProgramVocabularyTrialStateForTest(sqlite, createProgramVocabularyState({ scope, setVersion: 1 }));
   const referenceRegistry = createProgramReferenceContributorRegistry({ expected: [], contributors: [] });
   const store = new SQLiteProgramVocabularyTrialStore(sqlite, referenceRegistry);
@@ -271,12 +285,31 @@ async function harness(failAt?: ProgramVocabularyReviewedCommitTrialFailurePoint
     expectedRevisionDigest: staged.revision.digest
   };
 
-  const revoked = { value: false };
+  const revoked = {
+    get value(): boolean {
+      return sqlite.query<{ readonly state: string }, [string]>(`
+        SELECT state FROM program_reviewed_current_authority_trial
+        WHERE membership_id = ?
+      `).get(membershipId)?.state === 'revoked';
+    },
+    set value(value: boolean) {
+      sqlite.query<never, [string, string]>(`
+        UPDATE program_reviewed_current_authority_trial SET state = ?
+        WHERE membership_id = ?
+      `).run(value ? 'revoked' : 'active', membershipId);
+    }
+  };
   let nextInvocation = 0;
   const authorityResolver: CurrentAuthorityResolver<InvocationEvidence> = {
     resolve(input) {
       if (input.evidence.kind !== 'operator') return { kind: 'denied', reason: 'lane_mismatch' };
-      if (revoked.value) return { kind: 'denied', reason: 'revoked' };
+      const current = sqlite.query<{ readonly state: string }, [string, string, string]>(`
+        SELECT state FROM program_reviewed_current_authority_trial
+        WHERE membership_id = ? AND workspace_id = ? AND event_id = ?
+      `).get(membershipId, input.scope.workspaceId, input.scope.eventId ?? '');
+      if (!current || current.state !== 'active') {
+        return { kind: 'denied', reason: current?.state === 'revoked' ? 'revoked' : 'cross_scope' };
+      }
       return {
         kind: 'authorized',
         authority: {
@@ -316,6 +349,10 @@ async function harness(failAt?: ProgramVocabularyReviewedCommitTrialFailurePoint
         };
       }
     }
+  });
+  const transactionAuthority: EffectAuthorityRecheckSource = Object.freeze({
+    resolveAuthority: authorityResolver.resolve,
+    now: () => now
   });
   const autonomy = createOperationAutonomyPolicy({
     definition: refs.autonomy,
@@ -439,7 +476,7 @@ async function harness(failAt?: ProgramVocabularyReviewedCommitTrialFailurePoint
     control,
     () => '018f7d5a-4b3c-7abc-8def-0123456789e1'
   );
-  const unitOfWork = new SQLiteTrialEffectUnitOfWorkPort(sqlite, adapter, {
+  const unitOfWork = new SQLiteTrialEffectUnitOfWorkPort(sqlite, adapter, transactionAuthority, {
     afterTerminalAuditInserted: (record) => adapter.afterTerminalAuditInserted(record)
   });
   return {

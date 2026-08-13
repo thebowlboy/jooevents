@@ -7,15 +7,21 @@ test('remove arms, then fires, then hands back an undo that names its target', a
 	const card = page.locator('#placed-ses-2');
 	await expect(card).toBeVisible({ timeout: 15000 });
 
-	// First press arms; nothing is removed yet.
-	const removeButton = card.getByRole('button', { name: /Remove/ });
+	// First press arms: the card's own face becomes the question; nothing is
+	// removed yet, and Keep stands the whole thing down.
 	await card.hover();
-	await removeButton.click();
-	await expect(card.getByRole('button', { name: /Press again to remove/ })).toBeVisible();
+	await card.getByRole('button', { name: 'Remove “Context Caching Without Tears” from the schedule' }).click();
+	const veil = card.getByRole('group', { name: 'Remove “Context Caching Without Tears” from the schedule?' });
+	await expect(veil).toBeVisible();
+	await veil.getByRole('button', { name: 'Keep “Context Caching Without Tears” on the schedule' }).click();
+	await expect(veil).toHaveCount(0);
 	await expect(card).toBeVisible();
 
-	// Second press removes and leaves a receipt naming the exact object.
-	await card.getByRole('button', { name: /Press again to remove/ }).click();
+	// Armed again, the explicit confirm removes and leaves a receipt naming the
+	// exact object.
+	await card.hover();
+	await card.getByRole('button', { name: 'Remove “Context Caching Without Tears” from the schedule' }).click();
+	await card.getByRole('button', { name: 'Remove “Context Caching Without Tears” — confirm' }).click();
 	const receipt = page.getByRole('status').filter({ hasText: 'Removed “Context Caching Without Tears”' });
 	await expect(receipt).toBeVisible({ timeout: 10000 });
 	await expect(card).toHaveCount(0);

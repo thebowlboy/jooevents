@@ -1,11 +1,17 @@
 import { createRoute, OpenAPIHono } from '@hono/zod-openapi';
 import type { AccessContext } from '@jooevents/contracts';
 import { accessContextSchema } from '@jooevents/contracts';
+import { correlationIdSchema } from '@jooevents/contracts';
 import { classifyRoutePath } from '@jooevents/contracts/route-namespaces';
 import { z } from 'zod';
 import type { ReturnTypeOrPromise } from './types';
 import type { JooEventsAuth } from '../auth/better-auth';
 import { backendRouteNotFoundResponse, protectBackendNotFoundResponse } from './backend-not-found';
+import { createOperatorOperationsHttpAdapter, type OperatorOperationsHttpRuntime } from './operator-operations';
+import {
+  RequestSerializationAbortedError,
+  type HttpRequestSerializationBoundary
+} from './request-serialization';
 
 export interface AccessContextService {
   ensureAuthPrincipalProvisioned(input: {
@@ -21,16 +27,36 @@ export function createHttpApp(input: {
   readonly accessContext: AccessContextService;
   readonly workspaceId: string;
   readonly baseUrl: string;
+  readonly operatorOperations?: OperatorOperationsHttpRuntime;
+  readonly requestSerialization?: HttpRequestSerializationBoundary;
 }) {
   const app = new OpenAPIHono();
 
   app.use('*', async (context, next) => {
-    const incoming = context.req.header('x-correlation-id');
-    const correlationId = incoming && /^[A-Za-z0-9._:-]{1,128}$/.test(incoming) ? incoming : crypto.randomUUID();
+    const incoming = correlationIdSchema.safeParse(context.req.header('x-correlation-id'));
+    const correlationId = incoming.success ? incoming.data : crypto.randomUUID();
     context.header('x-correlation-id', correlationId);
     context.set('correlationId' as never, correlationId as never);
     await next();
   });
+
+  const requestSerialization = input.requestSerialization;
+  if (requestSerialization) {
+    app.use('*', async (context, next) => {
+      try {
+        await requestSerialization.run(next, context.req.raw.signal);
+      } catch (error) {
+        if (!(error instanceof RequestSerializationAbortedError)) throw error;
+        context.res = new Response(null, {
+          status: 499,
+          headers: {
+            'cache-control': 'no-store, max-age=0',
+            'x-correlation-id': context.get('correlationId' as never) as string
+          }
+        });
+      }
+    });
+  }
 
   app.use('*', async (context, next) => {
     await next();
@@ -134,6 +160,10 @@ export function createHttpApp(input: {
     }
     return context.json(accessContextSchema.parse({ state: 'blocked', code: 'not_admitted' }));
   });
+
+  if (input.operatorOperations) {
+    app.route('/', createOperatorOperationsHttpAdapter(input.operatorOperations));
+  }
 
   app.get('/health', (context) => context.json({ ok: true }));
   app.doc('/api/openapi.json', {

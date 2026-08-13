@@ -5,6 +5,7 @@ import {
 } from '@jooevents/contracts';
 import {
   CURRENT_AUTHORITY_GRANT_KINDS,
+  CURRENT_AUTHORITY_DENIAL_REASONS,
   canonicalAuthorityPrincipalKeyFrame,
   parseOperationAccessLane,
   type AuthorityPrincipalRef,
@@ -76,6 +77,11 @@ import type {
   ReadContextBuilderRegistration,
   ReadContextBuildResult
 } from './types';
+import {
+  bindPublicEffectConformanceBuilder,
+  isPublicEffectConformanceActivation,
+  type PublicEffectConformanceActivation
+} from './public-effect-conformance-activation';
 
 export interface InvocationClientRef {
   readonly key: string;
@@ -317,6 +323,34 @@ const sealedInvocationContexts = new WeakSet<object>();
 const sealedDeniedReadObservationAttempts = new WeakSet<object>();
 const sealedDeniedEffectAuditAttempts = new WeakSet<object>();
 const sealedDeniedEffectAuditOutcomes = new WeakMap<object, StructuredOutcome>();
+interface EffectAuthorityRecheckDirective {
+  readonly operation: {
+    readonly name: string;
+    readonly version: number;
+    readonly effect: 'draft' | 'commit';
+  };
+  readonly evidence: InvocationEvidence;
+  readonly lane: OperationAccessLane;
+  readonly scope: ResolvedScope;
+  readonly initialAuthority: CurrentResolvedAuthority;
+  readonly resolveAuthority: CurrentAuthorityResolver<InvocationEvidence>['resolve'];
+  readonly now: Clock['now'];
+  readonly deniedAuthorityOutcome: (reason: CurrentAuthorityDenialReason) => StructuredOutcome;
+}
+const effectAuthorityRechecks = new WeakMap<object, EffectAuthorityRecheckDirective>();
+interface InternalEffectAuthorityRecheckResult {
+  readonly context: InvocationContext;
+  readonly evaluatedAt: Instant;
+  readonly authority: CurrentResolvedAuthority;
+  readonly result:
+    | { readonly kind: 'authorized' }
+    | {
+        readonly kind: 'denied';
+        readonly reason: CurrentAuthorityDenialReason;
+        readonly outcome: StructuredOutcome;
+      };
+}
+const sealedEffectAuthorityRecheckResults = new WeakMap<object, InternalEffectAuthorityRecheckResult>();
 const sha256Pattern = /^[a-f0-9]{64}$/;
 const stableKeyPattern = /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/;
 const reservedBusinessInputKeys = new Set([
@@ -590,18 +624,29 @@ function normalizeCurrentAuthority(value: unknown): CurrentResolvedAuthority {
   }
   try {
     if (!Array.isArray(value.grants) || !Array.isArray(value.evidenceIds) || !Array.isArray(value.authorityCitationIds)) throw new TypeError();
-    const grants = value.grants.map((grant) => {
+    const parsedGrants = value.grants.map((grant) => {
       if (!isPlainRecord(grant) || !exactKeys(grant, ['kind', 'key']) || typeof grant.kind !== 'string' || !CURRENT_AUTHORITY_GRANT_KINDS.includes(grant.kind as never)) throw new TypeError();
       return Object.freeze({ kind: grant.kind, key: nonEmptyBoundedString(grant.key, 256) });
     });
+    const grants = [...new Map(
+      parsedGrants.map((grant) => [`${grant.kind}\u0000${grant.key}`, grant] as const)
+    ).values()].sort((left, right) =>
+      left.kind.localeCompare(right.kind) || left.key.localeCompare(right.key)
+    );
+    const evidenceIds = [...new Set(
+      value.evidenceIds.map((id) => nonEmptyBoundedString(id, 256))
+    )].sort();
+    const authorityCitationIds = [...new Set(
+      value.authorityCitationIds.map(parseAuthorityCitationId)
+    )].sort();
     return Object.freeze({
       actor: normalizeActor(value.actor),
       principal: normalizePrincipal(value.principal),
       lane: parseOperationAccessLane(value.lane),
       scope: normalizeScope(value.scope),
       grants: Object.freeze(grants),
-      evidenceIds: Object.freeze(value.evidenceIds.map((id) => nonEmptyBoundedString(id, 256))),
-      authorityCitationIds: Object.freeze(value.authorityCitationIds.map(parseAuthorityCitationId)),
+      evidenceIds: Object.freeze(evidenceIds),
+      authorityCitationIds: Object.freeze(authorityCitationIds),
       evaluatedAt: parseInstant(value.evaluatedAt)
     }) as CurrentResolvedAuthority;
   } catch (error) {
@@ -758,6 +803,44 @@ export interface IdempotencyCredentialSeal {
 
 export interface IdempotencyCredentialSealer {
   seal(rawIdempotencyKey: string): IdempotencyCredentialSeal | Promise<IdempotencyCredentialSeal>;
+}
+
+/** Default WebCrypto implementation for server-only idempotency-key verification. */
+export function createHmacIdempotencyCredentialSealer(input: {
+  readonly profile: VersionedKeyProfileRef;
+  readonly keyBytes: Uint8Array;
+}): IdempotencyCredentialSealer {
+  const profile = parseProfile(input.profile);
+  const keyBytes = Uint8Array.from(input.keyBytes);
+  if (keyBytes.byteLength < 32) throw new InvocationContextError('invalid_request_binding');
+  return Object.freeze({
+    async seal(rawIdempotencyKey: string): Promise<IdempotencyCredentialSeal> {
+      if (
+        typeof rawIdempotencyKey !== 'string'
+        || rawIdempotencyKey.length < 1
+        || rawIdempotencyKey.length > 512
+      ) {
+        throw new InvocationContextError('invalid_request_binding');
+      }
+      const key = await crypto.subtle.importKey(
+        'raw',
+        Uint8Array.from(keyBytes).buffer,
+        { name: 'HMAC', hash: 'SHA-256' },
+        false,
+        ['sign']
+      );
+      const material = new TextEncoder().encode(`jooevents:idempotency:v1:${rawIdempotencyKey}`);
+      const tag = new Uint8Array(await crypto.subtle.sign(
+        'HMAC',
+        key,
+        Uint8Array.from(material).buffer
+      ));
+      return Object.freeze({
+        verifierProfile: profile,
+        verifierSha256: Array.from(tag, (byte) => byte.toString(16).padStart(2, '0')).join('')
+      });
+    }
+  });
 }
 
 export interface RequestHashSeal {
@@ -986,6 +1069,7 @@ function scopeResolutionEvidenceFor(evidence: InvocationEvidence): ScopeResoluti
 async function buildContext(input: {
   readonly options: ReadInvocationContextBuilderOptions | EffectInvocationContextBuilderOptions;
   readonly invocation: ReadContextBuilderInput | EffectContextBuilderInput;
+  readonly publicEffectConformanceActivation?: PublicEffectConformanceActivation;
 }): Promise<
   | {
       readonly kind: 'outcome';
@@ -1004,7 +1088,11 @@ async function buildContext(input: {
   const evidence = parseInvocationEvidence(invocation.verifiedEvidence);
   if (evidence.surface !== invocation.surface) throw new InvocationContextError('lane_substitution');
   const lane = findLane(options.lanes, evidence);
-  if (options.effect !== 'read' && (lane.kind === 'public_open' || lane.kind === 'public_ceremony')) {
+  if (options.effect !== 'read' && (
+    lane.kind === 'public_open'
+    || (lane.kind === 'public_ceremony'
+      && !isPublicEffectConformanceActivation(input.publicEffectConformanceActivation))
+  )) {
     throw new InvocationContextError('public_mutation_disabled');
   }
   if (options.effect === 'commit' && lane.kind === 'app_model') {
@@ -1140,11 +1228,188 @@ async function buildContext(input: {
     }
   }) as unknown as InvocationContext;
   sealedInvocationContexts.add(context);
+  if (options.effect !== 'read') {
+    effectAuthorityRechecks.set(context, Object.freeze({
+      operation: context.operation,
+      evidence,
+      lane,
+      scope,
+      initialAuthority: authority,
+      resolveAuthority: options.authorityResolver.resolve,
+      now: options.clock.now,
+      deniedAuthorityOutcome: options.deniedAuthorityOutcome
+    }) as EffectAuthorityRecheckDirective);
+  }
   return { kind: 'ready', context, ...(idempotency === undefined ? {} : { idempotency }) };
 }
 
 export function isSealedInvocationContext(value: unknown): value is InvocationContext {
   return typeof value === 'object' && value !== null && sealedInvocationContexts.has(value);
+}
+
+export interface EffectAuthorityRecheckSource {
+  readonly resolveAuthority: CurrentAuthorityResolver<InvocationEvidence>['resolve'];
+  readonly now: Clock['now'];
+}
+
+export interface SealedEffectAuthorityRecheckResult {
+  readonly kind: 'sealed_effect_authority_recheck_result';
+}
+
+export type ConsumedEffectAuthorityRecheckResult =
+  | { readonly kind: 'authorized'; readonly evaluatedAt: Instant }
+  | {
+      readonly kind: 'denied';
+      readonly reason: CurrentAuthorityDenialReason;
+      readonly outcome: StructuredOutcome;
+      readonly evaluatedAt: Instant;
+    };
+
+function authoritySnapshot(authority: CurrentResolvedAuthority): string {
+  return canonicalJsonText({
+    actor: authority.actor,
+    principal: authority.principal,
+    lane: authority.lane,
+    scope: authority.scope,
+    grants: [...authority.grants]
+      .map((grant) => ({ ...grant }))
+      .sort((left, right) => left.kind.localeCompare(right.kind) || left.key.localeCompare(right.key)),
+    evidenceIds: [...authority.evidenceIds].sort(),
+    authorityCitationIds: [...authority.authorityCitationIds].sort()
+  });
+}
+
+async function sealEffectInvocationCurrentAuthorityRecheck(
+  context: InvocationContext,
+  source: EffectAuthorityRecheckSource
+): Promise<SealedEffectAuthorityRecheckResult> {
+  const directive = effectAuthorityRechecks.get(context);
+  if (!directive || !isSealedInvocationContext(context) || context.operation.effect === 'read') {
+    throw new InvocationContextError('invalid_authority');
+  }
+  const evaluatedAt = parseInstant(source.now());
+  if (Date.parse(evaluatedAt) < Date.parse(context.receivedAt)) {
+    throw new InvocationContextError('invalid_authority');
+  }
+  const candidate = await source.resolveAuthority({
+    operation: directive.operation,
+    evidence: directive.evidence,
+    lane: directive.lane,
+    scope: directive.scope,
+    evaluatedAt
+  });
+  let reason: CurrentAuthorityDenialReason;
+  if (candidate.kind === 'denied') {
+    if (!CURRENT_AUTHORITY_DENIAL_REASONS.includes(candidate.reason)) {
+      throw new InvocationContextError('invalid_authority');
+    }
+    reason = candidate.reason;
+  } else if (candidate.kind === 'authorized') {
+    const current = normalizeCurrentAuthority(candidate.authority);
+    if (current.evaluatedAt !== evaluatedAt
+      || !sameLane(current.lane, directive.lane)
+      || canonicalJsonText(current.scope) !== canonicalJsonText(directive.scope)
+      || !authorityMatchesEvidence(current, directive.evidence)
+      || !authorityCitationsMatch(current)) {
+      throw new InvocationContextError('invalid_authority');
+    }
+    if (authoritySnapshot(current) === authoritySnapshot(directive.initialAuthority)) {
+      const sealed: SealedEffectAuthorityRecheckResult = Object.freeze({
+        kind: 'sealed_effect_authority_recheck_result'
+      });
+      sealedEffectAuthorityRecheckResults.set(sealed, Object.freeze({
+        context,
+        evaluatedAt,
+        authority: current,
+        result: Object.freeze({ kind: 'authorized' })
+      }));
+      return sealed;
+    }
+    reason = 'stale';
+  } else {
+    throw new InvocationContextError('invalid_authority');
+  }
+
+  const outcome = structuredOutcomeSchema.parse(directive.deniedAuthorityOutcome(reason));
+  if (outcome.class !== 'access_denied'
+    || outcome.kind !== `authority.${reason}`
+    || outcome.retryable !== false) {
+    throw new InvocationContextError('invalid_authority');
+  }
+  const sealed: SealedEffectAuthorityRecheckResult = Object.freeze({
+    kind: 'sealed_effect_authority_recheck_result'
+  });
+  sealedEffectAuthorityRecheckResults.set(sealed, Object.freeze({
+    context,
+    evaluatedAt,
+    authority: directive.initialAuthority,
+    result: Object.freeze({ kind: 'denied', reason, outcome })
+  }));
+  return sealed;
+}
+
+/** Rechecks before execution using the original trusted authority source. */
+export function recheckEffectInvocationCurrentAuthority(
+  context: InvocationContext
+): Promise<SealedEffectAuthorityRecheckResult> {
+  const directive = effectAuthorityRechecks.get(context);
+  if (!directive) return Promise.reject(new InvocationContextError('invalid_authority'));
+  return sealEffectInvocationCurrentAuthorityRecheck(context, {
+    resolveAuthority: directive.resolveAuthority,
+    now: directive.now
+  });
+}
+
+/**
+ * Rechecks with the authority source owned by the active transaction adapter.
+ * The source must perform only current, transaction-local reads.
+ */
+export function recheckEffectInvocationCurrentAuthorityInTransaction(
+  context: InvocationContext,
+  source: EffectAuthorityRecheckSource
+): Promise<SealedEffectAuthorityRecheckResult> {
+  if (!source || typeof source.resolveAuthority !== 'function' || typeof source.now !== 'function') {
+    return Promise.reject(new InvocationContextError('invalid_authority'));
+  }
+  return sealEffectInvocationCurrentAuthorityRecheck(context, source);
+}
+
+/** Opens only an authentic application-sealed result for its exact invocation. */
+export function consumeEffectInvocationCurrentAuthorityRecheck(
+  context: InvocationContext,
+  sealed: SealedEffectAuthorityRecheckResult
+): ConsumedEffectAuthorityRecheckResult {
+  const internal = sealedEffectAuthorityRecheckResults.get(sealed);
+  if (!internal || internal.context !== context) {
+    throw new InvocationContextError('invalid_authority');
+  }
+  return internal.result.kind === 'authorized'
+    ? Object.freeze({ kind: 'authorized', evaluatedAt: internal.evaluatedAt })
+    : Object.freeze({ ...internal.result, evaluatedAt: internal.evaluatedAt });
+}
+
+/** Returns authenticated audit attribution from an exact recheck result. */
+export function resolveEffectInvocationAuthorityRecheckAttribution(
+  context: InvocationContext,
+  sealed: SealedEffectAuthorityRecheckResult
+): CurrentResolvedAuthority {
+  const internal = sealedEffectAuthorityRecheckResults.get(sealed);
+  if (!internal || internal.context !== context) {
+    throw new InvocationContextError('invalid_authority');
+  }
+  return internal.authority;
+}
+
+/** Returns the trusted evaluation time from any authentic recheck result. */
+export function resolveEffectInvocationCurrentAuthorityRecheckTime(
+  context: InvocationContext,
+  sealed: SealedEffectAuthorityRecheckResult
+): Instant {
+  const internal = sealedEffectAuthorityRecheckResults.get(sealed);
+  if (!internal || internal.context !== context) {
+    throw new InvocationContextError('invalid_authority');
+  }
+  return internal.evaluatedAt;
 }
 
 export function isSealedDeniedEffectAuditAttempt(value: unknown): value is DeniedEffectAuditAttempt {
@@ -1187,7 +1452,8 @@ export function createReadInvocationContextBuilder(
 }
 
 export function createEffectInvocationContextBuilder(
-  options: EffectInvocationContextBuilderOptions
+  options: EffectInvocationContextBuilderOptions,
+  publicEffectConformanceActivation?: PublicEffectConformanceActivation
 ): EffectContextBuilderRegistration {
   const base = normalizeBase(options, options.effect);
   const sealCredential = options.idempotencyCredentialSealer.seal.bind(options.idempotencyCredentialSealer);
@@ -1203,7 +1469,13 @@ export function createEffectInvocationContextBuilder(
   const registration: EffectContextBuilderRegistration = Object.freeze({
     reference: sealedOptions.reference,
     async build(invocation: EffectContextBuilderInput): Promise<EffectContextBuildResult> {
-      const built = await buildContext({ options: sealedOptions, invocation });
+      const built = await buildContext({
+        options: sealedOptions,
+        invocation,
+        ...(publicEffectConformanceActivation === undefined
+          ? {}
+          : { publicEffectConformanceActivation })
+      });
       if (built.kind === 'outcome') {
         if (!built.auditAttempt) throw new InvocationContextError('invalid_authority');
         return { kind: 'outcome', outcome: built.outcome, auditAttempt: built.auditAttempt };
@@ -1223,5 +1495,8 @@ export function createEffectInvocationContextBuilder(
     }
   });
   trustedBuilderBindings.set(registration, bindingFor(sealedOptions));
+  if (publicEffectConformanceActivation !== undefined) {
+    bindPublicEffectConformanceBuilder(registration, publicEffectConformanceActivation);
+  }
   return registration;
 }

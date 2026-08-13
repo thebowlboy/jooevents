@@ -25,6 +25,14 @@ import {
 import { z } from 'zod';
 import { createOperationAutonomyPolicy } from '../autonomy';
 import {
+  createPublicEffectConformanceBoundary,
+  type PublicEffectConformanceBoundary
+} from '../public-effect-conformance';
+import {
+  assertApplicationOperationRuntime,
+  createApplicationOperationRuntime
+} from './runtime';
+import {
   createContextDeniedOperationAuditRecord,
   createIdempotencyConflictOperationAuditRecord,
   createNonterminalProgressOperationAuditRecord,
@@ -52,7 +60,9 @@ import {
 import {
   createEffectInvocationContextBuilder,
   createHmacRequestHashSealer,
-  isSealedInvocationContext
+  isSealedInvocationContext,
+  recheckEffectInvocationCurrentAuthority,
+  type SealedEffectAuthorityRecheckResult
 } from './invocation-context';
 import {
   createOperationRegistry,
@@ -121,6 +131,11 @@ const appModelLane = parseOperationAccessLane({
   kind: 'app_model',
   surface: 'app_model',
   policy: { key: 'authority.app-model-effect-test', version: 1 }
+});
+const publicCeremonyLane = parseOperationAccessLane({
+  kind: 'public_ceremony',
+  surface: 'public_http',
+  policy: { key: 'authority.public-ceremony-effect-test', version: 1 }
 });
 
 function definitionRef(key: string): VersionedDefinitionRef {
@@ -205,6 +220,8 @@ function fixture(options: {
   readonly registeredConsumer?: boolean;
   readonly registeredJob?: boolean;
   readonly operatorBinding?: boolean;
+  readonly publicBinding?: boolean;
+  readonly publicEffectConformance?: PublicEffectConformanceBoundary;
   readonly appModelBinding?: boolean;
   readonly denyAuthority?: boolean;
 } = {}): OperationRegistrySource {
@@ -237,9 +254,11 @@ function fixture(options: {
     ...(options.operatorBinding === false ? [] : [operatorLane]),
     ...(options.registeredConsumer ? [registeredConsumerLane] : []),
     ...(options.registeredJob ? [registeredJobLane] : []),
-    ...(options.appModelBinding ? [appModelLane] : [])
+    ...(options.appModelBinding ? [appModelLane] : []),
+    ...(options.publicBinding ? [publicCeremonyLane] : [])
   ];
-  const contextBuilder = createEffectInvocationContextBuilder({
+  const contextBuilder = (options.publicEffectConformance?.createContextBuilder
+    ?? createEffectInvocationContextBuilder)({
     reference: refs.context,
     operation: { name: operationName, version: 1 },
     effect,
@@ -524,6 +543,19 @@ function fixture(options: {
           surface: 'app_model' as const,
           toolName: effect === 'draft' ? 'note_draft' : 'note_commit',
           projection: refs.projection
+        }] : []),
+        ...(options.publicBinding ? [{
+          surface: 'public_http' as const,
+          method: 'POST' as const,
+          path: effect === 'draft' ? '/api/public/test/note-drafts' : '/api/public/test/note-commits',
+          input: 'body' as const,
+          browserResumption: {
+            kind: 'server_ref' as const,
+            referenceSchema: refs.input,
+            requestCodec: definitionRef('codec.public-note-effect-request'),
+            maximumReferenceBytes: 256
+          },
+          projection: refs.projection
         }] : [])
       ],
       registeredConsumerBindings: options.registeredConsumer ? [{
@@ -583,6 +615,9 @@ class InMemoryEffectUnitOfWork implements EffectUnitOfWorkPort {
   private state: MemoryState = { receipts: new Map(), domain: [], children: [], audits: new Map(), claims: new Map() };
   commits = 0;
   receiptObserver?: (receipt: TerminalEffectReceipt) => void;
+  authorityRecheckOverride?: (
+    context: EffectInvocationContext
+  ) => Promise<SealedEffectAuthorityRecheckResult> | SealedEffectAuthorityRecheckResult;
   handlerSnapshot: unknown = { currentValue: null };
   claimOverride?: 'same' | 'changed' | 'unknown';
   receiptOverride?: TerminalEffectReceipt;
@@ -622,9 +657,16 @@ class InMemoryEffectUnitOfWork implements EffectUnitOfWorkPort {
     const fail = (point: FailurePoint) => this.fail(point);
     const trace = this.trace;
     const receiptObserver = this.receiptObserver;
+    const authorityRecheckOverride = this.authorityRecheckOverride;
     const handlerSnapshot = this.handlerSnapshot;
     const claimOverride = this.claimOverride;
+    const receiptOverride = this.receiptOverride;
     const unitOfWork: EffectUnitOfWork = {
+      recheckCurrentAuthority(context) {
+        trace.push('authority_recheck');
+        return authorityRecheckOverride?.(context)
+          ?? recheckEffectInvocationCurrentAuthority(context);
+      },
       acquireExecutionClaim(identity, requestHash) {
         trace.push('claim');
         if (claimOverride === 'same') return { kind: 'contended_same_request' as const };
@@ -643,7 +685,7 @@ class InMemoryEffectUnitOfWork implements EffectUnitOfWorkPort {
       },
       findTerminalReceipt(identity) {
         trace.push('receipt_recheck');
-        return working.receipts.get(identityKey(identity));
+        return receiptOverride ?? working.receipts.get(identityKey(identity));
       },
       openHandlerSnapshot(capability) {
         trace.push('snapshot');
@@ -651,8 +693,9 @@ class InMemoryEffectUnitOfWork implements EffectUnitOfWorkPort {
         fail('snapshot');
         return handlerSnapshot as EffectHandlerSnapshot;
       },
-      applyDomainContribution(contribution) {
+      applyDomainContribution(capability, contribution) {
         trace.push('domain');
+        expect(capability).toEqual(refs.capability);
         working.domain.push(structuredClone(contribution));
         fail('domain');
       },
@@ -1211,6 +1254,95 @@ describe('ordinary effect definition compatibility', () => {
     });
   });
 
+  test('isolates continuation-backed public effects behind one exact conformance boundary', async () => {
+    const boundary = createPublicEffectConformanceBoundary();
+    const source = fixture({
+      operatorBinding: false,
+      publicBinding: true,
+      publicEffectConformance: boundary
+    });
+
+    await expect(createOperationRegistry(source)).rejects.toMatchObject({
+      issues: expect.arrayContaining([
+        expect.objectContaining({ code: 'public_effect_lane_unactivated' })
+      ])
+    });
+
+    const registry = await boundary.createRegistry(source);
+    expect(registry.operatorHttpEffectBindings).toEqual([]);
+    expect(registry.publicHttpEffectBindings).toEqual([{
+      operationName: 'note.draft',
+      operationVersion: 1,
+      surface: 'public_http',
+      method: 'POST',
+      path: '/api/public/test/note-drafts',
+      input: 'body',
+      browserResumption: {
+        kind: 'server_ref',
+        referenceSchema: refs.input,
+        requestCodec: definitionRef('codec.public-note-effect-request'),
+        maximumReferenceBytes: 256
+      }
+    }]);
+    expect(registry.safeManifest.operations[0]?.enabledBindings[0]).toMatchObject({
+      protocol: 'http',
+      surface: 'public_http',
+      browserResumption: { kind: 'server_ref' }
+    });
+
+    const runtime = await boundary.createRuntime({
+      source,
+      read: {
+        operationalTrace: { emit() {} },
+        immutableAudit: { append() {} },
+        clock: { now: () => authorityInstant },
+        newInvocationId: () => authorityIds.invocation
+      },
+      unitOfWork: new InMemoryEffectUnitOfWork()
+    });
+    expect(() => assertApplicationOperationRuntime(runtime)).not.toThrow();
+    expect(runtime.registry.publicHttpEffectBindings).toEqual(registry.publicHttpEffectBindings);
+    await expect(createApplicationOperationRuntime({
+      source,
+      read: {
+        operationalTrace: { emit() {} },
+        immutableAudit: { append() {} },
+        clock: { now: () => authorityInstant },
+        newInvocationId: () => authorityIds.invocation
+      },
+      unitOfWork: new InMemoryEffectUnitOfWork()
+    })).rejects.toMatchObject({
+      issues: expect.arrayContaining([
+        expect.objectContaining({ code: 'public_effect_lane_unactivated' })
+      ])
+    });
+
+    const otherBoundary = createPublicEffectConformanceBoundary();
+    await expect(otherBoundary.createRegistry(source)).rejects.toMatchObject({
+      issues: expect.arrayContaining([
+        expect.objectContaining({ code: 'public_effect_context_unactivated' })
+      ])
+    });
+
+    const publicOpenLane = parseOperationAccessLane({
+      kind: 'public_open',
+      surface: 'public_http',
+      policy: { key: 'authority.public-open-effect-test', version: 1 }
+    });
+    const publicOpenSource: OperationRegistrySource = {
+      ...source,
+      effectOperations: (source.effectOperations ?? []).map((operation) => ({
+        ...operation,
+        accessLanes: [publicOpenLane]
+      }))
+    };
+    await expect(boundary.createRegistry(publicOpenSource)).rejects.toMatchObject({
+      issues: expect.arrayContaining([
+        expect.objectContaining({ code: 'public_effect_lane_unactivated' })
+      ])
+    });
+  });
+
   test('pins one credential verifier profile to the exact operation version', async () => {
     await expect(createOperationRegistry(fixture({
       builderCredentialProfile: rotatedKeyProfile,
@@ -1331,7 +1463,7 @@ describe('sealed ordinary effect executor', () => {
     const result = await test.executor.execute(await sealed({ builder: test.builder }));
     expect(result.kind).toBe('success');
     expect(test.port.trace).toEqual([
-      'receipt_preflight', 'begin', 'claim', 'receipt_recheck', 'snapshot',
+      'receipt_preflight', 'begin', 'authority_recheck', 'claim', 'receipt_recheck', 'snapshot',
       'domain', 'receipt_parent', 'operation_audit', 'receipt_child', 'release', 'commit'
     ]);
     expect(test.port.domainCount).toBe(1);
@@ -1780,7 +1912,9 @@ describe('sealed ordinary effect executor', () => {
     await expect(createEffectOperationExecutor({ registry: invalidRegistry, unitOfWork: invalidPort })
       .execute(await sealed({ builder: createEffectInvocationBuilder(invalidRegistry) })))
       .rejects.toMatchObject({ phase: 'autonomy_preflight' });
-    expect(invalidPort.trace).not.toContain('begin');
+    expect(invalidPort.trace).toEqual([
+      'receipt_preflight', 'begin', 'authority_recheck', 'claim', 'receipt_recheck', 'rollback'
+    ]);
 
     const unknownClaim = await harness();
     unknownClaim.port.claimOverride = 'unknown';
@@ -1822,7 +1956,9 @@ describe('sealed ordinary effect executor', () => {
       terminal: false,
       outcome: { class: 'policy_violation', kind: 'autonomy.renewed_approval' }
     });
-    expect(overBoundsPort.trace).not.toContain('begin');
+    expect(overBoundsPort.trace).toEqual([
+      'receipt_preflight', 'begin', 'authority_recheck', 'claim', 'receipt_recheck', 'release', 'commit', 'short_audit'
+    ]);
     const interventionEvidence = resolveEffectAutonomyExecutionEvidence({
       invocation: overBoundsInvocation,
       result: overBoundsResult
@@ -1861,7 +1997,9 @@ describe('sealed ordinary effect executor', () => {
       terminal: false,
       outcome: { kind: 'autonomy.renewed_approval' }
     });
-    expect(gatedPort.trace).not.toContain('begin');
+    expect(gatedPort.trace).toEqual([
+      'receipt_preflight', 'begin', 'authority_recheck', 'claim', 'receipt_recheck', 'release', 'commit', 'short_audit'
+    ]);
 
     const approved = await harness({ effect: 'commit', handlerEffect: 'commit' });
     const approvedInvocation = await sealed({
@@ -1911,12 +2049,14 @@ describe('sealed ordinary effect executor', () => {
     const compiled = getCompiledEffectOperation(test.registry, 'note.draft', 1, 'operator_http')?.operation;
     const context = test.observed.handlerContexts[0];
     if (!compiled || !context) throw new TypeError('missing sealed nonterminal audit fixture');
+    const authorityRecheck = await recheckEffectInvocationCurrentAuthority(context);
     expect(() => createNonterminalProgressOperationAuditRecord({
       context,
       definition: compiled.definition,
       auditTarget: compiled.auditTarget,
       auditRecordProfile: compiled.auditRecordProfile,
       result,
+      authorityRecheck,
       reason: {
         kind: 'autonomy_intervention',
         autonomyDisposition: 'proceed'
@@ -1928,6 +2068,7 @@ describe('sealed ordinary effect executor', () => {
       auditTarget: compiled.auditTarget,
       auditRecordProfile: compiled.auditRecordProfile,
       result,
+      authorityRecheck,
       reason: { kind: 'phase_nonterminal', detail: 'must-not-persist' } as never
     })).toThrow('invalid_nonterminal_progress_reason');
   });
@@ -1940,6 +2081,7 @@ describe('sealed ordinary effect executor', () => {
     if (!context || !compiled || terminalResult.kind !== 'success') {
       throw new TypeError('missing audit-seal fixture');
     }
+    const authorityRecheck = await recheckEffectInvocationCurrentAuthority(context);
     const requestChanged: EffectfulOperationResult = {
       kind: 'outcome',
       outcome: {
@@ -1957,7 +2099,8 @@ describe('sealed ordinary effect executor', () => {
       context,
       definition: compiled.definition,
       auditTarget: compiled.auditTarget,
-      auditRecordProfile: compiled.auditRecordProfile
+      auditRecordProfile: compiled.auditRecordProfile,
+      authorityRecheck
     };
     expect(() => createTerminalNewOperationAuditRecord({
       ...authorized,
@@ -2029,9 +2172,15 @@ describe('sealed ordinary effect executor', () => {
       terminal: false,
       outcome: { class: 'conflict', kind: 'operation.in_progress', retryable: true }
     });
-    expect(await same.executor.execute(sameInvocation)).toEqual(sameResult);
+    await expect(same.executor.execute(sameInvocation)).rejects.toMatchObject({ phase: 'binding' });
+    expect(await same.executor.execute(await sealed({ builder: same.builder }))).toEqual(sameResult);
     expect(same.observed.handlerCalls).toBe(0);
+    expect(same.port.storedAudits).toHaveLength(2);
     expect(same.port.storedAudits).toEqual([
+      expect.objectContaining({
+        disposition: 'nonterminal_progress',
+        reason: { kind: 'same_request_contended' }
+      }),
       expect.objectContaining({
         disposition: 'nonterminal_progress',
         reason: { kind: 'same_request_contended' }
@@ -2051,6 +2200,71 @@ describe('sealed ordinary effect executor', () => {
       expect.objectContaining({ disposition: 'idempotency_conflict' })
     ]);
   });
+
+  test('rejects forged and wrong-context transaction authority seals before claim or domain work', async () => {
+    const forged = await harness();
+    forged.port.authorityRecheckOverride = () => ({
+      kind: 'sealed_effect_authority_recheck_result'
+    } as SealedEffectAuthorityRecheckResult);
+    await expect(forged.executor.execute(await sealed({ builder: forged.builder })))
+      .rejects.toMatchObject({ phase: 'authority_recheck' });
+    expect(forged.port.trace).toEqual([
+      'receipt_preflight', 'begin', 'authority_recheck', 'rollback'
+    ]);
+    expect(forged.observed.handlerCalls).toBe(0);
+    expect(forged.port.domainCount).toBe(0);
+
+    const wrongContext = await harness();
+    await wrongContext.executor.execute(await sealed({
+      builder: wrongContext.builder,
+      rawKey: 'context-b-key',
+      value: 'context-b'
+    }));
+    const contextB = wrongContext.observed.handlerContexts[0];
+    if (!contextB) throw new TypeError('missing wrong-context authority fixture');
+    const sealB = await recheckEffectInvocationCurrentAuthority(contextB);
+    wrongContext.port.authorityRecheckOverride = () => sealB;
+    const traceStart = wrongContext.port.trace.length;
+    await expect(wrongContext.executor.execute(await sealed({
+      builder: wrongContext.builder,
+      rawKey: 'context-a-key',
+      value: 'context-a'
+    }))).rejects.toMatchObject({ phase: 'authority_recheck' });
+    expect(wrongContext.port.trace.slice(traceStart)).toEqual([
+      'receipt_preflight', 'begin', 'authority_recheck', 'rollback'
+    ]);
+    expect(wrongContext.observed.handlerCalls).toBe(1);
+    expect(wrongContext.port.domainCount).toBe(1);
+  });
+
+  test('a sealed invocation is single-use even when two executions overlap', async () => {
+    const concurrent = await harness();
+    const invocation = await sealed({ builder: concurrent.builder });
+    const first = concurrent.executor.execute(invocation);
+    await expect(concurrent.executor.execute(invocation))
+      .rejects.toMatchObject({ phase: 'binding' });
+    expect((await first).kind).toBe('success');
+    expect(concurrent.observed.handlerCalls).toBe(1);
+    expect(concurrent.port.domainCount).toBe(1);
+    expect(concurrent.port.receiptCount).toBe(1);
+  });
+
+	test('an invocation cannot cross into an executor compiled from another registry', async () => {
+		const first = await harness();
+		const second = await harness();
+		const invocation = await sealed({ builder: first.builder });
+
+		await expect(second.executor.execute(invocation))
+			.rejects.toMatchObject({ phase: 'binding' });
+		expect(first.port.trace).toEqual([]);
+		expect(second.port.trace).toEqual([]);
+		expect(first.observed.handlerCalls).toBe(0);
+		expect(second.observed.handlerCalls).toBe(0);
+
+		expect((await first.executor.execute(invocation)).kind).toBe('success');
+		expect(first.observed.handlerCalls).toBe(1);
+		expect(second.observed.handlerCalls).toBe(0);
+	});
 });
 
 test('effect safe manifest contains only JSON contract metadata', async () => {

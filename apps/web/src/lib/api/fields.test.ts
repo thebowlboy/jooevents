@@ -181,31 +181,29 @@ describe('the locked email field', () => {
 describe('user-owned ordering', () => {
 	test('move persists, and a later add anchors relative to the moved layout', async () => {
 		const before = await api.fields.list();
-		const linkIndex = ids(before).indexOf('fld-link');
+		const emailIndex = ids(before).indexOf('fld-email');
 
-		// The user drags their presence question up next to the name.
-		expect(await api.fields.move('fld-link', 1)).toEqual({ ok: true });
+		// The user drags their one contact question up next to the name.
+		expect(await api.fields.move('fld-email', 1)).toEqual({ ok: true });
 		const moved = await api.fields.list();
-		expect(ids(moved)[1]).toBe('fld-link');
+		expect(ids(moved)[1]).toBe('fld-email');
 		moved.forEach((entry, index) => expect(entry.position).toBe(index));
 
-		// A new presence field now anchors after the moved field — index 2, not
-		// the ladder's canonical presence slot.
+		// A new contact field now anchors after the moved field — index 2, not
+		// the ladder's canonical contact slot.
 		const { field, placement } = await api.fields.add({
-			kind: 'url',
-			label: 'Mastodon profile',
+			kind: 'phone',
+			label: 'Phone number',
 			collectAt: ['apply']
 		});
-		expect(placement.group).toBe('presence');
+		expect(placement.group).toBe('contact');
 		expect(placement.index).toBe(2);
-		expect(placement.reason).toBe(
-			'Placed with the other links & social questions, after “A link to your work”.'
-		);
-		expect(ids(await api.fields.list()).slice(1, 3)).toEqual(['fld-link', field.id]);
+		expect(placement.reason).toBe('Placed with the other contact questions, after “Email”.');
+		expect(ids(await api.fields.list()).slice(1, 3)).toEqual(['fld-email', field.id]);
 
 		// Put the layout back.
 		await api.fields.remove(field.id);
-		expect(await api.fields.move('fld-link', linkIndex)).toEqual({ ok: true });
+		expect(await api.fields.move('fld-email', emailIndex)).toEqual({ ok: true });
 		expect(await api.fields.list()).toEqual(before);
 	});
 

@@ -1,4 +1,8 @@
 import { z } from 'zod';
+import {
+  operationHttpIdempotencyKeySchema,
+  operationTransportErrorSchema
+} from '@jooevents/contracts';
 
 /* Deliberately message-free: server, provider, and transport text is diagnostic
    evidence, never interface copy. Features map `code` through their reviewed copy
@@ -43,9 +47,21 @@ export async function requestJson<T>(input: {
   readonly schema: z.ZodType<T>;
   readonly method?: 'GET' | 'POST';
   readonly body?: unknown;
+  /** Required by every registered effect binding; never placed in a request body. */
+  readonly idempotencyKey?: string;
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
 }): Promise<ApiResult<T>> {
+  input.signal?.throwIfAborted();
+
+  const parsedIdempotencyKey = input.idempotencyKey === undefined
+    ? undefined
+    : operationHttpIdempotencyKeySchema.safeParse(input.idempotencyKey);
+  if (parsedIdempotencyKey && !parsedIdempotencyKey.success) {
+    logDiagnostic(input.path, 'invalid_request');
+    return { kind: 'error', error: { code: 'invalid_request', retryable: false } };
+  }
+
   const correlationId = requestCorrelationId();
   const timeout = new AbortController();
   const relayAbort = () => timeout.abort(input.signal?.reason);
@@ -58,6 +74,9 @@ export async function requestJson<T>(input: {
       headers: {
         accept: 'application/json',
         'x-correlation-id': correlationId,
+        ...(parsedIdempotencyKey?.success
+          ? { 'idempotency-key': parsedIdempotencyKey.data }
+          : {}),
         ...(input.body === undefined ? {} : { 'content-type': 'application/json' })
       },
       ...(input.body === undefined ? {} : { body: JSON.stringify(input.body) }),
@@ -70,8 +89,40 @@ export async function requestJson<T>(input: {
       logDiagnostic(input.path, 'invalid_response', `unexpected content-type ${contentType}`, serverCorrelationId);
       return { kind: 'error', error: { code: 'invalid_response', retryable: true, ...(serverCorrelationId ? { correlationId: serverCorrelationId } : {}) } };
     }
-    const payload: unknown = await response.json();
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch (error) {
+      if (input.signal?.aborted) throw error;
+      logDiagnostic(
+        input.path,
+        'invalid_response',
+        error instanceof Error ? error.message : undefined,
+        serverCorrelationId
+      );
+      return {
+        kind: 'error',
+        error: {
+          code: 'invalid_response',
+          retryable: true,
+          ...(serverCorrelationId ? { correlationId: serverCorrelationId } : {})
+        }
+      };
+    }
     if (!response.ok) {
+      const operationError = operationTransportErrorSchema.safeParse(payload);
+      if (operationError.success) {
+        const errorCorrelationId = serverCorrelationId ?? operationError.data.correlationId;
+        logDiagnostic(input.path, operationError.data.code, undefined, errorCorrelationId);
+        return {
+          kind: 'error',
+          error: {
+            code: operationError.data.code,
+            retryable: operationError.data.retryable,
+            ...(errorCorrelationId ? { correlationId: errorCorrelationId } : {})
+          }
+        };
+      }
       const parsedError = safeErrorSchema.safeParse(payload);
       if (parsedError.success) {
         logDiagnostic(input.path, parsedError.data.code, parsedError.data.message, serverCorrelationId ?? parsedError.data.correlationId);

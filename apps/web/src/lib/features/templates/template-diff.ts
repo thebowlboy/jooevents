@@ -197,11 +197,24 @@ export function diffTemplate(base: MessageTemplate, draft: MessageTemplate): Tem
 // Surface blocks
 
 type ScheduleDaysBlock = Extract<SurfaceBlock, { type: 'schedule-days' }>;
+type RosterListBlock = Extract<SurfaceBlock, { type: 'roster-list' }>;
 
 /** The listing's display options, diffed field by field when a pair edits. */
 const listingOptions = ['grouping', 'showRoom', 'showTrack', 'showSpeakers', 'density'] as const;
 
-function optionText(value: ScheduleDaysBlock[(typeof listingOptions)[number]]): string {
+/** The same, for the roster listing's own knobs. */
+const rosterOptions = [
+	'layout',
+	'grouping',
+	'showHeadline',
+	'showSessions',
+	'showLinks',
+	'density'
+] as const;
+
+function optionText(
+	value: ScheduleDaysBlock[(typeof listingOptions)[number]] | RosterListBlock[(typeof rosterOptions)[number]]
+): string {
 	return typeof value === 'boolean' ? (value ? 'on' : 'off') : value;
 }
 
@@ -211,6 +224,8 @@ function surfaceLabel(block: SurfaceBlock): string {
 			return 'Hero';
 		case 'schedule-days':
 			return 'Schedule layout';
+		case 'roster-list':
+			return 'Roster layout';
 		case 'form-section':
 			return `Section: ${block.title}`;
 		case 'note':
@@ -224,6 +239,8 @@ function surfaceText(block: SurfaceBlock, labelOf: (ref: string) => string): str
 			return block.title;
 		case 'schedule-days':
 			return `grouped by ${block.grouping}`;
+		case 'roster-list':
+			return `${block.layout} layout`;
 		case 'form-section':
 			return block.fieldRefs.map(labelOf).join(' · ');
 		case 'note':
@@ -257,6 +274,17 @@ function editedSurfacePair(
 				entries.push({
 					kind: 'edited',
 					target: `Schedule layout · ${option}`,
+					before: optionText(before[option]),
+					after: optionText(after[option])
+				});
+			}
+		}
+	} else if (before.type === 'roster-list' && after.type === 'roster-list') {
+		for (const option of rosterOptions) {
+			if (before[option] !== after[option]) {
+				entries.push({
+					kind: 'edited',
+					target: `Roster layout · ${option}`,
 					before: optionText(before[option]),
 					after: optionText(after[option])
 				});

@@ -1,7 +1,7 @@
 <script lang="ts">
-	import LineupPage from '$lib/features/review/LineupPage.svelte';
+	import OperatorPage from 'jooevents-operator-page';
 </script>
 
 <svelte:head><title>Line-up · JooEvents</title></svelte:head>
 
-<LineupPage />
+<OperatorPage area="review_lineup" />

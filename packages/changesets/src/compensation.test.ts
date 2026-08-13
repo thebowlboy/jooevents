@@ -287,6 +287,26 @@ const irreversibleDefinition = definition('record.notify', () => ({
   kind: 'irreversible',
   remediationKey: 'record.manual_followup'
 }));
+const mixedSemanticDefinition = definition('record.mixed_semantic', (plan) => ({
+  kind: 'semantic',
+  authorInput: {
+    id: plan.id,
+    updates: plan.changes.map((change) => ({ field: change.field, value: change.before }))
+  },
+  noteKey: 'record.semantic_match'
+}));
+const mixedPartialDefinition = definition('record.mixed_partial', (plan) => ({
+  kind: 'partial',
+  authorInput: {
+    id: plan.id,
+    updates: plan.changes.map((change) => ({ field: change.field, value: change.before }))
+  },
+  conflicts: ['record.later_work_preserved']
+}));
+const mixedBlockedDefinition = definition('record.mixed_blocked', () => ({
+  kind: 'blocked',
+  reasonKey: 'record.correction_requires_review'
+}));
 const undeclaredPortDefinition = definition('record.undeclared', (plan, currentSnapshot) => {
   currentSnapshot.getPort(secretReadPort).read();
   return { kind: 'exact', authorInput: { id: plan.id, updates: [] } };
@@ -354,7 +374,8 @@ async function apply(
     currentGuardDigests: new Map(operations.flatMap((operation) =>
       operation.guardRefs.map((reference) => [reference.id, reference.digest] as const)
     )),
-    now: '2026-08-11T01:01:00.000Z'
+    now: '2026-08-11T01:01:00.000Z',
+    approvalRequirement: 'none'
   });
   if (validation.kind !== 'ready') throw new TypeError(`unexpected_commit_refusal:${validation.refusal.kind}`);
   const prepared = await prepareChangesetCommit({
@@ -564,6 +585,61 @@ describe('changeset compensation planning', () => {
     });
   });
 
+  test('retains one canonical correction finding for every source operation when one blocks the draft', async () => {
+    const registryValue = registry([
+      mixedSemanticDefinition,
+      mixedPartialDefinition,
+      mixedBlockedDefinition
+    ]);
+    const store = new RecordStore([record('a'), record('b'), record('c')]);
+    const operations = [
+      await plannedOperation({
+        registry: registryValue,
+        store,
+        kind: mixedSemanticDefinition.kind,
+        id: 'a',
+        updates: [{ field: 'title', value: 'A source' }],
+        group: 'semantic'
+      }),
+      await plannedOperation({
+        registry: registryValue,
+        store,
+        kind: mixedPartialDefinition.kind,
+        id: 'b',
+        updates: [{ field: 'title', value: 'B source' }],
+        group: 'partial'
+      }),
+      await plannedOperation({
+        registry: registryValue,
+        store,
+        kind: mixedBlockedDefinition.kind,
+        id: 'c',
+        updates: [{ field: 'title', value: 'C source' }],
+        group: 'blocked'
+      })
+    ];
+    const source = await apply(registryValue, store, operations);
+    const result = await planChangesetCompensation({
+      registry: registryValue,
+      source,
+      snapshot: snapshot(store)
+    });
+
+    expect(result).toMatchObject({
+      kind: 'blocked',
+      notes: [{ noteKey: 'record.semantic_match' }],
+      conflicts: [{ conflictKeys: ['record.later_work_preserved'] }],
+      blockers: [{ reasonKey: 'record.correction_requires_review' }],
+      operationEvidence: [
+        { kind: 'semantic', draftable: true, noteKey: 'record.semantic_match' },
+        { kind: 'partial', draftable: true, conflictKeys: ['record.later_work_preserved'] },
+        { kind: 'blocked', draftable: false, reasonKey: 'record.correction_requires_review' }
+      ]
+    });
+    expect(result.operationEvidence.map((entry) => entry.lineage.sourceOperationIndex)).toEqual([0, 1, 2]);
+    expect(Object.isFrozen(result.operationEvidence)).toBe(true);
+  });
+
   test('a compensating draft uses fresh bases and guards and can itself go stale before commit', async () => {
     const registryValue = registry();
     const store = new RecordStore([record('a')]);
@@ -608,7 +684,8 @@ describe('changeset compensation planning', () => {
     const common = {
       expectedHeadVersion: compensation.version,
       expectedRevisionDigest: revision.digest,
-      now: '2026-08-11T02:01:00.000Z'
+      now: '2026-08-11T02:01:00.000Z',
+      approvalRequirement: 'none' as const
     };
     expect(validateExactCommit(compensation, {
       ...common,

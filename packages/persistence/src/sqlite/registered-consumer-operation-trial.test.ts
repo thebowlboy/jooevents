@@ -8,6 +8,7 @@ import {
   createOperationAutonomyPolicy,
   createOperationRegistry,
   createSingleUnitOfWorkConformanceFixture,
+  type EffectAuthorityRecheckSource,
   type EffectInvocationContext,
   type OperationRegistrySource,
   type RegisteredOperationSchema
@@ -219,6 +220,65 @@ interface HarnessState {
   readonly contexts: EffectInvocationContext[];
 }
 
+function createConsumerAuthorityResolver(input: {
+  readonly reliability: SQLiteReliabilityConsumerTrial;
+  readonly consumer: ConsumerDefinition;
+  readonly state: HarnessState;
+}): EffectAuthorityRecheckSource['resolveAuthority'] {
+  return (resolution) => {
+    if (resolution.evidence.kind !== 'registered_consumer') {
+      return { kind: 'denied', reason: 'lane_mismatch' };
+    }
+    const evidence = resolution.evidence;
+    const delivery = input.reliability.readDelivery(evidence.consumerDeliveryId);
+    const attempt = delivery?.attempts.find(
+      (candidate) => candidate.id === evidence.consumerAttemptId
+    );
+    if (!input.state.authorized) {
+      return { kind: 'denied', reason: 'not_authorized' };
+    }
+    if (
+      !delivery
+      || !attempt
+      || delivery.consumer.key !== input.consumer.key
+      || delivery.consumer.version !== input.consumer.version
+      || delivery.capabilityRevisionId !== input.consumer.capabilityRevisionId
+      || delivery.authorityCitation.key !== input.consumer.authorityCitation.key
+      || delivery.authorityCitation.version !== input.consumer.authorityCitation.version
+      || (attempt.state !== 'running' && attempt.state !== 'succeeded')
+    ) {
+      return { kind: 'denied', reason: 'stale' };
+    }
+    return {
+      kind: 'authorized',
+      authority: {
+        actor: {
+          kind: 'system_consumer_delivery',
+          consumerDeliveryId: delivery.id,
+          consumerAttemptId: attempt.id,
+          consumerKey: delivery.consumer.key,
+          consumerVersion: delivery.consumer.version
+        },
+        principal: {
+          kind: 'registered_consumer_delivery',
+          consumerDeliveryId: delivery.id,
+          consumerAttemptId: attempt.id,
+          consumerKey: delivery.consumer.key,
+          consumerVersion: delivery.consumer.version,
+          capabilityRevisionId: delivery.capabilityRevisionId,
+          authorityCitationId: ids.citation
+        },
+        lane: resolution.lane,
+        scope: resolution.scope,
+        grants: [{ kind: 'registered_capability', key: delivery.capabilityRevisionId }],
+        evidenceIds: [`consumer-attempt:${attempt.id}`],
+        authorityCitationIds: [ids.citation],
+        evaluatedAt: resolution.evaluatedAt
+      }
+    };
+  };
+}
+
 async function definitions(maximumAttempts = 3): Promise<{
   readonly consumer: ConsumerDefinition;
   readonly registry: ReliabilityRegistry;
@@ -263,6 +323,7 @@ function operationSource(input: {
   readonly consumer: ConsumerDefinition;
   readonly clock: TrialClock;
   readonly state: HarnessState;
+  readonly resolveAuthority: EffectAuthorityRecheckSource['resolveAuthority'];
 }): OperationRegistrySource {
   const lane = parseOperationAccessLane({
     kind: 'registered_consumer',
@@ -313,58 +374,7 @@ function operationSource(input: {
       }
     },
     authorityResolver: {
-      resolve: (resolution) => {
-        if (resolution.evidence.kind !== 'registered_consumer') {
-          return { kind: 'denied', reason: 'lane_mismatch' };
-        }
-        if (!input.state.authorized) {
-          return { kind: 'denied', reason: 'not_authorized' };
-        }
-        const evidence = resolution.evidence;
-        const delivery = input.reliability.readDelivery(evidence.consumerDeliveryId);
-        const attempt = delivery?.attempts.find(
-          (candidate) => candidate.id === evidence.consumerAttemptId
-        );
-        if (
-          !delivery
-          || !attempt
-          || delivery.consumer.key !== input.consumer.key
-          || delivery.consumer.version !== input.consumer.version
-          || delivery.capabilityRevisionId !== input.consumer.capabilityRevisionId
-          || delivery.authorityCitation.key !== input.consumer.authorityCitation.key
-          || delivery.authorityCitation.version !== input.consumer.authorityCitation.version
-          || (attempt.state !== 'running' && attempt.state !== 'succeeded')
-        ) {
-          return { kind: 'denied', reason: 'stale' };
-        }
-        return {
-          kind: 'authorized',
-          authority: {
-            actor: {
-              kind: 'system_consumer_delivery',
-              consumerDeliveryId: delivery.id,
-              consumerAttemptId: attempt.id,
-              consumerKey: delivery.consumer.key,
-              consumerVersion: delivery.consumer.version
-            },
-            principal: {
-              kind: 'registered_consumer_delivery',
-              consumerDeliveryId: delivery.id,
-              consumerAttemptId: attempt.id,
-              consumerKey: delivery.consumer.key,
-              consumerVersion: delivery.consumer.version,
-              capabilityRevisionId: delivery.capabilityRevisionId,
-              authorityCitationId: ids.citation
-            },
-            lane: resolution.lane,
-            scope: resolution.scope,
-            grants: [{ kind: 'registered_capability', key: delivery.capabilityRevisionId }],
-            evidenceIds: [`consumer-attempt:${attempt.id}`],
-            authorityCitationIds: [ids.citation],
-            evaluatedAt: resolution.evaluatedAt
-          }
-        };
-      }
+      resolve: input.resolveAuthority
     },
     clock: input.clock,
     newInvocationId: () => parseInvocationId(crypto.randomUUID()),
@@ -537,11 +547,21 @@ async function harness(options: {
     rawIdempotencyKeys: [],
     contexts: []
   };
+  const resolveAuthority = createConsumerAuthorityResolver({
+    reliability,
+    consumer: sealed.consumer,
+    state
+  });
+  const transactionAuthority = {
+    resolveAuthority,
+    now: clock.now
+  } satisfies EffectAuthorityRecheckSource;
   const operationRegistry = await createOperationRegistry(operationSource({
     reliability,
     consumer: sealed.consumer,
     clock,
-    state
+    state,
+    resolveAuthority
   }));
   const sourceSchemas: readonly RegisteredConsumerSourceSchemaRegistration[] = [{
     source: refs.fact,
@@ -603,6 +623,7 @@ async function harness(options: {
     inputProjectors: projectors,
     authority,
     domain,
+    transactionAuthority,
     workerKey: 'worker.registered-consumer-a',
     newAttemptId: () => options.attemptIds?.[attemptIndex++] ?? ids.attemptA,
     newCorrelationId: () => correlationId,
@@ -658,6 +679,7 @@ async function harness(options: {
     authority,
     sources,
     domain,
+    transactionAuthority,
     clock,
     state,
     runnerInput,
@@ -788,7 +810,11 @@ describe('registered consumer operation SQLite trial', () => {
       });
     await createEffectOperationExecutor({
       registry: trial.operationRegistry,
-      unitOfWork: new SQLiteTrialEffectUnitOfWorkPort(trial.sqlite, trial.domain),
+      unitOfWork: new SQLiteTrialEffectUnitOfWorkPort(
+        trial.sqlite,
+        trial.domain,
+        trial.transactionAuthority
+      ),
       newReceiptId: () => receiptIds[0]
     }).execute(invocation);
     expect(trial.reliability.readDelivery(ids.delivery)?.state).toBe('leased');

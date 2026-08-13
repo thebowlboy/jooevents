@@ -3,42 +3,59 @@
 	import { tick } from 'svelte';
 	import { navigating, page } from '$app/state';
 	import { afterNavigate } from '$app/navigation';
-	import { ChevronsUpDown, Lock, Menu, Plus, X } from 'lucide-svelte';
+	import { ChevronsUpDown, Lock, Menu, Plus, RotateCcw, X } from 'lucide-svelte';
 	import wordmarkUrl from '$lib/assets/brand/jooevents-wordmark-login-256.png';
-	import { useWorkspaceGateway } from '$lib/api/workspace-gateway';
+	import type {
+		WorkspaceShellPort,
+		WorkspaceShellSummary
+	} from '$lib/api/workspace-shell-port';
 	import { PENDING_MIN_VISIBLE_MS, Popover, trackPending } from '$lib/ui';
-	import type { WorkspaceSummary } from '$lib/api/types';
+	import type {
+		AccountInfo,
+		AreaKey,
+		WorkspaceEventOption
+	} from '$lib/api/types';
+	import AccountMenu from './AccountMenu.svelte';
+	import NewEventModal from './NewEventModal.svelte';
 	import {
 		destinationLabel,
 		isActive as matchesPath,
-		navGroups,
 		navHref,
 		navMeta,
-		overviewItem,
-		settingsItem
+		navModel
 	} from '../navigation';
 
-	const { api, source } = useWorkspaceGateway();
-	const sampleMode = source.kind === 'sample';
-	const sampleScenario = source.scenario;
-
 	let {
+		port,
 		title,
 		activePath,
+		onResetSample,
 		children
 	}: {
+		/** Source-neutral data and capabilities for this tuned shell. */
+		port: WorkspaceShellPort;
 		/** Overrides the destination title derived from the address. */
 		title?: string;
 		/** Pins the selected destination; only the design reference needs this. */
 		activePath?: string;
+		/** Sample composition reset; absent from live and design-reference shells. */
+		onResetSample?: () => void;
 		children: Snippet;
 	} = $props();
 
-	let summary = $state<WorkspaceSummary | null>(null);
+	const sampleMode = $derived(port.source.kind === 'sample');
+	const sampleScenario = $derived(port.source.kind === 'sample' ? port.source.scenario : null);
+	// Which rows exist at all is the viewer's authority, read from the shell
+	// port rather than inferred from the data the surfaces were handed.
+	const nav = $derived(navModel(port.viewer));
+
+	let summary = $state<WorkspaceShellSummary | null>(null);
 	let navOpen = $state(false);
 	let isNarrow = $state(false);
+	let navigationDialog = $state<HTMLElement>();
 	let closeButton = $state<HTMLButtonElement>();
 	let menuButton = $state<HTMLButtonElement>();
+	let summaryMessage = $state('');
 
 	// The shell is layout-owned chrome: it outlives every in-app navigation, so the
 	// sidebar is fetched once and afterwards refreshed in place. Counts change
@@ -46,8 +63,14 @@
 	let summaryRequest = 0;
 	async function loadSummary() {
 		const request = (summaryRequest += 1);
-		const next = await api.workspace.summary();
-		if (request === summaryRequest) summary = next;
+		const result = await port.summary.read();
+		if (request !== summaryRequest) return;
+		if (result.kind === 'success') {
+			summary = result.data;
+			summaryMessage = '';
+			return;
+		}
+		summaryMessage = result.message;
 	}
 
 	// Runs for the initial navigation as well as later ones.
@@ -55,6 +78,44 @@
 		void loadSummary();
 		if (navOpen) closeNav();
 	});
+
+	// ---- The signed-in account, for the one identity mark in the top bar. ----
+	let account = $state<AccountInfo | null>(null);
+	async function loadAccount() {
+		account = await port.account.current();
+	}
+	$effect(() => {
+		void loadAccount();
+		// The event list is a handful of rows and the picker should open already
+		// answered, so it loads with the shell; opening refreshes it silently.
+		if (port.events) loadEvents();
+	});
+
+	// ---- Event switching. The projection re-serves on every open — live
+	// options, never a copied list — and a switch re-scopes every surface by
+	// reloading the app over the newly selected event's data.
+	let events = $state<WorkspaceEventOption[] | null>(null);
+	let switchingId = $state('');
+	let switchRefusal = $state('');
+	let newEventOpen = $state(false);
+
+	function loadEvents() {
+		if (!port.events) return;
+		void port.events.list().then((options) => (events = [...options]));
+	}
+
+	async function chooseEvent(option: WorkspaceEventOption) {
+		if (!port.events || option.current || switchingId) return;
+		switchingId = option.id;
+		switchRefusal = '';
+		const outcome = await port.events.switchEvent(option.id);
+		if (outcome.ok) {
+			location.reload();
+			return;
+		}
+		switchRefusal = outcome.reason;
+		switchingId = '';
+	}
 
 	// The shell presents exactly one destination at a time.
 	//
@@ -84,11 +145,18 @@
 		return matchesPath(current, href);
 	}
 
-	function metaFor(key: (typeof overviewItem)['key']) {
+	function metaFor(key: AreaKey) {
 		return summary ? navMeta(summary.navCounts, key) : undefined;
 	}
 
-	function isLocked(key: (typeof overviewItem)['key']) {
+	async function createEvent(input: Parameters<NonNullable<WorkspaceShellPort['createFirstEvent']>>[0]) {
+		const create = summary?.event ? port.events?.createEvent : port.createFirstEvent;
+		return create
+			? create(input)
+			: { ok: false as const, reason: 'Creating another event is not available in this workspace yet.' };
+	}
+
+	function isLocked(key: AreaKey) {
 		return summary?.lockedAreas.includes(key) ?? false;
 	}
 
@@ -131,7 +199,27 @@
 	});
 
 	function onKeydown(event: KeyboardEvent) {
-		if (event.key === 'Escape' && navOpen) closeNav();
+		if (!navOpen) return;
+		if (event.key === 'Escape') {
+			event.preventDefault();
+			closeNav();
+			return;
+		}
+		if (event.key !== 'Tab' || !navigationDialog) return;
+
+		const focusable = [...navigationDialog.querySelectorAll<HTMLElement>(
+			'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+		)].filter((element) => element.tabIndex >= 0 && element.getClientRects().length > 0);
+		const first = focusable[0];
+		const last = focusable.at(-1);
+		if (!first || !last) return;
+		if (event.shiftKey && document.activeElement === first) {
+			event.preventDefault();
+			last.focus();
+		} else if (!event.shiftKey && document.activeElement === last) {
+			event.preventDefault();
+			first.focus();
+		}
 	}
 </script>
 
@@ -139,6 +227,7 @@
 
 <div class="shell">
 	<aside
+		bind:this={navigationDialog}
 		class="side"
 		class:side--open={navOpen}
 		inert={isNarrow && !navOpen}
@@ -146,7 +235,7 @@
 		aria-modal={navOpen ? 'true' : undefined}
 		aria-label={navOpen ? 'Navigation' : undefined}>
 		<div class="side__top">
-			<a class="side__brand" href="/app">
+			<a class="side__brand" href={nav.home}>
 				<img src={wordmarkUrl} alt="JooEvents" width="120" height="22" />
 			</a>
 			<button
@@ -160,11 +249,16 @@
 		</div>
 
 		{#if !summary}
-			{@const known = api.workspace.summarySnapshot()}
+			{@const known = port.summary.snapshot()}
 			<!-- The chip and the create button are different compositions, so what
 			     is already known about the workspace decides which one holds the
 			     space; each placeholder is that composition with skeleton fills. -->
-			{#if known && !known.event}
+			{#if summaryMessage}
+				<div class="side__event side__event--loading" role="status">
+					<span class="side__event-name">Workspace unavailable</span>
+					<span class="side__event-dates">{summaryMessage}</span>
+				</div>
+			{:else if known && !known.event}
 				<span class="ui-skeleton side__create-skeleton" aria-hidden="true"></span>
 			{:else}
 				<div class="side__event side__event--loading" aria-hidden="true">
@@ -173,27 +267,98 @@
 				</div>
 			{/if}
 		{:else if summary.event}
-			<button type="button" class="side__event">
-				<span class="ui-sr-only">Switch event:</span>
-				<span class="side__event-name">{summary.event.name}</span>
-				<span class="side__event-dates">{summary.event.dates} · {summary.event.location}</span>
-				<span class="side__event-caret" aria-hidden="true"><ChevronsUpDown size={14} /></span>
-			</button>
+			{@const event = summary.event}
+			{@const eventCollection = port.events}
+			{#if eventCollection}
+				<div class="side__switch">
+					<Popover label="Switch event" fill onreveal={loadEvents}>
+					{#snippet trigger()}
+						<span class="side__event">
+							<span class="side__event-name">{event.name}</span>
+							<span class="side__event-dates">{event.dates}{event.location ? ` · ${event.location}` : ''}</span>
+							<span class="side__event-caret" aria-hidden="true"><ChevronsUpDown size={14} /></span>
+						</span>
+					{/snippet}
+					{#snippet children()}
+						<div class="evswitch" aria-busy={!events}>
+							{#if !events}
+								<!-- One option's own structure with skeleton fills, so the panel
+								     holds the footprint the resolved options give it. -->
+								<div class="evswitch__option" aria-hidden="true">
+									<span class="evswitch__name"
+										><span class="ui-skeleton evswitch__fill" style="inline-size: 10rem"></span></span>
+									<span class="evswitch__meta"
+										><span class="ui-skeleton evswitch__fill" style="inline-size: 8rem"></span></span>
+								</div>
+							{:else}
+								{#each events as option (option.id)}
+									<button
+										type="button"
+										class="evswitch__option"
+										class:evswitch__option--current={option.current}
+										aria-pressed={option.current}
+										disabled={switchingId !== '' && switchingId !== option.id}
+										aria-busy={switchingId === option.id || undefined}
+										onclick={() => void chooseEvent(option)}>
+										<span class="evswitch__name">{option.name}</span>
+										<span class="evswitch__meta">
+											{switchingId === option.id
+												? 'Switching…'
+												: `${option.dates}${option.location ? ` · ${option.location}` : ''}`}
+										</span>
+									</button>
+								{/each}
+								{#if switchRefusal}
+									<p class="evswitch__refusal">{switchRefusal}</p>
+								{/if}
+							{/if}
+							{#if eventCollection.createEvent}
+								<!-- Creation enters the flow here. Secondary, not ghost: a
+								     rare action is still a button and keeps its dimensional
+								     skin at rest. -->
+								<div class="evswitch__new">
+									<button
+										type="button"
+										class="ui-button ui-button--secondary ui-button--sm"
+										aria-haspopup="dialog"
+										onclick={() => (newEventOpen = true)}>
+										<Plus size={14} aria-hidden="true" />New event
+									</button>
+								</div>
+							{/if}
+						</div>
+					{/snippet}
+					</Popover>
+				</div>
+			{:else}
+				<div class="side__event side__event--loading">
+					<span class="side__event-name">{event.name}</span>
+					<span class="side__event-dates">{event.dates}{event.location ? ` · ${event.location}` : ''}</span>
+				</div>
+			{/if}
 		{:else}
-			<button type="button" class="ui-button ui-button--primary side__create">
+			<button
+				type="button"
+				class="ui-button ui-button--primary side__create"
+				aria-haspopup="dialog"
+				disabled={!port.createFirstEvent}
+				onclick={() => (newEventOpen = true)}>
 				<Plus size={16} aria-hidden="true" />Create your first event
 			</button>
 		{/if}
 
 		<nav class="side__nav" aria-label="Workspace">
-			<a
-				class="side__link"
-				class:side__link--active={isActive(overviewItem.href)}
-				href={overviewItem.href}
-				aria-current={isActive(overviewItem.href) ? 'page' : undefined}>
-				<overviewItem.icon size={16} aria-hidden="true" />{overviewItem.label}
-			</a>
-			{#each navGroups as group (group.label)}
+			{#if nav.overview}
+				{@const overviewItem = nav.overview}
+				<a
+					class="side__link"
+					class:side__link--active={isActive(overviewItem.href)}
+					href={overviewItem.href}
+					aria-current={isActive(overviewItem.href) ? 'page' : undefined}>
+					<overviewItem.icon size={16} aria-hidden="true" />{overviewItem.label}
+				</a>
+			{/if}
+			{#each nav.groups as group (group.label)}
 				<span class="side__group">{group.label}</span>
 				{#each group.items as item (item.href)}
 					{#if isLocked(item.key)}
@@ -222,19 +387,20 @@
 				{/each}
 			{/each}
 		</nav>
-		<div class="side__foot">
-			<a
-				class="side__link"
-				class:side__link--active={isActive(settingsItem.href)}
-				href={settingsItem.href}
-				aria-current={isActive(settingsItem.href) ? 'page' : undefined}>
-				<settingsItem.icon size={16} aria-hidden="true" />{settingsItem.label}
-			</a>
-			<div class="side__user">
-				<span class="ui-avatar ui-avatar--sm">JK</span>
-				<span class="side__user-name">Jere K.</span>
+		<!-- Identity renders once, in the top bar's account menu; the foot keeps
+		     only the Settings door and stands down when the viewer has none. -->
+		{#if nav.settings}
+			{@const settingsItem = nav.settings}
+			<div class="side__foot">
+				<a
+					class="side__link"
+					class:side__link--active={isActive(settingsItem.href)}
+					href={settingsItem.href}
+					aria-current={isActive(settingsItem.href) ? 'page' : undefined}>
+					<settingsItem.icon size={16} aria-hidden="true" />{settingsItem.label}
+				</a>
 			</div>
-		</div>
+		{/if}
 	</aside>
 
 	{#if navOpen}
@@ -253,7 +419,7 @@
 				<Menu size={18} />
 			</button>
 			<h1 class="top__title">{destination}</h1>
-			{#if sampleMode}
+			{#if sampleMode && sampleScenario}
 				<!-- This badge governs the truth value of every other number on screen,
 				     so it says which story they belong to when asked. -->
 				<Popover label="Sample data — what these numbers are">
@@ -264,13 +430,30 @@
 						<p class="sample__name">{sampleScenario.name}</p>
 						<p class="sample__copy">{sampleScenario.description}</p>
 						<p class="sample__copy">
-							Every count, row, and name in this workspace comes from that scenario. Nothing is a
-							real event, and changes you commit last until the page is reloaded.
+							This workspace uses resettable sample fixtures for that scenario. Nothing is a real
+							event, and changes you commit last until you reset or reload.
 						</p>
+						{#if onResetSample}
+							<button type="button" class="ui-button ui-button--secondary ui-button--sm sample__reset" onclick={onResetSample}>
+								<RotateCcw size={14} aria-hidden="true" />Reset sample data
+							</button>
+						{/if}
 					{/snippet}
 				</Popover>
 			{/if}
-			<span class="ui-avatar ui-avatar--sm top__avatar">JK</span>
+			<span class="top__account">
+				{#if account}
+					<AccountMenu
+						name={account.name}
+						email={account.email}
+						pendingChange={account.pendingEmailChange}
+						emailChange={port.account.emailChange}
+						signOut={port.account.signOut}
+						onchanged={() => void loadAccount()} />
+				{:else}
+					<span class="ui-skeleton top__account-fill" aria-hidden="true"></span>
+				{/if}
+			</span>
 
 			{#if handover.visible}
 				<span class="top__arriving" aria-hidden="true"><span></span></span>
@@ -293,6 +476,15 @@
 		</main>
 	</div>
 </div>
+
+<!-- Mounted only while open: the shared dialog keeps its children rendered
+     when closed (display:none), and a labelled "Name" input sitting in every
+     page's accessibility tree collides with any surface asking for one. -->
+{#if newEventOpen}
+	<NewEventModal
+		bind:open={newEventOpen}
+		{createEvent} />
+{/if}
 
 <style>
 	.shell {
@@ -516,18 +708,6 @@
 		padding-block-start: var(--je-space-3);
 	}
 
-	.side__user {
-		display: flex;
-		align-items: center;
-		gap: var(--je-space-2);
-		padding-inline: var(--je-space-2);
-	}
-
-	.side__user-name {
-		font-size: var(--je-font-size-sm);
-		color: var(--je-color-text-muted);
-	}
-
 	/* Body */
 	.body {
 		flex: 1;
@@ -589,8 +769,95 @@
 		font-weight: 600;
 	}
 
-	.top__avatar {
+	.top__account {
+		display: inline-flex;
 		margin-inline-start: auto;
+	}
+
+	/* The avatar's own footprint, held while the account resolves. */
+	.top__account-fill {
+		inline-size: 1.5rem;
+		block-size: 1.5rem;
+		border-radius: var(--je-radius-round);
+	}
+
+	/* The chip is a rounded rectangle, so the popover's mark ring follows its
+	   shape rather than the default pill (cosmetic alignment only). */
+	.side__switch :global(.ui-popover__trigger) {
+		border-radius: var(--je-radius-control);
+	}
+
+	.evswitch {
+		display: grid;
+		gap: var(--je-space-1);
+	}
+
+	.evswitch__option {
+		display: grid;
+		gap: 2px;
+		inline-size: 100%;
+		margin: 0;
+		padding: var(--je-space-2);
+		border: 1px solid transparent;
+		border-radius: var(--je-radius-control);
+		background: none;
+		font: inherit;
+		text-align: start;
+		color: inherit;
+		cursor: pointer;
+	}
+
+	.evswitch__option:hover:not(:disabled) {
+		background: var(--je-color-surface-sunken);
+	}
+
+	/* The event the workspace currently serves is marked, not accented. */
+	.evswitch__option--current {
+		background: var(--je-color-mark-surface);
+		border-color: var(--je-color-mark-border);
+		cursor: default;
+	}
+
+	.evswitch__option--current:hover:not(:disabled) {
+		background: var(--je-color-mark-surface);
+	}
+
+	.evswitch__option:disabled {
+		opacity: 0.55;
+		cursor: not-allowed;
+	}
+
+	.evswitch__name {
+		font-size: var(--je-font-size-md);
+		font-weight: 600;
+	}
+
+	.evswitch__meta {
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
+		font-variant-numeric: tabular-nums;
+	}
+
+	.evswitch__fill {
+		display: inline-block;
+		block-size: 1lh;
+		max-inline-size: 100%;
+		vertical-align: bottom;
+	}
+
+	.evswitch__refusal {
+		margin: 0;
+		font-size: var(--je-font-size-sm);
+		font-weight: 650;
+		color: var(--je-color-danger);
+	}
+
+	.evswitch__new {
+		display: grid;
+		justify-items: start;
+		margin-block-start: var(--je-space-1);
+		padding-block-start: var(--je-space-2);
+		border-block-start: 1px solid var(--je-color-border-subtle);
 	}
 
 	.sample__name {
@@ -602,6 +869,10 @@
 	.sample__copy {
 		margin: 0;
 		color: var(--je-color-text-muted);
+	}
+
+	.sample__reset {
+		margin-block-start: var(--je-space-2);
 	}
 
 	.content {

@@ -1,10 +1,14 @@
 import {
   effectfulOperationResultSchema,
+  versionedDefinitionRefSchema,
   type EffectfulOperationResult,
   type VersionedDefinitionRef
 } from '@jooevents/contracts';
 import {
+  recheckEffectInvocationCurrentAuthorityInTransaction,
   isSealedOperationAuditRecord,
+  type EffectAuthorityRecheckSource,
+  type SealedEffectAuthorityRecheckResult,
   type ShortOperationAuditRecord,
   type TerminalNewOperationAuditRecord,
   EffectHandlerSnapshot,
@@ -172,23 +176,131 @@ BEGIN
 END;
 `;
 
-export interface SQLiteTrialEffectDomainAdapter {
+export interface SQLiteEffectDomainAdapter {
   openHandlerSnapshot(
     capability: VersionedDefinitionRef,
-    context: EffectInvocationContext
+    context: EffectInvocationContext,
+    authorityRecheck: SealedEffectAuthorityRecheckResult
   ): EffectHandlerSnapshot;
   applyDomainContribution(contribution: unknown): void | Promise<void>;
   afterReceiptParentInserted?(receipt: TerminalEffectReceipt): void | Promise<void>;
   afterReceiptChildInserted?(receiptId: string, contribution: unknown): void | Promise<void>;
   afterExecutionClaimReleased?(identity: EffectOperationIdentity): void | Promise<void>;
   afterUnitOfWorkCommitted?(): void | Promise<void>;
+  /** Runs exactly once after the transaction has either committed or rolled back. */
+  afterUnitOfWorkFinished?(outcome: {
+    readonly committed: boolean;
+  }): void | Promise<void>;
 }
 
-export interface SQLiteTrialEffectAuditHooks {
+export type SQLiteTrialEffectDomainAdapter = SQLiteEffectDomainAdapter;
+
+export interface SQLiteEffectDomainAdapterRegistration {
+  readonly capability: VersionedDefinitionRef;
+  readonly adapter: SQLiteEffectDomainAdapter;
+}
+
+export interface SQLiteEffectDomainAdapterRegistry {
+  readonly capabilities: readonly VersionedDefinitionRef[];
+}
+
+const registeredEffectDomains = new WeakMap<
+  SQLiteEffectDomainAdapterRegistry,
+  ReadonlyMap<string, SQLiteEffectDomainAdapter>
+>();
+
+function capabilityKey(capability: VersionedDefinitionRef): string {
+  return `${capability.key}\u0000${capability.version}`;
+}
+
+function bindDomainAdapter(adapter: SQLiteEffectDomainAdapter): SQLiteEffectDomainAdapter {
+  if (
+    !adapter
+    || typeof adapter !== 'object'
+    || typeof adapter.openHandlerSnapshot !== 'function'
+    || typeof adapter.applyDomainContribution !== 'function'
+  ) {
+    throw new TypeError('sqlite_effect_domain_adapter_invalid');
+  }
+  for (const hook of [
+    'afterReceiptParentInserted',
+    'afterReceiptChildInserted',
+    'afterExecutionClaimReleased',
+    'afterUnitOfWorkCommitted',
+    'afterUnitOfWorkFinished'
+  ] as const) {
+    if (adapter[hook] !== undefined && typeof adapter[hook] !== 'function') {
+      throw new TypeError(`sqlite_effect_domain_adapter_hook_invalid:${hook}`);
+    }
+  }
+  return Object.freeze({
+    openHandlerSnapshot: adapter.openHandlerSnapshot.bind(adapter),
+    applyDomainContribution: adapter.applyDomainContribution.bind(adapter),
+    ...(adapter.afterReceiptParentInserted
+      ? { afterReceiptParentInserted: adapter.afterReceiptParentInserted.bind(adapter) }
+      : {}),
+    ...(adapter.afterReceiptChildInserted
+      ? { afterReceiptChildInserted: adapter.afterReceiptChildInserted.bind(adapter) }
+      : {}),
+    ...(adapter.afterExecutionClaimReleased
+      ? { afterExecutionClaimReleased: adapter.afterExecutionClaimReleased.bind(adapter) }
+      : {}),
+    ...(adapter.afterUnitOfWorkCommitted
+      ? { afterUnitOfWorkCommitted: adapter.afterUnitOfWorkCommitted.bind(adapter) }
+      : {}),
+    ...(adapter.afterUnitOfWorkFinished
+      ? { afterUnitOfWorkFinished: adapter.afterUnitOfWorkFinished.bind(adapter) }
+      : {})
+  });
+}
+
+export function createSQLiteEffectDomainAdapterRegistry(
+  registrations: readonly SQLiteEffectDomainAdapterRegistration[]
+): SQLiteEffectDomainAdapterRegistry {
+  if (!Array.isArray(registrations)) {
+    throw new TypeError('sqlite_effect_domain_adapter_registrations_invalid');
+  }
+  const byCapability = new Map<string, SQLiteEffectDomainAdapter>();
+  const capabilities: VersionedDefinitionRef[] = [];
+  for (const registration of registrations) {
+    const parsed = versionedDefinitionRefSchema.safeParse(registration?.capability);
+    if (!parsed.success) throw new TypeError('sqlite_effect_domain_capability_invalid');
+    const capability = Object.freeze({ ...parsed.data });
+    const key = capabilityKey(capability);
+    if (byCapability.has(key)) {
+      throw new TypeError(`sqlite_effect_domain_capability_duplicate:${capability.key}@${capability.version}`);
+    }
+    byCapability.set(key, bindDomainAdapter(registration.adapter));
+    capabilities.push(capability);
+  }
+  capabilities.sort((left, right) => left.key.localeCompare(right.key) || left.version - right.version);
+  const registry = Object.freeze({ capabilities: Object.freeze(capabilities) });
+  registeredEffectDomains.set(registry, byCapability);
+  return registry;
+}
+
+function resolveRegisteredEffectDomain(
+  registry: SQLiteEffectDomainAdapterRegistry,
+  candidate: VersionedDefinitionRef
+): SQLiteEffectDomainAdapter {
+  const registrations = registeredEffectDomains.get(registry);
+  if (!registrations) throw new TypeError('sqlite_effect_domain_adapter_registry_unsealed');
+  const parsed = versionedDefinitionRefSchema.safeParse(candidate);
+  if (!parsed.success) throw new TypeError('sqlite_effect_domain_capability_invalid');
+  const adapter = registrations.get(capabilityKey(parsed.data));
+  if (!adapter) {
+    throw new TypeError(`sqlite_effect_domain_capability_unregistered:${parsed.data.key}@${parsed.data.version}`);
+  }
+  return adapter;
+}
+
+export interface SQLiteEffectAuditHooks {
   afterTerminalAuditInserted?(record: TerminalNewOperationAuditRecord): void | Promise<void>;
   afterShortAuditInserted?(record: ShortOperationAuditRecord): void | Promise<void>;
   afterShortAuditCommitted?(record: ShortOperationAuditRecord): void | Promise<void>;
 }
+
+export type SQLiteTrialEffectAuditHooks = SQLiteEffectAuditHooks;
 
 interface ReceiptRow {
   readonly id: string;
@@ -272,14 +384,25 @@ export function installFoundationTrialUnitOfWorkSchema(sqlite: Database): void {
   sqlite.exec(FOUNDATION_TRIAL_UOW_SQL);
 }
 
-export class SQLiteTrialEffectUnitOfWorkPort implements EffectUnitOfWorkPort {
+class SQLiteEffectUnitOfWorkBase implements EffectUnitOfWorkPort {
   #active = false;
+  readonly #authorityRecheck: EffectAuthorityRecheckSource;
 
   constructor(
     private readonly sqlite: Database,
-    private readonly domain: SQLiteTrialEffectDomainAdapter,
-    private readonly auditHooks: SQLiteTrialEffectAuditHooks = {}
-  ) {}
+    private readonly resolveDomain: (capability: VersionedDefinitionRef) => SQLiteEffectDomainAdapter,
+    authorityRecheck: EffectAuthorityRecheckSource,
+    private readonly auditHooks: SQLiteEffectAuditHooks = {}
+  ) {
+    if (!authorityRecheck
+      || typeof authorityRecheck.resolveAuthority !== 'function'
+      || typeof authorityRecheck.now !== 'function') {
+      throw new TypeError('foundation_transaction_authority_recheck_required');
+    }
+    const resolveAuthority = authorityRecheck.resolveAuthority.bind(authorityRecheck);
+    const now = authorityRecheck.now.bind(authorityRecheck);
+    this.#authorityRecheck = Object.freeze({ resolveAuthority, now });
+  }
 
   findTerminalReceipt(identity: EffectOperationIdentity): TerminalEffectReceipt | undefined {
     const row = this.sqlite.query<ReceiptRow, [string, string, string, number, string, string, number, string]>(`
@@ -344,8 +467,33 @@ export class SQLiteTrialEffectUnitOfWorkPort implements EffectUnitOfWorkPort {
     if (this.#active) throw new TypeError('nested_foundation_unit_of_work');
     this.#active = true;
     let beganOwnTransaction = false;
+    let committed = false;
     const childOrdinals = new Map<string, number>();
+    let selectedDomain: {
+      readonly capability: VersionedDefinitionRef;
+      readonly adapter: SQLiteEffectDomainAdapter;
+    } | undefined;
+    const selectDomain = (candidate: VersionedDefinitionRef): SQLiteEffectDomainAdapter => {
+      const parsed = versionedDefinitionRefSchema.safeParse(candidate);
+      if (!parsed.success) throw new TypeError('sqlite_effect_domain_capability_invalid');
+      if (selectedDomain) {
+        if (capabilityKey(selectedDomain.capability) !== capabilityKey(parsed.data)) {
+          throw new TypeError('sqlite_effect_domain_capability_changed_in_unit_of_work');
+        }
+        return selectedDomain.adapter;
+      }
+      const capability = Object.freeze({ ...parsed.data });
+      const adapter = this.resolveDomain(capability);
+      selectedDomain = Object.freeze({ capability, adapter });
+      return adapter;
+    };
     const unitOfWork: EffectUnitOfWork = Object.freeze({
+      recheckCurrentAuthority: (context: EffectInvocationContext) => {
+        if (!this.sqlite.inTransaction) {
+          throw new TypeError('foundation_authority_recheck_requires_transaction');
+        }
+        return recheckEffectInvocationCurrentAuthorityInTransaction(context, this.#authorityRecheck);
+      },
       acquireExecutionClaim: (identity: EffectOperationIdentity, requestHash: string) => {
         const result = this.sqlite.query<never, [string, string, string, number, string, string, number, string, string]>(`
           INSERT INTO foundation_trial_operation_execution_claims (
@@ -374,9 +522,13 @@ export class SQLiteTrialEffectUnitOfWorkPort implements EffectUnitOfWorkPort {
           : { kind: 'contended_changed_request' as const };
       },
       findTerminalReceipt: (identity: EffectOperationIdentity) => this.findTerminalReceipt(identity),
-      openHandlerSnapshot: (capability: VersionedDefinitionRef, context: EffectInvocationContext) =>
-        this.domain.openHandlerSnapshot(capability, context),
-      applyDomainContribution: (contribution: unknown) => this.domain.applyDomainContribution(contribution),
+      openHandlerSnapshot: (
+        capability: VersionedDefinitionRef,
+        context: EffectInvocationContext,
+        authorityRecheck: SealedEffectAuthorityRecheckResult
+      ) => selectDomain(capability).openHandlerSnapshot(capability, context, authorityRecheck),
+      applyDomainContribution: (capability: VersionedDefinitionRef, contribution: unknown) =>
+        selectDomain(capability).applyDomainContribution(contribution),
       insertReceiptParent: (receipt: TerminalEffectReceipt) => {
         const identity = receipt.identity;
         this.sqlite.query<never, [string, string, string, string, number, string, string, number, string, string, string]>(`
@@ -392,7 +544,7 @@ export class SQLiteTrialEffectUnitOfWorkPort implements EffectUnitOfWorkPort {
           receipt.requestHash,
           canonicalJsonText(receipt.result)
         );
-        return this.domain.afterReceiptParentInserted?.(receipt);
+        return selectedDomain?.adapter.afterReceiptParentInserted?.(receipt);
       },
       insertTerminalNewOperationAudit: (record: TerminalNewOperationAuditRecord) => {
         if (!isSealedOperationAuditRecord(record) || record.disposition !== 'terminal_new') {
@@ -419,7 +571,7 @@ export class SQLiteTrialEffectUnitOfWorkPort implements EffectUnitOfWorkPort {
           ) VALUES (?, ?, ?)
         `).run(receiptId, ordinal, canonicalJsonText(contribution));
         childOrdinals.set(receiptId, ordinal + 1);
-        return this.domain.afterReceiptChildInserted?.(receiptId, contribution);
+        return selectedDomain?.adapter.afterReceiptChildInserted?.(receiptId, contribution);
       },
       releaseExecutionClaim: (identity: EffectOperationIdentity) => {
         const result = this.sqlite.query<never, [string, string, string, number, string, string, number, string]>(`
@@ -434,7 +586,7 @@ export class SQLiteTrialEffectUnitOfWorkPort implements EffectUnitOfWorkPort {
              AND idempotency_key_verifier = ?
         `).run(...identityInsertValues(identity));
         if (result.changes !== 1) throw new TypeError('missing_foundation_execution_claim');
-        return this.domain.afterExecutionClaimReleased?.(identity);
+        return selectedDomain?.adapter.afterExecutionClaimReleased?.(identity);
       }
     });
 
@@ -447,13 +599,49 @@ export class SQLiteTrialEffectUnitOfWorkPort implements EffectUnitOfWorkPort {
       ).get()?.count ?? -1;
       if (claimCount !== 0) throw new TypeError('foundation_execution_claim_not_released');
       this.sqlite.exec('COMMIT;');
-      await this.domain.afterUnitOfWorkCommitted?.();
+      committed = true;
+      await selectedDomain?.adapter.afterUnitOfWorkCommitted?.();
       return result;
     } catch (error) {
       if (beganOwnTransaction && this.sqlite.inTransaction) this.sqlite.exec('ROLLBACK;');
       throw error;
     } finally {
-      this.#active = false;
+      try {
+        await selectedDomain?.adapter.afterUnitOfWorkFinished?.({ committed });
+      } finally {
+        this.#active = false;
+      }
     }
+  }
+}
+
+export class SQLiteEffectUnitOfWorkPort extends SQLiteEffectUnitOfWorkBase {
+  constructor(
+    sqlite: Database,
+    registry: SQLiteEffectDomainAdapterRegistry,
+    authorityRecheck: EffectAuthorityRecheckSource,
+    auditHooks: SQLiteEffectAuditHooks = {}
+  ) {
+    if (!registeredEffectDomains.has(registry)) {
+      throw new TypeError('sqlite_effect_domain_adapter_registry_unsealed');
+    }
+    super(
+      sqlite,
+      (capability) => resolveRegisteredEffectDomain(registry, capability),
+      authorityRecheck,
+      auditHooks
+    );
+  }
+}
+
+export class SQLiteTrialEffectUnitOfWorkPort extends SQLiteEffectUnitOfWorkBase {
+  constructor(
+    sqlite: Database,
+    domain: SQLiteTrialEffectDomainAdapter,
+    authorityRecheck: EffectAuthorityRecheckSource,
+    auditHooks: SQLiteTrialEffectAuditHooks = {}
+  ) {
+    const boundDomain = bindDomainAdapter(domain);
+    super(sqlite, () => boundDomain, authorityRecheck, auditHooks);
   }
 }

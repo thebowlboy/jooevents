@@ -1,8 +1,11 @@
 import {
   programVocabularyChangeResultSchema,
   programVocabularyDraftInputSchema,
+  programVocabularyIdSchema,
+  programVocabularyNameSchema,
   programVocabularySafeDiffSchema,
   programVocabularyScopeSchema,
+  programTrackAccentSchema,
   programVocabularyVersionSchema,
   type ProgramVocabularyChangeResult,
   type ProgramVocabularyKind,
@@ -26,6 +29,7 @@ import {
 import { z } from 'zod';
 import {
   mergeReferenceCounts,
+  parseProgramVocabularyMutationPlan,
   planProgramVocabularyMutation,
   plannedProgramVocabularyItem,
   programVocabularyAggregateId,
@@ -45,11 +49,17 @@ import {
   type ProgramVocabularyState
 } from './model';
 import {
+  captureRegisteredProgramReferences,
+  assertProgramReferenceContributorRegistry,
   programReferenceUsage,
   type ProgramReferenceContributorRef,
   type ProgramReferenceContributorRegistry,
   type ProgramReferenceSnapshotSource
 } from './references';
+import {
+  assertProgramVocabularyOrdinaryPolicy,
+  type ProgramVocabularyOrdinaryPolicy
+} from './policy';
 
 export const PROGRAM_VOCABULARY_CHANGESET_KIND = 'program.vocabulary.mutate';
 export const PROGRAM_VOCABULARY_CHANGESET_VERSION = 1;
@@ -96,38 +106,54 @@ export interface ProgramVocabularyTrialPolicy {
   readonly mergeRisk: Extract<RiskTier, 'normal' | 'consequential'>;
 }
 
+type ProgramVocabularyChangesetPolicy =
+  | ProgramVocabularyTrialPolicy
+  | ProgramVocabularyOrdinaryPolicy;
+
+type ProgramVocabularyChangesetDefinition = ChangesetOperationDefinition<
+  ProgramVocabularyAuthorInput,
+  ProgramVocabularyChangesetPlan,
+  ProgramVocabularySafeDiff,
+  ProgramVocabularyChangesetPlan,
+  ProgramVocabularyChangeResult
+>;
+
 export interface ProgramVocabularyChangesetBundle {
   readonly policy: ProgramVocabularyTrialPolicy;
-  readonly definition: ChangesetOperationDefinition<
-    ProgramVocabularyAuthorInput,
-    ProgramVocabularyChangesetPlan,
-    ProgramVocabularySafeDiff,
-    ProgramVocabularyChangesetPlan,
-    ProgramVocabularyChangeResult
-  >;
+  readonly definition: ProgramVocabularyChangesetDefinition;
   readonly registry: ChangesetDefinitionRegistry;
 }
+
+export interface ProgramVocabularyOrdinaryChangesetBundle {
+  readonly policy: ProgramVocabularyOrdinaryPolicy;
+  readonly registry: ChangesetDefinitionRegistry;
+}
+
+const issuedOrdinaryBundles = new WeakSet<object>();
 
 const contributorRefSchema = z.strictObject({
   key: z.string().regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/),
   version: programVocabularyVersionSchema
 });
 
-const mergeCompensationInputSchema: z.ZodType<ProgramMergeCompensationInput> = z.strictObject({
+const mergeCompensationInputShape: z.ZodType<ProgramMergeCompensationInput> = z.strictObject({
   action: z.literal('merge_compensation'),
   scope: programVocabularyScopeSchema,
   kind: z.enum(['room', 'track', 'format']),
-  sourceId: z.uuid(),
-  targetId: z.uuid(),
+  sourceId: programVocabularyIdSchema,
+  targetId: programVocabularyIdSchema,
   expectedSetVersion: programVocabularyVersionSchema,
   expectedSourceVersion: programVocabularyVersionSchema,
   expectedTargetVersion: programVocabularyVersionSchema,
   restoreSource: z.boolean(),
   references: z.array(z.strictObject({
     contributor: contributorRefSchema,
-    referenceKeys: z.array(z.string().trim().min(1).max(300))
+    referenceKeys: z.array(z.string().min(1).max(300).refine((value) => value.trim() === value))
   }))
 });
+
+const mergeCompensationInputSchema: z.ZodType<ProgramMergeCompensationInput> =
+  mergeCompensationInputShape;
 
 const authorInputSchema = defineChangesetSchema({
   key: 'program.vocabulary.author',
@@ -138,23 +164,24 @@ const authorInputSchema = defineChangesetSchema({
 const plannedItemSchema = z.discriminatedUnion('kind', [
   z.strictObject({
     kind: z.literal('room'),
-    id: z.uuid(),
-    name: z.string().trim().min(1).max(200),
+    id: programVocabularyIdSchema,
+    name: programVocabularyNameSchema,
     status: z.enum(['active', 'retired']),
     version: programVocabularyVersionSchema,
     capacity: z.number().int().positive().nullable()
   }),
   z.strictObject({
     kind: z.literal('track'),
-    id: z.uuid(),
-    name: z.string().trim().min(1).max(200),
+    id: programVocabularyIdSchema,
+    name: programVocabularyNameSchema,
+    accent: programTrackAccentSchema,
     status: z.enum(['active', 'retired']),
     version: programVocabularyVersionSchema
   }),
   z.strictObject({
     kind: z.literal('format'),
-    id: z.uuid(),
-    name: z.string().trim().min(1).max(200),
+    id: programVocabularyIdSchema,
+    name: programVocabularyNameSchema,
     status: z.enum(['active', 'retired']),
     version: programVocabularyVersionSchema
   })
@@ -162,11 +189,11 @@ const plannedItemSchema = z.discriminatedUnion('kind', [
 
 const referenceTargetSchema = z.strictObject({
   kind: z.enum(['room', 'track', 'format']),
-  id: z.uuid()
+  id: programVocabularyIdSchema
 });
 const safeDestinationSchema = z.strictObject({
   kind: z.string().regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/),
-  id: z.string().trim().min(1).max(300)
+  id: z.string().min(1).max(300).refine((value) => value.trim() === value)
 });
 const referenceContributionSchema = z.strictObject({
   contributor: contributorRefSchema,
@@ -176,14 +203,14 @@ const referenceContributionSchema = z.strictObject({
     digest: z.string().regex(/^[a-f0-9]{64}$/)
   }),
   liveRepoints: z.array(z.strictObject({
-    referenceKey: z.string().trim().min(1).max(300),
+    referenceKey: z.string().min(1).max(300).refine((value) => value.trim() === value),
     expectedVersion: programVocabularyVersionSchema,
     from: referenceTargetSchema,
     to: referenceTargetSchema,
     destination: safeDestinationSchema
   })),
   historicalPins: z.array(z.strictObject({
-    referenceKey: z.string().trim().min(1).max(300),
+    referenceKey: z.string().min(1).max(300).refine((value) => value.trim() === value),
     version: programVocabularyVersionSchema,
     item: referenceTargetSchema,
     destination: safeDestinationSchema
@@ -222,15 +249,53 @@ const mutationPlanSchema: z.ZodType<ProgramVocabularyMutationPlan> = z.discrimin
     restoreSource: z.boolean(),
     ...referencePlanFields
   })
-]);
+]).superRefine((value, context) => {
+  try {
+    parseProgramVocabularyMutationPlan(value);
+  } catch {
+    context.addIssue({ code: 'custom', message: 'mutation plan must be canonical and coherent' });
+  }
+});
 
-const policySchema = z.strictObject({
+const trialPolicySchema = z.strictObject({
   activation: z.literal('test_only'),
   key: z.string().regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/),
   version: programVocabularyVersionSchema,
   ordinaryRisk: z.enum(['low', 'normal']),
   mergeRisk: z.enum(['normal', 'consequential'])
 });
+
+const ordinaryPolicySchema = z.strictObject({
+  activation: z.literal('ordinary'),
+  key: z.string().regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/),
+  version: programVocabularyVersionSchema,
+  ordinaryRisk: z.enum(['low', 'normal']),
+  mergeRisk: z.enum(['normal', 'consequential']),
+  approval: z.strictObject({
+    ordinary: z.enum(['none', 'distinct_current_human']),
+    merge: z.enum(['none', 'distinct_current_human'])
+  }),
+  definitionDigestSha256: z.string().regex(/^[a-f0-9]{64}$/)
+}).superRefine((policy, context) => {
+  const digest = canonicalJsonSha256({
+    activation: policy.activation,
+    key: policy.key,
+    version: policy.version,
+    ordinaryRisk: policy.ordinaryRisk,
+    mergeRisk: policy.mergeRisk,
+    approval: policy.approval
+  });
+  if (digest !== policy.definitionDigestSha256) {
+    context.addIssue({
+      code: 'custom',
+      path: ['definitionDigestSha256'],
+      message: 'Program Vocabulary policy definition digest changed.'
+    });
+  }
+});
+
+const policySchema: z.ZodType<ProgramVocabularyChangesetPolicy> =
+  z.discriminatedUnion('activation', [trialPolicySchema, ordinaryPolicySchema]);
 
 const changesetPlanSchema = defineChangesetSchema({
   key: 'program.vocabulary.plan',
@@ -261,22 +326,22 @@ const outcomeDetailSchema = defineChangesetSchema({
       'delete_referenced',
       'invalid_merge',
       'stale_reference',
+      'invalid_plan',
       'policy_changed'
     ]),
     action: z.enum(['create', 'edit', 'retire', 'restore', 'delete', 'merge', 'merge_compensation']),
     kind: z.enum(['room', 'track', 'format']),
-    ids: z.array(z.uuid()).min(1).max(2)
+    ids: z.array(programVocabularyIdSchema).min(1).max(2)
   })
 });
 
 export type ProgramVocabularyChangesetPlan = z.infer<typeof changesetPlanSchema.schema>;
 
-function samePolicy(left: ProgramVocabularyTrialPolicy, right: ProgramVocabularyTrialPolicy): boolean {
-  return left.activation === right.activation
-    && left.key === right.key
-    && left.version === right.version
-    && left.ordinaryRisk === right.ordinaryRisk
-    && left.mergeRisk === right.mergeRisk;
+function samePolicy(
+  left: ProgramVocabularyChangesetPolicy,
+  right: ProgramVocabularyChangesetPolicy
+): boolean {
+  return canonicalJsonSha256(left) === canonicalJsonSha256(right);
 }
 
 function operationKindAndIds(plan: ProgramVocabularyMutationPlan): {
@@ -378,7 +443,7 @@ function mergeCompensation(
   const source = resolveProgramVocabularyItem(state, plan.sourceAfter.kind, plan.sourceAfter.id);
   const target = resolveProgramVocabularyItem(state, plan.target.kind, plan.target.id);
   if (!source || !target) return { kind: 'blocked', reasonKey: 'program.merge_item_missing' };
-  const references = registry.capture(state.scope, port);
+  const references = captureRegisteredProgramReferences({ registry, scope: state.scope, source: port });
   const actualByContributor = new Map(references.contributors.map((entry) => [
     contributorIdentity(entry.contributor),
     new Map(entry.references.map((reference) => [reference.referenceKey, reference]))
@@ -407,7 +472,7 @@ function mergeCompensation(
   if (!restoreSource && selected.length === 0) {
     return { kind: 'blocked', reasonKey: 'program.no_safe_merge_compensation' };
   }
-  const authorInput: ProgramMergeCompensationInput = {
+  const authorInput: ProgramMergeCompensationInput = Object.freeze({
     action: 'merge_compensation',
     scope: plan.scope,
     kind: plan.sourceBefore.kind,
@@ -417,8 +482,11 @@ function mergeCompensation(
     expectedSourceVersion: source.version,
     expectedTargetVersion: target.version,
     restoreSource,
-    references: selected
-  };
+    references: Object.freeze(selected.map((entry) => Object.freeze({
+      contributor: Object.freeze({ ...entry.contributor }),
+      referenceKeys: Object.freeze([...entry.referenceKeys])
+    })))
+  });
   if (conflictKeys.size > 0) return { kind: 'partial', authorInput, conflicts: [...conflictKeys] };
   if (!plannedItemEqual(plannedProgramVocabularyItem(source), plan.sourceAfter)) {
     return { kind: 'semantic', authorInput, noteKey: 'program.merge_source_semantically_restored' };
@@ -438,7 +506,7 @@ function deriveCompensation(
     if (!current || !plannedItemEqual(plannedProgramVocabularyItem(current), plan.after)) {
       return { kind: 'blocked', reasonKey: 'program.creation_changed' };
     }
-    const references = registry.capture(state.scope, port);
+    const references = captureRegisteredProgramReferences({ registry, scope: state.scope, source: port });
     const usage = programReferenceUsage(references, current);
     const common = {
       scope: plan.scope,
@@ -543,7 +611,7 @@ function createInputForDeletedItem(
   };
 }
 
-function riskFor(plan: ProgramVocabularyMutationPlan, policy: ProgramVocabularyTrialPolicy): RiskTier {
+function riskFor(plan: ProgramVocabularyMutationPlan, policy: ProgramVocabularyChangesetPolicy): RiskTier {
   if (plan.action === 'merge' || plan.action === 'merge_compensation') return policy.mergeRisk;
   if (plan.action === 'delete') return 'normal';
   return policy.ordinaryRisk;
@@ -564,12 +632,18 @@ function outcome(
   };
 }
 
-export function createProgramVocabularyChangesetBundle(input: {
+function createBundle(input: {
   readonly referenceRegistry: ProgramReferenceContributorRegistry;
-  readonly policy: ProgramVocabularyTrialPolicy;
-}): ProgramVocabularyChangesetBundle {
-  const policy = policySchema.parse(input.policy);
-  const definition: ProgramVocabularyChangesetBundle['definition'] = {
+  readonly policy: ProgramVocabularyChangesetPolicy;
+}): {
+  readonly policy: ProgramVocabularyChangesetPolicy;
+  readonly definition: ProgramVocabularyChangesetDefinition;
+  readonly registry: ChangesetDefinitionRegistry;
+} {
+  assertProgramReferenceContributorRegistry(input.referenceRegistry);
+  const parsedPolicy = policySchema.parse(input.policy);
+  const policy = input.policy.activation === 'ordinary' ? input.policy : parsedPolicy;
+  const definition: ProgramVocabularyChangesetDefinition = {
     kind: PROGRAM_VOCABULARY_CHANGESET_KIND,
     version: PROGRAM_VOCABULARY_CHANGESET_VERSION,
     schemas: {
@@ -659,4 +733,39 @@ export function createProgramVocabularyChangesetBundle(input: {
     definitions: [definition]
   });
   return Object.freeze({ policy: Object.freeze(policy), definition, registry });
+}
+
+export function createProgramVocabularyChangesetBundle(input: {
+  readonly referenceRegistry: ProgramReferenceContributorRegistry;
+  readonly policy: ProgramVocabularyTrialPolicy;
+}): ProgramVocabularyChangesetBundle {
+  if (input.policy.activation !== 'test_only') {
+    throw new TypeError('program_vocabulary_trial_policy_required');
+  }
+  return createBundle(input) as ProgramVocabularyChangesetBundle;
+}
+
+/** Creates the ordinary definition registry only from module-issued policy evidence. */
+export function createProgramVocabularyOrdinaryChangesetBundle(input: {
+  readonly referenceRegistry: ProgramReferenceContributorRegistry;
+  readonly policy: ProgramVocabularyOrdinaryPolicy;
+}): ProgramVocabularyOrdinaryChangesetBundle {
+  assertProgramVocabularyOrdinaryPolicy(input.policy);
+  const internal = createBundle(input);
+  const bundle: ProgramVocabularyOrdinaryChangesetBundle = Object.freeze({
+    policy: input.policy,
+    registry: internal.registry
+  });
+  issuedOrdinaryBundles.add(bundle);
+  return bundle;
+}
+
+/** Rejects copied bundles even when all visible fields are structurally identical. */
+export function assertProgramVocabularyOrdinaryChangesetBundle(
+  candidate: ProgramVocabularyOrdinaryChangesetBundle
+): void {
+  if (!issuedOrdinaryBundles.has(candidate)) {
+    throw new TypeError('invalid_program_vocabulary_ordinary_bundle');
+  }
+  assertProgramVocabularyOrdinaryPolicy(candidate.policy);
 }

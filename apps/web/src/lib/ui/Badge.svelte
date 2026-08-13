@@ -2,7 +2,17 @@
   import type { Snippet } from 'svelte';
   import type { IconComponent } from './status-icons';
 
-  type Tone = 'neutral' | 'action' | 'success' | 'warning' | 'danger' | 'info' | 'lavender' | 'sea';
+  type Tone =
+    | 'neutral'
+    | 'action'
+    | 'success'
+    | 'warning'
+    | 'danger'
+    | 'info'
+    | 'lavender'
+    | 'sea'
+    /** Marking: what a surface is scoped or filtered to. Not a status. */
+    | 'mark';
 
   interface Props {
     children: Snippet;

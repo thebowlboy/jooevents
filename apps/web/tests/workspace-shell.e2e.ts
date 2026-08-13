@@ -122,7 +122,7 @@ test('a slow destination hands over whole, never as a torn frame', async ({ page
 	// Hold the destination's own work open so the handover window is observable.
 	let releaseDestination = () => {};
 	const destinationHeld = new Promise<void>((resolve) => (releaseDestination = resolve));
-	await page.route('**/SpeakersPage*', async (route) => {
+	await page.route(/\/src\/routes\/\(operator\)\/app\/speakers\/\+page\.svelte/, async (route) => {
 		await destinationHeld;
 		await route.continue();
 	});

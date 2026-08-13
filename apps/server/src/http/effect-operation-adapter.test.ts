@@ -8,6 +8,7 @@ import {
   createOperationRegistry,
   createSingleUnitOfWorkConformanceFixture,
   isSealedInvocationContext,
+  recheckEffectInvocationCurrentAuthority,
   type EffectOperationIdentity,
   type EffectUnitOfWork,
   type EffectUnitOfWorkPort,
@@ -36,6 +37,7 @@ import { createHttpApp } from './app';
 import { createOperatorEffectHttpAdapter } from './effect-operation-adapter';
 
 const requestedCorrelationId = '018f0f47-7a86-7d36-8a25-9f86589c7a4d';
+const retryCorrelationId = '018f0f47-7a86-7d36-8a25-9f86589c7a4e';
 const receiptId = '018f0f47-7a86-7d36-8a25-9f86589c7b40';
 const routePath = '/api/test/effect-adapter-proof';
 const digest = (seed: string) => seed.repeat(64);
@@ -336,6 +338,7 @@ class MemoryEffectUnitOfWork implements EffectUnitOfWorkPort {
     const domain = [...this.domain];
     const claims = new Map<string, string>();
     const unitOfWork: EffectUnitOfWork = {
+      recheckCurrentAuthority: (context) => recheckEffectInvocationCurrentAuthority(context),
       acquireExecutionClaim(identity, requestHash) {
         const key = identityKey(identity);
         const existing = claims.get(key);
@@ -436,12 +439,15 @@ async function harness(options: {
   return { app, tracker, registry, unitOfWork };
 }
 
-function trustedHeaders(idempotency = 'adapter-proof-key'): HeadersInit {
+function trustedHeaders(
+  idempotency = 'adapter-proof-key',
+  correlationId = requestedCorrelationId
+): HeadersInit {
   return {
     'content-type': 'application/json; charset=utf-8',
     'idempotency-key': idempotency,
     'x-test-session': 'valid',
-    'x-correlation-id': requestedCorrelationId
+    'x-correlation-id': correlationId
   };
 }
 
@@ -473,10 +479,17 @@ describe('generic operator effect HTTP adapter', () => {
     const proof = await harness();
     const first = await post(proof.app, { value: 'alpha' });
     expect(first.status).toBe(200);
+    const firstPayload = await first.json();
 
-    const replay = await post(proof.app, { value: 'alpha' });
+    const replay = await post(
+      proof.app,
+      { value: 'alpha' },
+      trustedHeaders('adapter-proof-key', retryCorrelationId)
+    );
     expect(replay.status).toBe(200);
-    expect(await replay.json()).toEqual(await first.json());
+    expect(replay.headers.get('x-correlation-id')).toBe(retryCorrelationId);
+    expect(await replay.json()).toEqual(firstPayload);
+    expect(firstPayload).toMatchObject({ correlationId: requestedCorrelationId });
 
     const changed = await post(proof.app, { value: 'changed' });
     expect(changed.status).toBe(200);

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type {
+  EffectAuthorityRecheckSource,
   EffectOperationIdentity,
   EffectUnitOfWork,
   TerminalEffectReceipt
@@ -18,6 +19,16 @@ const receiptIds = [
   '018f0f47-7a86-7d36-8a25-9f86589c7b42'
 ] as const;
 const correlationId = '018f0f47-7a86-7d36-8a25-9f86589c7a4d';
+const noteCapability = Object.freeze({ key: 'capability.note-write', version: 1 });
+
+const unexpectedAuthorityRecheck: EffectAuthorityRecheckSource = Object.freeze({
+  resolveAuthority: () => {
+    throw new Error('unexpected_authority_recheck');
+  },
+  now: () => {
+    throw new Error('unexpected_authority_recheck_clock');
+  }
+});
 
 function identity(overrides: Partial<EffectOperationIdentity> = {}): EffectOperationIdentity {
   return Object.freeze({
@@ -96,7 +107,11 @@ function harness(): Harness {
       trace.push(`commit-hook:${sqlite.inTransaction}`);
     }
   };
-  return { sqlite, port: new SQLiteTrialEffectUnitOfWorkPort(sqlite, domain), trace };
+  return {
+    sqlite,
+    port: new SQLiteTrialEffectUnitOfWorkPort(sqlite, domain, unexpectedAuthorityRecheck),
+    trace
+  };
 }
 
 async function terminalWrite(input: {
@@ -108,7 +123,9 @@ async function terminalWrite(input: {
   await input.port.runInUnitOfWork(async (unitOfWork) => {
     expect(await unitOfWork.acquireExecutionClaim(input.identity, input.receipt.requestHash)).toEqual({ kind: 'acquired' });
     if (input.failAfter === 'claim') throw new Error('injected:claim');
-    await unitOfWork.applyDomainContribution({ value: input.identity.authorityPrincipalKey });
+    await unitOfWork.applyDomainContribution(noteCapability, {
+      value: input.identity.authorityPrincipalKey
+    });
     if (input.failAfter === 'domain') throw new Error('injected:domain');
     await unitOfWork.insertReceiptParent(input.receipt);
     if (input.failAfter === 'parent') throw new Error('injected:parent');
@@ -193,7 +210,7 @@ describe('real SQLite ordinary-effect UnitOfWork trial', () => {
     try {
       await expect(test.port.runInUnitOfWork(async (unitOfWork) => {
         expect(await unitOfWork.acquireExecutionClaim(operationIdentity, '3'.repeat(64))).toEqual({ kind: 'acquired' });
-        await unitOfWork.applyDomainContribution({ value: 'alpha' });
+        await unitOfWork.applyDomainContribution(noteCapability, { value: 'alpha' });
         await unitOfWork.insertReceiptParent(receipt(operationIdentity));
       })).rejects.toThrow('foundation_execution_claim_not_released');
       expect(counts(test.sqlite)).toEqual({ claims: 0, receipts: 0, children: 0, notes: 0 });

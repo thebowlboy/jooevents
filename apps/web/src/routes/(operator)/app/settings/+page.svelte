@@ -1,7 +1,7 @@
 <script lang="ts">
-	import SettingsPage from '$lib/features/settings/SettingsPage.svelte';
+	import OperatorPage from 'jooevents-operator-page';
 </script>
 
 <svelte:head><title>Settings · JooEvents</title></svelte:head>
 
-<SettingsPage />
+<OperatorPage area="settings" />

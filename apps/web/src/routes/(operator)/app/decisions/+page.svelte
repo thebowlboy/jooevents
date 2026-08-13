@@ -1,7 +1,7 @@
 <script lang="ts">
-	import DecisionsPage from '$lib/features/decisions/DecisionsPage.svelte';
+	import OperatorPage from 'jooevents-operator-page';
 </script>
 
 <svelte:head><title>Decisions · JooEvents</title></svelte:head>
 
-<DecisionsPage />
+<OperatorPage area="decisions" />
