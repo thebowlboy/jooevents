@@ -9,6 +9,7 @@ import {
 } from './reviews';
 import {
   createEffectfulOperationResultSchema,
+  createOperationSchemaManifestRefs,
   createReadOperationResultSchema,
   structuredOutcomeSchema
 } from './operations';
@@ -403,6 +404,22 @@ export const reviewerRosterChangeDraftCanonicalResultSchema = z.discriminatedUni
 ]);
 export const reviewerRosterChangeDraftOperationResultSchema =
   createEffectfulOperationResultSchema(reviewerRosterChangeDraftDataSchema);
+
+/** Exact public schema identities projected into the operator operation manifest. */
+export const REVIEWER_ROSTER_OPERATION_SCHEMA_REFS = Object.freeze({
+  snapshotRead: createOperationSchemaManifestRefs({
+    inputKey: 'schema.reviewer_roster.snapshot-read.input',
+    inputSchema: reviewerRosterSnapshotReadInputSchema,
+    resultKey: 'schema.reviewer_roster.snapshot-read.result',
+    resultSchema: reviewerRosterSnapshotReadResultSchema
+  }),
+  changeDraft: createOperationSchemaManifestRefs({
+    inputKey: 'schema.reviewer_roster.change-draft.input',
+    inputSchema: reviewerRosterChangeDraftInputSchema,
+    resultKey: 'schema.reviewer_roster.change-draft.result',
+    resultSchema: reviewerRosterChangeDraftOperationResultSchema
+  })
+});
 
 export type ReviewerCapabilityId = z.infer<typeof reviewerCapabilityIdSchema>;
 export type ReviewerRosterScopeDto = z.infer<typeof reviewerRosterScopeSchema>;

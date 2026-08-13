@@ -138,6 +138,7 @@ describe('workspace overview operation', () => {
       status: 'partial',
       availableCapabilities: [
         'submission.contact.read',
+        'submission.direct_entry.create.draft',
         'submission.list',
         'submission.read',
         'submission.triage'
@@ -151,11 +152,14 @@ describe('workspace overview operation', () => {
       status: 'partial',
       availableCapabilities: [
         'schedule.placement.draft',
-        'schedule.placement.snapshot.read'
-      ],
-      unavailableCapabilities: [
+        'schedule.placement.snapshot.read',
         'schedule.session.manage',
         'schedule.session.read'
+      ],
+      unavailableCapabilities: [
+        'schedule.break.manage',
+        'schedule.placement.unplace',
+        'schedule.publish'
       ]
     });
     expect(DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG.find(
@@ -170,6 +174,43 @@ describe('workspace overview operation', () => {
         'preview_message_batch',
         'send_messages'
       ]
+    });
+    expect(DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG.find(
+      (entry) => entry.area === 'review'
+    )).toEqual({
+      area: 'review',
+      status: 'partial',
+      availableCapabilities: [
+        'review.assignment.step-back.draft',
+        'review.evaluation.change.draft',
+        'review.evaluation.draft.save',
+        'review.round.change.draft',
+        'review.round.setup.read',
+        'review.snapshot.read'
+      ],
+      unavailableCapabilities: ['review.comparison.read', 'submission.decision.commit']
+    });
+    expect(DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG.find(
+      (entry) => entry.area === 'decisions'
+    )).toEqual({
+      area: 'decisions',
+      status: 'partial',
+      availableCapabilities: [
+        'decision.decide.draft',
+        'decision.state.read'
+      ],
+      unavailableCapabilities: ['decision.notification.send']
+    });
+    expect(DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG.find(
+      (entry) => entry.area === 'reviewers'
+    )).toEqual({
+      area: 'reviewers',
+      status: 'partial',
+      availableCapabilities: [
+        'reviewer_roster.change.draft',
+        'reviewer_roster.snapshot.read'
+      ],
+      unavailableCapabilities: ['reviewer_roster.delivery.activate']
     });
     const settings = DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG.find(
       (entry) => entry.area === 'settings'

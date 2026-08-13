@@ -25,6 +25,9 @@ function state(input: {
   endDate?: string;
   location?: string;
   venueNote?: string;
+  dayStart?: string | null;
+  dayEnd?: string | null;
+  slotMinutes?: number | null;
 } = {}): EventSettingsState {
   const eventId = input.eventId ?? EVENT_ID;
   const eventVersion = input.eventVersion ?? 4;
@@ -50,7 +53,10 @@ function state(input: {
       eventId,
       eventVersion,
       location: input.location ?? 'Marina Bay',
-      venueNote: input.venueNote ?? 'Hall A'
+      venueNote: input.venueNote ?? 'Hall A',
+      dayStart: input.dayStart === undefined ? '09:00' : input.dayStart,
+      dayEnd: input.dayEnd === undefined ? '18:00' : input.dayEnd,
+      slotMinutes: input.slotMinutes === undefined ? 30 : input.slotMinutes
     })
   };
 }
@@ -67,7 +73,10 @@ function author(current = state()) {
       startDate: '2027-03-11',
       endDate: '2027-03-13',
       location: '  Suntec   City  ',
-      venueNote: 'Doors open at 08:00\r\nUse level 3.'
+      venueNote: 'Doors open at 08:00\r\nUse level 3.',
+      dayStart: '08:30',
+      dayEnd: '17:30',
+      slotMinutes: 30 as const
     }
   };
 }
@@ -84,8 +93,23 @@ describe('Event settings planning', () => {
       startDate: '2027-03-10',
       endDate: '2027-03-12',
       location: 'Marina Bay',
-      venueNote: 'Hall A'
+      venueNote: 'Hall A',
+      dayStart: '09:00',
+      dayEnd: '18:00',
+      slotMinutes: 30
     });
+    expect(projectEventSettings(state({ dayStart: null, dayEnd: null, slotMinutes: null })))
+      .toMatchObject({ dayStart: null, dayEnd: null, slotMinutes: null });
+    expect(() => parseEventSettingsCompanion({
+      workspaceId: WORKSPACE_ID,
+      eventId: EVENT_ID,
+      eventVersion: 4,
+      location: 'Marina Bay',
+      venueNote: 'Hall A',
+      dayStart: '09:00',
+      dayEnd: null,
+      slotMinutes: 30
+    })).toThrow(new TypeError('invalid_event_settings_companion'));
   });
 
   test('plans normalized settings while pinning selection, Event-set digest, and Event head', () => {
@@ -103,7 +127,10 @@ describe('Event settings planning', () => {
         eventVersion: 5,
         name: 'JooConf Live',
         location: 'Suntec City',
-        venueNote: 'Doors open at 08:00\nUse level 3.'
+        venueNote: 'Doors open at 08:00\nUse level 3.',
+        dayStart: '08:30',
+        dayEnd: '17:30',
+        slotMinutes: 30
       }
     });
     expect(plan.selection.eventSetGuardDigestSha256).toMatch(/^[a-f0-9]{64}$/);
@@ -119,8 +146,56 @@ describe('Event settings planning', () => {
       .toBe('stale_event');
     expect(validateEventSettingsUpdatePlan(state({ location: 'Changed elsewhere' }), plan))
       .toBe('settings_changed');
+    expect(validateEventSettingsUpdatePlan(state({ slotMinutes: 60 }), plan))
+      .toBe('settings_changed');
     expect(validateEventSettingsUpdatePlan(state({ eventId: OTHER_EVENT_ID }), plan))
       .not.toBeNull();
+  });
+
+  test('plans a geometry-only change and an honest clearing of the grid window', () => {
+    const current = state();
+    const base = author(current);
+    const geometryOnly = planEventSettingsUpdate({
+      state: current,
+      authorInput: {
+        scope: base.scope,
+        request: {
+          ...base.request,
+          name: 'JooConf 2027',
+          startDate: '2027-03-10',
+          endDate: '2027-03-12',
+          location: 'Marina Bay',
+          venueNote: 'Hall A',
+          dayStart: '10:00',
+          dayEnd: '16:00',
+          slotMinutes: 20
+        }
+      }
+    });
+    expect(geometryOnly.after).toMatchObject({
+      dayStart: '10:00', dayEnd: '16:00', slotMinutes: 20
+    });
+    expect(validateEventSettingsUpdatePlan(current, geometryOnly)).toBeNull();
+
+    const cleared = planEventSettingsUpdate({
+      state: current,
+      authorInput: {
+        scope: base.scope,
+        request: {
+          ...base.request,
+          name: 'JooConf 2027',
+          startDate: '2027-03-10',
+          endDate: '2027-03-12',
+          location: 'Marina Bay',
+          venueNote: 'Hall A',
+          dayStart: null,
+          dayEnd: null,
+          slotMinutes: null
+        }
+      }
+    });
+    expect(cleared.after).toMatchObject({ dayStart: null, dayEnd: null, slotMinutes: null });
+    expect(validateEventSettingsUpdatePlan(current, cleared)).toBeNull();
   });
 
   test('refuses no-op drafts and only derives an exact correction at the committed state', () => {
@@ -138,7 +213,10 @@ describe('Event settings planning', () => {
           startDate: '2027-03-10',
           endDate: '2027-03-12',
           location: 'Marina Bay',
-          venueNote: 'Hall A'
+          venueNote: 'Hall A',
+          dayStart: '09:00',
+          dayEnd: '18:00',
+          slotMinutes: 30
         }
       }
     })).toThrow(new EventSettingsPlanningError('no_changes'));
@@ -151,7 +229,10 @@ describe('Event settings planning', () => {
       startDate: plan.after.startDate,
       endDate: plan.after.endDate,
       location: plan.after.location,
-      venueNote: plan.after.venueNote
+      venueNote: plan.after.venueNote,
+      dayStart: plan.after.dayStart,
+      dayEnd: plan.after.dayEnd,
+      slotMinutes: plan.after.slotMinutes
     });
     expect(deriveEventSettingsUpdateCompensation({ state: committed, sourcePlan: plan }))
       .toMatchObject({
@@ -161,7 +242,10 @@ describe('Event settings planning', () => {
             expectedEventVersion: 5,
             name: 'JooConf 2027',
             location: 'Marina Bay',
-            venueNote: 'Hall A'
+            venueNote: 'Hall A',
+            dayStart: '09:00',
+            dayEnd: '18:00',
+            slotMinutes: 30
           }
         }
       });

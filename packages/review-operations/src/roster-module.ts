@@ -28,6 +28,7 @@ import {
   type VersionedDefinitionRef
 } from '@jooevents/contracts';
 import {
+  REVIEWER_ROSTER_OPERATION_SCHEMA_REFS,
   reviewerRosterChangeDraftCanonicalResultSchema,
   reviewerRosterChangeDraftDataSchema,
   reviewerRosterChangeDraftInputSchema,
@@ -170,17 +171,13 @@ function digest(value: unknown): string {
 }
 
 const schemas = Object.freeze({
-  readInput: schemaRef('schema.reviewer_roster.snapshot-read.input', reviewerRosterSnapshotReadInputSchema),
+  readInput: REVIEWER_ROSTER_OPERATION_SCHEMA_REFS.snapshotRead.inputSchema,
   readCanonical: schemaRef(
     'schema.reviewer_roster.snapshot-read.canonical-result',
     reviewerRosterSnapshotCanonicalResultSchema
   ),
-  readProjected: schemaRef(
-    'schema.reviewer_roster.snapshot-read.result', reviewerRosterSnapshotReadResultSchema
-  ),
-  draftInput: schemaRef(
-    'schema.reviewer_roster.change-draft.input', reviewerRosterChangeDraftInputSchema
-  ),
+  readProjected: REVIEWER_ROSTER_OPERATION_SCHEMA_REFS.snapshotRead.resultSchema,
+  draftInput: REVIEWER_ROSTER_OPERATION_SCHEMA_REFS.changeDraft.inputSchema,
   draftContribution: schemaRef(
     'schema.reviewer_roster.change-draft.contribution', reviewerRosterDraftContributionSchema
   ),
@@ -188,9 +185,7 @@ const schemas = Object.freeze({
     'schema.reviewer_roster.change-draft.canonical-result',
     reviewerRosterChangeDraftCanonicalResultSchema
   ),
-  draftProjected: schemaRef(
-    'schema.reviewer_roster.change-draft.result', reviewerRosterChangeDraftOperationResultSchema
-  ),
+  draftProjected: REVIEWER_ROSTER_OPERATION_SCHEMA_REFS.changeDraft.resultSchema,
   changedDetail: schemaRef(
     'schema.reviewer_roster.changed.detail', reviewerRosterChangedDetailSchema
   ),

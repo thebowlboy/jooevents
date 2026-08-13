@@ -24,7 +24,7 @@ import {
 import { encodeCanonicalJson } from '@jooevents/kernel';
 import { compareCanonicalText, deepFreeze, parseFormVersion } from './model';
 
-export type ApplicationAnswerValidationMode = 'draft' | 'submit';
+export type ApplicationAnswerValidationMode = 'draft' | 'submit' | 'direct_entry';
 
 export interface ApplicationAnswerOwner {
   readonly draftId: string;
@@ -92,6 +92,7 @@ export type ApplicationAnswerErrorCode =
   | 'hidden_field_answered'
   | 'required_answer_missing'
   | 'required_consent_not_affirmed'
+  | 'consent_not_enterable'
   | 'invalid_payload_adoption'
   | 'invalid_answer_index';
 
@@ -268,9 +269,15 @@ export function pinProgramVocabularyAnswers(input: {
   readonly answers: ApplicationAnswerIndexDto;
   readonly formVersion: FormVersionDto;
   readonly optionSource: ApplicationAnswerOptionSource;
+  readonly mode?: Extract<ApplicationAnswerValidationMode, 'submit' | 'direct_entry'>;
 }): readonly SubmissionProgramVocabularyAnswerPinDto[] {
   const version = parseFormVersion(input.formVersion);
-  validateGovernedAnswerIndex({ ...input, mode: 'submit' });
+  validateGovernedAnswerIndex({
+    answers: input.answers,
+    formVersion: input.formVersion,
+    optionSource: input.optionSource,
+    mode: input.mode ?? 'submit'
+  });
   const fields = new Map(version.definition.fields.map((field) => [field.id, field]));
   const pins: SubmissionProgramVocabularyAnswerPinDto[] = [];
   for (const answer of input.answers) {
@@ -336,6 +343,17 @@ function validateEffectiveState(
     if (!effective.visible.has(answer.fieldId)) {
       throw new ApplicationAnswerError('hidden_field_answered', answer.fieldId);
     }
+  }
+  if (mode === 'direct_entry') {
+    // An organizer transcribes on behalf of the speaker: form requiredness is
+    // not enforced, and a consent affirmation can never be entered for them.
+    const fields = new Map(version.definition.fields.map((field) => [field.id, field]));
+    for (const answer of answers) {
+      if (fields.get(answer.fieldId)?.purpose.kind === 'consent') {
+        throw new ApplicationAnswerError('consent_not_enterable', answer.fieldId);
+      }
+    }
+    return;
   }
   if (mode !== 'submit') return;
   const byField = new Map(answers.map((answer) => [answer.fieldId, answer]));

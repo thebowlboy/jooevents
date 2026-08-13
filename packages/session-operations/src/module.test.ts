@@ -15,9 +15,15 @@ const scope = Object.freeze({
 const profile = Object.freeze({ key: 'session-operation-test', version: parseContractVersion(1) });
 
 describe('Session operation module', () => {
-  test('registers an exact-event, current-authority catalog read', async () => {
+  test('registers a current-event, current-authority catalog read', async () => {
     const module = createSessionOperationModule({
-      scope,
+      workspaceId: scope.workspaceId,
+      currentEvent: {
+        resolveCurrentEvent: () => Object.freeze({
+          eventId: scope.eventId,
+          evidenceIds: Object.freeze(['event.current.selection'])
+        })
+      },
       readPolicy: SESSION_READ_ACCESS_POLICY,
       currentAuthority: {
         resolve: () => Object.freeze({ kind: 'denied' as const, reason: 'missing' as const })

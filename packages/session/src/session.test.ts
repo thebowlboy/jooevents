@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import type { SessionRestorePlanDto } from '@jooevents/contracts';
 import { createProgramVocabularyState } from '@jooevents/program';
 import { parseSchedulePlacementScope } from '@jooevents/schedule';
 import {
@@ -10,9 +11,20 @@ import {
   createSessionFormTargetPort,
   findSession,
   planSessionCompensation,
+  planSessionGraduationFrom,
+  planSessionGraduationReversalFrom,
   planSessionMutation,
+  projectSessionGraduationDiff,
+  sessionGraduationAggregateRefs,
+  sessionGraduationFactPayload,
+  sessionGraduationGuardRefs,
+  sessionGraduationPin,
+  sessionHeadDigest,
   sessionRosterCount,
+  sessionRosterDigest,
   SessionPlanningError,
+  validateSessionGraduationFrom,
+  validateSessionGraduationReversalFrom,
   type SessionCatalog
 } from './index';
 
@@ -22,6 +34,8 @@ const scope = Object.freeze({
 });
 const sessionId = '019c1df7-86b5-769b-bba4-5f7097bfa201';
 const userId = '019c1df7-86b5-769b-bba4-5f7097bfa202';
+const personA = '019c1df7-86b5-769b-bba4-5f7097bfa401';
+const personB = '019c1df7-86b5-769b-bba4-5f7097bfa402';
 const formatId = '019c1df7-86b5-769b-bba4-5f7097bfa301';
 const trackId = '019c1df7-86b5-769b-bba4-5f7097bfa302';
 const now = '2026-08-13T08:00:00.000Z';
@@ -182,5 +196,327 @@ describe('canonical Session foundation', () => {
   test('registers the Session mutation definition in the generic changeset registry', () => {
     const bundle = createSessionChangesetBundle();
     expect(bundle.registry.get('session.mutate', 1)).toBe(bundle.definition);
+  });
+
+  test('blocks deriving the compensating delete of a create while the Session is placed', () => {
+    const bundle = createSessionChangesetBundle();
+    const empty = createEmptySessionCatalog(scope);
+    const plan = createPlan(empty, 'programmed');
+    const catalog = applySessionMutationPlan({ catalog: empty, vocabulary: vocabulary(), plan }).catalog;
+    let placements = 1;
+    const port = {
+      readSessionCatalog: () => catalog,
+      readSessionVocabulary: () => vocabulary(),
+      countSessionSchedulePlacements: (_: typeof scope, id: string) =>
+        id === sessionId ? placements : 0
+    };
+    const snapshot = { getPort: <Port>() => port as unknown as Port };
+
+    expect(bundle.definition.deriveCompensation(plan, snapshot))
+      .toEqual({ kind: 'blocked', reasonKey: 'session.placed' });
+
+    placements = 0;
+    expect(bundle.definition.deriveCompensation(plan, snapshot)).toMatchObject({
+      kind: 'exact',
+      authorInput: { action: 'restore', expectedCurrent: { id: sessionId }, restore: null }
+    });
+  });
+
+  test('keeps prior-image compensation ungated while the Session is placed', () => {
+    const bundle = createSessionChangesetBundle();
+    const empty = createEmptySessionCatalog(scope);
+    const created = applySessionMutationPlan({
+      catalog: empty, vocabulary: vocabulary(), plan: createPlan(empty, 'collecting')
+    }).catalog;
+    const collecting = findSession(created, sessionId)!;
+    const transition = planSessionMutation({
+      catalog: created,
+      vocabulary: vocabulary(),
+      planningInput: {
+        action: 'transition', scope, sessionId, actorUserId: userId, occurredAt: later,
+        expectedCatalogVersion: created.version,
+        expectedCatalogDigestSha256: created.digestSha256,
+        expectedSessionVersion: collecting.version,
+        expectedSessionDigestSha256: collecting.digestSha256,
+        to: 'programmed'
+      }
+    });
+    const catalog = applySessionMutationPlan({
+      catalog: created, vocabulary: vocabulary(), plan: transition
+    }).catalog;
+    const port = {
+      readSessionCatalog: () => catalog,
+      readSessionVocabulary: () => vocabulary(),
+      countSessionSchedulePlacements: () => 1
+    };
+    const derived = bundle.definition.deriveCompensation(transition, {
+      getPort: <Port>() => port as unknown as Port
+    });
+    expect(derived).toMatchObject({
+      kind: 'exact',
+      authorInput: { action: 'restore', restore: { lifecycle: 'collecting' } }
+    });
+    const restorePlan = (derived as { readonly authorInput: SessionRestorePlanDto }).authorInput;
+    expect(bundle.definition.validateWithin(restorePlan, {
+      getPort: <Port>() => port as unknown as Port
+    })).toEqual({ kind: 'ready', validated: restorePlan });
+  });
+
+  test('refuses a stored deleting restore at replan and commit validate after a placement lands', () => {
+    const bundle = createSessionChangesetBundle();
+    const empty = createEmptySessionCatalog(scope);
+    const plan = createPlan(empty, 'programmed');
+    const catalog = applySessionMutationPlan({ catalog: empty, vocabulary: vocabulary(), plan }).catalog;
+    let placements = 0;
+    const port = {
+      readSessionCatalog: () => catalog,
+      readSessionVocabulary: () => vocabulary(),
+      countSessionSchedulePlacements: (_: typeof scope, id: string) =>
+        id === sessionId ? placements : 0
+    };
+    const snapshot = { getPort: <Port>() => port as unknown as Port };
+    const validation = { getPort: <Port>() => port as unknown as Port };
+
+    const derived = bundle.definition.deriveCompensation(plan, snapshot);
+    expect(derived).toMatchObject({ kind: 'exact' });
+    const restorePlan = (derived as { readonly authorInput: SessionRestorePlanDto }).authorInput;
+    expect(bundle.definition.plan(restorePlan, snapshot)).toMatchObject({ plan: restorePlan });
+    expect(bundle.definition.validateWithin(restorePlan, validation))
+      .toEqual({ kind: 'ready', validated: restorePlan });
+
+    // The placement lands after the compensation was derived and proposed. It
+    // moves neither the Session digest nor the catalog digest, so only the
+    // reference gate can refuse the delete.
+    placements = 1;
+    expect(() => bundle.definition.plan(restorePlan, snapshot)).toThrow('session_placed');
+    expect(bundle.definition.validateWithin(restorePlan, validation)).toEqual({
+      kind: 'outcome',
+      outcome: {
+        class: 'stale_revision',
+        kind: 'session.changed',
+        retryable: false,
+        subjects: [{ type: 'session', id: sessionId }],
+        detail: { code: 'session_placed', action: 'restore', sessionId },
+        detailSchemaVersion: 1
+      }
+    });
+  });
+
+  test('seeds create-time participants with person-keyed dedup and canonical positions', () => {
+    const empty = createEmptySessionCatalog(scope);
+    const source = { kind: 'submission', id: sessionId, version: 7 };
+    const plan = planSessionMutation({
+      catalog: empty,
+      vocabulary: vocabulary(),
+      planningInput: {
+        action: 'create', scope, sessionId, actorUserId: userId, occurredAt: now,
+        expectedCatalogVersion: empty.version,
+        expectedCatalogDigestSha256: empty.digestSha256,
+        title: 'Seeded Session', plannedDurationMinutes: 30,
+        lifecycle: 'programmed', formatId, trackId: null,
+        participants: [
+          { personId: personA, role: 'speaker', publiclyVisible: true, source },
+          { personId: personA, role: 'panelist', publiclyVisible: true, source },
+          { personId: personB, role: 'speaker', publiclyVisible: false, source }
+        ]
+      }
+    });
+    expect(plan.after.roster.participants).toEqual([
+      { personId: personA, role: 'speaker', position: 0, publiclyVisible: true, source },
+      { personId: personB, role: 'speaker', position: 1, publiclyVisible: false, source }
+    ]);
+    const applied = applySessionMutationPlan({ catalog: empty, vocabulary: vocabulary(), plan });
+    expect(sessionRosterCount(findSession(applied.catalog, sessionId)!)).toBe(2);
+  });
+
+  test('appends roster under person-keyed dedup, never clobbers, and graduates in place', () => {
+    const empty = createEmptySessionCatalog(scope);
+    const source = { kind: 'submission', id: sessionId, version: 1 };
+    const created = applySessionMutationPlan({
+      catalog: empty,
+      vocabulary: vocabulary(),
+      plan: planSessionMutation({
+        catalog: empty,
+        vocabulary: vocabulary(),
+        planningInput: {
+          action: 'create', scope, sessionId, actorUserId: userId, occurredAt: now,
+          expectedCatalogVersion: empty.version,
+          expectedCatalogDigestSha256: empty.digestSha256,
+          title: 'Collecting Panel', plannedDurationMinutes: 60,
+          lifecycle: 'collecting', formatId, trackId,
+          participants: [{ personId: personA, role: 'speaker', publiclyVisible: true, source }]
+        }
+      })
+    }).catalog;
+    const collecting = findSession(created, sessionId)!;
+
+    const appendPlan = planSessionMutation({
+      catalog: created,
+      vocabulary: vocabulary(),
+      planningInput: {
+        action: 'roster_append', scope, sessionId, actorUserId: userId, occurredAt: later,
+        expectedCatalogVersion: created.version,
+        expectedCatalogDigestSha256: created.digestSha256,
+        expectedSessionVersion: collecting.version,
+        expectedSessionDigestSha256: collecting.digestSha256,
+        participants: [
+          { personId: personA, role: 'moderator', publiclyVisible: true, source },
+          { personId: personB, role: 'speaker', publiclyVisible: true, source }
+        ],
+        graduateTo: 'programmed'
+      }
+    });
+    expect(appendPlan.after.roster.participants).toEqual([
+      { personId: personA, role: 'speaker', position: 0, publiclyVisible: true, source },
+      { personId: personB, role: 'speaker', position: 1, publiclyVisible: true, source }
+    ]);
+    expect(appendPlan.after.roster.version).toBe(collecting.roster.version + 1);
+    expect(appendPlan.after.lifecycle).toBe('programmed');
+    const graduated = applySessionMutationPlan({
+      catalog: created, vocabulary: vocabulary(), plan: appendPlan
+    }).catalog;
+    const programmed = findSession(graduated, sessionId)!;
+    expect(programmed.version).toBe(collecting.version + 1);
+
+    const idempotent = planSessionMutation({
+      catalog: graduated,
+      vocabulary: vocabulary(),
+      planningInput: {
+        action: 'roster_append', scope, sessionId, actorUserId: userId, occurredAt: later,
+        expectedCatalogVersion: graduated.version,
+        expectedCatalogDigestSha256: graduated.digestSha256,
+        expectedSessionVersion: programmed.version,
+        expectedSessionDigestSha256: programmed.digestSha256,
+        participants: [{ personId: personB, role: 'panelist', publiclyVisible: false, source }]
+      }
+    });
+    expect(idempotent.after.roster).toEqual(programmed.roster);
+    expect(idempotent.after.version).toBe(programmed.version + 1);
+
+    expect(() => planSessionMutation({
+      catalog: graduated,
+      vocabulary: vocabulary(),
+      planningInput: {
+        action: 'roster_append', scope, sessionId, actorUserId: userId, occurredAt: later,
+        expectedCatalogVersion: graduated.version,
+        expectedCatalogDigestSha256: graduated.digestSha256,
+        expectedSessionVersion: programmed.version,
+        expectedSessionDigestSha256: programmed.digestSha256,
+        participants: [{ personId: personB, role: 'panelist', publiclyVisible: false, source }],
+        graduateTo: 'programmed'
+      }
+    })).toThrow('invalid_transition');
+
+    const compensation = planSessionCompensation({
+      original: appendPlan, catalog: graduated, actorUserId: userId, occurredAt: later
+    });
+    const restored = applySessionRestorePlan({ catalog: graduated, plan: compensation });
+    const rolledBack = findSession(restored.catalog, sessionId)!;
+    expect(rolledBack.lifecycle).toBe('collecting');
+    expect(rolledBack.roster.participants).toEqual(collecting.roster.participants);
+    expect(rolledBack.roster.version).toBe(collecting.roster.version);
+  });
+
+  test('graduation collaboration plans spawn and attach, pins the applied head, and reverses', () => {
+    const empty = createEmptySessionCatalog(scope);
+    const source = { kind: 'submission', id: sessionId, version: 3 };
+    let catalog = empty;
+    const port = {
+      readSessionCatalog: () => catalog,
+      readSessionVocabulary: () => vocabulary(),
+      countSessionSchedulePlacements: () => 0
+    };
+    const spawn = planSessionGraduationFrom(port, {
+      kind: 'spawn',
+      scope,
+      attribution: { userId, at: now },
+      identity: { sessionId },
+      title: 'Spawned Session',
+      plannedDurationMinutes: 30,
+      lifecycle: 'programmed',
+      formatId,
+      trackId: null,
+      participants: [{ personId: personA, role: 'speaker', publiclyVisible: true, source }]
+    });
+    expect(validateSessionGraduationFrom(port, spawn)).toEqual({ kind: 'ready' });
+    expect(sessionGraduationAggregateRefs(spawn)).toEqual([]);
+    expect(sessionGraduationGuardRefs(spawn)).toEqual([{
+      id: `session_catalog:${scope.eventId}`,
+      version: empty.version,
+      digest: empty.digestSha256
+    }]);
+    expect(projectSessionGraduationDiff(spawn)).toEqual({
+      action: 'create', before: null, after: spawn.after
+    });
+    catalog = applySessionMutationPlan({ catalog, vocabulary: vocabulary(), plan: spawn }).catalog;
+    expect(sessionGraduationPin(spawn)).toEqual({
+      sessionId, version: 1, digestSha256: spawn.after.digestSha256, lifecycle: 'programmed'
+    });
+    expect(sessionGraduationFactPayload(spawn)).toEqual({
+      action: 'create', catalogVersion: catalog.version, session: spawn.after
+    });
+
+    const attach = planSessionGraduationFrom(port, {
+      kind: 'attach',
+      scope,
+      attribution: { userId, at: later },
+      sessionId,
+      participants: [{ personId: personB, role: 'panelist', publiclyVisible: true, source }]
+    });
+    expect(attach.after.roster.participants.map((participant) => participant.personId))
+      .toEqual([personA, personB]);
+    expect(sessionGraduationAggregateRefs(attach)).toEqual([
+      { id: `session:${sessionId}`, version: 1 }
+    ]);
+    const beforeAttach = catalog;
+    catalog = applySessionMutationPlan({ catalog, vocabulary: vocabulary(), plan: attach }).catalog;
+    expect(validateSessionGraduationFrom({ ...port, readSessionCatalog: () => beforeAttach }, attach))
+      .toEqual({ kind: 'ready' });
+
+    const reversal = planSessionGraduationReversalFrom(port, {
+      original: attach, attribution: { userId, at: later }
+    });
+    expect(validateSessionGraduationReversalFrom(port, reversal)).toEqual({ kind: 'ready' });
+    catalog = applySessionRestorePlan({ catalog, plan: reversal }).catalog;
+    expect(findSession(catalog, sessionId)!.roster.participants.map((participant) => participant.personId))
+      .toEqual([personA]);
+  });
+
+  test('refuses a schema-valid roster tamper that does not replan identically', () => {
+    const empty = createEmptySessionCatalog(scope);
+    const source = { kind: 'submission', id: sessionId, version: 1 };
+    const created = applySessionMutationPlan({
+      catalog: empty, vocabulary: vocabulary(), plan: createPlan(empty, 'collecting')
+    }).catalog;
+    const collecting = findSession(created, sessionId)!;
+    const plan = planSessionMutation({
+      catalog: created,
+      vocabulary: vocabulary(),
+      planningInput: {
+        action: 'roster_append', scope, sessionId, actorUserId: userId, occurredAt: later,
+        expectedCatalogVersion: created.version,
+        expectedCatalogDigestSha256: created.digestSha256,
+        expectedSessionVersion: collecting.version,
+        expectedSessionDigestSha256: collecting.digestSha256,
+        participants: [{ personId: personA, role: 'speaker', publiclyVisible: true, source }]
+      }
+    });
+    const tamperedRosterUnsigned = {
+      version: plan.after.roster.version,
+      participants: [{ ...plan.after.roster.participants[0]!, publiclyVisible: false }]
+    };
+    const tamperedRoster = {
+      ...tamperedRosterUnsigned,
+      digestSha256: sessionRosterDigest(tamperedRosterUnsigned)
+    };
+    const { digestSha256: _afterDigest, ...unsignedAfter } = plan.after;
+    const tamperedAfterUnsigned = { ...unsignedAfter, roster: tamperedRoster };
+    const tampered = {
+      ...plan,
+      after: { ...tamperedAfterUnsigned, digestSha256: sessionHeadDigest(tamperedAfterUnsigned) }
+    };
+    expect(() => applySessionMutationPlan({
+      catalog: created, vocabulary: vocabulary(), plan: tampered as typeof plan
+    })).toThrow('invalid_plan');
   });
 });

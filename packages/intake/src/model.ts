@@ -11,6 +11,7 @@ import {
   organizerSubmissionContactSchema,
   servedPublicFormSchema,
   submissionConsentEvidenceSchema,
+  submissionDirectEntryEvidenceSchema,
   submissionHeadSchema,
   submissionParticipantEvidenceSchema,
   submissionSubmitEvidenceSchema,
@@ -36,6 +37,7 @@ import {
   type OrganizerSubmissionContactDto,
   type ServedPublicFormDto,
   type SubmissionConsentEvidenceDto,
+  type SubmissionDirectEntryEvidenceDto,
   type SubmissionHeadDto,
   type SubmissionParticipantEvidenceDto,
   type SubmissionSubmitEvidenceDto
@@ -138,6 +140,10 @@ export function parseSubmissionHead(value: unknown): SubmissionHeadDto {
 
 export function parseSubmissionSubmitEvidence(value: unknown): SubmissionSubmitEvidenceDto {
   return parseSchema(submissionSubmitEvidenceSchema, value, 'invalid_submission_evidence');
+}
+
+export function parseSubmissionDirectEntryEvidence(value: unknown): SubmissionDirectEntryEvidenceDto {
+  return parseSchema(submissionDirectEntryEvidenceSchema, value, 'invalid_submission_evidence');
 }
 
 export function parseSubmissionParticipantEvidence(value: unknown): SubmissionParticipantEvidenceDto {

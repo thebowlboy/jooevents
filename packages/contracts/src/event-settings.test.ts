@@ -26,7 +26,10 @@ const before = {
   startDate: '2027-04-16',
   endDate: '2027-04-18',
   location: 'Singapore',
-  venueNote: 'Load-in from 07:00.'
+  venueNote: 'Load-in from 07:00.',
+  dayStart: '09:00',
+  dayEnd: '18:00',
+  slotMinutes: 30
 } as const;
 
 const after = {
@@ -49,10 +52,13 @@ describe('Event settings wire contracts', () => {
     }).success).toBe(false);
   });
 
-  test('projects exactly the six tuned settings fields plus current guards', () => {
+  test('projects exactly the nine tuned settings fields plus current guards', () => {
     expect(eventSettingsSchema.parse(before)).toEqual(before);
     expect(eventSettingsSchema.safeParse({ ...before, publicIndexing: true }).success).toBe(false);
     expect(eventSettingsSchema.safeParse({ ...before, endDate: '2027-04-15' }).success).toBe(false);
+    expect(eventSettingsSchema.parse({
+      ...before, dayStart: null, dayEnd: null, slotMinutes: null
+    })).toMatchObject({ dayStart: null, dayEnd: null, slotMinutes: null });
 
     expect(currentEventSettingsReadResultSchema.safeParse({
       kind: 'success',
@@ -86,7 +92,10 @@ describe('Event settings wire contracts', () => {
       startDate: '2027-04-16',
       endDate: '2027-04-18',
       location: '  Marina   Bay  ',
-      venueNote: '  Load-in from 06:30.\r\nUse the east entrance.  '
+      venueNote: '  Load-in from 06:30.\r\nUse the east entrance.  ',
+      dayStart: '09:00',
+      dayEnd: '18:00',
+      slotMinutes: 30
     });
     expect(parsed.name).toBe('JooConf   2027 Live');
     expect(parsed.location).toBe('Marina Bay');
@@ -115,7 +124,10 @@ describe('Event settings wire contracts', () => {
       startDate: '2027-04-16',
       endDate: '2027-04-18',
       location: 'Marina Bay',
-      venueNote: 'Use the east entrance.'
+      venueNote: 'Use the east entrance.',
+      dayStart: '09:00',
+      dayEnd: '18:00',
+      slotMinutes: 30
     };
     for (const candidate of [
       { ...input, location: 'x'.repeat(501) },
@@ -132,6 +144,58 @@ describe('Event settings wire contracts', () => {
       ...input,
       venueNote: 'Hall A\r\nHall B'
     }).venueNote).toBe('Hall A\nHall B');
+  });
+
+  test('holds the schedule-grid geometry to the closed coherent envelope', () => {
+    const input = {
+      expectedEventId: eventId,
+      expectedEventSetVersion: 2,
+      expectedEventVersion: 4,
+      name: 'JooConf 2027 Live',
+      timezone: 'Asia/Singapore',
+      startDate: '2027-04-16',
+      endDate: '2027-04-18',
+      location: 'Marina Bay',
+      venueNote: '',
+      dayStart: '09:00',
+      dayEnd: '18:00',
+      slotMinutes: 30
+    };
+    expect(eventSettingsUpdateDraftInputSchema.parse(input)).toMatchObject({
+      dayStart: '09:00',
+      dayEnd: '18:00',
+      slotMinutes: 30
+    });
+    expect(eventSettingsUpdateDraftInputSchema.parse({
+      ...input, dayStart: null, dayEnd: null, slotMinutes: null
+    })).toMatchObject({ dayStart: null, dayEnd: null, slotMinutes: null });
+    for (const candidate of [
+      { ...input, dayStart: null },
+      { ...input, dayEnd: null },
+      { ...input, slotMinutes: null },
+      { ...input, dayStart: '9:00' },
+      { ...input, dayStart: '24:00' },
+      { ...input, dayEnd: '18:60' },
+      { ...input, slotMinutes: 25 },
+      { ...input, slotMinutes: 0 },
+      { ...input, dayStart: '18:00', dayEnd: '09:00' },
+      { ...input, dayStart: '18:00', dayEnd: '18:00' },
+      { ...input, dayStart: '09:10', dayEnd: '18:00', slotMinutes: 60 }
+    ]) {
+      expect(eventSettingsUpdateDraftInputSchema.safeParse(candidate).success).toBe(false);
+      const { expectedEventId: _eventId, expectedEventSetVersion: _setVersion,
+        expectedEventVersion: _eventVersion, ...valueFields } = candidate;
+      expect(eventSettingsSchema.safeParse({
+        schemaVersion: 1,
+        eventId,
+        eventSetVersion: 2,
+        eventVersion: 4,
+        ...valueFields
+      }).success).toBe(false);
+    }
+    expect(eventSettingsUpdateDraftInputSchema.parse({
+      ...input, dayStart: '08:30', dayEnd: '17:30', slotMinutes: 60
+    })).toMatchObject({ dayStart: '08:30', dayEnd: '17:30', slotMinutes: 60 });
   });
 
   test('binds the safe diff to one exact current selection and version advance', () => {

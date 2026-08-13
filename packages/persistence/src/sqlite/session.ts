@@ -112,6 +112,7 @@ export class SQLiteSessionError extends Error {
 }
 
 interface CatalogRow { readonly version: number; readonly digest_sha256: string }
+interface CountRow { readonly count: number }
 interface HeadRow { readonly head_json: string }
 interface ScopeRow { readonly event_id: string }
 
@@ -156,6 +157,15 @@ export class SQLiteSessionRepository implements SessionChangesetTransactionPort 
 
   readSessionVocabulary(scope: SessionScope) {
     return this.vocabulary.readVocabulary(parseSessionScope(scope));
+  }
+
+  countSessionSchedulePlacements(scopeInput: SessionScope, sessionId: string): number {
+    const scope = parseSessionScope(scopeInput);
+    const row = this.sqlite.query<CountRow, [string, string, string]>(`
+      SELECT count(*) AS count FROM schedule_occurrences
+       WHERE workspace_id = ? AND event_id = ? AND session_id = ?
+    `).get(scope.workspaceId, scope.eventId, sessionId);
+    return row?.count ?? 0;
   }
 
   applySessionPlan(plan: SessionMutationPlanDto | SessionRestorePlanDto): SessionMutationResult {

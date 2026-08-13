@@ -113,7 +113,11 @@ export function projectReviewPlans(input: {
       ordinal: round.ordinal,
       name: round.name,
       state: round.state,
+      version: round.version,
       scaleMax: 5,
+      // Criterion identities are served verbatim from the canonical round so
+      // evaluation writes score the same ids every reader saw.
+      criteria: round.criteria,
       deadlineEffectiveAt: round.deadline.effectiveAt,
       anonymized: round.visibility.participantIdentity === 'hidden',
       antiAnchoring: round.visibility.peerContentUnlock === 'after_own_commit',

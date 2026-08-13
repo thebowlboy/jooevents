@@ -29,6 +29,15 @@ import {
   type CanonicalJson
 } from '@jooevents/changesets';
 import {
+  planReviewDueDeadlineChangeFrom,
+  projectReviewDueDeadlineDiff,
+  reviewDeadlinePinFromReference,
+  reviewDueDeadlinePin,
+  type DeadlineEventTimeSource,
+  type DeadlineRepository,
+  type ReviewDueDeadlineContribution
+} from '@jooevents/deadline';
+import {
   compareAssignments,
   compareCandidates,
   compareReviewers,
@@ -87,6 +96,24 @@ export interface ReviewMutationEnvironment {
   readonly sources: ReviewPlanningSource;
 }
 
+/** The Deadline-domain read capability the open-round collaboration plans against. */
+export type ReviewDueDeadlineCollaborator = DeadlineRepository & DeadlineEventTimeSource;
+
+/**
+ * Fresh planning additionally needs the Deadline collaborator because opening a
+ * round authors a `review_due` Deadline creation in the same plan; the other
+ * actions never touch the Deadline domain. Validation and apply revalidate
+ * against the exact stored contribution instead of re-planning it, so they only
+ * need the base environment.
+ */
+export interface ReviewMutationPlanningEnvironment extends ReviewMutationEnvironment {
+  readonly deadlines?: ReviewDueDeadlineCollaborator;
+}
+
+type OpenRoundDeadlineCollaboration =
+  | { readonly kind: 'collaborate'; readonly deadlines: ReviewDueDeadlineCollaborator }
+  | { readonly kind: 'injected'; readonly contribution: ReviewDueDeadlineContribution };
+
 export function reviewCatalogGuardId(eventId: string): string {
   return `review_catalog:${eventId}`;
 }
@@ -97,10 +124,6 @@ export function reviewCandidateQueryGuardId(eventId: string): string {
 
 export function reviewReviewerQueryGuardId(eventId: string): string {
   return `review_reviewers:${eventId}`;
-}
-
-export function reviewDeadlineGuardId(deadlineId: string): string {
-  return `review_deadline:${deadlineId}`;
 }
 
 export function reviewCatalogDigest(input: {
@@ -190,13 +213,30 @@ export function expectedReviewAssignmentPairs(input: {
 
 export function planReviewMutation(
   planningInput: ReviewMutationPlanningInput,
-  environment: ReviewMutationEnvironment
+  environment: ReviewMutationPlanningEnvironment
+): ReviewMutationPlanDto {
+  return planMutation(
+    planningInput,
+    environment,
+    environment.deadlines === undefined
+      ? undefined
+      : { kind: 'collaborate', deadlines: environment.deadlines }
+  );
+}
+
+function planMutation(
+  planningInput: ReviewMutationPlanningInput,
+  environment: ReviewMutationEnvironment,
+  collaboration?: OpenRoundDeadlineCollaboration
 ): ReviewMutationPlanDto {
   const input = reviewMutationPlanningInputSchema.parse(planningInput);
   const scope = parseReviewScope(input.scope);
   const catalog = currentCatalog(scope, environment.repository);
   assertReviewCatalogDigest(catalog);
-  if (input.action === 'open_round') return planOpenRound(input, catalog, environment);
+  if (input.action === 'open_round') {
+    if (!collaboration) throw new TypeError('review_open_round_deadline_collaboration_missing');
+    return planOpenRound(input, catalog, environment, collaboration);
+  }
   if (input.action === 'discard_empty_round') return planDiscardRound(input, catalog, environment.repository);
   if (input.action === 'step_back') return planStepBack(input, environment.repository);
   if (input.action === 'commit_review') return planCommitReview(input, environment.repository);
@@ -213,18 +253,21 @@ export function validateReviewMutationPlan(
     if (plan.action === 'open_round') {
       const candidates = environment.sources.readCandidates(plan.input.scope);
       const reviewers = environment.sources.readReviewerRoster(plan.input.scope);
-      const deadline = environment.sources.resolveReviewDeadline(
-        plan.input.scope,
-        plan.input.deadlineId
-      );
       if (!candidates || reviewCandidateSetDigest(candidates.candidates) !== plan.candidateGuard.digestSha256
           || candidates.version !== plan.candidateGuard.version) return 'candidate_query_changed';
       if (!reviewers || reviewRosterSetDigest(reviewers.reviewers) !== plan.reviewerGuard.digestSha256
           || reviewers.version !== plan.reviewerGuard.version) return 'reviewer_query_changed';
-      if (!deadline || deadline.digestSha256 !== plan.deadlineGuard.digestSha256
-          || deadline.version !== plan.deadlineGuard.version) return 'deadline_changed';
     }
-    const rebuilt = planReviewMutation(plan.input, environment);
+    // The deadline contribution is revalidated as the exact stored bytes (its
+    // freshness is owned by the Deadline collaboration ports); re-planning it
+    // here would wrongly refuse once the contribution has been applied first
+    // inside the committing transaction.
+    const rebuilt = plan.action === 'open_round'
+      ? planMutation(plan.input, environment, {
+          kind: 'injected',
+          contribution: plan.deadlineContribution
+        })
+      : planMutation(plan.input, environment);
     if (canonicalJsonSha256(rebuilt) !== canonicalJsonSha256(plan)) return 'invalid_plan';
     return undefined;
   } catch (error) {
@@ -298,7 +341,8 @@ export function projectReviewSafeDiff(planInput: ReviewMutationPlanDto): ReviewS
       submissionCount: new Set(plan.assignments.map((assignment) => assignment.submissionId)).size,
       deadlineEffectiveAt: plan.round.deadline.effectiveAt,
       anonymized: plan.round.visibility.participantIdentity === 'hidden',
-      criterionLabels: plan.round.criteria.map((criterion) => criterion.label)
+      criterionLabels: plan.round.criteria.map((criterion) => criterion.label),
+      deadline: projectReviewDueDeadlineDiff(plan.deadlineContribution)
     });
   }
   if (plan.action === 'discard_empty_round') {
@@ -442,15 +486,26 @@ export function ensureArrivalAssignments(input: {
 function planOpenRound(
   input: Extract<ReviewMutationPlanningInput, { action: 'open_round' }>,
   catalog: ReviewCatalogDto,
-  environment: ReviewMutationEnvironment
+  environment: ReviewMutationEnvironment,
+  collaboration: OpenRoundDeadlineCollaboration
 ): ReviewMutationPlanDto {
   if (catalog.version !== input.expectedCatalogVersion) throw new ReviewPlanningError('stale_catalog');
   if (catalog.rounds.some((round) => round.state === 'open')) throw new ReviewPlanningError('open_round_exists');
   const candidateSet = environment.sources.readCandidates(input.scope);
   const rosterSet = environment.sources.readReviewerRoster(input.scope);
-  const deadline = environment.sources.resolveReviewDeadline(input.scope, input.deadlineId);
   if (!candidateSet || !rosterSet) throw new ReviewPlanningError('wrong_scope');
-  if (!deadline) throw new ReviewPlanningError('deadline_missing');
+  const contribution = collaboration.kind === 'collaborate'
+    ? planReviewDueDeadlineChangeFrom(collaboration.deadlines, {
+        scope: input.scope,
+        currentDeadlineId: null,
+        dueOn: input.deadlineDate,
+        identity: { deadlineId: input.deadlineIdentity.deadlineId },
+        attribution: { userId: input.attributedByUserId, at: input.attributedAt }
+      })
+    : collaboration.contribution;
+  assertOpenRoundDeadlineContribution(input, contribution);
+  const pin = reviewDueDeadlinePin(contribution);
+  if (pin === null) throw new ReviewPlanningError('invalid_plan');
   const candidates = [...candidateSet.candidates].map(parseReviewCandidate).sort(compareCandidates);
   const reviewers = [...rosterSet.reviewers].map(parseReviewRosterMember).sort(compareReviewers);
   const expected = expectedReviewAssignmentPairs({ candidates, reviewers });
@@ -468,7 +523,7 @@ function planOpenRound(
     name: `Round ${ordinal}`,
     state: 'open',
     version: 1,
-    deadline: parseReviewDeadlinePin(deadline),
+    deadline: parseReviewDeadlinePin(reviewDeadlinePinFromReference(pin)),
     criteria: input.criteria,
     visibility: input.visibility,
     openedByUserId: input.attributedByUserId,
@@ -508,12 +563,33 @@ function planOpenRound(
       version: rosterSet.version,
       digestSha256: reviewRosterSetDigest(reviewers)
     },
-    deadlineGuard: {
-      id: reviewDeadlineGuardId(deadline.deadlineId),
-      version: deadline.version,
-      digestSha256: deadline.digestSha256
-    }
+    deadlineContribution: contribution
   });
+}
+
+/**
+ * The embedded contribution must be exactly the server-authored `review_due`
+ * creation for this round-open intent; anything else is a forged or drifted
+ * plan, never a data race.
+ */
+function assertOpenRoundDeadlineContribution(
+  input: Extract<ReviewMutationPlanningInput, { action: 'open_round' }>,
+  contribution: ReviewDueDeadlineContribution
+): void {
+  if (contribution.input.action !== 'create') throw new ReviewPlanningError('invalid_plan');
+  const creation = contribution.input;
+  if (creation.scope.workspaceId !== input.scope.workspaceId
+      || creation.scope.eventId !== input.scope.eventId
+      || creation.deadlineId !== input.deadlineIdentity.deadlineId
+      || creation.kind !== 'review_due'
+      || creation.displayDate !== input.deadlineDate
+      || creation.attributedByUserId !== input.attributedByUserId
+      || creation.attributedAt !== input.attributedAt
+      || contribution.before !== null
+      || contribution.after.status !== 'active'
+      || contribution.after.kind !== 'review_due') {
+    throw new ReviewPlanningError('invalid_plan');
+  }
 }
 
 function planDiscardRound(

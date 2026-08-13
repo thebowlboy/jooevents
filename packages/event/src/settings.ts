@@ -1,4 +1,5 @@
 import {
+  eventSettingsGeometrySchema,
   eventSettingsLocationSchema,
   eventSettingsSchema,
   eventSettingsScopeSchema,
@@ -6,6 +7,7 @@ import {
   eventSettingsVenueNoteSchema,
   type EventSettingsDto,
   type EventSettingsScope,
+  type EventSettingsSlotMinutes,
   type EventSettingsUpdateAuthorInput
 } from '@jooevents/contracts';
 import { canonicalJsonSha256 } from '@jooevents/changesets';
@@ -49,6 +51,9 @@ export interface EventSettingsCompanion {
   readonly eventVersion: AggregateVersion;
   readonly location: string;
   readonly venueNote: string;
+  readonly dayStart: string | null;
+  readonly dayEnd: string | null;
+  readonly slotMinutes: EventSettingsSlotMinutes | null;
 }
 
 export interface EventSettingsCompanionInput {
@@ -57,6 +62,9 @@ export interface EventSettingsCompanionInput {
   readonly eventVersion: number;
   readonly location: string;
   readonly venueNote: string;
+  readonly dayStart: string | null;
+  readonly dayEnd: string | null;
+  readonly slotMinutes: number | null;
 }
 
 export interface EventSettingsState {
@@ -93,18 +101,29 @@ export function parseEventSettingsCompanion(
   try {
     const location = eventSettingsLocationSchema.parse(input.location);
     const venueNote = eventSettingsVenueNoteSchema.parse(input.venueNote);
+    const geometry = eventSettingsGeometrySchema.parse({
+      dayStart: input.dayStart,
+      dayEnd: input.dayEnd,
+      slotMinutes: input.slotMinutes
+    });
     const companion = Object.freeze({
       workspaceId: parseWorkspaceId(input.workspaceId),
       eventId: parseEventId(input.eventId),
       eventVersion: parseAggregateVersion(input.eventVersion),
       location,
-      venueNote
+      venueNote,
+      dayStart: geometry.dayStart,
+      dayEnd: geometry.dayEnd,
+      slotMinutes: geometry.slotMinutes
     });
     if (companion.workspaceId !== input.workspaceId
         || companion.eventId !== input.eventId
         || companion.eventVersion !== input.eventVersion
         || companion.location !== input.location
-        || companion.venueNote !== input.venueNote) {
+        || companion.venueNote !== input.venueNote
+        || companion.dayStart !== input.dayStart
+        || companion.dayEnd !== input.dayEnd
+        || companion.slotMinutes !== input.slotMinutes) {
       throw new TypeError('event_settings_companion_not_canonical');
     }
     return companion;
@@ -153,7 +172,10 @@ export function projectEventSettings(state: EventSettingsState): EventSettingsDt
     startDate: current.event.startDate,
     endDate: current.event.endDate,
     location: current.companion.location,
-    venueNote: current.companion.venueNote
+    venueNote: current.companion.venueNote,
+    dayStart: current.companion.dayStart,
+    dayEnd: current.companion.dayEnd,
+    slotMinutes: current.companion.slotMinutes
   });
 }
 
@@ -199,7 +221,10 @@ function projectedAfter(
     startDate: event.startDate,
     endDate: event.endDate,
     location: author.request.location,
-    venueNote: author.request.venueNote
+    venueNote: author.request.venueNote,
+    dayStart: author.request.dayStart,
+    dayEnd: author.request.dayEnd,
+    slotMinutes: author.request.slotMinutes
   });
 }
 
@@ -288,7 +313,10 @@ export function validateEventSettingsUpdatePlan(
         startDate: plan.after.startDate,
         endDate: plan.after.endDate,
         location: plan.after.location,
-        venueNote: plan.after.venueNote
+        venueNote: plan.after.venueNote,
+        dayStart: plan.after.dayStart,
+        dayEnd: plan.after.dayEnd,
+        slotMinutes: plan.after.slotMinutes
       }
     });
   } catch {
@@ -342,7 +370,10 @@ export function deriveEventSettingsUpdateCompensation(input: {
         startDate: input.sourcePlan.before.startDate,
         endDate: input.sourcePlan.before.endDate,
         location: input.sourcePlan.before.location,
-        venueNote: input.sourcePlan.before.venueNote
+        venueNote: input.sourcePlan.before.venueNote,
+        dayStart: input.sourcePlan.before.dayStart,
+        dayEnd: input.sourcePlan.before.dayEnd,
+        slotMinutes: input.sourcePlan.before.slotMinutes
       }
     }
   };

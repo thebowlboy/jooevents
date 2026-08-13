@@ -1,5 +1,8 @@
 import { CHANGESET_LIFECYCLE_SQL } from './changeset-lifecycle';
 import { FOUNDATION_TRIAL_UOW_SQL } from './foundation-trial-uow';
+import { DECISION_SQL } from './decision';
+import { DECISION_CHANGESET_EFFECT_SQL } from './decision-changeset-effect-domain';
+import { DECISION_DRAFT_EFFECT_SQL } from './decision-draft-effect-domain';
 import { EVENT_SPINE_SQL } from './event-spine';
 import { EVENT_CREATION_CHANGESET_EFFECT_SQL } from './event-changeset-effect-domain';
 import { EVENT_CREATE_DRAFT_EFFECT_SQL } from './event-create-draft-effect-domain';
@@ -12,6 +15,9 @@ import { DEADLINE_SQL } from './deadline';
 import { FIELD_REGISTRY_CHANGESET_EFFECT_SQL } from './field-registry-changeset-effect-domain';
 import { FIELD_REGISTRY_DRAFT_EFFECT_SQL } from './field-registry-draft-effect-domain';
 import { FIELD_REGISTRY_SQL } from './field-registry';
+import {
+  SQLITE_INTAKE_DIRECT_ENTRY_EFFECT_SQL
+} from './intake-direct-entry-effect-domain';
 import { INTAKE_FORM_CHANGESET_EFFECT_SQL } from './intake-form-changeset-effect-domain';
 import { INTAKE_FORM_DRAFT_EFFECT_SQL } from './intake-form-draft-effect-domain';
 import { SQLITE_INTAKE_SQL } from './intake';
@@ -28,6 +34,20 @@ import { SQLITE_ORGANIZER_AUDIENCE_PREVIEW_SQL } from './communications/audience
 import { SQLITE_ORGANIZER_COMMUNICATION_AUTHORING_SQL } from './communications/organizer-authoring';
 import { SQLITE_ORGANIZER_COMMUNICATION_AUTHORING_EFFECT_SQL } from './communications/organizer-authoring-effect-domain';
 import { SQLITE_EMAIL_PROVIDER_CONFIGURATION_SQL } from './communications/provider-configuration';
+import { SESSION_SQL } from './session';
+import { SESSION_DRAFT_EFFECT_SQL } from './session-draft-effect-domain';
+import { SESSION_CHANGESET_EFFECT_SQL } from './session-changeset-effect-domain';
+import { REVIEW_SQL } from './review';
+import { REVIEW_DRAFT_EFFECT_SQL } from './review-draft-effect-domain';
+import {
+  REVIEW_EVALUATION_DRAFT_SAVE_EFFECT_SQL
+} from './review-evaluation-draft-save-effect-domain';
+import { REVIEW_CHANGESET_EFFECT_SQL } from './review-changeset-effect-domain';
+import { REVIEWER_ROSTER_SQL } from './reviewer-roster';
+import { REVIEWER_ROSTER_DRAFT_EFFECT_SQL } from './reviewer-roster-draft-effect-domain';
+import {
+  REVIEWER_ROSTER_CHANGESET_EFFECT_SQL
+} from './reviewer-roster-changeset-effect-domain';
 import { PROGRAM_VOCABULARY_DRAFT_EFFECT_SQL } from './program-vocabulary-draft-effect-domain';
 import { PROGRAM_VOCABULARY_CHANGESET_EFFECT_SQL } from './program-vocabulary-changeset-effect-domain';
 import { PROGRAM_VOCABULARY_REVIEWED_COMMIT_TRIAL_SQL } from './program-vocabulary-reviewed-commit-trial';
@@ -97,6 +117,7 @@ export const FOUNDATION_EPHEMERAL_SCHEMA_ARTIFACTS: readonly EphemeralSQLiteSche
     schemaArtifact('submission-triage-domain', SQLITE_SUBMISSION_TRIAGE_SQL),
     schemaArtifact('submission-triage-draft-effect', SQLITE_SUBMISSION_TRIAGE_DRAFT_EFFECT_SQL),
     schemaArtifact('submission-triage-changeset-effect', SUBMISSION_TRIAGE_CHANGESET_EFFECT_SQL),
+    schemaArtifact('intake-direct-entry-effect', SQLITE_INTAKE_DIRECT_ENTRY_EFFECT_SQL),
     schemaArtifact('field-registry-domain', FIELD_REGISTRY_SQL),
     schemaArtifact('field-registry-draft-effect', FIELD_REGISTRY_DRAFT_EFFECT_SQL),
     schemaArtifact('field-registry-changeset-effect', FIELD_REGISTRY_CHANGESET_EFFECT_SQL),
@@ -113,7 +134,20 @@ export const FOUNDATION_EPHEMERAL_SCHEMA_ARTIFACTS: readonly EphemeralSQLiteSche
     schemaArtifact('verified-inbox-processing', VERIFIED_INBOX_PROCESSING_TRIAL_SQL),
     schemaArtifact('public-mutation-continuation', PUBLIC_MUTATION_CONTINUATION_TRIAL_SQL),
     schemaArtifact('program-vocabulary', PROGRAM_VOCABULARY_TRIAL_SQL),
-    schemaArtifact('program-vocabulary-reviewed-commit', PROGRAM_VOCABULARY_REVIEWED_COMMIT_TRIAL_SQL)
+    schemaArtifact('program-vocabulary-reviewed-commit', PROGRAM_VOCABULARY_REVIEWED_COMMIT_TRIAL_SQL),
+    schemaArtifact('session-domain', SESSION_SQL),
+    schemaArtifact('session-draft-effect', SESSION_DRAFT_EFFECT_SQL),
+    schemaArtifact('session-changeset-effect', SESSION_CHANGESET_EFFECT_SQL),
+    schemaArtifact('reviewer-roster-domain', REVIEWER_ROSTER_SQL),
+    schemaArtifact('review-domain', REVIEW_SQL),
+    schemaArtifact('review-draft-effect', REVIEW_DRAFT_EFFECT_SQL),
+    schemaArtifact('review-evaluation-draft-save-effect', REVIEW_EVALUATION_DRAFT_SAVE_EFFECT_SQL),
+    schemaArtifact('review-changeset-effect', REVIEW_CHANGESET_EFFECT_SQL),
+    schemaArtifact('reviewer-roster-draft-effect', REVIEWER_ROSTER_DRAFT_EFFECT_SQL),
+    schemaArtifact('reviewer-roster-changeset-effect', REVIEWER_ROSTER_CHANGESET_EFFECT_SQL),
+    schemaArtifact('decision-domain', DECISION_SQL),
+    schemaArtifact('decision-draft-effect', DECISION_DRAFT_EFFECT_SQL),
+    schemaArtifact('decision-changeset-effect', DECISION_CHANGESET_EFFECT_SQL)
   ]);
 
 /** Opens one isolated runtime with the exact ordered Foundation schema. */

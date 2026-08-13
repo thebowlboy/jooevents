@@ -6,6 +6,8 @@ import {
   currentEventReadResultSchema,
   currentEventSettingsReadResultSchema,
   createReadOperationResultSchema,
+  decisionDecideDraftOperationResultSchema,
+  decisionStateReadResultSchema,
   emailProviderConfigurationReadOperationResultSchema,
   emailProviderReadinessReadOperationResultSchema,
   eventCreateDraftOperationResultSchema,
@@ -19,13 +21,23 @@ import {
   organizerMessageTemplatePageOperationResultSchema,
   organizerFormCatalogSchema,
   programVocabularySnapshotReadResultSchema,
-  safeOperationManifestSchema
+  safeOperationManifestSchema,
+  submissionDirectEntryDraftOperationResultSchema
 } from '@jooevents/contracts';
 import { workspaceOverviewReadResultSchema } from '@jooevents/contracts/workspace-overview';
 import {
   workspaceTeamDraftOperationResultSchema,
   workspaceTeamMembersReadResultSchema
 } from '@jooevents/contracts/workspace-team';
+import {
+  reviewChangeDraftOperationResultSchema,
+  reviewSnapshotReadResultSchema
+} from '@jooevents/contracts/reviews';
+import { sessionCatalogReadResultSchema } from '@jooevents/contracts/sessions';
+import {
+  reviewerRosterChangeDraftOperationResultSchema,
+  reviewerRosterSnapshotReadResultSchema
+} from '@jooevents/contracts/reviewer-roster';
 import {
   submissionTriageListOperationResultSchema
 } from '@jooevents/contracts/submission-triage';
@@ -359,6 +371,14 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['GET /api/events/current/deadlines/current']
       },
       {
+        name: 'decision.decide.draft', version: 1, effect: 'draft',
+        bindings: ['POST /api/events/current/decisions/decide-drafts']
+      },
+      {
+        name: 'decision.state.read', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/decisions']
+      },
+      {
         name: 'discard_message_draft', version: 1, effect: 'draft',
         bindings: ['POST /api/events/current/communications/drafts/discard']
       },
@@ -492,6 +512,38 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['GET /api/events/current/program-vocabulary']
       },
       {
+        name: 'review.assignment.step-back.draft', version: 1, effect: 'draft',
+        bindings: ['POST /api/events/current/review/step-back-drafts']
+      },
+      {
+        name: 'review.evaluation.change.draft', version: 1, effect: 'draft',
+        bindings: ['POST /api/events/current/review/evaluation-drafts']
+      },
+      {
+        name: 'review.evaluation.draft.save', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/review/evaluation-draft']
+      },
+      {
+        name: 'review.round.change.draft', version: 1, effect: 'draft',
+        bindings: ['POST /api/events/current/review/round-drafts']
+      },
+      {
+        name: 'review.round.setup.read', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/review/round-setup']
+      },
+      {
+        name: 'review.snapshot.read', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/review/snapshot']
+      },
+      {
+        name: 'reviewer_roster.change.draft', version: 1, effect: 'draft',
+        bindings: ['POST /api/events/current/reviewer-roster/drafts']
+      },
+      {
+        name: 'reviewer_roster.snapshot.read', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/reviewer-roster']
+      },
+      {
         name: 'revise_message_batch', version: 1, effect: 'draft',
         bindings: ['POST /api/events/current/communications/drafts/revise']
       },
@@ -504,12 +556,24 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['GET /api/events/current/schedule/placements']
       },
       {
+        name: 'session.catalog.read', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/sessions']
+      },
+      {
+        name: 'session.change.draft', version: 1, effect: 'draft',
+        bindings: ['POST /api/events/current/sessions/drafts']
+      },
+      {
         name: 'store_communication_authoring_payload', version: 1, effect: 'draft',
         bindings: ['POST /api/events/current/communications/authoring-payloads']
       },
       {
         name: 'submission.contact.read', version: 1, effect: 'read',
         bindings: ['GET /api/events/current/submissions/contact']
+      },
+      {
+        name: 'submission.direct_entry.create.draft', version: 1, effect: 'draft',
+        bindings: ['POST /api/events/current/submissions/direct-entry/drafts']
       },
       {
         name: 'submission.list', version: 1, effect: 'read',
@@ -585,9 +649,13 @@ describe('ephemeral live Foundation server composition', () => {
         'submission-triage-domain',
         'submission-triage-draft-effect',
         'submission-triage-changeset-effect',
+        'intake-direct-entry-effect',
         'workspace-team-domain',
         'workspace-team-draft-effect',
-        'workspace-team-changeset-effect'
+        'workspace-team-changeset-effect',
+        'decision-domain',
+        'decision-draft-effect',
+        'decision-changeset-effect'
       ]));
     expect(runtime.database.runtimeSchemaFingerprint)
       .not.toBe(runtime.database.retainedBaseline.schemaFingerprint);
@@ -1054,6 +1122,150 @@ describe('ephemeral live Foundation server composition', () => {
     expect(count(runtime, 'event_spine_heads')).toBe(1);
   });
 
+  test('serves the empty reviewer roster and the organizer Review snapshot to the owner because durable event.manage evidence resolves the organizer viewer', async () => {
+    const runtime = await createEphemeralLiveRuntime({ config });
+    runtimes.push(runtime);
+    const session = await createOwnerSession(runtime);
+    await provisionOwner(runtime, session);
+    await createEventThroughChangeset({ runtime, session, key: 'review-join-event' });
+
+    const rosterResponse = await runtime.app.request('/api/events/current/reviewer-roster', {
+      headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+    });
+    expect(rosterResponse.status).toBe(200);
+    expect(
+      reviewerRosterSnapshotReadResultSchema.parse(await rosterResponse.json())
+    ).toMatchObject({
+      kind: 'success',
+      data: {
+        schemaVersion: 1,
+        scope: { workspaceId: runtime.workspaceId },
+        reviewers: []
+      }
+    });
+
+    // The roster is empty, so the reviewer match (which always wins) cannot
+    // apply; the owner still reaches the organizer view only because the
+    // workspace-admin grant carries real event.manage evidence at this event
+    // scope. The snapshot lane's event.read+submission.read authority alone
+    // must never produce the organizer whole-population view.
+    const snapshotResponse = await runtime.app.request('/api/events/current/review/snapshot', {
+      headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+    });
+    expect(snapshotResponse.status).toBe(200);
+    expect(reviewSnapshotReadResultSchema.parse(await snapshotResponse.json())).toMatchObject({
+      kind: 'success',
+      data: {
+        schemaVersion: 1,
+        viewer: { kind: 'organizer' },
+        plans: [],
+        roundSetup: {
+          activeReviewers: 0,
+          invitedReviewers: 0,
+          submissions: 0,
+          expectedReviews: 0,
+          perReviewer: []
+        },
+        standings: {}
+      }
+    });
+  });
+
+  test('keeps a rostered reviewer on the reviewer view even though the same principal holds event.manage', async () => {
+    const runtime = await createEphemeralLiveRuntime({ config });
+    runtimes.push(runtime);
+    const session = await createOwnerSession(runtime);
+    const appUserId = await provisionOwner(runtime, session);
+    await createEventThroughChangeset({ runtime, session, key: 'roster-wins-event' });
+
+    const membership = runtime.database.sqlite.query<
+      { readonly id: string; readonly version: number },
+      [string, string]
+    >(`
+      SELECT id, version FROM workspace_memberships
+       WHERE workspace_id = ? AND user_id = ? AND status = 'active'
+    `).get(runtime.workspaceId, appUserId);
+    if (!membership) throw new Error('owner membership missing');
+
+    const roster = reviewerRosterSnapshotReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/reviewer-roster', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (roster.kind !== 'success') throw new Error('roster snapshot unavailable');
+
+    const draft = reviewerRosterChangeDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/reviewer-roster/drafts',
+      key: 'roster-wins-register',
+      body: {
+        action: 'register',
+        reviewerId: crypto.randomUUID(),
+        accessSubject: {
+          kind: 'workspace_membership',
+          id: membership.id,
+          version: membership.version
+        },
+        reviews: [],
+        expectedRosterVersion: roster.data.rosterVersion,
+        expectedRosterDigestSha256: roster.data.rosterDigestSha256
+      },
+      parse: (value) => value
+    }));
+    expect(draft).toMatchObject({ kind: 'success', data: { action: 'register' } });
+    if (draft.kind !== 'success') throw new Error('roster draft failed');
+    await commitDraft({ runtime, session, key: 'roster-wins', draft });
+
+    // The owner still holds workspace-admin event.manage, which resolved the
+    // organizer view before registration. The roster match must win now: a
+    // rostered reviewer keeps the blind-round reviewer view no matter what
+    // additional grants the same principal carries.
+    const snapshot = reviewSnapshotReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/review/snapshot', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    expect(snapshot).toMatchObject({
+      kind: 'success',
+      data: { viewer: { kind: 'reviewer', reviewerId: draft.data.reviewerId } }
+    });
+
+    // The duplicate-subject guard refuses a second registration typed instead
+    // of dying on the retained-records unique constraint: the double roster
+    // row would make acting-reviewer resolution ambiguous and hand the
+    // organizer view back to a reviewer holding event.manage.
+    const refreshed = reviewerRosterSnapshotReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/reviewer-roster', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (refreshed.kind !== 'success') throw new Error('roster snapshot unavailable');
+    const duplicate = reviewerRosterChangeDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/reviewer-roster/drafts',
+      key: 'roster-wins-duplicate',
+      body: {
+        action: 'register',
+        reviewerId: crypto.randomUUID(),
+        accessSubject: {
+          kind: 'workspace_membership',
+          id: membership.id,
+          version: membership.version
+        },
+        reviews: [],
+        expectedRosterVersion: refreshed.data.rosterVersion,
+        expectedRosterDigestSha256: refreshed.data.rosterDigestSha256
+      },
+      parse: (value) => value
+    }));
+    expect(duplicate).toMatchObject({
+      kind: 'outcome',
+      outcome: { class: 'stale_revision', detail: { code: 'reviewer_exists' } }
+    });
+  });
+
   test('creates, updates, and clears the current Event deadline through the shared lifecycle', async () => {
     const runtime = await createEphemeralLiveRuntime({ config });
     runtimes.push(runtime);
@@ -1227,7 +1439,12 @@ describe('ephemeral live Foundation server composition', () => {
         startDate: eventInput.startDate,
         endDate: eventInput.endDate,
         location: '',
-        venueNote: ''
+        venueNote: '',
+        // A newly created Event seeds the schedule-grid geometry defaults, so
+        // it can draw a grid from day one (Wave-2 recorder defaults).
+        dayStart: '09:00',
+        dayEnd: '18:00',
+        slotMinutes: 30
       },
       correlationId: initialCorrelation
     });
@@ -1241,7 +1458,10 @@ describe('ephemeral live Foundation server composition', () => {
       startDate: eventInput.startDate,
       endDate: eventInput.endDate,
       location: 'Suntec Convention Centre',
-      venueNote: 'Registration opens on Level 2.'
+      venueNote: 'Registration opens on Level 2.',
+      dayStart: '09:00',
+      dayEnd: '18:00',
+      slotMinutes: 30
     });
     const drafted = eventSettingsUpdateDraftOperationResultSchema.parse(await effect({
       runtime,
@@ -1295,7 +1515,12 @@ describe('ephemeral live Foundation server composition', () => {
         startDate: updateBody.startDate,
         endDate: updateBody.endDate,
         location: updateBody.location,
-        venueNote: updateBody.venueNote
+        venueNote: updateBody.venueNote,
+        // The update draft carried no geometry fields, so the seeded creation
+        // defaults survive the settings update unchanged.
+        dayStart: '09:00',
+        dayEnd: '18:00',
+        slotMinutes: 30
       },
       correlationId: updatedCorrelation
     });
@@ -1805,11 +2030,14 @@ describe('ephemeral live Foundation server composition', () => {
           status: 'partial',
           availableCapabilities: [
             'schedule.placement.draft',
-            'schedule.placement.snapshot.read'
-          ],
-          unavailableCapabilities: [
+            'schedule.placement.snapshot.read',
             'schedule.session.manage',
             'schedule.session.read'
+          ],
+          unavailableCapabilities: [
+            'schedule.break.manage',
+            'schedule.placement.unplace',
+            'schedule.publish'
           ]
         }, {
           area: 'messages',
@@ -2229,6 +2457,535 @@ describe('ephemeral live Foundation server composition', () => {
       headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
     });
     expect(await submissions.json()).toMatchObject({ kind: 'success', data: [] });
+    expect(runtime.database.sqlite.query<Record<string, unknown>, []>(
+      'PRAGMA foreign_key_check'
+    ).all()).toEqual([]);
+  });
+
+  test('commits an organizer direct entry through the shared lifecycle into triage and the Review basis', async () => {
+    const runtime = await createEphemeralLiveRuntime({ config });
+    runtimes.push(runtime);
+    const session = await createOwnerSession(runtime);
+    await provisionOwner(runtime, session);
+    await createEventThroughChangeset({ runtime, session, key: 'direct-entry-event' });
+
+    const registryResult = fieldRegistrySnapshotReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/field-registry', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (registryResult.kind !== 'success') throw new Error('Field registry read failed.');
+    const registry = registryResult.data;
+    const titleFieldId = registry.fields.find((field) =>
+      field.mapsTo === 'talk.title' && field.kind === 'text'
+    )?.id;
+    const emailFieldId = registry.fields.find((field) =>
+      field.mapsTo === 'person.email' && field.kind === 'email'
+    )?.id;
+    if (!titleFieldId || !emailFieldId) throw new Error('Identity fields missing.');
+    const included = new Set([titleFieldId, emailFieldId]);
+    const createDraft = intakeFormDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/forms/drafts/create',
+      key: 'direct-entry-form-create-draft',
+      body: {
+        expectedCatalogVersion: 1,
+        expectedRegistryVersion: registry.version,
+        definition: {
+          ...formDefinitionInput,
+          name: 'Direct Entry CFP',
+          composition: {
+            excludedFieldIds: registry.fields
+              .filter((field) => field.scope.kind === 'shared'
+                && field.contexts.apply.visible
+                && !included.has(field.id))
+              .map((field) => field.id)
+              .sort(),
+            requiredOverrides: {},
+            optionExposure: {}
+          }
+        }
+      },
+      parse: (value) => value
+    }));
+    expect(createDraft).toMatchObject({ kind: 'success', data: { action: 'create' } });
+    if (createDraft.kind !== 'success' || createDraft.data.safeDiff.action !== 'create') {
+      throw new Error('Form create draft failed.');
+    }
+    await commitDraft({
+      runtime, session, key: 'direct-entry-form-create', draft: createDraft
+    });
+    const openDraft = intakeFormDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/forms/drafts/lifecycle',
+      key: 'direct-entry-form-open-draft',
+      body: {
+        transition: 'publish_and_open',
+        formId: createDraft.data.safeDiff.after.id,
+        expectedDefinitionVersion: 1,
+        expectedRegistryVersion: registry.version
+      },
+      parse: (value) => value
+    }));
+    expect(openDraft).toMatchObject({ kind: 'success', data: { action: 'lifecycle' } });
+    if (openDraft.kind !== 'success') throw new Error('Form open draft failed.');
+    await commitDraft({ runtime, session, key: 'direct-entry-form-open', draft: openDraft });
+
+    // The wire input pins the form identity and definition version the
+    // organizer actually read, not draft outputs.
+    const catalog = organizerFormCatalogReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/forms', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (catalog.kind !== 'success') throw new Error('Form catalog read failed.');
+    const openForm = catalog.data.forms.find((form) => form.status === 'open');
+    if (!openForm) throw new Error('Open form missing from the catalog.');
+
+    const entryDraft = submissionDirectEntryDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/submissions/direct-entry/drafts',
+      key: 'direct-entry-submission-draft',
+      body: {
+        formId: openForm.id,
+        expectedFormDefinitionVersion: openForm.version,
+        answers: [
+          { kind: 'text', fieldId: titleFieldId, value: 'Keyed-in keynote' },
+          { kind: 'email', fieldId: emailFieldId, value: 'direct.speaker@example.test' }
+        ]
+      },
+      parse: (value) => value
+    }));
+    expect(entryDraft).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'create',
+        headVersion: 1,
+        status: 'draft',
+        safeDiff: {
+          action: 'create',
+          submission: { formId: openForm.id, source: 'direct_entry' }
+        }
+      },
+      receipt: {
+        operationName: 'submission.direct_entry.create.draft',
+        operationVersion: 1
+      }
+    });
+    if (entryDraft.kind !== 'success') throw new Error('Direct entry draft failed.');
+    const submissionId = entryDraft.data.safeDiff.submission.id;
+    expect(count(runtime, 'intake_direct_entry_draft_receipt_links')).toBe(1);
+    expect(count(runtime, 'intake_direct_entry_draft_timeline')).toBe(1);
+    expect(count(runtime, 'intake_submission_heads')).toBe(0);
+    expect(count(runtime, 'submission_triage_heads')).toBe(0);
+    const beforeCommit = submissionTriageListOperationResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/submissions/triage', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    expect(beforeCommit).toMatchObject({
+      kind: 'outcome',
+      outcome: { class: 'conflict', kind: 'submission_triage.not_initialized' }
+    });
+
+    await commitDraft({
+      runtime, session, key: 'direct-entry-submission', draft: entryDraft
+    });
+    expect(count(runtime, 'intake_submission_heads')).toBe(1);
+    expect(count(runtime, 'submission_arrival_facts')).toBe(1);
+    expect(count(runtime, 'submission_triage_heads')).toBe(1);
+    expect(count(runtime, 'intake_direct_entry_changeset_receipt_links')).toBe(2);
+    expect(count(runtime, 'intake_direct_entry_changeset_domain_facts')).toBe(1);
+    expect(count(runtime, 'intake_direct_entry_changeset_outbox_pointers')).toBe(1);
+    expect(count(runtime, 'intake_direct_entry_changeset_timeline')).toBe(2);
+
+    const triage = submissionTriageListOperationResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/submissions/triage', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    expect(triage).toMatchObject({
+      kind: 'success',
+      data: {
+        rows: [{
+          source: {
+            source: 'direct_entry',
+            summary: {
+              id: submissionId,
+              formId: openForm.id,
+              title: 'Keyed-in keynote'
+            }
+          },
+          triage: { submissionId, state: 'inbox', version: 1 },
+          arrival: { submissionId, source: 'direct_entry', classification: 'on_time' },
+          visibleTray: 'inbox'
+        }]
+      }
+    });
+
+    const snapshot = reviewSnapshotReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/review/snapshot', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    expect(snapshot).toMatchObject({
+      kind: 'success',
+      data: {
+        viewer: { kind: 'organizer' },
+        roundSetup: { submissions: 1 }
+      }
+    });
+
+    // Governed answer values live only in the classified store: the committed
+    // record and its whole database never disclose the entered email.
+    expect(JSON.stringify(runtime.database.sqlite
+      .query('SELECT * FROM changeset_revisions').all()
+    )).not.toContain('direct.speaker@example.test');
+    expect(Buffer.from(runtime.database.sqlite.serialize()).includes(
+      Buffer.from('direct.speaker@example.test')
+    )).toBe(false);
+    expect(runtime.database.sqlite.query<Record<string, unknown>, []>(
+      'PRAGMA foreign_key_check'
+    ).all()).toEqual([]);
+  });
+
+  test('commits the full Decision loop: direct entry, roster, open round with review_due deadline, and accept-with-spawn', async () => {
+    const runtime = await createEphemeralLiveRuntime({ config });
+    runtimes.push(runtime);
+    const session = await createOwnerSession(runtime);
+    const appUserId = await provisionOwner(runtime, session);
+    await createEventThroughChangeset({ runtime, session, key: 'decision-loop-event' });
+
+    // A spawnable candidate needs a format: pin the CFP to a format category.
+    const formatDraft = programVocabularyDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/program-vocabulary/drafts/create',
+      key: 'decision-loop-format-draft',
+      body: { kind: 'format', expectedSetVersion: 1, name: 'Talk' },
+      parse: (value) => value
+    }));
+    if (formatDraft.kind !== 'success') throw new Error('Format draft failed.');
+    await commitDraft({ runtime, session, key: 'decision-loop-format', draft: formatDraft });
+    const vocabulary = programVocabularySnapshotReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/program-vocabulary', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (vocabulary.kind !== 'success') throw new Error('Vocabulary read failed.');
+    const format = vocabulary.data.formats.find((candidate) => candidate.name === 'Talk');
+    if (!format) throw new Error('Committed format missing.');
+
+    const registryResult = fieldRegistrySnapshotReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/field-registry', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (registryResult.kind !== 'success') throw new Error('Field registry read failed.');
+    const registry = registryResult.data;
+    const titleFieldId = registry.fields.find((field) =>
+      field.mapsTo === 'talk.title' && field.kind === 'text'
+    )?.id;
+    const emailFieldId = registry.fields.find((field) =>
+      field.mapsTo === 'person.email' && field.kind === 'email'
+    )?.id;
+    if (!titleFieldId || !emailFieldId) throw new Error('Identity fields missing.');
+    const included = new Set([titleFieldId, emailFieldId]);
+    const formCreateDraft = intakeFormDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/forms/drafts/create',
+      key: 'decision-loop-form-create-draft',
+      body: {
+        expectedCatalogVersion: 1,
+        expectedRegistryVersion: registry.version,
+        definition: {
+          ...formDefinitionInput,
+          name: 'Talks CFP',
+          target: {
+            kind: 'category',
+            category: { kind: 'format', id: format.id }
+          },
+          composition: {
+            excludedFieldIds: registry.fields
+              .filter((field) => field.scope.kind === 'shared'
+                && field.contexts.apply.visible
+                && !included.has(field.id))
+              .map((field) => field.id)
+              .sort(),
+            requiredOverrides: {},
+            optionExposure: {}
+          }
+        }
+      },
+      parse: (value) => value
+    }));
+    if (formCreateDraft.kind !== 'success'
+        || formCreateDraft.data.safeDiff.action !== 'create') {
+      throw new Error('Form create draft failed.');
+    }
+    await commitDraft({
+      runtime, session, key: 'decision-loop-form-create', draft: formCreateDraft
+    });
+    const openDraft = intakeFormDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/forms/drafts/lifecycle',
+      key: 'decision-loop-form-open-draft',
+      body: {
+        transition: 'publish_and_open',
+        formId: formCreateDraft.data.safeDiff.after.id,
+        expectedDefinitionVersion: 1,
+        expectedRegistryVersion: registry.version
+      },
+      parse: (value) => value
+    }));
+    if (openDraft.kind !== 'success') throw new Error('Form open draft failed.');
+    await commitDraft({ runtime, session, key: 'decision-loop-form-open', draft: openDraft });
+    const catalog = organizerFormCatalogReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/forms', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (catalog.kind !== 'success') throw new Error('Form catalog read failed.');
+    const openForm = catalog.data.forms.find((form) => form.status === 'open');
+    if (!openForm) throw new Error('Open form missing from the catalog.');
+
+    const entryDraft = submissionDirectEntryDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/submissions/direct-entry/drafts',
+      key: 'decision-loop-entry-draft',
+      body: {
+        formId: openForm.id,
+        expectedFormDefinitionVersion: openForm.version,
+        answers: [
+          { kind: 'text', fieldId: titleFieldId, value: 'Decided keynote' },
+          { kind: 'email', fieldId: emailFieldId, value: 'decided.speaker@example.test' }
+        ]
+      },
+      parse: (value) => value
+    }));
+    if (entryDraft.kind !== 'success') throw new Error('Direct entry draft failed.');
+    const submissionId = entryDraft.data.safeDiff.submission.id;
+    await commitDraft({ runtime, session, key: 'decision-loop-entry', draft: entryDraft });
+
+    const membership = runtime.database.sqlite.query<
+      { readonly id: string; readonly version: number },
+      [string, string]
+    >(`
+      SELECT id, version FROM workspace_memberships
+       WHERE workspace_id = ? AND user_id = ? AND status = 'active'
+    `).get(runtime.workspaceId, appUserId);
+    if (!membership) throw new Error('owner membership missing');
+    const roster = reviewerRosterSnapshotReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/reviewer-roster', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (roster.kind !== 'success') throw new Error('roster snapshot unavailable');
+    const registerDraft = reviewerRosterChangeDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/reviewer-roster/drafts',
+      key: 'decision-loop-register-draft',
+      body: {
+        action: 'register',
+        reviewerId: crypto.randomUUID(),
+        accessSubject: {
+          kind: 'workspace_membership',
+          id: membership.id,
+          version: membership.version
+        },
+        reviews: [],
+        expectedRosterVersion: roster.data.rosterVersion,
+        expectedRosterDigestSha256: roster.data.rosterDigestSha256
+      },
+      parse: (value) => value
+    }));
+    expect(registerDraft).toMatchObject({ kind: 'success', data: { action: 'register' } });
+    if (registerDraft.kind !== 'success') throw new Error('roster draft failed');
+    await commitDraft({ runtime, session, key: 'decision-loop-register', draft: registerDraft });
+
+    // With a reviewable candidate and an active reviewer the open now
+    // succeeds where the empty composition pins the no_assignments refusal.
+    expect(count(runtime, 'review_rounds')).toBe(0);
+    expect(count(runtime, 'deadlines', "WHERE kind = 'review_due'")).toBe(0);
+    const roundDraft = reviewChangeDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/review/round-drafts',
+      key: 'decision-loop-open-round-draft',
+      body: { action: 'open_round', deadlineDate: '2027-06-11', anonymized: true },
+      parse: (value) => value
+    }));
+    expect(roundDraft).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'open_round',
+        headVersion: 1,
+        status: 'draft',
+        safeDiff: { action: 'open_round', assignmentCount: 1 }
+      },
+      receipt: { operationName: 'review.round.change.draft', operationVersion: 1 }
+    });
+    if (roundDraft.kind !== 'success') throw new Error('Open round draft failed.');
+    expect(count(runtime, 'review_rounds')).toBe(0);
+    expect(count(runtime, 'deadlines', "WHERE kind = 'review_due'")).toBe(0);
+    await commitDraft({ runtime, session, key: 'decision-loop-open-round', draft: roundDraft });
+    // One changeset commit lands the round, its assignment, and the
+    // collaborating review_due Deadline atomically.
+    expect(count(runtime, 'review_rounds')).toBe(1);
+    expect(count(runtime, 'review_assignments')).toBe(1);
+    expect(count(runtime, 'deadlines', "WHERE kind = 'review_due'")).toBe(1);
+    const deadlines = deadlineListReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/deadlines', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (deadlines.kind !== 'success') throw new Error('Deadline catalog read failed.');
+    expect(deadlines.data.deadlines).toEqual([expect.objectContaining({
+      kind: 'review_due', status: 'active', displayDate: '2027-06-11'
+    })]);
+
+    const triageBefore = submissionTriageListOperationResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/submissions/triage', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (triageBefore.kind !== 'success') throw new Error('Triage read failed.');
+    expect(triageBefore.data.rows).toMatchObject([{
+      triage: { submissionId, state: 'inbox', version: 1 },
+      visibleTray: 'inbox'
+    }]);
+
+    const undecided = decisionStateReadResultSchema.parse(await (
+      await runtime.app.request(
+        `/api/events/current/decisions?${new URLSearchParams({ submissionIds: submissionId }).toString()}`,
+        { headers: eventHeaders({ session, correlationId: crypto.randomUUID() }) }
+      )
+    ).json());
+    expect(undecided).toMatchObject({
+      kind: 'success',
+      data: { schemaVersion: 1, rows: [{ submissionId, head: null, origin: null }] }
+    });
+
+    const decideDraft = decisionDecideDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/decisions/decide-drafts',
+      key: 'decision-loop-decide-draft',
+      body: {
+        action: 'decide',
+        decisions: [{
+          submissionId,
+          state: 'accepted',
+          expectedDecisionVersion: null,
+          expectedDecisionDigestSha256: null,
+          graduation: { kind: 'spawn' }
+        }]
+      },
+      parse: (value) => value
+    }));
+    expect(decideDraft).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'decide',
+        headVersion: 1,
+        status: 'draft',
+        safeDiff: {
+          action: 'decide',
+          rows: [{
+            submissionId,
+            before: null,
+            after: { submissionId, state: 'accepted', version: 1 }
+          }]
+        }
+      },
+      receipt: { operationName: 'decision.decide.draft', operationVersion: 1 }
+    });
+    if (decideDraft.kind !== 'success') throw new Error('Decide draft failed.');
+    // The draft is inert: no Decision head, origin link, or Session yet.
+    expect(count(runtime, 'decision_draft_receipt_links')).toBe(1);
+    expect(count(runtime, 'decision_draft_timeline')).toBe(1);
+    expect(count(runtime, 'decision_heads')).toBe(0);
+    expect(count(runtime, 'submission_session_origins')).toBe(0);
+    expect(count(runtime, 'sessions')).toBe(0);
+
+    await commitDraft({ runtime, session, key: 'decision-loop-decide', draft: decideDraft });
+    expect(count(runtime, 'decision_heads')).toBe(1);
+    expect(count(runtime, 'submission_session_origins')).toBe(1);
+    expect(count(runtime, 'sessions')).toBe(1);
+    expect(count(runtime, 'decision_changeset_receipt_links')).toBe(2);
+    expect(count(runtime, 'decision_changeset_domain_facts')).toBe(1);
+    expect(count(runtime, 'decision_changeset_outbox_pointers')).toBe(1);
+    expect(count(runtime, 'decision_changeset_timeline')).toBe(2);
+
+    const decided = decisionStateReadResultSchema.parse(await (
+      await runtime.app.request(
+        `/api/events/current/decisions?${new URLSearchParams({ submissionIds: submissionId }).toString()}`,
+        { headers: eventHeaders({ session, correlationId: crypto.randomUUID() }) }
+      )
+    ).json());
+    expect(decided).toMatchObject({
+      kind: 'success',
+      data: {
+        rows: [{
+          submissionId,
+          head: { submissionId, state: 'accepted', version: 1, decidedByUserId: appUserId },
+          origin: { submissionId, kind: 'spawned', linkedByUserId: appUserId }
+        }]
+      }
+    });
+    if (decided.kind !== 'success') throw new Error('Decision state read failed.');
+    const origin = decided.data.rows[0]?.origin;
+    if (!origin) throw new Error('Origin link missing.');
+
+    // The spawn minted a NEW canonical Session carrying the submission's
+    // title and the participant person seeded from the Intake evidence.
+    const participant = runtime.database.sqlite.query<
+      { readonly person_id: string }, [string]
+    >(`
+      SELECT person_id FROM intake_submission_participant_evidence
+       WHERE submission_id = ?
+    `).get(submissionId);
+    if (!participant) throw new Error('Participant evidence missing.');
+    const sessions = sessionCatalogReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/sessions', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    expect(sessions).toMatchObject({
+      kind: 'success',
+      data: {
+        sessions: [{
+          id: origin.sessionId,
+          title: 'Decided keynote',
+          lifecycle: 'programmed',
+          roster: {
+            participants: [{ personId: participant.person_id, role: 'speaker' }]
+          }
+        }]
+      }
+    });
+
+    // Decisions never touch triage: the whole served row set — source and
+    // arrival projections included — reads back identical, not just the
+    // triage sub-objects.
+    const triageAfter = submissionTriageListOperationResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/submissions/triage', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (triageAfter.kind !== 'success') throw new Error('Triage re-read failed.');
+    expect(triageAfter.data.rows).toEqual(triageBefore.data.rows);
+    expect(triageAfter.data.rows[0]).toMatchObject({
+      triage: { submissionId, state: 'inbox', version: 1 },
+      visibleTray: 'inbox'
+    });
     expect(runtime.database.sqlite.query<Record<string, unknown>, []>(
       'PRAGMA foreign_key_check'
     ).all()).toEqual([]);

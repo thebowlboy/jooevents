@@ -76,6 +76,8 @@ export type ApplicationPlanningErrorCode =
   | 'invalid_input_policy_evidence'
   | 'invalid_answers'
   | 'invalid_submission_identity'
+  | 'direct_entry_title_required'
+  | 'direct_entry_email_required'
   | 'invalid_plan';
 
 export class ApplicationPlanningError extends Error {

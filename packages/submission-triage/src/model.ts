@@ -304,7 +304,8 @@ export function createSubmissionTriageInitialization(input: {
       input.submission.submittedAt
     )
   };
-  const classification = input.closeEvidence
+  const classification = submission.source === 'public_form'
+    && input.closeEvidence
     && Date.parse(submission.submittedAt) > Date.parse(input.closeEvidence.closeAt)
     ? 'late'
     : 'on_time';

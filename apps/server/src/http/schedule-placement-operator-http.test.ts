@@ -33,6 +33,11 @@ import {
 import {
   installSQLiteChangesetLifecycleSchema
 } from '@jooevents/persistence/changeset-lifecycle';
+import type {
+  ProgrammedSessionIdentityPort,
+  SchedulePlacementScope,
+  ScheduleSessionId
+} from '@jooevents/schedule';
 import {
   createSQLiteEventSpineOperatorEventRelationshipSource,
   installEventSpineSchema
@@ -188,15 +193,8 @@ async function openFixture() {
   });
   transaction(sqlite, () => vocabulary.applyVocabularyPlan(roomPlan));
 
-  const sessions = Object.freeze({
-    readProgrammedSession(
-      scope: Parameters<Parameters<
-        typeof createSQLiteSchedulePlacementDraftEffectDomainRegistration
-      >[0]['sessions']['readProgrammedSession']>[0],
-      requested: Parameters<Parameters<
-        typeof createSQLiteSchedulePlacementDraftEffectDomainRegistration
-      >[0]['sessions']['readProgrammedSession']>[1]
-    ) {
+  const sessions: ProgrammedSessionIdentityPort = Object.freeze({
+    readProgrammedSession(scope: SchedulePlacementScope, requested: ScheduleSessionId) {
       if (scope.workspaceId !== workspaceId
           || scope.eventId !== eventId
           || requested !== sessionId) return undefined;

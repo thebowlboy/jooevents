@@ -116,11 +116,18 @@ describe('ephemeral SQLite Event settings', () => {
       const replay = collaborator.initializeCreatedEventSettings(scope);
       sqlite.exec('COMMIT;');
       expect(first.companion).toMatchObject({
-        workspaceId, eventId, eventVersion: 1, location: '', venueNote: ''
+        workspaceId, eventId, eventVersion: 1, location: '', venueNote: '',
+        dayStart: '09:00', dayEnd: '18:00', slotMinutes: 30
       });
       expect(replay).toEqual(first);
 
       sqlite.exec(`UPDATE event_settings_companions SET location = 'unexpected'`);
+      sqlite.exec('BEGIN IMMEDIATE;');
+      expect(() => collaborator.initializeCreatedEventSettings(scope))
+        .toThrow(new SQLiteEventSettingsError('settings_companion_conflict'));
+      sqlite.exec('ROLLBACK;');
+
+      sqlite.exec(`UPDATE event_settings_companions SET location = '', day_start = '08:00'`);
       sqlite.exec('BEGIN IMMEDIATE;');
       expect(() => collaborator.initializeCreatedEventSettings(scope))
         .toThrow(new SQLiteEventSettingsError('settings_companion_conflict'));
@@ -167,7 +174,10 @@ describe('ephemeral SQLite Event settings', () => {
             startDate: '2027-04-17',
             endDate: '2027-04-19',
             location: 'Suntec City',
-            venueNote: 'Use level 3.'
+            venueNote: 'Use level 3.',
+            dayStart: '08:30',
+            dayEnd: '17:30',
+            slotMinutes: 20
           }
         }
       });
@@ -176,7 +186,13 @@ describe('ephemeral SQLite Event settings', () => {
       sqlite.exec('BEGIN IMMEDIATE;');
       const applied = settings.applyEventSettingsUpdatePlan(plan);
       sqlite.exec('COMMIT;');
-      expect(applied).toMatchObject({ eventVersion: 2, name: 'JooConf Live' });
+      expect(applied).toMatchObject({
+        eventVersion: 2,
+        name: 'JooConf Live',
+        dayStart: '08:30',
+        dayEnd: '17:30',
+        slotMinutes: 20
+      });
       expect(settings.readCurrentEventSettings(workspaceId)).toEqual(applied);
 
       sqlite.exec(`UPDATE event_settings_companions SET location = 'drifted'`);
@@ -212,7 +228,10 @@ describe('ephemeral SQLite Event settings', () => {
             startDate: '2027-04-16',
             endDate: '2027-04-18',
             location: 'Blocked',
-            venueNote: ''
+            venueNote: '',
+            dayStart: '09:00',
+            dayEnd: '18:00',
+            slotMinutes: 30
           }
         }
       });
@@ -226,6 +245,90 @@ describe('ephemeral SQLite Event settings', () => {
         .toThrow(new SQLiteEventSettingsError('stale_settings'));
       sqlite.exec('COMMIT;');
       expect(settings.readCurrentEventSettings(workspaceId)).toEqual(before);
+    } finally {
+      if (sqlite.inTransaction) sqlite.exec('ROLLBACK;');
+      sqlite.close();
+    }
+  });
+
+  test('clears the grid geometry to honest absence and guards the null before-image', () => {
+    const sqlite = openDatabase();
+    try {
+      const { settings } = createRoot(sqlite, true);
+      const clearPlan = planEventSettingsUpdate({
+        state: settings.requireEventSettings(scope),
+        authorInput: {
+          scope,
+          request: {
+            expectedEventId: eventId,
+            expectedEventSetVersion: 2,
+            expectedEventVersion: 1,
+            name: 'JooConf 2027',
+            timezone: 'Asia/Singapore',
+            startDate: '2027-04-16',
+            endDate: '2027-04-18',
+            location: '',
+            venueNote: '',
+            dayStart: null,
+            dayEnd: null,
+            slotMinutes: null
+          }
+        }
+      });
+      sqlite.exec('BEGIN IMMEDIATE;');
+      const cleared = settings.applyEventSettingsUpdatePlan(clearPlan);
+      sqlite.exec('COMMIT;');
+      expect(cleared).toMatchObject({
+        eventVersion: 2, dayStart: null, dayEnd: null, slotMinutes: null
+      });
+      expect(settings.readCurrentEventSettings(workspaceId)).toEqual(cleared);
+
+      const restorePlan = planEventSettingsUpdate({
+        state: settings.requireEventSettings(scope),
+        authorInput: {
+          scope,
+          request: {
+            expectedEventId: eventId,
+            expectedEventSetVersion: 2,
+            expectedEventVersion: 2,
+            name: 'JooConf 2027',
+            timezone: 'Asia/Singapore',
+            startDate: '2027-04-16',
+            endDate: '2027-04-18',
+            location: '',
+            venueNote: '',
+            dayStart: '10:00',
+            dayEnd: '16:00',
+            slotMinutes: 60
+          }
+        }
+      });
+      sqlite.exec('BEGIN IMMEDIATE;');
+      const restored = settings.applyEventSettingsUpdatePlan(restorePlan);
+      sqlite.exec('COMMIT;');
+      expect(restored).toMatchObject({
+        eventVersion: 3, dayStart: '10:00', dayEnd: '16:00', slotMinutes: 60
+      });
+      expect(settings.readCurrentEventSettings(workspaceId)).toEqual(restored);
+    } finally {
+      if (sqlite.inTransaction) sqlite.exec('ROLLBACK;');
+      sqlite.close();
+    }
+  });
+
+  test('the table refuses a torn or incoherent geometry triple at the constraint layer', () => {
+    const sqlite = openDatabase();
+    try {
+      createRoot(sqlite, true);
+      for (const mutation of [
+        `UPDATE event_settings_companions SET day_start = NULL`,
+        `UPDATE event_settings_companions SET slot_minutes = 25`,
+        `UPDATE event_settings_companions SET day_start = '19:00'`,
+        `UPDATE event_settings_companions SET day_start = '9:00'`,
+        `UPDATE event_settings_companions SET slot_minutes = 60, day_start = '09:30'`
+      ]) {
+        expect(() => sqlite.exec(mutation)).toThrow();
+      }
     } finally {
       if (sqlite.inTransaction) sqlite.exec('ROLLBACK;');
       sqlite.close();

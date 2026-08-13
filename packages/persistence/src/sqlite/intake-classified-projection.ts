@@ -12,7 +12,8 @@ import {
   type OrganizerSubmissionContactDto,
   type OrganizerSubmissionDetailDto,
   type OrganizerSubmissionSummaryDto,
-  type PublicApplicationDraftResumeDto
+  type PublicApplicationDraftResumeDto,
+  type SubmissionProgramVocabularyAnswerPinDto
 } from '@jooevents/contracts';
 import {
   applicationAnswerPayloadScopeBinding,
@@ -20,12 +21,15 @@ import {
   IntakeValidationError,
   parseFormVersion,
   parseSubmissionConsentEvidence,
+  parseSubmissionDirectEntryEvidence,
   parseSubmissionHead,
   parseSubmissionParticipantEvidence,
   parseSubmissionSubmitEvidence,
   projectOrganizerSubmissionContact,
   projectPublicApplicationDraftStatus,
   sameIntakeScope,
+  submissionDirectEntryAnswerOwner,
+  type ApplicationAnswerOwner,
   type ApplicationAnswerPayloadReferenceVerificationInput,
   type ApplicationAnswerPayloadReferenceVerifier
 } from '@jooevents/intake';
@@ -177,6 +181,82 @@ function projectVerifiedDetail(input:
   });
 }
 
+function projectVerifiedDirectEntrySummary(input:
+  Parameters<SQLiteIntakeSubmissionProjectionPort['projectDirectEntrySummary']>[0] & {
+    readonly resolvedAnswers: readonly OrganizerSubmissionAnswerDto[];
+  }): OrganizerSubmissionSummaryDto {
+  const head = parseSubmissionHead(input.head);
+  const version = parseFormVersion(input.version);
+  const evidence = parseSubmissionDirectEntryEvidence(input.entryEvidence);
+  const answers = parseResolvedAnswers(input.resolvedAnswers);
+  if (head.source !== 'direct_entry'
+      || version.id !== head.formVersionId || version.formId !== head.formId
+      || !sameIntakeScope(version.scope, head.scope)
+      || evidence.id !== head.submitEvidenceId || evidence.submissionId !== head.id
+      || evidence.formVersionId !== head.formVersionId || evidence.submittedAt !== head.submittedAt) {
+    throw new IntakeValidationError('invalid_form_version');
+  }
+  const titleField = version.definition.fields.find((field) => field.mapsTo === 'talk.title');
+  const nameField = version.definition.fields.find((field) => field.mapsTo === 'person.name');
+  if (titleField && titleField.kind !== 'text') throw new IntakeValidationError('invalid_form_version');
+  if (nameField && nameField.kind !== 'text') throw new IntakeValidationError('invalid_form_version');
+  const permittedIds = new Set([
+    ...(titleField ? [titleField.id] : []), ...(nameField ? [nameField.id] : [])
+  ]);
+  const durableByField = new Map(evidence.answers.map((answer) => [answer.fieldId, answer]));
+  const title = titleField ? answers.find((answer) => answer.fieldId === titleField.id) : undefined;
+  const name = nameField ? answers.find((answer) => answer.fieldId === nameField.id) : undefined;
+  const durableTitle = titleField ? durableByField.get(titleField.id) : undefined;
+  const durableName = nameField ? durableByField.get(nameField.id) : undefined;
+  if (answers.some((answer) => !permittedIds.has(answer.fieldId) || !answerMatchesVersion(answer, version))
+      || ((durableTitle !== undefined) !== (title !== undefined))
+      || (title !== undefined && (title.kind !== 'text'
+        || !resolvedAnswerMatches(durableTitle, title)))
+      || ((durableName !== undefined) !== (name !== undefined))
+      || (name !== undefined && (name.kind !== 'text' || !resolvedAnswerMatches(durableName, name)))) {
+    throw new IntakeValidationError('invalid_submission_evidence');
+  }
+  return organizerSubmissionSummarySchema.parse({
+    schemaVersion: 1, id: head.id, formId: head.formId, formVersionId: head.formVersionId,
+    target: version.definition.target, title: title?.kind === 'text' ? title.value : null,
+    primaryParticipantName: name?.kind === 'text' && name.value.length > 0 ? name.value : null,
+    submittedAt: head.submittedAt
+  });
+}
+
+function projectVerifiedDirectEntryDetail(input:
+  Parameters<SQLiteIntakeSubmissionProjectionPort['projectDirectEntryDetail']>[0] & {
+    readonly resolvedAnswers: readonly OrganizerSubmissionAnswerDto[];
+  }): OrganizerSubmissionDetailDto {
+  const head = parseSubmissionHead(input.head);
+  const version = parseFormVersion(input.version);
+  const evidence = parseSubmissionDirectEntryEvidence(input.entryEvidence);
+  const participants = input.participants.map(parseSubmissionParticipantEvidence);
+  const answers = parseResolvedAnswers(input.resolvedAnswers);
+  const durable = evidence.answers.filter((answer) => answer.kind !== 'email');
+  const durableByField = new Map(durable.map((answer) => [answer.fieldId, answer]));
+  const durableIds = durable.map((answer) => answer.fieldId).sort(compareCanonicalText);
+  const resolvedIds = answers.map((answer) => answer.fieldId).sort(compareCanonicalText);
+  if (head.source !== 'direct_entry'
+      || head.submitEvidenceId !== evidence.id || head.id !== evidence.submissionId
+      || head.formVersionId !== evidence.formVersionId || version.id !== head.formVersionId
+      || version.formId !== head.formId || !sameIntakeScope(version.scope, head.scope)
+      || participants.length !== 1 || participants[0]!.submissionId !== head.id
+      || participants[0]!.personId !== head.primaryPersonId
+      || durableIds.length !== resolvedIds.length
+      || durableIds.some((id, index) => id !== resolvedIds[index])
+      || answers.some((answer) => !answerMatchesVersion(answer, version)
+        || !resolvedAnswerMatches(durableByField.get(answer.fieldId), answer))) {
+    throw new IntakeValidationError('invalid_submission_evidence');
+  }
+  return organizerSubmissionDetailSchema.parse({
+    schemaVersion: 1, submissionId: head.id, formId: head.formId,
+    formVersionId: head.formVersionId, submittedAt: head.submittedAt,
+    participantCount: 1, answers,
+    affirmedConsentFieldIds: []
+  });
+}
+
 export interface SQLiteIntakeClassifiedProjectionOptions {
   readonly store: SynchronousClassifiedPayloadStore;
   readonly profiles: ClassifiedPayloadProfiles;
@@ -239,6 +319,154 @@ implements SQLiteIntakeSubmissionProjectionPort, ApplicationAnswerPayloadReferen
     return projectVerifiedDetail({ ...input, resolvedAnswers });
   }
 
+  projectDirectEntrySummary(
+    input: Parameters<SQLiteIntakeSubmissionProjectionPort['projectDirectEntrySummary']>[0]
+  ): OrganizerSubmissionSummaryDto {
+    const resolvedAnswers = this.#resolveDirectEntryAnswers({ ...input, mode: 'summary' });
+    return projectVerifiedDirectEntrySummary({ ...input, resolvedAnswers });
+  }
+
+  projectDirectEntryDetail(
+    input: Parameters<SQLiteIntakeSubmissionProjectionPort['projectDirectEntryDetail']>[0]
+  ): OrganizerSubmissionDetailDto {
+    const resolvedAnswers = this.#resolveDirectEntryAnswers({ ...input, mode: 'detail' });
+    return projectVerifiedDirectEntryDetail({ ...input, resolvedAnswers });
+  }
+
+  resolveDirectEntryContact(
+    input: Parameters<SQLiteIntakeSubmissionProjectionPort['resolveDirectEntryContact']>[0]
+  ): OrganizerSubmissionContactDto {
+    const evidence = parseSubmissionDirectEntryEvidence(input.entryEvidence);
+    if (input.head.source !== 'direct_entry'
+        || evidence.submissionId !== input.head.id
+        || evidence.id !== input.head.submitEvidenceId
+        || evidence.formVersionId !== input.version.id
+        || input.head.formId !== input.version.formId
+        || input.participant.submissionId !== input.head.id
+        || input.participant.personId !== input.head.primaryPersonId) {
+      throw new TypeError('intake_contact_attribution_mismatch');
+    }
+    const emailFields = input.version.definition.fields.filter((field) =>
+      field.kind === 'email' && field.mapsTo === 'person.email'
+    );
+    if (emailFields.length !== 1) throw new TypeError('intake_contact_field_invalid');
+    const field = emailFields[0]!;
+    const answer = evidence.answers.find((candidate) => candidate.fieldId === field.id);
+    if (!answer || answer.kind !== 'email') throw new TypeError('intake_contact_missing');
+    const email = this.#decodeGoverned(answer, field, this.#read({
+      kind: answer.kind,
+      fieldId: answer.fieldId,
+      payloadRefId: answer.value.payloadRef.id,
+      scopeBinding: this.#directEntryScopeBinding(input.head, evidence, answer)
+    }));
+    if (typeof email !== 'string') throw new TypeError('intake_contact_field_invalid');
+    return projectOrganizerSubmissionContact({
+      submissionId: input.head.id,
+      personId: input.participant.personId,
+      participantIdentityId: input.participant.participantIdentityId,
+      sourceFieldId: field.id,
+      email
+    });
+  }
+
+  #resolveDirectEntryAnswers(input: {
+    readonly head: Parameters<SQLiteIntakeSubmissionProjectionPort['projectDirectEntrySummary']>[0]['head'];
+    readonly entryEvidence: Parameters<SQLiteIntakeSubmissionProjectionPort['projectDirectEntrySummary']>[0]['entryEvidence'];
+    readonly version: Parameters<SQLiteIntakeSubmissionProjectionPort['projectDirectEntrySummary']>[0]['version'];
+    readonly mode: 'summary' | 'detail';
+  }): readonly OrganizerSubmissionAnswerDto[] {
+    const evidence = parseSubmissionDirectEntryEvidence(input.entryEvidence);
+    if (input.head.source !== 'direct_entry'
+        || evidence.submissionId !== input.head.id
+        || evidence.id !== input.head.submitEvidenceId
+        || evidence.formVersionId !== input.version.id
+        || input.head.formId !== input.version.formId
+        || input.head.formVersionId !== input.version.id) {
+      throw new TypeError('intake_projection_source_mismatch');
+    }
+    const summaryFieldIds = input.mode === 'summary'
+      ? new Set(input.version.definition.fields.filter((field) =>
+          field.mapsTo === 'talk.title' || field.mapsTo === 'person.name'
+        ).map((field) => field.id))
+      : undefined;
+    return Object.freeze(evidence.answers.flatMap((answer) => {
+      if (answer.kind === 'email'
+          || (summaryFieldIds && !summaryFieldIds.has(answer.fieldId))) return [];
+      const field = input.version.definition.fields.find((candidate) =>
+        candidate.id === answer.fieldId
+      );
+      if (!field || field.kind !== answer.kind) {
+        throw new TypeError('intake_classified_projection_corrupt');
+      }
+      const identifiedField = { fieldId: field.id, fieldLabel: field.label };
+      if ('value' in answer) {
+        const value = this.#decodeGoverned(answer, field, this.#read({
+          kind: answer.kind,
+          fieldId: answer.fieldId,
+          payloadRefId: answer.value.payloadRef.id,
+          scopeBinding: this.#directEntryScopeBinding(input.head, evidence, answer)
+        }));
+        return [organizerSubmissionAnswerSchema.parse({
+          kind: answer.kind,
+          ...identifiedField,
+          value
+        })];
+      }
+      if (answer.kind === 'select') {
+        if (field.kind !== 'select') throw new TypeError('intake_classified_projection_corrupt');
+        const choice = this.#resolveChoice(
+          evidence.programVocabularyAnswerPins, field, answer.choiceId
+        );
+        return [organizerSubmissionAnswerSchema.parse({
+          kind: answer.kind,
+          ...identifiedField,
+          choice
+        })];
+      }
+      if (answer.kind === 'multiselect') {
+        if (field.kind !== 'multiselect') {
+          throw new TypeError('intake_classified_projection_corrupt');
+        }
+        const choices = answer.choiceIds.map((choiceId) =>
+          this.#resolveChoice(evidence.programVocabularyAnswerPins, field, choiceId)
+        );
+        return [organizerSubmissionAnswerSchema.parse({
+          kind: answer.kind,
+          ...identifiedField,
+          choices
+        })];
+      }
+      return [organizerSubmissionAnswerSchema.parse({
+        kind: answer.kind,
+        ...identifiedField,
+        checked: answer.checked
+      })];
+    }));
+  }
+
+  #directEntryScopeBinding(
+    head: Parameters<SQLiteIntakeSubmissionProjectionPort['projectDirectEntrySummary']>[0]['head'],
+    evidence: ReturnType<typeof parseSubmissionDirectEntryEvidence>,
+    answer: GovernedAnswer
+  ): string {
+    const owner: ApplicationAnswerOwner = submissionDirectEntryAnswerOwner({
+      scope: head.scope,
+      submissionId: head.id,
+      entryEvidenceId: evidence.id,
+      enteredByUserId: evidence.enteredByUserId
+    });
+    if (owner.authorityPartitionDigestSha256 !== evidence.authorityPartitionDigestSha256) {
+      throw new TypeError('intake_classified_projection_corrupt');
+    }
+    return applicationAnswerPayloadScopeBinding({
+      scope: head.scope,
+      formVersionId: evidence.formVersionId,
+      owner,
+      fieldId: answer.fieldId,
+      kind: answer.kind
+    });
+  }
+
   #resolveSafeAnswers(input: {
     readonly head: Parameters<SQLiteIntakeSubmissionProjectionPort['projectSummary']>[0]['head'];
     readonly submitEvidence: Parameters<SQLiteIntakeSubmissionProjectionPort['projectSummary']>[0]['submitEvidence'];
@@ -275,7 +503,9 @@ implements SQLiteIntakeSubmissionProjectionPort, ApplicationAnswerPayloadReferen
       }
       if (answer.kind === 'select') {
         if (field.kind !== 'select') throw new TypeError('intake_classified_projection_corrupt');
-        const choice = this.#resolveChoice(input, field, answer.choiceId);
+        const choice = this.#resolveChoice(
+          input.submitEvidence.programVocabularyAnswerPins, field, answer.choiceId
+        );
         return [organizerSubmissionAnswerSchema.parse({
           kind: answer.kind,
           ...identifiedField,
@@ -287,7 +517,7 @@ implements SQLiteIntakeSubmissionProjectionPort, ApplicationAnswerPayloadReferen
           throw new TypeError('intake_classified_projection_corrupt');
         }
         const choices = answer.choiceIds.map((choiceId) =>
-          this.#resolveChoice(input, field, choiceId)
+          this.#resolveChoice(input.submitEvidence.programVocabularyAnswerPins, field, choiceId)
         );
         return [organizerSubmissionAnswerSchema.parse({
           kind: answer.kind,
@@ -392,9 +622,9 @@ implements SQLiteIntakeSubmissionProjectionPort, ApplicationAnswerPayloadReferen
   }
 
   #resolveChoice(
-    input: {
-      readonly submitEvidence: Parameters<SQLiteIntakeSubmissionProjectionPort['projectSummary']>[0]['submitEvidence'];
-    },
+    vocabularyPins: Parameters<
+      SQLiteIntakeSubmissionProjectionPort['projectSummary']
+    >[0]['submitEvidence']['programVocabularyAnswerPins'],
     field: Extract<FormFieldDefinitionDto, { readonly kind: 'select' | 'multiselect' }>,
     choiceId: string
   ): { readonly id: string; readonly label: string } {
@@ -404,7 +634,7 @@ implements SQLiteIntakeSubmissionProjectionPort, ApplicationAnswerPayloadReferen
       return { id: choice.id, label: choice.label };
     }
     const source = field.options.source;
-    const pins = input.submitEvidence.programVocabularyAnswerPins.filter((pin) =>
+    const pins = vocabularyPins.filter((pin) =>
       pin.fieldId === field.id && pin.itemId === choiceId && pin.source === source
     );
     if (pins.length !== 1) throw new TypeError('intake_classified_projection_corrupt');

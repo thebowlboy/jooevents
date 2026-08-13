@@ -35,7 +35,10 @@ function baseline(): EventSettingsState {
       eventId,
       eventVersion: 4,
       location: 'Singapore',
-      venueNote: ''
+      venueNote: '',
+      dayStart: '09:00',
+      dayEnd: '18:00',
+      slotMinutes: 30
     })
   };
 }
@@ -73,7 +76,10 @@ describe('Event settings changeset definition', () => {
           startDate: '2027-04-16',
           endDate: '2027-04-19',
           location: 'Suntec City',
-          venueNote: 'Use level 3.'
+          venueNote: 'Use level 3.',
+          dayStart: '08:00',
+          dayEnd: '18:00',
+          slotMinutes: 20
         }
       },
       dependencyGroup: 'event_settings',
@@ -87,8 +93,8 @@ describe('Event settings changeset definition', () => {
       safeDiff: {
         action: 'update',
         selection: { eventId, eventSetVersion: 3 },
-        before: { eventVersion: 4, location: 'Singapore' },
-        after: { eventVersion: 5, location: 'Suntec City' }
+        before: { eventVersion: 4, location: 'Singapore', dayStart: '09:00', slotMinutes: 30 },
+        after: { eventVersion: 5, location: 'Suntec City', dayStart: '08:00', slotMinutes: 20 }
       }
     });
     expect(operation.guardRefs[0]?.digest).toMatch(/^[a-f0-9]{64}$/);

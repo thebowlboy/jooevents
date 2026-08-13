@@ -122,12 +122,15 @@ export const submissionArrivalFactSchema = z.strictObject({
     });
   }
   if (closeAt !== undefined) {
-    const shouldBeLate = Date.parse(fact.submittedAt) > Date.parse(closeAt);
+    // Lateness measures a public-window arrival. Organizer-lane sources record
+    // the accepting close as evidence but are never classified late.
+    const shouldBeLate = fact.source === 'public_form'
+      && Date.parse(fact.submittedAt) > Date.parse(closeAt);
     if (shouldBeLate !== (fact.classification === 'late')) {
       context.addIssue({
         code: 'custom',
         path: ['classification'],
-        message: 'arrival classification must agree with the recorded close instant'
+        message: 'arrival classification must agree with the source and recorded close instant'
       });
     }
   }

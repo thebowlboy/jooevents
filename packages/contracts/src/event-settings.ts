@@ -100,6 +100,69 @@ export const eventSettingsVenueNoteSchema = canonicalText(
   true
 );
 
+const TIME_OF_DAY = /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/;
+
+/** Zero-padded HH:MM wall-clock boundaries of the schedulable day window. */
+export const eventSettingsDayStartSchema = z.string().regex(TIME_OF_DAY);
+export const eventSettingsDayEndSchema = z.string().regex(TIME_OF_DAY);
+/** Grid slot length in minutes; the closed set every schedule surface may assume. */
+export const eventSettingsSlotMinutesSchema = z.union([
+  z.literal(5), z.literal(10), z.literal(15), z.literal(20), z.literal(30), z.literal(60)
+]);
+
+function minuteOfDay(value: string): number {
+  return Number(value.slice(0, 2)) * 60 + Number(value.slice(3, 5));
+}
+
+function addEventSettingsGeometryIssues(
+  geometry: {
+    readonly dayStart: string | null;
+    readonly dayEnd: string | null;
+    readonly slotMinutes: number | null;
+  },
+  context: z.core.$RefinementCtx
+): void {
+  const absent = [geometry.dayStart, geometry.dayEnd, geometry.slotMinutes]
+    .filter((value) => value === null).length;
+  if (absent !== 0 && absent !== 3) {
+    context.addIssue({
+      code: 'custom',
+      path: ['slotMinutes'],
+      message: 'day start, day end, and slot length are set together or all absent'
+    });
+    return;
+  }
+  if (geometry.dayStart === null || geometry.dayEnd === null || geometry.slotMinutes === null) {
+    return;
+  }
+  const windowMinutes = minuteOfDay(geometry.dayEnd) - minuteOfDay(geometry.dayStart);
+  if (windowMinutes <= 0) {
+    context.addIssue({
+      code: 'custom',
+      path: ['dayEnd'],
+      message: 'day end must be after day start'
+    });
+    return;
+  }
+  if (windowMinutes % geometry.slotMinutes !== 0) {
+    context.addIssue({
+      code: 'custom',
+      path: ['slotMinutes'],
+      message: 'slot length must divide the day window exactly'
+    });
+  }
+}
+
+/**
+ * The schedule-grid geometry triple. All three values are present together or
+ * all null; all-null is the honest published absence of a grid, never a default.
+ */
+export const eventSettingsGeometrySchema = z.strictObject({
+  dayStart: eventSettingsDayStartSchema.nullable(),
+  dayEnd: eventSettingsDayEndSchema.nullable(),
+  slotMinutes: eventSettingsSlotMinutesSchema.nullable()
+}).superRefine(addEventSettingsGeometryIssues);
+
 /** Semantically named scope identities; both use the canonical application-ID wire format. */
 export const eventSettingsWorkspaceIdSchema = z.string().regex(APPLICATION_UUID_CANONICAL);
 export const eventSettingsEventIdSchema = z.string().regex(APPLICATION_UUID_CANONICAL);
@@ -115,7 +178,10 @@ const settingsValueFields = {
   startDate: eventDateSchema,
   endDate: eventDateSchema,
   location: eventSettingsLocationSchema,
-  venueNote: eventSettingsVenueNoteSchema
+  venueNote: eventSettingsVenueNoteSchema,
+  dayStart: eventSettingsDayStartSchema.nullable(),
+  dayEnd: eventSettingsDayEndSchema.nullable(),
+  slotMinutes: eventSettingsSlotMinutesSchema.nullable()
 } as const;
 
 export const eventSettingsSchema = z.strictObject({
@@ -127,7 +193,7 @@ export const eventSettingsSchema = z.strictObject({
 }).refine((settings) => settings.endDate >= settings.startDate, {
   path: ['endDate'],
   message: 'end date must not precede start date'
-});
+}).superRefine(addEventSettingsGeometryIssues);
 
 export const currentEventSettingsReadInputSchema = z.strictObject({});
 export const eventSettingsEventRequiredOutcomeSchema = z.strictObject({
@@ -154,11 +220,14 @@ export const eventSettingsUpdateDraftInputSchema = z.strictObject({
   startDate: eventDateSchema,
   endDate: eventDateSchema,
   location: eventSettingsLocationInputSchema,
-  venueNote: eventSettingsVenueNoteInputSchema
+  venueNote: eventSettingsVenueNoteInputSchema,
+  dayStart: eventSettingsDayStartSchema.nullable(),
+  dayEnd: eventSettingsDayEndSchema.nullable(),
+  slotMinutes: eventSettingsSlotMinutesSchema.nullable()
 }).refine((input) => input.endDate >= input.startDate, {
   path: ['endDate'],
   message: 'end date must not precede start date'
-});
+}).superRefine(addEventSettingsGeometryIssues);
 
 export const eventSettingsUpdateAuthorInputSchema = z.strictObject({
   scope: eventSettingsScopeSchema,
@@ -228,6 +297,8 @@ export const EVENT_SETTINGS_OPERATION_SCHEMA_REFS = Object.freeze({
 });
 
 export type EventSettingsScope = z.infer<typeof eventSettingsScopeSchema>;
+export type EventSettingsSlotMinutes = z.infer<typeof eventSettingsSlotMinutesSchema>;
+export type EventSettingsGeometry = z.infer<typeof eventSettingsGeometrySchema>;
 export type EventSettingsDto = z.infer<typeof eventSettingsSchema>;
 export type CurrentEventSettingsReadInput = z.infer<typeof currentEventSettingsReadInputSchema>;
 export type CurrentEventSettingsReadResult = z.infer<typeof currentEventSettingsReadResultSchema>;

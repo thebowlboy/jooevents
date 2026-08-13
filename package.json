@@ -13,6 +13,12 @@
     "dev:server": "bun run --cwd apps/server dev",
     "start:server": "bun run apps/server/src/entry/bun.ts",
     "build": "bun run --cwd apps/web build",
+    "demo:build:cloudflare": "bun run build && ./scripts/check-demo-build.sh",
+    "demo:dev:cloudflare": "bun run demo:build:cloudflare && bunx wrangler dev --config wrangler.demo.jsonc",
+    "demo:deploy:cloudflare": "bun run demo:build:cloudflare && bunx wrangler deploy --config wrangler.demo.jsonc",
+    "splash:dev:cloudflare": "bunx wrangler dev --config wrangler.splash.jsonc",
+    "splash:deploy:cloudflare": "bunx wrangler deploy --config wrangler.splash.jsonc",
+    "cloudflare:whoami": "bunx wrangler whoami",
     "check": "bun run --workspaces check && ./scripts/check-motion.sh",
     "check:motion": "./scripts/check-motion.sh",
     "check:public-boundary": "./scripts/check-public-boundary.sh",
@@ -21,10 +27,13 @@
     "db:backup": "bun packages/persistence/src/sqlite/cli.ts backup",
     "db:restore-rehearsal": "bun packages/persistence/src/sqlite/cli.ts restore-rehearsal",
     "test": "bun test",
-    "test:backend": "bun test packages/kernel packages/identity-access packages/contracts packages/application packages/changesets packages/changeset-operations packages/reliability packages/model-adapter packages/mcp packages/event packages/event-operations packages/deadline packages/deadline-operations packages/program packages/program-operations packages/schedule packages/schedule-operations packages/intake packages/intake-operations packages/field-registry packages/submission-triage packages/review packages/review-operations packages/communications packages/communication-operations packages/cloudflare-email packages/workspace-operations packages/persistence/src apps/server/src",
+    "test:backend": "bun test packages/kernel packages/identity-access packages/contracts packages/application packages/changesets packages/changeset-operations packages/reliability packages/model-adapter packages/mcp packages/event packages/event-operations packages/deadline packages/deadline-operations packages/program packages/program-operations packages/session packages/session-operations packages/decision packages/decision-operations packages/schedule packages/schedule-operations packages/intake packages/intake-operations packages/field-registry packages/submission-triage packages/review packages/review-operations packages/communications packages/communication-operations packages/cloudflare-email packages/workspace-operations packages/persistence/src apps/server/src",
     "test:foundation": "bun run test:backend",
     "test:foundation-db": "bun test packages/persistence/src/sqlite",
     "test:e2e": "bun run --cwd apps/web test:e2e",
     "preview": "bun run --cwd apps/web preview"
+  },
+  "devDependencies": {
+    "wrangler": "4.122.0"
   }
 }

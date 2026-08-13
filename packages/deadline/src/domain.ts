@@ -1,6 +1,7 @@
 import {
   deadlineChangedFactPayloadSchema,
   deadlineMutationPlanSchema,
+  deadlineMutationPlanningInputSchema,
   deadlineMutationResultSchema,
   deadlineSafeDiffSchema,
   type DeadlineCatalogSnapshotDto,
@@ -86,13 +87,16 @@ export function planDeadlineMutation(input: {
   readonly eventTimeBasis?: DeadlineEventTimeBasisDto;
 }): DeadlineMutationPlanDto {
   const catalog = parseDeadlineCatalog(input.catalog);
-  if (!sameDeadlineScope(catalog.scope, input.planningInput.scope)) {
+  const planning = deadlineMutationPlanningInputSchema.parse(input.planningInput);
+  if (!sameDeadlineScope(catalog.scope, planning.scope)) {
     throw new DeadlinePlanningError('wrong_scope');
   }
-  const current = catalog.deadlines.find((head) => head.id === input.planningInput.deadlineId);
-  const planning = input.planningInput;
+  const current = catalog.deadlines.find((head) => head.id === planning.deadlineId);
   if (planning.action === 'create' && current) throw new DeadlinePlanningError('deadline_exists');
   if (planning.action !== 'create' && !current) throw new DeadlinePlanningError('deadline_missing');
+  if (planning.action !== 'create' && current!.kind !== planning.kind) {
+    throw new DeadlinePlanningError('invalid_plan');
+  }
   if (planning.action !== 'create' && current!.version !== planning.expectedVersion) {
     throw new DeadlinePlanningError('stale_deadline');
   }
@@ -128,7 +132,7 @@ export function planDeadlineMutation(input: {
           schemaVersion: 1 as const,
           id: planning.deadlineId,
           scope: planning.scope,
-          kind: 'cfp_close' as const,
+          kind: planning.kind,
           version: 1,
           gracePolicy: 'soft' as const,
           createdByUserId: planning.attributedByUserId,

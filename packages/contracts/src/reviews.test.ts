@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   reviewCriteriaSchema,
   reviewChangeDraftInputSchema,
+  reviewPlanProjectionSchema,
   reviewRevisionSchema,
   reviewSnapshotSchema
 } from './reviews';
@@ -57,6 +58,32 @@ describe('review contracts', () => {
       plans: [],
       standings: {}
     });
+  });
+
+  test('serves round version and canonical criterion identities on every plan', () => {
+    const plan = {
+      id: id(20),
+      ordinal: 1,
+      name: 'Round 1',
+      state: 'open',
+      version: 3,
+      scaleMax: 5,
+      criteria: [{
+        id: id(21), key: 'overall', label: 'Overall', position: 0,
+        weightBps: 10_000, scaleMin: 1, scaleMax: 5
+      }],
+      deadlineEffectiveAt: '2026-08-31T00:00:00.000Z',
+      anonymized: true,
+      antiAnchoring: true,
+      done: 0,
+      total: 1,
+      reviewers: []
+    };
+    expect(reviewPlanProjectionSchema.safeParse(plan).success).toBe(true);
+    const { criteria: _criteria, ...withoutCriteria } = plan;
+    expect(reviewPlanProjectionSchema.safeParse(withoutCriteria).success).toBe(false);
+    const { version: _version, ...withoutVersion } = plan;
+    expect(reviewPlanProjectionSchema.safeParse(withoutVersion).success).toBe(false);
   });
 
   test('accepts open-round date intent and never trusts the browser with a Deadline id', () => {

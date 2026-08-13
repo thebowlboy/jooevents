@@ -17,6 +17,7 @@ import {
   installProgramVocabularySchema,
   SQLiteProgramVocabularyRepository
 } from './program-vocabulary';
+import { installSchedulePlacementSchema } from './schedule-placement';
 import { installSessionSchema, SQLiteSessionRepository } from './session';
 
 const workspaceId = parseWorkspaceId('550e8400-e29b-41d4-a716-446655440000');
@@ -48,6 +49,7 @@ function fixture() {
   installEventSpineSchema(sqlite);
   installProgramVocabularySchema(sqlite);
   installSessionSchema(sqlite);
+  installSchedulePlacementSchema(sqlite);
   sqlite.query(`
     INSERT INTO workspaces (id, name, state, created_at, updated_at, version)
     VALUES (?, 'Workspace', 'active', 1, 1, 1)
@@ -167,6 +169,47 @@ describe('disposable SQLite Session repository', () => {
       sqlite.exec('ROLLBACK;');
       expect(sessions.readSessionCatalog({ workspaceId, eventId })).toMatchObject({ version: 1, sessions: [] });
       expect(sqlite.query('SELECT count(*) AS count FROM session_catalogs').get()).toEqual({ count: 0 });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test('counts live schedule occurrences per Session for the compensation deletion gate', () => {
+    const { sqlite, sessions } = fixture();
+    try {
+      const plan = createPlan(sessions);
+      sqlite.exec('BEGIN IMMEDIATE;');
+      sessions.applySessionPlan(plan);
+      sqlite.exec('COMMIT;');
+      expect(sessions.countSessionSchedulePlacements({ workspaceId, eventId }, sessionId)).toBe(0);
+
+      const roomId = '019c1df7-86b5-769b-bba4-5f7097bfa501';
+      const occurrenceId = '019c1df7-86b5-769b-bba4-5f7097bfa502';
+      const otherSessionId = '019c1df7-86b5-769b-bba4-5f7097bfa503';
+      sqlite.exec('BEGIN IMMEDIATE;');
+      sqlite.query(`
+        INSERT INTO program_vocabulary_rooms (
+          workspace_id, event_id, id, name, status, capacity, version,
+          created_by_user_id, created_at_ms, updated_by_user_id, updated_at_ms
+        ) VALUES (?, ?, ?, 'Main Hall', 'active', NULL, 1, ?, ?, ?, ?)
+      `).run(workspaceId, eventId, roomId, userId, Date.parse(now), userId, Date.parse(now));
+      sqlite.query(`
+        INSERT INTO schedule_placement_sets (
+          workspace_id, event_id, schedule_version, updated_by_user_id, updated_at_ms
+        ) VALUES (?, ?, 2, ?, ?)
+      `).run(workspaceId, eventId, userId, Date.parse(now));
+      sqlite.query(`
+        INSERT INTO schedule_occurrences (
+          workspace_id, event_id, id, session_id, room_id, start_at_ms, end_at_ms,
+          version, updated_by_user_id, updated_at_ms
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+      `).run(
+        workspaceId, eventId, occurrenceId, sessionId, roomId,
+        Date.parse(now), Date.parse(later), userId, Date.parse(now)
+      );
+      sqlite.exec('COMMIT;');
+      expect(sessions.countSessionSchedulePlacements({ workspaceId, eventId }, sessionId)).toBe(1);
+      expect(sessions.countSessionSchedulePlacements({ workspaceId, eventId }, otherSessionId)).toBe(0);
     } finally {
       sqlite.close();
     }

@@ -76,7 +76,10 @@ describe('Event settings operations', () => {
           startDate: '2027-04-16',
           endDate: '2027-04-18',
           location: '',
-          venueNote: ''
+          venueNote: '',
+          dayStart: '09:00',
+          dayEnd: '18:00',
+          slotMinutes: 30
         })
       },
       clock: { now: () => now },
@@ -147,12 +150,14 @@ describe('Event settings operations', () => {
             before: {
               schemaVersion: 1 as const, eventId, eventSetVersion: 2, eventVersion: 1,
               name: 'JooConf', timezone: 'Asia/Singapore',
-              startDate: '2027-04-16', endDate: '2027-04-18', location: '', venueNote: ''
+              startDate: '2027-04-16', endDate: '2027-04-18', location: '', venueNote: '',
+              dayStart: '09:00', dayEnd: '18:00', slotMinutes: 30 as const
             },
             after: {
               schemaVersion: 1 as const, eventId, eventSetVersion: 2, eventVersion: 2,
               name: 'JooConf Live', timezone: 'Asia/Singapore',
-              startDate: '2027-04-16', endDate: '2027-04-18', location: '', venueNote: ''
+              startDate: '2027-04-16', endDate: '2027-04-18', location: '', venueNote: '',
+              dayStart: '09:00', dayEnd: '18:00', slotMinutes: 30 as const
             },
             selection: { eventId, eventSetVersion: 2 }
           }

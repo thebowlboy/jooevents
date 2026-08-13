@@ -92,7 +92,7 @@ import {
   schedulePlacementValidationPort,
   SCHEDULE_PLACEMENT_CHANGESET_KIND,
   SCHEDULE_PLACEMENT_CHANGESET_VERSION,
-  type ProgrammedSessionIdentityPort,
+  type PlaceableSessionIdentityPort,
   type SchedulePlacementChangesetBundle,
   type SchedulePlacementTransactionPort
 } from '@jooevents/schedule';
@@ -398,7 +398,7 @@ implements SQLiteEffectDomainAdapter, ChangesetLifecycleOwnerResolutionSource {
   constructor(private readonly input: {
     readonly sqlite: Database;
     readonly workspaceId: WorkspaceId;
-    readonly sessions: ProgrammedSessionIdentityPort;
+    readonly sessions: PlaceableSessionIdentityPort;
     readonly vocabulary: SQLiteProgramVocabularyRepository;
     readonly eventRelationships: SQLiteOperatorEventRelationshipSource;
     readonly ids: SQLiteSchedulePlacementChangesetEffectIds;
@@ -1037,7 +1037,7 @@ implements SQLiteEffectDomainAdapter, ChangesetLifecycleOwnerResolutionSource {
 export function createSQLiteSchedulePlacementChangesetEffectDomainRegistration(input: {
   readonly sqlite: Database;
   readonly workspaceId: WorkspaceId;
-  readonly sessions: ProgrammedSessionIdentityPort;
+  readonly sessions: PlaceableSessionIdentityPort;
   readonly vocabulary: SQLiteProgramVocabularyRepository;
   readonly eventRelationships: SQLiteOperatorEventRelationshipSource;
   readonly ids: SQLiteSchedulePlacementChangesetEffectIds;

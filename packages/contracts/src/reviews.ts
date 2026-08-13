@@ -1,5 +1,6 @@
 import { isApplicationId, parseInstant } from '@jooevents/kernel';
 import { z } from 'zod';
+import { deadlineMutationPlanSchema, deadlineSafeDiffSchema } from './deadlines';
 import {
   createEffectfulOperationResultSchema,
   createOperationSchemaManifestRefs,
@@ -239,12 +240,18 @@ const attributionFields = {
   attributedAt: reviewInstantSchema
 } as const;
 
+/**
+ * Opening a round never references a pre-existing deadline: the server mints
+ * the `review_due` Deadline identity and the same changeset creates it
+ * atomically from `deadlineDate` through the Deadline collaboration.
+ */
 export const reviewOpenRoundPlanningInputSchema = z.strictObject({
   action: z.literal('open_round'),
   scope: reviewScopeSchema,
   expectedCatalogVersion: reviewVersionSchema,
   roundId: reviewIdSchema,
-  deadlineId: reviewIdSchema,
+  deadlineIdentity: z.strictObject({ deadlineId: reviewIdSchema }),
+  deadlineDate: z.iso.date(),
   criteria: reviewCriteriaSchema,
   visibility: reviewVisibilityPolicySchema,
   assignmentIds: z.array(z.strictObject({
@@ -293,6 +300,17 @@ export const reviewQueryGuardSchema = z.strictObject({
   digestSha256: reviewSha256Schema
 });
 
+/**
+ * The open-round plan carries the whole `review_due` Deadline creation as an
+ * embedded Deadline mutation contribution; the Deadline is created in the same
+ * committed unit of work as the round.
+ *
+ * There is deliberately no per-deadline guard here: the created Deadline does
+ * not exist while the changeset is proposed, so a `review_deadline:<id>` guard
+ * could never be satisfied at commit re-check and would always false-conflict.
+ * Concurrent Deadline activity is instead fenced by the Deadline domain's own
+ * `deadline_catalog` guard (version + digest) carried by the contribution.
+ */
 export const reviewOpenRoundPlanSchema = z.strictObject({
   action: z.literal('open_round'), input: reviewOpenRoundPlanningInputSchema,
   catalog: z.strictObject({
@@ -303,7 +321,7 @@ export const reviewOpenRoundPlanSchema = z.strictObject({
   assignments: z.array(reviewAssignmentSchema).max(20_000),
   candidateGuard: reviewQueryGuardSchema,
   reviewerGuard: reviewQueryGuardSchema,
-  deadlineGuard: reviewQueryGuardSchema
+  deadlineContribution: deadlineMutationPlanSchema
 });
 export const reviewDiscardRoundPlanSchema = z.strictObject({
   action: z.literal('discard_empty_round'), input: reviewDiscardRoundPlanningInputSchema,
@@ -340,7 +358,8 @@ export const reviewSafeDiffSchema = z.discriminatedUnion('action', [
     action: z.literal('open_round'), roundId: reviewIdSchema,
     roundName: z.string().trim().min(1).max(120), assignmentCount: z.number().int().nonnegative().safe(),
     reviewerCount: z.number().int().nonnegative().safe(), submissionCount: z.number().int().nonnegative().safe(),
-    deadlineEffectiveAt: reviewInstantSchema, anonymized: z.boolean(), criterionLabels: z.array(z.string())
+    deadlineEffectiveAt: reviewInstantSchema, anonymized: z.boolean(), criterionLabels: z.array(z.string()),
+    deadline: deadlineSafeDiffSchema
   }),
   z.strictObject({ action: z.literal('discard_empty_round'), roundId: reviewIdSchema, roundName: z.string() }),
   z.strictObject({ action: z.literal('step_back'), assignmentId: reviewIdSchema, submissionId: reviewIdSchema }),
@@ -377,7 +396,14 @@ export const reviewRoundSetupProjectionSchema = z.strictObject({
 
 export const reviewPlanProjectionSchema = z.strictObject({
   id: reviewIdSchema, ordinal: z.number().int().positive(), name: z.string(), state: z.enum(['open', 'closed', 'discarded']),
+  /** The canonical round version; round-targeted change drafts pin it as their expected version. */
+  version: reviewVersionSchema,
   scaleMax: z.literal(5), deadlineEffectiveAt: reviewInstantSchema,
+  /**
+   * The round's canonical criterion identities in canonical position order.
+   * Evaluation saves score exactly these ids; no surface mints its own.
+   */
+  criteria: reviewCriteriaSchema,
   anonymized: z.boolean(), antiAnchoring: z.boolean(), done: z.number().int().nonnegative(), total: z.number().int().nonnegative(),
   reviewers: z.array(z.strictObject({
     reviewerId: reviewIdSchema, displayName: z.string().optional(), assigned: z.number().int().nonnegative(),
@@ -444,6 +470,12 @@ export const reviewSnapshotSchema = z.strictObject({
 
 export const reviewRoundSetupReadInputSchema = z.strictObject({});
 
+/**
+ * Omitting `criteria` opens the round with the server's single default
+ * criterion (key `overall`, full weight, 1–5 scale). Such a round therefore
+ * scores exactly one criterion, and its evaluation saves carry exactly one
+ * score entry for that served criterion id.
+ */
 export const reviewOpenRoundChangeDraftInputSchema = z.strictObject({
   action: z.literal('open_round'), deadlineDate: z.iso.date(),
   criteria: reviewCriteriaSchema.optional(), anonymized: z.boolean().default(true)
@@ -481,15 +513,6 @@ export const reviewEvaluationChangeDraftInputSchema = z.discriminatedUnion('acti
   reviewCommitChangeDraftInputSchema,
   reviewAmendChangeDraftInputSchema
 ]);
-
-/** Required server-side composition for opening from the tuned date-intent UI. */
-export const reviewRoundOpenAtomicJoinRequirementSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  kind: z.literal('review_due_round_atomic_join'),
-  deadlineKind: z.literal('review_due'),
-  deadlineDate: z.iso.date(),
-  atomic: z.literal(true)
-});
 
 export const reviewDraftSaveInputSchema = z.strictObject({
   assignmentId: reviewIdSchema,
@@ -603,8 +626,6 @@ export type ReviewQueueItemProjection = z.infer<typeof reviewQueueItemProjection
 export type ReviewStanding = z.infer<typeof reviewStandingSchema>;
 export type ReviewSnapshot = z.infer<typeof reviewSnapshotSchema>;
 export type ReviewChangeDraftInput = z.infer<typeof reviewChangeDraftInputSchema>;
-export type ReviewRoundOpenAtomicJoinRequirement =
-  z.infer<typeof reviewRoundOpenAtomicJoinRequirementSchema>;
 export type ReviewDraftSaveInput = z.infer<typeof reviewDraftSaveInputSchema>;
 export type ReviewDraftSaveResult = z.infer<typeof reviewDraftSaveResultSchema>;
 

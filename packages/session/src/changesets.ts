@@ -33,6 +33,7 @@ import {
   planSessionMutation,
   sessionAggregateId,
   sessionCatalogGuardId,
+  SessionPlanningError,
   validateSessionMutationPlan,
   type SessionPlanningErrorCode
 } from './domain';
@@ -46,6 +47,16 @@ type SessionChangesetPlan = SessionMutationPlanDto | SessionRestorePlanDto;
 
 export interface SessionChangesetReadPort extends SessionReadPort {
   readSessionVocabulary(scope: ReturnType<typeof parseSessionScope>): ProgramVocabularyState | undefined;
+  /**
+   * Live schedule occurrences referencing one Session. A placement moves
+   * neither the Session digest nor the catalog digest, so this reference count
+   * is the only fence that keeps a compensating delete from orphaning a placed
+   * Session's occurrence.
+   */
+  countSessionSchedulePlacements(
+    scope: ReturnType<typeof parseSessionScope>,
+    sessionId: string
+  ): number;
 }
 
 export interface SessionChangesetTransactionPort extends SessionChangesetReadPort {
@@ -57,8 +68,9 @@ export const sessionValidationPort = defineChangesetValidationPort<SessionChange
 export const sessionTransactionPort = defineChangesetTransactionPort<SessionChangesetTransactionPort>('session.transaction', 1);
 
 const combinedPlanSchema = z.union([sessionMutationPlanSchema, sessionRestorePlanSchema]);
+// Version 2 adds the `roster_append` planning arm and create-time participants.
 const authorInputSchema = defineChangesetSchema({
-  key: 'session.planning_input', version: 1,
+  key: 'session.planning_input', version: 2,
   schema: z.union([sessionPlanningInputSchema, sessionRestorePlanSchema])
 });
 const planSchema = defineChangesetSchema({ key: 'session.plan', version: 1, schema: combinedPlanSchema });
@@ -69,10 +81,10 @@ const staleDetailSchema = defineChangesetSchema({
   schema: z.strictObject({
     code: z.enum([
       'wrong_scope', 'stale_catalog', 'session_exists', 'session_missing', 'stale_session',
-      'format_missing', 'format_retired', 'track_missing', 'track_retired',
+      'session_placed', 'format_missing', 'format_retired', 'track_missing', 'track_retired',
       'invalid_transition', 'invalid_plan'
     ]),
-    action: z.enum(['create', 'transition', 'restore']),
+    action: z.enum(['create', 'transition', 'roster_append', 'restore']),
     sessionId: sessionIdSchema
   })
 });
@@ -116,8 +128,13 @@ export function createSessionChangesetBundle(): SessionChangesetBundle {
     plan(authorInput, snapshot) {
       const port = snapshot.getPort(sessionReadPort);
       if (isRestorePlan(authorInput)) {
-        const catalog = port.readSessionCatalog(parseSessionScope(authorInput.scope));
+        const restoreScope = parseSessionScope(authorInput.scope);
+        const catalog = port.readSessionCatalog(restoreScope);
         if (!catalog) throw new TypeError('session_scope_missing');
+        if (authorInput.restore === null
+            && port.countSessionSchedulePlacements(restoreScope, authorInput.expectedCurrent.id) !== 0) {
+          throw new SessionPlanningError('session_placed');
+        }
         applySessionRestorePlan({ plan: authorInput, catalog });
         return {
           plan: authorInput,
@@ -132,8 +149,14 @@ export function createSessionChangesetBundle(): SessionChangesetBundle {
       }
       const { catalog, vocabulary } = environment(authorInput.scope, port);
       const plan = planSessionMutation({ planningInput: authorInput, catalog, vocabulary });
-      const targetItems = [plan.after.programTarget.format, plan.after.programTarget.track]
-        .filter((item): item is NonNullable<typeof item> => item !== null);
+      // A pure roster append retains its Program Vocabulary evidence byte-for-byte,
+      // so vocabulary refs would only manufacture false conflicts for it.
+      const refreshesTarget = plan.input.action !== 'roster_append'
+        || plan.input.graduateTo !== undefined;
+      const targetItems = refreshesTarget
+        ? [plan.after.programTarget.format, plan.after.programTarget.track]
+            .filter((item): item is NonNullable<typeof item> => item !== null)
+        : [];
       return {
         plan,
         aggregateRefs: [
@@ -142,11 +165,11 @@ export function createSessionChangesetBundle(): SessionChangesetBundle {
         ],
         guardRefs: [
           { id: sessionCatalogGuardId(plan.input.scope.eventId), version: catalog.version, digest: catalog.digestSha256 },
-          {
+          ...(refreshesTarget ? [{
             id: programVocabularySetGuardId(plan.input.scope.eventId),
             version: vocabulary.setVersion,
             digest: programVocabularySetDigest(vocabulary)
-          }
+          }] : [])
         ],
         riskTier: 'normal', consequences: ['session_changed']
       };
@@ -166,8 +189,17 @@ export function createSessionChangesetBundle(): SessionChangesetBundle {
     validateWithin(plan, validation) {
       const port = validation.getPort(sessionValidationPort);
       if (isRestorePlan(plan)) {
-        const catalog = port.readSessionCatalog(parseSessionScope(plan.scope));
+        const restoreScope = parseSessionScope(plan.scope);
+        const catalog = port.readSessionCatalog(restoreScope);
         if (!catalog) return { kind: 'outcome', outcome: refusalOutcome('wrong_scope', plan) };
+        // A deleting restore re-checks the schedule reference gate it was
+        // derived under: a placement moves neither the Session digest nor the
+        // catalog digest, so a Session placed since propose refuses here
+        // instead of deleting under a live schedule occurrence.
+        if (plan.restore === null
+            && port.countSessionSchedulePlacements(restoreScope, plan.expectedCurrent.id) !== 0) {
+          return { kind: 'outcome', outcome: refusalOutcome('session_placed', plan) };
+        }
         try {
           applySessionRestorePlan({ plan, catalog });
           return { kind: 'ready', validated: plan };
@@ -198,8 +230,16 @@ export function createSessionChangesetBundle(): SessionChangesetBundle {
     deriveCompensation(plan, snapshot) {
       if (isRestorePlan(plan)) return { kind: 'blocked', reasonKey: 'session.compensation_of_compensation' };
       const port = snapshot.getPort(sessionReadPort);
-      const catalog = port.readSessionCatalog(parseSessionScope(plan.input.scope));
+      const scope = parseSessionScope(plan.input.scope);
+      const catalog = port.readSessionCatalog(scope);
       if (!catalog) return { kind: 'blocked', reasonKey: 'session.scope_missing' };
+      // Compensating a create deletes the Session, so it is blocked while any
+      // schedule occurrence still references it; the transition/roster arm
+      // restores the prior head and needs no reference gate.
+      if (plan.before === null
+          && port.countSessionSchedulePlacements(scope, plan.after.id) !== 0) {
+        return { kind: 'blocked', reasonKey: 'session.placed' };
+      }
       try {
         return {
           kind: 'exact',

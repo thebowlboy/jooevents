@@ -2,7 +2,8 @@ import { z } from 'zod';
 import {
   createEffectfulOperationResultSchema,
   createOperationSchemaManifestRefs,
-  createReadOperationResultSchema
+  createReadOperationResultSchema,
+  versionedDefinitionRefSchema
 } from './operations';
 import {
   programTrackAccentSchema,
@@ -71,6 +72,18 @@ export const sessionParticipantRefSchema = z.strictObject({
   personId: sessionIdSchema,
   role: sessionParticipantRoleSchema,
   position: z.number().int().nonnegative().safe(),
+  publiclyVisible: z.boolean(),
+  source: sessionRosterSourceRefSchema
+});
+
+/**
+ * Roster participant as authored: positions are always assigned canonically by
+ * planning, so authoring inputs carry identity, role, visibility, and source
+ * provenance only.
+ */
+export const sessionRosterParticipantInputSchema = z.strictObject({
+  personId: sessionIdSchema,
+  role: sessionParticipantRoleSchema,
   publiclyVisible: z.boolean(),
   source: sessionRosterSourceRefSchema
 });
@@ -145,7 +158,8 @@ export const sessionCreateInputSchema = z.strictObject({
   plannedDurationMinutes: sessionPlannedDurationMinutesSchema,
   lifecycle: sessionLifecycleSchema,
   formatId: sessionIdInputSchema,
-  trackId: sessionIdInputSchema.nullable()
+  trackId: sessionIdInputSchema.nullable(),
+  participants: z.array(sessionRosterParticipantInputSchema).max(500).optional()
 });
 
 export const sessionTransitionInputSchema = z.strictObject({
@@ -157,6 +171,27 @@ export const sessionTransitionInputSchema = z.strictObject({
   to: placeableSessionLifecycleSchema
 });
 
+/**
+ * Appends participants to an existing Session roster. Existing roster entries
+ * are never modified or removed; incoming participants whose person is already
+ * on the roster are skipped. The optional `graduateTo` carries the ordinary
+ * forward lifecycle graduation in the same atomic mutation.
+ */
+export const sessionRosterAppendInputSchema = z.strictObject({
+  action: z.literal('roster_append'),
+  ...catalogGuardFields,
+  sessionId: sessionIdInputSchema,
+  expectedSessionVersion: sessionVersionSchema,
+  expectedSessionDigestSha256: digestSchema,
+  participants: z.array(sessionRosterParticipantInputSchema).min(1).max(500),
+  graduateTo: z.literal('programmed').optional()
+});
+
+/**
+ * Operator wire surface for the mounted Session draft/mutate operations. Roster
+ * appends are authored through hosting changesets (`sessionPlanningInputSchema`
+ * carries the `roster_append` arm), not through this direct operator input.
+ */
 export const sessionAuthorInputSchema = z.discriminatedUnion('action', [
   sessionCreateInputSchema,
   sessionTransitionInputSchema
@@ -170,7 +205,8 @@ const planningAttribution = {
 
 export const sessionPlanningInputSchema = z.discriminatedUnion('action', [
   sessionCreateInputSchema.extend({ ...planningAttribution, sessionId: sessionIdSchema }),
-  sessionTransitionInputSchema.extend(planningAttribution)
+  sessionTransitionInputSchema.extend(planningAttribution),
+  sessionRosterAppendInputSchema.extend(planningAttribution)
 ]);
 
 export const sessionMutationPlanSchema = z.strictObject({
@@ -203,20 +239,49 @@ export const sessionRestorePlanSchema = z.strictObject({
 });
 
 export const sessionSafeDiffSchema = z.strictObject({
-  action: z.enum(['create', 'transition', 'restore']),
+  action: z.enum(['create', 'transition', 'roster_append', 'restore']),
   before: sessionHeadSchema.nullable(),
   after: sessionHeadSchema.nullable()
 });
 
 export const sessionMutationResultSchema = z.strictObject({
-  action: z.enum(['create', 'transition', 'restore']),
+  action: z.enum(['create', 'transition', 'roster_append', 'restore']),
   catalogVersion: sessionVersionSchema,
   session: sessionHeadSchema.nullable()
 });
 
+/** Exact selector and inert plan an operator needs to review, propose, and commit one draft. */
+export const sessionDraftDataSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  action: z.enum(['create', 'transition']),
+  changesetId: sessionIdSchema,
+  headVersion: sessionVersionSchema,
+  status: z.literal('draft'),
+  revision: z.strictObject({
+    id: sessionIdSchema,
+    number: sessionVersionSchema,
+    digestSha256: digestSchema
+  }),
+  riskTier: z.literal('normal'),
+  approvalPolicy: z.strictObject({
+    reference: versionedDefinitionRefSchema,
+    definitionDigestSha256: digestSchema,
+    requirement: z.literal('none')
+  }),
+  safeDiff: sessionSafeDiffSchema
+}).superRefine((data, context) => {
+  if (data.safeDiff.action !== data.action) {
+    context.addIssue({
+      code: 'custom',
+      path: ['safeDiff', 'action'],
+      message: 'Draft action and safe diff action must match.'
+    });
+  }
+});
+
 export const sessionCatalogReadInputSchema = z.strictObject({});
 export const sessionCatalogReadResultSchema = createReadOperationResultSchema(sessionCatalogSchema);
-export const sessionDraftOperationResultSchema = createEffectfulOperationResultSchema(sessionSafeDiffSchema);
+export const sessionDraftOperationResultSchema = createEffectfulOperationResultSchema(sessionDraftDataSchema);
 export const sessionMutationOperationResultSchema = createEffectfulOperationResultSchema(sessionMutationResultSchema);
 
 export const SESSION_OPERATION_SCHEMA_REFS = Object.freeze({
@@ -227,9 +292,9 @@ export const SESSION_OPERATION_SCHEMA_REFS = Object.freeze({
     resultSchema: sessionCatalogReadResultSchema
   }),
   draft: createOperationSchemaManifestRefs({
-    inputKey: 'schema.session.changeset-draft.input',
+    inputKey: 'schema.session.change-draft.input',
     inputSchema: sessionAuthorInputSchema,
-    resultKey: 'schema.session.changeset-draft.operator-result',
+    resultKey: 'schema.session.change-draft.operator-result',
     resultSchema: sessionDraftOperationResultSchema
   }),
   mutate: createOperationSchemaManifestRefs({
@@ -245,6 +310,8 @@ export type SessionLifecycle = z.infer<typeof sessionLifecycleSchema>;
 export type PlaceableSessionLifecycle = z.infer<typeof placeableSessionLifecycleSchema>;
 export type SessionProgramTargetEvidenceDto = z.infer<typeof sessionProgramTargetEvidenceSchema>;
 export type SessionParticipantRefDto = z.infer<typeof sessionParticipantRefSchema>;
+export type SessionRosterParticipantInput = z.infer<typeof sessionRosterParticipantInputSchema>;
+export type SessionRosterAppendInput = z.infer<typeof sessionRosterAppendInputSchema>;
 export type SessionRosterEvidenceDto = z.infer<typeof sessionRosterEvidenceSchema>;
 export type SessionHeadDto = z.infer<typeof sessionHeadSchema>;
 export type SessionCatalogDto = z.infer<typeof sessionCatalogSchema>;
@@ -253,4 +320,5 @@ export type SessionPlanningInput = z.infer<typeof sessionPlanningInputSchema>;
 export type SessionMutationPlanDto = z.infer<typeof sessionMutationPlanSchema>;
 export type SessionRestorePlanDto = z.infer<typeof sessionRestorePlanSchema>;
 export type SessionSafeDiffDto = z.infer<typeof sessionSafeDiffSchema>;
+export type SessionDraftData = z.infer<typeof sessionDraftDataSchema>;
 export type SessionMutationResult = z.infer<typeof sessionMutationResultSchema>;

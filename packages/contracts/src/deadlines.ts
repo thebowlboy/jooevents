@@ -43,7 +43,7 @@ export const deadlineScopeSchema = z.strictObject({
   workspaceId: deadlineIdSchema,
   eventId: deadlineIdSchema
 });
-export const deadlineKindSchema = z.literal('cfp_close');
+export const deadlineKindSchema = z.enum(['cfp_close', 'review_due']);
 export const deadlineGracePolicySchema = z.literal('soft');
 
 export const deadlineBoundaryProfileSchema = z.strictObject({
@@ -130,9 +130,15 @@ export const deadlineEventTimeBasisSchema = z.strictObject({
   eventVersion: deadlineVersionSchema
 });
 
+/**
+ * `kind` defaults to the original `cfp_close` so pre-existing planners keep
+ * their exact meaning; the Review round collaboration passes `review_due`
+ * explicitly. Parsed plans always carry the resolved kind.
+ */
 const deadlinePlanInputBase = {
   scope: deadlineScopeSchema,
   deadlineId: deadlineIdSchema,
+  kind: deadlineKindSchema.default('cfp_close'),
   attributedByUserId: deadlineIdSchema,
   attributedAt: deadlineInstantSchema
 } as const;
@@ -178,6 +184,10 @@ export const deadlineMutationPlanSchema = z.strictObject({
   if (plan.after.id !== plan.input.deadlineId
       || (plan.before !== null && plan.before.id !== plan.input.deadlineId)) {
     context.addIssue({ code: 'custom', path: ['input', 'deadlineId'], message: 'Identity mismatch.' });
+  }
+  if (plan.after.kind !== plan.input.kind
+      || (plan.before !== null && plan.before.kind !== plan.input.kind)) {
+    context.addIssue({ code: 'custom', path: ['input', 'kind'], message: 'Kind mismatch.' });
   }
   if (plan.catalog.afterVersion !== plan.catalog.beforeVersion + 1) {
     context.addIssue({ code: 'custom', path: ['catalog'], message: 'Catalog version must advance once.' });
@@ -291,7 +301,12 @@ export type ClearedDeadlineHeadDto = z.infer<typeof clearedDeadlineHeadSchema>;
 export type DeadlineReferencePinDto = z.infer<typeof deadlineReferencePinSchema>;
 export type DeadlineCatalogSnapshotDto = z.infer<typeof deadlineCatalogSnapshotSchema>;
 export type DeadlineEventTimeBasisDto = z.infer<typeof deadlineEventTimeBasisSchema>;
-export type DeadlineMutationPlanningInput = z.infer<typeof deadlineMutationPlanningInputSchema>;
+/**
+ * Author-facing planning input: `kind` may be omitted and defaults to
+ * `cfp_close` at parse time. Parsed plans (`DeadlineMutationPlanDto.input`)
+ * always carry the resolved kind.
+ */
+export type DeadlineMutationPlanningInput = z.input<typeof deadlineMutationPlanningInputSchema>;
 export type DeadlineMutationPlanDto = z.infer<typeof deadlineMutationPlanSchema>;
 export type DeadlineSafeDiff = z.infer<typeof deadlineSafeDiffSchema>;
 export type DeadlineMutationResult = z.infer<typeof deadlineMutationResultSchema>;

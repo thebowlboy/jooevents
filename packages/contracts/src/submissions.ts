@@ -1,6 +1,12 @@
 import { encodeCanonicalJson, parseInstant } from '@jooevents/kernel';
 import { z } from 'zod';
 import {
+  createEffectfulOperationResultSchema,
+  createOperationSchemaManifestRefs,
+  structuredOutcomeSchema,
+  versionedDefinitionRefSchema
+} from './operations';
+import {
   FORM_EMAIL_MAX_LENGTH,
   FORM_FIELDS_MAX,
   FORM_LONG_TEXT_MAX_LENGTH,
@@ -414,13 +420,20 @@ export const publicApplicationDraftResumeSchema = z.strictObject({
 
 export const submissionStatusSchema = z.literal('submitted');
 
+export const submissionSourceSchema = z.enum([
+  'public_form',
+  'direct_entry',
+  'import',
+  'email'
+]);
+
 export const submissionHeadSchema = z.strictObject({
   schemaVersion: z.literal(1),
   id: intakeIdSchema,
   scope: intakeScopeSchema,
   formId: intakeIdSchema,
   formVersionId: intakeIdSchema,
-  source: z.literal('public_form'),
+  source: submissionSourceSchema,
   status: submissionStatusSchema,
   version: intakeVersionSchema,
   submitEvidenceId: intakeIdSchema,
@@ -450,6 +463,34 @@ export const submissionSubmitEvidenceSchema = z.strictObject({
     .max(FORM_FIELDS_MAX * FORM_MULTISELECT_MAX_SELECTIONS),
   admissibilityDeadlinePin: formDeadlineReferencePinSchema.nullable(),
   inputPolicy: publicInputPolicyDecisionEvidenceSchema,
+  submittedAt: intakeInstantSchema
+}).superRefine((evidence, context) => {
+  const identities = evidence.programVocabularyAnswerPins
+    .map((pin) => `${pin.fieldId}:${pin.itemId}`);
+  addCanonicalOrderIssues(
+    identities, context, ['programVocabularyAnswerPins'],
+    'vocabulary answer pins must be unique and ordered by field and item id'
+  );
+});
+
+/**
+ * Immutable evidence for an organizer-entered submission. It is a distinct
+ * record beside the public submit evidence: there is no public input-policy
+ * decision and no draft ceremony behind a direct entry, and the operator who
+ * keyed the record in is carried as attribution, never as authorship.
+ */
+export const submissionDirectEntryEvidenceSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  id: intakeIdSchema,
+  submissionId: intakeIdSchema,
+  formVersionId: intakeIdSchema,
+  enteredByUserId: intakeIdSchema,
+  authorityPartitionDigestSha256: intakeDigestSchema,
+  requestDigestSha256: intakeDigestSchema,
+  answerIndexDigestSha256: intakeDigestSchema,
+  answers: applicationAnswerIndexSchema,
+  programVocabularyAnswerPins: z.array(submissionProgramVocabularyAnswerPinSchema)
+    .max(FORM_FIELDS_MAX * FORM_MULTISELECT_MAX_SELECTIONS),
   submittedAt: intakeInstantSchema
 }).superRefine((evidence, context) => {
   const identities = evidence.programVocabularyAnswerPins
@@ -608,6 +649,116 @@ export const organizerSubmissionContactSchema = z.strictObject({
   email: applicationEmailSchema
 });
 
+/**
+ * Operator wire input for the organizer direct-entry draft. The record's
+ * identities, source, and `submittedAt` are server-assigned inside the sealed
+ * invocation — the input cannot name or backdate them.
+ */
+export const submissionDirectEntryDraftInputSchema = z.strictObject({
+  formId: intakeIdInputSchema,
+  expectedFormDefinitionVersion: intakeVersionSchema,
+  answers: transientApplicationAnswersInputSchema
+});
+
+/**
+ * Non-classified diff surface for a planned direct entry. Answer values stay in
+ * governed payloads; only field identities and vocabulary pins appear here.
+ */
+export const submissionDirectEntrySafeDiffSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  action: z.literal('create'),
+  submission: z.strictObject({
+    id: intakeIdSchema,
+    formId: intakeIdSchema,
+    formVersionId: intakeIdSchema,
+    source: z.literal('direct_entry'),
+    submittedAt: intakeInstantSchema,
+    answeredFieldIds: z.array(intakeIdSchema).min(1).max(FORM_FIELDS_MAX),
+    programVocabularyAnswerPins: z.array(submissionProgramVocabularyAnswerPinSchema)
+      .max(FORM_FIELDS_MAX * FORM_MULTISELECT_MAX_SELECTIONS)
+  })
+}).superRefine((diff, context) => {
+  addCanonicalOrderIssues(
+    diff.submission.answeredFieldIds,
+    context,
+    ['submission', 'answeredFieldIds'],
+    'answered field ids must be unique and canonically ordered'
+  );
+  addCanonicalOrderIssues(
+    diff.submission.programVocabularyAnswerPins.map((pin) => `${pin.fieldId}:${pin.itemId}`),
+    context,
+    ['submission', 'programVocabularyAnswerPins'],
+    'vocabulary answer pins must be unique and ordered by field and item id'
+  );
+});
+
+const canonicalDirectEntryApplicationIdSchema = z.uuid().refine(
+  (value) => value === value.toLowerCase(),
+  'application ids use canonical lowercase form'
+);
+
+export const submissionDirectEntryDraftDataSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  action: z.literal('create'),
+  changesetId: canonicalDirectEntryApplicationIdSchema,
+  headVersion: intakeVersionSchema,
+  status: z.literal('draft'),
+  revision: z.strictObject({
+    id: canonicalDirectEntryApplicationIdSchema,
+    number: intakeVersionSchema,
+    digestSha256: intakeDigestSchema
+  }),
+  riskTier: z.literal('low'),
+  approvalPolicy: z.strictObject({
+    reference: versionedDefinitionRefSchema,
+    definitionDigestSha256: intakeDigestSchema,
+    requirement: z.enum(['none', 'distinct_current_human'])
+  }),
+  safeDiff: submissionDirectEntrySafeDiffSchema
+});
+
+/**
+ * Committed direct-entry receipt. `triage.queryGuard` proves the tray spine
+ * initialized in the same transaction, and `undo` names the recoverable
+ * compensating route — the arrival record itself is immutable evidence.
+ */
+export const submissionDirectEntryResultSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  submissionId: intakeIdSchema,
+  formId: intakeIdSchema,
+  formVersionId: intakeIdSchema,
+  source: z.literal('direct_entry'),
+  submittedAt: intakeInstantSchema,
+  triage: z.strictObject({
+    queryGuard: z.strictObject({
+      version: intakeVersionSchema,
+      digestSha256: intakeDigestSchema
+    }),
+    replay: z.boolean()
+  }),
+  undo: z.strictObject({
+    kind: z.literal('submission_triage_discard_recoverable'),
+    submissionId: intakeIdSchema
+  })
+});
+
+export const submissionDirectEntryDraftCanonicalResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success'), data: submissionDirectEntryDraftDataSchema }),
+  z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
+]);
+
+export const submissionDirectEntryDraftOperationResultSchema =
+  createEffectfulOperationResultSchema(submissionDirectEntryDraftDataSchema);
+
+export const SUBMISSION_DIRECT_ENTRY_OPERATION_SCHEMA_REFS = Object.freeze({
+  draft: createOperationSchemaManifestRefs({
+    inputKey: 'schema.submission.direct-entry-create-draft.input',
+    inputSchema: submissionDirectEntryDraftInputSchema,
+    resultKey: 'schema.submission.direct-entry-create-draft.operator-result',
+    resultSchema: submissionDirectEntryDraftOperationResultSchema
+  })
+});
+
 export type TransientApplicationAnswerInput = z.infer<typeof transientApplicationAnswerInputSchema>;
 export type TransientApplicationAnswersInput = z.infer<typeof transientApplicationAnswersInputSchema>;
 export type PublicApplicationDraftBeginInput = z.infer<typeof publicApplicationDraftBeginInputSchema>;
@@ -624,10 +775,12 @@ export type ApplicationDraftHeadDto = z.infer<typeof applicationDraftHeadSchema>
 export type ApplicationDraftRevisionDto = z.infer<typeof applicationDraftRevisionSchema>;
 export type PublicApplicationDraftStatusDto = z.infer<typeof publicApplicationDraftStatusSchema>;
 export type PublicApplicationDraftResumeDto = z.infer<typeof publicApplicationDraftResumeSchema>;
+export type SubmissionSource = z.infer<typeof submissionSourceSchema>;
 export type SubmissionHeadDto = z.infer<typeof submissionHeadSchema>;
 export type SubmissionSubmitEvidenceDto = z.infer<typeof submissionSubmitEvidenceSchema>;
 export type SubmissionProgramVocabularyAnswerPinDto =
   z.infer<typeof submissionProgramVocabularyAnswerPinSchema>;
+export type SubmissionDirectEntryEvidenceDto = z.infer<typeof submissionDirectEntryEvidenceSchema>;
 export type SubmissionParticipantEvidenceDto = z.infer<typeof submissionParticipantEvidenceSchema>;
 export type SubmissionConsentEvidenceDto = z.infer<typeof submissionConsentEvidenceSchema>;
 export type PublicApplicationSubmitResultDto = z.infer<typeof publicApplicationSubmitResultSchema>;
@@ -636,3 +789,7 @@ export type OrganizerSubmissionChoiceDto = z.infer<typeof organizerSubmissionCho
 export type OrganizerSubmissionAnswerDto = z.infer<typeof organizerSubmissionAnswerSchema>;
 export type OrganizerSubmissionDetailDto = z.infer<typeof organizerSubmissionDetailSchema>;
 export type OrganizerSubmissionContactDto = z.infer<typeof organizerSubmissionContactSchema>;
+export type SubmissionDirectEntryDraftInput = z.infer<typeof submissionDirectEntryDraftInputSchema>;
+export type SubmissionDirectEntrySafeDiff = z.infer<typeof submissionDirectEntrySafeDiffSchema>;
+export type SubmissionDirectEntryDraftData = z.infer<typeof submissionDirectEntryDraftDataSchema>;
+export type SubmissionDirectEntryResultDto = z.infer<typeof submissionDirectEntryResultSchema>;

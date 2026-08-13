@@ -1,4 +1,6 @@
 export * from './answers';
+export * from './direct-entry';
+export * from './direct-entry-changesets';
 export * from './forms';
 export * from './form-changesets';
 export * from './form-policy';

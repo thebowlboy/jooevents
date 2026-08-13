@@ -34,6 +34,16 @@ import type {
 import { projectReviewSnapshot } from './projections';
 import { parseApplicationId } from '@jooevents/kernel';
 import { planChangesetOperation } from '@jooevents/changesets';
+import {
+  createEmptyDeadlineCatalog,
+  type DeadlineEventTimeSource,
+  type DeadlineRepository
+} from '@jooevents/deadline';
+import type {
+  DeadlineCatalogSnapshotDto,
+  DeadlineHeadDto,
+  DeadlineScopeDto
+} from '@jooevents/contracts/deadlines';
 import { createReviewChangesetBundle } from './changesets';
 
 const id = (suffix: number) => parseApplicationId(
@@ -63,13 +73,23 @@ const reviewers: readonly ReviewRosterMemberSnapshotDto[] = Object.freeze([
   { reviewerId: reviewerTrack, version: 1, status: 'active', displayName: 'Track reviewer', scope: [{ kind: 'track', id: trackId }] },
   { reviewerId: reviewerInvited, version: 1, status: 'invited', scope: [] }
 ]);
-const deadline: ReviewDeadlinePinDto = {
-  deadlineId,
-  kind: 'review_due',
-  version: 3,
-  digestSha256: 'd'.repeat(64),
-  effectiveAt: '2026-08-30T23:59:59.000Z'
-};
+const deadlineDate = '2026-08-30';
+
+/** In-memory Deadline collaborator: an empty catalog plus a stable event time basis. */
+class MemoryDeadlineCollaborator implements DeadlineRepository, DeadlineEventTimeSource {
+  catalog: DeadlineCatalogSnapshotDto = createEmptyDeadlineCatalog(scope);
+  readDeadlineCatalog(requested: DeadlineScopeDto): DeadlineCatalogSnapshotDto | undefined {
+    return sameScope(requested) ? this.catalog : undefined;
+  }
+  readDeadline(requested: DeadlineScopeDto, idValue: string): DeadlineHeadDto | undefined {
+    return sameScope(requested)
+      ? this.catalog.deadlines.find((head) => head.id === idValue)
+      : undefined;
+  }
+  readDeadlineEventTimeBasis(requested: DeadlineScopeDto) {
+    return sameScope(requested) ? { timezone: 'UTC', eventVersion: 1 } : undefined;
+  }
+}
 const criteria = [
   { id: criterionQuality, key: 'quality', label: 'Quality', position: 0, weightBps: 6_000, scaleMin: 1 as const, scaleMax: 5 as const },
   { id: criterionFit, key: 'fit', label: 'Fit', position: 1, weightBps: 4_000, scaleMin: 1 as const, scaleMax: 5 as const }
@@ -82,7 +102,7 @@ class MemoryReviewStore implements
   catalog: ReviewCatalogDto = createEmptyReviewCatalog(scope);
   candidateSet: ReviewCandidateSet = { version: 3, candidates };
   rosterSet: ReviewRosterSet = { version: 2, reviewers };
-  deadline: ReviewDeadlinePinDto | undefined = deadline;
+  deadline: ReviewDeadlinePinDto | undefined;
   readonly rounds = new Map<string, ReviewRoundDto>();
   readonly assignments = new Map<string, ReviewAssignmentDto>();
   readonly drafts = new Map<string, ReviewDraftDto>();
@@ -169,18 +189,22 @@ class MemoryReviewStore implements
   }
 }
 
-function sameScope(value: ReviewScopeDto) {
+function sameScope(value: { readonly workspaceId: string; readonly eventId: string }) {
   return value.workspaceId === scope.workspaceId && value.eventId === scope.eventId;
 }
 
-function openRound(store: MemoryReviewStore) {
+function openRound(
+  store: MemoryReviewStore,
+  deadlines: MemoryDeadlineCollaborator = new MemoryDeadlineCollaborator()
+) {
   const pairs = expectedReviewAssignmentPairs({ candidates, reviewers });
   const plan = planReviewMutation({
     action: 'open_round',
     scope,
     expectedCatalogVersion: 1,
     roundId,
-    deadlineId,
+    deadlineIdentity: { deadlineId },
+    deadlineDate,
     criteria,
     visibility: {
       participantIdentity: 'hidden',
@@ -193,7 +217,7 @@ function openRound(store: MemoryReviewStore) {
     })),
     attributedByUserId: actorUserId,
     attributedAt: at(1)
-  }, { repository: store, sources: store });
+  }, { repository: store, sources: store, deadlines });
   if (plan.action !== 'open_round') throw new TypeError('test_open_round_plan_invalid');
   applyReviewMutationPlan({ plan, transaction: store, sources: store });
   return plan;
@@ -278,9 +302,19 @@ describe('review core', () => {
     const plan = openRound(store);
     expect(plan.candidateGuard.digestSha256).toBe(reviewCandidateSetDigest(candidates));
     expect(plan.reviewerGuard.digestSha256).toBe(reviewRosterSetDigest(reviewers));
+    expect(plan.deadlineContribution).toMatchObject({
+      input: { action: 'create', deadlineId, kind: 'review_due', displayDate: deadlineDate },
+      before: null,
+      after: { id: deadlineId, kind: 'review_due', status: 'active', version: 1 }
+    });
+    expect(plan.round.deadline).toMatchObject({
+      deadlineId, kind: 'review_due', version: 1,
+      effectiveAt: '2026-08-31T00:00:00.000Z'
+    });
     expect(projectReviewSafeDiff(plan)).toMatchObject({
       action: 'open_round', assignmentCount: 3, reviewerCount: 2, submissionCount: 2,
-      anonymized: true
+      anonymized: true,
+      deadline: { action: 'create', before: null, after: { id: deadlineId, status: 'active' } }
     });
     expect(store.catalog.version).toBe(2);
     expect(store.assignments.size).toBe(3);
@@ -290,11 +324,12 @@ describe('review core', () => {
     const store = new MemoryReviewStore();
     const pairs = expectedReviewAssignmentPairs({ candidates, reviewers });
     const plan = planReviewMutation({
-      action: 'open_round', scope, expectedCatalogVersion: 1, roundId, deadlineId, criteria,
+      action: 'open_round', scope, expectedCatalogVersion: 1, roundId,
+      deadlineIdentity: { deadlineId }, deadlineDate, criteria,
       visibility: { participantIdentity: 'hidden', peerReviewerIdentity: 'hidden', peerContentUnlock: 'after_own_commit' },
       assignmentIds: pairs.map((pair, index) => ({ ...pair, assignmentId: id(120 + index) })),
       attributedByUserId: actorUserId, attributedAt: at(1)
-    }, { repository: store, sources: store });
+    }, { repository: store, sources: store, deadlines: new MemoryDeadlineCollaborator() });
     store.candidateSet = { version: 4, candidates };
     expect(validateReviewMutationPlan(plan, { repository: store, sources: store }))
       .toBe('candidate_query_changed');
@@ -331,6 +366,10 @@ describe('review core', () => {
       steppedBack: 0,
       awaitingReassignment: 0
     }]);
+    // The plan serves the round's own version and its canonical criterion
+    // identities verbatim — the read side never invents or renumbers them.
+    expect(locked.plans[0]?.version).toBe(store.rounds.get(roundId)!.version);
+    expect(locked.plans[0]?.criteria).toEqual(store.rounds.get(roundId)!.criteria);
     expect(locked.standings[candidateA]).toBeUndefined();
 
     const trackDraft = saveDraft(store, track, reviewerTrack, 3, 4, 4);

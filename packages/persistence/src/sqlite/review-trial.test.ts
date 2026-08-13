@@ -1,16 +1,22 @@
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import type {
+  DeadlineCatalogSnapshotDto,
+  DeadlineHeadDto,
+  DeadlineScopeDto
+} from '@jooevents/contracts/deadlines';
+import type {
   ReviewCandidateSnapshotDto,
-  ReviewDeadlinePinDto,
   ReviewRosterMemberSnapshotDto,
   ReviewScopeDto
 } from '@jooevents/contracts/reviews';
+import { createEmptyDeadlineCatalog } from '@jooevents/deadline';
 import {
   applyReviewMutationPlan,
   expectedReviewAssignmentPairs,
   planReviewMutation,
   saveReviewDraft,
+  type ReviewDueDeadlineCollaborator,
   type ReviewPlanningSource
 } from '@jooevents/review';
 import { parseApplicationId } from '@jooevents/kernel';
@@ -44,24 +50,29 @@ const reviewers: readonly ReviewRosterMemberSnapshotDto[] = [
   { reviewerId: reviewerA, version: 1, status: 'active', scope: [] },
   { reviewerId: reviewerB, version: 1, status: 'active', scope: [{ kind: 'track', id: trackId }] }
 ];
-const deadline: ReviewDeadlinePinDto = {
-  deadlineId,
-  kind: 'review_due',
-  version: 1,
-  digestSha256: 'd'.repeat(64),
-  effectiveAt: '2026-08-31T23:59:59.000Z'
-};
+const deadlineDate = '2026-08-31';
 const source: ReviewPlanningSource = {
   readCandidates: (requested) => sameScope(requested) ? { version: 1, candidates } : undefined,
   readCandidate: (requested, submissionId) => sameScope(requested)
     ? candidates.find((candidate) => candidate.submissionId === submissionId)
     : undefined,
   readReviewerRoster: (requested) => sameScope(requested) ? { version: 1, reviewers } : undefined,
-  resolveReviewDeadline: (requested, requestedDeadlineId) =>
-    sameScope(requested) && requestedDeadlineId === deadlineId ? deadline : undefined
+  resolveReviewDeadline: () => undefined
 };
 
-function sameScope(value: ReviewScopeDto) {
+/** In-memory Deadline collaborator; the SQLite-backed join lives in review-deadline-collaboration.test.ts. */
+function memoryDeadlineCollaborator(): ReviewDueDeadlineCollaborator {
+  const catalog: DeadlineCatalogSnapshotDto = createEmptyDeadlineCatalog(scope);
+  return {
+    readDeadlineCatalog: (requested: DeadlineScopeDto) => sameScope(requested) ? catalog : undefined,
+    readDeadline: (requested: DeadlineScopeDto, idValue: string): DeadlineHeadDto | undefined =>
+      sameScope(requested) ? catalog.deadlines.find((head) => head.id === idValue) : undefined,
+    readDeadlineEventTimeBasis: (requested: DeadlineScopeDto) =>
+      sameScope(requested) ? { timezone: 'UTC', eventVersion: 1 } : undefined
+  };
+}
+
+function sameScope(value: { readonly workspaceId: string; readonly eventId: string }) {
   return value.workspaceId === scope.workspaceId && value.eventId === scope.eventId;
 }
 
@@ -76,7 +87,7 @@ function openRound(target: ReturnType<typeof setup>) {
   const pairs = expectedReviewAssignmentPairs({ candidates, reviewers });
   const plan = planReviewMutation({
     action: 'open_round', scope, expectedCatalogVersion: 1,
-    roundId, deadlineId,
+    roundId, deadlineIdentity: { deadlineId }, deadlineDate,
     criteria: [
       { id: criterionQuality, key: 'quality', label: 'Quality', position: 0, weightBps: 6_000, scaleMin: 1, scaleMax: 5 },
       { id: criterionFit, key: 'fit', label: 'Fit', position: 1, weightBps: 4_000, scaleMin: 1, scaleMax: 5 }
@@ -88,7 +99,7 @@ function openRound(target: ReturnType<typeof setup>) {
     assignmentIds: pairs.map((pair, index) => ({ ...pair, assignmentId: id(100 + index) })),
     attributedByUserId: actorUserId,
     attributedAt: at(1)
-  }, { repository: target.repository, sources: source });
+  }, { repository: target.repository, sources: source, deadlines: memoryDeadlineCollaborator() });
   if (plan.action !== 'open_round') throw new TypeError('test_open_plan_invalid');
   target.sqlite.transaction(() => applyReviewMutationPlan({
     plan, transaction: target.repository, sources: source

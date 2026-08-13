@@ -1,15 +1,24 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
+  SUBMISSION_TRIAGE_LIST_MAX,
   submissionTriageSourceRowSchema,
   type SubmissionTriageAttribution,
   type SubmissionTriageSourceRowDto
 } from '@jooevents/contracts/submission-triage';
+import { canonicalJsonText } from '@jooevents/kernel';
 import {
   createSubmissionTriageInitialization,
+  createSubmissionTriageState,
+  createSubmissionTriageSubmitInitializer,
   planSubmissionTriageTransition,
   projectSubmissionTriageList,
   projectSubmissionTriageRead,
+  submissionTriageArrivalDigest,
+  submissionTriageHeadDigest,
   type SubmissionTriageScope,
   type SubmissionTriageSourcePort
 } from '@jooevents/submission-triage';
@@ -37,12 +46,13 @@ function sourceRow(input: {
   readonly title?: string;
   readonly name?: string;
   readonly abstract?: string;
+  readonly source?: SubmissionTriageSourceRowDto['source'];
 }): SubmissionTriageSourceRowDto {
   const currentScope = input.currentScope ?? scope;
   return submissionTriageSourceRowSchema.parse({
     schemaVersion: 1,
     scope: currentScope,
-    source: 'public_form',
+    source: input.source ?? 'public_form',
     summary: {
       schemaVersion: 1,
       id: input.submissionId,
@@ -372,6 +382,267 @@ describe('SQLite submission triage repository', () => {
         visibleTray: 'late',
         triage: { state: 'inbox' },
         arrival: { classification: 'late' }
+      });
+    } finally {
+      if (sqlite.inTransaction) sqlite.exec('ROLLBACK');
+      sqlite.close();
+    }
+  });
+
+  test('initializes a direct-entry arrival with real close evidence and never classifies it late', () => {
+    const { sqlite, source, repository } = openDatabase();
+    const direct = sourceRow({ submissionId: id(30), source: 'direct_entry' });
+    const publicRow = sourceRow({ submissionId: id(31) });
+    source.rows.set(`${workspaceId}:${eventId}`, [direct, publicRow]);
+
+    // Same instants: submittedAt is one hour past closeAt for both arrivals.
+    const directValue = initialization(direct, 40);
+    const publicValue = initialization(publicRow, 41);
+    expect(Date.parse(directValue.arrival.submittedAt))
+      .toBeGreaterThan(Date.parse(directValue.arrival.closeEvidence!.closeAt));
+    expect(directValue.arrival.source).toBe('direct_entry');
+    expect(directValue.arrival.classification).toBe('on_time');
+    expect(directValue.arrival.closeEvidence).not.toBeNull();
+    expect(publicValue.arrival.classification).toBe('late');
+
+    try {
+      const inserted = initialize(sqlite, repository, directValue);
+      expect(inserted.replay).toBe(false);
+      initialize(sqlite, repository, publicValue);
+
+      const state = repository.readTriageState(scope)!;
+      const rows = [direct, publicRow];
+      expect(projectSubmissionTriageRead({
+        state, sourceRows: rows, submissionId: id(30)
+      })?.row).toMatchObject({
+        visibleTray: 'inbox',
+        arrival: { source: 'direct_entry', classification: 'on_time' }
+      });
+      expect(projectSubmissionTriageRead({
+        state, sourceRows: rows, submissionId: id(31)
+      })?.row).toMatchObject({
+        visibleTray: 'late',
+        arrival: { source: 'public_form', classification: 'late' }
+      });
+
+      // A lagging source projection that still claims public_form is refused at commit.
+      const mismatched = sourceRow({ submissionId: id(32), source: 'public_form' });
+      source.rows.set(`${workspaceId}:${eventId}`, [direct, publicRow, mismatched]);
+      const mismatchedValue = createSubmissionTriageInitialization({
+        scope,
+        submission: {
+          id: mismatched.summary.id,
+          formId: mismatched.summary.formId,
+          formVersionId: mismatched.summary.formVersionId,
+          source: 'direct_entry',
+          submittedAt: mismatched.summary.submittedAt
+        },
+        arrivalId: id(42),
+        recordedAt: submittedAt,
+        closeEvidence: null
+      });
+      sqlite.exec('BEGIN IMMEDIATE');
+      expect(() => repository.initializeSubmissionTriage(mismatchedValue))
+        .toThrow('source_changed');
+      sqlite.exec('ROLLBACK');
+    } finally {
+      if (sqlite.inTransaction) sqlite.exec('ROLLBACK');
+      sqlite.close();
+    }
+  });
+});
+
+/**
+ * Server-projection guarantee: `trayTotals` count every triaged submission in
+ * the event, never the returned window. The list contract alone can only
+ * enforce that the totals are no smaller than the served rows, so this suite
+ * is the invariant's executable proof over a population larger than the
+ * window.
+ */
+describe('conformance: submission triage tray totals state the whole population', () => {
+  test('totals count every submission while rows stop at the served window', () => {
+    const { sqlite, source, repository } = openDatabase();
+    const total = SUBMISSION_TRIAGE_LIST_MAX + 20;
+    const lateCount = 15;
+    const onTimeCount = total - lateCount;
+    try {
+      const rows: SubmissionTriageSourceRowDto[] = [];
+      const entries: ReturnType<typeof createSubmissionTriageInitialization>[] = [];
+      for (let index = 0; index < total; index += 1) {
+        const row = sourceRow({ submissionId: id(0x1000 + index) });
+        rows.push(row);
+        entries.push(createSubmissionTriageInitialization({
+          scope,
+          submission: {
+            id: row.summary.id,
+            formId: row.summary.formId,
+            formVersionId: row.summary.formVersionId,
+            source: row.source,
+            submittedAt: row.summary.submittedAt
+          },
+          arrivalId: id(0x2000 + index),
+          recordedAt: submittedAt,
+          // The population tail is late, so the served window never reaches it.
+          closeEvidence: index < onTimeCount ? null : {
+            closeAt,
+            policy: {
+              reference: { key: 'submission.accepting-window', version: 1 },
+              definitionDigestSha256: 'a'.repeat(64)
+            }
+          }
+        }));
+      }
+      source.rows.set(`${workspaceId}:${eventId}`, rows);
+      const assembled = createSubmissionTriageState({ scope, version: 1, entries });
+      sqlite.exec('BEGIN IMMEDIATE');
+      sqlite.query(`
+        INSERT INTO submission_triage_event_heads (
+          workspace_id, event_id, query_version, query_digest_sha256
+        ) VALUES (?, ?, ?, ?)
+      `).run(
+        workspaceId, eventId,
+        assembled.queryGuard.version, assembled.queryGuard.digestSha256
+      );
+      const insertArrival = sqlite.query(`
+        INSERT INTO submission_arrival_facts (
+          workspace_id, event_id, submission_id, arrival_id, form_id, form_version_id,
+          source, classification, submitted_at_ms, recorded_at_ms, fact_json,
+          fact_digest_sha256
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const insertHead = sqlite.query(`
+        INSERT INTO submission_triage_heads (
+          workspace_id, event_id, submission_id, head_version, state,
+          updated_at_ms, head_json, head_digest_sha256
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const entry of entries) {
+        insertArrival.run(
+          entry.arrival.scope.workspaceId, entry.arrival.scope.eventId,
+          entry.arrival.submissionId, entry.arrival.id, entry.arrival.formId,
+          entry.arrival.formVersionId, entry.arrival.source, entry.arrival.classification,
+          Date.parse(entry.arrival.submittedAt), Date.parse(entry.arrival.recordedAt),
+          canonicalJsonText(entry.arrival), submissionTriageArrivalDigest(entry.arrival)
+        );
+        insertHead.run(
+          entry.head.scope.workspaceId, entry.head.scope.eventId, entry.head.submissionId,
+          entry.head.version, entry.head.state, Date.parse(entry.head.updatedAt),
+          canonicalJsonText(entry.head), submissionTriageHeadDigest(entry.head)
+        );
+      }
+      sqlite.exec('COMMIT');
+
+      // The durable read revalidates every row it serves the projection.
+      const durable = repository.readTriageState(scope)!;
+      expect(durable.entries).toHaveLength(total);
+
+      const page = projectSubmissionTriageList({ state: durable, sourceRows: rows });
+      expect(page.rows).toHaveLength(SUBMISSION_TRIAGE_LIST_MAX);
+      // Every returned row is inbox, yet the totals still state the 15 late
+      // arrivals that sit entirely outside the served window.
+      expect(page.rows.every((row) => row.visibleTray === 'inbox')).toBe(true);
+      expect(page.trayTotals).toEqual({
+        inbox: onTimeCount, set_aside: 0, late: lateCount, discarded: 0
+      });
+
+      // A tray-filtered window keeps whole-population totals as well.
+      const lateTray = projectSubmissionTriageList({
+        state: durable, sourceRows: rows, query: { tray: 'late' }
+      });
+      expect(lateTray.rows).toHaveLength(lateCount);
+      expect(lateTray.trayTotals).toEqual({
+        inbox: onTimeCount, set_aside: 0, late: lateCount, discarded: 0
+      });
+    } finally {
+      if (sqlite.inTransaction) sqlite.exec('ROLLBACK');
+      sqlite.close();
+    }
+  });
+});
+
+/**
+ * Seam guarantee: a submission acceptance and its triage initialization share
+ * one transaction, for every submission-creating effect domain. A new
+ * accepting write path fails this suite until it composes the same
+ * initializer seam inside its own unit of work.
+ */
+describe('conformance: triage initialization binds to submission acceptance', () => {
+  const sqliteDirectory = dirname(fileURLToPath(import.meta.url));
+
+  test('every submission-persisting effect domain composes same-transaction triage initialization', () => {
+    const bindings = readdirSync(sqliteDirectory)
+      .filter((name) => name.endsWith('-effect-domain.ts'))
+      .sort()
+      .map((name) => ({ name, text: readFileSync(join(sqliteDirectory, name), 'utf8') }))
+      .filter((file) => /\binsertSubmission\(|\bapplyApplicationMutation\(/.test(file.text))
+      .map((file) => ({
+        domain: file.name,
+        initializesTriageInTransaction: /\binitializeWithinTransaction\(/.test(file.text)
+      }));
+    // The accepting path stays enumerated: a new submission-creating effect
+    // domain joins this list automatically and fails until it binds the
+    // same-transaction triage initializer.
+    expect(bindings.map((binding) => binding.domain))
+      .toContain('intake-public-mutation-effect-domain.ts');
+    expect(bindings).toEqual(bindings.map((binding) => ({
+      domain: binding.domain,
+      initializesTriageInTransaction: true
+    })));
+  });
+
+  test('submission head persistence keeps exactly one insert site', () => {
+    const inserters = readdirSync(sqliteDirectory)
+      .filter((name) => name.endsWith('.ts') && !name.endsWith('.test.ts'))
+      .filter((name) =>
+        readFileSync(join(sqliteDirectory, name), 'utf8').includes('INSERT INTO intake_submission_heads')
+      )
+      .sort();
+    expect(inserters).toEqual(['intake.ts']);
+  });
+
+  test('the submit-initializer seam shares the accepting transaction fate', () => {
+    const { sqlite, source, repository } = openDatabase();
+    const row = sourceRow({ submissionId: id(0x60) });
+    source.rows.set(`${workspaceId}:${eventId}`, [row]);
+    const initializer = createSubmissionTriageSubmitInitializer({
+      store: repository,
+      ids: { newArrivalId: () => id(0x61) }
+    });
+    const candidate = {
+      scope,
+      submission: {
+        id: row.summary.id,
+        formId: row.summary.formId,
+        formVersionId: row.summary.formVersionId,
+        source: row.source,
+        submittedAt: row.summary.submittedAt
+      },
+      recordedAt: submittedAt,
+      closeEvidence: null
+    };
+    try {
+      // Initialization cannot detach from the accepting transaction.
+      expect(() => initializer.initializeWithinTransaction(candidate))
+        .toThrow('transaction_required');
+
+      // Rolling the accepting transaction back leaves no triage state behind:
+      // the acceptance and its triage spine share one fate, so an absent
+      // event head stays honest "not initialized", never a false empty tray.
+      sqlite.exec('BEGIN IMMEDIATE');
+      expect(initializer.initializeWithinTransaction(candidate).replay).toBe(false);
+      sqlite.exec('ROLLBACK');
+      expect(repository.readTriageState(scope)).toBeUndefined();
+
+      // The committed acceptance serves the row as proven inbox state.
+      sqlite.exec('BEGIN IMMEDIATE');
+      const initialized = initializer.initializeWithinTransaction(candidate);
+      sqlite.exec('COMMIT');
+      expect(initialized.replay).toBe(false);
+      const state = repository.readTriageState(scope)!;
+      expect(state.entries).toHaveLength(1);
+      expect(state.entries[0]).toMatchObject({
+        arrival: { source: 'public_form', classification: 'on_time' },
+        head: { state: 'inbox', version: 1 }
       });
     } finally {
       if (sqlite.inTransaction) sqlite.exec('ROLLBACK');

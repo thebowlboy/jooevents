@@ -8,9 +8,11 @@ import {
   programVocabularyDraftOperationResultSchema
 } from '@jooevents/program-operations';
 import { workspaceOverviewReadResultSchema } from '@jooevents/contracts/workspace-overview';
+import { reviewSnapshotReadResultSchema } from '@jooevents/contracts/reviews';
 import {
   createRichEphemeralLiveFixture,
   RICH_EPHEMERAL_LIVE_SCENARIO,
+  RICH_REVIEWER_ID,
   type RichEphemeralLiveFixture
 } from './rich-ephemeral-live-fixture';
 
@@ -136,6 +138,17 @@ describe('rich ephemeral live SQLite fixture', () => {
       formVersions: expected.forms.publishedVersions,
       fieldRegistries: expected.events,
       submissions: expected.submissions,
+      sessions: expected.sessions.total,
+      sessionCatalogs: expected.sessions.catalogs,
+      reviewerRosterSets: expected.reviewerRoster.sets,
+      reviewerRosterRecords: expected.reviewerRoster.records,
+      reviewerRosterScopes: expected.reviewerRoster.scopes,
+      reviewCatalogs: expected.review.catalogs,
+      reviewRounds: expected.review.rounds,
+      reviewRoundCriteria: expected.review.roundCriteria,
+      reviewAssignments: expected.review.assignments,
+      deadlines: expected.deadlines.total,
+      deadlineCatalogs: expected.deadlines.catalogs,
       changesets: expected.changesets,
       committedChangesets: expected.changesets,
       operationReceipts: expected.operationReceipts
@@ -254,10 +267,122 @@ describe('rich ephemeral live SQLite fixture', () => {
       });
     expect(fixture.baseline.fieldRegistry.fields.find((field) => field.key === 'person.headshot'))
       .toMatchObject({ kind: 'file', fileUpload: 'disabled' });
-    expect(fixture.baseline.extensionSlots.submissions).toEqual({
-      status: 'not_mounted',
-      reason: 'The production-safe ephemeral composition does not mount a public Intake ceremony.'
+
+    expect(fixture.baseline.sessions).toEqual({
+      catalogVersion: expected.sessions.catalogVersion,
+      items: [
+        {
+          key: 'programmed_keynote',
+          title: 'Deterministic Changesets in Production',
+          lifecycle: 'programmed',
+          plannedDurationMinutes: 45,
+          version: 1,
+          format: 'talk',
+          track: 'evaluation_reliability',
+          programSetVersion: expected.vocabulary.setVersion,
+          participants: 0
+        },
+        {
+          key: 'collecting_panel',
+          title: 'Evaluating Agent Product Craft',
+          lifecycle: 'collecting',
+          plannedDurationMinutes: 60,
+          version: 2,
+          format: 'panel',
+          track: 'product_craft',
+          programSetVersion: expected.vocabulary.setVersion,
+          participants: 0
+        }
+      ]
     });
+
+    expect(fixture.reviewer.reviewerId).toBe(RICH_REVIEWER_ID);
+    expect(fixture.reviewer.userId).not.toBe(fixture.ownerUserId);
+    expect(fixture.baseline.reviewerRoster).toEqual({
+      rosterVersion: expected.reviewerRoster.rosterVersion,
+      reviewers: [{
+        reviewerId: RICH_REVIEWER_ID,
+        status: 'active',
+        accessSubjectKind: 'workspace_membership',
+        displayName: 'Rich Fixture Reviewer',
+        reviews: 0
+      }]
+    });
+    expect(fixture.baseline.review).toEqual({
+      organizerViewer: 'organizer',
+      plans: 0,
+      standings: 0,
+      roundSetup: {
+        activeReviewers: 1,
+        invitedReviewers: 0,
+        submissions: expected.submissions,
+        expectedReviews: expected.review.assignments,
+        perReviewer: [{
+          reviewerId: RICH_REVIEWER_ID,
+          displayName: 'Rich Fixture Reviewer',
+          assigned: 0
+        }]
+      }
+    });
+    expect(fixture.reviewPins).toEqual(RICH_EPHEMERAL_LIVE_SCENARIO.reviewPins);
+
+    // The rostered reviewer-only principal is served the blind reviewer view.
+    const reviewerSnapshotResponse = await fixture.runtime.app.request(
+      '/api/events/current/review/snapshot',
+      {
+        headers: {
+          cookie: fixture.reviewer.cookie,
+          'x-correlation-id': crypto.randomUUID()
+        }
+      }
+    );
+    expect(reviewerSnapshotResponse.status).toBe(200);
+    expect(reviewSnapshotReadResultSchema.parse(
+      await reviewerSnapshotResponse.json()
+    )).toMatchObject({
+      kind: 'success',
+      data: {
+        viewer: { kind: 'reviewer', reviewerId: RICH_REVIEWER_ID },
+        plans: [],
+        standings: {}
+      }
+    });
+
+    // The owner still resolves the organizer view after all seeding because
+    // the roster contains only the reviewer principal and the owner carries
+    // durable event.manage evidence.
+    const organizerSnapshotResponse = await fixture.runtime.app.request(
+      '/api/events/current/review/snapshot',
+      {
+        headers: {
+          cookie: fixture.ownerCookie,
+          'x-correlation-id': crypto.randomUUID()
+        }
+      }
+    );
+    expect(organizerSnapshotResponse.status).toBe(200);
+    expect(reviewSnapshotReadResultSchema.parse(
+      await organizerSnapshotResponse.json()
+    )).toMatchObject({
+      kind: 'success',
+      data: {
+        viewer: { kind: 'organizer' },
+        plans: [],
+        roundSetup: {
+          activeReviewers: 1,
+          invitedReviewers: 0,
+          submissions: 0,
+          expectedReviews: 0
+        }
+      }
+    });
+
+    expect(fixture.baseline.extensionSlots.submissions).toEqual(
+      RICH_EPHEMERAL_LIVE_SCENARIO.extensionSlots.submissions
+    );
+    expect(fixture.baseline.extensionSlots.reviewRounds).toEqual(
+      RICH_EPHEMERAL_LIVE_SCENARIO.extensionSlots.reviewRounds
+    );
     const overviewCorrelationId = crypto.randomUUID();
     const overviewResponse = await fixture.runtime.app.request('/api/workspace/overview', {
       headers: {
@@ -291,11 +416,17 @@ describe('rich ephemeral live SQLite fixture', () => {
           },
           changesets: {
             kind: 'exact',
-            total: expected.changesets - 1,
-            committed: expected.changesets - 1
+            // Event-scoped heads only: the event-creation changeset precedes
+            // the event and the workspace_team role change is workspace-scoped.
+            total: expected.changesets - 2,
+            committed: expected.changesets - 2
           }
         },
-        history: { total: expected.changesets, truncated: true }
+        // The overview history evidence union covers the event, vocabulary,
+        // form, field-registry, triage, and workspace_team timelines; the
+        // three Session changesets and the roster registration have no
+        // source there, while the reviewer role change adds one team thread.
+        history: { total: expected.changesets - 4, truncated: true }
       },
       correlationId: overviewCorrelationId
     });

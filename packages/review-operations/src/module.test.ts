@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import { createHmacRequestHashSealer, createOperationRegistry } from '@jooevents/application';
 import {
   reviewOpenRoundChangeDraftInputSchema,
-  reviewRoundOpenAtomicJoinRequirementSchema
+  reviewOpenRoundPlanningInputSchema
 } from '@jooevents/contracts/reviews';
 import {
   parseContractVersion,
@@ -25,7 +25,9 @@ import {
   REVIEW_STEP_BACK_DRAFT_OPERATION,
   createReviewOperationModule,
   reviewChangesetDraftDomainContributionSchema,
-  reviewDiffReadPermissionIdsForAction
+  reviewDiffReadPermissionIdsForAction,
+  reviewOpenRoundVisibilityPolicy,
+  reviewSnapshotCanonicalResultSchema
 } from '.';
 
 const workspaceId = parseWorkspaceId('550e8400-e29b-41d4-a716-446655440000');
@@ -114,20 +116,75 @@ describe('Review operation module', () => {
     ]);
   });
 
-  test('keeps date intent untrusted and makes the atomic Deadline join blocker typed', () => {
+  test('keeps date intent untrusted and expands anonymized to the canonical visibility axes', () => {
     expect(reviewOpenRoundChangeDraftInputSchema.parse({
       action: 'open_round', deadlineDate: '2026-09-01'
     })).toEqual({ action: 'open_round', deadlineDate: '2026-09-01', anonymized: true });
     expect(reviewOpenRoundChangeDraftInputSchema.safeParse({
       action: 'open_round', deadlineId: crypto.randomUUID()
     }).success).toBe(false);
-    expect(reviewRoundOpenAtomicJoinRequirementSchema.parse({
-      schemaVersion: 1,
-      kind: 'review_due_round_atomic_join',
-      deadlineKind: 'review_due',
-      deadlineDate: '2026-09-01',
-      atomic: true
-    })).toMatchObject({ atomic: true, deadlineKind: 'review_due' });
+    // The planning input never accepts a caller-supplied pre-existing deadline;
+    // the server mints the identity and the changeset creates the review_due
+    // Deadline atomically from the date intent.
+    expect(reviewOpenRoundPlanningInputSchema.safeParse({
+      action: 'open_round',
+      scope: { workspaceId, eventId: crypto.randomUUID() },
+      expectedCatalogVersion: 1,
+      roundId: crypto.randomUUID(),
+      deadlineId: crypto.randomUUID(),
+      criteria: [{
+        id: crypto.randomUUID(), key: 'overall', label: 'Overall',
+        position: 0, weightBps: 10_000, scaleMin: 1, scaleMax: 5
+      }],
+      visibility: reviewOpenRoundVisibilityPolicy(true),
+      assignmentIds: [],
+      attributedByUserId: crypto.randomUUID(),
+      attributedAt: '2026-08-13T12:00:00.000Z'
+    }).success).toBe(false);
+    expect(reviewOpenRoundVisibilityPolicy(true)).toEqual({
+      participantIdentity: 'hidden',
+      peerReviewerIdentity: 'hidden',
+      peerContentUnlock: 'after_own_commit'
+    });
+    expect(reviewOpenRoundVisibilityPolicy(false)).toEqual({
+      participantIdentity: 'shown',
+      peerReviewerIdentity: 'shown',
+      peerContentUnlock: 'after_own_commit'
+    });
+  });
+
+  test('snapshot serving requires round version and criterion identities on every plan', () => {
+    const plan = {
+      id: crypto.randomUUID(),
+      ordinal: 1,
+      name: 'Round 1',
+      state: 'open',
+      version: 1,
+      scaleMax: 5,
+      criteria: [{
+        id: crypto.randomUUID(), key: 'overall', label: 'Overall',
+        position: 0, weightBps: 10_000, scaleMin: 1, scaleMax: 5
+      }],
+      deadlineEffectiveAt: '2026-08-31T00:00:00.000Z',
+      anonymized: true,
+      antiAnchoring: true,
+      done: 0,
+      total: 0,
+      reviewers: []
+    };
+    const snapshot = (planValue: unknown) => ({
+      kind: 'success',
+      data: {
+        schemaVersion: 1,
+        viewer: { kind: 'organizer' },
+        plans: [planValue],
+        standings: {}
+      }
+    });
+    expect(reviewSnapshotCanonicalResultSchema.safeParse(snapshot(plan)).success).toBe(true);
+    const { criteria: _criteria, ...planWithoutCriteria } = plan;
+    expect(reviewSnapshotCanonicalResultSchema.safeParse(snapshot(planWithoutCriteria)).success)
+      .toBe(false);
   });
 
   test('carries exact split grants for generic changeset diff ownership', () => {

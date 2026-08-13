@@ -25,6 +25,25 @@ CREATE TABLE event_settings_companions (
   event_version INTEGER NOT NULL CHECK(event_version > 0),
   location TEXT NOT NULL CHECK(length(location) <= 500),
   venue_note TEXT NOT NULL CHECK(length(venue_note) <= 8000),
+  day_start TEXT CHECK(
+    day_start IS NULL
+    OR day_start GLOB '[01][0-9]:[0-5][0-9]'
+    OR day_start GLOB '2[0-3]:[0-5][0-9]'
+  ),
+  day_end TEXT CHECK(
+    day_end IS NULL
+    OR day_end GLOB '[01][0-9]:[0-5][0-9]'
+    OR day_end GLOB '2[0-3]:[0-5][0-9]'
+  ),
+  slot_minutes INTEGER CHECK(slot_minutes IS NULL OR slot_minutes IN (5, 10, 15, 20, 30, 60)),
+  CHECK((day_start IS NULL) = (day_end IS NULL) AND (day_start IS NULL) = (slot_minutes IS NULL)),
+  CHECK(day_start IS NULL OR day_end > day_start),
+  CHECK(
+    day_start IS NULL
+    OR ((CAST(substr(day_end, 1, 2) AS INTEGER) * 60 + CAST(substr(day_end, 4, 2) AS INTEGER))
+      - (CAST(substr(day_start, 1, 2) AS INTEGER) * 60 + CAST(substr(day_start, 4, 2) AS INTEGER)))
+      % slot_minutes = 0
+  ),
   PRIMARY KEY (workspace_id, event_id),
   UNIQUE (workspace_id, event_id, event_version),
   FOREIGN KEY (workspace_id, event_id)
@@ -74,7 +93,15 @@ interface CompanionRow {
   readonly event_version: number;
   readonly location: string;
   readonly venue_note: string;
+  readonly day_start: string | null;
+  readonly day_end: string | null;
+  readonly slot_minutes: number | null;
 }
+
+/** Schedule-grid geometry seeded for every newly created Event. */
+const CREATED_EVENT_DAY_START = '09:00';
+const CREATED_EVENT_DAY_END = '18:00';
+const CREATED_EVENT_SLOT_MINUTES = 30;
 
 function requireTransaction(sqlite: Database): void {
   if (!sqlite.inTransaction) throw new SQLiteEventSettingsError('transaction_required');
@@ -92,7 +119,10 @@ function parseCompanion(row: CompanionRow) {
       eventId: row.event_id,
       eventVersion: row.event_version,
       location: row.location,
-      venueNote: row.venue_note
+      venueNote: row.venue_note,
+      dayStart: row.day_start,
+      dayEnd: row.day_end,
+      slotMinutes: row.slot_minutes
     });
   } catch (error) {
     throw new SQLiteEventSettingsError('settings_data_corrupt', error);
@@ -128,7 +158,8 @@ export class SQLiteEventSettingsRepository implements EventSettingsTransactionPo
     const workspaceId = parseWorkspaceId(scope.workspaceId);
     const eventId = parseEventId(scope.eventId);
     const row = oneOrNone(this.sqlite.query<CompanionRow, [WorkspaceId, EventId]>(`
-      SELECT workspace_id, event_id, event_version, location, venue_note
+      SELECT workspace_id, event_id, event_version, location, venue_note,
+             day_start, day_end, slot_minutes
         FROM event_settings_companions
        WHERE workspace_id = ? AND event_id = ?
        ORDER BY workspace_id, event_id
@@ -186,19 +217,24 @@ export class SQLiteEventSettingsRepository implements EventSettingsTransactionPo
     if (existing) {
       if (existing.eventVersion !== current.currentEvent.version
           || existing.location !== ''
-          || existing.venueNote !== '') {
+          || existing.venueNote !== ''
+          || existing.dayStart !== CREATED_EVENT_DAY_START
+          || existing.dayEnd !== CREATED_EVENT_DAY_END
+          || existing.slotMinutes !== CREATED_EVENT_SLOT_MINUTES) {
         throw new SQLiteEventSettingsError('settings_companion_conflict');
       }
       return this.requireEventSettings(scope);
     }
     try {
       changedExactlyOnce(this.sqlite.query<never, [
-        WorkspaceId, EventId, number, WorkspaceId, EventId, number
+        WorkspaceId, EventId, number, string, string, number,
+        WorkspaceId, EventId, number
       ]>(`
         INSERT INTO event_settings_companions (
-          workspace_id, event_id, event_version, location, venue_note
+          workspace_id, event_id, event_version, location, venue_note,
+          day_start, day_end, slot_minutes
         )
-        SELECT ?, ?, ?, '', ''
+        SELECT ?, ?, ?, '', '', ?, ?, ?
          WHERE EXISTS (
            SELECT 1
              FROM event_spine_workspace_sets s
@@ -212,6 +248,9 @@ export class SQLiteEventSettingsRepository implements EventSettingsTransactionPo
         current.currentEvent.workspaceId,
         current.currentEvent.id,
         current.currentEvent.version,
+        CREATED_EVENT_DAY_START,
+        CREATED_EVENT_DAY_END,
+        CREATED_EVENT_SLOT_MINUTES,
         current.currentEvent.workspaceId,
         current.currentEvent.id,
         current.currentEvent.version
@@ -268,21 +307,31 @@ export class SQLiteEventSettingsRepository implements EventSettingsTransactionPo
         plan.selection.eventSetVersion
       ), 'stale_settings');
       changedExactlyOnce(this.sqlite.query<never, [
-        number, string, string, WorkspaceId, EventId, number, string, string
+        number, string, string, string | null, string | null, number | null,
+        WorkspaceId, EventId, number, string, string,
+        string | null, string | null, number | null
       ]>(`
         UPDATE event_settings_companions
-           SET event_version = ?, location = ?, venue_note = ?
+           SET event_version = ?, location = ?, venue_note = ?,
+               day_start = ?, day_end = ?, slot_minutes = ?
          WHERE workspace_id = ? AND event_id = ? AND event_version = ?
            AND location = ? AND venue_note = ?
+           AND day_start IS ? AND day_end IS ? AND slot_minutes IS ?
       `).run(
         plan.resultingEventVersion,
         plan.after.location,
         plan.after.venueNote,
+        plan.after.dayStart,
+        plan.after.dayEnd,
+        plan.after.slotMinutes,
         workspaceId,
         eventId,
         plan.expectedEventVersion,
         plan.before.location,
-        plan.before.venueNote
+        plan.before.venueNote,
+        plan.before.dayStart,
+        plan.before.dayEnd,
+        plan.before.slotMinutes
       ), 'stale_settings');
       this.sqlite.exec('RELEASE SAVEPOINT event_settings_apply');
     } catch (error) {

@@ -34,7 +34,6 @@ import {
   parseEventId,
   parseWorkspaceId,
   type Clock,
-  type EventId,
   type InvocationId,
   type WorkspaceId
 } from '@jooevents/kernel';
@@ -84,10 +83,21 @@ export interface SessionOperationIds {
   newInvocationId(): InvocationId;
 }
 
+export interface SessionCurrentEventResolution {
+  readonly eventId?: string;
+  readonly evidenceIds: readonly string[];
+}
+
+export interface SessionCurrentEventSource {
+  resolveCurrentEvent(workspaceId: WorkspaceId):
+    SessionCurrentEventResolution | Promise<SessionCurrentEventResolution>;
+}
+
 export interface CreateSessionOperationModuleInput {
-  readonly scope: { readonly workspaceId: WorkspaceId; readonly eventId: EventId };
+  readonly workspaceId: WorkspaceId;
   readonly readPolicy: VersionedAccessPolicyRef;
   readonly currentAuthority: CurrentAuthorityResolver<InvocationEvidence>;
+  readonly currentEvent: SessionCurrentEventSource;
   readonly clock: Clock;
   readonly ids: SessionOperationIds;
   readonly authorityPrincipalKeyProfile: VersionedKeyProfileRef;
@@ -103,27 +113,54 @@ function authorityOutcome(reason: CurrentAuthorityDenialReason): StructuredOutco
   });
 }
 
-function exactEventScopeResolver(scope: { readonly workspaceId: WorkspaceId; readonly eventId: EventId }): InvocationScopeResolver {
+function canonicalEvidenceIds(values: readonly string[]): readonly string[] {
+  const parsed = values.map((value) => {
+    if (typeof value !== 'string' || !value.trim() || value.length > 512 || value.trim() !== value) {
+      throw new TypeError('session_current_event_evidence_invalid');
+    }
+    return value;
+  });
+  return Object.freeze([...new Set(parsed)].sort((left, right) =>
+    left < right ? -1 : left > right ? 1 : 0
+  ));
+}
+
+function currentEventScopeResolver(input: {
+  readonly workspaceId: WorkspaceId;
+  readonly source: SessionCurrentEventSource;
+}): InvocationScopeResolver {
   return Object.freeze({
-    resolve: () => Object.freeze({
-      workspaceId: scope.workspaceId,
-      eventId: scope.eventId,
-      subjects: Object.freeze([
-        { kind: 'workspace' as const, id: scope.workspaceId },
-        { kind: 'event' as const, id: scope.eventId }
-      ]),
-      resolutionEvidenceIds: Object.freeze(['session.event-scope.bound'])
-    })
+    async resolve() {
+      const resolved = await input.source.resolveCurrentEvent(input.workspaceId);
+      if (!resolved || !Array.isArray(resolved.evidenceIds)) {
+        throw new TypeError('session_current_event_resolution_invalid');
+      }
+      const evidenceIds = canonicalEvidenceIds(resolved.evidenceIds);
+      if (resolved.eventId === undefined) {
+        return Object.freeze({
+          workspaceId: input.workspaceId,
+          subjects: Object.freeze([{ kind: 'workspace' as const, id: input.workspaceId }]),
+          resolutionEvidenceIds: evidenceIds
+        });
+      }
+      const eventId = parseEventId(resolved.eventId);
+      return Object.freeze({
+        workspaceId: input.workspaceId,
+        eventId,
+        subjects: Object.freeze([
+          { kind: 'workspace' as const, id: input.workspaceId },
+          { kind: 'event' as const, id: eventId }
+        ]),
+        resolutionEvidenceIds: evidenceIds
+      });
+    }
   });
 }
 
 export function createSessionOperationModule(
   input: CreateSessionOperationModuleInput
 ): OperationRegistryModule {
-  const scope = Object.freeze({
-    workspaceId: parseWorkspaceId(input.scope.workspaceId),
-    eventId: parseEventId(input.scope.eventId)
-  });
+  const workspaceId = parseWorkspaceId(input.workspaceId);
   if (input.readPolicy.key !== SESSION_READ_ACCESS_POLICY.key
       || input.readPolicy.version !== SESSION_READ_ACCESS_POLICY.version) {
     throw new TypeError('session_operation_policy_catalog_mismatch');
@@ -152,7 +189,7 @@ export function createSessionOperationModule(
     operation: SESSION_CATALOG_READ_OPERATION,
     effect: 'read',
     lanes: [lane],
-    scopeResolver: exactEventScopeResolver(scope),
+    scopeResolver: currentEventScopeResolver({ workspaceId, source: input.currentEvent }),
     authorityResolver: input.currentAuthority,
     clock: input.clock,
     newInvocationId: input.ids.newInvocationId,
@@ -162,7 +199,7 @@ export function createSessionOperationModule(
     deniedAuthorityOutcome: authorityOutcome
   });
   const openSnapshot = (invocation: ReadInvocationContext) => {
-    if (invocation.scope.eventId === undefined) throw new TypeError('session_event_scope_missing');
+    if (invocation.scope.eventId === undefined) return Object.freeze({ kind: 'event_required' as const });
     const catalog = input.sessions.readSessionCatalog({
       workspaceId: invocation.scope.workspaceId,
       eventId: invocation.scope.eventId
@@ -201,11 +238,25 @@ export function createSessionOperationModule(
         reference: refs.handler,
         readCapability: refs.capability,
         canonicalResultSchema: schemas.canonical,
-        handle: ({ snapshot }: { readonly snapshot: Readonly<Record<string, unknown>> }) =>
-          Object.freeze({
+        handle: ({ snapshot }: { readonly snapshot: Readonly<Record<string, unknown>> }) => {
+          if (snapshot.kind === 'event_required') {
+            return Object.freeze({
+              kind: 'outcome' as const,
+              outcome: Object.freeze({
+                class: 'conflict' as const,
+                kind: 'session.event_required',
+                retryable: false,
+                subjects: [],
+                detail: null,
+                detailSchemaVersion: 1
+              })
+            });
+          }
+          return Object.freeze({
             kind: 'success' as const,
             data: sessionCatalogSchema.parse(snapshot.catalog)
-          })
+          });
+        }
       }]),
       projections: Object.freeze([{
         reference: refs.projection,
@@ -233,7 +284,15 @@ export function createSessionOperationModule(
         consequenceTags: [],
         inputSchema: schemas.input,
         canonicalResultSchema: schemas.canonical,
-        outcomes: accessOutcomes,
+        outcomes: [
+          ...accessOutcomes,
+          {
+            class: 'conflict' as const,
+            kind: 'session.event_required',
+            retryable: false,
+            detailSchema: schemas.nullDetail
+          }
+        ],
         accessLanes: [lane],
         contextBuilder: refs.context,
         readCapability: refs.capability,

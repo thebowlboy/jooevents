@@ -2,6 +2,7 @@ export * from './access';
 export * from './account-linking';
 export * from './changeset-operations';
 export * from './communications/organizer';
+export * from './decisions';
 export * from './communications/provider';
 export * from './communications/outbound-email-delivery';
 export * from './communications/provider-configuration';

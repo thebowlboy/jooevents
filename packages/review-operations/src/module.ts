@@ -40,7 +40,6 @@ import {
   reviewEvaluationChangeDraftInputSchema,
   reviewMutationPlanSchema,
   reviewRoundChangeDraftInputSchema,
-  reviewRoundOpenAtomicJoinRequirementSchema,
   reviewRoundSetupProjectionSchema,
   reviewRoundSetupReadInputSchema,
   reviewRoundSetupReadResultSchema,
@@ -49,7 +48,9 @@ import {
   reviewSnapshotReadResultSchema,
   reviewSnapshotSchema,
   reviewStepBackChangeDraftInputSchema,
-  reviewVersionSchema
+  reviewVersionSchema,
+  reviewVisibilityPolicySchema,
+  type ReviewVisibilityPolicyDto
 } from '@jooevents/contracts/reviews';
 import {
   CURRENT_AUTHORITY_DENIAL_REASONS,
@@ -154,6 +155,28 @@ export function reviewDiffReadPermissionIdsFromStoredPlan(
   storedPlan: unknown
 ): readonly PermissionId[] {
   return reviewDiffReadPermissionIdsForAction(reviewMutationPlanSchema.parse(storedPlan).action);
+}
+
+/**
+ * The three visibility axes (`participantIdentity`, `peerReviewerIdentity`,
+ * `peerContentUnlock`) are the canonical round policy; the single `anonymized`
+ * boolean is only the round-open operation's ergonomic surface and expands to
+ * exactly this mapping. `anonymized: true` hides both identity axes and keeps
+ * peer content locked until the reviewer's own commit; `anonymized: false`
+ * reveals identities while retaining the anti-anchoring unlock.
+ */
+export function reviewOpenRoundVisibilityPolicy(anonymized: boolean): ReviewVisibilityPolicyDto {
+  return reviewVisibilityPolicySchema.parse(anonymized
+    ? {
+        participantIdentity: 'hidden',
+        peerReviewerIdentity: 'hidden',
+        peerContentUnlock: 'after_own_commit'
+      }
+    : {
+        participantIdentity: 'shown',
+        peerReviewerIdentity: 'shown',
+        peerContentUnlock: 'after_own_commit'
+      });
 }
 
 export const REVIEW_CHANGE_DRAFT_HANDLER_CAPABILITY = ref(
@@ -263,12 +286,6 @@ const changeDraftSuccessContributionSchema = z.strictObject({
       || evidence.occurredAt !== domain.occurredAt) {
     context.addIssue({ code: 'custom', message: 'Review draft evidence is incoherent.' });
   }
-  if (data.action === 'open_round') {
-    context.addIssue({
-      code: 'custom', path: ['result', 'data', 'action'],
-      message: 'Round opening requires the atomic review_due Deadline join.'
-    });
-  }
 });
 
 const changeDraftOutcomeContributionSchema = z.strictObject({
@@ -280,15 +297,12 @@ const changeDraftOutcomeContributionSchema = z.strictObject({
   const allowed = new Set([
     'conflict:review.event_required',
     'conflict:review.viewer_required',
-    'conflict:review.open_round_atomic_join_required',
     'stale_revision:review.canonical_changed',
     'conflict:changeset.id_collision'
   ]);
   const detailSchema = outcome.kind === 'review.canonical_changed'
     ? reviewCanonicalChangedDetailSchema
-    : outcome.kind === 'review.open_round_atomic_join_required'
-      ? reviewRoundOpenAtomicJoinRequirementSchema
-      : nullDetailSchema;
+    : nullDetailSchema;
   if (!allowed.has(`${outcome.class}:${outcome.kind}`)
       || outcome.retryable
       || outcome.detailSchemaVersion !== 1
@@ -381,7 +395,6 @@ const schemas = Object.freeze({
   saveCanonical: schemaRef('schema.review.evaluation-draft-save.canonical-result', reviewDraftSaveCanonicalResultSchema),
   saveProjected: REVIEW_OPERATION_SCHEMA_REFS.draftSave.resultSchema,
   staleDetail: schemaRef('schema.review.canonical-changed.detail', reviewCanonicalChangedDetailSchema),
-  openJoinDetail: schemaRef('schema.review.open-round-atomic-join.detail', reviewRoundOpenAtomicJoinRequirementSchema),
   nullDetail: schemaRef('schema.review.operation.null-detail', nullDetailSchema)
 });
 
@@ -577,7 +590,7 @@ export function createReviewOperationModule(
       handlerCapability: REVIEW_CHANGE_DRAFT_HANDLER_CAPABILITY,
       strategy: 'change', path: '/api/events/current/review/round-drafts',
       requestHashProfile: REVIEW_CHANGE_DRAFT_REQUEST_HASH_PROFILE,
-      outcomes: changeOutcomes({ accessOutcomes, includeOpenJoin: true })
+      outcomes: changeOutcomes(accessOutcomes)
     }, input, scopeResolver),
     effectRuntime({
       key: 'review.step-back-draft', operation: REVIEW_STEP_BACK_DRAFT_OPERATION,
@@ -591,7 +604,7 @@ export function createReviewOperationModule(
       handlerCapability: REVIEW_CHANGE_DRAFT_HANDLER_CAPABILITY,
       strategy: 'change', path: '/api/events/current/review/step-back-drafts',
       requestHashProfile: REVIEW_CHANGE_DRAFT_REQUEST_HASH_PROFILE,
-      outcomes: changeOutcomes({ accessOutcomes, includeOpenJoin: false })
+      outcomes: changeOutcomes(accessOutcomes)
     }, input, scopeResolver),
     effectRuntime({
       key: 'review.evaluation-change-draft', operation: REVIEW_EVALUATION_CHANGE_DRAFT_OPERATION,
@@ -605,7 +618,7 @@ export function createReviewOperationModule(
       handlerCapability: REVIEW_CHANGE_DRAFT_HANDLER_CAPABILITY,
       strategy: 'change', path: '/api/events/current/review/evaluation-drafts',
       requestHashProfile: REVIEW_CHANGE_DRAFT_REQUEST_HASH_PROFILE,
-      outcomes: changeOutcomes({ accessOutcomes, includeOpenJoin: false })
+      outcomes: changeOutcomes(accessOutcomes)
     }, input, scopeResolver),
     effectRuntime({
       key: 'review.evaluation-draft-save', operation: REVIEW_EVALUATION_DRAFT_SAVE_OPERATION,
@@ -670,7 +683,6 @@ export function createReviewOperationModule(
         { reference: schemas.saveCanonical, schema: reviewDraftSaveCanonicalResultSchema },
         { reference: schemas.saveProjected, schema: reviewDraftSaveOperationResultSchema },
         { reference: schemas.staleDetail, schema: reviewCanonicalChangedDetailSchema },
-        { reference: schemas.openJoinDetail, schema: reviewRoundOpenAtomicJoinRequirementSchema },
         { reference: schemas.nullDetail, schema: nullDetailSchema }
       ]),
       contextBuilders: Object.freeze([snapshotContext, setupContext]),
@@ -1110,21 +1122,14 @@ function effectRuntime(
   });
 }
 
-function changeOutcomes(input: {
-  readonly accessOutcomes: readonly OperationOutcomeDeclaration[];
-  readonly includeOpenJoin: boolean;
-}): readonly OperationOutcomeDeclaration[] {
+function changeOutcomes(
+  accessOutcomes: readonly OperationOutcomeDeclaration[]
+): readonly OperationOutcomeDeclaration[] {
   return Object.freeze([
     { class: 'idempotency_conflict' as const, kind: 'operation.request_changed', retryable: false, detailSchema: schemas.nullDetail },
-    ...input.accessOutcomes,
+    ...accessOutcomes,
     { class: 'conflict' as const, kind: 'review.event_required', retryable: false, detailSchema: schemas.nullDetail },
     { class: 'conflict' as const, kind: 'review.viewer_required', retryable: false, detailSchema: schemas.nullDetail },
-    ...(input.includeOpenJoin ? [{
-      class: 'conflict' as const,
-      kind: 'review.open_round_atomic_join_required',
-      retryable: false,
-      detailSchema: schemas.openJoinDetail
-    }] : []),
     { class: 'stale_revision' as const, kind: 'review.canonical_changed', retryable: false, detailSchema: schemas.staleDetail },
     { class: 'conflict' as const, kind: 'changeset.id_collision', retryable: false, detailSchema: schemas.nullDetail },
     { class: 'conflict' as const, kind: 'operation.in_progress', retryable: true, detailSchema: schemas.nullDetail },

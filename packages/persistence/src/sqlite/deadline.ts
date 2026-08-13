@@ -11,12 +11,15 @@ import type {
 import {
   applyDeadlinePlanToCatalog,
   applyFormCloseDeadlineFrom,
+  applyReviewDueDeadlineFrom,
   createEmptyDeadlineCatalog,
   parseDeadlineCatalog,
   parseDeadlineHead,
   planFormCloseDeadlineChangeFrom,
+  planReviewDueDeadlineChangeFrom,
   resolveCurrentDeadlineFrom,
   validateFormCloseDeadlineFrom,
+  validateReviewDueDeadlineFrom,
   type DeadlineChangesetTransactionPort,
   type DeadlineReferenceResolver,
   type FormCloseDeadlineAppliedContribution,
@@ -25,7 +28,14 @@ import {
   type FormCloseDeadlinePlanningPort,
   type FormCloseDeadlineTransactionPort,
   type FormCloseDeadlineValidation,
-  type FormCloseDeadlineValidationPort
+  type FormCloseDeadlineValidationPort,
+  type ReviewDueDeadlineAppliedContribution,
+  type ReviewDueDeadlineChangeInput,
+  type ReviewDueDeadlineContribution,
+  type ReviewDueDeadlinePlanningPort,
+  type ReviewDueDeadlineTransactionPort,
+  type ReviewDueDeadlineValidation,
+  type ReviewDueDeadlineValidationPort
 } from '@jooevents/deadline';
 import { canonicalJsonText } from '@jooevents/kernel';
 import type { SQLiteEventSpineRepository } from './event-spine';
@@ -49,7 +59,7 @@ CREATE TABLE deadlines (
   workspace_id TEXT NOT NULL CHECK(length(workspace_id) = 36),
   event_id TEXT NOT NULL CHECK(length(event_id) = 36),
   id TEXT NOT NULL CHECK(length(id) = 36),
-  kind TEXT NOT NULL CHECK(kind = 'cfp_close'),
+  kind TEXT NOT NULL CHECK(kind IN ('cfp_close', 'review_due')),
   status TEXT NOT NULL CHECK(status IN ('active', 'cleared')),
   version INTEGER NOT NULL CHECK(version > 0),
   digest_sha256 TEXT NOT NULL CHECK(
@@ -148,7 +158,7 @@ interface DeadlineRow {
   readonly workspace_id: string;
   readonly event_id: string;
   readonly id: string;
-  readonly kind: 'cfp_close';
+  readonly kind: 'cfp_close' | 'review_due';
   readonly status: 'active' | 'cleared';
   readonly version: number;
   readonly digest_sha256: string;
@@ -180,7 +190,10 @@ export class SQLiteDeadlineRepository implements
   DeadlineReferenceResolver,
   FormCloseDeadlinePlanningPort,
   FormCloseDeadlineValidationPort,
-  FormCloseDeadlineTransactionPort {
+  FormCloseDeadlineTransactionPort,
+  ReviewDueDeadlinePlanningPort,
+  ReviewDueDeadlineValidationPort,
+  ReviewDueDeadlineTransactionPort {
   constructor(
     private readonly sqlite: Database,
     private readonly events: Pick<SQLiteEventSpineRepository, 'readEventHead'>
@@ -257,6 +270,24 @@ export class SQLiteDeadlineRepository implements
     contribution: FormCloseDeadlineContribution
   ): FormCloseDeadlineAppliedContribution {
     return applyFormCloseDeadlineFrom(this, contribution);
+  }
+
+  planReviewDueDeadlineChange(
+    input: ReviewDueDeadlineChangeInput
+  ): ReviewDueDeadlineContribution {
+    return planReviewDueDeadlineChangeFrom(this, input);
+  }
+
+  validateReviewDueDeadline(
+    contribution: ReviewDueDeadlineContribution
+  ): ReviewDueDeadlineValidation {
+    return validateReviewDueDeadlineFrom(this, contribution);
+  }
+
+  applyReviewDueDeadline(
+    contribution: ReviewDueDeadlineContribution
+  ): ReviewDueDeadlineAppliedContribution {
+    return applyReviewDueDeadlineFrom(this, contribution);
   }
 
   applyDeadlinePlan(plan: DeadlineMutationPlanDto): DeadlineMutationResult {

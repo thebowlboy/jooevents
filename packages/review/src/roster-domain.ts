@@ -227,6 +227,16 @@ export function planReviewerRosterMutation(inputValue: ReviewerRosterMutationInp
   if (!authorityValue) fail('authority_unavailable');
   const authority = assertAuthoritySet(authorityValue, scope);
   const existing = current.reviewers.find((candidate) => candidate.reviewerId === request.reviewerId);
+  // A register refuses any duplicate access subject, whatever its record state:
+  // roster records are retained after revocation, one subject maps to at most one
+  // reviewer identity, and a revoked reviewer returns through restore, not a
+  // second registration.
+  if (request.action === 'register' && current.reviewers.some((candidate) =>
+    candidate.reviewerId !== request.reviewerId
+      && sameAuthoritySubject(candidate.accessSubject, request.accessSubject)
+  )) {
+    fail('reviewer_exists');
+  }
   const fact = resolveMutationAuthorityFact({ request, existing, authority });
   const targetValue = input.environment.sources.readReviewerScopeTargets(scope);
   if (!targetValue) fail('scope_targets_unavailable');
@@ -283,6 +293,13 @@ export function validateReviewerRosterMutationPlan(
   ) ?? null;
   if (canonicalJsonSha256(currentRecord) !== canonicalJsonSha256(plan.before)) {
     return 'stale_reviewer';
+  }
+  const planInput = plan.input;
+  if (planInput.action === 'register' && roster.reviewers.some((candidate) =>
+    candidate.reviewerId !== planInput.reviewerId
+      && sameAuthoritySubject(candidate.accessSubject, planInput.accessSubject)
+  )) {
+    return 'reviewer_exists';
   }
   const authorityValue = environment.sources.readReviewerAuthority(plan.input.scope);
   if (!authorityValue) return 'authority_unavailable';

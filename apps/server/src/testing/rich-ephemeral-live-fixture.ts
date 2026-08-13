@@ -11,6 +11,7 @@ import {
   organizerFormCatalogSchema,
   organizerFormDetailSchema,
   programVocabularySnapshotReadResultSchema,
+  type EventSettingsSlotMinutes,
   type FormDefinitionAuthorInput,
   type FormDefinitionCreateAuthorInput,
   type FormTarget,
@@ -22,6 +23,22 @@ import {
   type FieldRegistryPurpose,
   type FormTargetReferencePinDto
 } from '@jooevents/contracts';
+import {
+  reviewerRosterChangeDraftOperationResultSchema,
+  reviewerRosterSnapshotReadResultSchema
+} from '@jooevents/contracts/reviewer-roster';
+import {
+  reviewChangeDraftOperationResultSchema,
+  reviewSnapshotReadResultSchema
+} from '@jooevents/contracts/reviews';
+import {
+  sessionCatalogReadResultSchema,
+  sessionDraftOperationResultSchema
+} from '@jooevents/contracts/sessions';
+import {
+  workspaceTeamDraftOperationResultSchema,
+  workspaceTeamMembersReadResultSchema
+} from '@jooevents/contracts/workspace-team';
 import {
   changesetLifecycleOperationResultSchema
 } from '@jooevents/changeset-operations';
@@ -50,7 +67,14 @@ const organizerFormDetailReadResultSchema = createReadOperationResultSchema(
 
 const DEFAULT_BASE_URL = 'http://localhost:4193';
 const DEFAULT_OWNER_EMAIL = 'rich-fixture-owner@example.test';
+const DEFAULT_REVIEWER_EMAIL = 'rich-fixture-reviewer@example.test';
 const DEFAULT_AUTH_SECRET = 'rich-fixture-secret-that-is-at-least-thirty-two-bytes';
+
+/**
+ * The roster reviewer id is caller-chosen wire input, so the fixture derives it
+ * from its deterministic uuid sequence; every rebuild registers the same id.
+ */
+export const RICH_REVIEWER_ID = fixtureUuid(0x31);
 
 const vocabularySpecs = Object.freeze([
   Object.freeze({ key: 'grand_auditorium', kind: 'room', name: 'Grand Auditorium', capacity: 640 }),
@@ -76,9 +100,35 @@ const formSpecs = Object.freeze([
   Object.freeze({ key: 'format_history', finalName: 'Featured Talk Applications', finalStatus: 'closed' })
 ] as const);
 
+/**
+ * Both canonical Sessions are authored after the final Program Vocabulary
+ * retirements, so their pinned format/track evidence must reference items that
+ * are still active at that point (`talk`, `panel`, `evaluation_reliability`,
+ * `product_craft`). The first is created directly `programmed`; the second is
+ * created as a `draft` container and then transitioned to `collecting` through
+ * a second draft+commit so the fixture exercises both authoring paths.
+ */
+const sessionSpecs = Object.freeze([
+  Object.freeze({
+    key: 'programmed_keynote',
+    title: 'Deterministic Changesets in Production',
+    plannedDurationMinutes: 45,
+    format: 'talk',
+    track: 'evaluation_reliability'
+  }),
+  Object.freeze({
+    key: 'collecting_panel',
+    title: 'Evaluating Agent Product Craft',
+    plannedDurationMinutes: 60,
+    format: 'panel',
+    track: 'product_craft'
+  })
+] as const);
+
 export type RichVocabularyKey = typeof vocabularySpecs[number]['key'];
 export type RichFormKey = typeof formSpecs[number]['key'];
 export type RichVocabularyKind = typeof vocabularySpecs[number]['kind'];
+export type RichSessionKey = typeof sessionSpecs[number]['key'];
 
 export type RichNormalizedFormTarget =
   | { readonly kind: 'general_pool' }
@@ -142,7 +192,10 @@ export const RICH_EPHEMERAL_LIVE_SCENARIO = deepFreeze({
   }),
   eventSettings: Object.freeze({
     location: 'Suntec Convention Centre',
-    venueNote: 'Registration opens on Level 2 beside the Grand Auditorium.'
+    venueNote: 'Registration opens on Level 2 beside the Grand Auditorium.',
+    dayStart: '09:00',
+    dayEnd: '18:00',
+    slotMinutes: 30
   }),
   expected: Object.freeze({
     events: 1,
@@ -165,20 +218,66 @@ export const RICH_EPHEMERAL_LIVE_SCENARIO = deepFreeze({
     }),
     fieldRegistry: Object.freeze({ version: 1, fields: 19 }),
     submissions: 0,
-    changesets: 35,
-    operationReceipts: 105,
+    sessions: Object.freeze({
+      total: 2,
+      catalogs: 1,
+      catalogVersion: 4,
+      draft: 0,
+      collecting: 1,
+      programmed: 1
+    }),
+    reviewerRoster: Object.freeze({
+      sets: 1,
+      records: 1,
+      scopes: 0,
+      rosterVersion: 2
+    }),
+    review: Object.freeze({ catalogs: 0, rounds: 0, roundCriteria: 0, assignments: 0 }),
+    deadlines: Object.freeze({ total: 0, catalogs: 0 }),
+    changesets: 40,
+    operationReceipts: 120,
     history: Object.freeze({
-      draftTimelineEntries: 35,
-      lifecycleTimelineEntries: 70,
-      domainFacts: 35,
-      outboxPointers: 35,
-      commitLinks: 35
+      draftTimelineEntries: 40,
+      lifecycleTimelineEntries: 80,
+      domainFacts: 40,
+      outboxPointers: 40,
+      commitLinks: 40
+    })
+  }),
+  reviewPins: Object.freeze({
+    /**
+     * Served to the reviewer principal while it held only the `viewer` role
+     * and no roster registration: the snapshot lane's own read authority
+     * (event.read+submission.read) resolves neither the reviewer nor the
+     * organizer view.
+     */
+    preRegistrationSnapshot: Object.freeze({
+      class: 'conflict' as const,
+      kind: 'review.viewer_required' as const
+    }),
+    /**
+     * Opening a review round plans reviewer-submission assignments and
+     * refuses `no_assignments` when the pairing is empty. Submissions are
+     * creatable in this composition via organizer direct entry
+     * (`submission.direct_entry.create.draft`); this fixture deliberately
+     * seeds none, so the typed refusal is the truthful served response for
+     * the scenario as built — a seeds-nothing consequence, not a mount gap.
+     */
+    openRoundAttempt: Object.freeze({
+      class: 'stale_revision' as const,
+      kind: 'review.canonical_changed' as const,
+      code: 'no_assignments' as const,
+      action: 'open_round' as const
     })
   }),
   extensionSlots: Object.freeze({
     submissions: Object.freeze({
-      status: 'not_mounted' as const,
-      reason: 'The production-safe ephemeral composition does not mount a public Intake ceremony.'
+      status: 'seedable_unseeded' as const,
+      reason: 'Organizer direct entry (submission.direct_entry.create.draft) is mounted; the public Intake ceremony is not. The fixture seeds no submissions today — an extension may seed them through the registered direct-entry draft + lifecycle commit.'
+    }),
+    reviewRounds: Object.freeze({
+      status: 'requires_submissions' as const,
+      reason: 'review.round.change.draft open_round refuses no_assignments while the scenario seeds no submission; seeding one through direct entry (see submissions slot) unlocks an open round with its atomic review_due deadline.'
     })
   })
 });
@@ -187,6 +286,7 @@ export interface RichEphemeralLiveHandles {
   readonly eventId: string;
   readonly vocabulary: Readonly<Record<RichVocabularyKey, string>>;
   readonly forms: Readonly<Record<RichFormKey, string>>;
+  readonly sessions: Readonly<Record<RichSessionKey, string>>;
 }
 
 export interface RichEphemeralLiveBaseline {
@@ -198,6 +298,9 @@ export interface RichEphemeralLiveBaseline {
     readonly endDate: string;
     readonly location: string;
     readonly venueNote: string;
+    readonly dayStart: string | null;
+    readonly dayEnd: string | null;
+    readonly slotMinutes: EventSettingsSlotMinutes | null;
     readonly version: number;
   };
   readonly vocabulary: {
@@ -266,6 +369,46 @@ export interface RichEphemeralLiveBaseline {
           };
     }[];
   };
+  readonly sessions: {
+    readonly catalogVersion: number;
+    readonly items: readonly {
+      readonly key: RichSessionKey;
+      readonly title: string;
+      readonly lifecycle: 'draft' | 'collecting' | 'programmed';
+      readonly plannedDurationMinutes: number;
+      readonly version: number;
+      readonly format: RichVocabularyKey;
+      readonly track: RichVocabularyKey | null;
+      readonly programSetVersion: number;
+      readonly participants: number;
+    }[];
+  };
+  readonly reviewerRoster: {
+    readonly rosterVersion: number;
+    readonly reviewers: readonly {
+      readonly reviewerId: string;
+      readonly status: 'invited' | 'active' | 'revoked';
+      readonly accessSubjectKind: 'access_reservation' | 'workspace_membership';
+      readonly displayName: string | null;
+      readonly reviews: number;
+    }[];
+  };
+  readonly review: {
+    readonly organizerViewer: 'organizer';
+    readonly plans: number;
+    readonly standings: number;
+    readonly roundSetup: {
+      readonly activeReviewers: number;
+      readonly invitedReviewers: number;
+      readonly submissions: number;
+      readonly expectedReviews: number;
+      readonly perReviewer: readonly {
+        readonly reviewerId: string;
+        readonly displayName: string | null;
+        readonly assigned: number;
+      }[];
+    };
+  };
   readonly durableCounts: {
     readonly eventHeads: number;
     readonly vocabularyItems: number;
@@ -273,6 +416,17 @@ export interface RichEphemeralLiveBaseline {
     readonly formVersions: number;
     readonly fieldRegistries: number;
     readonly submissions: number;
+    readonly sessions: number;
+    readonly sessionCatalogs: number;
+    readonly reviewerRosterSets: number;
+    readonly reviewerRosterRecords: number;
+    readonly reviewerRosterScopes: number;
+    readonly reviewCatalogs: number;
+    readonly reviewRounds: number;
+    readonly reviewRoundCriteria: number;
+    readonly reviewAssignments: number;
+    readonly deadlines: number;
+    readonly deadlineCatalogs: number;
     readonly changesets: number;
     readonly committedChangesets: number;
     readonly operationReceipts: number;
@@ -310,6 +464,13 @@ export interface RichEphemeralLiveFixture {
   readonly workspaceId: string;
   readonly ownerUserId: string;
   readonly ownerCookie: string;
+  readonly reviewer: {
+    readonly userId: string;
+    readonly cookie: string;
+    readonly membershipId: string;
+    readonly reviewerId: string;
+  };
+  readonly reviewPins: typeof RICH_EPHEMERAL_LIVE_SCENARIO.reviewPins;
   readonly handles: RichEphemeralLiveHandles;
   readonly baseline: RichEphemeralLiveBaseline;
   readonly baselineFingerprintSha256: string;
@@ -410,6 +571,85 @@ async function createOwnerSession(
     throw new TypeError('rich_fixture_owner_link_missing');
   }
   return Object.freeze({ session, ownerUserId: link.user_id });
+}
+
+/**
+ * Mints the second workspace principal through the exact admission seam the
+ * owner already uses: raw better-auth rows plus an open access reservation
+ * consumed by `/api/me/access-context`. No registered operation can admit a
+ * brand-new principal in this composition — `workspace_team.invite.draft`
+ * records a classified invitation whose sign-in activation ceremony is not
+ * mounted — so the reservation rows mirror `bootstrapEmptyInstall`'s owner
+ * reservation verbatim. The reservation grants only the seeded `viewer`
+ * preset role; the reviewer capabilities are granted later through the
+ * registered `workspace_team.role_change.draft` operation, and every
+ * JooEvents-domain write past admission flows through operations.
+ */
+async function createReviewerPrincipal(
+  runtime: EphemeralLiveRuntime,
+  config: ServerConfig,
+  nextCorrelationId: () => string
+): Promise<{ readonly session: OwnerSession; readonly reviewerUserId: string }> {
+  const now = Date.now();
+  const authUserId = fixtureUuid(0x11);
+  const reservationId = fixtureUuid(0x21);
+  const rawToken = 'rich-ephemeral-live-reviewer-session-token';
+  const viewerRole = runtime.database.sqlite.query<{ readonly id: string }, [string]>(`
+    SELECT id FROM roles
+     WHERE workspace_id = ? AND source_preset_key = 'viewer' AND archived_at IS NULL
+  `).get(runtime.workspaceId);
+  if (!viewerRole) throw new TypeError('rich_fixture_viewer_role_missing');
+  runtime.database.sqlite.query(`
+    INSERT INTO access_reservations (
+      id, workspace_id, normalized_email, status, created_at, version
+    ) VALUES (?, ?, ?, 'open', ?, 1)
+  `).run(reservationId, runtime.workspaceId, DEFAULT_REVIEWER_EMAIL, now);
+  runtime.database.sqlite.query(`
+    INSERT INTO reservation_role_assignments (
+      id, reservation_id, role_id, scope_kind, event_id
+    ) VALUES (?, ?, ?, 'workspace', NULL)
+  `).run(fixtureUuid(0x22), reservationId, viewerRole.id);
+  runtime.database.sqlite.query(`
+    INSERT INTO auth_users (
+      id, name, email, email_verified, image, created_at, updated_at
+    ) VALUES (?, 'Rich Fixture Reviewer', ?, 1, NULL, ?, ?)
+  `).run(authUserId, DEFAULT_REVIEWER_EMAIL, now, now);
+  runtime.database.sqlite.query(`
+    INSERT INTO auth_accounts (
+      id, account_id, provider_id, user_id, created_at, updated_at
+    ) VALUES (?, 'rich-fixture-google-reviewer-subject', 'google', ?, ?, ?)
+  `).run(fixtureUuid(0x12), authUserId, now, now);
+  runtime.database.sqlite.query(`
+    INSERT INTO auth_sessions (
+      id, token, user_id, expires_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?)
+  `).run(fixtureUuid(0x13), rawToken, authUserId, now + 24 * 60 * 60 * 1000, now, now);
+
+  const secret = config.authSecrets[0]?.value;
+  if (!secret) throw new TypeError('rich_fixture_auth_secret_missing');
+  const signature = await makeSignature(rawToken, secret);
+  const session = Object.freeze({
+    authUserId,
+    cookie: `better-auth.session_token=${rawToken}.${signature}`
+  });
+  const provisioned = await runtime.app.request('/api/me/access-context', {
+    headers: { cookie: session.cookie, 'x-correlation-id': nextCorrelationId() }
+  });
+  if (provisioned.status !== 200) {
+    throw new TypeError(`rich_fixture_reviewer_provisioning_failed:${provisioned.status}`);
+  }
+  const link = runtime.database.sqlite.query<{
+    readonly user_id: string;
+    readonly provisioning_state: string;
+  }, [string]>(`
+    SELECT user_id, provisioning_state
+      FROM auth_user_links
+     WHERE auth_user_id = ?
+  `).get(authUserId);
+  if (!link || link.provisioning_state !== 'ready') {
+    throw new TypeError('rich_fixture_reviewer_link_missing');
+  }
+  return Object.freeze({ session, reviewerUserId: link.user_id });
 }
 
 function requireSuccess<Result extends { readonly kind: string }>(
@@ -841,6 +1081,266 @@ async function createForms(
   return handles;
 }
 
+async function readSessionCatalog(context: SeedContext) {
+  return requireSuccess(sessionCatalogReadResultSchema.parse(await read(
+    context,
+    '/api/events/current/sessions',
+    (value) => value
+  )), 'session_catalog_read').data;
+}
+
+async function createSessions(
+  context: SeedContext,
+  vocabulary: Readonly<Record<RichVocabularyKey, string>>
+): Promise<Record<RichSessionKey, string>> {
+  const handles = Object.create(null) as Record<RichSessionKey, string>;
+  const create = async (input: {
+    readonly key: RichSessionKey;
+    readonly lifecycle: 'draft' | 'programmed';
+  }): Promise<void> => {
+    const spec = sessionSpecs.find((candidate) => candidate.key === input.key);
+    if (!spec) throw new TypeError(`rich_fixture_session_spec_missing:${input.key}`);
+    const catalog = await readSessionCatalog(context);
+    const draft = requireSuccess(sessionDraftOperationResultSchema.parse(await effect({
+      context,
+      path: '/api/events/current/sessions/drafts',
+      key: `rich-v1-session-${input.key}-create-draft`,
+      body: {
+        action: 'create',
+        expectedCatalogVersion: catalog.version,
+        expectedCatalogDigestSha256: catalog.digestSha256,
+        title: spec.title,
+        plannedDurationMinutes: spec.plannedDurationMinutes,
+        lifecycle: input.lifecycle,
+        formatId: vocabulary[spec.format],
+        trackId: vocabulary[spec.track]
+      },
+      parse: (value) => value
+    })), `session_${input.key}_create_draft`);
+    const after = draft.data.safeDiff.after;
+    if (draft.data.safeDiff.action !== 'create' || after === null
+        || after.lifecycle !== input.lifecycle) {
+      throw new TypeError(`rich_fixture_session_${input.key}_create_diff_invalid`);
+    }
+    handles[input.key] = after.id;
+    await commitDraft(context, `rich-v1-session-${input.key}-create`, draft);
+  };
+
+  await create({ key: 'programmed_keynote', lifecycle: 'programmed' });
+  await create({ key: 'collecting_panel', lifecycle: 'draft' });
+
+  const catalog = await readSessionCatalog(context);
+  const container = catalog.sessions.find(
+    (candidate) => candidate.id === handles.collecting_panel
+  );
+  if (!container || container.lifecycle !== 'draft') {
+    throw new TypeError('rich_fixture_session_collecting_panel_missing');
+  }
+  const transition = requireSuccess(sessionDraftOperationResultSchema.parse(await effect({
+    context,
+    path: '/api/events/current/sessions/drafts',
+    key: 'rich-v1-session-collecting_panel-transition-draft',
+    body: {
+      action: 'transition',
+      expectedCatalogVersion: catalog.version,
+      expectedCatalogDigestSha256: catalog.digestSha256,
+      sessionId: container.id,
+      expectedSessionVersion: container.version,
+      expectedSessionDigestSha256: container.digestSha256,
+      to: 'collecting'
+    },
+    parse: (value) => value
+  })), 'session_collecting_panel_transition_draft');
+  if (transition.data.safeDiff.action !== 'transition'
+      || transition.data.safeDiff.after?.lifecycle !== 'collecting') {
+    throw new TypeError('rich_fixture_session_collecting_panel_transition_invalid');
+  }
+  await commitDraft(context, 'rich-v1-session-collecting_panel-transition', transition);
+  return handles;
+}
+
+async function readWorkspaceTeam(context: SeedContext) {
+  return requireSuccess(workspaceTeamMembersReadResultSchema.parse(await read(
+    context,
+    '/api/workspace/team',
+    (value) => value
+  )), 'workspace_team_read').data;
+}
+
+function teamMember(
+  team: Awaited<ReturnType<typeof readWorkspaceTeam>>,
+  userId: string
+) {
+  const member = team.members.find(
+    (candidate) => candidate.kind === 'member' && candidate.userId === userId
+  );
+  if (!member || member.kind !== 'member') {
+    throw new TypeError('rich_fixture_reviewer_member_missing');
+  }
+  return member;
+}
+
+/**
+ * Widens the reviewer principal from the admission-time `viewer` role to
+ * `speaker_reviewer` — the preset carrying exactly the six
+ * REVIEWER_CAPABILITY_IDS — through the registered
+ * `workspace_team.role_change.draft` operation and the shared lifecycle.
+ */
+async function grantReviewerCapabilities(
+  context: SeedContext,
+  reviewerUserId: string
+): Promise<string> {
+  const team = await readWorkspaceTeam(context);
+  const member = teamMember(team, reviewerUserId);
+  if (member.role.key !== 'viewer') {
+    throw new TypeError('rich_fixture_reviewer_admission_role_invalid');
+  }
+  const draft = requireSuccess(workspaceTeamDraftOperationResultSchema.parse(await effect({
+    context,
+    path: '/api/workspace/team/role-changes/drafts',
+    key: 'rich-v1-reviewer-role-change-draft',
+    body: {
+      subject: { kind: 'member', membershipId: member.id, version: member.version },
+      roleKey: 'speaker_reviewer',
+      expectedTeamVersion: team.version,
+      expectedTeamDigestSha256: team.digestSha256
+    },
+    parse: (value) => value
+  })), 'reviewer_role_change_draft');
+  if (draft.data.safeDiff.action !== 'change_role'
+      || draft.data.safeDiff.after.key !== 'speaker_reviewer') {
+    throw new TypeError('rich_fixture_reviewer_role_change_diff_invalid');
+  }
+  await commitDraft(context, 'rich-v1-reviewer-role-change', draft);
+  return member.id;
+}
+
+async function readReviewerRoster(context: SeedContext) {
+  return requireSuccess(reviewerRosterSnapshotReadResultSchema.parse(await read(
+    context,
+    '/api/events/current/reviewer-roster',
+    (value) => value
+  )), 'reviewer_roster_read').data;
+}
+
+async function registerReviewer(
+  context: SeedContext,
+  reviewerUserId: string,
+  membershipId: string
+): Promise<void> {
+  const team = await readWorkspaceTeam(context);
+  const member = teamMember(team, reviewerUserId);
+  if (member.id !== membershipId || member.role.key !== 'speaker_reviewer') {
+    throw new TypeError('rich_fixture_reviewer_registration_subject_invalid');
+  }
+  const roster = await readReviewerRoster(context);
+  const draft = requireSuccess(reviewerRosterChangeDraftOperationResultSchema.parse(await effect({
+    context,
+    path: '/api/events/current/reviewer-roster/drafts',
+    key: 'rich-v1-reviewer-roster-register-draft',
+    body: {
+      action: 'register',
+      reviewerId: RICH_REVIEWER_ID,
+      accessSubject: {
+        kind: 'workspace_membership',
+        id: member.id,
+        version: member.version
+      },
+      reviews: [],
+      expectedRosterVersion: roster.rosterVersion,
+      expectedRosterDigestSha256: roster.rosterDigestSha256
+    },
+    parse: (value) => value
+  })), 'reviewer_roster_register_draft');
+  if (draft.data.action !== 'register' || draft.data.reviewerId !== RICH_REVIEWER_ID) {
+    throw new TypeError('rich_fixture_reviewer_roster_register_invalid');
+  }
+  // The roster draft contract returns only the revision selector; a freshly
+  // authored changeset head is always at version 1 for the propose guard.
+  await commitDraft(context, 'rich-v1-reviewer-roster-register', {
+    data: {
+      changesetId: draft.data.changesetId,
+      headVersion: 1,
+      revision: draft.data.revision
+    }
+  });
+}
+
+/**
+ * Captures the lane-only branch as a real served response: before the roster
+ * registration (and before the role widening) the reviewer principal reaches
+ * the snapshot route with the `viewer` preset's event.read+submission.read
+ * authority and must receive the typed viewer_required conflict.
+ */
+async function capturePreRegistrationReviewSnapshot(
+  reviewerContext: SeedContext
+): Promise<typeof RICH_EPHEMERAL_LIVE_SCENARIO.reviewPins.preRegistrationSnapshot> {
+  const result = reviewSnapshotReadResultSchema.parse(await read(
+    reviewerContext,
+    '/api/events/current/review/snapshot',
+    (value) => value
+  ));
+  const pin = RICH_EPHEMERAL_LIVE_SCENARIO.reviewPins.preRegistrationSnapshot;
+  if (result.kind !== 'outcome'
+      || result.outcome.class !== pin.class
+      || result.outcome.kind !== pin.kind) {
+    throw new TypeError(
+      `rich_fixture_pre_registration_snapshot_unexpected:${JSON.stringify(result)}`
+    );
+  }
+  return pin;
+}
+
+/**
+ * Attempts to open a review round through the registered operation. The
+ * composition has no reviewable submission, so the draft must refuse with the
+ * typed `no_assignments` stale-revision outcome; the refusal is pinned as the
+ * served truth and leaves no changeset behind.
+ */
+async function attemptOpenReviewRound(
+  context: SeedContext
+): Promise<typeof RICH_EPHEMERAL_LIVE_SCENARIO.reviewPins.openRoundAttempt> {
+  const result = reviewChangeDraftOperationResultSchema.parse(await effect({
+    context,
+    path: '/api/events/current/review/round-drafts',
+    key: 'rich-v1-review-open-round-draft',
+    body: { action: 'open_round', deadlineDate: '2027-06-11', anonymized: true },
+    parse: (value) => value
+  }));
+  const pin = RICH_EPHEMERAL_LIVE_SCENARIO.reviewPins.openRoundAttempt;
+  const detail = result.kind === 'outcome'
+    && result.outcome.detail !== null
+    && typeof result.outcome.detail === 'object'
+    && !Array.isArray(result.outcome.detail)
+    ? result.outcome.detail as { readonly code?: unknown; readonly action?: unknown }
+    : undefined;
+  if (result.kind !== 'outcome'
+      || result.outcome.class !== pin.class
+      || result.outcome.kind !== pin.kind
+      || detail?.code !== pin.code
+      || detail.action !== pin.action) {
+    throw new TypeError(
+      `rich_fixture_open_round_attempt_unexpected:${JSON.stringify(result)}`
+    );
+  }
+  return pin;
+}
+
+async function assertReviewerViewerServed(
+  reviewerContext: SeedContext
+): Promise<void> {
+  const snapshot = requireSuccess(reviewSnapshotReadResultSchema.parse(await read(
+    reviewerContext,
+    '/api/events/current/review/snapshot',
+    (value) => value
+  )), 'reviewer_snapshot_read').data;
+  if (snapshot.viewer.kind !== 'reviewer'
+      || snapshot.viewer.reviewerId !== RICH_REVIEWER_ID
+      || snapshot.plans.length !== 0) {
+    throw new TypeError('rich_fixture_reviewer_viewer_not_served');
+  }
+}
+
 function count(runtime: EphemeralLiveRuntime, table: string, where = ''): number {
   return runtime.database.sqlite.query<{ readonly count: number }, []>(
     `SELECT count(*) AS count FROM ${table} ${where}`
@@ -1089,6 +1589,43 @@ async function captureBaseline(input: {
       options
     });
   });
+  const sessionCatalog = await readSessionCatalog(input.context);
+  const sessionItems = sessionSpecs.map((spec) => {
+    const head = sessionCatalog.sessions.find(
+      (candidate) => candidate.id === input.handles.sessions[spec.key]
+    );
+    if (!head) throw new TypeError(`rich_fixture_baseline_session_missing:${spec.key}`);
+    return Object.freeze({
+      key: spec.key,
+      title: head.title,
+      lifecycle: head.lifecycle,
+      plannedDurationMinutes: head.plannedDurationMinutes,
+      version: head.version,
+      format: vocabularyKeyForId(input.handles.vocabulary, head.programTarget.format.id),
+      track: head.programTarget.track === null
+        ? null
+        : vocabularyKeyForId(input.handles.vocabulary, head.programTarget.track.id),
+      programSetVersion: head.programTarget.setVersion,
+      participants: head.roster.participants.length
+    });
+  });
+  const roster = await readReviewerRoster(input.context);
+  const rosterReviewers = roster.reviewers.map((reviewer) => Object.freeze({
+    reviewerId: reviewer.reviewerId,
+    status: reviewer.status,
+    accessSubjectKind: reviewer.accessSubject.kind,
+    displayName: reviewer.displayName ?? null,
+    reviews: reviewer.reviews.length
+  }));
+  const reviewSnapshot = requireSuccess(reviewSnapshotReadResultSchema.parse(await read(
+    input.context,
+    '/api/events/current/review/snapshot',
+    (value) => value
+  )), 'review_snapshot_read').data;
+  if (reviewSnapshot.viewer.kind !== 'organizer' || !reviewSnapshot.roundSetup) {
+    throw new TypeError('rich_fixture_baseline_organizer_viewer_missing');
+  }
+  const roundSetup = reviewSnapshot.roundSetup;
   return deepFreeze({
     schemaVersion: 1 as const,
     event: {
@@ -1098,11 +1635,32 @@ async function captureBaseline(input: {
       endDate: current.event.endDate,
       location: settings.location,
       venueNote: settings.venueNote,
+      dayStart: settings.dayStart,
+      dayEnd: settings.dayEnd,
+      slotMinutes: settings.slotMinutes,
       version: current.event.version
     },
     vocabulary: { setVersion: vocabulary.setVersion, items },
     forms: { catalogVersion: catalog.catalogVersion, items: forms },
     fieldRegistry: { version: fieldRegistry.version, fields: registryFields },
+    sessions: { catalogVersion: sessionCatalog.version, items: sessionItems },
+    reviewerRoster: { rosterVersion: roster.rosterVersion, reviewers: rosterReviewers },
+    review: {
+      organizerViewer: 'organizer' as const,
+      plans: reviewSnapshot.plans.length,
+      standings: Object.keys(reviewSnapshot.standings).length,
+      roundSetup: {
+        activeReviewers: roundSetup.activeReviewers,
+        invitedReviewers: roundSetup.invitedReviewers,
+        submissions: roundSetup.submissions,
+        expectedReviews: roundSetup.expectedReviews,
+        perReviewer: roundSetup.perReviewer.map((entry) => Object.freeze({
+          reviewerId: entry.reviewerId,
+          displayName: entry.displayName ?? null,
+          assigned: entry.assigned
+        }))
+      }
+    },
     durableCounts: {
       eventHeads: count(input.context.runtime, 'event_spine_heads'),
       vocabularyItems:
@@ -1113,6 +1671,17 @@ async function captureBaseline(input: {
       formVersions: count(input.context.runtime, 'intake_form_versions'),
       fieldRegistries: count(input.context.runtime, 'field_registry_aggregates'),
       submissions: count(input.context.runtime, 'intake_submission_heads'),
+      sessions: count(input.context.runtime, 'sessions'),
+      sessionCatalogs: count(input.context.runtime, 'session_catalogs'),
+      reviewerRosterSets: count(input.context.runtime, 'reviewer_roster_sets'),
+      reviewerRosterRecords: count(input.context.runtime, 'reviewer_roster_records'),
+      reviewerRosterScopes: count(input.context.runtime, 'reviewer_roster_scopes'),
+      reviewCatalogs: count(input.context.runtime, 'review_catalogs'),
+      reviewRounds: count(input.context.runtime, 'review_rounds'),
+      reviewRoundCriteria: count(input.context.runtime, 'review_round_criteria'),
+      reviewAssignments: count(input.context.runtime, 'review_assignments'),
+      deadlines: count(input.context.runtime, 'deadlines'),
+      deadlineCatalogs: count(input.context.runtime, 'deadline_catalogs'),
       changesets: count(input.context.runtime, 'changeset_heads'),
       committedChangesets: count(
         input.context.runtime,
@@ -1126,22 +1695,42 @@ async function captureBaseline(input: {
         count(input.context.runtime, 'event_create_draft_timeline')
         + count(input.context.runtime, 'event_settings_update_draft_timeline')
         + count(input.context.runtime, 'program_vocabulary_draft_timeline')
-        + count(input.context.runtime, 'intake_form_draft_timeline'),
+        + count(input.context.runtime, 'intake_form_draft_timeline')
+        + count(input.context.runtime, 'session_draft_timeline')
+        + count(input.context.runtime, 'workspace_team_draft_timeline')
+        + count(input.context.runtime, 'reviewer_roster_draft_timeline')
+        + count(input.context.runtime, 'review_draft_timeline')
+        + count(input.context.runtime, 'deadline_draft_timeline'),
       lifecycleTimelineEntries:
         count(input.context.runtime, 'event_creation_changeset_timeline')
         + count(input.context.runtime, 'event_settings_changeset_timeline')
         + count(input.context.runtime, 'changeset_lifecycle_timeline_projection')
-        + count(input.context.runtime, 'intake_form_changeset_timeline'),
+        + count(input.context.runtime, 'intake_form_changeset_timeline')
+        + count(input.context.runtime, 'session_changeset_timeline')
+        + count(input.context.runtime, 'workspace_team_changeset_timeline')
+        + count(input.context.runtime, 'reviewer_roster_changeset_timeline')
+        + count(input.context.runtime, 'review_changeset_timeline')
+        + count(input.context.runtime, 'deadline_changeset_timeline'),
       domainFacts:
         count(input.context.runtime, 'event_creation_changeset_domain_facts')
         + count(input.context.runtime, 'event_settings_changeset_domain_facts')
         + count(input.context.runtime, 'changeset_lifecycle_domain_facts')
-        + count(input.context.runtime, 'intake_form_changeset_domain_facts'),
+        + count(input.context.runtime, 'intake_form_changeset_domain_facts')
+        + count(input.context.runtime, 'session_changeset_domain_facts')
+        + count(input.context.runtime, 'workspace_team_changeset_domain_facts')
+        + count(input.context.runtime, 'reviewer_roster_changeset_domain_facts')
+        + count(input.context.runtime, 'review_changeset_domain_facts')
+        + count(input.context.runtime, 'deadline_changeset_domain_facts'),
       outboxPointers:
         count(input.context.runtime, 'event_creation_changeset_outbox_pointers')
         + count(input.context.runtime, 'event_settings_changeset_outbox_pointers')
         + count(input.context.runtime, 'changeset_lifecycle_outbox_pointers')
-        + count(input.context.runtime, 'intake_form_changeset_outbox_pointers'),
+        + count(input.context.runtime, 'intake_form_changeset_outbox_pointers')
+        + count(input.context.runtime, 'session_changeset_outbox_pointers')
+        + count(input.context.runtime, 'workspace_team_changeset_outbox_pointers')
+        + count(input.context.runtime, 'reviewer_roster_changeset_outbox_pointers')
+        + count(input.context.runtime, 'review_changeset_outbox_pointers')
+        + count(input.context.runtime, 'deadline_changeset_outbox_pointers'),
       commitLinks: count(input.context.runtime, 'changeset_commit_links')
     },
     extensionSlots: RICH_EPHEMERAL_LIVE_SCENARIO.extensionSlots
@@ -1157,6 +1746,10 @@ function assertExpectedBaseline(baseline: RichEphemeralLiveBaseline): void {
   const formStatuses = baseline.forms.items.reduce(
     (counts, form) => ({ ...counts, [form.status]: counts[form.status] + 1 }),
     { draft: 0, open: 0, closed: 0 }
+  );
+  const sessionLifecycles = baseline.sessions.items.reduce(
+    (counts, session) => ({ ...counts, [session.lifecycle]: counts[session.lifecycle] + 1 }),
+    { draft: 0, collecting: 0, programmed: 0 }
   );
   const actual = {
     eventHeads: baseline.durableCounts.eventHeads,
@@ -1174,6 +1767,26 @@ function assertExpectedBaseline(baseline: RichEphemeralLiveBaseline): void {
     openForms: formStatuses.open,
     closedForms: formStatuses.closed,
     submissions: baseline.durableCounts.submissions,
+    sessions: baseline.durableCounts.sessions,
+    sessionCatalogs: baseline.durableCounts.sessionCatalogs,
+    sessionCatalogVersion: baseline.sessions.catalogVersion,
+    draftSessions: sessionLifecycles.draft,
+    collectingSessions: sessionLifecycles.collecting,
+    programmedSessions: sessionLifecycles.programmed,
+    reviewerRosterSets: baseline.durableCounts.reviewerRosterSets,
+    reviewerRosterRecords: baseline.durableCounts.reviewerRosterRecords,
+    reviewerRosterScopes: baseline.durableCounts.reviewerRosterScopes,
+    rosterVersion: baseline.reviewerRoster.rosterVersion,
+    rosterReviewers: baseline.reviewerRoster.reviewers.length,
+    reviewCatalogs: baseline.durableCounts.reviewCatalogs,
+    reviewRounds: baseline.durableCounts.reviewRounds,
+    reviewRoundCriteria: baseline.durableCounts.reviewRoundCriteria,
+    reviewAssignments: baseline.durableCounts.reviewAssignments,
+    reviewPlans: baseline.review.plans,
+    activeReviewers: baseline.review.roundSetup.activeReviewers,
+    expectedReviews: baseline.review.roundSetup.expectedReviews,
+    deadlines: baseline.durableCounts.deadlines,
+    deadlineCatalogs: baseline.durableCounts.deadlineCatalogs,
     changesets: baseline.durableCounts.changesets,
     committedChangesets: baseline.durableCounts.committedChangesets,
     operationReceipts: baseline.durableCounts.operationReceipts
@@ -1194,6 +1807,26 @@ function assertExpectedBaseline(baseline: RichEphemeralLiveBaseline): void {
     openForms: expected.forms.open,
     closedForms: expected.forms.closed,
     submissions: expected.submissions,
+    sessions: expected.sessions.total,
+    sessionCatalogs: expected.sessions.catalogs,
+    sessionCatalogVersion: expected.sessions.catalogVersion,
+    draftSessions: expected.sessions.draft,
+    collectingSessions: expected.sessions.collecting,
+    programmedSessions: expected.sessions.programmed,
+    reviewerRosterSets: expected.reviewerRoster.sets,
+    reviewerRosterRecords: expected.reviewerRoster.records,
+    reviewerRosterScopes: expected.reviewerRoster.scopes,
+    rosterVersion: expected.reviewerRoster.rosterVersion,
+    rosterReviewers: expected.reviewerRoster.records,
+    reviewCatalogs: expected.review.catalogs,
+    reviewRounds: expected.review.rounds,
+    reviewRoundCriteria: expected.review.roundCriteria,
+    reviewAssignments: expected.review.assignments,
+    reviewPlans: expected.review.rounds,
+    activeReviewers: expected.reviewerRoster.records,
+    expectedReviews: expected.review.assignments,
+    deadlines: expected.deadlines.total,
+    deadlineCatalogs: expected.deadlines.catalogs,
     changesets: expected.changesets,
     committedChangesets: expected.changesets,
     operationReceipts: expected.operationReceipts
@@ -1210,8 +1843,9 @@ function assertExpectedBaseline(baseline: RichEphemeralLiveBaseline): void {
 
 /**
  * Creates a private temporary SQLite database and fills it only through the
- * same registered Event, Event Settings, Program Vocabulary, Form, and changeset operations
- * used by the live server. Every call owns a separate runtime and database.
+ * same registered Event, Event Settings, Program Vocabulary, Form, Session,
+ * Workspace Team, Reviewer Roster, Review, and changeset operations used by
+ * the live server. Every call owns a separate runtime and database.
  */
 export async function createRichEphemeralLiveFixture(input: {
   readonly config?: ServerConfig;
@@ -1221,11 +1855,12 @@ export async function createRichEphemeralLiveFixture(input: {
   try {
     const owner = await createOwnerSession(runtime, config);
     let correlationSequence = 0x100;
+    const nextCorrelationId = () => fixtureUuid(correlationSequence++);
     const context: SeedContext = Object.freeze({
       runtime,
       config,
       session: owner.session,
-      nextCorrelationId: () => fixtureUuid(correlationSequence++)
+      nextCorrelationId
     });
     const eventId = await createEvent(context);
     await updateEventSettings(context, eventId);
@@ -1246,7 +1881,32 @@ export async function createRichEphemeralLiveFixture(input: {
     await mutateVocabulary({ context, handles: vocabulary, key: 'workshop', action: 'retire' });
     await mutateVocabulary({ context, handles: vocabulary, key: 'agent_systems', action: 'retire' });
 
-    const handles = deepFreeze({ eventId, vocabulary, forms });
+    const sessions = await createSessions(context, vocabulary);
+
+    const reviewerPrincipal = await createReviewerPrincipal(
+      runtime,
+      config,
+      nextCorrelationId
+    );
+    const reviewerContext: SeedContext = Object.freeze({
+      runtime,
+      config,
+      session: reviewerPrincipal.session,
+      nextCorrelationId
+    });
+    // Order matters: the lane-only viewer_required branch is only reachable
+    // before the roster registration, so it is served and pinned first.
+    const preRegistrationSnapshot =
+      await capturePreRegistrationReviewSnapshot(reviewerContext);
+    const membershipId = await grantReviewerCapabilities(
+      context,
+      reviewerPrincipal.reviewerUserId
+    );
+    await registerReviewer(context, reviewerPrincipal.reviewerUserId, membershipId);
+    const openRoundAttempt = await attemptOpenReviewRound(context);
+    await assertReviewerViewerServed(reviewerContext);
+
+    const handles = deepFreeze({ eventId, vocabulary, forms, sessions });
     const baseline = await captureBaseline({ context, handles });
     assertExpectedBaseline(baseline);
     const baselineFingerprintSha256 = createHash('sha256')
@@ -1259,6 +1919,13 @@ export async function createRichEphemeralLiveFixture(input: {
       workspaceId: runtime.workspaceId,
       ownerUserId: owner.ownerUserId,
       ownerCookie: owner.session.cookie,
+      reviewer: Object.freeze({
+        userId: reviewerPrincipal.reviewerUserId,
+        cookie: reviewerPrincipal.session.cookie,
+        membershipId,
+        reviewerId: RICH_REVIEWER_ID
+      }),
+      reviewPins: deepFreeze({ preRegistrationSnapshot, openRoundAttempt }),
       handles,
       baseline,
       baselineFingerprintSha256,

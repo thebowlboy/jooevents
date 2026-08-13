@@ -15,6 +15,7 @@ import type {
   PublicApplicationDraftResumeDto,
   ServedPublicFormDto,
   SubmissionConsentEvidenceDto,
+  SubmissionDirectEntryEvidenceDto,
   SubmissionHeadDto,
   SubmissionParticipantEvidenceDto,
   SubmissionSubmitEvidenceDto,
@@ -31,8 +32,10 @@ import {
   parseFormCatalogState,
   parseFormDefinitionHead,
   parseFormMutationPlan,
+  parseApplicationDirectEntryPlan,
   parseFormVersion,
   parseSubmissionConsentEvidence,
+  parseSubmissionDirectEntryEvidence,
   parseSubmissionHead,
   parseSubmissionParticipantEvidence,
   parseSubmissionSubmitEvidence,
@@ -40,7 +43,9 @@ import {
   projectOrganizerFormCatalog,
   projectOrganizerFormSummary,
   projectServedPublicForm,
+  validateApplicationDirectEntryPlanAgainstForm,
   validateApplicationMutationPlanAgainstForm,
+  type ApplicationDirectEntryPlan,
   type ApplicationMutationPlan,
   type ApplicationAnswerPayloadReferenceVerifier,
   type ApplicationCollectionSource,
@@ -223,7 +228,7 @@ CREATE TABLE intake_submission_heads (
   submission_id TEXT NOT NULL CHECK(length(submission_id) = 36 AND submission_id = lower(submission_id)),
   form_id TEXT NOT NULL,
   form_version_id TEXT NOT NULL,
-  draft_id TEXT NOT NULL UNIQUE,
+  draft_id TEXT UNIQUE,
   submit_evidence_id TEXT NOT NULL UNIQUE,
   person_id TEXT NOT NULL CHECK(length(person_id) = 36),
   head_json TEXT NOT NULL CHECK(json_valid(head_json) AND json_type(head_json) = 'object'),
@@ -233,6 +238,10 @@ CREATE TABLE intake_submission_heads (
   submitted_at_ms INTEGER NOT NULL CHECK(submitted_at_ms BETWEEN 0 AND 8640000000000000),
   PRIMARY KEY (workspace_id, event_id, submission_id),
   UNIQUE (submission_id),
+  CHECK(
+    (draft_id IS NOT NULL AND json_extract(head_json, '$.source') = 'public_form')
+    OR (draft_id IS NULL AND json_extract(head_json, '$.source') = 'direct_entry')
+  ),
   FOREIGN KEY (workspace_id, event_id, form_id, form_version_id)
     REFERENCES intake_form_versions(workspace_id, event_id, form_id, form_version_id)
     ON UPDATE RESTRICT ON DELETE RESTRICT,
@@ -255,6 +264,24 @@ CREATE TABLE intake_submission_submit_evidence (
   FOREIGN KEY (workspace_id, event_id, submission_id)
     REFERENCES intake_submission_heads(workspace_id, event_id, submission_id)
     ON UPDATE RESTRICT ON DELETE RESTRICT
+) STRICT, WITHOUT ROWID;
+
+CREATE TABLE intake_submission_direct_entry_evidence (
+  workspace_id TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  submission_id TEXT NOT NULL,
+  evidence_id TEXT NOT NULL CHECK(length(evidence_id) = 36 AND evidence_id = lower(evidence_id)),
+  entered_by_user_id TEXT NOT NULL CHECK(length(entered_by_user_id) = 36),
+  evidence_json TEXT NOT NULL CHECK(json_valid(evidence_json) AND json_type(evidence_json) = 'object'),
+  evidence_digest_sha256 TEXT NOT NULL CHECK(
+    length(evidence_digest_sha256) = 64 AND evidence_digest_sha256 NOT GLOB '*[^0-9a-f]*'
+  ),
+  PRIMARY KEY (workspace_id, event_id, evidence_id),
+  UNIQUE (workspace_id, event_id, submission_id),
+  FOREIGN KEY (workspace_id, event_id, submission_id)
+    REFERENCES intake_submission_heads(workspace_id, event_id, submission_id)
+    ON UPDATE RESTRICT ON DELETE RESTRICT,
+  FOREIGN KEY (entered_by_user_id) REFERENCES users(id) ON UPDATE RESTRICT ON DELETE RESTRICT
 ) STRICT, WITHOUT ROWID;
 
 CREATE TABLE intake_submission_participant_evidence (
@@ -329,6 +356,10 @@ CREATE TRIGGER intake_submission_submit_evidence_no_update BEFORE UPDATE ON inta
 BEGIN SELECT RAISE(ABORT, 'intake submit evidence is immutable'); END;
 CREATE TRIGGER intake_submission_submit_evidence_no_delete BEFORE DELETE ON intake_submission_submit_evidence
 BEGIN SELECT RAISE(ABORT, 'intake submit evidence is immutable'); END;
+CREATE TRIGGER intake_submission_direct_entry_evidence_no_update BEFORE UPDATE ON intake_submission_direct_entry_evidence
+BEGIN SELECT RAISE(ABORT, 'intake direct entry evidence is immutable'); END;
+CREATE TRIGGER intake_submission_direct_entry_evidence_no_delete BEFORE DELETE ON intake_submission_direct_entry_evidence
+BEGIN SELECT RAISE(ABORT, 'intake direct entry evidence is immutable'); END;
 CREATE TRIGGER intake_submission_participant_evidence_no_update BEFORE UPDATE ON intake_submission_participant_evidence
 BEGIN SELECT RAISE(ABORT, 'intake participant evidence is immutable'); END;
 CREATE TRIGGER intake_submission_participant_evidence_no_delete BEFORE DELETE ON intake_submission_participant_evidence
@@ -366,6 +397,23 @@ export interface SQLiteIntakeSubmissionProjectionPort {
     readonly draftHead: ApplicationDraftHeadDto;
     readonly sourceRevision: ApplicationDraftRevisionDto;
   }): OrganizerSubmissionSummaryDto;
+  projectDirectEntrySummary(input: {
+    readonly head: SubmissionHeadDto;
+    readonly entryEvidence: SubmissionDirectEntryEvidenceDto;
+    readonly version: FormVersionDto;
+  }): OrganizerSubmissionSummaryDto;
+  projectDirectEntryDetail(input: {
+    readonly head: SubmissionHeadDto;
+    readonly entryEvidence: SubmissionDirectEntryEvidenceDto;
+    readonly version: FormVersionDto;
+    readonly participants: readonly SubmissionParticipantEvidenceDto[];
+  }): OrganizerSubmissionDetailDto;
+  resolveDirectEntryContact(input: {
+    readonly head: SubmissionHeadDto;
+    readonly entryEvidence: SubmissionDirectEntryEvidenceDto;
+    readonly participant: SubmissionParticipantEvidenceDto;
+    readonly version: FormVersionDto;
+  }): OrganizerSubmissionContactDto;
   projectDetail(input: {
     readonly head: SubmissionHeadDto;
     readonly submitEvidence: SubmissionSubmitEvidenceDto;
@@ -420,7 +468,7 @@ interface DraftRevisionRow extends JsonRow {
 }
 interface SubmissionHeadRow extends JsonRow {
   readonly workspace_id: string; readonly event_id: string; readonly submission_id: string;
-  readonly form_id: string; readonly form_version_id: string; readonly draft_id: string;
+  readonly form_id: string; readonly form_version_id: string; readonly draft_id: string | null;
   readonly submit_evidence_id: string; readonly person_id: string; readonly submitted_at_ms: number;
 }
 interface SubmissionEvidenceRow extends JsonRow {
@@ -1035,10 +1083,14 @@ export class SQLiteIntakeRepository {
   }
 
   applyApplicationMutation(
-    plan: ApplicationMutationPlan,
+    plan: ApplicationMutationPlan | ApplicationDirectEntryPlan,
     payloadReferences: ApplicationAnswerPayloadReferenceVerifier
   ): void {
     if (!this.sqlite.inTransaction) throw new SQLiteIntakeError('transaction_required');
+    if ((plan as { readonly action?: unknown }).action === 'direct_entry') {
+      this.applyDirectEntryMutation(plan as ApplicationDirectEntryPlan, payloadReferences);
+      return;
+    }
     plan = parseApplicationMutationPlan(plan);
     const expectedHead = plan.action === 'begin' ? plan.head : plan.beforeHead;
     const formHead = this.readFormHead(expectedHead.scope, expectedHead.formId);
@@ -1077,6 +1129,60 @@ export class SQLiteIntakeRepository {
       ? this.readDraft(plan.head.scope, plan.head.id)
       : this.readDraft(plan.afterHead.scope, plan.afterHead.id);
     if (!effective) throw new SQLiteIntakeError('data_corrupt');
+  }
+
+  private applyDirectEntryMutation(
+    planInput: ApplicationDirectEntryPlan,
+    payloadReferences: ApplicationAnswerPayloadReferenceVerifier
+  ): void {
+    let plan = parseApplicationDirectEntryPlan(planInput);
+    const formHead = this.readFormHead(plan.submission.scope, plan.submission.formId);
+    const formVersion = this.readFormVersion(plan.submission.scope, plan.submission.formVersionId);
+    if (!formHead || !formVersion) throw new SQLiteIntakeError('stale_form');
+    try {
+      plan = validateApplicationDirectEntryPlanAgainstForm({
+        plan,
+        formHead,
+        formVersion,
+        collection: this,
+        payloadReferences
+      });
+    } catch {
+      throw new SQLiteIntakeError('stale_form');
+    }
+    this.assertCurrentForm(plan.submission.scope, plan.submission.formId,
+      plan.submission.formVersionId, plan.formDefinitionVersion, plan.formVersionDigestSha256);
+    this.insertSubmission(plan);
+    const head = this.readSubmissionHead(plan.submission.scope, plan.submission.id);
+    const evidence = this.readDirectEntryEvidence(plan.submission.scope, plan.submission.id);
+    if (!head || !evidence
+        || canonicalJsonText(head) !== canonicalJsonText(plan.submission)
+        || canonicalJsonText(evidence) !== canonicalJsonText(plan.entryEvidence)) {
+      throw new SQLiteIntakeError('data_corrupt');
+    }
+  }
+
+  readDirectEntryEvidence(
+    scopeInput: SQLiteIntakeScopeInput,
+    submissionId: string
+  ): SubmissionDirectEntryEvidenceDto | undefined {
+    const currentScope = scope(scopeInput);
+    const row = this.sqlite.query<SubmissionEvidenceRow & {
+      readonly entered_by_user_id: string;
+    }, [string, string, string]>(`
+      SELECT workspace_id, event_id, submission_id, evidence_id, entered_by_user_id,
+             evidence_json AS value_json, evidence_digest_sha256 AS value_digest
+        FROM intake_submission_direct_entry_evidence
+       WHERE workspace_id = ? AND event_id = ? AND submission_id = ? LIMIT 2
+    `).get(currentScope.workspaceId, currentScope.eventId, submissionId);
+    const evidence = parseStored(row, parseSubmissionDirectEntryEvidence);
+    if (evidence && (!row || row.workspace_id !== currentScope.workspaceId
+        || row.event_id !== currentScope.eventId || row.submission_id !== submissionId
+        || evidence.id !== row.evidence_id || evidence.submissionId !== row.submission_id
+        || evidence.enteredByUserId !== row.entered_by_user_id)) {
+      throw new SQLiteIntakeError('data_corrupt');
+    }
+    return evidence;
   }
 
   listForms(scopeInput: SQLiteIntakeScopeInput): OrganizerFormCatalogDto {
@@ -1151,8 +1257,22 @@ export class SQLiteIntakeRepository {
         throw new SQLiteIntakeError('data_corrupt');
       }
       const version = this.readFormVersion(currentScope, head.formVersionId);
+      if (!version || !this.submissionProjection) throw new SQLiteIntakeError('data_corrupt');
+      if (head.source === 'direct_entry') {
+        const entryEvidence = this.readDirectEntryEvidence(currentScope, head.id);
+        if (!entryEvidence || row.draft_id !== null
+            || entryEvidence.id !== row.submit_evidence_id
+            || entryEvidence.submissionId !== row.submission_id
+            || entryEvidence.formVersionId !== row.form_version_id
+            || entryEvidence.submittedAt !== head.submittedAt) {
+          throw new SQLiteIntakeError('data_corrupt');
+        }
+        return this.submissionProjection.projectDirectEntrySummary({
+          head, entryEvidence, version
+        });
+      }
       const evidence = this.readSubmitEvidence(currentScope, head.id);
-      if (!version || !evidence || !this.submissionProjection
+      if (!evidence
           || evidence.id !== row.submit_evidence_id
           || evidence.submissionId !== row.submission_id
           || evidence.draftId !== row.draft_id
@@ -1180,6 +1300,7 @@ export class SQLiteIntakeRepository {
     const currentScope = scope(scopeInput);
     const head = this.readSubmissionHead(currentScope, submissionId);
     if (!head) return undefined;
+    if (head.source === 'direct_entry') return this.readDirectEntryDetail(currentScope, head);
     const evidence = this.readSubmitEvidence(currentScope, submissionId);
     const bindingRow = this.sqlite.query<{
       readonly draft_id: string; readonly form_id: string; readonly form_version_id: string;
@@ -1248,6 +1369,55 @@ export class SQLiteIntakeRepository {
     });
   }
 
+  private readDirectEntryDetail(
+    currentScope: Scope,
+    head: SubmissionHeadDto
+  ): OrganizerSubmissionDetailDto {
+    const entryEvidence = this.readDirectEntryEvidence(currentScope, head.id);
+    const participant = this.readParticipantEvidence(currentScope, head.id);
+    const consentCount = this.sqlite.query<{ readonly consent_count: number }, [string, string, string]>(`
+      SELECT count(*) AS consent_count FROM intake_submission_consent_evidence
+       WHERE workspace_id = ? AND event_id = ? AND submission_id = ?
+    `).get(currentScope.workspaceId, currentScope.eventId, head.id);
+    const version = this.readFormVersion(currentScope, head.formVersionId);
+    if (!entryEvidence || !participant || !version || !this.submissionProjection
+        || consentCount?.consent_count !== 0
+        || entryEvidence.id !== head.submitEvidenceId
+        || entryEvidence.submissionId !== head.id
+        || entryEvidence.formVersionId !== head.formVersionId
+        || entryEvidence.submittedAt !== head.submittedAt
+        || participant.submissionId !== head.id
+        || participant.personId !== head.primaryPersonId) {
+      throw new SQLiteIntakeError('data_corrupt');
+    }
+    return this.submissionProjection.projectDirectEntryDetail({
+      head, entryEvidence, version, participants: [participant]
+    });
+  }
+
+  private readParticipantEvidence(
+    currentScope: Scope,
+    submissionId: string
+  ): SubmissionParticipantEvidenceDto | undefined {
+    const row = this.sqlite.query<ParticipantEvidenceRow, [string, string, string]>(`
+      SELECT workspace_id, event_id, submission_id, evidence_id, person_id,
+             participant_identity_id, evidence_json AS value_json,
+             evidence_digest_sha256 AS value_digest
+        FROM intake_submission_participant_evidence
+       WHERE workspace_id = ? AND event_id = ? AND submission_id = ? LIMIT 2
+    `).get(currentScope.workspaceId, currentScope.eventId, submissionId);
+    const participant = parseStored(row, parseSubmissionParticipantEvidence);
+    if (participant && (!row || row.workspace_id !== currentScope.workspaceId
+        || row.event_id !== currentScope.eventId || row.submission_id !== submissionId
+        || participant.id !== row.evidence_id
+        || participant.submissionId !== row.submission_id
+        || participant.personId !== row.person_id
+        || participant.participantIdentityId !== row.participant_identity_id)) {
+      throw new SQLiteIntakeError('data_corrupt');
+    }
+    return participant;
+  }
+
   readSubmissionContact(
     scopeInput: SQLiteIntakeScopeInput,
     submissionId: string
@@ -1255,6 +1425,20 @@ export class SQLiteIntakeRepository {
     const currentScope = scope(scopeInput);
     const head = this.readSubmissionHead(currentScope, submissionId);
     if (!head) return undefined;
+    if (head.source === 'direct_entry') {
+      const entryEvidence = this.readDirectEntryEvidence(currentScope, submissionId);
+      const participant = this.readParticipantEvidence(currentScope, submissionId);
+      const version = this.readFormVersion(currentScope, head.formVersionId);
+      if (!entryEvidence || !participant || !version || !this.submissionProjection
+          || entryEvidence.id !== head.submitEvidenceId
+          || participant.submissionId !== head.id
+          || participant.personId !== head.primaryPersonId) {
+        throw new SQLiteIntakeError('data_corrupt');
+      }
+      return this.submissionProjection.resolveDirectEntryContact({
+        head, entryEvidence, participant, version
+      });
+    }
     const submitEvidence = this.readSubmitEvidence(currentScope, submissionId);
     const participantRow = this.sqlite.query<ParticipantEvidenceRow, [string, string, string]>(`
       SELECT workspace_id, event_id, submission_id, evidence_id, person_id,
@@ -1474,26 +1658,54 @@ export class SQLiteIntakeRepository {
         || digest(version) !== versionDigestSha256) throw new SQLiteIntakeError('stale_form');
   }
 
-  private insertSubmission(plan: Extract<ApplicationMutationPlan, { readonly action: 'submit' }>): void {
+  private insertSubmission(
+    plan: Extract<ApplicationMutationPlan, { readonly action: 'submit' }> | ApplicationDirectEntryPlan
+  ): void {
     const head = parseSubmissionHead(plan.submission);
-    const evidence = parseSubmissionSubmitEvidence(plan.submitEvidence);
+    const submitEvidence = plan.action === 'submit'
+      ? parseSubmissionSubmitEvidence(plan.submitEvidence)
+      : undefined;
+    const entryEvidence = plan.action === 'direct_entry'
+      ? parseSubmissionDirectEntryEvidence(plan.entryEvidence)
+      : undefined;
+    const evidence = submitEvidence ?? entryEvidence;
     const participant = parseSubmissionParticipantEvidence(plan.participant);
-    const consents = plan.consents.map(parseSubmissionConsentEvidence);
-    if (head.id !== evidence.submissionId || head.id !== participant.submissionId
+    const consents = plan.action === 'submit'
+      ? plan.consents.map(parseSubmissionConsentEvidence)
+      : [];
+    if (!evidence || head.id !== evidence.submissionId || head.id !== participant.submissionId
         || head.submitEvidenceId !== evidence.id || head.primaryPersonId !== participant.personId
-        || evidence.draftId !== plan.beforeHead.id) throw new SQLiteIntakeError('data_corrupt');
+        || (plan.action === 'submit'
+          ? head.source !== 'public_form' || submitEvidence?.draftId !== plan.beforeHead.id
+          : head.source !== 'direct_entry')) throw new SQLiteIntakeError('data_corrupt');
     try {
-      changedOnce(this.sqlite.query<never, [string, string, string, string, string, string, string, string, string, string, number]>(`
+      changedOnce(this.sqlite.query<never, [string, string, string, string, string, string | null, string, string, string, string, number]>(`
         INSERT INTO intake_submission_heads (
           workspace_id, event_id, submission_id, form_id, form_version_id, draft_id,
           submit_evidence_id, person_id, head_json, head_digest_sha256, submitted_at_ms
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         head.scope.workspaceId, head.scope.eventId, head.id, head.formId, head.formVersionId,
-        plan.beforeHead.id, head.submitEvidenceId, head.primaryPersonId,
+        plan.action === 'submit' ? plan.beforeHead.id : null,
+        head.submitEvidenceId, head.primaryPersonId,
         canonicalJsonText(head), digest(head), Date.parse(head.submittedAt)
       ), 'id_collision');
-      this.insertSubmissionEvidence('intake_submission_submit_evidence', head, evidence.id, evidence);
+      if (submitEvidence !== undefined) {
+        this.insertSubmissionEvidence(
+          'intake_submission_submit_evidence', head, submitEvidence.id, submitEvidence
+        );
+      }
+      if (entryEvidence !== undefined) {
+        changedOnce(this.sqlite.query<never, [string, string, string, string, string, string, string]>(`
+          INSERT INTO intake_submission_direct_entry_evidence (
+            workspace_id, event_id, submission_id, evidence_id, entered_by_user_id,
+            evidence_json, evidence_digest_sha256
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          head.scope.workspaceId, head.scope.eventId, head.id, entryEvidence.id,
+          entryEvidence.enteredByUserId, canonicalJsonText(entryEvidence), digest(entryEvidence)
+        ), 'id_collision');
+      }
       changedOnce(this.sqlite.query<never, [string, string, string, string, string, string, string, string]>(`
         INSERT INTO intake_submission_participant_evidence (
           workspace_id, event_id, submission_id, evidence_id, person_id,
@@ -1537,7 +1749,8 @@ export class SQLiteIntakeRepository {
     ), 'id_collision');
   }
 
-  private readSubmissionHead(currentScope: Scope, submissionId: string): SubmissionHeadDto | undefined {
+  readSubmissionHead(scopeInput: SQLiteIntakeScopeInput, submissionId: string): SubmissionHeadDto | undefined {
+    const currentScope = scope(scopeInput);
     const row = this.sqlite.query<SubmissionHeadRow, [string, string, string]>(`
       SELECT workspace_id, event_id, submission_id, form_id, form_version_id,
              draft_id, submit_evidence_id, person_id, submitted_at_ms,

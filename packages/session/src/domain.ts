@@ -5,9 +5,11 @@ import {
   sessionRestorePlanSchema,
   type SessionMutationPlanDto,
   type SessionMutationResult,
+  type SessionParticipantRefDto,
   type SessionPlanningInput,
   type SessionProgramTargetEvidenceDto,
-  type SessionRestorePlanDto
+  type SessionRestorePlanDto,
+  type SessionRosterParticipantInput
 } from '@jooevents/contracts';
 import { encodeCanonicalJson } from '@jooevents/kernel';
 import {
@@ -34,6 +36,7 @@ export type SessionPlanningErrorCode =
   | 'session_exists'
   | 'session_missing'
   | 'stale_session'
+  | 'session_placed'
   | 'format_missing'
   | 'format_retired'
   | 'track_missing'
@@ -77,7 +80,7 @@ export function planSessionMutation(input: {
     if (existing) throw new SessionPlanningError('session_exists');
     before = null;
     const target = currentTargetEvidence(input.vocabulary, planningInput.formatId, planningInput.trackId);
-    const rosterUnsigned = { version: 1, participants: [] };
+    const rosterUnsigned = { version: 1, participants: seededRosterParticipants(planningInput.participants) };
     const roster = { ...rosterUnsigned, digestSha256: sessionRosterDigest(rosterUnsigned) };
     const unsigned = {
       schemaVersion: 1 as const,
@@ -91,6 +94,39 @@ export function planSessionMutation(input: {
       version: 1,
       createdByUserId: planningInput.actorUserId,
       createdAt: planningInput.occurredAt,
+      updatedByUserId: planningInput.actorUserId,
+      updatedAt: planningInput.occurredAt
+    };
+    after = parseSessionHead({ ...unsigned, digestSha256: sessionHeadDigest(unsigned) });
+  } else if (planningInput.action === 'roster_append') {
+    if (!existing) throw new SessionPlanningError('session_missing');
+    if (existing.version !== planningInput.expectedSessionVersion
+        || existing.digestSha256 !== planningInput.expectedSessionDigestSha256) {
+      throw new SessionPlanningError('stale_session');
+    }
+    if (planningInput.graduateTo !== undefined) {
+      requireTransition(existing.lifecycle, planningInput.graduateTo);
+    }
+    before = existing;
+    const appended = appendedRosterParticipants(existing.roster.participants, planningInput.participants);
+    const rosterUnsigned = appended === undefined
+      ? { version: existing.roster.version, participants: existing.roster.participants }
+      : { version: existing.roster.version + 1, participants: appended };
+    const roster = { ...rosterUnsigned, digestSha256: sessionRosterDigest(rosterUnsigned) };
+    const target = planningInput.graduateTo === undefined
+      ? existing.programTarget
+      : currentTargetEvidence(
+          input.vocabulary,
+          existing.programTarget.format.id,
+          existing.programTarget.track?.id ?? null
+        );
+    const { digestSha256: _digest, ...unsignedBefore } = existing;
+    const unsigned = {
+      ...unsignedBefore,
+      lifecycle: planningInput.graduateTo ?? existing.lifecycle,
+      programTarget: target,
+      roster,
+      version: existing.version + 1,
       updatedByUserId: planningInput.actorUserId,
       updatedAt: planningInput.occurredAt
     };
@@ -120,6 +156,41 @@ export function planSessionMutation(input: {
     after = parseSessionHead({ ...unsigned, digestSha256: sessionHeadDigest(unsigned) });
   }
   return buildMutationPlan(planningInput, input.catalog, before, after);
+}
+
+/** First authoring occurrence per person wins; positions are assigned canonically. */
+function seededRosterParticipants(
+  participants: readonly SessionRosterParticipantInput[] | undefined
+): readonly SessionParticipantRefDto[] {
+  const seededPersonIds = new Set<string>();
+  const seeded: SessionParticipantRefDto[] = [];
+  for (const participant of participants ?? []) {
+    if (seededPersonIds.has(participant.personId)) continue;
+    seededPersonIds.add(participant.personId);
+    seeded.push({ ...participant, position: seeded.length });
+  }
+  return seeded;
+}
+
+/**
+ * Append-only merge keyed by person: existing entries are retained byte-for-byte
+ * and an incoming participant whose person is already on the roster is skipped.
+ * Returns undefined when nothing new would be appended.
+ */
+function appendedRosterParticipants(
+  current: readonly SessionParticipantRefDto[],
+  incoming: readonly SessionRosterParticipantInput[]
+): readonly SessionParticipantRefDto[] | undefined {
+  const rosterPersonIds = new Set(current.map((participant) => participant.personId));
+  let nextPosition = current.reduce((maximum, participant) => Math.max(maximum, participant.position + 1), 0);
+  const appended: SessionParticipantRefDto[] = [];
+  for (const participant of incoming) {
+    if (rosterPersonIds.has(participant.personId)) continue;
+    rosterPersonIds.add(participant.personId);
+    appended.push({ ...participant, position: nextPosition });
+    nextPosition += 1;
+  }
+  return appended.length === 0 ? undefined : [...current, ...appended];
 }
 
 export function validateSessionMutationPlan(input: {

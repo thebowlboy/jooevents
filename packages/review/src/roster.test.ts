@@ -209,6 +209,51 @@ describe('reviewer roster domain', () => {
       attribution: { userId: organizerId, occurredAt }
     })).toThrow('reviewer_not_eligible');
   });
+
+  test('refuses a second registration for the same access subject at plan and validate time', () => {
+    const subject = { kind: 'workspace_membership', id: membershipTwo, version: 3 } as const;
+    const original = record(reviewerTwo, subject, []);
+    const roster = rosterState([original]);
+    const fact = authorityFact({
+      rosterSubject: subject, currentSubject: subject,
+      state: 'active', version: 8, displayName: 'Active reviewer'
+    });
+    const port = new MemoryRosterPort(roster, authoritySet([fact], 5), targetSet());
+    const registerAgain = {
+      action: 'register' as const, scope, reviewerId: reviewerThree,
+      accessSubject: subject, reviews: [],
+      expectedRosterVersion: roster.version,
+      expectedRosterDigestSha256: roster.digestSha256
+    };
+    // The duplicate is refused typed at planning; without this guard the plan
+    // survives to commit and dies on the retained-records UNIQUE constraint —
+    // and a doubly-rostered subject would make the acting-reviewer resolution
+    // ambiguous.
+    expect(() => planReviewerRosterMutation(registerAgain, {
+      environment: { repository: port, sources: port },
+      attribution: { userId: organizerId, occurredAt }
+    })).toThrow('reviewer_exists');
+
+    // A stored plan drafted before the subject joined revalidates to the same
+    // refusal against the current roster.
+    const emptyRoster = createEmptyReviewerRoster(scope);
+    const emptyPort = new MemoryRosterPort(emptyRoster, authoritySet([fact], 5), targetSet());
+    const staleRegister = planReviewerRosterMutation({
+      ...registerAgain,
+      expectedRosterVersion: emptyRoster.version,
+      expectedRosterDigestSha256: emptyRoster.digestSha256
+    }, {
+      environment: { repository: emptyPort, sources: emptyPort },
+      attribution: { userId: organizerId, occurredAt }
+    });
+    const occupied = rosterState([original]);
+    expect(validateReviewerRosterMutationPlan(
+      { ...staleRegister, roster: { ...staleRegister.roster,
+        beforeVersion: occupied.version, beforeDigestSha256: occupied.digestSha256 } },
+      { repository: new MemoryRosterPort(occupied, authoritySet([fact], 5), targetSet()),
+        sources: port }
+    )).toBe('reviewer_exists');
+  });
 });
 
 class MemoryRosterPort implements ReviewerRosterChangesetReadPort,

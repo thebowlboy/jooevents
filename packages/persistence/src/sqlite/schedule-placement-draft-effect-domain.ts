@@ -38,7 +38,7 @@ import {
   SchedulePlacementPlanningError,
   SCHEDULE_PLACEMENT_CHANGESET_KIND,
   SCHEDULE_PLACEMENT_CHANGESET_VERSION,
-  type ProgrammedSessionIdentityPort
+  type PlaceableSessionIdentityPort
 } from '@jooevents/schedule';
 import {
   SCHEDULE_PLACEMENT_APPROVAL_POLICY,
@@ -261,7 +261,7 @@ export class SQLiteSchedulePlacementDraftEffectDomainAdapter implements SQLiteEf
   constructor(private readonly input: {
     readonly sqlite: Database;
     readonly workspaceId: WorkspaceId;
-    readonly sessions: ProgrammedSessionIdentityPort;
+    readonly sessions: PlaceableSessionIdentityPort;
     readonly vocabulary: SQLiteProgramVocabularyRepository;
     readonly eventRelationships: SQLiteOperatorEventRelationshipSource;
     readonly ids: SQLiteSchedulePlacementDraftEffectIds;
@@ -632,7 +632,7 @@ export class SQLiteSchedulePlacementDraftEffectDomainAdapter implements SQLiteEf
 export function createSQLiteSchedulePlacementDraftEffectDomainRegistration(input: {
   readonly sqlite: Database;
   readonly workspaceId: WorkspaceId;
-  readonly sessions: ProgrammedSessionIdentityPort;
+  readonly sessions: PlaceableSessionIdentityPort;
   readonly vocabulary: SQLiteProgramVocabularyRepository;
   readonly eventRelationships: SQLiteOperatorEventRelationshipSource;
   readonly ids: SQLiteSchedulePlacementDraftEffectIds;

@@ -79,18 +79,22 @@ export interface EventSettingsChangesetPlan {
   readonly mutation: EventSettingsUpdatePlan;
 }
 
+/**
+ * Version 2 payloads carry the nullable schedule-grid geometry triple
+ * (dayStart/dayEnd/slotMinutes) in every settings image and author input.
+ */
 const authorSchema = defineChangesetSchema({
-  key: 'event_settings.author', version: 1, schema: eventSettingsUpdateAuthorInputSchema
+  key: 'event_settings.author', version: 2, schema: eventSettingsUpdateAuthorInputSchema
 });
 const planSchema = defineChangesetSchema({
-  key: 'event_settings.plan', version: 1,
+  key: 'event_settings.plan', version: 2,
   schema: z.strictObject({ policy: eventOrdinaryPolicySchema, mutation: planMutationSchema })
 });
 const diffSchema = defineChangesetSchema({
-  key: 'event_settings.safe_diff', version: 1, schema: eventSettingsSafeDiffSchema
+  key: 'event_settings.safe_diff', version: 2, schema: eventSettingsSafeDiffSchema
 });
 const resultSchema = defineChangesetSchema({
-  key: 'event_settings.result', version: 1, schema: eventSettingsSchema
+  key: 'event_settings.result', version: 2, schema: eventSettingsSchema
 });
 const refusalCodes = [
   'wrong_scope',

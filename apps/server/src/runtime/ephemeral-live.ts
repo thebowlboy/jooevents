@@ -50,6 +50,13 @@ import {
   createDeadlineOperationModule
 } from '@jooevents/deadline-operations';
 import {
+  DECISION_DRAFT_ACCESS_POLICY,
+  DECISION_DRAFT_REQUEST_HASH_PROFILE,
+  DECISION_READ_ACCESS_POLICY,
+  createDecisionDraftOperationModule,
+  createDecisionOperationModule
+} from '@jooevents/decision-operations';
+import {
   createEventDependencyContributorRegistry,
   issueEventOrdinaryPolicy,
   type EventDependencyContributorRef
@@ -73,7 +80,8 @@ import {
   createFieldRegistryOrdinaryPolicy
 } from '@jooevents/field-registry';
 import {
-  issueFormOrdinaryPolicy
+  issueFormOrdinaryPolicy,
+  issueSubmissionDirectEntryChangesetPolicy
 } from '@jooevents/intake';
 import {
   INTAKE_EVENT_MANAGE_ACCESS_POLICY,
@@ -84,12 +92,32 @@ import {
   INTAKE_PUBLIC_OPEN_ACCESS_POLICY,
   INTAKE_SUBMISSION_CONTACT_READ_ACCESS_POLICY,
   INTAKE_SUBMISSION_READ_ACCESS_POLICY,
+  SUBMISSION_DIRECT_ENTRY_ACCESS_POLICY,
+  SUBMISSION_DIRECT_ENTRY_DRAFT_REQUEST_HASH_PROFILE,
   createIntakeFormDraftOperationModule,
   createIntakePublicFormReadOperationModule,
   createIntakeReadOperationModule,
+  createSubmissionDirectEntryDraftOperationModule,
   type IntakePublicFormScopeSource
 } from '@jooevents/intake-operations';
-import type { CurrentAuthorityResolver } from '@jooevents/identity-access';
+import {
+  evaluateAccess,
+  type CurrentAuthorityResolver
+} from '@jooevents/identity-access';
+import {
+  createReviewOperationModule,
+  REVIEW_EVALUATE_ACCESS_POLICY,
+  REVIEW_MANAGE_ACCESS_POLICY,
+  REVIEW_REQUEST_HASH_PROFILE,
+  REVIEW_SNAPSHOT_ACCESS_POLICY,
+  REVIEW_STEP_BACK_ACCESS_POLICY,
+  type ReviewViewerResolver
+} from '@jooevents/review-operations';
+import {
+  createReviewerRosterOperationModule,
+  REVIEWER_ROSTER_DRAFT_REQUEST_HASH_PROFILE,
+  REVIEWER_ROSTER_MANAGE_ACCESS_POLICY
+} from '@jooevents/review-operations/roster';
 import {
   createProgramReferenceContributorRegistry,
   issueProgramVocabularyOrdinaryPolicy
@@ -100,7 +128,7 @@ import {
   PROGRAM_VOCABULARY_READ_ACCESS_POLICY,
   createProgramVocabularyOperationModule
 } from '@jooevents/program-operations';
-import type { ProgrammedSessionIdentityPort } from '@jooevents/schedule';
+import type { PlaceableSessionIdentityPort } from '@jooevents/schedule';
 import {
   SCHEDULE_PLACEMENT_DRAFT_REQUEST_HASH_PROFILE,
   SCHEDULE_PLACEMENT_MANAGE_ACCESS_POLICY,
@@ -108,12 +136,24 @@ import {
   createSchedulePlacementOperationModule
 } from '@jooevents/schedule-operations';
 import {
+  createSchedulePlaceableSessionPort,
+  createSessionAwareReviewerScopeTargetSource
+} from '@jooevents/session';
+import {
+  SESSION_DRAFT_ACCESS_POLICY,
+  SESSION_DRAFT_REQUEST_HASH_PROFILE,
+  SESSION_READ_ACCESS_POLICY,
+  createSessionDraftOperationModule,
+  createSessionOperationModule
+} from '@jooevents/session-operations';
+import {
   SUBMISSION_TRIAGE_DRAFT_REQUEST_HASH_PROFILE,
   SUBMISSION_TRIAGE_MANAGE_ACCESS_POLICY,
   SUBMISSION_TRIAGE_MCP_READ_ACCESS_POLICY,
   SUBMISSION_TRIAGE_OPERATOR_READ_ACCESS_POLICY,
   createSubmissionTriageDraftOperationModule,
   createSubmissionTriageReadOperationModule,
+  createSubmissionTriageSubmitInitializer,
   issueSubmissionTriageChangesetPolicy
 } from '@jooevents/submission-triage';
 import {
@@ -132,6 +172,7 @@ import {
 import {
   bootstrapEmptyInstall,
   createFoundationEphemeralSQLiteRuntime,
+  createSQLiteAccessRepositories,
   createSQLiteEventSettingsChangesetEffectDomainRegistration,
   createSQLiteEventSettingsInitializer,
   createSQLiteEventSettingsUpdateDraftEffectDomainRegistration,
@@ -149,6 +190,19 @@ import {
 import {
   createSQLiteDeadlineDraftEffectDomainRegistration
 } from '@jooevents/persistence/deadline-draft-effect-domain';
+import {
+  SQLiteDecisionCandidateSourceAdapter,
+  SQLiteDecisionRepository,
+  SQLiteDecisionReviewBasisSourceAdapter,
+  createSQLiteDecisionEnvironmentSource,
+  createSQLiteIntakeParticipantPersonSource
+} from '@jooevents/persistence/decision';
+import {
+  createSQLiteDecisionChangesetEffectDomainRegistration
+} from '@jooevents/persistence/decision-changeset-effect-domain';
+import {
+  createSQLiteDecisionDraftEffectDomainRegistration
+} from '@jooevents/persistence/decision-draft-effect-domain';
 import {
   createSQLiteEventCreateDraftEffectDomainRegistration
 } from '@jooevents/persistence/event-create-draft-effect-domain';
@@ -177,6 +231,10 @@ import {
   createSQLiteChangesetLifecycleEffectDomainRouter
 } from '@jooevents/persistence/changeset-lifecycle-effect-domain-router';
 import { SQLiteIntakeClassifiedProjection } from '@jooevents/persistence/intake-classified-projection';
+import {
+  createSQLiteIntakeDirectEntryChangesetEffectDomainRegistration,
+  createSQLiteIntakeDirectEntryDraftEffectDomainRegistration
+} from '@jooevents/persistence/intake-direct-entry-effect-domain';
 import {
   createSQLiteIntakeFormChangesetEffectDomainRegistration
 } from '@jooevents/persistence/intake-form-changeset-effect-domain';
@@ -218,6 +276,36 @@ import {
   SCHEDULE_PLACEMENT_ROOM_CONTRIBUTOR,
   createSQLiteScheduleRoomReferenceAdapter
 } from '@jooevents/persistence/schedule-placement';
+import { SQLiteSessionRepository } from '@jooevents/persistence/session';
+import { SQLiteReviewRepository } from '@jooevents/persistence/review';
+import {
+  createSQLiteReviewDraftEffectDomainRegistration
+} from '@jooevents/persistence/review-draft-effect-domain';
+import {
+  createSQLiteReviewEvaluationDraftSaveEffectDomainRegistration
+} from '@jooevents/persistence/review-evaluation-draft-save-effect-domain';
+import {
+  createSQLiteReviewChangesetEffectDomainRegistration
+} from '@jooevents/persistence/review-changeset-effect-domain';
+import {
+  SQLiteReviewerAuthoritySource
+} from '@jooevents/persistence/reviewer-authority-source';
+import {
+  SQLiteReviewerScopeTargetSource
+} from '@jooevents/persistence/reviewer-scope-target-source';
+import { SQLiteReviewerRosterRepository } from '@jooevents/persistence/reviewer-roster';
+import {
+  createSQLiteReviewerRosterDraftEffectDomainRegistration
+} from '@jooevents/persistence/reviewer-roster-draft-effect-domain';
+import {
+  createSQLiteReviewerRosterChangesetEffectDomainRegistration
+} from '@jooevents/persistence/reviewer-roster-changeset-effect-domain';
+import {
+  createSQLiteSessionChangesetEffectDomainRegistration
+} from '@jooevents/persistence/session-changeset-effect-domain';
+import {
+  createSQLiteSessionDraftEffectDomainRegistration
+} from '@jooevents/persistence/session-draft-effect-domain';
 import {
   SQLiteEffectUnitOfWorkPort,
   createSQLiteEffectDomainAdapterRegistry
@@ -317,6 +405,25 @@ const schedulePlacementProfiles = Object.freeze({
   })
 });
 
+const sessionProfiles = Object.freeze({
+  authorityPrincipal: Object.freeze({
+    key: 'key-profile.session.operator-principal',
+    version: parseContractVersion(1)
+  }),
+  scopePartition: Object.freeze({
+    key: 'key-profile.session.current-event-scope',
+    version: parseContractVersion(1)
+  }),
+  requestCanonicalization: Object.freeze({
+    key: 'key-profile.session.request-canonicalization',
+    version: parseContractVersion(1)
+  }),
+  idempotencyCredential: Object.freeze({
+    key: 'key-profile.session.idempotency-credential',
+    version: parseContractVersion(1)
+  })
+});
+
 const changesetProfiles = Object.freeze({
   authorityPrincipal: Object.freeze({
     key: 'key-profile.changeset.operator-principal',
@@ -351,6 +458,25 @@ const deadlineProfiles = Object.freeze({
   }),
   idempotencyCredential: Object.freeze({
     key: 'key-profile.deadline.idempotency-credential',
+    version: parseContractVersion(1)
+  })
+});
+
+const decisionProfiles = Object.freeze({
+  authorityPrincipal: Object.freeze({
+    key: 'key-profile.decision.operator-principal',
+    version: parseContractVersion(1)
+  }),
+  scopePartition: Object.freeze({
+    key: 'key-profile.decision.current-event-scope',
+    version: parseContractVersion(1)
+  }),
+  requestCanonicalization: Object.freeze({
+    key: 'key-profile.decision.request-canonicalization',
+    version: parseContractVersion(1)
+  }),
+  idempotencyCredential: Object.freeze({
+    key: 'key-profile.decision.idempotency-credential',
     version: parseContractVersion(1)
   })
 });
@@ -408,6 +534,44 @@ const submissionTriageProfiles = Object.freeze({
   }),
   idempotencyCredential: Object.freeze({
     key: 'key-profile.submission-triage.idempotency-credential',
+    version: parseContractVersion(1)
+  })
+});
+
+const reviewProfiles = Object.freeze({
+  authorityPrincipal: Object.freeze({
+    key: 'key-profile.review.operator-principal',
+    version: parseContractVersion(1)
+  }),
+  scopePartition: Object.freeze({
+    key: 'key-profile.review.current-event-scope',
+    version: parseContractVersion(1)
+  }),
+  requestCanonicalization: Object.freeze({
+    key: 'key-profile.review.request-canonicalization',
+    version: parseContractVersion(1)
+  }),
+  idempotencyCredential: Object.freeze({
+    key: 'key-profile.review.idempotency-credential',
+    version: parseContractVersion(1)
+  })
+});
+
+const reviewerRosterProfiles = Object.freeze({
+  authorityPrincipal: Object.freeze({
+    key: 'key-profile.reviewer-roster.operator-principal',
+    version: parseContractVersion(1)
+  }),
+  scopePartition: Object.freeze({
+    key: 'key-profile.reviewer-roster.current-event-scope',
+    version: parseContractVersion(1)
+  }),
+  requestCanonicalization: Object.freeze({
+    key: 'key-profile.reviewer-roster.request-canonicalization',
+    version: parseContractVersion(1)
+  }),
+  idempotencyCredential: Object.freeze({
+    key: 'key-profile.reviewer-roster.idempotency-credential',
     version: parseContractVersion(1)
   })
 });
@@ -597,11 +761,6 @@ export async function createEphemeralLiveRuntime(input: {
       now: () => parseInstant(new Date().toISOString())
     });
     const eventRelationships = createSQLiteEventSpineOperatorEventRelationshipSource();
-    const programmedSessions: ProgrammedSessionIdentityPort = Object.freeze({
-      readProgrammedSession() {
-        return undefined;
-      }
-    });
     const deadlineDraftDomain = createSQLiteDeadlineDraftEffectDomainRegistration({
       sqlite: database.sqlite,
       workspaceId,
@@ -661,6 +820,9 @@ export async function createEphemeralLiveRuntime(input: {
         throw new TypeError('program_vocabulary_read_repository_cannot_mutate');
       }
     );
+    const sessionRepository = new SQLiteSessionRepository(database.sqlite, vocabularyRead);
+    const placeableSessions: PlaceableSessionIdentityPort =
+      createSchedulePlaceableSessionPort(sessionRepository);
     const programVocabularyPolicy = issueProgramVocabularyOrdinaryPolicy({
       key: 'program_vocabulary.bounded',
       version: 1,
@@ -786,6 +948,10 @@ export async function createEphemeralLiveRuntime(input: {
           : {})
       }
     });
+    const intakeClassifiedProjection = new SQLiteIntakeClassifiedProjection({
+      store: intakeClassifiedStore,
+      profiles: intakeClassifiedProfiles
+    });
     const intakeRepository = new SQLiteIntakeRepository(
       database.sqlite,
       Object.freeze({
@@ -811,10 +977,7 @@ export async function createEphemeralLiveRuntime(input: {
             : undefined;
         }
       }),
-      new SQLiteIntakeClassifiedProjection({
-        store: intakeClassifiedStore,
-        profiles: intakeClassifiedProfiles
-      })
+      intakeClassifiedProjection
     );
     const fieldRegistryRepository = new SQLiteFieldRegistryRepository(
       database.sqlite,
@@ -824,10 +987,54 @@ export async function createEphemeralLiveRuntime(input: {
     const fieldRegistryOptionSource = new SQLiteProgramVocabularyFieldOptionSource(
       database.sqlite
     );
+    const submissionTriageSource = new SQLiteIntakeSubmissionTriageSourceAdapter(
+      intakeRepository
+    );
     const submissionTriageRepository = new SQLiteSubmissionTriageRepository(
       database.sqlite,
-      new SQLiteIntakeSubmissionTriageSourceAdapter(intakeRepository)
+      submissionTriageSource
     );
+    const reviewerAuthoritySource = new SQLiteReviewerAuthoritySource(
+      database.sqlite,
+      () => clock.now()
+    );
+    const reviewerScopeTargetSource = createSessionAwareReviewerScopeTargetSource(
+      new SQLiteReviewerScopeTargetSource(vocabularyRead),
+      sessionRepository
+    );
+    const reviewerRosterSources = Object.freeze({
+      readReviewerAuthority:
+        reviewerAuthoritySource.readReviewerAuthority.bind(reviewerAuthoritySource),
+      readReviewerScopeTargets:
+        reviewerScopeTargetSource.readReviewerScopeTargets.bind(reviewerScopeTargetSource)
+    });
+    const reviewerRosterRepository = new SQLiteReviewerRosterRepository(
+      database.sqlite,
+      reviewerRosterSources
+    );
+    const reviewRepository = new SQLiteReviewRepository(database.sqlite, {
+      triage: submissionTriageRepository,
+      roster: reviewerRosterSources
+    });
+    // Decision candidates and review basis are projections over the same
+    // effective sources the mounted triage and Review surfaces serve; nothing
+    // here reads a second copy of any effective state.
+    const decisionEnvironment = createSQLiteDecisionEnvironmentSource({
+      candidates: new SQLiteDecisionCandidateSourceAdapter(
+        submissionTriageSource,
+        createSQLiteIntakeParticipantPersonSource(database.sqlite)
+      ),
+      reviewBasis: new SQLiteDecisionReviewBasisSourceAdapter(Object.freeze({
+        repository: reviewRepository,
+        sources: reviewRepository,
+        candidateDisplay: reviewRepository
+      }))
+    });
+    const decisionRepository = new SQLiteDecisionRepository({
+      sqlite: database.sqlite,
+      sessions: sessionRepository,
+      environment: decisionEnvironment
+    });
     const fieldRegistryPolicy = createFieldRegistryOrdinaryPolicy({
       key: 'field_registry.bounded',
       version: 1,
@@ -844,6 +1051,11 @@ export async function createEphemeralLiveRuntime(input: {
       key: 'submission.triage.bounded',
       version: 1,
       approval: Object.freeze({ ordinary: 'none', discardRecoverable: 'none' })
+    });
+    const submissionDirectEntryPolicy = issueSubmissionDirectEntryChangesetPolicy({
+      key: 'submission.direct-entry.bounded',
+      version: 1,
+      approval: Object.freeze({ create: 'none' })
     });
     const workspaceTeamPolicy = createWorkspaceTeamChangesetPolicy({
       key: 'workspace_team.bounded',
@@ -919,6 +1131,32 @@ export async function createEphemeralLiveRuntime(input: {
           newPointerId: () => crypto.randomUUID()
         })
       });
+    const intakeDirectEntryChangesets =
+      createSQLiteIntakeDirectEntryChangesetEffectDomainRegistration({
+        sqlite: database.sqlite,
+        workspaceId,
+        policy: submissionDirectEntryPolicy,
+        repository: intakeRepository,
+        projection: intakeClassifiedProjection,
+        submissionTriage: createSubmissionTriageSubmitInitializer({
+          store: submissionTriageRepository,
+          ids: Object.freeze({ newArrivalId: () => crypto.randomUUID() })
+        }),
+        // No mounted surface holds durable references to a submission yet, so
+        // the compensation census reads an empty contributor set.
+        references: Object.freeze([]),
+        eventRelationships,
+        ids: Object.freeze({
+          newChangesetId: () => crypto.randomUUID(),
+          newRevisionId: () => crypto.randomUUID(),
+          newApprovalId: () => crypto.randomUUID(),
+          newCorrectionAttemptId: () => crypto.randomUUID(),
+          newPreparationHandle: () => crypto.randomUUID(),
+          newTimelineId: () => crypto.randomUUID(),
+          newFactId: () => crypto.randomUUID(),
+          newPointerId: () => crypto.randomUUID()
+        })
+      });
     const workspaceTeamChangesets =
       createSQLiteWorkspaceTeamChangesetEffectDomainRegistration({
         sqlite: database.sqlite,
@@ -956,7 +1194,7 @@ export async function createEphemeralLiveRuntime(input: {
       createSQLiteSchedulePlacementChangesetEffectDomainRegistration({
         sqlite: database.sqlite,
         workspaceId,
-        sessions: programmedSessions,
+        sessions: placeableSessions,
         vocabulary: vocabularyRead,
         eventRelationships,
         ids: Object.freeze({
@@ -974,7 +1212,7 @@ export async function createEphemeralLiveRuntime(input: {
       createSQLiteSchedulePlacementDraftEffectDomainRegistration({
         sqlite: database.sqlite,
         workspaceId,
-        sessions: programmedSessions,
+        sessions: placeableSessions,
         vocabulary: vocabularyRead,
         eventRelationships,
         ids: Object.freeze({
@@ -985,6 +1223,85 @@ export async function createEphemeralLiveRuntime(input: {
           newTimelineId: () => crypto.randomUUID()
         })
       });
+    const sessionDraftDomain = createSQLiteSessionDraftEffectDomainRegistration({
+      sqlite: database.sqlite,
+      workspaceId,
+      vocabulary: vocabularyRead,
+      eventRelationships,
+      ids: Object.freeze({
+        newChangesetId: () => crypto.randomUUID(),
+        newRevisionId: () => crypto.randomUUID(),
+        newSessionId: () => crypto.randomUUID(),
+        newPreparationHandle: () => crypto.randomUUID(),
+        newTimelineId: () => crypto.randomUUID()
+      })
+    });
+    const sessionChangesets = createSQLiteSessionChangesetEffectDomainRegistration({
+      sqlite: database.sqlite,
+      workspaceId,
+      vocabulary: vocabularyRead,
+      eventRelationships,
+      ids: Object.freeze({
+        newChangesetId: () => crypto.randomUUID(),
+        newRevisionId: () => crypto.randomUUID(),
+        newApprovalId: () => crypto.randomUUID(),
+        newCorrectionAttemptId: () => crypto.randomUUID(),
+        newPreparationHandle: () => crypto.randomUUID(),
+        newTimelineId: () => crypto.randomUUID(),
+        newFactId: () => crypto.randomUUID(),
+        newPointerId: () => crypto.randomUUID()
+      })
+    });
+    const reviewChangesets = createSQLiteReviewChangesetEffectDomainRegistration({
+      sqlite: database.sqlite,
+      workspaceId,
+      repository: reviewRepository,
+      eventRelationships,
+      ids: Object.freeze({
+        newChangesetId: () => crypto.randomUUID(),
+        newRevisionId: () => crypto.randomUUID(),
+        newApprovalId: () => crypto.randomUUID(),
+        newCorrectionAttemptId: () => crypto.randomUUID(),
+        newPreparationHandle: () => crypto.randomUUID(),
+        newTimelineId: () => crypto.randomUUID(),
+        newFactId: () => crypto.randomUUID(),
+        newPointerId: () => crypto.randomUUID()
+      })
+    });
+    const reviewerRosterChangesets =
+      createSQLiteReviewerRosterChangesetEffectDomainRegistration({
+        sqlite: database.sqlite,
+        workspaceId,
+        sources: reviewerRosterSources,
+        eventRelationships,
+        ids: Object.freeze({
+          newChangesetId: () => crypto.randomUUID(),
+          newRevisionId: () => crypto.randomUUID(),
+          newApprovalId: () => crypto.randomUUID(),
+          newCorrectionAttemptId: () => crypto.randomUUID(),
+          newPreparationHandle: () => crypto.randomUUID(),
+          newTimelineId: () => crypto.randomUUID(),
+          newFactId: () => crypto.randomUUID(),
+          newPointerId: () => crypto.randomUUID()
+        })
+      });
+    const decisionChangesets = createSQLiteDecisionChangesetEffectDomainRegistration({
+      sqlite: database.sqlite,
+      workspaceId,
+      vocabulary: vocabularyRead,
+      environment: decisionEnvironment,
+      eventRelationships,
+      ids: Object.freeze({
+        newChangesetId: () => crypto.randomUUID(),
+        newRevisionId: () => crypto.randomUUID(),
+        newApprovalId: () => crypto.randomUUID(),
+        newCorrectionAttemptId: () => crypto.randomUUID(),
+        newPreparationHandle: () => crypto.randomUUID(),
+        newTimelineId: () => crypto.randomUUID(),
+        newFactId: () => crypto.randomUUID(),
+        newPointerId: () => crypto.randomUUID()
+      })
+    });
     const eventCreationChangesets =
       createSQLiteEventCreationChangesetEffectDomainRegistration({
         sqlite: database.sqlite,
@@ -1011,10 +1328,37 @@ export async function createEphemeralLiveRuntime(input: {
             })
           });
           const settings = createSQLiteEventSettingsInitializer({ sqlite: database.sqlite });
+          const spineHeadRead = database.sqlite.query<
+            { readonly name: string; readonly created_at_ms: number },
+            [string, string]
+          >(`
+            SELECT name, created_at_ms FROM event_spine_heads
+             WHERE workspace_id = ? AND id = ?
+          `);
+          const identityEventInsert = database.sqlite.query<
+            never,
+            [string, string, string, number, number]
+          >(`
+            INSERT INTO events (id, workspace_id, name, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+          `);
           return Object.freeze({
             initializeCreatedEvent(scope: Parameters<
               typeof fieldRegistry.initializeCreatedEvent
             >[0]) {
+              // Project the committed Event into the identity-access `events`
+              // table inside the same transaction so event-scoped access
+              // evidence (event-scoped role assignments and overrides, and the
+              // reviewer authority source) resolves for the created Event.
+              const head = spineHeadRead.get(scope.workspaceId, scope.eventId);
+              if (!head) throw new TypeError('event_identity_projection_head_missing');
+              identityEventInsert.run(
+                scope.eventId,
+                scope.workspaceId,
+                head.name,
+                head.created_at_ms,
+                head.created_at_ms
+              );
               fieldRegistry.initializeCreatedEvent(scope);
               return settings.initializeCreatedEventSettings(scope);
             }
@@ -1065,6 +1409,12 @@ export async function createEphemeralLiveRuntime(input: {
         subjectRelationships: submissionTriageChangesets.subjectRelationships
       }),
       Object.freeze({
+        ownerId: intakeDirectEntryChangesets.ownerId,
+        adapter: intakeDirectEntryChangesets.adapter,
+        ownerResolution: intakeDirectEntryChangesets.ownerResolution,
+        subjectRelationships: intakeDirectEntryChangesets.subjectRelationships
+      }),
+      Object.freeze({
         ownerId: 'workspace_team',
         adapter: workspaceTeamChangesets.adapter,
         ownerResolution: workspaceTeamChangesets.ownerResolution,
@@ -1075,6 +1425,30 @@ export async function createEphemeralLiveRuntime(input: {
         adapter: schedulePlacementChangesets.adapter,
         ownerResolution: schedulePlacementChangesets.ownerResolution,
         subjectRelationships: schedulePlacementChangesets.subjectRelationships
+      }),
+      Object.freeze({
+        ownerId: sessionChangesets.ownerId,
+        adapter: sessionChangesets.adapter,
+        ownerResolution: sessionChangesets.ownerResolution,
+        subjectRelationships: sessionChangesets.subjectRelationships
+      }),
+      Object.freeze({
+        ownerId: reviewChangesets.ownerId,
+        adapter: reviewChangesets.adapter,
+        ownerResolution: reviewChangesets.ownerResolution,
+        subjectRelationships: reviewChangesets.subjectRelationships
+      }),
+      Object.freeze({
+        ownerId: reviewerRosterChangesets.ownerId,
+        adapter: reviewerRosterChangesets.adapter,
+        ownerResolution: reviewerRosterChangesets.ownerResolution,
+        subjectRelationships: reviewerRosterChangesets.subjectRelationships
+      }),
+      Object.freeze({
+        ownerId: decisionChangesets.ownerId,
+        adapter: decisionChangesets.adapter,
+        ownerResolution: decisionChangesets.ownerResolution,
+        subjectRelationships: decisionChangesets.subjectRelationships
       })
     ]);
     const authority = createSQLiteOperatorAuthorityComposition({
@@ -1132,6 +1506,14 @@ export async function createEphemeralLiveRuntime(input: {
           permissionId: 'schedule.manage' as const
         }),
         Object.freeze({
+          policy: SESSION_READ_ACCESS_POLICY,
+          permissionId: 'event.read' as const
+        }),
+        Object.freeze({
+          policy: SESSION_DRAFT_ACCESS_POLICY,
+          permissionId: 'schedule.manage' as const
+        }),
+        Object.freeze({
           policy: INTAKE_EVENT_READ_ACCESS_POLICY,
           permissionId: 'event.read' as const
         }),
@@ -1153,6 +1535,44 @@ export async function createEphemeralLiveRuntime(input: {
         }),
         Object.freeze({
           policy: SUBMISSION_TRIAGE_MANAGE_ACCESS_POLICY,
+          permissionId: 'event.manage' as const
+        }),
+        Object.freeze({
+          policy: SUBMISSION_DIRECT_ENTRY_ACCESS_POLICY,
+          permissionId: 'event.manage' as const
+        }),
+        Object.freeze({
+          policy: REVIEW_SNAPSHOT_ACCESS_POLICY,
+          permission: Object.freeze({
+            kind: 'all_of' as const,
+            permissionIds: ['event.read', 'submission.read'] as const
+          })
+        }),
+        Object.freeze({
+          policy: REVIEW_MANAGE_ACCESS_POLICY,
+          permissionId: 'event.manage' as const
+        }),
+        Object.freeze({
+          policy: REVIEW_STEP_BACK_ACCESS_POLICY,
+          permissionId: 'submission.score' as const
+        }),
+        Object.freeze({
+          policy: REVIEW_EVALUATE_ACCESS_POLICY,
+          permission: Object.freeze({
+            kind: 'all_of' as const,
+            permissionIds: ['submission.comment', 'submission.score'] as const
+          })
+        }),
+        Object.freeze({
+          policy: REVIEWER_ROSTER_MANAGE_ACCESS_POLICY,
+          permissionId: 'event.manage' as const
+        }),
+        Object.freeze({
+          policy: DECISION_READ_ACCESS_POLICY,
+          permissionId: 'event.manage' as const
+        }),
+        Object.freeze({
+          policy: DECISION_DRAFT_ACCESS_POLICY,
           permissionId: 'event.manage' as const
         }),
         Object.freeze({
@@ -1214,7 +1634,31 @@ export async function createEphemeralLiveRuntime(input: {
                 permissionId: 'schedule.manage' as const
               }),
               Object.freeze({
+                id: 'session',
+                permissionId: 'schedule.manage' as const
+              }),
+              Object.freeze({
                 id: submissionTriageChangesets.ownerId,
+                permissionId: 'event.manage' as const
+              }),
+              Object.freeze({
+                id: intakeDirectEntryChangesets.ownerId,
+                permissionId: 'event.manage' as const
+              }),
+              Object.freeze({
+                id: reviewChangesets.ownerId,
+                anyOfPermissionIds: Object.freeze([
+                  'event.manage',
+                  'submission.score',
+                  'submission.comment'
+                ] as const)
+              }),
+              Object.freeze({
+                id: reviewerRosterChangesets.ownerId,
+                permissionId: 'event.manage' as const
+              }),
+              Object.freeze({
+                id: decisionChangesets.ownerId,
                 permissionId: 'event.manage' as const
               }),
               Object.freeze({
@@ -1630,6 +2074,42 @@ export async function createEphemeralLiveRuntime(input: {
         keyBytes: randomHmacKey()
       })
     });
+    const sessionOperations = createSessionOperationModule({
+      workspaceId,
+      readPolicy: SESSION_READ_ACCESS_POLICY,
+      currentAuthority: authority.resolver,
+      currentEvent,
+      clock,
+      ids: Object.freeze({
+        newInvocationId: () => parseInvocationId(crypto.randomUUID())
+      }),
+      authorityPrincipalKeyProfile: sessionProfiles.authorityPrincipal,
+      scopePartitionProfile: sessionProfiles.scopePartition,
+      requestCanonicalizationProfile: sessionProfiles.requestCanonicalization,
+      sessions: sessionRepository
+    });
+    const sessionDraftOperations = createSessionDraftOperationModule({
+      workspaceId,
+      draftPolicy: SESSION_DRAFT_ACCESS_POLICY,
+      currentAuthority: authority.resolver,
+      currentEvent,
+      clock,
+      ids: Object.freeze({
+        newInvocationId: () => parseInvocationId(crypto.randomUUID())
+      }),
+      authorityPrincipalKeyProfile: sessionProfiles.authorityPrincipal,
+      scopePartitionProfile: sessionProfiles.scopePartition,
+      requestCanonicalizationProfile: sessionProfiles.requestCanonicalization,
+      requestHashSealer: createHmacRequestHashSealer({
+        profile: SESSION_DRAFT_REQUEST_HASH_PROFILE,
+        keyBytes: randomHmacKey()
+      }),
+      idempotencyCredentialProfile: sessionProfiles.idempotencyCredential,
+      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
+        profile: sessionProfiles.idempotencyCredential,
+        keyBytes: randomHmacKey()
+      })
+    });
     const fieldRegistryOperations = createFieldRegistryOperationModule({
       workspaceId,
       policies: Object.freeze({
@@ -1777,6 +2257,26 @@ export async function createEphemeralLiveRuntime(input: {
         })
       })
     });
+    const submissionDirectEntryDraftOperations =
+      createSubmissionDirectEntryDraftOperationModule({
+        workspaceId,
+        policy: SUBMISSION_DIRECT_ENTRY_ACCESS_POLICY,
+        currentAuthority: authority.resolver,
+        currentEvent,
+        clock,
+        ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+        crypto: Object.freeze({
+          authorityPrincipalKeyProfile: intakeProfiles.authorityPrincipal,
+          scopePartitionProfile: intakeProfiles.scopePartition,
+          requestCanonicalizationProfile: intakeProfiles.requestCanonicalization,
+          requestHashSealer: createHmacRequestHashSealer({
+            profile: SUBMISSION_DIRECT_ENTRY_DRAFT_REQUEST_HASH_PROFILE,
+            keyBytes: randomHmacKey()
+          }),
+          idempotencyCredentialProfile: intakeProfiles.idempotencyCredential,
+          idempotencyCredentialSealer: intakeIdempotencyCredentialSealer
+        })
+      });
     const workspaceTeamOperations = createWorkspaceTeamOperationModule({
       workspaceId,
       policies: Object.freeze({
@@ -1806,6 +2306,155 @@ export async function createEphemeralLiveRuntime(input: {
       idempotencyCredentialProfile: workspaceTeamProfiles.idempotencyCredential,
       idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
         profile: workspaceTeamProfiles.idempotencyCredential,
+        keyBytes: randomHmacKey()
+      })
+    });
+    const reviewViewerAccess = createSQLiteAccessRepositories(database.sqlite);
+    /**
+     * Resolves the Review projection viewer from durable admission and grant
+     * evidence. A roster match always wins over organizer evidence so a
+     * rostered reviewer keeps the blind-round reviewer view even when extra
+     * grants would authorize the whole-population organizer view; organizer
+     * resolves only on real `event.manage` evidence at the current event
+     * scope, never from the snapshot lane's read permissions alone.
+     */
+    const reviewViewer: ReviewViewerResolver = Object.freeze({
+      async resolveViewer({ scope, actor }: Parameters<
+        ReviewViewerResolver['resolveViewer']
+      >[0]) {
+        if (
+          actor.kind !== 'workspace_user'
+          || scope.workspaceId !== workspaceId
+          || scope.eventId === undefined
+        ) {
+          return Object.freeze({ kind: 'unavailable' as const });
+        }
+        const membership = await reviewViewerAccess.memberships.find(
+          workspaceId,
+          actor.userId
+        );
+        if (!membership || membership.status !== 'active') {
+          return Object.freeze({ kind: 'unavailable' as const });
+        }
+        const reviewerId = reviewRepository.resolveActingReviewer(
+          Object.freeze({ workspaceId: scope.workspaceId, eventId: scope.eventId }),
+          membership.id
+        );
+        if (reviewerId !== undefined) {
+          return Object.freeze({
+            kind: 'viewer' as const,
+            viewer: Object.freeze({ kind: 'reviewer' as const, reviewerId })
+          });
+        }
+        const [roles, assignments, overrides] = await Promise.all([
+          reviewViewerAccess.authorization.listRoles(workspaceId),
+          reviewViewerAccess.authorization.listAssignments(workspaceId, actor.userId),
+          reviewViewerAccess.authorization.listOverrides(workspaceId, actor.userId)
+        ]);
+        const organizer = evaluateAccess({
+          userId: actor.userId,
+          permissionId: 'event.manage',
+          requestedScope: Object.freeze({
+            kind: 'event' as const,
+            workspaceId,
+            eventId: scope.eventId
+          }),
+          membership,
+          roles,
+          assignments,
+          overrides,
+          now: clock.now()
+        });
+        return organizer.allowed
+          ? Object.freeze({
+              kind: 'viewer' as const,
+              viewer: Object.freeze({ kind: 'organizer' as const })
+            })
+          : Object.freeze({ kind: 'unavailable' as const });
+      }
+    });
+    const reviewOperations = createReviewOperationModule({
+      workspaceId,
+      policies: Object.freeze({
+        snapshot: REVIEW_SNAPSHOT_ACCESS_POLICY,
+        manage: REVIEW_MANAGE_ACCESS_POLICY,
+        stepBack: REVIEW_STEP_BACK_ACCESS_POLICY,
+        evaluate: REVIEW_EVALUATE_ACCESS_POLICY
+      }),
+      currentAuthority: authority.resolver,
+      currentEvent,
+      viewer: reviewViewer,
+      repository: reviewRepository,
+      sources: reviewRepository,
+      candidateDisplay: reviewRepository,
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      authorityPrincipalKeyProfile: reviewProfiles.authorityPrincipal,
+      scopePartitionProfile: reviewProfiles.scopePartition,
+      requestCanonicalizationProfile: reviewProfiles.requestCanonicalization,
+      requestHashSealer: createHmacRequestHashSealer({
+        profile: REVIEW_REQUEST_HASH_PROFILE,
+        keyBytes: randomHmacKey()
+      }),
+      idempotencyCredentialProfile: reviewProfiles.idempotencyCredential,
+      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
+        profile: reviewProfiles.idempotencyCredential,
+        keyBytes: randomHmacKey()
+      })
+    });
+    const reviewerRosterOperations = createReviewerRosterOperationModule({
+      workspaceId,
+      policy: REVIEWER_ROSTER_MANAGE_ACCESS_POLICY,
+      currentAuthority: authority.resolver,
+      currentEvent,
+      rosterRead: Object.freeze({
+        repository: reviewerRosterRepository,
+        authority: reviewerAuthoritySource
+      }),
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      authorityPrincipalKeyProfile: reviewerRosterProfiles.authorityPrincipal,
+      scopePartitionProfile: reviewerRosterProfiles.scopePartition,
+      requestCanonicalizationProfile: reviewerRosterProfiles.requestCanonicalization,
+      requestHashSealer: createHmacRequestHashSealer({
+        profile: REVIEWER_ROSTER_DRAFT_REQUEST_HASH_PROFILE,
+        keyBytes: randomHmacKey()
+      }),
+      idempotencyCredentialProfile: reviewerRosterProfiles.idempotencyCredential,
+      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
+        profile: reviewerRosterProfiles.idempotencyCredential,
+        keyBytes: randomHmacKey()
+      })
+    });
+    const decisionOperations = createDecisionOperationModule({
+      workspaceId,
+      readPolicy: DECISION_READ_ACCESS_POLICY,
+      currentAuthority: authority.resolver,
+      currentEvent,
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      authorityPrincipalKeyProfile: decisionProfiles.authorityPrincipal,
+      scopePartitionProfile: decisionProfiles.scopePartition,
+      requestCanonicalizationProfile: decisionProfiles.requestCanonicalization,
+      decisions: decisionRepository
+    });
+    const decisionDraftOperations = createDecisionDraftOperationModule({
+      workspaceId,
+      draftPolicy: DECISION_DRAFT_ACCESS_POLICY,
+      currentAuthority: authority.resolver,
+      currentEvent,
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      authorityPrincipalKeyProfile: decisionProfiles.authorityPrincipal,
+      scopePartitionProfile: decisionProfiles.scopePartition,
+      requestCanonicalizationProfile: decisionProfiles.requestCanonicalization,
+      requestHashSealer: createHmacRequestHashSealer({
+        profile: DECISION_DRAFT_REQUEST_HASH_PROFILE,
+        keyBytes: randomHmacKey()
+      }),
+      idempotencyCredentialProfile: decisionProfiles.idempotencyCredential,
+      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
+        profile: decisionProfiles.idempotencyCredential,
         keyBytes: randomHmacKey()
       })
     });
@@ -1894,6 +2543,28 @@ export async function createEphemeralLiveRuntime(input: {
           newTimelineId: () => crypto.randomUUID()
         })
       });
+    const intakeDirectEntryDraftDomain =
+      createSQLiteIntakeDirectEntryDraftEffectDomainRegistration({
+        sqlite: database.sqlite,
+        workspaceId,
+        policy: submissionDirectEntryPolicy,
+        repository: intakeRepository,
+        classifiedStore: intakeClassifiedStore,
+        classifiedProfiles: intakeClassifiedProfiles,
+        eventRelationships,
+        ids: Object.freeze({
+          newChangesetId: () => crypto.randomUUID(),
+          newRevisionId: () => crypto.randomUUID(),
+          newPreparationHandle: () => crypto.randomUUID(),
+          newTimelineId: () => crypto.randomUUID(),
+          newPayloadRefId: () => crypto.randomUUID(),
+          newSubmissionId: () => crypto.randomUUID(),
+          newEntryEvidenceId: () => crypto.randomUUID(),
+          newPersonId: () => crypto.randomUUID(),
+          newParticipantIdentityId: () => crypto.randomUUID(),
+          newParticipantEvidenceId: () => crypto.randomUUID()
+        })
+      });
     const workspaceTeamDraftDomain = Object.freeze({
       capability: WORKSPACE_TEAM_DRAFT_HANDLER_CAPABILITY,
       adapter: new SQLiteWorkspaceTeamDraftEffectDomainAdapter({
@@ -1916,6 +2587,60 @@ export async function createEphemeralLiveRuntime(input: {
         })
       })
     });
+    const reviewDraftDomain = createSQLiteReviewDraftEffectDomainRegistration({
+      sqlite: database.sqlite,
+      workspaceId,
+      repository: reviewRepository,
+      eventRelationships,
+      ids: Object.freeze({
+        newChangesetId: () => crypto.randomUUID(),
+        newRevisionId: () => crypto.randomUUID(),
+        newPreparationHandle: () => crypto.randomUUID(),
+        newTimelineId: () => crypto.randomUUID(),
+        newRoundId: () => crypto.randomUUID(),
+        newDeadlineId: () => crypto.randomUUID(),
+        newCriterionId: () => crypto.randomUUID(),
+        newAssignmentId: () => crypto.randomUUID(),
+        newReviewRevisionId: () => crypto.randomUUID()
+      })
+    });
+    const reviewEvaluationDraftSaveDomain =
+      createSQLiteReviewEvaluationDraftSaveEffectDomainRegistration({
+        sqlite: database.sqlite,
+        workspaceId,
+        repository: reviewRepository,
+        eventRelationships,
+        ids: Object.freeze({
+          newPreparationHandle: () => crypto.randomUUID()
+        })
+      });
+    const reviewerRosterDraftDomain =
+      createSQLiteReviewerRosterDraftEffectDomainRegistration({
+        sqlite: database.sqlite,
+        workspaceId,
+        sources: reviewerRosterSources,
+        eventRelationships,
+        ids: Object.freeze({
+          newChangesetId: () => crypto.randomUUID(),
+          newRevisionId: () => crypto.randomUUID(),
+          newPreparationHandle: () => crypto.randomUUID(),
+          newTimelineId: () => crypto.randomUUID()
+        })
+      });
+    const decisionDraftDomain = createSQLiteDecisionDraftEffectDomainRegistration({
+      sqlite: database.sqlite,
+      workspaceId,
+      vocabulary: vocabularyRead,
+      environment: decisionEnvironment,
+      eventRelationships,
+      ids: Object.freeze({
+        newChangesetId: () => crypto.randomUUID(),
+        newRevisionId: () => crypto.randomUUID(),
+        newSessionId: () => crypto.randomUUID(),
+        newPreparationHandle: () => crypto.randomUUID(),
+        newTimelineId: () => crypto.randomUUID()
+      })
+    });
     const organizerCommunicationAuthoringDomains =
       createSQLiteOrganizerCommunicationAuthoringEffectDomainRegistrations({
         sqlite: database.sqlite,
@@ -1932,10 +2657,16 @@ export async function createEphemeralLiveRuntime(input: {
       deadlineDraftDomain,
       programVocabularyDomain,
       schedulePlacementDraftDomain,
+      sessionDraftDomain,
       intakeFormDraftDomain,
       fieldRegistryDraftDomain,
       submissionTriageDraftDomain,
+      intakeDirectEntryDraftDomain,
       workspaceTeamDraftDomain,
+      reviewDraftDomain,
+      reviewEvaluationDraftSaveDomain,
+      reviewerRosterDraftDomain,
+      decisionDraftDomain,
       ...organizerCommunicationAuthoringDomains,
       changesetLifecycle
     ]);
@@ -1954,12 +2685,19 @@ export async function createEphemeralLiveRuntime(input: {
       deadlineOperations,
       programVocabularyOperations,
       schedulePlacementOperations,
+      sessionOperations,
+      sessionDraftOperations,
       fieldRegistryOperations,
       intakeReadOperations,
       intakeFormDraftOperations,
       submissionTriageReadOperations,
       submissionTriageDraftOperations,
+      submissionDirectEntryDraftOperations,
       workspaceTeamOperations,
+      reviewOperations,
+      reviewerRosterOperations,
+      decisionOperations,
+      decisionDraftOperations,
       organizerCommunicationAuthoringOperations,
       organizerCommunicationAudiencePreviewOperations,
       communicationProviderReadOperations

@@ -20,6 +20,14 @@ import {
   type ChangesetOperationDefinition,
   type CompensationDerivation
 } from '@jooevents/changesets';
+import {
+  reviewDueDeadlineAggregateRefs,
+  reviewDueDeadlineGuardRefs,
+  reviewDueDeadlinePin,
+  reviewDueDeadlinePlanningPort,
+  reviewDueDeadlineTransactionPort,
+  reviewDueDeadlineValidationPort
+} from '@jooevents/deadline';
 import { z } from 'zod';
 import {
   applyReviewMutationPlan,
@@ -106,20 +114,25 @@ export function createReviewChangesetBundle(): ReviewChangesetBundle {
       diff: diffSchema.reference,
       result: resultSchema.reference
     },
-    readPorts: [reviewChangesetReadPort],
-    validationPorts: [reviewChangesetValidationPort],
-    transactionPorts: [reviewChangesetTransactionPort],
+    readPorts: [reviewChangesetReadPort, reviewDueDeadlinePlanningPort],
+    validationPorts: [reviewChangesetValidationPort, reviewDueDeadlineValidationPort],
+    transactionPorts: [reviewChangesetTransactionPort, reviewDueDeadlineTransactionPort],
     allowedAggregateKinds: [
-      'review_catalog', 'review_round', 'review_assignment', 'review_draft', 'review_head'
+      'review_catalog', 'review_round', 'review_assignment', 'review_draft', 'review_head',
+      'deadline', 'event'
     ],
+    // Opening a round carries no `review_deadline` guard: its `review_due`
+    // Deadline is created inside the same commit, so a per-deadline guard could
+    // never match current state and would always false-conflict. The Deadline
+    // collaboration's own `deadline_catalog` guard is the concurrency fence.
     allowedGuardKinds: [
-      'review_catalog', 'review_candidates', 'review_reviewers', 'review_deadline',
-      'review_head_absence'
+      'review_catalog', 'review_candidates', 'review_reviewers',
+      'review_head_absence', 'deadline_catalog'
     ],
     allowedRisks: ['normal'],
     allowedConsequences: [
       'review_round_opened', 'review_round_discarded', 'review_assignment_stepped_back',
-      'review_committed', 'review_amended'
+      'review_committed', 'review_amended', 'deadline_changed'
     ],
     allowedOutcomes: [{
       class: 'stale_revision',
@@ -132,38 +145,65 @@ export function createReviewChangesetBundle(): ReviewChangesetBundle {
       { kind: 'review_round_discarded', version: 1 },
       { kind: 'review_assignment_stepped_back', version: 1 },
       { kind: 'review_committed', version: 1 },
-      { kind: 'review_amended', version: 1 }
+      { kind: 'review_amended', version: 1 },
+      { kind: 'deadline_changed', version: 1 }
     ],
     allowedEffects: [],
     plan(input, snapshot) {
       const read = snapshot.getPort(reviewChangesetReadPort);
-      const plan = planReviewMutation(input, { repository: read, sources: read });
+      const plan = planReviewMutation(input, {
+        repository: read,
+        sources: read,
+        deadlines: snapshot.getPort(reviewDueDeadlinePlanningPort)
+      });
       return {
         plan,
         aggregateRefs: aggregateRefs(plan),
         guardRefs: guardRefs(plan),
         riskTier: 'normal',
-        consequences: [consequenceFor(plan.action)]
+        consequences: consequencesFor(plan.action)
       };
     },
     projectDiff(plan) {
       return {
         diff: projectReviewSafeDiff(plan),
-        representedConsequences: [consequenceFor(plan.action)]
+        representedConsequences: consequencesFor(plan.action)
       };
     },
     validateWithin(plan, validation) {
       const read = validation.getPort(reviewChangesetValidationPort);
+      if (plan.action === 'open_round') {
+        const deadlineValidation = validation.getPort(reviewDueDeadlineValidationPort)
+          .validateReviewDueDeadline(plan.deadlineContribution);
+        if (deadlineValidation.kind === 'refused') {
+          return { kind: 'outcome', outcome: refusal('deadline_changed', plan) };
+        }
+      }
       const code = validateReviewMutationPlan(plan, { repository: read, sources: read });
       return code
         ? { kind: 'outcome', outcome: refusal(code, plan) }
         : { kind: 'ready', validated: plan };
     },
     applyWithin(plan, transaction) {
+      // The review_due Deadline contribution applies first; the review round
+      // then persists the pin the applied Deadline actually produced.
+      const deadlineApplied = plan.action !== 'open_round' ? null : (() => {
+        const applied = transaction.getPort(reviewDueDeadlineTransactionPort)
+          .applyReviewDueDeadline(plan.deadlineContribution);
+        if (canonicalJsonSha256(applied.pin)
+            !== canonicalJsonSha256(reviewDueDeadlinePin(plan.deadlineContribution))) {
+          throw new TypeError('review_due_deadline_apply_pin_changed');
+        }
+        return applied;
+      })();
       const repository = transaction.getPort(reviewChangesetTransactionPort);
       const result = applyReviewMutationPlan({ plan, transaction: repository, sources: repository });
       const fact = reviewMutationFact(plan);
-      return { result, facts: [fact], effects: [] };
+      return {
+        result,
+        facts: [fact, ...(deadlineApplied?.facts ?? [])],
+        effects: [...(deadlineApplied?.effects ?? [])]
+      };
     },
     deriveCompensation(plan): CompensationDerivation<ReviewMutationPlanningInput> {
       if (plan.action === 'commit_review' || plan.action === 'amend_review') {
@@ -183,7 +223,10 @@ export function createReviewChangesetBundle(): ReviewChangesetBundle {
 
 function aggregateRefs(plan: ReviewMutationPlanDto): readonly { id: string; version: number }[] {
   if (plan.action === 'open_round') {
-    return [{ id: `review_catalog:${plan.input.scope.eventId}`, version: plan.catalog.beforeVersion }];
+    return [
+      { id: `review_catalog:${plan.input.scope.eventId}`, version: plan.catalog.beforeVersion },
+      ...reviewDueDeadlineAggregateRefs(plan.deadlineContribution)
+    ];
   }
   if (plan.action === 'discard_empty_round') {
     return [
@@ -222,7 +265,7 @@ function guardRefs(plan: ReviewMutationPlanDto): readonly {
       },
       { id: plan.candidateGuard.id, version: plan.candidateGuard.version, digest: plan.candidateGuard.digestSha256 },
       { id: plan.reviewerGuard.id, version: plan.reviewerGuard.version, digest: plan.reviewerGuard.digestSha256 },
-      { id: plan.deadlineGuard.id, version: plan.deadlineGuard.version, digest: plan.deadlineGuard.digestSha256 }
+      ...reviewDueDeadlineGuardRefs(plan.deadlineContribution)
     ];
   }
   if (plan.action === 'discard_empty_round') {
@@ -246,11 +289,11 @@ export function absentReviewHeadDigest(scope: ReviewScopeDto, assignmentId: stri
   return canonicalJsonSha256({ scope, assignmentId, state: 'absent' });
 }
 
-function consequenceFor(action: ReviewMutationPlanDto['action']): string {
-  if (action === 'open_round') return 'review_round_opened';
-  if (action === 'discard_empty_round') return 'review_round_discarded';
-  if (action === 'step_back') return 'review_assignment_stepped_back';
-  return action === 'commit_review' ? 'review_committed' : 'review_amended';
+function consequencesFor(action: ReviewMutationPlanDto['action']): readonly string[] {
+  if (action === 'open_round') return ['review_round_opened', 'deadline_changed'];
+  if (action === 'discard_empty_round') return ['review_round_discarded'];
+  if (action === 'step_back') return ['review_assignment_stepped_back'];
+  return action === 'commit_review' ? ['review_committed'] : ['review_amended'];
 }
 
 function refusal(code: ReviewPlanningErrorCode, plan: ReviewMutationPlanDto) {

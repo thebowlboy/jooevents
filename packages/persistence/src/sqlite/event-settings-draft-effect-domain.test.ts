@@ -65,7 +65,10 @@ const updateInput = Object.freeze({
   startDate: '2027-04-16',
   endDate: '2027-04-19',
   location: 'Suntec City',
-  venueNote: 'Use level 3.'
+  venueNote: 'Use level 3.',
+  dayStart: '08:30',
+  dayEnd: '17:30',
+  slotMinutes: 30
 });
 
 function uuid(suffix: number): string {

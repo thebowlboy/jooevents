@@ -62,27 +62,59 @@ export const DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG: WorkspaceOverviewAreaCatal
       status: 'partial',
       availableCapabilities: [
         'submission.contact.read',
+        'submission.direct_entry.create.draft',
         'submission.list',
         'submission.read',
         'submission.triage'
       ],
       unavailableCapabilities: ['submission.decision', 'submission.review']
     },
-    { area: 'review', status: 'unavailable', reason: 'not_implemented' },
-    { area: 'decisions', status: 'unavailable', reason: 'not_implemented' },
+    {
+      area: 'review',
+      status: 'partial',
+      availableCapabilities: [
+        'review.assignment.step-back.draft',
+        'review.evaluation.change.draft',
+        'review.evaluation.draft.save',
+        'review.round.change.draft',
+        'review.round.setup.read',
+        'review.snapshot.read'
+      ],
+      unavailableCapabilities: ['review.comparison.read', 'submission.decision.commit']
+    },
+    {
+      area: 'decisions',
+      status: 'partial',
+      availableCapabilities: [
+        'decision.decide.draft',
+        'decision.state.read'
+      ],
+      unavailableCapabilities: ['decision.notification.send']
+    },
     { area: 'speakers', status: 'unavailable', reason: 'not_implemented' },
-    { area: 'reviewers', status: 'unavailable', reason: 'not_implemented' },
+    {
+      area: 'reviewers',
+      status: 'partial',
+      availableCapabilities: [
+        'reviewer_roster.change.draft',
+        'reviewer_roster.snapshot.read'
+      ],
+      unavailableCapabilities: ['reviewer_roster.delivery.activate']
+    },
     { area: 'tasks', status: 'unavailable', reason: 'not_implemented' },
     {
       area: 'schedule',
       status: 'partial',
       availableCapabilities: [
         'schedule.placement.draft',
-        'schedule.placement.snapshot.read'
-      ],
-      unavailableCapabilities: [
+        'schedule.placement.snapshot.read',
         'schedule.session.manage',
         'schedule.session.read'
+      ],
+      unavailableCapabilities: [
+        'schedule.break.manage',
+        'schedule.placement.unplace',
+        'schedule.publish'
       ]
     },
     {

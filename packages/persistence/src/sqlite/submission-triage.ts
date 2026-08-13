@@ -536,8 +536,13 @@ implements SubmissionTriageSourcePort {
     currentScope: SubmissionTriageScope,
     summary: ReturnType<SQLiteIntakeRepository['listSubmissions']>[number]
   ): SubmissionTriageSourceRowDto {
+    const head = this.intake.readSubmissionHead(currentScope, summary.id);
     const detail = this.intake.readSubmissionDetail(currentScope, summary.id);
-    if (!detail
+    if (!head || !detail
+        || head.id !== summary.id
+        || head.formId !== summary.formId
+        || head.formVersionId !== summary.formVersionId
+        || head.submittedAt !== summary.submittedAt
         || summary.id !== detail.submissionId
         || summary.formId !== detail.formId
         || summary.formVersionId !== detail.formVersionId
@@ -568,7 +573,7 @@ implements SubmissionTriageSourcePort {
     return submissionTriageSourceRowSchema.parse({
       schemaVersion: 1,
       scope: currentScope,
-      source: 'public_form',
+      source: head.source,
       summary,
       detail,
       abstract: abstractAnswer?.value ?? null,
