@@ -20,6 +20,11 @@ installation, upgrade, operator, integration, and API documentation will be publ
 with the capabilities they describe. Security reports are welcome now — see
 [SECURITY.md](SECURITY.md).
 
+The current browser-only sample can be deployed as a public or Cloudflare Access-gated
+demo without configuring a database, login provider, or email service. See
+[Deploy the sample demo to Cloudflare](docs/operator/cloudflare-demo.md). This is a
+product tour, not a production installation.
+
 ## License
 
 Except where noted otherwise, JooEvents source code, public documentation, and
