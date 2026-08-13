@@ -73,8 +73,8 @@
 
 	/**
 	 * An alert lands on the rows its sentence names. The item carries the scoped
-	 * address when one exists — "12 accepted submissions not yet notified" opens
-	 * those twelve, not the whole decisions table — and the area root is the
+	 * address when one exists — "3 decisions not yet notified" opens those
+	 * three, not the whole decisions table — and the area root is the
 	 * fallback for facts whose scope is the area itself.
 	 */
 	function destination(item: { area: string; href?: string }): string {
@@ -111,8 +111,11 @@
 
 	/**
 	 * A lane lands where its facts already land: the exact address the sidebar
-	 * badge re-aims to for the same area. One fact, one door — a blocked
-	 * schedule opens the conflicts panel here exactly as it does in the nav.
+	 * badge aims to for the same area (one shared map, so one fact never gains
+	 * two landings). Scoped landings survive only for filters; the schedule
+	 * lane lands at the area root — its head-row count is the door to the
+	 * conflicts panel, and the attention row above already carries the scoped
+	 * address for the conflicts fact itself.
 	 */
 	function laneDoor(stage: OverviewPipelineStage, counts: OverviewPageSummary['navCounts']) {
 		const item = navItemByKey[stageArea[stage.key]];

@@ -25,6 +25,8 @@
 
 	const deviceTimezone =
 		typeof Intl === 'undefined' ? 'UTC' : Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+	const today = new Date();
+	const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
 	let name = $state('');
 	let startDate = $state('');
@@ -54,7 +56,9 @@
 		idempotencyKey = '';
 		if (name.trim()) nameError = '';
 		dateError =
-			startDate && endDate && endDate < startDate
+			startDate && startDate < todayIso
+				? 'The start date cannot be in the past.'
+				: startDate && endDate && endDate < startDate
 				? 'The end date cannot fall before the start date.'
 				: '';
 	}
@@ -62,6 +66,7 @@
 	const ready = $derived(
 		name.trim().length > 0 &&
 			startDate !== '' &&
+			startDate >= todayIso &&
 			endDate !== '' &&
 			endDate >= startDate &&
 			timezone.trim().length > 0
@@ -70,7 +75,11 @@
 	async function create(event?: SubmitEvent) {
 		event?.preventDefault();
 		nameError = name.trim() ? '' : 'Give the event a name.';
-		dateError = !startDate || !endDate ? 'Choose both event dates.' : dateError;
+		dateError = !startDate || !endDate
+			? 'Choose both event dates.'
+			: startDate < todayIso
+				? 'The start date cannot be in the past.'
+				: dateError;
 		if (nameError || dateError || !ready || creating) return;
 		creating = true;
 		idempotencyKey ||= crypto.randomUUID();
@@ -120,6 +129,8 @@
 						{id}
 						{describedBy}
 						label="start date"
+						min={todayIso}
+						defaultFocus="today"
 						disabled={creating}
 						bind:value={startDate}
 						onchange={edited} />

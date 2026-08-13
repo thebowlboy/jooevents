@@ -178,7 +178,7 @@
 		aria-label={isNarrow && navOpen ? 'Workspace navigation' : 'Live workspace navigation'}>
 		<div class="live-nav__brand-row">
 			<a href="/app" class="live-nav__brand">
-				<img src={wordmarkUrl} alt="JooEvents" width="120" height="22" />
+				<img src={wordmarkUrl} alt="JooEvents" width="120" height="21" />
 			</a>
 			<button
 				type="button"

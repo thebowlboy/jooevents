@@ -9,6 +9,7 @@ import { expect, test } from '@playwright/test';
  */
 
 const CRUNCH = 'crunch';
+const FLIGHT = 'flight';
 
 function program(page: Page) {
 	return page.getByRole('region', { name: 'Program', exact: true });
@@ -17,6 +18,15 @@ function program(page: Page) {
 function group(page: Page, name: string) {
 	return program(page).getByRole('region', { name, exact: true });
 }
+
+// The pool fixtures here — the placeholder keynote, the two collecting
+// containers, the graduating acceptances — are the mid-flight scenario's.
+// The crunch describe below re-pins the held-slot scenario it needs.
+test.beforeEach(async ({ context, baseURL }) => {
+	await context.addCookies([
+		{ name: 'je-scenario', value: FLIGHT, url: baseURL ?? 'http://127.0.0.1:4173' }
+	]);
+});
 
 test('the panel partitions the pool: each unfinished session renders once, its gaps named on the row', async ({ page }, testInfo) => {
 	test.skip(testInfo.project.name !== 'desktop', 'one viewport covers the partition contract');
@@ -59,9 +69,9 @@ test('New session commits with an undoable receipt; Create and place… arms the
 	await expect(newButton).toBeVisible({ timeout: 15000 });
 	await newButton.click();
 
-	const form = page.locator('#new-session-form');
-	await expect(form).toBeVisible();
-	await expect(newButton).toHaveAttribute('aria-expanded', 'true');
+	const dialog = page.getByRole('dialog', { name: 'New session' });
+	await expect(dialog).toBeVisible();
+	const form = dialog.locator('#new-session-form');
 
 	// The editorial fact is the default start; a private sketch has no place
 	// on the grid, so choosing it withdraws the place-through action.
@@ -111,12 +121,12 @@ test('the board’s Add row is a second door to the same creation form, leading 
 	await expect(boardButton).toBeVisible({ timeout: 15000 });
 	await boardButton.click();
 
-	// Same form, same id — one instance, so the two doors can never read as
-	// two features. Standing at the board, the primary flips to place-through
-	// and Enter drives it.
-	const form = page.locator('#new-session-form');
-	await expect(form).toBeVisible();
-	await expect(boardButton).toHaveAttribute('aria-expanded', 'true');
+	// One dialog behind both doors, so they can never read as two features.
+	// Standing at the board, the primary flips to place-through and Enter
+	// drives it.
+	const dialog = page.getByRole('dialog', { name: 'New session' });
+	await expect(dialog).toBeVisible();
+	const form = dialog.locator('#new-session-form');
 	const actions = form.locator('.new-session__actions button');
 	await expect(actions.first()).toHaveText('Create and place…');
 	await expect(actions.first()).toHaveClass(/ui-button--primary/);
@@ -129,14 +139,19 @@ test('the board’s Add row is a second door to the same creation form, leading 
 	await page.keyboard.press('Escape');
 	await expect(page.getByRole('button', { name: 'Place “Community Demo Corner”' })).toBeVisible();
 
-	// Opening from the panel afterwards moves the one form there — the panel
-	// door keeps Create as its leading action.
+	// The panel door opens the same dialog, leading with Create — and a
+	// dismissed draft survives: parking, not discarding.
 	const panelButton = program(page).getByRole('button', { name: 'New session…' });
 	await panelButton.click();
-	await expect(page.locator('#new-session-form')).toHaveCount(1);
+	await expect(dialog).toBeVisible();
 	await expect(
-		program(page).locator('.new-session__actions button').first()
+		dialog.locator('.new-session__actions button').first()
 	).toHaveText('Create');
+	await form.getByLabel('Title').fill('Half-typed idea');
+	await page.keyboard.press('Escape');
+	await expect(dialog).toBeHidden();
+	await panelButton.click();
+	await expect(form.getByLabel('Title')).toHaveValue('Half-typed idea');
 });
 
 test('?tray= scopes the panel to one tray behind a visible chip, and Clear restores the grouped view', async ({ page }, testInfo) => {
@@ -185,12 +200,20 @@ test('direct entry completes a placeholder: provenance lands on the roster, the 
 		.getByRole('button', { name: 'Speakers on “Closing Keynote — speaker to be announced”' })
 		.click();
 
-	const speakers = page.getByRole('region', {
-		name: 'Speakers — Closing Keynote — speaker to be announced'
-	});
+	// The dialog names its session and where it stands — the continuity cue.
+	const speakers = page.getByRole('dialog', { name: 'Speakers' });
 	await expect(speakers).toBeVisible();
 	await expect(page).toHaveURL(/panel=speakers&session=ses-13/);
+	await expect(speakers).toContainText('Closing Keynote — speaker to be announced');
+	await expect(speakers).toContainText('not placed yet');
 	await expect(speakers).toContainText('No speakers yet');
+
+	// One query narrows every way in; the scope line keeps a short list honest.
+	const search = speakers.getByLabel('Add people');
+	await expect(search).toBeVisible();
+	await search.fill('zzz-nobody');
+	await expect(speakers).toContainText(/No one matches “zzz-nobody” across \d+\s+people/);
+	await search.fill('');
 
 	// Direct entry is one whole act — person, accepted record, attribution —
 	// landing together under one undoable receipt.
@@ -208,6 +231,9 @@ test('direct entry completes a placeholder: provenance lands on the roster, the 
 		.filter({ hasText: 'Jordan Nakamura' })
 		.filter({ hasText: 'direct entry' });
 	await expect(rosterRow).toBeVisible();
+	// A dialog is a stage, not a sidebar: leave it before travelling on.
+	await page.keyboard.press('Escape');
+	await expect(speakers).toBeHidden();
 	await expect(page.locator('#pool-ses-13')).not.toContainText('No speakers yet');
 
 	// The computed item reads zero and stops rendering — checked in the same
@@ -229,10 +255,9 @@ test('direct entry completes a placeholder: provenance lands on the roster, the 
 		.locator('#pool-ses-13')
 		.getByRole('button', { name: 'Speakers on “Closing Keynote — speaker to be announced”' })
 		.click();
-	const panel = page.getByRole('region', {
-		name: 'Speakers — Closing Keynote — speaker to be announced'
-	});
+	const panel = page.getByRole('dialog', { name: 'Speakers' });
 	await expect(panel).toBeVisible({ timeout: 15000 });
+	await expect(panel).toContainText('Closing Keynote — speaker to be announced');
 	await panel
 		.getByRole('button', {
 			name: 'Remove Jordan Nakamura from “Closing Keynote — speaker to be announced”'
@@ -251,14 +276,21 @@ test('direct entry completes a placeholder: provenance lands on the roster, the 
 	await expect(
 		panel.getByRole('button', { name: /Remove Jordan Nakamura/ })
 	).toHaveCount(0);
-	await expect(page.locator('#pool-ses-13')).toContainText('No speakers yet');
-
-	await removed.getByRole('button', { name: 'Undo' }).click();
+	// In-dialog recovery exists without the toast: the removed person is
+	// offered right back from the roster group.
 	await expect(
-		panel.getByRole('button', {
-			name: 'Remove Jordan Nakamura from “Closing Keynote — speaker to be announced”'
-		})
-	).toBeVisible({ timeout: 10000 });
+		panel.locator('.speakers__row').filter({ hasText: 'Jordan Nakamura' })
+	).toContainText('invited');
+
+	// The toast sits behind the dialog's top layer, so undo from it means
+	// leaving the stage first — one Escape, receipt still fresh.
+	await page.keyboard.press('Escape');
+	await expect(panel).toBeHidden();
+	await expect(page.locator('#pool-ses-13')).toContainText('No speakers yet');
+	await removed.getByRole('button', { name: 'Undo' }).click();
+	await expect(page.locator('#pool-ses-13')).not.toContainText('No speakers yet', {
+		timeout: 10000
+	});
 });
 
 test('accepting without a target spawns into the pool, the receipt carries the placement door, and undo unspawns', async ({ page }, testInfo) => {
@@ -341,10 +373,9 @@ test('accepting a proposal aimed at a collecting session graduates it: the conta
 		.locator('#pool-ses-11')
 		.getByRole('button', { name: 'Speakers on “Panel: Durable Agent Infrastructure”' })
 		.click();
-	const speakers = page.getByRole('region', {
-		name: 'Speakers — Panel: Durable Agent Infrastructure'
-	});
+	const speakers = page.getByRole('dialog', { name: 'Speakers' });
 	await expect(speakers).toBeVisible();
+	await expect(speakers).toContainText('Panel: Durable Agent Infrastructure');
 	const rosterRow = speakers.locator('.speakers__row').filter({ hasText: 'Tomás Rivera' });
 	await expect(rosterRow).toContainText('via “Durable Agent Jobs: A Queueing Confession”');
 });

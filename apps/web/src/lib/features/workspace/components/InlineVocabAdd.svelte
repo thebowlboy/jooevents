@@ -7,10 +7,11 @@
 -->
 <script lang="ts">
 	import { tick } from 'svelte';
+	import { Plus } from 'lucide-svelte';
 	import { Button } from '$lib/ui';
 
 	interface Props {
-		/** The action's full name, e.g. "New track…". */
+		/** The action's full name, e.g. "New track". */
 		label: string;
 		placeholder: string;
 		disabled?: boolean;
@@ -79,6 +80,9 @@
 </script>
 
 {#if open}
+	<!-- The name gets the whole line and the verbs sit under it, so the row
+	     works in a narrow column as well as a wide one — an input squeezed to
+	     a few characters is not a text field. -->
 	<div class="add">
 		<label class="ui-sr-only" for={uid}>{label.replace('…', '')} name</label>
 		<input
@@ -91,36 +95,52 @@
 			bind:this={input}
 			bind:value={name}
 			{onkeydown} />
-		<Button
-			size="sm"
-			variant="secondary"
-			disabled={disabled || !name.trim()}
-			loading={busy}
-			onclick={() => void add()}>
-			Add
-		</Button>
-		<Button variant="ghost" size="sm" disabled={disabled || busy} onclick={() => void close()}>
-			Cancel
-		</Button>
+		<div class="add__actions">
+			<Button
+				size="sm"
+				variant="secondary"
+				disabled={disabled || !name.trim()}
+				loading={busy}
+				onclick={() => void add()}>
+				Add
+			</Button>
+			<Button variant="ghost" size="sm" disabled={disabled || busy} onclick={() => void close()}>
+				Cancel
+			</Button>
+		</div>
 	</div>
 {:else}
 	<button
 		type="button"
-		class="ui-button ui-button--ghost ui-button--sm"
+		class="ui-button ui-button--ghost ui-button--sm add__opener"
 		{disabled}
 		bind:this={opener}
-		onclick={() => void openAdd()}>{label}</button>
+		onclick={() => void openAdd()}><Plus class="add__glyph" aria-hidden="true" />{label}</button>
 {/if}
 
 <style>
 	.add {
-		display: flex;
-		align-items: center;
+		display: grid;
 		gap: var(--je-space-2);
 	}
 
 	.add__name {
-		flex: 1;
+		inline-size: 100%;
 		min-inline-size: 0;
+	}
+
+	.add__actions {
+		display: flex;
+		gap: var(--je-space-2);
+	}
+
+	/* The glyph is the affordance ("this mints one"); the verb stays the name. */
+	.add__opener {
+		justify-self: start;
+	}
+
+	.add__opener :global(.add__glyph) {
+		inline-size: 1em;
+		block-size: 1em;
 	}
 </style>

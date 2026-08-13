@@ -113,7 +113,7 @@
 <div class="portal">
 	<header class="bar">
 		<a class="bar__brand" href="/portal" aria-label="JooEvents portal home">
-			<img src={wordmarkUrl} alt="JooEvents" width="108" height="20" />
+			<img src={wordmarkUrl} alt="JooEvents" width="108" height="19" />
 		</a>
 		<Popover label="Your account">
 			{#snippet trigger()}

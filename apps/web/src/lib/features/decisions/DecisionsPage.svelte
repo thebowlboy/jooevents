@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
+	import { flip } from 'svelte/animate';
 	import { ArrowDown, ArrowUp, ChevronDown, Flame, Gem, MailWarning, Star, Zap } from 'lucide-svelte';
 	// The situation glyph for a surface whose measurement has not been set up.
 	import { CircleDashed as NoPlan } from 'lucide-svelte';
@@ -8,6 +9,7 @@
 		Button,
 		Field,
 		Modal,
+		motionMs,
 		PENDING_MIN_VISIBLE_MS,
 		Popover,
 		revealTarget,
@@ -27,6 +29,7 @@
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
 	import { clearParams, param } from '$lib/features/workspace/url-state.svelte';
+	import { describePortFailure, type PortFailureView } from '$lib/api/port-failure';
 	import type { DecisionsPagePort } from '$lib/api/decisions-page-port';
 	import type {
 		AccoladeDef,
@@ -63,6 +66,22 @@
 	// first time its row opens. A decision re-read does not change any review,
 	// so an entry never goes stale within a session.
 	let reviewsBy = $state<Record<string, SubmissionReview[]>>({});
+	// A per-row read the port refused, kept as its reviewed copy so the open
+	// detail states the refusal instead of holding a loading treatment for an
+	// answer that is already refused (aggregates-only live evidence).
+	let reviewRefusals = $state<Record<string, string>>({});
+	/**
+	 * The candidate reads failed and nothing newer has landed. While `rows` is
+	 * still null this replaces the first-load skeletons (a skeleton over a
+	 * refused answer claims work that is not happening); with rows on screen it
+	 * renders as a notice over the kept truth. `retryable` follows the port's
+	 * own classification — a terminal refusal never offers a retry.
+	 */
+	let loadFailure = $state<PortFailureView | null>(null);
+	/** A decide or undo that did not commit, stated in the port's reviewed copy. */
+	let decideNotice = $state<{ title: string; message: string } | null>(null);
+	/** The notification projection/readiness refusal, rendered inside the dialog. */
+	let notifyRefusal = $state<string | null>(null);
 	/** The plan's scale, for inking each review's score chip. */
 	let scaleMax = $state(5);
 	/** Submissions the current person holds a committed review on. */
@@ -199,70 +218,92 @@
 		if (!quiet && rows !== null) refreshing = true;
 		let landed: Submission[] = [];
 		try {
-			const [inbox, late] = await Promise.all([
-				api.submissions.list({ tray: 'inbox' }),
-				api.submissions.list({ tray: 'late' })
+			try {
+				const [inbox, late] = await Promise.all([
+					api.submissions.list({ tray: 'inbox' }),
+					api.submissions.list({ tray: 'late' })
+				]);
+				if (seq !== loadSeq) return;
+				landed = [...inbox.rows, ...late.rows];
+				rows = landed;
+				loadFailure = null;
+				// An open row that the newest result set no longer holds would show a
+				// detail for a candidate the operator can no longer see.
+				if (expandedId !== null && !landed.some((row) => row.id === expandedId)) expandedId = null;
+				// The marks already on screen stay on screen: a decision re-read does
+				// not change any average, and blanking them back to a pending figure
+				// would flash the whole column for nothing. Only the flag reopens, so
+				// rows that arrived without a mark yet show the pending figure.
+				standingsRead = false;
+			} finally {
+				if (seq === loadSeq) refreshing = false;
+			}
+			// One batch for the whole table, read after the rows are on screen. The
+			// average cells reserve the mark's geometry from first paint, so these
+			// resolve in place rather than widening the column under the reader.
+			if (landed.length === 0) {
+				standingsRead = true;
+				return;
+			}
+			// The standing marks and the submitter profiles are two independent reads
+			// of the same landed rows, so neither waits on the other.
+			const [marks] = await Promise.all([
+				api.review.standings(landed.map((row) => row.id)),
+				loadProfiles(landed, seq)
 			]);
 			if (seq !== loadSeq) return;
-			landed = [...inbox.rows, ...late.rows];
-			rows = landed;
-			// An open row that the newest result set no longer holds would show a
-			// detail for a candidate the operator can no longer see.
-			if (expandedId !== null && !landed.some((row) => row.id === expandedId)) expandedId = null;
-			// The marks already on screen stay on screen: a decision re-read does
-			// not change any average, and blanking them back to a pending figure
-			// would flash the whole column for nothing. Only the flag reopens, so
-			// rows that arrived without a mark yet show the pending figure.
-			standingsRead = false;
-		} finally {
-			if (seq === loadSeq) refreshing = false;
-		}
-		// One batch for the whole table, read after the rows are on screen. The
-		// average cells reserve the mark's geometry from first paint, so these
-		// resolve in place rather than widening the column under the reader.
-		if (landed.length === 0) {
+			standings = marks;
 			standingsRead = true;
-			return;
+		} catch (error) {
+			// The failure becomes surfaced state, never an unhandled rejection: an
+			// eternal skeleton over a refused answer was the exact defect here.
+			if (seq === loadSeq) loadFailure = describePortFailure(error);
 		}
-		// The standing marks and the submitter profiles are two independent reads
-		// of the same landed rows, so neither waits on the other.
-		const [marks] = await Promise.all([
-			api.review.standings(landed.map((row) => row.id)),
-			loadProfiles(landed, seq)
-		]);
-		if (seq !== loadSeq) return;
-		standings = marks;
-		standingsRead = true;
 	}
 
-	onMount(async () => {
-		// The accolades land with the first rows, so a pinned cluster is never a
-		// late arrival that pushes a title sideways.
-		const [trackList, settings, queue, defs, templateList, planList] = await Promise.all([
-			api.vocab.tracks(),
-			api.settings.get(),
-			api.review.myQueue(),
-			api.review.accoladeDefs(),
-			api.templates.list(),
-			api.review.plans()
-		]);
-		tracks = trackList;
-		templates = templateList.messages;
-		// Read once, only to tell "nobody has reviewed this yet" apart from
-		// "there is nowhere to review it": the two look identical in a row and
-		// need completely different things from the organizer.
-		hasPlan = planList.length > 0;
-		plansRead = true;
-		scaleMax = planList[0]?.scaleMax ?? 5;
-		if (settings) subject = `Your submission decision — ${settings.name}`;
-		accoladeDefs = defs;
-		myCommitted = queue.filter((item) => item.committed).map((item) => item.submissionId);
-		myAccolades = Object.fromEntries(
-			queue
-				.filter((item) => item.accolades && item.accolades.length > 0)
-				.map((item) => [item.submissionId, item.accolades as AccoladeKey[]])
-		);
+	/**
+	 * The mount reads plus the first candidate load, re-runnable as the failure
+	 * surface's retry. A failure lands in `loadFailure` with the port's own
+	 * copy and retryability instead of rejecting out of `onMount`.
+	 */
+	async function boot() {
+		loadFailure = null;
+		try {
+			// The accolades land with the first rows, so a pinned cluster is never a
+			// late arrival that pushes a title sideways.
+			const [trackList, settings, queue, defs, templateList, planList] = await Promise.all([
+				api.vocab.tracks(),
+				api.settings.get(),
+				api.review.myQueue(),
+				api.review.accoladeDefs(),
+				api.templates.list(),
+				api.review.plans()
+			]);
+			tracks = trackList;
+			templates = templateList.messages;
+			// Read once, only to tell "nobody has reviewed this yet" apart from
+			// "there is nowhere to review it": the two look identical in a row and
+			// need completely different things from the organizer.
+			hasPlan = planList.length > 0;
+			plansRead = true;
+			scaleMax = planList[0]?.scaleMax ?? 5;
+			if (settings) subject = `Your submission decision — ${settings.name}`;
+			accoladeDefs = defs;
+			myCommitted = queue.filter((item) => item.committed).map((item) => item.submissionId);
+			myAccolades = Object.fromEntries(
+				queue
+					.filter((item) => item.accolades && item.accolades.length > 0)
+					.map((item) => [item.submissionId, item.accolades as AccoladeKey[]])
+			);
+		} catch (error) {
+			loadFailure = describePortFailure(error);
+			return;
+		}
 		await load();
+	}
+
+	onMount(() => {
+		void boot();
 	});
 
 	// Submissions without a review average sort last in both directions, so
@@ -283,11 +324,12 @@
 	/** One email per speaker on an un-notified submission. */
 	const recipientCount = $derived(unnotified.reduce((sum, row) => sum + row.speakers.length, 0));
 
-	// An alert reading "12 accepted submissions not yet notified" lands here with
-	// its scope in the address, so the table opens on exactly those twelve. The
+	// An alert reading "3 decisions not yet notified" lands here with its scope
+	// in the address, so the table opens on exactly those decisions. The
 	// chip says so on the surface and clears it in one press.
 	const scoped = $derived(param('scope') === 'unnotified');
 	const scopeLabel = 'Decided · not yet notified';
+
 
 	// The schedule pool's "collecting — N proposals" count lands here the same
 	// way, with its session in the address: the table narrows to the proposals
@@ -299,6 +341,94 @@
 	const visible = $derived(
 		scoped ? targeted.filter((row) => isDecided(row) && !row.notified) : targeted
 	);
+
+	// -------------------------------------------------------------------------
+	// The pass (23 §3): undecided candidates above, decided below, and a verdict
+	// moves the row between them — so the working set visibly shrinks toward
+	// zero instead of staying exactly as long as when the pass began.
+
+	/** Verdicts order the decided group by what still needs doing, then recency. */
+	const decidedRank: Record<DecisionState, number> = {
+		accepted: 0,
+		waitlisted: 1,
+		declined: 2,
+		withdrawn: 3,
+		undecided: 4
+	};
+
+	const stillToDecide = $derived(visible.filter((row) => row.decision === 'undecided'));
+	const decidedRows = $derived.by(() =>
+		visible
+			.filter((row) => row.decision !== 'undecided')
+			.sort(
+				(a, b) =>
+					decidedRank[a.decision] - decidedRank[b.decision] ||
+					(b.decidedAt ?? '').localeCompare(a.decidedAt ?? '')
+			)
+	);
+
+	/**
+	 * One flat keyed list — headers and rows together — because the FLIP that
+	 * carries a just-decided row down into the Decided group can only animate
+	 * reordering inside a single keyed each. Each item renders as its own
+	 * `<tbody>` so a row and its expansion stay one animatable unit.
+	 */
+	type DisplayItem =
+		| { kind: 'header'; id: string; label: string; count: number }
+		| { kind: 'row'; id: string; row: Submission };
+
+	const display = $derived.by<DisplayItem[]>(() => {
+		const items: DisplayItem[] = [];
+		if (stillToDecide.length > 0) {
+			items.push({
+				kind: 'header',
+				id: 'group-open',
+				label: 'Still to decide',
+				count: stillToDecide.length
+			});
+			for (const row of stillToDecide) items.push({ kind: 'row', id: row.id, row });
+		}
+		if (decidedRows.length > 0) {
+			items.push({ kind: 'header', id: 'group-decided', label: 'Decided', count: decidedRows.length });
+			for (const row of decidedRows) items.push({ kind: 'row', id: row.id, row });
+		}
+		return items;
+	});
+
+	/**
+	 * The finale: the pass is finished — every candidate on this surface holds
+	 * a decision — and the empty working set becomes the hand-off. Scoped views
+	 * keep their own empties; the finale belongs to the full pass only.
+	 */
+	const finaleActive = $derived(
+		rows !== null && visible.length > 0 && stillToDecide.length === 0 && !scoped && !targetScope
+	);
+
+	/** Sessions in the program pool still waiting on a slot, for the finale's door. */
+	let unplacedCount = $state<number | null>(null);
+	// Outside the graph: which finale activation the read answered.
+	let placementTicket = 0;
+	$effect(() => {
+		if (!finaleActive) {
+			placementTicket += 1;
+			unplacedCount = null;
+			return;
+		}
+		const ticket = ++placementTicket;
+		void api.schedule.state().then((state) => {
+			if (ticket !== placementTicket) return;
+			const placed = new Set(state.placements.map((placement) => placement.sessionId));
+			unplacedCount = state.sessions.filter(
+				(session) => session.state === 'programmed' && !placed.has(session.id)
+			).length;
+		}).catch(() => {
+			// Null stays "not known": the finale simply keeps its placement door
+			// shut instead of surfacing a count nobody read.
+			if (ticket === placementTicket) unplacedCount = null;
+		});
+	});
+
+	const waitlistedCount = $derived(visible.filter((row) => row.decision === 'waitlisted').length);
 
 	/** The targeted session's title, read once per target so the chip can name it. */
 	let targetTitle = $state<string | null>(null);
@@ -318,6 +448,8 @@
 		void api.schedule.state().then((state) => {
 			if (titleReadFor !== id) return;
 			targetTitle = state.sessions.find((session) => session.id === id)?.title ?? null;
+		}).catch(() => {
+			// The chip keeps naming the scope's shape; the filter is never anonymous.
 		});
 	});
 
@@ -339,9 +471,15 @@
 	}
 
 	async function loadReviews(row: Submission) {
-		if (row.reviewCount === 0 || row.id in reviewsBy) return;
-		const landed = await api.review.forSubmission(row.id);
-		reviewsBy = { ...reviewsBy, [row.id]: landed };
+		if (row.reviewCount === 0 || row.id in reviewsBy || row.id in reviewRefusals) return;
+		try {
+			const landed = await api.review.forSubmission(row.id);
+			reviewsBy = { ...reviewsBy, [row.id]: landed };
+		} catch (error) {
+			// A refused per-reviewer read renders as the port's own copy in the
+			// detail, never as a loading treatment for an already-refused answer.
+			reviewRefusals = { ...reviewRefusals, [row.id]: describePortFailure(error).message };
+		}
 	}
 
 	function toggleRow(id: string) {
@@ -370,15 +508,33 @@
 		toggleRow(id);
 	}
 
+	/** j/k walk the verdict keys' row — the reading-speed pass of 05 §3. */
+	const verdictKeys: Record<string, Verdict> = { a: 'accepted', w: 'waitlisted', d: 'declined' };
+
 	function onKeydown(event: KeyboardEvent) {
 		const target = event.target as HTMLElement | null;
 		if (target && /^(input|textarea|select)$/i.test(target.tagName)) return;
-		if (visible.length === 0 || (event.key !== 'j' && event.key !== 'k')) return;
-		const index = visible.findIndex((row) => row.id === expandedId);
-		const next = event.key === 'j' ? Math.min(index + 1, visible.length - 1) : Math.max(index - 1, 0);
-		const row = visible[next];
-		if (!row || row.id === expandedId) return;
-		toggleRow(row.id);
+		if (event.metaKey || event.ctrlKey || event.altKey) return;
+		// The rows as rendered — down the pass, then through the decided group.
+		const ordered = [...stillToDecide, ...decidedRows];
+		if (ordered.length === 0) return;
+		if (event.key === 'j' || event.key === 'k') {
+			const index = ordered.findIndex((row) => row.id === expandedId);
+			const next =
+				event.key === 'j' ? Math.min(index + 1, ordered.length - 1) : Math.max(index - 1, 0);
+			const row = ordered[next];
+			if (!row || row.id === expandedId) return;
+			toggleRow(row.id);
+			return;
+		}
+		// a/w/d decide the open row in place: the verdict is a receipted,
+		// undoable move the eye watches land one group down, so no key needs a
+		// confirm in front of it.
+		const verdict = verdictKeys[event.key];
+		if (!verdict || expandedId === null) return;
+		const row = ordered.find((entry) => entry.id === expandedId);
+		if (!row) return;
+		decideRow(row, verdict);
 	}
 
 	/**
@@ -495,13 +651,20 @@
 		};
 	}
 
-	async function decide(ids: string[], decision: DecisionState, label: string) {
+	/**
+	 * Resolves true only when the verdict committed. A refusal never escapes as
+	 * a rejection: the row re-syncs to the server's truth and the port's own
+	 * copy renders as the page notice — the typed `target_unavailable`
+	 * re-offer included — instead of vanishing into a floated promise.
+	 */
+	async function decide(ids: string[], decision: DecisionState, label: string): Promise<boolean> {
 		// A row already committing is dropped rather than committed twice.
 		const targets = ids.filter((id) => !pendingIds.includes(id));
-		if (targets.length === 0) return;
+		if (targets.length === 0) return true;
 		const committed = (rows ?? []).filter((row) => targets.includes(row.id));
 		// The compensator restores each submission's decision as it stood.
 		const previous = committed.map((row) => ({ id: row.id, decision: row.decision }));
+		decideNotice = null;
 		pendingIds = [...pendingIds, ...targets];
 		dimmedIds = [...new Set([...dimmedIds, ...targets])];
 		try {
@@ -509,9 +672,13 @@
 				await api.decisions.decide(targets, decision);
 			} catch (error) {
 				// A failed write can still have committed (a timeout, a dropped
-				// response), so re-sync from the server before the failure surfaces.
-				void load().catch(() => {});
-				throw error;
+				// response), so re-sync from the server while the failure surfaces.
+				void load();
+				decideNotice = {
+					title: targets.length === 1 ? 'The decision was not applied' : 'The decisions were not applied',
+					message: describePortFailure(error, 'The decision could not be completed.').message
+				};
+				return false;
 			}
 			const graduation = decision === 'accepted' ? acceptanceReceipt(committed) : null;
 			recordAction({
@@ -520,18 +687,32 @@
 				href: graduation?.href,
 				hrefLabel: graduation?.hrefLabel,
 				undo: async () => {
+					// The receipt surface swallows a compensator's rejection, so a
+					// refused restore states itself here — a first-time verdict has
+					// no "undecided" to return to, and silence would present the
+					// standing decision as successfully undone.
+					const failures: string[] = [];
 					for (const entry of previous) {
-						await api.decisions.decide([entry.id], entry.decision);
+						try {
+							await api.decisions.decide([entry.id], entry.decision);
+						} catch (error) {
+							failures.push(
+								describePortFailure(error, 'This decision could not be restored.').message
+							);
+						}
+					}
+					if (failures.length > 0) {
+						decideNotice = {
+							title: failures.length === previous.length
+								? 'Undo did not change the decision'
+								: 'Undo only partly applied',
+							message: [...new Set(failures)].join(' ')
+						};
 					}
 				}
 			});
-			try {
-				await load({ quiet: true });
-			} catch {
-				// The commit landed but the quiet re-read did not; the visible
-				// full reload is the fallback that still brings the new truth in.
-				await load();
-			}
+			await load({ quiet: true });
+			return true;
 		} finally {
 			pendingIds = pendingIds.filter((id) => !targets.includes(id));
 		}
@@ -540,7 +721,7 @@
 	function decideRow(row: Submission, verdict: Verdict) {
 		if (row.decision === verdict) return;
 		const past = verdictCopy[verdict].past;
-		decide([row.id], verdict, `${past[0].toUpperCase()}${past.slice(1)} “${row.title}”`);
+		void decide([row.id], verdict, `${past[0].toUpperCase()}${past.slice(1)} “${row.title}”`);
 	}
 
 	function askBulk(verdict: Verdict) {
@@ -551,30 +732,43 @@
 	async function confirmBulk() {
 		const ids = selected;
 		confirmOpen = false;
-		await decide(
+		const committed = await decide(
 			ids,
 			pendingVerdict,
 			`Set ${plural(ids.length, 'submission')} to ${verdictCopy[pendingVerdict].past}`
 		);
-		selected = [];
+		// A refused bulk verdict keeps the picks: the notice names why, and the
+		// selection is what a corrected retry acts on.
+		if (committed) selected = [];
 	}
 
 	// The dialog opens on the reviewable batch and then fills in: the projection
 	// and provider readiness arrive into a shell that already holds its place.
+	// A refusal fills the same shell with the port's own copy — the dialog must
+	// never hold its loading footprint for an answer that is already refused.
 	async function openNotify() {
 		const ids = unnotified.map((row) => row.id);
 		sentCount = null;
 		notifyIds = ids;
 		notifyReview = null;
 		notifyReadiness = null;
+		notifyRefusal = null;
 		notifyOpen = true;
-		const [projection, delivery] = await Promise.all([
-			api.decisions.reviewNotification(ids),
-			api.communications.readiness()
-		]);
-		if (!notifyOpen || notifyIds !== ids) return;
-		notifyReview = projection;
-		notifyReadiness = delivery;
+		try {
+			const [projection, delivery] = await Promise.all([
+				api.decisions.reviewNotification(ids),
+				api.communications.readiness()
+			]);
+			if (!notifyOpen || notifyIds !== ids) return;
+			notifyReview = projection;
+			notifyReadiness = delivery;
+		} catch (error) {
+			if (!notifyOpen || notifyIds !== ids) return;
+			notifyRefusal = describePortFailure(
+				error,
+				'The notification review could not be loaded.'
+			).message;
+		}
 	}
 
 	async function sendNotifications() {
@@ -589,6 +783,9 @@
 			});
 			sentCount = count;
 			await load();
+		} catch (error) {
+			// Nothing was pretended sent; the dialog states the refusal in place.
+			notifyRefusal = describePortFailure(error, 'The notifications were not sent.').message;
 		} finally {
 			busy = false;
 		}
@@ -598,7 +795,7 @@
 <svelte:window onkeydown={onKeydown} />
 
 {#if !rows}
-	{#if expectBanner}
+	{#if expectBanner && !loadFailure}
 		<!-- The banner's own composition with skeleton fills: geometry comes from
 		     the same classes the resolved banner uses, so it cannot drift. -->
 		<section class="banner" aria-hidden="true">
@@ -610,7 +807,10 @@
 			<span class="ui-skeleton skeleton-action"></span>
 		</section>
 	{/if}
-{:else if unnotified.length > 0}
+{:else if unnotified.length > 0 && !finaleActive}
+	<!-- While the pass still has undecided rows the un-notified gap keeps its
+	     ambient banner; once the pass completes, the finale below carries the
+	     same send door and this yields — one door per fact on one page. -->
 	<section class="banner" aria-labelledby="{uid}-banner">
 		<span class="banner__plate" aria-hidden="true"><MailWarning size={16} /></span>
 		<div class="banner__copy">
@@ -629,6 +829,24 @@
 
 <CommitReceipt onUndone={load} />
 
+{#if loadFailure && rows !== null}
+	<!-- The kept rows are yesterday's truth; the notice says the re-read behind
+	     them failed, in the port's own copy. Keyed so a fresh failure replaces
+	     a dismissed one instead of inheriting its hidden state. -->
+	{#key loadFailure}
+		<Alert
+			tone="danger"
+			title="The candidate list could not be refreshed"
+			message={loadFailure.message} />
+	{/key}
+{/if}
+
+{#if decideNotice}
+	{#key decideNotice}
+		<Alert tone="danger" title={decideNotice.title} message={decideNotice.message} dismissible />
+	{/key}
+{/if}
+
 <p class="ui-sr-only" role="status">{announcement}</p>
 
 <section class="table-region" aria-labelledby="{uid}-heading">
@@ -646,12 +864,16 @@
 					{plural(visible.length, 'decision')} waiting on a notification, of {plural(sorted.length, 'candidate')}.
 				{:else if targetScope}
 					{plural(visible.length, 'proposal')} aimed at this session, of {plural(sorted.length, 'candidate')}.
+				{:else if sorted.length - decidedCount > 0}
+					<!-- Pace, not inventory: the number that shrinks as the pass moves. -->
+					{sorted.length - decidedCount} of {plural(sorted.length, 'candidate')} still to decide —
+					set-aside and discarded submissions are not decided here.
 				{:else}
-					{plural(sorted.length, 'candidate')} from inbox and late · {decidedCount} decided ·
-					{sorted.length - decidedCount} undecided — set-aside and discarded submissions are not decided here.
+					All {plural(sorted.length, 'candidate')} decided — set-aside and discarded submissions
+					are not decided here.
 				{/if}
 			</p>
-		{:else}
+		{:else if !loadFailure}
 			<p class="head__note" aria-hidden="true"><span class="ui-skeleton skeleton-line" style="inline-size: min(28rem, 100%)"></span></p>
 		{/if}
 	</header>
@@ -703,15 +925,37 @@
 					<th class="col-expand"><span class="ui-sr-only">Details</span></th>
 				</tr>
 			</thead>
-			<tbody>
-				{#if !rows}
+			{#if !rows}
+				{#if loadFailure}
+					<!-- The reads behind the first paint failed or refused: the typed
+					     state replaces the skeletons, because a skeleton claims work
+					     that is no longer happening. Only a retryable failure offers
+					     a retry; a terminal refusal renders as exactly the refusal. -->
+					<tbody>
+						<tr>
+							<td colspan="7">
+								<div class="empty" role="alert">
+									<p class="empty__title">The candidates could not be loaded.</p>
+									<p class="empty__hint">{loadFailure.message}</p>
+									{#if loadFailure.retryable}
+										<button
+											type="button"
+											class="ui-button ui-button--secondary ui-button--sm"
+											onclick={() => void boot()}>Try again</button>
+									{/if}
+								</div>
+							</td>
+						</tr>
+					</tbody>
+				{:else}
+				<tbody>
 					{#each Array(8) as _, index (index)}
 						<!-- Mirrors the resolved multiline row cell-for-cell, so the row
 						     height is set by the same table metrics as real rows. -->
 						<tr aria-hidden="true">
 							<td class="col-check"></td>
 							<td>
-								<span class="ui-table__primary"><span class="ui-skeleton skeleton-line" style="inline-size: 16rem"></span></span>
+								<span class="ui-table__primary title-line"><span class="ui-skeleton skeleton-line" style="inline-size: 16rem"></span></span>
 								<span class="ui-table__secondary"><span class="ui-skeleton skeleton-line" style="inline-size: 9rem"></span></span>
 							</td>
 							<td><span class="ui-skeleton skeleton-chip"></span></td>
@@ -727,7 +971,10 @@
 							<td class="col-expand"><span class="ui-skeleton skeleton-action skeleton-action--icon"></span></td>
 						</tr>
 					{/each}
-				{:else if visible.length === 0}
+				</tbody>
+				{/if}
+			{:else if visible.length === 0}
+				<tbody>
 					<tr>
 						<td colspan="7">
 							<div class="empty">
@@ -765,8 +1012,70 @@
 							</div>
 						</td>
 					</tr>
+				</tbody>
 				{:else}
-					{#each visible as row (row.id)}
+					{#if finaleActive}
+						<!-- The pass is finished, and the working set's empty slot becomes
+						     the hand-off: what the decisions just created, each with its
+						     door — never an automatic next act (23 §3). The un-notified
+						     banner yields to this while it shows, so the send keeps one
+						     door on the page. -->
+						<tbody>
+							<tr class="finale-row">
+								<td colspan="7">
+									<div class="finale">
+										<p class="finale__title">Every candidate is decided.</p>
+										<div class="finale__actions">
+											{#if unnotified.length > 0}
+												<button
+													type="button"
+													class="ui-button ui-button--primary ui-button--sm"
+													onclick={openNotify}>
+													Send {plural(unnotified.length, 'decision notice')}
+												</button>
+											{/if}
+											{#if (unplacedCount ?? 0) > 0}
+												<a
+													class="ui-button ui-button--secondary ui-button--sm"
+													href="/app/schedule?tray=unplaced">
+													Place {plural(unplacedCount ?? 0, 'session')}
+												</a>
+											{/if}
+										</div>
+										{#if waitlistedCount > 0}
+											<p class="finale__note">
+												{plural(waitlistedCount, 'waitlisted submission')}
+												{waitlistedCount === 1
+													? 'holds here until you promote or release it.'
+													: 'hold here until you promote or release them.'}
+											</p>
+										{/if}
+										{#if unnotified.length === 0 && unplacedCount === 0 && waitlistedCount === 0}
+											<p class="finale__note">
+												Notified and placed too — the remaining program work lives on the schedule.
+											</p>
+										{/if}
+									</div>
+								</td>
+							</tr>
+						</tbody>
+					{/if}
+					{#each display as item (item.id)}
+					<tbody animate:flip={{ duration: motionMs('normal') }}>
+					{#if item.kind === 'header'}
+						<!-- The pass said in place: the working set above, what it has
+						     produced below. A verdict carries its row from one group to
+						     the other under the eye — the count pair is the pace. -->
+						<tr class="station">
+							<td colspan="7">
+								<div class="station__line">
+									<span class="station__label">{item.label}</span>
+									<span class="station__count">{item.count}</span>
+								</div>
+							</td>
+						</tr>
+					{:else}
+						{@const row = item.row}
 						{@const badge = decisionBadge[row.decision]}
 						{@const rowPending = pendingIds.includes(row.id)}
 						{@const pinned = pinnedFor(row.id)}
@@ -799,6 +1108,13 @@
 							<td>
 								<span class="ui-table__primary title-line">
 									<span class="title-line__text">{row.title}</span>
+									{#if row.tray === 'late'}
+										<!-- Candidates come from the inbox AND the late tray; on the
+										     submissions page the tray tab says which, here the row
+										     must say it itself. Provenance, not urgency: a quiet
+										     neutral word, never an amber alarm. -->
+										<span class="ui-badge ui-badge--neutral">Late</span>
+									{/if}
 									{#if pinned.length > 0}
 										<!-- One disclosure for the whole cluster: the marks are read as a
 										     group, and naming each one is what the panel is for. -->
@@ -934,19 +1250,31 @@
 									Line up with my other reviews
 								</a>
 							{/snippet}
+							<!-- A refused per-review read: the reviews block withdraws (this
+							     surface truly does not offer it) and the port's copy states
+							     why — never a loading treatment for a refused answer. -->
+							{#snippet reviewsRefusalNote()}
+								{reviewRefusals[row.id]}
+							{/snippet}
 							<tr class="detail-row">
 								<td colspan="7">
 									<SubmissionDetail
 										submission={row}
-										reviews={row.reviewCount === 0 ? undefined : (reviewsBy[row.id] ?? 'loading')}
+										reviews={row.reviewCount === 0 || row.id in reviewRefusals
+											? undefined
+											: (reviewsBy[row.id] ?? 'loading')}
 										{scaleMax}
-										actions={myCommitted.includes(row.id) ? lineupAction : undefined} />
+										actions={myCommitted.includes(row.id) ? lineupAction : undefined}
+										footnote={row.reviewCount > 0 && row.id in reviewRefusals
+											? reviewsRefusalNote
+											: undefined} />
 								</td>
 							</tr>
 						{/if}
+					{/if}
+					</tbody>
 					{/each}
 				{/if}
-			</tbody>
 		</table>
 	</div>
 </section>
@@ -1000,12 +1328,20 @@
 			{plural(recipientCount, 'submitter')} across {plural(unnotified.length, 'submission')} have a
 			decision that has not been sent. Deciding never emailed them; this send is the step that does.
 		</p>
-		<ReviewSurface
-			review={notifyReview}
-			readiness={notifyReadiness}
-			previewLabel="Their decision line"
-			subject={subjectField}
-			templateDoor={notifyDoor} />
+		{#if notifyRefusal}
+			<!-- The projection or readiness read refused: the shell fills with the
+			     port's own copy instead of holding loading skeletons for an answer
+			     that is already refused. Send stays disabled — nothing is sent and
+			     nothing pretends to be. -->
+			<Alert tone="warning" title="Notifications are not available" message={notifyRefusal} />
+		{:else}
+			<ReviewSurface
+				review={notifyReview}
+				readiness={notifyReadiness}
+				previewLabel="Their decision line"
+				subject={subjectField}
+				templateDoor={notifyDoor} />
+		{/if}
 	{:else}
 		<Alert
 			tone="success"
@@ -1255,6 +1591,70 @@
 		font-weight: 650;
 	}
 
+	/* Station group headers: the pass and its output, named between the rows.
+	   Caps like the other region titles, count in figures beside the label —
+	   the pair that shrinks and grows as verdicts land. Same band recipe as
+	   the submissions page: column-head fill, flush hairlines, no faked gap. */
+	tr.station td {
+		padding-block: var(--je-space-2);
+		background: var(--je-color-page);
+		border-block: 1px solid var(--je-color-border-strong);
+	}
+
+	.station__line {
+		display: flex;
+		align-items: baseline;
+		gap: var(--je-space-2);
+	}
+
+	.station__label {
+		font-size: var(--je-font-size-xs);
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: var(--je-tracking-caps);
+		color: var(--je-color-text-muted);
+	}
+
+	.station__count {
+		font-size: var(--je-font-size-xs);
+		font-weight: 600;
+		font-variant-numeric: tabular-nums;
+		color: var(--je-color-text);
+	}
+
+	/* The finale holds the empty working set's slot: centered like an empty
+	   state, because that is what it is — an empty queue whose next steps are
+	   already known. Doors, never automation. */
+	.finale {
+		display: grid;
+		justify-items: center;
+		gap: var(--je-space-3);
+		padding: var(--je-space-6) var(--je-space-4);
+		text-align: center;
+	}
+
+	.finale__title {
+		margin: 0;
+		font-weight: 600;
+	}
+
+	.finale__actions {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: center;
+		gap: var(--je-space-2);
+	}
+
+	.finale__actions:empty {
+		display: none;
+	}
+
+	.finale__note {
+		margin: 0;
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-text-muted);
+	}
+
 	/* An absence note, not a value: it sits in a number column, so it stays
 	   small and quiet enough that the eye still reads the scored rows as the
 	   column's content and skips these rather than trying to compare them. */
@@ -1285,15 +1685,26 @@
 
 	/* The title owns the line and the pinned marks sit at its end, because they
 	   are read as part of naming the submission. */
+	/* The line reserves badge height whether or not this row carries one, so a
+	   conditional chip (Late, accolades) never makes one row stand taller than
+	   its neighbours — the same geometric stability the loading shells keep. */
 	.title-line {
 		display: flex;
 		align-items: center;
 		gap: var(--je-space-2);
 		min-width: 0;
+		min-block-size: 1.375rem;
 	}
 
+	/* One line, like every `ui-table__primary strong` in the product: a dense
+	   verdict pass is scanned, and a wrapping title both breaks the scan and
+	   leaves the skeleton under-reserving the row it stands in for. The whole
+	   name stays one press away in the expansion and in every aria-label. */
 	.title-line__text {
 		min-inline-size: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 
 	.accolades {

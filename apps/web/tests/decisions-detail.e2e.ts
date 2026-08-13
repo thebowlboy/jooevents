@@ -13,7 +13,7 @@ test.describe('decisions row expansion', () => {
 		await page.goto('/app/decisions');
 
 		const expander = page.getByRole('button', {
-			name: /Details for .*Durable Agent Jobs/
+			name: /Details for .*Deterministic Replay/
 		});
 		await expect(expander).toBeVisible({ timeout: 15000 });
 		await expect(expander).toHaveAttribute('aria-expanded', 'false');
@@ -29,14 +29,16 @@ test.describe('decisions row expansion', () => {
 		await expect(detail.getByRole('heading', { name: 'Reviews' })).toBeVisible();
 		await expect(detail.getByText('You', { exact: true })).toBeVisible();
 		await expect(
-			detail.getByText('Strong war story; verify the outbox section fits 30 minutes.')
+			detail.getByText(
+				'Best infrastructure submission this year. Ask for the replay tooling link in the speaker pack.'
+			)
 		).toBeVisible();
-		await expect(detail.getByText(/^Reviewer [A-Z]$/)).toHaveCount(1);
+		await expect(detail.getByText(/^Reviewer [A-Z]$/)).toHaveCount(4);
 
 		// Only a committed review of my own can anchor the line-up, so this row
 		// carries the door and it points at the scoped comparison.
 		const lineup = detail.getByRole('link', { name: 'Line up with my other reviews' });
-		await expect(lineup).toHaveAttribute('href', '/app/review/lineup?anchor=sub-104&slice=track');
+		await expect(lineup).toHaveAttribute('href', '/app/review/lineup?anchor=sub-301&slice=track');
 
 		// Pressing the row's own controls belongs to them, never to the expansion.
 		await expander.click();
@@ -51,16 +53,16 @@ test.describe('decisions row expansion', () => {
 		await page.goto('/app/decisions');
 
 		const expander = page.getByRole('button', {
-			name: /Details for .*Context Caching Without Tears/
+			name: /Details for .*Durable Agent Jobs/
 		});
 		await expect(expander).toBeVisible({ timeout: 15000 });
 		await expander.click();
 
 		const detail = page.locator('.detail-row');
 		await expect(detail.getByRole('heading', { name: 'Reviews' })).toBeVisible();
-		// Three committed reviews behind a 4.6 average of 3 — the list and the
+		// Five committed reviews behind a 4.6 average of 5 — the list and the
 		// cell above it tell one story.
-		await expect(detail.getByText(/^Reviewer [A-Z]$/)).toHaveCount(3);
+		await expect(detail.getByText(/^Reviewer [A-Z]$/)).toHaveCount(5);
 		await expect(detail.getByText('You', { exact: true })).toHaveCount(0);
 		await expect(detail.getByRole('link', { name: 'Line up with my other reviews' })).toHaveCount(0);
 	});
@@ -68,10 +70,10 @@ test.describe('decisions row expansion', () => {
 	test('?submission= lands on that candidate row, open and marked', async ({ page }, testInfo) => {
 		test.skip(testInfo.project.name !== 'desktop', 'one viewport covers the arrival contract');
 
-		await page.goto('/app/decisions?submission=sub-101');
+		await page.goto('/app/decisions?submission=sub-301');
 
 		const expander = page.getByRole('button', {
-			name: /Details for .*Context Caching Without Tears/
+			name: /Details for .*Deterministic Replay/
 		});
 		await expect(expander).toBeVisible({ timeout: 15000 });
 		await expect(expander).toHaveAttribute('aria-expanded', 'true');

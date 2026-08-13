@@ -142,6 +142,11 @@ test('a new event is created from the switcher, and the workspace arrives on it'
 	await expect(dialog).toBeVisible();
 	await dialog.getByLabel('Name').fill('DevOps Days Helsinki 2027');
 
+	// Past days cannot become the selected start date, including typed input.
+	await page.locator('#new-event-start').fill('2020-01-01');
+	await page.locator('#new-event-start').press('Enter');
+	await expect(dialog.getByRole('button', { name: 'Create event' })).toBeDisabled();
+
 	// Dates validate where they are entered; the refusal is a value in place.
 	await page.locator('#new-event-start').fill('2027-09-09');
 	await page.locator('#new-event-start').press('Enter');

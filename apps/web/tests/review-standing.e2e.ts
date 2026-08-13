@@ -11,8 +11,17 @@ import { expect, test } from '@playwright/test';
  */
 
 const CRUNCH = 'crunch';
+const FLIGHT = 'flight';
 
-test.describe('the default round', () => {
+test.describe('the mid-flight round', () => {
+	test.beforeEach(async ({ context, baseURL }) => {
+		// The mid-flight scenario holds the round where exactly one of my reviews
+		// is committed, so the same queue carries a revealed card and a locked one.
+		await context.addCookies([
+			{ name: 'je-scenario', value: FLIGHT, url: baseURL ?? 'http://127.0.0.1:4173' }
+		]);
+	});
+
 	test('committing is what reveals standing; an open card carries the lock instead', async ({
 		page
 	}, testInfo) => {

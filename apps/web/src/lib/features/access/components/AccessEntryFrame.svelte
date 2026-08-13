@@ -9,7 +9,7 @@
 <div class="entry-page" class:entry-page--content={contentLed}>
   <main class="entry-main">
     <a class="entry-brand" href="/" aria-label="JooEvents home">
-      <img src={wordmarkUrl} width="512" height="94" alt="" aria-hidden="true" />
+      <img src={wordmarkUrl} width="512" height="90" alt="" aria-hidden="true" />
     </a>
     <p class="entry-tagline">Events for people who don't want to manage events.</p>
     <section class="entry-panel">

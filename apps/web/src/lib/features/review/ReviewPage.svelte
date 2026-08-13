@@ -25,6 +25,7 @@
 	import StandingMark from '$lib/features/workspace/components/StandingMark.svelte';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
 	import { applyParams, param, paramIn } from '$lib/features/workspace/url-state.svelte';
+	import { formatArrival } from '$lib/features/workspace/recency';
 	import ScopeChips from '$lib/features/reviewers/ScopeChips.svelte';
 	import { resolveScope, type ScopeEntities } from '$lib/features/reviewers/scope-display';
 	import LineupPanel, { sliceKeys } from './LineupPanel.svelte';
@@ -1086,7 +1087,7 @@
 							{#if materialsOpenId === id}
 								<div class="card__materials">
 									<ResourceList resources={row.submission.resources} />
-									<p class="card__submeta">Submitted {row.submission.submittedAt}</p>
+									<p class="card__submeta">Submitted {formatArrival(row.submission.submittedAt)}</p>
 								</div>
 							{/if}
 

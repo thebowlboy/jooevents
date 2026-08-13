@@ -16,7 +16,8 @@
 	import { ClampedText, CopyValue } from '$lib/ui';
 	import ResourceList from './ResourceList.svelte';
 	import { scoreTone } from './score-tone';
-	import type { Submission, SubmissionReview } from '$lib/api/types';
+	import { formatArrival } from '../recency';
+	import type { Submission, SubmissionOrigin, SubmissionReview } from '$lib/api/types';
 
 	interface Props {
 		submission: Submission;
@@ -28,13 +29,20 @@
 		reviews?: SubmissionReview[] | 'loading';
 		/** The review scale's top mark, for inking each score chip. */
 		scaleMax?: number;
+		/**
+		 * Where an accepted submission went — the session it became (spawn) or
+		 * joined (attach), with the door there. Omitted = this surface does not
+		 * offer the fact or the read has not landed; null = answered, and it
+		 * went nowhere (graduation reversed), which renders nothing.
+		 */
+		origin?: SubmissionOrigin | null;
 		/** Surface-specific actions at the end of the side column. */
 		actions?: Snippet;
 		/** Consequence copy under the actions. */
 		footnote?: Snippet;
 	}
 
-	const { submission, reviews, scaleMax = 5, actions, footnote }: Props = $props();
+	const { submission, reviews, scaleMax = 5, origin, actions, footnote }: Props = $props();
 </script>
 
 <div class="detail">
@@ -49,9 +57,22 @@
 		{/if}
 		{#if submission.source === 'direct_entry' && submission.enteredBy}
 			<!-- The verb honestly names the act: "submitted" belongs to submitters. -->
-			<p class="detail__meta">Entered directly by {submission.enteredBy} · {submission.submittedAt}</p>
+			<p class="detail__meta">
+				Entered directly by {submission.enteredBy} · {formatArrival(submission.submittedAt)}
+			</p>
 		{:else}
-			<p class="detail__meta">Submitted {submission.submittedAt}</p>
+			<p class="detail__meta">Submitted {formatArrival(submission.submittedAt)}</p>
+		{/if}
+		{#if origin}
+			<!-- The graduated row's way back to what it became: acceptance landed
+			     somewhere visible, and this is the durable door there — the
+			     receipt's "Place it" already expired with its toast. -->
+			<p class="detail__meta">
+				{origin.kind === 'spawn' ? 'Became' : 'Joined'}
+				<a class="detail__origin" href={`/app/schedule?session=${origin.sessionId}`}
+					>“{origin.title}”</a>
+				in the program.
+			</p>
 		{/if}
 		<ul class="detail__people">
 			{#each submission.speakers as speaker (speaker.email)}
@@ -172,6 +193,16 @@
 		font-size: var(--je-font-size-xs);
 		color: var(--je-color-text-muted);
 		font-variant-numeric: tabular-nums;
+	}
+
+	.detail__origin {
+		color: var(--je-color-action);
+		font-weight: 600;
+		text-decoration: none;
+	}
+
+	.detail__origin:hover {
+		text-decoration: underline;
 	}
 
 	/* One person per line. An address is a value someone transports, so it gets its

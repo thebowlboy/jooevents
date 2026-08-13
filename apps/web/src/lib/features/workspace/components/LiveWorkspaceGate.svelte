@@ -80,7 +80,7 @@
 {:else}
 	<main class="live-gate">
 		<section class="live-gate__panel" aria-busy={state.kind === 'loading' || state.kind === 'redirecting'}>
-			<img class="live-gate__brand" src={wordmarkUrl} alt="JooEvents" width="160" height="30" />
+			<img class="live-gate__brand" src={wordmarkUrl} alt="JooEvents" width="160" height="28" />
 			{#if state.kind === 'loading' || state.kind === 'redirecting'}
 			<div class="live-gate__copy" role="status">
 				<span class="ui-skeleton live-gate__heading-fill" aria-hidden="true"></span>

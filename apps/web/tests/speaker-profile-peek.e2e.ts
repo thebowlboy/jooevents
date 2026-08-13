@@ -11,6 +11,16 @@ import { expect, test } from '@playwright/test';
  */
 
 const CRUNCH = 'crunch';
+const FLIGHT = 'flight';
+
+// The peek's cast is the mid-flight scenario's: Maya's authored profile, the
+// plain names beside it, and the anonymized round. The double-submitter
+// describe below re-pins the crowded scenario it needs.
+test.beforeEach(async ({ context, baseURL }) => {
+	await context.addCookies([
+		{ name: 'je-scenario', value: FLIGHT, url: baseURL ?? 'http://127.0.0.1:4173' }
+	]);
+});
 
 test('a profiled submitter opens beside the row, and Escape gives the name back', async ({
 	page
@@ -106,13 +116,18 @@ test('the way to the roster lands on that speaker’s row, already open', async 
 	await expect(page).toHaveURL(/\/app\/submissions$/);
 
 	// The scope is kept, not merely aimed: her row is open and the caret is on
-	// her, so nobody has to find her again in a roster of alike rows.
+	// it — the whole record, not the name block inside it — so nobody has to
+	// find her again in a roster of alike rows.
 	const roster = roster_page.getByRole('region', { name: 'Speaker roster' });
 	const disclosure = roster
 		.getByRole('button', { name: 'Details for Maya Lindqvist' })
 		.filter({ visible: true });
 	await expect(disclosure).toHaveAttribute('aria-expanded', 'true', { timeout: 15000 });
-	await expect(roster.locator('[data-speaker="spk-1"]').filter({ visible: true })).toBeFocused();
+	await expect(
+		roster
+			.locator('tr[data-arrival-host]')
+			.filter({ has: roster_page.locator('[data-speaker="spk-1"]') })
+	).toBeFocused();
 
 	// That page dismisses by closing what it opened, and the scope leaves the
 	// address with it.

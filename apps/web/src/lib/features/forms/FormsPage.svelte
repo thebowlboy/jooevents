@@ -15,7 +15,7 @@
 	} from '$lib/ui';
 	import type { DescribedOption, IconComponent } from '$lib/ui';
 	import type { FormsPagePort } from '$lib/api/forms-page-port';
-	import { param, applyParams, clearParams } from '$lib/features/workspace/url-state.svelte';
+	import { param, paramFlag, applyParams, clearParams } from '$lib/features/workspace/url-state.svelte';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
 	import type {
@@ -34,6 +34,31 @@
 
 	let forms = $state<FormSummary[] | null>(null);
 	let newFormOpen = $state(false);
+
+	// A link may open the creation dialog — `/app/forms?new=1` — because a GET
+	// may open a surface: the empty-inbox CFP nudge and the Overview attention
+	// item land inside the act, not at an area name. Publishing stays the
+	// separate, deliberate commit.
+	const newAsked = $derived(paramFlag('new'));
+	let newHonoured = false;
+
+	$effect(() => {
+		if (!newAsked) {
+			newHonoured = false;
+			return;
+		}
+		if (newHonoured) return;
+		newHonoured = true;
+		newFormOpen = true;
+	});
+
+	// Closing the dialog leaves a clean address behind, so a reload does not
+	// reopen a dialog the operator already dismissed. Creation is not a
+	// dismissal: its own navigation clears the flag in the same write, and
+	// racing it here would wipe the `form` param it just pushed.
+	$effect(() => {
+		if (!newFormOpen && newAsked && newHonoured && !creating) void clearParams(['new']);
+	});
 
 	/** The open form's configurator is shareable state, so it lives in the address. */
 	const formId = $derived(param('form'));
@@ -232,10 +257,13 @@
 			...(newClosesAt ? { closesAt: newClosesAt } : {})
 		});
 		await reloadForms();
-		creating = false;
 		newFormOpen = false;
 		// The new form opens on its questions — creation's receipt is the arrival.
-		void applyParams({ form: created.id }, { history: 'push' });
+		// One write carries the whole address change: the questions page in, the
+		// `?new=1` door flag out. `creating` stays up until it lands so the
+		// dismissal cleanup cannot race a second write over it.
+		await applyParams({ form: created.id, new: null }, { history: 'push' });
+		creating = false;
 	}
 
 	// -----------------------------------------------------------------------
@@ -1248,8 +1276,8 @@
 			<div class="empty">
 				<h2 class="empty__title">No forms yet</h2>
 				<p class="empty__copy">
-					Start from the standard application — a complete form, already arranged, that you trim to
-					fit.
+					Open your call for proposals (CFP) by starting from the standard application — a
+					complete form, already arranged, that you trim to fit.
 				</p>
 				<button
 					type="button"
@@ -1323,8 +1351,8 @@
 <Modal bind:open={newFormOpen} title="New form">
 	<form class="newform" onsubmit={createForm} aria-label="New form">
 		<p class="newform__copy">
-			Every new form starts as the standard application — complete and arranged — and you trim it
-			to fit on the questions page this lands on.
+			Every new form starts as the standard application — the classic call for proposals (CFP),
+			complete and arranged — and you trim it to fit on the questions page this lands on.
 		</p>
 		<Field id="new-form-name" label="Name">
 			{#snippet children({ id, describedBy })}

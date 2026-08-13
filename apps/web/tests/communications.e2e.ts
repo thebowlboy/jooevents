@@ -4,7 +4,29 @@ import { expect, test } from '@playwright/test';
  * The communications surface: work waiting on the operator sits in the
  * attention queue, everything authorized to leave sits in history with its
  * purpose and cause, and a person scope shows one speaker's own thread.
+ *
+ * Pinned to the mid-flight scenario: these tests assert its exact fixtures
+ * (the onboarding bounces, the acceptance draft, Maya's thread), and which
+ * story the hosted demo opens on must not decide what they see.
  */
+
+test.use({
+	storageState: {
+		cookies: [
+			{
+				name: 'je-scenario',
+				value: 'flight',
+				domain: '127.0.0.1',
+				path: '/',
+				expires: -1,
+				httpOnly: false,
+				secure: false,
+				sameSite: 'Lax'
+			}
+		],
+		origins: []
+	}
+});
 
 test('attention and history split the surface, and every history row states why it was sent', async ({ page }) => {
 	await page.goto('/app/messages');

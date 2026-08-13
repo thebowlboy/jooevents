@@ -11,20 +11,21 @@ test('an attention row lands on its own rows, says so, and gives them all back',
 	await page.goto('/app');
 
 	const row = page
-		.getByRole('listitem')
-		.filter({ hasText: 'accepted submissions not yet notified' });
+		.getByRole('region', { name: 'Act now' })
+		.filter({ hasText: 'decisions not yet notified' });
 	await expect(row).toBeVisible({ timeout: 15000 });
 
 	// The scope in the sentence survives the click.
 	await row.getByRole('link', { name: /Compose notifications/ }).click();
 	await expect(page).toHaveURL(/\/app\/decisions\?scope=unnotified$/);
 
+	// Data rows by class: the station group headers share the table's rows.
 	const candidates = page.getByRole('region', { name: 'Candidates' });
-	const rows = candidates.locator('tbody tr');
-	await expect(rows).toHaveCount(3, { timeout: 15000 });
+	const rows = candidates.locator('tr.row');
+	await expect(rows).toHaveCount(4, { timeout: 15000 });
 	await expect(candidates).toContainText('Typed Tool Contracts Between Agents That Never Meet');
 	// An already-notified decision is not part of the scope.
-	await expect(candidates).not.toContainText('Context Caching Without Tears');
+	await expect(candidates).not.toContainText('Opening Keynote: AI Engineering Beyond the Demo');
 
 	// The destination names the filter it applied on the operator's behalf.
 	const chip = page.getByText('Decided · not yet notified');
@@ -33,8 +34,8 @@ test('an attention row lands on its own rows, says so, and gives them all back',
 	// One press returns the whole list, and the address goes back to clean.
 	await page.getByRole('button', { name: /Clear this filter/ }).click();
 	await expect(page).toHaveURL(/\/app\/decisions$/);
-	await expect(candidates).toContainText('Context Caching Without Tears');
-	expect(await rows.count()).toBeGreaterThan(3);
+	await expect(candidates).toContainText('Opening Keynote: AI Engineering Beyond the Demo');
+	expect(await rows.count()).toBeGreaterThan(4);
 	await expect(page.getByText('Decided · not yet notified')).toHaveCount(0);
 });
 
@@ -62,7 +63,7 @@ test('a submissions address restores the tray and the search it names', async ({
 test('a signal chip explains itself from the keyboard, and Escape gives focus back', async ({ page }) => {
 	await page.goto('/app/submissions');
 
-	const chip = page.getByRole('button', { name: /On-topic 0\.94 — why this signal/ });
+	const chip = page.getByRole('button', { name: /On-topic 0\.95 — why this signal/ });
 	await expect(chip).toBeVisible({ timeout: 15000 });
 	await expect(chip).toHaveAttribute('aria-expanded', 'false');
 
@@ -71,17 +72,26 @@ test('a signal chip explains itself from the keyboard, and Escape gives focus ba
 	const panelId = await chip.getAttribute('aria-controls');
 	const panel = page.locator(`#${panelId}`);
 	await expect(panel).toBeVisible();
-	await expect(panel).toContainText('Abstract cites concrete production invalidation graphs');
-	await expect(panel).toContainText('confidence 0.94');
+	await expect(panel).toContainText('Named tooling, reproducible method, and two concrete failures');
+	await expect(panel).toContainText('confidence 0.95');
 	// The same words reach a screen reader through the surface's polite region.
-	await expect(page.getByRole('status').filter({ hasText: 'Screen run #2' })).toBeAttached();
+	await expect(page.getByRole('status').filter({ hasText: 'Screen run #8' })).toBeAttached();
 
 	await page.keyboard.press('Escape');
 	await expect(chip).toHaveAttribute('aria-expanded', 'false');
 	await expect(chip).toBeFocused();
 });
 
-test('a received task is accepted from its own cell and the receipt takes it back', async ({ page }) => {
+test('a received task is accepted from its own cell and the receipt takes it back', async ({
+	page,
+	context,
+	baseURL
+}) => {
+	// Only the mid-flight scenario seeds a received-but-unaccepted upload, so the
+	// premise pins that scenario rather than borrowing a different cell state.
+	await context.addCookies([
+		{ name: 'je-scenario', value: 'flight', url: baseURL ?? 'http://127.0.0.1:4173' }
+	]);
 	await page.goto('/app/tasks');
 
 	const cell = page.getByRole('button', { name: /Received — Headshot upload from Ravi Chandran/ });
@@ -117,7 +127,7 @@ test('a speaker row opens the task matrix already scoped to that speaker', async
 	await expect(roster.getByText('AV requirements form').filter({ visible: true })).toBeVisible();
 	await roster.getByRole('link', { name: 'Open in Tasks' }).click();
 
-	await expect(page).toHaveURL(/\/app\/tasks\?speaker=spk-7&filter=overdue$/);
+	await expect(page).toHaveURL(/\/app\/tasks\?speaker=spk-4&filter=overdue$/);
 	await expect(page.getByText('Overdue · Elena Petrova')).toBeVisible({ timeout: 15000 });
 
 	await page.getByRole('button', { name: /Clear this filter/ }).click();
@@ -139,7 +149,7 @@ test('a speaker row opens the task matrix already scoped to that speaker', async
  */
 test('a scoped link marks the whole row, not the name inside it', async ({ page }) => {
 	await page.setViewportSize({ width: 1440, height: 900 });
-	await page.goto('/app/reviewers?reviewer=mem-7');
+	await page.goto('/app/reviewers?reviewer=mem-10');
 
 	const roster = page.getByRole('region', { name: 'Reviewer roster' });
 	const marked = roster.locator('tr.ui-arrival--row');
@@ -153,17 +163,17 @@ test('a scoped link marks the whole row, not the name inside it', async ({ page 
 
 test('the decisions table marks the row a ?submission= link names', async ({ page }) => {
 	await page.setViewportSize({ width: 1440, height: 900 });
-	await page.goto('/app/decisions?submission=sub-101');
+	await page.goto('/app/decisions?submission=sub-301');
 
 	const candidates = page.getByRole('region', { name: 'Candidates' });
 	const marked = candidates.locator('tr.ui-arrival--row');
 	await expect(marked).toHaveCount(1, { timeout: 15000 });
-	await expect(marked).toContainText('Context Caching Without Tears');
+	await expect(marked).toContainText('Deterministic Replay for Agent Failures');
 });
 
 test('a marked arrival shows one indicator, not a focus ring beside the mark', async ({ page }) => {
 	await page.setViewportSize({ width: 760, height: 900 });
-	await page.goto('/app/reviewers?reviewer=mem-7');
+	await page.goto('/app/reviewers?reviewer=mem-10');
 
 	// Narrow renders cards, where the host is the card itself and the focus ring
 	// would otherwise be drawn around the same box the mark already rings.

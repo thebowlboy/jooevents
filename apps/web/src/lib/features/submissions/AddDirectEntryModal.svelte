@@ -9,9 +9,10 @@
 -->
 <script lang="ts">
 	import { Button, Field, Modal, Radio } from '$lib/ui';
+	import { describePortFailure } from '$lib/api/port-failure';
 	import type { SubmissionsPagePort } from '$lib/api/submissions-page-port';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
-	import InlineVocabAdd from './InlineVocabAdd.svelte';
+	import InlineVocabAdd from '$lib/features/workspace/components/InlineVocabAdd.svelte';
 	import type { Format, Submission, Track } from '$lib/api/types';
 
 	interface Props {
@@ -205,8 +206,13 @@
 				disposition,
 				...(targetSessionId ? { targetSessionId } : {})
 			});
-		} catch {
-			requestError = 'The entry couldn’t be saved. Try again.';
+		} catch (error) {
+			// The port's typed refusals carry their own remedy ("open your call
+			// for proposals first", "add it to the inbox, then accept it on
+			// Decisions") — flattening them onto a retry line advertised a
+			// permanently doomed submit as transient. The generic retry copy is
+			// only the fallback for an unclassified failure.
+			requestError = describePortFailure(error, 'The entry couldn’t be saved. Try again.').message;
 			adding = false;
 			return;
 		}
@@ -226,7 +232,10 @@
 	}
 </script>
 
-<Modal bind:open title="Add direct entry">
+<!-- "Add a submission" on the control; "direct entry" stays the provenance
+     grammar the rows wear ("direct entry by Jere K.") — the button names the
+     object being added, the chip names how it got here. -->
+<Modal bind:open title="Add a submission">
 	<form class="entry" onsubmit={add}>
 		<p class="entry__copy">
 			For a talk that didn’t come through the form — an invited speaker, or a proposal that
@@ -336,7 +345,7 @@
 							{/if}
 						</span>
 						<InlineVocabAdd
-							label="New track…"
+							label="New track"
 							placeholder="e.g. Infrastructure"
 							disabled={adding || !vocabReady}
 							submit={addTrack} />
@@ -366,7 +375,7 @@
 							{/if}
 						</span>
 						<InlineVocabAdd
-							label="New format…"
+							label="New format"
 							placeholder="e.g. Lightning talk"
 							disabled={adding || !vocabReady}
 							submit={addFormat} />

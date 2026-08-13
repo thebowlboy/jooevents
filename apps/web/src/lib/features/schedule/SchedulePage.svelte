@@ -7,6 +7,7 @@
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
 	import { applyParams, clearParams, param } from '$lib/features/workspace/url-state.svelte';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
+	import InlineVocabAdd from '$lib/features/workspace/components/InlineVocabAdd.svelte';
 	import ProfilePeek from '$lib/features/workspace/components/ProfilePeek.svelte';
 	import {
 		columnSegments,
@@ -338,7 +339,7 @@
 			void commitPlacement();
 			return;
 		}
-		if (event.key !== 'Escape' || confirmOpen || breakOpen) return;
+		if (event.key !== 'Escape' || confirmOpen || breakOpen || newSessionOpen !== false) return;
 		if (event.target instanceof Element && event.target.closest('.ui-popover')) return;
 		// An armed removal stands down first; the mode survives the same press.
 		if (armedRemoveId || armedBreakId) {
@@ -693,10 +694,11 @@
 	// Speakers are deliberately absent here; attribution has one grammar (the
 	// speakers panel), so a free-text name field cannot reintroduce strings.
 	//
-	// One form, two doors: the Program panel header (the worklist home — a
+	// One dialog, two doors: the Program panel header (the worklist home — a
 	// created session starts unplaced there) and the board's Add row (standing
-	// at the grid, so its primary is Create and place…). Same label, same
-	// form, one open instance — never two controls that read as two features.
+	// at the grid, so its primary is Create and place…). A modal, matching how
+	// the product creates every other named thing (New event, New form) — and
+	// dismissal is parking: the draft survives until a create lands.
 
 	let newSessionOpen = $state<false | 'panel' | 'board'>(false);
 	let creatingSession = $state(false);
@@ -715,17 +717,70 @@
 	/** Enter commits the door's own primary: place-bound from the board, pool-bound from the panel. */
 	const nsPlaceIsPrimary = $derived(newSessionOpen === 'board' && nsState !== 'draft');
 
+	/**
+	 * A dismissed form keeps what was typed: closing is parking, not
+	 * discarding, so Escape or a click elsewhere never costs the title someone
+	 * was mid-way through. The fields reset only after a create lands (or on a
+	 * full reload, with everything else). Plain let — this is bookkeeping about
+	 * the draft's freshness, not view state.
+	 */
+	let nsStarted = false;
+
 	async function openNewSession(origin: 'panel' | 'board') {
 		newSessionOpen = newSessionOpen === origin ? false : origin;
 		if (!newSessionOpen) return;
-		nsTitle = '';
-		nsFormatId = formats.find((format) => format.status === 'active')?.id ?? '';
-		nsTrackId = '';
-		nsDurationTouched = false;
-		nsDuration = String(formatDefault(nsFormatId));
-		nsState = 'programmed';
+		if (!nsStarted) {
+			nsStarted = true;
+			nsVocabNote = '';
+			nsTitle = '';
+			nsFormatId = formats.find((format) => format.status === 'active')?.id ?? '';
+			nsTrackId = '';
+			nsDurationTouched = false;
+			nsDuration = String(formatDefault(nsFormatId));
+			nsState = 'programmed';
+		}
 		await tick();
 		nsTitleInput?.focus();
+	}
+
+	/** What was minted in place, said in place — the sourced-options note. */
+	let nsVocabNote = $state('');
+
+	/**
+	 * Vocabulary minted where it is chosen (the direct-entry pattern, 22):
+	 * dedup against the live list first — an existing name is selected, not
+	 * duplicated — and the new entry is selected and usable immediately.
+	 */
+	async function addFormatInline(name: string) {
+		const existing = formats.find(
+			(format) => format.name.trim().toLowerCase() === name.trim().toLowerCase()
+		);
+		if (existing) {
+			nsFormatId = existing.id;
+			onNsFormatChange();
+			nsVocabNote = `“${existing.name}” already exists — selected.`;
+			return;
+		}
+		const created = await api.vocab.addFormat(name);
+		formats = await api.vocab.formats();
+		nsFormatId = created.id;
+		onNsFormatChange();
+		nsVocabNote = `“${created.name}” added to the event's formats and selected.`;
+	}
+
+	async function addTrackInline(name: string) {
+		const existing = tracks.find(
+			(track) => track.name.trim().toLowerCase() === name.trim().toLowerCase()
+		);
+		if (existing) {
+			nsTrackId = existing.id;
+			nsVocabNote = `“${existing.name}” already exists — selected.`;
+			return;
+		}
+		const created = await api.vocab.addTrack(name);
+		tracks = await api.vocab.tracks();
+		nsTrackId = created.id;
+		nsVocabNote = `“${created.name}” added to the event's tracks and selected.`;
 	}
 
 	function formatDefault(formatId: string): number {
@@ -758,6 +813,8 @@
 			}
 		});
 		newSessionOpen = false;
+		// The draft landed; the next open starts fresh.
+		nsStarted = false;
 		await load();
 		creatingSession = false;
 		if (andPlace) {
@@ -802,16 +859,37 @@
 	}
 
 	// ------------------------------------------------------------------
-	// The speakers panel: attribution's home (21 §5), addressable as
+	// The speakers dialog: attribution's home (21 §5), addressable as
 	// `?panel=speakers&session=…`, opened from a named control — never from a
-	// card body. One grammar: attach an accepted submission, direct entry, or
-	// an editorial roster edit; a placeholder stays honestly empty until then.
+	// card body. People-first: the roster leads, an accepted talk arrives as
+	// the people on it, and a new person is one form away; a placeholder stays
+	// honestly empty until then. The dialog names its session and slot so the
+	// thread is never lost mid-attribution.
 
 	const speakersForId = $derived(param('panel') === 'speakers' ? param('session') : null);
 	const speakersSession = $derived(
 		speakersForId ? (schedule?.sessions.find((entry) => entry.id === speakersForId) ?? null) : null
 	);
-	let speakersPanel = $state<HTMLElement>();
+
+	/** Where the session stands right now — the dialog's continuity cue. */
+	const speakersContext = $derived.by(() => {
+		const session = speakersSession;
+		if (!session) return '';
+		const placement = schedule?.placements.find((entry) => entry.sessionId === session.id);
+		const where = placement
+			? `${dayLabel(placement.dayKey)} ${clockLabel(placement.startMin)} · ${roomName(placement.roomId)}`
+			: 'not placed yet';
+		return `${session.durationMin} min · ${formatName(session.formatId)} · ${where}`;
+	});
+
+	/** One query narrows every way in: names, addresses, accepted talk titles. */
+	let spQuery = $state('');
+
+	function speakerMatches(text: string): boolean {
+		const query = spQuery.trim().toLowerCase();
+		if (!query) return true;
+		return text.toLowerCase().includes(query);
+	}
 
 	/** Provenance per origin submission, loaded with the panel. */
 	let origins = $state.raw<{ id: string; title: string; source: Submission['source']; speakerEmails: string[] }[]>([]);
@@ -830,6 +908,8 @@
 	}
 
 	function openSpeakers(session: SessionItem) {
+		spQuery = '';
+		addPersonOpen = false;
 		void applyParams({ panel: 'speakers', session: session.id }, { history: 'push' });
 	}
 
@@ -854,8 +934,37 @@
 		if (!session) return [];
 		const held = new Set(session.speakers.map((speaker) => speaker.email));
 		return roster.filter(
-			(row) => !held.has(row.email) && (row.state === 'invited' || row.state === 'confirmed')
+			(row) =>
+				!held.has(row.email) &&
+				(row.state === 'invited' || row.state === 'confirmed') &&
+				speakerMatches(`${row.name} ${row.email}`)
 		);
+	});
+
+	/**
+	 * Accepted talks whose people are not yet on this session, person-first:
+	 * the row leads with who arrives and says what they bring — adding them
+	 * links their talk, co-speakers included, with provenance kept.
+	 */
+	const acceptedCandidates = $derived.by(() =>
+		attachable.filter((submission) =>
+			speakerMatches(
+				`${submission.speakers.map((speaker) => speaker.name).join(' ')} ${submission.title}`
+			)
+		)
+	);
+
+	/** How many ways in exist before the query narrows them — the search scope. */
+	const candidateScope = $derived.by(() => {
+		const session = speakersSession;
+		if (!session) return { people: 0, talks: 0 };
+		const held = new Set(session.speakers.map((speaker) => speaker.email));
+		return {
+			people: roster.filter(
+				(row) => !held.has(row.email) && (row.state === 'invited' || row.state === 'confirmed')
+			).length,
+			talks: attachable.length
+		};
 	});
 
 	/** Closed copy for the engagement words a candidate row may show. */
@@ -1126,6 +1235,19 @@
 	 */
 	const reveal = revealTarget;
 
+	/**
+	 * The head count's jump to the conflicts panel. The address gains the
+	 * panel's name so the landing is shareable; a repeat press while already
+	 * scoped re-reveals instead of writing the same address again.
+	 */
+	function openConflictsPanel() {
+		if (param('panel') === 'conflicts') {
+			void tick().then(() => reveal(conflictsPanel ?? null, { mark: false }));
+			return;
+		}
+		void applyParams({ panel: 'conflicts' }, { history: 'push' });
+	}
+
 	async function showOnGrid(placement: Placement) {
 		await applyParams({ day: placement.dayKey });
 		await tick();
@@ -1211,7 +1333,6 @@
 		attachable = [];
 		addPersonOpen = false;
 		void loadSpeakersPanel(id);
-		void tick().then(() => reveal(speakersPanel ?? null, { mark: false }));
 	});
 </script>
 
@@ -1317,9 +1438,14 @@
 			{#if conflictRows.length === 0}
 				No conflicts
 			{:else}
-				{#if blockingCount > 0}<span class="count count--block">{blockingCount} blocking</span>{/if}
-				{#if blockingCount > 0 && warningCount > 0}<span class="count__sep"> · </span>{/if}
-				{#if warningCount > 0}<span class="count count--warn">{warningCount} warning{warningCount === 1 ? '' : 's'}</span>{/if}
+				<!-- The always-in-view statement of broken physics is also the one
+				     door to its rows (R2): the nav badge stopped re-aiming here, so
+				     this count carries the jump to the panel below the worklist. -->
+				<button type="button" class="head__conflicts-door" onclick={openConflictsPanel}>
+					{#if blockingCount > 0}<span class="count count--block">{blockingCount} blocking</span>{/if}
+					{#if blockingCount > 0 && warningCount > 0}<span class="count__sep"> · </span>{/if}
+					{#if warningCount > 0}<span class="count count--warn">{warningCount} warning{warningCount === 1 ? '' : 's'}</span>{/if}
+				</button>
 			{/if}
 		</p>
 
@@ -1546,8 +1672,9 @@
 															type="button"
 															class="ui-button ui-button--ghost ui-button--sm"
 															aria-label={`Speakers on “${session.title}”`}
+															aria-haspopup="dialog"
 															disabled={busy || placing !== null}
-															onclick={() => openSpeakers(session)}>Speakers</button>
+															onclick={() => openSpeakers(session)}>Speakers…</button>
 													{/if}
 												</div>
 												{#if armedRemoveId === session.id}
@@ -1719,8 +1846,8 @@
 						<button
 							type="button"
 							class="ui-button ui-button--secondary ui-button--sm"
-							aria-expanded={newSessionOpen === 'board'}
-							aria-controls="new-session-form"
+							id="new-session-door-board"
+							aria-haspopup="dialog"
 							disabled={placing !== null}
 							onclick={() => void openNewSession('board')}>New session…</button>
 						<button
@@ -1735,9 +1862,6 @@
 							disabled={placing !== null}
 							onclick={openAddBreak}>Add break…</button>
 					</div>
-					{#if newSessionOpen === 'board'}
-						<div class="board-add__panel">{@render newSessionForm()}</div>
-					{/if}
 					{#if addRoomOpen}
 						<div class="board-add__panel" id="board-add-room">{@render roomForm()}</div>
 					{/if}
@@ -1746,145 +1870,6 @@
 		</section>
 
 		<div class="aside">
-			{#if speakersSession}
-				{@const session = speakersSession}
-				<!-- Attribution's home: addressable (`?panel=speakers&session=…`),
-				     opened from a named control, never from a card body (R3). One
-				     grammar — attach an accepted submission, direct entry, or an
-				     editorial roster edit — and every act leaves an undoable receipt. -->
-				<section
-					class="panel"
-					aria-label={`Speakers — ${session.title}`}
-					tabindex="-1"
-					bind:this={speakersPanel}>
-					<header class="panel__head">
-						<h2>Speakers</h2>
-						<span class="panel__count">{session.speakers.length}</span>
-						<button
-							type="button"
-							class="ui-button ui-button--ghost ui-button--sm panel__head-action"
-							aria-label={`Close speakers on “${session.title}”`}
-							onclick={closeSpeakers}>Close</button>
-					</header>
-					<p class="speakers__session">{session.title}</p>
-					{#if session.speakers.length === 0}
-						<p class="panel__calm">
-							No speakers yet — a placeholder is fine. Attach an accepted proposal or add the
-							person directly when they are known.
-						</p>
-					{:else}
-						<ul class="speakers">
-							{#each session.speakers as speaker (speaker.email)}
-								<li class="speakers__row">
-									<div class="speakers__copy">
-										<p class="speakers__name">{speaker.name}</p>
-										<!-- Provenance renders in place (R4): how this person got
-										     here, not a hover secret. -->
-										<p class="speakers__provenance">{provenanceOf(speaker)}</p>
-									</div>
-									{#if armedParticipant === speaker.email}
-										<button
-											type="button"
-											class="ui-button ui-button--danger ui-button--sm speakers__action"
-											disabled={attributing}
-											aria-label={`Remove ${speaker.name} — confirm`}
-											onclick={() => removeParticipant(session, speaker)}>Remove?</button>
-									{:else}
-										<button
-											type="button"
-											class="ui-button ui-button--ghost ui-button--sm speakers__action"
-											disabled={attributing}
-											aria-label={`Remove ${speaker.name} from “${session.title}”`}
-											onclick={() => armParticipant(speaker.email)}>Remove</button>
-									{/if}
-								</li>
-							{/each}
-						</ul>
-					{/if}
-
-					{#if attachable.length > 0}
-						<h3 class="speakers__group">Attach an accepted proposal</h3>
-						<ul class="speakers">
-							{#each attachable as submission (submission.id)}
-								<li class="speakers__row">
-									<div class="speakers__copy">
-										<p class="speakers__name">{submission.title}</p>
-										<p class="speakers__provenance">
-											{submission.speakers.map((speaker) => speaker.name).join(', ')}
-										</p>
-									</div>
-									<button
-										type="button"
-										class="ui-button ui-button--secondary ui-button--sm speakers__action"
-										disabled={attributing}
-										aria-label={`Attach “${submission.title}” to “${session.title}”`}
-										onclick={() => attach(session, submission)}>Attach</button>
-								</li>
-							{/each}
-						</ul>
-					{/if}
-
-					{#if rosterCandidates.length > 0}
-						<h3 class="speakers__group">Add from the roster</h3>
-						<ul class="speakers">
-							{#each rosterCandidates as row (row.id)}
-								<li class="speakers__row">
-									<div class="speakers__copy">
-										<p class="speakers__name">{row.name}</p>
-										<p class="speakers__provenance">{engagementCopy[row.state]}</p>
-									</div>
-									<button
-										type="button"
-										class="ui-button ui-button--secondary ui-button--sm speakers__action"
-										disabled={attributing}
-										aria-label={`Add ${row.name} to “${session.title}”`}
-										onclick={() => addFromRoster(session, row)}>Add</button>
-								</li>
-							{/each}
-						</ul>
-					{/if}
-
-					<div class="speakers__direct">
-						<button
-							type="button"
-							class="ui-button ui-button--secondary ui-button--sm"
-							aria-expanded={addPersonOpen}
-							aria-controls="speakers-direct-form"
-							onclick={() => (addPersonOpen = !addPersonOpen)}>Add a new person…</button>
-						{#if addPersonOpen}
-							<!-- Direct entry (04 §3), whole: person, accepted direct-entry
-							     record, invited engagement, and the attribution in one commit. -->
-							<form class="speakers__form" id="speakers-direct-form" onsubmit={addDirect}>
-								<Field id="speakers-direct-name" label="Name">
-									{#snippet children({ id, describedBy })}
-										<input
-											class="ui-control"
-											type="text"
-											{id}
-											aria-describedby={describedBy}
-											disabled={attributing}
-											bind:value={apName} />
-									{/snippet}
-								</Field>
-								<Field id="speakers-direct-email" label="Email">
-									{#snippet children({ id, describedBy })}
-										<input
-											class="ui-control"
-											type="email"
-											{id}
-											aria-describedby={describedBy}
-											disabled={attributing}
-											bind:value={apEmail} />
-									{/snippet}
-								</Field>
-								<Button type="submit" size="sm" disabled={!apReady || attributing}>
-									Add to session
-								</Button>
-							</form>
-						{/if}
-					</div>
-				</section>
-			{/if}
 
 			<!-- The round-up worklist: what still stands between the program and
 			     done. Groups partition the pool so every unfinished session renders
@@ -1898,14 +1883,10 @@
 					<button
 						type="button"
 						class="ui-button ui-button--secondary ui-button--sm panel__head-action"
-						aria-expanded={newSessionOpen === 'panel'}
-						aria-controls="new-session-form"
+						id="new-session-door-panel"
+						aria-haspopup="dialog"
 						onclick={() => void openNewSession('panel')}>New session…</button>
 				</header>
-
-				{#if newSessionOpen === 'panel'}
-					{@render newSessionForm()}
-				{/if}
 
 				{#if trayFilter}
 					<p class="panel__scope">
@@ -1994,9 +1975,191 @@
 	</div>
 {/if}
 
+<!-- Attribution's home (21 §5), now the full stage: who is on this session,
+     one search across every way in, and the session named so the thread is
+     never lost. Every act commits individually with an undoable receipt, so
+     closing loses nothing. -->
+<Modal
+	bind:open={() => speakersSession !== null, (value) => { if (!value) closeSpeakers(); }}
+	title="Speakers"
+	dismissible>
+	{#if speakersSession}
+		{@const session = speakersSession}
+		<div class="speakers__body">
+			<!-- The continuity cue: which session, and where it stands right now. -->
+			<div class="speakers__context">
+				<p class="speakers__session">{session.title}</p>
+				<p class="speakers__meta">{speakersContext}</p>
+			</div>
+
+			{#if session.speakers.length === 0}
+				<p class="speakers__calm">
+					No speakers yet — a placeholder is fine. Add people from the roster, bring in an
+					accepted talk, or add a new person when they are known.
+				</p>
+			{:else}
+				<h3 class="speakers__group">On this session</h3>
+				<ul class="speakers">
+					{#each session.speakers as speaker (speaker.email)}
+						<li class="speakers__row">
+							<div class="speakers__copy">
+								<p class="speakers__name">{speaker.name}</p>
+								<!-- Provenance renders in place (R4): how this person got
+								     here, not a hover secret. -->
+								<p class="speakers__provenance">{provenanceOf(speaker)}</p>
+							</div>
+							{#if armedParticipant === speaker.email}
+								<button
+									type="button"
+									class="ui-button ui-button--danger ui-button--sm speakers__action"
+									disabled={attributing}
+									aria-label={`Remove ${speaker.name} — confirm`}
+									onclick={() => removeParticipant(session, speaker)}>Remove?</button>
+							{:else}
+								<button
+									type="button"
+									class="ui-button ui-button--ghost ui-button--sm speakers__action"
+									disabled={attributing}
+									aria-label={`Remove ${speaker.name} from “${session.title}”`}
+									onclick={() => armParticipant(speaker.email)}>Remove</button>
+							{/if}
+						</li>
+					{/each}
+				</ul>
+			{/if}
+
+			{#if candidateScope.people + candidateScope.talks > 3}
+				<!-- One query across every way in; the scope line says what it
+				     searched, so a short list reads as "few matched", never
+				     "few exist". -->
+				<Field id="speakers-search" label="Add people">
+					{#snippet children({ id, describedBy })}
+						<input
+							class="ui-control"
+							type="search"
+							{id}
+							aria-describedby={describedBy}
+							placeholder="Search the roster and accepted talks"
+							bind:value={spQuery} />
+					{/snippet}
+				</Field>
+			{/if}
+
+			{#if rosterCandidates.length > 0}
+				<h3 class="speakers__group">From the roster</h3>
+				<ul class="speakers">
+					{#each rosterCandidates as row (row.id)}
+						<li class="speakers__row">
+							<div class="speakers__copy">
+								<p class="speakers__name">{row.name}</p>
+								<p class="speakers__provenance">{engagementCopy[row.state]}</p>
+							</div>
+							<button
+								type="button"
+								class="ui-button ui-button--secondary ui-button--sm speakers__action"
+								disabled={attributing}
+								aria-label={`Add ${row.name} to “${session.title}”`}
+								onclick={() => addFromRoster(session, row)}>Add</button>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+
+			{#if acceptedCandidates.length > 0}
+				<!-- People arriving with an accepted talk: adding them links the
+				     talk itself — co-speakers included — and keeps the provenance.
+				     Real program work: a panel assembled from separate proposals,
+				     a lightning block of short talks. -->
+				<h3 class="speakers__group">With an accepted talk</h3>
+				<ul class="speakers">
+					{#each acceptedCandidates as submission (submission.id)}
+						<li class="speakers__row">
+							<div class="speakers__copy">
+								<p class="speakers__name">
+									{submission.speakers.map((speaker) => speaker.name).join(', ')}
+								</p>
+								<p class="speakers__provenance">accepted — “{submission.title}”</p>
+							</div>
+							<button
+								type="button"
+								class="ui-button ui-button--secondary ui-button--sm speakers__action"
+								disabled={attributing}
+								aria-label={`Add “${submission.title}” to “${session.title}”`}
+								onclick={() => attach(session, submission)}>
+								{submission.speakers.length === 1 ? 'Add' : `Add ${submission.speakers.length}`}
+							</button>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+
+			{#if spQuery.trim() && rosterCandidates.length === 0 && acceptedCandidates.length === 0}
+				<p class="speakers__calm">
+					No one matches “{spQuery.trim()}” across {candidateScope.people}
+					{candidateScope.people === 1 ? 'person' : 'people'} on the roster and
+					{candidateScope.talks} accepted {candidateScope.talks === 1 ? 'talk' : 'talks'} —
+					add them as a new person below.
+				</p>
+			{/if}
+
+			<div class="speakers__direct">
+				<button
+					type="button"
+					class="ui-button ui-button--secondary ui-button--sm"
+					aria-expanded={addPersonOpen}
+					aria-controls="speakers-direct-form"
+					onclick={() => {
+						addPersonOpen = !addPersonOpen;
+						if (addPersonOpen && !apName && spQuery.trim()) apName = spQuery.trim();
+					}}>Add a new person…</button>
+				{#if addPersonOpen}
+					<!-- Direct entry (04 §3), whole: person, accepted direct-entry
+					     record, invited engagement, and the attribution in one commit. -->
+					<form class="speakers__form" id="speakers-direct-form" onsubmit={addDirect}>
+						<Field id="speakers-direct-name" label="Name">
+							{#snippet children({ id, describedBy })}
+								<input
+									class="ui-control"
+									type="text"
+									{id}
+									aria-describedby={describedBy}
+									disabled={attributing}
+									bind:value={apName} />
+							{/snippet}
+						</Field>
+						<Field id="speakers-direct-email" label="Email">
+							{#snippet children({ id, describedBy })}
+								<input
+									class="ui-control"
+									type="email"
+									{id}
+									aria-describedby={describedBy}
+									disabled={attributing}
+									bind:value={apEmail} />
+							{/snippet}
+						</Field>
+						<Button type="submit" size="sm" disabled={!apReady || attributing}>
+							Add to session
+						</Button>
+					</form>
+				{/if}
+			</div>
+		</div>
+	{/if}
+</Modal>
+
+<!-- Dismissal is parking, not discarding: backdrop, Escape, and the close
+     button all keep the draft (nsStarted), so nothing typed is lost until a
+     create lands or the page reloads. -->
+<Modal
+	bind:open={() => newSessionOpen !== false, (value) => { if (!value) newSessionOpen = false; }}
+	title="New session"
+	dismissible>
+	{@render newSessionForm()}
+</Modal>
+
 {#snippet newSessionForm()}
-	<!-- Rendered by whichever door opened it; one instance at a time, so the
-	     field ids stay unique. Enter submits the door's own primary. -->
+	<!-- Enter submits the opening door's own primary. -->
 	<form
 		class="new-session"
 		id="new-session-form"
@@ -2019,32 +2182,49 @@
 		<div class="new-session__vocab">
 			<Field id="new-session-format" label="Format">
 				{#snippet children({ id, describedBy })}
-					<select
-						class="ui-control"
-						{id}
-						aria-describedby={describedBy}
-						disabled={creatingSession}
-						bind:value={nsFormatId}
-						onchange={onNsFormatChange}>
-						{#each formats.filter((format) => format.status === 'active') as format (format.id)}
-							<option value={format.id}>{format.name}</option>
-						{/each}
-					</select>
+					<div class="new-session__choice">
+						<select
+							class="ui-control"
+							{id}
+							aria-describedby={describedBy}
+							disabled={creatingSession}
+							bind:value={nsFormatId}
+							onchange={onNsFormatChange}>
+							{#if formats.filter((format) => format.status === 'active').length === 0}
+								<option value="">No formats yet — add the first below</option>
+							{/if}
+							{#each formats.filter((format) => format.status === 'active') as format (format.id)}
+								<option value={format.id}>{format.name}</option>
+							{/each}
+						</select>
+						<InlineVocabAdd
+							label="New format"
+							placeholder="e.g. Workshop"
+							disabled={creatingSession}
+							submit={addFormatInline} />
+					</div>
 				{/snippet}
 			</Field>
 			<Field id="new-session-track" label="Track">
 				{#snippet children({ id, describedBy })}
-					<select
-						class="ui-control"
-						{id}
-						aria-describedby={describedBy}
-						disabled={creatingSession}
-						bind:value={nsTrackId}>
-						<option value="">No track yet</option>
-						{#each tracks.filter((track) => track.status === 'active') as track (track.id)}
-							<option value={track.id}>{track.name}</option>
-						{/each}
-					</select>
+					<div class="new-session__choice">
+						<select
+							class="ui-control"
+							{id}
+							aria-describedby={describedBy}
+							disabled={creatingSession}
+							bind:value={nsTrackId}>
+							<option value="">No track</option>
+							{#each tracks.filter((track) => track.status === 'active') as track (track.id)}
+								<option value={track.id}>{track.name}</option>
+							{/each}
+						</select>
+						<InlineVocabAdd
+							label="New track"
+							placeholder="e.g. Infrastructure"
+							disabled={creatingSession}
+							submit={addTrackInline} />
+					</div>
 				{/snippet}
 			</Field>
 			<Field id="new-session-duration" label="Minutes">
@@ -2062,6 +2242,9 @@
 				{/snippet}
 			</Field>
 		</div>
+		{#if nsVocabNote}
+			<p class="new-session__vocab-note" role="status">{nsVocabNote}</p>
+		{/if}
 		<fieldset class="new-session__state">
 			<legend>Starts as</legend>
 			<Radio
@@ -2189,8 +2372,9 @@
 					type="button"
 					class="ui-button ui-button--ghost ui-button--sm"
 					aria-label={`Speakers on “${session.title}”`}
+					aria-haspopup="dialog"
 					disabled={placing !== null}
-					onclick={() => openSpeakers(session)}>Speakers</button>
+					onclick={() => openSpeakers(session)}>Speakers…</button>
 			{/if}
 		</div>
 	</li>
@@ -2262,28 +2446,35 @@
 				<span class="confirm__note"> — {confirmNote}</span>{/if}
 		</p>
 		{#if confirmNeighbors.prev || confirmNeighbors.next}
-			<!-- Relative-to-neighbour setters: precision in the domain's own words,
-			     no aiming, no arithmetic — and the dialog's window onto what sits
-			     beside this slot while the modal covers the grid. -->
-			<div class="confirm__anchors" role="group" aria-label="Snap to a neighbouring item">
-				{#if confirmNeighbors.prev}
-					{@const prev = confirmNeighbors.prev}
-					<button
-						type="button"
-						class="ui-button ui-button--secondary ui-button--sm"
-						onclick={() => setConfirmStart(prev.startMin, `Right after “${prev.label}”`)}>
-						<span class="confirm__anchor-label">Right after “{prev.label}”</span>
-					</button>
-				{/if}
-				{#if confirmNeighbors.next}
-					{@const next = confirmNeighbors.next}
-					<button
-						type="button"
-						class="ui-button ui-button--secondary ui-button--sm"
-						onclick={() => setConfirmStart(next.startMin, `Right before “${next.label}”`)}>
-						<span class="confirm__anchor-label">Right before “{next.label}”</span>
-					</button>
-				{/if}
+			<!-- Relative-to-neighbour setters, now touch-only (owner direction,
+			     2026-08-13): on a desktop the aim already landed this time within
+			     leeway, the grid stays visible beside the dialog, and a miss is a
+			     cheap re-move — so the verbs were a third answer to a solved
+			     question. On a phone the tap is genuinely approximate and the
+			     modal covers the grid, so they stay — introduced candidly as the
+			     help they are, not an unexplained extra control. -->
+			<div class="confirm__anchors-group">
+				<p class="confirm__anchors-why">If the tap landed a little off, snap it exactly:</p>
+				<div class="confirm__anchors" role="group" aria-label="Snap to a neighbouring item">
+					{#if confirmNeighbors.prev}
+						{@const prev = confirmNeighbors.prev}
+						<button
+							type="button"
+							class="ui-button ui-button--secondary ui-button--sm"
+							onclick={() => setConfirmStart(prev.startMin, `Right after “${prev.label}”`)}>
+							<span class="confirm__anchor-label">Right after “{prev.label}”</span>
+						</button>
+					{/if}
+					{#if confirmNeighbors.next}
+						{@const next = confirmNeighbors.next}
+						<button
+							type="button"
+							class="ui-button ui-button--secondary ui-button--sm"
+							onclick={() => setConfirmStart(next.startMin, `Right before “${next.label}”`)}>
+							<span class="confirm__anchor-label">Right before “{next.label}”</span>
+						</button>
+					{/if}
+				</div>
 			</div>
 		{/if}
 		<div class="confirm__time">
@@ -2455,6 +2646,26 @@
 		font-size: var(--je-font-size-sm);
 		color: var(--je-color-text-muted);
 		font-variant-numeric: tabular-nums;
+	}
+
+	/* A door that reads as the fact it states: plain text with the underline
+	   affordance, not a second button competing with Publish. */
+	.head__conflicts-door {
+		padding: 0;
+		border: 0;
+		background: none;
+		font: inherit;
+		color: inherit;
+		cursor: pointer;
+		text-decoration: underline;
+		text-decoration-color: var(--je-color-border-strong);
+		text-underline-offset: 3px;
+	}
+
+	.head__conflicts-door:focus-visible {
+		outline: none;
+		box-shadow: var(--je-focus-ring);
+		border-radius: 2px;
 	}
 
 	.count {
@@ -3347,21 +3558,29 @@
 		margin-inline-start: auto;
 	}
 
+	/* The dialog supplies the surface; the form is plain composition inside it. */
 	.new-session {
 		display: grid;
 		gap: var(--je-space-3);
-		padding: var(--je-space-3);
-		margin-block-end: var(--je-space-3);
-		border: 1px solid var(--je-color-border);
-		border-radius: var(--je-radius-control);
-		background: var(--je-color-surface-sunken);
 	}
 
-	/* Three fields while they fit, wrapping to fewer columns on a narrow aside
-	   rather than squeezing selects below a usable width. */
+	.new-session__choice {
+		display: grid;
+		gap: var(--je-space-1);
+	}
+
+	.new-session__vocab-note {
+		margin: 0;
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
+	}
+
+	/* Two real columns while they fit — a mint row opening under a select
+	   needs the width of a text field, not a sliver — collapsing to one on a
+	   narrow dialog. Minutes simply takes the next cell. */
 	.new-session__vocab {
 		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+		grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
 		gap: var(--je-space-3);
 	}
 
@@ -3395,10 +3614,35 @@
 		padding: 0;
 	}
 
+	.speakers__body {
+		display: grid;
+		gap: var(--je-space-3);
+	}
+
+	/* The continuity cue: the session this dialog acts on, and where it
+	   stands — placed and when, or honestly unplaced — so mid-attribution the
+	   thread is never lost behind the covered grid. */
+	.speakers__context {
+		padding-block-end: var(--je-space-3);
+		border-block-end: 1px solid var(--je-color-border);
+	}
+
 	.speakers__session {
-		margin: 0 0 var(--je-space-3);
+		margin: 0;
 		font-size: var(--je-font-size-md);
 		font-weight: 600;
+	}
+
+	.speakers__meta {
+		margin: var(--je-space-1) 0 0;
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
+	}
+
+	.speakers__calm {
+		margin: 0;
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-text-muted);
 	}
 
 	.speakers__row {
@@ -3430,7 +3674,7 @@
 	}
 
 	.speakers__group {
-		margin: var(--je-space-4) 0 var(--je-space-1);
+		margin: var(--je-space-2) 0 calc(-1 * var(--je-space-2));
 		font-size: var(--je-font-size-xs);
 		font-weight: 600;
 		text-transform: uppercase;
@@ -3466,11 +3710,29 @@
 		color: var(--je-color-link);
 	}
 
+	/* Touch-only: on a fine pointer the aim already answered this, so the
+	   group stays out of the dialog entirely (owner direction, 2026-08-13). */
+	.confirm__anchors-group {
+		display: none;
+	}
+
+	@media (max-width: 920px), (pointer: coarse) {
+		.confirm__anchors-group {
+			display: block;
+			margin-block-end: var(--je-space-3);
+		}
+	}
+
+	.confirm__anchors-why {
+		margin: 0 0 var(--je-space-1);
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
+	}
+
 	.confirm__anchors {
 		display: flex;
 		flex-wrap: wrap;
 		gap: var(--je-space-2);
-		margin-block-end: var(--je-space-3);
 	}
 
 	/* A neighbour's title can be long; the verb stays one line and the quoted

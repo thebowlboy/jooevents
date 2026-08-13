@@ -236,7 +236,7 @@
 		aria-label={navOpen ? 'Navigation' : undefined}>
 		<div class="side__top">
 			<a class="side__brand" href={nav.home}>
-				<img src={wordmarkUrl} alt="JooEvents" width="120" height="22" />
+				<img src={wordmarkUrl} alt="JooEvents" width="120" height="21" />
 			</a>
 			<button
 				type="button"

@@ -11,9 +11,27 @@ import { expect, test, type Page } from '@playwright/test';
  *
  * Both renderings are asserted from the same dataset, switched by the viewer
  * cookie alone, so the organizer's screen is evidence that nothing was taken
- * from it. In the default `flight` scenario the reviewer projection borrows
- * Sofia Berg, a generalist with no scope rows.
+ * from it. Pinned to the mid-flight scenario, whose reviewer projection
+ * borrows Sofia Berg, a generalist with no scope rows.
  */
+
+test.use({
+	storageState: {
+		cookies: [
+			{
+				name: 'je-scenario',
+				value: 'flight',
+				domain: '127.0.0.1',
+				path: '/',
+				expires: -1,
+				httpOnly: false,
+				secure: false,
+				sameSite: 'Lax'
+			}
+		],
+		origins: []
+	}
+});
 
 const url = (baseURL: string | undefined) => baseURL ?? 'http://127.0.0.1:4173';
 

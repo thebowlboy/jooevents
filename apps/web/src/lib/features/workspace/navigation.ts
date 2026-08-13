@@ -152,18 +152,25 @@ export function destinationLabel(pathname: string): string | undefined {
  * Where a blocking count sends its nav item.
  *
  * A count beside a label never becomes a second, separately-clickable control —
- * it re-aims the one link the row already has. `Schedule 2` in danger tone means
- * the schedule cannot publish, so the better destination is the conflicts panel
- * rather than the area root. Warning and inventory counts keep the root: they
- * describe a workload, not a blockage, and the whole area is the answer.
+ * it re-aims the one link the row already has. Warning and inventory counts
+ * keep the root: they describe a workload, not a blockage, and the whole area
+ * is the answer.
+ *
+ * Re-aiming survives only where the scope is a *filter* the destination opens
+ * on — a scoped list is a legible landing. It does not survive where the scope
+ * is a mid-page scroll target: the owner found the schedule nav "scrolling to
+ * nothing of note" on every visit while a conflict existed (2026-08-13), so
+ * Schedule goes to its root and the head row's own blocking count — always in
+ * view there — is the door to the conflicts panel. The Overview attention row
+ * keeps the scoped address; a deliberate click on "5 blocking conflicts"
+ * arriving scrolled is the promise kept, not a surprise.
  *
  * These are the same addresses the matching Overview attention rows use, so one
  * fact never acquires two landings.
  */
 const blockedDestination: Partial<Record<AreaKey, string>> = {
 	decisions: '/app/decisions?scope=unnotified',
-	tasks: '/app/tasks?filter=overdue',
-	schedule: '/app/schedule?panel=conflicts'
+	tasks: '/app/tasks?filter=overdue'
 };
 
 /** The address a nav item points at, given the count it is currently showing. */

@@ -36,22 +36,32 @@ test.beforeEach(async ({ context, baseURL }) => {
 	}]);
 });
 
-test('real same-origin runtime exposes live data and no sample fallback', async ({ page }) => {
+test('real same-origin runtime exposes live data and no sample fallback', async ({
+	page
+}, testInfo) => {
 	await page.goto('/app');
 
 	await expect(page.getByRole('img', { name: 'JooEvents' }).first()).toBeVisible();
-	await expect(page.getByRole('heading', { level: 2, name: 'Welcome to JooEvents' })).toBeVisible();
-	await expect(page.getByRole('button', { name: 'Fill in details myself' })).toBeEnabled();
+	if (testInfo.project.name === 'desktop') {
+		// The joined server is shared across projects, and later desktop specs
+		// create the first Event — only the first project sees first-run.
+		await expect(
+			page.getByRole('heading', { level: 2, name: 'Welcome to JooEvents' })
+		).toBeVisible();
+		await expect(page.getByRole('button', { name: 'Fill in details myself' })).toBeEnabled();
+	}
 	await expect(page.getByText(/Mid-flight|Decision crunch|All clear/)).toHaveCount(0);
 	await expect(page.locator('[data-je-scenario]')).toHaveCount(0);
-	await expect(page.getByRole('link', { name: 'Communications' })).toBeVisible();
 
+	// Communications now mounts the live readiness page: the shell titles it
+	// and the page reports provider readiness honestly instead of the old
+	// blanket "not enabled" gate.
 	if ((page.viewportSize()?.width ?? 0) < 720) {
 		await page.getByRole('button', { name: 'Open navigation' }).click();
 	}
 	await page.getByRole('link', { name: 'Communications' }).click();
-	await expect(page.getByRole('heading', { level: 2, name: 'Communications' })).toBeVisible();
-	await expect(page.getByText('This area is not enabled in the live workspace yet.')).toBeVisible();
+	await expect(page.getByRole('heading', { level: 1, name: 'Communications' })).toBeVisible();
+	await expect(page.getByRole('heading', { level: 2, name: 'Email delivery' })).toBeVisible();
 
 	await expectNoDocumentOverflow(page);
 });

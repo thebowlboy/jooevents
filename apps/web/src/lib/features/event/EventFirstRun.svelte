@@ -10,6 +10,8 @@
 	}
 
 	let { port, projection, oncreated }: Props = $props();
+	const today = new Date();
+	const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 	let name = $state('');
 	let timezone = $state(
 		typeof Intl === 'undefined' ? 'UTC' : (Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC')
@@ -27,9 +29,11 @@
 		requestError = '';
 		idempotencyKey = '';
 		if (name.trim()) nameError = '';
-		dateError = startDate && endDate && endDate < startDate
-			? 'The end date cannot fall before the start date.'
-			: '';
+		dateError = startDate && startDate < todayIso
+			? 'The start date cannot be in the past.'
+			: startDate && endDate && endDate < startDate
+				? 'The end date cannot fall before the start date.'
+				: '';
 	}
 
 	function reviewedError(result: Awaited<ReturnType<EventProgramPort['event']['create']>>): string {
@@ -52,7 +56,9 @@
 		nameError = name.trim() ? '' : 'Give the event a name.';
 		dateError = !startDate || !endDate
 			? 'Choose both event dates.'
-			: endDate < startDate
+			: startDate < todayIso
+				? 'The start date cannot be in the past.'
+				: endDate < startDate
 				? 'The end date cannot fall before the start date.'
 				: '';
 		if (nameError) {
@@ -115,7 +121,7 @@
 		<Field id="first-event-start" label="Start date" required>
 			{#snippet children({ id, describedBy })}
 				<DatePicker {id} {describedBy} disabled={pending} label="event start date"
-					bind:value={startDate} onchange={edited} />
+					min={todayIso} defaultFocus="today" bind:value={startDate} onchange={edited} />
 			{/snippet}
 		</Field>
 

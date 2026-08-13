@@ -1,5 +1,25 @@
 import { expect, test } from '@playwright/test';
 
+// Pinned to the mid-flight scenario: these tests assert its exact fixtures,
+// and which story the hosted demo opens on must not decide what they see.
+test.use({
+	storageState: {
+		cookies: [
+			{
+				name: 'je-scenario',
+				value: 'flight',
+				domain: '127.0.0.1',
+				path: '/',
+				expires: -1,
+				httpOnly: false,
+				secure: false,
+				sameSite: 'Lax'
+			}
+		],
+		origins: []
+	}
+});
+
 /**
  * The placement mode: the grid is the interface. Entering from "Place…" expands
  * the board to every day with openings highlighted; a click proposes a snapped
@@ -258,6 +278,25 @@ test('mobile: a bottom strip carries the mode name and its cancel', async ({ pag
 	await expect(strip).toHaveCount(0);
 });
 
+test('mobile: the confirm dialog keeps the neighbour verbs, introduced as the help they are', async ({ page }, testInfo) => {
+	test.skip(testInfo.project.name !== 'mobile', 'the verbs are the coarse-pointer treatment');
+
+	await page.goto('/app/schedule');
+	const poolButton = page.getByRole('button', { name: /Place “Typed Tool Contracts/ });
+	await expect(poolButton).toBeVisible({ timeout: 15000 });
+	await poolButton.click();
+
+	// A tap carries a position but not precision; the dialog says so plainly
+	// and offers the flush setters the desktop dialog no longer needs.
+	await page.getByRole('button', { name: 'Opening 10:00–10:30 — Main Stage, Tue Oct 13' }).click();
+	const dialog = page.getByRole('dialog', { name: 'Place session' });
+	await expect(dialog).toBeVisible();
+	await expect(dialog).toContainText('If the tap landed a little off, snap it exactly:');
+	await expect(
+		dialog.getByRole('button', { name: /Right after “Opening Keynote/ })
+	).toBeVisible();
+});
+
 test('an opening click confirms a snapped flush time, commits, and hands back undo', async ({ page }, testInfo) => {
 	test.skip(testInfo.project.name !== 'desktop', 'one viewport covers the commit contract');
 
@@ -309,10 +348,11 @@ test('typed time is the escape hatch: running into a break warns without blockin
 	await dialog.getByLabel('Starts').fill('11:50');
 	await expect(dialog).toContainText('Runs into “Lunch” in Breakout Stage A');
 
-	// The neighbour verbs are the recovery: one press returns the time flush
-	// before the thing the warning names, no arithmetic.
-	await dialog.getByRole('button', { name: 'Right before “Lunch”' }).click();
-	await expect(dialog.getByLabel('Starts')).toHaveValue('11:30');
+	// On a fine pointer the typed time is the recovery — the neighbour verbs
+	// are touch help and stay out of the desktop dialog entirely (owner
+	// direction, 2026-08-13).
+	await expect(dialog.getByRole('button', { name: 'Right before “Lunch”' })).toBeHidden();
+	await dialog.getByLabel('Starts').fill('11:30');
 	await expect(dialog).not.toContainText('Runs into “Lunch”');
 
 	// A warning attaches; it does not block the commit — and Enter commits

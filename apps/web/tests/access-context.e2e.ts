@@ -52,12 +52,12 @@ test('anonymous entry is neutral, secure, and usable without horizontal overflow
   const brandImage = page.getByRole('link', { name: 'JooEvents home' }).locator('img');
   await expect(brandImage).toBeVisible();
   await expect(brandImage).toHaveAttribute('width', '512');
-  await expect(brandImage).toHaveAttribute('height', '94');
+  await expect(brandImage).toHaveAttribute('height', '90');
   expect(await brandImage.evaluate((image: HTMLImageElement) => ({
     complete: image.complete,
     naturalWidth: image.naturalWidth,
     naturalHeight: image.naturalHeight
-  }))).toEqual({ complete: true, naturalWidth: 512, naturalHeight: 94 });
+  }))).toEqual({ complete: true, naturalWidth: 512, naturalHeight: 90 });
   const resolvedPanel = await panelGeometry(page);
   const resolvedBox = await page.locator('.entry-panel').boundingBox();
   expectSamePlace(resolvingPanel, resolvedPanel);

@@ -1,5 +1,25 @@
 import { expect, test, type Page } from '@playwright/test';
 
+// Pinned to the mid-flight scenario: these tests assert its exact fixtures,
+// and which story the hosted demo opens on must not decide what they see.
+test.use({
+	storageState: {
+		cookies: [
+			{
+				name: 'je-scenario',
+				value: 'flight',
+				domain: '127.0.0.1',
+				path: '/',
+				expires: -1,
+				httpOnly: false,
+				secure: false,
+				sameSite: 'Lax'
+			}
+		],
+		origins: []
+	}
+});
+
 /**
  * The Forms area and its seam with the application surface: forms decide what
  * is asked (a checklist over the one shared registry — include/exclude,

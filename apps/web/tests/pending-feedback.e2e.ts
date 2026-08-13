@@ -22,17 +22,17 @@ test('a reload dims the rows in place instead of blanking to skeletons', async (
 
 	await page.goto('/app/submissions');
 	const wrap = page.locator('.ui-table-wrap');
-	await expect(page.getByRole('table')).toContainText('Context Caching Without Tears', { timeout: 10000 });
+	await expect(page.getByRole('table')).toContainText('Deterministic Replay for Agent Failures', { timeout: 10000 });
 
 	await page.getByRole('button', { name: /Set aside/ }).click();
 
 	// While the set-aside tray loads, the inbox rows stay mounted and dimmed.
 	await expect(wrap).toHaveClass(/is-refreshing/);
-	await expect(page.getByRole('table')).toContainText('Context Caching Without Tears');
+	await expect(page.getByRole('table')).toContainText('Deterministic Replay for Agent Failures');
 	await expect(wrap.locator('.ui-skeleton')).toHaveCount(0);
 
 	// Resolution swaps content and releases the treatment.
-	await expect(page.getByRole('table')).toContainText('Grow Your SaaS 10x', { timeout: 10000 });
+	await expect(page.getByRole('table')).toContainText('Scale Your Dev Team With Our AI Copilot', { timeout: 10000 });
 	await expect(wrap).not.toHaveClass(/is-refreshing/);
 });
 
@@ -41,10 +41,10 @@ test('a decision dims only its own row while the rest of the table stays live', 
 
 	await page.goto('/app/decisions');
 	const wrap = page.locator('.table-region .ui-table-wrap');
-	await expect(wrap.getByRole('table')).toContainText('Durable Agent Jobs', { timeout: 15000 });
+	await expect(wrap.getByRole('table')).toContainText('Deterministic Replay for Agent Failures', { timeout: 15000 });
 
-	const row = page.getByRole('row', { name: /Durable Agent Jobs/ });
-	const other = page.getByRole('row', { name: /The Inference Bill Nobody Read/ });
+	const row = page.getByRole('row', { name: /Deterministic Replay for Agent Failures/ });
+	const other = page.getByRole('row', { name: /Type Systems for Tool-Calling Agents/ });
 	await row.getByRole('button', { name: 'Accept' }).click();
 
 	// The committed row dims and goes inert; the whole-surface reload treatment
@@ -68,14 +68,16 @@ test('decision skeletons hold the exact geometry of what they stand in for', asy
 		page.evaluate(() => ({
 			banner: document.querySelector('.banner')?.getBoundingClientRect().height ?? 0,
 			note: document.querySelector('.head__note')?.getBoundingClientRect().height ?? 0,
-			row: document.querySelector('tbody tr')?.getBoundingClientRect().height ?? 0,
+			// The first resolved tr is a station group header now; the skeleton
+			// stands in for data rows, so measure the first of those.
+			row: document.querySelector('tbody tr:not(.station)')?.getBoundingClientRect().height ?? 0,
 			tableTop: document.querySelector('.ui-table-wrap')?.getBoundingClientRect().y ?? 0
 		}));
 
 	await page.locator('.banner .skeleton-line').first().waitFor({ timeout: 10000 });
 	const skeleton = await measure();
 	expect(skeleton.banner).toBeGreaterThan(0);
-	await expect(page.getByRole('table')).toContainText('Context Caching Without Tears', { timeout: 15000 });
+	await expect(page.getByRole('table')).toContainText('Deterministic Replay for Agent Failures', { timeout: 15000 });
 	const resolved = await measure();
 
 	expect(Math.abs(resolved.banner - skeleton.banner)).toBeLessThanOrEqual(2);

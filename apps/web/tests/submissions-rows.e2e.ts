@@ -18,7 +18,7 @@ test.describe('a submission row as a press target', () => {
 		test.skip(testInfo.project.name !== 'desktop', 'one viewport covers the pointer-target contract');
 
 		await page.goto('/app/submissions');
-		const row = page.getByRole('row', { name: /The Inference Bill Nobody Read/ });
+		const row = page.getByRole('row', { name: /Type Systems for Tool-Calling Agents/ });
 		await expect(row).toBeVisible({ timeout: 15000 });
 
 		const chevron = row.getByRole('button', { name: /^Details for/ });
@@ -29,7 +29,7 @@ test.describe('a submission row as a press target', () => {
 		await row.getByRole('cell').nth(2).click();
 		await expect(chevron).toHaveAttribute('aria-expanded', 'true');
 		await expect(
-			page.getByText('Cutting a seven-figure inference bill by routing work across model profiles')
+			page.getByText('Where type systems help tool-calling agents, where schemas become ceremony')
 		).toBeVisible();
 
 		// The same door swings both ways.
@@ -41,7 +41,7 @@ test.describe('a submission row as a press target', () => {
 		test.skip(testInfo.project.name !== 'desktop', 'one viewport covers the accessible-tree contract');
 
 		await page.goto('/app/submissions');
-		const row = page.getByRole('row', { name: /The Inference Bill Nobody Read/ });
+		const row = page.getByRole('row', { name: /Type Systems for Tool-Calling Agents/ });
 		await expect(row).toBeVisible({ timeout: 15000 });
 
 		// A bigger target for the pointer is not a second switch for anyone else:
@@ -57,7 +57,7 @@ test.describe('a submission row as a press target', () => {
 		test.skip(testInfo.project.name !== 'desktop', 'one viewport covers the pointer-target contract');
 
 		await page.goto('/app/submissions');
-		const row = page.getByRole('row', { name: /Context Caching Without Tears/ });
+		const row = page.getByRole('row', { name: /Deterministic Replay for Agent Failures/ });
 		await expect(row).toBeVisible({ timeout: 15000 });
 
 		const chevron = row.getByRole('button', { name: /^Details for/ });
@@ -65,7 +65,7 @@ test.describe('a submission row as a press target', () => {
 
 		// The signal chip is a disclosure of its own; pressing it reveals its
 		// reason and must not also drag the whole detail open underneath it.
-		const chip = row.getByRole('button', { name: /^On-topic 0\.94 — why this signal/ });
+		const chip = row.getByRole('button', { name: /^On-topic 0\.95 — why this signal/ });
 		await chip.click();
 		const panelId = await chip.getAttribute('aria-controls');
 		await expect(page.locator(`#${panelId}`)).toBeVisible();
@@ -88,7 +88,7 @@ test.describe('a submission row as a press target', () => {
 		test.skip(testInfo.project.name !== 'desktop', 'one viewport covers the disclosure contract');
 
 		await page.goto('/app/submissions');
-		const row = page.getByRole('row', { name: /Context Caching Without Tears/ });
+		const row = page.getByRole('row', { name: /Deterministic Replay for Agent Failures/ });
 		await expect(row).toBeVisible({ timeout: 15000 });
 
 		const chevron = row.getByRole('button', { name: /^Details for/ });
@@ -115,10 +115,10 @@ test('a scored row quotes its average without a denominator beside it', async ({
 	test.skip(testInfo.project.name !== 'desktop', 'one viewport covers the figure contract');
 
 	await page.goto('/app/submissions');
-	const row = page.getByRole('row', { name: /Context Caching Without Tears/ });
+	const row = page.getByRole('row', { name: /Deterministic Replay for Agent Failures/ });
 	await expect(row).toBeVisible({ timeout: 15000 });
 
-	// “4.8 / 3” reads as a score out of three. The count belongs to the sentence
+	// “4.7 / 5” reads as a score out of five. The count belongs to the sentence
 	// in the panel, which can say what it means.
 	const cell = row.getByRole('cell').nth(3);
 	const figure = cell.getByRole('button', { name: /standing details$/ });
@@ -132,7 +132,7 @@ test('a scored row quotes its average without a denominator beside it', async ({
 
 	// `useInnerText` because the mark's markup leaves whitespace around the
 	// figure that `textContent` keeps and a regex will not forgive. What is under
-	// test is that the cell says "4.6" and not "4.6 / 3"; the indentation of the
+	// test is that the cell says "4.7" and not "4.7 / 5"; the indentation of the
 	// template is not part of that contract.
 	await expect(cell).toHaveText(/^\d\.\d$/, { useInnerText: true, timeout: 15000 });
 	await figure.click();

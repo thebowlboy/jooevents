@@ -44,7 +44,7 @@ const proposal = (over: Partial<Submission>): Submission => ({
 	speakers: [{ name: 'Grace', email: 'grace@example.test' }],
 	trackId: 'trk-1',
 	formatId: 'fmt-talk',
-	submittedAt: 'Aug 1',
+	submittedAt: '2026-08-01T09:00:00Z',
 	source: 'cfp',
 	tray: 'inbox',
 	decision: 'undecided',

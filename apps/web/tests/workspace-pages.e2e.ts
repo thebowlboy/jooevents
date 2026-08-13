@@ -41,7 +41,7 @@ test('the naughty list gathers every speaker who still owes tasks', async ({ pag
 	await page.goto('/app/speakers');
 
 	const roster = page.getByRole('region', { name: 'Speaker roster' });
-	await expect(roster).toContainText('Maya Lindqvist', { timeout: 15000 });
+	await expect(roster).toContainText('Ravi Chandran', { timeout: 15000 });
 
 	// The playful label never travels alone: the chip carries a plain subtitle,
 	// and because that subtitle is visible text inside the button, the functional

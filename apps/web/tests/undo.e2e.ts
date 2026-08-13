@@ -10,19 +10,19 @@ test('remove arms, then fires, then hands back an undo that names its target', a
 	// First press arms: the card's own face becomes the question; nothing is
 	// removed yet, and Keep stands the whole thing down.
 	await card.hover();
-	await card.getByRole('button', { name: 'Remove “Context Caching Without Tears” from the schedule' }).click();
-	const veil = card.getByRole('group', { name: 'Remove “Context Caching Without Tears” from the schedule?' });
+	await card.getByRole('button', { name: 'Remove “Streaming Agent UIs Without a State Machine Meltdown” from the schedule' }).click();
+	const veil = card.getByRole('group', { name: 'Remove “Streaming Agent UIs Without a State Machine Meltdown” from the schedule?' });
 	await expect(veil).toBeVisible();
-	await veil.getByRole('button', { name: 'Keep “Context Caching Without Tears” on the schedule' }).click();
+	await veil.getByRole('button', { name: 'Keep “Streaming Agent UIs Without a State Machine Meltdown” on the schedule' }).click();
 	await expect(veil).toHaveCount(0);
 	await expect(card).toBeVisible();
 
 	// Armed again, the explicit confirm removes and leaves a receipt naming the
 	// exact object.
 	await card.hover();
-	await card.getByRole('button', { name: 'Remove “Context Caching Without Tears” from the schedule' }).click();
-	await card.getByRole('button', { name: 'Remove “Context Caching Without Tears” — confirm' }).click();
-	const receipt = page.getByRole('status').filter({ hasText: 'Removed “Context Caching Without Tears”' });
+	await card.getByRole('button', { name: 'Remove “Streaming Agent UIs Without a State Machine Meltdown” from the schedule' }).click();
+	await card.getByRole('button', { name: 'Remove “Streaming Agent UIs Without a State Machine Meltdown” — confirm' }).click();
+	const receipt = page.getByRole('status').filter({ hasText: 'Removed “Streaming Agent UIs Without a State Machine Meltdown”' });
 	await expect(receipt).toBeVisible({ timeout: 10000 });
 	await expect(card).toHaveCount(0);
 
@@ -35,7 +35,7 @@ test('an irreversible send leaves a receipt that says why it cannot be undone', 
 	test.skip(testInfo.project.name !== 'desktop', 'one viewport covers the receipt contract');
 
 	await page.goto('/app/decisions');
-	await expect(page.getByRole('table')).toContainText('Context Caching Without Tears', { timeout: 15000 });
+	await expect(page.getByRole('table')).toContainText('Streaming Agent UIs Without a State Machine Meltdown', { timeout: 15000 });
 
 	await page.getByRole('button', { name: 'Compose notifications' }).click();
 	const dialog = page.getByRole('dialog', { name: /notification/i });

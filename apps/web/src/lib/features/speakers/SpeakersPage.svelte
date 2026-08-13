@@ -280,7 +280,7 @@
 
 <!-- Session titles are separate records, so they get a structural divider
      rather than the interpunct this app uses for a single item's own
-     attributes ("Talk · 30 min"). One glyph cannot mean both "more about this"
+     attributes ("Priya Nair · Talk"). One glyph cannot mean both "more about this"
      and "a different thing", and at two long titles the dot was invisible.
      The rule is decorative; the comma beside it is what assistive technology
      hears. -->

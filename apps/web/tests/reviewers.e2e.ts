@@ -40,6 +40,14 @@ async function openRoster(page: Page, path = '/app/reviewers') {
 	await expect(rowsOf(page).first()).toBeVisible({ timeout: 15000 });
 }
 
+// The roster under test is the flight dataset's six-reviewer cast described
+// above; the tests that need a different scenario re-pin their own cookie.
+test.beforeEach(async ({ context, baseURL }) => {
+	await context.addCookies([
+		{ name: 'je-scenario', value: 'flight', url: baseURL ?? 'http://127.0.0.1:4173' }
+	]);
+});
+
 test('the roster renders scope as typed chips, and a generalist in plain words', async ({
 	page
 }, testInfo) => {
@@ -66,7 +74,7 @@ test('the roster renders scope as typed chips, and a generalist in plain words',
 
 	// …a format chip stays neutral, and a session chip names its lifecycle.
 	await expect(scopeCellOf(rows.filter({ hasText: 'Elif Aydın' }))).toContainText(
-		'Workshop · 90 min'
+		'Workshop'
 	);
 	const tomas = rows.filter({ hasText: 'Tomás Rivera' });
 	await expect(scopeCellOf(tomas)).toContainText('Models & Infrastructure');
@@ -276,12 +284,12 @@ test('selecting a track marks its sessions included — reason reachable, never 
 	await expect(panel).toHaveAttribute('aria-pressed', 'false');
 
 	// A format ref implies the same way, in its own words.
-	await editor.getByRole('button', { name: 'Workshop · 90 min', exact: true }).click();
+	await editor.getByRole('button', { name: 'Workshop', exact: true }).click();
 	const workshop = sessionsGroup.getByRole('button', { name: /AI Interface Audits That Stick/ });
 	await expect(workshop).toHaveAttribute('aria-disabled', 'true');
 	await expect(workshop).toContainText('via format');
 	await workshop.click({ force: true });
-	await expect(sessionsGroup.getByText('Included with Workshop · 90 min')).toBeVisible();
+	await expect(sessionsGroup.getByText('Included with Workshop')).toBeVisible();
 
 	// When the session's track joins the selection, both now cover it: the
 	// inline cause names the track — track wins — and the fuller reason line
@@ -289,7 +297,7 @@ test('selecting a track marks its sessions included — reason reachable, never 
 	await editor.getByRole('button', { name: 'Agents & Tools', exact: true }).click();
 	await expect(workshop).toContainText('via track');
 	await expect(
-		sessionsGroup.getByText('Included with Agents & Tools and Workshop · 90 min')
+		sessionsGroup.getByText('Included with Agents & Tools and Workshop')
 	).toBeVisible();
 });
 
@@ -496,7 +504,7 @@ test('a scope ref to a retired format keeps rendering, flagged — in the chip, 
 	await openRoster(page);
 
 	const tomas = rowsOf(page).filter({ hasText: 'Tomás Rivera' });
-	const chip = scopeCellOf(tomas).locator('.ui-badge').filter({ hasText: 'Lightning · 10 min' });
+	const chip = scopeCellOf(tomas).locator('.ui-badge').filter({ hasText: 'Lightning' });
 	await expect(chip).toBeVisible();
 	// The quiet flag: still rendering, no longer offered.
 	await expect(chip).toContainText('retired');
@@ -504,13 +512,13 @@ test('a scope ref to a retired format keeps rendering, flagged — in the chip, 
 	// The editor keeps the selected retired entry so it can be taken back out…
 	await rosterOf(page).getByRole('button', { name: 'Details for Tomás Rivera' }).click();
 	const editor = rosterOf(page).locator('.detail');
-	const retiredOption = editor.getByRole('button', { name: /Lightning · 10 min/ });
+	const retiredOption = editor.getByRole('button', { name: /Lightning/ });
 	await expect(retiredOption).toHaveAttribute('aria-pressed', 'true');
 	await expect(retiredOption).toContainText('retired');
 
 	// …and coverage keeps the row while the ref exists, flagged for re-scoping.
 	const coverage = page.getByRole('region', { name: 'Review coverage' });
-	const row = coverage.locator('.row').filter({ hasText: 'Lightning · 10 min' });
+	const row = coverage.locator('.row').filter({ hasText: 'Lightning' });
 	await expect(row).toContainText('retired — consider re-scoping');
 	await expect(row.getByRole('link', { name: '1 scoped reviewer' })).toBeVisible();
 });
@@ -526,7 +534,7 @@ test('a ?reviewer= deep link lands with that row open on its scope editor', asyn
 	await expect(editor.getByRole('button', { name: 'Apply scope' })).toBeVisible();
 	// The draft mirrors her committed scope.
 	await expect(
-		editor.getByRole('button', { name: 'Workshop · 90 min', exact: true })
+		editor.getByRole('button', { name: 'Workshop', exact: true })
 	).toHaveAttribute('aria-pressed', 'true');
 	await expect(page).toHaveURL(/reviewer=mem-7/);
 });

@@ -11,6 +11,7 @@ import { expect, test } from '@playwright/test';
 const CRUNCH = 'crunch';
 const QUIET = 'quiet';
 const OPENING = 'opening';
+const FLIGHT = 'flight';
 
 function pipeline(page: Page) {
 	return page.getByRole('region', { name: 'Pipeline' });
@@ -21,7 +22,11 @@ function lane(page: Page, stage: string) {
 }
 
 test.describe('a steady mid-flight event', () => {
-	// The default scenario: no cookie needed.
+	test.beforeEach(async ({ context, baseURL }) => {
+		await context.addCookies([
+			{ name: 'je-scenario', value: FLIGHT, url: baseURL ?? 'http://127.0.0.1:4173' }
+		]);
+	});
 
 	test('attention leads the pipeline, meters only real denominators, and lanes stay calm on pace', async ({
 		page
@@ -73,13 +78,14 @@ test.describe('a steady mid-flight event', () => {
 		await expect(schedule.locator('.lane__pace')).toHaveText('behind');
 		await expect(schedule).toContainText('publish target Sep 25');
 		await expect(schedule).toHaveAccessibleName(
-			'Schedule: 16 of 27, behind, publish target Sep 25 — open Schedule'
+			'Schedule: 8 of 12, behind, publish target Sep 25 — open Schedule'
 		);
 
-		// A blocked schedule opens the conflicts panel, exactly like the
-		// sidebar's danger count does.
+		// The lane is an orientation door and lands at the area root — the
+		// conflicts fact keeps its own scoped door on the attention row and on
+		// the schedule head's count (owner refinement, 2026-08-13).
 		await schedule.click();
-		await expect(page).toHaveURL(/\/app\/schedule\?panel=conflicts$/);
+		await expect(page).toHaveURL(/\/app\/schedule$/);
 	});
 });
 
@@ -112,7 +118,7 @@ test.describe('a crunch week', () => {
 
 		await expect(decide.locator('.lane__pace')).toHaveText('behind');
 		await expect(decide).toHaveAccessibleName(
-			'Decide: 138 of 300, behind, notify by Aug 13 — open Decisions'
+			'Decide: 6 of 16, behind, notify by Aug 13 — open Decisions'
 		);
 
 		await decide.click();
@@ -140,7 +146,7 @@ test.describe('a quiet, on-track event', () => {
 		for (const stage of ['review', 'decide', 'schedule']) {
 			await expect(lane(page, stage).locator('.lane__fill')).toHaveAttribute('style', /100%/);
 		}
-		await expect(lane(page, 'speakers')).toContainText('134 of 140');
+		await expect(lane(page, 'speakers')).toContainText('48 of 50');
 		await expect(lane(page, 'speakers').locator('.lane__fill')).toHaveAttribute('style', /96%/);
 	});
 });

@@ -2,7 +2,9 @@
 	import { onMount } from 'svelte';
 	import { ChevronDown, Search } from 'lucide-svelte';
 	import type { SubmissionsPagePort } from '$lib/api/submissions-page-port';
+	import { describePortFailure, type PortFailureView } from '$lib/api/port-failure';
 	import {
+		Alert,
 		createSettler,
 		Marked,
 		markIcon,
@@ -29,12 +31,16 @@
 	import StandingMark from '$lib/features/workspace/components/StandingMark.svelte';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
 	import { applyParams, param, paramIn } from '$lib/features/workspace/url-state.svelte';
+	import { formatArrival, isNewArrival } from '$lib/features/workspace/recency';
 	import type {
+		DecisionState,
 		Format,
+		ReviewRoundStatus,
 		ScoreStanding,
 		SignalChip,
 		SpeakerProfile,
 		Submission,
+		SubmissionOrigin,
 		SubmissionPage,
 		Track,
 		TrayKey
@@ -50,6 +56,16 @@
 	let busy = $state(false);
 	let announcement = $state('');
 	let addOpen = $state(false);
+	/**
+	 * The list reads failed and nothing newer has landed. While `data` is still
+	 * null this replaces the first-load skeletons — a skeleton over a refused
+	 * answer claims work that is not happening — and with rows on screen it
+	 * renders as a notice over the kept truth. `retryable` follows the port's
+	 * own classification, so a terminal refusal never offers a retry.
+	 */
+	let loadFailure = $state<PortFailureView | null>(null);
+	/** A tray change (or its undo) that did not commit, in the port's own copy. */
+	let actFailure = $state<string | null>(null);
 
 	/* Plain words, because these four are the fates an operator sorts into and
 	   none of them is a decision the submitter ever sees. "Set aside" replaced
@@ -189,35 +205,43 @@
 		refreshing = true;
 		let landed: Submission[] = [];
 		try {
-			const next = await port.submissions.list(query);
+			try {
+				const next = await port.submissions.list(query);
+				if (ticket !== request) return;
+				data = next;
+				landed = next.rows;
+				loadFailure = null;
+				pruneToRows(next.rows);
+				// The marks already on screen stay on screen: a re-read does not change
+				// any average, and blanking them back to a pending figure would flash
+				// the whole column for nothing. Only the flag reopens, so rows that
+				// arrived without a mark yet show the pending figure.
+				standingsRead = false;
+			} finally {
+				if (ticket === request) refreshing = false;
+			}
+			// One batch for the whole table, read after the rows are on screen. The
+			// average cells reserve the figure's geometry from first paint, so these
+			// resolve in place rather than widening the column under the reader.
+			if (landed.length === 0) {
+				standingsRead = true;
+				return;
+			}
+			// The standing marks and the submitter profiles are two independent reads
+			// of the same landed rows, so neither waits on the other.
+			const [marks] = await Promise.all([
+				port.review.standings(landed.map((row) => row.id)),
+				loadProfiles(landed, ticket)
+			]);
 			if (ticket !== request) return;
-			data = next;
-			landed = next.rows;
-			pruneToRows(next.rows);
-			// The marks already on screen stay on screen: a re-read does not change
-			// any average, and blanking them back to a pending figure would flash
-			// the whole column for nothing. Only the flag reopens, so rows that
-			// arrived without a mark yet show the pending figure.
-			standingsRead = false;
-		} finally {
-			if (ticket === request) refreshing = false;
-		}
-		// One batch for the whole table, read after the rows are on screen. The
-		// average cells reserve the figure's geometry from first paint, so these
-		// resolve in place rather than widening the column under the reader.
-		if (landed.length === 0) {
+			standings = marks;
 			standingsRead = true;
-			return;
+		} catch (error) {
+			// The failure becomes surfaced state, never an unhandled rejection: an
+			// eternal first-load skeleton over a refused answer was the exact
+			// defect here.
+			if (ticket === request) loadFailure = describePortFailure(error);
 		}
-		// The standing marks and the submitter profiles are two independent reads
-		// of the same landed rows, so neither waits on the other.
-		const [marks] = await Promise.all([
-			port.review.standings(landed.map((row) => row.id)),
-			loadProfiles(landed, ticket)
-		]);
-		if (ticket !== request) return;
-		standings = marks;
-		standingsRead = true;
 	}
 
 	// Read at least once: the entry dialog's selects must be able to tell
@@ -229,9 +253,136 @@
 		vocabLoaded = true;
 	}
 
+	/**
+	 * Whether any form is currently taking submissions — what the empty inbox's
+	 * nudge turns on. Null until known, and the empty state says nothing
+	 * state-specific until then: a wrong claim that flashes is worse than a
+	 * generic line that holds.
+	 */
+	let openFormCount = $state<number | null>(null);
+
+	/*
+	 * The visit snapshot. Both instants are captured once at page entry and
+	 * held for the whole visit: the New mark is a claim about what arrived
+	 * since the operator last looked, and re-deriving it mid-visit would fade
+	 * rows while the person is looking at them. `visitRead` gates the marks so
+	 * the column paints once rather than gaining marks as the read lands.
+	 */
+	const enteredAt = new Date();
+	let previousVisit = $state<string | null>(null);
+	let visitRead = $state(false);
+
+	/** The newest review round's standing — the station groups' one review fact. */
+	let round = $state<ReviewRoundStatus | null>(null);
+
 	onMount(() => {
-		void reloadVocab();
+		// Each side read degrades to its own designed "not known" state on
+		// failure (waiting selects, generic empty-state copy, no station meta,
+		// no New marks) instead of rejecting unhandled; the list surface below
+		// carries the page's failure state.
+		void reloadVocab().catch(() => {});
+		void port.forms.openCount().then((count) => (openFormCount = count)).catch(() => {});
+		void port.visits.previous().then((visit) => {
+			previousVisit = visit;
+			visitRead = true;
+		}).catch(() => {});
+		void port.review.round().then((status) => (round = status)).catch(() => {});
 	});
+
+	function isNew(row: Submission): boolean {
+		return visitRead && isNewArrival(row.submittedAt, previousVisit, enteredAt);
+	}
+
+	// -------------------------------------------------------------------------
+	// Stations: residence is custody (the trays), progress is projection. An
+	// undecided row is In review while an open round still owes it reviews,
+	// Waiting on a decision otherwise; a decided row still owes its notice
+	// until the send lands, and only then is it Done. Four rungs, exactly the
+	// ladder of 23 §1 — merging the last two taught a false reading ("Decided ·
+	// 4 not yet notified" over a row with no un-notified mark). Computed per
+	// row, stored nowhere.
+
+	type StationKey = 'review' | 'deciding' | 'notice' | 'done';
+
+	function stationOf(row: Submission): StationKey {
+		if (row.decision !== 'undecided') {
+			return row.notified || row.decision === 'withdrawn' ? 'done' : 'notice';
+		}
+		// No per-item target on the plan means the round never says "done with
+		// this one", so coverage holds until the round closes.
+		if (round?.open && row.reviewCount < (round.reviewsPerSubmission ?? Infinity)) {
+			return 'review';
+		}
+		return 'deciding';
+	}
+
+	/** Verdicts order the decided group by what still needs doing, then recency. */
+	const decidedRank: Record<DecisionState, number> = {
+		accepted: 0,
+		waitlisted: 1,
+		declined: 2,
+		withdrawn: 3,
+		undecided: 4
+	};
+
+	interface StationSection {
+		key: StationKey | 'all';
+		label: string | null;
+		rows: Submission[];
+	}
+
+	/*
+	 * The decidable custody trays (inbox, late — the same population the
+	 * decision table draws from) group by station, in funnel order; set-aside
+	 * and discarded stay flat lists, because they are not decidable and a
+	 * decided-then-discarded row's badges already tell its story. A group with
+	 * nothing in it does not render.
+	 */
+	const sections = $derived.by<StationSection[]>(() => {
+		const rows = data?.rows ?? [];
+		if (tray !== 'inbox' && tray !== 'late') return [{ key: 'all', label: null, rows }];
+		const byStation: Record<StationKey, Submission[]> = {
+			review: [],
+			deciding: [],
+			notice: [],
+			done: []
+		};
+		for (const row of rows) byStation[stationOf(row)].push(row);
+		// Arrival surfaces read newest first; comparison ordering lives on the
+		// decision table. Decided rows order by verdict, then decision recency.
+		byStation.review.sort((a, b) => b.submittedAt.localeCompare(a.submittedAt));
+		byStation.deciding.sort((a, b) => b.submittedAt.localeCompare(a.submittedAt));
+		const byVerdict = (a: Submission, b: Submission) =>
+			decidedRank[a.decision] - decidedRank[b.decision] ||
+			(b.decidedAt ?? '').localeCompare(a.decidedAt ?? '');
+		byStation.notice.sort(byVerdict);
+		byStation.done.sort(byVerdict);
+		return [
+			{ key: 'review' as const, label: 'In review', rows: byStation.review },
+			{ key: 'deciding' as const, label: 'Waiting on a decision', rows: byStation.deciding },
+			{ key: 'notice' as const, label: 'Decided · not yet notified', rows: byStation.notice },
+			{ key: 'done' as const, label: 'Done', rows: byStation.done }
+		].filter((section) => section.rows.length > 0);
+	});
+
+	/** The rows in the order they render — what j/k walks. */
+	const orderedRows = $derived(sections.flatMap((section) => section.rows));
+
+	// -------------------------------------------------------------------------
+	// Where an accepted row went — read when its detail opens, kept for the
+	// session. Null is an answered read (never graduated, or reversed); absent
+	// means not asked yet, which renders nothing.
+	let origins = $state<Record<string, SubmissionOrigin | null>>({});
+
+	function openRow(id: string | null) {
+		expandedId = id;
+		if (id === null) return;
+		const row = data?.rows.find((entry) => entry.id === id);
+		if (!row || row.decision !== 'accepted' || id in origins) return;
+		void port.schedule.originOf(id).then((origin) => {
+			origins = { ...origins, [id]: origin };
+		});
+	}
 
 	// Re-reads whenever the query in the address changes, including the first
 	// paint and a Back that restores an earlier scope.
@@ -302,20 +453,38 @@
 		const moved = (data?.rows ?? []).filter((row) => ids.includes(row.id));
 		const before = moved.map((row) => ({ id: row.id, tray: row.tray, setAsideBy: row.setAsideBy }));
 		busy = true;
-		await port.submissions[action](ids);
-		recordAction({
-			area: 'submissions',
-			label:
-				moved.length === 1
-					? `${triageCopy[action]} “${moved[0].title}”`
-					: `${triageCopy[action]} ${moved.length} submissions`,
-			undo: async () => {
-				await port.submissions.restoreTray(before);
-			}
-		});
-		selected = [];
-		busy = false;
-		await load();
+		actFailure = null;
+		try {
+			await port.submissions[action](ids);
+			recordAction({
+				area: 'submissions',
+				label:
+					moved.length === 1
+						? `${triageCopy[action]} “${moved[0].title}”`
+						: `${triageCopy[action]} ${moved.length} submissions`,
+				undo: async () => {
+					// The receipt surface swallows a compensator's rejection, so a
+					// refused restore states itself here instead of dismissing as
+					// if the rows had walked back.
+					try {
+						await port.submissions.restoreTray(before);
+					} catch (error) {
+						actFailure = describePortFailure(
+							error,
+							'The submissions could not be moved back.'
+						).message;
+					}
+				}
+			});
+			selected = [];
+		} catch (error) {
+			// The refusal surfaces typed; the re-read below still shows whatever
+			// part of the change actually committed.
+			actFailure = describePortFailure(error, 'The change could not be completed.').message;
+		} finally {
+			busy = false;
+			await load();
+		}
 	}
 
 	/** The same words the popover shows, for the polite live region. */
@@ -351,18 +520,18 @@
 	 */
 	function onRowPress(event: MouseEvent, id: string) {
 		if (shouldIgnoreRowPress(event)) return;
-		expandedId = expandedId === id ? null : id;
+		openRow(expandedId === id ? null : id);
 	}
 
 	function onKeydown(event: KeyboardEvent) {
 		const target = event.target as HTMLElement | null;
 		if (target && /^(input|textarea|select)$/i.test(target.tagName)) return;
-		const rows = data?.rows ?? [];
-		if (rows.length === 0 || (event.key !== 'j' && event.key !== 'k')) return;
-		const index = rows.findIndex((row) => row.id === expandedId);
+		// j/k walk the rows as rendered — down the station groups, not the wire order.
+		if (orderedRows.length === 0 || (event.key !== 'j' && event.key !== 'k')) return;
+		const index = orderedRows.findIndex((row) => row.id === expandedId);
 		const next =
-			event.key === 'j' ? Math.min(index + 1, rows.length - 1) : Math.max(index - 1, 0);
-		expandedId = rows[next]?.id ?? null;
+			event.key === 'j' ? Math.min(index + 1, orderedRows.length - 1) : Math.max(index - 1, 0);
+		openRow(orderedRows[next]?.id ?? null);
 	}
 </script>
 
@@ -442,7 +611,7 @@
 		<button
 			type="button"
 			class="ui-button ui-button--secondary ui-button--sm"
-			onclick={() => (addOpen = true)}>Add direct entry</button>
+			onclick={() => (addOpen = true)}>Add submission</button>
 	</div>
 
 	<!-- What the search did, in past tense, for the eye and for assistive tech at
@@ -460,6 +629,24 @@
 			{/if}
 			<span class="found__scope">· searched {SUBMISSION_SEARCH_SCOPE}</span>
 		</p>
+	{/if}
+
+	{#if loadFailure && data !== null}
+		<!-- The kept rows are yesterday's truth; the notice says the re-read
+		     behind them failed, in the port's own copy. Keyed so a fresh failure
+		     replaces a dismissed one instead of inheriting its hidden state. -->
+		{#key loadFailure}
+			<Alert
+				tone="danger"
+				title="The submission list could not be refreshed"
+				message={loadFailure.message} />
+		{/key}
+	{/if}
+
+	{#if actFailure}
+		{#key actFailure}
+			<Alert tone="danger" title="The change was not applied" message={actFailure} dismissible />
+		{/key}
 	{/if}
 
 	<div class="ui-table-wrap" class:is-refreshing={reload.visible} aria-busy={refreshing || undefined}>
@@ -484,6 +671,28 @@
 			</thead>
 			<tbody>
 				{#if !data}
+					{#if loadFailure}
+						<!-- The list reads failed or refused before any rows landed: the
+						     typed state replaces the skeletons, because a skeleton claims
+						     work that is no longer happening. Only a retryable failure
+						     offers a retry; a terminal refusal renders as the refusal. -->
+						<tr>
+							<td colspan="6">
+								<div class="empty" role="alert">
+									<p class="empty__title">The submissions could not be loaded.</p>
+									<p class="empty__hint">{loadFailure.message}</p>
+									{#if loadFailure.retryable}
+										<div class="empty__actions">
+											<button
+												type="button"
+												class="ui-button ui-button--secondary ui-button--sm"
+												onclick={() => void load()}>Try again</button>
+										</div>
+									{/if}
+								</div>
+							</td>
+						</tr>
+					{:else}
 					{#each Array(6) as _, index (index)}
 						<!-- Mirrors the resolved multiline row cell-for-cell, so the row
 						     height is set by the same table metrics as real rows. -->
@@ -505,6 +714,7 @@
 							<td class="col-expand"><span class="ui-skeleton skeleton-action skeleton-action--icon"></span></td>
 						</tr>
 					{/each}
+					{/if}
 				{:else if data.rows.length === 0}
 					<tr>
 						<td colspan="6">
@@ -525,18 +735,90 @@
 										{trayLabels[tray]}{trackId || formatId ? ' under the current filters' : ''}.
 										Try fewer words, or clear the search to see the tray.
 									</p>
+								{:else if tray === 'inbox' && !trackId && !formatId && openFormCount === 0}
+									<!-- The common first visit: nothing has arrived because
+									     nothing is open to arrive through. The empty list is
+									     where that dawns on someone, so the way forward starts
+									     here — not behind an area name they haven't learned yet. -->
+									<p class="empty__title">
+										No submissions yet — your call for proposals (CFP) isn't open.
+									</p>
+									<p class="empty__hint">
+										Start from the standard application — a complete form you trim to fit —
+										and submissions land here as they arrive. For speakers you already know,
+										add their submission yourself.
+									</p>
+									<div class="empty__actions">
+										<a class="ui-button ui-button--primary ui-button--sm" href="/app/forms?new=1"
+											>Open a call for proposals</a>
+										<button
+											type="button"
+											class="ui-button ui-button--secondary ui-button--sm"
+											aria-haspopup="dialog"
+											onclick={() => (addOpen = true)}>Add submission</button>
+									</div>
+								{:else if tray === 'inbox' && !trackId && !formatId && (openFormCount ?? 0) > 0}
+									<p class="empty__title">
+										Your call for proposals (CFP) is open — nothing has arrived yet.
+									</p>
+									<p class="empty__hint">
+										Share the form's link where your speakers are, or add a submission
+										yourself for the speakers you already know.
+									</p>
+									<div class="empty__actions">
+										<a class="ui-button ui-button--secondary ui-button--sm" href="/app/forms"
+											>Open Forms</a>
+										<button
+											type="button"
+											class="ui-button ui-button--secondary ui-button--sm"
+											aria-haspopup="dialog"
+											onclick={() => (addOpen = true)}>Add submission</button>
+									</div>
 								{:else}
 									<p class="empty__title">Nothing in {trayLabels[tray]} yet.</p>
 									<p class="empty__hint">
-										Adjust the filters, share the application form, or add a direct entry to
-										bring a submission in yourself.
+										Adjust the filters, share the application form, or add a submission
+										yourself to bring one in.
 									</p>
 								{/if}
 							</div>
 						</td>
 					</tr>
 				{:else}
-					{#each data.rows as row (row.id)}
+					{#each sections as section (section.key)}
+						{#if section.label}
+							<!-- The funnel, worded in place: residence stays the tray above,
+							     what each row still needs is the group it sits in. Counts are
+							     computed from the rows on screen — under a search they count
+							     the matches, which is what the eye is comparing them to. -->
+							<tr class="station">
+								<td colspan="6">
+									<div class="station__line">
+										<span class="station__label">{section.label}</span>
+										<span class="station__count">{section.rows.length}</span>
+										{#if section.key === 'review' && round}
+											<span class="station__meta"
+												>· {round.percentDone}% reviewed ·
+												<!-- The deadline inks up as it closes in — status-colored
+												     text, the quietest rung; a pill here would out-shout
+												     the rows it sits between. -->
+												<span
+													class="due"
+													class:due--warning={round.deadlineTone === 'warning'}
+													class:due--danger={round.deadlineTone === 'danger'}
+													>{round.dueLabel}</span></span>
+											<a class="station__door" href="/app/review">See review →</a>
+										{:else if section.key === 'deciding'}
+											<a class="station__door" href="/app/decisions">Decide →</a>
+										{:else if section.key === 'notice'}
+											<a class="station__door" href="/app/decisions?scope=unnotified"
+												>Send notices →</a>
+										{/if}
+									</div>
+								</td>
+							</tr>
+						{/if}
+						{#each section.rows as row (row.id)}
 						<!-- The pointer target is the row; the switch is still the chevron
 						     inside it, which is why no role or tabindex is added here. -->
 						<!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -560,7 +842,14 @@
 								<!-- Title and track are read as one judgment — what is this talk
 								     about — so the track sits beside the title, not columns away. -->
 								<span class="ui-table__primary title-line">
-									<Marked text={row.title} ranges={rangesFor(row.id, SUBMISSION_FIELD_TITLE)} />
+									<span class="title-line__text"
+										><Marked text={row.title} ranges={rangesFor(row.id, SUBMISSION_FIELD_TITLE)} /></span>
+									{#if isNew(row)}
+										<!-- Arrived since the operator last looked, or within the day —
+										     information, never urgency: the mark stays on the quietest
+										     rung and fades on its own once both arms lapse (23 §4). -->
+										<span class="ui-badge ui-badge--neutral title-line__new">New</span>
+									{/if}
 									<span class="ui-badge ui-badge--{trackAccent(row.trackId)}">{trackName(row.trackId)}</span>
 								</span>
 								<span class="ui-table__secondary">
@@ -586,6 +875,12 @@
 										· <span class="direct"
 											>direct entry{#if row.enteredBy}{' '}by {row.enteredBy}{/if}</span>
 									{/if}
+									<!-- The arrival fact ends the sentence: the inbox's pulse, and
+									     for an undecided row also how long it has waited. Relative
+									     while it still reads as "recently" ("3 days ago"), the plain
+									     calendar date once elapsed-time arithmetic stops helping —
+									     the word "arrived" said nothing the position didn't. -->
+									· <span class="arrived">{formatArrival(row.submittedAt, enteredAt)}</span>
 								</span>
 							</td>
 							<td>
@@ -677,7 +972,7 @@
 									class:expand--open={expandedId === row.id}
 									aria-expanded={expandedId === row.id}
 									aria-label={`Details for “${row.title}”`}
-									onclick={() => (expandedId = expandedId === row.id ? null : row.id)}>
+									onclick={() => openRow(expandedId === row.id ? null : row.id)}>
 									<ChevronDown size={15} />
 								</button>
 							</td>
@@ -705,11 +1000,13 @@
 								<td colspan="6">
 									<SubmissionDetail
 										submission={row}
+										origin={row.decision === 'accepted' ? origins[row.id] : undefined}
 										actions={trayActions}
 										footnote={row.tray !== 'set-aside' && row.tray !== 'discarded' ? fates : undefined} />
 								</td>
 							</tr>
 						{/if}
+						{/each}
 					{/each}
 				{/if}
 			</tbody>
@@ -907,6 +1204,13 @@
 		color: var(--je-color-text-muted);
 	}
 
+	.empty__actions {
+		display: flex;
+		justify-content: center;
+		gap: var(--je-space-2);
+		margin-block-start: var(--je-space-4);
+	}
+
 	.muted {
 		color: var(--je-color-text-muted);
 	}
@@ -1000,11 +1304,96 @@
 		color: var(--je-color-accent-lavender-strong);
 	}
 
+	/* The arrival fact ends the metadata sentence and stays one token: a
+	   timestamp that wraps away from its own words reads as a different fact. */
+	.arrived {
+		white-space: nowrap;
+		color: var(--je-color-text-subtle);
+	}
+
 	.title-line {
 		display: flex;
 		align-items: center;
 		gap: var(--je-space-2);
 		min-width: 0;
+	}
+
+	/* One line, like every `ui-table__primary strong` in the product: wrapped
+	   titles break the scan and leave the loading skeleton under-reserving the
+	   row it stands in for. The full name stays in the expansion and labels. */
+	.title-line__text {
+		min-inline-size: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	/* Station group headers as section bands: the same fill the column head
+	   wears, so each station reads as its own titled slab rather than one more
+	   row — the stations are together on one page, and visibly apart on it.
+	   Scrolling is the whole navigation; no filter tier earns its clicks here.
+	   Reading order is label, count, fact, way onward. */
+	tr.station td {
+		padding-block: var(--je-space-2);
+		background: var(--je-color-page);
+		border-block: 1px solid var(--je-color-border-strong);
+		/* Flush, like the column head: the fill and its two hairlines carry the
+		   separation. A faked white gap (a thick surface-colored border) was
+		   tried and read as the previous row trailing dead space — a spacer
+		   hack a table cannot honestly make. */
+	}
+
+	/* The deadline's ink follows its urgency — text color only, the quietest
+	   rung of the loudness ladder. */
+	.due--warning {
+		color: var(--je-color-warning);
+		font-weight: 600;
+	}
+
+	.due--danger {
+		color: var(--je-color-danger);
+		font-weight: 600;
+	}
+
+	.station__line {
+		display: flex;
+		align-items: baseline;
+		gap: var(--je-space-2);
+		min-width: 0;
+	}
+
+	.station__label {
+		font-size: var(--je-font-size-xs);
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: var(--je-tracking-caps);
+		color: var(--je-color-text-muted);
+	}
+
+	.station__count {
+		font-size: var(--je-font-size-xs);
+		font-weight: 600;
+		font-variant-numeric: tabular-nums;
+		color: var(--je-color-text);
+	}
+
+	.station__meta {
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
+		min-width: 0;
+	}
+
+	.station__door {
+		margin-inline-start: auto;
+		font-size: var(--je-font-size-xs);
+		font-weight: 600;
+		white-space: nowrap;
+		color: var(--je-color-action);
+		text-decoration: none;
+	}
+
+	.station__door:hover {
+		text-decoration: underline;
 	}
 
 	.signals {
