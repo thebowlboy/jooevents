@@ -16,6 +16,13 @@ const notEnabled = Object.freeze({
  * This composition carries no workspace API and no callable domain port.
  * Consumers render the explicit state instead of inventing empty rows or
  * reaching for sample data.
+ *
+ * This is the degenerate zero-aggregate fixture, not a claim about the
+ * current live mount: schedule, review_decisions (Review reads/drafts), and
+ * their roster construct real live ports in `LiveWorkspaceComposition.svelte`
+ * and render through `operator-page.live.svelte`. Only areas without a
+ * mounted owner there (decisions, speakers, tasks, templates, embeds) still
+ * resolve to the honest unavailable surface.
  */
 const capabilities = Object.freeze({
 	workspace_shell: notEnabled,

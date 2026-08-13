@@ -5,7 +5,7 @@ import { formatEventSettingsDateRange, mapEventSettings } from './event-settings
 const eventId = '00000000-0000-4000-8000-000000000001';
 
 describe('Event Settings canonical-to-browser mapping', () => {
-	test('preserves the six canonical values and hidden guards while deriving only dates', () => {
+	test('preserves the nine canonical values and hidden guards while deriving only dates', () => {
 		const source = eventSettingsSchema.parse({
 			schemaVersion: 1,
 			eventId,
@@ -16,7 +16,10 @@ describe('Event Settings canonical-to-browser mapping', () => {
 			startDate: '2027-03-18',
 			endDate: '2027-03-20',
 			location: 'Suntec Convention Centre',
-			venueNote: 'Registration opens on Level 2.'
+			venueNote: 'Registration opens on Level 2.',
+			dayStart: '09:00',
+			dayEnd: '18:00',
+			slotMinutes: 30
 		});
 
 		expect(mapEventSettings(source)).toEqual({
@@ -29,9 +32,19 @@ describe('Event Settings canonical-to-browser mapping', () => {
 			endDate: '2027-03-20',
 			location: 'Suntec Convention Centre',
 			venueNote: 'Registration opens on Level 2.',
+			dayStart: '09:00',
+			dayEnd: '18:00',
+			slotMinutes: 30,
 			dates: 'Mar 18–20, 2027'
 		});
 		expect(Object.isFrozen(mapEventSettings(source))).toBe(true);
+
+		expect(mapEventSettings(eventSettingsSchema.parse({
+			...source,
+			dayStart: null,
+			dayEnd: null,
+			slotMinutes: null
+		}))).toMatchObject({ dayStart: null, dayEnd: null, slotMinutes: null });
 	});
 
 	test('formats same-day, cross-month, and cross-year ranges without host-timezone drift', () => {

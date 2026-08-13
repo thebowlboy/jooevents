@@ -1,16 +1,13 @@
-import type { StructuredOutcome } from '@jooevents/contracts';
-import {
-	reviewRoundOpenAtomicJoinRequirementSchema,
-	type ReviewDraftSaveResult,
-	type ReviewRoundSetupProjection,
-	type ReviewSnapshot
+import type {
+	ReviewDraftSaveResult,
+	ReviewRoundSetupProjection,
+	ReviewSnapshot
 } from '@jooevents/contracts/reviews';
 import type { z } from 'zod';
 import type { reviewChangeDraftDataSchema } from '@jooevents/contracts/reviews';
 import type {
 	ReviewChangeDraftView,
 	ReviewDraftSaveView,
-	ReviewOpenRoundAtomicJoinRequirementView,
 	ReviewRoundSetupView,
 	ReviewSnapshotView,
 	ReviewView
@@ -52,23 +49,4 @@ export function mapReviewChangeDraft(
 
 export function mapReviewDraftSave(value: ReviewDraftSaveResult): ReviewDraftSaveView {
 	return immutableCopy(value);
-}
-
-/**
- * Narrows the one open-round blocker whose detail is part of the browser contract.
- * All other structured outcomes remain opaque envelopes for feature-safe copy.
- */
-export function reviewOpenRoundAtomicJoinRequirement(
-	outcome: StructuredOutcome
-): ReviewOpenRoundAtomicJoinRequirementView | undefined {
-	if (
-		outcome.class !== 'conflict' ||
-		outcome.kind !== 'review.open_round_atomic_join_required' ||
-		outcome.retryable ||
-		outcome.detailSchemaVersion !== 1
-	) {
-		return undefined;
-	}
-	const parsed = reviewRoundOpenAtomicJoinRequirementSchema.safeParse(outcome.detail);
-	return parsed.success ? immutableCopy(parsed.data) : undefined;
 }

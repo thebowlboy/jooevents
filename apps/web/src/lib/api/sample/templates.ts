@@ -48,7 +48,7 @@ export function starterTemplates(): MessageTemplate[] {
 			mergeFields: [
 				{ key: 'speaker.name', label: 'Speaker name', sample: 'Maya Lindqvist' },
 				{ key: 'submission.title', label: 'Submission title', sample: 'Context Caching Without Tears' },
-				{ key: 'submission.format', label: 'Session format', sample: 'Talk · 30 min' },
+				{ key: 'submission.format', label: 'Session format', sample: 'Talk' },
 				{ key: 'event.name', label: 'Event name', sample: 'AI Engineer NYC 2026' }
 			],
 			revision: 1,
@@ -85,7 +85,7 @@ export function starterTemplates(): MessageTemplate[] {
 			mergeFields: [
 				{ key: 'speaker.name', label: 'Speaker name', sample: 'Tomás Ferreira' },
 				{ key: 'submission.title', label: 'Submission title', sample: 'Prompt Caching at the Edge' },
-				{ key: 'submission.format', label: 'Session format', sample: 'Talk · 30 min' },
+				{ key: 'submission.format', label: 'Session format', sample: 'Talk' },
 				{ key: 'event.name', label: 'Event name', sample: 'AI Engineer NYC 2026' }
 			],
 			revision: 1,
@@ -122,7 +122,7 @@ export function starterTemplates(): MessageTemplate[] {
 			mergeFields: [
 				{ key: 'speaker.name', label: 'Speaker name', sample: 'Elif Aydın' },
 				{ key: 'submission.title', label: 'Submission title', sample: 'YAML-Driven Agent Pipelines' },
-				{ key: 'submission.format', label: 'Session format', sample: 'Workshop · 90 min' },
+				{ key: 'submission.format', label: 'Session format', sample: 'Workshop' },
 				{ key: 'event.name', label: 'Event name', sample: 'AI Engineer NYC 2026' }
 			],
 			revision: 1,

@@ -218,7 +218,10 @@ function sameSettings(
 		&& left.startDate === right.startDate
 		&& left.endDate === right.endDate
 		&& left.location === right.location
-		&& left.venueNote === right.venueNote;
+		&& left.venueNote === right.venueNote
+		&& left.dayStart === right.dayStart
+		&& left.dayEnd === right.dayEnd
+		&& left.slotMinutes === right.slotMinutes;
 }
 
 function safeDiffMatchesRequest(
@@ -239,7 +242,10 @@ function safeDiffMatchesRequest(
 		&& diff.after.startDate === request.startDate
 		&& diff.after.endDate === request.endDate
 		&& diff.after.location === request.location
-		&& diff.after.venueNote === request.venueNote;
+		&& diff.after.venueNote === request.venueNote
+		&& diff.after.dayStart === request.dayStart
+		&& diff.after.dayEnd === request.dayEnd
+		&& diff.after.slotMinutes === request.slotMinutes;
 }
 
 function sameSafeDiff(left: EventSettingsSafeDiff, right: EventSettingsSafeDiff): boolean {

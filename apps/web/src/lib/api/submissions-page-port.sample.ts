@@ -21,7 +21,11 @@ export function createSampleSubmissionsPagePort(api: WorkspaceApi): SubmissionsP
 		}),
 		speakers: Object.freeze({ profile: api.speakers.profile }),
 		review: Object.freeze({
-			standings: (submissionIds: readonly string[]) => api.review.standings([...submissionIds])
+			standings: (submissionIds: readonly string[]) => api.review.standings([...submissionIds]),
+			round: api.review.roundStatus
+		}),
+		visits: Object.freeze({
+			previous: () => api.visits.previous('submissions')
 		}),
 		vocab: Object.freeze({
 			tracks: api.vocab.tracks,
@@ -35,6 +39,13 @@ export function createSampleSubmissionsPagePort(api: WorkspaceApi): SubmissionsP
 				return Object.freeze(schedule.sessions
 					.filter((session) => session.state === 'collecting')
 					.map((session) => Object.freeze({ id: session.id, title: session.title })));
+			},
+			originOf: api.schedule.originOf
+		}),
+		forms: Object.freeze({
+			async openCount() {
+				const forms = await api.forms.list();
+				return forms.filter((form) => form.status === 'open').length;
 			}
 		})
 	});

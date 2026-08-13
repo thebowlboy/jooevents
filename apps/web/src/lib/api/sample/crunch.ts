@@ -1,5 +1,5 @@
 import type { WorkspaceDataset } from './dataset';
-import { closesInDays } from './dataset';
+import { closesInDays, daysAgo, hoursAgo } from './dataset';
 import {
 	defaultEventTheme,
 	starterSurfaceTemplates,
@@ -16,7 +16,7 @@ import { baselineFieldRegistry } from './fields';
 const crunch: WorkspaceDataset = {
 	key: 'crunch',
 	name: 'Decision crunch',
-	description: 'CFP closed, review 97% done, 37 acceptances waiting to send, schedule blocked.',
+	description: 'CFP closed, review 97% done, four decisions waiting to send, schedule blocked.',
 
 	summary: {
 		event: {
@@ -30,19 +30,19 @@ const crunch: WorkspaceDataset = {
 		},
 		lockedAreas: [],
 		navCounts: {
-			submissions: '300',
+			submissions: '16',
 			review: '97%',
-			decisions: { value: '37', tone: 'danger' },
-			speakers: '20',
+			decisions: { value: '4', tone: 'danger' },
+			speakers: '12',
 			reviewers: '8',
-			tasks: { value: '21', tone: 'warning' },
+			tasks: { value: '18', tone: 'warning' },
 			schedule: { value: '5', tone: 'danger' },
 			messages: '4'
 		},
 		stats: [
-			{ label: 'Undecided', value: '162', sub: 'of 300 submissions', tone: 'attention' },
+			{ label: 'Undecided', value: '10', sub: 'of 16 submissions', tone: 'attention' },
 			{ label: 'Round 2 reviews', value: '97%', sub: '583 of 600 committed' },
-			{ label: 'Accepted', value: '55', sub: '37 not yet notified', tone: 'attention' },
+			{ label: 'Accepted', value: '4', sub: '3 accepted not yet notified', tone: 'attention' },
 			{ label: 'Notify by', value: '3 days', sub: 'Aug 13, 23:59 EDT' }
 		],
 		attention: [
@@ -50,7 +50,7 @@ const crunch: WorkspaceDataset = {
 				id: 'unnotified',
 				severity: 'now',
 				area: 'decisions',
-				title: '37 accepted submissions not yet notified',
+				title: '4 decisions not yet notified',
 				detail: 'Promised by Aug 13, 23:59 EDT. The oldest acceptance is 9 days old and no notice has gone out.',
 				action: 'Compose notifications',
 				href: '/app/decisions?scope=unnotified'
@@ -59,7 +59,7 @@ const crunch: WorkspaceDataset = {
 				id: 'undecided',
 				severity: 'soon',
 				area: 'decisions',
-				title: '162 submissions still undecided',
+				title: '10 submissions still undecided',
 				detail: 'Scores are in for all of them. Evals & Reliability and Models & Infrastructure have not had a decision pass yet.',
 				action: 'Open decision board'
 			},
@@ -84,7 +84,7 @@ const crunch: WorkspaceDataset = {
 				id: 'overdue-tasks',
 				severity: 'soon',
 				area: 'tasks',
-				title: '21 speaker tasks overdue',
+				title: '18 speaker tasks overdue',
 				detail: 'Headshots, bios, and recording consent — all past due for speakers already announced.',
 				action: 'Filter overdue',
 				href: '/app/tasks?filter=overdue'
@@ -107,8 +107,8 @@ const crunch: WorkspaceDataset = {
 			}
 		],
 		pipeline: [
-			{ key: 'collect', label: 'Collect', headline: '300', sub: 'CFP closed Aug 1 · 17 late', state: 'ok' },
-			{ key: 'triage', label: 'Triage', headline: '214', sub: 'inbox · 61 set aside · 17 late', state: 'ok' },
+			{ key: 'collect', label: 'Collect', headline: '16', sub: 'CFP closed Aug 1 · 1 late', state: 'ok' },
+			{ key: 'triage', label: 'Triage', headline: '13', sub: 'inbox · 1 set aside · 1 late', state: 'ok' },
 			/* 97% reads calm; 17 reviews against a deadline that lands tomorrow
 			   is not. Pace answers to the clock, not to the fraction. */
 			{
@@ -125,21 +125,21 @@ const crunch: WorkspaceDataset = {
 			{
 				key: 'decide',
 				label: 'Decide',
-				headline: '138',
-				sub: '55 accepted · 37 un-notified',
+				headline: '6',
+				sub: '4 accepted · 4 un-notified',
 				state: 'attention',
-				progress: { done: 138, required: 300 },
+				progress: { done: 6, required: 16 },
 				paceTone: 'behind',
 				deadlineLabel: 'notify by Aug 13',
 				deadlineIso: '2026-08-13T23:59:00-04:00'
 			},
-			/* No stated task total, so no meter; 21 required tasks are already
+			/* No stated task total, so no meter; 18 required tasks are already
 			   overdue for announced speakers. */
 			{
 				key: 'speakers',
 				label: 'Speakers',
-				headline: '20',
-				sub: 'engaged · 21 tasks overdue',
+				headline: '10',
+				sub: 'confirmed · 18 tasks overdue',
 				state: 'attention',
 				paceTone: 'behind',
 				deadlineLabel: 'content due Sep 11',
@@ -148,10 +148,10 @@ const crunch: WorkspaceDataset = {
 			{
 				key: 'schedule',
 				label: 'Schedule',
-				headline: '17/18',
+				headline: '18/19',
 				sub: 'placed · 5 blocking conflicts',
 				state: 'blocked',
-				progress: { done: 17, required: 18 },
+				progress: { done: 18, required: 19 },
 				paceTone: 'behind',
 				deadlineLabel: 'publish target Aug 28',
 				deadlineIso: '2026-08-28'
@@ -179,7 +179,7 @@ const crunch: WorkspaceDataset = {
 				text: 'found 5 blocking conflicts after the Lab import — three sessions share one block',
 				time: '52 min ago'
 			},
-			{ id: 'act-3', actor: 'you', name: 'You', text: 'accepted 14 submissions in Agents & Tools', time: '2 h ago' },
+			{ id: 'act-3', actor: 'you', name: 'You', text: 'accepted 3 submissions in Agents & Tools', time: '2 h ago' },
 			{
 				id: 'act-4',
 				actor: 'person',
@@ -196,8 +196,8 @@ const crunch: WorkspaceDataset = {
 			}
 		],
 		trays: [
-			{ kind: 'late', label: 'Late submissions', count: 17, href: '/app/submissions?tray=late' },
-			{ kind: 'discarded', label: 'Discarded, recoverable', count: 8, href: '/app/submissions?tray=discarded' },
+			{ kind: 'late', label: 'Late submissions', count: 1, href: '/app/submissions?tray=late' },
+			{ kind: 'discarded', label: 'Discarded, recoverable', count: 1, href: '/app/submissions?tray=discarded' },
 			{ kind: 'inbound-mail', label: 'Inbound mail review', count: 6 },
 			{ kind: 'appeals', label: 'Appeals awaiting reply', count: 4 },
 			{ kind: 'bounced', label: 'Bounced recipients', count: 3, href: '/app/messages' },
@@ -211,9 +211,9 @@ const crunch: WorkspaceDataset = {
 		{ id: 'trk-infra', name: 'Models & Infrastructure', accent: 'neutral' }
 	],
 	formats: [
-		{ id: 'fmt-talk', name: 'Talk · 30 min', defaultDurationMin: 30 },
-		{ id: 'fmt-workshop', name: 'Workshop · 90 min', defaultDurationMin: 90 },
-		{ id: 'fmt-panel', name: 'Panel · 45 min', defaultDurationMin: 45 }
+		{ id: 'fmt-talk', name: 'Talk', defaultDurationMin: 30 },
+		{ id: 'fmt-workshop', name: 'Workshop', defaultDurationMin: 90 },
+		{ id: 'fmt-panel', name: 'Panel', defaultDurationMin: 45 }
 	],
 
 	submissions: [
@@ -225,7 +225,7 @@ const crunch: WorkspaceDataset = {
 			speakers: [{ name: 'Ingrid Halvorsen', email: 'ingrid@nordicscale.no' }],
 			trackId: 'trk-infra',
 			formatId: 'fmt-talk',
-			submittedAt: 'Jul 12',
+			submittedAt: daysAgo(32),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'undecided',
@@ -251,7 +251,7 @@ const crunch: WorkspaceDataset = {
 			speakers: [{ name: 'Marc Dubois', email: 'marc@a11ycraft.eu' }],
 			trackId: 'trk-web',
 			formatId: 'fmt-talk',
-			submittedAt: 'Jul 9',
+			submittedAt: daysAgo(35),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'undecided',
@@ -268,7 +268,7 @@ const crunch: WorkspaceDataset = {
 			speakers: [{ name: 'Priya Nair', email: 'priya.nair@reviewlab.ai' }],
 			trackId: 'trk-ai',
 			formatId: 'fmt-talk',
-			submittedAt: 'Jul 14',
+			submittedAt: daysAgo(30),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'undecided',
@@ -294,7 +294,7 @@ const crunch: WorkspaceDataset = {
 			speakers: [{ name: 'Tomás Rivera', email: 'tomas@queueless.dev' }],
 			trackId: 'trk-infra',
 			formatId: 'fmt-workshop',
-			submittedAt: 'Jul 6',
+			submittedAt: daysAgo(38),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'undecided',
@@ -319,7 +319,7 @@ const crunch: WorkspaceDataset = {
 			speakers: [{ name: 'Nora Visser', email: 'nora@tokenslab.nl' }],
 			trackId: 'trk-web',
 			formatId: 'fmt-talk',
-			submittedAt: 'Jul 20',
+			submittedAt: daysAgo(24),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'undecided',
@@ -344,7 +344,7 @@ const crunch: WorkspaceDataset = {
 			speakers: [{ name: 'Oskar Lind', email: 'oskar@steadystate.se' }],
 			trackId: 'trk-infra',
 			formatId: 'fmt-talk',
-			submittedAt: 'Jul 17',
+			submittedAt: daysAgo(27),
 			source: 'cfp',
 			targetSessionId: 'ses-19',
 			tray: 'inbox',
@@ -362,7 +362,7 @@ const crunch: WorkspaceDataset = {
 			speakers: [{ name: 'Hana Sato', email: 'hana@streamcraft.jp' }],
 			trackId: 'trk-ai',
 			formatId: 'fmt-talk',
-			submittedAt: 'Jul 22',
+			submittedAt: daysAgo(22),
 			source: 'cfp',
 			targetSessionId: 'ses-19',
 			tray: 'inbox',
@@ -383,7 +383,7 @@ const crunch: WorkspaceDataset = {
 			],
 			trackId: 'trk-web',
 			formatId: 'fmt-panel',
-			submittedAt: 'Jun 28',
+			submittedAt: daysAgo(46),
 			source: 'direct_entry',
 			enteredBy: 'Linnea Koski',
 			tray: 'inbox',
@@ -401,10 +401,11 @@ const crunch: WorkspaceDataset = {
 			speakers: [{ name: 'Deniz Kaya', email: 'deniz@ingestworks.io' }],
 			trackId: 'trk-web',
 			formatId: 'fmt-talk',
-			submittedAt: 'Jul 3',
+			submittedAt: daysAgo(41),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'accepted',
+			decidedAt: hoursAgo(28),
 			notified: false,
 			signals: [
 				{
@@ -427,10 +428,11 @@ const crunch: WorkspaceDataset = {
 			speakers: [{ name: 'Amara Okafor', email: 'amara@contractual.io' }],
 			trackId: 'trk-web',
 			formatId: 'fmt-talk',
-			submittedAt: 'Jul 8',
+			submittedAt: daysAgo(36),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'accepted',
+			decidedAt: hoursAgo(28),
 			notified: false,
 			signals: [],
 			reviewAverage: 4.6,
@@ -444,10 +446,11 @@ const crunch: WorkspaceDataset = {
 			speakers: [{ name: 'Daniel Kim', email: 'daniel@edgequery.dev' }],
 			trackId: 'trk-infra',
 			formatId: 'fmt-talk',
-			submittedAt: 'Jul 11',
+			submittedAt: daysAgo(33),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'accepted',
+			decidedAt: hoursAgo(27),
 			notified: false,
 			signals: [],
 			reviewAverage: 4.6,
@@ -461,11 +464,12 @@ const crunch: WorkspaceDataset = {
 			speakers: [{ name: 'Ravi Chandran', email: 'ravi@keynote.example' }],
 			trackId: 'trk-web',
 			formatId: 'fmt-talk',
-			submittedAt: 'Jun 15',
+			submittedAt: daysAgo(59),
 			source: 'direct_entry',
 			enteredBy: 'Jere K.',
 			tray: 'inbox',
 			decision: 'accepted',
+			decidedAt: daysAgo(58),
 			notified: true,
 			signals: [],
 			reviewCount: 0
@@ -481,10 +485,11 @@ const crunch: WorkspaceDataset = {
 			],
 			trackId: 'trk-web',
 			formatId: 'fmt-workshop',
-			submittedAt: 'Jul 19',
+			submittedAt: daysAgo(25),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'waitlisted',
+			decidedAt: hoursAgo(26),
 			notified: false,
 			signals: [],
 			reviewAverage: 4.1,
@@ -498,7 +503,7 @@ const crunch: WorkspaceDataset = {
 			speakers: [{ name: 'Britta Klein', email: 'britta@shipfast.tools' }],
 			trackId: 'trk-ai',
 			formatId: 'fmt-talk',
-			submittedAt: 'Jul 25',
+			submittedAt: daysAgo(19),
 			source: 'cfp',
 			tray: 'set-aside',
 			setAsideBy: 'Screen run #9',
@@ -524,7 +529,7 @@ const crunch: WorkspaceDataset = {
 			speakers: [{ name: 'Mikkel Sørensen', email: 'mikkel@boxfresh.dk' }],
 			trackId: 'trk-infra',
 			formatId: 'fmt-talk',
-			submittedAt: 'Aug 2',
+			submittedAt: hoursAgo(279),
 			source: 'cfp',
 			tray: 'late',
 			decision: 'undecided',
@@ -539,10 +544,11 @@ const crunch: WorkspaceDataset = {
 			speakers: [{ name: 'Rex Vault', email: 'rex@vaultmoney.xyz' }],
 			trackId: 'trk-ai',
 			formatId: 'fmt-talk',
-			submittedAt: 'Jul 30',
+			submittedAt: daysAgo(14),
 			source: 'cfp',
 			tray: 'discarded',
 			decision: 'declined',
+			decidedAt: daysAgo(13),
 			notified: true,
 			signals: [
 				{
@@ -558,13 +564,15 @@ const crunch: WorkspaceDataset = {
 			appealCount: 2
 		}
 	],
-	submissionTrayTotals: { inbox: 214, 'set-aside': 61, late: 17, discarded: 8 },
+	submissionTrayTotals: { inbox: 13, 'set-aside': 1, late: 1, discarded: 1 },
+	previousVisit: daysAgo(13),
 
 	reviewPlans: [
 		{
 			id: 'plan-r1',
 			name: 'Round 1 · screening',
 			scaleMax: 5,
+			reviewsPerSubmission: 5,
 			deadlineRelative: 'closed Jul 28',
 			anonymized: true,
 			done: 900,
@@ -585,6 +593,7 @@ const crunch: WorkspaceDataset = {
 			id: 'plan-r2',
 			name: 'Round 2 · shortlist',
 			scaleMax: 5,
+			reviewsPerSubmission: 5,
 			deadlineRelative: 'due tomorrow',
 			anonymized: false,
 			done: 583,
@@ -976,10 +985,10 @@ const crunch: WorkspaceDataset = {
 		slotMinutes: 30,
 		slotsPerDay: 16,
 		sessions: [
-			{ id: 'ses-1', title: 'Opening Keynote: AI Engineering Beyond the Demo', speakers: [{ name: 'Ravi Chandran', email: 'ravi@keynote.example' }], trackId: 'trk-web', formatId: 'fmt-talk', durationMin: 60, state: 'programmed' },
-			{ id: 'ses-2', title: 'Streaming Agent UIs Without a State Machine Meltdown', speakers: [{ name: 'Deniz Kaya', email: 'deniz@ingestworks.io' }], trackId: 'trk-web', formatId: 'fmt-talk', durationMin: 30, state: 'programmed' },
-			{ id: 'ses-3', title: 'Typed Tool Contracts Between Agents That Never Meet', speakers: [{ name: 'Amara Okafor', email: 'amara@contractual.io' }], trackId: 'trk-web', formatId: 'fmt-talk', durationMin: 30, state: 'programmed' },
-			{ id: 'ses-4', title: 'Durable Agent Jobs: A Queueing Confession', speakers: [{ name: 'Daniel Kim', email: 'daniel@edgequery.dev' }], trackId: 'trk-infra', formatId: 'fmt-talk', durationMin: 30, state: 'programmed' },
+			{ id: 'ses-1', title: 'Opening Keynote: AI Engineering Beyond the Demo', speakers: [{ name: 'Ravi Chandran', email: 'ravi@keynote.example' }], trackId: 'trk-web', formatId: 'fmt-talk', durationMin: 60, state: 'programmed', originSubmissionIds: ['sub-312'] },
+			{ id: 'ses-2', title: 'Streaming Agent UIs Without a State Machine Meltdown', speakers: [{ name: 'Deniz Kaya', email: 'deniz@ingestworks.io' }], trackId: 'trk-web', formatId: 'fmt-talk', durationMin: 30, state: 'programmed', originSubmissionIds: ['sub-309'] },
+			{ id: 'ses-3', title: 'Typed Tool Contracts Between Agents That Never Meet', speakers: [{ name: 'Amara Okafor', email: 'amara@contractual.io' }], trackId: 'trk-web', formatId: 'fmt-talk', durationMin: 30, state: 'programmed', originSubmissionIds: ['sub-310'] },
+			{ id: 'ses-4', title: 'Durable Agent Jobs: A Queueing Confession', speakers: [{ name: 'Daniel Kim', email: 'daniel@edgequery.dev' }], trackId: 'trk-infra', formatId: 'fmt-talk', durationMin: 30, state: 'programmed', originSubmissionIds: ['sub-311'] },
 			{ id: 'ses-5', title: 'Componentizing the Agent Stack', speakers: [{ name: 'Elena Petrova', email: 'elena@sandboxworks.example' }], trackId: 'trk-infra', formatId: 'fmt-talk', durationMin: 30, state: 'programmed' },
 			{ id: 'ses-6', title: 'Serving 100k-Token Contexts Without Melting the App', speakers: [{ name: 'Ines Moreau', email: 'ines@gridworks.fr' }], trackId: 'trk-web', formatId: 'fmt-talk', durationMin: 30, state: 'programmed' },
 			{ id: 'ses-7', title: 'Panel: Who Owns Agent Reliability?', speakers: [{ name: 'Sofia Berg', email: 'sofia@perfpanel.se' }, { name: 'Lukas Brandt', email: 'lukas@perfpanel.se' }], trackId: 'trk-web', formatId: 'fmt-panel', durationMin: 45, state: 'programmed' },
@@ -1100,11 +1109,11 @@ const crunch: WorkspaceDataset = {
 		{
 			id: 'msg-2',
 			subject: 'Your talk was accepted — AI Engineer NYC 2026',
-			audience: '37 accepted submitters',
-			audienceCount: 37,
+			audience: '3 accepted submitters',
+			audienceCount: 3,
 			state: 'draft',
 			purpose: 'Decision notice',
-			cause: '37 submissions were marked Accepted and their submitters have not been told',
+			cause: '3 submissions were marked Accepted and their submitters have not been told',
 			causeHref: '/app/decisions?scope=unnotified',
 			actor: 'you',
 			templateId: 'tpl-decision-accepted',
@@ -1277,7 +1286,7 @@ const crunch: WorkspaceDataset = {
 	theme: defaultEventTheme('AI Engineer NYC 2026'),
 
 	forms: [
-		{ id: 'form-cfp', name: 'Call for Proposals', target: { kind: 'general' }, status: 'closed', version: 4, submissionCount: 283 },
+		{ id: 'form-cfp', name: 'Call for Proposals', target: { kind: 'general' }, status: 'closed', version: 4, submissionCount: 14 },
 		{
 			id: 'form-late',
 			name: 'Late submission request',

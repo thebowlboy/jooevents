@@ -45,6 +45,8 @@ import type {
 	ReviewerStatus,
 	ReviewPlan,
 	ReviewRoundSetup,
+	ReviewRoundStatus,
+	SubmissionOrigin,
 	ReviewerProgress,
 	ReviseProgress,
 	Room,
@@ -1572,6 +1574,19 @@ function syncDraftFields(draft: SurfaceTemplate): void {
 }
 
 export const api = {
+	/**
+	 * The per-operator surface-visit rotation (Q41), reduced to the one read a
+	 * surface makes at entry: when did I last look here before this visit. The
+	 * sample seam serves the dataset's authored instant; the live row rotates
+	 * on a human page entry only — agent and MCP reads never count as seen.
+	 */
+	visits: {
+		async previous(surface: 'submissions'): Promise<string | null> {
+			await latency();
+			void surface;
+			return db.previousVisit ?? null;
+		}
+	},
 	workspace: {
 		async summary(): Promise<WorkspaceSummary> {
 			await latency();
@@ -1827,12 +1842,13 @@ export const api = {
 				speakers: input.speakers.map((speaker) => ({ ...speaker })),
 				trackId: input.trackId,
 				formatId: input.formatId,
-				submittedAt: 'Today',
+				submittedAt: new Date().toISOString(),
 				source: 'direct_entry',
 				enteredBy: accountIdentity().name,
 				...(input.targetSessionId ? { targetSessionId: input.targetSessionId } : {}),
 				tray: 'inbox',
 				decision: input.disposition === 'accepted' ? 'accepted' : 'undecided',
+				...(input.disposition === 'accepted' ? { decidedAt: new Date().toISOString() } : {}),
 				notified: false,
 				signals: [],
 				reviewCount: 0
@@ -1954,6 +1970,11 @@ export const api = {
 				const was = submission.decision;
 				submission.decision = decision;
 				submission.notified = false;
+				// The decision moment rides the head: it orders the decided groups
+				// and lets un-notified copy state its age. Undeciding clears it —
+				// an undecided row has no decision to date.
+				if (decision === 'undecided') delete submission.decidedAt;
+				else submission.decidedAt = new Date().toISOString();
 				if (decision === 'accepted') graduateSubmission(submission);
 				else if (was === 'accepted') ungraduateSubmission(submission);
 			}
@@ -2008,6 +2029,35 @@ export const api = {
 		async plans(): Promise<ReviewPlan[]> {
 			await latency();
 			return db.reviewPlans;
+		},
+		/**
+		 * The newest round's standing, reduced to what the submissions inbox
+		 * needs for its station groups. Open is stated by the plan's own
+		 * deadline words here because the sample plan carries no explicit flag;
+		 * the live projection reports a real one.
+		 */
+		async roundStatus(): Promise<ReviewRoundStatus | null> {
+			await latency();
+			const plan = db.reviewPlans.at(-1);
+			if (!plan) return null;
+			const due = plan.deadlineRelative.toLowerCase();
+			// Sample-only inference from the plan's authored words; the live
+			// projection computes the tone from the real deadline instant.
+			const deadlineTone = due.includes('overdue')
+				? ('danger' as const)
+				: due.includes('today') || due.includes('tomorrow')
+					? ('warning' as const)
+					: ('calm' as const);
+			return {
+				open: !due.startsWith('closed'),
+				name: plan.name,
+				percentDone: plan.total === 0 ? 0 : Math.round((plan.done / plan.total) * 100),
+				dueLabel: plan.deadlineRelative,
+				deadlineTone,
+				...(plan.reviewsPerSubmission !== undefined
+					? { reviewsPerSubmission: plan.reviewsPerSubmission }
+					: {})
+			};
 		},
 		/**
 		 * What opening the round will do, counted from current records. The
@@ -2603,6 +2653,24 @@ export const api = {
 	},
 
 	schedule: {
+		/**
+		 * Where an accepted submission went — the session it became or joined.
+		 * Session-graduations this session are answered from their compensation
+		 * record; pre-seeded acceptances fall back to the origin link, telling
+		 * spawn from attach by whether the session is the submission alone.
+		 */
+		async originOf(submissionId: string): Promise<SubmissionOrigin | null> {
+			await latency();
+			const session = db.schedule.sessions.find((entry) =>
+				(entry.originSubmissionIds ?? []).includes(submissionId)
+			);
+			if (!session) return null;
+			const record = graduations.get(submissionId);
+			const kind =
+				record?.kind ??
+				((session.originSubmissionIds ?? []).length === 1 ? 'spawn' : 'attach');
+			return { sessionId: session.id, title: session.title, kind };
+		},
 		async state(): Promise<ScheduleState> {
 			await latency();
 			// Snapshots, not live rows: roster edits mutate a session in place,
@@ -2855,11 +2923,12 @@ export const api = {
 				speakers: [{ name: person.name, email: person.email }],
 				trackId: session.trackId,
 				formatId: session.formatId,
-				submittedAt: 'Today',
+				submittedAt: new Date().toISOString(),
 				source: 'direct_entry',
 				enteredBy: accountIdentity().name,
 				tray: 'inbox',
 				decision: 'accepted',
+				decidedAt: new Date().toISOString(),
 				notified: false,
 				signals: [],
 				reviewCount: 0

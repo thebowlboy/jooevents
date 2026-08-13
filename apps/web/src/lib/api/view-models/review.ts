@@ -3,7 +3,6 @@ import type {
 	ReviewDraftSaveResult,
 	ReviewPlanProjection,
 	ReviewQueueItemProjection,
-	ReviewRoundOpenAtomicJoinRequirement,
 	ReviewRoundSetupProjection,
 	ReviewSnapshot,
 	ReviewStanding
@@ -41,8 +40,3 @@ export type ReviewChangeDraftView = ReviewView<
 	z.infer<typeof reviewChangeDraftDataSchema>
 >;
 export type ReviewDraftSaveView = ReviewView<ReviewDraftSaveResult>;
-
-/** Typed detail carried by the currently blocked open-round operation. */
-export type ReviewOpenRoundAtomicJoinRequirementView = ReviewView<
-	ReviewRoundOpenAtomicJoinRequirement
->;

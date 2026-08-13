@@ -107,7 +107,10 @@ function workspaceSettings(view: EventSettingsView): EventSettings {
 		endDate: view.endDate,
 		location: view.location,
 		timezone: view.timezone,
-		venueNote: view.venueNote
+		venueNote: view.venueNote,
+		dayStart: view.dayStart,
+		dayEnd: view.dayEnd,
+		slotMinutes: view.slotMinutes
 	};
 }
 
@@ -117,7 +120,10 @@ function sameAuthoredValues(current: EventSettingsView, request: EventSettingsUp
 		&& current.startDate === request.startDate
 		&& current.endDate === request.endDate
 		&& current.location === request.location
-		&& current.venueNote === request.venueNote;
+		&& current.venueNote === request.venueNote
+		&& current.dayStart === request.dayStart
+		&& current.dayEnd === request.dayEnd
+		&& current.slotMinutes === request.slotMinutes;
 }
 
 function defaultIdempotencyKey(): string {
@@ -125,7 +131,8 @@ function defaultIdempotencyKey(): string {
 }
 
 const authoredKeys = new Set<keyof EventSettings>([
-	'name', 'timezone', 'startDate', 'endDate', 'location', 'venueNote'
+	'name', 'timezone', 'startDate', 'endDate', 'location', 'venueNote',
+	'dayStart', 'dayEnd', 'slotMinutes'
 ]);
 
 /**
@@ -169,6 +176,8 @@ export function createEventSettingsWorkspaceAdapter(input: {
 
 			const current = await readCurrent();
 			if (!current) return null;
+			// The geometry triple accepts explicit null (clear the grid), so its
+			// merge distinguishes an absent patch key from an authored null.
 			const parsed = eventSettingsUpdateDraftInputSchema.safeParse({
 				expectedEventId: current.eventId,
 				expectedEventSetVersion: current.eventSetVersion,
@@ -178,7 +187,12 @@ export function createEventSettingsWorkspaceAdapter(input: {
 				startDate: patch.startDate ?? current.startDate,
 				endDate: patch.endDate ?? current.endDate,
 				location: patch.location ?? current.location,
-				venueNote: patch.venueNote ?? current.venueNote
+				venueNote: patch.venueNote ?? current.venueNote,
+				dayStart: Object.hasOwn(patch, 'dayStart') ? patch.dayStart ?? null : current.dayStart,
+				dayEnd: Object.hasOwn(patch, 'dayEnd') ? patch.dayEnd ?? null : current.dayEnd,
+				slotMinutes: Object.hasOwn(patch, 'slotMinutes')
+					? patch.slotMinutes ?? null
+					: current.slotMinutes
 			});
 			if (!parsed.success) {
 				throw new EventSettingsWorkspaceAdapterError({

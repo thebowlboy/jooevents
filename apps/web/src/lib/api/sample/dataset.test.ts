@@ -5,6 +5,11 @@ import quiet from './quiet';
 import crunch from './crunch';
 
 const aieScenarios = [opening, flight, quiet, crunch];
+const trayKeys = ['inbox', 'set-aside', 'late', 'discarded'] as const;
+
+function navNumber(value: string | { value: string }): number {
+	return Number(typeof value === 'string' ? value : value.value);
+}
 
 describe('AI Engineer demo scenarios', () => {
 	// The event switcher made the workspace hold two real events (decision:
@@ -78,6 +83,54 @@ describe('AI Engineer demo scenarios', () => {
 			for (const brk of scenario.schedule.breaks) {
 				expect(roomIds.has(brk.roomId)).toBe(true);
 				expect(dayKeys.has(brk.dayKey)).toBe(true);
+			}
+		}
+	});
+
+	test('direct demo counts resolve to the same fixture rows as their destinations', () => {
+		for (const scenario of aieScenarios) {
+			expect(navNumber(scenario.summary.navCounts.submissions!)).toBe(scenario.submissions.length);
+			expect(navNumber(scenario.summary.navCounts.speakers!)).toBe(scenario.speakers.length);
+
+			for (const tray of trayKeys) {
+				expect(scenario.submissionTrayTotals[tray]).toBe(
+					scenario.submissions.filter((submission) => submission.tray === tray).length
+				);
+			}
+
+			const lateTray = scenario.summary.trays.find((tray) => tray.kind === 'late');
+			const discardedTray = scenario.summary.trays.find((tray) => tray.kind === 'discarded');
+			expect(lateTray?.count).toBe(scenario.submissionTrayTotals.late);
+			expect(discardedTray?.count).toBe(scenario.submissionTrayTotals.discarded);
+
+			const cfp = scenario.forms.find((form) => form.id === 'form-cfp');
+			if (cfp) {
+				expect(cfp.submissionCount).toBe(
+					scenario.submissions.filter((submission) => submission.source === 'cfp').length
+				);
+			}
+
+			if (scenario.summary.navCounts.tasks) {
+				expect(navNumber(scenario.summary.navCounts.tasks)).toBe(
+				scenario.assignments.filter((assignment) => assignment.overdue).length
+				);
+			}
+			if (scenario.summary.navCounts.schedule) {
+				expect(navNumber(scenario.summary.navCounts.schedule)).toBe(
+					scenario.schedule.placements.filter((placement) =>
+						placement.conflicts.some((conflict) => conflict.severity === 'block')
+					).length
+				);
+			}
+
+			const unnotified = scenario.summary.attention.find((item) => item.id === 'unnotified');
+			if (unnotified) {
+				const count = Number(unnotified.title.match(/^\d+/)?.[0]);
+				expect(count).toBe(
+					scenario.submissions.filter(
+						(submission) => submission.decision !== 'undecided' && !submission.notified
+					).length
+				);
 			}
 		}
 	});

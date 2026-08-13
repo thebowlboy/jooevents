@@ -11,7 +11,6 @@ import {
 	reviewRoundSetupReadResultSchema,
 	reviewSnapshotReadResultSchema
 } from '@jooevents/contracts/reviews';
-import { reviewOpenRoundAtomicJoinRequirement } from '../mappers/review';
 import type { ExpectedOperatorHttpOperation } from './operator-http-binding';
 import {
 	createReviewLivePort,
@@ -210,41 +209,21 @@ describe('live Review operation port', () => {
 		}]);
 	});
 
-	test('keeps open-round date intent and returns the typed atomic review_due blocker unchanged', async () => {
+	test('keeps open-round date intent as the whole wire input for the atomic review_due join', async () => {
 		const calls: ReviewRequestInput[] = [];
-		const blocker = {
-			kind: 'outcome' as const,
-			outcome: {
-				class: 'conflict' as const,
-				kind: 'review.open_round_atomic_join_required',
-				retryable: false,
-				subjects: [],
-				detail: {
-					schemaVersion: 1,
-					kind: 'review_due_round_atomic_join',
-					deadlineKind: 'review_due',
-					deadlineDate: '2026-09-01',
-					atomic: true
-				} as const,
-				detailSchemaVersion: 1
-			},
-			terminal: false as const,
-			correlationId
-		};
+		const outcome = eventRequiredOutcome();
 		const result = await createReviewLivePort({
 			manifest: manifest(),
 			request: async (input) => {
 				calls.push(input);
-				return { kind: 'success', data: blocker };
+				return { kind: 'success', data: outcome };
 			}
 		}).draftRoundChange({
 			action: 'open_round',
 			deadlineDate: '2026-09-01'
 		}, 'review-open-round');
 
-		expect(result).toEqual(blocker);
-		if (result.kind !== 'outcome') throw new TypeError('Expected typed blocker.');
-		expect(reviewOpenRoundAtomicJoinRequirement(result.outcome)).toEqual(blocker.outcome.detail);
+		expect(result).toEqual(outcome);
 		expect(calls).toEqual([{
 			path: REVIEW_LIVE_OPERATIONS.round_change_draft.path,
 			method: 'POST',
@@ -256,6 +235,8 @@ describe('live Review operation port', () => {
 			},
 			idempotencyKey: 'review-open-round'
 		}]);
+		// The browser only sends date intent; the server mints the Deadline
+		// identity and creates the review_due Deadline in the round-open commit.
 		expect(JSON.stringify(calls[0]?.body)).not.toContain('deadlineId');
 	});
 
@@ -352,7 +333,7 @@ describe('live Review operation port', () => {
 		expect(Object.isFrozen(result.data.draft.scores)).toBe(true);
 	});
 
-	test('fails closed on missing, path-drifted, and malformed typed-blocker contracts', async () => {
+	test('fails closed on missing and path-drifted operation contracts', async () => {
 		let calls = 0;
 		const request: ReviewRequester = async () => {
 			calls += 1;
@@ -381,31 +362,6 @@ describe('live Review operation port', () => {
 		});
 		expect(await drifted.readRoundSetup()).toEqual({
 			kind: 'unavailable', operation: 'round_setup', reason: 'operation_contract_mismatch'
-		});
-
-		const malformed = await createReviewLivePort({
-			manifest: manifest(),
-			request: async () => ({
-				kind: 'success',
-				data: {
-					kind: 'outcome',
-					outcome: {
-						class: 'conflict',
-						kind: 'review.open_round_atomic_join_required',
-						retryable: false,
-						subjects: [],
-						detail: null,
-						detailSchemaVersion: 1
-					},
-					terminal: false,
-					correlationId
-				}
-			})
-		}).draftRoundChange({
-			action: 'open_round', deadlineDate: '2026-09-01'
-		}, 'review-open-malformed');
-		expect(malformed).toEqual({
-			kind: 'transport_error', error: { code: 'invalid_contract', retryable: true }
 		});
 		expect(calls).toBe(0);
 	});

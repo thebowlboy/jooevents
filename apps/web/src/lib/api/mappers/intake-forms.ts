@@ -232,7 +232,13 @@ export function mapOrganizerFormChangesetDiff(diff: ChangesetDiffData): Organize
 		riskTier: diff.riskTier,
 		approvalRequirement: diff.approvalPolicy.requirement,
 		operations: Object.freeze(diff.operations.map((operation) => {
-			if (operation.kind !== 'intake.form.mutate' || operation.version !== 2) {
+			// Cross-lane conformance note (Wave-2 J-WEB): the canonical
+			// FORM_CHANGESET_VERSION moved 2 -> 3 with the intake source
+			// widening; the sample dataset still emits 2 through this shared
+			// mapper, so both served versions verify until the forms lane
+			// converges the sample on the canonical version.
+			if (operation.kind !== 'intake.form.mutate'
+				|| (operation.version !== 2 && operation.version !== 3)) {
 				throw new TypeError('Changeset diff contains a non-Form operation.');
 			}
 			const parsedSafeDiff = intakeFormSafeDiffSchema.safeParse(operation.safeDiff);

@@ -1,0 +1,825 @@
+import type { StructuredOutcome } from '@jooevents/contracts';
+import { reviewSafeDiffSchema } from '@jooevents/contracts/reviews';
+import type { SafeApiError } from './client';
+import {
+	CHANGESET_REVIEW_OPERATIONS,
+	type ChangesetReviewPort,
+	type ChangesetReviewResult
+} from './changesets';
+import type { OperatorHttpBindingUnavailableReason } from './operations/operator-http-binding';
+import type { ProgramVocabularySettingsPort } from './program-vocabulary-settings-adapter';
+import type { ReviewCoreEffectResult, ReviewCorePort } from './review-core-port';
+import type { ReviewPagePort, ReviewPageViewer } from './review-page-port';
+import type {
+	Format,
+	MutationOutcome,
+	MyReviewItem,
+	ReviewPlan,
+	ReviewRoundSetup,
+	ScopeRef,
+	ScoreStanding,
+	Track
+} from './types';
+import type {
+	ReviewChangeDraftView,
+	ReviewSnapshotView,
+	ReviewStandingView
+} from './view-models/review';
+import type { ProgramFormatView, ProgramTrackView } from './view-models/program-vocabulary';
+
+/**
+ * The tuned page capabilities this deliberately partial live mount cannot
+ * truthfully serve yet, each refused with its own name so a failure states
+ * exactly which owner has not joined. The recorded Review core boundary
+ * (review-core-port.ts) deliberately carries no profile, reminder, accolade,
+ * or comparison capability; everything below stays refused until its own
+ * canonical owner exists. The mutating round/evaluation capabilities refuse
+ * only while no committed changeset owner is composed at this seam.
+ */
+export type ReviewPageLiveUnmountedCapability =
+	| 'submission_detail'
+	| 'review_round_commit'
+	| 'review_round_discard'
+	| 'review_evaluation_commit'
+	| 'review_evaluation_amend'
+	| 'review_evaluation_revert'
+	| 'review_step_back'
+	| 'review_comparison'
+	| 'review_accolade_change'
+	| 'reviewer_scope'
+	| 'reviewer_reminders'
+	| 'review_schedule_state';
+
+type AdapterFailure = Readonly<{ code: string; reason: string }>;
+
+/** Safe, reviewed-copy failure at the tuned Review boundary. */
+export class ReviewPageLiveError extends Error {
+	readonly code: string;
+
+	constructor(failure: AdapterFailure) {
+		super(failure.reason);
+		this.name = 'ReviewPageLiveError';
+		this.code = failure.code;
+	}
+}
+
+const UNMOUNTED_COPY: Readonly<Record<ReviewPageLiveUnmountedCapability, string>> = Object.freeze({
+	submission_detail:
+		'Submission details are not available in this live workspace yet.',
+	review_round_commit:
+		'Opening a review round is not available in this live workspace yet.',
+	review_round_discard:
+		'Discarding a review round is not available in this live workspace yet.',
+	review_evaluation_commit:
+		'Committing a review is not available in this live workspace yet.',
+	review_evaluation_amend:
+		'Amending a committed review is not available in this live workspace yet.',
+	review_evaluation_revert:
+		'Reverting an amendment is not available in this live workspace yet.',
+	review_step_back:
+		'Stepping back from a review is not available in this live workspace yet.',
+	review_comparison:
+		'Committed-review comparison is not available in this live workspace yet.',
+	review_accolade_change:
+		'Accolades are not available in this live workspace yet.',
+	reviewer_scope:
+		'This reviewer scope is not available in this live workspace.',
+	reviewer_reminders:
+		'Reviewer reminders are not available in this live workspace yet.',
+	review_schedule_state:
+		'The schedule is not available on this live Review surface yet.'
+});
+
+function unmounted(capability: ReviewPageLiveUnmountedCapability): ReviewPageLiveError {
+	return new ReviewPageLiveError({ code: capability, reason: UNMOUNTED_COPY[capability] });
+}
+
+function refusal(capability: ReviewPageLiveUnmountedCapability): MutationOutcome {
+	return { ok: false, reason: UNMOUNTED_COPY[capability] };
+}
+
+function outcomeCopy(
+	outcome: StructuredOutcome,
+	subject: string,
+	channel: 'read' | 'change'
+): string {
+	// D1 error-path fix: refusals name the channel they refused. An
+	// access-denied review commit used to claim the *read* permission was
+	// lost, which misstates both what was attempted and what to restore.
+	if (outcome.class === 'access_denied') {
+		return channel === 'read'
+			? `You no longer have permission to read ${subject}.`
+			: `You no longer have permission to change ${subject}.`;
+	}
+	if (outcome.class === 'stale_revision' || outcome.class === 'conflict') {
+		return `The ${subject} changed while you were working. Reload and try again.`;
+	}
+	return channel === 'read'
+		? `This ${subject} request could not be completed.`
+		: `This ${subject} change could not be completed.`;
+}
+
+type ReadFailure =
+	| { readonly kind: 'outcome'; readonly outcome: StructuredOutcome; readonly correlationId: string }
+	| { readonly kind: 'transport_error'; readonly error: SafeApiError }
+	| { readonly kind: 'unavailable'; readonly reason: OperatorHttpBindingUnavailableReason };
+
+function readFailure(result: ReadFailure, subject: string): AdapterFailure {
+	if (result.kind === 'unavailable') {
+		return { code: result.reason, reason: `The ${subject} is not available in this live workspace.` };
+	}
+	if (result.kind === 'transport_error') {
+		return {
+			code: result.error.code,
+			reason: result.error.retryable
+				? `The ${subject} could not be reached. Try again.`
+				: `This ${subject} request is not valid.`
+		};
+	}
+	return { code: result.outcome.kind, reason: outcomeCopy(result.outcome, subject, 'read') };
+}
+
+/**
+ * One failure grammar for every mutating channel: refusals from the Review
+ * core effect operations and from the generic changeset propose/commit steps
+ * both surface as the same `{code, reason}` shape the read side already uses,
+ * so the tuned page renders one refusal vocabulary for the whole loop.
+ */
+function effectFailure(
+	result:
+		| Exclude<ReviewCoreEffectResult<unknown>, { readonly kind: 'success' }>
+		| Exclude<ChangesetReviewResult<unknown>, { readonly kind: 'success' }>,
+	subject: string
+): AdapterFailure {
+	if (result.kind === 'unavailable') {
+		return {
+			code: result.reason,
+			reason: `The ${subject} is not available in this live workspace.`
+		};
+	}
+	if (result.kind === 'transport_error') {
+		return {
+			code: result.error.code,
+			reason: result.error.retryable
+				? `The ${subject} change could not reach JooEvents. Try again.`
+				: `This ${subject} change is not valid.`
+		};
+	}
+	return {
+		code: result.outcome.kind,
+		reason: outcomeCopy(result.outcome, subject, 'change')
+	};
+}
+
+function invalidContract(subject: string): AdapterFailure {
+	return {
+		code: 'invalid_contract',
+		reason: `This ${subject} request could not be completed.`
+	};
+}
+
+const UTC_MONTHS = Object.freeze([
+	'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+]);
+
+function utcDayNumber(epochMs: number): number {
+	return Math.floor(epochMs / 86_400_000);
+}
+
+/**
+ * The tuned plan's one presentation field, derived deterministically from the
+ * canonical UTC deadline instant — never from a browser locale. Open rounds
+ * phrase distance by whole UTC days; closed rounds name their UTC calendar
+ * date, matching the product's established deadline copy.
+ */
+function deadlinePhrase(state: 'open' | 'closed', deadlineIso: string, nowMs: number): string {
+	const deadline = Date.parse(deadlineIso);
+	if (state === 'closed') {
+		const date = new Date(deadline);
+		return `closed ${UTC_MONTHS[date.getUTCMonth()]} ${date.getUTCDate()}`;
+	}
+	const days = utcDayNumber(deadline) - utcDayNumber(nowMs);
+	if (days < 0) return days === -1 ? 'due yesterday' : `overdue by ${-days} days`;
+	if (days === 0) return 'due today';
+	if (days === 1) return 'due tomorrow';
+	return `due in ${days} days`;
+}
+
+/**
+ * Canonical plans projected into the tuned shape. Discarded rounds are the
+ * tuned list's removed records — `discardRound` takes a plan off the page —
+ * so they are omitted rather than shown as live rounds; open and closed
+ * rounds both remain, because closed history stays listed. A reviewer row
+ * whose canonical projection discloses no display name keeps that absence as
+ * the tuned string's empty value; a label is never invented for it.
+ */
+export function mapLiveReviewPlans(
+	plans: ReviewSnapshotView['plans'],
+	nowMs: number
+): ReviewPlan[] {
+	const kept: ReviewPlan[] = [];
+	for (const plan of plans) {
+		if (plan.state === 'discarded') continue;
+		kept.push({
+			id: plan.id,
+			name: plan.name,
+			scaleMax: plan.scaleMax,
+			deadlineRelative: deadlinePhrase(plan.state, plan.deadlineEffectiveAt, nowMs),
+			anonymized: plan.anonymized,
+			done: plan.done,
+			total: plan.total,
+			reviewers: plan.reviewers.map((row) => ({
+				id: row.reviewerId,
+				name: row.displayName ?? '',
+				assigned: row.assigned,
+				done: row.done,
+				steppedBack: row.steppedBack,
+				awaitingReassignment: row.awaitingReassignment
+			})),
+			antiAnchoring: plan.antiAnchoring
+		});
+	}
+	return kept;
+}
+
+function myReviewItem(item: NonNullable<ReviewSnapshotView['queue']>[number]): MyReviewItem {
+	const current = item.committed ? item.current : undefined;
+	const score = current ? current.score : item.draft?.score;
+	const comment = current ? current.comment : item.draft?.comment;
+	return {
+		submissionId: item.submissionId,
+		...(score !== undefined ? { myScore: score } : {}),
+		...(comment !== undefined ? { myComment: comment } : {}),
+		committed: item.committed,
+		...(item.peerScores ? { peerScores: [...item.peerScores] } : {}),
+		...(item.revisions.length > 0
+			? {
+					revisions: item.revisions.map((revision) => ({
+						score: revision.score,
+						comment: revision.comment,
+						at: revision.at,
+						postUnlock: revision.postUnlock
+					}))
+				}
+			: {})
+		// `accolades` stays absent: no canonical accolade owner exists, so no
+		// pinned marks exist to report.
+	};
+}
+
+/**
+ * Canonical standing projected into the tuned shape. The canonical slice
+ * label is optional disclosure; its absence is carried as the tuned string's
+ * empty value, never replaced with an invented slice name.
+ */
+function standingView(standing: ReviewStandingView): ScoreStanding {
+	return {
+		value: standing.value,
+		scaleMax: standing.scaleMax,
+		reviews: standing.reviews,
+		n: standing.n,
+		median: standing.median,
+		band: standing.band,
+		phrase: standing.phrase,
+		slice: {
+			label: standing.slice.label ?? '',
+			...(standing.slice.trackId !== undefined ? { trackId: standing.slice.trackId } : {})
+		},
+		...(standing.points ? { points: [...standing.points] } : {}),
+		...(standing.bins ? { bins: [...standing.bins] } : {}),
+		...(standing.dotK !== undefined ? { dotK: standing.dotK } : {})
+	};
+}
+
+function liveTrack(track: ProgramTrackView): Track {
+	return {
+		id: track.id,
+		name: track.name,
+		accent: track.accent,
+		status: track.status,
+		usage: { ...track.usage }
+	};
+}
+
+function liveFormat(format: ProgramFormatView): Format {
+	return {
+		id: format.id,
+		name: format.name,
+		status: format.status,
+		usage: { ...format.usage }
+	};
+}
+
+/** The canonical standings read accepts at most this many ids per request. */
+const STANDINGS_READ_CHUNK = 100;
+
+function chunked<Value>(values: readonly Value[], size: number): readonly (readonly Value[])[] {
+	const chunks: Value[][] = [];
+	for (let index = 0; index < values.length; index += size) {
+		chunks.push(values.slice(index, index + size));
+	}
+	return chunks;
+}
+
+const REVIEW_CHANGESET_OPERATION = Object.freeze({
+	kind: 'review.core.mutate',
+	version: 1,
+	dependencyGroup: 'review'
+});
+
+function receiptMatches(
+	receipt: { readonly operationName: string; readonly operationVersion: number } | undefined,
+	operation: { readonly name: string; readonly version: number }
+): boolean {
+	return receipt?.operationName === operation.name
+		&& receipt.operationVersion === operation.version;
+}
+
+/** The one identity a Review safe diff binds its action to. */
+function safeDiffSubjectId(safeDiff: ReviewChangeDraftView['safeDiff']): string {
+	if (safeDiff.action === 'open_round' || safeDiff.action === 'discard_empty_round') {
+		return safeDiff.roundId;
+	}
+	return safeDiff.assignmentId;
+}
+
+/**
+ * Live tuned Review page port over the canonical mount: the Review core
+ * port's reads (snapshot plans with their served criterion identities, the
+ * viewer's own queue, whole-slice standings, round setup, the viewer's own
+ * scope), its evaluation draft save, and — when the generic changeset review
+ * port is composed — its drafted changes carried through propose and commit
+ * so a drafted round open, round discard, step-back, or review commit
+ * becomes an effective change rather than an abandoned draft. Everything
+ * else surfaces the port's typed refusal or its typed absence — never sample
+ * fallback, fabricated zeros, or silent no-ops.
+ *
+ * Without a composed `changesets` port the mutating tuned methods keep their
+ * typed refusals: a drafted changeset alone is not an effective round,
+ * commit, or step-back, and this seam never reports a draft as a completed
+ * change.
+ *
+ * `saveReview` maps the tuned single score onto the round's served criterion
+ * identities. A round serving more than one criterion cannot truthfully
+ * accept one overall number, so the save refuses instead of minting ids or
+ * splitting the score — criterion identities only ever come from the
+ * canonical round.
+ */
+export function createLiveReviewPagePort(input: {
+	readonly review: ReviewCorePort;
+	readonly vocabulary: Pick<ProgramVocabularySettingsPort, 'source' | 'tracks' | 'formats'>;
+	readonly viewer: ReviewPageViewer;
+	/**
+	 * The generic changeset review port that commits drafted Review changes.
+	 * Absent while the composition has not joined it; the mutating methods
+	 * then refuse with their capability codes instead of half-committing.
+	 */
+	readonly changesets?: ChangesetReviewPort;
+	readonly now?: () => number;
+	/** Mints one idempotency anchor per user-visible attempt. */
+	readonly newAttemptKey?: () => string;
+}): ReviewPagePort {
+	if (input.review.source.kind !== 'live' || input.vocabulary.source.kind !== 'live') {
+		throw new TypeError('live_review_source_required');
+	}
+	if (input.changesets && input.changesets.source.kind !== 'live') {
+		throw new TypeError('live_review_source_required');
+	}
+	const now = input.now ?? Date.now;
+	const changesets = input.changesets;
+	const newAttemptKey = input.newAttemptKey ?? (() => crypto.randomUUID());
+
+	async function readSnapshot(
+		request: { standingSubmissionIds?: string[]; standingSlice?: 'track' | 'all' } = {}
+	): Promise<ReviewSnapshotView> {
+		const result = await input.review.readSnapshot(request);
+		if (result.kind !== 'success') {
+			throw new ReviewPageLiveError(readFailure(result, 'review snapshot'));
+		}
+		return result.data;
+	}
+
+	/**
+	 * Distinct derived keys per workflow stage from one minted attempt anchor,
+	 * so a retried attempt replays each stage instead of double-writing it.
+	 */
+	async function stageKeys(
+		workflow: string,
+		stages: readonly string[]
+	): Promise<Readonly<Record<string, string>>> {
+		const digest = await globalThis.crypto.subtle.digest(
+			'SHA-256',
+			new TextEncoder().encode(newAttemptKey())
+		);
+		const anchor = Array.from(new Uint8Array(digest), (byte) =>
+			byte.toString(16).padStart(2, '0')
+		).join('');
+		return Object.freeze(Object.fromEntries(stages.map((stage) => [
+			stage, `je.review.${workflow}.${stage}.${anchor}`
+		])));
+	}
+
+	function queueItem(
+		snapshot: ReviewSnapshotView,
+		submissionId: string
+	): NonNullable<ReviewSnapshotView['queue']>[number] {
+		const item = snapshot.queue?.find((entry) => entry.submissionId === submissionId);
+		if (!item) {
+			throw new ReviewPageLiveError({
+				code: 'review_assignment_missing',
+				reason: 'This submission is not in your review queue.'
+			});
+		}
+		return item;
+	}
+
+	/**
+	 * Carries one exact drafted Review change through propose and commit.
+	 * Resolves null when committed; otherwise the typed failure. Every
+	 * response is verified against the exact draft it claims to advance —
+	 * selector, single operation of the Review changeset kind, unchanged safe
+	 * diff subject, risk, and approval — so a swapped or partial changeset
+	 * never reads as this change succeeding.
+	 */
+	async function commitDraftedChange(request: {
+		readonly port: ChangesetReviewPort;
+		readonly draft: ReviewChangeDraftView;
+		readonly expectedAction: ReviewChangeDraftView['action'];
+		readonly proposeKey: string;
+		readonly commitKey: string;
+		readonly subject: string;
+	}): Promise<AdapterFailure | null> {
+		const draft = request.draft;
+		if (draft.action !== request.expectedAction
+			|| draft.safeDiff.action !== request.expectedAction) {
+			return invalidContract(request.subject);
+		}
+		if (draft.approvalPolicy.requirement !== 'none') {
+			return {
+				code: 'review_approval_required',
+				reason: 'This change needs a separate approval, which this surface cannot collect yet.'
+			};
+		}
+		const selector = {
+			changesetId: draft.changesetId,
+			revisionId: draft.revision.id,
+			revisionDigest: draft.revision.digestSha256
+		};
+		const proposed = await request.port.propose(
+			{ ...selector, expectedHeadVersion: draft.headVersion },
+			request.proposeKey
+		);
+		if (proposed.kind !== 'success') return effectFailure(proposed, request.subject);
+		if (!receiptMatches(proposed.receipt, CHANGESET_REVIEW_OPERATIONS.propose)
+			|| proposed.correlationId === undefined) {
+			return invalidContract(request.subject);
+		}
+		const operations = proposed.data.groups.flatMap((group) => group.operations);
+		const operation = operations[0];
+		const proposedDiff = reviewSafeDiffSchema.safeParse(operation?.safeDiff);
+		if (proposed.data.operationCount !== 1
+			|| operations.length !== 1
+			|| operation?.kind !== REVIEW_CHANGESET_OPERATION.kind
+			|| operation.version !== REVIEW_CHANGESET_OPERATION.version
+			|| operation.dependencyGroup !== REVIEW_CHANGESET_OPERATION.dependencyGroup
+			|| proposed.data.risk.value !== draft.riskTier
+			|| proposed.data.approval.requirement !== draft.approvalPolicy.requirement
+			|| !proposedDiff.success
+			|| proposedDiff.data.action !== draft.safeDiff.action
+			|| safeDiffSubjectId(proposedDiff.data) !== safeDiffSubjectId(draft.safeDiff)) {
+			return invalidContract(request.subject);
+		}
+		const committed = await request.port.commit(
+			{ ...selector, expectedHeadVersion: proposed.data.headVersion },
+			request.commitKey
+		);
+		if (committed.kind !== 'success') return effectFailure(committed, request.subject);
+		if (!receiptMatches(committed.receipt, CHANGESET_REVIEW_OPERATIONS.commit)
+			|| committed.correlationId === undefined) {
+			return invalidContract(request.subject);
+		}
+		return null;
+	}
+
+	/** The outcome-channel translation: typed adapter throws become `{ok:false}`. */
+	async function asOutcome(work: () => Promise<MutationOutcome>): Promise<MutationOutcome> {
+		try {
+			return await work();
+		} catch (error) {
+			if (error instanceof ReviewPageLiveError) return { ok: false, reason: error.message };
+			throw error;
+		}
+	}
+
+	return Object.freeze({
+		viewer: Object.freeze({ ...input.viewer }),
+		workspace: Object.freeze({
+			/** No live workspace summary is composed here; null is "not read yet". */
+			reviewPlanExpectedSnapshot(): boolean | null {
+				return null;
+			}
+		}),
+		vocab: Object.freeze({
+			tracks: async () => (await input.vocabulary.tracks()).map(liveTrack),
+			formats: async () => (await input.vocabulary.formats()).map(liveFormat)
+		}),
+		submissions: Object.freeze({
+			/**
+			 * Submissions exist canonically in Intake, but no candidate-display
+			 * join is composed at this seam; resolving null would falsely claim
+			 * the submission does not exist, so the read refuses instead.
+			 */
+			async get(): Promise<never> {
+				throw unmounted('submission_detail');
+			}
+		}),
+		review: Object.freeze({
+			async plans(): Promise<ReviewPlan[]> {
+				return mapLiveReviewPlans((await readSnapshot()).plans, now());
+			},
+			async roundSetup(): Promise<ReviewRoundSetup> {
+				const result = await input.review.readRoundSetup();
+				if (result.kind !== 'success') {
+					throw new ReviewPageLiveError(readFailure(result, 'round setup'));
+				}
+				return {
+					activeReviewers: result.data.activeReviewers,
+					invitedReviewers: result.data.invitedReviewers,
+					submissions: result.data.submissions,
+					expectedReviews: result.data.expectedReviews,
+					perReviewer: result.data.perReviewer.map((row) => ({
+						id: row.reviewerId,
+						// Undisclosed display names stay absent ('' in the tuned string).
+						name: row.displayName ?? '',
+						assigned: row.assigned
+					}))
+				};
+			},
+			async openRound(request: {
+				deadlineIso: string;
+				anonymized: boolean;
+			}): Promise<ReviewPlan> {
+				if (!changesets) throw unmounted('review_round_commit');
+				const keys = await stageKeys('round-open', ['draft', 'propose', 'commit']);
+				// `criteria` stays absent on purpose: the server opens the round
+				// with its single default criterion, which the snapshot then serves.
+				const drafted = await input.review.draftRoundChange({
+					action: 'open_round',
+					deadlineDate: request.deadlineIso,
+					anonymized: request.anonymized
+				}, keys.draft!);
+				if (drafted.kind !== 'success') {
+					throw new ReviewPageLiveError(effectFailure(drafted, 'review round'));
+				}
+				const failure = await commitDraftedChange({
+					port: changesets,
+					draft: drafted.data,
+					expectedAction: 'open_round',
+					proposeKey: keys.propose!,
+					commitKey: keys.commit!,
+					subject: 'review round'
+				});
+				if (failure) throw new ReviewPageLiveError(failure);
+				if (drafted.data.safeDiff.action !== 'open_round') {
+					throw new ReviewPageLiveError(invalidContract('review round'));
+				}
+				const roundId = drafted.data.safeDiff.roundId;
+				const opened = mapLiveReviewPlans((await readSnapshot()).plans, now())
+					.find((plan) => plan.id === roundId);
+				if (!opened) throw new ReviewPageLiveError(invalidContract('review round'));
+				return opened;
+			},
+			discardRound(planId: string): Promise<MutationOutcome> {
+				return asOutcome(async () => {
+					if (!changesets) return refusal('review_round_discard');
+					const snapshot = await readSnapshot();
+					const plan = snapshot.plans.find((candidate) => candidate.id === planId);
+					if (!plan) {
+						return { ok: false, reason: 'This round is not on the current review plan.' };
+					}
+					const keys = await stageKeys('round-discard', ['draft', 'propose', 'commit']);
+					const drafted = await input.review.draftRoundChange({
+						action: 'discard_empty_round',
+						roundId: planId,
+						expectedRoundVersion: plan.version
+					}, keys.draft!);
+					if (drafted.kind !== 'success') {
+						return { ok: false, reason: effectFailure(drafted, 'review round').reason };
+					}
+					const failure = await commitDraftedChange({
+						port: changesets,
+						draft: drafted.data,
+						expectedAction: 'discard_empty_round',
+						proposeKey: keys.propose!,
+						commitKey: keys.commit!,
+						subject: 'review round'
+					});
+					return failure ? { ok: false, reason: failure.reason } : { ok: true };
+				});
+			},
+			/**
+			 * The viewer's own queue only, as the server states it. An organizer
+			 * snapshot carries no queue because an organizer holds no assignments —
+			 * that empty list is the true state — while a reviewer snapshot missing
+			 * its queue is an absence and refuses rather than claiming "nothing to
+			 * review".
+			 */
+			async myQueue(): Promise<MyReviewItem[]> {
+				const snapshot = await readSnapshot();
+				if (snapshot.queue) return snapshot.queue.map(myReviewItem);
+				if (snapshot.viewer.kind === 'organizer') return [];
+				throw new ReviewPageLiveError({
+					code: 'review_queue_unavailable',
+					reason: 'Your review queue is not available in this live workspace.'
+				});
+			},
+			async saveReview(submissionId: string, score: number, comment: string): Promise<void> {
+				const snapshot = await readSnapshot();
+				const item = queueItem(snapshot, submissionId);
+				if (item.committed) {
+					throw new ReviewPageLiveError({
+						code: 'review_already_committed',
+						reason: 'This review is already committed; a saved draft can no longer change it.'
+					});
+				}
+				const plan = snapshot.plans.find((candidate) => candidate.id === item.roundId);
+				if (!plan) throw new ReviewPageLiveError(invalidContract('review draft'));
+				if (plan.criteria.length !== 1) {
+					throw new ReviewPageLiveError({
+						code: 'review_multi_criterion_round',
+						reason: 'This round scores several criteria; saving one overall score is not available here.'
+					});
+				}
+				const criterion = plan.criteria[0]!;
+				if (!Number.isInteger(score)
+					|| score < criterion.scaleMin
+					|| score > criterion.scaleMax) {
+					throw new ReviewPageLiveError({
+						code: 'review_score_invalid',
+						reason: `Scores are whole numbers from ${criterion.scaleMin} to ${criterion.scaleMax}.`
+					});
+				}
+				const keys = await stageKeys('evaluation-save', ['save']);
+				const saved = await input.review.saveEvaluationDraft({
+					assignmentId: item.assignmentId,
+					expectedDraftVersion: item.draft?.version ?? null,
+					scores: [{ criterionId: criterion.id, score }],
+					comment
+				}, keys.save!);
+				if (saved.kind !== 'success') {
+					throw new ReviewPageLiveError(effectFailure(saved, 'review draft'));
+				}
+			},
+			async commitReview(submissionId: string): Promise<MyReviewItem | null> {
+				if (!changesets) throw unmounted('review_evaluation_commit');
+				const snapshot = await readSnapshot();
+				const item = queueItem(snapshot, submissionId);
+				// An already-committed review is served truth, not a new write.
+				if (item.committed) return myReviewItem(item);
+				if (!item.draft) {
+					throw new ReviewPageLiveError({
+						code: 'review_draft_missing',
+						reason: 'Save a score before committing this review.'
+					});
+				}
+				const keys = await stageKeys('evaluation-commit', ['draft', 'propose', 'commit']);
+				const drafted = await input.review.draftEvaluationChange({
+					action: 'commit_review',
+					assignmentId: item.assignmentId,
+					expectedAssignmentVersion: item.assignmentVersion,
+					expectedDraftVersion: item.draft.version
+				}, keys.draft!);
+				if (drafted.kind !== 'success') {
+					throw new ReviewPageLiveError(effectFailure(drafted, 'review commit'));
+				}
+				const failure = await commitDraftedChange({
+					port: changesets,
+					draft: drafted.data,
+					expectedAction: 'commit_review',
+					proposeKey: keys.propose!,
+					commitKey: keys.commit!,
+					subject: 'review commit'
+				});
+				if (failure) throw new ReviewPageLiveError(failure);
+				// The committed truth is re-read, never locally synthesized.
+				const after = await readSnapshot();
+				const committed = after.queue?.find((entry) => entry.submissionId === submissionId);
+				return committed ? myReviewItem(committed) : null;
+			},
+			/** Absent key = the canonically served "no standing" absence, kept as null. */
+			async standing(submissionId: string): Promise<ScoreStanding | null> {
+				const snapshot = await readSnapshot({ standingSubmissionIds: [submissionId] });
+				// The canonical record is keyed by branded ids; the tuned read asks
+				// by plain string, so the lookup walks the served entries.
+				const entry = Object.entries(snapshot.standings).find(([key]) => key === submissionId);
+				return entry ? standingView(entry[1]) : null;
+			},
+			/**
+			 * The canonical read serves at most 100 standings per request, so a
+			 * larger ask becomes exact chunked reads merged by submission id —
+			 * never a silently truncated single request.
+			 */
+			async standings(submissionIds: string[]): Promise<Record<string, ScoreStanding>> {
+				const distinct = [...new Set(submissionIds)];
+				if (distinct.length === 0) return {};
+				const merged: Record<string, ScoreStanding> = {};
+				for (const chunk of chunked(distinct, STANDINGS_READ_CHUNK)) {
+					const snapshot = await readSnapshot({ standingSubmissionIds: [...chunk] });
+					for (const [submissionId, standing] of Object.entries(snapshot.standings)) {
+						merged[submissionId] = standingView(standing);
+					}
+				}
+				return merged;
+			},
+			async amend(): Promise<never> {
+				throw unmounted('review_evaluation_amend');
+			},
+			async revertAmend(): Promise<never> {
+				throw unmounted('review_evaluation_revert');
+			},
+			async comparables(): Promise<never> {
+				throw unmounted('review_comparison');
+			},
+			/** No accolade owner exists canonically, so no defs exist to offer. */
+			async accoladeDefs() {
+				return [];
+			},
+			async pinAccolade(): Promise<MutationOutcome> {
+				return refusal('review_accolade_change');
+			},
+			async unpinAccolade(): Promise<MutationOutcome> {
+				return refusal('review_accolade_change');
+			},
+			/**
+			 * The snapshot serves only the viewer's own scope; any other subject's
+			 * scope is not a served fact and refuses rather than answering with an
+			 * invented (or generalist-shaped) empty scope.
+			 */
+			async myScope(reviewerId: string): Promise<ScopeRef[]> {
+				const snapshot = await readSnapshot();
+				if (
+					snapshot.viewer.kind !== 'reviewer'
+					|| snapshot.viewer.reviewerId !== reviewerId
+					|| snapshot.reviewerScope === undefined
+				) {
+					throw unmounted('reviewer_scope');
+				}
+				return snapshot.reviewerScope.map((ref) => ({ kind: ref.kind, id: ref.id }));
+			},
+			stepBack(submissionId: string, reviewerId: string): Promise<MutationOutcome> {
+				return asOutcome(async () => {
+					if (!changesets) return refusal('review_step_back');
+					// The queue serves only the viewer's own assignments, so only
+					// the viewer's own step-back is expressible here.
+					if (input.viewer.kind !== 'reviewer' || input.viewer.reviewerId !== reviewerId) {
+						return {
+							ok: false,
+							reason: 'Only your own assignment can be stepped back from here.'
+						};
+					}
+					const snapshot = await readSnapshot();
+					const item = queueItem(snapshot, submissionId);
+					const keys = await stageKeys('step-back', ['draft', 'propose', 'commit']);
+					const drafted = await input.review.draftStepBack({
+						action: 'step_back',
+						assignmentId: item.assignmentId,
+						expectedAssignmentVersion: item.assignmentVersion
+					}, keys.draft!);
+					if (drafted.kind !== 'success') {
+						return { ok: false, reason: effectFailure(drafted, 'review assignment').reason };
+					}
+					const failure = await commitDraftedChange({
+						port: changesets,
+						draft: drafted.data,
+						expectedAction: 'step_back',
+						proposeKey: keys.propose!,
+						commitKey: keys.commit!,
+						subject: 'review assignment'
+					});
+					return failure ? { ok: false, reason: failure.reason } : { ok: true };
+				});
+			}
+		}),
+		speakers: Object.freeze({
+			/** Null is the port's own typed absence for an unknown profile. */
+			async profile() {
+				return null;
+			}
+		}),
+		tasks: Object.freeze({
+			async remind(): Promise<never> {
+				throw unmounted('reviewer_reminders');
+			}
+		}),
+		schedule: Object.freeze({
+			/**
+			 * Neither the Review core port nor the vocabulary owns schedule state,
+			 * and a zeroed ScheduleState would claim no days, rooms, or sessions
+			 * exist; the read refuses until the schedule owner is composed.
+			 */
+			async state(): Promise<never> {
+				throw unmounted('review_schedule_state');
+			}
+		})
+	} satisfies ReviewPagePort);
+}

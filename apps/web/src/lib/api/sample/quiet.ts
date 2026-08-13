@@ -1,4 +1,5 @@
 import type { WorkspaceDataset } from './dataset';
+import { daysAgo } from './dataset';
 import { defaultEventTheme, starterSurfaceTemplates, starterTemplates } from './templates';
 import { baselineFieldRegistry } from './fields';
 
@@ -24,22 +25,22 @@ const quiet: WorkspaceDataset = {
 		},
 		lockedAreas: [],
 		navCounts: {
-			submissions: '268',
+			submissions: '10',
 			review: '100%',
-			speakers: '28',
+			speakers: '10',
 			reviewers: '5',
 			messages: '2'
 		},
 		stats: [
 			{ label: 'Sessions', value: '24', sub: 'Published Sep 22 · no conflicts' },
 			{ label: 'Reviews', value: '100%', sub: 'Both rounds closed' },
-			{ label: 'Decisions', value: '268', sub: 'Every one notified' },
-			{ label: 'Speaker tasks', value: '96%', sub: '134 of 140 complete' }
+			{ label: 'Decisions', value: '10', sub: 'Every one notified' },
+			{ label: 'Speaker tasks', value: '96%', sub: '48 of 50 complete' }
 		],
 		attention: [],
 		pipeline: [
-			{ key: 'collect', label: 'Collect', headline: '268', sub: 'CFP closed Aug 22 · 1 late', state: 'ok' },
-			{ key: 'triage', label: 'Triage', headline: '193', sub: 'inbox · 74 set aside · 1 late', state: 'ok' },
+			{ key: 'collect', label: 'Collect', headline: '10', sub: 'CFP closed Aug 22 · 1 late', state: 'ok' },
+			{ key: 'triage', label: 'Triage', headline: '8', sub: 'inbox · 1 set aside · 1 late', state: 'ok' },
 			/* Full meters here stay neutral: done on time is calm, not a party.
 			   Round 1 was the full-population round (536 of 536); round 2 also
 			   closed, on Sep 9. */
@@ -59,19 +60,19 @@ const quiet: WorkspaceDataset = {
 			{
 				key: 'decide',
 				label: 'Decide',
-				headline: '268',
-				sub: '24 accepted · all notified',
+				headline: '10',
+				sub: '5 accepted · all notified',
 				state: 'ok',
-				progress: { done: 268, required: 268 }
+				progress: { done: 10, required: 10 }
 			},
 			/* The 6 remaining tasks answer to the optional slide-draft date. */
 			{
 				key: 'speakers',
 				label: 'Speakers',
-				headline: '28',
-				sub: 'confirmed · 134 of 140 tasks done',
+				headline: '10',
+				sub: 'confirmed · 48 of 50 tasks done',
 				state: 'ok',
-				progress: { done: 134, required: 140 },
+				progress: { done: 48, required: 50 },
 				paceTone: 'on',
 				deadlineLabel: 'slides due Oct 8',
 				deadlineIso: '2026-10-08T23:59:00-04:00'
@@ -136,12 +137,12 @@ const quiet: WorkspaceDataset = {
 		{ id: 'trk-infra', name: 'Models & Infrastructure', accent: 'neutral' }
 	],
 	formats: [
-		{ id: 'fmt-talk', name: 'Talk · 30 min', defaultDurationMin: 30 },
-		{ id: 'fmt-workshop', name: 'Workshop · 90 min', defaultDurationMin: 90 },
-		{ id: 'fmt-panel', name: 'Panel · 45 min', defaultDurationMin: 45 },
+		{ id: 'fmt-talk', name: 'Talk', defaultDurationMin: 30 },
+		{ id: 'fmt-workshop', name: 'Workshop', defaultDurationMin: 90 },
+		{ id: 'fmt-panel', name: 'Panel', defaultDurationMin: 45 },
 		/* Retired mid-planning; Tomás's scope still names it, so it keeps
 		   rendering (flagged) while never being offered for new scoping. */
-		{ id: 'fmt-lightning', name: 'Lightning · 10 min', status: 'retired' }
+		{ id: 'fmt-lightning', name: 'Lightning', status: 'retired' }
 	],
 
 	submissions: [
@@ -153,11 +154,12 @@ const quiet: WorkspaceDataset = {
 			speakers: [{ name: 'Ravi Chandran', email: 'ravi@keynote.example' }],
 			trackId: 'trk-web',
 			formatId: 'fmt-talk',
-			submittedAt: 'Jun 15',
+			submittedAt: daysAgo(105),
 			source: 'direct_entry',
 			enteredBy: 'Jere K.',
 			tray: 'inbox',
 			decision: 'accepted',
+			decidedAt: daysAgo(100),
 			notified: true,
 			signals: [],
 			reviewCount: 0
@@ -170,10 +172,11 @@ const quiet: WorkspaceDataset = {
 			speakers: [{ name: 'Ines Moreau', email: 'ines@gridworks.fr' }],
 			trackId: 'trk-web',
 			formatId: 'fmt-talk',
-			submittedAt: 'Jul 4',
+			submittedAt: daysAgo(86),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'accepted',
+			decidedAt: daysAgo(21),
 			notified: true,
 			signals: [
 				{
@@ -196,10 +199,11 @@ const quiet: WorkspaceDataset = {
 			speakers: [{ name: 'Daniel Kim', email: 'daniel@edgequery.dev' }],
 			trackId: 'trk-infra',
 			formatId: 'fmt-talk',
-			submittedAt: 'Jul 11',
+			submittedAt: daysAgo(79),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'accepted',
+			decidedAt: daysAgo(21),
 			notified: true,
 			signals: [],
 			reviewAverage: 4.6,
@@ -216,10 +220,11 @@ const quiet: WorkspaceDataset = {
 			],
 			trackId: 'trk-web',
 			formatId: 'fmt-workshop',
-			submittedAt: 'Jul 19',
+			submittedAt: daysAgo(71),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'accepted',
+			decidedAt: daysAgo(21),
 			notified: true,
 			signals: [
 				{
@@ -241,10 +246,11 @@ const quiet: WorkspaceDataset = {
 			speakers: [{ name: 'Rosa Delgado', email: 'rosa@replicalabs.es' }],
 			trackId: 'trk-infra',
 			formatId: 'fmt-talk',
-			submittedAt: 'Jul 23',
+			submittedAt: daysAgo(67),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'accepted',
+			decidedAt: daysAgo(21),
 			notified: true,
 			signals: [],
 			reviewAverage: 4.3,
@@ -258,10 +264,11 @@ const quiet: WorkspaceDataset = {
 			speakers: [{ name: 'Nora Visser', email: 'nora@tokenslab.nl' }],
 			trackId: 'trk-web',
 			formatId: 'fmt-talk',
-			submittedAt: 'Jul 27',
+			submittedAt: daysAgo(63),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'waitlisted',
+			decidedAt: daysAgo(20),
 			notified: true,
 			signals: [
 				{
@@ -283,10 +290,11 @@ const quiet: WorkspaceDataset = {
 			speakers: [{ name: 'Petra Novak', email: 'petra@smallops.cz' }],
 			trackId: 'trk-infra',
 			formatId: 'fmt-talk',
-			submittedAt: 'Aug 2',
+			submittedAt: daysAgo(57),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'declined',
+			decidedAt: daysAgo(20),
 			notified: true,
 			signals: [],
 			reviewAverage: 3.1,
@@ -300,10 +308,11 @@ const quiet: WorkspaceDataset = {
 			speakers: [{ name: 'Sven Aalto', email: 'sven@splitrepo.fi' }],
 			trackId: 'trk-infra',
 			formatId: 'fmt-talk',
-			submittedAt: 'Aug 5',
+			submittedAt: daysAgo(54),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'declined',
+			decidedAt: daysAgo(20),
 			notified: true,
 			signals: [],
 			reviewAverage: 2.9,
@@ -317,11 +326,12 @@ const quiet: WorkspaceDataset = {
 			speakers: [{ name: 'Britta Klein', email: 'britta@shipfast.tools' }],
 			trackId: 'trk-web',
 			formatId: 'fmt-talk',
-			submittedAt: 'Aug 3',
+			submittedAt: daysAgo(56),
 			source: 'cfp',
 			tray: 'set-aside',
 			setAsideBy: 'Screen run #12',
 			decision: 'declined',
+			decidedAt: daysAgo(20),
 			notified: true,
 			signals: [
 				{
@@ -343,22 +353,25 @@ const quiet: WorkspaceDataset = {
 			speakers: [{ name: 'Leo Marchetti', email: 'leo@ingestworks.it' }],
 			trackId: 'trk-infra',
 			formatId: 'fmt-talk',
-			submittedAt: 'Aug 23',
+			submittedAt: daysAgo(36),
 			source: 'cfp',
 			tray: 'late',
 			decision: 'declined',
+			decidedAt: daysAgo(20),
 			notified: true,
 			signals: [],
 			reviewCount: 0
 		}
 	],
-	submissionTrayTotals: { inbox: 193, 'set-aside': 74, late: 1, discarded: 0 },
+	submissionTrayTotals: { inbox: 8, 'set-aside': 1, late: 1, discarded: 0 },
+	previousVisit: daysAgo(3),
 
 	reviewPlans: [
 		{
 			id: 'plan-r1',
 			name: 'Round 1 · all tracks',
 			scaleMax: 5,
+			reviewsPerSubmission: 5,
 			deadlineRelative: 'closed Sep 2',
 			anonymized: true,
 			done: 536,
@@ -377,6 +390,7 @@ const quiet: WorkspaceDataset = {
 			id: 'plan-r2',
 			name: 'Round 2 · shortlist',
 			scaleMax: 5,
+			reviewsPerSubmission: 3,
 			deadlineRelative: 'closed Sep 9',
 			anonymized: false,
 			done: 174,
@@ -892,7 +906,7 @@ const quiet: WorkspaceDataset = {
 	theme: defaultEventTheme('AI Engineer NYC 2026'),
 
 	forms: [
-		{ id: 'form-cfp', name: 'Call for Proposals', target: { kind: 'general' }, status: 'closed', version: 4, submissionCount: 267 },
+		{ id: 'form-cfp', name: 'Call for Proposals', target: { kind: 'general' }, status: 'closed', version: 4, submissionCount: 9 },
 		{
 			id: 'form-late',
 			name: 'Late submission request',

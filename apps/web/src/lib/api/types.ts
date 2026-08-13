@@ -267,6 +267,12 @@ export interface Submission {
 	speakers: SubmissionSpeaker[];
 	trackId: string;
 	formatId: string;
+	/**
+	 * When this record arrived — an ISO instant, stamped by the server clock at
+	 * commit. Surfaces derive their own words from it (“2 h ago”, “Jul 2”); the
+	 * instant is also what the New mark and the oldest-waiting fact compute
+	 * from, so a pre-formatted label here would make both dishonest.
+	 */
 	submittedAt: string;
 	source: 'cfp' | 'direct_entry' | 'import';
 	/**
@@ -287,6 +293,13 @@ export interface Submission {
 	tray: TrayKey;
 	setAsideBy?: string;
 	decision: DecisionState;
+	/**
+	 * When the current decision landed — ISO instant, absent while undecided.
+	 * Orders the decided groups and lets un-notified copy state its age; the
+	 * moment itself already exists in the decision history, this only asks the
+	 * projection to carry it.
+	 */
+	decidedAt?: string;
 	/** True when the current decision has been communicated to the submitter. */
 	notified: boolean;
 	signals: SignalChip[];
@@ -389,6 +402,45 @@ export interface ReviewPlan {
 	reviewers: ReviewerProgress[];
 	/** Peer content unlocks only after own review is committed (default on). */
 	antiAnchoring: boolean;
+	/**
+	 * How many committed reviews the plan wants per submission. What separates
+	 * “in review” from “waiting on a decision” for an undecided row while the
+	 * round is open; absent means the round never states a per-item target and
+	 * every covered row stays in review until the round closes.
+	 */
+	reviewsPerSubmission?: number;
+}
+
+/**
+ * The one review-round fact the submissions inbox needs: is a round open over
+ * the candidates, and how far along is it. A station projection input, not a
+ * plan editor — the full plan stays on the Review surface.
+ */
+export interface ReviewRoundStatus {
+	open: boolean;
+	name: string;
+	/** Whole-round completion, 0–100, from the plan's own done/total. */
+	percentDone: number;
+	/** The plan's own deadline words (“due tomorrow”), stated not derived. */
+	dueLabel: string;
+	/**
+	 * How urgently the deadline should ink: calm until it closes in, warning
+	 * inside the last two days, danger once passed. The live projection
+	 * computes this from the real instant; a consumer never parses the words.
+	 */
+	deadlineTone: 'calm' | 'warning' | 'danger';
+	reviewsPerSubmission?: number;
+}
+
+/**
+ * Where an accepted submission went — the spawn/attach provenance read back
+ * from the program, so the row that graduated can carry a door to the session
+ * it became or joined.
+ */
+export interface SubmissionOrigin {
+	sessionId: string;
+	title: string;
+	kind: 'spawn' | 'attach';
 }
 
 /**
@@ -1528,6 +1580,15 @@ export interface EventSettings {
 	location: string;
 	timezone: string;
 	venueNote: string;
+	/**
+	 * Schedule-grid day window and slot length. The three values are present
+	 * together or all null; all-null (or absent in sample data) means the event
+	 * publishes no grid. dayStart/dayEnd are zero-padded HH:MM; slotMinutes is
+	 * one of 5, 10, 15, 20, 30, or 60 and divides the day window exactly.
+	 */
+	dayStart?: string | null;
+	dayEnd?: string | null;
+	slotMinutes?: number | null;
 	/**
 	 * Whether the hosted public pages ask to be indexed by search engines.
 	 *

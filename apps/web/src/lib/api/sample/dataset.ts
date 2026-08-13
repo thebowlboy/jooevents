@@ -72,6 +72,20 @@ export function closesInDays(days: number): string {
 }
 
 /**
+ * Instants authored relative to load, so a scenario's arrival story holds on
+ * any day it is opened: “arrived 2 h ago” stays two hours ago, and the New
+ * mark always has something honest to compute against. Static ISO dates would
+ * age out of every relative window within a week of being written.
+ */
+export function hoursAgo(hours: number): string {
+	return new Date(Date.now() - hours * 3_600_000).toISOString();
+}
+
+export function daysAgo(days: number): string {
+	return new Date(Date.now() - days * 86_400_000).toISOString();
+}
+
+/**
  * The display string public listings and the shell read for an event's dates,
  * derived from the ISO pair — one derivation for settings edits and created
  * events alike.
@@ -121,7 +135,8 @@ export interface SpeakerProfileSeed {
  * projection of exactly one dataset, so a dataset is also a testable product
  * scenario. Coherence rules for authors:
  * - `summary` counters, `submissionTrayTotals`, and detail rows must tell the
- *   same story (rows are a representative window; totals carry the real size);
+ *   same story; a demo count that links to a row slice must be backed by that
+ *   exact slice rather than an undisclosed aggregate;
  * - every attention item must be reachable on its area's screen;
  * - ids referenced across slices (tracks, sessions, speakers, tasks) must exist;
  * - every listed submission carrying a `reviewAverage` must have that exact
@@ -143,6 +158,13 @@ export interface WorkspaceDataset {
 	formats: FormatSeed[];
 	submissions: Submission[];
 	submissionTrayTotals: Record<TrayKey, number>;
+	/**
+	 * The operator's previous entry to the submissions surface — the rotation
+	 * value the surface-visit row would report, as an ISO instant. What the New
+	 * mark's since-your-last-visit arm computes against; absent plays as a
+	 * first-ever visit, where only the 24-hour arm applies.
+	 */
+	previousVisit?: string;
 	reviewPlans: ReviewPlan[];
 	/**
 	 * The reviewer roster: workspace members who review, with their scope.

@@ -1,9 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { reviewSnapshotSchema, type ReviewSnapshot } from '@jooevents/contracts/reviews';
-import {
-	mapReviewSnapshot,
-	reviewOpenRoundAtomicJoinRequirement
-} from './review';
+import { mapReviewSnapshot } from './review';
 
 const id = (value: number) =>
 	`00000000-0000-4000-8000-${value.toString(16).padStart(12, '0')}`;
@@ -28,7 +25,12 @@ function snapshot(): ReviewSnapshot {
 			ordinal: 1,
 			name: 'Round 1',
 			state: 'open',
+			version: 1,
 			scaleMax: 5,
+			criteria: [{
+				id: id(13), key: 'overall', label: 'Overall', position: 0,
+				weightBps: 10_000, scaleMin: 1, scaleMax: 5
+			}],
 			deadlineEffectiveAt: '2026-09-01T23:59:59.000Z',
 			anonymized: true,
 			antiAnchoring: true,
@@ -118,44 +120,13 @@ describe('Review source-neutral mapper', () => {
 			correctionOfRevisionId: id(9)
 		});
 		expect('displayName' in (mapped.plans[0]?.reviewers[0] ?? {})).toBe(false);
+		// Served criterion identities are carried by value, never re-minted.
+		expect(mapped.plans[0]?.criteria.map((criterion) => String(criterion.id))).toEqual([id(13)]);
+		expect(mapped.plans[0]?.version).toBe(1);
 		expect(Object.isFrozen(mapped)).toBe(true);
 		expect(Object.isFrozen(second?.revisions)).toBe(true);
 
 		canonical.plans[0]!.name = 'Changed after mapping';
 		expect(mapped.plans[0]?.name).toBe('Round 1');
-	});
-
-	test('narrows only the exact typed open-round atomic Deadline blocker', () => {
-		const requirement = reviewOpenRoundAtomicJoinRequirement({
-			class: 'conflict',
-			kind: 'review.open_round_atomic_join_required',
-			retryable: false,
-			subjects: [],
-			detailSchemaVersion: 1,
-			detail: {
-				schemaVersion: 1,
-				kind: 'review_due_round_atomic_join',
-				deadlineKind: 'review_due',
-				deadlineDate: '2026-09-01',
-				atomic: true
-			}
-		});
-		expect(requirement).toEqual({
-			schemaVersion: 1,
-			kind: 'review_due_round_atomic_join',
-			deadlineKind: 'review_due',
-			deadlineDate: '2026-09-01',
-			atomic: true
-		});
-		expect(Object.isFrozen(requirement)).toBe(true);
-
-		expect(reviewOpenRoundAtomicJoinRequirement({
-			class: 'conflict',
-			kind: 'review.open_round_atomic_join_required',
-			retryable: false,
-			subjects: [],
-			detailSchemaVersion: 1,
-			detail: null
-		})).toBeUndefined();
 	});
 });

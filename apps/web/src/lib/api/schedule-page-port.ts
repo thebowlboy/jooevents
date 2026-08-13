@@ -64,6 +64,11 @@ export interface SchedulePagePort {
 		formats(): Promise<Format[]>;
 		addRoom(name: string, capacity: number): Promise<Room>;
 		removeRoom(id: string): Promise<MutationOutcome>;
+		/** Minted where they are chosen (the direct-entry pattern): the New
+		 * session dialog creates a track or format in place and uses it
+		 * immediately, instead of sending the organizer to Settings mid-entry. */
+		addTrack(name: string): Promise<Track>;
+		addFormat(name: string): Promise<Format>;
 	};
 	readonly speakers: {
 		list(): Promise<SpeakerRow[]>;

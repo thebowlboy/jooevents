@@ -11,7 +11,10 @@ type HandledEventSettingsKey =
 	| 'startDate'
 	| 'endDate'
 	| 'location'
-	| 'venueNote';
+	| 'venueNote'
+	| 'dayStart'
+	| 'dayEnd'
+	| 'slotMinutes';
 
 const handledEventSettingsKeys: Record<
 	Exclude<keyof EventSettingsDto, HandledEventSettingsKey>,
@@ -72,6 +75,9 @@ export function mapEventSettings(settings: EventSettingsDto): EventSettingsView 
 		endDate: settings.endDate,
 		location: settings.location,
 		venueNote: settings.venueNote,
+		dayStart: settings.dayStart,
+		dayEnd: settings.dayEnd,
+		slotMinutes: settings.slotMinutes,
 		dates: formatEventSettingsDateRange(settings.startDate, settings.endDate)
 	});
 }

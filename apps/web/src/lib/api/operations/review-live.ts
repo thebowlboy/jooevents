@@ -25,8 +25,7 @@ import {
 	mapReviewChangeDraft,
 	mapReviewDraftSave,
 	mapReviewRoundSetup,
-	mapReviewSnapshot,
-	reviewOpenRoundAtomicJoinRequirement
+	mapReviewSnapshot
 } from '../mappers/review';
 import type {
 	ReviewCoreEffectResult,
@@ -251,11 +250,6 @@ function receiptMatches(
 	return receipt.operationName === operation.name && receipt.operationVersion === operation.version;
 }
 
-function outcomeIsValid(outcome: StructuredOutcome, allowOpenRoundJoin: boolean): boolean {
-	if (outcome.kind !== 'review.open_round_atomic_join_required') return true;
-	return allowOpenRoundJoin && reviewOpenRoundAtomicJoinRequirement(outcome) !== undefined;
-}
-
 function mapReadResult<Data, View>(
 	result: CanonicalReadResult<Data>,
 	map: (data: Data) => View
@@ -272,13 +266,9 @@ function mapEffectResult<Data, View>(input: {
 	readonly result: CanonicalEffectResult<Data>;
 	readonly operation: { readonly name: string; readonly version: number };
 	readonly map: (data: Data) => View;
-	readonly allowOpenRoundJoin?: boolean;
 }): ReviewCoreEffectResult<View> {
 	const result = input.result;
 	if (result.kind === 'outcome') {
-		if (!outcomeIsValid(result.outcome, input.allowOpenRoundJoin === true)) {
-			return invalidContract();
-		}
 		if (result.terminal && !receiptMatches(result.receipt, input.operation)) {
 			return invalidContract();
 		}
@@ -321,7 +311,6 @@ export function createReviewLivePort(input: {
 		readonly resultSchema: z.ZodType<CanonicalEffectResult<Data>>;
 		readonly map: (data: Data) => View;
 		readonly signal?: AbortSignal;
-		readonly allowOpenRoundJoin?: boolean;
 	}): Promise<ReviewCoreEffectResult<View>> {
 		const parsedInput = options.inputSchema.safeParse(options.rawInput);
 		const parsedKey = operationHttpIdempotencyKeySchema.safeParse(options.idempotencyKey);
@@ -344,8 +333,7 @@ export function createReviewLivePort(input: {
 		return mapEffectResult({
 			result: response.result,
 			operation: REVIEW_LIVE_OPERATIONS[options.operation],
-			map: options.map,
-			...(options.allowOpenRoundJoin ? { allowOpenRoundJoin: true } : {})
+			map: options.map
 		});
 	}
 
@@ -405,7 +393,6 @@ export function createReviewLivePort(input: {
 				idempotencyKey,
 				resultSchema: reviewChangeDraftOperationResultSchema,
 				map: mapReviewChangeDraft,
-				allowOpenRoundJoin: true,
 				...(options.signal ? { signal: options.signal } : {})
 			});
 		},

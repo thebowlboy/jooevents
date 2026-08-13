@@ -249,7 +249,11 @@ export function createLiveFormsPagePort(input: {
 			|| proposed.data.approvalRequirement !== drafted.data.approvalRequirement
 			|| proposed.data.operations.length !== 1
 			|| operation?.kind !== 'intake.form.mutate'
-			|| operation.version !== 2
+			// Canonical FORM_CHANGESET_VERSION moved 2 -> 3 with the Wave-2
+			// intake source widening (cross-lane conformance fix, J-WEB); the
+			// sample dataset still emits 2 through this shared workflow until
+			// the forms lane converges it on the canonical version.
+			|| (operation.version !== 2 && operation.version !== 3)
 			|| operation.dependencyGroup !== 'intake_form'
 			|| !sameJson(operation.safeDiff, drafted.data.safeDiff)) {
 			throw new FormsPageLiveAdapterError({

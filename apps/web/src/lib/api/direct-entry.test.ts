@@ -33,7 +33,10 @@ describe('inbox disposition', () => {
 		expect(created.source).toBe('direct_entry');
 		expect(created.tray).toBe('inbox');
 		expect(created.decision).toBe('undecided');
-		expect(created.submittedAt).toBe('Today');
+		// The arrival instant is the server clock at commit — an ISO string the
+		// surfaces word themselves ("just now"), never a pre-formatted label.
+		expect(Date.parse(created.submittedAt)).toBeGreaterThan(Date.now() - 60_000);
+		expect(created.decidedAt).toBeUndefined();
 		// Attribution is the signed-in member's name, stated by the server.
 		expect(created.enteredBy).toBe('Jere K.');
 		// The abstract can wait; absence is an empty string the UI names.

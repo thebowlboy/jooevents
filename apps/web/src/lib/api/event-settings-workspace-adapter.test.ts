@@ -26,6 +26,9 @@ const current: EventSettingsView = Object.freeze({
 	endDate: '2027-03-20',
 	location: 'Singapore',
 	venueNote: 'Use the west entrance.',
+	dayStart: '09:00',
+	dayEnd: '18:00',
+	slotMinutes: 30,
 	dates: 'Mar 18–20, 2027'
 });
 
@@ -54,7 +57,10 @@ const safeDiff: EventSettingsSafeDiff = {
 		startDate: current.startDate,
 		endDate: current.endDate,
 		location: current.location,
-		venueNote: current.venueNote
+		venueNote: current.venueNote,
+		dayStart: current.dayStart,
+		dayEnd: current.dayEnd,
+		slotMinutes: 30
 	},
 	after: {
 		schemaVersion: 1,
@@ -66,7 +72,10 @@ const safeDiff: EventSettingsSafeDiff = {
 		startDate: updated.startDate,
 		endDate: updated.endDate,
 		location: updated.location,
-		venueNote: updated.venueNote
+		venueNote: updated.venueNote,
+		dayStart: updated.dayStart,
+		dayEnd: updated.dayEnd,
+		slotMinutes: 30
 	},
 	selection: { eventId, eventSetVersion: 3 }
 };
@@ -122,7 +131,10 @@ describe('source-neutral Event Settings Workspace adapter', () => {
 			endDate: current.endDate,
 			location: current.location,
 			timezone: current.timezone,
-			venueNote: current.venueNote
+			venueNote: current.venueNote,
+			dayStart: current.dayStart,
+			dayEnd: current.dayEnd,
+			slotMinutes: current.slotMinutes
 		});
 		expect(settings).not.toHaveProperty('publicIndexing');
 	});
@@ -147,7 +159,7 @@ describe('source-neutral Event Settings Workspace adapter', () => {
 		expect(await api.get()).toBeNull();
 	});
 
-	test('re-reads hidden guards, authors all six values, and returns the committed projection', async () => {
+	test('re-reads hidden guards, authors all nine values, and returns the committed projection', async () => {
 		let captured: { request: EventSettingsUpdateDraftInput; key: string } | undefined;
 		const api = createEventSettingsWorkspaceAdapter({
 			client: liveClient({
@@ -171,7 +183,10 @@ describe('source-neutral Event Settings Workspace adapter', () => {
 			endDate: updated.endDate,
 			location: updated.location,
 			timezone: updated.timezone,
-			venueNote: updated.venueNote
+			venueNote: updated.venueNote,
+			dayStart: updated.dayStart,
+			dayEnd: updated.dayEnd,
+			slotMinutes: updated.slotMinutes
 		});
 		expect(captured).toEqual({
 			key: 'event-settings-save-1',
@@ -184,9 +199,64 @@ describe('source-neutral Event Settings Workspace adapter', () => {
 				startDate: current.startDate,
 				endDate: current.endDate,
 				location: updated.location,
-				venueNote: updated.venueNote
+				venueNote: updated.venueNote,
+				dayStart: current.dayStart,
+				dayEnd: current.dayEnd,
+				slotMinutes: 30
 			}
 		});
+	});
+
+	test('merges geometry patches by explicit key so null clears and absence preserves', async () => {
+		const captured: EventSettingsUpdateDraftInput[] = [];
+		const api = createEventSettingsWorkspaceAdapter({
+			client: liveClient({
+				reads: [readSuccess()],
+				update(request) {
+					captured.push(request);
+					return updateSuccess();
+				}
+			})
+		});
+
+		await api.update({ slotMinutes: 15 });
+		expect(captured[0]).toMatchObject({
+			dayStart: current.dayStart,
+			dayEnd: current.dayEnd,
+			slotMinutes: 15
+		});
+
+		await api.update({ dayStart: null, dayEnd: null, slotMinutes: null });
+		expect(captured[1]).toMatchObject({
+			dayStart: null,
+			dayEnd: null,
+			slotMinutes: null
+		});
+	});
+
+	test('refuses an incoherent geometry patch with the reviewed invalid-request copy', async () => {
+		const api = createEventSettingsWorkspaceAdapter({
+			client: liveClient({
+				reads: [readSuccess()],
+				update() {
+					throw new TypeError('unexpected_update');
+				}
+			})
+		});
+		for (const patch of [
+			{ dayStart: null },
+			{ slotMinutes: 25 },
+			{ dayStart: '18:30' as const },
+			{ dayStart: '09:10' as const, dayEnd: '18:00' as const, slotMinutes: 60 }
+		]) {
+			try {
+				await api.update(patch);
+				throw new TypeError('expected_invalid_request_refusal');
+			} catch (error) {
+				expect(error).toBeInstanceOf(EventSettingsWorkspaceAdapterError);
+				expect((error as EventSettingsWorkspaceAdapterError).code).toBe('invalid_request');
+			}
+		}
 	});
 
 	test('treats a normalized no-op as a read and creates no empty changeset', async () => {

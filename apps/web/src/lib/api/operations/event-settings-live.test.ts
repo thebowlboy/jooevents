@@ -41,7 +41,10 @@ const before = Object.freeze({
 	startDate: '2027-03-18',
 	endDate: '2027-03-20',
 	location: 'Singapore',
-	venueNote: 'Use the west entrance.'
+	venueNote: 'Use the west entrance.',
+	dayStart: '09:00',
+	dayEnd: '18:00',
+	slotMinutes: 30 as const
 });
 
 const updateInput = Object.freeze({
@@ -53,7 +56,10 @@ const updateInput = Object.freeze({
 	startDate: '2027-03-18',
 	endDate: '2027-03-21',
 	location: 'Suntec Convention Centre',
-	venueNote: 'Registration opens on Level 2.'
+	venueNote: 'Registration opens on Level 2.',
+	dayStart: '08:30',
+	dayEnd: '17:30',
+	slotMinutes: 30 as const
 });
 
 const after = Object.freeze({
@@ -66,7 +72,10 @@ const after = Object.freeze({
 	startDate: updateInput.startDate,
 	endDate: updateInput.endDate,
 	location: updateInput.location,
-	venueNote: updateInput.venueNote
+	venueNote: updateInput.venueNote,
+	dayStart: updateInput.dayStart,
+	dayEnd: updateInput.dayEnd,
+	slotMinutes: updateInput.slotMinutes
 });
 
 const safeDiff: EventSettingsSafeDiff = Object.freeze({
@@ -331,6 +340,9 @@ describe('pure-live Event Settings operation client', () => {
 				endDate: before.endDate,
 				location: before.location,
 				venueNote: before.venueNote,
+				dayStart: before.dayStart,
+				dayEnd: before.dayEnd,
+				slotMinutes: before.slotMinutes,
 				dates: 'Mar 18–20, 2027'
 			},
 			correlationId
@@ -505,12 +517,20 @@ describe('pure-live Event Settings operation client', () => {
 			...safeDiff,
 			after: { ...safeDiff.after, location: 'A different venue' }
 		};
+		const wrongGeometryDiff: EventSettingsSafeDiff = {
+			...safeDiff,
+			after: { ...safeDiff.after, dayStart: '10:30', dayEnd: '16:30' }
+		};
 		const cases: readonly {
 			readonly payloads: Readonly<Record<string, unknown>>;
 			readonly expectedCalls: number;
 		}[] = [
 			{
 				payloads: { [EXPECTED_OPERATIONS.draft.path]: draftSuccess({ diff: wrongDraftDiff }) },
+				expectedCalls: 1
+			},
+			{
+				payloads: { [EXPECTED_OPERATIONS.draft.path]: draftSuccess({ diff: wrongGeometryDiff }) },
 				expectedCalls: 1
 			},
 			{

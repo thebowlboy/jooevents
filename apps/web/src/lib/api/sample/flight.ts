@@ -1,5 +1,5 @@
 import type { WorkspaceDataset } from './dataset';
-import { closesInDays } from './dataset';
+import { closesInDays, daysAgo, hoursAgo } from './dataset';
 import { defaultEventTheme, starterSurfaceTemplates, starterTemplates } from './templates';
 import { baselineFieldRegistry } from './fields';
 
@@ -24,19 +24,19 @@ const flight: WorkspaceDataset = {
 		},
 		lockedAreas: [],
 		navCounts: {
-			submissions: '223',
+			submissions: '14',
 			review: '62%',
-			decisions: { value: '12', tone: 'warning' },
-			speakers: '24',
+			decisions: { value: '3', tone: 'warning' },
+			speakers: '9',
 			reviewers: '6',
-			tasks: { value: '14', tone: 'warning' },
+			tasks: { value: '8', tone: 'warning' },
 			schedule: { value: '2', tone: 'danger' },
 			messages: '2'
 		},
 		stats: [
-			{ label: 'Submissions', value: '223', sub: '+18 this week' },
+			{ label: 'Submissions', value: '14', sub: '+2 this week' },
 			{ label: 'Round 1 reviews', value: '62%', sub: '224 of 360 committed' },
-			{ label: 'Accepted', value: '24', sub: '12 not yet notified', tone: 'attention' },
+			{ label: 'Accepted', value: '4', sub: '2 accepted not yet notified', tone: 'attention' },
 			{ label: 'CFP closes', value: '12 days', sub: 'Aug 22, 23:59 EDT' }
 		],
 		attention: [
@@ -53,7 +53,7 @@ const flight: WorkspaceDataset = {
 				id: 'unnotified',
 				severity: 'now',
 				area: 'decisions',
-				title: '12 accepted submissions not yet notified',
+				title: '3 decisions not yet notified',
 				detail: 'Oldest decision is 6 days old. Notification is a separate, deliberate send.',
 				action: 'Compose notifications',
 				href: '/app/decisions?scope=unnotified'
@@ -71,8 +71,8 @@ const flight: WorkspaceDataset = {
 				id: 'overdue-tasks',
 				severity: 'soon',
 				area: 'tasks',
-				title: '14 speaker tasks overdue',
-				detail: 'Across 6 speakers — mostly headshots and AV forms.',
+				title: '8 speaker tasks overdue',
+				detail: 'Across 4 speakers — mostly AV forms.',
 				action: 'Filter overdue',
 				href: '/app/tasks?filter=overdue'
 			},
@@ -109,14 +109,14 @@ const flight: WorkspaceDataset = {
 			{
 				key: 'collect',
 				label: 'Collect',
-				headline: '223',
+				headline: '14',
 				sub: 'CFP open · closes in 12 days',
 				state: 'ok',
 				paceTone: 'on',
 				deadlineLabel: 'CFP closes in 12 days',
 				deadlineIso: '2026-08-22T23:59:00-04:00'
 			},
-			{ key: 'triage', label: 'Triage', headline: '128', sub: 'inbox · 73 set aside · 13 late', state: 'ok' },
+			{ key: 'triage', label: 'Triage', headline: '10', sub: 'inbox · 2 set aside · 1 late', state: 'ok' },
 			{
 				key: 'review',
 				label: 'Review',
@@ -128,23 +128,23 @@ const flight: WorkspaceDataset = {
 				deadlineLabel: 'due Aug 28',
 				deadlineIso: '2026-08-28T23:59:00-04:00'
 			},
-			/* 61 decided of the 223 collected; decisions have no committed
+			/* 6 decided of the 14 collected; decisions have no committed
 			   notify-by date in this scenario, so no pace claim is made. */
 			{
 				key: 'decide',
 				label: 'Decide',
-				headline: '61',
-				sub: '24 accepted · 12 un-notified',
+				headline: '6',
+				sub: '4 accepted · 3 un-notified',
 				state: 'attention',
-				progress: { done: 61, required: 223 }
+				progress: { done: 6, required: 14 }
 			},
-			/* No stated speaker-roster target, so no meter; the 14 overdue
+			/* No stated speaker-roster target, so no meter; the 8 overdue
 			   required tasks put the stage behind its content deadline. */
 			{
 				key: 'speakers',
 				label: 'Speakers',
-				headline: '21',
-				sub: 'confirmed · 14 tasks overdue',
+				headline: '5',
+				sub: 'confirmed · 8 tasks overdue',
 				state: 'attention',
 				paceTone: 'behind',
 				deadlineLabel: 'content due Sep 11',
@@ -153,15 +153,15 @@ const flight: WorkspaceDataset = {
 			{
 				key: 'schedule',
 				label: 'Schedule',
-				headline: '16/27',
+				headline: '8/12',
 				sub: 'placed · 2 blocking conflicts',
 				state: 'blocked',
-				progress: { done: 16, required: 27 },
+				progress: { done: 8, required: 12 },
 				paceTone: 'behind',
 				deadlineLabel: 'publish target Sep 25',
 				deadlineIso: '2026-09-25'
 			},
-			{ key: 'comms', label: 'Comms', headline: '18', sub: 'sent today · 2 bounced', state: 'ok' }
+			{ key: 'comms', label: 'Comms', headline: '5', sub: '3 sent · 1 scheduled · 1 draft', state: 'ok' }
 		],
 		deadlines: [
 			{ label: 'CFP closes', absolute: 'Aug 22, 23:59 EDT', relative: 'in 12 days', tone: 'ok' },
@@ -189,8 +189,8 @@ const flight: WorkspaceDataset = {
 			{ id: 'act-5', actor: 'you', name: 'You', text: 'sent “Speaker onboarding” to 18 recipients', time: 'yesterday' }
 		],
 		trays: [
-			{ kind: 'late', label: 'Late submissions', count: 13, href: '/app/submissions?tray=late' },
-			{ kind: 'discarded', label: 'Discarded, recoverable', count: 9, href: '/app/submissions?tray=discarded' },
+			{ kind: 'late', label: 'Late submissions', count: 1, href: '/app/submissions?tray=late' },
+			{ kind: 'discarded', label: 'Discarded, recoverable', count: 1, href: '/app/submissions?tray=discarded' },
 			{ kind: 'unresolved-import', label: 'Unresolved import items', count: 4 },
 			{ kind: 'stranded-drafts', label: 'Stranded form drafts', count: 3 },
 			{ kind: 'inbound-mail', label: 'Inbound mail review', count: 2 },
@@ -204,9 +204,9 @@ const flight: WorkspaceDataset = {
 		{ id: 'trk-infra', name: 'Models & Infrastructure', accent: 'neutral' }
 	],
 	formats: [
-		{ id: 'fmt-talk', name: 'Talk · 30 min', defaultDurationMin: 30 },
-		{ id: 'fmt-workshop', name: 'Workshop · 90 min', defaultDurationMin: 90 },
-		{ id: 'fmt-panel', name: 'Panel · 45 min', defaultDurationMin: 45 }
+		{ id: 'fmt-talk', name: 'Talk', defaultDurationMin: 30 },
+		{ id: 'fmt-workshop', name: 'Workshop', defaultDurationMin: 90 },
+		{ id: 'fmt-panel', name: 'Panel', defaultDurationMin: 45 }
 	],
 
 	submissions: [
@@ -218,10 +218,11 @@ const flight: WorkspaceDataset = {
 			speakers: [{ name: 'Maya Lindqvist', email: 'maya@nordicweb.dev' }],
 			trackId: 'trk-web',
 			formatId: 'fmt-talk',
-			submittedAt: 'Jul 2',
+			submittedAt: daysAgo(42),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'accepted',
+			decidedAt: daysAgo(9),
 			notified: true,
 			signals: [
 				{ key: 'relevance', label: 'On-topic 0.94', family: 'quality', score: 0.94, rationale: 'Abstract cites concrete production invalidation graphs and tooling.', source: 'Screen run #2' },
@@ -242,10 +243,11 @@ const flight: WorkspaceDataset = {
 			speakers: [{ name: 'Amara Okafor', email: 'amara@contractual.io' }],
 			trackId: 'trk-web',
 			formatId: 'fmt-talk',
-			submittedAt: 'Jul 8',
+			submittedAt: daysAgo(36),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'accepted',
+			decidedAt: daysAgo(2),
 			notified: false,
 			signals: [
 				{ key: 'relevance', label: 'On-topic 0.88', family: 'quality', score: 0.88, rationale: 'Concrete migration narrative with named tooling.', source: 'Screen run #2' }
@@ -261,10 +263,11 @@ const flight: WorkspaceDataset = {
 			speakers: [{ name: 'Priya Nair', email: 'priya.nair@reviewlab.ai' }],
 			trackId: 'trk-ai',
 			formatId: 'fmt-talk',
-			submittedAt: 'Jul 11',
+			submittedAt: daysAgo(33),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'accepted',
+			decidedAt: daysAgo(2),
 			notified: false,
 			signals: [
 				{ key: 'relevance', label: 'On-topic 0.91', family: 'quality', score: 0.91, rationale: 'Directly addresses review-tooling track themes with measurements.', source: 'Screen run #2' }
@@ -284,7 +287,7 @@ const flight: WorkspaceDataset = {
 			speakers: [{ name: 'Tomás Rivera', email: 'tomas@queueless.dev' }],
 			trackId: 'trk-infra',
 			formatId: 'fmt-talk',
-			submittedAt: 'Jul 15',
+			submittedAt: daysAgo(29),
 			source: 'cfp',
 			targetSessionId: 'ses-11',
 			tray: 'inbox',
@@ -308,7 +311,7 @@ const flight: WorkspaceDataset = {
 			],
 			trackId: 'trk-web',
 			formatId: 'fmt-workshop',
-			submittedAt: 'Jul 18',
+			submittedAt: daysAgo(26),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'undecided',
@@ -331,7 +334,7 @@ const flight: WorkspaceDataset = {
 			speakers: [{ name: 'Jonas Weber', email: 'jonas.weber@metricsense.de' }],
 			trackId: 'trk-infra',
 			formatId: 'fmt-talk',
-			submittedAt: 'Jul 20',
+			submittedAt: daysAgo(24),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'undecided',
@@ -348,7 +351,7 @@ const flight: WorkspaceDataset = {
 			speakers: [{ name: 'Hana Sato', email: 'hana@streamcraft.jp' }],
 			trackId: 'trk-ai',
 			formatId: 'fmt-talk',
-			submittedAt: 'Jul 24',
+			submittedAt: daysAgo(20),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'undecided',
@@ -366,7 +369,7 @@ const flight: WorkspaceDataset = {
 			speakers: [{ name: 'Ingrid Halvorsen', email: 'ingrid@nordicscale.no' }],
 			trackId: 'trk-infra',
 			formatId: 'fmt-talk',
-			submittedAt: 'Aug 6',
+			submittedAt: hoursAgo(5),
 			source: 'cfp',
 			targetSessionId: 'ses-11',
 			tray: 'inbox',
@@ -383,7 +386,7 @@ const flight: WorkspaceDataset = {
 			speakers: [{ name: 'Chad Maxwell', email: 'chad@growthblast.biz' }],
 			trackId: 'trk-ai',
 			formatId: 'fmt-talk',
-			submittedAt: 'Aug 1',
+			submittedAt: hoursAgo(25),
 			source: 'cfp',
 			tray: 'set-aside',
 			setAsideBy: 'Screen run #4',
@@ -402,7 +405,7 @@ const flight: WorkspaceDataset = {
 			speakers: [{ name: 'Britta Klein', email: 'britta@shipfast.tools' }],
 			trackId: 'trk-web',
 			formatId: 'fmt-talk',
-			submittedAt: 'Aug 3',
+			submittedAt: daysAgo(10),
 			source: 'cfp',
 			tray: 'set-aside',
 			setAsideBy: 'Screen run #4',
@@ -421,7 +424,7 @@ const flight: WorkspaceDataset = {
 			speakers: [{ name: 'Deniz Kaya', email: 'deniz@ingestworks.io' }],
 			trackId: 'trk-infra',
 			formatId: 'fmt-talk',
-			submittedAt: 'Aug 9',
+			submittedAt: hoursAgo(20),
 			source: 'cfp',
 			tray: 'late',
 			decision: 'undecided',
@@ -440,11 +443,12 @@ const flight: WorkspaceDataset = {
 			],
 			trackId: 'trk-web',
 			formatId: 'fmt-panel',
-			submittedAt: 'Jun 20',
+			submittedAt: daysAgo(54),
 			source: 'direct_entry',
 			enteredBy: 'Linnea Koski',
 			tray: 'inbox',
 			decision: 'accepted',
+			decidedAt: daysAgo(50),
 			notified: true,
 			signals: [],
 			reviewCount: 0
@@ -456,10 +460,11 @@ const flight: WorkspaceDataset = {
 			speakers: [{ name: 'Rex Vault', email: 'rex@vaultmoney.xyz' }],
 			trackId: 'trk-ai',
 			formatId: 'fmt-talk',
-			submittedAt: 'Jul 30',
+			submittedAt: daysAgo(14),
 			source: 'cfp',
 			tray: 'discarded',
 			decision: 'declined',
+			decidedAt: daysAgo(12),
 			notified: true,
 			signals: [
 				{ key: 'spam', label: 'Spam 0.97', family: 'integrity', score: 0.97, rationale: 'Off-topic financial promotion; disposable sender domain.', source: 'Arrival checks' }
@@ -475,10 +480,11 @@ const flight: WorkspaceDataset = {
 			speakers: [{ name: 'Nora Visser', email: 'nora@tokenslab.nl' }],
 			trackId: 'trk-web',
 			formatId: 'fmt-talk',
-			submittedAt: 'Jul 27',
+			submittedAt: daysAgo(17),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'waitlisted',
+			decidedAt: daysAgo(5),
 			notified: false,
 			signals: [
 				{ key: 'dup', label: 'Similar to #87', family: 'quality', rationale: 'Overlaps an earlier token-governance submission; clustered for comparison.', source: 'Duplicate clustering' }
@@ -487,13 +493,15 @@ const flight: WorkspaceDataset = {
 			reviewCount: 3
 		}
 	],
-	submissionTrayTotals: { inbox: 128, 'set-aside': 73, late: 13, discarded: 9 },
+	submissionTrayTotals: { inbox: 10, 'set-aside': 2, late: 1, discarded: 1 },
+	previousVisit: hoursAgo(26),
 
 	reviewPlans: [
 		{
 			id: 'plan-r1',
 			name: 'Round 1 · all tracks',
 			scaleMax: 5,
+			reviewsPerSubmission: 3,
 			deadlineRelative: 'due in 18 days',
 			anonymized: true,
 			done: 224,
@@ -834,13 +842,13 @@ const flight: WorkspaceDataset = {
 		slotsPerDay: 16,
 		sessions: [
 			{ id: 'ses-1', title: 'Opening Keynote: AI Engineering Beyond the Demo', speakers: [{ name: 'Ravi Chandran', email: 'ravi@keynote.example' }], trackId: 'trk-web', formatId: 'fmt-talk', durationMin: 60, state: 'programmed' },
-			{ id: 'ses-2', title: 'Context Caching Without Tears', speakers: [{ name: 'Maya Lindqvist', email: 'maya@nordicweb.dev' }], trackId: 'trk-web', formatId: 'fmt-talk', durationMin: 30, state: 'programmed' },
-			{ id: 'ses-3', title: 'Panel: Who Owns Agent Reliability?', speakers: [{ name: 'Sofia Berg', email: 'sofia@perfpanel.se' }, { name: 'Lukas Brandt', email: 'lukas@perfpanel.se' }], trackId: 'trk-web', formatId: 'fmt-panel', durationMin: 60, state: 'programmed' },
+			{ id: 'ses-2', title: 'Context Caching Without Tears', speakers: [{ name: 'Maya Lindqvist', email: 'maya@nordicweb.dev' }], trackId: 'trk-web', formatId: 'fmt-talk', durationMin: 30, state: 'programmed', originSubmissionIds: ['sub-101'] },
+			{ id: 'ses-3', title: 'Panel: Who Owns Agent Reliability?', speakers: [{ name: 'Sofia Berg', email: 'sofia@perfpanel.se' }, { name: 'Lukas Brandt', email: 'lukas@perfpanel.se' }], trackId: 'trk-web', formatId: 'fmt-panel', durationMin: 60, state: 'programmed', originSubmissionIds: ['sub-112'] },
 			{ id: 'ses-4', title: 'Componentizing the Agent Stack', speakers: [{ name: 'Elena Petrova', email: 'elena@sandboxworks.example' }], trackId: 'trk-infra', formatId: 'fmt-talk', durationMin: 30, state: 'programmed' },
 			{ id: 'ses-5', title: 'Running Small Models at the Edge', speakers: [{ name: 'Daniel Kim', email: 'daniel@edgequery.dev' }], trackId: 'trk-infra', formatId: 'fmt-talk', durationMin: 30, state: 'programmed' },
 			{ id: 'ses-6', title: 'AI Interface Audits That Stick', speakers: [{ name: 'Elif Aydın', email: 'elif@a11ycraft.eu' }, { name: 'Marc Dubois', email: 'marc@a11ycraft.eu' }], trackId: 'trk-web', formatId: 'fmt-workshop', durationMin: 90, state: 'programmed' },
-			{ id: 'ses-7', title: 'Typed Tool Contracts Between Agents That Never Meet', speakers: [{ name: 'Amara Okafor', email: 'amara@contractual.io' }], trackId: 'trk-web', formatId: 'fmt-talk', durationMin: 30, state: 'programmed' },
-			{ id: 'ses-8', title: 'LLM Review Queues: Allocating Human Attention', speakers: [{ name: 'Priya Nair', email: 'priya.nair@reviewlab.ai' }], trackId: 'trk-ai', formatId: 'fmt-talk', durationMin: 30, state: 'programmed' },
+			{ id: 'ses-7', title: 'Typed Tool Contracts Between Agents That Never Meet', speakers: [{ name: 'Amara Okafor', email: 'amara@contractual.io' }], trackId: 'trk-web', formatId: 'fmt-talk', durationMin: 30, state: 'programmed', originSubmissionIds: ['sub-102'] },
+			{ id: 'ses-8', title: 'LLM Review Queues: Allocating Human Attention', speakers: [{ name: 'Priya Nair', email: 'priya.nair@reviewlab.ai' }], trackId: 'trk-ai', formatId: 'fmt-talk', durationMin: 30, state: 'programmed', originSubmissionIds: ['sub-103'] },
 			{ id: 'ses-10', title: 'Closing Panel: Can We Ship Reliable Agents?', speakers: [{ name: 'Sofia Berg', email: 'sofia@perfpanel.se' }], trackId: 'trk-web', formatId: 'fmt-panel', durationMin: 45, state: 'programmed' },
 			/* Still-collecting slots: no speakers yet, never placed. They are
 			   legitimate reviewer-scope targets — that is what collecting is. */
@@ -1085,7 +1093,7 @@ const flight: WorkspaceDataset = {
 	forms: [
 		/* The open CFP asks the standard application — no composition, which is
 		 * the point of the baseline: most forms never deviate. */
-		{ id: 'form-cfp', name: 'Call for Proposals', target: { kind: 'general' }, status: 'open', closesAt: closesInDays(12), version: 3, submissionCount: 214 },
+		{ id: 'form-cfp', name: 'Call for Proposals', target: { kind: 'general' }, status: 'open', closesAt: closesInDays(12), version: 3, submissionCount: 13 },
 		/* A slot form trims to what a panelist decision needs (6 questions) —
 		 * the panel already owns its track and format, so neither is asked. */
 		{

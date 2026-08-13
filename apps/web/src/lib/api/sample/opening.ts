@@ -1,5 +1,5 @@
 import type { WorkspaceDataset } from './dataset';
-import { closesInDays } from './dataset';
+import { closesInDays, daysAgo, hoursAgo } from './dataset';
 import { defaultEventTheme, starterSurfaceTemplates, starterTemplates } from './templates';
 import { baselineFieldRegistry } from './fields';
 
@@ -118,9 +118,9 @@ const opening: WorkspaceDataset = {
 		{ id: 'trk-infra', name: 'Models & Infrastructure', accent: 'neutral' }
 	],
 	formats: [
-		{ id: 'fmt-talk', name: 'Talk · 30 min', defaultDurationMin: 30 },
-		{ id: 'fmt-workshop', name: 'Workshop · 90 min', defaultDurationMin: 90 },
-		{ id: 'fmt-panel', name: 'Panel · 45 min', defaultDurationMin: 45 }
+		{ id: 'fmt-talk', name: 'Talk', defaultDurationMin: 30 },
+		{ id: 'fmt-workshop', name: 'Workshop', defaultDurationMin: 90 },
+		{ id: 'fmt-panel', name: 'Panel', defaultDurationMin: 45 }
 	],
 
 	submissions: [
@@ -132,7 +132,7 @@ const opening: WorkspaceDataset = {
 			speakers: [{ name: 'Ines Moreau', email: 'ines@gridworks.fr' }],
 			trackId: 'trk-web',
 			formatId: 'fmt-talk',
-			submittedAt: 'Aug 7',
+			submittedAt: daysAgo(3),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'undecided',
@@ -148,7 +148,7 @@ const opening: WorkspaceDataset = {
 			speakers: [{ name: 'Oskar Lind', email: 'oskar@steadystate.se' }],
 			trackId: 'trk-infra',
 			formatId: 'fmt-talk',
-			submittedAt: 'Aug 7',
+			submittedAt: hoursAgo(68),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'undecided',
@@ -164,7 +164,7 @@ const opening: WorkspaceDataset = {
 			speakers: [{ name: 'Priya Nair', email: 'priya.nair@reviewlab.ai' }],
 			trackId: 'trk-ai',
 			formatId: 'fmt-talk',
-			submittedAt: 'Aug 8',
+			submittedAt: hoursAgo(55),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'undecided',
@@ -189,7 +189,7 @@ const opening: WorkspaceDataset = {
 			speakers: [{ name: 'Tomás Rivera', email: 'tomas@queueless.dev' }],
 			trackId: 'trk-infra',
 			formatId: 'fmt-workshop',
-			submittedAt: 'Aug 8',
+			submittedAt: hoursAgo(49),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'undecided',
@@ -213,7 +213,7 @@ const opening: WorkspaceDataset = {
 			speakers: [{ name: 'Nora Visser', email: 'nora@tokenslab.nl' }],
 			trackId: 'trk-web',
 			formatId: 'fmt-talk',
-			submittedAt: 'Aug 8',
+			submittedAt: hoursAgo(44),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'undecided',
@@ -229,7 +229,7 @@ const opening: WorkspaceDataset = {
 			speakers: [{ name: 'Hana Sato', email: 'hana@streamcraft.jp' }],
 			trackId: 'trk-ai',
 			formatId: 'fmt-talk',
-			submittedAt: 'Aug 9',
+			submittedAt: hoursAgo(33),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'undecided',
@@ -245,7 +245,7 @@ const opening: WorkspaceDataset = {
 			speakers: [{ name: 'Ingrid Halvorsen', email: 'ingrid@nordicscale.no' }],
 			trackId: 'trk-infra',
 			formatId: 'fmt-talk',
-			submittedAt: 'Aug 9',
+			submittedAt: hoursAgo(28),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'undecided',
@@ -261,7 +261,7 @@ const opening: WorkspaceDataset = {
 			speakers: [{ name: 'Elif Aydın', email: 'elif@a11ycraft.eu' }],
 			trackId: 'trk-web',
 			formatId: 'fmt-talk',
-			submittedAt: 'Aug 10',
+			submittedAt: hoursAgo(1),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'undecided',
@@ -277,7 +277,7 @@ const opening: WorkspaceDataset = {
 			speakers: [{ name: 'Mikkel Sørensen', email: 'mikkel@boxfresh.dk' }],
 			trackId: 'trk-infra',
 			formatId: 'fmt-talk',
-			submittedAt: 'Aug 10',
+			submittedAt: hoursAgo(5),
 			source: 'cfp',
 			tray: 'inbox',
 			decision: 'undecided',
@@ -296,6 +296,7 @@ const opening: WorkspaceDataset = {
 		}
 	],
 	submissionTrayTotals: { inbox: 9, 'set-aside': 0, late: 0, discarded: 0 },
+	previousVisit: daysAgo(2),
 
 	reviewPlans: [],
 	/* Reviewers lined up ahead of the plan: both invitations are recorded and

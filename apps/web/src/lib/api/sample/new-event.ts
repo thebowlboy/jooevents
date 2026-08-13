@@ -59,10 +59,11 @@ export function newEventDataset(seed: CreatedEventSeed): WorkspaceDataset {
 					id: 'open-intake',
 					severity: 'fyi',
 					area: 'forms',
-					title: 'Open your call for proposals',
+					title: 'Open your call for proposals (CFP)',
 					detail:
 						'The standard application form is ready to trim and open. Submissions, review, and the schedule fill from what it collects.',
-					action: 'Go to Forms'
+					action: 'Start from the standard application',
+					href: '/app/forms?new=1'
 				}
 			],
 			pipeline: [],
