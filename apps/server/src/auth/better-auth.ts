@@ -1,5 +1,6 @@
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
+import { magicLink } from 'better-auth/plugins';
 import type { SQLiteDatabase } from '@jooevents/persistence';
 import {
   authAccounts,
@@ -10,8 +11,29 @@ import {
 } from '@jooevents/persistence';
 import type { ServerConfig } from '../config';
 
+/** How long an issued workspace sign-in link stays valid, in seconds. */
+export const WORKSPACE_SIGN_IN_LINK_EXPIRES_IN_SECONDS = 900;
+
+export interface WorkspaceMagicLinkComposition {
+  /**
+   * Hands the built verification URL to the runtime's gated outbox delivery.
+   * The gate lives behind this seam: an ineligible address must be dropped
+   * silently so the HTTP surface stays byte-uniform. Tokens are stored hashed
+   * by the plugin; the raw link exists only in the delivered mail.
+   */
+  deliver(input: {
+    readonly email: string;
+    readonly url: string;
+  }): Promise<void>;
+}
+
 /** The reviewed Better Auth composition. Domain admission remains outside this object. */
-export function createAuth(config: ServerConfig, database: SQLiteDatabase) {
+export function createAuth(
+  config: ServerConfig,
+  database: SQLiteDatabase,
+  options?: { readonly magicLink?: WorkspaceMagicLinkComposition }
+) {
+  const workspaceMagicLink = options?.magicLink;
   return betterAuth({
     appName: 'JooEvents',
     baseURL: config.baseUrl,
@@ -75,7 +97,25 @@ export function createAuth(config: ServerConfig, database: SQLiteDatabase) {
       trustedProxyHeaders: false,
       useSecureCookies: new URL(config.baseUrl).protocol === 'https:',
       database: { generateId: () => crypto.randomUUID() }
-    }
+    },
+    plugins: workspaceMagicLink === undefined
+      ? []
+      : [
+          magicLink({
+            expiresIn: WORKSPACE_SIGN_IN_LINK_EXPIRES_IN_SECONDS,
+            // Hash-only at rest; the token is consumed atomically on first
+            // verification, so a link works once.
+            storeToken: 'hashed',
+            // Sign-up stays possible so a reservation-named address can
+            // complete a FIRST sign-in (owner revision, 2026-08-14); the
+            // gated deliver below is what keeps unreserved, unregistered
+            // addresses from ever receiving a usable token.
+            disableSignUp: false,
+            sendMagicLink: async ({ email, url }) => {
+              await workspaceMagicLink.deliver({ email, url });
+            }
+          })
+        ]
   });
 }
 

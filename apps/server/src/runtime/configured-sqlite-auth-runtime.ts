@@ -61,9 +61,16 @@ export function createConfiguredSQLiteAuthRuntime(input: {
       workspaceName: 'JooEvents',
       now: new Date().toISOString()
     });
-    const auth = createAuth(config, database.db);
+    // This auth-only runtime has no communications composition, so no link can
+    // ever be delivered — but the request surface still acknowledges every
+    // well-formed address identically instead of failing differently.
+    const auth = createAuth(config, database.db, {
+      magicLink: { deliver: async () => {} }
+    });
     const accessContext = createProvisioningService({
-      principals: createSQLiteAuthPrincipalReader(database.sqlite),
+      principals: createSQLiteAuthPrincipalReader(database.sqlite, {
+        issuerOrigin: new URL(config.baseUrl).origin
+      }),
       store: createSQLiteProvisioningStore(database.sqlite),
       admission: {
         mode: config.admissionMode,

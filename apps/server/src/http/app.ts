@@ -128,6 +128,41 @@ export function createHttpApp(input: {
     return context.json({ url: redirect.data.url });
   });
 
+  const signInLinkSchema = z.strictObject({ email: z.string().min(3).max(320) });
+  app.post('/api/entry/sign-in-link', async (context) => {
+    let payload: unknown;
+    try { payload = await context.req.json(); } catch { payload = undefined; }
+    const parsed = signInLinkSchema.safeParse(payload);
+    if (!parsed.success || !parsed.data.email.includes('@')) {
+      // Shape validation, not enumeration: a malformed address is refused
+      // before any durable work regardless of whether it exists.
+      return context.json({ code: 'invalid_request', message: 'The sign-in request was not valid.', retryable: false, correlationId: correlation(context) }, 400);
+    }
+    const email = parsed.data.email.trim();
+    const callbackURL = new URL('/auth/complete', input.baseUrl);
+    callbackURL.searchParams.set('returnTo', '/app');
+    const errorCallbackURL = new URL('/sign-in', input.baseUrl);
+    errorCallbackURL.searchParams.set('notice', 'link_invalid');
+    // Whether a link is actually issued is decided server-privately behind the
+    // delivery seam; this surface acknowledges every well-formed address with
+    // the same body. The initial display name for a reservation-completed
+    // first sign-in is the address's local part — a person can rename it, and
+    // an empty name must never reach workspace authority reads.
+    const response = await input.auth.handler(authRequest(context, '/api/auth/sign-in/magic-link', {
+      email,
+      name: email.slice(0, email.indexOf('@')) || email,
+      callbackURL: callbackURL.toString(),
+      errorCallbackURL: errorCallbackURL.toString()
+    }));
+    if (response.status === 429) {
+      return context.json({ code: 'rate_limited', message: 'Too many sign-in link requests. Try again shortly.', retryable: true, correlationId: correlation(context) }, 429);
+    }
+    if (!response.ok) {
+      return context.json({ code: 'link_request_failed', message: 'The sign-in link request could not be handled.', retryable: true, correlationId: correlation(context) }, response.status >= 500 ? 502 : 400);
+    }
+    return context.json({ outcome: 'link_requested' as const });
+  });
+
   app.post('/api/entry/sign-out', async (context) => {
     const response = await input.auth.handler(authRequest(context, '/api/auth/sign-out', {}));
     forwardAuthCookies(context, response);

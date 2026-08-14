@@ -323,6 +323,12 @@ import {
   type ParticipantChallengeSenderConfig
 } from '@jooevents/persistence/participant-challenge-delivery';
 import {
+  createSQLiteWorkspaceSignInLinkDelivery,
+  decideWorkspaceSignInLinkEligibility,
+  workspaceSignInLinkAddressFingerprint,
+  WORKSPACE_SIGN_IN_LINK_TEMPLATE_REVISION_REF_ID
+} from '@jooevents/persistence/workspace-sign-in-link';
+import {
   createSQLiteEngagementChangesetEffectDomainRegistration
 } from '@jooevents/persistence/engagement-changeset-effect-domain';
 import {
@@ -483,7 +489,11 @@ import {
 import {
   createSQLiteWorkspaceTeamChangesetEffectDomainRegistration
 } from '@jooevents/persistence/sqlite/workspace-team-changeset-effect-domain';
-import { createAuth, type JooEventsAuth } from '../auth/better-auth';
+import {
+  createAuth,
+  WORKSPACE_SIGN_IN_LINK_EXPIRES_IN_SECONDS,
+  type JooEventsAuth
+} from '../auth/better-auth';
 import { createBetterAuthOperatorEvidenceVerifier } from '../auth/operator-evidence';
 import { createSQLiteAuthPrincipalReader } from '../auth/principal-reader';
 import type { ServerConfig } from '../config';
@@ -1097,7 +1107,20 @@ export async function createEphemeralLiveRuntime(input: {
       ownerReservationId: bootstrap.ownerReservationId
     });
     const events = bootstrapEventSet(database, workspaceId);
-    const auth = createAuth(input.config, database.db);
+    // The magic-link deliver seam late-binds: the gated outbox delivery needs
+    // the communications composition, which composes after auth. Until it is
+    // fulfilled, every requested link drops silently — exactly the posture an
+    // ineligible address gets — so the surface never widens during boot.
+    let workspaceSignInLinkDeliver:
+      | ((input: { readonly email: string; readonly url: string }) => Promise<void>)
+      | null = null;
+    const auth = createAuth(input.config, database.db, {
+      magicLink: {
+        deliver: async (link) => {
+          if (workspaceSignInLinkDeliver !== null) await workspaceSignInLinkDeliver(link);
+        }
+      }
+    });
     const clock = Object.freeze({
       now: () => parseInstant(new Date().toISOString())
     });
@@ -1333,7 +1356,11 @@ export async function createEphemeralLiveRuntime(input: {
       workspaceTeamRepository.initialize(workspaceId);
     }).immediate();
     const accessContext = createProvisioningService({
-      principals: createSQLiteAuthPrincipalReader(database.sqlite),
+      // Email-proof principals (workspace magic link) carry claims issued by
+      // this installation, keyed by the auth user id — never by the address.
+      principals: createSQLiteAuthPrincipalReader(database.sqlite, {
+        issuerOrigin: new URL(input.config.baseUrl).origin
+      }),
       store: createSQLiteProvisioningStore(database.sqlite, {
         workspaceTeam: createWorkspaceTeamProvisioningSynchronizationPort(
           workspaceTeamRepository
@@ -3845,6 +3872,65 @@ export async function createEphemeralLiveRuntime(input: {
             })
           })
     });
+    // Workspace magic-link fulfillment (owner revision, 2026-08-14: registered
+    // or reserved). The gate decides server-privately; a denied address and a
+    // missing current event both drop without a trace the browser could read.
+    // Delivery scope pins the current event; a pre-event install keeps Google
+    // as its first-sign-in path until security mail gains event-free scope.
+    const workspaceSignInLinkDelivery = createSQLiteWorkspaceSignInLinkDelivery({
+      sqlite: database.sqlite,
+      releases: communicationMessageReleases,
+      ids: Object.freeze({
+        newReleaseId: () => crypto.randomUUID(),
+        newDeliveryId: () => crypto.randomUUID(),
+        newEvidenceId: () => crypto.randomUUID()
+      }),
+      sender: participantSenderConfig,
+      ...(communicationDeliveryRoute === undefined
+        ? {}
+        : {
+            providerRoute: Object.freeze({
+              providerConnectionRevisionId:
+                communicationDeliveryRoute.providerConnectionRevisionId
+            })
+          })
+    });
+    workspaceSignInLinkDeliver = async ({ email, url }) => {
+      const lane = resolvePortalLane();
+      if (lane === undefined) return;
+      const decision = decideWorkspaceSignInLinkEligibility({
+        sqlite: database.sqlite,
+        workspaceId,
+        email
+      });
+      if (!decision.eligible) return;
+      const requestedAt = new Date().toISOString();
+      const expiresAt = new Date(
+        Date.parse(requestedAt) + WORKSPACE_SIGN_IN_LINK_EXPIRES_IN_SECONDS * 1000
+      ).toISOString();
+      const effect = Object.freeze({
+        workspaceId: lane.workspaceId,
+        eventId: lane.eventId,
+        requestId: crypto.randomUUID(),
+        recipientEmail: email,
+        linkUrl: url,
+        requestedAt,
+        expiresAt
+      });
+      let began = false;
+      try {
+        database.sqlite.exec('BEGIN IMMEDIATE;');
+        began = true;
+        workspaceSignInLinkDelivery.enqueueSignInLink(effect);
+        database.sqlite.exec('COMMIT;');
+      } catch (error) {
+        if (began && database.sqlite.inTransaction) database.sqlite.exec('ROLLBACK;');
+        // A delivery fault must not become an eligibility oracle: the browser
+        // acknowledgement stays uniform, the ledger's absence is the honest
+        // record, and the operator log carries the fault without the address.
+        console.error('[jooevents] workspace sign-in link delivery failed', error);
+      }
+    };
     const participantRelationships = createSQLiteParticipantRelationshipSource(database.sqlite);
     const participantIntakeAttribution = createSQLiteIntakeAttributedParticipantSource({
       sqlite: database.sqlite,
@@ -4319,6 +4405,32 @@ export async function createEphemeralLiveRuntime(input: {
           url: `/portal/auth/complete?token=${match[1]!}`,
           expiresAt: new Date(row.expires_at_ms).toISOString()
         });
+      });
+      // The workspace-lane twin of the portal oracle above, under the same
+      // structural gating: it reads the newest workspace sign-in link mail for
+      // an address from the classified release, so tests can complete the
+      // ceremony without a mailbox. Never mounted through `http/app.ts`.
+      app.post('/api/entry/dev/issued-link', async (context) => {
+        let payload: unknown;
+        try { payload = await context.req.json(); } catch { payload = undefined; }
+        const email = (payload as { readonly email?: unknown } | undefined)?.email;
+        if (typeof email !== 'string') return context.json({ kind: 'none' as const });
+        const row = database.sqlite.query<{
+          readonly release_id: string;
+        }, [string, string]>(`
+          SELECT release_id FROM communication_outbound_delivery_heads
+           WHERE template_revision_ref_id = ? AND address_lookup_fingerprint_sha256 = ?
+           ORDER BY rowid DESC LIMIT 1
+        `).get(
+          WORKSPACE_SIGN_IN_LINK_TEMPLATE_REVISION_REF_ID,
+          workspaceSignInLinkAddressFingerprint(email)
+        );
+        const release = row ? communicationMessageReleases.read(row.release_id) : undefined;
+        const match = release
+          ? /(https?:\S+\/api\/auth\/magic-link\/verify\?\S+)/.exec(release.envelope.textBody)
+          : null;
+        if (!match) return context.json({ kind: 'none' as const });
+        return context.json({ kind: 'issued' as const, url: match[1]! });
       });
     }
     // Owner-lane external-effect executors (runbook §4): mounted ONLY when a

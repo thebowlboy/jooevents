@@ -88,7 +88,8 @@
     "./release-draft-effect-domain": "./src/sqlite/release-draft-effect-domain.ts",
     "./release-changeset-effect-domain": "./src/sqlite/release-changeset-effect-domain.ts",
     "./participant-access": "./src/sqlite/participant-access.ts",
-    "./participant-challenge-delivery": "./src/sqlite/participant-challenge-delivery.ts"
+    "./participant-challenge-delivery": "./src/sqlite/participant-challenge-delivery.ts",
+    "./workspace-sign-in-link": "./src/sqlite/workspace-sign-in-link.ts"
   },
   "scripts": {
     "check": "tsc --noEmit",
