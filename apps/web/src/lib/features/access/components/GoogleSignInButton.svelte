@@ -2,6 +2,9 @@
   let { busy = false, onclick }: { busy?: boolean; onclick: () => void } = $props();
 </script>
 
+<!-- Owner revision 2026-08-15: the provider is a quiet alternative beneath the
+     magic-link form, not a second door of equal size. The G mark stays small
+     for recognition; the words carry the meaning. -->
 <button class="google-button" type="button" disabled={busy} aria-busy={busy} {onclick}>
   <span class="google-button__icon" aria-hidden="true">
     <svg viewBox="0 0 18 18" focusable="false">
@@ -11,6 +14,6 @@
       <path fill="#ea4335" d="M9 3.58c1.321 0 2.507.454 3.441 1.346l2.581-2.581C13.464.892 11.426 0 9 0A9 9 0 0 0 .956 4.962l3.007 2.332C4.672 5.165 6.656 3.58 9 3.58Z"/>
     </svg>
   </span>
-  <span>{busy ? 'Opening Google…' : 'Continue with Google'}</span>
+  <span>{busy ? 'Opening Google…' : 'Sign in with Google instead'}</span>
   {#if busy}<span class="google-button__spinner" aria-hidden="true"></span>{/if}
 </button>

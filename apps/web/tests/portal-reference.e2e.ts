@@ -98,7 +98,7 @@ test('the sign-in link reference carries both lanes and their different acknowle
 		page.getByText("We'll email you a link that signs you in — no password, nothing to remember.")
 	).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Email me a magic link' })).toBeVisible();
-	await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Sign in with Google instead' })).toBeVisible();
 
 	// The arrow-key switcher still walks the set, and the resolver specimen next
 	// door shows the footprint the resting card arrives into.
@@ -115,7 +115,7 @@ test('the sign-in link reference carries both lanes and their different acknowle
 
 	await page.getByRole('button', { name: 'Speaker · one field' }).click();
 	await expect(page.getByRole('heading', { name: 'Magic link' })).toBeVisible();
-	await expect(page.getByRole('button', { name: 'Continue with Google' })).toHaveCount(0);
+	await expect(page.getByRole('button', { name: 'Sign in with Google instead' })).toHaveCount(0);
 
 	await page.getByRole('button', { name: 'Speaker · acknowledged' }).click();
 	await expect(page.getByRole('heading', { name: 'Check your email' })).toBeVisible();

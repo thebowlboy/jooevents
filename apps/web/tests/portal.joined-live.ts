@@ -267,7 +267,7 @@ test('newest wins: requesting again revokes the prior unused link', async ({ pag
 	await page.goto('/portal/sign-in');
 	await requestPortalLink(page, email);
 	const first = await issuedLink(page.request, email);
-	await page.getByRole('button', { name: 'Use a different address' }).click();
+	await page.getByRole('button', { name: 'Try another address' }).click();
 	await requestPortalLink(page, email);
 	const second = await issuedLink(page.request, email);
 	expect(second).not.toBe(first);

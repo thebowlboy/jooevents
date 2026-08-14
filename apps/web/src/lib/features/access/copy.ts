@@ -42,14 +42,15 @@ export const linkRequestCopy = {
   label: 'Email address',
   submit: 'Email me a magic link',
   invalid: 'Enter an email address like name@example.com',
-  /* The two choices are peers; the divider is all that separates them. */
+  /* Owner revision 2026-08-15: the magic link owns the card; the divider
+     hands off to a quiet provider alternative. */
   divider: 'or',
   aside: 'No sign-up here. Entry is for those who know.',
   /* Verbatim non-enumerating acknowledgement: identical on match and miss. The
      heading names no method so a code can share this room later. */
   confirmationHeading: 'Check your email',
   confirmationBody: 'If an account exists for this address, a magic link is on its way.',
-  differentAddress: 'Use a different address'
+  differentAddress: 'Try another address'
 } as const;
 
 /** Expected refusals keep their own copy; nothing here echoes server text. */

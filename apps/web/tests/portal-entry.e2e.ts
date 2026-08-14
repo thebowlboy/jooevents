@@ -17,7 +17,7 @@ test('participant entry asks once, confirms plainly, and keeps the panel in plac
   await usePortalEntry(page, baseURL, { 'je-portal-auth': 'anonymous' });
   await page.goto('/portal/sign-in');
   await expect(page.getByRole('heading', { name: 'Sign in', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Continue with Google' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Sign in with Google instead' })).toHaveCount(0);
   const restingPanel = await panelGeometry(page);
 
   // The same titled method group the operator lane uses, carrying this lane's
@@ -52,7 +52,7 @@ test('participant entry asks once, confirms plainly, and keeps the panel in plac
   expect(Math.abs(restingPanel.top - confirmedPanel.top)).toBeLessThan(2);
   expect(Math.abs(restingPanel.width - confirmedPanel.width)).toBeLessThan(2);
 
-  await page.getByRole('button', { name: 'Use a different address' }).click();
+  await page.getByRole('button', { name: 'Try another address' }).click();
   await expect(emailField).toBeFocused();
   await expect(emailField).toHaveValue('amara@example.com');
   expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false);

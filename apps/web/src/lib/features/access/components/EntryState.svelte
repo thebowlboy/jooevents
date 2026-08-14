@@ -83,8 +83,9 @@
     {/if}
     {#if surface.kind === 'anonymous'}
       {@const open = surface}
-      <!-- The magic link stands first and equal: a titled method group, its own
-           coral action, then a divider and the provider control. The method is
+      <!-- The magic link owns the card: a titled method group and its coral
+           action, then a divider handing off to the quiet provider alternative
+           (owner revision 2026-08-15, superseding the co-equal presentation). The method is
            named once at group level so the field can stay a plain "Email
            address". novalidate because the reviewed message and aria-invalid
            state belong to the field, not to a native browser bubble. -->

@@ -66,7 +66,7 @@ test('anonymous entry is neutral, secure, and usable without horizontal overflow
   // fits the footprint the resolver was already holding. A narrow viewport
   // gets its stillness from a panel that fills the screen instead.
   if (testInfo.project.name === 'desktop') expect(await reserve(page)).toEqual({ fits: true });
-  await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Sign in with Google instead' })).toBeVisible();
   await expect(page.getByText("Events for people who don't want to manage events.")).toBeVisible();
   await expect(page.getByText('Entry is for those who know.')).toBeVisible();
   await expect(page.getByText(/checks your workspace access separately/)).toHaveCount(0);
@@ -117,7 +117,7 @@ test('the magic link stands first and equal, answers identically, and never move
   const submit = page.getByRole('button', { name: 'Email me a magic link' });
   await expect(submit).toBeVisible();
   await expect(submit).toHaveClass(/ui-button--primary/);
-  await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Sign in with Google instead' })).toBeVisible();
   await expect(page.locator('.entry-or')).toHaveText('or');
 
   // The group names the method, so the field can stay plain and the helper can
@@ -193,13 +193,13 @@ test('the magic link stands first and equal, answers identically, and never move
   await expect(page.getByRole('heading', { name: 'Magic link sent' })).toHaveCount(0);
   await expect(page.getByText('If an account exists for this address, a magic link is on its way.')).toBeVisible();
   await expect(page.getByText('ada@example.com')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Sign in with Google instead' })).toBeVisible();
   const confirmedPanel = await panelGeometry(page);
   expectSamePlace(anonymousPanel, confirmedPanel);
   expect(await page.title()).toContain('Check your email');
   const matched = (await page.locator('.entry-state').innerText()).replace('ada@example.com', '');
 
-  await page.getByRole('button', { name: 'Use a different address' }).click();
+  await page.getByRole('button', { name: 'Try another address' }).click();
   await expect(emailField).toBeFocused();
   await expect(emailField).toHaveValue('ada@example.com');
   await emailField.fill('nobody@example.invalid');
@@ -224,7 +224,7 @@ test('a spent sign-in link explains itself and offers a fresh request', async ({
     // The notice sits above the field it points at; both choices stay offered.
     await expect(page.getByLabel('Email address')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Email me a magic link' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Sign in with Google instead' })).toBeVisible();
     await expect(page.getByText(/token|expired at|jwt/i)).toHaveCount(0);
   }
   expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false);

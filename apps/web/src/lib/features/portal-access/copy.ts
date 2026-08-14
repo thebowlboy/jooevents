@@ -14,7 +14,7 @@ export const participantEntryCopy = {
   invalid: 'Enter an email address like name@example.com',
   confirmationHeading: 'Check your email',
   confirmationBody: 'We just emailed you a magic link. If the address is new here, it creates your access.',
-  differentAddress: 'Use a different address',
+  differentAddress: 'Try another address',
   backToSignIn: 'Back to sign in'
 } as const;
 
