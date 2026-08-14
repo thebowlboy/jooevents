@@ -40,6 +40,7 @@
 	function switchView(next: ViewKey) {
 		if (view === next) return;
 		expandedId = null;
+		actionError = '';
 		// A view change replaces the scope the other view was carrying: a filter
 		// and a single-speaker arrival both belong to the roster view.
 		void applyParams({
@@ -189,10 +190,24 @@
 		revealTarget(shown ?? null);
 	}
 
+	/**
+	 * A refused act stays on screen with its reason: both response acts are
+	 * consequential commits fenced on the engagement's version, so a stale row
+	 * or lost authority resolves `{ ok: false }` rather than throwing — and the
+	 * roster reloads either way, because a refusal usually means the row moved.
+	 */
+	let actionError = $state('');
+
 	async function recordConfirmation(row: SpeakerRow) {
 		busyId = row.id;
+		actionError = '';
 		try {
-			await api.speakers.recordConfirmation(row.id);
+			const outcome = await api.speakers.recordConfirmation(row.id);
+			if (!outcome.ok) {
+				actionError = outcome.reason;
+				await load();
+				return;
+			}
 			await load();
 			announcement = `${row.name} is now confirmed.`;
 		} finally {
@@ -202,8 +217,14 @@
 
 	async function acceptCancellation(row: SpeakerRow) {
 		busyId = row.id;
+		actionError = '';
 		try {
-			await api.speakers.acceptCancellation(row.id);
+			const outcome = await api.speakers.acceptCancellation(row.id);
+			if (!outcome.ok) {
+				actionError = outcome.reason;
+				await load();
+				return;
+			}
 			await load();
 			announcement = `${row.name}’s cancellation is recorded. Nothing has been sent.`;
 		} finally {
@@ -483,6 +504,8 @@
 		Nothing reaches a public surface until a speaker is confirmed and their content is approved.
 	</p>
 </div>
+
+{#if actionError}<p class="roster__error" role="alert">{actionError}</p>{/if}
 
 <section aria-label="Speaker roster">
 	{#if speakers && filtered.length === 0}
@@ -769,6 +792,14 @@
 		max-inline-size: 72ch;
 		font-size: var(--je-font-size-xs);
 		color: var(--je-color-text-muted);
+	}
+
+	/* The same refusal grammar the lineup already speaks: one line, danger ink. */
+	.roster__error {
+		margin: var(--je-space-3) 0 0;
+		font-size: var(--je-font-size-sm);
+		font-weight: 600;
+		color: var(--je-color-danger);
 	}
 
 	/* No reserved height: the resolved list takes its natural size, however

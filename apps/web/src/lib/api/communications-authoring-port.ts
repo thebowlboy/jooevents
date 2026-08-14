@@ -5,6 +5,7 @@ import type {
 	OrganizerCommunicationAuthoringPayloadInput,
 	organizerCommunicationDraftGetInputSchema,
 	organizerCommunicationDraftListInputSchema,
+	organizerCommunicationHistoryListInputSchema,
 	organizerCommunicationPurposeGetInputSchema,
 	organizerCommunicationPurposeListInputSchema,
 	organizerCreateCommunicationDraftInputSchema,
@@ -13,7 +14,9 @@ import type {
 	organizerMessagePreviewRecipientListInputSchema,
 	organizerMessageTemplateGetInputSchema,
 	organizerMessageTemplateListInputSchema,
+	organizerPreviewMessageBatchInputSchema,
 	organizerReviseCommunicationDraftInputSchema,
+	organizerSendMessagesInputSchema,
 	StructuredOutcome
 } from '@jooevents/contracts';
 import type { z } from 'zod';
@@ -22,15 +25,19 @@ import type { OperatorHttpBindingUnavailableReason } from './operations/operator
 import type {
 	CommunicationAudienceOptionPageView,
 	CommunicationAuthoringPayloadRefView,
+	CommunicationDeliveryHistoryPageView,
 	CommunicationDraftMutationView,
 	CommunicationDraftPageView,
 	CommunicationDraftView,
 	CommunicationPurposeDetailView,
 	CommunicationPurposePageView,
 	MessageBatchPreviewDetailView,
+	MessagePreviewPrepareView,
 	MessagePreviewRecipientPageView,
+	MessagePreviewSummaryView,
 	MessageTemplateDetailView,
-	MessageTemplatePageView
+	MessageTemplatePageView,
+	SendMessagesResultView
 } from './view-models/communications-authoring';
 
 export type CommunicationPurposeListRequest = z.input<
@@ -51,6 +58,13 @@ export type MessageBatchPreviewGetRequest = z.input<
 >;
 export type MessagePreviewRecipientListRequest = z.input<
 	typeof organizerMessagePreviewRecipientListInputSchema
+>;
+export type MessagePreviewPrepareRequest = z.input<
+	typeof organizerPreviewMessageBatchInputSchema
+>;
+export type SendMessagesRequest = z.input<typeof organizerSendMessagesInputSchema>;
+export type DeliveryHistoryListRequest = z.input<
+	typeof organizerCommunicationHistoryListInputSchema
 >;
 export type CommunicationDraftCreateRequest = z.input<
 	typeof organizerCreateCommunicationDraftInputSchema
@@ -76,7 +90,11 @@ export type CommunicationAuthoringOperation =
 	| 'discard_message_draft'
 	| 'list_audience_options'
 	| 'get_message_batch_preview'
-	| 'list_message_preview_recipients';
+	| 'list_message_preview_recipients'
+	| 'prepare_message_batch_preview'
+	| 'preview_message_batch'
+	| 'send_messages'
+	| 'get_delivery_history';
 
 export type CommunicationUnavailableResult = {
 	readonly kind: 'unavailable';
@@ -174,4 +192,41 @@ export interface CommunicationsAuthoringPort {
 		input: MessagePreviewRecipientListRequest,
 		options?: { readonly signal?: AbortSignal }
 	): Promise<CommunicationReadResult<MessagePreviewRecipientPageView>>;
+
+	/**
+	 * The two-step preview adoption lane: the compute-only prepare read runs
+	 * the asynchronous audience resolution server-side against the exact draft
+	 * revision, then the adopt effect makes that preparation the immutable,
+	 * reviewed preview inside one unit of work — re-verifying draft version
+	 * and audience guard state before anything is written.
+	 */
+	prepareBatchPreview(
+		input: MessagePreviewPrepareRequest,
+		options?: { readonly signal?: AbortSignal }
+	): Promise<CommunicationReadResult<MessagePreviewPrepareView>>;
+	adoptBatchPreview(
+		input: MessagePreviewPrepareRequest,
+		idempotencyKey: CommunicationIdempotencyKey,
+		options?: { readonly signal?: AbortSignal }
+	): Promise<CommunicationEffectResult<MessagePreviewSummaryView>>;
+	/**
+	 * Commits one adopted, reviewed preview as an irreversible release batch.
+	 * A preview whose evidence no longer reproduces from current domain state
+	 * refuses typed (`stale_revision`/`communication.preview_changed`) instead
+	 * of sending; nothing is ever pretended sent.
+	 */
+	sendMessages(
+		input: SendMessagesRequest,
+		idempotencyKey: CommunicationIdempotencyKey,
+		options?: { readonly signal?: AbortSignal }
+	): Promise<CommunicationEffectResult<SendMessagesResultView>>;
+	/**
+	 * Per-batch send evidence with live per-recipient delivery-state counts
+	 * recomputed from the outbound ledger on every read — never a fire-once
+	 * flag, and never an address.
+	 */
+	getDeliveryHistory(
+		input?: DeliveryHistoryListRequest,
+		options?: { readonly signal?: AbortSignal }
+	): Promise<CommunicationReadResult<CommunicationDeliveryHistoryPageView>>;
 }

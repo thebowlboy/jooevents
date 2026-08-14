@@ -38,6 +38,7 @@
 		EmailReadiness,
 		MessageReview,
 		MessageTemplate,
+		NotificationDispatch,
 		ScoreStanding,
 		SpeakerProfile,
 		Submission,
@@ -93,7 +94,13 @@
 	let pendingVerdict = $state<Verdict>('accepted');
 	let notifyOpen = $state(false);
 	let subject = $state('Your submission decision');
-	let sentCount = $state<number | null>(null);
+	/**
+	 * What the committed send did, in the port's own record. Null until a send
+	 * in this dialog lands; the panel states this result rather than the count
+	 * the dialog asked for, so a commit nobody received never reads as mail
+	 * that went out.
+	 */
+	let dispatch = $state.raw<NotificationDispatch | null>(null);
 	/** The reviewed batch: the ids below are exactly the ids the send commits. */
 	let notifyIds = $state.raw<string[]>([]);
 	let notifyReview = $state.raw<MessageReview | null>(null);
@@ -748,7 +755,7 @@
 	// never hold its loading footprint for an answer that is already refused.
 	async function openNotify() {
 		const ids = unnotified.map((row) => row.id);
-		sentCount = null;
+		dispatch = null;
 		notifyIds = ids;
 		notifyReview = null;
 		notifyReadiness = null;
@@ -771,17 +778,47 @@
 		}
 	}
 
+	/**
+	 * The send's outcome in one line, from the committed result: acceptance by
+	 * an outbound provider is what "sent" means here, so a release nobody
+	 * accepted is stated as committed — never as email that went out.
+	 */
+	function dispatchTitle(result: NotificationDispatch): string {
+		if (result.sent === null) return `${plural(result.committed, 'notification')} committed`;
+		if (result.sent === 0) {
+			return `${plural(result.committed, 'notification')} committed — nothing sent`;
+		}
+		if (result.sent === result.committed) return `${plural(result.sent, 'email')} sent`;
+		return `${result.sent} of ${plural(result.committed, 'email')} sent`;
+	}
+
+	/** The same truth in the receipt trail, which outlives the dialog. */
+	function dispatchReceiptLabel(result: NotificationDispatch): string {
+		if (result.sent === null) {
+			return `Committed ${plural(result.committed, 'decision notification')}`;
+		}
+		if (result.sent === 0) {
+			return `Committed ${plural(result.committed, 'decision notification')} — nothing sent`;
+		}
+		if (result.sent === result.committed) {
+			return `Sent ${plural(result.sent, 'decision notification')}`;
+		}
+		return `Sent ${result.sent} of ${plural(result.committed, 'decision notification')}`;
+	}
+
 	async function sendNotifications() {
-		const count = emailCount;
 		busy = true;
 		try {
-			await api.decisions.notify(notifyIds, subject);
+			const result = await api.decisions.notify(notifyIds, subject);
 			recordAction({
 				area: 'decisions',
-				label: `Sent ${plural(count, 'decision notification')}`,
-				notUndoableReason: 'Email cannot be recalled after the provider accepts it.'
+				label: dispatchReceiptLabel(result),
+				// Both halves are true of every committed send: the release is
+				// immutable, and any copy a provider did accept is gone.
+				notUndoableReason:
+					'A committed release cannot be withdrawn, and email cannot be recalled once a provider accepts it.'
 			});
-			sentCount = count;
+			dispatch = result;
 			await load();
 		} catch (error) {
 			// Nothing was pretended sent; the dialog states the refusal in place.
@@ -1323,7 +1360,7 @@
 {/snippet}
 
 <Modal bind:open={notifyOpen} title="Compose decision notifications">
-	{#if sentCount === null}
+	{#if dispatch === null}
 		<p class="modal__lead notify__lead">
 			{plural(recipientCount, 'submitter')} across {plural(unnotified.length, 'submission')} have a
 			decision that has not been sent. Deciding never emailed them; this send is the step that does.
@@ -1343,13 +1380,16 @@
 				templateDoor={notifyDoor} />
 		{/if}
 	{:else}
+		<!-- The committed send stated as the port recorded it: what a provider
+		     accepted, what it did not, and why — the same truth the reloaded
+		     page still shows on its un-notified rows. -->
 		<Alert
-			tone="success"
-			title={`${plural(sentCount, 'email')} sent`}
-			message="Delivery state per recipient is tracked in Communications. These submissions no longer count as un-notified." />
+			tone={dispatch.sent !== null && dispatch.sent === dispatch.committed ? 'success' : 'warning'}
+			title={dispatchTitle(dispatch)}
+			message={dispatch.note} />
 	{/if}
 	{#snippet footer(close)}
-		{#if sentCount === null}
+		{#if dispatch === null}
 			<Button variant="secondary" size="sm" onclick={close}>Cancel</Button>
 			<Button
 				size="sm"

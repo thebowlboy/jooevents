@@ -1,0 +1,386 @@
+import { describe, expect, test } from 'bun:test';
+import type { EngagementHeadDto, EngagementSnapshotDto } from '@jooevents/contracts';
+import type {
+	EngagementsLiveClient,
+	EngagementsLiveRespondResult
+} from './operations/engagements-live';
+import type { SubmissionTriageLiveClient } from './operations/submission-triage-live';
+import type { SessionCatalogCorePort } from './session-catalog-port';
+import {
+	createLiveSpeakersPagePort,
+	SpeakersPageLiveError
+} from './speakers-page-port.live';
+import type { OrganizerSubmissionsPort } from './view-models/intake-submissions';
+
+const id = (value: number) =>
+	`00000000-0000-4000-8000-${value.toString(16).padStart(12, '0')}`;
+const digest = (seed: string) => seed.repeat(64);
+const correlationId = id(900);
+const workspaceId = id(1);
+const eventId = id(2);
+const sessionId = id(10);
+const personId = id(20);
+const submissionId = id(30);
+const engagementId = id(40);
+
+function invitedHead(overrides: Partial<EngagementHeadDto> = {}): EngagementHeadDto {
+	return {
+		schemaVersion: 1,
+		id: engagementId,
+		scope: { workspaceId, eventId },
+		sessionId,
+		personId,
+		submissionId,
+		seededByDecision: { version: 1, digestSha256: digest('a') },
+		state: 'invited',
+		invitedAt: '2026-08-13T10:00:00.000Z',
+		respondBy: null,
+		confirmation: null,
+		cancellationRequest: null,
+		cancelledAt: null,
+		source: { kind: 'submission', id: submissionId, version: 1 },
+		version: 1,
+		...overrides
+	};
+}
+
+function snapshot(engagements: readonly EngagementHeadDto[]): EngagementSnapshotDto {
+	return { schemaVersion: 1, scope: { workspaceId, eventId }, engagements: [...engagements] };
+}
+
+function fakeEngagements(input: {
+	readonly served: EngagementSnapshotDto;
+	readonly responded?: unknown[];
+	readonly result?: EngagementsLiveRespondResult;
+}): EngagementsLiveClient {
+	return {
+		async readSnapshot() {
+			return { kind: 'success', data: input.served, correlationId };
+		},
+		async respond(respondInput) {
+			input.responded?.push(respondInput);
+			return input.result ?? {
+				kind: 'success',
+				data: {
+					changesetId: id(60),
+					revisionId: id(61),
+					revisionDigest: digest('b'),
+					committedHeadVersion: 2,
+					safeDiff: { action: 'record_confirmation', before: null, after: null } as never
+				},
+				receipt: { id: id(62), operationName: 'changeset.commit', operationVersion: 1 },
+				correlationId
+			};
+		}
+	};
+}
+
+function fakeSessions(input: {
+	readonly title?: string;
+	readonly participants?: readonly {
+		readonly personId: string;
+		readonly publiclyVisible: boolean;
+	}[];
+}): SessionCatalogCorePort {
+	const participants = (input.participants ?? [{ personId, publiclyVisible: true }]).map(
+		(participant, index) => ({
+			personId: participant.personId,
+			role: 'speaker',
+			position: index,
+			publiclyVisible: participant.publiclyVisible,
+			source: { kind: 'submission', id: submissionId, version: 1 }
+		})
+	);
+	return {
+		source: { kind: 'live' },
+		async readCatalog() {
+			return {
+				kind: 'success',
+				data: {
+					schemaVersion: 1,
+					scope: { workspaceId, eventId },
+					version: 3,
+					digestSha256: digest('c'),
+					sessions: [{
+						schemaVersion: 1,
+						scope: { workspaceId, eventId },
+						id: sessionId,
+						title: input.title ?? 'Typed Tools in Anger',
+						plannedDurationMinutes: 30,
+						lifecycle: 'programmed',
+						programTarget: {
+							setVersion: 1,
+							setDigestSha256: digest('d'),
+							format: { kind: 'format', id: id(70), name: 'Talk', status: 'active', version: 1 },
+							track: null
+						},
+						roster: { version: 1, digestSha256: digest('e'), participants },
+						version: 2,
+						digestSha256: digest('f'),
+						createdByUserId: id(80),
+						createdAt: '2026-08-13T09:00:00.000Z',
+						updatedByUserId: id(80),
+						updatedAt: '2026-08-13T09:30:00.000Z'
+					}]
+				} as never,
+				correlationId
+			};
+		},
+		async applyChange() {
+			throw new Error('unexpected session change');
+		}
+	};
+}
+
+function fakeTriage(names: Readonly<Record<string, string | null>>): Pick<SubmissionTriageLiveClient, 'read'> {
+	return {
+		async read(readId) {
+			if (!(readId in names)) return { kind: 'transport_error', error: { code: 'http_404', retryable: false } };
+			return {
+				kind: 'success',
+				data: { source: { id: readId, primaryParticipantName: names[readId] } } as never,
+				correlationId
+			};
+		}
+	};
+}
+
+function fakeContacts(input: {
+	readonly emails?: Readonly<Record<string, string>>;
+	readonly refuse?: boolean;
+	readonly capability?: 'available' | 'unavailable';
+}): Pick<OrganizerSubmissionsPort, 'source' | 'contact'> {
+	if (input.capability === 'unavailable') {
+		return {
+			source: { kind: 'live', workspaceId },
+			contact: { kind: 'unavailable', reason: 'not_authorized' }
+		} as never;
+	}
+	return {
+		source: { kind: 'live', workspaceId },
+		contact: {
+			kind: 'available',
+			read: async (readId: string) => {
+				if (input.refuse) {
+					return {
+						kind: 'outcome',
+						outcome: {
+							class: 'access_denied', kind: 'authority.permission_missing',
+							retryable: false, message: 'no', detail: null, detailSchemaVersion: 1
+						} as never,
+						correlationId
+					};
+				}
+				const email = input.emails?.[readId];
+				return email === undefined
+					? { kind: 'transport_error', error: { code: 'http_404', retryable: false } }
+					: { kind: 'success', data: { submissionId: readId, email }, correlationId };
+			}
+		}
+	} as never;
+}
+
+function composePort(overrides: Partial<Parameters<typeof createLiveSpeakersPagePort>[0]> = {}) {
+	return createLiveSpeakersPagePort({
+		engagements: fakeEngagements({ served: snapshot([invitedHead()]) }),
+		sessions: fakeSessions({}),
+		triage: fakeTriage({ [submissionId]: 'Amina Diallo' }),
+		contacts: fakeContacts({ emails: { [submissionId]: 'amina@example.org' } }),
+		...overrides
+	});
+}
+
+describe('live tuned Speakers page port', () => {
+	test('refuses to compose over a non-live source', () => {
+		expect(() =>
+			composePort({
+				sessions: { ...fakeSessions({}), source: { kind: 'sample', label: 'Sample data', scenario: { key: 'k', name: 'n', description: 'd' } } } as never
+			})
+		).toThrow(TypeError);
+	});
+
+	test('serves one row per engagement joined with session, name, and disclosed address', async () => {
+		const port = composePort();
+		const rows = await port.speakers.list();
+
+		expect(rows).toEqual([{
+			id: engagementId,
+			name: 'Amina Diallo',
+			email: 'amina@example.org',
+			state: 'invited',
+			sessions: [{ id: sessionId, title: 'Typed Tools in Anger' }],
+			tasksDone: 0,
+			tasksTotal: 0,
+			overdueTasks: 0,
+			publiclyVisible: true,
+			contentApproved: false,
+			position: 0
+		}]);
+	});
+
+	test('projects a stored cancellation request as cancel_requested and serves its note', async () => {
+		const port = composePort({
+			engagements: fakeEngagements({
+				served: snapshot([invitedHead({
+					state: 'confirmed',
+					confirmation: {
+						attribution: 'organizer_recorded',
+						personId,
+						recordedByUserId: id(90),
+						confirmedAt: '2026-08-13T11:00:00.000Z'
+					},
+					cancellationRequest: {
+						requestedBy: 'speaker',
+						requestedAt: '2026-08-13T12:00:00.000Z',
+						note: 'Family emergency.'
+					},
+					version: 3
+				})])
+			})
+		});
+		const [row] = await port.speakers.list();
+		expect(row?.state).toBe('cancel_requested');
+		expect(row?.note).toBe('Family emergency.');
+	});
+
+	test('keeps the address the empty value when disclosure refuses or is not composed', async () => {
+		for (const contacts of [
+			fakeContacts({ refuse: true }),
+			fakeContacts({ capability: 'unavailable' })
+		]) {
+			const port = composePort({ contacts });
+			const [row] = await port.speakers.list();
+			expect(row?.name).toBe('Amina Diallo');
+			expect(row?.email).toBe('');
+		}
+	});
+
+	test('hides a person whose roster reference is not publicly visible', async () => {
+		const port = composePort({
+			sessions: fakeSessions({ participants: [{ personId, publiclyVisible: false }] })
+		});
+		const [row] = await port.speakers.list();
+		expect(row?.publiclyVisible).toBe(false);
+	});
+
+	test('orders rows by invitation instant then name and states positions', async () => {
+		const laterId = id(41);
+		const otherPerson = id(21);
+		const heads = [
+			invitedHead({
+				id: laterId,
+				personId: otherPerson,
+				invitedAt: '2026-08-14T10:00:00.000Z'
+			}),
+			invitedHead()
+		].sort((left, right) =>
+			`${left.sessionId}:${left.personId}`.localeCompare(`${right.sessionId}:${right.personId}`)
+		);
+		const port = composePort({
+			engagements: fakeEngagements({ served: snapshot(heads) }),
+			sessions: fakeSessions({
+				participants: [
+					{ personId, publiclyVisible: true },
+					{ personId: otherPerson, publiclyVisible: true }
+				]
+			})
+		});
+		const rows = await port.speakers.list();
+		expect(rows.map((row) => [row.id, row.position])).toEqual([
+			[engagementId, 0],
+			[laterId, 1]
+		]);
+	});
+
+	test('records a confirmation fenced on the freshly read engagement version', async () => {
+		const responded: unknown[] = [];
+		const port = composePort({
+			engagements: fakeEngagements({
+				served: snapshot([invitedHead({ version: 5 })]),
+				responded
+			})
+		});
+
+		expect(await port.speakers.recordConfirmation(engagementId)).toEqual({ ok: true });
+		expect(responded).toEqual([{
+			action: 'record_confirmation',
+			engagementId,
+			expectedEngagementVersion: 5,
+			attribution: 'organizer_recorded'
+		}]);
+	});
+
+	test('accepts a cancellation and maps a stale refusal onto reviewed copy', async () => {
+		const responded: unknown[] = [];
+		const stale: EngagementsLiveRespondResult = {
+			kind: 'outcome',
+			outcome: {
+				class: 'stale_revision', kind: 'engagement.changed', retryable: false,
+				message: 'changed', detail: null, detailSchemaVersion: 1
+			} as never,
+			terminal: true,
+			correlationId
+		};
+		const port = composePort({
+			engagements: fakeEngagements({
+				served: snapshot([invitedHead()]),
+				responded,
+				result: stale
+			})
+		});
+
+		const outcome = await port.speakers.acceptCancellation(engagementId);
+		expect(outcome.ok).toBe(false);
+		if (!outcome.ok) expect(outcome.reason).toContain('changed while you were working');
+		expect(responded).toEqual([{
+			action: 'accept_cancellation',
+			engagementId,
+			expectedEngagementVersion: 1
+		}]);
+	});
+
+	test('refuses a response for an engagement that is no longer served', async () => {
+		const responded: unknown[] = [];
+		const port = composePort({
+			engagements: fakeEngagements({ served: snapshot([]), responded })
+		});
+		const outcome = await port.speakers.recordConfirmation(engagementId);
+		expect(outcome.ok).toBe(false);
+		expect(responded).toEqual([]);
+	});
+
+	test('states the served truths: no tasks, no thread, no groups', async () => {
+		const port = composePort();
+		expect(await port.tasks.defs()).toEqual([]);
+		expect(await port.tasks.assignments()).toEqual([]);
+		expect(await port.communications.thread(personId)).toBeNull();
+		expect(await port.vocab.speakerCategories()).toEqual([]);
+	});
+
+	test('refuses every lineup mutation with its own name (BLOCKED-13)', async () => {
+		const port = composePort();
+		for (const outcome of [
+			await port.speakers.reorder(engagementId, 1),
+			await port.speakers.setCategory(engagementId, null),
+			await port.speakers.setVisibility(engagementId, true)
+		]) {
+			expect(outcome.ok).toBe(false);
+			if (!outcome.ok) expect(outcome.reason).toContain('not available in this live workspace yet');
+		}
+		await expect(port.vocab.addSpeakerCategory('Keynotes')).rejects.toThrow(SpeakersPageLiveError);
+	});
+
+	test('a failed roster read throws typed instead of serving an empty roster', async () => {
+		const port = composePort({
+			engagements: {
+				async readSnapshot() {
+					return { kind: 'transport_error', error: { code: 'network_unavailable', retryable: true } };
+				},
+				async respond() {
+					throw new Error('unexpected respond');
+				}
+			}
+		});
+		await expect(port.speakers.list()).rejects.toThrow(SpeakersPageLiveError);
+	});
+});

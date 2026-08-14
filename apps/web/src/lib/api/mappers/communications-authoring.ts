@@ -4,18 +4,23 @@ import type {
 	OrganizerCommunicationDraftMutationResult,
 	OrganizerCommunicationDraftProjection,
 	organizerCommunicationDraftPageSchema,
+	OrganizerCommunicationHistoryPage,
 	OrganizerCommunicationPurposeDetail,
 	organizerCommunicationPurposePageSchema,
 	OrganizerMessageBatchPreviewDetail,
 	organizerMessagePreviewRecipientPageSchema,
 	OrganizerMessagePreviewIdentity,
+	organizerMessagePreviewSummarySchema,
 	OrganizerMessageTemplateDetail,
-	organizerMessageTemplatePageSchema
+	organizerMessageTemplatePageSchema,
+	OrganizerPrepareMessagePreviewResult,
+	OrganizerSendMessagesResult
 } from '@jooevents/contracts';
 import type { z } from 'zod';
 import type {
 	CommunicationAudienceOptionPageView,
 	CommunicationAuthoringPayloadRefView,
+	CommunicationDeliveryHistoryPageView,
 	CommunicationDraftMutationView,
 	CommunicationDraftPageView,
 	CommunicationDraftView,
@@ -24,9 +29,12 @@ import type {
 	CommunicationView,
 	MessageBatchPreviewDetailView,
 	MessagePreviewIdentityView,
+	MessagePreviewPrepareView,
 	MessagePreviewRecipientPageView,
+	MessagePreviewSummaryView,
 	MessageTemplateDetailView,
-	MessageTemplatePageView
+	MessageTemplatePageView,
+	SendMessagesResultView
 } from '../view-models/communications-authoring';
 
 type PurposePage = z.infer<typeof organizerCommunicationPurposePageSchema>;
@@ -34,6 +42,7 @@ type TemplatePage = z.infer<typeof organizerMessageTemplatePageSchema>;
 type AudienceOptionPage = z.infer<typeof organizerCommunicationAudienceOptionPageSchema>;
 type DraftPage = z.infer<typeof organizerCommunicationDraftPageSchema>;
 type PreviewRecipientPage = z.infer<typeof organizerMessagePreviewRecipientPageSchema>;
+type PreviewSummary = z.infer<typeof organizerMessagePreviewSummarySchema>;
 
 function freezeJson(value: unknown): void {
 	if (value === null || typeof value !== 'object' || Object.isFrozen(value)) return;
@@ -114,5 +123,25 @@ export function mapMessageBatchPreviewDetail(
 export function mapMessagePreviewRecipientPage(
 	value: PreviewRecipientPage
 ): MessagePreviewRecipientPageView {
+	return immutableCopy(value);
+}
+
+export function mapMessagePreviewPrepare(
+	value: OrganizerPrepareMessagePreviewResult
+): MessagePreviewPrepareView {
+	return immutableCopy(value);
+}
+
+export function mapMessagePreviewSummary(value: PreviewSummary): MessagePreviewSummaryView {
+	return immutableCopy(value);
+}
+
+export function mapSendMessagesResult(value: OrganizerSendMessagesResult): SendMessagesResultView {
+	return immutableCopy(value);
+}
+
+export function mapCommunicationDeliveryHistoryPage(
+	value: OrganizerCommunicationHistoryPage
+): CommunicationDeliveryHistoryPageView {
 	return immutableCopy(value);
 }

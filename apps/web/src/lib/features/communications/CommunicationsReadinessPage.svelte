@@ -153,7 +153,8 @@
 
 <style>
 	/* This is the tuned delivery card's smallest independent composition. Keeping
-	   it separate avoids importing the full page and its unavailable send/history API. */
+	   it separate avoids importing the full Communications page, whose thread,
+	   attention, audience, and compose capabilities no live mount serves. */
 	.card {
 		background: var(--je-color-surface);
 		border: 1px solid var(--je-color-border);

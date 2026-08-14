@@ -4,12 +4,15 @@
 	import { createLiveEventProgramPort } from '$lib/api/event-program/live';
 	import { createChangesetReviewLivePort } from '$lib/api/changesets';
 	import { createLiveCommunicationsReadinessPagePort } from '$lib/api/communications-readiness-page-live';
+	import { createCommunicationsAuthoringLivePort } from '$lib/api/operations/communications-authoring-live';
 	import { createCommunicationsProviderReadLivePort } from '$lib/api/operations/communications-provider-read-live';
 	import { setOrganizerFormsPort } from '$lib/api/intake-forms-context';
 	import { createIntakeFormsLivePort } from '$lib/api/operations/intake-forms-live';
 	import { createLiveFormsPagePort } from '$lib/api/forms-page-port.live';
 	import { createDecisionsLiveClient } from '$lib/api/operations/decisions-live';
 	import { createDirectEntryLiveClient } from '$lib/api/operations/direct-entry-live';
+	import { createEngagementsLiveClient } from '$lib/api/operations/engagements-live';
+	import { createIntakeSubmissionsLivePort } from '$lib/api/operations/intake-submissions-live';
 	import { createLiveDecisionsPagePort } from '$lib/api/decisions-page-port.live';
 	import { createLiveSubmissionsPagePort } from '$lib/api/submissions-page-port.live';
 	import { createReviewLivePort } from '$lib/api/operations/review-live';
@@ -26,6 +29,7 @@
 	} from './review-resolution';
 	import { createLiveReviewersPagePort } from '$lib/api/reviewers-page-port.live';
 	import { createLiveSchedulePagePort } from '$lib/api/schedule-page-port.live';
+	import { createLiveSpeakersPagePort } from '$lib/api/speakers-page-port.live';
 	import type { ReviewPagePort } from '$lib/api/review-page-port';
 	import { createLiveScheduleProposalCountsSource } from './schedule-proposal-counts.live';
 	import { createEventSettingsLiveClient } from '$lib/api/operations/event-settings-live';
@@ -61,6 +65,11 @@
 	const changesets = createChangesetReviewLivePort({ manifest: initial.manifest });
 	const communicationsReadiness = createLiveCommunicationsReadinessPagePort({
 		provider: createCommunicationsProviderReadLivePort({ manifest: initial.manifest })
+	});
+	// One canonical communication authoring/preview/send client; the Decisions
+	// notify loop and any future Messages surface ride the same lane.
+	const communicationsAuthoring = createCommunicationsAuthoringLivePort({
+		manifest: initial.manifest
 	});
 	const canonicalForms = setOrganizerFormsPort(createIntakeFormsLivePort({ manifest: initial.manifest }));
 	const vocabulary = createProgramVocabularySettingsAdapter({
@@ -136,7 +145,24 @@
 		vocabulary,
 		settings: eventSettings,
 		schedule: { state: () => schedule.schedule.state() },
-		submissions: { list: (query) => submissions.submissions.list(query) }
+		submissions: { list: (query) => submissions.submissions.list(query) },
+		communications: communicationsAuthoring,
+		readiness: communicationsReadiness
+	});
+	// The tuned Speakers surface: the engagement snapshot joined with the same
+	// canonical Session catalog and triage clients the other surfaces share,
+	// plus the permission-gated contact disclosure. The disclosure capability is
+	// composed as attemptable — the server evaluates the exact permission on
+	// every read, and a refusal keeps the address an empty value; no browser
+	// role guess ever grants disclosure.
+	const speakers = createLiveSpeakersPagePort({
+		engagements: createEngagementsLiveClient({ manifest: initial.manifest }),
+		sessions: sessionCatalog,
+		triage,
+		contacts: createIntakeSubmissionsLivePort({
+			manifest: initial.manifest,
+			contactCapability: { kind: 'available' }
+		})
 	});
 
 	// The tuned Review surface renders under the authority the server states.
@@ -184,7 +210,8 @@
 		settings,
 		review,
 		reviewers,
-		schedule
+		schedule,
+		speakers
 	}));
 </script>
 

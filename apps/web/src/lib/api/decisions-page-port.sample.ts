@@ -1,4 +1,5 @@
 import type { DecisionsPagePort } from './decisions-page-port';
+import type { NotificationDispatch } from './types';
 import type { WorkspaceApi } from './workspace-gateway';
 
 /** Adapts the resettable workspace fixture without changing its behavior. */
@@ -17,7 +18,22 @@ export function createSampleDecisionsPagePort(api: WorkspaceApi): DecisionsPageP
 		templates: api.templates,
 		speakers: api.speakers,
 		schedule: api.schedule,
-		decisions: api.decisions,
+		decisions: Object.freeze({
+			...api.decisions,
+			/**
+			 * The fixture's send records a delivered message row; the dispatch the
+			 * page renders is that row's own counts, so the sample states its
+			 * simulated delivery rather than the request it was asked for.
+			 */
+			async notify(ids: string[], subject: string): Promise<NotificationDispatch> {
+				const message = await api.decisions.notify(ids, subject);
+				return {
+					committed: message.audienceCount,
+					sent: message.deliveredCount,
+					note: 'Delivery state per recipient is tracked in Communications. The un-notified indicator clears once delivery evidence lands.'
+				};
+			}
+		}),
 		communications: api.communications
 	});
 }

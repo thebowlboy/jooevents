@@ -113,6 +113,12 @@ test('a received task is accepted from its own cell and the receipt takes it bac
 	).toBeVisible({ timeout: 10000 });
 });
 
+// Sample-composition expectation, mode-scoped on purpose: the destination it
+// asserts is the sample task matrix. In the live workspace the Speakers page
+// is mounted but Tasks stays the honest LiveUnavailable surface (no task
+// system is mounted), so this link lands on the unavailable page there — the
+// live roster's own behavior is covered in speakers.joined-live.ts, and this
+// spec must not be ported into the joined suite as-is.
 test('a speaker row opens the task matrix already scoped to that speaker', async ({ page }) => {
 	await page.goto('/app/speakers');
 

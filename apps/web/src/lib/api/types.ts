@@ -926,6 +926,21 @@ export interface MessageReview {
 	irreversibleNote: string;
 }
 
+/**
+ * What a committed send actually did, from the sending port's own records.
+ * `committed` messages became releases the workspace cannot withdraw; `sent`
+ * counts the ones an outbound provider accepted, and is null only when the
+ * port could not read that state (the commit still happened either way).
+ * `note` states what became of the rest and where that state can be seen. A
+ * port that commits without delivering reports `sent: 0` and says so — the
+ * surface never restates a request count as mail somebody received.
+ */
+export interface NotificationDispatch {
+	committed: number;
+	sent: number | null;
+	note: string;
+}
+
 export interface CommunicationMessage {
 	id: string;
 	subject: string;

@@ -10,6 +10,7 @@
 	import ReviewersPage from '$lib/features/reviewers/ReviewersPage.svelte';
 	import SchedulePage from '$lib/features/schedule/SchedulePage.svelte';
 	import SettingsPage from '$lib/features/settings/SettingsPage.svelte';
+	import SpeakersPage from '$lib/features/speakers/SpeakersPage.svelte';
 	import { useLiveWorkspacePorts } from './live-workspace';
 	import { ReviewResolutionError } from './review-resolution';
 	import type { OperatorPageId } from './operator-pages';
@@ -90,6 +91,8 @@
 			{/if}
 		{/await}
 	{/key}
+{:else if area === 'speakers'}
+	<SpeakersPage port={ports.speakers} />
 {:else if area === 'reviewers'}
 	<ReviewersPage port={ports.reviewers} />
 {:else if area === 'schedule'}

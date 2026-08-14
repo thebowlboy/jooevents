@@ -5,12 +5,16 @@ import {
 	organizerCommunicationDraftMutationOperationResultSchema,
 	organizerCommunicationDraftOperationResultSchema,
 	organizerCommunicationDraftPageOperationResultSchema,
+	organizerCommunicationHistoryPageOperationResultSchema,
 	organizerCommunicationPurposeDetailOperationResultSchema,
 	organizerCommunicationPurposePageOperationResultSchema,
 	organizerMessageBatchPreviewDetailOperationResultSchema,
 	organizerMessagePreviewRecipientPageOperationResultSchema,
 	organizerMessageTemplateDetailOperationResultSchema,
 	organizerMessageTemplatePageOperationResultSchema,
+	organizerPrepareMessagePreviewOperationResultSchema,
+	organizerPreviewMessageBatchOperationResultSchema,
+	organizerSendMessagesOperationResultSchema,
 	safeOperationManifestSchema,
 	type OperationEffect,
 	type SafeOperationManifest,
@@ -41,7 +45,11 @@ const paths = Object.freeze({
 	discardDraft: '/api/events/current/communications/drafts/discard',
 	listAudienceOptions: '/api/events/current/communications/audiences/options',
 	getPreview: '/api/events/current/communications/previews/detail',
-	listPreviewRecipients: '/api/events/current/communications/previews/recipients'
+	listPreviewRecipients: '/api/events/current/communications/previews/recipients',
+	prepareBatchPreview: '/api/events/current/communications/previews/prepare',
+	adoptBatchPreview: '/api/events/current/communications/previews/adopt',
+	sendMessages: '/api/events/current/communications/messages/send',
+	getDeliveryHistory: '/api/events/current/communications/deliveries/history'
 } as const);
 
 const purposeRevision = Object.freeze({
@@ -356,6 +364,57 @@ function successPayloads(): Readonly<Record<string, unknown>> {
 		),
 		[paths.listPreviewRecipients]: organizerMessagePreviewRecipientPageOperationResultSchema.parse(
 			readSuccess(recipientPage)
+		),
+		[paths.prepareBatchPreview]: organizerPrepareMessagePreviewOperationResultSchema.parse(
+			readSuccess({ schemaVersion: 1, draftId: 'draft-1', draftVersion: 1, state: 'prepared' })
+		),
+		[paths.adoptBatchPreview]: organizerPreviewMessageBatchOperationResultSchema.parse(
+			effectSuccess('preview_message_batch', 71, previewSummary)
+		),
+		[paths.sendMessages]: organizerSendMessagesOperationResultSchema.parse(
+			effectSuccess('send_messages', 72, {
+				schemaVersion: 1,
+				batchId: 'batch-1',
+				changesetId: 'changeset-1',
+				dispatchGeneration: 1,
+				releaseCount: 1,
+				deliveryCount: 1
+			})
+		),
+		[paths.getDeliveryHistory]: organizerCommunicationHistoryPageOperationResultSchema.parse(
+			readSuccess({
+				schemaVersion: 1,
+				visibility: 'organizer_non_security',
+				rows: [{
+					schemaVersion: 1,
+					visibility: 'organizer_non_security',
+					historyItemId: 'history-1',
+					messageRefId: 'batch-1',
+					purposeRevision,
+					subject: 'Your submission decision',
+					audienceLabel: 'Accepted submissions',
+					state: 'known_failed',
+					stateReasonCode: 'delivery.rejected_terminal',
+					actor: { kind: 'human', displayLabel: 'Workspace operator' },
+					cause: {
+						summary: 'Committed from an adopted, reviewed decision-notification preview.',
+						subjectKind: 'communication_preview',
+						subjectRefId: 'audience-spec-1',
+						subjectVersion: 2
+					},
+					counts: {
+						audience: { knowledge: 'known', value: 1 },
+						materialized: { knowledge: 'known', value: 1 },
+						accepted: { knowledge: 'known', value: 0 },
+						delivered: { knowledge: 'not_supported' },
+						acceptanceUnknown: { knowledge: 'known', value: 0 },
+						knownFailed: { knowledge: 'known', value: 1 }
+					},
+					authorizedAt: '2026-08-14T12:00:00.000Z',
+					availableActions: ['continue_provider_setup']
+				}],
+				page: { hasMore: false }
+			})
 		)
 	});
 }
@@ -411,6 +470,18 @@ describe('pure-live Communications authoring browser port', () => {
 		const audiences = await port.listAudienceOptions({ purposeId: 'purpose-1' });
 		const preview = await port.getPreview(previewIdentity);
 		const recipients = await port.listPreviewRecipients({ ...previewIdentity, state: 'included' });
+		const prepared = await port.prepareBatchPreview({ draftId: 'draft-1', expectedDraftVersion: 1 });
+		const adopted = await port.adoptBatchPreview(
+			{ draftId: 'draft-1', expectedDraftVersion: 1 },
+			'adopt-preview-1'
+		);
+		const sent = await port.sendMessages({
+			audienceSpecId: 'audience-spec-1',
+			batchId: 'batch-1',
+			subject: 'Your submission decision',
+			audienceLabel: 'Accepted submissions'
+		}, 'send-messages-1');
+		const history = await port.getDeliveryHistory({ messageRefId: 'batch-1' });
 
 		expect(port.source).toEqual({ kind: 'live' });
 		expect(purposes).toMatchObject({
@@ -451,6 +522,36 @@ describe('pure-live Communications authoring browser port', () => {
 				rows: [{ state: 'included', channel: { disclosure: 'masked' } }]
 			}
 		});
+		expect(prepared).toMatchObject({
+			kind: 'success',
+			data: { draftId: 'draft-1', draftVersion: 1, state: 'prepared' }
+		});
+		expect(adopted).toMatchObject({
+			kind: 'success',
+			data: { identity: previewIdentity },
+			receipt: { operationName: 'preview_message_batch' }
+		});
+		expect(sent).toMatchObject({
+			kind: 'success',
+			data: { batchId: 'batch-1', dispatchGeneration: 1, releaseCount: 1, deliveryCount: 1 },
+			receipt: { operationName: 'send_messages' }
+		});
+		// History is the ledger truth: the batch is committed and honestly not
+		// delivered — provider acceptance zero, delivery evidence unsupported.
+		expect(history).toMatchObject({
+			kind: 'success',
+			data: {
+				rows: [{
+					messageRefId: 'batch-1',
+					state: 'known_failed',
+					stateReasonCode: 'delivery.rejected_terminal',
+					counts: {
+						accepted: { knowledge: 'known', value: 0 },
+						delivered: { knowledge: 'not_supported' }
+					}
+				}]
+			}
+		});
 
 		expect(calls.map((call) => call.path.split('?')[0])).toEqual(Object.values(paths));
 		const purposeQuery = new URL(calls[0]!.path, 'https://jooevents.invalid').searchParams;
@@ -462,13 +563,19 @@ describe('pure-live Communications authoring browser port', () => {
 		expect(previewQuery.get('previewGeneration')).toBe('2');
 		expect(previewQuery.get('previewDigestSha256')).toBe(previewIdentity.previewDigestSha256);
 		expect(calls.filter((call) => call.method === 'POST').map((call) => call.idempotencyKey))
-			.toEqual(['store-content-1', 'create-draft-1', 'revise-draft-1', 'discard-draft-1']);
+			.toEqual([
+				'store-content-1', 'create-draft-1', 'revise-draft-1', 'discard-draft-1',
+				'adopt-preview-1', 'send-messages-1'
+			]);
 		expect(JSON.stringify(calls.map(({ path, method, body, idempotencyKey }) => ({
 			path, method, body, idempotencyKey
 		})))).not.toContain('sample');
-		expect(Object.values(COMMUNICATIONS_AUTHORING_OPERATIONS).some((operation) =>
-			operation.name.includes('send') || operation.name.includes('delivery')
-		)).toBe(false);
+		// The send wave is mounted: the lane's exact operation names, no more.
+		expect(Object.values(COMMUNICATIONS_AUTHORING_OPERATIONS)
+			.map((operation) => operation.name)
+			.filter((name) => name.includes('send') || name.includes('delivery'))
+			.sort()
+		).toEqual(['get_delivery_history', 'send_messages']);
 	});
 
 	test('preserves structured nonterminal outcomes and rejects a mismatched preview tuple', async () => {

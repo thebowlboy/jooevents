@@ -228,20 +228,74 @@ test('decisions carries the entry through accept-with-spawn into the program poo
 	});
 	await expect(decidedRow.getByText('Accepted', { exact: true })).toBeVisible();
 
-	// The notify door opens onto the typed refusal, never onto a dialog that
-	// pretends the projection may still arrive: the recorded copy renders in
-	// place of the loading shell, Send stays disabled, nothing is faked as
-	// sent. (The door is the pass banner or, once every candidate is decided,
-	// the finale's send button — both open the same dialog.)
+	// The notify door opens onto the real deliberate-send review: the seeded
+	// acceptance template over the minted decision-set audience, this entry's
+	// submitter resolved as a recipient (masked address — contact disclosure
+	// is its own permission-gated read), and the honest sender line stating
+	// that no outbound provider is activated. (The door is the pass banner or,
+	// once every candidate is decided, the finale's send button — both open
+	// the same dialog.)
 	await page.getByRole('button', { name: /Compose notifications|decision notice/ }).first().click();
 	const notify = page.getByRole('dialog', { name: 'Compose decision notifications' });
 	await expect(notify).toBeVisible();
+	await expect(
+		notify.getByText(`Speaker ${testInfo.project.name}`, { exact: true }).first()
+	).toBeVisible();
 	await expect(notify.getByText(
-		'Decision notifications are not available in this live workspace yet. Decisions are recorded; nothing has been sent.'
+		'No outbound provider activated — deliveries will be recorded, not delivered'
 	)).toBeVisible();
-	await expect(notify.getByRole('button', { name: /^Send/ })).toBeDisabled();
-	await notify.getByRole('button', { name: 'Cancel' }).click();
+
+	// Send commits the adopted preview as an irreversible release batch
+	// through `send_messages`; the dialog then states what that commit did,
+	// read back from the delivery ledger — the release committed and nothing
+	// delivered, never "N emails sent" over an inert provider.
+	const send = notify.getByRole('button', { name: /^Send/ });
+	await expect(send).toBeEnabled();
+	await send.click();
+	await expect(notify.getByText(/notifications? committed — nothing sent/)).toBeVisible();
+	await expect(notify.getByText(
+		/deliver(y|ies) recorded, none delivered: the outbound lane rejected them outright\./
+	)).toBeVisible();
+	await expect(notify.getByText(/stay un-notified until an activated provider/)).toBeVisible();
+	await expect(notify.getByText(/emails? sent/)).toHaveCount(0);
+	await notify.getByRole('button', { name: 'Done' }).click();
 	await expect(notify).not.toBeVisible();
+
+	// The wire history carries the committed batch with the ledger truth: the
+	// dispatch pass ran, only the deterministic fake is composed, and the
+	// delivery is honestly, terminally not-delivered — zero accepted, delivery
+	// evidence not supported, and the reason the deciding attempt recorded.
+	const history = await page.request.get(
+		'/api/events/current/communications/deliveries/history',
+		{ headers: { 'x-correlation-id': crypto.randomUUID() } }
+	);
+	expect(history.status()).toBe(200);
+	const historyBody = await history.json() as {
+		kind: string;
+		data: { rows: {
+			state: string;
+			stateReasonCode?: string;
+			counts: { accepted: { value?: number }; delivered: { knowledge: string } };
+		}[] };
+	};
+	expect(historyBody.kind).toBe('success');
+	expect(historyBody.data.rows.length).toBeGreaterThan(0);
+	for (const row of historyBody.data.rows) {
+		expect(row.state).toBe('known_failed');
+		expect(row.stateReasonCode).toBe('delivery.rejected_terminal');
+		expect(row.counts.accepted.value).toBe(0);
+		expect(row.counts.delivered.knowledge).toBe('not_supported');
+	}
+
+	// The un-notified indicator stays honestly un-notified: "notified" means
+	// the decision was communicated, its evidence is provider-accepted
+	// delivery, and with no provider activated no such evidence can exist —
+	// after a full reload the send door still counts this decision (as the
+	// pass banner or the finale's send button, whichever the pass renders).
+	await page.reload();
+	await expect(
+		page.getByRole('button', { name: /Compose notifications|decision notice/ }).first()
+	).toBeVisible();
 
 	// The spawned session is canonical program state: it appears in the
 	// schedule pool under the submission's own title, session identity served

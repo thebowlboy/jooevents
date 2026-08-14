@@ -2568,18 +2568,32 @@ export const api = {
 			await latency();
 			return profileFor(email);
 		},
-		async recordConfirmation(id: string): Promise<void> {
+		/**
+		 * Records an out-of-product confirmation, attributed to the organizer.
+		 * Refused when the engagement is not awaiting one, so a stale screen
+		 * reads the refusal instead of a silent no-op claiming success.
+		 */
+		async recordConfirmation(id: string): Promise<MutationOutcome> {
 			await latency();
 			const speaker = db.speakers.find((entry) => entry.id === id);
-			if (speaker && speaker.state === 'invited') speaker.state = 'confirmed';
-		},
-		async acceptCancellation(id: string): Promise<void> {
-			await latency();
-			const speaker = db.speakers.find((entry) => entry.id === id);
-			if (speaker && speaker.state === 'cancel_requested') {
-				speaker.state = 'cancelled';
-				db.summary.attention = db.summary.attention.filter((item) => item.id !== 'cancel-request');
+			if (!speaker) return { ok: false, reason: 'This speaker is no longer on the roster' };
+			if (speaker.state !== 'invited') {
+				return { ok: false, reason: 'This engagement is no longer awaiting confirmation' };
 			}
+			speaker.state = 'confirmed';
+			return { ok: true };
+		},
+		/** Accepts a recorded cancellation request; nothing is sent anywhere. */
+		async acceptCancellation(id: string): Promise<MutationOutcome> {
+			await latency();
+			const speaker = db.speakers.find((entry) => entry.id === id);
+			if (!speaker) return { ok: false, reason: 'This speaker is no longer on the roster' };
+			if (speaker.state !== 'cancel_requested') {
+				return { ok: false, reason: 'This engagement has no cancellation request to accept' };
+			}
+			speaker.state = 'cancelled';
+			db.summary.attention = db.summary.attention.filter((item) => item.id !== 'cancel-request');
+			return { ok: true };
 		}
 	},
 

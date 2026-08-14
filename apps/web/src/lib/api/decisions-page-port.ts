@@ -5,6 +5,7 @@ import type {
 	MessageReview,
 	MessageTemplate,
 	MyReviewItem,
+	NotificationDispatch,
 	ReviewPlan,
 	ScheduleState,
 	ScoreStanding,
@@ -57,7 +58,13 @@ export interface DecisionsPagePort {
 	readonly decisions: {
 		decide(ids: string[], decision: DecisionState): Promise<void>;
 		reviewNotification(ids: string[]): Promise<MessageReview>;
-		notify(ids: string[], subject: string): Promise<unknown>;
+		/**
+		 * Commits the reviewed notifications and states what that commit did.
+		 * The result is the surface's only source for the send's outcome: what
+		 * a provider accepted is a fact only the sending port holds, so the
+		 * page renders this record rather than echoing the count it asked for.
+		 */
+		notify(ids: string[], subject: string): Promise<NotificationDispatch>;
 	};
 	readonly communications: {
 		readiness(): Promise<EmailReadiness>;

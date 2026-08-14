@@ -18,11 +18,12 @@ const notEnabled = Object.freeze({
  * reaching for sample data.
  *
  * This is the degenerate zero-aggregate fixture, not a claim about the
- * current live mount: schedule, review_decisions (Review reads/drafts), and
- * their roster construct real live ports in `LiveWorkspaceComposition.svelte`
- * and render through `operator-page.live.svelte`. Only areas without a
- * mounted owner there (decisions, speakers, tasks, templates, embeds) still
- * resolve to the honest unavailable surface.
+ * current live mount: schedule, review_decisions (Review reads, drafts, and
+ * the decide loop), their roster, and speaker_operations (the engagement
+ * roster) construct real live ports in `LiveWorkspaceComposition.svelte` and
+ * render through `operator-page.live.svelte`. Only areas without a mounted
+ * owner there (tasks, templates, embeds) still resolve to the honest
+ * unavailable surface.
  */
 const capabilities = Object.freeze({
 	workspace_shell: notEnabled,

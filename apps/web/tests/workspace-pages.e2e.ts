@@ -37,6 +37,11 @@ for (const destination of destinations) {
 	});
 }
 
+// Sample-composition expectation, mode-scoped on purpose: task obligations
+// exist only in the sample fixture. The live Speakers page serves the honest
+// zero-task truth (no task system is mounted), so this list is empty there —
+// the live roster has its own joined smoke in speakers.joined-live.ts, and
+// this spec must not be ported into the joined suite as-is.
 test('the naughty list gathers every speaker who still owes tasks', async ({ page }) => {
 	await page.goto('/app/speakers');
 

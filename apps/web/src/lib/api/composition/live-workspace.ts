@@ -10,6 +10,7 @@ import type { ReviewPagePort } from '../review-page-port';
 import type { ReviewersPagePort } from '../reviewers-page-port';
 import type { SchedulePagePort } from '../schedule-page-port';
 import type { SettingsPagePort } from '../settings-page-port';
+import type { SpeakersPagePort } from '../speakers-page-port';
 import type { SubmissionsPagePort } from '../submissions-page-port';
 
 /** Authenticated inputs from which the live workspace composition is built. */
@@ -41,6 +42,8 @@ export interface LiveWorkspacePorts {
 	readonly review: () => Promise<ReviewPagePort>;
 	readonly reviewers: ReviewersPagePort;
 	readonly schedule: SchedulePagePort;
+	/** The tuned Speakers surface over the live engagement vertical. */
+	readonly speakers: SpeakersPagePort;
 }
 
 export const [useLiveWorkspacePorts, setLiveWorkspacePorts] = createContext<LiveWorkspacePorts>();

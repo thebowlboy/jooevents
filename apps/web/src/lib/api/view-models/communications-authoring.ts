@@ -4,15 +4,19 @@ import type {
 	OrganizerCommunicationDraftMutationResult,
 	OrganizerCommunicationDraftProjection,
 	organizerCommunicationDraftPageSchema,
+	OrganizerCommunicationHistoryPage,
 	OrganizerCommunicationPurposeDetail,
 	organizerCommunicationPurposePageSchema,
 	OrganizerCommunicationPurposeRevisionRef,
 	OrganizerMessageBatchPreviewDetail,
 	organizerMessagePreviewRecipientPageSchema,
 	OrganizerMessagePreviewIdentity,
+	organizerMessagePreviewSummarySchema,
 	OrganizerMessageTemplateDetail,
 	organizerMessageTemplatePageSchema,
-	OrganizerMessageTemplateRevisionRef
+	OrganizerMessageTemplateRevisionRef,
+	OrganizerPrepareMessagePreviewResult,
+	OrganizerSendMessagesResult
 } from '@jooevents/contracts';
 import type { z } from 'zod';
 
@@ -69,3 +73,15 @@ export type MessageBatchPreviewDetailView =
 export type MessagePreviewRecipientPageView = CommunicationView<
 	z.infer<typeof organizerMessagePreviewRecipientPageSchema>
 >;
+
+/** Step-one acknowledgment of the two-step adoption lane; nothing durable yet. */
+export type MessagePreviewPrepareView = CommunicationView<OrganizerPrepareMessagePreviewResult>;
+/** The adopted, immutable reviewed preview summary the send commit later pins. */
+export type MessagePreviewSummaryView = CommunicationView<
+	z.infer<typeof organizerMessagePreviewSummarySchema>
+>;
+/** Receipt-safe send commit result: counts and identity only, never an address. */
+export type SendMessagesResultView = CommunicationView<OrganizerSendMessagesResult>;
+/** Per-batch delivery history with live ledger-derived state counts. */
+export type CommunicationDeliveryHistoryPageView =
+	CommunicationView<OrganizerCommunicationHistoryPage>;

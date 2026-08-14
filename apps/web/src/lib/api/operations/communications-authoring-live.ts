@@ -9,6 +9,8 @@ import {
 	organizerCommunicationDraftMutationOperationResultSchema,
 	organizerCommunicationDraftOperationResultSchema,
 	organizerCommunicationDraftPageOperationResultSchema,
+	organizerCommunicationHistoryListInputSchema,
+	organizerCommunicationHistoryPageOperationResultSchema,
 	organizerCommunicationPurposeDetailOperationResultSchema,
 	organizerCommunicationPurposeGetInputSchema,
 	organizerCommunicationPurposeListInputSchema,
@@ -23,7 +25,12 @@ import {
 	organizerMessageTemplateGetInputSchema,
 	organizerMessageTemplateListInputSchema,
 	organizerMessageTemplatePageOperationResultSchema,
+	organizerPrepareMessagePreviewOperationResultSchema,
+	organizerPreviewMessageBatchInputSchema,
+	organizerPreviewMessageBatchOperationResultSchema,
 	organizerReviseCommunicationDraftInputSchema,
+	organizerSendMessagesInputSchema,
+	organizerSendMessagesOperationResultSchema,
 	organizerStoreAuthoringPayloadInputSchema,
 	type OperationReceiptRef,
 	type StructuredOutcome
@@ -40,15 +47,19 @@ import { requestJson, type ApiResult } from '../client';
 import {
 	mapCommunicationAudienceOptionPage,
 	mapCommunicationAuthoringPayloadRef,
+	mapCommunicationDeliveryHistoryPage,
 	mapCommunicationDraft,
 	mapCommunicationDraftMutation,
 	mapCommunicationDraftPage,
 	mapCommunicationPurposeDetail,
 	mapCommunicationPurposePage,
 	mapMessageBatchPreviewDetail,
+	mapMessagePreviewPrepare,
 	mapMessagePreviewRecipientPage,
+	mapMessagePreviewSummary,
 	mapMessageTemplateDetail,
-	mapMessageTemplatePage
+	mapMessageTemplatePage,
+	mapSendMessagesResult
 } from '../mappers/communications-authoring';
 import {
 	resolveOperatorHttpBinding,
@@ -121,6 +132,26 @@ export const COMMUNICATIONS_AUTHORING_OPERATIONS = Object.freeze({
 		name: 'list_message_preview_recipients', version: 1,
 		effect: 'read', method: 'GET', input: 'query', idempotencyRequired: false,
 		...ORGANIZER_COMMUNICATION_OPERATION_SCHEMA_REFS.listPreviewRecipients
+	},
+	prepareBatchPreview: {
+		name: 'prepare_message_batch_preview', version: 1,
+		effect: 'read', method: 'GET', input: 'query', idempotencyRequired: false,
+		...ORGANIZER_COMMUNICATION_OPERATION_SCHEMA_REFS.prepareBatchPreview
+	},
+	adoptBatchPreview: {
+		name: 'preview_message_batch', version: 1,
+		effect: 'draft', method: 'POST', input: 'body', idempotencyRequired: true,
+		...ORGANIZER_COMMUNICATION_OPERATION_SCHEMA_REFS.previewBatch
+	},
+	sendMessages: {
+		name: 'send_messages', version: 1,
+		effect: 'commit', method: 'POST', input: 'body', idempotencyRequired: true,
+		...ORGANIZER_COMMUNICATION_OPERATION_SCHEMA_REFS.sendMessages
+	},
+	getDeliveryHistory: {
+		name: 'get_delivery_history', version: 1,
+		effect: 'read', method: 'GET', input: 'query', idempotencyRequired: false,
+		...ORGANIZER_COMMUNICATION_OPERATION_SCHEMA_REFS.getHistory
 	}
 } as const satisfies Readonly<Record<string, ExpectedOperatorHttpOperation>>);
 
@@ -590,6 +621,79 @@ export function createCommunicationsAuthoringLivePort(input: {
 						(parsed.data.state === undefined || row.state === parsed.data.state)
 						&& (parsed.data.reasonCode === undefined
 							|| ('reasonCode' in row && row.reasonCode === parsed.data.reasonCode))),
+				...(options.signal ? { signal: options.signal } : {})
+			});
+		},
+
+		prepareBatchPreview(raw, options = {}) {
+			const parsed = organizerPreviewMessageBatchInputSchema.safeParse(raw);
+			if (!parsed.success) return Promise.resolve(invalidRequest());
+			return requestRead({
+				binding: bindings.prepareBatchPreview,
+				operation: 'prepare_message_batch_preview',
+				query: parsed.data,
+				request,
+				resultSchema: organizerPrepareMessagePreviewOperationResultSchema,
+				map: mapMessagePreviewPrepare,
+				guard: (prepared) => prepared.state === 'prepared'
+					&& prepared.draftId === parsed.data.draftId
+					&& prepared.draftVersion === parsed.data.expectedDraftVersion,
+				...(options.signal ? { signal: options.signal } : {})
+			});
+		},
+
+		adoptBatchPreview(raw, idempotencyKey, options = {}) {
+			const parsed = organizerPreviewMessageBatchInputSchema.safeParse(raw);
+			if (!parsed.success) return Promise.resolve(invalidRequest());
+			const operation = COMMUNICATIONS_AUTHORING_OPERATIONS.adoptBatchPreview;
+			return requestEffect({
+				binding: bindings.adoptBatchPreview,
+				operation: operation.name,
+				operationIdentity: operation,
+				body: parsed.data,
+				idempotencyKey,
+				request,
+				resultSchema: organizerPreviewMessageBatchOperationResultSchema,
+				map: mapMessagePreviewSummary,
+				guard: (summary) => summary.identity.draftId === parsed.data.draftId
+					&& summary.identity.draftVersion === parsed.data.expectedDraftVersion,
+				...(options.signal ? { signal: options.signal } : {})
+			});
+		},
+
+		sendMessages(raw, idempotencyKey, options = {}) {
+			const parsed = organizerSendMessagesInputSchema.safeParse(raw);
+			if (!parsed.success) return Promise.resolve(invalidRequest());
+			const operation = COMMUNICATIONS_AUTHORING_OPERATIONS.sendMessages;
+			return requestEffect({
+				binding: bindings.sendMessages,
+				operation: operation.name,
+				operationIdentity: operation,
+				body: parsed.data,
+				idempotencyKey,
+				request,
+				resultSchema: organizerSendMessagesOperationResultSchema,
+				map: mapSendMessagesResult,
+				guard: (result) => result.batchId === parsed.data.batchId
+					&& result.dispatchGeneration === 1,
+				...(options.signal ? { signal: options.signal } : {})
+			});
+		},
+
+		getDeliveryHistory(raw = {}, options = {}) {
+			const parsed = organizerCommunicationHistoryListInputSchema.safeParse(raw);
+			if (!parsed.success) return Promise.resolve(invalidRequest());
+			return requestRead({
+				binding: bindings.getDeliveryHistory,
+				operation: 'get_delivery_history',
+				query: parsed.data,
+				request,
+				resultSchema: organizerCommunicationHistoryPageOperationResultSchema,
+				map: mapCommunicationDeliveryHistoryPage,
+				guard: (page) => page.rows.every((row) =>
+					(parsed.data.state === undefined || row.state === parsed.data.state)
+					&& (parsed.data.messageRefId === undefined
+						|| row.messageRefId === parsed.data.messageRefId)),
 				...(options.signal ? { signal: options.signal } : {})
 			});
 		}
