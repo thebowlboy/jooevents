@@ -19,6 +19,7 @@
 		frameMinHeight,
 		loaderSnippet,
 		normalizeOrigin,
+		originRefusalCopy,
 		specRefusals,
 		standaloneUrl
 	} from './embed-snippet';
@@ -194,19 +195,21 @@
 	const code = $derived(spec ? embedSnippet(origin, spec, snippetTitle) : '');
 	const loader = $derived(loaderSnippet(origin));
 	const limitation = $derived(deliveryLimitation(delivery, styleMode));
-	const refusals = $derived(spec ? specRefusals(spec) : []);
+	const refusals = $derived(spec ? specRefusals(spec, allowedOrigins) : []);
 	const needsOrigins = $derived(target ? bindsOriginAllowlist({ kind: target.kind }) : false);
 
 	function addOrigin(event: SubmitEvent) {
 		event.preventDefault();
 		const normalized = normalizeOrigin(originDraft);
-		if (!normalized) {
-			originError = 'That is not a website address. Try something like conference.example.org.';
+		if (normalized.kind !== 'normalized') {
+			originError = originRefusalCopy(normalized.code);
 			return;
 		}
 		originError = '';
 		originDraft = '';
-		if (!allowedOrigins.includes(normalized)) allowedOrigins = [...allowedOrigins, normalized];
+		if (!allowedOrigins.includes(normalized.origin)) {
+			allowedOrigins = [...allowedOrigins, normalized.origin];
+		}
 	}
 
 	function removeOrigin(value: string) {
@@ -757,8 +760,8 @@
 					<section class="rail__group" aria-label="Where it may appear">
 						<h2 class="rail__title">Where it may appear</h2>
 						<p class="rail__line">
-							This one takes applications, so it only loads on sites you name. Everything else here
-							is read-only and can go anywhere.
+							An embed loads only on sites you name here — that is what keeps another page from
+							passing itself off as the event. The hosted page's own link works everywhere.
 						</p>
 						<form class="origins__form" onsubmit={addOrigin}>
 							<label class="ui-sr-only" for="embed-origin">Website address</label>

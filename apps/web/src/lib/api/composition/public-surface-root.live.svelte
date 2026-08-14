@@ -1,10 +1,14 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
+	import { setPublicSurfacePort } from '../public-surface-port';
+	import { createLivePublicSurfacePort } from '../public-surface-port.live';
 
 	let { children }: { children: Snippet } = $props();
+
+	// The anonymous public lane: three GET reads, no workspace or organizer
+	// authority context. Publication absence arrives as a typed outcome and
+	// renders as the page's own honest not-published state.
+	setPublicSurfacePort(createLivePublicSurfacePort());
 </script>
 
-<!-- Public reads and application effects are not activated in the ordinary live
-     composition. The child resolves to a live unavailable surface and therefore
-     needs no workspace or organizer authority context. -->
 {@render children()}

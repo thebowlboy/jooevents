@@ -97,6 +97,7 @@ function createFixture(): void {
 	write('app/schedule.html', '<link href="../_app/immutable/assets/operator.css" rel="stylesheet">');
 	write('bowlboy.ico');
 	write('_app/version.json', '{"version":"fixture"}');
+	write('embed/v1/joo-embed.js', '(function(){})();');
 	for (const entry of Object.values(clientManifest)) {
 		write(entry.file);
 		for (const path of [...(entry.css ?? []), ...(entry.assets ?? [])]) write(path);
@@ -144,6 +145,7 @@ describe('live application build identity producer', () => {
 			'_app/version.json',
 			'app.html',
 			'bowlboy.ico',
+			'embed/v1/joo-embed.js',
 			'index.html',
 			'portal.html',
 			'sign-in.html'

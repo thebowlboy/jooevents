@@ -210,6 +210,10 @@ export function collectLiveApplicationDependencyClosure(input: {
 	}
 
 	if (existsSync(join(root, '_app/version.json'))) paths.add('_app/version.json');
+	// The embed loader is a served runtime requirement, referenced only by
+	// snippets pasted on other people's sites — no application HTML imports
+	// it, so the reference walk cannot discover it.
+	if (existsSync(join(root, 'embed/v1/joo-embed.js'))) paths.add('embed/v1/joo-embed.js');
 
 	const visitedManifestKeys = new Set<string>();
 	while (pendingManifestKeys.length > 0) {

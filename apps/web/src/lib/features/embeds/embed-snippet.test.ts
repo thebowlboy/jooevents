@@ -7,6 +7,7 @@ import {
 	frameMinHeight,
 	loaderSnippet,
 	normalizeOrigin,
+	originRefusalCopy,
 	parseScope,
 	serializeScope,
 	specRefusals,
@@ -188,27 +189,47 @@ describe('what a delivery cannot do is said before it is chosen', () => {
 });
 
 describe('origin allowlist', () => {
-	test('only a surface that accepts submissions binds one', () => {
+	test('every embed kind binds the allowlist: framing is allowlist-only', () => {
 		expect(bindsOriginAllowlist({ kind: 'application-form' })).toBe(true);
-		expect(bindsOriginAllowlist({ kind: 'speaker-roster' })).toBe(false);
-		expect(bindsOriginAllowlist({ kind: 'schedule' })).toBe(false);
+		expect(bindsOriginAllowlist({ kind: 'speaker-roster' })).toBe(true);
+		expect(bindsOriginAllowlist({ kind: 'schedule' })).toBe(true);
 	});
 
-	test('a form embed with no named site is refused; a roster embed is not', () => {
-		expect(specRefusals(spec({ kind: 'application-form' }))).toHaveLength(1);
-		expect(specRefusals(spec({ kind: 'application-form', allowedOrigins: ['https://a.example'] }))).toEqual([]);
-		expect(specRefusals(spec())).toEqual([]);
+	test('an empty surface allowlist refuses every kind; a named site readies it', () => {
+		expect(specRefusals(spec({ kind: 'application-form' }), [])).toHaveLength(1);
+		expect(specRefusals(spec({ kind: 'application-form' }), ['https://a.example'])).toEqual([]);
+		expect(specRefusals(spec(), [])).toHaveLength(1);
+		expect(specRefusals(spec(), ['https://a.example'])).toEqual([]);
 	});
 
-	test('an origin normalizes to scheme and host, and nothing else', () => {
-		expect(normalizeOrigin('conf.example.org')).toBe('https://conf.example.org');
-		expect(normalizeOrigin('  https://conf.example.org/speakers?x=1  ')).toBe('https://conf.example.org');
-		expect(normalizeOrigin('http://localhost:5176/anything')).toBe('http://localhost:5176');
+	test('an origin normalizes to scheme and host through the contract normalizer', () => {
+		expect(normalizeOrigin('conf.example.org')).toEqual({
+			kind: 'normalized',
+			origin: 'https://conf.example.org'
+		});
+		// Behavioral tightening over the old local helper: a path or query is no
+		// longer silently truncated — it refuses in place, matching the served
+		// frame-ancestors policy's own refusals.
+		expect(normalizeOrigin('  https://conf.example.org/speakers?x=1  ').kind).toBe('refused');
 	});
 
-	test('a value that is not an origin is refused rather than stored as decoration', () => {
-		for (const bad of ['', '   ', 'not a host', 'javascript:alert(1)', 'ftp://files.example.org']) {
-			expect(normalizeOrigin(bad)).toBeNull();
+	test('a value that is not an origin is refused with actionable copy', () => {
+		for (const bad of [
+			'',
+			'   ',
+			'not a host',
+			'javascript:alert(1)',
+			'ftp://files.example.org',
+			'https://evil.example;x',
+			'https://*.example.com'
+		]) {
+			const result = normalizeOrigin(bad);
+			expect(result.kind).toBe('refused');
+			if (result.kind === 'refused') {
+				expect(originRefusalCopy(result.code).length).toBeGreaterThan(0);
+			}
 		}
+		const forbidden = normalizeOrigin('https://evil.example;x');
+		expect(forbidden).toEqual({ kind: 'refused', code: 'hostname_forbidden_characters' });
 	});
 });

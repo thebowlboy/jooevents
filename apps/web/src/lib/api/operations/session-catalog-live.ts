@@ -152,6 +152,21 @@ function draftMatchesRequest(draft: SessionDraftData, request: SessionAuthorInpu
 				? diff.after.programTarget.track === null
 				: diff.after.programTarget.track?.id === request.trackId);
 	}
+	if (request.action === 'roster_visibility') {
+		return diff.before !== null
+			&& diff.after !== null
+			&& diff.before.id === request.sessionId
+			&& diff.before.version === request.expectedSessionVersion
+			&& diff.before.digestSha256 === request.expectedSessionDigestSha256
+			&& diff.after.id === diff.before.id
+			&& diff.after.version === diff.before.version + 1
+			&& diff.after.lifecycle === diff.before.lifecycle
+			&& diff.after.roster.participants.some(
+				(participant) =>
+					participant.personId === request.personId
+					&& participant.publiclyVisible === request.publiclyVisible
+			);
+	}
 	return diff.before !== null
 		&& diff.after !== null
 		&& diff.before.id === request.sessionId

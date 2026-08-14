@@ -41,11 +41,12 @@ export interface SessionChangeSelectorView {
 /**
  * One authored Session change after its draft was proposed and committed
  * through the generic changeset lifecycle. `session` is the committed after
- * image the reviewed safe diff stated; only `create` and `transition` cross
- * the web boundary ('restore' is internal compensation).
+ * image the reviewed safe diff stated; `create`, `transition`, and
+ * `roster_visibility` cross the web boundary ('restore' is internal
+ * compensation).
  */
 export interface SessionChangeCommittedView {
-	readonly action: 'create' | 'transition';
+	readonly action: 'create' | 'transition' | 'roster_visibility';
 	readonly selector: SessionChangeSelectorView;
 	readonly changesetHead: {
 		readonly proposedVersion: number;

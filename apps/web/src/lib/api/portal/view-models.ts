@@ -196,7 +196,11 @@ export type PortalRefusalReason =
 	| 'task_not_actionable'
 	| 'task_closed'
 	| 'field_locked'
-	| 'field_editable';
+	| 'field_editable'
+	/** Typed absence: this act is not served on the participant lane yet. */
+	| 'portal_not_served'
+	/** No trustworthy server answer exists (transport failure or an outcome outside this vocabulary). */
+	| 'request_unconfirmed';
 
 export type PortalMutationOutcome<Data> =
 	| { readonly ok: true; readonly data: Data }

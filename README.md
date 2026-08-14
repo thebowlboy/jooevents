@@ -1,52 +1,148 @@
+<p align="center">
+  <img src="apps/splash-worker/public/assets/jooevents-wordmark.png" width="384" height="68" alt="JooEvents">
+</p>
+
 # JooEvents
 
-JooEvents is a source-available event-operations application for scheduling, speaker
-submissions, speaker coordination, and communications.
+## Manage as little as possible.
 
-The product is being built around:
+JooEvents is event management for people who would prefer not to spend their days
+managing an event. It is being built to handle the work between putting up a Call for
+Speakers and putting the programme on your website: submissions, review, decisions,
+speaker tasks, scheduling, communications, and publishing.
 
-- an interactive Svelte interface for organizers and reviewers;
-- public schedules and speaker-application forms that can also be embedded;
-- Google identity with workspace approval and granular roles/permissions;
-- portable self-hosted and Cloudflare deployment paths;
-- optional Airtable synchronization without making Airtable the canonical database;
-- a secured MCP interface through which authorized agents can use the same application
-  operations as human users.
+Proposals arrive, get sorted and scored. Speakers get chased for their headshots. The
+schedule gets built and the programme lands on your website. Your part is the yes, the
+no, and a look before anything leaves.
 
-## Status
+[See how it works](https://jooevents.com) ·
+[Open the browser demo](https://jooevents-demo.joocorp.com/app)
 
-JooEvents is pre-release and is not yet ready for production event data. Supported
-installation, upgrade, operator, integration, and API documentation will be published
-with the capabilities they describe. Security reports are welcome now — see
-[SECURITY.md](SECURITY.md).
+## What is in the repository
 
-The current browser-only sample can be deployed as a public or Cloudflare Access-gated
-demo without configuring a database, login provider, or email service. See
-[Deploy the sample demo to Cloudflare](docs/operator/cloudflare-demo.md). This is a
-product tour, not a production installation.
+- The organizer, reviewer, participant, and public event surfaces.
+- The application operations, persistence contracts, migrations, and tests needed to
+  build and verify the released app.
+- A secured MCP surface through which authorized agents use the same permission-checked
+  operations as people do.
+
+Agent-proposed consequential changes remain proposals until a person reviews and
+commits them. Ordinary controls remain available; using an agent is a choice, not an
+entrance fee.
+
+## Production direction
+
+JooEvents is being completed first as a single-machine Bun and SQLite application. The
+production shape puts the web interface, HTTP API, authentication, application
+operations, database, files, and background work in one service on one origin.
+Cloudflare remains a later production target through the same application boundaries;
+it is not required for the first production release.
+
+### Where the SQLite path stands
+
+The single-machine path is substantially implemented. The repository already contains:
+
+- a production-mode Bun server that serves the built application and reserved backend
+  routes on one origin;
+- a retained SQLite migration ledger with schema validation, process ownership, and
+  startup refusal when the database is not safe to open;
+- Google authentication, bootstrap-owner creation, admission, sessions, and current
+  access checks over retained SQLite;
+- offline verified backup and restore-rehearsal commands; and
+- SQLite repositories and reviewed change operations across events, forms,
+  submissions, review, decisions, speakers, scheduling, publishing, and communications.
+
+The remaining line is composition rather than a restart. The configured retained
+runtime currently mounts the identity and admission slice. The broader event workflow
+runs as one joined SQLite application in the development/test runtime, but its domain
+schemas and operations still need to be promoted into the retained migration chain and
+mounted in the configured server. Files, outbound delivery, operational packaging,
+and an end-to-end recovery rehearsal also need their production checkpoints.
+
+JooEvents is therefore pre-release and **not ready for production event data yet**. It
+is close enough that the SQLite production work is the main story here; it is not close
+enough to suggest putting an actual attendee list into it. Supported installation and
+upgrade instructions will be published when that retained composition is verified end
+to end.
+
+The Cloudflare production composition—Worker, D1, R2, Queues, Cron, application auth,
+and outbound email—comes after the single-machine release. Its adapters and boundaries
+are being kept portable, but that composition is not deployable today.
+
+## Build and inspect
+
+The repository uses Bun 1.3.6. From its root:
+
+```sh
+bun install --frozen-lockfile
+bun run check
+bun test
+bun run build
+```
+
+For local product development:
+
+```sh
+bun run dev
+```
+
+The current development UI uses synthetic sample data. It is useful for inspecting the
+product while the retained runtime composition is completed; it is not the production
+storage path.
+
+## Demo
+
+The hosted browser demo is a disposable product tour. It has no database, email
+delivery, shared persistence, or external model calls. Most changes reset when the page
+reloads.
+
+[Open the demo](https://jooevents-demo.joocorp.com/app) or deploy a copy to your own
+Cloudflare account:
+
+```sh
+bun run demo:setup
+```
+
+The demo CLI builds and checks the sample, performs a Wrangler dry run, verifies the
+Cloudflare account, and asks again before creating or updating a public Worker. Inspect
+the complete plan without running it:
+
+```sh
+bun run demo:setup -- --provider cloudflare --plan
+```
+
+The CLI has no credential field. Wrangler handles authentication in the browser, and
+the CLI never asks for a token or password. The provider boundary is ready for later
+targets, while the unqualified `setup` command remains reserved for a real production
+installer.
+
+Read [Install the browser sample](docs/installation/browser-sample.md) for the guided,
+manual, and LLM-assisted demo paths.
 
 ## License
 
-Except where noted otherwise, JooEvents source code, public documentation, and
-first-party artwork in this repository—including the included Bowlboy artwork—are
-available under the [JooEvents Community and Small Organization License](LICENSE).
-It permits free personal, community, and qualifying small-organization use,
-along with public forks. Larger organizations receive a notice-first courtesy
-period for their own production use, while commercial resale remains reserved
-for a separate license.
+Except where noted otherwise, the source code, public documentation, and first-party
+artwork in this repository—including Bowlboy—are available under the
+[JooEvents Community and Small Organization License](LICENSE).
 
-Read the friendly [licensing overview](docs/reference/licensing.md) for the
-thresholds, fork rights, commercial approach, and why Apache License 2.0
-remains under consideration. Third-party components remain under their
-respective licenses.
+It permits free personal, community, and qualifying small-organization use, along with
+public forks. Larger organizations can begin their own internal use under a
+notice-first courtesy period. Selling, white-labelling, hosting, or embedding
+substantial JooEvents functionality requires a separate commercial license.
 
-See [NOTICE](NOTICE) for attribution notices. The copyright license does not grant
-permission to use JooEvents or Bowlboy as trademarks or to imply endorsement; see the
-[trademark policy](TRADEMARKS.md).
+Pricing is intentionally not posted yet. Contact [bowlboy@joocorp.com](mailto:bowlboy@joocorp.com)
+and we can work out something reasonable, including royalties where that fits. I am
+starting with these terms to keep my options open while the project is young, and I am
+still considering Apache License 2.0 later.
+
+The [friendly licensing overview](docs/reference/licensing.md) explains the thresholds,
+fork rights, commercial use, and courtesy period. See [NOTICE](NOTICE) for attribution
+and the [trademark policy](TRADEMARKS.md) for use of the JooEvents and Bowlboy marks.
 
 ## Maintainer
 
 JooEvents is a Bowlboy project, published by JooCorp Private Limited.
 
-Follow along on X at [@thebowlboy](https://x.com/thebowlboy), or on GitHub at
-[thebowlboy](https://github.com/thebowlboy).
+Follow [@thebowlboy](https://x.com/thebowlboy) or
+[thebowlboy on GitHub](https://github.com/thebowlboy). Security reports are welcome;
+see [SECURITY.md](SECURITY.md).

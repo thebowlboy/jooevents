@@ -36,7 +36,7 @@ export const participantLinkFailureCopy: Record<
 > = {
   link_expired: { heading: 'That link has expired', body: 'Links are short-lived for your safety. Enter your email to get a fresh one.' },
   link_used: { heading: 'That link was already used', body: 'Each link works once. Enter your email to get a fresh one.' },
-  link_invalid: { heading: "That link didn't work", body: 'It may have been cut short by your email app. Enter your email to get a fresh one.' }
+  link_invalid: { heading: 'That link is no longer valid', body: 'Requesting a new link replaces the old one, and an email app can also cut a link short. Enter your email to get a fresh one.' }
 };
 
 /** Expected refusals keep their own copy; nothing here echoes server text. */

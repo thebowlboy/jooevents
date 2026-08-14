@@ -2,6 +2,7 @@
   import { Alert, Button, CopyValue, Field } from '$lib/ui';
   import { RefreshCw } from 'lucide-svelte';
   import EntryGlyph from '$lib/features/access/components/EntryGlyph.svelte';
+  import PortalDevIssuedLink from './PortalDevIssuedLink.svelte';
   import type { ParticipantEntryState } from '../ParticipantEntryController';
   import {
     participantEntryCopy,
@@ -30,6 +31,10 @@
 
   let form = $derived(formView(state));
   const showDevLink = import.meta.env.DEV && import.meta.env.MODE !== 'live';
+  /* A live-dev build has a real ceremony and a dev-only delivery control: the
+     affordance opens the actually issued link (its own component keeps every
+     production bundle path inert). */
+  const showLiveDevLink = import.meta.env.DEV && import.meta.env.MODE === 'live';
 </script>
 
 <div class="entry-state entry-state--portal" aria-live={state.kind === 'resolving' || state.kind === 'completing' ? 'polite' : 'off'}>
@@ -88,6 +93,9 @@
     <button type="button" class="entry-secondary" onclick={onDifferentAddress}>{participantEntryCopy.differentAddress}</button>
     {#if showDevLink}
       <a class="entry-secondary" href="/portal/auth/complete?token=sample" data-dev-link>Open the emailed link (sample data)</a>
+    {/if}
+    {#if showLiveDevLink}
+      <PortalDevIssuedLink email={state.email} />
     {/if}
   {:else if state.kind === 'callback_error'}
     {@const copy = participantLinkFailureCopy[state.outcome]}

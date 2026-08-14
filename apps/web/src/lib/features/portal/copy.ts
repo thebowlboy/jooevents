@@ -147,7 +147,11 @@ export const refusalCopy: Record<PortalRefusalReason, string> = {
 	task_not_actionable: 'This task has already been dealt with.',
 	task_closed: 'The deadline for this task has passed and it no longer accepts anything.',
 	field_locked: 'Only the organizers can change this.',
-	field_editable: 'This one is yours to edit — no request is needed.'
+	field_editable: 'This one is yours to edit — no request is needed.',
+	portal_not_served:
+		'This doesn’t go through here yet. Email the organizers and they can make the change for you.',
+	request_unconfirmed:
+		'We couldn’t confirm what happened to this. Reload to see where things stand, and try again if it’s still open.'
 };
 
 /** Why a submitted record cannot be corrected, said before anyone tries. */

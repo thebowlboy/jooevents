@@ -11,16 +11,33 @@ const securityHeaders = {
   'X-Frame-Options': 'DENY'
 };
 
+// Dev/preview parity with the production embed slice: `/embed/*` documents may
+// carry a configured dev framing allowlist so an embed is testable in dev,
+// while every other HTML document keeps the deny pair. The value mirrors a
+// `frame-ancestors` source list; unset means deny-all, exactly like an event
+// whose surface names no allowed sites.
+const devEmbedFrameAncestors =
+  process.env.JOOEVENTS_DEV_EMBED_FRAME_ANCESTORS?.trim() || "'none'";
+
+const embedSecurityHeaders = {
+  'Cache-Control': 'no-store, max-age=0',
+  'Content-Security-Policy': `frame-ancestors ${devEmbedFrameAncestors}`,
+  'Referrer-Policy': 'no-referrer',
+  ...(devEmbedFrameAncestors === "'none'" ? { 'X-Frame-Options': 'DENY' } : {})
+};
+
 // Documents get the full auth security treatment including no-store. Modules,
 // assets, and fonts must remain cacheable or every navigation re-downloads the
 // whole dev/preview module graph on each load.
 const applySecurityHeaders = (
-  request: { headers: { accept?: string } },
+  request: { url?: string; headers: { accept?: string } },
   response: { setHeader(name: string, value: string): void },
   next: () => void
 ) => {
   if (request.headers.accept?.includes('text/html')) {
-    for (const [name, value] of Object.entries(securityHeaders)) response.setHeader(name, value);
+    const pathname = (request.url ?? '').split('?')[0] ?? '';
+    const headers = /^\/embed(\/|$)/.test(pathname) ? embedSecurityHeaders : securityHeaders;
+    for (const [name, value] of Object.entries(headers)) response.setHeader(name, value);
   }
   next();
 };

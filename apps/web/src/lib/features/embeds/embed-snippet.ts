@@ -1,3 +1,11 @@
+import {
+	EMBED_ELEMENT_TAG,
+	EMBED_FRAME_MIN_HEIGHT_PX,
+	EMBED_LOADER_PATH,
+	normalizeEmbedFrameOrigin,
+	type EmbedFrameOriginNormalization,
+	type EmbedFrameOriginRefusalCode
+} from '@jooevents/contracts';
 import type {
 	EmbedDelivery,
 	EmbedScope,
@@ -51,9 +59,9 @@ const ROUTE: Record<SurfaceKind, string> = {
 	'application-form': 'apply'
 };
 
-/** The custom element's tag, and the one script that defines it. */
-export const EMBED_TAG = 'joo-embed';
-export const LOADER_PATH = '/embed/v1/joo-embed.js';
+/** The custom element's tag, and the one script that defines it — the contract's own constants. */
+export const EMBED_TAG = EMBED_ELEMENT_TAG;
+export const LOADER_PATH = EMBED_LOADER_PATH;
 
 /**
  * A scope as one attribute value: `all`, or `kind:id`. Flat on purpose — it has
@@ -167,9 +175,9 @@ function elementSnippet(origin: string, spec: EmbedSpec): string {
  * of the two only the first loses information.
  */
 const FRAME_MIN_HEIGHT: Record<SurfaceKind, number> = {
-	schedule: 720,
-	'speaker-roster': 640,
-	'application-form': 900
+	schedule: EMBED_FRAME_MIN_HEIGHT_PX.schedule,
+	'speaker-roster': EMBED_FRAME_MIN_HEIGHT_PX.speakers,
+	'application-form': EMBED_FRAME_MIN_HEIGHT_PX.apply
 };
 
 /** A single speaker's card is a fraction of a roster and says so in its height. */
@@ -214,52 +222,70 @@ export function deliveryLimitation(delivery: EmbedDelivery, style: EmbedStyleMod
 }
 
 /**
- * True when this surface accepts submissions and therefore binds an origin
- * allowlist. Stated once, here, because both the refusal below and the editor's
- * copy have to agree about which embeds carry the obligation.
+ * True when this surface binds an origin allowlist before it can be framed.
+ * Every embed kind does: framing is allowlist-only for the whole product — an
+ * empty list means the served page denies all framing — so the snippet builder
+ * and the response policy agree about the obligation.
  */
-export function bindsOriginAllowlist(spec: Pick<EmbedSpec, 'kind'>): boolean {
-	return spec.kind === 'application-form';
+export function bindsOriginAllowlist(_spec: Pick<EmbedSpec, 'kind'>): boolean {
+	return true;
 }
 
 /**
- * What still stands between this spec and a site, in the terms an organizer can
- * act on. Empty means ready.
+ * What still stands between this spec and a site, in the terms an organizer
+ * can act on. Empty means ready.
  *
- * The origin allowlist is the one rule here that is not advice: a surface that
- * accepts submissions must name the sites allowed to frame it, or the same form
- * can be framed by a page impersonating the event.
+ * The origin allowlist is the one rule here that is not advice, and it is the
+ * surface's own configured list — the same fact the served `frame-ancestors`
+ * policy derives from — never a per-snippet decoration: an embed pasted on an
+ * unnamed site simply refuses to load.
  */
-export function specRefusals(spec: EmbedSpec): string[] {
+export function specRefusals(
+	spec: EmbedSpec,
+	surfaceAllowedOrigins: readonly string[]
+): string[] {
 	const refusals: string[] = [];
-	if (bindsOriginAllowlist(spec) && spec.allowedOrigins.length === 0) {
-		refusals.push('Name at least one site before this form can be embedded anywhere.');
+	if (bindsOriginAllowlist(spec) && surfaceAllowedOrigins.length === 0) {
+		refusals.push(
+			spec.kind === 'application-form'
+				? 'Name at least one site before this form can be embedded anywhere.'
+				: 'Name at least one site before this can be embedded anywhere.'
+		);
 	}
 	return refusals;
 }
 
 /**
- * An origin as the allowlist stores it: scheme and host, nothing else. Paths,
- * query, and credentials are not part of an origin, and a value carrying them
- * would be a rule that never matches. Returns null for anything unparseable, so
- * the caller can refuse in place rather than storing a decoration.
+ * An origin as the allowlist stores it: scheme and host, nothing else — the
+ * contract's own normalizer, so the builder refuses exactly what the served
+ * `frame-ancestors` policy would refuse. Paths, queries, fragments,
+ * credentials, wildcards, and header-unserializable host characters refuse in
+ * place rather than being truncated into a rule that never matches.
  */
-export function normalizeOrigin(input: string): string | null {
-	const trimmed = input.trim();
-	if (!trimmed) return null;
-	const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-	let url: URL;
-	try {
-		url = new URL(withScheme);
-	} catch {
-		return null;
-	}
-	if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
-	if (!url.hostname || !url.hostname.includes('.')) {
-		// `localhost` is the one hostname without a dot worth allowing.
-		if (url.hostname !== 'localhost') return null;
-	}
-	return url.origin;
+export function normalizeOrigin(input: string): EmbedFrameOriginNormalization {
+	return normalizeEmbedFrameOrigin(input);
+}
+
+/**
+ * The organizer-facing sentence for each origin refusal, in terms they can
+ * act on. Exhaustive over the contract's refusal codes so a new code fails
+ * the compile here rather than rendering an empty error.
+ */
+const ORIGIN_REFUSAL_COPY: Readonly<Record<EmbedFrameOriginRefusalCode, string>> = Object.freeze({
+	empty: 'Enter a website address, like conference.example.org.',
+	not_an_origin: 'That is not a website address. Try something like conference.example.org.',
+	unsupported_scheme: 'Only web addresses (http or https) can host this embed.',
+	credentials_present: 'A site address never carries a username or password.',
+	path_present: 'Name just the site itself — without a path. Try conference.example.org.',
+	query_present: 'Name just the site itself — without a query. Try conference.example.org.',
+	fragment_present: 'Name just the site itself — without a fragment. Try conference.example.org.',
+	wildcard_host: 'Name each site exactly — wildcards cannot be allowed.',
+	hostname_forbidden_characters: 'That address contains characters a site origin cannot carry.',
+	hostname_unqualified: 'Use the site’s full address, like conference.example.org.'
+});
+
+export function originRefusalCopy(code: EmbedFrameOriginRefusalCode): string {
+	return ORIGIN_REFUSAL_COPY[code];
 }
 
 /** Trailing slashes make `${origin}/embed` read as `//embed`; strip them once, here. */

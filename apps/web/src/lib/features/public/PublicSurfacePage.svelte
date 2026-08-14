@@ -4,7 +4,7 @@
 	import ScheduleSurfaceRender from '$lib/features/templates/ScheduleSurfaceRender.svelte';
 	import FormSurfaceRender from '$lib/features/templates/FormSurfaceRender.svelte';
 	import RosterSurfaceRender from '$lib/features/templates/RosterSurfaceRender.svelte';
-	import { useWorkspaceGateway } from '$lib/api/workspace-gateway';
+	import { usePublicSurfacePort } from '$lib/api/public-surface-port';
 	import { applyFormLens } from '$lib/api/fields';
 	import { parseScope } from '$lib/features/embeds/embed-snippet';
 	import { themeStyleProperties } from '$lib/theme/theme-contract';
@@ -41,7 +41,7 @@
 
 	let { kind }: Props = $props();
 
-	const { api } = useWorkspaceGateway();
+	const api = usePublicSurfacePort();
 
 	/** The slice this address shows, in the same closed vocabulary an embed uses. */
 	const scope = $derived<EmbedScope>(parseScope(page.url.searchParams.get('scope')));

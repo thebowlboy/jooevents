@@ -243,20 +243,31 @@ test('an address that names no surface is a plain not-found, and stays out of se
 	await expect(page.locator('meta[name="robots"]')).toHaveAttribute('content', 'noindex, nofollow');
 });
 
-test('a form embed is refused until a site is named; a read-only one never is', async ({ page }) => {
+test('every embed is refused until a site is named — framing is allowlist-only', async ({
+	page
+}) => {
+	// Read-only surfaces bind the allowlist too: an empty list means the served
+	// document denies all framing, so the builder says so before pasting.
 	await openEmbed(page, 'srf-speaker-roster', 'The whole lineup');
-	await expect(page.locator('.rail__error')).toHaveCount(0);
-	await expect(page.getByRole('region', { name: 'Where it may appear' })).toHaveCount(0);
+	const where = page.getByRole('region', { name: 'Where it may appear' });
+	await expect(where).toBeVisible();
+	await expect(page.locator('.rail__error')).toContainText('Name at least one site');
 
 	await openEmbed(page, 'srf-application-form%3Aform%3Aform-cfp', 'Call for Proposals');
-	const where = page.getByRole('region', { name: 'Where it may appear' });
 	await expect(where).toBeVisible();
 	await expect(page.locator('.rail__error')).toContainText('Name at least one site');
 
 	// A value that is not an origin is refused in place rather than stored.
 	await where.getByRole('textbox').fill('not a website');
 	await where.getByRole('button', { name: 'Add' }).click();
-	await expect(page.locator('.rail__error').first()).toContainText('not a website address');
+	await expect(page.locator('.rail__error').first()).toContainText(
+		'characters a site origin cannot carry'
+	);
+
+	// A path is no longer silently truncated: it refuses in place too.
+	await where.getByRole('textbox').fill('conference.example.org/speakers');
+	await where.getByRole('button', { name: 'Add' }).click();
+	await expect(page.locator('.rail__error').first()).toContainText('without a path');
 
 	// A bare host normalizes to a real origin, and the refusal clears.
 	await where.getByRole('textbox').fill('conference.example.org');
