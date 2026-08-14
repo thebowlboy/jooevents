@@ -287,7 +287,13 @@ function rawMembers(sqlite: Database, workspaceId: WorkspaceId): readonly Worksp
      WHERE m.workspace_id = ? AND m.status IN ('active', 'pending_review')
      ORDER BY m.id COLLATE BINARY
   `).all(workspaceId);
-  return Object.freeze(rows.map((row) => {
+  return Object.freeze(rows.flatMap((row) => {
+    // Open admission records a pending_review membership with no workspace role
+    // assignment; it joins the Team aggregate when approval assigns its role.
+    // Only an admitted state without exactly one usable primary role is corrupt.
+    if (row.membership_status === 'pending_review' && row.workspace_assignment_count === 0) {
+      return [];
+    }
     if (!row.assignment_id || !row.assignment_version || !row.role_id || !row.role_key
         || row.role_preset_version !== 1 || row.workspace_assignment_count !== 1) {
       throw new SQLiteWorkspaceTeamError('team_data_corrupt');

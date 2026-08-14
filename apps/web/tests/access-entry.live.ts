@@ -81,6 +81,38 @@ test('a refused magic-link request keeps the address and states the reason', asy
   await expect(page.getByRole('heading', { name: 'Check your email' })).toBeVisible();
 });
 
+test('provisioning is a compact box with a real support code, not a pre-reserved blank', async ({ page }, testInfo) => {
+  // Owner direction 2026-08-14: no state pre-reserves height for the
+  // error/retry block; the box is as tall as its content and grows downward
+  // only when recovery content actually appears.
+  await page.route('**/api/me/access-context', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ state: 'provisioning', retryAfterSeconds: 30, correlationId: 'corr_provisioning' })
+  }));
+  await page.goto('/');
+  await expect(page).toHaveURL('/auth/complete');
+  await expect(page.getByRole('heading', { name: 'Preparing your workspace' })).toBeVisible();
+  await expect(page.getByText(/corr_provisioning/)).toBeVisible();
+  const footprint = await page.locator('.entry-state').evaluate((state) => {
+    const box = state.getBoundingClientRect();
+    const lastChildBottom = [...state.children].reduce(
+      (deepest, child) => Math.max(deepest, child.getBoundingClientRect().bottom),
+      box.top
+    );
+    return {
+      reserved: state.classList.contains('entry-state--reserved'),
+      minBlockSize: getComputedStyle(state).minBlockSize,
+      trailingBlank: box.bottom - lastChildBottom
+    };
+  });
+  expect(footprint.reserved).toBe(false);
+  expect(['0px', 'auto']).toContain(footprint.minBlockSize);
+  // On a narrow viewport the panel is the page and the state stretches to
+  // center its content; only the desktop card owns the compact-box geometry.
+  if (testInfo.project.name === 'desktop') expect(footprint.trailingBlank).toBeLessThan(4);
+});
+
 test('a malformed or failed context remains a recoverable connection problem', async ({ page }) => {
   await page.route('**/api/me/access-context', (route) => route.fulfill({
     status: 502,

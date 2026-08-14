@@ -53,6 +53,36 @@ test('active context is navigation and not a rendered entry state', async () => 
   instance.dispose();
 });
 
+test('a served pending_review context rests on the pending surface without a poll loop', async () => {
+  const pending: AccessContext = { state: 'pending_review', user: { id: 'user_ada', displayName: 'Ada' }, membership: { id: 'membership_ada', workspaceId: 'workspace_summit', status: 'pending_review', version: 1 }, workspace: { id: 'workspace_summit', name: 'Summit Operations' } };
+  let requestCount = 0;
+  const navigations: Array<[string, boolean]> = [];
+  const instance = new AccessEntryController({
+    getContext: async () => {
+      requestCount += 1;
+      return { kind: 'success', data: pending };
+    },
+    startGoogle: async () => ({ kind: 'error', error: { code: 'start_failed', retryable: true } }),
+    signOut: async () => ({ kind: 'error', error: { code: 'sign_out_failed', retryable: true } }),
+    requestSignInLink: async () => ({ kind: 'success', data: { outcome: 'link_requested' } }),
+    navigate: (path, replace) => { navigations.push([path, replace]); }
+  });
+  instance.setRoute({ path: '/auth/complete' });
+  await instance.resolve({ announceDelay: false });
+  expect(instance.state.kind).toBe('pending_review');
+  if (instance.state.kind === 'pending_review') {
+    expect(instance.state.workspace.name).toBe('Summit Operations');
+    expect(instance.state.checking).toBe(false);
+  }
+  expect(navigations).toEqual([['/access/pending', true]]);
+  // Pending is a resting state: no automatic re-fetch may be scheduled the way
+  // provisioning schedules one — the state must not turn into a refresh loop.
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  expect(requestCount).toBe(1);
+  expect(instance.state.kind).toBe('pending_review');
+  instance.dispose();
+});
+
 test('failed sign-out preserves the pending server-backed view', async () => {
   const pending: AccessContext = { state: 'pending_review', user: { id: 'user_ada', displayName: 'Ada' }, membership: { id: 'membership_ada', workspaceId: 'workspace_summit', status: 'pending_review', version: 1 }, workspace: { id: 'workspace_summit', name: 'Summit Operations' } };
   const { instance } = controller(pending);

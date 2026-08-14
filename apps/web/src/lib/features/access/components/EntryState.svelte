@@ -60,7 +60,13 @@
   );
 </script>
 
-<div class="entry-state" aria-live={state.kind === 'resolving' || state.kind === 'provisioning' ? 'polite' : 'off'}>
+<!-- Only the resolver and the resting card it becomes hold a shared footprint;
+     every other state is compact and grows downward when recovery content
+     appears (owner direction, 2026-08-14). -->
+<div
+  class="entry-state"
+  class:entry-state--reserved={state.kind === 'resolving' || surface?.kind === 'anonymous'}
+  aria-live={state.kind === 'resolving' || state.kind === 'provisioning' ? 'polite' : 'off'}>
   {#if state.kind === 'resolving'}
     <!-- Six fills for the six rows the resolved card has: heading, the named
          method group, its email field, the magic-link action, the provider
@@ -140,8 +146,10 @@
     <p>Your identity is verified. We are connecting it to your JooEvents access.</p>
     <div class="entry-progress" aria-label="Sign-in preparation in progress"><span></span></div>
     {#if state.delayed}
-      <Alert title="This is taking longer than expected" message="Your access has not changed. You can safely retry the check." tone="info" />
-      <Button variant="secondary" onclick={onRetry}><RefreshCw aria-hidden="true" /> Retry</Button>
+      <div class="entry-appear">
+        <Alert title="This is taking longer than expected" message="Your access has not changed. You can safely retry the check." tone="info" />
+        <Button variant="secondary" onclick={onRetry}><RefreshCw aria-hidden="true" /> Retry</Button>
+      </div>
     {/if}
     <p class="support">Support code: <CopyValue value={state.correlationId} label="support code" /></p>
   {:else if pending}
@@ -156,14 +164,14 @@
       {#if pending.user.primaryEmail}<span>{pending.user.primaryEmail}</span>{/if}
       <p>We'll email {pending.user.primaryEmail ? 'this address' : 'your signed-in address'} when your access is approved.</p>
     </div>
-    {#if state.kind === 'sign_out_error'}<Alert title="Sign-out could not finish" message="You are still signed in. Check your connection and try again." tone="danger" />{/if}
+    {#if state.kind === 'sign_out_error'}<div class="entry-appear"><Alert title="Sign-out could not finish" message="You are still signed in. Check your connection and try again." tone="danger" /></div>{/if}
     <div class="actions"><Button onclick={onCheck} loading={pending.checking}><RefreshCw aria-hidden="true" /> {pending.checking ? 'Checking status' : 'Check status'}</Button><Button variant="secondary" onclick={onSignOut}>Sign out</Button></div>
-    {#if pending.checkError}<Alert title="Couldn't check status" message="Your access has not changed. Check your connection and try again." tone="danger" />{/if}
+    {#if pending.checkError}<div class="entry-appear"><Alert title="Couldn't check status" message="Your access has not changed. Check your connection and try again." tone="danger" /></div>{/if}
   {:else if blocked}
     {@const copy = blockedCopy[blocked.code]}
     <h1 data-entry-heading tabindex="-1">{copy.heading}</h1>
     <p>{copy.body}</p>
-    {#if state.kind === 'sign_out_error'}<Alert title="Sign-out could not finish" message="You are still signed in. Check your connection and try again." tone="danger" />{/if}
+    {#if state.kind === 'sign_out_error'}<div class="entry-appear"><Alert title="Sign-out could not finish" message="You are still signed in. Check your connection and try again." tone="danger" /></div>{/if}
     <div class="actions"><Button variant="secondary" onclick={onSignOut}>{blocked.code === 'not_admitted' ? 'Use another Google account' : 'Sign out'}</Button></div>
     {#if state.kind === 'sign_out_error' && state.error.correlationId}<p class="support">Support code: <CopyValue value={state.error.correlationId} label="support code" /></p>{/if}
   {:else if state.kind === 'context_error'}

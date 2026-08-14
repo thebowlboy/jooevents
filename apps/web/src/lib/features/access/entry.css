@@ -41,8 +41,6 @@
   .entry-page--content .entry-panel {
     padding: clamp(var(--je-space-6), 4vw, var(--je-space-8));
   }
-  /* Multi-part states are read, not reserved: they are as tall as they are. */
-  .entry-page--content .entry-state { min-block-size: 0; }
   .entry-page--content .entry-state h1 { max-width: 28ch; }
 
   /* Identity lives on the page; the panel is only the task. */
@@ -98,8 +96,8 @@
     margin-block-start: var(--je-space-2);
   }
 
-  /* The reserve lives on the state, not on this wrapper, so each lane can
-     reserve the footprint its own composition needs. */
+  /* Footprints live on the state, not on this wrapper, so each lane decides
+     what it holds still (resolver stability) and what stays compact. */
   .entry-content {
     min-width: 0;
     display: grid;
@@ -107,21 +105,37 @@
   }
 
   /* Task block: siblings sit at space-4; the two sign-in choices earn extra
-     surrounding space around the divider between them. Top-aligned inside the
-     reserved footprint so any growth extends strictly downward. */
+     surrounding space around the divider between them. Top-aligned so any
+     growth extends strictly downward.
+
+     Owner direction 2026-08-14: the box is compact — nothing pre-reserves
+     height for recovery content. When an error or retry block appears the box
+     grows downward to hold it; content above the box never moves because the
+     page is top-anchored. */
   .entry-state {
     min-width: 0;
-    /* Reserves the taller of the delayed resolver (skeleton plus status line)
-       and the resting operator composition — heading, the named magic-link
-       group and its field, the magic-link action, divider, provider button,
-       aside — so arriving at the card cannot move the panel. Notices and
-       failures may still grow past it, and only downward. */
-    min-block-size: 24.25rem;
     display: grid;
     align-content: start;
     justify-items: var(--je-entry-alignment, center);
     gap: var(--je-space-4);
     text-align: var(--je-entry-alignment, center);
+  }
+
+  /* The one footprint that is still held: the initial resolver and the resting
+     card it resolves into share this measure, so arriving anonymous cannot
+     shift the panel. It is a resolution-stability contract, not the retired
+     error/retry reserve. */
+  .entry-state--reserved { min-block-size: 24.25rem; }
+
+  /* Recovery content that appears into the compact box: the box grows
+     instantly and only downward, and the arriving block fades in at token
+     speed so the growth reads as an answer, not a jolt. */
+  .entry-state .entry-appear {
+    width: 100%;
+    display: grid;
+    justify-items: var(--je-entry-alignment, center);
+    gap: var(--je-space-4);
+    animation: je-error-in var(--je-duration-fast) var(--je-ease-out);
   }
 
   .entry-state h1 { max-width: 17ch; margin: 0; font-family: var(--je-font-body); font-size: var(--je-font-size-xl); font-weight: 700; line-height: var(--je-leading-tight); letter-spacing: -.01em; }

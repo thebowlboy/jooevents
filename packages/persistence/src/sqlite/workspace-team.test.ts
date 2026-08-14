@@ -154,6 +154,31 @@ function invitationPlan(input: Fixture, email = 'invitee@example.test') {
 }
 
 describe('disposable SQLite workspace team adapter', () => {
+  test('a role-less pending_review admission is awaiting approval, not aggregate corruption', () => {
+    const input = fixture();
+    const before = input.repository.readPlanningSnapshot(ids.workspace);
+    const at = Date.parse(now);
+    // Open admission (mode 'pending') commits a user and membership with no
+    // workspace role assignment inside the guarded provisioning transaction.
+    input.sqlite.transaction(() => {
+      const guard = input.repository.captureProvisioningGuard(ids.workspace);
+      input.sqlite.query(`INSERT INTO users
+        (id, status, display_name, created_at, updated_at, version)
+        VALUES ('019c2d70-0000-7000-8000-000000000701', 'pending_review', 'Applicant', ?, ?, 1)`)
+        .run(at, at);
+      input.sqlite.query(`INSERT INTO workspace_memberships
+        (id, workspace_id, user_id, status, created_at, updated_at, version)
+        VALUES ('019c2d70-0000-7000-8000-000000000702', ?,
+          '019c2d70-0000-7000-8000-000000000701', 'pending_review', ?, ?, 1)`)
+        .run(ids.workspace, at, at);
+      input.repository.synchronizeProvisioningMutation(guard);
+    }).immediate();
+    const after = input.repository.readPlanningSnapshot(ids.workspace);
+    expect(after.version).toBe(before.version);
+    expect(after.digestSha256).toBe(before.digestSha256);
+    expect(after.members.map((member) => member.userId)).toEqual([ids.owner, ids.member]);
+  });
+
   test('zeroizes the transient mailbox buffer when classified adoption fails', () => {
     let captured: Uint8Array | undefined;
     const failing: SynchronousClassifiedPayloadStore = {
