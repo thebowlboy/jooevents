@@ -4,7 +4,15 @@ import { basename, dirname } from 'node:path';
 import { makeSignature } from 'better-auth/crypto';
 import { eventCreateDraftOperationResultSchema } from '@jooevents/contracts';
 import { changesetLifecycleOperationResultSchema } from '@jooevents/changeset-operations';
+import {
+  workspaceSignInLinkAddressFingerprint,
+  WORKSPACE_SIGN_IN_LINK_TEMPLATE_REVISION_REF_ID
+} from '@jooevents/persistence/workspace-sign-in-link';
 import { loadEphemeralLiveConfig } from '../config';
+import {
+  loadCommunicationsProviderConfig,
+  loadMailSenderConfig
+} from '../config/communications';
 import { createEphemeralLiveRuntime, type EphemeralLiveRuntime } from './ephemeral-live';
 
 /**
@@ -216,6 +224,26 @@ function sessionCookieFrom(response: Response): string {
   return cookie;
 }
 
+/** The pinned `/a/:token` expansion target: relative callbacks, verify arbitrates. */
+function verifyLocation(token: string): string {
+  return `/api/auth/magic-link/verify?token=${encodeURIComponent(token)}`
+    + `&callbackURL=${encodeURIComponent('/auth/complete?returnTo=/app')}`
+    + `&errorCallbackURL=${encodeURIComponent('/sign-in?notice=link_invalid')}`;
+}
+
+/** Follows the short link's fixed 302 into the verify endpoint and returns its response. */
+async function completeShortLink(
+  runtime: EphemeralLiveRuntime,
+  shortUrl: string
+): Promise<Response> {
+  const expand = await runtime.app.request(shortUrl);
+  expect(expand.status).toBe(302);
+  expect(expand.headers.getSetCookie()).toEqual([]);
+  const location = expand.headers.get('location') ?? '';
+  expect(location).toBe(verifyLocation(shortUrl.slice(shortUrl.lastIndexOf('/') + 1)));
+  return runtime.app.request(location);
+}
+
 describe('workspace magic-link sign-in', () => {
   test('a reserved address completes a FIRST sign-in and lands admitted; the link works once', async () => {
     const runtime = await createEphemeralLiveRuntime({ config, devFixtures: true });
@@ -242,9 +270,30 @@ describe('workspace magic-link sign-in', () => {
     const issued = await issuedLink(runtime, INVITEE_EMAIL);
     if (issued.kind !== 'issued') throw new Error('workspace_magic_link_not_issued');
 
+    // The emailed naked link is the short form: origin, `/a/`, and a 22-char
+    // base64url token (16 random bytes).
+    expect(issued.url).toMatch(/^https?:\/\/[^/]+\/a\/[A-Za-z0-9_-]{22}$/);
+
+    // Garbage tokens produce the byte-identical redirect shape — same status,
+    // identical headers, same Location construction — so the short route
+    // discloses nothing; the verify endpoint is the single arbiter. Overlong
+    // path tokens are capped without changing the shape.
+    const wellFormed = await runtime.app.request(issued.url);
+    expect(wellFormed.status).toBe(302);
+    const garbage = await runtime.app.request(`${config.baseUrl}/a/definitely-not-a-token`);
+    expect(garbage.status).toBe(302);
+    expect(garbage.headers.get('location')).toBe(verifyLocation('definitely-not-a-token'));
+    expect(garbage.headers.getSetCookie()).toEqual([]);
+    expect([...garbage.headers.entries()].map(([name]) => name).sort())
+      .toEqual([...wellFormed.headers.entries()].map(([name]) => name).sort());
+    expect(garbage.headers.get('cache-control')).toBe(wellFormed.headers.get('cache-control'));
+    const oversized = await runtime.app.request(`${config.baseUrl}/a/${'x'.repeat(600)}`);
+    expect(oversized.status).toBe(302);
+    expect(oversized.headers.get('location')).toBe(verifyLocation('x'.repeat(512)));
+
     // The completed link mints the session AND performs first admission: the
     // open reservation is consumed exactly as a provider sign-in would.
-    const verify = await runtime.app.request(issued.url);
+    const verify = await completeShortLink(runtime, issued.url);
     expect([302, 307]).toContain(verify.status);
     const location = verify.headers.get('location') ?? '';
     expect(location).toContain('/auth/complete');
@@ -267,9 +316,9 @@ describe('workspace magic-link sign-in', () => {
     `).get(INVITEE_EMAIL);
     expect(user?.name).toBe('invitee');
 
-    // Single use: replaying the same link redirects to the closed notice and
-    // mints nothing.
-    const replay = await runtime.app.request(issued.url);
+    // Single use: replaying the same short link redirects to the closed notice
+    // and mints nothing.
+    const replay = await completeShortLink(runtime, issued.url);
     expect([302, 307]).toContain(replay.status);
     expect(replay.headers.get('location') ?? '').toContain('notice=link_invalid');
     expect(replay.headers.getSetCookie().some(
@@ -283,7 +332,7 @@ describe('workspace magic-link sign-in', () => {
     const reissued = await issuedLink(runtime, INVITEE_EMAIL);
     if (reissued.kind !== 'issued') throw new Error('workspace_magic_link_not_reissued');
     expect(reissued.url).not.toBe(issued.url);
-    const secondVerify = await runtime.app.request(reissued.url);
+    const secondVerify = await completeShortLink(runtime, reissued.url);
     const secondCookie = sessionCookieFrom(secondVerify);
     const secondContext = await runtime.app.request('/api/me/access-context', {
       headers: { cookie: secondCookie, 'x-correlation-id': crypto.randomUUID() }
@@ -320,6 +369,80 @@ describe('workspace magic-link sign-in', () => {
     const malformed = await requestLink(runtime, 'not-an-address');
     expect(malformed.status).toBe(400);
     expect(JSON.parse(malformed.body)).toMatchObject({ code: 'invalid_request' });
+  });
+
+  test('a composed provider dispatches the link right after commit, ahead of the sweep', async () => {
+    const sends: string[] = [];
+    const runtime = await createEphemeralLiveRuntime({
+      config,
+      devFixtures: true,
+      communications: {
+        provider: loadCommunicationsProviderConfig({
+          JOOEVENTS_EMAIL_PROVIDER_MODE: 'cloudflare_rest',
+          JOOEVENTS_CLOUDFLARE_EMAIL_ACCOUNT_ID: 'account_123',
+          JOOEVENTS_CLOUDFLARE_EMAIL_API_TOKEN_SECRET_STORE: 'deployment.secret',
+          JOOEVENTS_CLOUDFLARE_EMAIL_API_TOKEN_SECRET_REFERENCE: 'cloudflare-email-token'
+        }),
+        mailSender: loadMailSenderConfig({
+          JOOEVENTS_MAIL_FROM_ADDRESS: 'events@mail.example.test',
+          JOOEVENTS_MAIL_FROM_NAME: 'JooEvents'
+        }),
+        secretResolver: { withSecretText: async (_reference, use) => use('stub-secret-token') },
+        fetch: async (url) => {
+          if (String(url).includes('/email/sending/send')) {
+            sends.push(String(url));
+            return new Response(JSON.stringify({
+              success: true,
+              errors: [],
+              messages: [],
+              result: {
+                message_id: '<instant-dispatch@example.test>',
+                delivered: [INVITEE_EMAIL],
+                queued: [],
+                permanent_bounces: []
+              }
+            }), { status: 200 });
+          }
+          return new Response(
+            JSON.stringify({ success: true, result: { status: 'active' } }),
+            { status: 200 }
+          );
+        }
+      }
+    });
+    runtimes.push(runtime);
+    const owner = await createOwnerSession(runtime);
+    await runtime.app.request('/api/me/access-context', {
+      headers: { cookie: owner.cookie, 'x-correlation-id': crypto.randomUUID() }
+    });
+    await createEvent(runtime, owner);
+    insertOpenReservation(runtime, INVITEE_EMAIL);
+
+    const requested = await requestLink(runtime, INVITEE_EMAIL);
+    expect(requested.status).toBe(200);
+
+    // The after-commit kick moves the delivery head out of `pending` within
+    // this poll window, which stays strictly shorter than the 2s sweep
+    // period — the mail leaves without waiting for any pump pass.
+    const readHeadState = () => runtime.database.sqlite.query<{
+      readonly state: string;
+    }, [string, string]>(`
+      SELECT state FROM communication_outbound_delivery_heads
+       WHERE template_revision_ref_id = ? AND address_lookup_fingerprint_sha256 = ?
+       ORDER BY rowid DESC LIMIT 1
+    `).get(
+      WORKSPACE_SIGN_IN_LINK_TEMPLATE_REVISION_REF_ID,
+      workspaceSignInLinkAddressFingerprint(INVITEE_EMAIL)
+    )?.state;
+    const deadline = Date.now() + 1_000;
+    let state = readHeadState();
+    while ((state === undefined || state === 'pending' || state === 'request_started')
+        && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      state = readHeadState();
+    }
+    expect(state).toBe('accepted');
+    expect(sends).toHaveLength(1);
   });
 
   test('the workspace link oracle is structurally absent unless devFixtures is set', async () => {

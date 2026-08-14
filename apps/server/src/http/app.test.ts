@@ -133,6 +133,43 @@ describe('HTTP/auth composition', () => {
     }
   });
 
+  test('expands short sign-in links into fixed byte-uniform redirects', async () => {
+    const opened = openSQLite(':memory:');
+    databases.push(opened);
+    const auth = createAuth(config, opened.db);
+    const app = createHttpApp({
+      auth,
+      baseUrl: config.baseUrl,
+      workspaceId: 'workspace_summit',
+      accessContext: { ensureAuthPrincipalProvisioned: async () => { throw new Error('must not provision short-link redirects'); } }
+    });
+
+    // The same 302 shape for any single-segment token; the verify endpoint
+    // and the portal ceremony stay the sole arbiters of validity.
+    for (const token of ['abcDEF123-_x', 'definitely-not-a-token']) {
+      const workspace = await app.request(`/a/${token}`);
+      expect(workspace.status).toBe(302);
+      expect(workspace.headers.get('location')).toBe(
+        `/api/auth/magic-link/verify?token=${token}`
+          + `&callbackURL=${encodeURIComponent('/auth/complete?returnTo=/app')}`
+          + `&errorCallbackURL=${encodeURIComponent('/sign-in?notice=link_invalid')}`
+      );
+      expect(workspace.headers.get('cache-control')).toContain('no-store');
+      expect(workspace.headers.getSetCookie()).toEqual([]);
+
+      const portal = await app.request(`/p/${token}`);
+      expect(portal.status).toBe(302);
+      expect(portal.headers.get('location')).toBe(`/portal/auth/complete?token=${token}`);
+      expect(portal.headers.get('cache-control')).toContain('no-store');
+      expect(portal.headers.getSetCookie()).toEqual([]);
+    }
+
+    // Overlong path tokens are capped to 512 characters, same shape.
+    const oversized = await app.request(`/a/${'x'.repeat(600)}`);
+    expect(oversized.status).toBe(302);
+    expect(oversized.headers.get('location')).toContain(`token=${'x'.repeat(512)}&`);
+  });
+
   test('returns a disclosure-safe structured 404 instead of HTML for unknown backend paths', async () => {
     const opened = openSQLite(':memory:');
     databases.push(opened);

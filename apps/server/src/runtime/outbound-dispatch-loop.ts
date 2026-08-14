@@ -22,6 +22,13 @@ import {
 export interface OutboundDispatchLoop {
   /** One enumeration pass; returns each dispatched delivery's terminal-attempt result. */
   runOnce(): Promise<readonly OutboundEmailDispatchResult[]>;
+  /**
+   * Targeted dispatch of one just-registered delivery, for after-commit kicks
+   * that move time-sensitive security mail without waiting for a sweep. The
+   * same no-open-transaction guard applies: the caller's registering
+   * transaction must have committed first.
+   */
+  dispatchOne(deliveryId: string): Promise<OutboundEmailDispatchResult>;
 }
 
 export function createOutboundDispatchLoop(input: {
@@ -60,6 +67,12 @@ export function createOutboundDispatchLoop(input: {
         results.push(await worker.dispatch({ deliveryId: row.delivery_id }));
       }
       return Object.freeze(results);
+    },
+    async dispatchOne(deliveryId: string): Promise<OutboundEmailDispatchResult> {
+      if (input.sqlite.inTransaction) {
+        throw new TypeError('outbound_dispatch_loop_requires_no_open_transaction');
+      }
+      return worker.dispatch({ deliveryId });
     }
   });
 }

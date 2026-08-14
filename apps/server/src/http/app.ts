@@ -129,6 +129,9 @@ export function createHttpApp(input: {
   });
 
   const signInLinkSchema = z.strictObject({ email: z.string().min(3).max(320) });
+  const SIGN_IN_LINK_CALLBACK_PATH = '/auth/complete?returnTo=/app';
+  const SIGN_IN_LINK_ERROR_CALLBACK_PATH = '/sign-in?notice=link_invalid';
+  const SHORT_LINK_TOKEN_MAX_LENGTH = 512;
   app.post('/api/entry/sign-in-link', async (context) => {
     let payload: unknown;
     try { payload = await context.req.json(); } catch { payload = undefined; }
@@ -139,20 +142,18 @@ export function createHttpApp(input: {
       return context.json({ code: 'invalid_request', message: 'The sign-in request was not valid.', retryable: false, correlationId: correlation(context) }, 400);
     }
     const email = parsed.data.email.trim();
-    const callbackURL = new URL('/auth/complete', input.baseUrl);
-    callbackURL.searchParams.set('returnTo', '/app');
-    const errorCallbackURL = new URL('/sign-in', input.baseUrl);
-    errorCallbackURL.searchParams.set('notice', 'link_invalid');
     // Whether a link is actually issued is decided server-privately behind the
     // delivery seam; this surface acknowledges every well-formed address with
     // the same body. The initial display name for a reservation-completed
     // first sign-in is the address's local part — a person can rename it, and
-    // an empty name must never reach workspace authority reads.
+    // an empty name must never reach workspace authority reads. Callbacks stay
+    // relative: the emailed link is the short `/a/<token>` route below, which
+    // rebuilds the same relative pair.
     const response = await input.auth.handler(authRequest(context, '/api/auth/sign-in/magic-link', {
       email,
       name: email.slice(0, email.indexOf('@')) || email,
-      callbackURL: callbackURL.toString(),
-      errorCallbackURL: errorCallbackURL.toString()
+      callbackURL: SIGN_IN_LINK_CALLBACK_PATH,
+      errorCallbackURL: SIGN_IN_LINK_ERROR_CALLBACK_PATH
     }));
     if (response.status === 429) {
       return context.json({ code: 'rate_limited', message: 'Too many sign-in link requests. Try again shortly.', retryable: true, correlationId: correlation(context) }, 429);
@@ -168,6 +169,29 @@ export function createHttpApp(input: {
     forwardAuthCookies(context, response);
     if (!response.ok) return context.json({ code: 'sign_out_failed', message: 'Sign-out could not finish.', retryable: true, correlationId: correlation(context) }, 502);
     return context.json({ signedOut: true as const });
+  });
+
+  // Short sign-in link expansion. Emailed links are `${origin}/a/<token>`
+  // (workspace) and `${origin}/p/<token>` (participant portal); each route
+  // only re-shapes the path into the verifying surface's URL. The verifier is
+  // the single arbiter of token validity, so the redirect is byte-uniform for
+  // well-formed and garbage tokens alike: same status, same headers, same
+  // Location construction. Tokens are 22 characters; the cap only bounds
+  // hostile paths without changing the response shape.
+  app.get('/a/:token', (context) => {
+    const token = context.req.param('token').slice(0, SHORT_LINK_TOKEN_MAX_LENGTH);
+    context.header('cache-control', 'no-store, max-age=0');
+    return context.redirect(
+      `/api/auth/magic-link/verify?token=${encodeURIComponent(token)}`
+        + `&callbackURL=${encodeURIComponent(SIGN_IN_LINK_CALLBACK_PATH)}`
+        + `&errorCallbackURL=${encodeURIComponent(SIGN_IN_LINK_ERROR_CALLBACK_PATH)}`,
+      302
+    );
+  });
+  app.get('/p/:token', (context) => {
+    const token = context.req.param('token').slice(0, SHORT_LINK_TOKEN_MAX_LENGTH);
+    context.header('cache-control', 'no-store, max-age=0');
+    return context.redirect(`/portal/auth/complete?token=${encodeURIComponent(token)}`, 302);
   });
 
   app.on(['GET', 'POST'], '/api/auth/*', (context) => input.auth.handler(context.req.raw));

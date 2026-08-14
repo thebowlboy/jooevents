@@ -166,7 +166,9 @@ import {
   parseParticipantEmail,
   resolveParticipantContext,
   type CurrentAuthorityResolver,
-  type ParticipantLane
+  type ParticipantChallengeDelivery,
+  type ParticipantLane,
+  type ParticipantSignInLinkDeliveryEffect
 } from '@jooevents/identity-access';
 import {
   createReviewOperationModule,
@@ -1112,7 +1114,11 @@ export async function createEphemeralLiveRuntime(input: {
     // fulfilled, every requested link drops silently — exactly the posture an
     // ineligible address gets — so the surface never widens during boot.
     let workspaceSignInLinkDeliver:
-      | ((input: { readonly email: string; readonly url: string }) => Promise<void>)
+      | ((input: {
+          readonly email: string;
+          readonly url: string;
+          readonly token: string;
+        }) => Promise<void>)
       | null = null;
     const auth = createAuth(input.config, database.db, {
       magicLink: {
@@ -3891,6 +3897,19 @@ export async function createEphemeralLiveRuntime(input: {
             })
           })
     });
+    // The auth-owned delivery seam declares no return value; the SQLite
+    // adapter additionally returns the registration receipt, captured here so
+    // the after-commit entry hook dispatches exactly that delivery. Requests
+    // that register nothing leave the slot empty and the hook falls back to
+    // one sweep pass. The serialized HTTP boundary keeps the slot
+    // request-local.
+    let lastRegisteredParticipantDeliveryId: string | undefined;
+    const kickTrackedParticipantDelivery: ParticipantChallengeDelivery = Object.freeze({
+      enqueueSignInLink(effect: ParticipantSignInLinkDeliveryEffect) {
+        lastRegisteredParticipantDeliveryId =
+          participantDelivery.enqueueSignInLink(effect).deliveryId;
+      }
+    });
     // Workspace magic-link fulfillment (owner revision, 2026-08-14: registered
     // or reserved). The gate decides server-privately; a denied address and a
     // missing current event both drop without a trace the browser could read.
@@ -3914,7 +3933,8 @@ export async function createEphemeralLiveRuntime(input: {
             })
           })
     });
-    workspaceSignInLinkDeliver = async ({ email, url }) => {
+    const shortSignInLinkOrigin = new URL(input.config.baseUrl).origin;
+    workspaceSignInLinkDeliver = async ({ email, token }) => {
       const lane = resolvePortalLane();
       if (lane === undefined) return;
       const decision = decideWorkspaceSignInLinkEligibility({
@@ -3932,15 +3952,18 @@ export async function createEphemeralLiveRuntime(input: {
         eventId: lane.eventId,
         requestId: crypto.randomUUID(),
         recipientEmail: email,
-        linkUrl: url,
+        // The emailed link is the short `/a/<token>` form; its route rebuilds
+        // the plugin verify URL, which stays the single arbiter of validity.
+        linkUrl: `${shortSignInLinkOrigin}/a/${token}`,
         requestedAt,
         expiresAt
       });
       let began = false;
+      let registered: { readonly deliveryId: string } | undefined;
       try {
         database.sqlite.exec('BEGIN IMMEDIATE;');
         began = true;
-        workspaceSignInLinkDelivery.enqueueSignInLink(effect);
+        registered = workspaceSignInLinkDelivery.enqueueSignInLink(effect);
         database.sqlite.exec('COMMIT;');
       } catch (error) {
         if (began && database.sqlite.inTransaction) database.sqlite.exec('ROLLBACK;');
@@ -3948,6 +3971,17 @@ export async function createEphemeralLiveRuntime(input: {
         // acknowledgement stays uniform, the ledger's absence is the honest
         // record, and the operator log carries the fault without the address.
         console.error('[jooevents] workspace sign-in link delivery failed', error);
+        return;
+      }
+      // After-commit instant dispatch, real provider only: security mail must
+      // not wait for the sweep tick. Fire-and-forget and never rethrown, so
+      // dispatch faults cannot leak eligibility either; the pump remains the
+      // sweeper for anything this kick misses.
+      if (registered !== undefined && providerRuntime.registration?.delivery !== undefined) {
+        const { deliveryId } = registered;
+        void outboundDispatch.dispatchOne(deliveryId).catch((error) => {
+          console.error('[jooevents] workspace sign-in link dispatch kick failed', error);
+        });
       }
     };
     const participantRelationships = createSQLiteParticipantRelationshipSource(database.sqlite);
@@ -4177,9 +4211,24 @@ export async function createEphemeralLiveRuntime(input: {
         }
       },
       store: participantStore,
-      delivery: participantDelivery,
+      delivery: kickTrackedParticipantDelivery,
       intakeAttribution: participantIntakeAttribution,
       policy: PARTICIPANT_ACCESS_LAUNCH_POLICY,
+      // After-commit instant dispatch, real provider only: targeted when the
+      // registration receipt was captured, one sweep pass otherwise. Fire-and-
+      // forget with the failure swallowed here — the acknowledgement stays
+      // byte-uniform and the 2s pump remains the sweeper.
+      afterSignInLinkRegistered: () => {
+        if (providerRuntime.registration?.delivery === undefined) return;
+        const deliveryId = lastRegisteredParticipantDeliveryId;
+        lastRegisteredParticipantDeliveryId = undefined;
+        void (deliveryId === undefined
+          ? outboundDispatch.runOnce()
+          : outboundDispatch.dispatchOne(deliveryId)
+        ).catch((error) => {
+          console.error('[jooevents] participant sign-in link dispatch kick failed', error);
+        });
+      },
       ids: Object.freeze({
         newChallengeId: () => crypto.randomUUID(),
         newReceiptId: () => crypto.randomUUID(),
@@ -4415,8 +4464,11 @@ export async function createEphemeralLiveRuntime(input: {
         if (!row || row.delivery_id === null) return context.json({ kind: 'none' as const });
         const head = outboundEmailDeliveryLedger.read(row.delivery_id);
         const release = head ? communicationMessageReleases.read(head.releaseId) : undefined;
+        // The rendered portal link is the short `${origin}/p/<token>` form —
+        // the only form a disposable runtime can contain, since every release
+        // was rendered by this very process.
         const match = release
-          ? /[?&]token=([^\s&]+)/.exec(release.envelope.textBody)
+          ? /\/p\/([A-Za-z0-9_-]+)/.exec(release.envelope.textBody)
           : null;
         if (!match) return context.json({ kind: 'none' as const });
         return context.json({
@@ -4445,8 +4497,9 @@ export async function createEphemeralLiveRuntime(input: {
           workspaceSignInLinkAddressFingerprint(email)
         );
         const release = row ? communicationMessageReleases.read(row.release_id) : undefined;
+        // The emailed naked link is the short `${origin}/a/<token>` form.
         const match = release
-          ? /(https?:\S+\/api\/auth\/magic-link\/verify\?\S+)/.exec(release.envelope.textBody)
+          ? /(https?:\/\/\S+\/a\/[A-Za-z0-9_-]+)/.exec(release.envelope.textBody)
           : null;
         if (!match) return context.json({ kind: 'none' as const });
         return context.json({ kind: 'issued' as const, url: match[1]! });

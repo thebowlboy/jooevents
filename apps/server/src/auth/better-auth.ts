@@ -16,14 +16,16 @@ export const WORKSPACE_SIGN_IN_LINK_EXPIRES_IN_SECONDS = 900;
 
 export interface WorkspaceMagicLinkComposition {
   /**
-   * Hands the built verification URL to the runtime's gated outbox delivery.
-   * The gate lives behind this seam: an ineligible address must be dropped
-   * silently so the HTTP surface stays byte-uniform. Tokens are stored hashed
-   * by the plugin; the raw link exists only in the delivered mail.
+   * Hands the built verification URL and its raw token to the runtime's gated
+   * outbox delivery. The gate lives behind this seam: an ineligible address
+   * must be dropped silently so the HTTP surface stays byte-uniform. Tokens
+   * are stored hashed by the plugin; the raw token exists only here, where the
+   * delivered mail renders it as the short `/a/<token>` link.
    */
   deliver(input: {
     readonly email: string;
     readonly url: string;
+    readonly token: string;
   }): Promise<void>;
 }
 
@@ -111,8 +113,17 @@ export function createAuth(
             // gated deliver below is what keeps unreserved, unregistered
             // addresses from ever receiving a usable token.
             disableSignUp: false,
-            sendMagicLink: async ({ email, url }) => {
-              await workspaceMagicLink.deliver({ email, url });
+            // 16 random bytes as 22 base64url characters: 128-bit entropy
+            // keeps the token unguessable, it is hashed at rest (above), and
+            // it is 15-minute single-use — short enough for a compact emailed
+            // `/a/<token>` link without weakening the ceremony.
+            generateToken: () => {
+              const bytes = new Uint8Array(16);
+              crypto.getRandomValues(bytes);
+              return Buffer.from(bytes).toString('base64url');
+            },
+            sendMagicLink: async ({ email, url, token }) => {
+              await workspaceMagicLink.deliver({ email, url, token });
             }
           })
         ]

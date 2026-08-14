@@ -64,6 +64,14 @@ export interface ParticipantEntryRuntime {
   readPortalEvent(lane: ParticipantLane): PortalEventDto | undefined;
   now(): string;
   readonly allowedOrigins: readonly string[];
+  /**
+   * Injected after-commit kick for instant security-mail dispatch. Called once
+   * per link request AFTER the ceremony transaction commits — eligible and
+   * ineligible addresses alike, so the acknowledgement stays byte-uniform.
+   * Implementations must be fire-and-forget and swallow their own failures;
+   * the sweeping dispatch pump remains the correctness mechanism.
+   */
+  afterSignInLinkRegistered?(): void;
 }
 
 /** Extracts the lane-separate portal bearer from the Cookie header, if any. */
@@ -153,6 +161,9 @@ export function createParticipantEntryRoutes(runtime: ParticipantEntryRuntime) {
         email: parsed.data.email,
         now: runtime.now()
       }));
+      // The registering transaction has committed; the kick never changes the
+      // acknowledgement and never throws into this request.
+      runtime.afterSignInLinkRegistered?.();
       return context.json(signInLinkRequestResultSchema.parse(result.result));
     } catch (error) {
       // Address validation, not enumeration: a malformed address is refused

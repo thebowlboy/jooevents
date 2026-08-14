@@ -20,6 +20,21 @@ describe('reserved route namespace contract', () => {
     expect(classifyRoutePath('/app/schedule')).toEqual({ kind: 'frontend', pathname: '/app/schedule' });
   });
 
+  test('classifies short sign-in link roots on segment boundaries only', () => {
+    expect(classifyRoutePath('/a/xyz')).toMatchObject({
+      kind: 'backend',
+      namespace: { kind: 'auth-link', root: '/a' }
+    });
+    expect(classifyRoutePath('/p/xyz')).toMatchObject({
+      kind: 'backend',
+      namespace: { kind: 'portal-link', root: '/p' }
+    });
+    expect(classifyRoutePath('/about')).toEqual({ kind: 'frontend', pathname: '/about' });
+    expect(classifyRoutePath('/apply')).toEqual({ kind: 'frontend', pathname: '/apply' });
+    expect(classifyRoutePath('/app')).toEqual({ kind: 'frontend', pathname: '/app' });
+    expect(classifyRoutePath('/portal')).toEqual({ kind: 'frontend', pathname: '/portal' });
+  });
+
   test('recognizes one encoded path pass and fails malformed or backslash paths closed', () => {
     expect(classifyRoutePath('/%61pi/unknown')).toMatchObject({
       kind: 'backend',

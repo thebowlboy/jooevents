@@ -3,7 +3,13 @@ export const BACKEND_ROUTE_NAMESPACES = [
   { kind: 'api', root: '/api' },
   { kind: 'mcp', root: '/mcp' },
   { kind: 'webhook', root: '/webhooks' },
-  { kind: 'health', root: '/health' }
+  { kind: 'health', root: '/health' },
+  // Short emailed sign-in links: `/a/<token>` (workspace) and `/p/<token>`
+  // (participant portal) redirect into the verifying surfaces. Classification
+  // is segment-bounded, so `/about`, `/apply`, `/app`, and `/portal` remain
+  // browser routes.
+  { kind: 'auth-link', root: '/a' },
+  { kind: 'portal-link', root: '/p' }
 ] as const;
 
 export type BackendRouteNamespace = (typeof BACKEND_ROUTE_NAMESPACES)[number];
