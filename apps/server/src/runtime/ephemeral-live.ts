@@ -1719,6 +1719,25 @@ export async function createEphemeralLiveRuntime(input: {
      * dispatch pass runs — with only the deterministic fake composed, every
      * delivery still resolves terminally not-delivered (BLOCKED-2).
      */
+    // With a real provider activated, the outbox is pumped continuously so
+    // time-sensitive security mail (portal and workspace sign-in links) leaves
+    // promptly — those lanes register deliveries outside any send commit, so
+    // the after-commit pass alone would strand them as pending forever. The
+    // inert fake composition deliberately gets no pump: joined tests keep
+    // deterministic dispatch timing.
+    let outboundDispatchPump: ReturnType<typeof setInterval> | undefined;
+    if (providerRuntime.registration?.delivery) {
+      let pumping = false;
+      outboundDispatchPump = setInterval(() => {
+        if (pumping) return;
+        pumping = true;
+        void outboundDispatch.runOnce()
+          .catch((error) => {
+            console.error('[jooevents] outbound dispatch pass failed', error);
+          })
+          .finally(() => { pumping = false; });
+      }, 2000);
+    }
     const communicationSendRuntime = createCommunicationSendOperationRuntime({
       sqlite: database.sqlite,
       workspaceId,
@@ -4517,6 +4536,7 @@ export async function createEphemeralLiveRuntime(input: {
     let closeResult: ReturnType<EphemeralSQLiteRuntime['close']> | undefined;
     const close = () => {
       if (!closed) {
+        if (outboundDispatchPump !== undefined) clearInterval(outboundDispatchPump);
         closeResult = database.close();
         closed = true;
       }
