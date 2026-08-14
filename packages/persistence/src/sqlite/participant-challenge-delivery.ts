@@ -5,7 +5,10 @@ import {
   type ParticipantChallengeDelivery,
   type ParticipantSignInLinkDeliveryEffect
 } from '@jooevents/identity-access';
-import { buildCommunicationMessageRelease } from '@jooevents/communications';
+import {
+  buildCommunicationMessageRelease,
+  renderTransactionalEmail
+} from '@jooevents/communications';
 import { outboundEmailDeliveryWorkInputSchema } from '@jooevents/contracts';
 import { canonicalJsonText, encodeCanonicalJson } from '@jooevents/kernel';
 import {
@@ -57,6 +60,8 @@ export interface ParticipantChallengeProviderRoute {
 }
 
 const TEMPLATE_REVISION_REF_ID = 'template.participant-sign-in-link.v1';
+const PRODUCT_NAME = 'JooEvents';
+const SITE_URL = 'https://jooevents.com';
 const SENDER_PROFILE_REVISION_ID = 'sender.profile.participant-auth.v1';
 const SENDER_PRESENTATION_CONTRACT_KEY = 'sender.presentation.email-v1';
 const SENDER_PRESENTATION_CONTRACT_VERSION = 1;
@@ -86,30 +91,51 @@ export interface SQLiteParticipantChallengeDeliveryIds {
   newEvidenceId(): string;
 }
 
-/** Renders the fixed security-template text; no merge fields beyond the link and TTL. */
+/** Renders the fixed security template; no merge fields beyond the link and TTL. */
 export function renderParticipantSignInLinkMessage(input: {
   readonly portalOrigin: string;
   readonly linkToken: string;
   readonly requestedAt: string;
   readonly expiresAt: string;
-}): { readonly subject: string; readonly textBody: string; readonly linkUrl: string } {
+}): {
+  readonly subject: string;
+  readonly textBody: string;
+  readonly htmlBody: string;
+  readonly linkUrl: string;
+} {
   const origin = assertPortalOrigin(input.portalOrigin);
-  const linkUrl = `${origin}/portal/auth/complete?token=${encodeURIComponent(input.linkToken)}`;
+  const linkUrl = `${origin}/p/${encodeURIComponent(input.linkToken)}`;
   const validMinutes = Math.max(
     1,
     Math.round((Date.parse(input.expiresAt) - Date.parse(input.requestedAt)) / 60_000)
   );
   const subject = 'Your sign-in link';
-  const textBody = [
-    'Use this link to sign in:',
-    '',
-    linkUrl,
-    '',
-    `The link is valid for ${validMinutes} minutes and works once.`,
-    'Requesting a new link replaces this one.',
-    'If you did not request it, you can ignore this email.'
-  ].join('\n');
-  return Object.freeze({ subject, textBody, linkUrl });
+  const { textBody, htmlBody } = renderTransactionalEmail({
+    subject,
+    preheader: `Your one-time link to sign in to ${PRODUCT_NAME}.`,
+    heading: `Sign in to ${PRODUCT_NAME}`,
+    intro: ['Use this link to sign in:'],
+    button: { label: 'Sign in', url: linkUrl },
+    nakedLink: linkUrl,
+    smallPrint: [
+      `The link is valid for ${validMinutes} minutes and works once.`,
+      'Requesting a new link replaces this one.',
+      'If you did not request it, you can ignore this email.'
+    ],
+    siteUrl: SITE_URL,
+    productName: PRODUCT_NAME
+  });
+  return Object.freeze({ subject, textBody, htmlBody, linkUrl });
+}
+
+/**
+ * Same contract as the auth-owned port, narrowed to also return the delivery
+ * evidence id minted inside the enqueue transaction.
+ */
+export interface SQLiteParticipantChallengeDelivery extends ParticipantChallengeDelivery {
+  enqueueSignInLink(
+    effect: ParticipantSignInLinkDeliveryEffect
+  ): { readonly deliveryId: string };
 }
 
 export function createSQLiteParticipantChallengeDelivery(input: {
@@ -123,7 +149,7 @@ export function createSQLiteParticipantChallengeDelivery(input: {
     linkChallengeDelivery(link: { readonly challengeId: string; readonly deliveryId: string }): void;
   };
   readonly providerRoute?: ParticipantChallengeProviderRoute;
-}): ParticipantChallengeDelivery {
+}): SQLiteParticipantChallengeDelivery {
   const portalOrigin = assertPortalOrigin(input.portalOrigin);
   const senderPresentation = Object.freeze({
     fromAddress: input.sender.fromAddress,
@@ -144,7 +170,9 @@ export function createSQLiteParticipantChallengeDelivery(input: {
   const sender = Object.freeze({ ...senderPresentation, senderPresentationDigestSha256 });
 
   return Object.freeze({
-    enqueueSignInLink(effect: ParticipantSignInLinkDeliveryEffect): void {
+    enqueueSignInLink(
+      effect: ParticipantSignInLinkDeliveryEffect
+    ): { readonly deliveryId: string } {
       if (!input.sqlite.inTransaction) {
         throw new TypeError('participant_challenge_delivery_transaction_required');
       }
@@ -179,14 +207,16 @@ export function createSQLiteParticipantChallengeDelivery(input: {
         contentRefId: `content.participant-sign-in-link:${effect.challengeId}`,
         purposeKey: PARTICIPANT_SIGN_IN_CHALLENGE_PURPOSE,
         reviewedMessageDigestSha256: digest({
-          schemaVersion: 1,
+          schemaVersion: 2,
           subject: message.subject,
-          textBody: message.textBody
+          textBody: message.textBody,
+          htmlBody: message.htmlBody
         }),
         sender,
         toAddress: effect.recipientEmail,
         subject: message.subject,
         textBody: message.textBody,
+        htmlBody: message.htmlBody,
         createdAt: effect.requestedAt
       });
       input.releases.put(release);
@@ -287,6 +317,7 @@ export function createSQLiteParticipantChallengeDelivery(input: {
         receiptId: effect.receiptId
       });
       input.challenges.linkChallengeDelivery({ challengeId: effect.challengeId, deliveryId });
+      return Object.freeze({ deliveryId });
     }
   });
 }

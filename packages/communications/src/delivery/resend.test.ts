@@ -52,6 +52,26 @@ describe('marked resend envelope derivation', () => {
     expect(derived.replyTo).toEqual(reviewed.replyTo);
     expect(derived.from).toEqual(reviewed.from);
     expect(derived.htmlBody).toBe(`<p>${MARKED_RESEND_BODY_NOTE}</p>\n<p>Rich body.</p>`);
+  });
+
+  test('a full HTML document keeps its doctype first and gains the note inside <body>', () => {
+    const document = '<!doctype html><html><head><title>t</title></head>'
+      + '<body style="margin:0;"><table><tr><td>Sign in</td></tr></table></body></html>';
+    const derived = deriveMarkedResendEmailEnvelope(Object.freeze({
+      contractVersion: 1,
+      from: Object.freeze({ address: parseEmailAddress('sender@example.test') }),
+      to: Object.freeze({ address: parseEmailAddress('recipient@example.test') }),
+      subject: 'Your sign-in link',
+      textBody: 'Plain body.',
+      htmlBody: document,
+      headers: Object.freeze([])
+    }));
+    expect(derived.htmlBody?.startsWith('<!doctype html>')).toBe(true);
+    expect(derived.htmlBody).toBe(
+      '<!doctype html><html><head><title>t</title></head>'
+      + `<body style="margin:0;"><p>${MARKED_RESEND_BODY_NOTE}</p>`
+      + '<table><tr><td>Sign in</td></tr></table></body></html>'
+    );
     expect(derived.textBody.startsWith(`${MARKED_RESEND_BODY_NOTE}\n\n`)).toBe(true);
   });
 

@@ -32,6 +32,22 @@ function freezeParty<Party extends { readonly address: unknown }>(party: Party):
  * `[Resend]` prefix (clamped to the envelope's subject bound) and each body
  * gains the fixed leading resend note.
  */
+/**
+ * The note must land INSIDE the document: bytes before `<!doctype html>` make
+ * the resent mail an invalid document that renders in quirks mode with the
+ * note outside the page background. A full document gets the note directly
+ * after its opening <body>; fragment-style html keeps the leading note.
+ */
+function injectHtmlResendNote(htmlBody: string): string {
+  const note = `<p>${MARKED_RESEND_BODY_NOTE}</p>`;
+  const bodyOpen = /<body[^>]*>/i.exec(htmlBody);
+  if (bodyOpen) {
+    const at = bodyOpen.index + bodyOpen[0].length;
+    return `${htmlBody.slice(0, at)}${note}${htmlBody.slice(at)}`;
+  }
+  return `${note}\n${htmlBody}`;
+}
+
 export function deriveMarkedResendEmailEnvelope(
   reviewed: ImmutableEmailEnvelope
 ): ImmutableEmailEnvelope {
@@ -45,7 +61,7 @@ export function deriveMarkedResendEmailEnvelope(
     textBody: `${MARKED_RESEND_BODY_NOTE}\n\n${reviewed.textBody}`,
     ...(reviewed.htmlBody === undefined
       ? {}
-      : { htmlBody: `<p>${MARKED_RESEND_BODY_NOTE}</p>\n${reviewed.htmlBody}` }),
+      : { htmlBody: injectHtmlResendNote(reviewed.htmlBody) }),
     headers: Object.freeze(reviewed.headers.map((header) => Object.freeze({ ...header })))
   });
   computeReviewedEmailEnvelopeDigestSha256(derived);

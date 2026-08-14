@@ -4,7 +4,8 @@ import {
   buildCommunicationMessageRelease,
   computeReviewedEmailEnvelopeDigestSha256,
   createInMemoryCommunicationMessageReleaseStore,
-  createReleaseStoreOutboundEmailEnvelopeResolver
+  createReleaseStoreOutboundEmailEnvelopeResolver,
+  parseCommunicationMessageRelease
 } from '../index';
 
 const base = {
@@ -41,6 +42,25 @@ describe('communication message releases', () => {
     // Deterministic: the same inputs always produce the same reviewed digests.
     expect(buildCommunicationMessageRelease(base).reviewedEnvelopeDigestSha256)
       .toBe(release.reviewedEnvelopeDigestSha256);
+  });
+
+  test('the reviewed envelope digest covers the optional HTML body', () => {
+    const textOnly = buildCommunicationMessageRelease(base);
+    expect(textOnly.envelope.htmlBody).toBeUndefined();
+    const withHtml = buildCommunicationMessageRelease({
+      ...base,
+      htmlBody: '<p>Hello Ada, your submission was accepted.</p>'
+    });
+    expect(withHtml.envelope.htmlBody).toBe('<p>Hello Ada, your submission was accepted.</p>');
+    expect(withHtml.reviewedEnvelopeDigestSha256)
+      .not.toBe(textOnly.reviewedEnvelopeDigestSha256);
+    expect(withHtml.reviewedEnvelopeDigestSha256)
+      .toBe(computeReviewedEmailEnvelopeDigestSha256(withHtml.envelope));
+    // A tampered HTML body can no longer claim the reviewed digest.
+    expect(() => parseCommunicationMessageRelease({
+      ...withHtml,
+      envelope: { ...withHtml.envelope, htmlBody: '<p>Tampered.</p>' }
+    })).toThrow(new CommunicationMessageReleaseError('invalid_release'));
   });
 
   test('the store is append-only and refuses divergent re-puts of a release id', () => {

@@ -423,6 +423,42 @@ describe('Cloudflare REST transport', () => {
     expect(JSON.stringify(outcome)).not.toContain('speaker@example.test');
   });
 
+  test('an envelope with an HTML body dispatches both bodies', async () => {
+    let capturedInit: RequestInit | undefined;
+    const provider = restProvider(async (_request, init) => {
+      capturedInit = init;
+      return jsonResponse(responseBody());
+    });
+    await provider.delivery.submit(provider.delivery.prepare(ordinary()));
+    const body = String(capturedInit?.body);
+    const payload = JSON.parse(body) as CloudflareRestEmailMessage;
+    expect(payload.html).toBe('<p>A bounded message body.</p>');
+    expect(payload.text).toBe('A bounded message body.');
+    expect(body).toContain('"html":');
+    expect(body).toContain('"text":');
+  });
+
+  test('without an HTML body the dispatched payload bytes are unchanged', async () => {
+    let capturedInit: RequestInit | undefined;
+    const provider = restProvider(async (_request, init) => {
+      capturedInit = init;
+      return jsonResponse(responseBody());
+    });
+    const { htmlBody: _omitted, ...textOnlyEnvelope } = envelope();
+    await provider.delivery.submit(
+      provider.delivery.prepare(ordinary({ envelope: textOnlyEnvelope }))
+    );
+    // Exact-byte pin: adopting HTML must not perturb text-only sends.
+    expect(String(capturedInit?.body)).toBe(
+      '{"to":"speaker@example.test",'
+      + '"from":{"address":"organizer@example.test","name":"Organizer"},'
+      + '"subject":"Submission update",'
+      + '"text":"A bounded message body.",'
+      + '"reply_to":{"address":"reply@example.test","name":"Replies"},'
+      + '"headers":{"X-Event-Key":"event_1"}}'
+    );
+  });
+
   test.each([
     [400, 'known_rejected', 'terminal'],
     [401, 'known_rejected', 'terminal'],

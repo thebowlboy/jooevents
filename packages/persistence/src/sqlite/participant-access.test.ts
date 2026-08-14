@@ -325,7 +325,7 @@ function emailedLinkToken(f: Fixture, challengeId: string): string {
   if (!head) throw new Error('delivery head missing');
   const release = f.releases.read(head.releaseId);
   if (!release) throw new Error('release missing');
-  const match = /https:\/\/[^\s]+token=([^\s&]+)/.exec(release.envelope.textBody);
+  const match = /https:\/\/[^\s]+\/p\/([^\s]+)/.exec(release.envelope.textBody);
   if (!match) throw new Error('no link in envelope');
   return decodeURIComponent(match[1]!);
 }
@@ -359,9 +359,8 @@ describe('participant magic-link request ceremony (persistence)', () => {
     expect(release.purposeKey).toBe('security_challenge');
     expect(release.envelope.to.address as string).toBe('Speaker@Example.org');
     expect(release.envelope.from.address as string).toBe(SENDER.fromAddress);
-    expect(release.envelope.textBody).toContain(
-      `${PORTAL_ORIGIN}/portal/auth/complete?token=plt1_`
-    );
+    expect(release.envelope.textBody).toContain(`${PORTAL_ORIGIN}/p/plt1_`);
+    expect(release.envelope.htmlBody).toContain(`${PORTAL_ORIGIN}/p/plt1_`);
 
     const pointer = f.sqlite.query<{ readonly purpose: string }, [string]>(`
       SELECT purpose FROM communication_outbound_delivery_outbox WHERE delivery_id = ?
@@ -973,7 +972,7 @@ describe('per-request authority re-evaluation (persistence)', () => {
 });
 
 describe('participant sign-in message rendering', () => {
-  test('the link targets the portal completion route on the configured origin', () => {
+  test('the link targets the short portal path on the configured origin', () => {
     const message = renderParticipantSignInLinkMessage({
       portalOrigin: PORTAL_ORIGIN,
       linkToken: 'plt1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
@@ -981,8 +980,10 @@ describe('participant sign-in message rendering', () => {
       expiresAt: at(PARTICIPANT_MAGIC_LINK_LAUNCH_TTL_MS)
     });
     expect(message.linkUrl).toBe(
-      `${PORTAL_ORIGIN}/portal/auth/complete?token=plt1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`
+      `${PORTAL_ORIGIN}/p/plt1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`
     );
+    expect(message.textBody).toContain(message.linkUrl);
+    expect(message.htmlBody).toContain(message.linkUrl);
     expect(message.textBody).toContain('valid for 15 minutes');
     expect(message.textBody).toContain('works once');
   });

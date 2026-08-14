@@ -1,7 +1,10 @@
 import type { Database } from 'bun:sqlite';
 import { createHash } from 'node:crypto';
 import { normalizeEmail } from '@jooevents/identity-access';
-import { buildCommunicationMessageRelease } from '@jooevents/communications';
+import {
+  buildCommunicationMessageRelease,
+  renderTransactionalEmail
+} from '@jooevents/communications';
 import { outboundEmailDeliveryWorkInputSchema } from '@jooevents/contracts';
 import { canonicalJsonText, encodeCanonicalJson } from '@jooevents/kernel';
 import {
@@ -111,12 +114,15 @@ export interface WorkspaceSignInLinkDeliveryEffect {
   readonly expiresAt: string;
 }
 
-/** Renders the fixed security-template text; no merge fields beyond the link and TTL. */
+const PRODUCT_NAME = 'JooEvents';
+const SITE_URL = 'https://jooevents.com';
+
+/** Renders the fixed security template; no merge fields beyond the link and TTL. */
 export function renderWorkspaceSignInLinkMessage(input: {
   readonly linkUrl: string;
   readonly requestedAt: string;
   readonly expiresAt: string;
-}): { readonly subject: string; readonly textBody: string } {
+}): { readonly subject: string; readonly textBody: string; readonly htmlBody: string } {
   const parsed = new URL(input.linkUrl);
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
     throw new TypeError('workspace_sign_in_link_url_invalid');
@@ -126,20 +132,28 @@ export function renderWorkspaceSignInLinkMessage(input: {
     Math.round((Date.parse(input.expiresAt) - Date.parse(input.requestedAt)) / 60_000)
   );
   const subject = 'Your sign-in link';
-  const textBody = [
-    'Use this link to sign in:',
-    '',
-    parsed.toString(),
-    '',
-    `The link is valid for ${validMinutes} minutes and works once.`,
-    'Requesting a new link replaces this one.',
-    'If you did not request it, you can ignore this email.'
-  ].join('\n');
-  return Object.freeze({ subject, textBody });
+  const { textBody, htmlBody } = renderTransactionalEmail({
+    subject,
+    preheader: `Your one-time link to sign in to ${PRODUCT_NAME}.`,
+    heading: `Sign in to ${PRODUCT_NAME}`,
+    intro: ['Use this link to sign in:'],
+    button: { label: 'Sign in', url: parsed.toString() },
+    nakedLink: parsed.toString(),
+    smallPrint: [
+      `The link is valid for ${validMinutes} minutes and works once.`,
+      'Requesting a new link replaces this one.',
+      'If you did not request it, you can ignore this email.'
+    ],
+    siteUrl: SITE_URL,
+    productName: PRODUCT_NAME
+  });
+  return Object.freeze({ subject, textBody, htmlBody });
 }
 
 export interface WorkspaceSignInLinkDelivery {
-  enqueueSignInLink(effect: WorkspaceSignInLinkDeliveryEffect): void;
+  enqueueSignInLink(
+    effect: WorkspaceSignInLinkDeliveryEffect
+  ): { readonly deliveryId: string };
 }
 
 export function createSQLiteWorkspaceSignInLinkDelivery(input: {
@@ -168,7 +182,9 @@ export function createSQLiteWorkspaceSignInLinkDelivery(input: {
   const sender = Object.freeze({ ...senderPresentation, senderPresentationDigestSha256 });
 
   return Object.freeze({
-    enqueueSignInLink(effect: WorkspaceSignInLinkDeliveryEffect): void {
+    enqueueSignInLink(
+      effect: WorkspaceSignInLinkDeliveryEffect
+    ): { readonly deliveryId: string } {
       if (!input.sqlite.inTransaction) {
         throw new TypeError('workspace_sign_in_link_delivery_transaction_required');
       }
@@ -196,14 +212,16 @@ export function createSQLiteWorkspaceSignInLinkDelivery(input: {
         contentRefId: `content.workspace-sign-in-link:${effect.requestId}`,
         purposeKey: WORKSPACE_SIGN_IN_LINK_PURPOSE,
         reviewedMessageDigestSha256: digest({
-          schemaVersion: 1,
+          schemaVersion: 2,
           subject: message.subject,
-          textBody: message.textBody
+          textBody: message.textBody,
+          htmlBody: message.htmlBody
         }),
         sender,
         toAddress: effect.recipientEmail,
         subject: message.subject,
         textBody: message.textBody,
+        htmlBody: message.htmlBody,
         createdAt: effect.requestedAt
       });
       input.releases.put(release);
@@ -300,6 +318,7 @@ export function createSQLiteWorkspaceSignInLinkDelivery(input: {
         deliveryId,
         receiptId
       });
+      return Object.freeze({ deliveryId });
     }
   });
 }
