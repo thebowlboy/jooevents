@@ -120,15 +120,19 @@ export const DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG: WorkspaceOverviewAreaCatal
       area: 'schedule',
       status: 'partial',
       availableCapabilities: [
+        'release.change.draft',
         'schedule.placement.draft',
         'schedule.placement.snapshot.read',
         'schedule.session.manage',
         'schedule.session.read'
       ],
+      // `publish_schedule` now rides the mounted `release.change.draft`
+      // changeset loop (gated by the minted `publication.manage`), so the
+      // separate schedule.publish capability id is no longer the truth of
+      // what is unavailable here.
       unavailableCapabilities: [
         'schedule.break.manage',
-        'schedule.placement.unplace',
-        'schedule.publish'
+        'schedule.placement.unplace'
       ]
     },
     {
@@ -177,7 +181,17 @@ export const DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG: WorkspaceOverviewAreaCatal
       ],
       unavailableCapabilities: ['form.composition.manage', 'form.fields.manage']
     },
-    { area: 'embeds', status: 'unavailable', reason: 'not_implemented' },
+    {
+      area: 'embeds',
+      // The embed security slice is mounted server-side: the framing
+      // allowlist is authorable through the `release.change.draft`
+      // `surface_allowlist` arm and `/embed/*` HTML serves the enforced
+      // frame-ancestors policy. The embed documents and loader themselves
+      // are web-composition work that has not landed.
+      status: 'partial',
+      availableCapabilities: ['embed.frame_allowlist.draft'],
+      unavailableCapabilities: ['embed.document.render', 'embed.loader.serve']
+    },
     {
       area: 'settings',
       status: 'partial',

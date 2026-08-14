@@ -14,13 +14,21 @@ if (config.databaseDriver !== 'sqlite') {
 
 const buildDirectory = resolve(import.meta.dir, '../../../web/build-live');
 const buildIdentity = validateLiveBuildIdentity(buildDirectory);
-const runtime = await createEphemeralLiveRuntime({ config });
 const listener = resolveBunListenerConfiguration(Bun.env);
+// The dev-only issued-link token oracle mounts only in development mode, which
+// binds loopback (127.0.0.1). Production mode binds 0.0.0.0, so the oracle is
+// structurally absent beyond loopback — no remote peer can mint a magic-link
+// token there.
+const runtime = await createEphemeralLiveRuntime({
+  config,
+  devFixtures: listener.mode === 'development'
+});
 const fetch = createRuntimeRequestHandler({
   mode: listener.mode,
   backend: runtime.app.fetch,
   buildDirectory,
-  buildIdentity
+  buildIdentity,
+  embedFraming: runtime.embedFraming
 });
 
 const server = Bun.serve({

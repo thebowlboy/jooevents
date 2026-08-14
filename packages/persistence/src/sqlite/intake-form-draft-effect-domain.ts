@@ -30,6 +30,7 @@ import {
   createFormOrdinaryChangesetBundle,
   formChangesetReadPort,
   formPlanningAttributionReadPort,
+  formSurfaceSuccessorPlanningPort,
   parseFormChangesetAuthorInput,
   type FormChangesetAuthorInput,
   type FormDefinitionIdentityAssignment,
@@ -71,6 +72,7 @@ import {
 import { SQLiteEventSpineRepository } from './event-spine';
 import { SQLiteIntakeRepository } from './intake';
 import type { SQLiteOperatorEventRelationshipSource } from './operator-authority-repositories';
+import { createSQLiteFormSurfaceSuccessorCollaboration } from './release';
 
 export const INTAKE_FORM_DRAFT_EFFECT_SQL = `
 CREATE TABLE intake_form_draft_receipt_links (
@@ -382,6 +384,9 @@ export class SQLiteIntakeFormDraftEffectDomainAdapter implements SQLiteEffectDom
         }
         if ((key as unknown) === formCloseDeadlinePlanningPort) {
           return this.input.repository as unknown as Port;
+        }
+        if ((key as unknown) === formSurfaceSuccessorPlanningPort) {
+          return createSQLiteFormSurfaceSuccessorCollaboration(this.input.sqlite) as unknown as Port;
         }
         throw new TypeError('undeclared_intake_form_draft_read_port');
       }

@@ -111,6 +111,7 @@ import {
 } from '@jooevents/persistence/intake';
 import { installDeadlineSchema } from '@jooevents/persistence/deadline';
 import { installProgramVocabularySchema } from '@jooevents/persistence/program-vocabulary';
+import { installReleaseSchema } from '@jooevents/persistence/release';
 import {
   installSQLiteSubmissionTriageSchema,
   SQLiteIntakeSubmissionTriageSourceAdapter,
@@ -404,6 +405,9 @@ async function openFixture() {
   installSQLiteSubmissionTriageSchema(sqlite);
   installSQLiteIntakeFormDraftEffectSchema(sqlite);
   installIntakeFormChangesetEffectSchema(sqlite);
+  // Version-minting form plans consult the release surface-successor
+  // collaboration, so the release schema is an install prerequisite.
+  installReleaseSchema(sqlite);
   installSQLiteClassifiedPayloadStoreSchema(sqlite);
   installSQLitePublicMutationContinuationTrial(sqlite);
   installSQLitePublicMutationEffectCompletion(sqlite);

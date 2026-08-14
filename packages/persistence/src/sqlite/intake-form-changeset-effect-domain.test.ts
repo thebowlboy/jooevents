@@ -71,7 +71,14 @@ import {
 import { installSQLiteIntakeSchema, SQLiteIntakeRepository } from './intake';
 import { installDeadlineSchema } from './deadline';
 import { installProgramVocabularySchema } from './program-vocabulary';
+import {
+  createSQLiteIntakeFormVersionPinSource,
+  installReleaseSchema,
+  SQLiteReleaseRepository,
+  SQLiteReleaseSurfaceSuccessorStore
+} from './release';
 import { SQLiteEffectUnitOfWorkPort } from './sqlite-effect-unit-of-work';
+import { planReleaseMutation } from '@jooevents/release';
 
 const workspaceId = parseWorkspaceId('550e8400-e29b-41d4-a716-446655440000');
 const eventId = parseEventId('019c1df7-86b5-769b-bba4-5f7097bfa101');
@@ -165,6 +172,10 @@ function openFixture(options: {
   installDeadlineSchema(sqlite);
   installSQLiteIntakeFormDraftEffectSchema(sqlite);
   installIntakeFormChangesetEffectSchema(sqlite);
+  // The successor collaboration reads/writes the release surface tables inside
+  // any version-minting form plan, so the release schema is a hard install
+  // prerequisite for the intake form effect domains.
+  installReleaseSchema(sqlite);
   sqlite.query<never, [string, string, number, number, number]>(`
     INSERT INTO workspaces (id, name, state, created_at, updated_at, version)
     VALUES (?, ?, 'active', ?, ?, ?)
@@ -837,6 +848,190 @@ describe('ordinary SQLite Form changeset effect-domain adapter', () => {
         correctionLinks: beforeLaterHead.correctionLinks + 1
       });
       expect(opened.result.data.action).toBe('commit');
+    } finally {
+      fixture.close();
+    }
+  });
+
+  test('a committed republish re-releases the pinned apply surface in the same unit of work', async () => {
+    const fixture = openFixture();
+    const scope = { workspaceId, eventId };
+    try {
+      await commitDraft(fixture, createInput, INTAKE_FORM_CREATE_DRAFT_OPERATION, 'successor-create');
+      const formId = fixture.repository.readFormCatalog(scope)!.heads[0]!.id;
+      fixture.advance(1_000);
+      await commitDraft(fixture, {
+        formId,
+        expectedDefinitionVersion: 1,
+        expectedRegistryVersion: 1,
+        transition: 'publish_and_open'
+      }, INTAKE_FORM_LIFECYCLE_DRAFT_OPERATION, 'successor-open');
+      const openedHead = fixture.repository.readFormHead(scope, formId);
+      const versionOne = openedHead?.currentPublishedVersionId;
+      if (!versionOne) throw new TypeError('successor_first_version_missing');
+
+      // Publish a style set and an apply surface pinning version 1 through the
+      // canonical release domain over the same database.
+      const releases = new SQLiteReleaseRepository(fixture.sqlite, {
+        sessions: { readSessionCatalog: () => { throw new TypeError('unused_source'); } },
+        schedule: { readSchedule: () => { throw new TypeError('unused_source'); } },
+        engagements: { readEngagementSnapshot: () => { throw new TypeError('unused_source'); } },
+        vocabulary: { readVocabulary: () => { throw new TypeError('unused_source'); } },
+        eventSettings: { readEventSettings: () => { throw new TypeError('unused_source'); } },
+        names: { readParticipantDisplayName: () => { throw new TypeError('unused_source'); } },
+        forms: createSQLiteIntakeFormVersionPinSource(fixture.sqlite)
+      });
+      const releasedAt = '2026-08-12T09:00:01.000Z';
+      const styleSetReleaseId = uuid(0xa001);
+      const surfaceReleaseId = uuid(0xa002);
+      const stylePlan = planReleaseMutation({
+        planningInput: {
+          action: 'style_set_publish',
+          scope,
+          actorUserId: userId,
+          occurredAt: releasedAt,
+          releaseId: styleSetReleaseId,
+          recipe: {
+            name: 'Warm default', canvas: '#faf8f5', surface: '#ffffff',
+            text: '#2a2522', action: '#b05a4f', radius: 6, controlHeight: 36
+          },
+          expectedCurrentStyleSetNumber: null
+        },
+        port: releases
+      });
+      fixture.sqlite.exec('BEGIN IMMEDIATE;');
+      releases.applyReleasePlan(stylePlan);
+      fixture.sqlite.exec('COMMIT;');
+      const surfacePlan = planReleaseMutation({
+        planningInput: {
+          action: 'surface_publish',
+          scope,
+          actorUserId: userId,
+          occurredAt: releasedAt,
+          releaseId: surfaceReleaseId,
+          kind: 'apply',
+          manifest: { schemaVersion: 1, heading: 'Apply now', intro: null },
+          styleSetReleaseId,
+          formRef: { formId, formVersionId: versionOne },
+          expectedSurfaceHeadVersion: null
+        },
+        port: releases
+      });
+      fixture.sqlite.exec('BEGIN IMMEDIATE;');
+      releases.applyReleasePlan(surfacePlan);
+      fixture.sqlite.exec('COMMIT;');
+
+      fixture.advance(1_000);
+      const { draft, selector, proposed } = await draftAndPropose(fixture, {
+        formId,
+        expectedDefinitionVersion: 2,
+        expectedRegistryVersion: 1
+      }, INTAKE_FORM_PUBLISH_DRAFT_OPERATION, 'successor-republish');
+      if (draft.kind !== 'success' || draft.data.safeDiff.action !== 'publish') {
+        throw new TypeError('successor_republish_draft_missing');
+      }
+      expect(draft.data.safeDiff.surfaceSuccessors).toEqual([{
+        surfaceReleaseId: expect.any(String),
+        supersedesReleaseId: surfaceReleaseId,
+        formVersionId: draft.data.safeDiff.publishedVersion.id,
+        headVersion: 2
+      }]);
+      const committed = changesetLifecycleOperationResultSchema.parse(await fixture.effect({
+        operation: COMMIT_CHANGESET_OPERATION,
+        businessInput: {
+          ...selector,
+          expectedHeadVersion: proposed.kind === 'success' && proposed.data.action === 'propose'
+            ? proposed.data.diff.headVersion
+            : 0
+        },
+        key: 'successor-republish-commit'
+      }));
+      expect(committed).toMatchObject({ kind: 'success', data: { action: 'commit' } });
+
+      const versionTwo = fixture.repository.readFormHead(scope, formId)?.currentPublishedVersionId;
+      if (!versionTwo || versionTwo === versionOne) {
+        throw new TypeError('successor_republish_version_missing');
+      }
+      const store = new SQLiteReleaseSurfaceSuccessorStore(fixture.sqlite);
+      const head = store.readSurfaceHead(scope, 'apply');
+      expect(head).toMatchObject({ kind: 'apply', version: 2 });
+      const active = store.readSurfaceRelease(scope, head!.activeReleaseId);
+      expect(active).toMatchObject({
+        kind: 'apply',
+        number: 2,
+        predecessor: { releaseId: surfaceReleaseId },
+        formRef: { formId, formVersionId: versionTwo }
+      });
+      expect(count(fixture.sqlite, 'surface_releases')).toBe(2);
+      // The hosted successor rides the intake commit fact as a canonical
+      // release-domain surface_publish result.
+      const factRow = fixture.sqlite.query<{ readonly payload_json: string }, [string]>(`
+        SELECT payload_json FROM intake_form_changeset_domain_facts
+         WHERE changeset_id = ?
+      `).get(selector.changesetId);
+      const payload = JSON.parse(factRow!.payload_json) as {
+        readonly contributions: readonly {
+          readonly facts: readonly { readonly kind: string; readonly payload: unknown }[];
+        }[];
+      };
+      expect(payload.contributions[0]!.facts.map((fact) => fact.kind))
+        .toEqual(['intake_form_changed', 'release_changed']);
+      expect(payload.contributions[0]!.facts[1]!.payload).toMatchObject({
+        action: 'surface_publish',
+        release: { formRef: { formId, formVersionId: versionTwo } },
+        head: { activeReleaseId: head!.activeReleaseId, version: 2 }
+      });
+      expect(fixture.sqlite.query<Record<string, unknown>, []>('PRAGMA foreign_key_check').all())
+        .toEqual([]);
+
+      // A surface publish landing between propose and commit moves the fenced
+      // apply head and refuses the pending republish instead of committing a
+      // stale successor.
+      fixture.advance(1_000);
+      const drifted = await draftAndPropose(fixture, {
+        formId,
+        expectedDefinitionVersion: 3,
+        expectedRegistryVersion: 1
+      }, INTAKE_FORM_PUBLISH_DRAFT_OPERATION, 'successor-drift');
+      const repinPlan = planReleaseMutation({
+        planningInput: {
+          action: 'surface_publish',
+          scope,
+          actorUserId: userId,
+          occurredAt: '2026-08-12T09:00:03.000Z',
+          releaseId: uuid(0xa003),
+          kind: 'apply',
+          manifest: { schemaVersion: 1, heading: 'Apply today', intro: null },
+          styleSetReleaseId,
+          formRef: { formId, formVersionId: versionTwo },
+          expectedSurfaceHeadVersion: 2
+        },
+        port: releases
+      });
+      fixture.sqlite.exec('BEGIN IMMEDIATE;');
+      releases.applyReleasePlan(repinPlan);
+      fixture.sqlite.exec('COMMIT;');
+      expect(await fixture.effect({
+        operation: COMMIT_CHANGESET_OPERATION,
+        businessInput: {
+          ...drifted.selector,
+          expectedHeadVersion: drifted.proposed.kind === 'success'
+            && drifted.proposed.data.action === 'propose'
+            ? drifted.proposed.data.diff.headVersion
+            : 0
+        },
+        key: 'successor-drift-commit'
+      })).toMatchObject({
+        kind: 'outcome',
+        terminal: false,
+        outcome: {
+          class: 'stale_revision',
+          kind: 'changeset.lifecycle_refused',
+          detail: { code: 'guard_changed', subjectId: `surface_head_state:${eventId}:apply` }
+        }
+      });
+      expect(count(fixture.sqlite, 'surface_releases')).toBe(3);
+      expect(count(fixture.sqlite, 'intake_form_versions')).toBe(2);
     } finally {
       fixture.close();
     }

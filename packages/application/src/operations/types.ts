@@ -110,6 +110,15 @@ export interface OperatorHttpReadBindingDefinition {
   readonly projection: VersionedDefinitionRef;
 }
 
+export interface ParticipantHttpReadBindingDefinition {
+  readonly surface: 'participant_http';
+  readonly method: 'GET';
+  readonly path: string;
+  readonly input: 'query';
+  readonly browserResumption: { readonly kind: 'none' };
+  readonly projection: VersionedDefinitionRef;
+}
+
 export interface PublicHttpReadBindingDefinition {
   readonly surface: 'public_http';
   readonly method: 'GET';
@@ -133,6 +142,7 @@ export interface AppModelReadBindingDefinition {
 
 export type ReadOperationBindingDefinition =
   | OperatorHttpReadBindingDefinition
+  | ParticipantHttpReadBindingDefinition
   | PublicHttpReadBindingDefinition
   | ExternalMcpReadBindingDefinition
   | AppModelReadBindingDefinition;
@@ -209,6 +219,15 @@ export interface RegisteredOperatorHttpReadBinding {
   readonly input: 'query';
 }
 
+export interface RegisteredParticipantHttpReadBinding {
+  readonly operationName: string;
+  readonly operationVersion: number;
+  readonly surface: 'participant_http';
+  readonly method: 'GET';
+  readonly path: string;
+  readonly input: 'query';
+}
+
 export interface RegisteredPublicHttpReadBinding {
   readonly operationName: string;
   readonly operationVersion: number;
@@ -234,6 +253,7 @@ export interface RegisteredAppModelReadBinding {
 
 export type RegisteredReadOperationBinding =
   | RegisteredOperatorHttpReadBinding
+  | RegisteredParticipantHttpReadBinding
   | RegisteredPublicHttpReadBinding
   | RegisteredExternalMcpReadBinding
   | RegisteredAppModelReadBinding;
@@ -242,6 +262,7 @@ export interface ReadOperationRegistry {
   readonly safeManifest: SafeOperationManifest;
   readonly manifestDigestSha256: string;
   readonly operatorHttpBindings: readonly RegisteredOperatorHttpReadBinding[];
+  readonly participantHttpBindings: readonly RegisteredParticipantHttpReadBinding[];
   readonly publicHttpBindings: readonly RegisteredPublicHttpReadBinding[];
   readonly appModelReadBindings: readonly RegisteredAppModelReadBinding[];
 }
@@ -340,6 +361,15 @@ export interface OperatorHttpEffectBindingDefinition {
   readonly projection: VersionedDefinitionRef;
 }
 
+export interface ParticipantHttpEffectBindingDefinition {
+  readonly surface: 'participant_http';
+  readonly method: 'POST';
+  readonly path: string;
+  readonly input: 'body';
+  readonly browserResumption: { readonly kind: 'none' };
+  readonly projection: VersionedDefinitionRef;
+}
+
 export interface PublicHttpEffectBindingDefinition {
   readonly surface: 'public_http';
   readonly method: 'POST';
@@ -357,6 +387,7 @@ export interface AppModelEffectBindingDefinition {
 
 export type EffectOperationBindingDefinition =
   | OperatorHttpEffectBindingDefinition
+  | ParticipantHttpEffectBindingDefinition
   | PublicHttpEffectBindingDefinition
   | AppModelEffectBindingDefinition;
 
@@ -451,6 +482,15 @@ export interface RegisteredOperatorHttpEffectBinding {
   readonly input: 'body';
 }
 
+export interface RegisteredParticipantHttpEffectBinding {
+  readonly operationName: string;
+  readonly operationVersion: number;
+  readonly surface: 'participant_http';
+  readonly method: 'POST';
+  readonly path: string;
+  readonly input: 'body';
+}
+
 export interface RegisteredPublicHttpEffectBinding {
   readonly operationName: string;
   readonly operationVersion: number;
@@ -470,6 +510,7 @@ export interface RegisteredAppModelEffectBinding {
 
 export interface OperationRegistry extends ReadOperationRegistry {
   readonly operatorHttpEffectBindings: readonly RegisteredOperatorHttpEffectBinding[];
+  readonly participantHttpEffectBindings: readonly RegisteredParticipantHttpEffectBinding[];
   readonly publicHttpEffectBindings: readonly RegisteredPublicHttpEffectBinding[];
   readonly appModelEffectBindings: readonly RegisteredAppModelEffectBinding[];
   /** Executable internal bindings, deliberately separate from the public safe manifest. */

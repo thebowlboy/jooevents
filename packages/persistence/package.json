@@ -83,7 +83,12 @@
     "./engagement-changeset-effect-domain": "./src/sqlite/engagement-changeset-effect-domain.ts",
     "./organizer-decision-audience": "./src/sqlite/communications/decision-audience.ts",
     "./message-releases": "./src/sqlite/communications/message-releases.ts",
-    "./message-release-effect-domain": "./src/sqlite/communications/message-release-effect-domain.ts"
+    "./message-release-effect-domain": "./src/sqlite/communications/message-release-effect-domain.ts",
+    "./release": "./src/sqlite/release.ts",
+    "./release-draft-effect-domain": "./src/sqlite/release-draft-effect-domain.ts",
+    "./release-changeset-effect-domain": "./src/sqlite/release-changeset-effect-domain.ts",
+    "./participant-access": "./src/sqlite/participant-access.ts",
+    "./participant-challenge-delivery": "./src/sqlite/participant-challenge-delivery.ts"
   },
   "scripts": {
     "check": "tsc --noEmit",
@@ -112,6 +117,8 @@
     "@jooevents/model-adapter": "workspace:*",
     "@jooevents/program": "workspace:*",
     "@jooevents/program-operations": "workspace:*",
+    "@jooevents/release": "workspace:*",
+    "@jooevents/release-operations": "workspace:*",
     "@jooevents/reliability": "workspace:*",
     "@jooevents/review": "workspace:*",
     "@jooevents/review-operations": "workspace:*",

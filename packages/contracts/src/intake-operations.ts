@@ -40,6 +40,19 @@ const intakeFormSafeHeadSchema = z.strictObject({
   definition: formDefinitionContentSchema
 });
 
+/**
+ * One successor apply-surface release a form republish plans in the same
+ * reviewed changeset (owner Model 3): the surface currently rendering the
+ * republished form is re-released pinning the new form version. Absent on
+ * pre-successor revisions; required inside the current changeset plan.
+ */
+export const intakeFormSurfaceSuccessorDiffSchema = z.strictObject({
+  surfaceReleaseId: intakeIdSchema,
+  supersedesReleaseId: intakeIdSchema,
+  formVersionId: intakeIdSchema,
+  headVersion: z.number().int().positive().safe()
+});
+
 export const intakeFormSafeDiffSchema = z.discriminatedUnion('action', [
   z.strictObject({
     action: z.literal('create'), before: z.null(), after: intakeFormSafeHeadSchema
@@ -55,7 +68,8 @@ export const intakeFormSafeDiffSchema = z.discriminatedUnion('action', [
       id: intakeIdSchema,
       number: z.number().int().positive().safe(),
       definitionDigestSha256: intakeDigestSchema
-    })
+    }),
+    surfaceSuccessors: z.array(intakeFormSurfaceSuccessorDiffSchema).max(20).optional()
   }),
   z.strictObject({
     action: z.literal('lifecycle'),
@@ -65,7 +79,8 @@ export const intakeFormSafeDiffSchema = z.discriminatedUnion('action', [
       id: intakeIdSchema,
       number: z.number().int().positive().safe(),
       definitionDigestSha256: intakeDigestSchema
-    }).nullable()
+    }).nullable(),
+    surfaceSuccessors: z.array(intakeFormSurfaceSuccessorDiffSchema).max(20).nullable().optional()
   }),
   z.strictObject({
     action: z.literal('closing'),
@@ -204,5 +219,6 @@ export const INTAKE_OPERATION_SCHEMA_REFS = Object.freeze({
 });
 
 export type IntakeFormDraftAction = z.infer<typeof intakeFormDraftActionSchema>;
+export type IntakeFormSurfaceSuccessorDiff = z.infer<typeof intakeFormSurfaceSuccessorDiffSchema>;
 export type IntakeFormSafeDiff = z.infer<typeof intakeFormSafeDiffSchema>;
 export type IntakeFormDraftData = z.infer<typeof intakeFormDraftDataSchema>;

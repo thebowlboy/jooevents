@@ -11,7 +11,9 @@ import {
   type SafeEvidence
 } from '@jooevents/contracts';
 import {
+  requiredOutboundEmailAttemptKind,
   type OutboundEmailDeliveryAttempt,
+  type OutboundEmailDeliveryAttemptKind,
   type OutboundEmailDeliveryHead,
   type OutboundEmailDeliveryLedger,
   type ProviderAttemptResolution
@@ -48,6 +50,9 @@ CREATE TABLE communication_outbound_delivery_heads (
   )),
   version INTEGER NOT NULL CHECK(version > 0),
   attempt_count INTEGER NOT NULL CHECK(attempt_count >= 0),
+  unknown_attempt_count INTEGER NOT NULL
+    CHECK(unknown_attempt_count >= 0 AND unknown_attempt_count <= attempt_count),
+  marked_resend_exhausted INTEGER NOT NULL CHECK(marked_resend_exhausted IN (0, 1)),
   current_attempt_id TEXT,
   receipt_id TEXT,
   root_fact_id TEXT NOT NULL,
@@ -62,7 +67,8 @@ CREATE TABLE communication_outbound_delivery_heads (
   UNIQUE(history_thread_id),
   UNIQUE(root_history_id),
   CHECK((state = 'pending' AND attempt_count = 0 AND current_attempt_id IS NULL)
-    OR (state <> 'pending' AND attempt_count > 0 AND current_attempt_id IS NOT NULL))
+    OR (state <> 'pending' AND attempt_count > 0 AND current_attempt_id IS NOT NULL)),
+  CHECK(marked_resend_exhausted = 0 OR unknown_attempt_count >= 2)
 ) STRICT;
 
 CREATE TRIGGER communication_outbound_delivery_heads_no_delete
@@ -101,10 +107,19 @@ BEGIN
   SELECT RAISE(ABORT, 'outbound delivery governed references are immutable');
 END;
 
+CREATE TRIGGER communication_outbound_delivery_heads_ambiguity_monotonic
+BEFORE UPDATE ON communication_outbound_delivery_heads
+WHEN NEW.unknown_attempt_count < OLD.unknown_attempt_count
+  OR NEW.marked_resend_exhausted < OLD.marked_resend_exhausted
+BEGIN
+  SELECT RAISE(ABORT, 'outbound delivery acceptance ambiguity evidence is monotonic');
+END;
+
 CREATE TABLE communication_outbound_delivery_attempts (
   attempt_id TEXT PRIMARY KEY,
   delivery_id TEXT NOT NULL,
   attempt_number INTEGER NOT NULL CHECK(attempt_number > 0),
+  attempt_kind TEXT NOT NULL CHECK(attempt_kind IN ('original', 'marked_resend')),
   state TEXT NOT NULL CHECK(state IN (
     'request_started', 'accepted', 'known_rejected_safe_retryable',
     'known_rejected_terminal', 'acceptance_unknown'
@@ -140,6 +155,7 @@ WHEN OLD.state <> 'request_started'
   OR NEW.attempt_id IS NOT OLD.attempt_id
   OR NEW.delivery_id IS NOT OLD.delivery_id
   OR NEW.attempt_number IS NOT OLD.attempt_number
+  OR NEW.attempt_kind IS NOT OLD.attempt_kind
   OR NEW.adapter_key IS NOT OLD.adapter_key
   OR NEW.adapter_version IS NOT OLD.adapter_version
   OR NEW.idempotency_capability IS NOT OLD.idempotency_capability
@@ -275,6 +291,8 @@ interface DeliveryHeadRow {
   readonly state: OutboundEmailDeliveryHead['state'];
   readonly version: number;
   readonly attempt_count: number;
+  readonly unknown_attempt_count: number;
+  readonly marked_resend_exhausted: number;
   readonly current_attempt_id: string | null;
 }
 
@@ -282,6 +300,7 @@ interface AttemptRow {
   readonly attempt_id: string;
   readonly delivery_id: string;
   readonly attempt_number: number;
+  readonly attempt_kind: OutboundEmailDeliveryAttempt['attemptKind'];
   readonly state: OutboundEmailDeliveryAttempt['state'];
   readonly adapter_key: string;
   readonly adapter_version: string;
@@ -343,6 +362,8 @@ function headFromRow(row: DeliveryHeadRow): OutboundEmailDeliveryHead {
     state: row.state,
     version: row.version,
     attemptCount: row.attempt_count,
+    unknownAttemptCount: row.unknown_attempt_count,
+    markedResendExhausted: row.marked_resend_exhausted === 1,
     currentAttemptId: row.current_attempt_id
   });
 }
@@ -363,6 +384,7 @@ function attemptFromRow(row: AttemptRow): OutboundEmailDeliveryAttempt {
     deliveryId: row.delivery_id,
     attemptId: row.attempt_id,
     attemptNumber: row.attempt_number,
+    attemptKind: row.attempt_kind,
     state: row.state,
     adapterKey: row.adapter_key,
     adapterVersion: row.adapter_version,
@@ -389,12 +411,13 @@ SELECT delivery_id, workspace_id, event_id, release_id, dispatch_generation,
        channel_address_id, channel_address_version,
        address_lookup_fingerprint_profile, address_lookup_fingerprint_version,
        address_lookup_fingerprint_sha256, state, version, attempt_count,
+       unknown_attempt_count, marked_resend_exhausted,
        current_attempt_id
   FROM communication_outbound_delivery_heads
  WHERE delivery_id = ?`;
 
 const ATTEMPT_SELECT = `
-SELECT attempt_id, delivery_id, attempt_number, state, adapter_key, adapter_version,
+SELECT attempt_id, delivery_id, attempt_number, attempt_kind, state, adapter_key, adapter_version,
        idempotency_capability, reconciliation_capability, callback_capabilities_json,
        provider_request_digest_sha256, reviewed_message_digest_sha256,
        reviewed_envelope_digest_sha256, provider_message_id, provider_outcome_reason,
@@ -449,6 +472,8 @@ export class SQLiteOutboundEmailDeliveryLedger implements OutboundEmailDeliveryL
     readonly deliveryId: string;
     readonly expectedDeliveryVersion: number;
     readonly attemptId: string;
+    readonly attemptKind: OutboundEmailDeliveryAttemptKind;
+    readonly resendEnvelopeDigestSha256?: string;
     readonly adapterKey: string;
     readonly adapterVersion: string;
     readonly capabilities: ProviderCapabilities;
@@ -457,10 +482,20 @@ export class SQLiteOutboundEmailDeliveryLedger implements OutboundEmailDeliveryL
   }): OutboundEmailDeliveryAttempt {
     const deliveryId = providerOpaqueIdSchema.parse(input.deliveryId);
     const attemptId = providerOpaqueIdSchema.parse(input.attemptId);
+    const attemptKind = input.attemptKind;
+    if (attemptKind !== 'original' && attemptKind !== 'marked_resend') {
+      throw new TypeError('outbound_delivery_attempt_kind_invalid');
+    }
     const adapterKey = providerStableKeySchema.parse(input.adapterKey);
     const adapterVersion = providerStableKeySchema.parse(input.adapterVersion);
     const capabilities = providerCapabilitiesSchema.parse(input.capabilities);
     const requestDigest = providerSha256Schema.parse(input.providerRequestDigestSha256);
+    const resendDigest = attemptKind === 'marked_resend'
+      ? providerSha256Schema.parse(input.resendEnvelopeDigestSha256)
+      : undefined;
+    if (attemptKind === 'original' && input.resendEnvelopeDigestSha256 !== undefined) {
+      throw new TypeError('outbound_delivery_resend_digest_unexpected');
+    }
     const startedAtMs = instantMs(input.startedAt);
     return this.#transaction(() => {
       const registration = this.sqlite.query<DeliveryHeadRow & {
@@ -468,26 +503,36 @@ export class SQLiteOutboundEmailDeliveryLedger implements OutboundEmailDeliveryL
       }, [string]>(HEAD_SELECT.replace('current_attempt_id', 'current_attempt_id, receipt_id')).get(deliveryId);
       if (!registration || registration.receipt_id === null) throw new TypeError('outbound_delivery_not_registered');
       if (registration.version !== input.expectedDeliveryVersion) throw new TypeError('outbound_delivery_attempt_conflict');
-      if (registration.state !== 'pending' && registration.state !== 'known_rejected_safe_retryable') {
+      if (registration.state !== 'pending' && registration.state !== 'known_rejected_safe_retryable'
+        && !(registration.state === 'acceptance_unknown' && registration.marked_resend_exhausted === 0)) {
         throw new TypeError('outbound_delivery_not_dispatchable');
+      }
+      if (attemptKind !== requiredOutboundEmailAttemptKind(
+        { unknownAttemptCount: registration.unknown_attempt_count },
+        capabilities
+      )) {
+        throw new TypeError('outbound_delivery_attempt_kind_conflict');
+      }
+      if (resendDigest !== undefined && resendDigest === registration.reviewed_envelope_digest_sha256) {
+        throw new TypeError('outbound_delivery_resend_envelope_unmarked');
       }
       const attemptNumber = registration.attempt_count + 1;
       this.sqlite.query<never, [
-        string, string, number, string, string, string, string,
+        string, string, number, string, string, string, string, string,
         string, string, string, string, number
       ]>(`
         INSERT INTO communication_outbound_delivery_attempts (
-          attempt_id, delivery_id, attempt_number, state, adapter_key, adapter_version,
+          attempt_id, delivery_id, attempt_number, attempt_kind, state, adapter_key, adapter_version,
           idempotency_capability, reconciliation_capability, callback_capabilities_json,
           provider_request_digest_sha256, reviewed_message_digest_sha256,
           reviewed_envelope_digest_sha256, started_at_ms
-        ) VALUES (?, ?, ?, 'request_started', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, 'request_started', ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
-        attemptId, deliveryId, attemptNumber, adapterKey, adapterVersion,
+        attemptId, deliveryId, attemptNumber, attemptKind, adapterKey, adapterVersion,
         capabilities.idempotency, capabilities.reconciliation,
         canonicalJsonText(capabilities.callbacks), requestDigest,
         registration.reviewed_message_digest_sha256,
-        registration.reviewed_envelope_digest_sha256,
+        resendDigest ?? registration.reviewed_envelope_digest_sha256,
         startedAtMs
       );
       const changed = this.sqlite.query<never, [string, number, number, string, number]>(`
@@ -570,6 +615,18 @@ export class SQLiteOutboundEmailDeliveryLedger implements OutboundEmailDeliveryL
         || anchor.current_attempt_id !== attemptId) {
         throw new TypeError('outbound_delivery_attempt_conflict');
       }
+      const startedAttempt = this.sqlite.query<{
+        readonly attempt_kind: OutboundEmailDeliveryAttemptKind;
+      }, [string, string]>(`
+        SELECT attempt_kind FROM communication_outbound_delivery_attempts
+         WHERE attempt_id = ? AND delivery_id = ?
+      `).get(attemptId, deliveryId);
+      if (!startedAttempt) throw new TypeError('outbound_delivery_attempt_conflict');
+      const landedUnknown = input.state === 'acceptance_unknown';
+      // The single automatic marked retry is consumed when it also lands with
+      // unknown acceptance; the head is then quarantined for manual resolution.
+      const exhaustsMarkedResend = landedUnknown
+        && startedAttempt.attempt_kind === 'marked_resend';
       const changedAttempt = this.sqlite.query<never, [
         string, string | null, string | null, string | null, string | null, number, string
       ]>(`
@@ -587,11 +644,20 @@ export class SQLiteOutboundEmailDeliveryLedger implements OutboundEmailDeliveryL
         attemptId
       );
       if (changedAttempt.changes !== 1) throw new TypeError('outbound_delivery_attempt_conflict');
-      const changedHead = this.sqlite.query<never, [string, number, string, string]>(`
+      const changedHead = this.sqlite.query<never, [string, number, number, number, string, string]>(`
         UPDATE communication_outbound_delivery_heads
-           SET state = ?, version = version + 1, updated_at_ms = ?
+           SET state = ?, version = version + 1, updated_at_ms = ?,
+               unknown_attempt_count = unknown_attempt_count + ?,
+               marked_resend_exhausted = max(marked_resend_exhausted, ?)
          WHERE delivery_id = ? AND state = 'request_started' AND current_attempt_id = ?
-      `).run(input.state, completedAtMs, deliveryId, attemptId);
+      `).run(
+        input.state,
+        completedAtMs,
+        landedUnknown ? 1 : 0,
+        exhaustsMarkedResend ? 1 : 0,
+        deliveryId,
+        attemptId
+      );
       if (changedHead.changes !== 1) throw new TypeError('outbound_delivery_attempt_conflict');
 
       const factId = providerOpaqueIdSchema.parse(this.#ids.newFactId());
@@ -606,15 +672,19 @@ export class SQLiteOutboundEmailDeliveryLedger implements OutboundEmailDeliveryL
         ? {
             contractVersion: 1,
             kind: 'acceptance_unknown',
-            recoveryCode: input.recoveryCode
+            attemptKind: startedAttempt.attempt_kind,
+            recoveryCode: input.recoveryCode,
+            markedResendExhausted: exhaustsMarkedResend
           }
         : {
             contractVersion: 1,
             kind: 'provider_resolution',
+            attemptKind: startedAttempt.attempt_kind,
             state: input.state,
             providerMessageId: input.providerMessageId,
             providerOutcomeReason: input.providerOutcomeReason,
-            safeEvidence: input.safeEvidence
+            safeEvidence: input.safeEvidence,
+            ...(landedUnknown ? { markedResendExhausted: exhaustsMarkedResend } : {})
           };
       this.sqlite.query<never, [string, string, string, string, string, string, string, string, string, number]>(`
         INSERT INTO communication_outbound_delivery_facts (
@@ -697,11 +767,12 @@ export function insertOutboundEmailDeliveryRegistration(input: {
       channel_address_id, channel_address_version,
       address_lookup_fingerprint_profile, address_lookup_fingerprint_version,
       address_lookup_fingerprint_sha256, state, version, attempt_count,
+      unknown_attempt_count, marked_resend_exhausted,
       root_fact_id, root_outbox_pointer_id, history_thread_id, root_history_id,
       created_at_ms, updated_at_ms
     ) VALUES (
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-      'pending', 1, 0, ?, ?, ?, ?, ?, ?
+      'pending', 1, 0, 0, 0, ?, ?, ?, ?, ?, ?
     )
   `).run(
     work.deliveryId, input.workspaceId, input.eventId, work.releaseId,

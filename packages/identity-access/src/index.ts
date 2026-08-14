@@ -5,6 +5,7 @@ export * from './account-linking';
 export * from './identity';
 export * from './outcomes';
 export * from './operation-authority';
+export * from './participant-access';
 export * from './permissions';
 export * from './persistence';
 export * from './profile-media';

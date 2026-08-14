@@ -9,6 +9,14 @@ import type { JooEventsAuth } from '../auth/better-auth';
 import { backendRouteNotFoundResponse, protectBackendNotFoundResponse } from './backend-not-found';
 import { createOperatorOperationsHttpAdapter, type OperatorOperationsHttpRuntime } from './operator-operations';
 import {
+  createParticipantEntryRoutes,
+  type ParticipantEntryRuntime
+} from './participant-entry';
+import {
+  createParticipantOperationsHttpAdapter,
+  type ParticipantOperationsHttpRuntime
+} from './participant-operations';
+import {
   RequestSerializationAbortedError,
   type HttpRequestSerializationBoundary
 } from './request-serialization';
@@ -28,6 +36,8 @@ export function createHttpApp(input: {
   readonly workspaceId: string;
   readonly baseUrl: string;
   readonly operatorOperations?: OperatorOperationsHttpRuntime;
+  readonly participantEntry?: ParticipantEntryRuntime;
+  readonly participantOperations?: ParticipantOperationsHttpRuntime;
   readonly requestSerialization?: HttpRequestSerializationBoundary;
 }) {
   const app = new OpenAPIHono();
@@ -163,6 +173,16 @@ export function createHttpApp(input: {
 
   if (input.operatorOperations) {
     app.route('/', createOperatorOperationsHttpAdapter(input.operatorOperations));
+  }
+
+  // The participant lane: server-owned entry ceremony routes first, then the
+  // registered participant_http operation bindings. Both stay disjoint from
+  // operator routes and never consult Better Auth.
+  if (input.participantEntry) {
+    app.route('/', createParticipantEntryRoutes(input.participantEntry));
+  }
+  if (input.participantOperations) {
+    app.route('/', createParticipantOperationsHttpAdapter(input.participantOperations));
   }
 
   app.get('/health', (context) => context.json({ ok: true }));

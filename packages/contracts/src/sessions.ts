@@ -188,13 +188,35 @@ export const sessionRosterAppendInputSchema = z.strictObject({
 });
 
 /**
- * Operator wire surface for the mounted Session draft/mutate operations. Roster
- * appends are authored through hosting changesets (`sessionPlanningInputSchema`
- * carries the `roster_append` arm), not through this direct operator input.
+ * The organizer off-switch for one participant's public visibility. Owner
+ * decision (2026-08-14, publication packet): per-person public visibility
+ * lives on the session roster participant flag, and this action is its only
+ * mutation — append-style over the existing roster (no entry is added or
+ * removed), version-guarded on the session head, and compensation-covered by
+ * the ordinary prior-head restore. Public program releases read
+ * confirmed-and-visible from this flag.
+ */
+export const sessionRosterVisibilityInputSchema = z.strictObject({
+  action: z.literal('roster_visibility'),
+  ...catalogGuardFields,
+  sessionId: sessionIdInputSchema,
+  expectedSessionVersion: sessionVersionSchema,
+  expectedSessionDigestSha256: digestSchema,
+  personId: sessionIdInputSchema,
+  publiclyVisible: z.boolean()
+});
+
+/**
+ * Operator wire surface for the mounted Session draft/mutate operations:
+ * create, lifecycle transition, and the roster visibility off-switch — the
+ * organizer gesture that must stay reachable so a person can be hidden before
+ * any publish and after a revocation. Roster appends remain authored only
+ * through hosting changesets (decision graduation), never from a browser.
  */
 export const sessionAuthorInputSchema = z.discriminatedUnion('action', [
   sessionCreateInputSchema,
-  sessionTransitionInputSchema
+  sessionTransitionInputSchema,
+  sessionRosterVisibilityInputSchema
 ]);
 
 const planningAttribution = {
@@ -206,7 +228,8 @@ const planningAttribution = {
 export const sessionPlanningInputSchema = z.discriminatedUnion('action', [
   sessionCreateInputSchema.extend({ ...planningAttribution, sessionId: sessionIdSchema }),
   sessionTransitionInputSchema.extend(planningAttribution),
-  sessionRosterAppendInputSchema.extend(planningAttribution)
+  sessionRosterAppendInputSchema.extend(planningAttribution),
+  sessionRosterVisibilityInputSchema.extend(planningAttribution)
 ]);
 
 export const sessionMutationPlanSchema = z.strictObject({
@@ -239,13 +262,13 @@ export const sessionRestorePlanSchema = z.strictObject({
 });
 
 export const sessionSafeDiffSchema = z.strictObject({
-  action: z.enum(['create', 'transition', 'roster_append', 'restore']),
+  action: z.enum(['create', 'transition', 'roster_append', 'roster_visibility', 'restore']),
   before: sessionHeadSchema.nullable(),
   after: sessionHeadSchema.nullable()
 });
 
 export const sessionMutationResultSchema = z.strictObject({
-  action: z.enum(['create', 'transition', 'roster_append', 'restore']),
+  action: z.enum(['create', 'transition', 'roster_append', 'roster_visibility', 'restore']),
   catalogVersion: sessionVersionSchema,
   session: sessionHeadSchema.nullable()
 });
@@ -253,7 +276,7 @@ export const sessionMutationResultSchema = z.strictObject({
 /** Exact selector and inert plan an operator needs to review, propose, and commit one draft. */
 export const sessionDraftDataSchema = z.strictObject({
   schemaVersion: z.literal(1),
-  action: z.enum(['create', 'transition']),
+  action: z.enum(['create', 'transition', 'roster_visibility']),
   changesetId: sessionIdSchema,
   headVersion: sessionVersionSchema,
   status: z.literal('draft'),
@@ -312,6 +335,7 @@ export type SessionProgramTargetEvidenceDto = z.infer<typeof sessionProgramTarge
 export type SessionParticipantRefDto = z.infer<typeof sessionParticipantRefSchema>;
 export type SessionRosterParticipantInput = z.infer<typeof sessionRosterParticipantInputSchema>;
 export type SessionRosterAppendInput = z.infer<typeof sessionRosterAppendInputSchema>;
+export type SessionRosterVisibilityInput = z.infer<typeof sessionRosterVisibilityInputSchema>;
 export type SessionRosterEvidenceDto = z.infer<typeof sessionRosterEvidenceSchema>;
 export type SessionHeadDto = z.infer<typeof sessionHeadSchema>;
 export type SessionCatalogDto = z.infer<typeof sessionCatalogSchema>;

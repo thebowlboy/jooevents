@@ -268,6 +268,11 @@ const planningAttribution = {
   occurredAt: canonicalInstantSchema
 } as const;
 
+const planningContext = {
+  scope: engagementScopeSchema,
+  occurredAt: canonicalInstantSchema
+} as const;
+
 const planningGuards = {
   engagementId: engagementIdSchema,
   expectedEngagementVersion: engagementVersionSchema
@@ -279,11 +284,21 @@ const planningGuards = {
  * union: `self` and `co_speaker` planning inputs may only be constructed by a
  * person-authenticated surface acting as that person, never resolved from the
  * operator wire.
+ *
+ * The confirmation and decline arms carry a workspace `actorUserId` exactly
+ * when an operator surface resolved the act. A person-authenticated surface
+ * has no workspace user and must not fabricate one, so participant-resolved
+ * confirmation (`self`/`co_speaker`) and decline inputs omit it; the
+ * confirmation arm additionally pins the pairing so an organizer-recorded
+ * confirmation always names its recording user and a participant confirmation
+ * never does. Cancellation acts remain operator-resolved and keep the
+ * required attribution.
  */
 export const engagementMutationPlanningInputSchema = z.discriminatedUnion('action', [
   z.strictObject({
     action: z.literal('record_confirmation'),
-    ...planningAttribution,
+    ...planningContext,
+    actorUserId: engagementIdSchema.optional(),
     ...planningGuards,
     attribution: engagementConfirmationAttributionSchema,
     confirmingPersonId: engagementIdSchema.optional()
@@ -294,10 +309,18 @@ export const engagementMutationPlanningInputSchema = z.discriminatedUnion('actio
         message: 'exactly a co-speaker confirmation names the confirming person'
       });
     }
+    if ((input.attribution === 'organizer_recorded') !== (input.actorUserId !== undefined)) {
+      context.addIssue({
+        code: 'custom', path: ['actorUserId'],
+        message: 'exactly an organizer-recorded confirmation carries the recording workspace user'
+      });
+    }
   }),
   z.strictObject({
     action: z.literal('decline'),
-    ...planningAttribution,
+    ...planningContext,
+    /** Present exactly when an operator surface resolved the decline. */
+    actorUserId: engagementIdSchema.optional(),
     ...planningGuards
   }),
   z.strictObject({

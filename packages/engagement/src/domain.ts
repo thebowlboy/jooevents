@@ -88,7 +88,9 @@ function respond(
     const confirmation: EngagementConfirmationDto = {
       attribution: input.attribution,
       personId: input.attribution === 'co_speaker' ? input.confirmingPersonId! : before.personId,
-      recordedByUserId: input.attribution === 'organizer_recorded' ? input.actorUserId : null,
+      // The planning schema pins presence to organizer_recorded exactly; the
+      // head parse below still refuses an organizer confirmation without it.
+      recordedByUserId: input.attribution === 'organizer_recorded' ? (input.actorUserId ?? null) : null,
       confirmedAt: input.occurredAt
     };
     return parseEngagementHead({

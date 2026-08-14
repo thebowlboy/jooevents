@@ -1,0 +1,26 @@
+{
+  "private": true,
+  "version": "0.0.0",
+  "license": "SEE LICENSE IN LICENSE",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "bun-types": "1.3.6",
+    "typescript": "6.0.3"
+  },
+  "name": "@jooevents/release-operations",
+  "dependencies": {
+    "@jooevents/application": "workspace:*",
+    "@jooevents/contracts": "workspace:*",
+    "@jooevents/identity-access": "workspace:*",
+    "@jooevents/kernel": "workspace:*",
+    "@jooevents/release": "workspace:*",
+    "zod": "4.4.3"
+  }
+}

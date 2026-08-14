@@ -102,7 +102,7 @@ export const sessionDraftDomainContributionSchema = z.strictObject({
   revisionId: applicationIdSchema,
   revisionDigestSha256: sha256Schema,
   recordDigestSha256: sha256Schema,
-  action: z.enum(['create', 'transition']),
+  action: z.enum(['create', 'transition', 'roster_visibility']),
   sessionId: applicationIdSchema,
   occurredAt: canonicalInstantSchema
 });
@@ -121,9 +121,9 @@ export const sessionDraftStaleDetailSchema = z.strictObject({
   code: z.enum([
     'wrong_scope', 'stale_catalog', 'session_exists', 'session_missing', 'stale_session',
     'format_missing', 'format_retired', 'track_missing', 'track_retired',
-    'invalid_transition', 'invalid_plan'
+    'participant_missing', 'invalid_transition', 'invalid_plan'
   ]),
-  action: z.enum(['create', 'transition']),
+  action: z.enum(['create', 'transition', 'roster_visibility']),
   sessionId: applicationIdSchema
 });
 
@@ -490,7 +490,7 @@ export function createSessionDraftOperationModule(
       effectOperations: Object.freeze([{
         ...SESSION_CHANGE_DRAFT_OPERATION,
         lifecycle: { status: 'active' as const },
-        summary: 'Draft one Session creation or lifecycle transition for review.',
+        summary: 'Draft one Session creation, lifecycle transition, or roster visibility switch for review.',
         effect: 'draft' as const,
         maxRisk: 'low' as const,
         autonomyPolicy: refs.autonomy,

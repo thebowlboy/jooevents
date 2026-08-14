@@ -28,7 +28,9 @@ const config = loadEphemeralLiveConfig({
   JOOEVENTS_BLOB_DRIVER: 'filesystem'
 });
 
-const runtime = await createEphemeralLiveRuntime({ config });
+// This browser-test server binds loopback (127.0.0.1) only, so the dev-only
+// issued-link fixture the joined-live portal specs drive is safe to mount here.
+const runtime = await createEphemeralLiveRuntime({ config, devFixtures: true });
 const now = Date.now();
 const authUserId = crypto.randomUUID();
 runtime.database.sqlite.query(`

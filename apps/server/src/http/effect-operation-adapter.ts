@@ -4,6 +4,7 @@ import {
   type EffectOperationExecutor,
   type OperationRegistry,
   type RegisteredOperatorHttpEffectBinding,
+  type RegisteredParticipantHttpEffectBinding,
   type RegisteredPublicHttpEffectBinding
 } from '@jooevents/application';
 import {
@@ -17,7 +18,10 @@ import type { ReturnTypeOrPromise } from './types';
 
 const maxJsonBodyBytes = 1024 * 1024;
 
-type HttpEffectBinding = RegisteredOperatorHttpEffectBinding | RegisteredPublicHttpEffectBinding;
+type HttpEffectBinding =
+  | RegisteredOperatorHttpEffectBinding
+  | RegisteredParticipantHttpEffectBinding
+  | RegisteredPublicHttpEffectBinding;
 
 export type EffectProtocolEvidenceResult =
   | { readonly kind: 'verified'; readonly evidence: unknown }
@@ -34,6 +38,8 @@ export interface EffectProtocolEvidenceVerifier<Binding extends HttpEffectBindin
 export type OperatorEffectProtocolEvidenceResult = EffectProtocolEvidenceResult;
 export type OperatorEffectProtocolEvidenceVerifier =
   EffectProtocolEvidenceVerifier<RegisteredOperatorHttpEffectBinding>;
+export type ParticipantEffectProtocolEvidenceVerifier =
+  EffectProtocolEvidenceVerifier<RegisteredParticipantHttpEffectBinding>;
 export type PublicEffectProtocolEvidenceVerifier =
   EffectProtocolEvidenceVerifier<RegisteredPublicHttpEffectBinding>;
 
@@ -169,6 +175,20 @@ export function createOperatorEffectHttpAdapter(input: {
 }) {
   return createEffectHttpAdapter({
     bindings: input.registry.operatorHttpEffectBindings,
+    builder: input.builder,
+    executor: input.executor,
+    evidence: input.evidence
+  });
+}
+
+export function createParticipantEffectHttpAdapter(input: {
+  readonly registry: OperationRegistry;
+  readonly builder: EffectInvocationBuilder;
+  readonly executor: EffectOperationExecutor;
+  readonly evidence: ParticipantEffectProtocolEvidenceVerifier;
+}) {
+  return createEffectHttpAdapter({
+    bindings: input.registry.participantHttpEffectBindings,
     builder: input.builder,
     executor: input.executor,
     evidence: input.evidence

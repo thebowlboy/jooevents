@@ -297,7 +297,7 @@ describe('canonical Session foundation', () => {
         retryable: false,
         subjects: [{ type: 'session', id: sessionId }],
         detail: { code: 'session_placed', action: 'restore', sessionId },
-        detailSchemaVersion: 1
+        detailSchemaVersion: 2
       }
     });
   });
@@ -415,6 +415,167 @@ describe('canonical Session foundation', () => {
     expect(rolledBack.lifecycle).toBe('collecting');
     expect(rolledBack.roster.participants).toEqual(collecting.roster.participants);
     expect(rolledBack.roster.version).toBe(collecting.roster.version);
+  });
+
+  test('switches one participant visibility flag in place and compensates exactly', () => {
+    const empty = createEmptySessionCatalog(scope);
+    const source = { kind: 'submission', id: sessionId, version: 1 };
+    const created = applySessionMutationPlan({
+      catalog: empty,
+      vocabulary: vocabulary(),
+      plan: planSessionMutation({
+        catalog: empty,
+        vocabulary: vocabulary(),
+        planningInput: {
+          action: 'create', scope, sessionId, actorUserId: userId, occurredAt: now,
+          expectedCatalogVersion: empty.version,
+          expectedCatalogDigestSha256: empty.digestSha256,
+          title: 'Visible Panel', plannedDurationMinutes: 60,
+          lifecycle: 'programmed', formatId, trackId,
+          participants: [
+            { personId: personA, role: 'speaker', publiclyVisible: true, source },
+            { personId: personB, role: 'speaker', publiclyVisible: true, source }
+          ]
+        }
+      })
+    }).catalog;
+    const programmed = findSession(created, sessionId)!;
+
+    const hidePlan = planSessionMutation({
+      catalog: created,
+      // The off-switch never refreshes Program Vocabulary evidence, so a moved
+      // set must not disturb the retained pins.
+      vocabulary: vocabulary({ setVersion: 2 }),
+      planningInput: {
+        action: 'roster_visibility', scope, sessionId, actorUserId: userId, occurredAt: later,
+        expectedCatalogVersion: created.version,
+        expectedCatalogDigestSha256: created.digestSha256,
+        expectedSessionVersion: programmed.version,
+        expectedSessionDigestSha256: programmed.digestSha256,
+        personId: personA,
+        publiclyVisible: false
+      }
+    });
+    expect(hidePlan.after.roster.participants).toEqual([
+      { personId: personA, role: 'speaker', position: 0, publiclyVisible: false, source },
+      { personId: personB, role: 'speaker', position: 1, publiclyVisible: true, source }
+    ]);
+    expect(hidePlan.after.roster.version).toBe(programmed.roster.version + 1);
+    expect(hidePlan.after.version).toBe(programmed.version + 1);
+    expect(hidePlan.after.lifecycle).toBe('programmed');
+    expect(hidePlan.after.programTarget).toEqual(programmed.programTarget);
+
+    const hidden = applySessionMutationPlan({
+      catalog: created, vocabulary: vocabulary({ setVersion: 2 }), plan: hidePlan
+    }).catalog;
+    const hiddenHead = findSession(hidden, sessionId)!;
+
+    const idempotent = planSessionMutation({
+      catalog: hidden,
+      vocabulary: vocabulary({ setVersion: 2 }),
+      planningInput: {
+        action: 'roster_visibility', scope, sessionId, actorUserId: userId, occurredAt: later,
+        expectedCatalogVersion: hidden.version,
+        expectedCatalogDigestSha256: hidden.digestSha256,
+        expectedSessionVersion: hiddenHead.version,
+        expectedSessionDigestSha256: hiddenHead.digestSha256,
+        personId: personA,
+        publiclyVisible: false
+      }
+    });
+    expect(idempotent.after.roster).toEqual(hiddenHead.roster);
+    expect(idempotent.after.version).toBe(hiddenHead.version + 1);
+
+    expect(() => planSessionMutation({
+      catalog: hidden,
+      vocabulary: vocabulary({ setVersion: 2 }),
+      planningInput: {
+        action: 'roster_visibility', scope, sessionId, actorUserId: userId, occurredAt: later,
+        expectedCatalogVersion: hidden.version,
+        expectedCatalogDigestSha256: hidden.digestSha256,
+        expectedSessionVersion: hiddenHead.version,
+        expectedSessionDigestSha256: hiddenHead.digestSha256,
+        personId: '019c1df7-86b5-769b-bba4-5f7097bfa999',
+        publiclyVisible: false
+      }
+    })).toThrow('participant_missing');
+
+    expect(() => planSessionMutation({
+      catalog: hidden,
+      vocabulary: vocabulary({ setVersion: 2 }),
+      planningInput: {
+        action: 'roster_visibility', scope, sessionId, actorUserId: userId, occurredAt: later,
+        expectedCatalogVersion: hidden.version,
+        expectedCatalogDigestSha256: hidden.digestSha256,
+        expectedSessionVersion: programmed.version,
+        expectedSessionDigestSha256: programmed.digestSha256,
+        personId: personA,
+        publiclyVisible: true
+      }
+    })).toThrow('stale_session');
+
+    const bundle = createSessionChangesetBundle();
+    const port = {
+      readSessionCatalog: () => hidden,
+      readSessionVocabulary: () => vocabulary({ setVersion: 2 }),
+      countSessionSchedulePlacements: () => 1
+    };
+    const snapshot = { getPort: <Port>() => port as unknown as Port };
+    const derived = bundle.definition.deriveCompensation(hidePlan, snapshot);
+    expect(derived).toMatchObject({ kind: 'exact', authorInput: { action: 'restore' } });
+    const restored = applySessionRestorePlan({
+      catalog: hidden,
+      plan: (derived as { readonly authorInput: SessionRestorePlanDto }).authorInput
+    });
+    const visibleAgain = findSession(restored.catalog, sessionId)!;
+    expect(visibleAgain.roster.participants).toEqual(programmed.roster.participants);
+    expect(visibleAgain.roster.version).toBe(programmed.roster.version);
+  });
+
+  test('roster visibility plans fence only the catalog guard, never the vocabulary set', () => {
+    const empty = createEmptySessionCatalog(scope);
+    const source = { kind: 'submission', id: sessionId, version: 1 };
+    const created = applySessionMutationPlan({
+      catalog: empty,
+      vocabulary: vocabulary(),
+      plan: planSessionMutation({
+        catalog: empty,
+        vocabulary: vocabulary(),
+        planningInput: {
+          action: 'create', scope, sessionId, actorUserId: userId, occurredAt: now,
+          expectedCatalogVersion: empty.version,
+          expectedCatalogDigestSha256: empty.digestSha256,
+          title: 'Guarded Panel', plannedDurationMinutes: 60,
+          lifecycle: 'programmed', formatId, trackId,
+          participants: [{ personId: personA, role: 'speaker', publiclyVisible: true, source }]
+        }
+      })
+    }).catalog;
+    const programmed = findSession(created, sessionId)!;
+    const bundle = createSessionChangesetBundle();
+    const port = {
+      readSessionCatalog: () => created,
+      readSessionVocabulary: () => vocabulary(),
+      countSessionSchedulePlacements: () => 0
+    };
+    const planned = bundle.definition.plan({
+      action: 'roster_visibility', scope, sessionId, actorUserId: userId, occurredAt: later,
+      expectedCatalogVersion: created.version,
+      expectedCatalogDigestSha256: created.digestSha256,
+      expectedSessionVersion: programmed.version,
+      expectedSessionDigestSha256: programmed.digestSha256,
+      personId: personA,
+      publiclyVisible: false
+    }, { getPort: <Port>() => port as unknown as Port });
+    if (planned instanceof Promise) throw new Error('expected a synchronous plan');
+    expect(planned.guardRefs).toEqual([{
+      id: `session_catalog:${scope.eventId}`,
+      version: created.version,
+      digest: created.digestSha256
+    }]);
+    expect(planned.aggregateRefs).toEqual([
+      { id: `session:${sessionId}`, version: programmed.version }
+    ]);
   });
 
   test('graduation collaboration plans spawn and attach, pins the applied head, and reverses', () => {

@@ -5,6 +5,12 @@ import { isAbsolute, relative, resolve } from 'node:path';
 import { classifyRoutePath } from '@jooevents/contracts/route-namespaces';
 import type { LiveBuildIdentity } from '@jooevents/contracts/live-build-identity';
 import { protectBackendNotFoundResponse } from '../http/backend-not-found';
+import {
+  denyAllHtmlSecurityHeaders,
+  isHtmlResponseContentType,
+  resolveHtmlSecurityHeaders,
+  type EmbedFramingPolicySource
+} from '../http/embed-security';
 
 export type WebFetchHandler = (request: Request) => Response | Promise<Response>;
 
@@ -114,7 +120,8 @@ async function staticResponse(
   request: Request,
   file: StaticFile,
   pathname: string,
-  isFallback: boolean
+  isFallback: boolean,
+  security: Readonly<Record<string, string>>
 ): Promise<Response> {
   const source = Bun.file(file.path);
   const headers = new Headers({
@@ -123,6 +130,9 @@ async function staticResponse(
     'content-type': source.type || 'application/octet-stream',
     'x-content-type-options': 'nosniff'
   });
+  if (isHtmlResponseContentType(headers.get('content-type'))) {
+    for (const [name, value] of Object.entries(security)) headers.set(name, value);
+  }
   if (!file.descriptor) {
     return new Response(request.method === 'HEAD' ? null : source, { status: 200, headers });
   }
@@ -175,6 +185,7 @@ export function createProductionRequestHandler(input: {
   readonly backend: WebFetchHandler;
   readonly buildDirectory: string;
   readonly buildIdentity?: LiveBuildIdentity;
+  readonly embedFraming?: EmbedFramingPolicySource;
 }): WebFetchHandler {
   const build = validateStaticBuild(input.buildDirectory, input.buildIdentity);
 
@@ -187,14 +198,26 @@ export function createProductionRequestHandler(input: {
     }
 
     if (request.method === 'GET' || request.method === 'HEAD') {
+      // Every served HTML document carries an explicit framing policy:
+      // `/embed/<kind>` serves the surface's stored allowlist (empty or
+      // unresolvable framing denies), and all other HTML is `'none'` — which
+      // also closes the production no-CSP gap when no policy source is wired.
+      const security = input.embedFraming
+        ? await resolveHtmlSecurityHeaders({
+            pathname: classification.pathname,
+            framing: input.embedFraming
+          })
+        : denyAllHtmlSecurityHeaders();
       const staticPath = await resolveStaticFile(build, classification.pathname);
-      if (staticPath) return staticResponse(request, staticPath, classification.pathname, false);
+      if (staticPath) {
+        return staticResponse(request, staticPath, classification.pathname, false, security);
+      }
       if (acceptsHtmlNavigation(request)) {
         const indexDescriptor = build.allowedFiles?.get('index.html');
         return staticResponse(request, {
           path: build.indexPath,
           ...(indexDescriptor ? { descriptor: indexDescriptor } : {})
-        }, classification.pathname, true);
+        }, classification.pathname, true, security);
       }
     }
 
@@ -234,12 +257,14 @@ export function createRuntimeRequestHandler(input: {
   readonly backend: WebFetchHandler;
   readonly buildDirectory: string;
   readonly buildIdentity?: LiveBuildIdentity;
+  readonly embedFraming?: EmbedFramingPolicySource;
 }): WebFetchHandler {
   return input.mode === 'production'
     ? createProductionRequestHandler({
         backend: input.backend,
         buildDirectory: input.buildDirectory,
-        ...(input.buildIdentity ? { buildIdentity: input.buildIdentity } : {})
+        ...(input.buildIdentity ? { buildIdentity: input.buildIdentity } : {}),
+        ...(input.embedFraming ? { embedFraming: input.embedFraming } : {})
       })
     : input.backend;
 }

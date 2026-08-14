@@ -117,7 +117,7 @@ describe('ephemeral SQLite Event settings', () => {
       sqlite.exec('COMMIT;');
       expect(first.companion).toMatchObject({
         workspaceId, eventId, eventVersion: 1, location: '', venueNote: '',
-        dayStart: '09:00', dayEnd: '18:00', slotMinutes: 30
+        dayStart: '09:00', dayEnd: '18:00', slotMinutes: 15
       });
       expect(replay).toEqual(first);
 
@@ -231,7 +231,7 @@ describe('ephemeral SQLite Event settings', () => {
             venueNote: '',
             dayStart: '09:00',
             dayEnd: '18:00',
-            slotMinutes: 30
+            slotMinutes: 15
           }
         }
       });

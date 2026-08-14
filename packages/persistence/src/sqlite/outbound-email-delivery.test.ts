@@ -5,13 +5,22 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   FAKE_PROVIDER_SCENARIO_KEYS,
+  FAKE_SAFE_EVIDENCE_CATALOG,
+  MARKED_RESEND_BODY_NOTE,
   computeReviewedEmailEnvelopeDigestSha256,
   createDeterministicFakeEmailProvider,
   createFakeEmailEnvelope,
   createOutboundEmailDeliveryWorker,
-  type EmailDeliveryAdapter
+  createSafeEvidence,
+  deriveMarkedResendEmailEnvelope,
+  type EmailDeliveryAdapter,
+  type ImmutableEmailEnvelope
 } from '@jooevents/communications';
-import type { OutboundEmailDeliveryWorkInput } from '@jooevents/contracts';
+import {
+  providerSubmissionOutcomeSchema,
+  type OutboundEmailDeliveryWorkInput,
+  type ProviderCapabilities
+} from '@jooevents/contracts';
 import { installSQLiteOutboundEmailDeliverySchema, insertOutboundEmailDeliveryRegistration,
   linkOutboundEmailDeliveryReceipt, SQLiteOutboundEmailDeliveryLedger } from './outbound-email-delivery';
 
@@ -27,7 +36,10 @@ let id = 0;
 const nextId = (prefix: string) => `${prefix}-${++id}`;
 
 class TestClock {
-  #milliseconds = Date.parse('2026-08-13T00:00:00.000Z');
+  #milliseconds: number;
+  constructor(startAt = '2026-08-13T00:00:00.000Z') {
+    this.#milliseconds = Date.parse(startAt);
+  }
   now(): string { return new Date(this.#milliseconds++).toISOString(); }
 }
 
@@ -227,7 +239,7 @@ describe('SQLite outbound email delivery ledger', () => {
     sqlite.close();
   });
 
-  test('a lost accepted result survives restart as acceptance unknown and is never resubmitted', async () => {
+  test('a lost accepted result survives restart as acceptance unknown and recovery never resubmits', async () => {
     const fixture = databaseFile();
     const envelope = createFakeEmailEnvelope({
       from: 'sender@example.test',
@@ -263,13 +275,21 @@ describe('SQLite outbound email delivery ledger', () => {
       deliveryId: message.deliveryId,
       attemptId: expect.any(String),
       state: 'acceptance_unknown',
-      followUp: 'manual_resolution_required'
+      // The fake provider carries lookup reconciliation, so the honest next
+      // action for a lost result is reconciliation, never a blind resubmit.
+      followUp: 'reconcile'
     });
     expect(fake.capturedOrdinaryRequests()).toHaveLength(1);
     expect(resumed.ledger.listAttempts(message.deliveryId)[0]).toMatchObject({
+      attemptKind: 'original',
       state: 'acceptance_unknown',
       recoveryCode: 'worker_result_lost',
       safeEvidence: null
+    });
+    expect(resumed.ledger.read(message.deliveryId)).toMatchObject({
+      state: 'acceptance_unknown',
+      unknownAttemptCount: 1,
+      markedResendExhausted: false
     });
     expect(rowCount(reopened, 'communication_outbound_delivery_history')).toBe(2);
     reopened.close();
@@ -299,7 +319,101 @@ describe('SQLite outbound email delivery ledger', () => {
     sqlite.close();
   });
 
-  test('acceptance unknown with Cloudflare-v1-like no-recovery capabilities blocks resubmission', async () => {
+  test('acceptance unknown with Cloudflare-v1-like no-recovery capabilities earns exactly one marked resend before quarantine', async () => {
+    const { sqlite } = databaseFile();
+    const envelope = createFakeEmailEnvelope({
+      from: 'sender@example.test',
+      to: 'recipient@example.test',
+      subject: 'Reviewed subject',
+      textBody: 'Reviewed body'
+    });
+    const reviewedDigest = computeReviewedEmailEnvelopeDigestSha256(envelope);
+    const resendEnvelope = deriveMarkedResendEmailEnvelope(envelope);
+    const resendDigest = computeReviewedEmailEnvelopeDigestSha256(resendEnvelope);
+    const message = work(FAKE_PROVIDER_SCENARIO_KEYS.ordinary.timeoutAfterAcceptance, reviewedDigest);
+    register(sqlite, message);
+    const fake = createDeterministicFakeEmailProvider();
+    const submittedEnvelopes: ImmutableEmailEnvelope[] = [];
+    const noRecoveryProvider: EmailDeliveryAdapter = {
+      adapterKey: fake.delivery.adapterKey,
+      adapterVersion: fake.delivery.adapterVersion,
+      capabilities: {
+        idempotency: 'none',
+        reconciliation: 'none',
+        callbacks: [],
+        inboundReplies: false
+      },
+      prepare: (value) => {
+        submittedEnvelopes.push(value.envelope);
+        return fake.delivery.prepare(value) as ReturnType<EmailDeliveryAdapter['prepare']>;
+      },
+      submit: (prepared) => fake.delivery.submit(
+        prepared as ReturnType<typeof fake.delivery.prepare>
+      )
+    };
+    const testWorker = worker({
+      sqlite,
+      provider: noRecoveryProvider,
+      envelope,
+      clock: new TestClock()
+    });
+
+    expect(await testWorker.worker.dispatch({ deliveryId: message.deliveryId }))
+      .toMatchObject({ state: 'acceptance_unknown', followUp: 'marked_resend' });
+    expect(testWorker.ledger.read(message.deliveryId)).toMatchObject({
+      state: 'acceptance_unknown',
+      unknownAttemptCount: 1,
+      markedResendExhausted: false,
+      reviewedEnvelopeDigestSha256: reviewedDigest
+    });
+
+    expect(await testWorker.worker.dispatch({ deliveryId: message.deliveryId }))
+      .toMatchObject({ state: 'acceptance_unknown', followUp: 'manual_resolution_required' });
+    expect(submittedEnvelopes).toHaveLength(2);
+    expect(submittedEnvelopes[1]!.subject).toBe('[Resend] Reviewed subject');
+    expect(submittedEnvelopes[1]!.textBody.split('\n')[0]).toBe(MARKED_RESEND_BODY_NOTE);
+    expect(submittedEnvelopes[1]!.textBody.endsWith('\n\nReviewed body')).toBe(true);
+    expect(fake.capturedOrdinaryRequests()).toHaveLength(2);
+    expect(fake.capturedOrdinaryRequests()[1]).toMatchObject({
+      reviewedEnvelopeDigestSha256: resendDigest
+    });
+    const attempts = testWorker.ledger.listAttempts(message.deliveryId);
+    expect(attempts[0]).toMatchObject({
+      attemptKind: 'original',
+      state: 'acceptance_unknown',
+      reviewedEnvelopeDigestSha256: reviewedDigest,
+      safeEvidence: { registeredCode: 'delivery.acceptance_unknown' },
+      capabilities: { idempotency: 'none', reconciliation: 'none' }
+    });
+    expect(attempts[1]).toMatchObject({
+      attemptKind: 'marked_resend',
+      state: 'acceptance_unknown',
+      reviewedEnvelopeDigestSha256: resendDigest
+    });
+    expect(testWorker.ledger.read(message.deliveryId)).toMatchObject({
+      state: 'acceptance_unknown',
+      unknownAttemptCount: 2,
+      markedResendExhausted: true,
+      // The reviewed original stays pinned; the resend digest lives on its attempt.
+      reviewedEnvelopeDigestSha256: reviewedDigest
+    });
+
+    await expect(testWorker.worker.dispatch({ deliveryId: message.deliveryId }))
+      .rejects.toMatchObject({ code: 'delivery_not_dispatchable' });
+    expect(fake.capturedOrdinaryRequests()).toHaveLength(2);
+    // Governed rows carry digests and refs only — never the resend marking bytes.
+    const governed = sqlite.query<{ readonly all_text: string }, []>(`
+      SELECT group_concat(text_value, '|') AS all_text FROM (
+        SELECT payload_json AS text_value FROM communication_outbound_delivery_facts
+        UNION ALL SELECT safe_evidence_json FROM communication_outbound_delivery_attempts
+      )
+    `).get()?.all_text ?? '';
+    expect(governed).not.toContain('[Resend]');
+    expect(governed).not.toContain('could not confirm');
+    sqlite.close();
+  });
+
+  test('a marked resend that lands accepted completes the delivery honestly', async () => {
     const { sqlite } = databaseFile();
     const envelope = createFakeEmailEnvelope({
       from: 'sender@example.test',
@@ -308,7 +422,153 @@ describe('SQLite outbound email delivery ledger', () => {
       textBody: 'Reviewed body'
     });
     const message = work(
-      FAKE_PROVIDER_SCENARIO_KEYS.ordinary.timeoutAfterAcceptance,
+      FAKE_PROVIDER_SCENARIO_KEYS.ordinary.timeoutBeforeAcceptance,
+      computeReviewedEmailEnvelopeDigestSha256(envelope)
+    );
+    register(sqlite, message);
+    const fake = createDeterministicFakeEmailProvider();
+    const acceptedOutcome = providerSubmissionOutcomeSchema.parse({
+      contractVersion: 1,
+      kind: 'accepted',
+      providerMessageId: 'fake_msg_resend_accepted',
+      evidence: createSafeEvidence(FAKE_SAFE_EVIDENCE_CATALOG, {
+        code: 'delivery.accepted',
+        correlationId: 'corr1_resendaccepted'
+      })
+    });
+    let submissions = 0;
+    const secondAttemptAcceptsProvider: EmailDeliveryAdapter = {
+      adapterKey: fake.delivery.adapterKey,
+      adapterVersion: fake.delivery.adapterVersion,
+      capabilities: {
+        idempotency: 'none',
+        reconciliation: 'none',
+        callbacks: [],
+        inboundReplies: false
+      },
+      prepare: (value) => fake.delivery.prepare(value) as ReturnType<EmailDeliveryAdapter['prepare']>,
+      async submit(prepared) {
+        submissions += 1;
+        if (submissions === 1) {
+          return fake.delivery.submit(prepared as ReturnType<typeof fake.delivery.prepare>);
+        }
+        return acceptedOutcome;
+      }
+    };
+    const testWorker = worker({
+      sqlite,
+      provider: secondAttemptAcceptsProvider,
+      envelope,
+      clock: new TestClock()
+    });
+
+    expect(await testWorker.worker.dispatch({ deliveryId: message.deliveryId }))
+      .toMatchObject({ state: 'acceptance_unknown', followUp: 'marked_resend' });
+    // Until acceptance evidence lands, the head never reads as accepted.
+    expect(testWorker.ledger.read(message.deliveryId)?.state).toBe('acceptance_unknown');
+
+    expect(await testWorker.worker.dispatch({ deliveryId: message.deliveryId }))
+      .toMatchObject({ state: 'accepted', followUp: 'complete' });
+    expect(testWorker.ledger.read(message.deliveryId)).toMatchObject({
+      state: 'accepted',
+      unknownAttemptCount: 1,
+      markedResendExhausted: false
+    });
+    expect(testWorker.ledger.listAttempts(message.deliveryId)[1]).toMatchObject({
+      attemptKind: 'marked_resend',
+      state: 'accepted',
+      providerMessageId: 'fake_msg_resend_accepted'
+    });
+
+    // Accepted is terminal: no further attempt of any kind may start.
+    await expect(testWorker.worker.dispatch({ deliveryId: message.deliveryId }))
+      .rejects.toMatchObject({ code: 'delivery_not_dispatchable' });
+    expect(submissions).toBe(2);
+    sqlite.close();
+  });
+
+  test('a crash during the marked resend consumes the single retry on recovery', async () => {
+    const fixture = databaseFile();
+    const envelope = createFakeEmailEnvelope({
+      from: 'sender@example.test',
+      to: 'recipient@example.test',
+      subject: 'Reviewed subject',
+      textBody: 'Reviewed body'
+    });
+    const message = work(
+      FAKE_PROVIDER_SCENARIO_KEYS.ordinary.timeoutBeforeAcceptance,
+      computeReviewedEmailEnvelopeDigestSha256(envelope)
+    );
+    register(fixture.sqlite, message);
+    const fake = createDeterministicFakeEmailProvider();
+    const capabilities: ProviderCapabilities = {
+      idempotency: 'none',
+      reconciliation: 'none',
+      callbacks: [],
+      inboundReplies: false
+    };
+    const noRecoveryProvider: EmailDeliveryAdapter = {
+      adapterKey: fake.delivery.adapterKey,
+      adapterVersion: fake.delivery.adapterVersion,
+      capabilities,
+      prepare: (value) => fake.delivery.prepare(value) as ReturnType<EmailDeliveryAdapter['prepare']>,
+      submit: (prepared) => fake.delivery.submit(
+        prepared as ReturnType<typeof fake.delivery.prepare>
+      )
+    };
+    const first = worker({
+      sqlite: fixture.sqlite,
+      provider: noRecoveryProvider,
+      envelope,
+      clock: new TestClock()
+    });
+    expect(await first.worker.dispatch({ deliveryId: message.deliveryId }))
+      .toMatchObject({ state: 'acceptance_unknown', followUp: 'marked_resend' });
+    await expect(first.worker.dispatch({
+      deliveryId: message.deliveryId,
+      afterProviderResult: () => { throw new Error('simulated process loss'); }
+    })).rejects.toThrow('simulated process loss');
+    expect(first.ledger.read(message.deliveryId)?.state).toBe('request_started');
+    expect(fake.capturedOrdinaryRequests()).toHaveLength(2);
+    fixture.sqlite.close();
+
+    const reopened = new Database(fixture.path);
+    const resumed = worker({
+      sqlite: reopened,
+      provider: noRecoveryProvider,
+      envelope,
+      // A restarted process resumes with a later wall clock than the lost attempt.
+      clock: new TestClock('2026-08-13T00:00:10.000Z')
+    });
+    expect(await resumed.worker.dispatch({ deliveryId: message.deliveryId }))
+      .toMatchObject({ state: 'acceptance_unknown', followUp: 'manual_resolution_required' });
+    expect(resumed.ledger.read(message.deliveryId)).toMatchObject({
+      state: 'acceptance_unknown',
+      unknownAttemptCount: 2,
+      markedResendExhausted: true
+    });
+    expect(resumed.ledger.listAttempts(message.deliveryId)[1]).toMatchObject({
+      attemptKind: 'marked_resend',
+      state: 'acceptance_unknown',
+      recoveryCode: 'worker_result_lost'
+    });
+    // Replay after recovery never schedules a second resend.
+    await expect(resumed.worker.dispatch({ deliveryId: message.deliveryId }))
+      .rejects.toMatchObject({ code: 'delivery_not_dispatchable' });
+    expect(fake.capturedOrdinaryRequests()).toHaveLength(2);
+    reopened.close();
+  });
+
+  test('a failed release integrity check never consumes the marked resend', async () => {
+    const { sqlite } = databaseFile();
+    const envelope = createFakeEmailEnvelope({
+      from: 'sender@example.test',
+      to: 'recipient@example.test',
+      subject: 'Reviewed subject',
+      textBody: 'Reviewed body'
+    });
+    const message = work(
+      FAKE_PROVIDER_SCENARIO_KEYS.ordinary.timeoutBeforeAcceptance,
       computeReviewedEmailEnvelopeDigestSha256(envelope)
     );
     register(sqlite, message);
@@ -327,22 +587,164 @@ describe('SQLite outbound email delivery ledger', () => {
         prepared as ReturnType<typeof fake.delivery.prepare>
       )
     };
-    const testWorker = worker({
-      sqlite,
+    const honest = worker({ sqlite, provider: noRecoveryProvider, envelope, clock: new TestClock() });
+    expect(await honest.worker.dispatch({ deliveryId: message.deliveryId }))
+      .toMatchObject({ state: 'acceptance_unknown', followUp: 'marked_resend' });
+
+    const tampered = createFakeEmailEnvelope({
+      from: 'sender@example.test',
+      to: 'recipient@example.test',
+      subject: 'Tampered subject',
+      textBody: 'Reviewed body'
+    });
+    const tamperedWorker = createOutboundEmailDeliveryWorker({
+      ledger: honest.ledger,
       provider: noRecoveryProvider,
-      envelope,
+      envelopes: { resolve: () => tampered },
+      ids: { newAttemptId: () => nextId('attempt') },
       clock: new TestClock()
     });
-    expect(await testWorker.worker.dispatch({ deliveryId: message.deliveryId }))
-      .toMatchObject({ state: 'acceptance_unknown', followUp: 'manual_resolution_required' });
-    expect(testWorker.ledger.listAttempts(message.deliveryId)[0]).toMatchObject({
+    // The reviewed original is revalidated before any resend derivation.
+    await expect(tamperedWorker.dispatch({ deliveryId: message.deliveryId }))
+      .rejects.toMatchObject({ code: 'reviewed_envelope_changed' });
+    expect(honest.ledger.listAttempts(message.deliveryId)).toHaveLength(1);
+    expect(honest.ledger.read(message.deliveryId)).toMatchObject({
       state: 'acceptance_unknown',
-      safeEvidence: { registeredCode: 'delivery.acceptance_unknown' },
-      capabilities: { idempotency: 'none', reconciliation: 'none' }
+      markedResendExhausted: false
     });
-    await expect(testWorker.worker.dispatch({ deliveryId: message.deliveryId }))
-      .rejects.toMatchObject({ code: 'delivery_not_dispatchable' });
     expect(fake.capturedOrdinaryRequests()).toHaveLength(1);
+    sqlite.close();
+  });
+
+  test('a natively idempotent provider retries unmarked after acceptance unknown', async () => {
+    const { sqlite } = databaseFile();
+    const envelope = createFakeEmailEnvelope({
+      from: 'sender@example.test',
+      to: 'recipient@example.test',
+      subject: 'Reviewed subject',
+      textBody: 'Reviewed body'
+    });
+    const reviewedDigest = computeReviewedEmailEnvelopeDigestSha256(envelope);
+    const message = work(FAKE_PROVIDER_SCENARIO_KEYS.ordinary.timeoutBeforeAcceptance, reviewedDigest);
+    register(sqlite, message);
+    const fake = createDeterministicFakeEmailProvider();
+    const submittedEnvelopes: ImmutableEmailEnvelope[] = [];
+    const nativeKeyProvider: EmailDeliveryAdapter = {
+      adapterKey: fake.delivery.adapterKey,
+      adapterVersion: fake.delivery.adapterVersion,
+      capabilities: {
+        idempotency: 'native_key',
+        reconciliation: 'none',
+        callbacks: [],
+        inboundReplies: false
+      },
+      prepare: (value) => {
+        submittedEnvelopes.push(value.envelope);
+        return fake.delivery.prepare(value) as ReturnType<EmailDeliveryAdapter['prepare']>;
+      },
+      submit: (prepared) => fake.delivery.submit(
+        prepared as ReturnType<typeof fake.delivery.prepare>
+      )
+    };
+    const testWorker = worker({ sqlite, provider: nativeKeyProvider, envelope, clock: new TestClock() });
+    expect(await testWorker.worker.dispatch({ deliveryId: message.deliveryId }))
+      .toMatchObject({ state: 'acceptance_unknown', followUp: 'safe_retry' });
+    expect(await testWorker.worker.dispatch({ deliveryId: message.deliveryId }))
+      .toMatchObject({ state: 'acceptance_unknown', followUp: 'safe_retry' });
+    // The provider deduplicates on the external delivery key, so the retry is
+    // not a visible second delivery and must not carry the resend marking.
+    expect(submittedEnvelopes[1]!.subject).toBe('Reviewed subject');
+    expect(testWorker.ledger.listAttempts(message.deliveryId)[1]).toMatchObject({
+      attemptKind: 'original',
+      reviewedEnvelopeDigestSha256: reviewedDigest
+    });
+    sqlite.close();
+  });
+
+  test('the ledger refuses dishonest attempt kinds and unmarked resend digests', async () => {
+    const { sqlite } = databaseFile();
+    const envelope = createFakeEmailEnvelope({
+      from: 'sender@example.test',
+      to: 'recipient@example.test',
+      subject: 'Reviewed subject',
+      textBody: 'Reviewed body'
+    });
+    const reviewedDigest = computeReviewedEmailEnvelopeDigestSha256(envelope);
+    const message = work(FAKE_PROVIDER_SCENARIO_KEYS.ordinary.timeoutBeforeAcceptance, reviewedDigest);
+    register(sqlite, message);
+    const fake = createDeterministicFakeEmailProvider();
+    const capabilities: ProviderCapabilities = {
+      idempotency: 'none',
+      reconciliation: 'none',
+      callbacks: [],
+      inboundReplies: false
+    };
+    const noRecoveryProvider: EmailDeliveryAdapter = {
+      adapterKey: fake.delivery.adapterKey,
+      adapterVersion: fake.delivery.adapterVersion,
+      capabilities,
+      prepare: (value) => fake.delivery.prepare(value) as ReturnType<EmailDeliveryAdapter['prepare']>,
+      submit: (prepared) => fake.delivery.submit(
+        prepared as ReturnType<typeof fake.delivery.prepare>
+      )
+    };
+    const testWorker = worker({ sqlite, provider: noRecoveryProvider, envelope, clock: new TestClock() });
+    await testWorker.worker.dispatch({ deliveryId: message.deliveryId });
+    const head = testWorker.ledger.read(message.deliveryId)!;
+    expect(head).toMatchObject({ state: 'acceptance_unknown', unknownAttemptCount: 1 });
+    const attemptBase = {
+      deliveryId: message.deliveryId,
+      expectedDeliveryVersion: head.version,
+      adapterKey: fake.delivery.adapterKey,
+      adapterVersion: fake.delivery.adapterVersion,
+      capabilities,
+      providerRequestDigestSha256: digest('4'),
+      startedAt: '2026-08-13T01:00:00.000Z'
+    };
+    // Once ambiguity exists, an unmarked attempt through this provider is refused.
+    expect(() => testWorker.ledger.recordAttemptStarted({
+      ...attemptBase,
+      attemptId: nextId('attempt'),
+      attemptKind: 'original'
+    })).toThrow('outbound_delivery_attempt_kind_conflict');
+    // A "marked" resend whose digest equals the reviewed original carries no marking.
+    expect(() => testWorker.ledger.recordAttemptStarted({
+      ...attemptBase,
+      attemptId: nextId('attempt'),
+      attemptKind: 'marked_resend',
+      resendEnvelopeDigestSha256: reviewedDigest
+    })).toThrow('outbound_delivery_resend_envelope_unmarked');
+    // A marked resend must pin the derived envelope digest.
+    expect(() => testWorker.ledger.recordAttemptStarted({
+      ...attemptBase,
+      attemptId: nextId('attempt'),
+      attemptKind: 'marked_resend'
+    })).toThrow();
+    expect(testWorker.ledger.listAttempts(message.deliveryId)).toHaveLength(1);
+
+    // An original attempt never carries a resend digest.
+    const pristine = work(FAKE_PROVIDER_SCENARIO_KEYS.ordinary.acceptedWithId, reviewedDigest);
+    register(sqlite, pristine);
+    expect(() => testWorker.ledger.recordAttemptStarted({
+      ...attemptBase,
+      deliveryId: pristine.deliveryId,
+      expectedDeliveryVersion: 1,
+      attemptId: nextId('attempt'),
+      attemptKind: 'original',
+      resendEnvelopeDigestSha256: computeReviewedEmailEnvelopeDigestSha256(
+        deriveMarkedResendEmailEnvelope(envelope)
+      )
+    })).toThrow('outbound_delivery_resend_digest_unexpected');
+
+    // Ambiguity evidence is monotonic and attempt kinds are immutable at the schema.
+    expect(() => sqlite.query(`
+      UPDATE communication_outbound_delivery_heads SET unknown_attempt_count = 0
+       WHERE delivery_id = ?
+    `).run(message.deliveryId)).toThrow('outbound delivery acceptance ambiguity evidence is monotonic');
+    expect(() => sqlite.query(`
+      UPDATE communication_outbound_delivery_attempts SET attempt_kind = 'marked_resend'
+       WHERE delivery_id = ?
+    `).run(message.deliveryId)).toThrow('outbound delivery attempt evidence is immutable');
     sqlite.close();
   });
 

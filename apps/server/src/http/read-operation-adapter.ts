@@ -4,6 +4,7 @@ import {
   type ReadOperationExecutor,
   type ReadOperationRegistry,
   type RegisteredOperatorHttpReadBinding,
+  type RegisteredParticipantHttpReadBinding,
   type RegisteredPublicHttpReadBinding
 } from '@jooevents/application';
 import {
@@ -15,7 +16,10 @@ import { Hono } from 'hono';
 import { createSchemaAwareQueryInputDecoder } from './schema-aware-query-input';
 import type { ReturnTypeOrPromise } from './types';
 
-type HttpReadBinding = RegisteredOperatorHttpReadBinding | RegisteredPublicHttpReadBinding;
+type HttpReadBinding =
+  | RegisteredOperatorHttpReadBinding
+  | RegisteredParticipantHttpReadBinding
+  | RegisteredPublicHttpReadBinding;
 
 export type ReadProtocolEvidenceResult =
   | { readonly kind: 'verified'; readonly evidence: unknown }
@@ -32,6 +36,8 @@ export interface ReadProtocolEvidenceVerifier<Binding extends HttpReadBinding = 
 export type OperatorProtocolEvidenceResult = ReadProtocolEvidenceResult;
 export type OperatorProtocolEvidenceVerifier =
   ReadProtocolEvidenceVerifier<RegisteredOperatorHttpReadBinding>;
+export type ParticipantReadProtocolEvidenceVerifier =
+  ReadProtocolEvidenceVerifier<RegisteredParticipantHttpReadBinding>;
 export type PublicReadProtocolEvidenceVerifier =
   ReadProtocolEvidenceVerifier<RegisteredPublicHttpReadBinding>;
 
@@ -138,6 +144,19 @@ export function createOperatorReadHttpAdapter(input: {
   return createReadHttpAdapter({
     registry: input.registry,
     bindings: input.registry.operatorHttpBindings,
+    executor: input.executor,
+    evidence: input.evidence
+  });
+}
+
+export function createParticipantReadHttpAdapter(input: {
+  readonly registry: ReadOperationRegistry;
+  readonly executor: ReadOperationExecutor;
+  readonly evidence: ParticipantReadProtocolEvidenceVerifier;
+}) {
+  return createReadHttpAdapter({
+    registry: input.registry,
+    bindings: input.registry.participantHttpBindings,
     executor: input.executor,
     evidence: input.evidence
   });

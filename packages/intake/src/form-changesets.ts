@@ -17,11 +17,14 @@ import {
   formVersionPublishDraftInputSchema,
   formVersionSchema,
   intakeDigestSchema,
+  intakeFormSurfaceSuccessorDiffSchema,
   intakeIdSchema,
   intakeInstantSchema,
   intakeScopeSchema,
   intakeStableKeySchema,
   intakeVersionSchema,
+  releaseMutationResultSchema,
+  releaseSurfaceSuccessorPlanSchema,
   type FieldRegistrySnapshotDto,
   type FormClosingChangeDraftInput,
   type FormDefinitionContentDto,
@@ -30,7 +33,11 @@ import {
   type FormLifecycleChangeDraftInput,
   type FormVersionDto,
   type FormVersionPublishDraftInput,
-  type IntakeScopeDto
+  type IntakeScopeDto,
+  type ReleaseMutationResultDto,
+  type ReleaseSurfaceSuccessorInputDto,
+  type ReleaseSurfaceSuccessorPlanDto,
+  type SurfaceHeadDto
 } from '@jooevents/contracts';
 import {
   deadlineMutationPlanSchema,
@@ -156,6 +163,50 @@ export const formChangesetTransactionPort =
 export const formPlanningAttributionReadPort =
   defineChangesetReadPort<FormPlanningAttributionReadPort>('intake_form.planning_attribution', 1);
 
+/**
+ * The owner Model-3 coupling seam, hosted where the coupling rule binds: any
+ * form plan that mints a FormVersion consults this collaboration at propose
+ * time and freezes the resulting successor apply-surface releases into its own
+ * reviewed plan. The plan schema makes the consultation non-bypassable — a
+ * version-minting plan without a recorded successor set cannot parse — so a
+ * republish can never silently leave a public apply surface pinned to the
+ * superseded version. The composing runtime bridges these ports to the release
+ * domain's `planReleaseSurfaceSuccessorFrom` / `validate…` / apply functions.
+ */
+export interface FormSurfaceSuccessorPlanningPort {
+  planFormSurfaceSuccessors(input: ReleaseSurfaceSuccessorInputDto): {
+    readonly plan: ReleaseSurfaceSuccessorPlanDto;
+    readonly guardRefs: readonly GuardRef[];
+  };
+}
+
+export type FormSurfaceSuccessorValidation =
+  | { readonly kind: 'ready' }
+  | { readonly kind: 'refused' };
+
+export interface FormSurfaceSuccessorValidationPort {
+  validateFormSurfaceSuccessors(
+    plan: ReleaseSurfaceSuccessorPlanDto
+  ): FormSurfaceSuccessorValidation;
+}
+
+export interface FormSurfaceSuccessorTransactionPort {
+  applyFormSurfaceSuccessors(plan: ReleaseSurfaceSuccessorPlanDto): readonly SurfaceHeadDto[];
+}
+
+export const formSurfaceSuccessorPlanningPort =
+  defineChangesetReadPort<FormSurfaceSuccessorPlanningPort>(
+    'intake_form.surface_successor.planning', 1
+  );
+export const formSurfaceSuccessorValidationPort =
+  defineChangesetValidationPort<FormSurfaceSuccessorValidationPort>(
+    'intake_form.surface_successor.validation', 1
+  );
+export const formSurfaceSuccessorTransactionPort =
+  defineChangesetTransactionPort<FormSurfaceSuccessorTransactionPort>(
+    'intake_form.surface_successor.transaction', 1
+  );
+
 const identityAssignmentSchema: z.ZodType<FormDefinitionIdentityAssignment> = z.strictObject({
   formId: intakeIdSchema,
   rules: z.array(z.strictObject({ key: intakeStableKeySchema, id: intakeIdSchema }))
@@ -278,9 +329,42 @@ const mutationPlanSchema: z.ZodType<FormMutationPlan> = z.discriminatedUnion('ac
 const authorSchema = defineChangesetSchema({
   key: 'intake.form.author', version: 3, schema: formChangesetAuthorInputSchema
 });
+// Version 3: version-minting plans (publish, first-open lifecycle) freeze the
+// surface-successor collaboration result — the owner Model-3 "same reviewed
+// changeset" coupling — beside the mutation.
 const planSchema = defineChangesetSchema({
-  key: 'intake.form.plan', version: 2,
-  schema: z.strictObject({ policy: formOrdinaryPolicySchema, mutation: mutationPlanSchema })
+  key: 'intake.form.plan', version: 3,
+  schema: z.strictObject({
+    policy: formOrdinaryPolicySchema,
+    mutation: mutationPlanSchema,
+    surfaceSuccessors: releaseSurfaceSuccessorPlanSchema.nullable()
+  }).superRefine((plan, context) => {
+    const minting = plan.mutation.action === 'publish'
+      || (plan.mutation.action === 'lifecycle' && plan.mutation.publishedVersion !== null);
+    if (minting !== (plan.surfaceSuccessors !== null)) {
+      context.addIssue({
+        code: 'custom', path: ['surfaceSuccessors'],
+        message: 'exactly a version-minting plan records its surface-successor consultation'
+      });
+      return;
+    }
+    if (plan.surfaceSuccessors === null || plan.mutation.action === 'create') return;
+    const mutation = plan.mutation;
+    const publishedVersionId = mutation.action === 'publish'
+      ? mutation.publishedVersion.id
+      : mutation.action === 'lifecycle'
+        ? mutation.publishedVersion?.id
+        : undefined;
+    if (plan.surfaceSuccessors.input.formId !== mutation.before.id
+        || plan.surfaceSuccessors.input.formVersionId !== publishedVersionId
+        || plan.surfaceSuccessors.input.scope.workspaceId !== mutation.scope.workspaceId
+        || plan.surfaceSuccessors.input.scope.eventId !== mutation.scope.eventId) {
+      context.addIssue({
+        code: 'custom', path: ['surfaceSuccessors'],
+        message: 'surface successors must pin exactly the minted form version'
+      });
+    }
+  })
 });
 
 const safeHeadSchema = z.strictObject({
@@ -300,19 +384,23 @@ const safeDiffValueSchema = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('revise'), before: safeHeadSchema, after: safeHeadSchema }),
   z.strictObject({
     action: z.literal('publish'), before: safeHeadSchema, after: safeHeadSchema,
-    publishedVersion: publishedVersionSafeSchema
+    publishedVersion: publishedVersionSafeSchema,
+    surfaceSuccessors: z.array(intakeFormSurfaceSuccessorDiffSchema).max(20)
   }),
   z.strictObject({
     action: z.literal('lifecycle'), before: safeHeadSchema, after: safeHeadSchema,
-    publishedVersion: publishedVersionSafeSchema.nullable()
+    publishedVersion: publishedVersionSafeSchema.nullable(),
+    surfaceSuccessors: z.array(intakeFormSurfaceSuccessorDiffSchema).max(20).nullable()
   }),
   z.strictObject({
     action: z.literal('closing'), before: safeHeadSchema, after: safeHeadSchema,
     deadline: deadlineSafeDiffSchema
   })
 ]);
+// Version 3: version-minting diffs show which public apply surfaces the same
+// commit re-releases onto the minted version.
 const diffSchema = defineChangesetSchema({
-  key: 'intake.form.safe_diff', version: 2, schema: safeDiffValueSchema
+  key: 'intake.form.safe_diff', version: 3, schema: safeDiffValueSchema
 });
 const resultValueSchema = z.strictObject({
   schemaVersion: z.literal(1),
@@ -333,10 +421,11 @@ const planningErrorCodes: readonly FormPlanningErrorCode[] = [
   'deadline_unavailable', 'deadline_changed', 'invalid_identity_assignment',
   'invalid_definition', 'invalid_transition', 'invalid_plan'
 ];
+// Version 3: adds the validate-time surface-successor drift refusal.
 const outcomeDetailSchema = defineChangesetSchema({
-  key: 'intake.form.stale_detail', version: 2,
+  key: 'intake.form.stale_detail', version: 3,
   schema: z.strictObject({
-    code: z.enum([...planningErrorCodes, 'policy_changed']),
+    code: z.enum([...planningErrorCodes, 'policy_changed', 'surface_successor_changed']),
     action: formActionSchema,
     formId: intakeIdSchema
   })
@@ -377,20 +466,29 @@ export function createFormOrdinaryChangesetBundle(input: {
     readPorts: [
       formChangesetReadPort,
       formPlanningAttributionReadPort,
-      formCloseDeadlinePlanningPort
+      formCloseDeadlinePlanningPort,
+      formSurfaceSuccessorPlanningPort
     ],
-    validationPorts: [formChangesetValidationPort, formCloseDeadlineValidationPort],
-    transactionPorts: [formChangesetTransactionPort, formCloseDeadlineTransactionPort],
+    validationPorts: [
+      formChangesetValidationPort,
+      formCloseDeadlineValidationPort,
+      formSurfaceSuccessorValidationPort
+    ],
+    transactionPorts: [
+      formChangesetTransactionPort,
+      formCloseDeadlineTransactionPort,
+      formSurfaceSuccessorTransactionPort
+    ],
     allowedAggregateKinds: [
       'intake_form', 'field_registry', 'program_track', 'program_format',
       'session', 'deadline', 'event'
     ],
     allowedGuardKinds: [
       'intake_form_catalog', 'intake_form_version_set', 'field_registry_guard',
-      'deadline_catalog'
+      'deadline_catalog', 'surface_head_state'
     ],
     allowedRisks: ['low', 'normal'],
-    allowedConsequences: ['intake_form_changed', 'deadline_changed'],
+    allowedConsequences: ['intake_form_changed', 'deadline_changed', 'release_changed'],
     allowedOutcomes: [{
       class: 'stale_revision',
       kind: 'intake_form_changed',
@@ -399,7 +497,8 @@ export function createFormOrdinaryChangesetBundle(input: {
     }],
     allowedFacts: [
       { kind: 'intake_form_changed', version: 1 },
-      { kind: 'deadline_changed', version: 1 }
+      { kind: 'deadline_changed', version: 1 },
+      { kind: 'release_changed', version: 1 }
     ],
     allowedEffects: [],
     plan(authorInput, snapshot) {
@@ -409,19 +508,24 @@ export function createFormOrdinaryChangesetBundle(input: {
       const registry = requireRegistry(author.scope, port);
       const attribution = requirePlanningAttribution(author.scope, snapshot);
       const mutation = planMutation(author, catalog, registry, port, attribution, snapshot);
-      const consequences = formConsequences(mutation);
+      const successors = planSurfaceSuccessors(mutation, attribution, snapshot);
+      const plan = {
+        policy: input.policy,
+        mutation,
+        surfaceSuccessors: successors?.plan ?? null
+      };
       return {
-        plan: { policy: input.policy, mutation },
+        plan,
         aggregateRefs: aggregateRefs(mutation),
-        guardRefs: guardRefs(mutation),
+        guardRefs: uniqueGuardRefs([...guardRefs(mutation), ...(successors?.guardRefs ?? [])]),
         riskTier: input.policy.ordinaryRisk,
-        consequences
+        consequences: formConsequences(plan)
       };
     },
     projectDiff(plan) {
       return {
-        diff: safeDiff(plan.mutation),
-        representedConsequences: formConsequences(plan.mutation)
+        diff: safeDiff(plan),
+        representedConsequences: formConsequences(plan)
       };
     },
     validateWithin(plan, validation) {
@@ -452,9 +556,15 @@ export function createFormOrdinaryChangesetBundle(input: {
         references: port,
         ...(versions === undefined ? {} : { existingVersions: versions })
       });
-      return code
-        ? { kind: 'outcome', outcome: refusal(code, plan.mutation) }
-        : { kind: 'ready', validated: plan };
+      if (code) return { kind: 'outcome', outcome: refusal(code, plan.mutation) };
+      if (plan.surfaceSuccessors !== null) {
+        const successors = validation.getPort(formSurfaceSuccessorValidationPort)
+          .validateFormSurfaceSuccessors(plan.surfaceSuccessors);
+        if (successors.kind !== 'ready') {
+          return { kind: 'outcome', outcome: refusal('surface_successor_changed', plan.mutation) };
+        }
+      }
+      return { kind: 'ready', validated: plan };
     },
     applyWithin(plan, transaction) {
       const contribution = deadlineContribution(plan.mutation);
@@ -469,6 +579,31 @@ export function createFormOrdinaryChangesetBundle(input: {
       }
       const applied = transaction.getPort(formChangesetTransactionPort)
         .applyFormPlan(plan.mutation);
+      let successorFacts: readonly {
+        readonly kind: 'release_changed';
+        readonly version: 1;
+        readonly payload: ReleaseMutationResultDto;
+      }[] = [];
+      if (plan.surfaceSuccessors !== null) {
+        const heads = transaction.getPort(formSurfaceSuccessorTransactionPort)
+          .applyFormSurfaceSuccessors(plan.surfaceSuccessors);
+        const expected = plan.surfaceSuccessors.successors.map((successor) => successor.headAfter);
+        if (canonicalJsonSha256(heads) !== canonicalJsonSha256(expected)) {
+          throw new TypeError('form_surface_successor_apply_head_changed');
+        }
+        // One canonical release-domain result per successor, so audit and
+        // outbox consumers see ordinary surface publishes — same fact kind and
+        // payload shape the release changeset itself emits.
+        successorFacts = plan.surfaceSuccessors.successors.map((successor) => ({
+          kind: 'release_changed' as const,
+          version: 1 as const,
+          payload: releaseMutationResultSchema.parse({
+            action: 'surface_publish',
+            release: successor.release,
+            head: successor.headAfter
+          })
+        }));
+      }
       const result = resultValueSchema.parse({
         schemaVersion: 1,
         action: plan.mutation.action,
@@ -489,7 +624,7 @@ export function createFormOrdinaryChangesetBundle(input: {
             catalogVersion: result.catalogVersion,
             publishedVersionId: result.publishedVersionId
           }
-        }, ...(deadlineApplied?.facts ?? [])],
+        }, ...successorFacts, ...(deadlineApplied?.facts ?? [])],
         effects: [...(deadlineApplied?.effects ?? [])]
       };
     },
@@ -669,10 +804,52 @@ function publishesVersion(
     || (plan.action === 'lifecycle' && plan.publishedVersion !== null);
 }
 
-function formConsequences(plan: FormMutationPlan): readonly string[] {
-  return deadlineContribution(plan) === null
-    ? ['intake_form_changed']
-    : ['intake_form_changed', 'deadline_changed'];
+/**
+ * Consults the successor collaboration for every version-minting mutation. A
+ * first publish provably yields an empty set (no apply surface can pin an
+ * unpublished form), but the consultation is still recorded so no minting
+ * path — present or future — can skip the coupling. Collaboration failures
+ * refuse the plan; they are corrupt-state, never a partial publish.
+ */
+function planSurfaceSuccessors(
+  mutation: FormMutationPlan,
+  attribution: FormPlanningAttributionRecord,
+  snapshot: ChangesetPlanningSnapshot
+): { readonly plan: ReleaseSurfaceSuccessorPlanDto; readonly guardRefs: readonly GuardRef[] } | null {
+  if (!publishesVersion(mutation) || mutation.publishedVersion === null) return null;
+  try {
+    const planned = snapshot.getPort(formSurfaceSuccessorPlanningPort)
+      .planFormSurfaceSuccessors({
+        scope: mutation.scope,
+        formId: mutation.before.id,
+        formVersionId: mutation.publishedVersion.id,
+        actorUserId: attribution.actorUserId,
+        occurredAt: attribution.occurredAt
+      });
+    return {
+      plan: releaseSurfaceSuccessorPlanSchema.parse(planned.plan),
+      guardRefs: planned.guardRefs
+    };
+  } catch (error) {
+    // Release-domain refusals and malformed collaboration output refuse the
+    // plan as corrupt state; infrastructure failures stay loud.
+    if (error instanceof Error
+        && (error.name === 'ReleasePlanningError' || error.name === 'ZodError')) {
+      throw new FormPlanningError('invalid_plan');
+    }
+    throw error;
+  }
+}
+
+function formConsequences(plan: {
+  readonly mutation: FormMutationPlan;
+  readonly surfaceSuccessors: ReleaseSurfaceSuccessorPlanDto | null;
+}): readonly string[] {
+  return [
+    'intake_form_changed',
+    ...((plan.surfaceSuccessors?.successors.length ?? 0) > 0 ? ['release_changed'] : []),
+    ...(deadlineContribution(plan.mutation) === null ? [] : ['deadline_changed'])
+  ];
 }
 
 function registryPin(plan: FormMutationPlan) {
@@ -772,34 +949,53 @@ function safePublishedVersion(version: FormVersionDto) {
   };
 }
 
-function safeDiff(plan: FormMutationPlan): FormChangesetSafeDiff {
-  if (plan.action === 'create') {
-    return { action: 'create', before: null, after: safeHead(plan.after) };
+function safeSurfaceSuccessors(successors: ReleaseSurfaceSuccessorPlanDto) {
+  return successors.successors.map((successor) => ({
+    surfaceReleaseId: successor.release.id,
+    supersedesReleaseId: successor.headBefore.activeReleaseId,
+    formVersionId: successors.input.formVersionId,
+    headVersion: successor.headAfter.version
+  }));
+}
+
+function safeDiff(plan: {
+  readonly mutation: FormMutationPlan;
+  readonly surfaceSuccessors: ReleaseSurfaceSuccessorPlanDto | null;
+}): FormChangesetSafeDiff {
+  const mutation = plan.mutation;
+  if (mutation.action === 'create') {
+    return { action: 'create', before: null, after: safeHead(mutation.after) };
   }
-  if (plan.action === 'publish') return {
-    action: 'publish',
-    before: safeHead(plan.before),
-    after: safeHead(plan.after),
-    publishedVersion: safePublishedVersion(plan.publishedVersion)
-  };
-  if (plan.action === 'lifecycle') return {
+  if (mutation.action === 'publish') {
+    if (plan.surfaceSuccessors === null) throw new FormPlanningError('invalid_plan');
+    return {
+      action: 'publish',
+      before: safeHead(mutation.before),
+      after: safeHead(mutation.after),
+      publishedVersion: safePublishedVersion(mutation.publishedVersion),
+      surfaceSuccessors: safeSurfaceSuccessors(plan.surfaceSuccessors)
+    };
+  }
+  if (mutation.action === 'lifecycle') return {
     action: 'lifecycle',
-    before: safeHead(plan.before),
-    after: safeHead(plan.after),
-    publishedVersion: plan.publishedVersion === null
-      ? null : safePublishedVersion(plan.publishedVersion)
+    before: safeHead(mutation.before),
+    after: safeHead(mutation.after),
+    publishedVersion: mutation.publishedVersion === null
+      ? null : safePublishedVersion(mutation.publishedVersion),
+    surfaceSuccessors: plan.surfaceSuccessors === null
+      ? null : safeSurfaceSuccessors(plan.surfaceSuccessors)
   };
-  if (plan.action === 'closing') return {
+  if (mutation.action === 'closing') return {
     action: 'closing',
-    before: safeHead(plan.before),
-    after: safeHead(plan.after),
-    deadline: projectFormCloseDeadlineDiff(plan.deadlineContribution)
+    before: safeHead(mutation.before),
+    after: safeHead(mutation.after),
+    deadline: projectFormCloseDeadlineDiff(mutation.deadlineContribution)
   };
-  return { action: 'revise', before: safeHead(plan.before), after: safeHead(plan.after) };
+  return { action: 'revise', before: safeHead(mutation.before), after: safeHead(mutation.after) };
 }
 
 function refusal(
-  code: FormPlanningErrorCode | 'policy_changed',
+  code: FormPlanningErrorCode | 'policy_changed' | 'surface_successor_changed',
   plan: FormMutationPlan
 ) {
   return {
@@ -808,7 +1004,7 @@ function refusal(
     retryable: false,
     subjects: [{ type: 'intake_form', id: plan.after.id }],
     detail: { code, action: plan.action, formId: plan.after.id },
-    detailSchemaVersion: 2
+    detailSchemaVersion: 3
   };
 }
 

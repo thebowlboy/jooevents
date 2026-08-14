@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { existsSync, lstatSync, realpathSync, rmSync } from 'node:fs';
-import { basename, dirname } from 'node:path';
+import {
+  existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join } from 'node:path';
 import { makeSignature } from 'better-auth/crypto';
 import {
   currentEventReadResultSchema,
@@ -26,8 +29,13 @@ import {
   organizerPreviewMessageBatchOperationResultSchema,
   organizerSendMessagesOperationResultSchema,
   organizerFormCatalogSchema,
+  portalEngagementRespondResultSchema,
+  portalSnapshotReadResultSchema,
   programVocabularySnapshotReadResultSchema,
+  releaseDraftOperationResultSchema,
   safeOperationManifestSchema,
+  servedPublicRosterSchema,
+  servedPublicScheduleSchema,
   submissionDirectEntryDraftOperationResultSchema
 } from '@jooevents/contracts';
 import { workspaceOverviewReadResultSchema } from '@jooevents/contracts/workspace-overview';
@@ -39,7 +47,10 @@ import {
   reviewChangeDraftOperationResultSchema,
   reviewSnapshotReadResultSchema
 } from '@jooevents/contracts/reviews';
-import { sessionCatalogReadResultSchema } from '@jooevents/contracts/sessions';
+import {
+  sessionCatalogReadResultSchema,
+  sessionDraftOperationResultSchema
+} from '@jooevents/contracts/sessions';
 import {
   reviewerRosterChangeDraftOperationResultSchema,
   reviewerRosterSnapshotReadResultSchema
@@ -65,6 +76,7 @@ import {
 import { DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG } from '@jooevents/workspace-operations';
 import { loadEphemeralLiveConfig } from '../config';
 import { createEphemeralLiveRuntime, type EphemeralLiveRuntime } from './ephemeral-live';
+import { createProductionRequestHandler } from './request-handler';
 
 const runtimes: EphemeralLiveRuntime[] = [];
 const organizerFormCatalogReadResultSchema = createReadOperationResultSchema(
@@ -309,12 +321,225 @@ async function createEventThroughChangeset(input: {
   return Object.freeze({ draft, ...lifecycle });
 }
 
+const embedBuildDirectories: string[] = [];
+
+interface SeededSpeakerInput {
+  readonly key: string;
+  readonly title: string;
+  readonly name: string;
+  readonly email: string;
+}
+
+interface SeededSpeaker extends SeededSpeakerInput {
+  readonly submissionId: string;
+  readonly personId: string;
+  readonly sessionId: string;
+  readonly engagementId: string;
+}
+
+/**
+ * Seeds the shared publication/portal world through the mounted operations
+ * only: a format-targeted CFP carrying title, name, and email, one committed
+ * direct entry per speaker, and one accept-with-spawn decision commit — so
+ * every speaker ends with a `programmed` Session, Intake participant
+ * evidence, and one seeded `invited` engagement.
+ */
+async function seedAcceptedSpeakers(input: {
+  readonly runtime: EphemeralLiveRuntime;
+  readonly session: BrowserSession;
+  readonly key: string;
+  readonly speakers: readonly SeededSpeakerInput[];
+}): Promise<readonly SeededSpeaker[]> {
+  const { runtime, session, key } = input;
+  await createEventThroughChangeset({ runtime, session, key: `${key}-event` });
+
+  const formatDraft = programVocabularyDraftOperationResultSchema.parse(await effect({
+    runtime,
+    session,
+    path: '/api/events/current/program-vocabulary/drafts/create',
+    key: `${key}-format-draft`,
+    body: { kind: 'format', expectedSetVersion: 1, name: 'Talk' },
+    parse: (value) => value
+  }));
+  if (formatDraft.kind !== 'success') throw new Error('Format draft failed.');
+  await commitDraft({ runtime, session, key: `${key}-format`, draft: formatDraft });
+  const vocabulary = programVocabularySnapshotReadResultSchema.parse(await (
+    await runtime.app.request('/api/events/current/program-vocabulary', {
+      headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+    })
+  ).json());
+  if (vocabulary.kind !== 'success') throw new Error('Vocabulary read failed.');
+  const format = vocabulary.data.formats.find((candidate) => candidate.name === 'Talk');
+  if (!format) throw new Error('Committed format missing.');
+
+  const registryResult = fieldRegistrySnapshotReadResultSchema.parse(await (
+    await runtime.app.request('/api/events/current/field-registry', {
+      headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+    })
+  ).json());
+  if (registryResult.kind !== 'success') throw new Error('Field registry read failed.');
+  const registry = registryResult.data;
+  const requireField = (mapsTo: string, kind: string): string => {
+    const id = registry.fields.find(
+      (field) => field.mapsTo === mapsTo && field.kind === kind
+    )?.id;
+    if (!id) throw new Error(`Registry field missing: ${mapsTo}`);
+    return id;
+  };
+  const titleFieldId = requireField('talk.title', 'text');
+  const nameFieldId = requireField('person.name', 'text');
+  const emailFieldId = requireField('person.email', 'email');
+  const included = new Set([titleFieldId, nameFieldId, emailFieldId]);
+
+  const formCreateDraft = intakeFormDraftOperationResultSchema.parse(await effect({
+    runtime,
+    session,
+    path: '/api/events/current/forms/drafts/create',
+    key: `${key}-form-create-draft`,
+    body: {
+      expectedCatalogVersion: 1,
+      expectedRegistryVersion: registry.version,
+      definition: {
+        ...formDefinitionInput,
+        name: 'Speaker CFP',
+        target: { kind: 'category', category: { kind: 'format', id: format.id } },
+        composition: {
+          excludedFieldIds: registry.fields
+            .filter((field) => field.scope.kind === 'shared'
+              && field.contexts.apply.visible
+              && !included.has(field.id))
+            .map((field) => field.id)
+            .sort(),
+          requiredOverrides: {},
+          optionExposure: {}
+        }
+      }
+    },
+    parse: (value) => value
+  }));
+  if (formCreateDraft.kind !== 'success'
+      || formCreateDraft.data.safeDiff.action !== 'create') {
+    throw new Error('Form create draft failed.');
+  }
+  await commitDraft({ runtime, session, key: `${key}-form-create`, draft: formCreateDraft });
+  const openDraft = intakeFormDraftOperationResultSchema.parse(await effect({
+    runtime,
+    session,
+    path: '/api/events/current/forms/drafts/lifecycle',
+    key: `${key}-form-open-draft`,
+    body: {
+      transition: 'publish_and_open',
+      formId: formCreateDraft.data.safeDiff.after.id,
+      expectedDefinitionVersion: 1,
+      expectedRegistryVersion: registry.version
+    },
+    parse: (value) => value
+  }));
+  if (openDraft.kind !== 'success') throw new Error('Form open draft failed.');
+  await commitDraft({ runtime, session, key: `${key}-form-open`, draft: openDraft });
+  const catalog = organizerFormCatalogReadResultSchema.parse(await (
+    await runtime.app.request('/api/events/current/forms', {
+      headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+    })
+  ).json());
+  if (catalog.kind !== 'success') throw new Error('Form catalog read failed.');
+  const openForm = catalog.data.forms.find((form) => form.status === 'open');
+  if (!openForm) throw new Error('Open form missing from the catalog.');
+
+  const submissionIds: string[] = [];
+  for (const speaker of input.speakers) {
+    const entryDraft = submissionDirectEntryDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/submissions/direct-entry/drafts',
+      key: `${key}-entry-${speaker.key}-draft`,
+      body: {
+        formId: openForm.id,
+        expectedFormDefinitionVersion: openForm.version,
+        answers: [
+          { kind: 'text', fieldId: titleFieldId, value: speaker.title },
+          { kind: 'text', fieldId: nameFieldId, value: speaker.name },
+          { kind: 'email', fieldId: emailFieldId, value: speaker.email }
+        ]
+      },
+      parse: (value) => value
+    }));
+    if (entryDraft.kind !== 'success') throw new Error('Direct entry draft failed.');
+    submissionIds.push(entryDraft.data.safeDiff.submission.id);
+    await commitDraft({
+      runtime, session, key: `${key}-entry-${speaker.key}`, draft: entryDraft
+    });
+  }
+
+  const decideDraft = decisionDecideDraftOperationResultSchema.parse(await effect({
+    runtime,
+    session,
+    path: '/api/events/current/decisions/decide-drafts',
+    key: `${key}-decide-draft`,
+    body: {
+      action: 'decide',
+      decisions: submissionIds.map((submissionId) => ({
+        submissionId,
+        state: 'accepted',
+        expectedDecisionVersion: null,
+        expectedDecisionDigestSha256: null,
+        graduation: { kind: 'spawn' }
+      }))
+    },
+    parse: (value) => value
+  }));
+  if (decideDraft.kind !== 'success') throw new Error('Decide draft failed.');
+  await commitDraft({ runtime, session, key: `${key}-decide`, draft: decideDraft });
+
+  const sessions = sessionCatalogReadResultSchema.parse(await (
+    await runtime.app.request('/api/events/current/sessions', {
+      headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+    })
+  ).json());
+  if (sessions.kind !== 'success') throw new Error('Session catalog read failed.');
+  const engagements = engagementSnapshotReadResultSchema.parse(await (
+    await runtime.app.request('/api/events/current/engagements', {
+      headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+    })
+  ).json());
+  if (engagements.kind !== 'success') throw new Error('Engagement read failed.');
+
+  return input.speakers.map((speaker, index) => {
+    const submissionId = submissionIds[index];
+    if (!submissionId) throw new Error('Submission id missing.');
+    const person = runtime.database.sqlite.query<{ readonly person_id: string }, [string]>(`
+      SELECT person_id FROM intake_submission_participant_evidence
+       WHERE submission_id = ?
+    `).get(submissionId);
+    if (!person) throw new Error('Participant evidence missing.');
+    const spawned = sessions.data.sessions.find(
+      (candidate) => candidate.title === speaker.title
+    );
+    if (!spawned) throw new Error('Spawned session missing.');
+    const engagement = engagements.data.engagements.find(
+      (candidate) => candidate.submissionId === submissionId
+    );
+    if (!engagement) throw new Error('Seeded engagement missing.');
+    return Object.freeze({
+      ...speaker,
+      submissionId,
+      personId: person.person_id,
+      sessionId: spawned.id,
+      engagementId: engagement.id
+    });
+  });
+}
+
 afterEach(() => {
   while (runtimes.length > 0) {
     const runtime = runtimes.pop();
     if (!runtime) continue;
     runtime.close();
     cleanupRetainedTree(runtime.database.directoryPath);
+  }
+  while (embedBuildDirectories.length > 0) {
+    const directory = embedBuildDirectories.pop();
+    if (directory) rmSync(directory, { recursive: true, force: true });
   }
 });
 
@@ -503,6 +728,14 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['GET /api/events/current/communications/templates']
       },
       {
+        name: 'portal.engagement.respond', version: 1, effect: 'commit',
+        bindings: ['POST /api/portal/engagements/respond']
+      },
+      {
+        name: 'portal.snapshot.read', version: 1, effect: 'read',
+        bindings: ['GET /api/portal/snapshot']
+      },
+      {
         name: 'prepare_message_batch_preview', version: 1, effect: 'read',
         bindings: ['GET /api/events/current/communications/previews/prepare']
       },
@@ -537,6 +770,10 @@ describe('ephemeral live Foundation server composition', () => {
       {
         name: 'program_vocabulary.snapshot.read', version: 1, effect: 'read',
         bindings: ['GET /api/events/current/program-vocabulary']
+      },
+      {
+        name: 'release.change.draft', version: 1, effect: 'draft',
+        bindings: ['POST /api/events/current/releases/drafts']
       },
       {
         name: 'review.assignment.step-back.draft', version: 1, effect: 'draft',
@@ -697,6 +934,33 @@ describe('ephemeral live Foundation server composition', () => {
       body: '{}'
     })).status).toBe(404);
     expect((await runtime.app.request('/api/public/forms/current')).status).toBe(400);
+    // The unified public registry admits exactly three GET reads; before an
+    // event exists each refuses as an invalid request rather than serving.
+    expect((await runtime.app.request('/api/public/schedule/current')).status).toBe(400);
+    expect((await runtime.app.request('/api/public/speakers/current')).status).toBe(400);
+    expect((await runtime.app.request('/api/public/schedule')).status).toBe(404);
+    expect((await runtime.app.request('/api/public/speakers')).status).toBe(404);
+    // The participant lane refuses without a lane-separate session; the entry
+    // acknowledgement stays non-enumerating even before an event exists.
+    expect((await runtime.app.request('/api/portal/snapshot')).status).toBe(401);
+    expect((await runtime.app.request('/api/portal/engagements/respond', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        origin: config.baseUrl,
+        'idempotency-key': 'portal-census-probe'
+      },
+      body: '{}'
+    })).status).toBe(401);
+    expect(await (await runtime.app.request('/api/me/participant-context')).json())
+      .toEqual({ state: 'anonymous' });
+    const preEventLink = await runtime.app.request('/api/portal/entry/link', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: config.baseUrl },
+      body: JSON.stringify({ email: 'someone@example.test' })
+    });
+    expect(preEventLink.status).toBe(200);
+    expect(await preEventLink.json()).toEqual({ outcome: 'link_requested' });
     expect((await runtime.app.request('/api/public/forms/application')).status).toBe(404);
     expect((await runtime.app.request('/api/public/forms/application/mutate', {
       method: 'POST',
@@ -1489,10 +1753,11 @@ describe('ephemeral live Foundation server composition', () => {
         location: '',
         venueNote: '',
         // A newly created Event seeds the schedule-grid geometry defaults, so
-        // it can draw a grid from day one (Wave-2 recorder defaults).
+        // it can draw a grid from day one (owner-amended 2026-08-14: 15-minute
+        // slots, matching the moving UI's rhythm).
         dayStart: '09:00',
         dayEnd: '18:00',
-        slotMinutes: 30
+        slotMinutes: 15
       },
       correlationId: initialCorrelation
     });
@@ -1564,8 +1829,8 @@ describe('ephemeral live Foundation server composition', () => {
         endDate: updateBody.endDate,
         location: updateBody.location,
         venueNote: updateBody.venueNote,
-        // The update draft carried no geometry fields, so the seeded creation
-        // defaults survive the settings update unchanged.
+        // The update deliberately widened the slot size from the seeded 15 to
+        // 30, proving geometry rides the ordinary settings update path.
         dayStart: '09:00',
         dayEnd: '18:00',
         slotMinutes: 30
@@ -2077,6 +2342,7 @@ describe('ephemeral live Foundation server composition', () => {
           area: 'schedule',
           status: 'partial',
           availableCapabilities: [
+            'release.change.draft',
             'schedule.placement.draft',
             'schedule.placement.snapshot.read',
             'schedule.session.manage',
@@ -2084,8 +2350,7 @@ describe('ephemeral live Foundation server composition', () => {
           ],
           unavailableCapabilities: [
             'schedule.break.manage',
-            'schedule.placement.unplace',
-            'schedule.publish'
+            'schedule.placement.unplace'
           ]
         }, {
           area: 'messages',
@@ -4354,4 +4619,647 @@ describe('ephemeral live Foundation server composition', () => {
     expect(count(runtime, 'foundation_trial_operation_receipts')).toBe(0);
     expect(count(runtime, 'event_spine_heads')).toBe(0);
   });
+
+  test('publishes confirmed-and-visible program data to the public reads, re-gates rollback, and frames embeds from the surface allowlist', async () => {
+    const runtime = await createEphemeralLiveRuntime({ config });
+    runtimes.push(runtime);
+    const session = await createOwnerSession(runtime);
+    await provisionOwner(runtime, session);
+    const [ada, bram, cleo] = await seedAcceptedSpeakers({
+      runtime,
+      session,
+      key: 'publication-loop',
+      speakers: [
+        {
+          key: 'ada',
+          title: 'Typed changesets in production',
+          name: 'Ada Alpha',
+          email: 'ada.alpha@example.test'
+        },
+        {
+          key: 'bram',
+          title: 'Schedule physics for humans',
+          name: 'Bram Beta',
+          email: 'bram.beta@example.test'
+        },
+        {
+          key: 'cleo',
+          title: 'Signals without ceremony',
+          name: 'Cleo Gamma',
+          email: 'cleo.gamma@example.test'
+        }
+      ]
+    });
+    if (!ada || !bram || !cleo) throw new Error('Seeded speakers missing.');
+
+    const servedScheduleResultSchema = createReadOperationResultSchema(servedPublicScheduleSchema);
+    const servedRosterResultSchema = createReadOperationResultSchema(servedPublicRosterSchema);
+    const readPublic = async (path: string) => {
+      const response = await runtime.app.request(path);
+      expect(response.status).toBe(200);
+      const text = await response.text();
+      return Object.freeze({ text, body: JSON.parse(text) as unknown });
+    };
+
+    // Nothing published yet: both public reads answer the typed absence —
+    // never an empty world pretending to be a published one.
+    for (const path of ['/api/public/schedule/current', '/api/public/speakers/current']) {
+      const { body } = await readPublic(path);
+      expect(body).toMatchObject({
+        kind: 'outcome',
+        outcome: { class: 'conflict', kind: 'release.not_published', retryable: false }
+      });
+    }
+
+    // Ada and Bram confirm; Cleo stays invited-but-unconfirmed.
+    for (const [index, speaker] of [ada, bram].entries()) {
+      const confirmDraft = engagementChangeDraftOperationResultSchema.parse(await effect({
+        runtime,
+        session,
+        path: '/api/events/current/engagements/drafts',
+        key: `publication-loop-confirm-${index}-draft`,
+        body: {
+          action: 'record_confirmation',
+          engagementId: speaker.engagementId,
+          expectedEngagementVersion: 1,
+          attribution: 'organizer_recorded'
+        },
+        parse: (value) => value
+      }));
+      if (confirmDraft.kind !== 'success') throw new Error('Confirmation draft failed.');
+      await commitDraft({
+        runtime, session, key: `publication-loop-confirm-${index}`, draft: confirmDraft
+      });
+    }
+
+    // Non-programmed catalog content that must never enter a release: one
+    // collecting Session (placeable, still never public) and one draft.
+    const catalogForCreate = sessionCatalogReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/sessions', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (catalogForCreate.kind !== 'success') throw new Error('Session catalog read failed.');
+    const seededFormatId = catalogForCreate.data.sessions[0]?.programTarget.format.id;
+    if (!seededFormatId) throw new Error('Seeded session format missing.');
+    let catalogGuard = Object.freeze({
+      version: catalogForCreate.data.version,
+      digestSha256: catalogForCreate.data.digestSha256
+    });
+    for (const nonPublic of [
+      { key: 'collecting', title: 'Hallway lightning pod', lifecycle: 'collecting' as const },
+      { key: 'draft', title: 'Working notes placeholder', lifecycle: 'draft' as const }
+    ]) {
+      const createDraft = sessionDraftOperationResultSchema.parse(await effect({
+        runtime,
+        session,
+        path: '/api/events/current/sessions/drafts',
+        key: `publication-loop-${nonPublic.key}-draft`,
+        body: {
+          action: 'create',
+          expectedCatalogVersion: catalogGuard.version,
+          expectedCatalogDigestSha256: catalogGuard.digestSha256,
+          title: nonPublic.title,
+          plannedDurationMinutes: 30,
+          lifecycle: nonPublic.lifecycle,
+          formatId: seededFormatId,
+          trackId: null
+        },
+        parse: (value) => value
+      }));
+      if (createDraft.kind !== 'success') throw new Error('Session create draft failed.');
+      await commitDraft({
+        runtime, session, key: `publication-loop-${nonPublic.key}`, draft: createDraft
+      });
+      const refreshed = sessionCatalogReadResultSchema.parse(await (
+        await runtime.app.request('/api/events/current/sessions', {
+          headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+        })
+      ).json());
+      if (refreshed.kind !== 'success') throw new Error('Session catalog re-read failed.');
+      catalogGuard = Object.freeze({
+        version: refreshed.data.version,
+        digestSha256: refreshed.data.digestSha256
+      });
+    }
+
+    // Release 1: both confirmed speakers visible. The reviewed diff carries
+    // the audited name declassifications the commit copies into public state.
+    const publishOne = releaseDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/releases/drafts',
+      key: 'publication-loop-publish-1-draft',
+      body: { action: 'publish_schedule', expectedCurrentReleaseNumber: null },
+      parse: (value) => value
+    }));
+    if (publishOne.kind !== 'success') throw new Error('First publish draft failed.');
+    const diffOne = publishOne.data.safeDiff;
+    if (diffOne.action !== 'publish_schedule') throw new Error('First publish diff wrong arm.');
+    expect(diffOne.before).toBeNull();
+    expect(diffOne.after.number).toBe(1);
+    expect(diffOne.releasedSessionCount).toBe(3);
+    expect(diffOne.releasedOccurrenceCount).toBe(0);
+    expect(diffOne.rollbackSuppressions).toBeNull();
+    expect(diffOne.nameDeclassifications.map((entry) => entry.displayName).sort())
+      .toEqual(['Ada Alpha', 'Bram Beta']);
+    const releaseOneId = diffOne.after.releaseId;
+    await commitDraft({ runtime, session, key: 'publication-loop-publish-1', draft: publishOne });
+
+    const scheduleOne = await readPublic('/api/public/schedule/current');
+    const scheduleOneResult = servedScheduleResultSchema.parse(scheduleOne.body);
+    if (scheduleOneResult.kind !== 'success') throw new Error('Published schedule read failed.');
+    expect(scheduleOneResult.data.releaseNumber).toBe(1);
+    expect(scheduleOneResult.data.rooms).toEqual([]);
+    expect(scheduleOneResult.data.sessions.map((entry) => entry.title).sort())
+      .toEqual([ada.title, bram.title, cleo.title].sort());
+    const speakersOne = new Map(scheduleOneResult.data.sessions.map(
+      (entry) => [entry.sessionId, entry.speakers]
+    ));
+    expect(speakersOne.get(ada.sessionId)).toEqual(['Ada Alpha']);
+    expect(speakersOne.get(bram.sessionId)).toEqual(['Bram Beta']);
+    expect(speakersOne.get(cleo.sessionId)).toEqual([]);
+    const rosterOne = await readPublic('/api/public/speakers/current');
+    const rosterOneResult = servedRosterResultSchema.parse(rosterOne.body);
+    if (rosterOneResult.kind !== 'success') throw new Error('Published roster read failed.');
+    expect(rosterOneResult.data.speakers).toEqual([
+      { name: 'Ada Alpha', sessions: [{ sessionId: ada.sessionId, title: ada.title }] },
+      { name: 'Bram Beta', sessions: [{ sessionId: bram.sessionId, title: bram.title }] }
+    ]);
+    for (const text of [scheduleOne.text, rosterOne.text]) {
+      // Response bytes: no unconfirmed name, no non-programmed content, no
+      // contact data, no person key, no workspace scope.
+      expect(text).not.toContain('Cleo Gamma');
+      expect(text).not.toContain('Hallway lightning pod');
+      expect(text).not.toContain('Working notes placeholder');
+      expect(text).not.toContain('@example.test');
+      expect(text).not.toContain(ada.personId);
+      expect(text).not.toContain(bram.personId);
+      expect(text).not.toContain(runtime.workspaceId);
+    }
+
+    // The organizer turns Bram's public visibility off through the mounted
+    // roster_visibility session draft, then publishes the successor.
+    const catalogBeforeHide = sessionCatalogReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/sessions', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (catalogBeforeHide.kind !== 'success') throw new Error('Session catalog read failed.');
+    const bramSession = catalogBeforeHide.data.sessions.find(
+      (candidate) => candidate.id === bram.sessionId
+    );
+    if (!bramSession) throw new Error('Bram session missing from the catalog.');
+    const hideDraft = sessionDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/sessions/drafts',
+      key: 'publication-loop-hide-draft',
+      body: {
+        action: 'roster_visibility',
+        expectedCatalogVersion: catalogBeforeHide.data.version,
+        expectedCatalogDigestSha256: catalogBeforeHide.data.digestSha256,
+        sessionId: bram.sessionId,
+        expectedSessionVersion: bramSession.version,
+        expectedSessionDigestSha256: bramSession.digestSha256,
+        personId: bram.personId,
+        publiclyVisible: false
+      },
+      parse: (value) => value
+    }));
+    if (hideDraft.kind !== 'success') throw new Error('Roster visibility draft failed.');
+    await commitDraft({ runtime, session, key: 'publication-loop-hide', draft: hideDraft });
+
+    const publishTwo = releaseDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/releases/drafts',
+      key: 'publication-loop-publish-2-draft',
+      body: { action: 'publish_schedule', expectedCurrentReleaseNumber: 1 },
+      parse: (value) => value
+    }));
+    if (publishTwo.kind !== 'success') throw new Error('Second publish draft failed.');
+    const diffTwo = publishTwo.data.safeDiff;
+    if (diffTwo.action !== 'publish_schedule') throw new Error('Second publish diff wrong arm.');
+    expect(diffTwo.after.number).toBe(2);
+    expect(diffTwo.nameDeclassifications.map((entry) => entry.displayName))
+      .toEqual(['Ada Alpha']);
+    await commitDraft({ runtime, session, key: 'publication-loop-publish-2', draft: publishTwo });
+
+    const scheduleTwo = await readPublic('/api/public/schedule/current');
+    const scheduleTwoResult = servedScheduleResultSchema.parse(scheduleTwo.body);
+    if (scheduleTwoResult.kind !== 'success') throw new Error('Successor schedule read failed.');
+    expect(scheduleTwoResult.data.releaseNumber).toBe(2);
+    const speakersTwo = new Map(scheduleTwoResult.data.sessions.map(
+      (entry) => [entry.sessionId, entry.speakers]
+    ));
+    expect(speakersTwo.get(ada.sessionId)).toEqual(['Ada Alpha']);
+    expect(speakersTwo.get(bram.sessionId)).toEqual([]);
+    const rosterTwo = await readPublic('/api/public/speakers/current');
+    const rosterTwoResult = servedRosterResultSchema.parse(rosterTwo.body);
+    if (rosterTwoResult.kind !== 'success') throw new Error('Successor roster read failed.');
+    expect(rosterTwoResult.data.speakers.map((entry) => entry.name)).toEqual(['Ada Alpha']);
+    expect(scheduleTwo.text).not.toContain('Bram Beta');
+    expect(rosterTwo.text).not.toContain('Bram Beta');
+
+    // Rolling back to release 1 restores the program but re-gates against
+    // CURRENT state: Bram is still hidden, so the restorative successor
+    // withholds the appearance and the reviewed diff says exactly which one.
+    const rollback = releaseDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/releases/drafts',
+      key: 'publication-loop-rollback-draft',
+      body: {
+        action: 'program_rollback',
+        targetReleaseId: releaseOneId,
+        expectedCurrentReleaseNumber: 2
+      },
+      parse: (value) => value
+    }));
+    if (rollback.kind !== 'success') throw new Error('Rollback draft failed.');
+    const diffRollback = rollback.data.safeDiff;
+    if (diffRollback.action !== 'program_rollback') throw new Error('Rollback diff wrong arm.');
+    expect(diffRollback.after.number).toBe(3);
+    expect(diffRollback.rollbackSuppressions).toEqual([
+      { sessionId: bram.sessionId, personId: bram.personId }
+    ]);
+    expect(diffRollback.nameDeclassifications.map((entry) => entry.displayName))
+      .toEqual(['Ada Alpha']);
+    await commitDraft({ runtime, session, key: 'publication-loop-rollback', draft: rollback });
+
+    const scheduleThree = await readPublic('/api/public/schedule/current');
+    const scheduleThreeResult = servedScheduleResultSchema.parse(scheduleThree.body);
+    if (scheduleThreeResult.kind !== 'success') throw new Error('Rollback schedule read failed.');
+    expect(scheduleThreeResult.data.releaseNumber).toBe(3);
+    const speakersThree = new Map(scheduleThreeResult.data.sessions.map(
+      (entry) => [entry.sessionId, entry.speakers]
+    ));
+    expect(speakersThree.get(ada.sessionId)).toEqual(['Ada Alpha']);
+    expect(speakersThree.get(bram.sessionId)).toEqual([]);
+    expect(scheduleThree.text).not.toContain('Bram Beta');
+    expect(scheduleThree.text).not.toContain('Cleo Gamma');
+
+    // Embed delivery: the Bun request handler serves `/embed/<kind>` HTML
+    // with exactly the surface head's stored allowlist and everything else
+    // with the deny-all pair — through the runtime's own framing source.
+    const embedDirectory = mkdtempSync(join(tmpdir(), 'jooevents-embed-join-'));
+    embedBuildDirectories.push(embedDirectory);
+    const buildRoot = join(embedDirectory, 'build');
+    mkdirSync(buildRoot, { recursive: true });
+    writeFileSync(join(buildRoot, 'index.html'), '<!doctype html><title>JooEvents shell</title>');
+    const handler = createProductionRequestHandler({
+      backend: (request) => runtime.app.fetch(request),
+      buildDirectory: buildRoot,
+      embedFraming: runtime.embedFraming
+    });
+    const navigate = (path: string) => handler(new Request(`http://localhost:5176${path}`, {
+      headers: { accept: 'text/html', 'sec-fetch-mode': 'navigate' }
+    }));
+    const expectDenyAll = async (path: string) => {
+      const response = await navigate(path);
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-security-policy')).toBe("frame-ancestors 'none'");
+      expect(response.headers.get('x-frame-options')).toBe('DENY');
+    };
+
+    // Never-published surface: deny-all.
+    await expectDenyAll('/embed/schedule');
+
+    const styleDraft = releaseDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/releases/drafts',
+      key: 'publication-loop-style-draft',
+      body: {
+        action: 'style_set_publish',
+        recipe: {
+          name: 'Default',
+          canvas: '#ffffff',
+          surface: '#f5f5f4',
+          text: '#1c1917',
+          action: '#0f766e',
+          radius: 8,
+          controlHeight: 36
+        },
+        expectedCurrentStyleSetNumber: null
+      },
+      parse: (value) => value
+    }));
+    if (styleDraft.kind !== 'success') throw new Error('Style set draft failed.');
+    const styleDiff = styleDraft.data.safeDiff;
+    if (styleDiff.action !== 'style_set_publish') throw new Error('Style diff wrong arm.');
+    const styleSetReleaseId = styleDiff.after.releaseId;
+    await commitDraft({ runtime, session, key: 'publication-loop-style', draft: styleDraft });
+
+    const surfaceDraft = releaseDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/releases/drafts',
+      key: 'publication-loop-surface-draft',
+      body: {
+        action: 'surface_publish',
+        kind: 'schedule',
+        manifest: { schemaVersion: 1, heading: 'Programme', intro: null },
+        styleSetReleaseId,
+        formRef: null,
+        expectedSurfaceHeadVersion: null
+      },
+      parse: (value) => value
+    }));
+    if (surfaceDraft.kind !== 'success') throw new Error('Surface publish draft failed.');
+    const surfaceDiff = surfaceDraft.data.safeDiff;
+    if (surfaceDiff.action !== 'surface_publish') throw new Error('Surface diff wrong arm.');
+    expect(surfaceDiff.after.allowedFrameOrigins).toEqual([]);
+    await commitDraft({ runtime, session, key: 'publication-loop-surface', draft: surfaceDraft });
+
+    // Published surface, empty allowlist: still deny-all.
+    await expectDenyAll('/embed/schedule');
+
+    const allowDraft = releaseDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/releases/drafts',
+      key: 'publication-loop-allowlist-draft',
+      body: {
+        action: 'surface_allowlist',
+        kind: 'schedule',
+        allowedFrameOrigins: ['https://partner.example.com'],
+        expectedSurfaceHeadVersion: 1
+      },
+      parse: (value) => value
+    }));
+    if (allowDraft.kind !== 'success') throw new Error('Allowlist draft failed.');
+    const allowDiff = allowDraft.data.safeDiff;
+    if (allowDiff.action !== 'surface_allowlist') throw new Error('Allowlist diff wrong arm.');
+    expect(allowDiff.before.allowedFrameOrigins).toEqual([]);
+    expect(allowDiff.after.allowedFrameOrigins).toEqual(['https://partner.example.com']);
+    await commitDraft({ runtime, session, key: 'publication-loop-allowlist', draft: allowDraft });
+
+    const embedAllowed = await navigate('/embed/schedule');
+    expect(embedAllowed.status).toBe(200);
+    expect(embedAllowed.headers.get('content-security-policy'))
+      .toBe('frame-ancestors https://partner.example.com');
+    expect(embedAllowed.headers.get('x-frame-options')).toBeNull();
+    expect(await embedAllowed.text()).toContain('JooEvents shell');
+
+    // The allowlist frames exactly its own surface kind: the speakers embed,
+    // an unknown embed segment, and the operator app all stay deny-all.
+    await expectDenyAll('/embed/speakers');
+    await expectDenyAll('/embed/unknown');
+    await expectDenyAll('/app/schedule');
+
+    expect(runtime.database.sqlite.query<Record<string, unknown>, []>(
+      'PRAGMA foreign_key_check'
+    ).all()).toEqual([]);
+  }, 120_000);
+
+  test('runs the portal loop: non-enumerating link request, attributed-identity resume, own-data snapshot, self-attributed confirmation, and lane isolation', async () => {
+    // The portal loop drives the dev-only issued-link fixture, which is now
+    // structurally gated: an ungated runtime deliberately omits that route.
+    const runtime = await createEphemeralLiveRuntime({ config, devFixtures: true });
+    runtimes.push(runtime);
+    const session = await createOwnerSession(runtime);
+    await provisionOwner(runtime, session);
+    const [petra, otto] = await seedAcceptedSpeakers({
+      runtime,
+      session,
+      key: 'portal-loop',
+      speakers: [
+        {
+          key: 'petra',
+          title: 'Lanes for participants',
+          name: 'Petra Portal',
+          email: 'portal.speaker@example.test'
+        },
+        {
+          key: 'otto',
+          title: 'An entirely separate keynote',
+          name: 'Otto Other',
+          email: 'other.speaker@example.test'
+        }
+      ]
+    });
+    if (!petra || !otto) throw new Error('Seeded speakers missing.');
+
+    const portalPost = (path: string, body: unknown, extraHeaders?: Record<string, string>) =>
+      runtime.app.request(path, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          origin: config.baseUrl,
+          'x-correlation-id': crypto.randomUUID(),
+          ...extraHeaders
+        },
+        body: JSON.stringify(body)
+      });
+    const signInThroughIssuedLink = async (email: string): Promise<string> => {
+      const linkResponse = await portalPost('/api/portal/entry/link', { email });
+      expect(linkResponse.status).toBe(200);
+      expect(await linkResponse.json()).toEqual({ outcome: 'link_requested' });
+      const issuedResponse = await portalPost('/api/portal/entry/dev/issued-link', { email });
+      expect(issuedResponse.status).toBe(200);
+      const issued = await issuedResponse.json() as { kind: string; url?: string };
+      expect(issued.kind).toBe('issued');
+      if (issued.kind !== 'issued' || !issued.url) throw new Error('Issued link missing.');
+      const token = new URL(`${config.baseUrl}${issued.url}`).searchParams.get('token');
+      if (!token) throw new Error('Issued link token missing.');
+      const completeResponse = await portalPost('/api/portal/entry/complete', { token });
+      expect(completeResponse.status).toBe(200);
+      expect(await completeResponse.json()).toEqual({ outcome: 'signed_in' });
+      const cookieMatch = /__Host-je_portal_session=([^;]+)/.exec(
+        completeResponse.headers.get('set-cookie') ?? ''
+      );
+      if (!cookieMatch) throw new Error('Portal session cookie missing.');
+      return `__Host-je_portal_session=${cookieMatch[1]}`;
+    };
+
+    // Non-enumeration: an unknown address receives the byte-identical frozen
+    // acknowledgement a seeded speaker's address receives.
+    const knownResponse = await portalPost('/api/portal/entry/link', { email: petra.email });
+    expect(knownResponse.status).toBe(200);
+    const knownBody = await knownResponse.json();
+    const unknownResponse = await portalPost('/api/portal/entry/link', {
+      email: 'unknown.person@example.test'
+    });
+    expect(unknownResponse.status).toBe(200);
+    expect(await unknownResponse.json()).toEqual(knownBody);
+    expect(knownBody).toEqual({ outcome: 'link_requested' });
+
+    const petraCookie = await signInThroughIssuedLink(petra.email);
+
+    // The repaired ceremony semantics: completion RESUMED the intake-attributed
+    // identity — the family row carries the same person the Intake ceremony
+    // attributed, adopted (never a parallel portal-minted pair).
+    const familyRow = runtime.database.sqlite.query<{
+      readonly person_id: string;
+      readonly origin: string;
+    }, [string]>(`
+      SELECT person_id, origin FROM participant_identity_family
+       WHERE normalized_email = ?
+    `).get('portal.speaker@example.test');
+    expect(familyRow).toEqual({ person_id: petra.personId, origin: 'adopted_attribution' });
+
+    // The snapshot serves the signed-in participant's own world and nothing
+    // of anyone else's — byte-checked, not just shape-checked.
+    const snapshotResponse = await runtime.app.request('/api/portal/snapshot', {
+      headers: { cookie: petraCookie, 'x-correlation-id': crypto.randomUUID() }
+    });
+    expect(snapshotResponse.status).toBe(200);
+    const snapshotText = await snapshotResponse.text();
+    const snapshot = portalSnapshotReadResultSchema.parse(JSON.parse(snapshotText));
+    if (snapshot.kind !== 'success') throw new Error('Portal snapshot read failed.');
+    // The adopted identity's display name is the address local part: the
+    // attribution source proves the pair identity only and deliberately
+    // reads no classified name projection.
+    expect(snapshot.data.participant).toMatchObject({
+      displayName: 'portal.speaker',
+      email: petra.email
+    });
+    expect(snapshot.data.submissions).toHaveLength(1);
+    expect(snapshot.data.submissions[0]).toMatchObject({
+      id: petra.submissionId,
+      title: petra.title,
+      status: 'submitted',
+      statusNotifiedAt: null,
+      speakers: [{ displayName: 'portal.speaker' }]
+    });
+    expect(snapshot.data.engagements).toHaveLength(1);
+    expect(snapshot.data.engagements[0]).toMatchObject({
+      id: petra.engagementId,
+      sessionId: petra.sessionId,
+      submissionId: petra.submissionId,
+      status: 'invited',
+      confirmation: null
+    });
+    expect(snapshot.data.tasks).toEqual([]);
+    expect(snapshot.data.files).toEqual([]);
+    for (const foreign of [
+      otto.title, 'Otto Other', otto.email, otto.personId, otto.submissionId, otto.engagementId
+    ]) {
+      expect(snapshotText).not.toContain(foreign);
+    }
+
+    // A second person's snapshot is unreachable: the read takes no addressing
+    // parameter at all, and without the lane cookie there is no snapshot.
+    const anonymous = await runtime.app.request('/api/portal/snapshot');
+    expect(anonymous.status).toBe(401);
+    expect(await anonymous.json()).toMatchObject({
+      kind: 'transport_error', code: 'unauthenticated', retryable: false
+    });
+    const addressed = await runtime.app.request(
+      `/api/portal/snapshot?personId=${otto.personId}`,
+      { headers: { cookie: petraCookie, 'x-correlation-id': crypto.randomUUID() } }
+    );
+    expect(addressed.status).toBe(400);
+    expect(await addressed.json()).toMatchObject({
+      kind: 'transport_error', code: 'invalid_request', retryable: false
+    });
+
+    // Confirming as self through the participant lane: no attribution claim
+    // crosses the wire — the server derives it from the authenticated person.
+    const respondResponse = await portalPost(
+      '/api/portal/engagements/respond',
+      { engagementId: petra.engagementId, response: 'confirm' },
+      { cookie: petraCookie, 'idempotency-key': 'portal-loop-respond' }
+    );
+    expect(respondResponse.status).toBe(200);
+    const responded = portalEngagementRespondResultSchema.parse(await respondResponse.json());
+    if (responded.kind !== 'success') throw new Error('Portal respond failed.');
+    expect(responded.data).toMatchObject({
+      id: petra.engagementId,
+      status: 'confirmed',
+      confirmation: { by: 'you' }
+    });
+
+    // The operator engagement read shows the self attribution — the engaged
+    // person's own act, no recording workspace user.
+    const operatorRead = engagementSnapshotReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/engagements', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (operatorRead.kind !== 'success') throw new Error('Operator engagement read failed.');
+    const petraEngagement = operatorRead.data.engagements.find(
+      (candidate) => candidate.id === petra.engagementId
+    );
+    expect(petraEngagement).toMatchObject({
+      state: 'confirmed',
+      version: 2,
+      confirmation: {
+        attribution: 'self',
+        personId: petra.personId,
+        recordedByUserId: null
+      }
+    });
+    const ottoEngagement = operatorRead.data.engagements.find(
+      (candidate) => candidate.id === otto.engagementId
+    );
+    expect(ottoEngagement).toMatchObject({ state: 'invited', version: 1 });
+
+    // Lane isolation both ways: Otto signs in and sees only Otto's world,
+    // with Petra's act invisible to an unrelated participant.
+    const ottoCookie = await signInThroughIssuedLink(otto.email);
+    const ottoSnapshotResponse = await runtime.app.request('/api/portal/snapshot', {
+      headers: { cookie: ottoCookie, 'x-correlation-id': crypto.randomUUID() }
+    });
+    expect(ottoSnapshotResponse.status).toBe(200);
+    const ottoSnapshotText = await ottoSnapshotResponse.text();
+    const ottoSnapshot = portalSnapshotReadResultSchema.parse(JSON.parse(ottoSnapshotText));
+    if (ottoSnapshot.kind !== 'success') throw new Error('Second portal snapshot failed.');
+    expect(ottoSnapshot.data.participant).toMatchObject({
+      displayName: 'other.speaker',
+      email: otto.email
+    });
+    expect(ottoSnapshot.data.submissions.map((entry) => entry.id)).toEqual([otto.submissionId]);
+    expect(ottoSnapshot.data.engagements).toHaveLength(1);
+    expect(ottoSnapshot.data.engagements[0]).toMatchObject({
+      id: otto.engagementId,
+      status: 'invited'
+    });
+    for (const foreign of [
+      petra.title, 'Petra Portal', petra.email, petra.personId,
+      petra.submissionId, petra.engagementId
+    ]) {
+      expect(ottoSnapshotText).not.toContain(foreign);
+    }
+
+    expect(runtime.database.sqlite.query<Record<string, unknown>, []>(
+      'PRAGMA foreign_key_check'
+    ).all()).toEqual([]);
+  }, 120_000);
+
+  test('the dev issued-link token oracle is structurally absent unless devFixtures is set', async () => {
+    // The gate is structure, not convention: the default (ungated) composition
+    // — which is what the beyond-loopback entry uses in production posture —
+    // never mounts the route, so a remote peer cannot mint a magic-link token.
+    // A caller must opt in explicitly for it to exist.
+    const ungated = await createEphemeralLiveRuntime({ config });
+    runtimes.push(ungated);
+    const ungatedResponse = await ungated.app.request('/api/portal/entry/dev/issued-link', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        origin: config.baseUrl,
+        'x-correlation-id': crypto.randomUUID()
+      },
+      body: JSON.stringify({ email: 'anyone@example.test' })
+    });
+    expect(ungatedResponse.status).toBe(404);
+
+    const gated = await createEphemeralLiveRuntime({ config, devFixtures: true });
+    runtimes.push(gated);
+    const gatedResponse = await gated.app.request('/api/portal/entry/dev/issued-link', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        origin: config.baseUrl,
+        'x-correlation-id': crypto.randomUUID()
+      },
+      body: JSON.stringify({ email: 'anyone@example.test' })
+    });
+    // Mounted and reachable; with no issued challenge it honestly answers none.
+    expect(gatedResponse.status).toBe(200);
+    expect(await gatedResponse.json()).toEqual({ kind: 'none' });
+  }, 120_000);
 });

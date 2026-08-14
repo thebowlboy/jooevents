@@ -3,6 +3,7 @@ export * from './authoring/payloads';
 export * from './audience/preview';
 export * from './audience/resolution';
 export * from './delivery/model';
+export * from './delivery/resend';
 export * from './delivery/worker';
 export * from './providers/callback-verifier-registry';
 export * from './providers/fake';

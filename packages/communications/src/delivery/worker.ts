@@ -7,11 +7,14 @@ import {
 import {
   normalizeProviderSubmissionOutcome,
   outboundEmailFollowUp,
+  requiredOutboundEmailAttemptKind,
   type OutboundEmailDeliveryAttempt,
+  type OutboundEmailDeliveryAttemptKind,
   type OutboundEmailDeliveryHead,
   type OutboundEmailFollowUp,
   type ProviderAttemptResolution
 } from './model';
+import { deriveMarkedResendEmailEnvelope } from './resend';
 
 export class OutboundEmailDeliveryWorkerError extends Error {
   public constructor(
@@ -33,6 +36,13 @@ export interface OutboundEmailDeliveryLedger {
     readonly deliveryId: string;
     readonly expectedDeliveryVersion: number;
     readonly attemptId: string;
+    readonly attemptKind: OutboundEmailDeliveryAttemptKind;
+    /**
+     * Digest of the derived marked-resend envelope actually being submitted.
+     * Required for a `marked_resend` attempt and forbidden otherwise; the head's
+     * reviewed envelope digest keeps pinning the unmodified reviewed original.
+     */
+    readonly resendEnvelopeDigestSha256?: string;
     readonly adapterKey: string;
     readonly adapterVersion: string;
     readonly capabilities: EmailDeliveryAdapter['capabilities'];
@@ -82,7 +92,8 @@ export type OutboundEmailDispatchResult = Readonly<{
 function immutableSubmission(
   head: OutboundEmailDeliveryHead,
   attemptId: string,
-  envelope: ImmutableEmailEnvelope
+  envelope: ImmutableEmailEnvelope,
+  reviewedEnvelopeDigestSha256: string
 ): ImmutableEmailSubmission {
   return Object.freeze({
     contractVersion: 1,
@@ -98,13 +109,15 @@ function immutableSubmission(
     addressLookupFingerprintProfile: head.addressLookupFingerprintProfile,
     addressLookupFingerprintVersion: head.addressLookupFingerprintVersion,
     addressLookupFingerprintSha256: head.addressLookupFingerprintSha256,
-    reviewedEnvelopeDigestSha256: head.reviewedEnvelopeDigestSha256,
+    reviewedEnvelopeDigestSha256,
     envelope
   });
 }
 
 function dispatchable(head: OutboundEmailDeliveryHead): boolean {
-  return head.state === 'pending' || head.state === 'known_rejected_safe_retryable';
+  return head.state === 'pending'
+    || head.state === 'known_rejected_safe_retryable'
+    || (head.state === 'acceptance_unknown' && !head.markedResendExhausted);
 }
 
 /**
@@ -134,7 +147,11 @@ export function createOutboundEmailDeliveryWorker(input: {
       deliveryId: completed.deliveryId,
       attemptId: head.currentAttemptId,
       state: 'acceptance_unknown',
-      followUp: 'manual_resolution_required'
+      followUp: outboundEmailFollowUp(
+        { state: 'acceptance_unknown' },
+        input.provider.capabilities,
+        completed
+      )
     });
   }
 
@@ -152,24 +169,40 @@ export function createOutboundEmailDeliveryWorker(input: {
       }
 
       const attemptId = input.ids.newAttemptId();
-      const envelope = await input.envelopes.resolve({
+      const attemptKind = requiredOutboundEmailAttemptKind(head, input.provider.capabilities);
+      const reviewedEnvelope = await input.envelopes.resolve({
         deliveryId: head.deliveryId,
         releaseId: head.releaseId,
         recipientRefId: head.recipientRefId,
         templateRevisionRefId: head.templateRevisionRefId,
         contentRefId: head.contentRefId
       });
-      if (computeReviewedEmailEnvelopeDigestSha256(envelope) !== head.reviewedEnvelopeDigestSha256) {
+      if (
+        computeReviewedEmailEnvelopeDigestSha256(reviewedEnvelope)
+          !== head.reviewedEnvelopeDigestSha256
+      ) {
         throw new OutboundEmailDeliveryWorkerError('reviewed_envelope_changed');
       }
-      const prepared = input.provider.prepare(immutableSubmission(head, attemptId, envelope));
-      if (prepared.reviewedEnvelopeDigestSha256 !== head.reviewedEnvelopeDigestSha256) {
+      const envelope = attemptKind === 'marked_resend'
+        ? deriveMarkedResendEmailEnvelope(reviewedEnvelope)
+        : reviewedEnvelope;
+      const submittedEnvelopeDigestSha256 = attemptKind === 'marked_resend'
+        ? computeReviewedEmailEnvelopeDigestSha256(envelope)
+        : head.reviewedEnvelopeDigestSha256;
+      const prepared = input.provider.prepare(
+        immutableSubmission(head, attemptId, envelope, submittedEnvelopeDigestSha256)
+      );
+      if (prepared.reviewedEnvelopeDigestSha256 !== submittedEnvelopeDigestSha256) {
         throw new OutboundEmailDeliveryWorkerError('reviewed_envelope_changed');
       }
       input.ledger.recordAttemptStarted({
         deliveryId: head.deliveryId,
         expectedDeliveryVersion: head.version,
         attemptId,
+        attemptKind,
+        ...(attemptKind === 'marked_resend'
+          ? { resendEnvelopeDigestSha256: submittedEnvelopeDigestSha256 }
+          : {}),
         adapterKey: input.provider.adapterKey,
         adapterVersion: input.provider.adapterVersion,
         capabilities: input.provider.capabilities,
@@ -192,7 +225,11 @@ export function createOutboundEmailDeliveryWorker(input: {
           deliveryId: completed.deliveryId,
           attemptId,
           state: 'acceptance_unknown',
-          followUp: 'manual_resolution_required'
+          followUp: outboundEmailFollowUp(
+            { state: 'acceptance_unknown' },
+            input.provider.capabilities,
+            completed
+          )
         });
       }
 
@@ -208,7 +245,7 @@ export function createOutboundEmailDeliveryWorker(input: {
         deliveryId: completed.deliveryId,
         attemptId,
         state: normalized.state,
-        followUp: outboundEmailFollowUp(normalized, input.provider.capabilities)
+        followUp: outboundEmailFollowUp(normalized, input.provider.capabilities, completed)
       });
     }
   });

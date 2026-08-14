@@ -228,6 +228,12 @@ export const RICH_EPHEMERAL_LIVE_SCENARIO = deepFreeze({
     // inert fake provider composed, anything nonzero here would be a leak).
     messageReleases: 0,
     outboundDeliveries: 0,
+    // The scenario publishes nothing and no participant ever signs in, so
+    // the mounted release and participant-lane tables stay honestly empty;
+    // they are counted so the exact fingerprint covers both verticals.
+    programReleases: 0,
+    surfaceReleases: 0,
+    participantIdentities: 0,
     sessions: Object.freeze({
       total: 2,
       catalogs: 1,
@@ -429,6 +435,9 @@ export interface RichEphemeralLiveBaseline {
     readonly engagements: number;
     readonly messageReleases: number;
     readonly outboundDeliveries: number;
+    readonly programReleases: number;
+    readonly surfaceReleases: number;
+    readonly participantIdentities: number;
     readonly sessions: number;
     readonly sessionCatalogs: number;
     readonly reviewerRosterSets: number;
@@ -1687,6 +1696,15 @@ async function captureBaseline(input: {
       engagements: count(input.context.runtime, 'engagement_heads'),
       messageReleases: count(input.context.runtime, 'communication_message_releases'),
       outboundDeliveries: count(input.context.runtime, 'communication_outbound_delivery_heads'),
+      programReleases: count(input.context.runtime, 'program_releases')
+        + count(input.context.runtime, 'program_release_names'),
+      surfaceReleases: count(input.context.runtime, 'surface_releases')
+        + count(input.context.runtime, 'style_set_releases')
+        + count(input.context.runtime, 'surface_heads'),
+      participantIdentities: count(input.context.runtime, 'participant_identity_family')
+        + count(input.context.runtime, 'participant_sign_in_challenges')
+        + count(input.context.runtime, 'participant_sessions')
+        + count(input.context.runtime, 'participant_portal_activity'),
       sessions: count(input.context.runtime, 'sessions'),
       sessionCatalogs: count(input.context.runtime, 'session_catalogs'),
       reviewerRosterSets: count(input.context.runtime, 'reviewer_roster_sets'),
@@ -1717,7 +1735,8 @@ async function captureBaseline(input: {
         + count(input.context.runtime, 'reviewer_roster_draft_timeline')
         + count(input.context.runtime, 'review_draft_timeline')
         + count(input.context.runtime, 'deadline_draft_timeline')
-        + count(input.context.runtime, 'engagement_draft_timeline'),
+        + count(input.context.runtime, 'engagement_draft_timeline')
+        + count(input.context.runtime, 'release_draft_timeline'),
       lifecycleTimelineEntries:
         count(input.context.runtime, 'event_creation_changeset_timeline')
         + count(input.context.runtime, 'event_settings_changeset_timeline')
@@ -1729,6 +1748,7 @@ async function captureBaseline(input: {
         + count(input.context.runtime, 'review_changeset_timeline')
         + count(input.context.runtime, 'deadline_changeset_timeline')
         + count(input.context.runtime, 'engagement_changeset_timeline')
+        + count(input.context.runtime, 'release_changeset_timeline')
         // Per-delivery history threads of the send wave; the scenario sends
         // nothing, so the covered delta stays exactly zero.
         + count(input.context.runtime, 'communication_outbound_delivery_history'),
@@ -1743,6 +1763,7 @@ async function captureBaseline(input: {
         + count(input.context.runtime, 'review_changeset_domain_facts')
         + count(input.context.runtime, 'deadline_changeset_domain_facts')
         + count(input.context.runtime, 'engagement_changeset_domain_facts')
+        + count(input.context.runtime, 'release_changeset_domain_facts')
         + count(input.context.runtime, 'communication_outbound_delivery_facts'),
       outboxPointers:
         count(input.context.runtime, 'event_creation_changeset_outbox_pointers')
@@ -1755,6 +1776,7 @@ async function captureBaseline(input: {
         + count(input.context.runtime, 'review_changeset_outbox_pointers')
         + count(input.context.runtime, 'deadline_changeset_outbox_pointers')
         + count(input.context.runtime, 'engagement_changeset_outbox_pointers')
+        + count(input.context.runtime, 'release_changeset_outbox_pointers')
         + count(input.context.runtime, 'communication_outbound_delivery_outbox'),
       commitLinks: count(input.context.runtime, 'changeset_commit_links')
     },
@@ -1795,6 +1817,9 @@ function assertExpectedBaseline(baseline: RichEphemeralLiveBaseline): void {
     engagements: baseline.durableCounts.engagements,
     messageReleases: baseline.durableCounts.messageReleases,
     outboundDeliveries: baseline.durableCounts.outboundDeliveries,
+    programReleases: baseline.durableCounts.programReleases,
+    surfaceReleases: baseline.durableCounts.surfaceReleases,
+    participantIdentities: baseline.durableCounts.participantIdentities,
     sessions: baseline.durableCounts.sessions,
     sessionCatalogs: baseline.durableCounts.sessionCatalogs,
     sessionCatalogVersion: baseline.sessions.catalogVersion,
@@ -1838,6 +1863,9 @@ function assertExpectedBaseline(baseline: RichEphemeralLiveBaseline): void {
     engagements: expected.engagements,
     messageReleases: expected.messageReleases,
     outboundDeliveries: expected.outboundDeliveries,
+    programReleases: expected.programReleases,
+    surfaceReleases: expected.surfaceReleases,
+    participantIdentities: expected.participantIdentities,
     sessions: expected.sessions.total,
     sessionCatalogs: expected.sessions.catalogs,
     sessionCatalogVersion: expected.sessions.catalogVersion,

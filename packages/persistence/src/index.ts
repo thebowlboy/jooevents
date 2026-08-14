@@ -39,4 +39,5 @@ export * from './sqlite/workspace-team-changeset-effect-domain';
 export * from './sqlite/operator-authority-repositories';
 export * from './sqlite/work-leases';
 export * from './sqlite/provisioning-store';
+export * from './sqlite/participant-portal-effect-domain';
 export * from './filesystem/classified-payload-stage-store';

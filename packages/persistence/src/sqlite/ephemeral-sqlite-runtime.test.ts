@@ -187,14 +187,14 @@ describe('ephemeral SQLite runtime', () => {
 
     expect(runtime.installedSchemaArtifacts.map((artifact) => artifact.id))
       .toEqual(FOUNDATION_EPHEMERAL_SCHEMA_ARTIFACTS.map((artifact) => artifact.id));
-    expect(FOUNDATION_EPHEMERAL_SCHEMA_ARTIFACTS).toHaveLength(68);
+    expect(FOUNDATION_EPHEMERAL_SCHEMA_ARTIFACTS).toHaveLength(73);
     expect(Object.isFrozen(FOUNDATION_EPHEMERAL_SCHEMA_ARTIFACTS)).toBe(true);
     expect(FOUNDATION_EPHEMERAL_SCHEMA_ARTIFACTS.every(Object.isFrozen)).toBe(true);
     expect(runtime.sqlite.query<{ count: number }, []>(`
       select count(*) as count
         from sqlite_schema
        where type in ('table', 'view') and name not like 'sqlite_%'
-    `).get()?.count).toBe(280);
+    `).get()?.count).toBe(295);
     expect(runtime.sqlite.query<{ name: string }, []>(`
       select name
         from sqlite_schema

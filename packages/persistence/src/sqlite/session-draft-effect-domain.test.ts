@@ -9,6 +9,7 @@ import {
 import {
   CHANGESET_LIFECYCLE_ACCESS_POLICY,
   CHANGESET_LIFECYCLE_REQUEST_HASH_PROFILE,
+  changesetLifecycleOperationResultSchema,
   createChangesetOperationModule
 } from '@jooevents/changeset-operations';
 import {
@@ -59,8 +60,9 @@ import {
   installSessionDraftEffectSchema,
   type SQLiteSessionDraftEffectIds
 } from './session-draft-effect-domain';
-import { installSessionSchema } from './session';
+import { installSessionSchema, SQLiteSessionRepository } from './session';
 import { SQLiteEffectUnitOfWorkPort } from './sqlite-effect-unit-of-work';
+import { planSessionMutation } from '@jooevents/session';
 
 const workspaceId = parseWorkspaceId('550e8400-e29b-41d4-a716-446655440000');
 const eventId = parseEventId('019c1df7-86b5-769b-bba4-5f7097bfa121');
@@ -490,6 +492,140 @@ describe('SQLite Session draft effect domain', () => {
       ]);
       expect(fixture.sqlite.query<Record<string, unknown>, []>('PRAGMA foreign_key_check').all())
         .toEqual([]);
+    } finally {
+      fixture.close();
+    }
+  });
+
+  test('drafts the roster visibility off-switch through the same inert ceremony', async () => {
+    const fixture = openFixture();
+    const personId = uuid(0x7001);
+    const sessionId = uuid(0x7002);
+    try {
+      const vocabularyState = fixture.vocabulary.readVocabulary({ workspaceId, eventId });
+      if (!vocabularyState) throw new TypeError('session_vocabulary_fixture_missing');
+      const seedPlan = planSessionMutation({
+        planningInput: {
+          action: 'create',
+          scope: { workspaceId, eventId },
+          actorUserId: userId,
+          occurredAt: now,
+          sessionId,
+          expectedCatalogVersion: fixture.catalog().version,
+          expectedCatalogDigestSha256: fixture.catalog().digestSha256,
+          title: 'Visibility Session',
+          plannedDurationMinutes: 45,
+          lifecycle: 'programmed',
+          formatId,
+          trackId: null,
+          participants: [{
+            personId,
+            role: 'speaker',
+            publiclyVisible: true,
+            source: { kind: 'submission', id: 'seeded', version: 1 }
+          }]
+        },
+        catalog: fixture.catalog(),
+        vocabulary: vocabularyState
+      });
+      transaction(fixture.sqlite, () =>
+        new SQLiteSessionRepository(fixture.sqlite, fixture.vocabulary).applySessionPlan(seedPlan)
+      );
+      const current = fixture.catalog().sessions.find((session) => session.id === sessionId);
+      if (!current) throw new TypeError('session_visibility_fixture_missing');
+      expect(current.roster.participants[0]).toMatchObject({ personId, publiclyVisible: true });
+
+      const draft = sessionDraftOperationResultSchema.parse(await fixture.effect({
+        operation: SESSION_CHANGE_DRAFT_OPERATION,
+        businessInput: {
+          action: 'roster_visibility',
+          expectedCatalogVersion: fixture.catalog().version,
+          expectedCatalogDigestSha256: fixture.catalog().digestSha256,
+          sessionId,
+          expectedSessionVersion: current.version,
+          expectedSessionDigestSha256: current.digestSha256,
+          personId,
+          publiclyVisible: false
+        },
+        key: 'roster-visibility-draft'
+      }));
+      if (draft.kind !== 'success') throw new TypeError('session_visibility_draft_failed');
+      expect(draft.data).toMatchObject({
+        action: 'roster_visibility',
+        status: 'draft',
+        safeDiff: {
+          action: 'roster_visibility',
+          before: { roster: { participants: [{ personId, publiclyVisible: true }] } },
+          after: { roster: { participants: [{ personId, publiclyVisible: false }] } }
+        }
+      });
+      // The draft is inert: effective roster state is untouched until commit.
+      expect(fixture.catalog().sessions.find((session) => session.id === sessionId)?.roster
+        .participants[0]).toMatchObject({ publiclyVisible: true });
+      const link = fixture.sqlite.query<{ readonly action: string }, [string]>(`
+        SELECT action FROM session_draft_receipt_links WHERE receipt_id = ?
+      `).get(draft.receipt.id);
+      expect(link).toEqual({ action: 'roster_visibility' });
+
+      // The ordinary propose -> commit lifecycle lands the off-switch: the
+      // roster keeps its entry byte-for-byte except the flag.
+      const selector = {
+        changesetId: draft.data.changesetId,
+        revisionId: draft.data.revision.id,
+        revisionDigest: draft.data.revision.digestSha256
+      };
+      const proposed = changesetLifecycleOperationResultSchema.parse(await fixture.effect({
+        operation: { name: 'changeset.propose', version: 1 },
+        businessInput: { ...selector, expectedHeadVersion: draft.data.headVersion },
+        key: 'roster-visibility-propose'
+      }));
+      if (proposed.kind !== 'success' || proposed.data.action !== 'propose') {
+        throw new TypeError('session_visibility_propose_failed');
+      }
+      const committed = await fixture.effect({
+        operation: { name: 'changeset.commit', version: 1 },
+        businessInput: {
+          ...selector,
+          expectedHeadVersion: proposed.data.diff.headVersion
+        },
+        key: 'roster-visibility-commit'
+      });
+      expect(committed).toMatchObject({ kind: 'success', data: { action: 'commit' } });
+      const switched = fixture.catalog().sessions.find((session) => session.id === sessionId);
+      expect(switched?.roster.participants).toHaveLength(1);
+      expect(switched?.roster.participants[0]).toMatchObject({
+        personId,
+        role: 'speaker',
+        position: 0,
+        publiclyVisible: false,
+        source: { kind: 'submission', id: 'seeded', version: 1 }
+      });
+
+      const committedSession = fixture.catalog().sessions
+        .find((session) => session.id === sessionId);
+      if (!committedSession) throw new TypeError('session_visibility_committed_missing');
+      expect(await fixture.effect({
+        operation: SESSION_CHANGE_DRAFT_OPERATION,
+        businessInput: {
+          action: 'roster_visibility',
+          expectedCatalogVersion: fixture.catalog().version,
+          expectedCatalogDigestSha256: fixture.catalog().digestSha256,
+          sessionId,
+          expectedSessionVersion: committedSession.version,
+          expectedSessionDigestSha256: committedSession.digestSha256,
+          personId: uuid(0x7003),
+          publiclyVisible: false
+        },
+        key: 'roster-visibility-missing-person'
+      })).toMatchObject({
+        kind: 'outcome',
+        terminal: false,
+        outcome: {
+          class: 'stale_revision',
+          kind: 'session.changed',
+          detail: { code: 'participant_missing', action: 'roster_visibility', sessionId }
+        }
+      });
     } finally {
       fixture.close();
     }

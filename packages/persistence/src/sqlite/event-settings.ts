@@ -101,7 +101,7 @@ interface CompanionRow {
 /** Schedule-grid geometry seeded for every newly created Event. */
 const CREATED_EVENT_DAY_START = '09:00';
 const CREATED_EVENT_DAY_END = '18:00';
-const CREATED_EVENT_SLOT_MINUTES = 30;
+const CREATED_EVENT_SLOT_MINUTES = 15;
 
 function requireTransaction(sqlite: Database): void {
   if (!sqlite.inTransaction) throw new SQLiteEventSettingsError('transaction_required');

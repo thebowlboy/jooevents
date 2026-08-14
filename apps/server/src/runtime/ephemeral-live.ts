@@ -4,6 +4,7 @@ import {
   COMMUNICATION_PROVIDER_MANAGE_ACCESS_POLICY,
   composeOperationRegistryModules,
   createApplicationOperationRuntime,
+  OperationInputError,
   createClassifiedPayloadProfileRef,
   createCommunicationProviderReadOperationModule,
   createHmacIdempotencyCredentialSealer,
@@ -72,10 +73,31 @@ import {
   ENGAGEMENT_DRAFT_PERMISSION_ID,
   ENGAGEMENT_DRAFT_REQUEST_HASH_PROFILE,
   ENGAGEMENT_READ_ACCESS_POLICY,
+  PORTAL_ENGAGEMENT_RESPOND_REQUEST_HASH_PROFILE,
+  PORTAL_PARTICIPANT_ACT_ACCESS_POLICY,
+  PORTAL_PARTICIPANT_READ_ACCESS_POLICY,
   createEngagementDraftOperationModule,
   createEngagementOperationModule,
+  createParticipantCurrentAuthorityResolver,
+  createParticipantPortalOperationModule,
   sealEngagementDraftPreparation
 } from '@jooevents/engagement-operations';
+import {
+  RELEASE_CHANGE_DRAFT_OPERATION,
+  RELEASE_DRAFT_ACCESS_POLICY,
+  RELEASE_DRAFT_APPROVAL_POLICY,
+  RELEASE_DRAFT_HANDLER_CAPABILITY,
+  RELEASE_DRAFT_PERMISSION_ID,
+  RELEASE_DRAFT_REQUEST_HASH_PROFILE,
+  RELEASE_PUBLIC_OPEN_ACCESS_POLICY,
+  RELEASE_PUBLIC_ROSTER_READ_OPERATION,
+  RELEASE_PUBLIC_ROSTER_READ_PATH,
+  RELEASE_PUBLIC_SCHEDULE_READ_OPERATION,
+  RELEASE_PUBLIC_SCHEDULE_READ_PATH,
+  createReleaseDraftOperationModule,
+  createReleasePublicReadOperationModule,
+  sealReleaseDraftPreparation
+} from '@jooevents/release-operations';
 import {
   createEventDependencyContributorRegistry,
   issueEventOrdinaryPolicy,
@@ -122,8 +144,12 @@ import {
 } from '@jooevents/intake-operations';
 import {
   evaluateAccess,
+  PARTICIPANT_ACCESS_LAUNCH_POLICY,
   parseOperationAccessLane,
-  type CurrentAuthorityResolver
+  parseParticipantEmail,
+  resolveParticipantContext,
+  type CurrentAuthorityResolver,
+  type ParticipantLane
 } from '@jooevents/identity-access';
 import {
   createReviewOperationModule,
@@ -191,6 +217,9 @@ import {
   parseInstant,
   parseInvocationId,
   parseJobId,
+  parseParticipantIdentityId,
+  parseParticipantSessionId,
+  parsePersonId,
   parsePublicPolicyRevisionId,
   parseWorkspaceId
 } from '@jooevents/kernel';
@@ -201,6 +230,9 @@ import {
   createSQLiteEventSettingsChangesetEffectDomainRegistration,
   createSQLiteEventSettingsInitializer,
   createSQLiteEventSettingsUpdateDraftEffectDomainRegistration,
+  createSQLiteParticipantPortalEffectDomainRegistration,
+  createSQLiteParticipantPortalReadSource,
+  createSQLiteParticipantSessionAuthorityView,
   createSQLiteProvisioningStore,
   SQLiteEventSettingsRepository,
   SQLiteReadImmutableAuditPort,
@@ -247,8 +279,30 @@ import {
   createSQLiteOutboundEmailDeliveryEffectDomainRegistration
 } from '@jooevents/persistence/outbound-email-delivery-effect-domain';
 import {
-  createSQLiteEngagementSubmissionReferenceSource
+  createSQLiteEngagementSubmissionReferenceSource,
+  SQLiteEngagementRepository
 } from '@jooevents/persistence/engagement';
+import {
+  createSQLiteIntakeFormVersionPinSource,
+  SQLiteReleaseRepository,
+  type SQLiteReleaseParticipantNameSource,
+  type SQLiteReleaseUpstreamSources
+} from '@jooevents/persistence/release';
+import {
+  createSQLiteReleaseDraftEffectDomainRegistration
+} from '@jooevents/persistence/release-draft-effect-domain';
+import {
+  createSQLiteReleaseChangesetEffectDomainRegistration
+} from '@jooevents/persistence/release-changeset-effect-domain';
+import {
+  createSQLiteIntakeAttributedParticipantSource,
+  createSQLiteParticipantRelationshipSource,
+  SQLiteParticipantAccessStore
+} from '@jooevents/persistence/participant-access';
+import {
+  createSQLiteParticipantChallengeDelivery,
+  type ParticipantChallengeSenderConfig
+} from '@jooevents/persistence/participant-challenge-delivery';
 import {
   createSQLiteEngagementChangesetEffectDomainRegistration
 } from '@jooevents/persistence/engagement-changeset-effect-domain';
@@ -396,6 +450,11 @@ import { createBetterAuthOperatorEvidenceVerifier } from '../auth/operator-evide
 import { createSQLiteAuthPrincipalReader } from '../auth/principal-reader';
 import type { ServerConfig } from '../config';
 import { createHttpApp } from '../http/app';
+import type { EmbedFramingPolicySource } from '../http/embed-security';
+import {
+  readPortalSessionToken,
+  type ParticipantEntryRuntime
+} from '../http/participant-entry';
 import { createPublicOperationsHttpAdapter } from '../http/public-operations';
 import { createSerialHttpRequestBoundary } from '../http/request-serialization';
 import {
@@ -482,6 +541,44 @@ const sessionProfiles = Object.freeze({
   }),
   idempotencyCredential: Object.freeze({
     key: 'key-profile.session.idempotency-credential',
+    version: parseContractVersion(1)
+  })
+});
+
+const releaseProfiles = Object.freeze({
+  authorityPrincipal: Object.freeze({
+    key: 'key-profile.release.operator-principal',
+    version: parseContractVersion(1)
+  }),
+  scopePartition: Object.freeze({
+    key: 'key-profile.release.current-event-scope',
+    version: parseContractVersion(1)
+  }),
+  requestCanonicalization: Object.freeze({
+    key: 'key-profile.release.request-canonicalization',
+    version: parseContractVersion(1)
+  }),
+  idempotencyCredential: Object.freeze({
+    key: 'key-profile.release.idempotency-credential',
+    version: parseContractVersion(1)
+  })
+});
+
+const participantPortalProfiles = Object.freeze({
+  authorityPrincipal: Object.freeze({
+    key: 'key-profile.portal.participant-principal',
+    version: parseContractVersion(1)
+  }),
+  scopePartition: Object.freeze({
+    key: 'key-profile.portal.lane-event-scope',
+    version: parseContractVersion(1)
+  }),
+  requestCanonicalization: Object.freeze({
+    key: 'key-profile.portal.request-canonicalization',
+    version: parseContractVersion(1)
+  }),
+  idempotencyCredential: Object.freeze({
+    key: 'key-profile.portal.idempotency-credential',
     version: parseContractVersion(1)
   })
 });
@@ -833,7 +930,11 @@ function bootstrapEphemeralOwnerPermissionGrants(input: {
   `);
   for (const [permissionId, reason] of [
     ['program.vocabulary.manage', 'Ephemeral live Program Vocabulary owner grant'],
-    ['communication.provider.manage', 'Ephemeral live email provider owner grant']
+    ['communication.provider.manage', 'Ephemeral live email provider owner grant'],
+    // `publication.manage` is minted with no preset carrying it; this
+    // explicit reservation override is a bootstrap-only grant so the owner
+    // principal can publish in the joined ephemeral runtime.
+    ['publication.manage', 'Ephemeral live publication owner grant (bootstrap-only)']
   ] as const) {
     insert.run(crypto.randomUUID(), input.ownerReservationId, permissionId, reason);
   }
@@ -852,12 +953,26 @@ export interface EphemeralLiveRuntime {
   readonly communications: CommunicationSendLane;
   /** One-pass outbound dispatch over the delivery ledger with the inert fake provider. */
   readonly outboundDispatch: OutboundDispatchLoop;
+  /**
+   * Per-request embed framing policy over the current event's surface heads.
+   * The Bun request handler stamps `/embed/*` HTML with exactly this
+   * allowlist; everything else serves the deny-all pair.
+   */
+  readonly embedFraming: EmbedFramingPolicySource;
   close(): ReturnType<EphemeralSQLiteRuntime['close']>;
 }
 
 /** Opens one process-lifetime isolated organizer runtime over a new database. */
 export async function createEphemeralLiveRuntime(input: {
   readonly config: ServerConfig;
+  /**
+   * Structurally opts this composition into the dev-only participant fixture
+   * routes (the issued-link token oracle that bypasses email delivery). It is
+   * OFF unless a caller sets it explicitly, so a beyond-loopback preview never
+   * mounts the oracle by convention: only a loopback-bound dev/test entry
+   * enables it. See the `/api/portal/entry/dev/issued-link` mount below.
+   */
+  readonly devFixtures?: boolean;
 }): Promise<EphemeralLiveRuntime> {
   const database = createFoundationEphemeralSQLiteRuntime();
   try {
@@ -1623,6 +1738,80 @@ export async function createEphemeralLiveRuntime(input: {
           });
         })()
       });
+    const engagementReadRepository = new SQLiteEngagementRepository(database.sqlite);
+    // The governed name-declassification source: personId → the person's own
+    // participant evidence → the least-disclosure triage source row's
+    // `summary.primaryParticipantName` (the decision-audience precedent) —
+    // never the raw classified store.
+    const releaseParticipantNames: SQLiteReleaseParticipantNameSource = Object.freeze({
+      readParticipantDisplayName(
+        scope: { readonly workspaceId: string; readonly eventId: string },
+        personId: string
+      ) {
+        const evidence = database.sqlite.query<{ readonly submission_id: string }, [
+          string, string, string
+        ]>(`
+          SELECT submission_id FROM intake_submission_participant_evidence
+           WHERE workspace_id = ? AND event_id = ? AND person_id = ?
+           ORDER BY submission_id LIMIT 1
+        `).get(scope.workspaceId, scope.eventId, personId);
+        if (!evidence) return undefined;
+        const row = submissionTriageSource.readSourceRow(
+          { workspaceId: scope.workspaceId, eventId: scope.eventId },
+          evidence.submission_id
+        );
+        return row?.summary.primaryParticipantName ?? undefined;
+      }
+    });
+    const releaseSources: SQLiteReleaseUpstreamSources = Object.freeze({
+      sessions: sessionRepository,
+      schedule: schedulePlacementDraftDomain.scheduleRead,
+      engagements: engagementReadRepository,
+      vocabulary: vocabularyRead,
+      eventSettings: eventSettingsRepository,
+      names: releaseParticipantNames,
+      forms: createSQLiteIntakeFormVersionPinSource(database.sqlite)
+    });
+    const releaseRepository = new SQLiteReleaseRepository(database.sqlite, releaseSources);
+    const releaseChangesets = createSQLiteReleaseChangesetEffectDomainRegistration({
+      sqlite: database.sqlite,
+      workspaceId,
+      approvalPolicy: RELEASE_DRAFT_APPROVAL_POLICY,
+      permissionId: RELEASE_DRAFT_PERMISSION_ID,
+      eventRelationships,
+      sources: releaseSources,
+      ids: Object.freeze({
+        newChangesetId: () => crypto.randomUUID(),
+        newRevisionId: () => crypto.randomUUID(),
+        newApprovalId: () => crypto.randomUUID(),
+        newCorrectionAttemptId: () => crypto.randomUUID(),
+        newPreparationHandle: () => crypto.randomUUID(),
+        newTimelineId: () => crypto.randomUUID(),
+        newFactId: () => crypto.randomUUID(),
+        newPointerId: () => crypto.randomUUID()
+      })
+    });
+    const releaseDraftDomain = createSQLiteReleaseDraftEffectDomainRegistration({
+      sqlite: database.sqlite,
+      workspaceId,
+      operations: Object.freeze({
+        operation: RELEASE_CHANGE_DRAFT_OPERATION,
+        accessPolicy: RELEASE_DRAFT_ACCESS_POLICY,
+        permissionId: RELEASE_DRAFT_PERMISSION_ID,
+        capability: RELEASE_DRAFT_HANDLER_CAPABILITY,
+        approvalPolicy: RELEASE_DRAFT_APPROVAL_POLICY,
+        seal: sealReleaseDraftPreparation
+      }),
+      eventRelationships,
+      sources: releaseSources,
+      ids: Object.freeze({
+        newChangesetId: () => crypto.randomUUID(),
+        newRevisionId: () => crypto.randomUUID(),
+        newReleaseId: () => crypto.randomUUID(),
+        newPreparationHandle: () => crypto.randomUUID(),
+        newTimelineId: () => crypto.randomUUID()
+      })
+    });
     const changesetLifecycle = createSQLiteChangesetLifecycleEffectDomainRouter([
       Object.freeze({
         ownerId: 'event_creation',
@@ -1713,6 +1902,12 @@ export async function createEphemeralLiveRuntime(input: {
         adapter: engagementChangesets.adapter,
         ownerResolution: engagementChangesets.ownerResolution,
         subjectRelationships: engagementChangesets.subjectRelationships
+      }),
+      Object.freeze({
+        ownerId: releaseChangesets.ownerId,
+        adapter: releaseChangesets.adapter,
+        ownerResolution: releaseChangesets.ownerResolution,
+        subjectRelationships: releaseChangesets.subjectRelationships
       }),
       Object.freeze({
         ownerId: communicationReleaseChangesets.ownerId,
@@ -1858,6 +2053,10 @@ export async function createEphemeralLiveRuntime(input: {
           permissionId: 'event.manage' as const
         }),
         Object.freeze({
+          policy: RELEASE_DRAFT_ACCESS_POLICY,
+          permissionId: 'publication.manage' as const
+        }),
+        Object.freeze({
           policy: WORKSPACE_TEAM_OPERATION_ACCESS.read.policy,
           permissionId: WORKSPACE_TEAM_OPERATION_ACCESS.read.permissionId
         }),
@@ -1946,6 +2145,10 @@ export async function createEphemeralLiveRuntime(input: {
               Object.freeze({
                 id: engagementChangesets.ownerId,
                 permissionId: 'event.manage' as const
+              }),
+              Object.freeze({
+                id: releaseChangesets.ownerId,
+                permissionId: 'publication.manage' as const
               }),
               Object.freeze({
                 id: 'workspace_team',
@@ -2428,6 +2631,110 @@ export async function createEphemeralLiveRuntime(input: {
         authorityPrincipalKeyProfile: intakeProfiles.authorityPrincipal,
         scopePartitionProfile: intakeProfiles.scopePartition,
         requestCanonicalizationProfile: intakeProfiles.requestCanonicalization
+      })
+    });
+    const releaseDraftOperations = createReleaseDraftOperationModule({
+      workspaceId,
+      draftPolicy: RELEASE_DRAFT_ACCESS_POLICY,
+      currentAuthority: authority.resolver,
+      currentEvent,
+      clock,
+      ids: Object.freeze({
+        newInvocationId: () => parseInvocationId(crypto.randomUUID())
+      }),
+      authorityPrincipalKeyProfile: releaseProfiles.authorityPrincipal,
+      scopePartitionProfile: releaseProfiles.scopePartition,
+      requestCanonicalizationProfile: releaseProfiles.requestCanonicalization,
+      requestHashSealer: createHmacRequestHashSealer({
+        profile: RELEASE_DRAFT_REQUEST_HASH_PROFILE,
+        keyBytes: randomHmacKey()
+      }),
+      idempotencyCredentialProfile: releaseProfiles.idempotencyCredential,
+      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
+        profile: releaseProfiles.idempotencyCredential,
+        keyBytes: randomHmacKey()
+      })
+    });
+    // Read-only public surfaces follow the newest published release, so the
+    // per-process policy revision gates admission only (the G0 model card's
+    // Model-3 read-only arm); the module stays revision-source-agnostic.
+    const releasePublicPolicyRevisionId = parsePublicPolicyRevisionId(crypto.randomUUID());
+    const releasePublicOperations = new Set([
+      `${RELEASE_PUBLIC_SCHEDULE_READ_OPERATION.name}@${RELEASE_PUBLIC_SCHEDULE_READ_OPERATION.version}`,
+      `${RELEASE_PUBLIC_ROSTER_READ_OPERATION.name}@${RELEASE_PUBLIC_ROSTER_READ_OPERATION.version}`
+    ]);
+    const releasePublicAuthority = Object.freeze({
+      resolve(input: Parameters<CurrentAuthorityResolver<InvocationEvidence>['resolve']>[0]) {
+        if (input.evidence.kind !== 'public_open'
+            || input.evidence.publicPolicyRevisionId !== releasePublicPolicyRevisionId
+            || input.lane.kind !== 'public_open'
+            || input.lane.surface !== 'public_http'
+            || input.lane.policy.key !== RELEASE_PUBLIC_OPEN_ACCESS_POLICY.key
+            || input.lane.policy.version !== RELEASE_PUBLIC_OPEN_ACCESS_POLICY.version
+            || !releasePublicOperations.has(
+              `${input.operation.name}@${input.operation.version}`
+            )) {
+          return Object.freeze({ kind: 'denied' as const, reason: 'lane_mismatch' as const });
+        }
+        return Object.freeze({
+          kind: 'authorized' as const,
+          authority: Object.freeze({
+            actor: Object.freeze({
+              kind: 'public_request' as const,
+              publicPolicyRevisionId: releasePublicPolicyRevisionId,
+              authority: Object.freeze({ kind: 'open_policy' as const })
+            }),
+            principal: Object.freeze({
+              kind: 'public_capability' as const,
+              publicPolicyRevisionId: releasePublicPolicyRevisionId,
+              authority: Object.freeze({ kind: 'open_policy' as const })
+            }),
+            lane: input.lane,
+            scope: input.scope,
+            grants: Object.freeze([{
+              kind: 'public_policy' as const,
+              key: input.operation.name
+            }]),
+            evidenceIds: Object.freeze(['release-public-read.current']),
+            authorityCitationIds: Object.freeze([]),
+            evaluatedAt: input.evaluatedAt
+          })
+        });
+      }
+    } satisfies CurrentAuthorityResolver<InvocationEvidence>);
+    const releasePublicReadOperations = createReleasePublicReadOperationModule({
+      policy: RELEASE_PUBLIC_OPEN_ACCESS_POLICY,
+      currentAuthority: releasePublicAuthority,
+      publicScope: Object.freeze({
+        resolve(input: { readonly publicPolicyRevisionId: ReturnType<typeof parsePublicPolicyRevisionId> }) {
+          // Match the intake public-read posture: an unaddressable surface
+          // (stale policy revision or no current event) refuses as an
+          // invalid request, never as an internal fault.
+          if (input.publicPolicyRevisionId !== releasePublicPolicyRevisionId) {
+            throw new OperationInputError();
+          }
+          const current = currentEvent.resolveCurrentEvent(workspaceId);
+          if (!current.eventId) throw new OperationInputError();
+          return Object.freeze({
+            workspaceId,
+            eventId: current.eventId,
+            evidenceIds: Object.freeze([
+              ...current.evidenceIds,
+              `release-public-policy:${releasePublicPolicyRevisionId}`
+            ])
+          });
+        }
+      }),
+      read: Object.freeze({
+        readServedSchedule: releaseRepository.readServedSchedule.bind(releaseRepository),
+        readServedRoster: releaseRepository.readServedRoster.bind(releaseRepository)
+      }),
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      crypto: Object.freeze({
+        authorityPrincipalKeyProfile: releaseProfiles.authorityPrincipal,
+        scopePartitionProfile: releaseProfiles.scopePartition,
+        requestCanonicalizationProfile: releaseProfiles.requestCanonicalization
       })
     });
     const programVocabularyRequestHashSealer = createHmacRequestHashSealer({
@@ -3125,6 +3432,113 @@ export async function createEphemeralLiveRuntime(input: {
         newHistoryId: () => crypto.randomUUID()
       })
     });
+    // ------------------------------------------------------------------
+    // Participant lane (single-event launch): the lane resolves the current
+    // event per read, mirroring the dispatch job's event-missing posture —
+    // requests that need a lane before an event exists are answered honestly
+    // at the boundary and never reach these getters.
+    // ------------------------------------------------------------------
+    const resolvePortalLane = (): ParticipantLane | undefined => {
+      const current = currentEvent.resolveCurrentEvent(workspaceId);
+      return current.eventId === undefined
+        ? undefined
+        : Object.freeze({ workspaceId, eventId: parseEventId(current.eventId) });
+    };
+    const portalLane: ParticipantLane = Object.freeze({
+      workspaceId,
+      get eventId() {
+        const lane = resolvePortalLane();
+        if (lane === undefined) throw new TypeError('portal_lane_event_missing');
+        return lane.eventId;
+      }
+    }) as ParticipantLane;
+    const participantStore = new SQLiteParticipantAccessStore(database.sqlite, {
+      policy: PARTICIPANT_ACCESS_LAUNCH_POLICY
+    });
+    // Sender identity is per-installation configuration; unset environments
+    // use an explicit unconfigured `.invalid` profile (never a hardcoded
+    // production identity), matching the inert-provider posture.
+    const participantSenderConfig: ParticipantChallengeSenderConfig = Object.freeze({
+      fromAddress: process.env.JOOEVENTS_AUTH_MAIL_FROM_ADDRESS
+        ?? 'sign-in@unconfigured.invalid',
+      ...(process.env.JOOEVENTS_AUTH_MAIL_FROM_NAME
+        ? { fromDisplayName: process.env.JOOEVENTS_AUTH_MAIL_FROM_NAME }
+        : {}),
+      ...(process.env.JOOEVENTS_AUTH_MAIL_REPLY_TO
+        ? { replyToAddress: process.env.JOOEVENTS_AUTH_MAIL_REPLY_TO }
+        : {})
+    });
+    const participantDelivery = createSQLiteParticipantChallengeDelivery({
+      sqlite: database.sqlite,
+      releases: communicationMessageReleases,
+      ids: Object.freeze({
+        newReleaseId: () => crypto.randomUUID(),
+        newDeliveryId: () => crypto.randomUUID(),
+        newEvidenceId: () => crypto.randomUUID()
+      }),
+      sender: participantSenderConfig,
+      portalOrigin: input.config.baseUrl,
+      challenges: participantStore
+    });
+    const participantRelationships = createSQLiteParticipantRelationshipSource(database.sqlite);
+    const participantIntakeAttribution = createSQLiteIntakeAttributedParticipantSource({
+      sqlite: database.sqlite,
+      contacts: intakeRepository
+    });
+    const portalReadSource = createSQLiteParticipantPortalReadSource({
+      sqlite: database.sqlite,
+      intake: intakeRepository
+    });
+    const participantAuthority = createParticipantCurrentAuthorityResolver({
+      lane: portalLane,
+      policies: Object.freeze([
+        PORTAL_PARTICIPANT_READ_ACCESS_POLICY,
+        PORTAL_PARTICIPANT_ACT_ACCESS_POLICY
+      ]),
+      sessions: createSQLiteParticipantSessionAuthorityView(database.sqlite),
+      identities: participantStore,
+      relationships: participantRelationships
+    });
+    const participantPortalOperations = createParticipantPortalOperationModule({
+      lane: portalLane,
+      policies: Object.freeze({
+        read: PORTAL_PARTICIPANT_READ_ACCESS_POLICY,
+        act: PORTAL_PARTICIPANT_ACT_ACCESS_POLICY
+      }),
+      currentAuthority: participantAuthority,
+      clock,
+      ids: Object.freeze({
+        newInvocationId: () => parseInvocationId(crypto.randomUUID())
+      }),
+      crypto: Object.freeze({
+        authorityPrincipalKeyProfile: participantPortalProfiles.authorityPrincipal,
+        scopePartitionProfile: participantPortalProfiles.scopePartition,
+        requestCanonicalizationProfile: participantPortalProfiles.requestCanonicalization,
+        requestHashSealer: createHmacRequestHashSealer({
+          profile: PORTAL_ENGAGEMENT_RESPOND_REQUEST_HASH_PROFILE,
+          keyBytes: randomHmacKey()
+        }),
+        idempotencyCredentialProfile: participantPortalProfiles.idempotencyCredential,
+        idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
+          profile: participantPortalProfiles.idempotencyCredential,
+          keyBytes: randomHmacKey()
+        })
+      }),
+      identities: participantStore,
+      relationships: participantRelationships,
+      engagements: engagementReadRepository,
+      portal: portalReadSource
+    });
+    const participantPortalDomain = createSQLiteParticipantPortalEffectDomainRegistration({
+      sqlite: database.sqlite,
+      workspaceId,
+      lane: portalLane,
+      intake: intakeRepository,
+      ids: Object.freeze({
+        newPreparationHandle: () => crypto.randomUUID(),
+        newActivityId: () => crypto.randomUUID()
+      })
+    });
     const domains = createSQLiteEffectDomainAdapterRegistry([
       eventCreateDraftDomain,
       eventSettingsDraftDomain,
@@ -3142,15 +3556,29 @@ export async function createEphemeralLiveRuntime(input: {
       reviewerRosterDraftDomain,
       decisionDraftDomain,
       engagementDraftDomain,
+      releaseDraftDomain,
+      participantPortalDomain,
       outboundEmailDeliveryDomain,
       ...organizerCommunicationAuthoringDomains,
       ...communicationSendRuntime.effectDomains,
       changesetLifecycle
     ]);
+    // The in-transaction authority recheck dispatches by lane: participant
+    // invocations re-prove the participant session (without sliding it),
+    // identity standing, and current relationship; everything else re-proves
+    // operator authority. Neither resolver ever answers the other lane.
+    const effectRecheckSource = Object.freeze({
+      resolveAuthority: (
+        recheckInput: Parameters<CurrentAuthorityResolver<InvocationEvidence>['resolve']>[0]
+      ) => recheckInput.lane.kind === 'participant'
+        ? participantAuthority.resolve(recheckInput)
+        : authority.effectRecheckSource.resolveAuthority(recheckInput),
+      now: authority.effectRecheckSource.now
+    });
     const unitOfWork = new SQLiteEffectUnitOfWorkPort(
       database.sqlite,
       domains,
-      authority.effectRecheckSource
+      effectRecheckSource
     );
     const source = composeOperationRegistryModules([
       changesetOperations,
@@ -3177,6 +3605,8 @@ export async function createEphemeralLiveRuntime(input: {
       decisionDraftOperations,
       engagementOperations,
       engagementDraftOperations,
+      releaseDraftOperations,
+      participantPortalOperations,
       organizerCommunicationAuthoringOperations,
       organizerCommunicationAudiencePreviewOperations,
       communicationProviderReadOperations,
@@ -3195,8 +3625,14 @@ export async function createEphemeralLiveRuntime(input: {
       unitOfWork,
       newReceiptId: () => crypto.randomUUID()
     });
-    const publicFormReadRuntime = await createApplicationOperationRuntime({
-      source: publicFormReadOperations.source,
+    // ONE public registry behind ONE adapter: the intake form read and the
+    // two release reads compose into a single runtime, preserving the
+    // structural `/api/public/` guarantee at one seam.
+    const publicReadRuntime = await createApplicationOperationRuntime({
+      source: composeOperationRegistryModules([
+        publicFormReadOperations,
+        releasePublicReadOperations
+      ]),
       read: {
         operationalTrace: { emit() {} },
         immutableAudit: new SQLiteReadImmutableAuditPort(database.sqlite),
@@ -3210,9 +3646,103 @@ export async function createEphemeralLiveRuntime(input: {
       catalog: authority.policies,
       registry: operations.registry
     });
+    // Public-registry coverage gate (counterpart of the operator assert):
+    // the composed public surface is exactly the pinned three GET reads and
+    // carries no effect bindings at all.
+    {
+      const publicBindings = publicReadRuntime.registry.publicHttpBindings
+        .map((binding) =>
+          `${binding.operationName}@${binding.operationVersion} GET ${binding.path}`)
+        .sort();
+      const expectedPublicBindings = [
+        `${INTAKE_PUBLIC_FORM_READ_OPERATION.name}@${INTAKE_PUBLIC_FORM_READ_OPERATION.version} GET /api/public/forms/current`,
+        `${RELEASE_PUBLIC_ROSTER_READ_OPERATION.name}@${RELEASE_PUBLIC_ROSTER_READ_OPERATION.version} GET ${RELEASE_PUBLIC_ROSTER_READ_PATH}`,
+        `${RELEASE_PUBLIC_SCHEDULE_READ_OPERATION.name}@${RELEASE_PUBLIC_SCHEDULE_READ_OPERATION.version} GET ${RELEASE_PUBLIC_SCHEDULE_READ_PATH}`
+      ].sort();
+      if (publicReadRuntime.registry.publicHttpEffectBindings.length !== 0
+          || publicBindings.length !== expectedPublicBindings.length
+          || publicBindings.some((entry, index) => entry !== expectedPublicBindings[index])) {
+        throw new TypeError('ephemeral_public_registry_coverage_mismatch');
+      }
+    }
     const evidence = createBetterAuthOperatorEvidenceVerifier({
       sessions: { getSession: (headers) => auth.api.getSession({ headers }) },
       allowedOrigins: [input.config.baseUrl, ...input.config.trustedOrigins]
+    });
+    const participantAllowedOrigins = new Set([
+      input.config.baseUrl,
+      ...input.config.trustedOrigins
+    ]);
+    const participantEntryRuntime: ParticipantEntryRuntime = Object.freeze({
+      resolveLane: resolvePortalLane,
+      transaction: <Value>(work: () => Value): Value => {
+        let began = false;
+        try {
+          database.sqlite.exec('BEGIN IMMEDIATE;');
+          began = true;
+          const value = work();
+          database.sqlite.exec('COMMIT;');
+          return value;
+        } catch (error) {
+          if (began && database.sqlite.inTransaction) database.sqlite.exec('ROLLBACK;');
+          throw error;
+        }
+      },
+      store: participantStore,
+      delivery: participantDelivery,
+      intakeAttribution: participantIntakeAttribution,
+      policy: PARTICIPANT_ACCESS_LAUNCH_POLICY,
+      ids: Object.freeze({
+        newChallengeId: () => crypto.randomUUID(),
+        newReceiptId: () => crypto.randomUUID(),
+        newPersonId: () => parsePersonId(crypto.randomUUID()),
+        newParticipantIdentityId: () => parseParticipantIdentityId(crypto.randomUUID()),
+        newSessionId: () => parseParticipantSessionId(crypto.randomUUID())
+      }),
+      readPortalEvent: (lane: ParticipantLane) => portalReadSource.readPortalEvent(lane),
+      now: () => parseInstant(new Date().toISOString()),
+      allowedOrigins: Object.freeze([input.config.baseUrl, ...input.config.trustedOrigins])
+    });
+    const participantEvidence = Object.freeze({
+      verify({ request, binding }: {
+        readonly request: Request;
+        readonly correlationId: string;
+        readonly binding: { readonly method: string };
+      }) {
+        if (request.method !== binding.method) {
+          return Object.freeze({ kind: 'rejected' as const, reason: 'forbidden' as const });
+        }
+        if (binding.method === 'POST') {
+          const origin = request.headers.get('origin');
+          if (!origin || !participantAllowedOrigins.has(origin)) {
+            return Object.freeze({ kind: 'rejected' as const, reason: 'forbidden' as const });
+          }
+        }
+        const lane = resolvePortalLane();
+        const token = readPortalSessionToken(request);
+        if (lane === undefined || token === undefined) {
+          return Object.freeze({ kind: 'rejected' as const, reason: 'unauthenticated' as const });
+        }
+        const context = resolveParticipantContext({
+          sessions: participantStore,
+          identities: participantStore,
+          lane,
+          sessionToken: token,
+          now: parseInstant(new Date().toISOString())
+        });
+        if (context.kind !== 'active') {
+          return Object.freeze({ kind: 'rejected' as const, reason: 'unauthenticated' as const });
+        }
+        return Object.freeze({
+          kind: 'verified' as const,
+          evidence: Object.freeze({
+            kind: 'participant' as const,
+            surface: 'participant_http' as const,
+            client: Object.freeze({ key: 'portal-web' }),
+            participantSessionId: context.session.sessionId
+          })
+        });
+      }
     });
     const requestSerialization = createSerialHttpRequestBoundary();
     const app = createHttpApp({
@@ -3221,30 +3751,91 @@ export async function createEphemeralLiveRuntime(input: {
       workspaceId,
       baseUrl: input.config.baseUrl,
       operatorOperations: { operations, evidence },
+      participantEntry: participantEntryRuntime,
+      participantOperations: { operations, evidence: participantEvidence },
       requestSerialization
     });
-    const publicFormReadAdapter = createPublicOperationsHttpAdapter({
-      operations: publicFormReadRuntime,
+    const publicReadAdapter = createPublicOperationsHttpAdapter({
+      operations: publicReadRuntime,
       evidence: {
         verify({ binding }) {
-          if (binding.operationName !== INTAKE_PUBLIC_FORM_READ_OPERATION.name
-              || binding.operationVersion !== INTAKE_PUBLIC_FORM_READ_OPERATION.version
-              || binding.path !== '/api/public/forms/current') {
-            throw new TypeError('ephemeral_public_form_read_binding_mismatch');
+          if (binding.operationName === INTAKE_PUBLIC_FORM_READ_OPERATION.name
+              && binding.operationVersion === INTAKE_PUBLIC_FORM_READ_OPERATION.version
+              && binding.path === '/api/public/forms/current') {
+            return Object.freeze({
+              kind: 'verified' as const,
+              evidence: Object.freeze({
+                kind: 'public_open' as const,
+                surface: 'public_http' as const,
+                client: Object.freeze({ key: 'public.intake-form-read' }),
+                publicPolicyRevisionId: publicFormPolicyRevisionId
+              })
+            });
           }
-          return Object.freeze({
-            kind: 'verified' as const,
-            evidence: Object.freeze({
-              kind: 'public_open' as const,
-              surface: 'public_http' as const,
-              client: Object.freeze({ key: 'public.intake-form-read' }),
-              publicPolicyRevisionId: publicFormPolicyRevisionId
-            })
-          });
+          if (releasePublicOperations.has(`${binding.operationName}@${binding.operationVersion}`)
+              && (binding.path === RELEASE_PUBLIC_SCHEDULE_READ_PATH
+                || binding.path === RELEASE_PUBLIC_ROSTER_READ_PATH)) {
+            return Object.freeze({
+              kind: 'verified' as const,
+              evidence: Object.freeze({
+                kind: 'public_open' as const,
+                surface: 'public_http' as const,
+                client: Object.freeze({ key: 'public.release-read' }),
+                publicPolicyRevisionId: releasePublicPolicyRevisionId
+              })
+            });
+          }
+          throw new TypeError('ephemeral_public_read_binding_mismatch');
         }
       }
     });
-    app.route('/', publicFormReadAdapter);
+    app.route('/', publicReadAdapter);
+    // Dev-only fixture control for the hash-only challenge store: it hands out a
+    // working magic-link token bypassing the mailbox-possession proof the portal
+    // ceremony depends on, so its being dev-only must be STRUCTURAL, not a
+    // convention about which composition "is" the dev/test one. The route exists
+    // only when a caller sets `devFixtures` — the loopback-bound dev/test entries
+    // do; a beyond-loopback deployment does not — so no remote peer can reach a
+    // token oracle. It is never mounted through `http/app.ts`. When present it
+    // reads the challenge's classified release envelope for the link; delivery
+    // history keeps recording the honest terminal not-delivered.
+    if (input.devFixtures === true) {
+      app.post('/api/portal/entry/dev/issued-link', async (context) => {
+        let payload: unknown;
+        try { payload = await context.req.json(); } catch { payload = undefined; }
+        const email = (payload as { readonly email?: unknown } | undefined)?.email;
+        const lane = resolvePortalLane();
+        if (typeof email !== 'string' || lane === undefined) {
+          return context.json({ kind: 'none' as const });
+        }
+        let normalizedEmail: string;
+        try {
+          normalizedEmail = parseParticipantEmail(email).normalizedEmail;
+        } catch {
+          return context.json({ kind: 'none' as const });
+        }
+        const row = database.sqlite.query<{
+          readonly delivery_id: string | null;
+          readonly expires_at_ms: number;
+        }, [string, string, string]>(`
+          SELECT delivery_id, expires_at_ms FROM participant_sign_in_challenges
+           WHERE workspace_id = ? AND event_id = ? AND normalized_email = ? AND state = 'issued'
+           ORDER BY requested_at_ms DESC LIMIT 1
+        `).get(lane.workspaceId, lane.eventId, normalizedEmail);
+        if (!row || row.delivery_id === null) return context.json({ kind: 'none' as const });
+        const head = outboundEmailDeliveryLedger.read(row.delivery_id);
+        const release = head ? communicationMessageReleases.read(head.releaseId) : undefined;
+        const match = release
+          ? /[?&]token=([^\s&]+)/.exec(release.envelope.textBody)
+          : null;
+        if (!match) return context.json({ kind: 'none' as const });
+        return context.json({
+          kind: 'issued' as const,
+          url: `/portal/auth/complete?token=${match[1]!}`,
+          expiresAt: new Date(row.expires_at_ms).toISOString()
+        });
+      });
+    }
     let closed = false;
     let closeResult: ReturnType<EphemeralSQLiteRuntime['close']> | undefined;
     const close = () => {
@@ -3254,6 +3845,18 @@ export async function createEphemeralLiveRuntime(input: {
       }
       return closeResult!;
     };
+    // Per-request framing policy over the current event's surface heads —
+    // never cached; the surface allowlist is mutable event configuration.
+    const embedFraming: EmbedFramingPolicySource = Object.freeze({
+      readSurfaceFrameOrigins(kind: Parameters<EmbedFramingPolicySource['readSurfaceFrameOrigins']>[0]) {
+        const lane = resolvePortalLane();
+        if (lane === undefined) return undefined;
+        return releaseRepository.readSurfaceHead(
+          { workspaceId: lane.workspaceId, eventId: lane.eventId },
+          kind
+        )?.allowedFrameOrigins;
+      }
+    });
     return Object.freeze({
       database,
       auth,
@@ -3261,6 +3864,7 @@ export async function createEphemeralLiveRuntime(input: {
       workspaceId,
       communications,
       outboundDispatch,
+      embedFraming,
       close
     });
   } catch (error) {

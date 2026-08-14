@@ -309,7 +309,7 @@ describe('Session changeset draft operation module', () => {
     expect(SESSION_DRAFT_PERMISSION_ID).toBe('schedule.manage');
   });
 
-  test('accepts only create and transition authoring from a browser', () => {
+  test('accepts create, transition, and the roster visibility off-switch from a browser', () => {
     expect(sessionAuthorInputSchema.safeParse(createInput).success).toBe(true);
     expect(sessionAuthorInputSchema.safeParse({
       action: 'transition',
@@ -320,7 +320,17 @@ describe('Session changeset draft operation module', () => {
       expectedSessionDigestSha256: 'd'.repeat(64),
       to: 'programmed'
     }).success).toBe(true);
-    for (const action of ['restore', 'delete']) {
+    expect(sessionAuthorInputSchema.safeParse({
+      action: 'roster_visibility',
+      expectedCatalogVersion: 1,
+      expectedCatalogDigestSha256: 'a'.repeat(64),
+      sessionId: head.id,
+      expectedSessionVersion: 1,
+      expectedSessionDigestSha256: 'd'.repeat(64),
+      personId: '019c1df7-86b5-769b-bba4-5f7097bfa401',
+      publiclyVisible: false
+    }).success).toBe(true);
+    for (const action of ['restore', 'delete', 'roster_append']) {
       expect(sessionAuthorInputSchema.safeParse({ ...createInput, action }).success).toBe(false);
     }
     for (const field of [

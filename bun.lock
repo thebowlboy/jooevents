@@ -42,6 +42,8 @@
         "@jooevents/persistence": "workspace:*",
         "@jooevents/program": "workspace:*",
         "@jooevents/program-operations": "workspace:*",
+        "@jooevents/release": "workspace:*",
+        "@jooevents/release-operations": "workspace:*",
         "@jooevents/review-operations": "workspace:*",
         "@jooevents/schedule": "workspace:*",
         "@jooevents/schedule-operations": "workspace:*",
@@ -56,6 +58,14 @@
       },
       "devDependencies": {
         "@jooevents/mcp": "workspace:*",
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "apps/setup-cli": {
+      "name": "@jooevents/setup-cli",
+      "version": "0.0.0",
+      "devDependencies": {
         "bun-types": "1.3.6",
         "typescript": "6.0.3",
       },
@@ -438,6 +448,8 @@
         "@jooevents/model-adapter": "workspace:*",
         "@jooevents/program": "workspace:*",
         "@jooevents/program-operations": "workspace:*",
+        "@jooevents/release": "workspace:*",
+        "@jooevents/release-operations": "workspace:*",
         "@jooevents/reliability": "workspace:*",
         "@jooevents/review": "workspace:*",
         "@jooevents/review-operations": "workspace:*",
@@ -477,6 +489,37 @@
         "@jooevents/identity-access": "workspace:*",
         "@jooevents/kernel": "workspace:*",
         "@jooevents/program": "workspace:*",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/release": {
+      "name": "@jooevents/release",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/changesets": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "@jooevents/session": "workspace:*",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/release-operations": {
+      "name": "@jooevents/release-operations",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/application": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/identity-access": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "@jooevents/release": "workspace:*",
         "zod": "4.4.3",
       },
       "devDependencies": {
@@ -853,6 +896,10 @@
 
     "@jooevents/program-operations": ["@jooevents/program-operations@workspace:packages/program-operations"],
 
+    "@jooevents/release": ["@jooevents/release@workspace:packages/release"],
+
+    "@jooevents/release-operations": ["@jooevents/release-operations@workspace:packages/release-operations"],
+
     "@jooevents/reliability": ["@jooevents/reliability@workspace:packages/reliability"],
 
     "@jooevents/review": ["@jooevents/review@workspace:packages/review"],
@@ -868,6 +915,8 @@
     "@jooevents/session": ["@jooevents/session@workspace:packages/session"],
 
     "@jooevents/session-operations": ["@jooevents/session-operations@workspace:packages/session-operations"],
+
+    "@jooevents/setup-cli": ["@jooevents/setup-cli@workspace:apps/setup-cli"],
 
     "@jooevents/splash-worker": ["@jooevents/splash-worker@workspace:apps/splash-worker"],
 

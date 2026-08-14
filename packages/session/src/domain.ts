@@ -41,6 +41,7 @@ export type SessionPlanningErrorCode =
   | 'format_retired'
   | 'track_missing'
   | 'track_retired'
+  | 'participant_missing'
   | 'invalid_transition'
   | 'invalid_plan';
 
@@ -131,6 +132,31 @@ export function planSessionMutation(input: {
       updatedAt: planningInput.occurredAt
     };
     after = parseSessionHead({ ...unsigned, digestSha256: sessionHeadDigest(unsigned) });
+  } else if (planningInput.action === 'roster_visibility') {
+    if (!existing) throw new SessionPlanningError('session_missing');
+    if (existing.version !== planningInput.expectedSessionVersion
+        || existing.digestSha256 !== planningInput.expectedSessionDigestSha256) {
+      throw new SessionPlanningError('stale_session');
+    }
+    before = existing;
+    const switched = visibilitySwitchedRosterParticipants(
+      existing.roster.participants,
+      planningInput.personId,
+      planningInput.publiclyVisible
+    );
+    const rosterUnsigned = switched === undefined
+      ? { version: existing.roster.version, participants: existing.roster.participants }
+      : { version: existing.roster.version + 1, participants: switched };
+    const roster = { ...rosterUnsigned, digestSha256: sessionRosterDigest(rosterUnsigned) };
+    const { digestSha256: _digest, ...unsignedBefore } = existing;
+    const unsigned = {
+      ...unsignedBefore,
+      roster,
+      version: existing.version + 1,
+      updatedByUserId: planningInput.actorUserId,
+      updatedAt: planningInput.occurredAt
+    };
+    after = parseSessionHead({ ...unsigned, digestSha256: sessionHeadDigest(unsigned) });
   } else {
     if (!existing) throw new SessionPlanningError('session_missing');
     if (existing.version !== planningInput.expectedSessionVersion
@@ -170,6 +196,26 @@ function seededRosterParticipants(
     seeded.push({ ...participant, position: seeded.length });
   }
   return seeded;
+}
+
+/**
+ * The visibility off-switch mutates exactly one flag on the existing roster:
+ * no entry is added, removed, or reordered, and identity/role/position/source
+ * stay byte-identical. A person absent from the roster refuses — visibility is
+ * a property of a roster membership, never a way to create one. Returns
+ * undefined when the flag already holds the requested value.
+ */
+function visibilitySwitchedRosterParticipants(
+  current: readonly SessionParticipantRefDto[],
+  personId: string,
+  publiclyVisible: boolean
+): readonly SessionParticipantRefDto[] | undefined {
+  const participant = current.find((candidate) => candidate.personId === personId);
+  if (!participant) throw new SessionPlanningError('participant_missing');
+  if (participant.publiclyVisible === publiclyVisible) return undefined;
+  return current.map((candidate) =>
+    candidate.personId === personId ? { ...candidate, publiclyVisible } : candidate
+  );
 }
 
 /**

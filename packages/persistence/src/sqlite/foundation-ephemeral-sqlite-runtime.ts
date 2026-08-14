@@ -33,6 +33,11 @@ import {
   type EphemeralSQLiteSchemaArtifact
 } from './ephemeral-sqlite-runtime';
 import { MODEL_DURABILITY_TRIAL_SQL } from './model-durability-trial';
+import { SQLITE_PARTICIPANT_ACCESS_SQL } from './participant-access';
+import { SQLITE_PARTICIPANT_PORTAL_EFFECT_SQL } from './participant-portal-effect-domain';
+import { SQLITE_RELEASE_SQL } from './release';
+import { SQLITE_RELEASE_DRAFT_EFFECT_SQL } from './release-draft-effect-domain';
+import { SQLITE_RELEASE_CHANGESET_EFFECT_SQL } from './release-changeset-effect-domain';
 import { SQLITE_ORGANIZER_AUDIENCE_PREVIEW_SQL } from './communications/audience-preview';
 import { SQLITE_COMMUNICATION_MESSAGE_RELEASES_SQL } from './communications/message-releases';
 import {
@@ -120,6 +125,9 @@ export const FOUNDATION_EPHEMERAL_SCHEMA_ARTIFACTS: readonly EphemeralSQLiteSche
     schemaArtifact('workspace-team-draft-effect', WORKSPACE_TEAM_DRAFT_EFFECT_SQL),
     schemaArtifact('workspace-team-changeset-effect', WORKSPACE_TEAM_CHANGESET_EFFECT_SQL),
     schemaArtifact('intake-domain', SQLITE_INTAKE_SQL),
+    schemaArtifact('release-domain', SQLITE_RELEASE_SQL),
+    schemaArtifact('release-draft-effect', SQLITE_RELEASE_DRAFT_EFFECT_SQL),
+    schemaArtifact('release-changeset-effect', SQLITE_RELEASE_CHANGESET_EFFECT_SQL),
     schemaArtifact('intake-form-draft-effect', INTAKE_FORM_DRAFT_EFFECT_SQL),
     schemaArtifact('intake-form-changeset-effect', INTAKE_FORM_CHANGESET_EFFECT_SQL),
     schemaArtifact('submission-triage-domain', SQLITE_SUBMISSION_TRIAGE_SQL),
@@ -164,7 +172,9 @@ export const FOUNDATION_EPHEMERAL_SCHEMA_ARTIFACTS: readonly EphemeralSQLiteSche
     schemaArtifact(
       'communication-release-changeset-effect',
       SQLITE_COMMUNICATION_RELEASE_CHANGESET_SQL
-    )
+    ),
+    schemaArtifact('participant-access', SQLITE_PARTICIPANT_ACCESS_SQL),
+    schemaArtifact('participant-portal-effect', SQLITE_PARTICIPANT_PORTAL_EFFECT_SQL)
   ]);
 
 /** Opens one isolated runtime with the exact ordered Foundation schema. */

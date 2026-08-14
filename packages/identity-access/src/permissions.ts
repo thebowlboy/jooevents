@@ -45,6 +45,7 @@ export const PERMISSIONS = [
   { id: 'schedule.read', group: 'schedule', label: 'View working schedule', description: 'Read draft sessions, rooms, and timing.', risk: 'routine', allowedScopes: ['workspace', 'event'] },
   { id: 'schedule.manage', group: 'schedule', label: 'Manage schedule', description: 'Create sessions and change rooms or timing.', risk: 'sensitive', allowedScopes: ['workspace', 'event'] },
   { id: 'schedule.publish', group: 'schedule', label: 'Publish schedule', description: 'Make a schedule revision visible to attendees.', risk: 'consequential', allowedScopes: ['workspace', 'event'] },
+  { id: 'publication.manage', group: 'schedule', label: 'Manage publication', description: 'Draft, publish, and roll back the public program, surfaces, and embed framing.', risk: 'consequential', allowedScopes: ['workspace', 'event'] },
   { id: 'communication.draft', group: 'communications', label: 'Draft communications', description: 'Prepare messages without sending them.', risk: 'routine', allowedScopes: ['workspace', 'event'] },
   { id: 'communication.send', group: 'communications', label: 'Send communications', description: 'Send a message to speakers, reviewers, or attendees.', risk: 'consequential', allowedScopes: ['workspace', 'event'] },
   { id: 'communication.provider.manage', group: 'communications', label: 'Manage email providers', description: 'Read and manage email provider connections, readiness, sender profiles, and routing.', risk: 'sensitive', allowedScopes: ['workspace'] },

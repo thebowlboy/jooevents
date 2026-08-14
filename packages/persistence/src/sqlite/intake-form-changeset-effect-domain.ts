@@ -81,6 +81,9 @@ import {
   formChangesetTransactionPort,
   formChangesetValidationPort,
   formPlanningAttributionReadPort,
+  formSurfaceSuccessorPlanningPort,
+  formSurfaceSuccessorTransactionPort,
+  formSurfaceSuccessorValidationPort,
   formVersionSetDigest,
   formVersionSetGuardId,
   formVersionSetGuardVersion,
@@ -93,6 +96,7 @@ import {
   formCloseDeadlineTransactionPort,
   formCloseDeadlineValidationPort
 } from '@jooevents/deadline';
+import { releaseSurfaceSuccessorGuardRef } from '@jooevents/release';
 import type { SQLiteEffectDomainAdapter } from './foundation-trial-uow';
 import {
   SQLiteChangesetLifecycleStore,
@@ -103,6 +107,10 @@ import type {
   SQLiteOperatorSubjectRelationshipSource
 } from './operator-authority-repositories';
 import type { SQLiteIntakeRepository } from './intake';
+import {
+  createSQLiteFormSurfaceSuccessorCollaboration,
+  SQLiteReleaseSurfaceSuccessorStore
+} from './release';
 
 export const INTAKE_FORM_CHANGESET_EFFECT_SQL = `
 CREATE TABLE intake_form_changeset_receipt_links (
@@ -1012,6 +1020,7 @@ implements SQLiteEffectDomainAdapter, ChangesetLifecycleOwnerResolutionSource {
       workspaceId: this.input.workspaceId,
       eventId: context.scope.eventId
     });
+    const surfaceSuccessors = createSQLiteFormSurfaceSuccessorCollaboration(this.input.sqlite);
     return Object.freeze({
       getPort<Port>(key: ChangesetReadPortKey<Port>): Port {
         if ((key as unknown) === formChangesetReadPort) {
@@ -1019,6 +1028,9 @@ implements SQLiteEffectDomainAdapter, ChangesetLifecycleOwnerResolutionSource {
         }
         if ((key as unknown) === formCloseDeadlinePlanningPort) {
           return repository as unknown as Port;
+        }
+        if ((key as unknown) === formSurfaceSuccessorPlanningPort) {
+          return surfaceSuccessors as unknown as Port;
         }
         if ((key as unknown) === formPlanningAttributionReadPort) {
           return Object.freeze({
@@ -1039,8 +1051,13 @@ implements SQLiteEffectDomainAdapter, ChangesetLifecycleOwnerResolutionSource {
   }
 
   private commitTransaction(repository: SQLiteIntakeRepository): ChangesetCommitTransaction {
+    const surfaceSuccessors = createSQLiteFormSurfaceSuccessorCollaboration(this.input.sqlite);
     return Object.freeze({
       getPort<Port>(key: ChangesetValidationPortKey<Port> | ChangesetTransactionPortKey<Port>): Port {
+        if ((key as unknown) === formSurfaceSuccessorValidationPort
+            || (key as unknown) === formSurfaceSuccessorTransactionPort) {
+          return surfaceSuccessors as unknown as Port;
+        }
         if ((key as unknown) !== formChangesetValidationPort
             && (key as unknown) !== formChangesetTransactionPort
             && (key as unknown) !== formCloseDeadlineValidationPort
@@ -1123,6 +1140,13 @@ implements SQLiteEffectDomainAdapter, ChangesetLifecycleOwnerResolutionSource {
         const guardId = formVersionSetGuardId(plan.mutation.before.id);
         guardVersions.set(guardId, formVersionSetGuardVersion(latestVersion));
         guardDigests.set(guardId, formVersionSetDigest(versions));
+        // Version-minting plans fence the apply surface-head slot they may
+        // re-release; the current-state evidence mirrors the plan-time guard.
+        const surfaceGuard = releaseSurfaceSuccessorGuardRef(
+          new SQLiteReleaseSurfaceSuccessorStore(this.input.sqlite), scope
+        );
+        guardVersions.set(surfaceGuard.id, surfaceGuard.version);
+        guardDigests.set(surfaceGuard.id, surfaceGuard.digest);
       }
     }
     return Object.freeze({ aggregateVersions, guardVersions, guardDigests });

@@ -151,6 +151,7 @@ describe('workspace overview operation', () => {
       area: 'schedule',
       status: 'partial',
       availableCapabilities: [
+        'release.change.draft',
         'schedule.placement.draft',
         'schedule.placement.snapshot.read',
         'schedule.session.manage',
@@ -158,9 +159,16 @@ describe('workspace overview operation', () => {
       ],
       unavailableCapabilities: [
         'schedule.break.manage',
-        'schedule.placement.unplace',
-        'schedule.publish'
+        'schedule.placement.unplace'
       ]
+    });
+    expect(DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG.find(
+      (entry) => entry.area === 'embeds'
+    )).toEqual({
+      area: 'embeds',
+      status: 'partial',
+      availableCapabilities: ['embed.frame_allowlist.draft'],
+      unavailableCapabilities: ['embed.document.render', 'embed.loader.serve']
     });
     expect(DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG.find(
       (entry) => entry.area === 'messages'

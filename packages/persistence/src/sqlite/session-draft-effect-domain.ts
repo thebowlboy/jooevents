@@ -71,7 +71,7 @@ CREATE TABLE session_draft_receipt_links (
     length(record_digest_sha256) = 64
     AND record_digest_sha256 NOT GLOB '*[^0-9a-f]*'
   ),
-  action TEXT NOT NULL CHECK(action IN ('create', 'transition')),
+  action TEXT NOT NULL CHECK(action IN ('create', 'transition', 'roster_visibility')),
   session_id TEXT NOT NULL CHECK(length(session_id) = 36),
   operation_name TEXT NOT NULL CHECK(operation_name = 'session.change.draft'),
   operation_version INTEGER NOT NULL CHECK(operation_version = 1),

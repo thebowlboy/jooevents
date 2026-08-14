@@ -13,6 +13,14 @@ export type OutboundEmailDeliveryState =
   | 'known_rejected_terminal'
   | 'acceptance_unknown';
 
+/**
+ * `original` submits the exact reviewed envelope. `marked_resend` submits the
+ * deterministically derived resend envelope — `[Resend]` subject prefix plus a
+ * first body line noting the resend — used for the single automatic retry after
+ * a delivery's acceptance became unknown, so a double delivery reads as intent.
+ */
+export type OutboundEmailDeliveryAttemptKind = 'original' | 'marked_resend';
+
 export interface OutboundEmailDeliveryHead {
   readonly contractVersion: 1;
   readonly workspaceId: string;
@@ -39,6 +47,14 @@ export interface OutboundEmailDeliveryHead {
   readonly state: OutboundEmailDeliveryState;
   readonly version: number;
   readonly attemptCount: number;
+  /** Completed attempts whose provider acceptance is unknown; monotonic. */
+  readonly unknownAttemptCount: number;
+  /**
+   * True once the single automatic marked resend itself landed with unknown
+   * acceptance. An `acceptance_unknown` head with this flag set is quarantined:
+   * it is never dispatchable again and its follow-up is manual resolution.
+   */
+  readonly markedResendExhausted: boolean;
   readonly currentAttemptId: string | null;
 }
 
@@ -47,6 +63,7 @@ export interface OutboundEmailDeliveryAttempt {
   readonly deliveryId: string;
   readonly attemptId: string;
   readonly attemptNumber: number;
+  readonly attemptKind: OutboundEmailDeliveryAttemptKind;
   readonly state: Exclude<OutboundEmailDeliveryState, 'pending'>;
   readonly adapterKey: string;
   readonly adapterVersion: string;
@@ -78,6 +95,7 @@ export type OutboundEmailFollowUp =
   | 'safe_retry'
   | 'reconcile'
   | 'await_callback'
+  | 'marked_resend'
   | 'manual_resolution_required';
 
 /** Maps the closed provider port outcome into the delivery ledger vocabulary. */
@@ -113,12 +131,16 @@ export function normalizeProviderSubmissionOutcome(
 
 /**
  * Derives an honest next action from the frozen per-attempt provider capabilities.
- * In particular, an ambiguous provider with neither idempotency nor reconciliation
- * cannot be retried automatically.
+ * An ambiguous provider with neither idempotency nor reconciliation gets exactly
+ * one automatic retry, submitted as a marked resend (`[Resend]` subject prefix
+ * plus a first body line noting the resend) so a double delivery reads as intent;
+ * once that marked resend also lands unknown — or when no resend availability is
+ * supplied — the delivery requires manual resolution.
  */
 export function outboundEmailFollowUp(
   resolution: Pick<ProviderAttemptResolution, 'state'>,
-  capabilities: ProviderCapabilities
+  capabilities: ProviderCapabilities,
+  resend?: Pick<OutboundEmailDeliveryHead, 'markedResendExhausted'>
 ): OutboundEmailFollowUp {
   if (resolution.state === 'accepted' || resolution.state === 'known_rejected_terminal') {
     return 'complete';
@@ -127,6 +149,24 @@ export function outboundEmailFollowUp(
   if (capabilities.idempotency === 'native_key') return 'safe_retry';
   if (capabilities.reconciliation === 'lookup') return 'reconcile';
   if (capabilities.reconciliation === 'callback_only') return 'await_callback';
+  if (resend !== undefined && !resend.markedResendExhausted) return 'marked_resend';
   return 'manual_resolution_required';
+}
+
+/**
+ * The attempt kind the ledger requires for the next submission. Once acceptance
+ * ambiguity exists, any further send through a provider that cannot deduplicate
+ * natively must carry the marked-resend envelope — including a safe retry after
+ * a rejected marked resend, because the first delivery is still unconfirmed.
+ * A natively idempotent provider deduplicates on the external delivery key, so
+ * its retry is not a visible second delivery and stays unmarked.
+ */
+export function requiredOutboundEmailAttemptKind(
+  head: Pick<OutboundEmailDeliveryHead, 'unknownAttemptCount'>,
+  capabilities: Pick<ProviderCapabilities, 'idempotency'>
+): OutboundEmailDeliveryAttemptKind {
+  return head.unknownAttemptCount > 0 && capabilities.idempotency !== 'native_key'
+    ? 'marked_resend'
+    : 'original';
 }
 

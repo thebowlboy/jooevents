@@ -202,6 +202,11 @@ export function createEngagementChangesetBundle(): EngagementChangesetBundle {
       const environment: EngagementEnvironment = {
         engagements: snapshot.getPort(engagementReadPort)
       };
+      // Only operator-resolved plans enter the changeset lane; participant
+      // acts are guarded operations and never appear here.
+      if (plan.input.actorUserId === undefined) {
+        throw new TypeError('engagement_compensation_actor_missing');
+      }
       const derived = planEngagementCompensation({
         original: plan,
         environment,

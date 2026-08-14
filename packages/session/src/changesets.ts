@@ -68,23 +68,24 @@ export const sessionValidationPort = defineChangesetValidationPort<SessionChange
 export const sessionTransactionPort = defineChangesetTransactionPort<SessionChangesetTransactionPort>('session.transaction', 1);
 
 const combinedPlanSchema = z.union([sessionMutationPlanSchema, sessionRestorePlanSchema]);
-// Version 2 adds the `roster_append` planning arm and create-time participants.
+// Version 2 added the `roster_append` planning arm and create-time participants.
+// Version 3 adds the `roster_visibility` off-switch arm (owner decision 2026-08-14).
 const authorInputSchema = defineChangesetSchema({
-  key: 'session.planning_input', version: 2,
+  key: 'session.planning_input', version: 3,
   schema: z.union([sessionPlanningInputSchema, sessionRestorePlanSchema])
 });
 const planSchema = defineChangesetSchema({ key: 'session.plan', version: 1, schema: combinedPlanSchema });
 const diffSchema = defineChangesetSchema({ key: 'session.safe_diff', version: 1, schema: sessionSafeDiffSchema });
 const resultSchema = defineChangesetSchema({ key: 'session.result', version: 1, schema: sessionMutationResultSchema });
 const staleDetailSchema = defineChangesetSchema({
-  key: 'session.stale_detail', version: 1,
+  key: 'session.stale_detail', version: 2,
   schema: z.strictObject({
     code: z.enum([
       'wrong_scope', 'stale_catalog', 'session_exists', 'session_missing', 'stale_session',
       'session_placed', 'format_missing', 'format_retired', 'track_missing', 'track_retired',
-      'invalid_transition', 'invalid_plan'
+      'participant_missing', 'invalid_transition', 'invalid_plan'
     ]),
-    action: z.enum(['create', 'transition', 'roster_append', 'restore']),
+    action: z.enum(['create', 'transition', 'roster_append', 'roster_visibility', 'restore']),
     sessionId: sessionIdSchema
   })
 });
@@ -149,10 +150,12 @@ export function createSessionChangesetBundle(): SessionChangesetBundle {
       }
       const { catalog, vocabulary } = environment(authorInput.scope, port);
       const plan = planSessionMutation({ planningInput: authorInput, catalog, vocabulary });
-      // A pure roster append retains its Program Vocabulary evidence byte-for-byte,
-      // so vocabulary refs would only manufacture false conflicts for it.
-      const refreshesTarget = plan.input.action !== 'roster_append'
-        || plan.input.graduateTo !== undefined;
+      // A pure roster append or visibility switch retains its Program Vocabulary
+      // evidence byte-for-byte, so vocabulary refs would only manufacture false
+      // conflicts for it.
+      const refreshesTarget = plan.input.action === 'roster_append'
+        ? plan.input.graduateTo !== undefined
+        : plan.input.action !== 'roster_visibility';
       const targetItems = refreshesTarget
         ? [plan.after.programTarget.format, plan.after.programTarget.track]
             .filter((item): item is NonNullable<typeof item> => item !== null)
@@ -284,7 +287,7 @@ function refusalOutcome(code: SessionPlanningErrorCode, plan: SessionChangesetPl
     retryable: false,
     subjects: [{ type: 'session', id: sessionId }],
     detail: Object.freeze({ code, action, sessionId }),
-    detailSchemaVersion: 1
+    detailSchemaVersion: 2
   });
 }
 

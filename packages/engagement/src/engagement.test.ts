@@ -108,8 +108,12 @@ function headOf(port: WorldPort, personId: string): EngagementHeadDto {
 function planningInput(
   overrides: Partial<Record<string, unknown>> & { readonly action: string }
 ): EngagementMutationPlanningInput {
+  // A participant-attributed confirmation carries no workspace user; every
+  // other planning input in these tests is operator-resolved.
+  const participantAttributed = overrides.action === 'record_confirmation'
+    && overrides.attribution !== 'organizer_recorded';
   return {
-    scope, actorUserId: userId, occurredAt: later,
+    scope, ...(participantAttributed ? {} : { actorUserId: userId }), occurredAt: later,
     ...overrides
   } as EngagementMutationPlanningInput;
 }
