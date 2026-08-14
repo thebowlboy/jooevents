@@ -280,6 +280,120 @@ describe('live public-surface port', () => {
 		expect(mapServedFormSummary(served as never).target).toEqual({ kind: 'general' });
 	});
 
+	test('the application capability serves the exact DTO from the one in-flight form read', async () => {
+		const field = {
+			id: '018f6f00-0000-7000-8000-0000000000f1',
+			label: 'Talk title',
+			help: null,
+			required: true,
+			initiallyVisible: true,
+			position: 0,
+			kind: 'text' as const,
+			maximumLength: 500
+		};
+		const served = {
+			schemaVersion: 1,
+			formId: '018f6f00-0000-7000-8000-0000000000f0',
+			formVersionId: '018f6f00-0000-7000-8000-0000000000f2',
+			formVersionNumber: 3,
+			name: 'Call for proposals',
+			confirmation: 'Thanks! We received it.',
+			target: { kind: 'general_pool' as const },
+			availability: { kind: 'evergreen' as const },
+			fields: [field],
+			rules: []
+		};
+		let formReads = 0;
+		const port = createLivePublicSurfacePort(
+			fetcherFor({
+				'/api/public/schedule/current': () => json(notPublished()),
+				'/api/public/speakers/current': () => json(notPublished()),
+				[`/api/public/forms/current?formId=${served.formId}`]: () => {
+					formReads += 1;
+					return json(success(served));
+				}
+			}),
+			() => `http://127.0.0.1/s/apply?scope=form%3A${served.formId}`
+		);
+		const [{ surfaces }, dto] = await Promise.all([
+			port.templates.list(),
+			port.application!.served({ formId: served.formId })
+		]);
+		expect(surfaces).toHaveLength(1);
+		// The served DTO keeps what the flattened template drops: field
+		// constraints and option identities.
+		expect(dto).toEqual(served as never);
+		expect(formReads).toBe(1);
+		// The embed ↔ standalone handoff exchange is not served yet: typed
+		// absence, never a query-string fallback.
+		expect(port.application?.continuationHandoff).toEqual({ kind: 'not_served' });
+	});
+
+	test('a port session carries the served target into the recorded re-offer', async () => {
+		const formId = '018f6f00-0000-7000-8000-0000000000f0';
+		const continuation = `gsr_${'a'.repeat(43)}`;
+		const receipt = {
+			id: '018f6f00-0000-7000-8000-0000000000ee',
+			operationName: 'intake.public.application',
+			operationVersion: 1
+		};
+		const draft = {
+			schemaVersion: 1,
+			formId,
+			formVersionId: '018f6f00-0000-7000-8000-0000000000f2',
+			draftVersion: 1,
+			status: 'in_progress',
+			answeredFieldIds: [],
+			submittedSubmissionId: null,
+			updatedAt: '2026-08-14T12:00:00.000Z'
+		};
+		const port = createLivePublicSurfacePort(async (input, init) => {
+			if (input === '/api/public/forms/application/continuations') {
+				return json({ kind: 'issued', continuation, expiresAt: '2026-08-14T12:05:00.000Z' });
+			}
+			if (input === '/api/public/forms/application/mutate') {
+				const body = JSON.parse(String(init?.body)) as { action: string };
+				if (body.action === 'begin') {
+					return json({
+						kind: 'success',
+						data: { action: 'begin', draft },
+						receipt,
+						correlationId: crypto.randomUUID()
+					});
+				}
+				return json({
+					kind: 'outcome',
+					outcome: {
+						class: 'policy_violation',
+						kind: 'intake.refused',
+						retryable: false,
+						subjects: [],
+						detail: { reason: 'target_closed' },
+						detailSchemaVersion: 1
+					},
+					terminal: false,
+					correlationId: crypto.randomUUID()
+				});
+			}
+			throw new Error(`Unexpected fetch: ${input}`);
+		});
+		const session = port.application!.session({
+			formId,
+			target: {
+				kind: 'session',
+				sessionId: '018f6f00-0000-7000-8000-0000000000ab',
+				title: 'Collecting Panel'
+			}
+		});
+		await session.start();
+		const state = await session.submit();
+		expect(state.refusal).toMatchObject({
+			kind: 'target_no_longer_collecting',
+			reasonCode: 'target_closed',
+			reason: 'Its call has closed.'
+		});
+	});
+
 	test('a bare apply address carries no form id and stays honestly absent, fetch-free', async () => {
 		let formFetches = 0;
 		const port = createLivePublicSurfacePort(

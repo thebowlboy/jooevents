@@ -233,6 +233,13 @@ test('the hosted call for proposals shows its questions and says it cannot take 
 	// And the one honest line, because controls that look live and lose the work
 	// are the failure this notice exists to prevent.
 	await expect(page.locator('.public__notice')).toContainText('Submitting isn’t switched on yet');
+
+	// Without the port's application capability this is the display-only page:
+	// every control disabled, no live answering surface, no autosave line.
+	await expect(page.locator('.form__submit')).toBeDisabled();
+	await expect(page.locator('.form__control').first()).toBeDisabled();
+	await expect(page.locator('.apply__save')).toHaveCount(0);
+	await expect(page.locator('.apply__submit')).toHaveCount(0);
 });
 
 test('an address that names no surface is a plain not-found, and stays out of search', async ({

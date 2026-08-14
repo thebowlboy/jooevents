@@ -85,12 +85,17 @@ test('manifest failure is recoverable and exposes only the server correlation co
 });
 
 test('live participant and public roots are honest unavailable surfaces without sample data', async ({ page }) => {
+	// Both roots are live surfaces now. With no backend reachable, each states
+	// its own failure and offers a retry instead of holding a skeleton or
+	// leaking sample data.
 	await page.goto('/portal');
-	await expect(page.getByRole('heading', { name: 'The speaker portal isn’t available here yet' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'We could not check your access' })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible();
 	await expect(page.getByText(/AI Engineer NYC 2026|Mid-flight|Decision crunch/)).toHaveCount(0);
 
 	await page.goto('/s/apply');
-	await expect(page.getByRole('heading', { name: 'This event page isn’t available here yet' })).toBeVisible();
+	await expect(page.getByText('We couldn’t load this page.')).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Try again' })).toBeVisible();
 	await expect(page.getByText(/AI Engineer NYC 2026|Mid-flight|Decision crunch/)).toHaveCount(0);
 	await expect(page.locator('[data-je-scenario]')).toHaveCount(0);
 

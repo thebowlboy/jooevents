@@ -4,10 +4,13 @@
 	import ScheduleSurfaceRender from '$lib/features/templates/ScheduleSurfaceRender.svelte';
 	import FormSurfaceRender from '$lib/features/templates/FormSurfaceRender.svelte';
 	import RosterSurfaceRender from '$lib/features/templates/RosterSurfaceRender.svelte';
+	import FormSurfaceAnswer from './FormSurfaceAnswer.svelte';
 	import { usePublicSurfacePort } from '$lib/api/public-surface-port';
 	import { applyFormLens } from '$lib/api/fields';
 	import { parseScope } from '$lib/features/embeds/embed-snippet';
 	import { themeStyleProperties } from '$lib/theme/theme-contract';
+	import type { ServedPublicFormDto } from '@jooevents/contracts';
+	import type { PublicApplicationSession } from '$lib/api/public-application-session';
 	import type {
 		EmbedScope,
 		EventTheme,
@@ -53,39 +56,82 @@
 	let indexing = $state(false);
 	let missing = $state(false);
 
+	/**
+	 * The reads themselves failed — a different fact from "nothing is published
+	 * here", and one a visitor can act on by retrying. Without it, an unreachable
+	 * backend would hold the loading skeleton forever.
+	 */
+	let failed = $state(false);
+
 	let program = $state<{ schedule: ScheduleState; tracks: Track[] } | null>(null);
 	let lineup = $state<{ roster: PublicSpeakerCard[]; categories: SpeakerCategory[] } | null>(null);
 	let forms = $state<FormSummary[] | null>(null);
+	/**
+	 * The live answering surface, mounted only when the port's optional
+	 * application capability exists and the apply surface actually serves.
+	 * Without the capability this stays null and the page renders exactly the
+	 * honest read-only call it always has.
+	 */
+	let liveApply = $state<{ form: ServedPublicFormDto; session: PublicApplicationSession } | null>(
+		null
+	);
 
-	onMount(async () => {
-		const [library, brand, summary, settings] = await Promise.all([
-			api.templates.list(),
-			api.theme.get(),
-			api.workspace.summary(),
-			api.settings.get()
-		]);
-		surface = library.surfaces.find((entry) => entry.kind === kind) ?? null;
-		missing = surface === null;
-		theme = brand;
-		// A robots directive is opt-in: the page works either way, and a page that
-		// has already been crawled is far harder to withdraw than one that has not.
-		indexing = settings?.publicIndexing === true;
-		if (summary.event) {
-			eventName = summary.event.name;
-			eventMeta = `${summary.event.dates} · ${summary.event.location}`;
-		}
-		if (kind === 'schedule') {
-			const [schedule, tracks] = await Promise.all([api.schedule.state(), api.vocab.tracks()]);
-			program = { schedule, tracks };
-		} else if (kind === 'speaker-roster') {
-			const [roster, categories] = await Promise.all([
-				api.speakers.publicRoster(),
-				api.vocab.speakerCategories()
+	async function load() {
+		failed = false;
+		try {
+			const [library, brand, summary, settings] = await Promise.all([
+				api.templates.list(),
+				api.theme.get(),
+				api.workspace.summary(),
+				api.settings.get()
 			]);
-			lineup = { roster, categories };
-		} else {
-			forms = await api.forms.list();
+			surface = library.surfaces.find((entry) => entry.kind === kind) ?? null;
+			missing = surface === null;
+			theme = brand;
+			// A robots directive is opt-in: the page works either way, and a page that
+			// has already been crawled is far harder to withdraw than one that has not.
+			indexing = settings?.publicIndexing === true;
+			if (summary.event) {
+				eventName = summary.event.name;
+				eventMeta = `${summary.event.dates} · ${summary.event.location}`;
+			}
+			if (kind === 'schedule') {
+				const [schedule, tracks] = await Promise.all([api.schedule.state(), api.vocab.tracks()]);
+				program = { schedule, tracks };
+			} else if (kind === 'speaker-roster') {
+				const [roster, categories] = await Promise.all([
+					api.speakers.publicRoster(),
+					api.vocab.speakerCategories()
+				]);
+				lineup = { roster, categories };
+			} else {
+				const application = api.application;
+				if (application && scope.kind === 'form') {
+					// The served DTO carries what answering needs — field constraints
+					// and option identities — which the flattened template pool does
+					// not; both reads resolve from the one in-flight served answer.
+					const [summaries, served] = await Promise.all([
+						api.forms.list(),
+						application.served({ formId: scope.formId })
+					]);
+					forms = summaries;
+					if (served) {
+						liveApply = {
+							form: served,
+							session: application.session({ formId: served.formId, target: served.target })
+						};
+					}
+				} else {
+					forms = await api.forms.list();
+				}
+			}
+		} catch {
+			failed = true;
 		}
+	}
+
+	onMount(() => {
+		void load();
 	});
 
 	const brandStyle = $derived(
@@ -163,6 +209,14 @@
 				<p class="public__state-title">This page isn’t published yet.</p>
 				<p class="public__state-copy">Check back closer to the event.</p>
 			</div>
+		{:else if failed}
+			<div class="public__state" role="alert">
+				<p class="public__state-title">We couldn’t load this page.</p>
+				<p class="public__state-copy">Try again in a moment.</p>
+				<button type="button" class="ui-button ui-button--primary" onclick={() => void load()}>
+					Try again
+				</button>
+			</div>
 		{:else if !ready}
 			<!-- The page's own shape, held while it arrives, so the first painted
 			     frame is the right geometry rather than an empty screen. -->
@@ -188,6 +242,16 @@
 				categories={lineup.categories}
 				{scope}
 				frame="bare" />
+		{:else if liveApply && theme}
+			<!-- The port's application capability exists and this form serves:
+			     the same surface, taking answers through the one ceremony both
+			     render modes share. -->
+			<FormSurfaceAnswer
+				form={liveApply.form}
+				session={liveApply.session}
+				{theme}
+				{eventName}
+				{eventMeta} />
 		{:else if shownForm && theme}
 			<!--
 				The questions are real and the page is real; taking answers is not

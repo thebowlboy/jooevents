@@ -9,6 +9,8 @@ import {
 	type ServedPublicScheduleDto
 } from '@jooevents/contracts';
 import { defaultThemeRecipe } from '$lib/theme/theme-contract';
+import { createPublicApplicationClient } from './public-application-client';
+import { createPublicApplicationSession } from './public-application-session';
 import type { PublicSurfacePort } from './public-surface-port';
 import type {
 	EventTheme,
@@ -449,6 +451,39 @@ export function createLivePublicSurfacePort(
 				const served = await form();
 				return served === null ? [] : [mapServedFormSummary(served)];
 			}
+		},
+		application: {
+			// The served DTO for the answering surface, sharing the one
+			// in-flight form read with `templates.list()` so both agree on one
+			// served answer.
+			served: (input: { readonly formId: string }) =>
+				shared(`form:${input.formId}`, () =>
+					readPublic<ServedPublicFormDto>(
+						fetcher,
+						`${PUBLIC_FORM_PATH}?formId=${encodeURIComponent(input.formId)}`,
+						formResultSchema
+					)
+				),
+			// The ceremony lane over the same fetcher: mint + begin on start,
+			// autosave while editing, one idempotent submit. Whether the server
+			// actually takes answers is the published apply surface's decision —
+			// an unpublished or rolled-back surface stops the session, and the
+			// page renders that refusal instead of a silently dead form.
+			session: (input: {
+				readonly formId: string;
+				readonly target?: ServedPublicFormDto['target'];
+				readonly continuation?: string;
+			}) =>
+				createPublicApplicationSession({
+					client: createPublicApplicationClient({ fetcher }),
+					formId: input.formId,
+					...(input.target === undefined ? {} : { target: input.target }),
+					...(input.continuation === undefined
+						? {}
+						: { continuation: input.continuation })
+				}),
+			// No public POST exchange serves a handed-off continuation yet.
+			continuationHandoff: { kind: 'not_served' as const }
 		}
 	});
 }
