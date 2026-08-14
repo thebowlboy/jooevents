@@ -60,6 +60,7 @@ export type CloudflareWorkersErrorCode = typeof CLOUDFLARE_WORKERS_ERROR_CODES[n
 
 export const CLOUDFLARE_EMAIL_OBSERVATIONS = Object.freeze([
   'accepted_delivered',
+  'accepted_no_disposition',
   'accepted_permanent_bounce',
   'accepted_queued',
   'accepted_workers',

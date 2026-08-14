@@ -16,9 +16,16 @@ import type { OutboundEmailProviderRegistry } from './registry';
 
 type Awaitable<T> = T | Promise<T>;
 
+/**
+ * The external-effect executor family exists: the server composition mounts a
+ * readiness-check executor and an owner-lane diagnostic send for the one
+ * configured provider registration (deployments without a configured provider
+ * mode compose neither). Provider I/O runs strictly outside every unit of
+ * work, between the executor's own short begin/complete transactions.
+ */
 export const EMAIL_PROVIDER_EXTERNAL_OPERATION_ACTIVATION = Object.freeze({
-  runReadinessCheck: 'withheld_external_effect_executor',
-  sendDiagnosticTest: 'not_enabled'
+  runReadinessCheck: 'external_effect_executor_mounted',
+  sendDiagnosticTest: 'external_effect_executor_mounted'
 } as const);
 
 /** Read-side evidence only. The external-effect executor owns check/head writes. */

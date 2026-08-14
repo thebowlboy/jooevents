@@ -3,6 +3,7 @@ import { parseCeremonyEvidenceId } from '@jooevents/kernel';
 import { openSQLite } from './database';
 import {
   assertIntakeParticipantAttributionSource,
+  createSQLiteCeremonyMintedIntakeParticipantAttributionSource,
   createSQLiteIntakeParticipantAttributionConformance,
   installSQLiteIntakeParticipantAttributionConformanceSchema
 } from './intake-participant-attribution-conformance';
@@ -57,6 +58,54 @@ describe('SQLite Intake participant attribution conformance source', () => {
         SELECT count(*) AS total FROM intake_participant_attribution_conformance
       `).get()?.total).toBe(1);
       sqlite.exec('ROLLBACK');
+    } finally {
+      if (sqlite.inTransaction) sqlite.exec('ROLLBACK');
+      sqlite.close();
+    }
+  });
+
+  test('ceremony-minted attribution mints one immutable identity per ceremony, idempotently', () => {
+    const { sqlite } = openSQLite(':memory:');
+    try {
+      installSQLiteIntakeParticipantAttributionConformanceSchema(sqlite);
+      let minted = 0x10;
+      const source = createSQLiteCeremonyMintedIntakeParticipantAttributionSource(sqlite, {
+        newPersonId: () => id(minted++),
+        newParticipantIdentityId: () => id(minted++)
+      });
+      assertIntakeParticipantAttributionSource(source);
+
+      sqlite.exec('BEGIN IMMEDIATE');
+      const first = source.resolve({
+        ceremonyEvidenceId: parseCeremonyEvidenceId(id(1)),
+        authorityPartitionDigestSha256: 'a'.repeat(64)
+      });
+      expect(first).toEqual({
+        personId: id(0x10),
+        participantIdentityId: id(0x11),
+        evidenceIds: [`public-ceremony:${id(1)}`]
+      });
+      const replayed = source.resolve({
+        ceremonyEvidenceId: parseCeremonyEvidenceId(id(1)),
+        authorityPartitionDigestSha256: 'a'.repeat(64)
+      });
+      expect(replayed).toEqual(first);
+      // A different principal partition never resolves (and never re-mints)
+      // the ceremony's identity: the registered row already owns the ceremony.
+      expect(() => source.resolve({
+        ceremonyEvidenceId: parseCeremonyEvidenceId(id(1)),
+        authorityPartitionDigestSha256: 'b'.repeat(64)
+      })).toThrow();
+      const second = source.resolve({
+        ceremonyEvidenceId: parseCeremonyEvidenceId(id(2)),
+        authorityPartitionDigestSha256: 'b'.repeat(64)
+      });
+      expect(second?.personId).not.toBe(first?.personId);
+      expect(second?.participantIdentityId).not.toBe(first?.participantIdentityId);
+      expect(sqlite.query<{ readonly total: number }, []>(`
+        SELECT count(*) AS total FROM intake_participant_attribution_conformance
+      `).get()?.total).toBe(2);
+      sqlite.exec('COMMIT');
     } finally {
       if (sqlite.inTransaction) sqlite.exec('ROLLBACK');
       sqlite.close();

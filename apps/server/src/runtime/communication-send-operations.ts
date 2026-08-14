@@ -54,7 +54,8 @@ import {
   createDerivedCommitReceiptFactory,
   decisionSendRequestHash,
   materializeDecisionSendBatch,
-  openAdoptedDecisionSnapshot
+  openAdoptedDecisionSnapshot,
+  type CommunicationDeliveryRoute
 } from './communication-send-lane';
 
 /**
@@ -182,6 +183,12 @@ export interface CommunicationSendOperationRuntimeInput {
    * not-delivered (recorder default BLOCKED-2).
    */
   readonly dispatchAfterCommit: () => Promise<void>;
+  /**
+   * Route to the activated outbound provider connection. Absent (the default)
+   * the send specs keep the inert-provider posture: sentinel connection
+   * revision, unconfigured `.invalid` sender, non-scenario external key.
+   */
+  readonly deliveryRoute?: CommunicationDeliveryRoute;
 }
 
 export interface CommunicationSendOperationRuntime {
@@ -521,7 +528,8 @@ export function createCommunicationSendOperationRuntime(
         scope,
         snapshot,
         batchId: parsed.data.batchId,
-        now
+        now,
+        ...(input.deliveryRoute === undefined ? {} : { route: input.deliveryRoute })
       });
       const authorInput = buildDecisionSendAuthorInput({
         scope,

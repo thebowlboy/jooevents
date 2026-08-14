@@ -127,6 +127,55 @@ const UNCONFIGURED_SENDER = (() => {
   });
 })();
 
+export type CommunicationSenderPresentation = Readonly<{
+  fromAddress: string;
+  fromDisplayName?: string;
+  replyToAddress?: string;
+  senderProfileRevisionId: string;
+  senderPresentationContractKey: string;
+  senderPresentationContractVersion: number;
+  senderPresentationDigestSha256: string;
+}>;
+
+/**
+ * Digest-pinned sender presentation for the per-installation deployment
+ * sender identity (`JOOEVENTS_MAIL_*`). Same contract key and digest recipe as
+ * the unconfigured profile, so releases stay verifiable either way.
+ */
+export function buildDeploymentSenderPresentation(sender: Readonly<{
+  fromAddress: string;
+  fromDisplayName?: string;
+  replyToAddress?: string;
+}>): CommunicationSenderPresentation {
+  const presentation = Object.freeze({
+    fromAddress: sender.fromAddress,
+    ...(sender.fromDisplayName === undefined
+      ? {}
+      : { fromDisplayName: sender.fromDisplayName }),
+    ...(sender.replyToAddress === undefined
+      ? {}
+      : { replyToAddress: sender.replyToAddress }),
+    senderProfileRevisionId: 'sender.profile.deployment-env.v1',
+    senderPresentationContractKey: 'sender.presentation.email-v1',
+    senderPresentationContractVersion: 1
+  });
+  return Object.freeze({
+    ...presentation,
+    senderPresentationDigestSha256: digest({ schemaVersion: 1, presentation })
+  });
+}
+
+/**
+ * Route to the one activated outbound provider connection. Absent (the
+ * default), the lane keeps the inert-provider posture above byte for byte:
+ * unconfigured `.invalid` sender, sentinel connection revision, and the
+ * non-scenario external key the deterministic fake terminally rejects.
+ */
+export type CommunicationDeliveryRoute = Readonly<{
+  providerConnectionRevisionId: string;
+  sender: CommunicationSenderPresentation;
+}>;
+
 /**
  * Mirror of the audience-preview repository's private classified binding for
  * adopted snapshots (`profiles('preview')` + `previewBinding` in
@@ -245,7 +294,8 @@ function releaseSpec(release: CommunicationMessageRelease, row: {
   readonly address: NonNullable<
     Extract<AdoptedDecisionSnapshot['rows'][number], { state: 'included' }>['address']
   >;
-}, batchId: string) {
+}, batchId: string, route: CommunicationDeliveryRoute | undefined) {
+  const sender = route?.sender ?? UNCONFIGURED_SENDER;
   return {
     releaseId: release.releaseId,
     deliveryId: deterministicUuid('communication.send.delivery', {
@@ -259,12 +309,18 @@ function releaseSpec(release: CommunicationMessageRelease, row: {
     contentRefId: release.contentRefId,
     reviewedMessageDigestSha256: release.reviewedMessageDigestSha256,
     reviewedEnvelopeDigestSha256: release.reviewedEnvelopeDigestSha256,
-    providerConnectionRevisionId: UNCONFIGURED_PROVIDER_CONNECTION_REVISION_ID,
-    externalDeliveryKey: UNCONFIGURED_EXTERNAL_DELIVERY_KEY,
-    senderProfileRevisionId: UNCONFIGURED_SENDER.senderProfileRevisionId,
-    senderPresentationContractKey: UNCONFIGURED_SENDER.senderPresentationContractKey,
-    senderPresentationContractVersion: UNCONFIGURED_SENDER.senderPresentationContractVersion,
-    senderPresentationDigestSha256: UNCONFIGURED_SENDER.senderPresentationDigestSha256,
+    providerConnectionRevisionId:
+      route?.providerConnectionRevisionId ?? UNCONFIGURED_PROVIDER_CONNECTION_REVISION_ID,
+    externalDeliveryKey: route === undefined
+      ? UNCONFIGURED_EXTERNAL_DELIVERY_KEY
+      : deterministicUuid('communication.send.external-delivery', {
+          batchId,
+          releaseId: release.releaseId
+        }),
+    senderProfileRevisionId: sender.senderProfileRevisionId,
+    senderPresentationContractKey: sender.senderPresentationContractKey,
+    senderPresentationContractVersion: sender.senderPresentationContractVersion,
+    senderPresentationDigestSha256: sender.senderPresentationDigestSha256,
     channelAddressId: row.address.addressRefId,
     channelAddressVersion: row.address.addressVersion,
     addressLookupFingerprintProfile: row.address.lookupFingerprint.profile,
@@ -276,14 +332,18 @@ function releaseSpec(release: CommunicationMessageRelease, row: {
 /**
  * Materializes the reviewed, digest-pinned releases for one adopted snapshot:
  * one immutable release and one deterministic delivery spec per included
- * recipient, sender fixed to the explicit unconfigured `.invalid` profile so
- * the deterministic fake terminally rejects every attempt (BLOCKED-2).
+ * recipient. Without a delivery route (the default) the sender stays the
+ * explicit unconfigured `.invalid` profile and the deterministic fake
+ * terminally rejects every attempt (BLOCKED-2); with the activated provider's
+ * route, specs cite the active connection revision, the configured deployment
+ * sender, and a deterministic per-delivery external key.
  */
 export function materializeDecisionSendBatch(input: {
   readonly scope: { readonly workspaceId: string; readonly eventId: string };
   readonly snapshot: AdoptedDecisionSnapshot;
   readonly batchId: string;
   readonly now: string;
+  readonly route?: CommunicationDeliveryRoute;
 }): MaterializedDecisionSendBatch {
   const summary = input.snapshot.summary;
   const contentRefId = deterministicUuid('communication.send.reviewed-content', {
@@ -316,14 +376,14 @@ export function materializeDecisionSendBatch(input: {
       // The reviewed message digest is the reviewed render's output digest,
       // so "send exactly what was reviewed" is digest-pinned per recipient.
       reviewedMessageDigestSha256: row.render.outputDigestSha256,
-      sender: UNCONFIGURED_SENDER,
+      sender: input.route?.sender ?? UNCONFIGURED_SENDER,
       toAddress: row.address.classifiedValue.value,
       subject: row.render.subject,
       textBody: row.render.plainText,
       createdAt: input.now
     });
     materialized.push(release);
-    specs.push(releaseSpec(release, { address: row.address }, input.batchId));
+    specs.push(releaseSpec(release, { address: row.address }, input.batchId, input.route));
   }
   specs.sort((left, right) => (left.releaseId < right.releaseId ? -1 : 1));
   return Object.freeze({ materialized: Object.freeze(materialized), specs: Object.freeze(specs) });
@@ -474,6 +534,7 @@ export function createCommunicationSendLane(input: {
   readonly classifiedStore: SynchronousClassifiedPayloadStore;
   readonly releases: SQLiteCommunicationMessageReleaseStore;
   readonly clock: { now(): string };
+  readonly deliveryRoute?: CommunicationDeliveryRoute;
 }): CommunicationSendLane {
   function transaction<Value>(work: () => Value): Value {
     if (input.sqlite.inTransaction) {
@@ -566,7 +627,8 @@ export function createCommunicationSendLane(input: {
         scope,
         snapshot,
         batchId: request.batchId,
-        now
+        now,
+        ...(input.deliveryRoute === undefined ? {} : { route: input.deliveryRoute })
       });
       const authorInput = buildDecisionSendAuthorInput({
         scope,

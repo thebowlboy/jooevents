@@ -289,7 +289,7 @@ export const RICH_EPHEMERAL_LIVE_SCENARIO = deepFreeze({
   extensionSlots: Object.freeze({
     submissions: Object.freeze({
       status: 'seedable_unseeded' as const,
-      reason: 'Organizer direct entry (submission.direct_entry.create.draft) is mounted; the public Intake ceremony is not. The fixture seeds no submissions today — an extension may seed them through the registered direct-entry draft + lifecycle commit.'
+      reason: 'Organizer direct entry (submission.direct_entry.create.draft) and the public Intake apply ceremony (application.public.mutate, serving only while a published apply-surface release pins a form) are both mounted. The fixture seeds no submissions and publishes no apply surface today — an extension may seed them through the registered direct-entry draft + lifecycle commit, or publish an apply surface release and drive the public ceremony.'
     }),
     reviewRounds: Object.freeze({
       status: 'requires_submissions' as const,

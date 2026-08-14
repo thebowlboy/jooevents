@@ -149,6 +149,21 @@ function normalizeSuccessfulResponse(
   const totalDispositionCount = result.delivered.length
     + result.permanent_bounces.length
     + result.queued.length;
+  // Field-verified beta contract (2026-08-14, live capture): the normal
+  // acceptance is HTTP 200 with `success: true`, a `message_id`, and all
+  // three per-recipient disposition arrays EMPTY — Wrangler's own send
+  // command reports exactly this shape as plain success. When a disposition
+  // is reported it must be exactly one and must name this recipient; any
+  // other populated shape stays genuinely ambiguous.
+  if (totalDispositionCount === 0) {
+    return Object.freeze({
+      kind: 'accepted',
+      providerMessageId: messageId.data,
+      observation: 'accepted_no_disposition',
+      requestDispatched: true,
+      httpStatus: status
+    });
+  }
   if (totalDispositionCount !== 1) {
     return Object.freeze({
       kind: 'acceptance_unknown',

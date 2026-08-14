@@ -24,14 +24,17 @@ export const COMMUNICATION_PROVIDER_OPERATIONS = Object.freeze({
 });
 
 /**
- * Effects remain absent until the application runtime has an external-effect
- * execution family; ordinary single-unit-of-work handlers must not call a provider.
+ * The two external-effect operations are served by the server composition's
+ * external-effect executor family (mounted only for a configured provider
+ * registration, owner-lane gated behind the provider-manage policy), never by
+ * an ordinary single-unit-of-work handler: provider I/O stays strictly outside
+ * every unit of work.
  */
 export const COMMUNICATION_PROVIDER_OPERATION_ACTIVATION = Object.freeze({
   getConnection: 'read_leaf_ready',
   getReadiness: 'read_leaf_ready',
-  runReadinessCheck: 'withheld_external_effect_executor',
-  sendDiagnosticTest: 'not_enabled'
+  runReadinessCheck: 'external_effect_executor_mounted',
+  sendDiagnosticTest: 'external_effect_executor_mounted'
 } as const);
 
 export interface CommunicationProviderConfigurationReadPort {

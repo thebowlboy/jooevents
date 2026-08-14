@@ -67,25 +67,27 @@ export function createCloudflareApiTokenLease(input: Readonly<{
   });
 }
 
+export type CommunicationsProviderRuntimeActivation = Readonly<{
+  providerCalls: 'mounted' | 'not_mounted';
+  readinessChecks: 'mounted' | 'unmounted';
+  diagnosticTests: 'enabled' | 'not_enabled';
+  callbacks: 'not_supported';
+  inbound: 'not_enabled';
+}>;
+
 export type CommunicationsProviderRuntime = Readonly<{
   registry: OutboundEmailProviderRegistry;
   selected: OutboundEmailProviderSelector | null;
   registration: OutboundEmailProviderRegistration | null;
-  activation: Readonly<{
-    providerCalls: 'not_mounted';
-    readinessChecks: 'unmounted';
-    diagnosticTests: 'not_enabled';
-    callbacks: 'not_supported';
-    inbound: 'not_enabled';
-  }>;
+  activation: CommunicationsProviderRuntimeActivation;
 }>;
 
-const activation = Object.freeze({
-  providerCalls: 'not_mounted' as const,
-  readinessChecks: 'unmounted' as const,
-  diagnosticTests: 'not_enabled' as const,
-  callbacks: 'not_supported' as const,
-  inbound: 'not_enabled' as const
+const inertActivation: CommunicationsProviderRuntimeActivation = Object.freeze({
+  providerCalls: 'not_mounted',
+  readinessChecks: 'unmounted',
+  diagnosticTests: 'not_enabled',
+  callbacks: 'not_supported',
+  inbound: 'not_enabled'
 });
 
 function selector(registration: OutboundEmailProviderRegistration): OutboundEmailProviderSelector {
@@ -115,7 +117,7 @@ export function createCommunicationsProviderRuntime(input: Readonly<{
       registry: createOutboundEmailProviderRegistry([]),
       selected: null,
       registration: null,
-      activation
+      activation: inertActivation
     });
   }
 
@@ -151,5 +153,15 @@ export function createCommunicationsProviderRuntime(input: Readonly<{
   if (registry.resolve(selected) !== registration) {
     throw new TypeError('communications provider registry composition failed');
   }
+  // A registered provider means the composition hands the dispatch worker this
+  // registration's delivery adapter and mounts the diagnostic executor; the
+  // readiness executor is mounted exactly when a concrete probe was composed.
+  const activation: CommunicationsProviderRuntimeActivation = Object.freeze({
+    providerCalls: 'mounted',
+    readinessChecks: input.readinessProbe === undefined ? 'unmounted' : 'mounted',
+    diagnosticTests: 'enabled',
+    callbacks: 'not_supported',
+    inbound: 'not_enabled'
+  });
   return Object.freeze({ registry, selected, registration, activation });
 }

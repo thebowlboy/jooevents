@@ -29,11 +29,15 @@ import {
   organizerPreviewMessageBatchOperationResultSchema,
   organizerSendMessagesOperationResultSchema,
   organizerFormCatalogSchema,
+  organizerFormDetailSchema,
+  organizerSubmissionContactSchema,
   portalEngagementRespondResultSchema,
   portalSnapshotReadResultSchema,
   programVocabularySnapshotReadResultSchema,
+  publicApplicationDraftResumeSchema,
   releaseDraftOperationResultSchema,
   safeOperationManifestSchema,
+  servedPublicFormSchema,
   servedPublicRosterSchema,
   servedPublicScheduleSchema,
   submissionDirectEntryDraftOperationResultSchema
@@ -68,7 +72,15 @@ import {
   schedulePlacementDraftOperationResultSchema,
   schedulePlacementSnapshotReadResultSchema
 } from '@jooevents/schedule-operations';
-import { intakeFormDraftOperationResultSchema } from '@jooevents/intake-operations';
+import {
+  intakeFormDraftOperationResultSchema,
+  intakePublicMutationOperationResultSchema
+} from '@jooevents/intake-operations';
+import {
+  INTAKE_PUBLIC_CONTINUATION_HEADER,
+  INTAKE_PUBLIC_CONTINUATION_MINT_PATH,
+  INTAKE_PUBLIC_FORM_SELECTOR_HEADER
+} from '@jooevents/persistence/intake-public-ceremony';
 import {
   changesetDiffOperationResultSchema,
   changesetLifecycleOperationResultSchema
@@ -933,9 +945,11 @@ describe('ephemeral live Foundation server composition', () => {
       headers: { 'content-type': 'application/json', origin: config.baseUrl },
       body: '{}'
     })).status).toBe(404);
-    expect((await runtime.app.request('/api/public/forms/current')).status).toBe(400);
-    // The unified public registry admits exactly three GET reads; before an
-    // event exists each refuses as an invalid request rather than serving.
+    // The gated public form read fails closed before any apply surface
+    // release exists: the refusal is an undistinguishing 401, never a serve.
+    expect((await runtime.app.request('/api/public/forms/current')).status).toBe(401);
+    // The release reads stay admitted by their per-process policy revision;
+    // before an event exists each refuses as an invalid request.
     expect((await runtime.app.request('/api/public/schedule/current')).status).toBe(400);
     expect((await runtime.app.request('/api/public/speakers/current')).status).toBe(400);
     expect((await runtime.app.request('/api/public/schedule')).status).toBe(404);
@@ -961,12 +975,30 @@ describe('ephemeral live Foundation server composition', () => {
     });
     expect(preEventLink.status).toBe(200);
     expect(await preEventLink.json()).toEqual({ outcome: 'link_requested' });
-    expect((await runtime.app.request('/api/public/forms/application')).status).toBe(404);
+    // The public apply ceremony surface is mounted but fails closed: without
+    // the ceremony headers every request is an invalid one, and a mint for
+    // any form while no apply surface release is published is unavailable.
+    expect((await runtime.app.request('/api/public/forms/application')).status).toBe(400);
     expect((await runtime.app.request('/api/public/forms/application/mutate', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{}'
-    })).status).toBe(404);
+    })).status).toBe(400);
+    expect((await runtime.app.request('/api/public/forms/application/continuations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ schemaVersion: 1, bootstrap: 'a'.repeat(48) })
+    })).status).toBe(400);
+    const preSurfaceMint = await runtime.app.request('/api/public/forms/application/continuations', {
+      method: 'POST',
+      headers: {
+        'jooevents-form-id': crypto.randomUUID(),
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify({ schemaVersion: 1, bootstrap: 'a'.repeat(48) })
+    });
+    expect(preSurfaceMint.status).toBe(409);
+    expect(await preSurfaceMint.json()).toEqual({ kind: 'unavailable' });
     expect((await runtime.app.request('/api/changesets/approvals', {
       method: 'POST',
       headers: { 'content-type': 'application/json', origin: config.baseUrl },
@@ -5008,6 +5040,432 @@ describe('ephemeral live Foundation server composition', () => {
     await expectDenyAll('/embed/speakers');
     await expectDenyAll('/embed/unknown');
     await expectDenyAll('/app/schedule');
+
+    expect(runtime.database.sqlite.query<Record<string, unknown>, []>(
+      'PRAGMA foreign_key_check'
+    ).all()).toEqual([]);
+  }, 120_000);
+
+  test('runs the public apply loop: published surface serves the ceremony end to end and rollback fails the whole surface closed', async () => {
+    const runtime = await createEphemeralLiveRuntime({ config });
+    runtimes.push(runtime);
+    const session = await createOwnerSession(runtime);
+    await provisionOwner(runtime, session);
+    await createEventThroughChangeset({ runtime, session, key: 'apply-loop-event' });
+
+    // The seeded-style CFP: title, name, and email over the canonical registry.
+    const registryResult = fieldRegistrySnapshotReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/field-registry', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (registryResult.kind !== 'success') throw new Error('Field registry read failed.');
+    const registry = registryResult.data;
+    const requireField = (mapsTo: string, kind: string): string => {
+      const id = registry.fields.find(
+        (field) => field.mapsTo === mapsTo && field.kind === kind
+      )?.id;
+      if (!id) throw new Error(`Registry field missing: ${mapsTo}`);
+      return id;
+    };
+    const titleFieldId = requireField('talk.title', 'text');
+    const nameFieldId = requireField('person.name', 'text');
+    const emailFieldId = requireField('person.email', 'email');
+    const included = new Set([titleFieldId, nameFieldId, emailFieldId]);
+    const definition = (name: string) => ({
+      ...formDefinitionInput,
+      name,
+      composition: {
+        excludedFieldIds: registry.fields
+          .filter((field) => field.scope.kind === 'shared'
+            && field.contexts.apply.visible
+            && !included.has(field.id))
+          .map((field) => field.id)
+          .sort(),
+        requiredOverrides: {},
+        optionExposure: {}
+      }
+    });
+    const formCreateDraft = intakeFormDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/forms/drafts/create',
+      key: 'apply-loop-form-create-draft',
+      body: {
+        expectedCatalogVersion: 1,
+        expectedRegistryVersion: registry.version,
+        definition: definition('Public apply CFP')
+      },
+      parse: (value) => value
+    }));
+    if (formCreateDraft.kind !== 'success'
+        || formCreateDraft.data.safeDiff.action !== 'create') {
+      throw new Error('Form create draft failed.');
+    }
+    const formId = formCreateDraft.data.safeDiff.after.id;
+    await commitDraft({ runtime, session, key: 'apply-loop-form-create', draft: formCreateDraft });
+    const openDraft = intakeFormDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/forms/drafts/lifecycle',
+      key: 'apply-loop-form-open-draft',
+      body: {
+        transition: 'publish_and_open',
+        formId,
+        expectedDefinitionVersion: 1,
+        expectedRegistryVersion: registry.version
+      },
+      parse: (value) => value
+    }));
+    if (openDraft.kind !== 'success') throw new Error('Form open draft failed.');
+    await commitDraft({ runtime, session, key: 'apply-loop-form-open', draft: openDraft });
+    const readFormDetail = async () => {
+      const response = await runtime.app.request(
+        `/api/events/current/forms/detail?formId=${formId}`,
+        { headers: eventHeaders({ session, correlationId: crypto.randomUUID() }) }
+      );
+      expect(response.status).toBe(200);
+      const result = await response.json() as { readonly kind?: unknown; readonly data?: unknown };
+      if (result.kind !== 'success') throw new Error('Form detail read failed.');
+      return organizerFormDetailSchema.parse(result.data);
+    };
+    let detail = await readFormDetail();
+    const formVersion1 = detail.currentPublishedVersion?.id;
+    if (!formVersion1) throw new Error('Published form version missing.');
+
+    const readCurrent = (correlation = crypto.randomUUID(), form = formId) =>
+      runtime.app.request(`/api/public/forms/current?formId=${form}`, {
+        headers: { 'x-correlation-id': correlation }
+      });
+    const mint = (form: string, bootstrap: string) =>
+      runtime.app.request(INTAKE_PUBLIC_CONTINUATION_MINT_PATH, {
+        method: 'POST',
+        headers: {
+          [INTAKE_PUBLIC_FORM_SELECTOR_HEADER]: form,
+          'content-type': 'application/json',
+          'x-correlation-id': crypto.randomUUID()
+        },
+        body: JSON.stringify({ schemaVersion: 1, bootstrap })
+      });
+    const mutate = (token: string, body: unknown, key: string) =>
+      runtime.app.request('/api/public/forms/application/mutate', {
+        method: 'POST',
+        headers: {
+          [INTAKE_PUBLIC_FORM_SELECTOR_HEADER]: formId,
+          [INTAKE_PUBLIC_CONTINUATION_HEADER]: token,
+          'content-type': 'application/json',
+          'idempotency-key': key,
+          'x-correlation-id': crypto.randomUUID()
+        },
+        body: JSON.stringify(body)
+      });
+    const resumeRead = (token: string) =>
+      runtime.app.request('/api/public/forms/application', {
+        headers: {
+          [INTAKE_PUBLIC_FORM_SELECTOR_HEADER]: formId,
+          [INTAKE_PUBLIC_CONTINUATION_HEADER]: token,
+          'x-correlation-id': crypto.randomUUID()
+        }
+      });
+
+    // An open form alone publishes nothing: without an apply surface release
+    // the read, mint, and mutate paths all fail closed.
+    expect((await readCurrent()).status).toBe(401);
+    const preSurfaceMint = await mint(formId, 'a'.repeat(48));
+    expect(preSurfaceMint.status).toBe(409);
+    expect(await preSurfaceMint.json()).toEqual({ kind: 'unavailable' });
+    const preSurfaceMutate = await mutate(`gsr_${'x'.repeat(43)}`, {
+      action: 'begin', input: { formId }
+    }, 'apply-loop-pre-surface-begin');
+    expect(preSurfaceMutate.status).toBe(404);
+
+    // Publish the apply surface through the mounted release loop.
+    const styleDraft = releaseDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/releases/drafts',
+      key: 'apply-loop-style-draft',
+      body: {
+        action: 'style_set_publish',
+        recipe: {
+          name: 'Apply default',
+          canvas: '#ffffff',
+          surface: '#f5f5f4',
+          text: '#1c1917',
+          action: '#0f766e',
+          radius: 8,
+          controlHeight: 36
+        },
+        expectedCurrentStyleSetNumber: null
+      },
+      parse: (value) => value
+    }));
+    if (styleDraft.kind !== 'success' || styleDraft.data.safeDiff.action !== 'style_set_publish') {
+      throw new Error('Style set draft failed.');
+    }
+    const styleSetReleaseId = styleDraft.data.safeDiff.after.releaseId;
+    await commitDraft({ runtime, session, key: 'apply-loop-style', draft: styleDraft });
+    const surfaceDraft = releaseDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/releases/drafts',
+      key: 'apply-loop-surface-draft',
+      body: {
+        action: 'surface_publish',
+        kind: 'apply',
+        manifest: { schemaVersion: 1, heading: null, intro: null },
+        styleSetReleaseId,
+        formRef: { formId, formVersionId: formVersion1 },
+        expectedSurfaceHeadVersion: null
+      },
+      parse: (value) => value
+    }));
+    if (surfaceDraft.kind !== 'success' || surfaceDraft.data.safeDiff.action !== 'surface_publish') {
+      throw new Error('Apply surface draft failed.');
+    }
+    const applyRelease1 = surfaceDraft.data.safeDiff.after.activeReleaseId;
+    await commitDraft({ runtime, session, key: 'apply-loop-surface', draft: surfaceDraft });
+
+    // The public read now serves exactly the pinned form.
+    const servedResponse = await readCurrent();
+    expect(servedResponse.status).toBe(200);
+    const servedResult = await servedResponse.json() as {
+      readonly kind?: unknown;
+      readonly data?: unknown;
+    };
+    if (servedResult.kind !== 'success') throw new Error('Served public form read failed.');
+    expect(servedPublicFormSchema.parse(servedResult.data)).toMatchObject({
+      formId,
+      formVersionId: formVersion1
+    });
+
+    // Anonymous ceremony: mint, replay-safe mint, begin, autosave, resume.
+    const mintResponse = await mint(formId, 'a'.repeat(48));
+    expect(mintResponse.status).toBe(201);
+    const minted = await mintResponse.json() as {
+      readonly kind?: unknown;
+      readonly continuation?: unknown;
+    };
+    if (minted.kind !== 'issued' || typeof minted.continuation !== 'string') {
+      throw new Error('Continuation mint failed.');
+    }
+    const token = minted.continuation;
+    const replayMint = await mint(formId, 'a'.repeat(48));
+    expect(replayMint.status).toBe(409);
+    expect(await replayMint.json()).toMatchObject({ kind: 'already_issued' });
+
+    const begin = await mutate(token, { action: 'begin', input: { formId } }, 'apply-loop-begin');
+    expect(begin.status).toBe(200);
+    expect(intakePublicMutationOperationResultSchema.parse(await begin.json())).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'begin',
+        draft: { formId, formVersionId: formVersion1, draftVersion: 1, status: 'in_progress' }
+      }
+    });
+    const speakerTitle = 'Public loop keynote about joined runtimes';
+    const speakerEmail = 'public.applicant@example.test';
+    const answers = [
+      { kind: 'text', fieldId: titleFieldId, value: speakerTitle },
+      { kind: 'text', fieldId: nameFieldId, value: 'Pia Public' },
+      { kind: 'email', fieldId: emailFieldId, value: speakerEmail }
+    ] as const;
+    const save = await mutate(token, {
+      action: 'save', input: { expectedDraftVersion: 1, answers }
+    }, 'apply-loop-save');
+    expect(save.status).toBe(200);
+    expect(intakePublicMutationOperationResultSchema.parse(await save.json()))
+      .toMatchObject({ kind: 'success', data: { action: 'save', draft: { draftVersion: 2 } } });
+    const resume = await resumeRead(token);
+    expect(resume.status).toBe(200);
+    const resumeResult = await resume.json() as {
+      readonly kind?: unknown;
+      readonly data?: unknown;
+    };
+    if (resumeResult.kind !== 'success') throw new Error('Public resume read failed.');
+    const resumeData = publicApplicationDraftResumeSchema.parse(resumeResult.data);
+    expect(resumeData.draft).toMatchObject({
+      formId,
+      formVersionId: formVersion1,
+      draftVersion: 2,
+      status: 'in_progress'
+    });
+    const byFieldId = (list: readonly { readonly fieldId: string }[]) =>
+      [...list].sort((left, right) => left.fieldId < right.fieldId ? -1 : 1);
+    expect(byFieldId(resumeData.answers)).toEqual(byFieldId([...answers]));
+
+    // Submit needs no pre-registered submitter: the identity is minted from
+    // the ceremony evidence inside the same transaction.
+    const submitResponse = await mutate(token, {
+      action: 'submit', input: { expectedDraftVersion: 2 }
+    }, 'apply-loop-submit');
+    expect(submitResponse.status).toBe(200);
+    const submitBody = await submitResponse.json();
+    const submit = intakePublicMutationOperationResultSchema.parse(submitBody);
+    if (submit.kind !== 'success' || submit.data.action !== 'submit') {
+      throw new Error('Public submit failed.');
+    }
+    const submissionId = submit.data.submission.submissionId;
+    expect(submit.data.submission).toMatchObject({ formId, formVersionId: formVersion1 });
+
+    // The submission lands in triage as a public_form arrival.
+    const triageResult = submissionTriageListOperationResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/submissions/triage', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (triageResult.kind !== 'success') throw new Error('Triage list read failed.');
+    const triageRow = triageResult.data.rows.find(
+      (row) => row.triage.submissionId === submissionId
+    );
+    if (!triageRow) throw new Error('Public submission missing from triage.');
+    expect(triageRow.source.source).toBe('public_form');
+    expect(triageRow.arrival.source).toBe('public_form');
+    expect(triageRow.triage.state).toBe('inbox');
+
+    // Ceremony-minted participant attribution: distinct real identities, and
+    // the immutable conformance registry carries exactly one row.
+    expect(count(runtime, 'intake_participant_attribution_conformance')).toBe(1);
+    const contactResponse = await runtime.app.request(
+      `/api/events/current/submissions/contact?submissionId=${submissionId}`,
+      { headers: eventHeaders({ session, correlationId: crypto.randomUUID() }) }
+    );
+    expect(contactResponse.status).toBe(200);
+    const contactResult = await contactResponse.json() as {
+      readonly kind?: unknown;
+      readonly data?: unknown;
+    };
+    if (contactResult.kind !== 'success') throw new Error('Submission contact read failed.');
+    const contact = organizerSubmissionContactSchema.parse(contactResult.data);
+    expect(contact).toMatchObject({ submissionId, email: speakerEmail });
+    expect(contact.personId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(contact.participantIdentityId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(contact.personId).not.toBe(contact.participantIdentityId);
+
+    // Idempotent replay after response loss: identical bytes, no new rows.
+    const beforeReplay = {
+      receipts: count(runtime, 'foundation_trial_operation_receipts'),
+      submissions: count(runtime, 'intake_submission_heads'),
+      arrivals: count(runtime, 'submission_arrival_facts')
+    };
+    const replaySubmit = await mutate(token, {
+      action: 'submit', input: { expectedDraftVersion: 999 }
+    }, 'apply-loop-replay-after-response-loss');
+    expect(replaySubmit.status).toBe(200);
+    expect(await replaySubmit.json()).toEqual(submitBody);
+    expect({
+      receipts: count(runtime, 'foundation_trial_operation_receipts'),
+      submissions: count(runtime, 'intake_submission_heads'),
+      arrivals: count(runtime, 'submission_arrival_facts')
+    }).toEqual(beforeReplay);
+    expect(count(runtime, 'public_mutation_registered_effect_completions')).toBe(1);
+
+    // Classified separation: raw public answers never land in ordinary rows.
+    const serialized = Buffer.from(runtime.database.sqlite.serialize());
+    for (const secret of [speakerTitle, speakerEmail]) {
+      expect(serialized.includes(Buffer.from(secret, 'utf8'))).toBe(false);
+    }
+
+    // Republish the form: the reviewed commit mints version 2 and the
+    // successor apply surface release re-pins it without recomposition.
+    detail = await readFormDetail();
+    const reviseDraft = intakeFormDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/forms/drafts/revise',
+      key: 'apply-loop-revise-draft',
+      body: {
+        formId,
+        expectedDefinitionVersion: detail.head.version,
+        expectedRegistryVersion: detail.registryPin.version,
+        definition: definition('Public apply CFP, revised')
+      },
+      parse: (value) => value
+    }));
+    if (reviseDraft.kind !== 'success') throw new Error('Form revise draft failed.');
+    await commitDraft({ runtime, session, key: 'apply-loop-revise', draft: reviseDraft });
+    detail = await readFormDetail();
+    const republishDraft = intakeFormDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/forms/drafts/publish',
+      key: 'apply-loop-republish-draft',
+      body: {
+        formId,
+        expectedDefinitionVersion: detail.head.version,
+        expectedRegistryVersion: detail.registryPin.version
+      },
+      parse: (value) => value
+    }));
+    if (republishDraft.kind !== 'success') throw new Error('Form republish draft failed.');
+    await commitDraft({ runtime, session, key: 'apply-loop-republish', draft: republishDraft });
+    detail = await readFormDetail();
+    const formVersion2 = detail.currentPublishedVersion?.id;
+    if (!formVersion2 || formVersion2 === formVersion1) {
+      throw new Error('Republished form version missing.');
+    }
+    const mintB = await mint(formId, 'b'.repeat(48));
+    expect(mintB.status).toBe(201);
+    const mintedB = await mintB.json() as {
+      readonly kind?: unknown;
+      readonly continuation?: unknown;
+    };
+    if (mintedB.kind !== 'issued' || typeof mintedB.continuation !== 'string') {
+      throw new Error('Successor continuation mint failed.');
+    }
+    const tokenB = mintedB.continuation;
+    const beginB = await mutate(tokenB, { action: 'begin', input: { formId } }, 'apply-loop-begin-b');
+    expect(beginB.status).toBe(200);
+    expect(intakePublicMutationOperationResultSchema.parse(await beginB.json())).toMatchObject({
+      kind: 'success',
+      data: { action: 'begin', draft: { formId, formVersionId: formVersion2 } }
+    });
+
+    // Roll the apply surface head back to the release pinning version 1: the
+    // pin is superseded, so the whole public surface fails closed at once.
+    const rollbackDraft = releaseDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/releases/drafts',
+      key: 'apply-loop-rollback-draft',
+      body: {
+        action: 'surface_rollback',
+        kind: 'apply',
+        targetReleaseId: applyRelease1,
+        expectedSurfaceHeadVersion: 2
+      },
+      parse: (value) => value
+    }));
+    if (rollbackDraft.kind !== 'success') throw new Error('Apply rollback draft failed.');
+    await commitDraft({ runtime, session, key: 'apply-loop-rollback', draft: rollbackDraft });
+
+    // A post-rollback write refuses with zero rows.
+    const writesBefore = count(runtime, 'intake_public_mutation_receipt_links');
+    const rolledBackSave = await mutate(tokenB, {
+      action: 'save', input: { expectedDraftVersion: 1, answers: [] }
+    }, 'apply-loop-rolled-back-save');
+    expect(rolledBackSave.status).toBe(404);
+    expect(await rolledBackSave.json()).toMatchObject({
+      kind: 'transport_error', code: 'not_available'
+    });
+    expect(count(runtime, 'intake_public_mutation_receipt_links')).toBe(writesBefore);
+    expect((await resumeRead(tokenB)).status).toBe(404);
+
+    // Non-enumeration: the rolled-back form answers byte-identically to an
+    // unknown form at both the mint route and the public form read.
+    const rolledBackMint = await mint(formId, 'c'.repeat(48));
+    const unknownMint = await mint(crypto.randomUUID(), 'c'.repeat(48));
+    expect(rolledBackMint.status).toBe(409);
+    expect(unknownMint.status).toBe(409);
+    const rolledBackMintText = await rolledBackMint.text();
+    expect(rolledBackMintText).toBe(await unknownMint.text());
+    expect(JSON.parse(rolledBackMintText)).toEqual({ kind: 'unavailable' });
+    const readCorrelation = crypto.randomUUID();
+    const rolledBackRead = await readCurrent(readCorrelation);
+    const unknownRead = await readCurrent(readCorrelation, crypto.randomUUID());
+    expect(rolledBackRead.status).toBe(401);
+    expect(unknownRead.status).toBe(401);
+    expect(await rolledBackRead.text()).toBe(await unknownRead.text());
 
     expect(runtime.database.sqlite.query<Record<string, unknown>, []>(
       'PRAGMA foreign_key_check'

@@ -15,6 +15,13 @@ import {
 
 export type CloudflareAcceptedDisposition =
   | 'accepted_delivered'
+  /**
+   * Field-verified normal REST acceptance (2026-08-14): HTTP 200,
+   * `success: true`, a `message_id`, and all three per-recipient disposition
+   * arrays empty. Wrangler's own send command treats exactly this shape as
+   * plain success. Acceptance still never claims delivery.
+   */
+  | 'accepted_no_disposition'
   | 'accepted_permanent_bounce'
   | 'accepted_queued'
   | 'accepted_workers';

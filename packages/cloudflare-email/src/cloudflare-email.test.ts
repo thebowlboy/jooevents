@@ -358,6 +358,44 @@ describe('Cloudflare REST transport', () => {
     }));
   });
 
+  test('accepts the field-captured normal response: message_id with empty dispositions', async () => {
+    // Verbatim live capture (2026-08-14, authorized diagnostic send): the
+    // open-beta API acknowledges the normal accept with a message_id and all
+    // three per-recipient disposition arrays empty; Wrangler's own send
+    // command reports exactly this shape as "Email sent successfully.".
+    const captured = {
+      success: true,
+      errors: [],
+      messages: [],
+      result: {
+        message_id: '<ADjOnhG6hr2MAdzDuHh1Vthg5OxvxAr3G5zc@mail.jooevents.com>',
+        delivered: [],
+        queued: [],
+        permanent_bounces: []
+      }
+    };
+    const provider = restProvider(async () => jsonResponse(captured));
+
+    const outcome = await provider.delivery.submit(provider.delivery.prepare(ordinary()));
+    expect(outcome).toMatchObject({
+      kind: 'accepted',
+      providerMessageId: '<ADjOnhG6hr2MAdzDuHh1Vthg5OxvxAr3G5zc@mail.jooevents.com>'
+    });
+    expect(outcome.evidence.registeredFacts).toContainEqual(expect.objectContaining({
+      factKey: 'cloudflare.observation',
+      enumValue: 'accepted_no_disposition'
+    }));
+
+    // The same shape through the diagnostic grammar — the app's send-test path.
+    const diagnosticOutcome = await provider.diagnostics.submit(
+      provider.diagnostics.prepare(diagnostic())
+    );
+    expect(diagnosticOutcome).toMatchObject({
+      kind: 'accepted',
+      providerMessageId: '<ADjOnhG6hr2MAdzDuHh1Vthg5OxvxAr3G5zc@mail.jooevents.com>'
+    });
+  });
+
   test('uses the fixed endpoint, injected token lease, and REST field names', async () => {
     const runtimeToken = ['runtime', 'token', 'fixture'].join('-');
     let capturedUrl: string | undefined;

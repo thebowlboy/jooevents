@@ -6,6 +6,7 @@ import {
   createReadOperationResultSchema,
   eventCreateDraftOperationResultSchema,
   fieldRegistrySnapshotReadResultSchema,
+  releaseDraftOperationResultSchema,
   safeOperationManifestSchema,
   servedPublicFormSchema
 } from '@jooevents/contracts';
@@ -287,6 +288,66 @@ async function publicRead(
   });
 }
 
+async function expectFailedClosed(
+  runtime: EphemeralLiveRuntime,
+  formId: string
+): Promise<void> {
+  const response = await runtime.app.request(
+    `/api/public/forms/current?formId=${encodeURIComponent(formId)}`,
+    { headers: { 'x-correlation-id': crypto.randomUUID() } }
+  );
+  expect(response.status).toBe(401);
+  expect(await response.json()).toMatchObject({
+    kind: 'transport_error', code: 'unauthenticated', retryable: false
+  });
+}
+
+async function publishApplySurface(
+  runtime: EphemeralLiveRuntime,
+  session: BrowserSession,
+  formRef: { readonly formId: string; readonly formVersionId: string }
+): Promise<void> {
+  const styleDraft = releaseDraftOperationResultSchema.parse(await effect({
+    runtime,
+    session,
+    path: '/api/events/current/releases/drafts',
+    key: 'public-read-style-draft',
+    body: {
+      action: 'style_set_publish',
+      recipe: {
+        name: 'Public read default',
+        canvas: '#ffffff',
+        surface: '#f5f5f4',
+        text: '#1c1917',
+        action: '#0f766e',
+        radius: 8,
+        controlHeight: 36
+      },
+      expectedCurrentStyleSetNumber: null
+    }
+  }));
+  if (styleDraft.kind !== 'success' || styleDraft.data.safeDiff.action !== 'style_set_publish') {
+    throw new Error('public_read_style_set_draft_failed');
+  }
+  await commitDraft({ runtime, session, key: 'public-read-style', draft: styleDraft });
+  const surfaceDraft = releaseDraftOperationResultSchema.parse(await effect({
+    runtime,
+    session,
+    path: '/api/events/current/releases/drafts',
+    key: 'public-read-surface-draft',
+    body: {
+      action: 'surface_publish',
+      kind: 'apply',
+      manifest: { schemaVersion: 1, heading: null, intro: null },
+      styleSetReleaseId: styleDraft.data.safeDiff.after.releaseId,
+      formRef,
+      expectedSurfaceHeadVersion: null
+    }
+  }));
+  if (surfaceDraft.kind !== 'success') throw new Error('public_read_surface_draft_failed');
+  await commitDraft({ runtime, session, key: 'public-read-surface', draft: surfaceDraft });
+}
+
 describe('ephemeral live open public Form read', () => {
   test('serves only the current open safe DTO while every application path stays absent', async () => {
     const runtime = await createEphemeralLiveRuntime({ config });
@@ -306,30 +367,16 @@ describe('ephemeral live open public Form read', () => {
     )).toBe(false);
     expect((await runtime.app.request('/api/public/operations/manifest')).status).toBe(404);
 
-    for (const path of [
-      '/api/public/forms/current',
-      '/api/public/forms/current?formId=not-an-id',
-      `/api/public/forms/current?formId=${crypto.randomUUID()}&formId=${crypto.randomUUID()}`,
-      `/api/public/forms/current?formId=${crypto.randomUUID()}&workspaceId=${runtime.workspaceId}`
-    ]) {
-      const response = await runtime.app.request(path);
-      expect(response.status).toBe(400);
-      expect(await response.json()).toMatchObject({
-        kind: 'transport_error', code: 'invalid_request', retryable: false
-      });
-    }
-
-    const missing = await publicRead(runtime, crypto.randomUUID());
-    expect(missing.result).toMatchObject({
-      kind: 'outcome',
-      outcome: { class: 'conflict', kind: 'intake.not_found', retryable: false }
-    });
+    // Without a published apply surface release NOTHING serves: known,
+    // unknown, and malformed requests alike answer the undistinguishing 401,
+    // because evidence is gated before any input is even parsed.
+    await expectFailedClosed(runtime, crypto.randomUUID());
+    const preSurfaceMalformed = await runtime.app.request('/api/public/forms/current');
+    expect(preSurfaceMalformed.status).toBe(401);
 
     const formId = await createForm(runtime, session);
-    const draft = await publicRead(runtime, formId);
-    expect(draft.result).toMatchObject({
-      kind: 'outcome', outcome: { class: 'conflict', kind: 'intake.not_found' }
-    });
+    // A created — even an open — form alone publishes nothing.
+    await expectFailedClosed(runtime, formId);
 
     const registry = await readFieldRegistry(runtime, session);
     const opened = await changeForm({
@@ -349,6 +396,23 @@ describe('ephemeral live open public Form read', () => {
       throw new Error('public_read_form_publish_and_open_diff_missing');
     }
     const formVersionId = opened.data.safeDiff.publishedVersion.id;
+    await expectFailedClosed(runtime, formId);
+
+    // Publishing the apply surface release activates the read — and only
+    // then do malformed requests earn a 400 instead of the closed 401.
+    await publishApplySurface(runtime, session, { formId, formVersionId });
+    for (const path of [
+      '/api/public/forms/current',
+      '/api/public/forms/current?formId=not-an-id',
+      `/api/public/forms/current?formId=${formId}&formId=${formId}`,
+      `/api/public/forms/current?formId=${formId}&workspaceId=${runtime.workspaceId}`
+    ]) {
+      const response = await runtime.app.request(path);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        kind: 'transport_error', code: 'invalid_request', retryable: false
+      });
+    }
     const anonymous = await publicRead(runtime, formId);
     expect(anonymous.result).toMatchObject({
       kind: 'success',
@@ -389,6 +453,23 @@ describe('ephemeral live open public Form read', () => {
       expect(safeBytes).not.toContain(forbidden);
     }
 
+    // With the surface pinned, probing any OTHER well-formed formId answers
+    // byte-for-byte like no surface at all: ids must not be an oracle for
+    // which form is served. Same correlation id on both sides so the bodies
+    // can be compared exactly.
+    const probeCorrelation = crypto.randomUUID();
+    const probe = async (probedFormId: string) => {
+      const response = await runtime.app.request(
+        `/api/public/forms/current?formId=${encodeURIComponent(probedFormId)}`,
+        { headers: { 'x-correlation-id': probeCorrelation } }
+      );
+      expect(response.status).toBe(401);
+      return response.text();
+    };
+    const unservedProbe = await probe(crypto.randomUUID());
+    const uppercasedProbe = await probe(crypto.randomUUID().toUpperCase());
+    expect(uppercasedProbe).toBe(unservedProbe);
+
     const withOrganizerSession = await publicRead(runtime, formId, session.cookie);
     expect(withOrganizerSession.result.kind).toBe('success');
     if (withOrganizerSession.result.kind !== 'success') {
@@ -396,6 +477,9 @@ describe('ephemeral live open public Form read', () => {
     }
     expect(withOrganizerSession.result.data).toEqual(anonymous.result.data);
 
+    // Closing the form closes the whole gate: the surface release still pins
+    // the form, but a closed form fails the resolution, so the read reverts
+    // to the same undistinguishing 401 an unpublished surface answers.
     await changeForm({
       runtime,
       session,
@@ -403,24 +487,31 @@ describe('ephemeral live open public Form read', () => {
       key: 'public-read-form-close-draft',
       body: { transition: 'close', formId, expectedDefinitionVersion: 2 }
     });
-    const closed = await publicRead(runtime, formId);
-    expect(closed.result).toMatchObject({
-      kind: 'outcome', outcome: { class: 'conflict', kind: 'intake.not_found' }
-    });
+    await expectFailedClosed(runtime, formId);
+    // The gate-refused body and the wrong-id-while-pinned body are the same
+    // bytes under the same correlation id: the two refusals are one refusal.
+    expect(await probe(formId)).toBe(unservedProbe);
 
+    // The application ceremony paths are mounted but sealed: requests
+    // without the ceremony protocol are invalid, and the read binding
+    // answers no method beyond its registered GET.
     for (const [path, init] of [
       ['/api/public/forms/application', undefined],
       ['/api/public/forms/application/continuations', { method: 'POST' }],
       ['/api/public/forms/application/mutate', {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}'
-      }],
-      ['/api/public/forms/current', {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}'
       }]
     ] as const) {
       const response = await runtime.app.request(path, init);
-      expect(response.status).toBe(404);
-      expect(await response.json()).toMatchObject({ code: 'route_not_found' });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        kind: 'transport_error', code: 'invalid_request'
+      });
     }
+    const wrongMethod = await runtime.app.request('/api/public/forms/current', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}'
+    });
+    expect(wrongMethod.status).toBe(404);
+    expect(await wrongMethod.json()).toMatchObject({ code: 'route_not_found' });
   });
 });

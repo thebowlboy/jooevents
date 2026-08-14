@@ -39,12 +39,22 @@ export interface ParticipantChallengeSenderConfig {
 /**
  * Mirrors the Wave-3 send-lane posture for the not-yet-activated provider:
  * a sentinel external delivery key that is not a fake scenario key, so every
- * attempt lands `known_rejected_terminal`. Provider activation replaces this
- * in its own reviewed change.
+ * attempt lands `known_rejected_terminal`. The activation change replaces
+ * these only by composing an explicit `providerRoute` (below); without one,
+ * this inert posture is unchanged.
  */
 export const PARTICIPANT_CHALLENGE_UNCONFIGURED_EXTERNAL_DELIVERY_KEY = 'provider.not-activated';
 export const PARTICIPANT_CHALLENGE_UNCONFIGURED_PROVIDER_CONNECTION_REVISION_ID =
   'provider.connection.not-activated';
+
+/**
+ * Route to the one activated outbound provider connection. When composed, new
+ * sign-in-link deliveries cite the active connection revision and carry a
+ * deterministic per-challenge external delivery key instead of the sentinels.
+ */
+export interface ParticipantChallengeProviderRoute {
+  readonly providerConnectionRevisionId: string;
+}
 
 const TEMPLATE_REVISION_REF_ID = 'template.participant-sign-in-link.v1';
 const SENDER_PROFILE_REVISION_ID = 'sender.profile.participant-auth.v1';
@@ -112,6 +122,7 @@ export function createSQLiteParticipantChallengeDelivery(input: {
   readonly challenges: {
     linkChallengeDelivery(link: { readonly challengeId: string; readonly deliveryId: string }): void;
   };
+  readonly providerRoute?: ParticipantChallengeProviderRoute;
 }): ParticipantChallengeDelivery {
   const portalOrigin = assertPortalOrigin(input.portalOrigin);
   const senderPresentation = Object.freeze({
@@ -190,9 +201,11 @@ export function createSQLiteParticipantChallengeDelivery(input: {
         recipientRefId,
         templateRevisionRefId: TEMPLATE_REVISION_REF_ID,
         contentRefId: release.contentRefId,
-        providerConnectionRevisionId:
-          PARTICIPANT_CHALLENGE_UNCONFIGURED_PROVIDER_CONNECTION_REVISION_ID,
-        externalDeliveryKey: PARTICIPANT_CHALLENGE_UNCONFIGURED_EXTERNAL_DELIVERY_KEY,
+        providerConnectionRevisionId: input.providerRoute?.providerConnectionRevisionId
+          ?? PARTICIPANT_CHALLENGE_UNCONFIGURED_PROVIDER_CONNECTION_REVISION_ID,
+        externalDeliveryKey: input.providerRoute === undefined
+          ? PARTICIPANT_CHALLENGE_UNCONFIGURED_EXTERNAL_DELIVERY_KEY
+          : `participant-sign-in.${effect.challengeId}`,
         senderProfileRevisionId: SENDER_PROFILE_REVISION_ID,
         senderPresentationContractKey: SENDER_PRESENTATION_CONTRACT_KEY,
         senderPresentationContractVersion: SENDER_PRESENTATION_CONTRACT_VERSION,

@@ -23,6 +23,10 @@ import {
 } from './intake-direct-entry-effect-domain';
 import { INTAKE_FORM_CHANGESET_EFFECT_SQL } from './intake-form-changeset-effect-domain';
 import { INTAKE_FORM_DRAFT_EFFECT_SQL } from './intake-form-draft-effect-domain';
+import {
+  SQLITE_INTAKE_PARTICIPANT_ATTRIBUTION_CONFORMANCE_SQL
+} from './intake-participant-attribution-conformance';
+import { SQLITE_INTAKE_PUBLIC_MUTATION_EFFECT_SQL } from './intake-public-mutation-effect-domain';
 import { SQLITE_INTAKE_SQL } from './intake';
 import { SUBMISSION_TRIAGE_CHANGESET_EFFECT_SQL } from './submission-triage-changeset-effect-domain';
 import { SQLITE_SUBMISSION_TRIAGE_DRAFT_EFFECT_SQL } from './submission-triage-draft-effect-domain';
@@ -70,6 +74,7 @@ import { SCHEDULE_PLACEMENT_CHANGESET_EFFECT_SQL } from './schedule-placement-ch
 import { SCHEDULE_PLACEMENT_DRAFT_EFFECT_SQL } from './schedule-placement-draft-effect-domain';
 import { SCHEDULE_PLACEMENT_SQL } from './schedule-placement';
 import { PUBLIC_MUTATION_CONTINUATION_TRIAL_SQL } from './public-mutation-continuation-trial';
+import { SQLITE_PUBLIC_MUTATION_EFFECT_COMPLETION_SQL } from './public-mutation-effect-completion';
 import { READ_IMMUTABLE_AUDIT_TRIAL_SQL } from './read-immutable-audit-trial';
 import { REGISTERED_CONSUMER_OPERATION_TRIAL_SQL } from './registered-consumer-operation-trial';
 import { REGISTERED_JOB_OPERATION_TRIAL_SQL } from './registered-job-operation-trial';
@@ -149,6 +154,15 @@ export const FOUNDATION_EPHEMERAL_SCHEMA_ARTIFACTS: readonly EphemeralSQLiteSche
     schemaArtifact('verified-inbox', VERIFIED_INBOX_TRIAL_SQL),
     schemaArtifact('verified-inbox-processing', VERIFIED_INBOX_PROCESSING_TRIAL_SQL),
     schemaArtifact('public-mutation-continuation', PUBLIC_MUTATION_CONTINUATION_TRIAL_SQL),
+    schemaArtifact(
+      'public-mutation-effect-completion',
+      SQLITE_PUBLIC_MUTATION_EFFECT_COMPLETION_SQL
+    ),
+    schemaArtifact('intake-public-mutation-effect', SQLITE_INTAKE_PUBLIC_MUTATION_EFFECT_SQL),
+    schemaArtifact(
+      'intake-participant-attribution-conformance',
+      SQLITE_INTAKE_PARTICIPANT_ATTRIBUTION_CONFORMANCE_SQL
+    ),
     schemaArtifact('program-vocabulary', PROGRAM_VOCABULARY_TRIAL_SQL),
     schemaArtifact('program-vocabulary-reviewed-commit', PROGRAM_VOCABULARY_REVIEWED_COMMIT_TRIAL_SQL),
     schemaArtifact('session-domain', SESSION_SQL),

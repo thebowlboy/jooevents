@@ -2,6 +2,7 @@ import { createHash, createHmac as createNodeHmac } from 'node:crypto';
 import {
   assertOperatorAuthorityPolicyCatalogCoversOperationRegistry,
   COMMUNICATION_PROVIDER_MANAGE_ACCESS_POLICY,
+  COMMUNICATION_PROVIDER_OPERATIONS,
   composeOperationRegistryModules,
   createApplicationOperationRuntime,
   OperationInputError,
@@ -12,13 +13,19 @@ import {
   createProvisioningService,
   createWorkspaceTeamOperationModule,
   type InvocationEvidence,
+  type OperationRegistryModule,
   WORKSPACE_TEAM_DRAFT_HANDLER_CAPABILITY,
   WORKSPACE_TEAM_DRAFT_REQUEST_HASH_PROFILE,
   WORKSPACE_TEAM_OPERATION_ACCESS,
 } from '@jooevents/application';
+import { createPublicEffectConformanceBoundary } from '@jooevents/application/public-effect-conformance';
+import {
+  createPublicMutationContinuationBoundary
+} from '@jooevents/application/public-mutation-continuation';
 import {
   issueSynchronousClassifiedPayloadEncryptionProfile
 } from '@jooevents/application/synchronous-classified-payload-store';
+import { intakeIdInputSchema, intakeIdSchema } from '@jooevents/contracts';
 import type {
   FormTarget,
   FormTargetReferencePinDto
@@ -42,6 +49,7 @@ import {
   createOrganizerCommunicationReadOperationModule,
   createOutboundEmailDeliveryOperationModule
 } from '@jooevents/communication-operations';
+import type { CloudflareFetch } from '@jooevents/cloudflare-email';
 import {
   DECISION_NOTIFICATION_MERGE_FIELDS,
   createDeterministicFakeEmailProvider,
@@ -49,8 +57,7 @@ import {
   createEmailProviderReadinessReader,
   createHmacOrganizerPreviewOpaqueTokenCodec,
   createOrganizerMergeRegistryRelease,
-  createOrganizerPlainTextRenderStrategyPort,
-  createOutboundEmailProviderRegistry
+  createOrganizerPlainTextRenderStrategyPort
 } from '@jooevents/communications';
 import {
   DEADLINE_DRAFT_REQUEST_HASH_PROFILE,
@@ -129,18 +136,28 @@ import {
   INTAKE_EVENT_MANAGE_ACCESS_POLICY,
   INTAKE_EVENT_READ_ACCESS_POLICY,
   INTAKE_FORM_DRAFT_REQUEST_HASH_PROFILE,
+  INTAKE_PUBLIC_APPLY_UNCONFIGURED_ABUSE_POLICIES,
   INTAKE_PUBLIC_CEREMONY_ACCESS_POLICY,
+  INTAKE_PUBLIC_DRAFT_RESUME_OPERATION,
   INTAKE_PUBLIC_FORM_READ_OPERATION,
+  INTAKE_PUBLIC_MUTATE_OPERATION,
+  INTAKE_PUBLIC_MUTATION_REQUEST_HASH_PROFILE,
   INTAKE_PUBLIC_OPEN_ACCESS_POLICY,
   INTAKE_SUBMISSION_CONTACT_READ_ACCESS_POLICY,
   INTAKE_SUBMISSION_READ_ACCESS_POLICY,
   SUBMISSION_DIRECT_ENTRY_ACCESS_POLICY,
   SUBMISSION_DIRECT_ENTRY_DRAFT_REQUEST_HASH_PROFILE,
+  createApplySurfaceGatedContinuationPolicySource,
+  createApplySurfaceGatedPublicFormScopeSource,
   createIntakeFormDraftOperationModule,
-  createIntakePublicFormReadOperationModule,
+  createIntakePublicConformanceMutationOperationModule,
+  createIntakePublicConformanceReadOperationModule,
   createIntakeReadOperationModule,
+  createOffUnlessConfiguredPublicInputPolicyEvaluator,
+  createOffUnlessConfiguredPublicIntakeBootstrapVerifier,
   createSubmissionDirectEntryDraftOperationModule,
-  type IntakePublicFormScopeSource
+  intakePublicApplyPolicyRevision,
+  type IntakePublicApplySurfaceGate
 } from '@jooevents/intake-operations';
 import {
   evaluateAccess,
@@ -210,8 +227,10 @@ import {
 } from '@jooevents/workspace-operations';
 import {
   canonicalJsonText,
+  parseAuditEventId,
   parseAuthorityCitationId,
   parseCapabilityRevisionId,
+  parseCeremonyEvidenceId,
   parseContractVersion,
   parseEventId,
   parseInstant,
@@ -356,6 +375,25 @@ import {
   type SQLiteIntakeScopeInput
 } from '@jooevents/persistence/intake';
 import {
+  INTAKE_PUBLIC_CONTINUATION_HEADER,
+  INTAKE_PUBLIC_CONTINUATION_MINT_PATH,
+  INTAKE_PUBLIC_FORM_SELECTOR_HEADER,
+  createIntakePublicCeremonyGatedDirectory,
+  createSQLiteCeremonyMintedIntakeParticipantAttributionSource,
+  createSQLiteIntakePublicApplySurfaceGate,
+  intakePublicApplySurfaceCeremonyPinSource
+} from '@jooevents/persistence/intake-public-ceremony';
+import {
+  createSQLiteIntakePublicMutationEffectDomainRegistration,
+  type SQLiteIntakePublicMutationEffectIds
+} from '@jooevents/persistence/intake-public-mutation-effect-domain';
+import {
+  SQLitePublicMutationEffectCompletionPort
+} from '@jooevents/persistence/public-mutation-effect-completion';
+import {
+  SQLitePublicMutationContinuationTrial
+} from '@jooevents/persistence/testing/public-mutation-continuation-trial';
+import {
   SQLiteIntakeSubmissionTriageSourceAdapter,
   SQLiteSubmissionTriageRepository
 } from '@jooevents/persistence/submission-triage';
@@ -449,6 +487,12 @@ import { createAuth, type JooEventsAuth } from '../auth/better-auth';
 import { createBetterAuthOperatorEvidenceVerifier } from '../auth/operator-evidence';
 import { createSQLiteAuthPrincipalReader } from '../auth/principal-reader';
 import type { ServerConfig } from '../config';
+import {
+  loadCommunicationsProviderConfig,
+  loadMailSenderConfig,
+  type CommunicationsProviderConfig,
+  type MailSenderConfig
+} from '../config/communications';
 import { createHttpApp } from '../http/app';
 import type { EmbedFramingPolicySource } from '../http/embed-security';
 import {
@@ -457,11 +501,24 @@ import {
 } from '../http/participant-entry';
 import { createPublicOperationsHttpAdapter } from '../http/public-operations';
 import { createSerialHttpRequestBoundary } from '../http/request-serialization';
+import { createCloudflareTokenVerificationReadinessProbe } from './cloudflare-email-readiness-probe';
 import {
+  buildDeploymentSenderPresentation,
   communicationReleaseLifecycleInertAdapter,
   createCommunicationSendLane,
+  type CommunicationDeliveryRoute,
   type CommunicationSendLane
 } from './communication-send-lane';
+import {
+  createCommunicationsProviderActivation,
+  type CommunicationsProviderActivation
+} from './communications-provider-activation';
+import {
+  createCloudflareApiTokenLease,
+  createCommunicationsProviderRuntime,
+  type OpaqueSecretTextResolver
+} from './communications-provider-runtime';
+import { createDeploymentSecretFileResolver } from './deployment-secret-resolver';
 import {
   createSQLiteCommunicationDeliveryHistorySource
 } from './communication-delivery-history';
@@ -901,6 +958,30 @@ function randomHmacKey(): Uint8Array {
   return crypto.getRandomValues(new Uint8Array(32));
 }
 
+function newPublicCompletionReference(): string {
+  return `pcr_${crypto.randomUUID().replaceAll('-', '')}`;
+}
+
+/**
+ * The intake read and mutation modules each register the shared intake
+ * null-detail schema and operation-audit record profile; when both compose
+ * into the one public registry the second registration must be dropped so
+ * the composition stays duplicate-free.
+ */
+function omitSharedIntakeInfrastructure(module: OperationRegistryModule): OperationRegistryModule {
+  return Object.freeze({
+    ...module,
+    source: Object.freeze({
+      ...module.source,
+      schemas: (module.source.schemas ?? []).filter((entry) =>
+        entry.reference.key !== 'schema.intake.operation.null-detail'
+      ),
+      operationAuditRecordProfiles: (module.source.operationAuditRecordProfiles ?? [])
+        .filter((entry) => entry.reference.key !== 'record-profile.intake.operation-audit')
+    })
+  });
+}
+
 function bootstrapEventSet(
   database: EphemeralSQLiteRuntime,
   workspaceId: ReturnType<typeof parseWorkspaceId>
@@ -951,8 +1032,18 @@ export interface EphemeralLiveRuntime {
    * and by the J-WEB-2 HTTP mounting next.
    */
   readonly communications: CommunicationSendLane;
-  /** One-pass outbound dispatch over the delivery ledger with the inert fake provider. */
+  /**
+   * One-pass outbound dispatch over the delivery ledger: the inert fake
+   * provider by default, the activated registration's delivery adapter when a
+   * provider mode is composed.
+   */
   readonly outboundDispatch: OutboundDispatchLoop;
+  /**
+   * Present only when a provider registration is composed: the activation
+   * lifecycle row handle and the owner-lane external-effect executors
+   * (readiness check, diagnostic send).
+   */
+  readonly providerActivation?: CommunicationsProviderActivation;
   /**
    * Per-request embed framing policy over the current event's surface heads.
    * The Bun request handler stamps `/embed/*` HTML with exactly this
@@ -973,6 +1064,24 @@ export async function createEphemeralLiveRuntime(input: {
    * enables it. See the `/api/portal/entry/dev/issued-link` mount below.
    */
   readonly devFixtures?: boolean;
+  /**
+   * Outbound email provider composition. STRUCTURALLY inert unless an entry
+   * passes it: callers that omit this (every test constructing the runtime
+   * directly) get the empty provider registry, the deterministic fake dispatch
+   * adapter, and the sentinel delivery routes regardless of process env, so no
+   * test run can reach a real provider by accident. The Bun entry loads it
+   * from the deployment environment (`loadCommunicationsProviderConfig`,
+   * `loadMailSenderConfig`); `JOOEVENTS_EMAIL_PROVIDER_MODE` therefore stays
+   * the final, instantly reversible switch.
+   */
+  readonly communications?: {
+    readonly provider: CommunicationsProviderConfig;
+    readonly mailSender?: MailSenderConfig;
+    /** Test seam. Defaults to the `deployment.secret` file resolver. */
+    readonly secretResolver?: OpaqueSecretTextResolver;
+    /** Test seam. Defaults to global fetch. */
+    readonly fetch?: CloudflareFetch;
+  };
 }): Promise<EphemeralLiveRuntime> {
   const database = createFoundationEphemeralSQLiteRuntime();
   try {
@@ -1110,17 +1219,50 @@ export async function createEphemeralLiveRuntime(input: {
         database.sqlite,
         organizerCommunicationClassifiedStore
       );
-    // Recorder default BLOCKED-2 (provider inertness): the deterministic fake
-    // exists ONLY as the dispatch worker's adapter. The configurable-provider
-    // registry stays empty — its outbound-only gate structurally rejects the
-    // fake's full manifest, and an empty registry keeps the provider setup and
-    // readiness surfaces honestly reporting that nothing is configured.
-    // External activation stays withheld, the Cloudflare provider runtime
-    // stays unconsumed, and the send lane's non-scenario external delivery key
-    // makes every fake submission resolve as a terminal known rejection, so
-    // deliveries are recorded honestly as not delivered.
+    // Outbound provider seam. Default posture (no `communications` input, or
+    // mode `disabled`): the deterministic fake exists ONLY as the dispatch
+    // worker's adapter, the configurable-provider registry is composed empty —
+    // its outbound-only gate structurally rejects the fake's full manifest, an
+    // empty registry keeps the provider setup and readiness surfaces honestly
+    // reporting that nothing is configured — and the send lanes' non-scenario
+    // external delivery keys make every fake submission resolve as a terminal
+    // known rejection, so deliveries are recorded honestly as not delivered.
+    // With `mode: 'cloudflare_rest'` (reviewed activation, entry-composed),
+    // the registry carries the one Cloudflare REST registration built over the
+    // opaque `deployment.secret` token resolver and the token-verification
+    // readiness probe; construction performs no provider I/O.
+    const communicationsProviderConfig = input.communications?.provider
+      ?? loadCommunicationsProviderConfig({});
+    const mailSender = input.communications?.mailSender ?? loadMailSenderConfig(process.env);
+    if (communicationsProviderConfig.mode !== 'disabled' && !mailSender.configured) {
+      throw new TypeError(
+        'JOOEVENTS_MAIL_FROM_ADDRESS is required when JOOEVENTS_EMAIL_PROVIDER_MODE is not disabled'
+      );
+    }
+    const providerRuntime = createCommunicationsProviderRuntime({
+      config: communicationsProviderConfig,
+      ...(communicationsProviderConfig.mode === 'cloudflare_rest'
+        ? (() => {
+            const secretResolver = input.communications?.secretResolver
+              ?? createDeploymentSecretFileResolver();
+            const cloudflareFetch: CloudflareFetch = input.communications?.fetch
+              ?? ((request, init) => globalThis.fetch(request, init));
+            return {
+              secretResolver,
+              fetch: cloudflareFetch,
+              readinessProbe: createCloudflareTokenVerificationReadinessProbe({
+                tokenLease: createCloudflareApiTokenLease({
+                  reference: communicationsProviderConfig.apiTokenSecret,
+                  resolver: secretResolver
+                }),
+                fetch: cloudflareFetch
+              })
+            };
+          })()
+        : {})
+    });
     const fakeEmailProvider = createDeterministicFakeEmailProvider();
-    const emailProviderRegistry = createOutboundEmailProviderRegistry([]);
+    const emailProviderRegistry = providerRuntime.registry;
     const emailProviderRepository = new SQLiteEmailProviderConfigurationRepository(
       database.sqlite
     );
@@ -1134,6 +1276,39 @@ export async function createEphemeralLiveRuntime(input: {
       store: emailProviderRepository,
       nowEpochMs: () => Date.now()
     });
+    // Reviewed activation (runbook §4): with the Cloudflare registration in
+    // the registry, stage and activate the one `email_provider_connections`
+    // lifecycle row, and compose the two owner-lane external-effect executors
+    // (readiness check, diagnostic send). Absent a configured provider this
+    // whole block is structurally skipped and nothing below changes.
+    let providerActivation: CommunicationsProviderActivation | undefined;
+    let communicationDeliveryRoute: CommunicationDeliveryRoute | undefined;
+    if (
+      providerRuntime.registration !== null
+      && communicationsProviderConfig.mode === 'cloudflare_rest'
+      && mailSender.configured
+    ) {
+      providerActivation = createCommunicationsProviderActivation({
+        sqlite: database.sqlite,
+        workspaceId,
+        configuration: emailProviderConfiguration,
+        repository: emailProviderRepository,
+        registration: providerRuntime.registration,
+        connectionConfig: Object.freeze({
+          accountId: communicationsProviderConfig.accountId,
+          apiTokenSecret: communicationsProviderConfig.apiTokenSecret
+        }),
+        sender: mailSender,
+        clock,
+        nowEpochMs: () => Date.now(),
+        ids: Object.freeze({ newId: () => crypto.randomUUID() })
+      });
+      const activeConnection = await providerActivation.ensureActiveOutboundConnection();
+      communicationDeliveryRoute = Object.freeze({
+        providerConnectionRevisionId: activeConnection.revisionId,
+        sender: buildDeploymentSenderPresentation(mailSender)
+      });
+    }
     const organizerPlainTextMergeRegistry = createOrganizerMergeRegistryRelease({
       reference: Object.freeze({
         key: 'merge-registry.communication.plain-text',
@@ -1217,6 +1392,142 @@ export async function createEphemeralLiveRuntime(input: {
       database.sqlite,
       submissionTriageSource
     );
+    // ------------------------------------------------------------------
+    // Public CFP submission activation. One published apply-surface gate is
+    // the single serving truth for the anonymous surface: it sources the
+    // public form-read scope, the continuation policy the ceremony boundary
+    // re-resolves on every mint/admit/effect, and the `public_open` policy
+    // revision. The gate follows the workspace's CURRENT event per
+    // resolution, so absence, rollback, closing, re-pinning, and an event
+    // switch all fail closed without recomposition.
+    // ------------------------------------------------------------------
+    const applySurfaceGatesByEvent = new Map<string, IntakePublicApplySurfaceGate>();
+    const applySurfaceGate: IntakePublicApplySurfaceGate = Object.freeze({
+      resolveApplySurface() {
+        const current = events.readCurrentEventState(workspaceId);
+        const currentEventId = current?.currentEvent?.id;
+        if (!currentEventId) {
+          return Object.freeze({
+            kind: 'refused' as const,
+            reason: 'no_published_apply_surface' as const
+          });
+        }
+        let gate = applySurfaceGatesByEvent.get(currentEventId);
+        if (!gate) {
+          gate = createSQLiteIntakePublicApplySurfaceGate({
+            sqlite: database.sqlite,
+            workspaceId,
+            eventId: parseEventId(currentEventId),
+            forms: Object.freeze({
+              readFormHead: (
+                formScope: { readonly workspaceId: string; readonly eventId: string },
+                formId: string
+              ) => intakeRepository.readFormHead(formScope, formId)
+            })
+          });
+          applySurfaceGatesByEvent.set(currentEventId, gate);
+        }
+        return gate.resolveApplySurface();
+      }
+    });
+    const intakePublicContinuationBinding = Object.freeze({
+      key: 'intake.public-apply',
+      version: parseContractVersion(1)
+    });
+    const intakePublicContinuationStore = new SQLitePublicMutationContinuationTrial(
+      database.sqlite,
+      Object.freeze({
+        clock,
+        newAuditEventId: () => parseAuditEventId(crypto.randomUUID()),
+        newCompletionReference: newPublicCompletionReference
+      })
+    );
+    const intakePublicBootstrapVerifier = createOffUnlessConfiguredPublicIntakeBootstrapVerifier();
+    const intakePublicKeyProfile = (key: string) => Object.freeze({
+      reference: Object.freeze({ key, version: parseContractVersion(1) }),
+      keyBytes: randomHmacKey()
+    });
+    const intakePublicCeremonyBoundary = createPublicMutationContinuationBoundary({
+      binding: intakePublicContinuationBinding,
+      policies: createApplySurfaceGatedContinuationPolicySource({
+        gate: applySurfaceGate,
+        binding: intakePublicContinuationBinding,
+        security: {
+          lifetimeMs: 900_000,
+          ...INTAKE_PUBLIC_APPLY_UNCONFIGURED_ABUSE_POLICIES,
+          continuationProfiles: [
+            intakePublicKeyProfile('key-profile.intake.public-continuation')
+          ],
+          principalPartitionProfile:
+            intakePublicKeyProfile('key-profile.intake.public-partition'),
+          bootstrapReplayProfile:
+            intakePublicKeyProfile('key-profile.intake.public-bootstrap-replay')
+        }
+      }),
+      bootstrapVerifiers: Object.freeze({
+        resolve: (reference: { readonly key: string; readonly version: number }) =>
+          reference.key === intakePublicBootstrapVerifier.reference.key
+            && reference.version === intakePublicBootstrapVerifier.reference.version
+            ? intakePublicBootstrapVerifier
+            : undefined
+      }),
+      store: intakePublicContinuationStore,
+      clock,
+      newActionAnchorId: () => crypto.randomUUID(),
+      newCeremonyEvidenceId: () => parseCeremonyEvidenceId(crypto.randomUUID()),
+      newAuditEventId: () => parseAuditEventId(crypto.randomUUID())
+    });
+    const intakePublicEffectCompletion = new SQLitePublicMutationEffectCompletionPort(
+      database.sqlite,
+      Object.freeze({
+        clock,
+        newAuditEventId: () => parseAuditEventId(crypto.randomUUID())
+      })
+    );
+    // The gated directory follows the live pin, so an apply surface release
+    // published after process start serves without recomposition.
+    const intakePublicCeremonies = createIntakePublicCeremonyGatedDirectory({
+      pin: intakePublicApplySurfaceCeremonyPinSource(applySurfaceGate),
+      boundary: intakePublicCeremonyBoundary,
+      completion: intakePublicEffectCompletion
+    });
+    const intakePublicParticipantAttribution =
+      createSQLiteCeremonyMintedIntakeParticipantAttributionSource(database.sqlite, {
+        newPersonId: () => crypto.randomUUID(),
+        newParticipantIdentityId: () => crypto.randomUUID()
+      });
+    const intakePublicInputPolicy = createOffUnlessConfiguredPublicInputPolicyEvaluator({
+      issueEvaluationId: () => crypto.randomUUID()
+    });
+    const intakePublicMutationIds: SQLiteIntakePublicMutationEffectIds = Object.freeze({
+      newPreparationHandle: () => crypto.randomUUID(),
+      newRevisionId: () => crypto.randomUUID(),
+      newPayloadRefId: () => crypto.randomUUID(),
+      newSubmissionId: () => crypto.randomUUID(),
+      newSubmitEvidenceId: () => crypto.randomUUID(),
+      newParticipantEvidenceId: () => crypto.randomUUID(),
+      newConsentEvidenceId: () => crypto.randomUUID(),
+      newFactId: () => crypto.randomUUID(),
+      newPointerId: () => crypto.randomUUID(),
+      newTimelineId: () => crypto.randomUUID(),
+      newCompletionReference: newPublicCompletionReference
+    });
+    const intakePublicMutationDomain = createSQLiteIntakePublicMutationEffectDomainRegistration({
+      sqlite: database.sqlite,
+      workspaceId,
+      repository: intakeRepository,
+      projection: intakeClassifiedProjection,
+      classifiedStore: intakeClassifiedStore,
+      classifiedProfiles: intakeClassifiedProfiles,
+      inputPolicy: intakePublicInputPolicy,
+      ceremonies: intakePublicCeremonies,
+      participantAttribution: intakePublicParticipantAttribution,
+      submissionTriage: createSubmissionTriageSubmitInitializer({
+        store: submissionTriageRepository,
+        ids: Object.freeze({ newArrivalId: () => crypto.randomUUID() })
+      }),
+      ids: intakePublicMutationIds
+    });
     const reviewerAuthoritySource = new SQLiteReviewerAuthoritySource(
       database.sqlite,
       () => clock.now()
@@ -1349,7 +1660,9 @@ export async function createEphemeralLiveRuntime(input: {
     const outboundDispatch = createOutboundDispatchLoop({
       sqlite: database.sqlite,
       ledger: outboundEmailDeliveryLedger,
-      provider: fakeEmailProvider.delivery,
+      // The one composed dispatch adapter: the activated registration's real
+      // delivery adapter, or the deterministic fake in the inert posture.
+      provider: providerRuntime.registration?.delivery ?? fakeEmailProvider.delivery,
       envelopes: createSQLiteOutboundEmailEnvelopeResolver(communicationMessageReleases),
       ids: Object.freeze({ newAttemptId: () => crypto.randomUUID() }),
       clock: Object.freeze({ now: () => new Date().toISOString() })
@@ -1365,7 +1678,10 @@ export async function createEphemeralLiveRuntime(input: {
       previewRepository: organizerCommunicationPreview,
       classifiedStore: organizerCommunicationClassifiedStore,
       releases: communicationMessageReleases,
-      clock
+      clock,
+      ...(communicationDeliveryRoute === undefined
+        ? {}
+        : { deliveryRoute: communicationDeliveryRoute })
     });
     /**
      * Operator HTTP mounting of the send lane (J-WEB-2/P8): the adoption
@@ -1385,7 +1701,10 @@ export async function createEphemeralLiveRuntime(input: {
       clock,
       dispatchAfterCommit: async () => {
         await outboundDispatch.runOnce();
-      }
+      },
+      ...(communicationDeliveryRoute === undefined
+        ? {}
+        : { deliveryRoute: communicationDeliveryRoute })
     });
     const fieldRegistryPolicy = createFieldRegistryOrdinaryPolicy({
       key: 'field_registry.bounded',
@@ -2565,30 +2884,47 @@ export async function createEphemeralLiveRuntime(input: {
         keyBytes: randomHmacKey()
       })
     });
-    const publicFormPolicyRevisionId = parsePublicPolicyRevisionId(crypto.randomUUID());
-    const publicFormAuthority = Object.freeze({
+    // Public intake surface: `public_open` evidence is honored only against a
+    // FRESH gate resolution — the served policy revision IS the active apply
+    // surface release id — and `public_ceremony` evidence resolves through
+    // the gated ceremony directory's own current-authority recheck.
+    const intakePublicReadCrypto = Object.freeze({
+      authorityPrincipalKeyProfile: intakeProfiles.authorityPrincipal,
+      scopePartitionProfile: intakeProfiles.scopePartition,
+      requestCanonicalizationProfile: intakeProfiles.requestCanonicalization
+    });
+    const intakePublicAuthority = Object.freeze({
       resolve(input: Parameters<CurrentAuthorityResolver<InvocationEvidence>['resolve']>[0]) {
-        if (input.evidence.kind !== 'public_open'
-            || input.evidence.publicPolicyRevisionId !== publicFormPolicyRevisionId
+        if (input.evidence.kind === 'public_ceremony') {
+          return intakePublicCeremonies.currentAuthority.resolve(input);
+        }
+        if (input.evidence.kind !== 'public_open') {
+          return Object.freeze({ kind: 'denied' as const, reason: 'lane_mismatch' as const });
+        }
+        const resolution = applySurfaceGate.resolveApplySurface();
+        if (resolution.kind !== 'pinned'
             || input.lane.kind !== 'public_open'
             || input.lane.surface !== 'public_http'
             || input.lane.policy.key !== INTAKE_PUBLIC_OPEN_ACCESS_POLICY.key
             || input.lane.policy.version !== INTAKE_PUBLIC_OPEN_ACCESS_POLICY.version
             || input.operation.name !== INTAKE_PUBLIC_FORM_READ_OPERATION.name
-            || input.operation.version !== INTAKE_PUBLIC_FORM_READ_OPERATION.version) {
+            || input.operation.version !== INTAKE_PUBLIC_FORM_READ_OPERATION.version
+            || input.evidence.publicPolicyRevisionId
+              !== intakePublicApplyPolicyRevision(resolution.pin)) {
           return Object.freeze({ kind: 'denied' as const, reason: 'lane_mismatch' as const });
         }
+        const publicPolicyRevisionId = intakePublicApplyPolicyRevision(resolution.pin);
         return Object.freeze({
           kind: 'authorized' as const,
           authority: Object.freeze({
             actor: Object.freeze({
               kind: 'public_request' as const,
-              publicPolicyRevisionId: publicFormPolicyRevisionId,
+              publicPolicyRevisionId,
               authority: Object.freeze({ kind: 'open_policy' as const })
             }),
             principal: Object.freeze({
               kind: 'public_capability' as const,
-              publicPolicyRevisionId: publicFormPolicyRevisionId,
+              publicPolicyRevisionId,
               authority: Object.freeze({ kind: 'open_policy' as const })
             }),
             lane: input.lane,
@@ -2597,40 +2933,51 @@ export async function createEphemeralLiveRuntime(input: {
               kind: 'public_policy' as const,
               key: INTAKE_PUBLIC_FORM_READ_OPERATION.name
             }]),
-            evidenceIds: Object.freeze(['intake-public-form-read.current']),
+            evidenceIds: resolution.pin.evidenceIds,
             authorityCitationIds: Object.freeze([]),
             evaluatedAt: input.evaluatedAt
           })
         });
       }
     } satisfies CurrentAuthorityResolver<InvocationEvidence>);
-    const publicFormReadOperations = createIntakePublicFormReadOperationModule({
-      policy: INTAKE_PUBLIC_OPEN_ACCESS_POLICY,
-      currentAuthority: publicFormAuthority,
-      publicFormScope: Object.freeze({
-        resolve(input: Parameters<IntakePublicFormScopeSource['resolve']>[0]) {
-          if (input.publicPolicyRevisionId !== publicFormPolicyRevisionId) return undefined;
-          const current = currentEvent.resolveCurrentEvent(workspaceId);
-          if (!current.eventId) return undefined;
-          return Object.freeze({
-            workspaceId,
-            eventId: current.eventId,
-            evidenceIds: Object.freeze([
-              ...current.evidenceIds,
-              `intake-public-form-policy:${publicFormPolicyRevisionId}`
-            ])
-          });
-        }
+    const intakePublicReadOperations = createIntakePublicConformanceReadOperationModule({
+      policies: Object.freeze({
+        publicOpen: INTAKE_PUBLIC_OPEN_ACCESS_POLICY,
+        publicCeremony: INTAKE_PUBLIC_CEREMONY_ACCESS_POLICY
       }),
+      currentAuthority: intakePublicAuthority,
+      publicFormScope: createApplySurfaceGatedPublicFormScopeSource({ gate: applySurfaceGate }),
+      ceremonyScope: intakePublicCeremonies,
       read: Object.freeze({
-        readServedForm: intakeRepository.readServedForm.bind(intakeRepository)
-      }),
+        readServedForm: intakeRepository.readServedForm.bind(intakeRepository),
+        readPublicDraftResume(scope, binding) {
+          const data = intakeRepository.readPublicDraftResume(scope, binding);
+          return data ? Object.freeze({ binding, data }) : undefined;
+        }
+      } satisfies Parameters<typeof createIntakePublicConformanceReadOperationModule>[0]['read']),
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      crypto: intakePublicReadCrypto
+    });
+    const publicEffectBoundary = createPublicEffectConformanceBoundary();
+    const intakePublicMutationOperations = createIntakePublicConformanceMutationOperationModule({
+      policy: INTAKE_PUBLIC_CEREMONY_ACCESS_POLICY,
+      currentAuthority: intakePublicCeremonies.currentAuthority,
+      ceremonyScope: intakePublicCeremonies,
+      publicEffectConformance: publicEffectBoundary,
       clock,
       ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
       crypto: Object.freeze({
-        authorityPrincipalKeyProfile: intakeProfiles.authorityPrincipal,
-        scopePartitionProfile: intakeProfiles.scopePartition,
-        requestCanonicalizationProfile: intakeProfiles.requestCanonicalization
+        ...intakePublicReadCrypto,
+        requestHashSealer: createHmacRequestHashSealer({
+          profile: INTAKE_PUBLIC_MUTATION_REQUEST_HASH_PROFILE,
+          keyBytes: randomHmacKey()
+        }),
+        idempotencyCredentialProfile: intakeProfiles.idempotencyCredential,
+        idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
+          profile: intakeProfiles.idempotencyCredential,
+          keyBytes: randomHmacKey()
+        })
       })
     });
     const releaseDraftOperations = createReleaseDraftOperationModule({
@@ -3457,16 +3804,26 @@ export async function createEphemeralLiveRuntime(input: {
     });
     // Sender identity is per-installation configuration; unset environments
     // use an explicit unconfigured `.invalid` profile (never a hardcoded
-    // production identity), matching the inert-provider posture.
+    // production identity), matching the inert-provider posture. The
+    // auth-specific `JOOEVENTS_AUTH_MAIL_*` names override the deployment-wide
+    // `JOOEVENTS_MAIL_*` sender for this security lane.
+    const participantSenderFallback = mailSender.configured
+      ? mailSender
+      : undefined;
     const participantSenderConfig: ParticipantChallengeSenderConfig = Object.freeze({
       fromAddress: process.env.JOOEVENTS_AUTH_MAIL_FROM_ADDRESS
+        ?? participantSenderFallback?.fromAddress
         ?? 'sign-in@unconfigured.invalid',
       ...(process.env.JOOEVENTS_AUTH_MAIL_FROM_NAME
         ? { fromDisplayName: process.env.JOOEVENTS_AUTH_MAIL_FROM_NAME }
-        : {}),
+        : participantSenderFallback?.fromDisplayName !== undefined
+          ? { fromDisplayName: participantSenderFallback.fromDisplayName }
+          : {}),
       ...(process.env.JOOEVENTS_AUTH_MAIL_REPLY_TO
         ? { replyToAddress: process.env.JOOEVENTS_AUTH_MAIL_REPLY_TO }
-        : {})
+        : participantSenderFallback?.replyToAddress !== undefined
+          ? { replyToAddress: participantSenderFallback.replyToAddress }
+          : {})
     });
     const participantDelivery = createSQLiteParticipantChallengeDelivery({
       sqlite: database.sqlite,
@@ -3478,7 +3835,15 @@ export async function createEphemeralLiveRuntime(input: {
       }),
       sender: participantSenderConfig,
       portalOrigin: input.config.baseUrl,
-      challenges: participantStore
+      challenges: participantStore,
+      ...(communicationDeliveryRoute === undefined
+        ? {}
+        : {
+            providerRoute: Object.freeze({
+              providerConnectionRevisionId:
+                communicationDeliveryRoute.providerConnectionRevisionId
+            })
+          })
     });
     const participantRelationships = createSQLiteParticipantRelationshipSource(database.sqlite);
     const participantIntakeAttribution = createSQLiteIntakeAttributedParticipantSource({
@@ -3559,20 +3924,25 @@ export async function createEphemeralLiveRuntime(input: {
       releaseDraftDomain,
       participantPortalDomain,
       outboundEmailDeliveryDomain,
+      intakePublicMutationDomain,
       ...organizerCommunicationAuthoringDomains,
       ...communicationSendRuntime.effectDomains,
       changesetLifecycle
     ]);
     // The in-transaction authority recheck dispatches by lane: participant
     // invocations re-prove the participant session (without sliding it),
-    // identity standing, and current relationship; everything else re-proves
-    // operator authority. Neither resolver ever answers the other lane.
+    // identity standing, and current relationship; public-ceremony
+    // invocations re-prove the ceremony against the live apply-surface pin
+    // through the gated directory; everything else re-proves operator
+    // authority. No resolver ever answers another resolver's lane.
     const effectRecheckSource = Object.freeze({
       resolveAuthority: (
         recheckInput: Parameters<CurrentAuthorityResolver<InvocationEvidence>['resolve']>[0]
       ) => recheckInput.lane.kind === 'participant'
         ? participantAuthority.resolve(recheckInput)
-        : authority.effectRecheckSource.resolveAuthority(recheckInput),
+        : recheckInput.lane.kind === 'public_ceremony'
+          ? intakePublicCeremonies.currentAuthority.resolve(recheckInput)
+          : authority.effectRecheckSource.resolveAuthority(recheckInput),
       now: authority.effectRecheckSource.now
     });
     const unitOfWork = new SQLiteEffectUnitOfWorkPort(
@@ -3625,13 +3995,16 @@ export async function createEphemeralLiveRuntime(input: {
       unitOfWork,
       newReceiptId: () => crypto.randomUUID()
     });
-    // ONE public registry behind ONE adapter: the intake form read and the
-    // two release reads compose into a single runtime, preserving the
-    // structural `/api/public/` guarantee at one seam.
-    const publicReadRuntime = await createApplicationOperationRuntime({
+    // ONE public registry behind ONE adapter: the gated intake form read,
+    // the ceremony resume read, the two release reads, and the one public
+    // mutation effect compose into a single conformance-checked runtime
+    // sharing the one unit of work, preserving the structural `/api/public/`
+    // guarantee at one seam.
+    const publicRuntime = await publicEffectBoundary.createRuntime({
       source: composeOperationRegistryModules([
-        publicFormReadOperations,
-        releasePublicReadOperations
+        intakePublicReadOperations,
+        releasePublicReadOperations,
+        omitSharedIntakeInfrastructure(intakePublicMutationOperations)
       ]),
       read: {
         operationalTrace: { emit() {} },
@@ -3647,21 +4020,31 @@ export async function createEphemeralLiveRuntime(input: {
       registry: operations.registry
     });
     // Public-registry coverage gate (counterpart of the operator assert):
-    // the composed public surface is exactly the pinned three GET reads and
-    // carries no effect bindings at all.
+    // the composed public surface is exactly the pinned four GET reads and
+    // the one ceremony-guarded effect binding.
     {
-      const publicBindings = publicReadRuntime.registry.publicHttpBindings
+      const publicBindings = publicRuntime.registry.publicHttpBindings
         .map((binding) =>
           `${binding.operationName}@${binding.operationVersion} GET ${binding.path}`)
         .sort();
       const expectedPublicBindings = [
+        `${INTAKE_PUBLIC_DRAFT_RESUME_OPERATION.name}@${INTAKE_PUBLIC_DRAFT_RESUME_OPERATION.version} GET /api/public/forms/application`,
         `${INTAKE_PUBLIC_FORM_READ_OPERATION.name}@${INTAKE_PUBLIC_FORM_READ_OPERATION.version} GET /api/public/forms/current`,
         `${RELEASE_PUBLIC_ROSTER_READ_OPERATION.name}@${RELEASE_PUBLIC_ROSTER_READ_OPERATION.version} GET ${RELEASE_PUBLIC_ROSTER_READ_PATH}`,
         `${RELEASE_PUBLIC_SCHEDULE_READ_OPERATION.name}@${RELEASE_PUBLIC_SCHEDULE_READ_OPERATION.version} GET ${RELEASE_PUBLIC_SCHEDULE_READ_PATH}`
       ].sort();
-      if (publicReadRuntime.registry.publicHttpEffectBindings.length !== 0
-          || publicBindings.length !== expectedPublicBindings.length
-          || publicBindings.some((entry, index) => entry !== expectedPublicBindings[index])) {
+      const publicEffectBindings = publicRuntime.registry.publicHttpEffectBindings
+        .map((binding) =>
+          `${binding.operationName}@${binding.operationVersion} POST ${binding.path}`)
+        .sort();
+      const expectedPublicEffectBindings = [
+        `${INTAKE_PUBLIC_MUTATE_OPERATION.name}@${INTAKE_PUBLIC_MUTATE_OPERATION.version} POST /api/public/forms/application/mutate`
+      ];
+      if (publicBindings.length !== expectedPublicBindings.length
+          || publicBindings.some((entry, index) => entry !== expectedPublicBindings[index])
+          || publicEffectBindings.length !== expectedPublicEffectBindings.length
+          || publicEffectBindings.some((entry, index) =>
+            entry !== expectedPublicEffectBindings[index])) {
         throw new TypeError('ephemeral_public_registry_coverage_mismatch');
       }
     }
@@ -3755,20 +4138,108 @@ export async function createEphemeralLiveRuntime(input: {
       participantOperations: { operations, evidence: participantEvidence },
       requestSerialization
     });
-    const publicReadAdapter = createPublicOperationsHttpAdapter({
-      operations: publicReadRuntime,
+    // Public apply transport (the reviewed activation recipe): the mint route
+    // issues continuations against the live gate — the transport `Origin`
+    // header rides into the bootstrap protocol evidence — and the ceremony
+    // middleware admits every resume/mutate request before the registered
+    // binding runs. A terminal ceremony replays its registered completion; a
+    // stopped one answers an undistinguishing 404.
+    const publicCeremonyEvidenceByRequest = new WeakMap<Request, InvocationEvidence>();
+    app.post(INTAKE_PUBLIC_CONTINUATION_MINT_PATH, async (context) => {
+      const selected = context.req.header(INTAKE_PUBLIC_FORM_SELECTOR_HEADER);
+      if (!selected || selected.includes(',') || !intakeIdSchema.safeParse(selected).success) {
+        return context.json({ kind: 'transport_error', code: 'invalid_request' }, 400);
+      }
+      let payload: unknown;
+      try {
+        payload = await context.req.json();
+      } catch {
+        return context.json({ kind: 'transport_error', code: 'invalid_request' }, 400);
+      }
+      const minted = await intakePublicCeremonies.mint({
+        formId: selected,
+        protocolEvidence: {
+          schemaVersion: 1,
+          bootstrap: (payload as { readonly bootstrap?: unknown } | null)?.bootstrap,
+          origin: context.req.header('origin') ?? null
+        }
+      });
+      context.header('cache-control', 'no-store, max-age=0');
+      return context.json(minted, minted.kind === 'issued' ? 201 : 409);
+    });
+    const intakePublicCeremonyMiddleware = async (
+      context: Parameters<Parameters<typeof app.use>[1]>[0],
+      nextMiddleware: Parameters<Parameters<typeof app.use>[1]>[1]
+    ) => {
+      const selected = context.req.header(INTAKE_PUBLIC_FORM_SELECTOR_HEADER);
+      const continuation = context.req.header(INTAKE_PUBLIC_CONTINUATION_HEADER);
+      if (!selected || selected.includes(',') || !intakeIdSchema.safeParse(selected).success
+          || !continuation || continuation.includes(',')) {
+        return context.json({ kind: 'transport_error', code: 'invalid_request' }, 400);
+      }
+      const admission = intakePublicCeremonies.admit({ formId: selected, continuation });
+      if (admission.kind === 'terminal') {
+        context.header('cache-control', 'no-store, max-age=0');
+        return context.json(admission.receipt.result);
+      }
+      if (admission.kind === 'stopped') {
+        return context.json({ kind: 'transport_error', code: 'not_available' }, 404);
+      }
+      const evidence: InvocationEvidence = Object.freeze({
+        kind: 'public_ceremony',
+        surface: 'public_http',
+        client: { key: 'public.intake-apply' },
+        ceremonyEvidenceId: admission.evidence.ceremonyEvidenceId
+      });
+      publicCeremonyEvidenceByRequest.set(context.req.raw, evidence);
+      await nextMiddleware();
+    };
+    app.use('/api/public/forms/application', intakePublicCeremonyMiddleware);
+    app.use('/api/public/forms/application/mutate', intakePublicCeremonyMiddleware);
+    const publicOperationsAdapter = createPublicOperationsHttpAdapter({
+      operations: publicRuntime,
       evidence: {
-        verify({ binding }) {
+        verify({ request, binding }) {
           if (binding.operationName === INTAKE_PUBLIC_FORM_READ_OPERATION.name
               && binding.operationVersion === INTAKE_PUBLIC_FORM_READ_OPERATION.version
               && binding.path === '/api/public/forms/current') {
+            // Gate-refused form reads answer 401; unknown and rolled-back
+            // surfaces are indistinguishable at this boundary.
+            const resolution = applySurfaceGate.resolveApplySurface();
+            if (resolution.kind !== 'pinned') {
+              return Object.freeze({
+                kind: 'rejected' as const,
+                reason: 'unauthenticated' as const
+              });
+            }
+            // A well-formed formId naming anything but the pinned form gets the
+            // same bytes as no surface at all: probing ids must not distinguish
+            // "not served" from "served under a different id". A malformed id
+            // falls through to the executor's own 400. The producer's
+            // fail-closed scope refusal stays behind this as defense in depth.
+            const requestedFormId = (() => {
+              try {
+                const raw = new URL(request.url).searchParams.get('formId');
+                if (raw === null) return null;
+                const parsed = intakeIdInputSchema.safeParse(raw);
+                return parsed.success ? parsed.data : null;
+              } catch {
+                return null;
+              }
+            })();
+            if (requestedFormId !== null && requestedFormId !== resolution.pin.formId) {
+              return Object.freeze({
+                kind: 'rejected' as const,
+                reason: 'unauthenticated' as const
+              });
+            }
             return Object.freeze({
               kind: 'verified' as const,
               evidence: Object.freeze({
                 kind: 'public_open' as const,
                 surface: 'public_http' as const,
                 client: Object.freeze({ key: 'public.intake-form-read' }),
-                publicPolicyRevisionId: publicFormPolicyRevisionId
+                publicPolicyRevisionId: intakePublicApplyPolicyRevision(resolution.pin)
               })
             });
           }
@@ -3785,11 +4256,25 @@ export async function createEphemeralLiveRuntime(input: {
               })
             });
           }
-          throw new TypeError('ephemeral_public_read_binding_mismatch');
+          if ((binding.operationName === INTAKE_PUBLIC_DRAFT_RESUME_OPERATION.name
+                && binding.operationVersion === INTAKE_PUBLIC_DRAFT_RESUME_OPERATION.version
+                && binding.path === '/api/public/forms/application')
+              || (binding.operationName === INTAKE_PUBLIC_MUTATE_OPERATION.name
+                && binding.operationVersion === INTAKE_PUBLIC_MUTATE_OPERATION.version
+                && binding.path === '/api/public/forms/application/mutate')) {
+            const evidence = publicCeremonyEvidenceByRequest.get(request);
+            return evidence
+              ? Object.freeze({ kind: 'verified' as const, evidence })
+              : Object.freeze({
+                  kind: 'rejected' as const,
+                  reason: 'unauthenticated' as const
+                });
+          }
+          throw new TypeError('ephemeral_public_binding_mismatch');
         }
       }
     });
-    app.route('/', publicReadAdapter);
+    app.route('/', publicOperationsAdapter);
     // Dev-only fixture control for the hash-only challenge store: it hands out a
     // working magic-link token bypassing the mailbox-possession proof the portal
     // ceremony depends on, so its being dev-only must be STRUCTURAL, not a
@@ -3836,6 +4321,86 @@ export async function createEphemeralLiveRuntime(input: {
         });
       });
     }
+    // Owner-lane external-effect executors (runbook §4): mounted ONLY when a
+    // provider registration is composed, gated by the same operator evidence
+    // verifier and the `communication.provider.manage` policy every provider
+    // read already uses. Provider I/O runs inside the executor strictly
+    // outside any database transaction; a denied caller gets a typed refusal.
+    if (providerActivation !== undefined) {
+      const executorActivation = providerActivation;
+      const providerManageLane = parseOperationAccessLane({
+        kind: 'operator',
+        surface: 'operator_http',
+        policy: COMMUNICATION_PROVIDER_MANAGE_ACCESS_POLICY
+      });
+      const providerManageScope = Object.freeze({
+        workspaceId,
+        subjects: Object.freeze([{ kind: 'workspace' as const, id: workspaceId }]),
+        resolutionEvidenceIds: Object.freeze(['workspace.current'])
+      });
+      const requireProviderManageAuthority = async (
+        request: Request,
+        operation: { readonly name: string; readonly version: number }
+      ): Promise<
+        | { readonly kind: 'authorized' }
+        | { readonly kind: 'refused'; readonly status: 401 | 403 }
+      > => {
+        const verified = await evidence.verify({
+          request,
+          correlationId: crypto.randomUUID(),
+          binding: { method: 'POST' } as Parameters<typeof evidence.verify>[0]['binding']
+        });
+        if (verified.kind !== 'verified') {
+          return { kind: 'refused', status: verified.reason === 'unauthenticated' ? 401 : 403 };
+        }
+        const resolution = await authority.resolver.resolve({
+          operation: { name: operation.name, version: operation.version, effect: 'commit' },
+          evidence: verified.evidence as InvocationEvidence,
+          lane: providerManageLane,
+          scope: providerManageScope,
+          evaluatedAt: clock.now()
+        });
+        return resolution.kind === 'authorized'
+          ? { kind: 'authorized' }
+          : { kind: 'refused', status: 403 };
+      };
+      app.post('/api/communications/email-readiness/check', async (context) => {
+        const authorized = await requireProviderManageAuthority(
+          context.req.raw,
+          COMMUNICATION_PROVIDER_OPERATIONS.runReadinessCheck
+        );
+        if (authorized.kind === 'refused') {
+          return context.json({ kind: 'refused' as const }, authorized.status);
+        }
+        const check = await executorActivation.runReadinessCheck();
+        return context.json({ kind: 'completed' as const, check });
+      });
+      app.post('/api/communications/email-diagnostic/send-test', async (context) => {
+        const authorized = await requireProviderManageAuthority(
+          context.req.raw,
+          COMMUNICATION_PROVIDER_OPERATIONS.sendDiagnosticTest
+        );
+        if (authorized.kind === 'refused') {
+          return context.json({ kind: 'refused' as const }, authorized.status);
+        }
+        let payload: unknown;
+        try { payload = await context.req.json(); } catch { payload = undefined; }
+        const recipient = (payload as { readonly recipient?: unknown } | undefined)?.recipient;
+        if (typeof recipient !== 'string') {
+          return context.json({ kind: 'invalid_recipient' as const }, 422);
+        }
+        let diagnostic;
+        try {
+          diagnostic = await executorActivation.sendDiagnosticTest({ recipient });
+        } catch (error) {
+          if (error instanceof TypeError) {
+            return context.json({ kind: 'invalid_recipient' as const }, 422);
+          }
+          throw error;
+        }
+        return context.json({ kind: 'completed' as const, diagnostic });
+      });
+    }
     let closed = false;
     let closeResult: ReturnType<EphemeralSQLiteRuntime['close']> | undefined;
     const close = () => {
@@ -3864,6 +4429,7 @@ export async function createEphemeralLiveRuntime(input: {
       workspaceId,
       communications,
       outboundDispatch,
+      ...(providerActivation === undefined ? {} : { providerActivation }),
       embedFraming,
       close
     });

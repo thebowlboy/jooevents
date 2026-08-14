@@ -10,23 +10,20 @@ import {
   resolveBunListenerConfiguration
 } from '../runtime/request-handler';
 import { validateLiveBuildIdentity } from '../runtime/live-build-identity';
+import { seedJooConPlayground } from './joocon-playground-seed';
 
 const config = loadEphemeralLiveConfig(Bun.env);
 if (config.databaseDriver !== 'sqlite') {
-  throw new Error('The ephemeral live entry currently requires the SQLite adapter.');
+  throw new Error('The seeded ephemeral live entry currently requires the SQLite adapter.');
 }
 
 const buildDirectory = resolve(import.meta.dir, '../../../web/build-live');
 const buildIdentity = validateLiveBuildIdentity(buildDirectory);
 const listener = resolveBunListenerConfiguration(Bun.env);
-// The dev-only issued-link token oracle mounts only in development mode, which
+// Identical listener/runtime composition to the empty ephemeral live entry:
+// the dev-only issued-link token oracle mounts only in development mode, which
 // binds loopback (127.0.0.1). Production mode binds 0.0.0.0, so the oracle is
-// structurally absent beyond loopback — no remote peer can mint a magic-link
-// token there.
-// Outbound email provider composition is entry-owned: the runtime itself
-// defaults to the inert disabled posture, and `JOOEVENTS_EMAIL_PROVIDER_MODE`
-// in the deployment env is the final, instantly reversible activation switch
-// (unset or `disabled` composes the empty registry and the fake dispatcher).
+// structurally absent beyond loopback.
 const runtime = await createEphemeralLiveRuntime({
   config,
   devFixtures: listener.mode === 'development',
@@ -35,6 +32,33 @@ const runtime = await createEphemeralLiveRuntime({
     mailSender: loadMailSenderConfig(Bun.env)
   }
 });
+
+// The playground is filled before the first request is served, so no client
+// ever observes a half-seeded workspace. A failed seed closes the runtime and
+// exits rather than serving a silently incomplete world.
+const speakerEmailOverride = Bun.env.JOOEVENTS_PLAYGROUND_SPEAKER_EMAIL?.trim() || undefined;
+let summary;
+try {
+  summary = await seedJooConPlayground({
+    runtime,
+    config,
+    ...(speakerEmailOverride ? { speakerEmailOverride } : {})
+  });
+} catch (error) {
+  runtime.close();
+  throw error;
+}
+console.log(`[jooevents] seeded playground ${JSON.stringify(summary)}`);
+if (speakerEmailOverride) {
+  console.log("[jooevents] playground speaker email override active for submission 'okonkwo'");
+}
+if (!summary.bootstrapOwnerReservationOpen) {
+  runtime.close();
+  throw new Error(
+    'The bootstrap owner access reservation was consumed by the seed; the human owner could no longer be admitted.'
+  );
+}
+
 const fetch = createRuntimeRequestHandler({
   mode: listener.mode,
   backend: runtime.app.fetch,

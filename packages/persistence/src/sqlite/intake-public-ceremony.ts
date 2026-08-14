@@ -177,11 +177,18 @@ function exactScope(
     && canonicalJsonText(actualSubjects) === canonicalJsonText(expectedSubjects);
 }
 
-export function createIntakePublicCeremonyDirectory(
-  registry: IntakePublicCeremonyBoundaryRegistry
+interface IntakePublicCeremonyEntrySource {
+  /** The entry serving a client-selected form id right now, if any. */
+  entryForSelector(formId: string): IntakePublicCeremonyBoundaryEntry | undefined;
+  /** The entry an already-admitted ceremony must still match right now. */
+  entryForCeremony(
+    admittedEntry: IntakePublicCeremonyBoundaryEntry
+  ): IntakePublicCeremonyBoundaryEntry | undefined;
+}
+
+function buildIntakePublicCeremonyDirectory(
+  source: IntakePublicCeremonyEntrySource
 ): IntakePublicCeremonyDirectory {
-  const entries = registryEntries.get(registry);
-  if (!entries) throw new TypeError('intake_public_ceremony_registry_unsealed');
   const admitted = new Map<CeremonyEvidenceId, {
     readonly entry: IntakePublicCeremonyBoundaryEntry;
     readonly evidence: PublicMutationContinuationEvidence;
@@ -191,8 +198,10 @@ export function createIntakePublicCeremonyDirectory(
     const id = parseCeremonyEvidenceId(ceremonyEvidenceId);
     const admittedCeremony = admitted.get(id);
     if (!admittedCeremony) return undefined;
-    const material = admittedCeremony.entry.boundary.resolveCurrent(id);
-    return material ? exactBinding(admittedCeremony.entry, material) : undefined;
+    const entry = source.entryForCeremony(admittedCeremony.entry);
+    if (!entry) return undefined;
+    const material = entry.boundary.resolveCurrent(id);
+    return material ? exactBinding(entry, material) : undefined;
   };
 
   const currentAuthority: CurrentAuthorityResolver<InvocationEvidence> = Object.freeze({
@@ -219,7 +228,10 @@ export function createIntakePublicCeremonyDirectory(
         return Object.freeze({ kind: 'denied' as const, reason: 'cross_scope' as const });
       }
       const admittedCeremony = admitted.get(input.evidence.ceremonyEvidenceId);
-      const material = admittedCeremony?.entry.boundary.resolveCurrent(
+      const currentEntry = admittedCeremony
+        ? source.entryForCeremony(admittedCeremony.entry)
+        : undefined;
+      const material = currentEntry?.boundary.resolveCurrent(
         input.evidence.ceremonyEvidenceId
       );
       if (!material) return Object.freeze({ kind: 'denied' as const, reason: 'revoked' as const });
@@ -260,13 +272,15 @@ export function createIntakePublicCeremonyDirectory(
       const id = parseCeremonyEvidenceId(ceremonyEvidenceId);
       const admittedCeremony = admitted.get(id);
       if (!admittedCeremony) return undefined;
+      const entry = source.entryForCeremony(admittedCeremony.entry);
+      if (!entry) return undefined;
       const binding = resolveCurrent(id);
       if (!binding) return undefined;
       return Object.freeze({
         binding,
         evidence: admittedCeremony.evidence,
-        boundary: admittedCeremony.entry.boundary,
-        completion: admittedCeremony.entry.completion
+        boundary: entry.boundary,
+        completion: entry.completion
       });
     },
     async mint(input: { readonly formId: string; readonly protocolEvidence: unknown }) {
@@ -274,7 +288,7 @@ export function createIntakePublicCeremonyDirectory(
       try { formId = intakeIdSchema.parse(input.formId); } catch {
         return Object.freeze({ kind: 'unavailable' as const });
       }
-      const entry = entries.get(formId);
+      const entry = source.entryForSelector(formId);
       return entry
         ? entry.boundary.mint({ protocolEvidence: input.protocolEvidence })
         : Object.freeze({ kind: 'unavailable' as const });
@@ -284,7 +298,7 @@ export function createIntakePublicCeremonyDirectory(
       try { formId = intakeIdSchema.parse(input.formId); } catch {
         return Object.freeze({ kind: 'stopped', reason: 'not_available' });
       }
-      const entry = entries.get(formId);
+      const entry = source.entryForSelector(formId);
       if (!entry) return Object.freeze({ kind: 'stopped', reason: 'not_available' });
       const result = entry.boundary.admit({ continuation: input.continuation });
       if (result.kind === 'stopped') return Object.freeze(result);
@@ -311,3 +325,93 @@ export function createIntakePublicCeremonyDirectory(
   issuedDirectories.add(directory);
   return directory;
 }
+
+export function createIntakePublicCeremonyDirectory(
+  registry: IntakePublicCeremonyBoundaryRegistry
+): IntakePublicCeremonyDirectory {
+  const entries = registryEntries.get(registry);
+  if (!entries) throw new TypeError('intake_public_ceremony_registry_unsealed');
+  return buildIntakePublicCeremonyDirectory({
+    entryForSelector: (formId) => entries.get(formId),
+    entryForCeremony: (admittedEntry) => admittedEntry
+  });
+}
+
+/** A live serving pin; absence means the ceremony surface is not published. */
+export interface IntakePublicCeremonyPinSource {
+  resolveCurrentPin(): {
+    readonly formId: string;
+    readonly formVersionId: string;
+  } | undefined;
+}
+
+/**
+ * A directory whose single entry follows a live pin source instead of a
+ * sealed static catalog, so a form pinned by an apply-surface release
+ * published after process start serves without recomposition, and a re-pin
+ * or rollback fails closed on the very next resolution. The pin routes and
+ * cross-checks only; authority still requires the boundary's own current
+ * policy resolution and the durable ceremony store.
+ */
+export function createIntakePublicCeremonyGatedDirectory(input: {
+  readonly pin: IntakePublicCeremonyPinSource;
+  readonly boundary: PublicMutationContinuationBoundary;
+  readonly completion: PublicMutationEffectCompletionPort;
+}): IntakePublicCeremonyDirectory {
+  if (typeof input.pin?.resolveCurrentPin !== 'function'
+      || !input.boundary || typeof input.boundary.mint !== 'function'
+      || typeof input.boundary.admit !== 'function'
+      || typeof input.boundary.resolveCurrent !== 'function'
+      || !input.completion || typeof input.completion.resume !== 'function') {
+    throw new TypeError('intake_public_ceremony_gated_directory_invalid');
+  }
+  const liveEntry = (): IntakePublicCeremonyBoundaryEntry | undefined => {
+    let pin;
+    try {
+      pin = input.pin.resolveCurrentPin();
+    } catch {
+      return undefined;
+    }
+    if (!pin) return undefined;
+    let formId: string;
+    let formVersionId: string;
+    try {
+      formId = intakeIdSchema.parse(pin.formId);
+      formVersionId = intakeIdSchema.parse(pin.formVersionId);
+    } catch {
+      return undefined;
+    }
+    return Object.freeze({
+      formId,
+      formVersionId,
+      boundary: input.boundary,
+      completion: input.completion
+    });
+  };
+  return buildIntakePublicCeremonyDirectory({
+    entryForSelector(formId: string) {
+      const entry = liveEntry();
+      return entry && entry.formId === formId ? entry : undefined;
+    },
+    entryForCeremony() {
+      return liveEntry();
+    }
+  });
+}
+
+/*
+ * Mount surface for the public apply activation. `package.json` subpath
+ * exports are frozen for this change, so the activation producers ship
+ * through this already-exported ceremony module: the published apply-surface
+ * gate and the ceremony-minted submitter attribution source (production
+ * counterpart of the conformance registry's fixture-registered rows).
+ */
+export {
+  createSQLiteIntakePublicApplySurfaceGate,
+  intakePublicApplySurfaceCeremonyPinSource,
+  type IntakePublicApplySurfaceFormHeadSource
+} from './intake-public-apply-surface-gate';
+export {
+  createSQLiteCeremonyMintedIntakeParticipantAttributionSource,
+  type SQLiteCeremonyMintedIntakeParticipantAttributionIds
+} from './intake-participant-attribution-conformance';

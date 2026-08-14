@@ -62,12 +62,12 @@ describe('communication provider application reads', () => {
     expect(result.kind).toBe('outcome');
   });
 
-  test('keeps external-effect operations absent', () => {
+  test('declares the mounted external-effect executor family beside the read leaves', () => {
     expect(COMMUNICATION_PROVIDER_OPERATION_ACTIVATION).toEqual({
       getConnection: 'read_leaf_ready',
       getReadiness: 'read_leaf_ready',
-      runReadinessCheck: 'withheld_external_effect_executor',
-      sendDiagnosticTest: 'not_enabled'
+      runReadinessCheck: 'external_effect_executor_mounted',
+      sendDiagnosticTest: 'external_effect_executor_mounted'
     });
   });
 });

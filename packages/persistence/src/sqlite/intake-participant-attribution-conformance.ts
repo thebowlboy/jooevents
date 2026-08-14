@@ -148,3 +148,46 @@ export function assertIntakeParticipantAttributionSource(
 ): void {
   if (!issuedSources.has(source)) throw new TypeError('intake_participant_attribution_source_unsealed');
 }
+
+export interface SQLiteCeremonyMintedIntakeParticipantAttributionIds {
+  newPersonId(): string;
+  newParticipantIdentityId(): string;
+}
+
+/**
+ * Ceremony-minted submitter identity: no submitter accounts exist, so the
+ * first submit-time resolution for a public ceremony mints a fresh Person and
+ * ParticipantIdentity inside the same transaction, records them immutably
+ * against the ceremony evidence, and every later resolution (idempotent
+ * replay included) returns exactly that registration. The authority-partition
+ * digest still has to match, so evidence from another principal partition
+ * never resolves the minted identity.
+ */
+export function createSQLiteCeremonyMintedIntakeParticipantAttributionSource(
+  sqlite: Database,
+  ids: SQLiteCeremonyMintedIntakeParticipantAttributionIds
+): IntakeParticipantAttributionSource {
+  if (typeof ids?.newPersonId !== 'function' || typeof ids?.newParticipantIdentityId !== 'function') {
+    throw new TypeError('intake_participant_attribution_ids_invalid');
+  }
+  const registry = createSQLiteIntakeParticipantAttributionConformance(sqlite);
+  const source: IntakeParticipantAttributionSource = Object.freeze({
+    resolve(input: Parameters<IntakeParticipantAttributionSource['resolve']>[0]) {
+      const existing = registry.resolve(input);
+      if (existing) return existing;
+      const ceremonyEvidenceId = parseCeremonyEvidenceId(input.ceremonyEvidenceId);
+      registry.register({
+        ceremonyEvidenceId,
+        authorityPartitionDigestSha256: input.authorityPartitionDigestSha256,
+        personId: intakeIdSchema.parse(ids.newPersonId()),
+        participantIdentityId: intakeIdSchema.parse(ids.newParticipantIdentityId()),
+        evidenceIds: [`public-ceremony:${ceremonyEvidenceId}`]
+      });
+      const minted = registry.resolve(input);
+      if (!minted) throw new TypeError('intake_participant_attribution_mint_incoherent');
+      return minted;
+    }
+  });
+  issuedSources.add(source);
+  return source;
+}

@@ -1,0 +1,1162 @@
+import { makeSignature } from 'better-auth/crypto';
+import {
+  accessContextSchema,
+  createReadOperationResultSchema,
+  currentEventSettingsReadResultSchema,
+  decisionDecideDraftOperationResultSchema,
+  engagementChangeDraftOperationResultSchema,
+  engagementSnapshotReadResultSchema,
+  eventCreateDraftOperationResultSchema,
+  eventSettingsUpdateDraftOperationResultSchema,
+  fieldRegistrySnapshotReadResultSchema,
+  organizerFormCatalogSchema,
+  organizerFormDetailSchema,
+  programVocabularySnapshotReadResultSchema,
+  releaseDraftOperationResultSchema,
+  submissionDirectEntryDraftOperationResultSchema,
+  type FormDefinitionCreateAuthorInput,
+  type FormTarget
+} from '@jooevents/contracts';
+import {
+  reviewerRosterChangeDraftOperationResultSchema,
+  reviewerRosterSnapshotReadResultSchema
+} from '@jooevents/contracts/reviewer-roster';
+import {
+  reviewChangeDraftOperationResultSchema,
+  reviewDraftSaveOperationResultSchema,
+  reviewSnapshotReadResultSchema
+} from '@jooevents/contracts/reviews';
+import { sessionCatalogReadResultSchema } from '@jooevents/contracts/sessions';
+import {
+  workspaceTeamDraftOperationResultSchema,
+  workspaceTeamMembersReadResultSchema
+} from '@jooevents/contracts/workspace-team';
+import { changesetLifecycleOperationResultSchema } from '@jooevents/changeset-operations';
+import { normalizeEmail } from '@jooevents/identity-access';
+import { intakeFormDraftOperationResultSchema } from '@jooevents/intake-operations';
+import { programVocabularyDraftOperationResultSchema } from '@jooevents/program-operations';
+import {
+  schedulePlacementDraftOperationResultSchema,
+  schedulePlacementSnapshotReadResultSchema
+} from '@jooevents/schedule-operations';
+import type { ServerConfig } from '../config';
+import type { EphemeralLiveRuntime } from '../runtime/ephemeral-live';
+
+const organizerFormCatalogReadResultSchema = createReadOperationResultSchema(
+  organizerFormCatalogSchema
+);
+const organizerFormDetailReadResultSchema = createReadOperationResultSchema(
+  organizerFormDetailSchema
+);
+
+/**
+ * Seeded workspace principals. Neither address is the configured
+ * `JOOEVENTS_BOOTSTRAP_OWNER_EMAIL`: each seeded principal opens and consumes
+ * its OWN access reservation, so the bootstrap owner reservation minted by
+ * `bootstrapEmptyInstall` stays `open` and the human owner's later Google
+ * sign-in is still admitted into this very workspace as Workspace Admin.
+ */
+const OPERATOR_EMAIL = 'joocon.operator@example.test';
+const REVIEWER_EMAIL = 'joocon.reviewer@example.test';
+
+/**
+ * Reservation permission grants the ephemeral runtime attaches to the bootstrap
+ * owner reservation. The seeded operator holds its own reservation, so the same
+ * three bootstrap-only grants are attached to it verbatim; without
+ * `publication.manage` no principal in this composition could publish.
+ */
+const OPERATOR_PERMISSION_GRANTS = Object.freeze([
+  Object.freeze({
+    permissionId: 'program.vocabulary.manage',
+    reason: 'Seeded playground Program Vocabulary operator grant'
+  }),
+  Object.freeze({
+    permissionId: 'communication.provider.manage',
+    reason: 'Seeded playground email provider operator grant'
+  }),
+  Object.freeze({
+    permissionId: 'publication.manage',
+    reason: 'Seeded playground publication operator grant (bootstrap-only)'
+  })
+] as const);
+
+const EVENT = Object.freeze({
+  name: 'JooCon 2027',
+  timezone: 'Europe/Berlin',
+  startDate: '2027-09-15',
+  endDate: '2027-09-17'
+});
+
+const EVENT_SETTINGS_TEXT = Object.freeze({
+  location: 'Kulturbrauerei, Berlin',
+  venueNote: 'Registration and badge pickup open in Kesselhaus foyer from 08:00.'
+});
+
+/** Review round due date, inside the event window. */
+const REVIEW_DUE_DATE = '2027-09-16';
+
+const ROOMS = Object.freeze([
+  Object.freeze({ key: 'main_stage', name: 'Kesselhaus Main Stage', capacity: 620 }),
+  Object.freeze({ key: 'studio', name: 'Maschinenhaus Studio', capacity: 190 }),
+  Object.freeze({ key: 'workshop_loft', name: 'Workshop Loft', capacity: 64 })
+] as const);
+
+const TRACKS = Object.freeze([
+  Object.freeze({ key: 'agent_systems', name: 'Agent Systems' }),
+  Object.freeze({ key: 'platform_reliability', name: 'Platform & Reliability' }),
+  Object.freeze({ key: 'organizer_craft', name: 'Organizer Craft' })
+] as const);
+
+const FORMATS = Object.freeze([
+  Object.freeze({ key: 'talk', name: 'Talk' }),
+  Object.freeze({ key: 'workshop', name: 'Workshop' }),
+  Object.freeze({ key: 'lightning_talk', name: 'Lightning Talk' }),
+  Object.freeze({ key: 'panel', name: 'Panel' })
+] as const);
+
+type RoomKey = typeof ROOMS[number]['key'];
+type TrackKey = typeof TRACKS[number]['key'];
+type FormatKey = typeof FORMATS[number]['key'];
+type VocabularyKey = RoomKey | TrackKey | FormatKey;
+
+interface SubmissionSpec {
+  readonly key: string;
+  readonly name: string;
+  readonly email: string;
+  readonly title: string;
+  readonly abstract: string;
+}
+
+/**
+ * Featured-talk applications. Their form pins the `Talk` format category, so
+ * every one of them carries the format evidence an accept-with-spawn needs.
+ */
+const FEATURED_SUBMISSIONS: readonly SubmissionSpec[] = Object.freeze([
+  Object.freeze({
+    key: 'okonkwo',
+    name: 'Nadia Okonkwo',
+    email: 'nadia.okonkwo@example.test',
+    title: 'Changesets All the Way Down',
+    abstract: 'Every consequential change in our platform is drafted, diffed, and committed as one typed changeset. This talk walks through what that bought us — and the three places it hurt — after two years of running it in production.'
+  }),
+  Object.freeze({
+    key: 'lindqvist',
+    name: 'Teodor Lindqvist',
+    email: 'teodor.lindqvist@example.test',
+    title: 'The Deadline That Kept Its Promise',
+    abstract: 'Conference deadlines are timezone puzzles wearing a calendar costume. A practical tour of grace windows, display dates, and the moment a reviewer in Auckland and an organizer in Lisbon disagree about what "Friday" means.'
+  }),
+  Object.freeze({
+    key: 'raghunathan',
+    name: 'Priya Raghunathan',
+    email: 'priya.raghunathan@example.test',
+    title: 'Agents That Ask Before They Act',
+    abstract: 'We gave language models the whole organizer toolbox and then took away their ability to write anything directly. What is left is a drafting partner that proposes, explains, and waits. Includes the review surface that made it trustworthy.'
+  }),
+  Object.freeze({
+    key: 'bevilacqua',
+    name: 'Marcus Bevilacqua',
+    email: 'marcus.bevilacqua@example.test',
+    title: 'Schedule Physics for Stubborn Rooms',
+    abstract: 'Rooms overlap, speakers clone themselves, and the catering slot moves. A field guide to constraint checking that refuses the impossible schedule loudly and early, instead of discovering it at 08:55 on day one.'
+  }),
+  Object.freeze({
+    key: 'steinberg',
+    name: 'Hana Steinberg',
+    email: 'hana.steinberg@example.test',
+    title: 'Reviewing 900 Talks Without Losing the Plot',
+    abstract: 'Anonymized rounds, anti-anchoring, and the quiet statistics of a five-point scale. What we learned running a program committee of forty people through three review rounds in six weeks.'
+  })
+]);
+
+/** General-pool applications: no pinned format, so none of them can spawn. */
+const GENERAL_SUBMISSIONS: readonly SubmissionSpec[] = Object.freeze([
+  Object.freeze({
+    key: 'delacroix',
+    name: 'Oscar Delacroix',
+    email: 'oscar.delacroix@example.test',
+    title: 'Why Our CFP Emails Went to Spam',
+    abstract: 'A deliverability postmortem from an event that lost a third of its acceptance notices to a misconfigured sending domain, and the boring checklist that fixed it for good.'
+  }),
+  Object.freeze({
+    key: 'tanabe',
+    name: 'Aiko Tanabe',
+    email: 'aiko.tanabe@example.test',
+    title: 'Volunteer Rotas as a Constraint Problem',
+    abstract: 'Sixty volunteers, four venues, and a spreadsheet that had stopped being a spreadsheet. How we modelled shift coverage properly and gave everyone their lunch break back.'
+  }),
+  Object.freeze({
+    key: 'monteiro',
+    name: 'Rafael Monteiro',
+    email: 'rafael.monteiro@example.test',
+    title: 'Ten Years of Hallway Track Data',
+    abstract: 'We surveyed attendees about the sessions they skipped, every year, for a decade. The results changed how we lay out breaks, sponsor space, and the coffee queue.'
+  }),
+  Object.freeze({
+    key: 'halvorsen',
+    name: 'Ingrid Halvorsen',
+    email: 'ingrid.halvorsen@example.test',
+    title: 'Sponsor Booths Nobody Hates',
+    abstract: 'Sponsorship pays for the event and can quietly ruin it. Layout patterns, expectation setting, and the contract language that keeps the exhibition floor part of the conference rather than a tax on it.'
+  })
+]);
+
+const PLACEMENTS = Object.freeze([
+  Object.freeze({
+    submissionKey: 'okonkwo',
+    roomKey: 'main_stage' as RoomKey,
+    startAt: '2027-09-15T07:30:00.000Z',
+    endAt: '2027-09-15T08:15:00.000Z'
+  }),
+  Object.freeze({
+    submissionKey: 'lindqvist',
+    roomKey: 'studio' as RoomKey,
+    startAt: '2027-09-15T08:30:00.000Z',
+    endAt: '2027-09-15T09:15:00.000Z'
+  }),
+  Object.freeze({
+    submissionKey: 'raghunathan',
+    roomKey: 'main_stage' as RoomKey,
+    startAt: '2027-09-15T09:30:00.000Z',
+    endAt: '2027-09-15T10:15:00.000Z'
+  })
+] as const);
+
+/** Speakers whose engagement the organizer records as confirmed. */
+const CONFIRMED_SUBMISSION_KEYS: readonly string[] = Object.freeze([
+  'okonkwo', 'lindqvist', 'raghunathan'
+]);
+
+const EVALUATIONS = Object.freeze([
+  Object.freeze({ score: 5, comment: 'Concrete, production-grounded, and the diff surface demo lands.' }),
+  Object.freeze({ score: 4, comment: 'Strong material. Ask for one worked timezone example on stage.' }),
+  Object.freeze({ score: 5, comment: 'Exactly the argument this track needs; the refusal cases are the best part.' }),
+  Object.freeze({ score: 3, comment: 'Useful, slightly narrow. Would work better as a lightning talk.' }),
+  Object.freeze({ score: 4, comment: 'Clear structure and honest numbers. Happy to see it programmed.' }),
+  Object.freeze({ score: 4, comment: 'Good fit. Suggest trimming the tooling history at the front.' })
+] as const);
+
+export interface PlaygroundSeedSummary {
+  readonly eventId: string;
+  readonly eventName: string;
+  readonly operatorEmail: string;
+  readonly reviewerEmail: string;
+  readonly bootstrapOwnerEmail: string;
+  readonly bootstrapOwnerReservationOpen: boolean;
+  readonly vocabulary: { readonly rooms: number; readonly tracks: number; readonly formats: number };
+  readonly openForms: number;
+  readonly submissions: number;
+  readonly reviewers: number;
+  readonly reviewAssignments: number;
+  readonly committedReviews: number;
+  readonly accepted: number;
+  readonly waitlisted: number;
+  readonly declined: number;
+  readonly spawnedSessions: number;
+  readonly placements: number;
+  readonly confirmedEngagements: number;
+  readonly releaseNumber: number;
+}
+
+interface SeedPrincipal {
+  readonly authUserId: string;
+  readonly userId: string;
+  readonly cookie: string;
+}
+
+interface SeedContext {
+  readonly runtime: EphemeralLiveRuntime;
+  readonly config: ServerConfig;
+  readonly cookie: string;
+}
+
+interface DraftSelectorSource {
+  readonly data: {
+    readonly changesetId: string;
+    readonly revision: { readonly id: string; readonly digestSha256: string };
+  };
+}
+
+function fail(label: string, detail: unknown): never {
+  throw new TypeError(`joocon_playground_seed_${label}:${JSON.stringify(detail)}`);
+}
+
+/**
+ * Names the session cookie exactly as the composed Better Auth instance reads
+ * it. That instance sets `advanced.useSecureCookies` from the configured base
+ * URL's protocol, and Better Auth prefixes every cookie with `__Secure-` when
+ * that flag is on — so an https deployment (the tailnet preview origin) reads
+ * `__Secure-better-auth.session_token` while an http localhost origin reads the
+ * bare name. Deriving the name from the loaded config keeps the seed correct on
+ * both instead of assuming a development origin. Neither `advanced.cookiePrefix`
+ * nor `advanced.cookies` is configured, so the suffix is Better Auth's default.
+ */
+function sessionCookieName(config: ServerConfig): string {
+  const prefix = new URL(config.baseUrl).protocol === 'https:' ? '__Secure-' : '';
+  return `${prefix}better-auth.session_token`;
+}
+
+function requireSuccess<Result extends { readonly kind: string }>(
+  result: Result,
+  label: string
+): Extract<Result, { readonly kind: 'success' }> {
+  if (result.kind !== 'success') fail(label, result);
+  return result as Extract<Result, { readonly kind: 'success' }>;
+}
+
+async function read<Result>(
+  context: SeedContext,
+  path: string,
+  parse: (value: unknown) => Result
+): Promise<Result> {
+  const response = await context.runtime.app.request(path, {
+    headers: { cookie: context.cookie, 'x-correlation-id': crypto.randomUUID() }
+  });
+  if (response.status !== 200) {
+    fail('read_failed', { path, status: response.status, body: await response.text() });
+  }
+  return parse(await response.json());
+}
+
+async function effect<Result>(input: {
+  readonly context: SeedContext;
+  readonly path: string;
+  readonly key: string;
+  readonly body: unknown;
+  readonly parse: (value: unknown) => Result;
+}): Promise<Result> {
+  const response = await input.context.runtime.app.request(input.path, {
+    method: 'POST',
+    headers: {
+      cookie: input.context.cookie,
+      origin: input.context.config.baseUrl,
+      'content-type': 'application/json',
+      'idempotency-key': input.key,
+      'x-correlation-id': crypto.randomUUID()
+    },
+    body: JSON.stringify(input.body)
+  });
+  if (response.status !== 200) {
+    fail('effect_failed', { path: input.path, status: response.status, body: await response.text() });
+  }
+  return input.parse(await response.json());
+}
+
+/**
+ * Proposes and commits an authored changeset revision through the shared
+ * lifecycle routes. A freshly authored head is always at version 1, and the
+ * proposal's own served diff carries the head version the commit must pin.
+ */
+async function commitDraft(
+  context: SeedContext,
+  key: string,
+  draft: DraftSelectorSource,
+  headVersion = 1
+): Promise<void> {
+  const selector = Object.freeze({
+    changesetId: draft.data.changesetId,
+    revisionId: draft.data.revision.id,
+    revisionDigest: draft.data.revision.digestSha256
+  });
+  const proposal = requireSuccess(changesetLifecycleOperationResultSchema.parse(await effect({
+    context,
+    path: '/api/changesets/proposals',
+    key: `${key}-propose`,
+    body: { ...selector, expectedHeadVersion: headVersion },
+    parse: (value) => value
+  })), `${key}_proposal`);
+  if (proposal.data.action !== 'propose') fail(`${key}_proposal_invalid`, proposal.data.action);
+  const committed = requireSuccess(changesetLifecycleOperationResultSchema.parse(await effect({
+    context,
+    path: '/api/changesets/commits',
+    key: `${key}-commit`,
+    body: { ...selector, expectedHeadVersion: proposal.data.diff.headVersion },
+    parse: (value) => value
+  })), `${key}_commit`);
+  if (committed.data.action !== 'commit') fail(`${key}_commit_invalid`, committed.data.action);
+}
+
+/**
+ * Mints one workspace principal through the sanctioned admission seam: raw
+ * Better Auth rows plus an OWN open access reservation that
+ * `/api/me/access-context` consumes. No registered operation can admit a brand
+ * new principal in this composition, and every JooEvents-domain write past
+ * admission goes through operations.
+ */
+async function createSeededPrincipal(input: {
+  readonly runtime: EphemeralLiveRuntime;
+  readonly config: ServerConfig;
+  readonly email: string;
+  readonly displayName: string;
+  readonly rolePresetKey: 'workspace_admin' | 'viewer';
+  readonly permissionGrants?: readonly { readonly permissionId: string; readonly reason: string }[];
+}): Promise<SeedPrincipal> {
+  const { runtime, config } = input;
+  const now = Date.now();
+  const role = runtime.database.sqlite.query<{ readonly id: string }, [string, string]>(`
+    SELECT id FROM roles
+     WHERE workspace_id = ? AND source_preset_key = ? AND archived_at IS NULL
+  `).get(runtime.workspaceId, input.rolePresetKey);
+  if (!role) fail('role_preset_missing', input.rolePresetKey);
+
+  const reservationId = crypto.randomUUID();
+  // Reservations are matched against the normalized verified claim, so the row
+  // is written through the same normalizer `bootstrapEmptyInstall` uses.
+  runtime.database.sqlite.query(`
+    INSERT INTO access_reservations (
+      id, workspace_id, normalized_email, status, created_at, version
+    ) VALUES (?, ?, ?, 'open', ?, 1)
+  `).run(reservationId, runtime.workspaceId, normalizeEmail(input.email), now);
+  runtime.database.sqlite.query(`
+    INSERT INTO reservation_role_assignments (
+      id, reservation_id, role_id, scope_kind, event_id
+    ) VALUES (?, ?, ?, 'workspace', NULL)
+  `).run(crypto.randomUUID(), reservationId, role.id);
+  const grantInsert = runtime.database.sqlite.query(`
+    INSERT INTO reservation_permission_overrides (
+      id, reservation_id, permission_id, effect, scope_kind, event_id, reason
+    ) VALUES (?, ?, ?, 'grant', 'workspace', NULL, ?)
+  `);
+  for (const grant of input.permissionGrants ?? []) {
+    grantInsert.run(crypto.randomUUID(), reservationId, grant.permissionId, grant.reason);
+  }
+
+  const authUserId = crypto.randomUUID();
+  const rawToken = crypto.randomUUID();
+  runtime.database.sqlite.query(`
+    INSERT INTO auth_users (
+      id, name, email, email_verified, image, created_at, updated_at
+    ) VALUES (?, ?, ?, 1, NULL, ?, ?)
+  `).run(authUserId, input.displayName, input.email, now, now);
+  runtime.database.sqlite.query(`
+    INSERT INTO auth_accounts (
+      id, account_id, provider_id, user_id, created_at, updated_at
+    ) VALUES (?, ?, 'google', ?, ?, ?)
+  `).run(crypto.randomUUID(), `joocon-playground-${crypto.randomUUID()}`, authUserId, now, now);
+  runtime.database.sqlite.query(`
+    INSERT INTO auth_sessions (
+      id, token, user_id, expires_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?)
+  `).run(crypto.randomUUID(), rawToken, authUserId, now + 30 * 24 * 60 * 60 * 1000, now, now);
+
+  const secret = config.authSecrets[0]?.value;
+  if (!secret) fail('auth_secret_missing', input.email);
+  const signature = await makeSignature(rawToken, secret);
+  const cookie = `${sessionCookieName(config)}=${rawToken}.${signature}`;
+  const provisioned = await runtime.app.request('/api/me/access-context', {
+    headers: { cookie, 'x-correlation-id': crypto.randomUUID() }
+  });
+  if (provisioned.status !== 200) {
+    fail('principal_provisioning_failed', { email: input.email, status: provisioned.status });
+  }
+  // The route answers 200 for an unrecognized cookie (`anonymous`) and for a
+  // refused admission (`blocked`) alike, so the served context — not the status
+  // — is the evidence that this principal was admitted into THIS workspace.
+  // `active` is also the proof its own reservation consumed, whatever
+  // `JOOEVENTS_ADMISSION_MODE` is and whichever address the bootstrap owner uses.
+  const context = accessContextSchema.parse(await provisioned.json());
+  if (context.state !== 'active' || context.workspace.id !== runtime.workspaceId) {
+    fail('principal_not_admitted', {
+      email: input.email,
+      cookieName: sessionCookieName(config),
+      baseUrl: config.baseUrl,
+      admissionMode: config.admissionMode,
+      served: context
+    });
+  }
+  const link = runtime.database.sqlite.query<{
+    readonly user_id: string;
+    readonly provisioning_state: string;
+  }, [string]>(`
+    SELECT user_id, provisioning_state FROM auth_user_links WHERE auth_user_id = ?
+  `).get(authUserId);
+  if (!link || link.provisioning_state !== 'ready') {
+    fail('principal_link_missing', { email: input.email, link: link ?? null });
+  }
+  return Object.freeze({ authUserId, userId: link.user_id, cookie });
+}
+
+async function readVocabulary(context: SeedContext) {
+  return requireSuccess(programVocabularySnapshotReadResultSchema.parse(await read(
+    context, '/api/events/current/program-vocabulary', (value) => value
+  )), 'vocabulary_read').data;
+}
+
+async function readFieldRegistry(context: SeedContext) {
+  return requireSuccess(fieldRegistrySnapshotReadResultSchema.parse(await read(
+    context, '/api/events/current/field-registry', (value) => value
+  )), 'field_registry_read').data;
+}
+
+async function readFormCatalog(context: SeedContext) {
+  return requireSuccess(organizerFormCatalogReadResultSchema.parse(await read(
+    context, '/api/events/current/forms', (value) => value
+  )), 'form_catalog_read').data;
+}
+
+async function readFormDetail(context: SeedContext, formId: string) {
+  return requireSuccess(organizerFormDetailReadResultSchema.parse(await read(
+    context, `/api/events/current/forms/detail?formId=${encodeURIComponent(formId)}`, (value) => value
+  )), 'form_detail_read').data;
+}
+
+async function readSessionCatalog(context: SeedContext) {
+  return requireSuccess(sessionCatalogReadResultSchema.parse(await read(
+    context, '/api/events/current/sessions', (value) => value
+  )), 'session_catalog_read').data;
+}
+
+async function readEngagements(context: SeedContext) {
+  return requireSuccess(engagementSnapshotReadResultSchema.parse(await read(
+    context, '/api/events/current/engagements', (value) => value
+  )), 'engagement_read').data;
+}
+
+async function readReviewSnapshot(context: SeedContext) {
+  return requireSuccess(reviewSnapshotReadResultSchema.parse(await read(
+    context, '/api/events/current/review/snapshot', (value) => value
+  )), 'review_snapshot_read').data;
+}
+
+async function readWorkspaceTeam(context: SeedContext) {
+  return requireSuccess(workspaceTeamMembersReadResultSchema.parse(await read(
+    context, '/api/workspace/team', (value) => value
+  )), 'workspace_team_read').data;
+}
+
+async function readSchedule(context: SeedContext) {
+  const range = new URLSearchParams({
+    startAt: '2027-09-14T00:00:00.000Z',
+    endAt: '2027-09-18T00:00:00.000Z',
+    limit: '200'
+  });
+  return requireSuccess(schedulePlacementSnapshotReadResultSchema.parse(await read(
+    context, `/api/events/current/schedule/placements?${range.toString()}`, (value) => value
+  )), 'schedule_read').data;
+}
+
+async function createEvent(context: SeedContext): Promise<string> {
+  const draft = requireSuccess(eventCreateDraftOperationResultSchema.parse(await effect({
+    context,
+    path: '/api/events/drafts/create',
+    key: 'joocon-event-draft',
+    body: EVENT,
+    parse: (value) => value
+  })), 'event_draft');
+  await commitDraft(context, 'joocon-event', draft);
+  return draft.data.safeDiff.after.id;
+}
+
+/**
+ * Keeps every geometry value exactly as the creation defaults served it and
+ * writes only the location and venue note the organizer would type.
+ */
+async function updateEventSettings(context: SeedContext): Promise<void> {
+  const served = requireSuccess(currentEventSettingsReadResultSchema.parse(await read(
+    context, '/api/events/current/settings', (value) => value
+  )), 'event_settings_read').data;
+  const draft = requireSuccess(eventSettingsUpdateDraftOperationResultSchema.parse(await effect({
+    context,
+    path: '/api/events/current/settings/drafts/update',
+    key: 'joocon-event-settings-draft',
+    body: {
+      expectedEventId: served.eventId,
+      expectedEventSetVersion: served.eventSetVersion,
+      expectedEventVersion: served.eventVersion,
+      name: served.name,
+      timezone: served.timezone,
+      startDate: served.startDate,
+      endDate: served.endDate,
+      dayStart: served.dayStart,
+      dayEnd: served.dayEnd,
+      slotMinutes: served.slotMinutes,
+      ...EVENT_SETTINGS_TEXT
+    },
+    parse: (value) => value
+  })), 'event_settings_draft');
+  await commitDraft(context, 'joocon-event-settings', draft);
+}
+
+async function createVocabulary(
+  context: SeedContext
+): Promise<Readonly<Record<VocabularyKey, string>>> {
+  const handles: Record<string, string> = Object.create(null);
+  const specs = [
+    ...ROOMS.map((room) => ({ kind: 'room' as const, ...room })),
+    ...TRACKS.map((track) => ({ kind: 'track' as const, ...track })),
+    ...FORMATS.map((format) => ({ kind: 'format' as const, ...format }))
+  ];
+  for (const spec of specs) {
+    const snapshot = await readVocabulary(context);
+    const body = spec.kind === 'room'
+      ? {
+          kind: spec.kind,
+          expectedSetVersion: snapshot.setVersion,
+          name: spec.name,
+          capacity: spec.capacity
+        }
+      : { kind: spec.kind, expectedSetVersion: snapshot.setVersion, name: spec.name };
+    const draft = requireSuccess(programVocabularyDraftOperationResultSchema.parse(await effect({
+      context,
+      path: '/api/events/current/program-vocabulary/drafts/create',
+      key: `joocon-vocabulary-${spec.key}-draft`,
+      body,
+      parse: (value) => value
+    })), `vocabulary_${spec.key}_draft`);
+    if (draft.data.safeDiff.action !== 'create') fail(`vocabulary_${spec.key}_diff`, draft.data.safeDiff.action);
+    handles[spec.key] = draft.data.safeDiff.after.id;
+    await commitDraft(context, `joocon-vocabulary-${spec.key}`, draft);
+  }
+  return Object.freeze(handles) as Readonly<Record<VocabularyKey, string>>;
+}
+
+interface CfpFields {
+  readonly nameFieldId: string;
+  readonly emailFieldId: string;
+  readonly titleFieldId: string;
+  readonly abstractFieldId: string;
+  readonly excludedFieldIds: readonly string[];
+}
+
+/**
+ * Resolves the four registry fields every seeded application answers and the
+ * exact shared apply-visible field ids the CFP composition excludes, so each
+ * committed direct entry answers exactly the form it was authored against.
+ */
+async function resolveCfpFields(context: SeedContext): Promise<CfpFields> {
+  const registry = await readFieldRegistry(context);
+  const fieldId = (mapsTo: string, kind: string): string => {
+    const field = registry.fields.find(
+      (candidate) => candidate.mapsTo === mapsTo && candidate.kind === kind
+    );
+    if (!field) fail('registry_field_missing', mapsTo);
+    return field.id;
+  };
+  const nameFieldId = fieldId('person.name', 'text');
+  const emailFieldId = fieldId('person.email', 'email');
+  const titleFieldId = fieldId('talk.title', 'text');
+  const abstractFieldId = fieldId('talk.abstract', 'textarea');
+  const included = new Set([nameFieldId, emailFieldId, titleFieldId, abstractFieldId]);
+  return Object.freeze({
+    nameFieldId,
+    emailFieldId,
+    titleFieldId,
+    abstractFieldId,
+    excludedFieldIds: Object.freeze(registry.fields
+      .filter((field) => field.scope.kind === 'shared'
+        && field.contexts.apply.visible
+        && !included.has(field.id))
+      .map((field) => field.id)
+      .sort())
+  });
+}
+
+function cfpDefinition(input: {
+  readonly name: string;
+  readonly target: FormTarget;
+  readonly confirmation: string;
+  readonly fields: CfpFields;
+}): FormDefinitionCreateAuthorInput {
+  return {
+    kind: 'cfp',
+    name: input.name,
+    target: input.target,
+    availability: { kind: 'evergreen' },
+    confirmation: input.confirmation,
+    composition: {
+      excludedFieldIds: [...input.fields.excludedFieldIds],
+      requiredOverrides: {},
+      optionExposure: {}
+    },
+    rules: []
+  };
+}
+
+async function createOpenForm(input: {
+  readonly context: SeedContext;
+  readonly key: string;
+  readonly definition: FormDefinitionCreateAuthorInput;
+}): Promise<string> {
+  const { context, key } = input;
+  const catalog = await readFormCatalog(context);
+  const createDraft = requireSuccess(intakeFormDraftOperationResultSchema.parse(await effect({
+    context,
+    path: '/api/events/current/forms/drafts/create',
+    key: `joocon-form-${key}-create-draft`,
+    body: {
+      expectedCatalogVersion: catalog.catalogVersion,
+      expectedRegistryVersion: catalog.registryPin.version,
+      definition: input.definition
+    },
+    parse: (value) => value
+  })), `form_${key}_create_draft`);
+  if (createDraft.data.safeDiff.action !== 'create') {
+    fail(`form_${key}_create_diff`, createDraft.data.safeDiff.action);
+  }
+  const formId = createDraft.data.safeDiff.after.id;
+  await commitDraft(context, `joocon-form-${key}-create`, createDraft);
+
+  const detail = await readFormDetail(context, formId);
+  const openDraft = requireSuccess(intakeFormDraftOperationResultSchema.parse(await effect({
+    context,
+    path: '/api/events/current/forms/drafts/lifecycle',
+    key: `joocon-form-${key}-open-draft`,
+    body: {
+      transition: 'publish_and_open',
+      formId,
+      expectedDefinitionVersion: detail.head.version,
+      expectedRegistryVersion: detail.registryPin.version
+    },
+    parse: (value) => value
+  })), `form_${key}_open_draft`);
+  await commitDraft(context, `joocon-form-${key}-open`, openDraft);
+  return formId;
+}
+
+async function createDirectEntries(input: {
+  readonly context: SeedContext;
+  readonly formId: string;
+  readonly fields: CfpFields;
+  readonly specs: readonly SubmissionSpec[];
+}): Promise<ReadonlyMap<string, string>> {
+  const { context, fields } = input;
+  const catalog = await readFormCatalog(context);
+  const form = catalog.forms.find((candidate) => candidate.id === input.formId);
+  if (!form) fail('open_form_missing', input.formId);
+  const submissionIds = new Map<string, string>();
+  for (const spec of input.specs) {
+    const draft = requireSuccess(submissionDirectEntryDraftOperationResultSchema.parse(await effect({
+      context,
+      path: '/api/events/current/submissions/direct-entry/drafts',
+      key: `joocon-entry-${spec.key}-draft`,
+      body: {
+        formId: form.id,
+        expectedFormDefinitionVersion: form.version,
+        answers: [
+          { kind: 'text', fieldId: fields.nameFieldId, value: spec.name },
+          { kind: 'email', fieldId: fields.emailFieldId, value: spec.email },
+          { kind: 'text', fieldId: fields.titleFieldId, value: spec.title },
+          { kind: 'textarea', fieldId: fields.abstractFieldId, value: spec.abstract }
+        ]
+      },
+      parse: (value) => value
+    })), `entry_${spec.key}_draft`);
+    submissionIds.set(spec.key, draft.data.safeDiff.submission.id);
+    await commitDraft(context, `joocon-entry-${spec.key}`, draft);
+  }
+  return submissionIds;
+}
+
+/**
+ * Widens an admission-time `viewer` principal to the `speaker_reviewer` preset
+ * through the registered Workspace Team role-change operation.
+ */
+async function grantReviewerRole(context: SeedContext, reviewerUserId: string): Promise<void> {
+  const team = await readWorkspaceTeam(context);
+  const member = team.members.find(
+    (candidate) => candidate.kind === 'member' && candidate.userId === reviewerUserId
+  );
+  if (!member || member.kind !== 'member') fail('reviewer_member_missing', reviewerUserId);
+  const draft = requireSuccess(workspaceTeamDraftOperationResultSchema.parse(await effect({
+    context,
+    path: '/api/workspace/team/role-changes/drafts',
+    key: 'joocon-reviewer-role-change-draft',
+    body: {
+      subject: { kind: 'member', membershipId: member.id, version: member.version },
+      roleKey: 'speaker_reviewer',
+      expectedTeamVersion: team.version,
+      expectedTeamDigestSha256: team.digestSha256
+    },
+    parse: (value) => value
+  })), 'reviewer_role_change_draft');
+  await commitDraft(context, 'joocon-reviewer-role-change', draft);
+}
+
+async function registerReviewer(input: {
+  readonly context: SeedContext;
+  readonly key: string;
+  readonly userId: string;
+}): Promise<string> {
+  const { context } = input;
+  const team = await readWorkspaceTeam(context);
+  const member = team.members.find(
+    (candidate) => candidate.kind === 'member' && candidate.userId === input.userId
+  );
+  if (!member || member.kind !== 'member') fail('roster_member_missing', input.userId);
+  const roster = requireSuccess(reviewerRosterSnapshotReadResultSchema.parse(await read(
+    context, '/api/events/current/reviewer-roster', (value) => value
+  )), 'reviewer_roster_read').data;
+  const reviewerId = crypto.randomUUID();
+  const draft = requireSuccess(reviewerRosterChangeDraftOperationResultSchema.parse(await effect({
+    context,
+    path: '/api/events/current/reviewer-roster/drafts',
+    key: `joocon-roster-${input.key}-draft`,
+    body: {
+      action: 'register',
+      reviewerId,
+      accessSubject: {
+        kind: 'workspace_membership',
+        id: member.id,
+        version: member.version
+      },
+      reviews: [],
+      expectedRosterVersion: roster.rosterVersion,
+      expectedRosterDigestSha256: roster.rosterDigestSha256
+    },
+    parse: (value) => value
+  })), `roster_${input.key}_draft`);
+  if (draft.data.action !== 'register') fail(`roster_${input.key}_action`, draft.data.action);
+  await commitDraft(context, `joocon-roster-${input.key}`, {
+    data: { changesetId: draft.data.changesetId, revision: draft.data.revision }
+  });
+  return reviewerId;
+}
+
+async function openReviewRound(context: SeedContext): Promise<number> {
+  const draft = requireSuccess(reviewChangeDraftOperationResultSchema.parse(await effect({
+    context,
+    path: '/api/events/current/review/round-drafts',
+    key: 'joocon-review-open-round-draft',
+    body: { action: 'open_round', deadlineDate: REVIEW_DUE_DATE, anonymized: true },
+    parse: (value) => value
+  })), 'review_open_round_draft');
+  const diff = draft.data.safeDiff;
+  if (diff.action !== 'open_round') fail('review_open_round_diff', diff.action);
+  await commitDraft(context, 'joocon-review-open-round', draft, draft.data.headVersion);
+  return diff.assignmentCount;
+}
+
+/**
+ * Saves and commits evaluations from one rostered reviewer's own queue. Each
+ * pass re-reads the served snapshot so every guard (assignment version, draft
+ * version, round criteria) comes from current truth rather than a stale plan.
+ */
+async function commitEvaluations(input: {
+  readonly context: SeedContext;
+  readonly key: string;
+  readonly count: number;
+  readonly offset: number;
+}): Promise<number> {
+  const { context } = input;
+  let committed = 0;
+  for (let index = 0; index < input.count; index += 1) {
+    const snapshot = await readReviewSnapshot(context);
+    if (snapshot.viewer.kind !== 'reviewer') fail('reviewer_viewer_missing', snapshot.viewer.kind);
+    const item = (snapshot.queue ?? []).find((candidate) => !candidate.committed);
+    if (!item) break;
+    const plan = snapshot.plans.find((candidate) => candidate.id === item.roundId);
+    const criterion = plan?.criteria[0];
+    if (!criterion) fail('review_round_criterion_missing', item.roundId);
+    const evaluation = EVALUATIONS[(input.offset + index) % EVALUATIONS.length];
+    if (!evaluation) fail('review_evaluation_spec_missing', index);
+
+    const saved = requireSuccess(reviewDraftSaveOperationResultSchema.parse(await effect({
+      context,
+      path: '/api/events/current/review/evaluation-draft',
+      key: `joocon-review-${input.key}-${index}-save`,
+      body: {
+        assignmentId: item.assignmentId,
+        expectedDraftVersion: item.draft?.version ?? null,
+        scores: [{ criterionId: criterion.id, score: evaluation.score }],
+        comment: evaluation.comment
+      },
+      parse: (value) => value
+    })), `review_${input.key}_${index}_save`);
+
+    const draft = requireSuccess(reviewChangeDraftOperationResultSchema.parse(await effect({
+      context,
+      path: '/api/events/current/review/evaluation-drafts',
+      key: `joocon-review-${input.key}-${index}-draft`,
+      body: {
+        action: 'commit_review',
+        assignmentId: item.assignmentId,
+        expectedAssignmentVersion: item.assignmentVersion,
+        expectedDraftVersion: saved.data.draft.version
+      },
+      parse: (value) => value
+    })), `review_${input.key}_${index}_draft`);
+    await commitDraft(
+      context, `joocon-review-${input.key}-${index}`, draft, draft.data.headVersion
+    );
+    committed += 1;
+  }
+  return committed;
+}
+
+interface DecisionPlan {
+  readonly submissionId: string;
+  readonly state: 'accepted' | 'waitlisted' | 'declined';
+  readonly spawn: boolean;
+}
+
+async function commitDecisions(
+  context: SeedContext,
+  plans: readonly DecisionPlan[]
+): Promise<void> {
+  const draft = requireSuccess(decisionDecideDraftOperationResultSchema.parse(await effect({
+    context,
+    path: '/api/events/current/decisions/decide-drafts',
+    key: 'joocon-decisions-draft',
+    body: {
+      action: 'decide',
+      decisions: plans.map((plan) => ({
+        submissionId: plan.submissionId,
+        state: plan.state,
+        expectedDecisionVersion: null,
+        expectedDecisionDigestSha256: null,
+        ...(plan.spawn ? { graduation: { kind: 'spawn' } } : {})
+      }))
+    },
+    parse: (value) => value
+  })), 'decisions_draft');
+  await commitDraft(context, 'joocon-decisions', draft, draft.data.headVersion);
+}
+
+async function placeSessions(input: {
+  readonly context: SeedContext;
+  readonly sessionIdByTitle: ReadonlyMap<string, string>;
+  readonly vocabulary: Readonly<Record<VocabularyKey, string>>;
+  readonly titleBySubmissionKey: ReadonlyMap<string, string>;
+}): Promise<number> {
+  const { context } = input;
+  let placed = 0;
+  for (const placement of PLACEMENTS) {
+    const title = input.titleBySubmissionKey.get(placement.submissionKey);
+    const sessionId = title === undefined ? undefined : input.sessionIdByTitle.get(title);
+    if (!sessionId) fail('placement_session_missing', placement.submissionKey);
+    const schedule = await readSchedule(context);
+    const draft = requireSuccess(schedulePlacementDraftOperationResultSchema.parse(await effect({
+      context,
+      path: '/api/events/current/schedule/placements/drafts',
+      key: `joocon-placement-${placement.submissionKey}-draft`,
+      body: {
+        action: 'place',
+        expectedScheduleVersion: schedule.scheduleVersion,
+        sessionId,
+        roomId: input.vocabulary[placement.roomKey],
+        startAt: placement.startAt,
+        endAt: placement.endAt
+      },
+      parse: (value) => value
+    })), `placement_${placement.submissionKey}_draft`);
+    await commitDraft(
+      context, `joocon-placement-${placement.submissionKey}`, draft, draft.data.headVersion
+    );
+    placed += 1;
+  }
+  return placed;
+}
+
+async function confirmEngagements(input: {
+  readonly context: SeedContext;
+  readonly submissionIdByKey: ReadonlyMap<string, string>;
+}): Promise<number> {
+  const { context } = input;
+  let confirmed = 0;
+  for (const key of CONFIRMED_SUBMISSION_KEYS) {
+    const submissionId = input.submissionIdByKey.get(key);
+    if (!submissionId) fail('confirmation_submission_missing', key);
+    const engagements = await readEngagements(context);
+    const engagement = engagements.engagements.find(
+      (candidate) => candidate.submissionId === submissionId
+    );
+    if (!engagement) fail('confirmation_engagement_missing', key);
+    if (engagement.state === 'confirmed') continue;
+    const draft = requireSuccess(engagementChangeDraftOperationResultSchema.parse(await effect({
+      context,
+      path: '/api/events/current/engagements/drafts',
+      key: `joocon-confirm-${key}-draft`,
+      body: {
+        action: 'record_confirmation',
+        engagementId: engagement.id,
+        expectedEngagementVersion: engagement.version,
+        attribution: 'organizer_recorded'
+      },
+      parse: (value) => value
+    })), `confirm_${key}_draft`);
+    await commitDraft(context, `joocon-confirm-${key}`, draft, draft.data.headVersion);
+    confirmed += 1;
+  }
+  return confirmed;
+}
+
+async function publishSchedule(context: SeedContext): Promise<number> {
+  const draft = requireSuccess(releaseDraftOperationResultSchema.parse(await effect({
+    context,
+    path: '/api/events/current/releases/drafts',
+    key: 'joocon-publish-schedule-draft',
+    body: { action: 'publish_schedule', expectedCurrentReleaseNumber: null },
+    parse: (value) => value
+  })), 'publish_schedule_draft');
+  const diff = draft.data.safeDiff;
+  if (diff.action !== 'publish_schedule') fail('publish_schedule_diff', diff.action);
+  await commitDraft(context, 'joocon-publish-schedule', draft, draft.data.headVersion);
+  return diff.after.number;
+}
+
+/**
+ * Fills a freshly booted ephemeral live runtime with one believable fictional
+ * conference. Everything past the two admission seams is written through the
+ * same registered operations the web UI and MCP agents call — draft, propose,
+ * commit — so the seeded database is reachable state, never fabricated rows.
+ */
+export async function seedJooConPlayground(input: {
+  readonly runtime: EphemeralLiveRuntime;
+  readonly config: ServerConfig;
+  /**
+   * Points one seeded speaker (Nadia Okonkwo) at a mailbox the operator owns,
+   * so the participant portal's magic-link flow can be exercised end to end.
+   * The committed roster stays fictional; a real address arrives only through
+   * the ignored deployment environment.
+   */
+  readonly speakerEmailOverride?: string;
+}): Promise<PlaygroundSeedSummary> {
+  const { runtime, config } = input;
+  // The seeded principals must never share the bootstrap owner's address:
+  // that is what keeps the owner reservation unconsumed and the human's later
+  // Google sign-in admissible into this same workspace.
+  const bootstrapOwner = normalizeEmail(config.bootstrapOwnerEmail);
+  if (bootstrapOwner === normalizeEmail(OPERATOR_EMAIL)
+      || bootstrapOwner === normalizeEmail(REVIEWER_EMAIL)) {
+    fail('bootstrap_owner_email_collides_with_seeded_principal', bootstrapOwner);
+  }
+  const operator = await createSeededPrincipal({
+    runtime,
+    config,
+    email: OPERATOR_EMAIL,
+    displayName: 'JooCon Program Desk',
+    rolePresetKey: 'workspace_admin',
+    permissionGrants: OPERATOR_PERMISSION_GRANTS
+  });
+  const reviewer = await createSeededPrincipal({
+    runtime,
+    config,
+    email: REVIEWER_EMAIL,
+    displayName: 'JooCon Review Committee',
+    rolePresetKey: 'viewer'
+  });
+  const context: SeedContext = Object.freeze({ runtime, config, cookie: operator.cookie });
+  const reviewerContext: SeedContext = Object.freeze({
+    runtime, config, cookie: reviewer.cookie
+  });
+
+  const eventId = await createEvent(context);
+  await updateEventSettings(context);
+  const vocabulary = await createVocabulary(context);
+
+  const fields = await resolveCfpFields(context);
+  const generalFormId = await createOpenForm({
+    context,
+    key: 'general',
+    definition: cfpDefinition({
+      name: 'JooCon 2027 Call for Sessions',
+      target: { kind: 'general_pool' },
+      confirmation: 'Thanks — your proposal is in. The program team reviews everything in one batch after the deadline.',
+      fields
+    })
+  });
+  const featuredFormId = await createOpenForm({
+    context,
+    key: 'featured',
+    definition: cfpDefinition({
+      name: 'JooCon 2027 Featured Talks',
+      target: {
+        kind: 'category',
+        category: { kind: 'format', id: vocabulary.talk }
+      },
+      confirmation: 'Received. Featured talk proposals get a first read within two weeks.',
+      fields
+    })
+  });
+
+  const speakerEmail = input.speakerEmailOverride?.trim();
+  let featuredSpecs = FEATURED_SUBMISSIONS;
+  if (speakerEmail) {
+    if (!speakerEmail.includes('@')) fail('speaker_email_override_invalid', 'not_an_address');
+    const normalized = normalizeEmail(speakerEmail);
+    if (normalized === normalizeEmail(OPERATOR_EMAIL)
+        || normalized === normalizeEmail(REVIEWER_EMAIL)) {
+      fail('speaker_email_override_collides_with_seeded_principal', 'operator_or_reviewer');
+    }
+    featuredSpecs = FEATURED_SUBMISSIONS.map((spec) =>
+      spec.key === 'okonkwo' ? Object.freeze({ ...spec, email: speakerEmail }) : spec
+    );
+  }
+  const featuredIds = await createDirectEntries({
+    context, formId: featuredFormId, fields, specs: featuredSpecs
+  });
+  const generalIds = await createDirectEntries({
+    context, formId: generalFormId, fields, specs: GENERAL_SUBMISSIONS
+  });
+  const submissionIdByKey = new Map([...featuredIds, ...generalIds]);
+
+  const openForms = (await readFormCatalog(context))
+    .forms.filter((form) => form.status === 'open').length;
+
+  await registerReviewer({ context, key: 'operator', userId: operator.userId });
+  await grantReviewerRole(context, reviewer.userId);
+  await registerReviewer({ context, key: 'committee', userId: reviewer.userId });
+
+  const reviewAssignments = await openReviewRound(context);
+  const operatorReviews = await commitEvaluations({
+    context, key: 'operator', count: 3, offset: 0
+  });
+  const committeeReviews = await commitEvaluations({
+    context: reviewerContext, key: 'committee', count: 3, offset: 3
+  });
+
+  const decisions: DecisionPlan[] = [];
+  for (const spec of FEATURED_SUBMISSIONS) {
+    const submissionId = submissionIdByKey.get(spec.key);
+    if (!submissionId) fail('decision_submission_missing', spec.key);
+    decisions.push({ submissionId, state: 'accepted', spawn: true });
+  }
+  const waitlisted = submissionIdByKey.get('delacroix');
+  const declined = submissionIdByKey.get('tanabe');
+  if (!waitlisted || !declined) fail('decision_general_submission_missing', 'delacroix/tanabe');
+  decisions.push({ submissionId: waitlisted, state: 'waitlisted', spawn: false });
+  decisions.push({ submissionId: declined, state: 'declined', spawn: false });
+  await commitDecisions(context, decisions);
+
+  const catalog = await readSessionCatalog(context);
+  const sessionIdByTitle = new Map(catalog.sessions.map((session) => [session.title, session.id]));
+  const titleBySubmissionKey = new Map(
+    FEATURED_SUBMISSIONS.map((spec) => [spec.key, spec.title] as const)
+  );
+  const placements = await placeSessions({
+    context, sessionIdByTitle, vocabulary, titleBySubmissionKey
+  });
+  const confirmedEngagements = await confirmEngagements({ context, submissionIdByKey });
+  const releaseNumber = await publishSchedule(context);
+
+  const bootstrapReservation = runtime.database.sqlite.query<
+    { readonly status: string }, [string, string]
+  >(`
+    SELECT status FROM access_reservations
+     WHERE workspace_id = ? AND normalized_email = ?
+  `).get(runtime.workspaceId, normalizeEmail(config.bootstrapOwnerEmail));
+
+  return Object.freeze({
+    eventId,
+    eventName: EVENT.name,
+    operatorEmail: OPERATOR_EMAIL,
+    reviewerEmail: REVIEWER_EMAIL,
+    bootstrapOwnerEmail: config.bootstrapOwnerEmail,
+    bootstrapOwnerReservationOpen: bootstrapReservation?.status === 'open',
+    vocabulary: Object.freeze({
+      rooms: ROOMS.length, tracks: TRACKS.length, formats: FORMATS.length
+    }),
+    openForms,
+    submissions: submissionIdByKey.size,
+    reviewers: 2,
+    reviewAssignments,
+    committedReviews: operatorReviews + committeeReviews,
+    accepted: FEATURED_SUBMISSIONS.length,
+    waitlisted: 1,
+    declined: 1,
+    spawnedSessions: catalog.sessions.length,
+    placements,
+    confirmedEngagements,
+    releaseNumber
+  });
+}
