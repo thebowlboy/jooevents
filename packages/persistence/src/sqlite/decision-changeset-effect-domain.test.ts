@@ -17,6 +17,7 @@ import {
 } from '@jooevents/changeset-operations';
 import type { DecisionReviewPinDto } from '@jooevents/contracts';
 import type { DecisionCandidateDto, DecisionEnvironmentSource } from '@jooevents/decision';
+import { planEngagementMutation } from '@jooevents/engagement';
 import {
   DECISION_DECIDE_DRAFT_OPERATION,
   DECISION_DRAFT_ACCESS_POLICY,
@@ -53,6 +54,7 @@ import {
   type SQLiteDecisionDraftEffectIds
 } from './decision-draft-effect-domain';
 import { installDecisionSchema, SQLiteDecisionRepository } from './decision';
+import { installEngagementSchema } from './engagement';
 import {
   createSQLiteEventSpineOperatorEventRelationshipSource,
   installEventSpineSchema,
@@ -170,6 +172,7 @@ function openFixture() {
   installSessionSchema(sqlite);
   installSchedulePlacementSchema(sqlite);
   installDecisionSchema(sqlite);
+  installEngagementSchema(sqlite);
   installDecisionDraftEffectSchema(sqlite);
   installDecisionChangesetEffectSchema(sqlite);
   seed(sqlite);
@@ -485,6 +488,7 @@ function durableCounts(fixture: ReturnType<typeof openFixture>) {
     heads: count(fixture.sqlite, 'decision_heads'),
     origins: count(fixture.sqlite, 'submission_session_origins'),
     sessions: count(fixture.sqlite, 'sessions'),
+    engagements: count(fixture.sqlite, 'engagement_heads'),
     lifecycleLinks: count(fixture.sqlite, 'decision_changeset_receipt_links'),
     facts: count(fixture.sqlite, 'decision_changeset_domain_facts'),
     pointers: count(fixture.sqlite, 'decision_changeset_outbox_pointers'),
@@ -572,7 +576,9 @@ describe('ordinary SQLite Decision changeset effect domain', () => {
       const record = fixture.lifecycle.read(created.selector.changesetId);
       if (!record) throw new TypeError('decision_changeset_record_missing');
       expect(await fixture.ownerResolution.resolveOwner(record)).toMatchObject({ id: 'decision' });
-      expect(durableCounts(fixture)).toMatchObject({ heads: 0, origins: 0, sessions: 0 });
+      expect(durableCounts(fixture)).toMatchObject({
+        heads: 0, origins: 0, sessions: 0, engagements: 0
+      });
 
       const commitInput = { ...created.selector, expectedHeadVersion: 2 };
       const committed = await commit(fixture, created.selector, 'spawn-commit');
@@ -601,9 +607,18 @@ describe('ordinary SQLite Decision changeset effect domain', () => {
         .toEqual(['decision_changed', 'session_changed']);
       const afterCommit = durableCounts(fixture);
       expect(afterCommit).toMatchObject({
-        heads: 1, origins: 1, sessions: 1,
+        heads: 1, origins: 1, sessions: 1, engagements: 2,
         lifecycleLinks: 2, facts: 1, pointers: 1, timeline: 2, commitLinks: 1
       });
+      // The one accept-spawn unit of work seeded both candidate participants
+      // as invited engagements on the spawned Session.
+      expect(fixture.decisions.engagements
+        .listSeededEngagements(scope, spawnedSessionId, submissionA)
+        .map((head) => ({ personId: head.personId, state: head.state, version: head.version })))
+        .toEqual([
+          { personId: personA, state: 'invited', version: 1 },
+          { personId: personB, state: 'invited', version: 1 }
+        ]);
 
       expect(await fixture.effect({
         operation: COMMIT_CHANGESET_OPERATION,
@@ -647,6 +662,12 @@ describe('ordinary SQLite Decision changeset effect domain', () => {
       expect(fixture.decisions.readSubmissionSessionOrigin(scope, submissionA))
         .toMatchObject({ kind: 'attached', sessionId: collectingSessionId });
       expect(count(fixture.sqlite, 'sessions')).toBe(1);
+      // The attach arm seeded every candidate participant without an existing
+      // engagement pair — including the person the roster already carried.
+      expect(fixture.decisions.engagements
+        .listSeededEngagements(scope, collectingSessionId, submissionA)
+        .map((head) => head.personId)).toEqual([personA, personB]);
+      expect(count(fixture.sqlite, 'engagement_heads')).toBe(2);
     } finally {
       fixture.close();
     }
@@ -730,7 +751,9 @@ describe('ordinary SQLite Decision changeset effect domain', () => {
       });
       expect(fixture.decisions.readDecisionHead(scope, submissionA)?.state).toBe('waitlisted');
       expect(fixture.decisions.readDecisionHead(scope, submissionB)?.state).toBe('declined');
-      expect(durableCounts(fixture)).toMatchObject({ heads: 2, origins: 0, sessions: 0 });
+      expect(durableCounts(fixture)).toMatchObject({
+        heads: 2, origins: 0, sessions: 0, engagements: 0
+      });
     } finally {
       fixture.close();
     }
@@ -747,7 +770,9 @@ describe('ordinary SQLite Decision changeset effect domain', () => {
       );
       const committed = await commit(fixture, created.selector, 'unspawn-commit');
       if (committed.kind !== 'success') throw new TypeError('decision_commit_failed');
-      expect(durableCounts(fixture)).toMatchObject({ heads: 1, origins: 1, sessions: 1 });
+      expect(durableCounts(fixture)).toMatchObject({
+        heads: 1, origins: 1, sessions: 1, engagements: 2
+      });
 
       const corrected = await correction(
         fixture, created.selector, committed.receipt.id, 'unspawn-correction'
@@ -770,7 +795,9 @@ describe('ordinary SQLite Decision changeset effect domain', () => {
       })).toMatchObject({ kind: 'success' });
       const compensated = await commit(fixture, correctionSelector, 'unspawn-correction-commit');
       if (compensated.kind !== 'success') throw new TypeError('decision_compensation_commit_failed');
-      expect(durableCounts(fixture)).toMatchObject({ heads: 0, origins: 0, sessions: 0 });
+      expect(durableCounts(fixture)).toMatchObject({
+        heads: 0, origins: 0, sessions: 0, engagements: 0
+      });
       expect(fixture.catalog().sessions).toEqual([]);
 
       expect(await correction(
@@ -834,6 +861,9 @@ describe('ordinary SQLite Decision changeset effect domain', () => {
         lifecycle: 'programmed'
       });
       expect(count(fixture.sqlite, 'sessions')).toBe(1);
+      // The Session stays standing with its roster, so the seeded engagements
+      // stay standing with it.
+      expect(count(fixture.sqlite, 'engagement_heads')).toBe(2);
     } finally {
       fixture.close();
     }
@@ -1018,6 +1048,78 @@ describe('ordinary SQLite Decision changeset effect domain', () => {
       });
       expect(durableCounts(fixture)).toEqual(before);
       expect(fixture.decisions.readDecisionHead(scope, submissionA)?.state).toBe('waitlisted');
+    } finally {
+      fixture.close();
+    }
+  });
+
+  test('a confirmation landing before the compensation commit blocks the unspawn without writing', async () => {
+    const fixture = openFixture();
+    try {
+      fixture.candidates.set(submissionA, candidate());
+      const created = await draftAndPropose(
+        fixture,
+        decideInput([{ submissionId: submissionA, state: 'accepted' }]),
+        'advanced'
+      );
+      const committed = await commit(fixture, created.selector, 'advanced-commit');
+      if (committed.kind !== 'success') throw new TypeError('decision_commit_failed');
+      const spawnedSessionId = fixture.decisions
+        .readSubmissionSessionOrigin(scope, submissionA)!.sessionId;
+
+      // Derived while every seeded engagement is untouched: an exact unspawn.
+      const corrected = await correction(
+        fixture, created.selector, committed.receipt.id, 'advanced-correction'
+      );
+      expect(corrected).toMatchObject({
+        kind: 'success',
+        data: { action: 'correction', resultKind: 'exact' }
+      });
+      if (corrected.kind !== 'success' || corrected.data.action !== 'correction'
+          || corrected.data.target === null) throw new TypeError('decision_correction_missing');
+      const correctionSelector = {
+        changesetId: corrected.data.target.changesetId,
+        revisionId: corrected.data.target.revisionId,
+        revisionDigest: corrected.data.target.revisionDigest
+      };
+      expect(await fixture.effect({
+        operation: PROPOSE_CHANGESET_OPERATION,
+        businessInput: { ...correctionSelector, expectedHeadVersion: 1 },
+        key: 'advanced-correction-propose'
+      })).toMatchObject({ kind: 'success' });
+
+      // A speaker confirmation lands after derivation. It moves neither the
+      // Session digest nor any decision guard, so only the seed reversal's
+      // exact invited-image fence can stop the unspawn from destroying it.
+      const seeded = fixture.decisions.engagements
+        .listSeededEngagements(scope, spawnedSessionId, submissionA);
+      const confirm = planEngagementMutation({
+        planningInput: {
+          action: 'record_confirmation',
+          scope, actorUserId: userId, occurredAt: now,
+          engagementId: seeded[0]!.id,
+          expectedEngagementVersion: 1,
+          attribution: 'organizer_recorded'
+        },
+        environment: { engagements: fixture.decisions.engagements }
+      });
+      transaction(fixture.sqlite, () =>
+        fixture.decisions.engagements.applyEngagementPlan(confirm)
+      );
+
+      const before = durableCounts(fixture);
+      await expect(commit(fixture, correctionSelector, 'advanced-correction-commit'))
+        .rejects.toThrow('Operation execution failed during handler.');
+      expect(durableCounts(fixture)).toEqual(before);
+      expect(fixture.decisions.readDecisionHead(scope, submissionA))
+        .toMatchObject({ state: 'accepted' });
+      expect(fixture.decisions.readSubmissionSessionOrigin(scope, submissionA))
+        .toMatchObject({ kind: 'spawned', sessionId: spawnedSessionId });
+      expect(fixture.decisions.engagements
+        .readSessionPersonEngagement(scope, spawnedSessionId, personA))
+        .toMatchObject({ state: 'confirmed', version: 2 });
+      expect(fixture.sqlite.query<Record<string, unknown>, []>('PRAGMA foreign_key_check').all())
+        .toEqual([]);
     } finally {
       fixture.close();
     }

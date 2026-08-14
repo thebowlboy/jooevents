@@ -695,6 +695,22 @@ export const organizerPreviewMessageBatchInputSchema = z.strictObject({
 
 export const organizerPreviewMessageBatchResultSchema = organizerMessagePreviewSummarySchema;
 
+/**
+ * Step one of the two-step preview-adoption lane: the asynchronous,
+ * compute-only audience resolution and per-recipient render run behind this
+ * read and are parked server-side against the exact draft revision; the
+ * `preview_message_batch` effect then adopts the parked preparation inside
+ * its one unit-of-work transaction, re-verifying draft version and audience
+ * guard state before anything is written. Nothing durable changes here, and
+ * an unadopted preparation simply expires unused.
+ */
+export const organizerPrepareMessagePreviewResultSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  draftId: organizerCommunicationOpaqueIdSchema,
+  draftVersion: organizerCommunicationVersionSchema,
+  state: z.literal('prepared')
+});
+
 export const organizerMessageBatchPreviewGetInputSchema = organizerMessagePreviewIdentitySchema.extend({
   selectedRecipientResolutionId: organizerCommunicationRecipientResolutionIdSchema.optional()
 });
@@ -1083,6 +1099,42 @@ export const organizerCommunicationPlanProjectionSchema = z.strictObject({
 
 export const organizerCommunicationPlanGetInputSchema = changesetRevisionSelectorSchema;
 
+/**
+ * The consequential send wave over one adopted, reviewed preview. The wire
+ * carries only the adopted preview's audience identity, the operator's batch
+ * identity and labels — release materialization, the internal
+ * draft → propose → commit ceremony, and the outbox registration happen
+ * server-side in one transaction, and a preview whose evidence no longer
+ * reproduces from current domain state refuses typed
+ * (`stale_revision`/`communication.preview_changed`) instead of sending.
+ */
+export const organizerSendMessagesInputSchema = z.strictObject({
+  audienceSpecId: organizerCommunicationOpaqueIdSchema,
+  batchId: organizerCommunicationOpaqueIdSchema,
+  subject: normalizedSingleLineInput(998),
+  audienceLabel: normalizedSingleLineInput(200)
+});
+
+/** Receipt-safe send result: counts and identity only, never an address. */
+export const organizerSendMessagesResultSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  batchId: organizerCommunicationOpaqueIdSchema,
+  changesetId: organizerCommunicationOpaqueIdSchema,
+  dispatchGeneration: z.literal(1),
+  releaseCount: z.number().int().positive()
+    .max(ORGANIZER_COMMUNICATION_AUDIENCE_MEMBER_LIMIT),
+  deliveryCount: z.number().int().positive()
+    .max(ORGANIZER_COMMUNICATION_AUDIENCE_MEMBER_LIMIT)
+}).superRefine((result, context) => {
+  if (result.deliveryCount !== result.releaseCount) {
+    context.addIssue({
+      code: 'custom',
+      path: ['deliveryCount'],
+      message: 'Every committed release registers exactly one delivery.'
+    });
+  }
+});
+
 // Canonical handler results (without transport execution metadata).
 export const organizerCommunicationPurposePageCanonicalResultSchema =
   canonicalResultSchema(organizerCommunicationPurposePageSchema);
@@ -1120,6 +1172,10 @@ export const organizerCommunicationTimelinePageCanonicalResultSchema =
   canonicalResultSchema(organizerCommunicationTimelinePageSchema);
 export const organizerEmailReadinessCanonicalResultSchema =
   canonicalResultSchema(organizerEmailReadinessProjectionSchema);
+export const organizerSendMessagesCanonicalResultSchema =
+  canonicalResultSchema(organizerSendMessagesResultSchema);
+export const organizerPrepareMessagePreviewCanonicalResultSchema =
+  canonicalResultSchema(organizerPrepareMessagePreviewResultSchema);
 
 // Wire results (with correlation/receipt metadata) used by operator bindings.
 export const organizerCommunicationPurposePageOperationResultSchema =
@@ -1158,6 +1214,10 @@ export const organizerCommunicationTimelinePageOperationResultSchema =
   createReadOperationResultSchema(organizerCommunicationTimelinePageSchema);
 export const organizerEmailReadinessOperationResultSchema =
   createReadOperationResultSchema(organizerEmailReadinessProjectionSchema);
+export const organizerSendMessagesOperationResultSchema =
+  createEffectfulOperationResultSchema(organizerSendMessagesResultSchema);
+export const organizerPrepareMessagePreviewOperationResultSchema =
+  createReadOperationResultSchema(organizerPrepareMessagePreviewResultSchema);
 
 export const ORGANIZER_COMMUNICATION_OPERATION_SCHEMA_REFS = Object.freeze({
   listPurposes: createOperationSchemaManifestRefs({
@@ -1231,6 +1291,18 @@ export const ORGANIZER_COMMUNICATION_OPERATION_SCHEMA_REFS = Object.freeze({
     inputSchema: organizerPreviewMessageBatchInputSchema,
     resultKey: 'schema.communication.organizer.message-preview-mutation.operator-result',
     resultSchema: organizerPreviewMessageBatchOperationResultSchema
+  }),
+  sendMessages: createOperationSchemaManifestRefs({
+    inputKey: 'schema.communication.organizer.send-messages.input',
+    inputSchema: organizerSendMessagesInputSchema,
+    resultKey: 'schema.communication.organizer.send-messages.operator-result',
+    resultSchema: organizerSendMessagesOperationResultSchema
+  }),
+  prepareBatchPreview: createOperationSchemaManifestRefs({
+    inputKey: 'schema.communication.organizer.prepare-message-preview.input',
+    inputSchema: organizerPreviewMessageBatchInputSchema,
+    resultKey: 'schema.communication.organizer.prepare-message-preview.operator-result',
+    resultSchema: organizerPrepareMessagePreviewOperationResultSchema
   }),
   getPreview: createOperationSchemaManifestRefs({
     inputKey: 'schema.communication.organizer.get-message-batch-preview.input',
@@ -1355,4 +1427,12 @@ export type OrganizerCommunicationTimelinePage = z.infer<
 >;
 export type OrganizerCommunicationPlanProjection = z.infer<
   typeof organizerCommunicationPlanProjectionSchema
+>;
+export type OrganizerCommunicationHistoryPage = z.infer<
+  typeof organizerCommunicationHistoryPageSchema
+>;
+export type OrganizerSendMessagesInput = z.infer<typeof organizerSendMessagesInputSchema>;
+export type OrganizerSendMessagesResult = z.infer<typeof organizerSendMessagesResultSchema>;
+export type OrganizerPrepareMessagePreviewResult = z.infer<
+  typeof organizerPrepareMessagePreviewResultSchema
 >;

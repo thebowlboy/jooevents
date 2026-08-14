@@ -6,6 +6,7 @@ export * from './decisions';
 export * from './communications/provider';
 export * from './communications/outbound-email-delivery';
 export * from './communications/provider-configuration';
+export * from './engagements';
 export * from './event';
 export * from './event-settings';
 export * from './field-registry';

@@ -28,19 +28,27 @@ import {
   createChangesetOperationModule
 } from '@jooevents/changeset-operations';
 import {
+  COMMUNICATION_SEND_LANE_OPERATIONS,
   ORGANIZER_COMMUNICATION_DRAFT_ACCESS_POLICY,
   ORGANIZER_COMMUNICATION_MUTATION_OPERATIONS,
+  OUTBOUND_EMAIL_DISPATCH_ACCESS_POLICY,
+  SEND_MESSAGES_DRAFT_ACCESS_POLICY,
   composeOrganizerCommunicationAuthoringOperationModules,
+  createCommunicationDeliveryHistoryReadOperationModule,
+  createCommunicationSendOperationModule,
   createOrganizerAudiencePreviewReadOperationModule,
   createOrganizerCommunicationMutationOperationModule,
-  createOrganizerCommunicationReadOperationModule
+  createOrganizerCommunicationReadOperationModule,
+  createOutboundEmailDeliveryOperationModule
 } from '@jooevents/communication-operations';
 import {
+  DECISION_NOTIFICATION_MERGE_FIELDS,
+  createDeterministicFakeEmailProvider,
   createEmailProviderConfigurationService,
   createEmailProviderReadinessReader,
-  createDeterministicOrganizerPreviewRenderPort,
   createHmacOrganizerPreviewOpaqueTokenCodec,
   createOrganizerMergeRegistryRelease,
+  createOrganizerPlainTextRenderStrategyPort,
   createOutboundEmailProviderRegistry
 } from '@jooevents/communications';
 import {
@@ -56,6 +64,18 @@ import {
   createDecisionDraftOperationModule,
   createDecisionOperationModule
 } from '@jooevents/decision-operations';
+import {
+  ENGAGEMENT_CHANGE_DRAFT_OPERATION,
+  ENGAGEMENT_DRAFT_ACCESS_POLICY,
+  ENGAGEMENT_DRAFT_APPROVAL_POLICY,
+  ENGAGEMENT_DRAFT_HANDLER_CAPABILITY,
+  ENGAGEMENT_DRAFT_PERMISSION_ID,
+  ENGAGEMENT_DRAFT_REQUEST_HASH_PROFILE,
+  ENGAGEMENT_READ_ACCESS_POLICY,
+  createEngagementDraftOperationModule,
+  createEngagementOperationModule,
+  sealEngagementDraftPreparation
+} from '@jooevents/engagement-operations';
 import {
   createEventDependencyContributorRegistry,
   issueEventOrdinaryPolicy,
@@ -102,6 +122,7 @@ import {
 } from '@jooevents/intake-operations';
 import {
   evaluateAccess,
+  parseOperationAccessLane,
   type CurrentAuthorityResolver
 } from '@jooevents/identity-access';
 import {
@@ -163,9 +184,13 @@ import {
 } from '@jooevents/workspace-operations';
 import {
   canonicalJsonText,
+  parseAuthorityCitationId,
+  parseCapabilityRevisionId,
   parseContractVersion,
+  parseEventId,
   parseInstant,
   parseInvocationId,
+  parseJobId,
   parsePublicPolicyRevisionId,
   parseWorkspaceId
 } from '@jooevents/kernel';
@@ -203,6 +228,33 @@ import {
 import {
   createSQLiteDecisionDraftEffectDomainRegistration
 } from '@jooevents/persistence/decision-draft-effect-domain';
+import {
+  createSQLiteDecisionAudienceSource,
+  createSQLiteDraftRenderContentSource,
+  decisionAudienceDelegates,
+  mintDecisionAudienceRecipes,
+  seedDecisionNotificationCommunications
+} from '@jooevents/persistence/organizer-decision-audience';
+import {
+  SQLiteCommunicationMessageReleaseStore,
+  createSQLiteOutboundEmailEnvelopeResolver
+} from '@jooevents/persistence/message-releases';
+import {
+  createSQLiteCommunicationReleaseChangesetOwnerRegistration
+} from '@jooevents/persistence/message-release-effect-domain';
+import { SQLiteOutboundEmailDeliveryLedger } from '@jooevents/persistence/outbound-email-delivery';
+import {
+  createSQLiteOutboundEmailDeliveryEffectDomainRegistration
+} from '@jooevents/persistence/outbound-email-delivery-effect-domain';
+import {
+  createSQLiteEngagementSubmissionReferenceSource
+} from '@jooevents/persistence/engagement';
+import {
+  createSQLiteEngagementChangesetEffectDomainRegistration
+} from '@jooevents/persistence/engagement-changeset-effect-domain';
+import {
+  createSQLiteEngagementDraftEffectDomainRegistration
+} from '@jooevents/persistence/engagement-draft-effect-domain';
 import {
   createSQLiteEventCreateDraftEffectDomainRegistration
 } from '@jooevents/persistence/event-create-draft-effect-domain';
@@ -346,6 +398,16 @@ import type { ServerConfig } from '../config';
 import { createHttpApp } from '../http/app';
 import { createPublicOperationsHttpAdapter } from '../http/public-operations';
 import { createSerialHttpRequestBoundary } from '../http/request-serialization';
+import {
+  communicationReleaseLifecycleInertAdapter,
+  createCommunicationSendLane,
+  type CommunicationSendLane
+} from './communication-send-lane';
+import {
+  createSQLiteCommunicationDeliveryHistorySource
+} from './communication-delivery-history';
+import { createCommunicationSendOperationRuntime } from './communication-send-operations';
+import { createOutboundDispatchLoop, type OutboundDispatchLoop } from './outbound-dispatch-loop';
 import { createSQLiteOperatorAuthorityComposition } from './operator-authority';
 
 const eventProfiles = Object.freeze({
@@ -477,6 +539,25 @@ const decisionProfiles = Object.freeze({
   }),
   idempotencyCredential: Object.freeze({
     key: 'key-profile.decision.idempotency-credential',
+    version: parseContractVersion(1)
+  })
+});
+
+const engagementProfiles = Object.freeze({
+  authorityPrincipal: Object.freeze({
+    key: 'key-profile.engagement.operator-principal',
+    version: parseContractVersion(1)
+  }),
+  scopePartition: Object.freeze({
+    key: 'key-profile.engagement.current-event-scope',
+    version: parseContractVersion(1)
+  }),
+  requestCanonicalization: Object.freeze({
+    key: 'key-profile.engagement.request-canonicalization',
+    version: parseContractVersion(1)
+  }),
+  idempotencyCredential: Object.freeze({
+    key: 'key-profile.engagement.idempotency-credential',
     version: parseContractVersion(1)
   })
 });
@@ -629,6 +710,30 @@ const communicationProviderReadProfiles = Object.freeze({
   })
 });
 
+const outboundDispatchProfiles = Object.freeze({
+  authorityPrincipal: Object.freeze({
+    key: 'key-profile.communication.outbound-dispatch-principal',
+    version: parseContractVersion(1)
+  }),
+  scopePartition: Object.freeze({
+    key: 'key-profile.communication.outbound-dispatch-scope',
+    version: parseContractVersion(1)
+  }),
+  requestCanonicalization: Object.freeze({
+    key: 'key-profile.communication.outbound-dispatch-request-canonicalization',
+    version: parseContractVersion(1)
+  }),
+  idempotencyCredential: Object.freeze({
+    key: 'key-profile.communication.outbound-dispatch-idempotency-credential',
+    version: parseContractVersion(1)
+  })
+});
+
+const OUTBOUND_DISPATCH_REQUEST_HASH_PROFILE = Object.freeze({
+  key: 'request-hash.communication.outbound-email-dispatch',
+  version: parseContractVersion(1)
+});
+
 const organizerCommunicationExactContactPolicy = Object.freeze({
   key: 'policy.communication.preview-contact-disclosure',
   version: parseContractVersion(1)
@@ -644,10 +749,14 @@ function communicationDefinitionRef(key: string, definition: unknown) {
   });
 }
 
-function createOrganizerCommunicationRequestHashSealer(keyBytesInput: Uint8Array) {
+function createOrganizerCommunicationRequestHashSealer(
+  keyBytesInput: Uint8Array,
+  operations: readonly { readonly name: string }[] =
+    Object.values(ORGANIZER_COMMUNICATION_MUTATION_OPERATIONS)
+) {
   const keyBytes = Uint8Array.from(keyBytesInput);
   const operationNames: ReadonlySet<string> = new Set(
-    Object.values(ORGANIZER_COMMUNICATION_MUTATION_OPERATIONS).map((operation) => operation.name)
+    operations.map((operation) => operation.name)
   );
   return Object.freeze({
     seal(canonicalRequestBytes: Uint8Array) {
@@ -735,6 +844,14 @@ export interface EphemeralLiveRuntime {
   readonly auth: JooEventsAuth;
   readonly app: ReturnType<typeof createHttpApp>;
   readonly workspaceId: string;
+  /**
+   * Composed decision-notification send lane (adopt reviewed previews, commit
+   * `send_messages` ceremonies). Server-internal seam consumed by tests today
+   * and by the J-WEB-2 HTTP mounting next.
+   */
+  readonly communications: CommunicationSendLane;
+  /** One-pass outbound dispatch over the delivery ledger with the inert fake provider. */
+  readonly outboundDispatch: OutboundDispatchLoop;
   close(): ReturnType<EphemeralSQLiteRuntime['close']>;
 }
 
@@ -878,6 +995,16 @@ export async function createEphemeralLiveRuntime(input: {
         database.sqlite,
         organizerCommunicationClassifiedStore
       );
+    // Recorder default BLOCKED-2 (provider inertness): the deterministic fake
+    // exists ONLY as the dispatch worker's adapter. The configurable-provider
+    // registry stays empty — its outbound-only gate structurally rejects the
+    // fake's full manifest, and an empty registry keeps the provider setup and
+    // readiness surfaces honestly reporting that nothing is configured.
+    // External activation stays withheld, the Cloudflare provider runtime
+    // stays unconsumed, and the send lane's non-scenario external delivery key
+    // makes every fake submission resolve as a terminal known rejection, so
+    // deliveries are recorded honestly as not delivered.
+    const fakeEmailProvider = createDeterministicFakeEmailProvider();
     const emailProviderRegistry = createOutboundEmailProviderRegistry([]);
     const emailProviderRepository = new SQLiteEmailProviderConfigurationRepository(
       database.sqlite
@@ -897,29 +1024,10 @@ export async function createEphemeralLiveRuntime(input: {
         key: 'merge-registry.communication.plain-text',
         version: 1
       }),
-      fields: []
+      // The decision-notification field set; the release digest matches
+      // `createDecisionNotificationMergeRegistryRelease()` exactly.
+      fields: DECISION_NOTIFICATION_MERGE_FIELDS
     });
-    const organizerCommunicationPreview = new SQLiteOrganizerAudiencePreviewRepository(
-      database.sqlite,
-      organizerCommunicationClassifiedStore,
-      Object.freeze({
-        drafts: createOrganizerPreviewDraftBindingSource({
-          authoring: organizerCommunicationAuthoring,
-          plainTextRenderer: communicationDefinitionRef(
-            'renderer.communication.plain-text',
-            Object.freeze({ kind: 'plain_text', version: 1 })
-          ),
-          plainTextMergeRegistry: organizerPlainTextMergeRegistry.identity
-        }),
-        opaqueTokens: createHmacOrganizerPreviewOpaqueTokenCodec({
-          keyBytes: randomHmacKey(),
-          profile: Object.freeze({ key: 'communication.preview.opaque-token', version: 1 })
-        }),
-        render: createDeterministicOrganizerPreviewRenderPort([]),
-        digestProfile: Object.freeze({ key: 'communication.preview.sha256', version: 1 }),
-        audienceCursorKeyBytes: randomHmacKey()
-      })
-    );
     const workspaceTeamInvitationLookupKey = randomHmacKey();
     const workspaceTeamRepository = new SQLiteWorkspaceTeamRepository(
       database.sqlite,
@@ -1035,6 +1143,135 @@ export async function createEphemeralLiveRuntime(input: {
       sessions: sessionRepository,
       environment: decisionEnvironment
     });
+    // Live decision-set audience source over the same decision heads and
+    // classified intake contacts the mounted Decision and Submissions
+    // surfaces serve; identity is personId-bearing evidence, never email.
+    const decisionAudienceSource = createSQLiteDecisionAudienceSource({
+      sqlite: database.sqlite,
+      contacts: intakeRepository,
+      submissions: submissionTriageSource,
+      addressFingerprintKeyBytes: randomHmacKey()
+    });
+    const organizerCommunicationPreview = new SQLiteOrganizerAudiencePreviewRepository(
+      database.sqlite,
+      organizerCommunicationClassifiedStore,
+      Object.freeze({
+        drafts: createOrganizerPreviewDraftBindingSource({
+          authoring: organizerCommunicationAuthoring,
+          plainTextRenderer: communicationDefinitionRef(
+            'renderer.communication.plain-text',
+            Object.freeze({ kind: 'plain_text', version: 1 })
+          ),
+          plainTextMergeRegistry: organizerPlainTextMergeRegistry.identity
+        }),
+        opaqueTokens: createHmacOrganizerPreviewOpaqueTokenCodec({
+          keyBytes: randomHmacKey(),
+          profile: Object.freeze({ key: 'communication.preview.opaque-token', version: 1 })
+        }),
+        render: createOrganizerPlainTextRenderStrategyPort({
+          mergeRegistry: organizerPlainTextMergeRegistry,
+          content: createSQLiteDraftRenderContentSource({
+            sqlite: database.sqlite,
+            authoring: organizerCommunicationAuthoring
+          }),
+          values: decisionAudienceSource
+        }),
+        digestProfile: Object.freeze({ key: 'communication.preview.sha256', version: 1 }),
+        audienceCursorKeyBytes: randomHmacKey(),
+        registeredSources: decisionAudienceDelegates(decisionAudienceSource)
+      })
+    );
+    /**
+     * Recorder defaults BLOCKED-4/BLOCKED-5/BLOCKED-12: installs the one
+     * transactional decision-notification purpose with its two templates and
+     * mints the two immutable decision-set audience recipes for one event
+     * scope. Runs inside the caller's transaction; identities are
+     * deterministic per scope, so a re-run converges.
+     */
+    const seedCommunicationsForEvent = (rawScope: {
+      readonly workspaceId: string;
+      readonly eventId: string;
+    }): void => {
+      const scope = Object.freeze({
+        workspaceId: parseWorkspaceId(rawScope.workspaceId),
+        eventId: parseEventId(rawScope.eventId)
+      });
+      const seeded = seedDecisionNotificationCommunications({
+        sqlite: database.sqlite,
+        authoring: organizerCommunicationAuthoring,
+        scope,
+        mergeRegistry: organizerPlainTextMergeRegistry.identity,
+        renderer: communicationDefinitionRef(
+          'renderer.communication.plain-text',
+          Object.freeze({ kind: 'plain_text', version: 1 })
+        ),
+        now: clock.now()
+      });
+      mintDecisionAudienceRecipes({
+        repository: organizerCommunicationPreview,
+        scope,
+        purposeRevision: seeded.purposeRevision
+      });
+    };
+    const communicationMessageReleases = new SQLiteCommunicationMessageReleaseStore(
+      database.sqlite,
+      organizerCommunicationClassifiedStore,
+      Object.freeze({ newEnvelopePayloadRefId: () => crypto.randomUUID() })
+    );
+    const communicationReleaseChangesets =
+      createSQLiteCommunicationReleaseChangesetOwnerRegistration({
+        sqlite: database.sqlite,
+        workspaceId
+      });
+    const outboundEmailDeliveryLedger = new SQLiteOutboundEmailDeliveryLedger(
+      database.sqlite,
+      Object.freeze({
+        newFactId: () => crypto.randomUUID(),
+        newPointerId: () => crypto.randomUUID(),
+        newHistoryId: () => crypto.randomUUID()
+      })
+    );
+    const outboundDispatch = createOutboundDispatchLoop({
+      sqlite: database.sqlite,
+      ledger: outboundEmailDeliveryLedger,
+      provider: fakeEmailProvider.delivery,
+      envelopes: createSQLiteOutboundEmailEnvelopeResolver(communicationMessageReleases),
+      ids: Object.freeze({ newAttemptId: () => crypto.randomUUID() }),
+      clock: Object.freeze({ now: () => new Date().toISOString() })
+    });
+    const communications = createCommunicationSendLane({
+      sqlite: database.sqlite,
+      workspaceId,
+      currentEventId: () => {
+        const current = events.readCurrentEventState(workspaceId);
+        if (!current?.currentEvent) throw new TypeError('communication_send_event_missing');
+        return current.currentEvent.id;
+      },
+      previewRepository: organizerCommunicationPreview,
+      classifiedStore: organizerCommunicationClassifiedStore,
+      releases: communicationMessageReleases,
+      clock
+    });
+    /**
+     * Operator HTTP mounting of the send lane (J-WEB-2/P8): the adoption
+     * preparer runs the asynchronous audience resolution before the unit of
+     * work, and the two effect-domain adapters run the sealed synchronous
+     * steps inside it over the same composed repository, classified store,
+     * and release store instances. After a send commit lands durably, one
+     * dispatch pass runs — with only the deterministic fake composed, every
+     * delivery still resolves terminally not-delivered (BLOCKED-2).
+     */
+    const communicationSendRuntime = createCommunicationSendOperationRuntime({
+      sqlite: database.sqlite,
+      workspaceId,
+      previewRepository: organizerCommunicationPreview,
+      classifiedStore: organizerCommunicationClassifiedStore,
+      releases: communicationMessageReleases,
+      clock,
+      dispatchAfterCommit: async () => {
+        await outboundDispatch.runOnce();
+      }
+    });
     const fieldRegistryPolicy = createFieldRegistryOrdinaryPolicy({
       key: 'field_registry.bounded',
       version: 1,
@@ -1142,9 +1379,12 @@ export async function createEphemeralLiveRuntime(input: {
           store: submissionTriageRepository,
           ids: Object.freeze({ newArrivalId: () => crypto.randomUUID() })
         }),
-        // No mounted surface holds durable references to a submission yet, so
-        // the compensation census reads an empty contributor set.
-        references: Object.freeze([]),
+        // Engagement heads hold durable `submissionId` references: a submission
+        // whose acceptance seeded engagements refuses direct-entry compensation
+        // until the acceptance itself is compensated first.
+        references: Object.freeze([
+          createSQLiteEngagementSubmissionReferenceSource(database.sqlite)
+        ]),
         eventRelationships,
         ids: Object.freeze({
           newChangesetId: () => crypto.randomUUID(),
@@ -1302,6 +1542,23 @@ export async function createEphemeralLiveRuntime(input: {
         newPointerId: () => crypto.randomUUID()
       })
     });
+    const engagementChangesets = createSQLiteEngagementChangesetEffectDomainRegistration({
+      sqlite: database.sqlite,
+      workspaceId,
+      approvalPolicy: ENGAGEMENT_DRAFT_APPROVAL_POLICY,
+      permissionId: ENGAGEMENT_DRAFT_PERMISSION_ID,
+      eventRelationships,
+      ids: Object.freeze({
+        newChangesetId: () => crypto.randomUUID(),
+        newRevisionId: () => crypto.randomUUID(),
+        newApprovalId: () => crypto.randomUUID(),
+        newCorrectionAttemptId: () => crypto.randomUUID(),
+        newPreparationHandle: () => crypto.randomUUID(),
+        newTimelineId: () => crypto.randomUUID(),
+        newFactId: () => crypto.randomUUID(),
+        newPointerId: () => crypto.randomUUID()
+      })
+    });
     const eventCreationChangesets =
       createSQLiteEventCreationChangesetEffectDomainRegistration({
         sqlite: database.sqlite,
@@ -1360,6 +1617,7 @@ export async function createEphemeralLiveRuntime(input: {
                 head.created_at_ms
               );
               fieldRegistry.initializeCreatedEvent(scope);
+              seedCommunicationsForEvent(scope);
               return settings.initializeCreatedEventSettings(scope);
             }
           });
@@ -1449,6 +1707,18 @@ export async function createEphemeralLiveRuntime(input: {
         adapter: decisionChangesets.adapter,
         ownerResolution: decisionChangesets.ownerResolution,
         subjectRelationships: decisionChangesets.subjectRelationships
+      }),
+      Object.freeze({
+        ownerId: engagementChangesets.ownerId,
+        adapter: engagementChangesets.adapter,
+        ownerResolution: engagementChangesets.ownerResolution,
+        subjectRelationships: engagementChangesets.subjectRelationships
+      }),
+      Object.freeze({
+        ownerId: communicationReleaseChangesets.ownerId,
+        adapter: communicationReleaseLifecycleInertAdapter,
+        ownerResolution: communicationReleaseChangesets.ownerResolution,
+        subjectRelationships: communicationReleaseChangesets.subjectRelationships
       })
     ]);
     const authority = createSQLiteOperatorAuthorityComposition({
@@ -1463,6 +1733,10 @@ export async function createEphemeralLiveRuntime(input: {
         Object.freeze({
           policy: ORGANIZER_COMMUNICATION_DRAFT_ACCESS_POLICY,
           permissionId: 'communication.draft' as const
+        }),
+        Object.freeze({
+          policy: SEND_MESSAGES_DRAFT_ACCESS_POLICY,
+          permissionId: 'communication.send' as const
         }),
         Object.freeze({
           policy: COMMUNICATION_PROVIDER_MANAGE_ACCESS_POLICY,
@@ -1576,6 +1850,14 @@ export async function createEphemeralLiveRuntime(input: {
           permissionId: 'event.manage' as const
         }),
         Object.freeze({
+          policy: ENGAGEMENT_READ_ACCESS_POLICY,
+          permissionId: 'speaker.directory.read' as const
+        }),
+        Object.freeze({
+          policy: ENGAGEMENT_DRAFT_ACCESS_POLICY,
+          permissionId: 'event.manage' as const
+        }),
+        Object.freeze({
           policy: WORKSPACE_TEAM_OPERATION_ACCESS.read.policy,
           permissionId: WORKSPACE_TEAM_OPERATION_ACCESS.read.permissionId
         }),
@@ -1659,6 +1941,10 @@ export async function createEphemeralLiveRuntime(input: {
               }),
               Object.freeze({
                 id: decisionChangesets.ownerId,
+                permissionId: 'event.manage' as const
+              }),
+              Object.freeze({
+                id: engagementChangesets.ownerId,
                 permissionId: 'event.manage' as const
               }),
               Object.freeze({
@@ -1925,6 +2211,131 @@ export async function createEphemeralLiveRuntime(input: {
         ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
         crypto: communicationProviderReadProfiles
       });
+    const communicationSendOperations = createCommunicationSendOperationModule({
+      workspaceId,
+      draftPolicy: ORGANIZER_COMMUNICATION_DRAFT_ACCESS_POLICY,
+      sendPolicy: SEND_MESSAGES_DRAFT_ACCESS_POLICY,
+      currentAuthority: authority.resolver,
+      currentEvent: organizerCommunicationCurrentEvent,
+      adoptionPreparer: communicationSendRuntime.adoptionPreparer,
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      crypto: Object.freeze({
+        ...organizerCommunicationCrypto,
+        // The shared communication sealer allowlists per-operation profile
+        // keys; the send-lane effects hash under their own operation names.
+        requestHashSealer: createOrganizerCommunicationRequestHashSealer(
+          randomHmacKey(),
+          Object.values(COMMUNICATION_SEND_LANE_OPERATIONS)
+        )
+      })
+    });
+    const communicationDeliveryHistoryOperations =
+      createCommunicationDeliveryHistoryReadOperationModule({
+        workspaceId,
+        policy: ORGANIZER_COMMUNICATION_DRAFT_ACCESS_POLICY,
+        currentAuthority: authority.resolver,
+        currentEvent: organizerCommunicationCurrentEvent,
+        read: createSQLiteCommunicationDeliveryHistorySource({ sqlite: database.sqlite }),
+        clock,
+        ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+        crypto: organizerCommunicationCrypto
+      });
+    const outboundDispatchJobIdentity = Object.freeze({
+      jobId: parseJobId(crypto.randomUUID()),
+      capabilityRevisionId: parseCapabilityRevisionId(crypto.randomUUID()),
+      authorityCitationId: parseAuthorityCitationId(crypto.randomUUID())
+    });
+    const outboundDispatchLane = parseOperationAccessLane({
+      kind: 'registered_job',
+      surface: 'application_job',
+      policy: OUTBOUND_EMAIL_DISPATCH_ACCESS_POLICY
+    });
+    /**
+     * Dormant registered-job authority for `dispatch_message_release`. The
+     * operation compiles only an internal `application_job` binding (no
+     * operator/public surface), and this runtime hosts no job scheduler, so
+     * the resolver exists to pin the lane to this process's minted dispatch
+     * job identity; the operator policy catalog deliberately does not map the
+     * job-lane policy to any operator permission.
+     */
+    const outboundDispatchJobAuthority: CurrentAuthorityResolver<InvocationEvidence> =
+      Object.freeze({
+        resolve: (resolution: Parameters<
+          CurrentAuthorityResolver<InvocationEvidence>['resolve']
+        >[0]) => Object.freeze({
+          kind: 'authorized' as const,
+          authority: Object.freeze({
+            actor: Object.freeze({
+              kind: 'system_job' as const,
+              jobId: outboundDispatchJobIdentity.jobId,
+              registeredCapabilityRevisionId: outboundDispatchJobIdentity.capabilityRevisionId
+            }),
+            principal: Object.freeze({
+              kind: 'registered_job' as const,
+              jobId: outboundDispatchJobIdentity.jobId,
+              capabilityRevisionId: outboundDispatchJobIdentity.capabilityRevisionId,
+              authorityCitationId: outboundDispatchJobIdentity.authorityCitationId
+            }),
+            lane: outboundDispatchLane,
+            scope: resolution.scope,
+            grants: Object.freeze([Object.freeze({
+              kind: 'registered_capability' as const,
+              key: outboundDispatchJobIdentity.capabilityRevisionId
+            })]),
+            evidenceIds: Object.freeze([`job-current:${outboundDispatchJobIdentity.jobId}`]),
+            authorityCitationIds: Object.freeze([outboundDispatchJobIdentity.authorityCitationId]),
+            evaluatedAt: resolution.evaluatedAt
+          })
+        })
+      });
+    const outboundEmailDispatchOperations = createOutboundEmailDeliveryOperationModule({
+      policy: OUTBOUND_EMAIL_DISPATCH_ACCESS_POLICY,
+      scopeResolver: Object.freeze({
+        resolve: () => {
+          const current = events.readCurrentEventState(workspaceId);
+          if (!current?.currentEvent) throw new TypeError('outbound_dispatch_event_missing');
+          return Object.freeze({
+            workspaceId,
+            eventId: current.currentEvent.id,
+            subjects: Object.freeze([
+              Object.freeze({ kind: 'workspace' as const, id: workspaceId }),
+              Object.freeze({ kind: 'event' as const, id: current.currentEvent.id })
+            ]),
+            resolutionEvidenceIds: Object.freeze([
+              `event-spine-root:${current.currentEvent.id}@${current.currentEvent.version}`
+            ])
+          });
+        }
+      }),
+      currentAuthority: outboundDispatchJobAuthority,
+      registeredJob: Object.freeze({
+        job: Object.freeze({ key: 'communication.message-dispatch', version: 1 }),
+        inputProjection: Object.freeze({
+          key: 'communication.message-dispatch.input',
+          version: 1
+        }),
+        capabilityRevisionId: outboundDispatchJobIdentity.capabilityRevisionId,
+        authorityCitation: Object.freeze({
+          key: 'communication.message-dispatch.authority',
+          version: 1
+        })
+      }),
+      clock,
+      newInvocationId: () => parseInvocationId(crypto.randomUUID()),
+      authorityPrincipalKeyProfile: outboundDispatchProfiles.authorityPrincipal,
+      scopePartitionProfile: outboundDispatchProfiles.scopePartition,
+      requestCanonicalizationProfile: outboundDispatchProfiles.requestCanonicalization,
+      requestHashSealer: createHmacRequestHashSealer({
+        profile: OUTBOUND_DISPATCH_REQUEST_HASH_PROFILE,
+        keyBytes: randomHmacKey()
+      }),
+      idempotencyCredentialProfile: outboundDispatchProfiles.idempotencyCredential,
+      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
+        profile: outboundDispatchProfiles.idempotencyCredential,
+        keyBytes: randomHmacKey()
+      })
+    });
     const deadlineOperations = createDeadlineOperationModule({
       workspaceId,
       policies: Object.freeze({
@@ -2458,6 +2869,40 @@ export async function createEphemeralLiveRuntime(input: {
         keyBytes: randomHmacKey()
       })
     });
+    const engagementOperations = createEngagementOperationModule({
+      workspaceId,
+      readPolicy: ENGAGEMENT_READ_ACCESS_POLICY,
+      currentAuthority: authority.resolver,
+      currentEvent,
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      authorityPrincipalKeyProfile: engagementProfiles.authorityPrincipal,
+      scopePartitionProfile: engagementProfiles.scopePartition,
+      requestCanonicalizationProfile: engagementProfiles.requestCanonicalization,
+      // The same repository instance the decision transaction seeds through;
+      // nothing here reads a second copy of engagement state.
+      engagements: decisionRepository.engagements
+    });
+    const engagementDraftOperations = createEngagementDraftOperationModule({
+      workspaceId,
+      draftPolicy: ENGAGEMENT_DRAFT_ACCESS_POLICY,
+      currentAuthority: authority.resolver,
+      currentEvent,
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      authorityPrincipalKeyProfile: engagementProfiles.authorityPrincipal,
+      scopePartitionProfile: engagementProfiles.scopePartition,
+      requestCanonicalizationProfile: engagementProfiles.requestCanonicalization,
+      requestHashSealer: createHmacRequestHashSealer({
+        profile: ENGAGEMENT_DRAFT_REQUEST_HASH_PROFILE,
+        keyBytes: randomHmacKey()
+      }),
+      idempotencyCredentialProfile: engagementProfiles.idempotencyCredential,
+      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
+        profile: engagementProfiles.idempotencyCredential,
+        keyBytes: randomHmacKey()
+      })
+    });
     const eventCreateDraftDomain = createSQLiteEventCreateDraftEffectDomainRegistration({
       sqlite: database.sqlite,
       workspaceId,
@@ -2641,6 +3086,25 @@ export async function createEphemeralLiveRuntime(input: {
         newTimelineId: () => crypto.randomUUID()
       })
     });
+    const engagementDraftDomain = createSQLiteEngagementDraftEffectDomainRegistration({
+      sqlite: database.sqlite,
+      workspaceId,
+      operations: Object.freeze({
+        operation: ENGAGEMENT_CHANGE_DRAFT_OPERATION,
+        accessPolicy: ENGAGEMENT_DRAFT_ACCESS_POLICY,
+        permissionId: ENGAGEMENT_DRAFT_PERMISSION_ID,
+        capability: ENGAGEMENT_DRAFT_HANDLER_CAPABILITY,
+        approvalPolicy: ENGAGEMENT_DRAFT_APPROVAL_POLICY,
+        seal: sealEngagementDraftPreparation
+      }),
+      eventRelationships,
+      ids: Object.freeze({
+        newChangesetId: () => crypto.randomUUID(),
+        newRevisionId: () => crypto.randomUUID(),
+        newPreparationHandle: () => crypto.randomUUID(),
+        newTimelineId: () => crypto.randomUUID()
+      })
+    });
     const organizerCommunicationAuthoringDomains =
       createSQLiteOrganizerCommunicationAuthoringEffectDomainRegistrations({
         sqlite: database.sqlite,
@@ -2651,6 +3115,16 @@ export async function createEphemeralLiveRuntime(input: {
           newTimelineId: () => crypto.randomUUID()
         })
       });
+    const outboundEmailDeliveryDomain = createSQLiteOutboundEmailDeliveryEffectDomainRegistration({
+      sqlite: database.sqlite,
+      ids: Object.freeze({
+        newPreparationHandle: () => crypto.randomUUID(),
+        newFactId: () => crypto.randomUUID(),
+        newPointerId: () => crypto.randomUUID(),
+        newHistoryThreadId: () => crypto.randomUUID(),
+        newHistoryId: () => crypto.randomUUID()
+      })
+    });
     const domains = createSQLiteEffectDomainAdapterRegistry([
       eventCreateDraftDomain,
       eventSettingsDraftDomain,
@@ -2667,7 +3141,10 @@ export async function createEphemeralLiveRuntime(input: {
       reviewEvaluationDraftSaveDomain,
       reviewerRosterDraftDomain,
       decisionDraftDomain,
+      engagementDraftDomain,
+      outboundEmailDeliveryDomain,
       ...organizerCommunicationAuthoringDomains,
+      ...communicationSendRuntime.effectDomains,
       changesetLifecycle
     ]);
     const unitOfWork = new SQLiteEffectUnitOfWorkPort(
@@ -2698,9 +3175,14 @@ export async function createEphemeralLiveRuntime(input: {
       reviewerRosterOperations,
       decisionOperations,
       decisionDraftOperations,
+      engagementOperations,
+      engagementDraftOperations,
       organizerCommunicationAuthoringOperations,
       organizerCommunicationAudiencePreviewOperations,
-      communicationProviderReadOperations
+      communicationProviderReadOperations,
+      communicationSendOperations,
+      communicationDeliveryHistoryOperations,
+      outboundEmailDispatchOperations
     ]);
     const operations = await createApplicationOperationRuntime({
       source,
@@ -2777,6 +3259,8 @@ export async function createEphemeralLiveRuntime(input: {
       auth,
       app,
       workspaceId,
+      communications,
+      outboundDispatch,
       close
     });
   } catch (error) {

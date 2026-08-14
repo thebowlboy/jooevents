@@ -56,6 +56,7 @@ import {
   type OrganizerAudienceCandidate,
   type OrganizerAudienceScope,
   type OrganizerAudienceSourcePort,
+  type OrganizerAudienceSourceSnapshot,
   type OrganizerMessagePreviewSourceVersion,
   type OrganizerPreparedMessageBatchPreview,
   type OrganizerPreviewDigestProfile,
@@ -648,12 +649,37 @@ interface PreviewRow {
   readonly created_at: string;
 }
 
+/**
+ * A synchronous registered-query source mounted beside the mirror tables. A
+ * delegate serves an exact minted recipe live from its owning domain (for
+ * example the decision heads), so `binding: 'current_snapshot'` resolves the
+ * current domain state on every preview and currency check. Delegates must be
+ * synchronous: the preview guard digests their snapshot inline.
+ */
+export interface SQLiteRegisteredAudienceSourceDelegate {
+  /** Matches `communication_registered_audience_recipes.source_definition_key`. */
+  readonly sourceDefinitionKey: string;
+  ownsContactRef(contactRefId: string): boolean;
+  resolveCurrentSnapshot(input: {
+    readonly scope: OrganizerAudienceScope;
+    readonly audience: OrganizerCommunicationAudienceDraft;
+  }): OrganizerAudienceSourceSnapshot;
+  resolveEmail(input: {
+    readonly scope: OrganizerAudienceScope;
+    readonly purposeRevision: OrganizerCommunicationPurposeRevisionRef;
+    readonly candidate: OrganizerAudienceCandidate;
+    readonly asOf: string;
+  }): OrganizerAddressPolicyResolution;
+}
+
 export interface SQLiteOrganizerAudiencePreviewRepositoryOptions {
   readonly drafts: OrganizerPreviewDraftBindingSource;
   readonly opaqueTokens: OrganizerPreviewOpaqueTokenCodec;
   readonly render: OrganizerPreviewRenderPort;
   readonly digestProfile: OrganizerPreviewDigestProfile;
   readonly audienceCursorKeyBytes: Uint8Array;
+  /** Live registered-query sources; recipes stay minted immutable rows. */
+  readonly registeredSources?: readonly SQLiteRegisteredAudienceSourceDelegate[];
   /** Deliberately short: prepared material is process-local and nonrenewable. */
   readonly preparedTtlMs?: number;
   /** Receives only already-zeroed bytes; used by executable security tests. */
@@ -668,6 +694,7 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
   readonly #preparedTtlMs: number;
   readonly #preparedRecords = new WeakMap<object, PreparedRecord>();
   readonly #livePreparedRecords = new Set<PreparedRecord>();
+  readonly #registeredSources: ReadonlyMap<string, SQLiteRegisteredAudienceSourceDelegate>;
 
   constructor(
     private readonly sqlite: Database,
@@ -682,6 +709,19 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
     if (!Number.isSafeInteger(ttl) || ttl < 1 || ttl > 60_000) {
       throw new SQLiteOrganizerAudiencePreviewError('invalid_input');
     }
+    const registeredSources = new Map<string, SQLiteRegisteredAudienceSourceDelegate>();
+    for (const delegate of options.registeredSources ?? []) {
+      if (typeof delegate.sourceDefinitionKey !== 'string'
+          || delegate.sourceDefinitionKey.length === 0
+          || registeredSources.has(delegate.sourceDefinitionKey)
+          || typeof delegate.ownsContactRef !== 'function'
+          || typeof delegate.resolveCurrentSnapshot !== 'function'
+          || typeof delegate.resolveEmail !== 'function') {
+        throw new SQLiteOrganizerAudiencePreviewError('invalid_input');
+      }
+      registeredSources.set(delegate.sourceDefinitionKey, delegate);
+    }
+    this.#registeredSources = registeredSources;
     this.#cursorKey = Uint8Array.from(options.audienceCursorKeyBytes);
     this.#preparedTtlMs = ttl;
   }
@@ -935,6 +975,22 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
       audience = organizerCommunicationAudienceDraftSchema.parse(rawAudience);
     } catch (error) {
       throw new OrganizerAudienceResolutionError('source_contract_mismatch');
+    }
+    if (audience.source.kind === 'registered_query') {
+      // A minted immutable recipe row remains the authorization to resolve; a
+      // registered live delegate then serves the recipe's current snapshot.
+      const recipe = this.#exactRecipe(selected, audience.source);
+      if (recipe === undefined) {
+        throw new OrganizerAudienceResolutionError('source_not_registered');
+      }
+      const delegate = this.#registeredSources.get(recipe.source_definition_key);
+      if (delegate !== undefined) {
+        const snapshot = delegate.resolveCurrentSnapshot({ scope: selected, audience });
+        if (!exactJson(snapshot.source, audience.source)) {
+          throw new OrganizerAudienceResolutionError('source_contract_mismatch');
+        }
+        return snapshot;
+      }
     }
     const rows = this.#candidateRows(selected, audience);
     const candidates = rows.map((row) => {
@@ -1203,7 +1259,7 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
     this.#bumpScopeState(selected);
   }
 
-  resolveEmail({ scope: rawScope, purposeRevision: rawPurpose, candidate }: {
+  resolveEmail({ scope: rawScope, purposeRevision: rawPurpose, candidate, asOf: rawAsOf }: {
     readonly scope: OrganizerAudienceScope;
     readonly purposeRevision: OrganizerCommunicationPurposeRevisionRef;
     readonly candidate: OrganizerAudienceCandidate;
@@ -1211,6 +1267,16 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
   }): OrganizerAddressPolicyResolution {
     const selected = scope(rawScope);
     const purposeRevision = organizerCommunicationPurposeRevisionRefSchema.parse(rawPurpose);
+    for (const delegate of this.#registeredSources.values()) {
+      if (delegate.ownsContactRef(candidate.contactRefId)) {
+        return organizerAddressPolicyResolutionSchema.parse(delegate.resolveEmail({
+          scope: selected,
+          purposeRevision,
+          candidate,
+          asOf: rawAsOf
+        }));
+      }
+    }
     const rows = this.sqlite.query<{
       purpose_revision_json: string;
       resolution_kind: 'no_eligible_address' | 'evaluated';
@@ -1460,6 +1526,73 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
       source,
       addressPolicyState
     });
+  }
+
+  /**
+   * Commit-side currency probe for an adopted preview snapshot. It re-proves,
+   * synchronously and from live domain state, exactly what adoption pinned:
+   * the immutable snapshot row still carries the requested identity, the draft
+   * binding still reads at the pinned version, and re-resolving the audience
+   * plus address-policy state reproduces the adopted guard digest. Any drift —
+   * a re-decide, a revised or discarded draft, a changed address or policy —
+   * fails closed to 'stale'. The send-wave changeset consumes this inside its
+   * one commit transaction; the asynchronous full re-render check remains the
+   * read path's stronger gate.
+   */
+  checkAdoptedPreviewCurrency(input: {
+    readonly scope: OrganizerCommunicationScope;
+    readonly identity: unknown;
+  }): 'current' | 'stale' | 'not_found' {
+    const selected = scope(input.scope);
+    let identity: ReturnType<typeof organizerMessagePreviewIdentitySchema.parse>;
+    try {
+      identity = organizerMessagePreviewIdentitySchema.parse(input.identity);
+    } catch (error) {
+      throw new SQLiteOrganizerAudiencePreviewError('invalid_input', error);
+    }
+    const rows = this.sqlite.query<{
+      readonly owner_key: string;
+      readonly draft_id: string;
+      readonly draft_version: number;
+      readonly preview_generation: number;
+      readonly preview_digest_profile: string;
+      readonly preview_digest_version: number;
+      readonly preview_digest_sha256: string;
+      readonly guard_digest_sha256: string;
+    }, [string, string, string]>(`
+      SELECT owner_key,draft_id,draft_version,preview_generation,preview_digest_profile,
+             preview_digest_version,preview_digest_sha256,guard_digest_sha256
+        FROM communication_message_preview_snapshots
+       WHERE workspace_id=? AND event_id=? AND audience_spec_id=? LIMIT 2
+    `).all(selected.workspaceId, selected.eventId, identity.audienceSpecId);
+    if (rows.length > 1) throw new SQLiteOrganizerAudiencePreviewError('data_corrupt');
+    const row = rows[0];
+    if (row === undefined) return 'not_found';
+    if (row.draft_id !== identity.draftId
+        || row.draft_version !== identity.draftVersion
+        || row.preview_generation !== identity.previewGeneration
+        || row.preview_digest_profile !== identity.previewDigestProfile
+        || row.preview_digest_version !== identity.previewDigestVersion
+        || row.preview_digest_sha256 !== identity.previewDigestSha256) {
+      return 'stale';
+    }
+    const binding = this.options.drafts.readCurrent({
+      scope: selected,
+      ownerKey: row.owner_key,
+      draftId: identity.draftId,
+      expectedVersion: identity.draftVersion
+    });
+    if (binding === undefined) return 'stale';
+    try {
+      return this.#currentGuard({ scope: selected, ownerKey: row.owner_key, binding })
+        === row.guard_digest_sha256
+        ? 'current'
+        : 'stale';
+    } catch (error) {
+      // A source that can no longer resolve is drifted domain state, not corruption.
+      if (error instanceof OrganizerAudienceResolutionError) return 'stale';
+      throw error;
+    }
   }
 
   async preparePreview(input: {

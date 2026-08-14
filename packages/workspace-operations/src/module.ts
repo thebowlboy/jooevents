@@ -84,14 +84,28 @@ export const DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG: WorkspaceOverviewAreaCatal
     },
     {
       area: 'decisions',
+      status: 'available',
+      // Notification review and send ride the mounted communication send
+      // lane (prepare/adopt preview + send_messages); with no outbound
+      // provider activated every delivery still lands honestly not-delivered.
+      capabilities: [
+        'decision.decide.draft',
+        'decision.notification.send',
+        'decision.state.read'
+      ]
+    },
+    {
+      area: 'speakers',
       status: 'partial',
       availableCapabilities: [
-        'decision.decide.draft',
-        'decision.state.read'
+        'engagement.change.draft',
+        'engagement.snapshot.read'
       ],
-      unavailableCapabilities: ['decision.notification.send']
+      unavailableCapabilities: [
+        'speaker.category.manage',
+        'speaker.lineup.manage'
+      ]
     },
-    { area: 'speakers', status: 'unavailable', reason: 'not_implemented' },
     {
       area: 'reviewers',
       status: 'partial',
@@ -120,12 +134,33 @@ export const DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG: WorkspaceOverviewAreaCatal
     {
       area: 'messages',
       status: 'partial',
-      availableCapabilities: ['communication.email_readiness.read'],
-      unavailableCapabilities: [
-        'create_email_provider_connection_draft',
+      // The mounted authoring, audience-preview, send-lane, and
+      // delivery-history operations, by their exact operation names; the
+      // send ceremony and history projection are live (J-WEB-2), and with no
+      // outbound provider activated every delivery lands honestly
+      // not-delivered. Provider connection setup remains unavailable.
+      availableCapabilities: [
+        'communication.email_readiness.read',
+        'create_message_draft',
+        'discard_message_draft',
+        'get_communication_purpose',
         'get_delivery_history',
+        'get_message_batch_preview',
+        'get_message_draft',
+        'get_message_template',
+        'list_audience_options',
+        'list_communication_purposes',
+        'list_message_drafts',
+        'list_message_preview_recipients',
+        'list_message_templates',
+        'prepare_message_batch_preview',
         'preview_message_batch',
-        'send_messages'
+        'revise_message_batch',
+        'send_messages',
+        'store_communication_authoring_payload'
+      ],
+      unavailableCapabilities: [
+        'create_email_provider_connection_draft'
       ]
     },
     { area: 'templates', status: 'unavailable', reason: 'not_implemented' },

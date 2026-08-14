@@ -9,6 +9,8 @@ import {
   decisionDecideDraftOperationResultSchema,
   decisionStateReadResultSchema,
   emailProviderConfigurationReadOperationResultSchema,
+  engagementChangeDraftOperationResultSchema,
+  engagementSnapshotReadResultSchema,
   emailProviderReadinessReadOperationResultSchema,
   eventCreateDraftOperationResultSchema,
   eventSettingsUpdateDraftOperationResultSchema,
@@ -17,8 +19,12 @@ import {
   organizerCommunicationAuthoringPayloadOperationResultSchema,
   organizerCommunicationDraftMutationOperationResultSchema,
   organizerCommunicationDraftPageOperationResultSchema,
+  organizerCommunicationHistoryPageOperationResultSchema,
   organizerCommunicationPurposePageOperationResultSchema,
   organizerMessageTemplatePageOperationResultSchema,
+  organizerPrepareMessagePreviewOperationResultSchema,
+  organizerPreviewMessageBatchOperationResultSchema,
+  organizerSendMessagesOperationResultSchema,
   organizerFormCatalogSchema,
   programVocabularySnapshotReadResultSchema,
   safeOperationManifestSchema,
@@ -56,6 +62,7 @@ import {
   changesetDiffOperationResultSchema,
   changesetLifecycleOperationResultSchema
 } from '@jooevents/changeset-operations';
+import { DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG } from '@jooevents/workspace-operations';
 import { loadEphemeralLiveConfig } from '../config';
 import { createEphemeralLiveRuntime, type EphemeralLiveRuntime } from './ephemeral-live';
 
@@ -383,6 +390,14 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['POST /api/events/current/communications/drafts/discard']
       },
       {
+        name: 'engagement.change.draft', version: 1, effect: 'draft',
+        bindings: ['POST /api/events/current/engagements/drafts']
+      },
+      {
+        name: 'engagement.snapshot.read', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/engagements']
+      },
+      {
         name: 'event.create.draft', version: 1, effect: 'draft',
         bindings: ['POST /api/events/drafts/create']
       },
@@ -452,6 +467,10 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['GET /api/events/current/communications/purposes/detail']
       },
       {
+        name: 'get_delivery_history', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/communications/deliveries/history']
+      },
+      {
         name: 'get_message_batch_preview', version: 1, effect: 'read',
         bindings: ['GET /api/events/current/communications/previews/detail']
       },
@@ -482,6 +501,14 @@ describe('ephemeral live Foundation server composition', () => {
       {
         name: 'list_message_templates', version: 1, effect: 'read',
         bindings: ['GET /api/events/current/communications/templates']
+      },
+      {
+        name: 'prepare_message_batch_preview', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/communications/previews/prepare']
+      },
+      {
+        name: 'preview_message_batch', version: 1, effect: 'draft',
+        bindings: ['POST /api/events/current/communications/previews/adopt']
       },
       {
         name: 'program_vocabulary.create.draft', version: 1, effect: 'draft',
@@ -554,6 +581,10 @@ describe('ephemeral live Foundation server composition', () => {
       {
         name: 'schedule.placement.snapshot.read', version: 1, effect: 'read',
         bindings: ['GET /api/events/current/schedule/placements']
+      },
+      {
+        name: 'send_messages', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/communications/messages/send']
       },
       {
         name: 'session.catalog.read', version: 1, effect: 'read',
@@ -682,6 +713,23 @@ describe('ephemeral live Foundation server composition', () => {
       headers: { 'content-type': 'application/json', origin: config.baseUrl },
       body: '{}'
     })).status).toBe(404);
+  });
+
+  test('states the messages area by operations this composition actually serves', async () => {
+    const runtime = await createEphemeralLiveRuntime({ config });
+    runtimes.push(runtime);
+    const manifest = safeOperationManifestSchema.parse(
+      await (await runtime.app.request('/api/operations/manifest')).json()
+    );
+    const mounted = new Set(manifest.operations.map((operation) => operation.name));
+    const messages = DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG
+      .find((entry) => entry.area === 'messages');
+    if (messages?.status !== 'partial') throw new Error('The messages area is not partial.');
+    // The area names communication operations exactly: every advertised
+    // capability is served by this registry, and the one it calls unavailable
+    // is genuinely not mounted. An area claim is evidence, not a label.
+    expect(messages.availableCapabilities.filter((name) => !mounted.has(name))).toEqual([]);
+    expect(messages.unavailableCapabilities.filter((name) => mounted.has(name))).toEqual([]);
   });
 
   test('owns an independent database per runtime and closes idempotently', async () => {
@@ -2042,12 +2090,28 @@ describe('ephemeral live Foundation server composition', () => {
         }, {
           area: 'messages',
           status: 'partial',
-          availableCapabilities: ['communication.email_readiness.read'],
-          unavailableCapabilities: [
-            'create_email_provider_connection_draft',
+          availableCapabilities: [
+            'communication.email_readiness.read',
+            'create_message_draft',
+            'discard_message_draft',
+            'get_communication_purpose',
             'get_delivery_history',
+            'get_message_batch_preview',
+            'get_message_draft',
+            'get_message_template',
+            'list_audience_options',
+            'list_communication_purposes',
+            'list_message_drafts',
+            'list_message_preview_recipients',
+            'list_message_templates',
+            'prepare_message_batch_preview',
             'preview_message_batch',
-            'send_messages'
+            'revise_message_batch',
+            'send_messages',
+            'store_communication_authoring_payload'
+          ],
+          unavailableCapabilities: [
+            'create_email_provider_connection_draft'
           ]
         }])
       }
@@ -2159,7 +2223,7 @@ describe('ephemeral live Foundation server composition', () => {
     ).all()).toEqual([]);
   });
 
-  test('mounts factual Communications catalogs and inert classified authoring without product defaults', async () => {
+  test('mounts factual Communications catalogs with the seeded decision-notification defaults and inert classified authoring', async () => {
     const runtime = await createEphemeralLiveRuntime({ config });
     runtimes.push(runtime);
     const session = await createOwnerSession(runtime);
@@ -2221,34 +2285,67 @@ describe('ephemeral live Foundation server composition', () => {
     await createEventThroughChangeset({
       runtime, session, key: 'organizer-communication-event'
     });
-    const readPaths = Object.freeze([
-      Object.freeze({
-        path: '/api/events/current/communications/purposes',
-        schema: organizerCommunicationPurposePageOperationResultSchema
-      }),
-      Object.freeze({
-        path: '/api/events/current/communications/templates',
-        schema: organizerMessageTemplatePageOperationResultSchema
-      }),
-      Object.freeze({
-        path: '/api/events/current/communications/drafts',
-        schema: organizerCommunicationDraftPageOperationResultSchema
-      }),
-      Object.freeze({
-        path: '/api/events/current/communications/audiences/options',
-        schema: organizerCommunicationAudienceOptionPageOperationResultSchema
-      })
-    ]);
-    for (const { path, schema } of readPaths) {
-      const result = schema.parse(await (
+    // Created events are seeded with the recorded decision-notification
+    // defaults (BLOCKED-4/BLOCKED-5/BLOCKED-12): one transactional purpose,
+    // two active templates, and the two immutable decision-set audience
+    // recipes. Drafts remain empty — nothing authors messages by default.
+    const read = async <Value>(path: string, schema: { parse(value: unknown): Value }) =>
+      schema.parse(await (
         await runtime.app.request(path, {
           headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
         })
       ).json());
-      expect(result).toMatchObject({
-        kind: 'success', data: { schemaVersion: 1, rows: [], page: { hasMore: false } }
-      });
-    }
+    const purposes = await read(
+      '/api/events/current/communications/purposes',
+      organizerCommunicationPurposePageOperationResultSchema
+    );
+    expect(purposes).toMatchObject({
+      kind: 'success',
+      data: {
+        schemaVersion: 1,
+        rows: [{
+          communicationClass: 'transactional',
+          lifecycle: 'active',
+          revision: { purposeKey: 'decision_notification', revisionNumber: 1 }
+        }],
+        page: { hasMore: false }
+      }
+    });
+    const templates = await read(
+      '/api/events/current/communications/templates',
+      organizerMessageTemplatePageOperationResultSchema
+    );
+    expect(templates).toMatchObject({
+      kind: 'success',
+      data: { schemaVersion: 1, page: { hasMore: false } }
+    });
+    if (templates.kind !== 'success') throw new Error('templates_read_failed');
+    expect(templates.data.rows.map((row: { readonly key: string }) => row.key).sort())
+      .toEqual(['decision.accepted', 'decision.declined']);
+    const drafts = await read(
+      '/api/events/current/communications/drafts',
+      organizerCommunicationDraftPageOperationResultSchema
+    );
+    expect(drafts).toMatchObject({
+      kind: 'success', data: { schemaVersion: 1, rows: [], page: { hasMore: false } }
+    });
+    const audienceOptions = await read(
+      '/api/events/current/communications/audiences/options',
+      organizerCommunicationAudienceOptionPageOperationResultSchema
+    );
+    expect(audienceOptions).toMatchObject({
+      kind: 'success',
+      data: { schemaVersion: 1, page: { hasMore: false } }
+    });
+    if (audienceOptions.kind !== 'success') throw new Error('audience_options_read_failed');
+    expect(audienceOptions.data.rows).toHaveLength(2);
+    expect(audienceOptions.data.rows.map((row) => {
+      const source = row.audienceDraft.source;
+      return source.kind === 'registered_query' ? source.recipeId : source.kind;
+    }).sort()).toEqual([
+      'recipe.communication.decision-set.accepted',
+      'recipe.communication.decision-set.declined'
+    ]);
 
     const payloadBody = Object.freeze({
       payload: Object.freeze({
@@ -2288,7 +2385,9 @@ describe('ephemeral live Foundation server composition', () => {
       parse: (value) => value
     }));
     expect(replay).toEqual(payload);
-    expect(count(runtime, 'communication_authoring_payloads')).toBe(1);
+    // 4 seeded template payload rows (content + bindings for the two
+    // decision-notification templates) plus the one stored above.
+    expect(count(runtime, 'communication_authoring_payloads')).toBe(5);
     expect(count(runtime, 'organizer_communication_authoring_receipt_links')).toBe(1);
     expect(count(runtime, 'organizer_communication_authoring_timeline')).toBe(1);
     expect(Buffer.from(runtime.database.sqlite.serialize()).includes(
@@ -2908,17 +3007,20 @@ describe('ephemeral live Foundation server composition', () => {
       receipt: { operationName: 'decision.decide.draft', operationVersion: 1 }
     });
     if (decideDraft.kind !== 'success') throw new Error('Decide draft failed.');
-    // The draft is inert: no Decision head, origin link, or Session yet.
+    // The draft is inert: no Decision head, origin link, Session, or seeded
+    // engagement yet.
     expect(count(runtime, 'decision_draft_receipt_links')).toBe(1);
     expect(count(runtime, 'decision_draft_timeline')).toBe(1);
     expect(count(runtime, 'decision_heads')).toBe(0);
     expect(count(runtime, 'submission_session_origins')).toBe(0);
     expect(count(runtime, 'sessions')).toBe(0);
+    expect(count(runtime, 'engagement_heads')).toBe(0);
 
     await commitDraft({ runtime, session, key: 'decision-loop-decide', draft: decideDraft });
     expect(count(runtime, 'decision_heads')).toBe(1);
     expect(count(runtime, 'submission_session_origins')).toBe(1);
     expect(count(runtime, 'sessions')).toBe(1);
+    expect(count(runtime, 'engagement_heads')).toBe(1);
     expect(count(runtime, 'decision_changeset_receipt_links')).toBe(2);
     expect(count(runtime, 'decision_changeset_domain_facts')).toBe(1);
     expect(count(runtime, 'decision_changeset_outbox_pointers')).toBe(1);
@@ -2986,6 +3088,880 @@ describe('ephemeral live Foundation server composition', () => {
       triage: { submissionId, state: 'inbox', version: 1 },
       visibleTray: 'inbox'
     });
+
+    // The acceptance commit seeded one `invited` engagement for the spawned
+    // Session's participant inside the same unit of work, keyed by personId
+    // and stamped with the acceptance's own written decision head.
+    const decidedHead = decided.data.rows[0]?.head;
+    if (!decidedHead) throw new Error('Decided head missing.');
+    const engagements = engagementSnapshotReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/engagements', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    expect(engagements).toMatchObject({
+      kind: 'success',
+      data: {
+        schemaVersion: 1,
+        engagements: [{
+          sessionId: origin.sessionId,
+          personId: participant.person_id,
+          submissionId,
+          state: 'invited',
+          version: 1,
+          seededByDecision: {
+            version: decidedHead.version,
+            digestSha256: decidedHead.digestSha256
+          },
+          source: { kind: 'submission', id: submissionId }
+        }]
+      }
+    });
+    if (engagements.kind !== 'success') throw new Error('Engagement read failed.');
+    const seededEngagement = engagements.data.engagements[0];
+    if (!seededEngagement) throw new Error('Seeded engagement missing.');
+    // The seed pin above is what keeps this row safe from another
+    // acceptance's compensation: a reversal selects only rows carrying its
+    // own decision-head pin. The multi-acceptance dance itself is pinned at
+    // the persistence join (decision.test.ts "compensating a re-acceptance
+    // leaves rows an earlier acceptance seeded standing"; engagement.test.ts
+    // "reversal selects only the reverted acceptance's own rows by their
+    // decision pin") — replaying it here would need a collecting attach
+    // target plus staged post-commit drift, which this loop does not stage.
+
+    // The organizer records the speaker's confirmation through the mounted
+    // response draft; the draft is inert until its lifecycle commit.
+    const confirmDraft = engagementChangeDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/engagements/drafts',
+      key: 'decision-loop-confirm-draft',
+      body: {
+        action: 'record_confirmation',
+        engagementId: seededEngagement.id,
+        expectedEngagementVersion: 1,
+        attribution: 'organizer_recorded'
+      },
+      parse: (value) => value
+    }));
+    expect(confirmDraft).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'record_confirmation',
+        headVersion: 1,
+        status: 'draft',
+        safeDiff: {
+          action: 'record_confirmation',
+          before: { id: seededEngagement.id, state: 'invited', version: 1 },
+          after: { id: seededEngagement.id, state: 'confirmed', version: 2 }
+        }
+      },
+      receipt: { operationName: 'engagement.change.draft', operationVersion: 1 }
+    });
+    if (confirmDraft.kind !== 'success') throw new Error('Confirmation draft failed.');
+    expect(count(runtime, 'engagement_draft_receipt_links')).toBe(1);
+    expect(count(runtime, 'engagement_draft_timeline')).toBe(1);
+    expect(count(runtime, 'engagement_heads', "WHERE state = 'invited'")).toBe(1);
+
+    await commitDraft({ runtime, session, key: 'decision-loop-confirm', draft: confirmDraft });
+    expect(count(runtime, 'engagement_changeset_receipt_links')).toBe(2);
+    expect(count(runtime, 'engagement_changeset_domain_facts')).toBe(1);
+    expect(count(runtime, 'engagement_changeset_outbox_pointers')).toBe(1);
+    expect(count(runtime, 'engagement_changeset_timeline')).toBe(2);
+    const confirmed = engagementSnapshotReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/engagements', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    expect(confirmed).toMatchObject({
+      kind: 'success',
+      data: {
+        engagements: [{
+          id: seededEngagement.id,
+          state: 'confirmed',
+          version: 2,
+          confirmation: {
+            attribution: 'organizer_recorded',
+            personId: participant.person_id,
+            recordedByUserId: appUserId
+          },
+          seededByDecision: {
+            version: decidedHead.version,
+            digestSha256: decidedHead.digestSha256
+          }
+        }]
+      }
+    });
+    expect(runtime.database.sqlite.query<Record<string, unknown>, []>(
+      'PRAGMA foreign_key_check'
+    ).all()).toEqual([]);
+  });
+
+  test('commits the decision-notification send wave inertly: audience, preview, send ceremony, dispatch to terminal not-delivered, and currency refusal', async () => {
+    const runtime = await createEphemeralLiveRuntime({ config });
+    runtimes.push(runtime);
+    const session = await createOwnerSession(runtime);
+    const appUserId = await provisionOwner(runtime, session);
+    await createEventThroughChangeset({ runtime, session, key: 'send-wave-event' });
+
+    const formatDraft = programVocabularyDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/program-vocabulary/drafts/create',
+      key: 'send-wave-format-draft',
+      body: { kind: 'format', expectedSetVersion: 1, name: 'Talk' },
+      parse: (value) => value
+    }));
+    if (formatDraft.kind !== 'success') throw new Error('Format draft failed.');
+    await commitDraft({ runtime, session, key: 'send-wave-format', draft: formatDraft });
+    const vocabulary = programVocabularySnapshotReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/program-vocabulary', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (vocabulary.kind !== 'success') throw new Error('Vocabulary read failed.');
+    const format = vocabulary.data.formats.find((candidate) => candidate.name === 'Talk');
+    if (!format) throw new Error('Committed format missing.');
+
+    const registryResult = fieldRegistrySnapshotReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/field-registry', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (registryResult.kind !== 'success') throw new Error('Field registry read failed.');
+    const registry = registryResult.data;
+    const titleFieldId = registry.fields.find((field) =>
+      field.mapsTo === 'talk.title' && field.kind === 'text'
+    )?.id;
+    const emailFieldId = registry.fields.find((field) =>
+      field.mapsTo === 'person.email' && field.kind === 'email'
+    )?.id;
+    if (!titleFieldId || !emailFieldId) throw new Error('Identity fields missing.');
+    const included = new Set([titleFieldId, emailFieldId]);
+    const formCreateDraft = intakeFormDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/forms/drafts/create',
+      key: 'send-wave-form-create-draft',
+      body: {
+        expectedCatalogVersion: 1,
+        expectedRegistryVersion: registry.version,
+        definition: {
+          ...formDefinitionInput,
+          name: 'Send wave CFP',
+          target: {
+            kind: 'category',
+            category: { kind: 'format', id: format.id }
+          },
+          composition: {
+            excludedFieldIds: registry.fields
+              .filter((field) => field.scope.kind === 'shared'
+                && field.contexts.apply.visible
+                && !included.has(field.id))
+              .map((field) => field.id)
+              .sort(),
+            requiredOverrides: {},
+            optionExposure: {}
+          }
+        }
+      },
+      parse: (value) => value
+    }));
+    if (formCreateDraft.kind !== 'success'
+        || formCreateDraft.data.safeDiff.action !== 'create') {
+      throw new Error('Form create draft failed.');
+    }
+    await commitDraft({
+      runtime, session, key: 'send-wave-form-create', draft: formCreateDraft
+    });
+    const openDraft = intakeFormDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/forms/drafts/lifecycle',
+      key: 'send-wave-form-open-draft',
+      body: {
+        transition: 'publish_and_open',
+        formId: formCreateDraft.data.safeDiff.after.id,
+        expectedDefinitionVersion: 1,
+        expectedRegistryVersion: registry.version
+      },
+      parse: (value) => value
+    }));
+    if (openDraft.kind !== 'success') throw new Error('Form open draft failed.');
+    await commitDraft({ runtime, session, key: 'send-wave-form-open', draft: openDraft });
+    const catalog = organizerFormCatalogReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/forms', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (catalog.kind !== 'success') throw new Error('Form catalog read failed.');
+    const openForm = catalog.data.forms.find((form) => form.status === 'open');
+    if (!openForm) throw new Error('Open form missing from the catalog.');
+
+    const enterSubmission = async (label: string, email: string) => {
+      const entryDraft = submissionDirectEntryDraftOperationResultSchema.parse(await effect({
+        runtime,
+        session,
+        path: '/api/events/current/submissions/direct-entry/drafts',
+        key: `send-wave-entry-${label}-draft`,
+        body: {
+          formId: openForm.id,
+          expectedFormDefinitionVersion: openForm.version,
+          answers: [
+            { kind: 'text', fieldId: titleFieldId, value: `Send wave ${label}` },
+            { kind: 'email', fieldId: emailFieldId, value: email }
+          ]
+        },
+        parse: (value) => value
+      }));
+      if (entryDraft.kind !== 'success') throw new Error(`Direct entry ${label} failed.`);
+      await commitDraft({
+        runtime, session, key: `send-wave-entry-${label}`, draft: entryDraft
+      });
+      return entryDraft.data.safeDiff.submission.id;
+    };
+    const decide = async (label: string, submissionId: string) => {
+      const decideDraft = decisionDecideDraftOperationResultSchema.parse(await effect({
+        runtime,
+        session,
+        path: '/api/events/current/decisions/decide-drafts',
+        key: `send-wave-decide-${label}-draft`,
+        body: {
+          action: 'decide',
+          decisions: [{
+            submissionId,
+            state: 'accepted',
+            expectedDecisionVersion: null,
+            expectedDecisionDigestSha256: null,
+            graduation: { kind: 'spawn' }
+          }]
+        },
+        parse: (value) => value
+      }));
+      if (decideDraft.kind !== 'success') throw new Error(`Decide ${label} draft failed.`);
+      await commitDraft({
+        runtime, session, key: `send-wave-decide-${label}`, draft: decideDraft
+      });
+    };
+    const firstEmail = 'send.wave.one@example.test';
+    const submissionA = await enterSubmission('one', firstEmail);
+    const submissionB = await enterSubmission('two', 'send.wave.two@example.test');
+    await decide('one', submissionA);
+
+    // The seeded decision-set recipes serve as live audience options.
+    const options = organizerCommunicationAudienceOptionPageOperationResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/communications/audiences/options', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (options.kind !== 'success') throw new Error('Audience options read failed.');
+    const acceptedOption = options.data.rows.find((row) => {
+      const source = row.audienceDraft.source;
+      return source.kind === 'registered_query'
+        && source.recipeId === 'recipe.communication.decision-set.accepted';
+    });
+    if (!acceptedOption) throw new Error('Accepted decision-set option missing.');
+
+    const storePayload = async (label: string, payload: unknown) => {
+      const stored = organizerCommunicationAuthoringPayloadOperationResultSchema.parse(
+        await effect({
+          runtime,
+          session,
+          path: '/api/events/current/communications/authoring-payloads',
+          key: `send-wave-payload-${label}`,
+          body: { payload },
+          parse: (value) => value
+        })
+      );
+      if (stored.kind !== 'success') throw new Error(`Payload ${label} store failed.`);
+      return stored.data;
+    };
+    const createReadyDraft = async (label: string) => {
+      const contentPayload = await storePayload(`content-${label}`, {
+        payloadKind: 'message_content',
+        schemaVersion: 1,
+        value: {
+          kind: 'email/v1',
+          subject: 'Your submission decision',
+          body: {
+            kind: 'plain_text/v1',
+            text: `Good news — your submission was accepted. (${label})`
+          }
+        }
+      });
+      const audiencePayload = await storePayload(`audience-${label}`, {
+        payloadKind: 'message_audience_draft',
+        schemaVersion: 1,
+        value: acceptedOption.audienceDraft
+      });
+      const created = organizerCommunicationDraftMutationOperationResultSchema.parse(
+        await effect({
+          runtime,
+          session,
+          path: '/api/events/current/communications/drafts/create',
+          key: `send-wave-draft-${label}`,
+          body: {
+            channel: 'email',
+            purposeRevision: acceptedOption.audienceDraft.purposeRevision,
+            initial: {
+              kind: 'adopted_payload_refs',
+              contentPayload,
+              audiencePayload
+            }
+          },
+          parse: (value) => value
+        })
+      );
+      if (created.kind !== 'success') throw new Error(`Draft ${label} create failed.`);
+      return created.data;
+    };
+
+    const draftOne = await createReadyDraft('one');
+    const adoptedOne = await runtime.communications.adoptDecisionPreview({
+      draftId: draftOne.draftId,
+      expectedDraftVersion: draftOne.version
+    });
+    if (adoptedOne.kind !== 'adopted') {
+      throw new Error(`Preview adoption refused: ${JSON.stringify(adoptedOne)}`);
+    }
+    expect(adoptedOne.summary.counts).toMatchObject({ includedCount: 1 });
+    expect(adoptedOne.summary.sourceVersions).toEqual([
+      expect.objectContaining({ sourceKey: 'decision-set.accepted' })
+    ]);
+
+    const attributionRow = runtime.database.sqlite.query<{
+      readonly scope_partition_key: string;
+      readonly authority_principal_key: string;
+    }, []>(`
+      SELECT scope_partition_key, authority_principal_key
+        FROM foundation_trial_operation_receipts
+       WHERE operation_name = 'changeset.commit' LIMIT 1
+    `).get();
+    if (!attributionRow) throw new Error('No operator commit receipt to attribute.');
+    const attribution = Object.freeze({
+      scopePartitionKey: attributionRow.scope_partition_key,
+      authorityPrincipalKey: attributionRow.authority_principal_key,
+      principalKey: `workspace_user:${appUserId}`
+    });
+
+    const sent = runtime.communications.sendDecisionMessages({
+      audienceSpecId: adoptedOne.summary.identity.audienceSpecId,
+      batchId: 'batch.decision-notification.send-wave',
+      subject: 'Your submission decision',
+      audienceLabel: 'Accepted submissions',
+      attribution
+    });
+    if (sent.kind !== 'committed') {
+      throw new Error(`Send refused: ${JSON.stringify(sent)}`);
+    }
+    expect(sent.result).toMatchObject({
+      batchId: 'batch.decision-notification.send-wave',
+      dispatchGeneration: 1,
+      releaseCount: 1
+    });
+    // The reused changeset ceremony: drafted -> proposed -> committed inside
+    // the one send transaction (BLOCKED-3), with the commit receipt linked.
+    expect(runtime.database.sqlite.query<{
+      readonly status: string;
+      readonly head_version: number;
+    }, [string]>(`
+      SELECT status, head_version FROM changeset_heads WHERE changeset_id = ?
+    `).get(sent.changesetId)).toEqual({ status: 'committed', head_version: 3 });
+    expect(count(runtime, 'communication_release_receipt_links', "WHERE action = 'commit'"))
+      .toBe(1);
+    expect(count(runtime, 'communication_message_releases')).toBe(1);
+    expect(count(runtime, 'communication_release_effect_specs')).toBe(1);
+    expect(count(runtime, 'communication_outbound_delivery_heads', "WHERE state = 'pending'"))
+      .toBe(1);
+
+    // One dispatch pass over the ledger. Only the deterministic fake provider
+    // is composed and the send lane's external delivery key names no fake
+    // scenario, so the attempt resolves as a terminal known rejection: the
+    // delivery is honestly not delivered and no follow-up is owed.
+    const dispatched = await runtime.outboundDispatch.runOnce();
+    expect(dispatched).toEqual([expect.objectContaining({
+      contractVersion: 1,
+      state: 'known_rejected_terminal',
+      followUp: 'complete'
+    })]);
+    expect(count(runtime, 'communication_outbound_delivery_heads',
+      "WHERE state = 'known_rejected_terminal'")).toBe(1);
+    expect(runtime.database.sqlite.query<{
+      readonly adapter_key: string;
+      readonly state: string;
+      readonly provider_outcome_reason: string | null;
+    }, []>(`
+      SELECT adapter_key, state, provider_outcome_reason
+        FROM communication_outbound_delivery_attempts
+    `).all()).toEqual([{
+      adapter_key: 'fake.email',
+      state: 'known_rejected_terminal',
+      provider_outcome_reason: 'delivery.rejected_terminal'
+    }]);
+    expect(count(runtime, 'communication_outbound_delivery_facts')).toBe(2);
+    expect(count(runtime, 'communication_outbound_delivery_outbox')).toBe(2);
+    expect(count(runtime, 'communication_outbound_delivery_history')).toBe(2);
+    // A second pass finds nothing dispatchable: terminal rejections are never
+    // auto-retried (recorder default BLOCKED-6).
+    expect(await runtime.outboundDispatch.runOnce()).toEqual([]);
+
+    // The recipient address lives only in classified ciphertext: intake
+    // answers, the adopted preview snapshot, and the release envelope are all
+    // encrypted, and no ledger or release row carries an address column.
+    expect(Buffer.from(runtime.database.sqlite.serialize()).includes(
+      Buffer.from(firstEmail)
+    )).toBe(false);
+
+    // Currency: adopt a second preview of the accepted decision set, then
+    // commit a further decision. The held preview's source versions no longer
+    // reproduce from current decision heads, so the send refuses typed and
+    // writes nothing.
+    const draftTwo = await createReadyDraft('two');
+    const adoptedTwo = await runtime.communications.adoptDecisionPreview({
+      draftId: draftTwo.draftId,
+      expectedDraftVersion: draftTwo.version
+    });
+    if (adoptedTwo.kind !== 'adopted') {
+      throw new Error(`Second adoption refused: ${JSON.stringify(adoptedTwo)}`);
+    }
+    await decide('two', submissionB);
+    const refused = runtime.communications.sendDecisionMessages({
+      audienceSpecId: adoptedTwo.summary.identity.audienceSpecId,
+      batchId: 'batch.decision-notification.stale',
+      subject: 'Your submission decision',
+      audienceLabel: 'Accepted submissions',
+      attribution
+    });
+    expect(refused).toMatchObject({
+      kind: 'refused',
+      refusal: {
+        class: 'stale_revision',
+        kind: 'communication.preview_changed',
+        retryable: false,
+        detailSchemaVersion: 1,
+        detail: { includedCount: 1, irreversibleExternalEffectCount: 1 }
+      }
+    });
+    // The refused ceremony rolled back whole: no release, delivery, receipt
+    // link, or changeset row survives it.
+    expect(count(runtime, 'communication_message_releases')).toBe(1);
+    expect(count(runtime, 'communication_release_effect_specs')).toBe(1);
+    expect(count(runtime, 'communication_release_receipt_links')).toBe(1);
+    expect(count(runtime, 'communication_outbound_delivery_heads')).toBe(1);
+    expect(runtime.database.sqlite.query<{ readonly total: number }, [string]>(`
+      SELECT count(*) AS total FROM changeset_heads WHERE changeset_id = ?
+    `).get(sent.changesetId)?.total).toBe(1);
+    expect(runtime.database.sqlite.query<Record<string, unknown>, []>(
+      'PRAGMA foreign_key_check'
+    ).all()).toEqual([]);
+  });
+
+  test('serves the send lane over operator HTTP: prepare, adopt, send with auto-dispatch, delivery history, replay, and wire currency refusal', async () => {
+    const runtime = await createEphemeralLiveRuntime({ config });
+    runtimes.push(runtime);
+    const session = await createOwnerSession(runtime);
+    await provisionOwner(runtime, session);
+    await createEventThroughChangeset({ runtime, session, key: 'http-send-event' });
+
+    const formatDraft = programVocabularyDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/program-vocabulary/drafts/create',
+      key: 'http-send-format-draft',
+      body: { kind: 'format', expectedSetVersion: 1, name: 'Talk' },
+      parse: (value) => value
+    }));
+    if (formatDraft.kind !== 'success') throw new Error('Format draft failed.');
+    await commitDraft({ runtime, session, key: 'http-send-format', draft: formatDraft });
+    const vocabulary = programVocabularySnapshotReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/program-vocabulary', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (vocabulary.kind !== 'success') throw new Error('Vocabulary read failed.');
+    const format = vocabulary.data.formats.find((candidate) => candidate.name === 'Talk');
+    if (!format) throw new Error('Committed format missing.');
+
+    const registryResult = fieldRegistrySnapshotReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/field-registry', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (registryResult.kind !== 'success') throw new Error('Field registry read failed.');
+    const registry = registryResult.data;
+    const titleFieldId = registry.fields.find((field) =>
+      field.mapsTo === 'talk.title' && field.kind === 'text'
+    )?.id;
+    const emailFieldId = registry.fields.find((field) =>
+      field.mapsTo === 'person.email' && field.kind === 'email'
+    )?.id;
+    if (!titleFieldId || !emailFieldId) throw new Error('Identity fields missing.');
+    const included = new Set([titleFieldId, emailFieldId]);
+    const formCreateDraft = intakeFormDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/forms/drafts/create',
+      key: 'http-send-form-create-draft',
+      body: {
+        expectedCatalogVersion: 1,
+        expectedRegistryVersion: registry.version,
+        definition: {
+          ...formDefinitionInput,
+          name: 'HTTP send CFP',
+          target: { kind: 'category', category: { kind: 'format', id: format.id } },
+          composition: {
+            excludedFieldIds: registry.fields
+              .filter((field) => field.scope.kind === 'shared'
+                && field.contexts.apply.visible
+                && !included.has(field.id))
+              .map((field) => field.id)
+              .sort(),
+            requiredOverrides: {},
+            optionExposure: {}
+          }
+        }
+      },
+      parse: (value) => value
+    }));
+    if (formCreateDraft.kind !== 'success'
+        || formCreateDraft.data.safeDiff.action !== 'create') {
+      throw new Error('Form create draft failed.');
+    }
+    await commitDraft({
+      runtime, session, key: 'http-send-form-create', draft: formCreateDraft
+    });
+    const openDraft = intakeFormDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/forms/drafts/lifecycle',
+      key: 'http-send-form-open-draft',
+      body: {
+        transition: 'publish_and_open',
+        formId: formCreateDraft.data.safeDiff.after.id,
+        expectedDefinitionVersion: 1,
+        expectedRegistryVersion: registry.version
+      },
+      parse: (value) => value
+    }));
+    if (openDraft.kind !== 'success') throw new Error('Form open draft failed.');
+    await commitDraft({ runtime, session, key: 'http-send-form-open', draft: openDraft });
+    const catalog = organizerFormCatalogReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/forms', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (catalog.kind !== 'success') throw new Error('Form catalog read failed.');
+    const openForm = catalog.data.forms.find((form) => form.status === 'open');
+    if (!openForm) throw new Error('Open form missing from the catalog.');
+
+    const enterSubmission = async (label: string, email: string) => {
+      const entryDraft = submissionDirectEntryDraftOperationResultSchema.parse(await effect({
+        runtime,
+        session,
+        path: '/api/events/current/submissions/direct-entry/drafts',
+        key: `http-send-entry-${label}-draft`,
+        body: {
+          formId: openForm.id,
+          expectedFormDefinitionVersion: openForm.version,
+          answers: [
+            { kind: 'text', fieldId: titleFieldId, value: `HTTP send ${label}` },
+            { kind: 'email', fieldId: emailFieldId, value: email }
+          ]
+        },
+        parse: (value) => value
+      }));
+      if (entryDraft.kind !== 'success') throw new Error(`Direct entry ${label} failed.`);
+      await commitDraft({
+        runtime, session, key: `http-send-entry-${label}`, draft: entryDraft
+      });
+      return entryDraft.data.safeDiff.submission.id;
+    };
+    const decide = async (label: string, submissionId: string) => {
+      const decideDraft = decisionDecideDraftOperationResultSchema.parse(await effect({
+        runtime,
+        session,
+        path: '/api/events/current/decisions/decide-drafts',
+        key: `http-send-decide-${label}-draft`,
+        body: {
+          action: 'decide',
+          decisions: [{
+            submissionId,
+            state: 'accepted',
+            expectedDecisionVersion: null,
+            expectedDecisionDigestSha256: null,
+            graduation: { kind: 'spawn' }
+          }]
+        },
+        parse: (value) => value
+      }));
+      if (decideDraft.kind !== 'success') throw new Error(`Decide ${label} draft failed.`);
+      await commitDraft({
+        runtime, session, key: `http-send-decide-${label}`, draft: decideDraft
+      });
+    };
+    const submissionA = await enterSubmission('one', 'http.send.one@example.test');
+    const submissionB = await enterSubmission('two', 'http.send.two@example.test');
+    await decide('one', submissionA);
+
+    // The seeded acceptance template and the minted decision-set option are
+    // the wire truth this lane composes from.
+    const templates = organizerMessageTemplatePageOperationResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/communications/templates', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (templates.kind !== 'success') throw new Error('Template list read failed.');
+    const acceptedTemplate = templates.data.rows.find((row) => row.key === 'decision.accepted');
+    if (!acceptedTemplate) throw new Error('Seeded acceptance template missing.');
+    const options = organizerCommunicationAudienceOptionPageOperationResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/communications/audiences/options', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (options.kind !== 'success') throw new Error('Audience options read failed.');
+    const acceptedOption = options.data.rows.find((row) => {
+      const source = row.audienceDraft.source;
+      return source.kind === 'registered_query'
+        && source.recipeId === 'recipe.communication.decision-set.accepted';
+    });
+    if (!acceptedOption) throw new Error('Accepted decision-set option missing.');
+
+    const storePayload = async (label: string, payload: unknown) => {
+      const stored = organizerCommunicationAuthoringPayloadOperationResultSchema.parse(
+        await effect({
+          runtime,
+          session,
+          path: '/api/events/current/communications/authoring-payloads',
+          key: `http-send-payload-${label}`,
+          body: { payload },
+          parse: (value) => value
+        })
+      );
+      if (stored.kind !== 'success') throw new Error(`Payload ${label} store failed.`);
+      return stored.data;
+    };
+    const createReadyDraft = async (label: string) => {
+      const contentPayload = await storePayload(`content-${label}`, {
+        payloadKind: 'message_content',
+        schemaVersion: 1,
+        value: {
+          kind: 'email/v1',
+          subject: 'Your submission decision',
+          body: { kind: 'template_revision/v1', templateRevision: acceptedTemplate.revision }
+        }
+      });
+      const audiencePayload = await storePayload(`audience-${label}`, {
+        payloadKind: 'message_audience_draft',
+        schemaVersion: 1,
+        value: acceptedOption.audienceDraft
+      });
+      const created = organizerCommunicationDraftMutationOperationResultSchema.parse(
+        await effect({
+          runtime,
+          session,
+          path: '/api/events/current/communications/drafts/create',
+          key: `http-send-draft-${label}`,
+          body: {
+            channel: 'email',
+            purposeRevision: acceptedOption.audienceDraft.purposeRevision,
+            templateRevision: acceptedTemplate.revision,
+            initial: { kind: 'adopted_payload_refs', contentPayload, audiencePayload }
+          },
+          parse: (value) => value
+        })
+      );
+      if (created.kind !== 'success') throw new Error(`Draft ${label} create failed.`);
+      return created.data;
+    };
+
+    // Two-step adoption lane on the wire: the compute-only prepare read runs
+    // the asynchronous audience resolution, then the effect adopts the parked
+    // preparation inside its one unit of work.
+    const prepareAndAdopt = async (label: string, draft: {
+      readonly draftId: string;
+      readonly version: number;
+    }) => {
+      const prepared = organizerPrepareMessagePreviewOperationResultSchema.parse(await (
+        await runtime.app.request(
+          '/api/events/current/communications/previews/prepare'
+            + `?draftId=${encodeURIComponent(draft.draftId)}`
+            + `&expectedDraftVersion=${draft.version}`,
+          { headers: eventHeaders({ session, correlationId: crypto.randomUUID() }) }
+        )
+      ).json());
+      expect(prepared).toMatchObject({
+        kind: 'success',
+        data: {
+          schemaVersion: 1,
+          draftId: draft.draftId,
+          draftVersion: draft.version,
+          state: 'prepared'
+        }
+      });
+      const adopted = organizerPreviewMessageBatchOperationResultSchema.parse(await effect({
+        runtime,
+        session,
+        path: '/api/events/current/communications/previews/adopt',
+        key: `http-send-adopt-${label}`,
+        body: { draftId: draft.draftId, expectedDraftVersion: draft.version },
+        parse: (value) => value
+      }));
+      if (adopted.kind !== 'success') {
+        throw new Error(`Adoption ${label} refused: ${JSON.stringify(adopted)}`);
+      }
+      expect(adopted.receipt).toMatchObject({
+        operationName: 'preview_message_batch',
+        operationVersion: 1
+      });
+      return adopted.data;
+    };
+
+    const draftOne = await createReadyDraft('one');
+    const summaryOne = await prepareAndAdopt('one', draftOne);
+    expect(summaryOne.counts).toMatchObject({ includedCount: 1 });
+
+    // An adopt for a draft revision with no live preparation refuses typed
+    // instead of guessing: the lane requires its prepare step.
+    const unprepared = organizerPreviewMessageBatchOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/communications/previews/adopt',
+      key: 'http-send-adopt-unprepared',
+      body: { draftId: draftOne.draftId, expectedDraftVersion: draftOne.version },
+      parse: (value) => value
+    }));
+    expect(unprepared).toMatchObject({
+      kind: 'outcome',
+      terminal: false,
+      outcome: { class: 'stale_revision', kind: 'communication.revision_changed' }
+    });
+
+    const sendBody = Object.freeze({
+      audienceSpecId: summaryOne.identity.audienceSpecId,
+      batchId: 'batch.http.decision-notification',
+      subject: 'Your submission decision',
+      audienceLabel: 'Accepted submissions'
+    });
+    const sent = organizerSendMessagesOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/communications/messages/send',
+      key: 'http-send-commit',
+      body: sendBody,
+      parse: (value) => value
+    }));
+    if (sent.kind !== 'success') throw new Error(`Send refused: ${JSON.stringify(sent)}`);
+    expect(sent.receipt).toMatchObject({ operationName: 'send_messages', operationVersion: 1 });
+    expect(sent.data).toMatchObject({
+      schemaVersion: 1,
+      batchId: sendBody.batchId,
+      dispatchGeneration: 1,
+      releaseCount: 1,
+      deliveryCount: 1
+    });
+
+    // The dispatch pass ran automatically after the commit landed (provider
+    // I/O strictly outside the unit of work); only the deterministic fake is
+    // composed and no fake scenario key is named, so the one delivery is
+    // honestly, terminally not-delivered (BLOCKED-2, BLOCKED-6).
+    expect(count(runtime, 'communication_outbound_delivery_heads',
+      "WHERE state = 'known_rejected_terminal'")).toBe(1);
+    expect(count(runtime, 'communication_outbound_delivery_heads')).toBe(1);
+    expect(count(runtime, 'communication_outbound_delivery_attempts',
+      "WHERE adapter_key = 'fake.email'")).toBe(1);
+
+    const history = organizerCommunicationHistoryPageOperationResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/communications/deliveries/history', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (history.kind !== 'success') throw new Error('Delivery history read failed.');
+    expect(history.data.rows).toEqual([expect.objectContaining({
+      schemaVersion: 1,
+      visibility: 'organizer_non_security',
+      messageRefId: sendBody.batchId,
+      subject: sendBody.subject,
+      audienceLabel: sendBody.audienceLabel,
+      state: 'known_failed',
+      // The reason is the code the deciding provider attempt itself recorded,
+      // not an assumption about the composition: the fake resolves a
+      // non-scenario external key as a terminal known rejection.
+      stateReasonCode: 'delivery.rejected_terminal',
+      actor: { kind: 'human', displayLabel: 'Workspace operator' },
+      cause: expect.objectContaining({
+        subjectKind: 'communication_preview',
+        subjectRefId: summaryOne.identity.audienceSpecId
+      }),
+      counts: {
+        audience: { knowledge: 'known', value: 1 },
+        materialized: { knowledge: 'known', value: 1 },
+        accepted: { knowledge: 'known', value: 0 },
+        delivered: { knowledge: 'not_supported' },
+        acceptanceUnknown: { knowledge: 'known', value: 0 },
+        knownFailed: { knowledge: 'known', value: 1 }
+      },
+      availableActions: ['continue_provider_setup']
+    })]);
+    expect(history.data.page).toEqual({ hasMore: false });
+    // Derived, not assumed: the projected reason is exactly the outcome code
+    // the deciding attempt recorded in the ledger.
+    expect(history.data.rows[0]!.stateReasonCode).toBe(
+      runtime.database.sqlite.query<{ readonly provider_outcome_reason: string | null }, []>(`
+        SELECT provider_outcome_reason FROM communication_outbound_delivery_attempts
+      `).all()[0]!.provider_outcome_reason as string
+    );
+
+    // An identical retry replays the terminal receipt instead of re-sending.
+    const replayed = organizerSendMessagesOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/communications/messages/send',
+      key: 'http-send-commit',
+      body: sendBody,
+      parse: (value) => value
+    }));
+    if (replayed.kind !== 'success') throw new Error('Send replay failed.');
+    expect(replayed.receipt).toEqual(sent.receipt);
+    expect(count(runtime, 'communication_message_releases')).toBe(1);
+    expect(count(runtime, 'communication_outbound_delivery_heads')).toBe(1);
+
+    // Wire currency refusal: adopt a second preview, commit a further
+    // decision, and the held preview's evidence no longer reproduces — the
+    // send refuses typed with the reviewed safe diff and writes nothing.
+    const draftTwo = await createReadyDraft('two');
+    const summaryTwo = await prepareAndAdopt('two', draftTwo);
+    await decide('two', submissionB);
+    const refused = organizerSendMessagesOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/communications/messages/send',
+      key: 'http-send-stale',
+      body: {
+        audienceSpecId: summaryTwo.identity.audienceSpecId,
+        batchId: 'batch.http.stale',
+        subject: 'Your submission decision',
+        audienceLabel: 'Accepted submissions'
+      },
+      parse: (value) => value
+    }));
+    expect(refused).toMatchObject({
+      kind: 'outcome',
+      terminal: false,
+      outcome: {
+        class: 'stale_revision',
+        kind: 'communication.preview_changed',
+        retryable: false,
+        detailSchemaVersion: 1,
+        detail: expect.objectContaining({
+          includedCount: 1,
+          irreversibleExternalEffectCount: 1
+        })
+      }
+    });
+    expect(count(runtime, 'communication_message_releases')).toBe(1);
+    expect(count(runtime, 'communication_release_effect_specs')).toBe(1);
+    expect(count(runtime, 'communication_release_receipt_links')).toBe(1);
+    expect(count(runtime, 'communication_outbound_delivery_heads')).toBe(1);
     expect(runtime.database.sqlite.query<Record<string, unknown>, []>(
       'PRAGMA foreign_key_check'
     ).all()).toEqual([]);

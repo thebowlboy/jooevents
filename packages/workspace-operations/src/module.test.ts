@@ -167,12 +167,28 @@ describe('workspace overview operation', () => {
     )).toEqual({
       area: 'messages',
       status: 'partial',
-      availableCapabilities: ['communication.email_readiness.read'],
-      unavailableCapabilities: [
-        'create_email_provider_connection_draft',
+      availableCapabilities: [
+        'communication.email_readiness.read',
+        'create_message_draft',
+        'discard_message_draft',
+        'get_communication_purpose',
         'get_delivery_history',
+        'get_message_batch_preview',
+        'get_message_draft',
+        'get_message_template',
+        'list_audience_options',
+        'list_communication_purposes',
+        'list_message_drafts',
+        'list_message_preview_recipients',
+        'list_message_templates',
+        'prepare_message_batch_preview',
         'preview_message_batch',
-        'send_messages'
+        'revise_message_batch',
+        'send_messages',
+        'store_communication_authoring_payload'
+      ],
+      unavailableCapabilities: [
+        'create_email_provider_connection_draft'
       ]
     });
     expect(DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG.find(
@@ -194,12 +210,26 @@ describe('workspace overview operation', () => {
       (entry) => entry.area === 'decisions'
     )).toEqual({
       area: 'decisions',
+      status: 'available',
+      capabilities: [
+        'decision.decide.draft',
+        'decision.notification.send',
+        'decision.state.read'
+      ]
+    });
+    expect(DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG.find(
+      (entry) => entry.area === 'speakers'
+    )).toEqual({
+      area: 'speakers',
       status: 'partial',
       availableCapabilities: [
-        'decision.decide.draft',
-        'decision.state.read'
+        'engagement.change.draft',
+        'engagement.snapshot.read'
       ],
-      unavailableCapabilities: ['decision.notification.send']
+      unavailableCapabilities: [
+        'speaker.category.manage',
+        'speaker.lineup.manage'
+      ]
     });
     expect(DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG.find(
       (entry) => entry.area === 'reviewers'

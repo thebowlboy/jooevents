@@ -218,6 +218,16 @@ export const RICH_EPHEMERAL_LIVE_SCENARIO = deepFreeze({
     }),
     fieldRegistry: Object.freeze({ version: 1, fields: 19 }),
     submissions: 0,
+    // The scenario seeds no submissions, so no acceptance ever runs and the
+    // engagement tables stay honestly empty; they are counted so the exact
+    // fingerprint covers the mounted Engagement vertical.
+    engagements: 0,
+    // The scenario reviews and sends nothing: no preview is ever adopted, no
+    // send ceremony commits, and no delivery is registered. Counted so the
+    // exact fingerprint covers the mounted send-wave tables (with only the
+    // inert fake provider composed, anything nonzero here would be a leak).
+    messageReleases: 0,
+    outboundDeliveries: 0,
     sessions: Object.freeze({
       total: 2,
       catalogs: 1,
@@ -416,6 +426,9 @@ export interface RichEphemeralLiveBaseline {
     readonly formVersions: number;
     readonly fieldRegistries: number;
     readonly submissions: number;
+    readonly engagements: number;
+    readonly messageReleases: number;
+    readonly outboundDeliveries: number;
     readonly sessions: number;
     readonly sessionCatalogs: number;
     readonly reviewerRosterSets: number;
@@ -1671,6 +1684,9 @@ async function captureBaseline(input: {
       formVersions: count(input.context.runtime, 'intake_form_versions'),
       fieldRegistries: count(input.context.runtime, 'field_registry_aggregates'),
       submissions: count(input.context.runtime, 'intake_submission_heads'),
+      engagements: count(input.context.runtime, 'engagement_heads'),
+      messageReleases: count(input.context.runtime, 'communication_message_releases'),
+      outboundDeliveries: count(input.context.runtime, 'communication_outbound_delivery_heads'),
       sessions: count(input.context.runtime, 'sessions'),
       sessionCatalogs: count(input.context.runtime, 'session_catalogs'),
       reviewerRosterSets: count(input.context.runtime, 'reviewer_roster_sets'),
@@ -1700,7 +1716,8 @@ async function captureBaseline(input: {
         + count(input.context.runtime, 'workspace_team_draft_timeline')
         + count(input.context.runtime, 'reviewer_roster_draft_timeline')
         + count(input.context.runtime, 'review_draft_timeline')
-        + count(input.context.runtime, 'deadline_draft_timeline'),
+        + count(input.context.runtime, 'deadline_draft_timeline')
+        + count(input.context.runtime, 'engagement_draft_timeline'),
       lifecycleTimelineEntries:
         count(input.context.runtime, 'event_creation_changeset_timeline')
         + count(input.context.runtime, 'event_settings_changeset_timeline')
@@ -1710,7 +1727,11 @@ async function captureBaseline(input: {
         + count(input.context.runtime, 'workspace_team_changeset_timeline')
         + count(input.context.runtime, 'reviewer_roster_changeset_timeline')
         + count(input.context.runtime, 'review_changeset_timeline')
-        + count(input.context.runtime, 'deadline_changeset_timeline'),
+        + count(input.context.runtime, 'deadline_changeset_timeline')
+        + count(input.context.runtime, 'engagement_changeset_timeline')
+        // Per-delivery history threads of the send wave; the scenario sends
+        // nothing, so the covered delta stays exactly zero.
+        + count(input.context.runtime, 'communication_outbound_delivery_history'),
       domainFacts:
         count(input.context.runtime, 'event_creation_changeset_domain_facts')
         + count(input.context.runtime, 'event_settings_changeset_domain_facts')
@@ -1720,7 +1741,9 @@ async function captureBaseline(input: {
         + count(input.context.runtime, 'workspace_team_changeset_domain_facts')
         + count(input.context.runtime, 'reviewer_roster_changeset_domain_facts')
         + count(input.context.runtime, 'review_changeset_domain_facts')
-        + count(input.context.runtime, 'deadline_changeset_domain_facts'),
+        + count(input.context.runtime, 'deadline_changeset_domain_facts')
+        + count(input.context.runtime, 'engagement_changeset_domain_facts')
+        + count(input.context.runtime, 'communication_outbound_delivery_facts'),
       outboxPointers:
         count(input.context.runtime, 'event_creation_changeset_outbox_pointers')
         + count(input.context.runtime, 'event_settings_changeset_outbox_pointers')
@@ -1730,7 +1753,9 @@ async function captureBaseline(input: {
         + count(input.context.runtime, 'workspace_team_changeset_outbox_pointers')
         + count(input.context.runtime, 'reviewer_roster_changeset_outbox_pointers')
         + count(input.context.runtime, 'review_changeset_outbox_pointers')
-        + count(input.context.runtime, 'deadline_changeset_outbox_pointers'),
+        + count(input.context.runtime, 'deadline_changeset_outbox_pointers')
+        + count(input.context.runtime, 'engagement_changeset_outbox_pointers')
+        + count(input.context.runtime, 'communication_outbound_delivery_outbox'),
       commitLinks: count(input.context.runtime, 'changeset_commit_links')
     },
     extensionSlots: RICH_EPHEMERAL_LIVE_SCENARIO.extensionSlots
@@ -1767,6 +1792,9 @@ function assertExpectedBaseline(baseline: RichEphemeralLiveBaseline): void {
     openForms: formStatuses.open,
     closedForms: formStatuses.closed,
     submissions: baseline.durableCounts.submissions,
+    engagements: baseline.durableCounts.engagements,
+    messageReleases: baseline.durableCounts.messageReleases,
+    outboundDeliveries: baseline.durableCounts.outboundDeliveries,
     sessions: baseline.durableCounts.sessions,
     sessionCatalogs: baseline.durableCounts.sessionCatalogs,
     sessionCatalogVersion: baseline.sessions.catalogVersion,
@@ -1807,6 +1835,9 @@ function assertExpectedBaseline(baseline: RichEphemeralLiveBaseline): void {
     openForms: expected.forms.open,
     closedForms: expected.forms.closed,
     submissions: expected.submissions,
+    engagements: expected.engagements,
+    messageReleases: expected.messageReleases,
+    outboundDeliveries: expected.outboundDeliveries,
     sessions: expected.sessions.total,
     sessionCatalogs: expected.sessions.catalogs,
     sessionCatalogVersion: expected.sessions.catalogVersion,

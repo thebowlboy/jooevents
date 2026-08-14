@@ -30,6 +30,8 @@
         "@jooevents/deadline-operations": "workspace:*",
         "@jooevents/decision": "workspace:*",
         "@jooevents/decision-operations": "workspace:*",
+        "@jooevents/engagement": "workspace:*",
+        "@jooevents/engagement-operations": "workspace:*",
         "@jooevents/event": "workspace:*",
         "@jooevents/event-operations": "workspace:*",
         "@jooevents/field-registry": "workspace:*",
@@ -257,6 +259,36 @@
         "typescript": "6.0.3",
       },
     },
+    "packages/engagement": {
+      "name": "@jooevents/engagement",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/changesets": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/engagement-operations": {
+      "name": "@jooevents/engagement-operations",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/application": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/engagement": "workspace:*",
+        "@jooevents/identity-access": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
     "packages/event": {
       "name": "@jooevents/event",
       "version": "0.0.0",
@@ -394,6 +426,8 @@
         "@jooevents/deadline-operations": "workspace:*",
         "@jooevents/decision": "workspace:*",
         "@jooevents/decision-operations": "workspace:*",
+        "@jooevents/engagement": "workspace:*",
+        "@jooevents/engagement-operations": "workspace:*",
         "@jooevents/event": "workspace:*",
         "@jooevents/event-operations": "workspace:*",
         "@jooevents/field-registry": "workspace:*",
@@ -790,6 +824,10 @@
     "@jooevents/decision-operations": ["@jooevents/decision-operations@workspace:packages/decision-operations"],
 
     "@jooevents/demo-worker": ["@jooevents/demo-worker@workspace:apps/demo-worker"],
+
+    "@jooevents/engagement": ["@jooevents/engagement@workspace:packages/engagement"],
+
+    "@jooevents/engagement-operations": ["@jooevents/engagement-operations@workspace:packages/engagement-operations"],
 
     "@jooevents/event": ["@jooevents/event@workspace:packages/event"],
 

@@ -77,7 +77,13 @@
     "./decision": "./src/sqlite/decision.ts",
     "./decision-draft-effect-domain": "./src/sqlite/decision-draft-effect-domain.ts",
     "./decision-changeset-effect-domain": "./src/sqlite/decision-changeset-effect-domain.ts",
-    "./intake-direct-entry-effect-domain": "./src/sqlite/intake-direct-entry-effect-domain.ts"
+    "./intake-direct-entry-effect-domain": "./src/sqlite/intake-direct-entry-effect-domain.ts",
+    "./engagement": "./src/sqlite/engagement.ts",
+    "./engagement-draft-effect-domain": "./src/sqlite/engagement-draft-effect-domain.ts",
+    "./engagement-changeset-effect-domain": "./src/sqlite/engagement-changeset-effect-domain.ts",
+    "./organizer-decision-audience": "./src/sqlite/communications/decision-audience.ts",
+    "./message-releases": "./src/sqlite/communications/message-releases.ts",
+    "./message-release-effect-domain": "./src/sqlite/communications/message-release-effect-domain.ts"
   },
   "scripts": {
     "check": "tsc --noEmit",
@@ -94,6 +100,8 @@
     "@jooevents/deadline-operations": "workspace:*",
     "@jooevents/decision": "workspace:*",
     "@jooevents/decision-operations": "workspace:*",
+    "@jooevents/engagement": "workspace:*",
+    "@jooevents/engagement-operations": "workspace:*",
     "@jooevents/event": "workspace:*",
     "@jooevents/event-operations": "workspace:*",
     "@jooevents/field-registry": "workspace:*",

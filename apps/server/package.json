@@ -22,6 +22,8 @@
     "@jooevents/deadline-operations": "workspace:*",
     "@jooevents/decision": "workspace:*",
     "@jooevents/decision-operations": "workspace:*",
+    "@jooevents/engagement": "workspace:*",
+    "@jooevents/engagement-operations": "workspace:*",
     "@jooevents/event": "workspace:*",
     "@jooevents/event-operations": "workspace:*",
     "@jooevents/field-registry": "workspace:*",

@@ -625,6 +625,8 @@ describe('organizer communication pagination and schema identities', () => {
       'reviseDraft',
       'discardDraft',
       'previewBatch',
+      'sendMessages',
+      'prepareBatchPreview',
       'getPreview',
       'listPreviewRecipients',
       'getPlan',

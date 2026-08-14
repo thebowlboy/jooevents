@@ -3,6 +3,9 @@ import { FOUNDATION_TRIAL_UOW_SQL } from './foundation-trial-uow';
 import { DECISION_SQL } from './decision';
 import { DECISION_CHANGESET_EFFECT_SQL } from './decision-changeset-effect-domain';
 import { DECISION_DRAFT_EFFECT_SQL } from './decision-draft-effect-domain';
+import { SQLITE_ENGAGEMENT_SQL } from './engagement';
+import { SQLITE_ENGAGEMENT_DRAFT_EFFECT_SQL } from './engagement-draft-effect-domain';
+import { SQLITE_ENGAGEMENT_CHANGESET_EFFECT_SQL } from './engagement-changeset-effect-domain';
 import { EVENT_SPINE_SQL } from './event-spine';
 import { EVENT_CREATION_CHANGESET_EFFECT_SQL } from './event-changeset-effect-domain';
 import { EVENT_CREATE_DRAFT_EFFECT_SQL } from './event-create-draft-effect-domain';
@@ -31,9 +34,14 @@ import {
 } from './ephemeral-sqlite-runtime';
 import { MODEL_DURABILITY_TRIAL_SQL } from './model-durability-trial';
 import { SQLITE_ORGANIZER_AUDIENCE_PREVIEW_SQL } from './communications/audience-preview';
+import { SQLITE_COMMUNICATION_MESSAGE_RELEASES_SQL } from './communications/message-releases';
+import {
+  SQLITE_COMMUNICATION_RELEASE_CHANGESET_SQL
+} from './communications/message-release-effect-domain';
 import { SQLITE_ORGANIZER_COMMUNICATION_AUTHORING_SQL } from './communications/organizer-authoring';
 import { SQLITE_ORGANIZER_COMMUNICATION_AUTHORING_EFFECT_SQL } from './communications/organizer-authoring-effect-domain';
 import { SQLITE_EMAIL_PROVIDER_CONFIGURATION_SQL } from './communications/provider-configuration';
+import { SQLITE_OUTBOUND_EMAIL_DELIVERY_SQL } from './outbound-email-delivery';
 import { SESSION_SQL } from './session';
 import { SESSION_DRAFT_EFFECT_SQL } from './session-draft-effect-domain';
 import { SESSION_CHANGESET_EFFECT_SQL } from './session-changeset-effect-domain';
@@ -147,7 +155,16 @@ export const FOUNDATION_EPHEMERAL_SCHEMA_ARTIFACTS: readonly EphemeralSQLiteSche
     schemaArtifact('reviewer-roster-changeset-effect', REVIEWER_ROSTER_CHANGESET_EFFECT_SQL),
     schemaArtifact('decision-domain', DECISION_SQL),
     schemaArtifact('decision-draft-effect', DECISION_DRAFT_EFFECT_SQL),
-    schemaArtifact('decision-changeset-effect', DECISION_CHANGESET_EFFECT_SQL)
+    schemaArtifact('decision-changeset-effect', DECISION_CHANGESET_EFFECT_SQL),
+    schemaArtifact('engagement-domain', SQLITE_ENGAGEMENT_SQL),
+    schemaArtifact('engagement-draft-effect', SQLITE_ENGAGEMENT_DRAFT_EFFECT_SQL),
+    schemaArtifact('engagement-changeset-effect', SQLITE_ENGAGEMENT_CHANGESET_EFFECT_SQL),
+    schemaArtifact('communication-outbound-delivery', SQLITE_OUTBOUND_EMAIL_DELIVERY_SQL),
+    schemaArtifact('communication-message-releases', SQLITE_COMMUNICATION_MESSAGE_RELEASES_SQL),
+    schemaArtifact(
+      'communication-release-changeset-effect',
+      SQLITE_COMMUNICATION_RELEASE_CHANGESET_SQL
+    )
   ]);
 
 /** Opens one isolated runtime with the exact ordered Foundation schema. */
