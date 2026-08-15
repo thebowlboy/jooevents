@@ -26,6 +26,10 @@ import { FIXTURE_SCOPE, NOW, SPEAKER, chunked, fixtureId } from './test-fixtures
 
 class MemoryIntents implements FileUploadIntentRepository {
   private readonly rows = new Map<string, FileUploadIntentDto>();
+  /** The stored intents, for tests that model a reservation-aware usage sum. */
+  all(): readonly FileUploadIntentDto[] {
+    return [...this.rows.values()];
+  }
   readIntent(scope: FileScopeDto, intentId: string): FileUploadIntentDto | undefined {
     const row = this.rows.get(intentId);
     return row && row.scope.eventId === scope.eventId ? row : undefined;
@@ -302,7 +306,7 @@ describe('quota reservations bind at registration (D4 integrity)', () => {
       const usage: FileUploaderUsageSource = {
         readUploaderStoredBytes: (scope, uploader, asOf) => {
           let total = 0;
-          for (const intent of intents.rows.values()) {
+          for (const intent of intents.all()) {
             if (intent.scope.eventId !== scope.eventId) continue;
             if (intent.uploader.kind !== uploader.kind) continue;
             if ((intent.state === 'pending' || intent.state === 'stored')
