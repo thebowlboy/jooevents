@@ -239,15 +239,15 @@
 	/* One hue spent, where it means something: accepted is that status. The
 	   outer bands stay on the ink ladder. */
 	.story__fill--received {
-		fill: color-mix(in srgb, var(--je-color-text) 5%, transparent);
+		fill: color-mix(in srgb, var(--je-color-text) 7%, transparent);
 	}
 
 	.story__fill--decided {
-		fill: color-mix(in srgb, var(--je-color-text) 9%, transparent);
+		fill: color-mix(in srgb, var(--je-color-text) 13%, transparent);
 	}
 
 	.story__fill--accepted {
-		fill: color-mix(in srgb, var(--je-color-success) 22%, transparent);
+		fill: color-mix(in srgb, var(--je-color-success) 28%, transparent);
 	}
 
 	.story__line {
@@ -296,17 +296,17 @@
 	}
 
 	.story__swatch--received {
-		background: color-mix(in srgb, var(--je-color-text) 5%, transparent);
+		background: color-mix(in srgb, var(--je-color-text) 7%, transparent);
 		border: 1px solid var(--je-color-text-subtle);
 	}
 
 	.story__swatch--decided {
-		background: color-mix(in srgb, var(--je-color-text) 9%, transparent);
+		background: color-mix(in srgb, var(--je-color-text) 13%, transparent);
 		border: 1px solid var(--je-color-text-muted);
 	}
 
 	.story__swatch--accepted {
-		background: color-mix(in srgb, var(--je-color-success) 22%, transparent);
+		background: color-mix(in srgb, var(--je-color-success) 28%, transparent);
 		border: 1px solid var(--je-color-success);
 	}
 
