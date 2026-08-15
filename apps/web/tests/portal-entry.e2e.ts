@@ -17,7 +17,7 @@ test('participant entry asks once, confirms plainly, and keeps the panel in plac
   await usePortalEntry(page, baseURL, { 'je-portal-auth': 'anonymous' });
   await page.goto('/portal/sign-in');
   await expect(page.getByRole('heading', { name: 'Sign in', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Sign in with Google instead' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /with Google/ })).toHaveCount(0);
   const restingPanel = await panelGeometry(page);
 
   // The same titled method group the operator lane uses, carrying this lane's

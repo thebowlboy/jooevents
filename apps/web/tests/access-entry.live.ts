@@ -129,7 +129,7 @@ test('a malformed or failed context remains a recoverable connection problem', a
     .getByText(/corr_context_502/)
     .evaluate((support) => getComputedStyle(support).fontSize);
   expect(supportFontSize).toBe('13px');
-  await expect(page.getByRole('button', { name: 'Sign in with Google instead' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /with Google/ })).toHaveCount(0);
 });
 
 test('pending review names the workspace and retains context when sign-out fails', async ({ page }) => {

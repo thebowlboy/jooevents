@@ -50,7 +50,12 @@ export const linkRequestCopy = {
      heading names no method so a code can share this room later. */
   confirmationHeading: 'Check your email',
   confirmationBody: 'If an account exists for this address, a magic link is on its way.',
-  differentAddress: 'Try another address'
+  differentAddress: 'Try another address',
+  /* Two labels for one control (owner revision 2026-08-15): on the resting
+     card Google is a peer way in and says so plainly; once a link is on its
+     way it becomes the alternative to waiting for it. */
+  googleChoice: 'Continue with Google',
+  googleAlternative: 'Sign in with Google instead'
 } as const;
 
 /** Expected refusals keep their own copy; nothing here echoes server text. */

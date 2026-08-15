@@ -127,7 +127,13 @@
       <p>{linkRequestCopy.confirmationBody}</p>
       <p class="entry-echo">{surface.email}</p>
     {/if}
-    <GoogleSignInButton busy={state.kind === 'starting_google'} onclick={onGoogle} />
+    <GoogleSignInButton
+      busy={state.kind === 'starting_google'}
+      label={surface.kind === 'anonymous'
+        ? linkRequestCopy.googleChoice
+        : linkRequestCopy.googleAlternative}
+      quiet={surface.kind !== 'anonymous'}
+      onclick={onGoogle} />
     {#if surface.actionError}
       {#key surface.actionError}
         <div class="entry-error" role="alert">
