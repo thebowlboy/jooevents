@@ -51,6 +51,8 @@
 
   .entry-panel {
     --je-entry-alignment: center;
+    /* Anchors the waiting rail to the panel's own top edge. */
+    position: relative;
     display: grid;
     /* The content row takes leftover height, so when the panel fills the mobile
        viewport the composition centers instead of floating above dead space. */
@@ -62,6 +64,41 @@
     box-shadow:
       0 24px 64px color-mix(in srgb, var(--je-color-action) 12%, rgb(42 37 34 / 0.1)),
       0 6px 18px rgb(42 37 34 / 0.06);
+  }
+
+  /* The waiting rail: one travelling segment on the panel's top edge, alive for
+     the whole span from "who is this browser" to "is this identity admitted",
+     and gone the moment the answer is a screen or a destination. It is
+     positioned, never a grid child, so appearing and leaving cost no layout and
+     the task under it never moves — the same contract the workspace topbar's
+     arrival rail keeps, in the same action color, so "it is on its way" reads
+     the same everywhere. The corner radii follow the panel, which flattens to a
+     page on narrow viewports. */
+  .entry-rail {
+    position: absolute;
+    inset-inline: 0;
+    inset-block-start: 0;
+    block-size: 2px;
+    overflow: hidden;
+    border-start-start-radius: inherit;
+    border-start-end-radius: inherit;
+  }
+
+  .entry-rail > span {
+    display: block;
+    inline-size: 45%;
+    block-size: 100%;
+    background: var(--je-color-action);
+    animation: je-indeterminate var(--je-duration-loop) var(--je-ease) infinite alternate;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    /* Same information, no travel: the edge is simply lit while work is out. */
+    .entry-rail > span {
+      inline-size: 100%;
+      opacity: .55;
+      animation: none;
+    }
   }
 
   /* Identity group: mark, wordmark, and tagline sit tight (space-2); the group is
@@ -124,7 +161,9 @@
   /* The one footprint that is still held: the initial resolver and the resting
      card it resolves into share this measure, so arriving anonymous cannot
      shift the panel. It is a resolution-stability contract, not the retired
-     error/retry reserve. */
+     error/retry reserve — which is why the admission wait is outside it. That
+     wait resolves into a destination, so holding a card's height for it would
+     reserve a screenful of blank for a composition that never arrives. */
   .entry-state--reserved { min-block-size: 24.25rem; }
 
   /* Recovery content that appears into the compact box: the box grows
@@ -326,8 +365,6 @@
   .entry-state .resolver span:nth-child(4) { width: 100%; height: 2.75rem; border-radius: var(--je-radius-control); }
   .entry-state .resolver span:nth-child(5) { width: 100%; height: 2.75rem; border-radius: var(--je-radius-control); }
   .entry-state .resolver span:nth-child(6) { width: 55%; height: 1.35rem; }
-  .entry-state .entry-progress { width: 100%; height: .35rem; overflow: hidden; border-radius: var(--je-radius-round); background: var(--je-color-surface-sunken); }
-  .entry-state .entry-progress span { display: block; width: 45%; height: 100%; background: var(--je-color-info); animation: je-indeterminate var(--je-duration-loop) var(--je-ease) infinite alternate; }
 
   /* Google-mandated identity (standard G, white surface, border gray, label) with
      the system's button affordances: control radius, resting elevation, hover and
@@ -425,7 +462,6 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .entry-state .entry-progress span { width: 100%; animation: none; }
     .google-button__spinner { border-color: #4285f4; animation: none; }
   }
 }

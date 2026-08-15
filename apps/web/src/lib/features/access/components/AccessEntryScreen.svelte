@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { goto } from '$app/navigation';
+  import { goto, preloadCode } from '$app/navigation';
   import { page } from '$app/state';
   import { entryDependencies } from 'jooevents-entry-deps';
   import { AccessEntryController, type AccessEntryState } from '../AccessEntryController';
@@ -8,12 +8,20 @@
   import AccessEntryFrame from './AccessEntryFrame.svelte';
   import EntryState from './EntryState.svelte';
 
-  let state = $state<AccessEntryState>({ kind: 'resolving', delayed: false });
+  let state = $state<AccessEntryState>({ kind: 'resolving', delayed: false, awaiting: 'identity' });
   type FocusTarget = 'heading' | 'link-email' | 'confirmation';
   let focusNext: FocusTarget | null = null;
   const controller = new AccessEntryController({
     ...entryDependencies.operator,
-    navigate: (path, replace) => goto(path, { replaceState: replace, noScroll: true, keepFocus: true })
+    navigate: (path, replace) => goto(path, { replaceState: replace, noScroll: true, keepFocus: true }),
+    /* Overlap the last two waits: while admission is still committing, pull in
+       the destination's route modules so its own first paint is not stacked
+       behind this one. `preloadCode` rather than `preloadData` deliberately —
+       it imports code and cannot issue a request, which keeps "no protected
+       call before active" a property of the mechanism rather than of whichever
+       load functions the operator routes happen to have today. Best effort:
+       never awaited, and a rejection is the controller's to swallow. */
+    warmDestination: (path) => preloadCode(path)
   });
 
   const title = $derived(state.kind === 'link_requested'
@@ -92,7 +100,7 @@
   <meta name="robots" content="noindex, nofollow" />
 </svelte:head>
 
-<AccessEntryFrame {contentLed}>
+<AccessEntryFrame {contentLed} waiting={state.kind === 'resolving' || state.kind === 'provisioning'}>
   <EntryState
     {state}
     onGoogle={() => userAction(() => controller.startGoogle())}

@@ -62,16 +62,23 @@
 
 <!-- Only the resolver and the resting card it becomes hold a shared footprint;
      every other state is compact and grows downward when recovery content
-     appears (owner direction, 2026-08-14). -->
+     appears (owner direction, 2026-08-14). The admission wait is outside that
+     pair on purpose: what it resolves into is a destination, not this card. -->
 <div
   class="entry-state"
-  class:entry-state--reserved={state.kind === 'resolving' || surface?.kind === 'anonymous'}
+  class:entry-state--reserved={(state.kind === 'resolving' && state.awaiting !== 'admission') || surface?.kind === 'anonymous'}
   aria-live={state.kind === 'resolving' || state.kind === 'provisioning' ? 'polite' : 'off'}>
   {#if state.kind === 'resolving'}
-    <!-- Six fills for the six rows the resolved card has: heading, the named
-         method group, its email field, the magic-link action, the provider
-         control, aside. -->
-    <div class="resolver" aria-label="Checking access"><span></span><span></span><span></span><span></span><span></span><span></span></div>
+    {#if state.awaiting !== 'admission'}
+      <!-- Six fills for the six rows the resolved card has: heading, the named
+           method group, its email field, the magic-link action, the provider
+           control, aside. -->
+      <div class="resolver" aria-label="Checking access"><span></span><span></span><span></span><span></span><span></span><span></span></div>
+    {/if}
+    <!-- Waiting on admission holds no fills: the composition it resolves into is
+         a destination, not a card, so there is no shape to stand in for. The
+         panel's own rail carries the wait, and the admission screen — when the
+         wait earns one — grows in beneath it. -->
     {#if state.delayed}<p class="status">Checking your access…</p>{/if}
   {:else if surface}
     <h1 data-entry-heading tabindex="-1">
@@ -148,10 +155,12 @@
       <button type="button" class="entry-secondary" onclick={onDifferentAddress}>{linkRequestCopy.differentAddress}</button>
     {/if}
   {:else if state.kind === 'provisioning'}
+    <!-- No progress element of its own: this screen is the same wait the panel
+         rail has been running since the resolver, and a second indicator that
+         starts here would restart the motion it is supposed to continue. -->
     <Badge tone="info">Finishing sign-in</Badge>
     <h1 data-entry-heading tabindex="-1">Preparing your workspace</h1>
     <p>Your identity is verified. We are connecting it to your JooEvents access.</p>
-    <div class="entry-progress" aria-label="Sign-in preparation in progress"><span></span></div>
     {#if state.delayed}
       <div class="entry-appear">
         <Alert title="This is taking longer than expected" message="Your access has not changed. You can safely retry the check." tone="info" />
