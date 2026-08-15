@@ -14,6 +14,7 @@ const fresh: WorkspaceDataset = {
 	summary: {
 		event: null,
 		lockedAreas: [
+			'pulse',
 			'submissions',
 			'review',
 			'decisions',

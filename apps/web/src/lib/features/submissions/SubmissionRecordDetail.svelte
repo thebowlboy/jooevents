@@ -90,6 +90,12 @@
 		 * here, or the row stays open behind a sheet nobody can see.
 		 */
 		onclose?: () => void;
+		/**
+		 * Passed through to `RecordDetail`. A host that is already a dialog —
+		 * the deciding room — pins `inline`, because promoting to a sheet
+		 * inside a dialog would stack one modal in another.
+		 */
+		presentation?: 'auto' | 'inline' | 'sheet';
 	}
 
 	const {
@@ -103,7 +109,8 @@
 		origin,
 		actions,
 		footnote,
-		onclose
+		onclose,
+		presentation = 'auto'
 	}: Props = $props();
 
 	const decision = $derived(decisionStatusFor(submission));
@@ -288,7 +295,7 @@
 	{/if}
 {/snippet}
 
-<RecordDetail title={submission.title} {onclose} {fields} {blocks} {meta} {actions} {footnote} />
+<RecordDetail title={submission.title} {onclose} {fields} {blocks} {meta} {actions} {footnote} {presentation} />
 
 <style>
 	/* One person per line. The conventional angle brackets separate name from

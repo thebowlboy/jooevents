@@ -77,6 +77,40 @@ test('unfinished rows state their relevant clock, and New marks what arrived sin
 	await expect(lateRow).toContainText('No reviews yet');
 });
 
+test('every row states how far along its line it is, with the breakdown one press away', async ({
+	page
+}) => {
+	await page.goto('/app/submissions');
+	const list = page.getByRole('region', { name: 'Submissions' });
+	await expect(list.locator('tr.row').first()).toBeVisible({ timeout: 15000 });
+
+	// The strip is a figure disclosure: press-and-focus, never hover-only, so a
+	// tap opens the same breakdown on touch.
+	const waitlisted = list.locator('tr.row').filter({ hasText: 'AI Interface Audits' });
+	const strip = waitlisted.getByRole('button', { name: /^Progress on .*AI Interface Audits/ });
+	await expect(strip).toBeVisible();
+	await strip.click();
+
+	const panelId = await strip.getAttribute('aria-controls');
+	const panel = page.locator(`#${panelId}`);
+	await expect(panel).toBeVisible();
+	// The summary says how far, and each step states its own fact — including
+	// the tail steps' independence (waitlisted: sent open, scheduled maybe).
+	await expect(panel).toContainText('3 of 5 steps done — next: result sent');
+	await expect(panel).toContainText('Waitlisted');
+	await expect(panel).toContainText('Result not sent');
+	await expect(panel).toContainText('If promoted from the waitlist');
+
+	// An accepted, placed row fills its Scheduled dot with the landing named.
+	await page.keyboard.press('Escape');
+	const accepted = list.locator('tr.row').filter({ hasText: 'Streaming Agent UIs' });
+	const acceptedStrip = accepted.getByRole('button', { name: /^Progress on .*Streaming/ });
+	await acceptedStrip.click();
+	const acceptedPanel = page.locator(`#${await acceptedStrip.getAttribute('aria-controls')}`);
+	await expect(acceptedPanel).toContainText(/Joined|Became/);
+	await expect(acceptedPanel).toContainText('Result not sent');
+});
+
 test('a decided row expands to say where it went, and the door lands there', async ({
 	page
 }, testInfo) => {
@@ -159,12 +193,14 @@ test('j/k walk the pass and a/w/d decide the open row from the keyboard', async 
 	const candidates = page.getByRole('region', { name: 'Candidates' });
 	await expect(candidates.locator('tr.row').first()).toBeVisible({ timeout: 15000 });
 
-	// j opens the first row of the pass; d declines it in place.
+	// j starts the pass: the deciding room opens on the first candidate still
+	// waiting; d declines it there, and the room advances to the next one.
 	await page.keyboard.press('j');
-	await expect(candidates.locator('tr.row.is-open')).toContainText('Deterministic Replay');
+	await expect(page.getByRole('dialog', { name: /Deterministic Replay/ })).toBeVisible();
 	await page.keyboard.press('d');
 	await expect(
 		page.getByRole('status').filter({ hasText: 'Declined “Deterministic Replay' })
 	).toBeVisible();
+	await expect(page.getByRole('dialog', { name: /Type Systems/ })).toBeVisible();
 	await expect(candidates).toContainText('8 of 14 candidates still to decide');
 });

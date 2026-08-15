@@ -172,10 +172,17 @@ test('a scoped link marks the whole row, not the name inside it', async ({ page 
 	await expect(roster.locator('[data-reviewer].ui-arrival')).toHaveCount(0);
 });
 
-test('the decisions table marks the row a ?submission= link names', async ({ page }) => {
+test('a ?submission= link opens the deciding room, and closing marks its row', async ({ page }) => {
 	await page.setViewportSize({ width: 1440, height: 900 });
 	await page.goto('/app/decisions?submission=sub-301');
 
+	// The link's promise is the candidate itself: the room opens on it directly.
+	const room = page.getByRole('dialog', { name: /Deterministic Replay/ });
+	await expect(room).toBeVisible({ timeout: 15000 });
+
+	// Leaving the room is where the table answers "which row was that?" — the
+	// arrival mark lands on the candidate the person was just deciding.
+	await page.keyboard.press('Escape');
 	const candidates = page.getByRole('region', { name: 'Candidates' });
 	const marked = candidates.locator('tr.ui-arrival--row');
 	await expect(marked).toHaveCount(1, { timeout: 15000 });

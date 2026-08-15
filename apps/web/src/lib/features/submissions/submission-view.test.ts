@@ -9,6 +9,7 @@ import {
 	hasNoTrack,
 	isNoTrackScope,
 	decisionCellFor,
+	journeyOf,
 	noticeAge,
 	noticeStatus,
 	reviewSummary,
@@ -244,5 +245,74 @@ describe('the decision cell against its group band', () => {
 			status: { key: 'accepted', label: 'Accepted' },
 			notice: true
 		});
+	});
+});
+
+describe('the journey', () => {
+	const states = (steps: ReturnType<typeof journeyOf>) => steps.map((step) => step.state);
+	const notes = (steps: ReturnType<typeof journeyOf>) =>
+		Object.fromEntries(steps.map((step) => [step.key, step.note]));
+
+	test('an untouched arrival is at its first open step', () => {
+		const steps = journeyOf(row(), {
+			round: { open: true, reviewsPerSubmission: 3 },
+			arrival: '2 h ago'
+		});
+		expect(states(steps)).toEqual(['done', 'current', 'upcoming', 'upcoming', 'upcoming']);
+		expect(notes(steps).submitted).toBe('2 h ago');
+		expect(notes(steps).reviewed).toBe('0 of 3 reviews in');
+	});
+
+	test('reviews done, decision open: the ring moves to Decided', () => {
+		const steps = journeyOf(row({ reviewCount: 3 }), {
+			round: { open: true, reviewsPerSubmission: 3 }
+		});
+		expect(states(steps)).toEqual(['done', 'done', 'current', 'upcoming', 'upcoming']);
+		expect(notes(steps).decided).toBe('Waiting on a decision');
+	});
+
+	test('the tail steps state their own truth independently', () => {
+		// Accepted, placed, but the result was never sent: Scheduled is done
+		// while Result sent is the one current step.
+		const steps = journeyOf(
+			row({ decision: 'accepted', notified: false, reviewCount: 3 }),
+			{ round: null, origin: { sessionId: 'ses-1', title: 'The Session', kind: 'spawn' } }
+		);
+		expect(states(steps)).toEqual(['done', 'done', 'done', 'current', 'done']);
+		expect(notes(steps).scheduled).toBe('Became “The Session”');
+	});
+
+	test('a declined line ends at its sent result', () => {
+		const steps = journeyOf(row({ decision: 'declined', notified: true, reviewCount: 2 }), {
+			round: null
+		});
+		expect(states(steps)).toEqual(['done', 'done', 'done', 'done', 'skipped']);
+		expect(notes(steps).scheduled).toBe('Not scheduled');
+	});
+
+	test('withdrawal owes nothing further', () => {
+		const steps = journeyOf(row({ decision: 'withdrawn', reviewCount: 1 }), { round: null });
+		expect(states(steps)).toEqual(['done', 'done', 'done', 'skipped', 'skipped']);
+		expect(notes(steps).sent).toBe('Nothing owed — withdrawn by the submitter');
+	});
+
+	test('a parked row is not being decided, and the line says so', () => {
+		const steps = journeyOf(row({ tray: 'discarded' }), { round: null });
+		expect(states(steps)).toEqual(['done', 'skipped', 'skipped', 'skipped', 'skipped']);
+		expect(notes(steps).decided).toBe('Marked as spam — not being decided');
+	});
+
+	test('an accepted row not yet placed keeps Scheduled open, known or not', () => {
+		const unknown = journeyOf(row({ decision: 'accepted', notified: true, reviewCount: 3 }), {
+			round: null
+		});
+		const answeredNone = journeyOf(
+			row({ decision: 'accepted', notified: true, reviewCount: 3 }),
+			{ round: null, origin: null }
+		);
+		for (const steps of [unknown, answeredNone]) {
+			expect(states(steps)).toEqual(['done', 'done', 'done', 'done', 'current']);
+			expect(notes(steps).scheduled).toBe('Not placed yet');
+		}
 	});
 });

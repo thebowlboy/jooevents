@@ -422,6 +422,23 @@
 					<overviewItem.icon size={16} aria-hidden="true" />{overviewItem.label}
 				</a>
 			{/if}
+			{#if nav.pulse}
+				{@const pulseRow = nav.pulse}
+				{#if isLocked(pulseRow.key)}
+					<span class="side__link side__link--locked" title="Unlocks once your first event exists">
+						<pulseRow.icon size={16} aria-hidden="true" />{pulseRow.label}
+						<span class="side__meta side__meta--lock"><Lock size={12} aria-hidden="true" /><span class="ui-sr-only">Locked until an event exists</span></span>
+					</span>
+				{:else}
+					<a
+						class="side__link"
+						class:side__link--active={isActive(pulseRow.href)}
+						href={pulseRow.href}
+						aria-current={isActive(pulseRow.href) ? 'page' : undefined}>
+						<pulseRow.icon size={16} aria-hidden="true" />{pulseRow.label}
+					</a>
+				{/if}
+			{/if}
 			{#each nav.groups as group (group.label)}
 				<span class="side__group">{group.label}</span>
 				{#each group.items as item (item.href)}

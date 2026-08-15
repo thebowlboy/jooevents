@@ -6,6 +6,7 @@
 
 import type { Icon } from 'lucide-svelte';
 import {
+	Activity,
 	CalendarDays,
 	CodeXml,
 	FileText,
@@ -47,6 +48,20 @@ export const overviewItem: NavItem = {
 	label: 'Overview',
 	href: '/app',
 	icon: LayoutDashboard
+};
+
+/**
+ * The Overview's descriptive sibling: what has been happening, week by week.
+ * It sits ungrouped beside Overview — the two are complementary readings of
+ * the whole event, not members of any one area group — and carries no count:
+ * nothing on it ever needs somebody (owner-decided rail row, 2026-08-15,
+ * superseding the earlier quiet in-content door).
+ */
+export const pulseItem: NavItem = {
+	key: 'pulse',
+	label: 'Pulse',
+	href: '/app/pulse',
+	icon: Activity
 };
 
 export const navGroups: NavGroup[] = [
@@ -124,7 +139,12 @@ export const settingsSectionItems: readonly NavSubItem[] = settingsSections.map(
  * person is in, and every settings section is Settings. The section names
  * itself in the rail and in its own panel heading.
  */
-const allItems = [overviewItem, ...navGroups.flatMap((group) => group.items), settingsItem];
+const allItems = [
+	overviewItem,
+	pulseItem,
+	...navGroups.flatMap((group) => group.items),
+	settingsItem
+];
 
 /**
  * The rail, for whoever is looking at it.
@@ -146,6 +166,8 @@ export interface NavModel {
 	home: string;
 	/** Present when the viewer has an overview projection to land on. */
 	overview?: NavItem;
+	/** Present when the viewer has the descriptive Pulse projection (organizer only). */
+	pulse?: NavItem;
 	groups: NavGroup[];
 	/** Present when the viewer administers the workspace. */
 	settings?: NavItem;
@@ -156,7 +178,13 @@ const reviewerAreas: readonly AreaKey[] = ['review'];
 
 export function navModel(viewer: WorkspaceNavigationViewer): NavModel {
 	if (viewer.kind === 'organizer') {
-		return { home: overviewItem.href, overview: overviewItem, groups: navGroups, settings: settingsItem };
+		return {
+			home: overviewItem.href,
+			overview: overviewItem,
+			pulse: pulseItem,
+			groups: navGroups,
+			settings: settingsItem
+		};
 	}
 	const groups = navGroups
 		.map((group) => ({

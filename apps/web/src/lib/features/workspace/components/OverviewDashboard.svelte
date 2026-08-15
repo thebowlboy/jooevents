@@ -475,7 +475,9 @@
 		<!-- The arrival tile leads the band: how much has come in, and what is new
 		     since this operator last had it in their head, is the question they
 		     opened the page holding. It is measured from the rows rather than
-		     authored, so it is the one tile that cannot go stale. -->
+		     authored, so it is the one tile that cannot go stale. History and
+		     weekly rates live on Pulse, whose door is its own rail row — this
+		     band never grows charts of its own. -->
 		{#if summary.arrivals && timezone !== ''}
 			<ArrivalTile arrivals={summary.arrivals} {timezone} {discardedHref} />
 		{/if}

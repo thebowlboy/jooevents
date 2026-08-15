@@ -5,6 +5,11 @@ import {
 
 export const operatorPageIds = Object.freeze([
 	'overview',
+	/*
+	 * Pulse is a quiet destination: addressed at /app/pulse and entered from
+	 * the Overview's key-numbers band, without a rail row of its own.
+	 */
+	'pulse',
 	'submissions',
 	'review',
 	'review_lineup',

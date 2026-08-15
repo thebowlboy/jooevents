@@ -21,7 +21,16 @@
  */
 
 import type { StatusIconKey } from '$lib/ui';
-import type { DecisionState, Format, SignalChip, Submission, Track, TrayKey } from '$lib/api/types';
+import type {
+	DecisionState,
+	Format,
+	ReviewRoundStatus,
+	SignalChip,
+	Submission,
+	SubmissionOrigin,
+	Track,
+	TrayKey
+} from '$lib/api/types';
 
 /**
  * The track filter's scope for submissions carrying no track at all.
@@ -269,6 +278,148 @@ export function decisionCellFor(
 	if (section === 'notice') return { status: decisionStatus[row.decision], notice: false };
 	if (section === 'done') return { status: decisionStatus[row.decision], notice: false };
 	return { status: decisionStatusFor(row), notice: awaitsNotice(row) };
+}
+
+// ---------------------------------------------------------------------------
+// The journey: how far along its line a submission is (owner, 2026-08-15).
+//
+// The stations say which group a row sits in; the journey says how much of the
+// whole line is behind it — submitted, reviewed, decided, result sent,
+// scheduled — as one compact strip the eye can compare down the page. Pure
+// projection over state the row already carries (plus the round target and the
+// accepted row's origin), computed on read, stored nowhere.
+
+export type JourneyState = 'done' | 'current' | 'upcoming' | 'skipped';
+
+export interface JourneyStep {
+	readonly key: 'submitted' | 'reviewed' | 'decided' | 'sent' | 'scheduled';
+	readonly label: string;
+	readonly state: JourneyState;
+	/** The step's own fact, for the breakdown — never rendered on the strip. */
+	readonly note: string;
+}
+
+function stepPlural(count: number, word: string): string {
+	return `${count} ${word}${count === 1 ? '' : 's'}`;
+}
+
+/**
+ * The five steps, each answered independently — done, skipped (this row's line
+ * genuinely does not pass through it), or open — and then exactly one open
+ * step is marked `current`: the first one, which is what "how far along" means.
+ * Independence matters because the tail steps are not strictly ordered in
+ * life: an accepted talk may be placed before its result is sent, and both
+ * dots simply state their own truth.
+ *
+ * `origin` is the accepted row's landing: undefined = not read yet (renders as
+ * not-yet-placed until the read lands), null = read, and it went nowhere.
+ */
+export function journeyOf(
+	row: Pick<Submission, 'decision' | 'notified' | 'reviewCount' | 'tray'>,
+	input: {
+		readonly round: Pick<ReviewRoundStatus, 'open' | 'reviewsPerSubmission'> | null;
+		readonly origin?: SubmissionOrigin | null;
+		/** The arrival in words, composed by the caller who owns the clock. */
+		readonly arrival?: string;
+	} = { round: null }
+): JourneyStep[] {
+	const decided = row.decision !== 'undecided';
+	const parked = !decided && (row.tray === 'set-aside' || row.tray === 'discarded');
+	const target = input.round?.open ? input.round.reviewsPerSubmission : undefined;
+
+	// Reviewed: covered while an open round still owes it reviews; done once
+	// reviews exist and nothing more is owed; a line that reached its verdict
+	// with no reviews at all did not pass through this step.
+	const reviewOpen =
+		!decided && input.round?.open === true && row.reviewCount < (target ?? Infinity);
+	const reviewed: Omit<JourneyStep, 'state'> & { done: boolean; skipped: boolean } = {
+		key: 'reviewed',
+		label: 'Reviewed',
+		done: row.reviewCount > 0 && !reviewOpen,
+		skipped: row.reviewCount === 0 && (decided || parked || input.round?.open !== true),
+		note: reviewOpen
+			? target === undefined
+				? `${stepPlural(row.reviewCount, 'review')} in — round still open`
+				: `${row.reviewCount} of ${target} reviews in`
+			: row.reviewCount > 0
+				? `${stepPlural(row.reviewCount, 'review')} in`
+				: 'No reviews'
+	};
+
+	const sentSkipped = row.decision === 'withdrawn' || parked;
+	const scheduledSkipped =
+		row.decision === 'declined' || row.decision === 'withdrawn' || parked;
+
+	const steps: (Omit<JourneyStep, 'state'> & { done: boolean; skipped: boolean })[] = [
+		{
+			key: 'submitted',
+			label: 'Submitted',
+			done: true,
+			skipped: false,
+			note: input.arrival ?? ''
+		},
+		reviewed,
+		{
+			key: 'decided',
+			label: 'Decided',
+			done: decided,
+			skipped: parked,
+			note: decided
+				? decisionStatus[row.decision].label
+				: parked
+					? row.tray === 'set-aside'
+						? 'Set aside — not being decided'
+						: 'Marked as spam — not being decided'
+					: reviewOpen
+						? 'After the reviews'
+						: 'Waiting on a decision'
+		},
+		{
+			key: 'sent',
+			label: 'Result sent',
+			done: decided && !sentSkipped && row.notified,
+			skipped: sentSkipped,
+			note:
+				row.decision === 'withdrawn'
+					? 'Nothing owed — withdrawn by the submitter'
+					: parked
+						? 'Nothing owed'
+						: decided
+							? row.notified
+								? 'Sent'
+								: 'Result not sent'
+							: 'After the decision'
+		},
+		{
+			key: 'scheduled',
+			label: 'Scheduled',
+			done: row.decision === 'accepted' && input.origin != null,
+			skipped: scheduledSkipped,
+			note:
+				row.decision === 'accepted'
+					? input.origin
+						? `${input.origin.kind === 'spawn' ? 'Became' : 'Joined'} “${input.origin.title}”`
+						: 'Not placed yet'
+					: row.decision === 'waitlisted'
+						? 'If promoted from the waitlist'
+						: scheduledSkipped
+							? 'Not scheduled'
+							: 'After acceptance'
+		}
+	];
+
+	let currentTaken = false;
+	return steps.map((step) => {
+		const state: JourneyState = step.done
+			? 'done'
+			: step.skipped
+				? 'skipped'
+				: currentTaken
+					? 'upcoming'
+					: 'current';
+		if (state === 'current') currentTaken = true;
+		return { key: step.key, label: step.label, state, note: step.note };
+	});
 }
 
 /**

@@ -67,8 +67,11 @@
 		color: var(--je-color-text-muted);
 	}
 
+	/* The action sits beside what it acts on: the copy shrinks to its content
+	   (still truncating when the name is the long thing), so Open lands right
+	   after the file instead of stranded at the row's far edge. */
 	.row__copy {
-		flex: 1;
+		flex: 0 1 auto;
 		min-width: 0;
 		display: grid;
 	}

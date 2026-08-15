@@ -36,6 +36,9 @@
 
 	const labels: Readonly<Record<OperatorPageId, string>> = Object.freeze({
 		overview: 'Overview',
+		/* Live Pulse waits on its derivation; the fallback renders it as the
+		   explicit unavailable state rather than a sample-shaped page. */
+		pulse: 'Pulse',
 		submissions: 'Submissions',
 		review: 'Review',
 		review_lineup: 'Line-up',

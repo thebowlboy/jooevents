@@ -27,7 +27,8 @@ test.describe('the mid-flight round', () => {
 	}, testInfo) => {
 		test.skip(testInfo.project.name !== 'desktop', 'one viewport covers the reveal contract');
 
-		await page.goto('/app/review');
+		// Committed reviews are the Completed zone's population.
+		await page.goto('/app/review?scope=completed');
 
 		const committed = page
 			.getByRole('listitem')
@@ -52,10 +53,13 @@ test.describe('the mid-flight round', () => {
 		await expect(mark).toHaveAttribute('aria-expanded', 'false');
 
 		// An uncommitted review has no crowd to stand in, and the card says so
-		// rather than showing an aggregate its own score has not paid for.
+		// rather than showing an aggregate its own score has not paid for. It
+		// lives in the To-review zone.
+		await page.goto('/app/review');
 		const open = page
 			.getByRole('listitem')
 			.filter({ hasText: 'Hands-on: AI Interface Audits That Stick' });
+		await expect(open).toBeVisible({ timeout: 15000 });
 		await expect(open.getByText('Peer reviews unlock when you commit your own.')).toBeVisible();
 		await expect(open.getByText('Standing in track')).toHaveCount(0);
 		await expect(open.getByRole('button', { name: /standing details/ })).toHaveCount(0);
@@ -130,14 +134,14 @@ test.describe('a shortlist round at scale', () => {
 	}, testInfo) => {
 		test.skip(testInfo.project.name !== 'desktop', 'two-column composition contract');
 
-		await page.goto('/app/review');
+		await page.goto('/app/review?scope=completed');
 		const card = page.getByRole('listitem').filter({ hasText: 'Type Systems for Tool-Calling Agents' });
 		await expect(card).toBeVisible({ timeout: 15000 });
 
 		// Comparing is a closer look at the queue, not a departure from it: the
 		// line-up opens over the queue and says so in the address.
 		await card.getByRole('button', { name: 'Line up with my other reviews' }).click();
-		await expect(page).toHaveURL(/\/app\/review\?lineup=sub-302$/);
+		await expect(page).toHaveURL(/\/app\/review\?.*lineup=sub-302$/);
 		const dialog = page.getByRole('dialog');
 		await expect(dialog).toBeVisible();
 		await expect(dialog).toContainText('Line-up: “Type Systems for Tool-Calling Agents”');
@@ -161,13 +165,13 @@ test.describe('a shortlist round at scale', () => {
 			.getByRole('group', { name: 'Comparison slice' })
 			.getByRole('button', { name: 'All my reviews' })
 			.click();
-		await expect(page).toHaveURL(/\/app\/review\?lineup=sub-302&slice=all$/);
+		await expect(page).toHaveURL(/\/app\/review\?.*lineup=sub-302&slice=all$/);
 		await expect(list.getByRole('listitem')).toHaveCount(3, { timeout: 15000 });
 		await expect(list).toContainText('Deterministic Replay for Agent Failures');
 
 		// And Back is how the move is taken back, list included.
 		await page.goBack();
-		await expect(page).toHaveURL(/\/app\/review\?lineup=sub-302$/);
+		await expect(page).toHaveURL(/\/app\/review\?.*lineup=sub-302$/);
 		await expect(list.getByRole('listitem')).toHaveCount(1, { timeout: 15000 });
 		await expect(list).not.toContainText('Deterministic Replay for Agent Failures');
 
@@ -175,16 +179,16 @@ test.describe('a shortlist round at scale', () => {
 		// still there, exactly as it was left.
 		await page.goBack();
 		await expect(dialog).toBeHidden();
-		await expect(page).toHaveURL(/\/app\/review$/);
+		await expect(page).toHaveURL(/\/app\/review\?scope=completed$/);
 		await expect(card).toBeVisible();
 
 		// Escape is the same exit from the keyboard, and it leaves the same address.
 		await card.getByRole('button', { name: 'Line up with my other reviews' }).click();
 		await expect(dialog).toBeVisible();
-		await expect(page).toHaveURL(/\/app\/review\?lineup=sub-302$/);
+		await expect(page).toHaveURL(/\/app\/review\?.*lineup=sub-302$/);
 		await page.keyboard.press('Escape');
 		await expect(dialog).toBeHidden();
-		await expect(page).toHaveURL(/\/app\/review$/);
+		await expect(page).toHaveURL(/\/app\/review\?scope=completed$/);
 
 		// So is a press outside it — a surface you were only looking at is left the
 		// moment you stop looking.
@@ -192,7 +196,7 @@ test.describe('a shortlist round at scale', () => {
 		await expect(dialog).toBeVisible();
 		await page.mouse.click(8, 500);
 		await expect(dialog).toBeHidden();
-		await expect(page).toHaveURL(/\/app\/review$/);
+		await expect(page).toHaveURL(/\/app\/review\?scope=completed$/);
 	});
 
 	test('the line-up keeps its own address for a direct link', async ({ page }, testInfo) => {
@@ -244,7 +248,7 @@ test.describe('a shortlist round at scale', () => {
 	}, testInfo) => {
 		test.skip(testInfo.project.name !== 'desktop', 'one viewport covers the revise contract');
 
-		await page.goto('/app/review?lineup=sub-302');
+		await page.goto('/app/review?scope=completed&lineup=sub-302');
 		const anchor = page.getByRole('region', { name: 'Anchor', exact: true });
 		await expect(anchor).toContainText('Type Systems for Tool-Calling Agents', { timeout: 15000 });
 		await expect(anchor.locator('.score__value')).toHaveText('4');
@@ -267,7 +271,7 @@ test.describe('a shortlist round at scale', () => {
 
 		// Closing hands the queue card the score that was just settled.
 		await page.getByRole('button', { name: 'Close dialog' }).click();
-		await expect(page).toHaveURL(/\/app\/review$/);
+		await expect(page).toHaveURL(/\/app\/review\?scope=completed$/);
 		const queueCard = page
 			.getByRole('listitem')
 			.filter({ hasText: 'Type Systems for Tool-Calling Agents' });
@@ -284,7 +288,7 @@ test.describe('a shortlist round at scale', () => {
 	test('a spent mark keeps its place and says where all three went', async ({ page }, testInfo) => {
 		test.skip(testInfo.project.name !== 'desktop', 'one viewport covers the refusal contract');
 
-		await page.goto('/app/review');
+		await page.goto('/app/review?scope=completed');
 		const card = page.getByRole('listitem').filter({ hasText: 'Panel: When Should Models Run at the Edge?' });
 		await expect(card).toBeVisible({ timeout: 15000 });
 

@@ -53,7 +53,7 @@ test.describe('the reviewer subset', () => {
 
 		await asReviewer(page, baseURL);
 		await page.goto('/app/review');
-		await expect(page.getByRole('heading', { name: 'My queue' })).toBeVisible({ timeout: 15000 });
+		await expect(page.getByRole('heading', { name: 'Review queue' })).toBeVisible({ timeout: 15000 });
 
 		// Oversight of other people is chair work: the column, the reminders, the
 		// names that opened their records, and the way into managing them are
@@ -196,7 +196,8 @@ test.describe('the reviewer subset', () => {
 		test.skip(testInfo.project.name !== 'desktop', 'one viewport covers the refusal contract');
 
 		await asReviewer(page, baseURL);
-		await page.goto('/app/review');
+		// Committed reviews are the Completed zone's population.
+		await page.goto('/app/review?scope=completed');
 
 		const committed = page
 			.getByRole('listitem')
@@ -254,16 +255,18 @@ test.describe('the organizer rendering', () => {
 		await expect(page.getByRole('heading', { name: 'Reviewers' })).toHaveCount(0);
 		await expect(page.getByRole('link', { name: 'Reviewer progress and reminders' })).toBeVisible({ timeout: 15000 });
 		await expect(page.getByRole('heading', { name: 'Review queue' })).toBeVisible();
-		await expect(page.getByRole('heading', { name: 'To review' })).toBeVisible();
-		await expect(page.getByRole('heading', { name: 'Completed reviews' })).toBeVisible();
 
-		// Unfinished work is above completed history, regardless of source order.
-		const firstCard = page.locator('.queue .card').first();
-		await expect(firstCard.locator('.ui-badge--success')).toHaveCount(0);
-		const completedHeading = page.getByRole('heading', { name: 'Completed reviews' });
-		const completedBox = await completedHeading.boundingBox();
-		const firstCardBox = await firstCard.boundingBox();
-		expect(completedBox && firstCardBox && completedBox.y > firstCardBox.y).toBe(true);
+		// Two intents, two zones: the pass opens on unfinished work, and the
+		// completed history is a scope away rather than a scroll below it.
+		const zones = page.getByRole('radiogroup', { name: 'Review queue zones' });
+		await expect(zones.getByRole('radio', { name: /^To review/ })).toBeChecked();
+		await expect(page.locator('.queue .card .ui-badge--success')).toHaveCount(0);
+		await expect(page.locator('.queue .card').first().getByText('Commit review')).toBeVisible();
+
+		await zones.getByText('Completed', { exact: true }).click();
+		await expect(zones.getByRole('radio', { name: /^Completed/ })).toBeChecked();
+		await expect(page.locator('.queue .card').first().getByText('Your score')).toBeVisible();
+		await zones.getByText('To review', { exact: true }).click();
 
 		// Nothing reviewer-scoped leaks into the chair's screen.
 		await expect(page.locator('.brief')).toHaveCount(0);

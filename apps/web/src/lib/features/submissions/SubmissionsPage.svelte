@@ -29,11 +29,13 @@
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
 	import AddDirectEntryModal from './AddDirectEntryModal.svelte';
 	import SubmissionRecordDetail from './SubmissionRecordDetail.svelte';
+	import SubmissionJourney from './SubmissionJourney.svelte';
 	import {
 		NO_TRACK_SCOPE,
 		TRAY_ORDER,
 		decisionCellFor,
 		formatLabel,
+		journeyOf,
 		isNoTrackScope,
 		noticeAge,
 		noticeStatus,
@@ -224,11 +226,13 @@
 				standingsRead = true;
 				return;
 			}
-			// The standing marks and the submitter profiles are two independent reads
-			// of the same landed rows, so neither waits on the other.
+			// The standing marks, the submitter profiles, and the accepted rows'
+			// schedule landings are independent reads of the same landed rows, so
+			// none waits on another.
 			const [marks] = await Promise.all([
 				port.review.standings(landed.map((row) => row.id)),
-				loadProfiles(landed, ticket)
+				loadProfiles(landed, ticket),
+				loadOrigins(landed, ticket)
 			]);
 			if (ticket !== request) return;
 			standings = marks;
@@ -396,10 +400,24 @@
 	const orderedRows = $derived(sections.flatMap((section) => section.rows));
 
 	// -------------------------------------------------------------------------
-	// Where an accepted row went — read when its detail opens, kept for the
-	// session. Null is an answered read (never graduated, or reversed); absent
-	// means not asked yet, which renders nothing.
+	// Where an accepted row went — the journey strip's Scheduled dot and the
+	// expansion's durable door both read it, kept for the session. Null is an
+	// answered read (never graduated, or reversed); absent means not asked yet,
+	// which the strip renders as not-placed-yet until the batch lands.
 	let origins = $state<Record<string, SubmissionOrigin | null>>({});
+
+	/** One pass for the whole table's accepted rows, alongside the standings. */
+	async function loadOrigins(rows: Submission[], ticket: number) {
+		const ids = rows
+			.filter((row) => row.decision === 'accepted' && !(row.id in origins))
+			.map((row) => row.id);
+		if (ids.length === 0) return;
+		const found = await Promise.all(ids.map((id) => port.schedule.originOf(id)));
+		if (ticket !== request) return;
+		const next = { ...origins };
+		ids.forEach((id, index) => (next[id] = found[index] ?? null));
+		origins = next;
+	}
 
 	function openRow(id: string | null) {
 		expandedId = id;
@@ -705,6 +723,9 @@
 					<th>Signals</th>
 					<th class="ui-table__number col-avg">Reviews</th>
 					<th>Decision</th>
+					<!-- How far along its line each row is — five dots the eye compares
+					     straight down the page; the breakdown is one press away. -->
+					<th class="col-journey">Progress</th>
 					<!-- The clock the arrival groups sort by, in its own column: the
 					     sorted value is exactly what earns a column, and one constant
 					     right-edge slot is what lets the eye run down the page's
@@ -721,7 +742,7 @@
 						     work that is no longer happening. Only a retryable failure
 						     offers a retry; a terminal refusal renders as the refusal. -->
 						<tr>
-							<td colspan="7">
+							<td colspan="8">
 								<div class="empty" role="alert">
 									<p class="empty__title">The submissions could not be loaded.</p>
 									<p class="empty__hint">{loadFailure.message}</p>
@@ -755,6 +776,7 @@
 								</span>
 							</td>
 							<td class="ui-cell--state"><span class="ui-skeleton skeleton-chip"></span></td>
+							<td class="col-journey"><span class="ui-skeleton skeleton-dots"></span></td>
 							<td class="ui-table__number col-when"><span class="when"><span class="ui-skeleton skeleton-line" style="inline-size: 4rem"></span></span></td>
 							<td class="col-expand ui-cell--trail"><span class="ui-skeleton skeleton-action skeleton-action--icon"></span></td>
 						</tr>
@@ -762,7 +784,7 @@
 					{/if}
 				{:else if scopedRows.length === 0}
 					<tr>
-						<td colspan="7">
+						<td colspan="8">
 							<div class="empty">
 								<!-- An empty list has two different causes and the rows cannot
 								     tell them apart: nothing matched the words, or nothing is
@@ -848,7 +870,7 @@
 							     computed from the rows on screen — under a search they count
 							     the matches, which is what the eye is comparing them to. -->
 							<tr class="station">
-								<td colspan="7">
+								<td colspan="8">
 									<div class="station__line">
 										<span class="station__label">{section.label}</span>
 										<span class="station__count">{section.rows.length}</span>
@@ -1040,6 +1062,17 @@
 									<span class="absent">{cell.absent}</span>
 								{/if}
 							</td>
+							<td class="col-journey">
+								<SubmissionJourney
+									steps={journeyOf(row, {
+										round,
+										origin: origins[row.id],
+										arrival: formatArrival(row.submittedAt, enteredAt)
+									})}
+									context={row.title}
+									onreveal={() =>
+										(announcement = `Progress on “${row.title}”.`)} />
+							</td>
 							<!-- The arrival, on every row, in one constant slot. The New mark
 							     sits with the fact it qualifies — arrived since the operator
 							     last looked, or within the day; information, never urgency
@@ -1089,7 +1122,7 @@
 								Neither is sent to the submitter, and both can be undone.
 							{/snippet}
 							<tr class="detail-row ui-table__detail">
-								<td colspan="7">
+								<td colspan="8">
 									<!-- One component, two presentations: the inline expansion stays
 									     on desktop so a power user compares without losing the list,
 									     and promotes to a full-screen sheet on a phone, where a
@@ -1433,6 +1466,19 @@
 		justify-content: flex-end;
 		gap: var(--je-space-2);
 		min-inline-size: 0;
+	}
+
+	/* Five dots and their press padding — the strip's own box sets the floor. */
+	.col-journey {
+		inline-size: 4.5rem;
+	}
+
+	/* Stands at the strip's height so the read lands without moving the row. */
+	.skeleton-dots {
+		display: inline-block;
+		inline-size: 3.25rem;
+		block-size: 1.4375rem;
+		border-radius: var(--je-radius-round);
 	}
 
 	.title-line {

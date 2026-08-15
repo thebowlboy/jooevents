@@ -111,6 +111,7 @@ export type AttentionSeverity = 'now' | 'soon' | 'fyi';
 
 export type AreaKey =
 	| 'overview'
+	| 'pulse'
 	| 'submissions'
 	| 'review'
 	| 'decisions'

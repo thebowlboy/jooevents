@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
 	import { Check } from 'lucide-svelte';
-	import { Button, CopyValue, Field, Modal, statusIcon, trackPending } from '$lib/ui';
+	import { Button, CopyValue, Field, Meter, Modal, statusIcon, trackPending } from '$lib/ui';
 	import type { IconComponent } from '$lib/ui';
 	import type { TasksPagePort } from '$lib/api/tasks-page-port';
 	import { LiveRead, type LiveReadState } from '$lib/api/live-read';
@@ -295,6 +295,13 @@
 		assignments.length === 0 ? 0 : Math.round((completeCount / assignments.length) * 100)
 	);
 
+	/**
+	 * The bar answers the state, never the fraction (design-system §Meter): a
+	 * speaker at 2 of 5 with nothing overdue is healthy green; the same 2 of 5
+	 * with something past due is amber. The digits stay beside every bar.
+	 */
+	const rowTone = (row: SpeakerTaskRow) => (row.overdue > 0 ? 'caution' as const : 'positive' as const);
+
 	const selectableVisible = $derived(
 		visibleRows.filter((row) => row.outstanding > 0).map((row) => row.speaker.id)
 	);
@@ -546,6 +553,16 @@
 		<article class="stat">
 			<span class="stat__label">Assignments complete</span>
 			<span class="stat__value">{completePercent}%</span>
+			<!-- The bar carries the health, the digits stay beside it: amber while
+			     anything is past due, green while the remaining work is merely
+			     ahead — the fraction alone never picks the colour. -->
+			<span class="stat__meter">
+				<Meter
+					value={completePercent}
+					tone={overdueCount > 0 ? 'caution' : 'positive'}
+					label="Assignments complete"
+					valueText={`${completeCount} of ${assignments.length} complete`} />
+			</span>
 			<span class="stat__sub">
 				{completeCount} of {assignments.length} complete{waivedCount > 0 ? ` · ${waivedCount} waived` : ''}
 			</span>
@@ -564,6 +581,14 @@
 		<article class="stat">
 			<span class="stat__label">Speakers fully done</span>
 			<span class="stat__value">{fullyDone}</span>
+			<!-- Inventory, not health — neutral until the day everyone is done. -->
+			<span class="stat__meter">
+				<Meter
+					value={rows.length === 0 ? 0 : (fullyDone / rows.length) * 100}
+					tone={rows.length > 0 && fullyDone === rows.length ? 'positive' : 'neutral'}
+					label="Speakers fully done"
+					valueText={`${fullyDone} of ${rows.length} speakers`} />
+			</span>
 			<span class="stat__sub">of {rows.length} with assignments</span>
 		</article>
 	{:else if boardState.kind === 'resolving'}
@@ -615,6 +640,12 @@
 			<Button size="sm" onclick={openCreate}>Create a task definition</Button>
 		</div>
 	{:else}
+		<!-- Scopes left, the page's one constructive action right — the learned
+		     toolbar grammar. The reminder controls are not here: sending acts on a
+		     selection, so it appears with one (the bulk bar below), and the
+		     template that shapes the message travels with the send it shapes —
+		     not as a stray link beside an unrelated action. A permanently visible
+		     disabled Send was a standing wish; a control appears when it applies. -->
 		<div class="ui-toolbar board__toolbar">
 			<div class="ui-segmented" role="group" aria-label="Filter speakers">
 				{#each filters as entry (entry.key)}
@@ -625,22 +656,8 @@
 						onclick={() => setFilter(entry.key)}>{entry.label}</button>
 				{/each}
 			</div>
-			{#if reminderTemplate}
-				<a
-					class="board__template"
-					href={`/app/templates?template=${reminderTemplate.id}`}
-					aria-label={`Reminder template — ${reminderTemplate.name}`}>
-					Reminder template
-				</a>
-			{/if}
+			<span class="ui-toolbar__spacer"></span>
 			<Button variant="secondary" size="sm" onclick={openCreate}>Create task</Button>
-			<button
-				type="button"
-				class="ui-button ui-button--primary ui-button--sm board__remind"
-				disabled={selected.length === 0 || sending}
-				onclick={openReminder}>
-				Send reminder{selected.length > 0 ? ` (${selected.length})` : ''}
-			</button>
 		</div>
 
 		<div
@@ -744,6 +761,13 @@
 												row.speaker.state
 											]}</span
 										>
+										<span class="rowmeter">
+											<Meter
+												value={row.total === 0 ? 0 : (row.done / row.total) * 100}
+												tone={rowTone(row)}
+												label={`${row.speaker.name}'s tasks complete`}
+												valueText={`${row.done} of ${row.total} complete`} />
+										</span>
 										{row.done} of {row.total} complete{row.waived > 0 ? ` · ${row.waived} waived` : ''}
 									</span>
 								</th>
@@ -823,6 +847,13 @@
 											row.speaker.state
 										]}</span
 									>
+									<span class="rowmeter">
+										<Meter
+											value={row.total === 0 ? 0 : (row.done / row.total) * 100}
+											tone={rowTone(row)}
+											label={`${row.speaker.name}'s tasks complete`}
+											valueText={`${row.done} of ${row.total} complete`} />
+									</span>
 									{row.done} of {row.total} complete{row.waived > 0 ? ` · ${row.waived} waived` : ''}
 								</p>
 							</div>
@@ -846,6 +877,31 @@
 		</div>
 	{/if}
 </section>
+
+{#if selected.length > 0}
+	<!-- The reminder acts on the picked speakers, so its controls appear with
+	     the picks — the same selection grammar as the submissions trays. The
+	     template link rides beside the send it shapes. -->
+	<div class="bulkbar" role="toolbar" aria-label="Reminder actions">
+		<span class="bulkbar__count">{selected.length} selected</span>
+		<button
+			type="button"
+			class="ui-button ui-button--primary ui-button--sm"
+			disabled={sending}
+			onclick={openReminder}>
+			Send reminder
+		</button>
+		{#if reminderTemplate}
+			<a
+				class="bulkbar__template"
+				href={`/app/templates?template=${reminderTemplate.id}`}
+				aria-label={`Reminder template — ${reminderTemplate.name}`}>
+				Reminder template
+			</a>
+		{/if}
+		<button type="button" class="ui-button ui-button--ghost ui-button--sm" onclick={() => (selected = [])}>Clear</button>
+	</div>
+{/if}
 
 <p class="ui-sr-only" role="status">{announcement}</p>
 
@@ -952,6 +1008,7 @@
 		grid-template-areas:
 			'label'
 			'value'
+			'meter'
 			'sub';
 		gap: var(--je-space-1);
 		min-block-size: 6.75rem;
@@ -1023,6 +1080,32 @@
 		color: var(--je-color-warning);
 	}
 
+	/* The tile's bar: full width of the tile, under the figure it restates in
+	   state colour. The digits below remain the accessible comparison. */
+	.stat__meter {
+		grid-area: meter;
+		display: block;
+		inline-size: 100%;
+		margin-block: 2px;
+	}
+
+	.stat__meter :global(.ui-meter) {
+		inline-size: 100%;
+	}
+
+	/* The row's bar, sized to sit inside the metadata sentence: wide enough to
+	   read a fraction from, never wide enough to become a second column. */
+	.rowmeter {
+		display: inline-flex;
+		align-items: center;
+		vertical-align: middle;
+		margin-inline-end: var(--je-space-1);
+	}
+
+	.rowmeter :global(.ui-meter) {
+		inline-size: 4rem;
+	}
+
 	.stat__sub {
 		grid-area: sub;
 		font-size: var(--je-font-size-xs);
@@ -1064,20 +1147,32 @@
 		color: var(--je-color-text-muted);
 	}
 
-	.board__remind {
-		margin-inline-start: auto;
+	/* The selection's own toolbar, floating with the picks it acts on — the
+	   same grammar the submissions queue taught. */
+	.bulkbar {
+		position: sticky;
+		inset-block-end: var(--je-space-4);
+		align-self: center;
+		display: flex;
+		align-items: center;
+		gap: var(--je-space-2);
+		padding: var(--je-space-2) var(--je-space-4);
+		background: var(--je-color-surface);
+		border: 1px solid var(--je-color-border-strong);
+		border-radius: var(--je-radius-round);
+		box-shadow: var(--je-shadow-md);
 	}
 
-	/* The quiet door travels with the action it serves: it takes the push to the
-	   end edge, and the button beside it gives up its own so the pair stays
-	   together instead of splitting the free space. */
-	.board__template {
-		margin-inline-start: auto;
+	.bulkbar__count {
 		font-size: var(--je-font-size-sm);
+		font-weight: 600;
+		margin-inline-end: var(--je-space-2);
+		font-variant-numeric: tabular-nums;
 	}
 
-	.board__template + .board__remind {
-		margin-inline-start: 0;
+	.bulkbar__template {
+		font-size: var(--je-font-size-sm);
+		white-space: nowrap;
 	}
 
 	/* Matrix: speakers down, task definitions across. */
@@ -1453,11 +1548,6 @@
 		.board__toolbar {
 			border-block-end: 1px solid var(--je-color-border);
 			border-radius: var(--je-radius-surface);
-		}
-
-		.board__remind,
-		.board__template {
-			margin-inline-start: 0;
 		}
 
 		/* Per-speaker cards replace the matrix; a squeezed grid would carry the

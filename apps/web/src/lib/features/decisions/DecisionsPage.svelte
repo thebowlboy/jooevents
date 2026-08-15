@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { onMount, tick } from 'svelte';
+	import { onMount } from 'svelte';
 	import { flip } from 'svelte/animate';
-	import { ArrowDown, ArrowUp, ChevronDown, Flame, Gem, MailWarning, Star, Zap } from 'lucide-svelte';
+	import { ArrowDown, ArrowUp, ChevronRight, Flame, Gem, MailWarning, Star, Zap } from 'lucide-svelte';
 	// The situation glyph for a surface whose measurement has not been set up.
 	import { CircleDashed as NoPlan } from 'lucide-svelte';
 	import {
@@ -76,9 +76,66 @@
 	let rows = $state<Submission[] | null>(null);
 	let tracks = $state<Track[]>([]);
 	let selected = $state<string[]>([]);
-	let expandedId = $state<string | null>(null);
 	let sortDir = $state<'asc' | 'desc'>('desc');
 	let announcement = $state('');
+
+	/*
+	 * The deciding room (owner rework, 2026-08-15). Opening a candidate used to
+	 * insert a screen-tall detail into the table — the pass disappeared under
+	 * it, and the verdict stayed up on the collapsed row, an arm's length from
+	 * the evidence it judges. The room is the same candidates opened one at a
+	 * time *over* the pass instead: evidence beside the verdict, previous/next
+	 * walking the table's own order, and a verdict advancing to the next
+	 * undecided candidate — read, decide, next, without ever re-finding your
+	 * place. Which candidate is scope, so it travels in the address
+	 * (`?submission=`, the key deep links already used), and Back, Escape, the
+	 * close button and the backdrop all return to the pass with the last
+	 * candidate's row revealed.
+	 */
+	const openId = $derived(param('submission'));
+	let roomOpen = $state(false);
+	/** What the room last showed — the row the table reveals on close. */
+	let lastInspected: string | null = null;
+
+	$effect(() => {
+		roomOpen = openId !== null;
+	});
+
+	// The dialog closed itself — Escape, backdrop, the X — so the address
+	// follows, and the pass shows where the person left off.
+	$effect(() => {
+		if (roomOpen || openId === null) return;
+		void applyParams({ submission: null }).then(() => revealLast());
+	});
+
+	$effect(() => {
+		const id = openId;
+		if (!id) return;
+		lastInspected = id;
+		const row = rows?.find((entry) => entry.id === id);
+		if (!row) return;
+		void loadReviews(row);
+		// Keyed traversal changes the dialog under a reader without a focus
+		// move, so the polite region says which candidate is now showing.
+		announcement = `“${row.title}” — open for deciding.`;
+	});
+
+	/** No graph reads: a plain DOM lookup, so closing cannot re-fire it. */
+	function revealLast() {
+		if (!lastInspected) return;
+		const anchor = document.querySelector<HTMLElement>(`[data-submission="${lastInspected}"]`);
+		if (anchor) revealTarget(anchor);
+	}
+
+	function openRoom(id: string) {
+		void applyParams({ submission: id }, { history: 'push' });
+	}
+
+	/** Walking candidates is one act of reading, so it replaces rather than
+	 *  stacking a history entry per step. */
+	function showCandidate(id: string) {
+		void applyParams({ submission: id });
+	}
 
 	/*
 	 * A line-up is a closer look at the decision pass, not a new workflow. Keep
@@ -297,9 +354,9 @@
 				landed = [...inbox.rows, ...late.rows];
 				rows = landed;
 				loadFailure = null;
-				// An open row that the newest result set no longer holds would show a
-				// detail for a candidate the operator can no longer see.
-				if (expandedId !== null && !landed.some((row) => row.id === expandedId)) expandedId = null;
+				// A room showing a candidate the newest result set no longer holds
+				// would be deciding on a submission the operator can no longer see.
+				if (openId !== null && !landed.some((row) => row.id === openId)) roomOpen = false;
 				// The marks already on screen stay on screen: a decision re-read does
 				// not change any average, and blanking them back to a pending figure
 				// would flash the whole column for nothing. Only the flag reopens, so
@@ -552,97 +609,85 @@
 		}
 	}
 
-	function toggleRow(id: string) {
-		const next = expandedId === id ? null : id;
-		expandedId = next;
-		// The address named one candidate; the moment the operator opens or closes
-		// a row themselves, what is showing is theirs rather than the link's — so
-		// the scope leaves the address, and Back puts the scoped arrival back.
-		if (askedSubmission && askedSubmission !== next) {
-			void clearParams(['submission'], { history: 'push' });
-		}
-		if (next) {
-			const row = rows?.find((entry) => entry.id === next);
-			if (row) void loadReviews(row);
-		}
-	}
-
 	/**
-	 * The row is a bigger door to the same detail, for the pointer only. The
-	 * chevron stays the one focusable switch carrying `aria-expanded`; which
-	 * presses belong to the row's own controls — or to a text selection — is the
-	 * shared row-press contract in `$lib/ui`.
+	 * The row is a bigger door to the room, for the pointer only. The chevron
+	 * stays the one focusable trigger; which presses belong to the row's own
+	 * controls — or to a text selection — is the shared row-press contract in
+	 * `$lib/ui`.
 	 */
 	function onRowPress(event: MouseEvent, id: string) {
 		if (shouldIgnoreRowPress(event)) return;
-		toggleRow(id);
+		openRoom(id);
 	}
 
-	/** j/k walk the verdict keys' row — the reading-speed pass of 05 §3. */
+	// -------------------------------------------------------------------------
+	// The room's own facts, derived from the same groups the table renders.
+
+	/** The rows as rendered — down the pass, then through the decided group. */
+	const orderedRows = $derived([...stillToDecide, ...decidedRows]);
+	/** The candidate the room shows. Read from all candidates, not the scoped
+	 *  view: a deep link to a scope-hidden row still keeps its promise. */
+	const openRow = $derived(rows?.find((row) => row.id === openId) ?? null);
+	const openIndex = $derived(orderedRows.findIndex((row) => row.id === openId));
+
+	function step(delta: number) {
+		if (orderedRows.length === 0) return;
+		const from = openIndex === -1 ? (delta > 0 ? -1 : 0) : openIndex;
+		const next = orderedRows[Math.min(Math.max(from + delta, 0), orderedRows.length - 1)];
+		if (next && next.id !== openId) showCandidate(next.id);
+	}
+
+	/**
+	 * A verdict from the room advances the pass: the decided candidate leaves
+	 * the undecided group, and the room moves to the one now standing where it
+	 * stood — read, decide, next. Every keyed or pressed verdict is the same
+	 * receipted, undoable move it is on the row, so no confirm interrupts the
+	 * rhythm; when the last undecided candidate is decided the room closes onto
+	 * the finale. Re-deciding an already-decided candidate stays put — that is
+	 * a correction, not the pass moving.
+	 */
+	async function decideFromRoom(row: Submission, verdict: Verdict) {
+		if (row.decision === verdict) return;
+		const wasUndecided = row.decision === 'undecided';
+		const index = stillToDecide.findIndex((entry) => entry.id === row.id);
+		const outcome = decideRow(row, verdict);
+		// The trackless-accept confirm took over: the person answers it and
+		// returns to this candidate; advancing under a dialog would move the
+		// room behind their back.
+		if (!(outcome instanceof Promise)) return;
+		const committed = await outcome;
+		if (!committed || !wasUndecided || !roomOpen) return;
+		if (stillToDecide.length === 0) {
+			roomOpen = false;
+			return;
+		}
+		const next = stillToDecide[Math.min(Math.max(index, 0), stillToDecide.length - 1)];
+		if (next) showCandidate(next.id);
+	}
+
+	/** j/k walk the candidates; a/w/d decide — the reading-speed pass of 05 §3,
+	 *  now carried by the room. */
 	const verdictKeys: Record<string, Verdict> = { a: 'accepted', w: 'waitlisted', d: 'declined' };
 
 	function onKeydown(event: KeyboardEvent) {
 		const target = event.target as HTMLElement | null;
 		if (target && /^(input|textarea|select)$/i.test(target.tagName)) return;
 		if (event.metaKey || event.ctrlKey || event.altKey) return;
-		// The rows as rendered — down the pass, then through the decided group.
-		const ordered = [...stillToDecide, ...decidedRows];
-		if (ordered.length === 0) return;
-		if (event.key === 'j' || event.key === 'k') {
-			const index = ordered.findIndex((row) => row.id === expandedId);
-			const next =
-				event.key === 'j' ? Math.min(index + 1, ordered.length - 1) : Math.max(index - 1, 0);
-			const row = ordered[next];
-			if (!row || row.id === expandedId) return;
-			toggleRow(row.id);
+		if (orderedRows.length === 0) return;
+		if (!roomOpen) {
+			// From the table, j or k starts the pass: the room opens on the first
+			// candidate still waiting (or the top of the table once none are).
+			if (event.key === 'j' || event.key === 'k') {
+				const first = stillToDecide[0] ?? orderedRows[0];
+				if (first) openRoom(first.id);
+			}
 			return;
 		}
-		// a/w/d decide the open row in place: the verdict is a receipted,
-		// undoable move the eye watches land one group down, so no key needs a
-		// confirm in front of it.
+		if (event.key === 'j') return step(1);
+		if (event.key === 'k') return step(-1);
 		const verdict = verdictKeys[event.key];
-		if (!verdict || expandedId === null) return;
-		const row = ordered.find((entry) => entry.id === expandedId);
-		if (!row) return;
-		decideRow(row, verdict);
-	}
-
-	/**
-	 * Arriving from elsewhere: `?submission=` lands on that candidate's row —
-	 * open, scrolled to, and marked — so a link handed over by an alert or an
-	 * agent keeps its promise instead of dropping someone at the top of a table.
-	 * The candidates are a crowd of alike rows, so the arrival is marked.
-	 */
-	const askedSubmission = $derived(param('submission'));
-
-	// A plain let, deliberately outside the graph: it records which arrival has
-	// already been answered, so a repaint cannot steal focus back a second time.
-	let revealedSubmission: string | null = null;
-
-	$effect(() => {
-		const id = askedSubmission;
-		const ready = rows;
-		if (!ready || !id) {
-			revealedSubmission = null;
-			return;
-		}
-		if (revealedSubmission === id) return;
-		const row = ready.find((entry) => entry.id === id);
-		if (!row) return;
-		revealedSubmission = id;
-		expandedId = id;
-		void loadReviews(row);
-		announcement = `“${row.title}” — its candidate row is open.`;
-		void showRow(row);
-	});
-
-	async function showRow(row: Submission) {
-		// A scope the link never asked for can hide the row it did ask for, so the
-		// table widens to the full candidate list rather than landing on nothing.
-		if (scoped && !(isDecided(row) && !row.notified)) await clearParams(['scope']);
-		if (targetScope && row.targetSessionId !== targetScope) await clearParams(['target']);
-		await tick();
-		revealTarget(document.querySelector<HTMLElement>(`[data-submission="${row.id}"]`));
+		if (!verdict || !openRow) return;
+		void decideFromRoom(openRow, verdict);
 	}
 
 	const allSelected = $derived(visible.length > 0 && selected.length === visible.length);
@@ -788,8 +833,13 @@
 		}
 	}
 
-	function decideRow(row: Submission, verdict: Verdict) {
-		if (row.decision === verdict) return;
+	/**
+	 * Returns the commit's own promise where the verdict goes straight through,
+	 * and nothing where the trackless-accept confirm takes over — which is how
+	 * the room knows whether the pass may advance.
+	 */
+	function decideRow(row: Submission, verdict: Verdict): Promise<boolean> | undefined {
+		if (row.decision === verdict) return undefined;
 		if (
 			verdict === 'accepted' &&
 			!row.targetSessionId &&
@@ -801,10 +851,10 @@
 			pendingFromBulk = false;
 			prepareAcceptanceTracks([row.id]);
 			confirmOpen = true;
-			return;
+			return undefined;
 		}
 		const past = verdictCopy[verdict].past;
-		void decide([row.id], verdict, `${past[0].toUpperCase()}${past.slice(1)} “${row.title}”`);
+		return decide([row.id], verdict, `${past[0].toUpperCase()}${past.slice(1)} “${row.title}”`);
 	}
 
 	function askBulk(verdict: Verdict) {
@@ -971,7 +1021,11 @@
 	</section>
 {/if}
 
-<CommitReceipt onUndone={load} />
+{#if openId === null}
+	<!-- While the room is open its own receipt rides inside the dialog's top
+	     layer; a fixed banner down here would sit under the scrim. -->
+	<CommitReceipt onUndone={load} />
+{/if}
 
 {#if loadFailure && rows !== null}
 	<!-- The kept rows are yesterday's truth; the notice says the re-read behind
@@ -1230,16 +1284,14 @@
 						{@const rowPending = pendingIds.includes(row.id)}
 						{@const pinned = pinnedFor(row.id)}
 						{@const standing = standings[row.id]}
-						<!-- The pointer target is the row; the switch is still the chevron
-						     inside it, which is why no role or tabindex is added here. The row
-						     is also the arrival anchor and its own mark host for
-						     `?submission=`: nothing smaller answers "which one?" here, where
-						     every row carries the same four columns. -->
+						<!-- The pointer target is the row; the focusable trigger is the
+						     chevron inside it, which is why no role or tabindex is added
+						     here. The row is also the return anchor for the room: closing
+						     it reveals this row, marked, where the person left off. -->
 						<!-- svelte-ignore a11y_click_events_have_key_events -->
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
 						<tr
 							class="row"
-							class:is-open={expandedId === row.id}
 							data-submission={row.id}
 							data-selected={selected.includes(row.id) ? 'true' : undefined}
 							class:is-deciding={deciding.visible && dimmedIds.includes(row.id)}
@@ -1382,57 +1434,18 @@
 								</span>
 							</td>
 							<td class="col-expand ui-cell--trail">
+								<!-- The door to the room: a dialog trigger, not an expansion
+								     switch, so it points inward rather than down. -->
 								<button
 									type="button"
 									class="ui-button ui-button--ghost ui-button--icon ui-button--sm expand"
-									class:expand--open={expandedId === row.id}
-									aria-expanded={expandedId === row.id}
-									aria-label={`Details for “${row.title}”`}
-									onclick={() => toggleRow(row.id)}>
-									<ChevronDown size={15} />
+									aria-haspopup="dialog"
+									aria-label={`Open “${row.title}” for deciding`}
+									onclick={() => openRoom(row.id)}>
+									<ChevronRight size={15} />
 								</button>
 							</td>
 						</tr>
-						{#if expandedId === row.id}
-							<!-- The closer look at the review comparison. Only a committed
-							     review of my own can anchor the line-up, so the action renders
-							     only when it opens onto something. -->
-							{#snippet lineupAction()}
-								<button
-									type="button"
-									class="ui-button ui-button--secondary ui-button--sm"
-									onclick={() => openLineup(row.id)}>
-									Line up with my other reviews
-								</button>
-							{/snippet}
-							<!-- A refused per-review read: the reviews block withdraws (this
-							     surface truly does not offer it) and the port's copy states
-							     why — never a loading treatment for a refused answer. -->
-							{#snippet reviewsRefusalNote()}
-								{reviewRefusals[row.id]}
-							{/snippet}
-							<tr class="detail-row ui-table__detail">
-								<td colspan="7">
-									<!-- One component, two presentations: inline beside the pass on
-									     desktop, a full-screen sheet on a phone. Dismissing the sheet
-									     must also close the row, or the row stays open behind a sheet
-									     nobody can see. -->
-									<SubmissionRecordDetail
-										submission={row}
-										track={rowTrack}
-										trackOrder={trackIds}
-										reviews={row.reviewCount === 0 || row.id in reviewRefusals
-											? undefined
-											: (reviewsBy[row.id] ?? 'loading')}
-										{scaleMax}
-										actions={myCommitted.includes(row.id) ? lineupAction : undefined}
-										footnote={row.reviewCount > 0 && row.id in reviewRefusals
-											? reviewsRefusalNote
-											: undefined}
-										onclose={() => toggleRow(row.id)} />
-								</td>
-							</tr>
-						{/if}
 					{/if}
 					</tbody>
 					{/each}
@@ -1440,6 +1453,92 @@
 		</table>
 	</div>
 </section>
+
+<!-- The deciding room: one candidate over the pass, evidence beside verdict.
+     An inspection surface is left the moment you are done looking, so it is
+     dismissible; the verdict buttons inside are the same receipted, undoable
+     moves the row offers, at the point where the reading happens. -->
+<Modal bind:open={roomOpen} title={openRow?.title ?? 'Candidate'} size="lg" dismissible>
+	{#if openRow}
+		{@const roomTrack = trackLabel(tracks, openRow.trackId)}
+		{@const roomPending = pendingIds.includes(openRow.id)}
+		{#snippet roomActions()}
+			{#if openRow}
+				{#each verdicts as verdict (verdict.value)}
+					<button
+						type="button"
+						class="ui-button ui-button--sm rowacts__btn rowacts__btn--{verdict.value}"
+						aria-pressed={openRow.decision === verdict.value}
+						disabled={roomPending}
+						onclick={() => void decideFromRoom(openRow, verdict.value)}>{verdict.label}</button>
+				{/each}
+				{#if myCommitted.includes(openRow.id)}
+					<button
+						type="button"
+						class="ui-button ui-button--secondary ui-button--sm room__lineup"
+						onclick={() => openLineup(openRow.id)}>
+						Line up with my other reviews
+					</button>
+				{/if}
+			{/if}
+		{/snippet}
+		{#snippet roomFootnote()}
+			{#if openRow && openRow.reviewCount > 0 && openRow.id in reviewRefusals}
+				{reviewRefusals[openRow.id]}
+			{:else}
+				<!-- The banner's own sentence, repeated at the point of action — same
+				     fact, same words, and no internal noun ("the table") a reader
+				     has never been given. -->
+				A verdict does not contact anyone. Review and send each result when you are ready.
+			{/if}
+		{/snippet}
+		{#if decideNotice}
+			{#key decideNotice}
+				<Alert tone="danger" title={decideNotice.title} message={decideNotice.message} dismissible />
+			{/key}
+		{/if}
+		<div class="room-detail">
+			<SubmissionRecordDetail
+				submission={openRow}
+				track={roomTrack}
+				trackOrder={trackIds}
+				presentation="inline"
+				reviews={openRow.reviewCount === 0 || openRow.id in reviewRefusals
+					? undefined
+					: (reviewsBy[openRow.id] ?? 'loading')}
+				{scaleMax}
+				actions={roomActions}
+				footnote={roomFootnote} />
+		</div>
+		<CommitReceipt onUndone={() => void load({ quiet: true })} />
+	{/if}
+	{#snippet footer(_close)}
+		<!-- The traversal bar: where the pass stands, and the way through it.
+		     The keys are taught where they act; every one of them is also a
+		     button, so the keyboard is a shortcut and never the only door. -->
+		<p class="room__keys" aria-hidden="true">
+			<kbd>a</kbd> accept · <kbd>w</kbd> waitlist · <kbd>d</kbd> decline
+		</p>
+		<p class="room__pace">
+			{#if openIndex !== -1}
+				Candidate {openIndex + 1} of {orderedRows.length} ·
+			{/if}
+			{stillToDecide.length} still to decide
+		</p>
+		<div class="room__step">
+			<button
+				type="button"
+				class="ui-button ui-button--secondary ui-button--sm"
+				disabled={openIndex <= 0}
+				onclick={() => step(-1)}>← Previous</button>
+			<button
+				type="button"
+				class="ui-button ui-button--secondary ui-button--sm"
+				disabled={openIndex === -1 || openIndex >= orderedRows.length - 1}
+				onclick={() => step(1)}>Next →</button>
+		</div>
+	{/snippet}
+</Modal>
 
 <Modal bind:open={lineupOpen} title={lineupTitle} size="lg" dismissible>
 	{#if lineupId && resolvedLineupPort}
@@ -1706,50 +1805,12 @@
 		inline-size: 2.5rem;
 	}
 
-	.expand :global(svg) {
-		transition: rotate var(--je-duration-fast) var(--je-ease);
-	}
-
-	.expand--open :global(svg) {
-		rotate: 180deg;
-	}
-
 	/* The whole row opens its detail, so the whole row says so. Only the data
 	   rows: the detail, the empty state and the skeletons are not doors. The
 	   hover tint the table already gives every row is the other half of the
 	   affordance and is left alone. */
 	tr.row {
 		cursor: pointer;
-	}
-
-	/* Marked things tint; open things lift. The row being worked on keeps full
-	   surface brightness and a lifted boundary frames row and expansion as one
-	   raised unit — built from cell borders, because the table collapses them. */
-	tr.is-open td {
-		border-bottom-color: transparent;
-		background: var(--je-color-surface);
-		border-top: 2px solid var(--je-color-border-strong);
-	}
-
-	tr.is-open td:first-child {
-		border-inline-start: 2px solid var(--je-color-border-strong);
-	}
-
-	tr.is-open td:last-child {
-		border-inline-end: 2px solid var(--je-color-border-strong);
-	}
-
-	.detail-row td {
-		background: var(--je-color-surface);
-		border-bottom: 2px solid var(--je-color-border-strong);
-	}
-
-	.detail-row td:first-child {
-		border-inline-start: 2px solid var(--je-color-border-strong);
-	}
-
-	.detail-row td:last-child {
-		border-inline-end: 2px solid var(--je-color-border-strong);
 	}
 
 	.empty {
@@ -2087,6 +2148,71 @@
 		box-shadow: var(--je-shadow-md);
 	}
 
+	/*
+	 * The deciding room's own geometry. The record component brings its inline
+	 * two-column layout (evidence + rail); the room only sizes the ground it
+	 * stands on and re-stacks it where the dialog is the whole screen.
+	 */
+	.room-detail {
+		padding-block: var(--je-space-2);
+	}
+
+	/* The rail's verdicts read exactly like the row's — same classes, same
+	   tints — stretched to the rail's width so the pressed state is unmissable
+	   beside the evidence it judges. */
+	.room-detail :global(.rowacts__btn) {
+		inline-size: 100%;
+	}
+
+	.room-detail :global(.room__lineup) {
+		margin-block-start: var(--je-space-2);
+	}
+
+	@media (max-width: 47.99rem) {
+		/* Full-screen dialog: no room for a rail beside the evidence, so the
+		   record stacks — the same collapse the table's record width performs. */
+		.room-detail :global(.ui-detail) {
+			grid-template-columns: minmax(0, 1fr);
+		}
+	}
+
+	/* The traversal bar: keys taught quietly at the left, the pace in the
+	   middle, the way through at the right. The footer is the dialog's own
+	   pinned strip, so the controls hold still while the evidence scrolls. */
+	.room__keys {
+		margin: 0;
+		margin-inline-end: auto;
+		font-size: var(--je-font-size-2xs);
+		color: var(--je-color-text-subtle);
+	}
+
+	.room__keys kbd {
+		font-family: inherit;
+		padding: 0 var(--je-space-1);
+		border: 1px solid var(--je-color-border);
+		border-radius: 4px;
+		background: var(--je-color-surface);
+	}
+
+	.room__pace {
+		margin: 0;
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
+		font-variant-numeric: tabular-nums;
+		white-space: nowrap;
+	}
+
+	.room__step {
+		display: flex;
+		gap: var(--je-space-2);
+	}
+
+	@media (max-width: 47.99rem) {
+		.room__keys {
+			display: none;
+		}
+	}
+
 	.lineup-resolving {
 		display: grid;
 		gap: var(--je-space-6);
@@ -2141,6 +2267,28 @@
 	 * argument. The query asks the table wrapper, exactly as the primitive
 	 * does, so the two can never disagree about when a row stops being a row.
 	 */
+	/*
+	 * The compact columns (same recipe as the submissions queue, measured
+	 * 2026-08-15): between the record threshold and full width the columns
+	 * overflowed their wrapper by up to 168px — the lead cell's nowrap
+	 * identity line set the floor. In this range the lead trades its intrinsic
+	 * claim for the remaining width and the metadata sentence wraps exactly as
+	 * the record presentation already allows. Nothing leaves the screen and
+	 * the wrapper never scrolls sideways.
+	 */
+	@container je-table (min-width: 52rem) and (max-width: 74rem) {
+		.ui-table :global(.ui-table__secondary) {
+			overflow: visible;
+			text-overflow: clip;
+			white-space: normal;
+		}
+
+		td.ui-cell--lead {
+			inline-size: 100%;
+			max-inline-size: 0;
+		}
+	}
+
 	@container je-table (max-width: 51.99rem) {
 		/* A record grows downward, which is the one direction a phone has: the
 		   candidate's name stops being an ellipsis the moment there is no column
@@ -2225,14 +2373,6 @@
 			flex-wrap: wrap;
 		}
 
-		/* At record width the open row's frame belongs to the table primitive,
-		   and the detail itself has promoted to a sheet — so the cell keeps no
-		   painted strip of its own. Two boundaries around nothing read as a
-		   hole cut in the list. */
-		.detail-row td {
-			border: 0;
-			background: none;
-		}
 	}
 
 	/*

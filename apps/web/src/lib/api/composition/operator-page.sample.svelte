@@ -14,11 +14,13 @@
 	import TasksPage from '$lib/features/tasks/TasksPage.svelte';
 	import TemplatesPage from '$lib/features/templates/TemplatesPage.svelte';
 	import OverviewDashboard from '$lib/features/workspace/components/OverviewDashboard.svelte';
+	import PulseDashboard from '$lib/features/workspace/components/PulseDashboard.svelte';
 	import { useWorkspaceGateway } from '../workspace-gateway';
 	import { createSampleCommunicationsPagePort } from '../communications-page-port.sample';
 	import { createSampleDecisionsPagePort } from '../decisions-page-port.sample';
 	import { createSampleEmbedsPagePort } from '../embeds-page-port.sample';
 	import { createSampleOverviewPagePort } from '../overview-page-port.sample';
+	import { createSamplePulsePagePort } from '../pulse-page-port.sample';
 	import { createSampleFilesPagePort } from '../files/sample';
 	import { createSampleFormsPagePort } from '../forms-page-port.sample';
 	import { createSampleReviewPagePort } from '../review-page-port.sample';
@@ -34,6 +36,7 @@
 	let { area }: { readonly area: OperatorPageId } = $props();
 	const { api, source, viewer } = useWorkspaceGateway();
 	const overview = createSampleOverviewPagePort({ api, scenario: source.scenario });
+	const pulse = createSamplePulsePagePort({ api, scenario: source.scenario });
 	const communications = createSampleCommunicationsPagePort(api);
 	const decisions = createSampleDecisionsPagePort(api);
 	const embeds = createSampleEmbedsPagePort(api);
@@ -51,6 +54,8 @@
 
 {#if area === 'overview'}
 	<OverviewDashboard port={overview} />
+{:else if area === 'pulse'}
+	<PulseDashboard port={pulse} />
 {:else if area === 'submissions'}
 	<SubmissionsPage port={submissions} />
 {:else if area === 'review'}
