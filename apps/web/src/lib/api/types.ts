@@ -116,6 +116,7 @@ export type AreaKey =
 	| 'speakers'
 	| 'reviewers'
 	| 'tasks'
+	| 'files'
 	| 'schedule'
 	| 'messages'
 	| 'templates'

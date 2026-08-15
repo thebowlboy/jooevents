@@ -18,6 +18,7 @@ import { DEADLINE_SQL } from './deadline';
 import { FIELD_REGISTRY_CHANGESET_EFFECT_SQL } from './field-registry-changeset-effect-domain';
 import { FIELD_REGISTRY_DRAFT_EFFECT_SQL } from './field-registry-draft-effect-domain';
 import { FIELD_REGISTRY_SQL } from './field-registry';
+import { SQLITE_FILES_SQL } from './files';
 import {
   SQLITE_INTAKE_DIRECT_ENTRY_EFFECT_SQL
 } from './intake-direct-entry-effect-domain';
@@ -188,7 +189,8 @@ export const FOUNDATION_EPHEMERAL_SCHEMA_ARTIFACTS: readonly EphemeralSQLiteSche
       SQLITE_COMMUNICATION_RELEASE_CHANGESET_SQL
     ),
     schemaArtifact('participant-access', SQLITE_PARTICIPANT_ACCESS_SQL),
-    schemaArtifact('participant-portal-effect', SQLITE_PARTICIPANT_PORTAL_EFFECT_SQL)
+    schemaArtifact('participant-portal-effect', SQLITE_PARTICIPANT_PORTAL_EFFECT_SQL),
+    schemaArtifact('files-domain', SQLITE_FILES_SQL)
   ]);
 
 /** Opens one isolated runtime with the exact ordered Foundation schema. */

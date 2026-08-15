@@ -16,6 +16,7 @@
 	import { engagementStatusCopy, refusalCopy, unavailableCopy } from '../copy';
 	import { formatDeadline, formatInstant } from '../format';
 	import { usePortalStore } from '../store.svelte';
+	import MaterialsSection from './MaterialsSection.svelte';
 	import RefusalNote from './RefusalNote.svelte';
 	import StateBadge from './StateBadge.svelte';
 
@@ -127,6 +128,12 @@
 
 	{#if refusal}
 		<RefusalNote message={refusal} tone="refused" />
+	{/if}
+
+	{#if engagement.status === 'invited' || engagement.status === 'confirmed'}
+		<!-- Materials live with the engagement they belong to: asks, uploads,
+		     and organizer-shared resources for exactly this session. -->
+		<MaterialsSection engagementId={engagement.id} />
 	{/if}
 </article>
 

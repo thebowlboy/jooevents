@@ -87,6 +87,7 @@
     "./release": "./src/sqlite/release.ts",
     "./release-draft-effect-domain": "./src/sqlite/release-draft-effect-domain.ts",
     "./release-changeset-effect-domain": "./src/sqlite/release-changeset-effect-domain.ts",
+    "./files": "./src/sqlite/files.ts",
     "./participant-access": "./src/sqlite/participant-access.ts",
     "./participant-challenge-delivery": "./src/sqlite/participant-challenge-delivery.ts",
     "./workspace-sign-in-link": "./src/sqlite/workspace-sign-in-link.ts"
@@ -111,6 +112,7 @@
     "@jooevents/event": "workspace:*",
     "@jooevents/event-operations": "workspace:*",
     "@jooevents/field-registry": "workspace:*",
+    "@jooevents/files": "workspace:*",
     "@jooevents/identity-access": "workspace:*",
     "@jooevents/intake": "workspace:*",
     "@jooevents/intake-operations": "workspace:*",

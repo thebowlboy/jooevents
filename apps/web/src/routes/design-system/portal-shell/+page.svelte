@@ -2,6 +2,8 @@
 	import accepted from '$lib/api/portal/sample/accepted';
 	import { createPortalApi } from '$lib/api/portal/sample/api';
 	import { setPortalGateway } from '$lib/api/portal/gateway';
+	import { createSamplePortalFilesPort } from '$lib/api/files/sample';
+	import { setPortalFilesPort } from '$lib/api/files/portal-files-port';
 	import PortalShell from '$lib/features/portal/PortalShell.svelte';
 	import PortalHome from '$lib/features/portal/PortalHome.svelte';
 
@@ -22,6 +24,9 @@
 			scenario: { key: accepted.key, name: accepted.name, description: accepted.description }
 		}
 	});
+	// The engagement panels carry a Materials section; the reference fulfils it
+	// with the same sample files port the portal composition uses.
+	setPortalFilesPort(createSamplePortalFilesPort());
 </script>
 
 <svelte:head>

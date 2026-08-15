@@ -1,4 +1,7 @@
 import { createHash, createHmac as createNodeHmac } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   assertOperatorAuthorityPolicyCatalogCoversOperationRegistry,
   COMMUNICATION_PROVIDER_MANAGE_ACCESS_POLICY,
@@ -25,11 +28,39 @@ import {
 import {
   issueSynchronousClassifiedPayloadEncryptionProfile
 } from '@jooevents/application/synchronous-classified-payload-store';
-import { intakeIdInputSchema, intakeIdSchema } from '@jooevents/contracts';
+import {
+  intakeIdInputSchema,
+  intakeIdSchema,
+  readOperationResultSchema
+} from '@jooevents/contracts';
 import type {
   FormTarget,
   FormTargetReferencePinDto
 } from '@jooevents/contracts';
+import { fileIdInputSchema } from '@jooevents/contracts/files';
+import {
+  openInertFileDownload,
+  streamFileUploadBytes,
+  type InertDownloadOutcome,
+  type StreamUploadBytesResult
+} from '@jooevents/files';
+import {
+  FILE_MCP_READ_ACCESS_POLICY,
+  FILE_PORTAL_ENGAGEMENT_FILES_READ_OPERATION,
+  FILE_PORTAL_READ_ACCESS_POLICY,
+  FILE_READ_ACCESS_POLICY,
+  FILE_READ_PERMISSION_ID,
+  FILES_AGENT_REQUEST_DRAFT_ACCESS_POLICY,
+  FILES_COMMAND_ACCESS_POLICY,
+  FILES_COMMAND_REQUEST_HASH_PROFILE,
+  FILES_PORTAL_COMMAND_ACCESS_POLICY,
+  FILE_MANAGE_PERMISSION_ID,
+  createFilesAgentRequestDraftOperationModule,
+  createFilesCommandOperationModule,
+  createFilesPortalCommandOperationModule,
+  createFilesPortalReadOperationModule,
+  createFilesReadOperationModule
+} from '@jooevents/files-operations';
 import {
   CHANGESET_LIFECYCLE_ACCESS_POLICY,
   CHANGESET_LIFECYCLE_REQUEST_HASH_PROFILE,
@@ -164,6 +195,7 @@ import {
   PARTICIPANT_ACCESS_LAUNCH_POLICY,
   parseOperationAccessLane,
   parseParticipantEmail,
+  resolveParticipantAuthority,
   resolveParticipantContext,
   type CurrentAuthorityResolver,
   type ParticipantChallengeDelivery,
@@ -498,6 +530,7 @@ import {
 } from '../auth/better-auth';
 import { createBetterAuthOperatorEvidenceVerifier } from '../auth/operator-evidence';
 import { createSQLiteAuthPrincipalReader } from '../auth/principal-reader';
+import { SHARP_FILE_IMAGE_REENCODER } from './file-image-reencoder';
 import type { ServerConfig } from '../config';
 import {
   loadCommunicationsProviderConfig,
@@ -507,6 +540,9 @@ import {
 } from '../config/communications';
 import { createHttpApp } from '../http/app';
 import type { EmbedFramingPolicySource } from '../http/embed-security';
+import {
+  createParticipantOperationsHttpAdapter
+} from '../http/participant-operations';
 import {
   readPortalSessionToken,
   type ParticipantEntryRuntime
@@ -536,6 +572,7 @@ import {
 } from './communication-delivery-history';
 import { createCommunicationSendOperationRuntime } from './communication-send-operations';
 import { createOutboundDispatchLoop, type OutboundDispatchLoop } from './outbound-dispatch-loop';
+import { createFilesLiveComposition, type FilesLiveComposition } from './files-live';
 import { createSQLiteOperatorAuthorityComposition } from './operator-authority';
 
 const eventProfiles = Object.freeze({
@@ -648,6 +685,44 @@ const participantPortalProfiles = Object.freeze({
   }),
   idempotencyCredential: Object.freeze({
     key: 'key-profile.portal.idempotency-credential',
+    version: parseContractVersion(1)
+  })
+});
+
+const filesProfiles = Object.freeze({
+  authorityPrincipal: Object.freeze({
+    key: 'key-profile.file.operator-principal',
+    version: parseContractVersion(1)
+  }),
+  scopePartition: Object.freeze({
+    key: 'key-profile.file.current-event-scope',
+    version: parseContractVersion(1)
+  }),
+  requestCanonicalization: Object.freeze({
+    key: 'key-profile.file.request-canonicalization',
+    version: parseContractVersion(1)
+  }),
+  idempotencyCredential: Object.freeze({
+    key: 'key-profile.file.idempotency-credential',
+    version: parseContractVersion(1)
+  })
+});
+
+const filesPortalProfiles = Object.freeze({
+  authorityPrincipal: Object.freeze({
+    key: 'key-profile.file.portal-participant-principal',
+    version: parseContractVersion(1)
+  }),
+  scopePartition: Object.freeze({
+    key: 'key-profile.file.portal-lane-event-scope',
+    version: parseContractVersion(1)
+  }),
+  requestCanonicalization: Object.freeze({
+    key: 'key-profile.file.portal-request-canonicalization',
+    version: parseContractVersion(1)
+  }),
+  idempotencyCredential: Object.freeze({
+    key: 'key-profile.file.portal-idempotency-credential',
     version: parseContractVersion(1)
   })
 });
@@ -1062,6 +1137,15 @@ export interface EphemeralLiveRuntime {
    * allowlist; everything else serves the deny-all pair.
    */
   readonly embedFraming: EmbedFramingPolicySource;
+  /**
+   * Files v1 composition: the D4 limits actually in force, the blob store,
+   * the repository, and the D7 orphan sweep as a callable seam (a job runner
+   * or operator action invokes it; deliberately no timer in this runtime).
+   */
+  readonly files: Pick<
+    FilesLiveComposition,
+    'limits' | 'blobs' | 'repository' | 'sweepOrphanBlobs' | 'sweepExpiredIntents'
+  >;
   close(): ReturnType<EphemeralSQLiteRuntime['close']>;
 }
 
@@ -1096,6 +1180,7 @@ export async function createEphemeralLiveRuntime(input: {
   };
 }): Promise<EphemeralLiveRuntime> {
   const database = createFoundationEphemeralSQLiteRuntime();
+  let filesBlobRootDirectory: string | undefined;
   try {
     const bootstrap = bootstrapEmptyInstall({
       sqlite: database.sqlite,
@@ -2426,6 +2511,18 @@ export async function createEphemeralLiveRuntime(input: {
         Object.freeze({
           policy: RELEASE_DRAFT_ACCESS_POLICY,
           permissionId: 'publication.manage' as const
+        }),
+        Object.freeze({
+          policy: FILE_READ_ACCESS_POLICY,
+          permissionId: FILE_READ_PERMISSION_ID
+        }),
+        Object.freeze({
+          policy: FILE_MCP_READ_ACCESS_POLICY,
+          permissionId: FILE_READ_PERMISSION_ID
+        }),
+        Object.freeze({
+          policy: FILES_COMMAND_ACCESS_POLICY,
+          permissionId: FILE_MANAGE_PERMISSION_ID
         }),
         Object.freeze({
           policy: WORKSPACE_TEAM_OPERATION_ACCESS.read.policy,
@@ -4043,6 +4140,89 @@ export async function createEphemeralLiveRuntime(input: {
         newActivityId: () => crypto.randomUUID()
       })
     });
+    // ------------------------------------------------------------------
+    // Files v1 (D1–D9): the whole domain composes over the shared effect
+    // unit of work. Limits come from env-shaped configuration (invalid values
+    // throw at boot, never fall back), blobs live beside the ephemeral
+    // database and die with it, and the `none` scan provider releases on
+    // ingest while serving stays structurally inert on every path.
+    // ------------------------------------------------------------------
+    // Blob bytes are as disposable as the database, but the ephemeral SQLite
+    // runtime owns its directory exclusively, so the blobs get their own
+    // process-lifetime temp tree, removed on close.
+    filesBlobRootDirectory = mkdtempSync(join(tmpdir(), 'jooevents-ephemeral-files-'));
+    const files = createFilesLiveComposition({
+      sqlite: database.sqlite,
+      workspaceId,
+      blobRootDirectory: filesBlobRootDirectory,
+      events,
+      trackExists: (scope, trackId) => {
+        const vocabulary = vocabularyRead.readVocabulary(scope);
+        return vocabulary?.tracks.some(
+          (track) => track.id === trackId && track.status === 'active'
+        ) ?? false;
+      },
+      env: process.env
+    });
+    const filesOperationIds = Object.freeze({
+      newInvocationId: () => parseInvocationId(crypto.randomUUID())
+    });
+    const filesRequestHashSealer = createHmacRequestHashSealer({
+      profile: FILES_COMMAND_REQUEST_HASH_PROFILE,
+      keyBytes: randomHmacKey()
+    });
+    const filesIdempotencyCredentialSealer = createHmacIdempotencyCredentialSealer({
+      profile: filesProfiles.idempotencyCredential,
+      keyBytes: randomHmacKey()
+    });
+    const filesReadOperations = createFilesReadOperationModule({
+      workspaceId,
+      readPolicy: FILE_READ_ACCESS_POLICY,
+      // The external MCP surface carries reads only (agents never move bytes);
+      // the lane is registered vocabulary — this composition mounts no MCP
+      // transport, so nothing serves it yet.
+      mcpReadPolicy: FILE_MCP_READ_ACCESS_POLICY,
+      currentAuthority: authority.resolver,
+      currentEvent,
+      clock,
+      ids: filesOperationIds,
+      authorityPrincipalKeyProfile: filesProfiles.authorityPrincipal,
+      scopePartitionProfile: filesProfiles.scopePartition,
+      requestCanonicalizationProfile: filesProfiles.requestCanonicalization,
+      read: files.organizerRead
+    });
+    const filesCommandOperations = createFilesCommandOperationModule({
+      workspaceId,
+      commandPolicy: FILES_COMMAND_ACCESS_POLICY,
+      currentAuthority: authority.resolver,
+      currentEvent,
+      clock,
+      ids: filesOperationIds,
+      authorityPrincipalKeyProfile: filesProfiles.authorityPrincipal,
+      scopePartitionProfile: filesProfiles.scopePartition,
+      requestCanonicalizationProfile: filesProfiles.requestCanonicalization,
+      requestHashSealer: filesRequestHashSealer,
+      idempotencyCredentialProfile: filesProfiles.idempotencyCredential,
+      idempotencyCredentialSealer: filesIdempotencyCredentialSealer
+    });
+    // Agents draft file asks on the app_model lane (the platform has no
+    // external_mcp EFFECT binding vocabulary); this composition hosts no
+    // app_model transport, so the operation is registered vocabulary whose
+    // invocation would fail loudly on its unregistered draft capability.
+    const filesAgentRequestDraftOperations = createFilesAgentRequestDraftOperationModule({
+      workspaceId,
+      draftPolicy: FILES_AGENT_REQUEST_DRAFT_ACCESS_POLICY,
+      currentAuthority: authority.resolver,
+      currentEvent,
+      clock,
+      ids: filesOperationIds,
+      authorityPrincipalKeyProfile: filesProfiles.authorityPrincipal,
+      scopePartitionProfile: filesProfiles.scopePartition,
+      requestCanonicalizationProfile: filesProfiles.requestCanonicalization,
+      requestHashSealer: filesRequestHashSealer,
+      idempotencyCredentialProfile: filesProfiles.idempotencyCredential,
+      idempotencyCredentialSealer: filesIdempotencyCredentialSealer
+    });
     const domains = createSQLiteEffectDomainAdapterRegistry([
       eventCreateDraftDomain,
       eventSettingsDraftDomain,
@@ -4064,6 +4244,7 @@ export async function createEphemeralLiveRuntime(input: {
       participantPortalDomain,
       outboundEmailDeliveryDomain,
       intakePublicMutationDomain,
+      files.effectDomain,
       ...organizerCommunicationAuthoringDomains,
       ...communicationSendRuntime.effectDomains,
       changesetLifecycle
@@ -4115,6 +4296,9 @@ export async function createEphemeralLiveRuntime(input: {
       engagementOperations,
       engagementDraftOperations,
       releaseDraftOperations,
+      filesReadOperations,
+      filesCommandOperations,
+      filesAgentRequestDraftOperations,
       participantPortalOperations,
       organizerCommunicationAuthoringOperations,
       organizerCommunicationAudiencePreviewOperations,
@@ -4429,6 +4613,548 @@ export async function createEphemeralLiveRuntime(input: {
       }
     });
     app.route('/', publicOperationsAdapter);
+    // ------------------------------------------------------------------
+    // Files v1 transport. Every command and read is a registered operation;
+    // the transport owns exactly (a) the raw-byte streaming step of the
+    // two-phase upload — through-app, hashing and the hard cap inline,
+    // strictly OUTSIDE the shared unit of work — and (b) the inert download:
+    // Content-Disposition attachment + nosniff with the content type copied
+    // from the asset record, never sniffed, never inline. The participant
+    // surface composes lazily per current event because the portal read
+    // module pins its lane eagerly and no event exists at boot.
+    // ------------------------------------------------------------------
+    const filesPortalRequestHashSealer = createHmacRequestHashSealer({
+      profile: FILES_COMMAND_REQUEST_HASH_PROFILE,
+      keyBytes: randomHmacKey()
+    });
+    const filesPortalIdempotencySealer = createHmacIdempotencyCredentialSealer({
+      profile: filesPortalProfiles.idempotencyCredential,
+      keyBytes: randomHmacKey()
+    });
+    interface FilesPortalComposition {
+      readonly runtime: Awaited<ReturnType<typeof createApplicationOperationRuntime>>;
+      readonly adapter: ReturnType<typeof createParticipantOperationsHttpAdapter>;
+    }
+    const filesPortalByEvent = new Map<string, Promise<FilesPortalComposition>>();
+    const currentFilesPortal = (): Promise<FilesPortalComposition> | undefined => {
+      const lane = resolvePortalLane();
+      if (lane === undefined) return undefined;
+      const laneEventId: string = lane.eventId;
+      const existing = filesPortalByEvent.get(laneEventId);
+      if (existing) return existing;
+      const composed = (async (): Promise<FilesPortalComposition> => {
+        const filesPortalReadOperations = createFilesPortalReadOperationModule({
+          lane: { workspaceId, eventId: laneEventId },
+          readPolicy: FILE_PORTAL_READ_ACCESS_POLICY,
+          currentAuthority: participantAuthority,
+          clock,
+          ids: filesOperationIds,
+          authorityPrincipalKeyProfile: filesPortalProfiles.authorityPrincipal,
+          scopePartitionProfile: filesPortalProfiles.scopePartition,
+          requestCanonicalizationProfile: filesPortalProfiles.requestCanonicalization,
+          read: files.portalRead
+        });
+        const filesPortalCommandOperations = createFilesPortalCommandOperationModule({
+          lane: { workspaceId, eventId: laneEventId },
+          commandPolicy: FILES_PORTAL_COMMAND_ACCESS_POLICY,
+          currentAuthority: participantAuthority,
+          clock,
+          ids: filesOperationIds,
+          authorityPrincipalKeyProfile: filesPortalProfiles.authorityPrincipal,
+          scopePartitionProfile: filesPortalProfiles.scopePartition,
+          requestCanonicalizationProfile: filesPortalProfiles.requestCanonicalization,
+          requestHashSealer: filesPortalRequestHashSealer,
+          idempotencyCredentialProfile: filesPortalProfiles.idempotencyCredential,
+          idempotencyCredentialSealer: filesPortalIdempotencySealer
+        });
+        // A second registry, same shared unit of work (the public runtime
+        // precedent): the portal command operations reuse the operator
+        // command operation names, which one registry cannot carry twice.
+        const filesPortalRuntime = await createApplicationOperationRuntime({
+          source: composeOperationRegistryModules([
+            filesPortalReadOperations,
+            filesPortalCommandOperations
+          ]),
+          read: {
+            operationalTrace: { emit() {} },
+            immutableAudit: new SQLiteReadImmutableAuditPort(database.sqlite),
+            clock,
+            newInvocationId: () => parseInvocationId(crypto.randomUUID())
+          },
+          unitOfWork,
+          newReceiptId: () => crypto.randomUUID()
+        });
+        return Object.freeze({
+          runtime: filesPortalRuntime,
+          adapter: createParticipantOperationsHttpAdapter({
+            operations: filesPortalRuntime,
+            evidence: participantEvidence
+          })
+        });
+      })();
+      composed.catch(() => {
+        filesPortalByEvent.delete(laneEventId);
+      });
+      filesPortalByEvent.set(laneEventId, composed);
+      return composed;
+    };
+    const jsonResponse = (body: unknown, status: number, correlationId: string): Response =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: {
+          'content-type': 'application/json',
+          'cache-control': 'no-store, max-age=0',
+          'x-correlation-id': correlationId
+        }
+      });
+    async function* httpRequestBodyBytes(request: Request): AsyncIterable<Uint8Array> {
+      const body = request.body;
+      if (!body) return;
+      const reader = body.getReader();
+      try {
+        while (true) {
+          const chunk = await reader.read();
+          if (chunk.done) return;
+          if (!(chunk.value instanceof Uint8Array)) {
+            throw new TypeError('files_upload_body_chunk_invalid');
+          }
+          yield chunk.value;
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    }
+    const webStreamFromAsyncBytes = (
+      bytes: AsyncIterable<Uint8Array>
+    ): ReadableStream<Uint8Array> => {
+      const iterator = bytes[Symbol.asyncIterator]();
+      return new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          const next = await iterator.next();
+          if (next.done) controller.close();
+          else controller.enqueue(next.value);
+        },
+        async cancel() {
+          await iterator.return?.();
+        }
+      });
+    };
+    const uploadStreamRefusalStatus = Object.freeze({
+      intent_not_pending: 409,
+      intent_expired: 410,
+      byte_cap_exceeded: 413,
+      empty_stream: 400,
+      image_reencoder_unavailable: 422,
+      image_decode_failed: 422,
+      image_reencode_invalid: 422
+    } as const);
+    const respondUploadStream = (
+      outcome: StreamUploadBytesResult,
+      correlationId: string
+    ): Response => outcome.kind === 'stored'
+      ? jsonResponse({
+          kind: 'stored',
+          intent: {
+            id: outcome.intent.id,
+            contentType: outcome.intent.contentType,
+            byteSize: outcome.intent.storedByteSize,
+            sha256: outcome.intent.storedSha256
+          }
+        }, 200, correlationId)
+      : jsonResponse(
+          { kind: 'refused', code: outcome.code },
+          uploadStreamRefusalStatus[outcome.code],
+          correlationId
+        );
+    const downloadRefusalStatus = Object.freeze({
+      asset_blocked: 403,
+      content_type_not_servable: 415,
+      blob_missing: 410
+    } as const);
+    const respondInertDownload = (
+      outcome: InertDownloadOutcome,
+      correlationId: string
+    ): Response => {
+      if (outcome.kind === 'not_found') {
+        return jsonResponse({ kind: 'not_found' }, 404, correlationId);
+      }
+      if (outcome.kind === 'refused') {
+        return jsonResponse(
+          { kind: 'refused', code: outcome.code },
+          downloadRefusalStatus[outcome.code],
+          correlationId
+        );
+      }
+      // Serve EXACTLY the inert headers the domain computed: attachment
+      // disposition (RFC 5987 pair), nosniff, and the recorded content type.
+      return new Response(webStreamFromAsyncBytes(outcome.bytes), {
+        status: 200,
+        headers: {
+          'content-type': outcome.headers.contentType,
+          'content-disposition': outcome.headers.contentDisposition,
+          'x-content-type-options': outcome.headers.xContentTypeOptions,
+          'content-length': String(outcome.byteSize),
+          'cache-control': 'no-store, max-age=0',
+          'x-correlation-id': correlationId
+        }
+      });
+    };
+    const filesOperatorCommandLane = parseOperationAccessLane({
+      kind: 'operator',
+      surface: 'operator_http',
+      policy: FILES_COMMAND_ACCESS_POLICY
+    });
+    const filesOperatorReadLane = parseOperationAccessLane({
+      kind: 'operator',
+      surface: 'operator_http',
+      policy: FILE_READ_ACCESS_POLICY
+    });
+    const requireFilesOperatorAuthority = async (request: {
+      readonly raw: Request;
+      readonly method: 'GET' | 'PUT';
+      readonly lane: typeof filesOperatorCommandLane;
+      readonly operation: {
+        readonly name: string;
+        readonly version: number;
+        readonly effect: 'read' | 'commit';
+      };
+    }): Promise<
+      | {
+          readonly kind: 'authorized';
+          readonly scope: { readonly workspaceId: string; readonly eventId: string };
+          readonly actorUserId: string;
+        }
+      | { readonly kind: 'refused'; readonly status: 401 | 403 }
+      | { readonly kind: 'event_required' }
+    > => {
+      const verified = await evidence.verify({
+        request: request.raw,
+        correlationId: crypto.randomUUID(),
+        binding: { method: request.method } as Parameters<typeof evidence.verify>[0]['binding']
+      });
+      if (verified.kind !== 'verified') {
+        return {
+          kind: 'refused',
+          status: verified.reason === 'unauthenticated' ? 401 : 403
+        };
+      }
+      const current = events.readCurrentEventState(workspaceId);
+      const currentEventHead = current?.currentEvent;
+      if (!currentEventHead) return { kind: 'event_required' };
+      const eventId = parseEventId(currentEventHead.id);
+      const resolution = await authority.resolver.resolve({
+        operation: {
+          name: request.operation.name,
+          version: request.operation.version,
+          effect: request.operation.effect
+        },
+        evidence: verified.evidence as InvocationEvidence,
+        lane: request.lane,
+        scope: Object.freeze({
+          workspaceId,
+          eventId,
+          subjects: Object.freeze([
+            Object.freeze({ kind: 'workspace' as const, id: workspaceId }),
+            Object.freeze({ kind: 'event' as const, id: eventId })
+          ]),
+          resolutionEvidenceIds: Object.freeze([
+            `event-spine-root:${currentEventHead.id}@${currentEventHead.version}`
+          ])
+        }),
+        evaluatedAt: clock.now()
+      });
+      if (resolution.kind !== 'authorized') return { kind: 'refused', status: 403 };
+      const actor = resolution.authority.actor as {
+        readonly kind: string;
+        readonly userId?: unknown;
+      };
+      if (actor.kind !== 'workspace_user' || typeof actor.userId !== 'string') {
+        return { kind: 'refused', status: 403 };
+      }
+      return {
+        kind: 'authorized',
+        scope: { workspaceId, eventId },
+        actorUserId: actor.userId
+      };
+    };
+    const resolvePortalFilesActor = (request: Request):
+      | {
+          readonly kind: 'authorized';
+          readonly lane: ParticipantLane;
+          readonly participantIdentityId: string;
+          readonly engagementIds: readonly string[];
+        }
+      | { readonly kind: 'unauthenticated' }
+      | { readonly kind: 'event_required' } => {
+      const lane = resolvePortalLane();
+      if (lane === undefined) return Object.freeze({ kind: 'event_required' as const });
+      const resolution = resolveParticipantAuthority({
+        sessions: participantStore,
+        identities: participantStore,
+        relationships: participantRelationships,
+        lane,
+        sessionToken: readPortalSessionToken(request),
+        now: parseInstant(new Date().toISOString())
+      });
+      if (resolution.kind !== 'authorized') {
+        return Object.freeze({ kind: 'unauthenticated' as const });
+      }
+      return Object.freeze({
+        kind: 'authorized' as const,
+        lane,
+        participantIdentityId: resolution.identity.participantIdentityId,
+        engagementIds: resolution.relationship.kind === 'related'
+          ? resolution.relationship.engagementIds
+          : Object.freeze([])
+      });
+    };
+    // The registered portal engagement-files read declares a structured
+    // `subject` input that flat GET query parameters cannot express, so this
+    // transport translator decodes `?engagementId=` and invokes the exact
+    // registered operation through its executor — same authorization, trace,
+    // and projection. Registered first, it shadows the adapter's own GET.
+    app.get('/api/portal/engagements/files', async (context) => {
+      const correlationId = context.res.headers.get('x-correlation-id') ?? crypto.randomUUID();
+      const portal = currentFilesPortal();
+      if (portal === undefined) {
+        return jsonResponse(
+          { kind: 'transport_error', code: 'not_available' }, 404, correlationId
+        );
+      }
+      const verified = participantEvidence.verify({
+        request: context.req.raw,
+        correlationId,
+        binding: { method: 'GET' }
+      });
+      if (verified.kind === 'rejected') {
+        return jsonResponse(
+          {
+            kind: 'transport_error',
+            code: verified.reason,
+            retryable: false,
+            correlationId
+          },
+          verified.reason === 'unauthenticated' ? 401 : 403,
+          correlationId
+        );
+      }
+      const engagementId = fileIdInputSchema.safeParse(context.req.query('engagementId'));
+      if (!engagementId.success) {
+        return jsonResponse(
+          { kind: 'transport_error', code: 'invalid_request', retryable: false, correlationId },
+          400,
+          correlationId
+        );
+      }
+      try {
+        const { runtime: filesPortalRuntime } = await portal;
+        const result = await filesPortalRuntime.readExecutor.execute({
+          operationName: FILE_PORTAL_ENGAGEMENT_FILES_READ_OPERATION.name,
+          operationVersion: FILE_PORTAL_ENGAGEMENT_FILES_READ_OPERATION.version,
+          surface: 'participant_http',
+          correlationId,
+          businessInput: {
+            subject: { kind: 'engagement', engagementId: engagementId.data }
+          },
+          verifiedEvidence: verified.evidence
+        });
+        const parsed = readOperationResultSchema.safeParse(result);
+        if (!parsed.success || parsed.data.correlationId !== correlationId) {
+          throw new TypeError('files_portal_read_result_invalid');
+        }
+        return context.json(parsed.data);
+      } catch (error) {
+        if (error instanceof OperationInputError) {
+          return jsonResponse(
+            { kind: 'transport_error', code: 'invalid_request', retryable: false, correlationId },
+            400,
+            correlationId
+          );
+        }
+        console.error('[jooevents] files portal read failed', error);
+        return jsonResponse(
+          { kind: 'transport_error', code: 'internal_error', retryable: true, correlationId },
+          500,
+          correlationId
+        );
+      }
+    });
+    app.put('/api/portal/files/uploads/:intentId/bytes', async (context) => {
+      const correlationId = context.res.headers.get('x-correlation-id') ?? crypto.randomUUID();
+      const origin = context.req.header('origin');
+      if (!origin || !participantAllowedOrigins.has(origin)) {
+        return jsonResponse({ kind: 'refused', code: 'forbidden' }, 403, correlationId);
+      }
+      const actor = resolvePortalFilesActor(context.req.raw);
+      if (actor.kind === 'event_required') {
+        return jsonResponse({ kind: 'refused', code: 'event_required' }, 409, correlationId);
+      }
+      if (actor.kind !== 'authorized') {
+        return jsonResponse({ kind: 'refused', code: 'unauthenticated' }, 401, correlationId);
+      }
+      const intentId = fileIdInputSchema.safeParse(context.req.param('intentId'));
+      if (!intentId.success) return jsonResponse({ kind: 'not_found' }, 404, correlationId);
+      const scope = {
+        workspaceId: actor.lane.workspaceId,
+        eventId: actor.lane.eventId
+      };
+      const intent = files.repository.readIntent(scope, intentId.data);
+      if (!intent) return jsonResponse({ kind: 'not_found' }, 404, correlationId);
+      if (intent.uploader.kind !== 'participant'
+          || intent.uploader.participantIdentityId !== actor.participantIdentityId) {
+        return jsonResponse({ kind: 'refused', code: 'not_intent_owner' }, 403, correlationId);
+      }
+      const outcome = await streamFileUploadBytes({
+        intents: files.transactionalIntents,
+        intent,
+        bytes: httpRequestBodyBytes(context.req.raw),
+        blobs: files.blobs,
+        imageReEncoder: SHARP_FILE_IMAGE_REENCODER,
+        now: new Date().toISOString()
+      });
+      return respondUploadStream(outcome, correlationId);
+    });
+    app.get('/api/portal/files/download/:assetId', async (context) => {
+      const correlationId = context.res.headers.get('x-correlation-id') ?? crypto.randomUUID();
+      const actor = resolvePortalFilesActor(context.req.raw);
+      if (actor.kind === 'event_required') {
+        return jsonResponse({ kind: 'refused', code: 'event_required' }, 409, correlationId);
+      }
+      if (actor.kind !== 'authorized') {
+        return jsonResponse({ kind: 'refused', code: 'unauthenticated' }, 401, correlationId);
+      }
+      const assetId = fileIdInputSchema.safeParse(context.req.param('assetId'));
+      if (!assetId.success) return jsonResponse({ kind: 'not_found' }, 404, correlationId);
+      const scope = {
+        workspaceId: actor.lane.workspaceId,
+        eventId: actor.lane.eventId
+      };
+      // Reachability first: the asset must be live material attached to one
+      // of the participant's own engagements; anything else is an
+      // undistinguishing not-found.
+      const reachable = actor.engagementIds.some((engagementId) =>
+        files.repository
+          .listAttachmentsForSubject(scope, { kind: 'engagement', engagementId })
+          .some((attachment) => attachment.state === 'attached'
+            && attachment.content.kind === 'asset'
+            && attachment.content.assetId === assetId.data));
+      if (!reachable) return jsonResponse({ kind: 'not_found' }, 404, correlationId);
+      const outcome = await openInertFileDownload({
+        assets: files.repository,
+        blobs: files.blobs,
+        scope,
+        assetId: assetId.data
+      });
+      return respondInertDownload(outcome, correlationId);
+    });
+    // The portal files operations live in their own registry (operator and
+    // portal command modules share operation names, which one registry cannot
+    // carry twice), so the main /api/operations/manifest cannot list them.
+    // This browser-safe manifest is how the portal client resolves its files
+    // bindings; pre-event it answers the same not_available the sibling
+    // portal files routes do. Registered before the wildcard forwarder so it
+    // wins the match.
+    app.get('/api/portal/files/operations/manifest', async (context) => {
+      const correlationId = context.res.headers.get('x-correlation-id') ?? crypto.randomUUID();
+      const portal = currentFilesPortal();
+      if (portal === undefined) {
+        return jsonResponse(
+          { kind: 'transport_error', code: 'not_available' }, 404, correlationId
+        );
+      }
+      const composition = await portal;
+      return jsonResponse(composition.runtime.registry.safeManifest, 200, correlationId);
+    });
+    // The registered portal files command bindings live in the lazily
+    // composed per-event registry; this forwarder hands matching requests to
+    // its adapter once a current event exists and fails closed before then.
+    app.all('/api/portal/files/*', async (context) => {
+      const correlationId = context.res.headers.get('x-correlation-id') ?? crypto.randomUUID();
+      const portal = currentFilesPortal();
+      if (portal === undefined) {
+        return jsonResponse(
+          { kind: 'transport_error', code: 'not_available' }, 404, correlationId
+        );
+      }
+      const { adapter } = await portal;
+      return adapter.fetch(context.req.raw);
+    });
+    app.put('/api/events/current/files/uploads/:intentId/bytes', async (context) => {
+      const correlationId = context.res.headers.get('x-correlation-id') ?? crypto.randomUUID();
+      const origin = context.req.header('origin');
+      if (!origin || !participantAllowedOrigins.has(origin)) {
+        return jsonResponse({ kind: 'refused', code: 'forbidden' }, 403, correlationId);
+      }
+      const authorized = await requireFilesOperatorAuthority({
+        raw: context.req.raw,
+        method: 'PUT',
+        lane: filesOperatorCommandLane,
+        operation: { name: 'file.upload.intent', version: 1, effect: 'commit' }
+      });
+      if (authorized.kind === 'refused') {
+        return jsonResponse(
+          {
+            kind: 'refused',
+            code: authorized.status === 401 ? 'unauthenticated' : 'forbidden'
+          },
+          authorized.status,
+          correlationId
+        );
+      }
+      if (authorized.kind === 'event_required') {
+        return jsonResponse({ kind: 'refused', code: 'event_required' }, 409, correlationId);
+      }
+      const intentId = fileIdInputSchema.safeParse(context.req.param('intentId'));
+      if (!intentId.success) return jsonResponse({ kind: 'not_found' }, 404, correlationId);
+      const intent = files.repository.readIntent(authorized.scope, intentId.data);
+      if (!intent) return jsonResponse({ kind: 'not_found' }, 404, correlationId);
+      if (intent.uploader.kind !== 'operator_user'
+          || intent.uploader.userId !== authorized.actorUserId) {
+        return jsonResponse({ kind: 'refused', code: 'not_intent_owner' }, 403, correlationId);
+      }
+      const outcome = await streamFileUploadBytes({
+        intents: files.transactionalIntents,
+        intent,
+        bytes: httpRequestBodyBytes(context.req.raw),
+        blobs: files.blobs,
+        imageReEncoder: SHARP_FILE_IMAGE_REENCODER,
+        now: new Date().toISOString()
+      });
+      return respondUploadStream(outcome, correlationId);
+    });
+    app.get('/api/events/current/files/download/:assetId', async (context) => {
+      const correlationId = context.res.headers.get('x-correlation-id') ?? crypto.randomUUID();
+      const authorized = await requireFilesOperatorAuthority({
+        raw: context.req.raw,
+        method: 'GET',
+        lane: filesOperatorReadLane,
+        operation: { name: 'file.overview.read', version: 1, effect: 'read' }
+      });
+      if (authorized.kind === 'refused') {
+        return jsonResponse(
+          {
+            kind: 'refused',
+            code: authorized.status === 401 ? 'unauthenticated' : 'forbidden'
+          },
+          authorized.status,
+          correlationId
+        );
+      }
+      if (authorized.kind === 'event_required') {
+        return jsonResponse({ kind: 'refused', code: 'event_required' }, 409, correlationId);
+      }
+      const assetId = fileIdInputSchema.safeParse(context.req.param('assetId'));
+      if (!assetId.success) {
+        return jsonResponse({ kind: 'refused', code: 'invalid_request' }, 400, correlationId);
+      }
+      const outcome = await openInertFileDownload({
+        assets: files.repository,
+        blobs: files.blobs,
+        scope: authorized.scope,
+        assetId: assetId.data
+      });
+      return respondInertDownload(outcome, correlationId);
+    });
     // Dev-only fixture control for the hash-only challenge store: it hands out a
     // working magic-link token bypassing the mailbox-possession proof the portal
     // ceremony depends on, so its being dev-only must be STRUCTURAL, not a
@@ -4592,6 +5318,13 @@ export async function createEphemeralLiveRuntime(input: {
         if (outboundDispatchPump !== undefined) clearInterval(outboundDispatchPump);
         closeResult = database.close();
         closed = true;
+        try {
+          if (filesBlobRootDirectory !== undefined) {
+            rmSync(filesBlobRootDirectory, { recursive: true, force: true });
+          }
+        } catch (error) {
+          console.error('[jooevents] ephemeral files blob cleanup failed', error);
+        }
       }
       return closeResult!;
     };
@@ -4616,10 +5349,24 @@ export async function createEphemeralLiveRuntime(input: {
       outboundDispatch,
       ...(providerActivation === undefined ? {} : { providerActivation }),
       embedFraming,
+      files: Object.freeze({
+        limits: files.limits,
+        blobs: files.blobs,
+        repository: files.repository,
+        sweepOrphanBlobs: files.sweepOrphanBlobs,
+        sweepExpiredIntents: files.sweepExpiredIntents
+      }),
       close
     });
   } catch (error) {
     database.close();
+    if (filesBlobRootDirectory !== undefined) {
+      try {
+        rmSync(filesBlobRootDirectory, { recursive: true, force: true });
+      } catch {
+        // The boot failure below is the primary fault; cleanup stays best-effort.
+      }
+    }
     throw error;
   }
 }

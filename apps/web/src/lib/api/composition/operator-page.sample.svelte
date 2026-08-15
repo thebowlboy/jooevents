@@ -2,6 +2,7 @@
 	import CommunicationsPage from '$lib/features/communications/CommunicationsPage.svelte';
 	import DecisionsPage from '$lib/features/decisions/DecisionsPage.svelte';
 	import EmbedsPage from '$lib/features/embeds/EmbedsPage.svelte';
+	import FilesPage from '$lib/features/files/FilesPage.svelte';
 	import FormsPage from '$lib/features/forms/FormsPage.svelte';
 	import ReviewPage from '$lib/features/review/ReviewPage.svelte';
 	import LineupPage from '$lib/features/review/LineupPage.svelte';
@@ -18,6 +19,7 @@
 	import { createSampleDecisionsPagePort } from '../decisions-page-port.sample';
 	import { createSampleEmbedsPagePort } from '../embeds-page-port.sample';
 	import { createSampleOverviewPagePort } from '../overview-page-port.sample';
+	import { createSampleFilesPagePort } from '../files/sample';
 	import { createSampleFormsPagePort } from '../forms-page-port.sample';
 	import { createSampleReviewPagePort } from '../review-page-port.sample';
 	import { createSampleReviewersPagePort } from '../reviewers-page-port.sample';
@@ -44,6 +46,7 @@
 	const templates = createSampleTemplatesPagePort(api);
 	const settings = createSampleSettingsPagePort(api);
 	const submissions = createSampleSubmissionsPagePort(api);
+	const files = createSampleFilesPagePort();
 </script>
 
 {#if area === 'overview'}
@@ -62,6 +65,8 @@
 	<ReviewersPage port={reviewers} />
 {:else if area === 'tasks'}
 	<TasksPage port={tasks} />
+{:else if area === 'files'}
+	<FilesPage port={files} />
 {:else if area === 'schedule'}
 	<SchedulePage port={schedule} />
 {:else if area === 'communications'}

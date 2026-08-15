@@ -2,6 +2,7 @@
 	import LiveUnavailablePage from '$lib/features/workspace/components/LiveUnavailablePage.svelte';
 	import CommunicationsReadinessPage from '$lib/features/communications/CommunicationsReadinessPage.svelte';
 	import DecisionsPage from '$lib/features/decisions/DecisionsPage.svelte';
+	import FilesPage from '$lib/features/files/FilesPage.svelte';
 	import OverviewDashboard from '$lib/features/workspace/components/OverviewDashboard.svelte';
 	import FormsPage from '$lib/features/forms/FormsPage.svelte';
 	import SubmissionsPage from '$lib/features/submissions/SubmissionsPage.svelte';
@@ -39,6 +40,7 @@
 		speakers: 'Speakers',
 		reviewers: 'Reviewers',
 		tasks: 'Tasks',
+		files: 'Files',
 		schedule: 'Schedule',
 		communications: 'Communications',
 		forms: 'Forms',
@@ -93,6 +95,8 @@
 	{/key}
 {:else if area === 'speakers'}
 	<SpeakersPage port={ports.speakers} />
+{:else if area === 'files'}
+	<FilesPage port={ports.files} />
 {:else if area === 'reviewers'}
 	<ReviewersPage port={ports.reviewers} />
 {:else if area === 'schedule'}

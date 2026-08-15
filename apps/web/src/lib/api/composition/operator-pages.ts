@@ -7,6 +7,7 @@ export const operatorPageIds = Object.freeze([
 	'speakers',
 	'reviewers',
 	'tasks',
+	'files',
 	'schedule',
 	'communications',
 	'forms',

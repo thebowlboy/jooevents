@@ -19,6 +19,7 @@
     "@jooevents/communication-operations": "workspace:*",
     "@jooevents/communications": "workspace:*",
     "@jooevents/contracts": "workspace:*",
+    "@jooevents/deadline": "workspace:*",
     "@jooevents/deadline-operations": "workspace:*",
     "@jooevents/decision": "workspace:*",
     "@jooevents/decision-operations": "workspace:*",
@@ -27,6 +28,8 @@
     "@jooevents/event": "workspace:*",
     "@jooevents/event-operations": "workspace:*",
     "@jooevents/field-registry": "workspace:*",
+    "@jooevents/files": "workspace:*",
+    "@jooevents/files-operations": "workspace:*",
     "@jooevents/identity-access": "workspace:*",
     "@jooevents/intake": "workspace:*",
     "@jooevents/intake-operations": "workspace:*",
@@ -46,6 +49,7 @@
     "better-auth": "1.6.26",
     "drizzle-orm": "0.45.2",
     "hono": "4.13.1",
+    "sharp": "^0.35.3",
     "zod": "4.4.3"
   },
   "devDependencies": {

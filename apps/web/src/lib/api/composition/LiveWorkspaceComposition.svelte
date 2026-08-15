@@ -30,6 +30,7 @@
 	import { createLiveReviewersPagePort } from '$lib/api/reviewers-page-port.live';
 	import { createLiveSchedulePagePort } from '$lib/api/schedule-page-port.live';
 	import { createLiveSpeakersPagePort } from '$lib/api/speakers-page-port.live';
+	import { createLiveFilesPagePort } from '$lib/api/files/files-page-port.live';
 	import type { ReviewPagePort } from '$lib/api/review-page-port';
 	import { createLiveScheduleProposalCountsSource } from './schedule-proposal-counts.live';
 	import { createEventSettingsLiveClient } from '$lib/api/operations/event-settings-live';
@@ -164,6 +165,14 @@
 			contactCapability: { kind: 'available' }
 		})
 	});
+	// The Files surface joins the canonical roster (names for received
+	// material) and the vocabulary (track names for share audiences); both
+	// joins are tolerant, so a failed side read degrades labels, not the page.
+	const files = createLiveFilesPagePort({
+		manifest: initial.manifest,
+		roster: { list: () => speakers.speakers.list() },
+		vocabulary: { tracks: () => vocabulary.tracks() }
+	});
 
 	// The tuned Review surface renders under the authority the server states.
 	// Its port's `viewer` is a static construction input, so the port exists
@@ -211,7 +220,8 @@
 		review,
 		reviewers,
 		schedule,
-		speakers
+		speakers,
+		files
 	}));
 </script>
 

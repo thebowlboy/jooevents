@@ -672,6 +672,53 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['GET /api/events/current/field-registry']
       },
       {
+        name: 'file.attachment.attach', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/files/attachments/attach']
+      },
+      {
+        name: 'file.attachment.detach', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/files/attachments/detach']
+      },
+      {
+        name: 'file.attachment.link', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/files/attachments/link']
+      },
+      {
+        name: 'file.overview.read', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/files']
+      },
+      {
+        name: 'file.request.create', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/files/requests/create']
+      },
+      // The agent ask-draft rides the app_model tool surface only; it has no
+      // HTTP binding in this composition.
+      { name: 'file.request.create.draft', version: 1, effect: 'draft', bindings: [] },
+      {
+        name: 'file.request.fulfill', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/files/requests/fulfill']
+      },
+      {
+        name: 'file.request.withdraw', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/files/requests/withdraw']
+      },
+      {
+        name: 'file.share.create', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/files/shares/create']
+      },
+      {
+        name: 'file.share.revoke', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/files/shares/revoke']
+      },
+      {
+        name: 'file.upload.confirm', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/files/uploads/confirm']
+      },
+      {
+        name: 'file.upload.intent', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/files/uploads/intent']
+      },
+      {
         name: 'form.closing.change.draft', version: 1, effect: 'draft',
         bindings: ['POST /api/events/current/forms/drafts/closing']
       },

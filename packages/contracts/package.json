@@ -9,6 +9,7 @@
     "./communications/organizer": "./src/communications/organizer.ts",
     "./deadlines": "./src/deadlines.ts",
     "./field-registry": "./src/field-registry.ts",
+    "./files": "./src/files.ts",
     "./live-build-identity": "./src/live-build-identity.ts",
     "./route-namespaces": "./src/route-namespaces.ts",
     "./reviewer-roster": "./src/reviewer-roster.ts",

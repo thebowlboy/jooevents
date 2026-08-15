@@ -9,6 +9,7 @@ import {
 	CalendarDays,
 	CodeXml,
 	FileText,
+	FolderOpen,
 	Inbox,
 	LayoutDashboard,
 	LayoutTemplate,
@@ -61,7 +62,14 @@ export const navGroups: NavGroup[] = [
 		items: [
 			{ key: 'speakers', label: 'Speakers', href: '/app/speakers', icon: Users },
 			{ key: 'reviewers', label: 'Reviewers', href: '/app/reviewers', icon: UserPen },
-			{ key: 'tasks', label: 'Tasks', href: '/app/tasks', icon: ListChecks }
+			{ key: 'tasks', label: 'Tasks', href: '/app/tasks', icon: ListChecks },
+			/*
+			 * Files sits with People because its subject is speaker material:
+			 * what was asked of whom, what they sent, and what is shared back to
+			 * them. Requests, uploads, and resources all resolve to a person's
+			 * engagement, not to an event artifact like a form or template.
+			 */
+			{ key: 'files', label: 'Files', href: '/app/files', icon: FolderOpen }
 		]
 	},
 	{
