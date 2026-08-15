@@ -156,6 +156,16 @@ const emailFieldId = uuid(8);
 const consentFieldId = uuid(9);
 const now = parseInstant('2026-08-14T12:00:00.000Z');
 const scope: ReleaseScopeDto = { workspaceId, eventId };
+const themeArtifactId = uuid(0x71);
+const applyArtifactId = uuid(0x72);
+const templateRevisionId = uuid(0x73);
+const templatePin = (artifactId: string) => ({
+  artifactId, revisionId: templateRevisionId, revisionNumber: 1, digestSha256: 'd'.repeat(64)
+});
+const themeRecipe = {
+  name: 'Warm default', canvas: '#faf8f5', surface: '#ffffff',
+  text: '#2a2522', action: '#b05a4f', radius: 6, controlHeight: 36
+};
 const continuationBinding = Object.freeze({
   key: 'intake.public-apply', version: parseContractVersion(1)
 });
@@ -385,6 +395,17 @@ async function openFixture() {
       readCurrentPublishedFormVersionId: (releaseScope, requestedFormId) =>
         repository.readFormHead(releaseScope, requestedFormId)?.currentPublishedVersionId
           ?? undefined
+    },
+    templates: {
+      readPinnedArtifact: (_releaseScope, pin) => {
+        if (pin.artifactId === themeArtifactId) return {
+          kind: 'theme' as const, recipe: themeRecipe, markText: 'JE'
+        };
+        return pin.artifactId === applyArtifactId ? {
+          kind: 'surface' as const, surfaceKind: 'application-form' as const,
+          name: 'Apply', purpose: 'Application.', blocks: [], usedBy: []
+        } : undefined;
+      }
     }
   };
   const releaseRepository = new SQLiteReleaseRepository(sqlite, releaseSources);
@@ -962,10 +983,8 @@ function publishStyleSet(fixture: Fixture): string {
       actorUserId: userId,
       occurredAt: now,
       releaseId: uuid(0xa01),
-      recipe: {
-        name: 'Warm default', canvas: '#faf8f5', surface: '#ffffff',
-        text: '#2a2522', action: '#b05a4f', radius: 6, controlHeight: 36
-      },
+      sourceTemplateRevision: templatePin(themeArtifactId),
+      recipe: themeRecipe,
       expectedCurrentStyleSetNumber: null
     },
     port: fixture.releaseRepository
@@ -989,6 +1008,7 @@ function publishApplySurface(fixture: Fixture, input: {
       occurredAt: now,
       releaseId: input.releaseId,
       kind: 'apply',
+      sourceTemplateRevision: templatePin(applyArtifactId),
       manifest: { schemaVersion: 1, heading: null, intro: null },
       styleSetReleaseId: input.styleSetReleaseId,
       formRef: { formId, formVersionId: input.formVersionId },

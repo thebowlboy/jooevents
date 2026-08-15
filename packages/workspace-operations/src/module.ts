@@ -196,6 +196,8 @@ export const DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG: WorkspaceOverviewAreaCatal
       area: 'settings',
       status: 'partial',
       availableCapabilities: [
+        'communication.sender_identity.read',
+        'communication.sender_identity.update',
         'event.current.read',
         'event.settings.current.read',
         'event.settings.update.draft',

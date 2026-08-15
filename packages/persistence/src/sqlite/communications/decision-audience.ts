@@ -2,6 +2,7 @@ import type { Database } from 'bun:sqlite';
 import { createHash, createHmac } from 'node:crypto';
 import {
   DECISION_NOTIFICATION_PURPOSE_KEY,
+  TASK_REMINDER_PURPOSE_KEY,
   OrganizerAudienceResolutionError,
   organizerAddressPolicyResolutionSchema,
   organizerAudienceCandidateSchema,
@@ -411,15 +412,16 @@ export function createSQLiteDecisionAudienceSource(input: {
         participantIdentityId: contact.participantIdentityId,
         sourceFieldId: contact.sourceFieldId
       };
-      const purposeAllowed = purpose.purposeKey === DECISION_NOTIFICATION_PURPOSE_KEY;
+      const purposeAllowed = purpose.purposeKey === DECISION_NOTIFICATION_PURPOSE_KEY
+        || purpose.purposeKey === TASK_REMINDER_PURPOSE_KEY;
       return organizerAddressPolicyResolutionSchema.parse({
         kind: 'evaluated',
         selectionPolicy: {
-          reference: { key: 'address-policy.communication.decision-notification', version: 1 },
+          reference: { key: 'address-policy.communication.submission-primary-contact', version: 1 },
           definitionDigestSha256: digest({
             schemaVersion: 1,
             policy: 'submission_primary_contact',
-            purposeKey: DECISION_NOTIFICATION_PURPOSE_KEY
+            purposeKeys: [DECISION_NOTIFICATION_PURPOSE_KEY, TASK_REMINDER_PURPOSE_KEY]
           })
         },
         address: {

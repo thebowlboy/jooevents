@@ -39,7 +39,7 @@ describe('organizer submission canonical-to-view mapping', () => {
 			title: 'Systems that stay understandable',
 			primaryParticipantName: 'Ada Mensah',
 			submittedAt: '2026-08-12T10:15:00.000Z',
-			submittedAtLabel: 'Aug 12, 2026 · 10:15 UTC'
+			submittedAtLabel: '12 Aug 2026 \u00b7 10:15 UTC'.replaceAll(' ', '\u00a0')
 		});
 		expect('email' in view).toBe(false);
 		expect('decision' in view).toBe(false);

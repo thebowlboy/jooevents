@@ -14,6 +14,7 @@ import {
   programVocabularySnapshotReadResultSchema,
   releaseDraftOperationResultSchema,
   submissionDirectEntryDraftOperationResultSchema,
+  taskDraftOperationResultSchema,
   type FormDefinitionCreateAuthorInput,
   type FormTarget
 } from '@jooevents/contracts';
@@ -56,8 +57,8 @@ const organizerFormDetailReadResultSchema = createReadOperationResultSchema(
  * `bootstrapEmptyInstall` stays `open` and the human owner's later Google
  * sign-in is still admitted into this very workspace as Workspace Admin.
  */
-const OPERATOR_EMAIL = 'joocon.operator@example.test';
-const REVIEWER_EMAIL = 'joocon.reviewer@example.test';
+const OPERATOR_EMAIL = 'maya.chen@joocon.example.test';
+const REVIEWER_EMAIL = 'leonie.weber@joocon.example.test';
 
 /**
  * Reservation permission grants the ephemeral runtime attaches to the bootstrap
@@ -125,6 +126,7 @@ interface SubmissionSpec {
   readonly email: string;
   readonly title: string;
   readonly abstract: string;
+  readonly trackKey?: TrackKey;
 }
 
 /**
@@ -136,6 +138,7 @@ const FEATURED_SUBMISSIONS: readonly SubmissionSpec[] = Object.freeze([
     key: 'okonkwo',
     name: 'Nadia Okonkwo',
     email: 'nadia.okonkwo@example.test',
+    trackKey: 'platform_reliability',
     title: 'Changesets All the Way Down',
     abstract: 'Every consequential change in our platform is drafted, diffed, and committed as one typed changeset. This talk walks through what that bought us — and the three places it hurt — after two years of running it in production.'
   }),
@@ -143,6 +146,7 @@ const FEATURED_SUBMISSIONS: readonly SubmissionSpec[] = Object.freeze([
     key: 'lindqvist',
     name: 'Teodor Lindqvist',
     email: 'teodor.lindqvist@example.test',
+    trackKey: 'organizer_craft',
     title: 'The Deadline That Kept Its Promise',
     abstract: 'Conference deadlines are timezone puzzles wearing a calendar costume. A practical tour of grace windows, display dates, and the moment a reviewer in Auckland and an organizer in Lisbon disagree about what "Friday" means.'
   }),
@@ -150,6 +154,7 @@ const FEATURED_SUBMISSIONS: readonly SubmissionSpec[] = Object.freeze([
     key: 'raghunathan',
     name: 'Priya Raghunathan',
     email: 'priya.raghunathan@example.test',
+    trackKey: 'agent_systems',
     title: 'Agents That Ask Before They Act',
     abstract: 'We gave language models the whole organizer toolbox and then took away their ability to write anything directly. What is left is a drafting partner that proposes, explains, and waits. Includes the review surface that made it trustworthy.'
   }),
@@ -157,6 +162,7 @@ const FEATURED_SUBMISSIONS: readonly SubmissionSpec[] = Object.freeze([
     key: 'bevilacqua',
     name: 'Marcus Bevilacqua',
     email: 'marcus.bevilacqua@example.test',
+    trackKey: 'platform_reliability',
     title: 'Schedule Physics for Stubborn Rooms',
     abstract: 'Rooms overlap, speakers clone themselves, and the catering slot moves. A field guide to constraint checking that refuses the impossible schedule loudly and early, instead of discovering it at 08:55 on day one.'
   }),
@@ -164,6 +170,7 @@ const FEATURED_SUBMISSIONS: readonly SubmissionSpec[] = Object.freeze([
     key: 'steinberg',
     name: 'Hana Steinberg',
     email: 'hana.steinberg@example.test',
+    trackKey: 'organizer_craft',
     title: 'Reviewing 900 Talks Without Losing the Plot',
     abstract: 'Anonymized rounds, anti-anchoring, and the quiet statistics of a five-point scale. What we learned running a program committee of forty people through three review rounds in six weeks.'
   })
@@ -227,6 +234,33 @@ const CONFIRMED_SUBMISSION_KEYS: readonly string[] = Object.freeze([
   'okonkwo', 'lindqvist', 'raghunathan'
 ]);
 
+const SPEAKER_TASKS = Object.freeze([
+  Object.freeze({
+    key: 'bio',
+    name: 'Confirm speaker bio',
+    description: 'Review the biography that will accompany the published speaker profile.',
+    completionMode: 'acknowledge' as const,
+    required: true,
+    dueOn: '2027-08-15'
+  }),
+  Object.freeze({
+    key: 'headshot',
+    name: 'Upload headshot',
+    description: 'Provide a high-resolution headshot for the event programme.',
+    completionMode: 'file_upload' as const,
+    required: true,
+    dueOn: '2027-08-22'
+  }),
+  Object.freeze({
+    key: 'slides',
+    name: 'Upload slide draft',
+    description: 'Send the first slide deck for the programme team to check.',
+    completionMode: 'file_upload' as const,
+    required: false,
+    dueOn: '2027-09-08'
+  })
+] as const);
+
 const EVALUATIONS = Object.freeze([
   Object.freeze({ score: 5, comment: 'Concrete, production-grounded, and the diff surface demo lands.' }),
   Object.freeze({ score: 4, comment: 'Strong material. Ask for one worked timezone example on stage.' }),
@@ -255,6 +289,7 @@ export interface PlaygroundSeedSummary {
   readonly spawnedSessions: number;
   readonly placements: number;
   readonly confirmedEngagements: number;
+  readonly taskDefinitions: number;
   readonly releaseNumber: number;
 }
 
@@ -887,6 +922,7 @@ interface DecisionPlan {
   readonly submissionId: string;
   readonly state: 'accepted' | 'waitlisted' | 'declined';
   readonly spawn: boolean;
+  readonly trackId?: string;
 }
 
 async function commitDecisions(
@@ -904,7 +940,9 @@ async function commitDecisions(
         state: plan.state,
         expectedDecisionVersion: null,
         expectedDecisionDigestSha256: null,
-        ...(plan.spawn ? { graduation: { kind: 'spawn' } } : {})
+        ...(plan.spawn
+          ? { graduation: { kind: 'spawn', ...(plan.trackId ? { trackId: plan.trackId } : {}) } }
+          : {})
       }))
     },
     parse: (value) => value
@@ -980,6 +1018,27 @@ async function confirmEngagements(input: {
   return confirmed;
 }
 
+async function createSpeakerTasks(context: SeedContext): Promise<number> {
+  for (const task of SPEAKER_TASKS) {
+    const draft = requireSuccess(taskDraftOperationResultSchema.parse(await effect({
+      context,
+      path: '/api/events/current/tasks/drafts',
+      key: `joocon-task-${task.key}-draft`,
+      body: {
+        action: 'create_definition',
+        name: task.name,
+        description: task.description,
+        completionMode: task.completionMode,
+        required: task.required,
+        dueOn: task.dueOn
+      },
+      parse: (value) => value
+    })), `task_${task.key}_draft`);
+    await commitDraft(context, `joocon-task-${task.key}`, draft, draft.data.headVersion);
+  }
+  return SPEAKER_TASKS.length;
+}
+
 async function publishSchedule(context: SeedContext): Promise<number> {
   const draft = requireSuccess(releaseDraftOperationResultSchema.parse(await effect({
     context,
@@ -1024,7 +1083,7 @@ export async function seedJooConPlayground(input: {
     runtime,
     config,
     email: OPERATOR_EMAIL,
-    displayName: 'JooCon Program Desk',
+    displayName: 'Maya Chen',
     rolePresetKey: 'workspace_admin',
     permissionGrants: OPERATOR_PERMISSION_GRANTS
   });
@@ -1032,7 +1091,7 @@ export async function seedJooConPlayground(input: {
     runtime,
     config,
     email: REVIEWER_EMAIL,
-    displayName: 'JooCon Review Committee',
+    displayName: 'Leonie Weber',
     rolePresetKey: 'viewer'
   });
   const context: SeedContext = Object.freeze({ runtime, config, cookie: operator.cookie });
@@ -1095,21 +1154,27 @@ export async function seedJooConPlayground(input: {
 
   await registerReviewer({ context, key: 'operator', userId: operator.userId });
   await grantReviewerRole(context, reviewer.userId);
-  await registerReviewer({ context, key: 'committee', userId: reviewer.userId });
+  await registerReviewer({ context, key: 'reviewer', userId: reviewer.userId });
 
   const reviewAssignments = await openReviewRound(context);
   const operatorReviews = await commitEvaluations({
     context, key: 'operator', count: 3, offset: 0
   });
-  const committeeReviews = await commitEvaluations({
-    context: reviewerContext, key: 'committee', count: 3, offset: 3
+  const reviewerReviews = await commitEvaluations({
+    context: reviewerContext, key: 'reviewer', count: 3, offset: 3
   });
 
   const decisions: DecisionPlan[] = [];
   for (const spec of FEATURED_SUBMISSIONS) {
     const submissionId = submissionIdByKey.get(spec.key);
     if (!submissionId) fail('decision_submission_missing', spec.key);
-    decisions.push({ submissionId, state: 'accepted', spawn: true });
+    if (!spec.trackKey) fail('decision_track_missing', spec.key);
+    decisions.push({
+      submissionId,
+      state: 'accepted',
+      spawn: true,
+      trackId: vocabulary[spec.trackKey]
+    });
   }
   const waitlisted = submissionIdByKey.get('delacroix');
   const declined = submissionIdByKey.get('tanabe');
@@ -1127,6 +1192,7 @@ export async function seedJooConPlayground(input: {
     context, sessionIdByTitle, vocabulary, titleBySubmissionKey
   });
   const confirmedEngagements = await confirmEngagements({ context, submissionIdByKey });
+  const taskDefinitions = await createSpeakerTasks(context);
   const releaseNumber = await publishSchedule(context);
 
   const bootstrapReservation = runtime.database.sqlite.query<
@@ -1150,13 +1216,14 @@ export async function seedJooConPlayground(input: {
     submissions: submissionIdByKey.size,
     reviewers: 2,
     reviewAssignments,
-    committedReviews: operatorReviews + committeeReviews,
+    committedReviews: operatorReviews + reviewerReviews,
     accepted: FEATURED_SUBMISSIONS.length,
     waitlisted: 1,
     declined: 1,
     spawnedSessions: catalog.sessions.length,
     placements,
     confirmedEngagements,
+    taskDefinitions,
     releaseNumber
   });
 }

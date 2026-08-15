@@ -187,6 +187,9 @@ export function createLiveFormsPagePort(input: {
 	readonly forms: OrganizerFormsPort;
 	readonly fields: WorkspaceFieldsApi;
 	readonly vocabulary: Pick<ProgramVocabularySettingsPort, 'tracks' | 'formats'>;
+	readonly templates: {
+		applicationFormSurfaceId(): Promise<string | null>;
+	};
 	readonly newIdempotencyKey?: () => string;
 }): FormsPagePort {
 	if (input.forms.source.kind !== 'live') throw new TypeError('forms_page_live_source_required');
@@ -320,10 +323,7 @@ export function createLiveFormsPagePort(input: {
 
 	const port: FormsPagePort = {
 		templates: Object.freeze({
-			async applicationFormSurfaceId(): Promise<string | null> {
-				// No canonical template-surface owner is registered in live composition yet.
-				return null;
-			}
+			applicationFormSurfaceId: () => input.templates.applicationFormSurfaceId()
 		}),
 		vocab: Object.freeze({
 			async tracks() {

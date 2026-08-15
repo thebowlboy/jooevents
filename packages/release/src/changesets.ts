@@ -113,9 +113,9 @@ export const releaseStaleDetailSchema = z.strictObject({
   action: releaseActionSchema,
   subjectId: releaseIdSchema.nullable()
 });
-// Version 2: the action vocabulary gained surface_allowlist.
+// Version 3: the publication guard gained session_track_required.
 const staleDetailSchema = defineChangesetSchema({
-  key: 'release.stale_detail', version: 2, schema: releaseStaleDetailSchema
+  key: 'release.stale_detail', version: 3, schema: releaseStaleDetailSchema
 });
 
 type ReleaseDefinition = ChangesetOperationDefinition<
@@ -249,6 +249,6 @@ function refusalOutcome(code: ReleasePlanningErrorCode, plan: ReleaseMutationPla
     retryable: false,
     subjects: [{ type: 'release', id: subjectId }],
     detail: Object.freeze({ code, action: plan.input.action, subjectId }),
-    detailSchemaVersion: 2
+    detailSchemaVersion: 3
   });
 }

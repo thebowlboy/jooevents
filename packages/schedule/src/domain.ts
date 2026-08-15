@@ -35,6 +35,7 @@ export type SchedulePlacementPlanningErrorCode =
   | 'occurrence_missing'
   | 'stale_occurrence'
   | 'session_missing'
+  | 'session_track_required'
   | 'room_missing'
   | 'room_retired'
   | 'room_overlap'
@@ -139,6 +140,9 @@ export function planSchedulePlacementMutation(input: {
   if (!session || !sameScheduleScope(session.scope, scope) || session.id !== sessionId
       || (session.lifecycle !== 'collecting' && session.lifecycle !== 'programmed')) {
     throw new SchedulePlacementPlanningError('session_missing');
+  }
+  if (input.vocabulary.tracks.some((track) => track.status === 'active') && !session.trackId) {
+    throw new SchedulePlacementPlanningError('session_track_required');
   }
   const room = resolveProgramVocabularyItem(input.vocabulary, 'room', planningInput.roomId);
   if (!room) throw new SchedulePlacementPlanningError('room_missing');

@@ -60,6 +60,21 @@ const releaseId2 = '019c1df7-86b5-769b-bba4-5f7097bfa802';
 const releaseId3 = '019c1df7-86b5-769b-bba4-5f7097bfa803';
 const now = '2026-08-14T08:00:00.000Z';
 const later = '2026-08-14T09:00:00.000Z';
+const themeArtifactId = '019c1df7-86b5-769b-bba4-5f7097bfa710';
+const scheduleArtifactId = '019c1df7-86b5-769b-bba4-5f7097bfa711';
+const speakersArtifactId = '019c1df7-86b5-769b-bba4-5f7097bfa712';
+const applyArtifactId = '019c1df7-86b5-769b-bba4-5f7097bfa713';
+const templateRevisionId = '019c1df7-86b5-769b-bba4-5f7097bfa714';
+const templateDigest = 'd'.repeat(64);
+const recipe = {
+  name: 'Warm default', canvas: '#faf8f5', surface: '#ffffff',
+  text: '#2a2522', action: '#b05a4f', radius: 6, controlHeight: 36
+};
+const templatePin = (artifactId: string) => ({
+  artifactId, revisionId: templateRevisionId, revisionNumber: 1, digestSha256: templateDigest
+});
+const surfaceArtifactId = (kind: 'schedule' | 'speakers' | 'apply') =>
+  kind === 'schedule' ? scheduleArtifactId : kind === 'speakers' ? speakersArtifactId : applyArtifactId;
 
 function participant(personId: string, position: number, publiclyVisible: boolean) {
   return {
@@ -240,13 +255,37 @@ function fixture(overrides: Partial<FixtureState> = {}): {
       scope,
       setVersion: 2,
       setDigestSha256: 'b'.repeat(64),
-      rooms: [{ id: roomId, name: 'Main Hall' }]
+      rooms: [{ id: roomId, name: 'Main Hall' }],
+      tracks: []
     }),
     readReleaseEventSettingsVersion: () => 5,
     readReleaseScheduleConflicts: () => state.conflicts,
     readReleaseParticipantDisplayName: (_scope, personId) => state.names.get(personId),
     readReleasePublishedFormVersionId: (_scope, requestedFormId) =>
-      state.publishedFormVersions.get(requestedFormId)
+      state.publishedFormVersions.get(requestedFormId),
+    readReleaseTemplateArtifact: (_scope, pin) => {
+      if (pin.revisionId !== templateRevisionId || pin.revisionNumber !== 1
+          || pin.digestSha256 !== templateDigest) return undefined;
+      if (pin.artifactId === themeArtifactId) return {
+        kind: 'theme' as const, recipe, markText: 'JE'
+      };
+      const surfaceKind = pin.artifactId === scheduleArtifactId
+        ? 'schedule' as const
+        : pin.artifactId === speakersArtifactId
+          ? 'speaker-roster' as const
+          : pin.artifactId === applyArtifactId ? 'application-form' as const : null;
+      if (surfaceKind === null) return undefined;
+      return {
+        kind: 'surface' as const,
+        surfaceKind,
+        name: 'Public surface',
+        purpose: 'Published presentation.',
+        blocks: surfaceKind === 'application-form'
+          ? [{ type: 'hero' as const, title: 'Apply to speak', intro: '' }]
+          : [],
+        usedBy: []
+      };
+    }
   };
   return Object.freeze({ state, port });
 }
@@ -278,6 +317,27 @@ function commitProgramPlan(state: FixtureState, plan: ReleaseMutationPlanDto): P
 }
 
 describe('program release materialization', () => {
+  test('refuses programmed track omissions when the event uses tracks', () => {
+    const { port } = fixture();
+    const guarded: ReleaseReadPort = {
+      ...port,
+      readReleaseVocabulary: () => ({
+        scope,
+        setVersion: 2,
+        setDigestSha256: 'b'.repeat(64),
+        rooms: [{ id: roomId, name: 'Main Hall' }],
+        tracks: [{
+          id: '019c1df7-86b5-769b-bba4-5f7097bfa302',
+          name: 'Platform',
+          status: 'active',
+          version: 1,
+          accent: 'lavender'
+        }]
+      })
+    };
+    expect(() => materializeProgramContent(scope, guarded)).toThrow('session_track_required');
+  });
+
   test('admits only programmed sessions and confirmed-and-visible participants', () => {
     const { port } = fixture();
     const content = materializeProgramContent(scope, port);
@@ -602,16 +662,6 @@ describe('program rollback', () => {
 });
 
 describe('style-set and surface releases', () => {
-  const recipe = {
-    name: 'Warm default',
-    canvas: '#faf8f5',
-    surface: '#ffffff',
-    text: '#2a2522',
-    action: '#b05a4f',
-    radius: 6,
-    controlHeight: 36
-  };
-
   function publishStyleSet(state: FixtureState, port: ReleaseReadPort): StyleSetRelease {
     const plan = planReleaseMutation({
       planningInput: {
@@ -620,6 +670,7 @@ describe('style-set and surface releases', () => {
         actorUserId: userId,
         occurredAt: now,
         releaseId: releaseId1,
+        sourceTemplateRevision: templatePin(themeArtifactId),
         recipe,
         expectedCurrentStyleSetNumber: null
       },
@@ -650,7 +701,12 @@ describe('style-set and surface releases', () => {
         occurredAt: now,
         releaseId: input.releaseId,
         kind: input.kind,
-        manifest: { schemaVersion: 1, heading: null, intro: null },
+        sourceTemplateRevision: templatePin(surfaceArtifactId(input.kind)),
+        manifest: {
+          schemaVersion: 1,
+          heading: input.kind === 'apply' ? 'Apply to speak' : null,
+          intro: null
+        },
         styleSetReleaseId: input.styleSetReleaseId,
         formRef: input.formRef ?? null,
         expectedSurfaceHeadVersion: input.expectedSurfaceHeadVersion
@@ -907,6 +963,7 @@ describe('form-republish successor collaboration', () => {
         actorUserId: userId,
         occurredAt: now,
         releaseId: releaseId1,
+        sourceTemplateRevision: templatePin(themeArtifactId),
         recipe: {
           name: 'Warm default', canvas: '#faf8f5', surface: '#ffffff',
           text: '#2a2522', action: '#b05a4f', radius: 6, controlHeight: 36
@@ -926,6 +983,7 @@ describe('form-republish successor collaboration', () => {
         occurredAt: now,
         releaseId: releaseId2,
         kind: 'apply',
+        sourceTemplateRevision: templatePin(applyArtifactId),
         manifest: { schemaVersion: 1, heading: 'Apply to speak', intro: null },
         styleSetReleaseId: stylePlan.release.id,
         formRef: { formId, formVersionId: formVersion1 },

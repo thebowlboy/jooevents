@@ -1,3 +1,8 @@
+import {
+	createSampleSenderIdentitySettingsPort,
+	type SampleSenderIdentitySource,
+	type SettingsPageSenderIdentityPort
+} from './sender-identity-settings-port';
 import type { WorkspaceTeamSettingsMutationResult, WorkspaceTeamSettingsPort } from './workspace-team-settings-adapter';
 import type { WorkspaceTeamLiveReadResult } from './operations/workspace-team-live';
 import type { ProgramVocabularySettingsPort } from './program-vocabulary-settings-adapter';
@@ -70,6 +75,7 @@ export interface SampleSettingsPageSource {
 	};
 	readonly vocab: SettingsPageVocabularyPort;
 	readonly fields: SettingsPageFieldsPort;
+	readonly communications: { readonly senderIdentity: SampleSenderIdentitySource };
 }
 
 export type SettingsTeamReadResult =
@@ -103,6 +109,11 @@ export interface SettingsPagePort {
 	readonly team: SettingsPageTeamPort;
 	readonly vocab: SettingsPageVocabularyPort;
 	readonly fields: SettingsPageFieldsPort;
+	/**
+	 * Workspace-scoped, not event-scoped: the Email section answers before any
+	 * event exists, so this seam is not gated on `event.get()`.
+	 */
+	readonly senderIdentity: SettingsPageSenderIdentityPort;
 }
 
 function cloneMember(member: Member): Member {
@@ -205,6 +216,7 @@ export function createLiveSettingsPagePort(input: {
 	readonly team: WorkspaceTeamSettingsPort;
 	readonly vocab: ProgramVocabularySettingsPort;
 	readonly fields: SettingsPageFieldsPort;
+	readonly senderIdentity: SettingsPageSenderIdentityPort;
 	readonly summarySnapshot?: () => WorkspaceSummary | null;
 }): SettingsPagePort {
 	if (input.vocab.source.kind !== 'live' || input.team.source.kind !== 'live') {
@@ -279,7 +291,8 @@ export function createLiveSettingsPagePort(input: {
 			restoreTrack: (id: string) => vocabularyOutcome(input.vocab.restoreTrack(id)),
 			restoreFormat: (id: string) => vocabularyOutcome(input.vocab.restoreFormat(id))
 		}),
-		fields: input.fields
+		fields: input.fields,
+		senderIdentity: input.senderIdentity
 	});
 }
 
@@ -310,6 +323,7 @@ export function createSampleSettingsPagePort(api: SampleSettingsPageSource): Set
 			}
 		}),
 		vocab: api.vocab,
-		fields: api.fields
+		fields: api.fields,
+		senderIdentity: createSampleSenderIdentitySettingsPort(api.communications.senderIdentity)
 	});
 }

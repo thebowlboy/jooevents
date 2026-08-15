@@ -117,6 +117,11 @@ function collectApplicationHtml(
 	for (const route of routes) {
 		const path = routeHtmlPath(route);
 		if (!path) continue;
+		// A route may deliberately opt out of prerendering (for example a
+		// client-visible redirect) and is then served by the verified SPA
+		// fallback. Its route node still enters the dependency closure below;
+		// only an emitted route document can enter the HTML set.
+		if (!existsSync(buildFilePath(root, path))) continue;
 		readDirectBuildFile(root, path);
 		html.add(path);
 	}

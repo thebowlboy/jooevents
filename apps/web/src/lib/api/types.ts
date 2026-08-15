@@ -4,6 +4,7 @@
  * real transport will honor, so screens code against these types only.
  */
 
+import type { ArrivalPulse } from '@jooevents/contracts';
 import type { ThemeRecipe } from '../theme/theme-contract';
 
 // ---------------------------------------------------------------------------
@@ -158,17 +159,38 @@ export interface PipelineStage {
 	 * real computation lands.
 	 */
 	paceTone?: 'ahead' | 'on' | 'behind' | 'overdue';
-	/** Short human rendering of the governing deadline, e.g. 'due Aug 28'. */
-	deadlineLabel?: string;
-	/** Machine twin of deadlineLabel for the future real pace computation. */
-	deadlineIso?: string;
+	/**
+	 * The deadline this lane answers to. `qualifier` is the verb the date takes
+	 * on this stage — "due", "notify by", "publish target" — and the date itself
+	 * is stored, never rendered: the lane's countdown is spelled at read time so
+	 * it cannot age into a lie between one visit and the next.
+	 */
+	deadline?: {
+		qualifier: string;
+		displayDate: string;
+		effectiveAt: string;
+		/** The thing it gated is closed, so it reads `Passed`, not `Overdue`. */
+		settled?: boolean;
+	};
 }
 
+/**
+ * A deadline as the catalog stores one: the event-local calendar date the
+ * organizer set, plus the end-exclusive boundary instant that decides its
+ * state. Never a rendered string — the state, the countdown, and the absolute
+ * are all spelled by the one date vocabulary at read time, so a scenario
+ * cannot narrate "in 3 days" beside a date that says otherwise.
+ */
 export interface DeadlineItem {
 	label: string;
-	absolute: string;
-	relative: string;
-	tone: 'ok' | 'warning' | 'blocked';
+	/** `2026-08-22` — what the organizer typed, in the event's zone. */
+	displayDate: string;
+	/** The first instant of the following event-local day. */
+	effectiveAt: string;
+	/** The obligation is discharged: reads `Passed`, not `Overdue`. */
+	settled?: boolean;
+	/** A qualifier a countdown cannot carry — "blocked by 5 conflicts". */
+	note?: string;
 }
 
 export interface ActivityItem {
@@ -176,7 +198,8 @@ export interface ActivityItem {
 	actor: 'agent' | 'person' | 'you';
 	name: string;
 	text: string;
-	time: string;
+	/** When it happened, as an instant. The words are the vocabulary's job. */
+	at: string;
 }
 
 export type TrayKind =
@@ -205,7 +228,46 @@ export interface StatItem {
 	label: string;
 	value: string;
 	sub: string;
-	tone?: 'attention';
+	/**
+	 * The figure's state in the learned mapping — green healthy, amber needs
+	 * attention soon, red blocked. Absent where the figure is inventory rather
+	 * than a state, because a count of things is not good or bad by itself.
+	 *
+	 * One field rather than two: the sub-line's ink and the meter's fill are two
+	 * channels for the same fact, and giving them separate inputs is how a tile
+	 * ends up amber above a green bar.
+	 */
+	health?: 'ok' | 'attention' | 'blocked';
+	/**
+	 * Draws a meter under the value. Only where a real denominator exists — a
+	 * ratio invented to fill the bar is worse than no bar, and `sub` keeps the
+	 * absolute digits either way.
+	 */
+	progress?: { done: number; required: number };
+}
+
+/**
+ * What has arrived, and over which window — the Overview's answer to *what
+ * changed since I last had this in my head*.
+ *
+ * Computed from the submissions themselves at read time, never authored: a
+ * scenario cannot narrate "+2 this week" that its own rows do not back, and an
+ * authored delta ages into a falsehood the day after it is written. The window
+ * choice, the buckets, and the words all come from the shared engine in
+ * `@jooevents/contracts`.
+ */
+export interface SubmissionArrivals {
+	/** The pulse over the held population; discarded rows are not in it. */
+	pulse: ArrivalPulse;
+	/** How the held total is composed, by the tray each row sits in. */
+	held: { inbox: number; setAside: number; late: number };
+	/**
+	 * Kept and recoverable, and deliberately outside every figure above. A
+	 * discarded proposal is not part of what the event has to work through, so
+	 * counting it in the total would overstate the load — but it is not gone
+	 * either, so the breakdown still says how many and where they are.
+	 */
+	discarded: number;
 }
 
 export interface NavCounts {
@@ -225,6 +287,12 @@ export interface WorkspaceSummary {
 	/** Areas not yet unlocked (no event yet, or prerequisites missing). */
 	lockedAreas: AreaKey[];
 	navCounts: NavCounts;
+	/**
+	 * The computed arrival tile. Null where nothing has been collected yet —
+	 * a workspace with no event has no population to measure a diff against,
+	 * and zero-over-nothing is a claim rather than a measurement.
+	 */
+	arrivals: SubmissionArrivals | null;
 	stats: StatItem[];
 	attention: AttentionItem[];
 	pipeline: PipelineStage[];
@@ -605,7 +673,8 @@ export type ReviewerStatus = 'invited' | 'active';
 export interface Reviewer {
 	id: string;
 	name: string;
-	email: string;
+	/** Organizer-authorized contact address; absent when the projection does not disclose one. */
+	email?: string;
 	status: ReviewerStatus;
 	scope: ScopeRef[];
 	assigned: number;
@@ -632,6 +701,19 @@ export interface CoverageRow {
 }
 
 /**
+ * The coverage projection, or the stated reason a composition cannot count it.
+ *
+ * Coverage is a panel beside the roster, not the roster's spine. A composition
+ * that cannot count it truthfully says so here and still serves the roster;
+ * modelling the absence as a value is what keeps a missing coverage owner from
+ * failing the whole read and leaving the surface waiting on an answer that was
+ * never coming.
+ */
+export type ReviewerCoverage =
+	| { readonly kind: 'served'; readonly rows: CoverageRow[] }
+	| { readonly kind: 'unavailable'; readonly reason: string };
+
+/**
  * The reviewers surface's one read: the roster, the generalist count, and the
  * coverage projection. `generalists` counts active reviewers with no scope,
  * kept beside the coverage rows so "zero scoped reviewers" and "uncovered"
@@ -640,7 +722,7 @@ export interface CoverageRow {
 export interface ReviewerRoster {
 	reviewers: Reviewer[];
 	generalists: number;
-	coverage: CoverageRow[];
+	coverage: ReviewerCoverage;
 }
 
 /**
@@ -1434,6 +1516,8 @@ export interface EmbedTarget {
 	countNoun: string;
 	/** True when the surface accepts submissions, which binds the origin allowlist. */
 	acceptsSubmissions: boolean;
+	/** Canonical surface-head policy; every embed kind denies framing when this is empty. */
+	allowedOrigins: string[];
 }
 
 // ---------------------------------------------------------------------------

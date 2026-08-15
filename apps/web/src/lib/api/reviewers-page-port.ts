@@ -29,4 +29,7 @@ export interface ReviewersPagePort {
 	readonly schedule: {
 		state(): Promise<ScheduleState>;
 	};
+	readonly tasks: {
+		remind(reviewerIds: string[], subject: string): Promise<unknown>;
+	};
 }

@@ -71,6 +71,16 @@ const personHidden = '019c1df7-86b5-769b-bba4-5f7097bfd502';
 const sessionId = '019c1df7-86b5-769b-bba4-5f7097bfd601';
 const now = parseInstant('2026-08-14T09:00:00.000Z');
 const scope: ReleaseScopeDto = { workspaceId, eventId };
+const themeArtifactId = '019c1df7-86b5-769b-bba4-5f7097bfd710';
+const speakersArtifactId = '019c1df7-86b5-769b-bba4-5f7097bfd711';
+const templateRevisionId = '019c1df7-86b5-769b-bba4-5f7097bfd712';
+const templatePin = (artifactId: string) => ({
+  artifactId, revisionId: templateRevisionId, revisionNumber: 1, digestSha256: 'd'.repeat(64)
+});
+const themeRecipe = {
+  name: 'Warm default', canvas: '#faf8f5', surface: '#ffffff',
+  text: '#2a2522', action: '#b05a4f', radius: 6, controlHeight: 36
+};
 const profile = Object.freeze({ key: 'release-changeset-test', version: parseContractVersion(1) });
 const evidence: InvocationEvidence = Object.freeze({
   kind: 'operator',
@@ -256,7 +266,18 @@ function openFixture() {
       readEventSettings: () => ({ event: { id: eventId, version: 5 } }) as never
     },
     names: { readParticipantDisplayName: (_scope, personId) => names.get(personId) },
-    forms: { readCurrentPublishedFormVersionId: () => undefined }
+    forms: { readCurrentPublishedFormVersionId: () => undefined },
+    templates: {
+      readPinnedArtifact: (_scope, pin) => {
+        if (pin.artifactId === themeArtifactId) return {
+          kind: 'theme' as const, recipe: themeRecipe, markText: 'JE'
+        };
+        return pin.artifactId === speakersArtifactId ? {
+          kind: 'surface' as const, surfaceKind: 'speaker-roster' as const,
+          name: 'Speakers', purpose: 'Public lineup.', blocks: [], usedBy: []
+        } : undefined;
+      }
+    }
   };
 
   let currentTime: Instant = now;
@@ -575,10 +596,8 @@ describe('ordinary SQLite release changeset effect domain', () => {
         actorUserId: userId,
         occurredAt: now,
         releaseId: styleSetId,
-        recipe: {
-          name: 'Warm default', canvas: '#faf8f5', surface: '#ffffff',
-          text: '#2a2522', action: '#b05a4f', radius: 6, controlHeight: 36
-        },
+        sourceTemplateRevision: templatePin(themeArtifactId),
+        recipe: themeRecipe,
         expectedCurrentStyleSetNumber: null
       });
       await propose(fixture, styleSelector, 'style-propose');
@@ -592,6 +611,7 @@ describe('ordinary SQLite release changeset effect domain', () => {
         occurredAt: now,
         releaseId: surfaceId,
         kind: 'speakers',
+        sourceTemplateRevision: templatePin(speakersArtifactId),
         manifest: { schemaVersion: 1, heading: null, intro: null },
         styleSetReleaseId: styleSetId,
         formRef: null,

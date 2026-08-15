@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { onMount, untrack } from 'svelte';
 	import { AlertTriangle } from 'lucide-svelte';
-	import { statusIcon } from '$lib/ui';
+	import { DATE_CLASS, describeCalendarDeadline } from '@jooevents/contracts';
+	import { Badge, Meter, badgeFor, statusIcon, statusToneClass } from '$lib/ui';
+	import type { StatusTone } from '$lib/ui';
 	import {
 		navGroups,
 		navHref,
@@ -14,31 +16,71 @@
 		OverviewPageSummary,
 		OverviewPipelineStage
 	} from '$lib/api/overview-page-port';
-	import type { AreaKey } from '$lib/api/types';
+	import type { AreaKey, DeadlineItem } from '$lib/api/types';
 	import ActivityFeed from './ActivityFeed.svelte';
+	import ArrivalTile from './ArrivalTile.svelte';
 	import NewEventModal from './NewEventModal.svelte';
+	import StatTile from './StatTile.svelte';
 	import TrayLedger from './TrayLedger.svelte';
 
 	let { port }: { readonly port: OverviewPagePort } = $props();
+
+	/**
+	 * One clock reading for the whole screen, taken at entry.
+	 *
+	 * Every countdown, deadline state, and arrival window below is a claim about
+	 * a single instant, and re-deriving them per expression would let two
+	 * regions disagree by a tick — a lane saying "due tomorrow" beside a panel
+	 * that has already turned it over to "today".
+	 */
+	const now = Date.now();
 
 	let summary = $state<OverviewPageSummary | null>(null);
 	let loadError = $state('');
 	let newEventOpen = $state(false);
 
-	onMount(load);
+	onMount(() => {
+		void load();
+	});
 
-	async function load() {
-		loadError = '';
-		const result = await port.read();
-		if (result.kind === 'success') {
-			summary = result.data;
-			return;
-		}
-		loadError = result.kind === 'transport_error'
-			? result.retryable
-				? 'The overview could not be reached. Try again.'
-				: 'The overview response could not be loaded.'
-			: result.message;
+	// The retry below re-enters this, so it carries both ordering guarantees: a
+	// second press while a read is open joins it rather than stacking another,
+	// and a superseded answer is dropped instead of overwriting a fresher one.
+	let readTicket = 0;
+	let inFlight: Promise<void> | null = null;
+
+	function load(): Promise<void> {
+		return inFlight ?? read();
+	}
+
+	function read(): Promise<void> {
+		const ticket = (readTicket += 1);
+		const run = (async () => {
+			loadError = '';
+			try {
+				const result = await port.read();
+				if (ticket !== readTicket) return;
+				if (result.kind === 'success') {
+					summary = result.data;
+					return;
+				}
+				loadError = result.kind === 'transport_error'
+					? result.retryable
+						? 'The overview could not be reached. Try again.'
+						: 'The overview response could not be loaded.'
+					: result.message;
+			} catch {
+				// The port owes a structured outcome; a throw is a defect. It still
+				// must not read as "loading" forever, so it states itself as a
+				// retryable failure rather than leaving the placeholder standing.
+				if (ticket !== readTicket) return;
+				loadError = 'The overview could not be reached. Try again.';
+			} finally {
+				if (ticket === readTicket) inFlight = null;
+			}
+		})();
+		inFlight = run;
+		return run;
 	}
 
 	// What the shell already knows about this workspace shapes the placeholder.
@@ -56,7 +98,21 @@
 	const banner = $derived(summary?.attention.find((item) => item.severity === 'now'));
 	const listItems = $derived(summary ? summary.attention.filter((item) => item !== banner) : []);
 
+	/**
+	 * The event's zone is the authority on every date here — never the reader's.
+	 * An organizer travelling to their own conference must not see a deadline
+	 * move a day because their laptop did.
+	 */
+	const timezone = $derived(summary?.event?.timezone ?? '');
+
+	/**
+	 * Severity words, tones, and glyphs from the one status vocabulary, so an
+	 * attention row's loudness is the same fact it is everywhere else. Only
+	 * act-now takes the solid tier: a column of solid badges spends the page's
+	 * whole emphasis budget on the rows that are merely next.
+	 */
 	const severityLabel = { now: 'Act now', soon: 'Soon', fyi: 'FYI' } as const;
+	const severityMark = { now: badgeFor('actNow'), soon: badgeFor('soon'), fyi: badgeFor('fyi') };
 
 	const areaHref: Record<string, string> = {
 		overview: '/app',
@@ -122,24 +178,73 @@
 		return { href: navHref(item, navMeta(counts, item.key)), area: item.label };
 	}
 
-	/* Only deviation speaks: ahead/on lanes carry no pace word. */
-	function paceWord(stage: OverviewPipelineStage): 'behind' | 'overdue' | undefined {
-		return stage.paceTone === 'behind' || stage.paceTone === 'overdue'
-			? stage.paceTone
-			: undefined;
+	/* Only deviation speaks: ahead/on lanes carry no pace word. Sentence case,
+	   because it renders as a badge beside `Soon` and `Overdue` and a lowercase
+	   one read as a stray word rather than a state. */
+	function paceWord(stage: OverviewPipelineStage): 'Behind' | 'Overdue' | undefined {
+		if (stage.paceTone === 'overdue') return 'Overdue';
+		if (stage.paceTone === 'behind') return 'Behind';
+		return undefined;
 	}
 
-	/* The meter's fill answers the governing deadline, not the fraction: a high
-	   fraction due tomorrow still fills in warning. */
-	function meterTone(stage: OverviewPipelineStage): 'neutral' | 'warning' | 'danger' {
-		if (stage.paceTone === 'overdue') return 'danger';
-		if (stage.paceTone === 'behind') return 'warning';
-		return 'neutral';
-	}
+	/**
+	 * The meter answers the lane's **health**, not its fraction — a stage at 97%
+	 * whose deadline lands tomorrow is amber, and a stage at 20% with three
+	 * weeks left is green. The mark at the lane's start carries the same value
+	 * as a shape, so the two channels are one fact rather than two opinions.
+	 *
+	 * It used to fill with a wash of the action hue for "fine", which the design
+	 * record forbids reading as a status and which sits three degrees from the
+	 * danger family — so a healthy lane and a failing one were nearly the same
+	 * colour. Green now means healthy, as it does everywhere else a person has
+	 * ever read a bar.
+	 */
+	const laneTone: Record<OverviewPipelineStage['state'], StatusTone> = {
+		ok: 'positive',
+		attention: 'caution',
+		blocked: 'negative',
+		// A capability that is not wired is not a failing stage; it spends no
+		// status colour, and an unavailable lane never reaches a meter anyway.
+		unavailable: 'neutral'
+	};
 
 	function meterPercent(progress: { done: number; required: number }): number {
 		if (progress.required <= 0) return 0;
 		return Math.max(0, Math.min(100, Math.round((progress.done / progress.required) * 100)));
+	}
+
+	/**
+	 * A deadline in words, spelled by the one date vocabulary from the stored
+	 * date rather than by a string the scenario wrote. The lane end is a narrow
+	 * column, so it drops the weekday, the year, and the clock and keeps the two
+	 * halves that decide anything: which day, and how far away.
+	 */
+	function laneDeadline(stage: OverviewPipelineStage) {
+		if (!stage.deadline || timezone === '') return null;
+		return describeCalendarDeadline({
+			displayDate: stage.deadline.displayDate,
+			effectiveAt: stage.deadline.effectiveAt,
+			timezone,
+			now,
+			label: stage.deadline.qualifier,
+			settled: stage.deadline.settled === true,
+			weekday: false,
+			year: false,
+			showTime: false
+		});
+	}
+
+	/** The panel's rows keep the weekday and the clock: a deadline is a planning
+	    context, and "Friday" is what tells someone whether a working day is left. */
+	function panelDeadline(deadline: DeadlineItem) {
+		if (timezone === '') return null;
+		return describeCalendarDeadline({
+			displayDate: deadline.displayDate,
+			effectiveAt: deadline.effectiveAt,
+			timezone,
+			now,
+			settled: deadline.settled === true
+		});
 	}
 
 	function laneName(stage: OverviewPipelineStage, area: string): string {
@@ -147,16 +252,26 @@
 			? `${stage.progress.done} of ${stage.progress.required}`
 			: stage.headline;
 		const pace = paceWord(stage);
-		const parts = [figure, ...(pace ? [pace] : []), ...(stage.deadlineLabel ? [stage.deadlineLabel] : [])];
+		const deadline = laneDeadline(stage);
+		const parts = [
+			figure,
+			...(pace ? [pace.toLowerCase()] : []),
+			...(deadline ? [`${deadline.label} ${deadline.absolute}, ${deadline.relative}`] : [])
+		];
 		return `${stage.label}: ${parts.join(', ')} — open ${area}`;
 	}
+
+	/** The tray a discarded proposal is recoverable from, for the arrival panel. */
+	const discardedHref = $derived(
+		summary?.trays.find((tray) => tray.kind === 'discarded')?.href
+	);
 </script>
 
 {#if !summary && loadError}
 	<section class="welcome" aria-label="Overview unavailable">
 		<h2 class="welcome__title">The overview could not be loaded</h2>
 		<p class="welcome__copy">{loadError}</p>
-		<button type="button" class="ui-button ui-button--secondary" onclick={() => void load()}>Try again</button>
+		<button type="button" class="ui-button ui-button--secondary" onclick={() => void read()}>Try again</button>
 	</section>
 {:else if !summary}
 	<section class="loading" aria-label="Loading overview">
@@ -175,13 +290,21 @@
 				</section>
 			{/if}
 
+			<!-- The band's placeholder is the band: the same two components in the
+			     same order, each holding the rows its own resolved shape will have.
+			     A uniform grey rectangle per tile grew the region by 66px when the
+			     summary landed, which moved everything below it mid-read. -->
 			<section class="kpis" aria-hidden="true">
-				{#each Array(known.stats.length) as _, index (index)}
-					<article class="kpi">
-						<span class="kpi__label"><span class="ui-skeleton skeleton-line" style="inline-size: 5.5rem"></span></span>
-						<span class="kpi__value"><span class="ui-skeleton skeleton-line" style="inline-size: 3.5rem"></span></span>
-						<span class="kpi__sub"><span class="ui-skeleton skeleton-line" style="inline-size: 9rem"></span></span>
-					</article>
+				{#if known.arrivals}
+					<ArrivalTile />
+				{/if}
+				{#each known.stats as stat (stat.label)}
+					<StatTile
+						pending
+						label={stat.label}
+						value={stat.value}
+						sub={stat.sub}
+						progress={stat.progress} />
 				{/each}
 			</section>
 
@@ -229,13 +352,13 @@
 												<span class="lane__digits"><span class="ui-skeleton skeleton-line" style="inline-size: 3.5rem"></span></span>
 											</span>
 										{/if}
-										{#if stage.deadlineLabel || paceWord(stage)}
+										{#if stage.deadline || paceWord(stage)}
 											<span class="lane__end">
 												{#if paceWord(stage)}
 													<span class="ui-skeleton skeleton-chip" style="inline-size: 3.25rem"></span>
 												{/if}
-												{#if stage.deadlineLabel}
-													<span class="lane__deadline"><span class="ui-skeleton skeleton-line" style="inline-size: 6rem"></span></span>
+												{#if stage.deadline}
+													<span class="lane__deadline"><span class="ui-skeleton skeleton-line" style="inline-size: 7.5rem"></span></span>
 												{/if}
 											</span>
 										{/if}
@@ -254,7 +377,7 @@
 								<li class="dates__row">
 									<span class="dates__label"><span class="ui-skeleton skeleton-line" style="inline-size: 8rem"></span></span>
 									<span class="dates__relative"><span class="ui-skeleton skeleton-line" style="inline-size: 4rem"></span></span>
-									<span class="dates__absolute"><span class="ui-skeleton skeleton-line" style="inline-size: 9rem"></span></span>
+									<span class="dates__line"><span class="ui-skeleton skeleton-line" style="inline-size: 9rem"></span></span>
 								</li>
 							{/each}
 						</ul>
@@ -349,12 +472,20 @@
 	{/if}
 
 	<section class="kpis" aria-label="Key numbers">
+		<!-- The arrival tile leads the band: how much has come in, and what is new
+		     since this operator last had it in their head, is the question they
+		     opened the page holding. It is measured from the rows rather than
+		     authored, so it is the one tile that cannot go stale. -->
+		{#if summary.arrivals && timezone !== ''}
+			<ArrivalTile arrivals={summary.arrivals} {timezone} {discardedHref} />
+		{/if}
 		{#each summary.stats as stat (stat.label)}
-			<article class="kpi">
-				<span class="kpi__label">{stat.label}</span>
-				<span class="kpi__value">{stat.value}</span>
-				<span class="kpi__sub" class:kpi__sub--attention={stat.tone === 'attention'}>{stat.sub}</span>
-			</article>
+			<StatTile
+				label={stat.label}
+				value={stat.value}
+				sub={stat.sub}
+				health={stat.health}
+				progress={stat.progress} />
 		{/each}
 	</section>
 
@@ -375,13 +506,15 @@
 					<ul class="attention">
 						{#each listItems as item (item.id)}
 							{@const Destination = areaIcon[item.area]}
+							{@const mark = severityMark[item.severity]}
 							<li class="attention__row">
-								<span
-									class="ui-badge attention__sev"
-									class:ui-badge--danger={item.severity === 'now'}
-									class:ui-badge--warning={item.severity === 'soon'}
-									class:ui-badge--solid={item.severity !== 'fyi'}
-									class:ui-badge--neutral={item.severity === 'fyi'}>{severityLabel[item.severity]}</span>
+								<span class="attention__sev">
+									<Badge
+										tone={mark.tone}
+										icon={mark.icon}
+										emphasis={item.severity === 'now'}
+										value={severityLabel[item.severity]} />
+								</span>
 								<div class="attention__copy">
 									<p class="attention__title">{item.title}</p>
 									<p class="attention__detail">{item.detail}</p>
@@ -415,6 +548,7 @@
 							{:else}
 								{@const door = laneDoor(stage, summary.navCounts)}
 								{@const pace = paceWord(stage)}
+								{@const deadline = laneDeadline(stage)}
 								<!-- The whole lane is one door; nothing inside it is separately
 								     pressable, so the row can be a plain link. -->
 								<a
@@ -429,28 +563,45 @@
 								<span class="lane__headline">{stage.headline}</span>
 								<span class="lane__sub">{stage.sub}</span>
 								{#if stage.progress}
-									<!-- Digits carry the absolute; the fill's hue carries only
-									     pace, never raw completion. -->
-									<span class="lane__meter lane__meter--{meterTone(stage)}">
-										<span class="lane__track"
-											><span
-												class="lane__fill"
-												style:inline-size="{meterPercent(stage.progress)}%"></span
-											></span
-										>
+									<!-- Digits carry the absolute; the fill's hue carries the
+									     lane's health, never its raw completion. -->
+									<span class="lane__meter lane__meter--{statusToneClass[laneTone[stage.state]]}">
+										<span class="lane__track">
+											<Meter
+												value={meterPercent(stage.progress)}
+												label={`${stage.label} progress`}
+												valueText={`${stage.progress.done} of ${stage.progress.required}`}
+												tone={laneTone[stage.state]} />
+										</span>
 										<span class="lane__digits">{stage.progress.done} of {stage.progress.required}</span>
 									</span>
 								{/if}
-								{#if stage.deadlineLabel || pace}
+								{#if deadline || pace}
 									<span class="lane__end">
 										{#if pace}
-											<span
-												class="ui-badge ui-badge--solid lane__pace"
-												class:ui-badge--warning={pace === 'behind'}
-												class:ui-badge--danger={pace === 'overdue'}>{pace}</span>
+											<span class="lane__pace"
+												><Badge
+													tone={pace === 'Overdue' ? 'negative' : 'caution'}
+													value={pace} /></span>
 										{/if}
-										{#if stage.deadlineLabel}
-											<span class="lane__deadline">{stage.deadlineLabel}</span>
+										{#if deadline}
+											<!-- Which day, and how far away. Neither half works alone:
+											     a date with no distance makes someone do arithmetic, a
+											     countdown with no date leaves nothing to diarise. -->
+											<span
+												class="lane__deadline"
+												class:lane__deadline--quiet={deadline.ink === 'quiet'}>
+												<span class={DATE_CLASS.label}>{deadline.label}</span>
+												<span class={DATE_CLASS.column}>{deadline.absolute}</span>
+												{#if deadline.ink !== 'quiet'}
+													<!-- The countdown belongs to work that is still owed. A
+													     settled date is finished, and how long ago it finished
+													     is trivia this lane need not carry: "closed 27 Jul" is
+													     the fact, and "· 3 weeks ago" was pressure applied to
+													     something nobody can act on. -->
+													<span class="lane__distance">· {deadline.relative}</span>
+												{/if}
+											</span>
 										{/if}
 									</span>
 								{/if}
@@ -472,13 +623,24 @@
 				{:else}
 					<ul class="dates">
 						{#each summary.deadlines as deadline (deadline.label)}
-							<li class="dates__row">
-								<span class="dates__label">{deadline.label}</span>
-								<span
-									class="dates__relative"
-									class:dates__relative--warning={deadline.tone === 'warning'}
-									class:dates__relative--blocked={deadline.tone === 'blocked'}>{deadline.relative}</span>
-								<span class="dates__absolute">{deadline.absolute}</span>
+							{@const described = panelDeadline(deadline)}
+							<li class="dates__row" class:dates__row--quiet={described?.ink === 'quiet'}>
+								<span class="dates__label {DATE_CLASS.label}">{deadline.label}</span>
+								{#if described && described.state !== 'upcoming'}
+									<!-- The state is always a word. Colour ranks it; it never
+									     carries it alone. -->
+									<Badge tone={described.tone}>{described.stateWord}</Badge>
+								{/if}
+								<span class="dates__relative {DATE_CLASS.column}">{described?.relative ?? ''}</span>
+								<span class="dates__line">
+									<!-- The date's own span is the only thing that refuses to wrap;
+									     a qualifier inside it would inherit that and push the row
+									     past the viewport rather than breaking onto a second line. -->
+									<span class="{DATE_CLASS.column} {DATE_CLASS.value}"
+										>{described?.absolute ?? ''}</span>{#if deadline.note}<span
+											class="dates__note"> · {deadline.note}</span
+										>{/if}
+								</span>
 							</li>
 						{/each}
 					</ul>
@@ -492,7 +654,7 @@
 				{:else if summary.activity.length === 0}
 					<p class="panel__calm">No recorded activity yet.</p>
 				{:else}
-					<ActivityFeed items={summary.activity} />
+					<ActivityFeed items={summary.activity} {timezone} {now} />
 				{/if}
 			</section>
 
@@ -695,38 +857,9 @@
 	/* KPI row */
 	.kpis {
 		display: grid;
-		grid-template-columns: repeat(4, 1fr);
+		grid-template-columns: repeat(4, minmax(0, 1fr));
 		gap: var(--je-space-3);
-	}
-
-	.kpi {
-		display: grid;
-		gap: var(--je-space-1);
-		padding: var(--je-space-3) var(--je-space-4);
-		background: var(--je-color-surface);
-		border: 1px solid var(--je-color-border);
-		border-radius: var(--je-radius-surface);
-	}
-
-	.kpi__label {
-		font-size: var(--je-font-size-xs);
-		color: var(--je-color-text-muted);
-	}
-
-	.kpi__value {
-		font-size: var(--je-font-size-xl);
-		font-weight: 600;
-		font-variant-numeric: tabular-nums;
-	}
-
-	.kpi__sub {
-		font-size: var(--je-font-size-xs);
-		color: var(--je-color-text-muted);
-	}
-
-	.kpi__sub--attention {
-		color: var(--je-color-warning);
-		font-weight: 600;
+		align-items: stretch;
 	}
 
 	/* Columns */
@@ -801,6 +934,7 @@
 
 	.attention__sev {
 		grid-area: sev;
+		display: flex;
 	}
 
 	.attention__copy {
@@ -836,10 +970,19 @@
 
 	/* One lane, one door: the row itself is the link, bled to the panel edge so
 	   the hover plate reads as the whole row without moving its text. */
+	/* Wrapping is the default rather than a breakpoint's job. A lane carrying a
+	   mark, a label, a headline, a sentence, a meter with digits, a pace badge
+	   and a deadline needs about 700px; at compact desktop the panel gives it
+	   473, and without wrapping flexbox paid for that by shrinking the sentence
+	   to **zero width** — the prose vanished silently and the deadline ran out
+	   past the panel edge. `flex-basis` on the sentence is what turns that into
+	   a second line instead, and it holds at every width without a query. */
 	.lane {
 		display: flex;
+		flex-wrap: wrap;
 		align-items: baseline;
 		gap: var(--je-space-3);
+		row-gap: var(--je-space-1);
 		padding: var(--je-space-2);
 		margin-inline: calc(-1 * var(--je-space-2));
 		border-radius: var(--je-radius-control);
@@ -900,8 +1043,11 @@
 		flex-shrink: 0;
 	}
 
+	/* A real minimum, not `flex: 1` alone: a basis of zero lets the line stay
+	   one line by erasing this sentence, which is the one thing on the row that
+	   cannot be recovered from anywhere else. */
 	.lane__sub {
-		flex: 1;
+		flex: 1 1 10rem;
 		font-size: var(--je-font-size-sm);
 		color: var(--je-color-text-muted);
 		min-width: 0;
@@ -911,7 +1057,7 @@
 	}
 
 	/* The meter is a second channel beside the words, never their replacement:
-	   digits carry the absolute, the fill's hue carries pace alone. */
+	   digits carry the absolute, the fill's hue carries health alone. */
 	.lane__meter {
 		display: flex;
 		align-items: center;
@@ -922,30 +1068,7 @@
 
 	.lane__track {
 		inline-size: 5.5rem;
-		block-size: 0.3125rem;
-		border-radius: var(--je-radius-round);
-		background: var(--je-color-border-subtle);
-		overflow: hidden;
-	}
-
-	.lane__fill {
 		display: block;
-		block-size: 100%;
-		border-radius: inherit;
-	}
-
-	/* Ahead or on pace stays quiet: a muted wash of the action hue, no status
-	   colour spent on a lane that needs nothing. */
-	.lane__meter--neutral .lane__fill {
-		background: color-mix(in srgb, var(--je-color-action) 45%, transparent);
-	}
-
-	.lane__meter--warning .lane__fill {
-		background: var(--je-color-warning-fill);
-	}
-
-	.lane__meter--danger .lane__fill {
-		background: var(--je-color-danger-fill);
 	}
 
 	.lane__digits {
@@ -963,10 +1086,26 @@
 		align-self: center;
 	}
 
+	.lane__pace {
+		display: flex;
+	}
+
 	.lane__deadline {
+		display: flex;
+		align-items: baseline;
+		gap: 0.25em;
 		font-size: var(--je-font-size-xs);
 		color: var(--je-color-text-muted);
 		white-space: nowrap;
+	}
+
+	/* A settled date steps back so the live rows around it stand out. */
+	.lane__deadline--quiet {
+		color: var(--je-color-text-subtle);
+	}
+
+	.lane__distance {
+		color: var(--je-color-text-subtle);
 	}
 
 	.dates {
@@ -975,9 +1114,12 @@
 		padding: 0;
 	}
 
+	/* Qualifier, state, distance on one line; the date itself beneath, spanning.
+	   The state column collapses to nothing on a row that has no badge. */
 	.dates__row {
 		display: grid;
-		grid-template-columns: 1fr auto;
+		grid-template-columns: 1fr auto auto;
+		align-items: center;
 		column-gap: var(--je-space-2);
 		padding-block: var(--je-space-2);
 	}
@@ -986,9 +1128,17 @@
 		border-block-start: 1px solid var(--je-color-border);
 	}
 
+	/* Settled and passed dates recede; live ones hold the row's ink. That
+	   contrast is what lets a reader see what still needs action. */
+	.dates__row--quiet .dates__line,
+	.dates__row--quiet .dates__label {
+		color: var(--je-color-text-subtle);
+	}
+
+	/* The qualifier, at lower ink. Colour and weight come from the shared date
+	   label; only the size is this panel's. */
 	.dates__label {
-		font-size: var(--je-font-size-md);
-		font-weight: 600;
+		font-size: var(--je-font-size-sm);
 	}
 
 	.dates__relative {
@@ -997,27 +1147,24 @@
 		text-align: end;
 	}
 
-	.dates__relative--warning {
-		color: var(--je-color-warning);
-		font-weight: 600;
-	}
-
-	.dates__relative--blocked {
-		color: var(--je-color-danger);
-		font-weight: 600;
-	}
-
-	.dates__absolute {
+	/* The date is the value, so it holds the row's ink and reads at body size.
+	   It used to be the smallest, faintest thing in a panel about dates, with
+	   the word "Proposals close" bolded above it. */
+	.dates__line {
 		grid-column: 1 / -1;
-		font-size: var(--je-font-size-xs);
+		font-size: var(--je-font-size-sm);
+	}
+
+	.dates__note {
 		color: var(--je-color-text-muted);
+		font-weight: 400;
 	}
 
 	/* Narrow widths restructure rather than squeeze: badge and copy share the
 	   first row, the action gets its own row aligned with the copy. */
 	@media (max-width: 920px) {
 		.kpis {
-			grid-template-columns: repeat(2, 1fr);
+			grid-template-columns: repeat(2, minmax(0, 1fr));
 		}
 
 		.columns {
@@ -1060,9 +1207,7 @@
 		   meter at full width, then the deadline line. Absent channels produce
 		   no empty lines. */
 		.lane {
-			flex-wrap: wrap;
 			align-items: center;
-			row-gap: var(--je-space-1);
 		}
 
 		.lane__label {
@@ -1086,6 +1231,11 @@
 
 		.lane__end {
 			flex-basis: 100%;
+		}
+
+		.lane__deadline {
+			white-space: normal;
+			flex-wrap: wrap;
 		}
 	}
 </style>

@@ -86,7 +86,9 @@ function fixture() {
       newDeliveryId: nextUuid,
       newEvidenceId: nextUuid
     },
-    sender: { fromAddress: 'auth@installation.example' },
+    senderResolver: {
+      resolve: () => ({ fromAddress: 'auth@installation.example', source: 'installation' })
+    },
     portalOrigin: PORTAL_ORIGIN,
     challenges: {
       linkChallengeDelivery(link) {
@@ -147,6 +149,10 @@ describe('participant sign-in message rendering', () => {
     expect((message.htmlBody.match(new RegExp(`<a href="${PORTAL_ORIGIN}/p/${LINK_TOKEN}"`, 'g'))
       ?? []).length).toBe(2);
     expect(message.htmlBody).toContain('Sign in to JooEvents');
+    expect(message.htmlBody).toContain(
+      '<img src="https://jooevents.com/assets/jooevents-wordmark.png" width="136" height="24" alt="JooEvents"'
+    );
+    expect(message.htmlBody).toContain('background-color:#b05a4f;border-radius:6px');
   });
 
   test('a token that is not path-safe is percent-encoded into the short link', () => {

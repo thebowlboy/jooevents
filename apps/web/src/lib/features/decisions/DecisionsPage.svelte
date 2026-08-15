@@ -6,15 +6,18 @@
 	import { CircleDashed as NoPlan } from 'lucide-svelte';
 	import {
 		Alert,
+		Badge,
 		Button,
 		Field,
 		Modal,
-		motionMs,
 		PENDING_MIN_VISIBLE_MS,
 		Popover,
+		TrackChip,
+		badgeFor,
+		motionMs,
+		recordTable,
 		revealTarget,
 		shouldIgnoreRowPress,
-		statusIcon,
 		trackPending
 	} from '$lib/ui';
 	import type { IconComponent } from '$lib/ui';
@@ -25,12 +28,22 @@
 	} from '$lib/features/workspace/components/ReviewSurface.svelte';
 	import ScopeChip from '$lib/features/workspace/components/ScopeChip.svelte';
 	import StandingMark from '$lib/features/workspace/components/StandingMark.svelte';
-	import SubmissionDetail from '$lib/features/workspace/components/SubmissionDetail.svelte';
+	import SubmissionRecordDetail from '$lib/features/submissions/SubmissionRecordDetail.svelte';
+	import LineupPanel, { sliceKeys } from '$lib/features/review/LineupPanel.svelte';
+	import type { SliceKey } from '$lib/features/review/LineupPanel.svelte';
+	import {
+		awaitsNotice,
+		decisionStatusFor,
+		noticeStatus,
+		trackLabel,
+		trackOrder
+	} from '$lib/features/submissions/submission-view';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
-	import { clearParams, param } from '$lib/features/workspace/url-state.svelte';
+	import { applyParams, clearParams, param, paramIn } from '$lib/features/workspace/url-state.svelte';
 	import { describePortFailure, type PortFailureView } from '$lib/api/port-failure';
 	import type { DecisionsPagePort } from '$lib/api/decisions-page-port';
+	import type { ReviewPagePort } from '$lib/api/review-page-port';
 	import type {
 		AccoladeDef,
 		AccoladeKey,
@@ -48,9 +61,13 @@
 
 	interface Props {
 		port: DecisionsPagePort;
+		/** The already-composed review projection in the sample workspace. */
+		lineupPort?: ReviewPagePort;
+		/** Live review authority resolves only when the comparison is requested. */
+		resolveLineupPort?: () => Promise<ReviewPagePort>;
 	}
 
-	let { port }: Props = $props();
+	let { port, lineupPort: providedLineupPort, resolveLineupPort }: Props = $props();
 	const api = $derived(port);
 
 	/** The three decisions an organizer applies here. `withdrawn` is submitter-owned. */
@@ -62,6 +79,60 @@
 	let expandedId = $state<string | null>(null);
 	let sortDir = $state<'asc' | 'desc'>('desc');
 	let announcement = $state('');
+
+	/*
+	 * A line-up is a closer look at the decision pass, not a new workflow. Keep
+	 * the table mounted beneath a modal and put only its scope in the address:
+	 * Back, Escape, the close button and the backdrop all return to the exact
+	 * row and scroll position the organizer was using.
+	 */
+	const lineupId = $derived(param('lineup'));
+	const lineupSlice = $derived(paramIn('slice', sliceKeys, 'track'));
+	const lineupRow = $derived(rows?.find((row) => row.id === lineupId));
+	const lineupTitle = $derived(lineupRow ? `Line-up: “${lineupRow.title}”` : 'Line-up');
+	let lineupOpen = $state(false);
+	let resolvedLineupPort = $state.raw<ReviewPagePort | null>(null);
+	let lineupPortFailure = $state<string | null>(null);
+	let lineupPortRequest = 0;
+
+	$effect(() => {
+		lineupOpen = lineupId !== null;
+	});
+
+	$effect(() => {
+		if (providedLineupPort) resolvedLineupPort = providedLineupPort;
+	});
+
+	$effect(() => {
+		if (lineupOpen || lineupId === null) return;
+		void applyParams({ lineup: null, slice: null });
+	});
+
+	$effect(() => {
+		const id = lineupId;
+		if (!id || resolvedLineupPort || !resolveLineupPort) return;
+		const token = (lineupPortRequest += 1);
+		lineupPortFailure = null;
+		void resolveLineupPort()
+			.then((next) => {
+				if (token === lineupPortRequest) resolvedLineupPort = next;
+			})
+			.catch((error: unknown) => {
+				if (token !== lineupPortRequest) return;
+				lineupPortFailure = describePortFailure(
+					error,
+					'The comparison could not be loaded.'
+				).message;
+			});
+	});
+
+	function openLineup(submissionId: string) {
+		void applyParams({ lineup: submissionId, slice: null }, { history: 'push' });
+	}
+
+	function switchLineupSlice(next: SliceKey) {
+		void applyParams({ slice: next === 'track' ? null : next }, { history: 'push' });
+	}
 
 	// The committed reviews behind a row's average, read once per submission the
 	// first time its row opens. A decision re-read does not change any review,
@@ -92,6 +163,9 @@
 
 	let confirmOpen = $state(false);
 	let pendingVerdict = $state<Verdict>('accepted');
+	let pendingDecisionIds = $state<string[]>([]);
+	let pendingFromBulk = $state(false);
+	let acceptanceTrackIds = $state<Record<string, string>>({});
 	let notifyOpen = $state(false);
 	let subject = $state('Your submission decision');
 	/**
@@ -137,17 +211,6 @@
 		accepted: { verb: 'Accept', past: 'accepted' },
 		waitlisted: { verb: 'Waitlist', past: 'waitlisted' },
 		declined: { verb: 'Decline', past: 'declined' }
-	};
-
-	const decisionBadge: Record<
-		DecisionState,
-		{ label: string; tone: string; icon: IconComponent } | null
-	> = {
-		undecided: null,
-		accepted: { label: 'Accepted', tone: 'success', icon: statusIcon.accepted },
-		waitlisted: { label: 'Waitlisted', tone: 'lavender', icon: statusIcon.waitlisted },
-		declined: { label: 'Declined', tone: 'neutral', icon: statusIcon.declined },
-		withdrawn: { label: 'Withdrawn', tone: 'neutral', icon: statusIcon.withdrawn }
 	};
 
 	/** Only organizer decisions can be pending a notification. */
@@ -335,7 +398,7 @@
 	// in the address, so the table opens on exactly those decisions. The
 	// chip says so on the surface and clears it in one press.
 	const scoped = $derived(param('scope') === 'unnotified');
-	const scopeLabel = 'Decided · not yet notified';
+	const scopeLabel = 'Results not sent';
 
 
 	// The schedule pool's "collecting — N proposals" count lands here the same
@@ -587,14 +650,9 @@
 	/** Labels count the reviewed recipients once the projection has arrived. */
 	const emailCount = $derived(notifyReview ? includedCount(notifyReview) : recipientCount);
 
-	function trackName(id: string) {
-		return tracks.find((track) => track.id === id)?.name ?? id;
-	}
-
-	function trackAccent(id: string): string {
-		const accent = tracks.find((track) => track.id === id)?.accent;
-		return accent === 'lavender' ? 'lavender' : accent === 'sea' ? 'sea' : 'neutral';
-	}
+	/* Position in the event's own track list walks the accent palette from the
+	   top, so a track wears the same colour here as on the submissions queue. */
+	const trackIds = $derived(trackOrder(tracks));
 
 	function plural(count: number, word: string) {
 		return `${count} ${word}${count === 1 ? '' : 's'}`;
@@ -664,7 +722,12 @@
 	 * copy renders as the page notice — the typed `target_unavailable`
 	 * re-offer included — instead of vanishing into a floated promise.
 	 */
-	async function decide(ids: string[], decision: DecisionState, label: string): Promise<boolean> {
+	async function decide(
+		ids: string[],
+		decision: DecisionState,
+		label: string,
+		trackIdsBySubmission: Readonly<Record<string, string>> = {}
+	): Promise<boolean> {
 		// A row already committing is dropped rather than committed twice.
 		const targets = ids.filter((id) => !pendingIds.includes(id));
 		if (targets.length === 0) return true;
@@ -676,7 +739,7 @@
 		dimmedIds = [...new Set([...dimmedIds, ...targets])];
 		try {
 			try {
-				await api.decisions.decide(targets, decision);
+				await api.decisions.decide(targets, decision, trackIdsBySubmission);
 			} catch (error) {
 				// A failed write can still have committed (a timeout, a dropped
 				// response), so re-sync from the server while the failure surfaces.
@@ -727,26 +790,68 @@
 
 	function decideRow(row: Submission, verdict: Verdict) {
 		if (row.decision === verdict) return;
+		if (
+			verdict === 'accepted' &&
+			!row.targetSessionId &&
+			row.trackId === '' &&
+			tracks.filter((track) => track.status === 'active').length > 1
+		) {
+			pendingVerdict = verdict;
+			pendingDecisionIds = [row.id];
+			pendingFromBulk = false;
+			prepareAcceptanceTracks([row.id]);
+			confirmOpen = true;
+			return;
+		}
 		const past = verdictCopy[verdict].past;
 		void decide([row.id], verdict, `${past[0].toUpperCase()}${past.slice(1)} “${row.title}”`);
 	}
 
 	function askBulk(verdict: Verdict) {
 		pendingVerdict = verdict;
+		pendingDecisionIds = [...selected];
+		pendingFromBulk = true;
+		prepareAcceptanceTracks(selected);
 		confirmOpen = true;
 	}
 
+	function prepareAcceptanceTracks(ids: readonly string[]) {
+		const active = tracks.filter((track) => track.status === 'active');
+		const next: Record<string, string> = {};
+		for (const row of (rows ?? []).filter((candidate) => ids.includes(candidate.id))) {
+			if (row.targetSessionId || row.trackId !== '' || active.length === 0) continue;
+			next[row.id] = active.length === 1 ? active[0]!.id : '';
+		}
+		acceptanceTrackIds = next;
+	}
+
+	const acceptanceRowsNeedingTrack = $derived(
+		pendingVerdict === 'accepted'
+			? (rows ?? []).filter(
+					(row) => pendingDecisionIds.includes(row.id) && !row.targetSessionId && row.trackId === ''
+				)
+			: []
+	);
+	const acceptanceTracksReady = $derived(
+		tracks.filter((track) => track.status === 'active').length === 0 ||
+			acceptanceRowsNeedingTrack.every((row) => acceptanceTrackIds[row.id])
+	);
+
 	async function confirmBulk() {
-		const ids = selected;
+		const ids = pendingDecisionIds;
+		if (!acceptanceTracksReady) return;
 		confirmOpen = false;
 		const committed = await decide(
 			ids,
 			pendingVerdict,
-			`Set ${plural(ids.length, 'submission')} to ${verdictCopy[pendingVerdict].past}`
+			`Set ${plural(ids.length, 'submission')} to ${verdictCopy[pendingVerdict].past}`,
+			acceptanceTrackIds
 		);
 		// A refused bulk verdict keeps the picks: the notice names why, and the
 		// selection is what a corrected retry acts on.
-		if (committed) selected = [];
+		if (committed && pendingFromBulk) selected = [];
+		pendingDecisionIds = [];
+		acceptanceTrackIds = {};
 	}
 
 	// The dialog opens on the reviewable batch and then fills in: the projection
@@ -852,14 +957,16 @@
 		<span class="banner__plate" aria-hidden="true"><MailWarning size={16} /></span>
 		<div class="banner__copy">
 			<p class="banner__title" id="{uid}-banner">
-				{plural(unnotified.length, 'decision')} not yet sent to the submitter
+				{recipientCount === 1
+					? '1 speaker has not been told their result'
+					: `${recipientCount} speakers have not been told their result`}
 			</p>
 			<p class="banner__detail">
-				Deciding never emails anyone. Composing the notification is the separate step that does.
+				A verdict does not contact anyone. Review and send each result when you are ready.
 			</p>
 		</div>
 		<button type="button" class="ui-button ui-button--primary ui-button--sm banner__action" onclick={openNotify}>
-			Compose notifications
+			Send their results
 		</button>
 	</section>
 {/if}
@@ -904,9 +1011,9 @@
 				{:else if sorted.length - decidedCount > 0}
 					<!-- Pace, not inventory: the number that shrinks as the pass moves. -->
 					{sorted.length - decidedCount} of {plural(sorted.length, 'candidate')} still to decide —
-					set-aside and discarded submissions are not decided here.
+					set-aside and spam submissions are not decided here.
 				{:else}
-					All {plural(sorted.length, 'candidate')} decided — set-aside and discarded submissions
+					All {plural(sorted.length, 'candidate')} decided — set-aside and spam submissions
 					are not decided here.
 				{/if}
 			</p>
@@ -932,7 +1039,12 @@
 	{/if}
 
 	<div class="ui-table-wrap" class:is-refreshing={reload.visible} aria-busy={refreshing || undefined}>
-		<table class="ui-table ui-table--multiline">
+		<!-- The attachment restores what a display change costs: table roles once
+		     the row re-composes into a record, and the column names mirrored onto
+		     the cells that stack. Below the columns' width the pass becomes
+		     rail · candidate · decision · affordance, with track, average and the
+		     verdict buttons stacked and labelled beneath — nothing off-screen. -->
+		<table class="ui-table ui-table--multiline" {@attach recordTable()}>
 			<thead>
 				<tr>
 					<th class="col-check ui-pick-cell">
@@ -990,8 +1102,8 @@
 						<!-- Mirrors the resolved multiline row cell-for-cell, so the row
 						     height is set by the same table metrics as real rows. -->
 						<tr aria-hidden="true">
-							<td class="col-check"></td>
-							<td>
+							<td class="col-check ui-pick-cell"></td>
+							<td class="ui-cell--lead">
 								<span class="ui-table__primary title-line"><span class="ui-skeleton skeleton-line" style="inline-size: 16rem"></span></span>
 								<span class="ui-table__secondary"><span class="ui-skeleton skeleton-line" style="inline-size: 9rem"></span></span>
 							</td>
@@ -1003,9 +1115,9 @@
 									</span>
 								</span>
 							</td>
-							<td><span class="ui-skeleton skeleton-chip"></span></td>
+							<td class="ui-cell--state"><span class="ui-skeleton skeleton-chip"></span></td>
 							<td><span class="ui-skeleton skeleton-action skeleton-action--rowacts"></span></td>
-							<td class="col-expand"><span class="ui-skeleton skeleton-action skeleton-action--icon"></span></td>
+							<td class="col-expand ui-cell--trail"><span class="ui-skeleton skeleton-action skeleton-action--icon"></span></td>
 						</tr>
 					{/each}
 				</tbody>
@@ -1016,9 +1128,9 @@
 						<td colspan="7">
 							<div class="empty">
 								{#if scoped}
-									<p class="empty__title">Every decision here has been sent.</p>
+									<p class="empty__title">Every speaker here has been notified.</p>
 									<p class="empty__hint">
-										Nothing in the candidate list is waiting on a notification. The full list of
+										No decided submission here still needs a notification. The full list of
 										{plural(sorted.length, 'candidate')} is one press away.
 									</p>
 									<button type="button" class="ui-button ui-button--secondary ui-button--sm" onclick={clearScope}>
@@ -1037,7 +1149,7 @@
 										Show all candidates
 									</button>
 								{:else}
-									<p class="empty__title">Nothing is waiting on a decision.</p>
+									<p class="empty__title">No submissions need a decision.</p>
 									<p class="empty__hint">
 										Candidates appear here once submissions reach the inbox or late tray. Ask an agent to
 										screen the incoming submissions, or open Submissions and work through them yourself.
@@ -1068,7 +1180,7 @@
 													type="button"
 													class="ui-button ui-button--primary ui-button--sm"
 													onclick={openNotify}>
-													Send {plural(unnotified.length, 'decision notice')}
+												Send their results
 												</button>
 											{/if}
 											{#if (unplacedCount ?? 0) > 0}
@@ -1113,7 +1225,8 @@
 						</tr>
 					{:else}
 						{@const row = item.row}
-						{@const badge = decisionBadge[row.decision]}
+						{@const status = decisionStatusFor(row)}
+						{@const rowTrack = trackLabel(tracks, row.trackId)}
 						{@const rowPending = pendingIds.includes(row.id)}
 						{@const pinned = pinnedFor(row.id)}
 						{@const standing = standings[row.id]}
@@ -1142,7 +1255,7 @@
 										onchange={() => toggleSelected(row.id)} />
 								</label>
 							</td>
-							<td>
+							<td class="ui-cell--lead">
 								<span class="ui-table__primary title-line">
 									<span class="title-line__text">{row.title}</span>
 									{#if row.tray === 'late'}
@@ -1150,7 +1263,7 @@
 										     submissions page the tray tab says which, here the row
 										     must say it itself. Provenance, not urgency: a quiet
 										     neutral word, never an amber alarm. -->
-										<span class="ui-badge ui-badge--neutral">Late</span>
+										<Badge tone="neutral" value="Late" />
 									{/if}
 									{#if pinned.length > 0}
 										<!-- One disclosure for the whole cluster: the marks are read as a
@@ -1184,10 +1297,24 @@
 										profiles[speaker.email]}{#if index > 0}{', '}{/if}{#if profile}<ProfilePeek
 											{profile} />{:else}{speaker.name}{/if}{/each}</span>
 							</td>
-							<td>
-								<span class="ui-badge ui-badge--{trackAccent(row.trackId)}">{trackName(row.trackId)}</span>
+							<!-- A category, not a state: a squared chip in its own hue, so an
+							     amber track can never be read as an amber warning. A candidate
+							     with no track draws nothing at all and says so in words — the
+							     empty capsule this column used to hold nine of. Until the
+							     vocabulary read lands the cell has nothing it can say, so it
+							     withdraws from the record rather than labelling empty space. -->
+							<td class:ui-cell--detail={rowTrack.kind === 'unresolved'}>
+								{#if rowTrack.kind === 'named'}
+									<TrackChip name={rowTrack.name} id={row.trackId} order={trackIds} />
+								{:else if rowTrack.kind === 'none'}
+									<span class="no-track">No track</span>
+								{/if}
 							</td>
-							<td class="ui-table__number">
+							<!-- The mirrored column name would be the sort button's whole
+							     accessible sentence, so the record line names itself. The average
+							     is the comparison this surface exists for and keeps its line at
+							     every width. -->
+							<td class="ui-table__number" data-label="Review avg">
 								{#if row.reviewCount > 0}
 									<!-- The average alone. A bare “4.8 / 3” beside it reads as a score
 									     out of three, which is the one thing it never means; the panel's
@@ -1226,29 +1353,19 @@
 									<span class="absent">No reviews yet</span>
 								{/if}
 							</td>
-							<td>
+							<!-- The one state on the record's primary line. Undecided is a
+							     state, not an absence, so it wears the same badge shape as every
+							     other: a dash left the reader to guess between "nobody has
+							     decided", "still being reviewed", and "something is pending".
+							     Tone and glyph come from the shared status vocabulary — the same
+							     lookup the submissions queue reads, which is what stopped
+							     "Un-notified" from being soft here and solid there. Emphasis is
+							     spent on the region's one primary action, never on a column. -->
+							<td class="ui-cell--state">
 								<span class="decision">
-									{#if badge}
-										{@const Outcome = badge.icon}
-									<span class="ui-badge ui-badge--{badge.tone}"
-										><Outcome class="ui-badge__icon" aria-hidden="true" />{badge.label}</span
-									>
-										{#if isDecided(row) && !row.notified}
-											{@const Unnotified = statusIcon.unnotified}
-										<span class="ui-badge ui-badge--warning ui-badge--solid"
-											><Unnotified class="ui-badge__icon" aria-hidden="true" />Un-notified</span
-										>
-										{/if}
-									{:else}
-										<!-- Undecided is a state, not an absence, and the design system
-										     badges every lifecycle state. A dash left the reader to guess
-										     between "nobody has decided", "still being reviewed", and
-										     "something is pending" — three different answers, one glyph.
-										     The word says which; the column beside it says why there is
-										     no evidence yet, so neither repeats the other. -->
-										{@const NotDecided = statusIcon.notStarted}
-										<span class="ui-badge ui-badge--neutral"
-											><NotDecided class="ui-badge__icon" aria-hidden="true" />Not decided</span>
+									<Badge {...badgeFor(status.key)} value={status.label} />
+									{#if awaitsNotice(row)}
+										<Badge {...badgeFor(noticeStatus.key)} value={noticeStatus.label} />
 									{/if}
 								</span>
 							</td>
@@ -1264,7 +1381,7 @@
 									{/each}
 								</span>
 							</td>
-							<td class="col-expand">
+							<td class="col-expand ui-cell--trail">
 								<button
 									type="button"
 									class="ui-button ui-button--ghost ui-button--icon ui-button--sm expand"
@@ -1277,15 +1394,16 @@
 							</td>
 						</tr>
 						{#if expandedId === row.id}
-							<!-- The way out to the deeper comparison surface. Only a committed
-							     review of my own can anchor the line-up, so the door renders
+							<!-- The closer look at the review comparison. Only a committed
+							     review of my own can anchor the line-up, so the action renders
 							     only when it opens onto something. -->
 							{#snippet lineupAction()}
-								<a
+								<button
+									type="button"
 									class="ui-button ui-button--secondary ui-button--sm"
-									href={`/app/review/lineup?anchor=${row.id}&slice=track`}>
+									onclick={() => openLineup(row.id)}>
 									Line up with my other reviews
-								</a>
+								</button>
 							{/snippet}
 							<!-- A refused per-review read: the reviews block withdraws (this
 							     surface truly does not offer it) and the port's copy states
@@ -1293,10 +1411,16 @@
 							{#snippet reviewsRefusalNote()}
 								{reviewRefusals[row.id]}
 							{/snippet}
-							<tr class="detail-row">
+							<tr class="detail-row ui-table__detail">
 								<td colspan="7">
-									<SubmissionDetail
+									<!-- One component, two presentations: inline beside the pass on
+									     desktop, a full-screen sheet on a phone. Dismissing the sheet
+									     must also close the row, or the row stays open behind a sheet
+									     nobody can see. -->
+									<SubmissionRecordDetail
 										submission={row}
+										track={rowTrack}
+										trackOrder={trackIds}
 										reviews={row.reviewCount === 0 || row.id in reviewRefusals
 											? undefined
 											: (reviewsBy[row.id] ?? 'loading')}
@@ -1304,7 +1428,8 @@
 										actions={myCommitted.includes(row.id) ? lineupAction : undefined}
 										footnote={row.reviewCount > 0 && row.id in reviewRefusals
 											? reviewsRefusalNote
-											: undefined} />
+											: undefined}
+										onclose={() => toggleRow(row.id)} />
 								</td>
 							</tr>
 						{/if}
@@ -1315,6 +1440,25 @@
 		</table>
 	</div>
 </section>
+
+<Modal bind:open={lineupOpen} title={lineupTitle} size="lg" dismissible>
+	{#if lineupId && resolvedLineupPort}
+		<LineupPanel
+			port={resolvedLineupPort}
+			anchorId={lineupId}
+			slice={lineupSlice}
+			surface="modal"
+			onSliceChange={switchLineupSlice} />
+	{:else if lineupPortFailure}
+		<Alert tone="danger" title="The line-up could not be loaded" message={lineupPortFailure} />
+	{:else}
+		<div class="lineup-resolving" role="status" aria-label="Loading line-up">
+			<span class="ui-skeleton lineup-resolving__heading" aria-hidden="true"></span>
+			<span class="ui-skeleton lineup-resolving__body" aria-hidden="true"></span>
+			<span class="ui-sr-only">Loading line-up…</span>
+		</div>
+	{/if}
+</Modal>
 
 {#if selected.length > 0}
 	<div class="bulkbar" role="toolbar" aria-label="Bulk decisions">
@@ -1334,16 +1478,39 @@
 
 <Modal
 	bind:open={confirmOpen}
-	title={`${verdictCopy[pendingVerdict].verb} ${plural(selected.length, 'submission')}?`}>
+	title={`${verdictCopy[pendingVerdict].verb} ${plural(pendingDecisionIds.length, 'submission')}?`}>
 	<p class="modal__lead">
-		Sets {plural(selected.length, 'submission')} to {verdictCopy[pendingVerdict].past}. Nothing is
+		Sets {plural(pendingDecisionIds.length, 'submission')} to {verdictCopy[pendingVerdict].past}. Nothing is
 		emailed until you compose notifications.
 	</p>
 	<p class="modal__note">Any of them can be decided again before that send.</p>
+	{#if pendingVerdict === 'accepted' && acceptanceRowsNeedingTrack.length > 0 && tracks.filter((track) => track.status === 'active').length > 1}
+		<div class="modal__fields">
+			<p class="modal__note">
+				This event uses tracks. Classify each new program session before accepting it.
+			</p>
+			{#each acceptanceRowsNeedingTrack as row (row.id)}
+				<Field id={`accept-track-${row.id}`} label={row.title}>
+					{#snippet children({ id, describedBy })}
+						<select
+							class="ui-control"
+							{id}
+							aria-describedby={describedBy}
+							bind:value={acceptanceTrackIds[row.id]}>
+							<option value="" disabled>Choose a track</option>
+							{#each tracks.filter((track) => track.status === 'active') as track (track.id)}
+								<option value={track.id}>{track.name}</option>
+							{/each}
+						</select>
+					{/snippet}
+				</Field>
+			{/each}
+		</div>
+	{/if}
 	{#snippet footer(close)}
 		<Button variant="secondary" size="sm" onclick={close}>Cancel</Button>
-		<Button size="sm" onclick={confirmBulk}>
-			{verdictCopy[pendingVerdict].verb} {selected.length}
+		<Button size="sm" disabled={!acceptanceTracksReady} onclick={confirmBulk}>
+			{verdictCopy[pendingVerdict].verb} {pendingDecisionIds.length}
 		</Button>
 	{/snippet}
 </Modal>
@@ -1362,8 +1529,9 @@
 <Modal bind:open={notifyOpen} title="Compose decision notifications">
 	{#if dispatch === null}
 		<p class="modal__lead notify__lead">
-			{plural(recipientCount, 'submitter')} across {plural(unnotified.length, 'submission')} have a
-			decision that has not been sent. Deciding never emailed them; this send is the step that does.
+			{plural(recipientCount, 'speaker')} across {plural(unnotified.length, 'submission')}
+			{recipientCount === 1 ? 'has' : 'have'} not been told the result. A verdict does not contact
+			anyone; this send is the step that does.
 		</p>
 		{#if notifyRefusal}
 			<!-- The projection or readiness read refused: the shell fills with the
@@ -1719,6 +1887,14 @@
 		font-weight: 500;
 	}
 
+	/* An unassigned category, said in words on the quietest rung. It takes no
+	   chip: a chip asserts a category, and there is none to assert. The
+	   submissions queue carries the matching filter scope. */
+	.no-track {
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-subtle);
+	}
+
 	.col-check {
 		inline-size: 2rem;
 	}
@@ -1911,6 +2087,22 @@
 		box-shadow: var(--je-shadow-md);
 	}
 
+	.lineup-resolving {
+		display: grid;
+		gap: var(--je-space-6);
+	}
+
+	.lineup-resolving__heading {
+		inline-size: min(22rem, 70%);
+		block-size: 1lh;
+	}
+
+	.lineup-resolving__body {
+		inline-size: 100%;
+		block-size: min(30rem, 55dvh);
+		border-radius: var(--je-radius-md);
+	}
+
 	.bulkbar__count {
 		font-size: var(--je-font-size-sm);
 		font-weight: 600;
@@ -1930,8 +2122,129 @@
 		color: var(--je-color-text-muted);
 	}
 
+	.modal__fields {
+		display: grid;
+		gap: var(--je-space-3);
+		margin-block-start: var(--je-space-3);
+	}
+
 	.notify__lead {
 		margin-block-end: var(--je-space-5);
+	}
+
+	/*
+	 * ══ The record ═══════════════════════════════════════════════════════════
+	 *
+	 * What this surface adds once the shared table has re-composed its rows.
+	 * Last in the sheet on purpose: these are overrides of the column rules
+	 * above, and a cascade order is easier to keep true than a specificity
+	 * argument. The query asks the table wrapper, exactly as the primitive
+	 * does, so the two can never disagree about when a row stops being a row.
+	 */
+	@container je-table (max-width: 51.99rem) {
+		/* A record grows downward, which is the one direction a phone has: the
+		   candidate's name stops being an ellipsis the moment there is no column
+		   to protect, and the Late mark and the accolades drop below the title
+		   rather than squeezing the name they qualify. */
+		.title-line {
+			flex-wrap: wrap;
+		}
+
+		.title-line__text {
+			overflow: visible;
+			text-overflow: clip;
+			white-space: normal;
+			/* And it takes the whole line, so what qualifies it — the Late mark,
+			   the accolade cluster — follows underneath with the record's full
+			   width rather than competing with the name for a 153px column. */
+			flex: 1 0 100%;
+		}
+
+		/* A category is a scan key, and at record width its chip has a labelled
+		   line of its own — so it wraps rather than truncating. The full name
+		   lives in `title`, which is a pointer affordance a touch reader never
+		   receives, so a clipped chip on a phone is a name nobody can recover. */
+		.ui-table :global(.ui-track__label) {
+			overflow: visible;
+			text-overflow: clip;
+			white-space: normal;
+		}
+
+		/* A labelled line below the primary line has the whole record to use.
+		   The primitive leaves it in the identity column, which the state and
+		   the affordance have already narrowed — measured at 390px that left a
+		   value 41px of room, truncated a track name to "Mo…", and stacked the
+		   three verdicts into a column. */
+		.ui-table.ui-table--multiline > tbody > tr > :global(td[data-label]) {
+			grid-column: 2 / -1;
+			/* A chip is a box drawn around a word; blockified into a grid cell it
+			   would stretch to the column and read as a banner. */
+			justify-items: start;
+		}
+
+		/* The average's reserved box exists so a column cannot reflow under a
+		   reader mid-scan. A record has no column to protect, so the figure
+		   sits with its own label instead of at a right edge that is gone. */
+		.ui-table__number {
+			text-align: start;
+		}
+
+		.avg {
+			justify-content: flex-start;
+		}
+
+		.avg__mark {
+			inline-size: auto;
+		}
+
+		/* Three full-word verdicts at touch height: the pass is what this
+		   surface is for, so it keeps its controls on the record rather than
+		   sending them behind a disclosure. */
+		.rowacts {
+			flex-wrap: wrap;
+		}
+
+		/* The header row keeps only its controls here — select-all and the sort
+		   switch — so the strip is the band rather than one cell of it wearing
+		   the column-head fill alone. The group still lays out as a table
+		   header inside a block table, which shrink-wraps it to the width of
+		   the controls it kept. */
+		thead {
+			display: block;
+		}
+
+		thead tr {
+			background: var(--je-color-page);
+		}
+
+		thead th {
+			background: none;
+		}
+
+		.station__line {
+			flex-wrap: wrap;
+		}
+
+		/* At record width the open row's frame belongs to the table primitive,
+		   and the detail itself has promoted to a sheet — so the cell keeps no
+		   painted strip of its own. Two boundaries around nothing read as a
+		   hole cut in the list. */
+		.detail-row td {
+			border: 0;
+			background: none;
+		}
+	}
+
+	/*
+	 * A phone, where the record has no width to spare. A decided candidate
+	 * carries two states, and side by side they took 210px of a 334px record,
+	 * leaving the candidate's name a 68px column. Capped, the second state
+	 * stacks under the first and the identity keeps the room it needs.
+	 */
+	@container je-table (max-width: 30rem) {
+		.ui-cell--state {
+			max-inline-size: 7rem;
+		}
 	}
 
 	/* Narrow widths restructure: the banner's action moves under its copy and the

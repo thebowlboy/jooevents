@@ -6,6 +6,7 @@ export function createSampleReviewersPagePort(api: WorkspaceApi): ReviewersPageP
 	return Object.freeze({
 		reviewers: api.reviewers,
 		vocab: api.vocab,
-		schedule: api.schedule
+		schedule: api.schedule,
+		tasks: api.tasks
 	});
 }

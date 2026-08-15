@@ -240,7 +240,7 @@ function planningRefusal(
         class: 'stale_revision', kind: 'schedule_placement_changed', retryable: false,
         subjects: [{ type: 'schedule_occurrence', id: input.occurrenceId }],
         detail: { code: error.code, action: input.action, occurrenceId: input.occurrenceId },
-        detailSchemaVersion: 1
+        detailSchemaVersion: 2
       }
     },
     domain: null,

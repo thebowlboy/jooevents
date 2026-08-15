@@ -217,7 +217,8 @@ export const SCHEDULE_PLACEMENT_OPERATION_SCHEMA_REFS = Object.freeze({
     inputKey: 'schema.schedule.placement-draft.input',
     inputSchema: schedulePlacementInputSchema,
     resultKey: 'schema.schedule.placement-draft.operator-result',
-    resultSchema: schedulePlacementDraftOperationResultSchema
+    resultSchema: schedulePlacementDraftOperationResultSchema,
+    version: 2
   })
 });
 

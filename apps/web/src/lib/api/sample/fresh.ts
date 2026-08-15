@@ -31,8 +31,8 @@ const fresh: WorkspaceDataset = {
 		stats: [
 			{ label: 'Submissions', value: '—', sub: 'Create an event to begin' },
 			{ label: 'Reviews', value: '—', sub: 'Create an event to begin' },
-			{ label: 'Accepted', value: '—', sub: 'Create an event to begin' },
-			{ label: 'CFP closes', value: '—', sub: 'Create an event to begin' }
+			{ label: 'Decided', value: '—', sub: 'Create an event to begin' },
+			{ label: 'Placed', value: '—', sub: 'Create an event to begin' }
 		],
 		attention: [
 			{

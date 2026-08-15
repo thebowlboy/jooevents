@@ -2,10 +2,12 @@ import type {
 	EmbedTarget,
 	EventTheme,
 	FormSummary,
+	MutationOutcome,
 	PublicSpeakerCard,
 	ScheduleState,
 	SpeakerCategory,
 	SurfaceTemplate,
+	SurfaceKind,
 	Track
 } from './types';
 
@@ -14,6 +16,7 @@ export interface EmbedsPagePort {
 	readonly embeds: {
 		targets(): Promise<EmbedTarget[]>;
 		speakerTargets(): Promise<EmbedTarget[]>;
+		setAllowedOrigins(kind: SurfaceKind, origins: readonly string[]): Promise<MutationOutcome>;
 	};
 	readonly templates: {
 		list(): Promise<{ readonly surfaces: SurfaceTemplate[] }>;
@@ -31,7 +34,11 @@ export interface EmbedsPagePort {
 		}>;
 	};
 	readonly settings: {
-		get(): Promise<{ readonly publicIndexing?: boolean } | null>;
+		get(): Promise<{
+			readonly publicIndexing?: boolean;
+			readonly publicIndexingEditable?: boolean;
+			readonly publicIndexingReason?: string;
+		} | null>;
 		update(patch: { readonly publicIndexing: boolean }): Promise<unknown>;
 	};
 	readonly schedule: {

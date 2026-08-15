@@ -774,6 +774,18 @@ export function createLiveSubmissionsPagePort(input: {
 				};
 			}
 		}),
+		arrivals: Object.freeze({
+			/**
+			 * The pulse needs visit history and a cross-tray arrival read, and
+			 * the live workspace records neither yet (the same absence
+			 * `visits.previous` serves below). Null is the honest answer, and
+			 * the head says nothing about newness rather than inventing a
+			 * window nobody measured.
+			 */
+			async pulse(): Promise<null> {
+				return null;
+			}
+		}),
 		visits: Object.freeze({
 			/**
 			 * No visit owner records operator entries in the live workspace, so

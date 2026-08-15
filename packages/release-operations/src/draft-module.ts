@@ -176,9 +176,9 @@ const draftOutcomeContributionSchema = z.strictObject({
     readonly detailSchemaVersion: number;
   }>([
     ['conflict:release.event_required', { detailSchema: nullDetailSchema, detailSchemaVersion: 1 }],
-    // Version 2: the action vocabulary gained surface_allowlist.
+    // Version 3: the publication guard gained session_track_required.
     ['stale_revision:release.changed', {
-      detailSchema: releaseDraftStaleDetailSchema, detailSchemaVersion: 2
+      detailSchema: releaseDraftStaleDetailSchema, detailSchemaVersion: 3
     }],
     ['conflict:changeset.id_collision', { detailSchema: nullDetailSchema, detailSchemaVersion: 1 }]
   ]);
@@ -202,8 +202,8 @@ function ref(key: string): VersionedDefinitionRef {
   return Object.freeze({ key, version: 1 });
 }
 
-function schemaRef(key: string, schema: z.ZodType): SafeSchemaManifestRef {
-  return createSafeSchemaManifestRef(key, schema);
+function schemaRef(key: string, schema: z.ZodType, version = 1): SafeSchemaManifestRef {
+  return createSafeSchemaManifestRef(key, schema, version);
 }
 
 const schemas = Object.freeze({
@@ -212,7 +212,7 @@ const schemas = Object.freeze({
   canonical: schemaRef('schema.release.change-draft.canonical-result', releaseDraftCanonicalResultSchema),
   projected: RELEASE_OPERATION_SCHEMA_REFS.draft.resultSchema,
   nullDetail: schemaRef('schema.release.change-draft.null-detail', nullDetailSchema),
-  staleDetail: schemaRef('schema.release.changed.detail', releaseDraftStaleDetailSchema)
+  staleDetail: schemaRef('schema.release.changed.detail', releaseDraftStaleDetailSchema, 3)
 });
 
 const refs = Object.freeze({

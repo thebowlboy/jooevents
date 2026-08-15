@@ -21,6 +21,7 @@ const ids = {
   event: '01890f47-9abc-7def-8123-456789abcdea',
   room: '01890f47-9abc-7def-8123-456789abcdeb',
   retiredRoom: '01890f47-9abc-7def-8123-456789abcdec',
+  track: '01890f47-9abc-7def-8123-456789abcdf1',
   sessionA: '01890f47-9abc-7def-8123-456789abcded',
   sessionB: '01890f47-9abc-7def-8123-456789abcdee',
   occurrenceA: '01890f47-9abc-7def-8123-456789abcdef',
@@ -109,6 +110,28 @@ describe('Schedule placement domain', () => {
       expect((error as SchedulePlacementPlanningError).conflict?.conflicts.map((entry) => entry.occurrenceId))
         .toEqual([ids.occurrenceA]);
     }
+  });
+
+  test('refuses canonical placement of an unclassified session when the event has active tracks', () => {
+    const trackedVocabulary = createProgramVocabularyState({
+      scope,
+      setVersion: 2,
+      rooms: [{ id: ids.room, name: 'Main Hall', capacity: 200, status: 'active', version: 1 }],
+      tracks: [{ id: ids.track, name: 'Platform', status: 'active', version: 1 }]
+    });
+    expect(() => planSchedulePlacementMutation({
+      planningInput: placePlanningInput(),
+      state: emptyState(),
+      vocabulary: trackedVocabulary,
+      sessions: {
+        readPlaceableSession: () => Object.freeze({
+          scope,
+          id: parseScheduleSessionId(ids.sessionA),
+          lifecycle: 'collecting' as const,
+          trackId: null
+        })
+      }
+    })).toThrow('session_track_required');
   });
 
   test('refuses stale set, stale occurrence, missing session, and retired room', () => {

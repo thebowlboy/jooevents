@@ -4,6 +4,7 @@ import type { EventProgramPort } from '../event-program/port';
 import type { ChangesetReviewPort } from '../changesets';
 import type { CommunicationsReadinessPagePort } from '../communications-readiness-page-port';
 import type { DecisionsPagePort } from '../decisions-page-port';
+import type { EmbedsPagePort } from '../embeds-page-port';
 import type { FilesPagePort } from '../files/files-page-port';
 import type { FormsPagePort } from '../forms-page-port';
 import type { OverviewPagePort } from '../overview-page-port';
@@ -13,6 +14,8 @@ import type { SchedulePagePort } from '../schedule-page-port';
 import type { SettingsPagePort } from '../settings-page-port';
 import type { SpeakersPagePort } from '../speakers-page-port';
 import type { SubmissionsPagePort } from '../submissions-page-port';
+import type { TemplatesPagePort } from '../templates-page-port';
+import type { TasksPagePort } from '../tasks-page-port';
 
 /** Authenticated inputs from which the live workspace composition is built. */
 export interface LiveWorkspaceReady {
@@ -31,6 +34,8 @@ export interface LiveWorkspacePorts {
 	readonly submissions: SubmissionsPagePort;
 	/** The tuned Decisions surface over the live decide loop. */
 	readonly decisions: DecisionsPagePort;
+	/** Published surface catalogue and reviewed framing-origin controls. */
+	readonly embeds: EmbedsPagePort;
 	readonly settings: SettingsPagePort;
 	/**
 	 * Resolves the tuned Review page port. The tuned surface reads `viewer`
@@ -47,6 +52,10 @@ export interface LiveWorkspacePorts {
 	readonly speakers: SpeakersPagePort;
 	/** The Files surface: received uploads, resource shares, and file requests. */
 	readonly files: FilesPagePort;
+	/** Canonical Template artifacts plus the inert assisted-draft loop. */
+	readonly templates: TemplatesPagePort;
+	/** Canonical speaker Task board and reviewed mutation loop. */
+	readonly tasks: TasksPagePort;
 }
 
 export const [useLiveWorkspacePorts, setLiveWorkspacePorts] = createContext<LiveWorkspacePorts>();

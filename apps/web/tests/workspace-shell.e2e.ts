@@ -73,8 +73,14 @@ test('activity entries clamp long text and disclose only when cut off', async ({
 	// A one-line entry costs one line: no reserved blank line, no footer.
 	const plain = rows.filter({ hasText: 'Jonas Weber' });
 	await expect(plain.locator('.ui-clamp__footer')).toHaveCount(0);
-	// Its timestamp ends the sentence inline instead of holding a line of its own.
-	await expect(plain).toContainText('· 2 h ago');
+	// Its timestamp ends the sentence inline instead of holding a line of its own,
+	// spelled by the one date vocabulary rather than by the dataset — the feed
+	// used to be handed the string `2 h ago` while the live port wrote `2 hr ago`
+	// for the same distance.
+	await expect(plain).toContainText('· 2 hours ago');
+	// And it carries the absolute for the pointer and for assistive technology,
+	// because a relative string stops being a record of anything after two days.
+	await expect(plain.locator('time')).toHaveAttribute('title', /\d{1,2}\s\w{3}\s\d{4}/);
 	const plainHeight = (await plain.boundingBox())?.height ?? 0;
 	const tallest = Math.max(
 		...(await rows.evaluateAll((items) =>
@@ -86,17 +92,35 @@ test('activity entries clamp long text and disclose only when cut off', async ({
 	// Agent attribution survives without a badge repeating the robot mark.
 	await expect(activity.getByRole('img', { name: 'Agent' })).toHaveCount(2);
 
-	// The affordance appears only on entries that are actually truncated.
+	// The affordance appears only on entries that are actually truncated. How
+	// many that is depends on the words and the width — the date vocabulary's
+	// `2 hours ago` costs more of a 390px line than the dataset's old `2 h ago`
+	// did — so the assertion is the rule itself rather than a count that moves
+	// whenever a sentence does.
 	const toggles = activity.getByRole('button', { name: /Show more/ });
-	await expect(toggles).toHaveCount(1);
+	await expect(toggles.first()).toBeVisible();
+	const disclosure = await rows.evaluateAll((items) =>
+		items.map((item) => {
+			const body = item.querySelector('.ui-clamp__body');
+			return {
+				offers: Boolean(item.querySelector('.ui-clamp__toggle')),
+				clipped: body ? body.scrollHeight - body.clientHeight > 1 : false
+			};
+		})
+	);
+	expect(disclosure.every((row) => row.offers === row.clipped)).toBe(true);
+	expect(disclosure.some((row) => !row.offers)).toBe(true);
 
-	const toggle = toggles.first();
-	await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+	// The toggle under test is the one belonging to the row being measured, not
+	// whichever happens to come first: with more than one clipped entry, the
+	// first control expands a different row and the measured height never moves.
 	const clipped = rows.filter({ hasText: 'Schedule import' });
+	const toggle = clipped.getByRole('button', { name: /Show more/ });
+	await expect(toggle).toHaveAttribute('aria-expanded', 'false');
 	const collapsedHeight = (await clipped.boundingBox())?.height ?? 0;
 
 	await toggle.click();
-	await expect(activity.getByRole('button', { name: /Show less/ })).toHaveAttribute(
+	await expect(clipped.getByRole('button', { name: /Show less/ })).toHaveAttribute(
 		'aria-expanded',
 		'true'
 	);

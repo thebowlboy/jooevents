@@ -5,6 +5,10 @@ import { makeSignature } from 'better-auth/crypto';
 import { eventCreateDraftOperationResultSchema } from '@jooevents/contracts';
 import { changesetLifecycleOperationResultSchema } from '@jooevents/changeset-operations';
 import {
+  workspaceSenderIdentityReadResultSchema,
+  workspaceSenderIdentityUpdateResultSchema
+} from '@jooevents/contracts';
+import {
   workspaceSignInLinkAddressFingerprint,
   WORKSPACE_SIGN_IN_LINK_TEMPLATE_REVISION_REF_ID
 } from '@jooevents/persistence/workspace-sign-in-link';
@@ -454,5 +458,297 @@ describe('workspace magic-link sign-in', () => {
       body: JSON.stringify({ email: INVITEE_EMAIL })
     });
     expect(response.status).toBe(404);
+  });
+});
+
+/**
+ * The workspace sender-identity loop, joined against the same security-mail
+ * lane it changes. Every assertion here reads the STORED release envelope —
+ * the immutable, byte-exact record of what the send will present — rather than
+ * any in-memory value, so a sender that is frozen at composition cannot pass.
+ */
+
+/** The installation's sender configuration for these runtimes; never workspace-editable. */
+const INSTALLATION_FROM_ADDRESS = 'events@mail.example.test';
+
+async function createSenderIdentityRuntime(): Promise<EphemeralLiveRuntime> {
+  const runtime = await createEphemeralLiveRuntime({
+    config,
+    devFixtures: true,
+    communications: {
+      provider: loadCommunicationsProviderConfig({}),
+      mailSender: loadMailSenderConfig({
+        JOOEVENTS_MAIL_FROM_ADDRESS: INSTALLATION_FROM_ADDRESS,
+        JOOEVENTS_MAIL_FROM_NAME: 'JooEvents'
+      })
+    }
+  });
+  runtimes.push(runtime);
+  return runtime;
+}
+
+/** The reviewed envelope of the most recently registered workspace sign-in mail. */
+function latestSignInEnvelope(runtime: EphemeralLiveRuntime) {
+  const head = runtime.database.sqlite.query<{
+    readonly release_id: string;
+    readonly sender_presentation_digest_sha256: string;
+  }, [string]>(`
+    SELECT release_id, sender_presentation_digest_sha256
+      FROM communication_outbound_delivery_heads
+     WHERE template_revision_ref_id = ?
+     ORDER BY rowid DESC LIMIT 1
+  `).get(WORKSPACE_SIGN_IN_LINK_TEMPLATE_REVISION_REF_ID);
+  if (!head) throw new Error('workspace_sign_in_release_missing');
+  const release = runtime.communicationReleases.read(head.release_id);
+  if (!release) throw new Error('workspace_sign_in_release_unreadable');
+  const { envelope } = release;
+  return {
+    // The reviewed envelope's rendered sender presentation, as plain strings.
+    presentation: {
+      fromAddress: String(envelope.from.address),
+      fromDisplayName: envelope.from.displayName ?? null,
+      replyToAddress: envelope.replyTo === undefined
+        ? null
+        : String(envelope.replyTo.address)
+    },
+    senderPresentationDigestSha256: head.sender_presentation_digest_sha256
+  };
+}
+
+async function readSenderIdentity(runtime: EphemeralLiveRuntime, session: BrowserSession) {
+  const response = await runtime.app.request('/api/communications/sender-identity', {
+    headers: { cookie: session.cookie, 'x-correlation-id': crypto.randomUUID() }
+  });
+  expect(response.status).toBe(200);
+  return workspaceSenderIdentityReadResultSchema.parse(await response.json());
+}
+
+async function updateSenderIdentity(input: {
+  readonly runtime: EphemeralLiveRuntime;
+  readonly session: BrowserSession;
+  readonly key: string;
+  readonly body: unknown;
+}) {
+  const response = await input.runtime.app.request('/api/communications/sender-identity', {
+    method: 'POST',
+    headers: operatorHeaders({ session: input.session, key: input.key }),
+    body: JSON.stringify(input.body)
+  });
+  expect(response.status).toBe(200);
+  return workspaceSenderIdentityUpdateResultSchema.parse(await response.json());
+}
+
+describe('workspace email sender identity', () => {
+  test('an unset workspace sends under the installation identity; setting a name changes the NEXT mail', async () => {
+    const runtime = await createSenderIdentityRuntime();
+    const owner = await createOwnerSession(runtime);
+    await runtime.app.request('/api/me/access-context', {
+      headers: { cookie: owner.cookie, 'x-correlation-id': crypto.randomUUID() }
+    });
+    await createEvent(runtime, owner);
+    insertOpenReservation(runtime, INVITEE_EMAIL);
+
+    // Unset: the read reports the installation presentation, and the first
+    // mail renders exactly it.
+    const initial = await readSenderIdentity(runtime, owner);
+    expect(initial).toMatchObject({
+      kind: 'success',
+      data: {
+        headVersion: 1,
+        displayName: null,
+        replyToAddress: null,
+        updatedAt: null,
+        effective: {
+          fromAddress: INSTALLATION_FROM_ADDRESS,
+          fromDisplayName: 'JooEvents',
+          replyToAddress: null,
+          source: 'installation'
+        }
+      }
+    });
+    expect((await requestLink(runtime, INVITEE_EMAIL)).status).toBe(200);
+    const beforeEdit = latestSignInEnvelope(runtime);
+    expect(beforeEdit.presentation).toEqual({
+      fromAddress: INSTALLATION_FROM_ADDRESS,
+      fromDisplayName: 'JooEvents',
+      replyToAddress: null
+    });
+
+    const updated = await updateSenderIdentity({
+      runtime,
+      session: owner,
+      key: 'sender-identity-set',
+      body: {
+        expectedHeadVersion: 1,
+        displayName: 'Nordic Product Days',
+        replyToAddress: 'hello@nordic.example'
+      }
+    });
+    expect(updated).toMatchObject({
+      kind: 'success',
+      data: {
+        headVersion: 2,
+        displayName: 'Nordic Product Days',
+        replyToAddress: 'hello@nordic.example',
+        effective: {
+          fromAddress: INSTALLATION_FROM_ADDRESS,
+          fromDisplayName: 'Nordic Product Days',
+          replyToAddress: 'hello@nordic.example',
+          source: 'workspace'
+        }
+      }
+    });
+
+    // The NEXT mail renders the edited presentation with no restart: the
+    // deliveries hold a resolver, not a sender frozen at composition.
+    expect((await requestLink(runtime, INVITEE_EMAIL)).status).toBe(200);
+    const afterEdit = latestSignInEnvelope(runtime);
+    expect(afterEdit.presentation).toEqual({
+      // The from-address is unchanged: it is the installation's, always.
+      fromAddress: INSTALLATION_FROM_ADDRESS,
+      fromDisplayName: 'Nordic Product Days',
+      replyToAddress: 'hello@nordic.example'
+    });
+    // The ledger's presentation pin moved with the presentation.
+    expect(afterEdit.senderPresentationDigestSha256)
+      .not.toBe(beforeEdit.senderPresentationDigestSha256);
+
+    // Clearing returns the lane to the installation identity.
+    expect(await updateSenderIdentity({
+      runtime,
+      session: owner,
+      key: 'sender-identity-clear',
+      body: { expectedHeadVersion: 2, displayName: null, replyToAddress: null }
+    })).toMatchObject({
+      kind: 'success',
+      data: { headVersion: 3, effective: { source: 'installation' } }
+    });
+    expect((await requestLink(runtime, INVITEE_EMAIL)).status).toBe(200);
+    expect(latestSignInEnvelope(runtime).presentation).toEqual({
+      fromAddress: INSTALLATION_FROM_ADDRESS,
+      fromDisplayName: 'JooEvents',
+      replyToAddress: null
+    });
+  });
+
+  test('a header-injection attempt is refused structurally and writes nothing', async () => {
+    const runtime = await createSenderIdentityRuntime();
+    const owner = await createOwnerSession(runtime);
+    await runtime.app.request('/api/me/access-context', {
+      headers: { cookie: owner.cookie, 'x-correlation-id': crypto.randomUUID() }
+    });
+    await createEvent(runtime, owner);
+    insertOpenReservation(runtime, INVITEE_EMAIL);
+
+    const injected = await updateSenderIdentity({
+      runtime,
+      session: owner,
+      key: 'sender-identity-injection',
+      body: {
+        expectedHeadVersion: 1,
+        displayName: 'Nordic\r\nBcc: attacker@example.test',
+        replyToAddress: null
+      }
+    });
+    expect(injected).toMatchObject({
+      kind: 'outcome',
+      outcome: {
+        class: 'policy_violation',
+        kind: 'communication.sender_identity_refused',
+        retryable: false,
+        detail: { field: 'display_name', code: 'display_name_control_character' }
+      }
+    });
+
+    const listed = await updateSenderIdentity({
+      runtime,
+      session: owner,
+      key: 'sender-identity-reply-to-list',
+      body: {
+        expectedHeadVersion: 1,
+        displayName: null,
+        replyToAddress: 'hello@nordic.example, attacker@example.test'
+      }
+    });
+    expect(listed).toMatchObject({
+      kind: 'outcome',
+      outcome: {
+        class: 'policy_violation',
+        kind: 'communication.sender_identity_refused',
+        detail: { field: 'reply_to_address', code: 'reply_to_multiple_addresses' }
+      }
+    });
+
+    // Nothing was written: the head never advanced and the mail still renders
+    // the installation identity.
+    expect(await readSenderIdentity(runtime, owner)).toMatchObject({
+      kind: 'success',
+      data: { headVersion: 1, displayName: null, replyToAddress: null }
+    });
+    expect(runtime.database.sqlite.query<{ readonly count: number }, []>(`
+      SELECT COUNT(*) AS count FROM workspace_mail_sender_identity
+    `).get()?.count).toBe(0);
+    expect((await requestLink(runtime, INVITEE_EMAIL)).status).toBe(200);
+    expect(latestSignInEnvelope(runtime).presentation).toEqual({
+      fromAddress: INSTALLATION_FROM_ADDRESS,
+      fromDisplayName: 'JooEvents',
+      replyToAddress: null
+    });
+  });
+
+  test('a stale expected version refuses instead of overwriting a concurrent edit', async () => {
+    const runtime = await createSenderIdentityRuntime();
+    const owner = await createOwnerSession(runtime);
+    await runtime.app.request('/api/me/access-context', {
+      headers: { cookie: owner.cookie, 'x-correlation-id': crypto.randomUUID() }
+    });
+    await updateSenderIdentity({
+      runtime,
+      session: owner,
+      key: 'sender-identity-first',
+      body: { expectedHeadVersion: 1, displayName: 'Nordic Product Days', replyToAddress: null }
+    });
+    expect(await updateSenderIdentity({
+      runtime,
+      session: owner,
+      key: 'sender-identity-stale',
+      body: { expectedHeadVersion: 1, displayName: 'Someone Else', replyToAddress: null }
+    })).toMatchObject({
+      kind: 'outcome',
+      outcome: {
+        class: 'stale_revision',
+        kind: 'communication.sender_identity_changed',
+        retryable: false,
+        detail: { code: 'head_version_changed', headVersion: 2 }
+      }
+    });
+    expect(await readSenderIdentity(runtime, owner)).toMatchObject({
+      kind: 'success',
+      data: { headVersion: 2, displayName: 'Nordic Product Days' }
+    });
+  });
+
+  test('the sender identity is permission-gated on both read and update', async () => {
+    const runtime = await createSenderIdentityRuntime();
+    for (const request of [
+      new Request(`${config.baseUrl}/api/communications/sender-identity`, {
+        headers: { 'x-correlation-id': crypto.randomUUID() }
+      }),
+      new Request(`${config.baseUrl}/api/communications/sender-identity`, {
+        method: 'POST',
+        headers: {
+          origin: config.baseUrl,
+          'content-type': 'application/json',
+          'idempotency-key': 'sender-identity-anonymous',
+          'x-correlation-id': crypto.randomUUID()
+        },
+        body: JSON.stringify({
+          expectedHeadVersion: 1, displayName: 'Nordic Product Days', replyToAddress: null
+        })
+      })
+    ]) {
+      const response = await runtime.app.request(request);
+      expect(response.status).not.toBe(200);
+    }
   });
 });

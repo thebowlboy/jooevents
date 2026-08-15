@@ -78,7 +78,13 @@ function fixture() {
       newDeliveryId: nextUuid,
       newEvidenceId: nextUuid
     },
-    sender: { fromAddress: 'auth@installation.example', fromDisplayName: 'Example Conference' }
+    senderResolver: {
+      resolve: () => ({
+        fromAddress: 'auth@installation.example',
+        fromDisplayName: 'Example Conference',
+        source: 'installation'
+      })
+    }
   });
   const ledger = new SQLiteOutboundEmailDeliveryLedger(sqlite, {
     newFactId: nextUuid,
@@ -131,6 +137,10 @@ describe('workspace sign-in message rendering', () => {
       .toBe(2);
     expect(message.htmlBody).toContain('Sign in to JooEvents');
     expect(message.htmlBody).toContain('>Sign in</a>');
+    expect(message.htmlBody).toContain(
+      '<img src="https://jooevents.com/assets/jooevents-wordmark.png" width="136" height="24" alt="JooEvents"'
+    );
+    expect(message.htmlBody).toContain('background-color:#b05a4f;border-radius:6px');
   });
 
   test('a non-http(s) link is refused', () => {

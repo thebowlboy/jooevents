@@ -76,6 +76,12 @@ describe('traysOf', () => {
 	test('drafts never escalate to a tray', () => {
 		expect(traysOf(session({ state: 'draft', speakers: [] }), false)).toEqual([]);
 	});
+
+	test('an operational session without a track enters the repair tray only when the event uses tracks', () => {
+		expect(traysOf(session({ trackId: '' }), true, false)).toEqual([]);
+		expect(traysOf(session({ trackId: '' }), true, true)).toEqual(['needs-track']);
+		expect(traysOf(session({ state: 'draft', trackId: '' }), false, true)).toEqual([]);
+	});
 });
 
 describe('groupOf', () => {
@@ -94,6 +100,10 @@ describe('groupOf', () => {
 	test('collecting splits by placement', () => {
 		expect(groupOf(session({ state: 'collecting' }), false)).toBe('collecting');
 		expect(groupOf(session({ state: 'collecting' }), true)).toBe('undecided-in-place');
+	});
+
+	test('track repair outranks placement and roster gaps', () => {
+		expect(groupOf(session({ trackId: '', speakers: [] }), false, true)).toBe('needs-track');
 	});
 });
 
@@ -124,6 +134,7 @@ describe('roundupCounts and programGrouping', () => {
 
 	test('each count is its own row set', () => {
 		expect(roundupCounts(state)).toEqual({
+			'needs-track': 0,
 			unplaced: 2,
 			'needs-speakers': 2,
 			'undecided-in-place': 1

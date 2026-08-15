@@ -8,7 +8,7 @@ import { expect, test } from '@playwright/test';
  * on every row, and New marks what arrived since the operator last looked.
  *
  * Cookie-less loads serve the crunch scenario: 14 candidates, 9 undecided,
- * 5 decided (4 un-notified), one late arrival since the last visit.
+ * 5 decided (4 needing notice), one late arrival since the last visit.
  */
 
 test('the inbox groups rows by station, in funnel order, with doors', async ({ page }) => {
@@ -22,9 +22,9 @@ test('the inbox groups rows by station, in funnel order, with doors', async ({ p
 	// are separate rungs, so a group's claim is true of every row under it.
 	await expect(headers.nth(0)).toContainText('In review');
 	await expect(headers.nth(0)).toContainText('3');
-	await expect(headers.nth(1)).toContainText('Waiting on a decision');
+	await expect(headers.nth(1)).toContainText('Decision needed');
 	await expect(headers.nth(1)).toContainText('5');
-	await expect(headers.nth(2)).toContainText('Decided · not yet notified');
+	await expect(headers.nth(2)).toContainText('Results not sent');
 	await expect(headers.nth(2)).toContainText('4');
 	await expect(headers.nth(3)).toContainText('Done');
 	await expect(headers.nth(3)).toContainText('1');
@@ -39,33 +39,40 @@ test('the inbox groups rows by station, in funnel order, with doors', async ({ p
 		'href',
 		'/app/decisions'
 	);
-	await headers.nth(2).getByRole('link', { name: 'Send notices →' }).click();
+	await headers.nth(2).getByRole('link', { name: 'Send results →' }).click();
 	await expect(page).toHaveURL(/\/app\/decisions\?scope=unnotified$/);
-	await expect(page.getByText('Decided · not yet notified').first()).toBeVisible();
+	await expect(page.getByText('Results not sent').first()).toBeVisible();
 });
 
-test('every row states its arrival, and New marks what arrived since the last visit', async ({
+test('unfinished rows state their relevant clock, and New marks what arrived since the last visit', async ({
 	page
 }) => {
 	await page.goto('/app/submissions');
 	const list = page.getByRole('region', { name: 'Submissions' });
 	await expect(list.locator('tr.row').first()).toBeVisible({ timeout: 15000 });
 
-	// The arrival fact ends every row's metadata sentence — bare elapsed time
-	// while recent, the calendar date after ("3 days ago" / "Jul 12").
-	await expect(list.locator('tr.row .arrived').first()).toHaveText(
-		/(just now|min ago|h ago|yesterday|days ago|[A-Z][a-z]{2} \d)/
+	// Every row states its arrival in the one constant Received slot — the
+	// timeline the arrival groups are sorted by, readable straight down the
+	// column. The only other clock a row may run, an unsent result's decision
+	// age, stays in the metadata sentence and names itself.
+	await expect(list.locator('tr.row .when .arrived').first()).toHaveText(
+		/(?:just now|\d+ min ago|\d+ h ago|yesterday|\d+ days? ago|\d+ weeks? ago|\d+ months? ago|[A-Z][a-z]{2} \d)/
 	);
 
 	// Crunch's inbox has taken nothing new since the operator's previous
 	// visit, so no inbox row wears the mark — absence is a claim too.
-	await expect(list.locator('.title-line__new')).toHaveCount(0);
+	await expect(list.locator('tr.row .when').getByText('New', { exact: true })).toHaveCount(0);
 
 	// The one arrival since that visit sits in the late tray: older than a
-	// day, but new to this operator — the since-your-last-visit arm.
-	await page.getByRole('button', { name: /Late/ }).click();
+	// day, but new to this operator — the since-your-last-visit arm. The mark
+	// rides beside the arrival fact it qualifies.
+	// The trays are a radio group now, so the chip's own face is what is pressed
+	// and the checked radio is what says which population is showing.
+	const trays = page.getByRole('radiogroup', { name: 'Submission trays' });
+	await trays.getByText('Late', { exact: true }).click();
+	await expect(trays.getByRole('radio', { name: /^Late/ })).toBeChecked();
 	const lateRow = list.locator('tr.row').filter({ hasText: 'Sandboxing Tool Calls' });
-	await expect(lateRow.locator('.title-line__new')).toHaveText('New');
+	await expect(lateRow.locator('.when').getByText('New', { exact: true })).toBeVisible();
 	// And a row that just arrived cannot already carry committed reviews.
 	await expect(lateRow).toContainText('No reviews yet');
 });
@@ -134,7 +141,7 @@ test('finishing the pass hands off: notices, placement, waitlist — doors, not 
 	// yields so the send keeps exactly one door on the page.
 	const finale = candidates.locator('.finale');
 	await expect(finale).toContainText('Every candidate is decided.', { timeout: 15000 });
-	await expect(finale.getByRole('button', { name: /Send 14 decision notices/ })).toBeVisible();
+	await expect(finale.getByRole('button', { name: 'Send their results' })).toBeVisible();
 	await expect(finale.getByRole('link', { name: /Place \d+ sessions/ })).toHaveAttribute(
 		'href',
 		'/app/schedule?tray=unplaced'

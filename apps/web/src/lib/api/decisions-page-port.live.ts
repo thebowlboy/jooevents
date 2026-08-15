@@ -613,13 +613,13 @@ export function createLiveDecisionsPagePort(input: {
 
 	function dispatchNote(committed: number, sent: number, reasons: ReadonlySet<string>): string {
 		if (sent === committed) {
-			return 'Every message was accepted by the outbound provider; the un-notified indicator clears as that delivery evidence lands.';
+			return 'Every message was accepted by the outbound provider; Result not sent clears as that delivery evidence lands.';
 		}
 		const because = deliveryReasonCopy(reasons);
 		const what = sent === 0
 			? `${deliveries(committed)} recorded, none delivered`
 			: `${committed - sent} of ${deliveries(committed)} not delivered`;
-		return `${what}${because === null ? '' : `: ${because}`}. Those decisions stay un-notified until an activated provider accepts their delivery.`;
+		return `${what}${because === null ? '' : `: ${because}`}. Result not sent stays until an activated provider accepts their delivery.`;
 	}
 
 	/**
@@ -649,7 +649,7 @@ export function createLiveDecisionsPagePort(input: {
 				return {
 					committed,
 					sent: null,
-					note: 'The release is committed. Its delivery state could not be read here, so nothing about delivery is claimed and the un-notified indicator stays until delivery evidence lands.'
+					note: 'The release is committed. Its delivery state could not be read here, so nothing about delivery is claimed and Result not sent stays until delivery evidence lands.'
 				};
 			}
 			sent += row.counts.accepted.value;
@@ -771,7 +771,11 @@ export function createLiveDecisionsPagePort(input: {
 			 * refuse typed — a failed undo states exactly why instead of
 			 * silently leaving the decision standing.
 			 */
-			async decide(ids: string[], decision: DecisionState): Promise<void> {
+			async decide(
+				ids: string[],
+				decision: DecisionState,
+				trackIdsBySubmission: Readonly<Record<string, string>> = {}
+			): Promise<void> {
 				if (decision === 'undecided') throw unmounted('decision_undo_to_undecided');
 				if (decision === 'withdrawn') throw unmounted('decision_withdrawn_authoring');
 				const distinct = [...new Set(ids)];
@@ -782,11 +786,15 @@ export function createLiveDecisionsPagePort(input: {
 						action: 'decide',
 						decisions: chunk.map((submissionId) => {
 							const head = heads.get(submissionId)?.head ?? null;
+							const explicitTrackId = trackIdsBySubmission[submissionId];
 							return {
 								submissionId,
 								state: decision,
 								expectedDecisionVersion: head?.version ?? null,
-								expectedDecisionDigestSha256: head?.digestSha256 ?? null
+								expectedDecisionDigestSha256: head?.digestSha256 ?? null,
+								...(decision === 'accepted' && explicitTrackId
+									? { graduation: { kind: 'spawn' as const, trackId: explicitTrackId } }
+									: {})
 								// Graduation deliberately omitted: the server routes an
 								// accept by the submission's effective target (attach a
 								// resolvable collecting target, spawn otherwise), and a

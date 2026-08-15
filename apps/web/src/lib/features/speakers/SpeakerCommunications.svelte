@@ -3,6 +3,7 @@
 	import { statusIcon } from '$lib/ui';
 	import type { IconComponent } from '$lib/ui';
 	import type { SpeakersPagePort } from '$lib/api/speakers-page-port';
+	import { LiveRead, type LiveReadState } from '$lib/api/live-read';
 	import type { CommunicationThread } from '$lib/api/types';
 
 	/**
@@ -23,14 +24,19 @@
 	/** The tail keeps the expansion an overview; the full log is the page's job. */
 	const TAIL = 3;
 
-	let thread = $state<CommunicationThread | null>(null);
-	let loaded = $state(false);
+	// A rejected thread read used to leave `loaded` false with nothing in
+	// flight, so this expansion showed two skeleton lines for as long as the row
+	// stayed open. The failure is now stated where the entries would have been.
+	let threadState = $state<LiveReadState<CommunicationThread | null>>({ kind: 'resolving' });
+	const threadRead = new LiveRead<CommunicationThread | null>({
+		read: () => api.communications.thread(speakerId),
+		fallback: 'This speaker’s message history could not be loaded.',
+		onChange: (state) => (threadState = state)
+	});
+	const thread = $derived(threadState.kind === 'resolved' ? threadState.value : null);
 
 	onMount(() => {
-		void api.communications.thread(speakerId).then((result) => {
-			thread = result;
-			loaded = true;
-		});
+		void threadRead.read();
 	});
 
 	const outcomeBadge: Record<
@@ -52,7 +58,16 @@
 		Open in Communications
 	</a>
 </div>
-{#if !loaded}
+{#if threadState.kind === 'unavailable'}
+	<p class="none" role="alert">
+		{threadState.message}
+		{#if threadState.retryable}
+			<button type="button" class="ui-button ui-button--ghost ui-button--sm" onclick={() => void threadRead.refresh()}>
+				Try again
+			</button>
+		{/if}
+	</p>
+{:else if threadState.kind === 'resolving'}
 	<ul class="tail" aria-hidden="true">
 		{#each Array(2) as _, index (index)}
 			<li class="entry">

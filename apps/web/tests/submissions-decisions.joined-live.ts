@@ -54,7 +54,7 @@ async function ensureEvent(page: Page): Promise<void> {
  * surface, so the form target and the entry's selects have real entries.
  */
 async function ensureVocabulary(page: Page, trackName: string, formatName: string): Promise<void> {
-	await page.goto('/app/settings');
+	await page.goto('/app/settings/program');
 	const basics = page.getByRole('region', { name: 'Program basics' });
 	await expect(basics).toBeVisible();
 	if (await basics.getByText(trackName, { exact: true }).count() === 0) {
@@ -128,7 +128,7 @@ test.afterAll(async ({ browser }, testInfo) => {
 		sameSite: 'Lax'
 	}]);
 	const page = await context.newPage();
-	await page.goto('/app/settings');
+	await page.goto('/app/settings/program');
 	const basics = page.getByRole('region', { name: 'Program basics' });
 	await expect(basics).toBeVisible();
 	for (const name of [
@@ -161,7 +161,7 @@ test('the direct-entry dialog commits a real submission and the list refetches i
 	await ensureOpenForm(page, `Joined CFP ${project}`, entryFormat);
 
 	await page.goto('/app/submissions');
-	await expect(page.getByRole('navigation', { name: 'Submission trays' })).toBeVisible();
+	await expect(page.getByRole('radiogroup', { name: 'Submission trays' })).toBeVisible();
 	await expect(page.locator('[data-je-scenario]')).toHaveCount(0);
 
 	await page.getByRole('button', { name: 'Add submission' }).first().click();
@@ -198,8 +198,8 @@ test('the direct-entry dialog commits a real submission and the list refetches i
 	// matched exactly so the title (which contains the words) cannot satisfy it.
 	const row = page.getByRole('row', { name: new RegExp(entryTitle.replace(/[()]/g, '\\$&')) });
 	await expect(row.getByText(entryTitle, { exact: true })).toBeVisible();
-	await expect(row.getByText('direct entry', { exact: true })).toBeVisible();
-	await expect(row.getByText('Not decided')).toBeVisible();
+	await expect(row.getByText(/·\s*direct entry/)).toBeVisible();
+	await expect(row.getByText('Decision needed')).toBeVisible();
 
 	// Reload: the submission is canonical state, not page memory.
 	await page.reload();
@@ -235,7 +235,7 @@ test('decisions carries the entry through accept-with-spawn into the program poo
 	// that no outbound provider is activated. (The door is the pass banner or,
 	// once every candidate is decided, the finale's send button — both open
 	// the same dialog.)
-	await page.getByRole('button', { name: /Compose notifications|decision notice/ }).first().click();
+	await page.getByRole('button', { name: 'Send their results' }).first().click();
 	const notify = page.getByRole('dialog', { name: 'Compose decision notifications' });
 	await expect(notify).toBeVisible();
 	await expect(
@@ -256,7 +256,7 @@ test('decisions carries the entry through accept-with-spawn into the program poo
 	await expect(notify.getByText(
 		/deliver(y|ies) recorded, none delivered: the outbound lane rejected them outright\./
 	)).toBeVisible();
-	await expect(notify.getByText(/stay un-notified until an activated provider/)).toBeVisible();
+	await expect(notify.getByText(/Result not sent stays until an activated provider/)).toBeVisible();
 	await expect(notify.getByText(/emails? sent/)).toHaveCount(0);
 	await notify.getByRole('button', { name: 'Done' }).click();
 	await expect(notify).not.toBeVisible();
@@ -287,14 +287,14 @@ test('decisions carries the entry through accept-with-spawn into the program poo
 		expect(row.counts.delivered.knowledge).toBe('not_supported');
 	}
 
-	// The un-notified indicator stays honestly un-notified: "notified" means
+	// Result not sent stays honest: "notified" means
 	// the decision was communicated, its evidence is provider-accepted
 	// delivery, and with no provider activated no such evidence can exist —
 	// after a full reload the send door still counts this decision (as the
 	// pass banner or the finale's send button, whichever the pass renders).
 	await page.reload();
 	await expect(
-		page.getByRole('button', { name: /Compose notifications|decision notice/ }).first()
+		page.getByRole('button', { name: 'Send their results' }).first()
 	).toBeVisible();
 
 	// The spawned session is canonical program state: it appears in the

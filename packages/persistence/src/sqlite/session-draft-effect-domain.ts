@@ -71,7 +71,7 @@ CREATE TABLE session_draft_receipt_links (
     length(record_digest_sha256) = 64
     AND record_digest_sha256 NOT GLOB '*[^0-9a-f]*'
   ),
-  action TEXT NOT NULL CHECK(action IN ('create', 'transition', 'roster_visibility')),
+  action TEXT NOT NULL CHECK(action IN ('create', 'transition', 'retarget', 'roster_visibility')),
   session_id TEXT NOT NULL CHECK(length(session_id) = 36),
   operation_name TEXT NOT NULL CHECK(operation_name = 'session.change.draft'),
   operation_version INTEGER NOT NULL CHECK(operation_version = 1),
@@ -225,7 +225,7 @@ function planningRefusal(
         class: 'stale_revision', kind: 'session.changed', retryable: false,
         subjects: [{ type: 'session', id: input.sessionId }],
         detail: { code: error.code, action: input.action, sessionId: input.sessionId },
-        detailSchemaVersion: 1
+        detailSchemaVersion: 2
       }
     },
     domain: null,

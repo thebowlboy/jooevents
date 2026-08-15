@@ -25,6 +25,8 @@ import type {
 	TaskDef
 } from './types';
 import type { OrganizerSubmissionsPort } from './view-models/intake-submissions';
+import type { TaskLiveClient, TaskLiveResult } from './operations/tasks-live';
+import { taskAssignmentView, taskDefinitionView } from './mappers/tasks';
 
 /**
  * The tuned page capabilities this deliberately partial live mount cannot
@@ -91,7 +93,8 @@ function readFailure(
 		| Exclude<SessionCatalogReadResult, { readonly kind: 'success' }>
 		| { readonly kind: 'outcome'; readonly outcome: StructuredOutcome }
 		| { readonly kind: 'transport_error'; readonly error: SafeApiError }
-		| { readonly kind: 'unavailable'; readonly reason: string },
+	| Exclude<TaskLiveResult<unknown>, { readonly kind: 'success' }>
+	| { readonly kind: 'unavailable'; readonly reason: string },
 	subject: string
 ): AdapterFailure {
 	if (result.kind === 'unavailable') {
@@ -166,8 +169,8 @@ function defaultIdempotencyKey(): string {
  * and nothing here merges or dedupes people by email (recorded BLOCKED-8).
  *
  * Served truths this seam states deliberately, each at its site below:
- * task counts are zero and the defs/assignments lists empty (no task system
- * is mounted), communication threads are null (nothing has ever been sent),
+ * task counts and task lists are projections of the same canonical Task board
+ * used by the Tasks area; communication threads are null (nothing has ever been sent),
  * speaker categories are empty and every lineup mutation refuses typed
  * (BLOCKED-13), `position` is a derived stable order (invitedAt, then name)
  * because no lineup order owner exists, and `contentApproved` is false
@@ -178,6 +181,7 @@ export function createLiveSpeakersPagePort(input: {
 	readonly sessions: SessionCatalogCorePort;
 	readonly triage: Pick<SubmissionTriageLiveClient, 'read'>;
 	readonly contacts: Pick<OrganizerSubmissionsPort, 'source' | 'contact'>;
+	readonly tasks?: Pick<TaskLiveClient, 'readBoard'>;
 	readonly newIdempotencyKey?: () => string;
 }): SpeakersPagePort {
 	if (input.sessions.source.kind !== 'live' || input.contacts.source.kind !== 'live') {
@@ -254,7 +258,16 @@ export function createLiveSpeakersPagePort(input: {
 	}
 
 	async function listRows(): Promise<SpeakerRow[]> {
-		const [snapshot, catalog] = await Promise.all([readSnapshot(), readCatalog()]);
+		const [snapshot, catalog, taskBoard] = await Promise.all([
+			readSnapshot(),
+			readCatalog(),
+			input.tasks?.readBoard().then((result) => {
+				if (result.kind !== 'success') {
+					throw new SpeakersPageLiveError(readFailure(result, 'task board'));
+				}
+				return result.data;
+			}) ?? Promise.resolve(null)
+		]);
 		const submissionIds = [...new Set(
 			snapshot.engagements.flatMap((head) => head.submissionId === null ? [] : [head.submissionId])
 		)];
@@ -263,11 +276,13 @@ export function createLiveSpeakersPagePort(input: {
 			readEmails(submissionIds)
 		]);
 		const sessionsById = new Map(catalog.sessions.map((session) => [session.id, session]));
+		const taskAssignments = taskBoard?.assignments.map((entry) => taskAssignmentView(entry)) ?? [];
 		const rows = snapshot.engagements.map((head) => {
 			const session = sessionsById.get(head.sessionId);
 			const sessions: SpeakerSession[] = session
 				? [{ id: session.id, title: session.title }]
 				: [];
+			const assigned = taskAssignments.filter((entry) => entry.speakerId === head.id);
 			return {
 				id: head.id,
 				// The empty value is the typed absence for a row without a mounted
@@ -276,11 +291,11 @@ export function createLiveSpeakersPagePort(input: {
 				email: (head.submissionId !== null ? emails.get(head.submissionId) : undefined) ?? '',
 				state: webEngagementState(head),
 				sessions,
-				// No task system is mounted: zero obligations exist, so zeros are
-				// the served truth, not placeholders.
-				tasksDone: 0,
-				tasksTotal: 0,
-				overdueTasks: 0,
+				tasksDone: assigned.filter((entry) =>
+					entry.state === 'complete' || entry.state === 'late-complete'
+				).length,
+				tasksTotal: assigned.filter((entry) => entry.state !== 'waived').length,
+				overdueTasks: assigned.filter((entry) => entry.overdue).length,
 				// Roster visibility is the Session head's own roster reference for
 				// this person; an engagement whose person left every roster shows
 				// hidden, which is what the public composition would render.
@@ -363,13 +378,17 @@ export function createLiveSpeakersPagePort(input: {
 			}
 		}),
 		tasks: Object.freeze({
-			/** No task system is mounted; no definitions exist to list. */
 			async defs(): Promise<TaskDef[]> {
-				return [];
+				if (!input.tasks) return [];
+				const result = await input.tasks.readBoard();
+				if (result.kind !== 'success') throw new SpeakersPageLiveError(readFailure(result, 'task board'));
+				return result.data.definitions.map((entry) => taskDefinitionView(entry));
 			},
-			/** No task system is mounted; nobody holds an assignment. */
 			async assignments(): Promise<TaskAssignment[]> {
-				return [];
+				if (!input.tasks) return [];
+				const result = await input.tasks.readBoard();
+				if (result.kind !== 'success') throw new SpeakersPageLiveError(readFailure(result, 'task board'));
+				return result.data.assignments.map((entry) => taskAssignmentView(entry));
 			}
 		}),
 		communications: Object.freeze({

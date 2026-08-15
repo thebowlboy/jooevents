@@ -48,13 +48,12 @@ test('the no-round panel offers exactly one path and opening the round is real',
 	// Opening is the deliberate step, labelled by its consequence.
 	await dialog.getByRole('button', { name: 'Open round 1 · 9 reviews' }).click();
 
-	// The round takes over: header, meter at zero, and the roster with the
-	// hand-out it promised.
+	// The round takes over: header and meter at zero. Reviewer oversight now
+	// lives on Reviewers, while this route stays focused on the review queue.
 	await expect(page.getByRole('heading', { name: 'Round 1 · all tracks' })).toBeVisible();
 	await expect(page.getByText('0 of 9')).toBeVisible();
-	const reviewers = page.getByRole('table').filter({ hasText: 'Reviewer' });
-	await expect(reviewers).toContainText('Jonas Weber');
-	await expect(reviewers).toContainText('0 / 9');
+	await expect(page.getByRole('heading', { name: 'Review queue' })).toBeVisible();
+	await expect(page.getByRole('region', { name: 'Reviewers' })).toHaveCount(0);
 
 	// The organizer opened it without reviewing in it, and the queue says so.
 	await expect(page.getByText('You are running this round rather than reviewing in it.')).toBeVisible();

@@ -38,11 +38,16 @@ const personA = '019c1df7-86b5-769b-bba4-5f7097bfa401';
 const personB = '019c1df7-86b5-769b-bba4-5f7097bfa402';
 const formatId = '019c1df7-86b5-769b-bba4-5f7097bfa301';
 const trackId = '019c1df7-86b5-769b-bba4-5f7097bfa302';
+const otherTrackId = '019c1df7-86b5-769b-bba4-5f7097bfa303';
 const now = '2026-08-13T08:00:00.000Z';
 const later = '2026-08-13T08:05:00.000Z';
 const scheduleScope = parseSchedulePlacementScope(scope);
 
-function vocabulary(input: { readonly retiredFormat?: boolean; readonly setVersion?: number } = {}) {
+function vocabulary(input: {
+  readonly retiredFormat?: boolean;
+  readonly setVersion?: number;
+  readonly tracks?: 'none' | 'one' | 'two';
+} = {}) {
   return createProgramVocabularyState({
     scope,
     setVersion: input.setVersion ?? 1,
@@ -52,7 +57,12 @@ function vocabulary(input: { readonly retiredFormat?: boolean; readonly setVersi
       status: input.retiredFormat ? 'retired' : 'active',
       version: input.retiredFormat ? 2 : 1
     }],
-    tracks: [{ id: trackId, name: 'Platform', status: 'active', version: 1 }]
+    tracks: input.tracks === 'none' ? [] : [
+      { id: trackId, name: 'Platform', status: 'active', version: 1 },
+      ...(input.tracks === 'two'
+        ? [{ id: otherTrackId, name: 'Practice', status: 'active' as const, version: 1 }]
+        : [])
+    ]
   });
 }
 
@@ -78,6 +88,68 @@ function createPlan(catalog: SessionCatalog, lifecycle: 'draft' | 'collecting' |
 }
 
 describe('canonical Session foundation', () => {
+  test('makes track omission safe at the lifecycle boundary and repairs legacy heads', () => {
+    const empty = createEmptySessionCatalog(scope);
+    const baseInput = {
+      action: 'create' as const,
+      scope,
+      sessionId,
+      actorUserId: userId,
+      occurredAt: now,
+      expectedCatalogVersion: empty.version,
+      expectedCatalogDigestSha256: empty.digestSha256,
+      title: 'Classification boundary',
+      plannedDurationMinutes: 45,
+      formatId,
+      trackId: null
+    };
+
+    const sole = planSessionMutation({
+      catalog: empty,
+      vocabulary: vocabulary(),
+      planningInput: { ...baseInput, lifecycle: 'programmed' }
+    });
+    expect(sole.after.programTarget.track?.id).toBe(trackId);
+
+    expect(() => planSessionMutation({
+      catalog: empty,
+      vocabulary: vocabulary({ tracks: 'two' }),
+      planningInput: { ...baseInput, lifecycle: 'programmed' }
+    })).toThrow('track_required');
+    expect(planSessionMutation({
+      catalog: empty,
+      vocabulary: vocabulary({ tracks: 'two' }),
+      planningInput: { ...baseInput, lifecycle: 'draft' }
+    }).after.programTarget.track).toBeNull();
+
+    const legacyPlan = planSessionMutation({
+      catalog: empty,
+      vocabulary: vocabulary({ tracks: 'none' }),
+      planningInput: { ...baseInput, lifecycle: 'programmed' }
+    });
+    const legacyCatalog = applySessionMutationPlan({
+      catalog: empty,
+      vocabulary: vocabulary({ tracks: 'none' }),
+      plan: legacyPlan
+    }).catalog;
+    const legacy = findSession(legacyCatalog, sessionId)!;
+    const repaired = planSessionMutation({
+      catalog: legacyCatalog,
+      vocabulary: vocabulary({ tracks: 'two', setVersion: 2 }),
+      planningInput: {
+        action: 'retarget', scope, sessionId, actorUserId: userId, occurredAt: later,
+        expectedCatalogVersion: legacyCatalog.version,
+        expectedCatalogDigestSha256: legacyCatalog.digestSha256,
+        expectedSessionVersion: legacy.version,
+        expectedSessionDigestSha256: legacy.digestSha256,
+        formatId,
+        trackId: otherTrackId
+      }
+    });
+    expect(repaired.before?.programTarget.track).toBeNull();
+    expect(repaired.after.programTarget.track?.id).toBe(otherTrackId);
+  });
+
   test('retains exact active Program Vocabulary evidence and exposes lifecycle-bounded adapters', () => {
     const empty = createEmptySessionCatalog(scope);
     const created = applySessionMutationPlan({
@@ -121,7 +193,7 @@ describe('canonical Session foundation', () => {
       scope, { kind: 'session', sessionId }
     )).toMatchObject({ id: sessionId, title: 'Canonical Session', lifecycle: 'collecting', version: 2 });
     expect(createSchedulePlaceableSessionPort(collectingSource).readPlaceableSession(scheduleScope, sessionId as never))
-      .toMatchObject({ id: sessionId, lifecycle: 'collecting' });
+      .toMatchObject({ id: sessionId, lifecycle: 'collecting', trackId });
   });
 
   test('permits only forward ordinary lifecycle transitions and refuses retired current references', () => {
@@ -297,7 +369,7 @@ describe('canonical Session foundation', () => {
         retryable: false,
         subjects: [{ type: 'session', id: sessionId }],
         detail: { code: 'session_placed', action: 'restore', sessionId },
-        detailSchemaVersion: 2
+        detailSchemaVersion: 3
       }
     });
   });

@@ -97,3 +97,81 @@ test('live reviewers renders the empty roster and the typed invite refusal', asy
 
 	await expectNoDocumentOverflow(page);
 });
+
+test('a reviewer without disclosed contact has no empty copy control', async ({ page }) => {
+	await ensureEvent(page);
+
+	const teamResponse = await page.request.get('/api/workspace/team');
+	expect(teamResponse.ok()).toBe(true);
+	const teamPayload = await teamResponse.json();
+	expect(teamPayload.kind).toBe('success');
+	const owner = teamPayload.data.members.find(
+		(member: { kind: string }) => member.kind === 'member'
+	);
+	expect(owner).toBeTruthy();
+
+	const rosterResponse = await page.request.get('/api/events/current/reviewer-roster');
+	expect(rosterResponse.ok()).toBe(true);
+	const rosterPayload = await rosterResponse.json();
+	expect(rosterPayload.kind).toBe('success');
+
+	const reviewerId = '00000000-0000-4000-8000-000000000091';
+	const subject = {
+		kind: 'workspace_membership',
+		id: owner.id,
+		version: owner.version
+	};
+	const reviewer = {
+		reviewerId,
+		recordVersion: 1,
+		projectionVersion: 1,
+		status: 'active',
+		accessSubject: subject,
+		authority: {
+			schemaVersion: 1,
+			scope: rosterPayload.data.scope,
+			rosterSubject: subject,
+			currentSubject: subject,
+			state: 'active',
+			version: 1,
+			digestSha256: 'a'.repeat(64),
+			capabilityIds: [
+				'event.read',
+				'speaker.directory.read',
+				'submission.read',
+				'submission.score',
+				'submission.comment',
+				'schedule.read'
+			],
+			evidenceIds: ['browser:no-contact-reviewer'],
+			displayName: 'Avery Stone'
+		},
+		displayName: 'Avery Stone',
+		reviews: []
+	};
+
+	await page.route('**/api/events/current/reviewer-roster', (route) => route.fulfill({
+		json: {
+			...rosterPayload,
+			data: { ...rosterPayload.data, reviewers: [reviewer] }
+		}
+	}));
+	// The roster identity remains visible, but the organizer Team projection
+	// deliberately has no matching subject and therefore discloses no address.
+	await page.route('**/api/workspace/team', (route) => route.fulfill({
+		json: {
+			...teamPayload,
+			data: {
+				...teamPayload.data,
+				members: teamPayload.data.members.filter(
+					(member: { id: string }) => member.id !== owner.id
+				)
+			}
+		}
+	}));
+
+	await page.goto('/app/reviewers');
+	await expect(page.getByText('Avery Stone', { exact: true }).filter({ visible: true })).toHaveCount(1);
+	await expect(page.getByRole('button', { name: 'Copy email address' })).toHaveCount(0);
+	await expectNoDocumentOverflow(page);
+});

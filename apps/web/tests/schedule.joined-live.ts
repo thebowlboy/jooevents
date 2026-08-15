@@ -71,7 +71,7 @@ test.beforeEach(async ({ context, baseURL }) => {
 	}]);
 });
 
-test('live schedule renders the settings-derived grid, a typed publish refusal, and a placed session', async ({
+test('live schedule renders the settings-derived grid, publication state, and a placed session', async ({
 	page
 }, testInfo) => {
 	const formatName = `Joined format ${testInfo.project.name}`;
@@ -84,8 +84,10 @@ test('live schedule renders the settings-derived grid, a typed publish refusal, 
 	// dates under the seeded 09:00–18:00/30 trio), but without a room there is
 	// still no grid to draw — and the first project adds the shared room
 	// through the honest blank state's own form.
+	// The blank state names the supply that is actually missing rather than
+	// claiming the schedule is empty.
 	const dayGroup = page.getByRole('group', { name: 'Schedule day' });
-	const blank = page.getByRole('heading', { level: 2, name: 'Nothing is scheduled yet' });
+	const blank = page.getByRole('heading', { level: 2, name: 'The board has no rooms yet' });
 	await expect(blank.or(dayGroup).first()).toBeVisible();
 	if (await blank.isVisible()) {
 		await page.getByLabel('Room name').fill('Joined Hall');
@@ -106,12 +108,18 @@ test('live schedule renders the settings-derived grid, a typed publish refusal, 
 	await expect(page.getByText(/Mid-flight|Decision crunch|All clear/)).toHaveCount(0);
 	await expect(page.locator('[data-je-scenario]')).toHaveCount(0);
 
-	// Typed refusal: no publish owner is mounted, and the surface says exactly
-	// that instead of no-oping.
-	await page.getByRole('button', { name: 'Publish' }).click();
-	await expect(page.getByText(
-		'Publishing the schedule is not available in this live workspace yet.'
-	)).toBeVisible();
+	// The joined runtime is shared across specs. In isolation this legacy door
+	// still names its typed refusal; after the publication proof has run, the
+	// canonical release read replaces it with the honest Published state.
+	const publish = page.getByRole('button', { name: 'Publish' });
+	const published = page.getByText('Published', { exact: true });
+	await expect(publish.or(published).first()).toBeVisible();
+	if (await publish.isVisible()) {
+		await publish.click();
+		await expect(page.getByText(
+			'Publishing the schedule is not available in this live workspace yet.'
+		)).toBeVisible();
+	}
 
 	// Consequential path: create a session through the dialog. The fresh event
 	// has no formats, so the dialog's inline vocabulary mint is part of the
@@ -152,7 +160,7 @@ test('live schedule renders the settings-derived grid, a typed publish refusal, 
 
 	// Leave no active coverage target behind (see the header comment): retire
 	// the format this run minted through the live Settings vocabulary surface.
-	await page.goto('/app/settings');
+	await page.goto('/app/settings/program');
 	const basics = page.getByRole('region', { name: 'Program basics' });
 	await expect(basics.getByText(formatName, { exact: true })).toBeVisible();
 	await basics.getByRole('button', { name: `More actions for ${formatName}` }).click();

@@ -1,5 +1,8 @@
 import type { WorkspaceDataset } from './dataset';
-import { closesInDays, daysAgo, hoursAgo } from './dataset';
+import { closesInDays, dayDeadline, daysAgo, hoursAgo, visitedOnLastDays } from './dataset';
+
+/** The event's zone — the authority for every deadline boundary below. */
+const TZ = 'America/New_York';
 import { defaultEventTheme, starterSurfaceTemplates, starterTemplates } from './templates';
 import { baselineFieldRegistry } from './fields';
 
@@ -24,7 +27,8 @@ const flight: WorkspaceDataset = {
 		},
 		lockedAreas: [],
 		navCounts: {
-			submissions: '14',
+			/* Held, not collected-ever: the discarded row is recoverable, not waiting. */
+			submissions: '13',
 			review: '62%',
 			decisions: { value: '3', tone: 'warning' },
 			speakers: '9',
@@ -33,11 +37,33 @@ const flight: WorkspaceDataset = {
 			schedule: { value: '2', tone: 'danger' },
 			messages: '2'
 		},
+		/* The submissions figure and its delta are measured from the rows on
+		   every read, so they are not authored here; these three carry the
+		   judging, the choosing, and the placing. */
 		stats: [
-			{ label: 'Submissions', value: '14', sub: '+2 this week' },
-			{ label: 'Round 1 reviews', value: '62%', sub: '224 of 360 committed' },
-			{ label: 'Accepted', value: '4', sub: '2 accepted not yet notified', tone: 'attention' },
-			{ label: 'CFP closes', value: '12 days', sub: 'Aug 22, 23:59 EDT' }
+			{
+				label: 'Round 1 reviews',
+				value: '62%',
+				sub: '224 of 360 · 3 need another reviewer',
+				/* The same health the Review lane carries: one figure cannot be
+				   green in the band and amber in the pipeline. */
+				health: 'attention',
+				progress: { done: 224, required: 360 }
+			},
+			{
+				label: 'Decided',
+				value: '6 of 14',
+				sub: '4 accepted · 3 still waiting to hear',
+				health: 'attention',
+				progress: { done: 6, required: 14 }
+			},
+			{
+				label: 'Placed',
+				value: '8 of 12',
+				sub: 'on the grid · 2 conflicts',
+				health: 'blocked',
+				progress: { done: 8, required: 12 }
+			}
 		],
 		attention: [
 			{
@@ -53,18 +79,19 @@ const flight: WorkspaceDataset = {
 				id: 'unnotified',
 				severity: 'now',
 				area: 'decisions',
-				title: '3 decisions not yet notified',
-				detail: 'Oldest decision is 6 days old. Notification is a separate, deliberate send.',
-				action: 'Compose notifications',
+				title: '3 speakers have not been told their result',
+				detail:
+					'The oldest has been waiting 6 days. Results are never sent automatically — the send is yours to make.',
+				action: 'Send their results',
 				href: '/app/decisions?scope=unnotified'
 			},
 			{
 				id: 'conflicts',
 				severity: 'soon',
 				area: 'schedule',
-				title: '2 blocking conflicts on the schedule',
-				detail: 'Publishing stays blocked while blocking conflicts exist.',
-				action: 'Open conflicts',
+				title: '2 conflicts on the schedule',
+				detail: 'Two sessions want the same room at the same time.',
+				action: 'Show the conflicts',
 				href: '/app/schedule?panel=conflicts'
 			},
 			{
@@ -90,8 +117,8 @@ const flight: WorkspaceDataset = {
 				id: 'bounced',
 				severity: 'fyi',
 				area: 'messages',
-				title: '2 emails bounced',
-				detail: 'Addresses need correcting before the next send.',
+				title: '2 speakers never received the last send',
+				detail: 'Their addresses rejected it, and both are on the acceptance list.',
 				action: 'Open communications'
 			},
 			{
@@ -110,23 +137,21 @@ const flight: WorkspaceDataset = {
 				key: 'collect',
 				label: 'Collect',
 				headline: '14',
-				sub: 'CFP open · closes in 12 days',
+				sub: 'CFP open',
 				state: 'ok',
 				paceTone: 'on',
-				deadlineLabel: 'CFP closes in 12 days',
-				deadlineIso: '2026-08-22T23:59:00-04:00'
+				deadline: { qualifier: 'CFP closes', ...dayDeadline(12, TZ) }
 			},
 			{ key: 'triage', label: 'Triage', headline: '10', sub: 'inbox · 2 set aside · 1 late', state: 'ok' },
 			{
 				key: 'review',
 				label: 'Review',
 				headline: '62%',
-				sub: '224 of 360 · due in 18 days',
+				sub: '224 of 360 committed',
 				state: 'attention',
 				progress: { done: 224, required: 360 },
 				paceTone: 'on',
-				deadlineLabel: 'due Aug 28',
-				deadlineIso: '2026-08-28T23:59:00-04:00'
+				deadline: { qualifier: 'due', ...dayDeadline(18, TZ) }
 			},
 			/* 6 decided of the 14 collected; decisions have no committed
 			   notify-by date in this scenario, so no pace claim is made. */
@@ -134,7 +159,7 @@ const flight: WorkspaceDataset = {
 				key: 'decide',
 				label: 'Decide',
 				headline: '6',
-				sub: '4 accepted · 3 un-notified',
+				sub: '4 accepted · 3 still waiting to hear',
 				state: 'attention',
 				progress: { done: 6, required: 14 }
 			},
@@ -147,27 +172,29 @@ const flight: WorkspaceDataset = {
 				sub: 'confirmed · 8 tasks overdue',
 				state: 'attention',
 				paceTone: 'behind',
-				deadlineLabel: 'content due Sep 11',
-				deadlineIso: '2026-09-11T23:59:00-04:00'
+				deadline: { qualifier: 'content due', ...dayDeadline(32, TZ) }
 			},
 			{
 				key: 'schedule',
 				label: 'Schedule',
 				headline: '8/12',
-				sub: 'placed · 2 blocking conflicts',
+				sub: 'placed · 2 conflicts',
 				state: 'blocked',
 				progress: { done: 8, required: 12 },
 				paceTone: 'behind',
-				deadlineLabel: 'publish target Sep 25',
-				deadlineIso: '2026-09-25'
+				deadline: { qualifier: 'publish target', ...dayDeadline(46, TZ) }
 			},
 			{ key: 'comms', label: 'Comms', headline: '5', sub: '3 sent · 1 scheduled · 1 draft', state: 'ok' }
 		],
 		deadlines: [
-			{ label: 'CFP closes', absolute: 'Aug 22, 23:59 EDT', relative: 'in 12 days', tone: 'ok' },
-			{ label: 'Review round 1 due', absolute: 'Aug 28, 23:59 EDT', relative: 'in 18 days', tone: 'ok' },
-			{ label: 'Speaker content due', absolute: 'Sep 11, 23:59 EDT', relative: 'in 32 days', tone: 'ok' },
-			{ label: 'Schedule publish target', absolute: 'Sep 25', relative: 'in 46 days · blocked by 2 conflicts', tone: 'blocked' }
+			{ label: 'CFP closes', ...dayDeadline(12, TZ) },
+			{ label: 'Review round 1 due', ...dayDeadline(18, TZ) },
+			{ label: 'Speaker content due', ...dayDeadline(32, TZ) },
+			{
+				label: 'Schedule publish target',
+				...dayDeadline(46, TZ),
+				note: '2 conflicts still open'
+			}
 		],
 		activity: [
 			{
@@ -175,22 +202,22 @@ const flight: WorkspaceDataset = {
 				actor: 'agent',
 				name: 'Triage run #4',
 				text: 'finished screening 41 new submissions — 12 set aside as off-topic',
-				time: '8 min ago'
+				at: hoursAgo(0.13)
 			},
-			{ id: 'act-2', actor: 'person', name: 'Sofia Berg', text: 'committed 6 reviews in Round 1', time: '24 min ago' },
+			{ id: 'act-2', actor: 'person', name: 'Sofia Berg', text: 'committed 6 reviews in Round 1', at: hoursAgo(0.4) },
 			{
 				id: 'act-3',
 				actor: 'agent',
 				name: 'Schedule import',
 				text: 'draft ready for review — 2 unresolved room names (“Main Stage B”, “Workshop annex”) and one session naming a speaker who has not confirmed yet',
-				time: '1 h ago'
+				at: hoursAgo(1)
 			},
-			{ id: 'act-4', actor: 'person', name: 'Jonas Weber', text: 'accepted 3 submissions', time: '2 h ago' },
-			{ id: 'act-5', actor: 'you', name: 'You', text: 'sent “Speaker onboarding” to 18 recipients', time: 'yesterday' }
+			{ id: 'act-4', actor: 'person', name: 'Jonas Weber', text: 'accepted 3 submissions', at: hoursAgo(2) },
+			{ id: 'act-5', actor: 'you', name: 'You', text: 'sent “Speaker onboarding” to 18 recipients', at: daysAgo(1) }
 		],
 		trays: [
 			{ kind: 'late', label: 'Late submissions', count: 1, href: '/app/submissions?tray=late' },
-			{ kind: 'discarded', label: 'Discarded, recoverable', count: 1, href: '/app/submissions?tray=discarded' },
+			{ kind: 'discarded', label: 'Spam, recoverable', count: 1, href: '/app/submissions?tray=discarded' },
 			{ kind: 'unresolved-import', label: 'Unresolved import items', count: 4 },
 			{ kind: 'stranded-drafts', label: 'Stranded form drafts', count: 3 },
 			{ kind: 'inbound-mail', label: 'Inbound mail review', count: 2 },
@@ -369,7 +396,7 @@ const flight: WorkspaceDataset = {
 			speakers: [{ name: 'Ingrid Halvorsen', email: 'ingrid@nordicscale.no' }],
 			trackId: 'trk-infra',
 			formatId: 'fmt-talk',
-			submittedAt: hoursAgo(5),
+			submittedAt: hoursAgo(0.4),
 			source: 'cfp',
 			targetSessionId: 'ses-11',
 			tray: 'inbox',
@@ -424,7 +451,7 @@ const flight: WorkspaceDataset = {
 			speakers: [{ name: 'Deniz Kaya', email: 'deniz@ingestworks.io' }],
 			trackId: 'trk-infra',
 			formatId: 'fmt-talk',
-			submittedAt: hoursAgo(20),
+			submittedAt: hoursAgo(6),
 			source: 'cfp',
 			tray: 'late',
 			decision: 'undecided',
@@ -494,7 +521,10 @@ const flight: WorkspaceDataset = {
 		}
 	],
 	submissionTrayTotals: { inbox: 10, 'set-aside': 2, late: 1, discarded: 1 },
+	/* In here most working days, so the diff worth showing is today's: what
+	   happened yesterday is still in this person's head. */
 	previousVisit: hoursAgo(26),
+	visitHistory: [hoursAgo(2), ...visitedOnLastDays(5)],
 
 	reviewPlans: [
 		{
@@ -942,7 +972,7 @@ const flight: WorkspaceDataset = {
 			bounces: [],
 			review: {
 				templateLabel: 'decision-notice @ revision 2',
-				audienceLabel: 'Accepted, not yet notified (current snapshot)',
+				audienceLabel: 'Accepted speakers who have not been told (current snapshot)',
 				binding: 'current_snapshot',
 				recipients: [
 					{ name: 'Amara Okafor', email: 'amara@contractual.io', state: 'included', mergeSample: 'Accepted — “Typed Tool Contracts Between Agents That Never Meet”', mergeValues: { 'submission.title': 'Typed Tool Contracts Between Agents That Never Meet' } },

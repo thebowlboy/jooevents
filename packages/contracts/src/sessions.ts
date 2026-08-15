@@ -172,6 +172,21 @@ export const sessionTransitionInputSchema = z.strictObject({
 });
 
 /**
+ * Reclassifies one Session against the event's current Program Vocabulary.
+ * Format and track travel together because the retained target evidence pins
+ * one vocabulary set; changing either refreshes the complete target atomically.
+ */
+export const sessionRetargetInputSchema = z.strictObject({
+  action: z.literal('retarget'),
+  ...catalogGuardFields,
+  sessionId: sessionIdInputSchema,
+  expectedSessionVersion: sessionVersionSchema,
+  expectedSessionDigestSha256: digestSchema,
+  formatId: sessionIdInputSchema,
+  trackId: sessionIdInputSchema.nullable()
+});
+
+/**
  * Appends participants to an existing Session roster. Existing roster entries
  * are never modified or removed; incoming participants whose person is already
  * on the roster are skipped. The optional `graduateTo` carries the ordinary
@@ -208,7 +223,7 @@ export const sessionRosterVisibilityInputSchema = z.strictObject({
 
 /**
  * Operator wire surface for the mounted Session draft/mutate operations:
- * create, lifecycle transition, and the roster visibility off-switch — the
+ * create, format/track retargeting, lifecycle transition, and the roster visibility off-switch — the
  * organizer gesture that must stay reachable so a person can be hidden before
  * any publish and after a revocation. Roster appends remain authored only
  * through hosting changesets (decision graduation), never from a browser.
@@ -216,6 +231,7 @@ export const sessionRosterVisibilityInputSchema = z.strictObject({
 export const sessionAuthorInputSchema = z.discriminatedUnion('action', [
   sessionCreateInputSchema,
   sessionTransitionInputSchema,
+  sessionRetargetInputSchema,
   sessionRosterVisibilityInputSchema
 ]);
 
@@ -228,6 +244,7 @@ const planningAttribution = {
 export const sessionPlanningInputSchema = z.discriminatedUnion('action', [
   sessionCreateInputSchema.extend({ ...planningAttribution, sessionId: sessionIdSchema }),
   sessionTransitionInputSchema.extend(planningAttribution),
+  sessionRetargetInputSchema.extend(planningAttribution),
   sessionRosterAppendInputSchema.extend(planningAttribution),
   sessionRosterVisibilityInputSchema.extend(planningAttribution)
 ]);
@@ -262,13 +279,13 @@ export const sessionRestorePlanSchema = z.strictObject({
 });
 
 export const sessionSafeDiffSchema = z.strictObject({
-  action: z.enum(['create', 'transition', 'roster_append', 'roster_visibility', 'restore']),
+  action: z.enum(['create', 'transition', 'retarget', 'roster_append', 'roster_visibility', 'restore']),
   before: sessionHeadSchema.nullable(),
   after: sessionHeadSchema.nullable()
 });
 
 export const sessionMutationResultSchema = z.strictObject({
-  action: z.enum(['create', 'transition', 'roster_append', 'roster_visibility', 'restore']),
+  action: z.enum(['create', 'transition', 'retarget', 'roster_append', 'roster_visibility', 'restore']),
   catalogVersion: sessionVersionSchema,
   session: sessionHeadSchema.nullable()
 });
@@ -276,7 +293,7 @@ export const sessionMutationResultSchema = z.strictObject({
 /** Exact selector and inert plan an operator needs to review, propose, and commit one draft. */
 export const sessionDraftDataSchema = z.strictObject({
   schemaVersion: z.literal(1),
-  action: z.enum(['create', 'transition', 'roster_visibility']),
+  action: z.enum(['create', 'transition', 'retarget', 'roster_visibility']),
   changesetId: sessionIdSchema,
   headVersion: sessionVersionSchema,
   status: z.literal('draft'),
@@ -318,13 +335,15 @@ export const SESSION_OPERATION_SCHEMA_REFS = Object.freeze({
     inputKey: 'schema.session.change-draft.input',
     inputSchema: sessionAuthorInputSchema,
     resultKey: 'schema.session.change-draft.operator-result',
-    resultSchema: sessionDraftOperationResultSchema
+    resultSchema: sessionDraftOperationResultSchema,
+    version: 2
   }),
   mutate: createOperationSchemaManifestRefs({
     inputKey: 'schema.session.changeset-mutate.input',
     inputSchema: sessionAuthorInputSchema,
     resultKey: 'schema.session.changeset-mutate.operator-result',
-    resultSchema: sessionMutationOperationResultSchema
+    resultSchema: sessionMutationOperationResultSchema,
+    version: 2
   })
 });
 

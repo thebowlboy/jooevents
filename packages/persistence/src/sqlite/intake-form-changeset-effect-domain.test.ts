@@ -85,6 +85,20 @@ const eventId = parseEventId('019c1df7-86b5-769b-bba4-5f7097bfa101');
 const userId = parseUserId('019c1df7-86b5-769b-bba4-5f7097bfa201');
 const membershipId = parseMembershipId('019c1df7-86b5-769b-bba4-5f7097bfa202');
 const now = parseInstant('2026-08-12T09:00:00.000Z');
+const themeArtifactId = '019c1df7-86b5-769b-bba4-5f7097bfa211';
+const applyArtifactId = '019c1df7-86b5-769b-bba4-5f7097bfa212';
+const templateRevisionOne = '019c1df7-86b5-769b-bba4-5f7097bfa213';
+const templateRevisionTwo = '019c1df7-86b5-769b-bba4-5f7097bfa214';
+const templatePin = (artifactId: string, revisionId = templateRevisionOne) => ({
+  artifactId,
+  revisionId,
+  revisionNumber: revisionId === templateRevisionOne ? 1 : 2,
+  digestSha256: (revisionId === templateRevisionOne ? 'd' : 'e').repeat(64)
+});
+const themeRecipe = {
+  name: 'Warm default', canvas: '#faf8f5', surface: '#ffffff',
+  text: '#2a2522', action: '#b05a4f', radius: 6, controlHeight: 36
+};
 const profile = Object.freeze({ key: 'intake-form-sqlite-test', version: parseContractVersion(1) });
 const evidence: InvocationEvidence = Object.freeze({
   kind: 'operator', surface: 'operator_http', client: { key: 'web.operator' },
@@ -879,7 +893,24 @@ describe('ordinary SQLite Form changeset effect-domain adapter', () => {
         vocabulary: { readVocabulary: () => { throw new TypeError('unused_source'); } },
         eventSettings: { readEventSettings: () => { throw new TypeError('unused_source'); } },
         names: { readParticipantDisplayName: () => { throw new TypeError('unused_source'); } },
-        forms: createSQLiteIntakeFormVersionPinSource(fixture.sqlite)
+        forms: createSQLiteIntakeFormVersionPinSource(fixture.sqlite),
+        templates: {
+          readPinnedArtifact: (_scope, pin) => {
+            if (pin.artifactId === themeArtifactId
+                && pin.revisionId === templateRevisionOne) return {
+              kind: 'theme' as const, recipe: themeRecipe, markText: 'JE'
+            };
+            if (pin.artifactId !== applyArtifactId) return undefined;
+            const heading = pin.revisionId === templateRevisionOne
+              ? 'Apply now'
+              : pin.revisionId === templateRevisionTwo ? 'Apply today' : null;
+            return heading === null ? undefined : {
+              kind: 'surface' as const, surfaceKind: 'application-form' as const,
+              name: 'Apply', purpose: 'Application.',
+              blocks: [{ type: 'hero' as const, title: heading, intro: '' }], usedBy: []
+            };
+          }
+        }
       });
       const releasedAt = '2026-08-12T09:00:01.000Z';
       const styleSetReleaseId = uuid(0xa001);
@@ -891,10 +922,8 @@ describe('ordinary SQLite Form changeset effect-domain adapter', () => {
           actorUserId: userId,
           occurredAt: releasedAt,
           releaseId: styleSetReleaseId,
-          recipe: {
-            name: 'Warm default', canvas: '#faf8f5', surface: '#ffffff',
-            text: '#2a2522', action: '#b05a4f', radius: 6, controlHeight: 36
-          },
+          sourceTemplateRevision: templatePin(themeArtifactId),
+          recipe: themeRecipe,
           expectedCurrentStyleSetNumber: null
         },
         port: releases
@@ -910,6 +939,7 @@ describe('ordinary SQLite Form changeset effect-domain adapter', () => {
           occurredAt: releasedAt,
           releaseId: surfaceReleaseId,
           kind: 'apply',
+          sourceTemplateRevision: templatePin(applyArtifactId),
           manifest: { schemaVersion: 1, heading: 'Apply now', intro: null },
           styleSetReleaseId,
           formRef: { formId, formVersionId: versionOne },
@@ -1001,6 +1031,7 @@ describe('ordinary SQLite Form changeset effect-domain adapter', () => {
           occurredAt: '2026-08-12T09:00:03.000Z',
           releaseId: uuid(0xa003),
           kind: 'apply',
+          sourceTemplateRevision: templatePin(applyArtifactId, templateRevisionTwo),
           manifest: { schemaVersion: 1, heading: 'Apply today', intro: null },
           styleSetReleaseId,
           formRef: { formId, formVersionId: versionTwo },

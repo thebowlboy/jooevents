@@ -6,11 +6,16 @@ export * from './decisions';
 export * from './communications/provider';
 export * from './communications/outbound-email-delivery';
 export * from './communications/provider-configuration';
+export * from './communications/workspace-sender-identity';
 export * from './embeds';
 export * from './engagements';
 export * from './event';
 export * from './event-settings';
 export * from './field-registry';
+/** The one human-facing date vocabulary, shared by the web app, server, and email layer. */
+export * from './format/dates';
+/** The arrival pulse: which diff window a reader gets, and what fell inside it. */
+export * from './format/arrivals';
 export * from './forms';
 export * from './gateway-authority';
 export * from './operations';
@@ -23,4 +28,6 @@ export * from './route-namespaces';
 export * from './schedule-placement';
 export * from './sessions';
 export * from './submissions';
+export * from './template-authoring';
+export * from './tasks';
 export * from './workspace-team';

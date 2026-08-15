@@ -295,7 +295,7 @@ function staleContribution(
     kind: 'release.changed',
     subjects: [],
     detail: { code: error.code, action, subjectId: null },
-    detailSchemaVersion: 2
+    detailSchemaVersion: 3
   });
 }
 

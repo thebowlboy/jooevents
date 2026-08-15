@@ -117,7 +117,11 @@ export const submissionSessionOriginSchema = z.strictObject({
  * the two structured exits offered by a `decision.target_unavailable` refusal.
  */
 export const decisionGraduationChoiceInputSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('spawn') }),
+  z.strictObject({
+    kind: z.literal('spawn'),
+    /** Explicit organizer classification when the submission carries none. */
+    trackId: decisionIdInputSchema.optional()
+  }),
   z.strictObject({
     kind: z.literal('attach'),
     sessionId: decisionIdInputSchema,
@@ -168,7 +172,11 @@ export const decisionAuthorInputSchema = z.strictObject({
  * plan revalidates deterministically from planning input alone.
  */
 export const decisionPlanningGraduationSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('spawn'), sessionId: decisionIdSchema }),
+  z.strictObject({
+    kind: z.literal('spawn'),
+    sessionId: decisionIdSchema,
+    trackId: decisionIdSchema.nullable()
+  }),
   z.strictObject({
     kind: z.literal('attach'),
     sessionId: decisionIdSchema,
@@ -373,7 +381,8 @@ export const DECISION_OPERATION_SCHEMA_REFS = Object.freeze({
     inputKey: 'schema.decision.decide-draft.input',
     inputSchema: decisionAuthorInputSchema,
     resultKey: 'schema.decision.decide-draft.operator-result',
-    resultSchema: decisionDecideDraftOperationResultSchema
+    resultSchema: decisionDecideDraftOperationResultSchema,
+    version: 2
   })
 });
 

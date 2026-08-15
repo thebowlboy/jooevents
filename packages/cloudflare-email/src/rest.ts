@@ -1,3 +1,4 @@
+import { OUTBOUND_EMAIL_PROVIDER_REQUEST_BUDGET_MS } from '@jooevents/communications';
 import { providerMessageIdSchema } from '@jooevents/contracts';
 import {
   CLOUDFLARE_EMAIL_ADAPTER_VERSION,
@@ -279,9 +280,14 @@ function createRestTransport(input: Readonly<{
           callbackUsed = true;
           if (!validToken(apiToken)) throw new TypeError('Cloudflare API token is unavailable');
           dispatched = true;
+          // The submission carries a bounded budget so a hung connection ends as
+          // an honest acceptance-unknown timeout instead of occupying the
+          // delivery indefinitely. The dispatch lease is derived from this
+          // budget, so an unbounded request here would make the lease unsound.
           const response = await input.fetch(endpoint, {
             method: 'POST',
             redirect: 'error',
+            signal: AbortSignal.timeout(OUTBOUND_EMAIL_PROVIDER_REQUEST_BUDGET_MS),
             headers: {
               Authorization: `Bearer ${apiToken}`,
               'Content-Type': 'application/json'

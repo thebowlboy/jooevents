@@ -9,6 +9,7 @@ import {
   releaseAuthorInputSchema,
   releaseProgramPlanSchema,
   releasePublicReadInputSchema,
+  releaseOverviewSchema,
   releaseSafeDiffSchema,
   releaseSurfaceAllowlistPlanSchema,
   releaseSurfacePublishPlanSchema,
@@ -37,6 +38,12 @@ const formId = '019c1df7-86b5-769b-bba4-5f7097bfe701';
 const formVersionId = '019c1df7-86b5-769b-bba4-5f7097bfe702';
 const digest = 'a'.repeat(64);
 const now = '2026-08-14T08:00:00.000Z';
+const sourceTemplateRevision = Object.freeze({
+  artifactId: '019c1df7-86b5-769b-bba4-5f7097bfe710',
+  revisionId: '019c1df7-86b5-769b-bba4-5f7097bfe711',
+  revisionNumber: 1,
+  digestSha256: digest
+});
 
 function programRelease(overrides: Record<string, unknown> = {}) {
   return {
@@ -184,6 +191,7 @@ describe('surface release contract', () => {
     id: releaseId,
     number: 1,
     predecessor: null,
+    sourceTemplateRevision,
     manifest: { schemaVersion: 1, heading: null, intro: null },
     styleSetReleaseId: styleSetId,
     releasedByUserId: userId,
@@ -204,10 +212,41 @@ describe('surface release contract', () => {
     expect(apply.formRef.formVersionId).toBe(formVersionId);
   });
 
+  test('an operator overview carries exactly the immutable releases selected by its heads', () => {
+    const release = surfaceReleaseSchema.parse({ kind: 'schedule', ...common });
+    const head = surfaceHeadSchema.parse({
+      schemaVersion: 1,
+      scope,
+      kind: 'schedule',
+      activeReleaseId: release.id,
+      version: 1,
+      allowedFrameOrigins: [],
+      updatedByUserId: userId,
+      updatedAt: now
+    });
+    expect(releaseOverviewSchema.parse({
+      schemaVersion: 1,
+      scope,
+      currentProgramRelease: null,
+      currentStyleSetRelease: null,
+      surfaceHeads: [head],
+      activeSurfaceReleases: [release]
+    }).activeSurfaceReleases).toEqual([release]);
+    expect(() => releaseOverviewSchema.parse({
+      schemaVersion: 1,
+      scope,
+      currentProgramRelease: null,
+      currentStyleSetRelease: null,
+      surfaceHeads: [head],
+      activeSurfaceReleases: []
+    })).toThrow();
+  });
+
   test('the surface publish wire input pins a form exactly for submission-bearing kinds', () => {
     const base = {
       action: 'surface_publish',
       kind: 'speakers',
+      sourceTemplateRevision,
       manifest: { schemaVersion: 1, heading: null, intro: null },
       styleSetReleaseId: styleSetId,
       formRef: null,
@@ -263,6 +302,7 @@ describe('surface release contract', () => {
       input: {
         action: 'surface_publish',
         kind: 'speakers',
+        sourceTemplateRevision,
         manifest: { schemaVersion: 1, heading: null, intro: null },
         styleSetReleaseId: styleSetId,
         formRef: null,
@@ -304,6 +344,7 @@ describe('style set release contract', () => {
       id: releaseId,
       number: 1,
       predecessor: null,
+      sourceTemplateRevision,
       recipe: {
         name: 'Warm default', canvas: '#faf8f5', surface: '#ffffff',
         text: '#2a2522', action: '#b05a4f', radius: 6, controlHeight: 36

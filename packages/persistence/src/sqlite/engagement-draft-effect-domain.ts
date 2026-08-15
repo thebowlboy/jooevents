@@ -33,6 +33,7 @@ import {
   ENGAGEMENT_CHANGESET_KIND,
   ENGAGEMENT_CHANGESET_VERSION
 } from '@jooevents/engagement';
+import { TASK_ENGAGEMENT_RESPONSE_COLLABORATOR, taskReadPort } from '@jooevents/tasks';
 import type { PermissionId, VersionedAccessPolicyRef } from '@jooevents/identity-access';
 import {
   canonicalJsonText,
@@ -51,6 +52,7 @@ import type { SQLiteEffectDomainAdapter } from './foundation-trial-uow';
 import { createSQLiteDraftOnlyChangesetLifecycleStore } from './changeset-lifecycle';
 import { SQLiteEngagementRepository } from './engagement';
 import { SQLiteEventSpineRepository } from './event-spine';
+import { SQLiteTaskRepository } from './tasks';
 import type { SQLiteOperatorEventRelationshipSource } from './operator-authority-repositories';
 
 /** The one wire operation this adapter serves; the operations module must mount exactly it. */
@@ -403,13 +405,15 @@ export class SQLiteEngagementDraftEffectDomainAdapter implements SQLiteEffectDom
     this.clearTransient();
 
     const repository = new SQLiteEngagementRepository(this.input.sqlite);
-    const bundle = createEngagementChangesetBundle();
+    const tasks = new SQLiteTaskRepository(this.input.sqlite);
+    const bundle = createEngagementChangesetBundle({
+      collaborators: [TASK_ENGAGEMENT_RESPONSE_COLLABORATOR]
+    });
     const snapshot: ChangesetPlanningSnapshot = Object.freeze({
       getPort<Port>(key: ChangesetReadPortKey<Port>): Port {
-        if ((key as unknown) !== engagementReadPort) {
-          throw new TypeError('engagement_draft_undeclared_read_port');
-        }
-        return repository as unknown as Port;
+        if ((key as unknown) === engagementReadPort) return repository as unknown as Port;
+        if ((key as unknown) === taskReadPort) return tasks as unknown as Port;
+        throw new TypeError('engagement_draft_undeclared_read_port');
       }
     });
     const scope: EngagementScopeDto = { workspaceId: this.input.workspaceId, eventId };

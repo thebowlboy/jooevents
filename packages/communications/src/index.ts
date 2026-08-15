@@ -16,4 +16,6 @@ export * from './release/store';
 export * from './rendering/decision-notification';
 export * from './rendering/email-v1';
 export * from './rendering/merge-registry';
+export * from './rendering/sender-identity';
 export * from './rendering/transactional-email';
+export * from './rendering/task-reminder';

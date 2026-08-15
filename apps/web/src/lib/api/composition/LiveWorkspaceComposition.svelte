@@ -35,7 +35,19 @@
 	import { createLiveScheduleProposalCountsSource } from './schedule-proposal-counts.live';
 	import { createEventSettingsLiveClient } from '$lib/api/operations/event-settings-live';
 	import { createFieldRegistryLiveClient } from '$lib/api/operations/field-registry-live';
+	import { createTemplateArtifactLiveClient } from '$lib/api/operations/template-artifacts-live';
+	import { createTemplateEditLiveClient } from '$lib/api/operations/template-edit-live';
+	import { createReleaseLiveClient } from '$lib/api/operations/release-live';
+	import { createTasksLiveClient } from '$lib/api/operations/tasks-live';
+	import { createLiveTasksPagePort } from '$lib/api/tasks-page-port.live';
+	import { createTaskReminderLiveSender } from '$lib/api/task-reminder-live';
+	import { createReleaseWorkspacePort } from '$lib/api/release-workspace-adapter';
+	import { createLiveTemplatesPagePort } from '$lib/api/templates-page-port.live';
+	import { createTemplatePublicationLivePort } from '$lib/api/template-publication-live';
+	import { createLiveEmbedsPagePort } from '$lib/api/embeds-page-port.live';
 	import { createWorkspaceTeamLiveClient } from '$lib/api/operations/workspace-team-live';
+	import { createWorkspaceSenderIdentityLiveClient } from '$lib/api/operations/workspace-sender-identity-live';
+	import { createLiveSenderIdentitySettingsPort } from '$lib/api/sender-identity-settings-port';
 	import { createEventSettingsWorkspaceAdapter } from '$lib/api/event-settings-workspace-adapter';
 	import { createFieldRegistryWorkspaceAdapter } from '$lib/api/field-registry-workspace-adapter';
 	import { createProgramVocabularySettingsAdapter } from '$lib/api/program-vocabulary-settings-adapter';
@@ -80,10 +92,27 @@
 	const fields = createFieldRegistryWorkspaceAdapter({
 		client: createFieldRegistryLiveClient({ manifest: initial.manifest })
 	});
+	const templateArtifacts = createTemplateArtifactLiveClient({ manifest: initial.manifest });
+	const releaseClient = createReleaseLiveClient({ manifest: initial.manifest });
+	const release = createReleaseWorkspacePort(releaseClient);
 	const forms = createLiveFormsPagePort({
 		forms: canonicalForms,
 		fields,
-		vocabulary
+		vocabulary,
+		templates: {
+			async applicationFormSurfaceId() {
+				const result = await templateArtifacts.list('surface');
+				if (result.kind === 'success') {
+					return result.data.find((artifact) =>
+						artifact.current.document.kind === 'surface'
+						&& artifact.current.document.surfaceKind === 'application-form'
+					)?.head.artifactId ?? null;
+				}
+				if (result.kind === 'outcome'
+					&& result.outcome.kind === 'template.artifact.event_required') return null;
+				throw new Error('The application form Template could not be loaded.');
+			}
+		}
 	});
 	// One canonical Event Settings adapter feeds both the Settings surface and
 	// the schedule geometry derivation, so the grid and the settings form can
@@ -91,13 +120,17 @@
 	const eventSettings = createEventSettingsWorkspaceAdapter({
 		client: createEventSettingsLiveClient({ manifest: initial.manifest })
 	});
+	const workspaceTeam = createWorkspaceTeamSettingsPort({
+		client: createWorkspaceTeamLiveClient({ manifest: initial.manifest })
+	});
 	const settings = createLiveSettingsPagePort({
 		event: eventSettings,
-		team: createWorkspaceTeamSettingsPort({
-			client: createWorkspaceTeamLiveClient({ manifest: initial.manifest })
-		}),
+		team: workspaceTeam,
 		vocab: vocabulary,
-		fields
+		fields,
+		senderIdentity: createLiveSenderIdentitySettingsPort({
+			client: createWorkspaceSenderIdentityLiveClient({ manifest: initial.manifest })
+		})
 	});
 
 	// The joined program aggregates share one canonical core per concern:
@@ -119,11 +152,13 @@
 			list: (query, options) => triage.list(query, options),
 			decisions: { readState: (ids, options) => decisionsClient.readState(ids, options) }
 		}),
-		settings: eventSettings
+		settings: eventSettings,
+		publication: release
 	});
 	const reviewers = createLiveReviewersPagePort({
 		roster: createReviewerRosterLivePort({ manifest: initial.manifest }),
 		review: reviewCore,
+		team: workspaceTeam,
 		vocabulary,
 		schedule: { state: () => schedule.schedule.state() }
 	});
@@ -156,6 +191,7 @@
 	// composed as attemptable — the server evaluates the exact permission on
 	// every read, and a refusal keeps the address an empty value; no browser
 	// role guess ever grants disclosure.
+	const taskClient = createTasksLiveClient({ manifest: initial.manifest });
 	const speakers = createLiveSpeakersPagePort({
 		engagements: createEngagementsLiveClient({ manifest: initial.manifest }),
 		sessions: sessionCatalog,
@@ -163,7 +199,33 @@
 		contacts: createIntakeSubmissionsLivePort({
 			manifest: initial.manifest,
 			contactCapability: { kind: 'available' }
+		}),
+		tasks: taskClient
+	});
+	const templates = createLiveTemplatesPagePort({
+		artifacts: templateArtifacts,
+		model: createTemplateEditLiveClient({ manifest: initial.manifest }),
+		event: eventSettings,
+		schedule: { state: () => schedule.schedule.state() },
+		vocabulary: {
+			tracks: () => vocabulary.tracks(),
+			speakerCategories: () => speakers.vocab.speakerCategories()
+		},
+		speakers: { list: () => speakers.speakers.list() },
+		forms: { list: () => forms.forms.list() },
+		fields,
+		publication: createTemplatePublicationLivePort({
+			artifacts: templateArtifacts,
+			release: releaseClient,
+			forms: canonicalForms
 		})
+	});
+	const embeds = createLiveEmbedsPagePort({ release, templates });
+	const tasks = createLiveTasksPagePort({
+		tasks: taskClient,
+		speakers,
+		templates,
+		remind: createTaskReminderLiveSender({ communications: communicationsAuthoring })
 	});
 	// The Files surface joins the canonical roster (names for received
 	// material) and the vocabulary (track names for share audiences); both
@@ -216,12 +278,15 @@
 		forms,
 		submissions,
 		decisions,
+		embeds,
 		settings,
 		review,
 		reviewers,
 		schedule,
 		speakers,
-		files
+		files,
+		templates,
+		tasks
 	}));
 </script>
 

@@ -1,4 +1,5 @@
 import type { StructuredOutcome } from '@jooevents/contracts';
+import type { ReleaseWorkspacePort } from './release-workspace-adapter';
 import type { SafeApiError } from './client';
 import type {
 	ProgramFormatView,
@@ -166,28 +167,131 @@ function applyFailure(
 }
 
 /**
- * Canonical UTC projection of one placement occurrence. The day key is the
- * occurrence's own UTC calendar date and `startMin` counts from the served
- * geometry's day start (UTC midnight while no grid is derived) — both read
- * straight off the canonical instant string, never through the browser
- * locale. These keys keep "placed" a true claim (and round-trip through
- * `place`) without pretending to wall-clock time.
+ * Projection of one placement occurrence onto the board. The day key is the
+ * occurrence's own UTC calendar date (the canonical basis; re-keying stored
+ * occurrences stays deferred), while `startMin` counts from the served
+ * geometry's day start on the *event's own* clock — because `dayStart` and
+ * `dayEnd` are event-local wall-clock settings and the canonical instant is
+ * UTC. While no grid is derived the geometry serves the UTC zone and a
+ * midnight day start, so the pair still reads straight off the canonical
+ * instant string. Never the browser's locale or zone: the zone is the one the
+ * server sent with the event.
  */
 function occurrencePlacement(
 	occurrence: SchedulePlacementOccurrenceView,
-	dayStartMin = 0
+	dayStartMin = 0,
+	timeZone = 'UTC'
 ): Placement {
+	const clock = eventLocalClock(occurrence.startAtUtc, timeZone);
 	return {
 		sessionId: occurrence.sessionId,
 		dayKey: occurrence.startAtUtc.slice(0, 10),
 		roomId: occurrence.roomId,
-		startMin: utcMinutes(occurrence.startAtUtc) - dayStartMin,
+		startMin: (clock?.minutes ?? utcMinutes(occurrence.startAtUtc)) - dayStartMin,
 		conflicts: []
 	};
 }
 
 function utcMinutes(instant: string): number {
 	return Number(instant.slice(11, 13)) * 60 + Number(instant.slice(14, 16));
+}
+
+// ---------------------------------------------------------------------------
+// The event's own clock. Canonical occurrence instants are UTC; the Event
+// Settings day window (`dayStart`/`dayEnd`) is event-local wall clock, beside
+// the event's IANA `timezone`. Reading one against the other is what these
+// helpers exist to prevent. The zone is always the served one and the locale
+// is pinned, so nothing here depends on the browser's calendar.
+
+const EVENT_CLOCK_FORMATTERS = new Map<string, Intl.DateTimeFormat | null>();
+
+function eventClockFormatter(timeZone: string): Intl.DateTimeFormat | null {
+	const cached = EVENT_CLOCK_FORMATTERS.get(timeZone);
+	if (cached !== undefined) return cached;
+	let formatter: Intl.DateTimeFormat | null = null;
+	try {
+		formatter = new Intl.DateTimeFormat('en-CA', {
+			timeZone,
+			year: 'numeric',
+			month: '2-digit',
+			day: '2-digit',
+			hour: '2-digit',
+			minute: '2-digit',
+			hourCycle: 'h23'
+		});
+	} catch {
+		// An unrecognized zone is not a reason to invent geometry; the caller
+		// falls back to the canonical UTC basis it already served.
+		formatter = null;
+	}
+	EVENT_CLOCK_FORMATTERS.set(timeZone, formatter);
+	return formatter;
+}
+
+/** The zone the derivation will actually use — the served one, or UTC. */
+function resolveEventTimeZone(timezone: string | undefined | null): string {
+	return typeof timezone === 'string' && eventClockFormatter(timezone) ? timezone : 'UTC';
+}
+
+interface EventLocalClock {
+	/** The event-local calendar date the instant falls on (`yyyy-mm-dd`). */
+	readonly dayKey: string;
+	/** Minutes from event-local midnight. */
+	readonly minutes: number;
+}
+
+/** Reads a canonical UTC instant on the event's own wall clock. */
+function eventLocalClock(instant: string, timeZone: string): EventLocalClock | null {
+	const epoch = Date.parse(instant);
+	if (!Number.isFinite(epoch)) return null;
+	const formatter = eventClockFormatter(timeZone);
+	if (!formatter) return null;
+	const parts = formatter.formatToParts(new Date(epoch));
+	const read = (type: string): string | undefined =>
+		parts.find((part) => part.type === type)?.value;
+	const year = read('year');
+	const month = read('month');
+	const day = read('day');
+	const hour = read('hour');
+	const minute = read('minute');
+	if (!year || !month || !day || !hour || !minute) return null;
+	// Some ICU builds still render event-local midnight as hour 24 under h23.
+	const minutes = (Number(hour) % 24) * 60 + Number(minute);
+	return Number.isFinite(minutes) ? { dayKey: `${year}-${month}-${day}`, minutes } : null;
+}
+
+/**
+ * Mints the canonical UTC instant naming a wall-clock time on the event's own
+ * calendar — the inverse of {@link eventLocalClock}, and the write side of the
+ * board's basis. Two passes settle the zone offset (the second covers a slot
+ * that lands on the far side of a DST transition), and the result is verified
+ * by reading it back: a wall clock that does not exist in the zone (the spring
+ * gap) mints nothing rather than a silently shifted instant.
+ */
+function mintEventLocalInstant(
+	dayKey: string,
+	minutes: number,
+	timeZone: string
+): string | null {
+	const midnight = parseUtcDate(dayKey);
+	if (midnight === null || !Number.isInteger(minutes) || minutes < 0 || minutes >= 1_440) {
+		return null;
+	}
+	const wall = midnight + minutes * 60_000;
+	let candidate = wall;
+	for (let pass = 0; pass < 2; pass += 1) {
+		const clock = eventLocalClock(new Date(candidate).toISOString(), timeZone);
+		if (!clock) return null;
+		const observed = parseUtcDate(clock.dayKey);
+		if (observed === null) return null;
+		const next = wall - (observed + clock.minutes * 60_000 - candidate);
+		if (next === candidate) break;
+		candidate = next;
+	}
+	const settled = eventLocalClock(new Date(candidate).toISOString(), timeZone);
+	return settled && settled.dayKey === dayKey && settled.minutes === minutes
+		? new Date(candidate).toISOString()
+		: null;
 }
 
 // ---------------------------------------------------------------------------
@@ -215,6 +319,12 @@ export interface DerivedScheduleGeometry {
 	readonly dayStartMin: number;
 	readonly slotMinutes: number;
 	readonly slotsPerDay: number;
+	/**
+	 * The event's own IANA zone, in which `dayStart`/`dayEnd` are read and in
+	 * which the board's slots are minted back to canonical instants. `UTC`
+	 * whenever no grid is derived or the served zone is unrecognized.
+	 */
+	readonly timeZone: string;
 }
 
 const NO_GRID_GEOMETRY: DerivedScheduleGeometry = Object.freeze({
@@ -227,7 +337,8 @@ const NO_GRID_GEOMETRY: DerivedScheduleGeometry = Object.freeze({
 	dayStart: '00:00',
 	dayStartMin: 0,
 	slotMinutes: 30,
-	slotsPerDay: 0
+	slotsPerDay: 0,
+	timeZone: 'UTC'
 });
 
 /**
@@ -315,13 +426,28 @@ export function deriveScheduleGeometry(input: {
 		keys.add(key);
 		days.push({ key, label: dayLabel(epoch) });
 	}
+	// The day window is event-local wall clock, so every occurrence is read on
+	// the event's own clock before it is checked against that window — a
+	// UTC-versus-wall-clock comparison would refuse the grid for every event
+	// outside UTC (a 09:30 Berlin session is 07:30Z, "before" a 09:00 window).
+	// Day keys stay the canonical UTC date, so an occurrence whose event-local
+	// date differs from its UTC date is still a mismatch: that is the deferred
+	// re-keying, and it renders the honest no-grid state rather than a shifted
+	// column.
+	const timeZone = resolveEventTimeZone(settings.timezone);
 	for (const occurrence of input.occurrences) {
 		const key = occurrence.startAtUtc.slice(0, 10);
+		const start = eventLocalClock(occurrence.startAtUtc, timeZone);
+		const end = eventLocalClock(occurrence.endAtUtc, timeZone);
 		if (
-			!keys.has(key)
+			!start
+			|| !end
+			|| !keys.has(key)
 			|| occurrence.endAtUtc.slice(0, 10) !== key
-			|| utcMinutes(occurrence.startAtUtc) < dayStartMin
-			|| utcMinutes(occurrence.endAtUtc) > dayEndMin
+			|| start.dayKey !== key
+			|| end.dayKey !== key
+			|| start.minutes < dayStartMin
+			|| end.minutes > dayEndMin
 		) {
 			return NO_GRID_GEOMETRY;
 		}
@@ -332,21 +458,9 @@ export function deriveScheduleGeometry(input: {
 		dayStart: settings.dayStart as string,
 		dayStartMin,
 		slotMinutes,
-		slotsPerDay: (dayEndMin - dayStartMin) / slotMinutes
+		slotsPerDay: (dayEndMin - dayStartMin) / slotMinutes,
+		timeZone
 	});
-}
-
-/**
- * Mints the canonical UTC instant a UTC day key plus minutes-from-midnight
- * names, refusing keys that are not real UTC calendar dates. Deterministic and
- * locale-free by construction.
- */
-function mintUtcInstant(dayKey: string, startMin: number): string | null {
-	const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey);
-	if (!match || !Number.isInteger(startMin) || startMin < 0 || startMin >= 1_440) return null;
-	const midnight = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-	if (new Date(midnight).toISOString().slice(0, 10) !== dayKey) return null;
-	return new Date(midnight + startMin * 60_000).toISOString();
 }
 
 function addMinutes(instant: string, minutes: number): string {
@@ -428,8 +542,8 @@ function defaultIdempotencyKey(): string {
 
 /**
  * Live tuned Schedule page port over the deliberately partial canonical mount:
- * the Session catalog (read, create, forward-only transition through
- * draft -> propose -> commit), canonical placement occurrences, the live
+ * the Session catalog (read, create, target repair, and forward-only
+ * transition through draft -> propose -> commit), canonical placement occurrences, the live
  * Program Vocabulary, and a required open-proposal totals source — the page
  * prints those totals as positive per-session facts, so no live mount may run
  * without a canonical counter behind them. Everything else surfaces its typed
@@ -459,6 +573,7 @@ export function createLiveSchedulePagePort(input: {
 	readonly vocabulary: ProgramVocabularySettingsPort;
 	readonly proposals: ScheduleProposalCountsSource;
 	readonly settings: ScheduleGeometrySettingsSource;
+	readonly publication: Pick<ReleaseWorkspacePort, 'overview'>;
 	readonly newIdempotencyKey?: () => string;
 }): SchedulePagePort {
 	if (
@@ -508,11 +623,12 @@ export function createLiveSchedulePagePort(input: {
 		}),
 		schedule: Object.freeze({
 			async state(): Promise<ScheduleState> {
-				const [catalog, placements, rooms, settings] = await Promise.all([
+				const [catalog, placements, rooms, settings, publication] = await Promise.all([
 					readCatalog(),
 					readPlacements(),
 					input.vocabulary.rooms(),
-					input.settings.get()
+					input.settings.get(),
+					input.publication.overview()
 				]);
 				// Geometry is a served derivation, never a guess: the grid draws
 				// exactly when the settings trio and every placement reconcile
@@ -531,12 +647,12 @@ export function createLiveSchedulePagePort(input: {
 					slotsPerDay: geometry.slotsPerDay,
 					sessions: catalog.sessions.map(sessionItem),
 					placements: placements.occurrences.map((occurrence) =>
-						occurrencePlacement(occurrence, geometry.dayStartMin)
+						occurrencePlacement(occurrence, geometry.dayStartMin, geometry.timeZone)
 					),
 					// No canonical break owner exists, so none can exist to report.
 					breaks: [],
-					// No release owner is mounted, so no published schedule exists.
-					published: false
+					published: publication.currentProgramRelease !== null
+						&& publication.surfaceHeads.some((head) => head.kind === 'schedule')
 				};
 			},
 			/**
@@ -559,10 +675,10 @@ export function createLiveSchedulePagePort(input: {
 				roomId: string,
 				startMin: number
 			): Promise<Placement> {
-				// A slot that names no real UTC date refuses before any request; the
+				// A slot that names no real day key refuses before any request; the
 				// exact instant is minted under the pinned served geometry, which
 				// restores the day-window offset the board handed the slot in.
-				if (mintUtcInstant(dayKey, 0) === null || !Number.isInteger(startMin) || startMin < 0) {
+				if (parseUtcDate(dayKey) === null || !Number.isInteger(startMin) || startMin < 0) {
 					throw new SchedulePageLiveError({
 						code: 'invalid_slot',
 						reason: 'This slot does not name a canonical UTC day and time.'
@@ -600,11 +716,19 @@ export function createLiveSchedulePagePort(input: {
 					});
 				}
 				const snapshot = await readPlacements();
-				const startAt = mintUtcInstant(dayKey, geometry.dayStartMin + startMin);
+				// The board's slots are event-local wall clock — the basis `state()`
+				// served — so the canonical instant is minted in the pinned zone. A
+				// wall clock the zone skips (the spring-forward gap) mints nothing
+				// rather than an hour the organizer did not choose.
+				const startAt = mintEventLocalInstant(
+					dayKey,
+					geometry.dayStartMin + startMin,
+					geometry.timeZone
+				);
 				if (startAt === null) {
 					throw new SchedulePageLiveError({
 						code: 'invalid_slot',
-						reason: 'This slot does not name a canonical UTC day and time.'
+						reason: 'This slot does not name a real time on the event’s calendar.'
 					});
 				}
 				const existing = snapshot.occurrences.filter(
@@ -642,7 +766,11 @@ export function createLiveSchedulePagePort(input: {
 				if (applied.kind !== 'success') {
 					throw new SchedulePageLiveError(applyFailure(applied, 'placement'));
 				}
-				return occurrencePlacement(applied.data.occurrence, geometry.dayStartMin);
+				return occurrencePlacement(
+					applied.data.occurrence,
+					geometry.dayStartMin,
+					geometry.timeZone
+				);
 			},
 			async unplace(): Promise<void> {
 				// Unplace is internal compensation in the placement contract; it is
@@ -675,7 +803,8 @@ export function createLiveSchedulePagePort(input: {
 						plannedDurationMinutes: create.durationMin,
 						lifecycle: create.state,
 						formatId: create.formatId,
-						// The tuned page states "no track" as ''; canonically it is null.
+						// Empty is truthful only for a private draft or a track-free
+						// event; the canonical planner enforces that lifecycle boundary.
 						trackId: create.trackId === '' ? null : create.trackId
 					},
 					newIdempotencyKey()
@@ -683,6 +812,41 @@ export function createLiveSchedulePagePort(input: {
 				if (applied.kind !== 'success') {
 					throw new SchedulePageLiveError(applyFailure(applied, 'session'));
 				}
+				return sessionItem(applied.data.session);
+			},
+			async retargetSession(
+				id: string,
+				formatId: string,
+				trackId: string
+			): Promise<SessionItem> {
+				const catalogResult = await input.sessions.readCatalog();
+				if (catalogResult.kind !== 'success') {
+					throw new SchedulePageLiveError(readFailure(catalogResult, 'session catalog'));
+				}
+				const head = catalogResult.data.sessions.find((session) => session.id === id);
+				if (!head) {
+					throw new SchedulePageLiveError({
+						code: 'session_missing',
+						reason: 'This session no longer exists. Reload and try again.'
+					});
+				}
+				const applied = await input.sessions.applyChange(
+					{
+						action: 'retarget',
+						expectedCatalogVersion: catalogResult.data.version,
+						expectedCatalogDigestSha256: catalogResult.data.digestSha256,
+						sessionId: id,
+						expectedSessionVersion: head.version,
+						expectedSessionDigestSha256: head.digestSha256,
+						formatId,
+						trackId: trackId === '' ? null : trackId
+					},
+					newIdempotencyKey()
+				);
+				if (applied.kind !== 'success') {
+					throw new SchedulePageLiveError(applyFailure(applied, 'session'));
+				}
+				if (applied.data.session === null) throw new TypeError('session_retarget_result_missing');
 				return sessionItem(applied.data.session);
 			},
 			async removeSession(): Promise<MutationOutcome> {

@@ -43,7 +43,7 @@ export const deadlineScopeSchema = z.strictObject({
   workspaceId: deadlineIdSchema,
   eventId: deadlineIdSchema
 });
-export const deadlineKindSchema = z.enum(['cfp_close', 'review_due']);
+export const deadlineKindSchema = z.enum(['cfp_close', 'review_due', 'task_due']);
 export const deadlineGracePolicySchema = z.literal('soft');
 
 export const deadlineBoundaryProfileSchema = z.strictObject({

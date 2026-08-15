@@ -218,6 +218,44 @@ describe('live tuned Speakers page port', () => {
 		}]);
 	});
 
+	test('joins task counters and task rows from the canonical Task board', async () => {
+		const task = (state: 'pending' | 'complete', value: number) => ({
+			schemaVersion: 1,
+			scope: { workspaceId, eventId },
+			id: id(400 + value), taskDefinitionId: id(500 + value),
+			taskDefinitionRevisionId: id(600 + value), engagementId, personId,
+			state,
+			deadline: {
+				kind: 'task_due',
+				reference: {
+					id: id(700 + value), version: 1, kind: 'task_due',
+					displayDate: '2026-08-01', effectiveAt: '2026-08-01T15:59:59.999Z',
+					timeBasis: { timezone: 'Asia/Singapore', timezoneEvidence: { version: 1, digestSha256: digest('f') } }
+				}
+			},
+			deadlineOverride: null, completionEvidence: null,
+			assignedAt: '2026-07-01T00:00:00.000Z',
+			updatedAt: '2026-07-01T00:00:00.000Z', version: 1
+		});
+		const port = composePort({
+			tasks: {
+				async readBoard() {
+					return {
+						kind: 'success', correlationId,
+						data: {
+							schemaVersion: 1, scope: { workspaceId, eventId },
+							catalogVersion: 1, catalogDigestSha256: digest('a'), definitions: [],
+							assignments: [task('pending', 1), task('complete', 2)]
+						} as never
+					};
+				}
+			} as never
+		});
+		const [row] = await port.speakers.list();
+		expect(row).toMatchObject({ tasksDone: 1, tasksTotal: 2, overdueTasks: 1 });
+		expect(await port.tasks.assignments()).toHaveLength(2);
+	});
+
 	test('projects a stored cancellation request as cancel_requested and serves its note', async () => {
 		const port = composePort({
 			engagements: fakeEngagements({

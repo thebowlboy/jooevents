@@ -6,6 +6,7 @@ const summary: OverviewPageSummary = {
 	event: null,
 	lockedAreas: ['submissions', 'forms'],
 	navCounts: {},
+	arrivals: null,
 	stats: [],
 	attention: [],
 	pipeline: [],

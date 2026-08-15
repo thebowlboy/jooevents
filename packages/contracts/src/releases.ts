@@ -30,6 +30,19 @@ export const releaseScopeSchema = programVocabularyScopeSchema;
 export const releaseVersionSchema = programVocabularyVersionSchema;
 
 /**
+ * Exact immutable Template revision a presentation release was derived from.
+ * The release planner resolves this pin through the canonical Template owner
+ * and derives the public recipe/manifest itself; callers cannot submit a pin
+ * beside unrelated presentation bytes.
+ */
+export const releaseTemplateRevisionPinSchema = z.strictObject({
+  artifactId: releaseIdSchema,
+  revisionId: releaseIdSchema,
+  revisionNumber: releaseVersionSchema,
+  digestSha256: digestSchema
+});
+
+/**
  * The release types are never conflated: program-data releases carry what is
  * publicly visible, surface releases carry how public pages render, style-set
  * releases carry compiled presentation tokens, and form-schema versions stay
@@ -318,6 +331,7 @@ export const styleSetReleaseSchema = z.strictObject({
   id: releaseIdSchema,
   number: releaseVersionSchema,
   predecessor: releasePredecessorRefSchema.nullable(),
+  sourceTemplateRevision: releaseTemplateRevisionPinSchema,
   recipe: styleSetRecipeSchema,
   tokens: z.record(publicThemeTokenNameSchema, themeTokenValueSchema),
   releasedByUserId: releaseIdSchema,
@@ -351,6 +365,7 @@ const surfaceReleaseCommonFields = {
   id: releaseIdSchema,
   number: releaseVersionSchema,
   predecessor: releasePredecessorRefSchema.nullable(),
+  sourceTemplateRevision: releaseTemplateRevisionPinSchema,
   manifest: surfaceManifestSchema,
   styleSetReleaseId: releaseIdSchema,
   releasedByUserId: releaseIdSchema,
@@ -548,9 +563,13 @@ export const RELEASE_PLANNING_ERROR_CODES = [
   'schedule_conflicts_block',
   'release_missing',
   'style_set_release_missing',
+  'template_artifact_missing',
+  'template_revision_stale',
+  'template_kind_mismatch',
   'surface_kind_mismatch',
   'form_version_unpinned',
   'participant_name_unavailable',
+  'session_track_required',
   'invalid_plan'
 ] as const;
 export const releasePlanningErrorCodeSchema = z.enum(RELEASE_PLANNING_ERROR_CODES);
@@ -582,6 +601,7 @@ export const releaseProgramRollbackInputSchema = z.strictObject({
 
 export const releaseStyleSetPublishInputSchema = z.strictObject({
   action: z.literal('style_set_publish'),
+  sourceTemplateRevision: releaseTemplateRevisionPinSchema,
   recipe: styleSetRecipeSchema,
   expectedCurrentStyleSetNumber: releaseVersionSchema.nullable()
 });
@@ -589,6 +609,7 @@ export const releaseStyleSetPublishInputSchema = z.strictObject({
 export const releaseSurfacePublishInputSchema = z.strictObject({
   action: z.literal('surface_publish'),
   kind: surfaceKindSchema,
+  sourceTemplateRevision: releaseTemplateRevisionPinSchema,
   manifest: surfaceManifestSchema,
   styleSetReleaseId: releaseIdInputSchema,
   /** Required exactly for submission-bearing kinds. */
@@ -849,6 +870,7 @@ export const releaseSafeDiffSchema = z.discriminatedUnion('action', [
     action: z.literal('style_set_publish'),
     before: programChainImageSchema.nullable(),
     after: programChainImageSchema,
+    sourceTemplateRevision: releaseTemplateRevisionPinSchema,
     recipe: styleSetRecipeSchema
   }),
   z.strictObject({
@@ -856,6 +878,7 @@ export const releaseSafeDiffSchema = z.discriminatedUnion('action', [
     kind: surfaceKindSchema,
     before: surfaceHeadSchema.nullable(),
     after: surfaceHeadSchema,
+    sourceTemplateRevision: releaseTemplateRevisionPinSchema,
     styleSetReleaseId: releaseIdSchema,
     formRef: surfaceFormRefSchema.nullable()
   }),
@@ -944,7 +967,9 @@ export const releaseOverviewSchema = z.strictObject({
   scope: releaseScopeSchema,
   currentProgramRelease: programReleaseSchema.nullable(),
   currentStyleSetRelease: styleSetReleaseSchema.nullable(),
-  surfaceHeads: z.array(surfaceHeadSchema).max(3)
+  surfaceHeads: z.array(surfaceHeadSchema).max(3),
+  /** Immutable releases selected by the heads above, in surface-kind order. */
+  activeSurfaceReleases: z.array(surfaceReleaseSchema).max(3)
 }).superRefine((overview, context) => {
   const kinds = new Set<string>();
   for (const [index, head] of overview.surfaceHeads.entries()) {
@@ -955,6 +980,24 @@ export const releaseOverviewSchema = z.strictObject({
       });
     }
     kinds.add(head.kind);
+  }
+  const releases = new Map<string, string>();
+  for (const [index, release] of overview.activeSurfaceReleases.entries()) {
+    if (releases.has(release.kind)) {
+      context.addIssue({
+        code: 'custom', path: ['activeSurfaceReleases', index],
+        message: 'active surface releases must be unique per kind'
+      });
+    }
+    releases.set(release.kind, release.id);
+  }
+  if (releases.size !== kinds.size || overview.surfaceHeads.some((head) =>
+    releases.get(head.kind) !== head.activeReleaseId
+  )) {
+    context.addIssue({
+      code: 'custom', path: ['activeSurfaceReleases'],
+      message: 'active surface releases must correspond exactly to surface heads'
+    });
   }
 });
 
@@ -1117,6 +1160,21 @@ export const servedPublicRosterSchema = z.strictObject({
   }
 });
 
+/**
+ * Public-safe presentation pinned by one active surface release. The surface
+ * manifest and style recipe are immutable release content; actor, scope,
+ * digest-chain, form-pin, and framing-policy fields deliberately do not cross
+ * the anonymous boundary.
+ */
+export const servedPublicPresentationSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  surfaceKind: surfaceKindSchema,
+  surfaceReleaseNumber: releaseVersionSchema,
+  manifest: surfaceManifestSchema,
+  styleSetReleaseNumber: releaseVersionSchema,
+  style: styleSetRecipeSchema
+});
+
 export const RELEASE_OPERATION_SCHEMA_REFS = Object.freeze({
   overviewRead: createOperationSchemaManifestRefs({
     inputKey: 'schema.release.overview-read.input',
@@ -1133,6 +1191,7 @@ export const RELEASE_OPERATION_SCHEMA_REFS = Object.freeze({
 });
 
 export type ReleaseScopeDto = z.infer<typeof releaseScopeSchema>;
+export type ReleaseTemplateRevisionPinDto = z.infer<typeof releaseTemplateRevisionPinSchema>;
 export type SurfaceKind = z.infer<typeof surfaceKindSchema>;
 export type ProgramReleaseOriginDto = z.infer<typeof programReleaseOriginSchema>;
 export type ProgramReleaseEvidencePinsDto = z.infer<typeof programReleaseEvidencePinsSchema>;
@@ -1172,3 +1231,4 @@ export type ServedPublicScheduleDto = z.infer<typeof servedPublicScheduleSchema>
 export type ServedPublicSpeakerSessionDto = z.infer<typeof servedPublicSpeakerSessionSchema>;
 export type ServedPublicSpeakerCardDto = z.infer<typeof servedPublicSpeakerCardSchema>;
 export type ServedPublicRosterDto = z.infer<typeof servedPublicRosterSchema>;
+export type ServedPublicPresentationDto = z.infer<typeof servedPublicPresentationSchema>;

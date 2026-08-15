@@ -37,7 +37,7 @@ test('an irreversible send leaves a receipt that says why it cannot be undone', 
 	await page.goto('/app/decisions');
 	await expect(page.getByRole('table')).toContainText('Streaming Agent UIs Without a State Machine Meltdown', { timeout: 15000 });
 
-	await page.getByRole('button', { name: 'Compose notifications' }).click();
+	await page.getByRole('button', { name: 'Send their results' }).click();
 	const dialog = page.getByRole('dialog', { name: /notification/i });
 	await dialog.getByRole('button', { name: /Send \d+ emails/ }).click();
 

@@ -59,6 +59,7 @@
     Marked,
     Modal,
     Popover,
+    Meter,
     Progress,
     Radio,
     markArrival,
@@ -153,6 +154,16 @@
   let commandQuery = $state('');
   let commandInput = $state<HTMLInputElement>();
   let activeTab = $state('Details');
+
+  /* Four rows of the same bar, so the ladder is comparable in one glance: the
+     nearly-full amber one exists to show that the fill answers the clock and
+     not the fraction. */
+  const meterExamples = [
+    { label: 'Round 1 reviews', value: 62, digits: '224 of 360', tone: 'positive' as const, word: 'On pace' },
+    { label: 'Round 2 reviews', value: 97, digits: '583 of 600', tone: 'caution' as const, word: 'Behind' },
+    { label: 'Decisions sent', value: 38, digits: '6 of 16', tone: 'caution' as const, word: 'Behind' },
+    { label: 'Sessions placed', value: 95, digits: '18 of 19', tone: 'negative' as const, word: 'Blocked' }
+  ];
   let currentPage = $state(1);
   let editorMode = $state('Write');
   let reviewMode = $state('assigned');
@@ -711,7 +722,7 @@
             <Badge tone="success" icon={statusIcon.accepted}>Accepted</Badge><Badge tone="lavender" icon={statusIcon.waitlisted}>Waitlisted</Badge><Badge tone="neutral" icon={statusIcon.declined}>Declined</Badge><Badge tone="neutral" icon={statusIcon.withdrawn}>Withdrawn</Badge><Badge tone="info" icon={statusIcon.invited}>Invited</Badge><Badge tone="sea" icon={statusIcon.published}>Public</Badge><Badge tone="neutral" icon={statusIcon.unpublished}>Hidden</Badge>
           </div>
           <div class="component-row component-row--wrap">
-            <Badge tone="neutral" icon={statusIcon.draft}>Draft</Badge><Badge tone="info" icon={statusIcon.scheduled}>Scheduled</Badge><Badge tone="success" icon={statusIcon.sent}>Sent</Badge><Badge tone="warning" icon={statusIcon.held} emphasis>Held</Badge><Badge tone="warning" icon={statusIcon.unnotified} emphasis>Un-notified</Badge><Badge tone="danger" icon={statusIcon.blocking} emphasis>Blocking</Badge>
+            <Badge tone="neutral" icon={statusIcon.draft}>Draft</Badge><Badge tone="info" icon={statusIcon.scheduled}>Scheduled</Badge><Badge tone="success" icon={statusIcon.sent}>Sent</Badge><Badge tone="warning" icon={statusIcon.held} emphasis>Held</Badge><Badge tone="warning" icon={statusIcon.unnotified} emphasis>Result not sent</Badge><Badge tone="danger" icon={statusIcon.blocking} emphasis>Blocking</Badge>
           </div>
         </ShowcaseCard>
 
@@ -942,11 +953,30 @@
           </ul>
         </ShowcaseCard>
 
-        <ShowcaseCard title="Progress & loading" description="Known progress uses a bar. Unknown waits use a compact spinner or reserved structure.">
+        <ShowcaseCard title="Progress & loading" description="Known progress uses a bar; unknown waits use a compact spinner or reserved structure. This bar measures work in flight — an upload, a sync — so it carries no status tone. A ratio that has a state (behind, blocked, healthy) is a Meter, below.">
           <div class="progress-stack">
             <Progress label="Speaker profiles complete" value={76} />
             <Progress label="Airtable reconciliation" value={42} />
             <div class="loading-line"><span class="ui-spinner"></span><span>Checking schedule conflicts…</span></div>
+          </div>
+        </ShowcaseCard>
+
+        <ShowcaseCard
+          title="Meter — a ratio against a limit"
+          description="The fill answers the state, never the fraction: 97% due tomorrow is amber, 20% with three weeks left is green. The track is a lighter step of the same ramp, so a nearly-empty bar still reads its state. Digits stay beside it — the bar is a second channel, never the only one.">
+          <div class="meter-stack">
+            {#each meterExamples as example (example.label)}
+              <div class="meter-row">
+                <span class="meter-row__label">{example.label}</span>
+                <Meter
+                  value={example.value}
+                  label={example.label}
+                  valueText={example.digits}
+                  tone={example.tone} />
+                <span class="meter-row__digits">{example.digits}</span>
+                <Badge tone={example.tone}>{example.word}</Badge>
+              </div>
+            {/each}
           </div>
         </ShowcaseCard>
 

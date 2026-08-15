@@ -4,18 +4,17 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
  * Focused joined smoke for the Wave-4 publication vertical as the browser
  * sees it: before any program release the hosted schedule serves the honest
  * not-published gate (never an empty page pretending to be published), a
- * committed `publish_schedule` release serves the confirmed-and-visible
- * program on `/s/schedule` and `/s/speakers`, the embed document renders the
- * same published surface, the hosted pages stay off the search index, and
- * every HTML document from this unwired-framing server carries the fail-closed
- * deny pair.
+ * committed `publish_schedule` release plus the explicitly published schedule
+ * Template serve the confirmed-and-visible program on `/s/schedule` and
+ * `/s/speakers`, the embed document renders the same published surface, the
+ * hosted pages stay off the search index, and every HTML document from this
+ * unwired-framing server carries the fail-closed deny pair.
  *
- * One shared ephemeral backend serves every project: the release chain grows
- * across projects, so the pre-publish gate is asserted only while the world
- * is genuinely unpublished, and each publish pins the then-current release
- * number. Vocabulary minted here is retired at the end (the reviewers smoke
- * later in this project proves coverage over the active vocabulary
- * population).
+ * One shared ephemeral backend serves every project: the first viewport that
+ * sees no release publishes one, while later viewports prove that immutable
+ * public truth survives unrelated current-state changes. Vocabulary minted
+ * here is retired at the end (the reviewers smoke later in this project proves
+ * coverage over the active vocabulary population).
  */
 
 const rawToken = 'browser-test-owner-session-token';
@@ -69,7 +68,7 @@ async function ensureEvent(page: Page): Promise<void> {
 }
 
 async function ensureVocabulary(page: Page, trackName: string, formatName: string): Promise<void> {
-	await page.goto('/app/settings');
+	await page.goto('/app/settings/program');
 	const basics = page.getByRole('region', { name: 'Program basics' });
 	await expect(basics).toBeVisible();
 	if (await basics.getByText(trackName, { exact: true }).count() === 0) {
@@ -108,7 +107,7 @@ async function addSubmission(page: Page, input: {
 	readonly formatName: string;
 }): Promise<void> {
 	await page.goto('/app/submissions');
-	await expect(page.getByRole('navigation', { name: 'Submission trays' })).toBeVisible();
+	await expect(page.getByRole('radiogroup', { name: 'Submission trays' })).toBeVisible();
 	await page.getByRole('button', { name: 'Add submission' }).first().click();
 	const dialog = page.getByRole('dialog', { name: 'Add a submission' });
 	await dialog.getByLabel('Name').fill(input.name);
@@ -140,7 +139,9 @@ async function acceptSubmission(page: Page, title: string): Promise<void> {
 async function placeSession(page: Page, title: string): Promise<void> {
 	await page.goto('/app/schedule');
 	const dayGroup = page.getByRole('group', { name: 'Schedule day' });
-	const blank = page.getByRole('heading', { level: 2, name: 'Nothing is scheduled yet' });
+	// The blank board names the supply it is missing; here the days derive from
+	// the event's dates and the room is what is absent.
+	const blank = page.getByRole('heading', { level: 2, name: 'The board has no rooms yet' });
 	await expect(blank.or(dayGroup).first()).toBeVisible();
 	if (await blank.isVisible()) {
 		await page.getByLabel('Room name').fill('Release Hall');
@@ -238,6 +239,29 @@ async function publishSchedule(
 	expect(await committed.json()).toMatchObject({ kind: 'success', data: { action: 'commit' } });
 }
 
+/**
+ * Publishes the exact current schedule Template through the operator surface.
+ * Program data and presentation are intentionally independent release chains;
+ * the hosted page becomes available only after both have a committed head.
+ */
+async function publishSurfaceTemplate(page: Page, templateName: string): Promise<void> {
+	await page.goto('/app/templates?tab=surfaces');
+	const library = page.getByRole('region', { name: 'Public surfaces' });
+	await expect(library).toBeVisible();
+	await library.getByRole('button', { name: new RegExp(templateName) }).click();
+	await expect(page.getByRole('heading', { level: 2, name: templateName })).toBeVisible();
+	const publish = page.getByRole('button', { name: /^(?:Publish|Published)$/ });
+	await expect(publish).toBeVisible();
+	await expect.poll(async () => (await publish.textContent()) === 'Published' || await publish.isEnabled())
+		.toBe(true);
+	if ((await publish.textContent()) !== 'Published') {
+		await publish.click();
+		await expect(page.getByRole('button', { name: 'Published', exact: true })).toBeVisible({
+			timeout: 15_000
+		});
+	}
+}
+
 async function expectNoindex(page: Page): Promise<void> {
 	await expect(
 		page.locator('meta[name="robots"][content="noindex, nofollow"]').first()
@@ -266,7 +290,7 @@ test.afterAll(async ({ browser }, testInfo) => {
 	const context = await browser.newContext({ baseURL });
 	await addOwnerCookie(context, baseURL);
 	const page = await context.newPage();
-	await page.goto('/app/settings');
+	await page.goto('/app/settings/program');
 	const basics = page.getByRole('region', { name: 'Program basics' });
 	await expect(basics).toBeVisible();
 	for (const name of [
@@ -319,31 +343,34 @@ test('the hosted schedule serves the honest gate before publish, then the releas
 		await expectNoindex(page);
 	}
 
-	await publishSchedule(page.request, baseURL, before);
+	if (before === null) {
+		await publishSchedule(page.request, baseURL, before);
+		await publishSurfaceTemplate(page, 'Public schedule');
+		await publishSurfaceTemplate(page, 'Speaker lineup');
+	}
+	const releasedTitle = before === null ? title : /Released keynote/;
+	const releasedSpeaker = before === null ? speaker : /Release Speaker/;
 
 	// The hosted schedule serves the released program: the confirmed-and-
 	// visible speaker's name, the released title, and no search indexing.
 	await page.goto('/s/schedule');
-	await expect(page.getByText(title).first()).toBeVisible({ timeout: 15000 });
-	await expect(page.getByText(speaker).first()).toBeVisible();
+	await expect(page.getByText(releasedTitle).first()).toBeVisible({ timeout: 15000 });
+	await expect(page.getByText(releasedSpeaker).first()).toBeVisible();
 	await expectNoindex(page);
 	await expectNoDocumentOverflow(page);
 
 	// The speakers page is the union of visible released appearances.
 	await page.goto('/s/speakers');
-	await expect(page.getByText(speaker).first()).toBeVisible({ timeout: 15000 });
+	await expect(page.getByText(releasedSpeaker).first()).toBeVisible({ timeout: 15000 });
 	await expectNoindex(page);
 	await expectNoDocumentOverflow(page);
 });
 
 test('the embed document renders the same published surface, content-sized', async ({
 	page
-}, testInfo) => {
-	const project = testInfo.project.name;
-	const title = `Released keynote (${project})`;
-
+}) => {
 	await page.goto('/embed/schedule');
-	await expect(page.getByText(title).first()).toBeVisible({ timeout: 15000 });
+	await expect(page.getByText(/Released keynote/).first()).toBeVisible({ timeout: 15000 });
 	await expectNoindex(page);
 	await expectNoDocumentOverflow(page);
 

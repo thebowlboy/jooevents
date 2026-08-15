@@ -27,6 +27,7 @@ import type {
 	Room,
 	WorkspaceSummary
 } from '../types';
+import { parseZonedInstant, startOfLocalDate } from '@jooevents/contracts';
 
 /**
  * Vocabulary as a dataset authors it. Lifecycle status and usage counts belong
@@ -40,6 +41,14 @@ export type SpeakerCategorySeed = Omit<SpeakerCategory, 'status' | 'speakerCount
 	status?: VocabStatus;
 };
 export type ScheduleSeed = Omit<ScheduleState, 'rooms'> & { rooms: RoomSeed[] };
+
+/**
+ * A workspace summary as a dataset authors one. The arrival pulse belongs to
+ * the API, which measures it from the submissions on every read, so a dataset
+ * states no delta of its own — exactly as it states no vocabulary usage counts
+ * and no reviewer load numbers.
+ */
+export type WorkspaceSummarySeed = Omit<WorkspaceSummary, 'arrivals'>;
 
 /**
  * A roster entry as a dataset authors one. Public order belongs to the API — a
@@ -86,23 +95,71 @@ export function daysAgo(days: number): string {
 }
 
 /**
+ * A deadline the way the catalog stores one, authored relative to the day the
+ * workspace is opened: the event-local calendar date `days` from today, plus
+ * the first instant of the day after it.
+ *
+ * Deadlines used to be authored as a pair of rendered strings — `absolute: 'Aug
+ * 11, 23:59 EDT'` beside `relative: 'tomorrow'` — pinned to a "today" the
+ * scenario named in prose. Five days after they were written the panel was
+ * telling an operator that a date five days past was still tomorrow. Storing
+ * the date and spelling the distance at read time is what makes that
+ * unrepresentable.
+ */
+export function dayDeadline(
+	days: number,
+	timezone: string
+): { displayDate: string; effectiveAt: string } {
+	const here = parseZonedInstant(new Date().toISOString(), timezone);
+	const now = new Date();
+	const base = here ?? {
+		year: now.getUTCFullYear(),
+		month: now.getUTCMonth() + 1,
+		day: now.getUTCDate()
+	};
+	const target = new Date(Date.UTC(base.year, base.month - 1, base.day + days));
+	const displayDate = target.toISOString().slice(0, 10);
+	const boundary = startOfLocalDate(
+		{
+			year: target.getUTCFullYear(),
+			month: target.getUTCMonth() + 1,
+			day: target.getUTCDate() + 1
+		},
+		timezone
+	);
+	return {
+		displayDate,
+		effectiveAt: new Date(boundary ?? target.getTime() + 86_400_000).toISOString()
+	};
+}
+
+/**
+ * Previous entries to a surface, newest first — one per day, `days` deep. The
+ * arrival window reads habit off distinct days, so a scenario states how often
+ * this operator actually works here rather than stating the window it wants.
+ */
+export function visitedOnLastDays(days: number, hourOfDay = 9): string[] {
+	const visits: string[] = [];
+	for (let back = 1; back <= days; back += 1) {
+		const at = new Date(Date.now() - back * 86_400_000);
+		at.setHours(hourOfDay, 0, 0, 0);
+		visits.push(at.toISOString());
+	}
+	return visits;
+}
+
+/**
  * The display string public listings and the shell read for an event's dates,
  * derived from the ISO pair — one derivation for settings edits and created
  * events alike.
+ *
+ * It is the product's one date vocabulary, re-exported here because the sample
+ * modules already reach for it through this file. Nothing about a sample
+ * dataset makes its dates spell differently from a live one, and the previous
+ * local copy proved the point: it took the *end* year for both ends, so a
+ * scenario spanning New Year read `Dec 30 – Jan 2, 2027` and lost 2026.
  */
-export function formatDateRange(startIso: string, endIso: string): string {
-	const start = new Date(`${startIso}T12:00:00`);
-	const end = new Date(`${endIso}T12:00:00`);
-	if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return `${startIso} – ${endIso}`;
-	const month = (date: Date) => date.toLocaleDateString('en-US', { month: 'short' });
-	const sameMonth = start.getMonth() === end.getMonth() && start.getFullYear() === end.getFullYear();
-	if (sameMonth) {
-		return start.getDate() === end.getDate()
-			? `${month(start)} ${start.getDate()}, ${start.getFullYear()}`
-			: `${month(start)} ${start.getDate()}–${end.getDate()}, ${start.getFullYear()}`;
-	}
-	return `${month(start)} ${start.getDate()} – ${month(end)} ${end.getDate()}, ${end.getFullYear()}`;
-}
+export { formatDateRange } from '@jooevents/contracts';
 
 /**
  * A reviewer as a dataset authors one: identity, lifecycle, scope. The load
@@ -113,8 +170,8 @@ export function formatDateRange(startIso: string, endIso: string): string {
  */
 export type ReviewerSeed = Omit<
 	Reviewer,
-	'assigned' | 'done' | 'steppedBack' | 'awaitingReassignment'
->;
+	'assigned' | 'done' | 'steppedBack' | 'awaitingReassignment' | 'email'
+> & { email: string };
 
 /**
  * A submitter's self-description as a dataset authors it, keyed by the address
@@ -153,7 +210,7 @@ export interface WorkspaceDataset {
 	key: string;
 	name: string;
 	description: string;
-	summary: WorkspaceSummary;
+	summary: WorkspaceSummarySeed;
 	tracks: TrackSeed[];
 	formats: FormatSeed[];
 	submissions: Submission[];
@@ -165,6 +222,14 @@ export interface WorkspaceDataset {
 	 * first-ever visit, where only the 24-hour arm applies.
 	 */
 	previousVisit?: string;
+	/**
+	 * The operator's earlier entries to the workspace, newest first — how often
+	 * they actually work here. The arrival window is chosen from this: somebody
+	 * on most days gets today's diff, somebody occasional gets the week's, and
+	 * somebody who has been away gets the whole absence. Absent means the single
+	 * `previousVisit` is all that is known, which reads as an occasional visitor.
+	 */
+	visitHistory?: string[];
 	reviewPlans: ReviewPlan[];
 	/**
 	 * The reviewer roster: workspace members who review, with their scope.

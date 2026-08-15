@@ -7,16 +7,19 @@ import { mapLiveReviewPlans } from './review-page-port.live';
 import type { ReviewerRosterCorePort } from './reviewer-roster-core-port';
 import { coverageRows, isGeneralist, planLoad } from './reviewers';
 import type { ReviewersPagePort } from './reviewers-page-port';
+import type { WorkspaceTeamSettingsPort } from './workspace-team-settings-adapter';
 import type {
-	CoverageRow,
 	Format,
 	MutationOutcome,
 	Reviewer,
+	ReviewerCoverage,
 	ReviewerInviteLine,
 	ScheduleState,
 	Track
 } from './types';
 import type { ProgramFormatView, ProgramTrackView } from './view-models/program-vocabulary';
+import type { ReviewerRosterMemberView } from './view-models/reviewer-roster';
+import type { WorkspaceTeamMemberView } from './view-models/workspace-team';
 
 /**
  * The tuned page capabilities this deliberately partial live mount cannot
@@ -28,18 +31,30 @@ export type ReviewersPageLiveUnmountedCapability =
 	| 'reviewer_scope_change'
 	| 'reviewer_removal'
 	| 'reviewer_scope_targets'
-	| 'reviewer_coverage';
+	| 'reviewer_coverage'
+	| 'reviewer_reminders';
 
-type AdapterFailure = Readonly<{ code: string; reason: string }>;
+type AdapterFailure = Readonly<{ code: string; reason: string; retryable?: boolean }>;
 
-/** Safe, reviewed-copy failure at the tuned Reviewers boundary. */
+/**
+ * Safe, reviewed-copy failure at the tuned Reviewers boundary.
+ *
+ * `retryable` is declared, not inferred. A surface reads it to decide whether to
+ * offer a retry, and an unmounted capability must answer `false`: retrying a
+ * capability this composition does not implement can never succeed, and a
+ * "Try again" beside it would state the absence as a transient wait. Anything
+ * that does not declare itself stays retryable, so an unclassified defect never
+ * freezes a surface behind a terminal claim nobody made.
+ */
 export class ReviewersPageLiveError extends Error {
 	readonly code: string;
+	readonly retryable: boolean;
 
 	constructor(failure: AdapterFailure) {
 		super(failure.reason);
 		this.name = 'ReviewersPageLiveError';
 		this.code = failure.code;
+		this.retryable = failure.retryable !== false;
 	}
 }
 
@@ -55,7 +70,9 @@ const UNMOUNTED_COPY: Readonly<Record<ReviewersPageLiveUnmountedCapability, stri
 		reviewer_scope_targets:
 			'Session scope targets are not available in this live workspace yet.',
 		reviewer_coverage:
-			'Review coverage is not available in this live workspace yet.'
+			'Review coverage is not available in this live workspace yet.',
+		reviewer_reminders:
+			'Reviewer reminders are not available in this live workspace yet.'
 	});
 
 /**
@@ -71,7 +88,12 @@ const LOAD_POPULATION_PARTIAL: AdapterFailure = Object.freeze({
 });
 
 function unmounted(capability: ReviewersPageLiveUnmountedCapability): ReviewersPageLiveError {
-	return new ReviewersPageLiveError({ code: capability, reason: UNMOUNTED_COPY[capability] });
+	// Permanent for this composition: there is nothing to retry into.
+	return new ReviewersPageLiveError({
+		code: capability,
+		reason: UNMOUNTED_COPY[capability],
+		retryable: false
+	});
 }
 
 function refusal(capability: ReviewersPageLiveUnmountedCapability): MutationOutcome {
@@ -95,14 +117,22 @@ type ReadFailure =
 
 function readFailure(result: ReadFailure, subject: string): AdapterFailure {
 	if (result.kind === 'unavailable') {
-		return { code: result.reason, reason: `The ${subject} is not available in this live workspace.` };
+		// Not bound in this composition: retrying reaches the same absence.
+		return {
+			code: result.reason,
+			reason: `The ${subject} is not available in this live workspace.`,
+			retryable: false
+		};
 	}
 	if (result.kind === 'transport_error') {
+		// The transport already classified itself; carry that verdict rather
+		// than re-deciding it here.
 		return {
 			code: result.error.code,
 			reason: result.error.retryable
 				? `The ${subject} could not be reached. Try again.`
-				: `This ${subject} request is not valid.`
+				: `This ${subject} request is not valid.`,
+			retryable: result.error.retryable
 		};
 	}
 	return { code: result.outcome.kind, reason: outcomeCopy(result.outcome, subject) };
@@ -127,6 +157,21 @@ function liveFormat(format: ProgramFormatView): Format {
 	};
 }
 
+function teamSubjectKey(member: WorkspaceTeamMemberView): string {
+	return member.subject.kind === 'member'
+		? `workspace_membership:${member.subject.membershipId}`
+		: `access_reservation:${member.subject.reservationId}`;
+}
+
+function rosterSubjectKey(member: ReviewerRosterMemberView): string | undefined {
+	const subject = member.authority.currentSubject;
+	return subject ? `${subject.kind}:${subject.id}` : undefined;
+}
+
+function present(value: string | null | undefined): string | undefined {
+	return value && value.trim().length > 0 ? value : undefined;
+}
+
 /**
  * Live tuned Reviewers page port over the deliberately partial canonical
  * mount: the access-subject-keyed Reviewer Roster snapshot, the
@@ -148,11 +193,14 @@ function liveFormat(format: ProgramFormatView): Format {
  * reviewer-scoped one are a failed roster load, never a zeroed one.
  *
  * The canonical roster keys people by access subject and discloses no email
- * address, so the tuned row's `email` carries that absence as the empty
- * string; an address is never fabricated. A member whose projection
- * discloses no display name likewise keeps `name` empty rather than gaining
- * an invented label. Revoked members are the tuned roster's removed records
- * ("removal takes the record off the roster") and are omitted.
+ * address. The organizer-authorized Workspace Team projection owns that
+ * contact data, so this adapter joins the two projections by the roster's
+ * current membership/reservation subject — never by email. A missing join
+ * keeps email absent rather than inventing an empty-string value. Identity is
+ * load-bearing: a row with neither a Team name nor a roster-disclosed name is
+ * refused instead of gaining an invented label. Revoked members are the tuned
+ * roster's removed records ("removal takes the record off the roster") and
+ * are omitted.
  *
  * The `coverage` projection is served only as its provably empty population:
  * the frozen contract reads `coverage: []` as the positive claim that no
@@ -168,6 +216,7 @@ function liveFormat(format: ProgramFormatView): Format {
 export function createLiveReviewersPagePort(input: {
 	readonly roster: ReviewerRosterCorePort;
 	readonly review: ReviewCorePort;
+	readonly team: Pick<WorkspaceTeamSettingsPort, 'source' | 'members'>;
 	readonly vocabulary: Pick<ProgramVocabularySettingsPort, 'source' | 'tracks' | 'formats'>;
 	/**
 	 * The one schedule read the tuned page performs, delegated to the live
@@ -183,6 +232,7 @@ export function createLiveReviewersPagePort(input: {
 	if (
 		input.roster.source.kind !== 'live'
 		|| input.review.source.kind !== 'live'
+		|| input.team.source.kind !== 'live'
 		|| input.vocabulary.source.kind !== 'live'
 	) {
 		throw new TypeError('live_reviewer_roster_source_required');
@@ -198,14 +248,21 @@ export function createLiveReviewersPagePort(input: {
 	 * panel would count it. The probe's placeholder submissions list only
 	 * fills per-row counts, never row existence, and the probe rows are
 	 * discarded, so no fabricated per-target zero can escape it. Any populated
-	 * target set refuses (its rows' required `submissions` count has no live
+	 * target set declines (its rows' required `submissions` count has no live
 	 * owner), and with no schedule delegate the collecting-session population
-	 * is unknowable, so the empty claim is unprovable and the read refuses the
-	 * same way. A composed delegate's own read failure propagates as itself:
-	 * its typed error names the failing owner more precisely than a re-wrap.
+	 * is unknowable, so the empty claim is unprovable and the projection
+	 * declines the same way. A composed delegate's own read failure propagates
+	 * as itself: its typed error names the failing owner more precisely than a
+	 * re-wrap.
+	 *
+	 * A decline is a returned `unavailable` rather than a throw. Coverage is one
+	 * panel; the roster is the surface. Throwing here failed `list()` outright,
+	 * so an unprovable coverage claim left the whole Reviewers page rendering
+	 * skeleton rows forever — the page waiting on an answer the port had already
+	 * decided it would never give.
 	 */
-	async function provenEmptyCoverage(reviewers: readonly Reviewer[]): Promise<CoverageRow[]> {
-		if (!input.schedule) throw unmounted('reviewer_coverage');
+	async function provenEmptyCoverage(reviewers: readonly Reviewer[]): Promise<ReviewerCoverage> {
+		if (!input.schedule) return { kind: 'unavailable', reason: UNMOUNTED_COPY.reviewer_coverage };
 		const [tracks, formats, scheduleState] = await Promise.all([
 			input.vocabulary.tracks(),
 			input.vocabulary.formats(),
@@ -218,22 +275,26 @@ export function createLiveReviewersPagePort(input: {
 			submissions: [],
 			reviewers
 		});
-		if (probe.length > 0) throw unmounted('reviewer_coverage');
-		return [];
+		if (probe.length > 0) return { kind: 'unavailable', reason: UNMOUNTED_COPY.reviewer_coverage };
+		return { kind: 'served', rows: [] };
 	}
 
 	return Object.freeze({
 		reviewers: Object.freeze({
 			async list() {
-				const [rosterResult, reviewResult] = await Promise.all([
+				const [rosterResult, reviewResult, teamResult] = await Promise.all([
 					input.roster.readSnapshot(),
-					input.review.readSnapshot()
+					input.review.readSnapshot(),
+					input.team.members()
 				]);
 				if (rosterResult.kind !== 'success') {
 					throw new ReviewersPageLiveError(readFailure(rosterResult, 'reviewer roster'));
 				}
 				if (reviewResult.kind !== 'success') {
 					throw new ReviewersPageLiveError(readFailure(reviewResult, 'review load counts'));
+				}
+				if (teamResult.kind !== 'success') {
+					throw new ReviewersPageLiveError(readFailure(teamResult, 'workspace team'));
 				}
 				// Whole-roster sums ride the served discriminator, not row shape: a
 				// reviewer-served snapshot filters each hidden-identity round's rows
@@ -244,13 +305,26 @@ export function createLiveReviewersPagePort(input: {
 					throw new ReviewersPageLiveError(LOAD_POPULATION_PARTIAL);
 				}
 				const plans = mapLiveReviewPlans(reviewResult.data.plans, now());
+				const teamBySubject = new Map(
+					teamResult.data.members.map((member) => [teamSubjectKey(member), member] as const)
+				);
 				const reviewers: Reviewer[] = [];
 				for (const member of rosterResult.data.reviewers) {
 					if (member.status === 'revoked') continue;
+					const subjectKey = rosterSubjectKey(member);
+					const teamMember = subjectKey ? teamBySubject.get(subjectKey) : undefined;
+					const name = present(teamMember?.name) ?? present(member.displayName);
+					if (!name) {
+						throw new ReviewersPageLiveError({
+							code: 'reviewer_identity_missing',
+							reason: 'A reviewer identity could not be resolved from the workspace team.'
+						});
+					}
+					const email = present(teamMember?.email);
 					reviewers.push({
 						id: member.reviewerId,
-						name: member.displayName ?? '',
-						email: '',
+						name,
+						...(email ? { email } : {}),
 						status: member.status,
 						scope: member.reviews.map((ref) => ({ kind: ref.kind, id: ref.id })),
 						...planLoad(member.reviewerId, plans)
@@ -311,6 +385,11 @@ export function createLiveReviewersPagePort(input: {
 			async state(): Promise<ScheduleState> {
 				if (input.schedule) return input.schedule.state();
 				throw unmounted('reviewer_scope_targets');
+			}
+		}),
+		tasks: Object.freeze({
+			async remind(): Promise<never> {
+				throw unmounted('reviewer_reminders');
 			}
 		})
 	} satisfies ReviewersPagePort);

@@ -3,8 +3,7 @@ import { expect, test, type Page } from '@playwright/test';
 /**
  * `/app/review` rendered for someone who only reviews.
  *
- * There is no second reviewer app: the same screen drops the chair's half —
- * the roster, its reminders, the door into managing people, the setup panel —
+ * There is no second reviewer app: the same review pass omits organizer setup
  * and gains the three things a reviewer arriving for one round has nowhere
  * else to learn: what they were asked to review, what this plan lets them see,
  * and how to hand back a review they have a conflict of interest with.
@@ -115,6 +114,38 @@ test.describe('the reviewer subset', () => {
 		await expect(panel).toContainText('Reviewers do not see who submitted');
 	});
 
+	test('materials stand on the card, and a card with none says so', async ({
+		page,
+		baseURL
+	}, testInfo) => {
+		test.skip(testInfo.project.name !== 'desktop', 'one viewport covers the evidence contract');
+
+		await asReviewer(page, baseURL);
+		await page.goto('/app/review');
+
+		// Judging evidence is on the surface: the attached items render without
+		// any press, each with its own kind and qualifier.
+		const withMaterials = page
+			.getByRole('listitem')
+			.filter({ hasText: 'Hands-on: AI Interface Audits That Stick' });
+		await expect(withMaterials.getByText('workshop-outline-and-setup.pdf')).toBeVisible({
+			timeout: 15000
+		});
+		await expect(withMaterials.getByText('audit-starter-kit (repository)')).toBeVisible();
+		await expect(withMaterials.getByText(/^Submitted /)).toBeVisible();
+
+		// Absence is a fact about the submission, stated in the same place —
+		// a reviewer scoring without materials knows that is what is happening.
+		const without = page
+			.getByRole('listitem')
+			.filter({ hasText: 'The Inference Bill Nobody Read' });
+		await expect(without.getByText('No materials attached to this submission.')).toBeVisible();
+
+		// The old disclosure is gone: nothing on a card promises hidden details.
+		await expect(page.getByRole('button', { name: /Materials & details/ })).toHaveCount(0);
+		await expect(page.getByRole('button', { name: 'Details', exact: true })).toHaveCount(0);
+	});
+
 	test('stepping back takes the card out of the queue and answers with a receipt', async ({
 		page,
 		baseURL
@@ -209,22 +240,30 @@ test.describe('the reviewer subset', () => {
 });
 
 test.describe('the organizer rendering', () => {
-	test('keeps both columns, the roster, and every rail row', async ({ page, baseURL }, testInfo) => {
-		test.skip(testInfo.project.name !== 'desktop', 'one viewport covers the unchanged contract');
+	test('Review stays focused on unfinished work and hands reviewer oversight to Reviewers', async ({
+		page,
+		baseURL
+	}, testInfo) => {
+		test.skip(testInfo.project.name !== 'desktop', 'one viewport covers the composition contract');
 
 		await asOrganizer(page, baseURL);
 		await page.goto('/app/review');
 
-		await expect(page.getByRole('heading', { name: 'Reviewers' })).toBeVisible({ timeout: 15000 });
-		await expect(page.getByRole('link', { name: 'Manage reviewers' })).toBeVisible();
-		await expect(page.getByRole('link', { name: 'Sofia Berg — open in Reviewers' })).toBeVisible();
-		await expect(page.getByRole('heading', { name: 'My queue' })).toBeVisible();
+		// Review has one job: the organizer's own reviews. People, load, coverage,
+		// and reminder actions stay on the reviewer-management surface.
+		await expect(page.getByRole('heading', { name: 'Reviewers' })).toHaveCount(0);
+		await expect(page.getByRole('link', { name: 'Reviewer progress and reminders' })).toBeVisible({ timeout: 15000 });
+		await expect(page.getByRole('heading', { name: 'Review queue' })).toBeVisible();
+		await expect(page.getByRole('heading', { name: 'To review' })).toBeVisible();
+		await expect(page.getByRole('heading', { name: 'Completed reviews' })).toBeVisible();
 
-		// Two working columns, exactly as before the projection existed.
-		const columns = await page.evaluate(
-			() => getComputedStyle(document.querySelector('.columns') as Element).gridTemplateColumns
-		);
-		expect(columns.split(' ')).toHaveLength(2);
+		// Unfinished work is above completed history, regardless of source order.
+		const firstCard = page.locator('.queue .card').first();
+		await expect(firstCard.locator('.ui-badge--success')).toHaveCount(0);
+		const completedHeading = page.getByRole('heading', { name: 'Completed reviews' });
+		const completedBox = await completedHeading.boundingBox();
+		const firstCardBox = await firstCard.boundingBox();
+		expect(completedBox && firstCardBox && completedBox.y > firstCardBox.y).toBe(true);
 
 		// Nothing reviewer-scoped leaks into the chair's screen.
 		await expect(page.locator('.brief')).toHaveCount(0);
@@ -236,5 +275,31 @@ test.describe('the organizer rendering', () => {
 		}
 		await expect(page.locator(`.side__foot a[href="/app/settings"]`)).toBeVisible();
 		await expect(page.locator('.side__brand')).toHaveAttribute('href', '/app');
+
+		// The contextual door lands on the owning surface, where the useful nudge
+		// remains attached to the behind reviewer instead of disappearing.
+		await page.getByRole('link', { name: 'Reviewer progress and reminders' }).click();
+		await expect(page.getByRole('heading', { name: 'Reviewers' })).toBeVisible();
+		await expect(page.getByRole('button', { name: 'Remind' }).first()).toBeVisible();
+	});
+
+	test('the focused queue holds a phone without anything sideways', async ({
+		page,
+		baseURL
+	}, testInfo) => {
+		test.skip(testInfo.project.name !== 'mobile', 'touch-viewport composition contract');
+
+		await asOrganizer(page, baseURL);
+		await page.setViewportSize({ width: 390, height: 844 });
+		await page.goto('/app/review');
+
+		await expect(page.getByRole('heading', { name: 'Review queue' })).toBeVisible({ timeout: 15000 });
+		await expect(page.getByRole('heading', { name: 'Reviewers' })).toHaveCount(0);
+
+		const metrics = await page.evaluate(() => ({
+			scrollWidth: document.documentElement.scrollWidth,
+			clientWidth: document.documentElement.clientWidth
+		}));
+		expect(metrics.scrollWidth).toBe(metrics.clientWidth);
 	});
 });

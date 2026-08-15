@@ -9,6 +9,7 @@
 	 * blobs are refcounted, so recovery is honest.
 	 */
 	import { ChevronDown, ChevronRight } from 'lucide-svelte';
+	import { DATE_CLASS, formatDate } from '@jooevents/contracts';
 	import { Badge, Field, PENDING_MIN_VISIBLE_MS, Progress, trackPending } from '$lib/ui';
 	import type { FilesPagePort } from '$lib/api/files/files-page-port';
 	import type { FileLinkProvider } from '@jooevents/contracts/files';
@@ -416,7 +417,12 @@
 										<Badge tone="info">Open</Badge>
 									{/if}
 									{#if ask.deadline}
-										<span class="request__deadline">by {ask.deadline.displayDate}</span>
+										<span class="request__deadline {DATE_CLASS.column}">
+											<span class={DATE_CLASS.label}>by</span>
+											<time class={DATE_CLASS.value} datetime={ask.deadline.displayDate}
+												>{formatDate(ask.deadline.displayDate)}</time
+											>
+										</span>
 									{/if}
 								{:else if ask.state === 'fulfilled'}
 									<Badge tone="success">Received</Badge>
@@ -827,11 +833,9 @@
 		margin-inline-start: auto;
 	}
 
+	/* Figures and wrapping come from the shared date column; only the size is local. */
 	.request__deadline {
-		color: var(--je-color-text-muted);
 		font-size: var(--je-font-size-sm);
-		font-variant-numeric: tabular-nums;
-		white-space: nowrap;
 	}
 
 	.request__withdraw--armed,

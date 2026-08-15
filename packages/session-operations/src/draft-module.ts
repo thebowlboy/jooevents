@@ -102,7 +102,7 @@ export const sessionDraftDomainContributionSchema = z.strictObject({
   revisionId: applicationIdSchema,
   revisionDigestSha256: sha256Schema,
   recordDigestSha256: sha256Schema,
-  action: z.enum(['create', 'transition', 'roster_visibility']),
+  action: z.enum(['create', 'transition', 'retarget', 'roster_visibility']),
   sessionId: applicationIdSchema,
   occurredAt: canonicalInstantSchema
 });
@@ -120,10 +120,10 @@ export const sessionDraftEvidenceChildSchema = z.strictObject({
 export const sessionDraftStaleDetailSchema = z.strictObject({
   code: z.enum([
     'wrong_scope', 'stale_catalog', 'session_exists', 'session_missing', 'stale_session',
-    'format_missing', 'format_retired', 'track_missing', 'track_retired',
+    'format_missing', 'format_retired', 'track_missing', 'track_retired', 'track_required',
     'participant_missing', 'invalid_transition', 'invalid_plan'
   ]),
-  action: z.enum(['create', 'transition', 'roster_visibility']),
+  action: z.enum(['create', 'transition', 'retarget', 'roster_visibility']),
   sessionId: applicationIdSchema
 });
 
@@ -168,9 +168,10 @@ const draftOutcomeContributionSchema = z.strictObject({
     'stale_revision:session.changed',
     'conflict:changeset.id_collision'
   ]);
+  const expectedDetailSchemaVersion = outcome.kind === 'session.changed' ? 2 : 1;
   if (!allowed.has(`${outcome.class}:${outcome.kind}`)
       || outcome.retryable
-      || outcome.detailSchemaVersion !== 1
+      || outcome.detailSchemaVersion !== expectedDetailSchemaVersion
       || !detailSchema.safeParse(outcome.detail).success) {
     context.addIssue({ code: 'custom', message: 'Session draft refusal is invalid.' });
   }
@@ -187,17 +188,17 @@ function ref(key: string): VersionedDefinitionRef {
   return Object.freeze({ key, version: 1 });
 }
 
-function schemaRef(key: string, schema: z.ZodType): SafeSchemaManifestRef {
-  return createSafeSchemaManifestRef(key, schema);
+function schemaRef(key: string, schema: z.ZodType, version = 1): SafeSchemaManifestRef {
+  return createSafeSchemaManifestRef(key, schema, version);
 }
 
 const schemas = Object.freeze({
   input: SESSION_OPERATION_SCHEMA_REFS.draft.inputSchema,
-  contribution: schemaRef('schema.session.change-draft.contribution', sessionDraftContributionSchema),
-  canonical: schemaRef('schema.session.change-draft.canonical-result', sessionDraftCanonicalResultSchema),
+  contribution: schemaRef('schema.session.change-draft.contribution', sessionDraftContributionSchema, 2),
+  canonical: schemaRef('schema.session.change-draft.canonical-result', sessionDraftCanonicalResultSchema, 2),
   projected: SESSION_OPERATION_SCHEMA_REFS.draft.resultSchema,
   nullDetail: schemaRef('schema.session.change-draft.null-detail', nullDetailSchema),
-  staleDetail: schemaRef('schema.session.changed.detail', sessionDraftStaleDetailSchema)
+  staleDetail: schemaRef('schema.session.changed.detail', sessionDraftStaleDetailSchema, 2)
 });
 
 const refs = Object.freeze({
@@ -490,7 +491,7 @@ export function createSessionDraftOperationModule(
       effectOperations: Object.freeze([{
         ...SESSION_CHANGE_DRAFT_OPERATION,
         lifecycle: { status: 'active' as const },
-        summary: 'Draft one Session creation, lifecycle transition, or roster visibility switch for review.',
+        summary: 'Draft one Session creation, target repair, lifecycle transition, or roster visibility switch for review.',
         effect: 'draft' as const,
         maxRisk: 'low' as const,
         autonomyPolicy: refs.autonomy,

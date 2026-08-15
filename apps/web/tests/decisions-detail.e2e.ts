@@ -22,11 +22,16 @@ test.describe('decisions row expansion', () => {
 
 		const detail = page.locator('.detail-row');
 		await expect(detail).toBeVisible();
-		await expect(detail.getByRole('heading', { name: 'Abstract' })).toBeVisible();
+		// Every value carries its label, and the field order follows the list's
+		// own columns: who submitted it, its track, what review says, where the
+		// decision stands — then the long-form blocks that have no column.
+		for (const label of ['Speaker', 'Track', 'Reviews', 'Decision', 'Abstract']) {
+			await expect(detail.getByText(label, { exact: true })).toBeVisible();
+		}
 
 		// The reviews arrive with words, scores, and identity as plan-local
 		// labels — the caller's own committed review is the one named exception.
-		await expect(detail.getByRole('heading', { name: 'Reviews' })).toBeVisible();
+		await expect(detail.getByText('Committed reviews', { exact: true })).toBeVisible();
 		await expect(detail.getByText('You', { exact: true })).toBeVisible();
 		await expect(
 			detail.getByText(
@@ -35,10 +40,23 @@ test.describe('decisions row expansion', () => {
 		).toBeVisible();
 		await expect(detail.getByText(/^Reviewer [A-Z]$/)).toHaveCount(4);
 
-		// Only a committed review of my own can anchor the line-up, so this row
-		// carries the door and it points at the scoped comparison.
-		const lineup = detail.getByRole('link', { name: 'Line up with my other reviews' });
-		await expect(lineup).toHaveAttribute('href', '/app/review/lineup?anchor=sub-301&slice=track');
+		// Only a committed review of my own can anchor the line-up. Comparing is
+		// part of this decision pass, so it opens over the row instead of taking
+		// the organizer away from the table; its scope remains addressable.
+		const lineup = detail.getByRole('button', { name: 'Line up with my other reviews' });
+		await lineup.click();
+		await expect(page).toHaveURL(/\/app\/decisions\?lineup=sub-301$/);
+		const dialog = page.getByRole('dialog', { name: /Line-up:.*Deterministic Replay/ });
+		await expect(dialog).toBeVisible();
+		await expect(page.getByRole('heading', { name: 'Candidates' })).toBeVisible();
+
+		// Escape restores the same expanded decision row and the control that
+		// opened the comparison, so the primary pass resumes exactly in place.
+		await page.keyboard.press('Escape');
+		await expect(dialog).toBeHidden();
+		await expect(page).toHaveURL('/app/decisions');
+		await expect(detail).toBeVisible();
+		await expect(lineup).toBeFocused();
 
 		// Pressing the row's own controls belongs to them, never to the expansion.
 		await expander.click();
@@ -59,12 +77,39 @@ test.describe('decisions row expansion', () => {
 		await expander.click();
 
 		const detail = page.locator('.detail-row');
-		await expect(detail.getByRole('heading', { name: 'Reviews' })).toBeVisible();
+		await expect(detail.getByText('Committed reviews', { exact: true })).toBeVisible();
 		// Five committed reviews behind a 4.6 average of 5 — the list and the
 		// cell above it tell one story.
 		await expect(detail.getByText(/^Reviewer [A-Z]$/)).toHaveCount(5);
 		await expect(detail.getByText('You', { exact: true })).toHaveCount(0);
-		await expect(detail.getByRole('link', { name: 'Line up with my other reviews' })).toHaveCount(0);
+		await expect(detail.getByRole('button', { name: 'Line up with my other reviews' })).toHaveCount(0);
+	});
+
+	test('the phone line-up closes back to the open detail sheet', async ({ page }, testInfo) => {
+		test.skip(testInfo.project.name !== 'mobile', 'the stacked-dialog contract is phone-specific');
+
+		await page.goto('/app/decisions');
+		const expander = page.getByRole('button', {
+			name: /Details for .*Deterministic Replay/
+		});
+		await expect(expander).toBeVisible({ timeout: 15000 });
+		await expander.click();
+
+		const sheet = page.locator('dialog.ui-sheet');
+		await expect(sheet).toBeVisible();
+		const lineup = sheet.getByRole('button', { name: 'Line up with my other reviews' });
+		await lineup.click();
+
+		const comparison = page.getByRole('dialog', { name: /Line-up:.*Deterministic Replay/ });
+		await expect(comparison).toBeVisible();
+		await expect(page).toHaveURL(/\/app\/decisions\?lineup=sub-301$/);
+		await expect(page.locator('dialog[open]')).toHaveCount(2);
+
+		await page.keyboard.press('Escape');
+		await expect(comparison).toBeHidden();
+		await expect(sheet).toBeVisible();
+		await expect(lineup).toBeFocused();
+		await expect(page).toHaveURL('/app/decisions');
 	});
 
 	test('?submission= lands on that candidate row, open and marked', async ({ page }, testInfo) => {
@@ -77,7 +122,9 @@ test.describe('decisions row expansion', () => {
 		});
 		await expect(expander).toBeVisible({ timeout: 15000 });
 		await expect(expander).toHaveAttribute('aria-expanded', 'true');
-		await expect(page.locator('.detail-row').getByRole('heading', { name: 'Abstract' })).toBeVisible();
+		await expect(
+			page.locator('.detail-row').getByText('Abstract', { exact: true })
+		).toBeVisible();
 
 		// Opening a different row is the operator's own move, so the scope leaves
 		// the address rather than re-asserting the link's arrival on reload.

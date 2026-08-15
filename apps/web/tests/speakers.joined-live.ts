@@ -50,7 +50,7 @@ async function ensureEvent(page: Page): Promise<void> {
 
 /** Mints this project's track and format through the live Settings surface. */
 async function ensureVocabulary(page: Page, trackName: string, formatName: string): Promise<void> {
-	await page.goto('/app/settings');
+	await page.goto('/app/settings/program');
 	const basics = page.getByRole('region', { name: 'Program basics' });
 	await expect(basics).toBeVisible();
 	if (await basics.getByText(trackName, { exact: true }).count() === 0) {
@@ -127,7 +127,7 @@ test.afterAll(async ({ browser }, testInfo) => {
 		sameSite: 'Lax'
 	}]);
 	const page = await context.newPage();
-	await page.goto('/app/settings');
+	await page.goto('/app/settings/program');
 	const basics = page.getByRole('region', { name: 'Program basics' });
 	await expect(basics).toBeVisible();
 	for (const name of [
@@ -159,7 +159,7 @@ test('an accepted submission appears on the live roster as an invited engagement
 
 	// A real direct entry through the live dialog, into the review inbox.
 	await page.goto('/app/submissions');
-	await expect(page.getByRole('navigation', { name: 'Submission trays' })).toBeVisible();
+	await expect(page.getByRole('radiogroup', { name: 'Submission trays' })).toBeVisible();
 	await page.getByRole('button', { name: 'Add submission' }).first().click();
 	const dialog = page.getByRole('dialog', { name: 'Add a submission' });
 	await dialog.getByLabel('Name').fill(speakerName);

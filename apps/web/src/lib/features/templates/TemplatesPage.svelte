@@ -3,6 +3,7 @@
 	import { ArrowLeft, Bot, CodeXml, Sparkles } from 'lucide-svelte';
 	import { Button } from '$lib/ui';
 	import type { TemplatesPagePort } from '$lib/api/templates-page-port';
+	import { describePortFailure, type PortFailureView } from '$lib/api/port-failure';
 	import { applyParams, clearParams, param, paramIn } from '$lib/features/workspace/url-state.svelte';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
@@ -88,21 +89,49 @@
 	let eventName = $state('Your event');
 	let eventMeta = $state('');
 
+	/**
+	 * The library's failure, kept beside its value. `reload` is re-triggered by
+	 * every commit, revision, and undo on this page, so it carries a ticket: a
+	 * slow earlier answer must never overwrite the fresher library already on
+	 * screen, and a rejection must not leave `library` null forever behind a
+	 * skeleton nothing is filling.
+	 */
+	let libraryFailure = $state<PortFailureView | null>(null);
+	let libraryTicket = 0;
+
 	async function reload() {
-		const [list, brand, summary] = await Promise.all([
-			api.templates.list(),
-			api.theme.get(),
-			api.workspace.summary(),
-			registry ? reloadRegistry() : Promise.resolve()
-		]);
-		library = {
-			messages: list.messages.map((template) => ({ ...template })),
-			surfaces: list.surfaces.map((surface) => ({ ...surface }))
-		};
-		theme = brand;
-		if (summary.event) {
-			eventName = summary.event.name;
-			eventMeta = `${summary.event.dates} · ${summary.event.location}`;
+		const ticket = (libraryTicket += 1);
+		try {
+			const [list, brand, summary] = await Promise.all([
+				api.templates.list(),
+				api.theme.get(),
+				api.workspace.summary(),
+				registry ? reloadRegistry() : Promise.resolve()
+			]);
+			if (ticket !== libraryTicket) return;
+			library = {
+				messages: list.messages.map((template) => ({ ...template })),
+				surfaces: list.surfaces.map((surface) => ({ ...surface }))
+			};
+			theme = brand;
+			libraryFailure = null;
+			if (summary.event) {
+				eventName = summary.event.name;
+				eventMeta = `${summary.event.dates} · ${summary.event.location}`;
+			}
+		} catch (error) {
+			if (ticket !== libraryTicket) return;
+			libraryFailure = describePortFailure(error, 'The template library could not be loaded.');
+		}
+	}
+
+	let retryingLibrary = $state(false);
+	async function retryLibrary() {
+		retryingLibrary = true;
+		try {
+			await reload();
+		} finally {
+			retryingLibrary = false;
 		}
 	}
 
@@ -114,7 +143,12 @@
 
 	onMount(() => {
 		void reload();
-		void api.templates.modelChoices().then((choices) => (modelChoices = choices));
+		// An unreadable model list leaves the routing default in place rather
+		// than an empty picker waiting on choices that are not coming.
+		void api.templates.modelChoices().then(
+			(choices) => (modelChoices = choices),
+			() => (modelChoices = [])
+		);
 	});
 
 	/** The open template: the address names either kind, the list resolves it. */
@@ -128,6 +162,55 @@
 	});
 	const missingSelection = $derived(Boolean(selectedId && library && !current));
 	const currentIsSurface = $derived(current !== null && isSurfaceTemplate(current));
+	let publicationStatus = $state<null | {
+		state: 'never_published' | 'published' | 'changes_pending';
+		publishedRevisionNumber: number | null;
+	}>(null);
+	let publishing = $state(false);
+	let publicationError = $state('');
+	let publicationTicket = 0;
+
+	$effect(() => {
+		const id = currentIsSurface ? current?.id : null;
+		if (!id || !api.publication) {
+			publicationStatus = null;
+			publicationError = '';
+			return;
+		}
+		const ticket = (publicationTicket += 1);
+		void api.publication.status(id).then(
+			(status) => {
+				if (ticket === publicationTicket) publicationStatus = status;
+			},
+			() => {
+				if (ticket === publicationTicket) publicationStatus = null;
+			}
+		);
+	});
+
+	/**
+	 * What an auxiliary read for the open template could not answer. Only one
+	 * template is open at a time, so one cell states it. Each loader is guarded
+	 * against stacking, because the effects that drive them re-run whenever the
+	 * open template changes — including back to one whose request is still open.
+	 */
+	let previewFailure = $state<PortFailureView | null>(null);
+	let previewInFlight = $state<string[]>([]);
+
+	function loadPreview(kind: string, read: () => Promise<void>) {
+		if (previewInFlight.includes(kind)) return;
+		previewInFlight = [...previewInFlight, kind];
+		void read()
+			.then(() => {
+				previewFailure = null;
+			})
+			.catch((error: unknown) => {
+				previewFailure = describePortFailure(error, 'This preview could not be loaded.');
+			})
+			.finally(() => {
+				previewInFlight = previewInFlight.filter((entry) => entry !== kind);
+			});
+	}
 
 	/**
 	 * The real program a schedule surface previews, loaded when one is first
@@ -136,7 +219,8 @@
 	let program = $state<{ schedule: ScheduleState; tracks: Track[] } | null>(null);
 	$effect(() => {
 		if (program || !current || !isSurfaceTemplate(current) || current.kind !== 'schedule') return;
-		void Promise.all([api.schedule.state(), api.vocab.tracks()]).then(([schedule, trackList]) => {
+		loadPreview('schedule', async () => {
+			const [schedule, trackList] = await Promise.all([api.schedule.state(), api.vocab.tracks()]);
 			program = { schedule, tracks: trackList };
 		});
 	});
@@ -151,9 +235,13 @@
 		if (lineup || !current || !isSurfaceTemplate(current) || current.kind !== 'speaker-roster') {
 			return;
 		}
-		void Promise.all([api.speakers.publicRoster(), api.vocab.speakerCategories()]).then(
-			([roster, categories]) => (lineup = { roster, categories })
-		);
+		loadPreview('speaker-roster', async () => {
+			const [roster, categories] = await Promise.all([
+				api.speakers.publicRoster(),
+				api.vocab.speakerCategories()
+			]);
+			lineup = { roster, categories };
+		});
 	});
 
 	/**
@@ -168,7 +256,9 @@
 	$effect(() => {
 		if (formList || !current || !isSurfaceTemplate(current) || current.kind !== 'application-form')
 			return;
-		void api.forms.list().then((list) => (formList = list));
+		loadPreview('application-form', async () => {
+			formList = await api.forms.list();
+		});
 	});
 	const lensId = $derived(param('form'));
 	const isApplicationSurface = $derived(
@@ -193,7 +283,7 @@
 	}
 	$effect(() => {
 		if (registry || !isApplicationSurface) return;
-		void reloadRegistry();
+		loadPreview('field-registry', reloadRegistry);
 	});
 
 	/** How a non-open form names its state in the picker. */
@@ -224,6 +314,30 @@
 
 	function closeTemplate() {
 		void clearParams(['template'], { history: 'push' });
+	}
+
+	async function publishCurrent() {
+		if (!current || !isSurfaceTemplate(current) || !api.publication || publishing) return;
+		publishing = true;
+		publicationError = '';
+		try {
+			const outcome = await api.publication.publish(
+				current.id,
+				current.kind === 'application-form' ? (lensId ?? undefined) : undefined
+			);
+			if (!outcome.ok) {
+				publicationError = outcome.reason;
+				return;
+			}
+			publicationStatus = await api.publication.status(current.id);
+			recordAction({
+				area: 'templates',
+				label: `Published “${current.name}” from revision ${current.revision}`,
+				notUndoableReason: 'Public presentation rolls back by selecting an earlier immutable release.'
+			});
+		} finally {
+			publishing = false;
+		}
 	}
 
 	// -----------------------------------------------------------------------
@@ -863,6 +977,21 @@
 	<!-- A saved brand re-reads the shared copy, so an editor opened next previews
 	     the new brand without a full page load — the same path undo already takes. -->
 	<BrandTab {port} onSaved={reload} />
+{:else if libraryFailure && !library}
+	<!-- The library answered, and the answer was no. Skeleton rows would keep
+	     promising templates that nothing is fetching. -->
+	<section class="card" role="alert" aria-label="Template library">
+		<header class="card__head"><h2 class="card__title">Templates</h2></header>
+		<p class="library-failure">{libraryFailure.message}</p>
+		{#if libraryFailure.retryable}
+			<button
+				type="button"
+				class="ui-button ui-button--secondary ui-button--sm"
+				aria-busy={retryingLibrary || undefined}
+				disabled={retryingLibrary}
+				onclick={retryLibrary}>Try again</button>
+		{/if}
+	</section>
 {:else if !library}
 	{#if selectedId}
 		<!-- The editor's composition with skeleton fills: header lines, the
@@ -923,6 +1052,26 @@
 					<span class="ui-badge ui-badge--neutral">{flow}</span>
 				{/each}
 			</div>
+			{#if currentIsSurface && api.publication}
+				<div class="editor__publication">
+					<Button
+						size="sm"
+						disabled={publicationStatus?.state === 'published'}
+						loading={publishing}
+						onclick={publishCurrent}>
+						{publicationStatus?.state === 'published'
+							? 'Published'
+							: publicationStatus?.state === 'changes_pending' ? 'Publish update' : 'Publish'}
+					</Button>
+					{#if publicationStatus?.publishedRevisionNumber !== null
+							&& publicationStatus?.publishedRevisionNumber !== undefined}
+						<span>Public revision {publicationStatus.publishedRevisionNumber}</span>
+					{/if}
+				</div>
+				{#if publicationError}
+					<p class="editor__publication-error" role="alert">{publicationError}</p>
+				{/if}
+			{/if}
 			<div class="revsel">
 				<label class="revsel__label" for="tpl-revisions">Revision history</label>
 				<select
@@ -1024,6 +1173,8 @@
 										schedule={program.schedule}
 										tracks={program.tracks}
 										editable={inlineEnabled} />
+								{:else if previewFailure}
+									<p class="preview-failure" role="alert">{previewFailure.message}</p>
 								{:else}
 									<!-- The program is still on its way; the reserve keeps the room. -->
 									<span class="ui-skeleton sk-preview" aria-hidden="true"></span>
@@ -1038,6 +1189,8 @@
 										roster={lineup.roster}
 										categories={lineup.categories}
 										editable={inlineEnabled} />
+								{:else if previewFailure}
+									<p class="preview-failure" role="alert">{previewFailure.message}</p>
 								{:else}
 									<span class="ui-skeleton sk-preview" aria-hidden="true"></span>
 								{/if}
@@ -1375,6 +1528,13 @@
 		border-radius: var(--je-radius-control);
 	}
 
+	.library-failure,
+	.preview-failure {
+		margin: 0 0 var(--je-space-3);
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-danger);
+	}
+
 	.sk-preview {
 		display: block;
 		min-block-size: 38rem;
@@ -1490,6 +1650,21 @@
 		display: flex;
 		flex-wrap: wrap;
 		gap: var(--je-space-1);
+	}
+
+	.editor__publication {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--je-space-2);
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
+	}
+
+	.editor__publication-error {
+		margin: 0;
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-danger);
 	}
 
 	/* Revision history: one compact select. The closed control names the copy on

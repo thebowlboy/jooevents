@@ -150,7 +150,7 @@ export const schedulePlacementStaleDetailSchema = z.strictObject({
   code: z.enum([
     'wrong_scope', 'stale_schedule', 'occurrence_exists', 'occurrence_missing',
     'stale_occurrence', 'session_missing', 'room_missing', 'room_retired',
-    'stale_room_query', 'invalid_plan'
+    'session_track_required', 'stale_room_query', 'invalid_plan'
   ]),
   action: z.enum(['place', 'move']),
   occurrenceId: applicationIdSchema
@@ -197,7 +197,7 @@ const draftOutcomeContributionSchema = z.strictObject({
   ]);
   if (!allowed.has(`${outcome.class}:${outcome.kind}`)
       || outcome.retryable
-      || outcome.detailSchemaVersion !== 1
+      || outcome.detailSchemaVersion !== (outcome.kind === 'schedule_placement_changed' ? 2 : 1)
       || !detailSchema.safeParse(outcome.detail).success) {
     context.addIssue({ code: 'custom', message: 'Schedule draft refusal is invalid.' });
   }
@@ -216,13 +216,13 @@ function ref(key: string): VersionedDefinitionRef {
   return Object.freeze({ key, version: 1 });
 }
 
-function schemaRef(key: string, schema: z.ZodType): SafeSchemaManifestRef {
+function schemaRef(key: string, schema: z.ZodType, version = 1): SafeSchemaManifestRef {
   const jsonSchema = JSON.parse(JSON.stringify(
     z.toJSONSchema(schema, { target: 'draft-2020-12', unrepresentable: 'any', io: 'input' })
   )) as unknown;
   return Object.freeze({
     key,
-    version: 1,
+    version,
     digestSha256: createHash('sha256').update(encodeCanonicalJson(jsonSchema)).digest('hex')
   });
 }
@@ -236,14 +236,14 @@ const schemas = Object.freeze({
   readProjected: SCHEDULE_PLACEMENT_OPERATION_SCHEMA_REFS.snapshotRead.resultSchema,
   draftInput: SCHEDULE_PLACEMENT_OPERATION_SCHEMA_REFS.placementDraft.inputSchema,
   draftContribution: schemaRef(
-    'schema.schedule.placement-draft.contribution', schedulePlacementDraftContributionSchema
+    'schema.schedule.placement-draft.contribution', schedulePlacementDraftContributionSchema, 2
   ),
   draftCanonical: schemaRef(
-    'schema.schedule.placement-draft.canonical-result', schedulePlacementDraftCanonicalResultSchema
+    'schema.schedule.placement-draft.canonical-result', schedulePlacementDraftCanonicalResultSchema, 2
   ),
   draftProjected: SCHEDULE_PLACEMENT_OPERATION_SCHEMA_REFS.placementDraft.resultSchema,
   nullDetail: schemaRef('schema.schedule.operation.null-detail', nullDetailSchema),
-  staleDetail: schemaRef('schema.schedule.placement-stale.detail', schedulePlacementStaleDetailSchema),
+  staleDetail: schemaRef('schema.schedule.placement-stale.detail', schedulePlacementStaleDetailSchema, 2),
   overlapDetail: schemaRef(
     'schema.schedule.placement-room-overlap.detail', schedulePlacementConflictDetailSchema
   )

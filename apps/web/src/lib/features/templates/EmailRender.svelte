@@ -9,7 +9,7 @@
 		template: MessageTemplate;
 		theme: EventTheme;
 		eventName: string;
-		/** e.g. "Oct 12–14, 2026 · New York City"; empty hides the footer meta line. */
+		/** e.g. "12–14 Oct 2026 · New York City"; empty hides the footer meta line. */
 		eventMeta: string;
 		/**
 		 * Renders text runs and merge chips as addressable `data-edit` units for

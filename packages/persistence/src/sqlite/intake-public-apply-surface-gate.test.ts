@@ -40,6 +40,17 @@ const formVersion1 = '019c2ea1-86b5-769b-bba4-000000000005';
 const formVersion2 = '019c2ea1-86b5-769b-bba4-000000000006';
 const now = '2026-08-14T08:00:00.000Z';
 const scope: ReleaseScopeDto = { workspaceId, eventId };
+const themeArtifactId = '019c2ea1-86b5-769b-bba4-000000000007';
+const applyArtifactId = '019c2ea1-86b5-769b-bba4-000000000008';
+const templateRevisionId = '019c2ea1-86b5-769b-bba4-000000000009';
+const templateDigest = 'd'.repeat(64);
+const templatePin = (artifactId: string) => ({
+  artifactId, revisionId: templateRevisionId, revisionNumber: 1, digestSha256: templateDigest
+});
+const themeRecipe = {
+  name: 'Warm default', canvas: '#faf8f5', surface: '#ffffff',
+  text: '#2a2522', action: '#b05a4f', radius: 6, controlHeight: 36
+};
 
 let ordinal = 0x9000;
 function uuid(): string {
@@ -110,6 +121,19 @@ function fixture() {
         requestedFormId === formId && forms.currentPublishedVersionId !== null
           ? forms.currentPublishedVersionId
           : undefined
+    },
+    templates: {
+      readPinnedArtifact: (_scope, pin) => {
+        if (pin.revisionId !== templateRevisionId || pin.revisionNumber !== 1
+            || pin.digestSha256 !== templateDigest) return undefined;
+        if (pin.artifactId === themeArtifactId) return {
+          kind: 'theme' as const, recipe: themeRecipe, markText: 'JE'
+        };
+        return pin.artifactId === applyArtifactId ? {
+          kind: 'surface' as const, surfaceKind: 'application-form' as const,
+          name: 'Apply', purpose: 'Application.', blocks: [], usedBy: []
+        } : undefined;
+      }
     }
   };
   const repository = new SQLiteReleaseRepository(sqlite, sources);
@@ -156,10 +180,8 @@ function publishStyleSet(context: Fixture): string {
       actorUserId: userId,
       occurredAt: now,
       releaseId: uuid(),
-      recipe: {
-        name: 'Warm default', canvas: '#faf8f5', surface: '#ffffff',
-        text: '#2a2522', action: '#b05a4f', radius: 6, controlHeight: 36
-      },
+      sourceTemplateRevision: templatePin(themeArtifactId),
+      recipe: themeRecipe,
       expectedCurrentStyleSetNumber: null
     },
     port: context.repository
@@ -182,6 +204,7 @@ function publishApplySurface(context: Fixture, input: {
       occurredAt: now,
       releaseId: uuid(),
       kind: 'apply',
+      sourceTemplateRevision: templatePin(applyArtifactId),
       manifest: { schemaVersion: 1, heading: null, intro: null },
       styleSetReleaseId: input.styleSetReleaseId,
       formRef: { formId, formVersionId: input.formVersionId },

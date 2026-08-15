@@ -17,7 +17,7 @@
 		template: SurfaceTemplate;
 		theme: EventTheme;
 		eventName: string;
-		/** e.g. "Oct 12–14, 2026 · New York City"; empty hides the header and footer meta lines. */
+		/** e.g. "12–14 Oct 2026 · New York City"; empty hides the header and footer meta lines. */
 		eventMeta: string;
 		/**
 		 * The public roster projection — already ordered, already filtered to who

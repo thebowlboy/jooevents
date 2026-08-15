@@ -7,6 +7,7 @@ import {
 import {
   servedPublicRosterSchema,
   servedPublicScheduleSchema,
+  type ServedPublicPresentationDto,
   type ServedPublicRosterDto,
   type ServedPublicScheduleDto
 } from '@jooevents/contracts';
@@ -22,8 +23,11 @@ import {
 import {
   createReleasePublicReadOperationModule,
   RELEASE_PUBLIC_OPEN_ACCESS_POLICY,
+  RELEASE_PUBLIC_APPLY_PRESENTATION_READ_OPERATION,
   RELEASE_PUBLIC_ROSTER_READ_OPERATION,
+  RELEASE_PUBLIC_ROSTER_PRESENTATION_READ_OPERATION,
   RELEASE_PUBLIC_SCHEDULE_READ_OPERATION,
+  RELEASE_PUBLIC_SCHEDULE_PRESENTATION_READ_OPERATION,
   type ReleasePublicReadPort
 } from './module';
 
@@ -49,7 +53,10 @@ const crypto = Object.freeze({
 
 const publicOperations = Object.freeze([
   RELEASE_PUBLIC_SCHEDULE_READ_OPERATION,
-  RELEASE_PUBLIC_ROSTER_READ_OPERATION
+  RELEASE_PUBLIC_ROSTER_READ_OPERATION,
+  RELEASE_PUBLIC_SCHEDULE_PRESENTATION_READ_OPERATION,
+  RELEASE_PUBLIC_ROSTER_PRESENTATION_READ_OPERATION,
+  RELEASE_PUBLIC_APPLY_PRESENTATION_READ_OPERATION
 ]);
 
 const publicAuthority: CurrentAuthorityResolver<InvocationEvidence> = Object.freeze({
@@ -139,15 +146,35 @@ function servedRoster(releaseNumber: number, names: readonly string[]): ServedPu
   };
 }
 
+function servedPresentation(surfaceKind: 'schedule' | 'speakers' | 'apply'):
+ServedPublicPresentationDto {
+  return {
+    schemaVersion: 1,
+    surfaceKind,
+    surfaceReleaseNumber: 1,
+    manifest: { schemaVersion: 1, heading: 'Published', intro: 'Released presentation.' },
+    styleSetReleaseNumber: 1,
+    style: {
+      name: 'Released', canvas: '#f4f1ed', surface: '#ffffff', text: '#29231f',
+      action: '#a14e42', radius: 8, controlHeight: 38
+    }
+  };
+}
+
 interface PortState {
   schedule: ServedPublicScheduleDto | undefined;
   roster: ServedPublicRosterDto | undefined;
+  presentations?: Partial<Record<'schedule' | 'speakers' | 'apply', ServedPublicPresentationDto>>;
 }
 
 function port(state: PortState): ReleasePublicReadPort {
   return Object.freeze({
     readServedSchedule: () => state.schedule,
-    readServedRoster: () => state.roster
+    readServedRoster: () => state.roster,
+    readServedPresentation: (
+      _scope: Parameters<ReleasePublicReadPort['readServedPresentation']>[0],
+      kind: Parameters<ReleasePublicReadPort['readServedPresentation']>[1]
+    ) => state.presentations?.[kind]
   });
 }
 
@@ -202,7 +229,7 @@ function execute(
 }
 
 describe('release public read operations', () => {
-  test('freezes exactly the two open public served reads', () => {
+  test('freezes the public data and presentation reads', () => {
     const module = createReleasePublicReadOperationModule({
       policy: RELEASE_PUBLIC_OPEN_ACCESS_POLICY,
       currentAuthority: publicAuthority,
@@ -223,7 +250,10 @@ describe('release public read operations', () => {
     );
     expect(table).toEqual([
       { operation: 'schedule.public.read@1', effect: 'read', method: 'GET', path: '/api/public/schedule/current', surface: 'public_http' },
-      { operation: 'roster.public.read@1', effect: 'read', method: 'GET', path: '/api/public/speakers/current', surface: 'public_http' }
+      { operation: 'roster.public.read@1', effect: 'read', method: 'GET', path: '/api/public/speakers/current', surface: 'public_http' },
+      { operation: 'schedule.public.presentation.read@1', effect: 'read', method: 'GET', path: '/api/public/schedule/presentation', surface: 'public_http' },
+      { operation: 'roster.public.presentation.read@1', effect: 'read', method: 'GET', path: '/api/public/speakers/presentation', surface: 'public_http' },
+      { operation: 'apply.public.presentation.read@1', effect: 'read', method: 'GET', path: '/api/public/forms/presentation', surface: 'public_http' }
     ]);
     expect((module.source.effectOperations ?? [])).toHaveLength(0);
   });
@@ -243,7 +273,12 @@ describe('release public read operations', () => {
   test('serves the newest published projection and successors immediately', async () => {
     const state: PortState = {
       schedule: servedSchedule(1, ['Ada Lovelace']),
-      roster: servedRoster(1, ['Ada Lovelace'])
+      roster: servedRoster(1, ['Ada Lovelace']),
+      presentations: {
+        schedule: servedPresentation('schedule'),
+        speakers: servedPresentation('speakers'),
+        apply: servedPresentation('apply')
+      }
     };
     const runtime = await runtimeFor(state);
 
@@ -253,6 +288,9 @@ describe('release public read operations', () => {
     const roster = await execute(runtime, 'roster.public.read');
     if (roster.kind !== 'success') throw new Error('expected success');
     expect(roster.data).toEqual(servedRoster(1, ['Ada Lovelace']));
+    const presentation = await execute(runtime, 'schedule.public.presentation.read');
+    if (presentation.kind !== 'success') throw new Error('expected success');
+    expect(presentation.data).toEqual(servedPresentation('schedule'));
 
     for (const bytes of [JSON.stringify(schedule), JSON.stringify(roster)]) {
       expect(bytes).not.toContain('personId');
@@ -278,7 +316,13 @@ describe('release public read operations', () => {
 
   test('no published release is a typed absence, never an empty page', async () => {
     const runtime = await runtimeFor({ schedule: undefined, roster: undefined });
-    for (const operation of ['schedule.public.read', 'roster.public.read']) {
+    for (const operation of [
+      'schedule.public.read',
+      'roster.public.read',
+      'schedule.public.presentation.read',
+      'roster.public.presentation.read',
+      'apply.public.presentation.read'
+    ]) {
       const result = await execute(runtime, operation);
       expect(result).toEqual({
         kind: 'outcome',

@@ -12,14 +12,17 @@ import {
   applyDeadlinePlanToCatalog,
   applyFormCloseDeadlineFrom,
   applyReviewDueDeadlineFrom,
+  applyTaskDueDeadlineFrom,
   createEmptyDeadlineCatalog,
   parseDeadlineCatalog,
   parseDeadlineHead,
   planFormCloseDeadlineChangeFrom,
   planReviewDueDeadlineChangeFrom,
+  planTaskDueDeadlineCreateFrom,
   resolveCurrentDeadlineFrom,
   validateFormCloseDeadlineFrom,
   validateReviewDueDeadlineFrom,
+  validateTaskDueDeadlineFrom,
   type DeadlineChangesetTransactionPort,
   type DeadlineReferenceResolver,
   type FormCloseDeadlineAppliedContribution,
@@ -35,7 +38,14 @@ import {
   type ReviewDueDeadlinePlanningPort,
   type ReviewDueDeadlineTransactionPort,
   type ReviewDueDeadlineValidation,
-  type ReviewDueDeadlineValidationPort
+  type ReviewDueDeadlineValidationPort,
+  type TaskDueDeadlineAppliedContribution,
+  type TaskDueDeadlineContribution,
+  type TaskDueDeadlineCreateInput,
+  type TaskDueDeadlinePlanningPort,
+  type TaskDueDeadlineTransactionPort,
+  type TaskDueDeadlineValidation,
+  type TaskDueDeadlineValidationPort
 } from '@jooevents/deadline';
 import { canonicalJsonText } from '@jooevents/kernel';
 import type { SQLiteEventSpineRepository } from './event-spine';
@@ -59,7 +69,7 @@ CREATE TABLE deadlines (
   workspace_id TEXT NOT NULL CHECK(length(workspace_id) = 36),
   event_id TEXT NOT NULL CHECK(length(event_id) = 36),
   id TEXT NOT NULL CHECK(length(id) = 36),
-  kind TEXT NOT NULL CHECK(kind IN ('cfp_close', 'review_due')),
+  kind TEXT NOT NULL CHECK(kind IN ('cfp_close', 'review_due', 'task_due')),
   status TEXT NOT NULL CHECK(status IN ('active', 'cleared')),
   version INTEGER NOT NULL CHECK(version > 0),
   digest_sha256 TEXT NOT NULL CHECK(
@@ -158,7 +168,7 @@ interface DeadlineRow {
   readonly workspace_id: string;
   readonly event_id: string;
   readonly id: string;
-  readonly kind: 'cfp_close' | 'review_due';
+  readonly kind: 'cfp_close' | 'review_due' | 'task_due';
   readonly status: 'active' | 'cleared';
   readonly version: number;
   readonly digest_sha256: string;
@@ -193,11 +203,30 @@ export class SQLiteDeadlineRepository implements
   FormCloseDeadlineTransactionPort,
   ReviewDueDeadlinePlanningPort,
   ReviewDueDeadlineValidationPort,
-  ReviewDueDeadlineTransactionPort {
+  ReviewDueDeadlineTransactionPort,
+  TaskDueDeadlinePlanningPort,
+  TaskDueDeadlineValidationPort,
+  TaskDueDeadlineTransactionPort {
   constructor(
     private readonly sqlite: Database,
     private readonly events: Pick<SQLiteEventSpineRepository, 'readEventHead'>
   ) {}
+
+  planTaskDueDeadlineCreate(input: TaskDueDeadlineCreateInput): TaskDueDeadlineContribution {
+    return planTaskDueDeadlineCreateFrom(this, input);
+  }
+
+  validateTaskDueDeadline(
+    contribution: TaskDueDeadlineContribution
+  ): TaskDueDeadlineValidation {
+    return validateTaskDueDeadlineFrom(this, contribution);
+  }
+
+  applyTaskDueDeadline(
+    contribution: TaskDueDeadlineContribution
+  ): TaskDueDeadlineAppliedContribution {
+    return applyTaskDueDeadlineFrom(this, contribution);
+  }
 
   readDeadlineCatalog(scope: DeadlineScopeDto): DeadlineCatalogSnapshotDto | undefined {
     if (!this.scopeExists(scope)) return undefined;
@@ -470,4 +499,3 @@ function changedExactlyOnce(
 ): void {
   if (result.changes !== 1) throw new SQLiteDeadlineError(code);
 }
-

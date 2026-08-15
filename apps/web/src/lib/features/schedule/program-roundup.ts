@@ -13,7 +13,7 @@
 
 import type { ScheduleState, SessionItem, Submission } from '$lib/api/types';
 
-export type RoundupTray = 'unplaced' | 'needs-speakers' | 'undecided-in-place';
+export type RoundupTray = 'needs-track' | 'unplaced' | 'needs-speakers' | 'undecided-in-place';
 
 /** The Program panel's partition: each session appears in exactly one group. */
 export type ProgramGroup = RoundupTray | 'collecting' | 'drafts';
@@ -28,13 +28,14 @@ export interface ProgramGroupRow {
 }
 
 export const trayLabel: Record<RoundupTray, string> = {
+	'needs-track': 'Needs track',
 	unplaced: 'Unplaced',
 	'needs-speakers': 'Needs speakers',
 	'undecided-in-place': 'Held slots awaiting decisions'
 };
 
 export function isRoundupTray(value: string | null): value is RoundupTray {
-	return value === 'unplaced' || value === 'needs-speakers' || value === 'undecided-in-place';
+	return value === 'needs-track' || value === 'unplaced' || value === 'needs-speakers' || value === 'undecided-in-place';
 }
 
 const placedIds = (schedule: ScheduleState) =>
@@ -54,8 +55,13 @@ export function proposalCounts(submissions: readonly Submission[]): Map<string, 
 	return counts;
 }
 
-export function traysOf(session: SessionItem, placed: boolean): RoundupTray[] {
+export function traysOf(
+	session: SessionItem,
+	placed: boolean,
+	eventUsesTracks = false
+): RoundupTray[] {
 	const trays: RoundupTray[] = [];
+	if (eventUsesTracks && session.state !== 'draft' && session.trackId === '') trays.push('needs-track');
 	if (session.state === 'programmed' && !placed) trays.push('unplaced');
 	if (session.state === 'programmed' && session.speakers.length === 0) trays.push('needs-speakers');
 	if (session.state === 'collecting' && placed) trays.push('undecided-in-place');
@@ -66,15 +72,16 @@ export function traysOf(session: SessionItem, placed: boolean): RoundupTray[] {
  * The tray totals the summary reports — each count's denominator is its own
  * row set, rendered in the Program panel.
  */
-export function roundupCounts(schedule: ScheduleState): Record<RoundupTray, number> {
+export function roundupCounts(schedule: ScheduleState, eventUsesTracks = false): Record<RoundupTray, number> {
 	const placed = placedIds(schedule);
 	const counts: Record<RoundupTray, number> = {
+		'needs-track': 0,
 		unplaced: 0,
 		'needs-speakers': 0,
 		'undecided-in-place': 0
 	};
 	for (const session of schedule.sessions) {
-		for (const tray of traysOf(session, placed.has(session.id))) counts[tray] += 1;
+		for (const tray of traysOf(session, placed.has(session.id), eventUsesTracks)) counts[tray] += 1;
 	}
 	return counts;
 }
@@ -85,8 +92,9 @@ export function roundupCounts(schedule: ScheduleState): Record<RoundupTray, numb
  * still carries its "No speakers yet" mark — and a placed programmed session
  * with people is finished, so it appears on the grid alone, not here.
  */
-export function groupOf(session: SessionItem, placed: boolean): ProgramGroup | null {
+export function groupOf(session: SessionItem, placed: boolean, eventUsesTracks = false): ProgramGroup | null {
 	if (session.state === 'draft') return 'drafts';
+	if (eventUsesTracks && session.trackId === '') return 'needs-track';
 	if (session.state === 'collecting') return placed ? 'undecided-in-place' : 'collecting';
 	if (!placed) return 'unplaced';
 	if (session.speakers.length === 0) return 'needs-speakers';
@@ -101,6 +109,7 @@ export interface ProgramGrouping {
 }
 
 const GROUP_ORDER: ProgramGroup[] = [
+	'needs-track',
 	'unplaced',
 	'needs-speakers',
 	'undecided-in-place',
@@ -109,6 +118,7 @@ const GROUP_ORDER: ProgramGroup[] = [
 ];
 
 export const groupHeading: Record<ProgramGroup, string> = {
+	'needs-track': 'Needs track',
 	unplaced: 'Unplaced',
 	'needs-speakers': 'Needs speakers',
 	'undecided-in-place': 'Held slots awaiting decisions',
@@ -118,19 +128,20 @@ export const groupHeading: Record<ProgramGroup, string> = {
 
 export function programGrouping(
 	schedule: ScheduleState,
-	proposals: ReadonlyMap<string, number>
+	proposals: ReadonlyMap<string, number>,
+	eventUsesTracks = false
 ): ProgramGrouping {
 	const placed = placedIds(schedule);
 	const groups = new Map<ProgramGroup, ProgramGroupRow[]>();
 	let total = 0;
 	for (const session of schedule.sessions) {
 		const isPlaced = placed.has(session.id);
-		const group = groupOf(session, isPlaced);
+		const group = groupOf(session, isPlaced, eventUsesTracks);
 		if (!group) continue;
 		const row: ProgramGroupRow = {
 			session,
 			placed: isPlaced,
-			trays: traysOf(session, isPlaced),
+			trays: traysOf(session, isPlaced, eventUsesTracks),
 			proposalCount: proposals.get(session.id) ?? 0
 		};
 		const rows = groups.get(group);

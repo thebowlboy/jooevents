@@ -6,6 +6,7 @@ import {
 	proposedChangesetOperationResultSchema,
 	safeOperationManifestSchema,
 	type OperationEffect,
+	type ReleaseOverviewDto,
 	type SafeOperationManifest,
 	type SafeOperationManifestEntry
 } from '@jooevents/contracts';
@@ -20,6 +21,7 @@ import {
 	sessionDraftOperationResultSchema,
 	type SessionHeadDto
 } from '@jooevents/contracts/sessions';
+import { programGrouping } from '$lib/features/schedule/program-roundup';
 import { CHANGESET_REVIEW_OPERATIONS } from './changesets/live';
 import { mapProgramVocabularySnapshot } from './mappers/program-vocabulary';
 import type { ExpectedOperatorHttpOperation } from './operations/operator-http-binding';
@@ -391,6 +393,22 @@ function fakeSettings(settings: EventSettings | null = null): ScheduleGeometrySe
 	return { get: async () => settings };
 }
 
+function fakePublication(overrides: Partial<ReleaseOverviewDto> = {}) {
+	return {
+		async overview(): Promise<ReleaseOverviewDto> {
+			return {
+				schemaVersion: 1,
+				scope,
+				currentProgramRelease: null,
+				currentStyleSetRelease: null,
+				surfaceHeads: [],
+				activeSurfaceReleases: [],
+				...overrides
+			};
+		}
+	};
+}
+
 /** A complete, coherent served geometry for the grid-rendering tests. */
 function geometrySettings(overrides: Partial<EventSettings> = {}): EventSettings {
 	return {
@@ -399,7 +417,11 @@ function geometrySettings(overrides: Partial<EventSettings> = {}): EventSettings
 		startDate: '2027-05-04',
 		endDate: '2027-05-05',
 		location: 'Helsinki',
-		timezone: 'Europe/Helsinki',
+		// A UTC event on purpose: these cases pin the day-window arithmetic, so
+		// they read wall clock and canonical instant as the same numbers. The
+		// event-local basis (`dayStart` is wall clock, the instant is UTC) is
+		// pinned separately below, against a real offset.
+		timezone: 'UTC',
 		venueNote: '',
 		dayStart: '09:00',
 		dayEnd: '18:00',
@@ -424,7 +446,8 @@ function composePort(
 		sessions: createSessionCatalogLivePort({ manifest: shared, request }),
 		vocabulary: fakeVocabulary(),
 		proposals,
-		settings
+		settings,
+		publication: fakePublication()
 	});
 }
 
@@ -435,7 +458,8 @@ describe('live tuned Schedule page port', () => {
 			placements: createSchedulePlacementLivePort({ manifest: shared }),
 			sessions: createSessionCatalogLivePort({ manifest: shared }),
 			proposals: fakeProposalCounts(),
-			settings: fakeSettings()
+			settings: fakeSettings(),
+			publication: fakePublication()
 		};
 		expect(() =>
 			createLiveSchedulePagePort({
@@ -726,7 +750,8 @@ describe('live tuned Schedule page port', () => {
 			id: id(40),
 			title: 'Lightning round',
 			plannedDurationMinutes: 30,
-			lifecycle: 'collecting'
+			lifecycle: 'collecting',
+			programTarget: collectingHead.programTarget
 		});
 		const createDiff = { action: 'create', before: null, after: createdHead };
 		const calls: RecordedRequest[] = [];
@@ -793,7 +818,7 @@ describe('live tuned Schedule page port', () => {
 
 		const created = await port.schedule.createSession({
 			title: 'Lightning round',
-			trackId: '',
+			trackId,
 			formatId,
 			durationMin: 30,
 			state: 'collecting'
@@ -802,7 +827,7 @@ describe('live tuned Schedule page port', () => {
 			id: id(40),
 			title: 'Lightning round',
 			speakers: [],
-			trackId: '',
+			trackId,
 			formatId,
 			durationMin: 30,
 			state: 'collecting'
@@ -814,8 +839,8 @@ describe('live tuned Schedule page port', () => {
 			pathByOperation.propose,
 			pathByOperation.commit
 		]);
-		// The page's "no track" '' travels canonically as null, with the fresh
-		// catalog version and digest as guards.
+		// Classification travels with the fresh catalog guards; a collecting
+		// session in a track-using event never relies on canonical absence.
 		expect(calls[1]?.body).toEqual({
 			action: 'create',
 			expectedCatalogVersion: 7,
@@ -824,7 +849,7 @@ describe('live tuned Schedule page port', () => {
 			plannedDurationMinutes: 30,
 			lifecycle: 'collecting',
 			formatId,
-			trackId: null
+			trackId
 		});
 		expect(calls.slice(1).map((call) => call.idempotencyKey)).toEqual([
 			expect.stringMatching(/^je\.session\.change\.draft\.[a-f0-9]{64}$/),
@@ -1196,7 +1221,8 @@ describe('live tuned Schedule page port', () => {
 			sessions: createSessionCatalogLivePort({ manifest: shared }),
 			vocabulary: fakeVocabulary({ onAddRoom: (_name, capacity) => (receivedCapacity = capacity) }),
 			proposals: fakeProposalCounts(),
-			settings: fakeSettings()
+			settings: fakeSettings(),
+			publication: fakePublication()
 		});
 
 		expect(await port.vocab.tracks()).toEqual([{
@@ -1227,5 +1253,204 @@ describe('live tuned Schedule page port', () => {
 		expect(removal.ok).toBe(false);
 		if (removal.ok) throw new TypeError('Expected a refusal.');
 		expect(removal.reason).toContain('Retire or merge');
+	});
+});
+
+// ---------------------------------------------------------------------------
+// The event's own clock. Regression cover for the JooCon 2027 playground, where
+// a Europe/Berlin event with three committed placements served an empty day
+// list: `dayStart`/`dayEnd` are event-local wall clock, the canonical instant is
+// UTC, and comparing the two directly refused the grid for every event outside
+// UTC. Payloads below are the bytes a seeded live runtime actually served.
+
+/** Verbatim `/api/events/current/settings` data from the seeded playground. */
+function jooconSettings(overrides: Partial<EventSettings> = {}): EventSettings {
+	return {
+		name: 'JooCon 2027',
+		dates: 'September 15–17, 2027',
+		startDate: '2027-09-15',
+		endDate: '2027-09-17',
+		location: 'Kulturbrauerei, Berlin',
+		timezone: 'Europe/Berlin',
+		venueNote: '',
+		dayStart: '09:00',
+		dayEnd: '18:00',
+		slotMinutes: 15,
+		...overrides
+	};
+}
+
+/**
+ * Verbatim occurrences from the same runtime: 09:30, 10:30 and 11:30 Berlin
+ * on day one, which are 07:30Z, 08:30Z and 09:30Z.
+ */
+const jooconOccurrences = Object.freeze([
+	Object.freeze({ startAtUtc: '2027-09-15T07:30:00.000Z', endAtUtc: '2027-09-15T08:15:00.000Z' }),
+	Object.freeze({ startAtUtc: '2027-09-15T08:30:00.000Z', endAtUtc: '2027-09-15T09:15:00.000Z' }),
+	Object.freeze({ startAtUtc: '2027-09-15T09:30:00.000Z', endAtUtc: '2027-09-15T10:15:00.000Z' })
+]);
+
+describe('live tuned Schedule page geometry on the event’s own clock', () => {
+	test('draws the grid for a non-UTC event whose placements sit inside its local day window', () => {
+		const geometry = deriveScheduleGeometry({
+			settings: jooconSettings(),
+			occurrences: jooconOccurrences
+		});
+
+		// Before the basis fix this served NO_GRID_GEOMETRY: 07:30Z read as 450
+		// minutes, "before" the 540-minute day start, and the board rendered
+		// "Nothing is scheduled yet" over three committed placements.
+		expect(geometry.localCalendarReady).toBe(true);
+		expect(geometry.timeZone).toBe('Europe/Berlin');
+		expect(geometry.days).toEqual([
+			{ key: '2027-09-15', label: 'Wed Sep 15' },
+			{ key: '2027-09-16', label: 'Thu Sep 16' },
+			{ key: '2027-09-17', label: 'Fri Sep 17' }
+		]);
+		expect(geometry.slotsPerDay).toBe(36);
+	});
+
+	test('places the cards on their event-local rows, not their UTC ones', async () => {
+		const berlinOccurrence = {
+			id: id(5),
+			sessionId: id(20),
+			roomId,
+			startAt: '2027-09-15T07:30:00.000Z',
+			endAt: '2027-09-15T08:15:00.000Z',
+			version: 1
+		};
+		const payloads = {
+			[pathByOperation.sessionCatalog]: sessionCatalogReadResultSchema.parse({
+				kind: 'success', data: catalogData(), correlationId
+			}),
+			[fullRangePath]: schedulePlacementReadResultSchema.parse({
+				kind: 'success',
+				data: { schemaVersion: 1, scope, scheduleVersion: 4, occurrences: [berlinOccurrence] },
+				correlationId
+			})
+		};
+		const port = composePort(payloads, [], fakeProposalCounts(), fakeSettings(jooconSettings()));
+		const state = await port.schedule.state();
+
+		expect(state.days).toHaveLength(3);
+		// 09:30 Berlin is 30 minutes into a 09:00 day window — two 15-minute rows
+		// down, never the −90 the raw UTC clock would have produced.
+		expect(state.placements).toEqual([{
+			sessionId: id(20),
+			dayKey: '2027-09-15',
+			roomId,
+			startMin: 30,
+			conflicts: []
+		}]);
+	});
+
+	test('the served board offers a placeable row and a grid to place it on', async () => {
+		// The playground's shape: one session already holding a slot, one
+		// programmed session still unplaced. The page's own predicate — a row is
+		// placeable while it holds no slot and is not a draft — must find the
+		// second, and `boardReady` (rooms and days) must be true for the grid the
+		// press needs. Both were false on the live playground.
+		const placedBerlin = {
+			id: id(5),
+			sessionId: id(20),
+			roomId,
+			startAt: '2027-09-15T07:30:00.000Z',
+			endAt: '2027-09-15T08:15:00.000Z',
+			version: 1
+		};
+		const payloads = {
+			[pathByOperation.sessionCatalog]: sessionCatalogReadResultSchema.parse({
+				kind: 'success',
+				data: {
+					...catalogData(),
+					sessions: [head(20), head(22, { id: id(22), title: 'Schedule Physics for Stubborn Rooms' })]
+				},
+				correlationId
+			}),
+			[fullRangePath]: schedulePlacementReadResultSchema.parse({
+				kind: 'success',
+				data: { schemaVersion: 1, scope, scheduleVersion: 4, occurrences: [placedBerlin] },
+				correlationId
+			})
+		};
+		const port = composePort(payloads, [], fakeProposalCounts(), fakeSettings(jooconSettings()));
+		const state = await port.schedule.state();
+
+		const boardReady = state.rooms.length > 0 && state.days.length > 0;
+		expect(boardReady).toBe(true);
+
+		const grouping = programGrouping(state, new Map());
+		const rows = [...grouping.groups.values()].flat();
+		const placeable = rows.filter((row) => !row.placed && row.session.state !== 'draft');
+		expect(placeable.map((row) => row.session.title)).toEqual([
+			'Schedule Physics for Stubborn Rooms'
+		]);
+	});
+
+	test('keeps the honest no-grid state for placements the local window truly cannot draw', () => {
+		// 05:00Z is 07:00 in Berlin — genuinely before a 09:00 day start, and the
+		// fix must not paper that over.
+		expect(deriveScheduleGeometry({
+			settings: jooconSettings(),
+			occurrences: [
+				{ startAtUtc: '2027-09-15T05:00:00.000Z', endAtUtc: '2027-09-15T05:45:00.000Z' }
+			]
+		}).localCalendarReady).toBe(false);
+
+		// 22:30Z on day one is 00:30 on day two in Berlin. Day keys stay canonical
+		// UTC (re-keying occurrences is deferred), so a local date that disagrees
+		// with the UTC key renders no grid rather than a shifted column.
+		expect(deriveScheduleGeometry({
+			settings: jooconSettings(),
+			occurrences: [
+				{ startAtUtc: '2027-09-15T22:30:00.000Z', endAtUtc: '2027-09-15T23:15:00.000Z' }
+			]
+		}).localCalendarReady).toBe(false);
+
+		// An unrecognized zone falls back to the canonical UTC basis rather than
+		// inventing geometry: 07:30Z is then truly outside a 09:00 window.
+		expect(deriveScheduleGeometry({
+			settings: jooconSettings({ timezone: 'Not/AZone' }),
+			occurrences: jooconOccurrences
+		}).localCalendarReady).toBe(false);
+	});
+
+	test('place mints the instant the organizer’s own clock names, and round-trips', async () => {
+		const geometry = deriveScheduleGeometry({
+			settings: jooconSettings(),
+			occurrences: []
+		});
+		// Slot zero of the 09:00 Berlin window is 07:00Z, and reading it back on
+		// the event's clock returns slot zero — the board's press and the canonical
+		// record agree.
+		const state = await composePort(
+			{
+				[pathByOperation.sessionCatalog]: sessionCatalogReadResultSchema.parse({
+					kind: 'success', data: catalogData(), correlationId
+				}),
+				[fullRangePath]: schedulePlacementReadResultSchema.parse({
+					kind: 'success',
+					data: {
+						schemaVersion: 1,
+						scope,
+						scheduleVersion: 4,
+						occurrences: [{
+							id: id(5),
+							sessionId: id(20),
+							roomId,
+							startAt: '2027-09-15T07:00:00.000Z',
+							endAt: '2027-09-15T07:45:00.000Z',
+							version: 1
+						}]
+					},
+					correlationId
+				})
+			},
+			[],
+			fakeProposalCounts(),
+			fakeSettings(jooconSettings())
+		).schedule.state();
+		expect(geometry.dayStartMin).toBe(540);
+		expect(state.placements[0]).toMatchObject({ dayKey: '2027-09-15', startMin: 0 });
 	});
 });

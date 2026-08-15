@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import type { ServedPublicRosterDto, ServedPublicScheduleDto } from '@jooevents/contracts';
+import type {
+	ServedPublicPresentationDto,
+	ServedPublicRosterDto,
+	ServedPublicScheduleDto,
+	SurfaceKind
+} from '@jooevents/contracts';
 import {
 	PublicSurfaceLiveError,
 	createLivePublicSurfacePort,
@@ -90,11 +95,29 @@ function servedRoster(): ServedPublicRosterDto {
 	};
 }
 
+function servedPresentation(
+	surfaceKind: SurfaceKind,
+	heading: string
+): ServedPublicPresentationDto {
+	return {
+		schemaVersion: 1,
+		surfaceKind,
+		surfaceReleaseNumber: 2,
+		manifest: { schemaVersion: 1, heading, intro: `${heading} introduction` },
+		styleSetReleaseNumber: 1,
+		style: {
+			name: 'Released brand', canvas: '#f4f1ed', surface: '#ffffff', text: '#29231f',
+			action: '#a14e42', radius: 8, controlHeight: 38
+		}
+	};
+}
+
 function fetcherFor(routes: Record<string, () => Response>): (
 	input: string
 ) => Promise<Response> {
 	return async (input: string) => {
 		const route = routes[input];
+		if (!route && input.endsWith('/presentation')) return json(notPublished());
 		if (!route) throw new Error(`Unexpected fetch: ${input}`);
 		return route();
 	};
@@ -127,6 +150,10 @@ describe('live public-surface port', () => {
 					return json(success(servedSchedule()));
 				},
 				'/api/public/speakers/current': () => json(success(servedRoster())),
+				'/api/public/schedule/presentation': () =>
+					json(success(servedPresentation('schedule', 'Released schedule'))),
+				'/api/public/speakers/presentation': () =>
+					json(success(servedPresentation('speakers', 'Released speakers'))),
 				'/api/public/forms/current': () => json(formNotFound())
 			})
 		);
@@ -135,6 +162,10 @@ describe('live public-surface port', () => {
 			'schedule',
 			'speaker-roster'
 		]);
+		expect(surfaces.find((surface) => surface.kind === 'schedule')?.blocks[0]).toMatchObject({
+			type: 'hero', title: 'Released schedule', intro: 'Released schedule introduction'
+		});
+		expect(await port.theme.get()).toMatchObject({ name: 'Released brand', action: '#a14e42' });
 
 		const state = await port.schedule.state();
 		expect(state.published).toBe(true);
@@ -260,6 +291,8 @@ describe('live public-surface port', () => {
 			fetcherFor({
 				'/api/public/schedule/current': () => json(notPublished()),
 				'/api/public/speakers/current': () => json(notPublished()),
+				'/api/public/forms/presentation': () =>
+					json(success(servedPresentation('apply', 'Apply now'))),
 				[`/api/public/forms/current?formId=${served.formId}`]: () => json(success(served))
 			}),
 			() => `http://127.0.0.1/s/apply?scope=form%3A${served.formId}`
@@ -269,6 +302,7 @@ describe('live public-surface port', () => {
 		const apply = surfaces[0];
 		expect(apply?.kind).toBe('application-form');
 		expect(apply?.name).toBe('Call for proposals');
+		expect(apply?.blocks[0]).toMatchObject({ type: 'hero', title: 'Apply now' });
 		expect(apply?.fields?.map((entry) => entry.label)).toEqual(['Talk title']);
 		const summaries = await port.forms.list();
 		expect(summaries[0]).toMatchObject({
@@ -308,6 +342,8 @@ describe('live public-surface port', () => {
 			fetcherFor({
 				'/api/public/schedule/current': () => json(notPublished()),
 				'/api/public/speakers/current': () => json(notPublished()),
+				'/api/public/forms/presentation': () =>
+					json(success(servedPresentation('apply', 'Apply now'))),
 				[`/api/public/forms/current?formId=${served.formId}`]: () => {
 					formReads += 1;
 					return json(success(served));

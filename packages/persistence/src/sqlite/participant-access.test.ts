@@ -3,7 +3,8 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { issueSynchronousClassifiedPayloadEncryptionProfile } from '@jooevents/application/synchronous-classified-payload-store';
 import {
   createDeterministicFakeEmailProvider,
-  createOutboundEmailDeliveryWorker
+  createOutboundEmailDeliveryWorker,
+  isOutboundEmailDispatchSkipped
 } from '@jooevents/communications';
 import {
   PARTICIPANT_ACCESS_LAUNCH_POLICY,
@@ -84,8 +85,10 @@ function deterministicTokens(seed: number): ParticipantTokenSource {
 
 const SENDER = Object.freeze({
   fromAddress: 'auth@installation.example',
-  fromDisplayName: 'Example Conference'
+  fromDisplayName: 'Example Conference',
+  source: 'installation' as const
 });
+const SENDER_RESOLVER = Object.freeze({ resolve: () => SENDER });
 const PORTAL_ORIGIN = 'https://portal.installation.example';
 
 const databases: Database[] = [];
@@ -169,7 +172,7 @@ function fixture() {
       newDeliveryId: nextUuid,
       newEvidenceId: nextUuid
     },
-    sender: SENDER,
+    senderResolver: SENDER_RESOLVER,
     portalOrigin: PORTAL_ORIGIN,
     challenges: store
   });
@@ -183,7 +186,7 @@ function fixture() {
     ledger,
     provider: fake.delivery,
     envelopes: createSQLiteOutboundEmailEnvelopeResolver(releases),
-    ids: { newAttemptId: nextUuid },
+    ids: { newAttemptId: nextUuid, newClaimId: nextUuid },
     clock: { now: () => at(5_000) }
   });
   const relationships = createSQLiteParticipantRelationshipSource(sqlite);
@@ -486,6 +489,7 @@ describe('participant magic-link request ceremony (persistence)', () => {
     const deliveryId = challengeRow(f, challengeId).delivery_id!;
 
     const dispatched = await f.worker.dispatch({ deliveryId });
+    if (isOutboundEmailDispatchSkipped(dispatched)) throw new Error('dispatch was not claimed');
     expect(dispatched.state).toBe('known_rejected_terminal');
     expect(dispatched.followUp).toBe('complete');
 

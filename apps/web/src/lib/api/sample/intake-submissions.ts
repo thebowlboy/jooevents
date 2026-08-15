@@ -1,3 +1,4 @@
+import { submittedAtLabel } from '../mappers/intake-submissions';
 import type { WorkspaceDataset } from './dataset';
 import type { Submission } from '../types';
 import type {
@@ -54,7 +55,7 @@ function projectRecord(
 		title: submission.title,
 		primaryParticipantName: submission.speakers[0]?.name ?? null,
 		submittedAt: submission.submittedAt,
-		submittedAtLabel: submission.submittedAt
+		submittedAtLabel: submittedAtLabel(submission.submittedAt)
 	}) satisfies OrganizerSubmissionSummaryView;
 	const answers = Object.freeze([
 		Object.freeze({
@@ -87,7 +88,7 @@ function projectRecord(
 		formId,
 		formVersionId,
 		submittedAt: submission.submittedAt,
-		submittedAtLabel: submission.submittedAt,
+		submittedAtLabel: submittedAtLabel(submission.submittedAt),
 		participantCount: submission.speakers.length,
 		answers,
 		affirmedConsentFieldIds: Object.freeze([] as string[])

@@ -461,6 +461,22 @@ describe('live tuned Decisions page port', () => {
 		}]);
 	});
 
+	test('carries an explicit track into accept-spawn graduation', async () => {
+		const decided: unknown[] = [];
+		const port = composePort({ decisions: fakeDecisions({ decided }) });
+		await port.decisions.decide([id(21)], 'accepted', { [id(21)]: id(31) });
+		expect(decided).toEqual([{
+			action: 'decide',
+			decisions: [{
+				submissionId: id(21),
+				state: 'accepted',
+				expectedDecisionVersion: null,
+				expectedDecisionDigestSha256: null,
+				graduation: { kind: 'spawn', trackId: id(31) }
+			}]
+		}]);
+	});
+
 	test('refuses the verdicts no organizer authoring path exists for', async () => {
 		const decided: unknown[] = [];
 		const port = composePort({ decisions: fakeDecisions({ decided }) });
@@ -546,7 +562,7 @@ describe('live tuned Decisions page port', () => {
 		expect(sent).toEqual({
 			committed: 1,
 			sent: 0,
-			note: '1 delivery recorded, none delivered: the outbound lane rejected them outright. Those decisions stay un-notified until an activated provider accepts their delivery.'
+			note: '1 delivery recorded, none delivered: the outbound lane rejected them outright. Result not sent stays until an activated provider accepts their delivery.'
 		});
 		const afterReview = communications.calls.slice(8).map((call) => call.name);
 		expect(afterReview).toEqual([
@@ -603,7 +619,7 @@ describe('live tuned Decisions page port', () => {
 		expect(await acceptedPort.decisions.notify([id(21)], 'Your submission decision')).toEqual({
 			committed: 1,
 			sent: 1,
-			note: 'Every message was accepted by the outbound provider; the un-notified indicator clears as that delivery evidence lands.'
+			note: 'Every message was accepted by the outbound provider; Result not sent clears as that delivery evidence lands.'
 		});
 
 		// A refused history read is not a failed send: the commit stands and
@@ -625,7 +641,7 @@ describe('live tuned Decisions page port', () => {
 		expect(await unreadPort.decisions.notify([id(21)], 'Your submission decision')).toEqual({
 			committed: 1,
 			sent: null,
-			note: 'The release is committed. Its delivery state could not be read here, so nothing about delivery is claimed and the un-notified indicator stays until delivery evidence lands.'
+			note: 'The release is committed. Its delivery state could not be read here, so nothing about delivery is claimed and Result not sent stays until delivery evidence lands.'
 		});
 	});
 

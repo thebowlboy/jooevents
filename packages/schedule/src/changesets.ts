@@ -92,7 +92,7 @@ const resultSchema = defineChangesetSchema({
 });
 const staleDetailSchema = defineChangesetSchema({
   key: 'schedule.placement.stale_detail',
-  version: 1,
+  version: 2,
   schema: z.strictObject({
     code: z.enum([
       'wrong_scope',
@@ -101,6 +101,7 @@ const staleDetailSchema = defineChangesetSchema({
       'occurrence_missing',
       'stale_occurrence',
       'session_missing',
+      'session_track_required',
       'room_missing',
       'room_retired',
       'stale_room_query',
@@ -298,7 +299,7 @@ function refusalOutcome(
     retryable: false,
     subjects: [{ type: 'schedule_occurrence', id: plan.input.occurrenceId }],
     detail: { code, action: plan.input.action, occurrenceId: plan.input.occurrenceId },
-    detailSchemaVersion: 1
+    detailSchemaVersion: 2
   };
 }
 

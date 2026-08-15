@@ -566,7 +566,10 @@ describe('send_messages atomic commit and the immutable release store', () => {
       }),
       provider: createDeterministicFakeEmailProvider().delivery,
       envelopes: createSQLiteOutboundEmailEnvelopeResolver(input.releases),
-      ids: { newAttemptId: () => uuid((attemptSeq += 1)) },
+      ids: {
+        newAttemptId: () => uuid((attemptSeq += 1)),
+        newClaimId: () => uuid((attemptSeq += 1))
+      },
       clock: { now: () => now }
     });
     const result = await worker.dispatch({ deliveryId: specs[0]!.deliveryId });
@@ -636,7 +639,10 @@ describe('send_messages atomic commit and the immutable release store', () => {
       }),
       provider: createDeterministicFakeEmailProvider().delivery,
       envelopes: createSQLiteOutboundEmailEnvelopeResolver(input.releases),
-      ids: { newAttemptId: () => uuid((attemptSeq += 1)) },
+      ids: {
+        newAttemptId: () => uuid((attemptSeq += 1)),
+        newClaimId: () => uuid((attemptSeq += 1))
+      },
       clock: { now: () => now }
     });
     await expect(worker.dispatch({ deliveryId: uuid(0x510) }))

@@ -12,11 +12,14 @@ test('an attention row lands on its own rows, says so, and gives them all back',
 
 	const row = page
 		.getByRole('region', { name: 'Act now' })
-		.filter({ hasText: 'decisions not yet notified' });
+		.filter({ hasText: 'have not been told their result' });
 	await expect(row).toBeVisible({ timeout: 15000 });
 
-	// The scope in the sentence survives the click.
-	await row.getByRole('link', { name: /Compose notifications/ }).click();
+	// The scope in the sentence survives the click. The sentence names the people
+	// rather than the records, per `interface-language.md`; the address it lands
+	// on is unchanged, because how a fact reads and where it goes are separate
+	// decisions.
+	await row.getByRole('link', { name: /Send their results/ }).click();
 	await expect(page).toHaveURL(/\/app\/decisions\?scope=unnotified$/);
 
 	// Data rows by class: the station group headers share the table's rows.
@@ -28,7 +31,7 @@ test('an attention row lands on its own rows, says so, and gives them all back',
 	await expect(candidates).not.toContainText('Opening Keynote: AI Engineering Beyond the Demo');
 
 	// The destination names the filter it applied on the operator's behalf.
-	const chip = page.getByText('Decided · not yet notified');
+	const chip = page.getByText('Results not sent');
 	await expect(chip).toBeVisible();
 
 	// One press returns the whole list, and the address goes back to clean.
@@ -36,14 +39,16 @@ test('an attention row lands on its own rows, says so, and gives them all back',
 	await expect(page).toHaveURL(/\/app\/decisions$/);
 	await expect(candidates).toContainText('Opening Keynote: AI Engineering Beyond the Demo');
 	expect(await rows.count()).toBeGreaterThan(4);
-	await expect(page.getByText('Decided · not yet notified')).toHaveCount(0);
+	await expect(page.getByText('Results not sent')).toHaveCount(0);
 });
 
 test('a submissions address restores the tray and the search it names', async ({ page }) => {
 	await page.goto('/app/submissions?tray=discarded&search=Crypto');
 
-	const discarded = page.getByRole('button', { name: /Discarded/ });
-	await expect(discarded).toHaveAttribute('aria-pressed', 'true', { timeout: 15000 });
+	// A closed set of mutually exclusive populations is a radio group: the
+	// address restores which one is checked.
+	const trays = page.getByRole('radiogroup', { name: 'Submission trays' });
+	await expect(trays.getByRole('radio', { name: /^Spam/ })).toBeChecked({ timeout: 15000 });
 	await expect(page.getByRole('searchbox', { name: 'Search submissions' })).toHaveValue('Crypto');
 
 	const list = page.getByRole('region', { name: 'Submissions' });
@@ -51,7 +56,7 @@ test('a submissions address restores the tray and the search it names', async ({
 	await expect(list).toContainText('Crypto Wealth Secrets 2026');
 
 	// Changing a filter is a change of address, so the view stays shareable.
-	await page.getByRole('button', { name: /Inbox/ }).click();
+	await trays.getByText('Inbox', { exact: true }).click();
 	await expect(page).toHaveURL(/\/app\/submissions\?search=Crypto$/);
 	// An empty result names the query it ran and the corpus it ran against,
 	// rather than reporting an absence it never established.

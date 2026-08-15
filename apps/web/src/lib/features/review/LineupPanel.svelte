@@ -27,7 +27,7 @@
 	 */
 	import { onMount } from 'svelte';
 	import { Flame, Gem, Star, Zap } from 'lucide-svelte';
-	import { ClampedText, situationIcon, trackPending } from '$lib/ui';
+	import { ClampedText, TrackChip, situationIcon, trackPending } from '$lib/ui';
 	import type { IconComponent } from '$lib/ui';
 	import type { ReviewPagePort } from '$lib/api/review-page-port';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
@@ -79,6 +79,7 @@
 	};
 
 	let trackNames = $state<Record<string, string>>({});
+	let trackOrder = $state<string[]>([]);
 	let accoladeDefs = $state<AccoladeDef[]>([]);
 	let vocabLoaded = $state(false);
 
@@ -101,6 +102,7 @@
 	onMount(async () => {
 		const [tracks, defs] = await Promise.all([api.vocab.tracks(), api.review.accoladeDefs()]);
 		trackNames = Object.fromEntries(tracks.map((track) => [track.id, track.name]));
+		trackOrder = tracks.map((track) => track.id);
 		accoladeDefs = defs;
 		vocabLoaded = true;
 	});
@@ -276,7 +278,12 @@
 			<span class="ui-badge ui-badge--warning">Revised after reveal</span>
 		{/if}
 	</div>
-	<p class="card__track">{trackName(row.submission.trackId)}</p>
+	<p class="card__track">
+		<TrackChip
+			name={trackName(row.submission.trackId)}
+			id={row.submission.trackId}
+			order={trackOrder} />
+	</p>
 	<div class="card__abstract">
 		<ClampedText lines={2} label={row.submission.title}>{row.submission.abstract}</ClampedText>
 	</div>
@@ -648,8 +655,6 @@
 
 	.card__track {
 		margin: 0;
-		font-size: var(--je-font-size-xs);
-		color: var(--je-color-text-muted);
 	}
 
 	.card__abstract {

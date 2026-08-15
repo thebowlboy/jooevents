@@ -177,7 +177,9 @@ async function planningAttribution(input: {
 const surfaceIds = Object.freeze({
   styleSet: fixtureId(0x51),
   activeRelease: fixtureId(0x52),
-  successorRelease: fixtureId(0x53)
+  successorRelease: fixtureId(0x53),
+  templateArtifact: fixtureId(0x54),
+  templateRevision: fixtureId(0x55)
 });
 
 function applySurfaceRelease(input: {
@@ -193,6 +195,12 @@ function applySurfaceRelease(input: {
     id: input.id,
     number: input.number,
     predecessor: input.predecessor,
+    sourceTemplateRevision: {
+      artifactId: surfaceIds.templateArtifact,
+      revisionId: surfaceIds.templateRevision,
+      revisionNumber: 1,
+      digestSha256: 'b'.repeat(64)
+    },
     manifest: { schemaVersion: 1, heading: 'Apply', intro: null },
     styleSetReleaseId: surfaceIds.styleSet,
     formRef: { formId: fixtureIds.form, formVersionId: input.formVersionId },

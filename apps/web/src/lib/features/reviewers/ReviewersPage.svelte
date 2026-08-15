@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
-	import { ChevronDown } from 'lucide-svelte';
+	import { ChevronDown, TriangleAlert } from 'lucide-svelte';
 	import {
 		Badge,
 		CopyValue,
@@ -12,6 +12,7 @@
 		statusIcon
 	} from '$lib/ui';
 	import type { ReviewersPagePort } from '$lib/api/reviewers-page-port';
+	import { LiveRead, type LiveReadState } from '$lib/api/live-read';
 	import {
 		applyParams,
 		clearParams,
@@ -46,10 +47,54 @@
 
 	type FilterKey = 'all' | 'invited' | 'needs-cover';
 
-	let roster = $state<ReviewerRoster | null>(null);
-	let tracks = $state<Track[]>([]);
-	let formats = $state<Format[]>([]);
-	let sessions = $state<SessionItem[]>([]);
+	// The roster is this surface's spine; the scope vocabulary is what the chips
+	// and the scope editor resolve refs against. They are two reads with two
+	// owners, so they are held apart: a composition that cannot serve scope
+	// targets must not blank the roster, which was exactly the old failure —
+	// one rejected read in a joined `Promise.all` left every row a skeleton
+	// with nothing still on its way.
+	let rosterState = $state<LiveReadState<ReviewerRoster>>({ kind: 'resolving' });
+	const rosterRead = new LiveRead<ReviewerRoster>({
+		read: () => api.reviewers.list(),
+		fallback: 'The reviewer roster could not be loaded.',
+		onChange: (state) => (rosterState = state)
+	});
+	const roster = $derived(rosterState.kind === 'resolved' ? rosterState.value : null);
+
+	type ScopeVocabulary = {
+		readonly tracks: Track[];
+		readonly formats: Format[];
+		readonly sessions: SessionItem[];
+	};
+
+	let vocabularyState = $state<LiveReadState<ScopeVocabulary>>({ kind: 'resolving' });
+	const vocabularyRead = new LiveRead<ScopeVocabulary>({
+		read: async () => {
+			const [trackList, formatList, schedule] = await Promise.all([
+				api.vocab.tracks(),
+				api.vocab.formats(),
+				api.schedule.state()
+			]);
+			return {
+				tracks: trackList,
+				formats: formatList,
+				// Collecting and programmed sessions are scope targets; a draft slot
+				// stays organizer-only and is never offered.
+				sessions: schedule.sessions.filter(
+					(session) => session.state === 'collecting' || session.state === 'programmed'
+				)
+			};
+		},
+		fallback: 'Scope targets could not be loaded.',
+		onChange: (state) => (vocabularyState = state)
+	});
+	const vocabulary = $derived(
+		vocabularyState.kind === 'resolved' ? vocabularyState.value : null
+	);
+	/** Empty until served: an unresolved vocabulary offers no target, never a wrong one. */
+	const tracks = $derived(vocabulary?.tracks ?? []);
+	const formats = $derived(vocabulary?.formats ?? []);
+	const sessions = $derived(vocabulary?.sessions ?? []);
 	let expandedId = $state<string | null>(null);
 	/** The expanded row's scope draft; applied as one consequential write. */
 	let draft = $state<ScopeRef[]>([]);
@@ -59,6 +104,8 @@
 	let removeOpen = $state(false);
 	let removeTarget = $state<Reviewer | null>(null);
 	let announcement = $state('');
+	let remindingId = $state<string | null>(null);
+	let remindedIds = $state<string[]>([]);
 
 	const filterKeys = ['all', 'invited', 'needs-cover'] as const;
 
@@ -120,26 +167,31 @@
 	});
 	const activeCount = $derived(reviewers.filter((row) => row.status === 'active').length);
 
+	/** Re-read after a write: always a fresh request, and the newest one wins. */
 	async function load() {
-		roster = await api.reviewers.list();
+		await rosterRead.refresh();
 	}
 
-	onMount(async () => {
-		// The scope vocabulary loads with the roster: chips, the editor, and the
-		// `?scope=` label all resolve refs against these records.
-		const [trackList, formatList, schedule] = await Promise.all([
-			api.vocab.tracks(),
-			api.vocab.formats(),
-			api.schedule.state()
-		]);
-		tracks = trackList;
-		formats = formatList;
-		// Collecting and programmed sessions are scope targets; a draft slot
-		// stays organizer-only and is never offered.
-		sessions = schedule.sessions.filter(
-			(session) => session.state === 'collecting' || session.state === 'programmed'
-		);
-		await load();
+	let retryingRoster = $state(false);
+	async function retryRoster() {
+		retryingRoster = true;
+		try {
+			// The scope vocabulary may have failed with it; one visible retry is
+			// the person's whole answer to "this surface didn't load".
+			await Promise.all([
+				rosterRead.refresh(),
+				vocabularyState.kind === 'unavailable' ? vocabularyRead.refresh() : Promise.resolve()
+			]);
+		} finally {
+			retryingRoster = false;
+		}
+	}
+
+	onMount(() => {
+		// Both reads start together and land independently. Neither awaits the
+		// other, so neither can hold the other hostage.
+		void rosterRead.read();
+		void vocabularyRead.read();
 	});
 
 	function switchFilter(next: FilterKey) {
@@ -330,6 +382,24 @@
 		const carried = covered > 0 ? ` The other ${covered} already moved to another reviewer.` : '';
 		return `${reviews} nobody is covering. ${row.name} stepped back from ${row.steppedBack} because of a conflict of interest — they know or work with the submitter.${carried} Uncovered reviews stay in their assigned count until someone picks them up.`;
 	}
+
+	function isBehind(row: Reviewer): boolean {
+		return row.status === 'active' && row.assigned > 0 && row.done / row.assigned < 0.5;
+	}
+
+	async function remind(row: Reviewer) {
+		if (remindingId) return;
+		remindingId = row.id;
+		try {
+			await api.tasks.remind([row.id], 'Review reminder');
+			remindedIds = [...remindedIds, row.id];
+			announcement = `Review reminder sent to ${row.name}.`;
+		} catch (error) {
+			announcement = error instanceof Error ? error.message : 'The review reminder could not be sent.';
+		} finally {
+			remindingId = null;
+		}
+	}
 </script>
 
 {#snippet status(row: Reviewer)}
@@ -372,6 +442,16 @@
 	{:else}
 		<span class="load__none">Nothing assigned</span>
 	{/if}
+	{#if remindedIds.includes(row.id)}
+		<span class="load__sent">Reminder sent</span>
+	{:else if isBehind(row)}
+		<button
+			type="button"
+			class="ui-button ui-button--secondary ui-button--sm load__remind"
+			disabled={remindingId !== null}
+			aria-busy={remindingId === row.id}
+			onclick={() => remind(row)}>Remind</button>
+	{/if}
 {/snippet}
 
 {#snippet detail(row: Reviewer)}
@@ -391,7 +471,18 @@
 					reviewer’s scope. Clear every selection and they review everything.
 				{/if}
 			</p>
-			<ScopePicker {tracks} {formats} {sessions} selected={draft} ontoggle={toggleDraftRef} />
+			{#if vocabularyState.kind === 'unavailable'}
+				<!-- No picker at all rather than an empty one: a picker with no
+				     options states "this event has no tracks, formats, or sessions",
+				     which is a different and false claim. -->
+				<p class="detail__error" role="status">
+					{vocabularyState.message} Scope can’t be edited until they load.
+				</p>
+			{:else if vocabulary}
+				<ScopePicker {tracks} {formats} {sessions} selected={draft} ontoggle={toggleDraftRef} />
+			{:else}
+				<p class="detail__hint" role="status">Loading scope targets…</p>
+			{/if}
 			{#if scopeError}
 				<p class="detail__error" role="alert">{scopeError}</p>
 			{/if}
@@ -460,7 +551,23 @@
 {/if}
 
 <section aria-label="Reviewer roster">
-	{#if roster && filtered.length === 0}
+	{#if rosterState.kind === 'unavailable'}
+		<!-- The read answered, and its answer was "no". Skeleton rows here would
+		     promise a roster that is not on its way. -->
+		<div class="panel" role="alert">
+			<span class="panel__mark" aria-hidden="true"><TriangleAlert size={22} /></span>
+			<p class="panel__title">The reviewer roster is unavailable</p>
+			<p class="panel__copy">{rosterState.message}</p>
+			{#if rosterState.retryable}
+				<button
+					type="button"
+					class="ui-button ui-button--secondary ui-button--sm"
+					aria-busy={retryingRoster || undefined}
+					disabled={retryingRoster}
+					onclick={retryRoster}>Try again</button>
+			{/if}
+		</div>
+	{:else if roster && filtered.length === 0}
 		<div class="panel">
 			{#if reviewers.length === 0}
 				{@const Situation = situationIcon.emptyRoster}
@@ -569,8 +676,10 @@
 									     the column the link was about. -->
 									<div class="who" data-reviewer={row.id}>
 										<span class="ui-table__primary"><strong>{row.name}</strong></span>
-										<span class="ui-table__secondary"
-											><CopyValue value={row.email} label="email address" /></span>
+										{#if row.email}
+											<span class="ui-table__secondary"
+												><CopyValue value={row.email} label="email address" /></span>
+										{/if}
 									</div>
 								</td>
 								<td>{@render status(row)}</td>
@@ -631,7 +740,9 @@
 						<div class="card__head card__head--door" onclick={(event) => onRowPress(event, row.id)}>
 							<span class="card__copy">
 								<span class="card__name">{row.name}</span>
-								<span class="card__email"><CopyValue value={row.email} label="email address" /></span>
+								{#if row.email}
+									<span class="card__email"><CopyValue value={row.email} label="email address" /></span>
+								{/if}
 							</span>
 							<button
 								type="button"
@@ -653,6 +764,16 @@
 									<Badge tone="warning" icon={statusIcon.needsReviewer}>
 										{row.awaitingReassignment} need another reviewer
 									</Badge>
+								{/if}
+								{#if remindedIds.includes(row.id)}
+									<span class="load__sent">Reminder sent</span>
+								{:else if isBehind(row)}
+									<button
+										type="button"
+										class="ui-button ui-button--secondary ui-button--sm"
+										disabled={remindingId !== null}
+										aria-busy={remindingId === row.id}
+										onclick={() => remind(row)}>Remind</button>
 								{/if}
 							</span>
 							<!-- Cards have no column header, so the words carry the whole
@@ -858,9 +979,8 @@
 		inline-size: 2.5rem;
 	}
 
-	/* The same load voice as the review plan roster: the figure, then the bar
-	   spanning its column so every row's fill is measured against the same end
-	   points. */
+	/* Load is reviewer-management evidence: the figure and equal-endpoint bar
+	   support comparison, while Remind appears only for a person who is behind. */
 	.load__count {
 		display: block;
 		font-size: var(--je-font-size-sm);
@@ -890,6 +1010,18 @@
 	.load__none {
 		font-size: var(--je-font-size-xs);
 		color: var(--je-color-text-muted);
+	}
+
+	.load__remind,
+	.load__sent {
+		margin-block-start: var(--je-space-2);
+	}
+
+	.load__sent {
+		display: block;
+		font-size: var(--je-font-size-xs);
+		font-weight: 600;
+		color: var(--je-color-success);
 	}
 
 	.expand :global(svg) {

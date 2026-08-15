@@ -60,9 +60,9 @@ describe('Schedule placement contracts', () => {
       })
     });
     expect(SCHEDULE_PLACEMENT_OPERATION_SCHEMA_REFS.placementDraft).toEqual({
-      inputSchema: expect.objectContaining({ key: 'schema.schedule.placement-draft.input', version: 1 }),
+      inputSchema: expect.objectContaining({ key: 'schema.schedule.placement-draft.input', version: 2 }),
       resultSchema: expect.objectContaining({
-        key: 'schema.schedule.placement-draft.operator-result', version: 1
+        key: 'schema.schedule.placement-draft.operator-result', version: 2
       })
     });
     expect(SCHEDULE_PLACEMENT_OPERATION_SCHEMA_REFS.snapshotRead.inputSchema.digestSha256)

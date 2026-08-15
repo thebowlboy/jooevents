@@ -5,12 +5,23 @@ import type {
 	ScoreStanding,
 	SpeakerProfile,
 	Submission,
+	SubmissionArrivals,
 	SubmissionOrigin,
 	SubmissionPage,
 	SubmissionQuery,
 	Track,
 	TrayKey
 } from './types';
+
+/**
+ * The arrival pulse as the submissions head states it: the measured pulse and
+ * the event zone its calendar windows are claims about. One read, both facts —
+ * a pulse without its zone cannot say whose midnight "today" means.
+ */
+export interface SubmissionArrivalsView {
+	readonly arrivals: SubmissionArrivals;
+	readonly timezone: string;
+}
 
 export interface SubmissionTrayRestoreEntry {
 	readonly id: string;
@@ -40,6 +51,17 @@ export interface SubmissionsPagePort {
 		 * Null while no round has ever been opened.
 		 */
 		round(): Promise<ReviewRoundStatus | null>;
+	};
+	readonly arrivals: {
+		/**
+		 * What is new, over a named window chosen from this operator's own
+		 * rotation — the head's "is there anything to look at" answer, sharing
+		 * the Overview tile's engine so the two surfaces cannot disagree about
+		 * which day it is. Null where the source cannot measure it (no event
+		 * zone, or a live workspace that does not yet record visits); the head
+		 * then simply says nothing about newness rather than guessing.
+		 */
+		pulse(): Promise<SubmissionArrivalsView | null>;
 	};
 	readonly visits: {
 		/**

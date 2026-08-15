@@ -5,16 +5,20 @@
 	import { describePortFailure, type PortFailureView } from '$lib/api/port-failure';
 	import {
 		Alert,
-		createSettler,
+		Badge,
 		Marked,
-		markIcon,
 		Popover,
+		ScopeFilter,
+		TrackChip,
+		badgeFor,
+		createSettler,
+		markIcon,
+		recordTable,
 		shouldIgnoreRowPress,
-		statusIcon,
 		submissionTrayIcon,
-		trackPending
+		trackPending,
+		type Scope
 	} from '$lib/ui';
-	import type { IconComponent } from '$lib/ui';
 	import { matchFields, parseSearch, type MatchRange, type SearchMatch } from '$lib/api/search';
 	import {
 		submissionFields,
@@ -24,9 +28,25 @@
 	} from '$lib/api/searchable';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
 	import AddDirectEntryModal from './AddDirectEntryModal.svelte';
-	import SubmissionDetail, {
-		signalTone
-	} from '$lib/features/workspace/components/SubmissionDetail.svelte';
+	import SubmissionRecordDetail from './SubmissionRecordDetail.svelte';
+	import {
+		NO_TRACK_SCOPE,
+		TRAY_ORDER,
+		decisionCellFor,
+		formatLabel,
+		isNoTrackScope,
+		noticeAge,
+		noticeStatus,
+		rowsInTrackScope,
+		signalTone,
+		trackLabel,
+		trackOrder,
+		trackQuery,
+		trayLabels,
+		trayScopes
+	} from './submission-view';
+	import { describeArrivalPulse } from '@jooevents/contracts';
+	import type { SubmissionArrivalsView } from '$lib/api/submissions-page-port';
 	import ProfilePeek from '$lib/features/workspace/components/ProfilePeek.svelte';
 	import StandingMark from '$lib/features/workspace/components/StandingMark.svelte';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
@@ -67,22 +87,10 @@
 	/** A tray change (or its undo) that did not commit, in the port's own copy. */
 	let actFailure = $state<string | null>(null);
 
-	/* Plain words, because these four are the fates an operator sorts into and
-	   none of them is a decision the submitter ever sees. "Set aside" replaced
-	   "Folded": a coinage that taught nothing, and whose nearest reading — poker,
-	   where you fold your *own* hand — is the reverse of what happens here. */
-	const trayLabels: Record<TrayKey, string> = {
-		inbox: 'Inbox',
-		'set-aside': 'Set aside',
-		late: 'Late',
-		discarded: 'Discarded'
-	};
-	const trayOrder: TrayKey[] = ['inbox', 'set-aside', 'late', 'discarded'];
-
 	// The address owns the query. Landing on a scoped link, changing a filter,
 	// reloading, and pressing Back all arrive at this one place, so the rows on
 	// screen are always the rows the URL describes.
-	const tray = $derived(paramIn('tray', trayOrder, 'inbox'));
+	const tray = $derived(paramIn('tray', TRAY_ORDER, 'inbox'));
 	const search = $derived(param('search') ?? '');
 	const trackId = $derived(param('trackId') ?? '');
 	const formatId = $derived(param('formatId') ?? '');
@@ -141,19 +149,6 @@
 		return marks[rowId]?.fields[field]?.ranges ?? [];
 	}
 
-	// Glyphs come from the shared vocabulary so an outcome keeps one shape on
-	// every surface it appears; the word still carries the state.
-	const decisionBadge: Record<
-		Submission['decision'],
-		{ label: string; tone: string; icon: IconComponent } | null
-	> = {
-		undecided: null,
-		accepted: { label: 'Accepted', tone: 'success', icon: statusIcon.accepted },
-		waitlisted: { label: 'Waitlisted', tone: 'lavender', icon: statusIcon.waitlisted },
-		declined: { label: 'Declined', tone: 'neutral', icon: statusIcon.declined },
-		withdrawn: { label: 'Withdrawn', tone: 'neutral', icon: statusIcon.withdrawn }
-	};
-
 	// Reloads keep the rows a person is looking at and dim them until the next
 	// result lands; only the first load, with nothing to show, uses skeletons.
 	let refreshing = $state(false);
@@ -198,7 +193,9 @@
 		const query = {
 			tray,
 			search: search || undefined,
-			trackId: trackId || undefined,
+			// The untracked scope is not a track, so it is not a track filter: the
+			// tray comes back whole and `rowsInTrackScope` narrows it below.
+			trackId: trackQuery(trackId),
 			formatId: formatId || undefined
 		};
 		const ticket = (request += 1);
@@ -275,6 +272,24 @@
 	/** The newest review round's standing — the station groups' one review fact. */
 	let round = $state<ReviewRoundStatus | null>(null);
 
+	/*
+	 * The arrival pulse: what is new, over a window the engine chose from this
+	 * operator's own rotation and names beside its number. It answers the visit's
+	 * first question — is there anything to look at, or not — before a single row
+	 * is scanned. Null while unread or unmeasurable, and the head then says
+	 * nothing about newness rather than guessing.
+	 */
+	let pulseView = $state<SubmissionArrivalsView | null>(null);
+	const pulseWords = $derived(
+		pulseView
+			? describeArrivalPulse({
+					pulse: pulseView.arrivals.pulse,
+					timezone: pulseView.timezone,
+					now: enteredAt.getTime()
+				})
+			: null
+	);
+
 	onMount(() => {
 		// Each side read degrades to its own designed "not known" state on
 		// failure (waiting selects, generic empty-state copy, no station meta,
@@ -287,6 +302,7 @@
 			visitRead = true;
 		}).catch(() => {});
 		void port.review.round().then((status) => (round = status)).catch(() => {});
+		void port.arrivals.pulse().then((view) => (pulseView = view)).catch(() => {});
 	});
 
 	function isNew(row: Submission): boolean {
@@ -338,8 +354,19 @@
 	 * decided-then-discarded row's badges already tell its story. A group with
 	 * nothing in it does not render.
 	 */
+	/**
+	 * The rows the current track scope selects.
+	 *
+	 * A real track is the port's own filter and nothing is dropped again here;
+	 * the untracked scope is the one the port cannot express, so it narrows over
+	 * the tray the port already returned whole. Every count on this surface
+	 * reads from here, so the note under the table and the rows above it can
+	 * never disagree.
+	 */
+	const scopedRows = $derived(rowsInTrackScope(data?.rows ?? [], trackId));
+
 	const sections = $derived.by<StationSection[]>(() => {
-		const rows = data?.rows ?? [];
+		const rows = scopedRows;
 		if (tray !== 'inbox' && tray !== 'late') return [{ key: 'all', label: null, rows }];
 		const byStation: Record<StationKey, Submission[]> = {
 			review: [],
@@ -359,8 +386,8 @@
 		byStation.done.sort(byVerdict);
 		return [
 			{ key: 'review' as const, label: 'In review', rows: byStation.review },
-			{ key: 'deciding' as const, label: 'Waiting on a decision', rows: byStation.deciding },
-			{ key: 'notice' as const, label: 'Decided · not yet notified', rows: byStation.notice },
+			{ key: 'deciding' as const, label: 'Decision needed', rows: byStation.deciding },
+			{ key: 'notice' as const, label: 'Results not sent', rows: byStation.notice },
 			{ key: 'done' as const, label: 'Done', rows: byStation.done }
 		].filter((section) => section.rows.length > 0);
 	});
@@ -425,7 +452,7 @@
 		if (expandedId !== null && !present.has(expandedId)) expandedId = null;
 	}
 
-	function switchTray(next: TrayKey) {
+	function switchTray(next: string) {
 		if (tray === next) return;
 		// The default tray stays out of the address, so an unscoped link is clean.
 		applyParams({ tray: next === 'inbox' ? null : next });
@@ -436,14 +463,15 @@
 	}
 
 	function toggleAll() {
-		const rows = data?.rows ?? [];
-		selected = selected.length === rows.length ? [] : rows.map((row) => row.id);
+		// "All shown" means the rows on screen, which under the untracked scope is
+		// fewer than the tray holds.
+		selected = selected.length === scopedRows.length ? [] : scopedRows.map((row) => row.id);
 	}
 
 	const triageCopy = {
 		setAside: 'Set aside',
 		returnToInbox: 'Moved back to the inbox',
-		discard: 'Discarded',
+		discard: 'Marked as spam',
 		restore: 'Restored'
 	} as const;
 
@@ -494,22 +522,24 @@
 	}
 
 	// A filter offers what may be chosen now, so retired entries drop out of the
-	// lists; naming and coloring below still resolve them, permanently.
+	// lists; naming below still resolves them, permanently.
 	const offeredTracks = $derived(tracks.filter((track) => track.status === 'active'));
 	const offeredFormats = $derived(formats.filter((format) => format.status === 'active'));
 
-	function trackName(id: string) {
-		return tracks.find((track) => track.id === id)?.name ?? id;
-	}
+	/* Position in the event's own track list walks the accent palette from the
+	   top, so a track wears one colour here, on the decision board, and on the
+	   schedule — rather than a hash that can collide. */
+	const trackIds = $derived(trackOrder(tracks));
 
-	function formatName(id: string) {
-		return formats.find((format) => format.id === id)?.name ?? id;
-	}
-
-	function trackAccent(id: string): string {
-		const accent = tracks.find((track) => track.id === id)?.accent;
-		return accent === 'lavender' ? 'lavender' : accent === 'sea' ? 'sea' : 'neutral';
-	}
+	/* The four fates, as the mutually-exclusive scope set they are. Counts join
+	   once the totals are known; the chips are equal-width either way, so the
+	   number arrives without moving anything. */
+	const trays = $derived<Scope[]>(
+		trayScopes(data?.trayTotals ?? null).map((scope) => ({
+			...scope,
+			icon: submissionTrayIcon[scope.value]
+		}))
+	);
 
 	/**
 	 * The row is a bigger door to the same detail, for the pointer only. The
@@ -538,31 +568,33 @@
 <svelte:window onkeydown={onKeydown} />
 
 <div class="head">
-	<nav class="trays" aria-label="Submission trays">
-		{#each trayOrder as key (key)}
-			{@const Fate = submissionTrayIcon[key]}
-			<button
-				type="button"
-				class="trays__tab"
-				class:trays__tab--active={tray === key}
-				aria-pressed={tray === key}
-				onclick={() => switchTray(key)}>
-				<Fate size={14} aria-hidden="true" />
-				{trayLabels[key]}
-				<span class="trays__count">{data?.trayTotals[key] ?? '–'}</span>
-			</button>
-		{/each}
-	</nav>
+	<!-- Mutually exclusive scopes stay visible: four members, every one reachable
+	     at 390px, no ragged wrap and nothing hidden behind an overflow. -->
+	<div class="head__trays">
+		<ScopeFilter label="Submission trays" scopes={trays} value={tray} onchange={switchTray} />
+	</div>
 	{#if data}
+		<!-- The visit's first answer — is there anything new, or not — leads; the
+		     custody arithmetic lives on the tray chips beside it, so this line no
+		     longer recites four counts the chips already carry. The delta wears
+		     the same neutral mark as a New row and the Overview tile: one
+		     concept, one look. -->
 		<p class="head__denominator">
-			{Object.values(data.trayTotals).reduce((sum, count) => sum + count, 0)} total ·
-			{data.trayTotals.inbox} inbox · {data.trayTotals['set-aside']} set aside ·
-			{data.trayTotals.late} late · {data.trayTotals.discarded} discarded, all recoverable —
-			every submission stays countable.
+			{#if pulseWords}
+				{#if pulseWords.delta}
+					<Badge tone="neutral" value={pulseWords.delta} />
+				{:else}
+					<span class="head__quiet">{pulseWords.quiet}</span>
+				{/if}
+				<span aria-hidden="true">·</span>
+			{/if}
+			<span class="head__total"
+				>{Object.values(data.trayTotals).reduce((sum, count) => sum + count, 0)} total, all
+				recoverable</span>
 		</p>
 	{:else}
 		<p class="head__denominator" aria-hidden="true">
-			<span class="ui-skeleton skeleton-line" style="inline-size: min(30rem, 100%)"></span>
+			<span class="ui-skeleton skeleton-line" style="inline-size: min(18rem, 100%)"></span>
 		</p>
 	{/if}
 </div>
@@ -593,6 +625,9 @@
 			value={trackId}
 			onchange={(event) => applyParams({ trackId: event.currentTarget.value })}>
 			<option value="">All tracks</option>
+			<!-- Submissions with no track are a real population an organizer has to
+			     work through, so they are findable rather than merely visible. -->
+			<option value={NO_TRACK_SCOPE}>No track</option>
 			{#each offeredTracks as track (track.id)}
 				<option value={track.id}>{track.name}</option>
 			{/each}
@@ -650,7 +685,11 @@
 	{/if}
 
 	<div class="ui-table-wrap" class:is-refreshing={reload.visible} aria-busy={refreshing || undefined}>
-		<table class="ui-table ui-table--multiline">
+		<!-- The attachment restores what a display change costs: table roles after
+		     the row re-composes into a record, and the column names mirrored onto
+		     the cells that stack. Below the columns' width the row becomes
+		     rail · identity · state · affordance, so nothing leaves the screen. -->
+		<table class="ui-table ui-table--multiline" {@attach recordTable()}>
 			<thead>
 				<tr>
 					<th class="col-check ui-pick-cell">
@@ -658,7 +697,7 @@
 							<input
 								type="checkbox"
 								aria-label="Select all shown"
-								checked={data !== null && data.rows.length > 0 && selected.length === data.rows.length}
+								checked={data !== null && scopedRows.length > 0 && selected.length === scopedRows.length}
 								onchange={toggleAll} />
 						</label>
 					</th>
@@ -666,6 +705,11 @@
 					<th>Signals</th>
 					<th class="ui-table__number col-avg">Reviews</th>
 					<th>Decision</th>
+					<!-- The clock the arrival groups sort by, in its own column: the
+					     sorted value is exactly what earns a column, and one constant
+					     right-edge slot is what lets the eye run down the page's
+					     timeline without reading a sentence per row. -->
+					<th class="ui-table__number col-when">Received</th>
 					<th class="col-expand"><span class="ui-sr-only">Details</span></th>
 				</tr>
 			</thead>
@@ -677,7 +721,7 @@
 						     work that is no longer happening. Only a retryable failure
 						     offers a retry; a terminal refusal renders as the refusal. -->
 						<tr>
-							<td colspan="6">
+							<td colspan="7">
 								<div class="empty" role="alert">
 									<p class="empty__title">The submissions could not be loaded.</p>
 									<p class="empty__hint">{loadFailure.message}</p>
@@ -697,8 +741,8 @@
 						<!-- Mirrors the resolved multiline row cell-for-cell, so the row
 						     height is set by the same table metrics as real rows. -->
 						<tr aria-hidden="true">
-							<td class="col-check"></td>
-							<td>
+							<td class="col-check ui-pick-cell"></td>
+							<td class="ui-cell--lead">
 								<span class="ui-table__primary title-line"><span class="ui-skeleton skeleton-line" style="inline-size: 18rem"></span><span class="ui-skeleton skeleton-chip"></span></span>
 								<span class="ui-table__secondary"><span class="ui-skeleton skeleton-line" style="inline-size: 12rem"></span></span>
 							</td>
@@ -710,21 +754,33 @@
 									</span>
 								</span>
 							</td>
-							<td><span class="ui-skeleton skeleton-chip"></span></td>
-							<td class="col-expand"><span class="ui-skeleton skeleton-action skeleton-action--icon"></span></td>
+							<td class="ui-cell--state"><span class="ui-skeleton skeleton-chip"></span></td>
+							<td class="ui-table__number col-when"><span class="when"><span class="ui-skeleton skeleton-line" style="inline-size: 4rem"></span></span></td>
+							<td class="col-expand ui-cell--trail"><span class="ui-skeleton skeleton-action skeleton-action--icon"></span></td>
 						</tr>
 					{/each}
 					{/if}
-				{:else if data.rows.length === 0}
+				{:else if scopedRows.length === 0}
 					<tr>
-						<td colspan="6">
+						<td colspan="7">
 							<div class="empty">
 								<!-- An empty list has two different causes and the rows cannot
 								     tell them apart: nothing matched the words, or nothing is
 								     in this tray at all. Naming the query and the fields it
 								     ran against is what turns "nothing" into something a
 								     person can act on. -->
-								{#if search}
+								{#if isNoTrackScope(trackId) && data.rows.length > 0}
+									<!-- The scope is the answer: every submission in this tray
+									     carries a track, which is the fact the operator came to
+									     check. Naming it beats reporting an absence. -->
+									<p class="empty__title">
+										Every submission in {trayLabels[tray].toLowerCase()} has a track.
+									</p>
+									<p class="empty__hint">
+										Nothing here is without one{search ? ' that matches your search' : ''}.
+										Choose “All tracks” to see the {data.rows.length} in this tray.
+									</p>
+								{:else if search}
 									<p class="empty__title">
 										No submission here matches <span class="found__query">“{search}”</span>.
 									</p>
@@ -792,7 +848,7 @@
 							     computed from the rows on screen — under a search they count
 							     the matches, which is what the eye is comparing them to. -->
 							<tr class="station">
-								<td colspan="6">
+								<td colspan="7">
 									<div class="station__line">
 										<span class="station__label">{section.label}</span>
 										<span class="station__count">{section.rows.length}</span>
@@ -812,13 +868,17 @@
 											<a class="station__door" href="/app/decisions">Decide →</a>
 										{:else if section.key === 'notice'}
 											<a class="station__door" href="/app/decisions?scope=unnotified"
-												>Send notices →</a>
+											>Send results →</a>
 										{/if}
 									</div>
 								</td>
 							</tr>
 						{/if}
 						{#each section.rows as row (row.id)}
+						{@const rowTrack = trackLabel(tracks, row.trackId)}
+						{@const rowFormat = formatLabel(formats, row.formatId)}
+						{@const decidedAt = noticeAge(row)}
+						{@const cell = decisionCellFor(row, section.key)}
 						<!-- The pointer target is the row; the switch is still the chevron
 						     inside it, which is why no role or tabindex is added here. -->
 						<!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -838,19 +898,18 @@
 										onchange={() => toggleSelected(row.id)} />
 								</label>
 							</td>
-							<td>
+							<td class="ui-cell--lead">
 								<!-- Title and track are read as one judgment — what is this talk
-								     about — so the track sits beside the title, not columns away. -->
+								     about — so the track sits beside the title, not columns away.
+								     A submission with no track draws nothing here: an empty
+								     capsule is a defect, and the absence is said in words on the
+								     metadata line below. -->
 								<span class="ui-table__primary title-line">
 									<span class="title-line__text"
 										><Marked text={row.title} ranges={rangesFor(row.id, SUBMISSION_FIELD_TITLE)} /></span>
-									{#if isNew(row)}
-										<!-- Arrived since the operator last looked, or within the day —
-										     information, never urgency: the mark stays on the quietest
-										     rung and fades on its own once both arms lapse (23 §4). -->
-										<span class="ui-badge ui-badge--neutral title-line__new">New</span>
+									{#if rowTrack.kind === 'named'}
+										<TrackChip name={rowTrack.name} id={row.trackId} order={trackIds} />
 									{/if}
-									<span class="ui-badge ui-badge--{trackAccent(row.trackId)}">{trackName(row.trackId)}</span>
 								</span>
 								<span class="ui-table__secondary">
 									<!-- The submitter is a scan key, and once a profile has landed for
@@ -868,22 +927,46 @@
 												ranges={nameRanges} />{:else}<Marked
 												text={speaker.name}
 												ranges={nameRanges} />{/if}{/each}</span>
-									· {formatName(row.formatId)}
+									<!-- Facts join this sentence only when there is a fact: a blank
+									     slot between two separators is how “Ingrid Halvorsen · ·
+									     direct entry” shipped. An unassigned track is the one
+									     absence worth stating, and it states itself on the quietest
+									     rung — and it is a scope in the track filter above. -->
+									<!-- The separator binds to the fact that follows it with a
+									     no-break space, so a wrapped record never leaves a lone
+									     interpunct hanging at the end of a line. -->
+									{#if rowTrack.kind === 'none'}
+										<span class="no-track">·&nbsp;No track</span>
+									{/if}
+									{#if rowFormat.kind === 'named'}
+										·&nbsp;{rowFormat.name}
+									{/if}
 									{#if row.source === 'direct_entry'}
 										<!-- Provenance in one phrase — this row is here because an
 										     organizer put it here, and that person vouches for it. -->
-										· <span class="direct"
-											>direct entry{#if row.enteredBy}{' '}by {row.enteredBy}{/if}</span>
+										<span class="direct"
+											>·&nbsp;direct entry{#if row.enteredBy}{' '}by {row.enteredBy}{/if}</span>
 									{/if}
-									<!-- The arrival fact ends the sentence: the inbox's pulse, and
-									     for an undecided row also how long it has waited. Relative
-									     while it still reads as "recently" ("3 days ago"), the plain
-									     calendar date once elapsed-time arithmetic stops helping —
-									     the word "arrived" said nothing the position didn't. -->
-									· <span class="arrived">{formatArrival(row.submittedAt, enteredAt)}</span>
+									<!-- The one clock that is pressure rather than information: a
+									     decided row whose result was never sent. It stays in the
+									     sentence and names itself, because it is not the arrival —
+									     that clock now has its own column at the row's edge, where
+									     the eye can run down the page's timeline. -->
+									{#if decidedAt}
+										<span class="arrived">·&nbsp;decided {formatArrival(decidedAt, enteredAt)}</span>
+									{/if}
 								</span>
 							</td>
-							<td>
+							<!-- Signals and the review average keep their place in the record as
+							     labelled lines rather than moving into the detail. Both carry a
+							     disclosure of their own — why a machine marked this row, where
+							     this average stands — and a control a touch reader can only reach
+							     by opening the row is a control they have lost.
+
+							     A row with no signal has nothing to label, so its cell withdraws
+							     from the record entirely: a lone "SIGNALS" over empty space is
+							     the empty pill wearing a different costume. -->
+							<td class:ui-cell--detail={row.signals.length === 0 && !row.setAsideBy}>
 								<span class="signals">
 									{#each row.signals as signal (signal.key)}
 										<!-- Why a machine marked this row is reachable from the mark
@@ -893,7 +976,7 @@
 											label={`${signal.label} — why this signal is on “${row.title}”`}
 											onreveal={() => (announcement = signalSentence(signal))}>
 											{#snippet trigger()}
-												<span class="ui-badge ui-badge--{signalTone[signal.family]}">{signal.label}</span>
+												<Badge tone={signalTone[signal.family]} value={signal.label} />
 											{/snippet}
 											{#snippet children()}
 												<p class="signal__rationale">{signal.rationale}</p>
@@ -905,10 +988,7 @@
 										</Popover>
 									{/each}
 									{#if row.setAsideBy}
-										{@const Agent = markIcon.agent}
-									<span class="ui-badge ui-badge--lavender"
-										><Agent class="ui-badge__icon" aria-hidden="true" />{row.setAsideBy}</span
-									>
+										<Badge tone="lavender" icon={markIcon.agent} value={row.setAsideBy} />
 									{/if}
 								</span>
 							</td>
@@ -942,30 +1022,37 @@
 									<span class="absent">No reviews yet</span>
 								{/if}
 							</td>
-							<td>
-								{#if decisionBadge[row.decision]}
-									{@const badge = decisionBadge[row.decision]!}
-									{@const Outcome = badge.icon}
-									<span class="ui-badge ui-badge--{badge.tone}"
-										><Outcome class="ui-badge__icon" aria-hidden="true" />{badge.label}</span
-									>
-									{#if !row.notified && (row.decision === 'accepted' || row.decision === 'declined' || row.decision === 'waitlisted')}
-										{@const Unnotified = statusIcon.unnotified}
-										<span class="ui-badge ui-badge--warning"
-											><Unnotified class="ui-badge__icon" aria-hidden="true" />Un-notified</span
-										>
-									{/if}
-								{:else}
-									<!-- The same word the decisions board uses for the same state, so
-									     one state keeps one name across surfaces. It stays literally
-									     true in every tray; that a set-aside or discarded submission
-									     will not be decided is what the tray itself says. -->
-									{@const NotDecided = statusIcon.notStarted}
-									<span class="ui-badge ui-badge--neutral"
-										><NotDecided class="ui-badge__icon" aria-hidden="true" />Not decided</span>
+							<!-- The state cell, deduplicated against the group band above it:
+							     inside a station group only what varies row to row renders here
+							     — the verdict — while the constant fact ("Decision needed",
+							     "Result not sent") is said once, on the band. Tone and glyph
+							     still come from the shared status vocabulary, so the same state
+							     cannot wear one loudness here and another on the decision board. -->
+							<td class="ui-cell--state">
+								{#if cell.status}
+									<span class="decision">
+										<Badge {...badgeFor(cell.status.key)} value={cell.status.label} />
+										{#if cell.notice}
+											<Badge {...badgeFor(noticeStatus.key)} value={noticeStatus.label} />
+										{/if}
+									</span>
+								{:else if cell.absent}
+									<span class="absent">{cell.absent}</span>
 								{/if}
 							</td>
-							<td class="col-expand">
+							<!-- The arrival, on every row, in one constant slot. The New mark
+							     sits with the fact it qualifies — arrived since the operator
+							     last looked, or within the day; information, never urgency
+							     (23 §4). -->
+							<td class="ui-table__number col-when">
+								<span class="when">
+									{#if isNew(row)}
+										<Badge tone="neutral" value="New" />
+									{/if}
+									<span class="arrived">{formatArrival(row.submittedAt, enteredAt)}</span>
+								</span>
+							</td>
+							<td class="col-expand ui-cell--trail">
 								<button
 									type="button"
 									class="ui-button ui-button--ghost ui-button--icon ui-button--sm expand"
@@ -982,27 +1069,43 @@
 								{#if row.tray === 'set-aside'}
 									<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('returnToInbox', [row.id])}>Move back to inbox</button>
 								{:else if row.tray === 'discarded'}
-									<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('restore', [row.id])}>Restore to inbox</button>
+									<!-- The email pair's learned reversal: pressing it moves the
+									     row back to the inbox, which the receipt then says. -->
+									<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('restore', [row.id])}>Not spam — restore to inbox</button>
 								{:else}
 									<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('setAside', [row.id])}>Set aside</button>
-									<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('discard', [row.id])}>Discard</button>
+									<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('discard', [row.id])}>Mark as spam</button>
 								{/if}
 							{/snippet}
-							<!-- Two buttons of equal weight; what they differ in and what either
-							     costs is stated here, at the point of action. -->
+							<!-- One clause, and only the half a reader cannot already see.
+							     This was four lines grading the two buttons as "softer" and
+							     "firmer" — a feeling, not a fact, and the reader still could not
+							     choose between them because the outcome is the same. What
+							     genuinely differs is who may do it, and that is already shown
+							     where it happened: a row an agent set aside carries the agent's
+							     own lavender mark. Attribution states it once, on the evidence,
+							     instead of prose stating it on every row it might apply to. -->
 							{#snippet fates()}
-								Neither is sent to the submitter and both can be undone. Set aside is
-								the softer one and an agent may do it for you; discard is firmer and
-								only a person can. Either way the submission leaves the decision
-								board.
+								Neither is sent to the submitter, and both can be undone.
 							{/snippet}
-							<tr class="detail-row">
-								<td colspan="6">
-									<SubmissionDetail
+							<tr class="detail-row ui-table__detail">
+								<td colspan="7">
+									<!-- One component, two presentations: the inline expansion stays
+									     on desktop so a power user compares without losing the list,
+									     and promotes to a full-screen sheet on a phone, where a
+									     labelled two-column detail inside a 390px column is
+									     unreadable. Dismissing the sheet must also close the row, or
+									     the row stays open behind a sheet nobody can see. -->
+									<SubmissionRecordDetail
 										submission={row}
+										track={rowTrack}
+										format={rowFormat}
+										trackOrder={trackIds}
+										timezone={pulseView?.timezone}
 										origin={row.decision === 'accepted' ? origins[row.id] : undefined}
 										actions={trayActions}
-										footnote={row.tray !== 'set-aside' && row.tray !== 'discarded' ? fates : undefined} />
+										footnote={row.tray !== 'set-aside' && row.tray !== 'discarded' ? fates : undefined}
+										onclose={() => openRow(null)} />
 								</td>
 							</tr>
 						{/if}
@@ -1012,7 +1115,7 @@
 			</tbody>
 		</table>
 	</div>
-	{#if data && data.rows.length > 0}
+	{#if data && scopedRows.length > 0}
 		<!-- Under a search the rows are what matched, not what the tray holds, so
 		     "showing N of <tray total>" would claim the query ran against a
 		     population it never saw. The disclosure that matters is unchanged —
@@ -1029,7 +1132,7 @@
 			{#if data.search}
 				Searched {data.search.scanned} of {data.trayTotals[tray]}
 			{:else}
-				Showing {data.rows.length} of {data.trayTotals[tray]}
+				Showing {scopedRows.length} of {data.trayTotals[tray]}
 			{/if}
 			in {trayLabels[tray].toLowerCase()}{port.source.kind === 'sample'
 				? ' — sample window until live data lands.'
@@ -1044,10 +1147,10 @@
 		{#if tray === 'set-aside'}
 			<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('returnToInbox', selected)}>Move back to inbox</button>
 		{:else if tray === 'discarded'}
-			<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('restore', selected)}>Restore</button>
+			<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('restore', selected)}>Not spam — restore</button>
 		{:else}
 			<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('setAside', selected)}>Set aside</button>
-			<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('discard', selected)}>Discard</button>
+			<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('discard', selected)}>Mark as spam</button>
 		{/if}
 		<button type="button" class="ui-button ui-button--ghost ui-button--sm" onclick={() => (selected = [])}>Clear</button>
 	</div>
@@ -1076,48 +1179,37 @@
 		gap: var(--je-space-3);
 	}
 
-	.trays {
-		display: flex;
-		flex-wrap: wrap;
-		gap: var(--je-space-1);
-	}
-
-	.trays__tab {
-		display: inline-flex;
-		align-items: center;
-		gap: var(--je-space-2);
-		padding: var(--je-space-1) var(--je-space-3);
-		border: 1px solid transparent;
-		border-radius: var(--je-radius-round);
-		background: transparent;
-		font-size: var(--je-font-size-md);
-		color: var(--je-color-text-muted);
-		cursor: pointer;
-	}
-
-	.trays__tab:hover {
-		background: var(--je-color-surface);
-		color: var(--je-color-text);
-	}
-
-	.trays__tab--active {
-		background: var(--je-color-mark-surface);
-		border-color: var(--je-color-mark-border);
-		color: var(--je-color-text);
-		font-weight: 600;
-	}
-
-	.trays__count {
-		font-size: var(--je-font-size-xs);
-		font-variant-numeric: tabular-nums;
+	/* The scope set is its own query container, so its inline size is resolved
+	   without regard to its contents — in a shrink-to-fit slot that resolves to
+	   zero and the chips vanish. It therefore gets a definite basis here, free
+	   to grow into the head's slack and capped before four filters start
+	   reading as a navigation bar. Below its own 30rem the primitive
+	   re-composes into two even rows. */
+	.head__trays {
+		flex: 1 1 22rem;
+		min-inline-size: 0;
+		max-inline-size: 40rem;
 	}
 
 	.head__denominator {
 		margin: 0;
 		margin-inline-start: auto;
+		display: flex;
+		align-items: center;
+		gap: var(--je-space-2);
 		font-size: var(--je-font-size-xs);
 		color: var(--je-color-text-muted);
 		font-variant-numeric: tabular-nums;
+	}
+
+	/* "Nothing new this week" is a fact an organizer came for, not an error and
+	   not a zeroed chip — quiet words on the metadata rung. */
+	.head__quiet {
+		white-space: nowrap;
+	}
+
+	.head__total {
+		white-space: nowrap;
 	}
 
 	.toolbar__search {
@@ -1211,10 +1303,6 @@
 		margin-block-start: var(--je-space-4);
 	}
 
-	.muted {
-		color: var(--je-color-text-muted);
-	}
-
 	/* The average cell reserves the resolved figure's box from the first
 	   skeleton paint onward: same width, same line box, whichever of the three
 	   states a row is in. The standing read then lands as ink alone — a tint and
@@ -1294,21 +1382,57 @@
 
 
 	/* Speaker identity is a scan key on this surface; it keeps full ink even on
-	   the metadata line. */
+	   the metadata line. The quiet sea role lets the eye find people down a
+	   column of records without borrowing a status or action treatment. */
 	.scan {
-		color: var(--je-color-text);
-		font-weight: 500;
+		color: var(--je-color-recognition-person);
+		font-weight: 600;
 	}
 
+	/* Provenance is support, not a scan key: it descends to the sentence's own
+	   muted rung (owner colour-noise pass, 2026-08-15). The lavender it used to
+	   wear is the agent-attribution family, and a talk an organizer keyed in by
+	   hand is exactly not an agent's act — one hue, one meaning. */
 	.direct {
-		color: var(--je-color-accent-lavender-strong);
+		color: var(--je-color-text-muted);
 	}
 
-	/* The arrival fact ends the metadata sentence and stays one token: a
-	   timestamp that wraps away from its own words reads as a different fact. */
+	/* The one absence this surface states rather than leaves blank, on the
+	   quietest rung of the metadata sentence. It is not a category, so it takes
+	   no chip; it is findable, because the track filter carries the same scope. */
+	.no-track {
+		color: var(--je-color-text-subtle);
+	}
+
+	.decision {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--je-space-1);
+	}
+
+	/* A time fact stays one token: a timestamp that wraps away from its own
+	   words reads as a different fact. */
 	.arrived {
 		white-space: nowrap;
-		color: var(--je-color-text-subtle);
+		color: var(--je-color-recognition-time);
+		font-variant-numeric: tabular-nums;
+	}
+
+	/* The arrival column: one constant right-edge slot per row, so the eye can
+	   run down the page's timeline without reading a sentence per row. Sized to
+	   the widest phrase the vocabulary produces ("34 minutes ago") plus the New
+	   mark that sometimes rides beside it. */
+	.col-when {
+		inline-size: 9rem;
+	}
+
+	.when {
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		gap: var(--je-space-2);
+		min-inline-size: 0;
 	}
 
 	.title-line {
@@ -1318,15 +1442,16 @@
 		min-width: 0;
 	}
 
-	/* One line, like every `ui-table__primary strong` in the product: wrapped
-	   titles break the scan and leave the loading skeleton under-reserving the
-	   row it stands in for. The full name stays in the expansion and labels. */
+	/* One line while the row is a row: wrapped titles break the scan and leave
+	   the loading skeleton under-reserving the row it stands in for. The full
+	   name stays in the expansion and labels. */
 	.title-line__text {
 		min-inline-size: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
+
 
 	/* Station group headers as section bands: the same fill the column head
 	   wears, so each station reads as its own titled slab rather than one more
@@ -1514,6 +1639,166 @@
 
 		.bulkbar {
 			inset-block-end: var(--je-space-3);
+		}
+	}
+
+	/*
+	 * ══ The compact columns ══════════════════════════════════════════════════
+	 *
+	 * Between the record threshold and full width, the table is still columns —
+	 * but its two reservations were sized for a 1166px wrapper and, measured at
+	 * 906px, held the table 221px past its own edge (the metadata sentence's
+	 * nowrap run set a ~540px floor under the lead column on top of them). In
+	 * this range the reservations yield — the standing phrase ellipsizes into
+	 * its popover, which is where the full evidence lives anyway — the arrival
+	 * column sizes to its content, and the metadata sentence wraps exactly as
+	 * the record presentation already lets it. Nothing leaves the screen and
+	 * the wrapper never scrolls sideways.
+	 */
+	@container je-table (min-width: 52rem) and (max-width: 74rem) {
+		.ui-table {
+			--avg-w: 6rem;
+		}
+
+		.col-when {
+			inline-size: auto;
+		}
+
+		.ui-table :global(.ui-table__secondary) {
+			overflow: visible;
+			text-overflow: clip;
+			white-space: normal;
+		}
+
+		/* The identity column takes what the fixed columns leave rather than
+		   demanding its longest title's width: the zero cap removes its
+		   intrinsic claim from auto layout while the full-width claim hands it
+		   every remaining pixel, the title's own ellipsis absorbs the
+		   difference, and the sentence beneath wraps (above). */
+		td.ui-cell--lead {
+			inline-size: 100%;
+			max-inline-size: 0;
+		}
+	}
+
+	/*
+	 * ══ The record ═══════════════════════════════════════════════════════════
+	 *
+	 * What this surface adds once the shared table has re-composed its rows.
+	 * Last in the sheet on purpose: these are overrides of the column rules
+	 * above, and a cascade order is easier to keep true than a specificity
+	 * argument. The query asks the table wrapper, exactly as the primitive
+	 * does, so the two can never disagree about when a row stops being a row.
+	 */
+	@container je-table (max-width: 51.99rem) {
+		/* A record grows downward, which is the one direction a phone has: the
+		   identifying value stops being an ellipsis the moment there is no
+		   column to protect, and the track chip drops below the title rather
+		   than squeezing the name it qualifies. */
+		.title-line {
+			flex-wrap: wrap;
+		}
+
+		.title-line__text {
+			overflow: visible;
+			text-overflow: clip;
+			white-space: normal;
+			/* And it takes the whole line, so what qualifies it follows underneath
+			   with the record's full width to read in. Sharing the line squeezed
+			   the track chip to 68px and truncated a category to "Mo…" — and the
+			   full name lives in `title`, which is a pointer affordance a touch
+			   reader never receives. */
+			flex: 1 0 100%;
+		}
+
+		/* A category is a scan key, and at record width the chip has a line of
+		   its own — so it wraps rather than truncating. The full name lives in
+		   `title`, which is a pointer affordance a touch reader never receives,
+		   so a clipped chip on a phone is a name nobody can recover. */
+		.ui-table :global(.ui-track__label) {
+			overflow: visible;
+			text-overflow: clip;
+			white-space: normal;
+		}
+
+		/* A labelled line below the primary line has the whole record to use.
+		   The primitive leaves it in the identity column, which the state and
+		   the affordance have already narrowed — measured at 390px that left a
+		   value 41px of room and truncated a track name to "Mo…". */
+		.ui-table.ui-table--multiline > tbody > tr > :global(td[data-label]) {
+			grid-column: 2 / -1;
+			/* A chip is a box drawn around a word; blockified into a grid cell it
+			   would stretch to the column and read as a banner. */
+			justify-items: start;
+		}
+
+		/* The average's reserved box exists so a column cannot reflow under a
+		   reader mid-scan. A record has no column to protect, so the figure
+		   sits with its own label instead of at a 12rem right edge. */
+		.ui-table__number {
+			text-align: start;
+		}
+
+		.avg {
+			justify-content: flex-start;
+		}
+
+		.avg__mark {
+			inline-size: auto;
+		}
+
+		/* At record width the arrival is a labelled line like any other; it
+		   keeps its left edge with the record rather than a column's right one. */
+		.when {
+			justify-content: flex-start;
+		}
+
+		/* The header row keeps only its controls here, so the strip is the band
+		   rather than one cell of it wearing the column-head fill alone. The
+		   group still lays out as a table header inside a block table, which
+		   shrink-wraps it to the width of the one control it kept — 56px of
+		   grey floating over a 358px record. */
+		thead {
+			display: block;
+		}
+
+		thead tr {
+			background: var(--je-color-page);
+		}
+
+		thead th {
+			background: none;
+		}
+
+		/* The station band is a sentence and a door; at record width it wraps
+		   rather than pushing the door past the edge. */
+		.station__line {
+			flex-wrap: wrap;
+		}
+
+		.station__door {
+			margin-inline-start: 0;
+		}
+
+		/* At record width the open row's frame belongs to the table primitive,
+		   and the detail itself has promoted to a sheet — so the cell keeps no
+		   painted strip of its own. Two boundaries around nothing read as a
+		   hole cut in the list. */
+		.detail-row td {
+			border: 0;
+			background: none;
+		}
+	}
+
+	/*
+	 * A phone, where the record has no width to spare. A decided row carries
+	 * two states, and side by side they took 210px of a 334px record — leaving
+	 * the title 68px and truncating its track to "Mo…". Capped, the second
+	 * state stacks under the first and the identity keeps the room it needs.
+	 */
+	@container je-table (max-width: 30rem) {
+		.ui-cell--state {
+			max-inline-size: 7rem;
 		}
 	}
 </style>

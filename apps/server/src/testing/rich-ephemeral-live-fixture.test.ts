@@ -430,9 +430,10 @@ describe('rich ephemeral live SQLite fixture', () => {
         },
         // The overview history evidence union covers the event, vocabulary,
         // form, field-registry, triage, and workspace_team timelines; the
-        // three Session changesets and the roster registration have no
-        // source there, while the reviewer role change adds one team thread.
-        history: { total: expected.changesets - 4, truncated: true }
+        // three Session changesets, the roster registration, and the five
+        // publication changesets have no source there, while the reviewer
+        // role change adds one team thread.
+        history: { total: expected.changesets - 9, truncated: true }
       },
       correlationId: overviewCorrelationId
     });

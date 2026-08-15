@@ -152,6 +152,20 @@ describe('live application build identity producer', () => {
 		]);
 	});
 
+	test('covers a non-prerendered exact route through its node and verified SPA fallback', () => {
+		const withRedirect = [
+			...routes,
+			{ id: '/(operator)/app/settings', page: { layouts: [0, 3], errors: [1, null], leaf: 9 } }
+		] satisfies readonly ApplicationRouteManifestEntry[];
+		const identity = proveAndWriteLiveBuildIdentity({
+			buildDirectory,
+			clientManifest,
+			routes: withRedirect
+		});
+		expect(identity.files.some((file) => file.path === 'app/settings.html')).toBe(false);
+		expect(identity.files.some((file) => file.path === '_app/immutable/nodes/9.page.js')).toBe(true);
+	});
+
 	test('leaves no identity when sample evidence or a missing closure file fails proof', () => {
 		write('_app/immutable/nodes/9.page.js', 'Mid-flight');
 		expect(() => proveAndWriteLiveBuildIdentity({ buildDirectory, clientManifest, routes }))

@@ -10,10 +10,13 @@ import {
   type ReleaseSurfaceSuccessorPlanDto,
   type SchedulePlacementSnapshotDto,
   type ServedPublicRosterDto,
+  type ServedPublicPresentationDto,
   type ServedPublicScheduleDto,
   type SessionCatalogDto,
   type SurfaceHeadDto,
-  type SurfaceKind
+  type SurfaceKind,
+  type ReleaseTemplateRevisionPinDto,
+  type TemplateArtifactDocumentDto
 } from '@jooevents/contracts';
 import { canonicalJsonText } from '@jooevents/kernel';
 import { programVocabularySetDigest } from '@jooevents/program';
@@ -33,6 +36,7 @@ import {
   parseSurfaceRelease,
   planReleaseSurfaceSuccessorFrom,
   projectServedPublicRoster,
+  projectServedPublicPresentation,
   projectServedPublicSchedule,
   releaseMutationResultFromPlan,
   releaseSurfaceSuccessorGuardRef,
@@ -343,6 +347,12 @@ export interface SQLiteReleaseUpstreamSources {
   readonly eventSettings: Pick<SQLiteEventSettingsRepository, 'readEventSettings'>;
   readonly names: SQLiteReleaseParticipantNameSource;
   readonly forms: SQLiteReleasePublishedFormVersionSource;
+  readonly templates?: {
+    readPinnedArtifact(
+      scope: ReleaseScopeDto,
+      pin: ReleaseTemplateRevisionPinDto
+    ): TemplateArtifactDocumentDto | undefined;
+  };
 }
 
 interface ReleaseRow { readonly release_json: string }
@@ -400,6 +410,30 @@ implements ReleaseChangesetTransactionPort, ReleaseSurfaceSuccessorTransactionPo
   readServedRoster(scope: ReleaseScopeDto): ServedPublicRosterDto | undefined {
     const release = this.readCurrentProgramRelease(scope);
     return release === undefined ? undefined : projectServedPublicRoster(release);
+  }
+
+  /**
+   * Presentation follows the mutable surface head to one immutable surface
+   * release, then follows that release's exact immutable style pin. A broken
+   * pointer is corrupt publication state, never a reason to serve defaults.
+   */
+  readServedPresentation(
+    scope: ReleaseScopeDto,
+    kind: SurfaceKind
+  ): ServedPublicPresentationDto | undefined {
+    const head = this.readSurfaceHead(scope, kind);
+    if (head === undefined) return undefined;
+    const surface = this.readSurfaceRelease(scope, head.activeReleaseId);
+    if (surface === undefined || surface.kind !== kind) {
+      throw new SQLiteReleaseError('data_corrupt');
+    }
+    const style = this.readStyleSetRelease(scope, surface.styleSetReleaseId);
+    if (style === undefined) throw new SQLiteReleaseError('data_corrupt');
+    try {
+      return projectServedPublicPresentation({ surface, style });
+    } catch (error) {
+      throw new SQLiteReleaseError('data_corrupt', error);
+    }
   }
 
   readCurrentStyleSetRelease(scope: ReleaseScopeDto): StyleSetRelease | undefined {
@@ -462,6 +496,11 @@ implements ReleaseChangesetTransactionPort, ReleaseSurfaceSuccessorTransactionPo
         [...state.rooms]
           .sort((left, right) => left.id < right.id ? -1 : 1)
           .map((room) => Object.freeze({ id: room.id, name: room.name }))
+      ),
+      tracks: Object.freeze(
+        [...state.tracks]
+          .sort((left, right) => left.id < right.id ? -1 : 1)
+          .map((track) => Object.freeze({ id: track.id, status: track.status }))
       )
     });
   }
@@ -517,6 +556,13 @@ implements ReleaseChangesetTransactionPort, ReleaseSurfaceSuccessorTransactionPo
 
   readReleasePublishedFormVersionId(scope: ReleaseScopeDto, formId: string): string | undefined {
     return this.sources.forms.readCurrentPublishedFormVersionId(scope, formId);
+  }
+
+  readReleaseTemplateArtifact(
+    scope: ReleaseScopeDto,
+    pin: ReleaseTemplateRevisionPinDto
+  ): TemplateArtifactDocumentDto | undefined {
+    return this.sources.templates?.readPinnedArtifact(scope, pin);
   }
 
   applyReleasePlan(planInput: ReleaseMutationPlanDto): ReleaseMutationResultDto {

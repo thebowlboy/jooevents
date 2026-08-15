@@ -1,6 +1,7 @@
 <script lang="ts">
   /**
    * A value that is read *and* transported: an address, a link, a reference code.
+   * A blank value is not a value and renders no text or transport control.
    *
    * The value itself stays ordinary selectable text. Nothing wraps it in a
    * button, nothing intercepts pointer events on it, and no click handler sits on
@@ -42,6 +43,7 @@
   }
 
   let { value, label, display, oncopy }: Props = $props();
+  let copyable = $derived(value.trim().length > 0);
 
   /** Long enough to be read, short enough not to linger as state. */
   const HELD_MS = 1600;
@@ -70,6 +72,7 @@
   }
 
   async function copy() {
+    if (!copyable) return;
     clearTimeout(timer);
     if (await writeToClipboard(value)) {
       copied = true;
@@ -89,30 +92,32 @@
   }
 </script>
 
-<span class="ui-copy" class:ui-copy--copied={copied}>
-  <span class="ui-copy__value">{display ?? value}</span>
-  <button
-    type="button"
-    class="ui-copy__button"
-    class:ui-copy__button--done={copied}
-    class:ui-copy__button--failed={failed}
-    bind:this={button}
-    aria-label={copied ? `${label} copied` : failed ? `${label} could not be copied` : `Copy ${label}`}
-    onclick={copy}>
-    <!-- Stacked in one cell so the swap is a cross-fade, never a reflow. -->
-    <span class="ui-copy__glyphs">
-      <Copy class="ui-copy__glyph ui-copy__glyph--rest" aria-hidden="true" />
-      <Check class="ui-copy__glyph ui-copy__glyph--done" aria-hidden="true" />
-    </span>
-  </button>
-  {#if shown}
-    <!-- One element, both jobs: the words for the eye, and a polite announcement
-         for assistive technology. Naming the value keeps it useful when several
-         copyable things sit in one row. -->
-    <span
-      class="ui-copy__flag"
-      class:ui-copy__flag--placed={placed}
-      bind:this={flag}
-      role="status">Copied<span class="ui-sr-only">{` ${label}`}</span></span>
-  {/if}
-</span>
+{#if copyable}
+  <span class="ui-copy" class:ui-copy--copied={copied}>
+    <span class="ui-copy__value">{display ?? value}</span>
+    <button
+      type="button"
+      class="ui-copy__button"
+      class:ui-copy__button--done={copied}
+      class:ui-copy__button--failed={failed}
+      bind:this={button}
+      aria-label={copied ? `${label} copied` : failed ? `${label} could not be copied` : `Copy ${label}`}
+      onclick={copy}>
+      <!-- Stacked in one cell so the swap is a cross-fade, never a reflow. -->
+      <span class="ui-copy__glyphs">
+        <Copy class="ui-copy__glyph ui-copy__glyph--rest" aria-hidden="true" />
+        <Check class="ui-copy__glyph ui-copy__glyph--done" aria-hidden="true" />
+      </span>
+    </button>
+    {#if shown}
+      <!-- One element, both jobs: the words for the eye, and a polite announcement
+           for assistive technology. Naming the value keeps it useful when several
+           copyable things sit in one row. -->
+      <span
+        class="ui-copy__flag"
+        class:ui-copy__flag--placed={placed}
+        bind:this={flag}
+        role="status">Copied<span class="ui-sr-only">{` ${label}`}</span></span>
+    {/if}
+  </span>
+{/if}

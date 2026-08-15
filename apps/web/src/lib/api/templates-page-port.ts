@@ -35,6 +35,14 @@ export interface TemplatesPagePort {
 		get(): Promise<EventTheme>;
 		set(theme: EventTheme): Promise<void>;
 	};
+	/** Explicit public-release capability; absent in non-live/reference compositions. */
+	readonly publication?: {
+		status(templateId: string): Promise<{
+			readonly state: 'never_published' | 'published' | 'changes_pending';
+			readonly publishedRevisionNumber: number | null;
+		}>;
+		publish(templateId: string, formId?: string): Promise<MutationOutcome>;
+	};
 	readonly workspace: {
 		summary(): Promise<{
 			readonly event: null | {

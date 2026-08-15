@@ -884,8 +884,15 @@
 										value={form.closesAt ?? ''}
 										onchange={(value) => void saveClosing(value)} />
 									{#if form.closesAt}
+										<!-- Quiet danger: removing the close date is consequential —
+										     the form then stays open until somebody closes it by
+										     hand — but it is not this region's primary, which is the
+										     date itself. A ghost control understated the consequence;
+										     a filled red one would have taken the region's one
+										     accent-dominant slot from the lifecycle commit beside it.
+										     Filled danger stays inside confirming dialogs. -->
 										<Button
-											variant="ghost"
+											variant="danger-quiet"
 											size="sm"
 											disabled={pending !== ''}
 											onclick={() => void saveClosing('')}>
@@ -1111,7 +1118,7 @@
 															disabled={pending === 'apply'}
 															onchange={() => toggleOption(view, option.id)} />
 													{/each}
-													<a class="qrow__vocab" href="/app/settings">
+													<a class="qrow__vocab" href="/app/settings/program">
 														Manage {source.plural} in Settings
 													</a>
 												</fieldset>
@@ -1226,8 +1233,8 @@
 						{/if}
 						<p class="panel__foot-note">
 							Shared questions are defined once in
-							<a href="/app/settings">Settings → Speaker fields</a> — asking or dropping one here
-							changes only this form.
+							<a href="/app/settings/program#settings-speaker-fields">Settings → Speaker fields</a> —
+							asking or dropping one here changes only this form.
 						</p>
 					</footer>
 				{/if}

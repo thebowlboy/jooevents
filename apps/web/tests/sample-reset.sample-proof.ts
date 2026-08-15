@@ -9,7 +9,7 @@ test('sample changes stay local, use the tuned interaction, and reset from one a
 		return route.abort('blockedbyclient');
 	});
 
-	await page.goto('/app/settings');
+	await page.goto('/app/settings/program');
 	await expect(page.getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible();
 	const source = page.getByLabel('Sample data — what these numbers are');
 	await expect(source).toBeVisible();

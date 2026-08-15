@@ -1,4 +1,5 @@
 import {
+	formatInstant,
 	intakeFormSafeDiffSchema,
 	type ChangesetDiffData,
 	type FormDefinitionAuthorInput,
@@ -51,17 +52,14 @@ type HandledDetailKey =
 const unhandledDetailKeys: Record<Exclude<keyof OrganizerFormDetailDto, HandledDetailKey>, never> = {};
 void unhandledDetailKeys;
 
-const monthNames = Object.freeze([
-	'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-	'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-] as const);
-
+/**
+ * A form's own bookkeeping timestamps — last edited, published. The zone is
+ * named rather than implied; it is UTC because the Form wire contract carries
+ * no event timezone, which is a statement this mapper can make honestly and a
+ * silent local clock would not be.
+ */
 function instantLabel(instant: string): string {
-	const date = new Date(instant);
-	const month = monthNames[date.getUTCMonth()];
-	const hour = String(date.getUTCHours()).padStart(2, '0');
-	const minute = String(date.getUTCMinutes()).padStart(2, '0');
-	return `${month} ${date.getUTCDate()}, ${date.getUTCFullYear()} · ${hour}:${minute} UTC`;
+	return formatInstant(instant, 'UTC', { zone: true, fallback: 'Not recorded' });
 }
 
 function unreachable(value: never): never {

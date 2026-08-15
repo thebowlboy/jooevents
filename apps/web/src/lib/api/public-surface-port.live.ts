@@ -1,10 +1,13 @@
 import {
 	createReadOperationResultSchema,
+	formatDate,
 	operationTransportErrorSchema,
 	servedPublicFormSchema,
+	servedPublicPresentationSchema,
 	servedPublicRosterSchema,
 	servedPublicScheduleSchema,
 	type ServedPublicFormDto,
+	type ServedPublicPresentationDto,
 	type ServedPublicRosterDto,
 	type ServedPublicScheduleDto
 } from '@jooevents/contracts';
@@ -32,16 +35,19 @@ import type {
  * leaving the page's loading shell rather than fabricating an absent or empty
  * world.
  *
- * Presentation is the compiled default: no style-set or surface-manifest read
- * is served publicly yet, so the templates below are the product's own default
- * composition and the brand is the default recipe. When surface releases gain
- * a public read, this port swaps presentation sources without the pages
- * changing.
+ * Presentation comes from the active immutable surface release and its exact
+ * style-set pin. The pages consume the same stable port whether standalone or
+ * embedded.
  */
 
 const PUBLIC_SCHEDULE_PATH = '/api/public/schedule/current';
 const PUBLIC_SPEAKERS_PATH = '/api/public/speakers/current';
 const PUBLIC_FORM_PATH = '/api/public/forms/current';
+const PUBLIC_PRESENTATION_PATHS = Object.freeze({
+	schedule: '/api/public/schedule/presentation',
+	speakers: '/api/public/speakers/presentation',
+	apply: '/api/public/forms/presentation'
+});
 
 /** Typed failure at the public-surface boundary; absence is never an error. */
 export class PublicSurfaceLiveError extends Error {
@@ -59,6 +65,7 @@ export class PublicSurfaceLiveError extends Error {
 const scheduleResultSchema = createReadOperationResultSchema(servedPublicScheduleSchema);
 const rosterResultSchema = createReadOperationResultSchema(servedPublicRosterSchema);
 const formResultSchema = createReadOperationResultSchema(servedPublicFormSchema);
+const presentationResultSchema = createReadOperationResultSchema(servedPublicPresentationSchema);
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -110,11 +117,15 @@ const dayKeyFormat = new Intl.DateTimeFormat('en-CA', {
 	month: '2-digit',
 	day: '2-digit'
 });
-const dayLabelFormat = new Intl.DateTimeFormat('en-US', {
-	weekday: 'short',
-	month: 'short',
-	day: 'numeric'
-});
+/**
+ * A day tab, in the product's one date vocabulary and derived from the same
+ * key the tab is grouped by — so the visitor's tab and the operator's grid can
+ * no longer read `Thu, Mar 18` and `Thu Mar 18` for the same day. The year is
+ * dropped because every tab in one event would otherwise repeat it.
+ */
+function dayLabel(dayKey: string): string {
+	return formatDate(dayKey, { weekday: true, year: false });
+}
 
 function localDayKey(instant: Date): string {
 	return dayKeyFormat.format(instant);
@@ -159,7 +170,7 @@ export function mapServedScheduleState(served: ServedPublicScheduleDto): Schedul
 		for (const occurrence of session.occurrences) {
 			const start = new Date(Date.parse(occurrence.startAt));
 			const key = localDayKey(start);
-			if (!dayKeys.has(key)) dayKeys.set(key, dayLabelFormat.format(start));
+			if (!dayKeys.has(key)) dayKeys.set(key, dayLabel(key));
 			placements.push({
 				sessionId: session.sessionId,
 				dayKey: key,
@@ -265,16 +276,20 @@ export function mapServedFormFields(served: ServedPublicFormDto): SurfaceTemplat
 }
 
 // ---------------------------------------------------------------------------
-// Default presentation (no public surface-manifest read exists yet)
+// Released presentation
 
-function defaultScheduleTemplate(): SurfaceTemplate {
+function scheduleTemplate(presentation: ServedPublicPresentationDto): SurfaceTemplate {
 	return {
 		id: 'live-public-schedule',
 		kind: 'schedule',
 		name: 'Schedule',
 		purpose: 'The published programme, straight from the current release.',
 		blocks: [
-			{ type: 'hero', title: 'Schedule', intro: '' },
+			{
+				type: 'hero',
+				title: presentation.manifest.heading ?? 'Schedule',
+				intro: presentation.manifest.intro ?? ''
+			},
 			{
 				type: 'schedule-days',
 				grouping: 'day',
@@ -284,20 +299,24 @@ function defaultScheduleTemplate(): SurfaceTemplate {
 				density: 'cozy'
 			}
 		],
-		revision: 1,
+		revision: presentation.surfaceReleaseNumber,
 		revisions: [],
 		usedBy: ['Hosted schedule page', 'Schedule embed']
 	};
 }
 
-function defaultRosterTemplate(): SurfaceTemplate {
+function rosterTemplate(presentation: ServedPublicPresentationDto): SurfaceTemplate {
 	return {
 		id: 'live-public-speakers',
 		kind: 'speaker-roster',
 		name: 'Speakers',
 		purpose: 'The published lineup, straight from the current release.',
 		blocks: [
-			{ type: 'hero', title: 'Speakers', intro: '' },
+			{
+				type: 'hero',
+				title: presentation.manifest.heading ?? 'Speakers',
+				intro: presentation.manifest.intro ?? ''
+			},
 			{
 				type: 'roster-list',
 				layout: 'grid',
@@ -308,20 +327,27 @@ function defaultRosterTemplate(): SurfaceTemplate {
 				density: 'cozy'
 			}
 		],
-		revision: 1,
+		revision: presentation.surfaceReleaseNumber,
 		revisions: [],
 		usedBy: ['Hosted speakers page', 'Speakers embed']
 	};
 }
 
-function applyFormTemplate(served: ServedPublicFormDto): SurfaceTemplate {
+function applyFormTemplate(
+	served: ServedPublicFormDto,
+	presentation: ServedPublicPresentationDto
+): SurfaceTemplate {
 	return {
 		id: 'live-public-apply',
 		kind: 'application-form',
 		name: served.name,
 		purpose: 'The published call for proposals, exactly as it asks.',
 		blocks: [
-			{ type: 'hero', title: served.name, intro: '' },
+			{
+				type: 'hero',
+				title: presentation.manifest.heading ?? served.name,
+				intro: presentation.manifest.intro ?? ''
+			},
 			{
 				type: 'form-section',
 				title: 'Your proposal',
@@ -329,7 +355,7 @@ function applyFormTemplate(served: ServedPublicFormDto): SurfaceTemplate {
 			}
 		],
 		fields: mapServedFormFields(served),
-		revision: served.formVersionNumber,
+		revision: presentation.surfaceReleaseNumber,
 		revisions: [],
 		usedBy: ['Hosted application page']
 	};
@@ -377,6 +403,18 @@ export function createLivePublicSurfacePort(
 		}
 	}
 
+	function currentSurfaceKind(): keyof typeof PUBLIC_PRESENTATION_PATHS {
+		try {
+			const path = new URL(currentHref()).pathname;
+			if (path.includes('speakers')) return 'speakers';
+			if (path.includes('apply')) return 'apply';
+		} catch {
+			// A malformed location cannot widen publication. Schedule is only the
+			// deterministic presentation lookup used by the shared shell.
+		}
+		return 'schedule';
+	}
+
 	const schedule = () =>
 		shared('schedule', () =>
 			readPublic<ServedPublicScheduleDto>(fetcher, PUBLIC_SCHEDULE_PATH, scheduleResultSchema)
@@ -384,6 +422,14 @@ export function createLivePublicSurfacePort(
 	const roster = () =>
 		shared('roster', () =>
 			readPublic<ServedPublicRosterDto>(fetcher, PUBLIC_SPEAKERS_PATH, rosterResultSchema)
+		);
+	const presentation = (kind: keyof typeof PUBLIC_PRESENTATION_PATHS) =>
+		shared(`presentation:${kind}`, () =>
+			readPublic<ServedPublicPresentationDto>(
+				fetcher,
+				PUBLIC_PRESENTATION_PATHS[kind],
+				presentationResultSchema
+			)
 		);
 	const form = () => {
 		const formId = scopedFormId();
@@ -398,24 +444,37 @@ export function createLivePublicSurfacePort(
 	};
 
 	return Object.freeze({
-		templates: {
+			templates: {
 			async list() {
-				const [servedSchedule, servedRoster, servedForm] = await Promise.all([
+				const [servedSchedule, servedRoster, servedForm, schedulePresentation,
+					rosterPresentation, applyPresentation] = await Promise.all([
 					schedule(),
 					roster(),
-					form()
+					form(),
+					presentation('schedule'),
+					presentation('speakers'),
+					presentation('apply')
 				]);
 				const surfaces: SurfaceTemplate[] = [];
-				if (servedSchedule !== null) surfaces.push(defaultScheduleTemplate());
-				if (servedRoster !== null) surfaces.push(defaultRosterTemplate());
-				if (servedForm !== null) surfaces.push(applyFormTemplate(servedForm));
+				if (servedSchedule !== null && schedulePresentation !== null) {
+					surfaces.push(scheduleTemplate(schedulePresentation));
+				}
+				if (servedRoster !== null && rosterPresentation !== null) {
+					surfaces.push(rosterTemplate(rosterPresentation));
+				}
+				if (servedForm !== null && applyPresentation !== null) {
+					surfaces.push(applyFormTemplate(servedForm, applyPresentation));
+				}
 				return { surfaces };
 			}
 		},
 		theme: {
-			// No style-set release is publicly served yet: the brand is the
-			// product's default recipe, never a guess at the event's own.
-			get: async (): Promise<EventTheme> => ({ ...defaultThemeRecipe, markText: '' })
+			get: async (): Promise<EventTheme> => {
+				const released = await presentation(currentSurfaceKind());
+				return released === null
+					? { ...defaultThemeRecipe, markText: '' }
+					: { ...released.style, markText: '' };
+			}
 		},
 		workspace: {
 			// No public event-identity read exists; the pages render without a

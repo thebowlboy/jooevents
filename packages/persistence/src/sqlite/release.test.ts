@@ -43,6 +43,21 @@ const formVersion2 = '019c1df7-86b5-769b-bba4-5f7097bfc703';
 const now = '2026-08-14T08:00:00.000Z';
 const later = '2026-08-14T09:00:00.000Z';
 const scope: ReleaseScopeDto = { workspaceId, eventId };
+const themeArtifactId = '019c1df7-86b5-769b-bba4-5f7097bfc710';
+const scheduleArtifactId = '019c1df7-86b5-769b-bba4-5f7097bfc711';
+const speakersArtifactId = '019c1df7-86b5-769b-bba4-5f7097bfc713';
+const applyArtifactId = '019c1df7-86b5-769b-bba4-5f7097bfc714';
+const templateRevisionId = '019c1df7-86b5-769b-bba4-5f7097bfc712';
+const templateDigest = 'd'.repeat(64);
+const templatePin = (artifactId: string) => ({
+  artifactId, revisionId: templateRevisionId, revisionNumber: 1, digestSha256: templateDigest
+});
+const surfaceArtifactId = (kind: 'schedule' | 'speakers' | 'apply') =>
+  kind === 'schedule' ? scheduleArtifactId : kind === 'speakers' ? speakersArtifactId : applyArtifactId;
+const themeRecipe = {
+  name: 'Warm default', canvas: '#faf8f5', surface: '#ffffff',
+  text: '#2a2522', action: '#b05a4f', radius: 6, controlHeight: 36
+};
 
 let nextIdOrdinal = 0x9000;
 function uuid(): string {
@@ -219,6 +234,26 @@ function fixture(): {
     forms: {
       readCurrentPublishedFormVersionId: (_scope, requestedFormId) =>
         controls.publishedFormVersions.get(requestedFormId)
+    },
+    templates: {
+      readPinnedArtifact: (_scope, pin) => {
+        if (pin.revisionId !== templateRevisionId || pin.revisionNumber !== 1
+            || pin.digestSha256 !== templateDigest) return undefined;
+        if (pin.artifactId === themeArtifactId) return {
+          kind: 'theme' as const, recipe: themeRecipe, markText: 'JE'
+        };
+        const surfaceKind = pin.artifactId === scheduleArtifactId
+          ? 'schedule' as const
+          : pin.artifactId === speakersArtifactId
+            ? 'speaker-roster' as const
+            : pin.artifactId === applyArtifactId ? 'application-form' as const : null;
+        if (surfaceKind === null) return undefined;
+        return {
+          kind: 'surface' as const,
+          surfaceKind,
+          name: 'Public surface', purpose: 'Published presentation.', blocks: [], usedBy: []
+        };
+      }
     }
   };
   return Object.freeze({
@@ -276,10 +311,8 @@ function publishStyleSet(sqlite: Database, repository: SQLiteReleaseRepository) 
       actorUserId: userId,
       occurredAt: now,
       releaseId: uuid(),
-      recipe: {
-        name: 'Warm default', canvas: '#faf8f5', surface: '#ffffff',
-        text: '#2a2522', action: '#b05a4f', radius: 6, controlHeight: 36
-      },
+      sourceTemplateRevision: templatePin(themeArtifactId),
+      recipe: themeRecipe,
       expectedCurrentStyleSetNumber: null
     },
     port: repository
@@ -307,6 +340,7 @@ function publishSurface(
       occurredAt: now,
       releaseId: uuid(),
       kind: input.kind,
+      sourceTemplateRevision: templatePin(surfaceArtifactId(input.kind)),
       manifest: { schemaVersion: 1, heading: null, intro: null },
       styleSetReleaseId: input.styleSetReleaseId,
       formRef: input.formRef ?? null,
@@ -643,6 +677,7 @@ describe('SQLite release persistence', () => {
         occurredAt: now,
         releaseId: uuid(),
         kind: 'schedule',
+        sourceTemplateRevision: templatePin(scheduleArtifactId),
         manifest: { schemaVersion: 1, heading: null, intro: null },
         styleSetReleaseId: styleSet.id,
         formRef: null,

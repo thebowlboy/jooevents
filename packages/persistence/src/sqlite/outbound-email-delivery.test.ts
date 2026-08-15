@@ -7,6 +7,8 @@ import {
   FAKE_PROVIDER_SCENARIO_KEYS,
   FAKE_SAFE_EVIDENCE_CATALOG,
   MARKED_RESEND_BODY_NOTE,
+  OUTBOUND_EMAIL_DELIVERY_LEASE_MS,
+  isOutboundEmailDispatchSkipped,
   computeReviewedEmailEnvelopeDigestSha256,
   createDeterministicFakeEmailProvider,
   createFakeEmailEnvelope,
@@ -184,7 +186,7 @@ function worker(input: {
       ledger,
       provider: input.provider,
       envelopes: { resolve: () => input.envelope },
-      ids: { newAttemptId: () => nextId('attempt') },
+      ids: { newAttemptId: () => nextId('attempt'), newClaimId: () => nextId('claim') },
       clock: input.clock
     })
   };
@@ -268,7 +270,15 @@ describe('SQLite outbound email delivery ledger', () => {
     fixture.sqlite.close();
 
     const reopened = new Database(fixture.path);
-    const resumed = worker({ sqlite: reopened, provider: fake.delivery, envelope, clock: new TestClock() });
+    // The dead process left a lease behind. Recovery is not immediate and must
+    // not be: until that lease lapses, "a worker is on it" is still the honest
+    // reading of the row. The restart resumes past expiry.
+    const resumed = worker({
+      sqlite: reopened,
+      provider: fake.delivery,
+      envelope,
+      clock: new TestClock('2026-08-13T00:02:00.000Z')
+    });
     const result = await resumed.worker.dispatch({ deliveryId: message.deliveryId });
     expect(result).toEqual({
       contractVersion: 1,
@@ -537,8 +547,8 @@ describe('SQLite outbound email delivery ledger', () => {
       sqlite: reopened,
       provider: noRecoveryProvider,
       envelope,
-      // A restarted process resumes with a later wall clock than the lost attempt.
-      clock: new TestClock('2026-08-13T00:00:10.000Z')
+      // A restarted process resumes after the lost attempt's lease has lapsed.
+      clock: new TestClock('2026-08-13T00:02:00.000Z')
     });
     expect(await resumed.worker.dispatch({ deliveryId: message.deliveryId }))
       .toMatchObject({ state: 'acceptance_unknown', followUp: 'manual_resolution_required' });
@@ -601,7 +611,7 @@ describe('SQLite outbound email delivery ledger', () => {
       ledger: honest.ledger,
       provider: noRecoveryProvider,
       envelopes: { resolve: () => tampered },
-      ids: { newAttemptId: () => nextId('attempt') },
+      ids: { newAttemptId: () => nextId('attempt'), newClaimId: () => nextId('claim') },
       clock: new TestClock()
     });
     // The reviewed original is revalidated before any resend derivation.
@@ -692,9 +702,20 @@ describe('SQLite outbound email delivery ledger', () => {
     await testWorker.worker.dispatch({ deliveryId: message.deliveryId });
     const head = testWorker.ledger.read(message.deliveryId)!;
     expect(head).toMatchObject({ state: 'acceptance_unknown', unknownAttemptCount: 1 });
+    // An attempt may only start under a held claim, so the honesty checks below
+    // are reached with the lease this test's writer actually owns.
+    const claim = testWorker.ledger.claim({
+      deliveryId: message.deliveryId,
+      claimId: nextId('claim'),
+      now: '2026-08-13T01:00:00.000Z',
+      leaseMs: OUTBOUND_EMAIL_DELIVERY_LEASE_MS
+    });
+    if (!claim.claimed) throw new Error('the settled delivery should have been claimable');
     const attemptBase = {
       deliveryId: message.deliveryId,
       expectedDeliveryVersion: head.version,
+      claimId: claim.claimId,
+      leaseMs: OUTBOUND_EMAIL_DELIVERY_LEASE_MS,
       adapterKey: fake.delivery.adapterKey,
       adapterVersion: fake.delivery.adapterVersion,
       capabilities,
@@ -746,6 +767,235 @@ describe('SQLite outbound email delivery ledger', () => {
        WHERE delivery_id = ?
     `).run(message.deliveryId)).toThrow('outbound delivery attempt evidence is immutable');
     sqlite.close();
+  });
+
+  test('two workers racing one delivery: exactly one claims and the loser is a typed skip', async () => {
+    const { sqlite } = databaseFile();
+    const envelope = createFakeEmailEnvelope({
+      from: 'sender@example.test',
+      to: 'recipient@example.test',
+      subject: 'Reviewed subject',
+      textBody: 'Reviewed body'
+    });
+    const message = work(
+      FAKE_PROVIDER_SCENARIO_KEYS.ordinary.acceptedWithId,
+      computeReviewedEmailEnvelopeDigestSha256(envelope)
+    );
+    register(sqlite, message);
+    const fake = createDeterministicFakeEmailProvider();
+    const ledger = new SQLiteOutboundEmailDeliveryLedger(sqlite, {
+      newFactId: () => nextId('fact'),
+      newPointerId: () => nextId('pointer'),
+      newHistoryId: () => nextId('history')
+    });
+    // The first worker parks between claiming and submitting — the window a
+    // second worker used to walk straight into.
+    let releaseFirst: (() => void) | undefined;
+    const first = createOutboundEmailDeliveryWorker({
+      ledger,
+      provider: fake.delivery,
+      envelopes: {
+        resolve: async () => {
+          await new Promise<void>((resolve) => { releaseFirst = resolve; });
+          return envelope;
+        }
+      },
+      ids: { newAttemptId: () => nextId('attempt'), newClaimId: () => nextId('claim') },
+      clock: new TestClock()
+    });
+    const second = createOutboundEmailDeliveryWorker({
+      ledger,
+      provider: fake.delivery,
+      envelopes: { resolve: () => envelope },
+      ids: { newAttemptId: () => nextId('attempt'), newClaimId: () => nextId('claim') },
+      clock: new TestClock()
+    });
+
+    const firstRun = first.dispatch({ deliveryId: message.deliveryId });
+    const loser = await second.dispatch({ deliveryId: message.deliveryId });
+    // Losing is a value, not a throw, and not a delivery failure.
+    expect(loser).toEqual({
+      contractVersion: 1,
+      skipped: 'lease_held',
+      deliveryId: message.deliveryId
+    });
+    expect(isOutboundEmailDispatchSkipped(loser)).toBe(true);
+    expect(fake.capturedOrdinaryRequests()).toHaveLength(0);
+
+    releaseFirst!();
+    const winner = await firstRun;
+    expect(winner).toMatchObject({ state: 'accepted', followUp: 'complete' });
+    expect(fake.capturedOrdinaryRequests()).toHaveLength(1);
+    expect(ledger.listAttempts(message.deliveryId)).toHaveLength(1);
+    // The winner released the lease when it settled the delivery.
+    expect(ledger.read(message.deliveryId)).toMatchObject({
+      state: 'accepted',
+      leaseClaimId: null,
+      leaseExpiresAt: null
+    });
+    sqlite.close();
+  });
+
+  test('a late writer whose lease was taken neither overwrites the delivery nor discards its answer', async () => {
+    const { sqlite } = databaseFile();
+    const envelope = createFakeEmailEnvelope({
+      from: 'sender@example.test',
+      to: 'recipient@example.test',
+      subject: 'Reviewed subject',
+      textBody: 'Reviewed body'
+    });
+    const message = work(
+      FAKE_PROVIDER_SCENARIO_KEYS.ordinary.acceptedWithId,
+      computeReviewedEmailEnvelopeDigestSha256(envelope)
+    );
+    register(sqlite, message);
+    const fake = createDeterministicFakeEmailProvider();
+    const testWorker = worker({ sqlite, provider: fake.delivery, envelope, clock: new TestClock() });
+    const successorClaimId = nextId('claim');
+    const result = await testWorker.worker.dispatch({
+      deliveryId: message.deliveryId,
+      // Between the provider answering and this worker persisting, its lease
+      // lapses and another worker takes the delivery.
+      afterProviderResult: () => {
+        const taken = testWorker.ledger.claim({
+          deliveryId: message.deliveryId,
+          claimId: successorClaimId,
+          now: '2026-08-13T00:02:00.000Z',
+          leaseMs: OUTBOUND_EMAIL_DELIVERY_LEASE_MS
+        });
+        expect(taken.claimed).toBe(true);
+      }
+    });
+
+    // The provider really accepted, but this writer no longer owns the delivery,
+    // so it may not settle it — and the ledger never reports certainty it lost
+    // the right to record.
+    expect(result).toMatchObject({ state: 'acceptance_unknown' });
+    const fencedHead = testWorker.ledger.read(message.deliveryId)!;
+    expect(fencedHead.state).toBe('request_started');
+    expect(fencedHead.leaseClaimId).toBe(successorClaimId);
+    expect(fencedHead.attemptCount).toBe(1);
+    const attempt = testWorker.ledger.listAttempts(message.deliveryId)[0]!;
+    expect(attempt.state).toBe('request_started');
+    expect(attempt.providerMessageId).toBeNull();
+
+    // The real provider answer is not discarded: it is kept as append-only
+    // acceptance-unknown evidence under the existing vocabulary.
+    const fenced = sqlite.query<{
+      readonly fact_kind: string;
+      readonly payload_json: string;
+    }, []>(`
+      SELECT fact_kind, payload_json FROM communication_outbound_delivery_facts
+       WHERE fact_kind = 'outbound_email_attempt_acceptance_unknown'
+    `).get()!;
+    const payload = JSON.parse(fenced.payload_json) as {
+      readonly kind: string;
+      readonly observedState: string;
+      readonly providerMessageId: string | null;
+    };
+    expect(payload.kind).toBe('fenced_attempt_observation');
+    expect(payload.observedState).toBe('accepted');
+    expect(typeof payload.providerMessageId).toBe('string');
+    expect(sqlite.query<{ readonly count: number }, []>(`
+      SELECT count(*) AS count FROM communication_outbound_delivery_history
+       WHERE summary_code = 'communication.outbound-email.acceptance-unknown'
+    `).get()?.count).toBe(1);
+
+    // The delivery's new owner settles it, from acceptance-unknown outward.
+    const settled = testWorker.ledger.recordBoundaryAmbiguity({
+      deliveryId: message.deliveryId,
+      attemptId: attempt.attemptId,
+      claimId: successorClaimId,
+      code: 'worker_result_lost',
+      completedAt: '2026-08-13T00:02:01.000Z'
+    });
+    expect(settled.fenced).toBe(false);
+    expect(settled.head).toMatchObject({
+      state: 'acceptance_unknown',
+      unknownAttemptCount: 1,
+      leaseClaimId: null
+    });
+    expect(fake.capturedOrdinaryRequests()).toHaveLength(1);
+    sqlite.close();
+  });
+
+  test('a reclaimed lease resumes the marked-resend path rather than a fresh original', async () => {
+    const fixture = databaseFile();
+    const envelope = createFakeEmailEnvelope({
+      from: 'sender@example.test',
+      to: 'recipient@example.test',
+      subject: 'Reviewed subject',
+      textBody: 'Reviewed body'
+    });
+    const message = work(
+      FAKE_PROVIDER_SCENARIO_KEYS.ordinary.acceptedWithId,
+      computeReviewedEmailEnvelopeDigestSha256(envelope)
+    );
+    register(fixture.sqlite, message);
+    const fake = createDeterministicFakeEmailProvider();
+    const submitted: ImmutableEmailEnvelope[] = [];
+    // Cloudflare-v1-like: no idempotency key honoured, no reconciliation.
+    const noRecoveryProvider: EmailDeliveryAdapter = {
+      adapterKey: fake.delivery.adapterKey,
+      adapterVersion: fake.delivery.adapterVersion,
+      capabilities: {
+        idempotency: 'none',
+        reconciliation: 'none',
+        callbacks: [],
+        inboundReplies: false
+      },
+      prepare: (value) => {
+        submitted.push(value.envelope);
+        return fake.delivery.prepare(value) as ReturnType<EmailDeliveryAdapter['prepare']>;
+      },
+      submit: (prepared) => fake.delivery.submit(
+        prepared as ReturnType<typeof fake.delivery.prepare>
+      )
+    };
+    const crashed = worker({
+      sqlite: fixture.sqlite,
+      provider: noRecoveryProvider,
+      envelope,
+      clock: new TestClock()
+    });
+    await expect(crashed.worker.dispatch({
+      deliveryId: message.deliveryId,
+      afterProviderResult: () => { throw new Error('simulated process loss'); }
+    })).rejects.toThrow('simulated process loss');
+    expect(crashed.ledger.read(message.deliveryId)?.state).toBe('request_started');
+    expect(submitted).toHaveLength(1);
+
+    // A sweep arriving inside the lease may not touch the attempt at all.
+    const early = worker({
+      sqlite: fixture.sqlite,
+      provider: noRecoveryProvider,
+      envelope,
+      clock: new TestClock('2026-08-13T00:00:30.000Z')
+    });
+    expect(await early.worker.dispatch({ deliveryId: message.deliveryId }))
+      .toMatchObject({ skipped: 'lease_held' });
+    expect(submitted).toHaveLength(1);
+
+    // Past expiry it is recoverable — and recovery itself never resends.
+    const reclaimed = worker({
+      sqlite: fixture.sqlite,
+      provider: noRecoveryProvider,
+      envelope,
+      clock: new TestClock('2026-08-13T00:02:00.000Z')
+    });
+    expect(await reclaimed.worker.dispatch({ deliveryId: message.deliveryId }))
+      .toMatchObject({ state: 'acceptance_unknown', followUp: 'marked_resend' });
+    expect(submitted).toHaveLength(1);
+
+    // The send that follows is the single marked resend, not a fresh original,
+    // so a lease expiry can never become a silent double delivery.
+    expect(await reclaimed.worker.dispatch({ deliveryId: message.deliveryId }))
+      .toMatchObject({ state: 'accepted', followUp: 'complete' });
+    expect(submitted).toHaveLength(2);
+    expect(submitted[1]!.subject).toBe('[Resend] Reviewed subject');
+    expect(reclaimed.ledger.listAttempts(message.deliveryId)[1])
+      .toMatchObject({ attemptKind: 'marked_resend', state: 'accepted' });
+    fixture.sqlite.close();
   });
 
   test('stored governed rows never contain the recipient address or body bytes', async () => {

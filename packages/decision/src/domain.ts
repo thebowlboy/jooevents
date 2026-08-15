@@ -63,7 +63,7 @@ export const DECISION_PLANNING_ERROR_CODES = Object.freeze([
   'stale_decision', 'origin_exists', 'origin_changed', 'session_placed',
   'title_missing', 'title_unrepresentable', 'format_missing', 'stale_catalog',
   'session_exists', 'session_missing', 'stale_session', 'format_retired',
-  'track_missing', 'track_retired', 'invalid_transition', 'invalid_plan'
+  'track_missing', 'track_retired', 'track_required', 'invalid_transition', 'invalid_plan'
 ] as const satisfies readonly DecisionPlanningErrorCode[]);
 
 export class DecisionPlanningError extends Error {
@@ -180,7 +180,7 @@ export function planDecisionMutation(input: {
           plannedDurationMinutes: DECISION_SPAWN_PLANNED_DURATION_MINUTES,
           lifecycle: 'programmed',
           formatId: candidate.formatId,
-          trackId: candidate.trackId,
+          trackId: routing.trackId,
           participants
         });
       }
@@ -494,7 +494,16 @@ export function resolveDecisionMutationPlanningInput(input: {
         catalog
       });
       graduation = choice.kind === 'spawn'
-        ? { kind: 'spawn', sessionId: decisionIdSchema.parse(input.newSessionId()) }
+        ? {
+            kind: 'spawn',
+            sessionId: decisionIdSchema.parse(input.newSessionId()),
+            trackId: resolvedSpawnTrackId({
+              environment: input.environment,
+              scope: input.scope,
+              submissionId: row.submissionId,
+              ...(choice.trackId === undefined ? {} : { explicitTrackId: choice.trackId })
+            })
+          }
         : {
             kind: 'attach',
             sessionId: choice.sessionId,
@@ -518,12 +527,26 @@ export function resolveDecisionMutationPlanningInput(input: {
   });
 }
 
+function resolvedSpawnTrackId(input: {
+  readonly environment: DecisionEnvironment;
+  readonly scope: DecisionScopeDto;
+  readonly submissionId: string;
+  readonly explicitTrackId?: string;
+}): string | null {
+  if (input.explicitTrackId !== undefined) return decisionIdSchema.parse(input.explicitTrackId);
+  const candidate = input.environment.decisions.readDecisionCandidate(input.scope, input.submissionId);
+  if (!candidate || candidate.submissionId !== input.submissionId) {
+    throw new DecisionPlanningError('submission_missing', input.submissionId);
+  }
+  return candidate.trackId;
+}
+
 function effectiveTargetChoice(input: {
   readonly environment: DecisionEnvironment;
   readonly scope: DecisionScopeDto;
   readonly submissionId: string;
   readonly catalog: SessionCatalog;
-}): { readonly kind: 'spawn' } | {
+}): { readonly kind: 'spawn'; readonly trackId?: string } | {
   readonly kind: 'attach';
   readonly sessionId: string;
   readonly graduateTo?: 'programmed';

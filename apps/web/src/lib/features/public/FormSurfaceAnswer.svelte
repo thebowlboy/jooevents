@@ -1,7 +1,11 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { themeStyleProperties } from '$lib/theme/theme-contract';
-	import type { ServedPublicFormDto, ServedPublicFormFieldDto } from '@jooevents/contracts';
+	import {
+		formatInstant,
+		type ServedPublicFormDto,
+		type ServedPublicFormFieldDto
+	} from '@jooevents/contracts';
 	import type {
 		PublicApplicationSession,
 		PublicApplicationSessionSnapshot
@@ -33,13 +37,22 @@
 		session: PublicApplicationSession;
 		theme: EventTheme;
 		eventName: string;
-		/** e.g. "Oct 12–14, 2026 · New York City"; empty hides the meta lines. */
+		/** e.g. "12–14 Oct 2026 · New York City"; empty hides the meta lines. */
 		eventMeta: string;
 	}
 
 	let { form, session, theme, eventName, eventMeta }: Props = $props();
 
 	const uid = $props.id();
+
+	/** The visitor's own zone, resolved once. `UTC` if the browser will not say. */
+	const readerTimezone = ((): string => {
+		try {
+			return new Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+		} catch {
+			return 'UTC';
+		}
+	})();
 
 	// The session is this mount's own machine; its initial snapshot is a
 	// deliberate one-time read, and every later change arrives via subscribe.
@@ -118,11 +131,21 @@
 			.map((line) => line.trim())
 			.filter((line) => line.length > 0)
 	);
+	/**
+	 * The receipt line. This is the one timestamp an applicant may have to
+	 * produce as proof they answered before a deadline, so it is spelled in the
+	 * product's date vocabulary and it names its zone — an unlabelled clock is
+	 * not evidence of anything.
+	 *
+	 * The zone is the visitor's, because the surface is served without the
+	 * event's and inventing one would be worse than naming the one we know.
+	 */
 	const submittedAtLabel = $derived(
 		snapshot.submission
-			? new Intl.DateTimeFormat(undefined, { dateStyle: 'long', timeStyle: 'short' }).format(
-					new Date(snapshot.submission.submittedAt)
-				)
+			? formatInstant(snapshot.submission.submittedAt, readerTimezone, {
+					zone: true,
+					fallback: ''
+				})
 			: ''
 	);
 

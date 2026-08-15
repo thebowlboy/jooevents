@@ -41,6 +41,7 @@ export interface SchedulePagePort {
 			durationMin: number;
 			state: SessionState;
 		}): Promise<SessionItem>;
+		retargetSession(id: string, formatId: string, trackId: string): Promise<SessionItem>;
 		removeSession(id: string): Promise<MutationOutcome>;
 		transitionSession(id: string, to: SessionState): Promise<MutationOutcome>;
 		sessionOrigins(sessionId: string): Promise<{

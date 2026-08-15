@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
-	import { ChevronDown, Flame, Gem, Lock, Star, Zap } from 'lucide-svelte';
+	import { Flame, Gem, Lock, Star, Zap } from 'lucide-svelte';
 	import {
 		Badge,
 		ClampedText,
@@ -8,11 +8,11 @@
 		Modal,
 		Popover,
 		Progress,
+		ScopeFilter,
 		Term,
-		distinctResourceKinds,
-		resourceKindIcon,
 		statusIcon,
-		trackPending
+		trackPending,
+		type Scope
 	} from '$lib/ui';
 	import type { IconComponent } from '$lib/ui';
 	import type { ReviewPagePort } from '$lib/api/review-page-port';
@@ -38,7 +38,6 @@
 		MyReviewItem,
 		ReviewPlan,
 		ReviewRoundSetup,
-		ReviewerProgress,
 		ScopeRef,
 		ScoreStanding,
 		SpeakerProfile,
@@ -54,11 +53,9 @@
 	const viewer = $derived(port.viewer);
 
 	/**
-	 * Whose surface this is. A reviewer holds their own queue and nothing else,
-	 * so the chair's half of this screen — the roster, its reminders, the way
-	 * into managing people, the setup panel that creates a plan — is not
-	 * rendered for them. The projection comes from the gateway; the screen never
-	 * infers authority from the data it was handed.
+	 * Whose surface this is. Review is the queue for both roles; only round setup
+	 * and the review-policy brief vary here. Reviewer management and reminders
+	 * live on Reviewers rather than becoming a second job on this page.
 	 */
 	const reviewerView = $derived(viewer.kind === 'reviewer');
 
@@ -116,10 +113,7 @@
 	let plan = $state<ReviewPlan | null>(null);
 	let rows = $state<QueueRow[]>([]);
 	let drafts = $state<Record<string, Draft>>({});
-	let remindedIds = $state<string[]>([]);
-	let remindingId = $state<string | null>(null);
 	let committingId = $state<string | null>(null);
-	let materialsOpenId = $state<string | null>(null);
 	let status = $state('');
 
 	/** One fill per policy line the resolved brief states, at its own length. */
@@ -229,6 +223,51 @@
 
 	const scale = $derived(Array.from({ length: plan?.scaleMax ?? 5 }, (_, index) => index + 1));
 	const openCount = $derived(rows.filter((row) => !row.item.committed).length);
+	const completedCount = $derived(rows.length - openCount);
+
+	// -------------------------------------------------------------------------
+	// The queue's two intents are two zones (owner rework, 2026-08-15): working
+	// the pass and consulting what it produced are different visits, and a
+	// single scroll made the second one a hike past every unfinished card. The
+	// address owns which zone is showing — the same scope grammar as the
+	// Submissions trays, so the control is already learned.
+
+	const QUEUE_SCOPES = ['to-review', 'completed'] as const;
+	const queueScope = $derived(paramIn('scope', QUEUE_SCOPES, 'to-review'));
+
+	const queueScopes = $derived<Scope[]>([
+		{ value: 'to-review', label: 'To review', count: openCount },
+		{ value: 'completed', label: 'Completed', count: completedCount }
+	]);
+
+	function switchScope(next: string) {
+		// The default scope stays out of the address, so an unscoped link is clean.
+		applyParams({ scope: next === 'to-review' ? null : next });
+	}
+
+	/**
+	 * Reviews committed during this visit. Committing is what earns the peer
+	 * content, and that reveal must land on the card that was just pressed —
+	 * so a just-committed card keeps its place in the To-review zone for the
+	 * rest of the visit (in its completed presentation) instead of vanishing
+	 * mid-read into the other scope. The counts move immediately; the card
+	 * follows on the next arrival at the zone.
+	 */
+	let revealedIds = $state<string[]>([]);
+
+	/** The rows the current zone shows; source order stays stable inside it. */
+	const visibleRows = $derived(
+		queueScope === 'completed'
+			? rows.filter((row) => row.item.committed)
+			: rows.filter((row) => !row.item.committed || revealedIds.includes(row.item.submissionId))
+	);
+
+	// Arriving at a zone resets the visit-local reveals: what was "just
+	// committed" is only just-committed until the person moves on.
+	$effect(() => {
+		void queueScope;
+		revealedIds = [];
+	});
 	// The panel describes the scale this plan actually uses, never a mark the
 	// control does not offer.
 	const guideAnchors = $derived(
@@ -505,6 +544,9 @@
 			rows = rows.map((row) =>
 				row.item.submissionId === submissionId ? { ...row, item: { ...committed } } : row
 			);
+			// The reveal lands on the card that was pressed: it stays in this zone,
+			// in its committed presentation, until the person moves on.
+			revealedIds = [...revealedIds, submissionId];
 			// The receipt is the acknowledgement, and it says why this one is final.
 			recordAction({
 				area: 'review',
@@ -590,15 +632,6 @@
 		steppingBackId = null;
 	}
 
-	async function remind(reviewerId: string, name: string) {
-		if (remindingId) return;
-		remindingId = reviewerId;
-		await api.tasks.remind([reviewerId], 'Review reminder');
-		remindedIds = [...remindedIds, reviewerId];
-		status = `Review reminder sent to ${name}.`;
-		remindingId = null;
-	}
-
 	/**
 	 * A badge is the whole statement of the blinding policy, and whether a candid
 	 * comment is safe to write depends on which direction is blind. A reviewer
@@ -607,25 +640,6 @@
 	 * badge is already a box, and only running text takes a text affordance.
 	 */
 
-	function isBehind(assigned: number, done: number): boolean {
-		return assigned > 0 && done / assigned < 0.5;
-	}
-
-	/**
-	 * Why the roster is raising this reviewer, in the order a chair needs it:
-	 * what is uncovered, then why it came free. The count on the badge is the
-	 * task; this is the sentence behind it, and it names the reason in plain
-	 * words rather than making the badge carry a term nobody has to know.
-	 */
-	function coverageGap(reviewer: ReviewerProgress): string {
-		const gap = reviewer.awaitingReassignment;
-		const back = reviewer.steppedBack;
-		const covered = back - gap;
-		const reviews = `${gap} ${gap === 1 ? 'review' : 'reviews'}`;
-		const carried =
-			covered > 0 ? ` The other ${covered} already moved to another reviewer.` : '';
-		return `${reviews} nobody is covering. ${reviewer.name} stepped back from ${back} in this plan because of a conflict of interest — they know or work with the submitter.${carried}`;
-	}
 </script>
 
 <!-- An armed question stands down the same way every other one does. -->
@@ -706,46 +720,17 @@
 			</ul>
 		</section>
 	{/if}
-	<div class="columns" class:columns--queue-only={reviewerView}>
-		{#if !reviewerView}
-			<section class="column" aria-label="Loading reviewers">
-				<div class="column__head">
-					<h2 class="column__title">Reviewers</h2>
-					<p class="column__note"><span class="ui-skeleton skeleton-line" style="inline-size: 4.5rem"></span></p>
-				</div>
-				<div class="ui-table-wrap">
-					<table class="ui-table ui-table--multiline reviewers">
-						<thead>
-							<tr>
-								<th>Reviewer</th>
-								<th class="ui-table__number">Done</th>
-								<th class="col-remind"><span class="ui-sr-only">Reminder</span></th>
-							</tr>
-						</thead>
-						<tbody>
-							{#each Array(6) as _, index (index)}
-								<tr aria-hidden="true">
-									<td><span class="ui-table__primary"><span class="ui-skeleton skeleton-line" style="inline-size: 8rem"></span></span></td>
-									<td class="ui-table__number">
-										<span class="rev__count"><span class="ui-skeleton skeleton-line" style="inline-size: 2.5rem"></span></span>
-										<span class="ui-progress__track rev__bar"></span>
-									</td>
-									<td class="col-remind"><span class="rev__action"></span></td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
-				</div>
-			</section>
-		{/if}
-		<section class="column" aria-label="Loading my queue">
-			<div class="column__head">
-				<h2 class="column__title">My queue</h2>
-				<p class="column__note"><span class="ui-skeleton skeleton-line" style="inline-size: 7rem"></span></p>
-			</div>
-			<ul class="queue">
-				{#each Array(3) as _, index (index)}
-					<li class="card" aria-hidden="true">
+	<section class="column column--queue" aria-label="Loading my queue">
+		<div class="column__head">
+			<h2 class="column__title">Review queue</h2>
+			<!-- Stands at the scope set's own control height, so the head does not
+			     grow when the zones arrive. -->
+			<div class="column__scopes"><span class="ui-skeleton skeleton-action" style="inline-size: min(16rem, 100%)"></span></div>
+		</div>
+		<ul class="queue">
+			{#each Array(3) as _, index (index)}
+				<li class="card card--split" aria-hidden="true">
+					<div class="card__evidence">
 						<div class="card__id">
 							<div class="card__head">
 								<p class="card__title sk-head"><span class="ui-skeleton skeleton-line" style="inline-size: min(20rem, 100%)"></span></p>
@@ -755,7 +740,12 @@
 							<span class="ui-skeleton skeleton-line" style="inline-size: 100%"></span>
 							<span class="ui-skeleton skeleton-line" style="inline-size: 72%"></span>
 						</div>
-						<span class="card__materials-toggle"><span class="ui-skeleton skeleton-line" style="inline-size: 9rem"></span></span>
+						<div class="card__materials">
+							<span class="ui-skeleton skeleton-line" style="inline-size: 13rem"></span>
+							<span class="ui-skeleton skeleton-line" style="inline-size: 6.5rem"></span>
+						</div>
+					</div>
+					<div class="card__judgment">
 						<div class="score">
 							<div class="score__head">
 								<span class="score__label"><span class="ui-skeleton skeleton-line" style="inline-size: 2.5rem"></span></span>
@@ -773,16 +763,16 @@
 							<p class="card__lock"><span class="ui-skeleton skeleton-line" style="inline-size: 15rem"></span></p>
 							<span class="ui-skeleton skeleton-action card__commit"></span>
 						</div>
-						{#if reviewerView}
-							<div class="stepback">
-								<span class="ui-skeleton skeleton-action stepback__fill"></span>
-							</div>
-						{/if}
-					</li>
-				{/each}
-			</ul>
-		</section>
-	</div>
+					</div>
+					{#if reviewerView}
+						<div class="stepback">
+							<span class="ui-skeleton skeleton-action stepback__fill"></span>
+						</div>
+					{/if}
+				</li>
+			{/each}
+		</ul>
+	</section>
 {:else if !plan}
 	<section class="opening" aria-labelledby="opening-heading">
 		{#if reviewerView}
@@ -847,6 +837,9 @@
 			<h2 class="plan__name" id="plan-heading">{plan.name}</h2>
 			<p class="plan__meta">
 				Reviews {plan.deadlineRelative}
+				{#if !reviewerView}
+					<span aria-hidden="true">·</span> <a href="/app/reviewers">Reviewer progress and reminders</a>
+				{/if}
 				<!-- The badge is the whole statement of the blinding policy, and
 				     whether a candid comment is safe to write depends on which
 				     direction is blind. A reviewer here for one round has no way
@@ -897,455 +890,401 @@
 		</section>
 	{/if}
 
-	<div class="columns" class:columns--queue-only={reviewerView}>
-		{#if !reviewerView}
-			<section class="column" aria-labelledby="reviewers-heading">
-				<div class="column__head">
-					<h2 class="column__title" id="reviewers-heading">Reviewers</h2>
-					<!-- This roster shows plan progress; the people behind the rows —
-					     invites, scope, coverage — are managed on the Reviewers surface. -->
-					<p class="column__note">
-						{plan.reviewers.length} assigned · <a href="/app/reviewers">Manage reviewers</a>
-					</p>
-				</div>
-				<div
-					class="ui-table-wrap"
-					class:is-refreshing={planReload.visible}
-					aria-busy={planReloading || undefined}>
-					<table class="ui-table ui-table--multiline reviewers">
-						<thead>
-							<tr>
-								<th>Reviewer</th>
-								<th class="ui-table__number">Done</th>
-								<th class="col-remind"><span class="ui-sr-only">Reminder</span></th>
-							</tr>
-						</thead>
-						<tbody>
-							{#each plan.reviewers as reviewer (reviewer.id)}
-								<tr>
-									<td>
-										<!-- Solid underline + action colour: this name navigates — it is
-										     the door to this reviewer's record (scope, coverage, invite
-										     state) on the Reviewers surface. -->
-										<span class="ui-table__primary"
-											><strong
-												><a
-													href="/app/reviewers?reviewer={reviewer.id}"
-													aria-label="{reviewer.name} — open in Reviewers">{reviewer.name}</a
-												></strong
-											></span>
-										<!-- Only the uncovered part earns a badge. A step-back that someone
-										     else has already picked up is this reviewer's biography, and a
-										     roster is a work surface, not a history. The mark carries the
-										     reason, so the count keeps the word count of a task. -->
-										{#if reviewer.awaitingReassignment > 0}
-											<span class="rev__gap">
-												<Popover
-													label="{reviewer.awaitingReassignment} need another reviewer — why"
-													onreveal={() => (status = coverageGap(reviewer))}>
-													{#snippet trigger()}
-														<Badge tone="warning" icon={statusIcon.needsReviewer}>
-															{reviewer.awaitingReassignment} need another reviewer
-														</Badge>
-													{/snippet}
-													{#snippet children()}
-														<p class="rev__why">{coverageGap(reviewer)}</p>
-													{/snippet}
-												</Popover>
-											</span>
-										{/if}
-									</td>
-									<td class="ui-table__number">
-										<span class="rev__count">{reviewer.done} / {reviewer.assigned}</span>
-										<span class="ui-progress__track rev__bar" aria-hidden="true">
-											<span
-												class="ui-progress__value"
-												style:transform="scaleX({percent(reviewer.done, reviewer.assigned) / 100})"
-											></span>
-										</span>
-									</td>
-									<td class="col-remind">
-										<span class="rev__action">
-											{#if remindedIds.includes(reviewer.id)}
-												<span class="rev__sent">Reminder sent</span>
-												<!-- A nudge is for falling behind the others, so it waits for
-												     the round to have movement: a round opened a minute ago
-												     offers no one to be behind. Deadline-aware pace is the
-												     recorded later refinement. -->
-											{:else if plan.done > 0 && isBehind(reviewer.assigned, reviewer.done)}
-												<button
-													type="button"
-													class="ui-button ui-button--secondary ui-button--sm"
-													disabled={remindingId !== null}
-													aria-busy={remindingId === reviewer.id}
-													onclick={() => remind(reviewer.id, reviewer.name)}>Remind</button>
-											{/if}
-										</span>
-									</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
-				</div>
-			</section>
-		{/if}
+	<section class="column column--queue" aria-labelledby="queue-heading">
+		<!-- Two intents, two zones: working the pass, and consulting what it
+		     produced. The scopes carry the counts, so no second count line; the
+		     grammar is the Submissions trays', so the control is already learned. -->
+		<div class="column__head">
+			<h2 class="column__title" id="queue-heading">Review queue</h2>
+			<div class="column__scopes">
+				<ScopeFilter
+					label="Review queue zones"
+					scopes={queueScopes}
+					value={queueScope}
+					onchange={switchScope} />
+			</div>
+		</div>
 
-		<section class="column" aria-labelledby="queue-heading">
-			<div class="column__head">
-				<h2 class="column__title" id="queue-heading">My queue</h2>
-				<!-- "Commit" is not the everyday Save: it freezes the score and
-				     reveals the other reviewers'. Someone reading it as Save files
-				     an unfinished review, so the word owes its meaning before the
-				     button is reached, not in the receipt afterwards. -->
-				<p class="column__note">
-					{openCount} of {rows.length} still to <Term
-						term="commit"
+		{#if rows.length === 0}
+			<div class="queue-empty">
+				<p class="queue-empty__title">Nothing is assigned to you.</p>
+				{#if reviewerView}
+					<!-- This tells a blocked person to go ask someone, so the one
+					     word they need is the one naming who. "Chair" appears
+					     nowhere in the product's own role names. -->
+					<p class="queue-empty__hint">
+						Ask the <Term
+							term="chair"
+							definition="The person running this review round — they set the plan up and decide who reviews what. In your workspace they hold the Event Manager or Workspace Admin role."
+							onreveal={() => (status = 'Chair: the person running this review round.')} /> to
+						distribute this plan's submissions, or pick up unassigned ones from Submissions once
+						assignment opens.
+					</p>
+				{:else}
+					<!-- The organizer opened the round without being in its pool:
+					     true, ordinary, and not a fault — the work shows up as the
+					     reviewers commit it. -->
+					<p class="queue-empty__hint">
+						You are running this round rather than reviewing in it. Progress lands beside each
+						reviewer as they commit.
+					</p>
+				{/if}
+			</div>
+		{:else if visibleRows.length === 0}
+			<!-- The zone is empty while the queue is not: say which zone, and where
+			     its work went, instead of a generic nothing. -->
+			<div class="queue-empty">
+				{#if queueScope === 'to-review'}
+					<p class="queue-empty__title">All caught up — every review is committed.</p>
+					<p class="queue-empty__hint">
+						Your {completedCount} committed review{completedCount === 1 ? ' is' : 's are'} in
+						Completed, ready for comparison and amendment.
+					</p>
+				{:else}
+					<p class="queue-empty__title">No committed reviews yet.</p>
+					<p class="queue-empty__hint">
+						Commit your first from To review — committed reviews land here with peer scores,
+						standing, and your marks.
+					</p>
+				{/if}
+			</div>
+		{:else}
+			{#if queueScope === 'to-review'}
+				<!-- "Commit" is not the everyday Save: define its consequence once,
+				     at the zone's entry, where the action becomes relevant. -->
+				<p class="zone-note">
+					Drafts save as you type. <Term
+						term="Commit"
 						definition="Committing finalises your score and comment for that submission and unlocks the other reviewers' — so it is deliberately one-way. Drafts save as you type; nothing is committed until you press the button."
 						onreveal={() =>
 							(status = 'Commit finalises your review and unlocks peer reviews. It is one-way.')} />
+					finalises the review.
 				</p>
-			</div>
-
-			{#if rows.length === 0}
-				<div class="queue-empty">
-					<p class="queue-empty__title">Nothing is assigned to you.</p>
-					{#if reviewerView}
-						<!-- This tells a blocked person to go ask someone, so the one
-						     word they need is the one naming who. "Chair" appears
-						     nowhere in the product's own role names. -->
-						<p class="queue-empty__hint">
-							Ask the <Term
-								term="chair"
-								definition="The person running this review round — they set the plan up and decide who reviews what. In your workspace they hold the Event Manager or Workspace Admin role."
-								onreveal={() => (status = 'Chair: the person running this review round.')} /> to
-							distribute this plan's submissions, or pick up unassigned ones from Submissions once
-							assignment opens.
-						</p>
-					{:else}
-						<!-- The organizer opened the round without being in its pool:
-						     true, ordinary, and not a fault — the work shows up as the
-						     reviewers commit it. -->
-						<p class="queue-empty__hint">
-							You are running this round rather than reviewing in it. Progress lands beside each
-							reviewer as they commit.
-						</p>
-					{/if}
-				</div>
 			{:else}
-				<ul class="queue">
-					{#each rows as row (row.item.submissionId)}
-						{@const id = row.item.submissionId}
-						{@const draft = draftFor(id)}
-						{@const busy = committingId === id}
-						{@const materials = row.submission.resources ?? []}
-						<li class="card">
-							<div class="card__id">
-								<div class="card__head">
-									<h3 class="card__title" id="{id}-title">{row.submission.title}</h3>
-									{#if row.item.committed}
-										<span class="ui-badge ui-badge--success">Committed</span>
-									{/if}
-								</div>
-								{#if !plan.anonymized}
-									<!-- Only inside the open-review branch: a blind plan never renders
-									     the submitter at all, so it cannot gain a way to look them up. -->
-									<p class="card__by"
-										>{#each row.submission.speakers as speaker, index (speaker.email)}{@const profile =
-											profiles[speaker.email]}{#if index > 0}{', '}{/if}{#if profile}<ProfilePeek
-											{profile} />{:else}{speaker.name}{/if}{/each}</p>
-									{/if}
-							</div>
-							<div class="card__abstract">
-								<ClampedText lines={2} label={row.submission.title}>
-									{row.submission.abstract}
-								</ClampedText>
-							</div>
-
-							<button
-								type="button"
-								class="card__materials-toggle"
-								aria-expanded={materialsOpenId === id}
-								onclick={() => (materialsOpenId = materialsOpenId === id ? null : id)}>
-								<ChevronDown size={13} aria-hidden="true" class={materialsOpenId === id ? 'is-open' : ''} />
-								<!-- One glyph per kind of thing attached, so a reviewer can tell slides
-								     from a recording without opening anything. Recognition support only:
-								     the glyphs are aria-hidden and the word still carries the meaning,
-								     and with nothing attached there is nothing to promise — the toggle
-								     drops to "Details" rather than advertising empty materials. -->
-								{#if materials.length > 0}
-									<span class="card__kinds" aria-hidden="true">
-										{#each distinctResourceKinds(materials) as kind (kind)}
-											{@const Kind = resourceKindIcon[kind]}
-											<Kind size={13} />
-										{/each}
-									</span>
-									Materials & details&nbsp;({materials.length})
-								{:else}
-									Details
+				<!-- The coined marks, explained once at the zone's entry instead of
+				     repeated verbatim under every card. The copy stays limited to
+				     observable behavior: where marks appear and why two are capped. -->
+				<p class="zone-note">
+					Pinned marks appear beside your review on the chair's decision board. Top pick and
+					Hidden gem are capped at 3 each — a mark you could give everything ranks nothing.
+				</p>
+			{/if}
+			<ul class="queue">
+				{#each visibleRows as row (row.item.submissionId)}
+					{@const id = row.item.submissionId}
+					{@const draft = draftFor(id)}
+					{@const busy = committingId === id}
+					<!-- The card is two zones with two intents: the evidence being judged
+					     (title, who, abstract, materials) and the judgment being made (the
+					     score and its consequences). Side by side at desktop width so the
+					     eye moves between them without scrolling; stacked where the width
+					     runs out. -->
+					<li class="card card--split" class:card--committed={row.item.committed}>
+						<div class="card__evidence">
+						<div class="card__id">
+							<div class="card__head">
+								<h3 class="card__title" id="{id}-title">{row.submission.title}</h3>
+								{#if row.item.committed && queueScope === 'to-review'}
+									<!-- Only where the state varies: in the Completed zone every
+									     card is committed and the zone already says so. Here it
+									     marks the card that just flipped under the person's press. -->
+									<span class="ui-badge ui-badge--success">Committed</span>
 								{/if}
-							</button>
-							{#if materialsOpenId === id}
-								<div class="card__materials">
-									<ResourceList resources={row.submission.resources} />
-									<p class="card__submeta">Submitted {formatArrival(row.submission.submittedAt)}</p>
+							</div>
+							{#if !plan.anonymized}
+								<!-- Only inside the open-review branch: a blind plan never renders
+								     the submitter at all, so it cannot gain a way to look them up. -->
+								<p class="card__by"
+									>{#each row.submission.speakers as speaker, index (speaker.email)}{@const profile =
+										profiles[speaker.email]}{#if index > 0}{', '}{/if}{#if profile}<ProfilePeek
+										{profile} />{:else}{speaker.name}{/if}{/each}</p>
+								{/if}
+						</div>
+						<div class="card__abstract">
+							<ClampedText lines={2} label={row.submission.title}>
+								{row.submission.abstract}
+							</ClampedText>
+						</div>
+
+						<!-- What the submitter gave us is judging evidence, so it stands on
+						     the card rather than waiting behind a press — and when nothing
+						     was attached, that absence is stated in place: a card that only
+						     shows materials when there are some hides the fact a reviewer
+						     is scoring without them. -->
+						<div class="card__materials">
+							<ResourceList resources={row.submission.resources} density="compact" />
+							<p class="card__submeta">Submitted {formatArrival(row.submission.submittedAt)}</p>
+						</div>
+						</div>
+
+						<div class="card__judgment">
+						{#if row.item.committed}
+							{@const standing = standings[id]}
+							<dl class="verdict">
+								<div class="verdict__group">
+									<dt class="verdict__label">Your score</dt>
+									<!-- The same value-ramp ink the peer chips wear: one score
+									     vocabulary, one look, mine merely larger — it is the number
+									     this card exists to hold. -->
+									<dd class="verdict__score">
+										{#if row.item.myScore !== undefined}
+											<span
+												class="ui-badge {scoreTone(row.item.myScore, plan.scaleMax)} verdict__mine"
+												class:verdict__peer--top={isTopScore(row.item.myScore, plan.scaleMax)}
+												>{row.item.myScore}</span>
+										{/if}
+									</dd>
 								</div>
+								<div class="verdict__group">
+									<dt class="verdict__label">Peer scores</dt>
+									<dd class="verdict__peers">
+										{#if row.item.peerScores && row.item.peerScores.length > 0}
+											{#each row.item.peerScores as peerScore, index (index)}
+												<span
+													class="ui-badge {scoreTone(peerScore, plan.scaleMax)}"
+													class:verdict__peer--top={isTopScore(peerScore, plan.scaleMax)}>{peerScore}</span>
+											{/each}
+										{:else}
+											<span class="verdict__none">No peer review committed yet</span>
+										{/if}
+									</dd>
+								</div>
+								<div class="verdict__group verdict__group--standing">
+									<dt class="verdict__label">Standing in track</dt>
+									<dd class="verdict__standing" aria-busy={standing === undefined || undefined}>
+										{#if standing === undefined}
+											<!-- The slot is held at the mark's own height, so the claim
+											     lands in place instead of pushing the card down. -->
+											<span class="ui-skeleton skeleton-mark"></span>
+										{:else if standing}
+											<StandingMark {standing} context={row.submission.title} />
+										{:else}
+											<span class="verdict__none">No scored comparison yet</span>
+										{/if}
+									</dd>
+								</div>
+							</dl>
+							{#if row.item.myComment}
+								<p class="verdict__comment">{row.item.myComment}</p>
 							{/if}
 
-							{#if row.item.committed}
-								{@const standing = standings[id]}
-								<dl class="verdict">
-									<div class="verdict__group">
-										<dt class="verdict__label">Your score</dt>
-										<dd class="verdict__score">{row.item.myScore}</dd>
-									</div>
-									<div class="verdict__group">
-										<dt class="verdict__label">Peer scores</dt>
-										<dd class="verdict__peers">
-											{#if row.item.peerScores && row.item.peerScores.length > 0}
-												{#each row.item.peerScores as peerScore, index (index)}
-													<span
-														class="ui-badge {scoreTone(peerScore, plan.scaleMax)}"
-														class:verdict__peer--top={isTopScore(peerScore, plan.scaleMax)}>{peerScore}</span>
-												{/each}
-											{:else}
-												<span class="verdict__none">No peer review committed yet</span>
-											{/if}
-										</dd>
-									</div>
-									<div class="verdict__group verdict__group--standing">
-										<dt class="verdict__label">Standing in track</dt>
-										<dd class="verdict__standing" aria-busy={standing === undefined || undefined}>
-											{#if standing === undefined}
-												<!-- The slot is held at the mark's own height, so the claim
-												     lands in place instead of pushing the card down. -->
-												<span class="ui-skeleton skeleton-mark"></span>
-											{:else if standing}
-												<StandingMark {standing} context={row.submission.title} />
-											{:else}
-												<span class="verdict__none">No scored comparison yet</span>
-											{/if}
-										</dd>
-									</div>
-								</dl>
-								{#if row.item.myComment}
-									<p class="verdict__comment">{row.item.myComment}</p>
-								{/if}
-
-								<!-- What this review is worth to me beyond its number, and the way
-								     out to the rest of my own scoring. Both belong to a committed
-								     review: a mark on a draft would rank nothing. -->
-								<div class="marks">
-									<div
-										class="marks__keys"
-										role="group"
-										aria-label={`My marks on “${row.submission.title}”`}>
-										{#each accoladeDefs as def (def.key)}
-											{@const Icon = accoladeIcon[def.key]}
-											{@const pinned = row.item.accolades?.includes(def.key) ?? false}
-											{@const refusal = capRefusal(def, row)}
-											{#if refusal}
-												<span class="marks__slot" {@attach unavailable}>
-													<Popover
-														label={`${def.label} on “${row.submission.title}” — why this mark is unavailable`}
-														onreveal={() => (status = refusal)}>
-														{#snippet trigger()}
-															<span
-																class="ui-button ui-button--secondary ui-button--sm marks__key marks__key--spent">
-																<Icon size={13} aria-hidden="true" />{def.label}
-															</span>
-														{/snippet}
-														{#snippet children()}
-															<p class="marks__reason">{refusal}</p>
-														{/snippet}
-													</Popover>
-												</span>
-											{:else}
-												<button
-													type="button"
-													class="ui-button ui-button--secondary ui-button--sm marks__key"
-													aria-pressed={pinned}
-													aria-busy={accoladeBusy === `${id}:${def.key}` || undefined}
-													disabled={accoladeBusy !== null}
-													onclick={() => toggleAccolade(row, def)}>
-													<Icon size={13} aria-hidden="true" />{def.label}
-												</button>
-											{/if}
-										{/each}
-									</div>
-									<!-- Explain the coined marks before they are used and limit the copy
-									     to observable behavior: where they appear and why two are capped.
-									     The interface deliberately makes no claim that marks affect the
-									     final outcome. -->
+							<!-- What this review is worth to me beyond its number, and the way
+							     out to the rest of my own scoring. Both belong to a committed
+							     review: a mark on a draft would rank nothing. -->
+							<div class="marks">
+								<div
+									class="marks__keys"
+									role="group"
+									aria-label={`My marks on “${row.submission.title}”`}>
+									{#each accoladeDefs as def (def.key)}
+										{@const Icon = accoladeIcon[def.key]}
+										{@const pinned = row.item.accolades?.includes(def.key) ?? false}
+										{@const refusal = capRefusal(def, row)}
+										{#if refusal}
+											<span class="marks__slot" {@attach unavailable}>
+												<Popover
+													label={`${def.label} on “${row.submission.title}” — why this mark is unavailable`}
+													onreveal={() => (status = refusal)}>
+													{#snippet trigger()}
+														<span
+															class="ui-button ui-button--secondary ui-button--sm marks__key marks__key--spent">
+															<Icon size={13} aria-hidden="true" />{def.label}
+														</span>
+													{/snippet}
+													{#snippet children()}
+														<p class="marks__reason">{refusal}</p>
+													{/snippet}
+												</Popover>
+											</span>
+										{:else}
+											<button
+												type="button"
+												class="ui-button ui-button--secondary ui-button--sm marks__key"
+												aria-pressed={pinned}
+												aria-busy={accoladeBusy === `${id}:${def.key}` || undefined}
+												disabled={accoladeBusy !== null}
+												onclick={() => toggleAccolade(row, def)}>
+												<Icon size={13} aria-hidden="true" />{def.label}
+											</button>
+										{/if}
+									{/each}
+								</div>
+								{#if queueScope === 'to-review'}
+									<!-- The reveal moment is the first time these coined marks
+									     exist, so the card that just flipped teaches them; in the
+									     Completed zone the explanation is said once, at the zone's
+									     entry, instead of verbatim under every card. -->
 									<p class="marks__about">
 										Pinned marks appear beside your review on the chair's decision board.
 										Top pick and Hidden gem are capped at 3 each — a mark you could give
 										everything ranks nothing.
 									</p>
-									{#if hasOtherCommitted(id)}
-										<button
-											type="button"
-											class="ui-button ui-button--soft ui-button--sm marks__line"
-											onclick={() => openLineup(id)}>
-											Line up with my other reviews
-										</button>
-									{:else}
-										<span class="marks__slot" {@attach unavailable}>
-											<Popover
-												label={`Line up with my other reviews for “${row.submission.title}” — why this is unavailable`}
-												onreveal={() => (status = 'No other committed reviews yet')}>
-												{#snippet trigger()}
-													<span
-														class="ui-button ui-button--soft ui-button--sm marks__line marks__line--spent">
-														Line up with my other reviews
-													</span>
-												{/snippet}
-												{#snippet children()}
-													<p class="marks__reason">No other committed reviews yet</p>
-												{/snippet}
-											</Popover>
-										</span>
-									{/if}
-								</div>
-							{:else}
-								<div class="score">
-									<div class="score__head">
-										<span class="score__label" id="{id}-score-label">Score</span>
-										<!-- The anchor words say which number; the thresholds say why.
-										     They are one press away rather than five permanent
-										     sentences on every card. -->
-										<Popover
-											label={`What the numbers mean for “${row.submission.title}”`}
-											kind="word">
-											{#snippet trigger()}
-												<span class="score__guide">What the numbers mean</span>
-											{/snippet}
-											{#snippet children()}
-												{#each guideAnchors as anchor (anchor.value)}
-													<p class="guide">
-														<span class="guide__mark">{anchor.value} {anchor.caption}</span>
-														{anchor.threshold}
-													</p>
-												{/each}
-											{/snippet}
-										</Popover>
-									</div>
-									<div
-										class="ui-segmented score__scale"
-										role="group"
-										aria-labelledby="{id}-score-label {id}-title">
-										{#each scale as value (value)}
-											{@const anchor = anchorFor(value)}
-											<button
-												type="button"
-												class="ui-segmented__item score__step"
-												aria-label={anchor ? `${value} ${anchor.caption}` : undefined}
-												aria-pressed={draft.score === value}
-												disabled={busy}
-												onclick={() => setScore(id, value)}>
-												<span class="score__value">{value}</span>
-												{#if anchor}<span class="score__caption">{anchor.caption}</span>{/if}
-											</button>
-										{/each}
-									</div>
-								</div>
-
-								<Field id="{id}-comment" label="Comment" optional>
-									{#snippet children({ id: fieldId, describedBy })}
-										<textarea
-											class="ui-textarea card__comment"
-											id={fieldId}
-											aria-describedby={describedBy}
-											disabled={busy}
-											placeholder="What would make this a strong session — or what worries you?"
-											value={draft.comment}
-											oninput={(event) => setComment(id, event.currentTarget.value)}
-										></textarea>
-									{/snippet}
-								</Field>
-
-								<div class="card__foot">
-									{#if plan.antiAnchoring}
-										<p class="card__lock">
-											<Lock size={13} aria-hidden="true" />
-											Peer reviews unlock when you commit your own.
-										</p>
-									{/if}
+								{/if}
+								{#if hasOtherCommitted(id)}
 									<button
 										type="button"
-										class="ui-button ui-button--primary ui-button--sm card__commit"
-										disabled={draft.score === undefined || busy}
-										onclick={() => commit(id)}>
-										{busy ? 'Committing…' : 'Commit review'}
+										class="ui-button ui-button--soft ui-button--sm marks__line"
+										onclick={() => openLineup(id)}>
+										Line up with my other reviews
 									</button>
+								{:else}
+									<span class="marks__slot" {@attach unavailable}>
+										<Popover
+											label={`Line up with my other reviews for “${row.submission.title}” — why this is unavailable`}
+											onreveal={() => (status = 'No other committed reviews yet')}>
+											{#snippet trigger()}
+												<span
+													class="ui-button ui-button--soft ui-button--sm marks__line marks__line--spent">
+													Line up with my other reviews
+												</span>
+											{/snippet}
+											{#snippet children()}
+												<p class="marks__reason">No other committed reviews yet</p>
+											{/snippet}
+										</Popover>
+									</span>
+								{/if}
+							</div>
+						{:else}
+							<div class="score">
+								<div class="score__head">
+									<span class="score__label" id="{id}-score-label">Score</span>
+									<!-- The anchor words say which number; the thresholds say why.
+									     They are one press away rather than five permanent
+									     sentences on every card. -->
+									<Popover
+										label={`What the numbers mean for “${row.submission.title}”`}
+										kind="word">
+										{#snippet trigger()}
+											<span class="score__guide">What the numbers mean</span>
+										{/snippet}
+										{#snippet children()}
+											{#each guideAnchors as anchor (anchor.value)}
+												<p class="guide">
+													<span class="guide__mark">{anchor.value} {anchor.caption}</span>
+													{anchor.threshold}
+												</p>
+											{/each}
+										{/snippet}
+									</Popover>
 								</div>
-							{/if}
-
-							{#if reviewerView}
-								{@const refusal = row.item.committed
-									? composeStepBackRefusal(row.submission.title)
-									: undefined}
-								<div class="stepback">
-									{#if refusal}
-										<!-- The refusal is a state of the control that would have
-										     acted, kept focusable so the reason is readable. -->
-										<span class="marks__slot" {@attach unavailable}>
-											<Popover
-												label={`Step back from “${row.submission.title}” — why this is unavailable`}
-												onreveal={() => (status = refusal)}>
-												{#snippet trigger()}
-													<span class="ui-button ui-button--ghost ui-button--sm stepback__spent">
-														Step back
-													</span>
-												{/snippet}
-												{#snippet children()}
-													<p class="marks__reason">{refusal}</p>
-												{/snippet}
-											</Popover>
-										</span>
-									{:else if armedStepBackId === id}
-										<div
-											class="stepback__armed"
-											role="group"
-											aria-label={`Step back from “${row.submission.title}”?`}
-											onfocusout={armFocusout}>
-											<p class="stepback__q">
-												Step back from this review? It leaves your queue and waits for another
-												reviewer.
-											</p>
-											<div class="stepback__actions">
-												<button
-													type="button"
-													class="ui-button ui-button--secondary ui-button--sm"
-													id={`confirm-step-back-${id}`}
-													aria-label={`Step back from “${row.submission.title}” — confirm`}
-													aria-busy={steppingBackId === id || undefined}
-													disabled={steppingBackId !== null}
-													onclick={() => stepBack(row)}>Step back</button>
-												<button
-													type="button"
-													class="ui-button ui-button--ghost ui-button--sm"
-													aria-label={`Keep “${row.submission.title}” in your queue`}
-													onclick={() => keepReview(row)}>Keep it</button>
-											</div>
-										</div>
-									{:else}
-									<!-- The verb only: what it is for is stated once, on arrival,
-									     rather than under every card in the queue. -->
+								<div
+									class="ui-segmented score__scale"
+									role="group"
+									aria-labelledby="{id}-score-label {id}-title">
+									{#each scale as value (value)}
+										{@const anchor = anchorFor(value)}
 										<button
 											type="button"
-											class="ui-button ui-button--ghost ui-button--sm"
-											id={`step-back-${id}`}
-											aria-label={`Step back from “${row.submission.title}”`}
-											onclick={() => armStepBack(row)}>Step back</button>
-									{/if}
+											class="ui-segmented__item score__step"
+											aria-label={anchor ? `${value} ${anchor.caption}` : undefined}
+											aria-pressed={draft.score === value}
+											disabled={busy}
+											onclick={() => setScore(id, value)}>
+											<span class="score__value">{value}</span>
+											{#if anchor}<span class="score__caption">{anchor.caption}</span>{/if}
+										</button>
+									{/each}
 								</div>
-							{/if}
-						</li>
-					{/each}
-				</ul>
-			{/if}
-		</section>
-	</div>
+							</div>
+
+							<Field id="{id}-comment" label="Comment" optional>
+								{#snippet children({ id: fieldId, describedBy })}
+									<textarea
+										class="ui-textarea card__comment"
+										id={fieldId}
+										aria-describedby={describedBy}
+										disabled={busy}
+										placeholder="What would make this a strong session — or what worries you?"
+										value={draft.comment}
+										oninput={(event) => setComment(id, event.currentTarget.value)}
+									></textarea>
+								{/snippet}
+							</Field>
+
+							<div class="card__foot">
+								{#if plan.antiAnchoring}
+									<p class="card__lock">
+										<Lock size={13} aria-hidden="true" />
+										Peer reviews unlock when you commit your own.
+									</p>
+								{/if}
+								<button
+									type="button"
+									class="ui-button ui-button--primary ui-button--sm card__commit"
+									disabled={draft.score === undefined || busy}
+									onclick={() => commit(id)}>
+									{busy ? 'Committing…' : 'Commit review'}
+								</button>
+							</div>
+						{/if}
+						</div>
+
+						{#if reviewerView}
+							{@const refusal = row.item.committed
+								? composeStepBackRefusal(row.submission.title)
+								: undefined}
+							<div class="stepback">
+								{#if refusal}
+									<!-- The refusal is a state of the control that would have
+									     acted, kept focusable so the reason is readable. -->
+									<span class="marks__slot" {@attach unavailable}>
+										<Popover
+											label={`Step back from “${row.submission.title}” — why this is unavailable`}
+											onreveal={() => (status = refusal)}>
+											{#snippet trigger()}
+												<span class="ui-button ui-button--ghost ui-button--sm stepback__spent">
+													Step back
+												</span>
+											{/snippet}
+											{#snippet children()}
+												<p class="marks__reason">{refusal}</p>
+											{/snippet}
+										</Popover>
+									</span>
+								{:else if armedStepBackId === id}
+									<div
+										class="stepback__armed"
+										role="group"
+										aria-label={`Step back from “${row.submission.title}”?`}
+										onfocusout={armFocusout}>
+										<p class="stepback__q">
+											Step back from this review? It leaves your queue and waits for another
+											reviewer.
+										</p>
+										<div class="stepback__actions">
+											<button
+												type="button"
+												class="ui-button ui-button--secondary ui-button--sm"
+												id={`confirm-step-back-${id}`}
+												aria-label={`Step back from “${row.submission.title}” — confirm`}
+												aria-busy={steppingBackId === id || undefined}
+												disabled={steppingBackId !== null}
+												onclick={() => stepBack(row)}>Step back</button>
+											<button
+												type="button"
+												class="ui-button ui-button--ghost ui-button--sm"
+												aria-label={`Keep “${row.submission.title}” in your queue`}
+												onclick={() => keepReview(row)}>Keep it</button>
+										</div>
+									</div>
+								{:else}
+								<!-- The verb only: what it is for is stated once, on arrival,
+								     rather than under every card in the queue. -->
+									<button
+										type="button"
+										class="ui-button ui-button--ghost ui-button--sm"
+										id={`step-back-${id}`}
+										aria-label={`Step back from “${row.submission.title}”`}
+										onclick={() => armStepBack(row)}>Step back</button>
+								{/if}
+							</div>
+						{/if}
+					</li>
+				{/each}
+			</ul>
+		{/if}
+	</section>
 {/if}
 
 <!-- The comparison, over the queue it belongs to. It mounts with the address and
@@ -1463,10 +1402,9 @@
 		min-width: 0;
 	}
 
-	/* Committing re-reads the plan. The counter and the reviewer rows it feeds
+	/* Committing re-reads the plan. The counter and the reviewer cells it feeds
 	   dim in place; tearing them down would hide where the change lands. */
-	.plan__stat.is-refreshing,
-	.ui-table-wrap.is-refreshing tbody {
+	.plan__stat.is-refreshing {
 		opacity: 0.55;
 		pointer-events: none;
 		transition: opacity var(--je-duration-fast) var(--je-ease);
@@ -1525,21 +1463,6 @@
 		color: var(--je-color-text-muted);
 	}
 
-	/* Two working columns: chair oversight beside the reviewer's own queue. */
-	.columns {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr);
-		gap: var(--je-space-6);
-		align-items: start;
-	}
-
-	/* Without the oversight column there is nothing to sit beside, so the queue
-	   takes the width rather than leaving a column-shaped hole. */
-	.columns--queue-only {
-		grid-template-columns: minmax(0, 1fr);
-		max-inline-size: 52rem;
-	}
-
 	.column {
 		display: flex;
 		flex-direction: column;
@@ -1549,7 +1472,8 @@
 
 	.column__head {
 		display: flex;
-		align-items: baseline;
+		flex-wrap: wrap;
+		align-items: center;
 		justify-content: space-between;
 		gap: var(--je-space-3);
 	}
@@ -1563,65 +1487,33 @@
 		color: var(--je-color-text-muted);
 	}
 
-	.column__note {
+	/* The queue takes the working width the split card composition earns: the
+	   evidence keeps a reading measure on the left while the judgment stands
+	   beside it instead of below it. One cap for everyone who reviews, and a
+	   container so the card decides its own composition from the width it
+	   actually has, not from the viewport. */
+	.column--queue {
+		max-inline-size: 76rem;
+		container-type: inline-size;
+		container-name: review-queue;
+	}
+
+	/* The scope set needs a definite basis inside the head's flex line — in a
+	   shrink-to-fit slot it resolves to zero and the chips vanish. Capped so
+	   two zones do not stretch into a navigation bar. */
+	.column__scopes {
+		flex: 1 1 16rem;
+		min-inline-size: 0;
+		max-inline-size: 24rem;
+	}
+
+	/* What a zone says once, on arrival — the commit consequence, the marks'
+	   meaning. Quiet: it is read once and then stops competing with the cards. */
+	.zone-note {
 		margin: 0;
 		font-size: var(--je-font-size-xs);
 		color: var(--je-color-text-muted);
-	}
-
-	/* Three columns read comfortably well below the shared table minimum, so the
-	   reviewer list fits a narrow column and a phone without local scrolling. */
-	.reviewers {
-		min-inline-size: 20rem;
-	}
-
-	.col-remind {
-		inline-size: 6.5rem;
-	}
-
-	/* The badge starts its own line under the name rather than trailing it, so a
-	   long reviewer name and a long consequence never compete for one line in a
-	   20rem column. */
-	.rev__gap {
-		display: block;
-		margin-block-start: var(--je-space-1);
-	}
-
-	.rev__why {
-		margin: 0;
-	}
-
-	.rev__count {
-		display: block;
-		font-size: var(--je-font-size-sm);
-		font-variant-numeric: tabular-nums;
-	}
-
-	/* The track spans its column rather than sitting as a 56px garnish inside it.
-	   A short track leaves the column's extent undefined — the space to its right
-	   reads as a gap instead of as "how much is left" — and it wastes the one
-	   thing a progress column is for: comparing rows along a shared axis. Full
-	   width, every row's fill is measured against the same end points. */
-	.rev__bar {
-		display: block;
-		block-size: 0.25rem;
-		inline-size: 100%;
-		margin-block-start: var(--je-space-1);
-	}
-
-	.rev__bar .ui-progress__value {
-		display: block;
-	}
-
-	.rev__action {
-		display: flex;
-		justify-content: flex-end;
-	}
-
-	.rev__sent {
-		font-size: var(--je-font-size-xs);
-		font-weight: 600;
-		color: var(--je-color-success);
+		max-inline-size: 62ch;
 	}
 
 	/* Queue */
@@ -1629,19 +1521,71 @@
 		list-style: none;
 		display: flex;
 		flex-direction: column;
-		gap: var(--je-space-4);
 		margin: 0;
 		padding: 0;
 	}
 
+	.card + .card {
+		margin-block-start: var(--je-space-4);
+	}
+
 	.card {
+		padding: var(--je-space-4);
+		background: var(--je-color-surface);
+		border: 1px solid var(--je-color-border-strong);
+		border-radius: var(--je-radius-surface);
+	}
+
+	/*
+	 * Two zones with two intents: the evidence being judged and the judgment
+	 * being made. Side by side while the queue's own width allows, so the eye
+	 * moves between reading and scoring without scrolling; the hairline names
+	 * the boundary between them.
+	 */
+	.card--split {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(24rem, 27rem);
+		gap: var(--je-space-3) var(--je-space-6);
+	}
+
+	.card__evidence {
 		display: flex;
 		flex-direction: column;
 		gap: var(--je-space-3);
-		padding: var(--je-space-4);
-		background: var(--je-color-surface);
-		border: 1px solid var(--je-color-border);
-		border-radius: var(--je-radius-surface);
+		min-width: 0;
+	}
+
+	.card__judgment {
+		display: flex;
+		flex-direction: column;
+		gap: var(--je-space-3);
+		min-width: 0;
+		border-inline-start: 1px solid var(--je-color-border);
+		padding-inline-start: var(--je-space-6);
+	}
+
+	/* The footer actions span the whole card, under both zones. */
+	.card--split > .stepback {
+		grid-column: 1 / -1;
+	}
+
+	@container review-queue (max-width: 55.99rem) {
+		.card--split {
+			grid-template-columns: minmax(0, 1fr);
+		}
+
+		/* Stacked, the boundary turns with the layout: what was beside is now
+		   beneath, and the rule follows it. */
+		.card__judgment {
+			border-inline-start: 0;
+			padding-inline-start: 0;
+			border-block-start: 1px solid var(--je-color-border);
+			padding-block-start: var(--je-space-3);
+		}
+	}
+
+	.card--committed {
+		border-color: var(--je-color-border);
 	}
 
 	.card__id {
@@ -1663,11 +1607,22 @@
 		min-width: 0;
 	}
 
-	.card__by,
 	.card__abstract {
 		margin: 0;
 		font-size: var(--je-font-size-md);
 		color: var(--je-color-text-muted);
+		line-height: var(--je-leading-normal);
+	}
+
+	/* Who is behind the card is a scan key on an open (non-blind) plan, so it
+	   takes the quiet person recognition hue — the same ink the Submissions
+	   queue taught. A blind plan renders no byline at all, so the hue can
+	   never defeat anonymity. */
+	.card__by {
+		margin: 0;
+		font-size: var(--je-font-size-sm);
+		font-weight: 600;
+		color: var(--je-color-recognition-person);
 		line-height: var(--je-leading-normal);
 	}
 
@@ -1761,56 +1716,21 @@
 		min-block-size: 4.5rem;
 	}
 
-	.card__materials-toggle {
-		display: inline-flex;
-		align-items: center;
-		gap: var(--je-space-1);
-		align-self: start;
-		border: 0;
-		background: transparent;
-		padding: 0;
-		font-size: var(--je-font-size-xs);
-		font-weight: 600;
-		color: var(--je-color-link);
-		cursor: pointer;
-	}
-
-	.card__materials-toggle:hover {
-		text-decoration: underline;
-	}
-
-	/* The kinds are a hint about the contents, not part of the link: muted ink
-	   keeps them behind the word that says what pressing does. */
-	.card__kinds {
-		display: inline-flex;
-		align-items: center;
-		gap: var(--je-space-1);
-		color: var(--je-color-text-muted);
-	}
-
-	.card__materials-toggle :global(svg) {
-		transition: rotate var(--je-duration-fast) var(--je-ease);
-	}
-
-	.card__materials-toggle :global(svg.is-open) {
-		rotate: 180deg;
-	}
-
-	/* An inset disclosure belongs to the card that opened it: the sunken surface
-	   with its own boundary, not the page colour behind the card. */
+	/* The standing evidence zone: the typed tiles give it its identity across
+	   cards without a label or a box, and the stated absence takes the same
+	   place the rows would have. */
 	.card__materials {
 		display: grid;
-		gap: var(--je-space-3);
-		padding: var(--je-space-3);
-		background: var(--je-color-surface-sunken);
-		border: 1px solid var(--je-color-border);
-		border-radius: var(--je-radius-control);
+		gap: var(--je-space-2);
 	}
 
+	/* When it arrived, in the quiet time hue: dwell is part of judging a queue,
+	   and one consistent ink finds it without reading the sentence. */
 	.card__submeta {
 		margin: 0;
 		font-size: var(--je-font-size-xs);
-		color: var(--je-color-text-muted);
+		color: var(--je-color-recognition-time);
+		font-variant-numeric: tabular-nums;
 	}
 
 	.card__foot {
@@ -1862,9 +1782,16 @@
 
 	.verdict__score {
 		margin: 0;
-		font-size: var(--je-font-size-lg);
+		min-block-size: 1.7rem;
+	}
+
+	/* My score wears the same value-ramp badge as the peer chips — one score
+	   vocabulary, one look — merely larger, because it is the number this card
+	   exists to hold. */
+	.verdict__mine {
+		font-size: var(--je-font-size-md);
 		font-weight: 700;
-		font-variant-numeric: tabular-nums;
+		padding-inline: var(--je-space-3);
 	}
 
 	.verdict__peers {
@@ -2081,11 +2008,6 @@
 			gap: var(--je-space-4);
 		}
 
-		.columns {
-			grid-template-columns: 1fr;
-			gap: var(--je-space-8);
-		}
-
 		.card__foot {
 			grid-template-columns: minmax(0, 1fr);
 			grid-template-areas:
@@ -2101,5 +2023,12 @@
 		.opening {
 			padding: var(--je-space-6);
 		}
+	}
+
+	@media (max-width: 560px) {
+		.column__head {
+			align-items: flex-start;
+		}
+
 	}
 </style>

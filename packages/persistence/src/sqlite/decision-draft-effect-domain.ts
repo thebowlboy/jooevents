@@ -208,7 +208,7 @@ function staleContribution(code: string, submissionId: string): DecisionDraftCon
         class: 'stale_revision', kind: 'decision.changed', retryable: false,
         subjects: [{ type: 'submission', id: submissionId }],
         detail: { code, submissionId },
-        detailSchemaVersion: 1
+        detailSchemaVersion: 2
       }
     },
     domain: null,

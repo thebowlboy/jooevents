@@ -45,7 +45,12 @@ export function createSchedulePlaceableSessionPort(
       const catalog = source.readSessionCatalog(scope);
       const session = catalog && findSession(catalog, sessionId);
       if (!session || (session.lifecycle !== 'collecting' && session.lifecycle !== 'programmed')) return undefined;
-      return Object.freeze({ scope, id: sessionId, lifecycle: session.lifecycle });
+      return Object.freeze({
+        scope,
+        id: sessionId,
+        lifecycle: session.lifecycle,
+        trackId: session.programTarget.track?.id ?? null
+      });
     }
   });
 }

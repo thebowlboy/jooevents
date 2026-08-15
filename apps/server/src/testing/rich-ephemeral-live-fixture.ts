@@ -11,6 +11,8 @@ import {
   organizerFormCatalogSchema,
   organizerFormDetailSchema,
   programVocabularySnapshotReadResultSchema,
+  releaseDraftOperationResultSchema,
+  templateArtifactListOperationResultSchema,
   type EventSettingsSlotMinutes,
   type FormDefinitionAuthorInput,
   type FormDefinitionCreateAuthorInput,
@@ -228,11 +230,12 @@ export const RICH_EPHEMERAL_LIVE_SCENARIO = deepFreeze({
     // inert fake provider composed, anything nonzero here would be a leak).
     messageReleases: 0,
     outboundDeliveries: 0,
-    // The scenario publishes nothing and no participant ever signs in, so
-    // the mounted release and participant-lane tables stay honestly empty;
-    // they are counted so the exact fingerprint covers both verticals.
-    programReleases: 0,
-    surfaceReleases: 0,
+    // Publication is operation-seeded so the pure-live operator and public
+    // routes exercise one coherent pre-release state. No speaker names appear:
+    // the scenario still has no engagements, and release gating remains exact.
+    programReleases: 1,
+    // Three immutable surfaces + one style set + three mutable heads.
+    surfaceReleases: 7,
     participantIdentities: 0,
     sessions: Object.freeze({
       total: 2,
@@ -250,14 +253,14 @@ export const RICH_EPHEMERAL_LIVE_SCENARIO = deepFreeze({
     }),
     review: Object.freeze({ catalogs: 0, rounds: 0, roundCriteria: 0, assignments: 0 }),
     deadlines: Object.freeze({ total: 0, catalogs: 0 }),
-    changesets: 40,
-    operationReceipts: 120,
+    changesets: 45,
+    operationReceipts: 135,
     history: Object.freeze({
-      draftTimelineEntries: 40,
-      lifecycleTimelineEntries: 80,
-      domainFacts: 40,
-      outboxPointers: 40,
-      commitLinks: 40
+      draftTimelineEntries: 45,
+      lifecycleTimelineEntries: 90,
+      domainFacts: 45,
+      outboxPointers: 45,
+      commitLinks: 45
     })
   }),
   reviewPins: Object.freeze({
@@ -1181,6 +1184,131 @@ async function createSessions(
   return handles;
 }
 
+async function publishSurface(input: {
+  readonly context: SeedContext;
+  readonly key: 'schedule' | 'speakers' | 'apply';
+  readonly sourceTemplateRevision: {
+    readonly artifactId: string;
+    readonly revisionId: string;
+    readonly revisionNumber: number;
+    readonly digestSha256: string;
+  };
+  readonly manifest: { readonly schemaVersion: 1; readonly heading: string | null; readonly intro: string | null };
+  readonly styleSetReleaseId: string;
+  readonly formRef: null | { readonly formId: string; readonly formVersionId: string };
+}): Promise<void> {
+  const draft = requireSuccess(releaseDraftOperationResultSchema.parse(await effect({
+    context: input.context,
+    path: '/api/events/current/releases/drafts',
+    key: `rich-v1-release-surface-${input.key}-draft`,
+    body: {
+      action: 'surface_publish',
+      kind: input.key,
+      sourceTemplateRevision: input.sourceTemplateRevision,
+      manifest: input.manifest,
+      styleSetReleaseId: input.styleSetReleaseId,
+      formRef: input.formRef,
+      expectedSurfaceHeadVersion: null
+    },
+    parse: (value) => value
+  })), `release_surface_${input.key}_draft`);
+  await commitDraft(input.context, `rich-v1-release-surface-${input.key}`, draft);
+}
+
+/** Publishes the fixture only through the registered release changeset lane. */
+async function publishFixture(input: {
+  readonly context: SeedContext;
+  readonly forms: Readonly<Record<RichFormKey, string>>;
+}): Promise<void> {
+  const artifacts = requireSuccess(templateArtifactListOperationResultSchema.parse(await read(
+    input.context,
+    '/api/events/current/template-artifacts',
+    (value) => value
+  )), 'release_template_artifacts_read').data.artifacts;
+  const theme = artifacts.find((artifact) => artifact.current.document.kind === 'theme');
+  if (!theme || theme.current.document.kind !== 'theme') {
+    throw new TypeError('rich_fixture_release_theme_missing');
+  }
+  const pin = (artifact: typeof theme) => ({
+    artifactId: artifact.head.artifactId,
+    revisionId: artifact.current.revisionId,
+    revisionNumber: artifact.current.number,
+    digestSha256: artifact.current.digestSha256
+  });
+  const surface = (kind: 'schedule' | 'speaker-roster' | 'application-form') => {
+    const artifact = artifacts.find((candidate) =>
+      candidate.current.document.kind === 'surface'
+      && candidate.current.document.surfaceKind === kind
+    );
+    if (!artifact || artifact.current.document.kind !== 'surface') {
+      throw new TypeError(`rich_fixture_release_surface_template_missing:${kind}`);
+    }
+    const hero = artifact.current.document.blocks.find((block) => block.type === 'hero');
+    const text = (value: string) => {
+      const normalized = value.normalize('NFC').trim().replace(/\s+/gu, ' ');
+      return normalized.length === 0 ? null : normalized;
+    };
+    return {
+      pin: pin(artifact as typeof theme),
+      manifest: {
+        schemaVersion: 1 as const,
+        heading: hero ? text(hero.title) : null,
+        intro: hero ? text(hero.intro) : null
+      }
+    };
+  };
+  const program = requireSuccess(releaseDraftOperationResultSchema.parse(await effect({
+    context: input.context,
+    path: '/api/events/current/releases/drafts',
+    key: 'rich-v1-release-program-draft',
+    body: { action: 'publish_schedule', expectedCurrentReleaseNumber: null },
+    parse: (value) => value
+  })), 'release_program_draft');
+  await commitDraft(input.context, 'rich-v1-release-program', program);
+
+  const style = requireSuccess(releaseDraftOperationResultSchema.parse(await effect({
+    context: input.context,
+    path: '/api/events/current/releases/drafts',
+    key: 'rich-v1-release-style-draft',
+    body: {
+      action: 'style_set_publish',
+      sourceTemplateRevision: pin(theme),
+      recipe: theme.current.document.recipe,
+      expectedCurrentStyleSetNumber: null
+    },
+    parse: (value) => value
+  })), 'release_style_draft');
+  if (style.data.safeDiff.action !== 'style_set_publish') {
+    throw new TypeError('rich_fixture_release_style_diff_invalid');
+  }
+  await commitDraft(input.context, 'rich-v1-release-style', style);
+  const styleSetReleaseId = style.data.safeDiff.after.releaseId;
+
+  const schedule = surface('schedule');
+  const speakers = surface('speaker-roster');
+  const apply = surface('application-form');
+  await publishSurface({
+    context: input.context, key: 'schedule', sourceTemplateRevision: schedule.pin,
+    manifest: schedule.manifest, styleSetReleaseId, formRef: null
+  });
+  await publishSurface({
+    context: input.context, key: 'speakers', sourceTemplateRevision: speakers.pin,
+    manifest: speakers.manifest, styleSetReleaseId, formRef: null
+  });
+  const form = await readFormDetail(input.context, input.forms.main_open);
+  if (form.currentPublishedVersion === null) {
+    throw new TypeError('rich_fixture_release_apply_form_version_missing');
+  }
+  await publishSurface({
+    context: input.context,
+    key: 'apply',
+    sourceTemplateRevision: apply.pin,
+    manifest: apply.manifest,
+    styleSetReleaseId,
+    formRef: { formId: input.forms.main_open, formVersionId: form.currentPublishedVersion.id }
+  });
+}
+
 async function readWorkspaceTeam(context: SeedContext) {
   return requireSuccess(workspaceTeamMembersReadResultSchema.parse(await read(
     context,
@@ -1941,6 +2069,8 @@ export async function createRichEphemeralLiveFixture(input: {
     await mutateVocabulary({ context, handles: vocabulary, key: 'agent_systems', action: 'retire' });
 
     const sessions = await createSessions(context, vocabulary);
+
+    await publishFixture({ context, forms });
 
     const reviewerPrincipal = await createReviewerPrincipal(
       runtime,

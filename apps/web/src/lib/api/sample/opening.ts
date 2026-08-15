@@ -1,5 +1,8 @@
 import type { WorkspaceDataset } from './dataset';
-import { closesInDays, daysAgo, hoursAgo } from './dataset';
+import { closesInDays, dayDeadline, daysAgo, hoursAgo } from './dataset';
+
+/** The event's zone — the authority for every deadline boundary below. */
+const TZ = 'Europe/London';
 import { defaultEventTheme, starterSurfaceTemplates, starterTemplates } from './templates';
 import { baselineFieldRegistry } from './fields';
 
@@ -29,11 +32,17 @@ const opening: WorkspaceDataset = {
 			reviewers: '2',
 			messages: '1'
 		},
+		/* Day three: nothing has a denominator yet, so nothing draws a meter.
+		   An invented ratio would be worse than no bar at all. */
 		stats: [
-			{ label: 'Submissions', value: '9', sub: 'First 3 days of the CFP' },
-			{ label: 'Review round', value: 'Not open', sub: 'One reviewer ready · no deadline yet', tone: 'attention' },
+			{
+				label: 'Review round',
+				value: 'Not open',
+				sub: 'One reviewer ready · no deadline yet',
+				health: 'attention'
+			},
 			{ label: 'Speakers', value: '2', sub: 'Both invitations outstanding' },
-			{ label: 'CFP closes', value: '25 days', sub: 'Sep 4, 23:59 GMT' }
+			{ label: 'Sessions', value: '1', sub: 'The keynote, held on the grid' }
 		],
 		attention: [
 			{
@@ -48,8 +57,9 @@ const opening: WorkspaceDataset = {
 				id: 'callbacks-unverified',
 				severity: 'fyi',
 				area: 'messages',
-				title: 'Email delivery callbacks not verified',
-				detail: 'Mail still sends, but delivery and bounce counts stay blank until the callback URL is verified.',
+				title: 'Nobody can tell you whether your email arrives',
+				detail:
+					'Mail still sends. Until delivery reporting is set up, the delivered and bounced counts stay blank.',
 				action: 'Open email setup'
 			}
 		],
@@ -60,11 +70,10 @@ const opening: WorkspaceDataset = {
 				key: 'collect',
 				label: 'Collect',
 				headline: '9',
-				sub: 'CFP open · closes in 25 days',
+				sub: 'CFP open',
 				state: 'ok',
 				paceTone: 'on',
-				deadlineLabel: 'closes in 25 days',
-				deadlineIso: '2026-09-04T23:59:00-04:00'
+				deadline: { qualifier: 'closes', ...dayDeadline(25, TZ) }
 			},
 			{ key: 'triage', label: 'Triage', headline: '9', sub: 'inbox · nothing set aside yet', state: 'ok' },
 			/* No review plan: absence of measurement is not 0%, so neither a
@@ -75,38 +84,35 @@ const opening: WorkspaceDataset = {
 			{ key: 'schedule', label: 'Schedule', headline: '0/1', sub: 'placed · keynote is the only session', state: 'ok' },
 			{ key: 'comms', label: 'Comms', headline: '1', sub: 'sent · delivery reporting unverified', state: 'ok' }
 		],
-		deadlines: [
-			{ label: 'CFP closes', absolute: 'Sep 4, 23:59 GMT', relative: 'in 25 days', tone: 'ok' },
-			{ label: 'Doors open', absolute: 'Mar 3, 08:30 GMT', relative: 'in 205 days', tone: 'ok' }
-		],
+		deadlines: [{ label: 'CFP closes', ...dayDeadline(25, TZ) }],
 		activity: [
 			{
 				id: 'act-1',
 				actor: 'person',
 				name: 'Elif Aydın',
 				text: 'submitted “Designing Agent Interfaces People Can Actually Trust”',
-				time: '35 min ago'
+				at: hoursAgo(0.6)
 			},
 			{
 				id: 'act-2',
 				actor: 'agent',
 				name: 'Screen run #1',
 				text: 'checked 9 submissions for spam and off-topic pitches — nothing set aside',
-				time: '2 h ago'
+				at: hoursAgo(2)
 			},
-			{ id: 'act-3', actor: 'you', name: 'You', text: 'invited Ravi Chandran to open the summit', time: 'yesterday' },
+			{ id: 'act-3', actor: 'you', name: 'You', text: 'invited Ravi Chandran to open the summit', at: daysAgo(1) },
 			{
 				id: 'act-4',
 				actor: 'you',
 				name: 'You',
 				text: 'sent the CFP announcement to 412 past speakers and subscribers',
-				time: '3 days ago'
+				at: daysAgo(3)
 			},
-			{ id: 'act-5', actor: 'you', name: 'You', text: 'opened the call for proposals', time: '3 days ago' }
+			{ id: 'act-5', actor: 'you', name: 'You', text: 'opened the call for proposals', at: daysAgo(3) }
 		],
 		trays: [
 			{ kind: 'late', label: 'Late submissions', count: 0, href: '/app/submissions?tray=late' },
-			{ kind: 'discarded', label: 'Discarded, recoverable', count: 0, href: '/app/submissions?tray=discarded' },
+			{ kind: 'discarded', label: 'Spam, recoverable', count: 0, href: '/app/submissions?tray=discarded' },
 			{ kind: 'unresolved-import', label: 'Unresolved import items', count: 0 },
 			{ kind: 'bounced', label: 'Bounced recipients', count: 0, href: '/app/messages' }
 		]
@@ -296,7 +302,10 @@ const opening: WorkspaceDataset = {
 		}
 	],
 	submissionTrayTotals: { inbox: 9, 'set-aside': 0, late: 0, discarded: 0 },
+	/* Here every few days while the CFP fills: the week is the diff that
+	   matches how often they actually look. */
 	previousVisit: daysAgo(2),
+	visitHistory: [hoursAgo(3), daysAgo(2), daysAgo(5)],
 
 	reviewPlans: [],
 	/* Reviewers lined up ahead of the plan: both invitations are recorded and
@@ -419,7 +428,7 @@ const opening: WorkspaceDataset = {
 			bounces: [],
 			review: {
 				templateLabel: 'speaker-invite @ revision 1',
-				audienceLabel: 'Invited, not yet contacted (current snapshot)',
+				audienceLabel: 'Invited speakers nobody has written to yet (current snapshot)',
 				binding: 'current_snapshot',
 				recipients: [
 					{ name: 'Ravi Chandran', email: 'ravi@keynote.example', state: 'included', mergeSample: 'Invitation — “Opening Keynote: AI Engineering Beyond the Demo”' },

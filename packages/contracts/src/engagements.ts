@@ -395,12 +395,21 @@ export const engagementRestorePlanSchema = z.strictObject({
 export const engagementSafeDiffSchema = z.strictObject({
   action: z.enum([...engagementResponseActionSchema.options, 'restore']),
   before: engagementHeadSchema.nullable(),
-  after: engagementHeadSchema.nullable()
+  after: engagementHeadSchema.nullable(),
+  collaborations: z.array(z.strictObject({
+    contributor: versionedDefinitionRefSchema,
+    safeDiff: z.json(),
+    representedConsequences: z.array(z.string().min(1).max(160)).max(64)
+  })).max(32).optional()
 });
 
 export const engagementMutationResultSchema = z.strictObject({
   action: z.enum([...engagementResponseActionSchema.options, 'restore']),
-  engagement: engagementHeadSchema
+  engagement: engagementHeadSchema,
+  collaborations: z.array(z.strictObject({
+    contributor: versionedDefinitionRefSchema,
+    result: z.json()
+  })).max(32).optional()
 });
 
 /**

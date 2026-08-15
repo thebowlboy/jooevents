@@ -1,5 +1,8 @@
 import type { WorkspaceDataset } from './dataset';
-import { closesInDays, daysAgo, hoursAgo } from './dataset';
+import { closesInDays, dayDeadline, daysAgo, hoursAgo } from './dataset';
+
+/** The event's zone — the authority for every deadline boundary below. */
+const TZ = 'America/New_York';
 import {
 	defaultEventTheme,
 	starterSurfaceTemplates,
@@ -25,12 +28,15 @@ const crunch: WorkspaceDataset = {
 			dates: 'Oct 12–14, 2026',
 			location: 'New York City',
 			timezone: 'America/New_York',
-			phase: 'CFP closed · Decisions due Thursday',
+			phase: 'CFP closed · decisions waiting to send',
 			today: 'Monday, August 10'
 		},
 		lockedAreas: [],
 		navCounts: {
-			submissions: '16',
+			/* The held population. A discarded proposal is kept and recoverable,
+			   but it is not work waiting in this area, so it is out of the badge
+			   and out of the Overview total that reads the same rows. */
+			submissions: '15',
 			review: '97%',
 			decisions: { value: '4', tone: 'danger' },
 			speakers: '12',
@@ -39,27 +45,53 @@ const crunch: WorkspaceDataset = {
 			schedule: { value: '5', tone: 'danger' },
 			messages: '4'
 		},
+		/* Three fixed slots beside the computed arrival tile: how much judging is
+		   done, how much of the programme is chosen, how much of it is placed.
+		   They used to restate the attention queue — "10 undecided", "3 not yet
+		   notified", "notify by 3 days" were all rows in the panel below — which
+		   spent the top of the screen saying what the next region says better. */
 		stats: [
-			{ label: 'Undecided', value: '10', sub: 'of 16 submissions', tone: 'attention' },
-			{ label: 'Round 2 reviews', value: '97%', sub: '583 of 600 committed' },
-			{ label: 'Accepted', value: '4', sub: '3 accepted not yet notified', tone: 'attention' },
-			{ label: 'Notify by', value: '3 days', sub: 'Aug 13, 23:59 EDT' }
+			{
+				label: 'Round 2 reviews',
+				value: '97%',
+				/* The sub names why the bar is amber. With a meter above it the
+				   sentence stays on the ink ladder, so the words are the only thing
+				   carrying the state — colour ranks it, it never carries it. */
+				sub: '583 of 600 · 17 open with one day left',
+				health: 'attention',
+				progress: { done: 583, required: 600 }
+			},
+			{
+				label: 'Decided',
+				value: '6 of 16',
+				sub: '4 accepted · 4 still waiting to hear',
+				health: 'attention',
+				progress: { done: 6, required: 16 }
+			},
+			{
+				label: 'Placed',
+				value: '18 of 19',
+				sub: 'on the grid · 5 conflicts',
+				health: 'blocked',
+				progress: { done: 18, required: 19 }
+			}
 		],
 		attention: [
 			{
 				id: 'unnotified',
 				severity: 'now',
 				area: 'decisions',
-				title: '4 decisions not yet notified',
-				detail: 'Promised by Aug 13, 23:59 EDT. The oldest acceptance is 9 days old and no notice has gone out.',
-				action: 'Compose notifications',
+				title: '4 speakers have not been told their result',
+				detail:
+					'One of them has been waiting 9 days. Results are never sent automatically — the send is yours to make.',
+				action: 'Send their results',
 				href: '/app/decisions?scope=unnotified'
 			},
 			{
 				id: 'undecided',
 				severity: 'soon',
 				area: 'decisions',
-				title: '10 submissions still undecided',
+				title: '10 submissions are waiting for your answer',
 				detail: 'Scores are in for all of them. Evals & Reliability and Models & Infrastructure have not had a decision pass yet.',
 				action: 'Open decision board'
 			},
@@ -67,9 +99,10 @@ const crunch: WorkspaceDataset = {
 				id: 'conflicts',
 				severity: 'soon',
 				area: 'schedule',
-				title: '5 blocking conflicts on the schedule',
-				detail: 'Three sessions landed on the same Evals Lab block, and Priya Nair is booked in two rooms at once.',
-				action: 'Open conflicts',
+				title: '5 conflicts on the schedule',
+				detail:
+					'Three sessions want the same Evals Lab block, and Priya Nair is booked into two rooms at once.',
+				action: 'Show the conflicts',
 				href: '/app/schedule?panel=conflicts'
 			},
 			{
@@ -77,7 +110,8 @@ const crunch: WorkspaceDataset = {
 				severity: 'soon',
 				area: 'review',
 				title: '17 round 2 reviews still open',
-				detail: 'Due tomorrow, spread across 3 reviewers. Undecided submissions cannot close without them.',
+				detail:
+					'Due tomorrow, spread across 3 reviewers. Their scores are what the undecided submissions are waiting for.',
 				action: 'Nudge reviewers'
 			},
 			{
@@ -93,8 +127,9 @@ const crunch: WorkspaceDataset = {
 				id: 'bounced',
 				severity: 'fyi',
 				area: 'messages',
-				title: '3 emails bounced on the CFP close notice',
-				detail: 'Fix the addresses before the acceptance send goes to the same list.',
+				title: '3 speakers never received the CFP close notice',
+				detail:
+					'Their addresses rejected it, and the same list gets the acceptance emails.',
 				action: 'Open communications'
 			},
 			{
@@ -107,7 +142,7 @@ const crunch: WorkspaceDataset = {
 			}
 		],
 		pipeline: [
-			{ key: 'collect', label: 'Collect', headline: '16', sub: 'CFP closed Aug 1 · 1 late', state: 'ok' },
+			{ key: 'collect', label: 'Collect', headline: '16', sub: 'CFP closed two weeks ago · 1 late', state: 'ok' },
 			{ key: 'triage', label: 'Triage', headline: '13', sub: 'inbox · 1 set aside · 1 late', state: 'ok' },
 			/* 97% reads calm; 17 reviews against a deadline that lands tomorrow
 			   is not. Pace answers to the clock, not to the fraction. */
@@ -115,23 +150,21 @@ const crunch: WorkspaceDataset = {
 				key: 'review',
 				label: 'Review',
 				headline: '97%',
-				sub: '583 of 600 · 17 open, due tomorrow',
+				sub: '17 still open, across 3 reviewers',
 				state: 'attention',
 				progress: { done: 583, required: 600 },
 				paceTone: 'behind',
-				deadlineLabel: 'due tomorrow',
-				deadlineIso: '2026-08-11T23:59:00-04:00'
+				deadline: { qualifier: 'due', ...dayDeadline(1, TZ) }
 			},
 			{
 				key: 'decide',
 				label: 'Decide',
 				headline: '6',
-				sub: '4 accepted · 4 un-notified',
+				sub: '4 accepted · 4 still waiting to hear',
 				state: 'attention',
 				progress: { done: 6, required: 16 },
 				paceTone: 'behind',
-				deadlineLabel: 'notify by Aug 13',
-				deadlineIso: '2026-08-13T23:59:00-04:00'
+				deadline: { qualifier: 'notify by', ...dayDeadline(3, TZ) }
 			},
 			/* No stated task total, so no meter; 18 required tasks are already
 			   overdue for announced speakers. */
@@ -142,27 +175,29 @@ const crunch: WorkspaceDataset = {
 				sub: 'confirmed · 18 tasks overdue',
 				state: 'attention',
 				paceTone: 'behind',
-				deadlineLabel: 'content due Sep 11',
-				deadlineIso: '2026-09-11T23:59:00-04:00'
+				deadline: { qualifier: 'content due', ...dayDeadline(32, TZ) }
 			},
 			{
 				key: 'schedule',
 				label: 'Schedule',
 				headline: '18/19',
-				sub: 'placed · 5 blocking conflicts',
+				sub: 'placed · 5 conflicts',
 				state: 'blocked',
 				progress: { done: 18, required: 19 },
 				paceTone: 'behind',
-				deadlineLabel: 'publish target Aug 28',
-				deadlineIso: '2026-08-28'
+				deadline: { qualifier: 'publish target', ...dayDeadline(18, TZ) }
 			},
 			{ key: 'comms', label: 'Comms', headline: '4', sub: 'waiting to send · 1 sending now', state: 'ok' }
 		],
 		deadlines: [
-			{ label: 'Review round 2 due', absolute: 'Aug 11, 23:59 EDT', relative: 'tomorrow', tone: 'warning' },
-			{ label: 'Acceptance notices due', absolute: 'Aug 13, 23:59 EDT', relative: 'in 3 days', tone: 'warning' },
-			{ label: 'Schedule publish target', absolute: 'Aug 28', relative: 'in 18 days · blocked by 5 conflicts', tone: 'blocked' },
-			{ label: 'Speaker content due', absolute: 'Sep 11, 23:59 EDT', relative: 'in 32 days', tone: 'ok' }
+			{ label: 'Review round 2 due', ...dayDeadline(1, TZ) },
+			{ label: 'Acceptance notices due', ...dayDeadline(3, TZ) },
+			{
+				label: 'Schedule publish target',
+				...dayDeadline(18, TZ),
+				note: '5 conflicts still open'
+			},
+			{ label: 'Speaker content due', ...dayDeadline(32, TZ) }
 		],
 		activity: [
 			{
@@ -170,34 +205,34 @@ const crunch: WorkspaceDataset = {
 				actor: 'person',
 				name: 'Sofia Berg',
 				text: 'committed the last 9 Agents & Tools reviews in round 2',
-				time: '18 min ago'
+				at: hoursAgo(0.3)
 			},
 			{
 				id: 'act-2',
 				actor: 'agent',
 				name: 'Conflict scan',
-				text: 'found 5 blocking conflicts after the Lab import — three sessions share one block',
-				time: '52 min ago'
+				text: 'found 5 conflicts after the Lab import — three sessions want one block',
+				at: hoursAgo(0.9)
 			},
-			{ id: 'act-3', actor: 'you', name: 'You', text: 'accepted 3 submissions in Agents & Tools', time: '2 h ago' },
+			{ id: 'act-3', actor: 'you', name: 'You', text: 'accepted 3 submissions in Agents & Tools', at: hoursAgo(2) },
 			{
 				id: 'act-4',
 				actor: 'person',
 				name: 'Astrid Holm',
 				text: 'withdrew after acceptance — “Designing Agent Interfaces People Can Actually Trust” is unplaced',
-				time: '5 h ago'
+				at: hoursAgo(5)
 			},
 			{
 				id: 'act-5',
 				actor: 'agent',
 				name: 'Decision drafts',
 				text: 'prepared acceptance, waitlist, and decline drafts for review — nothing sent',
-				time: 'yesterday'
+				at: daysAgo(1)
 			}
 		],
 		trays: [
 			{ kind: 'late', label: 'Late submissions', count: 1, href: '/app/submissions?tray=late' },
-			{ kind: 'discarded', label: 'Discarded, recoverable', count: 1, href: '/app/submissions?tray=discarded' },
+			{ kind: 'discarded', label: 'Spam, recoverable', count: 1, href: '/app/submissions?tray=discarded' },
 			{ kind: 'inbound-mail', label: 'Inbound mail review', count: 6 },
 			{ kind: 'appeals', label: 'Appeals awaiting reply', count: 4 },
 			{ kind: 'bounced', label: 'Bounced recipients', count: 3, href: '/app/messages' },
@@ -240,6 +275,10 @@ const crunch: WorkspaceDataset = {
 					source: 'Screen run #8'
 				}
 			],
+			resources: [
+				{ name: 'replay-architecture-draft.pdf', kind: 'slides', detail: 'PDF · 2.8 MB' },
+				{ name: 'boundary-recorder (repository)', kind: 'link', detail: 'codeberg.org' }
+			],
 			reviewAverage: 4.7,
 			reviewCount: 5
 		},
@@ -257,6 +296,9 @@ const crunch: WorkspaceDataset = {
 			decision: 'undecided',
 			notified: false,
 			signals: [],
+			resources: [
+				{ name: 'tool-contract-typing-notes.pdf', kind: 'document', detail: 'PDF · 410 KB' }
+			],
 			reviewAverage: 4.5,
 			reviewCount: 5
 		},
@@ -351,6 +393,9 @@ const crunch: WorkspaceDataset = {
 			decision: 'undecided',
 			notified: false,
 			signals: [],
+			resources: [
+				{ name: 'Conference cut of the internal tech talk', kind: 'video', detail: '18 min · makertube.net' }
+			],
 			reviewAverage: 4.0,
 			reviewCount: 4
 		},
@@ -565,7 +610,10 @@ const crunch: WorkspaceDataset = {
 		}
 	],
 	submissionTrayTotals: { inbox: 13, 'set-aside': 1, late: 1, discarded: 1 },
+	/* Away for nearly two weeks. Neither today nor this week covers what they
+	   missed, so the arrival window widens to the absence itself. */
 	previousVisit: daysAgo(13),
+	visitHistory: [daysAgo(13), daysAgo(14), daysAgo(21)],
 
 	reviewPlans: [
 		{

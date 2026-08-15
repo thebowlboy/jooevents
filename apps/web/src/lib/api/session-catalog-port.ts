@@ -68,7 +68,8 @@ export type SessionCatalogCoreSource =
  * Source-neutral boundary over the canonical Session catalog only.
  *
  * It deliberately carries just what the backend owns today: the catalog read
- * and the inert change draft (`create` | forward-only `transition`), which a
+ * and the inert change draft (`create` | `retarget` | forward-only `transition`
+ * | roster visibility), which a
  * client completes through the generic changeset propose/commit lifecycle.
  * Rosters with resolvable people, submission attachment, per-session proposal
  * counts, breaks, and publication have no canonical owner here; a live source

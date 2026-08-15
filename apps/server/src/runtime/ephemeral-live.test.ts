@@ -36,11 +36,20 @@ import {
   programVocabularySnapshotReadResultSchema,
   publicApplicationDraftResumeSchema,
   releaseDraftOperationResultSchema,
+  releaseOverviewReadResultSchema,
   safeOperationManifestSchema,
   servedPublicFormSchema,
+  servedPublicPresentationSchema,
   servedPublicRosterSchema,
   servedPublicScheduleSchema,
-  submissionDirectEntryDraftOperationResultSchema
+  submissionDirectEntryDraftOperationResultSchema,
+  taskBoardReadResultSchema,
+  taskDraftOperationResultSchema,
+  templateArtifactListOperationResultSchema,
+  templateArtifactMutationDraftOperationResultSchema,
+  templateEditClassifyOperationResultSchema,
+  templateEditModelChoicesOperationResultSchema,
+  templateEditReviseOperationResultSchema
 } from '@jooevents/contracts';
 import { workspaceOverviewReadResultSchema } from '@jooevents/contracts/workspace-overview';
 import {
@@ -201,7 +210,9 @@ async function provisionOwner(
   const response = await runtime.app.request('/api/me/access-context', {
     headers: { cookie: session.cookie, 'x-correlation-id': crypto.randomUUID() }
   });
-  expect(response.status).toBe(200);
+  if (response.status !== 200) {
+    throw new Error(`effect_http_${response.status}:${await response.text()}`);
+  }
   expect(await response.json()).toMatchObject({
     state: 'active',
     workspace: { id: runtime.workspaceId }
@@ -258,8 +269,53 @@ async function effect<Result>(input: {
     }),
     body: JSON.stringify(input.body)
   });
-  expect(response.status).toBe(200);
+  if (response.status !== 200) {
+    throw new Error(`effect_http_${response.status}:${await response.text()}`);
+  }
   return input.parse(await response.json());
+}
+
+async function presentationTemplates(
+  runtime: EphemeralLiveRuntime,
+  session: BrowserSession,
+  surfaceKind: 'schedule' | 'speaker-roster' | 'application-form'
+) {
+  const response = await runtime.app.request('/api/events/current/template-artifacts', {
+    headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+  });
+  const result = templateArtifactListOperationResultSchema.parse(await response.json());
+  if (result.kind !== 'success') throw new Error('Presentation Template read failed.');
+  const theme = result.data.artifacts.find((entry) => entry.current.document.kind === 'theme');
+  const surface = result.data.artifacts.find((entry) =>
+    entry.current.document.kind === 'surface'
+    && entry.current.document.surfaceKind === surfaceKind
+  );
+  if (!theme || theme.current.document.kind !== 'theme'
+      || !surface || surface.current.document.kind !== 'surface') {
+    throw new Error('Presentation Template source missing.');
+  }
+  const pin = (entry: typeof theme) => ({
+    artifactId: entry.head.artifactId,
+    revisionId: entry.current.revisionId,
+    revisionNumber: entry.current.number,
+    digestSha256: entry.current.digestSha256
+  });
+  const hero = surface.current.document.blocks.find((block) => block.type === 'hero');
+  const text = (value: string) => {
+    const normalized = value.normalize('NFC').trim().replace(/\s+/gu, ' ');
+    return normalized.length === 0 ? null : normalized;
+  };
+  return Object.freeze({
+    theme: Object.freeze({ pin: pin(theme), recipe: theme.current.document.recipe }),
+    surface: Object.freeze({
+      pin: pin(surface as typeof theme),
+      manifest: Object.freeze({
+        schemaVersion: 1 as const,
+        heading: hero ? text(hero.title) : null,
+        intro: hero ? text(hero.intro) : null
+      })
+    })
+  });
 }
 
 async function commitDraft(input: {
@@ -599,6 +655,14 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['GET /api/communications/provider-connection']
       },
       {
+        name: 'communication.sender_identity.read', version: 1, effect: 'read',
+        bindings: ['GET /api/communications/sender-identity']
+      },
+      {
+        name: 'communication.sender_identity.update', version: 1, effect: 'commit',
+        bindings: ['POST /api/communications/sender-identity']
+      },
+      {
         name: 'create_message_draft', version: 1, effect: 'draft',
         bindings: ['POST /api/events/current/communications/drafts/create']
       },
@@ -835,6 +899,10 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['POST /api/events/current/releases/drafts']
       },
       {
+        name: 'release.overview.read', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/releases']
+      },
+      {
         name: 'review.assignment.step-back.draft', version: 1, effect: 'draft',
         bindings: ['POST /api/events/current/review/step-back-drafts']
       },
@@ -923,6 +991,38 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['POST /api/events/current/submissions/triage/drafts']
       },
       {
+        name: 'task.board.read', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/tasks']
+      },
+      {
+        name: 'task.mutation.draft', version: 1, effect: 'draft',
+        bindings: ['POST /api/events/current/tasks/drafts']
+      },
+      {
+        name: 'template.artifact.change.draft', version: 1, effect: 'draft',
+        bindings: ['POST /api/events/current/template-artifacts/drafts']
+      },
+      {
+        name: 'template.artifact.get', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/template-artifacts/detail']
+      },
+      {
+        name: 'template.artifact.list', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/template-artifacts']
+      },
+      {
+        name: 'template.edit.classify', version: 1, effect: 'draft',
+        bindings: ['POST /api/events/current/template-edit/classifications']
+      },
+      {
+        name: 'template.edit.model_choices.list', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/template-edit/model-choices']
+      },
+      {
+        name: 'template.edit.revise', version: 1, effect: 'draft',
+        bindings: ['POST /api/events/current/template-edit/revisions']
+      },
+      {
         name: 'workspace_team.invite.draft', version: 1, effect: 'draft',
         bindings: ['POST /api/workspace/team/invitations/drafts']
       },
@@ -953,6 +1053,10 @@ describe('ephemeral live Foundation server composition', () => {
         'event-settings-domain',
         'event-settings-draft-effect',
         'event-settings-changeset-effect',
+        'template-authoring-domain',
+        'template-artifact-draft-effect',
+        'template-artifact-changeset-effect',
+        'template-edit-effect',
         'deadline-domain',
         'deadline-draft-effect',
         'deadline-changeset-effect',
@@ -1413,6 +1517,23 @@ describe('ephemeral live Foundation server composition', () => {
         kind: 'email',
         constraints: { applyVisibility: 'required_visible', removal: 'forbidden' }
       });
+
+    // The authoring baseline is an Event dependency, not a later UI bootstrap:
+    // all ten heads and their first immutable revisions committed in the same
+    // unit of work as the Event and field registry.
+    expect(count(runtime, 'template_artifact_heads')).toBe(10);
+    expect(count(runtime, 'template_artifact_revisions')).toBe(10);
+    expect(runtime.database.sqlite.query<{
+      artifact_kind: string;
+      count: number;
+    }, []>(`
+      SELECT artifact_kind,count(*) AS count FROM template_artifact_heads
+       GROUP BY artifact_kind ORDER BY artifact_kind
+    `).all()).toEqual([
+      { artifact_kind: 'message', count: 6 },
+      { artifact_kind: 'surface', count: 3 },
+      { artifact_kind: 'theme', count: 1 }
+    ]);
 
     const emptyTriageCorrelation = crypto.randomUUID();
     const emptyTriageResponse = await runtime.app.request(
@@ -1950,6 +2071,451 @@ describe('ephemeral live Foundation server composition', () => {
     expect(count(runtime, 'event_settings_changeset_domain_facts')).toBe(1);
     expect(count(runtime, 'event_settings_changeset_outbox_pointers')).toBe(1);
     expect(count(runtime, 'event_settings_changeset_receipt_links')).toBe(2);
+  });
+
+  test('keeps Template artifact drafts inert, commits atomically, and reverts forward', async () => {
+    const runtime = await createEphemeralLiveRuntime({ config });
+    runtimes.push(runtime);
+    const session = await createOwnerSession(runtime);
+    await provisionOwner(runtime, session);
+
+    const noEvent = templateArtifactListOperationResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/template-artifacts', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    expect(noEvent).toMatchObject({
+      kind: 'outcome',
+      outcome: { class: 'conflict', kind: 'template.artifact.event_required' }
+    });
+
+    await createEventThroughChangeset({ runtime, session, key: 'template-artifact-event' });
+    const readArtifacts = async () => templateArtifactListOperationResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/template-artifacts', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    const initial = await readArtifacts();
+    expect(initial).toMatchObject({
+      kind: 'success',
+      data: { schemaVersion: 1 }
+    });
+    if (initial.kind !== 'success') throw new Error('Template artifact read failed.');
+    expect(initial.data.artifacts).toHaveLength(10);
+    expect(initial.data.artifacts.filter(
+      (artifact) => artifact.head.artifactKind === 'message'
+    )).toHaveLength(6);
+    expect(initial.data.artifacts.filter(
+      (artifact) => artifact.head.artifactKind === 'surface'
+    )).toHaveLength(3);
+    expect(initial.data.artifacts.filter(
+      (artifact) => artifact.head.artifactKind === 'theme'
+    )).toHaveLength(1);
+    const original = initial.data.artifacts.find(
+      (artifact) => artifact.head.artifactKind === 'message'
+    );
+    if (!original || original.current.document.kind !== 'message') {
+      throw new Error('Seeded message artifact missing.');
+    }
+    const modelChoices = templateEditModelChoicesOperationResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/template-edit/model-choices', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    expect(modelChoices).toMatchObject({
+      kind: 'success',
+      data: {
+        schemaVersion: 1,
+        choices: [{ id: 'auto' }, { id: 'quick' }, { id: 'thorough' }]
+      }
+    });
+    const instruction = 'Make the subject clearer and friendlier.';
+    const classification = templateEditClassifyOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/template-edit/classifications',
+      key: 'template-edit-classify',
+      body: { artifactId: original.head.artifactId, instruction, modelChoiceId: 'auto' },
+      parse: (value) => value
+    }));
+    expect(classification).toMatchObject({
+      kind: 'success',
+      data: {
+        artifactId: original.head.artifactId,
+        classification: { scope: 'quick', chosenBy: 'auto' }
+      },
+      receipt: { operationName: 'template.edit.classify', operationVersion: 1 }
+    });
+    const modelRevision = templateEditReviseOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/template-edit/revisions',
+      key: 'template-edit-revise',
+      body: { artifactId: original.head.artifactId, instruction, modelChoiceId: 'auto' },
+      parse: (value) => value
+    }));
+    expect(modelRevision).toMatchObject({
+      kind: 'success',
+      data: {
+        artifactId: original.head.artifactId,
+        baseRevisionNumber: 1,
+        classification: { scope: 'quick', chosenBy: 'auto' },
+        usage: { inputTokens: expect.any(Number), outputTokens: expect.any(Number) }
+      },
+      receipt: { operationName: 'template.edit.revise', operationVersion: 1 }
+    });
+    if (modelRevision.kind !== 'success') throw new Error('Template model revision failed.');
+    const beforeApplyingModelDraft = await readArtifacts();
+    if (beforeApplyingModelDraft.kind !== 'success') throw new Error('Template artifact read failed.');
+    expect(beforeApplyingModelDraft.data.artifacts.find(
+      (artifact) => artifact.head.artifactId === original.head.artifactId
+    )?.current).toEqual(original.current);
+    const replacementDocument = modelRevision.data.document;
+    const drafted = templateArtifactMutationDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/template-artifacts/drafts',
+      key: 'template-artifact-replace-draft',
+      body: {
+        action: 'replace',
+        artifactId: original.head.artifactId,
+        expectedRevisionNumber: 1,
+        document: replacementDocument,
+        author: 'organizer',
+        note: 'Clarify the subject line.'
+      },
+      parse: (value) => value
+    }));
+    expect(drafted).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'replace',
+        status: 'draft',
+        safeDiff: {
+          artifactId: original.head.artifactId,
+          artifactKind: 'message',
+          before: { number: 1 },
+          after: { number: 2, document: replacementDocument }
+        }
+      },
+      receipt: { operationName: 'template.artifact.change.draft', operationVersion: 1 }
+    });
+    if (drafted.kind !== 'success') throw new Error('Template artifact draft failed.');
+
+    const beforeCommit = await readArtifacts();
+    if (beforeCommit.kind !== 'success') throw new Error('Template artifact read failed.');
+    expect(beforeCommit.data.artifacts.find(
+      (artifact) => artifact.head.artifactId === original.head.artifactId
+    )?.current).toEqual(original.current);
+
+    await commitDraft({ runtime, session, key: 'template-artifact-replace', draft: drafted });
+    const afterCommit = await readArtifacts();
+    if (afterCommit.kind !== 'success') throw new Error('Template artifact read failed.');
+    const revised = afterCommit.data.artifacts.find(
+      (artifact) => artifact.head.artifactId === original.head.artifactId
+    );
+    expect(revised).toMatchObject({
+      head: { currentRevisionNumber: 2, version: 2 },
+      current: { number: 2, document: replacementDocument }
+    });
+
+    const revertDraft = templateArtifactMutationDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/template-artifacts/drafts',
+      key: 'template-artifact-revert-draft',
+      body: {
+        action: 'revert',
+        artifactId: original.head.artifactId,
+        expectedRevisionNumber: 2,
+        targetRevisionNumber: 1
+      },
+      parse: (value) => value
+    }));
+    expect(revertDraft).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'revert',
+        safeDiff: {
+          before: { number: 2 },
+          after: { number: 3, document: original.current.document },
+          restoredFromRevisionNumber: 1
+        }
+      }
+    });
+    if (revertDraft.kind !== 'success') throw new Error('Template artifact revert draft failed.');
+    await commitDraft({ runtime, session, key: 'template-artifact-revert', draft: revertDraft });
+
+    const reverted = await readArtifacts();
+    if (reverted.kind !== 'success') throw new Error('Template artifact read failed.');
+    expect(reverted.data.artifacts.find(
+      (artifact) => artifact.head.artifactId === original.head.artifactId
+    )).toMatchObject({
+      head: { currentRevisionNumber: 3, version: 3 },
+      current: { number: 3, document: original.current.document },
+      history: [{ number: 1 }, { number: 2 }, { number: 3 }]
+    });
+    expect(count(runtime, 'template_artifact_draft_receipt_links')).toBe(2);
+    expect(count(runtime, 'template_edit_model_receipts')).toBe(2);
+    expect(count(runtime, 'template_artifact_changeset_domain_facts')).toBe(2);
+    expect(count(runtime, 'template_artifact_changeset_outbox_pointers')).toBe(2);
+  });
+
+  test('drafts and atomically commits a task_due definition with exact confirmed-speaker assignments', async () => {
+    const runtime = await createEphemeralLiveRuntime({ config });
+    runtimes.push(runtime);
+    const session = await createOwnerSession(runtime);
+    await provisionOwner(runtime, session);
+    const [speaker, laterSpeaker] = await seedAcceptedSpeakers({
+      runtime,
+      session,
+      key: 'task-loop',
+      speakers: [{
+        key: 'mina',
+        title: 'Reliable organizer workflows',
+        name: 'Mina Tasker',
+        email: 'mina.tasker@example.test'
+      }, {
+        key: 'later',
+        title: 'Compounding task rules',
+        name: 'Lena Later',
+        email: 'lena.later@example.test'
+      }]
+    });
+    if (!speaker || !laterSpeaker) throw new Error('Seeded task speakers missing.');
+    const confirmation = engagementChangeDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/engagements/drafts',
+      key: 'task-loop-confirm-draft',
+      body: {
+        action: 'record_confirmation',
+        engagementId: speaker.engagementId,
+        expectedEngagementVersion: 1,
+        attribution: 'organizer_recorded'
+      },
+      parse: (value) => value
+    }));
+    if (confirmation.kind !== 'success') throw new Error('Task speaker confirmation failed.');
+    await commitDraft({ runtime, session, key: 'task-loop-confirm', draft: confirmation });
+
+    const readBoard = async () => taskBoardReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/tasks', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    const empty = await readBoard();
+    expect(empty).toMatchObject({
+      kind: 'success',
+      data: { catalogVersion: 1, definitions: [], assignments: [] }
+    });
+
+    const draft = taskDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/tasks/drafts',
+      key: 'task-loop-create-draft',
+      body: {
+        action: 'create_definition',
+        name: 'Upload headshot',
+        description: 'Provide a high-resolution event headshot.',
+        completionMode: 'file_upload',
+        required: true,
+        dueOn: '2027-05-31'
+      },
+      parse: (value) => value
+    }));
+    expect(draft).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'create_definition',
+        status: 'draft',
+        safeDiff: {
+          action: 'create_definition',
+          definition: {
+            name: 'Upload headshot',
+            completionMode: 'file_upload',
+            required: true,
+            dueOn: '2027-05-31'
+          },
+          assignments: [{ engagementId: speaker.engagementId }],
+          representedConsequences: [
+            'deadline_changed',
+            'task_definition_created',
+            'task_assignments_materialized'
+          ]
+        }
+      }
+    });
+    if (draft.kind !== 'success') throw new Error('Task draft failed.');
+    const stillEmpty = await readBoard();
+    if (stillEmpty.kind !== 'success') throw new Error('Task board read failed.');
+    expect(stillEmpty.data).toMatchObject({ definitions: [], assignments: [] });
+
+    await commitDraft({ runtime, session, key: 'task-loop-create', draft });
+    const committed = await readBoard();
+    expect(committed).toMatchObject({
+      kind: 'success',
+      data: {
+        catalogVersion: 2,
+        definitions: [{
+          current: {
+            name: 'Upload headshot',
+            completionMode: 'file_upload',
+            required: true,
+            deadline: { kind: 'task_due' }
+          }
+        }],
+        assignments: [{
+          engagementId: speaker.engagementId,
+          personId: speaker.personId,
+          state: 'pending',
+          version: 1,
+          deadline: { kind: 'task_due' }
+        }]
+      }
+    });
+    expect(count(runtime, 'deadlines', "WHERE kind = 'task_due'")).toBe(1);
+    expect(count(runtime, 'task_definition_revisions')).toBe(1);
+    expect(count(runtime, 'task_assignments')).toBe(1);
+    expect(count(runtime, 'task_events', "WHERE kind = 'assigned'")).toBe(1);
+    expect(count(runtime, 'task_changeset_domain_facts')).toBe(1);
+    expect(count(runtime, 'task_changeset_outbox_pointers')).toBe(1);
+
+    const laterConfirmation = engagementChangeDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/engagements/drafts',
+      key: 'task-loop-later-confirm-draft',
+      body: {
+        action: 'record_confirmation',
+        engagementId: laterSpeaker.engagementId,
+        expectedEngagementVersion: 1,
+        attribution: 'organizer_recorded'
+      },
+      parse: (value) => value
+    }));
+    expect(laterConfirmation).toMatchObject({
+      kind: 'success',
+      data: {
+        safeDiff: {
+          action: 'record_confirmation',
+          collaborations: [{
+            contributor: { key: 'task.engagement-confirmation', version: 1 },
+            safeDiff: {
+              action: 'materialize',
+              engagementId: laterSpeaker.engagementId,
+              afterState: 'pending'
+            },
+            representedConsequences: ['task_assignments_materialized']
+          }]
+        }
+      }
+    });
+    if (laterConfirmation.kind !== 'success') throw new Error('Later confirmation draft failed.');
+    await commitDraft({
+      runtime, session, key: 'task-loop-later-confirm', draft: laterConfirmation
+    });
+    const reconciled = await readBoard();
+    if (reconciled.kind !== 'success') throw new Error('Reconciled Task board read failed.');
+    expect(reconciled.data.assignments.map((assignment) => assignment.engagementId).sort())
+      .toEqual([speaker.engagementId, laterSpeaker.engagementId].sort());
+    expect(count(runtime, 'task_assignments')).toBe(2);
+    expect(count(runtime, 'task_events', "WHERE kind = 'assigned'")).toBe(2);
+
+    // The refined reminder act composes Task's opaque engagement audience
+    // through the ordinary Communications authoring -> preview -> send lane.
+    // No address is present in browser input or ordinary SQLite rows.
+    const purposes = organizerCommunicationPurposePageOperationResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/communications/purposes', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (purposes.kind !== 'success') throw new Error('Task reminder purpose read failed.');
+    const reminderPurpose = purposes.data.rows.find(
+      (row) => row.revision.purposeKey === 'task_reminder'
+    )?.revision;
+    if (!reminderPurpose) throw new Error('Task reminder purpose missing.');
+    const storeReminderPayload = async (label: string, payload: unknown) => {
+      const stored = organizerCommunicationAuthoringPayloadOperationResultSchema.parse(await effect({
+        runtime, session,
+        path: '/api/events/current/communications/authoring-payloads',
+        key: `task-reminder-${label}`,
+        body: { payload }, parse: (value) => value
+      }));
+      if (stored.kind !== 'success') throw new Error(`Task reminder ${label} payload failed.`);
+      return stored.data;
+    };
+    const reminderContent = await storeReminderPayload('content', {
+      payloadKind: 'message_content', schemaVersion: 1,
+      value: {
+        kind: 'email/v1', subject: 'Outstanding speaker tasks',
+        body: { kind: 'plain_text/v1', text: 'Please review your outstanding speaker tasks.' }
+      }
+    });
+    const reminderAudience = await storeReminderPayload('audience', {
+      payloadKind: 'message_audience_draft', schemaVersion: 1,
+      value: {
+        schemaVersion: 1, binding: 'current_snapshot', purposeRevision: reminderPurpose,
+        source: {
+          kind: 'explicit_contacts',
+          contactRefIds: [speaker.engagementId, laterSpeaker.engagementId]
+            .map((id) => `task-engagement:${id}`).sort()
+        }
+      }
+    });
+    const reminderDraft = organizerCommunicationDraftMutationOperationResultSchema.parse(await effect({
+      runtime, session, path: '/api/events/current/communications/drafts/create',
+      key: 'task-reminder-draft',
+      body: {
+        channel: 'email', purposeRevision: reminderPurpose,
+        initial: {
+          kind: 'adopted_payload_refs',
+          contentPayload: reminderContent, audiencePayload: reminderAudience
+        }
+      },
+      parse: (value) => value
+    }));
+    if (reminderDraft.kind !== 'success') throw new Error('Task reminder draft failed.');
+    const preparedReminder = organizerPrepareMessagePreviewOperationResultSchema.parse(await (
+      await runtime.app.request(
+        '/api/events/current/communications/previews/prepare'
+          + `?draftId=${encodeURIComponent(reminderDraft.data.draftId)}`
+          + `&expectedDraftVersion=${reminderDraft.data.version}`,
+        { headers: eventHeaders({ session, correlationId: crypto.randomUUID() }) }
+      )
+    ).json());
+    expect(preparedReminder).toMatchObject({ kind: 'success', data: { state: 'prepared' } });
+    const adoptedReminder = organizerPreviewMessageBatchOperationResultSchema.parse(await effect({
+      runtime, session, path: '/api/events/current/communications/previews/adopt',
+      key: 'task-reminder-adopt',
+      body: {
+        draftId: reminderDraft.data.draftId,
+        expectedDraftVersion: reminderDraft.data.version
+      },
+      parse: (value) => value
+    }));
+    expect(adoptedReminder).toMatchObject({
+      kind: 'success', data: { counts: { includedCount: 2, excludedCount: 0 } }
+    });
+    if (adoptedReminder.kind !== 'success') throw new Error('Task reminder adoption failed.');
+    const reminderSend = organizerSendMessagesOperationResultSchema.parse(await effect({
+      runtime, session, path: '/api/events/current/communications/messages/send',
+      key: 'task-reminder-send',
+      body: {
+        audienceSpecId: adoptedReminder.data.identity.audienceSpecId,
+        batchId: 'batch.http.task-reminder',
+        subject: 'Outstanding speaker tasks',
+        audienceLabel: 'Selected speakers with outstanding tasks'
+      },
+      parse: (value) => value
+    }));
+    expect(reminderSend).toMatchObject({
+      kind: 'success', data: { releaseCount: 2, deliveryCount: 2 }
+    });
+    expect(Buffer.from(runtime.database.sqlite.serialize()).includes(
+      Buffer.from('mina.tasker@example.test')
+    )).toBe(false);
   });
 
   test('joins current Event scope to inert Program Vocabulary drafts and keeps read/manage authority distinct', async () => {
@@ -2630,9 +3196,10 @@ describe('ephemeral live Foundation server composition', () => {
       runtime, session, key: 'organizer-communication-event'
     });
     // Created events are seeded with the recorded decision-notification
-    // defaults (BLOCKED-4/BLOCKED-5/BLOCKED-12): one transactional purpose,
-    // two active templates, and the two immutable decision-set audience
-    // recipes. Drafts remain empty — nothing authors messages by default.
+    // defaults (BLOCKED-4/BLOCKED-5/BLOCKED-12): the decision-notification
+    // purpose, the Task reminder purpose, two active decision templates, and
+    // the two immutable decision-set audience recipes. Drafts remain empty —
+    // nothing authors messages by default.
     const read = async <Value>(path: string, schema: { parse(value: unknown): Value }) =>
       schema.parse(await (
         await runtime.app.request(path, {
@@ -2647,14 +3214,12 @@ describe('ephemeral live Foundation server composition', () => {
       kind: 'success',
       data: {
         schemaVersion: 1,
-        rows: [{
-          communicationClass: 'transactional',
-          lifecycle: 'active',
-          revision: { purposeKey: 'decision_notification', revisionNumber: 1 }
-        }],
         page: { hasMore: false }
       }
     });
+    if (purposes.kind !== 'success') throw new Error('purposes_read_failed');
+    expect(purposes.data.rows.map((row) => row.revision.purposeKey).sort())
+      .toEqual(['decision_notification', 'task_reminder']);
     const templates = await read(
       '/api/events/current/communications/templates',
       organizerMessageTemplatePageOperationResultSchema
@@ -5005,6 +5570,7 @@ describe('ephemeral live Foundation server composition', () => {
     // Never-published surface: deny-all.
     await expectDenyAll('/embed/schedule');
 
+    const publicationTemplates = await presentationTemplates(runtime, session, 'schedule');
     const styleDraft = releaseDraftOperationResultSchema.parse(await effect({
       runtime,
       session,
@@ -5012,15 +5578,8 @@ describe('ephemeral live Foundation server composition', () => {
       key: 'publication-loop-style-draft',
       body: {
         action: 'style_set_publish',
-        recipe: {
-          name: 'Default',
-          canvas: '#ffffff',
-          surface: '#f5f5f4',
-          text: '#1c1917',
-          action: '#0f766e',
-          radius: 8,
-          controlHeight: 36
-        },
+        sourceTemplateRevision: publicationTemplates.theme.pin,
+        recipe: publicationTemplates.theme.recipe,
         expectedCurrentStyleSetNumber: null
       },
       parse: (value) => value
@@ -5039,7 +5598,8 @@ describe('ephemeral live Foundation server composition', () => {
       body: {
         action: 'surface_publish',
         kind: 'schedule',
-        manifest: { schemaVersion: 1, heading: 'Programme', intro: null },
+        sourceTemplateRevision: publicationTemplates.surface.pin,
+        manifest: publicationTemplates.surface.manifest,
         styleSetReleaseId,
         formRef: null,
         expectedSurfaceHeadVersion: null
@@ -5051,6 +5611,38 @@ describe('ephemeral live Foundation server composition', () => {
     if (surfaceDiff.action !== 'surface_publish') throw new Error('Surface diff wrong arm.');
     expect(surfaceDiff.after.allowedFrameOrigins).toEqual([]);
     await commitDraft({ runtime, session, key: 'publication-loop-surface', draft: surfaceDraft });
+
+    const presentationResponse = await runtime.app.request('/api/public/schedule/presentation');
+    expect(presentationResponse.status).toBe(200);
+    const presentation = createReadOperationResultSchema(servedPublicPresentationSchema)
+      .parse(await presentationResponse.json());
+    if (presentation.kind !== 'success') throw new Error('Public presentation read failed.');
+    expect(presentation.data).toEqual({
+      schemaVersion: 1,
+      surfaceKind: 'schedule',
+      surfaceReleaseNumber: 1,
+      manifest: publicationTemplates.surface.manifest,
+      styleSetReleaseNumber: 1,
+      style: publicationTemplates.theme.recipe
+    });
+    expect(JSON.stringify(presentation)).not.toContain('releasedByUserId');
+
+    const overviewResponse = await runtime.app.request('/api/events/current/releases', {
+      method: 'GET',
+      headers: eventHeaders({
+        session,
+        correlationId: crypto.randomUUID(),
+        origin: config.baseUrl
+      })
+    });
+    expect(overviewResponse.status).toBe(200);
+    const overview = releaseOverviewReadResultSchema.parse(await overviewResponse.json());
+    if (overview.kind !== 'success') throw new Error('Release overview read failed.');
+    expect(overview.data.surfaceHeads).toHaveLength(1);
+    expect(overview.data.activeSurfaceReleases).toHaveLength(1);
+    expect(overview.data.activeSurfaceReleases[0]).toMatchObject({
+      kind: 'schedule', id: surfaceDiff.after.activeReleaseId
+    });
 
     // Published surface, empty allowlist: still deny-all.
     await expectDenyAll('/embed/schedule');
@@ -5227,6 +5819,7 @@ describe('ephemeral live Foundation server composition', () => {
     expect(preSurfaceMutate.status).toBe(404);
 
     // Publish the apply surface through the mounted release loop.
+    const applicationTemplates = await presentationTemplates(runtime, session, 'application-form');
     const styleDraft = releaseDraftOperationResultSchema.parse(await effect({
       runtime,
       session,
@@ -5234,15 +5827,8 @@ describe('ephemeral live Foundation server composition', () => {
       key: 'apply-loop-style-draft',
       body: {
         action: 'style_set_publish',
-        recipe: {
-          name: 'Apply default',
-          canvas: '#ffffff',
-          surface: '#f5f5f4',
-          text: '#1c1917',
-          action: '#0f766e',
-          radius: 8,
-          controlHeight: 36
-        },
+        sourceTemplateRevision: applicationTemplates.theme.pin,
+        recipe: applicationTemplates.theme.recipe,
         expectedCurrentStyleSetNumber: null
       },
       parse: (value) => value
@@ -5260,7 +5846,8 @@ describe('ephemeral live Foundation server composition', () => {
       body: {
         action: 'surface_publish',
         kind: 'apply',
-        manifest: { schemaVersion: 1, heading: null, intro: null },
+        sourceTemplateRevision: applicationTemplates.surface.pin,
+        manifest: applicationTemplates.surface.manifest,
         styleSetReleaseId,
         formRef: { formId, formVersionId: formVersion1 },
         expectedSurfaceHeadVersion: null

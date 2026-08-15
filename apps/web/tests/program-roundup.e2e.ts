@@ -82,6 +82,11 @@ test('New session commits with an undoable receipt; Create and place… arms the
 	await expect(form.getByRole('button', { name: 'Create and place…' })).toBeVisible();
 
 	await form.getByLabel('Title').fill('Hallway Track: Unconference Hour');
+	// This event has several tracks. Operational creation stays disabled until
+	// the organizer makes the one classification the event cannot infer.
+	await expect(form.getByLabel('Track')).toHaveValue('');
+	await expect(form.getByRole('button', { name: 'Create', exact: true })).toBeDisabled();
+	await form.getByLabel('Track').selectOption({ label: 'Agents & Tools' });
 	await form.getByRole('button', { name: 'Create', exact: true }).click();
 
 	const receipt = page
@@ -100,6 +105,7 @@ test('New session commits with an undoable receipt; Create and place… arms the
 	// the mode is already armed, no re-finding the session in a list.
 	await newButton.click();
 	await form.getByLabel('Title').fill('Sponsor Lightning Reel');
+	await form.getByLabel('Track').selectOption({ label: 'Agents & Tools' });
 	await form.getByRole('button', { name: 'Create and place…' }).click();
 
 	await expect(
@@ -132,6 +138,7 @@ test('the board’s Add row is a second door to the same creation form, leading 
 	await expect(actions.first()).toHaveClass(/ui-button--primary/);
 
 	await form.getByLabel('Title').fill('Community Demo Corner');
+	await form.getByLabel('Track').selectOption({ label: 'Agents & Tools' });
 	await form.getByLabel('Title').press('Enter');
 	await expect(
 		page.getByRole('button', { name: 'Cancel placing “Community Demo Corner”' })
@@ -152,6 +159,47 @@ test('the board’s Add row is a second door to the same creation form, leading 
 	await expect(dialog).toBeHidden();
 	await panelButton.click();
 	await expect(form.getByLabel('Title')).toHaveValue('Half-typed idea');
+});
+
+test('a trackless private sketch must be classified before it can enter or be placed in the program', async ({ page }, testInfo) => {
+	test.skip(testInfo.project.name !== 'desktop', 'one viewport covers the track repair loop');
+
+	await page.goto('/app/schedule');
+	const panel = program(page);
+	await expect(panel).toBeVisible({ timeout: 15000 });
+	await panel.getByRole('button', { name: 'New session…' }).click();
+
+	const create = page.getByRole('dialog', { name: 'New session' });
+	const form = create.locator('#new-session-form');
+	await form.getByLabel('Title').fill('Unclassified private sketch');
+	await form.getByRole('radio', { name: 'Private sketch' }).check();
+	await expect(form.getByLabel('Track')).toHaveValue('');
+	await form.getByRole('button', { name: 'Create', exact: true }).click();
+
+	const row = panel.locator('.pool__row').filter({ hasText: 'Unclassified private sketch' });
+	await expect(row).toBeVisible({ timeout: 10000 });
+	await expect(row.getByRole('button', { name: 'Place “Unclassified private sketch”' }))
+		.toHaveCount(0);
+	await row.getByRole('button', { name: 'Add “Unclassified private sketch” to the program' })
+		.click();
+
+	const repair = page.getByRole('dialog', {
+		name: 'Choose a track for “Unclassified private sketch”'
+	});
+	await expect(repair).toBeVisible();
+	await expect(repair.getByRole('button', { name: 'Save track' })).toBeDisabled();
+	await repair.getByLabel('Track').selectOption({ label: 'Agents & Tools' });
+	await repair.getByRole('button', { name: 'Save track' }).click();
+	await expect(repair).toBeHidden();
+
+	// Repair is its own reviewed change. The sketch remains private until the
+	// organizer makes the original lifecycle change again.
+	await expect(row.locator('.ui-track__label')).toHaveText('Agents & Tools');
+	await row.getByRole('button', { name: 'Add “Unclassified private sketch” to the program' })
+		.click();
+	await expect(group(page, 'Unplaced').getByText('Unclassified private sketch')).toBeVisible({
+		timeout: 10000
+	});
 });
 
 test('?tray= scopes the panel to one tray behind a visible chip, and Clear restores the grouped view', async ({ page }, testInfo) => {

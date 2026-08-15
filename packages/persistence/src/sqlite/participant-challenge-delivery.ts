@@ -7,7 +7,9 @@ import {
 } from '@jooevents/identity-access';
 import {
   buildCommunicationMessageRelease,
-  renderTransactionalEmail
+  composeCommunicationSenderPresentation,
+  renderTransactionalEmail,
+  type MailSenderPresentationResolver
 } from '@jooevents/communications';
 import { outboundEmailDeliveryWorkInputSchema } from '@jooevents/contracts';
 import { canonicalJsonText, encodeCanonicalJson } from '@jooevents/kernel';
@@ -32,12 +34,12 @@ import type { SQLiteCommunicationMessageReleaseStore } from './communications/me
  * thread/message row is written — security mail has no organizer projection.
  */
 
-/** Per-installation sender identity; composed from deployment configuration, never hardcoded. */
-export interface ParticipantChallengeSenderConfig {
-  readonly fromAddress: string;
-  readonly fromDisplayName?: string;
-  readonly replyToAddress?: string;
-}
+/**
+ * Sender presentation is resolved once per send, never frozen at composition:
+ * the from-address is the installation's, while display name and reply-to may
+ * be workspace settings that change between two sends of the same process.
+ */
+export type ParticipantChallengeSenderResolver = MailSenderPresentationResolver;
 
 /**
  * Mirrors the Wave-3 send-lane posture for the not-yet-activated provider:
@@ -142,7 +144,7 @@ export function createSQLiteParticipantChallengeDelivery(input: {
   readonly sqlite: Database;
   readonly releases: SQLiteCommunicationMessageReleaseStore;
   readonly ids: SQLiteParticipantChallengeDeliveryIds;
-  readonly sender: ParticipantChallengeSenderConfig;
+  readonly senderResolver: ParticipantChallengeSenderResolver;
   readonly portalOrigin: string;
   /** Set-once backlink from the challenge row to its delivery evidence. */
   readonly challenges: {
@@ -151,24 +153,6 @@ export function createSQLiteParticipantChallengeDelivery(input: {
   readonly providerRoute?: ParticipantChallengeProviderRoute;
 }): SQLiteParticipantChallengeDelivery {
   const portalOrigin = assertPortalOrigin(input.portalOrigin);
-  const senderPresentation = Object.freeze({
-    fromAddress: input.sender.fromAddress,
-    ...(input.sender.fromDisplayName === undefined
-      ? {}
-      : { fromDisplayName: input.sender.fromDisplayName }),
-    ...(input.sender.replyToAddress === undefined
-      ? {}
-      : { replyToAddress: input.sender.replyToAddress }),
-    senderProfileRevisionId: SENDER_PROFILE_REVISION_ID,
-    senderPresentationContractKey: SENDER_PRESENTATION_CONTRACT_KEY,
-    senderPresentationContractVersion: SENDER_PRESENTATION_CONTRACT_VERSION
-  });
-  const senderPresentationDigestSha256 = digest({
-    schemaVersion: 1,
-    presentation: senderPresentation
-  });
-  const sender = Object.freeze({ ...senderPresentation, senderPresentationDigestSha256 });
-
   return Object.freeze({
     enqueueSignInLink(
       effect: ParticipantSignInLinkDeliveryEffect
@@ -182,6 +166,15 @@ export function createSQLiteParticipantChallengeDelivery(input: {
       ) {
         throw new TypeError('participant_challenge_delivery_effect_invalid');
       }
+      // Resolved here, inside the enqueue: the profile revision id names the
+      // lane's sender profile, and the presentation digest is the exact
+      // per-send pin the ledger and provider revalidation compare.
+      const { sender, senderPresentationDigestSha256 } = composeCommunicationSenderPresentation({
+        resolver: input.senderResolver,
+        senderProfileRevisionId: SENDER_PROFILE_REVISION_ID,
+        senderPresentationContractKey: SENDER_PRESENTATION_CONTRACT_KEY,
+        senderPresentationContractVersion: SENDER_PRESENTATION_CONTRACT_VERSION
+      });
       const message = renderParticipantSignInLinkMessage({
         portalOrigin,
         linkToken: effect.linkToken,

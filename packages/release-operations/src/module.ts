@@ -11,10 +11,12 @@ import {
   createReadOperationResultSchema,
   createSafeSchemaManifestRef,
   releasePublicReadInputSchema,
+  servedPublicPresentationSchema,
   servedPublicRosterSchema,
   servedPublicScheduleSchema,
   structuredOutcomeSchema,
   type SafeSchemaManifestRef,
+  type ServedPublicPresentationDto,
   type ServedPublicRosterDto,
   type ServedPublicScheduleDto,
   type StructuredOutcome,
@@ -47,20 +49,32 @@ export const RELEASE_PUBLIC_SCHEDULE_READ_OPERATION = Object.freeze({
 export const RELEASE_PUBLIC_ROSTER_READ_OPERATION = Object.freeze({
   name: 'roster.public.read', version: 1
 });
+export const RELEASE_PUBLIC_SCHEDULE_PRESENTATION_READ_OPERATION = Object.freeze({
+  name: 'schedule.public.presentation.read', version: 1
+});
+export const RELEASE_PUBLIC_ROSTER_PRESENTATION_READ_OPERATION = Object.freeze({
+  name: 'roster.public.presentation.read', version: 1
+});
+export const RELEASE_PUBLIC_APPLY_PRESENTATION_READ_OPERATION = Object.freeze({
+  name: 'apply.public.presentation.read', version: 1
+});
 
 export const RELEASE_PUBLIC_SCHEDULE_READ_PATH = '/api/public/schedule/current';
 export const RELEASE_PUBLIC_ROSTER_READ_PATH = '/api/public/speakers/current';
+export const RELEASE_PUBLIC_SCHEDULE_PRESENTATION_READ_PATH = '/api/public/schedule/presentation';
+export const RELEASE_PUBLIC_ROSTER_PRESENTATION_READ_PATH = '/api/public/speakers/presentation';
+export const RELEASE_PUBLIC_APPLY_PRESENTATION_READ_PATH = '/api/public/forms/presentation';
 
 export const RELEASE_PUBLIC_OPEN_ACCESS_POLICY = Object.freeze({
   key: 'authority.release.public-open', version: parseContractVersion(1)
 });
 
 /**
- * The two public surface identities the open read scope names. Both are
- * read-only surfaces: each serves the newest published program release, and
- * neither read accepts a parameter that could select anything else.
+ * Public surface identities the open read scope names. Schedule and speakers
+ * serve released program data; all three kinds also serve their immutable
+ * presentation release without accepting a caller-selected release.
  */
-export type ReleasePublicSurface = 'schedule' | 'speakers';
+export type ReleasePublicSurface = 'schedule' | 'speakers' | 'apply';
 
 /**
  * Read surface the public modules consume: served projections only, produced
@@ -77,6 +91,10 @@ export interface ReleasePublicReadPort {
   readServedRoster(
     scope: { readonly workspaceId: WorkspaceId; readonly eventId: EventId }
   ): ServedPublicRosterDto | undefined;
+  readServedPresentation(
+    scope: { readonly workspaceId: WorkspaceId; readonly eventId: EventId },
+    kind: ReleasePublicSurface
+  ): ServedPublicPresentationDto | undefined;
 }
 
 /**
@@ -220,6 +238,18 @@ const readCatalog = Object.freeze({
   ),
   publicRoster: readSchemas(
     'roster.public-read', releasePublicReadInputSchema, servedPublicRosterSchema
+  ),
+  schedulePresentation: readSchemas(
+    'schedule.public-presentation-read', releasePublicReadInputSchema,
+    servedPublicPresentationSchema
+  ),
+  rosterPresentation: readSchemas(
+    'roster.public-presentation-read', releasePublicReadInputSchema,
+    servedPublicPresentationSchema
+  ),
+  applyPresentation: readSchemas(
+    'apply.public-presentation-read', releasePublicReadInputSchema,
+    servedPublicPresentationSchema
   )
 });
 
@@ -372,9 +402,9 @@ function readModule(input: {
 
 /**
  * Registers the open, public-safe served projections of the release domain:
- * the schedule and speakers pages, each serving only the newest published
- * program release. No release yet is the typed `release.not_published`
- * refusal — never an empty page pretending to be published. Both reads follow
+ * schedule and speaker data plus each kind's active immutable presentation.
+ * No release yet is the typed `release.not_published` refusal — never an
+ * empty page pretending to be published. The reads follow
  * the public form-read blueprint: `public_open` evidence, policy-revision
  * gating in the scope source, and a strict served-DTO re-parse that refuses a
  * read port smuggling anything a public page must not carry.
@@ -420,6 +450,42 @@ export function createReleasePublicReadOperationModule(input: {
           releasePublicReadInputSchema.parse(raw ?? {});
           const value = input.read.readServedRoster(scopeRequired(context));
           return value === undefined ? undefined : servedPublicRosterSchema.parse(value);
+        }
+      },
+      {
+        operation: RELEASE_PUBLIC_SCHEDULE_PRESENTATION_READ_OPERATION,
+        key: 'schedulePresentation',
+        path: RELEASE_PUBLIC_SCHEDULE_PRESENTATION_READ_PATH,
+        lane,
+        scope: publicSurfaceScope(input.publicScope, 'schedule'),
+        read: (context, raw) => {
+          releasePublicReadInputSchema.parse(raw ?? {});
+          const value = input.read.readServedPresentation(scopeRequired(context), 'schedule');
+          return value === undefined ? undefined : servedPublicPresentationSchema.parse(value);
+        }
+      },
+      {
+        operation: RELEASE_PUBLIC_ROSTER_PRESENTATION_READ_OPERATION,
+        key: 'rosterPresentation',
+        path: RELEASE_PUBLIC_ROSTER_PRESENTATION_READ_PATH,
+        lane,
+        scope: publicSurfaceScope(input.publicScope, 'speakers'),
+        read: (context, raw) => {
+          releasePublicReadInputSchema.parse(raw ?? {});
+          const value = input.read.readServedPresentation(scopeRequired(context), 'speakers');
+          return value === undefined ? undefined : servedPublicPresentationSchema.parse(value);
+        }
+      },
+      {
+        operation: RELEASE_PUBLIC_APPLY_PRESENTATION_READ_OPERATION,
+        key: 'applyPresentation',
+        path: RELEASE_PUBLIC_APPLY_PRESENTATION_READ_PATH,
+        lane,
+        scope: publicSurfaceScope(input.publicScope, 'apply'),
+        read: (context, raw) => {
+          releasePublicReadInputSchema.parse(raw ?? {});
+          const value = input.read.readServedPresentation(scopeRequired(context), 'apply');
+          return value === undefined ? undefined : servedPublicPresentationSchema.parse(value);
         }
       }
     ]

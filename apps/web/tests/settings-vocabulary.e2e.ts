@@ -11,7 +11,7 @@ async function shownWidth(locator: Locator): Promise<number> {
 test('a used entry shows its usage and explains the delete it will not offer', async ({
 	page
 }, testInfo) => {
-	await page.goto('/app/settings');
+	await page.goto('/app/settings/program');
 	const panel = panelOf(page);
 
 	// The three lists are separately headed and described; the old umbrella note
@@ -54,7 +54,7 @@ test('a used entry shows its usage and explains the delete it will not offer', a
 });
 
 test('an unused entry offers a delete that removes it', async ({ page }) => {
-	await page.goto('/app/settings');
+	await page.goto('/app/settings/program');
 	const panel = panelOf(page);
 	await expect(panel.getByRole('heading', { name: 'Tracks' })).toBeVisible({ timeout: 15000 });
 
@@ -76,7 +76,7 @@ test('an unused entry offers a delete that removes it', async ({ page }) => {
 test('retiring keeps the entry rendering and takes it out of what is offered', async ({
 	page
 }, testInfo) => {
-	await page.goto('/app/settings');
+	await page.goto('/app/settings/program');
 	const panel = panelOf(page);
 	const row = panel.getByRole('listitem').filter({ hasText: 'Evals & Reliability' });
 	await expect(row).toBeVisible({ timeout: 15000 });
@@ -102,7 +102,11 @@ test('retiring keeps the entry rendering and takes it out of what is offered', a
 		await expect(filter.getByRole('option', { name: 'Evals & Reliability' })).toHaveCount(0);
 		await expect(page.getByRole('table')).toContainText('Evals & Reliability');
 
-		await page.getByRole('link', { name: 'Settings', exact: true }).click();
+		// Settings is a group of sections: away from it the group is closed, so
+		// the way back to this one is the group's own disclosure and then Program.
+		const settingsNav = page.getByRole('navigation', { name: 'Settings' });
+		await settingsNav.getByRole('button', { name: 'Expand Settings sections' }).click();
+		await settingsNav.getByRole('link', { name: 'Program', exact: true }).click();
 		await expect(panelOf(page).getByRole('heading', { name: 'Tracks' })).toBeVisible({ timeout: 15000 });
 	}
 

@@ -12,6 +12,7 @@
 	import { applyParams, clearParams, param, paramFlag } from '$lib/features/workspace/url-state.svelte';
 	import { destinationLabel } from '$lib/features/workspace/navigation';
 	import type { CommunicationsPagePort } from '$lib/api/communications-page-port';
+	import { LiveRead, type LiveReadState } from '$lib/api/live-read';
 	import EmailRender from '$lib/features/templates/EmailRender.svelte';
 	import ComposerShell from './ComposerShell.svelte';
 	import type {
@@ -33,11 +34,39 @@
 	let { port }: Props = $props();
 	const api = $derived(port);
 
-	let messages = $state<CommunicationMessage[] | null>(null);
-	let readiness = $state<EmailReadiness | null>(null);
-	let attention = $state<CommunicationAttentionItem[] | null>(null);
+	/**
+	 * The queue's one read. Its three parts arrive together and fail together,
+	 * so they are held as one value beside one failure. A rejection used to
+	 * leave all three null with nothing in flight, and the page renders
+	 * skeleton rows whenever any of them is null — a permanent loading queue.
+	 */
+	type MessageQueue = {
+		readonly messages: CommunicationMessage[];
+		readonly readiness: EmailReadiness;
+		readonly attention: CommunicationAttentionItem[];
+		readonly thread: CommunicationThread | null;
+	};
+	let queueState = $state<LiveReadState<MessageQueue>>({ kind: 'resolving' });
+	const queue = $derived(queueState.kind === 'resolved' ? queueState.value : null);
+	/**
+	 * Ids showing as sending until the re-read lands. The optimistic frame is an
+	 * overlay on the served rows rather than a write into them, so the next
+	 * answer replaces it wholesale instead of being merged with a guess.
+	 */
+	let sendingIds = $state<string[]>([]);
+	const messages = $derived<CommunicationMessage[] | null>(
+		queue
+			? queue.messages.map((message) => ({
+					...message,
+					subject: subjectEdits[message.id] ?? message.subject,
+					...(sendingIds.includes(message.id) ? { state: 'sending' as const } : {})
+				}))
+			: null
+	);
+	const readiness = $derived<EmailReadiness | null>(queue?.readiness ?? null);
+	const attention = $derived<CommunicationAttentionItem[] | null>(queue?.attention ?? null);
 	/** The scoped person's own entries, present only while `?person=` names one. */
-	let thread = $state<CommunicationThread | null>(null);
+	const thread = $derived<CommunicationThread | null>(queue?.thread ?? null);
 	/** Stored templates, read once: the review door and the composer share them. */
 	let templates = $state<MessageTemplate[] | null>(null);
 	let expandedId = $state<string | null>(null);
@@ -115,20 +144,35 @@
 	/** The person the address scopes history to; empty means the whole event. */
 	const personId = $derived(param('person'));
 
-	async function load() {
-		refreshing = true;
-		try {
+	const queueRead = new LiveRead<MessageQueue>({
+		read: async () => {
 			const person = personId;
-			const [list, delivery, queue, personThread] = await Promise.all([
+			const [list, delivery, waiting, personThread] = await Promise.all([
 				api.communications.list(),
 				api.communications.readiness(),
 				api.communications.attention(),
 				person ? api.communications.thread(person) : Promise.resolve(null)
 			]);
-			messages = rows(list);
-			readiness = delivery;
-			attention = queue;
-			thread = personThread;
+			return {
+				messages: rows(list),
+				readiness: delivery,
+				attention: waiting,
+				thread: personThread
+			};
+		},
+		fallback: 'The message queue could not be loaded.',
+		onChange: (state) => (queueState = state)
+	});
+
+	/**
+	 * Every trigger — the first load, a person-scope change, a send, a new draft
+	 * — is one fresh request whose answer supersedes any still open, so a slow
+	 * read of the previous scope can never repaint the queue of the new one.
+	 */
+	async function load() {
+		refreshing = true;
+		try {
+			await queueRead.refresh();
 		} finally {
 			refreshing = false;
 		}
@@ -151,15 +195,33 @@
 	let eventName = $state('Your event');
 	let eventMeta = $state('');
 
+	/*
+	 * Composer furniture, not the queue: the composer already renders a template
+	 * list it is still waiting for, and a preview that says so. A failure here
+	 * leaves those exactly as they read before any answer — which is the honest
+	 * picture — while the queue below keeps its own, louder failure. What must
+	 * not happen is an unhandled rejection escaping into nothing, which is what
+	 * an uncaught `void promise.then(...)` did.
+	 */
 	onMount(() => {
-		void api.templates.list().then((list) => (templates = list.messages));
-		void Promise.all([api.theme.get(), api.workspace.summary()]).then(([brand, summary]) => {
-			theme = brand;
-			if (summary.event) {
-				eventName = summary.event.name;
-				eventMeta = `${summary.event.dates} · ${summary.event.location}`;
+		void api.templates.list().then(
+			(list) => (templates = list.messages),
+			() => (templates = [])
+		);
+		void Promise.all([api.theme.get(), api.workspace.summary()]).then(
+			([brand, summary]) => {
+				theme = brand;
+				if (summary.event) {
+					eventName = summary.event.name;
+					eventMeta = `${summary.event.dates} · ${summary.event.location}`;
+				}
+			},
+			() => {
+				// The event's own name is unknown rather than assumed; the default
+				// stays, and no preview claims a brand it could not read.
+				theme = null;
 			}
-		});
+		);
 	});
 
 	const checks = $derived(
@@ -311,12 +373,10 @@
 		const count = reviewCount;
 		busy = true;
 		subjectEdits = { ...subjectEdits, [id]: reviewSubject };
-		messages =
-			messages?.map((message) =>
-				message.id === id ? { ...message, subject: reviewSubject, state: 'sending' } : message
-			) ?? null;
+		sendingIds = [...sendingIds, id];
 		const outcome = await api.communications.send(id);
 		await load();
+		sendingIds = sendingIds.filter((entry) => entry !== id);
 		if (outcome.ok) {
 			// The receipt is the visible acknowledgement and announces itself, so
 			// the sr-only line stays for the refusal case only.
@@ -790,7 +850,22 @@
 	</section>
 {/snippet}
 
-{#if !messages || !readiness || !attention}
+{#if queueState.kind === 'unavailable'}
+	<!-- The queue answered "no". Skeleton rows would keep claiming messages are
+	     on their way when no request is open. -->
+	<div class="empty" role="alert">
+		<p class="empty__title">The message queue is unavailable</p>
+		<p class="empty__hint">{queueState.message}</p>
+		{#if queueState.retryable}
+			<button
+				type="button"
+				class="ui-button ui-button--secondary ui-button--sm"
+				aria-busy={refreshing || undefined}
+				disabled={refreshing}
+				onclick={() => void load()}>Try again</button>
+		{/if}
+	</div>
+{:else if !messages || !readiness || !attention}
 	<!-- First-load skeletons mirror the resolved composition: the queue with its
 	     severity chip, copy, and action; history rows with their state chip and
 	     four lines; the delivery checks. -->

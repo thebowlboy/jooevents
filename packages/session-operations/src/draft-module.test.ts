@@ -309,7 +309,7 @@ describe('Session changeset draft operation module', () => {
     expect(SESSION_DRAFT_PERMISSION_ID).toBe('schedule.manage');
   });
 
-  test('accepts create, transition, and the roster visibility off-switch from a browser', () => {
+  test('accepts create, transition, retarget repair, and the roster visibility off-switch from a browser', () => {
     expect(sessionAuthorInputSchema.safeParse(createInput).success).toBe(true);
     expect(sessionAuthorInputSchema.safeParse({
       action: 'transition',
@@ -319,6 +319,16 @@ describe('Session changeset draft operation module', () => {
       expectedSessionVersion: 1,
       expectedSessionDigestSha256: 'd'.repeat(64),
       to: 'programmed'
+    }).success).toBe(true);
+    expect(sessionAuthorInputSchema.safeParse({
+      action: 'retarget',
+      expectedCatalogVersion: 1,
+      expectedCatalogDigestSha256: 'a'.repeat(64),
+      sessionId: head.id,
+      expectedSessionVersion: 1,
+      expectedSessionDigestSha256: 'd'.repeat(64),
+      formatId: '019c1df7-86b5-769b-bba4-5f7097bfa301',
+      trackId: '019c1df7-86b5-769b-bba4-5f7097bfa302'
     }).success).toBe(true);
     expect(sessionAuthorInputSchema.safeParse({
       action: 'roster_visibility',
@@ -364,7 +374,7 @@ describe('Session changeset draft operation module', () => {
           class: 'stale_revision', kind: 'session.changed', retryable: false,
           subjects: [{ type: 'session', id: head.id }],
           detail: { code: 'stale_catalog', action: 'create', sessionId: head.id },
-          detailSchemaVersion: 1
+          detailSchemaVersion: 2
         }
       },
       domain: null,

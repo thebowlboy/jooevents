@@ -7,7 +7,14 @@
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
 	import type { FieldContext, FieldGroup, FieldKind, RegistryField } from '$lib/api/types';
 
-	let { fields: fieldPort }: { readonly fields: SettingsPageFieldsPort } = $props();
+	let {
+		fields: fieldPort,
+		id
+	}: {
+		readonly fields: SettingsPageFieldsPort;
+		/** Anchor the page's on-this-page rail addresses this panel by. */
+		readonly id?: string;
+	} = $props();
 
 	/** How each answer kind names itself, on the row chip and in the composer. */
 	const kindLabels: Record<FieldKind, string> = {
@@ -263,7 +270,7 @@
 	}
 </script>
 
-<section class="panel" aria-label="Speaker fields">
+<section class="panel" {id} aria-label="Speaker fields">
 	<header class="panel__head">
 		<div class="panel__title">
 			<h2>Speaker fields</h2>

@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 test('inviting a member explains each role before and after the choice', async ({ page }, testInfo) => {
-	await page.goto('/app/settings');
+	await page.goto('/app/settings/team');
 
 	await page.getByRole('button', { name: 'Invite member' }).click();
 	const dialog = page.getByRole('dialog', { name: 'Invite a member' });
@@ -46,7 +46,7 @@ test('inviting a member explains each role before and after the choice', async (
 test('the role picker is keyboard-operable inside the modal without closing it', async ({ page }, testInfo) => {
 	test.skip(testInfo.project.name !== 'desktop', 'hardware-keyboard path');
 
-	await page.goto('/app/settings');
+	await page.goto('/app/settings/team');
 	await page.getByRole('button', { name: 'Invite member' }).click();
 	const dialog = page.getByRole('dialog', { name: 'Invite a member' });
 

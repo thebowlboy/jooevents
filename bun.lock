@@ -53,6 +53,10 @@
         "@jooevents/session": "workspace:*",
         "@jooevents/session-operations": "workspace:*",
         "@jooevents/submission-triage": "workspace:*",
+        "@jooevents/task-operations": "workspace:*",
+        "@jooevents/tasks": "workspace:*",
+        "@jooevents/template-authoring": "workspace:*",
+        "@jooevents/template-authoring-operations": "workspace:*",
         "@jooevents/workspace-operations": "workspace:*",
         "better-auth": "1.6.26",
         "drizzle-orm": "0.45.2",
@@ -494,6 +498,10 @@
         "@jooevents/session": "workspace:*",
         "@jooevents/session-operations": "workspace:*",
         "@jooevents/submission-triage": "workspace:*",
+        "@jooevents/task-operations": "workspace:*",
+        "@jooevents/tasks": "workspace:*",
+        "@jooevents/template-authoring": "workspace:*",
+        "@jooevents/template-authoring-operations": "workspace:*",
         "drizzle-orm": "0.45.2",
       },
       "devDependencies": {
@@ -678,6 +686,69 @@
         "@jooevents/changeset-operations": "workspace:*",
         "@jooevents/changesets": "workspace:*",
         "@jooevents/contracts": "workspace:*",
+        "@jooevents/identity-access": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/task-operations": {
+      "name": "@jooevents/task-operations",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/application": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/event-operations": "workspace:*",
+        "@jooevents/identity-access": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/tasks": {
+      "name": "@jooevents/tasks",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/changesets": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/deadline": "workspace:*",
+        "@jooevents/engagement": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/template-authoring": {
+      "name": "@jooevents/template-authoring",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/changesets": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "@jooevents/model-adapter": "workspace:*",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/template-authoring-operations": {
+      "name": "@jooevents/template-authoring-operations",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/application": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/event-operations": "workspace:*",
         "@jooevents/identity-access": "workspace:*",
         "@jooevents/kernel": "workspace:*",
         "zod": "4.4.3",
@@ -961,6 +1032,14 @@
     "@jooevents/splash-worker": ["@jooevents/splash-worker@workspace:apps/splash-worker"],
 
     "@jooevents/submission-triage": ["@jooevents/submission-triage@workspace:packages/submission-triage"],
+
+    "@jooevents/task-operations": ["@jooevents/task-operations@workspace:packages/task-operations"],
+
+    "@jooevents/tasks": ["@jooevents/tasks@workspace:packages/tasks"],
+
+    "@jooevents/template-authoring": ["@jooevents/template-authoring@workspace:packages/template-authoring"],
+
+    "@jooevents/template-authoring-operations": ["@jooevents/template-authoring-operations@workspace:packages/template-authoring-operations"],
 
     "@jooevents/web": ["@jooevents/web@workspace:apps/web"],
 

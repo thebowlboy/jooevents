@@ -89,7 +89,13 @@ describe('AI Engineer demo scenarios', () => {
 
 	test('direct demo counts resolve to the same fixture rows as their destinations', () => {
 		for (const scenario of aieScenarios) {
-			expect(navNumber(scenario.summary.navCounts.submissions!)).toBe(scenario.submissions.length);
+			// The badge counts what the area still has to work through, so a
+			// discarded row — kept, recoverable, and nobody's task — is out of it.
+			// The Overview's arrival total reads the same population, which is why
+			// the two agree on screen instead of differing by the discard tray.
+			expect(navNumber(scenario.summary.navCounts.submissions!)).toBe(
+				scenario.submissions.filter((submission) => submission.tray !== 'discarded').length
+			);
 			expect(navNumber(scenario.summary.navCounts.speakers!)).toBe(scenario.speakers.length);
 
 			for (const tray of trayKeys) {

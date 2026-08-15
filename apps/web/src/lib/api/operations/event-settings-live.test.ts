@@ -22,6 +22,10 @@ import {
 	type EventSettingsRequester
 } from './event-settings-live';
 
+/** Reads an expectation with ordinary spaces against the real non-breaking bytes. */
+const span = (text: string): string =>
+	text.replaceAll(' ', '\u00a0').replace(/(\d)\u2013(\d)/gu, '$1\u2060\u2013\u2060$2');
+
 const id = (value: number) =>
 	`00000000-0000-4000-8000-${value.toString(16).padStart(12, '0')}`;
 const digest = (seed: string) => seed.repeat(64);
@@ -343,7 +347,7 @@ describe('pure-live Event Settings operation client', () => {
 				dayStart: before.dayStart,
 				dayEnd: before.dayEnd,
 				slotMinutes: before.slotMinutes,
-				dates: 'Mar 18–20, 2027'
+				dates: span('18–20 Mar 2027')
 			},
 			correlationId
 		});
@@ -361,7 +365,7 @@ describe('pure-live Event Settings operation client', () => {
 					name: after.name,
 					location: after.location,
 					eventVersion: 5,
-					dates: 'Mar 18–21, 2027'
+					dates: span('18–21 Mar 2027')
 				},
 				safeDiff
 			},

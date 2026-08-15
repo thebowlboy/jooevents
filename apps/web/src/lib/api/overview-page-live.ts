@@ -6,6 +6,7 @@ import type {
 } from '@jooevents/contracts/workspace-overview';
 import type { EventProgramPort } from './event-program/port';
 import type { WorkspaceOverviewPort } from './operations/workspace-overview-live';
+import { formatDateRange } from '@jooevents/contracts';
 import type {
 	ActivityItem,
 	AreaKey,
@@ -74,9 +75,10 @@ function eventInfo(projection: WorkspaceOverviewProjection['event']): EventInfo 
 	return {
 		id: projection.event.id,
 		name: projection.event.name,
-		dates: projection.event.startDate === projection.event.endDate
-			? projection.event.startDate
-			: `${projection.event.startDate} – ${projection.event.endDate}`,
+		// Through the one date vocabulary, not assembled here: this used to join
+		// two raw ISO dates with a dash, so a live workspace showed
+		// `2027-03-18 – 2027-03-20` beside a sample one showing `18–20 Mar 2027`.
+		dates: formatDateRange(projection.event.startDate, projection.event.endDate),
 		location: '',
 		timezone: projection.event.timezone,
 		phase: '',
@@ -136,17 +138,6 @@ function unavailableStages(): OverviewPipelineStage[] {
 	}));
 }
 
-function elapsedLabel(occurredAt: string, nowMs: number): string {
-	const elapsed = Math.max(0, nowMs - Date.parse(occurredAt));
-	const minutes = Math.floor(elapsed / 60_000);
-	if (minutes < 1) return 'just now';
-	if (minutes < 60) return `${minutes} min ago`;
-	const hours = Math.floor(minutes / 60);
-	if (hours < 24) return `${hours} hr ago`;
-	const days = Math.floor(hours / 24);
-	return days === 1 ? '1 day ago' : `${days} days ago`;
-}
-
 function activityText(thread: WorkspaceOverviewHistoryThread): string {
 	const subject = domainLabel[thread.domain];
 	if (thread.root.kind === 'operation') return `recorded activity in ${subject}`;
@@ -158,10 +149,7 @@ function activityText(thread: WorkspaceOverviewHistoryThread): string {
 	}
 }
 
-function historyActivity(
-	threads: readonly WorkspaceOverviewHistoryThread[],
-	nowMs: number
-): ActivityItem[] {
+function historyActivity(threads: readonly WorkspaceOverviewHistoryThread[]): ActivityItem[] {
 	return threads.map((thread) => {
 		const primaryActor = thread.actors[0] ?? 'system';
 		return {
@@ -169,7 +157,10 @@ function historyActivity(
 			actor: thread.actors.includes('agent') ? 'agent' as const : 'person' as const,
 			name: thread.actors.length === 1 ? actorLabel[primaryActor] : 'Workspace collaborators',
 			text: activityText(thread),
-			time: elapsedLabel(thread.lastOccurredAt, nowMs)
+			// The instant, not a rendering of it. This port used to spell its own
+			// distance vocabulary — `8 min ago`, `6 hr ago` — a seventeenth local
+			// formatter beside the one the sample feed and the portal already use.
+			at: thread.lastOccurredAt
 		};
 	});
 }
@@ -180,13 +171,17 @@ function lockedAreas(projection: WorkspaceOverviewProjection): AreaKey[] {
 		.map((entry) => entry.area as AreaKey);
 }
 
-function mapLiveSummary(projection: WorkspaceOverviewProjection, nowMs: number): OverviewPageSummary {
+function mapLiveSummary(projection: WorkspaceOverviewProjection): OverviewPageSummary {
 	const submissions = projection.metrics.submissions;
-	const activity = historyActivity(projection.history.threads, nowMs);
+	const activity = historyActivity(projection.history.threads);
 	return {
 		event: eventInfo(projection.event),
 		lockedAreas: lockedAreas(projection),
 		navCounts: submissions.kind === 'exact' ? { submissions: String(submissions.total) } : {},
+		// The arrival window needs per-submission instants and the operator's own
+		// visit rotation; the overview projection carries neither yet, so the tile
+		// stays absent rather than being fabricated from a total.
+		arrivals: null,
 		stats: stats(projection),
 		attention: [],
 		pipeline: unavailableStages(),
@@ -251,11 +246,9 @@ function createFailure(
 export function createLiveOverviewPagePort(input: {
 	readonly overview: WorkspaceOverviewPort;
 	readonly event: EventProgramPort['event'];
-	readonly now?: () => number;
 }): OverviewPagePort {
 	let snapshot: OverviewPageSummary | null = null;
 	let eventSetVersion: number | null = null;
-	const now = input.now ?? Date.now;
 	const port: OverviewPagePort = {
 		source: Object.freeze({ kind: 'live' as const }),
 		snapshot: () => snapshot,
@@ -263,7 +256,7 @@ export function createLiveOverviewPagePort(input: {
 			const result = await input.overview.read(options);
 			if (result.kind !== 'success') return readUnavailable(result);
 			eventSetVersion = result.data.event.eventSetVersion;
-			snapshot = mapLiveSummary(result.data, now());
+			snapshot = mapLiveSummary(result.data);
 			return { kind: 'success' as const, data: snapshot };
 		},
 		async createEvent(event) {

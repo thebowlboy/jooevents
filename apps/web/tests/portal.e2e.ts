@@ -30,7 +30,7 @@ test('the home surface names the event, the deadline, and only what is waiting',
 	await expect(page.locator('header.bar')).not.toContainText('AI Engineer NYC 2026');
 	// Both halves of a deadline: an instant with its timezone, and the distance.
 	const deadline = page.locator('.event__call');
-	await expect(deadline).toContainText('call for speakers closed Jun 30, 23:59 EDT —');
+	await expect(deadline).toContainText('call for speakers closed Tue 30 Jun 2026 · 23:59 EDT —');
 	// The sentence is about proposals only, so it cannot contradict the late task
 	// directly below it that still accepts work.
 	await expect(deadline).toContainText('No new proposals, and no changes to the ones you sent.');

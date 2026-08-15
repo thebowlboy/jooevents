@@ -2,10 +2,9 @@
  * Fixed transactional email layout shared by the security/sign-in lanes: one
  * hidden preheader, a heading, intro paragraphs, one bulletproof button, the
  * naked short link for copy-paste, small print, and a quiet host footer. The
- * output is deliberately self-contained — no images, no scripts, no external
- * references of any kind, all styles inline — with a neutral palette that
- * stays legible when a client inverts colors, and a text body that mirrors
- * the same content in the same order for text-only clients.
+ * output uses one explicitly supplied brand image and no other passive remote
+ * content, no scripts, and no stylesheets. All styles stay inline, while the
+ * text body mirrors the same content in the same order for text-only clients.
  */
 
 const MAXIMUM_LINE_LENGTH = 1_000;
@@ -24,8 +23,28 @@ const CARD_BORDER = '#d8dce2';
 const PRIMARY_TEXT = '#232936';
 const SECONDARY_TEXT = '#5c6470';
 const FOOTER_TEXT = '#7a828d';
-const BUTTON_BACKGROUND = '#232936';
-const BUTTON_TEXT = '#f5f7fa';
+export interface TransactionalEmailBrand {
+  /** Six-digit email-safe color. The renderer derives accessible button ink. */
+  readonly actionColor: string;
+  /** Omit the image until an approved, stable public asset is available. */
+  readonly logo?: {
+    readonly url: string;
+    readonly alt: string;
+    readonly width: number;
+    readonly height: number;
+  };
+}
+
+/** Product baseline used until a lane supplies the event's current brand. */
+export const JOOEVENTS_TRANSACTIONAL_EMAIL_BRAND: TransactionalEmailBrand = Object.freeze({
+  actionColor: '#b05a4f',
+  logo: Object.freeze({
+    url: 'https://jooevents.com/assets/jooevents-wordmark.png',
+    alt: 'JooEvents',
+    width: 136,
+    height: 24
+  })
+});
 
 export interface TransactionalEmailInput {
   readonly subject: string;
@@ -37,6 +56,8 @@ export interface TransactionalEmailInput {
   readonly smallPrint: readonly string[];
   readonly siteUrl: string;
   readonly productName: string;
+  /** Defaults to the approved JooEvents email identity. */
+  readonly brand?: TransactionalEmailBrand;
 }
 
 export interface RenderedTransactionalEmail {
@@ -90,6 +111,40 @@ function escapeHtml(value: string): string {
     .replaceAll("'", '&#39;');
 }
 
+function assertColor(value: string): string {
+  if (!/^#[0-9a-f]{6}$/u.test(value)) {
+    throw new TypeError('transactional_email_brand_invalid');
+  }
+  return value;
+}
+
+function assertImageDimension(value: number): number {
+  if (!Number.isInteger(value) || value < 1 || value > 1_024) {
+    throw new TypeError('transactional_email_brand_invalid');
+  }
+  return value;
+}
+
+function relativeLuminance(hex: string): number {
+  const channels = [1, 3, 5].map((offset) => {
+    const value = Number.parseInt(hex.slice(offset, offset + 2), 16) / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * channels[0]! + 0.7152 * channels[1]! + 0.0722 * channels[2]!;
+}
+
+function contrastRatio(first: string, second: string): number {
+  const lighter = Math.max(relativeLuminance(first), relativeLuminance(second));
+  const darker = Math.min(relativeLuminance(first), relativeLuminance(second));
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function buttonTextColor(background: string): '#ffffff' | '#232936' {
+  return contrastRatio(background, '#ffffff') >= contrastRatio(background, '#232936')
+    ? '#ffffff'
+    : '#232936';
+}
+
 export function renderTransactionalEmail(
   input: TransactionalEmailInput
 ): RenderedTransactionalEmail {
@@ -104,6 +159,17 @@ export function renderTransactionalEmail(
   const siteUrl = assertHttpUrl(input.siteUrl);
   const siteHost = assertLine(new URL(siteUrl).host);
   const productName = assertLine(input.productName);
+  const brand = input.brand ?? JOOEVENTS_TRANSACTIONAL_EMAIL_BRAND;
+  const actionColor = assertColor(brand.actionColor);
+  const actionText = buttonTextColor(actionColor);
+  const logo = brand.logo === undefined
+    ? undefined
+    : {
+        url: assertHttpUrl(brand.logo.url),
+        alt: assertLine(brand.logo.alt),
+        width: assertImageDimension(brand.logo.width),
+        height: assertImageDimension(brand.logo.height)
+      };
   const footerLine = `© 2026 ${productName} · ${siteHost}`;
 
   const textBody = [
@@ -149,6 +215,14 @@ export function renderTransactionalEmail(
       // 32px sides keep real content width on small phones; 600px desktop
       // still reads airy.
       + 'border-radius:8px;padding:36px 32px 26px 32px;">',
+    ...(logo === undefined ? [] : [
+      // The identity is deliberately quiet and unlinked: it establishes trust
+      // before the task without competing with the only consequential action.
+      `<div style="margin:0 0 22px 0;line-height:0;"><img src="${escapeHtml(logo.url)}" `
+        + `width="${logo.width}" height="${logo.height}" alt="${escapeHtml(logo.alt)}" `
+        + `style="display:block;width:${logo.width}px;height:${logo.height}px;border:0;outline:none;`
+        + 'text-decoration:none;"></div>'
+    ]),
     `<h1 style="margin:0 0 16px 0;${bodyText(22, 30, PRIMARY_TEXT)}font-weight:600;">`
       + `${escapeHtml(heading)}</h1>`,
     introHtml,
@@ -160,9 +234,9 @@ export function renderTransactionalEmail(
     // table centers it even where auto margins are ignored.
     '<table role="presentation" align="center" cellpadding="0" cellspacing="0" border="0" '
       + 'style="border-collapse:separate;margin:28px auto 16px auto;">',
-    `<tr><td style="background-color:${BUTTON_BACKGROUND};border-radius:6px;">`,
+    `<tr><td style="background-color:${actionColor};border-radius:6px;">`,
     `<a href="${escapeHtml(buttonUrl)}" target="_blank" style="display:inline-block;`
-      + `padding:15px 44px;${bodyText(16, 24, BUTTON_TEXT)}font-weight:600;`
+      + `padding:15px 44px;${bodyText(16, 24, actionText)}font-weight:600;`
       + `text-decoration:none;border-radius:6px;">${escapeHtml(buttonLabel)}</a>`,
     '</td></tr>',
     '</table>',

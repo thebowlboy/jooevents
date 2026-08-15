@@ -201,7 +201,12 @@ export class SQLiteSchedulePlacementRepository implements SchedulePlacementTrans
   ): ProgrammedSessionIdentity | undefined {
     const session = this.readPlaceableSession(scope, sessionId);
     return session?.lifecycle === 'programmed'
-      ? Object.freeze({ scope: session.scope, id: session.id, lifecycle: 'programmed' as const })
+      ? Object.freeze({
+          scope: session.scope,
+          id: session.id,
+          lifecycle: 'programmed' as const,
+          trackId: session.trackId ?? null
+        })
       : undefined;
   }
 

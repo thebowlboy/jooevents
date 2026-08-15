@@ -148,9 +148,11 @@ function draftMatchesRequest(draft: SessionDraftData, request: SessionAuthorInpu
 			&& diff.after.plannedDurationMinutes === request.plannedDurationMinutes
 			&& diff.after.lifecycle === request.lifecycle
 			&& diff.after.programTarget.format.id === request.formatId
+			// A null request means "use the deterministic event default": the
+			// domain preserves null for drafts/track-free events and resolves the
+			// sole active track for operational sessions.
 			&& (request.trackId === null
-				? diff.after.programTarget.track === null
-				: diff.after.programTarget.track?.id === request.trackId);
+				|| diff.after.programTarget.track?.id === request.trackId);
 	}
 	if (request.action === 'roster_visibility') {
 		return diff.before !== null
@@ -166,6 +168,19 @@ function draftMatchesRequest(draft: SessionDraftData, request: SessionAuthorInpu
 					participant.personId === request.personId
 					&& participant.publiclyVisible === request.publiclyVisible
 			);
+	}
+	if (request.action === 'retarget') {
+		return diff.before !== null
+			&& diff.after !== null
+			&& diff.before.id === request.sessionId
+			&& diff.before.version === request.expectedSessionVersion
+			&& diff.before.digestSha256 === request.expectedSessionDigestSha256
+			&& diff.after.id === diff.before.id
+			&& diff.after.version === diff.before.version + 1
+			&& diff.after.lifecycle === diff.before.lifecycle
+			&& diff.after.programTarget.format.id === request.formatId
+			&& (request.trackId === null
+				|| diff.after.programTarget.track?.id === request.trackId);
 	}
 	return diff.before !== null
 		&& diff.after !== null

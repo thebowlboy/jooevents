@@ -260,6 +260,8 @@ describe('workspace overview operation', () => {
     expect(settings.availableCapabilities).toContain('field_registry.restore.draft');
     expect(settings.availableCapabilities).toContain('workspace_team.members.read');
     expect(settings.availableCapabilities).toContain('workspace_team.invite.draft');
+    expect(settings.availableCapabilities).toContain('communication.sender_identity.read');
+    expect(settings.availableCapabilities).toContain('communication.sender_identity.update');
     expect(settings.unavailableCapabilities).toEqual([
       'workspace_team.delivery.activate',
       'workspace_team.session_revocation.activate'

@@ -4,6 +4,7 @@ import { renderTransactionalEmail, type TransactionalEmailInput } from './transa
 const BUTTON_URL = 'https://app.example.test/a/tok1_button';
 const NAKED_LINK = 'https://app.example.test/a/tok1_naked';
 const SITE_URL = 'https://jooevents.com';
+const LOGO_URL = 'https://jooevents.com/assets/jooevents-wordmark.png';
 
 function input(overrides: Partial<TransactionalEmailInput> = {}): TransactionalEmailInput {
   return {
@@ -35,14 +36,15 @@ describe('transactional email rendering', () => {
     expect((htmlBody.match(/<a /g) ?? []).length).toBe(3);
   });
 
-  test('no URL beyond the three declared links, and no external-request vector', () => {
+  test('allows only the declared brand image as passive remote content', () => {
     const { htmlBody } = renderTransactionalEmail(input());
     const urls = htmlBody.match(/https?:\/\/[^\s"'<>]+/g) ?? [];
     for (const url of urls) {
-      expect([BUTTON_URL, NAKED_LINK, SITE_URL]).toContain(url);
+      expect([BUTTON_URL, NAKED_LINK, SITE_URL, LOGO_URL]).toContain(url);
     }
     expect(urls.length).toBeGreaterThan(0);
-    expect(htmlBody).not.toContain('<img');
+    expect((htmlBody.match(/<img /g) ?? []).length).toBe(1);
+    expect(htmlBody).toContain(`<img src="${LOGO_URL}" width="136" height="24" alt="JooEvents"`);
     expect(htmlBody).not.toContain('<script');
     expect(htmlBody).not.toContain('@import');
     expect(htmlBody).not.toContain('url(');
@@ -58,6 +60,34 @@ describe('transactional email rendering', () => {
     const buttonAt = htmlBody.indexOf(`<a href="${BUTTON_URL}"`);
     expect(buttonAt).toBeLessThan(htmlBody.indexOf('works once'));
     expect(buttonAt).toBeLessThan(htmlBody.indexOf('© 2026'));
+  });
+
+  test('places the quiet brand identity before the task and uses the brand action color', () => {
+    const { htmlBody } = renderTransactionalEmail(input());
+    const logoAt = htmlBody.indexOf(`<img src="${LOGO_URL}"`);
+    const headingAt = htmlBody.indexOf('Sign in to JooEvents');
+    const buttonAt = htmlBody.indexOf(`<a href="${BUTTON_URL}"`);
+    expect(logoAt).toBeGreaterThan(0);
+    expect(logoAt).toBeLessThan(headingAt);
+    expect(headingAt).toBeLessThan(buttonAt);
+    expect(htmlBody).toContain('background-color:#b05a4f;border-radius:6px');
+  });
+
+  test('a supplied event brand replaces both identity and action treatment', () => {
+    const { htmlBody } = renderTransactionalEmail(input({
+      productName: 'Northstar Conf',
+      brand: {
+        actionColor: '#214e78',
+        logo: {
+          url: 'https://northstar.example.test/brand/email-logo.png',
+          alt: 'Northstar Conf', width: 120, height: 30
+        }
+      }
+    }));
+    expect(htmlBody).toContain('src="https://northstar.example.test/brand/email-logo.png"');
+    expect(htmlBody).toContain('alt="Northstar Conf"');
+    expect(htmlBody).toContain('background-color:#214e78;border-radius:6px');
+    expect(htmlBody).not.toContain(LOGO_URL);
   });
 
   test('the footer credits the product and links the site host', () => {
@@ -109,6 +139,22 @@ describe('transactional email rendering', () => {
     }
     expect(() => renderTransactionalEmail(input({ siteUrl: 'ftp://jooevents.com' })))
       .toThrow('transactional_email_url_invalid');
+    expect(() => renderTransactionalEmail(input({
+      brand: { actionColor: '#b05a4f', logo: {
+        url: 'data:image/png;base64,nope', alt: 'JooEvents', width: 136, height: 24
+      } }
+    }))).toThrow('transactional_email_url_invalid');
+  });
+
+  test('refuses malformed brand colors and image geometry', () => {
+    expect(() => renderTransactionalEmail(input({
+      brand: { actionColor: 'black' }
+    }))).toThrow('transactional_email_brand_invalid');
+    expect(() => renderTransactionalEmail(input({
+      brand: { actionColor: '#b05a4f', logo: {
+        url: LOGO_URL, alt: 'JooEvents', width: 0, height: 24
+      } }
+    }))).toThrow('transactional_email_brand_invalid');
   });
 
   test('refuses empty and control-character text lines', () => {
@@ -155,5 +201,3 @@ test('the action centers with a thumb-sized target and the naked link centered b
   // The copy-paste link centers with the button as one action unit.
   expect(htmlBody).toMatch(/text-align:center;[^"]*word-break:break-all/);
 });
-
-

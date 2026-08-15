@@ -24,6 +24,14 @@ export function createSampleSubmissionsPagePort(api: WorkspaceApi): SubmissionsP
 			standings: (submissionIds: readonly string[]) => api.review.standings([...submissionIds]),
 			round: api.review.roundStatus
 		}),
+		arrivals: Object.freeze({
+			async pulse() {
+				const summary = await api.workspace.summary();
+				const timezone = summary.event?.timezone;
+				if (!summary.arrivals || !timezone) return null;
+				return Object.freeze({ arrivals: summary.arrivals, timezone });
+			}
+		}),
 		visits: Object.freeze({
 			previous: () => api.visits.previous('submissions')
 		}),

@@ -3,6 +3,7 @@
 	import { ArrowLeft, Check, CodeXml, Copy, ExternalLink, Frame, Globe } from 'lucide-svelte';
 	import { Button, CopyValue, Switch, writeToClipboard } from '$lib/ui';
 	import type { EmbedsPagePort } from '$lib/api/embeds-page-port';
+	import { describePortFailure, type PortFailureView } from '$lib/api/port-failure';
 	import { applyParams, clearParams, param, paramIn } from '$lib/features/workspace/url-state.svelte';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
@@ -69,8 +70,38 @@
 	/** Whether the hosted pages ask to be indexed. Null until the setting is read. */
 	let indexing = $state<boolean | null>(null);
 	let indexingBusy = $state(false);
+	let indexingEditable = $state(true);
+	let indexingReason = $state('');
+
+	/**
+	 * The page's read, with its failure kept beside its value. A rejection left
+	 * `targets` null and nothing in flight, and the picker skeletons on exactly
+	 * that condition — so an unreachable read was a permanent "loading".
+	 */
+	let loadFailure = $state<PortFailureView | null>(null);
+	let loadTicket = 0;
 
 	async function load() {
+		const ticket = (loadTicket += 1);
+		try {
+			await readAll(ticket);
+		} catch (error) {
+			if (ticket !== loadTicket) return;
+			loadFailure = describePortFailure(error, 'The embeddable pages could not be loaded.');
+		}
+	}
+
+	let retrying = $state(false);
+	async function retry() {
+		retrying = true;
+		try {
+			await load();
+		} finally {
+			retrying = false;
+		}
+	}
+
+	async function readAll(ticket: number) {
 		const [list, people, library, brand, summary, settings] = await Promise.all([
 			api.embeds.targets(),
 			api.embeds.speakerTargets(),
@@ -79,11 +110,16 @@
 			api.workspace.summary(),
 			api.settings.get()
 		]);
+		// Newest wins: a superseded read never installs its answer.
+		if (ticket !== loadTicket) return;
 		targets = list;
 		speakerTargets = people;
 		surfaces = library.surfaces;
 		theme = brand;
 		indexing = settings?.publicIndexing === true;
+		indexingEditable = settings?.publicIndexingEditable !== false;
+		indexingReason = settings?.publicIndexingReason ?? '';
+		loadFailure = null;
 		if (summary.event) {
 			eventName = summary.event.name;
 			eventMeta = `${summary.event.dates} · ${summary.event.location}`;
@@ -97,7 +133,7 @@
 	 * product and hard to undo on the open web.
 	 */
 	async function setIndexing(next: boolean) {
-		if (indexingBusy) return;
+		if (indexingBusy || !indexingEditable) return;
 		indexingBusy = true;
 		const before = indexing === true;
 		await api.settings.update({ publicIndexing: next });
@@ -144,6 +180,7 @@
 	let allowedOrigins = $state<string[]>([]);
 	let originDraft = $state('');
 	let originError = $state('');
+	let originBusy = $state(false);
 	let copied = $state('');
 
 	// A different embed is a different set of choices; opening one starts from
@@ -156,7 +193,7 @@
 		align = 'start';
 		styleMode = 'event';
 		delivery = 'inline';
-		allowedOrigins = [];
+		allowedOrigins = target ? [...target.allowedOrigins] : [];
 		originDraft = '';
 		originError = '';
 		copied = '';
@@ -198,22 +235,56 @@
 	const refusals = $derived(spec ? specRefusals(spec, allowedOrigins) : []);
 	const needsOrigins = $derived(target ? bindsOriginAllowlist({ kind: target.kind }) : false);
 
-	function addOrigin(event: SubmitEvent) {
+	async function saveAllowedOrigins(next: string[]): Promise<boolean> {
+		if (!target || originBusy) return false;
+		originBusy = true;
+		try {
+			const result = await api.embeds.setAllowedOrigins(target.kind, next);
+			if (!result.ok) {
+				originError = result.reason;
+				return false;
+			}
+			allowedOrigins = next;
+			return true;
+		} catch (error) {
+			originError = describePortFailure(error, 'The allowed sites could not be saved.').message;
+			return false;
+		} finally {
+			originBusy = false;
+		}
+	}
+
+	async function addOrigin(event: SubmitEvent) {
 		event.preventDefault();
 		const normalized = normalizeOrigin(originDraft);
 		if (normalized.kind !== 'normalized') {
 			originError = originRefusalCopy(normalized.code);
 			return;
 		}
+		if (allowedOrigins.includes(normalized.origin)) {
+			originError = '';
+			originDraft = '';
+			return;
+		}
+		const before = [...allowedOrigins];
+		const next = [...allowedOrigins, normalized.origin].sort();
+		if (!(await saveAllowedOrigins(next))) return;
 		originError = '';
 		originDraft = '';
-		if (!allowedOrigins.includes(normalized.origin)) {
-			allowedOrigins = [...allowedOrigins, normalized.origin];
-		}
+		recordAction({
+			area: 'embeds', label: `Allowed ${normalized.origin} to host this embed`,
+			undo: async () => { await saveAllowedOrigins(before); }
+		});
 	}
 
-	function removeOrigin(value: string) {
-		allowedOrigins = allowedOrigins.filter((entry) => entry !== value);
+	async function removeOrigin(value: string) {
+		const before = [...allowedOrigins];
+		const next = allowedOrigins.filter((entry) => entry !== value);
+		if (!(await saveAllowedOrigins(next))) return;
+		recordAction({
+			area: 'embeds', label: `Stopped allowing ${value} to host this embed`,
+			undo: async () => { await saveAllowedOrigins(before); }
+		});
 	}
 
 	// -----------------------------------------------------------------------
@@ -258,10 +329,35 @@
 	// What each preview needs, loaded when a surface of that kind is first
 	// opened and kept for the session.
 
+	/**
+	 * What a preview could not read. Only one preview kind is open at a time, so
+	 * one failure cell states it. Without this the preview skeleton was the only
+	 * thing a rejected read could produce, permanently.
+	 */
+	let previewFailure = $state<PortFailureView | null>(null);
+	/** Kinds with a request already open, so a target flipping back never stacks one. */
+	let previewInFlight = $state<string[]>([]);
+
+	function loadPreview(kind: string, read: () => Promise<void>) {
+		if (previewInFlight.includes(kind)) return;
+		previewInFlight = [...previewInFlight, kind];
+		void read()
+			.then(() => {
+				previewFailure = null;
+			})
+			.catch((error: unknown) => {
+				previewFailure = describePortFailure(error, 'This preview could not be loaded.');
+			})
+			.finally(() => {
+				previewInFlight = previewInFlight.filter((entry) => entry !== kind);
+			});
+	}
+
 	let program = $state<{ schedule: ScheduleState; tracks: Track[] } | null>(null);
 	$effect(() => {
 		if (program || target?.kind !== 'schedule') return;
-		void Promise.all([api.schedule.state(), api.vocab.tracks()]).then(([schedule, tracks]) => {
+		loadPreview('schedule', async () => {
+			const [schedule, tracks] = await Promise.all([api.schedule.state(), api.vocab.tracks()]);
 			program = { schedule, tracks };
 		});
 	});
@@ -269,15 +365,21 @@
 	let lineup = $state<{ roster: PublicSpeakerCard[]; categories: SpeakerCategory[] } | null>(null);
 	$effect(() => {
 		if (lineup || target?.kind !== 'speaker-roster') return;
-		void Promise.all([api.speakers.publicRoster(), api.vocab.speakerCategories()]).then(
-			([roster, categories]) => (lineup = { roster, categories })
-		);
+		loadPreview('speaker-roster', async () => {
+			const [roster, categories] = await Promise.all([
+				api.speakers.publicRoster(),
+				api.vocab.speakerCategories()
+			]);
+			lineup = { roster, categories };
+		});
 	});
 
 	let formList = $state<FormSummary[] | null>(null);
 	$effect(() => {
 		if (formList || target?.kind !== 'application-form') return;
-		void api.forms.list().then((list) => (formList = list));
+		loadPreview('application-form', async () => {
+			formList = await api.forms.list();
+		});
 	});
 
 	/** The application surface seen as the one form this embed carries. */
@@ -417,7 +519,21 @@
 	     matched the builder's rail — a `.card` following a `.card` in a two-column
 	     grid — and pushed the whole right column 16px below the left. -->
 	<div class="picker">
-		{#if targets === null}
+		{#if loadFailure}
+			<!-- Answered, and the answer was no: no skeleton claims otherwise. -->
+			<section class="card" role="alert" aria-label="What you can embed">
+				<header class="card__head"><h2 class="card__title">Pages</h2></header>
+				<p class="embeds-failure">{loadFailure.message}</p>
+				{#if loadFailure.retryable}
+					<button
+						type="button"
+						class="ui-button ui-button--secondary ui-button--sm"
+						aria-busy={retrying || undefined}
+						disabled={retrying}
+						onclick={retry}>Try again</button>
+				{/if}
+			</section>
+		{:else if targets === null}
 			<section class="card" aria-label="What you can embed" aria-busy="true">
 			<header class="card__head"><h2 class="card__title">Pages</h2></header>
 			<ul class="picks" aria-hidden="true">
@@ -466,11 +582,13 @@
 				<Switch
 					label="Let search engines find these pages"
 					checked={indexing === true}
-					disabled={indexing === null || indexingBusy}
+					disabled={indexing === null || indexingBusy || !indexingEditable}
 					onchange={(next) => void setIndexing(next)} />
 				<p class="findable__line">
 					{#if indexing}
 						These pages ask to be indexed. Anyone searching for your event may find them.
+					{:else if !indexingEditable && indexingReason}
+						{indexingReason}
 					{:else}
 						Off. Your links work exactly the same — they just stay out of search results, which is
 						the right default while a call is being written or a programme is half built.
@@ -608,7 +726,11 @@
 									// place it can be seen before a visitor sees it.
 									delivery === 'frame' ? `block-size:${frameMinHeight(spec)}px;` : ''
 								}`}>
-								{#if !previewReady}
+								{#if previewFailure && !previewReady}
+									<!-- The preview's read answered no; the skeleton would keep
+									     claiming it is still coming. -->
+									<p class="preview-failure" role="alert">{previewFailure.message}</p>
+								{:else if !previewReady}
 									<span class="ui-skeleton sk-preview" aria-hidden="true"></span>
 								{:else if target.kind === 'schedule' && program && surface}
 									<ScheduleSurfaceRender
@@ -763,7 +885,7 @@
 							An embed loads only on sites you name here — that is what keeps another page from
 							passing itself off as the event. The hosted page's own link works everywhere.
 						</p>
-						<form class="origins__form" onsubmit={addOrigin}>
+						<form class="origins__form" onsubmit={(event) => void addOrigin(event)}>
 							<label class="ui-sr-only" for="embed-origin">Website address</label>
 							<input
 								id="embed-origin"
@@ -771,8 +893,9 @@
 								type="text"
 								placeholder="conference.example.org"
 								autocomplete="off"
-								bind:value={originDraft} />
-							<Button type="submit" size="sm" disabled={!originDraft.trim()}>Add</Button>
+								bind:value={originDraft}
+								disabled={originBusy} />
+							<Button type="submit" size="sm" disabled={!originDraft.trim() || originBusy}>Add</Button>
 						</form>
 						{#if originError}<p class="rail__error" role="alert">{originError}</p>{/if}
 						{#if allowedOrigins.length > 0}
@@ -784,7 +907,8 @@
 											variant="ghost"
 											size="sm"
 											aria-label={`Remove ${value}`}
-											onclick={() => removeOrigin(value)}>Remove</Button>
+											disabled={originBusy}
+											onclick={() => void removeOrigin(value)}>Remove</Button>
 									</li>
 								{/each}
 							</ul>
@@ -829,13 +953,12 @@
 						<a href={standaloneUrl(origin, spec)}>the hosted one</a>, so what your visitors see
 						changes when you change it here.
 					</p>
-					<!-- The one honest line about what is and is not live today. -->
-					<!-- What is live and what is not, said exactly. The hosted link above
-					     works today; the embed route the snippet points at does not yet. -->
+					<!-- Targets exist only for an active surface release, so both addresses
+					     named here are live by construction. -->
 					<p class="rail__pending">
-						The page's own address is live now. The embedded route
-						(<code>{new URL(embedUrl(origin, spec)).pathname}</code>) and its loader arrive with
-						the public-surfaces slice — the code is final, the address goes live then.
+						The page and its embedded route
+						(<code>{new URL(embedUrl(origin, spec)).pathname}</code>) are live. Both read the same
+						published release, so there is no second copy to keep in sync.
 					</p>
 				</section>
 			</aside>
@@ -888,6 +1011,19 @@
 		border: 1px solid var(--je-color-border);
 		border-radius: var(--je-radius-surface);
 		padding: var(--je-space-4);
+	}
+
+	.preview-failure {
+		margin: 0;
+		padding: var(--je-space-4);
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-danger);
+	}
+
+	.embeds-failure {
+		margin: 0 0 var(--je-space-3);
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-danger);
 	}
 
 	.picker {

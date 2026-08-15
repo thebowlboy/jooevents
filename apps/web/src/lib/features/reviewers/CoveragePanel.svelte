@@ -13,7 +13,7 @@
 	 * submissions filter there, so those rows make no claim; their applicant
 	 * counts await the submission→target join).
 	 */
-	import type { CoverageRow } from '$lib/api/types';
+	import type { CoverageRow, ReviewerCoverage } from '$lib/api/types';
 
 	let {
 		coverage,
@@ -21,16 +21,22 @@
 		activeCount,
 		invitedCount
 	}: {
-		coverage: CoverageRow[];
+		coverage: ReviewerCoverage;
 		generalists: number;
 		/** Active reviewers on the roster; 0 means nobody has arrived yet. */
 		activeCount: number;
 		invitedCount: number;
 	} = $props();
 
-	const trackRows = $derived(coverage.filter((row) => row.ref.kind === 'track'));
-	const formatRows = $derived(coverage.filter((row) => row.ref.kind === 'format'));
-	const sessionRows = $derived(coverage.filter((row) => row.ref.kind === 'session'));
+	// A composition that cannot count coverage says so in place of the rows. The
+	// panel keeps its heading either way: the reader asked a question, and
+	// "this workspace cannot answer it" is an answer, where an empty panel or a
+	// permanent skeleton is not.
+	const served = $derived<CoverageRow[]>(coverage.kind === 'served' ? coverage.rows : []);
+
+	const trackRows = $derived(served.filter((row) => row.ref.kind === 'track'));
+	const formatRows = $derived(served.filter((row) => row.ref.kind === 'format'));
+	const sessionRows = $derived(served.filter((row) => row.ref.kind === 'session'));
 
 	/** Where the submissions count lands; null renders the count as plain text. */
 	function submissionsHref(row: CoverageRow): string | null {
@@ -87,7 +93,9 @@
 		{/if}
 	</div>
 
-	{#if activeCount === 0}
+	{#if coverage.kind === 'unavailable'}
+		<p class="panel__waiting">{coverage.reason}</p>
+	{:else if activeCount === 0}
 		<!-- One cause shared by every row belongs to the surface, not the rows:
 		     with nobody arrived there is no coverage to enumerate. -->
 		<p class="panel__waiting">
@@ -95,7 +103,7 @@
 			{plural(invitedCount, 'invitation is', 'invitations are')} recorded. Coverage appears as
 			reviewers sign in.
 		</p>
-	{:else if coverage.length === 0}
+	{:else if served.length === 0}
 		<p class="panel__waiting">
 			No tracks, formats, or collecting sessions to cover yet. Coverage appears once the event
 			vocabulary exists.

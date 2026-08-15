@@ -3,4 +3,5 @@ export * from './domain';
 export * from './form-collaboration';
 export * from './model';
 export * from './review-due-collaboration';
+export * from './task-due-collaboration';
 export * from './time';

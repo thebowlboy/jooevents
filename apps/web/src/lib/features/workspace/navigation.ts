@@ -21,6 +21,7 @@ import {
 	Users
 } from 'lucide-svelte';
 import type { AreaKey, NavCounts } from '$lib/api/types';
+import { settingsSections } from '$lib/features/settings/sections';
 
 /** Viewer facts needed to shape navigation, independent of any data source. */
 export type WorkspaceNavigationViewer =
@@ -100,6 +101,29 @@ export const settingsItem: NavItem = {
 	icon: Settings
 };
 
+/**
+ * The Settings item's own destinations. They expand in place beneath it — one
+ * column, never a second — and carry no icons: the group's mark already says
+ * which area these belong to, and a glyph per plain noun would only compete
+ * with it.
+ */
+export interface NavSubItem {
+	readonly key: string;
+	readonly label: string;
+	readonly href: string;
+}
+
+export const settingsSectionItems: readonly NavSubItem[] = settingsSections.map((section) => ({
+	key: section.key,
+	label: section.label,
+	href: section.href
+}));
+
+/*
+ * Sections are deliberately absent here: the destination title names the area a
+ * person is in, and every settings section is Settings. The section names
+ * itself in the rail and in its own panel heading.
+ */
 const allItems = [overviewItem, ...navGroups.flatMap((group) => group.items), settingsItem];
 
 /**

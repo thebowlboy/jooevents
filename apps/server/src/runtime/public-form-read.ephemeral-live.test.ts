@@ -8,7 +8,8 @@ import {
   fieldRegistrySnapshotReadResultSchema,
   releaseDraftOperationResultSchema,
   safeOperationManifestSchema,
-  servedPublicFormSchema
+  servedPublicFormSchema,
+  templateArtifactListOperationResultSchema
 } from '@jooevents/contracts';
 import {
   changesetLifecycleOperationResultSchema
@@ -307,6 +308,31 @@ async function publishApplySurface(
   session: BrowserSession,
   formRef: { readonly formId: string; readonly formVersionId: string }
 ): Promise<void> {
+  const artifactResponse = await runtime.app.request('/api/events/current/template-artifacts', {
+    headers: operatorHeaders({ session })
+  });
+  const artifacts = templateArtifactListOperationResultSchema.parse(await artifactResponse.json());
+  if (artifacts.kind !== 'success') throw new Error('public_read_templates_missing');
+  const theme = artifacts.data.artifacts.find((entry) => entry.current.document.kind === 'theme');
+  const apply = artifacts.data.artifacts.find((entry) =>
+    entry.current.document.kind === 'surface'
+    && entry.current.document.surfaceKind === 'application-form'
+  );
+  if (!theme || theme.current.document.kind !== 'theme'
+      || !apply || apply.current.document.kind !== 'surface') {
+    throw new Error('public_read_presentation_templates_missing');
+  }
+  const pin = (entry: typeof theme) => ({
+    artifactId: entry.head.artifactId,
+    revisionId: entry.current.revisionId,
+    revisionNumber: entry.current.number,
+    digestSha256: entry.current.digestSha256
+  });
+  const hero = apply.current.document.blocks.find((block) => block.type === 'hero');
+  const normalized = (value: string) => {
+    const text = value.normalize('NFC').trim().replace(/\s+/gu, ' ');
+    return text.length === 0 ? null : text;
+  };
   const styleDraft = releaseDraftOperationResultSchema.parse(await effect({
     runtime,
     session,
@@ -314,15 +340,8 @@ async function publishApplySurface(
     key: 'public-read-style-draft',
     body: {
       action: 'style_set_publish',
-      recipe: {
-        name: 'Public read default',
-        canvas: '#ffffff',
-        surface: '#f5f5f4',
-        text: '#1c1917',
-        action: '#0f766e',
-        radius: 8,
-        controlHeight: 36
-      },
+      sourceTemplateRevision: pin(theme),
+      recipe: theme.current.document.recipe,
       expectedCurrentStyleSetNumber: null
     }
   }));
@@ -338,7 +357,12 @@ async function publishApplySurface(
     body: {
       action: 'surface_publish',
       kind: 'apply',
-      manifest: { schemaVersion: 1, heading: null, intro: null },
+      sourceTemplateRevision: pin(apply as typeof theme),
+      manifest: {
+        schemaVersion: 1,
+        heading: hero ? normalized(hero.title) : null,
+        intro: hero ? normalized(hero.intro) : null
+      },
       styleSetReleaseId: styleDraft.data.safeDiff.after.releaseId,
       formRef,
       expectedSurfaceHeadVersion: null

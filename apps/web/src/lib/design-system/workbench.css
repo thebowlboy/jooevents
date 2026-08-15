@@ -791,6 +791,26 @@
 
   .alert-stack,
   .progress-stack { display: grid; gap: 0.65rem; }
+  /* Declared once on the list, not per row: `max-content` tracks resolve to
+     each row's own content, so four rows sizing their own columns put four
+     badges on four x positions. Subgrid is what makes them one set of tracks.
+     The label track has a zero minimum so the group can narrow to a phone
+     instead of pushing its card sideways. */
+  .meter-stack {
+    display: grid;
+    grid-template-columns: minmax(0, 9rem) minmax(3rem, 1fr) max-content max-content;
+    gap: 0.65rem;
+  }
+  .meter-row {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+    align-items: center;
+    font-size: var(--je-font-size-xs);
+  }
+  .meter-row__label { min-inline-size: 0; }
+  .meter-row__label { color: var(--je-color-text-muted); }
+  .meter-row__digits { font-variant-numeric: tabular-nums; color: var(--je-color-text-muted); }
   .loading-line { display: flex; align-items: center; gap: 0.5rem; color: var(--je-color-text-muted); font-size: var(--je-font-size-xs); }
   .loading-line .ui-spinner { color: var(--je-color-action); }
 

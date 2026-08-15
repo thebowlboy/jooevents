@@ -15,6 +15,11 @@ import {
 } from './reviewers-page-port.live';
 import type { ScheduleState, SessionItem } from './types';
 import type { ProgramFormatView, ProgramTrackView } from './view-models/program-vocabulary';
+import type { WorkspaceTeamSnapshotView } from './view-models/workspace-team';
+import type {
+	WorkspaceTeamSettingsPort,
+	WorkspaceTeamSettingsReadResult
+} from './workspace-team-settings-adapter';
 
 const id = (value: number) =>
 	`00000000-0000-4000-8000-${value.toString(16).padStart(12, '0')}`;
@@ -61,11 +66,11 @@ function rosterSnapshot(): ReviewerRosterSnapshotDto {
 			recordVersion: 2,
 			projectionVersion: 3,
 			status: 'active',
-			accessSubject: membership(id(11)),
+			accessSubject: reservation(id(12)),
 			authority: {
 				schemaVersion: 1,
 				scope,
-				rosterSubject: membership(id(11)),
+				rosterSubject: reservation(id(12)),
 				currentSubject: membership(id(11)),
 				state: 'active',
 				version: 5,
@@ -279,6 +284,56 @@ function emptyVocabulary(): Pick<ProgramVocabularySettingsPort, 'source' | 'trac
 	return { source: { kind: 'live' }, tracks: async () => [], formats: async () => [] };
 }
 
+function teamSnapshot(): WorkspaceTeamSnapshotView {
+	const reviewerRole = {
+		key: 'speaker_reviewer' as const,
+		name: 'Speaker Reviewer' as const,
+		version: 1 as const
+	};
+	return {
+		schemaVersion: 1,
+		version: 3,
+		digestSha256: digest('f'),
+		roles: [reviewerRole],
+		members: [{
+			id: id(11),
+			kind: 'member',
+			name: 'Ada Bell',
+			email: 'ada@example.test',
+			role: reviewerRole,
+			version: 2,
+			hasAdditionalAccess: false,
+			subject: { kind: 'member', membershipId: id(11), version: 2 },
+			status: 'active',
+			userId: id(13)
+		}, {
+			id: id(21),
+			kind: 'invitation',
+			name: 'Pending invitation',
+			email: 'ben@example.test',
+			role: reviewerRole,
+			version: 1,
+			hasAdditionalAccess: false,
+			subject: { kind: 'invitation', reservationId: id(21), version: 1 },
+			status: 'invited',
+			delivery: 'awaiting_activation'
+		}]
+	};
+}
+
+function teamPort(
+	result: WorkspaceTeamSettingsReadResult = {
+		kind: 'success',
+		data: teamSnapshot(),
+		correlationId
+	}
+): Pick<WorkspaceTeamSettingsPort, 'source' | 'members'> {
+	return {
+		source: { kind: 'live' },
+		members: async () => result
+	};
+}
+
 function session(state: SessionItem['state']): SessionItem {
 	return {
 		id: id(70),
@@ -310,12 +365,14 @@ function scheduleWith(sessions: SessionItem[]): { state(): Promise<ScheduleState
 function pagePort(overrides: {
 	readonly schedule?: { state(): Promise<ScheduleState> };
 	readonly review?: ReviewCorePort;
+	readonly team?: Pick<WorkspaceTeamSettingsPort, 'source' | 'members'>;
 	readonly vocabulary?: Pick<ProgramVocabularySettingsPort, 'source' | 'tracks' | 'formats'>;
 } = {}) {
 	const roster = rosterPort();
 	const page = createLiveReviewersPagePort({
 		roster: roster.port,
 		review: overrides.review ?? reviewPort(),
+		team: overrides.team ?? teamPort(),
 		vocabulary: overrides.vocabulary ?? vocabulary(),
 		now: () => NOW,
 		...(overrides.schedule ? { schedule: overrides.schedule } : {})
@@ -343,16 +400,25 @@ describe('live tuned Reviewers page port', () => {
 		expect(() => createLiveReviewersPagePort({
 			roster: { ...rosterPort().port, source: sampleSource },
 			review: reviewPort(),
+			team: teamPort(),
 			vocabulary: vocabulary()
 		})).toThrow(new TypeError('live_reviewer_roster_source_required'));
 		expect(() => createLiveReviewersPagePort({
 			roster: rosterPort().port,
 			review: { ...reviewPort(), source: sampleSource },
+			team: teamPort(),
 			vocabulary: vocabulary()
 		})).toThrow(new TypeError('live_reviewer_roster_source_required'));
 		expect(() => createLiveReviewersPagePort({
 			roster: rosterPort().port,
 			review: reviewPort(),
+			team: { ...teamPort(), source: sampleSource as never },
+			vocabulary: vocabulary()
+		})).toThrow(new TypeError('live_reviewer_roster_source_required'));
+		expect(() => createLiveReviewersPagePort({
+			roster: rosterPort().port,
+			review: reviewPort(),
+			team: teamPort(),
 			vocabulary: {
 				...vocabulary(),
 				source: { kind: 'sample', label: 'Sample data', resettable: true }
@@ -369,8 +435,9 @@ describe('live tuned Reviewers page port', () => {
 		expect(roster.reviewers).toEqual([{
 			id: adaId,
 			name: 'Ada Bell',
-			// The canonical roster discloses no email address; absence stays absent.
-			email: '',
+			// Joined by the current membership subject, even though the roster was
+			// originally registered against the now-consumed reservation.
+			email: 'ada@example.test',
 			status: 'active',
 			scope: [{ kind: 'track', id: trackId }],
 			// Summed by the one recorded counting module across the non-discarded
@@ -381,8 +448,8 @@ describe('live tuned Reviewers page port', () => {
 			awaitingReassignment: 1
 		}, {
 			id: benId,
-			name: '',
-			email: '',
+			name: 'Pending invitation',
+			email: 'ben@example.test',
 			status: 'invited',
 			scope: [],
 			assigned: 0,
@@ -392,7 +459,6 @@ describe('live tuned Reviewers page port', () => {
 		}, {
 			id: caraId,
 			name: 'Cara Diaz',
-			email: '',
 			status: 'active',
 			scope: [],
 			// Named in no plan across the whole served plan population: true zeros.
@@ -401,13 +467,16 @@ describe('live tuned Reviewers page port', () => {
 			steppedBack: 0,
 			awaitingReassignment: 0
 		}]);
+		// Cara has a roster identity but no matching Team row. Contact absence is
+		// represented by the missing property, never an empty string sentinel.
+		expect('email' in roster.reviewers[2]!).toBe(false);
 		// Revoked members are the tuned roster's removed records.
 		expect(roster.reviewers.some((row) => row.id === danId)).toBe(false);
 		// Active reviewers with no scope; the invited generalist is not counted.
 		expect(roster.generalists).toBe(1);
 		// [] is served only as this proven positive claim: no active track,
 		// format, or collecting-session target exists.
-		expect(roster.coverage).toEqual([]);
+		expect(roster.coverage).toEqual({ kind: 'served', rows: [] });
 	});
 
 	test('refuses load counts from a reviewer-scoped review snapshot instead of zeroing other members', async () => {
@@ -423,23 +492,29 @@ describe('live tuned Reviewers page port', () => {
 		expect(await liveErrorCode(page.reviewers.list())).toBe('review_load_population_partial');
 	});
 
-	test('refuses coverage whenever a target exists or the empty claim is unprovable', async () => {
+	test('declines coverage whenever a target exists or the empty claim is unprovable', async () => {
+		// The reviewed copy itself, pinned: this string is what the panel prints.
+		const declined = {
+			kind: 'unavailable' as const,
+			reason: 'Review coverage is not available in this live workspace yet.'
+		};
+
 		// The same port serves AI/Talk live, so coverage targets exist — and
 		// their required per-target submissions count has no live owner.
 		const withVocab = pagePort({ schedule: scheduleWith([]) });
-		expect(await liveErrorCode(withVocab.page.reviewers.list())).toBe('reviewer_coverage');
+		expect((await withVocab.page.reviewers.list()).coverage).toEqual(declined);
 
 		// No schedule delegate: the collecting-session population is unknowable,
 		// so [] cannot be proven even with an empty vocabulary.
 		const withoutSchedule = pagePort({ vocabulary: emptyVocabulary() });
-		expect(await liveErrorCode(withoutSchedule.page.reviewers.list())).toBe('reviewer_coverage');
+		expect((await withoutSchedule.page.reviewers.list()).coverage).toEqual(declined);
 
 		// A collecting session is a coverage target of its own.
 		const collecting = pagePort({
 			vocabulary: emptyVocabulary(),
 			schedule: scheduleWith([session('collecting')])
 		});
-		expect(await liveErrorCode(collecting.page.reviewers.list())).toBe('reviewer_coverage');
+		expect((await collecting.page.reviewers.list()).coverage).toEqual(declined);
 
 		// A retired track still named in a kept member's scope keeps its row.
 		const base = vocabulary();
@@ -454,7 +529,43 @@ describe('live tuned Reviewers page port', () => {
 			},
 			schedule: scheduleWith([])
 		});
-		expect(await liveErrorCode(retired.page.reviewers.list())).toBe('reviewer_coverage');
+		expect((await retired.page.reviewers.list()).coverage).toEqual(declined);
+	});
+
+	/**
+	 * A surface decides whether to offer a retry from this flag. An unmounted
+	 * capability is permanent for this composition, so offering "Try again"
+	 * would dress a settled absence as a transient wait — the same conflation
+	 * as an eternal skeleton, one step later.
+	 */
+	test('an unmounted capability declares itself unretryable', async () => {
+		const { page } = pagePort();
+		try {
+			await page.schedule.state();
+			throw new Error('Expected the unmounted scope-target read to reject.');
+		} catch (error) {
+			expect(error).toBeInstanceOf(ReviewersPageLiveError);
+			expect((error as ReviewersPageLiveError).code).toBe('reviewer_scope_targets');
+			expect((error as ReviewersPageLiveError).retryable).toBe(false);
+		}
+	});
+
+	/**
+	 * The eternal-loading regression. Coverage is one panel beside the roster;
+	 * throwing its absence out of `list()` failed the roster read itself, and the
+	 * page — which had no failure branch — held skeleton rows forever waiting on
+	 * an answer the port had already decided never to give.
+	 */
+	test('a declined coverage projection still serves the roster it sits beside', async () => {
+		const { page } = pagePort({ schedule: scheduleWith([]) });
+		const roster = await page.reviewers.list();
+
+		expect(roster.coverage.kind).toBe('unavailable');
+		// The spine survives: rows, identities, and the generalist count are all
+		// still served, so the surface has something true to render.
+		expect(roster.reviewers.length).toBeGreaterThan(0);
+		expect(roster.reviewers.every((row) => row.id.length > 0)).toBe(true);
+		expect(typeof roster.generalists).toBe('number');
 	});
 
 	test('serves the empty coverage claim past non-collecting sessions', async () => {
@@ -464,7 +575,7 @@ describe('live tuned Reviewers page port', () => {
 			vocabulary: emptyVocabulary(),
 			schedule: scheduleWith([session('programmed')])
 		});
-		expect((await page.reviewers.list()).coverage).toEqual([]);
+		expect((await page.reviewers.list()).coverage).toEqual({ kind: 'served', rows: [] });
 	});
 
 	test('refuses invite per line without invoking any operation', async () => {
@@ -503,7 +614,6 @@ describe('live tuned Reviewers page port', () => {
 			{
 				id: adaId,
 				name: 'Ada Bell',
-				email: '',
 				status: 'active',
 				scope: [],
 				assigned: 0,
@@ -562,6 +672,7 @@ describe('live tuned Reviewers page port', () => {
 		const rosterDown = createLiveReviewersPagePort({
 			roster: failingRoster,
 			review: reviewPort(),
+			team: teamPort(),
 			vocabulary: vocabulary(),
 			now: () => NOW
 		});
@@ -576,10 +687,18 @@ describe('live tuned Reviewers page port', () => {
 		const loadsDown = createLiveReviewersPagePort({
 			roster: rosterPort().port,
 			review: failingReview,
+			team: teamPort(),
 			vocabulary: vocabulary(),
 			now: () => NOW
 		});
 		// An unavailable load counter is a failed roster load, never zeros.
 		expect(await liveErrorCode(loadsDown.reviewers.list())).toBe('operation_not_registered');
+
+		const teamDown = pagePort({
+			team: teamPort({
+				kind: 'unavailable', operation: 'members', reason: 'operation_not_registered'
+			})
+		});
+		expect(await liveErrorCode(teamDown.page.reviewers.list())).toBe('operation_not_registered');
 	});
 });

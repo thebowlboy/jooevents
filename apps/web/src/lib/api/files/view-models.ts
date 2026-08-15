@@ -1,3 +1,4 @@
+import { formatDate } from '@jooevents/contracts';
 import type {
 	DeadlineCatalogSnapshotDto
 } from '@jooevents/contracts/deadlines';
@@ -331,7 +332,11 @@ function deadlineChoice(
 	if (!head || head.status !== 'active') return null;
 	return {
 		deadlineId: head.id,
-		label: `${head.displayDate} · ${head.kind === 'cfp_close' ? 'proposals close' : 'reviews due'}`,
+		// `displayDate` is the day the organizer typed, and the day this option
+		// must name. The catalog's `effectiveAt` is the *exclusive* boundary — the
+		// first instant of the next day — so spelling that instead would offer
+		// every deadline in the picker one day late.
+		label: `${formatDate(head.displayDate)} · ${head.kind === 'cfp_close' ? 'proposals close' : 'reviews due'}`,
 		displayDate: head.displayDate,
 		effectiveAt: head.effectiveAt
 	};

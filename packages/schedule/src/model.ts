@@ -45,6 +45,8 @@ export interface PlaceableSessionIdentity {
   readonly scope: SchedulePlacementScope;
   readonly id: ScheduleSessionId;
   readonly lifecycle: 'collecting' | 'programmed';
+  /** Null only for legacy data or events whose vocabulary has no active tracks. */
+  readonly trackId?: string | null;
 }
 
 /** Schedule placement imports session identity; it never creates or owns sessions. */

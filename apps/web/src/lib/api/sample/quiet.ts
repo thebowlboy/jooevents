@@ -1,5 +1,8 @@
 import type { WorkspaceDataset } from './dataset';
-import { daysAgo } from './dataset';
+import { dayDeadline, daysAgo, hoursAgo } from './dataset';
+
+/** The event's zone — the authority for every deadline boundary below. */
+const TZ = 'America/New_York';
 import { defaultEventTheme, starterSurfaceTemplates, starterTemplates } from './templates';
 import { baselineFieldRegistry } from './fields';
 
@@ -31,15 +34,34 @@ const quiet: WorkspaceDataset = {
 			reviewers: '5',
 			messages: '2'
 		},
+		/* Everything closed. Full meters read green because green is what
+		   healthy means here — done on time is calm, not a party. */
 		stats: [
-			{ label: 'Sessions', value: '24', sub: 'Published Sep 22 · no conflicts' },
-			{ label: 'Reviews', value: '100%', sub: 'Both rounds closed' },
-			{ label: 'Decisions', value: '10', sub: 'Every one notified' },
-			{ label: 'Speaker tasks', value: '96%', sub: '48 of 50 complete' }
+			{
+				label: 'Reviews',
+				value: '100%',
+				sub: 'both rounds closed · 536 of 536',
+				health: 'ok',
+				progress: { done: 536, required: 536 }
+			},
+			{
+				label: 'Decided',
+				value: '10 of 10',
+				sub: '5 accepted · everyone has been told',
+				health: 'ok',
+				progress: { done: 10, required: 10 }
+			},
+			{
+				label: 'Speaker tasks',
+				value: '96%',
+				sub: '48 of 50 complete',
+				health: 'ok',
+				progress: { done: 48, required: 50 }
+			}
 		],
 		attention: [],
 		pipeline: [
-			{ key: 'collect', label: 'Collect', headline: '10', sub: 'CFP closed Aug 22 · 1 late', state: 'ok' },
+			{ key: 'collect', label: 'Collect', headline: '10', sub: 'CFP closed · 1 late', state: 'ok' },
 			{ key: 'triage', label: 'Triage', headline: '8', sub: 'inbox · 1 set aside · 1 late', state: 'ok' },
 			/* Full meters here stay neutral: done on time is calm, not a party.
 			   Round 1 was the full-population round (536 of 536); round 2 also
@@ -52,8 +74,7 @@ const quiet: WorkspaceDataset = {
 				state: 'ok',
 				progress: { done: 536, required: 536 },
 				paceTone: 'on',
-				deadlineLabel: 'closed Sep 9',
-				deadlineIso: '2026-09-09'
+				deadline: { qualifier: 'closed', ...dayDeadline(-19, TZ), settled: true }
 			},
 			/* Complete, but this scenario names no notify-by date, so the meter
 			   stands alone without a pace claim. */
@@ -61,7 +82,7 @@ const quiet: WorkspaceDataset = {
 				key: 'decide',
 				label: 'Decide',
 				headline: '10',
-				sub: '5 accepted · all notified',
+				sub: '5 accepted · everyone has been told',
 				state: 'ok',
 				progress: { done: 10, required: 10 }
 			},
@@ -74,27 +95,28 @@ const quiet: WorkspaceDataset = {
 				state: 'ok',
 				progress: { done: 48, required: 50 },
 				paceTone: 'on',
-				deadlineLabel: 'slides due Oct 8',
-				deadlineIso: '2026-10-08T23:59:00-04:00'
+				deadline: { qualifier: 'slides due', ...dayDeadline(10, TZ) }
 			},
 			{
 				key: 'schedule',
 				label: 'Schedule',
 				headline: '24/24',
-				sub: 'placed · published Sep 22',
+				sub: 'placed and published',
 				state: 'ok',
 				progress: { done: 24, required: 24 },
 				paceTone: 'on',
-				deadlineLabel: 'published Sep 22',
-				deadlineIso: '2026-09-22'
+				deadline: { qualifier: 'published', ...dayDeadline(-6, TZ), settled: true }
 			},
 			{ key: 'comms', label: 'Comms', headline: '6', sub: '4 sent · 2 scheduled', state: 'ok' }
 		],
+		/* No "Doors open" row: the event's own dates are the shell's event card,
+		   not a deadline, and this panel is for the things that must happen before
+		   them. It also cannot be authored honestly here — the deadlines below run
+		   on a live clock while the fixture's event dates are a fixed string. */
 		deadlines: [
-			{ label: 'Final AV walkthrough', absolute: 'Oct 9, 14:00 EDT', relative: 'in 11 days', tone: 'ok' },
-			{ label: 'Attendee reminder sends', absolute: 'Oct 8, 09:00 EDT', relative: 'in 10 days', tone: 'ok' },
-			{ label: 'Optional slide drafts due', absolute: 'Oct 8, 23:59 EDT', relative: 'in 10 days', tone: 'ok' },
-			{ label: 'Doors open', absolute: 'Oct 12, 08:30 EDT', relative: 'in 14 days', tone: 'ok' }
+			{ label: 'Schedule published', ...dayDeadline(-6, TZ), settled: true },
+			{ label: 'Optional slide drafts due', ...dayDeadline(10, TZ) },
+			{ label: 'Final AV walkthrough', ...dayDeadline(11, TZ) }
 		],
 		activity: [
 			{
@@ -102,28 +124,28 @@ const quiet: WorkspaceDataset = {
 				actor: 'person',
 				name: 'Linnea Koski',
 				text: 'approved the last speaker headshot — every public profile is complete',
-				time: '3 h ago'
+				at: hoursAgo(3)
 			},
 			{
 				id: 'act-2',
 				actor: 'agent',
 				name: 'Conflict scan',
 				text: 'checked all 24 placements against rooms, speakers, and capacity — nothing found',
-				time: 'yesterday'
+				at: daysAgo(1)
 			},
-			{ id: 'act-3', actor: 'person', name: 'Sofia Berg', text: 'closed review round 2', time: 'Sep 9' },
-			{ id: 'act-4', actor: 'you', name: 'You', text: 'published the schedule', time: 'Sep 22' },
+			{ id: 'act-3', actor: 'person', name: 'Sofia Berg', text: 'closed review round 2', at: daysAgo(19) },
+			{ id: 'act-4', actor: 'you', name: 'You', text: 'published the schedule', at: daysAgo(6) },
 			{
 				id: 'act-5',
 				actor: 'you',
 				name: 'You',
 				text: 'sent the schedule announcement to 1,240 subscribers',
-				time: 'Sep 22'
+				at: daysAgo(6)
 			}
 		],
 		trays: [
 			{ kind: 'late', label: 'Late submissions', count: 1, href: '/app/submissions?tray=late' },
-			{ kind: 'discarded', label: 'Discarded, recoverable', count: 0, href: '/app/submissions?tray=discarded' },
+			{ kind: 'discarded', label: 'Spam, recoverable', count: 0, href: '/app/submissions?tray=discarded' },
 			{ kind: 'unresolved-import', label: 'Unresolved import items', count: 0 },
 			{ kind: 'stranded-drafts', label: 'Stranded form drafts', count: 0 },
 			{ kind: 'inbound-mail', label: 'Inbound mail review', count: 0 },
@@ -187,6 +209,9 @@ const quiet: WorkspaceDataset = {
 					rationale: 'Measured rendering work with a reproducible benchmark.',
 					source: 'Screen run #6'
 				}
+			],
+			resources: [
+				{ name: 'latency-cliff-benchmarks (repository)', kind: 'link', detail: 'codeberg.org' }
 			],
 			reviewAverage: 4.7,
 			reviewCount: 5
@@ -364,7 +389,9 @@ const quiet: WorkspaceDataset = {
 		}
 	],
 	submissionTrayTotals: { inbox: 8, 'set-aside': 1, late: 1, discarded: 0 },
+	/* Nothing is waiting, so they drop in a couple of times a week. */
 	previousVisit: daysAgo(3),
+	visitHistory: [hoursAgo(4), daysAgo(3), daysAgo(6)],
 
 	reviewPlans: [
 		{

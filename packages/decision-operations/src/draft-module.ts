@@ -170,9 +170,10 @@ const draftOutcomeContributionSchema = z.strictObject({
     'conflict:decision.target_unavailable',
     'conflict:changeset.id_collision'
   ]);
+  const expectedDetailSchemaVersion = outcome.kind === 'decision.changed' ? 2 : 1;
   if (!allowed.has(`${outcome.class}:${outcome.kind}`)
       || outcome.retryable
-      || outcome.detailSchemaVersion !== 1
+      || outcome.detailSchemaVersion !== expectedDetailSchemaVersion
       || !detailSchema.safeParse(outcome.detail).success) {
     context.addIssue({ code: 'custom', message: 'Decision draft refusal is invalid.' });
   }
@@ -189,17 +190,17 @@ function ref(key: string): VersionedDefinitionRef {
   return Object.freeze({ key, version: 1 });
 }
 
-function schemaRef(key: string, schema: z.ZodType): SafeSchemaManifestRef {
-  return createSafeSchemaManifestRef(key, schema);
+function schemaRef(key: string, schema: z.ZodType, version = 1): SafeSchemaManifestRef {
+  return createSafeSchemaManifestRef(key, schema, version);
 }
 
 const schemas = Object.freeze({
   input: DECISION_OPERATION_SCHEMA_REFS.decideDraft.inputSchema,
-  contribution: schemaRef('schema.decision.decide-draft.contribution', decisionDraftContributionSchema),
-  canonical: schemaRef('schema.decision.decide-draft.canonical-result', decisionDraftCanonicalResultSchema),
+  contribution: schemaRef('schema.decision.decide-draft.contribution', decisionDraftContributionSchema, 2),
+  canonical: schemaRef('schema.decision.decide-draft.canonical-result', decisionDraftCanonicalResultSchema, 2),
   projected: DECISION_OPERATION_SCHEMA_REFS.decideDraft.resultSchema,
   nullDetail: schemaRef('schema.decision.decide-draft.null-detail', nullDetailSchema),
-  staleDetail: schemaRef('schema.decision.changed.detail', decisionDraftStaleDetailSchema),
+  staleDetail: schemaRef('schema.decision.changed.detail', decisionDraftStaleDetailSchema, 2),
   targetDetail: schemaRef(
     'schema.decision.target-unavailable.detail',
     decisionDraftTargetUnavailableDetailSchema

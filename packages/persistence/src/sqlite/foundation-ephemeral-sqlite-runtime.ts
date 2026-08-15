@@ -6,12 +6,21 @@ import { DECISION_DRAFT_EFFECT_SQL } from './decision-draft-effect-domain';
 import { SQLITE_ENGAGEMENT_SQL } from './engagement';
 import { SQLITE_ENGAGEMENT_DRAFT_EFFECT_SQL } from './engagement-draft-effect-domain';
 import { SQLITE_ENGAGEMENT_CHANGESET_EFFECT_SQL } from './engagement-changeset-effect-domain';
+import { TASK_SQL } from './tasks';
+import { TASK_DRAFT_EFFECT_SQL } from './task-draft-effect-domain';
+import { TASK_CHANGESET_EFFECT_SQL } from './task-changeset-effect-domain';
 import { EVENT_SPINE_SQL } from './event-spine';
 import { EVENT_CREATION_CHANGESET_EFFECT_SQL } from './event-changeset-effect-domain';
 import { EVENT_CREATE_DRAFT_EFFECT_SQL } from './event-create-draft-effect-domain';
 import { EVENT_SETTINGS_SQL } from './event-settings';
 import { EVENT_SETTINGS_CHANGESET_EFFECT_SQL } from './event-settings-changeset-effect-domain';
 import { EVENT_SETTINGS_UPDATE_DRAFT_EFFECT_SQL } from './event-settings-draft-effect-domain';
+import { TEMPLATE_AUTHORING_SQL } from './template-authoring';
+import { TEMPLATE_ARTIFACT_DRAFT_EFFECT_SQL } from './template-artifact-draft-effect-domain';
+import { TEMPLATE_EDIT_EFFECT_SQL } from './template-edit-effect-domain';
+import {
+  TEMPLATE_ARTIFACT_CHANGESET_EFFECT_SQL
+} from './template-artifact-changeset-effect-domain';
 import { DEADLINE_CHANGESET_EFFECT_SQL } from './deadline-changeset-effect-domain';
 import { DEADLINE_DRAFT_EFFECT_SQL } from './deadline-draft-effect-domain';
 import { DEADLINE_SQL } from './deadline';
@@ -51,6 +60,7 @@ import {
 import { SQLITE_ORGANIZER_COMMUNICATION_AUTHORING_SQL } from './communications/organizer-authoring';
 import { SQLITE_ORGANIZER_COMMUNICATION_AUTHORING_EFFECT_SQL } from './communications/organizer-authoring-effect-domain';
 import { SQLITE_EMAIL_PROVIDER_CONFIGURATION_SQL } from './communications/provider-configuration';
+import { SQLITE_WORKSPACE_SENDER_IDENTITY_SQL } from './communications/workspace-sender-identity';
 import { SQLITE_OUTBOUND_EMAIL_DELIVERY_SQL } from './outbound-email-delivery';
 import { SESSION_SQL } from './session';
 import { SESSION_DRAFT_EFFECT_SQL } from './session-draft-effect-domain';
@@ -105,6 +115,9 @@ export const FOUNDATION_EPHEMERAL_SCHEMA_ARTIFACTS: readonly EphemeralSQLiteSche
     schemaArtifact('foundation-uow', FOUNDATION_TRIAL_UOW_SQL),
     schemaArtifact('event-spine', EVENT_SPINE_SQL),
     schemaArtifact('event-settings-domain', EVENT_SETTINGS_SQL),
+    schemaArtifact('template-authoring-domain', TEMPLATE_AUTHORING_SQL),
+    schemaArtifact('template-artifact-draft-effect', TEMPLATE_ARTIFACT_DRAFT_EFFECT_SQL),
+    schemaArtifact('template-edit-effect', TEMPLATE_EDIT_EFFECT_SQL),
     schemaArtifact('deadline-domain', DEADLINE_SQL),
     schemaArtifact('changeset-lifecycle', CHANGESET_LIFECYCLE_SQL),
     schemaArtifact('deadline-draft-effect', DEADLINE_DRAFT_EFFECT_SQL),
@@ -113,6 +126,7 @@ export const FOUNDATION_EPHEMERAL_SCHEMA_ARTIFACTS: readonly EphemeralSQLiteSche
     schemaArtifact('event-creation-changeset-effect', EVENT_CREATION_CHANGESET_EFFECT_SQL),
     schemaArtifact('event-settings-draft-effect', EVENT_SETTINGS_UPDATE_DRAFT_EFFECT_SQL),
     schemaArtifact('event-settings-changeset-effect', EVENT_SETTINGS_CHANGESET_EFFECT_SQL),
+    schemaArtifact('template-artifact-changeset-effect', TEMPLATE_ARTIFACT_CHANGESET_EFFECT_SQL),
     schemaArtifact('program-vocabulary-domain', PROGRAM_VOCABULARY_SQL),
     schemaArtifact('schedule-placement-domain', SCHEDULE_PLACEMENT_SQL),
     schemaArtifact('program-vocabulary-draft-effect', PROGRAM_VOCABULARY_DRAFT_EFFECT_SQL),
@@ -127,6 +141,7 @@ export const FOUNDATION_EPHEMERAL_SCHEMA_ARTIFACTS: readonly EphemeralSQLiteSche
     ),
     schemaArtifact('communication-organizer-audience-preview', SQLITE_ORGANIZER_AUDIENCE_PREVIEW_SQL),
     schemaArtifact('communication-email-provider-configuration', SQLITE_EMAIL_PROVIDER_CONFIGURATION_SQL),
+    schemaArtifact('communication-workspace-sender-identity', SQLITE_WORKSPACE_SENDER_IDENTITY_SQL),
     schemaArtifact('workspace-team-domain', WORKSPACE_TEAM_SQL),
     schemaArtifact('workspace-team-draft-effect', WORKSPACE_TEAM_DRAFT_EFFECT_SQL),
     schemaArtifact('workspace-team-changeset-effect', WORKSPACE_TEAM_CHANGESET_EFFECT_SQL),
@@ -180,6 +195,9 @@ export const FOUNDATION_EPHEMERAL_SCHEMA_ARTIFACTS: readonly EphemeralSQLiteSche
     schemaArtifact('decision-draft-effect', DECISION_DRAFT_EFFECT_SQL),
     schemaArtifact('decision-changeset-effect', DECISION_CHANGESET_EFFECT_SQL),
     schemaArtifact('engagement-domain', SQLITE_ENGAGEMENT_SQL),
+    schemaArtifact('task-domain', TASK_SQL),
+    schemaArtifact('task-draft-effect', TASK_DRAFT_EFFECT_SQL),
+    schemaArtifact('task-changeset-effect', TASK_CHANGESET_EFFECT_SQL),
     schemaArtifact('engagement-draft-effect', SQLITE_ENGAGEMENT_DRAFT_EFFECT_SQL),
     schemaArtifact('engagement-changeset-effect', SQLITE_ENGAGEMENT_CHANGESET_EFFECT_SQL),
     schemaArtifact('communication-outbound-delivery', SQLITE_OUTBOUND_EMAIL_DELIVERY_SQL),

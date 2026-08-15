@@ -73,25 +73,27 @@ export const decisionTransactionPort = defineChangesetTransactionPort<DecisionCh
 );
 
 const authorInputSchema = defineChangesetSchema({
-  key: 'decision.planning_input', version: 1,
+  // Version 2 carries the explicit nullable spawn-track resolution and the
+  // Session target hardening through every schema that embeds it.
+  key: 'decision.planning_input', version: 2,
   schema: z.union([decisionMutationPlanningInputSchema, decisionRestorePlanSchema])
 });
 const planSchema = defineChangesetSchema({
-  key: 'decision.plan', version: 1,
+  key: 'decision.plan', version: 2,
   schema: z.union([decisionMutationPlanSchema, decisionRestorePlanSchema])
 });
 const diffSchema = defineChangesetSchema({
-  key: 'decision.safe_diff', version: 1, schema: decisionSafeDiffSchema
+  key: 'decision.safe_diff', version: 2, schema: decisionSafeDiffSchema
 });
 const resultSchema = defineChangesetSchema({
-  key: 'decision.result', version: 1, schema: decisionMutationResultSchema
+  key: 'decision.result', version: 2, schema: decisionMutationResultSchema
 });
 export const decisionStaleDetailSchema = z.strictObject({
   code: z.enum(DECISION_PLANNING_ERROR_CODES),
   submissionId: decisionIdSchema
 });
 const staleDetailSchema = defineChangesetSchema({
-  key: 'decision.stale_detail', version: 1, schema: decisionStaleDetailSchema
+  key: 'decision.stale_detail', version: 2, schema: decisionStaleDetailSchema
 });
 const targetUnavailableDetailSchema = defineChangesetSchema({
   key: 'decision.target_unavailable_detail', version: 1,
@@ -363,6 +365,6 @@ function refusalOutcome(refusal: DecisionPlanRefusal) {
     retryable: false,
     subjects: [{ type: 'submission', id: refusal.submissionId }],
     detail: Object.freeze({ code: refusal.code, submissionId: refusal.submissionId }),
-    detailSchemaVersion: 1
+    detailSchemaVersion: 2
   });
 }

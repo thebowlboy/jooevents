@@ -9,8 +9,8 @@ describe('sample Overview page port', () => {
 			scenario: { key: flight.key, name: flight.name, description: flight.description },
 			api: {
 				workspace: {
-					async summary() { return flight.summary; },
-					summarySnapshot() { return flight.summary; },
+					async summary() { return { ...flight.summary, arrivals: null }; },
+					summarySnapshot() { return { ...flight.summary, arrivals: null }; },
 					async createEvent(input) {
 						createCalls.push(input);
 						return { ok: true as const };

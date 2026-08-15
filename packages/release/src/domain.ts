@@ -6,6 +6,7 @@ import {
   releasePlanningInputSchema,
   releaseProgramPlanSchema,
   releaseStyleSetPlanSchema,
+  surfaceManifestSchema,
   releaseSurfaceAllowlistPlanSchema,
   releaseSurfacePublishPlanSchema,
   releaseSurfaceRollbackPlanSchema,
@@ -23,6 +24,7 @@ import {
   type ReleaseScheduleConflictDto,
   type ReleaseScopeDto,
   type ReleaseStyleSetPlanDto,
+  type ReleaseTemplateRevisionPinDto,
   type ReleaseSurfaceAllowlistPlanDto,
   type ReleaseSurfacePublishPlanDto,
   type ReleaseSurfaceRollbackPlanDto,
@@ -32,6 +34,7 @@ import {
   type ReleasedSessionDto,
   type SessionHeadDto,
   type StyleSetRecipeDto,
+  type SurfaceManifestDto,
   type SurfaceHeadDto,
   type SurfaceKind,
   type SurfaceReleaseDto
@@ -186,11 +189,15 @@ export function materializeProgramContent(
   }
 
   const roomNames = new Map(vocabulary.rooms.map((room) => [room.id, room.name]));
+  const eventUsesTracks = vocabulary.tracks.some((track) => track.status === 'active');
   const usedRoomIds = new Set<string>();
   const releasedNames = new Map<string, string>();
   const sessions: ReleasedSessionDto[] = [];
   for (const session of catalog.sessions) {
     if (session.lifecycle !== 'programmed') continue;
+    if (eventUsesTracks && session.programTarget.track === null) {
+      throw new ReleasePlanningError('session_track_required');
+    }
     sessions.push(releasedSessionFrom({
       session,
       occurrences: occurrencesBySession.get(session.id) ?? [],
@@ -393,6 +400,46 @@ export function compileStyleSetTokens(
   };
 }
 
+function pinnedTemplateArtifact(input: {
+  readonly scope: ReleaseScope;
+  readonly pin: ReleaseTemplateRevisionPinDto;
+  readonly port: ReleaseReadPort;
+}) {
+  const document = input.port.readReleaseTemplateArtifact?.(input.scope, input.pin);
+  if (!document) throw new ReleasePlanningError('template_revision_stale');
+  return document;
+}
+
+function canonicalManifestText(value: string): string | null {
+  const normalized = value.normalize('NFC').trim().replace(/\s+/gu, ' ');
+  return normalized.length === 0 ? null : normalized;
+}
+
+function manifestFromTemplate(input: {
+  readonly scope: ReleaseScope;
+  readonly kind: Extract<ReleasePlanningInput, { readonly action: 'surface_publish' }>['kind'];
+  readonly pin: ReleaseTemplateRevisionPinDto;
+  readonly port: ReleaseReadPort;
+}): SurfaceManifestDto {
+  const document = pinnedTemplateArtifact({ scope: input.scope, pin: input.pin, port: input.port });
+  const expectedTemplateKind = input.kind === 'schedule'
+    ? 'schedule'
+    : input.kind === 'speakers' ? 'speaker-roster' : 'application-form';
+  if (document.kind !== 'surface' || document.surfaceKind !== expectedTemplateKind) {
+    throw new ReleasePlanningError('template_kind_mismatch');
+  }
+  const hero = document.blocks.find((block) => block.type === 'hero');
+  try {
+    return surfaceManifestSchema.parse({
+      schemaVersion: 1,
+      heading: hero ? canonicalManifestText(hero.title) : null,
+      intro: hero ? canonicalManifestText(hero.intro) : null
+    });
+  } catch {
+    throw new ReleasePlanningError('invalid_plan');
+  }
+}
+
 export function planReleaseMutation(input: {
   readonly planningInput: ReleasePlanningInput;
   readonly port: ReleaseReadPort;
@@ -455,14 +502,24 @@ export function planReleaseMutation(input: {
     case 'style_set_publish': {
       const current = port.readCurrentStyleSetRelease(scope);
       requireChainFence(current, planningInput.expectedCurrentStyleSetNumber);
+      const document = pinnedTemplateArtifact({
+        scope,
+        pin: planningInput.sourceTemplateRevision,
+        port
+      });
+      if (document.kind !== 'theme') throw new ReleasePlanningError('template_kind_mismatch');
+      if (canonical(document.recipe) !== canonical(planningInput.recipe)) {
+        throw new ReleasePlanningError('invalid_plan');
+      }
       const unsigned = {
         schemaVersion: 1 as const,
         scope,
         id: planningInput.releaseId,
         number: (current?.number ?? 0) + 1,
         predecessor: predecessorRef(current),
-        recipe: planningInput.recipe,
-        tokens: compileStyleSetTokens(planningInput.recipe),
+        sourceTemplateRevision: planningInput.sourceTemplateRevision,
+        recipe: document.recipe,
+        tokens: compileStyleSetTokens(document.recipe),
         releasedByUserId: planningInput.actorUserId,
         releasedAt: planningInput.occurredAt
       };
@@ -490,6 +547,15 @@ export function planReleaseMutation(input: {
           throw new ReleasePlanningError('form_version_unpinned');
         }
       }
+      const manifest = manifestFromTemplate({
+        scope,
+        kind: planningInput.kind,
+        pin: planningInput.sourceTemplateRevision,
+        port
+      });
+      if (canonical(manifest) !== canonical(planningInput.manifest)) {
+        throw new ReleasePlanningError('invalid_plan');
+      }
       const unsigned = {
         kind: planningInput.kind,
         schemaVersion: 1 as const,
@@ -499,7 +565,8 @@ export function planReleaseMutation(input: {
         predecessor: active === undefined
           ? null
           : { releaseId: active.id, digestSha256: active.digestSha256 },
-        manifest: planningInput.manifest,
+        sourceTemplateRevision: planningInput.sourceTemplateRevision,
+        manifest,
         styleSetReleaseId: planningInput.styleSetReleaseId,
         ...(planningInput.kind === 'apply' ? { formRef: planningInput.formRef! } : {}),
         releasedByUserId: planningInput.actorUserId,
@@ -587,6 +654,7 @@ export function projectReleaseSafeDiff(plan: ReleaseMutationPlanDto): ReleaseSaf
         number: plan.release.number,
         digestSha256: plan.release.digestSha256
       },
+      sourceTemplateRevision: plan.release.sourceTemplateRevision,
       recipe: plan.release.recipe
     };
   }
@@ -596,6 +664,7 @@ export function projectReleaseSafeDiff(plan: ReleaseMutationPlanDto): ReleaseSaf
       kind: plan.input.kind,
       before: plan.headBefore,
       after: plan.headAfter,
+      sourceTemplateRevision: plan.release.sourceTemplateRevision,
       styleSetReleaseId: plan.release.styleSetReleaseId,
       formRef: plan.release.kind === 'apply' ? plan.release.formRef : null
     };
@@ -763,6 +832,7 @@ export function planReleaseSurfaceSuccessorFrom(
       }),
       number: head.version + 1,
       predecessor: { releaseId: active.id, digestSha256: active.digestSha256 },
+      sourceTemplateRevision: active.sourceTemplateRevision,
       manifest: active.manifest,
       styleSetReleaseId: active.styleSetReleaseId,
       formRef: { formId: parsed.formId, formVersionId: parsed.formVersionId },

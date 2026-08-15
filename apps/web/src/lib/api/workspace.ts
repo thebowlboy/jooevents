@@ -59,12 +59,14 @@ import type {
 	SpeakerProfile,
 	SpeakerRow,
 	Submission,
+	SubmissionArrivals,
 	SubmissionPage,
 	SubmissionQuery,
 	SubmissionReview,
 	SurfaceBlock,
 	SurfaceField,
 	SurfaceTemplate,
+	SurfaceKind,
 	TaskAssignment,
 	TaskDef,
 	TemplateSuggestion,
@@ -103,7 +105,12 @@ import {
 	setScenarioCookie,
 	workspaceEvents
 } from './sample/registry';
+import { summarizeArrivals } from '@jooevents/contracts';
 import { formatDateRange } from './sample/dataset';
+import {
+	createSampleSenderIdentityStore,
+	type SampleSenderIdentityUpdate
+} from './sample/sender-identity';
 import { setOperatorEntryAuthCookie } from './composition/entry-deps';
 import { computeStanding, tintStep } from './standing';
 import { accoladeCatalog, composeCapRefusal } from './accolades';
@@ -136,21 +143,27 @@ import { createListSource, RESIDENT_ROW_CEILING } from './residency';
  * it here rather than in every dataset keeps a moved row from having to be
  * renumbered by hand in five files.
  */
-type LoadedWorkspace = Omit<WorkspaceDataset, 'speakers' | 'speakerCategories'> & {
+type LoadedWorkspace = Omit<WorkspaceDataset, 'speakers' | 'speakerCategories' | 'summary'> & {
 	speakers: SpeakerRow[];
 	speakerCategories: SpeakerCategorySeed[];
+	summary: WorkspaceSummary;
 };
 
 function loadWorkspace(): LoadedWorkspace {
 	const seed = structuredClone(resolveDataset());
 	return {
 		...seed,
+		// The arrival pulse is a measurement over the rows, so it is materialized
+		// here rather than authored — and it is refreshed on every read, because
+		// what counts as "today" moves while the tab stays open.
+		summary: { ...seed.summary, arrivals: null },
 		speakers: seed.speakers.map((row, index) => ({ ...row, position: row.position ?? index })),
 		speakerCategories: seed.speakerCategories ?? []
 	};
 }
 
 const db = loadWorkspace();
+const embedAllowedOrigins = new Map<SurfaceKind, string[]>();
 
 /** True while the app is running on sample data instead of a live backend. */
 export const sampleMode = true;
@@ -262,12 +275,18 @@ function placedSessionIds(): Set<string> {
 }
 
 /**
- * The three computed attention items, replaced in place by id on every
+ * The four computed attention items, replaced in place by id on every
  * program mutation. Placeholder-first is legitimate working state, so the
  * roster gap stays `fyi`; the other two are ordinary `soon` work.
  */
 function syncProgramRoundup(): void {
 	const placed = placedSessionIds();
+	const usesTracks = db.tracks.some((track) => track.status === 'active');
+	const needsTrack = usesTracks
+		? db.schedule.sessions.filter(
+				(session) => session.state !== 'draft' && session.trackId === ''
+			).length
+		: 0;
 	const unplaced = db.schedule.sessions.filter(
 		(session) => session.state === 'programmed' && !placed.has(session.id)
 	).length;
@@ -279,6 +298,17 @@ function syncProgramRoundup(): void {
 	).length;
 
 	const computed: AttentionItem[] = [];
+	if (needsTrack > 0) {
+		computed.push({
+			id: 'program-needs-track',
+			severity: 'soon',
+			area: 'schedule',
+			title: `${needsTrack} program session${needsTrack === 1 ? '' : 's'} need${needsTrack === 1 ? 's' : ''} a track`,
+			detail: 'This event sorts its programme into tracks, and these sessions have none.',
+			action: 'Choose tracks',
+			href: '/app/schedule?tray=needs-track'
+		});
+	}
 	if (unplaced > 0) {
 		computed.push({
 			id: 'program-unplaced',
@@ -306,8 +336,12 @@ function syncProgramRoundup(): void {
 			id: 'program-undecided-in-place',
 			severity: 'soon',
 			area: 'schedule',
-			title: `${heldSlots} held slot${heldSlots === 1 ? '' : 's'} await${heldSlots === 1 ? 's' : ''} decisions`,
-			detail: 'Collecting sessions holding grid time until their proposals are decided.',
+			/* "Held slot" and "collecting session" are both words this product
+			   invented, and neither is defined anywhere a first-time organizer
+			   would meet them. What is actually true is plain: a session is
+			   sitting on the grid holding time for proposals nobody has answered. */
+			title: `${heldSlots} session${heldSlots === 1 ? '' : 's'} on the grid ${heldSlots === 1 ? 'is' : 'are'} still collecting proposals`,
+			detail: 'Each one holds its time on the schedule until you decide what goes in it.',
 			action: 'Review held slots',
 			href: '/app/schedule?tray=undecided-in-place'
 		});
@@ -315,6 +349,7 @@ function syncProgramRoundup(): void {
 
 	const authored = db.summary.attention.filter(
 		(item) =>
+			item.id !== 'program-needs-track' &&
 			item.id !== 'program-unplaced' &&
 			item.id !== 'program-needs-speakers' &&
 			item.id !== 'program-undecided-in-place'
@@ -326,6 +361,55 @@ function syncProgramRoundup(): void {
 // derived once the scenario is loaded and after every mutation that can move
 // them, so every dataset gets truthful tray items without narrating counts.
 syncProgramRoundup();
+
+// ---------------------------------------------------------------------------
+// The arrival pulse. What is new is a fact about the rows, so it is measured
+// from them on every read rather than authored: a scenario cannot narrate a
+// delta its own submissions do not back, and a delta written into a file is
+// wrong the day after it is written.
+//
+// Discarded proposals are excluded from every figure here. They are kept and
+// recoverable, but they are not part of what this event has to work through,
+// and counting them would overstate the load on every surface that reads this.
+
+/** The operator's earlier entries to the workspace, newest first. */
+function visitHistory(): string[] {
+	if (db.visitHistory && db.visitHistory.length > 0) return db.visitHistory;
+	return db.previousVisit ? [db.previousVisit] : [];
+}
+
+function submissionArrivals(): SubmissionArrivals | null {
+	const timezone = db.summary.event?.timezone;
+	if (!timezone) return null;
+	const held = db.submissions.filter((row) => row.tray !== 'discarded');
+	const pulse = summarizeArrivals({
+		arrivals: held.map((row) => row.submittedAt),
+		visits: visitHistory(),
+		timezone,
+		now: Date.now()
+	});
+	if (pulse === null) return null;
+	return {
+		pulse,
+		held: {
+			inbox: held.filter((row) => row.tray === 'inbox').length,
+			setAside: held.filter((row) => row.tray === 'set-aside').length,
+			late: held.filter((row) => row.tray === 'late').length
+		},
+		discarded: db.submissions.length - held.length
+	};
+}
+
+/**
+ * The summary with its pulse brought up to date, as the same object every time.
+ * Recomputed rather than cached because the window itself moves — a workspace
+ * left open across midnight would otherwise keep counting yesterday as today —
+ * and returned by identity because callers compare snapshots.
+ */
+function refreshedSummary(): WorkspaceSummary {
+	db.summary.arrivals = submissionArrivals();
+	return db.summary;
+}
 
 /** Every program mutation funnels through here so no caller can forget a sync. */
 function programChanged(): void {
@@ -950,9 +1034,17 @@ function appendThreadEntries(message: CommunicationMessage, emails: string[]): v
 	}
 }
 
+/**
+ * The workspace's outbound sender presentation. Settings edits it and message
+ * previews quote it, so both read the one store rather than composing a From
+ * line of their own.
+ */
+const senderIdentityStore = createSampleSenderIdentityStore({
+	installationDisplayName: () => db.summary.event?.name ?? 'JooEvents'
+});
+
 function senderIdentity(): string {
-	const name = db.summary.event?.name ?? 'JooEvents';
-	return `${name} <program@aie-demo.example>`;
+	return senderIdentityStore.line();
 }
 
 function audienceOptions(personId?: string): AudienceOption[] {
@@ -968,7 +1060,7 @@ function audienceOptions(personId?: string): AudienceOption[] {
 	const unnotified = db.submissions
 		.filter((submission) => submission.decision === 'accepted' && !submission.notified)
 		.flatMap((submission) => submission.speakers).length;
-	options.push({ id: 'accepted-unnotified', label: 'Accepted, not yet notified', count: unnotified });
+	options.push({ id: 'accepted-unnotified', label: 'Accepted · results not sent', count: unnotified });
 	options.push({
 		id: 'reviewers',
 		label: 'Reviewers',
@@ -1584,13 +1676,13 @@ export const api = {
 		async previous(surface: 'submissions'): Promise<string | null> {
 			await latency();
 			void surface;
-			return db.previousVisit ?? null;
+			return visitHistory()[0] ?? null;
 		}
 	},
 	workspace: {
 		async summary(): Promise<WorkspaceSummary> {
 			await latency();
-			return db.summary;
+			return refreshedSummary();
 		},
 		/**
 		 * The most recently known summary, synchronously — evidence a screen may
@@ -1598,7 +1690,7 @@ export const api = {
 		 * deserves a placeholder). Null when nothing has been fetched yet.
 		 */
 		summarySnapshot(): WorkspaceSummary | null {
-			return db.summary;
+			return refreshedSummary();
 		},
 		/**
 		 * The workspace's events as the sidebar switcher offers them — a
@@ -1963,10 +2055,30 @@ export const api = {
 		 * unplaced pool — and seeds the engagement. Moving off `accepted`
 		 * compensates that graduation instead of leaving an orphan behind.
 		 */
-		async decide(ids: string[], decision: Submission['decision']): Promise<void> {
+		async decide(
+			ids: string[],
+			decision: Submission['decision'],
+			trackIdsBySubmission: Readonly<Record<string, string>> = {}
+		): Promise<void> {
 			await latency();
+			const activeTracks = db.tracks.filter((track) => track.status === 'active');
+			const resolvedTracks: Record<string, string> = {};
+			if (decision === 'accepted') {
+				for (const submission of db.submissions.filter((row) => ids.includes(row.id) && !row.targetSessionId)) {
+					const resolvedTrackId = trackIdsBySubmission[submission.id]
+						|| submission.trackId
+						|| (activeTracks.length === 1 ? activeTracks[0]!.id : '');
+					if (resolvedTrackId === '' && activeTracks.length > 1) {
+						throw new Error('Choose a track before accepting this submission');
+					}
+					resolvedTracks[submission.id] = resolvedTrackId;
+				}
+			}
 			for (const submission of db.submissions) {
 				if (!ids.includes(submission.id)) continue;
+				if (decision === 'accepted' && !submission.targetSessionId) {
+					submission.trackId = resolvedTracks[submission.id] ?? submission.trackId;
+				}
 				const was = submission.decision;
 				submission.decision = decision;
 				submission.notified = false;
@@ -2372,13 +2484,16 @@ export const api = {
 				generalists: reviewers.filter(
 					(reviewer) => reviewer.status === 'active' && isGeneralist(reviewer)
 				).length,
-				coverage: coverageRows({
-					tracks: db.tracks,
-					formats: db.formats,
-					sessions: db.schedule.sessions,
-					submissions: db.submissions,
-					reviewers: db.reviewers
-				})
+				coverage: {
+					kind: 'served',
+					rows: coverageRows({
+						tracks: db.tracks,
+						formats: db.formats,
+						sessions: db.schedule.sessions,
+						submissions: db.submissions,
+						reviewers: db.reviewers
+					})
+				}
 			};
 		},
 		/**
@@ -2483,6 +2598,7 @@ export const api = {
 		async restore(reviewer: Reviewer, index: number): Promise<void> {
 			await latency();
 			if (db.reviewers.some((entry) => entry.id === reviewer.id)) return;
+			if (!reviewer.email) return;
 			const seed: ReviewerSeed = {
 				id: reviewer.id,
 				name: reviewer.name,
@@ -2598,6 +2714,26 @@ export const api = {
 	},
 
 	tasks: {
+		async createDefinition(input: import('./tasks-page-port').CreateTaskDefinitionInput): Promise<MutationOutcome> {
+			await latency();
+			const id = `task-${globalThis.crypto.randomUUID()}`;
+			const due = new Date(`${input.dueOn}T23:59:00Z`);
+			const days = Math.ceil((due.getTime() - Date.now()) / 86_400_000);
+			db.taskDefs.push({
+				id,
+				name: input.name,
+				kind: input.completionMode === 'file_upload' ? 'upload'
+					: input.completionMode === 'acknowledge' ? 'confirm'
+						: input.completionMode === 'external_action' ? 'link' : 'form',
+				required: input.required,
+				dueAbsolute: due.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+				dueRelative: days < 0 ? `${Math.abs(days)} days overdue` : `in ${days} days`
+			});
+			for (const speaker of db.speakers.filter((entry) => entry.state === 'confirmed')) {
+				db.assignments.push({ taskId: id, speakerId: speaker.id, state: 'todo', overdue: days < 0 });
+			}
+			return { ok: true };
+		},
 		async defs(): Promise<TaskDef[]> {
 			await latency();
 			return db.taskDefs;
@@ -2765,6 +2901,22 @@ export const api = {
 				state: input.state
 			};
 			db.schedule.sessions = [...db.schedule.sessions, session];
+			programChanged();
+			return session;
+		},
+		async retargetSession(id: string, formatId: string, trackId: string): Promise<SessionItem> {
+			await latency();
+			const session = db.schedule.sessions.find((entry) => entry.id === id);
+			if (!session) throw new Error('This session no longer exists');
+			const activeTracks = db.tracks.filter((track) => track.status === 'active');
+			const resolvedTrackId = trackId || (session.state !== 'draft' && activeTracks.length === 1
+				? activeTracks[0]!.id
+				: '');
+			if (session.state !== 'draft' && activeTracks.length > 1 && resolvedTrackId === '') {
+				throw new Error('Choose a track before this session enters the program');
+			}
+			session.formatId = formatId;
+			session.trackId = resolvedTrackId;
 			programChanged();
 			return session;
 		},
@@ -3032,6 +3184,21 @@ export const api = {
 		async readiness(): Promise<EmailReadiness> {
 			await latency();
 			return db.readiness;
+		},
+		/**
+		 * The workspace-editable half of the sender presentation. The
+		 * from-address is answered as read-only effective context and is absent
+		 * from the update input: it is installation configuration.
+		 */
+		senderIdentity: {
+			async read() {
+				await latency();
+				return senderIdentityStore.read();
+			},
+			async update(input: SampleSenderIdentityUpdate) {
+				await latency();
+				return senderIdentityStore.update(input);
+			}
 		},
 		/**
 		 * The attention queue is a derived, rebuildable projection over the
@@ -3557,6 +3724,11 @@ export const api = {
 	 * a target that would paste in empty says so before it is pasted.
 	 */
 	embeds: {
+		async setAllowedOrigins(kind: SurfaceKind, origins: readonly string[]): Promise<MutationOutcome> {
+			await latency();
+			embedAllowedOrigins.set(kind, [...new Set(origins)].sort());
+			return { ok: true };
+		},
 		async targets(): Promise<EmbedTarget[]> {
 			await latency();
 			const targets: EmbedTarget[] = [];
@@ -3577,7 +3749,8 @@ export const api = {
 					purpose: 'Every scheduled session, with times and rooms, grouped the way your schedule page groups them.',
 					count: programmed,
 					countNoun: 'session',
-					acceptsSubmissions: false
+					acceptsSubmissions: false,
+					allowedOrigins: [...(embedAllowedOrigins.get('schedule') ?? [])]
 				});
 			}
 
@@ -3593,7 +3766,8 @@ export const api = {
 					purpose: 'Everyone on the public roster, in the order you set, grouped by your speaker groups.',
 					count: cards.length,
 					countNoun: 'speaker',
-					acceptsSubmissions: false
+					acceptsSubmissions: false,
+					allowedOrigins: [...(embedAllowedOrigins.get('speaker-roster') ?? [])]
 				});
 				// One target per group, because "our keynotes" is a page of its own on
 				// most event sites, and a person who wants it should not have to learn
@@ -3609,7 +3783,8 @@ export const api = {
 						purpose: `Only the people filed under ${category.name}.`,
 						count: inGroup,
 						countNoun: 'speaker',
-						acceptsSubmissions: false
+						acceptsSubmissions: false,
+						allowedOrigins: [...(embedAllowedOrigins.get('speaker-roster') ?? [])]
 					});
 				}
 			}
@@ -3630,7 +3805,8 @@ export const api = {
 								: `Currently ${served.status}: visitors are told it is not taking applications.`,
 						count: served.fieldCount,
 						countNoun: 'question',
-						acceptsSubmissions: true
+						acceptsSubmissions: true,
+						allowedOrigins: [...(embedAllowedOrigins.get('application-form') ?? [])]
 					});
 				}
 			}
@@ -3658,7 +3834,8 @@ export const api = {
 					: (card.headline ?? 'Their biography, links, and sessions.'),
 				count: card.sessions.length,
 				countNoun: 'session',
-				acceptsSubmissions: false
+				acceptsSubmissions: false,
+				allowedOrigins: [...(embedAllowedOrigins.get('speaker-roster') ?? [])]
 			}));
 		}
 	},

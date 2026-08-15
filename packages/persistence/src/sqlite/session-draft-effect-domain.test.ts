@@ -497,6 +497,93 @@ describe('SQLite Session draft effect domain', () => {
     }
   });
 
+  test('repairs a nullable persisted track through an inert retarget changeset', async () => {
+    const fixture = openFixture();
+    const sessionId = uuid(0x7010);
+    try {
+      const vocabularyState = fixture.vocabulary.readVocabulary({ workspaceId, eventId });
+      if (!vocabularyState) throw new TypeError('session_vocabulary_fixture_missing');
+      const seedPlan = planSessionMutation({
+        planningInput: {
+          action: 'create',
+          scope: { workspaceId, eventId },
+          actorUserId: userId,
+          occurredAt: now,
+          sessionId,
+          expectedCatalogVersion: fixture.catalog().version,
+          expectedCatalogDigestSha256: fixture.catalog().digestSha256,
+          title: 'Track repair session',
+          plannedDurationMinutes: 45,
+          lifecycle: 'draft',
+          formatId,
+          trackId: null,
+          participants: []
+        },
+        catalog: fixture.catalog(),
+        vocabulary: vocabularyState
+      });
+      transaction(fixture.sqlite, () =>
+        new SQLiteSessionRepository(fixture.sqlite, fixture.vocabulary).applySessionPlan(seedPlan)
+      );
+      const current = fixture.catalog().sessions.find((session) => session.id === sessionId);
+      if (!current) throw new TypeError('session_retarget_fixture_missing');
+      expect(current.programTarget.track).toBeNull();
+
+      const draft = sessionDraftOperationResultSchema.parse(await fixture.effect({
+        operation: SESSION_CHANGE_DRAFT_OPERATION,
+        businessInput: {
+          action: 'retarget',
+          expectedCatalogVersion: fixture.catalog().version,
+          expectedCatalogDigestSha256: fixture.catalog().digestSha256,
+          sessionId,
+          expectedSessionVersion: current.version,
+          expectedSessionDigestSha256: current.digestSha256,
+          formatId,
+          trackId
+        },
+        key: 'retarget-track-draft'
+      }));
+      if (draft.kind !== 'success') throw new TypeError('session_retarget_draft_failed');
+      expect(draft.data).toMatchObject({
+        action: 'retarget',
+        status: 'draft',
+        safeDiff: {
+          action: 'retarget',
+          before: { programTarget: { track: null } },
+          after: { programTarget: { track: { id: trackId, name: 'Platform' } } }
+        }
+      });
+      expect(fixture.catalog().sessions.find((session) => session.id === sessionId)
+        ?.programTarget.track).toBeNull();
+
+      const selector = {
+        changesetId: draft.data.changesetId,
+        revisionId: draft.data.revision.id,
+        revisionDigest: draft.data.revision.digestSha256
+      };
+      const proposed = changesetLifecycleOperationResultSchema.parse(await fixture.effect({
+        operation: { name: 'changeset.propose', version: 1 },
+        businessInput: { ...selector, expectedHeadVersion: draft.data.headVersion },
+        key: 'retarget-track-propose'
+      }));
+      if (proposed.kind !== 'success' || proposed.data.action !== 'propose') {
+        throw new TypeError('session_retarget_propose_failed');
+      }
+      const committed = changesetLifecycleOperationResultSchema.parse(await fixture.effect({
+        operation: { name: 'changeset.commit', version: 1 },
+        businessInput: { ...selector, expectedHeadVersion: proposed.data.diff.headVersion },
+        key: 'retarget-track-commit'
+      }));
+      expect(committed).toMatchObject({ kind: 'success', data: { action: 'commit' } });
+      expect(fixture.catalog().sessions.find((session) => session.id === sessionId)
+        ?.programTarget.track).toMatchObject({ id: trackId, name: 'Platform' });
+      expect(fixture.sqlite.query<Record<string, unknown>, []>('PRAGMA foreign_key_check').all())
+        .toEqual([]);
+    } finally {
+      fixture.close();
+    }
+  });
+
   test('drafts the roster visibility off-switch through the same inert ceremony', async () => {
     const fixture = openFixture();
     const personId = uuid(0x7001);

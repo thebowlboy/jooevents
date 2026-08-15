@@ -4,6 +4,7 @@
 	import { CopyValue, revealTarget, situationIcon, statusIcon } from '$lib/ui';
 	import type { IconComponent } from '$lib/ui';
 	import type { SpeakersPagePort } from '$lib/api/speakers-page-port';
+	import { LiveRead, type LiveReadState } from '$lib/api/live-read';
 	import { applyParams, clearParams, param, paramIn } from '$lib/features/workspace/url-state.svelte';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
 	import SpeakerCommunications from './SpeakerCommunications.svelte';
@@ -49,9 +50,17 @@
 		});
 	}
 
-	let speakers = $state<SpeakerRow[] | null>(null);
-	let taskDefs = $state<TaskDef[]>([]);
-	let assignments = $state<TaskAssignment[]>([]);
+	let rosterState = $state<
+		LiveReadState<{
+			readonly speakers: SpeakerRow[];
+			readonly defs: TaskDef[];
+			readonly assignments: TaskAssignment[];
+		}>
+	>({ kind: 'resolving' });
+	const resolvedRoster = $derived(rosterState.kind === 'resolved' ? rosterState.value : null);
+	const speakers = $derived(resolvedRoster?.speakers ?? null);
+	const taskDefs = $derived(resolvedRoster?.defs ?? []);
+	const assignments = $derived(resolvedRoster?.assignments ?? []);
 	let expandedId = $state<string | null>(null);
 	let busyId = $state<string | null>(null);
 	let announcement = $state('');
@@ -113,21 +122,49 @@
 	});
 	const cancellationPending = $derived(rows.some((row) => row.state === 'cancel_requested'));
 
+	/**
+	 * The surface's one read. It answers three ways — still arriving, arrived,
+	 * or cannot be answered — and the third is rendered as itself. Before this,
+	 * any rejection here left `speakers` null with nothing still in flight, so
+	 * the roster held skeleton rows for the rest of the session.
+	 */
+	const rosterRead = new LiveRead<{
+		readonly speakers: SpeakerRow[];
+		readonly defs: TaskDef[];
+		readonly assignments: TaskAssignment[];
+	}>({
+		read: async () => {
+			// The roster advertises "3 overdue" per speaker; the assignments behind
+			// that number are read here so the row's own panel can name them.
+			const [defs, taskAssignments, rows] = await Promise.all([
+				api.tasks.defs(),
+				api.tasks.assignments(),
+				api.speakers.list()
+			]);
+			// Fresh row objects so a committed mutation repaints the roster in place.
+			return { speakers: rows.map((row) => ({ ...row })), defs, assignments: taskAssignments };
+		},
+		fallback: 'The speaker roster could not be loaded.',
+		onChange: (state) => (rosterState = state)
+	});
+
+	/** Re-read after a write: a fresh request every time, newest answer wins. */
 	async function load() {
-		// Fresh row objects so a committed mutation repaints the roster in place.
-		speakers = (await api.speakers.list()).map((row) => ({ ...row }));
+		await rosterRead.refresh();
 	}
 
-	onMount(async () => {
-		// The roster advertises "3 overdue" per speaker; the assignments behind
-		// that number are read here so the row's own panel can name them.
-		const [defs, taskAssignments] = await Promise.all([
-			api.tasks.defs(),
-			api.tasks.assignments()
-		]);
-		taskDefs = defs;
-		assignments = taskAssignments;
-		await load();
+	let retrying = $state(false);
+	async function retry() {
+		retrying = true;
+		try {
+			await rosterRead.refresh();
+		} finally {
+			retrying = false;
+		}
+	}
+
+	onMount(() => {
+		void rosterRead.read();
 	});
 
 	function switchFilter(next: FilterKey) {
@@ -508,7 +545,22 @@
 {#if actionError}<p class="roster__error" role="alert">{actionError}</p>{/if}
 
 <section aria-label="Speaker roster">
-	{#if speakers && filtered.length === 0}
+	{#if rosterState.kind === 'unavailable'}
+		<!-- Nothing is still arriving, so nothing here pretends to be. -->
+		<div class="panel" role="alert">
+			<span class="panel__mark" aria-hidden="true"><TriangleAlert size={22} /></span>
+			<p class="panel__title">The speaker roster is unavailable</p>
+			<p class="panel__copy">{rosterState.message}</p>
+			{#if rosterState.retryable}
+				<button
+					type="button"
+					class="ui-button ui-button--secondary ui-button--sm"
+					aria-busy={retrying || undefined}
+					disabled={retrying}
+					onclick={retry}>Try again</button>
+			{/if}
+		</div>
+	{:else if speakers && filtered.length === 0}
 		<div class="panel">
 			{#if rows.length === 0}
 				{@const Situation = situationIcon.emptyRoster}

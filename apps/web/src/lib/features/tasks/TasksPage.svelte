@@ -4,6 +4,7 @@
 	import { Button, CopyValue, Field, Modal, statusIcon, trackPending } from '$lib/ui';
 	import type { IconComponent } from '$lib/ui';
 	import type { TasksPagePort } from '$lib/api/tasks-page-port';
+	import { LiveRead, type LiveReadState } from '$lib/api/live-read';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
 	import ProfilePeek from '$lib/features/workspace/components/ProfilePeek.svelte';
 	import ScopeChip from '$lib/features/workspace/components/ScopeChip.svelte';
@@ -95,10 +96,34 @@
 		waived: 'Waived'
 	};
 
-	let defs = $state<TaskDef[] | null>(null);
-	let assignments = $state<TaskAssignment[]>([]);
-	let speakers = $state<SpeakerRow[]>([]);
-	let loaded = $state(false);
+	type TaskBoard = {
+		readonly defs: TaskDef[];
+		readonly assignments: TaskAssignment[];
+		readonly speakers: SpeakerRow[];
+		readonly templates: MessageTemplate[];
+	};
+
+	/**
+	 * The board's one read, with its failure modelled beside its value. A
+	 * rejection used to leave `loaded` false forever, and the matrix renders
+	 * skeleton cells while `loaded` is false — so an unreachable board was
+	 * indistinguishable from a slow one, permanently.
+	 */
+	let boardState = $state<LiveReadState<TaskBoard>>({ kind: 'resolving' });
+	const board = $derived(boardState.kind === 'resolved' ? boardState.value : null);
+	const defs = $derived<TaskDef[] | null>(board?.defs ?? null);
+	const speakers = $derived<SpeakerRow[]>(board?.speakers ?? []);
+	const loaded = $derived(board !== null);
+
+	/**
+	 * Waiving and accepting re-read assignments alone, so they keep a cell of
+	 * their own seeded by the board read. A whole-board read clears it, since
+	 * the fresher answer arrived with the rest of the board.
+	 */
+	let assignmentOverride = $state<TaskAssignment[] | null>(null);
+	const assignments = $derived<TaskAssignment[]>(
+		assignmentOverride ?? board?.assignments ?? []
+	);
 
 	// Who each row is, keyed by their roster address. Null is a read that came
 	// back with nothing, and it is kept: a speaker without a profile is the
@@ -114,11 +139,20 @@
 	let reminderOpen = $state(false);
 	let reminderSubject = $state(reminderSubjectDefault);
 	let sending = $state(false);
+	let reminderError = $state('');
+	let createOpen = $state(false);
+	let createName = $state('');
+	let createDescription = $state('');
+	let createCompletionMode = $state<'acknowledge' | 'file_upload' | 'form' | 'external_action'>('file_upload');
+	let createRequired = $state(true);
+	let createDueOn = $state('');
+	let creating = $state(false);
+	let createError = $state('');
 
 	// One fact, one door: the reminder the send renders from is a stored
 	// template, and the quiet link beside the action is the way to it. Resolved
 	// from the template list; without a match no door renders.
-	let templates = $state.raw<MessageTemplate[]>([]);
+	const templates = $derived<MessageTemplate[]>(board?.templates ?? []);
 	const reminderTemplate = $derived(
 		templates.find((template) => template.key === 'task-reminder') ?? null
 	);
@@ -150,21 +184,49 @@
 		profiles = next;
 	}
 
-	onMount(async () => {
-		const [taskDefs, taskAssignments, speakerRows, templateList] = await Promise.all([
-			api.tasks.defs(),
-			api.tasks.assignments(),
-			api.speakers.list(),
-			api.templates.list()
-		]);
-		defs = taskDefs;
-		assignments = [...taskAssignments];
-		speakers = speakerRows;
-		templates = templateList.messages;
-		loaded = true;
-		// After the rows land, not with them: the matrix reserves the name's line
-		// from first paint, so a profile arriving late changes ink and nothing else.
-		await loadProfiles(speakerRows);
+	const boardRead = new LiveRead<TaskBoard>({
+		read: async () => {
+			const [taskDefs, taskAssignments, speakerRows, templateList] = await Promise.all([
+				api.tasks.defs(),
+				api.tasks.assignments(),
+				api.speakers.list(),
+				api.templates.list()
+			]);
+			return {
+				defs: taskDefs,
+				assignments: [...taskAssignments],
+				speakers: speakerRows,
+				templates: templateList.messages
+			};
+		},
+		fallback: 'The task board could not be loaded.',
+		onChange: (state) => {
+			boardState = state;
+			if (state.kind !== 'resolved') return;
+			assignmentOverride = null;
+			// After the rows land, not with them: the matrix reserves the name's
+			// line from first paint, so a profile arriving late changes ink and
+			// nothing else. Its own failure leaves names unresolved, never the
+			// board unrendered: "not asked yet" already renders as the plain name,
+			// which is exactly what an unanswerable profile read should show.
+			void loadProfiles(state.value.speakers).catch(() => {
+				profiles = {};
+			});
+		}
+	});
+
+	let retrying = $state(false);
+	async function retry() {
+		retrying = true;
+		try {
+			await boardRead.refresh();
+		} finally {
+			retrying = false;
+		}
+	}
+
+	onMount(() => {
+		void boardRead.read();
 	});
 
 	const cellKey = (taskId: string, speakerId: string) => `${taskId}::${speakerId}`;
@@ -278,7 +340,7 @@
 	async function reread() {
 		refreshing = true;
 		try {
-			assignments = [...(await api.tasks.assignments())];
+			assignmentOverride = [...(await api.tasks.assignments())];
 		} finally {
 			refreshing = false;
 		}
@@ -343,6 +405,7 @@
 
 	function openReminder() {
 		reminderSubject = reminderSubjectDefault;
+		reminderError = '';
 		reminderOpen = true;
 	}
 
@@ -351,15 +414,61 @@
 		if (recipients.length === 0 || sending) return;
 		const subject = reminderSubject.trim() || reminderSubjectDefault;
 		sending = true;
-		await api.tasks.remind(recipients, subject);
-		recordAction({
-			area: 'tasks',
-			label: `Sent “${subject}” to ${recipients.length} ${plural(recipients.length, 'speaker', 'speakers')}`,
-			notUndoableReason: 'Email cannot be recalled after the provider accepts it.'
-		});
-		sending = false;
-		reminderOpen = false;
-		selected = [];
+		reminderError = '';
+		try {
+			await api.tasks.remind(recipients, subject);
+			recordAction({
+				area: 'tasks',
+				label: `Committed “${subject}” for ${recipients.length} ${plural(recipients.length, 'speaker', 'speakers')}`,
+				notUndoableReason: 'Email cannot be recalled after the provider accepts it.'
+			});
+			reminderOpen = false;
+			selected = [];
+		} catch (error) {
+			reminderError = error instanceof Error ? error.message : 'The reminder could not be sent.';
+		} finally {
+			sending = false;
+		}
+	}
+
+	function openCreate() {
+		createName = '';
+		createDescription = '';
+		createCompletionMode = 'file_upload';
+		createRequired = true;
+		createDueOn = '';
+		createError = '';
+		createOpen = true;
+	}
+
+	async function createDefinition() {
+		const name = createName.trim();
+		if (!name || !createDueOn || creating) return;
+		creating = true;
+		createError = '';
+		try {
+			const outcome = await api.tasks.createDefinition({
+				name,
+				description: createDescription.trim() || null,
+				completionMode: createCompletionMode,
+				required: createRequired,
+				dueOn: createDueOn
+			});
+			if (!outcome.ok) {
+				createError = outcome.reason;
+				return;
+			}
+			recordAction({
+				area: 'tasks',
+				label: `Created “${name}” for confirmed speakers`,
+				notUndoableReason: 'Task definitions are corrected forward so their assignment history stays intact.'
+			});
+			createOpen = false;
+			announcement = `${name} created for confirmed speakers.`;
+			await boardRead.refresh();
+		} finally {
+			creating = false;
+		}
 	}
 </script>
 
@@ -457,10 +566,11 @@
 			<span class="stat__value">{fullyDone}</span>
 			<span class="stat__sub">of {rows.length} with assignments</span>
 		</article>
-	{:else}
+	{:else if boardState.kind === 'resolving'}
 		{#each Array(3) as _, index (index)}
 			<!-- The stat's own composition with skeleton fills, so the tile keeps
-			     the height its label, figure, and note give it. -->
+			     the height its label, figure, and note give it. Only while the read
+			     is genuinely open: a failed board states itself once, below. -->
 			<article class="stat" aria-hidden="true">
 				<span class="stat__label"><span class="ui-skeleton skeleton-line" style="inline-size: 8rem"></span></span>
 				<span class="stat__value"><span class="ui-skeleton skeleton-line" style="inline-size: 3rem"></span></span>
@@ -484,7 +594,17 @@
 		{/if}
 	</header>
 
-	{#if loaded && rows.length === 0}
+	{#if boardState.kind === 'unavailable'}
+		<!-- The board answered "no". Its skeleton would keep promising a matrix
+		     that nothing is still fetching. -->
+		<div class="blank blank--page" role="alert">
+			<p class="blank__title">The task board is unavailable</p>
+			<p class="blank__copy">{boardState.message}</p>
+			{#if boardState.retryable}
+				<Button size="sm" onclick={retry} disabled={retrying}>Try again</Button>
+			{/if}
+		</div>
+	{:else if loaded && rows.length === 0}
 		<div class="blank blank--page">
 			<p class="blank__title">No speaker tasks yet</p>
 			<p class="blank__copy">
@@ -492,7 +612,7 @@
 				format” — and assignments appear on their own as each speaker confirms. Describe the rule
 				once, or create a task definition and assign it by hand.
 			</p>
-			<Button size="sm">Create a task definition</Button>
+			<Button size="sm" onclick={openCreate}>Create a task definition</Button>
 		</div>
 	{:else}
 		<div class="ui-toolbar board__toolbar">
@@ -513,6 +633,7 @@
 					Reminder template
 				</a>
 			{/if}
+			<Button variant="secondary" size="sm" onclick={openCreate}>Create task</Button>
 			<button
 				type="button"
 				class="ui-button ui-button--primary ui-button--sm board__remind"
@@ -730,6 +851,50 @@
 
 <CommitReceipt onUndone={reread} />
 
+<Modal bind:open={createOpen} title="Create a task definition">
+	<p class="reminder__lede">
+		The definition applies to every currently confirmed speaker. New confirmations join automatically.
+	</p>
+	<div class="create-form">
+		<Field id="task-name" label="Task name" required>
+			{#snippet children({ id, describedBy })}
+				<input class="ui-control" type="text" {id} aria-describedby={describedBy} bind:value={createName} />
+			{/snippet}
+		</Field>
+		<Field id="task-description" label="Description">
+			{#snippet children({ id, describedBy })}
+				<textarea class="ui-control" {id} aria-describedby={describedBy} rows="3" bind:value={createDescription}></textarea>
+			{/snippet}
+		</Field>
+		<Field id="task-completion" label="Completion" required>
+			{#snippet children({ id, describedBy })}
+				<select class="ui-select" {id} aria-describedby={describedBy} bind:value={createCompletionMode}>
+					<option value="file_upload">File upload</option>
+					<option value="acknowledge">Acknowledgement</option>
+					<option value="form">Form</option>
+					<option value="external_action">External action</option>
+				</select>
+			{/snippet}
+		</Field>
+		<Field id="task-due" label="Due date" required>
+			{#snippet children({ id, describedBy })}
+				<input class="ui-control" type="date" {id} aria-describedby={describedBy} bind:value={createDueOn} />
+			{/snippet}
+		</Field>
+		<label class="create-required">
+			<input type="checkbox" bind:checked={createRequired} />
+			<span>Required for every confirmed speaker</span>
+		</label>
+		{#if createError}<p class="create-error" role="alert">{createError}</p>{/if}
+	</div>
+	{#snippet footer(close)}
+		<Button variant="ghost" onclick={close} disabled={creating}>Cancel</Button>
+		<Button loading={creating} disabled={!createName.trim() || !createDueOn} onclick={createDefinition}>
+			Create task
+		</Button>
+	{/snippet}
+</Modal>
+
 <Modal bind:open={reminderOpen} title="Send task reminder">
 	<p class="reminder__lede">
 		{reminderIncluded.length}
@@ -742,6 +907,7 @@
 			<input class="ui-control" type="text" {id} aria-describedby={describedBy} bind:value={reminderSubject} />
 		{/snippet}
 	</Field>
+	{#if reminderError}<p class="reminder__error" role="alert">{reminderError}</p>{/if}
 
 	<!-- Who receives this, named; and who does not, with the reason on the row.
 	     A selection is not a permission to write to someone. -->
@@ -826,6 +992,24 @@
 		grid-area: label;
 		font-size: var(--je-font-size-xs);
 		color: var(--je-color-text-muted);
+	}
+
+	.create-form {
+		display: grid;
+		gap: var(--je-space-4);
+	}
+
+	.create-required {
+		display: flex;
+		align-items: center;
+		gap: var(--je-space-2);
+		font-size: var(--je-font-size-sm);
+	}
+
+	.create-error {
+		margin: 0;
+		color: var(--je-color-danger);
+		font-size: var(--je-font-size-sm);
 	}
 
 	.stat__value {
@@ -1170,6 +1354,13 @@
 	.reminder__lede {
 		margin: 0 0 var(--je-space-4);
 		font-size: var(--je-font-size-md);
+		line-height: var(--je-leading-normal);
+	}
+
+	.reminder__error {
+		margin: 0 0 var(--je-space-4);
+		color: var(--je-color-danger);
+		font-size: var(--je-font-size-sm);
 		line-height: var(--je-leading-normal);
 	}
 

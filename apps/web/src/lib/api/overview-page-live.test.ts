@@ -5,6 +5,7 @@ import {
 } from '@jooevents/contracts/workspace-overview';
 import type { EventProgramPort } from './event-program/port';
 import type { WorkspaceOverviewPort } from './operations/workspace-overview-live';
+import { formatDateRange } from '@jooevents/contracts';
 import { createLiveOverviewPagePort } from './overview-page-live';
 
 const id = (value: number) =>
@@ -99,8 +100,7 @@ describe('live Overview page port', () => {
 	test('projects exact metrics and grouped history without inventing missing operational sections', async () => {
 		const port = createLiveOverviewPagePort({
 			overview: overviewPort(),
-			event: eventPort([]),
-			now: () => Date.parse('2026-08-13T03:00:00.000Z')
+			event: eventPort([])
 		});
 		expect(port.snapshot()).toBeNull();
 		const result = await port.read();
@@ -109,9 +109,14 @@ describe('live Overview page port', () => {
 			data: {
 				event: {
 					name: 'Test Summit',
-					dates: '2027-06-10 – 2027-06-12',
+					// The one date vocabulary spells this, not the port: a span in the
+					// same month says its month once and never breaks across a line,
+					// which is why the expectation is the vocabulary's own output
+					// rather than a hand-typed twin carrying ordinary spaces.
+					dates: formatDateRange('2027-06-10', '2027-06-12'),
 					timezone: 'Asia/Singapore'
 				},
+				arrivals: null,
 				navCounts: { submissions: '12' },
 				stats: [
 					{ label: 'Forms', value: '5', sub: '2 open · 1 draft · 2 closed' },
@@ -127,7 +132,9 @@ describe('live Overview page port', () => {
 					actor: 'agent',
 					name: 'An agent',
 					text: 'committed changes to forms',
-					time: '5 min ago'
+					// The instant, not a rendering of it. The words are the date
+					// vocabulary's job wherever the feed is drawn.
+					at: '2026-08-13T02:55:00.000Z'
 				}],
 				sections: {
 					attention: { kind: 'unavailable' },

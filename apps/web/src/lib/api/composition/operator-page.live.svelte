@@ -2,6 +2,7 @@
 	import LiveUnavailablePage from '$lib/features/workspace/components/LiveUnavailablePage.svelte';
 	import CommunicationsReadinessPage from '$lib/features/communications/CommunicationsReadinessPage.svelte';
 	import DecisionsPage from '$lib/features/decisions/DecisionsPage.svelte';
+	import EmbedsPage from '$lib/features/embeds/EmbedsPage.svelte';
 	import FilesPage from '$lib/features/files/FilesPage.svelte';
 	import OverviewDashboard from '$lib/features/workspace/components/OverviewDashboard.svelte';
 	import FormsPage from '$lib/features/forms/FormsPage.svelte';
@@ -12,9 +13,11 @@
 	import SchedulePage from '$lib/features/schedule/SchedulePage.svelte';
 	import SettingsPage from '$lib/features/settings/SettingsPage.svelte';
 	import SpeakersPage from '$lib/features/speakers/SpeakersPage.svelte';
+	import TemplatesPage from '$lib/features/templates/TemplatesPage.svelte';
+	import TasksPage from '$lib/features/tasks/TasksPage.svelte';
 	import { useLiveWorkspacePorts } from './live-workspace';
 	import { ReviewResolutionError } from './review-resolution';
-	import type { OperatorPageId } from './operator-pages';
+	import { isSettingsPage, settingsSectionOf, type OperatorPageId } from './operator-pages';
 
 	let { area }: { readonly area: OperatorPageId } = $props();
 	const ports = useLiveWorkspacePorts();
@@ -46,7 +49,12 @@
 		forms: 'Forms',
 		templates: 'Templates',
 		embeds: 'Embeds',
-		settings: 'Settings'
+		settings: 'Settings',
+		settings_event: 'Settings',
+		settings_program: 'Settings',
+		settings_team: 'Settings',
+		settings_email: 'Settings',
+		settings_about: 'Settings'
 	});
 </script>
 
@@ -55,7 +63,7 @@
 {:else if area === 'submissions'}
 	<SubmissionsPage port={ports.submissions} />
 {:else if area === 'decisions'}
-	<DecisionsPage port={ports.decisions} />
+	<DecisionsPage port={ports.decisions} resolveLineupPort={ports.review} />
 {:else if area === 'review' || area === 'review_lineup'}
 	<!-- The live Review port exists only once the snapshot has disclosed which
 	     authority projection the server serves (organizer or reviewer); until
@@ -95,6 +103,8 @@
 	{/key}
 {:else if area === 'speakers'}
 	<SpeakersPage port={ports.speakers} />
+{:else if area === 'tasks'}
+	<TasksPage port={ports.tasks} />
 {:else if area === 'files'}
 	<FilesPage port={ports.files} />
 {:else if area === 'reviewers'}
@@ -103,10 +113,14 @@
 	<SchedulePage port={ports.schedule} />
 {:else if area === 'forms'}
 	<FormsPage port={ports.forms} />
+{:else if area === 'templates'}
+	<TemplatesPage port={ports.templates} />
+{:else if area === 'embeds'}
+	<EmbedsPage port={ports.embeds} />
 {:else if area === 'communications'}
 	<CommunicationsReadinessPage port={ports.communicationsReadiness} />
-{:else if area === 'settings'}
-	<SettingsPage port={ports.settings} />
+{:else if isSettingsPage(area)}
+	<SettingsPage port={ports.settings} section={settingsSectionOf(area)} />
 {:else}
 	<LiveUnavailablePage title={labels[area]} />
 {/if}

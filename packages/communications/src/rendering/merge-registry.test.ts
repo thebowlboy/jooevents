@@ -2,8 +2,12 @@ import { describe, expect, test } from 'bun:test';
 import {
   OrganizerMergeRegistryError,
   createOrganizerMergeRegistryRelease,
+  organizerMergeValueText,
   resolveOrganizerMergeFields
 } from './merge-registry';
+
+/** Reads an expectation with ordinary spaces against the real non-breaking bytes. */
+const span = (text: string): string => text.replaceAll(' ', '\u00a0');
 
 const registry = createOrganizerMergeRegistryRelease({
   reference: { key: 'merge.registry', version: 1 },
@@ -70,5 +74,49 @@ describe('organizer merge registry', () => {
       ...base,
       resolvedValues: [{ fieldKey: 'event.name', value: { valueType: 'integer', value: 1 } }]
     })).toThrow(new OrganizerMergeRegistryError('merge_value_type_mismatch'));
+  });
+});
+
+describe('organizer merge value text', () => {
+  test('spells a stored date and instant in the shared date vocabulary', () => {
+    expect(organizerMergeValueText({ valueType: 'date', value: '2027-03-18' }))
+      .toBe(span('18 Mar 2027'));
+    expect(organizerMergeValueText(
+      { valueType: 'instant', value: '2027-03-18T23:59:00.000Z' },
+      { timezone: 'America/New_York' }
+    )).toBe(span('18 Mar 2027 · 19:59 EDT'));
+  });
+
+  test('never emits the machine string a recipient must not be shown', () => {
+    for (const value of [
+      { valueType: 'date' as const, value: '2027-03-18' },
+      { valueType: 'instant' as const, value: '2027-03-18T23:59:00.000Z' }
+    ]) {
+      const text = organizerMergeValueText(value, { timezone: 'Europe/Helsinki' });
+      expect(text).not.toContain(value.value);
+      expect(text).not.toContain('T23:59');
+      expect(text).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+      expect(text).not.toContain('Invalid Date');
+      expect(text.length).toBeGreaterThan(0);
+    }
+  });
+
+  test('labels the zone it actually used, including the UTC it falls back to', () => {
+    // No zone at the seam is not a licence to print a bare clock: the reader is
+    // told which wall clock this is, and can convert it.
+    expect(organizerMergeValueText({ valueType: 'instant', value: '2027-03-18T23:59:00.000Z' }))
+      .toBe(span('18 Mar 2027 · 23:59 UTC'));
+    // The zone moves the calendar day, which is the whole reason it is here.
+    expect(organizerMergeValueText(
+      { valueType: 'instant', value: '2027-03-18T23:59:00.000Z' },
+      { timezone: 'Pacific/Auckland' }
+    )).toBe(span('19 Mar 2027 · 12:59 GMT+13'));
+  });
+
+  test('passes text, url, and integer through unchanged', () => {
+    expect(organizerMergeValueText({ valueType: 'text', value: 'Maya' })).toBe('Maya');
+    expect(organizerMergeValueText({ valueType: 'url', value: 'https://a.test/x' }))
+      .toBe('https://a.test/x');
+    expect(organizerMergeValueText({ valueType: 'integer', value: 12 })).toBe('12');
   });
 });

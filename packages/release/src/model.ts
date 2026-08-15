@@ -2,6 +2,7 @@ import {
   programReleaseSchema,
   releaseScopeSchema,
   servedPublicRosterSchema,
+  servedPublicPresentationSchema,
   servedPublicScheduleSchema,
   styleSetReleaseSchema,
   surfaceHeadSchema,
@@ -12,12 +13,15 @@ import {
   type ReleaseScopeDto,
   type SchedulePlacementSnapshotDto,
   type ServedPublicRosterDto,
+  type ServedPublicPresentationDto,
   type ServedPublicScheduleDto,
   type SessionCatalogDto,
   type StyleSetReleaseDto,
   type SurfaceHeadDto,
   type SurfaceKind,
-  type SurfaceReleaseDto
+  type SurfaceReleaseDto,
+  type ReleaseTemplateRevisionPinDto,
+  type TemplateArtifactDocumentDto
 } from '@jooevents/contracts';
 import { canonicalJsonSha256 } from '@jooevents/changesets';
 
@@ -133,6 +137,32 @@ export function projectServedPublicRoster(release: ProgramRelease): ServedPublic
 }
 
 /**
+ * Narrows an active surface release and its exact style-set pin to the
+ * presentation facts an anonymous renderer needs. The pair is re-verified and
+ * must share scope; a broken style pin is never replaced with live/default
+ * organizer state.
+ */
+export function projectServedPublicPresentation(input: {
+  readonly surface: SurfaceRelease;
+  readonly style: StyleSetRelease;
+}): ServedPublicPresentationDto {
+  const surface = parseSurfaceRelease(input.surface);
+  const style = parseStyleSetRelease(input.style);
+  if (!sameReleaseScope(surface.scope, style.scope)
+      || surface.styleSetReleaseId !== style.id) {
+    throw new TypeError('surface_style_release_mismatch');
+  }
+  return deepFreeze(servedPublicPresentationSchema.parse({
+    schemaVersion: 1,
+    surfaceKind: surface.kind,
+    surfaceReleaseNumber: surface.number,
+    manifest: surface.manifest,
+    styleSetReleaseNumber: style.number,
+    style: style.recipe
+  }));
+}
+
+/**
  * Program Vocabulary evidence exactly as release materialization consumes it:
  * the set pin plus the room-name projection released occurrences reference.
  * The composing runtime derives it from the canonical vocabulary repository.
@@ -142,6 +172,7 @@ export interface ReleaseVocabularyEvidence {
   readonly setVersion: number;
   readonly setDigestSha256: string;
   readonly rooms: readonly { readonly id: string; readonly name: string }[];
+  readonly tracks: readonly { readonly id: string; readonly status: 'active' | 'retired' }[];
 }
 
 /**
@@ -173,6 +204,11 @@ export interface ReleaseReadPort {
   readReleaseParticipantDisplayName(scope: ReleaseScope, personId: string): string | undefined;
   /** The republished-form pin source: the form's current published version, if any. */
   readReleasePublishedFormVersionId(scope: ReleaseScope, formId: string): string | undefined;
+  /** Canonical current Template snapshot used to verify and derive presentation releases. */
+  readReleaseTemplateArtifact?(
+    scope: ReleaseScope,
+    pin: ReleaseTemplateRevisionPinDto
+  ): TemplateArtifactDocumentDto | undefined;
 }
 
 function deepFreeze<Value>(value: Value): Value {

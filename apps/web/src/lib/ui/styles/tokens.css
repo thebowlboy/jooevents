@@ -120,6 +120,54 @@
     --je-color-accent-sea-strong: var(--je-palette-sea-700);
     --je-color-accent-sea-soft: var(--je-palette-sea-100);
 
+    /*
+     * Recognition roles inside dense operational records.
+     *
+     * The ink ladder answers "how important?"; these two quiet hues answer
+     * "what kind of value is this?" without borrowing action, category, or
+     * status paint. They are activated only for a surface's declared scan
+     * values, never sprayed across every occurrence of a person or time.
+     */
+    --je-color-recognition-person: var(--je-palette-sea-700);
+    --je-color-recognition-time: var(--je-color-info);
+
+    /*
+     * Track accents: a programme's categories.
+     *
+     * Three accents (lavender / sea / neutral) cannot tell a real track list
+     * apart, and the third of them was "no colour", which reads as a missing
+     * value rather than a category. Eight families, hue-separated and
+     * deliberately equal in lightness — every fill sits at ~1.2:1 against
+     * surface, so no track looks more important than its neighbours and the
+     * set carries differentiation without spending emphasis.
+     *
+     * Every ink is >= 5.7:1 on its own fill, on `surface`, and on `page`
+     * (measured; `track-accents.ts` carries the table and asserts it in a
+     * unit test). They are theme-independent on purpose: they are absent
+     * from `publicThemeTokens`, so an event theme cannot re-derive a category
+     * palette out of its own action colour and collide with status.
+     *
+     * They are consumed through `.ui-track`, not `.ui-badge`: a category takes
+     * a different silhouette from a state, so colour inside the category
+     * family never borrows the learned status reflex.
+     */
+    --je-color-track-1-soft: #ece7f6;
+    --je-color-track-1-ink: #57497a;
+    --je-color-track-2-soft: #daedee;
+    --je-color-track-2-ink: #2f6165;
+    --je-color-track-3-soft: #e3e8f7;
+    --je-color-track-3-ink: #3f4e86;
+    --je-color-track-4-soft: #f4e5f1;
+    --je-color-track-4-ink: #7a3d6d;
+    --je-color-track-5-soft: #e7edda;
+    --je-color-track-5-ink: #4f6127;
+    --je-color-track-6-soft: #f5e9d7;
+    --je-color-track-6-ink: #74551f;
+    --je-color-track-7-soft: #fae2e7;
+    --je-color-track-7-ink: #8f3a53;
+    --je-color-track-8-soft: #eee6df;
+    --je-color-track-8-ink: #6b5344;
+
     --je-color-danger-contrast: #ffffff;
     --je-color-scrim: rgb(42 37 34 / 0.4);
     --je-color-shimmer: rgb(255 255 255 / 0.6);
@@ -169,6 +217,15 @@
     --je-control-padding-x: 0.75rem;
     --je-density-gap: 0.75rem;
     --je-row-height: 2.625rem;
+    /*
+     * The width a dense table needs before its columns are worth keeping, and
+     * the documented threshold of the phone record (see `.ui-table` in
+     * components.css). Container queries cannot read a custom property in
+     * their condition, so 52rem is repeated literally there — this token is
+     * the single place the number is *named*, and `.ui-table`'s own
+     * `min-width` consumes it so the two can never drift.
+     */
+    --je-table-columns-min: 52rem;
     --je-page-max: 96rem;
     --je-sidebar-width: 14rem;
     --je-topbar-height: 3.5rem;

@@ -1,4 +1,4 @@
-import type { EventSettingsDto } from '@jooevents/contracts';
+import { formatDateRange, type EventSettingsDto } from '@jooevents/contracts';
 import type { EventSettingsView } from '../view-models/event-settings';
 
 type HandledEventSettingsKey =
@@ -22,45 +22,16 @@ const handledEventSettingsKeys: Record<
 > = {};
 void handledEventSettingsKeys;
 
-interface CalendarDate {
-	readonly year: number;
-	readonly month: number;
-	readonly day: number;
-}
-
-const monthNames = Object.freeze([
-	'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-	'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-] as const);
-
-function calendarDate(iso: string): CalendarDate | undefined {
-	const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(iso);
-	if (!match) return undefined;
-	const year = Number(match[1]);
-	const month = Number(match[2]);
-	const day = Number(match[3]);
-	if (!Number.isInteger(year) || month < 1 || month > 12 || day < 1 || day > 31) {
-		return undefined;
-	}
-	return { year, month, day };
-}
-
-/** Stable English date-range label consumed by the tuned operator UI. */
+/**
+ * The event's span as the shell and the page headers say it.
+ *
+ * The spelling is the product's one date vocabulary, so the sidebar, the
+ * settings form, a public listing, and the email about the same event all read
+ * the same. It kept its own name because a dozen call sites already say it; the
+ * body is a single call and this alias is only worth the line while they move.
+ */
 export function formatEventSettingsDateRange(startIso: string, endIso: string): string {
-	const start = calendarDate(startIso);
-	const end = calendarDate(endIso);
-	if (!start || !end) return `${startIso} – ${endIso}`;
-	const startMonth = monthNames[start.month - 1];
-	const endMonth = monthNames[end.month - 1];
-	if (!startMonth || !endMonth) return `${startIso} – ${endIso}`;
-	if (start.year === end.year && start.month === end.month) {
-		return start.day === end.day
-			? `${startMonth} ${start.day}, ${start.year}`
-			: `${startMonth} ${start.day}–${end.day}, ${start.year}`;
-	}
-	return start.year === end.year
-		? `${startMonth} ${start.day} – ${endMonth} ${end.day}, ${start.year}`
-		: `${startMonth} ${start.day}, ${start.year} – ${endMonth} ${end.day}, ${end.year}`;
+	return formatDateRange(startIso, endIso, { fallback: 'Dates not set' });
 }
 
 /** Exhaustive, detached mapping from the wire DTO into browser state. */

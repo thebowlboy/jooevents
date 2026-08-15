@@ -384,7 +384,8 @@ describe('reviewers namespace', () => {
 		const priya = roster.reviewers.find((reviewer) => reviewer.status === 'invited');
 		expect(priya).toMatchObject({ id: 'mem-5', assigned: 0, done: 0 });
 
-		const infra = roster.coverage.find(
+		const servedCoverage = roster.coverage.kind === 'served' ? roster.coverage.rows : [];
+		const infra = servedCoverage.find(
 			(row) => row.ref.kind === 'track' && row.ref.id === 'trk-infra'
 		);
 		expect(infra?.reviewers).toBe(2);
@@ -394,10 +395,10 @@ describe('reviewers namespace', () => {
 
 		// Evals & Reliability has only an invited scope-holder, so its scoped
 		// count is honestly 0 — the generalist count answers for it.
-		const ai = roster.coverage.find((row) => row.ref.kind === 'track' && row.ref.id === 'trk-ai');
+		const ai = servedCoverage.find((row) => row.ref.kind === 'track' && row.ref.id === 'trk-ai');
 		expect(ai?.reviewers).toBe(0);
 
-		const collecting = roster.coverage.filter((row) => row.ref.kind === 'session');
+		const collecting = servedCoverage.filter((row) => row.ref.kind === 'session');
 		expect(collecting.map((row) => row.ref.id).sort()).toEqual(['ses-11', 'ses-12']);
 		expect(collecting.every((row) => row.submissions === 0)).toBe(true);
 		// The door numbers carry implied coverage: track-scoped Jonas and Tomás

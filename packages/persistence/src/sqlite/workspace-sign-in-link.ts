@@ -3,7 +3,9 @@ import { createHash } from 'node:crypto';
 import { normalizeEmail } from '@jooevents/identity-access';
 import {
   buildCommunicationMessageRelease,
-  renderTransactionalEmail
+  composeCommunicationSenderPresentation,
+  renderTransactionalEmail,
+  type MailSenderPresentationResolver
 } from '@jooevents/communications';
 import { outboundEmailDeliveryWorkInputSchema } from '@jooevents/contracts';
 import { canonicalJsonText, encodeCanonicalJson } from '@jooevents/kernel';
@@ -86,12 +88,12 @@ export function decideWorkspaceSignInLinkEligibility(input: {
   return { eligible: reservations.length === 1 };
 }
 
-/** Per-installation sender identity; composed from deployment configuration, never hardcoded. */
-export interface WorkspaceSignInLinkSenderConfig {
-  readonly fromAddress: string;
-  readonly fromDisplayName?: string;
-  readonly replyToAddress?: string;
-}
+/**
+ * Sender presentation is resolved once per send, never frozen at composition:
+ * the from-address is the installation's, while display name and reply-to may
+ * be workspace settings that change between two sends of the same process.
+ */
+export type WorkspaceSignInLinkSenderResolver = MailSenderPresentationResolver;
 
 export interface WorkspaceSignInLinkProviderRoute {
   readonly providerConnectionRevisionId: string;
@@ -160,27 +162,9 @@ export function createSQLiteWorkspaceSignInLinkDelivery(input: {
   readonly sqlite: Database;
   readonly releases: SQLiteCommunicationMessageReleaseStore;
   readonly ids: WorkspaceSignInLinkDeliveryIds;
-  readonly sender: WorkspaceSignInLinkSenderConfig;
+  readonly senderResolver: WorkspaceSignInLinkSenderResolver;
   readonly providerRoute?: WorkspaceSignInLinkProviderRoute;
 }): WorkspaceSignInLinkDelivery {
-  const senderPresentation = Object.freeze({
-    fromAddress: input.sender.fromAddress,
-    ...(input.sender.fromDisplayName === undefined
-      ? {}
-      : { fromDisplayName: input.sender.fromDisplayName }),
-    ...(input.sender.replyToAddress === undefined
-      ? {}
-      : { replyToAddress: input.sender.replyToAddress }),
-    senderProfileRevisionId: SENDER_PROFILE_REVISION_ID,
-    senderPresentationContractKey: SENDER_PRESENTATION_CONTRACT_KEY,
-    senderPresentationContractVersion: SENDER_PRESENTATION_CONTRACT_VERSION
-  });
-  const senderPresentationDigestSha256 = digest({
-    schemaVersion: 1,
-    presentation: senderPresentation
-  });
-  const sender = Object.freeze({ ...senderPresentation, senderPresentationDigestSha256 });
-
   return Object.freeze({
     enqueueSignInLink(
       effect: WorkspaceSignInLinkDeliveryEffect
@@ -188,6 +172,15 @@ export function createSQLiteWorkspaceSignInLinkDelivery(input: {
       if (!input.sqlite.inTransaction) {
         throw new TypeError('workspace_sign_in_link_delivery_transaction_required');
       }
+      // Resolved here, inside the enqueue: the profile revision id names the
+      // lane's sender profile, and the presentation digest is the exact
+      // per-send pin the ledger and provider revalidation compare.
+      const { sender, senderPresentationDigestSha256 } = composeCommunicationSenderPresentation({
+        resolver: input.senderResolver,
+        senderProfileRevisionId: SENDER_PROFILE_REVISION_ID,
+        senderPresentationContractKey: SENDER_PRESENTATION_CONTRACT_KEY,
+        senderPresentationContractVersion: SENDER_PRESENTATION_CONTRACT_VERSION
+      });
       const message = renderWorkspaceSignInLinkMessage({
         linkUrl: effect.linkUrl,
         requestedAt: effect.requestedAt,

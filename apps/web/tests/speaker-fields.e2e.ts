@@ -3,7 +3,7 @@ import { expect, test, type Page } from '@playwright/test';
 const panelOf = (page: Page) => page.getByRole('region', { name: 'Speaker fields' });
 
 async function openSettings(page: Page) {
-	await page.goto('/app/settings');
+	await page.goto('/app/settings/program');
 	const panel = panelOf(page);
 	await expect(panel.getByRole('heading', { name: 'Speaker fields' })).toBeVisible({
 		timeout: 15000
@@ -33,7 +33,10 @@ async function leaveAndReturn(page: Page, projectName: string) {
 		timeout: 15000
 	});
 	await reachNav(page, projectName);
-	await page.locator('.side__link[href="/app/settings"]').click();
+	// Settings is a group of sections; away from it the group is closed, so the
+	// way back is its disclosure and then the section this panel lives on.
+	await page.getByRole('button', { name: 'Expand Settings sections' }).click();
+	await page.locator('.side__link[href="/app/settings/program"]').click();
 	await expect(panelOf(page).getByRole('heading', { name: 'Speaker fields' })).toBeVisible({
 		timeout: 15000
 	});
@@ -201,7 +204,7 @@ test('a workspace without an event shows the start panel alone — no fields sec
 		{ name: 'je-scenario', value: 'fresh', url: baseURL ?? 'http://127.0.0.1:4173' }
 	]);
 
-	await page.goto('/app/settings');
+	await page.goto('/app/settings/program');
 	await expect(page.getByRole('region', { name: 'No event yet' })).toBeVisible({ timeout: 15000 });
 	await expect(panelOf(page)).toHaveCount(0);
 });

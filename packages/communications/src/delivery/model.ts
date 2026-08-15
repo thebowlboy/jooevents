@@ -21,6 +21,29 @@ export type OutboundEmailDeliveryState =
  */
 export type OutboundEmailDeliveryAttemptKind = 'original' | 'marked_resend';
 
+/**
+ * The bounded wall-clock budget one provider submission may occupy. The
+ * configured adapter enforces it on its own request, so a submission either
+ * resolves or reports a bounded acceptance-unknown timeout within this window.
+ */
+export const OUTBOUND_EMAIL_PROVIDER_REQUEST_BUDGET_MS = 20_000;
+
+/**
+ * The lease is derived from that budget, never guessed: it has to outlast a
+ * full-budget request plus the two short ledger transactions bracketing it, and
+ * it is renewed when the attempt actually starts, so an ordinary slow send can
+ * never lapse mid-flight. Three budgets is the accepted margin.
+ */
+export const OUTBOUND_EMAIL_DELIVERY_LEASE_MARGIN_FACTOR = 3;
+
+/**
+ * How long a dispatch claim owns a delivery. Ownership is durable state on the
+ * delivery head, so it survives a process death: a worker that dies mid-attempt
+ * stops renewing, the lease lapses, and only then may another worker take it.
+ */
+export const OUTBOUND_EMAIL_DELIVERY_LEASE_MS =
+  OUTBOUND_EMAIL_PROVIDER_REQUEST_BUDGET_MS * OUTBOUND_EMAIL_DELIVERY_LEASE_MARGIN_FACTOR;
+
 export interface OutboundEmailDeliveryHead {
   readonly contractVersion: 1;
   readonly workspaceId: string;
@@ -56,6 +79,16 @@ export interface OutboundEmailDeliveryHead {
    */
   readonly markedResendExhausted: boolean;
   readonly currentAttemptId: string | null;
+  /**
+   * The claim token of whoever owns dispatching this delivery right now, or
+   * `null` when nobody does. This is the durable answer to "is a worker
+   * actively doing this", which `state = 'request_started'` alone cannot give:
+   * that state means the same thing for a live attempt and for one abandoned by
+   * a dead process.
+   */
+  readonly leaseClaimId: string | null;
+  /** When the current claim lapses. A lapsed lease is takeable; a live one is not. */
+  readonly leaseExpiresAt: string | null;
 }
 
 export interface OutboundEmailDeliveryAttempt {

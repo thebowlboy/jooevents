@@ -9,6 +9,10 @@ import {
 	createLiveSettingsPagePort,
 	createSampleSettingsPagePort
 } from './settings-page-port';
+import {
+	createSampleSenderIdentitySettingsPort,
+	type SettingsPageSenderIdentityPort
+} from './sender-identity-settings-port';
 import type {
 	WorkspaceTeamSettingsMutationResult,
 	WorkspaceTeamSettingsPort
@@ -154,6 +158,11 @@ function committedInvite(): WorkspaceTeamSettingsMutationResult {
 	};
 }
 
+/** The Email section's seam is exercised in its own suites; here it only has to exist. */
+const senderIdentity: SettingsPageSenderIdentityPort = createSampleSenderIdentitySettingsPort(
+	sampleWorkspaceGateway.api.communications.senderIdentity
+);
+
 function createLivePort(team: WorkspaceTeamSettingsPort = teamPort()) {
 	return createLiveSettingsPagePort({
 		event: {
@@ -162,7 +171,8 @@ function createLivePort(team: WorkspaceTeamSettingsPort = teamPort()) {
 		},
 		team,
 		vocab: vocabulary('live'),
-		fields: sampleWorkspaceGateway.api.fields
+		fields: sampleWorkspaceGateway.api.fields,
+		senderIdentity
 	});
 }
 
@@ -183,7 +193,8 @@ describe('tuned Settings page source seam', () => {
 			},
 			team: teamPort(),
 			vocab: vocabulary('sample'),
-			fields: sampleWorkspaceGateway.api.fields
+			fields: sampleWorkspaceGateway.api.fields,
+			senderIdentity
 		})).toThrow('live_settings_source_required');
 	});
 

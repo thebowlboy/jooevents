@@ -49,6 +49,7 @@ function port(forms: OrganizerFormsPort = liveForms()) {
 		forms,
 		fields,
 		vocabulary,
+		templates: { async applicationFormSurfaceId() { return null; } },
 		newIdempotencyKey: () => `forms-live-test-${sequence += 1}`
 	});
 }
@@ -157,7 +158,8 @@ describe('live tuned Forms page adapter', () => {
 
 	test('requires a live canonical source and contains no sample or raw transport dependency', () => {
 		expect(() => createLiveFormsPagePort({
-			forms: createIntakeFormsSamplePort(), fields, vocabulary
+			forms: createIntakeFormsSamplePort(), fields, vocabulary,
+			templates: { async applicationFormSurfaceId() { return null; } }
 		})).toThrow('forms_page_live_source_required');
 		const source = readFileSync(import.meta.path.replace(/\.test\.ts$/u, '.ts'), 'utf8');
 		expect(source).not.toMatch(/(?:from|import\s*\()[^\n]*\/sample(?:\/|['"])/u);

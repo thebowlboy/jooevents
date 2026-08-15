@@ -115,6 +115,38 @@
     background: var(--je-color-danger);
   }
 
+  /*
+   * Quiet danger: destructive, but not the region's primary.
+   *
+   * "Discard" sitting in a row of ordinary controls is consequential and
+   * secondary at the same time. A filled red button there takes the one
+   * accent-dominant slot the region has and gives it to the action nobody
+   * should reach for by momentum — and once every destructive control is
+   * filled, the fill stops meaning "stop and think".
+   *
+   * Filled `--danger` stays reserved for the confirming press inside a
+   * dialog, where destroying the thing genuinely *is* the primary action.
+   * Out here the consequence is carried by danger ink (7.5:1 on surface) and
+   * a danger-toned border on a quiet base, so it reads as different in kind
+   * from its neighbours without outweighing the real primary.
+   */
+  .ui-button--danger-quiet {
+    border-color: color-mix(in srgb, var(--je-color-danger-fill) 55%, var(--je-color-border-strong));
+    background: var(--je-color-surface);
+    color: var(--je-color-danger);
+    box-shadow: var(--je-shadow-xs);
+  }
+
+  .ui-button--danger-quiet:hover:not(:disabled) {
+    border-color: var(--je-color-danger);
+    background: var(--je-color-danger-soft);
+  }
+
+  .ui-button--danger-quiet:active:not(:disabled) {
+    background: color-mix(in srgb, var(--je-color-danger-fill) 18%, var(--je-color-surface));
+    box-shadow: inset 0 1px 2px var(--je-color-border);
+  }
+
   .ui-button--sm {
     height: var(--je-control-height-sm);
     padding-inline: 0.55rem;
@@ -561,9 +593,157 @@
     box-shadow: var(--je-shadow-sm);
   }
 
+  /*
+   * ── Scope filter: a small set of mutually exclusive views ──────────────
+   *
+   * The driving case is the submission trays. As a wrapping flex row they
+   * broke into a ragged two-line block at 390px, and their 29.5–34px targets
+   * never reached the touch row of the fixed-metrics table — the set that
+   * decides *which population you are looking at* was the least reliable
+   * thing on the surface.
+   *
+   * A grid instead of a wrap: every member is placed, so the set can rearrange
+   * without fraying and no member can end up off-screen. One row while the
+   * scopes fit; two even columns when they do not, with an odd last member
+   * taking the full width so the layout reads 2+2+1 on purpose. Members never
+   * scroll out of sight and are never collapsed into an overflow menu — a
+   * scope you cannot see is a population you do not know you are excluding.
+   *
+   * Keyboard behaviour is the native radio group's: one tab stop, arrows move
+   * and select. Choosing a scope is choosing one of a closed set, which is
+   * what a radio group *is*; tabs would promise panels that do not exist.
+   */
+  /* The group is the query scope; the set inside it is what rearranges. A
+     container cannot answer a query about itself, so the two are separate
+     elements rather than one. */
+  .ui-scopes {
+    display: block;
+    container: je-scopes / inline-size;
+  }
+
+  .ui-scopes__set {
+    display: grid;
+    gap: var(--je-space-2);
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+  }
+
+  .ui-scopes__scope {
+    display: flex;
+    min-block-size: var(--je-control-height);
+    align-items: center;
+    gap: var(--je-space-2);
+    padding-inline: var(--je-space-3);
+    border: 1px solid var(--je-color-border);
+    border-radius: var(--je-radius-round);
+    background: var(--je-color-surface);
+    color: var(--je-color-text-muted);
+    font-size: var(--je-font-size-sm);
+    font-weight: 600;
+    cursor: pointer;
+    transition:
+      background var(--je-duration-fast) var(--je-ease),
+      border-color var(--je-duration-fast) var(--je-ease),
+      color var(--je-duration-fast) var(--je-ease);
+  }
+
+  .ui-scopes__scope:hover {
+    border-color: var(--je-color-border-strong);
+    color: var(--je-color-text);
+  }
+
+  /*
+   * The active scope is marking, not action: "this is the population you are
+   * looking at" is the same fact as a selected row or an applied filter, and
+   * the coral action ramp shares its hue with danger. Three signals carry it —
+   * the mark tint, the mark border, and full ink at a heavier weight — so it
+   * is never colour alone. No check glyph: the word sits 4px away and the
+   * element-justification review deletes a symbol that repeats it.
+   */
+  .ui-scopes__scope--active {
+    border-color: var(--je-color-mark-border);
+    background: var(--je-color-mark-surface);
+    color: var(--je-color-text);
+    font-weight: 700;
+  }
+
+  /* The input is the control and stays in the accessibility tree; the chip is
+     its face, so the ring is drawn there. */
+  .ui-scopes__scope:has(input:focus-visible) {
+    box-shadow: var(--je-focus-ring);
+  }
+
+  .ui-scopes__label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .ui-scopes__icon {
+    flex: 0 0 auto;
+    inline-size: 0.95rem;
+    block-size: 0.95rem;
+  }
+
+  /* The count holds the trailing edge of every chip, so the digits line up
+     down a stacked set and across a single row alike. */
+  .ui-scopes__count {
+    margin-inline-start: auto;
+    color: var(--je-color-text-muted);
+    font-variant-numeric: tabular-nums;
+    font-weight: 700;
+  }
+
+  .ui-scopes__scope--active .ui-scopes__count {
+    color: var(--je-color-mark-ink);
+  }
+
+  .ui-scopes__short {
+    display: none;
+  }
+
+  /*
+   * Narrow: two even columns, touch-row targets, and the abbreviated face
+   * where the scope declared one. The full name stays the accessible name —
+   * abbreviating what the eye reads is a layout decision, never a change to
+   * what the control is called.
+   */
+  @container je-scopes (max-width: 30rem) {
+    .ui-scopes__set {
+      grid-auto-flow: row;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .ui-scopes__scope {
+      min-block-size: 2.75rem;
+    }
+
+    /* An odd last member takes the whole row rather than leaving a dangler. */
+    .ui-scopes__scope:last-child:nth-child(odd) {
+      grid-column: 1 / -1;
+    }
+
+    .ui-scopes__scope:has(.ui-scopes__short) .ui-scopes__full {
+      display: none;
+    }
+
+    .ui-scopes__scope:has(.ui-scopes__short) .ui-scopes__short {
+      display: inline;
+    }
+  }
+
   .ui-badge {
     display: inline-flex;
     min-height: 1.35rem;
+    /*
+     * A badge is a background drawn around a word, so the word decides the
+     * width: it never shrinks below its own content and the text can never
+     * paint outside its pill. In a flex or grid line the prose beside it
+     * absorbs the pressure instead — which is what `.ui-table__primary`'s
+     * text track is already built to do. `--truncate` is the one exception,
+     * and it is opt-in per instance.
+     */
+    flex: 0 0 auto;
     align-items: center;
     gap: 0.32rem;
     padding: 0.15rem 0.45rem;
@@ -574,6 +754,49 @@
     font-size: var(--je-font-size-2xs);
     font-weight: 700;
     line-height: 1.1;
+    white-space: nowrap;
+  }
+
+  /*
+   * Empty is not a state. A pill with no word is ~16px of decoration that
+   * reads as a value the surface failed to load — nine of them down a Track
+   * column is worse, because a whole column then says nothing nine times.
+   *
+   * `Badge` refuses to render one at all (`value` that is blank returns
+   * nothing), and this is the net under the raw-class call sites the
+   * primitive cannot reach. Selectors Level 4 lets `:empty` match an element
+   * whose only content is white space, which covers `{maybeBlank}`.
+   */
+  .ui-badge:empty,
+  .ui-track:empty {
+    display: none;
+  }
+
+  /*
+   * The truncating badge. Where space is genuinely short the word may clip,
+   * but only with an ellipsis and only down to a floor — an ellipsis on its
+   * own is not a value. The complete text stays in the DOM, so assistive
+   * technology reads the whole word; `Badge` also mirrors it into `title` for
+   * the pointer.
+   */
+  .ui-badge--truncate {
+    flex: 0 1 auto;
+    min-inline-size: 3.25rem;
+    max-inline-size: 100%;
+  }
+
+  /* A slightly looser line than the pill's own so clipping the run cannot
+     shave a descender off "Deploying" or "Un-notified". */
+  .ui-badge__label,
+  .ui-track__label {
+    min-inline-size: 0;
+    line-height: 1.35;
+  }
+
+  .ui-badge--truncate .ui-badge__label,
+  .ui-track__label {
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
 
@@ -659,6 +882,79 @@
     border-color: transparent;
     background: var(--je-color-danger-emphasis);
     color: var(--je-color-danger-emphasis-contrast);
+  }
+
+  /*
+   * ── Track chip: a category, not a state ────────────────────────────────
+   *
+   * Status is a closed vocabulary carrying a learned reflex (red stops, amber
+   * cautions, green clears). A programme's tracks are an open list carrying
+   * no reflex at all, and rendering them as pills in the same eight tones the
+   * status ladder uses teaches the reader that colour means nothing here.
+   *
+   * So the category takes its own silhouette — a squared 4px corner instead
+   * of the pill's 999px, no status glyph, one weight lighter — and colour is
+   * then free to do the only job it has on a track: tell this track from the
+   * next one. Shape says "kind"; hue says "which".
+   *
+   * The chip truncates by default: a track name is a scan key on a crowded
+   * line, not a state word, and eight of them at full length would push the
+   * title out of every row. The full name stays in the DOM and in `title`.
+   */
+  .ui-track {
+    display: inline-flex;
+    min-height: 1.35rem;
+    max-inline-size: 100%;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.15rem 0.4rem;
+    border-radius: var(--je-radius-xs);
+    background: var(--je-color-track-8-soft);
+    color: var(--je-color-track-8-ink);
+    font-size: var(--je-font-size-2xs);
+    font-weight: 600;
+    line-height: 1.1;
+    white-space: nowrap;
+  }
+
+  .ui-track--1 {
+    background: var(--je-color-track-1-soft);
+    color: var(--je-color-track-1-ink);
+  }
+
+  .ui-track--2 {
+    background: var(--je-color-track-2-soft);
+    color: var(--je-color-track-2-ink);
+  }
+
+  .ui-track--3 {
+    background: var(--je-color-track-3-soft);
+    color: var(--je-color-track-3-ink);
+  }
+
+  .ui-track--4 {
+    background: var(--je-color-track-4-soft);
+    color: var(--je-color-track-4-ink);
+  }
+
+  .ui-track--5 {
+    background: var(--je-color-track-5-soft);
+    color: var(--je-color-track-5-ink);
+  }
+
+  .ui-track--6 {
+    background: var(--je-color-track-6-soft);
+    color: var(--je-color-track-6-ink);
+  }
+
+  .ui-track--7 {
+    background: var(--je-color-track-7-soft);
+    color: var(--je-color-track-7-ink);
+  }
+
+  .ui-track--8 {
+    background: var(--je-color-track-8-soft);
+    color: var(--je-color-track-8-ink);
   }
 
   .ui-alert {
@@ -790,6 +1086,65 @@
     transition: transform var(--je-duration-slow) var(--je-ease-out);
   }
 
+  /* A ratio against a limit, in the learned status colours. The track is a
+     lighter step of the fill's own ramp rather than a neutral grey, so the
+     state reads across the whole bar — a 4%-full amber bar is otherwise almost
+     entirely a colour that says nothing. */
+  .ui-meter {
+    display: block;
+    inline-size: 100%;
+    block-size: 0.3125rem;
+    border-radius: var(--je-radius-round);
+    overflow: hidden;
+    background: var(--je-color-border-subtle);
+  }
+
+  .ui-meter__fill {
+    display: block;
+    block-size: 100%;
+    border-radius: inherit;
+    background: var(--je-color-text-subtle);
+    transition: inline-size var(--je-duration-slow) var(--je-ease-out);
+  }
+
+  .ui-meter--success {
+    background: var(--je-color-success-soft);
+  }
+
+  .ui-meter--success .ui-meter__fill {
+    background: var(--je-color-success-fill);
+  }
+
+  .ui-meter--warning {
+    background: var(--je-color-warning-soft);
+  }
+
+  .ui-meter--warning .ui-meter__fill {
+    background: var(--je-color-warning-fill);
+  }
+
+  .ui-meter--danger {
+    background: var(--je-color-danger-soft);
+  }
+
+  .ui-meter--danger .ui-meter__fill {
+    background: var(--je-color-danger-fill);
+  }
+
+  .ui-meter--info {
+    background: var(--je-color-info-soft);
+  }
+
+  .ui-meter--info .ui-meter__fill {
+    background: var(--je-color-info-fill);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ui-meter__fill {
+      transition: none;
+    }
+  }
+
   .ui-tabs {
     display: flex;
     gap: 0.15rem;
@@ -882,14 +1237,59 @@
     width: 100%;
     overflow-x: auto;
     contain: layout inline-size paint;
+    /*
+     * The record transformation below asks its question of the wrapper, not
+     * of the viewport: a table narrowed by the operator sidebar, by a split
+     * pane, or by a 390px phone all hit the same wall, and the wall is "my
+     * columns no longer fit". `inline-size` containment is what this wrapper
+     * already declared, so naming it a container adds a query scope rather
+     * than a new constraint.
+     */
+    container: je-table / inline-size;
     border: 1px solid var(--je-color-border);
     border-radius: var(--je-radius-surface);
     background: var(--je-color-surface);
   }
 
+  /*
+   * A genuinely tabular grid that keeps its columns owes a visible affordance
+   * that there is more to the side. Pure CSS, and honest by construction: the
+   * `local`-attached covers ride the scroll and uncover the `scroll`-attached
+   * shadows only while there is actually something past the edge, so the cue
+   * appears when it is true and disappears at both ends.
+   *
+   * The wrapper additionally takes `tabindex="0"` + `role="region"` +
+   * `aria-label` on the surface using it, because a scroll container that
+   * cannot be reached by keyboard is not reachable at all.
+   */
+  .ui-table-wrap--scroll {
+    background-image:
+      linear-gradient(to right, var(--je-color-surface) 40%, transparent),
+      linear-gradient(to left, var(--je-color-surface) 40%, transparent),
+      linear-gradient(to right, rgb(42 37 34 / 0.16), transparent),
+      linear-gradient(to left, rgb(42 37 34 / 0.16), transparent);
+    background-position:
+      0 0,
+      100% 0,
+      0 0,
+      100% 0;
+    background-repeat: no-repeat;
+    background-size:
+      2.5rem 100%,
+      2.5rem 100%,
+      0.9rem 100%,
+      0.9rem 100%;
+    background-attachment: local, local, scroll, scroll;
+  }
+
+  .ui-table-wrap--scroll:focus-visible {
+    outline: 0;
+    box-shadow: var(--je-focus-ring);
+  }
+
   .ui-table {
     width: 100%;
-    min-width: 52rem;
+    min-width: var(--je-table-columns-min);
     border-collapse: collapse;
     font-size: var(--je-font-size-sm);
   }
@@ -965,6 +1365,246 @@
 
   .ui-table__number {
     font-variant-numeric: tabular-nums;
+  }
+
+  /*
+   * ══ The phone record ═════════════════════════════════════════════════════
+   *
+   * A dense table is a comparison instrument. Below the width where its
+   * columns fit it stops being one, and the containment that keeps the
+   * document from overflowing then hides the very state the surface exists to
+   * show: measured on the live playground at 390px, 58% of the submissions
+   * table sat off-screen — every signal, every review average, every decision,
+   * and the only control that opens the row — behind a sideways scroll with no
+   * affordance saying anything was there.
+   *
+   * So at that width the row re-composes into a record:
+   *
+   *     ┌──────┬────────────────────────────────┬─────────┬──────┐
+   *     │ rail │ primary line (identity)        │  state  │ trail│
+   *     │      │ labelled scan-key lines …      │         │      │
+   *     └──────┴────────────────────────────────┴─────────┴──────┘
+   *
+   * Nothing moves off-screen; the wrapper stops scrolling; the row grows
+   * downward, which is the one direction a phone has.
+   *
+   * The trigger is the wrapper's own inline size measured against the width
+   * the columns need (`--je-table-columns-min`), so every `.ui-table` in the
+   * product inherits this without a page change — including surfaces whose
+   * feature code nobody is touching this week. What a page *adds* is meaning:
+   * `data-label` names a stacked line, `.ui-cell--state` promotes one state
+   * onto the primary line, `.ui-cell--detail` moves a column into the detail
+   * presentation. Those are refinements on top of a floor that already holds.
+   *
+   * `.ui-table--columns` opts a genuinely tabular numeric grid back out — a
+   * task matrix, a schedule grid, anything whose meaning *is* the alignment.
+   * It then owes `.ui-table-wrap--scroll` on its wrapper.
+   */
+  @container je-table (max-width: 51.99rem) {
+    .ui-table:not(.ui-table--columns) {
+      display: block;
+      min-width: 0;
+      /*
+       * Touch metrics for everything the record contains. The record
+       * threshold is a statement about available space; the token promotion
+       * in tokens.css is keyed to the viewport at 768px, which leaves an
+       * 834px tablet — a touch device — holding 26px controls inside a
+       * stacked record. Redeclaring the density tokens on the table subtree
+       * promotes every nested control at once instead of listing them.
+       */
+      --je-control-height-sm: 2.5rem;
+      --je-control-height: 2.75rem;
+    }
+
+    /*
+     * A header row with no controls is column names for columns that no
+     * longer exist: hidden from the eye, kept in the DOM, because it is what
+     * `recordTable` mirrors into `data-label` and what assistive technology
+     * still reads where table semantics survive the display change.
+     */
+    .ui-table:not(.ui-table--columns) > thead:not(:has(button, input, select, a)) {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+
+    /* A header row that *does* carry controls — select-all, a sort toggle —
+       is not decoration and cannot be hidden. It re-composes into a control
+       strip: the words go, the controls stay reachable. */
+    .ui-table:not(.ui-table--columns) > thead:has(button, input, select, a) > tr {
+      display: flex;
+      align-items: center;
+      gap: var(--je-space-2);
+      padding: var(--je-space-2) var(--je-space-3);
+    }
+
+    .ui-table:not(.ui-table--columns) > thead:has(button, input, select, a) > tr > th {
+      display: none;
+      height: auto;
+      padding: 0;
+      border: 0;
+    }
+
+    .ui-table:not(.ui-table--columns) > thead:has(button, input, select, a) > tr > th:has(button, input, select, a) {
+      display: flex;
+      min-block-size: 2.75rem;
+      align-items: center;
+    }
+
+    /* The select-all label is absolutely positioned inside its cell, so the
+       cell has no width of its own to give it. It takes the same rail width
+       the rows use, which is also what keeps the two vertically aligned. */
+    .ui-table:not(.ui-table--columns) > thead > tr > .ui-pick-cell {
+      inline-size: 3.25rem;
+      padding-inline-end: var(--je-space-2);
+    }
+
+    .ui-table:not(.ui-table--columns) > tbody {
+      display: block;
+    }
+
+    .ui-table:not(.ui-table--columns) > tbody > tr {
+      display: grid;
+      /* Empty tracks cost nothing: the rail and trail carry their own inline
+         padding instead of a column gap, so a table with neither still reads
+         flush to the record's edges. */
+      grid-template-columns: max-content minmax(0, 1fr) max-content max-content;
+      align-items: start;
+      row-gap: var(--je-space-1);
+      min-block-size: 2.75rem;
+      padding: var(--je-space-3);
+      border-bottom: 1px solid var(--je-color-border);
+    }
+
+    .ui-table:not(.ui-table--columns) > tbody > tr:last-child {
+      border-bottom: 0;
+    }
+
+    .ui-table:not(.ui-table--columns) > tbody > tr > th,
+    .ui-table:not(.ui-table--columns) > tbody > tr > td {
+      display: block;
+      grid-column: 2;
+      height: auto;
+      min-inline-size: 0;
+      padding: 0;
+      border: 0;
+      white-space: normal;
+    }
+
+    /* The rail: the row's own control. `.ui-pick-cell` is the existing
+       convention and is placed automatically; `.ui-cell--rail` names the slot
+       for anything else. The pick label is absolutely positioned, so the cell
+       has no intrinsic width of its own and is given the touch target here. */
+    .ui-table:not(.ui-table--columns) > tbody > tr > .ui-pick-cell,
+    .ui-table:not(.ui-table--columns) > tbody > tr > .ui-cell--rail {
+      grid-column: 1;
+      grid-row: 1 / -1;
+      inline-size: 3.25rem;
+      min-block-size: 2.75rem;
+      padding-inline-end: var(--je-space-2);
+    }
+
+    /* The one state that belongs on the primary line beside the identity —
+       the answer the reader came for. Everything else stacks below. */
+    .ui-table:not(.ui-table--columns) > tbody > tr > .ui-cell--state {
+      grid-column: 3;
+      grid-row: 1;
+      justify-self: end;
+      padding-inline-start: var(--je-space-2);
+    }
+
+    /* The trailing affordance. The last cell wins by default when it holds a
+       control, which is this codebase's row-expander convention — so the
+       chevron lands at the record's trailing edge with no page change. */
+    .ui-table:not(.ui-table--columns) > tbody > tr > .ui-cell--trail,
+    .ui-table:not(.ui-table--columns) > tbody > tr > td:last-child:has(> .ui-button) {
+      grid-column: 4;
+      grid-row: 1;
+      justify-self: end;
+      padding-inline-start: var(--je-space-2);
+    }
+
+    /*
+     * Columns that do not earn phone real estate. Legitimate only when the
+     * same value is rendered in the record's detail presentation — hiding a
+     * fact outright is the off-screen defect wearing a different costume, and
+     * the class name is the reminder.
+     */
+    .ui-table:not(.ui-table--columns) > tbody > tr > .ui-cell--detail {
+      display: none;
+    }
+
+    /* Labelled scan-key lines. Without a label a stacked cell is a value with
+       no question; the label track is content-capped so a short label does not
+       push a long value into a two-character column. */
+    .ui-table:not(.ui-table--columns) > tbody > tr > td[data-label] {
+      display: grid;
+      grid-template-columns: minmax(0, 6.5rem) minmax(0, 1fr);
+      gap: var(--je-space-2);
+      align-items: baseline;
+    }
+
+    .ui-table:not(.ui-table--columns) > tbody > tr > td[data-label]::before {
+      content: attr(data-label);
+      color: var(--je-color-text-subtle);
+      font-size: var(--je-font-size-2xs);
+      font-weight: 700;
+      letter-spacing: var(--je-tracking-caps);
+      text-transform: uppercase;
+    }
+
+    /* A cell spanning the table — a section heading, an inline detail panel —
+       spans the whole record instead of sitting in the content column. */
+    .ui-table:not(.ui-table--columns) > tbody > tr > td[colspan]:not([colspan='1']) {
+      grid-column: 1 / -1;
+    }
+
+    /*
+     * The detail row owns no geometry of its own here: inline it takes the
+     * record's padding, and once the detail has promoted to a sheet the row
+     * has nothing to show and must not reserve a blank 44px strip for it.
+     *
+     * Its boundary is a 2px frame rather than a tint, because the thing in
+     * hand keeps full surface brightness — a tint on a white list can only go
+     * darker, which would put the record being worked on *behind* the ones
+     * being ignored.
+     */
+    .ui-table:not(.ui-table--columns) > tbody > tr.ui-table__detail {
+      min-block-size: 0;
+      padding: 0;
+      border-block-end: 2px solid var(--je-color-border-strong);
+    }
+
+    .ui-table:not(.ui-table--columns)
+      > tbody
+      > tr.ui-table__detail
+      .ui-detail-host[data-presentation='inline'] {
+      display: block;
+      padding: var(--je-space-3);
+    }
+
+    /* Stacked at record width — a two-column detail inside a phone column is
+       the arrangement the sheet exists to replace, and 834px is not wide
+       enough to earn a rail either. */
+    .ui-table:not(.ui-table--columns) .ui-detail {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    /*
+     * A record grows downward, so the title stops being a one-line ellipsis
+     * and the secondary line stops being a clipped sentence. This is the
+     * whole reason the transformation is worth doing: at 390px the truncated
+     * cell was hiding the identifying value in a list of nine.
+     */
+    .ui-table:not(.ui-table--columns) .ui-table__primary strong,
+    .ui-table:not(.ui-table--columns) .ui-table__secondary {
+      overflow: visible;
+      text-overflow: clip;
+      white-space: normal;
+    }
   }
 
   .ui-toolbar {
@@ -1271,6 +1911,210 @@
     min-block-size: 0;
     padding: 1rem;
     overflow-y: auto;
+  }
+
+  /*
+   * ── The record detail: one component, two presentations ────────────────
+   *
+   * On desktop the detail stays inline under its own row, because comparing
+   * one record against the list it came from is the whole reason a power user
+   * expands rather than opens. On a phone the same content promotes to a
+   * full-screen sheet, because a labelled two-column detail inside a 390px
+   * column is unreadable — and because an inline expansion there had a
+   * measured failure mode: focusing the expander scrolled the table 490px
+   * sideways, so the abstract opened mid-sentence, both actions sat off-screen
+   * left, and the title of the record being read was no longer visible.
+   *
+   * Same content, same order, same field names. Density changing metrics, not
+   * information architecture changing shape.
+   */
+  /*
+   * The host holds the detail's place in the row. When the content has been
+   * promoted to a sheet there is nothing left inline to lay out — a modal
+   * `<dialog>` is out of flow — so the host stops boxing anything at all and
+   * the row it sits in collapses instead of painting an empty strip.
+   */
+  .ui-detail-host[data-presentation='sheet'] {
+    display: contents;
+  }
+
+  .ui-detail {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(11rem, 16rem);
+    gap: var(--je-space-6);
+    align-items: start;
+  }
+
+  .ui-detail--stacked {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ui-detail__content {
+    display: grid;
+    min-inline-size: 0;
+    gap: var(--je-space-6);
+  }
+
+  /* Labels align down one track for every field, declared once on the group
+     and inherited by each row through subgrid — a per-row `max-content` sizes
+     to its own label and nothing lines up. */
+  .ui-detail__fields {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: var(--je-space-2) var(--je-space-4);
+    justify-content: start;
+  }
+
+  .ui-detail__field {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+    align-items: baseline;
+  }
+
+  /* The closing ledger: classification and provenance a reader consults after
+     the evidence, not before it. The extra margin lifts the boundary above the
+     content grid's group gap to the section tier — spacing, not a rule,
+     because a rule here would span the content column only and stop dead at
+     the actions rail (the measured defect that removed the blocks rule). */
+  .ui-detail__fields--meta {
+    margin-block-start: var(--je-space-2);
+  }
+
+  /* A block field carries its own heading and its value beneath: prose, an
+     attachment list, anything whose value is not a phrase. */
+  .ui-detail__field--block {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--je-space-1);
+  }
+
+  .ui-detail__label {
+    color: var(--je-color-text-subtle);
+    font-size: var(--je-font-size-2xs);
+    font-weight: 700;
+    letter-spacing: var(--je-tracking-caps);
+    text-transform: uppercase;
+  }
+
+  .ui-detail__value {
+    min-inline-size: 0;
+    color: var(--je-color-text);
+  }
+
+  /*
+   * Recognition is a second, quiet channel beside hierarchy. The neutral
+   * label still says what question is being answered; only the value takes the
+   * role hue. Category and state deliberately remain TrackChip and Badge so a
+   * person, a track and a decision never share one visual grammar.
+   */
+  .ui-detail__value--person {
+    color: var(--je-color-recognition-person);
+    font-weight: 600;
+  }
+
+  .ui-detail__value--time {
+    color: var(--je-color-recognition-time);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .ui-detail__value--measure {
+    color: var(--je-color-text);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Long prose gets a real measure. An abstract set to the full width of a
+     1164px panel is two enormous lines the eye loses its place in. */
+  .ui-detail__value--prose {
+    max-inline-size: 62ch;
+    color: var(--je-color-text-muted);
+    line-height: var(--je-leading-normal);
+  }
+
+  /* Principal evidence is read before the record is acted on. It earns a
+     stronger rung of the existing neutral ink/type ladder, never a feature
+     colour or a nested card that would compete with status and action. */
+  .ui-detail__value--primary {
+    color: var(--je-color-text);
+    font-size: var(--je-font-size-base);
+    line-height: var(--je-leading-normal);
+  }
+
+  /* Group separation is a tier, not a decoration: the labelled facts and the
+     long-form blocks are different kinds of thing, so the gap around them is
+     strictly larger than the gap inside either — 24px against the field list's
+     8px, which is the group-to-group step of the spacing scale.
+
+     The rule that used to sit here is gone. It spanned the content column only,
+     so it stopped dead at the actions rail and read as a line that failed to
+     draw rather than as a boundary; extending it under the rail would have been
+     worse, because it would have filed the record's own actions under the
+     blocks below it. Either way it was banding a separation the gap already
+     makes — "proximity is the fix, not banding" (design-system.md §Columns
+     align across rows). */
+  .ui-detail__blocks {
+    display: grid;
+    gap: var(--je-space-6);
+  }
+
+  .ui-detail__rail {
+    display: grid;
+    gap: var(--je-space-2);
+    justify-items: stretch;
+  }
+
+  .ui-detail__footnote {
+    color: var(--je-color-text-muted);
+    font-size: var(--je-font-size-2xs);
+    line-height: var(--je-leading-snug);
+  }
+
+  /* In a sheet the note follows the evidence column rather than sharing the
+     desktop action rail. A section-tier gap lets the last block (usually
+     Materials) finish before the action consequence begins. */
+  .ui-sheet .ui-dialog__body > .ui-detail__footnote {
+    margin-block-start: var(--je-space-8);
+  }
+
+  /*
+   * The phone presentation. It reuses the dialog frame — native `<dialog>`,
+   * so focus containment, Escape, the top layer, and focus restoration are
+   * the browser's job rather than a second implementation — and overrides
+   * only the geometry: the screen, edge to edge.
+   */
+  .ui-sheet {
+    inline-size: 100vw;
+    max-inline-size: 100vw;
+    block-size: 100dvh;
+    max-block-size: 100dvh;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .ui-sheet[open] {
+    animation: je-sheet-in var(--je-duration-slow) var(--je-ease-out);
+  }
+
+  /* The sheet's own actions are the primary reason it was opened, so they sit
+     where a thumb is: pinned at the bottom, at touch height, full width. */
+  .ui-sheet .ui-detail__rail {
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+  }
+
+  .ui-sheet .ui-detail__rail .ui-button {
+    inline-size: 100%;
+    min-block-size: 2.75rem;
+  }
+
+  .ui-sheet .ui-dialog__footer {
+    display: grid;
+    gap: var(--je-space-2);
+    justify-content: stretch;
   }
 
   /* An addressable unit of an editable preview. The cue is a quiet dashed
@@ -1719,6 +2563,14 @@
 @keyframes je-dialog-in {
   from { opacity: 0; transform: translateY(8px) scale(0.985); }
   to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* A sheet arrives from the edge it covers — the movement explains where the
+   surface came from and where dismissing it will send it back. Collapses via
+   the zeroed duration token under reduced motion, like every other overlay. */
+@keyframes je-sheet-in {
+  from { opacity: 0; transform: translateY(1.5rem); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 /* Opacity only: the critical ring and glow paint once; nothing moves or resizes. */

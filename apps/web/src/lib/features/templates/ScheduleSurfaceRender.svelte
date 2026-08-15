@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { formatClock, formatClockRange, parseClockMinutes } from '@jooevents/contracts';
 	import { themeStyleProperties } from '$lib/theme/theme-contract';
 	import { excerpt, unitAttributes } from './inline-edit';
 	import { compileTextStyle } from './text-style';
@@ -18,7 +19,7 @@
 		template: SurfaceTemplate;
 		theme: EventTheme;
 		eventName: string;
-		/** e.g. "Oct 12–14, 2026 · New York City"; empty hides the header and footer meta lines. */
+		/** e.g. "12–14 Oct 2026 · New York City"; empty hides the header and footer meta lines. */
 		eventMeta: string;
 		/**
 		 * The real schedule state: the preview renders the scenario's actual
@@ -100,16 +101,15 @@
 		return tracks.find((track) => track.id === id)?.accent ?? 'neutral';
 	}
 
+	const dayStartMin = $derived(parseClockMinutes(schedule.dayStart) ?? 0);
+
 	function clockLabel(offsetMin: number): string {
-		const [startHour = 0, startMinute = 0] = schedule.dayStart.split(':').map(Number);
-		const total = startHour * 60 + startMinute + offsetMin;
-		const hours = Math.floor(total / 60) % 24;
-		const minutes = total % 60;
-		return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+		return formatClock(dayStartMin + offsetMin);
 	}
 
 	function rangeLabel(entry: PlacedEntry): string {
-		return `${clockLabel(entry.placement.startMin)}–${clockLabel(entry.placement.startMin + entry.session.durationMin)}`;
+		const from = dayStartMin + entry.placement.startMin;
+		return formatClockRange(from, from + entry.session.durationMin);
 	}
 
 	function byProgramOrder(a: PlacedEntry, b: PlacedEntry): number {

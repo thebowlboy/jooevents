@@ -9,7 +9,8 @@
  * nothing fades while a person is looking at it.
  */
 
-const MINUTE = 60_000;
+import { formatRelative } from '@jooevents/contracts';
+
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
 
@@ -27,31 +28,31 @@ function parseInstant(iso: string): number {
 }
 
 /**
- * The arrival fact in words: relative while it still reads as “recently”
- * (under seven days), the plain date once “ago” arithmetic would be work the
- * reader has to undo. Future instants — clock skew, a mis-authored fixture —
- * clamp to “just now” rather than counting backwards.
+ * The arrival fact in words, in the product's one distance vocabulary.
+ *
+ * It used to spell its own: `6 h ago` here, `6 hr ago` in the activity feed,
+ * `in 3 hours` in the portal — three spellings of one unit on surfaces an
+ * operator moves between in a single session. The unit choice and the wording
+ * now come from `formatRelative`, so they cannot drift again.
+ *
+ * Pass the event's timezone wherever the caller has it: `today` and `yesterday`
+ * are claims about a particular midnight, and without a zone the vocabulary
+ * declines to make them rather than counting from the browser's.
+ *
+ * A relative string stops being a record of anything after a couple of days, so
+ * a surface with room for it should carry the absolute beside this — that is
+ * what `describeRecency` in the date vocabulary returns ready-made.
  */
-export function formatArrival(iso: string, now: Date = new Date()): string {
+export function formatArrival(iso: string, now: Date = new Date(), timezone?: string): string {
 	const instant = parseInstant(iso);
-	if (Number.isNaN(instant)) return iso;
-	const age = now.getTime() - instant;
-	if (age < MINUTE) return 'just now';
-	if (age < HOUR) return `${Math.floor(age / MINUTE)} min ago`;
-	if (age < DAY) {
-		const hours = Math.floor(age / HOUR);
-		return `${hours} h ago`;
-	}
-	if (age < 7 * DAY) {
-		const days = Math.floor(age / DAY);
-		return days === 1 ? 'yesterday' : `${days} days ago`;
-	}
-	const date = new Date(instant);
-	const sameYear = date.getFullYear() === now.getFullYear();
-	return date.toLocaleDateString('en-US', {
-		month: 'short',
-		day: 'numeric',
-		...(sameYear ? {} : { year: 'numeric' })
+	if (Number.isNaN(instant)) return 'Not recorded';
+	// Clock skew and mis-authored fixtures put an arrival in the future. A thing
+	// cannot have arrived later than now, so it clamps rather than counting
+	// backwards at a reader who would have no idea what to do about it.
+	const arrived = Math.min(instant, now.getTime());
+	return formatRelative(new Date(arrived).toISOString(), now.getTime(), {
+		...(timezone === undefined ? {} : { timezone }),
+		fallback: 'Not recorded'
 	});
 }
 
@@ -61,6 +62,16 @@ export function formatArrival(iso: string, now: Date = new Date()): string {
  * so checking five times a day never strips today's pulse and a weekend away
  * loses nothing. A first-ever visit has no “previous”, so only the 24-hour
  * arm applies and day one is not a sea of New.
+ *
+ * This is deliberately *not* the Overview's arrival window
+ * (`@jooevents/contracts` `chooseArrivalWindow`), and the difference is the
+ * point. The dashboard states a **count**, so its window has to be exactly what
+ * it claims: `+1 today` means one arrived today, and a 24-hour floor would make
+ * that sentence false every morning. A row mark states **freshness to this
+ * reader**, where the floor is what stops a 00:20 visit from being a page with
+ * nothing marked. Two questions, two windows — and because the count always
+ * names its own window on screen, a row marked New that is outside today's
+ * count reads as two facts rather than as a contradiction.
  */
 export function isNewArrival(
 	iso: string,

@@ -1,0 +1,79 @@
+/*
+ * The rendering half of the one date vocabulary.
+ *
+ * The strings come from `@jooevents/contracts` (`format/dates.ts`), which is
+ * framework-free because dates are produced on the server and in email as well
+ * as here. These classes are the part only a browser can do, and their
+ * names are exported from that module as `DATE_CLASS` so markup and module
+ * cannot drift apart.
+ *
+ * Everything below is scannability, which is half of what a date is for: a
+ * reader running down a column of deadlines is deciding what needs action, and
+ * that decision is made by eye before any single row is read.
+ *
+ * The fifth class, `.je-date-zone`, is the same idea applied to a different
+ * risk: a clock read from another timezone is acted on an hour or nine out
+ * unless it says whose clock it is.
+ */
+
+/*
+ * A date that stacks in a column. Tabular figures so the digits line up
+ * vertically — proportional figures put the same `1` in a different place on
+ * every row and there is nothing to run the eye down. `nowrap` is belt and
+ * braces beside the non-breaking spaces already inside the string, for the
+ * ordinary space between a qualifier and its value.
+ */
+.je-date-column {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/*
+ * The date is the value. Normal-to-medium weight and the surface's own ink:
+ * enough to be the thing the eye lands on, not so much that a column of them
+ * becomes a wall. Bolding the whole line emphasises nothing.
+ */
+.je-date-value {
+  color: var(--je-color-text);
+  font-weight: 500;
+}
+
+/*
+ * Its qualifier — "Due", "Closes", "Opened". A label, at lower ink, so the
+ * pair reads as one fact with the date carrying it rather than as two competing
+ * words.
+ */
+.je-date-label {
+  color: var(--je-color-text-subtle);
+  font-weight: 400;
+}
+
+/*
+ * The zone marker — `New York` beside a clock, for a reader whose own clock
+ * says something else. The same muted rung as the label, and for the same
+ * reason: it qualifies the time, it is not the time. A marker at the value's
+ * weight would read as part of the clock and pull the eye off the digits that
+ * are the actual answer.
+ *
+ * `nowrap` because a place is one word to a reader even when it is two to a
+ * line-breaker: `New` at the end of one line and `York` at the start of the
+ * next is the same defect as half a date. The string already carries a
+ * non-breaking space inside the name; this covers the join to the clock.
+ */
+.je-date-zone {
+  color: var(--je-color-text-subtle);
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+/*
+ * Settled and passed dates step back so the live ones hold the row. This is
+ * the contrast that lets someone see what still needs doing without reading
+ * every line — and it is never the only carrier of that fact: the state word
+ * beside it says so in words.
+ */
+.je-date-quiet,
+.je-date-quiet .je-date-value {
+  color: var(--je-color-text-subtle);
+  font-weight: 400;
+}

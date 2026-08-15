@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Field, Modal } from '$lib/ui';
 	import type { CommunicationsPagePort } from '$lib/api/communications-page-port';
+	import { LiveRead, type LiveReadState } from '$lib/api/live-read';
 	import EmailRender from '$lib/features/templates/EmailRender.svelte';
 	import type { AudienceOption, EventTheme, MessageTemplate } from '$lib/api/types';
 
@@ -36,7 +37,18 @@
 	/** Empty string is the blank start; otherwise the chosen template's id. */
 	let templateId = $state('');
 	let audienceId = $state('');
-	let audiences = $state<AudienceOption[] | null>(null);
+	let audiencesState = $state<LiveReadState<AudienceOption[]>>({ kind: 'resolving' });
+	const audiencesRead = new LiveRead<AudienceOption[]>({
+		read: async () => [...(await api.communications.audiences(personId ?? undefined))],
+		fallback: 'The audiences could not be counted.',
+		onChange: (state) => {
+			audiencesState = state;
+			if (state.kind === 'resolved') audienceId = state.value[0]?.id ?? '';
+		}
+	});
+	const audiences = $derived(
+		audiencesState.kind === 'resolved' ? audiencesState.value : null
+	);
 	let busy = $state(false);
 
 	// Opening resets the fields (a composer is a fresh sheet) and reads the
@@ -54,11 +66,12 @@
 		openedFor = scope;
 		subject = '';
 		templateId = '';
-		audiences = null;
-		void api.communications.audiences(scope ?? undefined).then((options) => {
-			audiences = options;
-			audienceId = options[0]?.id ?? '';
-		});
+		// A fresh request per scope, and the newest one wins: reopening the
+		// composer on another person while the first count is still in flight
+		// used to let whichever answer landed last install its options, which was
+		// not necessarily the scope now on screen. A rejection is now stated in
+		// the picker instead of leaving "Counting audiences…" on screen forever.
+		void audiencesRead.refresh();
 	});
 
 	const template = $derived(templates?.find((entry) => entry.id === templateId) ?? null);
@@ -150,6 +163,18 @@
 								<option value={option.id}>{option.label} · {option.count}</option>
 							{/each}
 						</select>
+					{:else if audiencesState.kind === 'unavailable'}
+						<!-- No picker to wait on: the count is not coming, and a
+						     disabled "Counting audiences…" would say it still is. -->
+						<p class="audience-failure" role="alert">
+							{audiencesState.message}
+							{#if audiencesState.retryable}
+								<button
+									type="button"
+									class="ui-button ui-button--ghost ui-button--sm"
+									onclick={() => void audiencesRead.refresh()}>Try again</button>
+							{/if}
+						</p>
 					{:else}
 						<select class="ui-select" {id} aria-describedby={describedBy} disabled>
 							<option>Counting audiences…</option>
@@ -265,6 +290,16 @@
 	.tpl__edit {
 		flex: none;
 		font-size: var(--je-font-size-sm);
+	}
+
+	.audience-failure {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--je-space-2);
+		margin: 0;
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-danger);
 	}
 
 	.note {

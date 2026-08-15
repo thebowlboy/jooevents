@@ -11,11 +11,20 @@ const destinations = [
 	{ path: '/app/messages', title: 'Communications' },
 	{ path: '/app/forms', title: 'Forms' },
 	{ path: '/app/embeds', title: 'Embeds' },
-	{ path: '/app/settings', title: 'Settings' }
+	// Every settings section is Settings: the destination title names the area a
+	// person is in, and the section names itself in the rail and its own panel.
+	{ path: '/app/settings', title: 'Settings' },
+	{ path: '/app/settings/event', title: 'Settings' },
+	{ path: '/app/settings/program', title: 'Settings' },
+	{ path: '/app/settings/team', title: 'Settings' },
+	{ path: '/app/settings/email', title: 'Settings' },
+	{ path: '/app/settings/about', title: 'Settings' }
 ];
 
 for (const destination of destinations) {
-	test(`${destination.title} renders inside the shell without page errors or overflow`, async ({ page }) => {
+	// Named by address: every settings section is titled Settings, so the path is
+	// what tells two of these runs apart.
+	test(`${destination.path} renders inside the shell without page errors or overflow`, async ({ page }) => {
 		const errors: string[] = [];
 		page.on('pageerror', (error) => errors.push(error.message));
 

@@ -627,11 +627,13 @@ test.describe('a reviewer row as a press target', () => {
 		const card = rowsOf(page).filter({ hasText: 'Marc Dubois' });
 		const chevron = card.getByRole('button', { name: 'Details for Marc Dubois' });
 
-		// The tags line is summary, not control: a tap there opens the editor.
-		await card.locator('.card__tags').tap();
+		// The load is summary, not control: a tap there opens the editor. The tags
+		// row can also contain the independent reminder control, so target the
+		// summary text rather than an area whose centre changes with wrapping.
+		await card.locator('.card__load').tap();
 		await expect(chevron).toHaveAttribute('aria-expanded', 'true');
 		await expect(card.locator('.card__detail')).toBeVisible();
-		await card.locator('.card__tags').tap();
+		await card.locator('.card__load').tap();
 		await expect(chevron).toHaveAttribute('aria-expanded', 'false');
 
 		await card.getByRole('button', { name: 'Copy email address' }).tap();

@@ -30,7 +30,7 @@ export function createSampleDecisionsPagePort(api: WorkspaceApi): DecisionsPageP
 				return {
 					committed: message.audienceCount,
 					sent: message.deliveredCount,
-					note: 'Delivery state per recipient is tracked in Communications. The un-notified indicator clears once delivery evidence lands.'
+					note: 'Delivery state per recipient is tracked in Communications. Result not sent clears once delivery evidence lands.'
 				};
 			}
 		}),

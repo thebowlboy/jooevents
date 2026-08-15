@@ -1,3 +1,4 @@
+import { formatDate, formatInstant } from '@jooevents/contracts';
 import {
   organizerCommunicationDefinitionRefSchema,
   organizerCommunicationOpaqueIdSchema,
@@ -311,10 +312,44 @@ export function resolveOrganizerMergeFields(input: {
   });
 }
 
-export function organizerMergeValueText(value: OrganizerMergeFieldValue): string {
+export interface OrganizerMergeValueTextOptions {
+  /**
+   * The event's IANA timezone, used to spell an `instant` merge value on the
+   * wall clock the recipient's event actually runs on.
+   *
+   * When it is absent the instant is spelled in UTC **and labelled `UTC`**, so
+   * the line is still a true statement about the moment rather than a clock
+   * with no zone attached. It is not the local time the reader wants, which is
+   * why the label is not optional here: an unlabelled clock is the one thing a
+   * recipient can act on and be wrong about.
+   */
+  readonly timezone?: string | undefined;
+}
+
+/**
+ * The text a merge value contributes to a rendered message.
+ *
+ * `date` and `instant` are stored as machine strings — `2027-03-18` and
+ * `2027-03-18T23:59:00.000Z` — and a recipient must never be shown either. They
+ * go through the one date vocabulary, the same one the operator app reads, so
+ * the date in the message about a deadline matches the date on the screen that
+ * set it.
+ *
+ * The switch is exhaustive on purpose and has no `default`: the previous
+ * `default: return value.value` is exactly how the two machine strings reached
+ * recipients unnoticed. A new merge value type must now be a compile error
+ * rather than a silent passthrough.
+ */
+export function organizerMergeValueText(
+  value: OrganizerMergeFieldValue,
+  options: OrganizerMergeValueTextOptions = {}
+): string {
   switch (value.valueType) {
     case 'integer': return String(value.value);
-    default: return value.value;
+    case 'date': return formatDate(value.value);
+    case 'instant': return formatInstant(value.value, options.timezone ?? 'UTC', { zone: true });
+    case 'text':
+    case 'url': return value.value;
   }
 }
 

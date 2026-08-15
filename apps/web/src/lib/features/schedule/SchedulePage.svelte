@@ -1,7 +1,20 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
 	import Modal from '$lib/ui/Modal.svelte';
-	import { Button, Field, Popover, Radio, revealTarget, statusIcon, trackPending } from '$lib/ui';
+	import {
+		Badge,
+		Button,
+		Field,
+		Popover,
+		Radio,
+		RecordDetail,
+		RecordField,
+		TrackChip,
+		badgeFor,
+		revealTarget,
+		trackAccent,
+		trackPending
+	} from '$lib/ui';
 	import type { SchedulePagePort } from '$lib/api/schedule-page-port';
 	import { presentProgramRoomCapacity } from '$lib/api/program-vocabulary-presentation';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
@@ -29,6 +42,12 @@
 		type ProgramGroupRow,
 		type RoundupTray
 	} from './program-roundup';
+	import {
+		boardBlankCopy,
+		boardReadiness,
+		placementAvailability,
+		placementBlockedCopy
+	} from './board-readiness';
 	import type {
 		BreakBlock,
 		Format,
@@ -60,6 +79,7 @@
 	let announcement = $state('');
 	let conflictsPanel = $state<HTMLElement>();
 	let programPanel = $state<HTMLElement>();
+	const activeTracks = $derived(tracks.filter((track) => track.status === 'active'));
 
 	// A placement, removal, or publish re-reads the schedule. That is a reload,
 	// not a first load: the grid and its panels keep what they are showing and
@@ -162,8 +182,26 @@
 		return asked && days.some((day) => day.key === asked) ? asked : (days[0]?.key ?? '');
 	});
 	const slotMinutes = $derived(schedule?.slotMinutes ?? 30);
-	/** Without rooms or days there is no grid to draw, only the way in. */
-	const boardReady = $derived(rooms.length > 0 && days.length > 0);
+
+	/*
+	 * Without rooms or days there is no grid to draw, only the way in — and
+	 * *which* way in depends on which supply is missing, so the blank state is
+	 * derived rather than written. `board-readiness.ts` carries the reasoning
+	 * and its tests; the page only renders the answer.
+	 */
+	const readiness = $derived(boardReadiness(schedule));
+	const boardReady = $derived(readiness.ready);
+	const blankCopy = $derived(boardBlankCopy(readiness));
+
+	/**
+	 * Whether the board can accept a placement at all. The pool's "Place…" used
+	 * to render from the row alone, so a board with no grid offered a control
+	 * that opened a mode with nothing in it. Now the reason is stated once,
+	 * where the rows are, and the control that cannot work is not drawn.
+	 */
+	const placeability = $derived(placementAvailability(schedule));
+	const canPlace = $derived(placeability.kind === 'available');
+	const placementBlocked = $derived(placementBlockedCopy(placeability));
 
 	const dayStartMin = $derived.by(() => {
 		const [hour = 0, minute = 0] = (schedule?.dayStart ?? '00:00').split(':').map(Number);
@@ -656,7 +694,7 @@
 	// never implies publication.
 
 	const grouping = $derived(
-		schedule ? programGrouping(schedule, new Map(Object.entries(proposals))) : null
+		schedule ? programGrouping(schedule, new Map(Object.entries(proposals)), activeTracks.length > 0) : null
 	);
 
 	/**
@@ -679,10 +717,26 @@
 		return rows;
 	});
 
-	/** A row offers Place… only while it holds no slot; drafts stay sketches. */
+	/** A row offers Place… only when it is classified and holds no slot. */
 	function placeable(row: ProgramGroupRow): boolean {
-		return !row.placed && row.session.state !== 'draft';
+		return !row.placed
+			&& row.session.state !== 'draft'
+			&& !row.trays.includes('needs-track');
 	}
+
+	/**
+	 * Rows that would take a slot if the board could hold one. The panel says
+	 * why placement is unavailable only when somebody is actually waiting on
+	 * it — an all-draft pool on a grid-less board has nothing to explain.
+	 */
+	const awaitingPlacement = $derived.by(() => {
+		if (!grouping) return 0;
+		let total = 0;
+		for (const group of grouping.order) {
+			for (const row of grouping.groups.get(group) ?? []) if (placeable(row)) total += 1;
+		}
+		return total;
+	});
 
 	function proposalsLabel(count: number): string {
 		return count === 0 ? 'no proposals yet' : `${count} proposal${count === 1 ? '' : 's'}`;
@@ -711,11 +765,14 @@
 	let nsTitleInput = $state<HTMLInputElement>();
 
 	const nsReady = $derived(
-		nsTitle.trim().length > 0 && nsFormatId !== '' && Number(nsDuration) > 0
+		nsTitle.trim().length > 0 &&
+			nsFormatId !== '' &&
+			Number(nsDuration) > 0 &&
+			(nsState === 'draft' || activeTracks.length === 0 || nsTrackId !== '')
 	);
 
 	/** Enter commits the door's own primary: place-bound from the board, pool-bound from the panel. */
-	const nsPlaceIsPrimary = $derived(newSessionOpen === 'board' && nsState !== 'draft');
+	const nsPlaceIsPrimary = $derived(newSessionOpen === 'board' && nsState !== 'draft' && canPlace);
 
 	/**
 	 * A dismissed form keeps what was typed: closing is parking, not
@@ -734,7 +791,7 @@
 			nsVocabNote = '';
 			nsTitle = '';
 			nsFormatId = formats.find((format) => format.status === 'active')?.id ?? '';
-			nsTrackId = '';
+			nsTrackId = activeTracks.length === 1 ? activeTracks[0]!.id : '';
 			nsDurationTouched = false;
 			nsDuration = String(formatDefault(nsFormatId));
 			nsState = 'programmed';
@@ -827,6 +884,47 @@
 		void tick().then(() => reveal(document.getElementById(`pool-${created.id}`)));
 	}
 
+	// ------------------------------------------------------------------
+	// Track repair. Existing permissive heads stay truthful until an organizer
+	// classifies them; this is the named deterministic door that prevents a
+	// legacy omission from becoming an unrepairable program fact.
+
+	let trackRepairId = $state<string | null>(null);
+	let repairTrackId = $state('');
+	let repairingTrack = $state(false);
+	const trackRepairSession = $derived(
+		trackRepairId ? (schedule?.sessions.find((session) => session.id === trackRepairId) ?? null) : null
+	);
+
+	function openTrackRepair(session: SessionItem) {
+		trackRepairId = session.id;
+		repairTrackId = activeTracks.length === 1 ? activeTracks[0]!.id : '';
+	}
+
+	async function repairTrack(event: SubmitEvent) {
+		event.preventDefault();
+		if (!trackRepairSession || repairTrackId === '' || repairingTrack) return;
+		repairingTrack = true;
+		try {
+			const updated = await api.schedule.retargetSession(
+				trackRepairSession.id,
+				trackRepairSession.formatId,
+				repairTrackId
+			);
+			const track = activeTracks.find((candidate) => candidate.id === updated.trackId);
+			recordAction({
+				area: 'schedule',
+				label: `Set “${updated.title}” to ${track?.name ?? 'its selected track'}`
+			});
+			trackRepairId = null;
+			await load();
+		} catch (error) {
+			announcement = error instanceof Error ? error.message : 'The track could not be updated.';
+		} finally {
+			repairingTrack = false;
+		}
+	}
+
 	/**
 	 * The lifecycle writer's manual door: a draft or collecting session joins
 	 * the program as editorial fact. Open proposals are never decided by this —
@@ -835,6 +933,10 @@
 	 */
 	async function addToProgram(row: ProgramGroupRow) {
 		if (busy) return;
+		if (activeTracks.length > 0 && row.session.trackId === '') {
+			openTrackRepair(row.session);
+			return;
+		}
 		busy = true;
 		const session = row.session;
 		const wasState = session.state;
@@ -1118,16 +1220,41 @@
 		return days.find((day) => day.key === key)?.label ?? key;
 	}
 
+	/**
+	 * Whether the board can actually show this day. A placement whose day is not
+	 * in the derived list is real and committed but undrawable, and its row must
+	 * not offer a door to a column that does not exist — nor print the raw key,
+	 * which is a machine date wearing a label's clothes.
+	 */
+	function dayIsDrawable(key: string): boolean {
+		return boardReady && days.some((day) => day.key === key);
+	}
+
 	function trackName(id: string): string {
 		return tracks.find((track) => track.id === id)?.name ?? 'Unassigned track';
 	}
 
-	function trackColor(id: string): string {
-		const accent = tracks.find((track) => track.id === id)?.accent;
-		if (accent === 'lavender') return 'var(--je-color-accent-lavender)';
-		if (accent === 'sea') return 'var(--je-color-accent-sea)';
-		return 'var(--je-color-text-subtle)';
-	}
+	/**
+	 * The event's own track order, which is what makes an accent mean the same
+	 * thing here as on every other surface. The local three-colour helper this
+	 * replaced resolved a real programme into two hues plus "no colour", so the
+	 * stripe taught a reader nothing; the shared palette carries eight.
+	 */
+	const trackIds = $derived(tracks.map((track) => track.id));
+
+	/** The word for a session's stage, for the record's labelled detail. */
+	const sessionStateLabel: Record<SessionState, string> = {
+		programmed: 'In the program',
+		collecting: 'Collecting proposals',
+		draft: 'Private sketch'
+	};
+
+	/**
+	 * Which pool row has its labelled detail open. One at a time, local state:
+	 * a disclosure over facts the row already implies is not a surface worth
+	 * addressing, unlike the speakers dialog beside it.
+	 */
+	let detailId = $state<string | null>(null);
 
 	/**
 	 * A format's own label may already carry its nominal length, so only the
@@ -1351,7 +1478,7 @@
 	</div>
 	<div class="layout">
 		<section class="board-region" aria-label="Loading schedule">
-			<div class="ui-table-wrap board-wrap">
+			<div class="ui-table-wrap ui-table-wrap--scroll board-wrap">
 				<div class="board" style="--cols: 4; --slots: 8" aria-hidden="true">
 					<span class="board__corner"></span>
 					{#each Array(4) as _room, roomIndex (roomIndex)}
@@ -1442,7 +1569,12 @@
 				     door to its rows (R2): the nav badge stopped re-aiming here, so
 				     this count carries the jump to the panel below the worklist. -->
 				<button type="button" class="head__conflicts-door" onclick={openConflictsPanel}>
-					{#if blockingCount > 0}<span class="count count--block">{blockingCount} blocking</span>{/if}
+					<!-- A count names a thing, not a rank: "5 blocking" counted an
+					     adjective, and a reader could not tell what five of them were.
+					     "Conflicts" is the word the Overview's attention row and this
+					     panel's own heading already use for the same rows, so the number
+					     that travels between them keeps its noun. -->
+					{#if blockingCount > 0}<span class="count count--block">{blockingCount} conflict{blockingCount === 1 ? '' : 's'}</span>{/if}
 					{#if blockingCount > 0 && warningCount > 0}<span class="count__sep"> · </span>{/if}
 					{#if warningCount > 0}<span class="count count--warn">{warningCount} warning{warningCount === 1 ? '' : 's'}</span>{/if}
 				</button>
@@ -1462,10 +1594,7 @@
 				</a>
 			{/if}
 			{#if schedule.published}
-				{@const Live = statusIcon.published}
-				<span class="ui-badge ui-badge--success"
-					><Live class="ui-badge__icon" aria-hidden="true" />Published</span
-				>
+				<Badge {...badgeFor('published')} value="Published" />
 			{:else}
 				<button type="button" class="ui-button ui-button--primary" disabled={busy} onclick={publish}>
 					Publish
@@ -1486,20 +1615,39 @@
 			bind:this={boardRegion}
 			oncontextmenu={cancelOnRightClick}>
 			{#if !boardReady}
+				<!-- The blank board names the supply it is missing and opens exactly
+				     the door that supplies it. It used to say "Nothing is scheduled
+				     yet" for every way the gate can fail, which was a false claim
+				     about a schedule holding placements the geometry refused — and it
+				     offered a room form to a board whose rooms were never the
+				     problem. Both facts come from `board-readiness.ts`. -->
 				<div class="blank">
-					<h2 class="blank__title">Nothing is scheduled yet</h2>
-					<p class="blank__copy">
-						Drop a spreadsheet, a photo of the whiteboard, or describe your day structure — the
-						draft comes back on this grid for review before anything is committed.
-					</p>
-					<p class="blank__copy">
-						Building it by hand works the same way: add a room, then place sessions from the pool
-						one slot at a time.
-					</p>
+					<h2 class="blank__title">{blankCopy.title}</h2>
+					{#if blankCopy.stranded}
+						<!-- Loudest thing in this region, because it is the one fact that
+						     contradicts what the board appears to say. -->
+						<p class="blank__stranded" role="status">{blankCopy.stranded}</p>
+					{/if}
+					<p class="blank__copy">{blankCopy.missing}</p>
+					{#if blankCopy.offerEventDates}
+						<!-- The door that supplies days. It is a link and not a form
+						     because the dates belong to the event, not to this board. -->
+						<p class="blank__copy blank__door">
+							<a href="/app/settings">Set the event’s dates and day window</a>
+						</p>
+					{/if}
+					{#if blankCopy.offerRoomForm}
+						<p class="blank__copy">
+							Drop a spreadsheet, a photo of the whiteboard, or describe your day structure — the
+							draft comes back on this grid for review before anything is committed. Building it
+							by hand works the same way: add a room, then place sessions from the pool one slot
+							at a time.
+						</p>
+					{/if}
 					{@render roomForm()}
 					{#if rooms.length > 0}
-						<!-- The grid needs days as well as rooms, so a room added here has
-						     nowhere to appear yet; it is named where it was created. -->
+						<!-- The grid needs days as well as rooms, so a room already added
+						     has nowhere to appear yet; it is named where it was created. -->
 						<p class="blank__rooms">
 							Rooms so far: {rooms.map((room) => room.name).join(' · ')}
 						</p>
@@ -1510,7 +1658,19 @@
 				     openings appear in columns, day buttons show counts, the pressed
 				     control becomes Cancel, and a ghost follows the pointer. The live
 				     region exposes the same state change without adding visual chrome. -->
-				<div class="ui-table-wrap board-wrap">
+				<!-- The one surface here that keeps its columns on a phone: a room
+				     grid's meaning *is* the alignment, so it takes the shared
+				     numeric-grid opt-out — it scrolls inside its own wrapper, with
+				     the primitive's edge affordance, and never the document. -->
+				<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+				<!-- The tabindex is the point: a scroll container that cannot be
+				     focused cannot be scrolled by keyboard at all, and a region whose
+				     content is out of view is exactly the case WCAG 2.1.1 covers. -->
+				<div
+					class="ui-table-wrap ui-table-wrap--scroll board-wrap"
+					role="region"
+					tabindex="0"
+					aria-label={`${dayLabel(dayKey)} — ${rooms.length} room${rooms.length === 1 ? '' : 's'}, scrolls sideways`}>
 					<div class="board" style="--cols: {rooms.length}; --slots: {schedule.slotsPerDay}">
 						<span class="board__corner"></span>
 						{#each rooms as room (room.id)}
@@ -1588,7 +1748,10 @@
 												style="--start: {placement.startMin / slotMinutes}; --span: {session.durationMin / slotMinutes}">
 												<span
 													class="card__track"
-													style="--track: {trackColor(session.trackId)}"
+													style="--track: var(--je-color-track-{trackAccent(
+														session.trackId,
+														trackIds
+													)}-ink)"
 													role="img"
 													aria-label={`${trackName(session.trackId)} track`}></span>
 												<p class="card__title">{session.title}</p>
@@ -1599,15 +1762,16 @@
 													     grid a tooltip is unreachable on touch and invisible to a
 													     keyboard. -->
 													{#if blocked}
-														{@const Blocking = statusIcon.blocking}
 														{@const reason = reasonsFor(placement, 'block')}
 														<Popover
-															label={`Conflict — why “${session.title}” is blocking`}
-															onreveal={() => (announcement = `${session.title} is blocking: ${reason}`)}>
+															label={`Conflict on “${session.title}” — why`}
+															onreveal={() => (announcement = `${session.title}: ${reason}`)}>
 															{#snippet trigger()}
-																<span class="ui-badge ui-badge--danger ui-badge--solid"
-																	><Blocking class="ui-badge__icon" aria-hidden="true" />Conflict</span
-																>
+																<!-- The board's one accent-dominant mark: a blocking card is
+																     the thing that stops publication, and it is at most a few
+																     cards among many. The conflicts panel lists the same fact
+																     as a column, so its badges stay unemphasised. -->
+																<Badge {...badgeFor('blocking')} value="Conflict" emphasis />
 															{/snippet}
 															{#snippet children()}
 																<p class="reason">{reason}</p>
@@ -1616,15 +1780,12 @@
 														</Popover>
 													{/if}
 													{#if warned}
-														{@const Warned = statusIcon.warning}
 														{@const reason = reasonsFor(placement, 'warn')}
 														<Popover
 															label={`Warning — why “${session.title}” is flagged`}
 															onreveal={() => (announcement = `${session.title} warning: ${reason}`)}>
 															{#snippet trigger()}
-																<span class="ui-badge ui-badge--warning"
-																	><Warned class="ui-badge__icon" aria-hidden="true" />Warning</span
-																>
+																<Badge {...badgeFor('warning')} value="Warning" />
 															{/snippet}
 															{#snippet children()}
 																<p class="reason">{reason}</p>
@@ -1659,9 +1820,13 @@
 														aria-label={`Move “${session.title}”`}
 														disabled={busy || placing !== null}
 														onclick={(event) => enterPlacement(session, event.detail === 0)}>Move</button>
+													<!-- Quiet danger: destructive, but not this card's primary — the
+													     card's primary is Move. Filled danger waits for the
+													     confirming press in the veil below, where destroying the
+													     placement genuinely is the act being asked for. -->
 													<button
 														type="button"
-														class="ui-button ui-button--danger ui-button--sm"
+														class="ui-button ui-button--danger-quiet ui-button--sm"
 														aria-label={`Remove “${session.title}” from the schedule`}
 														disabled={busy || placing !== null}
 														onclick={() => armRemove(session)}>Remove</button>
@@ -1720,7 +1885,7 @@
 										</p>
 										<button
 											type="button"
-											class="ui-button ui-button--ghost ui-button--sm brk__remove"
+											class="ui-button ui-button--danger-quiet ui-button--sm brk__remove"
 											aria-label={`Remove “${brk.label}” — ${dayLabel(brk.dayKey)} ${clockLabel(brk.startMin)}, ${roomName(brk.roomId)}`}
 											disabled={busy || placing !== null}
 											onclick={() => armBreak(brk)}>Remove</button>
@@ -1888,9 +2053,17 @@
 						onclick={() => void openNewSession('panel')}>New session…</button>
 				</header>
 
+				{#if placementBlocked && awaitingPlacement > 0}
+					<!-- Said once, where the rows are, instead of by every row growing a
+					     control that cannot work. This is the other half of the blank
+					     board above: that one says what the grid is missing, this one
+					     says what the absence costs these sessions. -->
+					<p class="panel__blocked">{placementBlocked}</p>
+				{/if}
+
 				{#if trayFilter}
 					<p class="panel__scope">
-						<span class="ui-badge">{trayLabel[trayFilter]}</span>
+						<Badge tone="mark" value={trayLabel[trayFilter]} />
 						<button
 							type="button"
 							class="ui-button ui-button--ghost ui-button--sm"
@@ -1941,31 +2114,37 @@
 					<span class="panel__count">{conflictRows.length}</span>
 				</header>
 				{#if conflictRows.length === 0}
-					<p class="panel__calm">Nothing is blocking publication.</p>
+					<!-- The condition, not the obstruction: this panel is read by people
+					     who are not necessarily about to publish, and what publication
+					     waits on belongs on the publish control, which states its own
+					     refusal when somebody actually tries. -->
+					<p class="panel__calm">No conflicts on the schedule.</p>
 				{:else}
 					<ul class="conflicts">
 						{#each conflictRows as row (row.key)}
-							{@const Severity =
-								row.conflict.severity === 'block' ? statusIcon.blocking : statusIcon.warning}
+							<!-- Tone and glyph come from the shared vocabulary, so a blocking
+							     conflict reads the same here as on the card it names. No
+							     emphasis: this is a column of the same fact, and a column of
+							     solid badges spends the region's whole accent budget on the
+							     list rather than on the card that has to move. -->
 							<li class="conflicts__row">
-								<span
-									class="ui-badge conflicts__sev"
-									class:ui-badge--danger={row.conflict.severity === 'block'}
-									class:ui-badge--solid={row.conflict.severity === 'block'}
-									class:ui-badge--warning={row.conflict.severity === 'warn'}>
-									<Severity class="ui-badge__icon" aria-hidden="true" />
-									{row.conflict.severity === 'block' ? 'Blocking' : 'Warning'}
+								<span class="conflicts__sev">
+									<Badge
+										{...badgeFor(row.conflict.severity === 'block' ? 'blocking' : 'warning')}
+										value={row.conflict.severity === 'block' ? 'Blocking' : 'Warning'} />
 								</span>
 								<div class="conflicts__copy">
 									<p class="conflicts__title">{row.session.title}</p>
 									<p class="conflicts__reason">{row.conflict.reason}</p>
 								</div>
-								<button
-									type="button"
-									class="ui-button ui-button--secondary ui-button--sm conflicts__action"
-									onclick={() => showOnGrid(row.placement)}>
-									Show on {dayLabel(row.placement.dayKey)}
-								</button>
+								{#if dayIsDrawable(row.placement.dayKey)}
+									<button
+										type="button"
+										class="ui-button ui-button--secondary ui-button--sm conflicts__action"
+										onclick={() => showOnGrid(row.placement)}>
+										Show on {dayLabel(row.placement.dayKey)}
+									</button>
+								{/if}
 							</li>
 						{/each}
 					</ul>
@@ -2016,9 +2195,12 @@
 									aria-label={`Remove ${speaker.name} — confirm`}
 									onclick={() => removeParticipant(session, speaker)}>Remove?</button>
 							{:else}
+								<!-- Resting: quiet danger among the Add controls it sits beside.
+								     The armed press above is the confirming step inside this
+								     dialog, which is where filled danger belongs. -->
 								<button
 									type="button"
-									class="ui-button ui-button--ghost ui-button--sm speakers__action"
+									class="ui-button ui-button--danger-quiet ui-button--sm speakers__action"
 									disabled={attributing}
 									aria-label={`Remove ${speaker.name} from “${session.title}”`}
 									onclick={() => armParticipant(speaker.email)}>Remove</button>
@@ -2158,6 +2340,40 @@
 	{@render newSessionForm()}
 </Modal>
 
+<Modal
+	bind:open={() => trackRepairId !== null, (value) => { if (!value) trackRepairId = null; }}
+	title={trackRepairSession ? `Choose a track for “${trackRepairSession.title}”` : 'Choose a track'}
+	dismissible>
+	<form class="new-session" onsubmit={repairTrack}>
+		<p class="new-session__vocab-note">
+			This event uses tracks, so every collecting or programmed session needs one before publish.
+		</p>
+		<Field id="repair-session-track" label="Track">
+			{#snippet children({ id, describedBy })}
+				<select
+					class="ui-control"
+					{id}
+					aria-describedby={describedBy}
+					disabled={repairingTrack}
+					bind:value={repairTrackId}>
+					<option value="" disabled>Choose a track</option>
+					{#each activeTracks as track (track.id)}
+						<option value={track.id}>{track.name}</option>
+					{/each}
+				</select>
+			{/snippet}
+		</Field>
+		<div class="new-session__actions">
+			<Button type="button" size="sm" variant="secondary" onclick={() => (trackRepairId = null)}>
+				Cancel
+			</Button>
+			<Button type="submit" size="sm" disabled={repairTrackId === '' || repairingTrack}>
+				Save track
+			</Button>
+		</div>
+	</form>
+</Modal>
+
 {#snippet newSessionForm()}
 	<!-- Enter submits the opening door's own primary. -->
 	<form
@@ -2205,7 +2421,14 @@
 					</div>
 				{/snippet}
 			</Field>
-			<Field id="new-session-track" label="Track">
+			<Field
+				id="new-session-track"
+				label="Track"
+				description={activeTracks.length === 0
+					? 'This event does not use tracks yet.'
+					: nsState === 'draft'
+						? 'Optional while this remains a private sketch.'
+						: 'Required before this session can enter the program.'}>
 				{#snippet children({ id, describedBy })}
 					<div class="new-session__choice">
 						<select
@@ -2214,8 +2437,14 @@
 							aria-describedby={describedBy}
 							disabled={creatingSession}
 							bind:value={nsTrackId}>
-							<option value="">No track</option>
-							{#each tracks.filter((track) => track.status === 'active') as track (track.id)}
+							<option value="" disabled={nsState !== 'draft' && activeTracks.length > 0}>
+								{activeTracks.length === 0
+									? 'This event has no tracks'
+									: nsState === 'draft'
+										? 'Decide later — private draft'
+										: 'Choose a track'}
+							</option>
+							{#each activeTracks as track (track.id)}
 								<option value={track.id}>{track.name}</option>
 							{/each}
 						</select>
@@ -2275,7 +2504,8 @@
 		     point; in the panel, landing unplaced is. Enter always takes the
 		     leading action, and Escape after committing still leaves a real,
 		     honestly-pooled session. A private sketch stays off the grid, so
-		     only Create is offered for it. -->
+		     only Create is offered for it — and so is every session while the
+		     board has no grid to place one on. -->
 		<div class="new-session__actions">
 			{#if nsPlaceIsPrimary}
 				<Button type="submit" size="sm" disabled={!nsReady || creatingSession}>
@@ -2289,7 +2519,7 @@
 					onclick={() => void createSession(false)}>Create</Button>
 			{:else}
 				<Button type="submit" size="sm" disabled={!nsReady || creatingSession}>Create</Button>
-				{#if nsState !== 'draft'}
+				{#if nsState !== 'draft' && canPlace}
 					<Button
 						type="button"
 						size="sm"
@@ -2305,19 +2535,41 @@
 {#snippet programRow(row: ProgramGroupRow)}
 	{@const session = row.session}
 	{@const placement = schedule?.placements.find((entry) => entry.sessionId === session.id)}
+	{@const track = tracks.find((entry) => entry.id === session.trackId)}
+	{@const open = detailId === session.id}
+	<!-- The record composition: a rail carrying the track accent, a primary line
+	     (title), the scan keys beneath it, and the trailing affordances. The
+	     phone gets the same arrangement with touch metrics — nothing moves
+	     off-screen and nothing scrolls sideways, because the row grows
+	     downward, which is the one direction a phone has. -->
 	<li
 		class="pool__row"
 		class:pool__row--active={placing?.id === session.id}
+		class:pool__row--open={open}
 		id={`pool-${session.id}`}
 		tabindex="-1"
-		style="--track: {trackColor(session.trackId)}">
+		style="--track: var(--je-color-track-{trackAccent(session.trackId, trackIds)}-ink)">
 		<div class="pool__copy">
 			<p class="pool__title">{session.title}</p>
 			<p class="pool__meta">
-				{session.durationMin} min · {formatName(session.formatId)} · {trackName(session.trackId)}{#if placement}
-					· {dayLabel(placement.dayKey)}
-					{clockLabel(placement.startMin)}{/if}
+				<span>{session.durationMin} min · {formatName(session.formatId)}</span>
+				{#if track}
+					<TrackChip name={track.name} id={track.id} order={trackIds} />
+				{:else}
+					<!-- Absence in words on the quietest rung, never an empty chip. -->
+					<span class="pool__untracked">No track</span>
+				{/if}
 			</p>
+			{#if placement && dayIsDrawable(placement.dayKey)}
+				<p class="pool__meta">
+					{dayLabel(placement.dayKey)}
+					{clockLabel(placement.startMin)} · {roomName(placement.roomId)}
+				</p>
+			{:else if placement}
+				<!-- Committed, and outside anything this grid can draw. Said, not
+				     hidden, and not printed as a raw key. -->
+				<p class="pool__fact">Placed at a time the current grid cannot draw</p>
+			{/if}
 			{#if session.state === 'collecting'}
 				<!-- The one door to this session's proposals (R2): the count lands
 				     on Decisions scoped to exactly these rows. Zero is stated, not
@@ -2335,10 +2587,16 @@
 			{/if}
 		</div>
 		<div class="pool__actions">
-			{#if placeable(row)}
+			{#if session.state !== 'draft' && session.trackId === '' && activeTracks.length > 0}
+				<Button size="sm" variant="secondary" onclick={() => openTrackRepair(session)}>
+					Choose track…
+				</Button>
+			{/if}
+			{#if placeable(row) && canPlace}
 				<!-- One element for both faces, so the pointer that pressed Place…
 				     is already resting on Cancel: entering the mode moves neither
-				     layout nor focus. -->
+				     layout nor focus. Drawn only while the board can actually take
+				     a placement; the reason it cannot is stated once, above. -->
 				<button
 					type="button"
 					class="ui-button ui-button--secondary ui-button--sm"
@@ -2353,7 +2611,7 @@
 					>{#if placing?.id === session.id}Cancel <kbd aria-hidden="true">Esc</kbd
 						>{:else}Place…{/if}</button>
 			{/if}
-			{#if placement}
+			{#if placement && dayIsDrawable(placement.dayKey)}
 				<button
 					type="button"
 					class="ui-button ui-button--secondary ui-button--sm"
@@ -2376,7 +2634,55 @@
 					disabled={placing !== null}
 					onclick={() => openSpeakers(session)}>Speakers…</button>
 			{/if}
+			<!-- The record's own disclosure: the labelled facts the row's two lines
+			     compress into a run-on, plus the people the pool row never named.
+			     One component, two presentations — an inline expansion where there
+			     is room beside the list, a full-screen sheet on a phone. -->
+			<button
+				type="button"
+				class="ui-button ui-button--ghost ui-button--sm pool__detail-door"
+				aria-expanded={open}
+				aria-label={open ? `Hide details of “${session.title}”` : `Details of “${session.title}”`}
+				onclick={() => (detailId = open ? null : session.id)}>{open ? 'Hide' : 'Details'}</button>
 		</div>
+		{#if open}
+			<div class="pool__detail">
+				<RecordDetail title={session.title} onclose={() => (detailId = null)}>
+					{#snippet fields()}
+						<!-- Field order mirrors the row's own reading order. -->
+						<RecordField label="Length">{session.durationMin} min</RecordField>
+						<RecordField label="Format">{formatName(session.formatId)}</RecordField>
+						<RecordField label="Track">
+							{#if track}
+								<TrackChip name={track.name} id={track.id} order={trackIds} />
+							{:else}
+								No track
+							{/if}
+						</RecordField>
+						<RecordField label="Stage">{sessionStateLabel[session.state]}</RecordField>
+						<RecordField label="Placed">
+							{#if placement && dayIsDrawable(placement.dayKey)}
+								{dayLabel(placement.dayKey)}
+								{rangeLabel(placement.startMin, session.durationMin)} · {roomName(placement.roomId)}
+							{:else if placement}
+								At a time the current grid cannot draw
+							{:else}
+								Not placed yet
+							{/if}
+						</RecordField>
+						<RecordField label="Speakers">
+							{#if session.speakers.length > 0}
+								{session.speakers.map((speaker) => speaker.name).join(', ')}
+							{:else if session.state === 'collecting'}
+								Collecting — {proposalsLabel(row.proposalCount)}
+							{:else}
+								No speakers yet
+							{/if}
+						</RecordField>
+					{/snippet}
+				</RecordDetail>
+			</div>
+		{/if}
 	</li>
 {/snippet}
 
@@ -2503,22 +2809,20 @@
 		{#if confirmConflicts.length > 0}
 			<ul class="confirm__conflicts">
 				{#each confirmConflicts as conflict, index (index)}
-					{@const Severity = conflict.severity === 'block' ? statusIcon.blocking : statusIcon.warning}
 					<li class="confirm__conflict">
-						<span
-							class="ui-badge"
-							class:ui-badge--danger={conflict.severity === 'block'}
-							class:ui-badge--solid={conflict.severity === 'block'}
-							class:ui-badge--warning={conflict.severity === 'warn'}>
-							<Severity class="ui-badge__icon" aria-hidden="true" />
-							{conflict.severity === 'block' ? 'Blocking' : 'Warning'}
-						</span>
+						<!-- A blocking conflict here disables the dialog's own primary, so
+						     it takes the emphasis: it is the one thing standing between
+						     this dialog and its commit. -->
+						<Badge
+							{...badgeFor(conflict.severity === 'block' ? 'blocking' : 'warning')}
+							value={conflict.severity === 'block' ? 'Blocking' : 'Warning'}
+							emphasis={conflict.severity === 'block'} />
 						<span class="confirm__conflict-reason">{conflict.reason}</span>
 					</li>
 				{/each}
 			</ul>
 			{#if confirmBlocked}
-				<p class="confirm__blocked-note">Pick a time that clears the blocking conflict above.</p>
+				<p class="confirm__blocked-note">Pick a time that clears the conflict above.</p>
 			{/if}
 		{/if}
 	{/if}
@@ -3333,6 +3637,27 @@
 		color: var(--je-color-text-muted);
 	}
 
+	/* The one fact in this region that contradicts what the board appears to
+	   say, so it holds full ink and a caution tone while the explanatory copy
+	   around it stays muted. The word carries the state; the colour agrees. */
+	.blank__stranded {
+		margin: 0;
+		max-inline-size: 56ch;
+		padding: var(--je-space-2) var(--je-space-3);
+		border-inline-start: 3px solid var(--je-color-warning);
+		border-radius: var(--je-radius-control);
+		background: var(--je-color-warning-soft);
+		font-size: var(--je-font-size-sm);
+		font-weight: 600;
+		color: var(--je-color-text);
+	}
+
+	/* The blank state's one accent-dominant element: the door that supplies
+	   what is missing. Everything else here is copy. */
+	.blank__door a {
+		font-weight: 650;
+	}
+
 	/* Creation lives with the grid it feeds: the disclosure sits under the board
 	   so opening it grows the region downward and moves nothing above it. */
 	.board-add {
@@ -3406,6 +3731,18 @@
 		color: var(--je-color-text-muted);
 	}
 
+	/* Why these rows offer no placement. Full ink, because it is the answer to
+	   a question the reader is about to ask about every row beneath it. */
+	.panel__blocked {
+		margin: 0 0 var(--je-space-3);
+		padding: var(--je-space-2) var(--je-space-3);
+		border-inline-start: 3px solid var(--je-color-warning);
+		border-radius: var(--je-radius-control);
+		background: var(--je-color-warning-soft);
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-text);
+	}
+
 	.reason {
 		margin: 0;
 	}
@@ -3472,12 +3809,22 @@
 		color: var(--je-color-text-muted);
 	}
 
+	/* The record: a rail carrying the track accent, the identifying line and its
+	   scan keys, then the trailing affordances on their own line aligned with
+	   the copy. One arrangement at every width — this panel is 20rem on the
+	   widest desktop, so a copy column crushed between two fixed neighbours was
+	   never a desktop design either; it was the narrow failure showing up early.
+	   Touch metrics arrive with the density tokens, so the controls grow to the
+	   44px row on a phone without a second rule here. */
 	.pool__row {
 		display: grid;
-		grid-template-columns: minmax(0, 1fr) max-content;
-		grid-template-areas: 'copy action';
-		align-items: center;
-		gap: var(--je-space-2) var(--je-space-3);
+		grid-template-columns: minmax(0, 1fr);
+		grid-template-areas:
+			'copy'
+			'action'
+			'detail';
+		align-items: start;
+		gap: var(--je-space-2);
 		padding-block: var(--je-space-3);
 		padding-inline-start: var(--je-space-3);
 		border-inline-start: 3px solid var(--track);
@@ -3508,10 +3855,20 @@
 		font-weight: 600;
 	}
 
+	/* The scan keys. A chip sits on this line, so the line is a flex row with a
+	   baseline it can share rather than a run of inline text the chip breaks. */
 	.pool__meta {
-		margin: 0;
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--je-space-1) var(--je-space-2);
+		margin: var(--je-space-1) 0 0;
 		font-size: var(--je-font-size-xs);
 		color: var(--je-color-text-muted);
+	}
+
+	.pool__untracked {
+		color: var(--je-color-text-subtle);
 	}
 
 	/* A gap named on the row: quiet ink for a plan ("No speakers yet"), a link
@@ -3522,12 +3879,45 @@
 		color: var(--je-color-text-muted);
 	}
 
+	/* The trailing affordances: a wrapping row, never a column of stretched
+	   blocks. Three full-width buttons under every row turned a worklist into a
+	   stack of forms on a phone, and made each row's real primary — Place… —
+	   indistinguishable from the disclosure beside it. */
 	.pool__actions {
 		grid-area: action;
 		display: flex;
-		flex-direction: column;
-		align-items: stretch;
-		gap: var(--je-space-1);
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--je-space-1) var(--je-space-2);
+	}
+
+	/* The disclosure is the quietest control in the row and sits last. */
+	.pool__detail-door {
+		margin-inline-start: auto;
+	}
+
+	.pool__detail {
+		grid-area: detail;
+	}
+
+	/* Group separation, carried by the inline presentation itself: the labelled
+	   facts are a different kind of thing from the row's own lines, so the
+	   boundary is visible and the gap around the group is larger than the gaps
+	   inside it. The sheet presentation is out of flow (`display: contents`), so
+	   attaching this to the inline host is also what stops the row holding a
+	   blank strip open for a detail that has left the page. */
+	.pool__detail :global(.ui-detail-host[data-presentation='inline']) {
+		display: block;
+		margin-block-start: var(--je-space-1);
+		padding-block-start: var(--je-space-3);
+		padding-inline-end: var(--je-space-3);
+		border-block-start: 1px solid var(--je-color-border);
+	}
+
+	/* An expansion is part of what opened it: the open row keeps the marked
+	   surface rather than showing the page behind it. */
+	.pool__row--open {
+		background: var(--je-color-surface-sunken);
 	}
 
 	.pool-group + .pool-group {
@@ -3876,9 +4266,14 @@
 			--slot-h: 8.75rem;
 		}
 
+		/* Three named controls do not fit one 11rem column, and the third was
+		   being sliced in half by the next room's edge. They wrap instead: a
+		   card grows downward inside a column that already scrolls, which costs
+		   nothing, where a clipped control costs the action. */
 		.card__actions {
 			position: static;
 			display: flex;
+			flex-wrap: wrap;
 			gap: var(--je-space-1);
 			inline-size: auto;
 			block-size: auto;
@@ -3909,18 +4304,6 @@
 
 		.publish__reason {
 			max-inline-size: none;
-		}
-
-		.pool__row {
-			grid-template-columns: minmax(0, 1fr);
-			grid-template-areas:
-				'copy'
-				'action';
-			align-items: start;
-		}
-
-		.pool__action {
-			justify-self: start;
 		}
 
 		.confirm__time {

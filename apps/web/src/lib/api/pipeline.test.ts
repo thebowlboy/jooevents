@@ -33,8 +33,13 @@ describe('pipeline progress and pace', () => {
 		for (const scenario of scenarios) {
 			for (const entry of scenario.summary.pipeline) {
 				if (!entry.paceTone) continue;
-				expect(entry.deadlineLabel).toBeTruthy();
-				expect(entry.deadlineIso).toBeTruthy();
+				expect(entry.deadline?.qualifier).toBeTruthy();
+				// Both halves, and both machine-readable: the day the organizer set,
+				// and the end-exclusive boundary that decides the state. A lane that
+				// carried a rendered label here could disagree with the panel beside
+				// it, which is exactly what it used to do.
+				expect(entry.deadline?.displayDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+				expect(Number.isNaN(Date.parse(entry.deadline?.effectiveAt ?? ''))).toBe(false);
 			}
 		}
 	});

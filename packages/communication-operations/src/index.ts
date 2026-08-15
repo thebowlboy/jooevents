@@ -6,3 +6,4 @@ export * from './organizer-audience-preview-module';
 export * from './preparation';
 export * from './send-module';
 export * from './send-operations-module';
+export * from './workspace-sender-identity-module';

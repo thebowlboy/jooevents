@@ -1,5 +1,5 @@
+import { formatDate, formatDateRange, formatInstantDate } from '@jooevents/contracts';
 import type { WorkspaceDataset } from './dataset';
-import { formatDateRange } from './dataset';
 import { defaultEventTheme, starterSurfaceTemplates, starterTemplates } from './templates';
 import { baselineFieldRegistry } from './fields';
 import flight from './flight';
@@ -40,19 +40,21 @@ export function newEventDataset(seed: CreatedEventSeed): WorkspaceDataset {
 				location: '',
 				timezone: seed.timezone,
 				phase: 'Just created · CFP not open yet',
-				today: new Date().toLocaleDateString('en-US', {
-					weekday: 'long',
-					month: 'long',
-					day: 'numeric'
-				})
+				// Today where the *event* is, not where the browser is: an organizer
+				// travelling to their own conference must not see the day shift. The
+				// weekday earns its place because this line exists to be placed
+				// against the event's own days.
+				today: formatInstantDate(new Date().toISOString(), seed.timezone, { weekday: true })
 			},
 			lockedAreas: [],
 			navCounts: {},
+			/* The submissions figure is measured from the rows, so it is not
+			   authored here — it resolves to nothing collected yet, which is the
+			   truth on a workspace whose form has not opened. */
 			stats: [
-				{ label: 'Submissions', value: '0', sub: 'No form is open yet' },
 				{ label: 'Reviews', value: '—', sub: 'No review plan yet' },
-				{ label: 'Accepted', value: '0', sub: 'Nothing decided yet' },
-				{ label: 'CFP closes', value: '—', sub: 'No close date yet' }
+				{ label: 'Decided', value: '—', sub: 'Nothing to decide yet' },
+				{ label: 'Placed', value: '—', sub: 'No sessions on the grid yet' }
 			],
 			attention: [
 				{
@@ -129,6 +131,17 @@ export function newEventDataset(seed: CreatedEventSeed): WorkspaceDataset {
 	};
 }
 
+/**
+ * The cursor's own calendar day. The cursor is anchored at local noon precisely
+ * so that stepping a day never lands on a DST-shifted midnight, which makes its
+ * local year/month/day the day it is standing on.
+ */
+function isoDay(date: Date): string {
+	const month = date.getMonth() + 1;
+	const day = date.getDate();
+	return `${date.getFullYear()}-${month < 10 ? '0' : ''}${month}-${day < 10 ? '0' : ''}${day}`;
+}
+
 /** One schedule day per event date, capped so a typo'd year cannot mint thousands. */
 function eventDays(startIso: string, endIso: string): { key: string; label: string }[] {
 	const days: { key: string; label: string }[] = [];
@@ -138,11 +151,9 @@ function eventDays(startIso: string, endIso: string): { key: string; label: stri
 	while (cursor.getTime() <= end.getTime() && days.length < 14) {
 		days.push({
 			key: `day-${days.length}`,
-			label: cursor.toLocaleDateString('en-US', {
-				weekday: 'short',
-				month: 'short',
-				day: 'numeric'
-			})
+			// A day tab needs its weekday and drops its year: every tab in one
+			// event's schedule would otherwise repeat the same four digits.
+			label: formatDate(isoDay(cursor), { weekday: true, year: false })
 		});
 		cursor.setDate(cursor.getDate() + 1);
 	}

@@ -380,8 +380,17 @@ test('the close date is edited where the form is configured, with an undoable re
 	await expect(receipt).toBeVisible({ timeout: 10000 });
 	await expect(closes).toHaveValue('2027-06-30');
 
+	// Destructive but secondary: danger ink and a danger-toned border on a quiet
+	// base, never the filled red that belongs to a confirming press in a dialog
+	// — and never the ghost that hid the consequence altogether. The region's
+	// one accent-dominant slot stays with the lifecycle commit beside it.
+	const removeClose = page.getByRole('button', { name: 'Remove close date' });
+	await expect(removeClose).toHaveClass(/ui-button--danger-quiet/);
+	await expect(removeClose).not.toHaveClass(/ui-button--danger\s/);
+	await expect(page.locator('.conf__intake .ui-button--danger:not(.ui-button--danger-quiet)')).toHaveCount(0);
+
 	// Removing it is the evergreen state, said in words on the card list.
-	await page.getByRole('button', { name: 'Remove close date' }).click();
+	await removeClose.click();
 	await expect(receiptOf(page, 'Removed the close date')).toBeVisible({ timeout: 10000 });
 	await expect(closes).toHaveValue('');
 	await expect(page.getByRole('button', { name: 'Remove close date' })).toHaveCount(0);

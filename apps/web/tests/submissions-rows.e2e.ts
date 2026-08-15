@@ -12,6 +12,33 @@ import { expect, test } from '@playwright/test';
  */
 
 test.describe('a submission row as a press target', () => {
+	test('a track keeps the same canonical pill when its record opens', async ({ page }) => {
+		await page.goto('/app/submissions');
+		const row = page.locator('tr.row').filter({ has: page.locator('.ui-track') }).first();
+		await expect(row).toBeVisible({ timeout: 15000 });
+
+		const rowChip = row.locator('.ui-track');
+		const label = (await rowChip.innerText()).trim();
+		const rowClass = await rowChip.getAttribute('class');
+		const rowFill = await rowChip.evaluate((element) => getComputedStyle(element).backgroundColor);
+
+		await row.getByRole('button', { name: /^Details for/ }).click();
+		// Desktop renders inline; the phone promotes the same content into a
+		// native dialog. The host is the stable semantic seam across both.
+		const detail = page.locator('.ui-detail-host').last();
+		await expect(detail).toBeVisible();
+		const trackField = detail
+			.locator('.ui-detail__field')
+			.filter({ has: page.getByText('Track', { exact: true }) });
+		const detailChip = trackField.locator('.ui-track');
+
+		await expect(detailChip).toHaveText(label);
+		expect(await detailChip.getAttribute('class')).toBe(rowClass);
+		expect(await detailChip.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe(
+			rowFill
+		);
+	});
+
 	test('dead space in the row opens the detail, and opens it again shut', async ({
 		page
 	}, testInfo) => {
@@ -46,8 +73,10 @@ test.describe('a submission row as a press target', () => {
 
 		// A bigger target for the pointer is not a second switch for anyone else:
 		// the row stays a row, and the chevron stays the one thing that says open.
+		// `role="row"` is the table's own semantics restated — redundant while the
+		// table is a table, and load-bearing the moment the record re-composes.
 		expect(await row.getAttribute('tabindex')).toBeNull();
-		expect(await row.getAttribute('role')).toBeNull();
+		expect(['row', null]).toContain(await row.getAttribute('role'));
 		await expect(row.getByRole('button', { name: /^Details for/ })).toHaveCount(1);
 	});
 
@@ -94,13 +123,14 @@ test.describe('a submission row as a press target', () => {
 		const chevron = row.getByRole('button', { name: /^Details for/ });
 		await chevron.click();
 		await expect(chevron).toHaveAttribute('aria-expanded', 'true');
-		await expect(page.getByRole('heading', { name: 'Abstract' })).toBeVisible();
+		// Every value in the detail carries its label; the abstract's is one of them.
+		await expect(page.locator('.ui-detail').getByText('Abstract', { exact: true })).toBeVisible();
 
 		// Pressing it a second time closes it once, not twice: the row underneath
 		// the chevron does not get a turn at the same press.
 		await chevron.click();
 		await expect(chevron).toHaveAttribute('aria-expanded', 'false');
-		await expect(page.getByRole('heading', { name: 'Abstract' })).toHaveCount(0);
+		await expect(page.locator('.ui-detail')).toHaveCount(0);
 
 		// And the keyboard reaches the same switch, unchanged.
 		await chevron.press('Enter');

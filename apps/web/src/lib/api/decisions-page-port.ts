@@ -56,7 +56,11 @@ export interface DecisionsPagePort {
 		state(): Promise<ScheduleState>;
 	};
 	readonly decisions: {
-		decide(ids: string[], decision: DecisionState): Promise<void>;
+		decide(
+			ids: string[],
+			decision: DecisionState,
+			trackIdsBySubmission?: Readonly<Record<string, string>>
+		): Promise<void>;
 		reviewNotification(ids: string[]): Promise<MessageReview>;
 		/**
 		 * Commits the reviewed notifications and states what that commit did.

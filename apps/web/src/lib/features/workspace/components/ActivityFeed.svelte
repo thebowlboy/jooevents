@@ -1,11 +1,41 @@
 <script lang="ts">
 	import { Bot } from 'lucide-svelte';
+	import { DATE_CLASS, describeRecency, formatRelative } from '@jooevents/contracts';
 	import { ClampedText } from '$lib/ui';
 	import type { ActivityItem } from '$lib/api/types';
 
-	let { items = [], limit }: { items?: ActivityItem[]; limit?: number } = $props();
+	let {
+		items = [],
+		limit,
+		timezone = '',
+		now = Date.now()
+	}: {
+		items?: ActivityItem[];
+		limit?: number;
+		/** The event's zone. Distances are counted in it, never in the reader's. */
+		timezone?: string;
+		/** One clock reading for the panel, so no two rows disagree by a tick. */
+		now?: number;
+	} = $props();
 
 	const shown = $derived(limit === undefined ? items : items.slice(0, limit));
+
+	/**
+	 * The distance in words, from the one date vocabulary. The feed used to be
+	 * handed pre-rendered strings — `18 min ago` from a sample dataset, `6 hr
+	 * ago` from the live port — two spellings of one unit on one surface, both
+	 * ageing the moment they were written.
+	 *
+	 * The absolute stays reachable beside it, because a relative string stops
+	 * being a record of anything after a couple of days. It is supplementary
+	 * here, not the carrier: the visible words already answer "is this fresh?".
+	 */
+	function when(item: ActivityItem) {
+		const described = timezone === '' ? null : describeRecency({ at: item.at, timezone, now });
+		if (described) return described;
+		const relative = formatRelative(item.at, now, { fallback: '' });
+		return { relative, absolute: '', machine: '', title: '', accessibleText: relative };
+	}
 
 	const initials = (name: string) =>
 		name
@@ -17,6 +47,7 @@
 
 <ol class="feed">
 	{#each shown as item (item.id)}
+		{@const at = when(item)}
 		<li class="feed__row">
 			{#if item.actor === 'agent'}
 				<!-- The robot mark is the agent attribution; it carries the name an
@@ -31,7 +62,12 @@
 				{#snippet children()}
 					<strong>{item.name}</strong>
 					{item.text}
-					<span class="feed__time">· {item.time}</span>
+					{#if at.relative !== ''}
+						<time
+							class="feed__time {DATE_CLASS.column}"
+							datetime={at.machine}
+							title={at.absolute}>· {at.relative}</time>
+					{/if}
 				{/snippet}
 			</ClampedText>
 		</li>
@@ -82,8 +118,8 @@
 		font-weight: 600;
 	}
 
+	/* Figures and wrapping come from the shared date column; only ink is local. */
 	.feed__time {
 		color: var(--je-color-text-subtle);
-		white-space: nowrap;
 	}
 </style>

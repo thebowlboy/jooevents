@@ -56,11 +56,7 @@ import {
   type ExactStoredChangesetCommit,
   type StoredChangesetRecord
 } from '@jooevents/changeset-operations';
-import type {
-  EngagementMutationPlanDto,
-  EngagementRestorePlanDto,
-  EngagementScopeDto
-} from '@jooevents/contracts';
+import type { EngagementScopeDto } from '@jooevents/contracts';
 import {
   createEngagementChangesetBundle,
   engagementReadPort,
@@ -72,8 +68,15 @@ import {
   ENGAGEMENT_CHANGESET_KIND,
   ENGAGEMENT_CHANGESET_OWNER_ID,
   ENGAGEMENT_CHANGESET_VERSION,
-  type EngagementChangesetBundle
+  type EngagementChangesetBundle,
+  type EngagementChangesetPlan
 } from '@jooevents/engagement';
+import {
+  TASK_ENGAGEMENT_RESPONSE_COLLABORATOR,
+  taskReadPort,
+  taskTransactionPort,
+  taskValidationPort
+} from '@jooevents/tasks';
 import type { PermissionId } from '@jooevents/identity-access';
 import {
   canonicalJsonText,
@@ -91,6 +94,7 @@ import {
 import type { SQLiteEffectDomainAdapter } from './foundation-trial-uow';
 import type { SQLiteChangesetLifecycleStore } from './changeset-lifecycle';
 import { SQLiteEngagementRepository } from './engagement';
+import { SQLiteTaskRepository } from './tasks';
 import type {
   SQLiteOperatorEventRelationshipSource,
   SQLiteOperatorSubjectRelationshipSource
@@ -218,8 +222,6 @@ const ID_METHODS = [
   'newPreparationHandle', 'newTimelineId', 'newFactId', 'newPointerId'
 ] as const;
 
-type EngagementChangesetPlan = EngagementMutationPlanDto | EngagementRestorePlanDto;
-
 type LifecycleSuccess = Extract<
   ChangesetLifecycleContribution,
   { readonly result: { readonly kind: 'success' } }
@@ -280,7 +282,7 @@ function exactSubjects(context: EffectInvocationContext, eventId: EventId): bool
 }
 
 function planScope(plan: EngagementChangesetPlan): EngagementScopeDto {
-  return isEngagementRestorePlan(plan) ? plan.scope : plan.input.scope;
+  return isEngagementRestorePlan(plan.core) ? plan.core.scope : plan.core.input.scope;
 }
 
 function operationPlan(input: {
@@ -337,7 +339,9 @@ export class SQLiteEngagementChangesetEffectDomainAdapter
 implements SQLiteEffectDomainAdapter, ChangesetLifecycleOwnerResolutionSource {
   readonly lifecycleStore: SQLiteChangesetLifecycleStore;
   readonly subjectRelationships: SQLiteOperatorSubjectRelationshipSource;
-  readonly #bundle = createEngagementChangesetBundle();
+  readonly #bundle = createEngagementChangesetBundle({
+    collaborators: [TASK_ENGAGEMENT_RESPONSE_COLLABORATOR]
+  });
   readonly #ids: SQLiteEngagementChangesetEffectIds;
   readonly #prepared = new Map<string, PreparedLifecycle>();
   readonly #issuedIds = new Set<string>();
@@ -650,9 +654,10 @@ implements SQLiteEffectDomainAdapter, ChangesetLifecycleOwnerResolutionSource {
       }
       const applied = applyPreparedChangesetSynchronous(prepared.prepared);
       const facts = applied.flatMap((contribution) => contribution.facts);
-      if (facts.length !== 1
-          || facts[0]?.kind !== ENGAGEMENT_CHANGESET_COMMIT_FACT_KIND
-          || facts[0].version !== 1) {
+      const engagementFacts = facts.filter((fact) =>
+        fact.kind === ENGAGEMENT_CHANGESET_COMMIT_FACT_KIND && fact.version === 1
+      );
+      if (engagementFacts.length !== 1) {
         throw new TypeError('engagement_changeset_fact_contribution_invalid');
       }
       exactCommit = validation.commit;
@@ -911,32 +916,33 @@ implements SQLiteEffectDomainAdapter, ChangesetLifecycleOwnerResolutionSource {
   }
 
   private planningSnapshot(repository: SQLiteEngagementRepository): ChangesetPlanningSnapshot {
+    const tasks = new SQLiteTaskRepository(this.input.sqlite);
     return Object.freeze({
       getPort<Port>(key: ChangesetReadPortKey<Port>): Port {
-        if ((key as unknown) !== engagementReadPort) {
-          throw new TypeError('engagement_changeset_undeclared_read_port');
-        }
-        return repository as unknown as Port;
+        if ((key as unknown) === engagementReadPort) return repository as unknown as Port;
+        if ((key as unknown) === taskReadPort) return tasks as unknown as Port;
+        throw new TypeError('engagement_changeset_undeclared_read_port');
       }
     });
   }
 
   private commitTransaction(repository: SQLiteEngagementRepository): ChangesetCommitTransaction {
+    const tasks = new SQLiteTaskRepository(this.input.sqlite);
     return Object.freeze({
       getPort<Port>(key: ChangesetValidationPortKey<Port> | ChangesetTransactionPortKey<Port>): Port {
-        if ((key as unknown) !== engagementValidationPort
-            && (key as unknown) !== engagementTransactionPort) {
-          throw new TypeError('engagement_changeset_undeclared_transaction_port');
-        }
-        return repository as unknown as Port;
+        if ((key as unknown) === engagementValidationPort
+            || (key as unknown) === engagementTransactionPort) return repository as unknown as Port;
+        if ((key as unknown) === taskValidationPort
+            || (key as unknown) === taskTransactionPort) return tasks as unknown as Port;
+        throw new TypeError('engagement_changeset_undeclared_transaction_port');
       }
     });
   }
 
   /**
    * Current-state evidence for exact-commit validation: every referenced
-   * engagement head aggregate at its current version. This domain publishes
-   * no guards — a response always addresses an existing head.
+   * engagement head aggregate at its current version, plus the Task catalog
+   * guard when confirmation-state collaboration materializes assignments.
    */
   private currentCommitEvidence(input: {
     readonly record: StoredChangesetRecord;
@@ -951,6 +957,7 @@ implements SQLiteEffectDomainAdapter, ChangesetLifecycleOwnerResolutionSource {
     const aggregateVersions = new Map<string, number>();
     const guardVersions = new Map<string, number>();
     const guardDigests = new Map<string, string>();
+    const tasks = new SQLiteTaskRepository(this.input.sqlite);
 
     const head = input.record.revisions.at(-1);
     if (!head) throw new TypeError('engagement_changeset_revision_missing');
@@ -958,10 +965,23 @@ implements SQLiteEffectDomainAdapter, ChangesetLifecycleOwnerResolutionSource {
       const plan = operationPlan({ bundle: this.#bundle, operation });
       if (!plan) throw new TypeError('engagement_changeset_owner_mismatch');
       for (const ref of operation.aggregateRefs) {
-        if (!ref.id.startsWith('engagement_head:')) continue;
-        const engagementId = ref.id.slice('engagement_head:'.length);
-        const current = input.repository.readEngagementHead(scope, engagementId);
-        if (current) aggregateVersions.set(ref.id, current.version);
+        if (ref.id.startsWith('engagement_head:')) {
+          const engagementId = ref.id.slice('engagement_head:'.length);
+          const current = input.repository.readEngagementHead(scope, engagementId);
+          if (current) aggregateVersions.set(ref.id, current.version);
+        } else if (ref.id.startsWith('task_assignment:')) {
+          const assignmentId = ref.id.slice('task_assignment:'.length);
+          const current = tasks.readTaskAssignment(scope, assignmentId);
+          if (current) aggregateVersions.set(ref.id, current.version);
+        }
+      }
+      for (const ref of operation.guardRefs) {
+        if (ref.id !== `task_catalog:${scope.eventId}`) continue;
+        const catalog = tasks.readTaskCatalog(scope);
+        if (catalog) {
+          guardVersions.set(ref.id, catalog.version);
+          guardDigests.set(ref.id, catalog.digestSha256);
+        }
       }
     }
     return Object.freeze({ aggregateVersions, guardVersions, guardDigests });

@@ -12,25 +12,27 @@ const HOUR = 3_600_000;
 const DAY = 86_400_000;
 
 describe('formatArrival', () => {
-	it('reads relatively while recent, absolutely after a week', () => {
+	it('spells its units the way every other surface does', () => {
+		// One vocabulary: these are the same words the activity feed and the
+		// speaker portal use for the same distances.
 		expect(formatArrival(ago(20 * 1000), NOW)).toBe('just now');
-		expect(formatArrival(ago(38 * MINUTE), NOW)).toBe('38 min ago');
-		expect(formatArrival(ago(2 * HOUR), NOW)).toBe('2 h ago');
-		expect(formatArrival(ago(30 * HOUR), NOW)).toBe('yesterday');
+		expect(formatArrival(ago(38 * MINUTE), NOW)).toBe('38 minutes ago');
+		expect(formatArrival(ago(2 * HOUR), NOW)).toBe('2 hours ago');
 		expect(formatArrival(ago(3 * DAY), NOW)).toBe('3 days ago');
-		expect(formatArrival(ago(42 * DAY), NOW)).toBe('Jul 2');
+		expect(formatArrival(ago(42 * DAY), NOW)).toBe('1 month ago');
 	});
 
-	it('names the year only when it differs', () => {
-		expect(formatArrival('2025-12-30T12:00:00Z', NOW)).toBe('Dec 30, 2025');
+	it('will not say “yesterday” until it is told whose midnight that is', () => {
+		expect(formatArrival(ago(30 * HOUR), NOW)).toBe('1 day ago');
+		expect(formatArrival(ago(30 * HOUR), NOW, 'America/New_York')).toBe('yesterday');
 	});
 
 	it('clamps a future instant instead of counting backwards', () => {
 		expect(formatArrival(ago(-5 * MINUTE), NOW)).toBe('just now');
 	});
 
-	it('passes an unparseable value through rather than inventing a date', () => {
-		expect(formatArrival('Jul 2', NOW)).toBe('Jul 2');
+	it('names the absence rather than handing back what it could not read', () => {
+		expect(formatArrival('Jul 2', NOW)).toBe('Not recorded');
 	});
 });
 

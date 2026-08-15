@@ -103,26 +103,34 @@ function requestedFields(content: TemplateContent): readonly string[] {
   return Object.freeze([...new Set(keys)].sort());
 }
 
-function inlineText(nodes: readonly InlineNode[], fields: OrganizerResolvedMergeFields): string {
+function inlineText(
+  nodes: readonly InlineNode[],
+  fields: OrganizerResolvedMergeFields,
+  timezone: string | undefined
+): string {
   let result = '';
   for (const node of nodes) {
     result += node.kind === 'text'
       ? node.value
       : fields.values.get(node.fieldKey) === undefined
         ? ''
-        : organizerMergeValueText(fields.values.get(node.fieldKey)!);
+        : organizerMergeValueText(fields.values.get(node.fieldKey)!, { timezone });
   }
   return result;
 }
 
-function inlineHtml(nodes: readonly InlineNode[], fields: OrganizerResolvedMergeFields): string {
+function inlineHtml(
+  nodes: readonly InlineNode[],
+  fields: OrganizerResolvedMergeFields,
+  timezone: string | undefined
+): string {
   let result = '';
   for (const node of nodes) {
     const value = node.kind === 'text'
       ? node.value
       : fields.values.get(node.fieldKey) === undefined
         ? ''
-        : organizerMergeValueText(fields.values.get(node.fieldKey)!);
+        : organizerMergeValueText(fields.values.get(node.fieldKey)!, { timezone });
     const escaped = escapeHtml(value);
     result += node.kind === 'text' && node.emphasis === 'strong'
       ? `<strong>${escaped}</strong>`
@@ -150,20 +158,21 @@ function actionUrl(
 function renderComposedHtml(
   blocks: readonly ComposedBlock[],
   fields: OrganizerResolvedMergeFields,
-  mergeRegistry: OrganizerMergeRegistryRelease
+  mergeRegistry: OrganizerMergeRegistryRelease,
+  timezone: string | undefined
 ): string {
   const html: string[] = [];
   for (const block of blocks) {
     switch (block.kind) {
-      case 'paragraph': html.push(`<p>${inlineHtml(block.content, fields)}</p>`); break;
-      case 'heading': html.push(`<h${block.level}>${inlineHtml(block.content, fields)}</h${block.level}>`); break;
+      case 'paragraph': html.push(`<p>${inlineHtml(block.content, fields, timezone)}</p>`); break;
+      case 'heading': html.push(`<h${block.level}>${inlineHtml(block.content, fields, timezone)}</h${block.level}>`); break;
       case 'list': {
         const tag = block.style === 'ordered' ? 'ol' : 'ul';
-        html.push(`<${tag}>${block.items.map((item) => `<li>${inlineHtml(item, fields)}</li>`).join('')}</${tag}>`);
+        html.push(`<${tag}>${block.items.map((item) => `<li>${inlineHtml(item, fields, timezone)}</li>`).join('')}</${tag}>`);
         break;
       }
       case 'action_link': {
-        const label = inlineHtml(block.label, fields);
+        const label = inlineHtml(block.label, fields, timezone);
         const href = actionUrl(block.hrefFieldKey, fields, mergeRegistry);
         html.push(href === undefined
           ? `<p>${label}</p>`
@@ -172,7 +181,7 @@ function renderComposedHtml(
       }
       case 'detail_rows':
         html.push(`<dl>${block.rows.map((row) =>
-          `<dt>${inlineHtml(row.label, fields)}</dt><dd>${inlineHtml(row.value, fields)}</dd>`
+          `<dt>${inlineHtml(row.label, fields, timezone)}</dt><dd>${inlineHtml(row.value, fields, timezone)}</dd>`
         ).join('')}</dl>`);
         break;
     }
@@ -183,27 +192,28 @@ function renderComposedHtml(
 function renderComposedText(
   blocks: readonly ComposedBlock[],
   fields: OrganizerResolvedMergeFields,
-  mergeRegistry: OrganizerMergeRegistryRelease
+  mergeRegistry: OrganizerMergeRegistryRelease,
+  timezone: string | undefined
 ): string {
   const lines: string[] = [];
   for (const block of blocks) {
     switch (block.kind) {
       case 'paragraph':
-      case 'heading': lines.push(inlineText(block.content, fields)); break;
+      case 'heading': lines.push(inlineText(block.content, fields, timezone)); break;
       case 'list':
         block.items.forEach((item, index) => lines.push(
-          block.style === 'ordered' ? `${index + 1}. ${inlineText(item, fields)}` : `- ${inlineText(item, fields)}`
+          block.style === 'ordered' ? `${index + 1}. ${inlineText(item, fields, timezone)}` : `- ${inlineText(item, fields, timezone)}`
         ));
         break;
       case 'action_link': {
-        const label = inlineText(block.label, fields);
+        const label = inlineText(block.label, fields, timezone);
         const href = actionUrl(block.hrefFieldKey, fields, mergeRegistry);
         lines.push(href === undefined ? label : `${label}: ${href}`);
         break;
       }
       case 'detail_rows':
         for (const row of block.rows) {
-          lines.push(`${inlineText(row.label, fields)}: ${inlineText(row.value, fields)}`);
+          lines.push(`${inlineText(row.label, fields, timezone)}: ${inlineText(row.value, fields, timezone)}`);
         }
         break;
     }
@@ -253,7 +263,15 @@ export function renderOrganizerEmailV1(input: {
   readonly resolvedValues?: readonly OrganizerResolvedMergeValue[];
   readonly fallbackValues?: readonly OrganizerFallbackMergeValue[];
   readonly attachments?: unknown;
+  /**
+   * The event's IANA timezone, so an `instant` merge value is spelled on the
+   * event's wall clock. Omitted, instants render in UTC and say `UTC`; the line
+   * is then true but not local. It joins the resolved-input digest only when it
+   * is supplied, so a render that never had a zone keeps the digest it has.
+   */
+  readonly timezone?: string;
 }): RenderedEmail {
+  const timezone = input.timezone;
   let recipientResolutionId: string;
   let releaseId: string;
   let releaseDigestSha256: string;
@@ -323,10 +341,10 @@ export function renderOrganizerEmailV1(input: {
       throw error;
     }
     attachments = canonicalAttachments(input.attachments ?? [], content.attachmentSlotKeys);
-    sanitizedHtml = renderComposedHtml(content.body.blocks, fields, input.mergeRegistry);
+    sanitizedHtml = renderComposedHtml(content.body.blocks, fields, input.mergeRegistry, timezone);
     plainText = content.plainTextPolicy === 'explicit_v1'
-      ? inlineText(content.explicitPlainText!, fields)
-      : renderComposedText(content.body.blocks, fields, input.mergeRegistry);
+      ? inlineText(content.explicitPlainText!, fields, timezone)
+      : renderComposedText(content.body.blocks, fields, input.mergeRegistry, timezone);
     templateDigestInput = { revision, content, bindings };
   }
 
@@ -341,7 +359,11 @@ export function renderOrganizerEmailV1(input: {
     message,
     template: templateDigestInput,
     mergeRegistry: input.mergeRegistry.identity,
-    values: fields.canonicalValues
+    values: fields.canonicalValues,
+    // Present only when a zone was supplied: the same inputs rendered on two
+    // different wall clocks are two different inputs, but a render that never
+    // had a zone must keep the digest it already had.
+    ...(timezone === undefined ? {} : { timezone })
   });
   const warningCodes = Object.freeze([...fields.warningCodes].sort());
   const unsigned = {

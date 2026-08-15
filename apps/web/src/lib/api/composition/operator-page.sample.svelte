@@ -29,7 +29,7 @@
 	import { createSampleTemplatesPagePort } from '../templates-page-port.sample';
 	import { createSampleSettingsPagePort } from '../settings-page-port';
 	import { createSampleSubmissionsPagePort } from '../submissions-page-port.sample';
-	import type { OperatorPageId } from './operator-pages';
+	import { settingsSectionOf, type OperatorPageId } from './operator-pages';
 
 	let { area }: { readonly area: OperatorPageId } = $props();
 	const { api, source, viewer } = useWorkspaceGateway();
@@ -58,7 +58,7 @@
 {:else if area === 'review_lineup'}
 	<LineupPage port={review} />
 {:else if area === 'decisions'}
-	<DecisionsPage port={decisions} />
+	<DecisionsPage port={decisions} lineupPort={review} />
 {:else if area === 'speakers'}
 	<SpeakersPage port={speakers} />
 {:else if area === 'reviewers'}
@@ -78,5 +78,5 @@
 {:else if area === 'embeds'}
 	<EmbedsPage port={embeds} />
 {:else}
-	<SettingsPage port={settings} />
+	<SettingsPage port={settings} section={settingsSectionOf(area)} />
 {/if}

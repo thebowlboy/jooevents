@@ -45,6 +45,7 @@ describe('live workspace gateway envelope', () => {
 						event: null,
 						lockedAreas: [],
 						navCounts: {},
+						arrivals: null,
 						stats: [],
 						attention: [],
 						pipeline: [],

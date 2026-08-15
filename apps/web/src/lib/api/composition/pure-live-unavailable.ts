@@ -21,9 +21,10 @@ const notEnabled = Object.freeze({
  * current live mount: schedule, review_decisions (Review reads, drafts, and
  * the decide loop), their roster, and speaker_operations (the engagement
  * roster) construct real live ports in `LiveWorkspaceComposition.svelte` and
- * render through `operator-page.live.svelte`. Only areas without a mounted
- * owner there (tasks, templates, embeds) still resolve to the honest
- * unavailable surface.
+ * render through `operator-page.live.svelte`; Templates, Embeds, and Tasks now
+ * do as well. No operator area currently falls through to this fixture. It is
+ * retained as the explicit zero-capability composition used before a live
+ * workspace has been resolved.
  */
 const capabilities = Object.freeze({
 	workspace_shell: notEnabled,

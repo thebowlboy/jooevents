@@ -12,8 +12,10 @@ import {
 } from '@jooevents/contracts';
 import {
   requiredOutboundEmailAttemptKind,
+  type OutboundEmailAttemptCompletion,
   type OutboundEmailDeliveryAttempt,
   type OutboundEmailDeliveryAttemptKind,
+  type OutboundEmailDeliveryClaimOutcome,
   type OutboundEmailDeliveryHead,
   type OutboundEmailDeliveryLedger,
   type ProviderAttemptResolution
@@ -54,6 +56,13 @@ CREATE TABLE communication_outbound_delivery_heads (
     CHECK(unknown_attempt_count >= 0 AND unknown_attempt_count <= attempt_count),
   marked_resend_exhausted INTEGER NOT NULL CHECK(marked_resend_exhausted IN (0, 1)),
   current_attempt_id TEXT,
+  -- Durable ownership of a dispatch. \`state = 'request_started'\` says an attempt
+  -- exists; only a live lease says a worker is still on it. Without this column
+  -- pair a recovery sweep cannot tell a healthy in-flight attempt from one
+  -- abandoned by a dead process, and takes both.
+  lease_claim_id TEXT,
+  lease_acquired_at_ms INTEGER CHECK(lease_acquired_at_ms IS NULL OR lease_acquired_at_ms >= 0),
+  lease_expires_at_ms INTEGER CHECK(lease_expires_at_ms IS NULL OR lease_expires_at_ms > lease_acquired_at_ms),
   receipt_id TEXT,
   root_fact_id TEXT NOT NULL,
   root_outbox_pointer_id TEXT NOT NULL,
@@ -68,8 +77,19 @@ CREATE TABLE communication_outbound_delivery_heads (
   UNIQUE(root_history_id),
   CHECK((state = 'pending' AND attempt_count = 0 AND current_attempt_id IS NULL)
     OR (state <> 'pending' AND attempt_count > 0 AND current_attempt_id IS NOT NULL)),
-  CHECK(marked_resend_exhausted = 0 OR unknown_attempt_count >= 2)
+  CHECK(marked_resend_exhausted = 0 OR unknown_attempt_count >= 2),
+  CHECK((lease_claim_id IS NULL AND lease_acquired_at_ms IS NULL AND lease_expires_at_ms IS NULL)
+    OR (lease_claim_id IS NOT NULL AND lease_acquired_at_ms IS NOT NULL
+        AND lease_expires_at_ms IS NOT NULL)),
+  -- An attempt may only be in flight under a claim, so an unowned
+  -- \`request_started\` row cannot exist and every recovery is decided by expiry.
+  CHECK(state <> 'request_started' OR lease_claim_id IS NOT NULL)
 ) STRICT;
+
+-- The claimable set the sweep is allowed to see: a state it may take, whose
+-- lease is absent or lapsed, oldest first.
+CREATE INDEX communication_outbound_delivery_heads_claimable_idx
+  ON communication_outbound_delivery_heads(state, lease_expires_at_ms, created_at_ms);
 
 CREATE TRIGGER communication_outbound_delivery_heads_no_delete
 BEFORE DELETE ON communication_outbound_delivery_heads
@@ -294,6 +314,8 @@ interface DeliveryHeadRow {
   readonly unknown_attempt_count: number;
   readonly marked_resend_exhausted: number;
   readonly current_attempt_id: string | null;
+  readonly lease_claim_id: string | null;
+  readonly lease_expires_at_ms: number | null;
 }
 
 interface AttemptRow {
@@ -364,7 +386,11 @@ function headFromRow(row: DeliveryHeadRow): OutboundEmailDeliveryHead {
     attemptCount: row.attempt_count,
     unknownAttemptCount: row.unknown_attempt_count,
     markedResendExhausted: row.marked_resend_exhausted === 1,
-    currentAttemptId: row.current_attempt_id
+    currentAttemptId: row.current_attempt_id,
+    leaseClaimId: row.lease_claim_id,
+    leaseExpiresAt: row.lease_expires_at_ms === null
+      ? null
+      : new Date(row.lease_expires_at_ms).toISOString()
   });
 }
 
@@ -401,8 +427,7 @@ function attemptFromRow(row: AttemptRow): OutboundEmailDeliveryAttempt {
   });
 }
 
-const HEAD_SELECT = `
-SELECT delivery_id, workspace_id, event_id, release_id, dispatch_generation,
+const HEAD_COLUMNS = `delivery_id, workspace_id, event_id, release_id, dispatch_generation,
        reviewed_message_digest_sha256, reviewed_envelope_digest_sha256,
        recipient_ref_id, template_revision_ref_id, content_ref_id,
        provider_connection_revision_id, external_delivery_key,
@@ -412,7 +437,15 @@ SELECT delivery_id, workspace_id, event_id, release_id, dispatch_generation,
        address_lookup_fingerprint_profile, address_lookup_fingerprint_version,
        address_lookup_fingerprint_sha256, state, version, attempt_count,
        unknown_attempt_count, marked_resend_exhausted,
-       current_attempt_id
+       current_attempt_id, lease_claim_id, lease_expires_at_ms`;
+
+const HEAD_SELECT = `
+SELECT ${HEAD_COLUMNS}
+  FROM communication_outbound_delivery_heads
+ WHERE delivery_id = ?`;
+
+const HEAD_SELECT_WITH_RECEIPT = `
+SELECT ${HEAD_COLUMNS}, receipt_id
   FROM communication_outbound_delivery_heads
  WHERE delivery_id = ?`;
 
@@ -468,9 +501,80 @@ export class SQLiteOutboundEmailDeliveryLedger implements OutboundEmailDeliveryL
     return Object.freeze(rows.map(attemptFromRow));
   }
 
+  /**
+   * One conditional update decides ownership. Zero rows changed means somebody
+   * else owns the delivery — never an exception. The classifying read runs only
+   * on that miss, to separate ordinary contention from a delivery that no lease
+   * could make dispatchable.
+   */
+  claim(input: {
+    readonly deliveryId: string;
+    readonly claimId: string;
+    readonly now: string;
+    readonly leaseMs: number;
+  }): OutboundEmailDeliveryClaimOutcome {
+    const deliveryId = providerOpaqueIdSchema.parse(input.deliveryId);
+    const claimId = providerOpaqueIdSchema.parse(input.claimId);
+    if (!Number.isSafeInteger(input.leaseMs) || input.leaseMs <= 0) {
+      throw new TypeError('outbound_delivery_lease_duration_invalid');
+    }
+    const nowMs = instantMs(input.now);
+    const expiresAtMs = nowMs + input.leaseMs;
+    return this.#transaction(() => {
+      const claimed = this.sqlite.query<never, [string, number, number, number, string, number]>(`
+        UPDATE communication_outbound_delivery_heads
+           SET lease_claim_id = ?, lease_acquired_at_ms = ?, lease_expires_at_ms = ?,
+               updated_at_ms = max(updated_at_ms, ?)
+         WHERE delivery_id = ?
+           AND (lease_expires_at_ms IS NULL OR lease_expires_at_ms <= ?)
+           AND (state = 'pending'
+             OR state = 'request_started'
+             OR state = 'known_rejected_safe_retryable'
+             OR (state = 'acceptance_unknown' AND marked_resend_exhausted = 0))
+      `).run(claimId, nowMs, expiresAtMs, nowMs, deliveryId, nowMs);
+      const row = this.sqlite.query<DeliveryHeadRow, [string]>(HEAD_SELECT).get(deliveryId);
+      if (!row) return Object.freeze({ contractVersion: 1, claimed: false, reason: 'not_found' });
+      const head = headFromRow(row);
+      if (claimed.changes === 1) {
+        return Object.freeze({ contractVersion: 1, claimed: true, claimId, head });
+      }
+      return Object.freeze({
+        contractVersion: 1,
+        claimed: false,
+        reason: row.lease_expires_at_ms !== null && row.lease_expires_at_ms > nowMs
+          ? 'lease_held'
+          : 'not_claimable',
+        head
+      });
+    });
+  }
+
+  releaseClaim(input: {
+    readonly deliveryId: string;
+    readonly claimId: string;
+    readonly now: string;
+  }): void {
+    const deliveryId = providerOpaqueIdSchema.parse(input.deliveryId);
+    const claimId = providerOpaqueIdSchema.parse(input.claimId);
+    const nowMs = instantMs(input.now);
+    this.#transaction(() => {
+      // A claim that already lapsed and was taken by someone else must not be
+      // cleared out from under its new owner, and an in-flight attempt keeps its
+      // lease so recovery stays governed by expiry.
+      this.sqlite.query<never, [number, string, string]>(`
+        UPDATE communication_outbound_delivery_heads
+           SET lease_claim_id = NULL, lease_acquired_at_ms = NULL, lease_expires_at_ms = NULL,
+               updated_at_ms = max(updated_at_ms, ?)
+         WHERE delivery_id = ? AND lease_claim_id = ? AND state <> 'request_started'
+      `).run(nowMs, deliveryId, claimId);
+    });
+  }
+
   recordAttemptStarted(input: {
     readonly deliveryId: string;
     readonly expectedDeliveryVersion: number;
+    readonly claimId: string;
+    readonly leaseMs: number;
     readonly attemptId: string;
     readonly attemptKind: OutboundEmailDeliveryAttemptKind;
     readonly resendEnvelopeDigestSha256?: string;
@@ -496,12 +600,17 @@ export class SQLiteOutboundEmailDeliveryLedger implements OutboundEmailDeliveryL
     if (attemptKind === 'original' && input.resendEnvelopeDigestSha256 !== undefined) {
       throw new TypeError('outbound_delivery_resend_digest_unexpected');
     }
+    const claimId = providerOpaqueIdSchema.parse(input.claimId);
+    if (!Number.isSafeInteger(input.leaseMs) || input.leaseMs <= 0) {
+      throw new TypeError('outbound_delivery_lease_duration_invalid');
+    }
     const startedAtMs = instantMs(input.startedAt);
     return this.#transaction(() => {
       const registration = this.sqlite.query<DeliveryHeadRow & {
         readonly receipt_id: string | null;
-      }, [string]>(HEAD_SELECT.replace('current_attempt_id', 'current_attempt_id, receipt_id')).get(deliveryId);
+      }, [string]>(HEAD_SELECT_WITH_RECEIPT).get(deliveryId);
       if (!registration || registration.receipt_id === null) throw new TypeError('outbound_delivery_not_registered');
+      if (registration.lease_claim_id !== claimId) throw new TypeError('outbound_delivery_attempt_conflict');
       if (registration.version !== input.expectedDeliveryVersion) throw new TypeError('outbound_delivery_attempt_conflict');
       if (registration.state !== 'pending' && registration.state !== 'known_rejected_safe_retryable'
         && !(registration.state === 'acceptance_unknown' && registration.marked_resend_exhausted === 0)) {
@@ -535,12 +644,19 @@ export class SQLiteOutboundEmailDeliveryLedger implements OutboundEmailDeliveryL
         resendDigest ?? registration.reviewed_envelope_digest_sha256,
         startedAtMs
       );
-      const changed = this.sqlite.query<never, [string, number, number, string, number]>(`
+      // The lease is renewed from the attempt's own start, so the whole provider
+      // request runs under a full lease rather than whatever remained of the
+      // claim taken before the envelope was resolved.
+      const changed = this.sqlite.query<never, [string, number, number, number, number, string, number, string]>(`
         UPDATE communication_outbound_delivery_heads
            SET state = 'request_started', current_attempt_id = ?, attempt_count = ?,
-               version = version + 1, updated_at_ms = ?
-         WHERE delivery_id = ? AND version = ?
-      `).run(attemptId, attemptNumber, startedAtMs, deliveryId, input.expectedDeliveryVersion);
+               version = version + 1, updated_at_ms = ?,
+               lease_acquired_at_ms = ?, lease_expires_at_ms = ?
+         WHERE delivery_id = ? AND version = ? AND lease_claim_id = ?
+      `).run(
+        attemptId, attemptNumber, startedAtMs, startedAtMs, startedAtMs + input.leaseMs,
+        deliveryId, input.expectedDeliveryVersion, claimId
+      );
       if (changed.changes !== 1) throw new TypeError('outbound_delivery_attempt_conflict');
       return this.readAttempt(attemptId)!;
     });
@@ -549,13 +665,15 @@ export class SQLiteOutboundEmailDeliveryLedger implements OutboundEmailDeliveryL
   recordProviderResolution(input: {
     readonly deliveryId: string;
     readonly attemptId: string;
+    readonly claimId: string;
     readonly resolution: ProviderAttemptResolution;
     readonly completedAt: string;
-  }): OutboundEmailDeliveryHead {
+  }): OutboundEmailAttemptCompletion {
     const safeEvidence = safeEvidenceSchema.parse(input.resolution.safeEvidence);
     return this.#complete({
       deliveryId: input.deliveryId,
       attemptId: input.attemptId,
+      claimId: input.claimId,
       state: input.resolution.state,
       providerMessageId: input.resolution.providerMessageId,
       providerOutcomeReason: input.resolution.providerOutcomeReason,
@@ -568,12 +686,14 @@ export class SQLiteOutboundEmailDeliveryLedger implements OutboundEmailDeliveryL
   recordBoundaryAmbiguity(input: {
     readonly deliveryId: string;
     readonly attemptId: string;
+    readonly claimId: string;
     readonly code: 'worker_result_lost' | 'provider_boundary_failure';
     readonly completedAt: string;
-  }): OutboundEmailDeliveryHead {
+  }): OutboundEmailAttemptCompletion {
     return this.#complete({
       deliveryId: input.deliveryId,
       attemptId: input.attemptId,
+      claimId: input.claimId,
       state: 'acceptance_unknown',
       providerMessageId: null,
       providerOutcomeReason: null,
@@ -586,16 +706,18 @@ export class SQLiteOutboundEmailDeliveryLedger implements OutboundEmailDeliveryL
   #complete(input: {
     readonly deliveryId: string;
     readonly attemptId: string;
+    readonly claimId: string;
     readonly state: ProviderAttemptResolution['state'];
     readonly providerMessageId: string | null;
     readonly providerOutcomeReason: string | null;
     readonly safeEvidence: SafeEvidence | null;
     readonly recoveryCode: OutboundEmailDeliveryAttempt['recoveryCode'];
     readonly completedAt: string;
-  }): OutboundEmailDeliveryHead {
+  }): OutboundEmailAttemptCompletion {
     const deliveryId = providerOpaqueIdSchema.parse(input.deliveryId);
     const attemptId = providerOpaqueIdSchema.parse(input.attemptId);
     const completedAtMs = instantMs(input.completedAt);
+    const claimId = providerOpaqueIdSchema.parse(input.claimId);
     return this.#transaction(() => {
       const anchor = this.sqlite.query<{
         readonly receipt_id: string | null;
@@ -606,13 +728,13 @@ export class SQLiteOutboundEmailDeliveryLedger implements OutboundEmailDeliveryL
         readonly event_id: string;
         readonly state: string;
         readonly current_attempt_id: string | null;
+        readonly lease_claim_id: string | null;
       }, [string]>(`
         SELECT receipt_id, root_fact_id, history_thread_id, root_history_id,
-               workspace_id, event_id, state, current_attempt_id
+               workspace_id, event_id, state, current_attempt_id, lease_claim_id
           FROM communication_outbound_delivery_heads WHERE delivery_id = ?
       `).get(deliveryId);
-      if (!anchor || anchor.receipt_id === null || anchor.state !== 'request_started'
-        || anchor.current_attempt_id !== attemptId) {
+      if (!anchor || anchor.receipt_id === null) {
         throw new TypeError('outbound_delivery_attempt_conflict');
       }
       const startedAttempt = this.sqlite.query<{
@@ -622,6 +744,38 @@ export class SQLiteOutboundEmailDeliveryLedger implements OutboundEmailDeliveryL
          WHERE attempt_id = ? AND delivery_id = ?
       `).get(attemptId, deliveryId);
       if (!startedAttempt) throw new TypeError('outbound_delivery_attempt_conflict');
+      // Fence: this writer's lease lapsed and someone else took the delivery.
+      // Its provider answer is real and must not be thrown away, but it can no
+      // longer decide effective state — so it is kept as append-only
+      // acceptance-unknown evidence and the current owner keeps the delivery.
+      if (anchor.lease_claim_id !== claimId) {
+        this.#appendAttemptEvidence({
+          anchor,
+          deliveryId,
+          attemptId,
+          factKind: 'outbound_email_attempt_acceptance_unknown',
+          summary: 'communication.outbound-email.acceptance-unknown',
+          payload: {
+            contractVersion: 1,
+            kind: 'fenced_attempt_observation',
+            attemptKind: startedAttempt.attempt_kind,
+            observedState: input.state,
+            providerMessageId: input.providerMessageId,
+            providerOutcomeReason: input.providerOutcomeReason,
+            safeEvidence: input.safeEvidence,
+            recoveryCode: input.recoveryCode
+          },
+          occurredAtMs: completedAtMs
+        });
+        return Object.freeze({
+          contractVersion: 1,
+          fenced: true,
+          head: this.read(deliveryId)!
+        });
+      }
+      if (anchor.state !== 'request_started' || anchor.current_attempt_id !== attemptId) {
+        throw new TypeError('outbound_delivery_attempt_conflict');
+      }
       const landedUnknown = input.state === 'acceptance_unknown';
       // The single automatic marked retry is consumed when it also lands with
       // unknown acceptance; the head is then quarantined for manual resolution.
@@ -644,30 +798,28 @@ export class SQLiteOutboundEmailDeliveryLedger implements OutboundEmailDeliveryL
         attemptId
       );
       if (changedAttempt.changes !== 1) throw new TypeError('outbound_delivery_attempt_conflict');
-      const changedHead = this.sqlite.query<never, [string, number, number, number, string, string]>(`
+      // Settling releases the lease with the same statement that settles state,
+      // and re-checks the claim in SQL so no writer can win the read and lose
+      // the write.
+      const changedHead = this.sqlite.query<never, [string, number, number, number, string, string, string]>(`
         UPDATE communication_outbound_delivery_heads
            SET state = ?, version = version + 1, updated_at_ms = ?,
                unknown_attempt_count = unknown_attempt_count + ?,
-               marked_resend_exhausted = max(marked_resend_exhausted, ?)
+               marked_resend_exhausted = max(marked_resend_exhausted, ?),
+               lease_claim_id = NULL, lease_acquired_at_ms = NULL, lease_expires_at_ms = NULL
          WHERE delivery_id = ? AND state = 'request_started' AND current_attempt_id = ?
+           AND lease_claim_id = ?
       `).run(
         input.state,
         completedAtMs,
         landedUnknown ? 1 : 0,
         exhaustsMarkedResend ? 1 : 0,
         deliveryId,
-        attemptId
+        attemptId,
+        claimId
       );
       if (changedHead.changes !== 1) throw new TypeError('outbound_delivery_attempt_conflict');
 
-      const factId = providerOpaqueIdSchema.parse(this.#ids.newFactId());
-      const pointerId = providerOpaqueIdSchema.parse(this.#ids.newPointerId());
-      const historyId = providerOpaqueIdSchema.parse(this.#ids.newHistoryId());
-      const sequence = this.sqlite.query<{ readonly next_sequence: number }, [string]>(`
-        SELECT coalesce(max(sequence), -1) + 1 AS next_sequence
-          FROM communication_outbound_delivery_history WHERE thread_id = ?
-      `).get(anchor.history_thread_id)?.next_sequence;
-      if (sequence === undefined) throw new TypeError('outbound_delivery_history_missing');
       const payload = input.safeEvidence === null
         ? {
             contractVersion: 1,
@@ -686,37 +838,75 @@ export class SQLiteOutboundEmailDeliveryLedger implements OutboundEmailDeliveryL
             safeEvidence: input.safeEvidence,
             ...(landedUnknown ? { markedResendExhausted: exhaustsMarkedResend } : {})
           };
-      this.sqlite.query<never, [string, string, string, string, string, string, string, string, string, number]>(`
-        INSERT INTO communication_outbound_delivery_facts (
-          fact_id, receipt_id, workspace_id, event_id, delivery_id, attempt_id,
-          fact_kind, fact_version, causation_fact_id, payload_json, occurred_at_ms
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
-      `).run(
-        factId, anchor.receipt_id, anchor.workspace_id, anchor.event_id,
-        deliveryId, attemptId,
-        input.state === 'acceptance_unknown'
+      this.#appendAttemptEvidence({
+        anchor,
+        deliveryId,
+        attemptId,
+        factKind: input.state === 'acceptance_unknown'
           ? 'outbound_email_attempt_acceptance_unknown'
           : 'outbound_email_attempt_resolved',
-        anchor.root_fact_id,
-        canonicalJsonText(payload),
-        completedAtMs
-      );
-      this.sqlite.query<never, [string, string, string, string, number]>(`
-        INSERT INTO communication_outbound_delivery_outbox (
-          pointer_id, receipt_id, fact_id, delivery_id, purpose, created_at_ms
-        ) VALUES (?, ?, ?, ?, 'communication.outbound-email.attempt-resolved', ?)
-      `).run(pointerId, anchor.receipt_id, factId, deliveryId, completedAtMs);
-      this.sqlite.query<never, [string, string, number, string, string, string, string, string, string, number]>(`
-        INSERT INTO communication_outbound_delivery_history (
-          history_id, thread_id, sequence, receipt_id, fact_id, delivery_id,
-          attempt_id, parent_history_id, summary_code, occurred_at_ms
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        historyId, anchor.history_thread_id, sequence, anchor.receipt_id, factId,
-        deliveryId, attemptId, anchor.root_history_id, summaryCode(input.state), completedAtMs
-      );
-      return this.read(deliveryId)!;
+        summary: summaryCode(input.state),
+        payload,
+        occurredAtMs: completedAtMs
+      });
+      return Object.freeze({ contractVersion: 1, fenced: false, head: this.read(deliveryId)! });
     });
+  }
+
+  /** Appends the fact, outbox pointer, and history entry for one attempt observation. */
+  #appendAttemptEvidence(input: {
+    readonly anchor: {
+      readonly receipt_id: string | null;
+      readonly root_fact_id: string;
+      readonly history_thread_id: string;
+      readonly root_history_id: string;
+      readonly workspace_id: string;
+      readonly event_id: string;
+    };
+    readonly deliveryId: string;
+    readonly attemptId: string;
+    readonly factKind: string;
+    readonly summary: string;
+    readonly payload: unknown;
+    readonly occurredAtMs: number;
+  }): void {
+    const receiptId = input.anchor.receipt_id;
+    if (receiptId === null) throw new TypeError('outbound_delivery_attempt_conflict');
+    const factId = providerOpaqueIdSchema.parse(this.#ids.newFactId());
+    const pointerId = providerOpaqueIdSchema.parse(this.#ids.newPointerId());
+    const historyId = providerOpaqueIdSchema.parse(this.#ids.newHistoryId());
+    const sequence = this.sqlite.query<{ readonly next_sequence: number }, [string]>(`
+      SELECT coalesce(max(sequence), -1) + 1 AS next_sequence
+        FROM communication_outbound_delivery_history WHERE thread_id = ?
+    `).get(input.anchor.history_thread_id)?.next_sequence;
+    if (sequence === undefined) throw new TypeError('outbound_delivery_history_missing');
+    this.sqlite.query<never, [string, string, string, string, string, string, string, string, string, number]>(`
+      INSERT INTO communication_outbound_delivery_facts (
+        fact_id, receipt_id, workspace_id, event_id, delivery_id, attempt_id,
+        fact_kind, fact_version, causation_fact_id, payload_json, occurred_at_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+    `).run(
+      factId, receiptId, input.anchor.workspace_id, input.anchor.event_id,
+      input.deliveryId, input.attemptId, input.factKind,
+      input.anchor.root_fact_id,
+      canonicalJsonText(input.payload),
+      input.occurredAtMs
+    );
+    this.sqlite.query<never, [string, string, string, string, number]>(`
+      INSERT INTO communication_outbound_delivery_outbox (
+        pointer_id, receipt_id, fact_id, delivery_id, purpose, created_at_ms
+      ) VALUES (?, ?, ?, ?, 'communication.outbound-email.attempt-resolved', ?)
+    `).run(pointerId, receiptId, factId, input.deliveryId, input.occurredAtMs);
+    this.sqlite.query<never, [string, string, number, string, string, string, string, string, string, number]>(`
+      INSERT INTO communication_outbound_delivery_history (
+        history_id, thread_id, sequence, receipt_id, fact_id, delivery_id,
+        attempt_id, parent_history_id, summary_code, occurred_at_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      historyId, input.anchor.history_thread_id, sequence, receiptId, factId,
+      input.deliveryId, input.attemptId, input.anchor.root_history_id, input.summary,
+      input.occurredAtMs
+    );
   }
 
   #transaction<Value>(work: () => Value): Value {

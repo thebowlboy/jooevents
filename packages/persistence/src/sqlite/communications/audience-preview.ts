@@ -660,6 +660,16 @@ export interface SQLiteRegisteredAudienceSourceDelegate {
   /** Matches `communication_registered_audience_recipes.source_definition_key`. */
   readonly sourceDefinitionKey: string;
   ownsContactRef(contactRefId: string): boolean;
+  /**
+   * Optional live resolution for explicit opaque contact references owned by
+   * this domain. This keeps the browser from disclosing or reconstructing an
+   * address and lets eligibility be re-read at preview and send time.
+   */
+  resolveExplicitContacts?(input: {
+    readonly scope: OrganizerAudienceScope;
+    readonly audience: OrganizerCommunicationAudienceDraft;
+    readonly contactRefIds: readonly string[];
+  }): OrganizerAudienceSourceSnapshot;
   resolveCurrentSnapshot(input: {
     readonly scope: OrganizerAudienceScope;
     readonly audience: OrganizerCommunicationAudienceDraft;
@@ -990,6 +1000,46 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
           throw new OrganizerAudienceResolutionError('source_contract_mismatch');
         }
         return snapshot;
+      }
+    }
+    if (audience.source.kind === 'explicit_contacts') {
+      const grouped = new Map<SQLiteRegisteredAudienceSourceDelegate, string[]>();
+      for (const contactRefId of audience.source.contactRefIds) {
+        const owners = [...this.#registeredSources.values()].filter((delegate) =>
+          delegate.resolveExplicitContacts !== undefined && delegate.ownsContactRef(contactRefId)
+        );
+        if (owners.length > 1) {
+          throw new OrganizerAudienceResolutionError('source_contract_mismatch');
+        }
+        if (owners[0]) grouped.set(owners[0], [...(grouped.get(owners[0]) ?? []), contactRefId]);
+      }
+      if (grouped.size > 0) {
+        const candidates: OrganizerAudienceCandidate[] = [];
+        const sourceVersions: OrganizerMessagePreviewSourceVersion[] = [];
+        for (const [delegate, contactRefIds] of grouped) {
+          const source = delegate.resolveExplicitContacts!({
+            scope: selected,
+            audience,
+            contactRefIds: Object.freeze([...contactRefIds].sort())
+          });
+          candidates.push(...source.candidates);
+          sourceVersions.push(...source.sourceVersions);
+        }
+        const owned = new Set(candidates.map((candidate) => candidate.contactRefId));
+        const unowned = audience.source.contactRefIds.filter((contactRefId) =>
+          ![...grouped.values()].flat().includes(contactRefId)
+        );
+        if (unowned.length === 0 && owned.size === candidates.length) {
+          return Object.freeze({
+            source: audience.source,
+            candidates: Object.freeze(candidates.sort((left, right) =>
+              left.subjectRefId.localeCompare(right.subjectRefId)
+            )),
+            sourceVersions: Object.freeze(sourceVersions.sort((left, right) =>
+              left.sourceKey.localeCompare(right.sourceKey)
+            ))
+          });
+        }
       }
     }
     const rows = this.#candidateRows(selected, audience);

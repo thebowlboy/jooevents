@@ -24,7 +24,10 @@ test('a reload dims the rows in place instead of blanking to skeletons', async (
 	const wrap = page.locator('.ui-table-wrap');
 	await expect(page.getByRole('table')).toContainText('Deterministic Replay for Agent Failures', { timeout: 10000 });
 
-	await page.getByRole('button', { name: /Set aside/ }).click();
+	await page
+		.getByRole('radiogroup', { name: 'Submission trays' })
+		.getByText('Set aside', { exact: true })
+		.click();
 
 	// While the set-aside tray loads, the inbox rows stay mounted and dimmed.
 	await expect(wrap).toHaveClass(/is-refreshing/);
@@ -89,7 +92,7 @@ test('decision skeletons hold the exact geometry of what they stand in for', asy
 test('the one waiting role select marks itself while its siblings merely disable', async ({ page }, testInfo) => {
 	test.skip(testInfo.project.name !== 'desktop', 'one viewport is enough for the timing contract');
 
-	await page.goto('/app/settings');
+	await page.goto('/app/settings/team');
 	const selects = page.getByRole('combobox', { name: /^Role for / });
 	await expect(selects.first()).toBeEnabled({ timeout: 10000 });
 

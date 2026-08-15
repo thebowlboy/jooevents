@@ -119,12 +119,12 @@ describe('Decision operation modules', () => {
   });
 
   test('refusal contribution accepts only the declared typed outcomes with matching details', () => {
-    const outcome = (kind: string, detail: unknown, klass = 'conflict') => ({
+    const outcome = (kind: string, detail: unknown, klass = 'conflict', detailSchemaVersion = 1) => ({
       result: {
         kind: 'outcome',
         outcome: {
           class: klass, kind, retryable: false,
-          subjects: [], detail, detailSchemaVersion: 1
+          subjects: [], detail, detailSchemaVersion
         }
       },
       domain: null,
@@ -141,7 +141,8 @@ describe('Decision operation modules', () => {
     expect(decisionDraftContributionSchema.safeParse(outcome(
       'decision.changed',
       { code: 'stale_decision', submissionId: '019c1df7-86b5-769b-bba4-5f7097bfa601' },
-      'stale_revision'
+      'stale_revision',
+      2
     )).success).toBe(true);
     expect(decisionDraftContributionSchema.safeParse(outcome(
       'decision.notify', null

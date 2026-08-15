@@ -78,7 +78,7 @@
 			{#each submission.speakers as speaker (speaker.email)}
 				<li class="person">
 					<span class="person__name">{speaker.name}</span>
-					<CopyValue value={speaker.email} label="email address" />
+					<CopyValue value={speaker.email} display={`<${speaker.email}>`} label="email address" />
 				</li>
 			{/each}
 		</ul>

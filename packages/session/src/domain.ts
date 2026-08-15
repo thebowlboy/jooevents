@@ -41,6 +41,7 @@ export type SessionPlanningErrorCode =
   | 'format_retired'
   | 'track_missing'
   | 'track_retired'
+  | 'track_required'
   | 'participant_missing'
   | 'invalid_transition'
   | 'invalid_plan';
@@ -80,7 +81,11 @@ export function planSessionMutation(input: {
   if (planningInput.action === 'create') {
     if (existing) throw new SessionPlanningError('session_exists');
     before = null;
-    const target = currentTargetEvidence(input.vocabulary, planningInput.formatId, planningInput.trackId);
+    const target = currentTargetEvidence(
+      input.vocabulary,
+      planningInput.formatId,
+      resolvedTrackId(input.vocabulary, planningInput.lifecycle, planningInput.trackId)
+    );
     const rosterUnsigned = { version: 1, participants: seededRosterParticipants(planningInput.participants) };
     const roster = { ...rosterUnsigned, digestSha256: sessionRosterDigest(rosterUnsigned) };
     const unsigned = {
@@ -119,7 +124,11 @@ export function planSessionMutation(input: {
       : currentTargetEvidence(
           input.vocabulary,
           existing.programTarget.format.id,
-          existing.programTarget.track?.id ?? null
+          resolvedTrackId(
+            input.vocabulary,
+            planningInput.graduateTo,
+            existing.programTarget.track?.id ?? null
+          )
         );
     const { digestSha256: _digest, ...unsignedBefore } = existing;
     const unsigned = {
@@ -157,6 +166,27 @@ export function planSessionMutation(input: {
       updatedAt: planningInput.occurredAt
     };
     after = parseSessionHead({ ...unsigned, digestSha256: sessionHeadDigest(unsigned) });
+  } else if (planningInput.action === 'retarget') {
+    if (!existing) throw new SessionPlanningError('session_missing');
+    if (existing.version !== planningInput.expectedSessionVersion
+        || existing.digestSha256 !== planningInput.expectedSessionDigestSha256) {
+      throw new SessionPlanningError('stale_session');
+    }
+    before = existing;
+    const target = currentTargetEvidence(
+      input.vocabulary,
+      planningInput.formatId,
+      resolvedTrackId(input.vocabulary, existing.lifecycle, planningInput.trackId)
+    );
+    const { digestSha256: _digest, ...unsignedBefore } = existing;
+    const unsigned = {
+      ...unsignedBefore,
+      programTarget: target,
+      version: existing.version + 1,
+      updatedByUserId: planningInput.actorUserId,
+      updatedAt: planningInput.occurredAt
+    };
+    after = parseSessionHead({ ...unsigned, digestSha256: sessionHeadDigest(unsigned) });
   } else {
     if (!existing) throw new SessionPlanningError('session_missing');
     if (existing.version !== planningInput.expectedSessionVersion
@@ -168,7 +198,7 @@ export function planSessionMutation(input: {
     const target = currentTargetEvidence(
       input.vocabulary,
       existing.programTarget.format.id,
-      existing.programTarget.track?.id ?? null
+      resolvedTrackId(input.vocabulary, planningInput.to, existing.programTarget.track?.id ?? null)
     );
     const { digestSha256: _digest, ...unsignedBefore } = existing;
     const unsigned = {
@@ -182,6 +212,24 @@ export function planSessionMutation(input: {
     after = parseSessionHead({ ...unsigned, digestSha256: sessionHeadDigest(unsigned) });
   }
   return buildMutationPlan(planningInput, input.catalog, before, after);
+}
+
+/**
+ * Null remains truthful for private sketches and events that do not use
+ * tracks. Once a session enters an operational lifecycle, one active track is
+ * the deterministic default; several active tracks require an explicit human
+ * choice instead of silently preserving an omission.
+ */
+function resolvedTrackId(
+  vocabulary: ProgramVocabularyState,
+  lifecycle: SessionHead['lifecycle'],
+  trackId: string | null
+): string | null {
+  if (trackId !== null || lifecycle === 'draft') return trackId;
+  const active = vocabulary.tracks.filter((track) => track.status === 'active');
+  if (active.length === 0) return null;
+  if (active.length === 1) return active[0]!.id;
+  throw new SessionPlanningError('track_required');
 }
 
 /** First authoring occurrence per person wins; positions are assigned canonically. */

@@ -10,6 +10,9 @@ import { expect, test, type Page } from '@playwright/test';
  * withdraws with an in-place arm — receipts and reviewed refusals included.
  */
 
+/** Reads an expectation with ordinary spaces against the real non-breaking bytes. */
+const span = (text: string): string => text.replaceAll(' ', '\u00a0');
+
 const webRoot = fileURLToPath(new URL('..', import.meta.url));
 const manifest = JSON.parse(
 	execSync('bun scripts/emit-files-manifest-fixture.ts', { cwd: webRoot }).toString()
@@ -200,7 +203,10 @@ test('the ask loop: create against a catalog deadline, see it land, withdraw it'
 	await page.getByRole('button', { name: 'Ask for a file' }).click();
 	await page.getByLabel(/From/).selectOption({ index: 1 });
 	await page.getByLabel(/What/).fill('Your final slide deck');
-	await page.getByLabel(/By when/).selectOption({ label: '2026-09-01 · proposals close' });
+	// `selectOption` matches the option label byte for byte, and a date holds its
+	// span together with non-breaking spaces, so this one cannot be spelled with
+	// ordinary ones the way the normalized text assertions below can.
+	await page.getByLabel(/By when/).selectOption({ label: span('1 Sep 2026 · proposals close') });
 	await page.getByLabel(/Instructions/).fill('Export as PDF if you can.');
 	await page.getByRole('button', { name: 'Send the ask' }).click();
 
@@ -208,7 +214,7 @@ test('the ask loop: create against a catalog deadline, see it land, withdraw it'
 	await expect(page.getByText('Asked for “Your final slide deck”')).toBeVisible();
 	const askRow = page.locator('.request', { hasText: 'Your final slide deck' });
 	await expect(askRow.getByText('Open')).toBeVisible();
-	await expect(askRow.getByText('by 2026-09-01')).toBeVisible();
+	await expect(askRow.getByText('by 1 Sep 2026')).toBeVisible();
 	expect(created[0]).toMatchObject({
 		engagementId,
 		what: 'Your final slide deck',

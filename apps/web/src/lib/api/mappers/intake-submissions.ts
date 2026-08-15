@@ -1,8 +1,9 @@
-import type {
-	OrganizerSubmissionAnswerDto,
-	OrganizerSubmissionContactDto,
-	OrganizerSubmissionDetailDto,
-	OrganizerSubmissionSummaryDto
+import {
+	formatInstant,
+	type OrganizerSubmissionAnswerDto,
+	type OrganizerSubmissionContactDto,
+	type OrganizerSubmissionDetailDto,
+	type OrganizerSubmissionSummaryDto
 } from '@jooevents/contracts';
 import type {
 	OrganizerSubmissionAnswerView,
@@ -56,27 +57,17 @@ const unhandledContactKeys: Record<
 > = {};
 void unhandledContactKeys;
 
-const monthNames = Object.freeze([
-	'Jan',
-	'Feb',
-	'Mar',
-	'Apr',
-	'May',
-	'Jun',
-	'Jul',
-	'Aug',
-	'Sep',
-	'Oct',
-	'Nov',
-	'Dec'
-] as const);
-
-function submittedAtLabel(instant: string): string {
-	const date = new Date(instant);
-	const month = monthNames[date.getUTCMonth()];
-	const hour = String(date.getUTCHours()).padStart(2, '0');
-	const minute = String(date.getUTCMinutes()).padStart(2, '0');
-	return `${month} ${date.getUTCDate()}, ${date.getUTCFullYear()} · ${hour}:${minute} UTC`;
+/**
+ * When a submission arrived, for the Submissions table's own column.
+ *
+ * The zone is named rather than implied, because a bare clock is the one thing
+ * a reader in another zone can act on and be wrong about. It is still UTC and
+ * not the event's: this mapper is handed one summary DTO at a time and the wire
+ * contract carries no event timezone, so naming UTC is the honest statement
+ * available here rather than a guess dressed up as local time.
+ */
+export function submittedAtLabel(instant: string): string {
+	return formatInstant(instant, 'UTC', { zone: true, fallback: 'Not recorded' });
 }
 
 function unreachable(value: never): never {
