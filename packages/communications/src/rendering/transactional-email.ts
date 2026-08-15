@@ -146,19 +146,29 @@ export function renderTransactionalEmail(
     // The card: heading, intro, the primary action, its copy-paste link, small print.
     '<tr><td style="'
       + `background-color:${CARD_BACKGROUND};border:1px solid ${CARD_BORDER};`
-      + 'border-radius:8px;padding:36px 40px 26px 40px;">',
+      // 32px sides keep real content width on small phones; 600px desktop
+      // still reads airy.
+      + 'border-radius:8px;padding:36px 32px 26px 32px;">',
     `<h1 style="margin:0 0 16px 0;${bodyText(22, 30, PRIMARY_TEXT)}font-weight:600;">`
       + `${escapeHtml(heading)}</h1>`,
     introHtml,
-    '<table role="presentation" cellpadding="0" cellspacing="0" border="0" '
-      + 'style="border-collapse:separate;margin:20px 0 12px 0;">',
+    // The action centers because a scrolling email controls its own vertical
+    // position: horizontal center is the one thumb-reach lever this document
+    // owns, and it is where a one-handed grip lands on either hand. The
+    // anchor carries the padding so the whole 54px surface is the tap target
+    // (16px type + 15px padding clears the 44pt/48dp floors); `align` on the
+    // table centers it even where auto margins are ignored.
+    '<table role="presentation" align="center" cellpadding="0" cellspacing="0" border="0" '
+      + 'style="border-collapse:separate;margin:28px auto 16px auto;">',
     `<tr><td style="background-color:${BUTTON_BACKGROUND};border-radius:6px;">`,
     `<a href="${escapeHtml(buttonUrl)}" target="_blank" style="display:inline-block;`
-      + `padding:12px 28px;${bodyText(15, 22, BUTTON_TEXT)}font-weight:600;`
+      + `padding:15px 44px;${bodyText(16, 24, BUTTON_TEXT)}font-weight:600;`
       + `text-decoration:none;border-radius:6px;">${escapeHtml(buttonLabel)}</a>`,
     '</td></tr>',
     '</table>',
-    `<p style="margin:0 0 24px 0;font-family:${MONOSPACE_STACK};font-size:12px;`
+    // The copy-paste link centers with the button as one action unit — and a
+    // thumb that misses low lands on the same destination.
+    `<p style="margin:0 0 24px 0;text-align:center;font-family:${MONOSPACE_STACK};font-size:12px;`
       + 'line-height:18px;word-break:break-all;">'
       + `<a href="${escapeHtml(nakedLink)}" target="_blank" `
       + `style="color:${SECONDARY_TEXT};text-decoration:underline;">`

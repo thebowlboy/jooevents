@@ -135,4 +135,25 @@ test('directional-override and zero-width characters are refused in every line',
     })).toThrow('transactional_email_text_invalid');
   }
 });
+test('the action centers with a thumb-sized target and the naked link centered beneath', () => {
+  const { htmlBody } = renderTransactionalEmail({
+    subject: 'Your sign-in link',
+    preheader: 'Sign in with one tap.',
+    heading: 'Sign in to JooEvents',
+    intro: ['Use the button below.'],
+    button: { label: 'Sign in', url: 'https://example.test/a/tok' },
+    nakedLink: 'https://example.test/a/tok',
+    smallPrint: ['Works once.'],
+    siteUrl: 'https://jooevents.com',
+    productName: 'JooEvents'
+  });
+  // Centered even in clients that ignore auto margins.
+  expect(htmlBody).toContain('align="center" cellpadding="0" cellspacing="0"');
+  // 16px type + 15px vertical padding = a 54px surface, past 44pt/48dp, and
+  // the padding sits on the anchor so the whole surface is the tap target.
+  expect(htmlBody).toMatch(/<a [^>]*style="display:inline-block;padding:15px 44px;[^"]*font-size:16px/);
+  // The copy-paste link centers with the button as one action unit.
+  expect(htmlBody).toMatch(/text-align:center;[^"]*word-break:break-all/);
+});
+
 
