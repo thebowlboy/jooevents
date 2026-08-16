@@ -65,17 +65,17 @@ const beforeAnythingArrives: PulseStory = {
 	proposals: {
 		total: 0,
 		totalNote: '',
-		absence: 'No proposals have arrived yet. Arrivals chart here week by week once the CFP opens.'
+		absence: 'Arrivals chart here once a form is open.'
 	},
 	reviews: {
 		total: 0,
 		totalNote: '',
-		absence: 'The review round has not opened. Committed reviews chart here week by week once it does.'
+		absence: 'Reviews chart here once a round opens.'
 	},
 	decisions: {
 		total: 0,
 		totalNote: '',
-		absence: 'No proposals have been decided. Decisions chart here once the first one is made.'
+		absence: 'Decisions chart here once the first one is made.'
 	},
 	heroAbsence: 'The story appears here as proposals arrive.',
 	breakdown: {
@@ -135,13 +135,12 @@ const stories: Readonly<Record<string, PulseStory>> = Object.freeze({
 		reviews: {
 			total: 0,
 			totalNote: '',
-			absence:
-				'The review round has not opened. Committed reviews chart here week by week once it does.'
+			absence: 'Reviews chart here once a round opens.'
 		},
 		decisions: {
 			total: 0,
 			totalNote: '',
-			absence: 'No proposals have been decided. Decisions chart here once the first one is made.'
+			absence: 'Decisions chart here once the first one is made.'
 		},
 		speakers: 2,
 		breakdown: {
@@ -151,7 +150,7 @@ const stories: Readonly<Record<string, PulseStory>> = Object.freeze({
 		tracks: {
 			rows: [],
 			rosterLine: '2 speakers are on the roster; both invitations are outstanding.',
-			absence: 'Each track fills here as proposals are accepted. None have been yet.'
+			absence: 'Each track fills here as proposals are accepted.'
 		}
 	},
 	crunch: {

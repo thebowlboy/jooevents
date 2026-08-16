@@ -98,7 +98,7 @@ test('opening: flows that have not begun state why instead of charting zeros', a
 	const beats = page.getByRole('region', { name: 'Week by week' });
 	// Arrivals have begun and chart; reviews and decisions have not, and say so.
 	await expect(beats.getByText('9', { exact: true })).toBeVisible({ timeout: 15000 });
-	await expect(beats.getByText('The review round has not opened', { exact: false })).toBeVisible();
+	await expect(beats.getByText('Reviews chart here once a round opens', { exact: false })).toBeVisible();
 	await expect(
 		beats.getByText('No proposals have been decided', { exact: false })
 	).toBeVisible();
