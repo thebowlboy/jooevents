@@ -552,7 +552,8 @@
 		<section class="card empty" aria-label="What you can embed">
 			<p class="empty__title">Nothing to embed yet.</p>
 			<p class="empty__copy">
-				Your public pages arrive with your first event. Once they exist, their code appears here.
+				Embed code appears here once a public page is published — the programme, the lineup, or
+				an application form.
 			</p>
 		</section>
 	{:else}
