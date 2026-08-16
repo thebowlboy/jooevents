@@ -5,6 +5,7 @@
 	import EmbedsPage from '$lib/features/embeds/EmbedsPage.svelte';
 	import FilesPage from '$lib/features/files/FilesPage.svelte';
 	import OverviewDashboard from '$lib/features/workspace/components/OverviewDashboard.svelte';
+	import PulseDashboard from '$lib/features/workspace/components/PulseDashboard.svelte';
 	import FormsPage from '$lib/features/forms/FormsPage.svelte';
 	import SubmissionsPage from '$lib/features/submissions/SubmissionsPage.svelte';
 	import ReviewPage from '$lib/features/review/ReviewPage.svelte';
@@ -37,8 +38,6 @@
 
 	const labels: Readonly<Record<OperatorPageId, string>> = Object.freeze({
 		overview: 'Overview',
-		/* Live Pulse waits on its derivation; the fallback renders it as the
-		   explicit unavailable state rather than a sample-shaped page. */
 		pulse: 'Pulse',
 		submissions: 'Submissions',
 		review: 'Review',
@@ -65,6 +64,8 @@
 
 {#if area === 'overview'}
 	<OverviewDashboard port={ports.overview} />
+{:else if area === 'pulse'}
+	<PulseDashboard port={ports.pulse} />
 {:else if area === 'submissions'}
 	<SubmissionsPage port={ports.submissions} />
 {:else if area === 'decisions'}

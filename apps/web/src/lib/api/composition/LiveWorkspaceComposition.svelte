@@ -54,6 +54,10 @@
 	import { createLiveSettingsPagePort } from '$lib/api/settings-page-port';
 	import { createLiveAgentActionsPagePort } from '$lib/api/agent-actions-page-port';
 	import { createLiveWorkspaceShellPort } from '$lib/api/workspace-shell-live';
+	import {
+		createLivePulsePagePort,
+		createPulseHistoryLivePort
+	} from '$lib/api/pulse-page-port.live';
 	import WorkspaceShell from '$lib/features/workspace/components/WorkspaceShell.svelte';
 	import {
 		setLiveWorkspacePorts,
@@ -140,6 +144,7 @@
 	const triage = createSubmissionTriageLiveClient({ manifest: initial.manifest });
 	const sessionCatalog = createSessionCatalogLivePort({ manifest: initial.manifest });
 	const decisionsClient = createDecisionsLiveClient({ manifest: initial.manifest });
+	const engagementsClient = createEngagementsLiveClient({ manifest: initial.manifest });
 	const schedule = createLiveSchedulePagePort({
 		placements: createSchedulePlacementLivePort({ manifest: initial.manifest }),
 		sessions: sessionCatalog,
@@ -189,7 +194,7 @@
 	// role guess ever grants disclosure.
 	const taskClient = createTasksLiveClient({ manifest: initial.manifest });
 	const speakers = createLiveSpeakersPagePort({
-		engagements: createEngagementsLiveClient({ manifest: initial.manifest }),
+		engagements: engagementsClient,
 		sessions: sessionCatalog,
 		triage,
 		contacts: createIntakeSubmissionsLivePort({
@@ -231,6 +236,17 @@
 		roster: { list: () => speakers.speakers.list() },
 		vocabulary: { tracks: () => vocabulary.tracks() }
 	});
+	const pulse = createLivePulsePagePort({
+		sources: {
+			event: eventProgram.event,
+			vocabulary: eventProgram.vocabulary,
+			triage,
+			decisions: decisionsClient,
+			engagements: engagementsClient,
+			sessions: sessionCatalog,
+			history: createPulseHistoryLivePort({ manifest: initial.manifest })
+		}
+	});
 
 	// The tuned Review surface renders under the authority the server states.
 	// Its port's `viewer` is a static construction input, so the port exists
@@ -268,6 +284,7 @@
 
 	setLiveWorkspacePorts(Object.freeze({
 		overview,
+		pulse,
 		eventProgram,
 		communicationsReadiness,
 		forms,

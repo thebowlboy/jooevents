@@ -16,6 +16,7 @@ import type { SubmissionsPagePort } from '../submissions-page-port';
 import type { TemplatesPagePort } from '../templates-page-port';
 import type { TasksPagePort } from '../tasks-page-port';
 import type { AgentActionsPagePort } from '../agent-actions-page-port';
+import type { PulsePagePort } from '../pulse-page-port';
 
 /** Authenticated inputs from which the live workspace composition is built. */
 export interface LiveWorkspaceReady {
@@ -26,6 +27,7 @@ export interface LiveWorkspaceReady {
 
 export interface LiveWorkspacePorts {
 	readonly overview: OverviewPagePort;
+	readonly pulse: PulsePagePort;
 	readonly eventProgram: EventProgramPort;
 	readonly communicationsReadiness: CommunicationsReadinessPagePort;
 	readonly forms: FormsPagePort;
