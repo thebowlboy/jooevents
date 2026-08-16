@@ -184,7 +184,7 @@ const flight: WorkspaceDataset = {
 				paceTone: 'behind',
 				deadline: { qualifier: 'publish target', ...dayDeadline(46, TZ) }
 			},
-			{ key: 'comms', label: 'Comms', headline: '5', sub: '3 sent · 1 scheduled · 1 draft', state: 'ok' }
+			{ key: 'comms', label: 'Messages', headline: '5', sub: '3 sent · 1 scheduled · 1 draft', state: 'ok' }
 		],
 		deadlines: [
 			{ label: 'CFP closes', ...dayDeadline(12, TZ) },

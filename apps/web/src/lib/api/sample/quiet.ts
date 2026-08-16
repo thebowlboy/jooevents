@@ -107,7 +107,7 @@ const quiet: WorkspaceDataset = {
 				paceTone: 'on',
 				deadline: { qualifier: 'published', ...dayDeadline(-6, TZ), settled: true }
 			},
-			{ key: 'comms', label: 'Comms', headline: '6', sub: '4 sent · 2 scheduled', state: 'ok' }
+			{ key: 'comms', label: 'Messages', headline: '6', sub: '4 sent · 2 scheduled', state: 'ok' }
 		],
 		/* No "Doors open" row: the event's own dates are the shell's event card,
 		   not a deadline, and this panel is for the things that must happen before

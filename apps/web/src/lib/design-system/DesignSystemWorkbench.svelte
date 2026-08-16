@@ -947,7 +947,7 @@
             <li class="ds-clamp-row">
               <span class="ui-avatar ui-avatar--sm" aria-hidden="true">SI</span>
               <ClampedText lines={2} expandFromSurface label="Schedule import">
-                {#snippet children()}<strong>Schedule import</strong> drafted 24 placements across 3 rooms from “agenda-draft.xlsx” — 2 unresolved room names (“Main Hall B”, “Studio 2”) and 1 possible duplicate session need a decision before this changeset can commit <span class="ds-clamp-time">· 1 h ago</span>{/snippet}
+                {#snippet children()}<strong>Schedule import</strong> planned 24 placements across 3 rooms from “agenda-draft.xlsx” — 2 unresolved room names (“Main Hall B”, “Studio 2”) and 1 possible duplicate session need a decision before the approved run can proceed <span class="ds-clamp-time">· 1 h ago</span>{/snippet}
               </ClampedText>
             </li>
           </ul>

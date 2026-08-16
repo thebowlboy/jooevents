@@ -91,7 +91,7 @@
 			decision: 'waitlisted',
 			notified: true,
 			abstract:
-				'A working account of passing state between agents without a shared database: typed changesets, a diff surface a human can actually read, and what happened the three times we let a model write straight to effective state.'
+				'A working account of passing state between agents without a shared database: typed operation plans, a review surface a human can actually read, and what happened the three times we let a model write straight to effective state.'
 		},
 		{
 			id: 'sub-3',

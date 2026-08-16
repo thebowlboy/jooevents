@@ -65,7 +65,7 @@
       id: 'fourbeat',
       name: 'Four beats',
       slot: 'content',
-      distils: 'Intent → Draft → Diff → Commit, the loop the product is built on.',
+      distils: 'Intent → Guard → Commit → History, the ordinary mutation loop.',
       argument:
         'The only variant that means something specific to JooEvents. A wait becomes a reminder of how work moves here — at the cost of implying stages this navigation does not really have.',
       still: 'All four beats show; the first is filled.'
@@ -232,7 +232,7 @@
                 {:else if variant.id === 'fourbeat'}
                   <div class="lv-beats">
                     <span class="lv-beats__track">
-                      {#each ['Intent', 'Draft', 'Diff', 'Commit'] as beat, i (beat)}
+                      {#each ['Intent', 'Guard', 'Commit', 'History'] as beat, i (beat)}
                         <span class="lv-beats__beat" style:--lv-step={i}><i></i>{beat}</span>
                       {/each}
                     </span>

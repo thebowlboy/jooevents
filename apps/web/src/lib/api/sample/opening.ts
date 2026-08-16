@@ -82,7 +82,7 @@ const opening: WorkspaceDataset = {
 			{ key: 'decide', label: 'Decide', headline: '0', sub: 'decisions start after review', state: 'ok' },
 			{ key: 'speakers', label: 'Speakers', headline: '2', sub: 'invited · no replies yet', state: 'ok' },
 			{ key: 'schedule', label: 'Schedule', headline: '0/1', sub: 'placed · keynote is the only session', state: 'ok' },
-			{ key: 'comms', label: 'Comms', headline: '1', sub: 'sent · delivery reporting unverified', state: 'ok' }
+			{ key: 'comms', label: 'Messages', headline: '1', sub: 'sent · delivery reporting unverified', state: 'ok' }
 		],
 		deadlines: [{ label: 'CFP closes', ...dayDeadline(25, TZ) }],
 		activity: [

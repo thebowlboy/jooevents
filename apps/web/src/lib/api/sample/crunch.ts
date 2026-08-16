@@ -187,7 +187,7 @@ const crunch: WorkspaceDataset = {
 				paceTone: 'behind',
 				deadline: { qualifier: 'publish target', ...dayDeadline(18, TZ) }
 			},
-			{ key: 'comms', label: 'Comms', headline: '4', sub: 'waiting to send · 1 sending now', state: 'ok' }
+			{ key: 'comms', label: 'Messages', headline: '4', sub: 'waiting to send · 1 sending now', state: 'ok' }
 		],
 		deadlines: [
 			{ label: 'Review round 2 due', ...dayDeadline(1, TZ) },

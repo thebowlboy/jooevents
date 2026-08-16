@@ -165,7 +165,8 @@ export const statusIcon: Record<StatusIconKey, IconComponent> = {
 };
 
 /**
- * Holding places on the Overview ledger — "everything has a place". These name a
+ * Holding places on the Overview ledger (the "Holding areas" panel — the
+ * P2 everything-has-a-place guarantee, worded for the reader). These name a
  * *kind of waiting room*, not a state, so they live apart from `statusIcon`.
  */
 export const trayIcon: Record<TrayKind, IconComponent> = {
