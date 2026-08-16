@@ -73,12 +73,18 @@
 <ul class="panel" aria-label="Attached files">
 	{#each items as item (item.attachmentId)}
 		<li class="row" aria-busy={busyId === item.attachmentId || undefined}>
-			<span class="row__name">{itemName(item)}</span>
-			{#if item.kind === 'file'}
-				<span class="row__meta">{item.sizeLabel} · {scanHonestyLabel[item.scan]}</span>
-			{:else}
-				<span class="row__meta">{linkProviderLabel[item.provider]}</span>
-			{/if}
+			<div class="row__content">
+				<span class="row__name">{itemName(item)}</span>
+				{#if item.kind === 'file'}
+					<span class="row__meta">
+						<span>{item.sizeLabel}</span>
+						<span aria-hidden="true">·</span>
+						<span>{scanHonestyLabel[item.scan]}</span>
+					</span>
+				{:else}
+					<span class="row__meta">{linkProviderLabel[item.provider]}</span>
+				{/if}
+			</div>
 			<span class="row__actions">
 				{#if item.kind === 'file'}
 					{#if item.downloadable}
@@ -118,21 +124,31 @@
 <style>
 	.panel {
 		display: grid;
-		gap: var(--je-space-1);
 		margin: 0;
 		padding: 0;
 		list-style: none;
 	}
 
 	.row {
-		display: flex;
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
 		align-items: center;
-		flex-wrap: wrap;
-		gap: var(--je-space-2);
-		padding-block: var(--je-space-1);
+		column-gap: var(--je-space-3);
+		padding-block: var(--je-space-2);
+	}
+
+	.row + .row {
+		border-block-start: 1px solid var(--je-color-border);
+	}
+
+	.row__content {
+		display: grid;
+		gap: 2px;
+		min-inline-size: 0;
 	}
 
 	.row--empty {
+		display: block;
 		color: var(--je-color-text-muted);
 		font-size: var(--je-font-size-sm);
 	}
@@ -143,6 +159,9 @@
 	}
 
 	.row__meta {
+		display: flex;
+		flex-wrap: wrap;
+		column-gap: var(--je-space-1);
 		color: var(--je-color-text-muted);
 		font-size: var(--je-font-size-sm);
 	}
@@ -151,7 +170,8 @@
 		display: flex;
 		align-items: center;
 		gap: var(--je-space-2);
-		margin-inline-start: auto;
+		grid-column: 2;
+		grid-row: 1;
 	}
 
 	.row__download {
@@ -167,5 +187,17 @@
 		margin: 0;
 		color: var(--je-color-danger);
 		font-size: var(--je-font-size-sm);
+	}
+
+	@media (max-width: 40rem) {
+		.row {
+			grid-template-columns: minmax(0, 1fr);
+			row-gap: var(--je-space-2);
+		}
+
+		.row__actions {
+			grid-column: 1;
+			grid-row: 2;
+		}
 	}
 </style>
