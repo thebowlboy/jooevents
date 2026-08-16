@@ -98,6 +98,7 @@
 	let yearPageStart = $state(0);
 	let text = $state(value);
 	let typedInvalid = $state(false);
+	let typedUnparseable = $state(false);
 	let root = $state<HTMLElement>();
 	let inputEl = $state<HTMLInputElement>();
 	let panel = $state<HTMLElement>();
@@ -143,17 +144,24 @@
 		if (text.trim() === '') {
 			value = '';
 			typedInvalid = false;
+			typedUnparseable = false;
 			onchange?.('');
 			return;
 		}
 		const parsed = parseLoose(text);
-		if (parsed && inRange(toIso(parsed))) {
+		if (parsed) {
+			// A parseable date always commits, in range or not: range policy is
+			// the form's refusal to speak. Swallowing the value here would turn
+			// a spoken refusal into a silent wall (the min-swallow defect,
+			// 2026-08-16). The calendar still greys out-of-range days.
 			value = toIso(parsed);
 			text = value;
-			typedInvalid = false;
+			typedInvalid = !inRange(value);
+			typedUnparseable = false;
 			onchange?.(value);
 		} else {
 			typedInvalid = true;
+			typedUnparseable = true;
 		}
 	}
 
@@ -257,7 +265,9 @@
 				bind:value={text}
 				{id}
 				{disabled}
-				aria-describedby={describedBy}
+				aria-describedby={[describedBy, typedUnparseable && id ? `${id}-format` : undefined]
+					.filter(Boolean)
+					.join(' ') || undefined}
 				aria-invalid={invalid || typedInvalid || undefined}
 				onblur={commitTyped}
 				onkeydown={(event) => {
@@ -281,6 +291,14 @@
 				<Calendar size={15} />
 			</button>
 		</div>
+
+		{#if typedUnparseable}
+			<!-- Unparseable text is the one refusal only the primitive can word:
+			     the form never receives a value to refuse. -->
+			<p class="typed-hint" id={id ? `${id}-format` : undefined}>
+				Enter a date like {todayIso}.
+			</p>
+		{/if}
 
 		{#if open}
 			<div
@@ -399,6 +417,12 @@
 {/if}
 
 <style>
+	.typed-hint {
+		margin: var(--je-space-1) 0 0;
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-danger);
+	}
+
 	.picker {
 		position: relative;
 	}

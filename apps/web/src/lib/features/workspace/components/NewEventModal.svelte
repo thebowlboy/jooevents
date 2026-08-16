@@ -145,13 +145,15 @@
 			</Field>
 			<Field id="new-event-end" label="End date" error={dateError}>
 				{#snippet children({ id, describedBy, invalid })}
-					<!-- No `min`: an earlier typed date must commit so the refusal can
-					     say itself in place, exactly as the live first-run validates. -->
+					<!-- The calendar greys days before the start date; a typed earlier
+					     date still commits (DatePicker commits parseable values since
+					     2026-08-16) so the refusal below says itself in place. -->
 					<DatePicker
 						{id}
 						{describedBy}
 						{invalid}
 						label="end date"
+						min={startDate || todayIso}
 						defaultFocus={startDate || 'today'}
 						disabled={creating}
 						bind:value={endDate}
