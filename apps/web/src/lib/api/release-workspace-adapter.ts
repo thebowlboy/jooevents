@@ -1,6 +1,7 @@
 import type { ReleaseOverviewDto, SurfaceKind } from '@jooevents/contracts';
 import type {
 	ReleaseLiveClient,
+	ReleaseLiveDraftData,
 	ReleaseLiveResult,
 	ReleaseMutationKeys
 } from './operations/release-live';
@@ -46,10 +47,35 @@ function idempotencyKeys(): ReleaseMutationKeys {
 	});
 }
 
+/**
+ * What a person reads before the second press: how much of the programme this
+ * release carries, and — the half that is easy to omit — exactly which speaker
+ * names the commit copies into public state. A schedule publish is the one
+ * release action that discloses people, so the names are the review, not a
+ * footnote to it.
+ */
+export interface SchedulePublicationReview {
+	/** The release number this publish would create. */
+	readonly releaseNumber: number;
+	readonly sessions: number;
+	readonly occurrences: number;
+	readonly declassifiedNames: readonly string[];
+	/**
+	 * Opaque continuation, handed straight back to `publishSchedule`. The port
+	 * that produced a review is the only thing that reads it, so a source with
+	 * no server draft behind it simply omits one.
+	 */
+	readonly continuation?: unknown;
+}
+
 /** One browser projection of the canonical release owner, shared by operator areas. */
 export interface ReleaseWorkspacePort {
 	overview(): Promise<ReleaseOverviewDto>;
 	setAllowedOrigins(kind: SurfaceKind, origins: readonly string[]): Promise<MutationOutcome>;
+	/** Drafts the next programme release. Nothing is public until it is published. */
+	draftSchedulePublication(): Promise<SchedulePublicationReview | { readonly ok: false; readonly reason: string }>;
+	/** Publishes exactly the reviewed draft. */
+	publishSchedule(review: SchedulePublicationReview): Promise<MutationOutcome>;
 }
 
 export function createReleaseWorkspacePort(client: ReleaseLiveClient): ReleaseWorkspacePort {
@@ -74,6 +100,51 @@ export function createReleaseWorkspacePort(client: ReleaseLiveClient): ReleaseWo
 			return result.kind === 'success'
 				? { ok: true }
 				: { ok: false, reason: failure(result).reason };
+		},
+
+		async draftSchedulePublication() {
+			let state: ReleaseOverviewDto;
+			try {
+				state = await overview();
+			} catch (error) {
+				return {
+					ok: false as const,
+					reason: error instanceof ReleaseWorkspaceError
+						? error.message
+						: 'Publication state could not be read.'
+				};
+			}
+			const drafted = await client.draft({
+				action: 'publish_schedule',
+				// Fences the chain: null says "no release yet", and a number says
+				// "this exact head". A schedule published from another tab in the
+				// meantime lands as a conflict rather than overwriting it.
+				expectedCurrentReleaseNumber: state.currentProgramRelease?.number ?? null
+			}, `je.release.publish-schedule.draft.${globalThis.crypto.randomUUID()}`);
+			if (drafted.kind !== 'success') return { ok: false as const, reason: failure(drafted).reason };
+			const diff = drafted.data.safeDiff;
+			if (diff.action !== 'publish_schedule') {
+				return { ok: false as const, reason: 'The reviewed release did not describe a schedule publication.' };
+			}
+			return {
+				releaseNumber: diff.after.number,
+				sessions: diff.releasedSessionCount,
+				occurrences: diff.releasedOccurrenceCount,
+				declassifiedNames: diff.nameDeclassifications.map((entry) => entry.displayName),
+				continuation: drafted.data
+			};
+		},
+
+		async publishSchedule(review: SchedulePublicationReview): Promise<MutationOutcome> {
+			const drafted = review.continuation as ReleaseLiveDraftData | undefined;
+			if (!drafted || drafted.action !== 'publish_schedule') {
+				return { ok: false, reason: 'Review this publication again before publishing it.' };
+			}
+			const result = await client.publishDrafted(
+				drafted,
+				`je.release.publish-schedule.publish.${globalThis.crypto.randomUUID()}`
+			);
+			return result.kind === 'success' ? { ok: true } : { ok: false, reason: failure(result).reason };
 		}
 	});
 }

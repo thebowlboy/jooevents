@@ -108,17 +108,27 @@ test('live schedule renders the settings-derived grid, publication state, and a 
 	await expect(page.getByText(/Mid-flight|Decision crunch|All clear/)).toHaveCount(0);
 	await expect(page.locator('[data-je-scenario]')).toHaveCount(0);
 
-	// The joined runtime is shared across specs. In isolation this legacy door
-	// still names its typed refusal; after the publication proof has run, the
-	// canonical release read replaces it with the honest Published state.
-	const publish = page.getByRole('button', { name: 'Publish' });
+	// The joined runtime is shared across specs, so the board arrives either
+	// unpublished or already carrying the canonical release read's Published
+	// state. Where the control stands, it opens the real reviewed lane: one
+	// draft request states what the release carries and which names it makes
+	// public, and nothing reaches public state until the second press.
+	const publish = page.getByRole('button', { name: 'Publish', exact: true });
 	const published = page.getByText('Published', { exact: true });
 	await expect(publish.or(published).first()).toBeVisible();
 	if (await publish.isVisible()) {
 		await publish.click();
-		await expect(page.getByText(
-			'Publishing the schedule is not available in this live workspace yet.'
-		)).toBeVisible();
+		const review = page.getByRole('region', { name: /^Review release \d+$/ });
+		await expect(review).toBeVisible({ timeout: 15000 });
+		await expect(review.getByText('Nothing is public yet.')).toBeVisible();
+		// The disclosure is the point of the ceremony: the names the commit
+		// copies into public state are stated before the press, never after.
+		await expect(review.getByRole('heading', { name: /^\d+ speaker names? becomes? public$/ }))
+			.toBeVisible();
+		// Standing it down leaves the board exactly as it was.
+		await review.getByRole('button', { name: 'Cancel' }).click();
+		await expect(review).toHaveCount(0);
+		await expect(publish).toBeVisible();
 	}
 
 	// Consequential path: create a session through the dialog. The fresh event

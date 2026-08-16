@@ -11,6 +11,13 @@ import { createLiveEmbedsPagePort } from './embeds-page-port.live';
 import type { ReleaseLiveClient, ReleaseMutationKeys } from './operations/release-live';
 import { createReleaseWorkspacePort } from './release-workspace-adapter';
 
+/** The reviewed half these doubles never reach: this port publishes in one press. */
+const unreviewed: Pick<ReleaseLiveClient, 'draft' | 'publishDrafted'> = {
+	draft() { throw new Error('draft_not_used'); },
+	publishDrafted() { throw new Error('publish_drafted_not_used'); }
+};
+
+
 const id = (value: number) => `00000000-0000-4000-8000-${value.toString(16).padStart(12, '0')}`;
 const digest = 'a'.repeat(64);
 const now = '2026-08-15T08:00:00.000Z';
@@ -84,6 +91,7 @@ describe('live Embeds page adapter', () => {
 		const mutations: ReleaseAuthorInput[] = [];
 		const mutationKeys: ReleaseMutationKeys[] = [];
 		const release: ReleaseLiveClient = {
+			...unreviewed,
 			async overview() {
 				return { kind: 'success', data: state, correlationId: 'overview-correlation' };
 			},
@@ -141,6 +149,7 @@ describe('live Embeds page adapter', () => {
 
 	test('keeps indexing disabled until its canonical publication setting exists', async () => {
 		const release: ReleaseLiveClient = {
+			...unreviewed,
 			async overview() { return { kind: 'success', data: releaseState(), correlationId: 'read' }; },
 			async mutate() { throw new Error('not used'); }
 		};

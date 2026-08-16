@@ -8,7 +8,7 @@ import type {
 } from '@jooevents/contracts';
 import type { OrganizerFormsPort } from './view-models/intake-forms';
 import type {
-	ReleaseLiveClient,
+	ReleaseMutateClient,
 	ReleaseLiveResult,
 	ReleaseMutationKeys
 } from './operations/release-live';
@@ -95,7 +95,7 @@ function manifest(document: Extract<TemplateArtifactDocumentDto, { readonly kind
  */
 export function createTemplatePublicationLivePort(input: {
 	readonly artifacts: TemplateArtifactLiveClient;
-	readonly release: ReleaseLiveClient;
+	readonly release: ReleaseMutateClient;
 	readonly forms: OrganizerFormsPort;
 }) {
 	async function artifacts(): Promise<readonly TemplateArtifactSnapshotDto[]> {

@@ -15,7 +15,10 @@
 		trackAccent,
 		trackPending
 	} from '$lib/ui';
-	import type { SchedulePagePort } from '$lib/api/schedule-page-port';
+	import type {
+		SchedulePagePort,
+		SchedulePublicationReview
+	} from '$lib/api/schedule-page-port';
 	import { presentProgramRoomCapacity } from '$lib/api/program-vocabulary-presentation';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
 	import { applyParams, clearParams, param } from '$lib/features/workspace/url-state.svelte';
@@ -76,6 +79,8 @@
 	let roster = $state.raw<SpeakerRow[]>([]);
 	let busy = $state(false);
 	let publishReason = $state('');
+	/** The drafted release a person is reading, between the two presses. */
+	let publishReview = $state<SchedulePublicationReview | null>(null);
 	let announcement = $state('');
 	let conflictsPanel = $state<HTMLElement>();
 	let programPanel = $state<HTMLElement>();
@@ -1336,13 +1341,35 @@
 		busy = false;
 	}
 
-	async function publish() {
+	/**
+	 * First press: draft the release and read back what publishing would make
+	 * public. Nothing has changed at this point — the draft exists server-side
+	 * as a revision, and only `confirmPublish` commits it.
+	 */
+	async function reviewPublish() {
 		if (busy) return;
 		busy = true;
 		publishReason = '';
-		const result = await api.schedule.publish();
+		const result = await api.schedule.draftPublication();
+		if ('ok' in result) publishReason = result.reason;
+		else publishReview = result;
+		busy = false;
+	}
+
+	function cancelPublish() {
+		publishReview = null;
+		publishReason = '';
+	}
+
+	/** Second press: publish exactly the draft on screen. */
+	async function confirmPublish() {
+		if (busy || !publishReview) return;
+		busy = true;
+		publishReason = '';
+		const result = await api.schedule.publishReviewed(publishReview);
 		if (!result.ok) publishReason = result.reason;
 		else {
+			publishReview = null;
 			recordAction({
 				area: 'schedule',
 				label: 'Published the schedule',
@@ -1594,12 +1621,66 @@
 			{#if schedule.published}
 				<Badge {...badgeFor('published')} value="Published" />
 			{:else}
-				<button type="button" class="ui-button ui-button--primary" disabled={busy} onclick={publish}>
+				<button type="button" class="ui-button ui-button--primary" disabled={busy} onclick={reviewPublish}>
 					Publish
 				</button>
 			{/if}
 		</div>
 	</div>
+
+	{#if publishReview}
+		<!-- The reviewed lane's one screen: what this release carries, and which
+		     names it copies into public state. A schedule publish is the only
+		     release action that discloses people, so the names are the review
+		     rather than a footnote to it. Nothing is public until the press. -->
+		<section
+			class="publish-review"
+			aria-labelledby="schedule-publish-review-title"
+			aria-busy={busy || undefined}>
+			<div>
+				<h2 id="schedule-publish-review-title">Review release {publishReview.releaseNumber}</h2>
+				<p class="publish-review__lede">Nothing is public yet.</p>
+			</div>
+			<dl class="publish-review__facts">
+				<div>
+					<dt>Sessions</dt>
+					<dd>{publishReview.sessions}</dd>
+				</div>
+				<div>
+					<dt>Placements</dt>
+					<dd>{publishReview.occurrences}</dd>
+				</div>
+			</dl>
+			<div class="publish-review__names">
+				<h3>
+					{publishReview.declassifiedNames.length === 1
+						? '1 speaker name becomes public'
+						: `${publishReview.declassifiedNames.length} speaker names become public`}
+				</h3>
+				{#if publishReview.declassifiedNames.length === 0}
+					<p class="publish-review__none">This release names nobody.</p>
+				{:else}
+					<ul>
+						{#each publishReview.declassifiedNames as name (name)}
+							<li>{name}</li>
+						{/each}
+					</ul>
+				{/if}
+			</div>
+			<div class="publish-review__actions">
+				<button
+					type="button"
+					class="ui-button ui-button--primary"
+					disabled={busy}
+					onclick={confirmPublish}>Publish release {publishReview.releaseNumber}</button>
+				<button
+					type="button"
+					class="ui-button ui-button--ghost"
+					disabled={busy}
+					onclick={cancelPublish}>Cancel</button>
+			</div>
+		</section>
+	{/if}
 
 	<div class="layout" class:is-refreshing={reload.visible} aria-busy={refreshing || undefined}>
 		<!-- Right-click stands the mode down, the same way Escape does. While a
@@ -2919,6 +3000,89 @@
 </Modal>
 
 <style>
+	/* The reviewed lane's own card, matching the Program Vocabulary merge review:
+	   a titled panel, the facts, the disclosure, then the two presses. */
+	.publish-review {
+		display: grid;
+		gap: var(--je-space-4);
+		padding: var(--je-space-5);
+		margin-block-end: var(--je-space-6);
+		background: var(--je-color-surface);
+		border: 1px solid var(--je-color-border);
+		border-radius: var(--je-radius-surface);
+	}
+
+	.publish-review h2,
+	.publish-review h3,
+	.publish-review p {
+		margin: 0;
+	}
+
+	.publish-review h2 {
+		font-size: var(--je-font-size-lg);
+	}
+
+	.publish-review__lede {
+		margin-block-start: var(--je-space-1);
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-text-muted);
+	}
+
+	.publish-review__facts {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--je-space-6);
+		margin: 0;
+	}
+
+	.publish-review__facts dt {
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
+	}
+
+	.publish-review__facts dd {
+		margin: 0;
+		font-size: var(--je-font-size-xl);
+		font-weight: 600;
+		font-variant-numeric: tabular-nums;
+	}
+
+	.publish-review__names h3 {
+		font-size: var(--je-font-size-sm);
+		font-weight: 600;
+	}
+
+	.publish-review__names ul {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--je-space-1) var(--je-space-3);
+		margin: var(--je-space-2) 0 0;
+		padding: 0;
+		list-style: none;
+		font-size: var(--je-font-size-sm);
+	}
+
+	.publish-review__none {
+		margin-block-start: var(--je-space-2);
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-text-muted);
+	}
+
+	.publish-review__actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--je-space-2);
+	}
+
+	/* The narrow composition stacks the presses rather than crushing them:
+	   the primary keeps a full-width target and Cancel sits under it. */
+	@media (max-width: 36rem) {
+		.publish-review__actions {
+			display: grid;
+			grid-template-columns: 1fr;
+		}
+	}
+
 	/* Header row: day switch, conflict tally, and the publish commit. */
 	.head {
 		display: flex;

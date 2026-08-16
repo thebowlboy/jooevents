@@ -40,7 +40,6 @@ import type {
 export type SchedulePageLiveUnmountedCapability =
 	| 'schedule_unplace'
 	| 'schedule_breaks'
-	| 'schedule_publish'
 	| 'session_remove'
 	| 'session_attach'
 	| 'session_detach'
@@ -96,7 +95,6 @@ const UNMOUNTED_COPY: Readonly<Record<SchedulePageLiveUnmountedCapability, strin
 	schedule_unplace:
 		'Removing a session from the schedule is not available in this live workspace yet.',
 	schedule_breaks: 'Breaks are not available in this live workspace yet.',
-	schedule_publish: 'Publishing the schedule is not available in this live workspace yet.',
 	session_remove: 'Removing a session is not available in this live workspace yet.',
 	session_attach: 'Attaching submissions is not available in this live workspace yet.',
 	session_detach: 'Detaching submissions is not available in this live workspace yet.',
@@ -573,7 +571,7 @@ export function createLiveSchedulePagePort(input: {
 	readonly vocabulary: ProgramVocabularySettingsPort;
 	readonly proposals: ScheduleProposalCountsSource;
 	readonly settings: ScheduleGeometrySettingsSource;
-	readonly publication: Pick<ReleaseWorkspacePort, 'overview'>;
+	readonly publication: Pick<ReleaseWorkspacePort, 'overview' | 'draftSchedulePublication' | 'publishSchedule'>;
 	readonly newIdempotencyKey?: () => string;
 }): SchedulePagePort {
 	if (
@@ -793,8 +791,18 @@ export function createLiveSchedulePagePort(input: {
 			async removeBreak(): Promise<never> {
 				throw unmounted('schedule_breaks');
 			},
-			async publish(): Promise<{ ok: true } | { ok: false; reason: string }> {
-				return { ok: false, reason: UNMOUNTED_COPY.schedule_publish };
+			/**
+			 * The reviewed lane, exactly as the Release owner serves it: one
+			 * draft request produces the safe diff a person reads, and the
+			 * second press publishes that same revision. The adapter fences the
+			 * release chain, so a schedule published elsewhere in the meantime
+			 * refuses rather than overwriting.
+			 */
+			draftPublication() {
+				return input.publication.draftSchedulePublication();
+			},
+			publishReviewed(review) {
+				return input.publication.publishSchedule(review);
 			},
 			async createSession(create: {
 				title: string;

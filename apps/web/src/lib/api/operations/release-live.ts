@@ -63,10 +63,43 @@ export type ReleaseLiveMutationData = Readonly<{
 	safeDiff: ReleaseSafeDiffDto;
 }>;
 
+/**
+ * A reviewed draft that has **not** been published: the safe diff a person
+ * reads before the second press, plus the exact selector that publishes the
+ * revision they read. Holding these apart is what makes a two-press ceremony
+ * honest — `mutate` below is the same two requests with nobody looking in
+ * between, which is correct only where the caller is the reviewer.
+ */
+export type ReleaseLiveDraftData = Readonly<{
+	action: ReleaseAuthorInput['action'];
+	selector: Readonly<{ draftId: string; revisionId: string; revisionDigestSha256: string }>;
+	safeDiff: ReleaseSafeDiffDto;
+}>;
+
 export interface ReleaseLiveClient {
 	overview(): Promise<ReleaseLiveResult<ReleaseOverviewDto>>;
+	/** Draft only. Nothing reaches public state until `publishDrafted` runs. */
+	draft(input: ReleaseAuthorInput, key: string): Promise<ReleaseLiveResult<ReleaseLiveDraftData>>;
+	/**
+	 * Publishes exactly the revision a reviewer read: the drafted safe diff
+	 * travels back in so the published effect is checked against what was
+	 * shown, not against what the server chose to do.
+	 */
+	publishDrafted(
+		drafted: ReleaseLiveDraftData,
+		key: string
+	): Promise<ReleaseLiveResult<ReleaseLiveMutationData>>;
 	mutate(input: ReleaseAuthorInput, keys: ReleaseMutationKeys): Promise<ReleaseLiveResult<ReleaseLiveMutationData>>;
 }
+
+/**
+ * What a consumer that is itself the reviewer needs: read the state, and make
+ * the change. Template publication and the embed allowlist are both of that
+ * shape — the operator already reviewed the Template or typed the origins, so
+ * a second ceremony over the release would be reviewing the same decision
+ * twice. Only a surface that shows a person the diff needs the wider client.
+ */
+export type ReleaseMutateClient = Pick<ReleaseLiveClient, 'overview' | 'mutate'>;
 
 export interface ReleaseRequestInput {
 	readonly path: string;
@@ -172,16 +205,14 @@ export function createReleaseLiveClient(input: {
 				: { kind: 'outcome', outcome: result.data.outcome, correlationId: result.data.correlationId };
 		},
 
-		async mutate(
+		async draft(
 			rawInput: ReleaseAuthorInput,
-			rawKeys: ReleaseMutationKeys
-		): Promise<ReleaseLiveResult<ReleaseLiveMutationData>> {
+			rawKey: string
+		): Promise<ReleaseLiveResult<ReleaseLiveDraftData>> {
 			const business = releaseAuthorInputSchema.safeParse(rawInput);
-			const draftKey = operationHttpIdempotencyKeySchema.safeParse(rawKeys.draft);
-			const publishKey = operationHttpIdempotencyKeySchema.safeParse(rawKeys.publish);
-			if (!business.success || !draftKey.success || !publishKey.success) return invalidRequest();
+			const draftKey = operationHttpIdempotencyKeySchema.safeParse(rawKey);
+			if (!business.success || !draftKey.success) return invalidRequest();
 			if (draftBinding.kind === 'unavailable') return unavailable('draft', draftBinding);
-			if (publishBinding.kind === 'unavailable') return unavailable('publish', publishBinding);
 
 			const draftTransport = await request({
 				path: draftBinding.path,
@@ -211,6 +242,27 @@ export function createReleaseLiveClient(input: {
 				revisionDigestSha256: drafted.data.data.revision.digestSha256
 			});
 			if (!selector.success) return invalidContract();
+			return {
+				kind: 'success',
+				data: {
+					action: business.data.action,
+					selector: selector.data,
+					safeDiff: drafted.data.data.safeDiff
+				},
+				correlationId: drafted.data.correlationId,
+				receipt: drafted.data.receipt
+			};
+		},
+
+		async publishDrafted(
+			drafted: ReleaseLiveDraftData,
+			rawKey: string
+		): Promise<ReleaseLiveResult<ReleaseLiveMutationData>> {
+			const publishKey = operationHttpIdempotencyKeySchema.safeParse(rawKey);
+			const selector = releasePublishInputSchema.safeParse(drafted.selector);
+			if (!publishKey.success || !selector.success) return invalidRequest();
+			if (publishBinding.kind === 'unavailable') return unavailable('publish', publishBinding);
+
 			const publishTransport = await request({
 				path: publishBinding.path,
 				method: 'POST',
@@ -229,17 +281,29 @@ export function createReleaseLiveClient(input: {
 					...('receipt' in published.data ? { receipt: published.data.receipt } : {})
 				};
 			}
+			// The published effect is checked against the diff the reviewer read,
+			// so a server that published something else cannot pass as success.
 			if (!receiptMatches(published.data.receipt, RELEASE_LIVE_OPERATIONS.publish)
-				|| published.data.data.action !== business.data.action
-				|| !publishedEffectMatches(published.data.data, drafted.data.data.safeDiff)) {
+				|| published.data.data.action !== drafted.action
+				|| !publishedEffectMatches(published.data.data, drafted.safeDiff)) {
 				return invalidContract();
 			}
 			return {
 				kind: 'success',
-				data: { mutation: published.data.data, safeDiff: drafted.data.data.safeDiff },
+				data: { mutation: published.data.data, safeDiff: drafted.safeDiff },
 				correlationId: published.data.correlationId,
 				receipt: published.data.receipt
 			};
+		},
+
+		/** The same two requests with nobody reviewing in between. */
+		async mutate(
+			rawInput: ReleaseAuthorInput,
+			rawKeys: ReleaseMutationKeys
+		): Promise<ReleaseLiveResult<ReleaseLiveMutationData>> {
+			const drafted = await this.draft(rawInput, rawKeys.draft);
+			if (drafted.kind !== 'success') return drafted;
+			return this.publishDrafted(drafted.data, rawKeys.publish);
 		}
 	});
 }

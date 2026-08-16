@@ -3106,11 +3106,40 @@ export const api = {
 			recomputeAllConflicts();
 			syncScheduleCounters();
 		},
-		async publish(): Promise<{ ok: true } | { ok: false; reason: string }> {
+		/**
+		 * The same two-press ceremony the live release lane serves, so the
+		 * design fixture and the product tell one story: a draft states what
+		 * would go public — including which speaker names the commit copies
+		 * into public state — and only the second press publishes it.
+		 */
+		async draftPublication() {
 			await latency();
 			const blocks = scheduleBlockCount();
 			if (blocks > 0) {
-				return { ok: false, reason: `${blocks} blocking conflict${blocks === 1 ? '' : 's'} must be resolved first` };
+				return {
+					ok: false as const,
+					reason: `${blocks} conflict${blocks === 1 ? '' : 's'} on the schedule`
+				};
+			}
+			const placed = db.schedule.placements.length;
+			const sessions = new Set(db.schedule.placements.map((placement) => placement.sessionId));
+			const names = [...sessions]
+				.flatMap((id) => db.schedule.sessions.find((session) => session.id === id)?.speakers ?? [])
+				.map((speaker) => speaker.name)
+				.filter((name, index, all) => all.indexOf(name) === index);
+			return {
+				releaseNumber: (db.schedule.published ? 1 : 0) + 1,
+				sessions: sessions.size,
+				occurrences: placed,
+				declassifiedNames: names
+				// No server draft behind the fixture, so no continuation to carry.
+			};
+		},
+		async publishReviewed(): Promise<MutationOutcome> {
+			await latency();
+			const blocks = scheduleBlockCount();
+			if (blocks > 0) {
+				return { ok: false, reason: `${blocks} conflict${blocks === 1 ? '' : 's'} on the schedule` };
 			}
 			db.schedule.published = true;
 			return { ok: true };

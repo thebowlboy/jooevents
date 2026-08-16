@@ -13,6 +13,9 @@ import type {
 	SurfaceTemplate,
 	Track
 } from './types';
+import type { SchedulePublicationReview } from './release-workspace-adapter';
+
+export type { SchedulePublicationReview };
 
 /** Factual capabilities consumed by the tuned schedule board and session drawers. */
 export interface SchedulePagePort {
@@ -33,7 +36,15 @@ export interface SchedulePagePort {
 			durationMin: number;
 		}): Promise<BreakBlock>;
 		removeBreak(id: string): Promise<void>;
-		publish(): Promise<{ ok: true } | { ok: false; reason: string }>;
+		/**
+		 * First press: draft the next programme release and return what the
+		 * second press would make public. Nothing reaches public state here —
+		 * a person reads the diff, then commits it, so publication is reviewed
+		 * rather than fired.
+		 */
+		draftPublication(): Promise<SchedulePublicationReview | { ok: false; reason: string }>;
+		/** Second press: publish exactly the draft that was reviewed. */
+		publishReviewed(review: SchedulePublicationReview): Promise<MutationOutcome>;
 		createSession(input: {
 			title: string;
 			trackId: string;

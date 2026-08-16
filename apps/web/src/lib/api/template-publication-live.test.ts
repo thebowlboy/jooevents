@@ -8,7 +8,7 @@ import {
 	type TemplateArtifactSnapshotDto
 } from '@jooevents/contracts';
 import type { OrganizerFormsPort } from './view-models/intake-forms';
-import type { ReleaseLiveClient, ReleaseMutationKeys } from './operations/release-live';
+import type { ReleaseMutateClient, ReleaseMutationKeys } from './operations/release-live';
 import type { TemplateArtifactLiveClient } from './operations/template-artifacts-live';
 import { createTemplatePublicationLivePort } from './template-publication-live';
 
@@ -74,7 +74,7 @@ describe('live Template publication bridge', () => {
 			schemaVersion: 1, scope, currentProgramRelease: null, currentStyleSetRelease: null,
 			surfaceHeads: [], activeSurfaceReleases: []
 		};
-		const release: ReleaseLiveClient = {
+		const release: ReleaseMutateClient = {
 			async overview() { return { kind: 'success', data: overview, correlationId: id(90) }; },
 			async mutate(input: ReleaseAuthorInput, mutationKeys: ReleaseMutationKeys) {
 				calls.push(input);
