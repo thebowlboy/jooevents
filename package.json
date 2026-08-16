@@ -13,7 +13,7 @@
     "dev:server": "bun run --cwd apps/server dev",
     "start:server": "bun run apps/server/src/entry/bun.ts",
     "build": "bun run --cwd apps/web build",
-    "demo:build:cloudflare": "bun run build && ./scripts/check-demo-build.sh",
+    "demo:build:cloudflare": "bun run build && bun scripts/exclude-demo-private-overlay.ts && ./scripts/check-demo-build.sh",
     "demo:dev:cloudflare": "bun run demo:build:cloudflare && bunx wrangler dev --config wrangler.demo.jsonc",
     "demo:deploy:cloudflare": "bun run demo:build:cloudflare && bunx wrangler deploy --config wrangler.demo.jsonc",
     "demo:setup": "bun apps/setup-cli/src/index.ts",
