@@ -312,8 +312,12 @@ export function createSQLiteParticipantPortalReadSource(input: {
           value: stringifyAnswerValue(answer)
         })),
         target,
-        // Communicated state only: nothing is communicated while the
-        // outbound provider stays inert, so the standing stays `submitted`.
+        // Communicated state only. The eventual write source is a verified
+        // Communications delivery completion pinned to this submission's exact
+        // decision revision; it must never read `decision_heads` directly or
+        // treat provider acceptance / an operator "mark sent" as delivery.
+        // Until that completion projection exists, the inert provider means the
+        // only truthful participant standing is the original submission state.
         status: 'submitted' as const,
         statusNotifiedAt: null,
         submittedAt: summary.submittedAt,
