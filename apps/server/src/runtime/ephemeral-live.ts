@@ -275,7 +275,9 @@ import {
   DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG,
   createOperationHistoryReadOperationModule,
   WORKSPACE_OVERVIEW_READ_ACCESS_POLICY,
-  createWorkspaceOverviewOperationModule
+  createWorkspaceOverviewOperationModule,
+  WORKSPACE_SHELL_SUMMARY_READ_ACCESS_POLICY,
+  createWorkspaceShellSummaryOperationModule
 } from '@jooevents/workspace-operations';
 import {
   DeterministicTemplateEditService,
@@ -489,6 +491,9 @@ import {
   SQLiteEmailProviderConfigurationRepository
 } from '@jooevents/persistence/email-provider-configuration';
 import { createSQLiteWorkspaceOverviewProjection } from '@jooevents/persistence/workspace-overview';
+import {
+  createSQLiteWorkspaceShellSummaryProjection
+} from '@jooevents/persistence/workspace-shell-summary';
 import { createSQLiteOperationHistoryReader } from '@jooevents/persistence/operation-history';
 import {
   createWorkspaceTeamProvisioningSynchronizationPort,
@@ -2120,6 +2125,10 @@ export async function createEphemeralLiveRuntime(input: {
           permissionId: 'event.read' as const
         }),
         Object.freeze({
+          policy: WORKSPACE_SHELL_SUMMARY_READ_ACCESS_POLICY,
+          permissionId: 'event.read' as const
+        }),
+        Object.freeze({
           policy: ORGANIZER_COMMUNICATION_DRAFT_ACCESS_POLICY,
           permissionId: 'communication.draft' as const
         }),
@@ -2387,6 +2396,21 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: eventProfiles.authorityPrincipal,
       scopePartitionProfile: eventProfiles.scopePartition,
       requestCanonicalizationProfile: eventProfiles.requestCanonicalization
+    });
+    const workspaceShellSummaryOperations = createWorkspaceShellSummaryOperationModule({
+      workspaceId,
+      policy: WORKSPACE_SHELL_SUMMARY_READ_ACCESS_POLICY,
+      currentAuthority: authority.resolver,
+      read: createSQLiteWorkspaceShellSummaryProjection(database.sqlite),
+      clock,
+      ids: Object.freeze({
+        newInvocationId: () => parseInvocationId(crypto.randomUUID())
+      }),
+      crypto: Object.freeze({
+        authorityPrincipalKeyProfile: eventProfiles.authorityPrincipal,
+        scopePartitionProfile: eventProfiles.scopePartition,
+        requestCanonicalizationProfile: eventProfiles.requestCanonicalization
+      })
     });
     const currentEvent = Object.freeze({
       resolveCurrentEvent(requestedWorkspaceId: typeof workspaceId) {
@@ -4058,6 +4082,7 @@ export async function createEphemeralLiveRuntime(input: {
       effectRecheckSource
     );
     const source = composeOperationRegistryModules([
+      workspaceShellSummaryOperations,
       workspaceOverviewOperations,
       operationHistoryOperations,
       eventOperations,

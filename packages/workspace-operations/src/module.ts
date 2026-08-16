@@ -55,7 +55,11 @@ export const DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG: WorkspaceOverviewAreaCatal
     {
       area: 'overview',
       status: 'available',
-      capabilities: ['operation.history.list', 'workspace.overview.read']
+      capabilities: [
+        'operation.history.list',
+        'workspace.overview.read',
+        'workspace.shell.summary.read'
+      ]
     },
     {
       area: 'submissions',

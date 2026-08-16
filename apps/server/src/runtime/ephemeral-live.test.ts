@@ -57,7 +57,8 @@ import {
   templateArtifactReviewDraftOperationResultSchema,
   templateEditClassifyOperationResultSchema,
   templateEditModelChoicesOperationResultSchema,
-  templateEditReviseOperationResultSchema
+  templateEditReviseOperationResultSchema,
+  workspaceShellSummaryReadResultSchema
 } from '@jooevents/contracts';
 import { workspaceOverviewReadResultSchema } from '@jooevents/contracts/workspace-overview';
 import {
@@ -1220,6 +1221,10 @@ describe('ephemeral live Foundation server composition', () => {
       {
         name: 'workspace.overview.read', version: 1, effect: 'read',
         bindings: ['GET /api/workspace/overview']
+      },
+      {
+        name: 'workspace.shell.summary.read', version: 1, effect: 'read',
+        bindings: ['GET /api/workspace/shell-summary']
       }
     ]);
     const history = manifest.operations.find((operation) =>
@@ -1494,6 +1499,23 @@ describe('ephemeral live Foundation server composition', () => {
       correlationId: noEventOverviewCorrelation
     });
 
+    const noEventShellCorrelation = crypto.randomUUID();
+    const noEventShellResponse = await runtime.app.request('/api/workspace/shell-summary', {
+      headers: eventHeaders({ session, correlationId: noEventShellCorrelation })
+    });
+    expect(noEventShellResponse.status).toBe(200);
+    expect(workspaceShellSummaryReadResultSchema.parse(
+      await noEventShellResponse.json()
+    )).toEqual({
+      kind: 'success',
+      data: {
+        schemaVersion: 1,
+        workspace: { id: runtime.workspaceId, name: 'JooEvents' },
+        event: null
+      },
+      correlationId: noEventShellCorrelation
+    });
+
     const noEventTriageCorrelation = crypto.randomUUID();
     const noEventTriageResponse = await runtime.app.request(
       '/api/events/current/submissions/triage',
@@ -1614,6 +1636,26 @@ describe('ephemeral live Foundation server composition', () => {
         event: created.data.event
       },
       correlationId: currentCorrelation
+    });
+
+    const shellCorrelation = crypto.randomUUID();
+    const shellResponse = await runtime.app.request('/api/workspace/shell-summary', {
+      headers: eventHeaders({ session, correlationId: shellCorrelation })
+    });
+    expect(workspaceShellSummaryReadResultSchema.parse(await shellResponse.json())).toEqual({
+      kind: 'success',
+      data: {
+        schemaVersion: 1,
+        workspace: { id: runtime.workspaceId, name: 'JooEvents' },
+        event: {
+          id: created.data.event.id,
+          name: eventInput.name,
+          timezone: eventInput.timezone,
+          startDate: eventInput.startDate,
+          endDate: eventInput.endDate
+        }
+      },
+      correlationId: shellCorrelation
     });
 
     const fieldRegistryResponse = await runtime.app.request(

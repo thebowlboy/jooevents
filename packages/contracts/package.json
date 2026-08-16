@@ -19,6 +19,7 @@
     "./sessions": "./src/sessions.ts",
     "./submission-triage": "./src/submission-triage.ts",
     "./workspace-team": "./src/workspace-team.ts",
+    "./workspace-shell-summary": "./src/workspace-shell-summary.ts",
     "./workspace-overview": "./src/workspace-overview.ts"
   },
   "scripts": { "check": "tsc --noEmit", "test": "bun test" },

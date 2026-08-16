@@ -32,3 +32,4 @@ export * from './submissions';
 export * from './template-authoring';
 export * from './tasks';
 export * from './workspace-team';
+export * from './workspace-shell-summary';

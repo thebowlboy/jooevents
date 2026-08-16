@@ -11,6 +11,7 @@
     "./foundation-ephemeral-sqlite-runtime": "./src/sqlite/foundation-ephemeral-sqlite-runtime.ts",
     "./retained-backup": "./src/sqlite/retained-backup.ts",
     "./workspace-overview": "./src/sqlite/workspace-overview.ts",
+    "./workspace-shell-summary": "./src/sqlite/workspace-shell-summary.ts",
     "./operation-history": "./src/sqlite/operation-history.ts",
     "./sqlite/workspace-team": "./src/sqlite/workspace-team.ts",
     "./sqlite/workspace-team-direct-effect-domain": "./src/sqlite/workspace-team-direct-effect-domain.ts",
