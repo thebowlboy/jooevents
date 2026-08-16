@@ -1,3 +1,4 @@
+import '../../crypto-uuid-fallback';
 import type { AccessContext, ParticipantContext } from '@jooevents/contracts';
 import type { ApiResult } from '../client';
 import { resolveDataset, sampleLatencyMs } from '../sample/registry';

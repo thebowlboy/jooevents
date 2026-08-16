@@ -82,16 +82,23 @@
 				: dateError;
 		if (nameError || dateError || !ready || creating) return;
 		creating = true;
-		idempotencyKey ||= crypto.randomUUID();
-		const outcome = await createEvent({
-			name: name.trim(),
-			timezone,
-			startDate,
-			endDate,
-			idempotencyKey
-		});
-		if (!outcome.ok) {
-			requestError = outcome.reason;
+		try {
+			idempotencyKey ||= crypto.randomUUID();
+			const outcome = await createEvent({
+				name: name.trim(),
+				timezone,
+				startDate,
+				endDate,
+				idempotencyKey
+			});
+			if (!outcome.ok) {
+				requestError = outcome.reason;
+				creating = false;
+				return;
+			}
+		} catch {
+			// An unexpected throw must not leave the control busy forever.
+			requestError = 'The event could not be created. Try again.';
 			creating = false;
 			return;
 		}

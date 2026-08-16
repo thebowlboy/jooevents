@@ -1,3 +1,4 @@
+import '../../crypto-uuid-fallback';
 import { signInLinkRequestResultSchema } from '@jooevents/contracts';
 import { getAccessContext } from '../access';
 import { signOut, startExternalSignIn } from '../auth';
