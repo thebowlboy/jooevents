@@ -154,10 +154,13 @@ import {
 } from '@jooevents/event';
 import {
   EVENT_CREATE_REQUEST_HASH_PROFILE,
+  EVENT_SELECT_REQUEST_HASH_PROFILE,
   EVENT_MANAGE_ACCESS_POLICY,
   EVENT_READ_ACCESS_POLICY,
   EVENT_SETTINGS_UPDATE_REQUEST_HASH_PROFILE,
   createEventOperationModule,
+  createEventListReadOperationModule,
+  createEventSelectOperationModule,
   createEventSettingsReadOperationModule,
   createEventSettingsUpdateOperationModule
 } from '@jooevents/event-operations';
@@ -317,6 +320,7 @@ import {
   createSQLiteDecisionDirectEffectDomainRegistration,
   createSQLiteEngagementDirectEffectDomainRegistration,
   createSQLiteEventEffectDomainRegistration,
+  createSQLiteEventSelectEffectDomainRegistration,
   createSQLiteEventSettingsDirectEffectDomainRegistration,
   createSQLiteEventSettingsInitializer,
   createSQLiteTemplateArtifactNativeEffectDomainRegistrations,
@@ -2059,6 +2063,10 @@ export async function createEphemeralLiveRuntime(input: {
       ids: Object.freeze({ newEventId: () => crypto.randomUUID() }),
       createdEventInitializer
     });
+    const eventSelectDirectDomain = createSQLiteEventSelectEffectDomainRegistration({
+      sqlite: database.sqlite,
+      workspaceId
+    });
     const engagementReadRepository = new SQLiteEngagementRepository(database.sqlite);
     // The governed name-declassification source: personId → the person's own
     // participant evidence → the least-disclosure triage source row's
@@ -2342,6 +2350,42 @@ export async function createEphemeralLiveRuntime(input: {
       idempotencyCredentialProfile: eventProfiles.idempotencyCredential,
       idempotencyCredentialSealer,
       mountLegacyDirectCreate: true
+    });
+    const eventListOperations = createEventListReadOperationModule({
+      workspaceId,
+      readPolicy: EVENT_READ_ACCESS_POLICY,
+      currentAuthority: authority.resolver,
+      list: Object.freeze({
+        readList(requestedWorkspaceId: typeof workspaceId) {
+          if (requestedWorkspaceId !== workspaceId) {
+            throw new TypeError('event_list_read_workspace_mismatch');
+          }
+          const list = events.readEventListProjection(workspaceId);
+          if (!list) throw new TypeError('event_workspace_set_missing');
+          return list;
+        }
+      }),
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      authorityPrincipalKeyProfile: eventProfiles.authorityPrincipal,
+      scopePartitionProfile: eventProfiles.scopePartition,
+      requestCanonicalizationProfile: eventProfiles.requestCanonicalization
+    });
+    const eventSelectOperations = createEventSelectOperationModule({
+      workspaceId,
+      managePolicy: EVENT_MANAGE_ACCESS_POLICY,
+      currentAuthority: authority.resolver,
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      authorityPrincipalKeyProfile: eventProfiles.authorityPrincipal,
+      scopePartitionProfile: eventProfiles.scopePartition,
+      requestCanonicalizationProfile: eventProfiles.requestCanonicalization,
+      requestHashSealer: createHmacRequestHashSealer({
+        profile: EVENT_SELECT_REQUEST_HASH_PROFILE,
+        keyBytes: randomHmacKey()
+      }),
+      idempotencyCredentialProfile: eventProfiles.idempotencyCredential,
+      idempotencyCredentialSealer
     });
     const eventSettingsReadOperations = createEventSettingsReadOperationModule({
       workspaceId,
@@ -4032,6 +4076,7 @@ export async function createEphemeralLiveRuntime(input: {
     });
     const domains = createSQLiteEffectDomainAdapterRegistry([
       eventDirectDomain,
+      eventSelectDirectDomain,
       eventSettingsDirectDomain,
       ...templateArtifactNativeDomains,
       templateEditDomain,
@@ -4086,6 +4131,8 @@ export async function createEphemeralLiveRuntime(input: {
       workspaceOverviewOperations,
       operationHistoryOperations,
       eventOperations,
+      eventListOperations,
+      eventSelectOperations,
       eventSettingsReadOperations,
       eventSettingsUpdateOperations,
       templateArtifactReadOperations,

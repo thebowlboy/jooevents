@@ -4,10 +4,14 @@ import {
   eventCreateResultSchema,
   eventCreateSafeDiffSchema,
   eventCreationCompensationEligibilitySchema,
+  eventSelectInputSchema,
+  eventSelectResultSchema,
   type EventCreateInput,
   type EventCreateResult,
   type EventCreateSafeDiff,
-  type EventCreationCompensationEligibility
+  type EventCreationCompensationEligibility,
+  type EventSelectInput,
+  type EventSelectResult
 } from '@jooevents/contracts';
 import {
   encodeCanonicalJson,
@@ -44,6 +48,7 @@ export type EventPlanningErrorCode =
   | 'wrong_workspace'
   | 'stale_event_set'
   | 'event_already_selected'
+  | 'event_missing'
   | 'invalid_plan';
 
 export class EventPlanningError extends Error {
@@ -63,7 +68,19 @@ export interface EventCreatePlan {
   readonly eventSetGuardDigest: string;
   readonly resultingEventSetVersion: AggregateVersion;
   readonly resultingEventSetGuardDigest: string;
+  readonly previousEventId: Event['id'] | null;
   readonly after: Event;
+}
+
+export interface EventSelectPlan {
+  readonly action: 'select';
+  readonly workspaceId: string;
+  readonly expectedEventSetVersion: AggregateVersion;
+  readonly eventSetGuardDigest: string;
+  readonly resultingEventSetVersion: AggregateVersion;
+  readonly resultingEventSetGuardDigest: string;
+  readonly previousEventId: Event['id'] | null;
+  readonly selected: Event;
 }
 
 export interface PlanEventCreationInput {
@@ -157,9 +174,6 @@ export function planEventCreation(input: PlanEventCreationInput): EventCreatePla
   if (authorInput.expectedEventSetVersion !== input.eventSet.version) {
     throw new EventPlanningError('stale_event_set');
   }
-  if (input.eventSet.currentEventId !== null) {
-    throw new EventPlanningError('event_already_selected');
-  }
   const resultingEventSetVersion = parseAggregateVersion(input.eventSet.version + 1);
   const after = createEvent({
     id: input.server.eventId,
@@ -184,6 +198,7 @@ export function planEventCreation(input: PlanEventCreationInput): EventCreatePla
     eventSetGuardDigest: workspaceEventSetDigest(input.eventSet),
     resultingEventSetVersion,
     resultingEventSetGuardDigest: workspaceEventSetDigest(nextSet),
+    previousEventId: input.eventSet.currentEventId,
     after
   });
 }
@@ -198,6 +213,7 @@ export function parseEventCreatePlan(value: unknown): EventCreatePlan {
       'eventSetGuardDigest',
       'resultingEventSetVersion',
       'resultingEventSetGuardDigest',
+      'previousEventId',
       'after'
     ]);
     if (record.action !== 'create' || typeof record.workspaceId !== 'string') {
@@ -225,19 +241,21 @@ export function parseEventCreatePlan(value: unknown): EventCreatePlan {
       createdByUserId: afterRecord.createdByUserId as string,
       createdAt: afterRecord.createdAt as string
     });
-    const plan = deepFreeze({
+    const expectedEventSetVersion = parseAggregateVersion(record.expectedEventSetVersion);
+    const before = createWorkspaceEventSet({
+      workspaceId: record.workspaceId,
+      version: expectedEventSetVersion,
+      currentEventId: record.previousEventId as string | null
+    });
+    const plan: EventCreatePlan = deepFreeze({
       action: 'create' as const,
       workspaceId: record.workspaceId,
-      expectedEventSetVersion: parseAggregateVersion(record.expectedEventSetVersion),
+      expectedEventSetVersion,
       eventSetGuardDigest: exactDigest(record.eventSetGuardDigest),
       resultingEventSetVersion: parseAggregateVersion(record.resultingEventSetVersion),
       resultingEventSetGuardDigest: exactDigest(record.resultingEventSetGuardDigest),
+      previousEventId: before.currentEventId,
       after
-    });
-    const before = createWorkspaceEventSet({
-      workspaceId: plan.workspaceId,
-      version: plan.expectedEventSetVersion,
-      currentEventId: null
     });
     if (validateEventCreatePlan(before, plan) !== null) {
       throw new EventPlanningError('invalid_plan');
@@ -260,7 +278,7 @@ export function validateEventCreatePlan(
       || workspaceEventSetDigest(eventSet) !== plan.eventSetGuardDigest) {
     return 'stale_event_set';
   }
-  if (eventSet.currentEventId !== null) return 'event_already_selected';
+  if (eventSet.currentEventId !== plan.previousEventId) return 'stale_event_set';
   if (plan.action !== 'create'
       || plan.after.version !== 1
       || plan.resultingEventSetVersion !== plan.expectedEventSetVersion + 1) {
@@ -287,7 +305,7 @@ export function diffEventCreatePlan(plan: EventCreatePlan): EventCreateSafeDiff 
     action: 'create',
     before: null,
     after: projectEvent(plan.after),
-    currentSelection: { before: null, after: plan.after.id },
+    currentSelection: { before: plan.previousEventId, after: plan.after.id },
     eventSetVersion: {
       before: plan.expectedEventSetVersion,
       after: plan.resultingEventSetVersion
@@ -299,6 +317,139 @@ export function eventCreateResult(plan: EventCreatePlan): EventCreateResult {
   return eventCreateResultSchema.parse({
     eventSetVersion: plan.resultingEventSetVersion,
     event: projectEvent(plan.after)
+  });
+}
+
+function resultingSelectedEventSet(plan: EventSelectPlan): WorkspaceEventSet {
+  return createWorkspaceEventSet({
+    workspaceId: plan.workspaceId,
+    version: plan.resultingEventSetVersion,
+    currentEventId: plan.selected.id
+  });
+}
+
+export function planEventSelection(input: {
+  readonly eventSet: WorkspaceEventSet;
+  readonly targetEvent: Event | undefined;
+  readonly authorInput: EventSelectInput;
+}): EventSelectPlan {
+  const authorInput = eventSelectInputSchema.parse(input.authorInput);
+  if (authorInput.expectedEventSetVersion !== input.eventSet.version) {
+    throw new EventPlanningError('stale_event_set');
+  }
+  if (!input.targetEvent || input.targetEvent.id !== authorInput.eventId) {
+    throw new EventPlanningError('event_missing');
+  }
+  if (input.targetEvent.workspaceId !== input.eventSet.workspaceId) {
+    throw new EventPlanningError('wrong_workspace');
+  }
+  if (input.eventSet.currentEventId === input.targetEvent.id) {
+    throw new EventPlanningError('event_already_selected');
+  }
+  const resultingEventSetVersion = parseAggregateVersion(input.eventSet.version + 1);
+  const plan: EventSelectPlan = {
+    action: 'select',
+    workspaceId: input.eventSet.workspaceId,
+    expectedEventSetVersion: input.eventSet.version,
+    eventSetGuardDigest: workspaceEventSetDigest(input.eventSet),
+    resultingEventSetVersion,
+    resultingEventSetGuardDigest: '',
+    previousEventId: input.eventSet.currentEventId,
+    selected: input.targetEvent
+  };
+  const next = resultingSelectedEventSet(plan);
+  return deepFreeze({ ...plan, resultingEventSetGuardDigest: workspaceEventSetDigest(next) });
+}
+
+export function parseEventSelectPlan(value: unknown): EventSelectPlan {
+  try {
+    const record = exactRecord(value, [
+      'action', 'workspaceId', 'expectedEventSetVersion', 'eventSetGuardDigest',
+      'resultingEventSetVersion', 'resultingEventSetGuardDigest', 'previousEventId', 'selected'
+    ]);
+    if (record.action !== 'select' || typeof record.workspaceId !== 'string') {
+      throw new EventPlanningError('invalid_plan');
+    }
+    const selectedRecord = exactRecord(record.selected, [
+      'id', 'workspaceId', 'name', 'timezone', 'startDate', 'endDate', 'version',
+      'createdByUserId', 'createdAt'
+    ]);
+    const selected = parseEventState({
+      id: selectedRecord.id as string,
+      workspaceId: selectedRecord.workspaceId as string,
+      name: selectedRecord.name as string,
+      timezone: selectedRecord.timezone as string,
+      startDate: selectedRecord.startDate as string,
+      endDate: selectedRecord.endDate as string,
+      version: selectedRecord.version as number,
+      createdByUserId: selectedRecord.createdByUserId as string,
+      createdAt: selectedRecord.createdAt as string
+    });
+    const expectedEventSetVersion = parseAggregateVersion(record.expectedEventSetVersion);
+    const before = createWorkspaceEventSet({
+      workspaceId: record.workspaceId,
+      version: expectedEventSetVersion,
+      currentEventId: record.previousEventId as string | null
+    });
+    const plan: EventSelectPlan = deepFreeze({
+      action: 'select' as const,
+      workspaceId: record.workspaceId,
+      expectedEventSetVersion,
+      eventSetGuardDigest: exactDigest(record.eventSetGuardDigest),
+      resultingEventSetVersion: parseAggregateVersion(record.resultingEventSetVersion),
+      resultingEventSetGuardDigest: exactDigest(record.resultingEventSetGuardDigest),
+      previousEventId: before.currentEventId,
+      selected
+    });
+    if (validateEventSelectPlan(before, selected, plan) !== null) {
+      throw new EventPlanningError('invalid_plan');
+    }
+    return plan;
+  } catch (error) {
+    if (error instanceof EventPlanningError && error.code === 'invalid_plan') throw error;
+    throw new EventPlanningError('invalid_plan');
+  }
+}
+
+export function validateEventSelectPlan(
+  eventSet: WorkspaceEventSet,
+  targetEvent: Event | undefined,
+  plan: EventSelectPlan
+): EventPlanningErrorCode | null {
+  if (eventSet.workspaceId !== plan.workspaceId || plan.selected.workspaceId !== plan.workspaceId) {
+    return 'wrong_workspace';
+  }
+  if (eventSet.version !== plan.expectedEventSetVersion
+      || workspaceEventSetDigest(eventSet) !== plan.eventSetGuardDigest
+      || eventSet.currentEventId !== plan.previousEventId) {
+    return 'stale_event_set';
+  }
+  if (!targetEvent || targetEvent.id !== plan.selected.id) return 'event_missing';
+  if (eventStateDigest(targetEvent) !== eventStateDigest(plan.selected)) return 'stale_event_set';
+  if (eventSet.currentEventId === plan.selected.id) return 'event_already_selected';
+  if (plan.action !== 'select'
+      || plan.resultingEventSetVersion !== plan.expectedEventSetVersion + 1) {
+    return 'invalid_plan';
+  }
+  if (workspaceEventSetDigest(resultingSelectedEventSet(plan))
+      !== plan.resultingEventSetGuardDigest) return 'invalid_plan';
+  return null;
+}
+
+export function applyEventSelectPlan(
+  eventSet: WorkspaceEventSet,
+  targetEvent: Event | undefined,
+  plan: EventSelectPlan
+): WorkspaceEventSet {
+  const issue = validateEventSelectPlan(eventSet, targetEvent, plan);
+  if (issue) throw new EventPlanningError(issue);
+  return resultingSelectedEventSet(plan);
+}
+
+export function eventSelectResult(plan: EventSelectPlan): EventSelectResult {
+  return eventSelectResultSchema.parse({
+    eventSetVersion: plan.resultingEventSetVersion,
+    event: projectEvent(plan.selected)
   });
 }
 

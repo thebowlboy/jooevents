@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { EventCreateInput } from '@jooevents/contracts';
+import type { EventCreateInput, EventSelectInput } from '@jooevents/contracts';
 import {
   EVENT_CREATION_CORRECTION_DEFINITION,
   EventDependencyRegistryValidationError,
@@ -8,6 +8,7 @@ import {
   EventProjectionError,
   EventValidationError,
   applyEventCreatePlan,
+  applyEventSelectPlan,
   assessEventCreationCompensation,
   createEvent,
   createEventDependencyContributorRegistry,
@@ -15,16 +16,21 @@ import {
   diffEventCreatePlan,
   eventCreatePlanDigest,
   eventCreateResult,
+  eventSelectResult,
   parseEventCreatePlan,
+  parseEventSelectPlan,
   parseEventState,
   parseWorkspaceEventSetState,
   planEventCreation,
+  planEventSelection,
   projectCurrentEvent,
   validateEventCreatePlan,
+  validateEventSelectPlan,
   workspaceEventSetDigest,
   workspaceEventSetGuardId,
   type Event,
   type EventCreatePlan,
+  type EventSelectPlan,
   type EventDependencyContributorRef,
   type EventDependencyScope,
   type EventDependencySnapshotSource,
@@ -274,11 +280,10 @@ describe('Event creation planning', () => {
     expect(validateEventCreatePlan(applied.eventSet, createPlan)).toBe('stale_event_set');
   });
 
-  test('rejects wrong workspace, stale set, and an already selected Event', () => {
+  test('rejects wrong workspace and stale set while allowing another Event', () => {
     const cases: readonly [() => unknown, EventPlanningError['code']][] = [
       [() => plan({ serverWorkspaceId: otherWorkspaceId }), 'wrong_workspace'],
-      [() => plan({ authorInput: authorInput({ expectedEventSetVersion: 2 }) }), 'stale_event_set'],
-      [() => plan({ eventSet: createWorkspaceEventSet({ workspaceId, version: 1, currentEventId: otherEventId }) }), 'event_already_selected']
+      [() => plan({ authorInput: authorInput({ expectedEventSetVersion: 2 }) }), 'stale_event_set']
     ];
     for (const [run, code] of cases) {
       try {
@@ -289,6 +294,17 @@ describe('Event creation planning', () => {
         expect((error as EventPlanningError).code).toBe(code);
       }
     }
+    const selected = createWorkspaceEventSet({
+      workspaceId, version: 2, currentEventId: otherEventId
+    });
+    const next = plan({
+      eventSet: selected,
+      authorInput: authorInput({ expectedEventSetVersion: 2 })
+    });
+    expect(String(next.previousEventId)).toBe(otherEventId);
+    expect(diffEventCreatePlan(next).currentSelection).toEqual({
+      before: otherEventId, after: eventId
+    });
   });
 
   test('detects a changed guard even when the set version is reused', () => {
@@ -296,6 +312,69 @@ describe('Event creation planning', () => {
     const changed = createWorkspaceEventSet({ workspaceId, version: 1, currentEventId: otherEventId });
     expect(validateEventCreatePlan(changed, createPlan)).toBe('stale_event_set');
     expect(() => applyEventCreatePlan(changed, createPlan)).toThrow(EventPlanningError);
+  });
+});
+
+describe('Event selection planning', () => {
+  function selectPlan(input?: {
+    readonly eventSet?: WorkspaceEventSet;
+    readonly targetEvent?: Event;
+    readonly authorInput?: EventSelectInput;
+  }): EventSelectPlan {
+    return planEventSelection({
+      eventSet: input?.eventSet ?? createWorkspaceEventSet({
+        workspaceId, version: 3, currentEventId: otherEventId
+      }),
+      targetEvent: input?.targetEvent ?? initialEvent(),
+      authorInput: input?.authorInput ?? { eventId, expectedEventSetVersion: 3 }
+    });
+  }
+
+  test('round-trips and applies an exact workspace-current selection', () => {
+    const before = createWorkspaceEventSet({
+      workspaceId, version: 3, currentEventId: otherEventId
+    });
+    const planned = selectPlan({ eventSet: before });
+    expect(parseEventSelectPlan(JSON.parse(JSON.stringify(planned)))).toEqual(planned);
+    expect(validateEventSelectPlan(before, initialEvent(), planned)).toBeNull();
+    expect(applyEventSelectPlan(before, initialEvent(), planned)).toEqual(
+      createWorkspaceEventSet({ workspaceId, version: 4, currentEventId: eventId })
+    );
+    expect(eventSelectResult(planned)).toEqual({
+      eventSetVersion: 4,
+      event: {
+        id: eventId,
+        name: 'JooConf 2027',
+        timezone: 'Asia/Singapore',
+        startDate: '2027-04-16',
+        endDate: '2027-04-18',
+        version: 1
+      }
+    });
+  });
+
+  test('refuses stale, missing, already-current, and cross-workspace targets', () => {
+    const cases: readonly [() => unknown, EventPlanningError['code']][] = [
+      [() => selectPlan({ authorInput: { eventId, expectedEventSetVersion: 2 } }), 'stale_event_set'],
+      [() => planEventSelection({
+        eventSet: createWorkspaceEventSet({ workspaceId, version: 3, currentEventId: otherEventId }),
+        targetEvent: undefined,
+        authorInput: { eventId, expectedEventSetVersion: 3 }
+      }), 'event_missing'],
+      [() => selectPlan({
+        eventSet: createWorkspaceEventSet({ workspaceId, version: 3, currentEventId: eventId })
+      }), 'event_already_selected'],
+      [() => selectPlan({ targetEvent: initialEvent({ workspaceId: otherWorkspaceId }) }), 'wrong_workspace']
+    ];
+    for (const [run, code] of cases) {
+      try {
+        run();
+        throw new Error('expected Event selection to fail');
+      } catch (error) {
+        expect(error).toBeInstanceOf(EventPlanningError);
+        expect((error as EventPlanningError).code).toBe(code);
+      }
+    }
   });
 });
 

@@ -1,15 +1,21 @@
 import { Database } from 'bun:sqlite';
 import {
   applyEventCreatePlan,
+  applyEventSelectPlan,
   eventCreatePlanDigest,
   eventCreateResult,
+  eventSelectResult,
   parseEventCreatePlan,
+  parseEventSelectPlan,
   parseEventState,
   parseWorkspaceEventSetState,
   projectCurrentEvent,
+  projectEventList,
   validateEventCreatePlan,
+  validateEventSelectPlan,
   type Event,
   type EventCreatePlan,
+  type EventSelectPlan,
   type WorkspaceEventSet
 } from '@jooevents/event';
 import {
@@ -18,7 +24,7 @@ import {
   type EventId,
   type WorkspaceId
 } from '@jooevents/kernel';
-import type { CurrentEventProjection } from '@jooevents/contracts';
+import type { CurrentEventProjection, EventListProjection } from '@jooevents/contracts';
 import type { SQLiteOperatorEventRelationshipSource } from './operator-authority-repositories';
 
 /** This schema contributes to the accepted epoch-2 baseline and may also serve isolated fixtures. */
@@ -228,6 +234,18 @@ export class SQLiteEventSpineRepository {
     return this.readEventHead({ workspaceId, eventId });
   }
 
+  readEventHeads(workspaceIdInput: string): readonly Event[] {
+    const workspaceId = parseWorkspaceId(workspaceIdInput);
+    return Object.freeze(this.sqlite.query<EventHeadRow, [WorkspaceId]>(`
+      SELECT h.workspace_id, h.id, h.name, h.timezone, h.start_date, h.end_date,
+             h.version, h.created_by_user_id, h.created_at_ms,
+             h.create_plan_digest_sha256
+        FROM event_spine_heads h
+       WHERE h.workspace_id = ?
+       ORDER BY h.start_date DESC, h.name, h.id
+    `).all(workspaceId).map(eventFromRow));
+  }
+
   readCurrentEventState(workspaceIdInput: string): CurrentEventState | undefined {
     const eventSet = this.readEventSet(workspaceIdInput);
     if (!eventSet) return undefined;
@@ -245,6 +263,13 @@ export class SQLiteEventSpineRepository {
   readCurrentEventProjection(workspaceId: string): CurrentEventProjection | undefined {
     const current = this.readCurrentEventState(workspaceId);
     return current ? projectCurrentEvent(current.eventSet, current.currentEvent) : undefined;
+  }
+
+  readEventListProjection(workspaceId: string): EventListProjection | undefined {
+    const eventSet = this.readEventSet(workspaceId);
+    return eventSet
+      ? projectEventList(eventSet, this.readEventHeads(eventSet.workspaceId))
+      : undefined;
   }
 
   bootstrapWorkspaceEventSet(workspaceIdInput: string): WorkspaceEventSet {
@@ -300,15 +325,16 @@ export class SQLiteEventSpineRepository {
       applied.event.workspaceId,
       applied.event.id
     );
-    changedExactlyOnce(this.sqlite.query<never, [number, string, string, number]>(`
+    changedExactlyOnce(this.sqlite.query<never, [number, string, string, number, string | null]>(`
       UPDATE event_spine_workspace_sets
          SET version = ?, current_event_id = ?
-       WHERE workspace_id = ? AND version = ? AND current_event_id IS NULL
+       WHERE workspace_id = ? AND version = ? AND current_event_id IS ?
     `).run(
       applied.eventSet.version,
       applied.event.id,
       applied.eventSet.workspaceId,
-      currentSet.version
+      currentSet.version,
+      currentSet.currentEventId
     ));
     return Object.freeze({
       eventSet: applied.eventSet,
@@ -319,6 +345,47 @@ export class SQLiteEventSpineRepository {
   applyEventCreatePlan(plan: EventCreatePlan) {
     const committed = this.commitEventCreatePlan(plan);
     return eventCreateResult(plan);
+  }
+
+  commitEventSelectPlan(plan: EventSelectPlan): CurrentEventState {
+    requireTransaction(this.sqlite);
+    let canonicalPlan: EventSelectPlan;
+    try {
+      canonicalPlan = parseEventSelectPlan(plan);
+    } catch (error) {
+      throw new SQLiteEventSpineError('event_head_data_corrupt', error);
+    }
+    const currentSet = this.requireEventSet(canonicalPlan.workspaceId);
+    const targetEvent = this.readEventHead({
+      workspaceId: canonicalPlan.workspaceId,
+      eventId: canonicalPlan.selected.id
+    });
+    const issue = validateEventSelectPlan(currentSet, targetEvent, canonicalPlan);
+    if (issue) throw new SQLiteEventSpineError(
+      issue === 'stale_event_set' || issue === 'event_already_selected'
+        ? 'stale_event_set'
+        : issue === 'event_missing'
+          ? 'current_event_missing'
+          : 'event_head_data_corrupt'
+    );
+    const eventSet = applyEventSelectPlan(currentSet, targetEvent, canonicalPlan);
+    changedExactlyOnce(this.sqlite.query<never, [number, string, string, number, string | null]>(`
+      UPDATE event_spine_workspace_sets
+         SET version = ?, current_event_id = ?
+       WHERE workspace_id = ? AND version = ? AND current_event_id IS ?
+    `).run(
+      eventSet.version,
+      canonicalPlan.selected.id,
+      eventSet.workspaceId,
+      currentSet.version,
+      currentSet.currentEventId
+    ));
+    return Object.freeze({ eventSet, currentEvent: canonicalPlan.selected });
+  }
+
+  applyEventSelectPlan(plan: EventSelectPlan) {
+    this.commitEventSelectPlan(plan);
+    return eventSelectResult(plan);
   }
 
 }

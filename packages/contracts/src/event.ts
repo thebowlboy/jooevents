@@ -67,6 +67,25 @@ export const currentEventProjectionSchema = z.discriminatedUnion('kind', [
   })
 ]);
 
+export const eventListProjectionSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  eventSetVersion: eventVersionSchema,
+  currentEventId: eventIdSchema.nullable(),
+  events: z.array(eventSchema).max(10_000)
+}).superRefine((projection, context) => {
+  const ids = projection.events.map((event) => event.id);
+  if (new Set(ids).size !== ids.length) {
+    context.addIssue({ code: 'custom', message: 'event ids must be unique', path: ['events'] });
+  }
+  if (projection.currentEventId !== null && !ids.includes(projection.currentEventId)) {
+    context.addIssue({
+      code: 'custom',
+      message: 'current event must be present in the collection',
+      path: ['currentEventId']
+    });
+  }
+});
+
 /** Current workspace and authority are resolved from verified invocation evidence. */
 export const currentEventReadInputSchema = z.strictObject({});
 
@@ -83,6 +102,10 @@ export const currentEventCanonicalResultSchema = z.discriminatedUnion('kind', [
 
 export const currentEventReadResultSchema =
   createReadOperationResultSchema(currentEventProjectionSchema);
+
+/** Current workspace and authority are resolved from verified invocation evidence. */
+export const eventListReadInputSchema = z.strictObject({});
+export const eventListReadResultSchema = createReadOperationResultSchema(eventListProjectionSchema);
 
 export const eventCreateInputSchema = z.strictObject({
   expectedEventSetVersion: eventVersionSchema,
@@ -111,7 +134,7 @@ export const eventCreateSafeDiffSchema = z.strictObject({
   before: z.null(),
   after: eventSchema,
   currentSelection: z.strictObject({
-    before: z.null(),
+    before: eventIdSchema.nullable(),
     after: eventIdSchema
   }),
   eventSetVersion: z.strictObject({
@@ -128,6 +151,19 @@ export const eventCreateResultSchema = z.strictObject({
 export const eventCreateOperationResultSchema =
   createEffectfulOperationResultSchema(eventCreateResultSchema);
 
+export const eventSelectInputSchema = z.strictObject({
+  eventId: eventIdSchema,
+  expectedEventSetVersion: eventVersionSchema
+});
+
+export const eventSelectResultSchema = z.strictObject({
+  eventSetVersion: eventVersionSchema,
+  event: eventSchema
+});
+
+export const eventSelectOperationResultSchema =
+  createEffectfulOperationResultSchema(eventSelectResultSchema);
+
 /** Exact public schema identities projected into the operator operation manifest. */
 export const EVENT_OPERATION_SCHEMA_REFS = Object.freeze({
   currentRead: createOperationSchemaManifestRefs({
@@ -136,11 +172,23 @@ export const EVENT_OPERATION_SCHEMA_REFS = Object.freeze({
     resultKey: 'schema.event.current-read.operator-result',
     resultSchema: currentEventReadResultSchema
   }),
+  listRead: createOperationSchemaManifestRefs({
+    inputKey: 'schema.event.list-read.input',
+    inputSchema: eventListReadInputSchema,
+    resultKey: 'schema.event.list-read.operator-result',
+    resultSchema: eventListReadResultSchema
+  }),
   create: createOperationSchemaManifestRefs({
     inputKey: 'schema.event.create.input',
     inputSchema: eventCreateInputSchema,
     resultKey: 'schema.event.create.operator-result',
     resultSchema: eventCreateOperationResultSchema
+  }),
+  select: createOperationSchemaManifestRefs({
+    inputKey: 'schema.event.select.input',
+    inputSchema: eventSelectInputSchema,
+    resultKey: 'schema.event.select.operator-result',
+    resultSchema: eventSelectOperationResultSchema
   })
 });
 
@@ -170,11 +218,17 @@ export type CurrentEventProjection = z.infer<typeof currentEventProjectionSchema
 export type CurrentEventReadInput = z.infer<typeof currentEventReadInputSchema>;
 export type CurrentEventCanonicalResult = z.infer<typeof currentEventCanonicalResultSchema>;
 export type CurrentEventReadResult = z.infer<typeof currentEventReadResultSchema>;
+export type EventListProjection = z.infer<typeof eventListProjectionSchema>;
+export type EventListReadInput = z.infer<typeof eventListReadInputSchema>;
+export type EventListReadResult = z.infer<typeof eventListReadResultSchema>;
 export type EventCreateInput = z.infer<typeof eventCreateInputSchema>;
 export type EventCreateDraftInput = z.infer<typeof eventCreateDraftInputSchema>;
 export type EventCreateSafeDiff = z.infer<typeof eventCreateSafeDiffSchema>;
 export type EventCreateResult = z.infer<typeof eventCreateResultSchema>;
 export type EventCreateOperationResult = z.infer<typeof eventCreateOperationResultSchema>;
+export type EventSelectInput = z.infer<typeof eventSelectInputSchema>;
+export type EventSelectResult = z.infer<typeof eventSelectResultSchema>;
+export type EventSelectOperationResult = z.infer<typeof eventSelectOperationResultSchema>;
 export type EventCreationCompensationEligibility = z.infer<
   typeof eventCreationCompensationEligibilitySchema
 >;

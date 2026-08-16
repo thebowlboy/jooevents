@@ -1,8 +1,10 @@
 import {
   currentEventProjectionSchema,
+  eventListProjectionSchema,
   eventSchema,
   type CurrentEventProjection,
-  type EventDto
+  type EventDto,
+  type EventListProjection
 } from '@jooevents/contracts';
 import type { Event, WorkspaceEventSet } from './model';
 
@@ -57,5 +59,20 @@ export function projectCurrentEvent(
     kind: 'current_event',
     eventSetVersion: eventSet.version,
     event: projectEvent(currentEvent)
+  });
+}
+
+export function projectEventList(
+  eventSet: WorkspaceEventSet,
+  events: readonly Event[]
+): EventListProjection {
+  if (events.some((event) => event.workspaceId !== eventSet.workspaceId)) {
+    throw new EventProjectionError('wrong_workspace');
+  }
+  return eventListProjectionSchema.parse({
+    schemaVersion: 1,
+    eventSetVersion: eventSet.version,
+    currentEventId: eventSet.currentEventId,
+    events: events.map(projectEvent)
   });
 }

@@ -16,6 +16,8 @@ import {
   engagementSnapshotReadResultSchema,
   emailProviderReadinessReadOperationResultSchema,
   eventCreateOperationResultSchema,
+  eventListReadResultSchema,
+  eventSelectOperationResultSchema,
   eventSettingsUpdateOperationResultSchema,
   fieldRegistryDirectOperationResultSchema,
   fieldRegistrySnapshotReadResultSchema,
@@ -866,6 +868,8 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['POST /api/events']
       },
       { name: 'event.current.read', version: 1, effect: 'read', bindings: ['GET /api/events/current'] },
+      { name: 'event.list.read', version: 1, effect: 'read', bindings: ['GET /api/events'] },
+      { name: 'event.select', version: 1, effect: 'commit', bindings: ['POST /api/events/select'] },
       {
         name: 'event.settings.current.read', version: 1, effect: 'read',
         bindings: ['GET /api/events/current/settings']
@@ -1658,6 +1662,133 @@ describe('ephemeral live Foundation server composition', () => {
       correlationId: shellCorrelation
     });
 
+    const secondCreateResponse = await runtime.app.request('/api/events', {
+      method: 'POST',
+      headers: eventHeaders({
+        session,
+        correlationId: crypto.randomUUID(),
+        idempotencyKey: 'create-second-event-from-browser',
+        origin: config.baseUrl
+      }),
+      body: JSON.stringify({
+        ...createBody,
+        expectedEventSetVersion: 2,
+        name: 'JooEvents Europe',
+        startDate: '2028-05-04',
+        endDate: '2028-05-06'
+      })
+    });
+    const secondCreated = eventCreateOperationResultSchema.parse(
+      await secondCreateResponse.json()
+    );
+    expect(secondCreated).toMatchObject({
+      kind: 'success', data: { eventSetVersion: 3, event: { name: 'JooEvents Europe' } }
+    });
+    if (secondCreated.kind !== 'success') throw new Error('Second Event create failed.');
+
+    const listCorrelation = crypto.randomUUID();
+    const listResponse = await runtime.app.request('/api/events', {
+      headers: eventHeaders({ session, correlationId: listCorrelation })
+    });
+    expect(eventListReadResultSchema.parse(await listResponse.json())).toMatchObject({
+      kind: 'success',
+      data: {
+        schemaVersion: 1,
+        eventSetVersion: 3,
+        currentEventId: secondCreated.data.event.id,
+        events: [secondCreated.data.event, created.data.event]
+      },
+      correlationId: listCorrelation
+    });
+
+    const selectBody = {
+      eventId: created.data.event.id,
+      expectedEventSetVersion: 3
+    };
+    const selectKey = 'select-first-event-from-browser';
+    const selectCorrelation = crypto.randomUUID();
+    const selectResponse = await runtime.app.request('/api/events/select', {
+      method: 'POST',
+      headers: eventHeaders({
+        session,
+        correlationId: selectCorrelation,
+        idempotencyKey: selectKey,
+        origin: config.baseUrl
+      }),
+      body: JSON.stringify(selectBody)
+    });
+    const selected = eventSelectOperationResultSchema.parse(await selectResponse.json());
+    expect(selected).toMatchObject({
+      kind: 'success',
+      data: { eventSetVersion: 4, event: created.data.event },
+      correlationId: selectCorrelation,
+      receipt: { operationName: 'event.select', operationVersion: 1 }
+    });
+    const selectReplayResponse = await runtime.app.request('/api/events/select', {
+      method: 'POST',
+      headers: eventHeaders({
+        session,
+        correlationId: crypto.randomUUID(),
+        idempotencyKey: selectKey,
+        origin: config.baseUrl
+      }),
+      body: JSON.stringify(selectBody)
+    });
+    expect(eventSelectOperationResultSchema.parse(await selectReplayResponse.json()))
+      .toEqual(selected);
+    const alreadySelectedResponse = await runtime.app.request('/api/events/select', {
+      method: 'POST',
+      headers: eventHeaders({
+        session,
+        correlationId: crypto.randomUUID(),
+        idempotencyKey: 'select-already-current-event',
+        origin: config.baseUrl
+      }),
+      body: JSON.stringify({ eventId: created.data.event.id, expectedEventSetVersion: 4 })
+    });
+    expect(eventSelectOperationResultSchema.parse(await alreadySelectedResponse.json()))
+      .toMatchObject({
+        kind: 'outcome', terminal: false,
+        outcome: { class: 'conflict', kind: 'event.already_selected', retryable: false }
+      });
+    const missingResponse = await runtime.app.request('/api/events/select', {
+      method: 'POST',
+      headers: eventHeaders({
+        session,
+        correlationId: crypto.randomUUID(),
+        idempotencyKey: 'select-missing-event',
+        origin: config.baseUrl
+      }),
+      body: JSON.stringify({ eventId: crypto.randomUUID(), expectedEventSetVersion: 4 })
+    });
+    expect(eventSelectOperationResultSchema.parse(await missingResponse.json())).toMatchObject({
+      kind: 'outcome', terminal: false,
+      outcome: { class: 'conflict', kind: 'event.not_found', retryable: false }
+    });
+    const staleSelectResponse = await runtime.app.request('/api/events/select', {
+      method: 'POST',
+      headers: eventHeaders({
+        session,
+        correlationId: crypto.randomUUID(),
+        idempotencyKey: 'select-stale-event-set',
+        origin: config.baseUrl
+      }),
+      body: JSON.stringify({ eventId: secondCreated.data.event.id, expectedEventSetVersion: 3 })
+    });
+    expect(eventSelectOperationResultSchema.parse(await staleSelectResponse.json()))
+      .toMatchObject({
+        kind: 'outcome', terminal: false,
+        outcome: {
+          class: 'stale_revision', kind: 'event.event_set_changed', retryable: false
+        }
+      });
+    expect(count(runtime, 'event_spine_heads')).toBe(2);
+    expect(count(runtime, 'operation_log')).toBe(3);
+    expect(runtime.database.sqlite.query<{ readonly summary: string }, []>(`
+      SELECT summary FROM operation_log
+       WHERE operation_name = 'event.select'
+    `).get()).toEqual({ summary: 'Selected an event' });
+
     const fieldRegistryResponse = await runtime.app.request(
       '/api/events/current/field-registry',
       { headers: eventHeaders({ session, correlationId: crypto.randomUUID() }) }
@@ -1684,10 +1815,10 @@ describe('ephemeral live Foundation server composition', () => {
       });
 
     // The authoring baseline is an Event dependency, not a later UI bootstrap:
-    // all ten heads and their first immutable revisions committed in the same
-    // unit of work as the Event and field registry.
-    expect(count(runtime, 'template_artifact_heads')).toBe(10);
-    expect(count(runtime, 'template_artifact_revisions')).toBe(10);
+    // each Event's ten heads and first immutable revisions committed in the same
+    // unit of work as that Event and its field registry.
+    expect(count(runtime, 'template_artifact_heads')).toBe(20);
+    expect(count(runtime, 'template_artifact_revisions')).toBe(20);
     expect(runtime.database.sqlite.query<{
       artifact_kind: string;
       count: number;
@@ -1695,9 +1826,9 @@ describe('ephemeral live Foundation server composition', () => {
       SELECT artifact_kind,count(*) AS count FROM template_artifact_heads
        GROUP BY artifact_kind ORDER BY artifact_kind
     `).all()).toEqual([
-      { artifact_kind: 'message', count: 6 },
-      { artifact_kind: 'surface', count: 3 },
-      { artifact_kind: 'theme', count: 1 }
+      { artifact_kind: 'message', count: 12 },
+      { artifact_kind: 'surface', count: 6 },
+      { artifact_kind: 'theme', count: 2 }
     ]);
 
     const emptyTriageCorrelation = crypto.randomUUID();
@@ -1729,7 +1860,7 @@ describe('ephemeral live Foundation server composition', () => {
       kind: 'success',
       data: {
         schemaVersion: 1,
-        event: { kind: 'current_event', eventSetVersion: 2 },
+        event: { kind: 'current_event', eventSetVersion: 4 },
         metrics: {
           forms: { kind: 'exact', total: 0, draft: 0, open: 0, closed: 0 },
           submissions: { kind: 'exact', total: 0 },
@@ -1762,7 +1893,7 @@ describe('ephemeral live Foundation server composition', () => {
       correlationId: currentOverviewCorrelation
     });
 
-    expect(count(runtime, 'event_spine_heads')).toBe(1);
+    expect(count(runtime, 'event_spine_heads')).toBe(2);
 
     const beforeReplayLogs = count(runtime, 'operation_log');
     const replayCommit = await effect({
@@ -1792,7 +1923,7 @@ describe('ephemeral live Foundation server composition', () => {
     expect(revoked).toMatchObject({
       kind: 'outcome', outcome: { class: 'access_denied', kind: 'authority.revoked' }
     });
-    expect(count(runtime, 'event_spine_heads')).toBe(1);
+    expect(count(runtime, 'event_spine_heads')).toBe(2);
   });
 
   test('serves the empty reviewer roster and the organizer Review snapshot to the owner because durable event.manage evidence resolves the organizer viewer', async () => {

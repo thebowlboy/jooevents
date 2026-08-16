@@ -128,10 +128,8 @@ const eventCreateOutcomeContributionSchema = z.strictObject({
   effectContributions: z.tuple([])
 }).superRefine((contribution, context) => {
   const key = `${contribution.result.outcome.class}:${contribution.result.outcome.kind}`;
-  if (![
-    'stale_revision:event.event_set_changed',
-    'conflict:event.already_selected'
-  ].includes(key) || contribution.result.outcome.retryable !== false
+  if (key !== 'stale_revision:event.event_set_changed'
+    || contribution.result.outcome.retryable !== false
     || contribution.result.outcome.detail !== null
     || contribution.result.outcome.detailSchemaVersion !== 1) {
     context.addIssue({ code: 'custom', message: 'Event create outcome is not a domain refusal.' });
@@ -209,7 +207,7 @@ export interface CreateEventOperationModuleInput {
   readonly requestHashSealer: RequestHashSealer;
   readonly idempotencyCredentialProfile: VersionedKeyProfileRef;
   readonly idempotencyCredentialSealer: IdempotencyCredentialSealer;
-  /** Defaults true for compatibility; ordinary composition sets false and mounts create-draft. */
+  /** Mounts the direct audited create operation when true. */
   readonly mountLegacyDirectCreate?: boolean;
 }
 
@@ -458,14 +456,13 @@ export function createEventOperationModule(input: CreateEventOperationModuleInpu
       })] : []),
       effectOperations: Object.freeze(mountLegacyDirectCreate ? [{
         ...EVENT_CREATE_OPERATION, lifecycle: { status: 'active' as const },
-        summary: 'Create and select the first Event in the active workspace.', effect: 'commit' as const,
+        summary: 'Create and select a new Event in the active workspace.', effect: 'commit' as const,
         maxRisk: 'normal' as const, autonomyPolicy: refs.createAutonomy, consequenceTags: ['event-created'],
         agentAction: { eligible: true as const, displayLabel: 'Create an event', consequences: ['A new event becomes the active event for this workspace.'], externalEffect: 'none' as const },
         inputSchema: schemas.createInput, contributionSchema: schemas.createContribution,
         canonicalResultSchema: schemas.createCanonical,
         outcomes: [{ class: 'idempotency_conflict' as const, kind: 'operation.request_changed', retryable: false, detailSchema: schemas.nullDetail }, ...accessOutcomes,
           { class: 'stale_revision' as const, kind: 'event.event_set_changed', retryable: false, detailSchema: schemas.nullDetail },
-          { class: 'conflict' as const, kind: 'event.already_selected', retryable: false, detailSchema: schemas.nullDetail },
           { class: 'conflict' as const, kind: 'operation.in_progress', retryable: true, detailSchema: schemas.nullDetail },
           ...autonomyInterventionOutcomeDeclarations(schemas.nullDetail)],
         accessLanes: [manageLane], contextBuilder: refs.createContext,

@@ -5,6 +5,9 @@ import {
   eventCreateInputSchema,
   eventCreateOperationResultSchema,
   eventCreationCompensationEligibilitySchema,
+  eventListProjectionSchema,
+  eventSelectInputSchema,
+  eventSelectOperationResultSchema,
   eventSchema
 } from './event';
 
@@ -67,6 +70,27 @@ describe('Event wire contracts', () => {
     }).success).toBe(false);
   });
 
+  test('keeps the Event collection and current pointer coherent', () => {
+    expect(eventListProjectionSchema.parse({
+      schemaVersion: 1,
+      eventSetVersion: 3,
+      currentEventId: eventId,
+      events: [event]
+    }).events).toEqual([event]);
+    expect(eventListProjectionSchema.safeParse({
+      schemaVersion: 1,
+      eventSetVersion: 3,
+      currentEventId: '018f7d5a-4b3c-7abc-8def-0123456789a3',
+      events: [event]
+    }).success).toBe(false);
+    expect(eventListProjectionSchema.safeParse({
+      schemaVersion: 1,
+      eventSetVersion: 3,
+      currentEventId: eventId,
+      events: [event, event]
+    }).success).toBe(false);
+  });
+
   test('requires durable receipt evidence on a terminal create result', () => {
     const receipt = { id: receiptId, operationName: 'event.create', operationVersion: 1 };
     expect(eventCreateOperationResultSchema.safeParse({
@@ -82,7 +106,7 @@ describe('Event wire contracts', () => {
     }).success).toBe(false);
   });
 
-  test('keeps first-Event creation scope-free', () => {
+  test('keeps Event creation scope-free', () => {
     const input = {
       name: 'JooConf 2027',
       timezone: 'Asia/Singapore',
@@ -97,6 +121,19 @@ describe('Event wire contracts', () => {
     expect(eventCreateDraftInputSchema.safeParse({ ...input, workspaceId: eventId }).success)
       .toBe(false);
 
+  });
+
+  test('selection accepts only a target and expected workspace Event-set version', () => {
+    const input = { eventId, expectedEventSetVersion: 3 };
+    expect(eventSelectInputSchema.safeParse(input).success).toBe(true);
+    expect(eventSelectInputSchema.safeParse({ ...input, workspaceId: eventId }).success).toBe(false);
+    expect(eventSelectInputSchema.safeParse({ ...input, expectedEventSetVersion: 0 }).success).toBe(false);
+    expect(eventSelectOperationResultSchema.safeParse({
+      kind: 'success',
+      data: { eventSetVersion: 4, event },
+      receipt: { id: receiptId, operationName: 'event.select', operationVersion: 1 },
+      correlationId
+    }).success).toBe(true);
   });
 
   test('keeps creation correction outcomes closed', () => {

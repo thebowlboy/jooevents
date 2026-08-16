@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   eventCreatePlanDigest,
+  planEventSelection,
   planEventCreation,
   type EventCreatePlan
 } from '@jooevents/event';
@@ -28,6 +29,8 @@ const otherEventId = parseEventId('019c1df7-86b5-769b-bba4-5f7097bfa112');
 const userId = parseUserId('019c1df7-86b5-769b-bba4-5f7097bfa211');
 const version1 = parseAggregateVersion(1);
 const version2 = parseAggregateVersion(2);
+const version3 = parseAggregateVersion(3);
+const version4 = parseAggregateVersion(4);
 const createdAt = '2026-08-12T08:30:00.000Z';
 const evaluatedAt = parseInstant(createdAt);
 const createOperation = Object.freeze({ name: 'event.create', version: 1 });
@@ -87,7 +90,7 @@ function plan(repository: SQLiteEventSpineRepository, id = eventId): EventCreate
   return planEventCreation({
     eventSet: repository.requireEventSet(workspaceId),
     authorInput: {
-      expectedEventSetVersion: 1,
+      expectedEventSetVersion: repository.requireEventSet(workspaceId).version,
       name: '  JooEvents  Summit  ',
       timezone: 'Asia/Singapore',
       startDate: '2026-11-04',
@@ -173,6 +176,49 @@ describe('ephemeral SQLite Event spine', () => {
            SET workspace_id = workspace_id
          WHERE event_id = ?
       `).run(eventId)).toThrow('event scope root links are immutable');
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test('appends Events, lists them deterministically, and changes the workspace pointer', () => {
+    const sqlite = openDatabase();
+    const repository = bootstrap(sqlite);
+    try {
+      const first = plan(repository);
+      sqlite.exec('BEGIN IMMEDIATE;');
+      repository.commitEventCreatePlan(first);
+      sqlite.exec('COMMIT;');
+      const second = plan(repository, otherEventId);
+      sqlite.exec('BEGIN IMMEDIATE;');
+      repository.commitEventCreatePlan(second);
+      sqlite.exec('COMMIT;');
+
+      expect(repository.readEventListProjection(workspaceId)).toEqual({
+        schemaVersion: 1,
+        eventSetVersion: version3,
+        currentEventId: otherEventId,
+        events: [
+          { id: eventId, name: 'JooEvents Summit', timezone: 'Asia/Singapore', startDate: '2026-11-04', endDate: '2026-11-06', version: version1 },
+          { id: otherEventId, name: 'JooEvents Summit', timezone: 'Asia/Singapore', startDate: '2026-11-04', endDate: '2026-11-06', version: version1 }
+        ]
+      });
+
+      const selection = planEventSelection({
+        eventSet: repository.requireEventSet(workspaceId),
+        targetEvent: repository.readEventHead({ workspaceId, eventId }),
+        authorInput: { eventId, expectedEventSetVersion: version3 }
+      });
+      expect(() => repository.commitEventSelectPlan(selection)).toThrow('transaction_required');
+      sqlite.exec('BEGIN IMMEDIATE;');
+      const selected = repository.commitEventSelectPlan(selection);
+      sqlite.exec('COMMIT;');
+      expect(selected.eventSet).toEqual({
+        workspaceId, version: version4, currentEventId: eventId
+      });
+      expect(repository.readCurrentEventProjection(workspaceId)).toMatchObject({
+        kind: 'current_event', eventSetVersion: version4, event: { id: eventId }
+      });
     } finally {
       sqlite.close();
     }

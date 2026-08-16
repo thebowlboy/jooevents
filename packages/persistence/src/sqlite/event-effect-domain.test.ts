@@ -291,7 +291,7 @@ describe('ordinary SQLite Event effect-domain adapter', () => {
     }
   });
 
-  test('returns typed stale and already-selected refusals without new domain or receipt rows', async () => {
+  test('returns typed stale refusal and appends a second selected Event', async () => {
     const stale = openFixture();
     try {
       expect(await stale.execute({ ...businessInput, expectedEventSetVersion: 2 })).toMatchObject({
@@ -307,14 +307,14 @@ describe('ordinary SQLite Event effect-domain adapter', () => {
 
     const selected = openFixture();
     try {
-      await selected.execute();
+      const first = eventCreateOperationResultSchema.parse(await selected.execute());
       expect(await selected.execute({ ...businessInput, expectedEventSetVersion: 2 })).toMatchObject({
-        kind: 'outcome',
-        terminal: false,
-        outcome: { class: 'conflict', kind: 'event.already_selected' }
+        kind: 'success',
+        data: { eventSetVersion: 3 }
       });
-      expect(count(selected.sqlite, 'event_spine_heads')).toBe(1);
-      expect(count(selected.sqlite, 'operation_log')).toBe(1);
+      expect(first.kind).toBe('success');
+      expect(count(selected.sqlite, 'event_spine_heads')).toBe(2);
+      expect(count(selected.sqlite, 'operation_log')).toBe(2);
     } finally {
       selected.close();
     }

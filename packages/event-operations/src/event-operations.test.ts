@@ -312,7 +312,8 @@ describe('Event operation module', () => {
     expect(create?.enabledBindings[0]?.resultSchema)
       .toEqual(EVENT_OPERATION_SCHEMA_REFS.create.resultSchema);
     expect(create?.outcomes.map((outcome) => `${outcome.class}:${outcome.kind}`)).toContain('stale_revision:event.event_set_changed');
-    expect(create?.outcomes.map((outcome) => `${outcome.class}:${outcome.kind}`)).toContain('conflict:event.already_selected');
+    expect(create?.outcomes.map((outcome) => `${outcome.class}:${outcome.kind}`))
+      .not.toContain('conflict:event.already_selected');
   });
 
   test('can retain current read while leaving legacy direct create unmounted', async () => {
@@ -367,26 +368,24 @@ describe('Event operation module', () => {
     expect([...fixture.unitOfWork.directLogs.values()][0]?.summary).toBe('Created an event');
   });
 
-  test('returns typed stale/already-selected refusals with zero writes', async () => {
-    for (const [fixture, businessInput, outcome] of [[
-      createFixture(), { ...input, expectedEventSetVersion: 2 }, 'event.event_set_changed'
-    ], [
-      createFixture({ selected: true }), { ...input, expectedEventSetVersion: 2 }, 'event.already_selected'
-    ]] as const) {
-      const operations = await runtime(fixture);
-      const invocation = await operations.effectBuilder.build({
-        operationName: 'event.create', operationVersion: 1, surface: 'operator_http',
-        correlationId: ids.correlation, businessInput, verifiedEvidence: fixture.evidence,
-        rawIdempotencyKey: `refusal-${outcome}`
-      });
-      const result = await operations.effectExecutor.execute(invocation);
-      expect(result).toMatchObject({
-        kind: 'outcome', terminal: false, outcome: { kind: outcome, retryable: false }
-      });
-      expect(fixture.unitOfWork.applyCalls).toBe(0);
-      expect(fixture.unitOfWork.receipts.size).toBe(0);
-      expect(fixture.unitOfWork.shortAudits).toHaveLength(0);
-    }
+  test('returns a typed stale refusal with zero writes', async () => {
+    const fixture = createFixture();
+    const operations = await runtime(fixture);
+    const invocation = await operations.effectBuilder.build({
+      operationName: 'event.create', operationVersion: 1, surface: 'operator_http',
+      correlationId: ids.correlation,
+      businessInput: { ...input, expectedEventSetVersion: 2 },
+      verifiedEvidence: fixture.evidence,
+      rawIdempotencyKey: 'refusal-event-set-changed'
+    });
+    const result = await operations.effectExecutor.execute(invocation);
+    expect(result).toMatchObject({
+      kind: 'outcome', terminal: false,
+      outcome: { kind: 'event.event_set_changed', retryable: false }
+    });
+    expect(fixture.unitOfWork.applyCalls).toBe(0);
+    expect(fixture.unitOfWork.receipts.size).toBe(0);
+    expect(fixture.unitOfWork.shortAudits).toHaveLength(0);
   });
 });
 
