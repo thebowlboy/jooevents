@@ -4,6 +4,7 @@ import {
   loadCommunicationsProviderConfig,
   loadMailSenderConfig
 } from '../config/communications';
+import { createDevFixtureClock } from '../runtime/dev-fixture-clock';
 import { createEphemeralLiveRuntime } from '../runtime/ephemeral-live';
 import {
   createRuntimeRequestHandler,
@@ -20,6 +21,7 @@ if (config.databaseDriver !== 'sqlite') {
 const buildDirectory = resolve(import.meta.dir, '../../../web/build-live');
 const buildIdentity = validateLiveBuildIdentity(buildDirectory);
 const listener = resolveBunListenerConfiguration(Bun.env);
+const fixtureClock = createDevFixtureClock();
 // Identical listener/runtime composition to the empty ephemeral live entry:
 // the dev-only issued-link token oracle mounts only in development mode, which
 // binds loopback (127.0.0.1). Production mode binds 0.0.0.0, so the oracle is
@@ -27,6 +29,7 @@ const listener = resolveBunListenerConfiguration(Bun.env);
 const runtime = await createEphemeralLiveRuntime({
   config,
   devFixtures: listener.mode === 'development',
+  devFixtureClock: fixtureClock,
   communications: {
     provider: loadCommunicationsProviderConfig(Bun.env),
     mailSender: loadMailSenderConfig(Bun.env)
@@ -42,6 +45,7 @@ try {
   summary = await seedJooConPlayground({
     runtime,
     config,
+    clock: fixtureClock,
     ...(speakerEmailOverride ? { speakerEmailOverride } : {})
   });
 } catch (error) {

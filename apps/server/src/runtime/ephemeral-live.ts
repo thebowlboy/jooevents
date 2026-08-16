@@ -311,6 +311,7 @@ import {
   parsePublicPolicyRevisionId,
   parseWorkspaceId
 } from '@jooevents/kernel';
+import type { Clock } from '@jooevents/kernel';
 import {
   bootstrapEmptyInstall,
   createFoundationEphemeralSQLiteRuntime,
@@ -1253,6 +1254,13 @@ export interface EphemeralLiveTestSupport {
 export async function createEphemeralLiveRuntime(input: {
   readonly config: ServerConfig;
   /**
+   * Server-composition-only fixture seam. The runtime neither returns nor
+   * routes this clock; ordinary and production entries omit it. It exists so
+   * the seeded playground can create a believable historical corpus through
+   * the real registered operations without granting time authority to a user.
+   */
+  readonly devFixtureClock?: Clock;
+  /**
    * Structurally opts this composition into the dev-only participant fixture
    * routes (the issued-link token oracle that bypasses email delivery). It is
    * OFF unless a caller sets it explicitly, so a beyond-loopback preview never
@@ -1312,7 +1320,7 @@ export async function createEphemeralLiveRuntime(input: {
         }
       }
     });
-    const clock = Object.freeze({
+    const clock: Clock = input.devFixtureClock ?? Object.freeze({
       now: () => parseInstant(new Date().toISOString())
     });
     const eventRelationships = createSQLiteEventSpineOperatorEventRelationshipSource();

@@ -41,6 +41,7 @@ import { normalizeEmail } from '@jooevents/identity-access';
 import { programVocabularyDirectOperationResultSchema } from '@jooevents/contracts';
 import { schedulePlacementSnapshotReadResultSchema } from '@jooevents/schedule-operations';
 import type { ServerConfig } from '../config';
+import type { DevFixtureClock } from '../runtime/dev-fixture-clock';
 import type { EphemeralLiveRuntime } from '../runtime/ephemeral-live';
 
 const organizerFormCatalogReadResultSchema = createReadOperationResultSchema(
@@ -95,6 +96,19 @@ const EVENT_SETTINGS_TEXT = Object.freeze({
 
 /** Review round due date, inside the event window. */
 const REVIEW_DUE_DATE = '2027-09-16';
+
+/**
+ * One monotone nine-week story. All offsets are relative to process start and
+ * every write still enters through its registered HTTP operation; only the
+ * server-stamped fixture time changes between calls.
+ */
+const SEED_TIMELINE = Object.freeze({
+  setupDaysBeforeAnchor: 70,
+  arrivalDaysBeforeAnchor: Object.freeze([63, 60, 57, 54, 51, 48, 45, 42, 39]),
+  reviewRoundDaysBeforeAnchor: 36,
+  reviewDaysBeforeAnchor: Object.freeze([35, 31, 27, 23, 19, 15]),
+  decisionDaysBeforeAnchor: Object.freeze([12, 10, 8, 6, 4, 2, 1])
+});
 
 const ROOMS = Object.freeze([
   Object.freeze({ key: 'main_stage', name: 'Kesselhaus Main Stage', capacity: 620 }),
@@ -303,6 +317,7 @@ interface SeedContext {
   readonly runtime: EphemeralLiveRuntime;
   readonly config: ServerConfig;
   readonly cookie: string;
+  readonly clock: DevFixtureClock;
 }
 
 interface DraftSelectorSource {
@@ -747,13 +762,23 @@ async function createDirectEntries(input: {
   readonly formId: string;
   readonly fields: CfpFields;
   readonly specs: readonly SubmissionSpec[];
+  readonly daysBeforeAnchor: readonly number[];
 }): Promise<ReadonlyMap<string, string>> {
   const { context, fields } = input;
+  if (input.daysBeforeAnchor.length !== input.specs.length) {
+    fail('entry_timeline_length', {
+      entries: input.specs.length,
+      instants: input.daysBeforeAnchor.length
+    });
+  }
   const catalog = await readFormCatalog(context);
   const form = catalog.forms.find((candidate) => candidate.id === input.formId);
   if (!form) fail('open_form_missing', input.formId);
   const submissionIds = new Map<string, string>();
-  for (const spec of input.specs) {
+  for (const [index, spec] of input.specs.entries()) {
+    const daysBeforeAnchor = input.daysBeforeAnchor[index];
+    if (daysBeforeAnchor === undefined) fail('entry_timeline_missing', spec.key);
+    context.clock.moveToDaysBeforeAnchor(daysBeforeAnchor);
     const result = requireSuccess(submissionDirectEntryOperationResultSchema.parse(await effect({
       context,
       path: '/api/events/current/submissions/direct-entry',
@@ -856,12 +881,13 @@ async function openReviewRound(context: SeedContext): Promise<number> {
 async function commitEvaluations(input: {
   readonly context: SeedContext;
   readonly key: string;
-  readonly count: number;
+  readonly daysBeforeAnchor: readonly number[];
   readonly offset: number;
 }): Promise<number> {
   const { context } = input;
   let committed = 0;
-  for (let index = 0; index < input.count; index += 1) {
+  for (const [index, daysBeforeAnchor] of input.daysBeforeAnchor.entries()) {
+    context.clock.moveToDaysBeforeAnchor(daysBeforeAnchor);
     const snapshot = await readReviewSnapshot(context);
     if (snapshot.viewer.kind !== 'reviewer') fail('reviewer_viewer_missing', snapshot.viewer.kind);
     const item = (snapshot.queue ?? []).find((candidate) => !candidate.committed);
@@ -906,6 +932,7 @@ async function commitEvaluations(input: {
 }
 
 interface DecisionPlan {
+  readonly key: string;
   readonly submissionId: string;
   readonly state: 'accepted' | 'waitlisted' | 'declined';
   readonly spawn: boolean;
@@ -914,26 +941,35 @@ interface DecisionPlan {
 
 async function commitDecisions(
   context: SeedContext,
-  plans: readonly DecisionPlan[]
+  plans: readonly DecisionPlan[],
+  daysBeforeAnchor: readonly number[]
 ): Promise<void> {
-  requireSuccess(decisionDecideOperationResultSchema.parse(await effect({
-    context,
-    path: '/api/events/current/decisions',
-    key: 'joocon-decisions',
-    body: {
-      action: 'decide',
-      decisions: plans.map((plan) => ({
-        submissionId: plan.submissionId,
-        state: plan.state,
-        expectedDecisionVersion: null,
-        expectedDecisionDigestSha256: null,
-        ...(plan.spawn
-          ? { graduation: { kind: 'spawn', ...(plan.trackId ? { trackId: plan.trackId } : {}) } }
-          : {})
-      }))
-    },
-    parse: (value) => value
-  })), 'decisions');
+  if (daysBeforeAnchor.length !== plans.length) {
+    fail('decision_timeline_length', { decisions: plans.length, instants: daysBeforeAnchor.length });
+  }
+  for (const [index, plan] of plans.entries()) {
+    const days = daysBeforeAnchor[index];
+    if (days === undefined) fail('decision_timeline_missing', plan.key);
+    context.clock.moveToDaysBeforeAnchor(days);
+    requireSuccess(decisionDecideOperationResultSchema.parse(await effect({
+      context,
+      path: '/api/events/current/decisions',
+      key: `joocon-decision-${plan.key}`,
+      body: {
+        action: 'decide',
+        decisions: [{
+          submissionId: plan.submissionId,
+          state: plan.state,
+          expectedDecisionVersion: null,
+          expectedDecisionDigestSha256: null,
+          ...(plan.spawn
+            ? { graduation: { kind: 'spawn', ...(plan.trackId ? { trackId: plan.trackId } : {}) } }
+            : {})
+        }]
+      },
+      parse: (value) => value
+    })), `decision_${plan.key}`);
+  }
 }
 
 async function placeSessions(input: {
@@ -1043,6 +1079,8 @@ async function publishSchedule(context: SeedContext): Promise<number> {
 export async function seedJooConPlayground(input: {
   readonly runtime: EphemeralLiveRuntime;
   readonly config: ServerConfig;
+  /** Controller retained only by this fixture assembler; never exposed by the runtime. */
+  readonly clock: DevFixtureClock;
   /**
    * Points one seeded speaker (Nadia Okonkwo) at a mailbox the operator owns,
    * so the participant portal's magic-link flow can be exercised end to end.
@@ -1060,151 +1098,180 @@ export async function seedJooConPlayground(input: {
       || bootstrapOwner === normalizeEmail(REVIEWER_EMAIL)) {
     fail('bootstrap_owner_email_collides_with_seeded_principal', bootstrapOwner);
   }
-  const operator = await createSeededPrincipal({
-    runtime,
-    config,
-    email: OPERATOR_EMAIL,
-    displayName: 'Maya Chen',
-    rolePresetKey: 'workspace_admin',
-    permissionGrants: OPERATOR_PERMISSION_GRANTS
-  });
-  const reviewer = await createSeededPrincipal({
-    runtime,
-    config,
-    email: REVIEWER_EMAIL,
-    displayName: 'Leonie Weber',
-    rolePresetKey: 'viewer'
-  });
-  const context: SeedContext = Object.freeze({ runtime, config, cookie: operator.cookie });
-  const reviewerContext: SeedContext = Object.freeze({
-    runtime, config, cookie: reviewer.cookie
-  });
-
-  const eventId = await createEvent(context);
-  await updateEventSettings(context);
-  const vocabulary = await createVocabulary(context);
-
-  const fields = await resolveCfpFields(context);
-  const generalFormId = await createOpenForm({
-    context,
-    key: 'general',
-    definition: cfpDefinition({
-      name: 'JooCon 2027 Call for Sessions',
-      target: { kind: 'general_pool' },
-      confirmation: 'Thanks — your proposal is in. The program team reviews everything in one batch after the deadline.',
-      fields
-    })
-  });
-  const featuredFormId = await createOpenForm({
-    context,
-    key: 'featured',
-    definition: cfpDefinition({
-      name: 'JooCon 2027 Featured Talks',
-      target: {
-        kind: 'category',
-        category: { kind: 'format', id: vocabulary.talk }
-      },
-      confirmation: 'Received. Featured talk proposals get a first read within two weeks.',
-      fields
-    })
-  });
-
-  const speakerEmail = input.speakerEmailOverride?.trim();
-  let featuredSpecs = FEATURED_SUBMISSIONS;
-  if (speakerEmail) {
-    if (!speakerEmail.includes('@')) fail('speaker_email_override_invalid', 'not_an_address');
-    const normalized = normalizeEmail(speakerEmail);
-    if (normalized === normalizeEmail(OPERATOR_EMAIL)
-        || normalized === normalizeEmail(REVIEWER_EMAIL)) {
-      fail('speaker_email_override_collides_with_seeded_principal', 'operator_or_reviewer');
-    }
-    featuredSpecs = FEATURED_SUBMISSIONS.map((spec) =>
-      spec.key === 'okonkwo' ? Object.freeze({ ...spec, email: speakerEmail }) : spec
-    );
-  }
-  const featuredIds = await createDirectEntries({
-    context, formId: featuredFormId, fields, specs: featuredSpecs
-  });
-  const generalIds = await createDirectEntries({
-    context, formId: generalFormId, fields, specs: GENERAL_SUBMISSIONS
-  });
-  const submissionIdByKey = new Map([...featuredIds, ...generalIds]);
-
-  const openForms = (await readFormCatalog(context))
-    .forms.filter((form) => form.status === 'open').length;
-
-  await registerReviewer({ context, key: 'operator', userId: operator.userId });
-  await grantReviewerRole(context, reviewer.userId);
-  await registerReviewer({ context, key: 'reviewer', userId: reviewer.userId });
-
-  const reviewAssignments = await openReviewRound(context);
-  const operatorReviews = await commitEvaluations({
-    context, key: 'operator', count: 3, offset: 0
-  });
-  const reviewerReviews = await commitEvaluations({
-    context: reviewerContext, key: 'reviewer', count: 3, offset: 3
-  });
-
-  const decisions: DecisionPlan[] = [];
-  for (const spec of FEATURED_SUBMISSIONS) {
-    const submissionId = submissionIdByKey.get(spec.key);
-    if (!submissionId) fail('decision_submission_missing', spec.key);
-    if (!spec.trackKey) fail('decision_track_missing', spec.key);
-    decisions.push({
-      submissionId,
-      state: 'accepted',
-      spawn: true,
-      trackId: vocabulary[spec.trackKey]
+  try {
+    input.clock.moveToDaysBeforeAnchor(SEED_TIMELINE.setupDaysBeforeAnchor);
+    const operator = await createSeededPrincipal({
+      runtime,
+      config,
+      email: OPERATOR_EMAIL,
+      displayName: 'Maya Chen',
+      rolePresetKey: 'workspace_admin',
+      permissionGrants: OPERATOR_PERMISSION_GRANTS
     });
+    const reviewer = await createSeededPrincipal({
+      runtime,
+      config,
+      email: REVIEWER_EMAIL,
+      displayName: 'Leonie Weber',
+      rolePresetKey: 'viewer'
+    });
+    const context: SeedContext = Object.freeze({
+      runtime, config, cookie: operator.cookie, clock: input.clock
+    });
+    const reviewerContext: SeedContext = Object.freeze({
+      runtime, config, cookie: reviewer.cookie, clock: input.clock
+    });
+
+    const eventId = await createEvent(context);
+    await updateEventSettings(context);
+    const vocabulary = await createVocabulary(context);
+
+    const fields = await resolveCfpFields(context);
+    const generalFormId = await createOpenForm({
+      context,
+      key: 'general',
+      definition: cfpDefinition({
+        name: 'JooCon 2027 Call for Sessions',
+        target: { kind: 'general_pool' },
+        confirmation: 'Thanks — your proposal is in. The program team reviews everything in one batch after the deadline.',
+        fields
+      })
+    });
+    const featuredFormId = await createOpenForm({
+      context,
+      key: 'featured',
+      definition: cfpDefinition({
+        name: 'JooCon 2027 Featured Talks',
+        target: {
+          kind: 'category',
+          category: { kind: 'format', id: vocabulary.talk }
+        },
+        confirmation: 'Received. Featured talk proposals get a first read within two weeks.',
+        fields
+      })
+    });
+
+    const speakerEmail = input.speakerEmailOverride?.trim();
+    let featuredSpecs = FEATURED_SUBMISSIONS;
+    if (speakerEmail) {
+      if (!speakerEmail.includes('@')) fail('speaker_email_override_invalid', 'not_an_address');
+      const normalized = normalizeEmail(speakerEmail);
+      if (normalized === normalizeEmail(OPERATOR_EMAIL)
+          || normalized === normalizeEmail(REVIEWER_EMAIL)) {
+        fail('speaker_email_override_collides_with_seeded_principal', 'operator_or_reviewer');
+      }
+      featuredSpecs = FEATURED_SUBMISSIONS.map((spec) =>
+        spec.key === 'okonkwo' ? Object.freeze({ ...spec, email: speakerEmail }) : spec
+      );
+    }
+    const featuredIds = await createDirectEntries({
+      context,
+      formId: featuredFormId,
+      fields,
+      specs: featuredSpecs,
+      daysBeforeAnchor: SEED_TIMELINE.arrivalDaysBeforeAnchor.slice(0, featuredSpecs.length)
+    });
+    const generalIds = await createDirectEntries({
+      context,
+      formId: generalFormId,
+      fields,
+      specs: GENERAL_SUBMISSIONS,
+      daysBeforeAnchor: SEED_TIMELINE.arrivalDaysBeforeAnchor.slice(featuredSpecs.length)
+    });
+    const submissionIdByKey = new Map([...featuredIds, ...generalIds]);
+
+    const openForms = (await readFormCatalog(context))
+      .forms.filter((form) => form.status === 'open').length;
+
+    await registerReviewer({ context, key: 'operator', userId: operator.userId });
+    await grantReviewerRole(context, reviewer.userId);
+    await registerReviewer({ context, key: 'reviewer', userId: reviewer.userId });
+
+    input.clock.moveToDaysBeforeAnchor(SEED_TIMELINE.reviewRoundDaysBeforeAnchor);
+    const reviewAssignments = await openReviewRound(context);
+    const operatorReviews = await commitEvaluations({
+      context,
+      key: 'operator',
+      daysBeforeAnchor: SEED_TIMELINE.reviewDaysBeforeAnchor.slice(0, 3),
+      offset: 0
+    });
+    const reviewerReviews = await commitEvaluations({
+      context: reviewerContext,
+      key: 'reviewer',
+      daysBeforeAnchor: SEED_TIMELINE.reviewDaysBeforeAnchor.slice(3),
+      offset: 3
+    });
+
+    const decisions: DecisionPlan[] = [];
+    for (const spec of FEATURED_SUBMISSIONS) {
+      const submissionId = submissionIdByKey.get(spec.key);
+      if (!submissionId) fail('decision_submission_missing', spec.key);
+      if (!spec.trackKey) fail('decision_track_missing', spec.key);
+      decisions.push({
+        key: spec.key,
+        submissionId,
+        state: 'accepted',
+        spawn: true,
+        trackId: vocabulary[spec.trackKey]
+      });
+    }
+    const waitlisted = submissionIdByKey.get('delacroix');
+    const declined = submissionIdByKey.get('tanabe');
+    if (!waitlisted || !declined) fail('decision_general_submission_missing', 'delacroix/tanabe');
+    decisions.push({ key: 'delacroix', submissionId: waitlisted, state: 'waitlisted', spawn: false });
+    decisions.push({ key: 'tanabe', submissionId: declined, state: 'declined', spawn: false });
+    await commitDecisions(context, decisions, SEED_TIMELINE.decisionDaysBeforeAnchor);
+
+    // The fixture chronology is complete. All subsequent startup and request
+    // work uses wall-clock time, just like an ordinary runtime.
+    input.clock.useSystemTime();
+
+    const catalog = await readSessionCatalog(context);
+    const sessionIdByTitle = new Map(catalog.sessions.map((session) => [session.title, session.id]));
+    const titleBySubmissionKey = new Map(
+      FEATURED_SUBMISSIONS.map((spec) => [spec.key, spec.title] as const)
+    );
+    const placements = await placeSessions({
+      context, sessionIdByTitle, vocabulary, titleBySubmissionKey
+    });
+    const confirmedEngagements = await confirmEngagements({ context, submissionIdByKey });
+    const taskDefinitions = await createSpeakerTasks(context);
+    const releaseNumber = await publishSchedule(context);
+
+    const bootstrapReservation = runtime.database.sqlite.query<
+      { readonly status: string }, [string, string]
+    >(`
+      SELECT status FROM access_reservations
+       WHERE workspace_id = ? AND normalized_email = ?
+    `).get(runtime.workspaceId, normalizeEmail(config.bootstrapOwnerEmail));
+
+    return Object.freeze({
+      eventId,
+      eventName: EVENT.name,
+      operatorEmail: OPERATOR_EMAIL,
+      reviewerEmail: REVIEWER_EMAIL,
+      bootstrapOwnerEmail: config.bootstrapOwnerEmail,
+      bootstrapOwnerReservationOpen: bootstrapReservation?.status === 'open',
+      vocabulary: Object.freeze({
+        rooms: ROOMS.length, tracks: TRACKS.length, formats: FORMATS.length
+      }),
+      openForms,
+      submissions: submissionIdByKey.size,
+      reviewers: 2,
+      reviewAssignments,
+      committedReviews: operatorReviews + reviewerReviews,
+      accepted: FEATURED_SUBMISSIONS.length,
+      waitlisted: 1,
+      declined: 1,
+      spawnedSessions: catalog.sessions.length,
+      placements,
+      confirmedEngagements,
+      taskDefinitions,
+      releaseNumber
+    });
+  } finally {
+    // Failed seeds also relinquish the process-local fixture clock before the
+    // caller closes the runtime, preventing stale time from escaping assembly.
+    input.clock.useSystemTime();
   }
-  const waitlisted = submissionIdByKey.get('delacroix');
-  const declined = submissionIdByKey.get('tanabe');
-  if (!waitlisted || !declined) fail('decision_general_submission_missing', 'delacroix/tanabe');
-  decisions.push({ submissionId: waitlisted, state: 'waitlisted', spawn: false });
-  decisions.push({ submissionId: declined, state: 'declined', spawn: false });
-  await commitDecisions(context, decisions);
-
-  const catalog = await readSessionCatalog(context);
-  const sessionIdByTitle = new Map(catalog.sessions.map((session) => [session.title, session.id]));
-  const titleBySubmissionKey = new Map(
-    FEATURED_SUBMISSIONS.map((spec) => [spec.key, spec.title] as const)
-  );
-  const placements = await placeSessions({
-    context, sessionIdByTitle, vocabulary, titleBySubmissionKey
-  });
-  const confirmedEngagements = await confirmEngagements({ context, submissionIdByKey });
-  const taskDefinitions = await createSpeakerTasks(context);
-  const releaseNumber = await publishSchedule(context);
-
-  const bootstrapReservation = runtime.database.sqlite.query<
-    { readonly status: string }, [string, string]
-  >(`
-    SELECT status FROM access_reservations
-     WHERE workspace_id = ? AND normalized_email = ?
-  `).get(runtime.workspaceId, normalizeEmail(config.bootstrapOwnerEmail));
-
-  return Object.freeze({
-    eventId,
-    eventName: EVENT.name,
-    operatorEmail: OPERATOR_EMAIL,
-    reviewerEmail: REVIEWER_EMAIL,
-    bootstrapOwnerEmail: config.bootstrapOwnerEmail,
-    bootstrapOwnerReservationOpen: bootstrapReservation?.status === 'open',
-    vocabulary: Object.freeze({
-      rooms: ROOMS.length, tracks: TRACKS.length, formats: FORMATS.length
-    }),
-    openForms,
-    submissions: submissionIdByKey.size,
-    reviewers: 2,
-    reviewAssignments,
-    committedReviews: operatorReviews + reviewerReviews,
-    accepted: FEATURED_SUBMISSIONS.length,
-    waitlisted: 1,
-    declined: 1,
-    spawnedSessions: catalog.sessions.length,
-    placements,
-    confirmedEngagements,
-    taskDefinitions,
-    releaseNumber
-  });
 }
