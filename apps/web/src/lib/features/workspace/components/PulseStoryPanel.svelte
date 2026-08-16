@@ -70,6 +70,16 @@
 	const decidedLine = $derived(hasDecided ? funnel.map((week) => week.decided ?? 0) : []);
 	const acceptedLine = $derived(hasAccepted ? funnel.map((week) => week.accepted ?? 0) : []);
 
+	/**
+	 * A story of one point has no shape: when everything so far landed in the
+	 * week in progress, an area chart is an empty frame with one jump at its
+	 * edge — which reads as broken, not as young. The words carry it until a
+	 * second week exists to draw a line between.
+	 */
+	const tooYoung = $derived(
+		funnel.length > 0 && funnel.slice(0, -1).every((week) => week.received === 0)
+	);
+
 	const last = $derived(funnel[funnel.length - 1]);
 	const figureName = $derived.by(() => {
 		if (!last) return '';
@@ -89,13 +99,19 @@
 	{:else}
 		<div class="story__figures">
 			{#each hero.figures as figure (figure.label)}
-				<div class="story__figure">
-					<span class="story__label">{figure.label}</span>
+				<div
+					class="story__figure"
+					class:story__figure--accepted={figure.label.toLowerCase() === 'accepted'}>
 					<span class="story__value">{figure.value}</span>
+					<span class="story__label">{figure.label}</span>
 				</div>
 			{/each}
 		</div>
-		{#if funnel.length > 0}
+		{#if tooYoung}
+			<p class="story__young">
+				Everything so far arrived this week. The story charts here as the weeks add up.
+			</p>
+		{:else if funnel.length > 0}
 			<Popover label={figureName} kind="figure" fill>
 				{#snippet trigger()}
 					<span class="story__chartrow">
@@ -193,30 +209,47 @@
 		color: var(--je-color-text-muted);
 	}
 
+	.story__young {
+		margin: 0;
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-text-muted);
+	}
+
 	/* The vanity figures, at display size: this band is where the numbers an
 	   organizer loves to glance at get their full weight. */
 	.story__figures {
 		display: flex;
 		flex-wrap: wrap;
-		gap: var(--je-space-3) var(--je-space-8);
-		margin-block-end: var(--je-space-4);
+		gap: var(--je-space-4) var(--je-space-8);
+		margin-block-end: var(--je-space-5);
 	}
 
+	/* Value first, at full display weight; the label is a caps whisper under
+	   it. The band's hierarchy is the numbers — the words only file them. */
 	.story__figure {
 		display: grid;
 		gap: var(--je-space-1);
 	}
 
 	.story__label {
-		font-size: var(--je-font-size-xs);
+		font-size: var(--je-font-size-2xs);
+		font-weight: 500;
+		text-transform: uppercase;
+		letter-spacing: var(--je-tracking-caps);
 		color: var(--je-color-text-muted);
 	}
 
 	.story__value {
-		font-size: var(--je-font-size-2xl);
+		font-size: var(--je-font-size-3xl);
 		font-weight: 600;
 		font-variant-numeric: tabular-nums;
 		line-height: var(--je-leading-tight);
+	}
+
+	/* Colour spent once, same rule as the chart: accepted is the figure the
+	   whole funnel exists to grow. */
+	.story__figure--accepted .story__value {
+		color: var(--je-color-success);
 	}
 
 	.story__chartrow {

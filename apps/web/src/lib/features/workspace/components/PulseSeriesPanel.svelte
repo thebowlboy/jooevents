@@ -14,6 +14,7 @@
 	import { describeArrivalWeek } from '@jooevents/contracts';
 	import { Popover } from '$lib/ui';
 	import type { PulseSeries, PulseWeek } from '$lib/api/pulse-page-port';
+	import DormantShape from './DormantShape.svelte';
 
 	let {
 		series,
@@ -47,7 +48,13 @@
 <article class="beat">
 	<span class="beat__label">{series.label}</span>
 	{#if series.absence !== undefined}
+		<!-- Dormant, not blank. The plot's own silhouette says "a chart lives
+		     here and has not started" before the sentence is read, and it holds
+		     the exact footprint the resolved plot takes — so a band of three
+		     panels reads as one composition rather than one full and two voids,
+		     and nothing moves when the first week lands. -->
 		<p class="beat__absence">{series.absence}</p>
+		<DormantShape shape="bars" />
 	{:else}
 		<!-- The rate is this panel's answer; the running total lives in the hero
 		     band above and in this plot's own table, so it does not shout twice. -->
@@ -115,12 +122,12 @@
 		color: var(--je-color-text-muted);
 	}
 
-	/* A flow that has not begun says why in words, holding roughly the block
-	   the resolved composition occupies so a band of three panels does not
-	   read as one full and two broken. */
+	/* A flow that has not begun states its condition where the running figure
+	   sits, with the dormant plot beneath it in the plot's own place. The old
+	   `min-block-size: 6.25rem` reservation is gone: the height is now made of
+	   the real parts, so it cannot drift from what resolves into it. */
 	.beat__absence {
 		margin: 0;
-		min-block-size: 6.25rem;
 		font-size: var(--je-font-size-sm);
 		color: var(--je-color-text-muted);
 	}

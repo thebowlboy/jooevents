@@ -12,6 +12,7 @@
 	import type { PulsePagePort, PulsePageSummary } from '$lib/api/pulse-page-port';
 	import type { DecisionState } from '$lib/api/types';
 	import CountRows from './CountRows.svelte';
+	import DormantShape from './DormantShape.svelte';
 	import PulseSeriesPanel from './PulseSeriesPanel.svelte';
 	import PulseStoryPanel from './PulseStoryPanel.svelte';
 
@@ -106,6 +107,22 @@
 	const trackOrder = $derived(summary ? summary.tracks.rows.map((row) => row.id) : []);
 
 	/**
+	 * `absence` carries two different facts, and only one of them may wear the
+	 * dormant shape. On the decision spread it is usually *this has not begun*
+	 * — but where every proposal sits in one state it is a stated measurement
+	 * ("All 9 proposals are waiting for your answer") over real records. A
+	 * silhouette behind that sentence would assert "not started" about nine
+	 * live proposals, so the total is the discriminator: a population of zero
+	 * is dormancy, anything else is a fact and keeps the plain sentence.
+	 */
+	const breakdownDormant = $derived(
+		summary?.breakdown.absence !== undefined && summary.breakdown.total === 0
+	);
+	const knownBreakdownDormant = known
+		? known.breakdown.absence !== undefined && known.breakdown.total === 0
+		: false;
+
+	/**
 	 * Ranked for comparison: the panel's question is which tracks are thin, so
 	 * the biggest speaker count leads and the shortfall reads off the bottom.
 	 * The ranking is the order itself — numbering the rows would restate what
@@ -153,7 +170,11 @@
 					<article class="sk-beat">
 						<span class="sk-beat__label"><span class="ui-skeleton sk-line" style="inline-size: 7rem"></span></span>
 						{#if series.absence !== undefined}
+							<!-- Evidence already says this flow has not begun, so the
+							     placeholder is the dormant composition itself rather than a
+							     skeleton promising a chart that is not coming. -->
 							<p class="sk-beat__absence">{series.absence}</p>
+							<DormantShape shape="bars" />
 						{:else}
 							<span class="sk-beat__value"><span class="ui-skeleton sk-line" style="inline-size: 3.5rem"></span></span>
 							<span class="sk-beat__plot"></span>
@@ -165,6 +186,9 @@
 				<section class="panel">
 					<header class="panel__head"><h2>Where every proposal stands</h2></header>
 					{#if known.breakdown.absence !== undefined}
+						{#if knownBreakdownDormant}
+							<span class="dormant-slot"><DormantShape shape="rows" rows={4} /></span>
+						{/if}
 						<p class="panel__calm">{known.breakdown.absence}</p>
 					{:else}
 						<ul class="sk-rows">
@@ -180,6 +204,7 @@
 				<section class="panel">
 					<header class="panel__head"><h2>How the program is filling</h2></header>
 					{#if known.tracks.absence !== undefined}
+						<span class="dormant-slot"><DormantShape shape="rows" rows={3} /></span>
 						<p class="panel__calm">{known.tracks.absence}</p>
 					{:else}
 						<ul class="sk-rows">
@@ -230,6 +255,11 @@
 				<span class="panel__count">{summary.breakdown.total}</span>
 			</header>
 			{#if summary.breakdown.absence !== undefined}
+				{#if breakdownDormant}
+					<!-- Nothing to spread yet: the list's own silhouette, then the
+					     condition beneath it where the panel's note already sits. -->
+					<span class="dormant-slot"><DormantShape shape="rows" rows={4} /></span>
+				{/if}
 				<p class="panel__calm">{summary.breakdown.absence}</p>
 			{:else}
 				<CountRows rows={breakdownRows} value={(row) => row.count}>
@@ -252,6 +282,10 @@
 		<section class="panel" aria-label="How the program is filling">
 			<header class="panel__head"><h2>How the program is filling</h2></header>
 			{#if summary.tracks.absence !== undefined}
+				<!-- Track fill is dormant whenever it is absent: the rows exist only
+				     once a track has an accepted speaker, so there is no stated
+				     measurement to confuse this with. -->
+				<span class="dormant-slot"><DormantShape shape="rows" rows={3} /></span>
 				<p class="panel__calm">{summary.tracks.absence}</p>
 			{:else}
 				<!-- One shared scale across the bars, so the lengths *are* the
@@ -332,6 +366,14 @@
 		font-size: var(--je-font-size-xs);
 		color: var(--je-color-text-muted);
 		font-variant-numeric: tabular-nums;
+	}
+
+	/* The shape owns no outer spacing — a primitive's box is its own — so the
+	   panel supplies the interval between the silhouette and the sentence that
+	   names its condition. */
+	.dormant-slot {
+		display: block;
+		margin-block-end: var(--je-space-3);
 	}
 
 	.panel__calm {

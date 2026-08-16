@@ -40,7 +40,7 @@ test('mid-flight: the rail row lands on Pulse, and every region tells the flight
 	if (testInfo.project.name === 'mobile') {
 		await page.getByRole('button', { name: 'Open navigation' }).click();
 	}
-	const row = page.getByRole('navigation', { name: 'Workspace' }).getByRole('link', { name: 'Pulse' });
+	const row = page.getByRole('navigation', { name: 'Workspace', exact: true }).getByRole('link', { name: 'Pulse' });
 	await expect(row).toBeVisible({ timeout: 15000 });
 	await row.click();
 	await expect(page).toHaveURL(/\/app\/pulse$/);
