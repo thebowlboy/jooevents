@@ -27,7 +27,7 @@ import {
 import type { TaskEngagementReconciliationPlan } from '@jooevents/tasks';
 import { canonicalJsonText } from '@jooevents/kernel';
 
-/** Additive Task trial schema, installed only in explicitly ephemeral runtimes. */
+/** This schema contributes to the accepted epoch-2 baseline and may also serve isolated fixtures. */
 export const TASK_SQL = `
 CREATE TABLE task_definition_catalogs (
   workspace_id TEXT NOT NULL CHECK(length(workspace_id) = 36),
@@ -261,6 +261,21 @@ export class SQLiteTaskRepository implements TaskTransactionPort, TaskMembership
       definitions: catalog.definitions,
       assignments
     });
+  }
+
+  readTaskEvent(
+    scope: TaskScopeDto,
+    assignmentId: string,
+    assignmentVersion: number
+  ): TaskEventDto | undefined {
+    const row = this.sqlite.query<{ readonly value_json: string }, [string, string, string, number]>(`
+      SELECT event_json AS value_json FROM task_events
+       WHERE workspace_id=? AND event_id=? AND assignment_id=? AND assignment_version=?
+       LIMIT 2
+    `).get(scope.workspaceId, scope.eventId, assignmentId, assignmentVersion);
+    if (row === null) return undefined;
+    try { return parseTaskEvent(JSON.parse(row.value_json)); }
+    catch (error) { throw new SQLiteTaskError('data_corrupt', error); }
   }
 
   listConfirmedTaskEngagements(scope: TaskScopeDto): readonly ConfirmedTaskEngagement[] {

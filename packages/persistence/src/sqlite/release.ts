@@ -44,7 +44,7 @@ import {
   validateReleaseSurfaceSuccessorFrom,
   ReleasePlanningError,
   type ProgramRelease,
-  type ReleaseChangesetTransactionPort,
+  type ReleaseTransactionPort,
   type ReleaseSurfaceSuccessorReadPort,
   type ReleaseSurfaceSuccessorTransactionPort,
   type ReleaseVocabularyEvidence,
@@ -62,7 +62,8 @@ import type { SQLiteProgramVocabularyRepository } from './program-vocabulary';
 import type { SQLiteSessionRepository } from './session';
 
 /**
- * Additive schema installed only in an explicitly disposable SQLite runtime.
+ * This schema contributes to the accepted epoch-2 baseline and may also serve
+ * isolated fixtures.
  * Every release row is immutable retained evidence: the `*_no_update` /
  * `*_no_delete` retention triggers make UPDATE and DELETE physical refusals,
  * so rollback can only ever be another release or a head-pointer move. The
@@ -361,14 +362,14 @@ interface NameRow { readonly person_id: string; readonly display_name: string }
 interface ScopeRow { readonly event_id: string }
 
 /**
- * Canonical release persistence: the release changeset transaction port and
+ * Canonical release persistence: the owner-native Release transaction port and
  * the intake-hosted successor collaboration port on one caller-owned handle.
  * Reads serve release content only; the confirmed-and-visible join was
  * enforced at materialization, and every apply revalidates its plan against
  * current state through the release domain before touching a row.
  */
 export class SQLiteReleaseRepository
-implements ReleaseChangesetTransactionPort, ReleaseSurfaceSuccessorTransactionPort {
+implements ReleaseTransactionPort, ReleaseSurfaceSuccessorTransactionPort {
   constructor(
     private readonly sqlite: Database,
     private readonly sources: SQLiteReleaseUpstreamSources
@@ -704,11 +705,11 @@ export class SQLiteReleaseSurfaceSuccessorStore implements ReleaseSurfaceSuccess
 }
 
 /**
- * The composed successor collaboration the intake form draft and changeset
+ * The composed successor collaboration the reviewed Form-version publish
  * effect domains host: plans, revalidates, and applies successor apply-surface
  * releases through the release domain's own functions over this database's
  * release tables. Planning also returns the apply-surface-head guard so the
- * hosting changeset fences concurrent surface publishes, absence included.
+ * hosting operation fences concurrent surface publishes, absence included.
  */
 export function createSQLiteFormSurfaceSuccessorCollaboration(
   sqlite: Database

@@ -177,8 +177,8 @@ const contributionSchema = parser((value) => {
     || !domain
     || Object.keys(domain).length !== 1
     || typeof domain.value !== 'string'
-    || !Array.isArray(candidate.receiptChildren)
-    || candidate.receiptChildren.length !== 0
+    || !Array.isArray(candidate.effectContributions)
+    || candidate.effectContributions.length !== 0
   ) return undefined;
   return structuredClone(candidate);
 });
@@ -471,7 +471,7 @@ function operationSource(input: {
         return {
           result: { kind: 'success' as const, data: { value: request.value } },
           domain: { value: request.value },
-          receiptChildren: []
+          effectContributions: []
         };
       }
     }],
@@ -627,7 +627,7 @@ async function harness(options: {
     workerKey: 'worker.registered-consumer-a',
     newAttemptId: () => options.attemptIds?.[attemptIndex++] ?? ids.attemptA,
     newCorrelationId: () => correlationId,
-    newReceiptId: () => receiptIds[receiptIndex++] ?? crypto.randomUUID()
+    newOperationLogId: () => receiptIds[receiptIndex++] ?? crypto.randomUUID()
   } as const;
   const runner = createSQLiteRegisteredConsumerOperationTrialRunner(runnerInput);
 
@@ -692,9 +692,7 @@ async function harness(options: {
 function count(sqlite: Database, table: string): number {
   const allowed = new Set([
     'registered_consumer_domain_results_trial',
-    'foundation_trial_operation_receipts',
-    'foundation_trial_operation_audits',
-    'foundation_trial_operation_receipt_children',
+    'operation_log',
     'reliability_consumer_attempt_completions_trial'
   ]);
   if (!allowed.has(table)) throw new TypeError('unknown trial table');
@@ -722,11 +720,7 @@ describe('registered consumer operation SQLite trial', () => {
       `consumer-delivery:${ids.delivery}:attempt:${ids.attemptA}`
     ]);
     expect(count(trial.sqlite, 'registered_consumer_domain_results_trial')).toBe(1);
-    expect(count(trial.sqlite, 'foundation_trial_operation_receipts')).toBe(1);
-    expect(count(trial.sqlite, 'foundation_trial_operation_receipt_children')).toBe(0);
-    expect(trial.sqlite.query<{ readonly disposition: string; readonly receipt_id: string | null }, []>(`
-      SELECT disposition, receipt_id FROM foundation_trial_operation_audits
-    `).get()).toMatchObject({ disposition: 'terminal_new', receipt_id: result.result.kind === 'success' ? result.result.receipt.id : null });
+    expect(count(trial.sqlite, 'operation_log')).toBe(1);
     expect(count(trial.sqlite, 'reliability_consumer_attempt_completions_trial')).toBe(1);
     const context = trial.state.contexts[0];
     expect(context?.surface).toBe('application_job');
@@ -758,15 +752,14 @@ describe('registered consumer operation SQLite trial', () => {
     })).rejects.toThrow();
     expect(trial.reliability.readDelivery(ids.delivery)?.state).toBe('leased');
     expect(count(trial.sqlite, 'registered_consumer_domain_results_trial')).toBe(0);
-    expect(count(trial.sqlite, 'foundation_trial_operation_receipts')).toBe(0);
+    expect(count(trial.sqlite, 'operation_log')).toBe(0);
     expect(count(trial.sqlite, 'reliability_consumer_attempt_completions_trial')).toBe(0);
 
     const recovered = await trial.run();
     expect(recovered.kind).toBe('terminal');
     expect(trial.reliability.listAttemptEvidence(ids.delivery)).toHaveLength(1);
     expect(count(trial.sqlite, 'registered_consumer_domain_results_trial')).toBe(1);
-    expect(count(trial.sqlite, 'foundation_trial_operation_receipts')).toBe(1);
-    expect(count(trial.sqlite, 'foundation_trial_operation_audits')).toBe(1);
+    expect(count(trial.sqlite, 'operation_log')).toBe(1);
   });
 
   test('response loss restarts into terminal replay without another contribution', async () => {
@@ -775,16 +768,13 @@ describe('registered consumer operation SQLite trial', () => {
     await expect(trial.run()).rejects.toMatchObject({ phase: 'unit_of_work' });
     expect(trial.reliability.readDelivery(ids.delivery)?.state).toBe('succeeded');
     expect(count(trial.sqlite, 'registered_consumer_domain_results_trial')).toBe(1);
-    expect(count(trial.sqlite, 'foundation_trial_operation_receipts')).toBe(1);
+    expect(count(trial.sqlite, 'operation_log')).toBe(1);
     const replay = await trial.run();
     expect(replay.kind).toBe('terminal');
     expect(replay.kind === 'terminal' && replay.replay).toBe(true);
     expect(trial.state.handlerCalls).toBe(1);
     expect(count(trial.sqlite, 'registered_consumer_domain_results_trial')).toBe(1);
-    expect(count(trial.sqlite, 'foundation_trial_operation_receipts')).toBe(1);
-    expect(trial.sqlite.query<{ readonly disposition: string }, []>(`
-      SELECT disposition FROM foundation_trial_operation_audits ORDER BY rowid
-    `).all().map((row) => row.disposition)).toEqual(['terminal_new', 'terminal_replay']);
+    expect(count(trial.sqlite, 'operation_log')).toBe(1);
   });
 
   test('an already-durable receipt completes separately only for the same current delivery attempt', async () => {
@@ -815,10 +805,10 @@ describe('registered consumer operation SQLite trial', () => {
         trial.domain,
         trial.transactionAuthority
       ),
-      newReceiptId: () => receiptIds[0]
+      newOperationLogId: () => receiptIds[0]
     }).execute(invocation);
     expect(trial.reliability.readDelivery(ids.delivery)?.state).toBe('leased');
-    expect(count(trial.sqlite, 'foundation_trial_operation_receipts')).toBe(1);
+    expect(count(trial.sqlite, 'operation_log')).toBe(1);
 
     const replay = await trial.run();
     expect(replay.kind).toBe('terminal');
@@ -848,7 +838,7 @@ describe('registered consumer operation SQLite trial', () => {
     ]);
     expect(trial.state.projectorCalls).toBe(0);
     expect(trial.state.handlerCalls).toBe(0);
-    expect(count(trial.sqlite, 'foundation_trial_operation_receipts')).toBe(0);
+    expect(count(trial.sqlite, 'operation_log')).toBe(0);
     expect(count(trial.sqlite, 'registered_consumer_domain_results_trial')).toBe(0);
   });
 
@@ -892,7 +882,7 @@ describe('registered consumer operation SQLite trial', () => {
       { number: 2, fence: 2, state: 'succeeded' }
     ]);
     expect(trial.state.handlerCalls).toBe(1);
-    expect(count(trial.sqlite, 'foundation_trial_operation_receipts')).toBe(1);
+    expect(count(trial.sqlite, 'operation_log')).toBe(1);
     expect(count(trial.sqlite, 'registered_consumer_domain_results_trial')).toBe(1);
   });
 
@@ -908,10 +898,7 @@ describe('registered consumer operation SQLite trial', () => {
     });
     expect(trial.reliability.readDelivery(ids.delivery)?.state).toBe('leased');
     expect(trial.state.handlerCalls).toBe(0);
-    expect(count(trial.sqlite, 'foundation_trial_operation_receipts')).toBe(0);
-    expect(trial.sqlite.query<{ readonly disposition: string; readonly receipt_id: string | null; readonly related_receipt_id: string | null }, []>(`
-      SELECT disposition, receipt_id, related_receipt_id FROM foundation_trial_operation_audits
-    `).get()).toEqual({ disposition: 'context_denied', receipt_id: null, related_receipt_id: null });
+    expect(count(trial.sqlite, 'operation_log')).toBe(0);
     expect(count(trial.sqlite, 'registered_consumer_domain_results_trial')).toBe(0);
 
     trial.state.authorized = true;
@@ -964,7 +951,7 @@ describe('registered consumer operation SQLite trial', () => {
       code: 'projection_failed'
     });
     expect(trial.state.handlerCalls).toBe(0);
-    expect(count(trial.sqlite, 'foundation_trial_operation_receipts')).toBe(0);
+    expect(count(trial.sqlite, 'operation_log')).toBe(0);
 
     const another = await harness();
     const wrongShapeRunner = createSQLiteRegisteredConsumerOperationTrialRunner({
@@ -978,6 +965,6 @@ describe('registered consumer operation SQLite trial', () => {
       code: 'projection_failed'
     });
     expect(another.state.handlerCalls).toBe(0);
-    expect(count(another.sqlite, 'foundation_trial_operation_receipts')).toBe(0);
+    expect(count(another.sqlite, 'operation_log')).toBe(0);
   });
 });

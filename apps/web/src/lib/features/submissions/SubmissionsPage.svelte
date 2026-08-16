@@ -494,10 +494,7 @@
 	} as const;
 
 	async function act(action: keyof typeof triageCopy, ids: string[]) {
-		// Captured before the move: the receipt's compensator returns each row to
-		// the tray it was actually in, not to whatever the opposite call defaults to.
 		const moved = (data?.rows ?? []).filter((row) => ids.includes(row.id));
-		const before = moved.map((row) => ({ id: row.id, tray: row.tray, setAsideBy: row.setAsideBy }));
 		busy = true;
 		actFailure = null;
 		try {
@@ -508,19 +505,7 @@
 					moved.length === 1
 						? `${triageCopy[action]} “${moved[0].title}”`
 						: `${triageCopy[action]} ${moved.length} submissions`,
-				undo: async () => {
-					// The receipt surface swallows a compensator's rejection, so a
-					// refused restore states itself here instead of dismissing as
-					// if the rows had walked back.
-					try {
-						await port.submissions.restoreTray(before);
-					} catch (error) {
-						actFailure = describePortFailure(
-							error,
-							'The submissions could not be moved back.'
-						).message;
-					}
-				}
+				notUndoableReason: 'Use the destination tray action if this submission needs moving again.'
 			});
 			selected = [];
 		} catch (error) {

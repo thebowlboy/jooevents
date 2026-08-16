@@ -1,13 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import type {
 	SubmissionTriageAction,
-	SubmissionTriageSafeDiff,
-	SubmissionTriageTransitionDraftInput,
+	SubmissionTriageTransitionInput,
 	SubmissionTriageVisibleTray
 } from '@jooevents/contracts/submission-triage';
 import type { SubmissionTriagePageView, SubmissionTriageRowView } from './mappers/submission-triage';
 import type {
-	SubmissionTriageCompensationSource,
 	SubmissionTriageLiveApplyResult,
 	SubmissionTriageLiveClient,
 	SubmissionTriageLiveReadResult
@@ -116,66 +114,20 @@ function stateForAction(action: SubmissionTriageAction) {
 			: { state: 'inbox' as const, tray: 'late' as const };
 }
 
-function diffFor(action: SubmissionTriageAction): SubmissionTriageSafeDiff {
-	const before = stateForAction(action);
-	const afterState = action === 'set_aside'
-		? 'set_aside'
-		: action === 'discard_recoverable'
-			? 'discarded_recoverable'
-			: 'inbox';
-	const afterTray = afterState === 'set_aside'
-		? 'set_aside'
-		: afterState === 'discarded_recoverable'
-			? 'discarded'
-			: before.tray === 'late' ? 'late' : 'inbox';
-	const attribution = {
-		kind: 'manual' as const,
-		principalKey: 'opaque:principal',
-		invocationId: id(30),
-		surface: 'operator_http' as const
-	};
-	return {
-		schemaVersion: 1,
-		action,
-		queryGuard: {
-			before: queryGuard,
-			after: { ...queryGuard, version: 8, digestSha256: digest('c') }
-		},
-		transitions: [{
-			submissionId,
-			arrivalClassification: before.tray === 'late' ? 'late' : 'on_time',
-			beforeVisibleTray: before.tray,
-			afterVisibleTray: afterTray,
-			before: {
-				submissionId,
-				version: 4,
-				state: before.state,
-				setAsideAttribution: before.state === 'set_aside' ? attribution : null,
-				updatedAt: '2026-08-13T10:02:00.000Z'
-			},
-			after: {
-				submissionId,
-				version: 5,
-				state: afterState,
-				setAsideAttribution: afterState === 'set_aside' ? attribution : null,
-				updatedAt: '2026-08-13T10:03:00.000Z'
-			}
-		}]
-	};
-}
-
-function applied(diff: SubmissionTriageSafeDiff): SubmissionTriageLiveApplyResult {
+function applied(action: SubmissionTriageAction): SubmissionTriageLiveApplyResult {
 	return {
 		kind: 'success',
 		data: {
-			action: diff.action,
-			changesetId: id(20),
-			revisionId: id(21),
-			revisionDigest: digest('d'),
-			committedHeadVersion: 3,
-			safeDiff: diff
+			schemaVersion: 1,
+			action,
+			queryGuard: { ...queryGuard, version: 8, digestSha256: digest('c') },
+			submissionIds: [submissionId]
 		},
-		receipt: { id: id(22), operationName: 'changeset.commit', operationVersion: 1 },
+		receipt: {
+			id: id(22),
+			operationName: 'submission.triage.transition',
+			operationVersion: 1
+		},
 		correlationId
 	};
 }
@@ -184,11 +136,7 @@ function client(input: {
 	readonly list?: SubmissionTriageLiveReadResult<SubmissionTriagePageView>;
 	readonly read?: SubmissionTriageLiveReadResult<SubmissionTriageRowView>;
 	readonly apply?: (
-		request: SubmissionTriageTransitionDraftInput,
-		key: string
-	) => SubmissionTriageLiveApplyResult | Promise<SubmissionTriageLiveApplyResult>;
-	readonly compensate?: (
-		source: SubmissionTriageCompensationSource,
+		request: SubmissionTriageTransitionInput,
 		key: string
 	) => SubmissionTriageLiveApplyResult | Promise<SubmissionTriageLiveApplyResult>;
 }): SubmissionTriageLiveClient {
@@ -204,10 +152,6 @@ function client(input: {
 		async apply(request, key) {
 			if (!input.apply) throw new TypeError('unexpected_apply');
 			return input.apply(request, key);
-		},
-		async compensate(source, key) {
-			if (!input.compensate) throw new TypeError('unexpected_compensate');
-			return input.compensate(source, key);
 		}
 	};
 }
@@ -230,8 +174,9 @@ describe('source-neutral Submission Triage workspace adapter', () => {
 		for (const absent of ['email', 'decision', 'notified', 'signals', 'reviewCount']) {
 			expect(serialized).not.toContain(`\"${absent}\"`);
 		}
-		expect('addDirectEntry' in port).toBe(false);
-		expect('removeDirectEntry' in port).toBe(false);
+		expect(Object.keys(port).sort()).toEqual([
+			'discard', 'list', 'read', 'restore', 'returnToInbox', 'setAside'
+		]);
 	});
 
 	test('uses cached server query/head guards for every ordinary action', async () => {
@@ -247,13 +192,13 @@ describe('source-neutral Submission Triage workspace adapter', () => {
 		for (const entry of cases) {
 			const state = stateForAction(entry.action);
 			const source = row(state);
-			let captured: { request: SubmissionTriageTransitionDraftInput; key: string } | undefined;
+			let captured: { request: SubmissionTriageTransitionInput; key: string } | undefined;
 			const port = createSubmissionTriageWorkspaceAdapter({
 				client: client({
 					list: { kind: 'success', data: page(source), correlationId },
 					apply(request, key) {
 						captured = { request, key };
-						return applied(diffFor(entry.action));
+						return applied(entry.action);
 					}
 				}),
 				newIdempotencyKey: () => `triage-${entry.action}`
@@ -270,37 +215,6 @@ describe('source-neutral Submission Triage workspace adapter', () => {
 				}
 			});
 		}
-	});
-
-	test('uses the committed source receipt for exact restore instead of drafting an inverse', async () => {
-		const safeDiff = diffFor('set_aside');
-		let applyCalls = 0;
-		let compensated: SubmissionTriageCompensationSource | undefined;
-		const port = createSubmissionTriageWorkspaceAdapter({
-			client: client({
-				list: { kind: 'success', data: page(), correlationId },
-				apply() {
-					applyCalls += 1;
-					return applied(safeDiff);
-				},
-				compensate(source) {
-					compensated = source;
-					return applied({ ...safeDiff, action: 'restore_exact' });
-				}
-			}),
-			newIdempotencyKey: () => 'triage-action'
-		});
-		await port.list();
-		await port.setAside([submissionId]);
-		await port.restoreTray([{ id: submissionId, visibleTray: 'late' }]);
-		expect(applyCalls).toBe(1);
-		expect(compensated).toMatchObject({
-			changesetId: id(20),
-			revisionId: id(21),
-			revisionDigest: digest('d'),
-			sourceCommitReceiptId: id(22),
-			safeDiff
-		});
 	});
 
 	test('maps a stale query refusal to reviewed copy without leaking detail', async () => {

@@ -222,9 +222,7 @@
 				disposition === 'accepted'
 					? `Added “${created.title}” — direct entry, accepted`
 					: `Added “${created.title}” — direct entry, in the inbox`,
-			undo: async () => {
-				await port.submissions.removeDirectEntry(created.id);
-			}
+			notUndoableReason: 'Move it to spam if this direct entry should not remain in the inbox.'
 		});
 		adding = false;
 		open = false;

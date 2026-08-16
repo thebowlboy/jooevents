@@ -164,6 +164,7 @@ function loadWorkspace(): LoadedWorkspace {
 
 const db = loadWorkspace();
 const embedAllowedOrigins = new Map<SurfaceKind, string[]>();
+const removedReviewers = new Map<string, { readonly seed: ReviewerSeed; readonly index: number }>();
 
 /** True while the app is running on sample data instead of a live backend. */
 export const sampleMode = true;
@@ -1955,40 +1956,6 @@ export const api = {
 			submissionsChanged();
 			return { ...submission };
 		},
-		/**
-		 * The compensating write behind an add receipt: the entry disappears
-		 * whole — an accepted one first reverses its graduation (16 §4), and a
-		 * roster row the graduation minted goes with it once nothing else names
-		 * that person. Valid only while nothing references the submission: a
-		 * row with committed reviews stays, because removing it would orphan
-		 * the reviews that cite it.
-		 */
-		async removeDirectEntry(id: string): Promise<void> {
-			await latency();
-			const submission = db.submissions.find((row) => row.id === id);
-			if (!submission || submission.source !== 'direct_entry') return;
-			if (submission.reviewCount > 0) return;
-			if (submission.decision === 'accepted') {
-				ungraduateSubmission(submission);
-				programChanged();
-			}
-			db.submissions = db.submissions.filter((row) => row.id !== id);
-			db.submissionTrayTotals[submission.tray] = Math.max(
-				0,
-				db.submissionTrayTotals[submission.tray] - 1
-			);
-			// A person this add introduced who now holds nothing — no session, no
-			// tasks — leaves the roster with it; anyone with remaining ties stays.
-			db.speakers = db.speakers.filter(
-				(row) =>
-					!(
-						submission.speakers.some((speaker) => speaker.email === row.email) &&
-						row.sessions.length === 0 &&
-						row.tasksTotal === 0
-					)
-			);
-			submissionsChanged();
-		},
 		async setAside(ids: string[], byRun = 'Set aside by hand'): Promise<void> {
 			await latency();
 			for (const submission of db.submissions) {
@@ -2025,24 +1992,6 @@ export const api = {
 					moveTrayCount('discarded', 'inbox');
 					submission.tray = 'inbox';
 				}
-			}
-		},
-		/**
-		 * The compensating write behind a triage receipt. Setting aside, discarding, and
-		 * restore all normalize onto the inbox, so undoing them by calling the
-		 * opposite operation would quietly move a late submission out of the late
-		 * tray; this puts each row back in the exact tray it came from, with the
-		 * set-aside attribution it carried.
-		 */
-		async restoreTray(entries: { id: string; tray: TrayKey; setAsideBy?: string }[]): Promise<void> {
-			await latency();
-			for (const entry of entries) {
-				const submission = db.submissions.find((row) => row.id === entry.id);
-				if (!submission || submission.tray === entry.tray) continue;
-				moveTrayCount(submission.tray, entry.tray);
-				submission.tray = entry.tray;
-				if (entry.setAsideBy) submission.setAsideBy = entry.setAsideBy;
-				else delete submission.setAsideBy;
 			}
 		}
 	},
@@ -2568,16 +2517,6 @@ export const api = {
 			return { ok: true };
 		},
 		/**
-		 * The compensating write behind a scope receipt: puts the exact prior
-		 * set back. A quiet no-op when the reviewer has left the roster
-		 * meanwhile.
-		 */
-		async restoreScope(id: string, scope: ScopeRef[]): Promise<void> {
-			await latency();
-			const reviewer = db.reviewers.find((entry) => entry.id === id);
-			if (reviewer) reviewer.scope = scope.map((ref) => ({ ...ref }));
-		},
-		/**
 		 * Takes a reviewer off the roster. Their rows in each plan's roster
 		 * stay — an uncovered review remains in the original reviewer's
 		 * `assigned`, so plan denominators never move — and workspace
@@ -2586,27 +2525,29 @@ export const api = {
 		 */
 		async remove(id: string): Promise<MutationOutcome> {
 			await latency();
+			const index = db.reviewers.findIndex((entry) => entry.id === id);
+			const reviewer = db.reviewers[index];
+			if (reviewer) removedReviewers.set(id, {
+				seed: structuredClone(reviewer), index
+			});
 			db.reviewers = db.reviewers.filter((entry) => entry.id !== id);
 			return { ok: true };
 		},
 		/**
-		 * The compensating write behind a removal receipt: puts the reviewer
-		 * back at the roster position they held. Only the identity, status,
-		 * and scope are stored — the load numbers are recomputed from the
-		 * plans on the next read. A no-op when the id is present again.
+		 * Forward restore from the retained sample tombstone. The caller supplies
+		 * only identity; no browser before-image can recreate roster state.
 		 */
-		async restore(reviewer: Reviewer, index: number): Promise<void> {
+		async restore(id: string): Promise<void> {
 			await latency();
-			if (db.reviewers.some((entry) => entry.id === reviewer.id)) return;
-			if (!reviewer.email) return;
-			const seed: ReviewerSeed = {
-				id: reviewer.id,
-				name: reviewer.name,
-				email: reviewer.email,
-				status: reviewer.status,
-				scope: reviewer.scope.map((ref) => ({ ...ref }))
-			};
-			db.reviewers.splice(Math.max(0, Math.min(db.reviewers.length, index)), 0, seed);
+			if (db.reviewers.some((entry) => entry.id === id)) return;
+			const retained = removedReviewers.get(id);
+			if (!retained) return;
+			db.reviewers.splice(
+				Math.max(0, Math.min(db.reviewers.length, retained.index)),
+				0,
+				structuredClone(retained.seed)
+			);
+			removedReviewers.delete(id);
 		}
 	},
 

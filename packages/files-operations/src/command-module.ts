@@ -201,19 +201,6 @@ export const FILES_COMMAND_ACCESS_POLICY: VersionedAccessPolicyRef = Object.free
 export const FILES_PORTAL_COMMAND_ACCESS_POLICY: VersionedAccessPolicyRef = Object.freeze({
   key: 'authority.portal.participant.act', version: parseContractVersion(1)
 });
-/**
- * D: agents draft file requests; they never move binary content. The mutation
- * runs on the `app_model` lane (the platform's agent effect surface); the
- * external MCP surface carries reads only, matching the platform's effect
- * binding vocabulary.
- */
-export const FILES_AGENT_REQUEST_DRAFT_ACCESS_POLICY: VersionedAccessPolicyRef = Object.freeze({
-  key: 'authority.file.agent-request-draft', version: parseContractVersion(1)
-});
-export const FILE_REQUEST_CREATE_DRAFT_OPERATION = Object.freeze({
-  name: 'file.request.create.draft', version: 1
-});
-
 /** Actions a portal participant may perform (D8: authenticated portal lane). */
 export const FILES_PORTAL_COMMAND_ACTIONS = Object.freeze([
   'upload.intent', 'upload.confirm', 'attachment.attach', 'attachment.link',
@@ -254,7 +241,7 @@ export function filesCommandContributionSchema(action: FilesCommandAction) {
       data: commandDataSchemas[action]
     }),
     domain: filesCommandDomainContributionSchema,
-    receiptChildren: z.array(filesCommandFactChildSchema).max(2)
+    effectContributions: z.array(filesCommandFactChildSchema).max(2)
   }).superRefine((contribution, context) => {
     if (contribution.domain.action !== action) {
       context.addIssue({ code: 'custom', message: 'Files command evidence is incoherent.' });
@@ -266,7 +253,7 @@ export function filesCommandContributionSchema(action: FilesCommandAction) {
       outcome: structuredOutcomeSchema
     }),
     domain: z.null(),
-    receiptChildren: z.tuple([])
+    effectContributions: z.tuple([])
   }).superRefine((contribution, context) => {
     const value = contribution.result.outcome;
     const allowed = new Set([
@@ -293,7 +280,7 @@ export type FilesCommandContribution = z.infer<ReturnType<typeof filesCommandCon
 export interface FilesCommandPreparedContribution {
   readonly result: unknown;
   readonly domain: unknown;
-  readonly receiptChildren: readonly unknown[];
+  readonly effectContributions: readonly unknown[];
 }
 
 /**
@@ -382,7 +369,7 @@ function portalRefusal(action: FilesCommandAction): FilesCommandPreparedContribu
       })
     }),
     domain: null,
-    receiptChildren: Object.freeze([])
+    effectContributions: Object.freeze([])
   });
 }
 
@@ -424,7 +411,7 @@ function createFilesCommandHandler(input: {
           const guarded = portalSubjectGuard(input.action, businessInput, engagementIds);
           if (guarded !== undefined) {
             sealed.phase = 'spent';
-            return { ...guarded, receiptChildren: [...guarded.receiptChildren] };
+            return { ...guarded, effectContributions: [...guarded.effectContributions] };
           }
         }
         const contribution = sealed.prepare({
@@ -440,7 +427,7 @@ function createFilesCommandHandler(input: {
         return {
           result: contribution.result,
           domain: contribution.domain,
-          receiptChildren: [...contribution.receiptChildren]
+          effectContributions: [...contribution.effectContributions]
         };
       } catch (error) {
         sealed.phase = 'spent';
@@ -911,371 +898,5 @@ export function createFilesPortalCommandOperationModule(
     requestHashSealer: input.requestHashSealer,
     idempotencyCredentialProfile: input.idempotencyCredentialProfile,
     idempotencyCredentialSealer: input.idempotencyCredentialSealer
-  });
-}
-
-// ---------------------------------------------------------------------------
-// MCP request-draft module (agents draft asks; they never upload bytes)
-// ---------------------------------------------------------------------------
-
-export const fileRequestDraftDataSchema = z.strictObject({
-  action: z.literal('request.create.draft'),
-  changesetId: applicationIdSchema,
-  proposal: fileRequestCreateInputSchema,
-  deadline: deadlineReferencePinSchema.nullable()
-});
-
-export const fileRequestDraftDomainContributionSchema = z.strictObject({
-  kind: z.literal('files_request_draft'),
-  preparationHandle: applicationIdSchema,
-  workspaceId: applicationIdSchema,
-  eventId: applicationIdSchema,
-  changesetId: applicationIdSchema,
-  revisionId: applicationIdSchema,
-  revisionDigestSha256: z.string().regex(/^[a-f0-9]{64}$/),
-  occurredAt: canonicalInstantSchema
-});
-
-export const fileRequestDraftContributionSchema = z.union([
-  z.strictObject({
-    result: z.strictObject({ kind: z.literal('success'), data: fileRequestDraftDataSchema }),
-    domain: fileRequestDraftDomainContributionSchema,
-    receiptChildren: z.array(filesCommandFactChildSchema).max(1)
-  }),
-  z.strictObject({
-    result: z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema }),
-    domain: z.null(),
-    receiptChildren: z.tuple([])
-  })
-]);
-
-export interface FileRequestDraftPreparation {
-  prepare(input: {
-    readonly businessInput: unknown;
-    readonly context: EffectInvocationContext;
-  }): FilesCommandPreparedContribution;
-}
-
-export const FILE_REQUEST_DRAFT_HANDLER_CAPABILITY = ref('capability.file.request-draft');
-
-export function sealFileRequestDraftPreparation(input: {
-  readonly capability: VersionedDefinitionRef;
-  readonly context: EffectInvocationContext;
-  readonly preparation: FileRequestDraftPreparation;
-}): EffectHandlerSnapshot {
-  return sealFilesCommandPreparation({
-    capability: input.capability,
-    context: input.context,
-    preparation: {
-      prepare: ({ businessInput, context }) =>
-        input.preparation.prepare({ businessInput, context })
-    }
-  });
-}
-
-/**
- * The one MCP-lane mutation: draft a file request as an inert changeset for
- * organizer review. Reads aside, agents get nothing else — binary upload
- * operations are deliberately absent from this lane.
- */
-export function createFilesAgentRequestDraftOperationModule(input: {
-  readonly workspaceId: WorkspaceId;
-  readonly draftPolicy: VersionedAccessPolicyRef;
-  readonly currentAuthority: CurrentAuthorityResolver<InvocationEvidence>;
-  readonly currentEvent: FilesCurrentEventSource;
-  readonly clock: Clock;
-  readonly ids: FilesOperationIds;
-  readonly authorityPrincipalKeyProfile: VersionedKeyProfileRef;
-  readonly scopePartitionProfile: VersionedKeyProfileRef;
-  readonly requestCanonicalizationProfile: VersionedKeyProfileRef;
-  readonly requestHashSealer: RequestHashSealer;
-  readonly idempotencyCredentialProfile: VersionedKeyProfileRef;
-  readonly idempotencyCredentialSealer: IdempotencyCredentialSealer;
-}): OperationRegistryModule {
-  if (input.draftPolicy.key !== FILES_AGENT_REQUEST_DRAFT_ACCESS_POLICY.key
-      || input.draftPolicy.version !== FILES_AGENT_REQUEST_DRAFT_ACCESS_POLICY.version) {
-    throw new TypeError('files_agent_request_draft_policy_catalog_mismatch');
-  }
-  const workspaceId = parseWorkspaceId(input.workspaceId);
-  const lane = parseOperationAccessLane({
-    kind: 'app_model', surface: 'app_model', policy: input.draftPolicy
-  });
-  const operation = FILE_REQUEST_CREATE_DRAFT_OPERATION;
-  const nullDetail = schemaRef('schema.file.request-draft.null-detail', z.null());
-  const refs = Object.freeze({
-    context: ref('context.file.request.create-draft'),
-    autonomy: ref('autonomy.file.request.create-draft'),
-    concurrency: ref('concurrency.file.request.create-draft'),
-    family: ref('file.request.create-draft.execution-family'),
-    phase: ref('file.request.create-draft.phase.single-uow'),
-    terminalization: ref('file.request.create-draft.terminalization'),
-    risk: ref('file.request.create-draft.risk-resolver'),
-    autonomyEvidence: ref('file.request.create-draft.autonomy-evidence'),
-    approval: ref('file.request.create-draft.approval-resolver'),
-    preflight: ref('file.request.create-draft.autonomy-preflight'),
-    handler: ref('handler.file.request.create-draft'),
-    projection: ref('projection.file.request.create-draft'),
-    audit: ref('audit.file.request.create-draft'),
-    auditProfile: ref('record-profile.file.request-draft.operation-audit'),
-    keySource: ref('idempotency.mcp-header')
-  });
-  const canonicalSchema = z.discriminatedUnion('kind', [
-    z.strictObject({ kind: z.literal('success'), data: fileRequestDraftDataSchema }),
-    z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
-  ]);
-  const projectedSchema = createEffectfulOperationResultSchema(fileRequestDraftDataSchema);
-  const requestDraftRefusalDetail = schemaRef(
-    'schema.file.request-draft.refusal-detail', filesCommandRefusalDetailSchema
-  );
-  const schemas = Object.freeze({
-    input: schemaRef('schema.file.request-draft.input', fileRequestCreateInputSchema),
-    contribution: schemaRef(
-      'schema.file.request-draft.contribution', fileRequestDraftContributionSchema
-    ),
-    canonical: schemaRef('schema.file.request-draft.canonical-result', canonicalSchema),
-    projected: schemaRef('schema.file.request-draft.projected-result', projectedSchema)
-  });
-  const autonomy = createOperationAutonomyPolicy({
-    definition: refs.autonomy,
-    operation,
-    riskFloor: 'low',
-    unattendedRiskCeiling: 'low',
-    supportedDispositions: [
-      'proceed', 'safe_retry', 'reconcile', 'renewed_approval',
-      'replan', 'compensate', 'block', 'attention'
-    ],
-    triggerDispositions: {
-      authority_lost: 'block',
-      unattended_bounds_exceeded: 'renewed_approval',
-      approval_required: 'renewed_approval',
-      known_retryable_failure: 'safe_retry',
-      ambiguous_external_effect: 'reconcile',
-      stale_plan: 'replan',
-      compensation_required: 'compensate',
-      terminal_failure: 'attention'
-    },
-    requiresSeparateApproval: false
-  });
-  const context = createEffectInvocationContextBuilder({
-    reference: refs.context,
-    operation,
-    effect: 'draft',
-    lanes: [lane],
-    scopeResolver: filesCurrentEventScopeResolver({ workspaceId, source: input.currentEvent }),
-    authorityResolver: input.currentAuthority,
-    clock: input.clock,
-    newInvocationId: input.ids.newInvocationId,
-    authorityPrincipalKeyProfile: input.authorityPrincipalKeyProfile,
-    scopePartitionProfile: input.scopePartitionProfile,
-    requestCanonicalizationProfile: input.requestCanonicalizationProfile,
-    requestHashProfile: FILES_COMMAND_REQUEST_HASH_PROFILE,
-    requestHashSealer: input.requestHashSealer,
-    idempotencyCredentialProfile: input.idempotencyCredentialProfile,
-    idempotencyCredentialSealer: input.idempotencyCredentialSealer,
-    deniedAuthorityOutcome: authorityOutcome
-  });
-  const family = createSingleUnitOfWorkFamilyRegistration({
-    reference: refs.family, phase: refs.phase
-  });
-  const terminalization = createTerminalizationResolverRegistration({
-    reference: refs.terminalization,
-    operation,
-    phase: refs.phase,
-    resolve: ({ result }) => result.kind === 'success'
-      ? Object.freeze({ kind: 'terminal' as const })
-      : Object.freeze({ kind: 'nonterminal' as const })
-  });
-  const phase = createSingleUnitOfWorkPhaseRegistration({
-    reference: refs.phase,
-    family: refs.family,
-    operation,
-    effect: 'draft',
-    handler: refs.handler,
-    handlerCapability: FILE_REQUEST_DRAFT_HANDLER_CAPABILITY,
-    contributionSchema: schemas.contribution,
-    terminalization: refs.terminalization,
-    terminalOutcomeKeys: [],
-    contentionOutcome: Object.freeze({
-      class: 'conflict' as const,
-      kind: 'operation.in_progress',
-      retryable: true,
-      subjects: [],
-      detail: null,
-      detailSchemaVersion: 1
-    })
-  });
-  const risk = createOperationRiskResolverRegistration({
-    reference: refs.risk,
-    operation,
-    resolve: () => Object.freeze({
-      risk: 'low' as const,
-      consequenceTags: Object.freeze(['changeset-drafted']),
-      evidenceIds: Object.freeze(['file.request.create.draft.risk'])
-    })
-  });
-  const autonomyEvidence = createAutonomyEvidenceResolverRegistration({
-    reference: refs.autonomyEvidence,
-    operation,
-    resolve: ({ subject }) => {
-      const notAfter = parseInstant(
-        new Date(Date.parse(subject.evaluatedAt) + 60_000).toISOString()
-      );
-      const bounds = Object.freeze({
-        scopeKeys: Object.freeze([...subject.scopeKeys]),
-        maximumSpendMicros: 0,
-        maximumActions: 1,
-        notAfter
-      });
-      return Object.freeze({
-        evaluatedAt: subject.evaluatedAt,
-        hardBounds: bounds,
-        unattendedBounds: bounds,
-        spendMicros: 0,
-        actionCount: 1,
-        completesBy: subject.evaluatedAt,
-        proposedAction: Object.freeze({
-          key: 'file.request.create.draft.execute',
-          version: 1,
-          digestSha256: subject.requestHashSha256
-        }),
-        failure: Object.freeze({ kind: 'none' as const })
-      });
-    }
-  });
-  const approval = createRenewedApprovalResolverRegistration({
-    reference: refs.approval,
-    operation,
-    resolve: () => Object.freeze({ approverCurrentlyAuthorized: false })
-  });
-  const preflight = createAutonomyPreflightRegistration({
-    reference: refs.preflight,
-    operation,
-    policy: refs.autonomy,
-    riskResolver: refs.risk,
-    evidenceResolver: refs.autonomyEvidence,
-    approvalResolver: refs.approval,
-    interventionOutcomes: autonomyInterventionOutcomes(1)
-  });
-  const handler = createFilesCommandHandler({
-    reference: refs.handler,
-    action: 'request.create',
-    lane: 'app_model',
-    effect: 'draft',
-    handlerCapability: FILE_REQUEST_DRAFT_HANDLER_CAPABILITY,
-    contributionSchema: schemas.contribution,
-    canonicalResultSchema: schemas.canonical
-  });
-  const accessOutcomes = CURRENT_AUTHORITY_DENIAL_REASONS.map((reason) => Object.freeze({
-    class: 'access_denied' as const,
-    kind: `authority.${reason}`,
-    retryable: false,
-    detailSchema: nullDetail
-  }));
-  return Object.freeze({
-    id: 'files.agent-request-draft.operation',
-    source: Object.freeze({
-      effectExecutionFamilies: Object.freeze([family]),
-      effectPhases: Object.freeze([phase]),
-      terminalizationResolvers: Object.freeze([terminalization]),
-      riskResolvers: Object.freeze([risk]),
-      autonomyEvidenceResolvers: Object.freeze([autonomyEvidence]),
-      renewedApprovalResolvers: Object.freeze([approval]),
-      autonomyPreflights: Object.freeze([preflight]),
-      autonomyPolicies: Object.freeze([autonomy]),
-      schemas: Object.freeze([
-        { reference: schemas.input, schema: fileRequestCreateInputSchema },
-        { reference: schemas.contribution, schema: fileRequestDraftContributionSchema },
-        { reference: schemas.canonical, schema: canonicalSchema },
-        { reference: schemas.projected, schema: projectedSchema },
-        { reference: nullDetail, schema: z.null() },
-        { reference: requestDraftRefusalDetail, schema: filesCommandRefusalDetailSchema }
-      ]),
-      contextBuilders: Object.freeze([]),
-      readCapabilities: Object.freeze([]),
-      handlers: Object.freeze([]),
-      operations: Object.freeze([]),
-      readOperationalTraceTargets: Object.freeze([]),
-      projections: Object.freeze([{
-        reference: refs.projection,
-        canonicalResultSchema: schemas.canonical,
-        projectedResultSchema: schemas.projected,
-        project: (candidate: unknown) => canonicalSchema.parse(candidate)
-      }]),
-      operationAuditTargets: Object.freeze([{
-        reference: refs.audit,
-        kind: 'operation_audit_record' as const,
-        recordProfile: refs.auditProfile
-      }]),
-      operationAuditRecordProfiles: Object.freeze([{
-        reference: refs.auditProfile,
-        kind: 'canonical_json' as const,
-        maximumBytes: 262_144
-      }]),
-      effectContextBuilders: Object.freeze([context]),
-      effectHandlers: Object.freeze([handler]),
-      effectOperations: Object.freeze([{
-        ...operation,
-        lifecycle: { status: 'active' as const },
-        summary: 'Draft one file request as an inert changeset for organizer review (MCP lane).',
-        effect: 'draft' as const,
-        maxRisk: 'low' as const,
-        autonomyPolicy: refs.autonomy,
-        consequenceTags: ['changeset-drafted'],
-        inputSchema: schemas.input,
-        contributionSchema: schemas.contribution,
-        canonicalResultSchema: schemas.canonical,
-        outcomes: [
-          {
-            class: 'idempotency_conflict' as const,
-            kind: 'operation.request_changed',
-            retryable: false,
-            detailSchema: nullDetail
-          },
-          ...accessOutcomes,
-          {
-            class: 'conflict' as const,
-            kind: 'file.event_required',
-            retryable: false,
-            detailSchema: nullDetail
-          },
-          {
-            class: 'policy_violation' as const,
-            kind: 'file.command_refused',
-            retryable: false,
-            detailSchema: requestDraftRefusalDetail
-          },
-          {
-            class: 'conflict' as const,
-            kind: 'operation.in_progress',
-            retryable: true,
-            detailSchema: nullDetail
-          },
-          ...autonomyInterventionOutcomeDeclarations(nullDetail)
-        ],
-        accessLanes: [lane],
-        contextBuilder: refs.context,
-        handlerCapability: FILE_REQUEST_DRAFT_HANDLER_CAPABILITY,
-        handler: refs.handler,
-        audit: { mode: 'required' as const, target: refs.audit },
-        idempotency: {
-          keySource: refs.keySource,
-          credentialVerifierProfile: input.idempotencyCredentialProfile,
-          requestHashProfile: FILES_COMMAND_REQUEST_HASH_PROFILE
-        },
-        concurrency: refs.concurrency,
-        execution: {
-          kind: 'single_unit_of_work' as const,
-          family: refs.family,
-          phase: refs.phase,
-          terminalization: refs.terminalization,
-          autonomyPreflight: refs.preflight
-        },
-        bindings: [{
-          surface: 'app_model' as const,
-          toolName: operation.name,
-          projection: refs.projection
-        }]
-      }])
-    })
   });
 }

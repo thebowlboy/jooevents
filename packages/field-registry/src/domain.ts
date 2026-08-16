@@ -1,3 +1,4 @@
+import { canonicalJsonSha256 } from '@jooevents/kernel';
 import {
   fieldRegistryAddDraftRequestSchema,
   fieldRegistryChangeResultSchema,
@@ -22,7 +23,7 @@ import {
   type FieldRegistryRestoreDraftRequest,
   type FieldRegistryScopeDto
 } from '@jooevents/contracts';
-import { canonicalJsonSha256 } from '@jooevents/changesets';
+
 import { suggestFieldRegistryPlacement, type FieldRegistryPlacementSuggestion } from './placement';
 import {
   fieldRegistryStateDigest,
@@ -67,6 +68,14 @@ export interface FieldRegistryFormReferenceResolver {
     scope: FieldRegistryScopeDto,
     formId: string
   ): FieldRegistryFormReference | undefined;
+}
+
+export interface FieldRegistryReadPort extends FieldRegistryFormReferenceResolver {
+  readFieldRegistry(scope: FieldRegistryScopeDto): FieldRegistryState | undefined;
+}
+
+export interface FieldRegistryTransactionPort extends FieldRegistryReadPort {
+  applyFieldRegistryPlan(plan: FieldRegistryMutationPlan): FieldRegistryChangeResult;
 }
 
 export type FieldRegistryAuthorInput =

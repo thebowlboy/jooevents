@@ -286,7 +286,7 @@ describe('the live sender-identity client', () => {
 			POST: {
 				kind: 'success',
 				data: identity({ headVersion: 2, updatedAt: '2026-08-15T09:00:00.000Z' }),
-				receipt: { ...receipt, operationName: 'event.settings.update.draft' },
+				receipt: { ...receipt, operationName: 'event.settings.update' },
 				correlationId
 			}
 		});

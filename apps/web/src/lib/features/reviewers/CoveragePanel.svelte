@@ -123,7 +123,7 @@
 				</div>
 			{/if}
 			{#if sessionRows.length > 0}
-				<div class="group">
+				<div class="group group--sessions">
 					<h3 class="group__name">Collecting sessions</h3>
 					<ul class="group__rows">{@render rows(sessionRows)}</ul>
 					<p class="group__note">Applicants aren’t counted here yet.</p>
@@ -139,6 +139,9 @@
 		border: 1px solid var(--je-color-border);
 		border-radius: var(--je-radius-surface);
 		background: var(--je-color-surface);
+		/* The groups compose against the panel's own width, not the viewport. */
+		container-type: inline-size;
+		container-name: coverage;
 	}
 
 	.panel__head {
@@ -167,10 +170,44 @@
 		color: var(--je-color-text-muted);
 	}
 
+	/* Three groups, one question. Each mini-table hugs its own content so the
+	   gap inside a row (label to count, a fixed space-4) stays strictly smaller
+	   than the boundary between groups — the nesting invariant that makes them
+	   read as separate. Because leftover width varies with the container, the
+	   boundary is also named by a hairline rather than left to space alone:
+	   stacked groups take a horizontal rule; side by side, a vertical one. */
 	.groups {
-		display: grid;
-		grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
-		gap: var(--je-space-6);
+		display: flex;
+		flex-direction: column;
+		gap: var(--je-space-3);
+	}
+
+	.group + .group {
+		border-block-start: 1px solid var(--je-color-border);
+		padding-block-start: var(--je-space-3);
+	}
+
+	/* Tracks and Formats share a row once the panel is wide enough for two
+	   mini-tables; Collecting sessions keeps its own full-width band — its rows
+	   claim less (no submissions door yet) and carry their own note, and its
+	   session titles want the reading measure, not a squeezed column. */
+	@container coverage (min-inline-size: 48rem) {
+		.groups {
+			display: grid;
+			grid-template-columns: fit-content(55%) minmax(0, 1fr);
+			gap: var(--je-space-3) var(--je-space-6);
+		}
+
+		.group:not(.group--sessions) + .group:not(.group--sessions) {
+			border-block-start: none;
+			padding-block-start: 0;
+			border-inline-start: 1px solid var(--je-color-border);
+			padding-inline-start: var(--je-space-6);
+		}
+
+		.group--sessions {
+			grid-column: 1 / -1;
+		}
 	}
 
 	.group__name {
@@ -183,13 +220,15 @@
 	}
 
 	/* The columns live on the list; each row opts in with subgrid so every
-	   count lands on one shared vertical line down the group. */
+	   count lands on one shared vertical line down the group. The label column
+	   sizes to its content (shrinkable, never stretched), so slack pools after
+	   the row instead of inside it — the counts stay beside what they count. */
 	.group__rows {
 		margin: 0;
 		padding: 0;
 		list-style: none;
 		display: grid;
-		grid-template-columns: minmax(0, 1fr) max-content max-content;
+		grid-template-columns: minmax(0, max-content) max-content max-content;
 		gap: var(--je-space-1) var(--je-space-4);
 	}
 
@@ -221,11 +260,5 @@
 		margin: var(--je-space-2) 0 0;
 		font-size: var(--je-font-size-2xs);
 		color: var(--je-color-text-muted);
-	}
-
-	@media (max-width: 920px) {
-		.groups {
-			grid-template-columns: minmax(0, 1fr);
-		}
 	}
 </style>

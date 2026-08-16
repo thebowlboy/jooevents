@@ -1,5 +1,4 @@
 import type {
-	reviewChangeDraftDataSchema,
 	ReviewDraftSaveResult,
 	ReviewPlanProjection,
 	ReviewQueueItemProjection,
@@ -7,7 +6,6 @@ import type {
 	ReviewSnapshot,
 	ReviewStanding
 } from '@jooevents/contracts/reviews';
-import type { z } from 'zod';
 
 /**
  * Browser-owned, immutable copies of Review projections.
@@ -36,7 +34,4 @@ export type ReviewQueueItemView = ReviewView<ReviewQueueItemProjection>;
 export type ReviewStandingView = ReviewView<ReviewStanding>;
 export type ReviewRoundSetupView = ReviewView<ReviewRoundSetupProjection>;
 
-export type ReviewChangeDraftView = ReviewView<
-	z.infer<typeof reviewChangeDraftDataSchema>
->;
 export type ReviewDraftSaveView = ReviewView<ReviewDraftSaveResult>;

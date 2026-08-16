@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import {
   composeOperationRegistryModules,
   createApplicationOperationRuntime,
@@ -12,30 +13,21 @@ import {
   type SynchronousClassifiedPayloadStore
 } from '@jooevents/application/synchronous-classified-payload-store';
 import {
-  CHANGESET_LIFECYCLE_ACCESS_POLICY,
-  CHANGESET_LIFECYCLE_REQUEST_HASH_PROFILE,
-  COMMIT_CHANGESET_OPERATION,
-  PROPOSE_CHANGESET_OPERATION,
-  changesetLifecycleOperationResultSchema,
-  createChangesetOperationModule
-} from '@jooevents/changeset-operations';
-import {
-  submissionDirectEntryDraftOperationResultSchema,
+  submissionDirectEntryOperationResultSchema,
   type FieldRegistrySnapshotDto,
   type FormDefinitionCreateAuthorInput
 } from '@jooevents/contracts';
 import {
   applyFormMutationPlan,
-  issueSubmissionDirectEntryChangesetPolicy,
   parseFormCatalogState,
   planFormCreation,
   planFormLifecycleChange
 } from '@jooevents/intake';
 import {
   SUBMISSION_DIRECT_ENTRY_ACCESS_POLICY,
-  SUBMISSION_DIRECT_ENTRY_DRAFT_OPERATION,
-  SUBMISSION_DIRECT_ENTRY_DRAFT_REQUEST_HASH_PROFILE,
-  createSubmissionDirectEntryDraftOperationModule
+  SUBMISSION_DIRECT_ENTRY_CREATE_OPERATION,
+  SUBMISSION_DIRECT_ENTRY_REQUEST_HASH_PROFILE,
+  createSubmissionDirectEntryOperationModule
 } from '@jooevents/intake-operations';
 import {
   parseContractVersion,
@@ -48,9 +40,6 @@ import {
   type Instant
 } from '@jooevents/kernel';
 import { createSubmissionTriageSubmitInitializer } from '@jooevents/submission-triage';
-import { openSQLite } from './database';
-import { installSQLiteChangesetLifecycleSchema } from './changeset-lifecycle';
-import { createSQLiteChangesetLifecycleEffectDomainRouter } from './changeset-lifecycle-effect-domain-router';
 import { installDeadlineSchema } from './deadline';
 import {
   createSQLiteEventSpineOperatorEventRelationshipSource,
@@ -62,16 +51,12 @@ import {
 } from './field-registry';
 import {
   createSQLiteEffectDomainAdapterRegistry,
-  installFoundationTrialUnitOfWorkSchema,
-  type SQLiteEffectDomainAdapter
+  installFoundationTrialUnitOfWorkSchema
 } from './foundation-trial-uow';
 import { SQLiteIntakeClassifiedProjection } from './intake-classified-projection';
 import {
-  createSQLiteIntakeDirectEntryChangesetEffectDomainRegistration,
-  createSQLiteIntakeDirectEntryDraftEffectDomainRegistration,
-  installSQLiteIntakeDirectEntryEffectSchema,
-  type SQLiteIntakeDirectEntryChangesetEffectIds,
-  type SQLiteIntakeDirectEntryDraftEffectIds
+  createSQLiteIntakeDirectEntryEffectDomainRegistration,
+  type SQLiteIntakeDirectEntryEffectIds
 } from './intake-direct-entry-effect-domain';
 import { installSQLiteIntakeSchema, SQLiteIntakeRepository } from './intake';
 import { installProgramVocabularySchema } from './program-vocabulary';
@@ -105,9 +90,6 @@ const profile = Object.freeze({ key: 'direct-entry-sqlite-test', version: parseC
 const evidence: InvocationEvidence = Object.freeze({
   kind: 'operator', surface: 'operator_http', client: { key: 'web.operator' },
   sessionHandle: 'verified-session-handle'
-});
-const policy = issueSubmissionDirectEntryChangesetPolicy({
-  key: 'submission.direct-entry.bounded', version: 1, approval: { create: 'none' }
 });
 
 const goodAnswers = Object.freeze([
@@ -145,34 +127,14 @@ const profiles = Object.freeze({
   )
 });
 
-function count(sqlite: ReturnType<typeof openSQLite>['sqlite'], table: string): number {
+function count(sqlite: Database, table: string): number {
   return sqlite.query<{ readonly total: number }, []>(`SELECT count(*) AS total FROM ${table}`)
     .get()?.total ?? -1;
 }
 
-function failOnFact(base: SQLiteEffectDomainAdapter): SQLiteEffectDomainAdapter {
-  return {
-    openHandlerSnapshot: base.openHandlerSnapshot.bind(base),
-    applyDomainContribution: base.applyDomainContribution.bind(base),
-    ...(base.afterReceiptParentInserted
-      ? { afterReceiptParentInserted: base.afterReceiptParentInserted.bind(base) } : {}),
-    afterReceiptChildInserted(receiptId, contribution) {
-      if ((contribution as { readonly kind?: unknown }).kind === 'domain_fact') {
-        throw new TypeError('injected_direct_entry_fact_failure');
-      }
-      return base.afterReceiptChildInserted?.(receiptId, contribution);
-    },
-    ...(base.afterExecutionClaimReleased
-      ? { afterExecutionClaimReleased: base.afterExecutionClaimReleased.bind(base) } : {}),
-    ...(base.afterUnitOfWorkCommitted
-      ? { afterUnitOfWorkCommitted: base.afterUnitOfWorkCommitted.bind(base) } : {}),
-    ...(base.afterUnitOfWorkFinished
-      ? { afterUnitOfWorkFinished: base.afterUnitOfWorkFinished.bind(base) } : {})
-  };
-}
-
-function openFixture(options: { readonly failFact?: boolean } = {}) {
-  const { sqlite } = openSQLite(':memory:');
+function openFixture() {
+  const sqlite = new Database(':memory:', { create: true, strict: true });
+  sqlite.exec('PRAGMA foreign_keys = ON;');
   installFoundationTrialUnitOfWorkSchema(sqlite);
   installEventSpineSchema(sqlite);
   installProgramVocabularySchema(sqlite);
@@ -181,8 +143,6 @@ function openFixture(options: { readonly failFact?: boolean } = {}) {
   installDeadlineSchema(sqlite);
   installSQLiteSubmissionTriageSchema(sqlite);
   installSQLiteClassifiedPayloadStoreSchema(sqlite);
-  installSQLiteChangesetLifecycleSchema(sqlite);
-  installSQLiteIntakeDirectEntryEffectSchema(sqlite);
   sqlite.query(`INSERT INTO workspaces (id, name, state, created_at, updated_at, version)
     VALUES (?, 'Workspace', 'active', 1, 1, 1)`).run(workspaceId);
   sqlite.query(`INSERT INTO users (id, status, display_name, created_at, updated_at, version)
@@ -297,12 +257,7 @@ function openFixture(options: { readonly failFact?: boolean } = {}) {
   );
   let generated = 0x1000;
   const next = () => id(generated++);
-  let changesetIdOverride: string | undefined;
-  const draftIds: SQLiteIntakeDirectEntryDraftEffectIds = {
-    newChangesetId: () => changesetIdOverride ?? next(),
-    newRevisionId: next,
-    newPreparationHandle: next,
-    newTimelineId: next,
+  const ids: SQLiteIntakeDirectEntryEffectIds = {
     newPayloadRefId: next,
     newSubmissionId: next,
     newEntryEvidenceId: next,
@@ -310,40 +265,21 @@ function openFixture(options: { readonly failFact?: boolean } = {}) {
     newParticipantIdentityId: next,
     newParticipantEvidenceId: next
   };
-  const lifecycleIds: SQLiteIntakeDirectEntryChangesetEffectIds = {
-    newChangesetId: next, newRevisionId: next, newApprovalId: next,
-    newCorrectionAttemptId: next, newPreparationHandle: next,
-    newTimelineId: next, newFactId: next, newPointerId: next
-  };
   const eventRelationships = createSQLiteEventSpineOperatorEventRelationshipSource();
   const submissionTriage = createSubmissionTriageSubmitInitializer({
     store: triageRepository,
     ids: { newArrivalId: next }
   });
-  let referenceCount = 0;
-  const draftRegistration = createSQLiteIntakeDirectEntryDraftEffectDomainRegistration({
-    sqlite, workspaceId, policy, repository, classifiedStore,
-    classifiedProfiles: profiles, eventRelationships, ids: draftIds
+  const registration = createSQLiteIntakeDirectEntryEffectDomainRegistration({
+    sqlite, workspaceId, repository, projection, submissionTriage, classifiedStore,
+    classifiedProfiles: profiles, eventRelationships, ids
   });
-  const lifecycleRegistration = createSQLiteIntakeDirectEntryChangesetEffectDomainRegistration({
-    sqlite, workspaceId, policy, repository, projection, submissionTriage,
-    references: [{ countSubmissionReferences: () => referenceCount }],
-    eventRelationships, ids: lifecycleIds
-  });
-  const routed = createSQLiteChangesetLifecycleEffectDomainRouter([{
-    ownerId: lifecycleRegistration.ownerId,
-    adapter: options.failFact
-      ? failOnFact(lifecycleRegistration.adapter)
-      : lifecycleRegistration.adapter,
-    ownerResolution: lifecycleRegistration.ownerResolution,
-    subjectRelationships: lifecycleRegistration.subjectRelationships
-  }]);
-  const adapters = createSQLiteEffectDomainAdapterRegistry([draftRegistration, routed]);
+  const adapters = createSQLiteEffectDomainAdapterRegistry([registration]);
   let revoked = false;
   let grantKey = 'event.manage';
   let currentTime: Instant = start;
   const authority: Parameters<
-    typeof createSubmissionDirectEntryDraftOperationModule
+    typeof createSubmissionDirectEntryOperationModule
   >[0]['currentAuthority'] = {
     resolve(input) {
       if (revoked) return { kind: 'denied', reason: 'revoked' };
@@ -361,7 +297,7 @@ function openFixture(options: { readonly failFact?: boolean } = {}) {
       };
     }
   };
-  const draftModule = createSubmissionDirectEntryDraftOperationModule({
+  const directModule = createSubmissionDirectEntryOperationModule({
     workspaceId,
     policy: SUBMISSION_DIRECT_ENTRY_ACCESS_POLICY,
     currentAuthority: authority,
@@ -373,7 +309,7 @@ function openFixture(options: { readonly failFact?: boolean } = {}) {
       scopePartitionProfile: profile,
       requestCanonicalizationProfile: profile,
       requestHashSealer: createHmacRequestHashSealer({
-        profile: SUBMISSION_DIRECT_ENTRY_DRAFT_REQUEST_HASH_PROFILE,
+        profile: SUBMISSION_DIRECT_ENTRY_REQUEST_HASH_PROFILE,
         keyBytes: new Uint8Array(32).fill(0x64)
       }),
       idempotencyCredentialProfile: profile,
@@ -381,33 +317,9 @@ function openFixture(options: { readonly failFact?: boolean } = {}) {
         seal(raw: string) {
           return {
             verifierProfile: profile,
-            verifierSha256: createHash('sha256').update(`draft:${raw}`).digest('hex')
+            verifierSha256: createHash('sha256').update(`direct:${raw}`).digest('hex')
           };
         }
-      }
-    }
-  });
-  const lifecycleModule = createChangesetOperationModule({
-    workspaceId, policy: CHANGESET_LIFECYCLE_ACCESS_POLICY,
-    currentAuthority: authority,
-    lifecycleStore: lifecycleRegistration.lifecycleStore,
-    ownerResolution: routed.ownerResolution,
-    clock: { now: () => currentTime },
-    ids: { newInvocationId: () => parseInvocationId(next()) },
-    authorityPrincipalKeyProfile: profile,
-    scopePartitionProfile: profile,
-    requestCanonicalizationProfile: profile,
-    requestHashSealer: createHmacRequestHashSealer({
-      profile: CHANGESET_LIFECYCLE_REQUEST_HASH_PROFILE,
-      keyBytes: new Uint8Array(32).fill(0x46)
-    }),
-    idempotencyCredentialProfile: profile,
-    idempotencyCredentialSealer: {
-      seal(raw) {
-        return {
-          verifierProfile: profile,
-          verifierSha256: createHash('sha256').update(`lifecycle:${raw}`).digest('hex')
-        };
       }
     }
   });
@@ -416,23 +328,19 @@ function openFixture(options: { readonly failFact?: boolean } = {}) {
   });
   let receipt = 0x8000;
   const runtime = createApplicationOperationRuntime({
-    source: composeOperationRegistryModules([draftModule, lifecycleModule]),
+    source: composeOperationRegistryModules([directModule]),
     read: {
       operationalTrace: { emit() {} }, immutableAudit: { append() {} },
       clock: { now: () => currentTime }, newInvocationId: () => parseInvocationId(next())
     },
-    unitOfWork, newReceiptId: () => id(receipt++)
+    unitOfWork, newOperationLogId: () => id(receipt++)
   });
   let request = 0x9000;
   return {
     sqlite, repository, triageRepository,
-    lifecycle: lifecycleRegistration.lifecycleStore,
-    ownerResolution: routed.ownerResolution,
     close: () => sqlite.close(),
     setRevoked(value: boolean) { revoked = value; },
     setGrantKey(value: string) { grantKey = value; },
-    setReferenceCount(value: number) { referenceCount = value; },
-    forceNextChangesetId(value: string | undefined) { changesetIdOverride = value; },
     advance() {
       currentTime = parseInstant(new Date(Date.parse(currentTime) + 1_000).toISOString());
     },
@@ -455,28 +363,24 @@ function openFixture(options: { readonly failFact?: boolean } = {}) {
 
 function durableCounts(fixture: ReturnType<typeof openFixture>) {
   return {
-    receipts: count(fixture.sqlite, 'foundation_trial_operation_receipts'),
-    audits: count(fixture.sqlite, 'foundation_trial_operation_audits'),
+    receipts: 0,
+    audits: 0,
     submissions: count(fixture.sqlite, 'intake_submission_heads'),
     entryEvidence: count(fixture.sqlite, 'intake_submission_direct_entry_evidence'),
     participants: count(fixture.sqlite, 'intake_submission_participant_evidence'),
     arrivals: count(fixture.sqlite, 'submission_arrival_facts'),
     triageHeads: count(fixture.sqlite, 'submission_triage_heads'),
-    draftLinks: count(fixture.sqlite, 'intake_direct_entry_draft_receipt_links'),
-    lifecycleLinks: count(fixture.sqlite, 'intake_direct_entry_changeset_receipt_links'),
-    facts: count(fixture.sqlite, 'intake_direct_entry_changeset_domain_facts'),
-    pointers: count(fixture.sqlite, 'intake_direct_entry_changeset_outbox_pointers'),
-    commits: count(fixture.sqlite, 'changeset_commit_links')
+    operationLog: count(fixture.sqlite, 'operation_log')
   };
 }
 
-async function draftEntry(
+async function createEntry(
   fixture: ReturnType<typeof openFixture>,
   key: string,
   input: Record<string, unknown> = {}
 ) {
-  return submissionDirectEntryDraftOperationResultSchema.parse(await fixture.effect(
-    SUBMISSION_DIRECT_ENTRY_DRAFT_OPERATION,
+  return submissionDirectEntryOperationResultSchema.parse(await fixture.effect(
+    SUBMISSION_DIRECT_ENTRY_CREATE_OPERATION,
     {
       formId,
       expectedFormDefinitionVersion: 2,
@@ -487,261 +391,71 @@ async function draftEntry(
   ));
 }
 
-async function draftAndPropose(fixture: ReturnType<typeof openFixture>, key: string) {
-  const draft = await draftEntry(fixture, `${key}-draft`);
-  if (draft.kind !== 'success') throw new TypeError('direct_entry_draft_failed');
-  const selector = {
-    changesetId: draft.data.changesetId,
-    revisionId: draft.data.revision.id,
-    revisionDigest: draft.data.revision.digestSha256
-  };
-  const proposed = changesetLifecycleOperationResultSchema.parse(await fixture.effect(
-    PROPOSE_CHANGESET_OPERATION,
-    { ...selector, expectedHeadVersion: draft.data.headVersion },
-    `${key}-propose`
-  ));
-  if (proposed.kind !== 'success' || proposed.data.action !== 'propose') {
-    throw new TypeError('direct_entry_propose_failed');
-  }
-  return { draft, selector, proposedHeadVersion: proposed.data.diff.headVersion };
-}
-
-describe('SQLite direct-entry effect domains', () => {
-  test('commits one submission with same-transaction triage initialization, replay-safe receipts, and typed authority denial', async () => {
+describe('SQLite direct-entry direct effect domain', () => {
+  test('one call commits submission and triage atomically, replays, and key-conflicts changed bytes', async () => {
     const fixture = openFixture();
     try {
       const entryTime = fixture.currentTime();
-      const { draft, selector, proposedHeadVersion } = await draftAndPropose(fixture, 'happy');
-      if (draft.kind !== 'success') throw new TypeError('draft_failed');
-      expect(draft.data).toMatchObject({
-        action: 'create', riskTier: 'low', status: 'draft'
+      const committed = await createEntry(fixture, 'direct-entry-one-key');
+      expect(committed).toMatchObject({
+        kind: 'success',
+        data: { action: 'create', formId, formVersionId, source: 'direct_entry', submittedAt: entryTime }
       });
-      const submissionId = draft.data.safeDiff.submission.id;
-      expect(draft.data.safeDiff.submission).toMatchObject({
-        source: 'direct_entry', formId, formVersionId, submittedAt: entryTime
-      });
-      expect(JSON.stringify(draft.data.safeDiff)).not.toContain('entered.speaker@example.test');
-      expect(await fixture.ownerResolution.resolveOwner(
-        fixture.lifecycle.read(selector.changesetId)!
-      )).toMatchObject({ id: 'intake_direct_entry' });
-      // Nothing effective exists while the changeset is only drafted/proposed.
+      if (committed.kind !== 'success') throw new TypeError('direct_entry_commit_failed');
+      const submissionId = committed.data.submissionId;
       expect(fixture.repository.readSubmissionHead({ workspaceId, eventId }, submissionId))
-        .toBeUndefined();
-      expect(fixture.triageRepository.readTriageState({ workspaceId, eventId })).toBeUndefined();
-
-      fixture.advance();
-      const commitInput = { ...selector, expectedHeadVersion: proposedHeadVersion };
-      const committed = changesetLifecycleOperationResultSchema.parse(await fixture.effect(
-        COMMIT_CHANGESET_OPERATION, commitInput, 'happy-commit'
-      ));
-      expect(committed).toMatchObject({ kind: 'success', data: { action: 'commit' } });
-      if (committed.kind !== 'success') throw new TypeError('commit_failed');
-
-      const head = fixture.repository.readSubmissionHead({ workspaceId, eventId }, submissionId);
-      expect(head).toMatchObject({
-        source: 'direct_entry', status: 'submitted', version: 1, submittedAt: entryTime
-      });
-      const entryEvidence = fixture.repository.readDirectEntryEvidence(
-        { workspaceId, eventId }, submissionId
-      );
-      expect(entryEvidence).toMatchObject({ enteredByUserId: userId, submittedAt: entryTime });
-      const triage = fixture.triageRepository.readTriageState({ workspaceId, eventId });
-      expect(triage?.entries).toHaveLength(1);
-      expect(triage?.entries[0]).toMatchObject({
-        arrival: { source: 'direct_entry', classification: 'on_time', closeEvidence: null },
-        head: { state: 'inbox', version: 1 }
-      });
-      const factRow = fixture.sqlite.query<{ readonly payload_json: string }, []>(`
-        SELECT payload_json FROM intake_direct_entry_changeset_domain_facts
-      `).get();
-      expect(factRow).toBeDefined();
-      const payload = JSON.parse(factRow!.payload_json) as {
-        readonly contributions: readonly { readonly result: {
-          readonly submissionId: string;
-          readonly undo: { readonly kind: string; readonly submissionId: string };
-          readonly triage: { readonly replay: boolean };
-        }; }[];
-      };
-      expect(payload.contributions[0]?.result).toMatchObject({
-        submissionId,
-        undo: { kind: 'submission_triage_discard_recoverable', submissionId },
-        triage: { replay: false }
-      });
-      expect(JSON.stringify(fixture.sqlite.query('SELECT * FROM changeset_revisions').all()))
-        .not.toContain('entered.speaker@example.test');
-      expect(JSON.stringify(fixture.sqlite.query('SELECT * FROM intake_submission_direct_entry_evidence').all()))
-        .not.toContain('entered.speaker@example.test');
+        .toMatchObject({ source: 'direct_entry', status: 'submitted', version: 1 });
+      expect(fixture.triageRepository.readTriageState({ workspaceId, eventId })?.entries[0])
+        .toMatchObject({
+          arrival: { source: 'direct_entry', classification: 'on_time' },
+          head: { state: 'inbox', version: 1 }
+        });
       const committedCounts = durableCounts(fixture);
       expect(committedCounts).toMatchObject({
         submissions: 1, entryEvidence: 1, participants: 1, arrivals: 1, triageHeads: 1,
-        draftLinks: 1, lifecycleLinks: 2, facts: 1, pointers: 1, commits: 1
+        receipts: 0, operationLog: 1
       });
+			expect(fixture.sqlite.query<{ summary: string }, []>(
+				"SELECT summary FROM operation_log WHERE operation_name = 'submission.direct_entry.create'"
+			).get()).toEqual({ summary: 'Added a direct-entry submission' });
 
-      // Response loss: replaying the same idempotency key returns the stored receipt.
-      const replayed = await fixture.effect(
-        COMMIT_CHANGESET_OPERATION, commitInput, 'happy-commit'
-      );
+      const replayed = await createEntry(fixture, 'direct-entry-one-key');
       expect(replayed).toMatchObject({ kind: 'success', receipt: { id: committed.receipt.id } });
-      expect(durableCounts(fixture)).toEqual({
-        ...committedCounts, audits: committedCounts.audits + 1
-      });
+      expect(durableCounts(fixture)).toEqual(committedCounts);
 
-      // Idempotent-key reuse with a different request refuses instead of double-writing.
-      const conflictBase = durableCounts(fixture);
-      expect(await fixture.effect(
-        COMMIT_CHANGESET_OPERATION,
-        { ...commitInput, expectedHeadVersion: commitInput.expectedHeadVersion + 1 },
-        'happy-commit'
-      )).toMatchObject({
+      expect(await createEntry(fixture, 'direct-entry-one-key', {
+        answers: goodAnswers.map((answer) => answer.kind === 'text'
+          ? { ...answer, value: 'Changed request' }
+          : answer)
+      })).toMatchObject({
         kind: 'outcome',
         outcome: { class: 'idempotency_conflict', kind: 'operation.request_changed' }
       });
-      expect(durableCounts(fixture)).toEqual({
-        ...conflictBase, audits: conflictBase.audits + 1
-      });
+      expect(durableCounts(fixture)).toEqual(committedCounts);
+      expect(fixture.sqlite.query<Record<string, unknown>, []>('PRAGMA foreign_key_check').all())
+        .toEqual([]);
+    } finally { fixture.close(); }
+  });
 
-      // Authority denial is a typed outcome, not a silent skip.
+  test('current authority and form guards refuse without partial writes', async () => {
+    const fixture = openFixture();
+    try {
+      const before = durableCounts(fixture);
       fixture.setRevoked(true);
-      fixture.advance();
-      const deniedBase = durableCounts(fixture);
-      expect(await draftEntry(fixture, 'revoked-draft')).toMatchObject({
+      expect(await createEntry(fixture, 'revoked-direct-entry')).toMatchObject({
         kind: 'outcome', outcome: { class: 'access_denied', kind: 'authority.revoked' }
       });
-      expect(durableCounts(fixture)).toEqual({
-        ...deniedBase, audits: deniedBase.audits + 1
-      });
+      expect(durableCounts(fixture)).toEqual(before);
       fixture.setRevoked(false);
-
-      expect(fixture.sqlite.query<Record<string, unknown>, []>('PRAGMA foreign_key_check').all())
-        .toEqual([]);
-    } finally { fixture.close(); }
-  });
-
-  test('missing permission grant, cross-scope form, and duplicate server ids all refuse without partial writes', async () => {
-    const fixture = openFixture();
-    try {
-      const before = durableCounts(fixture);
-      fixture.setGrantKey('event.read');
-      await expect(draftEntry(fixture, 'wrong-grant'))
-        .rejects.toThrow('Operation execution failed during write_snapshot.');
-      fixture.setGrantKey('event.manage');
-      expect(durableCounts(fixture)).toEqual(before);
-
-      // A form outside the current event scope is invisible, not borrowable.
-      expect(fixture.repository.readFormHead(
-        { workspaceId, eventId: otherEventId }, formId
-      )).toBeUndefined();
-      const crossScope = await draftEntry(fixture, 'cross-scope', { formId: id(0x7777) });
-      expect(crossScope).toMatchObject({
+      expect(await createEntry(fixture, 'stale-form', {
+        expectedFormDefinitionVersion: 1
+      })).toMatchObject({
         kind: 'outcome',
-        outcome: {
-          class: 'stale_revision',
-          kind: 'submission_direct_entry.changed',
-          detail: { code: 'form_missing', action: 'create' }
-        }
+        outcome: { class: 'stale_revision', kind: 'submission_direct_entry.changed' }
       });
-
-      const first = await draftEntry(fixture, 'collision-first');
-      if (first.kind !== 'success') throw new TypeError('draft_failed');
-      const collisionBase = durableCounts(fixture);
-      fixture.forceNextChangesetId(first.data.changesetId);
-      await expect(draftEntry(fixture, 'collision-second')).rejects.toThrow();
-      fixture.forceNextChangesetId(undefined);
-      expect(durableCounts(fixture)).toEqual(collisionBase);
-      expect(fixture.sqlite.query<Record<string, unknown>, []>('PRAGMA foreign_key_check').all())
-        .toEqual([]);
-    } finally { fixture.close(); }
-  });
-
-  test('typed refusals: titleless, missing email, consent transcription, closed form, and no backdated submittedAt input', async () => {
-    const fixture = openFixture();
-    try {
-      const refused = (detailCode: string, kind = 'submission_direct_entry.refused', klass = 'policy_violation') =>
-        expect.objectContaining({
-          kind: 'outcome',
-          outcome: expect.objectContaining({
-            class: klass, kind, retryable: false,
-            detail: expect.objectContaining({ code: detailCode, action: 'create', formId })
-          })
-        });
-      expect(await draftEntry(fixture, 'titleless', {
-        answers: goodAnswers.filter((answer) => answer.fieldId !== titleId)
-      })).toEqual(refused('direct_entry_title_required'));
-      expect(await draftEntry(fixture, 'emailless', {
-        answers: goodAnswers.filter((answer) => answer.fieldId !== emailId)
-      })).toEqual(refused('direct_entry_email_required'));
-      expect(await draftEntry(fixture, 'consented', {
-        answers: [...goodAnswers, { kind: 'checkbox', fieldId: consentId, checked: true }]
-      })).toEqual(refused('invalid_answers'));
-
-      // The wire cannot carry its own submittedAt or source: strict input refuses.
-      await expect(draftEntry(fixture, 'backdated', {
-        submittedAt: '2020-01-01T00:00:00.000Z'
-      })).rejects.toBeDefined();
-      await expect(draftEntry(fixture, 'sourced', { source: 'public_form' }))
-        .rejects.toBeDefined();
-
-      // Stale expected form version refuses as stale, never writes.
-      expect(await draftEntry(fixture, 'stale-version', {
-        expectedFormDefinitionVersion: 9
-      })).toEqual(refused('form_version_mismatch', 'submission_direct_entry.changed', 'stale_revision'));
-
-      // Close the form, then both a fresh draft and a pre-closed commit refuse.
-      const { selector, proposedHeadVersion } = await draftAndPropose(fixture, 'pre-close');
-      const registry = fixture.repository.readFieldRegistrySnapshot({ workspaceId, eventId })!;
-      const catalog = fixture.repository.readFormCatalog({ workspaceId, eventId })!;
-      const head = catalog.heads.find((candidate) => candidate.id === formId)!;
-      const close = planFormLifecycleChange({
-        head,
-        registry,
-        existingVersions: fixture.repository.readFormVersions({ workspaceId, eventId }, formId),
-        authorInput: {
-          transition: 'close',
-          formId,
-          expectedDefinitionVersion: head.version
-        },
-        references: fixture.repository,
-        server: { updatedByUserId: userId, updatedAt: fixture.currentTime() }
+      expect(durableCounts(fixture)).toMatchObject({
+        submissions: 0, entryEvidence: 0, participants: 0, arrivals: 0, triageHeads: 0
       });
-      fixture.sqlite.exec('BEGIN IMMEDIATE');
-      fixture.repository.applyFormMutation(close);
-      fixture.sqlite.exec('COMMIT');
-
-      expect(await draftEntry(fixture, 'closed-draft'))
-        .toEqual(refused('form_not_open', 'submission_direct_entry.changed', 'stale_revision'));
-      const beforeCommit = durableCounts(fixture);
-      const closedCommit = await fixture.effect(
-        COMMIT_CHANGESET_OPERATION,
-        { ...selector, expectedHeadVersion: proposedHeadVersion },
-        'closed-commit'
-      );
-      expect(closedCommit).toMatchObject({ kind: 'outcome' });
-      const after = durableCounts(fixture);
-      expect(after.submissions).toBe(beforeCommit.submissions);
-      expect(after.arrivals).toBe(beforeCommit.arrivals);
-      expect(after.commits).toBe(beforeCommit.commits);
-      expect(after.facts).toBe(beforeCommit.facts);
-    } finally { fixture.close(); }
-  });
-
-  test('a late commit-evidence failure rolls the submission, triage spine, and receipts back atomically', async () => {
-    const fixture = openFixture({ failFact: true });
-    try {
-      const { draft, selector, proposedHeadVersion } = await draftAndPropose(fixture, 'rollback');
-      if (draft.kind !== 'success') throw new TypeError('draft_failed');
-      const submissionId = draft.data.safeDiff.submission.id;
-      const before = durableCounts(fixture);
-      await expect(fixture.effect(
-        COMMIT_CHANGESET_OPERATION,
-        { ...selector, expectedHeadVersion: proposedHeadVersion },
-        'rollback-commit'
-      )).rejects.toThrow('Operation execution failed during receipt_children.');
-      expect(durableCounts(fixture)).toEqual(before);
-      expect(fixture.repository.readSubmissionHead({ workspaceId, eventId }, submissionId))
-        .toBeUndefined();
-      expect(fixture.triageRepository.readTriageState({ workspaceId, eventId })).toBeUndefined();
-      expect(fixture.sqlite.query<Record<string, unknown>, []>('PRAGMA foreign_key_check').all())
-        .toEqual([]);
     } finally { fixture.close(); }
   });
 });

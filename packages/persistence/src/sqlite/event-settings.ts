@@ -17,7 +17,7 @@ import {
 import { parseEventId, parseWorkspaceId, type EventId, type WorkspaceId } from '@jooevents/kernel';
 import { SQLiteEventSpineRepository } from './event-spine';
 
-/** Additive schema installed only in an explicitly ephemeral SQLite runtime. */
+/** This schema contributes to the accepted epoch-2 baseline and may also serve isolated fixtures. */
 export const EVENT_SETTINGS_SQL = `
 CREATE TABLE event_settings_companions (
   workspace_id TEXT NOT NULL CHECK(length(workspace_id) = 36),

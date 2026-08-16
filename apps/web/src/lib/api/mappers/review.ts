@@ -3,17 +3,12 @@ import type {
 	ReviewRoundSetupProjection,
 	ReviewSnapshot
 } from '@jooevents/contracts/reviews';
-import type { z } from 'zod';
-import type { reviewChangeDraftDataSchema } from '@jooevents/contracts/reviews';
 import type {
-	ReviewChangeDraftView,
 	ReviewDraftSaveView,
 	ReviewRoundSetupView,
 	ReviewSnapshotView,
 	ReviewView
 } from '../view-models/review';
-
-type ReviewChangeDraftData = z.infer<typeof reviewChangeDraftDataSchema>;
 
 function freezeJson(value: unknown): void {
 	if (value === null || typeof value !== 'object' || Object.isFrozen(value)) return;
@@ -38,12 +33,6 @@ export function mapReviewSnapshot(value: ReviewSnapshot): ReviewSnapshotView {
 export function mapReviewRoundSetup(
 	value: ReviewRoundSetupProjection
 ): ReviewRoundSetupView {
-	return immutableCopy(value);
-}
-
-export function mapReviewChangeDraft(
-	value: ReviewChangeDraftData
-): ReviewChangeDraftView {
 	return immutableCopy(value);
 }
 

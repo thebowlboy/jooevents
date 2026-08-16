@@ -1,7 +1,5 @@
 import { Database } from 'bun:sqlite';
 import { existsSync } from 'node:fs';
-import { drizzle } from 'drizzle-orm/bun-sqlite';
-import * as schema from '../schema';
 import { SQLiteFoundationError } from './foundation-errors';
 import {
   acquireSQLiteExclusiveLock,
@@ -24,11 +22,8 @@ import {
 } from './migration-runner';
 import { captureSQLiteSchema, fingerprintSQLiteSchema } from './schema-snapshot';
 
-export type SQLiteDatabase = ReturnType<typeof drizzle<typeof schema>>;
-
 export interface OpenSQLiteResult {
   readonly sqlite: Database;
-  readonly db: SQLiteDatabase;
   readonly migration: SQLiteMigrationState;
 }
 
@@ -192,7 +187,7 @@ export function openSQLite(path: string, options: OpenSQLiteOptions = {}): OpenS
     migrationLock?.release();
     migrationLock = undefined;
     if (owner) attachSQLiteOwner(sqlite, owner);
-    return { sqlite, db: drizzle(sqlite, { schema }), migration };
+    return { sqlite, migration };
   } catch (error) {
     sqlite.close();
     owner?.release();

@@ -1,9 +1,5 @@
+import type { ReviewerRosterSnapshotDto } from '@jooevents/contracts/reviewer-roster';
 import type {
-	ReviewerRosterChangeDraftData,
-	ReviewerRosterSnapshotDto
-} from '@jooevents/contracts/reviewer-roster';
-import type {
-	ReviewerRosterChangeDraftView,
 	ReviewerRosterSnapshotView,
 	ReviewerRosterView
 } from '../view-models/reviewer-roster';
@@ -27,11 +23,5 @@ function immutableCopy<Value>(value: Value): ReviewerRosterView<Value> {
 export function mapReviewerRosterSnapshot(
 	value: ReviewerRosterSnapshotDto
 ): ReviewerRosterSnapshotView {
-	return immutableCopy(value);
-}
-
-export function mapReviewerRosterChangeDraft(
-	value: ReviewerRosterChangeDraftData
-): ReviewerRosterChangeDraftView {
 	return immutableCopy(value);
 }

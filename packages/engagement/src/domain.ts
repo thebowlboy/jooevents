@@ -3,16 +3,12 @@ import {
   engagementMutationPlanningInputSchema,
   engagementMutationPlanSchema,
   engagementMutationResultSchema,
-  engagementRestorePlanSchema,
-  engagementSafeDiffSchema,
   type EngagementAuthorInput,
   type EngagementConfirmationDto,
   type EngagementHeadDto,
   type EngagementMutationPlanDto,
   type EngagementMutationPlanningInput,
   type EngagementMutationResult,
-  type EngagementRestorePlanDto,
-  type EngagementSafeDiffDto,
   type EngagementScopeDto
 } from '@jooevents/contracts';
 import { encodeCanonicalJson } from '@jooevents/kernel';
@@ -156,102 +152,12 @@ export function validateEngagementMutationPlan(input: {
     : { code: 'invalid_plan', engagementId: input.plan.input.engagementId };
 }
 
-/**
- * Revalidates a compensating restore against current state: the pinned current
- * head must match exactly, so anything that touched the engagement after the
- * original response refuses `stale_engagement` instead of clobbering it.
- */
-export function validateEngagementRestorePlan(input: {
-  readonly plan: EngagementRestorePlanDto;
-  readonly environment: EngagementEnvironment;
-}): EngagementPlanRefusal | undefined {
-  const plan = engagementRestorePlanSchema.parse(input.plan);
-  const current = input.environment.engagements.readEngagementHead(
-    plan.scope, plan.expectedCurrent.id
-  );
-  if (!current || canonical(current) !== canonical(plan.expectedCurrent)) {
-    return { code: 'stale_engagement', engagementId: plan.expectedCurrent.id };
-  }
-  return undefined;
-}
-
-export type EngagementCompensationPlan =
-  | { readonly kind: 'exact'; readonly plan: EngagementRestorePlanDto }
-  | { readonly kind: 'blocked'; readonly reasonKey: string };
-
-/**
- * Compensation restores the exact before image (as a forward version bump) and
- * is available only while the engagement still is exactly as the original
- * response left it; any later movement blocks with `engagement.changed`.
- */
-export function planEngagementCompensation(input: {
-  readonly original: EngagementMutationPlanDto;
-  readonly environment: EngagementEnvironment;
-  readonly actorUserId: string;
-  readonly occurredAt: string;
-}): EngagementCompensationPlan {
-  const scope = input.original.input.scope;
-  const current = input.environment.engagements.readEngagementHead(
-    scope, input.original.input.engagementId
-  );
-  if (!current || canonical(current) !== canonical(input.original.after)) {
-    return { kind: 'blocked', reasonKey: 'engagement.changed' };
-  }
-  const restore = parseEngagementHead({
-    ...input.original.before,
-    version: current.version + 1
-  });
-  return {
-    kind: 'exact',
-    plan: engagementRestorePlanSchema.parse({
-      action: 'restore',
-      scope,
-      actorUserId: input.actorUserId,
-      occurredAt: input.occurredAt,
-      expectedCurrent: current,
-      restore
-    })
-  };
-}
-
-export function isEngagementRestorePlan(
-  value: EngagementMutationPlanDto | EngagementRestorePlanDto
-): value is EngagementRestorePlanDto {
-  return 'action' in value && value.action === 'restore';
-}
-
 export function engagementMutationResultFromPlan(
   plan: EngagementMutationPlanDto
 ): EngagementMutationResult {
   return engagementMutationResultSchema.parse({
     action: plan.input.action,
     engagement: plan.after
-  });
-}
-
-export function engagementMutationResultFromRestore(
-  plan: EngagementRestorePlanDto
-): EngagementMutationResult {
-  return engagementMutationResultSchema.parse({
-    action: 'restore',
-    engagement: plan.restore
-  });
-}
-
-export function projectEngagementSafeDiff(
-  plan: EngagementMutationPlanDto | EngagementRestorePlanDto
-): EngagementSafeDiffDto {
-  if (isEngagementRestorePlan(plan)) {
-    return engagementSafeDiffSchema.parse({
-      action: 'restore',
-      before: plan.expectedCurrent,
-      after: plan.restore
-    });
-  }
-  return engagementSafeDiffSchema.parse({
-    action: plan.input.action,
-    before: plan.before,
-    after: plan.after
   });
 }
 

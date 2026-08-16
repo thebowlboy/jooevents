@@ -2,12 +2,17 @@ import { createHash, createHmac as createNodeHmac } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { makeSignature } from 'better-auth/crypto';
 import {
   assertOperatorAuthorityPolicyCatalogCoversOperationRegistry,
   COMMUNICATION_PROVIDER_MANAGE_ACCESS_POLICY,
   COMMUNICATION_PROVIDER_OPERATIONS,
   composeOperationRegistryModules,
+  createAgentActionPlanSurface,
+  createAgentActionRunner,
   createApplicationOperationRuntime,
+  createRegisteredAgentActionEligibilityCatalog,
+  createRegisteredAgentActionExecutor,
   OperationInputError,
   createClassifiedPayloadProfileRef,
   createCommunicationProviderReadOperationModule,
@@ -16,9 +21,11 @@ import {
   createProvisioningService,
   createWorkspaceTeamOperationModule,
   type InvocationEvidence,
+  type AgentActionCurrentAuthority,
+  type ApprovedAgentActionOperationExecutionPort,
+  type RegisteredAgentActionEligibility,
   type OperationRegistryModule,
-  WORKSPACE_TEAM_DRAFT_HANDLER_CAPABILITY,
-  WORKSPACE_TEAM_DRAFT_REQUEST_HASH_PROFILE,
+  WORKSPACE_TEAM_MUTATION_REQUEST_HASH_PROFILE,
   WORKSPACE_TEAM_OPERATION_ACCESS,
 } from '@jooevents/application';
 import { createPublicEffectConformanceBoundary } from '@jooevents/application/public-effect-conformance';
@@ -29,9 +36,16 @@ import {
   issueSynchronousClassifiedPayloadEncryptionProfile
 } from '@jooevents/application/synchronous-classified-payload-store';
 import {
+  accessContextSchema,
+  effectfulOperationResultSchema,
   intakeIdInputSchema,
   intakeIdSchema,
-  readOperationResultSchema
+  readOperationResultSchema,
+  workspaceTeamSnapshotSchema,
+  type AgentActionBatchView,
+  type EffectfulOperationResult,
+  type ReadOperationResult,
+  type WorkspaceTeamSnapshot
 } from '@jooevents/contracts';
 import type {
   FormTarget,
@@ -52,22 +66,15 @@ import {
   FILE_PORTAL_READ_ACCESS_POLICY,
   FILE_READ_ACCESS_POLICY,
   FILE_READ_PERMISSION_ID,
-  FILES_AGENT_REQUEST_DRAFT_ACCESS_POLICY,
   FILES_COMMAND_ACCESS_POLICY,
   FILES_COMMAND_REQUEST_HASH_PROFILE,
   FILES_PORTAL_COMMAND_ACCESS_POLICY,
   FILE_MANAGE_PERMISSION_ID,
-  createFilesAgentRequestDraftOperationModule,
   createFilesCommandOperationModule,
   createFilesPortalCommandOperationModule,
   createFilesPortalReadOperationModule,
   createFilesReadOperationModule
 } from '@jooevents/files-operations';
-import {
-  CHANGESET_LIFECYCLE_ACCESS_POLICY,
-  CHANGESET_LIFECYCLE_REQUEST_HASH_PROFILE,
-  createChangesetOperationModule
-} from '@jooevents/changeset-operations';
 import {
   COMMUNICATION_SEND_LANE_OPERATIONS,
   ORGANIZER_COMMUNICATION_DRAFT_ACCESS_POLICY,
@@ -98,42 +105,34 @@ import {
   type OrganizerMergeValueSource
 } from '@jooevents/communications';
 import {
-  DEADLINE_DRAFT_REQUEST_HASH_PROFILE,
+  DEADLINE_CHANGE_REQUEST_HASH_PROFILE,
   DEADLINE_MANAGE_ACCESS_POLICY,
   DEADLINE_READ_ACCESS_POLICY,
   createDeadlineOperationModule
 } from '@jooevents/deadline-operations';
 import {
-  DECISION_DRAFT_ACCESS_POLICY,
-  DECISION_DRAFT_REQUEST_HASH_PROFILE,
+  DECISION_MANAGE_ACCESS_POLICY,
+  DECISION_REQUEST_HASH_PROFILE,
   DECISION_READ_ACCESS_POLICY,
-  createDecisionDraftOperationModule,
+  createDecisionDirectOperationModule,
   createDecisionOperationModule
 } from '@jooevents/decision-operations';
 import {
-  ENGAGEMENT_CHANGE_DRAFT_OPERATION,
-  ENGAGEMENT_DRAFT_ACCESS_POLICY,
-  ENGAGEMENT_DRAFT_APPROVAL_POLICY,
-  ENGAGEMENT_DRAFT_HANDLER_CAPABILITY,
-  ENGAGEMENT_DRAFT_PERMISSION_ID,
-  ENGAGEMENT_DRAFT_REQUEST_HASH_PROFILE,
+  ENGAGEMENT_MANAGE_ACCESS_POLICY,
+  ENGAGEMENT_REQUEST_HASH_PROFILE,
   ENGAGEMENT_READ_ACCESS_POLICY,
   PORTAL_ENGAGEMENT_RESPOND_REQUEST_HASH_PROFILE,
   PORTAL_PARTICIPANT_ACT_ACCESS_POLICY,
   PORTAL_PARTICIPANT_READ_ACCESS_POLICY,
-  createEngagementDraftOperationModule,
+  createEngagementDirectOperationModule,
   createEngagementOperationModule,
   createParticipantCurrentAuthorityResolver,
-  createParticipantPortalOperationModule,
-  sealEngagementDraftPreparation
+  createParticipantPortalOperationModule
 } from '@jooevents/engagement-operations';
 import {
-  RELEASE_CHANGE_DRAFT_OPERATION,
   RELEASE_DRAFT_ACCESS_POLICY,
-  RELEASE_DRAFT_APPROVAL_POLICY,
-  RELEASE_DRAFT_HANDLER_CAPABILITY,
-  RELEASE_DRAFT_PERMISSION_ID,
-  RELEASE_DRAFT_REQUEST_HASH_PROFILE,
+  RELEASE_NATIVE_DRAFT_REQUEST_HASH_PROFILE,
+  RELEASE_NATIVE_PUBLISH_REQUEST_HASH_PROFILE,
   RELEASE_PUBLIC_OPEN_ACCESS_POLICY,
   RELEASE_PUBLIC_APPLY_PRESENTATION_READ_OPERATION,
   RELEASE_PUBLIC_APPLY_PRESENTATION_READ_PATH,
@@ -145,42 +144,35 @@ import {
   RELEASE_PUBLIC_SCHEDULE_READ_PATH,
   RELEASE_PUBLIC_SCHEDULE_PRESENTATION_READ_OPERATION,
   RELEASE_PUBLIC_SCHEDULE_PRESENTATION_READ_PATH,
-  createReleaseDraftOperationModule,
+  createReleaseNativeOperationModule,
   createReleaseOverviewOperationModule,
-  createReleasePublicReadOperationModule,
-  sealReleaseDraftPreparation
+  createReleasePublicReadOperationModule
 } from '@jooevents/release-operations';
 import {
   createEventDependencyContributorRegistry,
-  issueEventOrdinaryPolicy,
   type EventDependencyContributorRef
 } from '@jooevents/event';
 import {
-  EVENT_CREATE_DRAFT_REQUEST_HASH_PROFILE,
   EVENT_CREATE_REQUEST_HASH_PROFILE,
   EVENT_MANAGE_ACCESS_POLICY,
   EVENT_READ_ACCESS_POLICY,
-  EVENT_SETTINGS_UPDATE_DRAFT_REQUEST_HASH_PROFILE,
-  createEventCreateDraftOperationModule,
+  EVENT_SETTINGS_UPDATE_REQUEST_HASH_PROFILE,
   createEventOperationModule,
   createEventSettingsReadOperationModule,
-  createEventSettingsUpdateDraftOperationModule
+  createEventSettingsUpdateOperationModule
 } from '@jooevents/event-operations';
 import {
-  FIELD_REGISTRY_DRAFT_REQUEST_HASH_PROFILE,
+  FIELD_REGISTRY_DIRECT_REQUEST_HASH_PROFILE,
   FIELD_REGISTRY_MANAGE_ACCESS_POLICY,
   FIELD_REGISTRY_READ_ACCESS_POLICY,
-  createFieldRegistryOperationModule,
-  createFieldRegistryOrdinaryPolicy
+  createFieldRegistryOperationModule
 } from '@jooevents/field-registry';
-import {
-  issueFormOrdinaryPolicy,
-  issueSubmissionDirectEntryChangesetPolicy
-} from '@jooevents/intake';
 import {
   INTAKE_EVENT_MANAGE_ACCESS_POLICY,
   INTAKE_EVENT_READ_ACCESS_POLICY,
-  INTAKE_FORM_DRAFT_REQUEST_HASH_PROFILE,
+  INTAKE_FORM_DIRECT_REQUEST_HASH_PROFILE,
+  INTAKE_FORM_PUBLISH_REQUEST_HASH_PROFILE,
+  INTAKE_FORM_REVIEW_DRAFT_REQUEST_HASH_PROFILE,
   INTAKE_PUBLIC_APPLY_UNCONFIGURED_ABUSE_POLICIES,
   INTAKE_PUBLIC_CEREMONY_ACCESS_POLICY,
   INTAKE_PUBLIC_DRAFT_RESUME_OPERATION,
@@ -191,16 +183,16 @@ import {
   INTAKE_SUBMISSION_CONTACT_READ_ACCESS_POLICY,
   INTAKE_SUBMISSION_READ_ACCESS_POLICY,
   SUBMISSION_DIRECT_ENTRY_ACCESS_POLICY,
-  SUBMISSION_DIRECT_ENTRY_DRAFT_REQUEST_HASH_PROFILE,
+  SUBMISSION_DIRECT_ENTRY_REQUEST_HASH_PROFILE,
   createApplySurfaceGatedContinuationPolicySource,
   createApplySurfaceGatedPublicFormScopeSource,
-  createIntakeFormDraftOperationModule,
+  createIntakeFormWriteOperationModule,
   createIntakePublicConformanceMutationOperationModule,
   createIntakePublicConformanceReadOperationModule,
   createIntakeReadOperationModule,
   createOffUnlessConfiguredPublicInputPolicyEvaluator,
   createOffUnlessConfiguredPublicIntakeBootstrapVerifier,
-  createSubmissionDirectEntryDraftOperationModule,
+  createSubmissionDirectEntryOperationModule,
   intakePublicApplyPolicyRevision,
   type IntakePublicApplySurfaceGate
 } from '@jooevents/intake-operations';
@@ -217,7 +209,9 @@ import {
   type ParticipantSignInLinkDeliveryEffect
 } from '@jooevents/identity-access';
 import {
+  createReviewDirectOperationModule,
   createReviewOperationModule,
+  REVIEW_DIRECT_REQUEST_HASH_PROFILE,
   REVIEW_EVALUATE_ACCESS_POLICY,
   REVIEW_MANAGE_ACCESS_POLICY,
   REVIEW_REQUEST_HASH_PROFILE,
@@ -227,24 +221,28 @@ import {
 } from '@jooevents/review-operations';
 import {
   createReviewerRosterOperationModule,
-  REVIEWER_ROSTER_DRAFT_REQUEST_HASH_PROFILE,
+  REVIEWER_ROSTER_DIRECT_REQUEST_HASH_PROFILE,
   REVIEWER_ROSTER_MANAGE_ACCESS_POLICY
 } from '@jooevents/review-operations/roster';
 import {
   createProgramReferenceContributorRegistry,
-  issueProgramVocabularyOrdinaryPolicy
 } from '@jooevents/program';
 import {
-  PROGRAM_VOCABULARY_DRAFT_REQUEST_HASH_PROFILE,
+  PROGRAM_VOCABULARY_DIRECT_REQUEST_HASH_PROFILE,
+  PROGRAM_VOCABULARY_MERGE_DRAFT_REQUEST_HASH_PROFILE,
+  PROGRAM_VOCABULARY_MERGE_PUBLISH_REQUEST_HASH_PROFILE,
   PROGRAM_VOCABULARY_MANAGE_ACCESS_POLICY,
   PROGRAM_VOCABULARY_READ_ACCESS_POLICY,
-  createProgramVocabularyOperationModule
+  createProgramVocabularyReadOperationModule,
+  createProgramVocabularyDirectOperationModule,
+  createProgramVocabularyMergeOperationModule
 } from '@jooevents/program-operations';
 import type { PlaceableSessionIdentityPort } from '@jooevents/schedule';
 import {
-  SCHEDULE_PLACEMENT_DRAFT_REQUEST_HASH_PROFILE,
+  SCHEDULE_PLACEMENT_REQUEST_HASH_PROFILE,
   SCHEDULE_PLACEMENT_MANAGE_ACCESS_POLICY,
   SCHEDULE_PLACEMENT_READ_ACCESS_POLICY,
+  createSchedulePlacementDirectOperationModule,
   createSchedulePlacementOperationModule
 } from '@jooevents/schedule-operations';
 import {
@@ -252,46 +250,42 @@ import {
   createSessionAwareReviewerScopeTargetSource
 } from '@jooevents/session';
 import {
-  SESSION_DRAFT_ACCESS_POLICY,
-  SESSION_DRAFT_REQUEST_HASH_PROFILE,
+  SESSION_CHANGE_REQUEST_HASH_PROFILE,
+  SESSION_MANAGE_ACCESS_POLICY,
   SESSION_READ_ACCESS_POLICY,
-  createSessionDraftOperationModule,
+  createSessionDirectOperationModule,
   createSessionOperationModule
 } from '@jooevents/session-operations';
 import {
-  SUBMISSION_TRIAGE_DRAFT_REQUEST_HASH_PROFILE,
+  SUBMISSION_TRIAGE_REQUEST_HASH_PROFILE,
   SUBMISSION_TRIAGE_MANAGE_ACCESS_POLICY,
   SUBMISSION_TRIAGE_MCP_READ_ACCESS_POLICY,
   SUBMISSION_TRIAGE_OPERATOR_READ_ACCESS_POLICY,
-  createSubmissionTriageDraftOperationModule,
+  createSubmissionTriageTransitionOperationModule,
   createSubmissionTriageReadOperationModule,
-  createSubmissionTriageSubmitInitializer,
-  issueSubmissionTriageChangesetPolicy
+  createSubmissionTriageSubmitInitializer
 } from '@jooevents/submission-triage';
 import {
-  TASK_MUTATION_DRAFT_OPERATION,
-  TASK_DRAFT_APPROVAL_POLICY,
-  TASK_DRAFT_HANDLER_CAPABILITY,
-  TASK_DRAFT_REQUEST_HASH_PROFILE,
-  TASK_MANAGE_PERMISSION_ID,
+  TASK_MANAGE_ACCESS_POLICY,
+  TASK_MUTATION_REQUEST_HASH_PROFILE,
   createTaskBoardReadOperationModule,
-  createTaskDraftOperationModule,
-  sealTaskDraftPreparation
+  createTaskMutationOperationModule
 } from '@jooevents/task-operations';
 import {
   DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG,
+  createOperationHistoryReadOperationModule,
   WORKSPACE_OVERVIEW_READ_ACCESS_POLICY,
   createWorkspaceOverviewOperationModule
 } from '@jooevents/workspace-operations';
 import {
   DeterministicTemplateEditService,
-  issueTemplateAuthoringPolicy,
   starterTemplateArtifacts
 } from '@jooevents/template-authoring';
 import {
-  TEMPLATE_ARTIFACT_DRAFT_REQUEST_HASH_PROFILE,
+  TEMPLATE_ARTIFACT_NATIVE_DRAFT_REQUEST_HASH_PROFILE,
+  TEMPLATE_ARTIFACT_NATIVE_PUBLISH_REQUEST_HASH_PROFILE,
   TEMPLATE_EDIT_REQUEST_HASH_PROFILE,
-  createTemplateArtifactDraftOperationModule,
+  createTemplateArtifactNativeOperationModule,
   createTemplateArtifactReadOperationModule,
   createTemplateEditOperationModule
 } from '@jooevents/template-authoring-operations';
@@ -315,32 +309,32 @@ import {
 import {
   bootstrapEmptyInstall,
   createFoundationEphemeralSQLiteRuntime,
+  createSQLiteBetterAuthDatabase,
   createSQLiteAccessRepositories,
-  createSQLiteEventSettingsChangesetEffectDomainRegistration,
+  createSQLiteDeadlineDirectEffectDomainRegistration,
+  createSQLiteDecisionDirectEffectDomainRegistration,
+  createSQLiteEngagementDirectEffectDomainRegistration,
+  createSQLiteEventEffectDomainRegistration,
+  createSQLiteEventSettingsDirectEffectDomainRegistration,
   createSQLiteEventSettingsInitializer,
-  createSQLiteEventSettingsUpdateDraftEffectDomainRegistration,
-  createSQLiteTemplateArtifactChangesetEffectDomainRegistration,
-  createSQLiteTemplateArtifactDraftEffectDomainRegistration,
+  createSQLiteTemplateArtifactNativeEffectDomainRegistrations,
   createSQLiteTemplateEditEffectDomainRegistration,
   createSQLiteParticipantPortalEffectDomainRegistration,
   createSQLiteParticipantPortalReadSource,
   createSQLiteParticipantSessionAuthorityView,
   createSQLiteProvisioningStore,
+  createSQLiteSchedulePlacementDirectEffectDomainRegistration,
+  createSQLiteSessionDirectEffectDomainRegistration,
+  createSQLiteSubmissionTriageDirectEffectDomainRegistration,
+  createSQLiteTaskDirectEffectDomainRegistration,
+  createSQLiteIntakeDirectEntryEffectDomainRegistration,
   SQLiteEventSettingsRepository,
   SQLiteTaskRepository,
   SQLiteTemplateAuthoringRepository,
   SQLiteReadImmutableAuditPort,
+  SQLiteAgentActionRunRepository,
   type EphemeralSQLiteRuntime
 } from '@jooevents/persistence';
-import {
-  createSQLiteEventCreationChangesetEffectDomainRegistration
-} from '@jooevents/persistence/event-changeset-effect-domain';
-import {
-  createSQLiteDeadlineChangesetEffectDomainRegistration
-} from '@jooevents/persistence/deadline-changeset-effect-domain';
-import {
-  createSQLiteDeadlineDraftEffectDomainRegistration
-} from '@jooevents/persistence/deadline-draft-effect-domain';
 import { SQLiteDeadlineRepository } from '@jooevents/persistence/deadline';
 import {
   SQLiteDecisionCandidateSourceAdapter,
@@ -349,12 +343,6 @@ import {
   createSQLiteDecisionEnvironmentSource,
   createSQLiteIntakeParticipantPersonSource
 } from '@jooevents/persistence/decision';
-import {
-  createSQLiteDecisionChangesetEffectDomainRegistration
-} from '@jooevents/persistence/decision-changeset-effect-domain';
-import {
-  createSQLiteDecisionDraftEffectDomainRegistration
-} from '@jooevents/persistence/decision-draft-effect-domain';
 import {
   createSQLiteDecisionAudienceSource,
   createSQLiteDraftRenderContentSource,
@@ -370,15 +358,11 @@ import {
   SQLiteCommunicationMessageReleaseStore,
   createSQLiteOutboundEmailEnvelopeResolver
 } from '@jooevents/persistence/message-releases';
-import {
-  createSQLiteCommunicationReleaseChangesetOwnerRegistration
-} from '@jooevents/persistence/message-release-effect-domain';
 import { SQLiteOutboundEmailDeliveryLedger } from '@jooevents/persistence/outbound-email-delivery';
 import {
   createSQLiteOutboundEmailDeliveryEffectDomainRegistration
 } from '@jooevents/persistence/outbound-email-delivery-effect-domain';
 import {
-  createSQLiteEngagementSubmissionReferenceSource,
   SQLiteEngagementRepository
 } from '@jooevents/persistence/engagement';
 import {
@@ -388,11 +372,8 @@ import {
   type SQLiteReleaseUpstreamSources
 } from '@jooevents/persistence/release';
 import {
-  createSQLiteReleaseDraftEffectDomainRegistration
-} from '@jooevents/persistence/release-draft-effect-domain';
-import {
-  createSQLiteReleaseChangesetEffectDomainRegistration
-} from '@jooevents/persistence/release-changeset-effect-domain';
+  createSQLiteReleaseNativeEffectDomainRegistrations
+} from '@jooevents/persistence/release-native-effect-domain';
 import {
   createSQLiteIntakeAttributedParticipantSource,
   createSQLiteParticipantRelationshipSource,
@@ -408,26 +389,8 @@ import {
   WORKSPACE_SIGN_IN_LINK_TEMPLATE_REVISION_REF_ID
 } from '@jooevents/persistence/workspace-sign-in-link';
 import {
-  createSQLiteEngagementChangesetEffectDomainRegistration
-} from '@jooevents/persistence/engagement-changeset-effect-domain';
-import {
-  createSQLiteEngagementDraftEffectDomainRegistration
-} from '@jooevents/persistence/engagement-draft-effect-domain';
-import {
-  createSQLiteTaskChangesetEffectDomainRegistration
-} from '@jooevents/persistence/task-changeset-effect-domain';
-import {
-  createSQLiteTaskDraftEffectDomainRegistration
-} from '@jooevents/persistence/task-draft-effect-domain';
-import {
-  createSQLiteEventCreateDraftEffectDomainRegistration
-} from '@jooevents/persistence/event-create-draft-effect-domain';
-import {
-  createSQLiteFieldRegistryChangesetEffectDomainRegistration
-} from '@jooevents/persistence/field-registry-changeset-effect-domain';
-import {
-  createSQLiteFieldRegistryDraftEffectDomainRegistration
-} from '@jooevents/persistence/field-registry-draft-effect-domain';
+  createSQLiteFieldRegistryDirectEffectDomainRegistration
+} from '@jooevents/persistence/field-registry-direct-effect-domain';
 import {
   FIELD_REGISTRY_EVENT_DEPENDENCY_CONTRIBUTOR,
   SQLiteFieldRegistryEventDependencySource,
@@ -440,23 +403,10 @@ import {
   SQLiteEventSpineRepository,
   createSQLiteEventSpineOperatorEventRelationshipSource
 } from '@jooevents/persistence/event-spine';
-import {
-  createSQLiteProgramVocabularyChangesetEffectDomainRegistration
-} from '@jooevents/persistence/program-vocabulary-changeset-effect-domain';
-import {
-  createSQLiteChangesetLifecycleEffectDomainRouter
-} from '@jooevents/persistence/changeset-lifecycle-effect-domain-router';
 import { SQLiteIntakeClassifiedProjection } from '@jooevents/persistence/intake-classified-projection';
 import {
-  createSQLiteIntakeDirectEntryChangesetEffectDomainRegistration,
-  createSQLiteIntakeDirectEntryDraftEffectDomainRegistration
-} from '@jooevents/persistence/intake-direct-entry-effect-domain';
-import {
-  createSQLiteIntakeFormChangesetEffectDomainRegistration
-} from '@jooevents/persistence/intake-form-changeset-effect-domain';
-import {
-  createSQLiteIntakeFormDraftEffectDomainRegistration
-} from '@jooevents/persistence/intake-form-draft-effect-domain';
+  createSQLiteIntakeFormWriteEffectDomainRegistrations
+} from '@jooevents/persistence/intake-form-write-effect-domain';
 import {
   createSQLiteIntakeFormProgramVocabularyReferenceAdapter,
   INTAKE_FORM_PROGRAM_VOCABULARY_CONTRIBUTOR
@@ -489,24 +439,15 @@ import {
   SQLiteSubmissionTriageRepository
 } from '@jooevents/persistence/submission-triage';
 import {
-  createSQLiteSubmissionTriageChangesetEffectDomainRegistration
-} from '@jooevents/persistence/submission-triage-changeset-effect-domain';
+  createSQLiteProgramVocabularyDirectEffectDomainRegistration
+} from '@jooevents/persistence/program-vocabulary-direct-effect-domain';
 import {
-  createSQLiteSubmissionTriageDraftEffectDomainRegistration
-} from '@jooevents/persistence/submission-triage-draft-effect-domain';
-import {
-  createSQLiteProgramVocabularyDraftEffectDomainRegistration
-} from '@jooevents/persistence/program-vocabulary-draft-effect-domain';
+  createSQLiteProgramVocabularyMergeEffectDomainRegistrations
+} from '@jooevents/persistence/program-vocabulary-merge-effect-domain';
 import {
   SQLiteProgramVocabularyRepository,
   createSQLiteProgramVocabularyContributorAdapterRegistry
 } from '@jooevents/persistence/program-vocabulary';
-import {
-  createSQLiteSchedulePlacementChangesetEffectDomainRegistration
-} from '@jooevents/persistence/schedule-placement-changeset-effect-domain';
-import {
-  createSQLiteSchedulePlacementDraftEffectDomainRegistration
-} from '@jooevents/persistence/schedule-placement-draft-effect-domain';
 import {
   SCHEDULE_PLACEMENT_ROOM_CONTRIBUTOR,
   createSQLiteScheduleRoomReferenceAdapter
@@ -514,14 +455,11 @@ import {
 import { SQLiteSessionRepository } from '@jooevents/persistence/session';
 import { SQLiteReviewRepository } from '@jooevents/persistence/review';
 import {
-  createSQLiteReviewDraftEffectDomainRegistration
-} from '@jooevents/persistence/review-draft-effect-domain';
+  createSQLiteReviewDirectEffectDomainRegistration
+} from '@jooevents/persistence/review-direct-effect-domain';
 import {
   createSQLiteReviewEvaluationDraftSaveEffectDomainRegistration
 } from '@jooevents/persistence/review-evaluation-draft-save-effect-domain';
-import {
-  createSQLiteReviewChangesetEffectDomainRegistration
-} from '@jooevents/persistence/review-changeset-effect-domain';
 import {
   SQLiteReviewerAuthoritySource
 } from '@jooevents/persistence/reviewer-authority-source';
@@ -530,17 +468,8 @@ import {
 } from '@jooevents/persistence/reviewer-scope-target-source';
 import { SQLiteReviewerRosterRepository } from '@jooevents/persistence/reviewer-roster';
 import {
-  createSQLiteReviewerRosterDraftEffectDomainRegistration
-} from '@jooevents/persistence/reviewer-roster-draft-effect-domain';
-import {
-  createSQLiteReviewerRosterChangesetEffectDomainRegistration
-} from '@jooevents/persistence/reviewer-roster-changeset-effect-domain';
-import {
-  createSQLiteSessionChangesetEffectDomainRegistration
-} from '@jooevents/persistence/session-changeset-effect-domain';
-import {
-  createSQLiteSessionDraftEffectDomainRegistration
-} from '@jooevents/persistence/session-draft-effect-domain';
+  createSQLiteReviewerRosterDirectEffectDomainRegistration
+} from '@jooevents/persistence/reviewer-roster-direct-effect-domain';
 import {
   SQLiteEffectUnitOfWorkPort,
   createSQLiteEffectDomainAdapterRegistry
@@ -560,20 +489,15 @@ import {
   SQLiteEmailProviderConfigurationRepository
 } from '@jooevents/persistence/email-provider-configuration';
 import { createSQLiteWorkspaceOverviewProjection } from '@jooevents/persistence/workspace-overview';
+import { createSQLiteOperationHistoryReader } from '@jooevents/persistence/operation-history';
 import {
   createWorkspaceTeamProvisioningSynchronizationPort,
   SQLiteWorkspaceTeamRepository,
   ensureWorkspaceTeamRoles
 } from '@jooevents/persistence/sqlite/workspace-team';
 import {
-  createWorkspaceTeamChangesetPolicy
-} from '@jooevents/persistence/sqlite/workspace-team-changesets';
-import {
-  SQLiteWorkspaceTeamDraftEffectDomainAdapter
-} from '@jooevents/persistence/sqlite/workspace-team-draft-effect-domain';
-import {
-  createSQLiteWorkspaceTeamChangesetEffectDomainRegistration
-} from '@jooevents/persistence/sqlite/workspace-team-changeset-effect-domain';
+  createSQLiteWorkspaceTeamMutationEffectDomainRegistration
+} from '@jooevents/persistence/sqlite/workspace-team-direct-effect-domain';
 import {
   createAuth,
   WORKSPACE_SIGN_IN_LINK_EXPIRES_IN_SECONDS,
@@ -590,6 +514,7 @@ import {
   type MailSenderConfig
 } from '../config/communications';
 import { createHttpApp } from '../http/app';
+import { createAgentActionRunsHttpAdapter } from '../http/agent-action-runs';
 import type { EmbedFramingPolicySource } from '../http/embed-security';
 import {
   createParticipantOperationsHttpAdapter
@@ -603,7 +528,6 @@ import { createSerialHttpRequestBoundary } from '../http/request-serialization';
 import { createCloudflareTokenVerificationReadinessProbe } from './cloudflare-email-readiness-probe';
 import {
   buildDeploymentSenderPresentation,
-  communicationReleaseLifecycleInertAdapter,
   createCommunicationSendLane,
   type CommunicationDeliveryRoute,
   type CommunicationSendLane
@@ -794,25 +718,6 @@ const filesPortalProfiles = Object.freeze({
   }),
   idempotencyCredential: Object.freeze({
     key: 'key-profile.file.portal-idempotency-credential',
-    version: parseContractVersion(1)
-  })
-});
-
-const changesetProfiles = Object.freeze({
-  authorityPrincipal: Object.freeze({
-    key: 'key-profile.changeset.operator-principal',
-    version: parseContractVersion(1)
-  }),
-  scopePartition: Object.freeze({
-    key: 'key-profile.changeset.current-event-scope',
-    version: parseContractVersion(1)
-  }),
-  requestCanonicalization: Object.freeze({
-    key: 'key-profile.changeset.request-canonicalization',
-    version: parseContractVersion(1)
-  }),
-  idempotencyCredential: Object.freeze({
-    key: 'key-profile.changeset.idempotency-credential',
     version: parseContractVersion(1)
   })
 });
@@ -1261,7 +1166,78 @@ export interface EphemeralLiveRuntime {
     FilesLiveComposition,
     'limits' | 'blobs' | 'repository' | 'sweepOrphanBlobs' | 'sweepExpiredIntents'
   >;
+  /**
+   * Structurally test-only access to the compiled operator executor, real
+   * admission path, and a read-only public-binding snapshot. It is absent unless
+   * `devFixtures: true`; no member exposes a handler, authority resolver, or
+   * database mutation primitive.
+   */
+  readonly testSupport?: EphemeralLiveTestSupport;
   close(): ReturnType<EphemeralSQLiteRuntime['close']>;
+}
+
+export type EphemeralLiveTestActorPersona = 'organizer' | 'reviewer' | 'second-organizer';
+
+export interface EphemeralLiveTestActor {
+  readonly persona: EphemeralLiveTestActorPersona;
+  readonly userId: string;
+  readonly membership: { readonly id: string; readonly version: number };
+  readonly cookie: string;
+}
+
+export interface EphemeralLiveTestPublicEffectBinding {
+  readonly operationName: string;
+  readonly operationVersion: number;
+  readonly method: 'POST';
+  readonly path: string;
+}
+
+export interface EphemeralLiveTestSupport {
+  /** Read-only snapshot of the production public registry; it cannot invoke an operation. */
+  publicEffectBindings(): readonly EphemeralLiveTestPublicEffectBinding[];
+  /** Invokes one registered operator read through context, authority, and projection. */
+  invokeRead(input: {
+    readonly actor: EphemeralLiveTestActor;
+    readonly operationName: string;
+    readonly operationVersion?: number;
+    readonly businessInput?: unknown;
+    readonly correlationId?: string;
+  }): Promise<ReadOperationResult>;
+  /** Invokes one registered operator effect through seal, guard, UoW, log, and replay. */
+  invokeEffect(input: {
+    readonly actor: EphemeralLiveTestActor;
+    readonly operationName: string;
+    readonly operationVersion?: number;
+    readonly businessInput: unknown;
+    readonly idempotencyKey: string;
+    readonly correlationId?: string;
+  }): Promise<EffectfulOperationResult>;
+  /**
+   * Creates three Better Auth principals and admits them through the same
+   * reservation/access-context path as product sign-in. Additional actors are
+   * invited through `workspace_team.invite`, never inserted into auth/domain tables.
+   */
+  bootstrapActors(): Promise<{
+    readonly organizer: EphemeralLiveTestActor;
+    readonly reviewer: EphemeralLiveTestActor;
+    readonly secondOrganizer: EphemeralLiveTestActor;
+  }>;
+  /** Frozen registry-derived plan metadata; no handler or mutation capability escapes. */
+  agentActionPlanCatalog(): {
+    readonly registryDigestSha256: string;
+    readonly operations: readonly RegisteredAgentActionEligibility[];
+  };
+  /** Submits through the application plan-only surface, never the repository. */
+  submitAgentActionPlan(candidate: unknown): AgentActionBatchView;
+  /** Safe projection used by the approval directory/detail surface. */
+  inspectAgentActionRun(batchId: string): AgentActionBatchView | undefined;
+  /** Advances exactly one leased step through the real registered executor. */
+  advanceAgentActionRun(input: {
+    readonly batchId: string;
+    readonly workerId: string;
+    readonly at?: string;
+    readonly crashAfterAtomicCommit?: boolean;
+  }): Promise<AgentActionBatchView>;
 }
 
 /** Opens one process-lifetime isolated organizer runtime over a new database. */
@@ -1320,7 +1296,7 @@ export async function createEphemeralLiveRuntime(input: {
           readonly token: string;
         }) => Promise<void>)
       | null = null;
-    const auth = createAuth(input.config, database.db, {
+    const auth = createAuth(input.config, createSQLiteBetterAuthDatabase(database.sqlite), {
       magicLink: {
         deliver: async (link) => {
           if (workspaceSignInLinkDeliver !== null) await workspaceSignInLinkDeliver(link);
@@ -1331,16 +1307,12 @@ export async function createEphemeralLiveRuntime(input: {
       now: () => parseInstant(new Date().toISOString())
     });
     const eventRelationships = createSQLiteEventSpineOperatorEventRelationshipSource();
-    const deadlineDraftDomain = createSQLiteDeadlineDraftEffectDomainRegistration({
+    const deadlineDirectDomain = createSQLiteDeadlineDirectEffectDomainRegistration({
       sqlite: database.sqlite,
       workspaceId,
       eventRelationships,
       ids: Object.freeze({
-        newChangesetId: () => crypto.randomUUID(),
-        newRevisionId: () => crypto.randomUUID(),
-        newDeadlineId: () => crypto.randomUUID(),
-        newPreparationHandle: () => crypto.randomUUID(),
-        newTimelineId: () => crypto.randomUUID()
+        newDeadlineId: () => crypto.randomUUID()
       })
     });
     const eventDependencySource = new SQLiteFieldRegistryEventDependencySource(
@@ -1349,18 +1321,6 @@ export async function createEphemeralLiveRuntime(input: {
     const eventDependencyRegistry = createEventDependencyContributorRegistry({
       expected: [FIELD_REGISTRY_EVENT_DEPENDENCY_CONTRIBUTOR],
       contributors: [FIELD_REGISTRY_EVENT_DEPENDENCY_CONTRIBUTOR]
-    });
-    const eventPolicy = issueEventOrdinaryPolicy({
-      key: 'event.creation.bounded',
-      version: 1,
-      risk: 'low',
-      approval: 'none'
-    });
-    const templateAuthoringPolicy = issueTemplateAuthoringPolicy({
-      key: 'template.artifact.bounded',
-      version: 1,
-      risk: 'low',
-      approval: 'none'
     });
     const intakeFormReferenceAdapter =
       createSQLiteIntakeFormProgramVocabularyReferenceAdapter();
@@ -1399,32 +1359,6 @@ export async function createEphemeralLiveRuntime(input: {
     const sessionRepository = new SQLiteSessionRepository(database.sqlite, vocabularyRead);
     const placeableSessions: PlaceableSessionIdentityPort =
       createSchedulePlaceableSessionPort(sessionRepository);
-    const programVocabularyPolicy = issueProgramVocabularyOrdinaryPolicy({
-      key: 'program_vocabulary.bounded',
-      version: 1,
-      ordinaryRisk: 'low',
-      mergeRisk: 'consequential',
-      approval: Object.freeze({ ordinary: 'none', merge: 'none' })
-    });
-    const programVocabularyChangesets =
-      createSQLiteProgramVocabularyChangesetEffectDomainRegistration({
-        sqlite: database.sqlite,
-        workspaceId,
-        policy: programVocabularyPolicy,
-        referenceRegistry,
-        contributors: contributorAdapters,
-        eventRelationships,
-        ids: Object.freeze({
-          newChangesetId: () => crypto.randomUUID(),
-          newRevisionId: () => crypto.randomUUID(),
-          newApprovalId: () => crypto.randomUUID(),
-          newCorrectionAttemptId: () => crypto.randomUUID(),
-          newPreparationHandle: () => crypto.randomUUID(),
-          newTimelineId: () => crypto.randomUUID(),
-          newFactId: () => crypto.randomUUID(),
-          newPointerId: () => crypto.randomUUID()
-        })
-      });
     const intakeClassifiedStore = new SQLiteClassifiedPayloadStore(database.sqlite, {
       encryptionProfile: issueSynchronousClassifiedPayloadEncryptionProfile({
         reference: Object.freeze({ key: 'encryption.intake-answer', version: 1 }),
@@ -1576,7 +1510,8 @@ export async function createEphemeralLiveRuntime(input: {
       store: createSQLiteProvisioningStore(database.sqlite, {
         workspaceTeam: createWorkspaceTeamProvisioningSynchronizationPort(
           workspaceTeamRepository
-        )
+        ),
+        workspaceInvitationLookupKeyBytes: workspaceTeamInvitationLookupKey
       }),
       admission: {
         mode: input.config.admissionMode,
@@ -1904,11 +1839,6 @@ export async function createEphemeralLiveRuntime(input: {
       organizerCommunicationClassifiedStore,
       Object.freeze({ newEnvelopePayloadRefId: () => crypto.randomUUID() })
     );
-    const communicationReleaseChangesets =
-      createSQLiteCommunicationReleaseChangesetOwnerRegistration({
-        sqlite: database.sqlite,
-        workspaceId
-      });
     const outboundEmailDeliveryLedger = new SQLiteOutboundEmailDeliveryLedger(
       database.sqlite,
       Object.freeze({
@@ -1999,401 +1929,131 @@ export async function createEphemeralLiveRuntime(input: {
         ? {}
         : { deliveryRoute: communicationDeliveryRoute })
     });
-    const fieldRegistryPolicy = createFieldRegistryOrdinaryPolicy({
-      key: 'field_registry.bounded',
-      version: 1,
-      ordinaryRisk: 'low',
-      approval: 'none'
-    });
-    const formPolicy = issueFormOrdinaryPolicy({
-      key: 'intake_form.bounded',
-      version: 1,
-      ordinaryRisk: 'low',
-      approval: Object.freeze({ ordinary: 'none' })
-    });
-    const submissionTriagePolicy = issueSubmissionTriageChangesetPolicy({
-      key: 'submission.triage.bounded',
-      version: 1,
-      approval: Object.freeze({ ordinary: 'none', discardRecoverable: 'none' })
-    });
-    const submissionDirectEntryPolicy = issueSubmissionDirectEntryChangesetPolicy({
-      key: 'submission.direct-entry.bounded',
-      version: 1,
-      approval: Object.freeze({ create: 'none' })
-    });
-    const workspaceTeamPolicy = createWorkspaceTeamChangesetPolicy({
-      key: 'workspace_team.bounded',
-      version: 1,
-      approval: 'none'
-    });
-    const intakeFormChangesets = createSQLiteIntakeFormChangesetEffectDomainRegistration({
-      sqlite: database.sqlite,
-      workspaceId,
-      policy: formPolicy,
-      repository: intakeRepository,
-      eventRelationships,
-      ids: Object.freeze({
-        newChangesetId: () => crypto.randomUUID(),
-        newRevisionId: () => crypto.randomUUID(),
-        newApprovalId: () => crypto.randomUUID(),
-        newCorrectionAttemptId: () => crypto.randomUUID(),
-        newPreparationHandle: () => crypto.randomUUID(),
-        newTimelineId: () => crypto.randomUUID(),
-        newFactId: () => crypto.randomUUID(),
-        newPointerId: () => crypto.randomUUID()
-      })
-    });
-    const eventSettingsChangesets =
-      createSQLiteEventSettingsChangesetEffectDomainRegistration({
+    const submissionTriageDirectDomain =
+      createSQLiteSubmissionTriageDirectEffectDomainRegistration({
         sqlite: database.sqlite,
         workspaceId,
-        policy: eventPolicy,
-        eventRelationships,
-        ids: Object.freeze({
-          newChangesetId: () => crypto.randomUUID(),
-          newRevisionId: () => crypto.randomUUID(),
-          newApprovalId: () => crypto.randomUUID(),
-          newCorrectionAttemptId: () => crypto.randomUUID(),
-          newPreparationHandle: () => crypto.randomUUID(),
-          newTimelineId: () => crypto.randomUUID(),
-          newFactId: () => crypto.randomUUID(),
-          newPointerId: () => crypto.randomUUID()
-        })
-      });
-    const templateArtifactChangesets =
-      createSQLiteTemplateArtifactChangesetEffectDomainRegistration({
-        sqlite: database.sqlite,
-        workspaceId,
-        policy: templateAuthoringPolicy,
-        eventRelationships,
-        ids: Object.freeze({
-          newChangesetId: () => crypto.randomUUID(),
-          newRevisionId: () => crypto.randomUUID(),
-          newApprovalId: () => crypto.randomUUID(),
-          newCorrectionAttemptId: () => crypto.randomUUID(),
-          newPreparationHandle: () => crypto.randomUUID(),
-          newTimelineId: () => crypto.randomUUID(),
-          newFactId: () => crypto.randomUUID(),
-          newPointerId: () => crypto.randomUUID()
-        })
-      });
-    const fieldRegistryChangesets =
-      createSQLiteFieldRegistryChangesetEffectDomainRegistration({
-        sqlite: database.sqlite,
-        workspaceId,
-        policy: fieldRegistryPolicy,
-        eventRelationships,
-        ids: Object.freeze({
-          newChangesetId: () => crypto.randomUUID(),
-          newRevisionId: () => crypto.randomUUID(),
-          newApprovalId: () => crypto.randomUUID(),
-          newCorrectionAttemptId: () => crypto.randomUUID(),
-          newPreparationHandle: () => crypto.randomUUID(),
-          newTimelineId: () => crypto.randomUUID(),
-          newFactId: () => crypto.randomUUID(),
-          newPointerId: () => crypto.randomUUID()
-        })
-      });
-    const submissionTriageChangesets =
-      createSQLiteSubmissionTriageChangesetEffectDomainRegistration({
-        sqlite: database.sqlite,
-        workspaceId,
-        policy: submissionTriagePolicy,
         repository: submissionTriageRepository,
-        eventRelationships,
-        ids: Object.freeze({
-          newChangesetId: () => crypto.randomUUID(),
-          newRevisionId: () => crypto.randomUUID(),
-          newApprovalId: () => crypto.randomUUID(),
-          newCorrectionAttemptId: () => crypto.randomUUID(),
-          newPreparationHandle: () => crypto.randomUUID(),
-          newTimelineId: () => crypto.randomUUID(),
-          newFactId: () => crypto.randomUUID(),
-          newPointerId: () => crypto.randomUUID()
-        })
+        eventRelationships
       });
-    const intakeDirectEntryChangesets =
-      createSQLiteIntakeDirectEntryChangesetEffectDomainRegistration({
+    const intakeDirectEntryDirectDomain =
+      createSQLiteIntakeDirectEntryEffectDomainRegistration({
         sqlite: database.sqlite,
         workspaceId,
-        policy: submissionDirectEntryPolicy,
         repository: intakeRepository,
         projection: intakeClassifiedProjection,
         submissionTriage: createSubmissionTriageSubmitInitializer({
           store: submissionTriageRepository,
           ids: Object.freeze({ newArrivalId: () => crypto.randomUUID() })
         }),
-        // Engagement heads hold durable `submissionId` references: a submission
-        // whose acceptance seeded engagements refuses direct-entry compensation
-        // until the acceptance itself is compensated first.
-        references: Object.freeze([
-          createSQLiteEngagementSubmissionReferenceSource(database.sqlite)
-        ]),
+        classifiedStore: intakeClassifiedStore,
+        classifiedProfiles: intakeClassifiedProfiles,
         eventRelationships,
         ids: Object.freeze({
-          newChangesetId: () => crypto.randomUUID(),
-          newRevisionId: () => crypto.randomUUID(),
-          newApprovalId: () => crypto.randomUUID(),
-          newCorrectionAttemptId: () => crypto.randomUUID(),
-          newPreparationHandle: () => crypto.randomUUID(),
-          newTimelineId: () => crypto.randomUUID(),
-          newFactId: () => crypto.randomUUID(),
-          newPointerId: () => crypto.randomUUID()
+          newPayloadRefId: () => crypto.randomUUID(),
+          newSubmissionId: () => crypto.randomUUID(),
+          newEntryEvidenceId: () => crypto.randomUUID(),
+          newPersonId: () => crypto.randomUUID(),
+          newParticipantIdentityId: () => crypto.randomUUID(),
+          newParticipantEvidenceId: () => crypto.randomUUID()
         })
       });
-    const workspaceTeamChangesets =
-      createSQLiteWorkspaceTeamChangesetEffectDomainRegistration({
-        sqlite: database.sqlite,
-        workspaceId,
-        policy: workspaceTeamPolicy,
-        classifiedStore: workspaceTeamClassifiedStore,
-        ids: Object.freeze({
-          newChangesetId: () => crypto.randomUUID(),
-          newRevisionId: () => crypto.randomUUID(),
-          newApprovalId: () => crypto.randomUUID(),
-          newCorrectionAttemptId: () => crypto.randomUUID(),
-          newPreparationHandle: () => crypto.randomUUID(),
-          newTimelineId: () => crypto.randomUUID(),
-          newFactId: () => crypto.randomUUID(),
-          newPointerId: () => crypto.randomUUID()
-        })
-      });
-    const deadlineChangesets =
-      createSQLiteDeadlineChangesetEffectDomainRegistration({
-        sqlite: database.sqlite,
-        workspaceId,
-        eventRelationships,
-        ids: Object.freeze({
-          newChangesetId: () => crypto.randomUUID(),
-          newRevisionId: () => crypto.randomUUID(),
-          newApprovalId: () => crypto.randomUUID(),
-          newCorrectionAttemptId: () => crypto.randomUUID(),
-          newPreparationHandle: () => crypto.randomUUID(),
-          newTimelineId: () => crypto.randomUUID(),
-          newFactId: () => crypto.randomUUID(),
-          newPointerId: () => crypto.randomUUID()
-          })
-        });
-    const schedulePlacementChangesets =
-      createSQLiteSchedulePlacementChangesetEffectDomainRegistration({
+    const schedulePlacementDirectDomain =
+      createSQLiteSchedulePlacementDirectEffectDomainRegistration({
         sqlite: database.sqlite,
         workspaceId,
         sessions: placeableSessions,
         vocabulary: vocabularyRead,
         eventRelationships,
+        newOccurrenceId: () => crypto.randomUUID()
+      });
+    const sessionDirectDomain = createSQLiteSessionDirectEffectDomainRegistration({
+      sqlite: database.sqlite,
+      workspaceId,
+      repository: sessionRepository,
+      eventRelationships,
+      newSessionId: () => crypto.randomUUID()
+    });
+    const decisionDirectDomain = createSQLiteDecisionDirectEffectDomainRegistration({
+      sqlite: database.sqlite,
+      workspaceId,
+      repository: decisionRepository,
+      eventRelationships,
+      newSessionId: () => crypto.randomUUID()
+    });
+    const engagementDirectDomain = createSQLiteEngagementDirectEffectDomainRegistration({
+      sqlite: database.sqlite,
+      workspaceId,
+      eventRelationships
+    });
+    const taskDirectDomain = createSQLiteTaskDirectEffectDomainRegistration({
+      sqlite: database.sqlite,
+      workspaceId,
+      eventRelationships,
+      ids: Object.freeze({
+        newTaskDefinitionId: () => crypto.randomUUID(),
+        newTaskDefinitionRevisionId: () => crypto.randomUUID(),
+        newDeadlineId: () => crypto.randomUUID()
+      })
+    });
+    const createdEventInitializer = (() => {
+      const fieldRegistry = createSQLiteFieldRegistryEventInitializer({
+        sqlite: database.sqlite,
         ids: Object.freeze({
-          newChangesetId: () => crypto.randomUUID(),
-          newRevisionId: () => crypto.randomUUID(),
-          newApprovalId: () => crypto.randomUUID(),
-          newCorrectionAttemptId: () => crypto.randomUUID(),
-          newPreparationHandle: () => crypto.randomUUID(),
-          newTimelineId: () => crypto.randomUUID(),
-          newFactId: () => crypto.randomUUID(),
-          newPointerId: () => crypto.randomUUID()
+          newFieldId: () => crypto.randomUUID(),
+          newChoiceId: () => crypto.randomUUID()
         })
       });
-    const schedulePlacementDraftDomain =
-      createSQLiteSchedulePlacementDraftEffectDomainRegistration({
-        sqlite: database.sqlite,
-        workspaceId,
-        sessions: placeableSessions,
-        vocabulary: vocabularyRead,
-        eventRelationships,
-        ids: Object.freeze({
-          newChangesetId: () => crypto.randomUUID(),
-          newRevisionId: () => crypto.randomUUID(),
-          newOccurrenceId: () => crypto.randomUUID(),
-          newPreparationHandle: () => crypto.randomUUID(),
-          newTimelineId: () => crypto.randomUUID()
-        })
-      });
-    const sessionDraftDomain = createSQLiteSessionDraftEffectDomainRegistration({
-      sqlite: database.sqlite,
-      workspaceId,
-      vocabulary: vocabularyRead,
-      eventRelationships,
-      ids: Object.freeze({
-        newChangesetId: () => crypto.randomUUID(),
-        newRevisionId: () => crypto.randomUUID(),
-        newSessionId: () => crypto.randomUUID(),
-        newPreparationHandle: () => crypto.randomUUID(),
-        newTimelineId: () => crypto.randomUUID()
-      })
-    });
-    const sessionChangesets = createSQLiteSessionChangesetEffectDomainRegistration({
-      sqlite: database.sqlite,
-      workspaceId,
-      vocabulary: vocabularyRead,
-      eventRelationships,
-      ids: Object.freeze({
-        newChangesetId: () => crypto.randomUUID(),
-        newRevisionId: () => crypto.randomUUID(),
-        newApprovalId: () => crypto.randomUUID(),
-        newCorrectionAttemptId: () => crypto.randomUUID(),
-        newPreparationHandle: () => crypto.randomUUID(),
-        newTimelineId: () => crypto.randomUUID(),
-        newFactId: () => crypto.randomUUID(),
-        newPointerId: () => crypto.randomUUID()
-      })
-    });
-    const reviewChangesets = createSQLiteReviewChangesetEffectDomainRegistration({
-      sqlite: database.sqlite,
-      workspaceId,
-      repository: reviewRepository,
-      eventRelationships,
-      ids: Object.freeze({
-        newChangesetId: () => crypto.randomUUID(),
-        newRevisionId: () => crypto.randomUUID(),
-        newApprovalId: () => crypto.randomUUID(),
-        newCorrectionAttemptId: () => crypto.randomUUID(),
-        newPreparationHandle: () => crypto.randomUUID(),
-        newTimelineId: () => crypto.randomUUID(),
-        newFactId: () => crypto.randomUUID(),
-        newPointerId: () => crypto.randomUUID()
-      })
-    });
-    const reviewerRosterChangesets =
-      createSQLiteReviewerRosterChangesetEffectDomainRegistration({
-        sqlite: database.sqlite,
-        workspaceId,
-        sources: reviewerRosterSources,
-        eventRelationships,
-        ids: Object.freeze({
-          newChangesetId: () => crypto.randomUUID(),
-          newRevisionId: () => crypto.randomUUID(),
-          newApprovalId: () => crypto.randomUUID(),
-          newCorrectionAttemptId: () => crypto.randomUUID(),
-          newPreparationHandle: () => crypto.randomUUID(),
-          newTimelineId: () => crypto.randomUUID(),
-          newFactId: () => crypto.randomUUID(),
-          newPointerId: () => crypto.randomUUID()
-        })
-      });
-    const decisionChangesets = createSQLiteDecisionChangesetEffectDomainRegistration({
-      sqlite: database.sqlite,
-      workspaceId,
-      vocabulary: vocabularyRead,
-      environment: decisionEnvironment,
-      eventRelationships,
-      ids: Object.freeze({
-        newChangesetId: () => crypto.randomUUID(),
-        newRevisionId: () => crypto.randomUUID(),
-        newApprovalId: () => crypto.randomUUID(),
-        newCorrectionAttemptId: () => crypto.randomUUID(),
-        newPreparationHandle: () => crypto.randomUUID(),
-        newTimelineId: () => crypto.randomUUID(),
-        newFactId: () => crypto.randomUUID(),
-        newPointerId: () => crypto.randomUUID()
-      })
-    });
-    const engagementChangesets = createSQLiteEngagementChangesetEffectDomainRegistration({
-      sqlite: database.sqlite,
-      workspaceId,
-      approvalPolicy: ENGAGEMENT_DRAFT_APPROVAL_POLICY,
-      permissionId: ENGAGEMENT_DRAFT_PERMISSION_ID,
-      eventRelationships,
-      ids: Object.freeze({
-        newChangesetId: () => crypto.randomUUID(),
-        newRevisionId: () => crypto.randomUUID(),
-        newApprovalId: () => crypto.randomUUID(),
-        newCorrectionAttemptId: () => crypto.randomUUID(),
-        newPreparationHandle: () => crypto.randomUUID(),
-        newTimelineId: () => crypto.randomUUID(),
-        newFactId: () => crypto.randomUUID(),
-        newPointerId: () => crypto.randomUUID()
-      })
-    });
-    const taskChangesets = createSQLiteTaskChangesetEffectDomainRegistration({
-      sqlite: database.sqlite,
-      workspaceId,
-      repository: taskRepository,
-      deadlines: taskDeadlineRepository,
-      eventRelationships,
-      ids: Object.freeze({
-        newChangesetId: () => crypto.randomUUID(),
-        newRevisionId: () => crypto.randomUUID(),
-        newApprovalId: () => crypto.randomUUID(),
-        newCorrectionAttemptId: () => crypto.randomUUID(),
-        newPreparationHandle: () => crypto.randomUUID(),
-        newTimelineId: () => crypto.randomUUID(),
-        newFactId: () => crypto.randomUUID(),
-        newPointerId: () => crypto.randomUUID()
-      })
-    });
-    const eventCreationChangesets =
-      createSQLiteEventCreationChangesetEffectDomainRegistration({
-        sqlite: database.sqlite,
-        workspaceId,
-        policy: eventPolicy,
-        dependencyRegistry: eventDependencyRegistry,
-        dependencySource: eventDependencySource,
-        ids: Object.freeze({
-          newChangesetId: () => crypto.randomUUID(),
-          newRevisionId: () => crypto.randomUUID(),
-          newApprovalId: () => crypto.randomUUID(),
-          newCorrectionAttemptId: () => crypto.randomUUID(),
-          newPreparationHandle: () => crypto.randomUUID(),
-          newTimelineId: () => crypto.randomUUID(),
-          newFactId: () => crypto.randomUUID(),
-          newPointerId: () => crypto.randomUUID()
-        }),
-        createdEventInitializer: (() => {
-          const fieldRegistry = createSQLiteFieldRegistryEventInitializer({
-            sqlite: database.sqlite,
-            ids: Object.freeze({
-              newFieldId: () => crypto.randomUUID(),
-              newChoiceId: () => crypto.randomUUID()
-            })
+      const settings = createSQLiteEventSettingsInitializer({ sqlite: database.sqlite });
+      const spineHeadRead = database.sqlite.query<
+        {
+          readonly name: string;
+          readonly created_by_user_id: string;
+          readonly created_at_ms: number;
+        },
+        [string, string]
+      >(`
+        SELECT name, created_by_user_id, created_at_ms FROM event_spine_heads
+         WHERE workspace_id = ? AND id = ?
+      `);
+      const identityEventInsert = database.sqlite.query<
+        never,
+        [string, string, string, number, number]
+      >(`
+        INSERT INTO events (id, workspace_id, name, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+      return Object.freeze({
+        initializeCreatedEvent(scope: Parameters<
+          typeof fieldRegistry.initializeCreatedEvent
+        >[0]) {
+          const head = spineHeadRead.get(scope.workspaceId, scope.eventId);
+          if (!head) throw new TypeError('event_identity_projection_head_missing');
+          identityEventInsert.run(
+            scope.eventId,
+            scope.workspaceId,
+            head.name,
+            head.created_at_ms,
+            head.created_at_ms
+          );
+          fieldRegistry.initializeCreatedEvent(scope);
+          seedCommunicationsForEvent(scope);
+          templateAuthoringRepository.initializeCreatedEvent({
+            scope,
+            createdByUserId: head.created_by_user_id,
+            createdAt: new Date(head.created_at_ms).toISOString(),
+            artifacts: starterTemplateArtifacts({ scope, eventName: head.name })
           });
-          const settings = createSQLiteEventSettingsInitializer({ sqlite: database.sqlite });
-          const spineHeadRead = database.sqlite.query<
-            {
-              readonly name: string;
-              readonly created_by_user_id: string;
-              readonly created_at_ms: number;
-            },
-            [string, string]
-          >(`
-            SELECT name, created_by_user_id, created_at_ms FROM event_spine_heads
-             WHERE workspace_id = ? AND id = ?
-          `);
-          const identityEventInsert = database.sqlite.query<
-            never,
-            [string, string, string, number, number]
-          >(`
-            INSERT INTO events (id, workspace_id, name, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-          `);
-          return Object.freeze({
-            initializeCreatedEvent(scope: Parameters<
-              typeof fieldRegistry.initializeCreatedEvent
-            >[0]) {
-              // Project the committed Event into the identity-access `events`
-              // table inside the same transaction so event-scoped access
-              // evidence (event-scoped role assignments and overrides, and the
-              // reviewer authority source) resolves for the created Event.
-              const head = spineHeadRead.get(scope.workspaceId, scope.eventId);
-              if (!head) throw new TypeError('event_identity_projection_head_missing');
-              identityEventInsert.run(
-                scope.eventId,
-                scope.workspaceId,
-                head.name,
-                head.created_at_ms,
-                head.created_at_ms
-              );
-              fieldRegistry.initializeCreatedEvent(scope);
-              seedCommunicationsForEvent(scope);
-              templateAuthoringRepository.initializeCreatedEvent({
-                scope,
-                createdByUserId: head.created_by_user_id,
-                createdAt: new Date(head.created_at_ms).toISOString(),
-                artifacts: starterTemplateArtifacts({ scope, eventName: head.name })
-              });
-              return settings.initializeCreatedEventSettings(scope);
-            }
-          });
-        })()
+          return settings.initializeCreatedEventSettings(scope);
+        }
       });
+    })();
+    const eventDirectDomain = createSQLiteEventEffectDomainRegistration({
+      sqlite: database.sqlite,
+      workspaceId,
+      ids: Object.freeze({ newEventId: () => crypto.randomUUID() }),
+      createdEventInitializer
+    });
     const engagementReadRepository = new SQLiteEngagementRepository(database.sqlite);
     // The governed name-declassification source: personId → the person's own
     // participant evidence → the least-disclosure triage source row's
@@ -2421,7 +2081,7 @@ export async function createEphemeralLiveRuntime(input: {
     });
     const releaseSources: SQLiteReleaseUpstreamSources = Object.freeze({
       sessions: sessionRepository,
-      schedule: schedulePlacementDraftDomain.scheduleRead,
+      schedule: schedulePlacementDirectDomain.scheduleRead,
       engagements: engagementReadRepository,
       vocabulary: vocabularyRead,
       eventSettings: eventSettingsRepository,
@@ -2439,161 +2099,17 @@ export async function createEphemeralLiveRuntime(input: {
       })
     });
     const releaseRepository = new SQLiteReleaseRepository(database.sqlite, releaseSources);
-    const releaseChangesets = createSQLiteReleaseChangesetEffectDomainRegistration({
+    const releaseNativeDomains = createSQLiteReleaseNativeEffectDomainRegistrations({
       sqlite: database.sqlite,
       workspaceId,
-      approvalPolicy: RELEASE_DRAFT_APPROVAL_POLICY,
-      permissionId: RELEASE_DRAFT_PERMISSION_ID,
       eventRelationships,
       sources: releaseSources,
       ids: Object.freeze({
-        newChangesetId: () => crypto.randomUUID(),
+        newDraftId: () => crypto.randomUUID(),
         newRevisionId: () => crypto.randomUUID(),
-        newApprovalId: () => crypto.randomUUID(),
-        newCorrectionAttemptId: () => crypto.randomUUID(),
-        newPreparationHandle: () => crypto.randomUUID(),
-        newTimelineId: () => crypto.randomUUID(),
-        newFactId: () => crypto.randomUUID(),
-        newPointerId: () => crypto.randomUUID()
+        newReleaseId: () => crypto.randomUUID()
       })
     });
-    const releaseDraftDomain = createSQLiteReleaseDraftEffectDomainRegistration({
-      sqlite: database.sqlite,
-      workspaceId,
-      operations: Object.freeze({
-        operation: RELEASE_CHANGE_DRAFT_OPERATION,
-        accessPolicy: RELEASE_DRAFT_ACCESS_POLICY,
-        permissionId: RELEASE_DRAFT_PERMISSION_ID,
-        capability: RELEASE_DRAFT_HANDLER_CAPABILITY,
-        approvalPolicy: RELEASE_DRAFT_APPROVAL_POLICY,
-        seal: sealReleaseDraftPreparation
-      }),
-      eventRelationships,
-      sources: releaseSources,
-      ids: Object.freeze({
-        newChangesetId: () => crypto.randomUUID(),
-        newRevisionId: () => crypto.randomUUID(),
-        newReleaseId: () => crypto.randomUUID(),
-        newPreparationHandle: () => crypto.randomUUID(),
-        newTimelineId: () => crypto.randomUUID()
-      })
-    });
-    const changesetLifecycle = createSQLiteChangesetLifecycleEffectDomainRouter([
-      Object.freeze({
-        ownerId: 'event_creation',
-        adapter: eventCreationChangesets.adapter,
-        ownerResolution: eventCreationChangesets.ownerResolution,
-        subjectRelationships: eventCreationChangesets.subjectRelationships
-      }),
-      Object.freeze({
-        ownerId: 'program_vocabulary',
-        adapter: programVocabularyChangesets.adapter,
-        ownerResolution: programVocabularyChangesets.ownerResolution,
-        subjectRelationships: programVocabularyChangesets.subjectRelationships
-      }),
-      Object.freeze({
-        ownerId: intakeFormChangesets.ownerId,
-        adapter: intakeFormChangesets.adapter,
-        ownerResolution: intakeFormChangesets.ownerResolution,
-        subjectRelationships: intakeFormChangesets.subjectRelationships
-      }),
-      Object.freeze({
-        ownerId: 'field_registry',
-        adapter: fieldRegistryChangesets.adapter,
-        ownerResolution: fieldRegistryChangesets.ownerResolution,
-        subjectRelationships: fieldRegistryChangesets.subjectRelationships
-      }),
-      Object.freeze({
-        ownerId: eventSettingsChangesets.ownerId,
-        adapter: eventSettingsChangesets.adapter,
-        ownerResolution: eventSettingsChangesets.ownerResolution,
-        subjectRelationships: eventSettingsChangesets.subjectRelationships
-      }),
-      Object.freeze({
-        ownerId: templateArtifactChangesets.ownerId,
-        adapter: templateArtifactChangesets.adapter,
-        ownerResolution: templateArtifactChangesets.ownerResolution,
-        subjectRelationships: templateArtifactChangesets.subjectRelationships
-      }),
-      Object.freeze({
-        ownerId: 'deadline',
-        adapter: deadlineChangesets.adapter,
-        ownerResolution: deadlineChangesets.ownerResolution,
-        subjectRelationships: deadlineChangesets.subjectRelationships
-      }),
-      Object.freeze({
-        ownerId: submissionTriageChangesets.ownerId,
-        adapter: submissionTriageChangesets.adapter,
-        ownerResolution: submissionTriageChangesets.ownerResolution,
-        subjectRelationships: submissionTriageChangesets.subjectRelationships
-      }),
-      Object.freeze({
-        ownerId: intakeDirectEntryChangesets.ownerId,
-        adapter: intakeDirectEntryChangesets.adapter,
-        ownerResolution: intakeDirectEntryChangesets.ownerResolution,
-        subjectRelationships: intakeDirectEntryChangesets.subjectRelationships
-      }),
-      Object.freeze({
-        ownerId: 'workspace_team',
-        adapter: workspaceTeamChangesets.adapter,
-        ownerResolution: workspaceTeamChangesets.ownerResolution,
-        subjectRelationships: workspaceTeamChangesets.subjectRelationships
-      }),
-      Object.freeze({
-        ownerId: 'schedule_placement',
-        adapter: schedulePlacementChangesets.adapter,
-        ownerResolution: schedulePlacementChangesets.ownerResolution,
-        subjectRelationships: schedulePlacementChangesets.subjectRelationships
-      }),
-      Object.freeze({
-        ownerId: sessionChangesets.ownerId,
-        adapter: sessionChangesets.adapter,
-        ownerResolution: sessionChangesets.ownerResolution,
-        subjectRelationships: sessionChangesets.subjectRelationships
-      }),
-      Object.freeze({
-        ownerId: reviewChangesets.ownerId,
-        adapter: reviewChangesets.adapter,
-        ownerResolution: reviewChangesets.ownerResolution,
-        subjectRelationships: reviewChangesets.subjectRelationships
-      }),
-      Object.freeze({
-        ownerId: reviewerRosterChangesets.ownerId,
-        adapter: reviewerRosterChangesets.adapter,
-        ownerResolution: reviewerRosterChangesets.ownerResolution,
-        subjectRelationships: reviewerRosterChangesets.subjectRelationships
-      }),
-      Object.freeze({
-        ownerId: decisionChangesets.ownerId,
-        adapter: decisionChangesets.adapter,
-        ownerResolution: decisionChangesets.ownerResolution,
-        subjectRelationships: decisionChangesets.subjectRelationships
-      }),
-      Object.freeze({
-        ownerId: engagementChangesets.ownerId,
-        adapter: engagementChangesets.adapter,
-        ownerResolution: engagementChangesets.ownerResolution,
-        subjectRelationships: engagementChangesets.subjectRelationships
-      }),
-      Object.freeze({
-        ownerId: taskChangesets.ownerId,
-        adapter: taskChangesets.adapter,
-        ownerResolution: taskChangesets.ownerResolution,
-        subjectRelationships: taskChangesets.subjectRelationships
-      }),
-      Object.freeze({
-        ownerId: releaseChangesets.ownerId,
-        adapter: releaseChangesets.adapter,
-        ownerResolution: releaseChangesets.ownerResolution,
-        subjectRelationships: releaseChangesets.subjectRelationships
-      }),
-      Object.freeze({
-        ownerId: communicationReleaseChangesets.ownerId,
-        adapter: communicationReleaseLifecycleInertAdapter,
-        ownerResolution: communicationReleaseChangesets.ownerResolution,
-        subjectRelationships: communicationReleaseChangesets.subjectRelationships
-      })
-    ]);
     const authority = createSQLiteOperatorAuthorityComposition({
       sqlite: database.sqlite,
       workspaceId,
@@ -2633,6 +2149,10 @@ export async function createEphemeralLiveRuntime(input: {
           permissionId: 'event.manage' as const
         }),
         Object.freeze({
+          policy: TASK_MANAGE_ACCESS_POLICY,
+          permissionId: 'event.manage' as const
+        }),
+        Object.freeze({
           policy: FIELD_REGISTRY_READ_ACCESS_POLICY,
           permissionId: 'event.read' as const
         }),
@@ -2661,7 +2181,7 @@ export async function createEphemeralLiveRuntime(input: {
           permissionId: 'event.read' as const
         }),
         Object.freeze({
-          policy: SESSION_DRAFT_ACCESS_POLICY,
+          policy: SESSION_MANAGE_ACCESS_POLICY,
           permissionId: 'schedule.manage' as const
         }),
         Object.freeze({
@@ -2723,7 +2243,7 @@ export async function createEphemeralLiveRuntime(input: {
           permissionId: 'event.manage' as const
         }),
         Object.freeze({
-          policy: DECISION_DRAFT_ACCESS_POLICY,
+          policy: DECISION_MANAGE_ACCESS_POLICY,
           permissionId: 'event.manage' as const
         }),
         Object.freeze({
@@ -2731,7 +2251,7 @@ export async function createEphemeralLiveRuntime(input: {
           permissionId: 'speaker.directory.read' as const
         }),
         Object.freeze({
-          policy: ENGAGEMENT_DRAFT_ACCESS_POLICY,
+          policy: ENGAGEMENT_MANAGE_ACCESS_POLICY,
           permissionId: 'event.manage' as const
         }),
         Object.freeze({
@@ -2772,101 +2292,10 @@ export async function createEphemeralLiveRuntime(input: {
             kind: 'all_of' as const,
             permissionIds: ['speaker.contact.read', 'submission.read'] as const
           })
-        }),
-        Object.freeze({
-          policy: CHANGESET_LIFECYCLE_ACCESS_POLICY,
-          permission: Object.freeze({
-            kind: 'domain_subject' as const,
-            domain: 'changeset',
-            entity: 'owner',
-            mappings: Object.freeze([
-              Object.freeze({
-                id: 'event_creation',
-                permissionId: 'event.manage' as const
-              }),
-              Object.freeze({
-                id: 'field_registry',
-                permissionId: 'event.manage' as const
-              }),
-              Object.freeze({
-                id: eventSettingsChangesets.ownerId,
-                permissionId: 'event.manage' as const
-              }),
-              Object.freeze({
-                id: templateArtifactChangesets.ownerId,
-                permissionId: 'event.manage' as const
-              }),
-              Object.freeze({
-                id: 'deadline',
-                permissionId: 'event.manage' as const
-              }),
-              Object.freeze({
-                id: 'intake_form',
-                permissionId: 'event.manage' as const
-              }),
-              Object.freeze({
-                id: 'program_vocabulary',
-                permissionId: 'program.vocabulary.manage' as const
-              }),
-              Object.freeze({
-                id: 'schedule_placement',
-                permissionId: 'schedule.manage' as const
-              }),
-              Object.freeze({
-                id: 'session',
-                permissionId: 'schedule.manage' as const
-              }),
-              Object.freeze({
-                id: submissionTriageChangesets.ownerId,
-                permissionId: 'event.manage' as const
-              }),
-              Object.freeze({
-                id: intakeDirectEntryChangesets.ownerId,
-                permissionId: 'event.manage' as const
-              }),
-              Object.freeze({
-                id: reviewChangesets.ownerId,
-                anyOfPermissionIds: Object.freeze([
-                  'event.manage',
-                  'submission.score',
-                  'submission.comment'
-                ] as const)
-              }),
-              Object.freeze({
-                id: reviewerRosterChangesets.ownerId,
-                permissionId: 'event.manage' as const
-              }),
-              Object.freeze({
-                id: decisionChangesets.ownerId,
-                permissionId: 'event.manage' as const
-              }),
-              Object.freeze({
-                id: engagementChangesets.ownerId,
-                permissionId: 'event.manage' as const
-              }),
-              Object.freeze({
-                id: taskChangesets.ownerId,
-                permissionId: 'event.manage' as const
-              }),
-              Object.freeze({
-                id: releaseChangesets.ownerId,
-                permissionId: 'publication.manage' as const
-              }),
-              Object.freeze({
-                id: 'workspace_team',
-                anyOfPermissionIds: Object.freeze([
-                  'access.roles.manage',
-                  'access.users.invite',
-                  'access.users.suspend'
-                ] as const)
-              })
-            ])
-          })
         })
       ]),
       clock,
-      eventRelationships,
-      additionalSubjectRelationships: changesetLifecycle.subjectRelationships
+      eventRelationships
     });
     const requestHashSealer = createHmacRequestHashSealer({
       profile: EVENT_CREATE_REQUEST_HASH_PROFILE,
@@ -2903,7 +2332,7 @@ export async function createEphemeralLiveRuntime(input: {
       requestHashSealer,
       idempotencyCredentialProfile: eventProfiles.idempotencyCredential,
       idempotencyCredentialSealer,
-      mountLegacyDirectCreate: false
+      mountLegacyDirectCreate: true
     });
     const eventSettingsReadOperations = createEventSettingsReadOperationModule({
       workspaceId,
@@ -2925,7 +2354,7 @@ export async function createEphemeralLiveRuntime(input: {
       scopePartitionProfile: eventProfiles.scopePartition,
       requestCanonicalizationProfile: eventProfiles.requestCanonicalization
     });
-    const eventSettingsDraftOperations = createEventSettingsUpdateDraftOperationModule({
+    const eventSettingsUpdateOperations = createEventSettingsUpdateOperationModule({
       workspaceId,
       managePolicy: EVENT_MANAGE_ACCESS_POLICY,
       currentAuthority: authority.resolver,
@@ -2937,7 +2366,7 @@ export async function createEphemeralLiveRuntime(input: {
       scopePartitionProfile: eventProfiles.scopePartition,
       requestCanonicalizationProfile: eventProfiles.requestCanonicalization,
       requestHashSealer: createHmacRequestHashSealer({
-        profile: EVENT_SETTINGS_UPDATE_DRAFT_REQUEST_HASH_PROFILE,
+        profile: EVENT_SETTINGS_UPDATE_REQUEST_HASH_PROFILE,
         keyBytes: randomHmacKey()
       }),
       idempotencyCredentialProfile: eventProfiles.idempotencyCredential,
@@ -2959,24 +2388,6 @@ export async function createEphemeralLiveRuntime(input: {
       scopePartitionProfile: eventProfiles.scopePartition,
       requestCanonicalizationProfile: eventProfiles.requestCanonicalization
     });
-    const eventCreateDraftOperations = createEventCreateDraftOperationModule({
-      workspaceId,
-      managePolicy: EVENT_MANAGE_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
-      clock,
-      ids: Object.freeze({
-        newInvocationId: () => parseInvocationId(crypto.randomUUID())
-      }),
-      authorityPrincipalKeyProfile: eventProfiles.authorityPrincipal,
-      scopePartitionProfile: eventProfiles.scopePartition,
-      requestCanonicalizationProfile: eventProfiles.requestCanonicalization,
-      requestHashSealer: createHmacRequestHashSealer({
-        profile: EVENT_CREATE_DRAFT_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
-      idempotencyCredentialProfile: eventProfiles.idempotencyCredential,
-      idempotencyCredentialSealer
-    });
     const currentEvent = Object.freeze({
       resolveCurrentEvent(requestedWorkspaceId: typeof workspaceId) {
         if (requestedWorkspaceId !== workspaceId) {
@@ -2995,6 +2406,22 @@ export async function createEphemeralLiveRuntime(input: {
           evidenceIds: Object.freeze(evidenceIds)
         });
       }
+    });
+    const operationHistoryOperations = createOperationHistoryReadOperationModule({
+      workspaceId,
+      policy: WORKSPACE_OVERVIEW_READ_ACCESS_POLICY,
+      currentAuthority: authority.resolver,
+      currentEvent,
+      read: createSQLiteOperationHistoryReader(database.sqlite),
+      clock,
+      ids: Object.freeze({
+        newInvocationId: () => parseInvocationId(crypto.randomUUID())
+      }),
+      crypto: Object.freeze({
+        authorityPrincipalKeyProfile: eventProfiles.authorityPrincipal,
+        scopePartitionProfile: eventProfiles.scopePartition,
+        requestCanonicalizationProfile: eventProfiles.requestCanonicalization
+      })
     });
     const templateArtifactReadOperations = createTemplateArtifactReadOperationModule({
       workspaceId,
@@ -3019,10 +2446,11 @@ export async function createEphemeralLiveRuntime(input: {
       scopePartitionProfile: templateArtifactProfiles.scopePartition,
       requestCanonicalizationProfile: templateArtifactProfiles.requestCanonicalization
     });
-    const templateArtifactDraftOperations = createTemplateArtifactDraftOperationModule({
+    const templateArtifactNativeOperations = createTemplateArtifactNativeOperationModule({
       workspaceId,
-      managePolicy: EVENT_MANAGE_ACCESS_POLICY,
+      policy: EVENT_MANAGE_ACCESS_POLICY,
       currentAuthority: authority.resolver,
+      currentEvent,
       clock,
       ids: Object.freeze({
         newInvocationId: () => parseInvocationId(crypto.randomUUID())
@@ -3030,8 +2458,12 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: templateArtifactProfiles.authorityPrincipal,
       scopePartitionProfile: templateArtifactProfiles.scopePartition,
       requestCanonicalizationProfile: templateArtifactProfiles.requestCanonicalization,
-      requestHashSealer: createHmacRequestHashSealer({
-        profile: TEMPLATE_ARTIFACT_DRAFT_REQUEST_HASH_PROFILE,
+      draftRequestHashSealer: createHmacRequestHashSealer({
+        profile: TEMPLATE_ARTIFACT_NATIVE_DRAFT_REQUEST_HASH_PROFILE,
+        keyBytes: randomHmacKey()
+      }),
+      publishRequestHashSealer: createHmacRequestHashSealer({
+        profile: TEMPLATE_ARTIFACT_NATIVE_PUBLISH_REQUEST_HASH_PROFILE,
         keyBytes: randomHmacKey()
       }),
       idempotencyCredentialProfile: templateArtifactProfiles.idempotencyCredential,
@@ -3315,7 +2747,7 @@ export async function createEphemeralLiveRuntime(input: {
       }),
       currentAuthority: authority.resolver,
       currentEvent,
-      deadlineRead: deadlineDraftDomain.deadlineRead,
+      deadlineRead: deadlineDirectDomain.deadlineRead,
       clock,
       ids: Object.freeze({
         newInvocationId: () => parseInvocationId(crypto.randomUUID())
@@ -3324,7 +2756,7 @@ export async function createEphemeralLiveRuntime(input: {
       scopePartitionProfile: deadlineProfiles.scopePartition,
       requestCanonicalizationProfile: deadlineProfiles.requestCanonicalization,
       requestHashSealer: createHmacRequestHashSealer({
-        profile: DEADLINE_DRAFT_REQUEST_HASH_PROFILE,
+        profile: DEADLINE_CHANGE_REQUEST_HASH_PROFILE,
         keyBytes: randomHmacKey()
       }),
       idempotencyCredentialProfile: deadlineProfiles.idempotencyCredential,
@@ -3429,9 +2861,9 @@ export async function createEphemeralLiveRuntime(input: {
         })
       })
     });
-    const releaseDraftOperations = createReleaseDraftOperationModule({
+    const releaseNativeOperations = createReleaseNativeOperationModule({
       workspaceId,
-      draftPolicy: RELEASE_DRAFT_ACCESS_POLICY,
+      policy: RELEASE_DRAFT_ACCESS_POLICY,
       currentAuthority: authority.resolver,
       currentEvent,
       clock,
@@ -3441,8 +2873,12 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: releaseProfiles.authorityPrincipal,
       scopePartitionProfile: releaseProfiles.scopePartition,
       requestCanonicalizationProfile: releaseProfiles.requestCanonicalization,
-      requestHashSealer: createHmacRequestHashSealer({
-        profile: RELEASE_DRAFT_REQUEST_HASH_PROFILE,
+      draftRequestHashSealer: createHmacRequestHashSealer({
+        profile: RELEASE_NATIVE_DRAFT_REQUEST_HASH_PROFILE,
+        keyBytes: randomHmacKey()
+      }),
+      publishRequestHashSealer: createHmacRequestHashSealer({
+        profile: RELEASE_NATIVE_PUBLISH_REQUEST_HASH_PROFILE,
         keyBytes: randomHmacKey()
       }),
       idempotencyCredentialProfile: releaseProfiles.idempotencyCredential,
@@ -3551,20 +2987,13 @@ export async function createEphemeralLiveRuntime(input: {
         requestCanonicalizationProfile: releaseProfiles.requestCanonicalization
       })
     });
-    const programVocabularyRequestHashSealer = createHmacRequestHashSealer({
-      profile: PROGRAM_VOCABULARY_DRAFT_REQUEST_HASH_PROFILE,
-      keyBytes: randomHmacKey()
-    });
     const programVocabularyIdempotencyCredentialSealer = createHmacIdempotencyCredentialSealer({
       profile: programVocabularyProfiles.idempotencyCredential,
       keyBytes: randomHmacKey()
     });
-    const programVocabularyOperations = createProgramVocabularyOperationModule({
+    const programVocabularyOperations = createProgramVocabularyReadOperationModule({
       workspaceId,
-      policies: Object.freeze({
-        read: PROGRAM_VOCABULARY_READ_ACCESS_POLICY,
-        manage: PROGRAM_VOCABULARY_MANAGE_ACCESS_POLICY
-      }),
+      readPolicy: PROGRAM_VOCABULARY_READ_ACCESS_POLICY,
       currentAuthority: authority.resolver,
       currentEvent,
       vocabularyRead,
@@ -3575,8 +3004,43 @@ export async function createEphemeralLiveRuntime(input: {
       }),
       authorityPrincipalKeyProfile: programVocabularyProfiles.authorityPrincipal,
       scopePartitionProfile: programVocabularyProfiles.scopePartition,
+      requestCanonicalizationProfile: programVocabularyProfiles.requestCanonicalization
+    });
+    const programVocabularyDirectOperations = createProgramVocabularyDirectOperationModule({
+      workspaceId,
+      managePolicy: PROGRAM_VOCABULARY_MANAGE_ACCESS_POLICY,
+      currentAuthority: authority.resolver,
+      currentEvent,
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      authorityPrincipalKeyProfile: programVocabularyProfiles.authorityPrincipal,
+      scopePartitionProfile: programVocabularyProfiles.scopePartition,
       requestCanonicalizationProfile: programVocabularyProfiles.requestCanonicalization,
-      requestHashSealer: programVocabularyRequestHashSealer,
+      requestHashSealer: createHmacRequestHashSealer({
+        profile: PROGRAM_VOCABULARY_DIRECT_REQUEST_HASH_PROFILE,
+        keyBytes: randomHmacKey()
+      }),
+      idempotencyCredentialProfile: programVocabularyProfiles.idempotencyCredential,
+      idempotencyCredentialSealer: programVocabularyIdempotencyCredentialSealer
+    });
+    const programVocabularyMergeOperations = createProgramVocabularyMergeOperationModule({
+      workspaceId,
+      managePolicy: PROGRAM_VOCABULARY_MANAGE_ACCESS_POLICY,
+      currentAuthority: authority.resolver,
+      currentEvent,
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      authorityPrincipalKeyProfile: programVocabularyProfiles.authorityPrincipal,
+      scopePartitionProfile: programVocabularyProfiles.scopePartition,
+      requestCanonicalizationProfile: programVocabularyProfiles.requestCanonicalization,
+      draftRequestHashSealer: createHmacRequestHashSealer({
+        profile: PROGRAM_VOCABULARY_MERGE_DRAFT_REQUEST_HASH_PROFILE,
+        keyBytes: randomHmacKey()
+      }),
+      publishRequestHashSealer: createHmacRequestHashSealer({
+        profile: PROGRAM_VOCABULARY_MERGE_PUBLISH_REQUEST_HASH_PROFILE,
+        keyBytes: randomHmacKey()
+      }),
       idempotencyCredentialProfile: programVocabularyProfiles.idempotencyCredential,
       idempotencyCredentialSealer: programVocabularyIdempotencyCredentialSealer
     });
@@ -3588,7 +3052,7 @@ export async function createEphemeralLiveRuntime(input: {
       }),
       currentAuthority: authority.resolver,
       currentEvent,
-      scheduleRead: schedulePlacementDraftDomain.scheduleRead,
+      scheduleRead: schedulePlacementDirectDomain.scheduleRead,
       clock,
       ids: Object.freeze({
         newInvocationId: () => parseInvocationId(crypto.randomUUID())
@@ -3597,7 +3061,33 @@ export async function createEphemeralLiveRuntime(input: {
       scopePartitionProfile: schedulePlacementProfiles.scopePartition,
       requestCanonicalizationProfile: schedulePlacementProfiles.requestCanonicalization,
       requestHashSealer: createHmacRequestHashSealer({
-        profile: SCHEDULE_PLACEMENT_DRAFT_REQUEST_HASH_PROFILE,
+        profile: SCHEDULE_PLACEMENT_REQUEST_HASH_PROFILE,
+        keyBytes: randomHmacKey()
+      }),
+      idempotencyCredentialProfile: schedulePlacementProfiles.idempotencyCredential,
+      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
+        profile: schedulePlacementProfiles.idempotencyCredential,
+        keyBytes: randomHmacKey()
+      })
+    });
+    const schedulePlacementDirectOperations = createSchedulePlacementDirectOperationModule({
+      workspaceId,
+      policies: Object.freeze({
+        read: SCHEDULE_PLACEMENT_READ_ACCESS_POLICY,
+        manage: SCHEDULE_PLACEMENT_MANAGE_ACCESS_POLICY
+      }),
+      currentAuthority: authority.resolver,
+      currentEvent,
+      scheduleRead: schedulePlacementDirectDomain.scheduleRead,
+      clock,
+      ids: Object.freeze({
+        newInvocationId: () => parseInvocationId(crypto.randomUUID())
+      }),
+      authorityPrincipalKeyProfile: schedulePlacementProfiles.authorityPrincipal,
+      scopePartitionProfile: schedulePlacementProfiles.scopePartition,
+      requestCanonicalizationProfile: schedulePlacementProfiles.requestCanonicalization,
+      requestHashSealer: createHmacRequestHashSealer({
+        profile: SCHEDULE_PLACEMENT_REQUEST_HASH_PROFILE,
         keyBytes: randomHmacKey()
       }),
       idempotencyCredentialProfile: schedulePlacementProfiles.idempotencyCredential,
@@ -3620,9 +3110,9 @@ export async function createEphemeralLiveRuntime(input: {
       requestCanonicalizationProfile: sessionProfiles.requestCanonicalization,
       sessions: sessionRepository
     });
-    const sessionDraftOperations = createSessionDraftOperationModule({
+    const sessionDirectOperations = createSessionDirectOperationModule({
       workspaceId,
-      draftPolicy: SESSION_DRAFT_ACCESS_POLICY,
+      managePolicy: SESSION_MANAGE_ACCESS_POLICY,
       currentAuthority: authority.resolver,
       currentEvent,
       clock,
@@ -3633,7 +3123,7 @@ export async function createEphemeralLiveRuntime(input: {
       scopePartitionProfile: sessionProfiles.scopePartition,
       requestCanonicalizationProfile: sessionProfiles.requestCanonicalization,
       requestHashSealer: createHmacRequestHashSealer({
-        profile: SESSION_DRAFT_REQUEST_HASH_PROFILE,
+        profile: SESSION_CHANGE_REQUEST_HASH_PROFILE,
         keyBytes: randomHmacKey()
       }),
       idempotencyCredentialProfile: sessionProfiles.idempotencyCredential,
@@ -3660,7 +3150,7 @@ export async function createEphemeralLiveRuntime(input: {
       scopePartitionProfile: fieldRegistryProfiles.scopePartition,
       requestCanonicalizationProfile: fieldRegistryProfiles.requestCanonicalization,
       requestHashSealer: createHmacRequestHashSealer({
-        profile: FIELD_REGISTRY_DRAFT_REQUEST_HASH_PROFILE,
+        profile: FIELD_REGISTRY_DIRECT_REQUEST_HASH_PROFILE,
         keyBytes: randomHmacKey()
       }),
       idempotencyCredentialProfile: fieldRegistryProfiles.idempotencyCredential,
@@ -3668,31 +3158,6 @@ export async function createEphemeralLiveRuntime(input: {
         profile: fieldRegistryProfiles.idempotencyCredential,
         keyBytes: randomHmacKey()
       })
-    });
-    const changesetRequestHashSealer = createHmacRequestHashSealer({
-      profile: CHANGESET_LIFECYCLE_REQUEST_HASH_PROFILE,
-      keyBytes: randomHmacKey()
-    });
-    const changesetIdempotencyCredentialSealer = createHmacIdempotencyCredentialSealer({
-      profile: changesetProfiles.idempotencyCredential,
-      keyBytes: randomHmacKey()
-    });
-    const changesetOperations = createChangesetOperationModule({
-      workspaceId,
-      policy: CHANGESET_LIFECYCLE_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
-      lifecycleStore: programVocabularyChangesets.lifecycleStore,
-      ownerResolution: changesetLifecycle.ownerResolution,
-      clock,
-      ids: Object.freeze({
-        newInvocationId: () => parseInvocationId(crypto.randomUUID())
-      }),
-      authorityPrincipalKeyProfile: changesetProfiles.authorityPrincipal,
-      scopePartitionProfile: changesetProfiles.scopePartition,
-      requestCanonicalizationProfile: changesetProfiles.requestCanonicalization,
-      requestHashSealer: changesetRequestHashSealer,
-      idempotencyCredentialProfile: changesetProfiles.idempotencyCredential,
-      idempotencyCredentialSealer: changesetIdempotencyCredentialSealer
     });
     const intakeReadOperations = createIntakeReadOperationModule({
       workspaceId,
@@ -3726,29 +3191,34 @@ export async function createEphemeralLiveRuntime(input: {
         requestCanonicalizationProfile: intakeProfiles.requestCanonicalization
       })
     });
-    const intakeRequestHashSealer = createHmacRequestHashSealer({
-      profile: INTAKE_FORM_DRAFT_REQUEST_HASH_PROFILE,
-      keyBytes: randomHmacKey()
-    });
     const intakeIdempotencyCredentialSealer = createHmacIdempotencyCredentialSealer({
       profile: intakeProfiles.idempotencyCredential,
       keyBytes: randomHmacKey()
     });
-    const intakeFormDraftOperations = createIntakeFormDraftOperationModule({
+    const intakeFormWriteOperations = createIntakeFormWriteOperationModule({
       workspaceId,
       policy: INTAKE_EVENT_MANAGE_ACCESS_POLICY,
       currentAuthority: authority.resolver,
       currentEvent,
       clock,
       ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
-      crypto: Object.freeze({
-        authorityPrincipalKeyProfile: intakeProfiles.authorityPrincipal,
-        scopePartitionProfile: intakeProfiles.scopePartition,
-        requestCanonicalizationProfile: intakeProfiles.requestCanonicalization,
-        requestHashSealer: intakeRequestHashSealer,
-        idempotencyCredentialProfile: intakeProfiles.idempotencyCredential,
-        idempotencyCredentialSealer: intakeIdempotencyCredentialSealer
-      })
+      authorityPrincipalKeyProfile: intakeProfiles.authorityPrincipal,
+      scopePartitionProfile: intakeProfiles.scopePartition,
+      requestCanonicalizationProfile: intakeProfiles.requestCanonicalization,
+      directRequestHashSealer: createHmacRequestHashSealer({
+        profile: INTAKE_FORM_DIRECT_REQUEST_HASH_PROFILE,
+        keyBytes: randomHmacKey()
+      }),
+      reviewRequestHashSealer: createHmacRequestHashSealer({
+        profile: INTAKE_FORM_REVIEW_DRAFT_REQUEST_HASH_PROFILE,
+        keyBytes: randomHmacKey()
+      }),
+      publishRequestHashSealer: createHmacRequestHashSealer({
+        profile: INTAKE_FORM_PUBLISH_REQUEST_HASH_PROFILE,
+        keyBytes: randomHmacKey()
+      }),
+      idempotencyCredentialProfile: intakeProfiles.idempotencyCredential,
+      idempotencyCredentialSealer: intakeIdempotencyCredentialSealer
     });
     const submissionTriageReadOperations = createSubmissionTriageReadOperationModule({
       workspaceId,
@@ -3767,7 +3237,7 @@ export async function createEphemeralLiveRuntime(input: {
         requestCanonicalizationProfile: submissionTriageProfiles.requestCanonicalization
       })
     });
-    const submissionTriageDraftOperations = createSubmissionTriageDraftOperationModule({
+    const submissionTriageTransitionOperations = createSubmissionTriageTransitionOperationModule({
       workspaceId,
       policy: SUBMISSION_TRIAGE_MANAGE_ACCESS_POLICY,
       currentAuthority: authority.resolver,
@@ -3779,7 +3249,7 @@ export async function createEphemeralLiveRuntime(input: {
         scopePartitionProfile: submissionTriageProfiles.scopePartition,
         requestCanonicalizationProfile: submissionTriageProfiles.requestCanonicalization,
         requestHashSealer: createHmacRequestHashSealer({
-          profile: SUBMISSION_TRIAGE_DRAFT_REQUEST_HASH_PROFILE,
+          profile: SUBMISSION_TRIAGE_REQUEST_HASH_PROFILE,
           keyBytes: randomHmacKey()
         }),
         idempotencyCredentialProfile: submissionTriageProfiles.idempotencyCredential,
@@ -3789,8 +3259,8 @@ export async function createEphemeralLiveRuntime(input: {
         })
       })
     });
-    const submissionDirectEntryDraftOperations =
-      createSubmissionDirectEntryDraftOperationModule({
+    const submissionDirectEntryOperations =
+      createSubmissionDirectEntryOperationModule({
         workspaceId,
         policy: SUBMISSION_DIRECT_ENTRY_ACCESS_POLICY,
         currentAuthority: authority.resolver,
@@ -3802,7 +3272,7 @@ export async function createEphemeralLiveRuntime(input: {
           scopePartitionProfile: intakeProfiles.scopePartition,
           requestCanonicalizationProfile: intakeProfiles.requestCanonicalization,
           requestHashSealer: createHmacRequestHashSealer({
-            profile: SUBMISSION_DIRECT_ENTRY_DRAFT_REQUEST_HASH_PROFILE,
+            profile: SUBMISSION_DIRECT_ENTRY_REQUEST_HASH_PROFILE,
             keyBytes: randomHmacKey()
           }),
           idempotencyCredentialProfile: intakeProfiles.idempotencyCredential,
@@ -3832,7 +3302,7 @@ export async function createEphemeralLiveRuntime(input: {
       scopePartitionProfile: workspaceTeamProfiles.scopePartition,
       requestCanonicalizationProfile: workspaceTeamProfiles.requestCanonicalization,
       requestHashSealer: createHmacRequestHashSealer({
-        profile: WORKSPACE_TEAM_DRAFT_REQUEST_HASH_PROFILE,
+        profile: WORKSPACE_TEAM_MUTATION_REQUEST_HASH_PROFILE,
         keyBytes: randomHmacKey()
       }),
       idempotencyCredentialProfile: workspaceTeamProfiles.idempotencyCredential,
@@ -3934,6 +3404,30 @@ export async function createEphemeralLiveRuntime(input: {
         keyBytes: randomHmacKey()
       })
     });
+    const reviewDirectOperations = createReviewDirectOperationModule({
+      workspaceId,
+      policies: Object.freeze({
+        manage: REVIEW_MANAGE_ACCESS_POLICY,
+        stepBack: REVIEW_STEP_BACK_ACCESS_POLICY,
+        evaluate: REVIEW_EVALUATE_ACCESS_POLICY
+      }),
+      currentAuthority: authority.resolver,
+      currentEvent,
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      authorityPrincipalKeyProfile: reviewProfiles.authorityPrincipal,
+      scopePartitionProfile: reviewProfiles.scopePartition,
+      requestCanonicalizationProfile: reviewProfiles.requestCanonicalization,
+      requestHashSealer: createHmacRequestHashSealer({
+        profile: REVIEW_DIRECT_REQUEST_HASH_PROFILE,
+        keyBytes: randomHmacKey()
+      }),
+      idempotencyCredentialProfile: reviewProfiles.idempotencyCredential,
+      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
+        profile: reviewProfiles.idempotencyCredential,
+        keyBytes: randomHmacKey()
+      })
+    });
     const reviewerRosterOperations = createReviewerRosterOperationModule({
       workspaceId,
       policy: REVIEWER_ROSTER_MANAGE_ACCESS_POLICY,
@@ -3948,8 +3442,8 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: reviewerRosterProfiles.authorityPrincipal,
       scopePartitionProfile: reviewerRosterProfiles.scopePartition,
       requestCanonicalizationProfile: reviewerRosterProfiles.requestCanonicalization,
-      requestHashSealer: createHmacRequestHashSealer({
-        profile: REVIEWER_ROSTER_DRAFT_REQUEST_HASH_PROFILE,
+      directRequestHashSealer: createHmacRequestHashSealer({
+        profile: REVIEWER_ROSTER_DIRECT_REQUEST_HASH_PROFILE,
         keyBytes: randomHmacKey()
       }),
       idempotencyCredentialProfile: reviewerRosterProfiles.idempotencyCredential,
@@ -3970,9 +3464,9 @@ export async function createEphemeralLiveRuntime(input: {
       requestCanonicalizationProfile: decisionProfiles.requestCanonicalization,
       decisions: decisionRepository
     });
-    const decisionDraftOperations = createDecisionDraftOperationModule({
+    const decisionDirectOperations = createDecisionDirectOperationModule({
       workspaceId,
-      draftPolicy: DECISION_DRAFT_ACCESS_POLICY,
+      managePolicy: DECISION_MANAGE_ACCESS_POLICY,
       currentAuthority: authority.resolver,
       currentEvent,
       clock,
@@ -3981,7 +3475,7 @@ export async function createEphemeralLiveRuntime(input: {
       scopePartitionProfile: decisionProfiles.scopePartition,
       requestCanonicalizationProfile: decisionProfiles.requestCanonicalization,
       requestHashSealer: createHmacRequestHashSealer({
-        profile: DECISION_DRAFT_REQUEST_HASH_PROFILE,
+        profile: DECISION_REQUEST_HASH_PROFILE,
         keyBytes: randomHmacKey()
       }),
       idempotencyCredentialProfile: decisionProfiles.idempotencyCredential,
@@ -4004,9 +3498,9 @@ export async function createEphemeralLiveRuntime(input: {
       // nothing here reads a second copy of engagement state.
       engagements: decisionRepository.engagements
     });
-    const engagementDraftOperations = createEngagementDraftOperationModule({
+    const engagementDirectOperations = createEngagementDirectOperationModule({
       workspaceId,
-      draftPolicy: ENGAGEMENT_DRAFT_ACCESS_POLICY,
+      managePolicy: ENGAGEMENT_MANAGE_ACCESS_POLICY,
       currentAuthority: authority.resolver,
       currentEvent,
       clock,
@@ -4015,7 +3509,7 @@ export async function createEphemeralLiveRuntime(input: {
       scopePartitionProfile: engagementProfiles.scopePartition,
       requestCanonicalizationProfile: engagementProfiles.requestCanonicalization,
       requestHashSealer: createHmacRequestHashSealer({
-        profile: ENGAGEMENT_DRAFT_REQUEST_HASH_PROFILE,
+        profile: ENGAGEMENT_REQUEST_HASH_PROFILE,
         keyBytes: randomHmacKey()
       }),
       idempotencyCredentialProfile: engagementProfiles.idempotencyCredential,
@@ -4028,6 +3522,7 @@ export async function createEphemeralLiveRuntime(input: {
       workspaceId,
       readPolicy: EVENT_READ_ACCESS_POLICY,
       currentAuthority: authority.resolver,
+      currentEvent,
       tasks: Object.freeze({
         readCurrent(requestedWorkspaceId: typeof workspaceId) {
           const selected = currentEvent.resolveCurrentEvent(requestedWorkspaceId);
@@ -4045,17 +3540,18 @@ export async function createEphemeralLiveRuntime(input: {
       scopePartitionProfile: taskProfiles.scopePartition,
       requestCanonicalizationProfile: taskProfiles.requestCanonicalization
     });
-    const taskDraftOperations = createTaskDraftOperationModule({
+    const taskMutationOperations = createTaskMutationOperationModule({
       workspaceId,
-      managePolicy: EVENT_MANAGE_ACCESS_POLICY,
+      managePolicy: TASK_MANAGE_ACCESS_POLICY,
       currentAuthority: authority.resolver,
+      currentEvent,
       clock,
       ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
       authorityPrincipalKeyProfile: taskProfiles.authorityPrincipal,
       scopePartitionProfile: taskProfiles.scopePartition,
       requestCanonicalizationProfile: taskProfiles.requestCanonicalization,
       requestHashSealer: createHmacRequestHashSealer({
-        profile: TASK_DRAFT_REQUEST_HASH_PROFILE,
+        profile: TASK_MUTATION_REQUEST_HASH_PROFILE,
         keyBytes: randomHmacKey()
       }),
       idempotencyCredentialProfile: taskProfiles.idempotencyCredential,
@@ -4064,42 +3560,20 @@ export async function createEphemeralLiveRuntime(input: {
         keyBytes: randomHmacKey()
       })
     });
-    const eventCreateDraftDomain = createSQLiteEventCreateDraftEffectDomainRegistration({
-      sqlite: database.sqlite,
-      workspaceId,
-      policy: eventPolicy,
-      dependencyRegistry: eventDependencyRegistry,
-      dependencySource: eventDependencySource,
-      ids: Object.freeze({
-        newChangesetId: () => crypto.randomUUID(),
-        newRevisionId: () => crypto.randomUUID(),
-        newPreparationHandle: () => crypto.randomUUID(),
-        newTimelineId: () => crypto.randomUUID(),
-        newEventId: () => crypto.randomUUID()
-      })
-    });
-    const eventSettingsDraftDomain =
-      createSQLiteEventSettingsUpdateDraftEffectDomainRegistration({
+    const eventSettingsDirectDomain =
+      createSQLiteEventSettingsDirectEffectDomainRegistration({
         sqlite: database.sqlite,
-        workspaceId,
-        policy: eventPolicy,
-        ids: Object.freeze({
-          newChangesetId: () => crypto.randomUUID(),
-          newRevisionId: () => crypto.randomUUID(),
-          newPreparationHandle: () => crypto.randomUUID(),
-          newTimelineId: () => crypto.randomUUID()
-        })
+        workspaceId
       });
-    const templateArtifactDraftDomain =
-      createSQLiteTemplateArtifactDraftEffectDomainRegistration({
+    const templateArtifactNativeDomains =
+      createSQLiteTemplateArtifactNativeEffectDomainRegistrations({
         sqlite: database.sqlite,
         workspaceId,
-        policy: templateAuthoringPolicy,
+        eventRelationships,
         ids: Object.freeze({
-          newChangesetId: () => crypto.randomUUID(),
+          newDraftId: () => crypto.randomUUID(),
           newRevisionId: () => crypto.randomUUID(),
-          newPreparationHandle: () => crypto.randomUUID(),
-          newTimelineId: () => crypto.randomUUID()
+          newArtifactRevisionId: () => crypto.randomUUID()
         })
       });
     const templateEditDomain = createSQLiteTemplateEditEffectDomainRegistration({
@@ -4112,100 +3586,56 @@ export async function createEphemeralLiveRuntime(input: {
         newAttemptId: () => crypto.randomUUID()
       })
     });
-    const programVocabularyDomain =
-      createSQLiteProgramVocabularyDraftEffectDomainRegistration({
+    const programVocabularyDirectDomain =
+      createSQLiteProgramVocabularyDirectEffectDomainRegistration({
         sqlite: database.sqlite,
         workspaceId,
-        policy: programVocabularyPolicy,
+        referenceRegistry,
+        contributors: contributorAdapters,
+        eventRelationships,
+        ids: Object.freeze({ newVocabularyItemId: () => crypto.randomUUID() })
+      });
+    const programVocabularyMergeDomains =
+      createSQLiteProgramVocabularyMergeEffectDomainRegistrations({
+        sqlite: database.sqlite,
+        workspaceId,
         referenceRegistry,
         contributors: contributorAdapters,
         eventRelationships,
         ids: Object.freeze({
-          newChangesetId: () => crypto.randomUUID(),
-          newRevisionId: () => crypto.randomUUID(),
-          newPreparationHandle: () => crypto.randomUUID(),
-          newTimelineId: () => crypto.randomUUID(),
-          newVocabularyItemId: () => crypto.randomUUID()
+          newDraftId: () => crypto.randomUUID(),
+          newRevisionId: () => crypto.randomUUID()
         })
       });
-    const intakeFormDraftDomain = createSQLiteIntakeFormDraftEffectDomainRegistration({
+    const intakeFormWriteDomains = createSQLiteIntakeFormWriteEffectDomainRegistrations({
       sqlite: database.sqlite,
       workspaceId,
-      policy: formPolicy,
       repository: intakeRepository,
       eventRelationships,
       ids: Object.freeze({
-        newChangesetId: () => crypto.randomUUID(),
-        newRevisionId: () => crypto.randomUUID(),
-        newPreparationHandle: () => crypto.randomUUID(),
-        newTimelineId: () => crypto.randomUUID(),
         newFormEntityId: () => crypto.randomUUID(),
-        newFormVersionId: () => crypto.randomUUID()
+        newFormVersionId: () => crypto.randomUUID(),
+        newReviewDraftId: () => crypto.randomUUID(),
+        newReviewRevisionId: () => crypto.randomUUID()
       })
     });
-    const fieldRegistryDraftDomain = createSQLiteFieldRegistryDraftEffectDomainRegistration({
+    const fieldRegistryDirectDomain = createSQLiteFieldRegistryDirectEffectDomainRegistration({
       sqlite: database.sqlite,
       workspaceId,
-      policy: fieldRegistryPolicy,
       eventRelationships,
       ids: Object.freeze({
-        newChangesetId: () => crypto.randomUUID(),
-        newRevisionId: () => crypto.randomUUID(),
-        newPreparationHandle: () => crypto.randomUUID(),
-        newTimelineId: () => crypto.randomUUID(),
         newFieldId: () => crypto.randomUUID(),
         newChoiceId: () => crypto.randomUUID()
       })
     });
-    const submissionTriageDraftDomain =
-      createSQLiteSubmissionTriageDraftEffectDomainRegistration({
+    const workspaceTeamMutationDomain =
+      createSQLiteWorkspaceTeamMutationEffectDomainRegistration({
         sqlite: database.sqlite,
         workspaceId,
-        policy: submissionTriagePolicy,
-        repository: submissionTriageRepository,
-        eventRelationships,
-        ids: Object.freeze({
-          newChangesetId: () => crypto.randomUUID(),
-          newRevisionId: () => crypto.randomUUID(),
-          newPreparationHandle: () => crypto.randomUUID(),
-          newTimelineId: () => crypto.randomUUID()
-        })
-      });
-    const intakeDirectEntryDraftDomain =
-      createSQLiteIntakeDirectEntryDraftEffectDomainRegistration({
-        sqlite: database.sqlite,
-        workspaceId,
-        policy: submissionDirectEntryPolicy,
-        repository: intakeRepository,
-        classifiedStore: intakeClassifiedStore,
-        classifiedProfiles: intakeClassifiedProfiles,
-        eventRelationships,
-        ids: Object.freeze({
-          newChangesetId: () => crypto.randomUUID(),
-          newRevisionId: () => crypto.randomUUID(),
-          newPreparationHandle: () => crypto.randomUUID(),
-          newTimelineId: () => crypto.randomUUID(),
-          newPayloadRefId: () => crypto.randomUUID(),
-          newSubmissionId: () => crypto.randomUUID(),
-          newEntryEvidenceId: () => crypto.randomUUID(),
-          newPersonId: () => crypto.randomUUID(),
-          newParticipantIdentityId: () => crypto.randomUUID(),
-          newParticipantEvidenceId: () => crypto.randomUUID()
-        })
-      });
-    const workspaceTeamDraftDomain = Object.freeze({
-      capability: WORKSPACE_TEAM_DRAFT_HANDLER_CAPABILITY,
-      adapter: new SQLiteWorkspaceTeamDraftEffectDomainAdapter({
-        sqlite: database.sqlite,
-        workspaceId,
-        policy: workspaceTeamPolicy,
         classifiedStore: workspaceTeamClassifiedStore,
         invitationLookupKeyBytes: workspaceTeamInvitationLookupKey,
         ids: Object.freeze({
-          newChangesetId: () => crypto.randomUUID(),
-          newRevisionId: () => crypto.randomUUID(),
           newPreparationHandle: () => crypto.randomUUID(),
-          newTimelineId: () => crypto.randomUUID(),
           newReservationId: () => crypto.randomUUID(),
           newReservationRoleAssignmentId: () => crypto.randomUUID(),
           newReleaseIntentId: () => crypto.randomUUID(),
@@ -4213,18 +3643,13 @@ export async function createEphemeralLiveRuntime(input: {
           newPayloadRefId: () => crypto.randomUUID(),
           newSessionRevocationIntentId: () => crypto.randomUUID()
         })
-      })
-    });
-    const reviewDraftDomain = createSQLiteReviewDraftEffectDomainRegistration({
+      });
+    const reviewDirectDomain = createSQLiteReviewDirectEffectDomainRegistration({
       sqlite: database.sqlite,
       workspaceId,
       repository: reviewRepository,
       eventRelationships,
       ids: Object.freeze({
-        newChangesetId: () => crypto.randomUUID(),
-        newRevisionId: () => crypto.randomUUID(),
-        newPreparationHandle: () => crypto.randomUUID(),
-        newTimelineId: () => crypto.randomUUID(),
         newRoundId: () => crypto.randomUUID(),
         newDeadlineId: () => crypto.randomUUID(),
         newCriterionId: () => crypto.randomUUID(),
@@ -4242,73 +3667,13 @@ export async function createEphemeralLiveRuntime(input: {
           newPreparationHandle: () => crypto.randomUUID()
         })
       });
-    const reviewerRosterDraftDomain =
-      createSQLiteReviewerRosterDraftEffectDomainRegistration({
+    const reviewerRosterDirectDomain =
+      createSQLiteReviewerRosterDirectEffectDomainRegistration({
         sqlite: database.sqlite,
         workspaceId,
         sources: reviewerRosterSources,
-        eventRelationships,
-        ids: Object.freeze({
-          newChangesetId: () => crypto.randomUUID(),
-          newRevisionId: () => crypto.randomUUID(),
-          newPreparationHandle: () => crypto.randomUUID(),
-          newTimelineId: () => crypto.randomUUID()
-        })
+        eventRelationships
       });
-    const decisionDraftDomain = createSQLiteDecisionDraftEffectDomainRegistration({
-      sqlite: database.sqlite,
-      workspaceId,
-      vocabulary: vocabularyRead,
-      environment: decisionEnvironment,
-      eventRelationships,
-      ids: Object.freeze({
-        newChangesetId: () => crypto.randomUUID(),
-        newRevisionId: () => crypto.randomUUID(),
-        newSessionId: () => crypto.randomUUID(),
-        newPreparationHandle: () => crypto.randomUUID(),
-        newTimelineId: () => crypto.randomUUID()
-      })
-    });
-    const engagementDraftDomain = createSQLiteEngagementDraftEffectDomainRegistration({
-      sqlite: database.sqlite,
-      workspaceId,
-      operations: Object.freeze({
-        operation: ENGAGEMENT_CHANGE_DRAFT_OPERATION,
-        accessPolicy: ENGAGEMENT_DRAFT_ACCESS_POLICY,
-        permissionId: ENGAGEMENT_DRAFT_PERMISSION_ID,
-        capability: ENGAGEMENT_DRAFT_HANDLER_CAPABILITY,
-        approvalPolicy: ENGAGEMENT_DRAFT_APPROVAL_POLICY,
-        seal: sealEngagementDraftPreparation
-      }),
-      eventRelationships,
-      ids: Object.freeze({
-        newChangesetId: () => crypto.randomUUID(),
-        newRevisionId: () => crypto.randomUUID(),
-        newPreparationHandle: () => crypto.randomUUID(),
-        newTimelineId: () => crypto.randomUUID()
-      })
-    });
-    const taskDraftDomain = createSQLiteTaskDraftEffectDomainRegistration({
-      sqlite: database.sqlite,
-      workspaceId,
-      operations: Object.freeze({
-        operation: TASK_MUTATION_DRAFT_OPERATION,
-        accessPolicy: EVENT_MANAGE_ACCESS_POLICY,
-        permissionId: TASK_MANAGE_PERMISSION_ID,
-        capability: TASK_DRAFT_HANDLER_CAPABILITY,
-        approvalPolicy: TASK_DRAFT_APPROVAL_POLICY,
-        seal: sealTaskDraftPreparation
-      }),
-      ids: Object.freeze({
-        newChangesetId: () => crypto.randomUUID(),
-        newRevisionId: () => crypto.randomUUID(),
-        newTaskDefinitionId: () => crypto.randomUUID(),
-        newTaskDefinitionRevisionId: () => crypto.randomUUID(),
-        newDeadlineId: () => crypto.randomUUID(),
-        newPreparationHandle: () => crypto.randomUUID(),
-        newTimelineId: () => crypto.randomUUID()
-      })
-    });
     const organizerCommunicationAuthoringDomains =
       createSQLiteOrganizerCommunicationAuthoringEffectDomainRegistrations({
         sqlite: database.sqlite,
@@ -4619,24 +3984,6 @@ export async function createEphemeralLiveRuntime(input: {
       idempotencyCredentialProfile: filesProfiles.idempotencyCredential,
       idempotencyCredentialSealer: filesIdempotencyCredentialSealer
     });
-    // Agents draft file asks on the app_model lane (the platform has no
-    // external_mcp EFFECT binding vocabulary); this composition hosts no
-    // app_model transport, so the operation is registered vocabulary whose
-    // invocation would fail loudly on its unregistered draft capability.
-    const filesAgentRequestDraftOperations = createFilesAgentRequestDraftOperationModule({
-      workspaceId,
-      draftPolicy: FILES_AGENT_REQUEST_DRAFT_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
-      currentEvent,
-      clock,
-      ids: filesOperationIds,
-      authorityPrincipalKeyProfile: filesProfiles.authorityPrincipal,
-      scopePartitionProfile: filesProfiles.scopePartition,
-      requestCanonicalizationProfile: filesProfiles.requestCanonicalization,
-      requestHashSealer: filesRequestHashSealer,
-      idempotencyCredentialProfile: filesProfiles.idempotencyCredential,
-      idempotencyCredentialSealer: filesIdempotencyCredentialSealer
-    });
     const senderIdentityOperations = createWorkspaceSenderIdentityOperationModule({
       workspaceId,
       policy: WORKSPACE_SENDER_IDENTITY_ACCESS_POLICY,
@@ -4660,34 +4007,34 @@ export async function createEphemeralLiveRuntime(input: {
       })
     });
     const domains = createSQLiteEffectDomainAdapterRegistry([
-      eventCreateDraftDomain,
-      eventSettingsDraftDomain,
-      templateArtifactDraftDomain,
+      eventDirectDomain,
+      eventSettingsDirectDomain,
+      ...templateArtifactNativeDomains,
       templateEditDomain,
-      deadlineDraftDomain,
-      programVocabularyDomain,
-      schedulePlacementDraftDomain,
-      sessionDraftDomain,
-      intakeFormDraftDomain,
-      fieldRegistryDraftDomain,
-      submissionTriageDraftDomain,
-      intakeDirectEntryDraftDomain,
-      workspaceTeamDraftDomain,
-      reviewDraftDomain,
+      deadlineDirectDomain,
+      programVocabularyDirectDomain,
+      ...programVocabularyMergeDomains,
+      schedulePlacementDirectDomain,
+      sessionDirectDomain,
+      ...intakeFormWriteDomains,
+      fieldRegistryDirectDomain,
+      submissionTriageDirectDomain,
+      intakeDirectEntryDirectDomain,
+      workspaceTeamMutationDomain,
+      reviewDirectDomain,
       reviewEvaluationDraftSaveDomain,
-      reviewerRosterDraftDomain,
-      decisionDraftDomain,
-      engagementDraftDomain,
-      taskDraftDomain,
-      releaseDraftDomain,
+      reviewerRosterDirectDomain,
+      decisionDirectDomain,
+      engagementDirectDomain,
+      taskDirectDomain,
+      ...releaseNativeDomains,
       participantPortalDomain,
       outboundEmailDeliveryDomain,
       intakePublicMutationDomain,
       files.effectDomain,
       senderIdentity.effectDomain,
       ...organizerCommunicationAuthoringDomains,
-      ...communicationSendRuntime.effectDomains,
-      changesetLifecycle
+      ...communicationSendRuntime.effectDomains
     ]);
     // The in-transaction authority recheck dispatches by lane: participant
     // invocations re-prove the participant session (without sliding it),
@@ -4711,40 +4058,42 @@ export async function createEphemeralLiveRuntime(input: {
       effectRecheckSource
     );
     const source = composeOperationRegistryModules([
-      changesetOperations,
       workspaceOverviewOperations,
+      operationHistoryOperations,
       eventOperations,
-      eventCreateDraftOperations,
       eventSettingsReadOperations,
-      eventSettingsDraftOperations,
+      eventSettingsUpdateOperations,
       templateArtifactReadOperations,
-      templateArtifactDraftOperations,
+      templateArtifactNativeOperations,
       templateEditOperations,
       deadlineOperations,
       programVocabularyOperations,
+      programVocabularyDirectOperations,
+      programVocabularyMergeOperations,
       schedulePlacementOperations,
+      schedulePlacementDirectOperations,
       sessionOperations,
-      sessionDraftOperations,
+      sessionDirectOperations,
       fieldRegistryOperations,
       intakeReadOperations,
-      intakeFormDraftOperations,
+      intakeFormWriteOperations,
       submissionTriageReadOperations,
-      submissionTriageDraftOperations,
-      submissionDirectEntryDraftOperations,
+      submissionTriageTransitionOperations,
+      submissionDirectEntryOperations,
       workspaceTeamOperations,
+      reviewDirectOperations,
       reviewOperations,
       reviewerRosterOperations,
       decisionOperations,
-      decisionDraftOperations,
+      decisionDirectOperations,
       engagementOperations,
-      engagementDraftOperations,
+      engagementDirectOperations,
       taskBoardOperations,
-      taskDraftOperations,
-      releaseDraftOperations,
+      taskMutationOperations,
+      releaseNativeOperations,
       releaseOverviewOperations,
       filesReadOperations,
       filesCommandOperations,
-      filesAgentRequestDraftOperations,
       participantPortalOperations,
       organizerCommunicationAuthoringOperations,
       organizerCommunicationAudiencePreviewOperations,
@@ -4762,8 +4111,7 @@ export async function createEphemeralLiveRuntime(input: {
         clock,
         newInvocationId: () => parseInvocationId(crypto.randomUUID())
       },
-      unitOfWork,
-      newReceiptId: () => crypto.randomUUID()
+      unitOfWork
     });
     // ONE public registry behind ONE adapter: the gated intake form read,
     // the ceremony resume read, the two release reads, and the one public
@@ -4782,8 +4130,7 @@ export async function createEphemeralLiveRuntime(input: {
         clock,
         newInvocationId: () => parseInvocationId(crypto.randomUUID())
       },
-      unitOfWork,
-      newReceiptId: () => crypto.randomUUID()
+      unitOfWork
     });
     assertOperatorAuthorityPolicyCatalogCoversOperationRegistry({
       catalog: authority.policies,
@@ -4928,6 +4275,36 @@ export async function createEphemeralLiveRuntime(input: {
       participantOperations: { operations, evidence: participantEvidence },
       requestSerialization
     });
+    const agentActionRuns = new SQLiteAgentActionRunRepository(
+      database.sqlite,
+      ({ approval }) => approval.approvedByPrincipalId.length > 0
+        && !approval.approvedByPrincipalId.startsWith('model-')
+        && !approval.approvedByPrincipalId.startsWith('mcp-')
+    );
+    const agentActionCatalog = createRegisteredAgentActionEligibilityCatalog(operations.registry);
+    const agentActionPlanSurface = createAgentActionPlanSurface({
+      repository: agentActionRuns,
+      catalog: agentActionCatalog,
+      now: () => new Date().toISOString()
+    });
+    app.route('/', createAgentActionRunsHttpAdapter({
+      repository: agentActionRuns,
+      allowedOrigins: [input.config.baseUrl, ...input.config.trustedOrigins],
+      now: () => new Date().toISOString(),
+      async authenticateEligibleHuman(request) {
+        const session = await auth.api.getSession({ headers: request.headers });
+        if (!session) return undefined;
+        const result = await accessContext.ensureAuthPrincipalProvisioned({
+          authUserId: session.user.id,
+          workspaceId,
+          correlationId: request.headers.get('x-correlation-id') ?? crypto.randomUUID(),
+          now: new Date().toISOString()
+        });
+        return result.kind === 'success' && result.data.state === 'active'
+          ? result.data.user.id
+          : undefined;
+      }
+    }));
     // Public apply transport (the reviewed activation recipe): the mint route
     // issues continuations against the live gate — the transport `Origin`
     // header rides into the bootstrap protocol evidence — and the ceremony
@@ -5136,8 +4513,7 @@ export async function createEphemeralLiveRuntime(input: {
             clock,
             newInvocationId: () => parseInvocationId(crypto.randomUUID())
           },
-          unitOfWork,
-          newReceiptId: () => crypto.randomUUID()
+          unitOfWork
         });
         return Object.freeze({
           runtime: filesPortalRuntime,
@@ -5766,6 +5142,267 @@ export async function createEphemeralLiveRuntime(input: {
         return context.json({ kind: 'completed' as const, diagnostic });
       });
     }
+    const testSupport = input.devFixtures === true
+      ? (() => {
+          type OperatorEvidence = Extract<InvocationEvidence, { readonly kind: 'operator' }>;
+          const actorEvidence = new WeakMap<EphemeralLiveTestActor, OperatorEvidence>();
+          const actorEvidenceByUserId = new Map<string, OperatorEvidence>();
+          const requireEvidence = (actor: EphemeralLiveTestActor): OperatorEvidence => {
+            const resolved = actorEvidence.get(actor);
+            if (!resolved) throw new TypeError('ephemeral_test_actor_not_admitted');
+            return resolved;
+          };
+          const executeRead = async (request: {
+            readonly evidence: OperatorEvidence;
+            readonly operationName: string;
+            readonly operationVersion?: number;
+            readonly businessInput?: unknown;
+            readonly correlationId?: string;
+          }): Promise<ReadOperationResult> => readOperationResultSchema.parse(
+            await operations.readExecutor.execute({
+              operationName: request.operationName,
+              operationVersion: request.operationVersion ?? 1,
+              surface: 'operator_http',
+              correlationId: request.correlationId ?? crypto.randomUUID(),
+              businessInput: request.businessInput ?? {},
+              verifiedEvidence: request.evidence
+            })
+          );
+          const executeEffect = async (request: {
+            readonly evidence: OperatorEvidence;
+            readonly operationName: string;
+            readonly operationVersion?: number;
+            readonly businessInput: unknown;
+            readonly idempotencyKey: string;
+            readonly correlationId?: string;
+          }): Promise<EffectfulOperationResult> => {
+            const invocation = await operations.effectBuilder.build({
+              operationName: request.operationName,
+              operationVersion: request.operationVersion ?? 1,
+              surface: 'operator_http',
+              correlationId: request.correlationId ?? crypto.randomUUID(),
+              businessInput: request.businessInput,
+              verifiedEvidence: request.evidence,
+              rawIdempotencyKey: request.idempotencyKey
+            });
+            return effectfulOperationResultSchema.parse(
+              await operations.effectExecutor.execute(invocation)
+            );
+          };
+          const readTeam = async (evidence: OperatorEvidence): Promise<WorkspaceTeamSnapshot> => {
+            const result = await executeRead({
+              evidence,
+              operationName: 'workspace_team.members.read',
+              businessInput: {}
+            });
+            if (result.kind !== 'success') {
+              throw new TypeError(`ephemeral_test_team_read_refused:${result.outcome.kind}`);
+            }
+            return workspaceTeamSnapshotSchema.parse(result.data);
+          };
+          const createAdmittedActor = async (details: {
+            readonly persona: EphemeralLiveTestActorPersona;
+            readonly name: string;
+            readonly email: string;
+          }, membershipReaderEvidence?: OperatorEvidence): Promise<EphemeralLiveTestActor> => {
+            const authContext = await auth.$context;
+            // Better Auth owns these test principal/session rows. Deliberately
+            // leave the principal accountless: the runtime's reviewed
+            // first-party email-proof reader recognizes exactly this shape,
+            // while JooEvents identity/membership state is still created only
+            // by the real reservation admission below.
+            const created = await authContext.internalAdapter.createUser({
+              name: details.name,
+              email: details.email,
+              emailVerified: true,
+              image: null
+            });
+            const session = await authContext.internalAdapter.createSession(created.id);
+            const secret = input.config.authSecrets[0]?.value;
+            if (!secret) throw new TypeError('ephemeral_test_auth_secret_missing');
+            const signature = await makeSignature(session.token, secret);
+            const cookieName = new URL(input.config.baseUrl).protocol === 'https:'
+              ? '__Secure-better-auth.session_token'
+              : 'better-auth.session_token';
+            const cookie = `${cookieName}=${session.token}.${signature}`;
+            const response = await app.request('/api/me/access-context', {
+              headers: { cookie, 'x-correlation-id': crypto.randomUUID() }
+            });
+            if (response.status !== 200) {
+              throw new TypeError(`ephemeral_test_admission_http_${response.status}`);
+            }
+            const access = accessContextSchema.parse(await response.json());
+            if (access.state !== 'active' || access.workspace.id !== workspaceId) {
+              throw new TypeError(`ephemeral_test_admission_${access.state}`);
+            }
+            const evidence = Object.freeze({
+              kind: 'operator' as const,
+              surface: 'operator_http' as const,
+              client: Object.freeze({ key: 'test.ephemeral.flow' }),
+              sessionHandle: session.id
+            });
+            const team = await readTeam(membershipReaderEvidence ?? evidence);
+            const member = team.members.find((candidate) =>
+              candidate.kind === 'member'
+              && candidate.status === 'active'
+              && candidate.userId === access.user.id
+            );
+            if (!member || member.kind !== 'member') {
+              throw new TypeError('ephemeral_test_admitted_membership_missing');
+            }
+            const actor = Object.freeze({
+              persona: details.persona,
+              userId: access.user.id,
+              membership: Object.freeze({ id: member.id, version: member.version }),
+              cookie
+            });
+            actorEvidence.set(actor, evidence);
+            actorEvidenceByUserId.set(actor.userId, evidence);
+            return actor;
+          };
+          let actors: Promise<{
+            readonly organizer: EphemeralLiveTestActor;
+            readonly reviewer: EphemeralLiveTestActor;
+            readonly secondOrganizer: EphemeralLiveTestActor;
+          }> | undefined;
+          const bootstrapActors = () => actors ??= (async () => {
+            const organizer = await createAdmittedActor({
+              persona: 'organizer',
+              name: 'Ephemeral Flow Organizer',
+              email: input.config.bootstrapOwnerEmail
+            });
+            const invite = async (
+              email: string,
+              roleKey: 'speaker_reviewer' | 'event_manager'
+            ) => {
+              const team = await readTeam(requireEvidence(organizer));
+              const result = await executeEffect({
+                evidence: requireEvidence(organizer),
+                operationName: 'workspace_team.invite',
+                businessInput: {
+                  email,
+                  roleKey,
+                  expectedTeamVersion: team.version,
+                  expectedTeamDigestSha256: team.digestSha256
+                },
+                idempotencyKey: `ephemeral-test-invite-${roleKey}`
+              });
+              if (result.kind !== 'success') {
+                throw new TypeError(`ephemeral_test_invite_refused:${result.outcome.kind}`);
+              }
+            };
+            const reviewerEmail = 'flow-reviewer@jooevents.example';
+            await invite(reviewerEmail, 'speaker_reviewer');
+            const reviewer = await createAdmittedActor({
+              persona: 'reviewer',
+              name: 'Ephemeral Flow Reviewer',
+              email: reviewerEmail
+            }, requireEvidence(organizer));
+            const secondOrganizerEmail = 'flow-second-organizer@jooevents.example';
+            await invite(secondOrganizerEmail, 'event_manager');
+            const secondOrganizer = await createAdmittedActor({
+              persona: 'second-organizer',
+              name: 'Ephemeral Flow Second Organizer',
+              email: secondOrganizerEmail
+            }, requireEvidence(organizer));
+            return Object.freeze({ organizer, reviewer, secondOrganizer });
+          })();
+          let crashAfterAtomicCommitForBatch: string | undefined;
+          const registeredAgentActionExecutor = createRegisteredAgentActionExecutor({
+            catalog: agentActionCatalog,
+            operationExecutor: Object.freeze({
+              async executeRegistered(
+                request: Parameters<ApprovedAgentActionOperationExecutionPort['executeRegistered']>[0]
+              ) {
+                const evidence = actorEvidenceByUserId.get(request.approval.approvedByPrincipalId);
+                if (!evidence) {
+                  return { kind: 'paused' as const, outcome: { reason: 'approver_not_admitted' } };
+                }
+                const result = await unitOfWork.executeApprovedAgentActionStep({
+                  batchId: request.batchId,
+                  stepId: request.stepId,
+                  workerId: request.lease.workerId,
+                  leaseVersion: request.lease.leaseVersion,
+                  leaseExpiresAt: request.lease.leaseExpiresAt,
+                  completedAt: request.now,
+                  execute: async () => {
+                    const invocation = await operations.effectBuilder.build({
+                      operationName: request.operation.name,
+                      operationVersion: request.operation.version,
+                      surface: 'operator_http',
+                      correlationId: crypto.randomUUID(),
+                      businessInput: request.businessInput,
+                      verifiedEvidence: evidence,
+                      rawIdempotencyKey: request.semanticIdempotencyKey
+                    });
+                    return effectfulOperationResultSchema.parse(
+                      await operations.effectExecutor.execute(invocation)
+                    );
+                  }
+                });
+                if (result.kind === 'success' || result.terminal === true) {
+                  if (crashAfterAtomicCommitForBatch === request.batchId) {
+                    throw new Error('ephemeral_agent_action_crash_after_atomic_commit');
+                  }
+                  return { kind: 'succeeded' as const, terminalLogId: result.receipt.id };
+                }
+                return { kind: 'paused' as const, outcome: result.outcome };
+              }
+            })
+          });
+          return Object.freeze({
+            publicEffectBindings: () => Object.freeze(
+              publicRuntime.registry.publicHttpEffectBindings.map((binding) => Object.freeze({
+                operationName: binding.operationName,
+                operationVersion: binding.operationVersion,
+                method: binding.method,
+                path: binding.path
+              }))
+            ),
+            invokeRead: (request: Parameters<EphemeralLiveTestSupport['invokeRead']>[0]) =>
+              executeRead({ ...request, evidence: requireEvidence(request.actor) }),
+            invokeEffect: (request: Parameters<EphemeralLiveTestSupport['invokeEffect']>[0]) =>
+              executeEffect({ ...request, evidence: requireEvidence(request.actor) }),
+            bootstrapActors,
+            agentActionPlanCatalog: () => Object.freeze({
+              registryDigestSha256: operations.registry.manifestDigestSha256,
+              operations: agentActionCatalog.entries
+            }),
+            submitAgentActionPlan: (candidate: unknown) => agentActionPlanSurface.submit(candidate),
+            inspectAgentActionRun: (batchId: string) => agentActionPlanSurface.inspect(batchId),
+            advanceAgentActionRun: async (
+              request: Parameters<EphemeralLiveTestSupport['advanceAgentActionRun']>[0]
+            ) => {
+              const at = request.at ?? new Date().toISOString();
+              const runner = createAgentActionRunner({
+                repository: agentActionRuns,
+                catalog: agentActionCatalog,
+                authority: Object.freeze({
+                  recheck({ batch }: Parameters<AgentActionCurrentAuthority['recheck']>[0]) {
+                    const approval = batch.approval;
+                    return approval
+                      && actorEvidenceByUserId.has(approval.approvedByPrincipalId)
+                      && batch.plan.scope.workspaceId === workspaceId
+                      ? { kind: 'allowed' as const }
+                      : { kind: 'paused' as const, reason: 'current_approval_authority_changed' };
+                  }
+                }) satisfies AgentActionCurrentAuthority,
+                executor: registeredAgentActionExecutor,
+                now: () => at,
+                leaseDurationMs: 60_000
+              });
+              crashAfterAtomicCommitForBatch = request.crashAfterAtomicCommit
+                ? request.batchId
+                : undefined;
+              try {
+                return await runner.advance(request.batchId, request.workerId);
+              } finally {
+                crashAfterAtomicCommitForBatch = undefined;
+              }
+            }
+          }) satisfies EphemeralLiveTestSupport;
+        })()
+      : undefined;
     let closed = false;
     let closeResult: ReturnType<EphemeralSQLiteRuntime['close']> | undefined;
     const close = () => {
@@ -5814,6 +5451,7 @@ export async function createEphemeralLiveRuntime(input: {
         sweepOrphanBlobs: files.sweepOrphanBlobs,
         sweepExpiredIntents: files.sweepExpiredIntents
       }),
+      ...(testSupport === undefined ? {} : { testSupport }),
       close
     });
   } catch (error) {

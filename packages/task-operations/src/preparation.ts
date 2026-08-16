@@ -5,37 +5,37 @@ import type {
 } from '@jooevents/application';
 import type { VersionedDefinitionRef } from '@jooevents/contracts';
 
-export interface TaskDraftPreparedContribution {
+export interface TaskDirectPreparedContribution {
   readonly result: unknown;
   readonly domain: unknown;
-  readonly receiptChildren: readonly unknown[];
+  readonly effectContributions: readonly unknown[];
 }
-export interface TaskDraftPreparation {
+export interface TaskDirectPreparation {
   prepare(input: {
     readonly businessInput: unknown;
     readonly context: EffectInvocationContext;
-  }): TaskDraftPreparedContribution;
+  }): TaskDirectPreparedContribution;
 }
 interface SealedPreparation {
   readonly capability: VersionedDefinitionRef;
   readonly context: EffectInvocationContext;
-  readonly prepare: TaskDraftPreparation['prepare'];
+  readonly prepare: TaskDirectPreparation['prepare'];
   phase: 'ready' | 'preparing' | 'spent';
 }
 const sealed = new WeakMap<object, SealedPreparation>();
 const sameRef = (left: VersionedDefinitionRef, right: VersionedDefinitionRef) =>
   left.key === right.key && left.version === right.version;
 
-export function sealTaskDraftPreparation(input: {
+export function sealTaskDirectPreparation(input: {
   readonly capability: VersionedDefinitionRef;
   readonly context: EffectInvocationContext;
-  readonly preparation: TaskDraftPreparation;
+  readonly preparation: TaskDirectPreparation;
 }): EffectHandlerSnapshot {
   if (typeof input.preparation.prepare !== 'function'
       || input.preparation.prepare.constructor.name === 'AsyncFunction') {
-    throw new TypeError('task_draft_preparation_must_be_synchronous');
+    throw new TypeError('task_direct_preparation_must_be_synchronous');
   }
-  const snapshot = Object.freeze({ strategy: 'task_changeset_draft', version: 1 });
+  const snapshot = Object.freeze({ strategy: 'task_direct_mutation', version: 1 });
   sealed.set(snapshot, {
     capability: Object.freeze({ ...input.capability }),
     context: input.context,
@@ -45,7 +45,7 @@ export function sealTaskDraftPreparation(input: {
   return snapshot;
 }
 
-export function createTaskDraftHandler(input: {
+export function createTaskDirectHandler(input: {
   readonly reference: VersionedDefinitionRef;
   readonly handlerCapability: VersionedDefinitionRef;
   readonly contributionSchema: EffectHandlerRegistration['contributionSchema'];
@@ -54,7 +54,7 @@ export function createTaskDraftHandler(input: {
   const capability = Object.freeze({ ...input.handlerCapability });
   return Object.freeze({
     reference: Object.freeze({ ...input.reference }),
-    effect: 'draft' as const,
+    effect: 'commit' as const,
     handlerCapability: capability,
     contributionSchema: Object.freeze({ ...input.contributionSchema }),
     canonicalResultSchema: Object.freeze({ ...input.canonicalResultSchema }),
@@ -62,19 +62,19 @@ export function createTaskDraftHandler(input: {
       const preparation = sealed.get(snapshot);
       if (!preparation || !sameRef(preparation.capability, capability)
           || preparation.context !== context || preparation.phase !== 'ready') {
-        throw new TypeError('invalid_task_draft_preparation');
+        throw new TypeError('invalid_task_direct_preparation');
       }
       preparation.phase = 'preparing';
       try {
         const contribution = preparation.prepare({ businessInput, context });
         if (contribution && typeof (contribution as { readonly then?: unknown }).then === 'function') {
-          throw new TypeError('task_draft_preparation_must_be_synchronous');
+          throw new TypeError('task_direct_preparation_must_be_synchronous');
         }
         preparation.phase = 'spent';
         return {
           result: contribution.result,
           domain: contribution.domain,
-          receiptChildren: [...contribution.receiptChildren]
+          effectContributions: [...contribution.effectContributions]
         };
       } catch (error) {
         preparation.phase = 'spent';

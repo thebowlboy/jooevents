@@ -7,6 +7,7 @@ import type { EventProgramPort } from './event-program/port';
 import type { WorkspaceOverviewPort } from './operations/workspace-overview-live';
 import { formatDateRange } from '@jooevents/contracts';
 import { createLiveOverviewPagePort } from './overview-page-live';
+import type { OverviewPageSummary } from './overview-page-port';
 
 const id = (value: number) =>
 	`00000000-0000-4000-8000-${value.toString(16).padStart(12, '0')}`;
@@ -41,17 +42,21 @@ function projection(overrides: Record<string, unknown> = {}) {
 				tracks: { total: 4, active: 3, retired: 1 },
 				formats: { total: 4, active: 2, retired: 2 }
 			},
-			changesets: {
-				kind: 'exact', total: 9, draft: 1, proposed: 1, committed: 6, discarded: 1
-			}
+			operations: { kind: 'exact', total: 9 },
+			triage: { kind: 'exact', arrived: 12, sorted: 4 },
+			reviews: { kind: 'exact', rounds: 1, assignments: 8, committed: 3 },
+			decisions: { kind: 'exact', decided: 2, undecided: 10 },
+			engagements: { kind: 'exact', total: 4, confirmed: 1 },
+			sessions: { kind: 'exact', total: 6, placed: 2 },
+			communications: { kind: 'exact', recipients: 5, sent: 4 }
 		},
 		history: {
 			total: 1,
 			truncated: false,
 			threads: [{
-				id: `changeset:${id(2)}`,
+				id: `operation:${id(3)}`,
 				domain: 'forms',
-				root: { kind: 'changeset', changesetId: id(2), status: 'committed' },
+				root: { kind: 'operation', receiptId: id(3) },
 				firstOccurredAt: '2026-08-13T02:50:00.000Z',
 				lastOccurredAt: '2026-08-13T02:55:00.000Z',
 				actors: ['agent'],
@@ -122,23 +127,25 @@ describe('live Overview page port', () => {
 					{ label: 'Forms', value: '5', sub: '2 open · 1 draft · 2 closed' },
 					{ label: 'Submissions', value: '12', sub: '12 recorded submissions' },
 					{ label: 'Program vocabulary', value: '13', sub: '9 active · 4 retired' },
-					{ label: 'Changes', value: '9', sub: '6 committed · 2 in progress' }
+					{ label: 'Changes', value: '9', sub: '9 recorded changes' }
 				],
 				attention: [],
 				deadlines: [],
 				trays: [],
 				activity: [{
-					id: `changeset:${id(2)}`,
+					id: `operation:${id(3)}`,
 					actor: 'agent',
 					name: 'An agent',
-					text: 'committed changes to forms',
+					text: 'recorded activity in forms',
 					// The instant, not a rendering of it. The words are the date
 					// vocabulary's job wherever the feed is drawn.
 					at: '2026-08-13T02:55:00.000Z'
 				}],
 				sections: {
 					attention: { kind: 'unavailable' },
-					pipeline: { kind: 'unavailable' },
+					// The lanes state their own truth now, so the section carries no
+					// apology of its own.
+					pipeline: { kind: 'available' },
 					deadlines: { kind: 'unavailable' },
 					activity: { kind: 'available' },
 					trays: { kind: 'unavailable' }
@@ -147,43 +154,188 @@ describe('live Overview page port', () => {
 		});
 		if (result.kind !== 'success') throw new Error('expected_success');
 		expect(result.data.pipeline).toHaveLength(7);
+		// Every area in this fixture is `not_implemented` apart from overview, so
+		// no lane can be measured and none may claim a lock either: an unwired
+		// area is an absence of wiring, never a fact about the event.
 		expect(result.data.pipeline.every((stage) =>
-			stage.state === 'unavailable'
+			stage.availability.kind === 'unavailable'
+			&& stage.state === 'unavailable'
 			&& stage.headline === '—'
 			&& stage.progress === undefined
 			&& stage.paceTone === undefined
 		)).toBe(true);
+		// The abbreviation is gone: this lane opens the area the sidebar labels
+		// Communications, and a control carries its meaning in full words.
+		expect(result.data.pipeline.at(-1)?.label).toBe('Messages');
 		expect(port.snapshot()).toEqual(result.data);
 	});
 
-	test('renders unavailable metrics as a reasoned dash, never a manufactured zero', async () => {
+	// The areas a real deployment actually mounts: every pipeline-relevant area
+	// is available or partial, so lane state is decided by the metrics rather
+	// than by capability wiring.
+	const mountedAreas = WORKSPACE_OVERVIEW_AREAS.map((area) => area === 'templates'
+		? { area, status: 'unavailable' as const, reason: 'not_implemented' as const }
+		: { area, status: 'available' as const, capabilities: ['workspace.overview.read'] });
+
+	function lane(data: OverviewPageSummary, key: string) {
+		const found = data.pipeline.find((stage) => stage.key === key);
+		if (!found) throw new Error(`missing_lane_${key}`);
+		return found;
+	}
+
+	async function readMounted(metrics: Record<string, unknown>) {
 		const base = projection();
-		const data = projection({
-			metrics: {
-				...base.metrics,
-				forms: { kind: 'unavailable', reason: 'dependency_unavailable' }
-			}
-		});
 		const result = await createLiveOverviewPagePort({
-			overview: overviewPort(data),
+			overview: overviewPort(projection({
+				areas: mountedAreas,
+				metrics: { ...base.metrics, ...metrics }
+			})),
 			event: eventPort([])
 		}).read();
 		if (result.kind !== 'success') throw new Error('expected_success');
-		expect(result.data.stats[0]).toEqual({
-			label: 'Forms', value: '—', sub: 'This number is not available yet.'
+		return result.data;
+	}
+
+	test('a new event states what turns every stage on, one specific condition per lane', async () => {
+		const data = await readMounted({
+			forms: { kind: 'exact', total: 0, draft: 0, open: 0, closed: 0 },
+			submissions: { kind: 'exact', total: 0 },
+			triage: { kind: 'exact', arrived: 0, sorted: 0 },
+			reviews: { kind: 'exact', rounds: 0, assignments: 0, committed: 0 },
+			decisions: { kind: 'exact', decided: 0, undecided: 0 },
+			engagements: { kind: 'exact', total: 0, confirmed: 0 },
+			sessions: { kind: 'exact', total: 0, placed: 0 },
+			communications: { kind: 'exact', recipients: 0, sent: 0 }
 		});
+
+		// Held, each with the one sentence naming what turns it on. No figure at
+		// all: the dash was a refusal to say, and the condition is the answer.
+		expect(data.pipeline.map((stage) => [stage.key, stage.availability])).toEqual([
+			['collect', { kind: 'locked', condition: 'Collecting starts when you open a form.' }],
+			// Proven by its own arrival count now, not borrowed from the submission
+			// total one lane over.
+			['triage', { kind: 'locked', condition: 'The first submission to arrive lands here.' }],
+			['review', { kind: 'locked', condition: 'Reviewing starts when you open a round.' }],
+			['decide', { kind: 'locked', condition: 'Submissions get their answer here, once they arrive.' }],
+			['speakers', { kind: 'locked', condition: 'Speakers appear here once you invite someone.' }],
+			['schedule', { kind: 'locked', condition: 'Scheduling starts with the first session in the programme.' }],
+			['comms', { kind: 'locked', condition: 'Messages appear here once you send your first one.' }]
+		]);
+		expect(data.pipeline.every((stage) => stage.headline === '' && stage.sub === '')).toBe(true);
+		// Nothing is uncounted, so the footnote explaining dashes has nothing to
+		// explain — which is the end state the seam request was for.
+		expect(data.pipeline.some((stage) => stage.availability.kind === 'unavailable')).toBe(false);
+
+		// An event with no form provably carries no closing date.
+		expect(data.sections.deadlines).toEqual({
+			kind: 'locked',
+			condition: "Deadlines start with a form's closing date."
+		});
+	});
+
+	test('a running event reports each stage from its own unit of work', async () => {
+		const data = await readMounted({
+			forms: { kind: 'exact', total: 3, draft: 1, open: 2, closed: 0 },
+			submissions: { kind: 'exact', total: 12 },
+			triage: { kind: 'exact', arrived: 12, sorted: 4 },
+			reviews: { kind: 'exact', rounds: 2, assignments: 8, committed: 3 },
+			decisions: { kind: 'exact', decided: 2, undecided: 10 },
+			engagements: { kind: 'exact', total: 4, confirmed: 1 },
+			sessions: { kind: 'exact', total: 6, placed: 2 },
+			communications: { kind: 'exact', recipients: 5, sent: 4 }
+		});
+
+		expect(lane(data, 'collect')).toMatchObject({
+			headline: '2', sub: '2 forms are open to submissions', state: 'ok'
+		});
+		expect(lane(data, 'review')).toMatchObject({
+			headline: '3', sub: '3 of 8 reviews are in', state: 'ok'
+		});
+		// The count the reader will meet at the destination, and the approved
+		// wording for it.
+		expect(lane(data, 'decide')).toMatchObject({
+			headline: '10', sub: '10 of 12 submissions are waiting for your answer', state: 'ok'
+		});
+		expect(lane(data, 'speakers')).toMatchObject({
+			headline: '1', sub: '1 of 4 speakers have confirmed', state: 'ok'
+		});
+		expect(lane(data, 'schedule')).toMatchObject({
+			headline: '2', sub: '2 of 6 sessions have a time and a room', state: 'ok'
+		});
+		expect(lane(data, 'comms')).toMatchObject({
+			headline: '4', sub: '4 of 5 messages have been sent', state: 'ok'
+		});
+
+		// The outstanding half, matching Decide: the count the reader meets at the
+		// destination, whose default tray is the Inbox.
+		expect(lane(data, 'triage')).toMatchObject({
+			headline: '8', sub: '8 of 12 submissions are in the inbox', state: 'ok'
+		});
+
+		// No lane draws a bar. A meter's job is the tone, a tone is a judgment
+		// against a deadline, and this projection carries no deadline at all.
+		expect(data.pipeline.every((stage) => stage.progress === undefined)).toBe(true);
+
+		// Every lane answered from its own unit of work, so no dash is rendered
+		// anywhere and the footnote that explains dashes has nothing to explain.
+		expect(data.pipeline.some((stage) => stage.availability.kind === 'unavailable')).toBe(false);
+	});
+
+	test('separates the two different reasons reviewing has not begun', async () => {
+		const noRound = await readMounted({
+			reviews: { kind: 'exact', rounds: 0, assignments: 0, committed: 0 }
+		});
+		expect(lane(noRound, 'review').availability).toEqual({
+			kind: 'locked', condition: 'Reviewing starts when you open a round.'
+		});
+
+		const noAssignments = await readMounted({
+			reviews: { kind: 'exact', rounds: 1, assignments: 0, committed: 0 }
+		});
+		expect(lane(noAssignments, 'review').availability).toEqual({
+			kind: 'locked', condition: 'Reviewers start once submissions are assigned to them.'
+		});
+	});
+
+	test('states a finished stage as finished rather than as a fraction of itself', async () => {
+		const data = await readMounted({
+			forms: { kind: 'exact', total: 2, draft: 1, open: 0, closed: 1 },
+			triage: { kind: 'exact', arrived: 12, sorted: 12 },
+			decisions: { kind: 'exact', decided: 12, undecided: 0 },
+			sessions: { kind: 'exact', total: 6, placed: 6 },
+			communications: { kind: 'exact', recipients: 5, sent: 5 }
+		});
+		expect(lane(data, 'collect').sub).toBe('1 form is closed, none open');
+		expect(lane(data, 'triage').sub).toBe('The inbox is clear');
+		expect(lane(data, 'decide').sub).toBe('Every submission has an answer');
+		expect(lane(data, 'schedule').sub).toBe('Every session has a time and a room');
+		expect(lane(data, 'comms').sub).toBe('Every message has been sent');
+	});
+
+	test('an unavailable metric locks nothing — an absent count is not a proof', async () => {
+		const reason = { kind: 'unavailable', reason: 'dependency_unavailable' } as const;
+		const data = await readMounted({
+			forms: reason,
+			submissions: reason,
+			triage: reason,
+			reviews: reason,
+			decisions: reason,
+			engagements: reason,
+			sessions: reason,
+			communications: reason
+		});
+		expect(data.pipeline.every((stage) => stage.availability.kind === 'unavailable')).toBe(true);
+		expect(data.sections.deadlines.kind).toBe('unavailable');
 	});
 
 	test('uses the read event-set version and caller idempotency key for first-event creation', async () => {
 		const calls: unknown[] = [];
 		const noEvent = projection({
 			event: { schemaVersion: 1, kind: 'no_event', eventSetVersion: 11 },
-			metrics: {
-				forms: { kind: 'unavailable', reason: 'event_required' },
-				submissions: { kind: 'unavailable', reason: 'event_required' },
-				programVocabulary: { kind: 'unavailable', reason: 'event_required' },
-				changesets: { kind: 'unavailable', reason: 'event_required' }
-			}
+			metrics: Object.fromEntries([
+				'forms', 'submissions', 'programVocabulary', 'operations', 'triage',
+				'reviews', 'decisions', 'engagements', 'sessions', 'communications'
+			].map((metric) => [metric, { kind: 'unavailable', reason: 'event_required' }]))
 		});
 		const port = createLiveOverviewPagePort({
 			overview: overviewPort(noEvent),

@@ -1653,7 +1653,7 @@ function preparationOutcome(
   return organizerCommunicationMutationContributionSchema.parse({
     result: outcome,
     domain: null,
-    receiptChildren: []
+    effectContributions: []
   });
 }
 
@@ -1721,7 +1721,7 @@ function mutationSuccess(input: {
       entityVersion: isPayload ? parsed.payloadRefVersion : parsed.version,
       occurredAt: input.occurredAt
     },
-    receiptChildren: []
+    effectContributions: []
   });
 }
 

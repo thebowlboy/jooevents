@@ -3,10 +3,10 @@ import { expect, test, type Page } from '@playwright/test';
 /**
  * Focused joined smoke for the Wave-2 decision spine as the browser sees it:
  * the tuned Submissions surface committing a real organizer direct entry
- * through `submission.direct_entry.create.draft` + the changeset lifecycle
+ * through `submission.direct_entry.create@1`
  * (and refetching, never optimistically echoing), then the tuned Decisions
  * surface carrying the same row through the full visible loop — undecided,
- * accept-with-spawn committed through `decision.decide.draft`, and the
+ * accept-with-spawn committed through `decision.decide@1`, and the
  * spawned session appearing in the schedule's program pool.
  *
  * One shared ephemeral backend serves every project, so names carry the
@@ -74,7 +74,7 @@ async function ensureVocabulary(page: Page, trackName: string, formatName: strin
  * the standard application created through the live Forms surface, targeted
  * at this project's format pool (the category pin is what the Decision
  * spine's candidate source lifts for spawn), and opened (publish + open)
- * through the same changeset lifecycle.
+ * through the same registered operation boundary.
  */
 async function ensureOpenForm(page: Page, formName: string, formatName: string): Promise<void> {
 	await page.goto('/app/forms');
@@ -199,7 +199,10 @@ test('the direct-entry dialog commits a real submission and the list refetches i
 	const row = page.getByRole('row', { name: new RegExp(entryTitle.replace(/[()]/g, '\\$&')) });
 	await expect(row.getByText(entryTitle, { exact: true })).toBeVisible();
 	await expect(row.getByText(/·\s*direct entry/)).toBeVisible();
-	await expect(row.getByText('Decision needed')).toBeVisible();
+	// The station band owns the shared actionable state; the row keeps the
+	// quiet non-duplicated fact in its Decision cell.
+	await expect(page.getByRole('row', { name: /Decision needed/ })).toBeVisible();
+	await expect(row.getByText('No decision yet', { exact: true })).toBeVisible();
 
 	// Reload: the submission is canonical state, not page memory.
 	await page.reload();
@@ -219,8 +222,8 @@ test('decisions carries the entry through accept-with-spawn into the program poo
 	const verdicts = page.getByRole('group', { name: `Set decision for “${entryTitle}”` });
 	await expect(verdicts).toBeVisible();
 
-	// Accept: a consequential decide committed through the changeset
-	// lifecycle; a general-pool entry spawns its session in the same commit.
+	// Accept: a consequential decide committed through the direct operation
+	// boundary; a general-pool entry spawns its session in the same commit.
 	await verdicts.getByRole('button', { name: 'Accept', exact: true }).click();
 	await expect(page.getByText('Decided', { exact: true })).toBeVisible();
 	const decidedRow = page.getByRole('row', {

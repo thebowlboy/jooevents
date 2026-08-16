@@ -42,7 +42,7 @@ export interface TerminalizationEvidence {
         readonly detailSchemaVersion: number;
       };
   readonly hasDomainContribution: boolean;
-  readonly receiptChildCount: number;
+  readonly effectContributionCount: number;
 }
 
 export type TerminalizationDecision =
@@ -258,7 +258,7 @@ export function resolveTerminalization(input: {
     phase: { ...input.phase.reference },
     result: structuredClone(input.evidence.result),
     hasDomainContribution: input.evidence.hasDomainContribution,
-    receiptChildCount: input.evidence.receiptChildCount
+    effectContributionCount: input.evidence.effectContributionCount
   });
   const first = input.resolver.resolve(evidence);
   const second = input.resolver.resolve(structuredClone(evidence));
@@ -280,13 +280,13 @@ export function probeTerminalizationResolver(input: {
   readonly resolver: TerminalizationResolverRegistration;
 }): void {
   for (const hasDomainContribution of [false, true]) {
-    for (const receiptChildCount of [0, 1]) {
+    for (const effectContributionCount of [0, 1]) {
       const evidence: TerminalizationEvidence = {
         operation: { ...input.operation },
         phase: { ...input.phase },
         result: { kind: 'success' },
         hasDomainContribution,
-        receiptChildCount
+        effectContributionCount
       };
       const first = input.resolver.resolve(evidence);
       const second = input.resolver.resolve(structuredClone(evidence));
@@ -308,7 +308,7 @@ export function probeTerminalizationOutcomes(input: {
 }): void {
   for (const outcome of input.outcomes) {
     for (const hasDomainContribution of [false, true]) {
-      for (const receiptChildCount of [0, 1]) {
+      for (const effectContributionCount of [0, 1]) {
         resolveTerminalization({
           operation: input.operation,
           phase: input.phase,
@@ -322,7 +322,7 @@ export function probeTerminalizationOutcomes(input: {
               detailSchemaVersion: outcome.detailSchema.version
             },
             hasDomainContribution,
-            receiptChildCount
+            effectContributionCount
           }
         });
       }
@@ -333,11 +333,11 @@ export function probeTerminalizationOutcomes(input: {
 export function terminalizationEvidenceFor(input: {
   readonly canonicalResult: unknown;
   readonly domainContribution: unknown;
-  readonly receiptChildren: readonly unknown[];
+  readonly effectContributions: readonly unknown[];
 }): Omit<TerminalizationEvidence, 'operation' | 'phase'> {
   return deepFreeze({
     result: summarizeCanonicalResult(input.canonicalResult),
     hasDomainContribution: input.domainContribution !== null,
-    receiptChildCount: input.receiptChildren.length
+    effectContributionCount: input.effectContributions.length
   });
 }

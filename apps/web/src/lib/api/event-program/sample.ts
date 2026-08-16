@@ -1,34 +1,26 @@
 import {
-	changesetDiffDataSchema,
-	changesetRevisionSelectorSchema,
-	committedChangesetDataSchema,
 	currentEventProjectionSchema,
 	deriveProgramTrackAccent,
 	eventCreateInputSchema,
-	programVocabularyDraftDataSchema,
+	programVocabularyDirectDataSchema,
+	programVocabularyMergePublishInputSchema,
+	programVocabularyMergeReviewDataSchema,
 	programVocabularySnapshotSchema,
-	type ChangesetRevisionSelector,
 	type EventCreateInput,
+	type ProgramVocabularyDirectData,
 	type ProgramVocabularyItemDto,
+	type ProgramVocabularyKind,
+	type ProgramVocabularyMergePublishInput,
+	type ProgramVocabularyMergeReviewData,
 	type ProgramVocabularySafeDiff,
 	type ProgramVocabularySnapshotDto
 } from '@jooevents/contracts';
-import { mapChangesetCommit, mapChangesetDiff } from '../changesets/mapper';
-import type {
-	ChangesetCommitView,
-	ChangesetDiffView,
-	ChangesetReviewEffectInput,
-	ChangesetReviewPort,
-	ChangesetReviewResult
-} from '../changesets/port';
 import { mapCurrentEvent, mapEvent } from '../mappers/event';
-import {
-	mapProgramVocabularyDraft,
-	mapProgramVocabularySnapshot
-} from '../mappers/program-vocabulary';
+import { mapProgramVocabularySnapshot } from '../mappers/program-vocabulary';
 import type {
-	EventProgramDraftRequest,
+	EventProgramDirectRequest,
 	EventProgramEffectResult,
+	EventProgramMergeDraftRequest,
 	EventProgramPort,
 	ResettableEventProgramSample
 } from './port';
@@ -40,21 +32,15 @@ interface ReplayEntry {
 }
 
 interface PendingVocabularyChange {
-	readonly request: EventProgramDraftRequest;
-	readonly changesetId: string;
+	readonly request: EventProgramMergeDraftRequest;
+	readonly draftId: string;
 	readonly revisionId: string;
 	readonly revisionDigest: string;
-	readonly riskTier: 'low' | 'normal';
 	readonly safeDiff: ProgramVocabularySafeDiff;
-	status: 'draft' | 'proposed' | 'committed';
-	headVersion: number;
+	status: 'draft' | 'published';
 }
 
-export interface ResettableEventProgramSampleComposition extends ResettableEventProgramSample {
-	readonly changesets: ChangesetReviewPort & {
-		readonly source: { readonly kind: 'sample'; readonly label: 'Sample data' };
-	};
-}
+export type ResettableEventProgramSampleComposition = ResettableEventProgramSample;
 
 function defaultId(): string {
 	return crypto.randomUUID();
@@ -100,7 +86,7 @@ function safeItem(item: ProgramVocabularyItemDto) {
 
 function itemFrom(
 	snapshot: ProgramVocabularySnapshotDto,
-	kind: EventProgramDraftRequest['input']['kind'],
+	kind: ProgramVocabularyKind,
 	id: string
 ): ProgramVocabularyItemDto | undefined {
 	const collection =
@@ -143,15 +129,6 @@ export function createSampleEventProgramPort(input: {
 		: null;
 	const replay = new Map<string, ReplayEntry>();
 	const pending = new Map<string, PendingVocabularyChange>();
-	const reviewReplay = new Map<string, {
-		readonly fingerprint: string;
-		readonly result: ChangesetReviewResult<unknown>;
-	}>();
-	const approvalPolicy = Object.freeze({
-		reference: Object.freeze({ key: 'approval.program_vocabulary.default', version: 1 }),
-		definitionDigestSha256: 'b'.repeat(64),
-		requirement: 'none' as const
-	});
 
 	function withIdempotency<T>(
 		operation: string,
@@ -216,14 +193,14 @@ export function createSampleEventProgramPort(input: {
 			return {
 				kind: 'success',
 				data: Object.freeze({ eventSetVersion, event: mapEvent(event) }),
-				receipt: { id: createId(), operationName: 'changeset.commit', operationVersion: 1 },
+				receipt: { id: createId(), operationName: 'event.create', operationVersion: 1 },
 				correlationId
 			};
 		});
 	}
 
 	function buildSafeDiff(
-		request: EventProgramDraftRequest,
+		request: EventProgramDirectRequest | EventProgramMergeDraftRequest,
 		correlationId: string
 	): ProgramVocabularySafeDiff | EventProgramEffectResult<never> {
 		if (!vocabulary) return conflict('program_vocabulary.event_required', correlationId);
@@ -303,48 +280,40 @@ export function createSampleEventProgramPort(input: {
 	}
 
 	function draftVocabulary(
-		request: EventProgramDraftRequest,
+		request: EventProgramMergeDraftRequest,
 		idempotencyKey: string
-	): EventProgramEffectResult<ReturnType<typeof mapProgramVocabularyDraft>> {
-		return withIdempotency<ReturnType<typeof mapProgramVocabularyDraft>>(
-			`program_vocabulary.${request.action}.draft`,
+	): EventProgramEffectResult<ProgramVocabularyMergeReviewData> {
+		return withIdempotency<ProgramVocabularyMergeReviewData>(
+			'program_vocabulary.merge.draft',
 			idempotencyKey,
 			request.input,
 			(correlationId) => {
 				const safeDiff = buildSafeDiff(request, correlationId);
 				if ('kind' in safeDiff) return safeDiff;
-				const changesetId = createId();
+				const draftId = createId();
 				const revisionId = createId();
-				const riskTier = request.action === 'delete' || request.action === 'merge'
-					? 'normal' as const
-					: 'low' as const;
-				const data = programVocabularyDraftDataSchema.parse({
+				const data = programVocabularyMergeReviewDataSchema.parse({
 					schemaVersion: 1,
-					action: request.action,
-					changesetId,
-					headVersion: 1,
+					action: 'merge',
+					draftId,
 					status: 'draft',
 					revision: { id: revisionId, number: 1, digestSha256: digest(revisionId) },
-					riskTier,
-					approvalPolicy,
 					safeDiff
 				});
-				pending.set(changesetId, {
+				pending.set(draftId, {
 					request,
-					changesetId,
+					draftId,
 					revisionId,
 					revisionDigest: data.revision.digestSha256,
-					riskTier,
 					safeDiff,
-					status: 'draft',
-					headVersion: 1
+					status: 'draft'
 				});
 				return {
 					kind: 'success',
-					data: mapProgramVocabularyDraft(data),
+					data,
 					receipt: {
 						id: createId(),
-						operationName: `program_vocabulary.${request.action}.draft`,
+						operationName: 'program_vocabulary.merge.draft',
 						operationVersion: 1
 					},
 					correlationId
@@ -353,57 +322,6 @@ export function createSampleEventProgramPort(input: {
 		);
 	}
 
-	function readPending(selector: ChangesetRevisionSelector): PendingVocabularyChange | null {
-		const parsed = changesetRevisionSelectorSchema.safeParse({
-			changesetId: selector.changesetId,
-			revisionId: selector.revisionId,
-			revisionDigest: selector.revisionDigest
-		});
-		if (!parsed.success) return null;
-		const change = pending.get(parsed.data.changesetId);
-		return change
-			&& change.revisionId === parsed.data.revisionId
-			&& change.revisionDigest === parsed.data.revisionDigest
-			? change
-			: null;
-	}
-
-	function reviewOutcome<Data>(kind: string, changesetId: string): ChangesetReviewResult<Data> {
-		return {
-			kind: 'outcome',
-			terminal: false,
-			correlationId: createCorrelationId(),
-			outcome: {
-				class: 'stale_revision',
-				kind,
-				retryable: false,
-				subjects: [{ type: 'changeset', id: changesetId }],
-				detail: null,
-				detailSchemaVersion: 1
-			}
-		};
-	}
-
-	function mappedDiff(change: PendingVocabularyChange) {
-		return mapChangesetDiff(changesetDiffDataSchema.parse({
-			changesetId: change.changesetId,
-			headVersion: change.headVersion,
-			status: change.status,
-			revisionId: change.revisionId,
-			revisionNumber: 1,
-			revisionDigest: change.revisionDigest,
-			riskTier: change.riskTier,
-			approvalPolicy,
-			operations: [{
-				kind: 'program.vocabulary.mutate',
-				version: 1,
-				riskTier: change.riskTier,
-				dependencyGroup: 'program_vocabulary',
-				safeDiff: change.safeDiff,
-				consequences: ['program_vocabulary_changed']
-			}]
-		}));
-	}
 
 	function deleteEligibility(current: number, historicalPins: number) {
 		return current === 0 && historicalPins === 0
@@ -425,7 +343,10 @@ export function createSampleEventProgramPort(input: {
 		});
 	}
 
-	function applyChange(change: PendingVocabularyChange): boolean {
+	function applyChange(change: {
+		readonly request: EventProgramDirectRequest | EventProgramMergeDraftRequest;
+		readonly safeDiff: ProgramVocabularySafeDiff;
+	}): boolean {
 		if (!vocabulary || vocabulary.setVersion !== change.request.input.expectedSetVersion) return false;
 		const diff = change.safeDiff;
 		switch (diff.action) {
@@ -500,95 +421,90 @@ export function createSampleEventProgramPort(input: {
 				});
 				return true;
 			}
-			case 'merge_compensation':
+			default:
 				return false;
 		}
 	}
 
-	function reviewEffectReplay<Data>(
-		action: 'propose' | 'commit',
-		key: string,
-		businessInput: ChangesetReviewEffectInput,
-		run: () => ChangesetReviewResult<Data>
-	): ChangesetReviewResult<Data> {
-		const slot = `${action}:${key}`;
-		const requestFingerprint = fingerprint(businessInput);
-		const prior = reviewReplay.get(slot);
-		if (prior) {
-			return prior.fingerprint === requestFingerprint
-				? prior.result as ChangesetReviewResult<Data>
-				: reviewOutcome('operation.idempotency_conflict', businessInput.changesetId);
-		}
-		const result = run();
-		reviewReplay.set(slot, { fingerprint: requestFingerprint, result });
-		return result;
-	}
-
-	const changesets: ResettableEventProgramSampleComposition['changesets'] = Object.freeze({
-		source: Object.freeze({ kind: 'sample' as const, label: 'Sample data' as const }),
-		async readDiff(
-			selector: ChangesetRevisionSelector,
-			options: { readonly signal?: AbortSignal } = {}
-		): Promise<ChangesetReviewResult<ChangesetDiffView>> {
-			options.signal?.throwIfAborted();
-			const change = readPending(selector);
-			return change
-				? { kind: 'success' as const, data: mappedDiff(change), correlationId: createCorrelationId() }
-				: reviewOutcome('changeset.revision_missing', selector.changesetId);
-		},
-		async propose(
-			effectInput: ChangesetReviewEffectInput,
-			key: string,
-			options: { readonly signal?: AbortSignal } = {}
-		): Promise<ChangesetReviewResult<ChangesetDiffView>> {
-			options.signal?.throwIfAborted();
-			return reviewEffectReplay<ChangesetDiffView>('propose', key, effectInput, () => {
-				const change = readPending(effectInput);
-				if (!change || change.status !== 'draft' || change.headVersion !== effectInput.expectedHeadVersion) {
-					return reviewOutcome('changeset.lifecycle_refused', effectInput.changesetId);
+	function directVocabulary(
+		request: EventProgramDirectRequest,
+		idempotencyKey: string
+	): EventProgramEffectResult<ProgramVocabularyDirectData> {
+		return withIdempotency<ProgramVocabularyDirectData>(
+			`program_vocabulary.${request.action}`,
+			idempotencyKey,
+			request.input,
+			(correlationId) => {
+				const safeDiff = buildSafeDiff(request, correlationId);
+				if ('kind' in safeDiff) return safeDiff;
+				if (!applyChange({ request, safeDiff }) || !vocabulary) {
+					return conflict('program_vocabulary.item_changed', correlationId, 'stale_revision');
 				}
-				change.status = 'proposed';
-				change.headVersion += 1;
-				return {
-					kind: 'success',
-					data: mappedDiff(change),
-					correlationId: createCorrelationId(),
-					receipt: { id: createId(), operationName: 'changeset.propose', operationVersion: 1 }
-				};
-			});
-		},
-		async commit(
-			effectInput: ChangesetReviewEffectInput,
-			key: string,
-			options: { readonly signal?: AbortSignal } = {}
-		): Promise<ChangesetReviewResult<ChangesetCommitView>> {
-			options.signal?.throwIfAborted();
-			return reviewEffectReplay<ChangesetCommitView>('commit', key, effectInput, () => {
-				const change = readPending(effectInput);
-				if (!change || change.status !== 'proposed' || change.headVersion !== effectInput.expectedHeadVersion
-					|| !applyChange(change)) {
-					return reviewOutcome('changeset.lifecycle_refused', effectInput.changesetId);
-				}
-				change.status = 'committed';
-				change.headVersion += 1;
-				const data = committedChangesetDataSchema.parse({
-					schemaVersion: 1,
-					action: 'commit',
-					changesetId: change.changesetId,
-					expectedHeadVersion: effectInput.expectedHeadVersion,
-					committedHeadVersion: change.headVersion,
-					revisionId: change.revisionId,
-					revisionDigest: change.revisionDigest
+				const affectedId = safeDiff.action === 'create'
+					? safeDiff.after.id
+					: 'before' in safeDiff
+						? safeDiff.before.id
+						: undefined;
+				if (!affectedId) return conflict('program_vocabulary.invalid_direct_action', correlationId);
+				const data = programVocabularyDirectDataSchema.parse({
+					action: request.action,
+					kind: request.input.kind,
+					affectedIds: [affectedId],
+					setVersion: vocabulary.setVersion,
+					liveRepoints: 0
 				});
 				return {
 					kind: 'success',
-					data: mapChangesetCommit(data),
-					correlationId: createCorrelationId(),
-					receipt: { id: createId(), operationName: 'changeset.commit', operationVersion: 1 }
+					data,
+					receipt: {
+						id: createId(),
+						operationName: `program_vocabulary.${request.action}`,
+						operationVersion: 1
+					},
+					correlationId
 				};
-			});
-		}
-	}) satisfies ChangesetReviewPort;
+			}
+		);
+	}
+
+	function publishVocabularyMerge(
+		rawInput: ProgramVocabularyMergePublishInput,
+		idempotencyKey: string
+	): EventProgramEffectResult<ProgramVocabularyDirectData> {
+		return withIdempotency<ProgramVocabularyDirectData>(
+			'program_vocabulary.merge',
+			idempotencyKey,
+			rawInput,
+			(correlationId) => {
+				const parsed = programVocabularyMergePublishInputSchema.safeParse(rawInput);
+				if (!parsed.success) return conflict('operation.invalid_input', correlationId);
+				const change = pending.get(parsed.data.draftId);
+				if (!change
+					|| change.revisionId !== parsed.data.revisionId
+					|| change.revisionDigest !== parsed.data.revisionDigestSha256
+					|| change.status !== 'draft') {
+					return conflict('program_vocabulary.merge_revision_changed', correlationId, 'stale_revision');
+				}
+				if (!applyChange(change) || !vocabulary || change.safeDiff.action !== 'merge') {
+					return conflict('program_vocabulary.item_changed', correlationId, 'stale_revision');
+				}
+				change.status = 'published';
+				const data = programVocabularyDirectDataSchema.parse({
+					action: 'merge',
+					kind: change.request.input.kind,
+					affectedIds: [change.request.input.sourceId, change.request.input.targetId],
+					setVersion: vocabulary.setVersion,
+					liveRepoints: change.safeDiff.liveRepoints
+				});
+				return {
+					kind: 'success',
+					data,
+					receipt: { id: createId(), operationName: 'program_vocabulary.merge', operationVersion: 1 },
+					correlationId
+				};
+			}
+		);
+	}
 
 	const port = Object.freeze({
 		source: Object.freeze({ kind: 'sample' as const, label: input.fixture.label, resettable: true as const }),
@@ -628,12 +544,54 @@ export function createSampleEventProgramPort(input: {
 							}
 						};
 			},
-			async draft(
-				request: EventProgramDraftRequest,
+			async create(
+				businessInput: Extract<EventProgramDirectRequest, { action: 'create' }>['input'],
+				options: { readonly idempotencyKey: string; readonly signal?: AbortSignal }
+			) {
+				options.signal?.throwIfAborted();
+				return directVocabulary({ action: 'create', input: businessInput }, options.idempotencyKey);
+			},
+			async edit(
+				businessInput: Extract<EventProgramDirectRequest, { action: 'edit' }>['input'],
+				options: { readonly idempotencyKey: string; readonly signal?: AbortSignal }
+			) {
+				options.signal?.throwIfAborted();
+				return directVocabulary({ action: 'edit', input: businessInput }, options.idempotencyKey);
+			},
+			async retire(
+				businessInput: Extract<EventProgramDirectRequest, { action: 'retire' }>['input'],
+				options: { readonly idempotencyKey: string; readonly signal?: AbortSignal }
+			) {
+				options.signal?.throwIfAborted();
+				return directVocabulary({ action: 'retire', input: businessInput }, options.idempotencyKey);
+			},
+			async restore(
+				businessInput: Extract<EventProgramDirectRequest, { action: 'restore' }>['input'],
+				options: { readonly idempotencyKey: string; readonly signal?: AbortSignal }
+			) {
+				options.signal?.throwIfAborted();
+				return directVocabulary({ action: 'restore', input: businessInput }, options.idempotencyKey);
+			},
+			async delete(
+				businessInput: Extract<EventProgramDirectRequest, { action: 'delete' }>['input'],
+				options: { readonly idempotencyKey: string; readonly signal?: AbortSignal }
+			) {
+				options.signal?.throwIfAborted();
+				return directVocabulary({ action: 'delete', input: businessInput }, options.idempotencyKey);
+			},
+			async draftMerge(
+				request: EventProgramMergeDraftRequest,
 				options: { readonly idempotencyKey: string; readonly signal?: AbortSignal }
 			) {
 				options.signal?.throwIfAborted();
 				return draftVocabulary(request, options.idempotencyKey);
+			},
+			async publishMerge(
+				businessInput: ProgramVocabularyMergePublishInput,
+				options: { readonly idempotencyKey: string; readonly signal?: AbortSignal }
+			) {
+				options.signal?.throwIfAborted();
+				return publishVocabularyMerge(businessInput, options.idempotencyKey);
 			}
 		})
 	}) satisfies EventProgramPort & {
@@ -642,7 +600,6 @@ export function createSampleEventProgramPort(input: {
 
 	return Object.freeze({
 		port,
-		changesets,
 		reset() {
 			currentEvent = currentEventProjectionSchema.parse(input.fixture.currentEvent);
 			vocabulary = input.fixture.vocabulary
@@ -650,7 +607,6 @@ export function createSampleEventProgramPort(input: {
 				: null;
 			replay.clear();
 			pending.clear();
-			reviewReplay.clear();
 		}
 	});
 }

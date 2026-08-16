@@ -9,7 +9,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { openSQLite, type OpenSQLiteResult, type SQLiteDatabase } from './database';
+import { openSQLite, type OpenSQLiteResult } from './database';
 import { createEphemeralSQLiteFile } from './ephemeral-rebuild';
 import { SQLiteFoundationError } from './foundation-errors';
 import { listSQLiteOwners, sqliteCoordinationPaths } from './file-ownership';
@@ -126,7 +126,6 @@ export interface EphemeralSQLiteRuntime {
   readonly directoryPath: string;
   readonly databasePath: string;
   readonly sqlite: Database;
-  readonly db: SQLiteDatabase;
   /** The retained migration chain applied before additive runtime schema artifacts. */
   readonly retainedBaseline: SQLiteMigrationState;
   readonly installedSchemaArtifacts: readonly InstalledEphemeralSQLiteSchemaArtifact[];
@@ -447,7 +446,7 @@ function normalizeSchemaArtifacts(value: unknown): readonly CompiledSchemaArtifa
   return Object.freeze(artifacts);
 }
 
-function assertEpochOne(state: SQLiteMigrationState): void {
+function assertRetainedBaseline(state: SQLiteMigrationState): void {
   const migration = SQLITE_MIGRATION_MANIFEST.migrations[0];
   if (
     state.coordinate?.schemaEpoch !== migration.schemaEpoch ||
@@ -834,13 +833,13 @@ export function createEphemeralSQLiteRuntime(
   let layout: RuntimeLayout | undefined;
   try {
     const created = createEphemeralSQLiteFile(databasePath);
-    assertEpochOne(created);
+    assertRetainedBaseline(created);
     chmodSync(databasePath, 0o600);
     opened = openSQLite(databasePath, {
       migrationPolicy: 'validate',
       databaseClass: 'ephemeral'
     });
-    assertEpochOne(opened.migration);
+    assertRetainedBaseline(opened.migration);
     if (opened.migration.databaseId !== created.databaseId) {
       throw unsafe('The ephemeral SQLite identity changed between creation and open.');
     }
@@ -895,7 +894,6 @@ export function createEphemeralSQLiteRuntime(
       directoryPath,
       databasePath,
       sqlite: opened.sqlite,
-      db: opened.db,
       retainedBaseline,
       installedSchemaArtifacts,
       runtimeSchemaFingerprint,

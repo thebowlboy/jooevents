@@ -53,7 +53,7 @@ if (command === 'open' && databasePath) {
   acquireSQLiteOwner({
     canonicalDatabasePath: canonical,
     kind: 'pending-adoption',
-    sourceFingerprint: SQLITE_MIGRATION_MANIFEST.migrations[0].expectedApplicationFingerprint
+    sourceFingerprint: SQLITE_MIGRATION_MANIFEST.predecessor.expectedApplicationFingerprint
   });
   const database = new Database(canonical, { create: false, strict: true });
   database.exec('PRAGMA foreign_keys = ON;');

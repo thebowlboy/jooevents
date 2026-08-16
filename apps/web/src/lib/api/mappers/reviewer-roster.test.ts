@@ -1,10 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import {
-	reviewerRosterChangeDraftDataSchema,
 	reviewerRosterSnapshotSchema,
 	type ReviewerRosterSnapshotDto
 } from '@jooevents/contracts/reviewer-roster';
-import { mapReviewerRosterChangeDraft, mapReviewerRosterSnapshot } from './reviewer-roster';
+import { mapReviewerRosterSnapshot } from './reviewer-roster';
 
 const id = (value: number) =>
 	`00000000-0000-4000-8000-${value.toString(16).padStart(12, '0')}`;
@@ -105,16 +104,4 @@ describe('reviewer roster mappers', () => {
 		expect('email' in (view.reviewers[1] ?? {})).toBe(false);
 	});
 
-	test('copies a change draft deeply frozen', () => {
-		const draft = reviewerRosterChangeDraftDataSchema.parse({
-			changesetId: id(40),
-			revision: { id: id(41), digestSha256: digest('f') },
-			action: 'register',
-			reviewerId: id(10)
-		});
-		const view = mapReviewerRosterChangeDraft(draft);
-		expect(view).toEqual(draft as never);
-		expect(Object.isFrozen(view)).toBe(true);
-		expect(Object.isFrozen(view.revision)).toBe(true);
-	});
 });

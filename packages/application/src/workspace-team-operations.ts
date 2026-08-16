@@ -28,20 +28,20 @@ import {
   WORKSPACE_TEAM_OPERATION_SCHEMA_REFS,
   createSafeSchemaManifestRef,
   structuredOutcomeSchema,
-  workspaceTeamDraftCanonicalResultSchema,
-  workspaceTeamDraftDataSchema,
-  workspaceTeamDraftOperationResultSchema,
-  workspaceTeamInviteDraftInputSchema,
+  workspaceTeamMutationCanonicalResultSchema,
+  workspaceTeamMutationDataSchema,
+  workspaceTeamMutationOperationResultSchema,
+  workspaceTeamInviteInputSchema,
   workspaceTeamMembersCanonicalResultSchema,
   workspaceTeamMembersReadInputSchema,
   workspaceTeamMembersReadResultSchema,
-  workspaceTeamRemovalDraftInputSchema,
-  workspaceTeamRoleChangeDraftInputSchema,
+  workspaceTeamRemovalInputSchema,
+  workspaceTeamRoleChangeInputSchema,
   workspaceTeamSnapshotSchema,
   type SafeSchemaManifestRef,
   type StructuredOutcome,
   type VersionedDefinitionRef,
-  type WorkspaceTeamDraftData,
+  type WorkspaceTeamMutationData,
   type WorkspaceTeamSnapshot
 } from '@jooevents/contracts';
 import {
@@ -63,19 +63,19 @@ import {
 } from '@jooevents/kernel';
 import { z } from 'zod';
 
-export type WorkspaceTeamDraftAction = 'invite' | 'change_role' | 'remove';
+export type WorkspaceTeamMutationAction = 'invite' | 'change_role' | 'remove';
 
 export const WORKSPACE_TEAM_MEMBERS_READ_OPERATION = Object.freeze({
   name: 'workspace_team.members.read', version: 1
 });
-export const WORKSPACE_TEAM_INVITE_DRAFT_OPERATION = Object.freeze({
-  name: 'workspace_team.invite.draft', version: 1
+export const WORKSPACE_TEAM_INVITE_OPERATION = Object.freeze({
+  name: 'workspace_team.invite', version: 1
 });
-export const WORKSPACE_TEAM_ROLE_CHANGE_DRAFT_OPERATION = Object.freeze({
-  name: 'workspace_team.role_change.draft', version: 1
+export const WORKSPACE_TEAM_ROLE_CHANGE_OPERATION = Object.freeze({
+  name: 'workspace_team.role_change', version: 1
 });
-export const WORKSPACE_TEAM_REMOVAL_DRAFT_OPERATION = Object.freeze({
-  name: 'workspace_team.removal.draft', version: 1
+export const WORKSPACE_TEAM_REMOVAL_OPERATION = Object.freeze({
+  name: 'workspace_team.remove', version: 1
 });
 
 export const WORKSPACE_TEAM_OPERATION_ACCESS = Object.freeze({
@@ -84,53 +84,39 @@ export const WORKSPACE_TEAM_OPERATION_ACCESS = Object.freeze({
     permissionId: WORKSPACE_TEAM_PERMISSIONS.read
   }),
   invite: Object.freeze({
-    policy: { key: 'authority.workspace_team.invite.draft', version: parseContractVersion(1) },
+    policy: { key: 'authority.workspace_team.invite', version: parseContractVersion(1) },
     permissionId: WORKSPACE_TEAM_PERMISSIONS.invite
   }),
   changeRole: Object.freeze({
-    policy: { key: 'authority.workspace_team.role_change.draft', version: parseContractVersion(1) },
+    policy: { key: 'authority.workspace_team.role_change', version: parseContractVersion(1) },
     permissionId: WORKSPACE_TEAM_PERMISSIONS.changeRole
   }),
   remove: Object.freeze({
-    policy: { key: 'authority.workspace_team.removal.draft', version: parseContractVersion(1) },
+    policy: { key: 'authority.workspace_team.remove', version: parseContractVersion(1) },
     permissionId: WORKSPACE_TEAM_PERMISSIONS.remove
   })
 });
 
-export const WORKSPACE_TEAM_DRAFT_REQUEST_HASH_PROFILE = ref(
-  'request-hash.workspace_team.draft'
+export const WORKSPACE_TEAM_MUTATION_REQUEST_HASH_PROFILE = ref(
+  'request-hash.workspace_team.mutation'
 );
-export const WORKSPACE_TEAM_DRAFT_HANDLER_CAPABILITY = ref(
-  'capability.workspace_team.changeset_draft'
+export const WORKSPACE_TEAM_MUTATION_HANDLER_CAPABILITY = ref(
+  'capability.workspace_team.direct_mutation'
 );
 
 const applicationIdSchema = z.string().uuid();
-const digestSchema = z.string().regex(/^[a-f0-9]{64}$/);
 const instantSchema = z.iso.datetime({ offset: true });
 
-export const workspaceTeamDraftDomainContributionSchema = z.strictObject({
-  kind: z.literal('workspace_team_changeset_draft'),
+export const workspaceTeamMutationDomainContributionSchema = z.strictObject({
+  kind: z.literal('workspace_team_direct_mutation'),
   preparationHandle: applicationIdSchema,
   action: z.enum(['invite', 'change_role', 'remove']),
   workspaceId: applicationIdSchema,
-  changesetId: applicationIdSchema,
-  revisionId: applicationIdSchema,
-  revisionDigestSha256: digestSchema,
-  recordDigestSha256: digestSchema,
+  resultingTeamVersion: z.number().int().positive(),
   occurredAt: instantSchema
 });
 
-export const workspaceTeamDraftEvidenceChildSchema = z.strictObject({
-  kind: z.literal('timeline'),
-  timelineId: applicationIdSchema,
-  sourceKind: z.literal('changeset_revision'),
-  workspaceId: applicationIdSchema,
-  changesetId: applicationIdSchema,
-  revisionId: applicationIdSchema,
-  occurredAt: instantSchema
-});
-
-export const workspaceTeamDraftRefusalDetailSchema = z.strictObject({
+export const workspaceTeamMutationRefusalDetailSchema = z.strictObject({
   code: z.enum([
     'wrong_scope', 'stale_team', 'subject_missing', 'stale_subject',
     'role_unavailable', 'unsupported_assignment', 'duplicate_invitation',
@@ -141,75 +127,65 @@ export const workspaceTeamDraftRefusalDetailSchema = z.strictObject({
 });
 
 const successContributionSchema = z.strictObject({
-  result: z.strictObject({ kind: z.literal('success'), data: workspaceTeamDraftDataSchema }),
-  domain: workspaceTeamDraftDomainContributionSchema,
-  receiptChildren: z.tuple([workspaceTeamDraftEvidenceChildSchema])
+  result: z.strictObject({ kind: z.literal('success'), data: workspaceTeamMutationDataSchema }),
+  domain: workspaceTeamMutationDomainContributionSchema,
+  effectContributions: z.tuple([])
 }).superRefine((contribution, context) => {
   const { data } = contribution.result;
   const { domain } = contribution;
-  const timeline = contribution.receiptChildren[0];
   if (data.action !== domain.action
-      || data.changesetId !== domain.changesetId
-      || data.revision.id !== domain.revisionId
-      || data.revision.digestSha256 !== domain.revisionDigestSha256
-      || timeline.workspaceId !== domain.workspaceId
-      || timeline.changesetId !== domain.changesetId
-      || timeline.revisionId !== domain.revisionId
-      || timeline.occurredAt !== domain.occurredAt) {
-    context.addIssue({ code: 'custom', message: 'Workspace team draft evidence is incoherent.' });
+      || data.teamVersion !== domain.resultingTeamVersion) {
+    context.addIssue({ code: 'custom', message: 'Workspace team mutation evidence is incoherent.' });
   }
 });
 
-const allowedDraftOutcomes = new Set([
+const allowedMutationOutcomes = new Set([
   'conflict:workspace_team.change_refused',
   'stale_revision:workspace_team.change_refused',
-  'policy_violation:workspace_team.change_refused',
-  'conflict:changeset.id_collision'
+  'policy_violation:workspace_team.change_refused'
 ]);
 const outcomeContributionSchema = z.strictObject({
   result: z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema }),
   domain: z.null(),
-  receiptChildren: z.tuple([])
+  effectContributions: z.tuple([])
 }).superRefine((contribution, context) => {
   const outcome = contribution.result.outcome;
-  const validDetail = outcome.kind === 'changeset.id_collision'
-    ? outcome.detail === null
-    : workspaceTeamDraftRefusalDetailSchema.safeParse(outcome.detail).success;
-  if (!allowedDraftOutcomes.has(`${outcome.class}:${outcome.kind}`)
+  const validDetail = workspaceTeamMutationRefusalDetailSchema.safeParse(outcome.detail).success;
+  if (!allowedMutationOutcomes.has(`${outcome.class}:${outcome.kind}`)
       || outcome.retryable || outcome.detailSchemaVersion !== 1 || !validDetail) {
-    context.addIssue({ code: 'custom', message: 'Workspace team draft refusal is invalid.' });
+    context.addIssue({ code: 'custom', message: 'Workspace team mutation refusal is invalid.' });
   }
 });
 
-export const workspaceTeamDraftContributionSchema = z.union([
+export const workspaceTeamMutationContributionSchema = z.union([
   successContributionSchema,
   outcomeContributionSchema
 ]);
-export type WorkspaceTeamDraftContribution =
-  z.infer<typeof workspaceTeamDraftContributionSchema>;
+export type WorkspaceTeamMutationContribution =
+  z.infer<typeof workspaceTeamMutationContributionSchema>;
 
 export interface WorkspaceTeamReadPort {
   readWorkspaceTeam(workspaceId: WorkspaceId): WorkspaceTeamSnapshot;
 }
 
-export interface WorkspaceTeamDraftPreparedContribution {
+export interface WorkspaceTeamMutationPreparedContribution {
   readonly result: unknown;
   readonly domain: unknown;
-  readonly receiptChildren: readonly unknown[];
+  readonly effectContributions: readonly unknown[];
 }
 
-export interface WorkspaceTeamDraftPreparation {
+export interface WorkspaceTeamMutationPreparation {
   prepare(input: {
-    readonly action: WorkspaceTeamDraftAction;
+    readonly action: WorkspaceTeamMutationAction;
     readonly businessInput: unknown;
     readonly context: EffectInvocationContext;
-  }): WorkspaceTeamDraftPreparedContribution;
+  }): WorkspaceTeamMutationPreparedContribution;
 }
 
 interface SealedPreparation {
   readonly capability: VersionedDefinitionRef;
   readonly context: EffectInvocationContext;
-  readonly prepare: WorkspaceTeamDraftPreparation['prepare'];
+  readonly prepare: WorkspaceTeamMutationPreparation['prepare'];
   phase: 'ready' | 'preparing' | 'spent';
 }
 
@@ -219,16 +195,16 @@ function sameReference(left: VersionedDefinitionRef, right: VersionedDefinitionR
   return left.key === right.key && left.version === right.version;
 }
 
-export function sealWorkspaceTeamDraftPreparation(input: {
+export function sealWorkspaceTeamMutationPreparation(input: {
   readonly capability: VersionedDefinitionRef;
   readonly context: EffectInvocationContext;
-  readonly preparation: WorkspaceTeamDraftPreparation;
+  readonly preparation: WorkspaceTeamMutationPreparation;
 }): EffectHandlerSnapshot {
   if (typeof input.preparation.prepare !== 'function'
       || input.preparation.prepare.constructor.name === 'AsyncFunction') {
-    throw new TypeError('workspace_team_draft_preparation_invalid');
+    throw new TypeError('workspace_team_mutation_preparation_invalid');
   }
-  const snapshot = Object.freeze({ strategy: 'workspace_team_changeset_draft', version: 1 });
+  const snapshot = Object.freeze({ strategy: 'workspace_team_direct_mutation', version: 1 });
   sealedPreparations.set(snapshot, {
     capability: Object.freeze({ ...input.capability }),
     context: input.context,
@@ -238,39 +214,39 @@ export function sealWorkspaceTeamDraftPreparation(input: {
   return snapshot;
 }
 
-function createDraftHandler(input: {
+function createMutationHandler(input: {
   readonly reference: VersionedDefinitionRef;
   readonly contributionSchema: SafeSchemaManifestRef;
   readonly canonicalResultSchema: SafeSchemaManifestRef;
 }): EffectHandlerRegistration {
-  const capability = WORKSPACE_TEAM_DRAFT_HANDLER_CAPABILITY;
+  const capability = WORKSPACE_TEAM_MUTATION_HANDLER_CAPABILITY;
   return Object.freeze({
     reference: input.reference,
-    effect: 'draft' as const,
+    effect: 'commit' as const,
     handlerCapability: capability,
     contributionSchema: input.contributionSchema,
     canonicalResultSchema: input.canonicalResultSchema,
     handle({ businessInput, context, snapshot }:
       Parameters<EffectHandlerRegistration['handle']>[0]) {
       const sealed = sealedPreparations.get(snapshot);
-      const action = workspaceTeamDraftActionForOperation(
+      const action = workspaceTeamMutationActionForOperation(
         context.operation.name, context.operation.version
       );
       if (!sealed || !sameReference(sealed.capability, capability)
           || sealed.context !== context || sealed.phase !== 'ready' || !action) {
-        throw new TypeError('workspace_team_draft_preparation_invalid');
+        throw new TypeError('workspace_team_mutation_preparation_invalid');
       }
       sealed.phase = 'preparing';
       try {
         const contribution = sealed.prepare({ action, businessInput, context });
         if (contribution && typeof (contribution as { then?: unknown }).then === 'function') {
-          throw new TypeError('workspace_team_draft_preparation_must_be_synchronous');
+          throw new TypeError('workspace_team_mutation_preparation_must_be_synchronous');
         }
         sealed.phase = 'spent';
         return {
           result: contribution.result,
           domain: contribution.domain,
-          receiptChildren: [...contribution.receiptChildren]
+          effectContributions: [...contribution.effectContributions]
         };
       } catch (error) {
         sealed.phase = 'spent';
@@ -295,18 +271,18 @@ const schemas = Object.freeze({
     workspaceTeamMembersCanonicalResultSchema
   ),
   readProjected: WORKSPACE_TEAM_OPERATION_SCHEMA_REFS.members.resultSchema,
-  draftContribution: schemaRef(
-    'schema.workspace_team.changeset-draft.contribution',
-    workspaceTeamDraftContributionSchema
+  mutationContribution: schemaRef(
+    'schema.workspace_team.mutation.contribution',
+    workspaceTeamMutationContributionSchema
   ),
-  draftCanonical: schemaRef(
-    'schema.workspace_team.changeset-draft.canonical-result',
-    workspaceTeamDraftCanonicalResultSchema
+  mutationCanonical: schemaRef(
+    'schema.workspace_team.mutation.canonical-result',
+    workspaceTeamMutationCanonicalResultSchema
   ),
-  draftProjected: WORKSPACE_TEAM_OPERATION_SCHEMA_REFS.invite.resultSchema,
+  mutationProjected: WORKSPACE_TEAM_OPERATION_SCHEMA_REFS.invite.resultSchema,
   nullDetail: schemaRef('schema.workspace_team.operation.null-detail', z.null()),
   refusalDetail: schemaRef(
-    'schema.workspace_team.draft-refusal.detail', workspaceTeamDraftRefusalDetailSchema
+    'schema.workspace_team.mutation-refusal.detail', workspaceTeamMutationRefusalDetailSchema
   ),
   inviteInput: WORKSPACE_TEAM_OPERATION_SCHEMA_REFS.invite.inputSchema,
   roleInput: WORKSPACE_TEAM_OPERATION_SCHEMA_REFS.roleChange.inputSchema,
@@ -320,42 +296,42 @@ const commonRefs = Object.freeze({
   readHandler: ref('handler.workspace_team.members-read'),
   readProjection: ref('projection.workspace_team.members-read.operator'),
   readTrace: ref('trace.workspace_team.members-read'),
-  draftHandler: ref('handler.workspace_team.changeset-draft'),
-  draftProjection: ref('projection.workspace_team.changeset-draft.operator'),
-  audit: ref('audit.workspace_team.changeset-draft'),
+  mutationHandler: ref('handler.workspace_team.direct-mutation'),
+  mutationProjection: ref('projection.workspace_team.mutation.operator'),
+  audit: ref('audit.workspace_team.mutation'),
   auditRecordProfile: ref('record-profile.workspace_team.operation-audit'),
   keySource: ref('idempotency.operator-header'),
-  requestHash: WORKSPACE_TEAM_DRAFT_REQUEST_HASH_PROFILE
+  requestHash: WORKSPACE_TEAM_MUTATION_REQUEST_HASH_PROFILE
 });
 
-const draftEntries = Object.freeze([
+const mutationEntries = Object.freeze([
   {
     action: 'invite' as const,
-    operation: WORKSPACE_TEAM_INVITE_DRAFT_OPERATION,
-    inputSchema: workspaceTeamInviteDraftInputSchema,
+    operation: WORKSPACE_TEAM_INVITE_OPERATION,
+    inputSchema: workspaceTeamInviteInputSchema,
     inputRef: schemas.inviteInput,
     access: WORKSPACE_TEAM_OPERATION_ACCESS.invite,
-    path: '/api/workspace/team/invitations/drafts'
+    path: '/api/workspace/team/invitations'
   },
   {
     action: 'change_role' as const,
-    operation: WORKSPACE_TEAM_ROLE_CHANGE_DRAFT_OPERATION,
-    inputSchema: workspaceTeamRoleChangeDraftInputSchema,
+    operation: WORKSPACE_TEAM_ROLE_CHANGE_OPERATION,
+    inputSchema: workspaceTeamRoleChangeInputSchema,
     inputRef: schemas.roleInput,
     access: WORKSPACE_TEAM_OPERATION_ACCESS.changeRole,
-    path: '/api/workspace/team/role-changes/drafts'
+    path: '/api/workspace/team/role-changes'
   },
   {
     action: 'remove' as const,
-    operation: WORKSPACE_TEAM_REMOVAL_DRAFT_OPERATION,
-    inputSchema: workspaceTeamRemovalDraftInputSchema,
+    operation: WORKSPACE_TEAM_REMOVAL_OPERATION,
+    inputSchema: workspaceTeamRemovalInputSchema,
     inputRef: schemas.removalInput,
     access: WORKSPACE_TEAM_OPERATION_ACCESS.remove,
-    path: '/api/workspace/team/removals/drafts'
+    path: '/api/workspace/team/removals'
   }
 ]);
 
-interface DraftRefs {
+interface MutationRefs {
   readonly context: VersionedDefinitionRef;
   readonly autonomy: VersionedDefinitionRef;
   readonly executionFamily: VersionedDefinitionRef;
@@ -368,18 +344,18 @@ interface DraftRefs {
   readonly preflight: VersionedDefinitionRef;
 }
 
-function refsFor(action: WorkspaceTeamDraftAction): DraftRefs {
+function refsFor(action: WorkspaceTeamMutationAction): MutationRefs {
   return Object.freeze({
-    context: ref(`context.workspace_team.${action}-draft`),
-    autonomy: ref(`autonomy.workspace_team.${action}-draft`),
-    executionFamily: ref(`workspace_team.${action}-draft.execution-family`),
-    executionPhase: ref(`workspace_team.${action}-draft.phase.single-uow`),
-    concurrency: ref(`concurrency.workspace_team.${action}-draft`),
-    terminalization: ref(`workspace_team.${action}-draft.terminalization`),
-    risk: ref(`workspace_team.${action}-draft.risk-resolver`),
-    evidence: ref(`workspace_team.${action}-draft.autonomy-evidence`),
-    approval: ref(`workspace_team.${action}-draft.approval-resolver`),
-    preflight: ref(`workspace_team.${action}-draft.autonomy-preflight`)
+    context: ref(`context.workspace_team.${action}`),
+    autonomy: ref(`autonomy.workspace_team.${action}`),
+    executionFamily: ref(`workspace_team.${action}.execution-family`),
+    executionPhase: ref(`workspace_team.${action}.phase.direct-uow`),
+    concurrency: ref(`concurrency.workspace_team.${action}`),
+    terminalization: ref(`workspace_team.${action}.terminalization`),
+    risk: ref(`workspace_team.${action}.risk-resolver`),
+    evidence: ref(`workspace_team.${action}.autonomy-evidence`),
+    approval: ref(`workspace_team.${action}.approval-resolver`),
+    preflight: ref(`workspace_team.${action}.autonomy-preflight`)
   });
 }
 
@@ -447,11 +423,11 @@ function autonomy(
   });
 }
 
-export function workspaceTeamDraftActionForOperation(
+export function workspaceTeamMutationActionForOperation(
   operationName: string,
   operationVersion: number
-): WorkspaceTeamDraftAction | undefined {
-  return draftEntries.find(({ operation }) =>
+): WorkspaceTeamMutationAction | undefined {
+  return mutationEntries.find(({ operation }) =>
     operation.name === operationName && operation.version === operationVersion
   )?.action;
 }
@@ -489,7 +465,7 @@ export function createWorkspaceTeamOperationModule(
     }
   });
 
-  const drafts = draftEntries.map((entry) => {
+  const mutations = mutationEntries.map((entry) => {
     const refs = refsFor(entry.action);
     const lane = parseOperationAccessLane({
       kind: 'operator', surface: 'operator_http', policy: input.policies[
@@ -500,7 +476,7 @@ export function createWorkspaceTeamOperationModule(
     const context = createEffectInvocationContextBuilder({
       reference: refs.context,
       operation: entry.operation,
-      effect: 'draft', lanes: [lane], scopeResolver,
+      effect: 'commit', lanes: [lane], scopeResolver,
       authorityResolver: input.currentAuthority, clock: input.clock,
       newInvocationId: input.ids.newInvocationId,
       authorityPrincipalKeyProfile: input.authorityPrincipalKeyProfile,
@@ -524,9 +500,9 @@ export function createWorkspaceTeamOperationModule(
     });
     const phase = createSingleUnitOfWorkPhaseRegistration({
       reference: refs.executionPhase, family: refs.executionFamily,
-      operation: entry.operation, effect: 'draft', handler: commonRefs.draftHandler,
-      handlerCapability: WORKSPACE_TEAM_DRAFT_HANDLER_CAPABILITY,
-      contributionSchema: schemas.draftContribution,
+      operation: entry.operation, effect: 'commit', handler: commonRefs.mutationHandler,
+      handlerCapability: WORKSPACE_TEAM_MUTATION_HANDLER_CAPABILITY,
+      contributionSchema: schemas.mutationContribution,
       terminalization: refs.terminalization,
       terminalOutcomeKeys: [],
       contentionOutcome: {
@@ -538,8 +514,8 @@ export function createWorkspaceTeamOperationModule(
       reference: refs.risk, operation: entry.operation,
       resolve: () => ({
         risk: 'low' as const,
-        consequenceTags: Object.freeze(['changeset-drafted']),
-        evidenceIds: Object.freeze([`workspace_team.${entry.action}.draft.risk`])
+        consequenceTags: Object.freeze([`workspace-team-${entry.action}`]),
+        evidenceIds: Object.freeze([`workspace_team.${entry.action}.risk`])
       })
     });
     const evidence = createAutonomyEvidenceResolverRegistration({
@@ -555,7 +531,7 @@ export function createWorkspaceTeamOperationModule(
           hardBounds: bounds, unattendedBounds: bounds,
           spendMicros: 0, actionCount: 1, completesBy: subject.evaluatedAt,
           proposedAction: {
-            key: `workspace_team.${entry.action}.draft.execute`, version: 1,
+            key: `workspace_team.${entry.action}.execute`, version: 1,
             digestSha256: subject.requestHashSha256
           },
           failure: { kind: 'none' as const }
@@ -584,33 +560,33 @@ export function createWorkspaceTeamOperationModule(
     retryable: false,
     detailSchema: schemas.nullDetail
   }));
-  const draftHandler = createDraftHandler({
-    reference: commonRefs.draftHandler,
-    contributionSchema: schemas.draftContribution,
-    canonicalResultSchema: schemas.draftCanonical
+  const mutationHandler = createMutationHandler({
+    reference: commonRefs.mutationHandler,
+    contributionSchema: schemas.mutationContribution,
+    canonicalResultSchema: schemas.mutationCanonical
   });
 
   return Object.freeze({
     id: 'workspace-team.operations',
     source: Object.freeze({
-      effectExecutionFamilies: Object.freeze(drafts.map((entry) => entry.family)),
-      effectPhases: Object.freeze(drafts.map((entry) => entry.phase)),
-      terminalizationResolvers: Object.freeze(drafts.map((entry) => entry.terminalization)),
-      riskResolvers: Object.freeze(drafts.map((entry) => entry.risk)),
-      autonomyEvidenceResolvers: Object.freeze(drafts.map((entry) => entry.evidence)),
-      renewedApprovalResolvers: Object.freeze(drafts.map((entry) => entry.approval)),
-      autonomyPreflights: Object.freeze(drafts.map((entry) => entry.preflight)),
-      autonomyPolicies: Object.freeze([readAutonomy, ...drafts.map((entry) => entry.autonomy)]),
+      effectExecutionFamilies: Object.freeze(mutations.map((entry) => entry.family)),
+      effectPhases: Object.freeze(mutations.map((entry) => entry.phase)),
+      terminalizationResolvers: Object.freeze(mutations.map((entry) => entry.terminalization)),
+      riskResolvers: Object.freeze(mutations.map((entry) => entry.risk)),
+      autonomyEvidenceResolvers: Object.freeze(mutations.map((entry) => entry.evidence)),
+      renewedApprovalResolvers: Object.freeze(mutations.map((entry) => entry.approval)),
+      autonomyPreflights: Object.freeze(mutations.map((entry) => entry.preflight)),
+      autonomyPolicies: Object.freeze([readAutonomy, ...mutations.map((entry) => entry.autonomy)]),
       schemas: Object.freeze([
         { reference: schemas.readInput, schema: workspaceTeamMembersReadInputSchema },
         { reference: schemas.readCanonical, schema: workspaceTeamMembersCanonicalResultSchema },
         { reference: schemas.readProjected, schema: workspaceTeamMembersReadResultSchema },
-        ...drafts.map((entry) => ({ reference: entry.inputRef, schema: entry.inputSchema })),
-        { reference: schemas.draftContribution, schema: workspaceTeamDraftContributionSchema },
-        { reference: schemas.draftCanonical, schema: workspaceTeamDraftCanonicalResultSchema },
-        { reference: schemas.draftProjected, schema: workspaceTeamDraftOperationResultSchema },
+        ...mutations.map((entry) => ({ reference: entry.inputRef, schema: entry.inputSchema })),
+        { reference: schemas.mutationContribution, schema: workspaceTeamMutationContributionSchema },
+        { reference: schemas.mutationCanonical, schema: workspaceTeamMutationCanonicalResultSchema },
+        { reference: schemas.mutationProjected, schema: workspaceTeamMutationOperationResultSchema },
         { reference: schemas.nullDetail, schema: z.null() },
-        { reference: schemas.refusalDetail, schema: workspaceTeamDraftRefusalDetailSchema }
+        { reference: schemas.refusalDetail, schema: workspaceTeamMutationRefusalDetailSchema }
       ]),
       contextBuilders: Object.freeze([readContext]),
       readCapabilities: Object.freeze([readCapability]),
@@ -629,10 +605,10 @@ export function createWorkspaceTeamOperationModule(
         projectedResultSchema: schemas.readProjected,
         project: (candidate: unknown) => workspaceTeamMembersCanonicalResultSchema.parse(candidate)
       }, {
-        reference: commonRefs.draftProjection,
-        canonicalResultSchema: schemas.draftCanonical,
-        projectedResultSchema: schemas.draftProjected,
-        project: (candidate: unknown) => workspaceTeamDraftCanonicalResultSchema.parse(candidate)
+        reference: commonRefs.mutationProjection,
+        canonicalResultSchema: schemas.mutationCanonical,
+        projectedResultSchema: schemas.mutationProjected,
+        project: (candidate: unknown) => workspaceTeamMutationCanonicalResultSchema.parse(candidate)
       }]),
       readOperationalTraceTargets: Object.freeze([{
         reference: commonRefs.readTrace,
@@ -681,19 +657,21 @@ export function createWorkspaceTeamOperationModule(
           projection: commonRefs.readProjection
         }]
       }]),
-      effectContextBuilders: Object.freeze(drafts.map((entry) => entry.context)),
-      effectHandlers: Object.freeze([draftHandler]),
-      effectOperations: Object.freeze(drafts.map((entry) => ({
+      effectContextBuilders: Object.freeze(mutations.map((entry) => entry.context)),
+      effectHandlers: Object.freeze([mutationHandler]),
+      effectOperations: Object.freeze(mutations.map((entry) => ({
         ...entry.operation,
         lifecycle: { status: 'active' as const },
-        summary: `Draft a workspace team ${entry.action} change for review.`,
-        effect: 'draft' as const,
+        summary: entry.action === 'invite' ? 'Invite a workspace teammate.'
+          : entry.action === 'change_role' ? 'Change a workspace teammate role.'
+            : 'Remove a workspace teammate.',
+        effect: 'commit' as const,
         maxRisk: 'low' as const,
         autonomyPolicy: entry.refs.autonomy,
-        consequenceTags: ['changeset-drafted'],
+        consequenceTags: [`workspace-team-${entry.action}`],
         inputSchema: entry.inputRef,
-        contributionSchema: schemas.draftContribution,
-        canonicalResultSchema: schemas.draftCanonical,
+        contributionSchema: schemas.mutationContribution,
+        canonicalResultSchema: schemas.mutationCanonical,
         outcomes: [
           {
             class: 'idempotency_conflict' as const,
@@ -718,11 +696,6 @@ export function createWorkspaceTeamOperationModule(
           },
           {
             class: 'conflict' as const,
-            kind: 'changeset.id_collision', retryable: false,
-            detailSchema: schemas.nullDetail
-          },
-          {
-            class: 'conflict' as const,
             kind: 'operation.in_progress', retryable: true,
             detailSchema: schemas.nullDetail
           },
@@ -730,8 +703,8 @@ export function createWorkspaceTeamOperationModule(
         ],
         accessLanes: [entry.lane],
         contextBuilder: entry.refs.context,
-        handlerCapability: WORKSPACE_TEAM_DRAFT_HANDLER_CAPABILITY,
-        handler: commonRefs.draftHandler,
+        handlerCapability: WORKSPACE_TEAM_MUTATION_HANDLER_CAPABILITY,
+        handler: commonRefs.mutationHandler,
         audit: { mode: 'required' as const, target: commonRefs.audit },
         idempotency: {
           keySource: commonRefs.keySource,
@@ -741,10 +714,14 @@ export function createWorkspaceTeamOperationModule(
         concurrency: entry.refs.concurrency,
         execution: {
           kind: 'single_unit_of_work' as const,
+          profile: 'direct_audited' as const,
           family: entry.refs.executionFamily,
           phase: entry.refs.executionPhase,
           terminalization: entry.refs.terminalization,
-          autonomyPreflight: entry.refs.preflight
+          autonomyPreflight: entry.refs.preflight,
+          history: { summary: entry.action === 'invite' ? 'Invited a teammate'
+            : entry.action === 'change_role' ? 'Changed a teammate role'
+              : 'Removed a teammate' }
         },
         bindings: [{
           surface: 'operator_http' as const,
@@ -752,7 +729,7 @@ export function createWorkspaceTeamOperationModule(
           path: entry.path,
           input: 'body' as const,
           browserResumption: { kind: 'none' as const },
-          projection: commonRefs.draftProjection
+          projection: commonRefs.mutationProjection
         }]
       })))
     })

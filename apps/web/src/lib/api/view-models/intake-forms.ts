@@ -1,15 +1,16 @@
 import type {
-	FormClosingChangeDraftInput,
 	FormConfigurationIssueDto,
 	FormDefinitionAuthorInput,
 	FormDefinitionCreateDraftInput,
 	FormDefinitionReviseDraftInput,
-	FormLifecycleChangeDraftInput,
+	FormClosingChangeDraftInput,
 	FormRegistryPinDto,
 	FormStatus,
-	FormVersionPublishDraftInput,
-	IntakeFormDraftAction,
-	IntakeFormSafeDiff,
+	intakeFormDirectLifecycleInputSchema,
+	IntakeFormVersionPublishInput,
+	intakeFormVersionReviewDraftDataSchema,
+	IntakeFormVersionReviewInput,
+	IntakeFormWriteData,
 	StructuredOutcome
 } from '@jooevents/contracts';
 import type { SafeApiError } from '../client';
@@ -86,59 +87,20 @@ export interface OrganizerFormDetailView {
 		| null;
 }
 
-/** Canonical safe diffs are retained without lossy browser aliases. */
-export type OrganizerFormSafeDiffView = IntakeFormSafeDiff;
-
-export interface OrganizerFormDraftView {
-	readonly action: IntakeFormDraftAction;
-	readonly changesetId: string;
-	readonly headVersion: number;
-	readonly revisionId: string;
-	readonly revisionNumber: number;
-	readonly revisionDigest: string;
-	readonly riskTier: 'low' | 'normal' | 'consequential';
-	readonly approvalRequirement: 'none' | 'distinct_current_human';
-	readonly safeDiff: OrganizerFormSafeDiffView;
-}
-
-export interface OrganizerFormChangesetDiffView {
-	readonly changesetId: string;
-	readonly headVersion: number;
-	readonly status: 'draft' | 'proposed' | 'committed' | 'discarded';
-	readonly revisionId: string;
-	readonly revisionNumber: number;
-	readonly revisionDigest: string;
-	readonly riskTier: 'low' | 'normal' | 'consequential';
-	readonly approvalRequirement: 'none' | 'distinct_current_human';
-	readonly operations: readonly {
-		readonly kind: string;
-		readonly version: number;
-		readonly riskTier: 'low' | 'normal' | 'consequential';
-		readonly dependencyGroup: string;
-		readonly safeDiff: OrganizerFormSafeDiffView;
-		readonly consequences: readonly string[];
-	}[];
-}
-
-export interface OrganizerFormCommitView {
-	readonly changesetId: string;
-	readonly expectedHeadVersion: number;
-	readonly committedHeadVersion: number;
-	readonly revisionId: string;
-	readonly revisionDigest: string;
-}
+export type OrganizerFormWriteView = IntakeFormWriteData;
+export type OrganizerFormVersionReviewView = ReturnType<typeof intakeFormVersionReviewDraftDataSchema.parse>;
+export type OrganizerFormVersionPublishSelector = IntakeFormVersionPublishInput;
+export type OrganizerFormLifecycleInput = ReturnType<typeof intakeFormDirectLifecycleInputSchema.parse>;
 
 export type OrganizerFormsOperation =
 	| 'list'
 	| 'detail'
-	| 'draft_create'
-	| 'draft_revise'
+	| 'create'
+	| 'revise'
 	| 'draft_publish'
-	| 'draft_lifecycle'
-	| 'draft_closing'
-	| 'diff'
-	| 'propose'
-	| 'commit';
+	| 'publish'
+	| 'lifecycle'
+	| 'closing';
 
 export type OrganizerFormsUnavailableReason = OperatorHttpBindingUnavailableReason;
 
@@ -183,16 +145,6 @@ export type OrganizerFormsSource =
 			};
 	  };
 
-export interface OrganizerFormsChangesetSelector {
-	readonly changesetId: string;
-	readonly revisionId: string;
-	readonly revisionDigest: string;
-}
-
-export type OrganizerFormsChangesetEffectInput = OrganizerFormsChangesetSelector & {
-	readonly expectedHeadVersion: number;
-};
-
 export interface OrganizerFormsPort {
 	readonly source: OrganizerFormsSource;
 	list(options?: {
@@ -202,44 +154,35 @@ export interface OrganizerFormsPort {
 		formId: string,
 		options?: { readonly signal?: AbortSignal }
 	): Promise<OrganizerFormsResult<OrganizerFormDetailView>>;
-	draftCreate(
+	create(
 		input: FormDefinitionCreateDraftInput,
 		idempotencyKey: string,
 		options?: { readonly signal?: AbortSignal }
-	): Promise<OrganizerFormsResult<OrganizerFormDraftView>>;
-	draftRevise(
+	): Promise<OrganizerFormsResult<OrganizerFormWriteView>>;
+	revise(
 		input: FormDefinitionReviseDraftInput,
 		idempotencyKey: string,
 		options?: { readonly signal?: AbortSignal }
-	): Promise<OrganizerFormsResult<OrganizerFormDraftView>>;
+	): Promise<OrganizerFormsResult<OrganizerFormWriteView>>;
 	draftPublish(
-		input: FormVersionPublishDraftInput,
+		input: IntakeFormVersionReviewInput,
 		idempotencyKey: string,
 		options?: { readonly signal?: AbortSignal }
-	): Promise<OrganizerFormsResult<OrganizerFormDraftView>>;
-	draftLifecycle(
-		input: FormLifecycleChangeDraftInput,
+	): Promise<OrganizerFormsResult<OrganizerFormVersionReviewView>>;
+	publish(
+		input: IntakeFormVersionPublishInput,
 		idempotencyKey: string,
 		options?: { readonly signal?: AbortSignal }
-	): Promise<OrganizerFormsResult<OrganizerFormDraftView>>;
-	draftClosing(
+	): Promise<OrganizerFormsResult<OrganizerFormWriteView>>;
+	lifecycle(
+		input: OrganizerFormLifecycleInput,
+		idempotencyKey: string,
+		options?: { readonly signal?: AbortSignal }
+	): Promise<OrganizerFormsResult<OrganizerFormWriteView>>;
+	closing(
 		input: FormClosingChangeDraftInput,
 		idempotencyKey: string,
 		options?: { readonly signal?: AbortSignal }
-	): Promise<OrganizerFormsResult<OrganizerFormDraftView>>;
-	readDiff(
-		input: OrganizerFormsChangesetSelector,
-		options?: { readonly signal?: AbortSignal }
-	): Promise<OrganizerFormsResult<OrganizerFormChangesetDiffView>>;
-	propose(
-		input: OrganizerFormsChangesetEffectInput,
-		idempotencyKey: string,
-		options?: { readonly signal?: AbortSignal }
-	): Promise<OrganizerFormsResult<OrganizerFormChangesetDiffView>>;
-	commit(
-		input: OrganizerFormsChangesetEffectInput,
-		idempotencyKey: string,
-		options?: { readonly signal?: AbortSignal }
-	): Promise<OrganizerFormsResult<OrganizerFormCommitView>>;
+	): Promise<OrganizerFormsResult<OrganizerFormWriteView>>;
 	reset?(): void | Promise<void>;
 }

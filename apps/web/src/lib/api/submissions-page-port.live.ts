@@ -6,7 +6,7 @@ import type {
 	DecisionsLiveReadResult
 } from './operations/decisions-live';
 import type {
-	DirectEntryDraftWireInput,
+	DirectEntryWireInput,
 	DirectEntryFieldIdentity,
 	DirectEntryLiveClient,
 	DirectEntryLiveCreateResult
@@ -21,7 +21,7 @@ import type { ProgramVocabularySettingsPort } from './program-vocabulary-setting
 import { mapLiveReviewPlans } from './review-page-port.live';
 import type { ReviewCorePort } from './review-core-port';
 import type { SessionCatalogCorePort } from './session-catalog-port';
-import type { SubmissionsPagePort, SubmissionTrayRestoreEntry } from './submissions-page-port';
+import type { SubmissionsPagePort } from './submissions-page-port';
 import type {
 	DirectEntryInput,
 	Format,
@@ -123,20 +123,6 @@ function applyFailure(
 				? `The ${subject} change could not reach JooEvents. Try again.`
 				: `This ${subject} change is not valid.`,
 			retryable: result.error.retryable
-		};
-	}
-	if (result.kind === 'confirmation_required') {
-		return {
-			code: 'distinct_current_human_required',
-			reason: 'This change needs a separate approval, which this surface cannot collect yet.',
-			retryable: false
-		};
-	}
-	if (result.kind === 'correction_unavailable') {
-		return {
-			code: `correction_${result.resultKind}`,
-			reason: `This ${subject} change can no longer be reversed exactly.`,
-			retryable: false
 		};
 	}
 	return {
@@ -248,7 +234,7 @@ const REQUIRED_MAPPINGS = Object.freeze([
  * accepted row's origin door), the Review core's whole-slice standings and
  * plans, the live Program Vocabulary, the organizer forms catalog, the
  * Session catalog (session identity only), and the direct-entry create
- * carried through the same changeset lifecycle. Everything the canonical
+ * carried through the same registered operation. Everything the canonical
  * mounts cannot truthfully serve surfaces a typed refusal or its typed
  * absence — never sample fallback, fabricated counts, or silent no-ops.
  *
@@ -546,10 +532,10 @@ export function createLiveSubmissionsPagePort(input: {
 	function directEntryAnswers(
 		entry: DirectEntryInput,
 		plan: DirectEntryFormPlan
-	): DirectEntryDraftWireInput['answers'] {
+	): DirectEntryWireInput['answers'] {
 		const field = (mapping: string) => plan.fieldByMapping.get(mapping)!;
 		const speaker = entry.speakers[0]!;
-		const answers: DirectEntryDraftWireInput['answers'] = [
+		const answers: DirectEntryWireInput['answers'] = [
 			{ kind: 'text', fieldId: field('talk.title').id, value: entry.title },
 			{ kind: 'text', fieldId: field('person.name').id, value: speaker.name },
 			{ kind: 'email', fieldId: field('person.email').id, value: speaker.email },
@@ -569,13 +555,6 @@ export function createLiveSubmissionsPagePort(input: {
 	function createFailure(
 		result: Exclude<DirectEntryLiveCreateResult, { readonly kind: 'success' }>
 	): AdapterFailure {
-		if (result.kind === 'confirmation_required') {
-			return {
-				code: 'distinct_current_human_required',
-				reason: 'This change needs a separate approval, which this surface cannot collect yet.',
-				retryable: false
-			};
-		}
 		if (result.kind === 'unavailable') {
 			return {
 				code: result.reason,
@@ -665,19 +644,6 @@ export function createLiveSubmissionsPagePort(input: {
 				return submissionRow(row, decisions.get(created.data.submissionId), undefined);
 			},
 
-			async removeDirectEntry(id: string): Promise<void> {
-				const row = await readRow(id);
-				if (row.source.source !== 'direct_entry') {
-					throw new SubmissionsPageLiveError({
-						code: 'direct_entry_only_removal',
-						reason: 'Only direct entries can be removed here.',
-						retryable: false
-					});
-				}
-				// The recorded compensation route: a recoverable triage discard.
-				// The arrival record is immutable evidence and stays countable.
-				await transition('discard_recoverable', [id]);
-			},
 
 			async setAside(ids: readonly string[]): Promise<void> {
 				await transition('set_aside', ids);
@@ -690,36 +656,6 @@ export function createLiveSubmissionsPagePort(input: {
 			},
 			async restore(ids: readonly string[]): Promise<void> {
 				await transition('restore', ids);
-			},
-
-			/**
-			 * Residency compensation: each entry returns to the tray it was in,
-			 * derived from its current canonical state. Agent set-aside
-			 * attribution is not restorable from this surface — the compensating
-			 * set-aside is attributed to the person undoing, as served.
-			 */
-			async restoreTray(entries: readonly SubmissionTrayRestoreEntry[]): Promise<void> {
-				for (const entry of entries) {
-					const current = await readRow(entry.id);
-					const state = current.head.state;
-					const target = entry.tray;
-					if (VIEW_TRAY[current.visibleTray] === target) continue;
-					if (target === 'inbox' || target === 'late') {
-						await transition(
-							state === 'discarded_recoverable' ? 'restore' : 'return_to_inbox',
-							[entry.id]
-						);
-						continue;
-					}
-					if (target === 'set-aside') {
-						// A discarded row walks back through the inbox first; each
-						// step is its own committed, receipted transition.
-						if (state === 'discarded_recoverable') await transition('restore', [entry.id]);
-						await transition('set_aside', [entry.id]);
-						continue;
-					}
-					await transition('discard_recoverable', [entry.id]);
-				}
 			}
 		}),
 		speakers: Object.freeze({

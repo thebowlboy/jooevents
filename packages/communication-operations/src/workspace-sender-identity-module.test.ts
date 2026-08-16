@@ -169,7 +169,7 @@ describe('workspace sender identity contribution', () => {
       headVersion: 2,
       occurredAt: '2026-08-15T00:00:00.000Z'
     },
-    receiptChildren: [{
+    effectContributions: [{
       kind: 'domain_fact',
       factId: '018f7d5a-4b3c-7abc-8def-000000000102',
       factKind: 'workspace_sender_identity_changed',
@@ -185,13 +185,13 @@ describe('workspace sender identity contribution', () => {
   test('rejects evidence whose fact disagrees with the projected head', () => {
     expect(workspaceSenderIdentityContributionSchema.safeParse({
       ...success,
-      receiptChildren: [{ ...success.receiptChildren[0], payload: {
+      effectContributions: [{ ...success.effectContributions[0], payload: {
         headVersion: 3, displayNameSet: true, replyToAddressSet: false
       } }]
     }).success).toBe(false);
     expect(workspaceSenderIdentityContributionSchema.safeParse({
       ...success,
-      receiptChildren: [{ ...success.receiptChildren[0], payload: {
+      effectContributions: [{ ...success.effectContributions[0], payload: {
         headVersion: 2, displayNameSet: false, replyToAddressSet: false
       } }]
     }).success).toBe(false);
@@ -199,7 +199,7 @@ describe('workspace sender identity contribution', () => {
 
   test('accepts only the two declared refusals, with their exact details', () => {
     const refusal = (outcome: unknown) => workspaceSenderIdentityContributionSchema.safeParse({
-      result: { kind: 'outcome', outcome }, domain: null, receiptChildren: []
+      result: { kind: 'outcome', outcome }, domain: null, effectContributions: []
     }).success;
     expect(refusal({
       class: 'policy_violation',

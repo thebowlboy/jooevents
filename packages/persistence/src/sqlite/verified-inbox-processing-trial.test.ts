@@ -203,8 +203,8 @@ const contributionSchema = parser((value) => {
     !candidate
     || !result.success
     || !domain.success
-    || !Array.isArray(candidate.receiptChildren)
-    || candidate.receiptChildren.length !== 0
+    || !Array.isArray(candidate.effectContributions)
+    || candidate.effectContributions.length !== 0
   ) return undefined;
   return structuredClone(candidate);
 });
@@ -518,7 +518,7 @@ async function createHarness(options: {
         return {
           result: { kind: 'success' as const, data: request },
           domain: request,
-          receiptChildren: []
+          effectContributions: []
         };
       }
     }],
@@ -594,7 +594,7 @@ async function createHarness(options: {
       sqlite.query('INSERT INTO fake_processed_inbox_events_trial (processing_ref) VALUES (?)')
         .run(parsed.processingRef);
     },
-    afterReceiptParentInserted: () => {
+    afterOperationLogInserted: () => {
       expect(sqlite.inTransaction).toBe(true);
       const head = sqlite.query<{ state: string }, []>(
         'SELECT state FROM verified_inbox_processing_heads_trial'
@@ -617,7 +617,7 @@ async function createHarness(options: {
     workerKey: 'worker.fake-inbox-processor',
     newAttemptId: () => parseInvocationId(nextUuid()),
     newCorrelationId: () => nextUuid(),
-    newReceiptId: nextUuid
+    newOperationLogId: nextUuid
   });
   const dependencyState: {
     responses: Array<
@@ -886,7 +886,7 @@ describe('disposable verified inbox discovery, enqueue, and processing join', ()
         }
       })).rejects.toThrow('processor-crash-before-commit');
       expect(trial.processing.requireHeadByJob(jobId).state).toBe('queued');
-      expect(count(trial.sqlite, 'foundation_trial_operation_receipts')).toBe(0);
+      expect(count(trial.sqlite, 'operation_log')).toBe(0);
       expect(count(trial.sqlite, 'fake_processed_inbox_events_trial')).toBe(0);
       sqlite.close();
       sqlite = undefined;
@@ -900,7 +900,7 @@ describe('disposable verified inbox discovery, enqueue, and processing join', ()
       expect(trial.processing.requireHeadByJob(jobId).state).toBe('succeeded');
       expect(count(trial.sqlite, 'reliability_jobs_trial')).toBe(1);
       expect(count(trial.sqlite, 'reliability_job_attempts_trial')).toBe(1);
-      expect(count(trial.sqlite, 'foundation_trial_operation_receipts')).toBe(1);
+      expect(count(trial.sqlite, 'operation_log')).toBe(1);
       expect(count(trial.sqlite, 'fake_processed_inbox_events_trial')).toBe(1);
     } finally {
       sqlite?.close();
@@ -1002,13 +1002,13 @@ describe('disposable verified inbox discovery, enqueue, and processing join', ()
     expect(trial.jobs.require(jobId).job.state).toBe('succeeded');
     expect(trial.processing.requireHeadByJob(jobId).state).toBe('succeeded');
     expect(trial.trace).toEqual(['head:succeeded:job:succeeded']);
-    expect(count(trial.sqlite, 'foundation_trial_operation_receipts')).toBe(1);
+    expect(count(trial.sqlite, 'operation_log')).toBe(1);
     expect(count(trial.sqlite, 'fake_processed_inbox_events_trial')).toBe(1);
     const dependencyCalls = trial.dependencyState.calls;
     const replay = await trial.processorRunner.run({ jobId });
     expect(replay.kind).toBe('terminal');
     expect(trial.dependencyState.calls).toBe(dependencyCalls);
-    expect(count(trial.sqlite, 'foundation_trial_operation_receipts')).toBe(1);
+    expect(count(trial.sqlite, 'operation_log')).toBe(1);
     expect(count(trial.sqlite, 'reliability_job_attempts_trial')).toBe(1);
     const bytes = trial.sqlite.serialize();
     expect(bytes.includes(Buffer.from(CLASSIFIED_CANARY))).toBe(false);
@@ -1045,11 +1045,11 @@ describe('disposable verified inbox discovery, enqueue, and processing join', ()
     })).rejects.toThrow('crash-before-processor-head');
     expect(trial.jobs.require(jobId).job.state).toBe('leased');
     expect(trial.processing.requireHeadByJob(jobId).state).toBe('queued');
-    expect(count(trial.sqlite, 'foundation_trial_operation_receipts')).toBe(0);
+    expect(count(trial.sqlite, 'operation_log')).toBe(0);
     expect(count(trial.sqlite, 'fake_processed_inbox_events_trial')).toBe(0);
     const recovered = await trial.processorRunner.run({ jobId });
     expect(recovered.kind).toBe('terminal');
     expect(trial.processing.requireHeadByJob(jobId).state).toBe('succeeded');
-    expect(count(trial.sqlite, 'foundation_trial_operation_receipts')).toBe(1);
+    expect(count(trial.sqlite, 'operation_log')).toBe(1);
   });
 });

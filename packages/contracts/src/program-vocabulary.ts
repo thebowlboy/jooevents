@@ -488,41 +488,48 @@ export const programVocabularyMergeDraftRequestSchema = z.strictObject({
   expectedTargetVersion: programVocabularyVersionSchema
 });
 
-export const programVocabularyDraftDataSchema = z.strictObject({
+export const programVocabularyDirectDataSchema = programVocabularyChangeResultSchema;
+export const programVocabularyDirectCanonicalResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success'), data: programVocabularyDirectDataSchema }),
+  z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
+]);
+export const programVocabularyDirectOperationResultSchema =
+  createEffectfulOperationResultSchema(programVocabularyDirectDataSchema);
+
+/** Feature-owned reviewed merge revision with its own draft and publish selector. */
+export const programVocabularyMergeReviewDataSchema = z.strictObject({
   schemaVersion: z.literal(1),
-  action: z.enum(['create', 'edit', 'retire', 'restore', 'delete', 'merge']),
-  changesetId: programVocabularyOperationApplicationIdSchema,
-  headVersion: programVocabularyVersionSchema,
+  action: z.literal('merge'),
+  draftId: programVocabularyOperationApplicationIdSchema,
   status: z.literal('draft'),
   revision: z.strictObject({
     id: programVocabularyOperationApplicationIdSchema,
-    number: programVocabularyVersionSchema,
+    number: z.literal(1),
     digestSha256: z.string().regex(/^[a-f0-9]{64}$/)
-  }),
-  riskTier: z.enum(['low', 'normal', 'consequential']),
-  approvalPolicy: z.strictObject({
-    reference: versionedDefinitionRefSchema,
-    definitionDigestSha256: z.string().regex(/^[a-f0-9]{64}$/),
-    requirement: z.enum(['none', 'distinct_current_human'])
   }),
   safeDiff: programVocabularySafeDiffSchema
 }).superRefine((data, context) => {
-  if (data.safeDiff.action !== data.action) {
-    context.addIssue({
-      code: 'custom',
-      path: ['safeDiff', 'action'],
-      message: 'Draft action and safe diff action must match.'
-    });
+  if (data.safeDiff.action !== 'merge') {
+    context.addIssue({ code: 'custom', path: ['safeDiff', 'action'], message: 'Expected a merge diff.' });
   }
 });
-
-export const programVocabularyDraftCanonicalResultSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('success'), data: programVocabularyDraftDataSchema }),
+export const programVocabularyMergeReviewCanonicalResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success'), data: programVocabularyMergeReviewDataSchema }),
   z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
 ]);
-
-export const programVocabularyDraftOperationResultSchema =
-  createEffectfulOperationResultSchema(programVocabularyDraftDataSchema);
+export const programVocabularyMergeReviewOperationResultSchema =
+  createEffectfulOperationResultSchema(programVocabularyMergeReviewDataSchema);
+export const programVocabularyMergePublishInputSchema = z.strictObject({
+  draftId: programVocabularyOperationApplicationIdSchema,
+  revisionId: programVocabularyOperationApplicationIdSchema,
+  revisionDigestSha256: z.string().regex(/^[a-f0-9]{64}$/)
+});
+export const programVocabularyMergePublishCanonicalResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success'), data: programVocabularyChangeResultSchema }),
+  z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
+]);
+export const programVocabularyMergePublishOperationResultSchema =
+  createEffectfulOperationResultSchema(programVocabularyChangeResultSchema);
 
 const programVocabularyDraftRequestSchemas = Object.freeze({
   create: programVocabularyCreateDraftRequestSchema,
@@ -541,19 +548,33 @@ export const PROGRAM_VOCABULARY_OPERATION_SCHEMA_REFS = Object.freeze({
     resultKey: 'schema.program_vocabulary.snapshot-read.operator-result',
     resultSchema: programVocabularySnapshotReadResultSchema
   }),
-  drafts: Object.freeze(Object.fromEntries(
-    Object.entries(programVocabularyDraftRequestSchemas).map(([action, inputSchema]) => [
-      action,
-      createOperationSchemaManifestRefs({
-        inputKey: `schema.program_vocabulary.${action}-draft.input`,
-        inputSchema,
-        resultKey: 'schema.program_vocabulary.changeset-draft.operator-result',
-        resultSchema: programVocabularyDraftOperationResultSchema
-      })
-    ])
+  direct: Object.freeze(Object.fromEntries(
+    Object.entries(programVocabularyDraftRequestSchemas)
+      .filter(([action]) => action !== 'merge')
+      .map(([action, inputSchema]) => [
+        action,
+        createOperationSchemaManifestRefs({
+          inputKey: `schema.program_vocabulary.${action}.input`,
+          inputSchema,
+          resultKey: 'schema.program_vocabulary.direct.operator-result',
+          resultSchema: programVocabularyDirectOperationResultSchema
+        })
+      ])
   ) as {
-    readonly [Action in keyof typeof programVocabularyDraftRequestSchemas]:
+    readonly [Action in Exclude<keyof typeof programVocabularyDraftRequestSchemas, 'merge'>]:
       ReturnType<typeof createOperationSchemaManifestRefs>;
+  }),
+  mergeReviewDraft: createOperationSchemaManifestRefs({
+    inputKey: 'schema.program_vocabulary.merge-review-draft.input',
+    inputSchema: programVocabularyMergeDraftRequestSchema,
+    resultKey: 'schema.program_vocabulary.merge-review-draft.operator-result',
+    resultSchema: programVocabularyMergeReviewOperationResultSchema
+  }),
+  mergePublish: createOperationSchemaManifestRefs({
+    inputKey: 'schema.program_vocabulary.merge-publish.input',
+    inputSchema: programVocabularyMergePublishInputSchema,
+    resultKey: 'schema.program_vocabulary.merge-publish.operator-result',
+    resultSchema: programVocabularyMergePublishOperationResultSchema
   })
 });
 
@@ -592,8 +613,8 @@ export type ProgramVocabularyDeleteDraftRequest =
   z.infer<typeof programVocabularyDeleteDraftRequestSchema>;
 export type ProgramVocabularyMergeDraftRequest =
   z.infer<typeof programVocabularyMergeDraftRequestSchema>;
-export type ProgramVocabularyDraftData = z.infer<typeof programVocabularyDraftDataSchema>;
-export type ProgramVocabularyDraftCanonicalResult =
-  z.infer<typeof programVocabularyDraftCanonicalResultSchema>;
-export type ProgramVocabularyDraftOperationResult =
-  z.infer<typeof programVocabularyDraftOperationResultSchema>;
+export type ProgramVocabularyDirectData = z.infer<typeof programVocabularyDirectDataSchema>;
+export type ProgramVocabularyDirectOperationResult =
+  z.infer<typeof programVocabularyDirectOperationResultSchema>;
+export type ProgramVocabularyMergeReviewData = z.infer<typeof programVocabularyMergeReviewDataSchema>;
+export type ProgramVocabularyMergePublishInput = z.infer<typeof programVocabularyMergePublishInputSchema>;

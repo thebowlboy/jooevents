@@ -22,7 +22,6 @@
       "dependencies": {
         "@hono/zod-openapi": "1.5.2",
         "@jooevents/application": "workspace:*",
-        "@jooevents/changeset-operations": "workspace:*",
         "@jooevents/cloudflare-email": "workspace:*",
         "@jooevents/communication-operations": "workspace:*",
         "@jooevents/communications": "workspace:*",
@@ -134,35 +133,6 @@
         "typescript": "6.0.3",
       },
     },
-    "packages/changeset-operations": {
-      "name": "@jooevents/changeset-operations",
-      "version": "0.0.0",
-      "dependencies": {
-        "@jooevents/application": "workspace:*",
-        "@jooevents/changesets": "workspace:*",
-        "@jooevents/contracts": "workspace:*",
-        "@jooevents/identity-access": "workspace:*",
-        "@jooevents/kernel": "workspace:*",
-        "zod": "4.4.3",
-      },
-      "devDependencies": {
-        "bun-types": "1.3.6",
-        "typescript": "6.0.3",
-      },
-    },
-    "packages/changesets": {
-      "name": "@jooevents/changesets",
-      "version": "0.0.0",
-      "dependencies": {
-        "@jooevents/contracts": "workspace:*",
-        "@jooevents/kernel": "workspace:*",
-        "zod": "4.4.3",
-      },
-      "devDependencies": {
-        "bun-types": "1.3.6",
-        "typescript": "6.0.3",
-      },
-    },
     "packages/cloudflare-email": {
       "name": "@jooevents/cloudflare-email",
       "version": "0.0.0",
@@ -221,7 +191,6 @@
       "name": "@jooevents/deadline",
       "version": "0.0.0",
       "dependencies": {
-        "@jooevents/changesets": "workspace:*",
         "@jooevents/contracts": "workspace:*",
         "@jooevents/kernel": "workspace:*",
         "zod": "4.4.3",
@@ -251,7 +220,6 @@
       "name": "@jooevents/decision",
       "version": "0.0.0",
       "dependencies": {
-        "@jooevents/changesets": "workspace:*",
         "@jooevents/contracts": "workspace:*",
         "@jooevents/kernel": "workspace:*",
         "@jooevents/session": "workspace:*",
@@ -282,7 +250,6 @@
       "name": "@jooevents/engagement",
       "version": "0.0.0",
       "dependencies": {
-        "@jooevents/changesets": "workspace:*",
         "@jooevents/contracts": "workspace:*",
         "@jooevents/kernel": "workspace:*",
         "zod": "4.4.3",
@@ -312,7 +279,6 @@
       "name": "@jooevents/event",
       "version": "0.0.0",
       "dependencies": {
-        "@jooevents/changesets": "workspace:*",
         "@jooevents/contracts": "workspace:*",
         "@jooevents/kernel": "workspace:*",
         "zod": "4.4.3",
@@ -343,7 +309,6 @@
       "version": "0.0.0",
       "dependencies": {
         "@jooevents/application": "workspace:*",
-        "@jooevents/changesets": "workspace:*",
         "@jooevents/contracts": "workspace:*",
         "@jooevents/identity-access": "workspace:*",
         "@jooevents/kernel": "workspace:*",
@@ -401,7 +366,6 @@
       "version": "0.0.0",
       "dependencies": {
         "@jooevents/application": "workspace:*",
-        "@jooevents/changesets": "workspace:*",
         "@jooevents/contracts": "workspace:*",
         "@jooevents/deadline": "workspace:*",
         "@jooevents/kernel": "workspace:*",
@@ -417,8 +381,6 @@
       "version": "0.0.0",
       "dependencies": {
         "@jooevents/application": "workspace:*",
-        "@jooevents/changeset-operations": "workspace:*",
-        "@jooevents/changesets": "workspace:*",
         "@jooevents/contracts": "workspace:*",
         "@jooevents/identity-access": "workspace:*",
         "@jooevents/intake": "workspace:*",
@@ -433,6 +395,9 @@
     "packages/kernel": {
       "name": "@jooevents/kernel",
       "version": "0.0.0",
+      "dependencies": {
+        "@noble/hashes": "2.3.0",
+      },
       "devDependencies": {
         "bun-types": "1.3.6",
         "typescript": "6.0.3",
@@ -466,8 +431,6 @@
       "version": "0.0.0",
       "dependencies": {
         "@jooevents/application": "workspace:*",
-        "@jooevents/changeset-operations": "workspace:*",
-        "@jooevents/changesets": "workspace:*",
         "@jooevents/communication-operations": "workspace:*",
         "@jooevents/communications": "workspace:*",
         "@jooevents/contracts": "workspace:*",
@@ -514,7 +477,6 @@
       "name": "@jooevents/program",
       "version": "0.0.0",
       "dependencies": {
-        "@jooevents/changesets": "workspace:*",
         "@jooevents/contracts": "workspace:*",
         "@jooevents/kernel": "workspace:*",
         "zod": "4.4.3",
@@ -544,7 +506,6 @@
       "name": "@jooevents/release",
       "version": "0.0.0",
       "dependencies": {
-        "@jooevents/changesets": "workspace:*",
         "@jooevents/contracts": "workspace:*",
         "@jooevents/kernel": "workspace:*",
         "@jooevents/session": "workspace:*",
@@ -586,7 +547,6 @@
       "name": "@jooevents/review",
       "version": "0.0.0",
       "dependencies": {
-        "@jooevents/changesets": "workspace:*",
         "@jooevents/contracts": "workspace:*",
         "@jooevents/deadline": "workspace:*",
         "@jooevents/kernel": "workspace:*",
@@ -617,7 +577,6 @@
       "name": "@jooevents/schedule",
       "version": "0.0.0",
       "dependencies": {
-        "@jooevents/changesets": "workspace:*",
         "@jooevents/contracts": "workspace:*",
         "@jooevents/kernel": "workspace:*",
         "@jooevents/program": "workspace:*",
@@ -648,7 +607,6 @@
       "name": "@jooevents/session",
       "version": "0.0.0",
       "dependencies": {
-        "@jooevents/changesets": "workspace:*",
         "@jooevents/contracts": "workspace:*",
         "@jooevents/intake": "workspace:*",
         "@jooevents/kernel": "workspace:*",
@@ -683,8 +641,6 @@
       "version": "0.0.0",
       "dependencies": {
         "@jooevents/application": "workspace:*",
-        "@jooevents/changeset-operations": "workspace:*",
-        "@jooevents/changesets": "workspace:*",
         "@jooevents/contracts": "workspace:*",
         "@jooevents/identity-access": "workspace:*",
         "@jooevents/kernel": "workspace:*",
@@ -715,7 +671,6 @@
       "name": "@jooevents/tasks",
       "version": "0.0.0",
       "dependencies": {
-        "@jooevents/changesets": "workspace:*",
         "@jooevents/contracts": "workspace:*",
         "@jooevents/deadline": "workspace:*",
         "@jooevents/engagement": "workspace:*",
@@ -731,7 +686,6 @@
       "name": "@jooevents/template-authoring",
       "version": "0.0.0",
       "dependencies": {
-        "@jooevents/changesets": "workspace:*",
         "@jooevents/contracts": "workspace:*",
         "@jooevents/kernel": "workspace:*",
         "@jooevents/model-adapter": "workspace:*",
@@ -952,10 +906,6 @@
     "@img/sharp-win32-x64": ["@img/sharp-win32-x64@0.35.3", "", { "os": "win32", "cpu": "x64" }, "sha512-D4y1vNeZrIIJCN+uHaWVtH86B+aCrdMYYjicy9pXHvbGZeGYLLSd3wdVuC37FxVXlU1ARsk84eKWfWMXGYEqvA=="],
 
     "@jooevents/application": ["@jooevents/application@workspace:packages/application"],
-
-    "@jooevents/changeset-operations": ["@jooevents/changeset-operations@workspace:packages/changeset-operations"],
-
-    "@jooevents/changesets": ["@jooevents/changesets@workspace:packages/changesets"],
 
     "@jooevents/cloudflare-email": ["@jooevents/cloudflare-email@workspace:packages/cloudflare-email"],
 

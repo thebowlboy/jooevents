@@ -23,7 +23,7 @@ import {
   validateFormCloseDeadlineFrom,
   validateReviewDueDeadlineFrom,
   validateTaskDueDeadlineFrom,
-  type DeadlineChangesetTransactionPort,
+  type DeadlineTransactionRepository,
   type DeadlineReferenceResolver,
   type FormCloseDeadlineAppliedContribution,
   type FormCloseDeadlineChangeInput,
@@ -50,7 +50,7 @@ import {
 import { canonicalJsonText } from '@jooevents/kernel';
 import type { SQLiteEventSpineRepository } from './event-spine';
 
-/** Additive schema installed only in an explicitly ephemeral SQLite runtime. */
+/** This schema contributes to the accepted epoch-2 baseline and may also serve isolated fixtures. */
 export const DEADLINE_SQL = `
 CREATE TABLE deadline_catalogs (
   workspace_id TEXT NOT NULL CHECK(length(workspace_id) = 36),
@@ -196,7 +196,7 @@ export function installDeadlineSchema(sqlite: Database): void {
 }
 
 export class SQLiteDeadlineRepository implements
-  DeadlineChangesetTransactionPort,
+  DeadlineTransactionRepository,
   DeadlineReferenceResolver,
   FormCloseDeadlinePlanningPort,
   FormCloseDeadlineValidationPort,

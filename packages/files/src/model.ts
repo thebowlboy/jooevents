@@ -135,7 +135,7 @@ export interface FilesFact<Payload> {
   readonly payload: Payload;
 }
 
-/** Mirror of `ChangesetApplyContribution`: result plus receipt-bound facts. */
+/** File command result plus receipt-bound facts for the selected effect lane. */
 export interface FilesAppliedContribution<Result, FactPayload> {
   readonly result: Result;
   readonly facts: readonly FilesFact<FactPayload>[];

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, test } from 'bun:test';
 import { createHmacRequestHashSealer, createOperationRegistry } from '@jooevents/application';
-import { deadlineChangeDraftInputSchema } from '@jooevents/contracts/deadlines';
+import { deadlineChangeInputSchema } from '@jooevents/contracts/deadlines';
 import {
   parseContractVersion,
   parseInstant,
@@ -10,9 +10,9 @@ import {
 } from '@jooevents/kernel';
 import {
   DEADLINE_CATALOG_READ_OPERATION,
-  DEADLINE_CHANGE_DRAFT_OPERATION,
+  DEADLINE_CHANGE_OPERATION,
   DEADLINE_CURRENT_READ_OPERATION,
-  DEADLINE_DRAFT_REQUEST_HASH_PROFILE,
+  DEADLINE_CHANGE_REQUEST_HASH_PROFILE,
   DEADLINE_MANAGE_ACCESS_POLICY,
   DEADLINE_OPERATION_RUNTIME_SCHEMA_REFS,
   DEADLINE_READ_ACCESS_POLICY,
@@ -40,7 +40,7 @@ function module() {
     scopePartitionProfile: profile,
     requestCanonicalizationProfile: profile,
     requestHashSealer: createHmacRequestHashSealer({
-      profile: DEADLINE_DRAFT_REQUEST_HASH_PROFILE,
+      profile: DEADLINE_CHANGE_REQUEST_HASH_PROFILE,
       keyBytes: new Uint8Array(32).fill(0x61)
     }),
     idempotencyCredentialProfile: profile,
@@ -56,7 +56,7 @@ function module() {
 }
 
 describe('Deadline operation module', () => {
-  test('registers two current-authority reads and one idempotent draft path', async () => {
+  test('registers two current-authority reads and one idempotent direct path', async () => {
     const registry = await createOperationRegistry(module().source);
     expect(registry.operatorHttpBindings.map((binding) => ({
       operation: `${binding.operationName}@${binding.operationVersion}`,
@@ -76,17 +76,17 @@ describe('Deadline operation module', () => {
       method: binding.method,
       path: binding.path
     }))).toEqual([{
-      operation: `${DEADLINE_CHANGE_DRAFT_OPERATION.name}@1`,
+      operation: `${DEADLINE_CHANGE_OPERATION.name}@1`,
       method: 'POST',
-      path: '/api/events/current/deadlines/drafts'
+      path: '/api/events/current/deadlines'
     }]);
     const manifest = registry.safeManifest.operations.find((operation) =>
-      operation.name === DEADLINE_CHANGE_DRAFT_OPERATION.name
+      operation.name === DEADLINE_CHANGE_OPERATION.name
     );
     expect(manifest).toMatchObject({
-      effect: 'draft', maxRisk: 'low',
+      effect: 'commit', maxRisk: 'low',
       idempotency: { required: true },
-      consequenceTags: ['changeset-drafted']
+      consequenceTags: ['deadline-changed']
     });
   });
 
@@ -99,23 +99,23 @@ describe('Deadline operation module', () => {
 
   test('keeps scope, identities, attribution, receipts, and approval out of browser input', () => {
     const ordinary = { action: 'create', displayDate: '2026-11-01' } as const;
-    expect(deadlineChangeDraftInputSchema.safeParse(ordinary).success).toBe(true);
+    expect(deadlineChangeInputSchema.safeParse(ordinary).success).toBe(true);
     for (const field of [
-      'scope', 'deadlineId', 'changesetId', 'revisionId', 'receiptId',
+      'scope', 'deadlineId', 'clientOwnedId', 'revisionId', 'receiptId',
       'actor', 'approval', 'attributedAt'
     ]) {
-      expect(deadlineChangeDraftInputSchema.safeParse({
+      expect(deadlineChangeInputSchema.safeParse({
         ...ordinary,
         [field]: field === 'scope' ? { workspaceId } : crypto.randomUUID()
       }).success).toBe(false);
     }
-    expect(deadlineChangeDraftInputSchema.safeParse({
+    expect(deadlineChangeInputSchema.safeParse({
       action: 'update',
       deadlineId: '019c1df7-86b5-769b-bba4-5f7097bfa311',
       expectedVersion: 2,
       displayDate: '2026-11-02'
     }).success).toBe(true);
-    expect(deadlineChangeDraftInputSchema.safeParse({
+    expect(deadlineChangeInputSchema.safeParse({
       action: 'clear',
       deadlineId: '019c1df7-86b5-769b-bba4-5f7097bfa311',
       expectedVersion: 2

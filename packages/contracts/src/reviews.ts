@@ -242,7 +242,7 @@ const attributionFields = {
 
 /**
  * Opening a round never references a pre-existing deadline: the server mints
- * the `review_due` Deadline identity and the same changeset creates it
+ * the `review_due` Deadline identity and the same direct operation creates it
  * atomically from `deadlineDate` through the Deadline collaboration.
  */
 export const reviewOpenRoundPlanningInputSchema = z.strictObject({
@@ -306,8 +306,8 @@ export const reviewQueryGuardSchema = z.strictObject({
  * committed unit of work as the round.
  *
  * There is deliberately no per-deadline guard here: the created Deadline does
- * not exist while the changeset is proposed, so a `review_deadline:<id>` guard
- * could never be satisfied at commit re-check and would always false-conflict.
+ * not exist before execution, so a `review_deadline:<id>` guard could never be
+ * satisfied at the in-transaction recheck and would always false-conflict.
  * Concurrent Deadline activity is instead fenced by the Deadline domain's own
  * `deadline_catalog` guard (version + digest) carried by the contribution.
  */
@@ -522,35 +522,6 @@ export const reviewDraftSaveInputSchema = z.strictObject({
 });
 export const reviewDraftSaveResultSchema = z.strictObject({ draft: reviewDraftSchema });
 
-export const reviewChangeDraftDataSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  action: z.enum([
-    'open_round', 'discard_empty_round', 'step_back', 'commit_review', 'amend_review'
-  ]),
-  changesetId: reviewIdSchema,
-  headVersion: reviewVersionSchema,
-  status: z.literal('draft'),
-  revision: z.strictObject({
-    id: reviewIdSchema,
-    number: reviewVersionSchema,
-    digestSha256: reviewSha256Schema
-  }),
-  riskTier: z.literal('normal'),
-  approvalPolicy: z.strictObject({
-    reference: versionedDefinitionRefSchema,
-    definitionDigestSha256: reviewSha256Schema,
-    requirement: z.enum(['none', 'distinct_current_human'])
-  }),
-  safeDiff: reviewSafeDiffSchema
-}).superRefine((data, context) => {
-  if (data.action !== data.safeDiff.action) {
-    context.addIssue({ code: 'custom', path: ['safeDiff', 'action'], message: 'action mismatch' });
-  }
-});
-export const reviewChangeDraftCanonicalResultSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('success'), data: reviewChangeDraftDataSchema }),
-  z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
-]);
 export const reviewDraftSaveCanonicalResultSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('success'), data: reviewDraftSaveResultSchema }),
   z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
@@ -558,8 +529,12 @@ export const reviewDraftSaveCanonicalResultSchema = z.discriminatedUnion('kind',
 
 export const reviewSnapshotReadResultSchema = createReadOperationResultSchema(reviewSnapshotSchema);
 export const reviewRoundSetupReadResultSchema = createReadOperationResultSchema(reviewRoundSetupProjectionSchema);
-export const reviewChangeDraftOperationResultSchema =
-  createEffectfulOperationResultSchema(reviewChangeDraftDataSchema);
+export const reviewDirectCanonicalResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success'), data: reviewMutationResultSchema }),
+  z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
+]);
+export const reviewDirectOperationResultSchema =
+  createEffectfulOperationResultSchema(reviewMutationResultSchema);
 export const reviewDraftSaveOperationResultSchema = createEffectfulOperationResultSchema(reviewDraftSaveResultSchema);
 
 export const REVIEW_OPERATION_SCHEMA_REFS = Object.freeze({
@@ -575,29 +550,29 @@ export const REVIEW_OPERATION_SCHEMA_REFS = Object.freeze({
     resultKey: 'schema.review.round-setup-read.operator-result',
     resultSchema: reviewRoundSetupReadResultSchema
   }),
-  roundChangeDraft: createOperationSchemaManifestRefs({
-    inputKey: 'schema.review.round-change-draft.input',
-    inputSchema: reviewRoundChangeDraftInputSchema,
-    resultKey: 'schema.review.round-change-draft.operator-result',
-    resultSchema: reviewChangeDraftOperationResultSchema
-  }),
-  stepBackDraft: createOperationSchemaManifestRefs({
-    inputKey: 'schema.review.step-back-draft.input',
-    inputSchema: reviewStepBackChangeDraftInputSchema,
-    resultKey: 'schema.review.step-back-draft.operator-result',
-    resultSchema: reviewChangeDraftOperationResultSchema
-  }),
-  evaluationChangeDraft: createOperationSchemaManifestRefs({
-    inputKey: 'schema.review.evaluation-change-draft.input',
-    inputSchema: reviewEvaluationChangeDraftInputSchema,
-    resultKey: 'schema.review.evaluation-change-draft.operator-result',
-    resultSchema: reviewChangeDraftOperationResultSchema
-  }),
   draftSave: createOperationSchemaManifestRefs({
     inputKey: 'schema.review.evaluation-draft-save.input',
     inputSchema: reviewDraftSaveInputSchema,
     resultKey: 'schema.review.evaluation-draft-save.operator-result',
     resultSchema: reviewDraftSaveOperationResultSchema
+  }),
+  roundChange: createOperationSchemaManifestRefs({
+    inputKey: 'schema.review.round-change.input',
+    inputSchema: reviewRoundChangeDraftInputSchema,
+    resultKey: 'schema.review.direct.operator-result',
+    resultSchema: reviewDirectOperationResultSchema
+  }),
+  stepBack: createOperationSchemaManifestRefs({
+    inputKey: 'schema.review.step-back.input',
+    inputSchema: reviewStepBackChangeDraftInputSchema,
+    resultKey: 'schema.review.direct.operator-result',
+    resultSchema: reviewDirectOperationResultSchema
+  }),
+  evaluationChange: createOperationSchemaManifestRefs({
+    inputKey: 'schema.review.evaluation-change.input',
+    inputSchema: reviewEvaluationChangeDraftInputSchema,
+    resultKey: 'schema.review.direct.operator-result',
+    resultSchema: reviewDirectOperationResultSchema
   })
 });
 
@@ -620,6 +595,7 @@ export type ReviewMutationPlanningInput = z.infer<typeof reviewMutationPlanningI
 export type ReviewMutationPlanDto = z.infer<typeof reviewMutationPlanSchema>;
 export type ReviewSafeDiff = z.infer<typeof reviewSafeDiffSchema>;
 export type ReviewMutationResult = z.infer<typeof reviewMutationResultSchema>;
+export type ReviewDirectOperationResult = z.infer<typeof reviewDirectOperationResultSchema>;
 export type ReviewRoundSetupProjection = z.infer<typeof reviewRoundSetupProjectionSchema>;
 export type ReviewPlanProjection = z.infer<typeof reviewPlanProjectionSchema>;
 export type ReviewQueueItemProjection = z.infer<typeof reviewQueueItemProjectionSchema>;

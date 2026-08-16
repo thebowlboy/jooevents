@@ -188,14 +188,14 @@ const canonicalSchema = trialSchema((value: unknown) => {
 });
 const contributionSchema = trialSchema((value: unknown) => {
   if (!record(value) || !record(value.domain) || value.domain.accepted !== true
-    || !Array.isArray(value.receiptChildren)
-    || value.receiptChildren.length !== 0) {
+    || !Array.isArray(value.effectContributions)
+    || value.effectContributions.length !== 0) {
     throw new TypeError('invalid contribution');
   }
   return {
     result: canonicalSchema.parse(value.result),
     domain: { accepted: true as const },
-    receiptChildren: []
+    effectContributions: []
   };
 });
 const projectedSchema = trialSchema((value: unknown) => {
@@ -547,7 +547,7 @@ async function operationRuntime(sqlite: Database, clock: Clock) {
         return {
           result: { kind: 'success', data: { accepted: true } },
           domain: { accepted: true },
-          receiptChildren: []
+          effectContributions: []
         };
       }
     }],
@@ -733,7 +733,7 @@ async function harness(input: {
     newToolCallId: () => uuid(state.nextTool++),
     newPayloadRefId: () => uuid(state.nextPayload++),
     newCorrelationId: () => uuid(state.nextCorrelation++),
-    newReceiptId: () => uuid(state.nextReceipt++),
+    newOperationLogId: () => uuid(state.nextReceipt++),
     faults
   });
   const result = state as Harness;
@@ -789,7 +789,7 @@ describe('sealed model-attempt trial composition', () => {
     expect(sqlite.query<{ table: string }, []>(`
       SELECT "table" AS "table" FROM pragma_foreign_key_list('model_tool_calls_trial')
        WHERE "from" = 'operation_receipt_id'
-    `).get()?.table).toBe('foundation_trial_operation_receipts');
+    `).get()?.table).toBe('operation_log');
     expect(sqlite.query<{ count: number }, []>(`
       SELECT count(*) AS count FROM sqlite_master WHERE name = 'model_tool_operation_receipts_trial'
     `).get()?.count).toBe(0);
@@ -837,7 +837,7 @@ describe('sealed model-attempt trial composition', () => {
       SELECT count(*) AS count FROM model_tool_calls_trial
     `).get()?.count).toBe(0);
     expect(test.sqlite.query<{ count: number }, []>(`
-      SELECT count(*) AS count FROM foundation_trial_operation_receipts
+      SELECT count(*) AS count FROM operation_log
     `).get()?.count).toBe(0);
     expectAbsent(test.sqlite, outputCanary);
 
@@ -884,7 +884,7 @@ describe('sealed model-attempt trial composition', () => {
       expect(attached.kind).toBe('attached');
     }
     expect(test.sqlite.query<{ count: number }, []>(`
-      SELECT count(*) AS count FROM foundation_trial_operation_receipts WHERE surface = 'app_model'
+      SELECT count(*) AS count FROM operation_log WHERE surface = 'app_model'
     `).get()?.count).toBe(2);
     expect(test.sqlite.query<{ count: number }, []>(`
       SELECT count(*) AS count FROM sealed_note_domain_trial
@@ -906,7 +906,7 @@ describe('sealed model-attempt trial composition', () => {
     await expect(test.composition.runner.executeToolCall({ toolCallId: toolCallId as never }))
       .rejects.toThrow('crash:afterOperationReceipt');
     expect(test.sqlite.query<{ count: number }, []>(`
-      SELECT count(*) AS count FROM foundation_trial_operation_receipts
+      SELECT count(*) AS count FROM operation_log
     `).get()?.count).toBe(1);
     expect(test.sqlite.query<{ count: number }, []>(`
       SELECT count(*) AS count FROM sealed_note_domain_trial
@@ -914,7 +914,7 @@ describe('sealed model-attempt trial composition', () => {
     test.recreate();
     expect((await test.composition.runner.executeToolCall({ toolCallId: toolCallId as never })).kind).toBe('attached');
     expect(test.sqlite.query<{ count: number }, []>(`
-      SELECT count(*) AS count FROM foundation_trial_operation_receipts
+      SELECT count(*) AS count FROM operation_log
     `).get()?.count).toBe(1);
     expect(() => test.composition.repository.attachToolReceipt(Object.freeze({})))
       .toThrow('unsealed_model_tool_receipt');

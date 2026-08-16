@@ -7,8 +7,6 @@ import {
   parseAuthorityCitationId,
   parseCapabilityRevisionId,
   parseCeremonyEvidenceId,
-  parseChangesetId,
-  parseChangesetRevisionId,
   parseConsumerAttemptId,
   parseConsumerDeliveryId,
   parseContractVersion,
@@ -86,18 +84,10 @@ export interface ReliabilitySafeInput {
   readonly classifiedPayloadRefs: readonly PayloadRef[];
 }
 
-export type ReliabilityContributionCausation =
-  | {
-      readonly kind: 'operation_receipt';
-      readonly receiptId: OperationReceiptId;
-    }
-  | {
-      readonly kind: 'changeset_revision';
-      readonly receiptId: OperationReceiptId;
-      readonly changesetId: ReturnType<typeof parseChangesetId>;
-      readonly revisionId: ReturnType<typeof parseChangesetRevisionId>;
-      readonly revisionDigestSha256: CanonicalSha256;
-    };
+export type ReliabilityContributionCausation = {
+  readonly kind: 'operation_receipt';
+  readonly receiptId: OperationReceiptId;
+};
 
 declare const contributionContextBrand: unique symbol;
 
@@ -301,7 +291,7 @@ function sameProducer(left: ProducerRef, right: ProducerRef): boolean {
 
 function parseProducer(value: unknown): ProducerRef {
   if (!isRecord(value) || !exactKeys(value, ['kind', 'operation'])
-    || (value.kind !== 'operation' && value.kind !== 'changeset_operation')
+    || value.kind !== 'operation'
     || !isRecord(value.operation)
     || !exactKeys(value.operation, ['kind', 'key', 'version'])
     || value.operation.kind !== value.kind) {
@@ -491,18 +481,6 @@ function parseCausation(value: unknown, producer: ProducerRef): ReliabilityContr
     if (producer.kind === 'operation' && value.kind === 'operation_receipt'
       && exactKeys(value, ['kind', 'receiptId'])) {
       return { kind: value.kind, receiptId: parseOperationReceiptId(value.receiptId) };
-    }
-    if (producer.kind === 'changeset_operation' && value.kind === 'changeset_revision'
-      && exactKeys(value, [
-        'kind', 'receiptId', 'changesetId', 'revisionId', 'revisionDigestSha256'
-      ])) {
-      return {
-        kind: value.kind,
-        receiptId: parseOperationReceiptId(value.receiptId),
-        changesetId: parseChangesetId(value.changesetId),
-        revisionId: parseChangesetRevisionId(value.revisionId),
-        revisionDigestSha256: parseCanonicalSha256(value.revisionDigestSha256)
-      };
     }
   } catch {
     // normalized below

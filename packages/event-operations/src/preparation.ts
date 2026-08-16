@@ -9,7 +9,7 @@ import { EventPlanningError } from '@jooevents/event';
 export interface EventCreatePreparedContribution {
   readonly result: unknown;
   readonly domain: unknown;
-  readonly receiptChildren: readonly unknown[];
+  readonly effectContributions: readonly unknown[];
 }
 
 export interface EventCreatePreparation {
@@ -45,7 +45,7 @@ function planningRefusal(error: EventPlanningError): EventCreatePreparedContribu
       })
     }),
     domain: null,
-    receiptChildren: Object.freeze([])
+    effectContributions: Object.freeze([])
   });
 }
 
@@ -98,7 +98,7 @@ export function createEventCreateHandler(input: {
         return {
           result: contribution.result,
           domain: contribution.domain,
-          receiptChildren: [...contribution.receiptChildren]
+          effectContributions: [...contribution.effectContributions]
         };
       } catch (error) {
         sealed.phase = 'spent';

@@ -3,13 +3,12 @@ import {
   createEffectfulOperationResultSchema,
   createOperationSchemaManifestRefs,
   createReadOperationResultSchema,
+  structuredOutcomeSchema,
   versionedDefinitionRefSchema
 } from './operations';
 import {
   sessionMutationPlanSchema,
   sessionMutationResultSchema,
-  sessionRestorePlanSchema,
-  sessionSafeDiffSchema
 } from './sessions';
 
 const APPLICATION_UUID_INPUT =
@@ -159,7 +158,7 @@ export const decisionAuthorInputSchema = z.strictObject({
     if (submissionIds.has(row.submissionId)) {
       context.addIssue({
         code: 'custom', path: ['decisions', index, 'submissionId'],
-        message: 'each submission is decided at most once per changeset'
+        message: 'each submission is decided at most once per operation'
       });
     }
     submissionIds.add(row.submissionId);
@@ -217,7 +216,7 @@ export const decisionMutationPlanningInputSchema = z.strictObject({
     if (submissionIds.has(row.submissionId)) {
       context.addIssue({
         code: 'custom', path: ['decisions', index, 'submissionId'],
-        message: 'each submission is decided at most once per changeset'
+        message: 'each submission is decided at most once per operation'
       });
     }
     submissionIds.add(row.submissionId);
@@ -264,36 +263,8 @@ export const decisionMutationPlanSchema = z.strictObject({
   }
 });
 
-/** Internal compensating restore; it is never an ordinary authoring input. */
-export const decisionRestoreRowSchema = z.strictObject({
-  submissionId: decisionIdSchema,
-  expectedCurrent: decisionHeadSchema,
-  restore: decisionHeadSchema.nullable(),
-  sessionRestore: sessionRestorePlanSchema.nullable(),
-  unlinkOrigin: submissionSessionOriginSchema.nullable()
-});
-
-export const decisionRestorePlanSchema = z.strictObject({
-  action: z.literal('restore'),
-  scope: decisionScopeSchema,
-  actorUserId: decisionIdSchema,
-  occurredAt: canonicalInstantSchema,
-  rows: z.array(decisionRestoreRowSchema).min(1).max(DECISION_DECIDE_ROWS_MAX)
-});
-
-export const decisionSafeDiffSchema = z.strictObject({
-  action: z.enum(['decide', 'restore']),
-  rows: z.array(z.strictObject({
-    submissionId: decisionIdSchema,
-    before: decisionHeadSchema.nullable(),
-    after: decisionHeadSchema.nullable(),
-    evidence: decisionEvidenceSchema.nullable(),
-    session: sessionSafeDiffSchema.nullable()
-  })).min(1).max(DECISION_DECIDE_ROWS_MAX)
-});
-
 export const decisionMutationResultSchema = z.strictObject({
-  action: z.enum(['decide', 'restore']),
+  action: z.literal('decide'),
   rows: z.array(z.strictObject({
     submissionId: decisionIdSchema,
     head: decisionHeadSchema.nullable(),
@@ -339,36 +310,17 @@ export const decisionStateSnapshotSchema = z.strictObject({
 });
 
 /** Exact selector and inert plan an operator needs to review, propose, and commit one decide draft. */
-export const decisionDecideDraftDataSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  action: z.literal('decide'),
-  changesetId: decisionIdSchema,
-  headVersion: decisionVersionSchema,
-  status: z.literal('draft'),
-  revision: z.strictObject({
-    id: decisionIdSchema,
-    number: decisionVersionSchema,
-    digestSha256: digestSchema
-  }),
-  riskTier: z.literal('consequential'),
-  approvalPolicy: z.strictObject({
-    reference: versionedDefinitionRefSchema,
-    definitionDigestSha256: digestSchema,
-    requirement: z.literal('none')
-  }),
-  safeDiff: decisionSafeDiffSchema
-}).superRefine((data, context) => {
-  if (data.safeDiff.action !== data.action) {
-    context.addIssue({
-      code: 'custom', path: ['safeDiff', 'action'],
-      message: 'Draft action and safe diff action must match.'
-    });
-  }
+export const decisionDecideDataSchema = decisionMutationResultSchema.extend({
+  action: z.literal('decide')
 });
 
 export const decisionStateReadResultSchema = createReadOperationResultSchema(decisionStateSnapshotSchema);
-export const decisionDecideDraftOperationResultSchema =
-  createEffectfulOperationResultSchema(decisionDecideDraftDataSchema);
+export const decisionDecideCanonicalResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success'), data: decisionDecideDataSchema }),
+  z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
+]);
+export const decisionDecideOperationResultSchema =
+  createEffectfulOperationResultSchema(decisionDecideDataSchema);
 
 export const DECISION_OPERATION_SCHEMA_REFS = Object.freeze({
   stateRead: createOperationSchemaManifestRefs({
@@ -377,11 +329,11 @@ export const DECISION_OPERATION_SCHEMA_REFS = Object.freeze({
     resultKey: 'schema.decision.state-read.operator-result',
     resultSchema: decisionStateReadResultSchema
   }),
-  decideDraft: createOperationSchemaManifestRefs({
-    inputKey: 'schema.decision.decide-draft.input',
+  decide: createOperationSchemaManifestRefs({
+    inputKey: 'schema.decision.decide.input',
     inputSchema: decisionAuthorInputSchema,
-    resultKey: 'schema.decision.decide-draft.operator-result',
-    resultSchema: decisionDecideDraftOperationResultSchema,
+    resultKey: 'schema.decision.decide.operator-result',
+    resultSchema: decisionDecideOperationResultSchema,
     version: 2
   })
 });
@@ -403,12 +355,9 @@ export type DecisionPlanningRow = z.infer<typeof decisionPlanningRowSchema>;
 export type DecisionMutationPlanningInput = z.infer<typeof decisionMutationPlanningInputSchema>;
 export type DecisionRowPlanDto = z.infer<typeof decisionRowPlanSchema>;
 export type DecisionMutationPlanDto = z.infer<typeof decisionMutationPlanSchema>;
-export type DecisionRestoreRowDto = z.infer<typeof decisionRestoreRowSchema>;
-export type DecisionRestorePlanDto = z.infer<typeof decisionRestorePlanSchema>;
-export type DecisionSafeDiffDto = z.infer<typeof decisionSafeDiffSchema>;
 export type DecisionMutationResult = z.infer<typeof decisionMutationResultSchema>;
 export type DecisionTargetUnavailableDetail = z.infer<typeof decisionTargetUnavailableDetailSchema>;
 export type DecisionStateReadInput = z.infer<typeof decisionStateReadInputSchema>;
 export type DecisionStateRowDto = z.infer<typeof decisionStateRowSchema>;
 export type DecisionStateSnapshotDto = z.infer<typeof decisionStateSnapshotSchema>;
-export type DecisionDecideDraftData = z.infer<typeof decisionDecideDraftDataSchema>;
+export type DecisionDecideData = z.infer<typeof decisionDecideDataSchema>;

@@ -197,7 +197,7 @@ describe('organizer communication authoring operation modules', () => {
         entityVersion: 1,
         occurredAt: now
       },
-      receiptChildren: [] as []
+      effectContributions: [] as []
     };
     expect(organizerCommunicationMutationContributionSchema.parse(contribution)).toEqual(contribution);
     expect(() => organizerCommunicationMutationContributionSchema.parse({
@@ -228,12 +228,12 @@ describe('organizer communication authoring operation modules', () => {
         prepare: () => ({ result: { kind: 'outcome', outcome: {
           class: 'conflict', kind: 'communication.not_found', retryable: false,
           subjects: [], detail: null, detailSchemaVersion: 1
-        } }, domain: null, receiptChildren: [] })
+        } }, domain: null, effectContributions: [] })
       }
     });
     expect(handler.handle({ businessInput: {}, context, snapshot })).toEqual(expect.objectContaining({
       domain: null,
-      receiptChildren: []
+      effectContributions: []
     }));
     expect(() => handler.handle({ businessInput: {}, context, snapshot })).toThrow();
   });

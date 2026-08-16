@@ -103,7 +103,7 @@ import { z } from 'zod';
  * fetched exclusively for the sessions the viewer is engaged on.
  *
  * Participant acts are guarded operations with receipts and portal timeline
- * entries — never changesets (20-confirmation-history binding).
+ * entries rather than generic review artifacts (20-confirmation-history binding).
  */
 
 export const PORTAL_SNAPSHOT_READ_OPERATION = Object.freeze({
@@ -696,7 +696,7 @@ export const participantEngagementResponseDomainContributionSchema = z.strictObj
   occurredAt: canonicalInstant
 });
 
-export const participantEngagementResponseReceiptChildSchema = z.discriminatedUnion('kind', [
+export const participantEngagementResponseEffectContributionSchema = z.discriminatedUnion('kind', [
   z.strictObject({
     kind: z.literal('engagement_response'),
     engagementId: canonicalUuid,
@@ -717,14 +717,14 @@ export const participantEngagementResponseReceiptChildSchema = z.discriminatedUn
 const respondSuccessContributionSchema = z.strictObject({
   result: z.strictObject({ kind: z.literal('success'), data: portalEngagementSchema }),
   domain: participantEngagementResponseDomainContributionSchema,
-  receiptChildren: z.array(participantEngagementResponseReceiptChildSchema).min(1).max(501)
+  effectContributions: z.array(participantEngagementResponseEffectContributionSchema).min(1).max(501)
 }).superRefine((contribution, context) => {
   const data = contribution.result.data;
   const domain = contribution.domain;
-  const responses = contribution.receiptChildren.filter(
+  const responses = contribution.effectContributions.filter(
     (child) => child.kind === 'engagement_response'
   );
-  const timelines = contribution.receiptChildren.filter(
+  const timelines = contribution.effectContributions.filter(
     (child) => child.kind === 'portal_timeline'
   );
   const respondedIds = responses.map((child) => child.engagementId);
@@ -752,7 +752,7 @@ const respondSuccessContributionSchema = z.strictObject({
 const respondOutcomeContributionSchema = z.strictObject({
   result: z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema }),
   domain: z.null(),
-  receiptChildren: z.tuple([])
+  effectContributions: z.tuple([])
 }).superRefine((contribution, context) => {
   const outcome = contribution.result.outcome;
   const allowed = new Set([
@@ -783,7 +783,7 @@ export type ParticipantEngagementRespondContribution =
 export interface ParticipantPortalPreparedContribution {
   readonly result: unknown;
   readonly domain: unknown;
-  readonly receiptChildren: readonly unknown[];
+  readonly effectContributions: readonly unknown[];
 }
 
 /** Transaction-owned preparation for one participant response commit. */
@@ -852,7 +852,7 @@ export function createParticipantPortalRespondPreparation(input: {
         return Object.freeze({
           result: Object.freeze({ kind: 'outcome', outcome: REFUSAL_OUTCOMES[application.code] }),
           domain: null,
-          receiptChildren: Object.freeze([])
+          effectContributions: Object.freeze([])
         });
       }
       const planned = application.act;
@@ -862,7 +862,7 @@ export function createParticipantPortalRespondPreparation(input: {
         plan.input.action === 'record_confirmation'
           ? (plan.input.attribution === 'self' ? 'self' : 'co_speaker')
           : null;
-      const receiptChildren: unknown[] = plans.map((plan) => Object.freeze({
+      const effectContributions: unknown[] = plans.map((plan) => Object.freeze({
         kind: 'engagement_response',
         engagementId: plan.after.id,
         personId: plan.after.personId,
@@ -870,7 +870,7 @@ export function createParticipantPortalRespondPreparation(input: {
         version: plan.after.version
       }));
       if (application.activity !== null) {
-        receiptChildren.push(Object.freeze({
+        effectContributions.push(Object.freeze({
           kind: 'portal_timeline',
           activityId: application.activity.activityId,
           submissionId: application.activity.submissionId,
@@ -893,7 +893,7 @@ export function createParticipantPortalRespondPreparation(input: {
           activityId: application.activity?.activityId ?? null,
           occurredAt
         }),
-        receiptChildren: Object.freeze(receiptChildren)
+        effectContributions: Object.freeze(effectContributions)
       });
     }
   });
@@ -967,7 +967,7 @@ function createParticipantRespondHandler(input: {
         return {
           result: contribution.result,
           domain: contribution.domain,
-          receiptChildren: [...contribution.receiptChildren]
+          effectContributions: [...contribution.effectContributions]
         };
       } catch (error) {
         sealed.phase = 'spent';

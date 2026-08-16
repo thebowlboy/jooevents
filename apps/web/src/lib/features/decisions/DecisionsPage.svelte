@@ -207,7 +207,7 @@
 	 * own classification — a terminal refusal never offers a retry.
 	 */
 	let loadFailure = $state<PortFailureView | null>(null);
-	/** A decide or undo that did not commit, stated in the port's reviewed copy. */
+	/** A decision that did not commit, stated in the port's reviewed copy. */
 	let decideNotice = $state<{ title: string; message: string } | null>(null);
 	/** The notification projection/readiness refusal, rendered inside the dialog. */
 	let notifyRefusal = $state<string | null>(null);
@@ -641,7 +641,7 @@
 	 * A verdict from the room advances the pass: the decided candidate leaves
 	 * the undecided group, and the room moves to the one now standing where it
 	 * stood — read, decide, next. Every keyed or pressed verdict is the same
-	 * receipted, undoable move it is on the row, so no confirm interrupts the
+	 * receipted forward move it is on the row, so no confirm interrupts the
 	 * rhythm; when the last undecided candidate is decided the room closes onto
 	 * the finale. Re-deciding an already-decided candidate stays put — that is
 	 * a correction, not the pass moving.
@@ -738,8 +738,8 @@
 	 * joins it, and every other acceptance lands a new unplaced session in the
 	 * program pool. The receipt states where each landed and carries the door
 	 * there, so the organizer can keep batching without losing the placement
-	 * debt. Undo is the ordinary decision compensator; the seam reverses the
-	 * graduation with it.
+	 * debt. Corrections are later guarded decisions; the receipt never offers
+	 * compensation for the graduation.
 	 */
 	function acceptanceReceipt(committed: Submission[]) {
 		const joined = committed.filter((row) => row.targetSessionId).length;
@@ -777,8 +777,6 @@
 		const targets = ids.filter((id) => !pendingIds.includes(id));
 		if (targets.length === 0) return true;
 		const committed = (rows ?? []).filter((row) => targets.includes(row.id));
-		// The compensator restores each submission's decision as it stood.
-		const previous = committed.map((row) => ({ id: row.id, decision: row.decision }));
 		decideNotice = null;
 		pendingIds = [...pendingIds, ...targets];
 		dimmedIds = [...new Set([...dimmedIds, ...targets])];
@@ -796,36 +794,13 @@
 				return false;
 			}
 			const graduation = decision === 'accepted' ? acceptanceReceipt(committed) : null;
-			recordAction({
-				area: 'decisions',
-				label: graduation?.label ?? label,
-				href: graduation?.href,
-				hrefLabel: graduation?.hrefLabel,
-				undo: async () => {
-					// The receipt surface swallows a compensator's rejection, so a
-					// refused restore states itself here — a first-time verdict has
-					// no "undecided" to return to, and silence would present the
-					// standing decision as successfully undone.
-					const failures: string[] = [];
-					for (const entry of previous) {
-						try {
-							await api.decisions.decide([entry.id], entry.decision);
-						} catch (error) {
-							failures.push(
-								describePortFailure(error, 'This decision could not be restored.').message
-							);
-						}
-					}
-					if (failures.length > 0) {
-						decideNotice = {
-							title: failures.length === previous.length
-								? 'Undo did not change the decision'
-								: 'Undo only partly applied',
-							message: [...new Set(failures)].join(' ')
-						};
-					}
-				}
-			});
+				recordAction({
+					area: 'decisions',
+					label: graduation?.label ?? label,
+					href: graduation?.href,
+					hrefLabel: graduation?.hrefLabel,
+					notUndoableReason: 'Choose another result if this decision needs correcting.'
+				});
 			await load({ quiet: true });
 			return true;
 		} finally {
@@ -1024,7 +999,7 @@
 {#if openId === null}
 	<!-- While the room is open its own receipt rides inside the dialog's top
 	     layer; a fixed banner down here would sit under the scrim. -->
-	<CommitReceipt onUndone={load} />
+	<CommitReceipt />
 {/if}
 
 {#if loadFailure && rows !== null}
@@ -1456,7 +1431,7 @@
 
 <!-- The deciding room: one candidate over the pass, evidence beside verdict.
      An inspection surface is left the moment you are done looking, so it is
-     dismissible; the verdict buttons inside are the same receipted, undoable
+     dismissible; the verdict buttons inside are the same receipted forward
      moves the row offers, at the point where the reading happens. -->
 <Modal bind:open={roomOpen} title={openRow?.title ?? 'Candidate'} size="lg" dismissible>
 	{#if openRow}
@@ -1510,7 +1485,7 @@
 				actions={roomActions}
 				footnote={roomFootnote} />
 		</div>
-		<CommitReceipt onUndone={() => void load({ quiet: true })} />
+		<CommitReceipt />
 	{/if}
 	{#snippet footer(_close)}
 		<!-- The traversal bar: where the pass stands, and the way through it.
@@ -1779,7 +1754,7 @@
 		letter-spacing: inherit;
 	}
 
-	/* A full reload (undo, notification send) re-reads everything; the rows dim
+	/* A full reload (decision correction, notification send) re-reads everything; the rows dim
 	   in place so nobody loses their spot to skeletons. */
 	tbody {
 		transition: opacity var(--je-duration-fast) var(--je-ease);

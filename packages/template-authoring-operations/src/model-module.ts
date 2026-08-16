@@ -48,7 +48,7 @@ import {
 } from '@jooevents/identity-access';
 import { parseInstant, parseWorkspaceId, type Clock, type InvocationId, type WorkspaceId } from '@jooevents/kernel';
 import { z } from 'zod';
-import { createTemplateArtifactDraftHandler } from './preparation';
+import { createTemplateEditHandler } from './model-preparation';
 
 export const TEMPLATE_EDIT_MODEL_CHOICES_OPERATION = Object.freeze({ name: 'template.edit.model_choices.list', version: 1 });
 export const TEMPLATE_EDIT_CLASSIFY_OPERATION = Object.freeze({ name: 'template.edit.classify', version: 1 });
@@ -69,10 +69,10 @@ export const templateEditDomainContributionSchema = z.strictObject({
   occurredAt: z.iso.datetime({ offset: true })
 });
 const success = z.union([
-  z.strictObject({ result: z.strictObject({ kind: z.literal('success'), data: templateEditClassifyCanonicalResultSchema.options[0].shape.data }), domain: templateEditDomainContributionSchema, receiptChildren: z.tuple([]) }),
-  z.strictObject({ result: z.strictObject({ kind: z.literal('success'), data: templateEditReviseCanonicalResultSchema.options[0].shape.data }), domain: templateEditDomainContributionSchema, receiptChildren: z.tuple([]) })
+  z.strictObject({ result: z.strictObject({ kind: z.literal('success'), data: templateEditClassifyCanonicalResultSchema.options[0].shape.data }), domain: templateEditDomainContributionSchema, effectContributions: z.tuple([]) }),
+  z.strictObject({ result: z.strictObject({ kind: z.literal('success'), data: templateEditReviseCanonicalResultSchema.options[0].shape.data }), domain: templateEditDomainContributionSchema, effectContributions: z.tuple([]) })
 ]);
-const outcome = z.strictObject({ result: z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema }), domain: z.null(), receiptChildren: z.tuple([]) });
+const outcome = z.strictObject({ result: z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema }), domain: z.null(), effectContributions: z.tuple([]) });
 export const templateEditContributionSchema = z.union([success, outcome]);
 
 function ref(key: string): VersionedDefinitionRef { return Object.freeze({ key, version: 1 }); }
@@ -133,7 +133,7 @@ export function createTemplateEditOperationModule(input: CreateTemplateEditOpera
   const evidences = operations.map(({ key, operation }) => createAutonomyEvidenceResolverRegistration({ reference: refs[key].evidence!, operation, resolve: ({ subject }) => { const bounds = { scopeKeys:[...subject.scopeKeys], maximumSpendMicros:0, maximumActions:1, notAfter:parseInstant(new Date(Date.parse(subject.evaluatedAt)+60_000).toISOString()) }; return { evaluatedAt:subject.evaluatedAt, hardBounds:bounds, unattendedBounds:bounds, spendMicros:0, actionCount:1, completesBy:subject.evaluatedAt, proposedAction:{ key:`template.edit.${key}.execute`, version:1, digestSha256:subject.requestHashSha256 }, failure:{ kind:'none' } }; } }));
   const approvals = operations.map(({ key, operation }) => createRenewedApprovalResolverRegistration({ reference: refs[key].approval!, operation, resolve: () => ({ approverCurrentlyAuthorized:false }) }));
   const preflights = operations.map(({ key, operation }, index) => createAutonomyPreflightRegistration({ reference:refs[key].preflight!, operation, policy:refs[key].autonomy!, riskResolver:refs[key].risk!, evidenceResolver:refs[key].evidence!, approvalResolver:refs[key].approval!, interventionOutcomes:autonomyInterventionOutcomes(1) }));
-  const handlers = operations.map(({ key, canonical }) => createTemplateArtifactDraftHandler({ reference:refs[key].handler!, handlerCapability:TEMPLATE_EDIT_HANDLER_CAPABILITY, contributionSchema:contributionRef, canonicalResultSchema:schemaRef(`schema.template.edit.${key}.canonical`, canonical) }));
+  const handlers = operations.map(({ key, canonical }) => createTemplateEditHandler({ reference:refs[key].handler!, handlerCapability:TEMPLATE_EDIT_HANDLER_CAPABILITY, contributionSchema:contributionRef, canonicalResultSchema:schemaRef(`schema.template.edit.${key}.canonical`, canonical) }));
   const choiceContext = createReadInvocationContextBuilder({ reference:ref('context.template.edit.model-choices'), operation:TEMPLATE_EDIT_MODEL_CHOICES_OPERATION, effect:'read', lanes:[readLane], scopeResolver:scope(workspaceId), authorityResolver:input.currentAuthority, clock:input.clock, newInvocationId:input.ids.newInvocationId, authorityPrincipalKeyProfile:input.authorityPrincipalKeyProfile, scopePartitionProfile:input.scopePartitionProfile, requestCanonicalizationProfile:input.requestCanonicalizationProfile, deniedAuthorityOutcome:denied });
   const choiceCapability: ReadCapabilityRegistration = { reference:ref('capability.template.edit.model-choices'), openSnapshot:() => ({ choices:input.choices() }) };
   const accessOutcomes = CURRENT_AUTHORITY_DENIAL_REASONS.map((reason) => ({ class:'access_denied' as const, kind:`authority.${reason}`, retryable:false, detailSchema:nullRef }));

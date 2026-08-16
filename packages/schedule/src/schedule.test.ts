@@ -190,4 +190,36 @@ describe('Schedule placement domain', () => {
     expect(validateSchedulePlacementPlan({ state: bypassedGuard, sessions, vocabulary, plan }))
       .toBe('stale_room_query');
   });
+
+  test('unplaces, places again, and moves back under exact current guards', () => {
+    const placedPlan = planSchedulePlacementMutation({
+      planningInput: placePlanningInput(), state: emptyState(), sessions, vocabulary
+    });
+    const placed = applySchedulePlacementPlan({ state: emptyState(), sessions, vocabulary, plan: placedPlan });
+    const unplacePlan = planSchedulePlacementMutation({ state: placed.state, sessions, vocabulary,
+      planningInput: { action: 'unplace', scope, expectedScheduleVersion: 2,
+        occurrenceId: ids.occurrenceA, expectedOccurrenceVersion: 1 } });
+    const unplaced = applySchedulePlacementPlan({ state: placed.state, sessions, vocabulary, plan: unplacePlan });
+    expect(unplaced.result).toMatchObject({ action: 'unplace', scheduleVersion: 3, occurrence: null });
+    expect(() => applySchedulePlacementPlan({ state: unplaced.state, sessions, vocabulary, plan: unplacePlan }))
+      .toThrow('stale_schedule');
+
+    const replacedPlan = planSchedulePlacementMutation({ state: unplaced.state, sessions, vocabulary,
+      planningInput: placePlanningInput({ expectedScheduleVersion: 3 }) });
+    const replaced = applySchedulePlacementPlan({ state: unplaced.state, sessions, vocabulary, plan: replacedPlan });
+    const movedPlan = planSchedulePlacementMutation({ state: replaced.state, sessions, vocabulary,
+      planningInput: { action: 'move', scope, expectedScheduleVersion: 4,
+        occurrenceId: ids.occurrenceA, expectedOccurrenceVersion: 1, roomId: ids.room,
+        startAt: '2026-09-01T10:00:00.000Z', endAt: '2026-09-01T11:00:00.000Z' } });
+    const moved = applySchedulePlacementPlan({ state: replaced.state, sessions, vocabulary, plan: movedPlan });
+    const movedOccurrence = moved.result.occurrence!;
+    const moveBackPlan = planSchedulePlacementMutation({ state: moved.state, sessions, vocabulary,
+      planningInput: { action: 'move', scope, expectedScheduleVersion: 5,
+        occurrenceId: ids.occurrenceA, expectedOccurrenceVersion: movedOccurrence.version, roomId: ids.room,
+        startAt: '2026-09-01T09:00:00.000Z', endAt: '2026-09-01T10:00:00.000Z' } });
+    const movedBack = applySchedulePlacementPlan({ state: moved.state, sessions, vocabulary, plan: moveBackPlan });
+    expect(movedBack.result.occurrence).toMatchObject({
+      id: ids.occurrenceA, startAt: '2026-09-01T09:00:00.000Z', endAt: '2026-09-01T10:00:00.000Z'
+    });
+  });
 });

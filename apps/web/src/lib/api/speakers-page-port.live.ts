@@ -160,9 +160,8 @@ function defaultIdempotencyKey(): string {
  * whole-event engagement snapshot joined with the Session catalog (session
  * identity and roster visibility), submission provenance (participant name and
  * title through the triage per-row read), and the permission-gated contact
- * disclosure. The two response acts are consequential commits carried through
- * `engagement.change.draft` -> propose -> commit, fenced on the engagement
- * version read immediately before drafting.
+ * disclosure. The two response acts are direct audited commits fenced on the
+ * engagement version read immediately before the request.
  *
  * One row per engagement — the `(session, person)` pair — never per human:
  * the same person accepted onto two sessions is truthfully two engagements,
@@ -327,7 +326,7 @@ export function createLiveSpeakersPagePort(input: {
 
 	/**
 	 * One consequential response act, fenced on the engagement version read
-	 * immediately before drafting. A missing row and every refusal resolve
+	 * immediately before changing. A missing row and every refusal resolve
 	 * `{ ok: false }` with reviewed copy — the page shows the reason and
 	 * reloads — while transport-level read failures throw like every load.
 	 */

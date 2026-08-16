@@ -14,7 +14,6 @@
   "dependencies": {
     "@hono/zod-openapi": "1.5.2",
     "@jooevents/application": "workspace:*",
-    "@jooevents/changeset-operations": "workspace:*",
     "@jooevents/cloudflare-email": "workspace:*",
     "@jooevents/communication-operations": "workspace:*",
     "@jooevents/communications": "workspace:*",

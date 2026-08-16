@@ -1,8 +1,9 @@
 import type { WorkspaceApi } from './workspace-gateway';
-import type { FormsPagePort } from './forms-page-port';
+import type { FormPublishPreparation, FormPublishReview, FormsPagePort } from './forms-page-port';
 
 /** Keeps the tuned Forms page on the resettable fixture without entering live's import graph. */
 export function createSampleFormsPagePort(api: WorkspaceApi): FormsPagePort {
+	const pending = new Map<string, FormPublishReview>();
 	return Object.freeze({
 		templates: Object.freeze({
 			async applicationFormSurfaceId(): Promise<string | null> {
@@ -27,9 +28,32 @@ export function createSampleFormsPagePort(api: WorkspaceApi): FormsPagePort {
 			fields: api.forms.fields,
 			create: api.forms.create,
 			setComposition: api.forms.setComposition,
-			restoreComposition: api.forms.restoreComposition,
 			setClosing: api.forms.setClosing,
-			setStatus: api.forms.setStatus
+			setStatus: api.forms.setStatus,
+			async preparePublish(id: string): Promise<FormPublishPreparation> {
+				const form = await api.forms.get(id);
+				if (!form) return { ok: false, reason: 'This form no longer exists.' };
+				if (form.status !== 'draft') return { ok: false, reason: 'Only a draft Form can be published and opened.' };
+				const draftId = crypto.randomUUID();
+				const revisionId = crypto.randomUUID();
+				const review: FormPublishReview = Object.freeze({ action: 'publish_and_open',
+					selector: Object.freeze({ draftId, revisionId,
+						revisionDigestSha256: revisionId.replaceAll('-', '').padEnd(64, '0') }),
+					formId: id, formName: form.name, versionNumber: form.version + 1,
+					resultingStatus: 'open', surfaceSuccessorCount: 1 });
+				pending.set(draftId, review);
+				return { ok: true, review };
+			},
+			async publish(review: FormPublishReview) {
+				const retained = pending.get(review.selector.draftId);
+				if (!retained || retained.selector.revisionId !== review.selector.revisionId
+					|| retained.selector.revisionDigestSha256 !== review.selector.revisionDigestSha256) {
+					return { ok: false, reason: 'This Form review is no longer current. Review it again.' };
+				}
+				const outcome = await api.forms.setStatus(review.formId, 'open');
+				if (outcome.ok) pending.delete(review.selector.draftId);
+				return outcome;
+			}
 		}),
 		fields: Object.freeze({
 			move: api.fields.move,

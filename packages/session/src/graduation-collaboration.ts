@@ -1,9 +1,3 @@
-import type { ChangesetApplyContribution, GuardRef, VersionRef } from '@jooevents/changesets';
-import {
-  defineChangesetReadPort,
-  defineChangesetTransactionPort,
-  defineChangesetValidationPort
-} from '@jooevents/changesets';
 import {
   sessionMutationPlanSchema,
   sessionMutationResultSchema,
@@ -17,6 +11,7 @@ import {
   type SessionSafeDiffDto,
   type SessionScopeDto
 } from '@jooevents/contracts';
+import type { ProgramVocabularyState } from '@jooevents/program';
 import {
   applySessionRestorePlan,
   planSessionMutation,
@@ -27,7 +22,6 @@ import {
   type SessionPlanningErrorCode,
   type SessionTransactionPort
 } from './domain';
-import type { SessionChangesetReadPort } from './changesets';
 import {
   findSession,
   parseSessionCatalog,
@@ -40,15 +34,20 @@ import {
   type SessionReadPort
 } from './model';
 
+export interface SessionGraduationReadPort extends SessionReadPort {
+  readSessionVocabulary(scope: ReturnType<typeof parseSessionScope>): ProgramVocabularyState | undefined;
+  countSessionSchedulePlacements(scope: ReturnType<typeof parseSessionScope>, sessionId: string): number;
+}
+
 /**
- * One Session contribution a hosting changeset embeds so an acceptance can
+ * One Session contribution the hosting Decision operation embeds so an acceptance can
  * spawn a new Session or attach onto an existing roster atomically with its own
  * commit. The contribution is an exact Session mutation plan; validation and
  * apply run through the canonical Session domain, so append-never-clobber and
  * one-way lifecycle rules hold identically for hosted graduations.
  *
  * Concurrency fencing: a spawned Session cannot carry a per-session guard (it
- * does not exist while the hosting changeset is proposed), so spawns fence on
+ * does not exist before the hosting operation executes), so spawns fence on
  * the whole `session_catalog` guard only. Attaches add the target Session
  * aggregate ref beside the same catalog guard. The catalog guard makes any
  * concurrent Session change to the event a conflict for a pending graduation —
@@ -84,7 +83,7 @@ export interface SessionGraduationReversalInput {
   readonly attribution: { readonly userId: string; readonly at: string };
 }
 
-export interface SessionGraduationPlanningPort extends SessionChangesetReadPort {
+export interface SessionGraduationPlanningPort extends SessionGraduationReadPort {
   planSessionGraduation(input: SessionGraduationChangeInput): SessionGraduationContribution;
   planSessionGraduationReversal(input: SessionGraduationReversalInput): SessionRestorePlanDto;
 }
@@ -93,7 +92,7 @@ export type SessionGraduationValidation =
   | { readonly kind: 'ready' }
   | { readonly kind: 'refused'; readonly code: SessionPlanningErrorCode };
 
-export interface SessionGraduationValidationPort extends SessionChangesetReadPort {
+export interface SessionGraduationValidationPort extends SessionGraduationReadPort {
   validateSessionGraduation(
     contribution: SessionGraduationContribution
   ): SessionGraduationValidation;
@@ -107,9 +106,15 @@ export interface SessionGraduationPinDto {
   readonly lifecycle: SessionLifecycle;
 }
 
-export interface SessionGraduationAppliedContribution extends
-  ChangesetApplyContribution<SessionMutationResult> {
+export interface SessionGraduationAppliedContribution {
+  readonly result: SessionMutationResult;
   readonly pin: SessionGraduationPinDto;
+  readonly facts: readonly {
+    readonly kind: string;
+    readonly version: number;
+    readonly payload: SessionMutationResult;
+  }[];
+  readonly effects: readonly never[];
 }
 
 export interface SessionGraduationTransactionPort extends SessionTransactionPort {
@@ -119,20 +124,17 @@ export interface SessionGraduationTransactionPort extends SessionTransactionPort
   applySessionGraduationReversal(plan: SessionRestorePlanDto): SessionMutationResult;
 }
 
-export const sessionGraduationPlanningPort = defineChangesetReadPort<SessionGraduationPlanningPort>(
-  'session_graduation.planning', 1
-);
-export const sessionGraduationValidationPort =
-  defineChangesetValidationPort<SessionGraduationValidationPort>(
-    'session_graduation.validation', 1
-  );
-export const sessionGraduationTransactionPort =
-  defineChangesetTransactionPort<SessionGraduationTransactionPort>(
-    'session_graduation.transaction', 1
-  );
+export interface SessionGraduationAggregateRef {
+  readonly id: string;
+  readonly version: number;
+}
+
+export interface SessionGraduationGuardRef extends SessionGraduationAggregateRef {
+  readonly digest: string;
+}
 
 export function planSessionGraduationFrom(
-  port: SessionChangesetReadPort,
+  port: SessionGraduationReadPort,
   input: SessionGraduationChangeInput
 ): SessionGraduationContribution {
   const scope = parseSessionScope(input.scope);
@@ -186,7 +188,7 @@ export function planSessionGraduationFrom(
 }
 
 export function validateSessionGraduationFrom(
-  port: SessionChangesetReadPort,
+  port: SessionGraduationReadPort,
   contribution: SessionGraduationContribution
 ): SessionGraduationValidation {
   const scope = parseSessionScope(contribution.input.scope);
@@ -308,7 +310,7 @@ export function applySessionGraduationReversalFrom(
 
 export function sessionGraduationAggregateRefs(
   contribution: SessionGraduationContribution
-): readonly VersionRef[] {
+): readonly SessionGraduationAggregateRef[] {
   return Object.freeze(contribution.before
     ? [{ id: sessionAggregateId(contribution.before.id), version: contribution.before.version }]
     : []);
@@ -316,7 +318,7 @@ export function sessionGraduationAggregateRefs(
 
 export function sessionGraduationGuardRefs(
   contribution: SessionGraduationContribution
-): readonly GuardRef[] {
+): readonly SessionGraduationGuardRef[] {
   return Object.freeze([{
     id: sessionCatalogGuardId(contribution.input.scope.eventId),
     version: contribution.catalogVersion.before,

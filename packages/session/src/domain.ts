@@ -2,12 +2,14 @@ import {
   sessionMutationPlanSchema,
   sessionMutationResultSchema,
   sessionPlanningInputSchema,
+  sessionRemoveNewPlanSchema,
   sessionRestorePlanSchema,
   type SessionMutationPlanDto,
   type SessionMutationResult,
   type SessionParticipantRefDto,
   type SessionPlanningInput,
   type SessionProgramTargetEvidenceDto,
+  type SessionRemoveNewPlanDto,
   type SessionRestorePlanDto,
   type SessionRosterParticipantInput
 } from '@jooevents/contracts';
@@ -54,7 +56,7 @@ export class SessionPlanningError extends Error {
 }
 
 export interface SessionTransactionPort {
-  applySessionPlan(plan: SessionMutationPlanDto | SessionRestorePlanDto): SessionMutationResult;
+  applySessionPlan(plan: SessionMutationPlanDto | SessionRestorePlanDto | SessionRemoveNewPlanDto): SessionMutationResult;
 }
 
 export function sessionCatalogGuardId(eventId: string): string {
@@ -367,6 +369,52 @@ export function planSessionCompensation(input: {
     catalogDigestSha256: { before: input.catalog.digestSha256, after: afterCatalog.digestSha256 },
     actorUserId: input.actorUserId,
     occurredAt: input.occurredAt
+  });
+}
+
+export function planNewSessionRemoval(input: {
+  readonly current: SessionHead;
+  readonly catalog: SessionCatalog;
+  readonly actorUserId: string;
+  readonly occurredAt: string;
+}): SessionRemoveNewPlanDto {
+  const current = findSession(input.catalog, input.current.id);
+  if (!current || current.version !== 1 || current.digestSha256 !== input.current.digestSha256) {
+    throw new SessionPlanningError('stale_session');
+  }
+  const sessions = input.catalog.sessions.filter((session) => session.id !== current.id);
+  const afterCatalog = catalogWith(input.catalog.scope, input.catalog.version + 1, sessions);
+  return sessionRemoveNewPlanSchema.parse({
+    action: 'remove_new_session', scope: input.catalog.scope,
+    expectedCatalogVersion: input.catalog.version,
+    expectedCatalogDigestSha256: input.catalog.digestSha256,
+    expectedCurrent: current,
+    catalogVersion: { before: input.catalog.version, after: afterCatalog.version },
+    catalogDigestSha256: { before: input.catalog.digestSha256, after: afterCatalog.digestSha256 },
+    actorUserId: input.actorUserId, occurredAt: input.occurredAt
+  });
+}
+
+export function applyNewSessionRemovalPlan(input: {
+  readonly plan: SessionRemoveNewPlanDto;
+  readonly catalog: SessionCatalog;
+}): { readonly catalog: SessionCatalog; readonly result: SessionMutationResult } {
+  const plan = sessionRemoveNewPlanSchema.parse(input.plan);
+  requireCatalogGuard(input.catalog, plan.expectedCatalogVersion, plan.expectedCatalogDigestSha256);
+  if (!sameSessionScope(input.catalog.scope, plan.scope)) throw new SessionPlanningError('wrong_scope');
+  const current = findSession(input.catalog, plan.expectedCurrent.id);
+  if (!current || current.version !== 1 || current.version !== plan.expectedCurrent.version
+      || current.digestSha256 !== plan.expectedCurrent.digestSha256) {
+    throw new SessionPlanningError('stale_session');
+  }
+  const catalog = catalogWith(input.catalog.scope, plan.catalogVersion.after,
+    input.catalog.sessions.filter((session) => session.id !== current.id));
+  if (catalog.digestSha256 !== plan.catalogDigestSha256.after) throw new SessionPlanningError('invalid_plan');
+  return Object.freeze({
+    catalog,
+    result: sessionMutationResultSchema.parse({
+      action: 'remove_new_session', catalogVersion: catalog.version, session: null
+    })
   });
 }
 

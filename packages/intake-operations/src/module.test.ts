@@ -23,7 +23,6 @@ import {
 import {
   INTAKE_EVENT_MANAGE_ACCESS_POLICY,
   INTAKE_EVENT_READ_ACCESS_POLICY,
-  INTAKE_FORM_DRAFT_REQUEST_HASH_PROFILE,
   INTAKE_PUBLIC_CEREMONY_ACCESS_POLICY,
   INTAKE_PUBLIC_OPEN_ACCESS_POLICY,
   INTAKE_PUBLIC_MUTATE_OPERATION,
@@ -33,10 +32,15 @@ import {
   createIntakePublicConformanceMutationOperationModule,
   createIntakePublicConformanceReadOperationModule,
   createIntakePublicFormReadOperationModule,
-  createIntakeFormDraftOperationModule,
   createIntakeReadOperationModule,
   intakePublicMutateInputSchema
 } from './module';
+import {
+  INTAKE_FORM_DIRECT_REQUEST_HASH_PROFILE,
+  INTAKE_FORM_PUBLISH_REQUEST_HASH_PROFILE,
+  INTAKE_FORM_REVIEW_DRAFT_REQUEST_HASH_PROFILE,
+  createIntakeFormWriteOperationModule
+} from './form-write-module';
 
 const workspaceId = parseWorkspaceId('018f7d5a-4b3c-7abc-8def-012345678901');
 const eventId = '018f7d5a-4b3c-7abc-8def-012345678902';
@@ -298,37 +302,50 @@ describe('Intake operation modules', () => {
     }
   });
 
-  test('freezes the scope-free organizer Form changeset draft operations', () => {
-    const module = createIntakeFormDraftOperationModule({
+  test('freezes the direct and owner-native Form write bindings', () => {
+    const module = createIntakeFormWriteOperationModule({
       workspaceId,
       policy: INTAKE_EVENT_MANAGE_ACCESS_POLICY,
       currentAuthority: authority,
       currentEvent: { resolveCurrentEvent: () => ({ eventId, evidenceIds: ['event:current'] }) },
       clock,
       ids,
-      crypto: {
-        ...crypto,
-        requestHashSealer: createHmacRequestHashSealer({
-          profile: INTAKE_FORM_DRAFT_REQUEST_HASH_PROFILE,
-          keyBytes: new Uint8Array(32).fill(0x43)
-        })
-      }
+      authorityPrincipalKeyProfile: profile,
+      scopePartitionProfile: profile,
+      requestCanonicalizationProfile: profile,
+      directRequestHashSealer: createHmacRequestHashSealer({
+        profile: INTAKE_FORM_DIRECT_REQUEST_HASH_PROFILE,
+        keyBytes: new Uint8Array(32).fill(0x51)
+      }),
+      reviewRequestHashSealer: createHmacRequestHashSealer({
+        profile: INTAKE_FORM_REVIEW_DRAFT_REQUEST_HASH_PROFILE,
+        keyBytes: new Uint8Array(32).fill(0x52)
+      }),
+      publishRequestHashSealer: createHmacRequestHashSealer({
+        profile: INTAKE_FORM_PUBLISH_REQUEST_HASH_PROFILE,
+        keyBytes: new Uint8Array(32).fill(0x53)
+      }),
+      idempotencyCredentialProfile: profile,
+      idempotencyCredentialSealer: crypto.idempotencyCredentialSealer
     });
     expect(endpointTable(module as ReturnType<typeof createIntakeReadOperationModule>)).toEqual([
-      { operation: 'form.definition.create.draft@1', effect: 'draft', method: 'POST', path: '/api/events/current/forms/drafts/create', input: 'body', surface: 'operator_http' },
-      { operation: 'form.definition.revise.draft@1', effect: 'draft', method: 'POST', path: '/api/events/current/forms/drafts/revise', input: 'body', surface: 'operator_http' },
-      { operation: 'form.version.publish.draft@1', effect: 'draft', method: 'POST', path: '/api/events/current/forms/drafts/publish', input: 'body', surface: 'operator_http' },
-      { operation: 'form.lifecycle.change.draft@1', effect: 'draft', method: 'POST', path: '/api/events/current/forms/drafts/lifecycle', input: 'body', surface: 'operator_http' },
-      { operation: 'form.closing.change.draft@1', effect: 'draft', method: 'POST', path: '/api/events/current/forms/drafts/closing', input: 'body', surface: 'operator_http' }
+      { operation: 'form.definition.create@1', effect: 'commit', method: 'POST', path: '/api/events/current/forms/create', input: 'body', surface: 'operator_http' },
+      { operation: 'form.definition.revise@1', effect: 'commit', method: 'POST', path: '/api/events/current/forms/revise', input: 'body', surface: 'operator_http' },
+      { operation: 'form.closing.change@1', effect: 'commit', method: 'POST', path: '/api/events/current/forms/closing', input: 'body', surface: 'operator_http' },
+      { operation: 'form.lifecycle.change@1', effect: 'commit', method: 'POST', path: '/api/events/current/forms/lifecycle', input: 'body', surface: 'operator_http' },
+      { operation: 'form.version.publish.draft@1', effect: 'draft', method: 'POST', path: '/api/events/current/forms/publish/draft', input: 'body', surface: 'operator_http' },
+      { operation: 'form.version.publish@1', effect: 'commit', method: 'POST', path: '/api/events/current/forms/publish', input: 'body', surface: 'operator_http' }
     ]);
-    const definitions = (module.source.schemas ?? []).filter((entry) =>
-      entry.reference.key.endsWith('-draft.input')
+    const publish = module.source.effectOperations?.find((operation) =>
+      operation.name === 'form.version.publish'
     );
-    expect(definitions).toHaveLength(5);
-    for (const entry of definitions) {
-      expect(entry.schema.safeParse({ workspaceId, eventId, actorUserId: formId }).success)
-        .toBe(false);
-    }
+    expect(publish?.execution).toMatchObject({
+      profile: 'direct_audited',
+      history: { summariesByAction: {
+        publish: 'Published a form version',
+        publish_and_open: 'Published and opened a form'
+      } }
+    });
   });
 
   test('fails closed on substituted policy references', () => {

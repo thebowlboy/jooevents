@@ -15,7 +15,11 @@ import {
   type VersionedDefinitionRef
 } from '@jooevents/contracts';
 import { parseOperationAccessLane, type OperationAccessLane } from '@jooevents/identity-access';
-import { canonicalJsonText, parseCapabilityRevisionId } from '@jooevents/kernel';
+import { canonicalJsonSha256, canonicalJsonText, parseCapabilityRevisionId } from '@jooevents/kernel';
+import type {
+  AgentActionEligibilityCatalog,
+  AgentActionEligibleOperation
+} from '../agent-action-runs';
 import {
   isTrustedOperationAutonomyPolicy,
   validateOperationAutonomyPolicy,
@@ -718,6 +722,14 @@ function sealedEffectDefinition(
       ? { ...operation.lifecycle, replacement: { ...operation.lifecycle.replacement } }
       : { ...operation.lifecycle },
     consequenceTags: [...operation.consequenceTags],
+    ...(operation.agentAction === undefined ? {} : {
+      agentAction: {
+        eligible: true as const,
+        displayLabel: operation.agentAction.displayLabel,
+        consequences: [...operation.agentAction.consequences],
+        externalEffect: operation.agentAction.externalEffect
+      }
+    }),
     autonomyPolicy: { ...operation.autonomyPolicy },
     inputSchema: { ...operation.inputSchema },
     contributionSchema: { ...operation.contributionSchema },
@@ -737,13 +749,36 @@ function sealedEffectDefinition(
       requestHashProfile: { ...operation.idempotency.requestHashProfile }
     },
     concurrency: { ...operation.concurrency },
-    execution: {
-      kind: 'single_unit_of_work',
-      family: { ...operation.execution.family },
-      phase: { ...operation.execution.phase },
-      terminalization: { ...operation.execution.terminalization },
-      autonomyPreflight: { ...operation.execution.autonomyPreflight }
-    },
+    execution: operation.execution.kind === 'single_unit_of_work'
+      && 'profile' in operation.execution
+      ? {
+          kind: 'single_unit_of_work',
+          profile: 'direct_audited',
+          family: { ...operation.execution.family },
+          phase: { ...operation.execution.phase },
+          terminalization: { ...operation.execution.terminalization },
+          autonomyPreflight: { ...operation.execution.autonomyPreflight },
+          history: 'summary' in operation.execution.history
+            ? { summary: operation.execution.history.summary }
+            : 'summariesByAction' in operation.execution.history
+              ? {
+                summariesByAction: Object.freeze({
+                  ...operation.execution.history.summariesByAction
+                })
+              }
+              : {
+                  summariesByActionAndKind: Object.freeze({
+                    ...operation.execution.history.summariesByActionAndKind
+                  })
+                }
+        }
+      : {
+          kind: 'single_unit_of_work',
+          family: { ...operation.execution.family },
+          phase: { ...operation.execution.phase },
+          terminalization: { ...operation.execution.terminalization },
+          autonomyPreflight: { ...operation.execution.autonomyPreflight }
+        },
     bindings: operation.bindings.map<EffectOperationBindingDefinition>((binding) => {
       switch (binding.surface) {
         case 'operator_http':
@@ -1136,16 +1171,85 @@ export async function createOperationRegistry(
       issues.push({ code: 'invalid_effect_binding_profile', detail: 'Effectful idempotency and concurrency references must be versioned.', operationName: operation.name, operationVersion: operation.version });
     }
     const execution = (operation as { readonly execution?: unknown }).execution;
+    const executionKeys = execution && typeof execution === 'object' && !Array.isArray(execution)
+      ? Object.keys(execution).sort().join(',')
+      : '';
+    const directExecution = executionKeys === 'autonomyPreflight,family,history,kind,phase,profile,terminalization'
+      && (execution as { readonly profile?: unknown }).profile === 'direct_audited';
+    const predecessorExecution = executionKeys === 'autonomyPreflight,family,kind,phase,terminalization';
+    if (operation.agentAction !== undefined) {
+      const agentAction = operation.agentAction;
+      if (!directExecution
+        || agentAction.displayLabel.trim() !== agentAction.displayLabel
+        || agentAction.displayLabel.length < 1
+        || agentAction.displayLabel.length > 160
+        || agentAction.consequences.length > 16
+        || agentAction.consequences.some((entry) => entry.trim() !== entry
+          || entry.length < 1 || entry.length > 160)
+        || !['none', 'reconcilable'].includes(agentAction.externalEffect)) {
+        issues.push({
+          code: 'invalid_agent_action_eligibility',
+          detail: 'Approved agent-action eligibility requires a direct-audited operation and bounded display metadata.',
+          operationName: operation.name,
+          operationVersion: operation.version
+        });
+      }
+    }
+    const history = directExecution
+      ? (execution as { readonly history?: unknown }).history
+      : undefined;
+    const literalHistory = Boolean(
+      history && typeof history === 'object' && !Array.isArray(history)
+      && Object.keys(history).join(',') === 'summary'
+      && typeof (history as { readonly summary?: unknown }).summary === 'string'
+      && (history as { readonly summary: string }).summary.length >= 1
+      && (history as { readonly summary: string }).summary.length <= 240
+    );
+    const actionSummaryCandidate = history && typeof history === 'object' && !Array.isArray(history)
+      && Object.keys(history).join(',') === 'summariesByAction'
+      ? (history as { readonly summariesByAction?: unknown }).summariesByAction
+      : undefined;
+    const actionSummaryEntries = actionSummaryCandidate && typeof actionSummaryCandidate === 'object'
+      && !Array.isArray(actionSummaryCandidate)
+      ? Object.entries(actionSummaryCandidate)
+      : [];
+    const actionHistory = actionSummaryEntries.length >= 1
+      && actionSummaryEntries.length <= 32
+      && actionSummaryEntries.every(([action, summary]) =>
+        /^[a-z][a-z0-9_]{0,63}$/.test(action)
+        && typeof summary === 'string'
+        && summary.length >= 1
+        && summary.length <= 240
+      );
+    const actionKindSummaryCandidate = history && typeof history === 'object' && !Array.isArray(history)
+      && Object.keys(history).join(',') === 'summariesByActionAndKind'
+      ? (history as { readonly summariesByActionAndKind?: unknown }).summariesByActionAndKind
+      : undefined;
+    const actionKindSummaryEntries = actionKindSummaryCandidate
+      && typeof actionKindSummaryCandidate === 'object'
+      && !Array.isArray(actionKindSummaryCandidate)
+      ? Object.entries(actionKindSummaryCandidate)
+      : [];
+    const actionKindHistory = actionKindSummaryEntries.length >= 1
+      && actionKindSummaryEntries.length <= 96
+      && actionKindSummaryEntries.every(([key, summary]) =>
+        /^[a-z][a-z0-9_]{0,63}:[a-z][a-z0-9_]{0,63}$/.test(key)
+        && typeof summary === 'string'
+        && summary.length >= 1
+        && summary.length <= 240
+      );
     if (!execution || typeof execution !== 'object' || Array.isArray(execution)
-      || Object.keys(execution).sort().join(',') !== 'autonomyPreflight,family,kind,phase,terminalization'
+      || (!predecessorExecution && !directExecution)
       || (execution as { readonly kind?: unknown }).kind !== 'single_unit_of_work'
       || !versionedDefinitionRefSchema.safeParse((execution as { readonly family?: unknown }).family).success
       || !versionedDefinitionRefSchema.safeParse((execution as { readonly phase?: unknown }).phase).success
       || !versionedDefinitionRefSchema.safeParse((execution as { readonly terminalization?: unknown }).terminalization).success
-      || !versionedDefinitionRefSchema.safeParse((execution as { readonly autonomyPreflight?: unknown }).autonomyPreflight).success) {
+      || !versionedDefinitionRefSchema.safeParse((execution as { readonly autonomyPreflight?: unknown }).autonomyPreflight).success
+      || (directExecution && operation.effect !== 'commit')
+      || (directExecution && !literalHistory && !actionHistory && !actionKindHistory)) {
       issues.push({
         code: 'invalid_effect_execution_contract',
-        detail: 'Effectful operations require the exact closed single-unit-of-work execution declaration.',
+        detail: 'Effectful operations require the exact closed predecessor or direct-audited execution declaration.',
         operationName: operation.name,
         operationVersion: operation.version
       });
@@ -2395,6 +2499,72 @@ export async function createOperationRegistry(
     registeredJobOperations
   });
   return registry;
+}
+
+export interface RegisteredAgentActionEligibility {
+  readonly operationName: string;
+  readonly operationVersion: number;
+  readonly contractDigestSha256: string;
+  readonly displayLabel: string;
+  readonly consequences: readonly string[];
+  readonly externalEffect: 'none' | 'reconcilable';
+}
+
+/** Builds the only catalog the approved runner may use from the compiled registry. */
+export function createRegisteredAgentActionEligibilityCatalog(
+  registry: OperationRegistry
+): AgentActionEligibilityCatalog & { readonly entries: readonly RegisteredAgentActionEligibility[] } {
+  const state = registryStates.get(registry);
+  if (!state) throw new TypeError('agent_action_registry_not_compiled');
+  const eligible = [...state.effectOperations.values()]
+    .filter((compiled) => compiled.definition.lifecycle.status === 'active'
+      && compiled.definition.agentAction?.eligible === true)
+    .map((compiled) => {
+      const metadata = compiled.definition.agentAction!;
+      const validateInput = (value: unknown): unknown => {
+        const parsed = compiled.inputSchema.schema.safeParse(value);
+        if (!parsed.success) throw new TypeError('agent_action_operation_input_invalid');
+        return parsed.data;
+      };
+      const contractDigestSha256 = canonicalJsonSha256({
+        operation: { name: compiled.definition.name, version: compiled.definition.version },
+        inputSchema: compiled.inputSchema.reference,
+        canonicalResultSchema: compiled.canonicalResultSchema.reference,
+        outcomes: compiled.definition.outcomes,
+        metadata
+      });
+      return Object.freeze({
+        operationName: compiled.definition.name,
+        operationVersion: compiled.definition.version,
+        contractDigestSha256,
+        batchable: true,
+        externalEffect: metadata.externalEffect,
+        validateInput,
+        hashRequest: (value: unknown) => canonicalJsonSha256(validateInput(value)),
+        displayLabel: () => metadata.displayLabel,
+        consequences: () => Object.freeze([...metadata.consequences])
+      } satisfies AgentActionEligibleOperation);
+    })
+    .sort((left, right) => left.operationName.localeCompare(right.operationName)
+      || left.operationVersion - right.operationVersion);
+  const byIdentity = new Map(eligible.map((operation) => [
+    `${operation.operationName}\u0000${operation.operationVersion}`,
+    operation
+  ]));
+  const entries = Object.freeze(eligible.map((operation) => Object.freeze({
+    operationName: operation.operationName,
+    operationVersion: operation.operationVersion,
+    contractDigestSha256: operation.contractDigestSha256,
+    displayLabel: operation.displayLabel(),
+    consequences: Object.freeze([...operation.consequences()]),
+    externalEffect: operation.externalEffect
+  })));
+  return Object.freeze({
+    entries,
+    resolve(operationName: string, operationVersion: number) {
+      return byIdentity.get(`${operationName}\u0000${operationVersion}`);
+    }
+  });
 }
 
 export async function createReadOperationRegistry(source: ReadOperationRegistrySource): Promise<ReadOperationRegistry> {

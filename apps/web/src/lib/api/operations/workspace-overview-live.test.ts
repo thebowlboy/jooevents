@@ -91,7 +91,7 @@ const projection = workspaceOverviewProjectionSchema.parse({
 		forms: { kind: 'unavailable', reason: 'event_required' },
 		submissions: { kind: 'unavailable', reason: 'event_required' },
 		programVocabulary: { kind: 'unavailable', reason: 'event_required' },
-		changesets: { kind: 'unavailable', reason: 'event_required' }
+		operations: { kind: 'unavailable', reason: 'event_required' }
 	},
 	history: { total: 0, truncated: false, threads: [] }
 });

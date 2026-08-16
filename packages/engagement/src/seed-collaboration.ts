@@ -1,9 +1,4 @@
 import {
-  defineChangesetReadPort,
-  defineChangesetTransactionPort,
-  defineChangesetValidationPort
-} from '@jooevents/changesets';
-import {
   engagementSeedInputSchema,
   engagementSeedPlanSchema,
   engagementSeedProvenanceSchema,
@@ -93,18 +88,6 @@ export interface EngagementSeedTransactionPort extends EngagementReadPort {
   applyEngagementSeed(contribution: EngagementSeedContribution): EngagementSeedResultDto;
   applyEngagementSeedReversal(plan: EngagementSeedReversalPlanDto): EngagementSeedResultDto;
 }
-
-export const engagementSeedPlanningPort = defineChangesetReadPort<EngagementSeedPlanningPort>(
-  'engagement_seed.planning', 1
-);
-export const engagementSeedValidationPort =
-  defineChangesetValidationPort<EngagementSeedValidationPort>(
-    'engagement_seed.validation', 1
-  );
-export const engagementSeedTransactionPort =
-  defineChangesetTransactionPort<EngagementSeedTransactionPort>(
-    'engagement_seed.transaction', 1
-  );
 
 /**
  * Plans one seed over current state: every person without an engagement on the

@@ -375,7 +375,7 @@ function successPayloads(): Readonly<Record<string, unknown>> {
 			effectSuccess('send_messages', 72, {
 				schemaVersion: 1,
 				batchId: 'batch-1',
-				changesetId: 'changeset-1',
+				releaseCommitId: 'release-commit-1',
 				dispatchGeneration: 1,
 				releaseCount: 1,
 				deliveryCount: 1

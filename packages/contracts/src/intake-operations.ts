@@ -41,10 +41,9 @@ const intakeFormSafeHeadSchema = z.strictObject({
 });
 
 /**
- * One successor apply-surface release a form republish plans in the same
- * reviewed changeset (owner Model 3): the surface currently rendering the
- * republished form is re-released pinning the new form version. Absent on
- * pre-successor revisions; required inside the current changeset plan.
+ * One successor apply-surface release a reviewed Form-version publish plans in
+ * the same atomic publish unit: the surface currently rendering the form is
+ * re-released pinning the new version. Absent on pre-successor revisions.
  */
 export const intakeFormSurfaceSuccessorDiffSchema = z.strictObject({
   surfaceReleaseId: intakeIdSchema,
@@ -90,36 +89,101 @@ export const intakeFormSafeDiffSchema = z.discriminatedUnion('action', [
   })
 ]);
 
-export const intakeFormDraftDataSchema = z.strictObject({
+export const intakeFormWriteActionSchema = z.enum([
+  'create',
+  'revise',
+  'set_closing',
+  'update_closing',
+  'remove_closing',
+  'close',
+  'reopen',
+  'publish',
+  'publish_and_open'
+]);
+
+export const intakeFormDirectLifecycleInputSchema = z.discriminatedUnion('transition', [
+  z.strictObject({
+    transition: z.literal('close'),
+    formId: intakeIdInputSchema,
+    expectedDefinitionVersion: z.number().int().positive().safe()
+  }),
+  z.strictObject({
+    transition: z.literal('reopen'),
+    formId: intakeIdInputSchema,
+    expectedDefinitionVersion: z.number().int().positive().safe()
+  })
+]);
+
+export const intakeFormWriteDataSchema = z.strictObject({
   schemaVersion: z.literal(1),
-  action: intakeFormDraftActionSchema,
-  changesetId: canonicalUuid,
-  headVersion: z.number().int().positive().safe(),
+  action: intakeFormWriteActionSchema,
+  formId: intakeIdSchema,
+  formDefinitionVersion: z.number().int().positive().safe(),
+  catalogVersion: z.number().int().positive().safe(),
+  publishedVersionId: intakeIdSchema.nullable()
+});
+
+export const intakeFormDirectCanonicalResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success'), data: intakeFormWriteDataSchema }),
+  z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
+]);
+export const intakeFormDirectOperationResultSchema =
+  createEffectfulOperationResultSchema(intakeFormWriteDataSchema);
+
+export const intakeFormVersionReviewActionSchema = z.enum(['publish', 'publish_and_open']);
+export const intakeFormVersionReviewInputSchema = z.discriminatedUnion('action', [
+  z.strictObject({
+    action: z.literal('publish'),
+    formId: intakeIdInputSchema,
+    expectedDefinitionVersion: z.number().int().positive().safe(),
+    expectedRegistryVersion: z.number().int().positive().safe()
+  }),
+  z.strictObject({
+    action: z.literal('publish_and_open'),
+    formId: intakeIdInputSchema,
+    expectedDefinitionVersion: z.number().int().positive().safe(),
+    expectedRegistryVersion: z.number().int().positive().safe()
+  })
+]);
+
+export const intakeFormVersionReviewSafeDiffSchema = z.strictObject({
+  action: intakeFormVersionReviewActionSchema,
+  before: intakeFormSafeHeadSchema,
+  after: intakeFormSafeHeadSchema,
+  publishedVersion: z.strictObject({
+    id: intakeIdSchema,
+    number: z.number().int().positive().safe(),
+    definitionDigestSha256: intakeDigestSchema
+  }),
+  surfaceSuccessors: z.array(intakeFormSurfaceSuccessorDiffSchema).max(20)
+});
+
+export const intakeFormVersionReviewDraftDataSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  action: intakeFormVersionReviewActionSchema,
+  draftId: canonicalUuid,
   status: z.literal('draft'),
   revision: z.strictObject({
     id: canonicalUuid,
-    number: z.number().int().positive().safe(),
+    number: z.literal(1),
     digestSha256: intakeDigestSchema
   }),
-  riskTier: z.enum(['low', 'normal', 'consequential']),
-  approvalPolicy: z.strictObject({
-    reference: versionedDefinitionRefSchema,
-    definitionDigestSha256: intakeDigestSchema,
-    requirement: z.enum(['none', 'distinct_current_human'])
-  }),
-  safeDiff: intakeFormSafeDiffSchema
-}).superRefine((data, context) => {
-  if (data.action !== data.safeDiff.action) {
-    context.addIssue({ code: 'custom', path: ['safeDiff', 'action'], message: 'action mismatch' });
-  }
+  safeDiff: intakeFormVersionReviewSafeDiffSchema
 });
-
-export const intakeFormDraftCanonicalResultSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('success'), data: intakeFormDraftDataSchema }),
+export const intakeFormVersionReviewDraftCanonicalResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success'), data: intakeFormVersionReviewDraftDataSchema }),
   z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
 ]);
-export const intakeFormDraftOperationResultSchema =
-  createEffectfulOperationResultSchema(intakeFormDraftDataSchema);
+export const intakeFormVersionReviewDraftOperationResultSchema =
+  createEffectfulOperationResultSchema(intakeFormVersionReviewDraftDataSchema);
+
+export const intakeFormVersionPublishInputSchema = z.strictObject({
+  draftId: canonicalUuid,
+  revisionId: canonicalUuid,
+  revisionDigestSha256: intakeDigestSchema
+});
+export const intakeFormVersionPublishCanonicalResultSchema = intakeFormDirectCanonicalResultSchema;
+export const intakeFormVersionPublishOperationResultSchema = intakeFormDirectOperationResultSchema;
 
 export const intakeEmptyReadInputSchema = z.strictObject({});
 export const intakeFormReadInputSchema = z.strictObject({ formId: intakeIdInputSchema });
@@ -184,36 +248,42 @@ export const INTAKE_OPERATION_SCHEMA_REFS = Object.freeze({
     resultKey: 'schema.submission.contact-read.projected-result',
     resultSchema: organizerSubmissionContactReadResultSchema
   }),
-  formDrafts: Object.freeze({
+  formWrites: Object.freeze({
     create: createOperationSchemaManifestRefs({
-      inputKey: 'schema.intake.form-create-draft.input',
+      inputKey: 'schema.intake.form-create.input',
       inputSchema: formDefinitionCreateDraftInputSchema,
-      resultKey: 'schema.intake.form-draft.operator-result',
-      resultSchema: intakeFormDraftOperationResultSchema
+      resultKey: 'schema.intake.form-direct.operator-result',
+      resultSchema: intakeFormDirectOperationResultSchema
     }),
     revise: createOperationSchemaManifestRefs({
-      inputKey: 'schema.intake.form-revise-draft.input',
+      inputKey: 'schema.intake.form-revise.input',
       inputSchema: formDefinitionReviseDraftInputSchema,
-      resultKey: 'schema.intake.form-draft.operator-result',
-      resultSchema: intakeFormDraftOperationResultSchema
-    }),
-    publish: createOperationSchemaManifestRefs({
-      inputKey: 'schema.intake.form-publish-draft.input',
-      inputSchema: formVersionPublishDraftInputSchema,
-      resultKey: 'schema.intake.form-draft.operator-result',
-      resultSchema: intakeFormDraftOperationResultSchema
-    }),
-    lifecycle: createOperationSchemaManifestRefs({
-      inputKey: 'schema.intake.form-lifecycle-draft.input',
-      inputSchema: formLifecycleChangeDraftInputSchema,
-      resultKey: 'schema.intake.form-draft.operator-result',
-      resultSchema: intakeFormDraftOperationResultSchema
+      resultKey: 'schema.intake.form-direct.operator-result',
+      resultSchema: intakeFormDirectOperationResultSchema
     }),
     closing: createOperationSchemaManifestRefs({
-      inputKey: 'schema.intake.form-closing-draft.input',
+      inputKey: 'schema.intake.form-closing.input',
       inputSchema: formClosingChangeDraftInputSchema,
-      resultKey: 'schema.intake.form-draft.operator-result',
-      resultSchema: intakeFormDraftOperationResultSchema
+      resultKey: 'schema.intake.form-direct.operator-result',
+      resultSchema: intakeFormDirectOperationResultSchema
+    }),
+    lifecycle: createOperationSchemaManifestRefs({
+      inputKey: 'schema.intake.form-lifecycle.input',
+      inputSchema: intakeFormDirectLifecycleInputSchema,
+      resultKey: 'schema.intake.form-direct.operator-result',
+      resultSchema: intakeFormDirectOperationResultSchema
+    }),
+    publishDraft: createOperationSchemaManifestRefs({
+      inputKey: 'schema.intake.form-version-review.input',
+      inputSchema: intakeFormVersionReviewInputSchema,
+      resultKey: 'schema.intake.form-version-review.operator-result',
+      resultSchema: intakeFormVersionReviewDraftOperationResultSchema
+    }),
+    publish: createOperationSchemaManifestRefs({
+      inputKey: 'schema.intake.form-version-publish.input',
+      inputSchema: intakeFormVersionPublishInputSchema,
+      resultKey: 'schema.intake.form-version-publish.operator-result',
+      resultSchema: intakeFormVersionPublishOperationResultSchema
     })
   })
 });
@@ -221,4 +291,9 @@ export const INTAKE_OPERATION_SCHEMA_REFS = Object.freeze({
 export type IntakeFormDraftAction = z.infer<typeof intakeFormDraftActionSchema>;
 export type IntakeFormSurfaceSuccessorDiff = z.infer<typeof intakeFormSurfaceSuccessorDiffSchema>;
 export type IntakeFormSafeDiff = z.infer<typeof intakeFormSafeDiffSchema>;
-export type IntakeFormDraftData = z.infer<typeof intakeFormDraftDataSchema>;
+export type IntakeFormWriteAction = z.infer<typeof intakeFormWriteActionSchema>;
+export type IntakeFormWriteData = z.infer<typeof intakeFormWriteDataSchema>;
+export type IntakeFormVersionReviewAction = z.infer<typeof intakeFormVersionReviewActionSchema>;
+export type IntakeFormVersionReviewInput = z.infer<typeof intakeFormVersionReviewInputSchema>;
+export type IntakeFormVersionReviewSafeDiff = z.infer<typeof intakeFormVersionReviewSafeDiffSchema>;
+export type IntakeFormVersionPublishInput = z.infer<typeof intakeFormVersionPublishInputSchema>;

@@ -31,7 +31,7 @@ import {
   TEMPLATE_EDIT_CLASSIFY_OPERATION,
   TEMPLATE_EDIT_HANDLER_CAPABILITY,
   TEMPLATE_EDIT_REVISE_OPERATION,
-  sealTemplateArtifactDraftPreparation,
+  sealTemplateEditPreparation,
   templateEditContributionSchema,
   templateEditDomainContributionSchema
 } from '@jooevents/template-authoring-operations';
@@ -77,7 +77,7 @@ CREATE TABLE template_edit_model_receipts (
   ),
   CHECK(json_extract(result_json, '$.artifactId') = artifact_id),
   FOREIGN KEY(receipt_id)
-    REFERENCES foundation_trial_operation_receipts(id)
+    REFERENCES operation_log(id)
     ON UPDATE RESTRICT ON DELETE RESTRICT,
   FOREIGN KEY(workspace_id,event_id,artifact_id)
     REFERENCES template_artifact_heads(workspace_id,event_id,artifact_id)
@@ -114,7 +114,7 @@ interface PreparedEdit {
   readonly context: EffectInvocationContext;
   readonly contribution: TemplateEditSuccess;
   readonly evaluatedAt: Instant;
-  phase: 'prepared' | 'applied' | 'parent_linked' | 'claim_released';
+  phase: 'prepared' | 'applied' | 'parent_linked' | 'invocation_released';
   receiptId?: string;
 }
 
@@ -150,7 +150,7 @@ function refusal(kind: string): TemplateEditContribution {
       }
     },
     domain: null,
-    receiptChildren: []
+    effectContributions: []
   });
 }
 
@@ -232,7 +232,7 @@ export class SQLiteTemplateEditEffectDomainAdapter implements SQLiteEffectDomain
     this.#expectedIdentity = undefined;
     this.#nonterminalReleaseContext = undefined;
 
-    return sealTemplateArtifactDraftPreparation({
+    return sealTemplateEditPreparation({
       capability,
       context,
       preparation: {
@@ -289,7 +289,7 @@ export class SQLiteTemplateEditEffectDomainAdapter implements SQLiteEffectDomain
               artifactId: business.artifactId, runId, attemptId,
               resultDigestSha256: resultDigest(data), occurredAt: evaluatedAt
             },
-            receiptChildren: []
+            effectContributions: []
           });
           if (contribution.result.kind !== 'success' || contribution.domain === null) {
             throw new TypeError('template_edit_success_contribution_invalid');
@@ -318,7 +318,7 @@ export class SQLiteTemplateEditEffectDomainAdapter implements SQLiteEffectDomain
     this.#active = prepared;
   }
 
-  afterReceiptParentInserted(receipt: TerminalEffectReceipt): void {
+  afterOperationLogInserted(receipt: TerminalEffectReceipt): void {
     const active = this.#active;
     if (!this.input.sqlite.inTransaction || !active || active.phase !== 'applied'
         || !effectOperationIdentityMatchesContext(receipt.identity, active.context)
@@ -366,7 +366,7 @@ export class SQLiteTemplateEditEffectDomainAdapter implements SQLiteEffectDomain
     this.#expectedIdentity = receipt.identity;
   }
 
-  afterExecutionClaimReleased(identity: EffectOperationIdentity): void {
+  afterEffectApplicationCommitted(identity: EffectOperationIdentity): void {
     if (!this.input.sqlite.inTransaction) throw new TypeError('template_edit_transaction_required');
     const active = this.#active;
     if (!active) {
@@ -381,7 +381,7 @@ export class SQLiteTemplateEditEffectDomainAdapter implements SQLiteEffectDomain
         || !effectOperationIdentitiesEqual(identity, this.#expectedIdentity)) {
       throw new TypeError('template_edit_incomplete');
     }
-    active.phase = 'claim_released';
+    active.phase = 'invocation_released';
   }
 
   afterUnitOfWorkCommitted(): void {

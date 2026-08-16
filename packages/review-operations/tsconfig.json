@@ -5,7 +5,6 @@
     "moduleResolution": "Bundler",
     "paths": {
       "@jooevents/application": ["../application/src/index.ts"],
-      "@jooevents/changesets": ["../changesets/src/index.ts"],
       "@jooevents/contracts": ["../contracts/src/index.ts"],
       "@jooevents/contracts/reviews": ["../contracts/src/reviews.ts"],
       "@jooevents/identity-access": ["../identity-access/src/index.ts"],

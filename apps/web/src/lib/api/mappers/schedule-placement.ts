@@ -1,12 +1,11 @@
 import type {
-	SchedulePlacementDraftData,
 	SchedulePlacementOccurrenceDto,
 	SchedulePlacementPlanDto,
+	SchedulePlacementResult,
 	SchedulePlacementSnapshotDto
 } from '@jooevents/contracts/schedule-placement';
 import type {
 	SchedulePlacementCommittedView,
-	SchedulePlacementDraftView,
 	SchedulePlacementOccurrenceView,
 	SchedulePlacementPlanInputView,
 	SchedulePlacementPlanView,
@@ -97,49 +96,12 @@ export function mapSchedulePlacementPlan(plan: SchedulePlacementPlanDto): Schedu
 	});
 }
 
-export function mapSchedulePlacementDraft(
-	draft: SchedulePlacementDraftData
-): SchedulePlacementDraftView {
+export function mapSchedulePlacementResult(
+	result: SchedulePlacementResult
+): SchedulePlacementCommittedView {
 	return Object.freeze({
-		schemaVersion: 1,
-		action: draft.action,
-		selector: Object.freeze({
-			changesetId: draft.changesetId,
-			revisionId: draft.revision.id,
-			revisionDigest: draft.revision.digestSha256
-		}),
-		headVersion: draft.headVersion,
-		status: draft.status,
-		revisionNumber: draft.revision.number,
-		riskTier: draft.riskTier,
-		approval: Object.freeze({
-			requirement: draft.approvalPolicy.requirement,
-			policy: Object.freeze({ ...draft.approvalPolicy.reference }),
-			policyDigestSha256: draft.approvalPolicy.definitionDigestSha256
-		}),
-		safeDiff: mapSchedulePlacementPlan(draft.safeDiff)
-	});
-}
-
-export function mapSchedulePlacementCommit(input: {
-	readonly draft: SchedulePlacementDraftData;
-	readonly proposedHeadVersion: number;
-	readonly committedHeadVersion: number;
-}): SchedulePlacementCommittedView {
-	const draft = mapSchedulePlacementDraft(input.draft);
-	const occurrence = draft.safeDiff.after;
-	if (occurrence === null) {
-		throw new TypeError('Schedule placement commit has no placed occurrence.');
-	}
-	return Object.freeze({
-		action: draft.action,
-		selector: draft.selector,
-		changesetHead: Object.freeze({
-			proposedVersion: input.proposedHeadVersion,
-			committedVersion: input.committedHeadVersion
-		}),
-		scheduleVersion: draft.safeDiff.scheduleVersion.after,
-		occurrence,
-		safeDiff: draft.safeDiff
+		action: result.action,
+		scheduleVersion: result.scheduleVersion,
+		occurrence: result.occurrence ? mapSchedulePlacementOccurrence(result.occurrence) : null
 	});
 }

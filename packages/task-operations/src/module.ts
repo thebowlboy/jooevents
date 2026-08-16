@@ -26,16 +26,18 @@ import {
   taskBoardReadInputSchema,
   taskBoardReadResultSchema,
   taskBoardSnapshotSchema,
-  taskDraftCanonicalResultSchema,
-  taskDraftDataSchema,
-  taskDraftOperationResultSchema,
-  taskMutationDraftInputSchema,
+  taskMutationCanonicalResultSchema,
+  taskMutationDataSchema,
+  taskMutationOperationResultSchema,
+  taskMutationInputSchema,
+  taskAssignmentRestorePlanSchema,
+  taskMutationPlanSchema,
   type SafeSchemaManifestRef,
   type StructuredOutcome,
   type TaskBoardSnapshotDto,
   type VersionedDefinitionRef
 } from '@jooevents/contracts';
-import { EVENT_MANAGE_ACCESS_POLICY, EVENT_READ_ACCESS_POLICY } from '@jooevents/event-operations';
+import { EVENT_READ_ACCESS_POLICY } from '@jooevents/event-operations';
 import {
   CURRENT_AUTHORITY_DENIAL_REASONS,
   parseOperationAccessLane,
@@ -51,17 +53,16 @@ import {
   type InvocationId,
   type WorkspaceId
 } from '@jooevents/kernel';
-import { createHash } from 'node:crypto';
-import { encodeCanonicalJson, parseContractVersion } from '@jooevents/kernel';
+import { parseContractVersion, parseEventId } from '@jooevents/kernel';
 import { z } from 'zod';
-import { createTaskDraftHandler } from './preparation';
+import { createTaskDirectHandler } from './preparation';
 
 export const TASK_BOARD_READ_OPERATION = Object.freeze({ name: 'task.board.read', version: 1 });
-export const TASK_MUTATION_DRAFT_OPERATION = Object.freeze({ name: 'task.mutation.draft', version: 1 });
+export const TASK_MUTATION_OPERATION = Object.freeze({ name: 'task.mutation', version: 1 });
 export const TASK_BOARD_READ_PATH = '/api/events/current/tasks';
-export const TASK_MUTATION_DRAFT_PATH = '/api/events/current/tasks/drafts';
-export const TASK_DRAFT_HANDLER_CAPABILITY = ref('capability.task.changeset-draft');
-export const TASK_DRAFT_REQUEST_HASH_PROFILE = ref('request-hash.task.mutation-draft');
+export const TASK_MUTATION_PATH = '/api/events/current/tasks';
+export const TASK_MUTATION_HANDLER_CAPABILITY = ref('capability.task.direct-mutation');
+export const TASK_MUTATION_REQUEST_HASH_PROFILE = ref('request-hash.task.mutation');
 export const TASK_READ_PERMISSION_ID = 'speaker.directory.read' as const;
 export const TASK_MANAGE_PERMISSION_ID = 'event.manage' as const;
 export const TASK_READ_ACCESS_POLICY: VersionedAccessPolicyRef = Object.freeze({
@@ -70,19 +71,6 @@ export const TASK_READ_ACCESS_POLICY: VersionedAccessPolicyRef = Object.freeze({
 export const TASK_MANAGE_ACCESS_POLICY: VersionedAccessPolicyRef = Object.freeze({
   key: 'authority.task.manage', version: parseContractVersion(1)
 });
-export const TASK_DRAFT_APPROVAL_POLICY = (() => {
-  const reference = ref('policy.task.mutation.bounded');
-  const definition = Object.freeze({ reference, requirement: 'none' as const });
-  return Object.freeze({
-    ...definition,
-    definitionDigestSha256: createHash('sha256')
-      .update(encodeCanonicalJson(definition)).digest('hex')
-  });
-})();
-
-const idSchema = z.uuid().refine((value) => value === value.toLowerCase());
-const digestSchema = z.string().regex(/^[a-f0-9]{64}$/);
-const instantSchema = z.iso.datetime({ offset: true });
 const nullSchema = z.null();
 const staleDetailSchema = z.strictObject({
   code: z.enum([
@@ -90,46 +78,25 @@ const staleDetailSchema = z.strictObject({
     'stale_assignment', 'invalid_transition', 'membership_changed',
     'deadline_changed', 'invalid_plan'
   ]),
-  action: z.enum(['create_definition', 'waive_assignment', 'accept_fulfillment']),
+  action: z.enum(['create_definition', 'waive_assignment', 'accept_fulfillment', 'restore_assignment']),
   subjectId: z.string().min(1).max(512)
 });
-export const taskDraftDomainContributionSchema = z.strictObject({
-  kind: z.literal('task_changeset_draft'),
-  preparationHandle: idSchema,
-  workspaceId: idSchema,
-  eventId: idSchema,
-  changesetId: idSchema,
-  revisionId: idSchema,
-  revisionDigestSha256: digestSchema,
-  recordDigestSha256: digestSchema,
-  action: z.enum(['create_definition', 'waive_assignment', 'accept_fulfillment']),
-  subjectId: idSchema,
-  occurredAt: instantSchema
-});
-export const taskDraftEvidenceChildSchema = z.strictObject({
-  kind: z.literal('timeline'),
-  timelineId: idSchema,
-  sourceKind: z.literal('changeset_revision'),
-  workspaceId: idSchema,
-  eventId: idSchema,
-  changesetId: idSchema,
-  revisionId: idSchema,
-  occurredAt: instantSchema
-});
-export const taskDraftContributionSchema = z.union([
+export const taskDirectContributionSchema = z.union([
   z.strictObject({
-    result: z.strictObject({ kind: z.literal('success'), data: taskDraftDataSchema }),
-    domain: taskDraftDomainContributionSchema,
-    receiptChildren: z.tuple([taskDraftEvidenceChildSchema])
+    result: z.strictObject({ kind: z.literal('success'), data: taskMutationDataSchema }),
+    domain: z.strictObject({
+      kind: z.literal('task_direct_mutation'),
+      plan: z.union([taskMutationPlanSchema, taskAssignmentRestorePlanSchema])
+    }),
+    effectContributions: z.tuple([])
   }),
   z.strictObject({
     result: z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema }),
     domain: z.null(),
-    receiptChildren: z.tuple([])
+    effectContributions: z.tuple([])
   })
 ]);
-export type TaskDraftContribution = z.infer<typeof taskDraftContributionSchema>;
-
+export type TaskDirectContribution = z.infer<typeof taskDirectContributionSchema>;
 function ref(key: string): VersionedDefinitionRef { return Object.freeze({ key, version: 1 }); }
 function schemaRef(key: string, schema: z.ZodType): SafeSchemaManifestRef {
   return createSafeSchemaManifestRef(key, schema);
@@ -140,13 +107,23 @@ function authorityOutcome(reason: CurrentAuthorityDenialReason): StructuredOutco
     subjects: [], detail: null, detailSchemaVersion: 1
   });
 }
-function workspaceScope(workspaceId: WorkspaceId): InvocationScopeResolver {
+export interface TaskCurrentEventSource {
+  resolveCurrentEvent(workspaceId: WorkspaceId): { readonly eventId?: string; readonly evidenceIds: readonly string[] }
+    | Promise<{ readonly eventId?: string; readonly evidenceIds: readonly string[] }>;
+}
+function eventScope(workspaceId: WorkspaceId, source: TaskCurrentEventSource): InvocationScopeResolver {
   return Object.freeze({
-    resolve: () => Object.freeze({
-      workspaceId,
-      subjects: Object.freeze([{ kind: 'workspace' as const, id: workspaceId }]),
-      resolutionEvidenceIds: Object.freeze(['workspace.current'])
-    })
+    async resolve() {
+      const resolved = await source.resolveCurrentEvent(workspaceId);
+      if (resolved.eventId === undefined) return Object.freeze({
+        workspaceId, subjects: Object.freeze([{ kind: 'workspace' as const, id: workspaceId }]),
+        resolutionEvidenceIds: Object.freeze([...resolved.evidenceIds])
+      });
+      const eventId = parseEventId(resolved.eventId);
+      return Object.freeze({ workspaceId, eventId, subjects: Object.freeze([
+        { kind: 'workspace' as const, id: workspaceId }, { kind: 'event' as const, id: eventId }
+      ]), resolutionEvidenceIds: Object.freeze([...resolved.evidenceIds]) });
+    }
   });
 }
 function autonomy(
@@ -183,6 +160,7 @@ export interface SharedTaskOperationInput {
   readonly authorityPrincipalKeyProfile: VersionedKeyProfileRef;
   readonly scopePartitionProfile: VersionedKeyProfileRef;
   readonly requestCanonicalizationProfile: VersionedKeyProfileRef;
+  readonly currentEvent: TaskCurrentEventSource;
 }
 
 export function createTaskBoardReadOperationModule(input: SharedTaskOperationInput & {
@@ -219,7 +197,7 @@ export function createTaskBoardReadOperationModule(input: SharedTaskOperationInp
   const policy = autonomy(refs.autonomy, TASK_BOARD_READ_OPERATION);
   const context = createReadInvocationContextBuilder({
     reference: refs.context, operation: TASK_BOARD_READ_OPERATION, effect: 'read', lanes: [lane],
-    scopeResolver: workspaceScope(workspaceId), authorityResolver: input.currentAuthority,
+    scopeResolver: eventScope(workspaceId, input.currentEvent), authorityResolver: input.currentAuthority,
     clock: input.clock, newInvocationId: input.ids.newInvocationId,
     authorityPrincipalKeyProfile: input.authorityPrincipalKeyProfile,
     scopePartitionProfile: input.scopePartitionProfile,
@@ -311,47 +289,47 @@ export function createTaskBoardReadOperationModule(input: SharedTaskOperationInp
   });
 }
 
-export function createTaskDraftOperationModule(input: SharedTaskOperationInput & {
+export function createTaskMutationOperationModule(input: SharedTaskOperationInput & {
   readonly managePolicy: VersionedAccessPolicyRef;
   readonly requestHashSealer: RequestHashSealer;
   readonly idempotencyCredentialProfile: VersionedKeyProfileRef;
   readonly idempotencyCredentialSealer: IdempotencyCredentialSealer;
 }): OperationRegistryModule {
   const workspaceId = parseWorkspaceId(input.workspaceId);
-  if (input.managePolicy.key !== EVENT_MANAGE_ACCESS_POLICY.key
-      || input.managePolicy.version !== EVENT_MANAGE_ACCESS_POLICY.version) {
-    throw new TypeError('task_draft_policy_catalog_mismatch');
+  if (input.managePolicy.key !== TASK_MANAGE_ACCESS_POLICY.key
+      || input.managePolicy.version !== TASK_MANAGE_ACCESS_POLICY.version) {
+    throw new TypeError('task_mutation_policy_catalog_mismatch');
   }
   const refs = {
-    context: ref('context.task.mutation-draft'), autonomy: ref('autonomy.task.mutation-draft'),
-    handler: ref('handler.task.mutation-draft'), projection: ref('projection.task.mutation-draft.operator'),
-    audit: ref('audit.task.mutation-draft'), record: ref('record-profile.task.operation-audit'),
-    keySource: ref('idempotency.operator-header'), concurrency: ref('concurrency.task.mutation-draft'),
-    family: ref('task.mutation-draft.execution-family'), phase: ref('task.mutation-draft.phase.single-uow'),
-    terminalization: ref('task.mutation-draft.terminalization'), risk: ref('task.mutation-draft.risk'),
-    evidence: ref('task.mutation-draft.autonomy-evidence'), approval: ref('task.mutation-draft.approval'),
-    preflight: ref('task.mutation-draft.autonomy-preflight')
+    context: ref('context.task.mutation'), autonomy: ref('autonomy.task.mutation'),
+    handler: ref('handler.task.mutation'), projection: ref('projection.task.mutation.operator'),
+    audit: ref('audit.task.mutation'), record: ref('record-profile.task.operation-audit'),
+    keySource: ref('idempotency.operator-header'), concurrency: ref('concurrency.task.mutation'),
+    family: ref('task.mutation.execution-family'), phase: ref('task.mutation.phase.direct-uow'),
+    terminalization: ref('task.mutation.terminalization'), risk: ref('task.mutation.risk'),
+    evidence: ref('task.mutation.autonomy-evidence'), approval: ref('task.mutation.approval'),
+    preflight: ref('task.mutation.autonomy-preflight')
   };
   const schemas = {
-    input: TASK_OPERATION_SCHEMA_REFS.mutationDraft.inputSchema,
-    contribution: schemaRef('schema.task.mutation-draft.contribution', taskDraftContributionSchema),
-    canonical: schemaRef('schema.task.mutation-draft.canonical-result', taskDraftCanonicalResultSchema),
-    projected: TASK_OPERATION_SCHEMA_REFS.mutationDraft.resultSchema,
-    null: schemaRef('schema.task.mutation-draft.null-detail', nullSchema),
-    stale: schemaRef('schema.task.mutation-draft.stale-detail', staleDetailSchema)
+    input: TASK_OPERATION_SCHEMA_REFS.mutation.inputSchema,
+    contribution: schemaRef('schema.task.mutation.contribution', taskDirectContributionSchema),
+    canonical: schemaRef('schema.task.mutation.canonical-result', taskMutationCanonicalResultSchema),
+    projected: TASK_OPERATION_SCHEMA_REFS.mutation.resultSchema,
+    null: schemaRef('schema.task.mutation.null-detail', nullSchema),
+    stale: schemaRef('schema.task.mutation.stale-detail', staleDetailSchema)
   };
   const lane = parseOperationAccessLane({
     kind: 'operator', surface: 'operator_http', policy: input.managePolicy
   });
-  const policy = autonomy(refs.autonomy, TASK_MUTATION_DRAFT_OPERATION);
+  const policy = autonomy(refs.autonomy, TASK_MUTATION_OPERATION);
   const context = createEffectInvocationContextBuilder({
-    reference: refs.context, operation: TASK_MUTATION_DRAFT_OPERATION, effect: 'draft', lanes: [lane],
-    scopeResolver: workspaceScope(workspaceId), authorityResolver: input.currentAuthority,
+    reference: refs.context, operation: TASK_MUTATION_OPERATION, effect: 'commit', lanes: [lane],
+    scopeResolver: eventScope(workspaceId, input.currentEvent), authorityResolver: input.currentAuthority,
     clock: input.clock, newInvocationId: input.ids.newInvocationId,
     authorityPrincipalKeyProfile: input.authorityPrincipalKeyProfile,
     scopePartitionProfile: input.scopePartitionProfile,
     requestCanonicalizationProfile: input.requestCanonicalizationProfile,
-    requestHashProfile: TASK_DRAFT_REQUEST_HASH_PROFILE,
+    requestHashProfile: TASK_MUTATION_REQUEST_HASH_PROFILE,
     requestHashSealer: input.requestHashSealer,
     idempotencyCredentialProfile: input.idempotencyCredentialProfile,
     idempotencyCredentialSealer: input.idempotencyCredentialSealer,
@@ -359,14 +337,14 @@ export function createTaskDraftOperationModule(input: SharedTaskOperationInput &
   });
   const family = createSingleUnitOfWorkFamilyRegistration({ reference: refs.family, phase: refs.phase });
   const terminalization = createTerminalizationResolverRegistration({
-    reference: refs.terminalization, operation: TASK_MUTATION_DRAFT_OPERATION, phase: refs.phase,
+    reference: refs.terminalization, operation: TASK_MUTATION_OPERATION, phase: refs.phase,
     resolve: ({ result }) => result.kind === 'success'
       ? Object.freeze({ kind: 'terminal' as const })
       : Object.freeze({ kind: 'nonterminal' as const })
   });
   const phase = createSingleUnitOfWorkPhaseRegistration({
-    reference: refs.phase, family: refs.family, operation: TASK_MUTATION_DRAFT_OPERATION,
-    effect: 'draft', handler: refs.handler, handlerCapability: TASK_DRAFT_HANDLER_CAPABILITY,
+    reference: refs.phase, family: refs.family, operation: TASK_MUTATION_OPERATION,
+    effect: 'commit', handler: refs.handler, handlerCapability: TASK_MUTATION_HANDLER_CAPABILITY,
     contributionSchema: schemas.contribution, terminalization: refs.terminalization,
     terminalOutcomeKeys: [],
     contentionOutcome: {
@@ -375,11 +353,11 @@ export function createTaskDraftOperationModule(input: SharedTaskOperationInput &
     }
   });
   const risk = createOperationRiskResolverRegistration({
-    reference: refs.risk, operation: TASK_MUTATION_DRAFT_OPERATION,
-    resolve: () => ({ risk: 'low', consequenceTags: ['changeset-drafted'], evidenceIds: ['task.mutation.draft.risk'] })
+    reference: refs.risk, operation: TASK_MUTATION_OPERATION,
+    resolve: () => ({ risk: 'low', consequenceTags: ['task-mutated'], evidenceIds: ['task.mutation.risk'] })
   });
   const evidence = createAutonomyEvidenceResolverRegistration({
-    reference: refs.evidence, operation: TASK_MUTATION_DRAFT_OPERATION,
+    reference: refs.evidence, operation: TASK_MUTATION_OPERATION,
     resolve: ({ subject }) => {
       const bounds = Object.freeze({
         scopeKeys: Object.freeze([...subject.scopeKeys]), maximumSpendMicros: 0,
@@ -389,23 +367,23 @@ export function createTaskDraftOperationModule(input: SharedTaskOperationInput &
       return Object.freeze({
         evaluatedAt: subject.evaluatedAt, hardBounds: bounds, unattendedBounds: bounds,
         spendMicros: 0, actionCount: 1, completesBy: subject.evaluatedAt,
-        proposedAction: { key: 'task.mutation.draft.execute', version: 1, digestSha256: subject.requestHashSha256 },
+        proposedAction: { key: 'task.mutation.execute', version: 1, digestSha256: subject.requestHashSha256 },
         failure: { kind: 'none' as const }
       });
     }
   });
   const approval = createRenewedApprovalResolverRegistration({
-    reference: refs.approval, operation: TASK_MUTATION_DRAFT_OPERATION,
+    reference: refs.approval, operation: TASK_MUTATION_OPERATION,
     resolve: () => ({ approverCurrentlyAuthorized: false })
   });
   const preflight = createAutonomyPreflightRegistration({
-    reference: refs.preflight, operation: TASK_MUTATION_DRAFT_OPERATION,
+    reference: refs.preflight, operation: TASK_MUTATION_OPERATION,
     policy: refs.autonomy, riskResolver: refs.risk, evidenceResolver: refs.evidence,
     approvalResolver: refs.approval, interventionOutcomes: autonomyInterventionOutcomes(1)
   });
-  const handler = createTaskDraftHandler({
+  const handler = createTaskDirectHandler({
     reference: refs.handler,
-    handlerCapability: TASK_DRAFT_HANDLER_CAPABILITY,
+    handlerCapability: TASK_MUTATION_HANDLER_CAPABILITY,
     contributionSchema: schemas.contribution,
     canonicalResultSchema: schemas.canonical
   });
@@ -414,7 +392,7 @@ export function createTaskDraftOperationModule(input: SharedTaskOperationInput &
     retryable: false, detailSchema: schemas.null
   }));
   return Object.freeze({
-    id: 'task-mutation-draft.operation',
+    id: 'task-mutation.operation',
     source: Object.freeze({
       effectExecutionFamilies: [family], effectPhases: [phase],
       terminalizationResolvers: [terminalization], riskResolvers: [risk],
@@ -423,17 +401,17 @@ export function createTaskDraftOperationModule(input: SharedTaskOperationInput &
       contextBuilders: [], readCapabilities: [], handlers: [], operations: [],
       readOperationalTraceTargets: [],
       schemas: [
-        { reference: schemas.input, schema: taskMutationDraftInputSchema },
-        { reference: schemas.contribution, schema: taskDraftContributionSchema },
-        { reference: schemas.canonical, schema: taskDraftCanonicalResultSchema },
-        { reference: schemas.projected, schema: taskDraftOperationResultSchema },
+        { reference: schemas.input, schema: taskMutationInputSchema },
+        { reference: schemas.contribution, schema: taskDirectContributionSchema },
+        { reference: schemas.canonical, schema: taskMutationCanonicalResultSchema },
+        { reference: schemas.projected, schema: taskMutationOperationResultSchema },
         { reference: schemas.null, schema: nullSchema },
         { reference: schemas.stale, schema: staleDetailSchema }
       ],
       projections: [{
         reference: refs.projection, canonicalResultSchema: schemas.canonical,
         projectedResultSchema: schemas.projected,
-        project: (candidate: unknown) => taskDraftCanonicalResultSchema.parse(candidate)
+        project: (candidate: unknown) => taskMutationCanonicalResultSchema.parse(candidate)
       }],
       operationAuditTargets: [{
         reference: refs.audit, kind: 'operation_audit_record' as const, recordProfile: refs.record
@@ -443,11 +421,17 @@ export function createTaskDraftOperationModule(input: SharedTaskOperationInput &
       }],
       effectContextBuilders: [context], effectHandlers: [handler],
       effectOperations: [{
-        ...TASK_MUTATION_DRAFT_OPERATION,
+        ...TASK_MUTATION_OPERATION,
         lifecycle: { status: 'active' as const },
-        summary: 'Draft one task definition or assignment transition for review.',
-        effect: 'draft' as const, maxRisk: 'low' as const,
-        autonomyPolicy: refs.autonomy, consequenceTags: ['changeset-drafted'],
+        summary: 'Create or change a speaker task.',
+        effect: 'commit' as const, maxRisk: 'low' as const,
+        autonomyPolicy: refs.autonomy, consequenceTags: ['task-mutated'],
+        agentAction: {
+          eligible: true as const,
+          displayLabel: 'Change speaker tasks',
+          consequences: ['Speaker task responsibilities or completion state may change.'],
+          externalEffect: 'none' as const
+        },
         inputSchema: schemas.input, contributionSchema: schemas.contribution,
         canonicalResultSchema: schemas.canonical,
         outcomes: [
@@ -455,26 +439,34 @@ export function createTaskDraftOperationModule(input: SharedTaskOperationInput &
           ...accessOutcomes,
           { class: 'stale_revision' as const, kind: 'task.changed', retryable: false, detailSchema: schemas.stale },
           { class: 'conflict' as const, kind: 'task.event_required', retryable: false, detailSchema: schemas.null },
-          { class: 'conflict' as const, kind: 'changeset.id_collision', retryable: false, detailSchema: schemas.null },
           { class: 'conflict' as const, kind: 'operation.in_progress', retryable: true, detailSchema: schemas.null },
           ...autonomyInterventionOutcomeDeclarations(schemas.null)
         ],
         accessLanes: [lane], contextBuilder: refs.context,
-        handlerCapability: TASK_DRAFT_HANDLER_CAPABILITY, handler: refs.handler,
+        handlerCapability: TASK_MUTATION_HANDLER_CAPABILITY, handler: refs.handler,
         audit: { mode: 'required' as const, target: refs.audit },
         idempotency: {
           keySource: refs.keySource,
           credentialVerifierProfile: input.idempotencyCredentialProfile,
-          requestHashProfile: TASK_DRAFT_REQUEST_HASH_PROFILE
+          requestHashProfile: TASK_MUTATION_REQUEST_HASH_PROFILE
         },
         concurrency: refs.concurrency,
         execution: {
-          kind: 'single_unit_of_work' as const, family: refs.family, phase: refs.phase,
-          terminalization: refs.terminalization, autonomyPreflight: refs.preflight
+          kind: 'single_unit_of_work' as const, profile: 'direct_audited' as const,
+          family: refs.family, phase: refs.phase,
+          terminalization: refs.terminalization, autonomyPreflight: refs.preflight,
+          history: {
+            summariesByAction: Object.freeze({
+              create_definition: 'Created speaker tasks',
+              waive_assignment: 'Waived a speaker task',
+              accept_fulfillment: "Accepted a speaker's completed task",
+              restore_assignment: 'Restored a speaker task'
+            })
+          }
         },
         bindings: [{
           surface: 'operator_http' as const, method: 'POST' as const,
-          path: TASK_MUTATION_DRAFT_PATH, input: 'body' as const,
+          path: TASK_MUTATION_PATH, input: 'body' as const,
           browserResumption: { kind: 'none' as const }, projection: refs.projection
         }]
       }]

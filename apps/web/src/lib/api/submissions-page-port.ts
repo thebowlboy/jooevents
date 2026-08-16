@@ -9,8 +9,7 @@ import type {
 	SubmissionOrigin,
 	SubmissionPage,
 	SubmissionQuery,
-	Track,
-	TrayKey
+	Track
 } from './types';
 
 /**
@@ -23,23 +22,15 @@ export interface SubmissionArrivalsView {
 	readonly timezone: string;
 }
 
-export interface SubmissionTrayRestoreEntry {
-	readonly id: string;
-	readonly tray: TrayKey;
-	readonly setAsideBy?: string;
-}
-
 export interface SubmissionsPagePort {
 	readonly source: { readonly kind: 'sample' } | { readonly kind: 'live' };
 	readonly submissions: {
 		list(query?: SubmissionQuery): Promise<SubmissionPage>;
 		addDirectEntry(input: DirectEntryInput): Promise<Submission>;
-		removeDirectEntry(id: string): Promise<void>;
 		setAside(ids: readonly string[]): Promise<void>;
 		returnToInbox(ids: readonly string[]): Promise<void>;
 		discard(ids: readonly string[]): Promise<void>;
 		restore(ids: readonly string[]): Promise<void>;
-		restoreTray(entries: readonly SubmissionTrayRestoreEntry[]): Promise<void>;
 	};
 	readonly speakers: {
 		profile(email: string): Promise<SpeakerProfile | null>;
@@ -98,4 +89,3 @@ export interface SubmissionsPagePort {
 		openCount(): Promise<number>;
 	};
 }
-

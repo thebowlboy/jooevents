@@ -365,7 +365,20 @@ describe('disposable model catalog and run persistence', () => {
       SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name
     `).all();
     expect(applicationTables.length).toBeGreaterThan(0);
-    expect(applicationTables.every(({ name }) => name.includes('_trial'))).toBe(true);
+    expect(applicationTables.map(({ name }) => name)).toEqual(expect.arrayContaining([
+      'operation_log',
+      'model_profile_revisions_trial',
+      'model_profile_current_trial',
+      'model_scaffold_revisions_trial',
+      'model_scaffold_current_trial',
+      'model_binding_profiles_trial',
+      'model_runs_trial',
+      'model_attempts_trial',
+      'model_tool_calls_trial',
+      'model_attempt_payload_adoptions_trial',
+      'deterministic_fake_attempts_trial',
+      'deterministic_fake_tool_requests_trial'
+    ]));
 
     const frozen = startRun(context.repository, {
       runId: ids.run1,

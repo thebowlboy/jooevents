@@ -1,3 +1,4 @@
+import { canonicalJsonSha256 } from '@jooevents/kernel';
 import {
   eventSettingsGeometrySchema,
   eventSettingsLocationSchema,
@@ -10,7 +11,7 @@ import {
   type EventSettingsSlotMinutes,
   type EventSettingsUpdateAuthorInput
 } from '@jooevents/contracts';
-import { canonicalJsonSha256 } from '@jooevents/changesets';
+
 import {
   parseAggregateVersion,
   parseEventId,
@@ -71,6 +72,14 @@ export interface EventSettingsState {
   readonly eventSet: WorkspaceEventSet;
   readonly event: Event;
   readonly companion: EventSettingsCompanion;
+}
+
+export interface EventSettingsReadPort {
+  readEventSettings(scope: EventSettingsScope): EventSettingsState | undefined;
+}
+
+export interface EventSettingsTransactionPort extends EventSettingsReadPort {
+  applyEventSettingsUpdatePlan(plan: EventSettingsUpdatePlan): EventSettingsDto;
 }
 
 export interface EventSettingsUpdatePlan {

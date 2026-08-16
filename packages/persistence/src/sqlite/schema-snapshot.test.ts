@@ -46,8 +46,12 @@ function expectFoundationError(work: () => unknown, code: SQLiteFoundationError[
 }
 
 describe('SQLite artifact verification', () => {
-  test('the manifest freezes the exact epoch-1 and runner-bootstrap bytes', () => {
+  test('the manifest freezes the exact epoch-2 baseline, predecessor, and runner bytes', () => {
     const predecessor = readVerifiedSQLiteArtifact(
+      SQLITE_MIGRATION_MANIFEST.predecessor.artifact,
+      SQLITE_MIGRATION_MANIFEST.predecessor.checksumSha256
+    );
+    const baseline = readVerifiedSQLiteArtifact(
       SQLITE_MIGRATION_MANIFEST.migrations[0].artifact,
       SQLITE_MIGRATION_MANIFEST.migrations[0].checksumSha256
     );
@@ -57,6 +61,7 @@ describe('SQLite artifact verification', () => {
     );
 
     expect(predecessor.checksumSha256).toBe('7bcc91ff77f3cb57b6d553dbf73546ec1d2972da24840d238d12323b7f50305c');
+    expect(baseline.checksumSha256).toBe('5ce9cfb08f06e8cd9a84296fe20d0850cf4876f283b479caafc128ad967bf6aa');
     expect(bootstrap.checksumSha256).toBe('55548c37be3531717439c32b9ea00caa5eaa186c9ae3de54ad5ff7baa54f62e3');
     expect(predecessor.bytes.byteLength).toBe(11_340);
   });

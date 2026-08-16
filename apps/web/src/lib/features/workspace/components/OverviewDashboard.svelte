@@ -151,6 +151,23 @@
 		unavailable: statusIcon.notConfigured
 	} as const;
 
+	/**
+	 * A lane's mark answers its *availability* before its health, because a
+	 * stage that has not begun and a stage nobody counted are two different
+	 * absences and neither is a health verdict.
+	 *
+	 * Both glyphs come from the closed vocabulary and already mean exactly
+	 * this: `notStarted` is the task board's word for work that has not begun,
+	 * `notChecked` is the readiness vocabulary's word for a question nobody
+	 * answered. A padlock is deliberately not used — `Lock` is already spent on
+	 * a closed form, and one meaning takes one symbol.
+	 */
+	function laneIcon(stage: OverviewPipelineStage) {
+		if (stage.availability.kind === 'locked') return statusIcon.notStarted;
+		if (stage.availability.kind === 'unavailable') return statusIcon.notChecked;
+		return stageIcon[stage.state];
+	}
+
 	const navItemByKey = Object.fromEntries(navItems.map((item) => [item.key, item]));
 
 	/* The area whose screen answers for each stage's facts. Collect and triage
@@ -261,6 +278,55 @@
 		return `${stage.label}: ${parts.join(', ')} — open ${area}`;
 	}
 
+	/**
+	 * The lanes showing a dash. A dash is legitimate only where no measurement
+	 * exists and its reason sits with it — so the reason is said once, under the
+	 * list, naming exactly the lanes the reader can see it on. Saying it on each
+	 * lane instead would state one fact about the event five times down a column,
+	 * which is the defect the empty-cell rule exists to stop.
+	 *
+	 * The one-lane spelling matches the port's own `availability.message`; this
+	 * composes the same sentence over several labels.
+	 */
+	const uncountedNote = $derived.by(() => {
+		const labels = summary
+			? summary.pipeline
+				.filter((stage) => stage.availability.kind === 'unavailable')
+				.map((stage) => stage.label)
+			: [];
+		if (labels.length === 0) return '';
+		const named = labels.length === 1
+			? labels[0]
+			: `${labels.slice(0, -1).join(', ')} or ${labels[labels.length - 1]}`;
+		return `JooEvents does not yet count ${named} on this event.`;
+	});
+
+	/**
+	 * One shared cause, said once above the lanes and carrying its own next step,
+	 * rather than repeated down a column. It renders only while the whole intake
+	 * chain is held by the same fact — the moment a form opens, the lanes differ
+	 * and each states its own condition.
+	 */
+	const intakeHeld = $derived.by(() => {
+		const lanes = summary?.pipeline;
+		if (!lanes) return false;
+		const locked = (key: OverviewPipelineStage['key']) =>
+			lanes.find((stage) => stage.key === key)?.availability.kind === 'locked';
+		return locked('collect') && locked('triage');
+	});
+
+	/**
+	 * The same two questions asked of the snapshot, so the placeholder reserves
+	 * the held line and the footnote exactly where the resolved panel puts them.
+	 */
+	const knownIntakeHeld = known
+		? ['collect', 'triage'].every((key) =>
+			known.pipeline.find((stage) => stage.key === key)?.availability.kind === 'locked')
+		: false;
+	const knownHasUncounted = known
+		? known.pipeline.some((stage) => stage.availability.kind === 'unavailable')
+		: false;
+
 	/** The tray a discarded proposal is recoverable from, for the arrival panel. */
 	const discardedHref = $derived(
 		summary?.trays.find((tray) => tray.kind === 'discarded')?.href
@@ -335,17 +401,35 @@
 
 					<section class="panel" aria-hidden="true">
 						<header class="panel__head"><h2>Pipeline</h2></header>
+						{#if knownIntakeHeld}
+							<!-- The held line and its action are a block above the list; a
+							     placeholder that omitted them would push every lane upward
+							     the moment the summary landed. -->
+							<div class="stages__held">
+								<p class="stages__held-fact"><span class="ui-skeleton skeleton-line" style="inline-size: min(19rem, 100%)"></span></p>
+								<span class="ui-skeleton skeleton-action"></span>
+							</div>
+						{/if}
 						<ul class="stages">
 							<!-- Each placeholder lane keeps the shape its own stage resolves
 							     to: a meter only where the stage carries a denominator, a
 							     lane end only where it names a deadline or falls behind. -->
 							{#each known.pipeline as stage (stage.key)}
 								<li class="stages__item">
-									<span class="lane">
+									<span class="lane" class:lane--locked={stage.availability.kind === 'locked'}>
 										<span class="lane__mark lane__mark--pending"></span>
 										<span class="lane__label"><span class="ui-skeleton skeleton-line" style="inline-size: 4rem"></span></span>
-										<span class="lane__headline"><span class="ui-skeleton skeleton-line" style="inline-size: 2.5rem"></span></span>
-										<span class="lane__sub"><span class="ui-skeleton skeleton-line" style="inline-size: 12rem"></span></span>
+										<!-- A held lane resolves to no figure at all and an uncounted
+										     one to a dash, so neither reserves the figure slot the
+										     measured lanes use. -->
+										{#if stage.availability.kind === 'available'}
+											<span class="lane__headline"><span class="ui-skeleton skeleton-line" style="inline-size: 2.5rem"></span></span>
+										{:else if stage.availability.kind === 'unavailable'}
+											<span class="lane__headline"><span class="ui-skeleton skeleton-line" style="inline-size: 0.75rem"></span></span>
+										{/if}
+										{#if stage.availability.kind !== 'unavailable'}
+											<span class="lane__sub"><span class="ui-skeleton skeleton-line" style="inline-size: 12rem"></span></span>
+										{/if}
 										{#if stage.progress}
 											<span class="lane__meter">
 												<span class="lane__track"></span>
@@ -366,6 +450,9 @@
 								</li>
 							{/each}
 						</ul>
+						{#if knownHasUncounted}
+							<p class="stages__note"><span class="ui-skeleton skeleton-line" style="inline-size: min(23rem, 100%)"></span></p>
+						{/if}
 					</section>
 				</div>
 
@@ -399,7 +486,7 @@
 					</section>
 
 					<section class="panel" aria-hidden="true">
-						<header class="panel__head"><h2>Everything has a place</h2></header>
+						<header class="panel__head"><h2>Holding areas</h2></header>
 						<ul class="ledger-rows">
 							{#each Array(known.trays.length) as _, index (index)}
 								<li><span class="ui-skeleton skeleton-pill"></span></li>
@@ -450,14 +537,17 @@
 			<button
 				type="button"
 				class="ui-button ui-button--primary"
-				disabled
-				title="AI-assisted event drafting is not available yet">Create event</button>
+				disabled>Create event</button>
 			<button
 				type="button"
 				class="ui-button ui-button--secondary"
 				aria-haspopup="dialog"
 				onclick={() => (newEventOpen = true)}>Fill in details myself</button>
 		</div>
+		<!-- The reason a control refuses renders in place. It used to be a `title`,
+		     which never arrives on a disabled control and never arrives on touch at
+		     all — so the refusal was invisible exactly where it was needed. -->
+		<p class="welcome__note">Describing your event to the assistant is not available yet.</p>
 	</section>
 {:else}
 	{#if banner}
@@ -500,7 +590,9 @@
 					<h2>Needs attention</h2>
 					<span class="panel__count">{listItems.length}</span>
 				</header>
-				{#if summary.sections.attention.kind === 'unavailable'}
+				{#if summary.sections.attention.kind === 'locked'}
+					<p class="panel__calm">{summary.sections.attention.condition}</p>
+				{:else if summary.sections.attention.kind === 'unavailable'}
 					<p class="panel__calm">{summary.sections.attention.message}</p>
 				{:else if listItems.length === 0}
 					<p class="panel__calm">Nothing is waiting on you right now.</p>
@@ -532,20 +624,41 @@
 
 			<section class="panel" aria-label="Pipeline">
 				<header class="panel__head"><h2>Pipeline</h2></header>
+				{#if intakeHeld}
+					<!-- The fact is the line; the verb is the button. One consequence for
+					     the whole panel, rather than a door on every held lane leading to
+					     the same nothing. -->
+					<div class="stages__held">
+						<p class="stages__held-fact">No form is open, so nothing has arrived yet.</p>
+						<a class="ui-button ui-button--secondary ui-button--sm" href={areaHref.forms}
+							>Make a form</a>
+					</div>
+				{/if}
 				<ul class="stages">
 					{#each summary.pipeline as stage (stage.key)}
-						{@const Health = stageIcon[stage.state]}
+						{@const Health = laneIcon(stage)}
 						<li class="stages__item">
-							{#if stage.availability.kind === 'unavailable'}
-								<!-- Capability availability is not event progress. The neutral
-								     lane keeps the tuned map visible without becoming a false door. -->
-								<span class="lane" data-stage={stage.key}>
+							{#if stage.availability.kind === 'locked'}
+								<!-- Present, not started. It carries no figure at all: the dash
+								     was a refusal to say, and the condition is the answer. Not a
+								     door either — there are no rows behind it, and the panel
+								     above already offers the one live next step. -->
+								<span class="lane lane--locked" data-stage={stage.key}>
+									<span class="lane__mark lane__mark--locked" aria-hidden="true"
+										><Health size={14} /></span
+									>
+									<span class="lane__label">{stage.label}</span>
+									<span class="lane__sub">{stage.availability.condition}</span>
+								</span>
+							{:else if stage.availability.kind === 'unavailable'}
+								<!-- No measurement exists. The dash says so and the footnote
+								     under the list says why, once, for every lane wearing one. -->
+								<span class="lane lane--uncounted" data-stage={stage.key}>
 									<span class="lane__mark lane__mark--unavailable" aria-hidden="true"
 										><Health size={14} /></span
 									>
 									<span class="lane__label">{stage.label}</span>
 									<span class="lane__headline">{stage.headline}</span>
-									<span class="lane__sub">{stage.sub}</span>
 								</span>
 							{:else}
 								{@const door = laneDoor(stage, summary.navCounts)}
@@ -612,13 +725,22 @@
 						</li>
 					{/each}
 				</ul>
+				{#if uncountedNote}
+					<!-- Said once, under the list, the way the tray ledger says once why
+					     some of its pills are figures rather than links. -->
+					<p class="stages__note">{uncountedNote}</p>
+				{/if}
 			</section>
 		</div>
 
 		<div class="columns__aside">
 			<section class="panel" aria-label="Deadlines">
 				<header class="panel__head"><h2>Deadlines</h2></header>
-				{#if summary.sections.deadlines.kind === 'unavailable'}
+				{#if summary.sections.deadlines.kind === 'locked'}
+					<!-- A fact about the event, not an absence of wiring: it states what
+					     the first deadline will be rather than apologising for having none. -->
+					<p class="panel__calm">{summary.sections.deadlines.condition}</p>
+				{:else if summary.sections.deadlines.kind === 'unavailable'}
 					<p class="panel__calm">{summary.sections.deadlines.message}</p>
 				{:else if summary.deadlines.length === 0}
 					<p class="panel__calm">No event deadlines are recorded.</p>
@@ -651,7 +773,9 @@
 
 			<section class="panel" aria-label="Activity">
 				<header class="panel__head"><h2>Activity</h2></header>
-				{#if summary.sections.activity.kind === 'unavailable'}
+				{#if summary.sections.activity.kind === 'locked'}
+					<p class="panel__calm">{summary.sections.activity.condition}</p>
+				{:else if summary.sections.activity.kind === 'unavailable'}
 					<p class="panel__calm">{summary.sections.activity.message}</p>
 				{:else if summary.activity.length === 0}
 					<p class="panel__calm">No recorded activity yet.</p>
@@ -660,9 +784,16 @@
 				{/if}
 			</section>
 
-			<section class="panel" aria-label="Everything has a place">
-				<header class="panel__head"><h2>Everything has a place</h2></header>
-				{#if summary.sections.trays.kind === 'unavailable'}
+			<!-- Named for what it lists, not for the guarantee behind it: "Everything
+			     has a place" was the design principle worn as a heading, and beside
+			     Pipeline / Deadlines / Activity it read as a riddle. The pills are
+			     the places things are held outside the main queues; the heading
+			     says so and stops. -->
+			<section class="panel" aria-label="Holding areas">
+				<header class="panel__head"><h2>Holding areas</h2></header>
+				{#if summary.sections.trays.kind === 'locked'}
+					<p class="panel__calm">{summary.sections.trays.condition}</p>
+				{:else if summary.sections.trays.kind === 'unavailable'}
 					<p class="panel__calm">{summary.sections.trays.message}</p>
 				{:else}
 					<TrayLedger trays={summary.trays} />
@@ -808,6 +939,12 @@
 		flex-wrap: wrap;
 		gap: var(--je-space-2);
 		justify-content: center;
+	}
+
+	.welcome__note {
+		margin: var(--je-space-3) 0 0;
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
 	}
 
 	.welcome--loading {
@@ -1028,8 +1165,54 @@
 		color: var(--je-color-danger);
 	}
 
-	.lane__mark--unavailable {
+	.lane__mark--unavailable,
+	.lane__mark--locked {
+		/* Non-text UI, so the 3:1 floor applies and subtle ink clears it at
+		   4.14:1. The lane's own words never take this step — see below. */
 		color: var(--je-color-text-subtle);
+	}
+
+	/* Present, not started. One ink step on the label is the visible level
+	   change; the missing figure, meter and lane end are the rest of the
+	   quieting. No fill and no border: the live lanes' hover already owns the
+	   sunken surface, and on a new event every lane is held, so a per-lane wash
+	   would distinguish nothing. What makes it read deliberate is the sentence. */
+	.lane--locked .lane__label {
+		color: var(--je-color-text-muted);
+	}
+
+	/* This sentence is the whole payload of a held lane, so it wraps at every
+	   width rather than inheriting the measured lane's single-line ellipsis —
+	   truncating it would hide the one thing the lane exists to say. It stays on
+	   `text-muted` and never steps to `text-subtle`, which measures 4.14:1 and is
+	   below the 4.5:1 floor for ordinary text: dimmed must not mean illegible. */
+	.lane--locked .lane__sub {
+		white-space: normal;
+		overflow: visible;
+		text-overflow: clip;
+	}
+
+	/* The shared cause, above the lanes it holds, carrying the one next step. */
+	.stages__held {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--je-space-3);
+		margin-block-end: var(--je-space-4);
+	}
+
+	.stages__held-fact {
+		margin: 0;
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-text-muted);
+	}
+
+	/* Said once, under the list, for every lane wearing a dash. */
+	.stages__note {
+		margin: var(--je-space-4) 0 0;
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
 	}
 
 	.lane__label {

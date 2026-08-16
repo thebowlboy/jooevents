@@ -26,8 +26,8 @@ import {
 } from '@jooevents/kernel';
 
 /**
- * C0 trial persistence for participant email-proof access (fresh/disposable
- * schema; retained migrations are coordinated separately). Three records:
+ * Participant email-proof access persistence contributes to the accepted epoch-2
+ * baseline and may also serve isolated fixtures. Three records:
  *
  * - `participant_identity_family` — the portal lane's members of the one
  *   person + participant-identity family the intake attribution ceremony

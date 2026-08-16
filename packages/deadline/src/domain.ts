@@ -1,3 +1,4 @@
+import { canonicalJsonSha256 } from '@jooevents/kernel';
 import {
   deadlineChangedFactPayloadSchema,
   deadlineMutationPlanSchema,
@@ -15,7 +16,7 @@ import {
   type DeadlineSafeDiff,
   type DeadlineScopeDto
 } from '@jooevents/contracts/deadlines';
-import { canonicalJsonSha256 } from '@jooevents/changesets';
+
 import {
   compareDeadlineHeads,
   deadlineCatalogDigest,

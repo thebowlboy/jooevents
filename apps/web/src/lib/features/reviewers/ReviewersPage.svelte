@@ -308,7 +308,6 @@
 	}
 
 	async function applyScope(row: Reviewer) {
-		const before = row.scope.map((ref) => ({ ...ref }));
 		const next = draft.map((ref) => ({ ...ref }));
 		busyId = row.id;
 		try {
@@ -318,11 +317,7 @@
 				return;
 			}
 			const label = scopeReceiptLabel(row, next);
-			recordAction({
-				label,
-				area: 'Reviewers',
-				undo: () => api.reviewers.restoreScope(row.id, before)
-			});
+			recordAction({ label, area: 'Reviewers' });
 			await load();
 			announcement = `${label}.`;
 		} finally {
@@ -345,8 +340,6 @@
 	async function confirmRemove() {
 		const target = removeTarget;
 		if (!target || !roster) return;
-		const index = roster.reviewers.findIndex((entry) => entry.id === target.id);
-		const snapshot: Reviewer = { ...target, scope: target.scope.map((ref) => ({ ...ref })) };
 		removeOpen = false;
 		busyId = target.id;
 		try {
@@ -354,7 +347,7 @@
 			recordAction({
 				label: `Removed ${target.name} from the reviewer roster`,
 				area: 'Reviewers',
-				undo: () => api.reviewers.restore(snapshot, Math.max(0, index))
+				undo: () => api.reviewers.restore(target.id)
 			});
 			expandedId = null;
 			await load();
@@ -551,21 +544,30 @@
 {/if}
 
 <section aria-label="Reviewer roster">
-	{#if rosterState.kind === 'unavailable'}
+	{#if rosterState.kind === 'unavailable' && rosterState.retryable}
 		<!-- The read answered, and its answer was "no". Skeleton rows here would
 		     promise a roster that is not on its way. -->
 		<div class="panel" role="alert">
 			<span class="panel__mark" aria-hidden="true"><TriangleAlert size={22} /></span>
-			<p class="panel__title">The reviewer roster is unavailable</p>
+			<p class="panel__title">The reviewer roster could not be loaded</p>
 			<p class="panel__copy">{rosterState.message}</p>
-			{#if rosterState.retryable}
-				<button
-					type="button"
-					class="ui-button ui-button--secondary ui-button--sm"
-					aria-busy={retryingRoster || undefined}
-					disabled={retryingRoster}
-					onclick={retryRoster}>Try again</button>
-			{/if}
+			<button
+				type="button"
+				class="ui-button ui-button--secondary ui-button--sm"
+				aria-busy={retryingRoster || undefined}
+				disabled={retryingRoster}
+				onclick={retryRoster}>Try again</button>
+		</div>
+	{:else if rosterState.kind === 'unavailable'}
+		<!-- Not bound in this composition: retrying reaches the same absence. That
+		     is a fact about the workspace, not a failure this person caused or can
+		     repair, so it takes neither the alarm glyph, the assertive live region,
+		     nor a retry that would only re-answer "no". -->
+		{@const Situation = statusIcon.notConfigured}
+		<div class="panel">
+			<span class="panel__mark" aria-hidden="true"><Situation size={22} /></span>
+			<p class="panel__title">The reviewer roster is not available here</p>
+			<p class="panel__copy">{rosterState.message}</p>
 		</div>
 	{:else if roster && filtered.length === 0}
 		<div class="panel">
@@ -816,8 +818,8 @@
 	{/snippet}
 </Modal>
 
-<!-- After an undo the roster is re-read, and the open row's editor resyncs to
-     the restored truth — a stale draft would claim a pending edit nobody made. -->
+<!-- A roster restore is an explicit forward operation over its retained revoked row.
+     After it commits, re-read the roster and resync the open editor. -->
 <CommitReceipt
 	onUndone={async () => {
 		await load();

@@ -33,7 +33,7 @@ import {
   type UserId
 } from '@jooevents/kernel';
 
-/** Additive schema installed only in an explicitly ephemeral SQLite runtime. */
+/** This schema contributes to the accepted epoch-2 baseline and may also serve isolated fixtures. */
 export const PROGRAM_VOCABULARY_SQL = `
 CREATE TABLE program_vocabulary_sets (
   workspace_id TEXT NOT NULL CHECK(length(workspace_id) = 36),

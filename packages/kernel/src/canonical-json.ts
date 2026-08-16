@@ -113,3 +113,10 @@ export function encodeCanonicalJson(value: unknown): Uint8Array {
 export function canonicalJsonText(value: unknown): string {
   return JSON.stringify(canonicalJsonValue(value));
 }
+
+/** Hashes canonical_json v1 bytes without depending on a feature workflow. */
+export function canonicalJsonSha256(value: unknown): string {
+  return bytesToHex(sha256(encodeCanonicalJson(value)));
+}
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex } from '@noble/hashes/utils.js';

@@ -128,32 +128,6 @@ export const eventCreateResultSchema = z.strictObject({
 export const eventCreateOperationResultSchema =
   createEffectfulOperationResultSchema(eventCreateResultSchema);
 
-const canonicalEventDraftIdSchema = z.uuid().refine(
-  (value) => value === value.toLowerCase(),
-  { message: 'Application IDs must use canonical lowercase bytes.' }
-);
-const eventDigestSchema = z.string().regex(/^[a-f0-9]{64}$/);
-
-export const eventCreateDraftDataSchema = z.strictObject({
-  action: z.literal('create'),
-  changesetId: canonicalEventDraftIdSchema,
-  headVersion: eventVersionSchema,
-  revision: z.strictObject({
-    id: canonicalEventDraftIdSchema,
-    number: eventVersionSchema,
-    digestSha256: eventDigestSchema
-  }),
-  safeDiff: eventCreateSafeDiffSchema
-});
-
-export const eventCreateDraftCanonicalResultSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('success'), data: eventCreateDraftDataSchema }),
-  z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
-]);
-
-export const eventCreateDraftOperationResultSchema =
-  createEffectfulOperationResultSchema(eventCreateDraftDataSchema);
-
 /** Exact public schema identities projected into the operator operation manifest. */
 export const EVENT_OPERATION_SCHEMA_REFS = Object.freeze({
   currentRead: createOperationSchemaManifestRefs({
@@ -167,12 +141,6 @@ export const EVENT_OPERATION_SCHEMA_REFS = Object.freeze({
     inputSchema: eventCreateInputSchema,
     resultKey: 'schema.event.create.operator-result',
     resultSchema: eventCreateOperationResultSchema
-  }),
-  createDraft: createOperationSchemaManifestRefs({
-    inputKey: 'schema.event.create-draft.input',
-    inputSchema: eventCreateDraftInputSchema,
-    resultKey: 'schema.event.create-draft.operator-result',
-    resultSchema: eventCreateDraftOperationResultSchema
   })
 });
 
@@ -207,13 +175,6 @@ export type EventCreateDraftInput = z.infer<typeof eventCreateDraftInputSchema>;
 export type EventCreateSafeDiff = z.infer<typeof eventCreateSafeDiffSchema>;
 export type EventCreateResult = z.infer<typeof eventCreateResultSchema>;
 export type EventCreateOperationResult = z.infer<typeof eventCreateOperationResultSchema>;
-export type EventCreateDraftData = z.infer<typeof eventCreateDraftDataSchema>;
-export type EventCreateDraftCanonicalResult = z.infer<
-  typeof eventCreateDraftCanonicalResultSchema
->;
-export type EventCreateDraftOperationResult = z.infer<
-  typeof eventCreateDraftOperationResultSchema
->;
 export type EventCreationCompensationEligibility = z.infer<
   typeof eventCreationCompensationEligibilitySchema
 >;

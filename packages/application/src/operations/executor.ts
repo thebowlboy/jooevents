@@ -36,18 +36,16 @@ export type OperationExecutionPhase =
   | 'projected_result'
   | 'read_operational_trace'
   | 'read_immutable_audit'
-  | 'receipt_preflight'
+  | 'replay_preflight'
   | 'autonomy_preflight'
   | 'unit_of_work'
-  | 'execution_claim'
-  | 'receipt_recheck'
+  | 'replay_recheck'
   | 'authority_recheck'
   | 'write_snapshot'
   | 'domain_contribution'
-  | 'receipt_parent'
-  | 'operation_audit'
-  | 'receipt_children'
-  | 'claim_release';
+  | 'operation_log'
+  | 'effect_contributions'
+  | 'invocation_release';
 
 export class OperationInputError extends Error {
   constructor() {

@@ -18,8 +18,8 @@ function usage(): never {
     'Usage:',
     '  jooevents-db status --database /absolute/path.sqlite',
     '  jooevents-db migrate --database /absolute/path.sqlite [--class retained_development|frozen_release]',
-    '  jooevents-db backup --database /absolute/path.sqlite --backup /absolute/path.backup.sqlite --expected-database-id ID --class retained_development|frozen_release --max-bytes N',
-    '  jooevents-db restore-rehearsal --backup /absolute/path.backup.sqlite --candidate /absolute/restored.sqlite --expected-database-id ID --expected-sha256 SHA256 --class retained_development|frozen_release --max-bytes N',
+    '  jooevents-db backup --database /absolute/path.sqlite --backup /absolute/path.backup.sqlite [--expected-database-id ID] --class retained_development|frozen_release --max-bytes N',
+    '  jooevents-db restore-rehearsal --backup /absolute/path.backup.sqlite --candidate /absolute/restored.sqlite [--expected-database-id ID] --expected-sha256 SHA256 --class retained_development|frozen_release --max-bytes N',
     ''
   ].join('\n'));
   process.exit(64);
@@ -62,14 +62,14 @@ export function runSQLiteCli(arguments_: readonly string[]): number {
     const requestedClass = flag(arguments_, '--class');
     const maximumSerializeBytes = Number(flag(arguments_, '--max-bytes'));
     if (
-      !databasePath || !backupPath || !expectedDatabaseId ||
+      !databasePath || !backupPath ||
       (requestedClass !== 'retained_development' && requestedClass !== 'frozen_release') ||
       !Number.isSafeInteger(maximumSerializeBytes) || maximumSerializeBytes < 1
     ) usage();
     const descriptor = createRetainedSQLiteBackup({
       databasePath,
       backupPath,
-      expectedDatabaseId,
+      ...(expectedDatabaseId ? { expectedDatabaseId } : {}),
       expectedDatabaseClass: requestedClass,
       maximumSerializeBytes
     });
@@ -85,14 +85,14 @@ export function runSQLiteCli(arguments_: readonly string[]): number {
     const requestedClass = flag(arguments_, '--class');
     const maximumBytes = Number(flag(arguments_, '--max-bytes'));
     if (
-      !backupPath || !candidatePath || !expectedDatabaseId ||
+      !backupPath || !candidatePath ||
       !expectedSha256 || !/^[0-9a-f]{64}$/.test(expectedSha256) ||
       (requestedClass !== 'retained_development' && requestedClass !== 'frozen_release') ||
       !Number.isSafeInteger(maximumBytes) || maximumBytes < 1
     ) usage();
     const verified = verifyRetainedSQLiteBackup({
       backupPath,
-      expectedDatabaseId,
+      ...(expectedDatabaseId ? { expectedDatabaseId } : {}),
       expectedDatabaseClass: requestedClass as RetainedSQLiteDatabaseClass,
       maximumBytes
     });

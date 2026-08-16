@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import {
   createApplicationOperationRuntime,
   createHmacRequestHashSealer,
@@ -26,7 +27,6 @@ import {
   eventCreateOperationResultSchema,
   type EventCreateInput
 } from '@jooevents/contracts';
-import { openSQLite } from './database';
 import {
   SQLiteEventSpineRepository,
   installEventSpineSchema
@@ -66,7 +66,7 @@ function uuid(suffix: number): string {
   return `019c1df7-86b5-769b-bba4-${suffix.toString(16).padStart(12, '0')}`;
 }
 
-function count(sqlite: ReturnType<typeof openSQLite>['sqlite'], table: string): number {
+function count(sqlite: Database, table: string): number {
   return sqlite.query<{ readonly count: number }, []>(
     `SELECT count(*) AS count FROM ${table}`
   ).get()?.count ?? -1;
@@ -75,18 +75,10 @@ function count(sqlite: ReturnType<typeof openSQLite>['sqlite'], table: string): 
 const domainTables = [
   'event_spine_heads',
   'event_spine_scope_roots',
-  'event_spine_create_links',
-  'event_spine_create_plans',
-  'event_spine_domain_facts',
-  'event_spine_outbox_pointers',
-  'event_spine_timeline_projection',
-  'foundation_trial_operation_receipts',
-  'foundation_trial_operation_receipt_children',
-  'foundation_trial_operation_audits',
-  'foundation_trial_operation_execution_claims'
+  'operation_log'
 ] as const;
 
-function expectNoOperationRows(sqlite: ReturnType<typeof openSQLite>['sqlite']): void {
+function expectNoOperationRows(sqlite: Database): void {
   for (const table of domainTables) expect(count(sqlite, table), table).toBe(0);
   const eventSet = new SQLiteEventSpineRepository(sqlite).requireEventSet(workspaceId);
   expect(eventSet.workspaceId).toBe(workspaceId);
@@ -96,53 +88,26 @@ function expectNoOperationRows(sqlite: ReturnType<typeof openSQLite>['sqlite']):
 
 type AdapterMode =
   | 'ordinary'
-  | 'forged_domain'
-  | 'wrong_receipt'
-  | 'reordered_child'
-  | 'duplicate_child'
-  | 'substituted_child';
+  | 'forged_domain';
 
 function adversarialAdapter(
   base: SQLiteEventEffectDomainAdapter,
   mode: Exclude<AdapterMode, 'ordinary'>
 ): SQLiteEffectDomainAdapter {
-  let firstChild: unknown;
   return {
     openHandlerSnapshot: base.openHandlerSnapshot.bind(base),
     applyDomainContribution(contribution) {
       if (mode === 'forged_domain') {
         const forged = structuredClone(contribution) as Record<string, unknown>;
-        forged.planDigestSha256 = '0'.repeat(64);
+        const plan = structuredClone(forged.plan) as Record<string, unknown>;
+        const after = structuredClone(plan.after) as Record<string, unknown>;
+        after.name = 'Forged Event';
+        plan.after = after;
+        forged.plan = plan;
         return base.applyDomainContribution(forged);
       }
       return base.applyDomainContribution(contribution);
     },
-    afterReceiptParentInserted: base.afterReceiptParentInserted.bind(base),
-    afterReceiptChildInserted(receiptId, contribution) {
-      if (mode === 'wrong_receipt') {
-        return base.afterReceiptChildInserted(uuid(0xff01), contribution);
-      }
-      if (mode === 'reordered_child') {
-        const fact = contribution as { readonly factId?: string };
-        return base.afterReceiptChildInserted(receiptId, {
-          kind: 'outbox_pointer',
-          pointerId: uuid(0xff02),
-          sourceKind: 'domain_fact',
-          factId: fact.factId
-        });
-      }
-      if (mode === 'substituted_child') {
-        const substituted = structuredClone(contribution) as Record<string, unknown>;
-        substituted.factId = uuid(0xff03);
-        return base.afterReceiptChildInserted(receiptId, substituted);
-      }
-      if (firstChild === undefined) {
-        firstChild = structuredClone(contribution);
-        return base.afterReceiptChildInserted(receiptId, contribution);
-      }
-      return base.afterReceiptChildInserted(receiptId, firstChild);
-    },
-    afterExecutionClaimReleased: base.afterExecutionClaimReleased.bind(base),
     afterUnitOfWorkCommitted: base.afterUnitOfWorkCommitted.bind(base)
   };
 }
@@ -150,12 +115,12 @@ function adversarialAdapter(
 interface FixtureOptions {
   readonly mode?: AdapterMode;
   readonly permission?: 'event.manage' | 'event.read';
-  readonly duplicateIds?: boolean;
 }
 
 function openFixture(options: FixtureOptions = {}) {
-  const opened = openSQLite(':memory:');
-  const sqlite = opened.sqlite;
+  const sqlite = new Database(':memory:', { create: true, strict: true });
+  sqlite.exec('PRAGMA foreign_keys = ON;');
+  const opened = { sqlite };
   installFoundationTrialUnitOfWorkSchema(sqlite);
   installEventSpineSchema(sqlite);
   sqlite.query<never, [string, string, number, number, number]>(`
@@ -173,25 +138,19 @@ function openFixture(options: FixtureOptions = {}) {
 
   let generatedId = 0x100;
   const nextDomainId = () => uuid(generatedId++);
-  const ids: SQLiteEventEffectDomainIds = options.duplicateIds
-    ? {
-        newEventId: nextDomainId,
-        newPreparationHandle: nextDomainId,
-        newFactId: () => uuid(0xdd01),
-        newPointerId: () => uuid(0xdd01),
-        newTimelineId: nextDomainId
-      }
-    : {
-        newEventId: nextDomainId,
-        newPreparationHandle: nextDomainId,
-        newFactId: nextDomainId,
-        newPointerId: nextDomainId,
-        newTimelineId: nextDomainId
-      };
+  const ids: SQLiteEventEffectDomainIds = { newEventId: nextDomainId };
   const registration = createSQLiteEventEffectDomainRegistration({
     sqlite,
     workspaceId,
-    ids
+    ids,
+    createdEventInitializer: {
+      initializeCreatedEvent(scope) {
+        sqlite.query<never, [string, string, string, number, number]>(`
+          INSERT INTO events (id, workspace_id, name, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?)
+        `).run(scope.eventId, scope.workspaceId, businessInput.name, Date.parse(now), Date.parse(now));
+      }
+    }
   });
   const selectedAdapter = options.mode && options.mode !== 'ordinary'
     ? adversarialAdapter(registration.adapter, options.mode)
@@ -267,7 +226,7 @@ function openFixture(options: FixtureOptions = {}) {
       newInvocationId: () => parseInvocationId(uuid(generatedId++))
     },
     unitOfWork,
-    newReceiptId: () => uuid(receiptId++)
+    newOperationLogId: () => uuid(receiptId++)
   });
   let correlationId = 0x900;
   let idempotency = 0;
@@ -297,7 +256,7 @@ function expectExecutionFailure(error: unknown, phase: OperationExecutionError['
 }
 
 describe('ordinary SQLite Event effect-domain adapter', () => {
-  test('commits exact transaction-authoritative state, receipt linkage and ordered evidence', async () => {
+  test('commits exact state and Event initialization with one readable operation-log row', async () => {
     const fixture = openFixture();
     try {
       const result = eventCreateOperationResultSchema.parse(await fixture.execute());
@@ -320,23 +279,13 @@ describe('ordinary SQLite Event effect-domain adapter', () => {
         workspaceId
       });
       if (!event) throw new TypeError('expected_event');
-      const plan = fixture.repository.readEventCreatePlan(result.receipt.id);
-      expect(plan.after).toEqual(event);
       expect(fixture.sqlite.query<Record<string, unknown>, []>('PRAGMA foreign_key_check').all())
         .toEqual([]);
-      expect(count(fixture.sqlite, 'event_spine_domain_facts')).toBe(1);
-      expect(count(fixture.sqlite, 'event_spine_outbox_pointers')).toBe(1);
-      expect(count(fixture.sqlite, 'event_spine_timeline_projection')).toBe(1);
-      expect(fixture.sqlite.query<{ readonly ordinal: number; readonly kind: string }, []>(`
-        SELECT ordinal, json_extract(contribution_json, '$.kind') AS kind
-          FROM foundation_trial_operation_receipt_children
-         ORDER BY ordinal
-      `).all()).toEqual([
-        { ordinal: 0, kind: 'domain_fact' },
-        { ordinal: 1, kind: 'outbox_pointer' },
-        { ordinal: 2, kind: 'timeline' }
-      ]);
-      expect(count(fixture.sqlite, 'events')).toBe(0);
+      expect(count(fixture.sqlite, 'operation_log')).toBe(1);
+      expect(fixture.sqlite.query<{ readonly summary: string }, []>(
+        "SELECT summary FROM operation_log WHERE operation_name = 'event.create'"
+      ).get()).toEqual({ summary: 'Created an event' });
+      expect(count(fixture.sqlite, 'events')).toBe(1);
     } finally {
       fixture.close();
     }
@@ -351,9 +300,7 @@ describe('ordinary SQLite Event effect-domain adapter', () => {
         outcome: { class: 'stale_revision', kind: 'event.event_set_changed' }
       });
       expect(count(stale.sqlite, 'event_spine_heads')).toBe(0);
-      expect(count(stale.sqlite, 'foundation_trial_operation_receipts')).toBe(0);
-      expect(count(stale.sqlite, 'foundation_trial_operation_receipt_children')).toBe(0);
-      expect(count(stale.sqlite, 'foundation_trial_operation_audits')).toBe(1);
+      expect(count(stale.sqlite, 'operation_log')).toBe(0);
     } finally {
       stale.close();
     }
@@ -367,8 +314,7 @@ describe('ordinary SQLite Event effect-domain adapter', () => {
         outcome: { class: 'conflict', kind: 'event.already_selected' }
       });
       expect(count(selected.sqlite, 'event_spine_heads')).toBe(1);
-      expect(count(selected.sqlite, 'foundation_trial_operation_receipts')).toBe(1);
-      expect(count(selected.sqlite, 'foundation_trial_operation_receipt_children')).toBe(3);
+      expect(count(selected.sqlite, 'operation_log')).toBe(1);
     } finally {
       selected.close();
     }
@@ -382,7 +328,7 @@ describe('ordinary SQLite Event effect-domain adapter', () => {
         {} as EffectInvocationContext,
         {} as never
       )).toThrow('event_effect_transaction_required');
-      expect(() => fixture.adapter.afterExecutionClaimReleased({} as never))
+      expect(() => fixture.adapter.applyDomainContribution({}))
         .toThrow('event_effect_transaction_required');
       fixture.sqlite.exec('BEGIN IMMEDIATE;');
       expect(() => fixture.adapter.openHandlerSnapshot(
@@ -403,42 +349,18 @@ describe('ordinary SQLite Event effect-domain adapter', () => {
     }
   });
 
-  test('rejects a forged prepared domain and colliding server IDs with full rollback', async () => {
-    for (const options of [{ mode: 'forged_domain' }, { duplicateIds: true }] as const) {
-      const fixture = openFixture(options);
+  test('rejects a forged prepared domain with full rollback', async () => {
+    const fixture = openFixture({ mode: 'forged_domain' });
+    try {
       try {
-        try {
-          await fixture.execute();
-          throw new Error('expected_execution_failure');
-        } catch (error) {
-          expectExecutionFailure(error, options.mode ? 'domain_contribution' : 'handler');
-        }
-        expectNoOperationRows(fixture.sqlite);
-      } finally {
-        fixture.close();
+        await fixture.execute();
+        throw new Error('expected_execution_failure');
+      } catch (error) {
+        expectExecutionFailure(error, 'domain_contribution');
       }
-    }
-  });
-
-  test('cross-binds the exact receipt ID and rejects reordered, duplicate or substituted children', async () => {
-    for (const mode of [
-      'wrong_receipt',
-      'reordered_child',
-      'duplicate_child',
-      'substituted_child'
-    ] as const) {
-      const fixture = openFixture({ mode });
-      try {
-        try {
-          await fixture.execute();
-          throw new Error('expected_execution_failure');
-        } catch (error) {
-          expectExecutionFailure(error, 'receipt_children');
-        }
-        expectNoOperationRows(fixture.sqlite);
-      } finally {
-        fixture.close();
-      }
+      expectNoOperationRows(fixture.sqlite);
+    } finally {
+      fixture.close();
     }
   });
 });

@@ -52,6 +52,15 @@ export class SchedulePlacementPlanningError extends Error {
   }
 }
 
+export interface SchedulePlacementRepository extends PlaceableSessionIdentityPort {
+  readSchedule(scope: SchedulePlacementScope): SchedulePlacementState | undefined;
+  readVocabulary(scope: SchedulePlacementScope): ProgramVocabularyState | undefined;
+}
+
+export interface SchedulePlacementTransactionRepository extends SchedulePlacementRepository {
+  applyPlacementPlan(plan: SchedulePlacementPlanDto): SchedulePlacementResult;
+}
+
 export function schedulePlacementGuardId(eventId: string): string {
   return `event_schedule:${eventId}`;
 }

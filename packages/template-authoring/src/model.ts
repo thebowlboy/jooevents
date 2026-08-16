@@ -1,4 +1,4 @@
-import { canonicalJsonSha256 } from '@jooevents/changesets';
+import { canonicalJsonSha256 } from '@jooevents/kernel';
 import {
   templateArtifactDocumentSchema,
   templateArtifactHeadSchema,

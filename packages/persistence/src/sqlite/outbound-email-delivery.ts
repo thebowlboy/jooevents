@@ -22,7 +22,7 @@ import {
 } from '@jooevents/communications';
 import { canonicalJsonText, parseInstant } from '@jooevents/kernel';
 
-/** Fresh/disposable schema. Retained migrations are intentionally coordinated separately. */
+/** This schema contributes to the accepted epoch-2 baseline and may also serve isolated fixtures. */
 export const SQLITE_OUTBOUND_EMAIL_DELIVERY_SQL = `
 CREATE TABLE communication_outbound_delivery_heads (
   delivery_id TEXT PRIMARY KEY,

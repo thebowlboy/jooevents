@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import {
   createClassifiedPayloadProfileRef,
   createHmacRequestHashSealer,
@@ -52,7 +53,6 @@ import {
 } from '@jooevents/kernel';
 import type { ProgramReferenceContributorSnapshot } from '@jooevents/program';
 import { createSubmissionTriageSubmitInitializer } from '@jooevents/submission-triage';
-import { openSQLite } from './database';
 import { installDeadlineSchema } from './deadline';
 import { installEventSpineSchema } from './event-spine';
 import {
@@ -197,7 +197,7 @@ function continuationPolicy(): PublicMutationContinuationPolicy {
   });
 }
 
-function count(sqlite: ReturnType<typeof openSQLite>['sqlite'], table: string): number {
+function count(sqlite: Database, table: string): number {
   return sqlite.query<{ readonly total: number }, []>(`SELECT count(*) AS total FROM ${table}`)
     .get()?.total ?? -1;
 }
@@ -210,10 +210,10 @@ function substitutedChild(
   return {
     openHandlerSnapshot: base.openHandlerSnapshot.bind(base),
     applyDomainContribution: base.applyDomainContribution.bind(base),
-    ...(base.afterReceiptParentInserted
-      ? { afterReceiptParentInserted: base.afterReceiptParentInserted.bind(base) }
+    ...(base.afterOperationLogInserted
+      ? { afterOperationLogInserted: base.afterOperationLogInserted.bind(base) }
       : {}),
-    afterReceiptChildInserted(receiptId, contribution) {
+    afterEffectContributionInserted(receiptId, contribution) {
       childCalls += 1;
       const changed = structuredClone(contribution) as Record<string, unknown>;
       if (childCalls === mismatchAtCall) {
@@ -221,10 +221,10 @@ function substitutedChild(
         else if (changed.kind === 'outbox_pointer') changed.pointerId = id(9999);
         else changed.timelineId = id(9999);
       }
-      return base.afterReceiptChildInserted?.(receiptId, changed);
+      return base.afterEffectContributionInserted?.(receiptId, changed);
     },
-    ...(base.afterExecutionClaimReleased
-      ? { afterExecutionClaimReleased: base.afterExecutionClaimReleased.bind(base) }
+    ...(base.afterEffectApplicationCommitted
+      ? { afterEffectApplicationCommitted: base.afterEffectApplicationCommitted.bind(base) }
       : {}),
     ...(base.afterUnitOfWorkCommitted
       ? { afterUnitOfWorkCommitted: base.afterUnitOfWorkCommitted.bind(base) }
@@ -236,7 +236,8 @@ function substitutedChild(
 }
 
 async function fixture(options: { readonly mismatchChild?: boolean } = {}) {
-  const { sqlite } = openSQLite(':memory:');
+  const sqlite = new Database(':memory:', { create: true, strict: true });
+  sqlite.exec('PRAGMA foreign_keys = ON;');
   installFoundationTrialUnitOfWorkSchema(sqlite);
   installEventSpineSchema(sqlite);
   installProgramVocabularySchema(sqlite);
@@ -507,7 +508,7 @@ async function fixture(options: { readonly mismatchChild?: boolean } = {}) {
     read: { operationalTrace: { emit() {} }, immutableAudit: { append() {} },
       clock, newInvocationId: () => parseInvocationId(id(generated++)) },
     unitOfWork,
-    newReceiptId: () => id(generated++)
+    newOperationLogId: () => id(generated++)
   });
   let request = 1;
   const evidence: InvocationEvidence = {
@@ -554,11 +555,11 @@ describe('SQLite Intake public mutation effect domain', () => {
       } } });
       expect(f.directory.resolve(f.evidence.ceremonyEvidenceId)).toBeDefined();
 
-      const beforeRefusal = count(f.sqlite, 'foundation_trial_operation_receipts');
+      const beforeRefusal = count(f.sqlite, 'operation_log');
       expect(await f.execute({ action: 'begin', input: { formId } }, 'fresh-begin'))
         .toMatchObject({ kind: 'outcome', terminal: false,
           outcome: { class: 'conflict', kind: 'intake.changed' } });
-      expect(count(f.sqlite, 'foundation_trial_operation_receipts')).toBe(beforeRefusal);
+      expect(count(f.sqlite, 'operation_log')).toBe(beforeRefusal);
 
       const save = intakePublicMutationOperationResultSchema.parse(await f.execute({
         action: 'save', input: {
@@ -825,8 +826,7 @@ describe('SQLite Intake public mutation effect domain', () => {
       const nonStoreTables = [
         'intake_application_draft_revisions',
         'intake_submission_submit_evidence',
-        'intake_public_mutation_facts',
-        'foundation_trial_operation_receipt_children'
+        'intake_public_mutation_facts'
       ];
       const nonStoreRows = JSON.stringify(nonStoreTables.flatMap((table) =>
         f.sqlite.query<Record<string, unknown>, []>(`SELECT * FROM ${table}`).all()
@@ -851,7 +851,7 @@ describe('SQLite Intake public mutation effect domain', () => {
         'intake_submission_consent_evidence', 'intake_public_mutation_receipt_links',
         'intake_public_mutation_facts', 'intake_public_mutation_pointers',
         'intake_public_mutation_timeline', 'public_mutation_registered_effect_completions',
-        'foundation_trial_operation_receipts', 'foundation_trial_operation_receipt_children'
+        'operation_log'
       ] as const;
       const before = new Map(tables.map((table) => [table, count(f.sqlite, table)]));
       await expect(f.execute({
@@ -864,7 +864,7 @@ describe('SQLite Intake public mutation effect domain', () => {
           ]
         }
       })).rejects
-        .toMatchObject({ name: 'OperationExecutionError', phase: 'receipt_children' });
+        .toMatchObject({ name: 'OperationExecutionError', phase: 'effect_contributions' });
       for (const table of tables) {
         const expected = before.get(table);
         if (expected === undefined) throw new TypeError(`missing table count: ${table}`);
@@ -887,8 +887,7 @@ describe('SQLite Intake public mutation effect domain', () => {
       const tables = [
         'classified_payload_records', 'intake_application_draft_heads',
         'intake_application_draft_revisions', 'intake_submission_heads',
-        'intake_public_mutation_facts', 'foundation_trial_operation_receipts',
-        'foundation_trial_operation_receipt_children'
+        'intake_public_mutation_facts', 'operation_log'
       ] as const;
       const before = new Map(tables.map((table) => [table, count(f.sqlite, table)]));
       const buffersBefore = f.capturedBuffers.length;
@@ -919,17 +918,21 @@ describe('SQLite Intake public mutation effect domain', () => {
       if (!sourceReceipt) throw new TypeError('missing source receipt');
       const secondReceipt = id(8000);
       f.sqlite.query(`
-        INSERT INTO foundation_trial_operation_receipts (
-          id, scope_partition_key, authority_principal_key, operation_name,
-          operation_version, surface, idempotency_verifier_profile_key,
+        INSERT INTO operation_log (
+          id, operation_name, operation_version, registry_digest_sha256, surface,
+          actor_json, authority_principal_key, workspace_id, event_id, subjects_json,
+          summary, occurred_at_ms, correlation_id, scope_partition_key,
+          idempotency_verifier_profile_key,
           idempotency_verifier_profile_version, idempotency_key_verifier,
-          request_hash, result_json
+          request_hash, result_json, action_batch_id, action_step_id
         )
-        SELECT ?, scope_partition_key, authority_principal_key, operation_name,
-          operation_version, surface, idempotency_verifier_profile_key,
+        SELECT ?, operation_name, operation_version, registry_digest_sha256, surface,
+          actor_json, authority_principal_key, workspace_id, event_id, subjects_json,
+          summary, occurred_at_ms, correlation_id, scope_partition_key,
+          idempotency_verifier_profile_key,
           idempotency_verifier_profile_version, ?, request_hash,
-          json_set(result_json, '$.receipt.id', ?)
-        FROM foundation_trial_operation_receipts WHERE id = ?
+          json_set(result_json, '$.receipt.id', ?), action_batch_id, action_step_id
+        FROM operation_log WHERE id = ?
       `).run(secondReceipt, 'c'.repeat(64), secondReceipt, sourceReceipt);
       f.sqlite.query(`
         INSERT INTO intake_public_mutation_receipt_links (

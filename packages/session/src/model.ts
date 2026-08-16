@@ -1,3 +1,4 @@
+import { canonicalJsonSha256 } from '@jooevents/kernel';
 import {
   sessionCatalogSchema,
   sessionHeadSchema,
@@ -8,7 +9,7 @@ import {
   type SessionRosterEvidenceDto,
   type SessionScopeDto
 } from '@jooevents/contracts';
-import { canonicalJsonSha256 } from '@jooevents/changesets';
+
 
 export type SessionScope = SessionScopeDto;
 export type SessionHead = SessionHeadDto;

@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  workspaceTeamInviteDraftInputSchema,
+  workspaceTeamInviteInputSchema,
   workspaceTeamMemberViewSchema,
-  workspaceTeamRemovalDraftInputSchema,
-  workspaceTeamRoleChangeDraftInputSchema,
+  workspaceTeamRemovalInputSchema,
+  workspaceTeamRoleChangeInputSchema,
   workspaceTeamSafeDiffSchema,
   workspaceTeamSnapshotSchema
 } from './workspace-team';
@@ -17,17 +17,17 @@ describe('workspace team browser contracts', () => {
       email: 'owner@example.test', roleKey: 'workspace_admin',
       expectedTeamVersion: 4, expectedTeamDigestSha256: digest
     };
-    expect(workspaceTeamInviteDraftInputSchema.parse(invite).email).toBe('owner@example.test');
+    expect(workspaceTeamInviteInputSchema.parse(invite).email).toBe('owner@example.test');
     for (const field of ['workspaceId', 'actorUserId', 'evaluatedAt', 'authority', 'receiptId']) {
-      expect(workspaceTeamInviteDraftInputSchema.safeParse({ ...invite, [field]: 'forged' }).success)
+      expect(workspaceTeamInviteInputSchema.safeParse({ ...invite, [field]: 'forged' }).success)
         .toBe(false);
     }
 
     const subject = { kind: 'member' as const, membershipId, version: 2 };
-    expect(workspaceTeamRoleChangeDraftInputSchema.safeParse({
+    expect(workspaceTeamRoleChangeInputSchema.safeParse({
       subject, roleKey: 'viewer', expectedTeamVersion: 4, expectedTeamDigestSha256: digest
     }).success).toBe(true);
-    expect(workspaceTeamRemovalDraftInputSchema.safeParse({
+    expect(workspaceTeamRemovalInputSchema.safeParse({
       subject, expectedTeamVersion: 4, expectedTeamDigestSha256: digest
     }).success).toBe(true);
   });

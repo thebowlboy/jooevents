@@ -42,7 +42,7 @@ import type { SQLiteOperatorEventRelationshipSource } from './operator-authority
 import type { SQLiteReviewRepository } from './review';
 
 /**
- * Terminal receipt evidence for the sanctioned non-changeset Review write: the
+ * Terminal receipt evidence for the sanctioned feature-native Review write: the
  * reviewer's own evaluation draft save. Exactly one link row per receipt, and a
  * given (assignment, draft version) is saved at most once.
  */
@@ -57,7 +57,7 @@ CREATE TABLE review_evaluation_draft_save_receipt_links (
   operation_version INTEGER NOT NULL CHECK(operation_version = 1),
   occurred_at_ms INTEGER NOT NULL CHECK(occurred_at_ms BETWEEN 0 AND 8640000000000000),
   FOREIGN KEY (receipt_id)
-    REFERENCES foundation_trial_operation_receipts(id)
+    REFERENCES operation_log(id)
     ON UPDATE RESTRICT ON DELETE RESTRICT,
   FOREIGN KEY (workspace_id, event_id, assignment_id)
     REFERENCES review_assignments(workspace_id, event_id, id)
@@ -133,7 +133,7 @@ function conflictContribution(
       }
     },
     domain: null,
-    receiptChildren: []
+    effectContributions: []
   });
 }
 
@@ -149,13 +149,13 @@ function planningRefusal(error: ReviewPlanningError, assignmentId: string): Save
       }
     },
     domain: null,
-    receiptChildren: []
+    effectContributions: []
   });
 }
 
 /**
  * Saves one reviewer evaluation draft inside the Foundation effect unit of work.
- * The save is the sanctioned non-changeset Review write: it touches only the
+ * The save is the sanctioned feature-native Review write: it touches only the
  * acting reviewer's own `review_drafts` row through the frozen `saveReviewDraft`
  * ceremony, never the round, assignment, head, or Deadline state.
  */
@@ -315,7 +315,7 @@ implements SQLiteEffectDomainAdapter {
         draftVersion: saved.draft.version,
         occurredAt: input.evaluatedAt
       },
-      receiptChildren: []
+      effectContributions: []
     });
     if (candidate.result.kind !== 'success' || candidate.domain === null) {
       throw new TypeError('review_draft_save_success_contribution_invalid');
@@ -342,7 +342,7 @@ implements SQLiteEffectDomainAdapter {
     this.#active = prepared;
   }
 
-  afterReceiptParentInserted(receipt: TerminalEffectReceipt): void {
+  afterOperationLogInserted(receipt: TerminalEffectReceipt): void {
     const active = this.#active;
     const parsedResult = reviewDraftSaveOperationResultSchema.safeParse(receipt.result);
     if (!this.input.sqlite.inTransaction || !active || active.phase !== 'applied'
@@ -373,11 +373,11 @@ implements SQLiteEffectDomainAdapter {
     this.#expectedIdentity = receipt.identity;
   }
 
-  afterReceiptChildInserted(): void {
-    throw new TypeError('review_draft_save_expects_no_receipt_children');
+  afterEffectContributionInserted(): void {
+    throw new TypeError('review_draft_save_expects_no_effect_contributions');
   }
 
-  afterExecutionClaimReleased(identity: EffectOperationIdentity): void {
+  afterEffectApplicationCommitted(identity: EffectOperationIdentity): void {
     if (!this.input.sqlite.inTransaction) {
       throw new TypeError('review_draft_save_transaction_required');
     }

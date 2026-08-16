@@ -1,7 +1,6 @@
 import type {
 	Format,
 	MutationOutcome,
-	Reviewer,
 	ReviewerInviteLine,
 	ReviewerRoster,
 	ScheduleState,
@@ -18,9 +17,8 @@ export interface ReviewersPagePort {
 			scope?: ScopeRef[]
 		): Promise<ReviewerInviteLine[]>;
 		setScope(id: string, scope: ScopeRef[]): Promise<MutationOutcome>;
-		restoreScope(id: string, scope: ScopeRef[]): Promise<void>;
 		remove(id: string): Promise<MutationOutcome>;
-		restore(reviewer: Reviewer, index: number): Promise<void>;
+		restore(id: string): Promise<void>;
 	};
 	readonly vocab: {
 		tracks(): Promise<Track[]>;

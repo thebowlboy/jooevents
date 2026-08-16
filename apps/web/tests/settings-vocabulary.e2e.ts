@@ -94,7 +94,7 @@ test('retiring keeps the entry rendering and takes it out of what is offered', a
 		// A retired track is no longer offered for new use; the submissions it
 		// already carries keep naming it.
 		await page
-			.getByRole('navigation', { name: 'Workspace' })
+			.getByRole('navigation', { name: 'Workspace', exact: true })
 			.getByRole('link', { name: 'Submissions' })
 			.click();
 		const filter = page.getByLabel('Filter by track');
@@ -102,11 +102,14 @@ test('retiring keeps the entry rendering and takes it out of what is offered', a
 		await expect(filter.getByRole('option', { name: 'Evals & Reliability' })).toHaveCount(0);
 		await expect(page.getByRole('table')).toContainText('Evals & Reliability');
 
-		// Settings is a group of sections: away from it the group is closed, so
-		// the way back to this one is the group's own disclosure and then Program.
-		const settingsNav = page.getByRole('navigation', { name: 'Settings' });
-		await settingsNav.getByRole('button', { name: 'Expand Settings sections' }).click();
-		await settingsNav.getByRole('link', { name: 'Program', exact: true }).click();
+		// The rail opens the area; the way back to this section is the surface's
+		// own tabs and then Program.
+		const settingsNav = page.getByRole('navigation', { name: 'Workspace controls' });
+		await settingsNav.getByRole('link', { name: 'Settings', exact: true }).click();
+		await page
+			.getByRole('navigation', { name: 'Settings sections' })
+			.getByRole('link', { name: 'Program', exact: true })
+			.click();
 		await expect(panelOf(page).getByRole('heading', { name: 'Tracks' })).toBeVisible({ timeout: 15000 });
 	}
 

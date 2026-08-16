@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { EventSettingsSafeDiff, EventSettingsUpdateDraftInput } from '@jooevents/contracts';
+import type { EventSettingsUpdateInput } from '@jooevents/contracts';
 import {
 	createEventSettingsWorkspaceAdapter,
 	EventSettingsWorkspaceAdapterError
@@ -45,53 +45,11 @@ function readSuccess(data: EventSettingsView = current): EventSettingsLiveReadRe
 	return { kind: 'success', data, correlationId };
 }
 
-const safeDiff: EventSettingsSafeDiff = {
-	action: 'update',
-	before: {
-		schemaVersion: 1,
-		eventId,
-		eventSetVersion: 3,
-		eventVersion: 4,
-		name: current.name,
-		timezone: current.timezone,
-		startDate: current.startDate,
-		endDate: current.endDate,
-		location: current.location,
-		venueNote: current.venueNote,
-		dayStart: current.dayStart,
-		dayEnd: current.dayEnd,
-		slotMinutes: 30
-	},
-	after: {
-		schemaVersion: 1,
-		eventId,
-		eventSetVersion: 3,
-		eventVersion: 5,
-		name: updated.name,
-		timezone: updated.timezone,
-		startDate: updated.startDate,
-		endDate: updated.endDate,
-		location: updated.location,
-		venueNote: updated.venueNote,
-		dayStart: updated.dayStart,
-		dayEnd: updated.dayEnd,
-		slotMinutes: 30
-	},
-	selection: { eventId, eventSetVersion: 3 }
-};
-
 function updateSuccess(): EventSettingsLiveUpdateResult {
 	return {
 		kind: 'success',
-		data: {
-			changesetId: id(2),
-			revisionId: id(3),
-			revisionDigest: 'a'.repeat(64),
-			committedHeadVersion: 3,
-			settings: updated,
-			safeDiff
-		},
-		receipt: { id: id(4), operationName: 'changeset.commit', operationVersion: 1 },
+		data: { settings: updated },
+		receipt: { id: id(4), operationName: 'event.settings.update', operationVersion: 1 },
 		correlationId
 	};
 }
@@ -99,7 +57,7 @@ function updateSuccess(): EventSettingsLiveUpdateResult {
 function liveClient(input: {
 	readonly reads: readonly EventSettingsLiveReadResult[];
 	readonly update?: (
-		request: EventSettingsUpdateDraftInput,
+		request: EventSettingsUpdateInput,
 		idempotencyKey: string
 	) => EventSettingsLiveUpdateResult | Promise<EventSettingsLiveUpdateResult>;
 }): EventSettingsLiveClient {
@@ -160,7 +118,7 @@ describe('source-neutral Event Settings Workspace adapter', () => {
 	});
 
 	test('re-reads hidden guards, authors all nine values, and returns the committed projection', async () => {
-		let captured: { request: EventSettingsUpdateDraftInput; key: string } | undefined;
+		let captured: { request: EventSettingsUpdateInput; key: string } | undefined;
 		const api = createEventSettingsWorkspaceAdapter({
 			client: liveClient({
 				reads: [readSuccess()],
@@ -208,7 +166,7 @@ describe('source-neutral Event Settings Workspace adapter', () => {
 	});
 
 	test('merges geometry patches by explicit key so null clears and absence preserves', async () => {
-		const captured: EventSettingsUpdateDraftInput[] = [];
+		const captured: EventSettingsUpdateInput[] = [];
 		const api = createEventSettingsWorkspaceAdapter({
 			client: liveClient({
 				reads: [readSuccess()],
@@ -259,7 +217,7 @@ describe('source-neutral Event Settings Workspace adapter', () => {
 		}
 	});
 
-	test('treats a normalized no-op as a read and creates no empty changeset', async () => {
+	test('treats a normalized no-op as a read and creates no empty operation', async () => {
 		let updates = 0;
 		const api = createEventSettingsWorkspaceAdapter({
 			client: liveClient({

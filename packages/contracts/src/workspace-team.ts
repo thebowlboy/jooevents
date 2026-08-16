@@ -120,21 +120,21 @@ export const workspaceTeamMembersCanonicalResultSchema = z.discriminatedUnion('k
 export const workspaceTeamMembersReadResultSchema =
   createReadOperationResultSchema(workspaceTeamSnapshotSchema);
 
-export const workspaceTeamInviteDraftInputSchema = z.strictObject({
+export const workspaceTeamInviteInputSchema = z.strictObject({
   email: canonicalEmailInputSchema,
   roleKey: workspaceTeamRoleKeySchema,
   expectedTeamVersion: positiveVersionSchema,
   expectedTeamDigestSha256: z.string().regex(DIGEST)
 });
 
-export const workspaceTeamRoleChangeDraftInputSchema = z.strictObject({
+export const workspaceTeamRoleChangeInputSchema = z.strictObject({
   subject: workspaceTeamSubjectRefSchema,
   roleKey: workspaceTeamRoleKeySchema,
   expectedTeamVersion: positiveVersionSchema,
   expectedTeamDigestSha256: z.string().regex(DIGEST)
 });
 
-export const workspaceTeamRemovalDraftInputSchema = z.strictObject({
+export const workspaceTeamRemovalInputSchema = z.strictObject({
   subject: workspaceTeamSubjectRefSchema,
   expectedTeamVersion: positiveVersionSchema,
   expectedTeamDigestSha256: z.string().regex(DIGEST)
@@ -163,39 +163,23 @@ export const workspaceTeamSafeDiffSchema = z.discriminatedUnion('action', [
   })
 ]);
 
-export const workspaceTeamDraftDataSchema = z.strictObject({
+export const workspaceTeamMutationDataSchema = z.strictObject({
   schemaVersion: z.literal(1),
   action: z.enum(['invite', 'change_role', 'remove']),
-  changesetId: applicationIdSchema,
-  headVersion: positiveVersionSchema,
-  status: z.literal('draft'),
-  revision: z.strictObject({
-    id: applicationIdSchema,
-    number: z.literal(1),
-    digestSha256: z.string().regex(DIGEST)
-  }),
-  riskTier: z.enum(['normal', 'consequential']),
-  approvalPolicy: z.strictObject({
-    reference: z.strictObject({
-      key: z.string().regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/),
-      version: positiveVersionSchema
-    }),
-    definitionDigestSha256: z.string().regex(DIGEST),
-    requirement: z.enum(['none', 'distinct_current_human'])
-  }),
+  teamVersion: positiveVersionSchema,
   safeDiff: workspaceTeamSafeDiffSchema
 }).superRefine((data, context) => {
   if (data.action !== data.safeDiff.action) {
-    context.addIssue({ code: 'custom', message: 'Workspace team draft action and diff disagree.' });
+    context.addIssue({ code: 'custom', message: 'Workspace team mutation action and diff disagree.' });
   }
 });
 
-export const workspaceTeamDraftCanonicalResultSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('success'), data: workspaceTeamDraftDataSchema }),
+export const workspaceTeamMutationCanonicalResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success'), data: workspaceTeamMutationDataSchema }),
   z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
 ]);
-export const workspaceTeamDraftOperationResultSchema =
-  createEffectfulOperationResultSchema(workspaceTeamDraftDataSchema);
+export const workspaceTeamMutationOperationResultSchema =
+  createEffectfulOperationResultSchema(workspaceTeamMutationDataSchema);
 
 export const WORKSPACE_TEAM_OPERATION_SCHEMA_REFS = Object.freeze({
   members: createOperationSchemaManifestRefs({
@@ -205,22 +189,22 @@ export const WORKSPACE_TEAM_OPERATION_SCHEMA_REFS = Object.freeze({
     resultSchema: workspaceTeamMembersReadResultSchema
   }),
   invite: createOperationSchemaManifestRefs({
-    inputKey: 'schema.workspace_team.invite-draft.input',
-    inputSchema: workspaceTeamInviteDraftInputSchema,
-    resultKey: 'schema.workspace_team.draft.operator-result',
-    resultSchema: workspaceTeamDraftOperationResultSchema
+    inputKey: 'schema.workspace_team.invite.input',
+    inputSchema: workspaceTeamInviteInputSchema,
+    resultKey: 'schema.workspace_team.mutation.operator-result',
+    resultSchema: workspaceTeamMutationOperationResultSchema
   }),
   roleChange: createOperationSchemaManifestRefs({
-    inputKey: 'schema.workspace_team.role-change-draft.input',
-    inputSchema: workspaceTeamRoleChangeDraftInputSchema,
-    resultKey: 'schema.workspace_team.draft.operator-result',
-    resultSchema: workspaceTeamDraftOperationResultSchema
+    inputKey: 'schema.workspace_team.role-change.input',
+    inputSchema: workspaceTeamRoleChangeInputSchema,
+    resultKey: 'schema.workspace_team.mutation.operator-result',
+    resultSchema: workspaceTeamMutationOperationResultSchema
   }),
   removal: createOperationSchemaManifestRefs({
-    inputKey: 'schema.workspace_team.removal-draft.input',
-    inputSchema: workspaceTeamRemovalDraftInputSchema,
-    resultKey: 'schema.workspace_team.draft.operator-result',
-    resultSchema: workspaceTeamDraftOperationResultSchema
+    inputKey: 'schema.workspace_team.removal.input',
+    inputSchema: workspaceTeamRemovalInputSchema,
+    resultKey: 'schema.workspace_team.mutation.operator-result',
+    resultSchema: workspaceTeamMutationOperationResultSchema
   })
 });
 
@@ -230,4 +214,4 @@ export type WorkspaceTeamSubjectRef = z.infer<typeof workspaceTeamSubjectRefSche
 export type WorkspaceTeamMemberView = z.infer<typeof workspaceTeamMemberViewSchema>;
 export type WorkspaceTeamSnapshot = z.infer<typeof workspaceTeamSnapshotSchema>;
 export type WorkspaceTeamSafeDiff = z.infer<typeof workspaceTeamSafeDiffSchema>;
-export type WorkspaceTeamDraftData = z.infer<typeof workspaceTeamDraftDataSchema>;
+export type WorkspaceTeamMutationData = z.infer<typeof workspaceTeamMutationDataSchema>;

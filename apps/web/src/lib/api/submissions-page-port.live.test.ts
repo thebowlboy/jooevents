@@ -178,24 +178,19 @@ function fakeTriage(input: {
 			}
 			return { kind: 'success', data: triageRead(row), correlationId };
 		},
-		async apply(applyInput) {
+		async apply(applyInput, _idempotencyKey) {
 			input.applied?.push(applyInput);
 			return input.applyResult ?? {
 				kind: 'success',
 				data: {
+					schemaVersion: 1,
 					action: applyInput.action,
-					changesetId: id(60),
-					revisionId: id(61),
-					revisionDigest: digest('b'),
-					committedHeadVersion: 2,
-					safeDiff: {} as never
+					queryGuard: { ...queryGuard, schemaVersion: 1 as const },
+					submissionIds: applyInput.submissionIds
 				},
-				receipt: { id: id(62), operationName: 'changeset.commit', operationVersion: 1 },
+				receipt: { id: id(62), operationName: 'submission.triage.transition', operationVersion: 1 },
 				correlationId
 			};
-		},
-		async compensate() {
-			throw new Error('unexpected compensate');
 		}
 	};
 }
@@ -246,13 +241,13 @@ function reviewCore(snapshot: Partial<ReviewSnapshotView> = {}): ReviewCorePort 
 		async readRoundSetup() {
 			throw new Error('unexpected round setup read');
 		},
-		async draftRoundChange() {
+		async changeRound() {
 			throw new Error('unexpected draft');
 		},
-		async draftStepBack() {
+		async stepBack() {
 			throw new Error('unexpected draft');
 		},
-		async draftEvaluationChange() {
+		async changeEvaluation() {
 			throw new Error('unexpected draft');
 		},
 		async saveEvaluationDraft() {
@@ -412,6 +407,7 @@ const registryFields = [
 
 function fakeDirectEntry(input: {
 	readonly created?: unknown[];
+	readonly keys?: string[];
 	readonly result?: DirectEntryLiveCreateResult;
 }): DirectEntryLiveClient {
 	return {
@@ -422,21 +418,21 @@ function fakeDirectEntry(input: {
 				correlationId
 			};
 		},
-		async create(wire) {
+		async create(wire, idempotencyKey) {
 			input.created?.push(wire);
+			input.keys?.push(idempotencyKey);
 			return input.result ?? {
 				kind: 'success',
 				data: {
+					schemaVersion: 1,
+					action: 'create',
 					submissionId: id(21),
 					formId,
 					formVersionId,
-					submittedAt: '2026-08-13T09:00:00.000Z',
-					changesetId: id(60),
-					revisionId: id(61),
-					revisionDigest: digest('b'),
-					committedHeadVersion: 2
+					source: 'direct_entry',
+					submittedAt: '2026-08-13T09:00:00.000Z'
 				},
-				receipt: { id: id(62), operationName: 'changeset.commit', operationVersion: 1 },
+				receipt: { id: id(62), operationName: 'submission.direct_entry.create', operationVersion: 1 },
 				correlationId
 			};
 		}
@@ -574,9 +570,10 @@ describe('live tuned Submissions page port', () => {
 	test('direct entry commits through an open covering form and returns the canonical re-read', async () => {
 		const createdRow = triageRowDto({ value: 21, source: 'direct_entry' });
 		const created: unknown[] = [];
+		const keys: string[] = [];
 		const port = composePort({
 			triage: fakeTriage({ rows: { [id(21)]: createdRow } }),
-			directEntry: fakeDirectEntry({ created }),
+			directEntry: fakeDirectEntry({ created, keys }),
 			forms: fakeForms({
 				forms: [{ id: formId, status: 'open', version: 4, target: { kind: 'general_pool' } }],
 				fields: registryFields.map((field) => ({ id: field.id, included: true }))
@@ -603,6 +600,7 @@ describe('live tuned Submissions page port', () => {
 				{ kind: 'textarea', fieldId: id(45), value: 'Practical systems.' }
 			]
 		}]);
+		expect(keys).toEqual(['je.test.submissions.key']);
 		expect(submission).toMatchObject({
 			id: id(21),
 			source: 'direct_entry',
@@ -684,21 +682,6 @@ describe('live tuned Submissions page port', () => {
 			],
 			expectedQueryGuard: { version: 7, digestSha256: digest('a') }
 		}]);
-	});
-
-	test('removal answers only for direct entries and lands as a recoverable discard', async () => {
-		const cfpRow = triageRowDto({ value: 23 });
-		const directRow = triageRowDto({ value: 24, source: 'direct_entry' });
-		const applied: unknown[] = [];
-		const port = composePort({
-			triage: fakeTriage({ rows: { [id(23)]: cfpRow, [id(24)]: directRow }, applied })
-		});
-		await expect(port.submissions.removeDirectEntry(id(23))).rejects.toMatchObject({
-			code: 'direct_entry_only_removal'
-		});
-		expect(applied).toEqual([]);
-		await port.submissions.removeDirectEntry(id(24));
-		expect(applied).toEqual([expect.objectContaining({ action: 'discard_recoverable' })]);
 	});
 
 	test('typed absences stay absences: profile, previous visit, and session doors', async () => {

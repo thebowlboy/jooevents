@@ -15,6 +15,7 @@ import type {
 	ReviewerCoverage,
 	ReviewerInviteLine,
 	ScheduleState,
+	ScopeRef,
 	Track
 } from './types';
 import type { ProgramFormatView, ProgramTrackView } from './view-models/program-vocabulary';
@@ -28,8 +29,6 @@ import type { WorkspaceTeamMemberView } from './view-models/workspace-team';
  */
 export type ReviewersPageLiveUnmountedCapability =
 	| 'reviewer_invite'
-	| 'reviewer_scope_change'
-	| 'reviewer_removal'
 	| 'reviewer_scope_targets'
 	| 'reviewer_coverage'
 	| 'reviewer_reminders';
@@ -63,10 +62,6 @@ const UNMOUNTED_COPY: Readonly<Record<ReviewersPageLiveUnmountedCapability, stri
 		reviewer_invite:
 			'Inviting reviewers by email is not available in this live workspace yet. '
 			+ 'Reviewer access is reserved through workspace member admission.',
-		reviewer_scope_change:
-			'Changing a reviewer’s scope is not available in this live workspace yet.',
-		reviewer_removal:
-			'Removing a reviewer is not available in this live workspace yet.',
 		reviewer_scope_targets:
 			'Session scope targets are not available in this live workspace yet.',
 		reviewer_coverage:
@@ -134,6 +129,23 @@ function readFailure(result: ReadFailure, subject: string): AdapterFailure {
 				: `This ${subject} request is not valid.`,
 			retryable: result.error.retryable
 		};
+	}
+	return { code: result.outcome.kind, reason: outcomeCopy(result.outcome, subject) };
+}
+
+function changeFailure(
+	result: Exclude<Awaited<ReturnType<ReviewerRosterCorePort['change']>>, { readonly kind: 'success' }>,
+	subject: string
+): AdapterFailure {
+	if (result.kind === 'unavailable') {
+		return { code: result.reason, reason: `The ${subject} is not available in this live workspace.`, retryable: false };
+	}
+	if (result.kind === 'transport_error') {
+		return { code: result.error.code,
+			reason: result.error.retryable
+				? `The ${subject} change could not reach JooEvents. Try again.`
+				: `This ${subject} change is not valid.`,
+			retryable: result.error.retryable };
 	}
 	return { code: result.outcome.kind, reason: outcomeCopy(result.outcome, subject) };
 }
@@ -228,6 +240,7 @@ export function createLiveReviewersPagePort(input: {
 	 */
 	readonly schedule?: { state(): Promise<ScheduleState> };
 	readonly now?: () => number;
+	readonly newAttemptKey?: () => string;
 }): ReviewersPagePort {
 	if (
 		input.roster.source.kind !== 'live'
@@ -238,6 +251,45 @@ export function createLiveReviewersPagePort(input: {
 		throw new TypeError('live_reviewer_roster_source_required');
 	}
 	const now = input.now ?? Date.now;
+	const newAttemptKey = input.newAttemptKey ?? (() => crypto.randomUUID());
+
+	async function currentRoster() {
+		const result = await input.roster.readSnapshot();
+		if (result.kind !== 'success') throw new ReviewersPageLiveError(readFailure(result, 'reviewer roster'));
+		return result.data;
+	}
+
+	async function changeReviewer(
+		action: 'set_scope' | 'revoke' | 'restore',
+		reviewerId: string,
+		reviews?: ScopeRef[]
+	): Promise<void> {
+		const roster = await currentRoster();
+		const reviewer = roster.reviewers.find((candidate) => candidate.reviewerId === reviewerId);
+		if (!reviewer) throw new ReviewersPageLiveError({ code: 'reviewer_missing',
+			reason: 'This reviewer is not on the current roster.' });
+		if (action === 'restore' && reviewer.status !== 'revoked') {
+			throw new ReviewersPageLiveError({ code: 'reviewer_not_revoked',
+				reason: 'Only a revoked reviewer can be restored.' });
+		}
+		if (action !== 'restore' && reviewer.status === 'revoked') {
+			throw new ReviewersPageLiveError({ code: 'reviewer_revoked',
+				reason: 'Restore this reviewer before changing the active roster.' });
+		}
+		const guard = { reviewerId, expectedReviewerVersion: reviewer.recordVersion,
+			expectedRosterVersion: roster.rosterVersion,
+			expectedRosterDigestSha256: roster.rosterDigestSha256 };
+		const result = action === 'set_scope'
+			? await input.roster.change({ action, ...guard, reviews: reviews ?? [] }, newAttemptKey())
+			: action === 'revoke'
+				? await input.roster.change({ action, ...guard }, newAttemptKey())
+				: await input.roster.change({ action, ...guard }, newAttemptKey());
+		if (result.kind !== 'success') throw new ReviewersPageLiveError(changeFailure(result, 'reviewer roster'));
+		if (result.data.action !== action || result.data.reviewer.reviewerId !== reviewerId) {
+			throw new ReviewersPageLiveError({ code: 'invalid_contract',
+				reason: 'This reviewer roster request could not be completed.' });
+		}
+	}
 
 	/**
 	 * `coverage: []` only as a proven claim. The proof reuses the one recorded
@@ -358,23 +410,26 @@ export function createLiveReviewersPagePort(input: {
 					reason: UNMOUNTED_COPY.reviewer_invite
 				}));
 			},
-			/**
-			 * The canonical scope-change draft exists on the roster port, but a
-			 * draft alone is not an effective change and no committed
-			 * Draft → Propose → Commit owner is composed at this seam, so the
-			 * mutation refuses instead of reporting a draft as a completed change.
-			 */
-			async setScope(): Promise<MutationOutcome> {
-				return refusal('reviewer_scope_change');
+			async setScope(id: string, scope: ScopeRef[]): Promise<MutationOutcome> {
+				try {
+					await changeReviewer('set_scope', id, scope);
+					return { ok: true };
+				} catch (error) {
+					if (error instanceof ReviewersPageLiveError) return { ok: false, reason: error.message };
+					throw error;
+				}
 			},
-			async restoreScope(): Promise<never> {
-				throw unmounted('reviewer_scope_change');
+			async remove(id: string): Promise<MutationOutcome> {
+				try {
+					await changeReviewer('revoke', id);
+					return { ok: true };
+				} catch (error) {
+					if (error instanceof ReviewersPageLiveError) return { ok: false, reason: error.message };
+					throw error;
+				}
 			},
-			async remove(): Promise<MutationOutcome> {
-				return refusal('reviewer_removal');
-			},
-			async restore(): Promise<never> {
-				throw unmounted('reviewer_removal');
+			async restore(id: string): Promise<void> {
+				await changeReviewer('restore', id);
 			}
 		}),
 		vocab: Object.freeze({

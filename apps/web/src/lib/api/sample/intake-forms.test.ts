@@ -3,65 +3,42 @@ import { intakeFormsFixtureIds } from '../fixtures/intake-forms';
 import { createIntakeFormsSamplePort } from './intake-forms';
 
 describe('resettable canonical organizer Forms sample port', () => {
-	test('does not change effective state before propose and commit', async () => {
+	test('applies direct lifecycle once and replays the same key', async () => {
 		const port = createIntakeFormsSamplePort();
 		const before = await port.readDetail(intakeFormsFixtureIds.openForm);
 		if (before.kind !== 'success') throw new TypeError('Sample detail missing.');
-		const draft = await port.draftLifecycle({
-			transition: 'close',
-			formId: before.data.form.id,
-			expectedDefinitionVersion: before.data.form.version
-		}, 'sample-close-draft');
-		if (draft.kind !== 'success') throw new TypeError('Sample draft failed.');
-		expect((await port.readDetail(before.data.form.id))).toMatchObject({
-			kind: 'success', data: { form: { status: 'open', version: 2 } }
+		const input = { transition: 'close' as const, formId: before.data.form.id,
+			expectedDefinitionVersion: before.data.form.version };
+		const first = await port.lifecycle(input, 'sample-close');
+		const replay = await port.lifecycle(input, 'sample-close');
+		expect(replay).toEqual(first);
+		expect(first).toMatchObject({ kind: 'success', data: { action: 'close' },
+			receipt: { operationName: 'form.lifecycle.change' } });
+		expect(await port.readDetail(before.data.form.id)).toMatchObject({
+			kind: 'success', data: { form: { status: 'closed', version: before.data.form.version + 1 } }
 		});
-
-		const selector = {
-			changesetId: draft.data.changesetId,
-			revisionId: draft.data.revisionId,
-			revisionDigest: draft.data.revisionDigest
-		};
-		const diff = await port.readDiff(selector);
-		expect(diff).toMatchObject({ kind: 'success', data: { status: 'draft' } });
-		const proposed = await port.propose({ ...selector, expectedHeadVersion: 1 }, 'sample-close-propose');
-		expect(proposed).toMatchObject({ kind: 'success', data: { status: 'proposed', headVersion: 2 } });
-		expect((await port.readDetail(before.data.form.id))).toMatchObject({
-			kind: 'success', data: { form: { status: 'open', version: 2 } }
-		});
-		await port.commit({ ...selector, expectedHeadVersion: 2 }, 'sample-close-commit');
-		expect((await port.readDetail(before.data.form.id))).toMatchObject({
-			kind: 'success', data: { form: { status: 'closed', version: 3 } }
-		});
-		expect(await port.draftLifecycle({
-			transition: 'close',
-			formId: before.data.form.id,
-			expectedDefinitionVersion: before.data.form.version
-		}, 'sample-close-draft')).toEqual(draft);
 	});
 
-	test('replays an idempotency key and reset restores the fixture', async () => {
+	test('keeps publication inert until exact publish and resets the fixture', async () => {
 		const port = createIntakeFormsSamplePort();
-		const listed = await port.list();
-		if (listed.kind !== 'success') throw new TypeError('Sample catalog missing.');
-		const definition = {
-			kind: 'cfp' as const,
-			name: 'Lightning talk proposals',
-			target: { kind: 'general_pool' as const },
-			availability: { kind: 'evergreen' as const },
-			confirmation: 'Thanks — your lightning talk is in the review queue.',
-			composition: { excludedFieldIds: [], requiredOverrides: {}, optionExposure: {} },
-			rules: []
-		};
-		const createInput = {
-			expectedCatalogVersion: listed.data.catalogVersion,
-			expectedRegistryVersion: listed.data.registryPin.version,
-			definition
-		};
-		const first = await port.draftCreate(createInput, 'same-create');
-		const replay = await port.draftCreate(createInput, 'same-create');
-		expect(replay).toEqual(first);
+		const before = await port.readDetail(intakeFormsFixtureIds.draftForm);
+		if (before.kind !== 'success') throw new TypeError('Sample draft Form missing.');
+		const draft = await port.draftPublish({ action: 'publish_and_open', formId: before.data.form.id,
+			expectedDefinitionVersion: before.data.form.version,
+			expectedRegistryVersion: before.data.registryPin.version }, 'sample-publish-draft');
+		if (draft.kind !== 'success') throw new TypeError('Sample publication review missing.');
+		expect((await port.readDetail(before.data.form.id))).toMatchObject({ kind: 'success',
+			data: { form: { status: 'draft', version: before.data.form.version } } });
+		const selector = { draftId: draft.data.draftId, revisionId: draft.data.revision.id,
+			revisionDigestSha256: draft.data.revision.digestSha256 };
+		const published = await port.publish(selector, 'sample-publish');
+		expect(published).toMatchObject({ kind: 'success', data: { action: 'publish_and_open' },
+			receipt: { operationName: 'form.version.publish' } });
+		expect(await port.publish(selector, 'sample-publish')).toEqual(published);
+		expect(await port.readDetail(before.data.form.id)).toMatchObject({ kind: 'success',
+			data: { form: { status: 'open', currentPublishedVersionId: expect.any(String) } } });
 		port.reset();
-		expect(await port.list()).toMatchObject({ kind: 'success', data: { catalogVersion: 3 } });
+		expect(await port.readDetail(before.data.form.id)).toMatchObject({ kind: 'success',
+			data: { form: { status: 'draft', version: before.data.form.version } } });
 	});
 });

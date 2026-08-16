@@ -132,18 +132,8 @@ export const workspaceOverviewProgramVocabularyMetricSchema = z.union([
   unavailableMetricSchema
 ]);
 
-export const workspaceOverviewChangesetsMetricSchema = z.union([
-  z.strictObject({
-    kind: z.literal('exact'),
-    total: safeCountSchema,
-    draft: safeCountSchema,
-    proposed: safeCountSchema,
-    committed: safeCountSchema,
-    discarded: safeCountSchema
-  }).refine(
-    (value) => value.total === value.draft + value.proposed + value.committed + value.discarded,
-    { message: 'Changeset status counts must equal the total.' }
-  ),
+export const workspaceOverviewOperationsMetricSchema = z.union([
+  z.strictObject({ kind: z.literal('exact'), total: safeCountSchema }),
   unavailableMetricSchema
 ]);
 
@@ -151,7 +141,7 @@ export const workspaceOverviewMetricsSchema = z.strictObject({
   forms: workspaceOverviewFormsMetricSchema,
   submissions: workspaceOverviewSubmissionsMetricSchema,
   programVocabulary: workspaceOverviewProgramVocabularyMetricSchema,
-  changesets: workspaceOverviewChangesetsMetricSchema
+  operations: workspaceOverviewOperationsMetricSchema
 });
 
 export const workspaceOverviewHistoryDomainSchema = z.enum([
@@ -186,17 +176,10 @@ const uniqueSurfacesSchema = z.array(operationSurfaceSchema)
     'Surfaces must be unique and canonically ordered.'
   );
 
-export const workspaceOverviewHistoryRootSchema = z.discriminatedUnion('kind', [
-  z.strictObject({
-    kind: z.literal('changeset'),
-    changesetId: z.uuid(),
-    status: z.enum(['draft', 'proposed', 'committed', 'discarded'])
-  }),
-  z.strictObject({
-    kind: z.literal('operation'),
-    receiptId: z.uuid()
-  })
-]);
+export const workspaceOverviewHistoryRootSchema = z.strictObject({
+  kind: z.literal('operation'),
+  receiptId: z.uuid()
+});
 
 export const workspaceOverviewHistoryOutcomeSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('success') }),
@@ -204,7 +187,7 @@ export const workspaceOverviewHistoryOutcomeSchema = z.discriminatedUnion('kind'
 ]);
 
 export const workspaceOverviewHistoryThreadSchema = z.strictObject({
-  id: z.string().regex(/^(?:changeset|operation):[0-9a-f-]{36}$/),
+  id: z.string().regex(/^operation:[0-9a-f-]{36}$/),
   domain: workspaceOverviewHistoryDomainSchema,
   root: workspaceOverviewHistoryRootSchema,
   firstOccurredAt: z.iso.datetime({ offset: true }),
@@ -222,9 +205,7 @@ export const workspaceOverviewHistoryThreadSchema = z.strictObject({
     receipts: safeCountSchema.min(1)
   })
 }).superRefine((thread, context) => {
-  const expectedId = thread.root.kind === 'changeset'
-    ? `changeset:${thread.root.changesetId}`
-    : `operation:${thread.root.receiptId}`;
+  const expectedId = `operation:${thread.root.receiptId}`;
   if (thread.id !== expectedId) {
     context.addIssue({ code: 'custom', message: 'History ID must identify its causal root.', path: ['id'] });
   }

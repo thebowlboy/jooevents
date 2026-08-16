@@ -29,7 +29,7 @@ const schema = Object.freeze({
 const contribution = Object.freeze({
   result: Object.freeze({ kind: 'success', data: Object.freeze({}) }),
   domain: Object.freeze({ kind: 'test' }),
-  receiptChildren: Object.freeze([])
+  effectContributions: Object.freeze([])
 });
 const workspaceId = parseWorkspaceId('018f7d5a-4b3c-7abc-8def-012345678901');
 const userId = parseUserId('018f7d5a-4b3c-7abc-8def-012345678902');
@@ -47,10 +47,9 @@ const lane = parseOperationAccessLane({
 
 async function context(input: {
   readonly invocationId: string;
-  readonly effect?: 'draft' | 'commit';
 }): Promise<EffectInvocationContext> {
-  const effect = input.effect ?? 'draft';
-  const operation = Object.freeze({ name: 'form.definition.create.draft', version: 1 });
+  const effect = 'commit' as const;
+  const operation = Object.freeze({ name: 'submission.direct_entry.create', version: 1 });
   const builder = createEffectInvocationContextBuilder({
     reference: { key: `context.intake.preparation-${effect}`, version: parseContractVersion(1) },
     operation,
@@ -116,10 +115,9 @@ async function context(input: {
   return built.context;
 }
 
-function handler(effect: 'draft' | 'commit' = 'draft') {
+function handler() {
   return createIntakeHandler({
-    reference: { key: `handler.intake.test-${effect}`, version: parseContractVersion(1) },
-    effect,
+    reference: { key: 'handler.intake.test-commit', version: parseContractVersion(1) },
     handlerCapability: capability,
     contributionSchema: schema,
     canonicalResultSchema: schema
@@ -175,9 +173,11 @@ describe('intake preparation', () => {
     })).toThrow('intake_preparation_must_be_synchronous');
 
     const mismatch = sealIntakePreparation({
-      capability, context: expectedContext, preparation: { prepare: () => contribution }
+      capability: { key: 'capability.intake.other', version: parseContractVersion(1) },
+      context: expectedContext,
+      preparation: { prepare: () => contribution }
     });
-    expect(() => handler('commit').handle({
+    expect(() => handler().handle({
       businessInput: {}, context: expectedContext, snapshot: mismatch
     })).toThrow('invalid_intake_preparation');
 

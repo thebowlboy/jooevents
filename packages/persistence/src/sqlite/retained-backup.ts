@@ -24,9 +24,10 @@ import {
 import {
   loadSQLiteFoundationArtifacts,
   migrateOrValidateSQLite,
-  type SQLiteDatabaseClass,
-  type SQLiteMigrationState
+  type SQLiteDatabaseClass
 } from './migration-runner';
+import { SQLITE_MIGRATION_MANIFEST } from './migration-manifest';
+import { captureSQLiteSchema, fingerprintSQLiteSchema } from './schema-snapshot';
 
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 
@@ -37,7 +38,8 @@ export type RetainedSQLiteDatabaseClass = Extract<
 
 export interface RetainedSQLiteBackupDescriptor {
   readonly formatVersion: 1;
-  readonly databaseId: string;
+  readonly identityKind: 'managed' | 'untracked_legacy';
+  readonly databaseId: string | null;
   readonly databaseClass: RetainedSQLiteDatabaseClass;
   readonly schemaFingerprintSha256: string;
   readonly migrationId: string;
@@ -121,23 +123,64 @@ function writeExclusive(path: string, bytes: Uint8Array): void {
 }
 
 function assertIntegrity(database: Database): void {
-  const integrity = database.query<{ readonly integrity_check: string }, []>(
-    'PRAGMA integrity_check'
-  ).all();
-  if (integrity.length !== 1 || integrity[0]?.integrity_check !== 'ok') {
-    refuse('backup_invalid', 'The retained SQLite artifact failed integrity verification.');
+  try {
+    const integrity = database.query<{ readonly integrity_check: string }, []>(
+      'PRAGMA integrity_check'
+    ).all();
+    if (integrity.length !== 1 || integrity[0]?.integrity_check !== 'ok') {
+      refuse('backup_invalid', 'The retained SQLite artifact failed integrity verification.');
+    }
+    if (database.query<Record<string, unknown>, []>('PRAGMA foreign_key_check').all().length !== 0) {
+      refuse('backup_invalid', 'The retained SQLite artifact failed foreign-key verification.');
+    }
+  } catch (error) {
+    if (error instanceof SQLiteFoundationError) throw error;
+    refuse('backup_invalid', 'The retained SQLite artifact could not be parsed for integrity verification.');
   }
-  if (database.query<Record<string, unknown>, []>('PRAGMA foreign_key_check').all().length !== 0) {
-    refuse('backup_invalid', 'The retained SQLite artifact failed foreign-key verification.');
-  }
+}
+
+interface RetainedSQLiteBackupIdentity {
+  readonly identityKind: 'managed' | 'untracked_legacy';
+  readonly databaseId: string | null;
+  readonly databaseClass: RetainedSQLiteDatabaseClass;
+  readonly schemaFingerprint: string;
+  readonly migrationId: string;
+  readonly schemaEpoch: number;
+  readonly sequence: number;
 }
 
 function validateState(input: {
   readonly database: Database;
-  readonly expectedDatabaseId: string;
+  readonly expectedDatabaseId?: string;
   readonly expectedDatabaseClass: RetainedSQLiteDatabaseClass;
-}): SQLiteMigrationState {
+}): RetainedSQLiteBackupIdentity {
   assertIntegrity(input.database);
+  const applicationFingerprint = fingerprintSQLiteSchema(
+    captureSQLiteSchema(input.database, 'application')
+  );
+  const runnerObjectCount = input.database.query<{ readonly count: number }, []>(`
+    SELECT count(*) AS count FROM sqlite_schema
+     WHERE name IN ('schema_migrations','schema_epoch_transitions','database_instance_metadata')
+        OR tbl_name IN ('schema_migrations','schema_epoch_transitions','database_instance_metadata')
+  `).get()?.count ?? 0;
+  const predecessor = SQLITE_MIGRATION_MANIFEST.acceptedPredecessorLineages[0];
+  if (runnerObjectCount === 0 && applicationFingerprint === predecessor.sourceApplicationFingerprint) {
+    if (input.expectedDatabaseClass !== 'retained_development' || input.expectedDatabaseId !== undefined) {
+      refuse('backup_invalid', 'The untracked legacy backup has no database ID and can only be retained development.');
+    }
+    return {
+      identityKind: 'untracked_legacy',
+      databaseId: null,
+      databaseClass: 'retained_development',
+      schemaFingerprint: applicationFingerprint,
+      migrationId: predecessor.sourceTerminal.migrationId,
+      schemaEpoch: predecessor.sourceTerminal.schemaEpoch,
+      sequence: predecessor.sourceTerminal.sequence
+    };
+  }
+  if (!input.expectedDatabaseId) {
+    refuse('backup_invalid', 'A managed retained SQLite artifact requires its expected database ID.');
+  }
   const state = migrateOrValidateSQLite({
     database: input.database,
     artifacts: loadSQLiteFoundationArtifacts(),
@@ -152,28 +195,31 @@ function validateState(input: {
   ) {
     refuse('backup_invalid', 'The retained SQLite artifact does not match its expected identity.');
   }
-  return state;
+  return {
+    identityKind: 'managed',
+    databaseId: state.databaseId,
+    databaseClass: state.databaseClass,
+    schemaFingerprint: state.schemaFingerprint,
+    migrationId: state.migrationId,
+    schemaEpoch: state.coordinate.schemaEpoch,
+    sequence: state.coordinate.sequence
+  };
 }
 
 function descriptorFrom(input: {
   readonly bytes: Uint8Array;
-  readonly state: SQLiteMigrationState;
+  readonly state: RetainedSQLiteBackupIdentity;
 }): RetainedSQLiteBackupDescriptor {
   const { state } = input;
-  if (
-    (state.databaseClass !== 'retained_development' && state.databaseClass !== 'frozen_release') ||
-    !state.databaseId || !state.schemaFingerprint || !state.migrationId || !state.coordinate
-  ) {
-    return refuse('backup_invalid', 'The retained SQLite artifact has incomplete migration identity.');
-  }
   return Object.freeze({
     formatVersion: 1,
+    identityKind: state.identityKind,
     databaseId: state.databaseId,
     databaseClass: state.databaseClass,
     schemaFingerprintSha256: state.schemaFingerprint,
     migrationId: state.migrationId,
-    schemaEpoch: state.coordinate.schemaEpoch,
-    sequence: state.coordinate.sequence,
+    schemaEpoch: state.schemaEpoch,
+    sequence: state.sequence,
     bytes: input.bytes.byteLength,
     sha256: digest(input.bytes)
   });
@@ -192,7 +238,7 @@ function sameDescriptor(
  */
 export function verifyRetainedSQLiteBackup(input: {
   readonly backupPath: string;
-  readonly expectedDatabaseId: string;
+  readonly expectedDatabaseId?: string;
   readonly expectedDatabaseClass: RetainedSQLiteDatabaseClass;
   readonly maximumBytes: number;
   readonly expectedDescriptor?: RetainedSQLiteBackupDescriptor;
@@ -207,12 +253,12 @@ export function verifyRetainedSQLiteBackup(input: {
   }
 
   const database = new Database(path, { readonly: true, create: false, strict: true });
-  let state: SQLiteMigrationState;
+  let state: RetainedSQLiteBackupIdentity;
   try {
     database.exec('PRAGMA foreign_keys = ON;');
     state = validateState({
       database,
-      expectedDatabaseId: input.expectedDatabaseId,
+      ...(input.expectedDatabaseId ? { expectedDatabaseId: input.expectedDatabaseId } : {}),
       expectedDatabaseClass: input.expectedDatabaseClass
     });
   } finally {
@@ -232,7 +278,7 @@ export function verifyRetainedSQLiteBackup(input: {
 export function createRetainedSQLiteBackup(input: {
   readonly databasePath: string;
   readonly backupPath: string;
-  readonly expectedDatabaseId: string;
+  readonly expectedDatabaseId?: string;
   readonly expectedDatabaseClass: RetainedSQLiteDatabaseClass;
   readonly maximumSerializeBytes: number;
 }): RetainedSQLiteBackupDescriptor {
@@ -279,7 +325,7 @@ export function createRetainedSQLiteBackup(input: {
       source.exec('BEGIN EXCLUSIVE;');
       validateState({
         database: source,
-        expectedDatabaseId: input.expectedDatabaseId,
+        ...(input.expectedDatabaseId ? { expectedDatabaseId: input.expectedDatabaseId } : {}),
         expectedDatabaseClass: input.expectedDatabaseClass
       });
       bytes = normalizeSerializedJournalHeader(source.serialize());
@@ -302,7 +348,7 @@ export function createRetainedSQLiteBackup(input: {
     writeExclusive(backupPath, bytes);
     return verifyRetainedSQLiteBackup({
       backupPath,
-      expectedDatabaseId: input.expectedDatabaseId,
+      ...(input.expectedDatabaseId ? { expectedDatabaseId: input.expectedDatabaseId } : {}),
       expectedDatabaseClass: input.expectedDatabaseClass,
       maximumBytes: input.maximumSerializeBytes
     });
@@ -324,7 +370,9 @@ export function createVerifiedRetainedSQLiteRestoreCandidate(input: {
   assertBound(input.maximumBytes);
   const backup = verifyRetainedSQLiteBackup({
     backupPath: input.backupPath,
-    expectedDatabaseId: input.expectedDescriptor.databaseId,
+    ...(input.expectedDescriptor.databaseId
+      ? { expectedDatabaseId: input.expectedDescriptor.databaseId }
+      : {}),
     expectedDatabaseClass: input.expectedDescriptor.databaseClass,
     expectedDescriptor: input.expectedDescriptor,
     maximumBytes: input.maximumBytes
@@ -341,7 +389,7 @@ export function createVerifiedRetainedSQLiteRestoreCandidate(input: {
   writeExclusive(candidatePath, bytes);
   return verifyRetainedSQLiteBackup({
     backupPath: candidatePath,
-    expectedDatabaseId: backup.databaseId,
+    ...(backup.databaseId ? { expectedDatabaseId: backup.databaseId } : {}),
     expectedDatabaseClass: backup.databaseClass,
     expectedDescriptor: backup,
     maximumBytes: input.maximumBytes

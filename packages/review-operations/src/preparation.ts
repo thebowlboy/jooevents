@@ -8,7 +8,7 @@ import type { VersionedDefinitionRef } from '@jooevents/contracts';
 export interface ReviewPreparedContribution {
   readonly result: unknown;
   readonly domain: unknown;
-  readonly receiptChildren: readonly unknown[];
+  readonly effectContributions: readonly unknown[];
 }
 
 export interface ReviewEffectPreparation {
@@ -19,7 +19,7 @@ export interface ReviewEffectPreparation {
 }
 
 interface SealedPreparation {
-  readonly strategy: 'review_changeset_draft' | 'review_evaluation_draft_save';
+  readonly strategy: 'review_evaluation_draft_save';
   readonly capability: VersionedDefinitionRef;
   readonly context: EffectInvocationContext;
   readonly prepare: ReviewEffectPreparation['prepare'];
@@ -27,14 +27,6 @@ interface SealedPreparation {
 }
 
 const sealedPreparations = new WeakMap<object, SealedPreparation>();
-
-export function sealReviewChangeDraftPreparation(input: {
-  readonly capability: VersionedDefinitionRef;
-  readonly context: EffectInvocationContext;
-  readonly preparation: ReviewEffectPreparation;
-}): EffectHandlerSnapshot {
-  return seal('review_changeset_draft', input);
-}
 
 export function sealReviewEvaluationDraftSavePreparation(input: {
   readonly capability: VersionedDefinitionRef;
@@ -44,22 +36,13 @@ export function sealReviewEvaluationDraftSavePreparation(input: {
   return seal('review_evaluation_draft_save', input);
 }
 
-export function createReviewChangeDraftHandler(input: {
-  readonly reference: VersionedDefinitionRef;
-  readonly handlerCapability: VersionedDefinitionRef;
-  readonly contributionSchema: EffectHandlerRegistration['contributionSchema'];
-  readonly canonicalResultSchema: EffectHandlerRegistration['canonicalResultSchema'];
-}): EffectHandlerRegistration {
-  return handler('review_changeset_draft', 'draft', input);
-}
-
 export function createReviewEvaluationDraftSaveHandler(input: {
   readonly reference: VersionedDefinitionRef;
   readonly handlerCapability: VersionedDefinitionRef;
   readonly contributionSchema: EffectHandlerRegistration['contributionSchema'];
   readonly canonicalResultSchema: EffectHandlerRegistration['canonicalResultSchema'];
 }): EffectHandlerRegistration {
-  return handler('review_evaluation_draft_save', 'commit', input);
+  return handler('review_evaluation_draft_save', input);
 }
 
 function seal(
@@ -89,7 +72,6 @@ function seal(
 
 function handler(
   strategy: SealedPreparation['strategy'],
-  effect: 'draft' | 'commit',
   input: {
     readonly reference: VersionedDefinitionRef;
     readonly handlerCapability: VersionedDefinitionRef;
@@ -100,7 +82,7 @@ function handler(
   const handlerCapability = Object.freeze({ ...input.handlerCapability });
   return Object.freeze({
     reference: Object.freeze({ ...input.reference }),
-    effect,
+    effect: 'commit',
     handlerCapability,
     contributionSchema: Object.freeze({ ...input.contributionSchema }),
     canonicalResultSchema: Object.freeze({ ...input.canonicalResultSchema }),
@@ -124,7 +106,7 @@ function handler(
         return {
           result: contribution.result,
           domain: contribution.domain,
-          receiptChildren: [...contribution.receiptChildren]
+          effectContributions: [...contribution.effectContributions]
         };
       } catch (error) {
         sealed.phase = 'spent';

@@ -6,8 +6,6 @@ import {
 	type ProgramVocabularySnapshotDto
 } from '@jooevents/contracts';
 import { createContext } from 'svelte';
-import { createFormsSampleChangesetReviewPort } from '../changesets/forms-sample';
-import type { ChangesetReviewPort } from '../changesets/port';
 import {
 	createSampleEventProgramPort,
 	type ResettableEventProgramSampleComposition
@@ -170,9 +168,7 @@ export function projectSampleScenario(dataset: WorkspaceDataset): ScenarioProjec
 export interface SampleWorkspacePorts {
 	readonly scenario: Pick<WorkspaceDataset, 'key' | 'name' | 'description'>;
 	readonly eventProgram: ResettableEventProgramSampleComposition['port'];
-	readonly programChangesets: ChangesetReviewPort;
 	readonly forms: IntakeFormsSamplePort;
-	readonly formChangesets: ChangesetReviewPort;
 	readonly submissions: OrganizerSubmissionsPort;
 	reset(): void;
 }
@@ -188,9 +184,7 @@ export function createSampleWorkspacePorts(dataset: WorkspaceDataset): SampleWor
 	return Object.freeze({
 		scenario: Object.freeze({ key: dataset.key, name: dataset.name, description: dataset.description }),
 		eventProgram: eventProgram.port,
-		programChangesets: eventProgram.changesets,
 		forms,
-		formChangesets: createFormsSampleChangesetReviewPort(forms),
 		submissions,
 		reset() {
 			eventProgram.reset();

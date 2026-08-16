@@ -3,10 +3,8 @@ import {
   createEffectfulOperationResultSchema,
   createOperationSchemaManifestRefs,
   createReadOperationResultSchema,
-  structuredOutcomeSchema,
-  versionedDefinitionRefSchema
+  structuredOutcomeSchema
 } from './operations';
-import { changesetApplicationIdSchema } from './changeset-operations';
 import {
   eventDateSchema,
   eventIdSchema,
@@ -19,7 +17,6 @@ import {
 
 const EVENT_LOCATION_LIMIT = 500;
 const EVENT_VENUE_NOTE_LIMIT = 8_000;
-const DIGEST = /^[a-f0-9]{64}$/;
 const APPLICATION_UUID_CANONICAL =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[47][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -211,7 +208,7 @@ export const currentEventSettingsCanonicalResultSchema = z.discriminatedUnion('k
 export const currentEventSettingsReadResultSchema =
   createReadOperationResultSchema(eventSettingsSchema);
 
-export const eventSettingsUpdateDraftInputSchema = z.strictObject({
+export const eventSettingsUpdateInputSchema = z.strictObject({
   expectedEventId: eventIdSchema,
   expectedEventSetVersion: eventVersionSchema,
   expectedEventVersion: eventVersionSchema,
@@ -231,55 +228,25 @@ export const eventSettingsUpdateDraftInputSchema = z.strictObject({
 
 export const eventSettingsUpdateAuthorInputSchema = z.strictObject({
   scope: eventSettingsScopeSchema,
-  request: eventSettingsUpdateDraftInputSchema
-});
-
-export const eventSettingsSafeDiffSchema = z.strictObject({
-  action: z.literal('update'),
-  before: eventSettingsSchema,
-  after: eventSettingsSchema,
-  selection: z.strictObject({
-    eventId: eventIdSchema,
-    eventSetVersion: eventVersionSchema
-  })
-}).superRefine((diff, context) => {
-  if (diff.before.eventId !== diff.after.eventId
-      || diff.before.eventId !== diff.selection.eventId
-      || diff.before.eventSetVersion !== diff.after.eventSetVersion
-      || diff.before.eventSetVersion !== diff.selection.eventSetVersion
-      || diff.after.eventVersion !== diff.before.eventVersion + 1) {
-    context.addIssue({ code: 'custom', message: 'Event settings diff versions are incoherent.' });
-  }
+  request: eventSettingsUpdateInputSchema
 });
 
 export const eventSettingsUpdateResultSchema = eventSettingsSchema;
 
-export const eventSettingsUpdateDraftDataSchema = z.strictObject({
+export const eventSettingsUpdateDataSchema = z.strictObject({
   schemaVersion: z.literal(1),
   action: z.literal('update'),
-  changesetId: changesetApplicationIdSchema,
-  headVersion: eventVersionSchema,
-  status: z.literal('draft'),
-  revision: z.strictObject({
-    id: changesetApplicationIdSchema,
-    number: eventVersionSchema,
-    digestSha256: z.string().regex(DIGEST)
-  }),
-  riskTier: z.enum(['low', 'normal', 'consequential']),
-  approvalPolicy: z.strictObject({
-    reference: versionedDefinitionRefSchema,
-    definitionDigestSha256: z.string().regex(DIGEST),
-    requirement: z.enum(['none', 'distinct_current_human'])
-  }),
-  safeDiff: eventSettingsSafeDiffSchema
+  eventId: eventIdSchema,
+  eventSetVersion: eventVersionSchema,
+  eventVersion: eventVersionSchema
 });
 
-export const eventSettingsUpdateDraftCanonicalResultSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('success'), data: eventSettingsUpdateDraftDataSchema }),
+export const eventSettingsUpdateCanonicalResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success'), data: eventSettingsUpdateDataSchema }),
   z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
 ]);
-export const eventSettingsUpdateDraftOperationResultSchema =
-  createEffectfulOperationResultSchema(eventSettingsUpdateDraftDataSchema);
+export const eventSettingsUpdateOperationResultSchema =
+  createEffectfulOperationResultSchema(eventSettingsUpdateDataSchema);
 
 export const EVENT_SETTINGS_OPERATION_SCHEMA_REFS = Object.freeze({
   currentRead: createOperationSchemaManifestRefs({
@@ -288,11 +255,11 @@ export const EVENT_SETTINGS_OPERATION_SCHEMA_REFS = Object.freeze({
     resultKey: 'schema.event_settings.current-read.operator-result',
     resultSchema: currentEventSettingsReadResultSchema
   }),
-  updateDraft: createOperationSchemaManifestRefs({
-    inputKey: 'schema.event_settings.update-draft.input',
-    inputSchema: eventSettingsUpdateDraftInputSchema,
-    resultKey: 'schema.event_settings.update-draft.operator-result',
-    resultSchema: eventSettingsUpdateDraftOperationResultSchema
+  update: createOperationSchemaManifestRefs({
+    inputKey: 'schema.event_settings.update.input',
+    inputSchema: eventSettingsUpdateInputSchema,
+    resultKey: 'schema.event_settings.update.operator-result',
+    resultSchema: eventSettingsUpdateOperationResultSchema
   })
 });
 
@@ -302,11 +269,10 @@ export type EventSettingsGeometry = z.infer<typeof eventSettingsGeometrySchema>;
 export type EventSettingsDto = z.infer<typeof eventSettingsSchema>;
 export type CurrentEventSettingsReadInput = z.infer<typeof currentEventSettingsReadInputSchema>;
 export type CurrentEventSettingsReadResult = z.infer<typeof currentEventSettingsReadResultSchema>;
-export type EventSettingsUpdateDraftInput = z.infer<typeof eventSettingsUpdateDraftInputSchema>;
+export type EventSettingsUpdateInput = z.infer<typeof eventSettingsUpdateInputSchema>;
 export type EventSettingsUpdateAuthorInput = z.infer<typeof eventSettingsUpdateAuthorInputSchema>;
-export type EventSettingsSafeDiff = z.infer<typeof eventSettingsSafeDiffSchema>;
 export type EventSettingsUpdateResult = z.infer<typeof eventSettingsUpdateResultSchema>;
-export type EventSettingsUpdateDraftData = z.infer<typeof eventSettingsUpdateDraftDataSchema>;
-export type EventSettingsUpdateDraftOperationResult = z.infer<
-  typeof eventSettingsUpdateDraftOperationResultSchema
+export type EventSettingsUpdateData = z.infer<typeof eventSettingsUpdateDataSchema>;
+export type EventSettingsUpdateOperationResult = z.infer<
+  typeof eventSettingsUpdateOperationResultSchema
 >;

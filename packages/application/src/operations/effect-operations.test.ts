@@ -73,6 +73,8 @@ import {
   OperationRegistryValidationError
 } from './registry';
 import type {
+  DirectAuditedUnitOfWork,
+  DirectOperationLogRecord,
   EffectOperationIdentity,
   EffectHandlerRegistration,
   EffectHandlerSnapshot,
@@ -178,14 +180,16 @@ const inputSchema = z.strictObject({
 });
 
 const canonicalSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('success'), data: z.strictObject({ value: z.string() }) }),
+  z.strictObject({ kind: z.literal('success'), data: z.strictObject({
+    value: z.string(), action: z.string().optional()
+  }) }),
   z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
 ]);
 
 const contributionSchema = z.strictObject({
   result: canonicalSchema,
   domain: z.union([z.strictObject({ value: z.string() }), z.null()]),
-  receiptChildren: z.array(z.discriminatedUnion('kind', [
+  effectContributions: z.array(z.discriminatedUnion('kind', [
     z.strictObject({ kind: z.literal('domain_evidence'), safeValue: z.string() }),
     z.strictObject({ kind: z.literal('operation_audit'), safeValue: z.string() })
   ]))
@@ -204,6 +208,7 @@ interface FixtureTracker {
   projectionCalls: number;
   readonly handlerSnapshotKeys: string[][];
   readonly handlerContexts: EffectInvocationContext[];
+  authorityCalls: number;
 }
 
 function fixture(options: {
@@ -224,6 +229,9 @@ function fixture(options: {
   readonly publicEffectConformance?: PublicEffectConformanceBoundary;
   readonly appModelBinding?: boolean;
   readonly denyAuthority?: boolean;
+  readonly directAudited?: boolean;
+  readonly directAction?: string;
+  readonly directSummariesByAction?: Readonly<Record<string, string>>;
 } = {}): OperationRegistrySource {
   const effect = options.effect ?? 'draft';
   const tracker = options.tracker;
@@ -232,8 +240,10 @@ function fixture(options: {
   const autonomyPolicy = createOperationAutonomyPolicy({
     definition: refs.autonomy,
     operation: { name: operationName, version: 1 },
-    riskFloor: effect === 'draft' ? 'normal' : 'consequential',
-    unattendedRiskCeiling: effect === 'draft' ? 'normal' : 'consequential',
+    riskFloor: options.directAudited ? 'low' : effect === 'draft' ? 'normal' : 'consequential',
+    unattendedRiskCeiling: options.directAudited
+      ? 'low'
+      : effect === 'draft' ? 'normal' : 'consequential',
     supportedDispositions: [
       'proceed', 'safe_retry', 'reconcile', 'renewed_approval',
       'replan', 'compensate', 'block', 'attention'
@@ -248,7 +258,7 @@ function fixture(options: {
       compensation_required: 'compensate',
       terminal_failure: 'attention'
     },
-    requiresSeparateApproval: effect === 'commit'
+    requiresSeparateApproval: effect === 'commit' && !options.directAudited
   });
   const accessLanes = [
     ...(options.operatorBinding === false ? [] : [operatorLane]),
@@ -292,6 +302,7 @@ function fixture(options: {
     },
     authorityResolver: {
       resolve: (input) => {
+        if (tracker) tracker.authorityCalls += 1;
         if (options.denyAuthority) return { kind: 'denied' as const, reason: 'not_authorized' as const };
         if (input.evidence.kind === 'registered_job') {
           return {
@@ -390,8 +401,8 @@ function fixture(options: {
   });
   const phaseControl = createSingleUnitOfWorkConformanceFixture({
     operation: { name: operationName, version: 1, effect },
-    maximumRisk: effect === 'draft' ? 'normal' : 'consequential',
-    consequenceTags: effect === 'draft' ? [] : ['authority-changing'],
+    maximumRisk: options.directAudited ? 'low' : effect === 'draft' ? 'normal' : 'consequential',
+    consequenceTags: options.directAudited ? [] : effect === 'draft' ? [] : ['authority-changing'],
     autonomyPolicy,
     handler: refs.handler,
     handlerCapability: refs.capability,
@@ -436,7 +447,9 @@ function fixture(options: {
             }
           };
         }
-        return parsed;
+        return parsed.kind === 'success'
+          ? { kind: 'success' as const, data: { value: parsed.data.value } }
+          : parsed;
       }
     }],
     operations: [],
@@ -480,13 +493,18 @@ function fixture(options: {
               }
             },
             domain: null,
-            receiptChildren: []
+            effectContributions: []
           };
         }
         const ordinary = {
-          result: { kind: 'success' as const, data: { value: request.value } },
+          result: { kind: 'success' as const, data: {
+            value: request.value,
+            ...(options.directAction ? { action: options.directAction } : {})
+          } },
           domain: { value: request.value },
-          receiptChildren: request.mode === 'reserved-audit'
+          effectContributions: options.directAudited
+            ? []
+            : request.mode === 'reserved-audit'
             ? [{ kind: 'operation_audit' as const, safeValue: request.value }]
             : [{ kind: 'domain_evidence' as const, safeValue: request.value }]
         };
@@ -501,9 +519,9 @@ function fixture(options: {
       lifecycle: { status: 'active' },
       summary: effect === 'draft' ? 'Create an inert note draft.' : 'Commit a note.',
       effect,
-      maxRisk: effect === 'draft' ? 'normal' : 'consequential',
+      maxRisk: options.directAudited ? 'low' : effect === 'draft' ? 'normal' : 'consequential',
       autonomyPolicy: refs.autonomy,
-      consequenceTags: effect === 'draft' ? [] : ['authority-changing'],
+      consequenceTags: options.directAudited ? [] : effect === 'draft' ? [] : ['authority-changing'],
       inputSchema: refs.input,
       contributionSchema: refs.contribution,
       canonicalResultSchema: refs.canonical,
@@ -529,7 +547,15 @@ function fixture(options: {
         requestHashProfile: options.operationRequestHashProfile ?? refs.requestHash
       },
       concurrency: refs.concurrency,
-      execution: phaseControl.execution,
+      execution: options.directAudited
+        ? {
+            ...phaseControl.execution,
+            profile: 'direct_audited' as const,
+            history: options.directSummariesByAction
+              ? { summariesByAction: options.directSummariesByAction }
+              : { summary: 'Committed synthetic note' }
+          }
+        : phaseControl.execution,
       bindings: [
         ...(options.operatorBinding === false ? [] : [{
           surface: 'operator_http' as const,
@@ -589,37 +615,39 @@ function identityKey(identity: EffectOperationIdentity): string {
   ].join('|');
 }
 
-type FailurePoint = 'claim' | 'snapshot' | 'domain' | 'parent' | 'audit' | 'child' | 'release' | 'commit';
+type FailurePoint = 'snapshot' | 'domain' | 'parent' | 'child' | 'release' | 'commit';
 
 interface MemoryState {
   readonly receipts: Map<string, TerminalEffectReceipt>;
+  readonly directLogs: Map<string, DirectOperationLogRecord>;
   readonly domain: unknown[];
   readonly children: { readonly receiptId: string; readonly contribution: unknown }[];
   readonly audits: Map<string, OperationAuditRecord>;
-  readonly claims: Map<string, string>;
 }
 
 function cloneState(state: MemoryState): MemoryState {
   return {
     receipts: new Map(state.receipts),
+    directLogs: new Map(state.directLogs),
     domain: [...state.domain],
     children: [...state.children],
-    audits: new Map(state.audits),
-    claims: new Map(state.claims)
+    audits: new Map(state.audits)
   };
 }
 
 class InMemoryEffectUnitOfWork implements EffectUnitOfWorkPort {
   readonly trace: string[] = [];
   readonly failure: FailurePoint | undefined;
-  private state: MemoryState = { receipts: new Map(), domain: [], children: [], audits: new Map(), claims: new Map() };
+  private state: MemoryState = {
+    receipts: new Map(), directLogs: new Map(), domain: [], children: [],
+    audits: new Map()
+  };
   commits = 0;
   receiptObserver?: (receipt: TerminalEffectReceipt) => void;
   authorityRecheckOverride?: (
     context: EffectInvocationContext
   ) => Promise<SealedEffectAuthorityRecheckResult> | SealedEffectAuthorityRecheckResult;
   handlerSnapshot: unknown = { currentValue: null };
-  claimOverride?: 'same' | 'changed' | 'unknown';
   receiptOverride?: TerminalEffectReceipt;
 
   constructor(failure?: FailurePoint) {
@@ -627,9 +655,10 @@ class InMemoryEffectUnitOfWork implements EffectUnitOfWorkPort {
   }
 
   get receiptCount() { return this.state.receipts.size; }
+  get directLogCount() { return this.state.directLogs.size; }
+  get directLogSummaries() { return [...this.state.directLogs.values()].map((record) => record.summary); }
   get domainCount() { return this.state.domain.length; }
   get childCount() { return this.state.children.length; }
-  get claimCount() { return this.state.claims.size; }
   get storedReceipts() { return [...this.state.receipts.values()]; }
   get storedChildren() { return [...this.state.children]; }
   get storedAudits() { return [...this.state.audits.values()]; }
@@ -639,8 +668,13 @@ class InMemoryEffectUnitOfWork implements EffectUnitOfWorkPort {
   }
 
   findTerminalReceipt(identity: EffectOperationIdentity): TerminalEffectReceipt | undefined {
-    this.trace.push('receipt_preflight');
+    this.trace.push('replay_preflight');
     return this.receiptOverride ?? this.state.receipts.get(identityKey(identity));
+  }
+
+  findTerminalOperationLog(identity: EffectOperationIdentity): TerminalEffectReceipt | undefined {
+    this.trace.push('direct_log_preflight');
+    return this.state.directLogs.get(identityKey(identity))?.receipt;
   }
 
   recordShortOperationAudit(record: ShortOperationAuditRecord): void {
@@ -659,7 +693,6 @@ class InMemoryEffectUnitOfWork implements EffectUnitOfWorkPort {
     const receiptObserver = this.receiptObserver;
     const authorityRecheckOverride = this.authorityRecheckOverride;
     const handlerSnapshot = this.handlerSnapshot;
-    const claimOverride = this.claimOverride;
     const receiptOverride = this.receiptOverride;
     const unitOfWork: EffectUnitOfWork = {
       recheckCurrentAuthority(context) {
@@ -667,24 +700,8 @@ class InMemoryEffectUnitOfWork implements EffectUnitOfWorkPort {
         return authorityRecheckOverride?.(context)
           ?? recheckEffectInvocationCurrentAuthority(context);
       },
-      acquireExecutionClaim(identity, requestHash) {
-        trace.push('claim');
-        if (claimOverride === 'same') return { kind: 'contended_same_request' as const };
-        if (claimOverride === 'changed') return { kind: 'contended_changed_request' as const };
-        if (claimOverride === 'unknown') return { kind: 'unknown' } as never;
-        const key = identityKey(identity);
-        const existing = working.claims.get(key);
-        if (existing !== undefined) {
-          return existing === requestHash
-            ? { kind: 'contended_same_request' as const }
-            : { kind: 'contended_changed_request' as const };
-        }
-        working.claims.set(key, requestHash);
-        fail('claim');
-        return { kind: 'acquired' as const };
-      },
       findTerminalReceipt(identity) {
-        trace.push('receipt_recheck');
+        trace.push('replay_recheck');
         return receiptOverride ?? working.receipts.get(identityKey(identity));
       },
       openHandlerSnapshot(capability) {
@@ -699,37 +716,28 @@ class InMemoryEffectUnitOfWork implements EffectUnitOfWorkPort {
         working.domain.push(structuredClone(contribution));
         fail('domain');
       },
-      insertReceiptParent(receipt) {
-        trace.push('receipt_parent');
-        receiptObserver?.(receipt);
-        const key = identityKey(receipt.identity);
+      insertOperationLog(record) {
+        trace.push('operation_log');
+        receiptObserver?.(record.receipt);
+        const key = identityKey(record.receipt.identity);
         if (working.receipts.has(key)) throw new Error('duplicate receipt');
-        working.receipts.set(key, receipt);
+        working.receipts.set(key, record.receipt);
+        working.directLogs.set(key, record);
         fail('parent');
       },
-      insertTerminalNewOperationAudit(record) {
-        trace.push('operation_audit');
-        if (!isSealedOperationAuditRecord(record)) throw new Error('unsealed audit');
-        if (![...working.receipts.values()].some((receipt) => receipt.ref.id === record.receiptId)) throw new Error('missing receipt parent');
-        working.audits.set(record.eventId, record);
-        fail('audit');
-      },
-      insertReceiptChild(receiptId, contribution) {
-        trace.push('receipt_child');
-        if (![...working.receipts.values()].some((receipt) => receipt.ref.id === receiptId)) throw new Error('missing receipt parent');
+      applyEffectContribution(receiptId, contribution) {
+        trace.push('effect_contribution');
         working.children.push({ receiptId, contribution: structuredClone(contribution) });
         fail('child');
       },
-      releaseExecutionClaim(identity) {
+      finishEffectApplication() {
         trace.push('release');
-        if (!working.claims.delete(identityKey(identity))) throw new Error('missing claim');
         fail('release');
       }
     };
 
     try {
       const result = await work(unitOfWork);
-      if (working.claims.size !== 0) throw new Error('claims must be empty before commit');
       this.fail('commit');
       this.state = working;
       this.commits += 1;
@@ -737,6 +745,53 @@ class InMemoryEffectUnitOfWork implements EffectUnitOfWorkPort {
       return result;
     } catch (error) {
       this.trace.push('rollback');
+      throw error;
+    }
+  }
+
+  async runInDirectUnitOfWork<Value>(
+    work: (unitOfWork: DirectAuditedUnitOfWork) => Promise<Value>
+  ): Promise<Value> {
+    this.trace.push('direct_begin');
+    const working = cloneState(this.state);
+    const trace = this.trace;
+    const handlerSnapshot = this.handlerSnapshot;
+    const authorityRecheckOverride = this.authorityRecheckOverride;
+    const unitOfWork: DirectAuditedUnitOfWork = {
+      recheckCurrentAuthority(context) {
+        trace.push('authority_recheck');
+        return authorityRecheckOverride?.(context)
+          ?? recheckEffectInvocationCurrentAuthority(context);
+      },
+      findTerminalOperationLog(identity) {
+        trace.push('direct_log_recheck');
+        return working.directLogs.get(identityKey(identity))?.receipt;
+      },
+      openHandlerSnapshot(capability) {
+        trace.push('snapshot');
+        expect(capability).toEqual(refs.capability);
+        return handlerSnapshot as EffectHandlerSnapshot;
+      },
+      applyDomainContribution(capability, contribution) {
+        trace.push('domain');
+        expect(capability).toEqual(refs.capability);
+        working.domain.push(structuredClone(contribution));
+      },
+      insertOperationLog(record: DirectOperationLogRecord) {
+        trace.push('direct_log');
+        const key = identityKey(record.receipt.identity);
+        if (working.directLogs.has(key)) throw new Error('duplicate direct log');
+        working.directLogs.set(key, record);
+      }
+    };
+    try {
+      const result = await work(unitOfWork);
+      this.state = working;
+      this.commits += 1;
+      this.trace.push('direct_commit');
+      return result;
+    } catch (error) {
+      this.trace.push('direct_rollback');
       throw error;
     }
   }
@@ -748,7 +803,8 @@ function tracker(): FixtureTracker {
     handlerCalls: 0,
     projectionCalls: 0,
     handlerSnapshotKeys: [],
-    handlerContexts: []
+    handlerContexts: [],
+    authorityCalls: 0
   };
 }
 
@@ -759,6 +815,9 @@ async function harness(options: {
   readonly asyncProjection?: boolean;
   readonly nondeterministicProjection?: boolean;
   readonly semanticRewriteProjection?: boolean;
+  readonly directAudited?: boolean;
+  readonly directAction?: string;
+  readonly directSummariesByAction?: Readonly<Record<string, string>>;
 } = {}) {
   const observed = tracker();
   const registry = await createOperationRegistry(fixture({
@@ -771,6 +830,11 @@ async function harness(options: {
       : {}),
     ...(options.semanticRewriteProjection !== undefined
       ? { semanticRewriteProjection: options.semanticRewriteProjection }
+      : {}),
+    ...(options.directAudited !== undefined ? { directAudited: options.directAudited } : {}),
+    ...(options.directAction !== undefined ? { directAction: options.directAction } : {}),
+    ...(options.directSummariesByAction !== undefined
+      ? { directSummariesByAction: options.directSummariesByAction }
       : {})
   }));
   const port = new InMemoryEffectUnitOfWork(options.failure);
@@ -783,7 +847,7 @@ async function harness(options: {
     executor: createEffectOperationExecutor({
       registry,
       unitOfWork: port,
-      newReceiptId: () => receiptIds[nextReceipt++] ?? crypto.randomUUID()
+      newOperationLogId: () => receiptIds[nextReceipt++] ?? crypto.randomUUID()
     })
   };
 }
@@ -1442,7 +1506,7 @@ describe('ordinary effect definition compatibility', () => {
 });
 
 describe('sealed ordinary effect executor', () => {
-  test('receipt-parent hooks can prove the exact issued receipt object for its sealed invocation', async () => {
+  test('operation-log hooks can prove the exact issued receipt object for its sealed invocation', async () => {
     const test = await harness();
     const invocation = await sealed({ builder: test.builder });
     let observed = false;
@@ -1458,27 +1522,18 @@ describe('sealed ordinary effect executor', () => {
     expect(observed).toBe(true);
   });
 
-  test('commits domain contribution, immutable receipt parent, and receipt child in strict order', async () => {
+  test('commits domain contribution, immutable operation log, and owner effect contribution in strict order', async () => {
     const test = await harness();
     const result = await test.executor.execute(await sealed({ builder: test.builder }));
     expect(result.kind).toBe('success');
     expect(test.port.trace).toEqual([
-      'receipt_preflight', 'begin', 'authority_recheck', 'claim', 'receipt_recheck', 'snapshot',
-      'domain', 'receipt_parent', 'operation_audit', 'receipt_child', 'release', 'commit'
+      'replay_preflight', 'begin', 'authority_recheck', 'replay_recheck', 'snapshot',
+      'domain', 'operation_log', 'effect_contribution', 'release', 'commit'
     ]);
     expect(test.port.domainCount).toBe(1);
     expect(test.port.receiptCount).toBe(1);
     expect(test.port.childCount).toBe(1);
-    expect(test.port.storedAudits).toHaveLength(1);
-    expect(test.port.storedAudits[0]).toMatchObject({
-      disposition: 'terminal_new',
-      receiptId: result.kind === 'success' ? result.receipt.id : undefined,
-      auditTarget: refs.audit,
-      auditRecordProfile: refs.auditRecordProfile,
-      maxRisk: 'normal',
-      resultSummary: { kind: 'success', terminal: true }
-    });
-    expect(test.port.claimCount).toBe(0);
+    expect(test.port.storedAudits).toHaveLength(0);
     const receipt = test.port.storedReceipts[0];
     expect(receipt && Object.isFrozen(receipt)).toBe(true);
     expect(receipt && Object.isFrozen(receipt.result)).toBe(true);
@@ -1505,7 +1560,7 @@ describe('sealed ordinary effect executor', () => {
       }
     };
     await expect(test.executor.execute(await sealed({ builder: test.builder })))
-      .rejects.toMatchObject({ phase: 'receipt_preflight' });
+      .rejects.toMatchObject({ phase: 'replay_preflight' });
     expect(test.observed.handlerCalls).toBe(1);
     expect(test.port.commits).toBe(1);
   });
@@ -1517,13 +1572,7 @@ describe('sealed ordinary effect executor', () => {
     expect(replay).toEqual(first);
     expect(test.observed.handlerCalls).toBe(1);
     expect(test.port.commits).toBe(1);
-    expect(test.port.storedAudits.map((record) => record.disposition)).toEqual([
-      'terminal_new', 'terminal_replay'
-    ]);
-    expect(test.port.storedAudits[1]).toMatchObject({
-      disposition: 'terminal_replay',
-      relatedReceiptId: first.kind === 'success' ? first.receipt.id : undefined
-    });
+    expect(test.port.storedAudits).toEqual([]);
 
     const changed = await test.executor.execute(await sealed({ builder: test.builder, value: 'changed', correlationId: correlationIds[1] }));
     expect(changed).toEqual({
@@ -1542,15 +1591,6 @@ describe('sealed ordinary effect executor', () => {
     expect('receipt' in changed).toBe(false);
     expect(test.observed.handlerCalls).toBe(1);
     expect(test.port.receiptCount).toBe(1);
-    expect(test.port.storedAudits[2]).toMatchObject({
-      disposition: 'idempotency_conflict',
-      resultSummary: {
-        kind: 'outcome',
-        outcomeClass: 'idempotency_conflict',
-        outcomeKind: 'operation.request_changed',
-        terminal: false
-      }
-    });
 
     const isolated = await test.executor.execute(await sealed({ builder: test.builder, principal: 'grace', correlationId: correlationIds[2] }));
     expect(isolated.kind).toBe('success');
@@ -1594,7 +1634,6 @@ describe('sealed ordinary effect executor', () => {
     expect(test.port.domainCount).toBe(0);
     expect(test.port.receiptCount).toBe(0);
     expect(test.port.childCount).toBe(0);
-    expect(test.port.claimCount).toBe(0);
     expect(test.port.trace.at(-1)).toBe('rollback');
   });
 
@@ -1611,16 +1650,15 @@ describe('sealed ordinary effect executor', () => {
     expect(test.port.receiptCount).toBe(0);
     expect(test.port.childCount).toBe(0);
     expect(test.port.storedAudits).toHaveLength(0);
-    expect(test.port.claimCount).toBe(0);
     expect(test.port.trace.at(-1)).toBe('rollback');
   });
 
-  test('every injected transaction crash rolls back domain, receipt, child, and transient claim', async () => {
-    for (const failure of ['claim', 'snapshot', 'domain', 'parent', 'audit', 'child', 'release', 'commit'] as const) {
+  test('every injected transaction crash rolls back domain, operation log, and owner effect contribution', async () => {
+    for (const failure of ['snapshot', 'domain', 'parent', 'child', 'release', 'commit'] as const) {
       const test = await harness({ failure });
       await expect(test.executor.execute(await sealed({ builder: test.builder }))).rejects.toBeInstanceOf(OperationExecutionError);
-      expect({ failure, domain: test.port.domainCount, receipts: test.port.receiptCount, children: test.port.childCount, claims: test.port.claimCount, commits: test.port.commits })
-        .toEqual({ failure, domain: 0, receipts: 0, children: 0, claims: 0, commits: 0 });
+      expect({ failure, domain: test.port.domainCount, receipts: test.port.receiptCount, children: test.port.childCount, commits: test.port.commits })
+        .toEqual({ failure, domain: 0, receipts: 0, children: 0, commits: 0 });
       expect(test.port.trace.at(-1)).toBe('rollback');
     }
   });
@@ -1629,13 +1667,11 @@ describe('sealed ordinary effect executor', () => {
     const handlerCrash = await harness();
     await expect(handlerCrash.executor.execute(await sealed({ builder: handlerCrash.builder, mode: 'crash' }))).rejects.toMatchObject({ phase: 'handler' });
     expect(handlerCrash.port.receiptCount).toBe(0);
-    expect(handlerCrash.port.claimCount).toBe(0);
 
     const projectionCrash = await harness({ asyncProjection: true });
     await expect(projectionCrash.executor.execute(await sealed({ builder: projectionCrash.builder }))).rejects.toMatchObject({ phase: 'projection' });
     expect(projectionCrash.port.domainCount).toBe(0);
     expect(projectionCrash.port.receiptCount).toBe(0);
-    expect(projectionCrash.port.claimCount).toBe(0);
 
     const nondeterministicProjection = await harness({ nondeterministicProjection: true });
     await expect(nondeterministicProjection.executor.execute(await sealed({
@@ -1680,7 +1716,6 @@ describe('sealed ordinary effect executor', () => {
       expect(test.observed.handlerCalls).toBe(0);
       expect(test.port.domainCount).toBe(0);
       expect(test.port.receiptCount).toBe(0);
-      expect(test.port.claimCount).toBe(0);
     }
     expect(accessorCalls).toBe(0);
   });
@@ -1890,7 +1925,7 @@ describe('sealed ordinary effect executor', () => {
     })).toThrow('exact outcome');
   });
 
-  test('invalid autonomy evidence and unknown claim states fail closed before the handler', async () => {
+  test('invalid autonomy evidence fails closed before the handler', async () => {
     const invalidEvidenceSource = fixture();
     const originalEvidence = invalidEvidenceSource.autonomyEvidenceResolvers?.[0];
     if (!originalEvidence) throw new TypeError('missing autonomy evidence fixture');
@@ -1913,16 +1948,8 @@ describe('sealed ordinary effect executor', () => {
       .execute(await sealed({ builder: createEffectInvocationBuilder(invalidRegistry) })))
       .rejects.toMatchObject({ phase: 'autonomy_preflight' });
     expect(invalidPort.trace).toEqual([
-      'receipt_preflight', 'begin', 'authority_recheck', 'claim', 'receipt_recheck', 'rollback'
+      'replay_preflight', 'begin', 'authority_recheck', 'replay_recheck', 'rollback'
     ]);
-
-    const unknownClaim = await harness();
-    unknownClaim.port.claimOverride = 'unknown';
-    await expect(unknownClaim.executor.execute(await sealed({ builder: unknownClaim.builder })))
-      .rejects.toMatchObject({ phase: 'execution_claim' });
-    expect(unknownClaim.observed.handlerCalls).toBe(0);
-    expect(unknownClaim.port.domainCount).toBe(0);
-    expect(unknownClaim.port.receiptCount).toBe(0);
   });
 
   test('bounds and consequential approval gate before UnitOfWork, while exact sealed approval proceeds', async () => {
@@ -1957,7 +1984,7 @@ describe('sealed ordinary effect executor', () => {
       outcome: { class: 'policy_violation', kind: 'autonomy.renewed_approval' }
     });
     expect(overBoundsPort.trace).toEqual([
-      'receipt_preflight', 'begin', 'authority_recheck', 'claim', 'receipt_recheck', 'release', 'commit', 'short_audit'
+      'replay_preflight', 'begin', 'authority_recheck', 'replay_recheck', 'commit'
     ]);
     const interventionEvidence = resolveEffectAutonomyExecutionEvidence({
       invocation: overBoundsInvocation,
@@ -1998,7 +2025,7 @@ describe('sealed ordinary effect executor', () => {
       outcome: { kind: 'autonomy.renewed_approval' }
     });
     expect(gatedPort.trace).toEqual([
-      'receipt_preflight', 'begin', 'authority_recheck', 'claim', 'receipt_recheck', 'release', 'commit', 'short_audit'
+      'replay_preflight', 'begin', 'authority_recheck', 'replay_recheck', 'commit'
     ]);
 
     const approved = await harness({ effect: 'commit', handlerEffect: 'commit' });
@@ -2039,12 +2066,7 @@ describe('sealed ordinary effect executor', () => {
     });
     expect(test.port.domainCount).toBe(0);
     expect(test.port.receiptCount).toBe(0);
-    expect(test.port.storedAudits).toEqual([
-      expect.objectContaining({
-        disposition: 'nonterminal_progress',
-        reason: { kind: 'phase_nonterminal' }
-      })
-    ]);
+    expect(test.port.storedAudits).toEqual([]);
 
     const compiled = getCompiledEffectOperation(test.registry, 'note.draft', 1, 'operator_http')?.operation;
     const context = test.observed.handlerContexts[0];
@@ -2162,46 +2184,7 @@ describe('sealed ordinary effect executor', () => {
     })).toThrow('invalid_operation_audit_context_denied_result');
   });
 
-  test('same-hash contention returns registered safe progress without false conflict classification', async () => {
-    const same = await harness();
-    same.port.claimOverride = 'same';
-    const sameInvocation = await sealed({ builder: same.builder });
-    const sameResult = await same.executor.execute(sameInvocation);
-    expect(sameResult).toMatchObject({
-      kind: 'outcome',
-      terminal: false,
-      outcome: { class: 'conflict', kind: 'operation.in_progress', retryable: true }
-    });
-    await expect(same.executor.execute(sameInvocation)).rejects.toMatchObject({ phase: 'binding' });
-    expect(await same.executor.execute(await sealed({ builder: same.builder }))).toEqual(sameResult);
-    expect(same.observed.handlerCalls).toBe(0);
-    expect(same.port.storedAudits).toHaveLength(2);
-    expect(same.port.storedAudits).toEqual([
-      expect.objectContaining({
-        disposition: 'nonterminal_progress',
-        reason: { kind: 'same_request_contended' }
-      }),
-      expect.objectContaining({
-        disposition: 'nonterminal_progress',
-        reason: { kind: 'same_request_contended' }
-      })
-    ]);
-    expect(same.port.trace.filter((entry) => entry === 'short_audit')).toHaveLength(2);
-
-    const changed = await harness();
-    changed.port.claimOverride = 'changed';
-    const changedResult = await changed.executor.execute(await sealed({ builder: changed.builder }));
-    expect(changedResult).toMatchObject({
-      kind: 'outcome',
-      terminal: false,
-      outcome: { class: 'idempotency_conflict', kind: 'operation.request_changed' }
-    });
-    expect(changed.port.storedAudits).toEqual([
-      expect.objectContaining({ disposition: 'idempotency_conflict' })
-    ]);
-  });
-
-  test('rejects forged and wrong-context transaction authority seals before claim or domain work', async () => {
+  test('rejects forged and wrong-context transaction authority seals before domain work', async () => {
     const forged = await harness();
     forged.port.authorityRecheckOverride = () => ({
       kind: 'sealed_effect_authority_recheck_result'
@@ -2209,7 +2192,7 @@ describe('sealed ordinary effect executor', () => {
     await expect(forged.executor.execute(await sealed({ builder: forged.builder })))
       .rejects.toMatchObject({ phase: 'authority_recheck' });
     expect(forged.port.trace).toEqual([
-      'receipt_preflight', 'begin', 'authority_recheck', 'rollback'
+      'replay_preflight', 'begin', 'authority_recheck', 'rollback'
     ]);
     expect(forged.observed.handlerCalls).toBe(0);
     expect(forged.port.domainCount).toBe(0);
@@ -2231,7 +2214,7 @@ describe('sealed ordinary effect executor', () => {
       value: 'context-a'
     }))).rejects.toMatchObject({ phase: 'authority_recheck' });
     expect(wrongContext.port.trace.slice(traceStart)).toEqual([
-      'receipt_preflight', 'begin', 'authority_recheck', 'rollback'
+      'replay_preflight', 'begin', 'authority_recheck', 'rollback'
     ]);
     expect(wrongContext.observed.handlerCalls).toBe(1);
     expect(wrongContext.port.domainCount).toBe(1);
@@ -2265,6 +2248,123 @@ describe('sealed ordinary effect executor', () => {
 		expect(first.observed.handlerCalls).toBe(1);
 		expect(second.observed.handlerCalls).toBe(0);
 	});
+});
+
+describe('direct audited effect executor', () => {
+  test('admits the compact profile only for commit operations', async () => {
+    await expect(createOperationRegistry(fixture({ directAudited: true })))
+      .rejects.toMatchObject({
+        issues: [expect.objectContaining({ code: 'invalid_effect_execution_contract' })]
+      });
+  });
+
+  test('writes one domain contribution and log, rechecks authority before replay, and conflicts changed requests', async () => {
+    const direct = await harness({
+      effect: 'commit', handlerEffect: 'commit', directAudited: true
+    });
+    const first = await direct.executor.execute(await sealed({
+      builder: direct.builder, effect: 'commit', rawKey: 'direct-key', value: 'alpha'
+    }));
+    expect(first).toMatchObject({
+      kind: 'success', data: { value: 'alpha' },
+      receipt: { operationName: 'note.commit', operationVersion: 1 }
+    });
+    expect(direct.port.domainCount).toBe(1);
+    expect(direct.port.directLogCount).toBe(1);
+    expect(direct.port.directLogSummaries).toEqual(['Committed synthetic note']);
+    expect(direct.port.childCount).toBe(0);
+    expect(direct.port.trace).toEqual([
+      'direct_log_preflight', 'direct_begin', 'authority_recheck', 'direct_log_recheck',
+      'snapshot', 'domain', 'direct_log', 'direct_commit'
+    ]);
+    const authorityAfterFirst = direct.observed.authorityCalls;
+
+    const replay = await direct.executor.execute(await sealed({
+      builder: direct.builder, effect: 'commit', rawKey: 'direct-key', value: 'alpha'
+    }));
+    expect(replay).toEqual(first);
+    expect(direct.observed.authorityCalls - authorityAfterFirst).toBe(2);
+    expect(direct.port.domainCount).toBe(1);
+    expect(direct.port.directLogCount).toBe(1);
+
+    const changed = await direct.executor.execute(await sealed({
+      builder: direct.builder, effect: 'commit', rawKey: 'direct-key', value: 'changed'
+    }));
+    expect(changed).toMatchObject({
+      kind: 'outcome', terminal: false,
+      outcome: { class: 'idempotency_conflict', kind: 'operation.request_changed' }
+    });
+    expect(direct.port.domainCount).toBe(1);
+    expect(direct.port.directLogCount).toBe(1);
+  });
+
+  test('resolves a safe history summary from the committed action and rolls back an unmapped action', async () => {
+    const mapped = await harness({
+      effect: 'commit', handlerEffect: 'commit', directAudited: true,
+      directAction: 'create', directSummariesByAction: { create: 'Created a synthetic note' }
+    });
+    expect((await mapped.executor.execute(await sealed({
+      builder: mapped.builder, effect: 'commit', rawKey: 'mapped-key', value: 'alpha'
+    }))).kind).toBe('success');
+    expect(mapped.port.directLogSummaries).toEqual(['Created a synthetic note']);
+
+    const unmapped = await harness({
+      effect: 'commit', handlerEffect: 'commit', directAudited: true,
+      directAction: 'update', directSummariesByAction: { create: 'Created a synthetic note' }
+    });
+    await expect(unmapped.executor.execute(await sealed({
+      builder: unmapped.builder, effect: 'commit', rawKey: 'unmapped-key', value: 'alpha'
+    }))).rejects.toMatchObject({ phase: 'canonical_result' });
+    expect(unmapped.port.domainCount).toBe(0);
+    expect(unmapped.port.directLogCount).toBe(0);
+    expect(unmapped.port.trace.at(-1)).toBe('direct_rollback');
+  });
+
+  test('partitions replay by principal and scope and writes no log for a nonterminal outcome', async () => {
+    const direct = await harness({
+      effect: 'commit', handlerEffect: 'commit', directAudited: true
+    });
+    for (const candidate of [
+      { principal: 'ada', scope: 'workspace-alpha' },
+      { principal: 'grace', scope: 'workspace-alpha' },
+      { principal: 'ada', scope: 'workspace-beta' }
+    ]) {
+      expect((await direct.executor.execute(await sealed({
+        builder: direct.builder,
+        effect: 'commit', rawKey: 'partitioned-key', value: candidate.scope,
+        ...candidate
+      }))).kind).toBe('success');
+    }
+    expect(direct.port.domainCount).toBe(3);
+    expect(direct.port.directLogCount).toBe(3);
+
+    const beforeAuthority = direct.observed.authorityCalls;
+    const nonterminal = await direct.executor.execute(await sealed({
+      builder: direct.builder,
+      effect: 'commit', rawKey: 'nonterminal-key', value: 'none', mode: 'nonterminal'
+    }));
+    expect(nonterminal).toMatchObject({
+      kind: 'outcome', terminal: false,
+      outcome: { class: 'access_denied', kind: 'authority.denied' }
+    });
+    expect(direct.observed.authorityCalls - beforeAuthority).toBe(3);
+    expect(direct.port.domainCount).toBe(3);
+    expect(direct.port.directLogCount).toBe(3);
+  });
+
+  test('rolls back without a domain write or log when result projection fails', async () => {
+    const direct = await harness({
+      effect: 'commit', handlerEffect: 'commit', directAudited: true,
+      semanticRewriteProjection: true
+    });
+
+    await expect(direct.executor.execute(await sealed({
+      builder: direct.builder, effect: 'commit', rawKey: 'projection-key', value: 'alpha'
+    }))).rejects.toMatchObject({ phase: 'projection' });
+    expect(direct.port.domainCount).toBe(0);
+    expect(direct.port.directLogCount).toBe(0);
+    expect(direct.port.trace.at(-1)).toBe('direct_rollback');
+  });
 });
 
 test('effect safe manifest contains only JSON contract metadata', async () => {

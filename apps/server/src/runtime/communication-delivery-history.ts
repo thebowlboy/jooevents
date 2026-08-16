@@ -14,7 +14,7 @@ import { z } from 'zod';
 /**
  * Live `get_delivery_history` projection over the committed send-wave
  * evidence: one row per committed release batch, its identity and labels read
- * from the batch's own committed changeset revision (the send plan), and its
+ * from the batch's owner-native release commit, and its
  * per-recipient delivery-state counts recomputed from the outbound-delivery
  * ledger heads on every read. Nothing here is a fire-once flag — the counts
  * are always the ledger's current truth, so with no outbound provider
@@ -38,9 +38,8 @@ type CanonicalResult =
 
 interface CommitLinkRow {
   readonly receipt_id: string;
-  readonly changeset_id: string;
-  readonly revision_id: string;
   readonly batch_id: string;
+  readonly plan_json: string;
   readonly occurred_at_ms: number;
 }
 
@@ -55,11 +54,6 @@ interface HeadStateRow {
   readonly total: number;
   readonly last_updated_at_ms: number;
 }
-
-/** Minimal, targeted view of a stored revision record: the first author intent. */
-const revisionAuthorIntentSchema = z.looseObject({
-  authorIntents: z.array(z.looseObject({ authorInput: z.unknown() })).min(1)
-});
 
 const CURSOR_PREFIX = 'cur1_';
 
@@ -154,17 +148,9 @@ export function createSQLiteCommunicationDeliveryHistorySource(input: {
     scope: { workspaceId: string; eventId: string },
     link: CommitLinkRow
   ): OrganizerCommunicationHistoryItem {
-    const revision = sqlite.query<{ readonly record_json: string }, [string, string]>(`
-      SELECT record_json FROM changeset_revisions
-       WHERE changeset_id = ? AND revision_id = ? LIMIT 2
-    `).all(link.changeset_id, link.revision_id);
-    if (revision.length !== 1) {
-      throw new SQLiteCommunicationDeliveryHistoryError('data_corrupt');
-    }
     let plan: ReturnType<typeof sendMessagesAuthorInputSchema.parse>;
     try {
-      const record = revisionAuthorIntentSchema.parse(JSON.parse(revision[0]!.record_json));
-      plan = sendMessagesAuthorInputSchema.parse(record.authorIntents[0]!.authorInput);
+      plan = sendMessagesAuthorInputSchema.parse(JSON.parse(link.plan_json));
     } catch (error) {
       throw new SQLiteCommunicationDeliveryHistoryError('data_corrupt', error);
     }
@@ -264,8 +250,8 @@ export function createSQLiteCommunicationDeliveryHistorySource(input: {
         ORGANIZER_COMMUNICATION_PAGE_LIMIT
       );
 
-      const conditions = ['l.action = ?', 'l.workspace_id = ?', 'l.event_id = ?'];
-      const parameters: (string | number)[] = ['commit', scope.workspaceId, scope.eventId];
+      const conditions = ['l.workspace_id = ?', 'l.event_id = ?'];
+      const parameters: (string | number)[] = [scope.workspaceId, scope.eventId];
       if (filters.messageRefId !== undefined) {
         conditions.push('l.batch_id = ?');
         parameters.push(filters.messageRefId);
@@ -279,15 +265,15 @@ export function createSQLiteCommunicationDeliveryHistorySource(input: {
         parameters.push(filters.personRefId);
       }
       if (after !== undefined) {
-        conditions.push('(l.occurred_at_ms < ? OR (l.occurred_at_ms = ? AND l.receipt_id > ?))');
+        conditions.push('(l.occurred_at_ms < ? OR (l.occurred_at_ms = ? AND l.commit_id > ?))');
         parameters.push(after.occurredAtMs, after.occurredAtMs, after.receiptId);
       }
 
       const links = sqlite.query<CommitLinkRow, (string | number)[]>(`
-        SELECT l.receipt_id, l.changeset_id, l.revision_id, l.batch_id, l.occurred_at_ms
-          FROM communication_release_receipt_links l
+        SELECT l.commit_id AS receipt_id, l.batch_id, l.plan_json, l.occurred_at_ms
+          FROM communication_release_commits l
          WHERE ${conditions.join(' AND ')}
-         ORDER BY l.occurred_at_ms DESC, l.receipt_id ASC
+         ORDER BY l.occurred_at_ms DESC, l.commit_id ASC
          LIMIT ${limit + 1}
       `).all(...parameters);
 

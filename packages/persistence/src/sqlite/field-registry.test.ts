@@ -50,7 +50,7 @@ function openDatabase(): Database {
       id TEXT PRIMARY KEY, status TEXT NOT NULL, display_name TEXT NOT NULL,
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, version INTEGER NOT NULL
     ) STRICT;
-    CREATE TABLE foundation_trial_operation_receipts (
+    CREATE TABLE operation_log (
       id TEXT PRIMARY KEY, operation_name TEXT NOT NULL,
       operation_version INTEGER NOT NULL, result_json TEXT NOT NULL
     ) STRICT;

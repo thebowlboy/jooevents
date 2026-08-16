@@ -17,18 +17,11 @@ import type { VersionedAccessPolicyRef } from '@jooevents/identity-access';
 import { z } from 'zod';
 
 /**
- * The send wave is one consequential changeset: `send_messages` drafts the
- * reviewed release batch, and the shared `changeset.propose` →
- * `changeset.approve` → `changeset.commit` ceremony carries it to the single
- * atomic commit (recorder default BLOCKED-3 — no separate approval path).
+ * The send wave is one consequential, owner-native reviewed release batch.
+ * `send_messages` commits the exact adopted preview and its delivery effects
+ * in one atomic domain transaction.
  */
 export const SEND_MESSAGES_OPERATION = Object.freeze({ name: 'send_messages', version: 1 });
-
-/** Stable changeset-owner identity for the send-wave changeset lifecycle. */
-export const SEND_MESSAGES_CHANGESET_OWNER_ID = 'communication_release' as const;
-
-export const SEND_MESSAGES_CHANGESET_KIND = 'communication.send_messages';
-export const SEND_MESSAGES_CHANGESET_VERSION = 1;
 
 /** Hard batch ceiling shared with the audience contract (BLOCKED-12). */
 export const SEND_MESSAGES_RECIPIENT_LIMIT = 10_000;
@@ -108,8 +101,8 @@ const releaseArraySchema = z.array(sendMessagesReleaseSpecSchema)
 /**
  * The reviewed batch the organizer sends. It pins the exact preview identity
  * plus the membership and evidence digests and source versions the adopted
- * preview's stored summary attested. The send changeset validates all of it
- * at commit: a pin that never belonged to the adopted preview refuses as
+ * preview's stored summary attested. The reviewed send batch validates all of
+ * it at commit: a pin that never belonged to the adopted preview refuses as
  * `preview_changed` at planning, and a re-decide (or any other domain drift
  * after adoption) refuses the commit with the typed
  * `stale_revision`/`communication.preview_changed` outcome via the live

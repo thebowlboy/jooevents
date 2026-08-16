@@ -362,7 +362,7 @@ function reliabilityJobImmutableTriggerSql(table: string): string {
   `;
 }
 
-/** Installs only a disposable SQLite proof schema; it is not a retained migration. */
+/** This schema contributes to the accepted epoch-2 baseline and may also serve isolated fixtures. */
 export const RELIABILITY_JOB_TRIAL_SQL = `
     CREATE TABLE reliability_jobs_trial (
       job_id TEXT PRIMARY KEY,
@@ -469,7 +469,7 @@ export const RELIABILITY_JOB_TRIAL_SQL = `
       PRIMARY KEY(job_id, invocation_id),
       FOREIGN KEY(job_id, invocation_id) REFERENCES reliability_job_attempts_trial(job_id, invocation_id)
         ON UPDATE NO ACTION ON DELETE NO ACTION,
-      FOREIGN KEY(receipt_id) REFERENCES foundation_trial_operation_receipts(id)
+      FOREIGN KEY(receipt_id) REFERENCES operation_log(id)
         ON UPDATE NO ACTION ON DELETE NO ACTION,
       CHECK(
         (completion_state IN ('retry_scheduled', 'dead_lettered') AND failure_code IS NOT NULL AND failure_classification IS NOT NULL)
@@ -781,7 +781,7 @@ export class SQLiteReliabilityJobTrial {
       }
       const parent = this.sqlite.query<ReceiptParentRow, [string]>(`
         SELECT operation_name, operation_version, surface, result_json
-        FROM foundation_trial_operation_receipts
+        FROM operation_log
         WHERE id = ?
       `).get(input.receipt.ref.id);
       if (
@@ -793,7 +793,7 @@ export class SQLiteReliabilityJobTrial {
       ) {
         throw new SQLiteReliabilityJobTrialError(
           'receipt_mismatch',
-          'terminal receipt parent is absent or differs from the authenticated receipt'
+          'terminal operation log is absent or differs from the authenticated receipt'
         );
       }
       const next = completeJob(current.job, input.fence, now, {

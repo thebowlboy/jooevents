@@ -746,29 +746,41 @@
 									{/if}
 								</td>
 								<th class="matrix__speaker-cell" scope="row">
-									<!-- The name is what an operator is already reading when "who is
+									<!-- One line per speaker: name left, the progress pair pinned to
+									     the column's right edge so the bars align down the page. The
+									     name is what an operator is already reading when "who is
 									     this?" arrives, so once a profile has landed the name answers
-									     it in place. A speaker with nothing written about them keeps a
-									     plain name rather than a control that opens nothing. -->
-									<span class="ui-table__primary"
-										><strong
+									     it in place; a speaker with nothing written about them keeps a
+									     plain name rather than a control that opens nothing.
+
+									     Confirmed is the steady state of anyone holding assignments,
+									     so it says nothing per row — only an exception (invited,
+									     cancellation requested…) wears its badge, and by being the
+									     only badge on the line it is unmissable. The same rule as the
+									     Late chip: state it only where it is not already context. -->
+									<span class="who">
+										<strong class="who__name"
 											>{#if profile}<ProfilePeek {profile} />{:else}{row.speaker
 													.name}{/if}</strong
-										></span>
-									<span class="ui-table__secondary">
-										<span class="ui-badge {engagementBadge[row.speaker.state]}"
-											><Engagement class="ui-badge__icon" aria-hidden="true" />{engagementLabel[
-												row.speaker.state
-											]}</span
 										>
-										<span class="rowmeter">
-											<Meter
-												value={row.total === 0 ? 0 : (row.done / row.total) * 100}
-												tone={rowTone(row)}
-												label={`${row.speaker.name}'s tasks complete`}
-												valueText={`${row.done} of ${row.total} complete`} />
+										{#if row.speaker.state !== 'confirmed'}
+											<span class="ui-badge {engagementBadge[row.speaker.state]}"
+												><Engagement class="ui-badge__icon" aria-hidden="true" />{engagementLabel[
+													row.speaker.state
+												]}</span
+											>
+										{/if}
+										<span class="who__progress">
+											<span class="rowmeter">
+												<Meter
+													value={row.total === 0 ? 0 : (row.done / row.total) * 100}
+													tone={rowTone(row)}
+													label={`${row.speaker.name}'s tasks complete`}
+													valueText={`${row.done} of ${row.total} complete${row.waived > 0 ? `, ${row.waived} waived` : ''}`} />
+											</span>
+											<span class="who__fraction"
+												>{row.done} of {row.total}{row.waived > 0 ? ` · ${row.waived} waived` : ''}</span>
 										</span>
-										{row.done} of {row.total} complete{row.waived > 0 ? ` · ${row.waived} waived` : ''}
 									</span>
 								</th>
 								{#each defs as def (def.id)}
@@ -842,11 +854,13 @@
 									{#if profile}<ProfilePeek {profile} />{:else}{row.speaker.name}{/if}
 								</h3>
 								<p class="card__meta">
-									<span class="ui-badge {engagementBadge[row.speaker.state]}"
-										><Engagement class="ui-badge__icon" aria-hidden="true" />{engagementLabel[
-											row.speaker.state
-										]}</span
-									>
+									{#if row.speaker.state !== 'confirmed'}
+										<span class="ui-badge {engagementBadge[row.speaker.state]}"
+											><Engagement class="ui-badge__icon" aria-hidden="true" />{engagementLabel[
+												row.speaker.state
+											]}</span
+										>
+									{/if}
 									<span class="rowmeter">
 										<Meter
 											value={row.total === 0 ? 0 : (row.done / row.total) * 100}
@@ -1099,7 +1113,6 @@
 		display: inline-flex;
 		align-items: center;
 		vertical-align: middle;
-		margin-inline-end: var(--je-space-1);
 	}
 
 	.rowmeter :global(.ui-meter) {
@@ -1228,10 +1241,14 @@
 	   (lifecycle), how far along (progress). Separating identity from the meta
 	   line by one step, and holding the meta line together with a tighter gap,
 	   makes the grouping legible without adding any new element. */
+	/* Stays a real table cell. `display: grid` here broke the cell out of the
+	   table model: its bottom border painted at its own content's height, so
+	   the moment an opened task cell grew the row, the separator stranded
+	   mid-row under the name (owner catch, 2026-08-15). Vertical centring is
+	   the cell's own `vertical-align`, and the step between identity and meta
+	   line is the meta line's own margin. */
 	.matrix__speaker-cell {
-		display: grid;
-		align-content: center;
-		row-gap: var(--je-space-1);
+		vertical-align: middle;
 		background: transparent;
 		color: var(--je-color-text);
 		font-size: var(--je-font-size-sm);
@@ -1241,11 +1258,35 @@
 		white-space: normal;
 	}
 
-	.matrix__speaker-cell .ui-table__secondary {
+	/* Name · (exception badge) · progress, on one line: the name gives way
+	   first (truncating), the progress pair holds the right edge so the bars
+	   read as one aligned strip down the page. */
+	.who {
+		display: flex;
+		align-items: center;
+		gap: var(--je-space-2);
+		min-width: 0;
+	}
+
+	.who__name {
+		min-inline-size: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.who__progress {
+		margin-inline-start: auto;
 		display: inline-flex;
 		align-items: center;
 		gap: var(--je-space-2);
-		overflow: visible;
+		white-space: nowrap;
+	}
+
+	.who__fraction {
+		font-variant-numeric: tabular-nums;
+		color: var(--je-color-text-muted);
+		font-size: var(--je-font-size-xs);
 	}
 
 	.cell-done {
@@ -1535,7 +1576,8 @@
 			grid-template-columns: minmax(0, 1fr) max-content;
 			grid-template-areas:
 				'label value'
-				'sub value';
+				'sub value'
+				'meter meter';
 			align-items: center;
 			min-block-size: 4rem;
 			padding: var(--je-space-3);

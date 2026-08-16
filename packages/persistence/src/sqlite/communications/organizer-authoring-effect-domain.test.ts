@@ -137,16 +137,16 @@ function bindAdapter(
       ?? base.openHandlerSnapshot.bind(base),
     applyDomainContribution: overrides.applyDomainContribution
       ?? base.applyDomainContribution.bind(base),
-    ...(overrides.afterReceiptParentInserted
-      ? { afterReceiptParentInserted: overrides.afterReceiptParentInserted }
-      : base.afterReceiptParentInserted
-        ? { afterReceiptParentInserted: base.afterReceiptParentInserted.bind(base) }
+    ...(overrides.afterOperationLogInserted
+      ? { afterOperationLogInserted: overrides.afterOperationLogInserted }
+      : base.afterOperationLogInserted
+        ? { afterOperationLogInserted: base.afterOperationLogInserted.bind(base) }
         : {}),
-    ...(base.afterReceiptChildInserted
-      ? { afterReceiptChildInserted: base.afterReceiptChildInserted.bind(base) }
+    ...(base.afterEffectContributionInserted
+      ? { afterEffectContributionInserted: base.afterEffectContributionInserted.bind(base) }
       : {}),
-    ...(base.afterExecutionClaimReleased
-      ? { afterExecutionClaimReleased: base.afterExecutionClaimReleased.bind(base) }
+    ...(base.afterEffectApplicationCommitted
+      ? { afterEffectApplicationCommitted: base.afterEffectApplicationCommitted.bind(base) }
       : {}),
     ...(base.afterUnitOfWorkCommitted
       ? { afterUnitOfWorkCommitted: base.afterUnitOfWorkCommitted.bind(base) }
@@ -429,7 +429,7 @@ function openFixture(input: {
       newInvocationId: () => parseInvocationId(next())
     },
     unitOfWork,
-    newReceiptId: () => uuid(receiptId++)
+    newOperationLogId: () => uuid(receiptId++)
   });
 
   return {
@@ -592,10 +592,9 @@ describe('SQLite organizer communication authoring effect domain', () => {
       kind: 'success',
       data: { draftId: created.data.draftId, version: 3, state: 'discarded' }
     });
-    expect(count(fixture.sqlite, 'foundation_trial_operation_receipts')).toBe(6);
+    expect(count(fixture.sqlite, 'operation_log')).toBe(6);
     expect(count(fixture.sqlite, 'organizer_communication_authoring_receipt_links')).toBe(6);
     expect(count(fixture.sqlite, 'organizer_communication_authoring_timeline')).toBe(6);
-    expect(count(fixture.sqlite, 'foundation_trial_operation_execution_claims')).toBe(0);
     expect(fixture.sqlite.query<{ provenance_json: string }, []>(
       'SELECT provenance_json FROM communication_drafts'
     ).get()?.provenance_json).toContain(ids.agentRunId);
@@ -632,7 +631,7 @@ describe('SQLite organizer communication authoring effect domain', () => {
       outcome: { class: 'idempotency_conflict', kind: 'operation.request_changed' }
     });
     expect(fixture.observedPayloadBytes).toHaveLength(observedCount);
-    expect(count(fixture.sqlite, 'foundation_trial_operation_receipts')).toBe(1);
+    expect(count(fixture.sqlite, 'operation_log')).toBe(1);
     expect(count(fixture.sqlite, 'organizer_communication_authoring_timeline')).toBe(1);
   });
 
@@ -652,8 +651,7 @@ describe('SQLite organizer communication authoring effect domain', () => {
       outcome: { class: 'access_denied' }
     });
     expect(count(missingGrant.sqlite, 'communication_authoring_payloads')).toBe(0);
-    expect(count(missingGrant.sqlite, 'foundation_trial_operation_receipts')).toBe(0);
-    expect(count(missingGrant.sqlite, 'foundation_trial_operation_execution_claims')).toBe(0);
+    expect(count(missingGrant.sqlite, 'operation_log')).toBe(0);
 
     const malformedAuthority = openFixture();
     malformedAuthority.setAuthorityScenario('missing_grant_always');
@@ -663,7 +661,7 @@ describe('SQLite organizer communication authoring effect domain', () => {
       idempotencyKey: 'consistently-missing-grant'
     })).rejects.toThrow('Operation execution failed during write_snapshot.');
     expect(count(malformedAuthority.sqlite, 'communication_authoring_payloads')).toBe(0);
-    expect(count(malformedAuthority.sqlite, 'foundation_trial_operation_receipts')).toBe(0);
+    expect(count(malformedAuthority.sqlite, 'operation_log')).toBe(0);
 
     const shifted = openFixture();
     shifted.setAuthorityScenario('shift_event_in_transaction');
@@ -673,7 +671,7 @@ describe('SQLite organizer communication authoring effect domain', () => {
       idempotencyKey: 'stale-current-event'
     })).rejects.toThrow('Operation execution failed during write_snapshot.');
     expect(count(shifted.sqlite, 'communication_authoring_payloads')).toBe(0);
-    expect(count(shifted.sqlite, 'foundation_trial_operation_receipts')).toBe(0);
+    expect(count(shifted.sqlite, 'operation_log')).toBe(0);
     expect(new SQLiteEventSpineRepository(shifted.sqlite)
       .readCurrentEventState(ids.workspaceId)?.currentEvent?.id).toBe(ids.eventId);
   });
@@ -693,7 +691,7 @@ describe('SQLite organizer communication authoring effect domain', () => {
       outcome: { class: 'conflict', kind: 'communication.event_required' }
     });
     expect(count(fixture.sqlite, 'communication_authoring_payloads')).toBe(0);
-    expect(count(fixture.sqlite, 'foundation_trial_operation_receipts')).toBe(0);
+    expect(count(fixture.sqlite, 'operation_log')).toBe(0);
     expect(count(fixture.sqlite, 'organizer_communication_authoring_timeline')).toBe(0);
   });
 
@@ -741,17 +739,16 @@ describe('SQLite organizer communication authoring effect domain', () => {
     })).rejects.toThrow('Operation execution failed during domain_contribution.');
     expect(count(malformed.sqlite, 'communication_authoring_payloads')).toBe(0);
     expect(count(malformed.sqlite, 'classified_payload_records')).toBe(0);
-    expect(count(malformed.sqlite, 'foundation_trial_operation_receipts')).toBe(0);
+    expect(count(malformed.sqlite, 'operation_log')).toBe(0);
     expect(count(malformed.sqlite, 'organizer_communication_authoring_timeline')).toBe(0);
-    expect(count(malformed.sqlite, 'foundation_trial_operation_execution_claims')).toBe(0);
     assertZeroized(malformed.observedPayloadBytes);
 
     const lateFailure = openFixture({
       transformAdapter(base) {
-        if (!base.afterReceiptParentInserted) throw new TypeError('receipt hook missing');
+        if (!base.afterOperationLogInserted) throw new TypeError('receipt hook missing');
         return bindAdapter(base, {
-          afterReceiptParentInserted(receipt) {
-            base.afterReceiptParentInserted!(receipt);
+          afterOperationLogInserted(receipt) {
+            base.afterOperationLogInserted!(receipt);
             throw new TypeError('injected_late_organizer_authoring_failure');
           }
         });
@@ -761,14 +758,13 @@ describe('SQLite organizer communication authoring effect domain', () => {
       operationName: 'store_communication_authoring_payload',
       businessInput: contentInput('Late failure', 'ROLLBACK-CONTENT-TWO'),
       idempotencyKey: 'late-hook-failure'
-    })).rejects.toThrow('Operation execution failed during receipt_parent.');
+    })).rejects.toThrow('Operation execution failed during operation_log.');
     for (const table of [
       'communication_authoring_payloads',
       'classified_payload_records',
-      'foundation_trial_operation_receipts',
+      'operation_log',
       'organizer_communication_authoring_receipt_links',
-      'organizer_communication_authoring_timeline',
-      'foundation_trial_operation_execution_claims'
+      'organizer_communication_authoring_timeline'
     ]) {
       expect(count(lateFailure.sqlite, table)).toBe(0);
     }

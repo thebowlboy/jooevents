@@ -30,7 +30,13 @@ export function createLiveEventProgramPort(input: {
 		}),
 		vocabulary: Object.freeze({
 			read: vocabularyClient.read,
-			draft: vocabularyClient.draft
+			create: vocabularyClient.create,
+			edit: vocabularyClient.edit,
+			retire: vocabularyClient.retire,
+			restore: vocabularyClient.restore,
+			delete: vocabularyClient.delete,
+			draftMerge: vocabularyClient.draftMerge,
+			publishMerge: vocabularyClient.publishMerge
 		})
 	});
 }

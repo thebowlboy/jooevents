@@ -3,53 +3,35 @@ import { encodeCanonicalJson } from '@jooevents/kernel';
 import type {
   DecisionHeadDto,
   DecisionMutationPlanDto,
-  DecisionRestorePlanDto,
   DecisionReviewPinDto,
   SubmissionSessionOriginDto
 } from '@jooevents/contracts';
 import {
   applySessionGraduationFrom,
-  applySessionGraduationReversalFrom,
   applySessionMutationPlan,
-  applySessionRestorePlan,
   createEmptySessionCatalog,
   findSession,
   planSessionGraduationFrom,
-  planSessionGraduationReversalFrom,
   planSessionMutation,
   validateSessionGraduationFrom,
-  validateSessionGraduationReversalFrom,
   type SessionCatalog,
   type SessionGraduationContribution,
   type SessionGraduationPlanningPort,
   type SessionGraduationTransactionPort,
   type SessionGraduationValidationPort
 } from '@jooevents/session';
-import type { SessionMutationPlanDto, SessionRestorePlanDto } from '@jooevents/contracts';
+import type { SessionMutationPlanDto } from '@jooevents/contracts';
 import {
-  createDecisionChangesetBundle,
-  decisionReadPort,
-  decisionTransactionPort,
-  decisionValidationPort,
   DecisionPlanningError,
   DecisionTargetUnavailableError,
   decisionMutationResultFromPlan,
-  decisionMutationResultFromRestore,
-  isDecisionRestorePlan,
-  planDecisionCompensation,
   planDecisionMutation,
   resolveDecisionMutationPlanningInput,
   validateDecisionMutationPlan,
-  validateDecisionRestorePlan,
   type DecisionCandidateDto,
-  type DecisionChangesetTransactionPort,
+  type DecisionTransactionPort,
   type DecisionEnvironment
 } from './index';
-import {
-  sessionGraduationPlanningPort,
-  sessionGraduationTransactionPort,
-  sessionGraduationValidationPort
-} from '@jooevents/session';
 
 const scope = Object.freeze({
   workspaceId: '550e8400-e29b-41d4-a716-446655440000',
@@ -116,7 +98,7 @@ function createWorld(): MemoryWorld {
   };
 }
 
-type WorldPort = DecisionChangesetTransactionPort
+type WorldPort = DecisionTransactionPort
   & SessionGraduationPlanningPort
   & SessionGraduationValidationPort
   & SessionGraduationTransactionPort;
@@ -140,34 +122,16 @@ function transactionPort(world: MemoryWorld): WorldPort {
     readSessionVocabulary: () => vocabulary,
     planSessionGraduation: (input: Parameters<typeof planSessionGraduationFrom>[1]) =>
       planSessionGraduationFrom(port, input),
-    planSessionGraduationReversal: (
-      input: Parameters<typeof planSessionGraduationReversalFrom>[1]
-    ) => planSessionGraduationReversalFrom(port, input),
     validateSessionGraduation: (contribution: SessionGraduationContribution) =>
       validateSessionGraduationFrom(port, contribution),
-    validateSessionGraduationReversal: (plan: SessionRestorePlanDto) =>
-      validateSessionGraduationReversalFrom(port, plan),
-    applySessionPlan(plan: SessionMutationPlanDto | SessionRestorePlanDto) {
-      // Only restore plans carry a top-level `action` discriminant.
-      const applied = 'action' in plan
-        ? applySessionRestorePlan({ plan, catalog: world.catalog })
-        : applySessionMutationPlan({ plan, catalog: world.catalog, vocabulary });
+    applySessionPlan(plan: SessionMutationPlanDto) {
+      const applied = applySessionMutationPlan({ plan, catalog: world.catalog, vocabulary });
       world.catalog = applied.catalog;
       return applied.result;
     },
     applySessionGraduation: (contribution: SessionGraduationContribution) =>
       applySessionGraduationFrom(port, contribution),
-    applySessionGraduationReversal: (plan: SessionRestorePlanDto) =>
-      applySessionGraduationReversalFrom(port, plan),
-    applyDecisionPlan(plan: DecisionMutationPlanDto | DecisionRestorePlanDto) {
-      if (isDecisionRestorePlan(plan)) {
-        for (const row of plan.rows) {
-          if (row.restore === null) world.heads.delete(row.submissionId);
-          else world.heads.set(row.submissionId, row.restore);
-          if (row.unlinkOrigin !== null) world.origins.delete(row.submissionId);
-        }
-        return decisionMutationResultFromRestore(plan);
-      }
+    applyDecisionPlan(plan: DecisionMutationPlanDto) {
       for (const row of plan.rows) {
         world.heads.set(row.submissionId, row.after);
         if (row.origin !== null) world.origins.set(row.submissionId, row.origin);
@@ -447,275 +411,7 @@ describe('canonical Decision domain', () => {
       .toEqual({ kind: 'stale', code: 'invalid_plan', submissionId: submissionA });
   });
 
-  test('compensation unspawns only while unreferenced, else stays standing with unlink, and detach restores roster-before', () => {
-    const world = createWorld();
-    world.candidates.set(submissionA, candidate());
-    const env = environment(world);
-    const port = transactionPort(world);
-    const spawnPlan = planDecisionMutation({
-      planningInput: spawnRouting(world, [decideRow()]),
-      environment: env
-    });
-    port.applySessionGraduation(spawnPlan.rows[0]!.graduation!);
-    port.applyDecisionPlan(spawnPlan);
-    expect(findSession(world.catalog, spawnedSessionId)).toBeDefined();
-
-    // Referenced by a schedule placement: the Session stays standing; only the
-    // head reverts and the origin unlinks.
-    world.placements.set(spawnedSessionId, 1);
-    const standing = planDecisionCompensation({
-      original: spawnPlan, environment: env, actorUserId: userId, occurredAt: later
-    });
-    expect(standing).toMatchObject({
-      kind: 'semantic', noteKey: 'decision.session_stays_standing'
-    });
-    if (standing.kind === 'blocked') throw new TypeError('unexpected_blocked');
-    expect(standing.plan.rows[0]).toMatchObject({ restore: null, sessionRestore: null });
-    expect(standing.plan.rows[0]!.unlinkOrigin).not.toBeNull();
-
-    // Unreferenced again: exact compensation unspawns and unlinks.
-    world.placements.delete(spawnedSessionId);
-    const exact = planDecisionCompensation({
-      original: spawnPlan, environment: env, actorUserId: userId, occurredAt: later
-    });
-    expect(exact.kind).toBe('exact');
-    if (exact.kind === 'blocked') throw new TypeError('unexpected_blocked');
-    port.applyDecisionPlan(exact.plan);
-    for (const row of exact.plan.rows) {
-      if (row.sessionRestore) port.applySessionGraduationReversal(row.sessionRestore);
-    }
-    expect(world.heads.size).toBe(0);
-    expect(world.origins.size).toBe(0);
-    expect(findSession(world.catalog, spawnedSessionId)).toBeUndefined();
-
-    // Detach: an attach reversal restores the exact roster-before image.
-    seedCollectingSession(world);
-    const rosterBefore = findSession(world.catalog, collectingSessionId)!.roster;
-    const attachPlan = planDecisionMutation({
-      planningInput: planningInput([decideRow({
-        graduation: { kind: 'attach', sessionId: collectingSessionId }
-      })]),
-      environment: env
-    });
-    port.applySessionGraduation(attachPlan.rows[0]!.graduation!);
-    port.applyDecisionPlan(attachPlan);
-    const detach = planDecisionCompensation({
-      original: attachPlan, environment: env, actorUserId: userId, occurredAt: later
-    });
-    expect(detach.kind).toBe('exact');
-    if (detach.kind === 'blocked') throw new TypeError('unexpected_blocked');
-    port.applyDecisionPlan(detach.plan);
-    for (const row of detach.plan.rows) {
-      if (row.sessionRestore) port.applySessionGraduationReversal(row.sessionRestore);
-    }
-    const restored = findSession(world.catalog, collectingSessionId)!;
-    expect(restored.roster.participants).toEqual(rosterBefore.participants);
-    expect(restored.roster.version).toBe(rosterBefore.version);
-    expect(world.heads.has(submissionA)).toBe(false);
-
-    // A moved head blocks compensation instead of guessing.
-    const reSpawn = planDecisionMutation({
-      planningInput: spawnRouting(world, [decideRow()]),
-      environment: env
-    });
-    port.applySessionGraduation(reSpawn.rows[0]!.graduation!);
-    port.applyDecisionPlan(reSpawn);
-    world.heads.set(submissionA, {
-      ...world.heads.get(submissionA)!,
-      digestSha256: 'f'.repeat(64)
-    });
-    expect(planDecisionCompensation({
-      original: reSpawn, environment: env, actorUserId: userId, occurredAt: later
-    })).toEqual({ kind: 'blocked', reasonKey: 'decision.changed' });
-  });
-
-  test('a placement landing after compensation derives refuses the restore at validation instead of unspawning', () => {
-    const world = createWorld();
-    world.candidates.set(submissionA, candidate());
-    const env = environment(world);
-    const port = transactionPort(world);
-    const spawnPlan = planDecisionMutation({
-      planningInput: spawnRouting(world, [decideRow()]),
-      environment: env
-    });
-    port.applySessionGraduation(spawnPlan.rows[0]!.graduation!);
-    port.applyDecisionPlan(spawnPlan);
-
-    // Derived while unreferenced: an exact unspawn that currently validates.
-    const exact = planDecisionCompensation({
-      original: spawnPlan, environment: env, actorUserId: userId, occurredAt: later
-    });
-    expect(exact.kind).toBe('exact');
-    if (exact.kind === 'blocked') throw new TypeError('unexpected_blocked');
-    expect(validateDecisionRestorePlan({ plan: exact.plan, environment: env })).toBeUndefined();
-
-    // The placement lands between derive and commit. It moves neither the
-    // Session digest nor the catalog digest, so only the reference re-check
-    // can see it — the plan refuses instead of stranding the occurrence.
-    world.placements.set(spawnedSessionId, 1);
-    expect(validateDecisionRestorePlan({ plan: exact.plan, environment: env }))
-      .toEqual({ kind: 'stale', code: 'session_placed', submissionId: submissionA });
-    const bundle = createDecisionChangesetBundle();
-    const ports = Object.freeze({ getPort: () => port as never });
-    expect(bundle.definition.validateWithin(exact.plan, ports as never)).toMatchObject({
-      kind: 'outcome',
-      outcome: {
-        class: 'stale_revision',
-        kind: 'decision.changed',
-        retryable: false,
-        detail: { code: 'session_placed', submissionId: submissionA }
-      }
-    });
-
-    // Retry-by-replan: the re-derived compensation keeps the placed Session
-    // standing, unlinks only, and validates against the same current state.
-    const rederived = planDecisionCompensation({
-      original: spawnPlan, environment: env, actorUserId: userId, occurredAt: later
-    });
-    expect(rederived).toMatchObject({
-      kind: 'semantic', noteKey: 'decision.session_stays_standing'
-    });
-    if (rederived.kind === 'blocked') throw new TypeError('unexpected_blocked');
-    expect(rederived.plan.rows[0]).toMatchObject({ sessionRestore: null });
-    expect(validateDecisionRestorePlan({ plan: rederived.plan, environment: env }))
-      .toBeUndefined();
-
-    // The detach arm is gated identically: an attach reversal derived before
-    // the target Session was placed refuses once a placement references it.
-    const detachWorld = createWorld();
-    seedCollectingSession(detachWorld);
-    detachWorld.candidates.set(submissionA, candidate());
-    const detachEnv = environment(detachWorld);
-    const detachPort = transactionPort(detachWorld);
-    const attachPlan = planDecisionMutation({
-      planningInput: planningInput([decideRow({
-        graduation: { kind: 'attach', sessionId: collectingSessionId }
-      })]),
-      environment: detachEnv
-    });
-    detachPort.applySessionGraduation(attachPlan.rows[0]!.graduation!);
-    detachPort.applyDecisionPlan(attachPlan);
-    const detach = planDecisionCompensation({
-      original: attachPlan, environment: detachEnv, actorUserId: userId, occurredAt: later
-    });
-    expect(detach.kind).toBe('exact');
-    if (detach.kind === 'blocked') throw new TypeError('unexpected_blocked');
-    expect(validateDecisionRestorePlan({ plan: detach.plan, environment: detachEnv }))
-      .toBeUndefined();
-    detachWorld.placements.set(collectingSessionId, 1);
-    expect(validateDecisionRestorePlan({ plan: detach.plan, environment: detachEnv }))
-      .toEqual({ kind: 'stale', code: 'session_placed', submissionId: submissionA });
-  });
-
-  test('changeset definition hosts the graduation collaboration and refuses through typed outcomes', () => {
-    const bundle = createDecisionChangesetBundle();
-    expect(bundle.registry.get('decision.decide', 1)).toBe(bundle.definition);
-    expect(bundle.definition.readPorts).toContain(sessionGraduationPlanningPort);
-    expect(bundle.definition.validationPorts).toContain(sessionGraduationValidationPort);
-    expect(bundle.definition.transactionPorts).toContain(sessionGraduationTransactionPort);
-    expect(bundle.definition.allowedRisks).toEqual(['consequential']);
-    expect(bundle.definition.allowedEffects).toEqual([]);
-
-    const world = createWorld();
-    seedCollectingSession(world);
-    world.candidates.set(submissionA, candidate({ targetSessionId: collectingSessionId }));
-    const port = transactionPort(world);
-    const getPort = (key: unknown) => {
-      if (key === decisionReadPort || key === decisionValidationPort
-          || key === decisionTransactionPort || key === sessionGraduationPlanningPort
-          || key === sessionGraduationValidationPort
-          || key === sessionGraduationTransactionPort) return port as never;
-      throw new TypeError('undeclared_port');
-    };
-    const ports = Object.freeze({ getPort });
-    const planned = bundle.definition.plan(
-      resolveDecisionMutationPlanningInput({
-        authorInput: {
-          action: 'decide',
-          decisions: [{
-            submissionId: submissionA, state: 'accepted',
-            expectedDecisionVersion: null, expectedDecisionDigestSha256: null,
-            graduation: { kind: 'attach', sessionId: collectingSessionId }
-          }]
-        } as never,
-        scope, actorUserId: userId, occurredAt: now,
-        environment: { decisions: port, sessions: port },
-        newSessionId: () => spawnedSessionId
-      }),
-      ports as never
-    );
-    if (planned instanceof Promise) throw new TypeError('unexpected_async_plan');
-    expect(planned.riskTier).toBe('consequential');
-    expect(planned.consequences).toEqual(['decision_changed', 'session_changed']);
-    expect(planned.guardRefs.map((guard) => guard.id)).toEqual([
-      `decision_head_absence:${submissionA}`,
-      `session_catalog:${scope.eventId}`
-    ]);
-    expect(planned.aggregateRefs.map((aggregate) => aggregate.id)).toEqual([
-      `session:${collectingSessionId}`
-    ]);
-    const projected = bundle.definition.projectDiff(planned.plan);
-    expect(projected.representedConsequences).toEqual(planned.consequences);
-
-    // The collecting target graduates mid-flight: validation refuses with the
-    // structured filled-target outcome carrying the two decided exits.
-    const graduate = planSessionMutation({
-      catalog: world.catalog,
-      vocabulary,
-      planningInput: {
-        action: 'transition', scope, sessionId: collectingSessionId,
-        actorUserId: userId, occurredAt: later,
-        expectedCatalogVersion: world.catalog.version,
-        expectedCatalogDigestSha256: world.catalog.digestSha256,
-        expectedSessionVersion: findSession(world.catalog, collectingSessionId)!.version,
-        expectedSessionDigestSha256: findSession(world.catalog, collectingSessionId)!.digestSha256,
-        to: 'programmed'
-      }
-    });
-    world.catalog = applySessionMutationPlan({
-      plan: graduate, catalog: world.catalog, vocabulary
-    }).catalog;
-    const refused = bundle.definition.validateWithin(planned.plan, ports as never);
-    expect(refused).toMatchObject({
-      kind: 'outcome',
-      outcome: {
-        class: 'conflict',
-        kind: 'decision.target_unavailable',
-        retryable: false,
-        detail: { reason: 'target_graduated', exits: ['retarget', 'spawn'] }
-      }
-    });
-  });
-
-  test('applyWithin applies the collaborator first, checks pin equality, and merges facts without effects', () => {
-    const world = createWorld();
-    world.candidates.set(submissionA, candidate());
-    const bundle = createDecisionChangesetBundle();
-    const port = transactionPort(world);
-    const ports = Object.freeze({ getPort: () => port as never });
-    const plan = planDecisionMutation({
-      planningInput: spawnRouting(world, [decideRow()]),
-      environment: { decisions: port, sessions: port }
-    });
-    const contribution = bundle.definition.applyWithin(plan, ports as never);
-    if (contribution instanceof Promise) throw new TypeError('unexpected_async_apply');
-    expect(contribution.effects).toEqual([]);
-    expect(contribution.facts.map((fact) => fact.kind))
-      .toEqual(['decision_changed', 'session_changed']);
-    expect(contribution.result).toMatchObject({
-      action: 'decide',
-      rows: [{
-        submissionId: submissionA,
-        head: { state: 'accepted', version: 1 },
-        origin: { kind: 'spawned', sessionId: spawnedSessionId }
-      }]
-    });
-    expect(world.heads.get(submissionA)?.state).toBe('accepted');
-    expect(world.origins.get(submissionA)?.sessionId).toBe(spawnedSessionId);
-    expect(findSession(world.catalog, spawnedSessionId)?.lifecycle).toBe('programmed');
-  });
-
-  test('spawn refuses an unrepresentable title and a titleless candidate with typed codes', () => {
+    test('spawn refuses an unrepresentable title and a titleless candidate with typed codes', () => {
     const world = createWorld();
     world.candidates.set(submissionA, candidate({ title: null }));
     const env = environment(world);

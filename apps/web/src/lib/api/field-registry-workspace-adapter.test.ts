@@ -20,12 +20,10 @@ const id = (value: number) => `00000000-0000-4000-8000-${value.toString(16).padS
 const workspaceId = id(1);
 const eventId = id(2);
 const fieldId = id(3);
-const changesetId = id(4);
-const revisionId = id(5);
 const correlationId = id(900);
 const receipt = Object.freeze({
 	id: id(901),
-	operationName: 'changeset.commit',
+	operationName: 'field_registry.add',
 	operationVersion: 1
 });
 
@@ -80,10 +78,14 @@ function applied(diff: FieldRegistrySafeDiff): FieldRegistryLiveApplyResult {
 		kind: 'success',
 		data: {
 			action: diff.action,
-			changesetId,
-			revisionId,
-			revisionDigest: 'a'.repeat(64),
-			committedHeadVersion: 3,
+			mutation: {
+				schemaVersion: 1,
+				action: diff.action,
+				fieldId: diff.action === 'move' ? diff.fieldId : diff.action === 'remove' ? diff.before.id : diff.after.id,
+				registryVersion: diff.registryVersionAfter,
+				fieldVersion: diff.action === 'move' ? diff.fieldVersion : diff.action === 'remove' ? diff.before.version : diff.after.version,
+				position: diff.action === 'remove' ? null : diff.action === 'move' ? diff.afterIndex : diff.after.position
+			},
 			safeDiff: diff
 		},
 		receipt,

@@ -12,7 +12,6 @@ import { canonicalJsonText } from '@jooevents/kernel';
 import { sessionCatalogDigest, sessionHeadDigest, sessionRosterDigest } from '@jooevents/session';
 import {
   compileStyleSetTokens,
-  createReleaseChangesetBundle,
   isProgramPlan,
   isStyleSetPlan,
   isSurfaceAllowlistPlan,
@@ -22,6 +21,7 @@ import {
   materializeProgramContent,
   planReleaseCompensation,
   planReleaseMutation,
+  projectReleaseSafeDiff,
   projectServedPublicRoster,
   projectServedPublicSchedule,
   planReleaseSurfaceSuccessorFrom,
@@ -288,11 +288,6 @@ function fixture(overrides: Partial<FixtureState> = {}): {
     }
   };
   return Object.freeze({ state, port });
-}
-
-function resolvedSync<Value>(value: Value | Promise<Value>): Value {
-  if (value instanceof Promise) throw new Error('expected a synchronous plan');
-  return value;
 }
 
 function publishInput(releaseId: string, expected: number | null): ReleasePlanningInput {
@@ -581,8 +576,8 @@ describe('program rollback', () => {
       { sessionId: programmedSessionId, personId: personA }
     ]);
     expect(validateReleaseMutationPlan({ plan, port })).toBeUndefined();
-    const diff = createReleaseChangesetBundle()
-      .definition.projectDiff(plan).diff as { readonly rollbackSuppressions: unknown };
+    const diff = projectReleaseSafeDiff(plan);
+    if (diff.action !== 'program_rollback') throw new Error('wrong diff');
     expect(diff.rollbackSuppressions).toEqual([
       { sessionId: programmedSessionId, personId: personA }
     ]);
@@ -1042,30 +1037,7 @@ describe('form-republish successor collaboration', () => {
   });
 });
 
-describe('changeset bundle', () => {
-  test('plans consequential guards and derives per-kind compensation', () => {
-    const { state, port } = fixture();
-    const bundle = createReleaseChangesetBundle();
-    const snapshot = {
-      getPort: <Port>(_key: unknown): Port => port as unknown as Port
-    };
-    const planned = resolvedSync(bundle.definition.plan(publishInput(releaseId1, null), snapshot as never));
-    expect(planned.riskTier).toBe('consequential');
-    expect(planned.aggregateRefs).toEqual([]);
-    expect(planned.guardRefs).toEqual([{
-      id: `program_release_chain:${scope.eventId}`,
-      ...releaseChainGuard(undefined)
-    }]);
-    const projected = bundle.definition.projectDiff(planned.plan);
-    if (projected.diff.action !== 'publish_schedule') throw new Error('wrong diff');
-    expect(projected.diff.nameDeclassifications).toEqual([
-      { personId: personA, displayName: 'Ada Lovelace' }
-    ]);
-    commitProgramPlan(state, planned.plan);
-    const compensation = bundle.definition.deriveCompensation(planned.plan, snapshot as never);
-    expect(compensation).toEqual({ kind: 'blocked', reasonKey: 'release.first_release' });
-  });
-
+describe('release guards and digests', () => {
   test('guard evidence is deterministic across sides', () => {
     expect(releaseChainGuard(undefined)).toEqual(releaseChainGuard(undefined));
     expect(releaseChainGuard({ number: 2, digestSha256: 'c'.repeat(64) }))

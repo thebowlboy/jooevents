@@ -1,17 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import {
-  planChangesetOperation,
-  type ChangesetPlanningSnapshot,
-  type ChangesetReadPortKey
-} from '@jooevents/changesets';
 import type { FieldRegistryScopeDto } from '@jooevents/contracts';
 import {
   FieldRegistryPlanningError,
   applyFieldRegistryMutationPlan,
   createCanonicalFieldRegistryBaseline,
-  createFieldRegistryOrdinaryChangesetBundle,
-  createFieldRegistryOrdinaryPolicy,
-  fieldRegistryReadPort,
   planFieldRegistryMutation,
   projectFieldRegistrySnapshot,
   suggestFieldRegistryPlacement,
@@ -349,45 +341,6 @@ describe('Field Registry canonical model', () => {
         }
       }
     })).toThrow(new FieldRegistryPlanningError('field_exists'));
-  });
-
-  test('changeset planning emits only the compact safe diff and exact guards', async () => {
-    const state = baseline();
-    const policy = createFieldRegistryOrdinaryPolicy({
-      key: 'field_registry.default', version: 1
-    });
-    const bundle = createFieldRegistryOrdinaryChangesetBundle({ policy });
-    const store = {
-      readFieldRegistry: () => state,
-      resolveFormReference: forms.resolveFormReference.bind(forms)
-    };
-    const snapshot: ChangesetPlanningSnapshot = {
-      getPort<Port>(key: ChangesetReadPortKey<Port>): Port {
-        if ((key as unknown) !== fieldRegistryReadPort) throw new TypeError('undeclared_test_port');
-        return store as unknown as Port;
-      }
-    };
-    const operation = await planChangesetOperation({
-      registry: bundle.registry,
-      kind: 'field_registry.mutate',
-      version: 1,
-      authorInput: authorAdd(state),
-      dependencyGroup: 'field_registry',
-      snapshot
-    });
-    expect(operation).toMatchObject({
-      riskTier: 'low',
-      aggregateRefs: [{ id: `field_registry:${eventId}`, version: 1 }, { id: `intake_form:${formId}`, version: 4 }],
-      guardRefs: [{ id: `field_registry_guard:${eventId}`, version: 1 }],
-      safeDiff: {
-        action: 'add',
-        registryVersionBefore: 1,
-        registryVersionAfter: 2,
-        before: null,
-        placement: { index: 15, group: 'talk' }
-      }
-    });
-    expect(JSON.stringify(operation.safeDiff)).not.toContain('removedByUserId');
   });
 
   test('placement advisor remains deterministic and does not rewrite existing positions', () => {

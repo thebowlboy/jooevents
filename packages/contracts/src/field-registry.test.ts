@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
   fieldRegistryAddDraftRequestSchema,
-  fieldRegistryDraftDataSchema,
   fieldRegistryFieldDefinitionSchema,
   fieldRegistrySnapshotSchema
 } from '.';
@@ -132,38 +131,4 @@ describe('Field Registry transport contracts', () => {
     }).success).toBe(false);
   });
 
-  test('draft projection contains compact deterministic evidence, not private planning bytes', () => {
-    const data = {
-      schemaVersion: 1 as const,
-      action: 'add' as const,
-      changesetId: fieldId,
-      headVersion: 1,
-      status: 'draft' as const,
-      revision: { id: formId, number: 1, digestSha256: 'a'.repeat(64) },
-      riskTier: 'low' as const,
-      approvalPolicy: {
-        reference: { key: 'field_registry.default', version: 1 },
-        definitionDigestSha256: 'b'.repeat(64),
-        requirement: 'none' as const
-      },
-      safeDiff: {
-        action: 'add' as const,
-        registryVersionBefore: 1,
-        registryVersionAfter: 2,
-        before: null,
-        after: field(),
-        placement: { index: 0, group: 'identity' as const,
-          reasonKey: 'field_registry.placement.group_end' }
-      }
-    };
-    expect(fieldRegistryDraftDataSchema.parse(data)).toMatchObject({
-      action: 'add',
-      safeDiff: { action: 'add', registryVersionBefore: 1, registryVersionAfter: 2 }
-    });
-    expect(fieldRegistryDraftDataSchema.safeParse({
-      ...data,
-      removedByUserId: workspaceId,
-      rawRegistryState: []
-    }).success).toBe(false);
-  });
 });

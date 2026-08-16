@@ -42,7 +42,7 @@ async function asOrganizer(page: Page, baseURL: string | undefined) {
 	await page.context().addCookies([{ name: 'je-viewer', value: 'organizer', url: url(baseURL) }]);
 }
 
-const rail = (page: Page) => page.getByRole('navigation', { name: 'Workspace' });
+const rail = (page: Page) => page.getByRole('navigation', { name: 'Workspace', exact: true });
 
 test.describe('the reviewer subset', () => {
 	test('the chair half of the screen is not rendered, and the rail is the reviewer’s world', async ({

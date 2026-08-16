@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { CANONICAL_JSON_PROFILE, canonicalJsonText, encodeCanonicalJson } from './canonical-json';
+import {
+  CANONICAL_JSON_PROFILE,
+  canonicalJsonSha256,
+  canonicalJsonText,
+  encodeCanonicalJson
+} from './canonical-json';
 
 describe('canonical_json v1', () => {
   test('normalizes Unicode before sorting keys and produces stable UTF-8 bytes', () => {
@@ -10,6 +15,13 @@ describe('canonical_json v1', () => {
     );
     expect(new TextDecoder().decode(encodeCanonicalJson({ b: 2, a: 1 }))).toBe('{"a":1,"b":2}');
     expect(CANONICAL_JSON_PROFILE).toEqual({ key: 'jooevents.canonical_json', version: 1 });
+  });
+
+  test('hashes the canonical bytes independently of input key order', () => {
+    expect(canonicalJsonSha256({ b: 2, a: 1 })).toBe(
+      '43258cff783fe7036d8a43033f830adfc60ec037382473548ac742b888292777'
+    );
+    expect(canonicalJsonSha256({ b: 2, a: 1 })).toBe(canonicalJsonSha256({ a: 1, b: 2 }));
   });
 
   test('rejects values whose JavaScript representation is ambiguous or lossy', () => {

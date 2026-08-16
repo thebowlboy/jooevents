@@ -2,8 +2,6 @@ import { describe, expect, test } from 'bun:test';
 import {
   canonicalJsonText,
   parseAuthorityCitationId,
-  parseChangesetId,
-  parseChangesetRevisionId,
   parseContractVersion,
   parseDomainFactId,
   parseEffectSpecificationId,
@@ -38,8 +36,8 @@ import { jobDefinition } from './test-fixtures';
 
 const schemaDigest = 'a'.repeat(64);
 const producer: ProducerRef = {
-  kind: 'changeset_operation',
-  operation: definitionRef('changeset_operation', 'event.commit', 1)
+  kind: 'operation',
+  operation: definitionRef('operation', 'event.commit', 1)
 };
 const authorityCitation = definitionRef(
   'authority_citation',
@@ -53,8 +51,6 @@ const ids = {
   event: parseEventId('01890f47-9abc-7def-8123-456789abc001'),
   user: parseUserId('01890f47-9abc-7def-8123-456789abc002'),
   receipt: parseOperationReceiptId('01890f47-9abc-7def-8123-456789abc003'),
-  changeset: parseChangesetId('01890f47-9abc-7def-8123-456789abc004'),
-  revision: parseChangesetRevisionId('01890f47-9abc-7def-8123-456789abc005'),
   aggregate: '01890f47-9abc-7def-8123-456789abc006',
   payload: parsePayloadRefId('01890f47-9abc-7def-8123-456789abc007'),
   fact: parseDomainFactId('01890f47-9abc-7def-8123-456789abc008'),
@@ -77,7 +73,7 @@ async function factDefinition(): Promise<DomainFactDefinition> {
     aggregateKind: parseDefinitionKey('event'),
     subjectIdentity: definitionRef('subject_identity', 'event.subject', 1),
     scope: definitionRef('scope', 'event.scope', 1),
-    causalParent: definitionRef('causal_parent', 'changeset.receipt', 1),
+    causalParent: definitionRef('causal_parent', 'operation.receipt', 1),
     consumerCompatibility: definitionRef('consumer_compatibility', 'exact.source', 1),
     classifiedPayloadPaths: ['/classifiedPayloadRefs'],
     redaction: definitionRef('redaction', 'event.fact', 1)
@@ -126,11 +122,8 @@ async function fixture() {
       { kind: 'domain', domain: 'event', entity: 'event', id: ids.aggregate }
     ],
     causation: {
-      kind: 'changeset_revision',
-      receiptId: ids.receipt,
-      changesetId: ids.changeset,
-      revisionId: ids.revision,
-      revisionDigestSha256: 'c'.repeat(64) as never
+      kind: 'operation_receipt',
+      receiptId: ids.receipt
     }
   });
   const safeInput: ReliabilitySafeInput = {
@@ -251,8 +244,8 @@ describe('sealed reliability contributions', () => {
       registry: target.registry,
       definition: exact(target.fact),
       producer: {
-        kind: 'changeset_operation',
-        operation: definitionRef('changeset_operation', 'event.commit', 2)
+        kind: 'operation',
+        operation: definitionRef('operation', 'event.commit', 2)
       },
       newFactId: () => ids.fact
     })).rejects.toMatchObject({ code: 'producer_mismatch' });

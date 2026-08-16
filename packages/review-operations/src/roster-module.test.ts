@@ -9,13 +9,11 @@ import {
   parseWorkspaceId
 } from '@jooevents/kernel';
 import {
-  REVIEWER_ROSTER_CHANGE_DRAFT_OPERATION,
-  REVIEWER_ROSTER_DRAFT_REQUEST_HASH_PROFILE,
+  REVIEWER_ROSTER_CHANGE_OPERATION,
+  REVIEWER_ROSTER_DIRECT_REQUEST_HASH_PROFILE,
   REVIEWER_ROSTER_MANAGE_ACCESS_POLICY,
   REVIEWER_ROSTER_SNAPSHOT_READ_OPERATION,
-  createReviewerRosterOperationModule,
-  reviewerRosterDiffReadPermissionIds,
-  reviewerRosterDraftDomainContributionSchema
+  createReviewerRosterOperationModule
 } from './roster';
 
 const workspaceId = parseWorkspaceId('550e8400-e29b-41d4-a716-446655440000');
@@ -38,9 +36,9 @@ function module() {
     authorityPrincipalKeyProfile: profile,
     scopePartitionProfile: profile,
     requestCanonicalizationProfile: profile,
-    requestHashSealer: createHmacRequestHashSealer({
-      profile: REVIEWER_ROSTER_DRAFT_REQUEST_HASH_PROFILE,
-      keyBytes: new Uint8Array(32).fill(0x76)
+    directRequestHashSealer: createHmacRequestHashSealer({
+      profile: REVIEWER_ROSTER_DIRECT_REQUEST_HASH_PROFILE,
+      keyBytes: new Uint8Array(32).fill(0x77)
     }),
     idempotencyCredentialProfile: profile,
     idempotencyCredentialSealer: {
@@ -55,7 +53,7 @@ function module() {
 }
 
 describe('reviewer roster operation module', () => {
-  test('registers one current-authority read and one idempotent draft path', async () => {
+  test('registers one current-authority read and one direct mutation path', async () => {
     let registry;
     try {
       registry = await createOperationRegistry(module().source);
@@ -79,20 +77,19 @@ describe('reviewer roster operation module', () => {
       method: binding.method,
       path: binding.path
     }))).toEqual([{
-      operation: REVIEWER_ROSTER_CHANGE_DRAFT_OPERATION.name,
+      operation: REVIEWER_ROSTER_CHANGE_OPERATION.name,
       method: 'POST',
-      path: '/api/events/current/reviewer-roster/drafts'
+      path: '/api/events/current/reviewer-roster/changes'
     }]);
     expect(registry.safeManifest.operations.find((operation) =>
-      operation.name === REVIEWER_ROSTER_CHANGE_DRAFT_OPERATION.name
+      operation.name === REVIEWER_ROSTER_CHANGE_OPERATION.name
     )).toMatchObject({
-      effect: 'draft', maxRisk: 'low', idempotency: { required: true },
-      consequenceTags: ['changeset-drafted']
+      effect: 'commit', maxRisk: 'low', idempotency: { required: true },
+      consequenceTags: ['reviewer-roster-changed']
     });
   });
 
-  test('uses only current event.manage authority for roster and generic diff reads', () => {
-    expect(reviewerRosterDiffReadPermissionIds()).toEqual(['event.manage']);
+  test('uses only current event.manage authority for reads and mutations', () => {
     const source = module().source;
     expect(source.operations?.[0]?.accessLanes).toEqual(source.effectOperations?.[0]?.accessLanes);
   });
@@ -117,26 +114,5 @@ describe('reviewer roster operation module', () => {
         [field]: field === 'scope' ? { workspaceId, eventId: crypto.randomUUID() } : 'unsafe'
       }).success).toBe(false);
     }
-  });
-
-  test('requires exact event.manage diff ownership in stored draft evidence', () => {
-    const base = {
-      kind: 'reviewer_roster_changeset_draft' as const,
-      preparationHandle: crypto.randomUUID(),
-      workspaceId,
-      eventId: crypto.randomUUID(),
-      changesetId: crypto.randomUUID(),
-      revisionId: crypto.randomUUID(),
-      revisionDigestSha256: 'a'.repeat(64),
-      action: 'set_scope' as const,
-      reviewerId: crypto.randomUUID(),
-      occurredAt: '2026-08-13T12:00:00.000Z'
-    };
-    expect(reviewerRosterDraftDomainContributionSchema.safeParse({
-      ...base, diffReadPermissionIds: ['event.manage']
-    }).success).toBe(true);
-    expect(reviewerRosterDraftDomainContributionSchema.safeParse({
-      ...base, diffReadPermissionIds: ['submission.score']
-    }).success).toBe(false);
   });
 });

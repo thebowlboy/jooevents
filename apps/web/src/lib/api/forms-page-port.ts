@@ -12,6 +12,24 @@ import type {
 	Track
 } from './types';
 
+export interface FormPublishReview {
+	readonly action: 'publish_and_open';
+	readonly selector: {
+		readonly draftId: string;
+		readonly revisionId: string;
+		readonly revisionDigestSha256: string;
+	};
+	readonly formId: string;
+	readonly formName: string;
+	readonly versionNumber: number;
+	readonly resultingStatus: 'open';
+	readonly surfaceSuccessorCount: number;
+}
+
+export type FormPublishPreparation =
+	| { readonly ok: true; readonly review: FormPublishReview }
+	| { readonly ok: false; readonly reason: string };
+
 /**
  * Everything the tuned Forms page consumes. Source selection belongs to the
  * composition root; the page keeps one interaction model for sample and live.
@@ -41,9 +59,10 @@ export interface FormsPagePort {
 			readonly closesAt?: string;
 		}): Promise<FormSummary>;
 		setComposition(id: string, composition: FormComposition): Promise<MutationOutcome>;
-		restoreComposition(id: string, composition: FormComposition): Promise<void>;
 		setClosing(id: string, closesAt: string | null): Promise<MutationOutcome>;
 		setStatus(id: string, status: 'open' | 'closed'): Promise<MutationOutcome>;
+		preparePublish(id: string): Promise<FormPublishPreparation>;
+		publish(review: FormPublishReview): Promise<MutationOutcome>;
 	};
 	readonly fields: {
 		move(id: string, toIndex: number): Promise<MutationOutcome>;

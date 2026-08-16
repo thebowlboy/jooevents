@@ -197,7 +197,7 @@ async function currentReleaseNumber(request: APIRequestContext): Promise<number 
 	return null;
 }
 
-/** Drafts, proposes, and commits one `publish_schedule` release through the real loop. */
+/** Reviews and publishes one `publish_schedule` release through the real loop. */
 async function publishSchedule(
 	request: APIRequestContext,
 	baseURL: string,
@@ -212,7 +212,7 @@ async function publishSchedule(
 	const draft = await draftResponse.json() as {
 		kind: string;
 		data?: {
-			changesetId: string;
+			draftId: string;
 			revision: { id: string; digestSha256: string };
 			safeDiff: { action: string };
 		};
@@ -221,22 +221,19 @@ async function publishSchedule(
 	if (draft.kind !== 'success' || !draft.data) throw new Error('Publish draft failed.');
 	expect(draft.data.safeDiff.action).toBe('publish_schedule');
 	const selector = {
-		changesetId: draft.data.changesetId,
+		draftId: draft.data.draftId,
 		revisionId: draft.data.revision.id,
-		revisionDigest: draft.data.revision.digestSha256
+		revisionDigestSha256: draft.data.revision.digestSha256
 	};
-	const proposed = await request.post('/api/changesets/proposals', {
-		headers: apiHeaders(baseURL, `${key}-propose`),
-		data: { ...selector, expectedHeadVersion: 1 }
-	});
-	expect(proposed.status()).toBe(200);
-	expect(await proposed.json()).toMatchObject({ kind: 'success', data: { action: 'propose' } });
-	const committed = await request.post('/api/changesets/commits', {
-		headers: apiHeaders(baseURL, `${key}-commit`),
-		data: { ...selector, expectedHeadVersion: 2 }
+	const committed = await request.post('/api/events/current/releases/publish', {
+		headers: apiHeaders(baseURL, `${key}-publish`),
+		data: selector
 	});
 	expect(committed.status()).toBe(200);
-	expect(await committed.json()).toMatchObject({ kind: 'success', data: { action: 'commit' } });
+	expect(await committed.json()).toMatchObject({
+		kind: 'success', data: { action: 'publish_schedule' },
+		receipt: { operationName: 'release.publish', operationVersion: 1 }
+	});
 }
 
 /**

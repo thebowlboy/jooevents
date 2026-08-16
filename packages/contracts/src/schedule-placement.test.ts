@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   SCHEDULE_PLACEMENT_OPERATION_SCHEMA_REFS,
-  schedulePlacementDraftOperationResultSchema,
+  schedulePlacementOperationResultSchema,
   schedulePlacementOccurrenceSchema,
   schedulePlacementInputSchema,
   schedulePlacementReadInputSchema,
@@ -59,10 +59,10 @@ describe('Schedule placement contracts', () => {
         key: 'schema.schedule.placement-snapshot-read.operator-result', version: 1
       })
     });
-    expect(SCHEDULE_PLACEMENT_OPERATION_SCHEMA_REFS.placementDraft).toEqual({
-      inputSchema: expect.objectContaining({ key: 'schema.schedule.placement-draft.input', version: 2 }),
+    expect(SCHEDULE_PLACEMENT_OPERATION_SCHEMA_REFS.placement).toEqual({
+      inputSchema: expect.objectContaining({ key: 'schema.schedule.placement.input', version: 1 }),
       resultSchema: expect.objectContaining({
-        key: 'schema.schedule.placement-draft.operator-result', version: 2
+        key: 'schema.schedule.placement.operator-result', version: 1
       })
     });
     expect(SCHEDULE_PLACEMENT_OPERATION_SCHEMA_REFS.snapshotRead.inputSchema.digestSha256)
@@ -70,7 +70,7 @@ describe('Schedule placement contracts', () => {
     expect(SCHEDULE_PLACEMENT_OPERATION_SCHEMA_REFS.snapshotRead.resultSchema.digestSha256)
       .toMatch(/^[a-f0-9]{64}$/);
     expect(schedulePlacementReadResultSchema).toBeDefined();
-    expect(schedulePlacementDraftOperationResultSchema).toBeDefined();
+    expect(schedulePlacementOperationResultSchema).toBeDefined();
   });
 
   test('refuses non-canonical instants, empty intervals, and extra authority-shaped fields', () => {

@@ -5,25 +5,26 @@ import { basename, dirname } from 'node:path';
 import { makeSignature } from 'better-auth/crypto';
 import {
   createReadOperationResultSchema,
-  decisionDecideDraftOperationResultSchema,
+  decisionDecideOperationResultSchema,
   engagementSnapshotReadResultSchema,
   fieldRegistrySnapshotReadResultSchema,
   organizerFormCatalogSchema,
   programVocabularySnapshotReadResultSchema,
   sessionCatalogReadResultSchema,
-  submissionDirectEntryDraftOperationResultSchema
+  submissionDirectEntryOperationResultSchema
 } from '@jooevents/contracts';
 import {
   organizerFileOverviewSchema,
   portalEngagementFilesSchema
 } from '@jooevents/contracts/files';
-import { deadlineDraftOperationResultSchema } from '@jooevents/contracts/deadlines';
-import { changesetLifecycleOperationResultSchema } from '@jooevents/changeset-operations';
+import { deadlineChangeOperationResultSchema } from '@jooevents/contracts/deadlines';
 import {
-  eventCreateDraftOperationResultSchema,
-  intakeFormDraftOperationResultSchema
+  eventCreateOperationResultSchema,
+  intakeFormDirectOperationResultSchema,
+  intakeFormVersionPublishOperationResultSchema,
+  intakeFormVersionReviewDraftOperationResultSchema,
+  programVocabularyDirectOperationResultSchema
 } from '@jooevents/contracts';
-import { programVocabularyDraftOperationResultSchema } from '@jooevents/program-operations';
 import { loadEphemeralLiveConfig } from '../config';
 import { createEphemeralLiveRuntime, type EphemeralLiveRuntime } from './ephemeral-live';
 
@@ -175,40 +176,6 @@ async function operatorRead(input: {
   return response.json();
 }
 
-async function commitDraft(input: {
-  readonly runtime: EphemeralLiveRuntime;
-  readonly session: BrowserSession;
-  readonly key: string;
-  readonly draft: {
-    readonly data: {
-      readonly changesetId: string;
-      readonly revision: { readonly id: string; readonly digestSha256: string };
-    };
-  };
-}): Promise<void> {
-  const selector = {
-    changesetId: input.draft.data.changesetId,
-    revisionId: input.draft.data.revision.id,
-    revisionDigest: input.draft.data.revision.digestSha256
-  };
-  const proposed = changesetLifecycleOperationResultSchema.parse(await effect({
-    runtime: input.runtime,
-    session: input.session,
-    path: '/api/changesets/proposals',
-    key: `${input.key}-propose`,
-    body: { ...selector, expectedHeadVersion: 1 }
-  }));
-  expect(proposed).toMatchObject({ kind: 'success', data: { action: 'propose' } });
-  const committed = changesetLifecycleOperationResultSchema.parse(await effect({
-    runtime: input.runtime,
-    session: input.session,
-    path: '/api/changesets/commits',
-    key: `${input.key}-commit`,
-    body: { ...selector, expectedHeadVersion: 2 }
-  }));
-  expect(committed).toMatchObject({ kind: 'success', data: { action: 'commit' } });
-}
-
 interface SeededSpeaker {
   readonly title: string;
   readonly name: string;
@@ -230,30 +197,29 @@ async function seedAcceptedSpeakers(input: {
   readonly speakers: readonly { readonly key: string; readonly title: string; readonly name: string; readonly email: string }[];
 }): Promise<readonly SeededSpeaker[]> {
   const { runtime, session, key } = input;
-  const eventDraft = eventCreateDraftOperationResultSchema.parse(await effect({
+  const eventCreated = eventCreateOperationResultSchema.parse(await effect({
     runtime,
     session,
-    path: '/api/events/drafts/create',
-    key: `${key}-event-draft`,
+    path: '/api/events',
+    key: `${key}-event-create`,
     body: {
+      expectedEventSetVersion: 1,
       name: 'Files Summit',
       timezone: 'Asia/Singapore',
       startDate: '2027-06-10',
       endDate: '2027-06-12'
     }
   }));
-  if (eventDraft.kind !== 'success') throw new Error('Event draft failed.');
-  await commitDraft({ runtime, session, key: `${key}-event`, draft: eventDraft });
+  if (eventCreated.kind !== 'success') throw new Error('Event create failed.');
 
-  const formatDraft = programVocabularyDraftOperationResultSchema.parse(await effect({
+  const formatDraft = programVocabularyDirectOperationResultSchema.parse(await effect({
     runtime,
     session,
-    path: '/api/events/current/program-vocabulary/drafts/create',
+    path: '/api/events/current/program-vocabulary/create',
     key: `${key}-format-draft`,
     body: { kind: 'format', expectedSetVersion: 1, name: 'Talk' }
   }));
   if (formatDraft.kind !== 'success') throw new Error('Format draft failed.');
-  await commitDraft({ runtime, session, key: `${key}-format`, draft: formatDraft });
   const vocabulary = programVocabularySnapshotReadResultSchema.parse(
     await operatorRead({ runtime, session, path: '/api/events/current/program-vocabulary' })
   );
@@ -278,11 +244,11 @@ async function seedAcceptedSpeakers(input: {
   const emailFieldId = requireField('person.email', 'email');
   const included = new Set([titleFieldId, nameFieldId, emailFieldId]);
 
-  const formCreateDraft = intakeFormDraftOperationResultSchema.parse(await effect({
+  const formCreated = intakeFormDirectOperationResultSchema.parse(await effect({
     runtime,
     session,
-    path: '/api/events/current/forms/drafts/create',
-    key: `${key}-form-create-draft`,
+    path: '/api/events/current/forms/create',
+    key: `${key}-form-create`,
     body: {
       expectedCatalogVersion: 1,
       expectedRegistryVersion: registry.version,
@@ -306,25 +272,34 @@ async function seedAcceptedSpeakers(input: {
       }
     }
   }));
-  if (formCreateDraft.kind !== 'success'
-      || formCreateDraft.data.safeDiff.action !== 'create') {
-    throw new Error('Form create draft failed.');
+  if (formCreated.kind !== 'success' || formCreated.data.action !== 'create') {
+    throw new Error('Form create failed.');
   }
-  await commitDraft({ runtime, session, key: `${key}-form-create`, draft: formCreateDraft });
-  const openDraft = intakeFormDraftOperationResultSchema.parse(await effect({
+  const openReview = intakeFormVersionReviewDraftOperationResultSchema.parse(await effect({
     runtime,
     session,
-    path: '/api/events/current/forms/drafts/lifecycle',
-    key: `${key}-form-open-draft`,
+    path: '/api/events/current/forms/publish/draft',
+    key: `${key}-form-open-review`,
     body: {
-      transition: 'publish_and_open',
-      formId: formCreateDraft.data.safeDiff.after.id,
+      action: 'publish_and_open',
+      formId: formCreated.data.formId,
       expectedDefinitionVersion: 1,
       expectedRegistryVersion: registry.version
     }
   }));
-  if (openDraft.kind !== 'success') throw new Error('Form open draft failed.');
-  await commitDraft({ runtime, session, key: `${key}-form-open`, draft: openDraft });
+  if (openReview.kind !== 'success') throw new Error('Form open review failed.');
+  const opened = intakeFormVersionPublishOperationResultSchema.parse(await effect({
+    runtime,
+    session,
+    path: '/api/events/current/forms/publish',
+    key: `${key}-form-open-publish`,
+    body: {
+      draftId: openReview.data.draftId,
+      revisionId: openReview.data.revision.id,
+      revisionDigestSha256: openReview.data.revision.digestSha256
+    }
+  }));
+  if (opened.kind !== 'success') throw new Error('Form open publish failed.');
   const catalog = organizerFormCatalogReadResultSchema.parse(
     await operatorRead({ runtime, session, path: '/api/events/current/forms' })
   );
@@ -334,11 +309,11 @@ async function seedAcceptedSpeakers(input: {
 
   const submissionIds: string[] = [];
   for (const speaker of input.speakers) {
-    const entryDraft = submissionDirectEntryDraftOperationResultSchema.parse(await effect({
+    const entryResult = submissionDirectEntryOperationResultSchema.parse(await effect({
       runtime,
       session,
-      path: '/api/events/current/submissions/direct-entry/drafts',
-      key: `${key}-entry-${speaker.key}-draft`,
+      path: '/api/events/current/submissions/direct-entry',
+      key: `${key}-entry-${speaker.key}`,
       body: {
         formId: openForm.id,
         expectedFormDefinitionVersion: openForm.version,
@@ -349,18 +324,15 @@ async function seedAcceptedSpeakers(input: {
         ]
       }
     }));
-    if (entryDraft.kind !== 'success') throw new Error('Direct entry draft failed.');
-    submissionIds.push(entryDraft.data.safeDiff.submission.id);
-    await commitDraft({
-      runtime, session, key: `${key}-entry-${speaker.key}`, draft: entryDraft
-    });
+    if (entryResult.kind !== 'success') throw new Error('Direct entry failed.');
+    submissionIds.push(entryResult.data.submissionId);
   }
 
-  const decideDraft = decisionDecideDraftOperationResultSchema.parse(await effect({
+  const decideResult = decisionDecideOperationResultSchema.parse(await effect({
     runtime,
     session,
-    path: '/api/events/current/decisions/decide-drafts',
-    key: `${key}-decide-draft`,
+    path: '/api/events/current/decisions',
+    key: `${key}-decide`,
     body: {
       action: 'decide',
       decisions: submissionIds.map((submissionId) => ({
@@ -372,8 +344,7 @@ async function seedAcceptedSpeakers(input: {
       }))
     }
   }));
-  if (decideDraft.kind !== 'success') throw new Error('Decide draft failed.');
-  await commitDraft({ runtime, session, key: `${key}-decide`, draft: decideDraft });
+  if (decideResult.kind !== 'success') throw new Error('Decide failed.');
 
   const sessions = sessionCatalogReadResultSchema.parse(
     await operatorRead({ runtime, session, path: '/api/events/current/sessions' })
@@ -518,16 +489,15 @@ describe('files joined acceptance loop (ephemeral live)', () => {
 
     // A committed deadline in the existing catalog is the "by when" the file
     // request references — file requests own no deadline physics.
-    const deadlineDraft = deadlineDraftOperationResultSchema.parse(await effect({
+    const deadlineChange = deadlineChangeOperationResultSchema.parse(await effect({
       runtime,
       session,
-      path: '/api/events/current/deadlines/drafts',
-      key: 'files-loop-deadline-draft',
+      path: '/api/events/current/deadlines',
+      key: 'files-loop-deadline',
       body: { action: 'create', displayDate: '2027-05-01' }
     }));
-    if (deadlineDraft.kind !== 'success') throw new Error('Deadline draft failed.');
-    const deadlineId = deadlineDraft.data.safeDiff.after.id;
-    await commitDraft({ runtime, session, key: 'files-loop-deadline', draft: deadlineDraft });
+    if (deadlineChange.kind !== 'success') throw new Error('Deadline creation failed.');
+    const deadlineId = deadlineChange.data.deadline.id;
 
     // Organizer shares a resource with every confirmed speaker.
     const resourceShareId = crypto.randomUUID();

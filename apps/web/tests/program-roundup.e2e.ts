@@ -287,7 +287,7 @@ test('direct entry completes a placeholder: provenance lands on the roster, the 
 	// The computed item reads zero and stops rendering — checked in the same
 	// session through the app's own navigation.
 	await page
-		.getByRole('navigation', { name: 'Workspace' })
+		.getByRole('navigation', { name: 'Workspace', exact: true })
 		.getByRole('link', { name: 'Overview' })
 		.click();
 	await expect(attention).toBeVisible({ timeout: 15000 });
@@ -296,7 +296,7 @@ test('direct entry completes a placeholder: provenance lands on the roster, the 
 
 	// Removal arms in place before it commits, and the receipt takes it back.
 	await page
-		.getByRole('navigation', { name: 'Workspace' })
+		.getByRole('navigation', { name: 'Workspace', exact: true })
 		.getByRole('link', { name: 'Schedule' })
 		.click();
 	await page
@@ -341,7 +341,7 @@ test('direct entry completes a placeholder: provenance lands on the roster, the 
 	});
 });
 
-test('accepting without a target spawns into the pool, the receipt carries the placement door, and undo unspawns', async ({ page }, testInfo) => {
+test('accepting without a target spawns into the pool, and correction stays forward-only', async ({ page }, testInfo) => {
 	test.skip(testInfo.project.name !== 'desktop', 'one viewport covers the graduation contract');
 
 	await page.goto('/app/decisions');
@@ -358,36 +358,34 @@ test('accepting without a target spawns into the pool, the receipt carries the p
 	const door = receipt.getByRole('link', { name: 'Place it' });
 	await expect(door).toHaveAttribute('href', '/app/schedule?tray=unplaced');
 
-	// Undo first, while the receipt is fresh (it rests after a few seconds —
-	// the trail surface, not this toast, is the long-lived undo home): the
-	// compensated graduation takes the untouched spawn out of the pool.
-	await receipt.getByRole('button', { name: 'Undo' }).click();
-	await expect(receipt).toHaveCount(0, { timeout: 10000 });
-	await page.getByRole('link', { name: 'Schedule' }).click();
+	// Graduation has durable downstream state, so the receipt offers no
+	// compensation. The organizer corrects the decision with another verdict.
+	await expect(receipt.getByRole('button', { name: 'Undo' })).toHaveCount(0);
+	await expect(receipt).toContainText('Choose another result if this decision needs correcting.');
+	await door.click();
+	await expect(page).toHaveURL(/\/app\/schedule\?tray=unplaced$/);
 	const spawned = program(page)
 		.locator('.pool__row')
 		.filter({ hasText: 'The Inference Bill Nobody Read' });
-	// The grouped (unscoped) view: the compensated spawn has left Unplaced,
-	// restoring the seeded two; the collecting group is untouched beside it.
-	await expect(
-		page.getByRole('region', { name: 'Unplaced', exact: true }).locator('.pool__row')
-	).toHaveCount(2, { timeout: 15000 });
-	await expect(spawned).toHaveCount(0);
+	await expect(spawned).toBeVisible({ timeout: 15000 });
 
-	// Accept again and walk the door this time; the pool arrives scoped to the
-	// placement debt with the spawned session in it.
+	// A later waitlist is the explicit forward correction. The guarded Decision
+	// operation retracts the acceptance-created program consequence from current
+	// state; no browser before-image or compensation chooses that result.
 	await page.getByRole('link', { name: 'Decisions' }).click();
 	await expect(row).toBeVisible({ timeout: 15000 });
-	await row.getByRole('button', { name: 'Accept', exact: true }).click();
-	await expect(receipt).toBeVisible({ timeout: 10000 });
-	await receipt.getByRole('link', { name: 'Place it' }).click();
-
-	await expect(page).toHaveURL(/\/app\/schedule\?tray=unplaced$/);
-	await expect(program(page).locator('.panel__scope .ui-badge')).toHaveText('Unplaced', {
-		timeout: 15000
+	await row.getByRole('button', { name: 'Waitlist', exact: true }).click();
+	const correction = page.getByRole('status').filter({
+		hasText: 'Waitlisted “The Inference Bill Nobody Read”'
 	});
-	await expect(spawned).toBeVisible();
-	await expect(program(page).locator('.pool__row')).toHaveCount(3);
+	await expect(correction).toBeVisible({ timeout: 10000 });
+	await expect(correction.getByRole('button', { name: 'Undo' })).toHaveCount(0);
+	await page.getByRole('link', { name: 'Schedule' }).click();
+	await expect(page).toHaveURL(/\/app\/schedule$/);
+	await expect(spawned).toHaveCount(0);
+	await expect(
+		page.getByRole('region', { name: 'Unplaced', exact: true }).locator('.pool__row')
+	).toHaveCount(2);
 });
 
 test('accepting a proposal aimed at a collecting session graduates it: the container joins Unplaced with the proposer attributed', async ({ page }, testInfo) => {
@@ -406,7 +404,7 @@ test('accepting a proposal aimed at a collecting session graduates it: the conta
 	// In the same session, the pool reflects the graduation: the container
 	// left Collecting and now waits as an ordinary unplaced programmed row.
 	await page
-		.getByRole('navigation', { name: 'Workspace' })
+		.getByRole('navigation', { name: 'Workspace', exact: true })
 		.getByRole('link', { name: 'Schedule' })
 		.click();
 	await expect(program(page)).toBeVisible({ timeout: 15000 });

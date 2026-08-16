@@ -52,12 +52,13 @@ The single-machine path is substantially implemented. The repository already con
 - SQLite repositories and reviewed change operations across events, forms,
   submissions, review, decisions, speakers, scheduling, publishing, and communications.
 
-The remaining line is composition rather than a restart. The configured retained
-runtime currently mounts the identity and admission slice. The broader event workflow
-runs as one joined SQLite application in the development/test runtime, but its domain
-schemas and operations still need to be promoted into the retained migration chain and
-mounted in the configured server. Files, outbound delivery, operational packaging,
-and an end-to-end recovery rehearsal also need their production checkpoints.
+The retained migration chain now contains the application schema as well as identity
+and admission, with a verified upgrade from the earlier identity/access database.
+The remaining line is runtime composition rather than schema promotion: the configured
+server still mounts the identity and admission slice, while the broader event workflow
+runs as one joined SQLite application in development and tests. Files, outbound
+delivery, operational packaging, and an end-to-end recovery rehearsal also need their
+production checkpoints.
 
 JooEvents is therefore pre-release and **not ready for production event data yet**. It
 is close enough that the SQLite production work is the main story here; it is not close

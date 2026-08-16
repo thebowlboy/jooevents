@@ -1,12 +1,8 @@
 import {
 	formatInstant,
-	intakeFormSafeDiffSchema,
-	type ChangesetDiffData,
 	type FormDefinitionAuthorInput,
 	type FormDefinitionContentDto,
 	type FormTarget,
-	type IntakeFormDraftData,
-	type IntakeFormSafeDiff,
 	type OrganizerFormCatalogDto,
 	type OrganizerFormDetailDto,
 	type OrganizerFormSummaryDto
@@ -14,11 +10,8 @@ import {
 import { mapFieldRegistryField } from './field-registry';
 import type {
 	OrganizerFormCatalogView,
-	OrganizerFormChangesetDiffView,
 	OrganizerFormDefinitionView,
 	OrganizerFormDetailView,
-	OrganizerFormDraftView,
-	OrganizerFormSafeDiffView,
 	OrganizerFormSummaryView,
 	OrganizerFormTargetView
 } from '../view-models/intake-forms';
@@ -198,59 +191,5 @@ export function mapOrganizerFormDetail(detail: OrganizerFormDetailDto): Organize
 					publishedAtLabel: instantLabel(detail.currentPublishedVersion.publishedAt)
 				})
 			: null
-	});
-}
-
-export function mapOrganizerFormSafeDiff(diff: IntakeFormSafeDiff): OrganizerFormSafeDiffView {
-	return structuredClone(diff);
-}
-
-export function mapOrganizerFormDraft(draft: IntakeFormDraftData): OrganizerFormDraftView {
-	return Object.freeze({
-		action: draft.action,
-		changesetId: draft.changesetId,
-		headVersion: draft.headVersion,
-		revisionId: draft.revision.id,
-		revisionNumber: draft.revision.number,
-		revisionDigest: draft.revision.digestSha256,
-		riskTier: draft.riskTier,
-		approvalRequirement: draft.approvalPolicy.requirement,
-		safeDiff: mapOrganizerFormSafeDiff(draft.safeDiff)
-	});
-}
-
-export function mapOrganizerFormChangesetDiff(diff: ChangesetDiffData): OrganizerFormChangesetDiffView {
-	return Object.freeze({
-		changesetId: diff.changesetId,
-		headVersion: diff.headVersion,
-		status: diff.status,
-		revisionId: diff.revisionId,
-		revisionNumber: diff.revisionNumber,
-		revisionDigest: diff.revisionDigest,
-		riskTier: diff.riskTier,
-		approvalRequirement: diff.approvalPolicy.requirement,
-		operations: Object.freeze(diff.operations.map((operation) => {
-			// Cross-lane conformance note (Wave-2 J-WEB): the canonical
-			// FORM_CHANGESET_VERSION moved 2 -> 3 with the intake source
-			// widening; the sample dataset still emits 2 through this shared
-			// mapper, so both served versions verify until the forms lane
-			// converges the sample on the canonical version.
-			if (operation.kind !== 'intake.form.mutate'
-				|| (operation.version !== 2 && operation.version !== 3)) {
-				throw new TypeError('Changeset diff contains a non-Form operation.');
-			}
-			const parsedSafeDiff = intakeFormSafeDiffSchema.safeParse(operation.safeDiff);
-			if (!parsedSafeDiff.success) {
-				throw new TypeError('Changeset Form diff does not match its wire contract.');
-			}
-			return Object.freeze({
-				kind: operation.kind,
-				version: operation.version,
-				riskTier: operation.riskTier,
-				dependencyGroup: operation.dependencyGroup,
-				safeDiff: mapOrganizerFormSafeDiff(parsedSafeDiff.data),
-				consequences: Object.freeze([...operation.consequences])
-			});
-		}))
 	});
 }

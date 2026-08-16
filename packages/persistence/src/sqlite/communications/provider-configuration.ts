@@ -25,7 +25,7 @@ import {
 } from '@jooevents/contracts';
 import { canonicalJsonText } from '@jooevents/kernel';
 
-/** Additive disposable schema. It is intentionally not a retained migration. */
+/** This schema contributes to the accepted epoch-2 baseline and may also serve isolated fixtures. */
 export const SQLITE_EMAIL_PROVIDER_CONFIGURATION_SQL = `
 CREATE TABLE email_provider_connections (
   connection_id TEXT PRIMARY KEY,

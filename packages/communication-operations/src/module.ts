@@ -126,13 +126,13 @@ const createdContributionSchema = z.strictObject({
     data: outboundEmailDeliveryWorkAnchorSchema.extend({ disposition: z.literal('created') })
   }),
   domain: outboundEmailDeliveryDomainContributionSchema,
-  receiptChildren: z.tuple([
+  effectContributions: z.tuple([
     outboundEmailDeliveryEvidenceChildSchema.options[0],
     outboundEmailDeliveryEvidenceChildSchema.options[1],
     outboundEmailDeliveryEvidenceChildSchema.options[2]
   ])
 }).superRefine((value, context) => {
-  const [fact, pointer, history] = value.receiptChildren;
+  const [fact, pointer, history] = value.effectContributions;
   if (
     value.result.data.deliveryId !== value.domain.deliveryId
     || value.result.data.deliveryId !== fact.deliveryId
@@ -150,7 +150,7 @@ const alreadyReadyContributionSchema = z.strictObject({
     data: outboundEmailDeliveryWorkAnchorSchema.extend({ disposition: z.literal('already_ready') })
   }),
   domain: z.null(),
-  receiptChildren: z.tuple([])
+  effectContributions: z.tuple([])
 });
 
 const identityConflictContributionSchema = z.strictObject({
@@ -167,7 +167,7 @@ const identityConflictContributionSchema = z.strictObject({
     ) context.addIssue({ code: 'custom', message: 'Invalid delivery identity conflict.' });
   }),
   domain: z.null(),
-  receiptChildren: z.tuple([])
+  effectContributions: z.tuple([])
 });
 
 export const outboundEmailDeliveryContributionSchema = z.union([

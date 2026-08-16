@@ -1,4 +1,5 @@
 import type { DecisionStateSnapshotDto } from '@jooevents/contracts';
+import type { SubmissionTriageListInput } from '@jooevents/contracts/submission-triage';
 import type { DecisionsLiveReadResult } from '../operations/decisions-live';
 import type { SubmissionTriageLiveReadResult } from '../operations/submission-triage-live';
 import type { SubmissionTriagePageView } from '../mappers/submission-triage';
@@ -9,7 +10,7 @@ import type {
 
 /** The one triage read this source performs, injectable for tests. */
 export type SubmissionTriageListReader = (
-	query?: unknown,
+	query: SubmissionTriageListInput,
 	options?: { readonly signal?: AbortSignal }
 ) => Promise<SubmissionTriageLiveReadResult<SubmissionTriagePageView>>;
 

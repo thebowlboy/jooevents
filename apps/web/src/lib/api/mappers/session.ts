@@ -1,12 +1,11 @@
 import type {
 	SessionCatalogDto,
-	SessionDraftData,
+	SessionDirectResult,
 	SessionHeadDto
 } from '@jooevents/contracts/sessions';
 import type {
 	SessionCatalogView,
 	SessionChangeCommittedView,
-	SessionDraftView,
 	SessionHeadView,
 	SessionView
 } from '../view-models/session';
@@ -36,32 +35,6 @@ export function mapSessionCatalog(catalog: SessionCatalogDto): SessionCatalogVie
 	return immutableCopy(catalog);
 }
 
-export function mapSessionDraft(draft: SessionDraftData): SessionDraftView {
-	return immutableCopy(draft);
-}
-
-export function mapSessionChangeCommit(input: {
-	readonly draft: SessionDraftData;
-	readonly proposedHeadVersion: number;
-	readonly committedHeadVersion: number;
-}): SessionChangeCommittedView {
-	const draft = mapSessionDraft(input.draft);
-	const session = draft.safeDiff.after;
-	if (draft.safeDiff.action !== draft.action || session === null) {
-		throw new TypeError('Session change commit has no resulting session head.');
-	}
-	return Object.freeze({
-		action: draft.action,
-		selector: Object.freeze({
-			changesetId: draft.changesetId,
-			revisionId: draft.revision.id,
-			revisionDigest: draft.revision.digestSha256
-		}),
-		changesetHead: Object.freeze({
-			proposedVersion: input.proposedHeadVersion,
-			committedVersion: input.committedHeadVersion
-		}),
-		session,
-		safeDiff: draft.safeDiff
-	});
+export function mapSessionChangeResult(result: SessionDirectResult): SessionChangeCommittedView {
+	return immutableCopy(result);
 }

@@ -35,8 +35,8 @@ function expectFoundationError(work: () => unknown, code: SQLiteFoundationError[
   throw new Error(`Expected ${code}`);
 }
 
-function applicationRows(database: Database): string {
-  const tableNames = database.query<{ name: string }, []>(`
+function applicationRows(database: Database, selectedTableNames?: readonly string[]): string {
+  const tableNames = selectedTableNames ?? database.query<{ name: string }, []>(`
     select name from pragma_table_list
      where schema = 'main' and type = 'table' and name not like 'sqlite_%'
        and name not in ('schema_migrations', 'schema_epoch_transitions', 'database_instance_metadata')
@@ -52,14 +52,14 @@ function applicationRows(database: Database): string {
   return JSON.stringify(rows);
 }
 
-describe('SQLite epoch-1 runner', () => {
+describe('SQLite epoch-2 retained-baseline runner', () => {
   test('migrates an empty ephemeral database once with a terminal receipt', () => {
     const database = openSQLite(':memory:');
     opened.push(database);
     expect(database.migration).toMatchObject({
       status: 'applied',
-      coordinate: { schemaEpoch: 1, sequence: 1 },
-      migrationId: 'e1_0001_identity_access',
+      coordinate: { schemaEpoch: 2, sequence: 1 },
+      migrationId: 'e2_0001_jooevents_foundation',
       databaseClass: 'ephemeral',
       schemaFingerprint: SQLITE_MIGRATION_MANIFEST.expectedCurrentFullFingerprint
     });
@@ -96,7 +96,7 @@ describe('SQLite epoch-1 runner', () => {
 
     const legacyPath = temporaryDatabasePath();
     const legacy = new Database(legacyPath, { create: true, strict: true });
-    legacy.exec(readFileSync(SQLITE_MIGRATION_MANIFEST.migrations[0].artifact, 'utf8'));
+    legacy.exec(readFileSync(SQLITE_MIGRATION_MANIFEST.predecessor.artifact, 'utf8'));
     legacy.close();
     expectFoundationError(() => openSQLite(legacyPath), 'migration_required');
     expect(existsSync(`${legacyPath}-wal`)).toBe(false);
@@ -124,7 +124,7 @@ describe('SQLite epoch-1 runner', () => {
     const path = temporaryDatabasePath();
     const legacy = new Database(path, { create: true, strict: true });
     legacy.exec('PRAGMA foreign_keys = ON;');
-    legacy.exec(readFileSync(SQLITE_MIGRATION_MANIFEST.migrations[0].artifact, 'utf8'));
+    legacy.exec(readFileSync(SQLITE_MIGRATION_MANIFEST.predecessor.artifact, 'utf8'));
     const now = Date.parse('2026-08-11T00:00:00.000Z');
     legacy.query('insert into auth_users (id, name, email, email_verified, created_at, updated_at) values (?, ?, ?, 1, ?, ?)')
       .run('auth_legacy', 'Legacy Owner', 'legacy@example.com', now, now);
@@ -132,14 +132,25 @@ describe('SQLite epoch-1 runner', () => {
       .run('workspace_legacy', 'Legacy Workspace', 'active', now, now);
     legacy.query('insert into events (id, workspace_id, name, created_at, updated_at) values (?, ?, ?, ?, ?)')
       .run('event_legacy', 'workspace_legacy', 'Legacy Event', now, now);
-    const before = applicationRows(legacy);
+    const predecessorTables = legacy.query<{ name: string }, []>(`
+      SELECT name FROM pragma_table_list
+       WHERE schema='main' AND type='table' AND name NOT LIKE 'sqlite_%'
+       ORDER BY name
+    `).all().map((row) => row.name);
+    const before = applicationRows(legacy, predecessorTables);
     legacy.close();
 
     const adopted = openSQLite(path, { migrationPolicy: 'apply' });
     opened.push(adopted);
-    expect(adopted.migration).toMatchObject({ status: 'adopted', databaseClass: 'retained_development' });
-    expect(adopted.sqlite.query<{ receipt_kind: string }, []>('select receipt_kind from schema_migrations').get()?.receipt_kind).toBe('legacy_adoption');
-    expect(applicationRows(adopted.sqlite)).toBe(before);
+    expect(adopted.migration).toMatchObject({
+      status: 'bridged',
+      coordinate: { schemaEpoch: 2, sequence: 1 },
+      databaseClass: 'retained_development'
+    });
+    expect(adopted.sqlite.query<{ receipt_kind: string }, []>(
+      'SELECT receipt_kind FROM schema_migrations ORDER BY schema_epoch,sequence'
+    ).all().map((row) => row.receipt_kind)).toEqual(['legacy_adoption', 'epoch_bridge']);
+    expect(applicationRows(adopted.sqlite, predecessorTables)).toBe(before);
   });
 
   test('a partial legacy schema refuses without inventing runner receipts', () => {

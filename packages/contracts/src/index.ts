@@ -1,6 +1,6 @@
 export * from './access';
+export * from './agent-action-runs';
 export * from './account-linking';
-export * from './changeset-operations';
 export * from './communications/organizer';
 export * from './decisions';
 export * from './communications/provider';
@@ -19,6 +19,7 @@ export * from './format/arrivals';
 export * from './forms';
 export * from './gateway-authority';
 export * from './operations';
+export * from './operation-history';
 export * from './intake-operations';
 export * from './participant-portal';
 export * from './participant-portal-operations';

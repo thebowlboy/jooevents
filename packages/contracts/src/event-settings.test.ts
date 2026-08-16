@@ -1,18 +1,15 @@
 import { describe, expect, test } from 'bun:test';
 import {
   currentEventSettingsReadResultSchema,
-  eventSettingsSafeDiffSchema,
   eventSettingsEventRequiredOutcomeSchema,
   eventSettingsSchema,
   eventSettingsScopeSchema,
   eventSettingsWorkspaceIdSchema,
-  eventSettingsUpdateDraftInputSchema,
-  eventSettingsUpdateDraftOperationResultSchema
+  eventSettingsUpdateInputSchema,
+  eventSettingsUpdateOperationResultSchema
 } from './event-settings';
 
 const eventId = '019c2582-aee8-7c51-8d2f-0d27f67dc111';
-const changesetId = '019c2582-aee8-7c51-8d2f-0d27f67dc112';
-const revisionId = '019c2582-aee8-7c51-8d2f-0d27f67dc113';
 const receiptId = '019c2582-aee8-7c51-8d2f-0d27f67dc114';
 const correlationId = '019c2582-aee8-7c51-8d2f-0d27f67dc115';
 
@@ -83,7 +80,7 @@ describe('Event settings wire contracts', () => {
   });
 
   test('normalizes authored text while keeping identity and attribution server-owned', () => {
-    const parsed = eventSettingsUpdateDraftInputSchema.parse({
+    const parsed = eventSettingsUpdateInputSchema.parse({
       expectedEventId: eventId,
       expectedEventSetVersion: 2,
       expectedEventVersion: 4,
@@ -100,15 +97,15 @@ describe('Event settings wire contracts', () => {
     expect(parsed.name).toBe('JooConf   2027 Live');
     expect(parsed.location).toBe('Marina Bay');
     expect(parsed.venueNote).toBe('Load-in from 06:30.\nUse the east entrance.');
-    expect(eventSettingsUpdateDraftInputSchema.safeParse({
+    expect(eventSettingsUpdateInputSchema.safeParse({
       ...parsed,
       workspaceId: eventId
     }).success).toBe(false);
-    expect(eventSettingsUpdateDraftInputSchema.safeParse({
+    expect(eventSettingsUpdateInputSchema.safeParse({
       ...parsed,
       updatedByUserId: eventId
     }).success).toBe(false);
-    expect(eventSettingsUpdateDraftInputSchema.safeParse({
+    expect(eventSettingsUpdateInputSchema.safeParse({
       ...parsed,
       publicIndexing: true
     }).success).toBe(false);
@@ -138,9 +135,9 @@ describe('Event settings wire contracts', () => {
       { ...input, venueNote: 'Hall\tA' },
       { ...input, venueNote: 'Hall\ud800A' }
     ]) {
-      expect(eventSettingsUpdateDraftInputSchema.safeParse(candidate).success).toBe(false);
+      expect(eventSettingsUpdateInputSchema.safeParse(candidate).success).toBe(false);
     }
-    expect(eventSettingsUpdateDraftInputSchema.parse({
+    expect(eventSettingsUpdateInputSchema.parse({
       ...input,
       venueNote: 'Hall A\r\nHall B'
     }).venueNote).toBe('Hall A\nHall B');
@@ -161,12 +158,12 @@ describe('Event settings wire contracts', () => {
       dayEnd: '18:00',
       slotMinutes: 30
     };
-    expect(eventSettingsUpdateDraftInputSchema.parse(input)).toMatchObject({
+    expect(eventSettingsUpdateInputSchema.parse(input)).toMatchObject({
       dayStart: '09:00',
       dayEnd: '18:00',
       slotMinutes: 30
     });
-    expect(eventSettingsUpdateDraftInputSchema.parse({
+    expect(eventSettingsUpdateInputSchema.parse({
       ...input, dayStart: null, dayEnd: null, slotMinutes: null
     })).toMatchObject({ dayStart: null, dayEnd: null, slotMinutes: null });
     for (const candidate of [
@@ -182,7 +179,7 @@ describe('Event settings wire contracts', () => {
       { ...input, dayStart: '18:00', dayEnd: '18:00' },
       { ...input, dayStart: '09:10', dayEnd: '18:00', slotMinutes: 60 }
     ]) {
-      expect(eventSettingsUpdateDraftInputSchema.safeParse(candidate).success).toBe(false);
+      expect(eventSettingsUpdateInputSchema.safeParse(candidate).success).toBe(false);
       const { expectedEventId: _eventId, expectedEventSetVersion: _setVersion,
         expectedEventVersion: _eventVersion, ...valueFields } = candidate;
       expect(eventSettingsSchema.safeParse({
@@ -193,60 +190,31 @@ describe('Event settings wire contracts', () => {
         ...valueFields
       }).success).toBe(false);
     }
-    expect(eventSettingsUpdateDraftInputSchema.parse({
+    expect(eventSettingsUpdateInputSchema.parse({
       ...input, dayStart: '08:30', dayEnd: '17:30', slotMinutes: 60
     })).toMatchObject({ dayStart: '08:30', dayEnd: '17:30', slotMinutes: 60 });
   });
 
-  test('binds the safe diff to one exact current selection and version advance', () => {
-    const diff = {
-      action: 'update',
-      before,
-      after,
-      selection: { eventId, eventSetVersion: 2 }
-    } as const;
-    expect(eventSettingsSafeDiffSchema.parse(diff)).toEqual(diff);
-    expect(eventSettingsSafeDiffSchema.safeParse({
-      ...diff,
-      after: { ...after, eventVersion: 6 }
-    }).success).toBe(false);
-    expect(eventSettingsSafeDiffSchema.safeParse({
-      ...diff,
-      selection: { eventId, eventSetVersion: 3 }
-    }).success).toBe(false);
-  });
-
-  test('requires a terminal receipt for a persisted settings draft', () => {
+  test('requires one terminal operation-log receipt for a persisted update', () => {
     const payload = {
       kind: 'success',
       data: {
         schemaVersion: 1,
         action: 'update',
-        changesetId,
-        headVersion: 1,
-        status: 'draft',
-        revision: { id: revisionId, number: 1, digestSha256: 'a'.repeat(64) },
-        riskTier: 'low',
-        approvalPolicy: {
-          reference: { key: 'event.settings.ordinary', version: 1 },
-          definitionDigestSha256: 'b'.repeat(64),
-          requirement: 'none'
-        },
-        safeDiff: {
-          action: 'update', before, after,
-          selection: { eventId, eventSetVersion: 2 }
-        }
+        eventId,
+        eventSetVersion: 2,
+        eventVersion: 5
       },
       receipt: {
         id: receiptId,
-        operationName: 'event.settings.update.draft',
+        operationName: 'event.settings.update',
         operationVersion: 1
       },
       correlationId
     } as const;
-    expect(eventSettingsUpdateDraftOperationResultSchema.safeParse(payload).success).toBe(true);
+    expect(eventSettingsUpdateOperationResultSchema.safeParse(payload).success).toBe(true);
     const { receipt: _receipt, ...withoutReceipt } = payload;
-    expect(eventSettingsUpdateDraftOperationResultSchema.safeParse(withoutReceipt).success)
+    expect(eventSettingsUpdateOperationResultSchema.safeParse(withoutReceipt).success)
       .toBe(false);
   });
 });

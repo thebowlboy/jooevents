@@ -260,7 +260,7 @@ test('before an event exists, Templates sits locked in the navigation', async ({
 	await page.goto('/app');
 	await reachNav(page, testInfo.project.name);
 
-	const nav = page.getByRole('navigation', { name: 'Workspace' });
+	const nav = page.getByRole('navigation', { name: 'Workspace', exact: true });
 	const locked = nav.locator('.side__link--locked').filter({ hasText: 'Templates' });
 	await expect(locked).toBeVisible({ timeout: 15000 });
 	// Locked means not a link: there is nothing to follow yet.

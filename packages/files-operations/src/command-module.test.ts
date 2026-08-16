@@ -12,12 +12,9 @@ import {
   FILES_COMMAND_ACCESS_POLICY,
   FILES_COMMAND_ACTIONS,
   FILES_COMMAND_REQUEST_HASH_PROFILE,
-  FILES_AGENT_REQUEST_DRAFT_ACCESS_POLICY,
   FILES_PORTAL_COMMAND_ACCESS_POLICY,
   FILES_PORTAL_COMMAND_ACTIONS,
-  FILE_REQUEST_CREATE_DRAFT_OPERATION,
   createFilesCommandOperationModule,
-  createFilesAgentRequestDraftOperationModule,
   createFilesPortalCommandOperationModule,
   filesCommandContributionSchema,
   portalSubjectGuard,
@@ -127,42 +124,6 @@ describe('files command operation modules', () => {
     }
   });
 
-  test('agents get exactly one mutation: the file-request draft, no binary upload', async () => {
-    const module = createFilesAgentRequestDraftOperationModule({
-      workspaceId: scope.workspaceId,
-      draftPolicy: FILES_AGENT_REQUEST_DRAFT_ACCESS_POLICY,
-      currentEvent: {
-        resolveCurrentEvent: () => Object.freeze({
-          eventId: scope.eventId,
-          evidenceIds: Object.freeze(['event.current.selection'])
-        })
-      },
-      ...shared
-    });
-    const registry = await createOperationRegistry(module.source);
-    expect(registry.safeManifest.operations.map((operation) => ({
-      name: operation.name, effect: operation.effect
-    }))).toEqual([{
-      name: FILE_REQUEST_CREATE_DRAFT_OPERATION.name, effect: 'draft'
-    }]);
-    expect(registry.appModelEffectBindings.map((binding) => ({
-      operation: binding.operationName, toolName: binding.toolName
-    }))).toEqual([{
-      operation: FILE_REQUEST_CREATE_DRAFT_OPERATION.name,
-      toolName: FILE_REQUEST_CREATE_DRAFT_OPERATION.name
-    }]);
-    const sourceOperation = (module.source as unknown as {
-      effectOperations: readonly { accessLanes: readonly { kind: string; surface: string }[] }[];
-    }).effectOperations[0]!;
-    expect(sourceOperation.accessLanes).toEqual([
-      expect.objectContaining({ kind: 'app_model', surface: 'app_model' })
-    ]);
-    // No upload/attach operation exists anywhere on this lane.
-    expect(registry.safeManifest.operations.some((operation) =>
-      operation.name.includes('upload') || operation.name.includes('attachment')
-    )).toBe(false);
-  });
-
   test('policy catalog mismatches refuse construction', () => {
     const wrong = Object.freeze({ key: 'authority.other', version: parseContractVersion(1) });
     expect(() => createFilesCommandOperationModule({
@@ -176,12 +137,6 @@ describe('files command operation modules', () => {
       commandPolicy: wrong,
       ...shared
     })).toThrow('files_portal_command_policy_catalog_mismatch');
-    expect(() => createFilesAgentRequestDraftOperationModule({
-      workspaceId: scope.workspaceId,
-      draftPolicy: wrong,
-      currentEvent: { resolveCurrentEvent: () => ({ evidenceIds: [] }) },
-      ...shared
-    })).toThrow('files_agent_request_draft_policy_catalog_mismatch');
   });
 
   test('the contribution schema accepts coherent evidence and rejects foreign refusals', () => {
@@ -213,7 +168,7 @@ describe('files command operation modules', () => {
         recordVersion: 2,
         occurredAt: '2026-08-15T12:00:00.000Z'
       },
-      receiptChildren: [{
+      effectContributions: [{
         kind: 'domain_fact',
         factId: uuid('705'),
         factKind: 'file_request_changed',
@@ -232,7 +187,7 @@ describe('files command operation modules', () => {
         outcome: { class: klass, kind, retryable: false, subjects: [], detail, detailSchemaVersion: 1 }
       },
       domain: null,
-      receiptChildren: []
+      effectContributions: []
     });
     expect(schema.safeParse(refusal(
       'file.command_refused', 'policy_violation',
@@ -281,7 +236,7 @@ describe('files command operation modules', () => {
       preparation: {
         prepare: () => {
           calls += 1;
-          return { result: { kind: 'outcome' }, domain: null, receiptChildren: [] };
+          return { result: { kind: 'outcome' }, domain: null, effectContributions: [] };
         }
       }
     });

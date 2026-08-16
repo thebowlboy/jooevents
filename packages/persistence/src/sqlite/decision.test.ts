@@ -2,11 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   planDecisionMutation,
-  planDecisionCompensation,
   resolveDecisionMutationPlanningInput,
   type DecisionEnvironmentSource
 } from '@jooevents/decision';
-import { planEngagementMutation } from '@jooevents/engagement';
 import { applySessionMutationPlan, planSessionMutation } from '@jooevents/session';
 import { parseEventId, parseInstant, parseUserId, parseWorkspaceId } from '@jooevents/kernel';
 import {
@@ -56,7 +54,7 @@ function fixture(environment?: DecisionEnvironmentSource) {
       id TEXT PRIMARY KEY, status TEXT NOT NULL, display_name TEXT NOT NULL,
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, version INTEGER NOT NULL
     ) STRICT;
-    CREATE TABLE foundation_trial_operation_receipts (
+    CREATE TABLE operation_log (
       id TEXT PRIMARY KEY, operation_name TEXT NOT NULL,
       operation_version INTEGER NOT NULL, result_json TEXT NOT NULL
     ) STRICT;
@@ -234,7 +232,7 @@ describe('disposable SQLite Decision repository', () => {
     }
   });
 
-  test('origins require an existing Session, stay immutable, and unlink only on the exact image', () => {
+  test('origins require an existing Session and stay immutable; correction is a later decide', () => {
     const fx = fixture();
     try {
       fx.candidates.set(submissionId, candidate());
@@ -275,31 +273,8 @@ describe('disposable SQLite Decision repository', () => {
         UPDATE submission_session_origins SET kind = 'attached'
       `).run()).toThrow('immutable');
 
-      const compensation = planDecisionCompensation({
-        original: plan,
-        environment: { decisions: fx.decisions, sessions: fx.decisions },
-        actorUserId: userId,
-        occurredAt: later
-      });
-      expect(compensation.kind).toBe('exact');
-      if (compensation.kind === 'blocked') throw new TypeError('unexpected_blocked');
-      expect(fx.sqlite.query('SELECT count(*) AS count FROM engagement_heads').get())
-        .toEqual({ count: 1 });
-      fx.sqlite.exec('BEGIN IMMEDIATE;');
-      fx.decisions.applyDecisionPlan(compensation.plan);
-      for (const row of compensation.plan.rows) {
-        if (row.sessionRestore) fx.decisions.applySessionGraduationReversal(row.sessionRestore);
-      }
-      fx.sqlite.exec('COMMIT;');
-      expect(fx.decisions.readDecisionHead(scope, submissionId)).toBeUndefined();
-      expect(fx.decisions.readSubmissionSessionOrigin(scope, submissionId)).toBeUndefined();
-      expect(fx.sessions.readSessionCatalog(scope)?.sessions).toEqual([]);
-      expect(fx.sqlite.query('SELECT count(*) AS count FROM submission_session_origins').get())
-        .toEqual({ count: 0 });
-      // Compensation removed exactly the seeded engagement rows before the
-      // spawned Session row left, so the foreign key held throughout.
-      expect(fx.sqlite.query('SELECT count(*) AS count FROM engagement_heads').get())
-        .toEqual({ count: 0 });
+      expect(fx.decisions.readDecisionHead(scope, submissionId)).toBeDefined();
+      expect(fx.decisions.readSubmissionSessionOrigin(scope, submissionId)).toBeDefined();
     } finally {
       fx.sqlite.close();
     }
@@ -340,7 +315,7 @@ describe('disposable SQLite Decision repository', () => {
     }
   });
 
-  test('waitlist and decline seed no engagements, and an advanced engagement blocks the compensating removal', () => {
+  test('waitlist and decline seed no engagements; later corrections preserve responses', () => {
     const fx = fixture();
     try {
       seedCollectingSession(fx);
@@ -382,157 +357,13 @@ describe('disposable SQLite Decision repository', () => {
       const seeded = fx.decisions.engagements.listSeededEngagements(scope, sessionId, submissionId);
       expect(seeded).toHaveLength(1);
 
-      // A recorded confirmation moves the seeded row past invited; the
-      // compensating removal now aborts instead of destroying the response.
-      const confirm = planEngagementMutation({
-        planningInput: {
-          action: 'record_confirmation',
-          scope, actorUserId: userId, occurredAt: later,
-          engagementId: seeded[0]!.id,
-          expectedEngagementVersion: 1,
-          attribution: 'organizer_recorded'
-        },
-        environment: { engagements: fx.decisions.engagements }
-      });
-      fx.sqlite.exec('BEGIN IMMEDIATE;');
-      fx.decisions.engagements.applyEngagementPlan(confirm);
-      fx.sqlite.exec('COMMIT;');
-      const compensation = planDecisionCompensation({
-        original: accept,
-        environment: { decisions: fx.decisions, sessions: fx.decisions },
-        actorUserId: userId,
-        occurredAt: later
-      });
-      if (compensation.kind === 'blocked') throw new TypeError('unexpected_blocked');
-      fx.sqlite.exec('BEGIN IMMEDIATE;');
-      expect(() => fx.decisions.applyDecisionPlan(compensation.plan))
-        .toThrow('engagement_advanced');
-      fx.sqlite.exec('ROLLBACK;');
-      expect(fx.decisions.readDecisionHead(scope, submissionId)?.state).toBe('accepted');
-      expect(fx.decisions.engagements.readSessionPersonEngagement(scope, sessionId, personId))
-        .toMatchObject({ state: 'confirmed', version: 2 });
-    } finally {
-      fx.sqlite.close();
-    }
-  });
-
-  test('compensating a re-acceptance leaves rows an earlier acceptance seeded standing', () => {
-    // Adversarial sequence: accept #1 seeds (S, P); a stays-standing semantic
-    // compensation deliberately preserves that row; a re-acceptance of the
-    // same submission then seeds nothing (the pair exists). Compensating the
-    // re-acceptance must remove exactly what IT seeded — nothing — because
-    // the survivor carries accept #1's decision pin, not accept #2's.
-    const evenLater = parseInstant('2026-08-13T08:10:00.000Z');
-    const personQ = '019c1df7-86b5-769b-bba4-5f7097bfa602';
-    const fx = fixture();
-    try {
-      seedCollectingSession(fx);
-      fx.candidates.set(submissionId, candidate({ targetSessionId: sessionId }));
-
-      // Accept #1 (attach): seeds the invited row pinned to its own head.
-      const accept1 = acceptPlan(fx, { kind: 'attach', sessionId });
-      fx.sqlite.exec('BEGIN IMMEDIATE;');
-      fx.decisions.applySessionGraduation(accept1.rows[0]!.graduation!);
-      fx.decisions.applyDecisionPlan(accept1);
-      fx.sqlite.exec('COMMIT;');
-      const seededByAccept1 = Object.freeze({
-        version: accept1.rows[0]!.after.version,
-        digestSha256: accept1.rows[0]!.after.digestSha256
-      });
-      expect(fx.decisions.engagements.listSeededEngagements(scope, sessionId, submissionId))
-        .toEqual([expect.objectContaining({ seededByDecision: seededByAccept1 })]);
-
-      // An unrelated ordinary roster append moves the Session digest, so the
-      // first compensation derives SEMANTIC stays-standing.
-      const catalog = fx.sessions.readSessionCatalog(scope)!;
-      const current = catalog.sessions.find((session) => session.id === sessionId)!;
-      const append = planSessionMutation({
-        catalog,
-        vocabulary: fx.sessions.readSessionVocabulary(scope)!,
-        planningInput: {
-          action: 'roster_append', scope, sessionId, actorUserId: userId, occurredAt: later,
-          expectedCatalogVersion: catalog.version,
-          expectedCatalogDigestSha256: catalog.digestSha256,
-          expectedSessionVersion: current.version,
-          expectedSessionDigestSha256: current.digestSha256,
-          participants: [{
-            personId: personQ, role: 'speaker', publiclyVisible: true,
-            source: { kind: 'manual', id: userId, version: 1 }
-          }]
-        }
-      });
-      fx.sqlite.exec('BEGIN IMMEDIATE;');
-      fx.sessions.applySessionPlan(append);
-      fx.sqlite.exec('COMMIT;');
-      const compensation1 = planDecisionCompensation({
-        original: accept1,
-        environment: { decisions: fx.decisions, sessions: fx.decisions },
-        actorUserId: userId,
-        occurredAt: later
-      });
-      expect(compensation1.kind).toBe('semantic');
-      if (compensation1.kind === 'blocked') throw new TypeError('unexpected_blocked');
-      expect(compensation1.plan.rows[0]!.sessionRestore).toBeNull();
-      fx.sqlite.exec('BEGIN IMMEDIATE;');
-      fx.decisions.applyDecisionPlan(compensation1.plan);
-      fx.sqlite.exec('COMMIT;');
-      // The recorded stays-standing semantics: the engagement survives.
-      expect(fx.decisions.readDecisionHead(scope, submissionId)).toBeUndefined();
       expect(fx.decisions.engagements.listSeededEngagements(scope, sessionId, submissionId))
         .toHaveLength(1);
-
-      // Re-accept (attach): the pair exists, so this acceptance seeds nothing.
-      const accept2 = planDecisionMutation({
-        planningInput: {
-          action: 'decide', scope, actorUserId: userId, occurredAt: evenLater,
-          decisions: [{
-            submissionId, state: 'accepted',
-            expectedDecisionVersion: null, expectedDecisionDigestSha256: null,
-            graduation: { kind: 'attach', sessionId }
-          }]
-        },
-        environment: { decisions: fx.decisions, sessions: fx.decisions }
-      });
-      fx.sqlite.exec('BEGIN IMMEDIATE;');
-      fx.decisions.applySessionGraduation(accept2.rows[0]!.graduation!);
-      fx.decisions.applyDecisionPlan(accept2);
-      fx.sqlite.exec('COMMIT;');
-      expect(fx.sqlite.query('SELECT count(*) AS count FROM engagement_heads').get())
-        .toEqual({ count: 1 });
-
-      // Compensating the re-acceptance derives EXACT (untouched since) and
-      // must not delete the survivor accept #2 never seeded.
-      const compensation2 = planDecisionCompensation({
-        original: accept2,
-        environment: { decisions: fx.decisions, sessions: fx.decisions },
-        actorUserId: userId,
-        occurredAt: evenLater
-      });
-      if (compensation2.kind === 'blocked') throw new TypeError('unexpected_blocked');
-      expect(compensation2.plan.rows[0]!.sessionRestore).not.toBeNull();
-      fx.sqlite.exec('BEGIN IMMEDIATE;');
-      fx.decisions.applyDecisionPlan(compensation2.plan);
-      for (const row of compensation2.plan.rows) {
-        if (row.sessionRestore) fx.decisions.applySessionGraduationReversal(row.sessionRestore);
-      }
-      fx.sqlite.exec('COMMIT;');
-
-      // P stays rostered AND keeps engagement tracking with accept #1's pin:
-      // no rostered person falls through the cracks.
-      const roster = fx.sessions.readSessionCatalog(scope)!
-        .sessions.find((session) => session.id === sessionId)!
-        .roster.participants.map((participant) => participant.personId);
-      expect(roster).toContain(personId);
-      expect(fx.decisions.engagements.listSeededEngagements(scope, sessionId, submissionId))
-        .toEqual([expect.objectContaining({
-          personId, state: 'invited', version: 1, seededByDecision: seededByAccept1
-        })]);
-      expect(fx.decisions.readDecisionHead(scope, submissionId)).toBeUndefined();
-      expect(fx.decisions.readSubmissionSessionOrigin(scope, submissionId)).toBeUndefined();
     } finally {
       fx.sqlite.close();
     }
   });
+
 
   test('candidate source derives the same version as the Review candidate source over one row', () => {
     const row: SubmissionTriageSourceRowDto = {

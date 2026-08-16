@@ -235,7 +235,7 @@ export class SQLiteFilesCommandEffectDomainAdapter implements SQLiteEffectDomain
               })
             }),
             domain: null,
-            receiptChildren: Object.freeze([])
+            effectContributions: Object.freeze([])
           });
         }
         const scope: FileScopeDto = { workspaceId: context.scope.workspaceId, eventId };
@@ -254,7 +254,7 @@ export class SQLiteFilesCommandEffectDomainAdapter implements SQLiteEffectDomain
               })
             }),
             domain: null,
-            receiptChildren: Object.freeze([])
+            effectContributions: Object.freeze([])
           });
         }
         const handle = this.nextId('newPreparationHandle');
@@ -270,7 +270,7 @@ export class SQLiteFilesCommandEffectDomainAdapter implements SQLiteEffectDomain
             recordVersion: dispatched.success.recordVersion,
             occurredAt
           },
-          receiptChildren: dispatched.success.facts.map((fact) => ({
+          effectContributions: dispatched.success.facts.map((fact) => ({
             kind: 'domain_fact' as const,
             factId: this.nextId('newFactId'),
             factKind: fact.kind,

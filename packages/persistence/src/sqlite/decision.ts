@@ -1,24 +1,21 @@
+import { canonicalJsonSha256 } from '@jooevents/kernel';
 import type { Database } from 'bun:sqlite';
-import { canonicalJsonSha256 } from '@jooevents/changesets';
+
 import {
   decisionMutationPlanSchema,
-  decisionRestorePlanSchema,
   type DecisionHeadDto,
   type DecisionMutationPlanDto,
   type DecisionMutationResult,
-  type DecisionRestorePlanDto,
   type DecisionReviewPinDto,
   type DecisionScopeDto,
   type SubmissionSessionOriginDto
 } from '@jooevents/contracts';
 import {
   decisionMutationResultFromPlan,
-  decisionMutationResultFromRestore,
-  isDecisionRestorePlan,
   parseDecisionHead,
   parseSubmissionSessionOrigin,
   type DecisionCandidateDto,
-  type DecisionChangesetTransactionPort,
+  type DecisionTransactionPort,
   type DecisionEnvironmentSource
 } from '@jooevents/decision';
 import { submissionTriageSourceRowSchema } from '@jooevents/contracts/submission-triage';
@@ -30,9 +27,7 @@ import {
 } from '@jooevents/review';
 import {
   applyEngagementSeedFrom,
-  applyEngagementSeedReversalFrom,
-  planEngagementSeedFrom,
-  planEngagementSeedReversalFrom
+  planEngagementSeedFrom
 } from '@jooevents/engagement';
 import {
   applySessionGraduationFrom,
@@ -50,11 +45,7 @@ import {
   type SessionGraduationValidation,
   type SessionGraduationValidationPort
 } from '@jooevents/session';
-import type {
-  DecisionRestoreRowDto,
-  DecisionRowPlanDto,
-  SessionRosterParticipantInput
-} from '@jooevents/contracts';
+import type { DecisionRowPlanDto, SessionRosterParticipantInput } from '@jooevents/contracts';
 import { SQLiteEngagementRepository } from './engagement';
 import type {
   SessionMutationPlanDto,
@@ -64,7 +55,7 @@ import type {
 import type { SubmissionTriageSourcePort } from '@jooevents/submission-triage';
 import type { SQLiteSessionRepository } from './session';
 
-/** Additive schema installed only in an explicitly disposable SQLite runtime. */
+/** This schema contributes to the accepted epoch-2 baseline and may also serve isolated fixtures. */
 export const DECISION_SQL = `
 CREATE TABLE decision_heads (
   workspace_id TEXT NOT NULL CHECK(length(workspace_id) = 36),
@@ -162,24 +153,19 @@ interface CountRow { readonly count: number }
 
 /**
  * Canonical Decision persistence plus the Session graduation collaboration
- * ports served from the one composed Session repository, so a hosting
- * changeset commits Decision heads, origin links, and Session graduations in
- * a single unit of work on the caller-owned handle. Plan-level validation
- * lives in the changeset validate phase; every write here is guarded by the
- * exact expected row image and refuses on any drift.
+ * ports served from the one composed Session repository, so the direct
+ * operation commits Decision heads, origin links, and Session graduations in
+ * a single unit of work on the caller-owned handle. Every write is guarded by
+ * the exact expected row image and refuses on any drift.
  *
  * Acceptance-seed join (recorded Wave-3 widening of the decide unit of work):
  * every accepted row's committed roster write additionally seeds one
  * `invited` engagement per candidate participant through the engagement seed
  * collaboration, skip-existing on the `(sessionId, personId)` pair, inside
  * this same transaction, each row stamped with the acceptance's own written
- * decision head. A compensating restore that reverses the graduation removes
- * exactly the rows carrying that acceptance's stamp and aborts if any of
- * them moved past its seeded `invited` image; rows earlier acceptances
- * seeded, and any restore that leaves the Session standing, leave their
- * engagements standing with the roster.
+ * decision head.
  */
-export class SQLiteDecisionRepository implements DecisionChangesetTransactionPort,
+export class SQLiteDecisionRepository implements DecisionTransactionPort,
   SessionGraduationPlanningPort,
   SessionGraduationValidationPort,
   SessionGraduationTransactionPort {
@@ -303,22 +289,8 @@ export class SQLiteDecisionRepository implements DecisionChangesetTransactionPor
     return applySessionGraduationReversalFrom(this.input.sessions, plan);
   }
 
-  applyDecisionPlan(plan: DecisionMutationPlanDto | DecisionRestorePlanDto): DecisionMutationResult {
+  applyDecisionPlan(plan: DecisionMutationPlanDto): DecisionMutationResult {
     if (!this.input.sqlite.inTransaction) throw new SQLiteDecisionError('transaction_required');
-    if (isDecisionRestorePlan(plan)) {
-      const parsed = decisionRestorePlanSchema.parse(plan);
-      for (const row of parsed.rows) {
-        // The seed reversal and origin unlink run before the head write so a
-        // spawned Session row can be removed by its graduation reversal after
-        // this restore returns without an engagement or origin still
-        // referencing it.
-        this.reverseEngagementSeed(parsed.scope, row);
-        if (row.unlinkOrigin !== null) this.deleteOrigin(parsed.scope, row.unlinkOrigin);
-        if (row.restore === null) this.deleteHead(parsed.scope, row.expectedCurrent);
-        else this.updateHead(parsed.scope, row.expectedCurrent, row.restore);
-      }
-      return decisionMutationResultFromRestore(parsed);
-    }
     const parsed = decisionMutationPlanSchema.parse(plan);
     const scope = parsed.input.scope;
     for (const row of parsed.rows) {
@@ -336,8 +308,8 @@ export class SQLiteDecisionRepository implements DecisionChangesetTransactionPor
    * existing `(sessionId, personId)` pairs are skipped untouched, so replays
    * and attaches onto peopled Sessions are idempotent. Every seeded row is
    * stamped with this acceptance's own written decision head
-   * (`row.after.version` + digest), the pin its compensation later selects
-   * by. Waitlisted and declined rows carry no graduation and seed nothing.
+   * (`row.after.version` + digest). Waitlisted and declined rows carry no
+   * graduation and seed nothing.
    */
   private seedEngagements(scope: DecisionScopeDto, row: DecisionRowPlanDto, occurredAt: string): void {
     if (row.graduation === null || row.origin === null) return;
@@ -357,37 +329,6 @@ export class SQLiteDecisionRepository implements DecisionChangesetTransactionPor
       invitedAt: occurredAt,
       respondBy: null
     }));
-  }
-
-  /**
-   * Removes exactly the engagements one reverted acceptance seeded, and only
-   * while every one of them still is its seeded `invited` version-one image —
-   * a confirmation, decline, or cancellation on any seeded row aborts the
-   * whole compensation instead of destroying a recorded human response.
-   * Selection pins `seededByDecision` to `row.expectedCurrent`: compensation
-   * derivation is blocked (`decision.changed`) unless the current decision
-   * head is exactly the head the reverted commit wrote, so `expectedCurrent`
-   * is that commit's own write and its `(version, digest)` matches only the
-   * rows that commit stamped at seed time. Rows an earlier acceptance of the
-   * same submission seeded — preserved by a stays-standing compensation —
-   * carry a different pin and stay untouched, whatever their state. A restore
-   * that leaves the Session standing (no graduation reversal) leaves the
-   * seeded engagements standing with its roster.
-   */
-  private reverseEngagementSeed(scope: DecisionScopeDto, row: DecisionRestoreRowDto): void {
-    if (row.unlinkOrigin === null || row.sessionRestore === null) return;
-    applyEngagementSeedReversalFrom(
-      this.engagements,
-      planEngagementSeedReversalFrom(this.engagements, {
-        scope,
-        sessionId: row.unlinkOrigin.sessionId,
-        submissionId: row.submissionId,
-        seededByDecision: {
-          version: row.expectedCurrent.version,
-          digestSha256: row.expectedCurrent.digestSha256
-        }
-      })
-    );
   }
 
   private scopeExists(scope: DecisionScopeDto): boolean {

@@ -17,6 +17,7 @@ import { openSQLite, type OpenSQLiteResult } from './database';
 import { SQLiteFoundationError } from './foundation-errors';
 import type { SQLiteFoundationErrorCode } from './foundation-errors';
 import { canonicalSQLiteTarget, listSQLiteOwners } from './file-ownership';
+import { loadSQLiteFoundationArtifacts } from './migration-runner';
 import {
   createRetainedSQLiteBackup,
   createVerifiedRetainedSQLiteRestoreCandidate,
@@ -64,6 +65,20 @@ function createRetained(path: string, databaseClass: 'retained_development' | 'f
   return { databaseId, databaseClass } as const;
 }
 
+function createUntrackedLegacy(path: string): void {
+  const database = new Database(path, { create: true, strict: true });
+  try {
+    database.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;');
+    database.exec(loadSQLiteFoundationArtifacts().predecessor.sql);
+    database.query(`
+      insert into workspaces (id, name, state, created_at, updated_at, version)
+      values ('workspace_legacy_backup', 'Legacy backup proof', 'active', ?, ?, 1)
+    `).run(Date.parse('2026-08-13T00:00:00.000Z'), Date.parse('2026-08-13T00:00:00.000Z'));
+  } finally {
+    database.close();
+  }
+}
+
 function expectCode(work: () => unknown, code: SQLiteFoundationErrorCode): void {
   try {
     work();
@@ -76,6 +91,44 @@ function expectCode(work: () => unknown, code: SQLiteFoundationErrorCode): void 
 }
 
 describe('retained SQLite backup and restore rehearsal', () => {
+  test('backs up the exact untracked predecessor without inventing a database ID', () => {
+    const paths = fixture();
+    createUntrackedLegacy(paths.sourcePath);
+
+    const backup = createRetainedSQLiteBackup({
+      databasePath: paths.sourcePath,
+      backupPath: paths.backupPath,
+      expectedDatabaseClass: 'retained_development',
+      maximumSerializeBytes: maximumBytes
+    });
+    expect(backup).toMatchObject({
+      formatVersion: 1,
+      identityKind: 'untracked_legacy',
+      databaseId: null,
+      databaseClass: 'retained_development',
+      migrationId: 'e1_0001_identity_access',
+      schemaEpoch: 1,
+      sequence: 1
+    });
+    expect(createVerifiedRetainedSQLiteRestoreCandidate({
+      backupPath: paths.backupPath,
+      restoreCandidatePath: paths.candidatePath,
+      expectedDescriptor: backup,
+      maximumBytes
+    })).toEqual(backup);
+    const restored = new Database(paths.candidatePath, { readonly: true, create: false, strict: true });
+    try {
+      expect(restored.query<{ readonly name: string }, []>(
+        "select name from workspaces where id = 'workspace_legacy_backup'"
+      ).get()).toEqual({ name: 'Legacy backup proof' });
+      expect(restored.query<{ readonly count: number }, []>(
+        "select count(*) as count from sqlite_schema where name = 'database_instance_metadata'"
+      ).get()?.count).toBe(0);
+    } finally {
+      restored.close();
+    }
+  });
+
   test('creates a bounded verified backup and a separately verified restore candidate', () => {
     const paths = fixture();
     const source = createRetained(paths.sourcePath);
@@ -91,8 +144,8 @@ describe('retained SQLite backup and restore rehearsal', () => {
       formatVersion: 1,
       databaseId: source.databaseId,
       databaseClass: 'retained_development',
-      migrationId: 'e1_0001_identity_access',
-      schemaEpoch: 1,
+      migrationId: 'e2_0001_jooevents_foundation',
+      schemaEpoch: 2,
       sequence: 1
     });
     expect(backup.bytes).toBeGreaterThan(0);

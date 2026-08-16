@@ -1,8 +1,12 @@
+import { canonicalJsonSha256 } from '@jooevents/kernel';
 import {
   canonicalFrameOriginAllowlist,
   releasedSessionSchema,
   releaseMutationPlanSchema,
   releaseMutationResultSchema,
+  releaseActionSchema,
+  releaseIdSchema,
+  releasePlanningErrorCodeSchema,
   releasePlanningInputSchema,
   releaseProgramPlanSchema,
   releaseStyleSetPlanSchema,
@@ -39,7 +43,8 @@ import {
   type SurfaceKind,
   type SurfaceReleaseDto
 } from '@jooevents/contracts';
-import { canonicalJsonSha256 } from '@jooevents/changesets';
+import { z } from 'zod';
+
 import { encodeCanonicalJson } from '@jooevents/kernel';
 import {
   parseProgramRelease,
@@ -64,6 +69,12 @@ export class ReleasePlanningError extends Error {
     this.name = 'ReleasePlanningError';
   }
 }
+
+export const releaseStaleDetailSchema = z.strictObject({
+  code: releasePlanningErrorCodeSchema,
+  action: releaseActionSchema,
+  subjectId: releaseIdSchema.nullable()
+});
 
 export function programReleaseChainGuardId(eventId: string): string {
   return `program_release_chain:${eventId}`;
@@ -806,8 +817,8 @@ export type ReleaseSurfaceSuccessorReadPort =
  * presentation and style pins copied verbatim. Read-only surfaces are never
  * touched — their data follows the newest program release and a form
  * republish is not their concern. Successor identities are content-derived so
- * the hosting intake changeset replays byte-identically. Consumed by the
- * intake form-republish changeset through its surface-successor collaboration
+ * the hosting reviewed Form-version publish replays byte-identically. Consumed by
+ * that publish through its surface-successor collaboration
  * ports; the release domain never mounts an implicit side effect.
  */
 export function planReleaseSurfaceSuccessorFrom(
@@ -875,9 +886,9 @@ export function validateReleaseSurfaceSuccessorFrom(
 }
 
 /**
- * Concurrency fence a hosting changeset records beside a successor plan: the
+ * Concurrency fence a hosting reviewed publish records beside a successor plan: the
  * one `apply` surface-head slot, absence included, in exactly the evidence
- * shape the release changeset itself uses. Any surface publish or rollback
+ * shape the owner-native Release workflow itself uses. Any surface publish or rollback
  * between propose and commit moves it and conflicts the pending republish.
  */
 export function releaseSurfaceSuccessorGuardRef(

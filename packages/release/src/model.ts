@@ -1,3 +1,4 @@
+import { canonicalJsonSha256 } from '@jooevents/kernel';
 import {
   programReleaseSchema,
   releaseScopeSchema,
@@ -20,10 +21,11 @@ import {
   type SurfaceHeadDto,
   type SurfaceKind,
   type SurfaceReleaseDto,
+  type ReleaseSurfaceSuccessorPlanDto,
   type ReleaseTemplateRevisionPinDto,
   type TemplateArtifactDocumentDto
 } from '@jooevents/contracts';
-import { canonicalJsonSha256 } from '@jooevents/changesets';
+
 
 export type ReleaseScope = ReleaseScopeDto;
 export type ProgramRelease = ProgramReleaseDto;
@@ -209,6 +211,18 @@ export interface ReleaseReadPort {
     scope: ReleaseScope,
     pin: ReleaseTemplateRevisionPinDto
   ): TemplateArtifactDocumentDto | undefined;
+}
+
+/** Owner-native release transaction seam used by the registered publish operation. */
+export interface ReleaseTransactionPort extends ReleaseReadPort {
+  applyReleasePlan(plan: import('@jooevents/contracts').ReleaseMutationPlanDto):
+    import('@jooevents/contracts').ReleaseMutationResultDto;
+}
+
+export interface ReleaseSurfaceSuccessorTransactionPort extends ReleaseReadPort {
+  applyReleaseSurfaceSuccessorPlan(
+    plan: ReleaseSurfaceSuccessorPlanDto
+  ): readonly SurfaceHeadDto[];
 }
 
 function deepFreeze<Value>(value: Value): Value {

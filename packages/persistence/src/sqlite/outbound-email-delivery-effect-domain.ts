@@ -48,7 +48,7 @@ export interface SQLiteOutboundEmailDeliveryEffectIds {
   newHistoryId(): string;
 }
 
-type EvidenceChild = OutboundEmailDeliveryContribution['receiptChildren'][number];
+type EvidenceChild = OutboundEmailDeliveryContribution['effectContributions'][number];
 type RegistrationContribution = Extract<
   OutboundEmailDeliveryContribution,
   { readonly domain: { readonly kind: 'outbound_email_delivery_registration' } }
@@ -62,14 +62,14 @@ interface PreparedRegistration {
   readonly evaluatedAt: string;
   readonly work: OutboundEmailDeliveryWorkInput;
   readonly contribution: RegistrationContribution;
-  phase: 'prepared' | 'applied' | 'parent_linked' | 'evidence_complete' | 'claim_released';
+  phase: 'prepared' | 'applied' | 'parent_linked' | 'evidence_complete' | 'invocation_released';
   nextChild: number;
   receiptId?: string;
 }
 
 interface PreparedNoop {
   readonly context: EffectInvocationContext;
-  phase: 'prepared' | 'claim_released';
+  phase: 'prepared' | 'invocation_released';
 }
 
 function exactCapability(value: { readonly key: string; readonly version: number }): boolean {
@@ -206,7 +206,7 @@ export class SQLiteOutboundEmailDeliveryEffectDomainAdapter implements SQLiteEff
                     }
                   },
                   domain: null,
-                  receiptChildren: []
+                  effectContributions: []
                 }
               : {
                   result: {
@@ -221,7 +221,7 @@ export class SQLiteOutboundEmailDeliveryEffectDomainAdapter implements SQLiteEff
                     }
                   },
                   domain: null,
-                  receiptChildren: []
+                  effectContributions: []
                 });
             this.#active = { context, phase: 'prepared' };
             return contribution;
@@ -250,7 +250,7 @@ export class SQLiteOutboundEmailDeliveryEffectDomainAdapter implements SQLiteEff
               deliveryId: work.deliveryId,
               workDigestSha256: outboundEmailDeliveryWorkDigest(work)
             },
-            receiptChildren: [{
+            effectContributions: [{
               kind: 'domain_fact',
               factId,
               factKind: 'outbound_email_delivery_requested',
@@ -309,7 +309,7 @@ export class SQLiteOutboundEmailDeliveryEffectDomainAdapter implements SQLiteEff
       || parsed.workDigestSha256 !== outboundEmailDeliveryWorkDigest(prepared.work)
       || canonicalJsonText(parsed) !== canonicalJsonText(prepared.contribution.domain)
     ) throw new TypeError('outbound_delivery_effect_preparation_invalid');
-    const [fact, pointer, history] = prepared.contribution.receiptChildren;
+    const [fact, pointer, history] = prepared.contribution.effectContributions;
     insertOutboundEmailDeliveryRegistration({
       sqlite: this.sqlite,
       workspaceId: prepared.workspaceId,
@@ -328,9 +328,9 @@ export class SQLiteOutboundEmailDeliveryEffectDomainAdapter implements SQLiteEff
     this.#active = prepared;
   }
 
-  afterReceiptParentInserted(receipt: TerminalEffectReceipt): void {
+  afterOperationLogInserted(receipt: TerminalEffectReceipt): void {
     if (!this.sqlite.inTransaction || !this.#active) {
-      throw new TypeError('outbound_delivery_effect_receipt_parent_missing');
+      throw new TypeError('outbound_delivery_effect_operation_log_missing');
     }
     const result = outboundEmailDeliveryWorkOperationResultSchema.safeParse(receipt.result);
     if (
@@ -354,13 +354,13 @@ export class SQLiteOutboundEmailDeliveryEffectDomainAdapter implements SQLiteEff
     }
   }
 
-  afterReceiptChildInserted(receiptId: string, contribution: unknown): void {
+  afterEffectContributionInserted(receiptId: string, contribution: unknown): void {
     const active = this.#active;
     if (!this.sqlite.inTransaction || !active || !('handle' in active)
       || active.phase !== 'parent_linked' || active.receiptId !== receiptId) {
-      throw new TypeError('outbound_delivery_effect_receipt_parent_missing');
+      throw new TypeError('outbound_delivery_effect_operation_log_missing');
     }
-    const expected = active.contribution.receiptChildren[active.nextChild];
+    const expected = active.contribution.effectContributions[active.nextChild];
     const child = exactChild(contribution);
     if (!expected || canonicalJsonText(expected) !== canonicalJsonText(child)) {
       throw new TypeError('outbound_delivery_effect_evidence_order_mismatch');
@@ -406,12 +406,12 @@ export class SQLiteOutboundEmailDeliveryEffectDomainAdapter implements SQLiteEff
       );
     }
     active.nextChild += 1;
-    if (active.nextChild === active.contribution.receiptChildren.length) {
+    if (active.nextChild === active.contribution.effectContributions.length) {
       active.phase = 'evidence_complete';
     }
   }
 
-  afterExecutionClaimReleased(identity: EffectOperationIdentity): void {
+  afterEffectApplicationCommitted(identity: EffectOperationIdentity): void {
     if (!this.sqlite.inTransaction || !this.#active || !this.#expectedIdentity
       || !effectOperationIdentitiesEqual(identity, this.#expectedIdentity)) {
       throw new TypeError('outbound_delivery_effect_incomplete');
@@ -423,7 +423,7 @@ export class SQLiteOutboundEmailDeliveryEffectDomainAdapter implements SQLiteEff
     } else if (this.#active.phase !== 'prepared') {
       throw new TypeError('outbound_delivery_effect_incomplete');
     }
-    this.#active.phase = 'claim_released';
+    this.#active.phase = 'invocation_released';
   }
 
   afterUnitOfWorkCommitted(): void {

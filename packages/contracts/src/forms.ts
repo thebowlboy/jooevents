@@ -753,7 +753,7 @@ export const formDefinitionAuthorInputSchema = z.strictObject({
 
 /**
  * Creation accepts organizer intent, not a client-authored Deadline identity.
- * The Form changeset allocates and creates that Deadline in the same unit of work.
+ * The Form operation allocates and creates that Deadline in the same unit of work.
  */
 export const formDefinitionCreateAuthorInputSchema = z.strictObject({
   kind: formKindSchema,

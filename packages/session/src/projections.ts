@@ -1,3 +1,4 @@
+import { canonicalJsonSha256 } from '@jooevents/kernel';
 import {
   compareScopeRef,
   reviewerScopeTargetFactSchema,
@@ -6,7 +7,7 @@ import {
   type ReviewerScopeTargetFactDto,
   type ReviewerScopeTargetSetDto
 } from '@jooevents/contracts/reviewer-roster';
-import { canonicalJsonSha256 } from '@jooevents/changesets';
+
 import type { IntakeFormReferenceSource } from '@jooevents/intake';
 import type { ReviewerScopeTargetSource } from '@jooevents/review/roster';
 import type {

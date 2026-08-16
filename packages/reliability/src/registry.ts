@@ -139,10 +139,6 @@ function assertProducer(producer: unknown, label: string): void {
     assertRef(candidate.operation, 'operation', `${label}.operation`);
     return;
   }
-  if (candidate.kind === 'changeset_operation') {
-    assertRef(candidate.operation, 'changeset_operation', `${label}.operation`);
-    return;
-  }
   invalid(`${label}.kind is not a closed producer kind`);
 }
 

@@ -4,19 +4,13 @@ import type { EngagementHeadDto, EngagementMutationPlanningInput } from '@jooeve
 import {
   applyEngagementSeedFrom,
   applyEngagementSeedReversalFrom,
-  createEngagementChangesetBundle,
   deterministicEngagementId,
   engagementAggregateId,
   engagementMutationResultFromPlan,
-  engagementReadPort,
   engagementSeedResultFromPlan,
-  engagementTransactionPort,
-  engagementValidationPort,
   EngagementPlanningError,
   EngagementSeedError,
   isCancellationRequested,
-  isEngagementRestorePlan,
-  planEngagementCompensation,
   planEngagementMutation,
   planEngagementSeedFrom,
   planEngagementSeedReversalFrom,
@@ -24,7 +18,7 @@ import {
   validateEngagementMutationPlan,
   validateEngagementSeedFrom,
   validateEngagementSeedReversalFrom,
-  type EngagementChangesetTransactionPort,
+  type EngagementReadPort,
   type EngagementSeedTransactionPort
 } from './index';
 
@@ -49,7 +43,10 @@ interface MemoryWorld {
   readonly heads: Map<string, EngagementHeadDto>;
 }
 
-type WorldPort = EngagementChangesetTransactionPort & EngagementSeedTransactionPort;
+type WorldPort = EngagementReadPort & EngagementSeedTransactionPort & {
+  applyEngagementPlan(plan: import('@jooevents/contracts').EngagementMutationPlanDto):
+    import('@jooevents/contracts').EngagementMutationResult;
+};
 
 function worldPort(world: MemoryWorld): WorldPort {
   return {
@@ -63,10 +60,6 @@ function worldPort(world: MemoryWorld): WorldPort {
         .filter((head) => head.sessionId === session && head.submissionId === submission)
         .sort((left, right) => left.personId < right.personId ? -1 : 1),
     applyEngagementPlan(plan) {
-      if (isEngagementRestorePlan(plan)) {
-        world.heads.set(plan.restore.id, plan.restore);
-        return { action: 'restore', engagement: plan.restore };
-      }
       world.heads.set(plan.after.id, plan.after);
       return engagementMutationResultFromPlan(plan);
     },
@@ -474,140 +467,5 @@ describe('engagement state machine', () => {
     expect(plan.after.confirmation).toMatchObject({
       attribution: 'organizer_recorded', personId: personA, recordedByUserId: userId
     });
-  });
-});
-
-describe('engagement compensation', () => {
-  test('restores the exact before image while untouched and blocks after movement', () => {
-    const { port } = seedWorld();
-    const engagementId = headOf(port, personA).id;
-    const confirm = planEngagementMutation({
-      planningInput: planningInput({
-        action: 'record_confirmation',
-        engagementId,
-        expectedEngagementVersion: 1,
-        attribution: 'organizer_recorded'
-      }),
-      environment: { engagements: port }
-    });
-    port.applyEngagementPlan(confirm);
-    const compensation = planEngagementCompensation({
-      original: confirm,
-      environment: { engagements: port },
-      actorUserId: userId,
-      occurredAt: later
-    });
-    if (compensation.kind !== 'exact') throw new TypeError('expected_exact');
-    expect(compensation.plan.restore).toMatchObject({ state: 'invited', version: 3 });
-    port.applyEngagementPlan(compensation.plan);
-    expect(headOf(port, personA)).toMatchObject({
-      state: 'invited', version: 3, confirmation: null
-    });
-
-    const reconfirm = planEngagementMutation({
-      planningInput: planningInput({
-        action: 'record_confirmation',
-        engagementId,
-        expectedEngagementVersion: 3,
-        attribution: 'organizer_recorded'
-      }),
-      environment: { engagements: port }
-    });
-    port.applyEngagementPlan(reconfirm);
-    port.applyEngagementPlan(planEngagementMutation({
-      planningInput: planningInput({
-        action: 'request_cancellation',
-        engagementId,
-        expectedEngagementVersion: 4,
-        requestedBy: 'speaker'
-      }),
-      environment: { engagements: port }
-    }));
-    expect(planEngagementCompensation({
-      original: reconfirm,
-      environment: { engagements: port },
-      actorUserId: userId,
-      occurredAt: later
-    })).toEqual({ kind: 'blocked', reasonKey: 'engagement.changed' });
-  });
-});
-
-describe('engagement changeset bundle', () => {
-  test('plans, validates, applies, and derives compensation through the declared ports', () => {
-    const { port } = seedWorld();
-    const bundle = createEngagementChangesetBundle();
-    const snapshot = Object.freeze({
-      getPort<Port>(key: unknown): Port {
-        if (key !== engagementReadPort) throw new TypeError('undeclared_read_port');
-        return port as unknown as Port;
-      }
-    });
-    const commitTransaction = Object.freeze({
-      getPort<Port>(key: unknown): Port {
-        if (key !== engagementValidationPort && key !== engagementTransactionPort) {
-          throw new TypeError('undeclared_transaction_port');
-        }
-        return port as unknown as Port;
-      }
-    });
-    const engagementId = headOf(port, personA).id;
-    const planned = bundle.definition.plan(planningInput({
-      action: 'record_confirmation',
-      engagementId,
-      expectedEngagementVersion: 1,
-      attribution: 'organizer_recorded'
-    }), snapshot as never);
-    if (planned instanceof Promise) throw new TypeError('unexpected_async_plan');
-    expect(planned.riskTier).toBe('consequential');
-    expect(planned.aggregateRefs).toEqual([
-      { id: engagementAggregateId(engagementId), version: 1 }
-    ]);
-    expect(planned.guardRefs).toEqual([]);
-    const diff = bundle.definition.projectDiff(planned.plan);
-    expect(diff.diff.action).toBe('record_confirmation');
-
-    const validation = bundle.definition.validateWithin(planned.plan, commitTransaction as never);
-    if (validation instanceof Promise) throw new TypeError('unexpected_async_validate');
-    expect(validation.kind).toBe('ready');
-    const applied = bundle.definition.applyWithin(planned.plan, commitTransaction as never);
-    if (applied instanceof Promise) throw new TypeError('unexpected_async_apply');
-    expect(applied.facts).toEqual([
-      {
-        kind: 'engagement_changed',
-        version: 1,
-        payload: { action: 'record_confirmation', engagement: headOf(port, personA) }
-      }
-    ]);
-    expect(applied.effects).toEqual([]);
-
-    const stale = bundle.definition.validateWithin(planned.plan, commitTransaction as never);
-    if (stale instanceof Promise) throw new TypeError('unexpected_async_validate');
-    if (stale.kind !== 'outcome') throw new TypeError('expected_outcome');
-    expect(stale.outcome).toMatchObject({
-      class: 'stale_revision', kind: 'engagement.changed'
-    });
-
-    const derived = bundle.definition.deriveCompensation(planned.plan, snapshot as never);
-    if (derived instanceof Promise) throw new TypeError('unexpected_async_compensation');
-    if (derived.kind !== 'exact') throw new TypeError('expected_exact');
-    expect(canonical(derived.authorInput)).toContain('"action":"restore"');
-    const restorePlanned = bundle.definition.plan(derived.authorInput, snapshot as never);
-    if (restorePlanned instanceof Promise) throw new TypeError('unexpected_async_plan');
-    const restoreApplied = bundle.definition.applyWithin(
-      restorePlanned.plan, commitTransaction as never
-    );
-    if (restoreApplied instanceof Promise) throw new TypeError('unexpected_async_apply');
-    expect(restoreApplied.result).toMatchObject({ action: 'restore' });
-    expect(headOf(port, personA)).toMatchObject({ state: 'invited', version: 3 });
-    expect(bundle.definition.deriveCompensation(restorePlanned.plan, snapshot as never))
-      .toEqual({ kind: 'blocked', reasonKey: 'engagement.compensation_of_compensation' });
-  });
-
-  test('owner identity and fact grammar are the exported module surface', () => {
-    const bundle = createEngagementChangesetBundle();
-    expect(bundle.definition.kind).toBe('engagement.respond');
-    expect(bundle.definition.allowedAggregateKinds).toEqual(['engagement_head']);
-    expect(bundle.definition.allowedGuardKinds).toEqual([]);
-    expect(bundle.definition.allowedEffects).toEqual([]);
   });
 });

@@ -98,7 +98,7 @@ CREATE TABLE intake_public_mutation_receipt_links (
   ),
   UNIQUE(ceremony_evidence_id, receipt_id),
   UNIQUE(receipt_id, workspace_id, event_id, action, plan_digest_sha256, occurred_at_ms),
-  FOREIGN KEY(receipt_id) REFERENCES foundation_trial_operation_receipts(id)
+  FOREIGN KEY(receipt_id) REFERENCES operation_log(id)
     ON UPDATE RESTRICT ON DELETE RESTRICT,
   FOREIGN KEY(workspace_id, event_id, draft_id)
     REFERENCES intake_application_draft_heads(workspace_id, event_id, draft_id)
@@ -203,7 +203,7 @@ interface PreparedMutation {
   readonly completionReference: string | undefined;
   readonly participantAttributionEvidenceIds: readonly string[] | undefined;
   readonly rawBuffers: readonly Uint8Array[];
-  phase: 'prepared' | 'applied' | 'parent_linked' | 'evidence_complete' | 'claim_released';
+  phase: 'prepared' | 'applied' | 'parent_linked' | 'evidence_complete' | 'invocation_released';
   nextChild: number;
   receipt?: TerminalEffectReceipt;
 }
@@ -224,7 +224,7 @@ function planningRefusal(error: unknown) {
       retryable: false, subjects: [], detail: null, detailSchemaVersion: 1
     } },
     domain: null,
-    receiptChildren: []
+    effectContributions: []
   });
 }
 
@@ -462,7 +462,7 @@ implements SQLiteEffectDomainAdapter {
               action: plan.action, workspaceId: scope.workspaceId, eventId: scope.eventId,
               planDigestSha256, occurredAt: evaluatedAt
             },
-            receiptChildren: [{
+            effectContributions: [{
               kind: 'domain_fact', factId,
               factKind: plan.action === 'submit'
                 ? 'application_submitted' : 'application_draft_changed',
@@ -540,7 +540,7 @@ implements SQLiteEffectDomainAdapter {
     this.#active = prepared;
   }
 
-  afterReceiptParentInserted(receipt: TerminalEffectReceipt): void {
+  afterOperationLogInserted(receipt: TerminalEffectReceipt): void {
     const active = this.#active;
     const parsed = intakePublicMutationOperationResultSchema.safeParse(receipt.result);
     if (!this.input.sqlite.inTransaction || !active || active.phase !== 'applied'
@@ -579,26 +579,26 @@ implements SQLiteEffectDomainAdapter {
     this.#expectedIdentity = receipt.identity;
   }
 
-  afterReceiptChildInserted(receiptId: string, contribution: unknown): void {
+  afterEffectContributionInserted(receiptId: string, contribution: unknown): void {
     const active = this.#active;
     if (!this.input.sqlite.inTransaction || !active || active.phase !== 'parent_linked'
         || !active.receipt || receiptId !== active.receipt.ref.id) {
-      throw new TypeError('intake_public_receipt_parent_missing');
+      throw new TypeError('intake_public_operation_log_missing');
     }
     const child = intakeMutationEvidenceChildSchema.parse(contribution);
-    const expected = active.contribution.receiptChildren[active.nextChild];
+    const expected = active.contribution.effectContributions[active.nextChild];
     if (!expected || canonicalJsonText(child) !== canonicalJsonText(expected)) {
       throw new TypeError('intake_public_evidence_order_mismatch');
     }
     this.#insertChild(receiptId, child);
     active.nextChild += 1;
-    if (active.nextChild === active.contribution.receiptChildren.length) {
+    if (active.nextChild === active.contribution.effectContributions.length) {
       if (active.plan.action === 'submit') this.#complete(active);
       active.phase = 'evidence_complete';
     }
   }
 
-  afterExecutionClaimReleased(identity: EffectOperationIdentity): void {
+  afterEffectApplicationCommitted(identity: EffectOperationIdentity): void {
     if (!this.input.sqlite.inTransaction) throw new TypeError('intake_public_transaction_required');
     const active = this.#active;
     if (!active) {
@@ -613,7 +613,7 @@ implements SQLiteEffectDomainAdapter {
         || !effectOperationIdentitiesEqual(identity, this.#expectedIdentity)) {
       throw new TypeError('intake_public_incomplete');
     }
-    active.phase = 'claim_released';
+    active.phase = 'invocation_released';
   }
 
   afterUnitOfWorkFinished(): void { this.#clearTransient(); }

@@ -16,7 +16,6 @@
   },
   "name": "@jooevents/release",
   "dependencies": {
-    "@jooevents/changesets": "workspace:*",
     "@jooevents/contracts": "workspace:*",
     "@jooevents/kernel": "workspace:*",
     "@jooevents/session": "workspace:*",

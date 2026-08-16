@@ -11,6 +11,7 @@
     "./field-registry": "./src/field-registry.ts",
     "./files": "./src/files.ts",
     "./live-build-identity": "./src/live-build-identity.ts",
+    "./operation-history": "./src/operation-history.ts",
     "./route-namespaces": "./src/route-namespaces.ts",
     "./reviewer-roster": "./src/reviewer-roster.ts",
     "./reviews": "./src/reviews.ts",

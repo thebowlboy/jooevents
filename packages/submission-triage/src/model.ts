@@ -135,7 +135,7 @@ export interface SubmissionTriagePlannedTransition {
 
 export interface SubmissionTriageTransitionPlan {
   readonly schemaVersion: 1;
-  readonly action: SubmissionTriageAction | 'restore_exact';
+  readonly action: SubmissionTriageAction;
   readonly scope: SubmissionTriageScope;
   readonly attribution: SubmissionTriageAttribution;
   readonly queryGuard: {
@@ -150,13 +150,6 @@ export interface SubmissionTriageTransitionResult {
   readonly action: SubmissionTriageTransitionPlan['action'];
   readonly queryGuard: SubmissionTriageQueryGuardDto;
   readonly submissionIds: readonly string[];
-}
-
-export interface SubmissionTriageExactRestoreTarget {
-  readonly submissionId: string;
-  readonly expectedCurrentVersion: number;
-  readonly state: SubmissionTriageState;
-  readonly setAsideAttribution: SubmissionTriageAttribution | null;
 }
 
 function compareCanonicalText(left: string, right: string): number {
@@ -486,7 +479,6 @@ function planWithTargets(input: {
   readonly targets: readonly {
     readonly submissionId: string;
     readonly expectedCurrentVersion: number;
-    readonly restore?: Pick<SubmissionTriageHeadDto, 'state' | 'setAsideAttribution'>;
   }[];
 }): SubmissionTriageTransitionPlan {
   const state = parseSubmissionTriageState(input.state);
@@ -505,20 +497,12 @@ function planWithTargets(input: {
     if (entry.head.version !== target.expectedCurrentVersion) {
       throw new SubmissionTriageDomainError('stale_submission');
     }
-    const after = input.action === 'restore_exact'
-      ? submissionTriageHeadSchema.parse({
-          ...entry.head,
-          version: entry.head.version + 1,
-          state: target.restore?.state,
-          setAsideAttribution: target.restore?.setAsideAttribution,
-          updatedAt: input.changedAt
-        })
-      : nextHead({
-          action: input.action,
-          before: entry.head,
-          attribution,
-          changedAt: input.changedAt
-        });
+    const after = nextHead({
+      action: input.action,
+      before: entry.head,
+      attribution,
+      changedAt: input.changedAt
+    });
     afterById.set(target.submissionId, after);
     return deepFreeze({
       submissionId: target.submissionId,
@@ -580,58 +564,8 @@ export function planSubmissionTriageTransition(input: {
   });
 }
 
-export function planSubmissionTriageExactRestore(input: {
-  readonly state: SubmissionTriageStateSnapshot;
-  readonly targets: readonly SubmissionTriageExactRestoreTarget[];
-  readonly attribution: SubmissionTriageAttribution;
-  readonly changedAt: string;
-}): SubmissionTriageTransitionPlan {
-  return planWithTargets({
-    state: input.state,
-    action: 'restore_exact',
-    attribution: input.attribution,
-    changedAt: input.changedAt,
-    targets: input.targets.map((target) => ({
-      submissionId: target.submissionId,
-      expectedCurrentVersion: target.expectedCurrentVersion,
-      restore: {
-        state: target.state,
-        setAsideAttribution: target.setAsideAttribution
-      }
-    }))
-  });
-}
-
 export function submissionTriagePlanDigest(plan: SubmissionTriageTransitionPlan): string {
   return digest(plan);
-}
-
-export function submissionTriageSafeDiff(plan: SubmissionTriageTransitionPlan) {
-  return deepFreeze({
-    schemaVersion: 1 as const,
-    action: plan.action,
-    queryGuard: plan.queryGuard,
-    transitions: plan.transitions.map((transition) => ({
-      submissionId: transition.submissionId,
-      arrivalClassification: transition.arrivalClassification,
-      beforeVisibleTray: transition.beforeVisibleTray,
-      afterVisibleTray: transition.afterVisibleTray,
-      before: {
-        submissionId: transition.before.submissionId,
-        version: transition.before.version,
-        state: transition.before.state,
-        setAsideAttribution: transition.before.setAsideAttribution,
-        updatedAt: transition.before.updatedAt
-      },
-      after: {
-        submissionId: transition.after.submissionId,
-        version: transition.after.version,
-        state: transition.after.state,
-        setAsideAttribution: transition.after.setAsideAttribution,
-        updatedAt: transition.after.updatedAt
-      }
-    }))
-  });
 }
 
 export function validateSubmissionTriagePlan(

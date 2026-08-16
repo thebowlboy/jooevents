@@ -5,7 +5,6 @@ import type {
   SynchronousClassifiedPayloadBinding,
   SynchronousClassifiedPayloadStore
 } from '@jooevents/application/synchronous-classified-payload-store';
-import type { ChangesetCommitTerminalReceipt } from '@jooevents/changeset-operations';
 import {
   DECISION_NOTIFICATION_PURPOSE_KEY,
   buildCommunicationMessageRelease,
@@ -37,7 +36,7 @@ import type {
   SQLiteCommunicationMessageReleaseStore
 } from '@jooevents/persistence/message-releases';
 import {
-  commitSendMessagesChangeset,
+  commitSendMessagesRelease,
   type CommitSendMessagesOutcome
 } from '@jooevents/persistence/message-release-effect-domain';
 import { z } from 'zod';
@@ -47,16 +46,13 @@ import { z } from 'zod';
  * repository, release store, and outbound-delivery ledger schema.
  *
  * This is deliberately a server-internal composition seam, not an operation
- * module: the send commit rides `commitSendMessagesChangeset`, whose terminal
- * receipt must be a `changeset.commit` receipt row verified through the
- * ordinary changeset lifecycle store, and whose internal
- * draft -> propose -> validate -> commit ceremony (recorder default BLOCKED-3)
- * runs in one transaction. The J-WEB-2 (P8) HTTP mounting consumes exactly
- * this seam; every call requires explicit operator attribution taken from a
- * real operation receipt so the derived ceremony receipt stays auditable.
+ * module. The owner-native release commit and delivery registrations run in
+ * one transaction. The J-WEB-2 (P8) HTTP mounting consumes exactly this seam;
+ * every call requires explicit operator attribution from the invoking
+ * operation so the release remains auditable.
  */
 
-/** Explicit operator attribution for the derived `changeset.commit` receipt. */
+/** Explicit operator attribution for the owner-native release commit. */
 export interface CommunicationSendAttribution {
   readonly scopePartitionKey: string;
   readonly authorityPrincipalKey: string;
@@ -83,8 +79,7 @@ export interface SendDecisionMessagesInput {
 export type SendDecisionMessagesOutcome =
   | {
       readonly kind: 'committed';
-      readonly changesetId: string;
-      readonly commitReceiptId: string;
+      readonly releaseCommitId: string;
       readonly result: {
         readonly batchId: string;
         readonly dispatchGeneration: 1;
@@ -389,7 +384,7 @@ export function materializeDecisionSendBatch(input: {
   return Object.freeze({ materialized: Object.freeze(materialized), specs: Object.freeze(specs) });
 }
 
-/** The reviewed batch as the send changeset's author input. */
+/** The reviewed batch as the owner-native release commit input. */
 export function buildDecisionSendAuthorInput(input: {
   readonly scope: { readonly workspaceId: string; readonly eventId: string };
   readonly snapshot: AdoptedDecisionSnapshot;
@@ -435,97 +430,6 @@ export function decisionSendRequestHash(input: {
     batchId: input.batchId
   });
 }
-
-/**
- * Derives the ceremony's `changeset.commit` terminal receipt from real
- * operator attribution and records it in the foundation receipts table inside
- * the caller's open transaction; the ordinary lifecycle store then verifies it
- * before the commit link is written.
- */
-export function createDerivedCommitReceiptFactory(input: {
-  readonly sqlite: Database;
-  readonly scopePartitionKey: string;
-  readonly authorityPrincipalKey: string;
-  readonly requestHashSha256: string;
-}): (binding: {
-  readonly changesetId: string;
-  readonly expectedHeadVersion: number;
-  readonly committedHeadVersion: number;
-  readonly revisionId: string;
-  readonly revisionDigest: string;
-}) => ChangesetCommitTerminalReceipt {
-  return (binding) => {
-    const receiptId = crypto.randomUUID();
-    const receiptRef = {
-      id: receiptId,
-      operationName: 'changeset.commit',
-      operationVersion: 1
-    } as const;
-    const value: ChangesetCommitTerminalReceipt = {
-      ref: receiptRef,
-      identity: {
-        scopePartitionKey: input.scopePartitionKey,
-        authorityPrincipalKey: input.authorityPrincipalKey,
-        operationName: 'changeset.commit',
-        operationVersion: 1,
-        surface: 'operator_http',
-        idempotencyVerifierProfile: { key: 'changeset.commit.derived', version: 1 },
-        idempotencyKeyVerifier: digest({ receiptId, changesetId: binding.changesetId })
-      },
-      requestHash: input.requestHashSha256,
-      result: {
-        kind: 'success',
-        data: {
-          schemaVersion: 1,
-          action: 'commit',
-          changesetId: binding.changesetId,
-          expectedHeadVersion: binding.expectedHeadVersion,
-          committedHeadVersion: binding.committedHeadVersion,
-          revisionId: binding.revisionId,
-          revisionDigest: binding.revisionDigest
-        },
-        receipt: receiptRef,
-        correlationId: crypto.randomUUID()
-      }
-    };
-    input.sqlite.query(`
-      INSERT INTO foundation_trial_operation_receipts (
-        id, scope_partition_key, authority_principal_key, operation_name,
-        operation_version, surface, idempotency_verifier_profile_key,
-        idempotency_verifier_profile_version, idempotency_key_verifier,
-        request_hash, result_json
-      ) VALUES (?, ?, ?, 'changeset.commit', 1, 'operator_http',
-                'changeset.commit.derived', 1, ?, ?, ?)
-    `).run(
-      receiptId,
-      input.scopePartitionKey,
-      input.authorityPrincipalKey,
-      value.identity.idempotencyKeyVerifier,
-      input.requestHashSha256,
-      canonicalJsonText(value.result)
-    );
-    return value;
-  };
-}
-
-/**
- * Router adapter for the `communication_release` changeset owner. Send
- * changesets are born committed inside the one send-lane transaction, and the
- * operator policy catalog deliberately carries no `domain_subject` mapping for
- * this owner, so shared `changeset.*` effect operations addressed at a send
- * changeset deny typed at the authority boundary before any dispatch reaches
- * this adapter. Reaching it therefore indicates a composition fault, which
- * must abort the unit of work loudly rather than fabricate lifecycle writes.
- */
-export const communicationReleaseLifecycleInertAdapter = Object.freeze({
-  openHandlerSnapshot(): never {
-    throw new TypeError('communication_release_lifecycle_not_operator_addressable');
-  },
-  applyDomainContribution(): never {
-    throw new TypeError('communication_release_lifecycle_not_operator_addressable');
-  }
-});
-
 export function createCommunicationSendLane(input: {
   readonly sqlite: Database;
   readonly workspaceId: string;
@@ -639,31 +543,19 @@ export function createCommunicationSendLane(input: {
         audienceLabel: request.audienceLabel,
         now
       });
-      const requestHashSha256 = decisionSendRequestHash({
-        scope,
-        audienceSpecId: request.audienceSpecId,
-        batchId: request.batchId
-      });
-
       const outcome = ((): CommitSendMessagesOutcome => {
         let began = false;
         try {
           input.sqlite.exec('BEGIN IMMEDIATE;');
           began = true;
-          const committed = commitSendMessagesChangeset({
+          const committed = commitSendMessagesRelease({
             sqlite: input.sqlite,
             releases: input.releases,
             // The live currency authority is the composed preview repository
             // itself (Track B repair): a re-decide between adoption and this
             // commit refuses typed, never a mirror comparison.
             previewCurrency: input.previewRepository,
-            ids: {
-              newChangesetId: () => crypto.randomUUID(),
-              newRevisionId: () => crypto.randomUUID(),
-              newApprovalId: () => crypto.randomUUID(),
-              newCorrectionAttemptId: () => crypto.randomUUID(),
-              newEvidenceId: () => crypto.randomUUID()
-            },
+            ids: { newEvidenceId: () => crypto.randomUUID() },
             context: {
               workspaceId: scope.workspaceId,
               eventId: scope.eventId,
@@ -672,23 +564,7 @@ export function createCommunicationSendLane(input: {
               evaluatedAt: now
             },
             authorInput,
-            materializedReleases: batch.materialized,
-            receiptExpectation: {
-              surface: 'operator_http',
-              scopePartitionKey: request.attribution.scopePartitionKey,
-              requestHashSha256
-            },
-            // Derives the ceremony's `changeset.commit` terminal receipt from
-            // the caller's real operator attribution and records it in the
-            // foundation receipts table inside this same transaction; the
-            // ordinary lifecycle store then verifies it before the commit
-            // link is written.
-            terminalReceipt: createDerivedCommitReceiptFactory({
-              sqlite: input.sqlite,
-              scopePartitionKey: request.attribution.scopePartitionKey,
-              authorityPrincipalKey: request.attribution.authorityPrincipalKey,
-              requestHashSha256
-            })
+            materializedReleases: batch.materialized
           });
           if (committed.kind === 'committed') {
             input.sqlite.exec('COMMIT;');
@@ -710,8 +586,7 @@ export function createCommunicationSendLane(input: {
       }
       return Object.freeze({
         kind: 'committed',
-        changesetId: outcome.record.head.id,
-        commitReceiptId: outcome.link.commitReceiptId,
+        releaseCommitId: outcome.releaseCommitId,
         result: outcome.result
       });
     }

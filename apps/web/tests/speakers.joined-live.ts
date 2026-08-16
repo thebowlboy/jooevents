@@ -5,7 +5,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
  * it: accepting a submission on the tuned Decisions surface seeds that
  * speaker's `invited` engagement in the same commit, the live Speakers roster
  * serves it (name, disclosed address, session, state), `record_confirmation`
- * commits through `engagement.change.draft` + the changeset lifecycle with
+ * commits through `engagement.change@1` with
  * organizer attribution on the committed head, and a lineup mutation surfaces
  * its typed BLOCKED-13 refusal instead of pretending a lineup owner exists.
  *

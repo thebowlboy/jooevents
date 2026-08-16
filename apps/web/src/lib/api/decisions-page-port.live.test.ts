@@ -38,6 +38,7 @@ function decidedHead(submissionId: string) {
 function fakeDecisions(input: {
 	readonly heads?: readonly DecisionStateRowDto[];
 	readonly decided?: unknown[];
+	readonly keys?: string[];
 	readonly result?: DecisionsLiveDecideResult;
 }): DecisionsLiveClient {
 	return {
@@ -53,18 +54,17 @@ function fakeDecisions(input: {
 				correlationId
 			};
 		},
-		async decide(decideInput) {
+		async decide(decideInput, idempotencyKey) {
 			input.decided?.push(decideInput);
+			input.keys?.push(idempotencyKey);
 			return input.result ?? {
 				kind: 'success',
 				data: {
-					changesetId: id(60),
-					revisionId: id(61),
-					revisionDigest: digest('b'),
-					committedHeadVersion: 2,
-					safeDiff: { action: 'decide', rows: [] } as never
+					action: 'decide',
+					rows: [],
+					sessions: []
 				},
-				receipt: { id: id(62), operationName: 'changeset.commit', operationVersion: 1 },
+				receipt: { id: id(62), operationName: 'decision.decide', operationVersion: 1 },
 				correlationId
 			};
 		}
@@ -87,13 +87,13 @@ function reviewCore(snapshot: Partial<ReviewSnapshotView> = {}): ReviewCorePort 
 		async readRoundSetup() {
 			throw new Error('unexpected round setup read');
 		},
-		async draftRoundChange() {
+		async changeRound() {
 			throw new Error('unexpected draft');
 		},
-		async draftStepBack() {
+		async stepBack() {
 			throw new Error('unexpected draft');
 		},
-		async draftEvaluationChange() {
+		async changeEvaluation() {
 			throw new Error('unexpected draft');
 		},
 		async saveEvaluationDraft() {
@@ -365,7 +365,6 @@ function fakeCommunications(overrides: Partial<CommunicationsInput> = {}): {
 				data: {
 					schemaVersion: 1,
 					batchId: parsed.batchId,
-					changesetId: id(97),
 					dispatchGeneration: 1,
 					releaseCount: 1,
 					deliveryCount: 1
@@ -435,10 +434,11 @@ function composePort(overrides: Partial<Parameters<typeof createLiveDecisionsPag
 describe('live tuned Decisions page port', () => {
 	test('decides with per-row guards read fresh from the Decision spine', async () => {
 		const decided: unknown[] = [];
+		const keys: string[] = [];
 		const port = composePort({
 			decisions: fakeDecisions({
 				heads: [{ submissionId: id(22), head: decidedHead(id(22)), origin: null }],
-				decided
+				decided, keys
 			})
 		});
 		await port.decisions.decide([id(21), id(22)], 'accepted');
@@ -459,6 +459,7 @@ describe('live tuned Decisions page port', () => {
 				}
 			]
 		}]);
+		expect(keys).toEqual(['je.test.decisions.key']);
 	});
 
 	test('carries an explicit track into accept-spawn graduation', async () => {
@@ -482,7 +483,7 @@ describe('live tuned Decisions page port', () => {
 		const port = composePort({ decisions: fakeDecisions({ decided }) });
 		await expect(port.decisions.decide([id(21)], 'undecided')).rejects.toMatchObject({
 			name: 'DecisionsPageLiveError',
-			code: 'decision_undo_to_undecided'
+			code: 'decision_undecided_unavailable'
 		});
 		await expect(port.decisions.decide([id(21)], 'withdrawn')).rejects.toMatchObject({
 			code: 'decision_withdrawn_authoring'

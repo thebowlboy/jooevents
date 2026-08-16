@@ -12,6 +12,7 @@
 	import SpeakersPage from '$lib/features/speakers/SpeakersPage.svelte';
 	import SubmissionsPage from '$lib/features/submissions/SubmissionsPage.svelte';
 	import TasksPage from '$lib/features/tasks/TasksPage.svelte';
+	import AgentActionsPage from '$lib/features/agent-actions/AgentActionsPage.svelte';
 	import TemplatesPage from '$lib/features/templates/TemplatesPage.svelte';
 	import OverviewDashboard from '$lib/features/workspace/components/OverviewDashboard.svelte';
 	import PulseDashboard from '$lib/features/workspace/components/PulseDashboard.svelte';
@@ -31,6 +32,7 @@
 	import { createSampleTemplatesPagePort } from '../templates-page-port.sample';
 	import { createSampleSettingsPagePort } from '../settings-page-port';
 	import { createSampleSubmissionsPagePort } from '../submissions-page-port.sample';
+	import { createSampleAgentActionsPagePort } from '../agent-actions-page-port.sample';
 	import { settingsSectionOf, type OperatorPageId } from './operator-pages';
 
 	let { area }: { readonly area: OperatorPageId } = $props();
@@ -50,6 +52,7 @@
 	const settings = createSampleSettingsPagePort(api);
 	const submissions = createSampleSubmissionsPagePort(api);
 	const files = createSampleFilesPagePort();
+	const agentActions = createSampleAgentActionsPagePort();
 </script>
 
 {#if area === 'overview'}
@@ -82,6 +85,8 @@
 	<TemplatesPage port={templates} />
 {:else if area === 'embeds'}
 	<EmbedsPage port={embeds} />
+{:else if area === 'approvals'}
+	<AgentActionsPage port={agentActions} />
 {:else}
 	<SettingsPage port={settings} section={settingsSectionOf(area)} />
 {/if}

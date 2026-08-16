@@ -1,3 +1,4 @@
+import { canonicalJsonSha256 } from '@jooevents/kernel';
 import {
   submissionTriageSourceRowSchema,
   type SubmissionTriageSourceRowDto
@@ -7,7 +8,7 @@ import type {
   ReviewCandidateSnapshotDto,
   ReviewScopeDto
 } from '@jooevents/contracts/reviews';
-import { canonicalJsonSha256 } from '@jooevents/changesets';
+
 import {
   compareCandidates,
   parseReviewCandidate,

@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   eventCreatePlanDigest,
-  eventCreateResult,
   planEventCreation,
   type EventCreatePlan
 } from '@jooevents/event';
@@ -31,7 +30,6 @@ const version1 = parseAggregateVersion(1);
 const version2 = parseAggregateVersion(2);
 const createdAt = '2026-08-12T08:30:00.000Z';
 const evaluatedAt = parseInstant(createdAt);
-const receiptId = '019c1df7-86b5-769b-bba4-5f7097bfa311';
 const createOperation = Object.freeze({ name: 'event.create', version: 1 });
 
 function openDatabase(): Database {
@@ -102,36 +100,6 @@ function plan(repository: SQLiteEventSpineRepository, id = eventId): EventCreate
       createdAt
     }
   });
-}
-
-function insertReceiptParent(
-  sqlite: Database,
-  sourcePlan: EventCreatePlan,
-  id = receiptId
-): void {
-  const resultJson = JSON.stringify({
-    kind: 'success',
-    data: eventCreateResult(sourcePlan),
-    receipt: { id, operationName: 'event.create', operationVersion: 1 },
-    correlationId: '019c1df7-86b5-769b-bba4-5f7097bfa312'
-  });
-  sqlite.query(`
-    INSERT INTO foundation_trial_operation_receipts (
-      id, scope_partition_key, authority_principal_key, operation_name,
-      operation_version, surface, idempotency_verifier_profile_key,
-      idempotency_verifier_profile_version, idempotency_key_verifier,
-      request_hash, result_json
-    ) VALUES (?, ?, ?, ?, 1, 'operator_http', ?, 1, ?, ?, ?)
-  `).run(
-    id,
-    'a'.repeat(64),
-    'event-test-principal',
-    'event.create',
-    'event-test.idempotency',
-    'b'.repeat(64),
-    'c'.repeat(64),
-    resultJson
-  );
 }
 
 describe('ephemeral SQLite Event spine', () => {
@@ -400,174 +368,6 @@ describe('ephemeral SQLite Event spine', () => {
           `event-spine-set:${workspaceId}`
         ]
       });
-    } finally {
-      sqlite.close();
-    }
-  });
-
-  test('retains and reconstructs the complete immutable source create plan', () => {
-    const sqlite = openDatabase();
-    const repository = bootstrap(sqlite);
-    try {
-      const sourcePlan = plan(repository);
-      sqlite.exec('BEGIN IMMEDIATE;');
-      repository.commitEventCreatePlan(sourcePlan);
-      insertReceiptParent(sqlite, sourcePlan);
-      repository.linkEventCreateReceipt({ receiptId, plan: sourcePlan, operation: createOperation });
-      sqlite.exec('COMMIT;');
-
-      expect(repository.readEventCreatePlan(receiptId)).toEqual(sourcePlan);
-      expect(() => sqlite.query(`
-        UPDATE event_spine_create_plans SET plan_digest_sha256 = ? WHERE receipt_id = ?
-      `).run('f'.repeat(64), receiptId)).toThrow('event create plans are immutable');
-      expect(() => sqlite.query(`
-        DELETE FROM event_spine_create_plans WHERE receipt_id = ?
-      `).run(receiptId)).toThrow('event create plans are immutable');
-    } finally {
-      sqlite.close();
-    }
-
-    const corruptDatabase = openDatabase();
-    const corruptRepository = bootstrap(corruptDatabase);
-    try {
-      const sourcePlan = plan(corruptRepository);
-      corruptDatabase.exec('BEGIN IMMEDIATE;');
-      corruptRepository.commitEventCreatePlan(sourcePlan);
-      insertReceiptParent(corruptDatabase, sourcePlan);
-      corruptDatabase.query(`
-        INSERT INTO event_spine_create_links (receipt_id, workspace_id, event_id)
-        VALUES (?, ?, ?)
-      `).run(receiptId, workspaceId, eventId);
-      corruptDatabase.query(`
-        INSERT INTO event_spine_create_plans (
-          receipt_id, workspace_id, event_id, plan_digest_sha256, plan_json
-        ) VALUES (?, ?, ?, ?, ?)
-      `).run(
-        receiptId,
-        workspaceId,
-        eventId,
-        eventCreatePlanDigest(sourcePlan),
-        ` ${canonicalJsonText(sourcePlan)}`
-      );
-      corruptDatabase.exec('COMMIT;');
-      expect(() => corruptRepository.readEventCreatePlan(receiptId))
-        .toThrow('source_plan_corrupt');
-    } finally {
-      corruptDatabase.close();
-    }
-  });
-
-  test('rejects receipt evidence whose coherent source plan differs from the applied head', () => {
-    const sqlite = openDatabase();
-    const repository = bootstrap(sqlite);
-    try {
-      const appliedPlan = plan(repository);
-      const differentPlan = planEventCreation({
-        eventSet: repository.requireEventSet(workspaceId),
-        authorInput: {
-          expectedEventSetVersion: 1,
-          name: 'Different evidence',
-          timezone: 'Asia/Singapore',
-          startDate: '2026-11-04',
-          endDate: '2026-11-06'
-        },
-        server: {
-          workspaceId,
-          eventId,
-          createdByUserId: userId,
-          createdAt
-        }
-      });
-      sqlite.exec('BEGIN IMMEDIATE;');
-      repository.commitEventCreatePlan(appliedPlan);
-      insertReceiptParent(sqlite, differentPlan);
-      expect(() => repository.linkEventCreateReceipt({
-        receiptId,
-        plan: differentPlan,
-        operation: createOperation
-      }))
-        .toThrow('source_plan_corrupt');
-      sqlite.exec('ROLLBACK;');
-      expect(sqlite.query<{ readonly count: number }, []>(
-        'SELECT count(*) AS count FROM event_spine_create_plans'
-      ).get()?.count).toBe(0);
-    } finally {
-      sqlite.close();
-    }
-  });
-
-  test('rejects a matching Event result owned by another operation identity', () => {
-    const sqlite = openDatabase();
-    const repository = bootstrap(sqlite);
-    try {
-      const sourcePlan = plan(repository);
-      sqlite.exec('BEGIN IMMEDIATE;');
-      repository.commitEventCreatePlan(sourcePlan);
-      insertReceiptParent(sqlite, sourcePlan);
-      expect(() => repository.linkEventCreateReceipt({
-        receiptId,
-        plan: sourcePlan,
-        operation: { name: 'another.event.create', version: 1 }
-      })).toThrow('source_plan_corrupt');
-      sqlite.exec('ROLLBACK;');
-    } finally {
-      sqlite.close();
-    }
-  });
-
-  test('rejects a timeline whose fact belongs to another workspace/event', () => {
-    const sqlite = openDatabase();
-    const repository = bootstrap(sqlite);
-    try {
-      bootstrap(sqlite, otherWorkspaceId);
-      const primaryPlan = plan(repository);
-      const otherPlan = planEventCreation({
-        eventSet: repository.requireEventSet(otherWorkspaceId),
-        authorInput: {
-          expectedEventSetVersion: 1,
-          name: 'Other event',
-          timezone: 'UTC',
-          startDate: '2026-11-04',
-          endDate: '2026-11-06'
-        },
-        server: {
-          workspaceId: otherWorkspaceId,
-          eventId: otherEventId,
-          createdByUserId: userId,
-          createdAt
-        }
-      });
-      sqlite.exec('BEGIN IMMEDIATE;');
-      repository.commitEventCreatePlan(primaryPlan);
-      const otherRepository = new SQLiteEventSpineRepository(sqlite);
-      otherRepository.commitEventCreatePlan(otherPlan);
-      insertReceiptParent(sqlite, primaryPlan);
-      repository.linkEventCreateReceipt({
-        receiptId,
-        plan: primaryPlan,
-        operation: createOperation
-      });
-      const factId = '019c1df7-86b5-769b-bba4-5f7097bfa411';
-      sqlite.query(`
-        INSERT INTO event_spine_domain_facts (
-          fact_id, receipt_id, workspace_id, event_id,
-          fact_kind, fact_version, payload_json
-        ) VALUES (?, ?, ?, ?, 'event_created', 1, '{}')
-      `).run(factId, receiptId, workspaceId, eventId);
-      expect(() => sqlite.query(`
-        INSERT INTO event_spine_timeline_projection (
-          timeline_id, receipt_id, fact_id, workspace_id,
-          event_id, occurred_at_ms, source_kind
-        ) VALUES (?, ?, ?, ?, ?, ?, 'domain_fact')
-      `).run(
-        '019c1df7-86b5-769b-bba4-5f7097bfa511',
-        receiptId,
-        factId,
-        otherWorkspaceId,
-        otherEventId,
-        Date.parse(createdAt)
-      )).toThrow('FOREIGN KEY constraint failed');
-      sqlite.exec('ROLLBACK;');
     } finally {
       sqlite.close();
     }

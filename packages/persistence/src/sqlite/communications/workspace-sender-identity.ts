@@ -18,7 +18,8 @@ import { parseInstant, parseWorkspaceId, type WorkspaceId } from '@jooevents/ker
  * row reaching them by any other path — a repair script, a restore, a future
  * writer — must still be structurally incapable of carrying CR or LF.
  *
- * Additive disposable schema. It is intentionally not a retained migration.
+ * This schema contributes to the accepted epoch-2 baseline and may also serve
+ * isolated fixtures.
  */
 export const SQLITE_WORKSPACE_SENDER_IDENTITY_SQL = `
 CREATE TABLE workspace_mail_sender_identity (

@@ -5,25 +5,25 @@ import type {
 } from '@jooevents/application';
 import type { FieldRegistryDraftAction, VersionedDefinitionRef } from '@jooevents/contracts';
 
-export interface FieldRegistryDraftPreparedContribution {
+export interface FieldRegistryDirectPreparedContribution {
   readonly result: unknown;
   readonly domain: unknown;
-  readonly receiptChildren: readonly unknown[];
+  readonly effectContributions: readonly unknown[];
 }
 
 /** Transaction-owned preparation; trusted scope, identities, actor, and time stay server-side. */
-export interface FieldRegistryDraftPreparation {
+export interface FieldRegistryDirectPreparation {
   prepare(input: {
     readonly action: FieldRegistryDraftAction;
     readonly businessInput: unknown;
     readonly context: EffectInvocationContext;
-  }): FieldRegistryDraftPreparedContribution;
+  }): FieldRegistryDirectPreparedContribution;
 }
 
 interface SealedPreparation {
   readonly capability: VersionedDefinitionRef;
   readonly context: EffectInvocationContext;
-  readonly prepare: FieldRegistryDraftPreparation['prepare'];
+  readonly prepare: FieldRegistryDirectPreparation['prepare'];
   phase: 'ready' | 'preparing' | 'spent';
 }
 
@@ -33,16 +33,16 @@ function sameReference(left: VersionedDefinitionRef, right: VersionedDefinitionR
   return left.key === right.key && left.version === right.version;
 }
 
-export function sealFieldRegistryDraftPreparation(input: {
+export function sealFieldRegistryDirectPreparation(input: {
   readonly capability: VersionedDefinitionRef;
   readonly context: EffectInvocationContext;
-  readonly preparation: FieldRegistryDraftPreparation;
+  readonly preparation: FieldRegistryDirectPreparation;
 }): EffectHandlerSnapshot {
   if (typeof input.preparation.prepare !== 'function'
       || input.preparation.prepare.constructor.name === 'AsyncFunction') {
-    throw new TypeError('field_registry_draft_preparation_invalid');
+    throw new TypeError('field_registry_direct_preparation_invalid');
   }
-  const snapshot = Object.freeze({ strategy: 'field_registry_changeset_draft', version: 1 });
+  const snapshot = Object.freeze({ strategy: 'field_registry_direct', version: 1 });
   sealedPreparations.set(snapshot, {
     capability: Object.freeze({ ...input.capability }),
     context: input.context,
@@ -52,7 +52,7 @@ export function sealFieldRegistryDraftPreparation(input: {
   return snapshot;
 }
 
-export function createFieldRegistryDraftHandler(input: {
+export function createFieldRegistryDirectHandler(input: {
   readonly reference: VersionedDefinitionRef;
   readonly handlerCapability: VersionedDefinitionRef;
   readonly contributionSchema: EffectHandlerRegistration['contributionSchema'];
@@ -65,7 +65,7 @@ export function createFieldRegistryDraftHandler(input: {
   const capability = Object.freeze({ ...input.handlerCapability });
   return Object.freeze({
     reference: Object.freeze({ ...input.reference }),
-    effect: 'draft' as const,
+    effect: 'commit' as const,
     handlerCapability: capability,
     contributionSchema: Object.freeze({ ...input.contributionSchema }),
     canonicalResultSchema: Object.freeze({ ...input.canonicalResultSchema }),
@@ -78,19 +78,19 @@ export function createFieldRegistryDraftHandler(input: {
           || sealed.context !== context
           || sealed.phase !== 'ready'
           || action === undefined) {
-        throw new TypeError('invalid_field_registry_draft_preparation');
+        throw new TypeError('invalid_field_registry_direct_preparation');
       }
       sealed.phase = 'preparing';
       try {
         const contribution = sealed.prepare({ action, businessInput, context });
         if (contribution && typeof (contribution as { readonly then?: unknown }).then === 'function') {
-          throw new TypeError('field_registry_draft_preparation_must_be_synchronous');
+          throw new TypeError('field_registry_direct_preparation_must_be_synchronous');
         }
         sealed.phase = 'spent';
         return {
           result: contribution.result,
           domain: contribution.domain,
-          receiptChildren: [...contribution.receiptChildren]
+          effectContributions: [...contribution.effectContributions]
         };
       } catch (error) {
         sealed.phase = 'spent';

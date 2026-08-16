@@ -4,6 +4,7 @@ export * from './reconciliation';
 export * from './operations';
 export * from './classified-payloads';
 export * from './autonomy';
+export * from './agent-action-runs';
 export * from './operator-authority';
 export * from './workspace-team-operations';
 export * from './communications-provider-operations';

@@ -11,7 +11,6 @@ import {
 import { parseOperationAccessLane } from '@jooevents/identity-access';
 import {
   createSQLiteEventSpineOperatorEventRelationshipSource,
-  installEventSpineSchema,
   openSQLite,
   SQLiteOperatorAuthorityTransactionError,
   type OpenSQLiteResult
@@ -160,7 +159,6 @@ describe('SQLite operator authority server composition', () => {
 
   test('revalidates a server-owned Event scope through the same outer and transaction handle', async () => {
     const db = fixture();
-    installEventSpineSchema(db.sqlite);
     db.sqlite.query(`
       insert into permission_overrides (
         id, user_id, permission_id, effect, workspace_id, scope_kind,

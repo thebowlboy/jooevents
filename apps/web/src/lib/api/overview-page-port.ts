@@ -13,13 +13,27 @@ export type OverviewPageSource =
 
 export type OverviewSectionAvailability =
 	| { readonly kind: 'available' }
+	/**
+	 * The prerequisite this region runs on is *provably* unmet on this event —
+	 * a fact about the event, not an absence of wiring. `condition` is the one
+	 * sentence naming what turns it on, and it may only be claimed where the
+	 * projection can prove the prerequisite unmet.
+	 */
+	| { readonly kind: 'locked'; readonly condition: string }
+	/** No measurement exists, or the projection declines to answer. */
 	| { readonly kind: 'unavailable'; readonly message: string };
 
 export interface OverviewPipelineStage extends Omit<PipelineStage, 'state'> {
+	/**
+	 * Only meaningful while `availability.kind === 'available'`. Locked and
+	 * unavailable lanes carry `'unavailable'` as the no-health-claim value, so
+	 * every consumer must branch on `availability` before reading `state`.
+	 */
 	readonly state: PipelineStage['state'] | 'unavailable';
 	/**
 	 * An unavailable lane preserves orientation without claiming that an area
-	 * capability is evidence of event-stage progress.
+	 * capability is evidence of event-stage progress; a locked lane states the
+	 * event fact that has not happened yet.
 	 */
 	readonly availability: OverviewSectionAvailability;
 }

@@ -127,6 +127,13 @@ function idempotencyKey(action: string): string {
 	return `je.template.${action}.${globalThis.crypto.randomUUID()}`;
 }
 
+function mutationKeys(action: string): Readonly<{ draft: string; publish: string }> {
+	return Object.freeze({
+		draft: idempotencyKey(`${action}.draft`),
+		publish: idempotencyKey(`${action}.publish`)
+	});
+}
+
 /** Maps canonical artifacts and existing joined projections into the frozen tuned Templates port. */
 export function createLiveTemplatesPagePort(input: {
 	readonly artifacts: TemplateArtifactLiveClient;
@@ -169,7 +176,7 @@ export function createLiveTemplatesPagePort(input: {
 	): Promise<MutationOutcome> {
 		const snapshot = await current(id);
 		if (!snapshot) return { ok: false, reason: 'This template no longer exists.' };
-		const result = await input.artifacts.mutate(create(snapshot), idempotencyKey('change'));
+		const result = await input.artifacts.mutate(create(snapshot), mutationKeys('change'));
 		return result.kind === 'success' ? { ok: true } : { ok: false, reason: failure(result).reason };
 	}
 
@@ -273,7 +280,7 @@ export function createLiveTemplatesPagePort(input: {
 						controlHeight: theme.controlHeight
 					}, markText: theme.markText },
 					author: 'organizer', note: `Saved the event brand “${theme.name}”.`
-				}, idempotencyKey('theme'));
+				}, mutationKeys('theme'));
 				if (result.kind !== 'success') throw new TemplatesPageLiveError(failure(result));
 			}
 		}),

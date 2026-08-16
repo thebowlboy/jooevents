@@ -1,5 +1,4 @@
 import { describe, expect, test } from 'bun:test';
-import type { ChangesetPlanningSnapshot } from '@jooevents/changesets';
 import {
   applyFormMutationPlan,
   planFormCreation,
@@ -13,15 +12,6 @@ import {
   validateApplicationDirectEntryPlanAgainstForm,
   type ApplicationDirectEntryPlan
 } from './direct-entry';
-import {
-  createSubmissionDirectEntryChangesetBundle,
-  issueSubmissionDirectEntryChangesetPolicy,
-  submissionDirectEntryRecordDigest,
-  submissionDirectEntryReferenceReadPort,
-  submissionDirectEntrySafeDiff,
-  SUBMISSION_DIRECT_ENTRY_CHANGESET_KIND,
-  SUBMISSION_DIRECT_ENTRY_CHANGESET_VERSION
-} from './direct-entry-changesets';
 import type { ApplicationAnswerPayloadReferenceVerifier } from './submissions';
 import {
   fixtureAt,
@@ -256,92 +246,5 @@ describe('direct entry planner', () => {
       key: 'intake.form.availability_deadline',
       version: 1
     });
-  });
-});
-
-describe('direct entry changeset bundle', () => {
-  const policy = issueSubmissionDirectEntryChangesetPolicy({
-    key: 'submission.direct-entry.bounded',
-    version: 1,
-    approval: { create: 'none' }
-  });
-
-  function referenceSnapshot(input: {
-    readonly digest: string | undefined;
-    readonly references: number;
-  }): ChangesetPlanningSnapshot {
-    return Object.freeze({
-      getPort: <Port>(key: { readonly key: string }): Port => {
-        if ((key as unknown) !== submissionDirectEntryReferenceReadPort) {
-          throw new TypeError('unexpected_port');
-        }
-        return Object.freeze({
-          readCurrentEntryRecordDigest: () => input.digest,
-          countSubmissionReferences: () => input.references
-        }) as unknown as Port;
-      }
-    });
-  }
-
-  test('registers the create definition with a low-only risk envelope', () => {
-    const bundle = createSubmissionDirectEntryChangesetBundle({ policy });
-    const definition = bundle.registry.get(
-      SUBMISSION_DIRECT_ENTRY_CHANGESET_KIND,
-      SUBMISSION_DIRECT_ENTRY_CHANGESET_VERSION
-    );
-    expect(definition).toBeDefined();
-    expect(definition!.allowedRisks).toEqual(['low']);
-    expect(definition!.allowedFacts).toEqual([{ kind: 'submission_created', version: 1 }]);
-    expect(definition!.allowedEffects).toEqual([]);
-  });
-
-  test('safe diff exposes identities and pins, never governed answer text', () => {
-    const plan = planEntry();
-    const diff = submissionDirectEntrySafeDiff(plan);
-    expect(diff).toMatchObject({
-      schemaVersion: 1,
-      action: 'create',
-      submission: {
-        id: plan.submission.id,
-        source: 'direct_entry',
-        submittedAt
-      }
-    });
-    expect(diff.submission.answeredFieldIds).toEqual(
-      [...plan.entryEvidence.answers.map((answer) => answer.fieldId)].sort()
-    );
-    expect(JSON.stringify(diff)).not.toContain(fixtureId(0x900));
-    expect(JSON.stringify(diff)).not.toContain(fixtureId(0x901));
-  });
-
-  test('compensation is blocked with typed reasons: later change, referenced, triage route', async () => {
-    const bundle = createSubmissionDirectEntryChangesetBundle({ policy });
-    const definition = bundle.registry.get(
-      SUBMISSION_DIRECT_ENTRY_CHANGESET_KIND,
-      SUBMISSION_DIRECT_ENTRY_CHANGESET_VERSION
-    )!;
-    const plan = planEntry();
-    const currentDigest = submissionDirectEntryRecordDigest(plan);
-    expect(await definition.deriveCompensation(
-      plan, referenceSnapshot({ digest: undefined, references: 0 })
-    )).toEqual({ kind: 'blocked', reasonKey: 'submission.direct_entry.later_change' });
-    expect(await definition.deriveCompensation(
-      plan, referenceSnapshot({ digest: currentDigest, references: 2 })
-    )).toEqual({ kind: 'blocked', reasonKey: 'submission.direct_entry.referenced' });
-    expect(await definition.deriveCompensation(
-      plan, referenceSnapshot({ digest: currentDigest, references: 0 })
-    )).toEqual({ kind: 'blocked', reasonKey: 'submission.direct_entry.discard_via_triage' });
-  });
-
-  test('a policy that was not issued by the module is rejected', () => {
-    expect(() => createSubmissionDirectEntryChangesetBundle({
-      policy: {
-        activation: 'submission_direct_entry',
-        key: 'submission.direct-entry.bounded',
-        version: 1,
-        approval: { create: 'none' },
-        definitionDigestSha256: 'a'.repeat(64)
-      }
-    })).toThrow('invalid_submission_direct_entry_changeset_policy');
   });
 });

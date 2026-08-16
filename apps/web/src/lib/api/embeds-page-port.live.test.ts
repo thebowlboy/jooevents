@@ -8,7 +8,7 @@ import {
 import { sampleWorkspaceGateway } from './sample/gateway';
 import { createSampleTemplatesPagePort } from './templates-page-port.sample';
 import { createLiveEmbedsPagePort } from './embeds-page-port.live';
-import type { ReleaseLiveClient } from './operations/release-live';
+import type { ReleaseLiveClient, ReleaseMutationKeys } from './operations/release-live';
 import { createReleaseWorkspacePort } from './release-workspace-adapter';
 
 const id = (value: number) => `00000000-0000-4000-8000-${value.toString(16).padStart(12, '0')}`;
@@ -82,12 +82,14 @@ describe('live Embeds page adapter', () => {
 	test('catalogues only released facts and commits the surface-head allowlist', async () => {
 		let state = releaseState();
 		const mutations: ReleaseAuthorInput[] = [];
+		const mutationKeys: ReleaseMutationKeys[] = [];
 		const release: ReleaseLiveClient = {
 			async overview() {
 				return { kind: 'success', data: state, correlationId: 'overview-correlation' };
 			},
-			async mutate(input) {
+			async mutate(input, keys) {
 				mutations.push(input);
+				mutationKeys.push(keys);
 				if (input.action !== 'surface_allowlist') throw new Error('unexpected action');
 				const before = state.surfaceHeads.find((entry) => entry.kind === input.kind)!;
 				const after = {
@@ -103,10 +105,10 @@ describe('live Embeds page adapter', () => {
 				return {
 					kind: 'success',
 					data: {
+						mutation: { action: 'surface_allowlist', head: after },
 						safeDiff: releaseSafeDiffSchema.parse({
 							action: 'surface_allowlist', kind: input.kind, before, after
-						}),
-						committedHeadVersion: 1
+						})
 					},
 					correlationId: 'mutation-correlation'
 				};
@@ -130,6 +132,8 @@ describe('live Embeds page adapter', () => {
 			action: 'surface_allowlist', kind: 'speakers',
 			allowedFrameOrigins: ['https://host.example'], expectedSurfaceHeadVersion: 1
 		}]);
+		expect(mutationKeys).toHaveLength(1);
+		expect(mutationKeys[0]?.draft).not.toBe(mutationKeys[0]?.publish);
 		const refreshed = await port.embeds.targets();
 		expect(refreshed.find((entry) => entry.kind === 'speaker-roster')?.allowedOrigins)
 			.toEqual(['https://host.example']);

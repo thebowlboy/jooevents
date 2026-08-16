@@ -316,7 +316,7 @@ describe('portal operations live client — engagement respond', () => {
 	});
 
 	test('a receipt from another operation is refused', async () => {
-		const foreignReceipt = { ...receipt, operationName: 'engagement.change.draft' };
+		const foreignReceipt = { ...receipt, operationName: 'decision.decide' };
 		const { request } = stubRequester({
 			[PATHS.respond]: {
 				kind: 'success',

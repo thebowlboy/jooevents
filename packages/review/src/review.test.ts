@@ -33,7 +33,6 @@ import type {
 } from './model';
 import { projectReviewSnapshot } from './projections';
 import { parseApplicationId } from '@jooevents/kernel';
-import { planChangesetOperation } from '@jooevents/changesets';
 import {
   createEmptyDeadlineCatalog,
   type DeadlineEventTimeSource,
@@ -44,7 +43,6 @@ import type {
   DeadlineHeadDto,
   DeadlineScopeDto
 } from '@jooevents/contracts/deadlines';
-import { createReviewChangesetBundle } from './changesets';
 
 const id = (suffix: number) => parseApplicationId(
   'event',
@@ -256,39 +254,6 @@ describe('review core', () => {
       id: id(90), key: 'overall', label: 'Overall', position: 0,
       weightBps: 10_000, scaleMin: 1, scaleMax: 5
     }]);
-  });
-
-  test('registers consequential Review plans in the generic changeset loop', async () => {
-    const store = new MemoryReviewStore();
-    openRound(store);
-    const assignment = assignmentFor(store, reviewerGeneralist, candidateB);
-    const bundle = createReviewChangesetBundle();
-    const frozen = await planChangesetOperation({
-      registry: bundle.registry,
-      kind: 'review.core.mutate',
-      version: 1,
-      authorInput: {
-        action: 'step_back', scope, assignmentId: assignment.id,
-        expectedAssignmentVersion: assignment.version,
-        reviewerId: reviewerGeneralist,
-        attributedByUserId: actorUserId,
-        attributedAt: at(2)
-      },
-      dependencyGroup: 'review_assignment',
-      snapshot: { getPort: <Port>() => store as unknown as Port }
-    });
-    expect(frozen).toMatchObject({
-      kind: 'review.core.mutate',
-      version: 1,
-      riskTier: 'normal',
-      safeDiff: {
-        action: 'step_back',
-        assignmentId: assignment.id,
-        submissionId: candidateB
-      },
-      consequences: ['review_assignment_stepped_back']
-    });
-    expect(bundle.definition.allowedEffects).toEqual([]);
   });
 
   test('freezes round criteria, source guards, scoped assignments, and a safe diff', () => {

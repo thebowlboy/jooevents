@@ -5,24 +5,24 @@ import type {
 } from '@jooevents/application';
 import type { VersionedDefinitionRef } from '@jooevents/contracts';
 
-export interface DecisionDraftPreparedContribution {
+export interface DecisionDirectPreparedContribution {
   readonly result: unknown;
   readonly domain: unknown;
-  readonly receiptChildren: readonly unknown[];
+  readonly effectContributions: readonly unknown[];
 }
 
-/** Transaction-owned preparation for one inert decide changeset draft. */
-export interface DecisionDraftPreparation {
+/** Transaction-owned preparation for one direct decision mutation. */
+export interface DecisionDirectPreparation {
   prepare(input: {
     readonly businessInput: unknown;
     readonly context: EffectInvocationContext;
-  }): DecisionDraftPreparedContribution;
+  }): DecisionDirectPreparedContribution;
 }
 
 interface SealedPreparation {
   readonly capability: VersionedDefinitionRef;
   readonly context: EffectInvocationContext;
-  readonly prepare: DecisionDraftPreparation['prepare'];
+  readonly prepare: DecisionDirectPreparation['prepare'];
   phase: 'ready' | 'preparing' | 'spent';
 }
 
@@ -32,18 +32,18 @@ function sameReference(left: VersionedDefinitionRef, right: VersionedDefinitionR
   return left.key === right.key && left.version === right.version;
 }
 
-export function sealDecisionDraftPreparation(input: {
+export function sealDecisionDirectPreparation(input: {
   readonly capability: VersionedDefinitionRef;
   readonly context: EffectInvocationContext;
-  readonly preparation: DecisionDraftPreparation;
+  readonly preparation: DecisionDirectPreparation;
 }): EffectHandlerSnapshot {
   if (typeof input.preparation.prepare !== 'function') {
-    throw new TypeError('decision_draft_preparation_invalid');
+    throw new TypeError('decision_direct_preparation_invalid');
   }
   if (input.preparation.prepare.constructor.name === 'AsyncFunction') {
-    throw new TypeError('decision_draft_preparation_must_be_synchronous');
+    throw new TypeError('decision_direct_preparation_must_be_synchronous');
   }
-  const snapshot = Object.freeze({ strategy: 'decision_changeset_draft', version: 1 });
+  const snapshot = Object.freeze({ strategy: 'decision_direct', version: 1 });
   sealedPreparations.set(snapshot, {
     capability: Object.freeze({ ...input.capability }),
     context: input.context,
@@ -53,7 +53,7 @@ export function sealDecisionDraftPreparation(input: {
   return snapshot;
 }
 
-export function createDecisionDraftHandler(input: {
+export function createDecisionDirectHandler(input: {
   readonly reference: VersionedDefinitionRef;
   readonly handlerCapability: VersionedDefinitionRef;
   readonly contributionSchema: EffectHandlerRegistration['contributionSchema'];
@@ -62,7 +62,7 @@ export function createDecisionDraftHandler(input: {
   const handlerCapability = Object.freeze({ ...input.handlerCapability });
   return Object.freeze({
     reference: Object.freeze({ ...input.reference }),
-    effect: 'draft' as const,
+    effect: 'commit' as const,
     handlerCapability,
     contributionSchema: Object.freeze({ ...input.contributionSchema }),
     canonicalResultSchema: Object.freeze({ ...input.canonicalResultSchema }),
@@ -72,19 +72,19 @@ export function createDecisionDraftHandler(input: {
           || !sameReference(sealed.capability, handlerCapability)
           || sealed.context !== context
           || sealed.phase !== 'ready') {
-        throw new TypeError('invalid_decision_draft_preparation');
+        throw new TypeError('invalid_decision_direct_preparation');
       }
       sealed.phase = 'preparing';
       try {
         const contribution = sealed.prepare({ businessInput, context });
         if (contribution && typeof (contribution as { readonly then?: unknown }).then === 'function') {
-          throw new TypeError('decision_draft_preparation_must_be_synchronous');
+          throw new TypeError('decision_direct_preparation_must_be_synchronous');
         }
         sealed.phase = 'spent';
         return {
           result: contribution.result,
           domain: contribution.domain,
-          receiptChildren: [...contribution.receiptChildren]
+          effectContributions: [...contribution.effectContributions]
         };
       } catch (error) {
         sealed.phase = 'spent';

@@ -23,7 +23,7 @@ import {
 } from './ephemeral-sqlite-runtime';
 import {
   createFoundationEphemeralSQLiteRuntime,
-  FOUNDATION_EPHEMERAL_SCHEMA_ARTIFACTS
+  FOUNDATION_SCHEMA_AUTHORING_ARTIFACTS
 } from './foundation-ephemeral-sqlite-runtime';
 import { SQLiteFoundationError } from './foundation-errors';
 import { listSQLiteOwners, sqliteCoordinationPaths } from './file-ownership';
@@ -94,7 +94,7 @@ function expectFoundationCode(
 }
 
 describe('ephemeral SQLite runtime', () => {
-  test('owns one private epoch-1 file and explicitly retains the closed OS-temporary tree', () => {
+  test('owns one private epoch-2 file and explicitly retains the closed OS-temporary tree', () => {
     const runtime = trackRuntime(createEphemeralSQLiteRuntime([]));
     const markerPath = `${runtime.databasePath}.jooevents-ephemeral.json`;
     const ownersPath = sqliteCoordinationPaths(runtime.databasePath).owners;
@@ -110,8 +110,8 @@ describe('ephemeral SQLite runtime', () => {
     expect(statSync(ownersPath).mode & 0o777).toBe(0o700);
     expect(runtime.retainedBaseline).toMatchObject({
       status: 'current',
-      coordinate: { schemaEpoch: 1, sequence: 1 },
-      migrationId: 'e1_0001_identity_access',
+      coordinate: { schemaEpoch: 2, sequence: 1 },
+      migrationId: 'e2_0001_jooevents_foundation',
       databaseClass: 'ephemeral',
       schemaFingerprint: SQLITE_MIGRATION_MANIFEST.expectedCurrentFullFingerprint
     });
@@ -182,33 +182,28 @@ describe('ephemeral SQLite runtime', () => {
     second.close();
   });
 
-  test('composes the joined trial schema families through inert ordered artifacts', () => {
+  test('opens the joined schema families from the accepted baseline without an overlay', () => {
     const runtime = trackRuntime(createFoundationEphemeralSQLiteRuntime());
 
-    expect(runtime.installedSchemaArtifacts.map((artifact) => artifact.id))
-      .toEqual(FOUNDATION_EPHEMERAL_SCHEMA_ARTIFACTS.map((artifact) => artifact.id));
-    expect(FOUNDATION_EPHEMERAL_SCHEMA_ARTIFACTS).toHaveLength(85);
-    expect(Object.isFrozen(FOUNDATION_EPHEMERAL_SCHEMA_ARTIFACTS)).toBe(true);
-    expect(FOUNDATION_EPHEMERAL_SCHEMA_ARTIFACTS.every(Object.isFrozen)).toBe(true);
+    expect(runtime.installedSchemaArtifacts).toEqual([]);
+    expect(FOUNDATION_SCHEMA_AUTHORING_ARTIFACTS).toHaveLength(52);
+    expect(Object.isFrozen(FOUNDATION_SCHEMA_AUTHORING_ARTIFACTS)).toBe(true);
+    expect(FOUNDATION_SCHEMA_AUTHORING_ARTIFACTS.every(Object.isFrozen)).toBe(true);
     expect(runtime.sqlite.query<{ count: number }, []>(`
       select count(*) as count
         from sqlite_schema
        where type in ('table', 'view') and name not like 'sqlite_%'
-    `).get()?.count).toBe(327);
+    `).get()?.count).toBe(201);
     expect(runtime.sqlite.query<{ name: string }, []>(`
       select name
         from sqlite_schema
        where type = 'table' and name in (
          'schedule_placement_sets',
-         'schedule_occurrences',
-         'schedule_placement_draft_receipt_links',
-         'schedule_placement_changeset_receipt_links'
+         'schedule_occurrences'
        )
        order by name collate binary
     `).all().map((row) => row.name)).toEqual([
       'schedule_occurrences',
-      'schedule_placement_changeset_receipt_links',
-      'schedule_placement_draft_receipt_links',
       'schedule_placement_sets'
     ]);
     expect(runtime.sqlite.query<Record<string, unknown>, []>('PRAGMA foreign_key_check').all()).toEqual([]);

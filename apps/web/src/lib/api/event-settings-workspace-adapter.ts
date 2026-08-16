@@ -1,6 +1,6 @@
 import {
-	eventSettingsUpdateDraftInputSchema,
-	type EventSettingsUpdateDraftInput,
+	eventSettingsUpdateInputSchema,
+	type EventSettingsUpdateInput,
 	type StructuredOutcome
 } from '@jooevents/contracts';
 import type {
@@ -79,12 +79,6 @@ function readFailure(
 function updateFailure(
 	result: Exclude<EventSettingsLiveUpdateResult, { readonly kind: 'success' | 'outcome' }>
 ): AdapterFailure {
-	if (result.kind === 'confirmation_required') {
-		return {
-			code: 'distinct_current_human_required',
-			reason: 'This change needs confirmation from another currently authorized person.'
-		};
-	}
 	if (result.kind === 'unavailable') {
 		return {
 			code: result.reason,
@@ -114,7 +108,7 @@ function workspaceSettings(view: EventSettingsView): EventSettings {
 	};
 }
 
-function sameAuthoredValues(current: EventSettingsView, request: EventSettingsUpdateDraftInput): boolean {
+function sameAuthoredValues(current: EventSettingsView, request: EventSettingsUpdateInput): boolean {
 	return current.name === request.name
 		&& current.timezone === request.timezone
 		&& current.startDate === request.startDate
@@ -178,7 +172,7 @@ export function createEventSettingsWorkspaceAdapter(input: {
 			if (!current) return null;
 			// The geometry triple accepts explicit null (clear the grid), so its
 			// merge distinguishes an absent patch key from an authored null.
-			const parsed = eventSettingsUpdateDraftInputSchema.safeParse({
+			const parsed = eventSettingsUpdateInputSchema.safeParse({
 				expectedEventId: current.eventId,
 				expectedEventSetVersion: current.eventSetVersion,
 				expectedEventVersion: current.eventVersion,

@@ -24,9 +24,9 @@ import {
   fieldRegistryAddDraftRequestSchema,
   fieldRegistryDigestSchema,
   fieldRegistryDraftActionSchema,
-  fieldRegistryDraftCanonicalResultSchema,
-  fieldRegistryDraftDataSchema,
-  fieldRegistryDraftOperationResultSchema,
+  fieldRegistryDirectCanonicalResultSchema,
+  fieldRegistryDirectDataSchema,
+  fieldRegistryDirectOperationResultSchema,
   fieldRegistryEditDraftRequestSchema,
   fieldRegistryIdSchema,
   fieldRegistryMoveDraftRequestSchema,
@@ -66,26 +66,26 @@ import {
   projectFieldRegistrySnapshot,
   type FieldRegistryLiveOptionSource
 } from './model';
-import type { FieldRegistryReadPort } from './changesets';
-import { createFieldRegistryDraftHandler } from './preparation';
+import type { FieldRegistryMutationPlan, FieldRegistryReadPort } from './domain';
+import { createFieldRegistryDirectHandler } from './preparation';
 
 export const FIELD_REGISTRY_SNAPSHOT_READ_OPERATION = Object.freeze({
   name: 'field_registry.snapshot.read', version: 1
 });
-export const FIELD_REGISTRY_ADD_DRAFT_OPERATION = Object.freeze({
-  name: 'field_registry.add.draft', version: 1
+export const FIELD_REGISTRY_ADD_OPERATION = Object.freeze({
+  name: 'field_registry.add', version: 1
 });
-export const FIELD_REGISTRY_EDIT_DRAFT_OPERATION = Object.freeze({
-  name: 'field_registry.edit.draft', version: 1
+export const FIELD_REGISTRY_EDIT_OPERATION = Object.freeze({
+  name: 'field_registry.edit', version: 1
 });
-export const FIELD_REGISTRY_MOVE_DRAFT_OPERATION = Object.freeze({
-  name: 'field_registry.move.draft', version: 1
+export const FIELD_REGISTRY_MOVE_OPERATION = Object.freeze({
+  name: 'field_registry.move', version: 1
 });
-export const FIELD_REGISTRY_REMOVE_DRAFT_OPERATION = Object.freeze({
-  name: 'field_registry.remove.draft', version: 1
+export const FIELD_REGISTRY_REMOVE_OPERATION = Object.freeze({
+  name: 'field_registry.remove', version: 1
 });
-export const FIELD_REGISTRY_RESTORE_DRAFT_OPERATION = Object.freeze({
-  name: 'field_registry.restore.draft', version: 1
+export const FIELD_REGISTRY_RESTORE_OPERATION = Object.freeze({
+  name: 'field_registry.restore', version: 1
 });
 
 export const FIELD_REGISTRY_READ_ACCESS_POLICY: VersionedAccessPolicyRef = Object.freeze({
@@ -96,127 +96,99 @@ export const FIELD_REGISTRY_MANAGE_ACCESS_POLICY: VersionedAccessPolicyRef = Obj
 });
 export const FIELD_REGISTRY_READ_PERMISSION_ID: PermissionId = 'event.read';
 export const FIELD_REGISTRY_MANAGE_PERMISSION_ID: PermissionId = 'event.manage';
-export const FIELD_REGISTRY_DRAFT_REQUEST_HASH_PROFILE = ref(
-  'request-hash.field_registry.draft'
+export const FIELD_REGISTRY_DIRECT_REQUEST_HASH_PROFILE = ref(
+  'request-hash.field_registry.direct'
 );
-export const FIELD_REGISTRY_DRAFT_HANDLER_CAPABILITY = ref(
-  'capability.field_registry.changeset_draft'
+export const FIELD_REGISTRY_DIRECT_HANDLER_CAPABILITY = ref(
+  'capability.field_registry.direct'
 );
 
-const draftOperations = Object.freeze([
+const directOperations = Object.freeze([
   Object.freeze({
     action: 'add' as const,
-    operation: FIELD_REGISTRY_ADD_DRAFT_OPERATION,
+    operation: FIELD_REGISTRY_ADD_OPERATION,
     schema: fieldRegistryAddDraftRequestSchema
   }),
   Object.freeze({
     action: 'edit' as const,
-    operation: FIELD_REGISTRY_EDIT_DRAFT_OPERATION,
+    operation: FIELD_REGISTRY_EDIT_OPERATION,
     schema: fieldRegistryEditDraftRequestSchema
   }),
   Object.freeze({
     action: 'move' as const,
-    operation: FIELD_REGISTRY_MOVE_DRAFT_OPERATION,
+    operation: FIELD_REGISTRY_MOVE_OPERATION,
     schema: fieldRegistryMoveDraftRequestSchema
   }),
   Object.freeze({
     action: 'remove' as const,
-    operation: FIELD_REGISTRY_REMOVE_DRAFT_OPERATION,
+    operation: FIELD_REGISTRY_REMOVE_OPERATION,
     schema: fieldRegistryRemoveDraftRequestSchema
   }),
   Object.freeze({
     action: 'restore' as const,
-    operation: FIELD_REGISTRY_RESTORE_DRAFT_OPERATION,
+    operation: FIELD_REGISTRY_RESTORE_OPERATION,
     schema: fieldRegistryRestoreDraftRequestSchema
   })
 ]);
 
-export const fieldRegistryDraftDomainContributionSchema = z.strictObject({
-  kind: z.literal('field_registry_changeset_draft'),
-  preparationHandle: fieldRegistryIdSchema,
-  action: fieldRegistryDraftActionSchema,
-  workspaceId: fieldRegistryIdSchema,
-  eventId: fieldRegistryIdSchema,
-  changesetId: fieldRegistryIdSchema,
-  revisionId: fieldRegistryIdSchema,
-  revisionDigestSha256: fieldRegistryDigestSchema,
-  recordDigestSha256: fieldRegistryDigestSchema,
-  occurredAt: z.iso.datetime({ offset: true })
-});
-
-export const fieldRegistryDraftEvidenceChildSchema = z.strictObject({
-  kind: z.literal('timeline'),
-  timelineId: fieldRegistryIdSchema,
-  sourceKind: z.literal('changeset_revision'),
-  workspaceId: fieldRegistryIdSchema,
-  eventId: fieldRegistryIdSchema,
-  changesetId: fieldRegistryIdSchema,
-  revisionId: fieldRegistryIdSchema,
-  occurredAt: z.iso.datetime({ offset: true })
-});
-
 const nullDetailSchema = z.null();
-export const fieldRegistryDraftDetailSchema = z.strictObject({
+export const fieldRegistryDirectDetailSchema = z.strictObject({
   code: z.enum([
     'wrong_scope', 'stale_registry', 'field_exists', 'field_missing', 'stale_field',
     'field_removed', 'field_active', 'form_missing', 'form_changed', 'locked_field',
-    'invalid_options', 'invalid_position', 'invalid_plan', 'policy_changed'
+    'invalid_options', 'invalid_position', 'invalid_plan'
   ]),
   action: fieldRegistryDraftActionSchema,
   fieldId: fieldRegistryIdSchema
 });
 
-const draftSuccessContributionSchema = z.strictObject({
-  result: z.strictObject({ kind: z.literal('success'), data: fieldRegistryDraftDataSchema }),
-  domain: fieldRegistryDraftDomainContributionSchema,
-  receiptChildren: z.tuple([fieldRegistryDraftEvidenceChildSchema])
+const mutationPlanSchema = z.custom<FieldRegistryMutationPlan>((value) => {
+  if (!value || typeof value !== 'object') return false;
+  return fieldRegistryDraftActionSchema.safeParse(
+    (value as { readonly action?: unknown }).action
+  ).success;
+}, { message: 'invalid_field_registry_mutation_plan' });
+
+const directSuccessContributionSchema = z.strictObject({
+  result: z.strictObject({ kind: z.literal('success'), data: fieldRegistryDirectDataSchema }),
+  domain: z.strictObject({
+    kind: z.literal('field_registry_direct_change'),
+    plan: mutationPlanSchema
+  }),
+  effectContributions: z.tuple([])
 }).superRefine((contribution, context) => {
-  const data = contribution.result.data;
-  const domain = contribution.domain;
-  const timeline = contribution.receiptChildren[0];
-  if (data.action !== domain.action
-      || data.changesetId !== domain.changesetId
-      || data.revision.id !== domain.revisionId
-      || data.revision.digestSha256 !== domain.revisionDigestSha256
-      || timeline.workspaceId !== domain.workspaceId
-      || timeline.eventId !== domain.eventId
-      || timeline.changesetId !== domain.changesetId
-      || timeline.revisionId !== domain.revisionId
-      || timeline.occurredAt !== domain.occurredAt) {
-    context.addIssue({ code: 'custom', message: 'Field Registry draft evidence is incoherent.' });
+  if (contribution.result.data.action !== contribution.domain.plan.action) {
+    context.addIssue({ code: 'custom', message: 'Field Registry direct action mismatch.' });
   }
 });
 
-const allowedDraftOutcomes = new Set([
+const allowedDirectOutcomes = new Set([
   'conflict:field_registry.event_required',
   'stale_revision:field_registry.changed',
-  'policy_violation:field_registry.change_refused',
-  'conflict:changeset.id_collision'
+  'policy_violation:field_registry.change_refused'
 ]);
 
-const draftOutcomeContributionSchema = z.strictObject({
+const directOutcomeContributionSchema = z.strictObject({
   result: z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema }),
   domain: z.null(),
-  receiptChildren: z.tuple([])
+  effectContributions: z.tuple([])
 }).superRefine((contribution, context) => {
   const outcome = contribution.result.outcome;
   const detailSchema = outcome.kind === 'field_registry.event_required'
-      || outcome.kind === 'changeset.id_collision'
-    ? nullDetailSchema
-    : fieldRegistryDraftDetailSchema;
-  if (!allowedDraftOutcomes.has(`${outcome.class}:${outcome.kind}`)
+    ? nullDetailSchema : fieldRegistryDirectDetailSchema;
+  if (!allowedDirectOutcomes.has(`${outcome.class}:${outcome.kind}`)
       || outcome.retryable
       || outcome.detailSchemaVersion !== 1
       || !detailSchema.safeParse(outcome.detail).success) {
-    context.addIssue({ code: 'custom', message: 'Field Registry draft refusal is invalid.' });
+    context.addIssue({ code: 'custom', message: 'Field Registry direct refusal is invalid.' });
   }
 });
 
-export const fieldRegistryDraftContributionSchema = z.union([
-  draftSuccessContributionSchema,
-  draftOutcomeContributionSchema
+export const fieldRegistryDirectContributionSchema = z.union([
+  directSuccessContributionSchema,
+  directOutcomeContributionSchema
 ]);
-export type FieldRegistryDraftContribution = z.infer<typeof fieldRegistryDraftContributionSchema>;
+export type FieldRegistryDirectContribution = z.infer<typeof fieldRegistryDirectContributionSchema>;
 
 function ref(key: string): VersionedDefinitionRef {
   return Object.freeze({ key, version: parseContractVersion(1) });
@@ -233,26 +205,26 @@ const schemas = Object.freeze({
     fieldRegistrySnapshotCanonicalResultSchema
   ),
   readProjected: FIELD_REGISTRY_OPERATION_SCHEMA_REFS.snapshotRead.resultSchema,
-  draftContribution: schemaRef(
-    'schema.field_registry.changeset-draft.contribution',
-    fieldRegistryDraftContributionSchema
+  directContribution: schemaRef(
+    'schema.field_registry.direct.contribution',
+    fieldRegistryDirectContributionSchema
   ),
-  draftCanonical: schemaRef(
-    'schema.field_registry.changeset-draft.canonical-result',
-    fieldRegistryDraftCanonicalResultSchema
+  directCanonical: schemaRef(
+    'schema.field_registry.direct.canonical-result',
+    fieldRegistryDirectCanonicalResultSchema
   ),
-  draftProjected: FIELD_REGISTRY_OPERATION_SCHEMA_REFS.drafts.add.resultSchema,
+  directProjected: FIELD_REGISTRY_OPERATION_SCHEMA_REFS.direct.add.resultSchema,
   nullDetail: schemaRef('schema.field_registry.operation.null-detail', nullDetailSchema),
-  draftDetail: schemaRef(
-    'schema.field_registry.draft-refusal.detail',
-    fieldRegistryDraftDetailSchema
+  directDetail: schemaRef(
+    'schema.field_registry.direct-refusal.detail',
+    fieldRegistryDirectDetailSchema
   ),
-  draftInputs: Object.freeze({
-    add: FIELD_REGISTRY_OPERATION_SCHEMA_REFS.drafts.add.inputSchema,
-    edit: FIELD_REGISTRY_OPERATION_SCHEMA_REFS.drafts.edit.inputSchema,
-    move: FIELD_REGISTRY_OPERATION_SCHEMA_REFS.drafts.move.inputSchema,
-    remove: FIELD_REGISTRY_OPERATION_SCHEMA_REFS.drafts.remove.inputSchema,
-    restore: FIELD_REGISTRY_OPERATION_SCHEMA_REFS.drafts.restore.inputSchema
+  directInputs: Object.freeze({
+    add: FIELD_REGISTRY_OPERATION_SCHEMA_REFS.direct.add.inputSchema,
+    edit: FIELD_REGISTRY_OPERATION_SCHEMA_REFS.direct.edit.inputSchema,
+    move: FIELD_REGISTRY_OPERATION_SCHEMA_REFS.direct.move.inputSchema,
+    remove: FIELD_REGISTRY_OPERATION_SCHEMA_REFS.direct.remove.inputSchema,
+    restore: FIELD_REGISTRY_OPERATION_SCHEMA_REFS.direct.restore.inputSchema
   })
 });
 
@@ -263,15 +235,15 @@ const refs = Object.freeze({
   readHandler: ref('handler.field_registry.snapshot-read'),
   readProjection: ref('projection.field_registry.snapshot-read.operator'),
   readTrace: ref('trace.field_registry.snapshot-read'),
-  draftHandler: ref('handler.field_registry.changeset-draft'),
-  draftProjection: ref('projection.field_registry.changeset-draft.operator'),
-  audit: ref('audit.field_registry.changeset-draft'),
+  directHandler: ref('handler.field_registry.direct'),
+  directProjection: ref('projection.field_registry.direct.operator'),
+  audit: ref('audit.field_registry.direct'),
   auditRecordProfile: ref('record-profile.field_registry.operation-audit'),
   keySource: ref('idempotency.operator-header'),
-  requestHash: FIELD_REGISTRY_DRAFT_REQUEST_HASH_PROFILE
+  requestHash: FIELD_REGISTRY_DIRECT_REQUEST_HASH_PROFILE
 });
 
-interface DraftRefs {
+interface DirectRefs {
   readonly context: VersionedDefinitionRef;
   readonly autonomy: VersionedDefinitionRef;
   readonly concurrency: VersionedDefinitionRef;
@@ -284,18 +256,18 @@ interface DraftRefs {
   readonly autonomyPreflight: VersionedDefinitionRef;
 }
 
-function refsFor(action: FieldRegistryDraftAction): DraftRefs {
+function refsFor(action: FieldRegistryDraftAction): DirectRefs {
   return Object.freeze({
-    context: ref(`context.field_registry.${action}-draft`),
-    autonomy: ref(`autonomy.field_registry.${action}-draft`),
-    concurrency: ref(`concurrency.field_registry.${action}-draft`),
-    executionFamily: ref(`field_registry.${action}-draft.execution-family`),
-    executionPhase: ref(`field_registry.${action}-draft.phase.single-uow`),
-    terminalization: ref(`field_registry.${action}-draft.terminalization`),
-    riskResolver: ref(`field_registry.${action}-draft.risk-resolver`),
-    autonomyEvidence: ref(`field_registry.${action}-draft.autonomy-evidence`),
-    approvalResolver: ref(`field_registry.${action}-draft.approval-resolver`),
-    autonomyPreflight: ref(`field_registry.${action}-draft.autonomy-preflight`)
+    context: ref(`context.field_registry.${action}`),
+    autonomy: ref(`autonomy.field_registry.${action}`),
+    concurrency: ref(`concurrency.field_registry.${action}`),
+    executionFamily: ref(`field_registry.${action}.execution-family`),
+    executionPhase: ref(`field_registry.${action}.phase.direct-uow`),
+    terminalization: ref(`field_registry.${action}.terminalization`),
+    riskResolver: ref(`field_registry.${action}.risk-resolver`),
+    autonomyEvidence: ref(`field_registry.${action}.autonomy-evidence`),
+    approvalResolver: ref(`field_registry.${action}.approval-resolver`),
+    autonomyPreflight: ref(`field_registry.${action}.autonomy-preflight`)
   });
 }
 
@@ -429,20 +401,20 @@ function operationAutonomy(input: {
   });
 }
 
-export function fieldRegistryDraftActionForOperation(
+export function fieldRegistryDirectActionForOperation(
   operationName: string,
   operationVersion: number
 ): FieldRegistryDraftAction | undefined {
-  return draftOperations.find(({ operation }) =>
+  return directOperations.find(({ operation }) =>
     operation.name === operationName && operation.version === operationVersion
   )?.action;
 }
 
 function pathFor(action: FieldRegistryDraftAction): string {
-  return `/api/events/current/field-registry/drafts/${action}`;
+  return `/api/events/current/field-registry/${action}`;
 }
 
-/** Registers one exact snapshot read and five inert changeset-draft mutations. */
+/** Registers one exact snapshot read and five direct audited mutations. */
 export function createFieldRegistryOperationModule(
   input: CreateFieldRegistryOperationModuleInput
 ): OperationRegistryModule {
@@ -500,13 +472,13 @@ export function createFieldRegistryOperationModule(
     }
   });
 
-  const drafts = draftOperations.map(({ action, operation }) => {
+  const directs = directOperations.map(({ action, operation }) => {
     const operationRefs = refsFor(action);
     const autonomy = operationAutonomy({ operation, definition: operationRefs.autonomy });
     const context = createEffectInvocationContextBuilder({
       reference: operationRefs.context,
       operation,
-      effect: 'draft',
+      effect: 'commit',
       lanes: [manageLane],
       scopeResolver,
       authorityResolver: input.currentAuthority,
@@ -537,10 +509,10 @@ export function createFieldRegistryOperationModule(
       reference: operationRefs.executionPhase,
       family: operationRefs.executionFamily,
       operation,
-      effect: 'draft',
-      handler: refs.draftHandler,
-      handlerCapability: FIELD_REGISTRY_DRAFT_HANDLER_CAPABILITY,
-      contributionSchema: schemas.draftContribution,
+      effect: 'commit',
+      handler: refs.directHandler,
+      handlerCapability: FIELD_REGISTRY_DIRECT_HANDLER_CAPABILITY,
+      contributionSchema: schemas.directContribution,
       terminalization: operationRefs.terminalization,
       terminalOutcomeKeys: [],
       contentionOutcome: Object.freeze({
@@ -557,8 +529,8 @@ export function createFieldRegistryOperationModule(
       operation,
       resolve: () => Object.freeze({
         risk: 'low' as const,
-        consequenceTags: Object.freeze(['changeset-drafted']),
-        evidenceIds: Object.freeze([`field_registry.${action}.draft.risk`])
+        consequenceTags: Object.freeze(['field-registry-changed']),
+        evidenceIds: Object.freeze([`field_registry.${action}.risk`])
       })
     });
     const autonomyEvidence = createAutonomyEvidenceResolverRegistration({
@@ -581,7 +553,7 @@ export function createFieldRegistryOperationModule(
           actionCount: 1,
           completesBy: subject.evaluatedAt,
           proposedAction: Object.freeze({
-            key: `field_registry.${action}.draft.execute`,
+            key: `field_registry.${action}.execute`,
             version: 1,
             digestSha256: subject.requestHashSha256
           }),
@@ -615,37 +587,37 @@ export function createFieldRegistryOperationModule(
     retryable: false,
     detailSchema: schemas.nullDetail
   }));
-  const draftHandler = createFieldRegistryDraftHandler({
-    reference: refs.draftHandler,
-    handlerCapability: FIELD_REGISTRY_DRAFT_HANDLER_CAPABILITY,
-    contributionSchema: schemas.draftContribution,
-    canonicalResultSchema: schemas.draftCanonical,
-    actionForOperation: fieldRegistryDraftActionForOperation
+  const directHandler = createFieldRegistryDirectHandler({
+    reference: refs.directHandler,
+    handlerCapability: FIELD_REGISTRY_DIRECT_HANDLER_CAPABILITY,
+    contributionSchema: schemas.directContribution,
+    canonicalResultSchema: schemas.directCanonical,
+    actionForOperation: fieldRegistryDirectActionForOperation
   });
 
   return Object.freeze({
     id: 'field-registry.operations',
     source: Object.freeze({
-      effectExecutionFamilies: Object.freeze(drafts.map((entry) => entry.family)),
-      effectPhases: Object.freeze(drafts.map((entry) => entry.phase)),
-      terminalizationResolvers: Object.freeze(drafts.map((entry) => entry.terminalization)),
-      riskResolvers: Object.freeze(drafts.map((entry) => entry.riskResolver)),
-      autonomyEvidenceResolvers: Object.freeze(drafts.map((entry) => entry.autonomyEvidence)),
-      renewedApprovalResolvers: Object.freeze(drafts.map((entry) => entry.approvalResolver)),
-      autonomyPreflights: Object.freeze(drafts.map((entry) => entry.preflight)),
-      autonomyPolicies: Object.freeze([readAutonomy, ...drafts.map((entry) => entry.autonomy)]),
+      effectExecutionFamilies: Object.freeze(directs.map((entry) => entry.family)),
+      effectPhases: Object.freeze(directs.map((entry) => entry.phase)),
+      terminalizationResolvers: Object.freeze(directs.map((entry) => entry.terminalization)),
+      riskResolvers: Object.freeze(directs.map((entry) => entry.riskResolver)),
+      autonomyEvidenceResolvers: Object.freeze(directs.map((entry) => entry.autonomyEvidence)),
+      renewedApprovalResolvers: Object.freeze(directs.map((entry) => entry.approvalResolver)),
+      autonomyPreflights: Object.freeze(directs.map((entry) => entry.preflight)),
+      autonomyPolicies: Object.freeze([readAutonomy, ...directs.map((entry) => entry.autonomy)]),
       schemas: Object.freeze([
         { reference: schemas.readInput, schema: fieldRegistrySnapshotReadInputSchema },
         { reference: schemas.readCanonical, schema: fieldRegistrySnapshotCanonicalResultSchema },
         { reference: schemas.readProjected, schema: fieldRegistrySnapshotReadResultSchema },
-        ...draftOperations.map(({ action, schema }) => ({
-          reference: schemas.draftInputs[action], schema
+        ...directOperations.map(({ action, schema }) => ({
+          reference: schemas.directInputs[action], schema
         })),
-        { reference: schemas.draftContribution, schema: fieldRegistryDraftContributionSchema },
-        { reference: schemas.draftCanonical, schema: fieldRegistryDraftCanonicalResultSchema },
-        { reference: schemas.draftProjected, schema: fieldRegistryDraftOperationResultSchema },
+        { reference: schemas.directContribution, schema: fieldRegistryDirectContributionSchema },
+        { reference: schemas.directCanonical, schema: fieldRegistryDirectCanonicalResultSchema },
+        { reference: schemas.directProjected, schema: fieldRegistryDirectOperationResultSchema },
         { reference: schemas.nullDetail, schema: nullDetailSchema },
-        { reference: schemas.draftDetail, schema: fieldRegistryDraftDetailSchema }
+        { reference: schemas.directDetail, schema: fieldRegistryDirectDetailSchema }
       ]),
       contextBuilders: Object.freeze([readContext]),
       readCapabilities: Object.freeze([readCapability]),
@@ -667,10 +639,10 @@ export function createFieldRegistryOperationModule(
         projectedResultSchema: schemas.readProjected,
         project: (candidate: unknown) => fieldRegistrySnapshotCanonicalResultSchema.parse(candidate)
       }, {
-        reference: refs.draftProjection,
-        canonicalResultSchema: schemas.draftCanonical,
-        projectedResultSchema: schemas.draftProjected,
-        project: (candidate: unknown) => fieldRegistryDraftCanonicalResultSchema.parse(candidate)
+        reference: refs.directProjection,
+        canonicalResultSchema: schemas.directCanonical,
+        projectedResultSchema: schemas.directProjected,
+        project: (candidate: unknown) => fieldRegistryDirectCanonicalResultSchema.parse(candidate)
       }]),
       readOperationalTraceTargets: Object.freeze([{
         reference: refs.readTrace,
@@ -723,19 +695,19 @@ export function createFieldRegistryOperationModule(
           projection: refs.readProjection
         }]
       }]),
-      effectContextBuilders: Object.freeze(drafts.map((entry) => entry.context)),
-      effectHandlers: Object.freeze([draftHandler]),
-      effectOperations: Object.freeze(drafts.map(({ action, operation, refs: operationRefs }) => ({
+      effectContextBuilders: Object.freeze(directs.map((entry) => entry.context)),
+      effectHandlers: Object.freeze([directHandler]),
+      effectOperations: Object.freeze(directs.map(({ action, operation, refs: operationRefs }) => ({
         ...operation,
         lifecycle: { status: 'active' as const },
-        summary: `Draft a Field Registry ${action} change for review.`,
-        effect: 'draft' as const,
+        summary: `${action === 'add' ? 'Added' : action === 'edit' ? 'Updated' : action === 'move' ? 'Moved' : action === 'remove' ? 'Removed' : 'Restored'} a speaker field`,
+        effect: 'commit' as const,
         maxRisk: 'low' as const,
         autonomyPolicy: operationRefs.autonomy,
-        consequenceTags: ['changeset-drafted'],
-        inputSchema: schemas.draftInputs[action],
-        contributionSchema: schemas.draftContribution,
-        canonicalResultSchema: schemas.draftCanonical,
+        consequenceTags: ['field-registry-changed'],
+        inputSchema: schemas.directInputs[action],
+        contributionSchema: schemas.directContribution,
+        canonicalResultSchema: schemas.directCanonical,
         outcomes: [
           {
             class: 'idempotency_conflict' as const,
@@ -754,19 +726,13 @@ export function createFieldRegistryOperationModule(
             class: 'stale_revision' as const,
             kind: 'field_registry.changed',
             retryable: false,
-            detailSchema: schemas.draftDetail
+            detailSchema: schemas.directDetail
           },
           {
             class: 'policy_violation' as const,
             kind: 'field_registry.change_refused',
             retryable: false,
-            detailSchema: schemas.draftDetail
-          },
-          {
-            class: 'conflict' as const,
-            kind: 'changeset.id_collision',
-            retryable: false,
-            detailSchema: schemas.nullDetail
+            detailSchema: schemas.directDetail
           },
           {
             class: 'conflict' as const,
@@ -778,8 +744,8 @@ export function createFieldRegistryOperationModule(
         ],
         accessLanes: [manageLane],
         contextBuilder: operationRefs.context,
-        handlerCapability: FIELD_REGISTRY_DRAFT_HANDLER_CAPABILITY,
-        handler: refs.draftHandler,
+        handlerCapability: FIELD_REGISTRY_DIRECT_HANDLER_CAPABILITY,
+        handler: refs.directHandler,
         audit: { mode: 'required' as const, target: refs.audit },
         idempotency: {
           keySource: refs.keySource,
@@ -789,10 +755,18 @@ export function createFieldRegistryOperationModule(
         concurrency: operationRefs.concurrency,
         execution: {
           kind: 'single_unit_of_work' as const,
+          profile: 'direct_audited' as const,
           family: operationRefs.executionFamily,
           phase: operationRefs.executionPhase,
           terminalization: operationRefs.terminalization,
-          autonomyPreflight: operationRefs.autonomyPreflight
+          autonomyPreflight: operationRefs.autonomyPreflight,
+          history: { summariesByAction: Object.freeze({
+            add: 'Added a speaker field',
+            edit: 'Updated a speaker field',
+            move: 'Moved a speaker field',
+            remove: 'Removed a speaker field',
+            restore: 'Restored a speaker field'
+          }) }
         },
         bindings: [{
           surface: 'operator_http' as const,
@@ -800,7 +774,7 @@ export function createFieldRegistryOperationModule(
           path: pathFor(action),
           input: 'body' as const,
           browserResumption: { kind: 'none' as const },
-          projection: refs.draftProjection
+          projection: refs.directProjection
         }]
       })))
     })

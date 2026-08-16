@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
+import { loadSQLiteFoundationArtifacts } from './migration-runner';
 import {
   issueSynchronousClassifiedPayloadEncryptionProfile,
   type SynchronousClassifiedPayloadStore
@@ -21,7 +23,6 @@ import {
   parseUserId,
   parseWorkspaceId
 } from '@jooevents/kernel';
-import { openSQLite, type OpenSQLiteResult } from './database';
 import {
   SQLiteClassifiedPayloadStore,
   installSQLiteClassifiedPayloadStoreSchema
@@ -45,29 +46,31 @@ const ids = {
 } as const;
 const now = parseInstant('2026-08-13T03:00:00.000Z');
 const lookupKey = new Uint8Array(32).fill(0x45);
-const opened: OpenSQLiteResult[] = [];
+const opened: Database[] = [];
 
 interface Fixture {
-  readonly sqlite: OpenSQLiteResult['sqlite'];
+  readonly sqlite: Database;
   readonly store: SQLiteClassifiedPayloadStore;
   readonly repository: SQLiteWorkspaceTeamRepository;
   readonly roleIds: Readonly<Record<WorkspaceTeamRoleKey, string>>;
 }
 
 function fixture(): Fixture {
-  const database = openSQLite(':memory:');
+  const database = new Database(':memory:', { create: true, strict: true });
+  database.exec('PRAGMA foreign_keys = ON;');
+  database.exec(loadSQLiteFoundationArtifacts().predecessor.sql);
   opened.push(database);
-  installSQLiteClassifiedPayloadStoreSchema(database.sqlite);
-  installWorkspaceTeamSchema(database.sqlite);
+  installSQLiteClassifiedPayloadStoreSchema(database);
+  installWorkspaceTeamSchema(database);
   const profile = issueSynchronousClassifiedPayloadEncryptionProfile({
     reference: { key: 'encryption.workspace-invitation-test', version: 1 },
     keyBytes: new Uint8Array(32).fill(0x71)
   });
-  const store = new SQLiteClassifiedPayloadStore(database.sqlite, {
+  const store = new SQLiteClassifiedPayloadStore(database, {
     encryptionProfile: profile,
     nonceSource: (length) => new Uint8Array(length).fill(0x29)
   });
-  const repository = new SQLiteWorkspaceTeamRepository(database.sqlite, store);
+  const repository = new SQLiteWorkspaceTeamRepository(database, store);
   const roleIds = {
     workspace_admin: '019c2d70-0000-7000-8000-000000000101',
     event_manager: '019c2d70-0000-7000-8000-000000000102',
@@ -78,16 +81,16 @@ function fixture(): Fixture {
     viewer: '019c2d70-0000-7000-8000-000000000107'
   } as const;
   const at = Date.parse(now);
-  database.sqlite.transaction(() => {
-    database.sqlite.query(`INSERT INTO workspaces
+  database.transaction(() => {
+    database.query(`INSERT INTO workspaces
       (id, name, state, created_at, updated_at, version)
       VALUES (?, 'Main', 'active', ?, ?, 1), (?, 'Other', 'active', ?, ?, 1)`)
       .run(ids.workspace, at, at, ids.otherWorkspace, at, at);
-    database.sqlite.query(`INSERT INTO users
+    database.query(`INSERT INTO users
       (id, status, display_name, created_at, updated_at, version)
       VALUES (?, 'active', 'Owner', ?, ?, 1), (?, 'active', 'Member', ?, ?, 1)`)
       .run(ids.owner, at, at, ids.member, at, at);
-    database.sqlite.query(`INSERT INTO user_emails
+    database.query(`INSERT INTO user_emails
       (id, user_id, normalized_email, display_email, verified, source,
        is_primary, verified_at, created_at)
       VALUES
@@ -96,18 +99,18 @@ function fixture(): Fixture {
       ('019c2d70-0000-7000-8000-000000000202', ?, 'member@example.test',
        'member@example.test', 1, 'auth_provider', 1, ?, ?)`)
       .run(ids.owner, at, at, ids.member, at, at);
-    database.sqlite.query(`INSERT INTO workspace_memberships
+    database.query(`INSERT INTO workspace_memberships
       (id, workspace_id, user_id, status, created_at, updated_at, version)
       VALUES (?, ?, ?, 'active', ?, ?, 1), (?, ?, ?, 'active', ?, ?, 1)`)
       .run(ids.ownerMembership, ids.workspace, ids.owner, at, at,
         ids.memberMembership, ids.workspace, ids.member, at, at);
     ensureWorkspaceTeamRoles({
-      sqlite: database.sqlite,
+      sqlite: database,
       workspaceId: ids.workspace,
       now,
       newRoleId: (key) => roleIds[key]
     });
-    database.sqlite.query(`INSERT INTO role_assignments
+    database.query(`INSERT INTO role_assignments
       (id, user_id, role_id, workspace_id, scope_kind, event_id,
        assigned_by_user_id, assigned_at, version)
       VALUES
@@ -117,11 +120,11 @@ function fixture(): Fixture {
         ids.member, roleIds.viewer, ids.workspace, ids.owner, at);
     repository.initialize(ids.workspace);
   }).immediate();
-  return { sqlite: database.sqlite, store, repository, roleIds };
+  return { sqlite: database, store, repository, roleIds };
 }
 
 afterEach(() => {
-  while (opened.length) opened.pop()?.sqlite.close(false);
+  while (opened.length) opened.pop()?.close(false);
 });
 
 function invitationPlan(input: Fixture, email = 'invitee@example.test') {

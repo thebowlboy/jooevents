@@ -9,10 +9,11 @@ import {
   type EffectOperationIdentity,
   type EffectUnitOfWork,
   type EffectUnitOfWorkPort,
+  type DirectAuditedUnitOfWork,
+  type DirectOperationLogRecord,
   type InvocationEvidence,
   type ShortOperationAuditRecord,
-  type TerminalEffectReceipt,
-  type TerminalNewOperationAuditRecord
+  type TerminalEffectReceipt
 } from '@jooevents/application';
 import {
   currentEventReadInputSchema,
@@ -24,8 +25,6 @@ import {
 import {
   applyEventCreatePlan,
   createWorkspaceEventSet,
-  diffEventCreatePlan,
-  eventCreatePlanDigest,
   eventCreateResult,
   planEventCreation,
   projectCurrentEvent,
@@ -56,9 +55,6 @@ const ids = {
   user: parseUserId('01890f47-9abc-7def-8123-456789abc001'),
   membership: parseMembershipId('01890f47-9abc-7def-8123-456789abc002'),
   event: '018f7d5a-4b3c-7abc-8def-0123456789a2',
-  fact: '018f7d5a-4b3c-7abc-8def-0123456789a3',
-  pointer: '018f7d5a-4b3c-7abc-8def-0123456789a4',
-  timeline: '018f7d5a-4b3c-7abc-8def-0123456789a5',
   receipt: '018f7d5a-4b3c-7abc-8def-0123456789a6',
   correlation: '018f7d5a-4b3c-7abc-8def-0123456789a7'
 } as const;
@@ -103,31 +99,9 @@ function contribution(inputValue: EventCreateInput, context: EffectInvocationCon
       result: { kind: 'success' as const, data: eventCreateResult(plan) },
       domain: {
         kind: 'event_create' as const,
-        preparationHandle: 'prepared-event-create',
-        planDigestSha256: eventCreatePlanDigest(plan)
+        plan
       },
-      receiptChildren: [{
-        kind: 'domain_fact' as const,
-        factId: ids.fact,
-        factKind: 'event_created' as const,
-        factVersion: 1 as const,
-        eventId: ids.event,
-        sourcePlan: plan,
-        safeDiff: diffEventCreatePlan(plan)
-      }, {
-        kind: 'outbox_pointer' as const,
-        pointerId: ids.pointer,
-        sourceKind: 'domain_fact' as const,
-        factId: ids.fact
-      }, {
-        kind: 'timeline' as const,
-        timelineId: ids.timeline,
-        sourceKind: 'domain_fact' as const,
-        factId: ids.fact,
-        workspaceId: ids.workspace,
-        eventId: ids.event,
-        occurredAt: now
-      }]
+      effectContributions: []
     }
   };
 }
@@ -140,15 +114,17 @@ class MemoryEventUnitOfWork implements EffectUnitOfWorkPort, EffectUnitOfWork {
   });
   currentEvent: Event | undefined;
   readonly receipts = new Map<string, TerminalEffectReceipt>();
+  readonly directLogs = new Map<string, DirectOperationLogRecord>();
   readonly shortAudits: ShortOperationAuditRecord[] = [];
-  readonly terminalAudits: TerminalNewOperationAuditRecord[] = [];
-  readonly children: unknown[] = [];
   applyCalls = 0;
-  claim: 'available' | 'contended' = 'available';
   #prepared: ReturnType<typeof contribution> | undefined;
 
   findTerminalReceipt(identity: EffectOperationIdentity) {
     return this.receipts.get(identityKey(identity));
+  }
+
+  findTerminalOperationLog(identity: EffectOperationIdentity) {
+    return this.directLogs.get(identityKey(identity))?.receipt;
   }
 
   recordShortOperationAudit(record: ShortOperationAuditRecord) {
@@ -159,10 +135,10 @@ class MemoryEventUnitOfWork implements EffectUnitOfWorkPort, EffectUnitOfWork {
     return work(this);
   }
 
-  acquireExecutionClaim() {
-    return this.claim === 'contended'
-      ? { kind: 'contended_same_request' as const }
-      : { kind: 'acquired' as const };
+  async runInDirectUnitOfWork<Value>(
+    work: (unitOfWork: DirectAuditedUnitOfWork) => Promise<Value>
+  ) {
+    return work(this);
   }
 
   recheckCurrentAuthority(context: EffectInvocationContext) {
@@ -195,19 +171,10 @@ class MemoryEventUnitOfWork implements EffectUnitOfWorkPort, EffectUnitOfWork {
     this.applyCalls += 1;
   }
 
-  insertReceiptParent(receipt: TerminalEffectReceipt) {
-    this.receipts.set(identityKey(receipt.identity), receipt);
+  insertOperationLog(record: DirectOperationLogRecord) {
+    this.directLogs.set(identityKey(record.receipt.identity), record);
   }
 
-  insertTerminalNewOperationAudit(record: TerminalNewOperationAuditRecord) {
-    this.terminalAudits.push(record);
-  }
-
-  insertReceiptChild(_receiptId: string, child: unknown) {
-    this.children.push(child);
-  }
-
-  releaseExecutionClaim() {}
 }
 
 function createFixture(options: {
@@ -297,7 +264,7 @@ async function runtime(fixture: ReturnType<typeof createFixture>) {
       clock: { now: () => now }, newInvocationId: () => parseInvocationId(crypto.randomUUID())
     },
     unitOfWork: fixture.unitOfWork,
-    newReceiptId: () => ids.receipt
+    newOperationLogId: () => ids.receipt
   });
 }
 
@@ -375,7 +342,7 @@ describe('Event operation module', () => {
     expect(eventCreateInputSchema.safeParse({ ...input, authority: 'event.manage' }).success).toBe(false);
   });
 
-  test('commits one exact create with trusted attribution/time and full correction evidence', async () => {
+  test('commits one exact create with trusted attribution/time and one readable history row', async () => {
     const fixture = createFixture();
     const operations = await runtime(fixture);
     const invocation = await operations.effectBuilder.build({
@@ -387,21 +354,20 @@ describe('Event operation module', () => {
     expect(eventCreateOperationResultSchema.parse(result)).toMatchObject({
       kind: 'success',
       data: { eventSetVersion: 2, event: { id: ids.event, name: input.name } },
-      receipt: { id: ids.receipt, operationName: 'event.create', operationVersion: 1 }
+      receipt: {
+        id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        operationName: 'event.create', operationVersion: 1
+      }
     });
     expect(fixture.unitOfWork.applyCalls).toBe(1);
     expect(fixture.unitOfWork.currentEvent).toMatchObject({
       workspaceId: ids.workspace, createdByUserId: ids.user, createdAt: now
     });
-    expect(fixture.unitOfWork.children).toHaveLength(3);
-    expect(fixture.unitOfWork.children[0]).toMatchObject({
-      kind: 'domain_fact', sourcePlan: { eventSetGuardDigest: expect.any(String) },
-      safeDiff: { action: 'create' }
-    });
-    expect(fixture.unitOfWork.terminalAudits).toHaveLength(1);
+    expect(fixture.unitOfWork.directLogs.size).toBe(1);
+    expect([...fixture.unitOfWork.directLogs.values()][0]?.summary).toBe('Created an event');
   });
 
-  test('returns typed stale/already-selected refusals with zero writes or receipt children', async () => {
+  test('returns typed stale/already-selected refusals with zero writes', async () => {
     for (const [fixture, businessInput, outcome] of [[
       createFixture(), { ...input, expectedEventSetVersion: 2 }, 'event.event_set_changed'
     ], [
@@ -418,9 +384,8 @@ describe('Event operation module', () => {
         kind: 'outcome', terminal: false, outcome: { kind: outcome, retryable: false }
       });
       expect(fixture.unitOfWork.applyCalls).toBe(0);
-      expect(fixture.unitOfWork.children).toHaveLength(0);
       expect(fixture.unitOfWork.receipts.size).toBe(0);
-      expect(fixture.unitOfWork.shortAudits).toHaveLength(1);
+      expect(fixture.unitOfWork.shortAudits).toHaveLength(0);
     }
   });
 });
@@ -436,7 +401,7 @@ describe('Event create preparation and contribution schema', () => {
     const context = Object.freeze({}) as EffectInvocationContext;
     const snapshot = sealEventCreatePreparation({
       capability: EVENT_CREATE_HANDLER_CAPABILITY,
-      preparation: { prepare: () => ({ result: { kind: 'outcome', outcome: {} }, domain: null, receiptChildren: [] }) }
+      preparation: { prepare: () => ({ result: { kind: 'outcome', outcome: {} }, domain: null, effectContributions: [] }) }
     });
     expect(snapshot).toEqual({ strategy: 'event_create', version: 1 });
     expect(Object.keys(snapshot)).toEqual(['strategy', 'version']);
@@ -444,11 +409,11 @@ describe('Event create preparation and contribution schema', () => {
     expect(() => handler.handle({ businessInput: input, context, snapshot })).toThrow('invalid_event_create_preparation');
     expect(() => sealEventCreatePreparation({
       capability: EVENT_CREATE_HANDLER_CAPABILITY,
-      preparation: { prepare: (async () => ({ result: null, domain: null, receiptChildren: [] })) as never }
+      preparation: { prepare: (async () => ({ result: null, domain: null, effectContributions: [] })) as never }
     })).toThrow('event_create_preparation_must_be_synchronous');
   });
 
-  test('accepts only coherent full plan/diff evidence or an exact zero-write refusal', () => {
+  test('accepts only a coherent compact plan or an exact zero-write refusal', () => {
     const context = {
       actor: { kind: 'workspace_user', userId: ids.user },
       scope: { workspaceId: ids.workspace }
@@ -457,17 +422,9 @@ describe('Event create preparation and contribution schema', () => {
       workspaceId: ids.workspace, version: 1, currentEventId: null
     })).value;
     expect(eventCreateContributionSchema.safeParse(prepared).success).toBe(true);
-    const reordered = structuredClone(prepared);
-    const reorderedFact = reordered.receiptChildren[0];
-    if (!reorderedFact || reorderedFact.kind !== 'domain_fact') throw new TypeError('missing_fact');
-    reorderedFact.sourcePlan = Object.fromEntries(
-      Object.entries(reorderedFact.sourcePlan).reverse()
-    ) as typeof reorderedFact.sourcePlan;
-    expect(eventCreateContributionSchema.safeParse(reordered).success).toBe(true);
     const tampered = structuredClone(prepared);
-    const fact = tampered.receiptChildren[0];
-    if (!fact || fact.kind !== 'domain_fact') throw new TypeError('missing_fact');
-    fact.safeDiff.after.name = 'Changed';
+    if (!tampered.domain) throw new TypeError('missing_domain');
+    (tampered.domain.plan.after as { name: string }).name = 'Changed';
     expect(eventCreateContributionSchema.safeParse(tampered).success).toBe(false);
     expect(eventCreateContributionSchema.safeParse({
       result: {
@@ -475,7 +432,7 @@ describe('Event create preparation and contribution schema', () => {
           class: 'stale_revision', kind: 'event.event_set_changed', retryable: false,
           subjects: [], detail: null, detailSchemaVersion: 1
         }
-      }, domain: null, receiptChildren: []
+      }, domain: null, effectContributions: []
     }).success).toBe(true);
     expect(eventCreateContributionSchema.safeParse({
       result: {
@@ -483,7 +440,7 @@ describe('Event create preparation and contribution schema', () => {
           class: 'stale_revision', kind: 'event.event_set_changed', retryable: false,
           subjects: [], detail: null, detailSchemaVersion: 1
         }
-      }, domain: { kind: 'event_create' }, receiptChildren: []
+      }, domain: { kind: 'event_create' }, effectContributions: []
     }).success).toBe(false);
   });
 });

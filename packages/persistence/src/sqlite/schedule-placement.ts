@@ -38,7 +38,7 @@ import {
   type ProgrammedSessionIdentity,
   type SchedulePlacementScope,
   type SchedulePlacementState,
-  type SchedulePlacementTransactionPort
+  type SchedulePlacementTransactionRepository
 } from '@jooevents/schedule';
 import { createHash } from 'node:crypto';
 
@@ -139,7 +139,7 @@ export function installSchedulePlacementSchema(sqlite: Database): void {
   sqlite.exec(SCHEDULE_PLACEMENT_SQL);
 }
 
-export class SQLiteSchedulePlacementRepository implements SchedulePlacementTransactionPort {
+export class SQLiteSchedulePlacementRepository implements SchedulePlacementTransactionRepository {
   constructor(
     private readonly sqlite: Database,
     private readonly sessions: PlaceableSessionIdentityPort,

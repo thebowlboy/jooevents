@@ -51,24 +51,23 @@ function snapshot(engagements: readonly EngagementHeadDto[]): EngagementSnapshot
 function fakeEngagements(input: {
 	readonly served: EngagementSnapshotDto;
 	readonly responded?: unknown[];
+	readonly keys?: string[];
 	readonly result?: EngagementsLiveRespondResult;
 }): EngagementsLiveClient {
 	return {
 		async readSnapshot() {
 			return { kind: 'success', data: input.served, correlationId };
 		},
-		async respond(respondInput) {
+		async respond(respondInput, idempotencyKey) {
 			input.responded?.push(respondInput);
+			input.keys?.push(idempotencyKey);
 			return input.result ?? {
 				kind: 'success',
 				data: {
-					changesetId: id(60),
-					revisionId: id(61),
-					revisionDigest: digest('b'),
-					committedHeadVersion: 2,
-					safeDiff: { action: 'record_confirmation', before: null, after: null } as never
+					action: respondInput.action,
+					engagement: invitedHead()
 				},
-				receipt: { id: id(62), operationName: 'changeset.commit', operationVersion: 1 },
+				receipt: { id: id(62), operationName: 'engagement.change', operationVersion: 1 },
 				correlationId
 			};
 		}
@@ -332,10 +331,11 @@ describe('live tuned Speakers page port', () => {
 
 	test('records a confirmation fenced on the freshly read engagement version', async () => {
 		const responded: unknown[] = [];
+		const keys: string[] = [];
 		const port = composePort({
 			engagements: fakeEngagements({
 				served: snapshot([invitedHead({ version: 5 })]),
-				responded
+				responded, keys
 			})
 		});
 
@@ -346,6 +346,8 @@ describe('live tuned Speakers page port', () => {
 			expectedEngagementVersion: 5,
 			attribution: 'organizer_recorded'
 		}]);
+		expect(keys).toHaveLength(1);
+		expect(keys[0]!.length).toBeGreaterThanOrEqual(16);
 	});
 
 	test('accepts a cancellation and maps a stale refusal onto reviewed copy', async () => {

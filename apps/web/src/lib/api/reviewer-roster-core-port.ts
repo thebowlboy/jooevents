@@ -5,23 +5,25 @@ import type {
 } from '@jooevents/contracts';
 import type {
 	reviewerRosterChangeDraftInputSchema,
-	reviewerRosterSnapshotReadInputSchema
+	reviewerRosterSnapshotReadInputSchema,
+	ReviewerRosterMutationResult
 } from '@jooevents/contracts/reviewer-roster';
 import type { z } from 'zod';
 import type { SafeApiError } from './client';
 import type { OperatorHttpBindingUnavailableReason } from './operations/operator-http-binding';
 import type {
-	ReviewerRosterChangeDraftView,
-	ReviewerRosterSnapshotView
+	ReviewerRosterSnapshotView,
+	ReviewerRosterView
 } from './view-models/reviewer-roster';
 
 export type ReviewerRosterSnapshotRequest = z.input<typeof reviewerRosterSnapshotReadInputSchema>;
-export type ReviewerRosterChangeDraftRequest = z.input<
+export type ReviewerRosterChangeRequest = z.input<
 	typeof reviewerRosterChangeDraftInputSchema
 >;
+export type ReviewerRosterMutationView = ReviewerRosterView<ReviewerRosterMutationResult>;
 export type ReviewerRosterIdempotencyKey = z.input<typeof operationHttpIdempotencyKeySchema>;
 
-export type ReviewerRosterCoreOperation = 'snapshot' | 'change_draft';
+export type ReviewerRosterCoreOperation = 'snapshot' | 'change';
 
 export type ReviewerRosterCoreUnavailableResult = {
 	readonly kind: 'unavailable';
@@ -72,11 +74,10 @@ export type ReviewerRosterCoreSource =
 
 /**
  * Source-neutral boundary over the Reviewer Roster capabilities the backend
- * currently owns: the joined roster/authority snapshot and typed change drafts.
+ * currently owns: the joined roster/authority snapshot and direct changes.
  *
  * Roster entries are keyed by access subject (membership or reservation) —
- * never by email address — and `draftChange` produces a reviewed changeset
- * draft, not a committed mutation. There are deliberately no invite, load-sum,
+ * never by email address. There are deliberately no invite, load-sum,
  * or coverage methods here: those tuned-screen capabilities are mounted only
  * after their own canonical owners exist, and a live Roster source never fills
  * them with sample behavior or inferred facts.
@@ -88,9 +89,9 @@ export interface ReviewerRosterCorePort {
 		input?: ReviewerRosterSnapshotRequest,
 		options?: { readonly signal?: AbortSignal }
 	): Promise<ReviewerRosterCoreReadResult<ReviewerRosterSnapshotView>>;
-	draftChange(
-		input: ReviewerRosterChangeDraftRequest,
+	change(
+		input: ReviewerRosterChangeRequest,
 		idempotencyKey: ReviewerRosterIdempotencyKey,
 		options?: { readonly signal?: AbortSignal }
-	): Promise<ReviewerRosterCoreEffectResult<ReviewerRosterChangeDraftView>>;
+	): Promise<ReviewerRosterCoreEffectResult<ReviewerRosterMutationView>>;
 }

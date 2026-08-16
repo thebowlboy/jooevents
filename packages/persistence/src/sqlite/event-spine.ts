@@ -8,14 +8,7 @@ import {
   parseWorkspaceEventSetState,
   projectCurrentEvent,
   validateEventCreatePlan,
-  workspaceEventSetDigest,
-  eventCreateCompensationResult,
-  validateEventCreateCompensationPlan,
   type Event,
-  type EventCreateCompensationPlan,
-  type EventCreationReadPort,
-  type EventCreationChangesetResult,
-  type EventDependencyContributorRegistry,
   type EventCreatePlan,
   type WorkspaceEventSet
 } from '@jooevents/event';
@@ -25,14 +18,10 @@ import {
   type EventId,
   type WorkspaceId
 } from '@jooevents/kernel';
-import {
-  eventCreateOperationResultSchema,
-  type CurrentEventProjection
-} from '@jooevents/contracts';
-import { canonicalJsonText } from '@jooevents/kernel';
+import type { CurrentEventProjection } from '@jooevents/contracts';
 import type { SQLiteOperatorEventRelationshipSource } from './operator-authority-repositories';
 
-/** Additive schema installed only in an explicitly ephemeral SQLite runtime. */
+/** This schema contributes to the accepted epoch-2 baseline and may also serve isolated fixtures. */
 export const EVENT_SPINE_SQL = `
 CREATE TABLE event_spine_workspace_sets (
   workspace_id TEXT PRIMARY KEY CHECK(length(workspace_id) = 36),
@@ -91,89 +80,6 @@ CREATE TABLE event_spine_scope_roots (
     ON UPDATE RESTRICT ON DELETE RESTRICT
 ) STRICT, WITHOUT ROWID;
 
-CREATE TABLE event_spine_create_links (
-  receipt_id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL,
-  event_id TEXT NOT NULL UNIQUE,
-  UNIQUE (receipt_id, workspace_id, event_id),
-  FOREIGN KEY (receipt_id)
-    REFERENCES foundation_trial_operation_receipts(id)
-    ON UPDATE RESTRICT ON DELETE RESTRICT,
-  FOREIGN KEY (workspace_id, event_id)
-    REFERENCES event_spine_heads(workspace_id, id)
-    ON UPDATE RESTRICT ON DELETE RESTRICT
-) STRICT, WITHOUT ROWID;
-
-CREATE TABLE event_spine_create_plans (
-  receipt_id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL,
-  event_id TEXT NOT NULL UNIQUE,
-  plan_digest_sha256 TEXT NOT NULL UNIQUE CHECK(
-    length(plan_digest_sha256) = 64
-    AND plan_digest_sha256 NOT GLOB '*[^0-9a-f]*'
-  ),
-  plan_json TEXT NOT NULL CHECK(
-    json_valid(plan_json)
-    AND json_extract(plan_json, '$.action') = 'create'
-    AND json_extract(plan_json, '$.workspaceId') = workspace_id
-    AND json_extract(plan_json, '$.after.id') = event_id
-  ),
-  UNIQUE (receipt_id, workspace_id, event_id),
-  FOREIGN KEY (receipt_id, workspace_id, event_id)
-    REFERENCES event_spine_create_links(receipt_id, workspace_id, event_id)
-    ON UPDATE RESTRICT ON DELETE RESTRICT,
-  FOREIGN KEY (workspace_id, event_id, plan_digest_sha256)
-    REFERENCES event_spine_heads(workspace_id, id, create_plan_digest_sha256)
-    ON UPDATE RESTRICT ON DELETE RESTRICT
-) STRICT, WITHOUT ROWID;
-
-CREATE TABLE event_spine_domain_facts (
-  fact_id TEXT PRIMARY KEY CHECK(length(fact_id) BETWEEN 1 AND 300),
-  receipt_id TEXT NOT NULL UNIQUE,
-  workspace_id TEXT NOT NULL,
-  event_id TEXT NOT NULL UNIQUE,
-  fact_kind TEXT NOT NULL CHECK(fact_kind = 'event_created'),
-  fact_version INTEGER NOT NULL CHECK(fact_version = 1),
-  payload_json TEXT NOT NULL CHECK(json_valid(payload_json)),
-  UNIQUE (fact_id, receipt_id),
-  UNIQUE (fact_id, receipt_id, workspace_id, event_id),
-  FOREIGN KEY (receipt_id, workspace_id, event_id)
-    REFERENCES event_spine_create_links(receipt_id, workspace_id, event_id)
-    ON UPDATE RESTRICT ON DELETE RESTRICT
-) STRICT, WITHOUT ROWID;
-
-CREATE TABLE event_spine_outbox_pointers (
-  pointer_id TEXT PRIMARY KEY CHECK(length(pointer_id) BETWEEN 1 AND 300),
-  receipt_id TEXT NOT NULL UNIQUE,
-  fact_id TEXT NOT NULL UNIQUE,
-  source_kind TEXT NOT NULL CHECK(source_kind = 'domain_fact'),
-  FOREIGN KEY (fact_id, receipt_id)
-    REFERENCES event_spine_domain_facts(fact_id, receipt_id)
-    ON UPDATE RESTRICT ON DELETE RESTRICT
-) STRICT, WITHOUT ROWID;
-
-CREATE TABLE event_spine_timeline_projection (
-  timeline_id TEXT PRIMARY KEY CHECK(length(timeline_id) BETWEEN 1 AND 300),
-  receipt_id TEXT NOT NULL UNIQUE,
-  fact_id TEXT NOT NULL UNIQUE,
-  workspace_id TEXT NOT NULL,
-  event_id TEXT NOT NULL,
-  occurred_at_ms INTEGER NOT NULL CHECK(occurred_at_ms BETWEEN 0 AND 8640000000000000),
-  source_kind TEXT NOT NULL CHECK(source_kind = 'domain_fact'),
-  FOREIGN KEY (fact_id, receipt_id, workspace_id, event_id)
-    REFERENCES event_spine_domain_facts(fact_id, receipt_id, workspace_id, event_id)
-    ON UPDATE RESTRICT ON DELETE RESTRICT,
-  FOREIGN KEY (workspace_id, event_id)
-    REFERENCES event_spine_heads(workspace_id, id)
-    ON UPDATE RESTRICT ON DELETE RESTRICT
-) STRICT, WITHOUT ROWID;
-
-CREATE TRIGGER event_spine_create_links_no_update
-BEFORE UPDATE ON event_spine_create_links
-BEGIN
-  SELECT RAISE(ABORT, 'event create links are immutable');
-END;
-
 CREATE TRIGGER event_spine_scope_roots_no_update
 BEFORE UPDATE ON event_spine_scope_roots
 BEGIN
@@ -186,59 +92,6 @@ BEGIN
   SELECT RAISE(ABORT, 'event scope root links are immutable');
 END;
 
-CREATE TRIGGER event_spine_create_links_no_delete
-BEFORE DELETE ON event_spine_create_links
-BEGIN
-  SELECT RAISE(ABORT, 'event create links are immutable');
-END;
-
-CREATE TRIGGER event_spine_create_plans_no_update
-BEFORE UPDATE ON event_spine_create_plans
-BEGIN
-  SELECT RAISE(ABORT, 'event create plans are immutable');
-END;
-
-CREATE TRIGGER event_spine_create_plans_no_delete
-BEFORE DELETE ON event_spine_create_plans
-BEGIN
-  SELECT RAISE(ABORT, 'event create plans are immutable');
-END;
-
-CREATE TRIGGER event_spine_domain_facts_no_update
-BEFORE UPDATE ON event_spine_domain_facts
-BEGIN
-  SELECT RAISE(ABORT, 'event facts are immutable');
-END;
-
-CREATE TRIGGER event_spine_domain_facts_no_delete
-BEFORE DELETE ON event_spine_domain_facts
-BEGIN
-  SELECT RAISE(ABORT, 'event facts are immutable');
-END;
-
-CREATE TRIGGER event_spine_outbox_pointers_no_update
-BEFORE UPDATE ON event_spine_outbox_pointers
-BEGIN
-  SELECT RAISE(ABORT, 'event outbox pointers are immutable');
-END;
-
-CREATE TRIGGER event_spine_outbox_pointers_no_delete
-BEFORE DELETE ON event_spine_outbox_pointers
-BEGIN
-  SELECT RAISE(ABORT, 'event outbox pointers are immutable');
-END;
-
-CREATE TRIGGER event_spine_timeline_no_update
-BEFORE UPDATE ON event_spine_timeline_projection
-BEGIN
-  SELECT RAISE(ABORT, 'event timeline entries are immutable');
-END;
-
-CREATE TRIGGER event_spine_timeline_no_delete
-BEFORE DELETE ON event_spine_timeline_projection
-BEGIN
-  SELECT RAISE(ABORT, 'event timeline entries are immutable');
-END;
 `;
 
 export type SQLiteEventSpineErrorCode =
@@ -247,8 +100,6 @@ export type SQLiteEventSpineErrorCode =
   | 'event_set_data_corrupt'
   | 'event_head_data_corrupt'
   | 'current_event_missing'
-  | 'source_plan_missing'
-  | 'source_plan_corrupt'
   | 'stale_event_set';
 
 export class SQLiteEventSpineError extends TypeError {
@@ -278,17 +129,6 @@ interface EventHeadRow {
   readonly created_by_user_id: string;
   readonly created_at_ms: number;
   readonly create_plan_digest_sha256: string;
-}
-
-interface EventCreatePlanRow {
-  readonly plan_digest_sha256: string;
-  readonly plan_json: string;
-}
-
-interface EventCreateReceiptRow {
-  readonly operation_name: string;
-  readonly operation_version: number;
-  readonly result_json: string;
 }
 
 export interface CurrentEventState {
@@ -481,112 +321,6 @@ export class SQLiteEventSpineRepository {
     return eventCreateResult(plan);
   }
 
-  applyEventCreateCompensationPlan(input: {
-    readonly plan: EventCreateCompensationPlan;
-    readonly dependencyRegistry: EventDependencyContributorRegistry;
-    readonly readPort: EventCreationReadPort;
-  }): EventCreationChangesetResult {
-    requireTransaction(this.sqlite);
-    const issue = validateEventCreateCompensationPlan(
-      input.plan,
-      input.readPort,
-      input.dependencyRegistry
-    );
-    if (issue !== null) {
-      throw new SQLiteEventSpineError(
-        issue === 'stale_event_set' || issue === 'event_missing'
-          || issue === 'event_changed' || issue === 'dependencies_changed'
-          ? 'stale_event_set'
-          : 'event_head_data_corrupt'
-      );
-    }
-    changedExactlyOnce(this.sqlite.query<never, [number, string, number, string]>(`
-      UPDATE event_spine_workspace_sets
-         SET version = ?, current_event_id = NULL
-       WHERE workspace_id = ? AND version = ? AND current_event_id = ?
-    `).run(
-      input.plan.resultingEventSetVersion,
-      input.plan.workspaceId,
-      input.plan.expectedEventSetVersion,
-      input.plan.before.id
-    ));
-    return eventCreateCompensationResult(input.plan);
-  }
-
-  linkEventCreateReceipt(input: {
-    readonly receiptId: string;
-    readonly plan: EventCreatePlan;
-    readonly operation: { readonly name: string; readonly version: number };
-  }): void {
-    requireTransaction(this.sqlite);
-    const plan = parseEventCreatePlan(input.plan);
-    const eventSet = this.requireEventSet(plan.workspaceId);
-    const event = this.readEventHead({ workspaceId: plan.workspaceId, eventId: plan.after.id });
-    const receipt = oneOrNone(this.sqlite.query<EventCreateReceiptRow, [string]>(`
-      SELECT operation_name, operation_version, result_json
-        FROM foundation_trial_operation_receipts
-       WHERE id = ?
-       ORDER BY id
-       LIMIT 2
-    `).all(input.receiptId), 'source_plan_corrupt');
-    let parsedReceipt: ReturnType<typeof eventCreateOperationResultSchema.parse>;
-    try {
-      parsedReceipt = eventCreateOperationResultSchema.parse(JSON.parse(receipt?.result_json ?? 'null'));
-    } catch (error) {
-      throw new SQLiteEventSpineError('source_plan_corrupt', error);
-    }
-    if (!event
-        || canonicalJsonText(event) !== canonicalJsonText(plan.after)
-        || eventSet.currentEventId !== plan.after.id
-        || eventSet.version !== plan.resultingEventSetVersion
-        || workspaceEventSetDigest(eventSet) !== plan.resultingEventSetGuardDigest
-        || parsedReceipt.kind !== 'success'
-        || receipt?.operation_name !== input.operation.name
-        || receipt.operation_version !== input.operation.version
-        || parsedReceipt.receipt.id !== input.receiptId
-        || parsedReceipt.receipt.operationName !== input.operation.name
-        || parsedReceipt.receipt.operationVersion !== input.operation.version
-        || canonicalJsonText(parsedReceipt.data) !== canonicalJsonText(eventCreateResult(plan))) {
-      throw new SQLiteEventSpineError('source_plan_corrupt');
-    }
-    this.sqlite.query<never, [string, string, string]>(`
-      INSERT INTO event_spine_create_links (receipt_id, workspace_id, event_id)
-      VALUES (?, ?, ?)
-    `).run(input.receiptId, plan.workspaceId, plan.after.id);
-    this.sqlite.query<never, [string, string, string, string, string]>(`
-      INSERT INTO event_spine_create_plans (
-        receipt_id, workspace_id, event_id, plan_digest_sha256, plan_json
-      ) VALUES (?, ?, ?, ?, ?)
-    `).run(
-      input.receiptId,
-      plan.workspaceId,
-      plan.after.id,
-      eventCreatePlanDigest(plan),
-      canonicalJsonText(plan)
-    );
-  }
-
-  readEventCreatePlan(receiptId: string): EventCreatePlan {
-    const row = oneOrNone(this.sqlite.query<EventCreatePlanRow, [string]>(`
-      SELECT plan_digest_sha256, plan_json
-        FROM event_spine_create_plans
-       WHERE receipt_id = ?
-       ORDER BY receipt_id
-       LIMIT 2
-    `).all(receiptId), 'source_plan_corrupt');
-    if (!row) throw new SQLiteEventSpineError('source_plan_missing');
-    try {
-      const plan = parseEventCreatePlan(JSON.parse(row.plan_json));
-      if (canonicalJsonText(plan) !== row.plan_json
-          || eventCreatePlanDigest(plan) !== row.plan_digest_sha256) {
-        throw new SQLiteEventSpineError('source_plan_corrupt');
-      }
-      return plan;
-    } catch (error) {
-      if (error instanceof SQLiteEventSpineError) throw error;
-      throw new SQLiteEventSpineError('source_plan_corrupt', error);
-    }
-  }
 }
 
 /** Revalidates a spine-owned Event root using the authority transaction's own handle. */

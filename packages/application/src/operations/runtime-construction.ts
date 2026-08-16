@@ -13,7 +13,7 @@ export interface TrustedRuntimeConstructionInput {
   readonly read: ReadOperationExecutorOptions;
   readonly unitOfWork: EffectUnitOfWorkPort;
   readonly effectBuilder?: EffectInvocationBuilderOptions;
-  readonly newReceiptId?: () => string;
+  readonly newOperationLogId?: () => string;
 }
 
 const trustedApplicationOperationRuntimes = new WeakSet<object>();
@@ -29,7 +29,7 @@ export function createTrustedApplicationOperationRuntime(
     effectExecutor: createEffectOperationExecutor({
       registry: input.registry,
       unitOfWork: input.unitOfWork,
-      ...(input.newReceiptId ? { newReceiptId: input.newReceiptId } : {})
+      ...(input.newOperationLogId ? { newOperationLogId: input.newOperationLogId } : {})
     })
   });
   trustedApplicationOperationRuntimes.add(runtime);

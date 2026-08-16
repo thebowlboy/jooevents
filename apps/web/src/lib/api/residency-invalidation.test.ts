@@ -52,11 +52,6 @@ describe('a mutation is visible to the next read', () => {
 		expect(await trayOf(subject.id)).toBe('inbox');
 	});
 
-	test('restoreTray', async () => {
-		await api.submissions.restoreTray([{ id: subject.id, tray: origin }]);
-		expect(await trayOf(subject.id)).toBe(origin);
-	});
-
 	// These two change a row without moving a tray, so they cannot ride the
 	// shared count helper and have to invalidate themselves.
 	//
@@ -99,9 +94,10 @@ describe('the two modes agree', () => {
 		];
 		for (const query of queries) {
 			const first = await api.submissions.list(query);
-			// A mutation-free round trip: the snapshot is dropped and rebuilt, so
-			// the second answer comes from a fresh load rather than the held copy.
-			await api.submissions.restoreTray([{ id: subject.id, tray: origin }]);
+			// Two explicit forward actions return the row to its current inbox
+			// state while forcing the resident snapshot to rebuild.
+			await api.submissions.setAside([subject.id]);
+			await api.submissions.returnToInbox([subject.id]);
 			const second = await api.submissions.list(query);
 			expect(second.rows.map((row) => row.id)).toEqual(first.rows.map((row) => row.id));
 			expect(second.search?.matched).toBe(first.search?.matched);

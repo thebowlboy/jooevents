@@ -1,4 +1,3 @@
-import type { ChangesetApplyContribution, GuardRef, VersionRef } from '@jooevents/changesets';
 import {
   deadlineDisplayDateSchema,
   deadlineMutationPlanSchema,
@@ -8,11 +7,6 @@ import {
   type DeadlineSafeDiff,
   type DeadlineScopeDto
 } from '@jooevents/contracts/deadlines';
-import {
-  defineChangesetReadPort,
-  defineChangesetTransactionPort,
-  defineChangesetValidationPort
-} from '@jooevents/changesets';
 import {
   deadlineChangedFactPayload,
   planDeadlineMutation,
@@ -62,8 +56,14 @@ export interface FormCloseDeadlineValidationPort extends DeadlineRepository, Dea
   validateFormCloseDeadline(contribution: FormCloseDeadlineContribution): FormCloseDeadlineValidation;
 }
 
-export interface FormCloseDeadlineAppliedContribution extends
-  ChangesetApplyContribution<DeadlineMutationResult> {
+export interface FormCloseDeadlineAppliedContribution {
+  readonly result: DeadlineMutationResult;
+  readonly facts: readonly {
+    readonly kind: string;
+    readonly version: number;
+    readonly payload: ReturnType<typeof deadlineChangedFactPayload>;
+  }[];
+  readonly effects: readonly never[];
   readonly pin: DeadlineReferencePinDto | null;
 }
 
@@ -72,18 +72,6 @@ export interface FormCloseDeadlineTransactionPort extends DeadlineTransactionRep
     contribution: FormCloseDeadlineContribution
   ): FormCloseDeadlineAppliedContribution;
 }
-
-export const formCloseDeadlinePlanningPort = defineChangesetReadPort<FormCloseDeadlinePlanningPort>(
-  'form_close_deadline.planning', 1
-);
-export const formCloseDeadlineValidationPort =
-  defineChangesetValidationPort<FormCloseDeadlineValidationPort>(
-    'form_close_deadline.validation', 1
-  );
-export const formCloseDeadlineTransactionPort =
-  defineChangesetTransactionPort<FormCloseDeadlineTransactionPort>(
-    'form_close_deadline.transaction', 1
-  );
 
 export function planFormCloseDeadlineChangeFrom(
   port: DeadlineRepository & DeadlineEventTimeSource,
@@ -167,7 +155,7 @@ export function applyFormCloseDeadlineFrom(
 
 export function formCloseDeadlineAggregateRefs(
   contribution: FormCloseDeadlineContribution
-): readonly VersionRef[] {
+): readonly { readonly id: string; readonly version: number }[] {
   return Object.freeze([
     ...(contribution.before
       ? [{ id: deadlineAggregateId(contribution.before.id), version: contribution.before.version }]
@@ -183,7 +171,7 @@ export function formCloseDeadlineAggregateRefs(
 
 export function formCloseDeadlineGuardRefs(
   contribution: FormCloseDeadlineContribution
-): readonly GuardRef[] {
+): readonly { readonly id: string; readonly version: number; readonly digest: string }[] {
   return Object.freeze([{
     id: deadlineCatalogGuardId(contribution.input.scope.eventId),
     version: contribution.catalog.beforeVersion,

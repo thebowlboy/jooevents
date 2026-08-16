@@ -299,7 +299,7 @@ export const taskMutationResultSchema = z.discriminatedUnion('action', [
 
 export const taskBoardReadInputSchema = z.strictObject({});
 export const taskBoardReadResultSchema = createReadOperationResultSchema(taskBoardSnapshotSchema);
-export const taskMutationDraftInputSchema = z.discriminatedUnion('action', [
+export const taskMutationInputSchema = z.discriminatedUnion('action', [
   z.strictObject({
     action: z.literal('create_definition'),
     name: canonicalText(120),
@@ -312,41 +312,42 @@ export const taskMutationDraftInputSchema = z.discriminatedUnion('action', [
     action: z.enum(['waive_assignment', 'accept_fulfillment']),
     assignmentId: taskIdSchema,
     expectedVersion: taskVersionSchema
+  }),
+  z.strictObject({
+    action: z.literal('restore_assignment'),
+    assignmentId: taskIdSchema,
+    expectedVersion: taskVersionSchema
   })
 ]);
-export const taskDraftDataSchema = z.strictObject({
+export const taskMutationDataSchema = z.discriminatedUnion('action', [
+  z.strictObject({
   schemaVersion: z.literal(1),
-  action: z.enum(['create_definition', 'waive_assignment', 'accept_fulfillment']),
-  changesetId: taskIdSchema,
-  headVersion: taskVersionSchema,
-  status: z.literal('draft'),
-  revision: z.strictObject({
-    id: taskIdSchema,
-    number: taskVersionSchema,
-    digestSha256: taskDigestSchema
+  action: z.literal('create_definition'),
+  definition: taskDefinitionSnapshotSchema,
+  assignments: z.array(taskAssignmentSchema).max(TASK_ASSIGNMENT_LIMIT)
   }),
-  riskTier: z.enum(['normal', 'consequential']),
-  approvalPolicy: z.strictObject({
-    reference: versionedDefinitionRefSchema,
-    definitionDigestSha256: taskDigestSchema,
-    requirement: z.literal('none')
-  }),
-  safeDiff: taskSafeDiffSchema
-});
-export const taskDraftCanonicalResultSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('success'), data: taskDraftDataSchema }),
+  z.strictObject({
+    schemaVersion: z.literal(1),
+    action: z.enum(['waive_assignment', 'accept_fulfillment', 'restore_assignment']),
+    assignment: taskAssignmentSchema
+  })
+]);
+export const taskMutationCanonicalResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success'), data: taskMutationDataSchema }),
   z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
 ]);
-export const taskDraftOperationResultSchema = createEffectfulOperationResultSchema(taskDraftDataSchema);
+export const taskMutationOperationResultSchema = createEffectfulOperationResultSchema(taskMutationDataSchema);
+
+/** Temporary predecessor aliases retained only until the shared runtime rejoin removes old registrations. */
 
 export const TASK_OPERATION_SCHEMA_REFS = Object.freeze({
   boardRead: createOperationSchemaManifestRefs({
     inputKey: 'schema.task.board-read.input', inputSchema: taskBoardReadInputSchema,
     resultKey: 'schema.task.board-read.operator-result', resultSchema: taskBoardReadResultSchema
   }),
-  mutationDraft: createOperationSchemaManifestRefs({
-    inputKey: 'schema.task.mutation-draft.input', inputSchema: taskMutationDraftInputSchema,
-    resultKey: 'schema.task.mutation-draft.operator-result', resultSchema: taskDraftOperationResultSchema
+  mutation: createOperationSchemaManifestRefs({
+    inputKey: 'schema.task.mutation.input', inputSchema: taskMutationInputSchema,
+    resultKey: 'schema.task.mutation.operator-result', resultSchema: taskMutationOperationResultSchema
   })
 });
 
@@ -357,6 +358,8 @@ export type TaskDefinitionCatalogDto = z.infer<typeof taskDefinitionCatalogSchem
 export type TaskAssignmentDto = z.infer<typeof taskAssignmentSchema>;
 export type TaskEventDto = z.infer<typeof taskEventSchema>;
 export type TaskBoardSnapshotDto = z.infer<typeof taskBoardSnapshotSchema>;
+export type TaskMutationInput = z.infer<typeof taskMutationInputSchema>;
+export type TaskMutationData = z.infer<typeof taskMutationDataSchema>;
 export type TaskDefinitionCreatePlanningInput = z.infer<typeof taskDefinitionCreatePlanningInputSchema>;
 export type TaskAssignmentTransitionPlanningInput = z.infer<typeof taskAssignmentTransitionPlanningInputSchema>;
 export type TaskAuthorInput = z.infer<typeof taskAuthorInputSchema>;
@@ -364,5 +367,3 @@ export type TaskMutationPlanDto = z.infer<typeof taskMutationPlanSchema>;
 export type TaskAssignmentRestorePlanDto = z.infer<typeof taskAssignmentRestorePlanSchema>;
 export type TaskSafeDiffDto = z.infer<typeof taskSafeDiffSchema>;
 export type TaskMutationResultDto = z.infer<typeof taskMutationResultSchema>;
-export type TaskMutationDraftInput = z.input<typeof taskMutationDraftInputSchema>;
-export type TaskDraftData = z.infer<typeof taskDraftDataSchema>;

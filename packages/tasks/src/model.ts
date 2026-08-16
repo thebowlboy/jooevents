@@ -1,3 +1,4 @@
+import { canonicalJsonSha256 } from '@jooevents/kernel';
 import {
   taskAssignmentSchema,
   taskBoardSnapshotSchema,
@@ -14,7 +15,7 @@ import {
   type TaskEventDto,
   type TaskScopeDto
 } from '@jooevents/contracts';
-import { canonicalJsonSha256 } from '@jooevents/changesets';
+
 
 export function parseTaskScope(value: unknown): TaskScopeDto {
   return deepFreeze(taskScopeSchema.parse(value));
@@ -137,6 +138,10 @@ export interface TaskReadPort {
   readTaskCatalog(scope: TaskScopeDto): TaskDefinitionCatalogDto | undefined;
   readTaskAssignment(scope: TaskScopeDto, assignmentId: string): TaskAssignmentDto | undefined;
   readTaskBoard(scope: TaskScopeDto): TaskBoardSnapshotDto | undefined;
+}
+
+export interface TaskEventReadPort {
+  readTaskEvent(scope: TaskScopeDto, assignmentId: string, assignmentVersion: number): TaskEventDto | undefined;
 }
 
 export interface TaskTransactionPort extends TaskReadPort {

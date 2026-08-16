@@ -69,7 +69,7 @@ describe('Event and Program Vocabulary aggregate ports', () => {
 		expect(replay).toEqual(first);
 		expect(first).toMatchObject({
 			kind: 'success',
-			receipt: { operationName: 'changeset.commit', operationVersion: 1 }
+			receipt: { operationName: 'event.create', operationVersion: 1 }
 		});
 		expect(await sample.port.event.read()).toMatchObject({
 			kind: 'success', data: { kind: 'current_event', eventSetVersion: 2 }
@@ -87,23 +87,47 @@ describe('Event and Program Vocabulary aggregate ports', () => {
 		});
 	});
 
-	test('returns sample vocabulary drafts as inert changesets without mutating effective state', async () => {
+	test('applies sample ordinary vocabulary directly and keeps merge as the only draft', async () => {
 		const sample = createSampleEventProgramPort({
 			fixture: configuredEventProgramFixture,
 			createId: ids(),
 			createCorrelationId: () => correlationId
 		});
 		const before = await sample.port.vocabulary.read();
-		const drafted = await sample.port.vocabulary.draft({
-			action: 'create',
-			input: { kind: 'track', expectedSetVersion: 4, name: 'Platform engineering' }
-		}, { idempotencyKey: 'sample-track-draft' });
-		expect(drafted).toMatchObject({
+		const applied = await sample.port.vocabulary.create(
+			{ kind: 'track', expectedSetVersion: 4, name: 'Platform engineering' },
+			{ idempotencyKey: 'sample-track-create' }
+		);
+		expect(applied).toMatchObject({
 			kind: 'success',
-			data: { status: 'draft', change: { action: 'create', after: { name: 'Platform engineering' } } }
+			data: { action: 'create', kind: 'track', setVersion: 5 },
+			receipt: { operationName: 'program_vocabulary.create' }
 		});
 		const after = await sample.port.vocabulary.read();
-		expect(after).toEqual(before);
+		expect(after).not.toEqual(before);
+		expect(after.kind === 'success'
+			&& after.data.tracks.some((track) => track.name === 'Platform engineering')).toBe(true);
+
+		const draft = await sample.port.vocabulary.draftMerge({ action: 'merge', input: {
+			kind: 'room', sourceId: '018f7d5a-4b3c-7abc-8def-0123456789b1',
+			targetId: '018f7d5a-4b3c-7abc-8def-0123456789b0', expectedSetVersion: 5,
+			expectedSourceVersion: 1, expectedTargetVersion: 2
+		} }, { idempotencyKey: 'sample-room-merge-draft' });
+		if (draft.kind !== 'success') throw new TypeError('sample_merge_draft_expected');
+		expect(draft.data).toMatchObject({ action: 'merge',
+			safeDiff: { liveRepoints: 0, historicalPinsPreserved: 0 } });
+		expect(typeof draft.data.draftId).toBe('string');
+		expect(draft.receipt.operationName).toBe('program_vocabulary.merge.draft');
+		const published = await sample.port.vocabulary.publishMerge({
+			draftId: draft.data.draftId, revisionId: draft.data.revision.id,
+			revisionDigestSha256: draft.data.revision.digestSha256
+		}, { idempotencyKey: 'sample-room-merge-publish' });
+		expect(published).toMatchObject({ kind: 'success', data: { action: 'merge', setVersion: 6 },
+			receipt: { operationName: 'program_vocabulary.merge' } });
+		expect(await sample.port.vocabulary.publishMerge({
+			draftId: draft.data.draftId, revisionId: draft.data.revision.id,
+			revisionDigestSha256: draft.data.revision.digestSha256
+		}, { idempotencyKey: 'sample-room-merge-publish' })).toEqual(published);
 	});
 
 	test('never substitutes sample data when a live manifest is unavailable', async () => {
@@ -115,11 +139,7 @@ describe('Event and Program Vocabulary aggregate ports', () => {
 					requested = true;
 					throw new TypeError('should_not_request');
 				},
-				draft: async () => {
-					requested = true;
-					throw new TypeError('should_not_request');
-				},
-				changeset: async () => {
+				create: async () => {
 					requested = true;
 					throw new TypeError('should_not_request');
 				}
@@ -129,7 +149,15 @@ describe('Event and Program Vocabulary aggregate ports', () => {
 					requested = true;
 					throw new TypeError('should_not_request');
 				},
-				draft: async () => {
+				direct: async () => {
+					requested = true;
+					throw new TypeError('should_not_request');
+				},
+				draftMerge: async () => {
+					requested = true;
+					throw new TypeError('should_not_request');
+				},
+				publishMerge: async () => {
 					requested = true;
 					throw new TypeError('should_not_request');
 				}

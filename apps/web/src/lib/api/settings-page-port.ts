@@ -185,9 +185,6 @@ function mutationFailure(result: Exclude<WorkspaceTeamSettingsMutationResult,
 	{ readonly kind: 'success' | 'committed_refresh_failed' | 'committed_projection_mismatch' }>): string {
 	if (result.kind === 'refused') return result.reason;
 	if (result.kind === 'prepare_read_failed') return readFailure(result.result);
-	if (result.kind === 'confirmation_required') {
-		return 'This team change needs confirmation from another currently authorized person.';
-	}
 	if (result.kind === 'unavailable') return 'This team change is not available in this live workspace.';
 	if (result.kind === 'transport_error') {
 		return result.error.retryable

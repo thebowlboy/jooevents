@@ -1,3 +1,3 @@
-export * from './draft-module';
+export * from './direct-module';
 export * from './module';
 export * from './participant-portal-module';

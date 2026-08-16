@@ -1,5 +1,6 @@
+import { canonicalJsonSha256 } from '@jooevents/kernel';
 import type { Database } from 'bun:sqlite';
-import { canonicalJsonSha256 } from '@jooevents/changesets';
+
 import {
   compareScopeRef,
   reviewerRosterMutationResultSchema,
@@ -17,10 +18,8 @@ import {
   parseReviewerRosterRecord,
   parseReviewerRosterScope,
   parseReviewerRosterState,
-  type ReviewerRosterAttribution,
-  type ReviewerRosterChangesetReadPort,
-  type ReviewerRosterChangesetTransactionPort,
-  type ReviewerRosterPlanningSource
+  type ReviewerRosterPlanningSource,
+  type ReviewerRosterTransactionRepository
 } from '@jooevents/review/roster';
 
 /** Durable reviewer-roster schema over an established event scope root. */
@@ -118,18 +117,13 @@ export function installReviewerRosterSchema(sqlite: Database): void {
  * are the only state this repository owns: reviewer records are retained (never
  * deleted), their identity — including the exact access-subject binding — is
  * immutable, and one access subject registers at most once per event. Authority
- * and scope-target facts are delegated to the injected lower-owner sources, and
- * compensation attribution is available only when the optional resolver is
- * wired, so unattributed compensations stay blocked rather than fabricated.
+ * and scope-target facts are delegated to the injected lower-owner sources.
  */
 export class SQLiteReviewerRosterRepository
-implements ReviewerRosterChangesetReadPort, ReviewerRosterChangesetTransactionPort {
+implements ReviewerRosterTransactionRepository {
   constructor(
     private readonly sqlite: Database,
-    private readonly sources: ReviewerRosterPlanningSource,
-    private readonly compensationAttribution?: (
-      scope: ReviewerRosterScopeDto
-    ) => ReviewerRosterAttribution | undefined
+    private readonly sources: ReviewerRosterPlanningSource
   ) {}
 
   readReviewerRoster(scopeValue: ReviewerRosterScopeDto): ReviewerRosterStateDto | undefined {
@@ -164,12 +158,6 @@ implements ReviewerRosterChangesetReadPort, ReviewerRosterChangesetTransactionPo
 
   readReviewerScopeTargets(scope: ReviewerRosterScopeDto): ReviewerScopeTargetSetDto | undefined {
     return this.sources.readReviewerScopeTargets(parseReviewerRosterScope(scope));
-  }
-
-  readReviewerRosterCompensationAttribution(
-    scope: ReviewerRosterScopeDto
-  ): ReviewerRosterAttribution | undefined {
-    return this.compensationAttribution?.(parseReviewerRosterScope(scope));
   }
 
   applyReviewerRosterPlan(plan: ReviewerRosterMutationPlanDto): ReviewerRosterMutationResult {

@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { createHash } from 'node:crypto';
+import {
+  composeOperationRegistryModules,
+  createApplicationOperationRuntime,
+  createHmacRequestHashSealer,
+  type InvocationEvidence
+} from '@jooevents/application';
 import {
   applyEngagementSeedFrom,
   applyEngagementSeedReversalFrom,
@@ -10,19 +17,46 @@ import {
   validateEngagementSeedReversalFrom,
   EngagementSeedError
 } from '@jooevents/engagement';
-import { parseEventId, parseInstant, parseUserId, parseWorkspaceId } from '@jooevents/kernel';
+import {
+  ENGAGEMENT_CHANGE_OPERATION,
+  ENGAGEMENT_MANAGE_ACCESS_POLICY,
+  ENGAGEMENT_REQUEST_HASH_PROFILE,
+  createEngagementDirectOperationModule,
+  engagementChangeOperationResultSchema
+} from '@jooevents/engagement-operations';
+import {
+  parseContractVersion,
+  parseEventId,
+  parseInstant,
+  parseInvocationId,
+  parseMembershipId,
+  parseUserId,
+  parseWorkspaceId
+} from '@jooevents/kernel';
 import {
   createProgramReferenceContributorRegistry,
   planProgramVocabularyMutation
 } from '@jooevents/program';
 import { planSessionMutation } from '@jooevents/session';
-import { installEventSpineSchema } from './event-spine';
+import { installDeadlineSchema } from './deadline';
+import { createSQLiteEngagementDirectEffectDomainRegistration } from './engagement-direct-effect-domain';
+import {
+  createSQLiteEventSpineOperatorEventRelationshipSource,
+  installEventSpineSchema,
+  SQLiteEventSpineRepository
+} from './event-spine';
+import {
+  createSQLiteEffectDomainAdapterRegistry,
+  installFoundationTrialUnitOfWorkSchema
+} from './foundation-trial-uow';
 import {
   createSQLiteProgramVocabularyContributorAdapterRegistry,
   installProgramVocabularySchema,
   SQLiteProgramVocabularyRepository
 } from './program-vocabulary';
 import { installSessionSchema, SQLiteSessionRepository } from './session';
+import { SQLiteEffectUnitOfWorkPort } from './sqlite-effect-unit-of-work';
+import { installTaskSchema } from './tasks';
 import {
   createSQLiteEngagementSubmissionReferenceSource,
   installEngagementSchema,
@@ -32,6 +66,7 @@ import {
 const workspaceId = parseWorkspaceId('550e8400-e29b-41d4-a716-446655440000');
 const eventId = parseEventId('019c1df7-86b5-769b-bba4-5f7097bfb101');
 const userId = parseUserId('019c1df7-86b5-769b-bba4-5f7097bfb201');
+const membershipId = parseMembershipId('019c1df7-86b5-769b-bba4-5f7097bfb202');
 const sessionId = '019c1df7-86b5-769b-bba4-5f7097bfb301';
 const formatId = '019c1df7-86b5-769b-bba4-5f7097bfb401';
 const personA = '019c1df7-86b5-769b-bba4-5f7097bfb501';
@@ -43,6 +78,17 @@ const later = parseInstant('2026-08-14T09:00:00.000Z');
 const scope = { workspaceId, eventId };
 const seededBy = Object.freeze({ version: 1, digestSha256: 'e'.repeat(64) });
 const otherSeededBy = Object.freeze({ version: 1, digestSha256: 'f'.repeat(64) });
+const profile = Object.freeze({ key: 'engagement-direct-test', version: parseContractVersion(1) });
+const evidence: InvocationEvidence = Object.freeze({
+  kind: 'operator',
+  surface: 'operator_http',
+  client: Object.freeze({ key: 'web.operator' }),
+  sessionHandle: 'verified-engagement-direct-session'
+});
+
+function uuid(suffix: number): string {
+  return `019c1df7-86b5-769b-bba4-${suffix.toString(16).padStart(12, '0')}`;
+}
 
 function fixture() {
   const sqlite = new Database(':memory:', { strict: true });
@@ -57,10 +103,13 @@ function fixture() {
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, version INTEGER NOT NULL
     ) STRICT;
   `);
+  installFoundationTrialUnitOfWorkSchema(sqlite);
   installEventSpineSchema(sqlite);
   installProgramVocabularySchema(sqlite);
   installSessionSchema(sqlite);
   installEngagementSchema(sqlite);
+  installDeadlineSchema(sqlite);
+  installTaskSchema(sqlite);
   sqlite.query(`
     INSERT INTO workspaces (id, name, state, created_at, updated_at, version)
     VALUES (?, 'Workspace', 'active', 1, 1, 1)
@@ -81,6 +130,11 @@ function fixture() {
   `).run(workspaceId, eventId, userId, Date.parse(now), 'a'.repeat(64));
   sqlite.query(`INSERT INTO event_spine_scope_roots (workspace_id, event_id) VALUES (?, ?)`)
     .run(workspaceId, eventId);
+  sqlite.query(`
+    UPDATE event_spine_workspace_sets
+       SET version = 2, current_event_id = ?
+     WHERE workspace_id = ?
+  `).run(eventId, workspaceId);
 
   const referenceRegistry = createProgramReferenceContributorRegistry({
     expected: [], contributors: []
@@ -124,6 +178,110 @@ function fixture() {
 
   const engagements = new SQLiteEngagementRepository(sqlite);
   return { sqlite, engagements };
+}
+
+function directEffect(fx: ReturnType<typeof fixture>) {
+  let nextId = 0x700;
+  let receiptId = 0x900;
+  let correlationId = 0xa00;
+  const next = () => uuid(nextId++);
+  const authority: Parameters<typeof createEngagementDirectOperationModule>[0]['currentAuthority'] = {
+    resolve(input) {
+      if (input.evidence.kind !== 'operator') {
+        return Object.freeze({ kind: 'denied' as const, reason: 'lane_mismatch' as const });
+      }
+      return Object.freeze({
+        kind: 'authorized' as const,
+        authority: Object.freeze({
+          actor: Object.freeze({ kind: 'workspace_user' as const, userId }),
+          principal: Object.freeze({ kind: 'workspace_user' as const, userId, membershipId }),
+          lane: input.lane,
+          scope: input.scope,
+          grants: Object.freeze([Object.freeze({ kind: 'permission' as const, key: 'event.manage' })]),
+          evidenceIds: Object.freeze(['engagement-membership.current']),
+          authorityCitationIds: Object.freeze([]),
+          evaluatedAt: input.evaluatedAt
+        })
+      });
+    }
+  };
+  const currentEvent = {
+    resolveCurrentEvent(requestedWorkspaceId: typeof workspaceId) {
+      if (requestedWorkspaceId !== workspaceId) throw new TypeError('engagement_workspace_mismatch');
+      const state = new SQLiteEventSpineRepository(fx.sqlite).readCurrentEventState(workspaceId);
+      if (!state) throw new TypeError('engagement_event_set_missing');
+      return Object.freeze({
+        ...(state.currentEvent ? { eventId: state.currentEvent.id } : {}),
+        evidenceIds: Object.freeze([
+          `event-spine-set:${workspaceId}@${state.eventSet.version}`,
+          ...(state.currentEvent
+            ? [`event-spine-root:${state.currentEvent.id}@${state.currentEvent.version}`]
+            : [])
+        ])
+      });
+    }
+  };
+  const module = createEngagementDirectOperationModule({
+    workspaceId,
+    managePolicy: ENGAGEMENT_MANAGE_ACCESS_POLICY,
+    currentAuthority: authority,
+    currentEvent,
+    clock: { now: () => later },
+    ids: { newInvocationId: () => parseInvocationId(next()) },
+    authorityPrincipalKeyProfile: profile,
+    scopePartitionProfile: profile,
+    requestCanonicalizationProfile: profile,
+    requestHashSealer: createHmacRequestHashSealer({
+      profile: ENGAGEMENT_REQUEST_HASH_PROFILE,
+      keyBytes: new Uint8Array(32).fill(0x73)
+    }),
+    idempotencyCredentialProfile: profile,
+    idempotencyCredentialSealer: {
+      seal(raw: string) {
+        return Object.freeze({
+          verifierProfile: profile,
+          verifierSha256: createHash('sha256').update(`engagement-key:${raw}`).digest('hex')
+        });
+      }
+    }
+  });
+  const adapters = createSQLiteEffectDomainAdapterRegistry([
+    createSQLiteEngagementDirectEffectDomainRegistration({
+      sqlite: fx.sqlite,
+      workspaceId,
+      eventRelationships: createSQLiteEventSpineOperatorEventRelationshipSource()
+    })
+  ]);
+  const unitOfWork = new SQLiteEffectUnitOfWorkPort(fx.sqlite, adapters, {
+    resolveAuthority: authority.resolve,
+    now: () => later
+  });
+  const runtime = createApplicationOperationRuntime({
+    source: composeOperationRegistryModules([module]),
+    read: {
+      operationalTrace: { emit() {} },
+      immutableAudit: { append() {} },
+      clock: { now: () => later },
+      newInvocationId: () => parseInvocationId(next())
+    },
+    unitOfWork,
+    newOperationLogId: () => uuid(receiptId++)
+  });
+  return async (businessInput: unknown, key: string) => {
+    const composed = await runtime;
+    const invocation = await composed.effectBuilder.build({
+      operationName: ENGAGEMENT_CHANGE_OPERATION.name,
+      operationVersion: ENGAGEMENT_CHANGE_OPERATION.version,
+      surface: 'operator_http',
+      correlationId: uuid(correlationId++),
+      businessInput,
+      verifiedEvidence: evidence,
+      rawIdempotencyKey: key
+    });
+    return engagementChangeOperationResultSchema.parse(
+      await composed.effectExecutor.execute(invocation)
+    );
+  };
 }
 
 function seedInput(overrides: Record<string, unknown> = {}) {
@@ -314,6 +472,67 @@ describe('disposable SQLite engagement repository', () => {
       fx.sqlite.exec('BEGIN IMMEDIATE;');
       expect(() => fx.sqlite.query('DELETE FROM sessions').run()).toThrow();
       fx.sqlite.exec('ROLLBACK;');
+    } finally {
+      fx.sqlite.close();
+    }
+  });
+});
+
+describe('SQLite Engagement direct effect domain', () => {
+  test('one call commits the head and log atomically, replays, and key-conflicts changed bytes', async () => {
+    const fx = fixture();
+    try {
+      applySeed(fx);
+      const head = fx.engagements.readSessionPersonEngagement(scope, sessionId, personA)!;
+      const effect = directEffect(fx);
+      const input = {
+        action: 'record_confirmation',
+        engagementId: head.id,
+        expectedEngagementVersion: 1,
+        attribution: 'organizer_recorded'
+      };
+      const committed = await effect(input, 'engagement-one-key');
+      expect(committed).toMatchObject({
+        kind: 'success',
+        data: {
+          action: 'record_confirmation',
+          engagement: { id: head.id, state: 'confirmed', version: 2 }
+        },
+        receipt: { operationName: 'engagement.change', operationVersion: 1 }
+      });
+      if (committed.kind !== 'success') throw new TypeError('engagement_commit_failed');
+      expect(fx.engagements.readEngagementHead(scope, head.id)).toMatchObject({
+        state: 'confirmed', version: 2,
+        confirmation: { attribution: 'organizer_recorded', recordedByUserId: userId }
+      });
+      expect(fx.sqlite.query<{ count: number }, []>(
+        'SELECT count(*) AS count FROM operation_log'
+      ).get()).toEqual({ count: 1 });
+      expect(fx.sqlite.query<{ summary: string }, []>(
+        "SELECT summary FROM operation_log WHERE operation_name = 'engagement.change'"
+      ).get()).toEqual({ summary: 'Recorded a speaker confirmation' });
+
+      const replayed = await effect(input, 'engagement-one-key');
+      expect(replayed).toMatchObject({ kind: 'success', receipt: { id: committed.receipt.id } });
+      expect(fx.sqlite.query<{ count: number }, []>(
+        'SELECT count(*) AS count FROM operation_log'
+      ).get()).toEqual({ count: 1 });
+
+      expect(await effect({
+        action: 'decline',
+        engagementId: head.id,
+        expectedEngagementVersion: 1
+      }, 'engagement-one-key')).toMatchObject({
+        kind: 'outcome',
+        outcome: { class: 'idempotency_conflict', kind: 'operation.request_changed' }
+      });
+      expect(await effect(input, 'engagement-stale')).toMatchObject({
+        kind: 'outcome',
+        outcome: { class: 'stale_revision', kind: 'engagement.changed' }
+      });
+      expect(fx.sqlite.query<{ count: number }, []>(
+        'SELECT count(*) AS count FROM operation_log'
+      ).get()).toEqual({ count: 1 });
     } finally {
       fx.sqlite.close();
     }

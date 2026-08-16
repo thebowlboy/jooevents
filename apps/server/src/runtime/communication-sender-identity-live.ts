@@ -101,7 +101,7 @@ function refusal(
       })
     }),
     domain: null,
-    receiptChildren: Object.freeze([])
+    effectContributions: Object.freeze([])
   });
 }
 
@@ -119,7 +119,7 @@ function staleRefusal(headVersion: number): WorkspaceSenderIdentityPreparedContr
       })
     }),
     domain: null,
-    receiptChildren: Object.freeze([])
+    effectContributions: Object.freeze([])
   });
 }
 
@@ -235,7 +235,7 @@ export class SQLiteWorkspaceSenderIdentityEffectDomainAdapter implements SQLiteE
               headVersion: application.head.headVersion,
               occurredAt
             },
-            receiptChildren: [{
+            effectContributions: [{
               kind: 'domain_fact',
               factId: this.input.ids.newFactId(),
               factKind: 'workspace_sender_identity_changed',

@@ -1,4 +1,4 @@
-import { canonicalJsonSha256, type RiskTier } from '@jooevents/changesets';
+import { canonicalJsonSha256 } from '@jooevents/kernel';
 import { z } from 'zod';
 
 const stablePolicyKeySchema = z.string().regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/);
@@ -9,7 +9,7 @@ export interface TemplateAuthoringPolicy {
   readonly activation: 'ordinary';
   readonly key: string;
   readonly version: number;
-  readonly risk: Extract<RiskTier, 'low' | 'normal'>;
+  readonly risk: 'low' | 'normal';
   readonly approval: TemplateAuthoringApprovalRequirement;
   readonly definitionDigestSha256: string;
 }
@@ -17,7 +17,7 @@ export interface TemplateAuthoringPolicy {
 export interface TemplateAuthoringPolicyInput {
   readonly key: string;
   readonly version: number;
-  readonly risk: Extract<RiskTier, 'low' | 'normal'>;
+  readonly risk: 'low' | 'normal';
   readonly approval: TemplateAuthoringApprovalRequirement;
 }
 

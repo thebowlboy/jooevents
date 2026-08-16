@@ -2,11 +2,8 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, lstatSync, realpathSync, rmSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import {
-  changesetLifecycleOperationResultSchema
-} from '@jooevents/changeset-operations';
-import {
-  programVocabularyDraftOperationResultSchema
-} from '@jooevents/program-operations';
+  programVocabularyDirectOperationResultSchema
+} from '@jooevents/contracts';
 import { workspaceOverviewReadResultSchema } from '@jooevents/contracts/workspace-overview';
 import { reviewSnapshotReadResultSchema } from '@jooevents/contracts/reviews';
 import {
@@ -84,10 +81,10 @@ async function retirePanelFormat(fixture: RichEphemeralLiveFixture): Promise<voi
      WHERE formats.id = ?
   `).get(itemId);
   if (!snapshot) throw new TypeError('rich_fixture_test_panel_missing');
-  const draft = programVocabularyDraftOperationResultSchema.parse(await effect(
+  const mutation = programVocabularyDirectOperationResultSchema.parse(await effect(
     fixture,
-    '/api/events/current/program-vocabulary/drafts/retire',
-    'isolation-panel-retire-draft',
+    '/api/events/current/program-vocabulary/retire',
+    'isolation-panel-retire',
     {
       kind: 'format',
       id: itemId,
@@ -95,29 +92,8 @@ async function retirePanelFormat(fixture: RichEphemeralLiveFixture): Promise<voi
       expectedItemVersion: snapshot.version
     }
   ));
-  if (draft.kind !== 'success') throw new TypeError('rich_fixture_test_panel_draft_failed');
-  const selector = {
-    changesetId: draft.data.changesetId,
-    revisionId: draft.data.revision.id,
-    revisionDigest: draft.data.revision.digestSha256
-  };
-  const proposed = changesetLifecycleOperationResultSchema.parse(await effect(
-    fixture,
-    '/api/changesets/proposals',
-    'isolation-panel-retire-propose',
-    { ...selector, expectedHeadVersion: draft.data.headVersion }
-  ));
-  if (proposed.kind !== 'success' || proposed.data.action !== 'propose') {
-    throw new TypeError('rich_fixture_test_panel_propose_failed');
-  }
-  const committed = changesetLifecycleOperationResultSchema.parse(await effect(
-    fixture,
-    '/api/changesets/commits',
-    'isolation-panel-retire-commit',
-    { ...selector, expectedHeadVersion: proposed.data.diff.headVersion }
-  ));
-  if (committed.kind !== 'success' || committed.data.action !== 'commit') {
-    throw new TypeError('rich_fixture_test_panel_commit_failed');
+  if (mutation.kind !== 'success' || mutation.data.action !== 'retire') {
+    throw new TypeError('rich_fixture_test_panel_retire_failed');
   }
 }
 
@@ -155,9 +131,8 @@ describe('rich ephemeral live SQLite fixture', () => {
       reviewAssignments: expected.review.assignments,
       deadlines: expected.deadlines.total,
       deadlineCatalogs: expected.deadlines.catalogs,
-      changesets: expected.changesets,
-      committedChangesets: expected.changesets,
-      operationReceipts: expected.operationReceipts
+      operationReceipts: expected.operationReceipts,
+      operationLogs: expected.operationLogs
     });
     expect(fixture.baseline.historyCounts).toEqual(expected.history);
     expect(fixture.baseline.vocabulary.items.filter((item) => item.status === 'retired'))
@@ -279,7 +254,7 @@ describe('rich ephemeral live SQLite fixture', () => {
       items: [
         {
           key: 'programmed_keynote',
-          title: 'Deterministic Changesets in Production',
+          title: 'Deterministic Operations in Production',
           lifecycle: 'programmed',
           plannedDurationMinutes: 45,
           version: 1,
@@ -420,20 +395,12 @@ describe('rich ephemeral live SQLite fixture', () => {
             tracks: { total: expected.vocabulary.tracks },
             formats: { total: expected.vocabulary.formats }
           },
-          changesets: {
-            kind: 'exact',
-            // Event-scoped heads only: the event-creation changeset precedes
-            // the event and the workspace_team role change is workspace-scoped.
-            total: expected.changesets - 2,
-            committed: expected.changesets - 2
-          }
+          // Overview metrics are current-Event scoped; the fixture's one
+          // workspace-level Team role change remains visible in History but
+          // is not an Event operation.
+          operations: { kind: 'exact', total: expected.operationLogs - 1 }
         },
-        // The overview history evidence union covers the event, vocabulary,
-        // form, field-registry, triage, and workspace_team timelines; the
-        // three Session changesets, the roster registration, and the five
-        // publication changesets have no source there, while the reviewer
-        // role change adds one team thread.
-        history: { total: expected.changesets - 9, truncated: true }
+        history: { total: expected.operationLogs, truncated: true }
       },
       correlationId: overviewCorrelationId
     });

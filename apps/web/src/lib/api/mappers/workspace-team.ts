@@ -1,12 +1,12 @@
 import type {
-	WorkspaceTeamDraftData,
+	WorkspaceTeamMutationData,
 	WorkspaceTeamMemberView as WorkspaceTeamMemberDto,
 	WorkspaceTeamRoleView as WorkspaceTeamRoleDto,
 	WorkspaceTeamSafeDiff,
 	WorkspaceTeamSnapshot
 } from '@jooevents/contracts';
 import type {
-	WorkspaceTeamDraftView,
+	WorkspaceTeamCommittedMutationView,
 	WorkspaceTeamMemberView,
 	WorkspaceTeamRoleView,
 	WorkspaceTeamSafeChangeView,
@@ -118,24 +118,15 @@ export function mapWorkspaceTeamSafeChange(
 	}
 }
 
-export function mapWorkspaceTeamDraft(draft: WorkspaceTeamDraftData): WorkspaceTeamDraftView {
-	if (draft.action !== draft.safeDiff.action) {
-		throw new TypeError('Workspace Team draft action does not match its safe diff.');
+export function mapWorkspaceTeamMutation(
+	mutation: WorkspaceTeamMutationData
+): WorkspaceTeamCommittedMutationView {
+	if (mutation.action !== mutation.safeDiff.action) {
+		throw new TypeError('Workspace Team mutation action does not match its safe diff.');
 	}
 	return Object.freeze({
-		schemaVersion: draft.schemaVersion,
-		action: draft.action,
-		changesetId: draft.changesetId,
-		headVersion: draft.headVersion,
-		status: draft.status,
-		revision: Object.freeze({ ...draft.revision }),
-		riskTier: draft.riskTier,
-		approvalPolicy: Object.freeze({
-			key: draft.approvalPolicy.reference.key,
-			version: draft.approvalPolicy.reference.version,
-			definitionDigestSha256: draft.approvalPolicy.definitionDigestSha256,
-			requirement: draft.approvalPolicy.requirement
-		}),
-		change: mapWorkspaceTeamSafeChange(draft.safeDiff)
+		action: mutation.action,
+		teamVersion: mutation.teamVersion,
+		change: mapWorkspaceTeamSafeChange(mutation.safeDiff)
 	});
 }

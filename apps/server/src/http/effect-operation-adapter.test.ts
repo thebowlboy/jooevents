@@ -87,7 +87,7 @@ const canonicalSchema = z.discriminatedUnion('kind', [
 const contributionSchema = z.strictObject({
   result: canonicalSchema,
   domain: z.strictObject({ value: z.string() }),
-  receiptChildren: z.array(z.strictObject({ kind: z.literal('domain_evidence'), value: z.string() }))
+  effectContributions: z.array(z.strictObject({ kind: z.literal('domain_evidence'), value: z.string() }))
 });
 const projectedSchema = createEffectfulOperationResultSchema(z.strictObject({ value: z.string() }));
 
@@ -250,7 +250,7 @@ function provingSource(tracker: ProofTracker, invalidProjection = false): Operat
         return {
           result: { kind: 'success' as const, data: { value: request.value } },
           domain: { value: request.value },
-          receiptChildren: [{ kind: 'domain_evidence' as const, value: request.value }]
+          effectContributions: [{ kind: 'domain_evidence' as const, value: request.value }]
         };
       }
     }],
@@ -336,18 +336,8 @@ class MemoryEffectUnitOfWork implements EffectUnitOfWorkPort {
     this.tracker.unitOfWorkBegins += 1;
     const receipts = new Map(this.receipts);
     const domain = [...this.domain];
-    const claims = new Map<string, string>();
     const unitOfWork: EffectUnitOfWork = {
       recheckCurrentAuthority: (context) => recheckEffectInvocationCurrentAuthority(context),
-      acquireExecutionClaim(identity, requestHash) {
-        const key = identityKey(identity);
-        const existing = claims.get(key);
-        if (existing !== undefined) return existing === requestHash
-          ? { kind: 'contended_same_request' as const }
-          : { kind: 'contended_changed_request' as const };
-        claims.set(key, requestHash);
-        return { kind: 'acquired' as const };
-      },
       findTerminalReceipt(identity) {
         return receipts.get(identityKey(identity));
       },
@@ -356,24 +346,19 @@ class MemoryEffectUnitOfWork implements EffectUnitOfWorkPort {
         domain.push(structuredClone(contribution));
         this.tracker.domainWrites += 1;
       },
-      insertReceiptParent(receipt) {
-        const key = identityKey(receipt.identity);
+      insertOperationLog(record) {
+        const key = identityKey(record.receipt.identity);
         if (receipts.has(key)) throw new Error('duplicate receipt');
-        receipts.set(key, receipt);
+        receipts.set(key, record.receipt);
       },
-      insertTerminalNewOperationAudit() {},
-      insertReceiptChild(parentReceiptId) {
+      applyEffectContribution(parentReceiptId) {
         if (![...receipts.values()].some((receipt) => receipt.ref.id === parentReceiptId)) {
-          throw new Error('receipt parent missing');
+          throw new Error('operation log missing');
         }
-      },
-      releaseExecutionClaim(identity) {
-        if (!claims.delete(identityKey(identity))) throw new Error('execution claim missing');
       }
     };
     try {
       const result = await work(unitOfWork);
-      if (claims.size !== 0) throw new Error('execution claim leaked');
       this.receipts = receipts;
       this.domain = domain;
       this.tracker.commits += 1;
@@ -401,7 +386,7 @@ async function harness(options: {
   const registry = await createOperationRegistry(provingSource(tracker, options.invalidProjection ?? false));
   const unitOfWork = new MemoryEffectUnitOfWork(tracker);
   const builder = createEffectInvocationBuilder(registry);
-  const effectExecutor = createEffectOperationExecutor({ registry, unitOfWork, newReceiptId: () => receiptId });
+  const effectExecutor = createEffectOperationExecutor({ registry, unitOfWork, newOperationLogId: () => receiptId });
   let loseCommittedResponse = options.loseFirstCommittedResponse ?? false;
   const executor = {
     async execute(invocation: Parameters<typeof effectExecutor.execute>[0]) {

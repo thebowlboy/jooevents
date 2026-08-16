@@ -44,15 +44,13 @@ import type {
 } from '@jooevents/persistence/message-releases';
 import {
   CommunicationReleasePlanningError,
-  commitSendMessagesChangeset
+  commitSendMessagesRelease
 } from '@jooevents/persistence/message-release-effect-domain';
 import type {
   SQLiteEffectDomainAdapterRegistration
 } from '@jooevents/persistence/sqlite-effect-unit-of-work';
 import {
   buildDecisionSendAuthorInput,
-  createDerivedCommitReceiptFactory,
-  decisionSendRequestHash,
   materializeDecisionSendBatch,
   openAdoptedDecisionSnapshot,
   type CommunicationDeliveryRoute
@@ -68,14 +66,11 @@ import {
  * resolution and per-recipient render, no writes, parked per draft revision)
  * and the two Foundation effect-domain adapters whose sealed synchronous
  * steps run inside the one unit-of-work transaction — adopting the parked
- * preparation, or driving the whole draft -> propose -> validate -> commit
- * send ceremony (`commitSendMessagesChangeset`) with the derived
- * `changeset.commit` receipt.
+ * preparation, or committing the owner-native release and delivery records.
  *
- * Refusal discipline: the ceremony writes its own draft/propose rows before it
- * can refuse, so the send step runs under a savepoint; a typed refusal rolls
- * back to the savepoint and surfaces as the operation's declared outcome while
- * the hosting unit of work commits nothing but its own audit evidence.
+ * Refusal discipline: the send step runs under a savepoint; a typed refusal
+ * rolls back to the savepoint and surfaces as the operation's declared outcome
+ * while the hosting unit of work commits nothing but its own audit evidence.
  */
 
 const SEND_SAVEPOINT = 'communication_send_operation';
@@ -158,7 +153,7 @@ function refusalContribution(refused: StructuredOutcome): CommunicationSendLaneP
   return Object.freeze({
     result: Object.freeze({ kind: 'outcome' as const, outcome: refused }),
     domain: null,
-    receiptChildren: Object.freeze([])
+    effectContributions: Object.freeze([])
   });
 }
 
@@ -416,7 +411,7 @@ export function createCommunicationSendOperationRuntime(
         current.phase = 'applied';
         applied = current;
       },
-      afterReceiptParentInserted(receipt: TerminalEffectReceipt): void {
+      afterOperationLogInserted(receipt: TerminalEffectReceipt): void {
         const current = applied;
         if (!input.sqlite.inTransaction
             || !current
@@ -494,7 +489,7 @@ export function createCommunicationSendOperationRuntime(
         return Object.freeze({
           result: Object.freeze({ kind: 'success' as const, data }),
           domain,
-          receiptChildren: Object.freeze([])
+          effectContributions: Object.freeze([])
         });
       } catch (error) {
         if (error instanceof SQLiteOrganizerAudiencePreviewError) {
@@ -540,15 +535,6 @@ export function createCommunicationSendOperationRuntime(
         audienceLabel: parsed.data.audienceLabel,
         now
       });
-      const requestHashSha256 = decisionSendRequestHash({
-        scope,
-        audienceSpecId: parsed.data.audienceSpecId,
-        batchId: parsed.data.batchId
-      });
-      const attribution = Object.freeze({
-        scopePartitionKey: context.requestBinding.scopePartitionKey,
-        authorityPrincipalKey: context.authorityPrincipalKey
-      });
       // The ceremony writes draft and proposal rows before it can refuse, so
       // it runs under a savepoint inside the Foundation transaction: a typed
       // refusal rolls those rows back while the unit of work itself commits
@@ -556,40 +542,23 @@ export function createCommunicationSendOperationRuntime(
       input.sqlite.exec(`SAVEPOINT ${SEND_SAVEPOINT}`);
       let savepointOpen = true;
       try {
-        const committed = commitSendMessagesChangeset({
+        const committed = commitSendMessagesRelease({
           sqlite: input.sqlite,
           releases: input.releases,
           // The live currency authority is the composed preview repository
           // (Track B repair): a re-decide between adoption and this commit
           // refuses typed, never a mirror comparison.
           previewCurrency: input.previewRepository,
-          ids: {
-            newChangesetId: () => crypto.randomUUID(),
-            newRevisionId: () => crypto.randomUUID(),
-            newApprovalId: () => crypto.randomUUID(),
-            newCorrectionAttemptId: () => crypto.randomUUID(),
-            newEvidenceId: () => crypto.randomUUID()
-          },
+          ids: { newEvidenceId: () => crypto.randomUUID() },
           context: {
             workspaceId: scope.workspaceId,
             eventId: scope.eventId,
             principalKey,
-            authorityPrincipalKey: attribution.authorityPrincipalKey,
+            authorityPrincipalKey: context.authorityPrincipalKey,
             evaluatedAt: now
           },
           authorInput,
-          materializedReleases: batch.materialized,
-          receiptExpectation: {
-            surface: 'operator_http',
-            scopePartitionKey: attribution.scopePartitionKey,
-            requestHashSha256
-          },
-          terminalReceipt: createDerivedCommitReceiptFactory({
-            sqlite: input.sqlite,
-            scopePartitionKey: attribution.scopePartitionKey,
-            authorityPrincipalKey: attribution.authorityPrincipalKey,
-            requestHashSha256
-          })
+          materializedReleases: batch.materialized
         });
         if (committed.kind === 'refused') {
           input.sqlite.exec(`ROLLBACK TO ${SEND_SAVEPOINT}`);
@@ -609,7 +578,7 @@ export function createCommunicationSendOperationRuntime(
         const data = organizerSendMessagesResultSchema.parse({
           schemaVersion: 1,
           batchId: committed.result.batchId,
-          changesetId: committed.record.head.id,
+          releaseCommitId: committed.releaseCommitId,
           dispatchGeneration: committed.result.dispatchGeneration,
           releaseCount: committed.result.releaseCount,
           deliveryCount: committed.result.deliveryIds.length
@@ -619,8 +588,7 @@ export function createCommunicationSendOperationRuntime(
           workspaceId: scope.workspaceId,
           eventId: scope.eventId,
           batchId: data.batchId,
-          changesetId: data.changesetId,
-          commitReceiptId: committed.link.commitReceiptId,
+          releaseCommitId: data.releaseCommitId,
           releaseCount: data.releaseCount,
           deliveryCount: data.deliveryCount,
           occurredAt: context.receivedAt
@@ -629,7 +597,7 @@ export function createCommunicationSendOperationRuntime(
         return Object.freeze({
           result: Object.freeze({ kind: 'success' as const, data }),
           domain,
-          receiptChildren: Object.freeze([])
+          effectContributions: Object.freeze([])
         });
       } catch (error) {
         if (savepointOpen) {

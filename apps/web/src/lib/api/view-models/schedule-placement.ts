@@ -76,34 +76,8 @@ export interface SchedulePlacementPlanView {
 	readonly timeBasis: SchedulePlacementUtcOnlyTimeBasisView;
 }
 
-export interface SchedulePlacementDraftView {
-	readonly schemaVersion: 1;
-	readonly action: 'place' | 'move';
-	readonly selector: {
-		readonly changesetId: string;
-		readonly revisionId: string;
-		readonly revisionDigest: string;
-	};
-	readonly headVersion: number;
-	readonly status: 'draft';
-	readonly revisionNumber: number;
-	readonly riskTier: 'normal';
-	readonly approval: {
-		readonly requirement: 'none';
-		readonly policy: { readonly key: string; readonly version: number };
-		readonly policyDigestSha256: string;
-	};
-	readonly safeDiff: SchedulePlacementPlanView;
-}
-
 export interface SchedulePlacementCommittedView {
-	readonly action: 'place' | 'move';
-	readonly selector: SchedulePlacementDraftView['selector'];
-	readonly changesetHead: {
-		readonly proposedVersion: number;
-		readonly committedVersion: number;
-	};
+	readonly action: 'place' | 'move' | 'unplace';
 	readonly scheduleVersion: number;
-	readonly occurrence: SchedulePlacementOccurrenceView;
-	readonly safeDiff: SchedulePlacementPlanView;
+	readonly occurrence: SchedulePlacementOccurrenceView | null;
 }

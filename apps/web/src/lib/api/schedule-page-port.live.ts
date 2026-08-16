@@ -766,16 +766,26 @@ export function createLiveSchedulePagePort(input: {
 				if (applied.kind !== 'success') {
 					throw new SchedulePageLiveError(applyFailure(applied, 'placement'));
 				}
+				if (applied.data.occurrence === null) {
+					throw new SchedulePageLiveError({
+						code: 'invalid_contract', reason: 'The placement result was incomplete.'
+					});
+				}
 				return occurrencePlacement(
 					applied.data.occurrence,
 					geometry.dayStartMin,
 					geometry.timeZone
 				);
 			},
-			async unplace(): Promise<void> {
-				// Unplace is internal compensation in the placement contract; it is
-				// not a web operation, so the capability refuses instead of no-oping.
-				throw unmounted('schedule_unplace');
+			async unplace(sessionId: string): Promise<void> {
+				const snapshot = await readPlacements();
+				const current = snapshot.occurrences.find((entry) => entry.sessionId === sessionId);
+				if (!current) return;
+				const applied = await input.placements.placeOrMove({
+					action: 'unplace', expectedScheduleVersion: snapshot.scheduleVersion,
+					occurrenceId: current.id, expectedOccurrenceVersion: current.version
+				} as never, newIdempotencyKey());
+				if (applied.kind !== 'success') throw new SchedulePageLiveError(applyFailure(applied, 'placement'));
 			},
 			async addBreak(): Promise<never> {
 				throw unmounted('schedule_breaks');
@@ -811,6 +821,11 @@ export function createLiveSchedulePagePort(input: {
 				);
 				if (applied.kind !== 'success') {
 					throw new SchedulePageLiveError(applyFailure(applied, 'session'));
+				}
+				if (applied.data.session === null) {
+					throw new SchedulePageLiveError({
+						code: 'invalid_contract', reason: 'The session result was incomplete.'
+					});
 				}
 				return sessionItem(applied.data.session);
 			},
@@ -849,8 +864,16 @@ export function createLiveSchedulePagePort(input: {
 				if (applied.data.session === null) throw new TypeError('session_retarget_result_missing');
 				return sessionItem(applied.data.session);
 			},
-			async removeSession(): Promise<MutationOutcome> {
-				return refusal('session_remove');
+			async removeSession(id: string): Promise<MutationOutcome> {
+				const catalog = await readCatalog();
+				const head = catalog.sessions.find((session) => session.id === id);
+				if (!head) return { ok: false, reason: 'This session no longer exists.' };
+				const applied = await input.sessions.applyChange({
+					action: 'remove_new_session', expectedCatalogVersion: catalog.version,
+					expectedCatalogDigestSha256: catalog.digestSha256, sessionId: id,
+					expectedSessionVersion: 1, expectedSessionDigestSha256: head.digestSha256
+				} as never, newIdempotencyKey());
+				return applied.kind === 'success' ? { ok: true } : { ok: false, reason: applyFailure(applied, 'session').reason };
 			},
 			/**
 			 * Resolved `{ ok: false }` is reserved for refusals of a satisfiable

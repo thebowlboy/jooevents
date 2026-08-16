@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 
 /**
  * Focused joined smoke for the live Schedule aggregate (session.catalog.read +
- * session.change.draft, placement snapshot, the live Program Vocabulary, the
+ * session.change, placement snapshot, the live Program Vocabulary, the
  * whole-population proposal counter, and — since the Wave-2 geometry join —
  * the day grid derived from the event's own settings trio).
  *
@@ -141,7 +141,7 @@ test('live schedule renders the settings-derived grid, publication state, and a 
 	await expect(pool.getByText(sessionTitle, { exact: true })).toBeVisible();
 
 	// Place it: aim from the pool, take the first served opening, and commit
-	// through the placement lifecycle (draft -> propose -> commit).
+	// through the one direct placement operation.
 	await pool.getByRole('button', { name: `Place “${sessionTitle}”` }).click();
 	await page.getByRole('button', { name: /^Opening / }).first().click();
 	const confirm = page.getByRole('dialog', { name: 'Place session' });

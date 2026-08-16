@@ -20,6 +20,7 @@ import type {
   WorkspaceTeamProvisioningGuard,
   WorkspaceTeamProvisioningSynchronizationPort
 } from './workspace-team';
+import { workspaceInvitationLookupBinding } from './workspace-team';
 
 type Row = Record<string, string | number | null>;
 
@@ -96,6 +97,8 @@ export function createSQLiteProvisioningStore(
   sqlite: Database,
   options: {
     readonly workspaceTeam?: WorkspaceTeamProvisioningSynchronizationPort;
+    /** Server-held key for matching a verified mailbox to a classified team invitation. */
+    readonly workspaceInvitationLookupKeyBytes?: Uint8Array;
   } = {}
 ): ProvisioningStore {
   function userIdFor(reference: UserReference, newUserId: string | undefined): string {
@@ -232,6 +235,25 @@ export function createSQLiteProvisioningStore(
       if (normalizedEmail) {
         const row = sqlite.query<Row, [string, string, number]>(`select * from access_reservations where workspace_id = ? and normalized_email = ? and status = 'open' and (expires_at is null or expires_at > ?)`).get(input.workspaceId, normalizedEmail, Date.parse(input.claims.observedAt));
         if (row) reservation = reservationFromRows(sqlite, row);
+        if (!reservation && options.workspaceInvitationLookupKeyBytes) {
+          const lookupBinding = workspaceInvitationLookupBinding({
+            keyBytes: options.workspaceInvitationLookupKeyBytes,
+            workspaceId: input.workspaceId as Parameters<typeof workspaceInvitationLookupBinding>[0]['workspaceId'],
+            normalizedEmail
+          });
+          const invitation = sqlite.query<Row, [string, string, number]>(`
+            select r.* from access_reservations r
+              join workspace_team_invitation_recipients recipient
+                on recipient.reservation_id = r.id
+             where r.workspace_id = ? and recipient.lookup_binding = ?
+               and r.status = 'open' and (r.expires_at is null or r.expires_at > ?)
+             limit 2
+          `).all(input.workspaceId, lookupBinding, Date.parse(input.claims.observedAt));
+          if (invitation.length > 1) throw new Error('workspace_invitation_lookup_collision');
+          if (invitation[0]) {
+            reservation = { ...reservationFromRows(sqlite, invitation[0]), normalizedEmail };
+          }
+        }
       }
       return {
         ...(identity ? { identityLink: { id: String(identity.id), userId: String(identity.user_id), provider: String(identity.provider), issuer: String(identity.issuer), subject: String(identity.subject), ...(identity.email_snapshot != null ? { emailSnapshot: String(identity.email_snapshot) } : {}), emailVerifiedSnapshot: Number(identity.email_verified_snapshot) === 1, ...(identity.display_name_snapshot != null ? { displayNameSnapshot: String(identity.display_name_snapshot) } : {}), ...(identity.avatar_url_snapshot != null ? { avatarUrlSnapshot: String(identity.avatar_url_snapshot) } : {}), linkedAt: iso(identity.linked_at), lastObservedAt: iso(identity.last_observed_at) } } : {}),

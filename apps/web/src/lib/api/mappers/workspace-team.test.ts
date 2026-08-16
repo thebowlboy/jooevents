@@ -1,10 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import {
-	workspaceTeamDraftDataSchema,
+	workspaceTeamMutationDataSchema,
 	workspaceTeamSnapshotSchema
 } from '@jooevents/contracts';
 import {
-	mapWorkspaceTeamDraft,
+	mapWorkspaceTeamMutation,
 	mapWorkspaceTeamSnapshot
 } from './workspace-team';
 
@@ -84,19 +84,10 @@ describe('Workspace Team browser mapper', () => {
 	});
 
 	test('maps only the disclosure-safe invitation evidence and never reconstructs an address', () => {
-		const draft = workspaceTeamDraftDataSchema.parse({
+		const mutation = workspaceTeamMutationDataSchema.parse({
 			schemaVersion: 1,
 			action: 'invite',
-			changesetId: id(10),
-			headVersion: 1,
-			status: 'draft',
-			revision: { id: id(11), number: 1, digestSha256: digest('b') },
-			riskTier: 'normal',
-			approvalPolicy: {
-				reference: { key: 'workspace_team.bounded', version: 1 },
-				definitionDigestSha256: digest('c'),
-				requirement: 'none'
-			},
+			teamVersion: 8,
 			safeDiff: {
 				action: 'invite',
 				recipientHint: 'recipient-0123456789ab',
@@ -105,10 +96,10 @@ describe('Workspace Team browser mapper', () => {
 				delivery: 'awaiting_activation'
 			}
 		});
-		const mapped = mapWorkspaceTeamDraft(draft);
+		const mapped = mapWorkspaceTeamMutation(mutation);
 		expect(mapped).toMatchObject({
 			action: 'invite',
-			riskTier: 'normal',
+			teamVersion: 8,
 			change: {
 				recipientHint: 'recipient-0123456789ab',
 				invitationStatus: 'recorded',
@@ -119,19 +110,10 @@ describe('Workspace Team browser mapper', () => {
 	});
 
 	test('keeps pending member-session revocation distinct from invitation removal', () => {
-		const draft = workspaceTeamDraftDataSchema.parse({
+		const mutation = workspaceTeamMutationDataSchema.parse({
 			schemaVersion: 1,
 			action: 'remove',
-			changesetId: id(20),
-			headVersion: 4,
-			status: 'draft',
-			revision: { id: id(21), number: 1, digestSha256: digest('d') },
-			riskTier: 'consequential',
-			approvalPolicy: {
-				reference: { key: 'workspace_team.bounded', version: 1 },
-				definitionDigestSha256: digest('e'),
-				requirement: 'distinct_current_human'
-			},
+			teamVersion: 8,
 			safeDiff: {
 				action: 'remove',
 				subject: { kind: 'member', membershipId: id(2), version: 4 },
@@ -141,7 +123,7 @@ describe('Workspace Team browser mapper', () => {
 			}
 		});
 
-		expect(mapWorkspaceTeamDraft(draft).change).toEqual({
+		expect(mapWorkspaceTeamMutation(mutation).change).toEqual({
 			action: 'remove',
 			subject: { kind: 'member', membershipId: id(2), version: 4 },
 			before: roles[0],

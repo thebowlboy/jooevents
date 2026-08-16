@@ -488,7 +488,7 @@ describe('SQLite organizer communication authoring repository', () => {
     expect(first).toMatchObject({
       result: { kind: 'success', data: { payloadKind: 'message_content' } },
       domain: { operationName: 'store_communication_authoring_payload' },
-      receiptChildren: []
+      effectContributions: []
     });
 
     const changed = inTransaction(input, () => preparation.prepare({

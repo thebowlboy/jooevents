@@ -3,9 +3,8 @@ import type {
 	FormDefinitionCreateAuthorInput,
 	StructuredOutcome
 } from '@jooevents/contracts';
-import type { FormsPagePort } from './forms-page-port';
+import type { FormPublishReview, FormsPagePort } from './forms-page-port';
 import type { WorkspaceFieldsApi } from './field-registry-workspace-adapter';
-import { mapFormDefinitionToAuthorInput } from './mappers/intake-forms';
 import type { ProgramVocabularySettingsPort } from './program-vocabulary-settings-adapter';
 import type {
 	FormComposition,
@@ -14,10 +13,10 @@ import type {
 	MutationOutcome
 } from './types';
 import type {
-	OrganizerFormDraftView,
 	OrganizerFormSummaryView,
 	OrganizerFormsPort,
-	OrganizerFormsResult
+	OrganizerFormsResult,
+	OrganizerFormWriteView
 } from './view-models/intake-forms';
 
 type AdapterFailure = Readonly<{ code: string; reason: string }>;
@@ -97,26 +96,6 @@ function isMissing(result: Exclude<OrganizerFormsResult<unknown>, { readonly kin
 			|| result.outcome.kind.endsWith('.not_found'));
 }
 
-function sameJson(left: unknown, right: unknown): boolean {
-	function ordered(value: unknown): unknown {
-		if (Array.isArray(value)) return value.map(ordered);
-		if (typeof value !== 'object' || value === null) return value;
-		return Object.fromEntries(
-			Object.entries(value as Record<string, unknown>)
-				.sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
-				.map(([key, child]) => [key, ordered(child)])
-		);
-	}
-	return JSON.stringify(ordered(left)) === JSON.stringify(ordered(right));
-}
-
-function receiptMatches(
-	receipt: { readonly operationName: string; readonly operationVersion: number } | undefined,
-	name: string
-): boolean {
-	return receipt?.operationName === name && receipt.operationVersion === 1;
-}
-
 function canonicalComposition(composition: FormComposition): FormComposition {
 	return {
 		excludedFieldIds: [...composition.excludedFieldIds].sort(),
@@ -171,17 +150,9 @@ function defaultIdempotencyKey(): string {
 	return `je.forms.action.${globalThis.crypto.randomUUID()}`;
 }
 
-interface WorkflowInput {
-	readonly action: 'create' | 'revise' | 'lifecycle' | 'closing';
-	readonly draftOperationName: string;
-	readonly draft: (idempotencyKey: string) => Promise<OrganizerFormsResult<OrganizerFormDraftView>>;
-	readonly validateDraft: (draft: OrganizerFormDraftView) => boolean;
-}
-
 /**
- * Adapts canonical Form + Registry + Program Vocabulary operations to the
- * already-tuned page. Every UI gesture completes one exact Draft → Propose →
- * Commit loop; no Deadline identity or sample fallback crosses this seam.
+ * Adapts canonical Form + Registry + Program Vocabulary operations to the tuned page.
+ * Ordinary writes are direct; publication alone uses Form-owned review and publish.
  */
 export function createLiveFormsPagePort(input: {
 	readonly forms: OrganizerFormsPort;
@@ -194,6 +165,7 @@ export function createLiveFormsPagePort(input: {
 }): FormsPagePort {
 	if (input.forms.source.kind !== 'live') throw new TypeError('forms_page_live_source_required');
 	const newIdempotencyKey = input.newIdempotencyKey ?? defaultIdempotencyKey;
+	const publishKeys = new Map<string, string>();
 
 	async function catalog() {
 		const result = await input.forms.list();
@@ -208,80 +180,19 @@ export function createLiveFormsPagePort(input: {
 		throw new FormsPageLiveAdapterError(resultFailure(result));
 	}
 
-	async function workflow(work: WorkflowInput): Promise<void> {
-		const baseKey = newIdempotencyKey();
-		const drafted = await work.draft(`${baseKey}.${work.action}.draft`);
-		if (drafted.kind !== 'success') {
-			throw new FormsPageLiveAdapterError(resultFailure(drafted));
+	async function write(
+		expectedAction: OrganizerFormWriteView['action'],
+		expectedFormId: string | null,
+		invoke: (key: string) => Promise<OrganizerFormsResult<OrganizerFormWriteView>>
+	): Promise<OrganizerFormWriteView> {
+		const result = await invoke(newIdempotencyKey());
+		if (result.kind !== 'success') throw new FormsPageLiveAdapterError(resultFailure(result));
+		if (result.data.action !== expectedAction
+			|| (expectedFormId !== null && result.data.formId !== expectedFormId)) {
+			throw new FormsPageLiveAdapterError({ code: 'invalid_contract',
+				reason: 'The Form result did not match the requested change.' });
 		}
-		if (!receiptMatches(drafted.receipt, work.draftOperationName)
-			|| drafted.data.action !== work.action
-			|| !work.validateDraft(drafted.data)) {
-			throw new FormsPageLiveAdapterError({
-				code: 'invalid_contract',
-				reason: 'The Form draft did not match the requested change.'
-			});
-		}
-		if (drafted.data.approvalRequirement !== 'none') {
-			throw new FormsPageLiveAdapterError({
-				code: 'distinct_current_human_required',
-				reason: 'This Form change needs confirmation from another currently authorized person.'
-			});
-		}
-		const selector = {
-			changesetId: drafted.data.changesetId,
-			revisionId: drafted.data.revisionId,
-			revisionDigest: drafted.data.revisionDigest
-		};
-		const proposed = await input.forms.propose(
-			{ ...selector, expectedHeadVersion: drafted.data.headVersion },
-			`${baseKey}.${work.action}.propose`
-		);
-		if (proposed.kind !== 'success') {
-			throw new FormsPageLiveAdapterError(resultFailure(proposed));
-		}
-		const operation = proposed.data.operations[0];
-		if (!receiptMatches(proposed.receipt, 'changeset.propose')
-			|| proposed.data.changesetId !== selector.changesetId
-			|| proposed.data.revisionId !== selector.revisionId
-			|| proposed.data.revisionDigest !== selector.revisionDigest
-			|| proposed.data.headVersion !== drafted.data.headVersion + 1
-			|| proposed.data.status !== 'proposed'
-			|| proposed.data.revisionNumber !== drafted.data.revisionNumber
-			|| proposed.data.riskTier !== drafted.data.riskTier
-			|| proposed.data.approvalRequirement !== drafted.data.approvalRequirement
-			|| proposed.data.operations.length !== 1
-			|| operation?.kind !== 'intake.form.mutate'
-			// Canonical FORM_CHANGESET_VERSION moved 2 -> 3 with the Wave-2
-			// intake source widening (cross-lane conformance fix, J-WEB); the
-			// sample dataset still emits 2 through this shared workflow until
-			// the forms lane converges it on the canonical version.
-			|| (operation.version !== 2 && operation.version !== 3)
-			|| operation.dependencyGroup !== 'intake_form'
-			|| !sameJson(operation.safeDiff, drafted.data.safeDiff)) {
-			throw new FormsPageLiveAdapterError({
-				code: 'invalid_contract',
-				reason: 'The proposed Form change did not match its reviewed draft.'
-			});
-		}
-		const committed = await input.forms.commit(
-			{ ...selector, expectedHeadVersion: proposed.data.headVersion },
-			`${baseKey}.${work.action}.commit`
-		);
-		if (committed.kind !== 'success') {
-			throw new FormsPageLiveAdapterError(resultFailure(committed));
-		}
-		if (!receiptMatches(committed.receipt, 'changeset.commit')
-			|| committed.data.changesetId !== selector.changesetId
-			|| committed.data.revisionId !== selector.revisionId
-			|| committed.data.revisionDigest !== selector.revisionDigest
-			|| committed.data.expectedHeadVersion !== proposed.data.headVersion
-			|| committed.data.committedHeadVersion !== proposed.data.headVersion + 1) {
-			throw new FormsPageLiveAdapterError({
-				code: 'invalid_contract',
-				reason: 'The committed Form receipt did not match the proposed change.'
-			});
-		}
+		return result.data;
 	}
 
 	async function guardedMutation(work: () => Promise<void>): Promise<MutationOutcome> {
@@ -305,20 +216,15 @@ export function createLiveFormsPagePort(input: {
 			...current.form.definition,
 			composition: canonicalComposition(composition)
 		};
-		await workflow({
-			action: 'revise',
-			draftOperationName: 'form.definition.revise.draft',
-			draft: (key) => input.forms.draftRevise({
+		const result = await write('revise', formId, (key) => input.forms.revise({
 				formId,
 				expectedDefinitionVersion: current.form.version,
 				expectedRegistryVersion: current.registryPin.version,
 				definition
-			}, key),
-			validateDraft: (draft) => draft.safeDiff.action === 'revise'
-				&& draft.safeDiff.before.id === formId
-				&& draft.safeDiff.before.version === current.form.version
-				&& sameJson(mapFormDefinitionToAuthorInput(draft.safeDiff.after.definition), definition)
-		});
+			}, key));
+		if (result.formDefinitionVersion !== current.form.version + 1) {
+			throw new FormsPageLiveAdapterError({ code: 'invalid_contract', reason: 'The updated Form version did not match.' });
+		}
 	}
 
 	const port: FormsPagePort = {
@@ -376,31 +282,12 @@ export function createLiveFormsPagePort(input: {
 					}),
 					rules: []
 				};
-				let createdId = '';
-				await workflow({
-					action: 'create',
-					draftOperationName: 'form.definition.create.draft',
-					draft: (key) => input.forms.draftCreate({
+				const result = await write('create', null, (key) => input.forms.create({
 						expectedCatalogVersion: current.catalogVersion,
 						expectedRegistryVersion: current.registryPin.version,
 						definition
-					}, key),
-					validateDraft: (draft) => {
-						if (draft.safeDiff.action !== 'create' || draft.safeDiff.before !== null) return false;
-						createdId = draft.safeDiff.after.id;
-						const after = mapFormDefinitionToAuthorInput(draft.safeDiff.after.definition);
-						const availabilityMatches = definition.availability.kind === 'evergreen'
-							? after.availability.kind === 'evergreen'
-							: after.availability.kind === 'deadline';
-						return availabilityMatches
-							&& after.name === definition.name
-							&& sameJson(after.target, definition.target)
-							&& after.confirmation === definition.confirmation
-							&& sameJson(after.composition, definition.composition)
-							&& sameJson(after.rules, definition.rules);
-					}
-				});
-				const created = (await catalog()).forms.find((form) => form.id === createdId);
+					}, key));
+				const created = (await catalog()).forms.find((form) => form.id === result.formId);
 				if (!created) {
 					throw new FormsPageLiveAdapterError({
 						code: 'invalid_contract',
@@ -412,63 +299,80 @@ export function createLiveFormsPagePort(input: {
 			setComposition: (formId, composition) => guardedMutation(
 				() => reviseComposition(formId, composition)
 			),
-			async restoreComposition(formId, composition) {
-				await reviseComposition(formId, composition);
-			},
 			setClosing: (formId, closesAt) => guardedMutation(async () => {
 				const current = await detail(formId);
 				if (!current) {
 					throw new FormsPageLiveAdapterError({ code: 'form_missing', reason: 'This form no longer exists.' });
 				}
-				await workflow({
-					action: 'closing',
-					draftOperationName: 'form.closing.change.draft',
-					draft: (key) => input.forms.draftClosing({
+				const expectedAction = current.form.definition.availability.kind === 'evergreen'
+					? 'set_closing' as const : closesAt === null ? 'remove_closing' as const : 'update_closing' as const;
+				const result = await write(expectedAction, formId, (key) => input.forms.closing({
 						formId,
 						expectedDefinitionVersion: current.form.version,
 						closesAt
-					}, key),
-					validateDraft: (draft) => draft.safeDiff.action === 'closing'
-						&& draft.safeDiff.before.id === formId
-						&& draft.safeDiff.before.version === current.form.version
-						&& draft.safeDiff.deadline.after.displayDate === closesAt
-						&& (closesAt === null
-							? draft.safeDiff.after.definition.availability.kind === 'evergreen'
-							: draft.safeDiff.after.definition.availability.kind === 'deadline')
-				});
+					}, key));
+				if (result.formDefinitionVersion !== current.form.version + 1) {
+					throw new FormsPageLiveAdapterError({ code: 'invalid_contract', reason: 'The Form close-date version did not match.' });
+				}
 			}),
 			setStatus: (formId, status) => guardedMutation(async () => {
 				const current = await detail(formId);
 				if (!current) {
 					throw new FormsPageLiveAdapterError({ code: 'form_missing', reason: 'This form no longer exists.' });
 				}
-				const transition = status === 'closed'
-					? 'close' as const
-					: current.form.status === 'draft'
-						? 'publish_and_open' as const
-						: 'reopen' as const;
-				await workflow({
-					action: 'lifecycle',
-					draftOperationName: 'form.lifecycle.change.draft',
-					draft: (key) => input.forms.draftLifecycle(
-						transition === 'publish_and_open'
-							? {
-									transition,
-									formId,
-									expectedDefinitionVersion: current.form.version,
-									expectedRegistryVersion: current.registryPin.version
-								}
-							: { transition, formId, expectedDefinitionVersion: current.form.version },
-						key
-					),
-					validateDraft: (draft) => draft.safeDiff.action === 'lifecycle'
-						&& draft.safeDiff.before.id === formId
-						&& draft.safeDiff.before.version === current.form.version
-						&& draft.safeDiff.after.status === status
-						&& (transition === 'publish_and_open'
-							? draft.safeDiff.publishedVersion !== null
-							: draft.safeDiff.publishedVersion === null)
-				});
+				if (current.form.status === 'draft') {
+					throw new FormsPageLiveAdapterError({ code: 'review_required', reason: 'Review this Form before publishing and opening it.' });
+				}
+				const transition = status === 'closed' ? 'close' as const : 'reopen' as const;
+				const result = await write(transition, formId, (key) => input.forms.lifecycle({
+					transition, formId, expectedDefinitionVersion: current.form.version
+				}, key));
+				if (result.formDefinitionVersion !== current.form.version + 1) {
+					throw new FormsPageLiveAdapterError({ code: 'invalid_contract', reason: 'The Form lifecycle version did not match.' });
+				}
+			}),
+			async preparePublish(formId) {
+				try {
+					const current = await detail(formId);
+					if (!current) return { ok: false, reason: 'This form no longer exists.' };
+					if (current.form.status !== 'draft') return { ok: false, reason: 'Only a draft Form can be published and opened.' };
+					const drafted = await input.forms.draftPublish({ action: 'publish_and_open', formId,
+						expectedDefinitionVersion: current.form.version,
+						expectedRegistryVersion: current.registryPin.version }, newIdempotencyKey());
+					if (drafted.kind !== 'success') throw new FormsPageLiveAdapterError(resultFailure(drafted));
+					const diff = drafted.data.safeDiff;
+					if (drafted.data.action !== 'publish_and_open' || diff.action !== 'publish_and_open'
+						|| diff.before.id !== formId || diff.before.version !== current.form.version
+						|| diff.after.status !== 'open' || diff.publishedVersion.number < 1) {
+						throw new FormsPageLiveAdapterError({ code: 'invalid_contract', reason: 'The Form publication review did not match.' });
+					}
+					const review: FormPublishReview = Object.freeze({ action: 'publish_and_open',
+						selector: Object.freeze({ draftId: drafted.data.draftId, revisionId: drafted.data.revision.id,
+							revisionDigestSha256: drafted.data.revision.digestSha256 }),
+						formId, formName: current.form.name, versionNumber: diff.publishedVersion.number,
+						resultingStatus: 'open', surfaceSuccessorCount: diff.surfaceSuccessors.length });
+					return { ok: true, review };
+				} catch (error) {
+					if (error instanceof FormsPageLiveAdapterError) return { ok: false, reason: error.message };
+					throw error;
+				}
+			},
+			publish: (review) => guardedMutation(async () => {
+				const fingerprint = JSON.stringify(review.selector);
+				const key = publishKeys.get(fingerprint) ?? newIdempotencyKey();
+				publishKeys.set(fingerprint, key);
+				const published = await input.forms.publish(review.selector, key);
+				if (published.kind !== 'success') throw new FormsPageLiveAdapterError(resultFailure(published));
+				if (published.data.action !== review.action || published.data.formId !== review.formId
+					|| published.data.publishedVersionId === null) {
+					throw new FormsPageLiveAdapterError({ code: 'invalid_contract', reason: 'The published Form did not match its review.' });
+				}
+				const current = await detail(review.formId);
+				if (!current || current.form.status !== 'open'
+					|| current.form.currentPublishedVersionId !== published.data.publishedVersionId) {
+					throw new FormsPageLiveAdapterError({ code: 'invalid_contract', reason: 'The published Form could not be reconciled.' });
+				}
+				publishKeys.delete(fingerprint);
 			})
 		}),
 		fields: Object.freeze({

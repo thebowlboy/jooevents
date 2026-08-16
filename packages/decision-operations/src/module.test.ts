@@ -9,14 +9,14 @@ import {
   parseWorkspaceId
 } from '@jooevents/kernel';
 import {
-  DECISION_DECIDE_DRAFT_OPERATION,
-  DECISION_DRAFT_ACCESS_POLICY,
-  DECISION_DRAFT_REQUEST_HASH_PROFILE,
+  DECISION_DECIDE_OPERATION,
+  DECISION_MANAGE_ACCESS_POLICY,
+  DECISION_REQUEST_HASH_PROFILE,
   DECISION_READ_ACCESS_POLICY,
   DECISION_STATE_READ_OPERATION,
-  createDecisionDraftOperationModule,
+  createDecisionDirectOperationModule,
   createDecisionOperationModule,
-  decisionDraftContributionSchema
+  decisionDirectContributionSchema
 } from '.';
 
 const scope = Object.freeze({
@@ -64,10 +64,10 @@ describe('Decision operation modules', () => {
     });
   });
 
-  test('registers the decide draft with its typed refusal outcomes', async () => {
-    const module = createDecisionDraftOperationModule({
+  test('registers the direct decide operation with its typed refusal outcomes', async () => {
+    const module = createDecisionDirectOperationModule({
       workspaceId: scope.workspaceId,
-      draftPolicy: DECISION_DRAFT_ACCESS_POLICY,
+      managePolicy: DECISION_MANAGE_ACCESS_POLICY,
       currentAuthority: {
         resolve: () => Object.freeze({ kind: 'denied' as const, reason: 'missing' as const })
       },
@@ -84,7 +84,7 @@ describe('Decision operation modules', () => {
       requestCanonicalizationProfile: profile,
       requestHashSealer: {
         seal: () => Object.freeze({
-          profile: DECISION_DRAFT_REQUEST_HASH_PROFILE,
+          profile: DECISION_REQUEST_HASH_PROFILE,
           requestHashSha256: 'a'.repeat(64)
         })
       } as never,
@@ -103,15 +103,15 @@ describe('Decision operation modules', () => {
       path: binding.path,
       input: binding.input
     }))).toEqual([{
-      operation: `${DECISION_DECIDE_DRAFT_OPERATION.name}@1`,
+      operation: `${DECISION_DECIDE_OPERATION.name}@1`,
       method: 'POST',
-      path: '/api/events/current/decisions/decide-drafts',
+      path: '/api/events/current/decisions',
       input: 'body'
     }]);
     const manifest = registry.safeManifest.operations.find(
-      (operation) => operation.name === DECISION_DECIDE_DRAFT_OPERATION.name
+      (operation) => operation.name === DECISION_DECIDE_OPERATION.name
     );
-    expect(manifest).toMatchObject({ effect: 'draft', consequenceTags: ['changeset-drafted'] });
+    expect(manifest).toMatchObject({ effect: 'commit', consequenceTags: ['decision-recorded'] });
     const outcomeKeys = (manifest as { outcomes: readonly { class: string; kind: string }[] })
       .outcomes.map((outcome) => `${outcome.class}:${outcome.kind}`);
     expect(outcomeKeys).toContain('stale_revision:decision.changed');
@@ -128,23 +128,23 @@ describe('Decision operation modules', () => {
         }
       },
       domain: null,
-      receiptChildren: []
+      effectContributions: []
     });
-    expect(decisionDraftContributionSchema.safeParse(outcome(
+    expect(decisionDirectContributionSchema.safeParse(outcome(
       'decision.target_unavailable',
       { reason: 'target_graduated', exits: ['retarget', 'spawn'] }
     )).success).toBe(true);
-    expect(decisionDraftContributionSchema.safeParse(outcome(
+    expect(decisionDirectContributionSchema.safeParse(outcome(
       'decision.target_unavailable',
       { reason: 'target_graduated', exits: ['spawn', 'retarget'] }
     )).success).toBe(false);
-    expect(decisionDraftContributionSchema.safeParse(outcome(
+    expect(decisionDirectContributionSchema.safeParse(outcome(
       'decision.changed',
       { code: 'stale_decision', submissionId: '019c1df7-86b5-769b-bba4-5f7097bfa601' },
       'stale_revision',
       2
     )).success).toBe(true);
-    expect(decisionDraftContributionSchema.safeParse(outcome(
+    expect(decisionDirectContributionSchema.safeParse(outcome(
       'decision.notify', null
     )).success).toBe(false);
   });

@@ -1,3 +1,4 @@
+import { canonicalJsonSha256 } from '@jooevents/kernel';
 import {
   engagementHeadSchema,
   engagementScopeSchema,
@@ -6,7 +7,7 @@ import {
   type EngagementScopeDto,
   type EngagementSnapshotDto
 } from '@jooevents/contracts';
-import { canonicalJsonSha256 } from '@jooevents/changesets';
+
 
 export type EngagementScope = EngagementScopeDto;
 export type EngagementHead = EngagementHeadDto;

@@ -285,19 +285,29 @@ function receipt(boundContext: EffectInvocationContext, id = receiptId): Termina
 
 function insertReceipt(sqlite: Database, value: TerminalEffectReceipt): void {
   sqlite.query(`
-    INSERT INTO foundation_trial_operation_receipts (
-      id, scope_partition_key, authority_principal_key, operation_name,
-      operation_version, surface, idempotency_verifier_profile_key,
+    INSERT INTO operation_log (
+      id, operation_name, operation_version, registry_digest_sha256, surface,
+      actor_json, authority_principal_key, workspace_id, event_id, subjects_json,
+      summary, occurred_at_ms, correlation_id, scope_partition_key,
+      idempotency_verifier_profile_key,
       idempotency_verifier_profile_version, idempotency_key_verifier,
       request_hash, result_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     value.ref.id,
-    value.identity.scopePartitionKey,
-    value.identity.authorityPrincipalKey,
     value.identity.operationName,
     value.identity.operationVersion,
+    'a'.repeat(64),
     value.identity.surface,
+    '{}',
+    value.identity.authorityPrincipalKey,
+    workspaceId,
+    eventId,
+    JSON.stringify([{ kind: 'event', id: eventId }]),
+    'Completed a public mutation',
+    0,
+    correlationId,
+    value.identity.scopePartitionKey,
     value.identity.idempotencyVerifierProfile.key,
     value.identity.idempotencyVerifierProfile.version,
     value.identity.idempotencyKeyVerifier,
@@ -440,7 +450,7 @@ describe('transaction-bound public mutation effect completion', () => {
     insertReceipt(h.sqlite, terminalReceipt);
     expect(() => h.completion.complete(sealed)).toThrow('completion_collision');
     h.sqlite.exec('ROLLBACK');
-    expect(count(h.sqlite, 'foundation_trial_operation_receipts')).toBe(0);
+    expect(count(h.sqlite, 'operation_log')).toBe(0);
     expect(count(h.sqlite, 'public_mutation_effect_proofs_trial')).toBe(0);
     expect(count(h.sqlite, 'public_mutation_registered_effect_completions')).toBe(0);
     expect(h.boundary.admit({ continuation: ready.continuation }).kind).toBe('ready');

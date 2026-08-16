@@ -6,7 +6,7 @@ import {
 } from '@jooevents/application';
 import { correlationIdSchema, safeOperationManifestSchema } from '@jooevents/contracts';
 import { parseInstant, parseInvocationId } from '@jooevents/kernel';
-import { openSQLite } from '@jooevents/persistence';
+import { createSQLiteBetterAuthDatabase, openSQLite } from '@jooevents/persistence';
 import { createAuth } from '../auth/better-auth';
 import { createSQLiteAuthPrincipalReader } from '../auth/principal-reader';
 import { loadConfig } from '../config';
@@ -38,7 +38,7 @@ describe('HTTP/auth composition', () => {
   test('mounts an injected operator registry manifest under one UUID correlation boundary', async () => {
     const opened = openSQLite(':memory:');
     databases.push(opened);
-    const auth = createAuth(config, opened.db);
+    const auth = createAuth(config, createSQLiteBetterAuthDatabase(opened.sqlite));
     const emptySource: OperationRegistrySource = {
       autonomyPolicies: [], schemas: [], contextBuilders: [], readCapabilities: [],
       handlers: [], projections: [], operations: []
@@ -79,7 +79,7 @@ describe('HTTP/auth composition', () => {
   test('returns the closed anonymous context and a correlation ID without a session', async () => {
     const opened = openSQLite(':memory:');
     databases.push(opened);
-    const auth = createAuth(config, opened.db);
+    const auth = createAuth(config, createSQLiteBetterAuthDatabase(opened.sqlite));
     const app = createHttpApp({
       auth,
       baseUrl: config.baseUrl,
@@ -96,7 +96,7 @@ describe('HTTP/auth composition', () => {
   test('starts Google authorization with the canonical Better Auth callback', async () => {
     const opened = openSQLite(':memory:');
     databases.push(opened);
-    const auth = createAuth(config, opened.db);
+    const auth = createAuth(config, createSQLiteBetterAuthDatabase(opened.sqlite));
     const app = createHttpApp({
       auth,
       baseUrl: config.baseUrl,
@@ -136,7 +136,7 @@ describe('HTTP/auth composition', () => {
   test('expands short sign-in links into fixed byte-uniform redirects', async () => {
     const opened = openSQLite(':memory:');
     databases.push(opened);
-    const auth = createAuth(config, opened.db);
+    const auth = createAuth(config, createSQLiteBetterAuthDatabase(opened.sqlite));
     const app = createHttpApp({
       auth,
       baseUrl: config.baseUrl,
@@ -173,7 +173,7 @@ describe('HTTP/auth composition', () => {
   test('returns a disclosure-safe structured 404 instead of HTML for unknown backend paths', async () => {
     const opened = openSQLite(':memory:');
     databases.push(opened);
-    const auth = createAuth(config, opened.db);
+    const auth = createAuth(config, createSQLiteBetterAuthDatabase(opened.sqlite));
     const app = createHttpApp({
       auth,
       baseUrl: config.baseUrl,

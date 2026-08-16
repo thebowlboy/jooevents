@@ -17,18 +17,17 @@ import {
 import {
   SUBMISSION_DIRECT_ENTRY_OPERATION_SCHEMA_REFS,
   createSafeSchemaManifestRef,
-  intakeDigestSchema,
   intakeIdSchema,
   structuredOutcomeSchema,
-  submissionDirectEntryDraftCanonicalResultSchema,
-  submissionDirectEntryDraftDataSchema,
-  submissionDirectEntryDraftInputSchema,
-  submissionDirectEntryDraftOperationResultSchema,
-  submissionDirectEntrySafeDiffSchema,
+  submissionDirectEntryCanonicalResultSchema,
+  submissionDirectEntryResultSchema,
+  submissionDirectEntryInputSchema,
+  submissionDirectEntryOperationResultSchema,
   type SafeSchemaManifestRef,
   type StructuredOutcome,
   type VersionedDefinitionRef
 } from '@jooevents/contracts';
+import { parseApplicationDirectEntryPlan, type ApplicationDirectEntryPlan } from '@jooevents/intake';
 import {
   CURRENT_AUTHORITY_DENIAL_REASONS,
   parseOperationAccessLane,
@@ -49,18 +48,18 @@ import { z } from 'zod';
 import type { IntakeOperationCrypto, IntakeOperationIds, IntakeCurrentEventSource } from './module';
 import { createIntakeHandler } from './preparation';
 
-export const SUBMISSION_DIRECT_ENTRY_DRAFT_OPERATION = Object.freeze({
-  name: 'submission.direct_entry.create.draft', version: 1
+export const SUBMISSION_DIRECT_ENTRY_CREATE_OPERATION = Object.freeze({
+  name: 'submission.direct_entry.create', version: 1
 });
 
-export const SUBMISSION_DIRECT_ENTRY_DRAFT_HANDLER_CAPABILITY: VersionedDefinitionRef =
+export const SUBMISSION_DIRECT_ENTRY_DIRECT_HANDLER_CAPABILITY: VersionedDefinitionRef =
   Object.freeze({
-    key: 'capability.submission.direct-entry.changeset-draft',
+    key: 'capability.submission.direct-entry.direct',
     version: parseContractVersion(1)
   });
-export const SUBMISSION_DIRECT_ENTRY_DRAFT_REQUEST_HASH_PROFILE: VersionedDefinitionRef =
+export const SUBMISSION_DIRECT_ENTRY_REQUEST_HASH_PROFILE: VersionedDefinitionRef =
   Object.freeze({
-    key: 'request-hash.submission.direct-entry.draft',
+    key: 'request-hash.submission.direct-entry.create',
     version: parseContractVersion(1)
   });
 
@@ -72,37 +71,19 @@ export const SUBMISSION_DIRECT_ENTRY_ACCESS_POLICY: VersionedAccessPolicyRef = O
 export const SUBMISSION_DIRECT_ENTRY_PERMISSION_ID: PermissionId = 'event.manage';
 
 export const SUBMISSION_DIRECT_ENTRY_HTTP_PATHS = Object.freeze({
-  draft: '/api/events/current/submissions/direct-entry/drafts'
+  create: '/api/events/current/submissions/direct-entry'
 });
 
-const canonicalUuid = z.uuid().refine((value) => value === value.toLowerCase());
+const directEntryPlanSchema = z.custom<ApplicationDirectEntryPlan>(
+  (value) => { try { parseApplicationDirectEntryPlan(value); return true; } catch { return false; } }
+).transform((value) => parseApplicationDirectEntryPlan(value));
 
-export const submissionDirectEntryDraftDomainContributionSchema = z.strictObject({
-  kind: z.literal('submission_direct_entry_changeset_draft'),
-  preparationHandle: canonicalUuid,
-  workspaceId: canonicalUuid,
-  eventId: canonicalUuid,
-  action: z.literal('create'),
-  submissionId: intakeIdSchema,
-  changesetId: canonicalUuid,
-  revisionId: canonicalUuid,
-  revisionDigestSha256: intakeDigestSchema,
-  recordDigestSha256: intakeDigestSchema,
-  occurredAt: z.iso.datetime({ offset: true })
+export const submissionDirectEntryDirectDomainContributionSchema = z.strictObject({
+  kind: z.literal('submission_direct_entry_direct'),
+  plan: directEntryPlanSchema
 });
 
-export const submissionDirectEntryDraftEvidenceChildSchema = z.strictObject({
-  kind: z.literal('timeline'),
-  timelineId: canonicalUuid,
-  sourceKind: z.literal('changeset_revision'),
-  workspaceId: canonicalUuid,
-  eventId: canonicalUuid,
-  changesetId: canonicalUuid,
-  revisionId: canonicalUuid,
-  occurredAt: z.iso.datetime({ offset: true })
-});
-
-export const submissionDirectEntryDraftRefusalDetailSchema = z.strictObject({
+export const submissionDirectEntryRefusalDetailSchema = z.strictObject({
   code: z.enum([
     'wrong_scope', 'form_missing', 'form_not_open', 'form_version_mismatch',
     'target_unavailable', 'deadline_unavailable', 'deadline_changed',
@@ -113,58 +94,41 @@ export const submissionDirectEntryDraftRefusalDetailSchema = z.strictObject({
   formId: intakeIdSchema
 });
 
-const draftSuccessContributionSchema = z.strictObject({
+const directSuccessContributionSchema = z.strictObject({
   result: z.strictObject({
     kind: z.literal('success'),
-    data: submissionDirectEntryDraftDataSchema
+    data: submissionDirectEntryResultSchema
   }),
-  domain: submissionDirectEntryDraftDomainContributionSchema,
-  receiptChildren: z.tuple([submissionDirectEntryDraftEvidenceChildSchema])
-}).superRefine((value, context) => {
-  const data = value.result.data;
-  const domain = value.domain;
-  const timeline = value.receiptChildren[0];
-  if (data.action !== domain.action
-      || data.changesetId !== domain.changesetId
-      || data.revision.id !== domain.revisionId
-      || data.revision.digestSha256 !== domain.revisionDigestSha256
-      || data.safeDiff.submission.id !== domain.submissionId
-      || timeline.workspaceId !== domain.workspaceId
-      || timeline.eventId !== domain.eventId
-      || timeline.changesetId !== domain.changesetId
-      || timeline.revisionId !== domain.revisionId
-      || timeline.occurredAt !== domain.occurredAt) {
-    context.addIssue({ code: 'custom', message: 'direct entry draft evidence is incoherent' });
-  }
+  domain: submissionDirectEntryDirectDomainContributionSchema,
+  effectContributions: z.tuple([])
 });
 
-const draftOutcomeContributionSchema = z.strictObject({
+const directOutcomeContributionSchema = z.strictObject({
   result: z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema }),
   domain: z.null(),
-  receiptChildren: z.tuple([])
+  effectContributions: z.tuple([])
 }).superRefine((value, context) => {
   const outcome = value.result.outcome;
   const allowed = new Set([
     'conflict:submission_direct_entry.event_required',
     'stale_revision:submission_direct_entry.changed',
-    'policy_violation:submission_direct_entry.refused',
-    'conflict:changeset.id_collision'
+    'policy_violation:submission_direct_entry.refused'
   ]);
   const detailSchema = outcome.kind === 'submission_direct_entry.changed'
       || outcome.kind === 'submission_direct_entry.refused'
-    ? submissionDirectEntryDraftRefusalDetailSchema
+    ? submissionDirectEntryRefusalDetailSchema
     : z.null();
   if (!allowed.has(`${outcome.class}:${outcome.kind}`)
       || outcome.retryable
       || outcome.detailSchemaVersion !== 1
       || !detailSchema.safeParse(outcome.detail).success) {
-    context.addIssue({ code: 'custom', message: 'direct entry draft refusal is invalid' });
+    context.addIssue({ code: 'custom', message: 'direct entry refusal is invalid' });
   }
 });
 
-export const submissionDirectEntryDraftContributionSchema = z.union([
-  draftSuccessContributionSchema,
-  draftOutcomeContributionSchema
+export const submissionDirectEntryDirectContributionSchema = z.union([
+  directSuccessContributionSchema,
+  directOutcomeContributionSchema
 ]);
 
 function ref(key: string): VersionedDefinitionRef {
@@ -234,12 +198,8 @@ function operatorLane(policy: VersionedAccessPolicyRef) {
   return lane;
 }
 
-/**
- * Registers the organizer direct-entry draft: one confirm on the operator
- * surface producing a single low-tier create changeset. The commit itself runs
- * through the generic changeset lifecycle operations.
- */
-export function createSubmissionDirectEntryDraftOperationModule(input: {
+/** Registers organizer direct entry as one direct audited operation. */
+export function createSubmissionDirectEntryOperationModule(input: {
   readonly workspaceId: WorkspaceId;
   readonly policy: VersionedAccessPolicyRef;
   readonly currentAuthority: CurrentAuthorityResolver<InvocationEvidence>;
@@ -252,39 +212,39 @@ export function createSubmissionDirectEntryDraftOperationModule(input: {
     'submission_direct_entry_policy_catalog_mismatch');
   const workspaceId = parseWorkspaceId(input.workspaceId);
   const lane = operatorLane(input.policy);
-  const operation = SUBMISSION_DIRECT_ENTRY_DRAFT_OPERATION;
+  const operation = SUBMISSION_DIRECT_ENTRY_CREATE_OPERATION;
   const nullDetail = z.null();
   const refs = {
-    input: SUBMISSION_DIRECT_ENTRY_OPERATION_SCHEMA_REFS.draft.inputSchema,
+    input: SUBMISSION_DIRECT_ENTRY_OPERATION_SCHEMA_REFS.create.inputSchema,
     contribution: schemaRef(
-      'schema.submission.direct-entry-draft.contribution',
-      submissionDirectEntryDraftContributionSchema
+      'schema.submission.direct-entry-create.contribution',
+      submissionDirectEntryDirectContributionSchema
     ),
     canonical: schemaRef(
-      'schema.submission.direct-entry-draft.canonical-result',
-      submissionDirectEntryDraftCanonicalResultSchema
+      'schema.submission.direct-entry-create.canonical-result',
+      submissionDirectEntryCanonicalResultSchema
     ),
-    projected: SUBMISSION_DIRECT_ENTRY_OPERATION_SCHEMA_REFS.draft.resultSchema,
+    projected: SUBMISSION_DIRECT_ENTRY_OPERATION_SCHEMA_REFS.create.resultSchema,
     detail: schemaRef(
-      'schema.submission.direct-entry-draft.refusal-detail',
-      submissionDirectEntryDraftRefusalDetailSchema
+      'schema.submission.direct-entry-create.refusal-detail',
+      submissionDirectEntryRefusalDetailSchema
     ),
-    nullDetail: schemaRef('schema.submission.direct-entry-draft.null-detail', nullDetail),
-    context: ref('context.submission.direct-entry.create-draft'),
-    handler: ref('handler.submission.direct-entry.changeset-draft'),
-    projection: ref('projection.submission.direct-entry.changeset-draft.operator'),
-    autonomy: ref('autonomy.submission.direct-entry.create-draft'),
-    audit: ref('audit.submission.direct-entry.changeset-draft'),
-    auditProfile: ref('record-profile.submission.direct-entry-draft.operation-audit'),
+    nullDetail: schemaRef('schema.submission.direct-entry-create.null-detail', nullDetail),
+    context: ref('context.submission.direct-entry.create'),
+    handler: ref('handler.submission.direct-entry.direct'),
+    projection: ref('projection.submission.direct-entry.direct.operator'),
+    autonomy: ref('autonomy.submission.direct-entry.create'),
+    audit: ref('audit.submission.direct-entry.direct'),
+    auditProfile: ref('record-profile.submission.direct-entry-create.operation-audit'),
     keySource: ref('idempotency.operator-header'),
-    concurrency: ref('concurrency.submission.direct-entry.create-draft'),
-    family: ref('submission.direct-entry.create-draft.execution-family'),
-    phase: ref('submission.direct-entry.create-draft.phase.single-uow'),
-    terminalization: ref('submission.direct-entry.create-draft.terminalization'),
-    risk: ref('submission.direct-entry.create-draft.risk-resolver'),
-    evidence: ref('submission.direct-entry.create-draft.autonomy-evidence'),
-    approval: ref('submission.direct-entry.create-draft.approval-resolver'),
-    preflight: ref('submission.direct-entry.create-draft.autonomy-preflight')
+    concurrency: ref('concurrency.submission.direct-entry.create'),
+    family: ref('submission.direct-entry.create.execution-family'),
+    phase: ref('submission.direct-entry.create.phase.single-uow'),
+    terminalization: ref('submission.direct-entry.create.terminalization'),
+    risk: ref('submission.direct-entry.create.risk-resolver'),
+    evidence: ref('submission.direct-entry.create.autonomy-evidence'),
+    approval: ref('submission.direct-entry.create.approval-resolver'),
+    preflight: ref('submission.direct-entry.create.autonomy-preflight')
   };
   const operationAutonomy = createOperationAutonomyPolicy({
     definition: refs.autonomy,
@@ -306,7 +266,7 @@ export function createSubmissionDirectEntryDraftOperationModule(input: {
   const context = createEffectInvocationContextBuilder({
     reference: refs.context,
     operation,
-    effect: 'draft',
+    effect: 'commit',
     lanes: [lane],
     scopeResolver: eventScope(workspaceId, input.currentEvent),
     authorityResolver: input.currentAuthority,
@@ -315,7 +275,7 @@ export function createSubmissionDirectEntryDraftOperationModule(input: {
     authorityPrincipalKeyProfile: input.crypto.authorityPrincipalKeyProfile,
     scopePartitionProfile: input.crypto.scopePartitionProfile,
     requestCanonicalizationProfile: input.crypto.requestCanonicalizationProfile,
-    requestHashProfile: SUBMISSION_DIRECT_ENTRY_DRAFT_REQUEST_HASH_PROFILE,
+    requestHashProfile: SUBMISSION_DIRECT_ENTRY_REQUEST_HASH_PROFILE,
     requestHashSealer: input.crypto.requestHashSealer,
     idempotencyCredentialProfile: input.crypto.idempotencyCredentialProfile,
     idempotencyCredentialSealer: input.crypto.idempotencyCredentialSealer,
@@ -336,9 +296,9 @@ export function createSubmissionDirectEntryDraftOperationModule(input: {
     reference: refs.phase,
     family: refs.family,
     operation,
-    effect: 'draft',
+    effect: 'commit',
     handler: refs.handler,
-    handlerCapability: SUBMISSION_DIRECT_ENTRY_DRAFT_HANDLER_CAPABILITY,
+    handlerCapability: SUBMISSION_DIRECT_ENTRY_DIRECT_HANDLER_CAPABILITY,
     contributionSchema: refs.contribution,
     terminalization: refs.terminalization,
     terminalOutcomeKeys: [],
@@ -352,8 +312,8 @@ export function createSubmissionDirectEntryDraftOperationModule(input: {
     operation,
     resolve: () => ({
       risk: 'low',
-      consequenceTags: ['changeset-drafted'],
-      evidenceIds: ['submission.direct-entry.create.draft.risk']
+      consequenceTags: ['submission-created'],
+      evidenceIds: ['submission.direct-entry.create.risk']
     })
   });
   const evidence = createAutonomyEvidenceResolverRegistration({
@@ -374,7 +334,7 @@ export function createSubmissionDirectEntryDraftOperationModule(input: {
         actionCount: 1,
         completesBy: subject.evaluatedAt,
         proposedAction: {
-          key: 'submission.direct-entry.create.draft.execute',
+          key: 'submission.direct-entry.create.execute',
           version: 1,
           digestSha256: subject.requestHashSha256
         },
@@ -398,8 +358,7 @@ export function createSubmissionDirectEntryDraftOperationModule(input: {
   });
   const handler = createIntakeHandler({
     reference: refs.handler,
-    effect: 'draft',
-    handlerCapability: SUBMISSION_DIRECT_ENTRY_DRAFT_HANDLER_CAPABILITY,
+    handlerCapability: SUBMISSION_DIRECT_ENTRY_DIRECT_HANDLER_CAPABILITY,
     contributionSchema: refs.contribution,
     canonicalResultSchema: refs.canonical
   });
@@ -410,22 +369,16 @@ export function createSubmissionDirectEntryDraftOperationModule(input: {
     detailSchema: refs.nullDetail
   }));
   return Object.freeze({
-    id: 'submission-direct-entry.draft-operation',
+    id: 'submission-direct-entry.create-operation',
     source: Object.freeze({
       autonomyPolicies: [operationAutonomy],
       schemas: [
-        { reference: refs.input, schema: submissionDirectEntryDraftInputSchema },
-        { reference: refs.contribution, schema: submissionDirectEntryDraftContributionSchema },
-        { reference: refs.canonical, schema: submissionDirectEntryDraftCanonicalResultSchema },
-        { reference: refs.projected, schema: submissionDirectEntryDraftOperationResultSchema },
-        { reference: refs.detail, schema: submissionDirectEntryDraftRefusalDetailSchema },
+        { reference: refs.input, schema: submissionDirectEntryInputSchema },
+        { reference: refs.contribution, schema: submissionDirectEntryDirectContributionSchema },
+        { reference: refs.canonical, schema: submissionDirectEntryCanonicalResultSchema },
+        { reference: refs.projected, schema: submissionDirectEntryOperationResultSchema },
+        { reference: refs.detail, schema: submissionDirectEntryRefusalDetailSchema },
         { reference: refs.nullDetail, schema: nullDetail },
-        {
-          reference: schemaRef(
-            'schema.submission.direct-entry.safe-diff', submissionDirectEntrySafeDiffSchema
-          ),
-          schema: submissionDirectEntrySafeDiffSchema
-        }
       ],
       contextBuilders: [],
       readCapabilities: [],
@@ -435,7 +388,7 @@ export function createSubmissionDirectEntryDraftOperationModule(input: {
         canonicalResultSchema: refs.canonical,
         projectedResultSchema: refs.projected,
         project: (candidate: unknown) =>
-          submissionDirectEntryDraftCanonicalResultSchema.parse(candidate)
+          submissionDirectEntryCanonicalResultSchema.parse(candidate)
       }],
       operationAuditTargets: [{
         reference: refs.audit,
@@ -460,11 +413,12 @@ export function createSubmissionDirectEntryDraftOperationModule(input: {
       effectOperations: [{
         ...operation,
         lifecycle: { status: 'active' as const },
-        summary: 'Draft one organizer-entered submission as a low-tier create changeset.',
-        effect: 'draft' as const,
+        summary: 'Add an organizer-entered submission.',
+        effect: 'commit' as const,
         maxRisk: 'low' as const,
         autonomyPolicy: refs.autonomy,
-        consequenceTags: ['changeset-drafted'],
+        consequenceTags: ['submission-created'],
+        agentAction: { eligible: true as const, displayLabel: 'Add a submission', consequences: ['A new organizer-entered submission is added to the event.'], externalEffect: 'none' as const },
         inputSchema: refs.input,
         contributionSchema: refs.contribution,
         canonicalResultSchema: refs.canonical,
@@ -474,32 +428,35 @@ export function createSubmissionDirectEntryDraftOperationModule(input: {
           { class: 'conflict' as const, kind: 'submission_direct_entry.event_required', retryable: false, detailSchema: refs.nullDetail },
           { class: 'stale_revision' as const, kind: 'submission_direct_entry.changed', retryable: false, detailSchema: refs.detail },
           { class: 'policy_violation' as const, kind: 'submission_direct_entry.refused', retryable: false, detailSchema: refs.detail },
-          { class: 'conflict' as const, kind: 'changeset.id_collision', retryable: false, detailSchema: refs.nullDetail },
           { class: 'conflict' as const, kind: 'operation.in_progress', retryable: true, detailSchema: refs.nullDetail },
           ...autonomyInterventionOutcomeDeclarations(refs.nullDetail)
         ],
         accessLanes: [lane],
         contextBuilder: refs.context,
-        handlerCapability: SUBMISSION_DIRECT_ENTRY_DRAFT_HANDLER_CAPABILITY,
+        handlerCapability: SUBMISSION_DIRECT_ENTRY_DIRECT_HANDLER_CAPABILITY,
         handler: refs.handler,
         audit: { mode: 'required' as const, target: refs.audit },
         idempotency: {
           keySource: refs.keySource,
           credentialVerifierProfile: input.crypto.idempotencyCredentialProfile,
-          requestHashProfile: SUBMISSION_DIRECT_ENTRY_DRAFT_REQUEST_HASH_PROFILE
+          requestHashProfile: SUBMISSION_DIRECT_ENTRY_REQUEST_HASH_PROFILE
         },
         concurrency: refs.concurrency,
         execution: {
           kind: 'single_unit_of_work' as const,
+          profile: 'direct_audited' as const,
           family: refs.family,
           phase: refs.phase,
           terminalization: refs.terminalization,
-          autonomyPreflight: refs.preflight
+          autonomyPreflight: refs.preflight,
+          history: { summariesByAction: Object.freeze({
+            create: 'Added a direct-entry submission'
+          }) }
         },
         bindings: [{
           surface: 'operator_http' as const,
           method: 'POST' as const,
-          path: SUBMISSION_DIRECT_ENTRY_HTTP_PATHS.draft,
+          path: SUBMISSION_DIRECT_ENTRY_HTTP_PATHS.create,
           input: 'body' as const,
           browserResumption: { kind: 'none' as const },
           projection: refs.projection

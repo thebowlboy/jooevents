@@ -55,7 +55,7 @@ import {
   type UtcInstant
 } from '@jooevents/kernel';
 
-/** Disposable SQLite proof only. These objects are not part of the retained schema chain. */
+/** This schema contributes to the accepted epoch-2 baseline and may also serve isolated fixtures. */
 export const MODEL_DURABILITY_TRIAL_SQL = `
 CREATE TABLE model_profile_revisions_trial (
   profile_key TEXT NOT NULL CHECK(length(profile_key) BETWEEN 1 AND 160),
@@ -232,7 +232,7 @@ CREATE TABLE model_tool_calls_trial (
     REFERENCES model_binding_profiles_trial(profile_key, profile_version)
     ON UPDATE RESTRICT ON DELETE RESTRICT,
   FOREIGN KEY (operation_receipt_id)
-    REFERENCES foundation_trial_operation_receipts(id)
+    REFERENCES operation_log(id)
     ON UPDATE RESTRICT ON DELETE RESTRICT
 );
 
@@ -622,7 +622,7 @@ export function installModelDurabilityTrial(sqlite: Database): void {
   sqlite.exec('PRAGMA foreign_keys = ON');
   const foundationReceiptTable = sqlite.query<{ readonly present: number }, []>(`
     SELECT 1 AS present FROM sqlite_master
-     WHERE type = 'table' AND name = 'foundation_trial_operation_receipts'
+     WHERE type = 'table' AND name = 'operation_log'
   `).get();
   if (!foundationReceiptTable) throw new TypeError('foundation_trial_receipt_schema_required');
   sqlite.transaction(() => sqlite.exec(MODEL_DURABILITY_TRIAL_SQL))();
@@ -1459,7 +1459,7 @@ export class ModelDurabilityTrialRepository {
                operation_version, surface, idempotency_verifier_profile_key,
                idempotency_verifier_profile_version, idempotency_key_verifier,
                request_hash, result_json
-          FROM foundation_trial_operation_receipts WHERE id = ?
+          FROM operation_log WHERE id = ?
       `).get(receipt.ref.id);
       if (!stored
         || stored.scope_partition_key !== receipt.identity.scopePartitionKey
@@ -1600,7 +1600,7 @@ export class ModelDurabilityTrialRepository {
       result_json: string;
     }, [string]>(`
       SELECT operation_name, operation_version, surface, result_json
-        FROM foundation_trial_operation_receipts WHERE id = ?
+        FROM operation_log WHERE id = ?
     `).get(call.operationReceiptId);
     if (!row
       || row.operation_name !== call.operation.name

@@ -196,7 +196,7 @@ describe('registered outbound email delivery operation joined to SQLite', () => 
           resolve: () => ({ registeredIdempotencyIdentity: 'dispatch:release-joined-1:1' })
         }
       },
-      newReceiptId: nextUuid
+      newOperationLogId: nextUuid
     });
     const invocation = await runtime.effectBuilder.buildRegisteredJob({
       job: { key: 'communication.message-dispatch', version: 1 },
@@ -220,8 +220,7 @@ describe('registered outbound email delivery operation joined to SQLite', () => 
       reviewedMessageDigestSha256: source.input.reviewedMessageDigestSha256
     });
     for (const table of [
-      'foundation_trial_operation_receipts',
-      'foundation_trial_operation_audits',
+      'operation_log',
       'communication_outbound_delivery_facts',
       'communication_outbound_delivery_outbox',
       'communication_outbound_delivery_history'

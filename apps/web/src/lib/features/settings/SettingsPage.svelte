@@ -17,7 +17,12 @@
 	import SpeakerFieldsSection from './SpeakerFieldsSection.svelte';
 	import StartPanel from './StartPanel.svelte';
 	import TeamPanel from './TeamPanel.svelte';
-	import { settingsRail, settingsSectionByKey, type SettingsSectionKey } from './sections';
+	import {
+		settingsRail,
+		settingsSectionByKey,
+		settingsSections,
+		type SettingsSectionKey
+	} from './sections';
 
 	let {
 		port,
@@ -60,6 +65,21 @@
 		return () => query.removeEventListener('change', apply);
 	});
 </script>
+
+<!-- The surface's own head says what Settings is made of. Tabs, not a second
+     menu: the design system's "tabs preserve context within one entity", and
+     each tab is the section's real address, so the switch is a navigation the
+     back button and deep links already understand. The rail names the area;
+     which part of it is chosen here, the same division of labour as trays and
+     zones on the other surfaces. -->
+<nav class="ui-tabs sections" aria-label="Settings sections">
+	{#each settingsSections as entry (entry.key)}
+		<a
+			class="ui-tab"
+			href={entry.href}
+			aria-current={entry.key === section ? 'page' : undefined}>{entry.label}</a>
+	{/each}
+</nav>
 
 <div class="settings" class:settings--railed={rail.visible}>
 	<div class="settings__main">
@@ -125,6 +145,12 @@
 </div>
 
 <style>
+	/* Head to content is a section-tier boundary; the tab underline already
+	   draws the line, so the space says the rest. */
+	.sections {
+		margin-block-end: var(--je-space-6);
+	}
+
 	.settings {
 		display: grid;
 		grid-template-columns: minmax(0, 1fr);

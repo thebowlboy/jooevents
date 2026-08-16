@@ -650,46 +650,14 @@ export const organizerSubmissionContactSchema = z.strictObject({
 });
 
 /**
- * Operator wire input for the organizer direct-entry draft. The record's
- * identities, source, and `submittedAt` are server-assigned inside the sealed
- * invocation — the input cannot name or backdate them.
+ * Operator wire input for organizer direct entry. The record's identities,
+ * source, and `submittedAt` are server-assigned inside the sealed invocation —
+ * the input cannot name or backdate them.
  */
-export const submissionDirectEntryDraftInputSchema = z.strictObject({
+export const submissionDirectEntryInputSchema = z.strictObject({
   formId: intakeIdInputSchema,
   expectedFormDefinitionVersion: intakeVersionSchema,
   answers: transientApplicationAnswersInputSchema
-});
-
-/**
- * Non-classified diff surface for a planned direct entry. Answer values stay in
- * governed payloads; only field identities and vocabulary pins appear here.
- */
-export const submissionDirectEntrySafeDiffSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  action: z.literal('create'),
-  submission: z.strictObject({
-    id: intakeIdSchema,
-    formId: intakeIdSchema,
-    formVersionId: intakeIdSchema,
-    source: z.literal('direct_entry'),
-    submittedAt: intakeInstantSchema,
-    answeredFieldIds: z.array(intakeIdSchema).min(1).max(FORM_FIELDS_MAX),
-    programVocabularyAnswerPins: z.array(submissionProgramVocabularyAnswerPinSchema)
-      .max(FORM_FIELDS_MAX * FORM_MULTISELECT_MAX_SELECTIONS)
-  })
-}).superRefine((diff, context) => {
-  addCanonicalOrderIssues(
-    diff.submission.answeredFieldIds,
-    context,
-    ['submission', 'answeredFieldIds'],
-    'answered field ids must be unique and canonically ordered'
-  );
-  addCanonicalOrderIssues(
-    diff.submission.programVocabularyAnswerPins.map((pin) => `${pin.fieldId}:${pin.itemId}`),
-    context,
-    ['submission', 'programVocabularyAnswerPins'],
-    'vocabulary answer pins must be unique and ordered by field and item id'
-  );
 });
 
 const canonicalDirectEntryApplicationIdSchema = z.uuid().refine(
@@ -697,65 +665,30 @@ const canonicalDirectEntryApplicationIdSchema = z.uuid().refine(
   'application ids use canonical lowercase form'
 );
 
-export const submissionDirectEntryDraftDataSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  action: z.literal('create'),
-  changesetId: canonicalDirectEntryApplicationIdSchema,
-  headVersion: intakeVersionSchema,
-  status: z.literal('draft'),
-  revision: z.strictObject({
-    id: canonicalDirectEntryApplicationIdSchema,
-    number: intakeVersionSchema,
-    digestSha256: intakeDigestSchema
-  }),
-  riskTier: z.literal('low'),
-  approvalPolicy: z.strictObject({
-    reference: versionedDefinitionRefSchema,
-    definitionDigestSha256: intakeDigestSchema,
-    requirement: z.enum(['none', 'distinct_current_human'])
-  }),
-  safeDiff: submissionDirectEntrySafeDiffSchema
-});
-
-/**
- * Committed direct-entry receipt. `triage.queryGuard` proves the tray spine
- * initialized in the same transaction, and `undo` names the recoverable
- * compensating route — the arrival record itself is immutable evidence.
- */
 export const submissionDirectEntryResultSchema = z.strictObject({
   schemaVersion: z.literal(1),
+  action: z.literal('create'),
   submissionId: intakeIdSchema,
   formId: intakeIdSchema,
   formVersionId: intakeIdSchema,
   source: z.literal('direct_entry'),
-  submittedAt: intakeInstantSchema,
-  triage: z.strictObject({
-    queryGuard: z.strictObject({
-      version: intakeVersionSchema,
-      digestSha256: intakeDigestSchema
-    }),
-    replay: z.boolean()
-  }),
-  undo: z.strictObject({
-    kind: z.literal('submission_triage_discard_recoverable'),
-    submissionId: intakeIdSchema
-  })
+  submittedAt: intakeInstantSchema
 });
 
-export const submissionDirectEntryDraftCanonicalResultSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('success'), data: submissionDirectEntryDraftDataSchema }),
+export const submissionDirectEntryCanonicalResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success'), data: submissionDirectEntryResultSchema }),
   z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
 ]);
 
-export const submissionDirectEntryDraftOperationResultSchema =
-  createEffectfulOperationResultSchema(submissionDirectEntryDraftDataSchema);
+export const submissionDirectEntryOperationResultSchema =
+  createEffectfulOperationResultSchema(submissionDirectEntryResultSchema);
 
 export const SUBMISSION_DIRECT_ENTRY_OPERATION_SCHEMA_REFS = Object.freeze({
-  draft: createOperationSchemaManifestRefs({
-    inputKey: 'schema.submission.direct-entry-create-draft.input',
-    inputSchema: submissionDirectEntryDraftInputSchema,
-    resultKey: 'schema.submission.direct-entry-create-draft.operator-result',
-    resultSchema: submissionDirectEntryDraftOperationResultSchema
+  create: createOperationSchemaManifestRefs({
+    inputKey: 'schema.submission.direct-entry-create.input',
+    inputSchema: submissionDirectEntryInputSchema,
+    resultKey: 'schema.submission.direct-entry-create.operator-result',
+    resultSchema: submissionDirectEntryOperationResultSchema
   })
 });
 
@@ -789,7 +722,5 @@ export type OrganizerSubmissionChoiceDto = z.infer<typeof organizerSubmissionCho
 export type OrganizerSubmissionAnswerDto = z.infer<typeof organizerSubmissionAnswerSchema>;
 export type OrganizerSubmissionDetailDto = z.infer<typeof organizerSubmissionDetailSchema>;
 export type OrganizerSubmissionContactDto = z.infer<typeof organizerSubmissionContactSchema>;
-export type SubmissionDirectEntryDraftInput = z.infer<typeof submissionDirectEntryDraftInputSchema>;
-export type SubmissionDirectEntrySafeDiff = z.infer<typeof submissionDirectEntrySafeDiffSchema>;
-export type SubmissionDirectEntryDraftData = z.infer<typeof submissionDirectEntryDraftDataSchema>;
+export type SubmissionDirectEntryInput = z.infer<typeof submissionDirectEntryInputSchema>;
 export type SubmissionDirectEntryResultDto = z.infer<typeof submissionDirectEntryResultSchema>;

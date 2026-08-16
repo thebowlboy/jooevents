@@ -83,8 +83,8 @@ export async function effectDefinition(
     providerAttemptSchema: schemaRef('schema.message.provider.attempt', 1, SCHEMA_DIGEST_B),
     producers: [
       {
-        kind: 'changeset_operation',
-        operation: definitionRef('changeset_operation', 'message.request', 3)
+        kind: 'operation',
+        operation: definitionRef('operation', 'message.request', 3)
       }
     ],
     targetJob,

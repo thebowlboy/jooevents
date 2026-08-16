@@ -7,7 +7,11 @@ import type {
 	TemplateArtifactSnapshotDto
 } from '@jooevents/contracts';
 import type { OrganizerFormsPort } from './view-models/intake-forms';
-import type { ReleaseLiveClient, ReleaseLiveResult } from './operations/release-live';
+import type {
+	ReleaseLiveClient,
+	ReleaseLiveResult,
+	ReleaseMutationKeys
+} from './operations/release-live';
 import type { TemplateArtifactLiveClient, TemplateArtifactLiveResult } from './operations/template-artifacts-live';
 import type { MutationOutcome, SurfaceKind as TemplateSurfaceKind } from './types';
 
@@ -18,6 +22,13 @@ const RELEASE_KIND: Readonly<Record<TemplateSurfaceKind, SurfaceKind>> = Object.
 });
 
 const key = (stage: string) => `je.template.publish.${stage}.${globalThis.crypto.randomUUID()}`;
+
+function releaseKeys(stage: 'style' | 'surface'): ReleaseMutationKeys {
+	return Object.freeze({
+		draft: key(`${stage}.draft`),
+		publish: key(`${stage}.publish`)
+	});
+}
 
 function releaseFailure(result: Exclude<ReleaseLiveResult<unknown>, { readonly kind: 'success' }>): string {
 	if (result.kind === 'unavailable') return 'Publication is not available in this workspace.';
@@ -80,7 +91,7 @@ function manifest(document: Extract<TemplateArtifactDocumentDto, { readonly kind
  * Explicit Template → immutable public-release bridge. Template edits remain
  * private authoring revisions. A press snapshots the exact current surface
  * and theme revisions; the server re-resolves both pins and derives the same
- * manifest/recipe before either reviewed changeset may commit.
+ * manifest/recipe before either owner-native Release revision may publish.
  */
 export function createTemplatePublicationLivePort(input: {
 	readonly artifacts: TemplateArtifactLiveClient;
@@ -136,7 +147,7 @@ export function createTemplatePublicationLivePort(input: {
 						recipe: theme.current.document.recipe,
 						expectedCurrentStyleSetNumber: initial.currentStyleSetRelease?.number ?? null
 					};
-					const publishedStyle = await input.release.mutate(styleInput, key('style'));
+					const publishedStyle = await input.release.mutate(styleInput, releaseKeys('style'));
 					if (publishedStyle.kind !== 'success') {
 						return { ok: false, reason: releaseFailure(publishedStyle) };
 					}
@@ -176,7 +187,7 @@ export function createTemplatePublicationLivePort(input: {
 					styleSetReleaseId,
 					formRef,
 					expectedSurfaceHeadVersion: current?.version ?? null
-				}, key('surface'));
+				}, releaseKeys('surface'));
 				return published.kind === 'success'
 					? { ok: true }
 					: { ok: false, reason: releaseFailure(published) };

@@ -1,4 +1,4 @@
-import { canonicalJsonSha256, type RiskTier } from '@jooevents/changesets';
+import { canonicalJsonSha256 } from '@jooevents/kernel';
 import { intakeStableKeySchema, intakeVersionSchema } from '@jooevents/contracts';
 import { z } from 'zod';
 
@@ -8,7 +8,7 @@ export type FormOrdinaryAction = 'create' | 'revise' | 'publish' | 'lifecycle' |
 export interface FormOrdinaryPolicyInput {
   readonly key: string;
   readonly version: number;
-  readonly ordinaryRisk: Extract<RiskTier, 'low' | 'normal'>;
+  readonly ordinaryRisk: 'low' | 'normal';
   readonly approval: { readonly ordinary: FormOrdinaryApprovalRequirement };
 }
 

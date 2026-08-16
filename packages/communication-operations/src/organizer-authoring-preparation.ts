@@ -14,7 +14,7 @@ export type OrganizerCommunicationMutationOperationName =
 export interface OrganizerCommunicationPreparedContribution {
   readonly result: unknown;
   readonly domain: unknown;
-  readonly receiptChildren: readonly unknown[];
+  readonly effectContributions: readonly unknown[];
 }
 
 export interface OrganizerCommunicationMutationPreparation {
@@ -98,7 +98,7 @@ export function createOrganizerCommunicationMutationHandler(input: {
         return {
           result: contribution.result,
           domain: contribution.domain,
-          receiptChildren: [...contribution.receiptChildren]
+          effectContributions: [...contribution.effectContributions]
         };
       } catch (error) {
         sealed.phase = 'spent';

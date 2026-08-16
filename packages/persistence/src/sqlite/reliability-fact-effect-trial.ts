@@ -8,7 +8,7 @@ import {
   type SealedReliabilityContribution
 } from '../../../reliability/src/contribution';
 
-/** Test-only schema whose SQL objects are isolated under the `_trial` namespace. */
+/** This epoch-2 baseline schema remains isolated under `_trial` for focused fixtures. */
 export const RELIABILITY_FACT_EFFECT_TRIAL_SQL = `
 CREATE TABLE _trial_reliability_aggregates (
   workspace_id TEXT NOT NULL CHECK(length(workspace_id) = 36),
@@ -22,7 +22,7 @@ CREATE TABLE _trial_reliability_aggregates (
 
 CREATE TABLE _trial_reliability_operation_receipts (
   receipt_id TEXT PRIMARY KEY CHECK(length(receipt_id) = 36),
-  producer_kind TEXT NOT NULL CHECK(producer_kind IN ('operation', 'changeset_operation')),
+  producer_kind TEXT NOT NULL CHECK(producer_kind = 'operation'),
   producer_key TEXT NOT NULL CHECK(length(producer_key) BETWEEN 1 AND 160),
   producer_version INTEGER NOT NULL CHECK(producer_version > 0),
   contribution_digest_sha256 TEXT NOT NULL CHECK(
@@ -84,7 +84,7 @@ CREATE TABLE _trial_reliability_domain_facts (
     length(definition_digest_sha256) = 64
     AND definition_digest_sha256 NOT GLOB '*[^0-9a-f]*'
   ),
-  producer_kind TEXT NOT NULL CHECK(producer_kind IN ('operation', 'changeset_operation')),
+  producer_kind TEXT NOT NULL CHECK(producer_kind = 'operation'),
   producer_key TEXT NOT NULL CHECK(length(producer_key) BETWEEN 1 AND 160),
   producer_version INTEGER NOT NULL CHECK(producer_version > 0),
   metadata_schema_key TEXT NOT NULL CHECK(length(metadata_schema_key) BETWEEN 1 AND 160),
@@ -122,7 +122,7 @@ CREATE TABLE _trial_reliability_effect_specifications (
   definition_key TEXT NOT NULL CHECK(length(definition_key) BETWEEN 1 AND 160),
   definition_version INTEGER NOT NULL CHECK(definition_version > 0),
   definition_digest_sha256 TEXT NOT NULL CHECK(length(definition_digest_sha256) = 64),
-  producer_kind TEXT NOT NULL CHECK(producer_kind IN ('operation', 'changeset_operation')),
+  producer_kind TEXT NOT NULL CHECK(producer_kind = 'operation'),
   producer_key TEXT NOT NULL CHECK(length(producer_key) BETWEEN 1 AND 160),
   producer_version INTEGER NOT NULL CHECK(producer_version > 0),
   specification_schema_key TEXT NOT NULL CHECK(length(specification_schema_key) BETWEEN 1 AND 160),

@@ -51,7 +51,13 @@ const projection: WorkspaceOverviewProjection = {
     forms: { kind: 'unavailable', reason: 'event_required' },
     submissions: { kind: 'unavailable', reason: 'event_required' },
     programVocabulary: { kind: 'unavailable', reason: 'event_required' },
-    changesets: { kind: 'unavailable', reason: 'event_required' }
+    operations: { kind: 'unavailable', reason: 'event_required' },
+    triage: { kind: 'unavailable', reason: 'event_required' },
+    reviews: { kind: 'unavailable', reason: 'event_required' },
+    decisions: { kind: 'unavailable', reason: 'event_required' },
+    engagements: { kind: 'unavailable', reason: 'event_required' },
+    sessions: { kind: 'unavailable', reason: 'event_required' },
+    communications: { kind: 'unavailable', reason: 'event_required' }
   },
   history: { total: 0, truncated: false, threads: [] }
 };
@@ -138,7 +144,7 @@ describe('workspace overview operation', () => {
       status: 'partial',
       availableCapabilities: [
         'submission.contact.read',
-        'submission.direct_entry.create.draft',
+        'submission.direct_entry.create',
         'submission.list',
         'submission.read',
         'submission.triage'
@@ -152,15 +158,20 @@ describe('workspace overview operation', () => {
       status: 'partial',
       availableCapabilities: [
         'release.change.draft',
-        'schedule.placement.draft',
+        'schedule.placement',
         'schedule.placement.snapshot.read',
-        'schedule.session.manage',
-        'schedule.session.read'
+        'session.catalog.read',
+        'session.change'
       ],
-      unavailableCapabilities: [
-        'schedule.break.manage',
-        'schedule.placement.unplace'
-      ]
+      unavailableCapabilities: ['schedule.break.manage']
+    });
+    expect(DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG.find(
+      (entry) => entry.area === 'tasks'
+    )).toEqual({
+      area: 'tasks',
+      status: 'partial',
+      availableCapabilities: ['task.board.read', 'task.mutation'],
+      unavailableCapabilities: ['task.reminder.send']
     });
     expect(DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG.find(
       (entry) => entry.area === 'embeds'
@@ -205,10 +216,10 @@ describe('workspace overview operation', () => {
       area: 'review',
       status: 'partial',
       availableCapabilities: [
-        'review.assignment.step-back.draft',
-        'review.evaluation.change.draft',
+        'review.assignment.step_back',
+        'review.evaluation.change',
         'review.evaluation.draft.save',
-        'review.round.change.draft',
+        'review.round.change',
         'review.round.setup.read',
         'review.snapshot.read'
       ],
@@ -220,7 +231,7 @@ describe('workspace overview operation', () => {
       area: 'decisions',
       status: 'available',
       capabilities: [
-        'decision.decide.draft',
+        'decision.decide',
         'decision.notification.send',
         'decision.state.read'
       ]
@@ -231,7 +242,7 @@ describe('workspace overview operation', () => {
       area: 'speakers',
       status: 'partial',
       availableCapabilities: [
-        'engagement.change.draft',
+        'engagement.change',
         'engagement.snapshot.read'
       ],
       unavailableCapabilities: [
@@ -245,7 +256,7 @@ describe('workspace overview operation', () => {
       area: 'reviewers',
       status: 'partial',
       availableCapabilities: [
-        'reviewer_roster.change.draft',
+        'reviewer_roster.change',
         'reviewer_roster.snapshot.read'
       ],
       unavailableCapabilities: ['reviewer_roster.delivery.activate']
@@ -259,7 +270,7 @@ describe('workspace overview operation', () => {
     expect(settings.availableCapabilities).toContain('field_registry.add.draft');
     expect(settings.availableCapabilities).toContain('field_registry.restore.draft');
     expect(settings.availableCapabilities).toContain('workspace_team.members.read');
-    expect(settings.availableCapabilities).toContain('workspace_team.invite.draft');
+    expect(settings.availableCapabilities).toContain('workspace_team.invite');
     expect(settings.availableCapabilities).toContain('communication.sender_identity.read');
     expect(settings.availableCapabilities).toContain('communication.sender_identity.update');
     expect(settings.unavailableCapabilities).toEqual([

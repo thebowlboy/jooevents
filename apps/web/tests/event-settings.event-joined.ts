@@ -51,9 +51,9 @@ test('first Event joins the tuned live Settings interactions through registered 
 	await newEvent.locator('#new-event-end').press('Enter');
 	await newEvent.getByRole('button', { name: 'Create event' }).click();
 	await expect(page.getByRole('region', { name: 'Pipeline' })).toBeVisible();
-	await expect(page.getByText('Event-stage progress is not available yet.').first()).toBeVisible();
+	await expect(page.getByText('No form is open, so nothing has arrived yet.').first()).toBeVisible();
 	await expect(page.getByRole('region', { name: 'Needs attention' })
-		.getByText('Attention signals are not available yet.')).toBeVisible();
+		.getByText('JooEvents does not yet watch this event for things that need you.')).toBeVisible();
 
 	// Settings is a group of sections, each its own address; the group address
 	// opens on the first of them.
@@ -103,20 +103,12 @@ test('first Event joins the tuned live Settings interactions through registered 
 	await expect(page.locator('[data-je-scenario]')).toHaveCount(0);
 
 	expect(posts).toEqual([
-		'/api/events/drafts/create',
-		'/api/changesets/proposals',
-		'/api/changesets/commits',
-		'/api/events/current/settings/drafts/update',
-		'/api/changesets/proposals',
-		'/api/changesets/commits',
-		'/api/events/current/program-vocabulary/drafts/create',
-		'/api/changesets/proposals',
-		'/api/changesets/commits',
-		'/api/workspace/team/invitations/drafts',
-		'/api/changesets/proposals',
-		'/api/changesets/commits'
+		'/api/events',
+		'/api/events/current/settings',
+		'/api/events/current/program-vocabulary/create',
+		'/api/workspace/team/invitations'
 	]);
-	expect(posts).not.toContain('/api/events');
+	expect(posts).not.toContain('/api/changesets/commits');
 	expect(await page.evaluate(() => ({
 		document: document.documentElement.scrollWidth > document.documentElement.clientWidth,
 		body: document.body.scrollWidth > document.body.clientWidth

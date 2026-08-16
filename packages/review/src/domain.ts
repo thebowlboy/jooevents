@@ -1,3 +1,4 @@
+import { canonicalJsonSha256, canonicalJsonValue, type CanonicalJson } from '@jooevents/kernel';
 import {
   reviewCatalogSchema,
   reviewCriteriaSchema,
@@ -23,11 +24,6 @@ import {
   type ReviewSafeDiff,
   type ReviewScopeDto
 } from '@jooevents/contracts/reviews';
-import {
-  canonicalJsonSha256,
-  canonicalJsonValue,
-  type CanonicalJson
-} from '@jooevents/changesets';
 import {
   planReviewDueDeadlineChangeFrom,
   projectReviewDueDeadlineDiff,

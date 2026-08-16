@@ -55,14 +55,14 @@ export const DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG: WorkspaceOverviewAreaCatal
     {
       area: 'overview',
       status: 'available',
-      capabilities: ['workspace.overview.read']
+      capabilities: ['operation.history.list', 'workspace.overview.read']
     },
     {
       area: 'submissions',
       status: 'partial',
       availableCapabilities: [
         'submission.contact.read',
-        'submission.direct_entry.create.draft',
+        'submission.direct_entry.create',
         'submission.list',
         'submission.read',
         'submission.triage'
@@ -73,10 +73,10 @@ export const DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG: WorkspaceOverviewAreaCatal
       area: 'review',
       status: 'partial',
       availableCapabilities: [
-        'review.assignment.step-back.draft',
-        'review.evaluation.change.draft',
+        'review.assignment.step_back',
+        'review.evaluation.change',
         'review.evaluation.draft.save',
-        'review.round.change.draft',
+        'review.round.change',
         'review.round.setup.read',
         'review.snapshot.read'
       ],
@@ -89,7 +89,7 @@ export const DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG: WorkspaceOverviewAreaCatal
       // lane (prepare/adopt preview + send_messages); with no outbound
       // provider activated every delivery still lands honestly not-delivered.
       capabilities: [
-        'decision.decide.draft',
+        'decision.decide',
         'decision.notification.send',
         'decision.state.read'
       ]
@@ -98,7 +98,7 @@ export const DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG: WorkspaceOverviewAreaCatal
       area: 'speakers',
       status: 'partial',
       availableCapabilities: [
-        'engagement.change.draft',
+        'engagement.change',
         'engagement.snapshot.read'
       ],
       unavailableCapabilities: [
@@ -110,30 +110,32 @@ export const DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG: WorkspaceOverviewAreaCatal
       area: 'reviewers',
       status: 'partial',
       availableCapabilities: [
-        'reviewer_roster.change.draft',
+        'reviewer_roster.change',
         'reviewer_roster.snapshot.read'
       ],
       unavailableCapabilities: ['reviewer_roster.delivery.activate']
     },
-    { area: 'tasks', status: 'unavailable', reason: 'not_implemented' },
+    {
+      area: 'tasks',
+      status: 'partial',
+      availableCapabilities: ['task.board.read', 'task.mutation'],
+      unavailableCapabilities: ['task.reminder.send']
+    },
     {
       area: 'schedule',
       status: 'partial',
       availableCapabilities: [
         'release.change.draft',
-        'schedule.placement.draft',
+        'schedule.placement',
         'schedule.placement.snapshot.read',
-        'schedule.session.manage',
-        'schedule.session.read'
+        'session.catalog.read',
+        'session.change'
       ],
       // `publish_schedule` now rides the mounted `release.change.draft`
-      // changeset loop (gated by the minted `publication.manage`), so the
+      // owner-native publication loop (gated by the minted `publication.manage`), so the
       // separate schedule.publish capability id is no longer the truth of
       // what is unavailable here.
-      unavailableCapabilities: [
-        'schedule.break.manage',
-        'schedule.placement.unplace'
-      ]
+      unavailableCapabilities: ['schedule.break.manage']
     },
     {
       area: 'messages',
@@ -200,7 +202,7 @@ export const DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG: WorkspaceOverviewAreaCatal
         'communication.sender_identity.update',
         'event.current.read',
         'event.settings.current.read',
-        'event.settings.update.draft',
+        'event.settings.update',
         'field_registry.add.draft',
         'field_registry.edit.draft',
         'field_registry.move.draft',
@@ -208,10 +210,10 @@ export const DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG: WorkspaceOverviewAreaCatal
         'field_registry.restore.draft',
         'field_registry.snapshot.read',
         'program_vocabulary.snapshot.read',
-        'workspace_team.invite.draft',
+        'workspace_team.invite',
         'workspace_team.members.read',
-        'workspace_team.removal.draft',
-        'workspace_team.role_change.draft'
+        'workspace_team.remove',
+        'workspace_team.role_change'
       ],
       unavailableCapabilities: [
         'workspace_team.delivery.activate',

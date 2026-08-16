@@ -80,9 +80,8 @@ import {
  * (the effect) adopts the parked preparation inside its one unit-of-work
  * transaction, where draft version and audience guard state are re-verified
  * before anything is written. `send_messages` then commits the adopted
- * preview as one irreversible release batch — the whole
- * draft -> propose -> commit ceremony (recorder default BLOCKED-3), the
- * immutable releases, and the outbox delivery registrations ride one
+ * preview as one irreversible release batch. The immutable releases and the
+ * outbox delivery registrations ride one
  * transaction server-side, and a preview whose evidence no longer reproduces
  * from current domain state refuses typed instead of sending.
  */
@@ -145,8 +144,7 @@ export const communicationSendLaneDomainContributionSchema = z.discriminatedUnio
     workspaceId: z.uuid(),
     eventId: z.uuid(),
     batchId: canonicalIdSchema,
-    changesetId: canonicalIdSchema,
-    commitReceiptId: canonicalIdSchema,
+    releaseCommitId: canonicalIdSchema,
     releaseCount: z.number().int().positive().safe(),
     deliveryCount: z.number().int().positive().safe(),
     occurredAt: z.iso.datetime({ offset: true })
@@ -162,7 +160,7 @@ export const communicationSendLaneContributionSchema = z.union([
   z.strictObject({
     result: z.strictObject({ kind: z.literal('success'), data: sendLaneSuccessDataSchema }),
     domain: communicationSendLaneDomainContributionSchema,
-    receiptChildren: z.tuple([])
+    effectContributions: z.tuple([])
   }).superRefine((contribution, context) => {
     const data = contribution.result.data;
     const isSummary = 'identity' in data;
@@ -182,7 +180,7 @@ export const communicationSendLaneContributionSchema = z.union([
     }
     if (isSummary
         || data.batchId !== domain.batchId
-        || data.changesetId !== domain.changesetId
+        || data.releaseCommitId !== domain.releaseCommitId
         || data.releaseCount !== domain.releaseCount
         || data.deliveryCount !== domain.deliveryCount) {
       context.addIssue({
@@ -194,7 +192,7 @@ export const communicationSendLaneContributionSchema = z.union([
   z.strictObject({
     result: z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema }),
     domain: z.null(),
-    receiptChildren: z.tuple([])
+    effectContributions: z.tuple([])
   })
 ]);
 
@@ -205,7 +203,7 @@ export type CommunicationSendLaneContribution = z.infer<
 export interface CommunicationSendLanePreparedContribution {
   readonly result: unknown;
   readonly domain: unknown;
-  readonly receiptChildren: readonly unknown[];
+  readonly effectContributions: readonly unknown[];
 }
 
 export interface CommunicationSendLanePreparation {
@@ -290,7 +288,7 @@ function createSendLaneHandler(input: {
         return {
           result: contribution.result,
           domain: contribution.domain,
-          receiptChildren: [...contribution.receiptChildren]
+          effectContributions: [...contribution.effectContributions]
         };
       } catch (error) {
         sealed.phase = 'spent';
@@ -356,9 +354,8 @@ export interface CommunicationSendOperationCrypto {
 type SendLaneKey = keyof typeof COMMUNICATION_SEND_LANE_OPERATIONS;
 
 /**
- * Operator-only in v1: the send ceremony derives its `changeset.commit`
- * receipt from the invoking operator's own attribution (BLOCKED-3), and no
- * agent send policy is recorded yet, so no MCP or app-model lane is compiled.
+ * Operator-only in v1: no agent send policy is recorded yet, so no MCP or
+ * app-model lane is compiled.
  */
 export function createCommunicationSendOperationModule(input: {
   readonly workspaceId: WorkspaceId;

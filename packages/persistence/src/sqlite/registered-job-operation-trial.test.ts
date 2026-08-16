@@ -202,8 +202,8 @@ const contributionSchema = parser((value) => {
     || !domain
     || Object.keys(domain).length !== 1
     || typeof domain.value !== 'string'
-    || !Array.isArray(candidate.receiptChildren)
-    || candidate.receiptChildren.length !== 0
+    || !Array.isArray(candidate.effectContributions)
+    || candidate.effectContributions.length !== 0
   ) return undefined;
   return structuredClone(candidate);
 });
@@ -527,7 +527,7 @@ async function harness(options: {
         return {
           result: { kind: 'success' as const, data: { value: request.value } },
           domain: { value: request.value },
-          receiptChildren: []
+          effectContributions: []
         };
       }
     }],
@@ -618,12 +618,12 @@ async function harness(options: {
       sqlite.query('INSERT INTO note_job_domain_trial (value) VALUES (?)').run(parsed.value);
       state.trace.push('domain');
     },
-    afterReceiptParentInserted: () => {
+    afterOperationLogInserted: () => {
       const job = jobs.read(activeJobId as JobId);
-      const audits = sqlite.query<{ readonly count: number }, []>(
-        'SELECT count(*) AS count FROM foundation_trial_operation_audits'
+      const logs = sqlite.query<{ readonly count: number }, []>(
+        'SELECT count(*) AS count FROM operation_log'
       ).get()?.count;
-      state.trace.push(`parent_hook:job=${job?.job.state}:audits=${audits}`);
+      state.trace.push(`parent_hook:job=${job?.job.state}:logs=${logs}`);
     }
   };
   let activeJobId: JobId | undefined;
@@ -675,16 +675,10 @@ async function harness(options: {
       dispositionPolicies: [policy],
       domain,
       transactionAuthority,
-      auditHooks: {
-        afterTerminalAuditInserted: () => {
-          const job = jobs.read(activeJobId as JobId);
-          state.trace.push(`audit_hook:job=${job?.job.state}`);
-        }
-      },
       workerKey: runnerInput.workerKey ?? 'worker.registered-job-a',
       newAttemptId: nextAttemptId,
       newCorrelationId: nextCorrelationId,
-      newReceiptId: nextReceiptId
+      newOperationLogId: nextReceiptId
     });
   return {
     sqlite,
@@ -721,7 +715,7 @@ function count(sqlite: Database, table: string): number {
 }
 
 describe('disposable registered-job operation join', () => {
-  test('fresh execution binds the exact job and atomically completes after parent but before audit', async () => {
+  test('fresh execution binds the exact job and atomically completes with its operation log', async () => {
     const test = await harness();
     const jobId = test.createJob({ inputMessage: 'alpha', registeredIdentity: 'semantic-alpha' });
     const runner = await test.runner();
@@ -734,11 +728,9 @@ describe('disposable registered-job operation join', () => {
     expect(test.state.projectorCalls).toBe(2);
     expect(test.state.trace).toEqual([
       'domain',
-      'parent_hook:job=succeeded:audits=0',
-      'audit_hook:job=succeeded'
+      'parent_hook:job=succeeded:logs=1'
     ]);
-    expect(count(test.sqlite, 'foundation_trial_operation_receipts')).toBe(1);
-    expect(count(test.sqlite, 'foundation_trial_operation_audits')).toBe(1);
+    expect(count(test.sqlite, 'operation_log')).toBe(1);
     expect(count(test.sqlite, 'note_job_domain_trial')).toBe(1);
     const attempt = test.jobs.listAttemptEvidence(jobId)[0];
     expect(attempt).toMatchObject({
@@ -759,7 +751,7 @@ describe('disposable registered-job operation join', () => {
     expect(JSON.stringify(result.kind === 'terminal' ? result.result : null))
       .not.toContain('semantic-alpha');
     expect(test.sqlite.query<{ readonly result_json: string }, []>(
-      'SELECT result_json FROM foundation_trial_operation_receipts'
+      'SELECT result_json FROM operation_log'
     ).get()?.result_json).not.toContain('semantic-alpha');
   });
 
@@ -785,8 +777,7 @@ describe('disposable registered-job operation join', () => {
       faults: { afterAtomicJobCompletion: () => { throw new Error('process-lost-in-parent-hook'); } }
     })).rejects.toThrow('process-lost-in-parent-hook');
     expect(atomic.jobs.require(atomicJobId).job.state).toBe('leased');
-    expect(count(atomic.sqlite, 'foundation_trial_operation_receipts')).toBe(0);
-    expect(count(atomic.sqlite, 'foundation_trial_operation_audits')).toBe(0);
+    expect(count(atomic.sqlite, 'operation_log')).toBe(0);
     expect(count(atomic.sqlite, 'note_job_domain_trial')).toBe(0);
     expect(atomic.jobs.listAttemptEvidence(atomicJobId)[0]?.completion).toBeNull();
     const retried = await atomicRunner.run({ jobId: atomicJobId });
@@ -820,12 +811,12 @@ describe('disposable registered-job operation join', () => {
         test.domain,
         test.transactionAuthority
       ),
-      newReceiptId: test.nextReceiptId
+      newOperationLogId: test.nextReceiptId
     });
     const first = await executor.execute(invocation);
     expect(first.kind).toBe('success');
     expect(test.jobs.require(jobId).job.state).toBe('leased');
-    expect(count(test.sqlite, 'foundation_trial_operation_receipts')).toBe(1);
+    expect(count(test.sqlite, 'operation_log')).toBe(1);
 
     const runner = await test.runner();
     await expect(runner.run({
@@ -864,8 +855,7 @@ describe('disposable registered-job operation join', () => {
       reasonCode: 'job.nonterminal_blocked'
     });
     expect(test.state.handlerCalls).toBe(0);
-    expect(count(test.sqlite, 'foundation_trial_operation_receipts')).toBe(0);
-    expect(count(test.sqlite, 'foundation_trial_operation_audits')).toBe(1);
+    expect(count(test.sqlite, 'operation_log')).toBe(0);
   });
 
   test('a known pre-submission projection failure retries only by its registered gate', async () => {

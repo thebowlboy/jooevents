@@ -1,8 +1,5 @@
 import type { WorkspaceApi } from './workspace-gateway';
-import type {
-	SubmissionsPagePort,
-	SubmissionTrayRestoreEntry
-} from './submissions-page-port';
+import type { SubmissionsPagePort } from './submissions-page-port';
 
 /** Keeps the tuned Submissions page on its resettable fixture without exposing that source to live. */
 export function createSampleSubmissionsPagePort(api: WorkspaceApi): SubmissionsPagePort {
@@ -11,13 +8,10 @@ export function createSampleSubmissionsPagePort(api: WorkspaceApi): SubmissionsP
 		submissions: Object.freeze({
 			list: api.submissions.list,
 			addDirectEntry: api.submissions.addDirectEntry,
-			removeDirectEntry: api.submissions.removeDirectEntry,
 			setAside: (ids: readonly string[]) => api.submissions.setAside([...ids]),
 			returnToInbox: (ids: readonly string[]) => api.submissions.returnToInbox([...ids]),
 			discard: (ids: readonly string[]) => api.submissions.discard([...ids]),
-			restore: (ids: readonly string[]) => api.submissions.restore([...ids]),
-			restoreTray: (entries: readonly SubmissionTrayRestoreEntry[]) =>
-				api.submissions.restoreTray(entries.map((entry: SubmissionTrayRestoreEntry) => ({ ...entry })))
+			restore: (ids: readonly string[]) => api.submissions.restore([...ids])
 		}),
 		speakers: Object.freeze({ profile: api.speakers.profile }),
 		review: Object.freeze({

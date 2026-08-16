@@ -1,20 +1,22 @@
 import type { Database } from 'bun:sqlite';
-import type { SessionHeadDto, SessionMutationPlanDto, SessionMutationResult, SessionRestorePlanDto } from '@jooevents/contracts/sessions';
+import type { SessionHeadDto, SessionMutationPlanDto, SessionMutationResult, SessionRemoveNewPlanDto, SessionRestorePlanDto } from '@jooevents/contracts/sessions';
 import { canonicalJsonText } from '@jooevents/kernel';
 import type { SQLiteProgramVocabularyRepository } from './program-vocabulary';
 import {
   applySessionMutationPlan,
+  applyNewSessionRemovalPlan,
   applySessionRestorePlan,
   createEmptySessionCatalog,
   parseSessionCatalog,
   parseSessionHead,
   parseSessionScope,
   type SessionCatalog,
-  type SessionChangesetTransactionPort,
+  type SessionGraduationReadPort,
+  type SessionTransactionPort,
   type SessionScope
 } from '@jooevents/session';
 
-/** Additive schema installed only in an explicitly disposable SQLite runtime. */
+/** This schema contributes to the accepted epoch-2 baseline and may also serve isolated fixtures. */
 export const SESSION_SQL = `
 CREATE TABLE session_catalogs (
   workspace_id TEXT NOT NULL CHECK(length(workspace_id) = 36),
@@ -122,7 +124,7 @@ export function installSessionSchema(sqlite: Database): void {
   sqlite.exec(SESSION_SQL);
 }
 
-export class SQLiteSessionRepository implements SessionChangesetTransactionPort {
+export class SQLiteSessionRepository implements SessionTransactionPort, SessionGraduationReadPort {
   constructor(
     private readonly sqlite: Database,
     private readonly vocabulary: Pick<SQLiteProgramVocabularyRepository, 'readVocabulary'>
@@ -168,13 +170,30 @@ export class SQLiteSessionRepository implements SessionChangesetTransactionPort 
     return row?.count ?? 0;
   }
 
-  applySessionPlan(plan: SessionMutationPlanDto | SessionRestorePlanDto): SessionMutationResult {
+  countSessionCanonicalReferences(scopeInput: SessionScope, sessionId: string): number {
+    const scope = parseSessionScope(scopeInput);
+    return ['submission_session_origins', 'engagement_heads'].reduce((total, table) => {
+      const installed = this.sqlite.query<CountRow, [string]>(
+        "SELECT count(*) AS count FROM sqlite_master WHERE type = 'table' AND name = ?"
+      ).get(table)?.count ?? 0;
+      if (installed === 0) return total;
+      const row = this.sqlite.query<CountRow, [string, string, string]>(
+        `SELECT count(*) AS count FROM ${table} WHERE workspace_id = ? AND event_id = ? AND session_id = ?`
+      ).get(scope.workspaceId, scope.eventId, sessionId);
+      return total + (row?.count ?? 0);
+    }, 0);
+  }
+
+  applySessionPlan(plan: SessionMutationPlanDto | SessionRestorePlanDto | SessionRemoveNewPlanDto): SessionMutationResult {
     if (!this.sqlite.inTransaction) throw new SQLiteSessionError('transaction_required');
+    const directRemoval = isRemoveNewPlan(plan);
     const restore = isRestorePlan(plan);
-    const scope = parseSessionScope(restore ? plan.scope : plan.input.scope);
+    const scope = parseSessionScope((restore || directRemoval) ? plan.scope : plan.input.scope);
     const catalog = this.readSessionCatalog(scope);
     if (!catalog) throw new SQLiteSessionError('scope_corrupt');
-    const applied = restore
+    const applied = directRemoval
+      ? applyNewSessionRemovalPlan({ plan, catalog })
+      : restore
       ? applySessionRestorePlan({ plan, catalog })
       : (() => {
           const vocabulary = this.readSessionVocabulary(scope);
@@ -196,8 +215,8 @@ export class SQLiteSessionRepository implements SessionChangesetTransactionPort 
       ), 'stale_catalog');
     }
 
-    const before = restore ? plan.expectedCurrent : plan.before;
-    const after = restore ? plan.restore : plan.after;
+    const before = (restore || directRemoval) ? plan.expectedCurrent : plan.before;
+    const after = directRemoval ? null : restore ? plan.restore : plan.after;
     if (before === null && after) this.insertHead(after);
     else if (before && after) this.updateHead(before, after);
     else if (before && after === null) this.deleteHead(before);
@@ -305,7 +324,13 @@ function changedExactlyOnce(result: { readonly changes: number }, code: SQLiteSe
 }
 
 function isRestorePlan(
-  plan: SessionMutationPlanDto | SessionRestorePlanDto
+  plan: SessionMutationPlanDto | SessionRestorePlanDto | SessionRemoveNewPlanDto
 ): plan is SessionRestorePlanDto {
   return 'action' in plan && plan.action === 'restore';
+}
+
+function isRemoveNewPlan(
+  plan: SessionMutationPlanDto | SessionRestorePlanDto | SessionRemoveNewPlanDto
+): plan is SessionRemoveNewPlanDto {
+  return 'action' in plan && plan.action === 'remove_new_session';
 }

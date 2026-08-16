@@ -17,9 +17,6 @@ export const APPLICATION_ID_KINDS = [
   'consumer_attempt',
   'integration_inbox_receipt',
   'operation_receipt',
-  'operation_execution_claim',
-  'changeset',
-  'changeset_revision',
   'approval',
   'audit_event',
   'domain_fact',
@@ -82,9 +79,6 @@ export type ConsumerDeliveryId = ApplicationId<'consumer_delivery'>;
 export type ConsumerAttemptId = ApplicationId<'consumer_attempt'>;
 export type IntegrationInboxReceiptId = ApplicationId<'integration_inbox_receipt'>;
 export type OperationReceiptId = ApplicationId<'operation_receipt'>;
-export type OperationExecutionClaimId = ApplicationId<'operation_execution_claim'>;
-export type ChangesetId = ApplicationId<'changeset'>;
-export type ChangesetRevisionId = ApplicationId<'changeset_revision'>;
 export type ApprovalId = ApplicationId<'approval'>;
 export type AuditEventId = ApplicationId<'audit_event'>;
 export type DomainFactId = ApplicationId<'domain_fact'>;
@@ -120,9 +114,6 @@ export const parseConsumerDeliveryId = parser('consumer_delivery');
 export const parseConsumerAttemptId = parser('consumer_attempt');
 export const parseIntegrationInboxReceiptId = parser('integration_inbox_receipt');
 export const parseOperationReceiptId = parser('operation_receipt');
-export const parseOperationExecutionClaimId = parser('operation_execution_claim');
-export const parseChangesetId = parser('changeset');
-export const parseChangesetRevisionId = parser('changeset_revision');
 export const parseApprovalId = parser('approval');
 export const parseAuditEventId = parser('audit_event');
 export const parseDomainFactId = parser('domain_fact');

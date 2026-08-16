@@ -22,10 +22,6 @@ import {
   reviewerScopeTargetSetDigest,
   validateReviewerRosterMutationPlan
 } from './roster-domain';
-import type {
-  ReviewerRosterChangesetReadPort,
-  ReviewerRosterChangesetTransactionPort
-} from './roster-changesets';
 
 const id = (tail: string) =>
   `00000000-0000-4000-8000-${tail.padStart(12, '0')}` as ReviewerRosterRecordDto['reviewerId'];
@@ -256,8 +252,7 @@ describe('reviewer roster domain', () => {
   });
 });
 
-class MemoryRosterPort implements ReviewerRosterChangesetReadPort,
-  ReviewerRosterChangesetTransactionPort {
+class MemoryRosterPort {
   constructor(
     public roster: ReviewerRosterStateDto,
     public authority: ReviewerAuthoritySetDto,
@@ -274,10 +269,6 @@ class MemoryRosterPort implements ReviewerRosterChangesetReadPort,
 
   readReviewerScopeTargets(readScope: ReviewerRosterScopeDto) {
     return readScope.eventId === scope.eventId ? this.targets : undefined;
-  }
-
-  readReviewerRosterCompensationAttribution() {
-    return { userId: organizerId, occurredAt: '2026-08-13T00:05:00.000Z' };
   }
 
   applyReviewerRosterPlan(plan: ReviewerRosterMutationPlanDto) {

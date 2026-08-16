@@ -1,7 +1,14 @@
 import { describe, expect, test } from 'bun:test';
-import type { ReleaseAuthorInput, ReleaseOverviewDto, TemplateArtifactSnapshotDto } from '@jooevents/contracts';
+import {
+	publicThemeTokenNameSchema,
+	releaseMutationResultSchema,
+	releaseSafeDiffSchema,
+	type ReleaseAuthorInput,
+	type ReleaseOverviewDto,
+	type TemplateArtifactSnapshotDto
+} from '@jooevents/contracts';
 import type { OrganizerFormsPort } from './view-models/intake-forms';
-import type { ReleaseLiveClient } from './operations/release-live';
+import type { ReleaseLiveClient, ReleaseMutationKeys } from './operations/release-live';
 import type { TemplateArtifactLiveClient } from './operations/template-artifacts-live';
 import { createTemplatePublicationLivePort } from './template-publication-live';
 
@@ -62,23 +69,34 @@ describe('live Template publication bridge', () => {
 			}
 		});
 		const calls: ReleaseAuthorInput[] = [];
+		const keys: ReleaseMutationKeys[] = [];
 		let overview: ReleaseOverviewDto = {
 			schemaVersion: 1, scope, currentProgramRelease: null, currentStyleSetRelease: null,
 			surfaceHeads: [], activeSurfaceReleases: []
 		};
-		const release = {
+		const release: ReleaseLiveClient = {
 			async overview() { return { kind: 'success', data: overview, correlationId: id(90) }; },
-			async mutate(input: ReleaseAuthorInput) {
+			async mutate(input: ReleaseAuthorInput, mutationKeys: ReleaseMutationKeys) {
 				calls.push(input);
+				keys.push(mutationKeys);
 				if (input.action === 'style_set_publish') return {
 					kind: 'success', correlationId: id(90), data: {
-						committedHeadVersion: 3,
-						safeDiff: {
+						mutation: releaseMutationResultSchema.parse({
+							action: 'style_set_publish',
+							release: {
+								schemaVersion: 1, scope, id: id(30), number: 1, predecessor: null,
+								sourceTemplateRevision: input.sourceTemplateRevision, recipe: input.recipe,
+								tokens: Object.fromEntries(publicThemeTokenNameSchema.options.map((name) => [name, 'initial'])),
+								releasedByUserId: id(3), releasedAt: '2026-08-15T00:00:00.000Z',
+								digestSha256: digest('b')
+							}
+						}),
+						safeDiff: releaseSafeDiffSchema.parse({
 							action: 'style_set_publish', before: null,
 							after: { releaseId: id(30), number: 1, digestSha256: digest('b') },
 							sourceTemplateRevision: input.sourceTemplateRevision,
 							recipe: input.recipe
-						}
+						})
 					}
 				};
 				if (input.action !== 'surface_publish') throw new Error('unexpected release action');
@@ -97,21 +115,35 @@ describe('live Template publication bridge', () => {
 				};
 				return {
 					kind: 'success', correlationId: id(90), data: {
-						committedHeadVersion: 3,
-						safeDiff: {
+						mutation: releaseMutationResultSchema.parse({
+							action: 'surface_publish', release: overview.activeSurfaceReleases[0],
+							head: overview.surfaceHeads[0]
+						}),
+						safeDiff: releaseSafeDiffSchema.parse({
 							action: 'surface_publish', kind: input.kind, before: null,
 							after: overview.surfaceHeads[0]!,
 							sourceTemplateRevision: input.sourceTemplateRevision,
 							styleSetReleaseId: input.styleSetReleaseId, formRef: null
-						}
+						})
 					}
 				};
 			}
-		} as unknown as ReleaseLiveClient;
-		const artifacts = {
-			async list() { return { kind: 'success', data: [theme, surface], correlationId: id(90) }; }
-		} as unknown as TemplateArtifactLiveClient;
-		const forms = { source: { kind: 'live' } } as unknown as OrganizerFormsPort;
+		};
+		const artifacts: TemplateArtifactLiveClient = {
+			async list() { return { kind: 'success', data: [theme, surface], correlationId: id(90) }; },
+			async mutate() { throw new TypeError('template_mutation_not_used'); }
+		};
+		const forms: OrganizerFormsPort = {
+			source: { kind: 'live' },
+			async list() { throw new TypeError('form_list_not_used'); },
+			async readDetail() { throw new TypeError('form_detail_not_used'); },
+			async create() { throw new TypeError('form_create_not_used'); },
+			async revise() { throw new TypeError('form_revise_not_used'); },
+			async draftPublish() { throw new TypeError('form_publish_not_used'); },
+			async publish() { throw new TypeError('form_publish_not_used'); },
+			async lifecycle() { throw new TypeError('form_lifecycle_not_used'); },
+			async closing() { throw new TypeError('form_closing_not_used'); }
+		};
 		const port = createTemplatePublicationLivePort({ artifacts, release, forms });
 
 		expect(await port.publish(surface.head.artifactId)).toEqual({ ok: true });
@@ -126,6 +158,12 @@ describe('live Template publication bridge', () => {
 			sourceTemplateRevision: { artifactId: surface.head.artifactId, revisionId: surface.current.revisionId },
 			manifest: { schemaVersion: 1, heading: 'Event schedule', intro: 'Find every session.' }
 		});
+		expect(keys).toHaveLength(2);
+		expect(keys[0]?.draft).toStartWith('je.template.publish.style.draft.');
+		expect(keys[0]?.publish).toStartWith('je.template.publish.style.publish.');
+		expect(keys[1]?.draft).toStartWith('je.template.publish.surface.draft.');
+		expect(keys[1]?.publish).toStartWith('je.template.publish.surface.publish.');
+		expect(new Set(keys.flatMap((entry) => [entry.draft, entry.publish])).size).toBe(4);
 		expect(await port.status(surface.head.artifactId)).toEqual({
 			state: 'published', publishedRevisionNumber: 1
 		});

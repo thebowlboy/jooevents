@@ -200,7 +200,7 @@ test('a hosted page is the surface itself, with none of the console and no crawl
 	// Hidden from search until an organizer says otherwise.
 	await expect(page.locator('meta[name="robots"]')).toHaveAttribute('content', 'noindex, nofollow');
 	// None of the operator console reaches a visitor.
-	await expect(page.getByRole('navigation', { name: 'Workspace' })).toHaveCount(0);
+	await expect(page.getByRole('navigation', { name: 'Workspace', exact: true })).toHaveCount(0);
 	// The real programme, not sample copy.
 	await expect(page.locator('.schedule__session-title').first()).toBeVisible();
 

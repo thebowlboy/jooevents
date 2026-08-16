@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test';
 import {
   currentEventProjectionSchema,
   eventCreateDraftInputSchema,
-  eventCreateDraftOperationResultSchema,
   eventCreateInputSchema,
   eventCreateOperationResultSchema,
   eventCreationCompensationEligibilitySchema,
@@ -83,7 +82,7 @@ describe('Event wire contracts', () => {
     }).success).toBe(false);
   });
 
-  test('keeps first-Event drafting scope-free and returns an inert exact diff', () => {
+  test('keeps first-Event creation scope-free', () => {
     const input = {
       name: 'JooConf 2027',
       timezone: 'Asia/Singapore',
@@ -98,28 +97,6 @@ describe('Event wire contracts', () => {
     expect(eventCreateDraftInputSchema.safeParse({ ...input, workspaceId: eventId }).success)
       .toBe(false);
 
-    expect(eventCreateDraftOperationResultSchema.safeParse({
-      kind: 'success',
-      data: {
-        action: 'create',
-        changesetId: '018f0f47-7a86-7d36-8a25-9f86589c7a4a',
-        headVersion: 1,
-        revision: {
-          id: '018f0f47-7a86-7d36-8a25-9f86589c7a4b',
-          number: 1,
-          digestSha256: 'a'.repeat(64)
-        },
-        safeDiff: {
-          action: 'create',
-          before: null,
-          after: event,
-          currentSelection: { before: null, after: eventId },
-          eventSetVersion: { before: 1, after: 2 }
-        }
-      },
-      receipt: { id: receiptId, operationName: 'event.create.draft', operationVersion: 1 },
-      correlationId
-    }).success).toBe(true);
   });
 
   test('keeps creation correction outcomes closed', () => {

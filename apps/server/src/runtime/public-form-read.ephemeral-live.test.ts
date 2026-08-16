@@ -4,19 +4,17 @@ import { basename, dirname } from 'node:path';
 import { makeSignature } from 'better-auth/crypto';
 import {
   createReadOperationResultSchema,
-  eventCreateDraftOperationResultSchema,
+  eventCreateOperationResultSchema,
   fieldRegistrySnapshotReadResultSchema,
-  releaseDraftOperationResultSchema,
+  intakeFormDirectOperationResultSchema,
+  intakeFormVersionPublishOperationResultSchema,
+  intakeFormVersionReviewDraftOperationResultSchema,
+  releasePublishOperationResultSchema,
+  releaseReviewDraftOperationResultSchema,
   safeOperationManifestSchema,
   servedPublicFormSchema,
   templateArtifactListOperationResultSchema
 } from '@jooevents/contracts';
-import {
-  changesetLifecycleOperationResultSchema
-} from '@jooevents/changeset-operations';
-import {
-  intakeFormDraftOperationResultSchema
-} from '@jooevents/intake-operations';
 import { loadEphemeralLiveConfig } from '../config';
 import { createEphemeralLiveRuntime, type EphemeralLiveRuntime } from './ephemeral-live';
 
@@ -134,7 +132,9 @@ async function effect(input: {
     headers: operatorHeaders({ session: input.session, key: input.key }),
     body: JSON.stringify(input.body)
   });
-  expect(response.status).toBe(200);
+  if (response.status !== 200) {
+    throw new Error(`public_form_effect_failed:${input.path}:${response.status}:${await response.text()}`);
+  }
   return response.json();
 }
 
@@ -144,52 +144,43 @@ async function commitDraft(input: {
   readonly key: string;
   readonly draft: {
     readonly data: {
-      readonly changesetId: string;
+      readonly draftId: string;
       readonly revision: { readonly id: string; readonly digestSha256: string };
     };
   };
 }): Promise<void> {
-  const selector = Object.freeze({
-    changesetId: input.draft.data.changesetId,
-    revisionId: input.draft.data.revision.id,
-    revisionDigest: input.draft.data.revision.digestSha256
-  });
-  const proposed = changesetLifecycleOperationResultSchema.parse(await effect({
+  const published = releasePublishOperationResultSchema.parse(await effect({
     runtime: input.runtime,
     session: input.session,
-    path: '/api/changesets/proposals',
-    key: `${input.key}-propose`,
-    body: { ...selector, expectedHeadVersion: 1 }
+    path: '/api/events/current/releases/publish',
+    key: `${input.key}-publish`,
+    body: {
+      draftId: input.draft.data.draftId,
+      revisionId: input.draft.data.revision.id,
+      revisionDigestSha256: input.draft.data.revision.digestSha256
+    }
   }));
-  expect(proposed).toMatchObject({ kind: 'success', data: { action: 'propose' } });
-  const committed = changesetLifecycleOperationResultSchema.parse(await effect({
-    runtime: input.runtime,
-    session: input.session,
-    path: '/api/changesets/commits',
-    key: `${input.key}-commit`,
-    body: { ...selector, expectedHeadVersion: 2 }
-  }));
-  expect(committed).toMatchObject({ kind: 'success', data: { action: 'commit' } });
+  expect(published.kind).toBe('success');
 }
 
 async function createEvent(
   runtime: EphemeralLiveRuntime,
   session: BrowserSession
 ): Promise<void> {
-  const draft = eventCreateDraftOperationResultSchema.parse(await effect({
+  const created = eventCreateOperationResultSchema.parse(await effect({
     runtime,
     session,
-    path: '/api/events/drafts/create',
-    key: 'public-read-event-draft',
+    path: '/api/events',
+    key: 'public-read-event-create',
     body: {
+      expectedEventSetVersion: 1,
       name: 'Public Read Event',
       timezone: 'Asia/Singapore',
       startDate: '2027-06-10',
       endDate: '2027-06-12'
     }
   }));
-  if (draft.kind !== 'success') throw new Error('public_read_event_draft_failed');
-  await commitDraft({ runtime, session, key: 'public-read-event', draft });
+  if (created.kind !== 'success') throw new Error('public_read_event_create_failed');
 }
 
 async function readFieldRegistry(
@@ -232,22 +223,21 @@ async function createForm(
     },
     rules: []
   };
-  const draft = intakeFormDraftOperationResultSchema.parse(await effect({
+  const mutation = intakeFormDirectOperationResultSchema.parse(await effect({
     runtime,
     session,
-    path: '/api/events/current/forms/drafts/create',
-    key: 'public-read-form-create-draft',
+    path: '/api/events/current/forms/create',
+    key: 'public-read-form-create',
     body: {
       expectedCatalogVersion: 1,
       expectedRegistryVersion: registry.version,
       definition
     }
   }));
-  if (draft.kind !== 'success' || draft.data.safeDiff.action !== 'create') {
+  if (mutation.kind !== 'success' || mutation.data.action !== 'create') {
     throw new Error('public_read_form_create_failed');
   }
-  await commitDraft({ runtime, session, key: 'public-read-form-create', draft });
-  return draft.data.safeDiff.after.id;
+  return mutation.data.formId;
 }
 
 async function changeForm(input: {
@@ -257,15 +247,26 @@ async function changeForm(input: {
   readonly key: string;
   readonly body: unknown;
 }) {
-  const draft = intakeFormDraftOperationResultSchema.parse(await effect(input));
-  if (draft.kind !== 'success') throw new Error(`${input.key}_failed`);
-  await commitDraft({
-    runtime: input.runtime,
-    session: input.session,
-    key: input.key.replace(/-draft$/, ''),
-    draft
-  });
-  return draft;
+  if (input.path === '/api/events/current/forms/publish/draft') {
+    const review = intakeFormVersionReviewDraftOperationResultSchema.parse(await effect(input));
+    if (review.kind !== 'success') throw new Error(`${input.key}_failed`);
+    const published = intakeFormVersionPublishOperationResultSchema.parse(await effect({
+      runtime: input.runtime,
+      session: input.session,
+      path: '/api/events/current/forms/publish',
+      key: input.key.replace(/-review$/, '-publish'),
+      body: {
+        draftId: review.data.draftId,
+        revisionId: review.data.revision.id,
+        revisionDigestSha256: review.data.revision.digestSha256
+      }
+    }));
+    if (published.kind !== 'success') throw new Error(`${input.key}_publish_failed`);
+    return published;
+  }
+  const mutation = intakeFormDirectOperationResultSchema.parse(await effect(input));
+  if (mutation.kind !== 'success') throw new Error(`${input.key}_failed`);
+  return mutation;
 }
 
 async function publicRead(
@@ -333,7 +334,7 @@ async function publishApplySurface(
     const text = value.normalize('NFC').trim().replace(/\s+/gu, ' ');
     return text.length === 0 ? null : text;
   };
-  const styleDraft = releaseDraftOperationResultSchema.parse(await effect({
+  const styleDraft = releaseReviewDraftOperationResultSchema.parse(await effect({
     runtime,
     session,
     path: '/api/events/current/releases/drafts',
@@ -349,7 +350,7 @@ async function publishApplySurface(
     throw new Error('public_read_style_set_draft_failed');
   }
   await commitDraft({ runtime, session, key: 'public-read-style', draft: styleDraft });
-  const surfaceDraft = releaseDraftOperationResultSchema.parse(await effect({
+  const surfaceDraft = releaseReviewDraftOperationResultSchema.parse(await effect({
     runtime,
     session,
     path: '/api/events/current/releases/drafts',
@@ -406,20 +407,20 @@ describe('ephemeral live open public Form read', () => {
     const opened = await changeForm({
       runtime,
       session,
-      path: '/api/events/current/forms/drafts/lifecycle',
-      key: 'public-read-form-publish-and-open-draft',
+      path: '/api/events/current/forms/publish/draft',
+      key: 'public-read-form-publish-and-open-review',
       body: {
-        transition: 'publish_and_open',
+        action: 'publish_and_open',
         formId,
         expectedDefinitionVersion: 1,
         expectedRegistryVersion: registry.version
       }
     });
-    if (opened.data.safeDiff.action !== 'lifecycle'
-        || opened.data.safeDiff.publishedVersion === null) {
+    if (opened.data.action !== 'publish_and_open'
+        || opened.data.publishedVersionId === null) {
       throw new Error('public_read_form_publish_and_open_diff_missing');
     }
-    const formVersionId = opened.data.safeDiff.publishedVersion.id;
+    const formVersionId = opened.data.publishedVersionId;
     await expectFailedClosed(runtime, formId);
 
     // Publishing the apply surface release activates the read — and only
@@ -507,8 +508,8 @@ describe('ephemeral live open public Form read', () => {
     await changeForm({
       runtime,
       session,
-      path: '/api/events/current/forms/drafts/lifecycle',
-      key: 'public-read-form-close-draft',
+      path: '/api/events/current/forms/lifecycle',
+      key: 'public-read-form-close',
       body: { transition: 'close', formId, expectedDefinitionVersion: 2 }
     });
     await expectFailedClosed(runtime, formId);

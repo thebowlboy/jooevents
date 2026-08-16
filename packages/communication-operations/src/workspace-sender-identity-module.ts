@@ -136,10 +136,10 @@ const successContributionSchema = z.strictObject({
     data: workspaceSenderIdentitySchema
   }),
   domain: workspaceSenderIdentityDomainContributionSchema,
-  receiptChildren: z.tuple([workspaceSenderIdentityFactChildSchema])
+  effectContributions: z.tuple([workspaceSenderIdentityFactChildSchema])
 }).superRefine((contribution, context) => {
   const { data } = contribution.result;
-  const fact = contribution.receiptChildren[0];
+  const fact = contribution.effectContributions[0];
   if (data.workspaceId !== contribution.domain.workspaceId
       || data.headVersion !== contribution.domain.headVersion
       || fact.payload.headVersion !== contribution.domain.headVersion
@@ -153,7 +153,7 @@ const successContributionSchema = z.strictObject({
 const outcomeContributionSchema = z.strictObject({
   result: z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema }),
   domain: z.null(),
-  receiptChildren: z.tuple([])
+  effectContributions: z.tuple([])
 }).superRefine((contribution, context) => {
   const outcome = contribution.result.outcome;
   const key = `${outcome.class}:${outcome.kind}`;
@@ -185,7 +185,7 @@ export type WorkspaceSenderIdentityContribution = z.infer<
 export interface WorkspaceSenderIdentityPreparedContribution {
   readonly result: unknown;
   readonly domain: unknown;
-  readonly receiptChildren: readonly unknown[];
+  readonly effectContributions: readonly unknown[];
 }
 
 export interface WorkspaceSenderIdentityPreparation {
@@ -262,7 +262,7 @@ function createUpdateHandler(input: {
         return {
           result: contribution.result,
           domain: contribution.domain,
-          receiptChildren: [...contribution.receiptChildren]
+          effectContributions: [...contribution.effectContributions]
         };
       } catch (error) {
         sealed.phase = 'spent';
@@ -423,7 +423,7 @@ export function createWorkspaceSenderIdentityOperationModule(
   // platform forbids app_model access on commit operations (agents draft,
   // people commit), and the external MCP surface carries no effect binding
   // vocabulary at all. An agent-authored sender change therefore needs the
-  // changeset draft loop, which is a separate decision, not one this module
+  // reviewed sender-configuration loop, which is a separate decision, not one this module
   // resolves silently.
   const updateLanes = Object.freeze([
     parseOperationAccessLane({ kind: 'operator', surface: 'operator_http', policy: input.policy })

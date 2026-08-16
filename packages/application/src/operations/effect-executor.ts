@@ -11,13 +11,6 @@ import { z } from 'zod';
 import { OperationExecutionError, OperationInputError, type OperationExecutionPhase } from './executor';
 import { effectOperationIdentitiesEqual } from './effect-identity';
 import {
-  createContextDeniedOperationAuditRecord,
-  createIdempotencyConflictOperationAuditRecord,
-  createNonterminalProgressOperationAuditRecord,
-  createTerminalNewOperationAuditRecord,
-  createTerminalReplayOperationAuditRecord
-} from './audit';
-import {
   consumeAutonomyPreflightDecision,
   executeAutonomyPreflight,
   resolveAutonomyExecutionDirectiveEvidence,
@@ -69,7 +62,7 @@ const internalCanonicalResultSchema = z.discriminatedUnion('kind', [
 const handlerContributionEnvelopeSchema = z.strictObject({
   result: z.unknown(),
   domain: z.json(),
-  receiptChildren: z.array(z.json()).max(100)
+  effectContributions: z.array(z.json()).max(100)
 });
 
 interface InternalEffectInvocation {
@@ -401,29 +394,32 @@ function validateReplay(
   receipt: TerminalEffectReceipt
 ): EffectfulOperationResult {
   if (!effectOperationIdentitiesEqual(identity, receipt.identity) || receipt.ref.operationName !== identity.operationName || receipt.ref.operationVersion !== identity.operationVersion) {
-    throw new OperationExecutionError('receipt_preflight');
+    throw new OperationExecutionError('replay_preflight');
   }
   const base = effectfulOperationResultSchema.safeParse(receipt.result);
   const projected = invocation.binding.projectedResultSchema.schema.safeParse(receipt.result);
   if (!base.success || !projected.success || (base.data.kind === 'outcome' && base.data.terminal !== true)) {
-    throw new OperationExecutionError('receipt_preflight');
+    throw new OperationExecutionError('replay_preflight');
   }
   if (base.data.receipt.id !== receipt.ref.id
     || base.data.receipt.operationName !== receipt.ref.operationName
     || base.data.receipt.operationVersion !== receipt.ref.operationVersion) {
-    throw new OperationExecutionError('receipt_preflight');
+    throw new OperationExecutionError('replay_preflight');
   }
   return deepFreeze(base.data);
 }
 
-function canonicalResult(operation: CompiledEffectOperation, candidate: unknown): unknown {
+function canonicalResult(
+  operation: CompiledEffectOperation,
+  candidate: unknown
+): z.infer<typeof internalCanonicalResultSchema> {
   const base = internalCanonicalResultSchema.safeParse(candidate);
   if (!base.success) throw new OperationExecutionError('canonical_result');
   const parsed = operation.canonicalResultSchema.schema.safeParse(base.data);
   if (!parsed.success) throw new OperationExecutionError('canonical_result');
-  const outcome = outcomeFrom(parsed.data);
+  const outcome = outcomeFrom(base.data);
   if (outcome && !validateDeclaredOutcome(operation, outcome)) throw new OperationExecutionError('canonical_result');
-  return parsed.data;
+  return base.data;
 }
 
 function projectedBase(invocation: InternalEffectInvocation, canonical: unknown): z.infer<typeof internalCanonicalResultSchema> {
@@ -471,6 +467,222 @@ function bindAutonomyExecution(input: {
   return input.result;
 }
 
+function newUuidV7(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  let milliseconds = Date.now();
+  for (let index = 5; index >= 0; index -= 1) {
+    bytes[index] = milliseconds & 0xff;
+    milliseconds = Math.floor(milliseconds / 256);
+  }
+  bytes[6] = 0x70 | (bytes[6]! & 0x0f);
+  bytes[8] = 0x80 | (bytes[8]! & 0x3f);
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+function isDirectAudited(invocation: InternalEffectInvocation): boolean {
+  return 'profile' in invocation.operation.definition.execution
+    && invocation.operation.definition.execution.profile === 'direct_audited';
+}
+
+function resolveDirectHistorySummary(
+  history: Extract<CompiledEffectOperation['definition']['execution'], { readonly profile: 'direct_audited' }>['history'],
+  canonical: z.infer<typeof internalCanonicalResultSchema>
+): string {
+  if ('summary' in history) return history.summary;
+  if (canonical.kind !== 'success'
+      || canonical.data === null
+      || typeof canonical.data !== 'object'
+      || Array.isArray(canonical.data)) {
+    throw new OperationExecutionError('canonical_result');
+  }
+  const data = canonical.data as { readonly action?: unknown; readonly kind?: unknown };
+  const action = data.action;
+  const summary = typeof action !== 'string'
+    ? undefined
+    : 'summariesByAction' in history
+      ? history.summariesByAction[action]
+      : typeof data.kind === 'string'
+        ? history.summariesByActionAndKind[`${action}:${data.kind}`]
+        : undefined;
+  if (typeof summary !== 'string') throw new OperationExecutionError('canonical_result');
+  return summary;
+}
+
+async function executeDirectAudited(input: {
+  readonly invocation: InternalEffectInvocation;
+  readonly unitOfWork: EffectUnitOfWorkPort;
+  readonly registryDigestSha256: string;
+  readonly newOperationLogId: () => string;
+}): Promise<EffectfulOperationResult> {
+  const { invocation } = input;
+  if (!isDirectAudited(invocation)) throw new OperationExecutionError('binding');
+  const direct = invocation.operation.definition.execution;
+  if (!('profile' in direct) || direct.profile !== 'direct_audited') {
+    throw new OperationExecutionError('binding');
+  }
+  if (invocation.contextResolution.kind === 'outcome') {
+    return nonterminalResult(invocation, invocation.contextResolution.outcome);
+  }
+  if (!input.unitOfWork.findTerminalOperationLog || !input.unitOfWork.runInDirectUnitOfWork) {
+    throw new OperationExecutionError('unit_of_work');
+  }
+
+  const readyContext = invocation.contextResolution;
+  const identity = identityFor(invocation);
+  const requestHash = readyContext.requestHash;
+  const sealedExecutionAuthority = await phase('authority_recheck', () =>
+    recheckEffectInvocationCurrentAuthority(readyContext.context)
+  );
+  const executionAuthority = await phase('authority_recheck', () =>
+    consumeEffectInvocationCurrentAuthorityRecheck(readyContext.context, sealedExecutionAuthority)
+  );
+  if (executionAuthority.kind === 'denied') {
+    return nonterminalResult(invocation, executionAuthority.outcome);
+  }
+
+  const existing = await phase('replay_preflight', () =>
+    input.unitOfWork.findTerminalOperationLog!(identity)
+  );
+  if (existing) {
+    const replay = validateReplay(invocation, identity, existing);
+    return existing.requestHash === requestHash
+      ? replay
+      : nonterminalResult(invocation, requestChangedOutcome(invocation.operation));
+  }
+
+  let executionDirective: SealedAutonomyExecutionDirective | undefined;
+  const result = await phase('unit_of_work', () => input.unitOfWork.runInDirectUnitOfWork!(async (unitOfWork) => {
+    const sealedAuthorityRecheck = await phase('authority_recheck', () =>
+      unitOfWork.recheckCurrentAuthority(readyContext.context)
+    );
+    const authorityRecheck = await phase('authority_recheck', () =>
+      consumeEffectInvocationCurrentAuthorityRecheck(readyContext.context, sealedAuthorityRecheck)
+    );
+    if (authorityRecheck.kind === 'denied') {
+      return nonterminalResult(invocation, authorityRecheck.outcome);
+    }
+
+    const afterLock = await phase('replay_recheck', () =>
+      unitOfWork.findTerminalOperationLog(identity)
+    );
+    if (afterLock) {
+      const replay = validateReplay(invocation, identity, afterLock);
+      return afterLock.requestHash === requestHash
+        ? replay
+        : nonterminalResult(invocation, requestChangedOutcome(invocation.operation));
+    }
+
+    const sealedPreflight = await phase('autonomy_preflight', () => executeAutonomyPreflight({
+      registration: invocation.operation.autonomyPreflight,
+      policy: invocation.operation.autonomyPolicy,
+      riskResolver: invocation.operation.riskResolver,
+      evidenceResolver: invocation.operation.autonomyEvidenceResolver,
+      approvalResolver: invocation.operation.renewedApprovalResolver,
+      context: readyContext.context,
+      maximumRisk: invocation.operation.definition.maxRisk,
+      consequenceTags: invocation.operation.definition.consequenceTags,
+      requestHashSha256: requestHash,
+      evaluatedAt: authorityRecheck.evaluatedAt
+    }));
+    const preflight = await phase('autonomy_preflight', () => consumeAutonomyPreflightDecision({
+      decision: sealedPreflight,
+      registration: invocation.operation.autonomyPreflight,
+      operation: {
+        name: invocation.operation.definition.name,
+        version: invocation.operation.definition.version
+      },
+      requestHashSha256: requestHash
+    }));
+    executionDirective = preflight.directive;
+    if (preflight.disposition !== 'proceed') {
+      return nonterminalResult(invocation, preflight.outcome);
+    }
+
+    const snapshot = await phase('write_snapshot', async () => freezeHandlerSnapshot(
+      await unitOfWork.openHandlerSnapshot(
+        invocation.operation.definition.handlerCapability,
+        readyContext.context,
+        sealedAuthorityRecheck
+      )
+    ));
+    const handlerCandidate = await phase('handler', () => {
+      const candidate = invocation.operation.handler.handle({
+        businessInput: invocation.businessInput,
+        context: readyContext.context,
+        snapshot
+      });
+      if (isPromiseLike(candidate)) throw new TypeError('direct-audited handler returned a promise');
+      return candidate;
+    });
+    const envelope = handlerContributionEnvelopeSchema.safeParse(handlerCandidate);
+    if (!envelope.success) throw new OperationExecutionError('contribution');
+    const contribution = invocation.operation.contributionSchema.schema.safeParse(envelope.data);
+    if (!contribution.success) throw new OperationExecutionError('contribution');
+    const sealedContribution = handlerContributionEnvelopeSchema.safeParse(contribution.data);
+    if (!sealedContribution.success || sealedContribution.data.effectContributions.length !== 0) {
+      throw new OperationExecutionError('contribution');
+    }
+
+    const canonical = canonicalResult(invocation.operation, sealedContribution.data.result);
+    const terminalization = await phase('terminalization', () => resolveTerminalization({
+      operation: invocation.operation.definition,
+      phase: invocation.operation.executionPhase,
+      resolver: invocation.operation.terminalizationResolver,
+      evidence: terminalizationEvidenceFor({
+        canonicalResult: canonical,
+        domainContribution: sealedContribution.data.domain,
+        effectContributions: sealedContribution.data.effectContributions
+      })
+    }));
+    if (terminalization.kind === 'nonterminal') {
+      const outcome = outcomeFrom(canonical);
+      if (!outcome || sealedContribution.data.domain !== null) {
+        throw new OperationExecutionError('terminalization');
+      }
+      return nonterminalResult(invocation, outcome);
+    }
+
+    const projected = projectedBase(invocation, canonical);
+    const historySummary = resolveDirectHistorySummary(direct.history, canonical);
+    const logId = await phase('operation_log', () => input.newOperationLogId());
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(logId)) {
+      throw new OperationExecutionError('operation_log');
+    }
+    await phase('domain_contribution', () => unitOfWork.applyDomainContribution(
+      invocation.operation.definition.handlerCapability,
+      sealedContribution.data.domain
+    ));
+    const terminal = terminalResult({ invocation, projected, receiptId: logId });
+    const receipt: TerminalEffectReceipt = deepFreeze({
+      ref: terminal.ref,
+      identity,
+      requestHash,
+      result: terminal.result
+    });
+    await phase('operation_log', () => unitOfWork.insertOperationLog(deepFreeze({
+      receipt,
+      registryDigestSha256: input.registryDigestSha256,
+      actor: readyContext.context.actor,
+      scope: {
+        workspaceId: readyContext.context.scope.workspaceId,
+        ...(readyContext.context.scope.eventId
+          ? { eventId: readyContext.context.scope.eventId }
+          : {}),
+        subjects: readyContext.context.scope.subjects
+      },
+      summary: historySummary,
+      occurredAt: readyContext.context.receivedAt,
+      correlationId: readyContext.context.correlationId
+    })));
+    return terminal.result;
+  }));
+
+  return executionDirective === undefined
+    ? result
+    : bindAutonomyExecution({ invocation, result, directive: executionDirective });
+}
+
 function terminalResult(input: {
   readonly invocation: InternalEffectInvocation;
   readonly projected: z.infer<typeof internalCanonicalResultSchema>;
@@ -493,33 +705,33 @@ function terminalResult(input: {
 export function createEffectOperationExecutor(input: {
   readonly registry: OperationRegistry;
   readonly unitOfWork: EffectUnitOfWorkPort;
-  readonly newReceiptId?: () => string;
+  readonly newOperationLogId?: () => string;
 }): EffectOperationExecutor {
-  const newReceiptId = input.newReceiptId ?? (() => crypto.randomUUID());
+  const newOperationLogId = input.newOperationLogId ?? newUuidV7;
   return Object.freeze({
     async execute(sealed: SealedEffectInvocation) {
       const invocation = sealedInvocations.get(sealed);
-			if (!invocation || invocation.registry !== input.registry) {
-				throw new OperationExecutionError('binding');
-			}
+      if (!invocation || invocation.registry !== input.registry) {
+        throw new OperationExecutionError('binding');
+      }
       if (completedInvocations.has(sealed) || executingInvocations.has(sealed)) {
         throw new OperationExecutionError('binding');
       }
       executingInvocations.add(sealed);
       let completed = false;
       try {
-      if (invocation.contextResolution.kind === 'outcome') {
-        const deniedResolution = invocation.contextResolution;
-        const result = nonterminalResult(invocation, deniedResolution.outcome);
-        await phase('operation_audit', () => input.unitOfWork.recordShortOperationAudit(
-          createContextDeniedOperationAuditRecord({
-            attempt: deniedResolution.auditAttempt,
-            definition: invocation.operation.definition,
-            auditTarget: invocation.operation.auditTarget,
-            auditRecordProfile: invocation.operation.auditRecordProfile,
-            result
-          })
-        ));
+        if (isDirectAudited(invocation)) {
+          const result = await executeDirectAudited({
+            invocation,
+            unitOfWork: input.unitOfWork,
+            registryDigestSha256: input.registry.manifestDigestSha256,
+            newOperationLogId
+          });
+          completed = true;
+          return result;
+        }
+        if (invocation.contextResolution.kind === 'outcome') {
+        const result = nonterminalResult(invocation, invocation.contextResolution.outcome);
         completed = true;
         return result;
       }
@@ -538,55 +750,21 @@ export function createEffectOperationExecutor(input: {
       );
       if (executionAuthority.kind === 'denied') {
         const result = nonterminalResult(invocation, executionAuthority.outcome);
-        await phase('operation_audit', () => input.unitOfWork.recordShortOperationAudit(
-          createNonterminalProgressOperationAuditRecord({
-            context: readyContext.context,
-            definition: invocation.operation.definition,
-            auditTarget: invocation.operation.auditTarget,
-            auditRecordProfile: invocation.operation.auditRecordProfile,
-            result,
-            authorityRecheck: sealedExecutionAuthority,
-            reason: {
-              kind: 'authority_recheck',
-              denialReason: executionAuthority.reason
-            }
-          })
-        ));
         completed = true;
         return result;
       }
-      const existing = await phase('receipt_preflight', () => input.unitOfWork.findTerminalReceipt(identity));
+      const existing = await phase('replay_preflight', () => input.unitOfWork.findTerminalReceipt(identity));
       if (existing) {
         const validatedReplay = validateReplay(invocation, identity, existing);
         const matchingRequest = existing.requestHash === requestHash;
         const result = matchingRequest
           ? validatedReplay
           : nonterminalResult(invocation, requestChangedOutcome(invocation.operation));
-        await phase('operation_audit', () => input.unitOfWork.recordShortOperationAudit(
-          matchingRequest
-            ? createTerminalReplayOperationAuditRecord({
-                context: readyContext.context,
-                definition: invocation.operation.definition,
-                auditTarget: invocation.operation.auditTarget,
-                auditRecordProfile: invocation.operation.auditRecordProfile,
-                result,
-                relatedReceiptId: existing.ref.id,
-                authorityRecheck: sealedExecutionAuthority
-              })
-            : createIdempotencyConflictOperationAuditRecord({
-                context: readyContext.context,
-                definition: invocation.operation.definition,
-                auditTarget: invocation.operation.auditTarget,
-                auditRecordProfile: invocation.operation.auditRecordProfile,
-                result,
-                authorityRecheck: sealedExecutionAuthority
-              })
-        ));
         completed = true;
         return result;
       }
       let executionDirective: SealedAutonomyExecutionDirective | undefined;
-      const execution = await phase('unit_of_work', () => input.unitOfWork.runInUnitOfWork(async (unitOfWork) => {
+      const result = await phase('unit_of_work', () => input.unitOfWork.runInUnitOfWork(async (unitOfWork) => {
         const sealedAuthorityRecheck = await phase('authority_recheck', () =>
           unitOfWork.recheckCurrentAuthority(readyContext.context)
         );
@@ -597,89 +775,14 @@ export function createEffectOperationExecutor(input: {
           )
         );
         if (authorityRecheck.kind === 'denied') {
-          const result = nonterminalResult(invocation, authorityRecheck.outcome);
-          return {
-            kind: 'short_audit' as const,
-            result,
-            record: createNonterminalProgressOperationAuditRecord({
-              context: readyContext.context,
-              definition: invocation.operation.definition,
-              auditTarget: invocation.operation.auditTarget,
-              auditRecordProfile: invocation.operation.auditRecordProfile,
-              result,
-              authorityRecheck: sealedAuthorityRecheck,
-              reason: {
-                kind: 'authority_recheck',
-                denialReason: authorityRecheck.reason
-              }
-            })
-          };
+          return nonterminalResult(invocation, authorityRecheck.outcome);
         }
-
-        const claim = await phase('execution_claim', () => unitOfWork.acquireExecutionClaim(identity, requestHash));
-        if (claim.kind === 'contended_changed_request') {
-          const result = nonterminalResult(invocation, requestChangedOutcome(invocation.operation));
-          return {
-            kind: 'short_audit' as const,
-            result,
-            record: createIdempotencyConflictOperationAuditRecord({
-              context: readyContext.context,
-              definition: invocation.operation.definition,
-              auditTarget: invocation.operation.auditTarget,
-              auditRecordProfile: invocation.operation.auditRecordProfile,
-              result,
-              authorityRecheck: sealedAuthorityRecheck
-            })
-          };
-        }
-        if (claim.kind === 'contended_same_request') {
-          const result = nonterminalResult(invocation, invocation.operation.executionPhase.contentionOutcome);
-          return {
-            kind: 'short_audit' as const,
-            result,
-            record: createNonterminalProgressOperationAuditRecord({
-              context: readyContext.context,
-              definition: invocation.operation.definition,
-              auditTarget: invocation.operation.auditTarget,
-              auditRecordProfile: invocation.operation.auditRecordProfile,
-              result,
-              authorityRecheck: sealedAuthorityRecheck,
-              reason: { kind: 'same_request_contended' }
-            })
-          };
-        }
-        if (claim.kind !== 'acquired') {
-          throw new OperationExecutionError('execution_claim');
-        }
-        const afterClaim = await phase('receipt_recheck', () => unitOfWork.findTerminalReceipt(identity));
-        if (afterClaim) {
-          const validatedReplay = validateReplay(invocation, identity, afterClaim);
-          const result = afterClaim.requestHash === requestHash
-            ? validatedReplay
+        const afterLock = await phase('replay_recheck', () => unitOfWork.findTerminalReceipt(identity));
+        if (afterLock) {
+          const replay = validateReplay(invocation, identity, afterLock);
+          return afterLock.requestHash === requestHash
+            ? replay
             : nonterminalResult(invocation, requestChangedOutcome(invocation.operation));
-          await phase('claim_release', () => unitOfWork.releaseExecutionClaim(identity));
-          return {
-            kind: 'short_audit' as const,
-            result,
-            record: afterClaim.requestHash === requestHash
-              ? createTerminalReplayOperationAuditRecord({
-                  context: readyContext.context,
-                  definition: invocation.operation.definition,
-                  auditTarget: invocation.operation.auditTarget,
-                  auditRecordProfile: invocation.operation.auditRecordProfile,
-                  result,
-                  relatedReceiptId: afterClaim.ref.id,
-                  authorityRecheck: sealedAuthorityRecheck
-                })
-              : createIdempotencyConflictOperationAuditRecord({
-                  context: readyContext.context,
-                  definition: invocation.operation.definition,
-                  auditTarget: invocation.operation.auditTarget,
-                  auditRecordProfile: invocation.operation.auditRecordProfile,
-                  result,
-                  authorityRecheck: sealedAuthorityRecheck
-                })
-          };
         }
 
         const sealedPreflight = await phase('autonomy_preflight', () => executeAutonomyPreflight({
@@ -705,24 +808,7 @@ export function createEffectOperationExecutor(input: {
         }));
         executionDirective = preflight.directive;
         if (preflight.disposition !== 'proceed') {
-          const result = nonterminalResult(invocation, preflight.outcome);
-          await phase('claim_release', () => unitOfWork.releaseExecutionClaim(identity));
-          return {
-            kind: 'short_audit' as const,
-            result,
-            record: createNonterminalProgressOperationAuditRecord({
-              context: readyContext.context,
-              definition: invocation.operation.definition,
-              auditTarget: invocation.operation.auditTarget,
-              auditRecordProfile: invocation.operation.auditRecordProfile,
-              result,
-              authorityRecheck: sealedAuthorityRecheck,
-              reason: {
-                kind: 'autonomy_intervention',
-                autonomyDisposition: preflight.disposition
-              }
-            })
-          };
+          return nonterminalResult(invocation, preflight.outcome);
         }
 
         const snapshot = await phase('write_snapshot', async () => freezeHandlerSnapshot(
@@ -747,7 +833,7 @@ export function createEffectOperationExecutor(input: {
         if (!contribution.success) throw new OperationExecutionError('contribution');
         const sealedContribution = handlerContributionEnvelopeSchema.safeParse(contribution.data);
         if (!sealedContribution.success) throw new OperationExecutionError('contribution');
-        assertNoHandlerAuthoredAudit(sealedContribution.data.receiptChildren);
+        assertNoHandlerAuthoredAudit(sealedContribution.data.effectContributions);
 
         const canonical = canonicalResult(invocation.operation, sealedContribution.data.result);
         const terminalization = await phase('terminalization', () => resolveTerminalization({
@@ -757,32 +843,18 @@ export function createEffectOperationExecutor(input: {
           evidence: terminalizationEvidenceFor({
             canonicalResult: canonical,
             domainContribution: sealedContribution.data.domain,
-            receiptChildren: sealedContribution.data.receiptChildren
+            effectContributions: sealedContribution.data.effectContributions
           })
         }));
         if (terminalization.kind === 'nonterminal') {
           const outcome = outcomeFrom(canonical);
-          if (!outcome || sealedContribution.data.domain !== null || sealedContribution.data.receiptChildren.length !== 0) {
+          if (!outcome || sealedContribution.data.domain !== null || sealedContribution.data.effectContributions.length !== 0) {
             throw new OperationExecutionError('terminalization');
           }
-          const result = nonterminalResult(invocation, outcome);
-          await phase('claim_release', () => unitOfWork.releaseExecutionClaim(identity));
-          return {
-            kind: 'short_audit' as const,
-            result,
-            record: createNonterminalProgressOperationAuditRecord({
-              context: readyContext.context,
-              definition: invocation.operation.definition,
-              auditTarget: invocation.operation.auditTarget,
-              auditRecordProfile: invocation.operation.auditRecordProfile,
-              result,
-              authorityRecheck: sealedAuthorityRecheck,
-              reason: { kind: 'phase_nonterminal' }
-            })
-          };
+          return nonterminalResult(invocation, outcome);
         }
         const projected = projectedBase(invocation, canonical);
-        const receiptId = await phase('receipt_parent', () => newReceiptId());
+        const receiptId = await phase('operation_log', () => newOperationLogId());
         const terminal = terminalResult({ invocation, projected, receiptId });
         const receipt: TerminalEffectReceipt = deepFreeze({
           ref: terminal.ref,
@@ -796,32 +868,33 @@ export function createEffectOperationExecutor(input: {
           sealedContribution.data.domain
         ));
         issuedTerminalReceipts.set(receipt, invocation);
-        await phase('receipt_parent', () => unitOfWork.insertReceiptParent(receipt));
-        await phase('operation_audit', () => unitOfWork.insertTerminalNewOperationAudit(
-          createTerminalNewOperationAuditRecord({
-            context: readyContext.context,
-            definition: invocation.operation.definition,
-            auditTarget: invocation.operation.auditTarget,
-            auditRecordProfile: invocation.operation.auditRecordProfile,
-            result: terminal.result,
-            receiptId: receipt.ref.id,
-            authorityRecheck: sealedAuthorityRecheck
-          })
-        ));
-        for (const child of sealedContribution.data.receiptChildren) {
-          await phase('receipt_children', () => unitOfWork.insertReceiptChild(receipt.ref.id, child));
+        if (!unitOfWork.insertOperationLog) throw new OperationExecutionError('operation_log');
+        await phase('operation_log', () => unitOfWork.insertOperationLog!(deepFreeze({
+          receipt,
+          registryDigestSha256: input.registry.manifestDigestSha256,
+          actor: readyContext.context.actor,
+          scope: {
+            workspaceId: readyContext.context.scope.workspaceId,
+            ...(readyContext.context.scope.eventId
+              ? { eventId: readyContext.context.scope.eventId }
+              : {}),
+            subjects: readyContext.context.scope.subjects
+          },
+          summary: `Completed ${invocation.operation.definition.name}`,
+          occurredAt: readyContext.context.receivedAt,
+          correlationId: readyContext.context.correlationId
+        })));
+        for (const child of sealedContribution.data.effectContributions) {
+          await phase('effect_contributions', () => unitOfWork.applyEffectContribution?.(receipt.ref.id, child));
         }
-        await phase('claim_release', () => unitOfWork.releaseExecutionClaim(identity));
-        return { kind: 'terminal_new' as const, result: terminal.result };
+        await phase('invocation_release', () => unitOfWork.finishEffectApplication?.(identity));
+        return terminal.result;
       }));
-      if (execution.kind === 'short_audit') {
-        await phase('operation_audit', () => input.unitOfWork.recordShortOperationAudit(execution.record));
-      }
-      const result = executionDirective === undefined
-        ? execution.result
-        : bindAutonomyExecution({ invocation, result: execution.result, directive: executionDirective });
+      const visibleResult = executionDirective === undefined
+        ? result
+        : bindAutonomyExecution({ invocation, result, directive: executionDirective });
       completed = true;
-      return result;
+      return visibleResult;
       } finally {
         executingInvocations.delete(sealed);
         if (completed) completedInvocations.add(sealed);
@@ -850,7 +923,7 @@ export function resolveEffectAutonomyExecutionEvidence(input: {
 /**
  * Proves exact object identity between an authentic builder-owned invocation and
  * the receipt object issued for it immediately before parent insertion. This is
- * intended for receipt-parent-aware internal completion hooks; byte-equivalent
+ * intended for operation-log-aware internal completion hooks; byte-equivalent
  * caller-created objects cannot pass the WeakMap seal.
  */
 export function assertTerminalEffectReceiptIssuedForInvocation(input: {
@@ -859,7 +932,7 @@ export function assertTerminalEffectReceiptIssuedForInvocation(input: {
 }): void {
   const invocation = sealedInvocations.get(input.invocation);
   if (!invocation || issuedTerminalReceipts.get(input.receipt) !== invocation) {
-    throw new OperationExecutionError('receipt_parent');
+    throw new OperationExecutionError('operation_log');
   }
 }
 
@@ -876,19 +949,19 @@ export async function resolveTerminalEffectReceipt(input: {
   const invocation = sealedInvocations.get(input.invocation);
   if (!invocation) throw new OperationExecutionError('binding');
   const parsed = effectfulOperationResultSchema.safeParse(input.result);
-  if (!parsed.success) throw new OperationExecutionError('receipt_preflight');
+  if (!parsed.success) throw new OperationExecutionError('replay_preflight');
   if (parsed.data.kind === 'outcome' && parsed.data.terminal !== true) return undefined;
   if (invocation.contextResolution.kind !== 'ready') return undefined;
 
   const identity = identityFor(invocation);
-  const receipt = await phase('receipt_preflight', () => input.unitOfWork.findTerminalReceipt(identity));
+  const receipt = await phase('replay_preflight', () => input.unitOfWork.findTerminalReceipt(identity));
   if (!receipt
     || receipt.requestHash !== invocation.contextResolution.requestHash
     || receipt.ref.id !== parsed.data.receipt.id
     || receipt.ref.operationName !== parsed.data.receipt.operationName
     || receipt.ref.operationVersion !== parsed.data.receipt.operationVersion
     || canonicalJsonText(receipt.result) !== canonicalJsonText(parsed.data)) {
-    throw new OperationExecutionError('receipt_preflight');
+    throw new OperationExecutionError('replay_preflight');
   }
   validateReplay(invocation, identity, receipt);
   return receipt;

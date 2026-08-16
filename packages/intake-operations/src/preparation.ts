@@ -9,7 +9,7 @@ import type { VersionedDefinitionRef } from '@jooevents/contracts';
 export interface IntakePreparedContribution {
   readonly result: unknown;
   readonly domain: unknown;
-  readonly receiptChildren: readonly unknown[];
+  readonly effectContributions: readonly unknown[];
 }
 
 export interface IntakePreparation {
@@ -58,7 +58,6 @@ export function sealIntakePreparation(input: {
 
 export function createIntakeHandler(input: {
   readonly reference: VersionedDefinitionRef;
-  readonly effect: 'draft' | 'commit';
   readonly handlerCapability: VersionedDefinitionRef;
   readonly contributionSchema: EffectHandlerRegistration['contributionSchema'];
   readonly canonicalResultSchema: EffectHandlerRegistration['canonicalResultSchema'];
@@ -66,7 +65,7 @@ export function createIntakeHandler(input: {
   const capability = Object.freeze({ ...input.handlerCapability });
   return Object.freeze({
     reference: Object.freeze({ ...input.reference }),
-    effect: input.effect,
+    effect: 'commit',
     handlerCapability: capability,
     contributionSchema: Object.freeze({ ...input.contributionSchema }),
     canonicalResultSchema: Object.freeze({ ...input.canonicalResultSchema }),
@@ -76,7 +75,7 @@ export function createIntakeHandler(input: {
       if (!sealed
           || !sameReference(sealed.capability, capability)
           || sealed.context !== context
-          || context.operation.effect !== input.effect
+          || context.operation.effect !== 'commit'
           || sealed.phase !== 'ready') {
         throw new TypeError('invalid_intake_preparation');
       }
@@ -90,7 +89,7 @@ export function createIntakeHandler(input: {
         return {
           result: contribution.result,
           domain: contribution.domain,
-          receiptChildren: [...contribution.receiptChildren]
+          effectContributions: [...contribution.effectContributions]
         };
       } catch (error) {
         sealed.phase = 'spent';

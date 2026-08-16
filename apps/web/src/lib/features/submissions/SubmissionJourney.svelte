@@ -7,9 +7,10 @@
 	 * Information, never status: the dots spend neutral ink only (done at full
 	 * ink, the current step ringed, the rest recessive), because "how far" is
 	 * not "how good" — verdicts keep their worded badges one column over.
-	 * The disclosure is press-and-focus, exactly like every figure in the
-	 * product (R4): hover shows the plate that invites the press; a tap opens
-	 * it on touch, where hover never arrives.
+	 * The disclosure opens on hover for a fine pointer (owner call,
+	 * 2026-08-15: "hover for desktop, click for phones") and on press/tap
+	 * everywhere — hover is an accelerator on top of the universal press path,
+	 * so the hover law holds: nothing here is carried by hover alone.
 	 */
 	import { Popover } from '$lib/ui';
 	import type { JourneyStep } from './submission-view';
@@ -34,7 +35,7 @@
 	);
 </script>
 
-<Popover label={`Progress on “${context}” — ${summary}`} kind="figure" {onreveal}>
+<Popover label={`Progress on “${context}” — ${summary}`} kind="figure" hoverOpen {onreveal}>
 	{#snippet trigger()}
 		<span class="dots" aria-hidden="true">
 			{#each steps as step (step.key)}

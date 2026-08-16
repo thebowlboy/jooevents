@@ -4,7 +4,6 @@ import {
   createAutonomyEvidenceResolverRegistration,
   createAutonomyPreflightRegistration,
   createEffectInvocationContextBuilder,
-  createReadInvocationContextBuilder,
   createOperationAutonomyPolicy,
   createOperationRiskResolverRegistration,
   createRenewedApprovalResolverRegistration,
@@ -12,25 +11,17 @@ import {
   createSingleUnitOfWorkPhaseRegistration,
   createTerminalizationResolverRegistration,
   type IdempotencyCredentialSealer,
-  type EffectInvocationContext,
   type InvocationEvidence,
   type InvocationScopeResolver,
   type OperationRegistryModule,
-  type ReadCapabilityRegistration,
   type RequestHashSealer
 } from '@jooevents/application';
 import {
   createSafeSchemaManifestRef,
-  currentEventSettingsCanonicalResultSchema,
-  currentEventSettingsReadInputSchema,
-  currentEventSettingsReadResultSchema,
-  eventSettingsUpdateDraftCanonicalResultSchema,
-  eventSettingsUpdateDraftDataSchema,
-  eventSettingsUpdateDraftInputSchema,
-  eventSettingsUpdateDraftOperationResultSchema,
+  eventSettingsUpdateCanonicalResultSchema,
+  eventSettingsUpdateInputSchema,
+  eventSettingsUpdateOperationResultSchema,
   EVENT_SETTINGS_OPERATION_SCHEMA_REFS,
-  eventSettingsSchema,
-  eventSettingsEventRequiredOutcomeSchema,
   structuredOutcomeSchema,
   type SafeSchemaManifestRef,
   type StructuredOutcome,
@@ -45,6 +36,7 @@ import {
   type VersionedKeyProfileRef
 } from '@jooevents/identity-access';
 import {
+  parseEventId,
   parseInstant,
   parseWorkspaceId,
   type Clock,
@@ -52,50 +44,29 @@ import {
   type WorkspaceId
 } from '@jooevents/kernel';
 import { z } from 'zod';
-import { EVENT_MANAGE_ACCESS_POLICY, EVENT_READ_ACCESS_POLICY } from './module';
-import { createEventSettingsUpdateDraftHandler } from './settings-preparation';
+import { EVENT_MANAGE_ACCESS_POLICY } from './module';
+import {
+  createEventSettingsDirectUpdateHandler,
+  eventSettingsDirectUpdateContributionSchema
+} from './settings-direct-preparation';
 
-export const EVENT_SETTINGS_UPDATE_DRAFT_OPERATION = Object.freeze({
-  name: 'event.settings.update.draft',
+export {
+  createEventSettingsReadOperationModule,
+  EVENT_SETTINGS_CURRENT_READ_OPERATION,
+  type CreateEventSettingsReadOperationModuleInput,
+  type EventSettingsCurrentReadPort,
+  type EventSettingsOperationIds
+} from './settings-read-module';
+
+export const EVENT_SETTINGS_UPDATE_OPERATION = Object.freeze({
+  name: 'event.settings.update',
   version: 1
 });
-export const EVENT_SETTINGS_UPDATE_DRAFT_REQUEST_HASH_PROFILE =
-  ref('request-hash.event.settings.update-draft');
-export const EVENT_SETTINGS_UPDATE_DRAFT_HANDLER_CAPABILITY = ref(
-  'capability.event.settings.changeset_draft'
+export const EVENT_SETTINGS_UPDATE_REQUEST_HASH_PROFILE =
+  ref('request-hash.event.settings.update');
+export const EVENT_SETTINGS_UPDATE_HANDLER_CAPABILITY = ref(
+  'capability.event.settings.direct_update'
 );
-export const EVENT_SETTINGS_CURRENT_READ_OPERATION = Object.freeze({
-  name: 'event.settings.current.read', version: 1
-});
-
-const canonicalApplicationIdSchema = z.uuid().refine(
-  (value) => value === value.toLowerCase(),
-  { message: 'Application IDs must use canonical lowercase bytes.' }
-);
-
-export const eventSettingsUpdateDraftDomainContributionSchema = z.strictObject({
-  kind: z.literal('event_settings_changeset_draft'),
-  preparationHandle: canonicalApplicationIdSchema,
-  action: z.literal('update'),
-  workspaceId: canonicalApplicationIdSchema,
-  eventId: canonicalApplicationIdSchema,
-  changesetId: canonicalApplicationIdSchema,
-  revisionId: canonicalApplicationIdSchema,
-  revisionDigestSha256: z.string().regex(/^[a-f0-9]{64}$/),
-  recordDigestSha256: z.string().regex(/^[a-f0-9]{64}$/),
-  occurredAt: z.iso.datetime({ offset: true })
-});
-
-export const eventSettingsUpdateDraftEvidenceChildSchema = z.strictObject({
-  kind: z.literal('timeline'),
-  timelineId: canonicalApplicationIdSchema,
-  sourceKind: z.literal('changeset_revision'),
-  workspaceId: canonicalApplicationIdSchema,
-  eventId: canonicalApplicationIdSchema,
-  changesetId: canonicalApplicationIdSchema,
-  revisionId: canonicalApplicationIdSchema,
-  occurredAt: z.iso.datetime({ offset: true })
-});
 
 const nullDetailSchema = z.null();
 const staleDetailSchema = z.strictObject({
@@ -104,58 +75,8 @@ const staleDetailSchema = z.strictObject({
     'stale_event', 'settings_changed', 'no_changes', 'invalid_plan'
   ]),
   action: z.literal('update'),
-  eventId: canonicalApplicationIdSchema
+  eventId: z.uuid()
 });
-
-const successContributionSchema = z.strictObject({
-  result: z.strictObject({ kind: z.literal('success'), data: eventSettingsUpdateDraftDataSchema }),
-  domain: eventSettingsUpdateDraftDomainContributionSchema,
-  receiptChildren: z.tuple([eventSettingsUpdateDraftEvidenceChildSchema])
-}).superRefine((contribution, context) => {
-  const data = contribution.result.data;
-  const domain = contribution.domain;
-  const timeline = contribution.receiptChildren[0];
-  if (data.action !== domain.action
-      || data.safeDiff.after.eventId !== domain.eventId
-      || data.changesetId !== domain.changesetId
-      || data.revision.id !== domain.revisionId
-      || data.revision.digestSha256 !== domain.revisionDigestSha256
-      || timeline.workspaceId !== domain.workspaceId
-      || timeline.eventId !== domain.eventId
-      || timeline.changesetId !== domain.changesetId
-      || timeline.revisionId !== domain.revisionId
-      || timeline.occurredAt !== domain.occurredAt) {
-    context.addIssue({ code: 'custom', message: 'Event draft evidence is incoherent.' });
-  }
-});
-
-const outcomeContributionSchema = z.strictObject({
-  result: z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema }),
-  domain: z.null(),
-  receiptChildren: z.tuple([])
-}).superRefine((contribution, context) => {
-  const outcome = contribution.result.outcome;
-  const key = `${outcome.class}:${outcome.kind}`;
-  const detailSchema = key === 'conflict:changeset.id_collision'
-      || key === 'conflict:event.settings.event_required'
-    ? nullDetailSchema
-    : staleDetailSchema;
-  if (![
-    'stale_revision:event.settings_changed',
-    'conflict:event.settings.event_required',
-    'conflict:changeset.id_collision'
-  ].includes(key) || outcome.retryable || outcome.detailSchemaVersion !== 1
-      || !detailSchema.safeParse(outcome.detail).success) {
-    context.addIssue({ code: 'custom', message: 'Event draft refusal is invalid.' });
-  }
-});
-
-export const eventSettingsUpdateDraftContributionSchema = z.union([
-  successContributionSchema,
-  outcomeContributionSchema
-]);
-
-export type EventSettingsUpdateDraftContribution = z.infer<typeof eventSettingsUpdateDraftContributionSchema>;
 
 function ref(key: string): VersionedDefinitionRef {
   return Object.freeze({ key, version: 1 });
@@ -166,49 +87,49 @@ function schemaRef(key: string, schema: z.ZodType): SafeSchemaManifestRef {
 }
 
 const schemas = Object.freeze({
-  input: EVENT_SETTINGS_OPERATION_SCHEMA_REFS.updateDraft.inputSchema,
+  input: EVENT_SETTINGS_OPERATION_SCHEMA_REFS.update.inputSchema,
   contribution: schemaRef(
-    'schema.event-settings.update-draft.contribution',
-    eventSettingsUpdateDraftContributionSchema
+    'schema.event-settings.update.contribution',
+    eventSettingsDirectUpdateContributionSchema
   ),
   canonical: schemaRef(
-    'schema.event-settings.update-draft.canonical-result',
-    eventSettingsUpdateDraftCanonicalResultSchema
+    'schema.event-settings.update.canonical-result',
+    eventSettingsUpdateCanonicalResultSchema
   ),
-  projected: EVENT_SETTINGS_OPERATION_SCHEMA_REFS.updateDraft.resultSchema,
-  nullDetail: schemaRef('schema.event-settings.update-draft.null-detail', nullDetailSchema),
-  staleDetail: schemaRef('schema.event-settings.update-draft.stale-detail', staleDetailSchema)
+  projected: EVENT_SETTINGS_OPERATION_SCHEMA_REFS.update.resultSchema,
+  nullDetail: schemaRef('schema.event-settings.update.null-detail', nullDetailSchema),
+  staleDetail: schemaRef('schema.event-settings.update.stale-detail', staleDetailSchema)
 });
 
 const refs = Object.freeze({
-  context: ref('context.event.settings.update-draft'),
-  autonomy: ref('autonomy.event.settings.update-draft'),
-  handler: ref('handler.event.settings.update-draft'),
-  projection: ref('projection.event.settings.update-draft.operator'),
-  audit: ref('audit.event.settings.update-draft'),
-  auditRecordProfile: ref('record-profile.event.settings.operation-audit'),
+  context: ref('context.event.settings.update'),
+  autonomy: ref('autonomy.event.settings.update'),
+  handler: ref('handler.event.settings.update'),
+  projection: ref('projection.event.settings.update.operator'),
+  audit: ref('audit.event.settings.update'),
+  auditRecordProfile: ref('record-profile.event.settings.operation-log'),
   keySource: ref('idempotency.operator-header'),
-  requestHash: EVENT_SETTINGS_UPDATE_DRAFT_REQUEST_HASH_PROFILE,
+  requestHash: EVENT_SETTINGS_UPDATE_REQUEST_HASH_PROFILE,
   concurrency: ref('concurrency.event.settings.workspace-event-set'),
-  executionFamily: ref('event.settings.update-draft.execution-family'),
-  executionPhase: ref('event.settings.update-draft.phase.single-uow'),
-  terminalization: ref('event.settings.update-draft.terminalization'),
-  riskResolver: ref('event.settings.update-draft.risk-resolver'),
-  autonomyEvidence: ref('event.settings.update-draft.autonomy-evidence'),
-  approvalResolver: ref('event.settings.update-draft.approval-resolver'),
-  autonomyPreflight: ref('event.settings.update-draft.autonomy-preflight')
+  executionFamily: ref('event.settings.update.execution-family'),
+  executionPhase: ref('event.settings.update.phase.direct-uow'),
+  terminalization: ref('event.settings.update.terminalization'),
+  riskResolver: ref('event.settings.update.risk-resolver'),
+  autonomyEvidence: ref('event.settings.update.autonomy-evidence'),
+  approvalResolver: ref('event.settings.update.approval-resolver'),
+  autonomyPreflight: ref('event.settings.update.autonomy-preflight')
 });
 
-export interface EventSettingsUpdateDraftOperationIds {
+export interface EventSettingsUpdateOperationIds {
   newInvocationId(): InvocationId;
 }
 
-export interface CreateEventSettingsUpdateDraftOperationModuleInput {
+export interface CreateEventSettingsUpdateOperationModuleInput {
   readonly workspaceId: WorkspaceId;
   readonly managePolicy: VersionedAccessPolicyRef;
   readonly currentAuthority: CurrentAuthorityResolver<InvocationEvidence>;
   readonly clock: Clock;
-  readonly ids: EventSettingsUpdateDraftOperationIds;
+  readonly ids: EventSettingsUpdateOperationIds;
   readonly authorityPrincipalKeyProfile: VersionedKeyProfileRef;
   readonly scopePartitionProfile: VersionedKeyProfileRef;
   readonly requestCanonicalizationProfile: VersionedKeyProfileRef;
@@ -228,30 +149,38 @@ function authorityOutcome(reason: CurrentAuthorityDenialReason): StructuredOutco
   });
 }
 
-function workspaceScopeResolver(workspaceId: WorkspaceId): InvocationScopeResolver {
+function eventScopeResolver(workspaceId: WorkspaceId): InvocationScopeResolver {
   return Object.freeze({
-    resolve: () => Object.freeze({
-      workspaceId,
-      subjects: Object.freeze([{ kind: 'workspace' as const, id: workspaceId }]),
-      resolutionEvidenceIds: Object.freeze(['workspace.current'])
-    })
+    resolve: ({ businessInput }: Parameters<InvocationScopeResolver['resolve']>[0]) => {
+      const request = eventSettingsUpdateInputSchema.parse(businessInput);
+      const eventId = parseEventId(request.expectedEventId);
+      return Object.freeze({
+        workspaceId,
+        eventId,
+        subjects: Object.freeze([
+          { kind: 'workspace' as const, id: workspaceId },
+          { kind: 'event' as const, id: eventId }
+        ]),
+        resolutionEvidenceIds: Object.freeze(['workspace.current', `event:${eventId}`])
+      });
+    }
   });
 }
 
-export function createEventSettingsUpdateDraftOperationModule(
-  input: CreateEventSettingsUpdateDraftOperationModuleInput
+export function createEventSettingsUpdateOperationModule(
+  input: CreateEventSettingsUpdateOperationModuleInput
 ): OperationRegistryModule {
   const workspaceId = parseWorkspaceId(input.workspaceId);
   if (input.managePolicy.key !== EVENT_MANAGE_ACCESS_POLICY.key
       || input.managePolicy.version !== EVENT_MANAGE_ACCESS_POLICY.version) {
-    throw new TypeError('event_settings_update_draft_policy_catalog_mismatch');
+    throw new TypeError('event_settings_update_policy_catalog_mismatch');
   }
   const lane = parseOperationAccessLane({
     kind: 'operator', surface: 'operator_http', policy: input.managePolicy
   });
   const autonomy = createOperationAutonomyPolicy({
     definition: refs.autonomy,
-    operation: EVENT_SETTINGS_UPDATE_DRAFT_OPERATION,
+    operation: EVENT_SETTINGS_UPDATE_OPERATION,
     riskFloor: 'low',
     unattendedRiskCeiling: 'low',
     supportedDispositions: [
@@ -272,10 +201,10 @@ export function createEventSettingsUpdateDraftOperationModule(
   });
   const context = createEffectInvocationContextBuilder({
     reference: refs.context,
-    operation: EVENT_SETTINGS_UPDATE_DRAFT_OPERATION,
-    effect: 'draft',
+    operation: EVENT_SETTINGS_UPDATE_OPERATION,
+    effect: 'commit',
     lanes: [lane],
-    scopeResolver: workspaceScopeResolver(workspaceId),
+    scopeResolver: eventScopeResolver(workspaceId),
     authorityResolver: input.currentAuthority,
     clock: input.clock,
     newInvocationId: input.ids.newInvocationId,
@@ -294,7 +223,7 @@ export function createEventSettingsUpdateDraftOperationModule(
   });
   const terminalization = createTerminalizationResolverRegistration({
     reference: refs.terminalization,
-    operation: EVENT_SETTINGS_UPDATE_DRAFT_OPERATION,
+    operation: EVENT_SETTINGS_UPDATE_OPERATION,
     phase: refs.executionPhase,
     resolve: ({ result }) => result.kind === 'success'
       ? Object.freeze({ kind: 'terminal' as const })
@@ -303,10 +232,10 @@ export function createEventSettingsUpdateDraftOperationModule(
   const phase = createSingleUnitOfWorkPhaseRegistration({
     reference: refs.executionPhase,
     family: refs.executionFamily,
-    operation: EVENT_SETTINGS_UPDATE_DRAFT_OPERATION,
-    effect: 'draft',
+    operation: EVENT_SETTINGS_UPDATE_OPERATION,
+    effect: 'commit',
     handler: refs.handler,
-    handlerCapability: EVENT_SETTINGS_UPDATE_DRAFT_HANDLER_CAPABILITY,
+    handlerCapability: EVENT_SETTINGS_UPDATE_HANDLER_CAPABILITY,
     contributionSchema: schemas.contribution,
     terminalization: refs.terminalization,
     terminalOutcomeKeys: [],
@@ -321,20 +250,18 @@ export function createEventSettingsUpdateDraftOperationModule(
   });
   const riskResolver = createOperationRiskResolverRegistration({
     reference: refs.riskResolver,
-    operation: EVENT_SETTINGS_UPDATE_DRAFT_OPERATION,
+    operation: EVENT_SETTINGS_UPDATE_OPERATION,
     resolve: () => Object.freeze({
       risk: 'low' as const,
-      consequenceTags: Object.freeze(['changeset-drafted']),
-      evidenceIds: Object.freeze(['event.settings.update.draft.risk'])
+      consequenceTags: Object.freeze(['event-settings-updated']),
+      evidenceIds: Object.freeze(['event.settings.update.risk'])
     })
   });
   const autonomyEvidence = createAutonomyEvidenceResolverRegistration({
     reference: refs.autonomyEvidence,
-    operation: EVENT_SETTINGS_UPDATE_DRAFT_OPERATION,
+    operation: EVENT_SETTINGS_UPDATE_OPERATION,
     resolve: ({ subject }) => {
-      const notAfter = parseInstant(
-        new Date(Date.parse(subject.evaluatedAt) + 60_000).toISOString()
-      );
+      const notAfter = parseInstant(new Date(Date.parse(subject.evaluatedAt) + 60_000).toISOString());
       const bounds = Object.freeze({
         scopeKeys: Object.freeze([...subject.scopeKeys]),
         maximumSpendMicros: 0,
@@ -349,7 +276,7 @@ export function createEventSettingsUpdateDraftOperationModule(
         actionCount: 1,
         completesBy: subject.evaluatedAt,
         proposedAction: Object.freeze({
-          key: 'event.settings.update.draft.execute',
+          key: 'event.settings.update.execute',
           version: 1,
           digestSha256: subject.requestHashSha256
         }),
@@ -359,12 +286,12 @@ export function createEventSettingsUpdateDraftOperationModule(
   });
   const approvalResolver = createRenewedApprovalResolverRegistration({
     reference: refs.approvalResolver,
-    operation: EVENT_SETTINGS_UPDATE_DRAFT_OPERATION,
+    operation: EVENT_SETTINGS_UPDATE_OPERATION,
     resolve: () => Object.freeze({ approverCurrentlyAuthorized: false })
   });
   const autonomyPreflight = createAutonomyPreflightRegistration({
     reference: refs.autonomyPreflight,
-    operation: EVENT_SETTINGS_UPDATE_DRAFT_OPERATION,
+    operation: EVENT_SETTINGS_UPDATE_OPERATION,
     policy: refs.autonomy,
     riskResolver: refs.riskResolver,
     evidenceResolver: refs.autonomyEvidence,
@@ -377,15 +304,15 @@ export function createEventSettingsUpdateDraftOperationModule(
     retryable: false,
     detailSchema: schemas.nullDetail
   }));
-  const handler = createEventSettingsUpdateDraftHandler({
+  const handler = createEventSettingsDirectUpdateHandler({
     reference: refs.handler,
-    handlerCapability: EVENT_SETTINGS_UPDATE_DRAFT_HANDLER_CAPABILITY,
+    handlerCapability: EVENT_SETTINGS_UPDATE_HANDLER_CAPABILITY,
     contributionSchema: schemas.contribution,
     canonicalResultSchema: schemas.canonical
   });
 
   return Object.freeze({
-    id: 'event-settings-update-draft.operation',
+    id: 'event-settings-update.operation',
     source: Object.freeze({
       effectExecutionFamilies: Object.freeze([family]),
       effectPhases: Object.freeze([phase]),
@@ -401,10 +328,10 @@ export function createEventSettingsUpdateDraftOperationModule(
       operations: Object.freeze([]),
       readOperationalTraceTargets: Object.freeze([]),
       schemas: Object.freeze([
-        { reference: schemas.input, schema: eventSettingsUpdateDraftInputSchema },
-        { reference: schemas.contribution, schema: eventSettingsUpdateDraftContributionSchema },
-        { reference: schemas.canonical, schema: eventSettingsUpdateDraftCanonicalResultSchema },
-        { reference: schemas.projected, schema: eventSettingsUpdateDraftOperationResultSchema },
+        { reference: schemas.input, schema: eventSettingsUpdateInputSchema },
+        { reference: schemas.contribution, schema: eventSettingsDirectUpdateContributionSchema },
+        { reference: schemas.canonical, schema: eventSettingsUpdateCanonicalResultSchema },
+        { reference: schemas.projected, schema: eventSettingsUpdateOperationResultSchema },
         { reference: schemas.nullDetail, schema: nullDetailSchema },
         { reference: schemas.staleDetail, schema: staleDetailSchema }
       ]),
@@ -412,7 +339,7 @@ export function createEventSettingsUpdateDraftOperationModule(
         reference: refs.projection,
         canonicalResultSchema: schemas.canonical,
         projectedResultSchema: schemas.projected,
-        project: (candidate: unknown) => eventSettingsUpdateDraftCanonicalResultSchema.parse(candidate)
+        project: (candidate: unknown) => eventSettingsUpdateCanonicalResultSchema.parse(candidate)
       }]),
       operationAuditTargets: Object.freeze([{
         reference: refs.audit,
@@ -422,18 +349,24 @@ export function createEventSettingsUpdateDraftOperationModule(
       operationAuditRecordProfiles: Object.freeze([{
         reference: refs.auditRecordProfile,
         kind: 'canonical_json' as const,
-        maximumBytes: 65_536
+        maximumBytes: 16_384
       }]),
       effectContextBuilders: Object.freeze([context]),
       effectHandlers: Object.freeze([handler]),
       effectOperations: Object.freeze([{
-        ...EVENT_SETTINGS_UPDATE_DRAFT_OPERATION,
+        ...EVENT_SETTINGS_UPDATE_OPERATION,
         lifecycle: { status: 'active' as const },
-        summary: 'Draft an update to the selected Event settings for review.',
-        effect: 'draft' as const,
+        summary: 'Update the selected Event settings.',
+        effect: 'commit' as const,
         maxRisk: 'low' as const,
         autonomyPolicy: refs.autonomy,
-        consequenceTags: ['changeset-drafted'],
+        consequenceTags: ['event-settings-updated'],
+        agentAction: {
+          eligible: true as const,
+          displayLabel: 'Update event settings',
+          consequences: ['The event name, dates, or timezone may change.'],
+          externalEffect: 'none' as const
+        },
         inputSchema: schemas.input,
         contributionSchema: schemas.contribution,
         canonicalResultSchema: schemas.canonical,
@@ -459,12 +392,6 @@ export function createEventSettingsUpdateDraftOperationModule(
           },
           {
             class: 'conflict' as const,
-            kind: 'changeset.id_collision',
-            retryable: false,
-            detailSchema: schemas.nullDetail
-          },
-          {
-            class: 'conflict' as const,
             kind: 'operation.in_progress',
             retryable: true,
             detailSchema: schemas.nullDetail
@@ -473,7 +400,7 @@ export function createEventSettingsUpdateDraftOperationModule(
         ],
         accessLanes: [lane],
         contextBuilder: refs.context,
-        handlerCapability: EVENT_SETTINGS_UPDATE_DRAFT_HANDLER_CAPABILITY,
+        handlerCapability: EVENT_SETTINGS_UPDATE_HANDLER_CAPABILITY,
         handler: refs.handler,
         audit: { mode: 'required' as const, target: refs.audit },
         idempotency: {
@@ -484,218 +411,22 @@ export function createEventSettingsUpdateDraftOperationModule(
         concurrency: refs.concurrency,
         execution: {
           kind: 'single_unit_of_work' as const,
+          profile: 'direct_audited' as const,
           family: refs.executionFamily,
           phase: refs.executionPhase,
           terminalization: refs.terminalization,
-          autonomyPreflight: refs.autonomyPreflight
+          autonomyPreflight: refs.autonomyPreflight,
+          history: { summary: 'Updated event settings' }
         },
         bindings: [{
           surface: 'operator_http' as const,
           method: 'POST' as const,
-          path: '/api/events/current/settings/drafts/update',
+          path: '/api/events/current/settings',
           input: 'body' as const,
           browserResumption: { kind: 'none' as const },
           projection: refs.projection
         }]
       }])
-    })
-  });
-}
-
-const readRefs = Object.freeze({
-  context: ref('context.event.settings.current-read'),
-  autonomy: ref('autonomy.event.settings.current-read'),
-  capability: ref('capability.event.settings.current-read'),
-  handler: ref('handler.event.settings.current-read'),
-  projection: ref('projection.event.settings.current-read.operator'),
-  trace: ref('trace.event.settings.current-read'),
-  recordProfile: ref('record-profile.event.settings.read-trace')
-});
-
-const readSchemas = Object.freeze({
-  input: EVENT_SETTINGS_OPERATION_SCHEMA_REFS.currentRead.inputSchema,
-  canonical: schemaRef(
-    'schema.event-settings.current-read.canonical-result',
-    currentEventSettingsCanonicalResultSchema
-  ),
-  projected: EVENT_SETTINGS_OPERATION_SCHEMA_REFS.currentRead.resultSchema,
-  nullDetail: schemaRef('schema.event-settings.current-read.null-detail', nullDetailSchema)
-});
-
-export interface EventSettingsCurrentReadPort {
-  readCurrent(workspaceId: WorkspaceId):
-    | z.infer<typeof eventSettingsSchema>
-    | undefined
-    | Promise<z.infer<typeof eventSettingsSchema> | undefined>;
-}
-
-export interface CreateEventSettingsReadOperationModuleInput {
-  readonly workspaceId: WorkspaceId;
-  readonly readPolicy: VersionedAccessPolicyRef;
-  readonly currentAuthority: CurrentAuthorityResolver<InvocationEvidence>;
-  readonly currentSettingsRead: EventSettingsCurrentReadPort;
-  readonly clock: Clock;
-  readonly ids: EventSettingsUpdateDraftOperationIds;
-  readonly authorityPrincipalKeyProfile: VersionedKeyProfileRef;
-  readonly scopePartitionProfile: VersionedKeyProfileRef;
-  readonly requestCanonicalizationProfile: VersionedKeyProfileRef;
-}
-
-export function createEventSettingsReadOperationModule(
-  input: CreateEventSettingsReadOperationModuleInput
-): OperationRegistryModule {
-  const workspaceId = parseWorkspaceId(input.workspaceId);
-  if (input.readPolicy.key !== EVENT_READ_ACCESS_POLICY.key
-      || input.readPolicy.version !== EVENT_READ_ACCESS_POLICY.version) {
-    throw new TypeError('event_settings_read_policy_catalog_mismatch');
-  }
-  const lane = parseOperationAccessLane({
-    kind: 'operator', surface: 'operator_http', policy: input.readPolicy
-  });
-  const autonomy = createOperationAutonomyPolicy({
-    definition: readRefs.autonomy,
-    operation: EVENT_SETTINGS_CURRENT_READ_OPERATION,
-    riskFloor: 'low',
-    unattendedRiskCeiling: 'low',
-    supportedDispositions: [
-      'proceed', 'safe_retry', 'reconcile', 'renewed_approval',
-      'replan', 'compensate', 'block', 'attention'
-    ],
-    triggerDispositions: {
-      authority_lost: 'block',
-      unattended_bounds_exceeded: 'renewed_approval',
-      approval_required: 'renewed_approval',
-      known_retryable_failure: 'safe_retry',
-      ambiguous_external_effect: 'reconcile',
-      stale_plan: 'replan',
-      compensation_required: 'compensate',
-      terminal_failure: 'attention'
-    },
-    requiresSeparateApproval: false
-  });
-  const context = createReadInvocationContextBuilder({
-    reference: readRefs.context,
-    operation: EVENT_SETTINGS_CURRENT_READ_OPERATION,
-    effect: 'read',
-    lanes: [lane],
-    scopeResolver: workspaceScopeResolver(workspaceId),
-    authorityResolver: input.currentAuthority,
-    clock: input.clock,
-    newInvocationId: input.ids.newInvocationId,
-    authorityPrincipalKeyProfile: input.authorityPrincipalKeyProfile,
-    scopePartitionProfile: input.scopePartitionProfile,
-    requestCanonicalizationProfile: input.requestCanonicalizationProfile,
-    deniedAuthorityOutcome: authorityOutcome
-  });
-  const capability: ReadCapabilityRegistration = Object.freeze({
-    reference: readRefs.capability,
-    openSnapshot: async (readContext: EffectInvocationContext) => Object.freeze({
-      current: await input.currentSettingsRead.readCurrent(readContext.scope.workspaceId)
-    })
-  });
-  const accessOutcomes = CURRENT_AUTHORITY_DENIAL_REASONS.map((reason) => Object.freeze({
-    class: 'access_denied' as const,
-    kind: `authority.${reason}`,
-    retryable: false,
-    detailSchema: readSchemas.nullDetail
-  }));
-  return Object.freeze({
-    id: 'event-settings-read.operation',
-    source: Object.freeze({
-      effectExecutionFamilies: Object.freeze([]),
-      effectPhases: Object.freeze([]),
-      terminalizationResolvers: Object.freeze([]),
-      riskResolvers: Object.freeze([]),
-      autonomyEvidenceResolvers: Object.freeze([]),
-      renewedApprovalResolvers: Object.freeze([]),
-      autonomyPreflights: Object.freeze([]),
-      autonomyPolicies: Object.freeze([autonomy]),
-      schemas: Object.freeze([
-        { reference: readSchemas.input, schema: currentEventSettingsReadInputSchema },
-        { reference: readSchemas.canonical, schema: currentEventSettingsCanonicalResultSchema },
-        { reference: readSchemas.projected, schema: currentEventSettingsReadResultSchema },
-        { reference: readSchemas.nullDetail, schema: nullDetailSchema }
-      ]),
-      contextBuilders: Object.freeze([context]),
-      readCapabilities: Object.freeze([capability]),
-      handlers: Object.freeze([{
-        reference: readRefs.handler,
-        readCapability: readRefs.capability,
-        canonicalResultSchema: readSchemas.canonical,
-        handle: ({ snapshot }: { readonly snapshot: Readonly<Record<string, unknown>> }) =>
-          snapshot.current === undefined
-            ? {
-                kind: 'outcome' as const,
-                outcome: eventSettingsEventRequiredOutcomeSchema.parse({
-                  class: 'conflict',
-                  kind: 'event.settings.event_required',
-                  retryable: false,
-                  subjects: [],
-                  detail: null,
-                  detailSchemaVersion: 1
-                })
-              }
-            : {
-                kind: 'success' as const,
-                data: eventSettingsSchema.parse(snapshot.current)
-              }
-      }]),
-      projections: Object.freeze([{
-        reference: readRefs.projection,
-        canonicalResultSchema: readSchemas.canonical,
-        projectedResultSchema: readSchemas.projected,
-        project: (candidate: unknown) => currentEventSettingsCanonicalResultSchema.parse(candidate)
-      }]),
-      readOperationalTraceTargets: Object.freeze([{
-        reference: readRefs.trace,
-        kind: 'read_operational_trace_record' as const,
-        recordProfile: readRefs.recordProfile
-      }]),
-      operationAuditTargets: Object.freeze([]),
-      operationAuditRecordProfiles: Object.freeze([{
-        reference: readRefs.recordProfile,
-        kind: 'canonical_json' as const,
-        maximumBytes: 65_536
-      }]),
-      operations: Object.freeze([{
-        ...EVENT_SETTINGS_CURRENT_READ_OPERATION,
-        lifecycle: { status: 'active' as const },
-        summary: 'Read settings for the selected Event.',
-        effect: 'read' as const,
-        maxRisk: 'low' as const,
-        autonomyPolicy: readRefs.autonomy,
-        consequenceTags: [],
-        inputSchema: readSchemas.input,
-        canonicalResultSchema: readSchemas.canonical,
-        outcomes: [
-          ...accessOutcomes,
-          {
-            class: 'conflict' as const,
-            kind: 'event.settings.event_required',
-            retryable: false,
-            detailSchema: readSchemas.nullDetail
-          }
-        ],
-        accessLanes: [lane],
-        contextBuilder: readRefs.context,
-        readCapability: readRefs.capability,
-        handler: readRefs.handler,
-        observability: {
-          trace: { mode: 'required' as const, target: readRefs.trace },
-          immutableAudit: { mode: 'none' as const }
-        },
-        bindings: [{
-          surface: 'operator_http' as const,
-          method: 'GET' as const,
-          path: '/api/events/current/settings',
-          input: 'query' as const,
-          browserResumption: { kind: 'none' as const },
-          projection: readRefs.projection
-        }]
-      }]),
-      effectContextBuilders: Object.freeze([]),
-      effectHandlers: Object.freeze([]),
-      effectOperations: Object.freeze([])
     })
   });
 }

@@ -1,4 +1,3 @@
-import type { ChangesetApplyContribution, GuardRef, VersionRef } from '@jooevents/changesets';
 import {
   deadlineDisplayDateSchema,
   deadlineMutationPlanSchema,
@@ -8,11 +7,6 @@ import {
   type DeadlineSafeDiff,
   type DeadlineScopeDto
 } from '@jooevents/contracts/deadlines';
-import {
-  defineChangesetReadPort,
-  defineChangesetTransactionPort,
-  defineChangesetValidationPort
-} from '@jooevents/changesets';
 import {
   deadlineChangedFactPayload,
   planDeadlineMutation,
@@ -53,9 +47,15 @@ export interface TaskDueDeadlineValidationPort extends TaskDueDeadlinePlanningPo
   validateTaskDueDeadline(contribution: TaskDueDeadlineContribution): TaskDueDeadlineValidation;
 }
 
-export interface TaskDueDeadlineAppliedContribution extends
-  ChangesetApplyContribution<DeadlineMutationResult> {
+export interface TaskDueDeadlineAppliedContribution {
+  readonly result: DeadlineMutationResult;
   readonly pin: DeadlineReferencePinDto;
+  readonly facts: readonly {
+    readonly kind: string;
+    readonly version: number;
+    readonly payload: ReturnType<typeof deadlineChangedFactPayload>;
+  }[];
+  readonly effects: readonly never[];
 }
 
 export interface TaskDueDeadlineTransactionPort extends DeadlineTransactionRepository {
@@ -64,17 +64,14 @@ export interface TaskDueDeadlineTransactionPort extends DeadlineTransactionRepos
   ): TaskDueDeadlineAppliedContribution;
 }
 
-export const taskDueDeadlinePlanningPort = defineChangesetReadPort<TaskDueDeadlinePlanningPort>(
-  'task_due_deadline.planning', 1
-);
-export const taskDueDeadlineValidationPort =
-  defineChangesetValidationPort<TaskDueDeadlineValidationPort>(
-    'task_due_deadline.validation', 1
-  );
-export const taskDueDeadlineTransactionPort =
-  defineChangesetTransactionPort<TaskDueDeadlineTransactionPort>(
-    'task_due_deadline.transaction', 1
-  );
+export interface TaskDueDeadlineAggregateRef {
+  readonly id: string;
+  readonly version: number;
+}
+
+export interface TaskDueDeadlineGuardRef extends TaskDueDeadlineAggregateRef {
+  readonly digest: string;
+}
 
 export function planTaskDueDeadlineCreateFrom(
   port: DeadlineRepository & DeadlineEventTimeSource,
@@ -134,7 +131,7 @@ export function applyTaskDueDeadlineFrom(
 
 export function taskDueDeadlineAggregateRefs(
   contribution: TaskDueDeadlineContribution
-): readonly VersionRef[] {
+): readonly TaskDueDeadlineAggregateRef[] {
   if (!contribution.eventTimeBasis) throw new TypeError('task_due_event_basis_missing');
   return Object.freeze([{
     id: deadlineEventAggregateId(contribution.input.scope.eventId),
@@ -144,7 +141,7 @@ export function taskDueDeadlineAggregateRefs(
 
 export function taskDueDeadlineGuardRefs(
   contribution: TaskDueDeadlineContribution
-): readonly GuardRef[] {
+): readonly TaskDueDeadlineGuardRef[] {
   return Object.freeze([{
     id: deadlineCatalogGuardId(contribution.input.scope.eventId),
     version: contribution.catalog.beforeVersion,

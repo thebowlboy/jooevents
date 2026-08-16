@@ -20,14 +20,10 @@ async function open(page: Page) {
  * transport and lose the very commit these tests are checking survived.
  */
 async function visitSection(page: Page, label: string, testInfo: TestInfo) {
-	if (testInfo.project.name === 'mobile') {
-		await page.getByRole('button', { name: 'Open navigation' }).click();
-		// The drawer takes focus when it has finished opening; its links are not
-		// stable to click until then.
-		await expect(page.getByRole('button', { name: 'Close navigation' })).toBeFocused();
-	}
+	// The sections are the surface's own tabs, so no drawer is needed on touch.
+	void testInfo;
 	await page
-		.getByRole('navigation', { name: 'Settings' })
+		.getByRole('navigation', { name: 'Settings sections' })
 		.getByRole('link', { name: label, exact: true })
 		.click();
 }

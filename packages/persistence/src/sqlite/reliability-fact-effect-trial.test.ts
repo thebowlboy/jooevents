@@ -5,8 +5,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   parseAuthorityCitationId,
-  parseChangesetId,
-  parseChangesetRevisionId,
   parseContractVersion,
   parseDomainFactId,
   parseEffectSpecificationId,
@@ -48,8 +46,8 @@ import {
 
 const schemaDigest = 'a'.repeat(64);
 const producer: ProducerRef = {
-  kind: 'changeset_operation',
-  operation: definitionRef('changeset_operation', 'event.commit', 1)
+  kind: 'operation',
+  operation: definitionRef('operation', 'event.commit', 1)
 };
 const authorityCitation = definitionRef(
   'authority_citation',
@@ -84,7 +82,7 @@ async function factDefinition(): Promise<DomainFactDefinition> {
     aggregateKind: parseDefinitionKey('event'),
     subjectIdentity: definitionRef('subject_identity', 'event.subject', 1),
     scope: definitionRef('scope', 'event.scope', 1),
-    causalParent: definitionRef('causal_parent', 'changeset.receipt', 1),
+    causalParent: definitionRef('causal_parent', 'operation.receipt', 1),
     consumerCompatibility: definitionRef('consumer_compatibility', 'exact.source', 1),
     classifiedPayloadPaths: ['/classifiedPayloadRefs'],
     redaction: definitionRef('redaction', 'event.fact', 1)
@@ -153,11 +151,8 @@ async function buildContribution(options: BuildOptions): Promise<{
       { kind: 'domain', domain: 'event', entity: 'event', id: aggregateId }
     ],
     causation: {
-      kind: 'changeset_revision',
-      receiptId,
-      changesetId: parseChangesetId(uuid(options.base + 2)),
-      revisionId: parseChangesetRevisionId(uuid(options.base + 3)),
-      revisionDigestSha256: 'c'.repeat(64) as never
+      kind: 'operation_receipt',
+      receiptId
     }
   });
   const facts = await createDomainFactContributionPlanner({
@@ -316,7 +311,7 @@ afterEach(() => {
 });
 
 describe('disposable SQLite fact/effect authority proof', () => {
-  test('atomically commits exact fact/effect/pointers with receipt parents and universal timeline coverage', async () => {
+  test('atomically commits exact fact/effect/pointers with operation logs and registered effect timeline coverage', async () => {
     const target = await buildContribution({ base: 100 });
     const sqlite = new Database(':memory:', { strict: true });
     try {

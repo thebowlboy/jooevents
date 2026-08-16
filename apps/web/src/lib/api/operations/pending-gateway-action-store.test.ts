@@ -447,7 +447,7 @@ describe('PendingGatewayAction durable store', () => {
 				...ticket.binding,
 				currentStep: {
 					...ticket.binding.currentStep,
-					operation: { ...ticket.binding.currentStep.operation, name: 'changeset.commit' }
+					operation: { ...ticket.binding.currentStep.operation, name: 'event.settings.update' }
 				}
 			},
 			{
@@ -844,7 +844,7 @@ describe('PendingGatewayAction durable store', () => {
 			],
 			currentStep: {
 				stepKey: 'commit',
-				operation: { name: 'changeset.commit', version: 1 },
+				operation: { name: 'event.settings.update', version: 1 },
 				idempotencyKey: parseGatewayStageIdempotencyKey('gik_fedcba9876543210'),
 				request: sameStage.currentStep.request
 			}

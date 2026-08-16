@@ -2,10 +2,6 @@ import { createHash } from 'node:crypto';
 import { describe, expect, test } from 'bun:test';
 import { createHmacRequestHashSealer, createOperationRegistry } from '@jooevents/application';
 import {
-  reviewOpenRoundChangeDraftInputSchema,
-  reviewOpenRoundPlanningInputSchema
-} from '@jooevents/contracts/reviews';
-import {
   parseContractVersion,
   parseInstant,
   parseInvocationId,
@@ -14,18 +10,13 @@ import {
 import {
   REVIEW_DRAFT_SAVE_REQUEST_HASH_PROFILE,
   REVIEW_EVALUATE_ACCESS_POLICY,
-  REVIEW_EVALUATION_CHANGE_DRAFT_OPERATION,
   REVIEW_EVALUATION_DRAFT_SAVE_OPERATION,
   REVIEW_MANAGE_ACCESS_POLICY,
-  REVIEW_ROUND_CHANGE_DRAFT_OPERATION,
   REVIEW_ROUND_SETUP_READ_OPERATION,
   REVIEW_SNAPSHOT_ACCESS_POLICY,
   REVIEW_SNAPSHOT_READ_OPERATION,
   REVIEW_STEP_BACK_ACCESS_POLICY,
-  REVIEW_STEP_BACK_DRAFT_OPERATION,
   createReviewOperationModule,
-  reviewChangesetDraftDomainContributionSchema,
-  reviewDiffReadPermissionIdsForAction,
   reviewOpenRoundVisibilityPolicy,
   reviewSnapshotCanonicalResultSchema
 } from '.';
@@ -86,7 +77,7 @@ function operationModule() {
 }
 
 describe('Review operation module', () => {
-  test('registers six operations with only their declared operator bindings', async () => {
+  test('registers reads and the retained evaluation working-draft save', async () => {
     let registry;
     try {
       registry = await createOperationRegistry(operationModule().source);
@@ -97,50 +88,20 @@ describe('Review operation module', () => {
       throw error;
     }
     expect(registry.safeManifest.operations.map((operation) => operation.name).sort()).toEqual([
-      REVIEW_EVALUATION_CHANGE_DRAFT_OPERATION.name,
       REVIEW_EVALUATION_DRAFT_SAVE_OPERATION.name,
-      REVIEW_ROUND_CHANGE_DRAFT_OPERATION.name,
       REVIEW_ROUND_SETUP_READ_OPERATION.name,
-      REVIEW_SNAPSHOT_READ_OPERATION.name,
-      REVIEW_STEP_BACK_DRAFT_OPERATION.name
+      REVIEW_SNAPSHOT_READ_OPERATION.name
     ].sort());
     expect(registry.operatorHttpBindings.map((binding) => binding.path)).toEqual([
       '/api/events/current/review/round-setup',
       '/api/events/current/review/snapshot'
     ]);
     expect(registry.operatorHttpEffectBindings.map((binding) => binding.path)).toEqual([
-      '/api/events/current/review/evaluation-draft',
-      '/api/events/current/review/evaluation-drafts',
-      '/api/events/current/review/round-drafts',
-      '/api/events/current/review/step-back-drafts'
+      '/api/events/current/review/evaluation-draft'
     ]);
   });
 
-  test('keeps date intent untrusted and expands anonymized to the canonical visibility axes', () => {
-    expect(reviewOpenRoundChangeDraftInputSchema.parse({
-      action: 'open_round', deadlineDate: '2026-09-01'
-    })).toEqual({ action: 'open_round', deadlineDate: '2026-09-01', anonymized: true });
-    expect(reviewOpenRoundChangeDraftInputSchema.safeParse({
-      action: 'open_round', deadlineId: crypto.randomUUID()
-    }).success).toBe(false);
-    // The planning input never accepts a caller-supplied pre-existing deadline;
-    // the server mints the identity and the changeset creates the review_due
-    // Deadline atomically from the date intent.
-    expect(reviewOpenRoundPlanningInputSchema.safeParse({
-      action: 'open_round',
-      scope: { workspaceId, eventId: crypto.randomUUID() },
-      expectedCatalogVersion: 1,
-      roundId: crypto.randomUUID(),
-      deadlineId: crypto.randomUUID(),
-      criteria: [{
-        id: crypto.randomUUID(), key: 'overall', label: 'Overall',
-        position: 0, weightBps: 10_000, scaleMin: 1, scaleMax: 5
-      }],
-      visibility: reviewOpenRoundVisibilityPolicy(true),
-      assignmentIds: [],
-      attributedByUserId: crypto.randomUUID(),
-      attributedAt: '2026-08-13T12:00:00.000Z'
-    }).success).toBe(false);
+  test('expands anonymized to the canonical visibility axes', () => {
     expect(reviewOpenRoundVisibilityPolicy(true)).toEqual({
       participantIdentity: 'hidden',
       peerReviewerIdentity: 'hidden',
@@ -185,32 +146,5 @@ describe('Review operation module', () => {
     const { criteria: _criteria, ...planWithoutCriteria } = plan;
     expect(reviewSnapshotCanonicalResultSchema.safeParse(snapshot(planWithoutCriteria)).success)
       .toBe(false);
-  });
-
-  test('carries exact split grants for generic changeset diff ownership', () => {
-    expect(reviewDiffReadPermissionIdsForAction('open_round')).toEqual(['event.manage']);
-    expect(reviewDiffReadPermissionIdsForAction('step_back')).toEqual(['submission.score']);
-    expect(reviewDiffReadPermissionIdsForAction('commit_review'))
-      .toEqual(['submission.comment', 'submission.score']);
-    const base = {
-      kind: 'review_changeset_draft' as const,
-      preparationHandle: crypto.randomUUID(),
-      workspaceId,
-      eventId: crypto.randomUUID(),
-      changesetId: crypto.randomUUID(),
-      revisionId: crypto.randomUUID(),
-      revisionDigestSha256: 'a'.repeat(64),
-      recordDigestSha256: 'b'.repeat(64),
-      action: 'commit_review' as const,
-      occurredAt: '2026-08-13T12:00:00.000Z'
-    };
-    expect(reviewChangesetDraftDomainContributionSchema.safeParse({
-      ...base,
-      diffReadPermissionIds: ['submission.comment', 'submission.score']
-    }).success).toBe(true);
-    expect(reviewChangesetDraftDomainContributionSchema.safeParse({
-      ...base,
-      diffReadPermissionIds: ['event.manage']
-    }).success).toBe(false);
   });
 });

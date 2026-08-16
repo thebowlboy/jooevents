@@ -666,12 +666,8 @@ export function recoverStaleSQLiteOwner(canonicalDatabasePath: string, ownerId: 
     const database = new Database(canonicalDatabasePath, { create: false, strict: true });
     try {
       database.exec('PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;');
-      if (
-        record.kind === 'pending-adoption' &&
-        fingerprintSQLiteSchema(captureSQLiteSchema(database, 'application')) !== record.sourceFingerprint
-      ) {
-        throw new SQLiteFoundationError('schema_drift', 'The pending-adoption source fingerprint changed before owner recovery.');
-      }
+      const pendingSourceChanged = record.kind === 'pending-adoption'
+        && fingerprintSQLiteSchema(captureSQLiteSchema(database, 'application')) !== record.sourceFingerprint;
       let managedDatabaseId: string | null = null;
       try {
         managedDatabaseId = migrateOrValidateSQLite({
@@ -686,6 +682,9 @@ export function recoverStaleSQLiteOwner(canonicalDatabasePath: string, ownerId: 
         }
         // An exact uncommitted legacy adoption remains intentionally unmanaged;
         // its source identity is already bound by the owner record and migrator.
+      }
+      if (pendingSourceChanged && managedDatabaseId === null) {
+        throw new SQLiteFoundationError('schema_drift', 'The pending-adoption source fingerprint changed before owner recovery.');
       }
       if (record.kind === 'ordinary' && managedDatabaseId !== record.databaseId) {
         throw new SQLiteFoundationError('owner_record_malformed', 'The durable database identity no longer matches the stale ordinary owner.');

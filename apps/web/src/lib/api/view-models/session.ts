@@ -1,8 +1,7 @@
 import type {
 	SessionCatalogDto,
-	SessionDraftData,
-	SessionHeadDto,
-	SessionSafeDiffDto
+	SessionDirectResult,
+	SessionHeadDto
 } from '@jooevents/contracts/sessions';
 
 /**
@@ -29,29 +28,4 @@ export type SessionView<Value> =
 
 export type SessionHeadView = SessionView<SessionHeadDto>;
 export type SessionCatalogView = SessionView<SessionCatalogDto>;
-export type SessionSafeDiffView = SessionView<SessionSafeDiffDto>;
-export type SessionDraftView = SessionView<SessionDraftData>;
-
-export interface SessionChangeSelectorView {
-	readonly changesetId: string;
-	readonly revisionId: string;
-	readonly revisionDigest: string;
-}
-
-/**
- * One authored Session change after its draft was proposed and committed
- * through the generic changeset lifecycle. `session` is the committed after
- * image the reviewed safe diff stated; `create`, `transition`, and
- * `retarget`, and `roster_visibility` cross the web boundary ('restore' is internal
- * compensation).
- */
-export interface SessionChangeCommittedView {
-	readonly action: 'create' | 'transition' | 'retarget' | 'roster_visibility';
-	readonly selector: SessionChangeSelectorView;
-	readonly changesetHead: {
-		readonly proposedVersion: number;
-		readonly committedVersion: number;
-	};
-	readonly session: SessionHeadView;
-	readonly safeDiff: SessionSafeDiffView;
-}
+export type SessionChangeCommittedView = SessionView<SessionDirectResult>;

@@ -7,8 +7,6 @@ import {
   programVocabularyNameInputSchema,
   programVocabularyCreateDraftRequestSchema,
   programVocabularyDeleteDraftRequestSchema,
-  programVocabularyDraftDataSchema,
-  programVocabularyDraftOperationResultSchema,
   programVocabularyDraftInputSchema,
   programVocabularySafeDiffSchema,
   programVocabularySnapshotCanonicalResultSchema,
@@ -121,37 +119,6 @@ describe('Program Vocabulary transport contracts', () => {
       actor: 'browser-supplied'
     }).success).toBe(false);
 
-    const data = {
-      schemaVersion: 1 as const,
-      action: 'create' as const,
-      changesetId: id,
-      headVersion: 1,
-      status: 'draft' as const,
-      revision: { id: otherId, number: 1, digestSha256: 'a'.repeat(64) },
-      riskTier: 'low' as const,
-      approvalPolicy: {
-        reference: { key: 'approval.program_vocabulary.default', version: 1 },
-        definitionDigestSha256: 'b'.repeat(64),
-        requirement: 'none' as const
-      },
-      safeDiff: {
-        action: 'create' as const,
-        before: null,
-        after: { kind: 'room' as const, id, name: 'Main hall', status: 'active' as const,
-          capacity: 300, version: 1 }
-      }
-    };
-    expect(programVocabularyDraftDataSchema.parse(data)).toEqual(data);
-    expect(programVocabularyDraftOperationResultSchema.safeParse({
-      kind: 'success',
-      data,
-      receipt: { id, operationName: 'program_vocabulary.create.draft', operationVersion: 1 },
-      correlationId: otherId
-    }).success).toBe(true);
-    expect(programVocabularyDraftDataSchema.safeParse({
-      ...data,
-      preparationHandle: otherId
-    }).success).toBe(false);
   });
 
   test('normalizes author text and ids but refuses non-canonical projected bytes', () => {

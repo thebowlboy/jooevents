@@ -1,5 +1,7 @@
-import { canonicalJsonSha256, type RiskTier } from '@jooevents/changesets';
+import { canonicalJsonSha256 } from '@jooevents/kernel';
 import { z } from 'zod';
+
+type EventOrdinaryRiskTier = 'low' | 'normal';
 
 const stablePolicyKeySchema = z.string()
   .regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/);
@@ -10,7 +12,7 @@ export interface EventOrdinaryPolicy {
   readonly activation: 'ordinary';
   readonly key: string;
   readonly version: number;
-  readonly risk: Extract<RiskTier, 'low' | 'normal'>;
+  readonly risk: EventOrdinaryRiskTier;
   readonly approval: EventOrdinaryApprovalRequirement;
   readonly definitionDigestSha256: string;
 }
@@ -18,7 +20,7 @@ export interface EventOrdinaryPolicy {
 export interface EventOrdinaryPolicyInput {
   readonly key: string;
   readonly version: number;
-  readonly risk: Extract<RiskTier, 'low' | 'normal'>;
+  readonly risk: EventOrdinaryRiskTier;
   readonly approval: EventOrdinaryApprovalRequirement;
 }
 

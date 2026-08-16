@@ -14,7 +14,7 @@
 		statusIcon
 	} from '$lib/ui';
 	import type { DescribedOption, IconComponent } from '$lib/ui';
-	import type { FormsPagePort } from '$lib/api/forms-page-port';
+	import type { FormPublishReview, FormsPagePort } from '$lib/api/forms-page-port';
 	import { param, paramFlag, applyParams, clearParams } from '$lib/features/workspace/url-state.svelte';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
@@ -34,6 +34,15 @@
 
 	let forms = $state<FormSummary[] | null>(null);
 	let newFormOpen = $state(false);
+	let publishReviewOpen = $state(false);
+	let publishReview = $state<FormPublishReview | null>(null);
+	let publishError = $state('');
+	$effect(() => {
+		if (!publishReviewOpen && publishReview) {
+			publishReview = null;
+			publishError = '';
+		}
+	});
 
 	// A link may open the creation dialog — `/app/forms?new=1` — because a GET
 	// may open a surface: the empty-inbox CFP nudge and the Overview attention
@@ -637,7 +646,6 @@
 		if (!form || !draft || pending || pendingCount === 0) return;
 		const target = form;
 		const changes = pendingCount;
-		const prior = structuredClone($state.snapshot(target.composition)) as FormComposition;
 		const next = structuredClone($state.snapshot(draft)) as FormComposition;
 		begin('apply');
 		const outcome = await port.forms.setComposition(target.id, next);
@@ -648,10 +656,7 @@
 			recordAction({
 				area: 'forms',
 				label: said,
-				undo: async () => {
-					await port.forms.restoreComposition(target.id, prior);
-					await reloadAll({ resetDraft: true });
-				}
+				notUndoableReason: 'Edit the current questions and apply another change'
 			});
 		} else {
 			message = outcome.reason;
@@ -681,10 +686,7 @@
 			recordAction({
 				area: 'forms',
 				label: said,
-				undo: async () => {
-					await port.forms.setClosing(target.id, prior);
-					await reloadAll();
-				}
+				notUndoableReason: 'Edit the current close date and apply another change'
 			});
 		} else {
 			message = outcome.reason;
@@ -695,36 +697,66 @@
 	async function changeStatus(status: 'open' | 'closed') {
 		if (!form || pending) return;
 		const target = form;
-		const prior = target.status;
+		if (target.status === 'draft') return;
 		begin('lifecycle');
 		const outcome = await port.forms.setStatus(target.id, status);
 		if (outcome.ok) {
 			await reloadAll();
 			const said =
 				status === 'open'
-					? prior === 'closed'
-						? `Reopened “${target.name}” — it accepts applications again`
-						: `Opened “${target.name}” — it now accepts applications`
+					? `Reopened “${target.name}” — it accepts applications again`
 					: `Closed “${target.name}” — on-time editing is locked; late arrivals join the late tray`;
 			message = said;
 			recordAction({
 				area: 'forms',
 				label: said,
-				// Opening publishes: the form may already have been seen, so the
-				// receipt names the compensating act instead of pretending undo.
-				...(prior === 'draft'
-					? { notUndoableReason: 'An opened form may already have been seen — close it instead' }
-					: {
-							undo: async () => {
-								await port.forms.setStatus(target.id, prior);
-								await reloadAll();
-							}
-						})
+				undo: async () => {
+					await port.forms.setStatus(target.id, status === 'closed' ? 'open' : 'closed');
+					await reloadAll();
+				}
 			});
 		} else {
 			message = outcome.reason;
 		}
 		pending = '';
+	}
+
+	async function preparePublication() {
+		if (!form || pending || form.status !== 'draft') return;
+		begin('publish-review');
+		const prepared = await port.forms.preparePublish(form.id);
+		pending = '';
+		if (!prepared.ok) {
+			message = prepared.reason;
+			return;
+		}
+		publishReview = prepared.review;
+		publishError = '';
+		publishReviewOpen = true;
+	}
+
+	function cancelPublication() {
+		publishReviewOpen = false;
+		publishReview = null;
+		publishError = '';
+	}
+
+	async function confirmPublication() {
+		if (!publishReview || pending) return;
+		begin('publish');
+		const review = publishReview;
+		const outcome = await port.forms.publish(review);
+		pending = '';
+		if (!outcome.ok) {
+			publishError = outcome.reason;
+			return;
+		}
+		cancelPublication();
+		await reloadAll();
+		const said = `Published and opened “${review.formName}”`;
+		message = said;
+		recordAction({ area: 'forms', label: said,
+			notUndoableReason: 'Close the Form if it must stop accepting applications' });
 	}
 
 	/** A question scoped to this form is removed from the registry — it exists nowhere else. */
@@ -915,8 +947,8 @@
 									size="sm"
 									loading={pending === 'lifecycle'}
 									disabled={pending !== '' && pending !== 'lifecycle'}
-									onclick={() => void changeStatus('open')}>
-									Open form
+									onclick={() => void preparePublication()}>
+									Publish and open
 								</Button>
 							{:else if form.status === 'open'}
 								<Button
@@ -1472,6 +1504,27 @@
 	</div>
 {/if}
 
+<Modal bind:open={publishReviewOpen} title="Review publication">
+	{#if publishReview}
+		<div class="publish-review">
+			<p>Nothing has changed yet. Confirm what will be published and opened.</p>
+			<dl>
+				<div><dt>Form</dt><dd>{publishReview.formName}</dd></div>
+				<div><dt>Action</dt><dd>Publish and open</dd></div>
+				<div><dt>Version</dt><dd>{publishReview.versionNumber}</dd></div>
+				<div><dt>Resulting state</dt><dd>Open</dd></div>
+				<div><dt>Application surfaces updated</dt><dd>{publishReview.surfaceSuccessorCount}</dd></div>
+			</dl>
+			<p class="publish-error" role="status">{publishError}</p>
+		</div>
+	{/if}
+	{#snippet footer(_close: () => void)}
+		<Button variant="ghost" disabled={pending !== ''} onclick={cancelPublication}>Cancel</Button>
+		<Button loading={pending === 'publish'} disabled={pending !== '' || !publishReview}
+			onclick={() => void confirmPublication()}>Publish and open</Button>
+	{/snippet}
+</Modal>
+
 <CommitReceipt onUndone={() => reloadAll()} />
 
 <style>
@@ -1573,6 +1626,17 @@
 		place-items: center;
 		flex-shrink: 0;
 		color: var(--je-color-text-subtle);
+	}
+
+	.publish-review { display: grid; gap: var(--je-space-4); }
+	.publish-review > p { margin: 0; color: var(--je-color-text-muted); }
+	.publish-review dl { display: grid; gap: var(--je-space-2); margin: 0; }
+	.publish-review dl div { display: grid; grid-template-columns: minmax(10rem, .45fr) minmax(0, 1fr); gap: var(--je-space-3); }
+	.publish-review dt { color: var(--je-color-text-muted); }
+	.publish-review dd { margin: 0; overflow-wrap: anywhere; }
+	.publish-error { min-block-size: 1.25rem; color: var(--je-color-danger) !important; }
+	@media (max-width: 36rem) {
+		.publish-review dl div { grid-template-columns: 1fr; gap: var(--je-space-1); }
 	}
 
 	.card__glyph--open {

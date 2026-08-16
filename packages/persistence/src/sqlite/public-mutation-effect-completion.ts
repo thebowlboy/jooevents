@@ -59,7 +59,7 @@ export const SQLITE_PUBLIC_MUTATION_EFFECT_COMPLETION_SQL = `
       REFERENCES public_mutation_effect_proofs_trial(ceremony_evidence_id, completion_reference)
       ON UPDATE NO ACTION ON DELETE NO ACTION,
     FOREIGN KEY (receipt_id)
-      REFERENCES foundation_trial_operation_receipts(id)
+      REFERENCES operation_log(id)
       ON UPDATE NO ACTION ON DELETE NO ACTION
   ) STRICT;
 
@@ -247,7 +247,7 @@ const receiptSql = `
          operation_version, surface, idempotency_verifier_profile_key,
          idempotency_verifier_profile_version, idempotency_key_verifier,
          request_hash, result_json
-    FROM foundation_trial_operation_receipts
+    FROM operation_log
    WHERE id = ?
 `;
 

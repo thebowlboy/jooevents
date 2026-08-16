@@ -4,16 +4,19 @@ import { createProvisioningService } from '@jooevents/application';
 import {
   issueSynchronousClassifiedPayloadEncryptionProfile
 } from '@jooevents/application/synchronous-classified-payload-store';
-import { bootstrapEmptyInstall, createSQLiteProvisioningStore, openSQLite } from '@jooevents/persistence';
 import {
-  SQLiteClassifiedPayloadStore,
-  installSQLiteClassifiedPayloadStoreSchema
+  bootstrapEmptyInstall,
+  createSQLiteBetterAuthDatabase,
+  createSQLiteProvisioningStore,
+  openSQLite
+} from '@jooevents/persistence';
+import {
+  SQLiteClassifiedPayloadStore
 } from '@jooevents/persistence/sqlite-classified-payload-store';
 import {
   SQLiteWorkspaceTeamRepository,
   createWorkspaceTeamProvisioningSynchronizationPort,
-  ensureWorkspaceTeamRoles,
-  installWorkspaceTeamSchema
+  ensureWorkspaceTeamRoles
 } from '@jooevents/persistence/sqlite/workspace-team';
 import { parseInstant, parseWorkspaceId } from '@jooevents/kernel';
 import { createAuth } from '../auth/better-auth';
@@ -52,8 +55,6 @@ afterEach(() => {
 function joinedAdmissionFixture() {
   const opened = openSQLite(':memory:');
   databases.push(opened);
-  installSQLiteClassifiedPayloadStoreSchema(opened.sqlite);
-  installWorkspaceTeamSchema(opened.sqlite);
   const bootstrap = bootstrapEmptyInstall({
     sqlite: opened.sqlite,
     ownerEmail: config.bootstrapOwnerEmail,
@@ -77,7 +78,7 @@ function joinedAdmissionFixture() {
     });
     teamRepository.initialize(workspaceId);
   }).immediate();
-  const auth = createAuth(config, opened.db);
+  const auth = createAuth(config, createSQLiteBetterAuthDatabase(opened.sqlite));
   const app = createHttpApp({
     auth,
     baseUrl: config.baseUrl,

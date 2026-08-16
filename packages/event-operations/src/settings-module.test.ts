@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, test } from 'bun:test';
 import {
-  createApplicationOperationRuntime,
   createHmacRequestHashSealer,
-  type InvocationEvidence
+  createOperationRegistry,
+  createRegisteredAgentActionEligibilityCatalog
 } from '@jooevents/application';
 import {
   parseContractVersion,
@@ -17,11 +17,11 @@ import {
   EVENT_MANAGE_ACCESS_POLICY,
   EVENT_READ_ACCESS_POLICY,
   EVENT_SETTINGS_CURRENT_READ_OPERATION,
-  EVENT_SETTINGS_UPDATE_DRAFT_OPERATION,
-  EVENT_SETTINGS_UPDATE_DRAFT_REQUEST_HASH_PROFILE,
+  EVENT_SETTINGS_UPDATE_OPERATION,
+  EVENT_SETTINGS_UPDATE_REQUEST_HASH_PROFILE,
   createEventSettingsReadOperationModule,
-  createEventSettingsUpdateDraftOperationModule,
-  eventSettingsUpdateDraftContributionSchema
+  createEventSettingsUpdateOperationModule,
+  eventSettingsDirectUpdateContributionSchema
 } from '.';
 
 const workspaceId = parseWorkspaceId('550e8400-e29b-41d4-a716-446655440000');
@@ -60,35 +60,19 @@ const ids = {
 };
 
 describe('Event settings operations', () => {
-  test('registers the tuned current read and update-draft endpoints only', () => {
+  test('registers one current read and one direct audited update endpoint', async () => {
     const read = createEventSettingsReadOperationModule({
       workspaceId,
       readPolicy: EVENT_READ_ACCESS_POLICY,
       currentAuthority: authority,
-      currentSettingsRead: {
-        readCurrent: () => ({
-          schemaVersion: 1,
-          eventId,
-          eventSetVersion: 2,
-          eventVersion: 1,
-          name: 'JooConf',
-          timezone: 'Asia/Singapore',
-          startDate: '2027-04-16',
-          endDate: '2027-04-18',
-          location: '',
-          venueNote: '',
-          dayStart: '09:00',
-          dayEnd: '18:00',
-          slotMinutes: 30
-        })
-      },
+      currentSettingsRead: { readCurrent: () => undefined },
       clock: { now: () => now },
       ids,
       authorityPrincipalKeyProfile: profile,
       scopePartitionProfile: profile,
       requestCanonicalizationProfile: profile
     });
-    const draft = createEventSettingsUpdateDraftOperationModule({
+    const update = createEventSettingsUpdateOperationModule({
       workspaceId,
       managePolicy: EVENT_MANAGE_ACCESS_POLICY,
       currentAuthority: authority,
@@ -98,12 +82,12 @@ describe('Event settings operations', () => {
       scopePartitionProfile: profile,
       requestCanonicalizationProfile: profile,
       requestHashSealer: createHmacRequestHashSealer({
-        profile: EVENT_SETTINGS_UPDATE_DRAFT_REQUEST_HASH_PROFILE,
+        profile: EVENT_SETTINGS_UPDATE_REQUEST_HASH_PROFILE,
         keyBytes: new Uint8Array(32).fill(0x33)
       }),
       idempotencyCredentialProfile: profile,
       idempotencyCredentialSealer: {
-        seal(raw) {
+        seal(raw: string) {
           return {
             verifierProfile: profile,
             verifierSha256: createHash('sha256').update(`settings:${raw}`).digest('hex')
@@ -115,131 +99,59 @@ describe('Event settings operations', () => {
       ...EVENT_SETTINGS_CURRENT_READ_OPERATION,
       bindings: [{ method: 'GET', path: '/api/events/current/settings', input: 'query' }]
     });
-    expect(draft.source.effectOperations?.[0]).toMatchObject({
-      ...EVENT_SETTINGS_UPDATE_DRAFT_OPERATION,
-      effect: 'draft',
-      bindings: [{
-        method: 'POST', path: '/api/events/current/settings/drafts/update', input: 'body'
-      }]
+    expect(update.source.effectOperations?.[0]).toMatchObject({
+      ...EVENT_SETTINGS_UPDATE_OPERATION,
+      effect: 'commit',
+      execution: {
+        kind: 'single_unit_of_work', profile: 'direct_audited',
+        history: { summary: 'Updated event settings' }
+      },
+      bindings: [{ method: 'POST', path: '/api/events/current/settings', input: 'body' }]
     });
+    const registry = await createOperationRegistry(update.source);
+    const eligibility = createRegisteredAgentActionEligibilityCatalog(registry);
+    expect(eligibility.entries).toEqual([{
+      operationName: EVENT_SETTINGS_UPDATE_OPERATION.name,
+      operationVersion: EVENT_SETTINGS_UPDATE_OPERATION.version,
+      contractDigestSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+      displayLabel: 'Update event settings',
+      consequences: ['The event name, dates, or timezone may change.'],
+      externalEffect: 'none'
+    }]);
+    const entry = eligibility.resolve(
+      EVENT_SETTINGS_UPDATE_OPERATION.name,
+      EVENT_SETTINGS_UPDATE_OPERATION.version
+    );
+    const candidate = {
+      expectedEventId: eventId,
+      expectedEventSetVersion: 1,
+      expectedEventVersion: 1,
+      name: 'JSConf',
+      timezone: 'Asia/Singapore',
+      startDate: '2026-09-01',
+      endDate: '2026-09-02',
+      location: 'Singapore',
+      venueNote: '',
+      dayStart: '09:00',
+      dayEnd: '17:00',
+      slotMinutes: 30
+    };
+    expect(entry?.validateInput(candidate)).toEqual(candidate);
+    expect(eligibility.resolve('event.settings.unregistered', 1)).toBeUndefined();
   });
 
-  test('requires coherent selected-Event evidence in a draft contribution', () => {
-    const base = {
+  test('direct contributions are compact and carry no universal evidence children', () => {
+    const outcome = eventSettingsDirectUpdateContributionSchema.parse({
       result: {
-        kind: 'success' as const,
-        data: {
-          schemaVersion: 1 as const,
-          action: 'update' as const,
-          changesetId: '019c2582-aee8-7c51-8d2f-0d27f67dc112',
-          headVersion: 1,
-          status: 'draft' as const,
-          revision: {
-            id: '019c2582-aee8-7c51-8d2f-0d27f67dc113',
-            number: 1,
-            digestSha256: 'a'.repeat(64)
-          },
-          riskTier: 'low' as const,
-          approvalPolicy: {
-            reference: { key: 'event.settings.ordinary', version: 1 },
-            definitionDigestSha256: 'b'.repeat(64),
-            requirement: 'none' as const
-          },
-          safeDiff: {
-            action: 'update' as const,
-            before: {
-              schemaVersion: 1 as const, eventId, eventSetVersion: 2, eventVersion: 1,
-              name: 'JooConf', timezone: 'Asia/Singapore',
-              startDate: '2027-04-16', endDate: '2027-04-18', location: '', venueNote: '',
-              dayStart: '09:00', dayEnd: '18:00', slotMinutes: 30 as const
-            },
-            after: {
-              schemaVersion: 1 as const, eventId, eventSetVersion: 2, eventVersion: 2,
-              name: 'JooConf Live', timezone: 'Asia/Singapore',
-              startDate: '2027-04-16', endDate: '2027-04-18', location: '', venueNote: '',
-              dayStart: '09:00', dayEnd: '18:00', slotMinutes: 30 as const
-            },
-            selection: { eventId, eventSetVersion: 2 }
-          }
+        kind: 'outcome',
+        outcome: {
+          class: 'conflict', kind: 'event.settings.event_required', retryable: false,
+          subjects: [], detail: null, detailSchemaVersion: 1
         }
       },
-      domain: {
-        kind: 'event_settings_changeset_draft' as const,
-        preparationHandle: '019c2582-aee8-7c51-8d2f-0d27f67dc114',
-        action: 'update' as const,
-        workspaceId,
-        eventId,
-        changesetId: '019c2582-aee8-7c51-8d2f-0d27f67dc112',
-        revisionId: '019c2582-aee8-7c51-8d2f-0d27f67dc113',
-        revisionDigestSha256: 'a'.repeat(64),
-        recordDigestSha256: 'c'.repeat(64),
-        occurredAt: now
-      },
-      receiptChildren: [{
-        kind: 'timeline' as const,
-        timelineId: '019c2582-aee8-7c51-8d2f-0d27f67dc115',
-        sourceKind: 'changeset_revision' as const,
-        workspaceId,
-        eventId,
-        changesetId: '019c2582-aee8-7c51-8d2f-0d27f67dc112',
-        revisionId: '019c2582-aee8-7c51-8d2f-0d27f67dc113',
-        occurredAt: now
-      }]
-    };
-    expect(eventSettingsUpdateDraftContributionSchema.safeParse(base).success).toBe(true);
-    expect(eventSettingsUpdateDraftContributionSchema.safeParse({
-      ...base,
-      domain: { ...base.domain, eventId: '019c2582-aee8-7c51-8d2f-0d27f67dc119' }
-    }).success).toBe(false);
-  });
-
-  test('executes a typed no-Event read outcome instead of surfacing a handler failure', async () => {
-    const module = createEventSettingsReadOperationModule({
-      workspaceId,
-      readPolicy: EVENT_READ_ACCESS_POLICY,
-      currentAuthority: authority,
-      currentSettingsRead: { readCurrent: () => undefined },
-      clock: { now: () => now },
-      ids,
-      authorityPrincipalKeyProfile: profile,
-      scopePartitionProfile: profile,
-      requestCanonicalizationProfile: profile
+      domain: null,
+      effectContributions: []
     });
-    const runtime = await createApplicationOperationRuntime({
-      source: module.source,
-      read: {
-        operationalTrace: { emit() {} },
-        immutableAudit: { append() {} },
-        clock: { now: () => now },
-        newInvocationId: ids.newInvocationId
-      },
-      unitOfWork: {} as never,
-      newReceiptId: () => '019c2582-aee8-7c51-8d2f-0d27f67dc120'
-    });
-    const evidence: InvocationEvidence = {
-      kind: 'operator',
-      surface: 'operator_http',
-      client: { key: 'web.operator' },
-      sessionHandle: 'verified-session-handle'
-    };
-    expect(await runtime.readExecutor.execute({
-      operationName: EVENT_SETTINGS_CURRENT_READ_OPERATION.name,
-      operationVersion: EVENT_SETTINGS_CURRENT_READ_OPERATION.version,
-      surface: 'operator_http',
-      correlationId: '019c2582-aee8-7c51-8d2f-0d27f67dc121',
-      businessInput: {},
-      verifiedEvidence: evidence
-    })).toEqual({
-      kind: 'outcome',
-      outcome: {
-        class: 'conflict',
-        kind: 'event.settings.event_required',
-        retryable: false,
-        subjects: [],
-        detail: null,
-        detailSchemaVersion: 1
-      },
-      correlationId: '019c2582-aee8-7c51-8d2f-0d27f67dc121'
-    });
+    expect(outcome.effectContributions).toHaveLength(0);
   });
 });

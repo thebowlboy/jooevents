@@ -1,7 +1,6 @@
 import type { SafeOperationManifest, SafeUser, SafeWorkspace } from '@jooevents/contracts';
 import { createContext } from 'svelte';
 import type { EventProgramPort } from '../event-program/port';
-import type { ChangesetReviewPort } from '../changesets';
 import type { CommunicationsReadinessPagePort } from '../communications-readiness-page-port';
 import type { DecisionsPagePort } from '../decisions-page-port';
 import type { EmbedsPagePort } from '../embeds-page-port';
@@ -16,6 +15,7 @@ import type { SpeakersPagePort } from '../speakers-page-port';
 import type { SubmissionsPagePort } from '../submissions-page-port';
 import type { TemplatesPagePort } from '../templates-page-port';
 import type { TasksPagePort } from '../tasks-page-port';
+import type { AgentActionsPagePort } from '../agent-actions-page-port';
 
 /** Authenticated inputs from which the live workspace composition is built. */
 export interface LiveWorkspaceReady {
@@ -27,7 +27,6 @@ export interface LiveWorkspaceReady {
 export interface LiveWorkspacePorts {
 	readonly overview: OverviewPagePort;
 	readonly eventProgram: EventProgramPort;
-	readonly changesets: ChangesetReviewPort;
 	readonly communicationsReadiness: CommunicationsReadinessPagePort;
 	readonly forms: FormsPagePort;
 	/** The tuned Submissions surface over the live triage/decision/review joins. */
@@ -56,6 +55,8 @@ export interface LiveWorkspacePorts {
 	readonly templates: TemplatesPagePort;
 	/** Canonical speaker Task board and reviewed mutation loop. */
 	readonly tasks: TasksPagePort;
+	/** Human approval and durable partial-state directory for frozen agent plans. */
+	readonly agentActions: AgentActionsPagePort;
 }
 
 export const [useLiveWorkspacePorts, setLiveWorkspacePorts] = createContext<LiveWorkspacePorts>();

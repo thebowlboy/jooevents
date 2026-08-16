@@ -332,7 +332,7 @@ export function createSQLiteRegisteredConsumerOperationTrialRunner(input: {
     deliveryId: ConsumerDeliveryId,
     attemptId: ConsumerAttemptId
   ) => string;
-  readonly newReceiptId?: () => string;
+  readonly newOperationLogId?: () => string;
 }) {
   const compositionFailure = (message: string): never => {
     throw new RegisteredConsumerOperationTrialError('composition_mismatch', message);
@@ -611,8 +611,8 @@ export function createSQLiteRegisteredConsumerOperationTrialRunner(input: {
       const domain: SQLiteTrialEffectDomainAdapter = Object.freeze({
         openHandlerSnapshot: input.domain.openHandlerSnapshot.bind(input.domain),
         applyDomainContribution: input.domain.applyDomainContribution.bind(input.domain),
-        async afterReceiptParentInserted(receipt: TerminalEffectReceipt) {
-          await input.domain.afterReceiptParentInserted?.(receipt);
+        async afterOperationLogInserted(receipt: TerminalEffectReceipt) {
+          await input.domain.afterOperationLogInserted?.(receipt);
           input.reliability.completeOperation({
             deliveryId: delivery.id,
             fence
@@ -620,11 +620,11 @@ export function createSQLiteRegisteredConsumerOperationTrialRunner(input: {
           freshReceipt = true;
           runInput.faults?.afterAtomicDeliveryCompletion?.();
         },
-        ...(input.domain.afterReceiptChildInserted
-          ? { afterReceiptChildInserted: input.domain.afterReceiptChildInserted.bind(input.domain) }
+        ...(input.domain.afterEffectContributionInserted
+          ? { afterEffectContributionInserted: input.domain.afterEffectContributionInserted.bind(input.domain) }
           : {}),
-        ...(input.domain.afterExecutionClaimReleased
-          ? { afterExecutionClaimReleased: input.domain.afterExecutionClaimReleased.bind(input.domain) }
+        ...(input.domain.afterEffectApplicationCommitted
+          ? { afterEffectApplicationCommitted: input.domain.afterEffectApplicationCommitted.bind(input.domain) }
           : {}),
         ...(input.domain.afterUnitOfWorkCommitted
           ? { afterUnitOfWorkCommitted: input.domain.afterUnitOfWorkCommitted.bind(input.domain) }
@@ -633,7 +633,7 @@ export function createSQLiteRegisteredConsumerOperationTrialRunner(input: {
       const executor = createEffectOperationExecutor({
         registry: input.operationRegistry,
         unitOfWork: new SQLiteTrialEffectUnitOfWorkPort(input.sqlite, domain, input.transactionAuthority),
-        ...(input.newReceiptId ? { newReceiptId: input.newReceiptId } : {})
+        ...(input.newOperationLogId ? { newOperationLogId: input.newOperationLogId } : {})
       });
       const result = await executor.execute(invocation);
       const terminal = result.kind === 'success'

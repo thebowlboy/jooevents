@@ -512,7 +512,7 @@ export async function createSQLiteRegisteredJobOperationTrialRunner(input: {
   readonly workerKey: string;
   readonly newAttemptId: (jobId: JobId) => InvocationId;
   readonly newCorrelationId: (jobId: JobId, attemptId: InvocationId) => string;
-  readonly newReceiptId?: () => string;
+  readonly newOperationLogId?: () => string;
 }) {
   const compositionFailure = (message: string): never => {
     throw new RegisteredJobOperationTrialError('composition_mismatch', message);
@@ -936,7 +936,7 @@ export async function createSQLiteRegisteredJobOperationTrialRunner(input: {
       const domain: SQLiteTrialEffectDomainAdapter = Object.freeze({
         openHandlerSnapshot: input.domain.openHandlerSnapshot.bind(input.domain),
         applyDomainContribution: input.domain.applyDomainContribution.bind(input.domain),
-        async afterReceiptParentInserted(receipt: TerminalEffectReceipt) {
+        async afterOperationLogInserted(receipt: TerminalEffectReceipt) {
           assertTerminalEffectReceiptIssuedForInvocation({ invocation, receipt });
           input.reliability.completeWithReceipt({
             jobId: record.job.id,
@@ -951,13 +951,13 @@ export async function createSQLiteRegisteredJobOperationTrialRunner(input: {
               throw new InjectedTrialCrash(error);
             }
           }
-          await input.domain.afterReceiptParentInserted?.(receipt);
+          await input.domain.afterOperationLogInserted?.(receipt);
         },
-        ...(input.domain.afterReceiptChildInserted
-          ? { afterReceiptChildInserted: input.domain.afterReceiptChildInserted.bind(input.domain) }
+        ...(input.domain.afterEffectContributionInserted
+          ? { afterEffectContributionInserted: input.domain.afterEffectContributionInserted.bind(input.domain) }
           : {}),
-        ...(input.domain.afterExecutionClaimReleased
-          ? { afterExecutionClaimReleased: input.domain.afterExecutionClaimReleased.bind(input.domain) }
+        ...(input.domain.afterEffectApplicationCommitted
+          ? { afterEffectApplicationCommitted: input.domain.afterEffectApplicationCommitted.bind(input.domain) }
           : {}),
         ...(input.domain.afterUnitOfWorkCommitted
           ? { afterUnitOfWorkCommitted: input.domain.afterUnitOfWorkCommitted.bind(input.domain) }
@@ -972,7 +972,7 @@ export async function createSQLiteRegisteredJobOperationTrialRunner(input: {
       const executor = createEffectOperationExecutor({
         registry: input.operationRegistry,
         unitOfWork,
-        ...(input.newReceiptId ? { newReceiptId: input.newReceiptId } : {})
+        ...(input.newOperationLogId ? { newOperationLogId: input.newOperationLogId } : {})
       });
 
       let result: EffectfulOperationResult;

@@ -49,7 +49,7 @@ function resolutionProof() {
       pendingActionRevision: 7,
       currentStep: {
         stepKey: 'commit',
-        operation: { name: 'changeset.commit', version: 3 },
+        operation: { name: 'event.settings.update', version: 3 },
         idempotencyKey: 'gik_0123456789abcdef'
       }
     },
@@ -79,7 +79,7 @@ describe('gateway authority contracts', () => {
   test('requires an exact, bounded, single-use authenticated resolution envelope', () => {
     const proof = parseGatewayPendingActionResolutionProof(resolutionProof());
     expect(proof.binding.currentStep.operation).toEqual({
-      name: 'changeset.commit',
+      name: 'event.settings.update',
       version: 3
     });
     expect(gatewayPendingActionResolutionProofSchema.safeParse('gar_0123456789abcdef').success)

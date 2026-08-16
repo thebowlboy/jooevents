@@ -1,13 +1,9 @@
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { magicLink } from 'better-auth/plugins';
-import type { SQLiteDatabase } from '@jooevents/persistence';
 import {
-  authAccounts,
-  authRateLimits,
-  authSessions,
-  authUsers,
-  authVerifications
+  SQLITE_BETTER_AUTH_SCHEMA,
+  type SQLiteBetterAuthDatabase
 } from '@jooevents/persistence';
 import type { ServerConfig } from '../config';
 
@@ -32,7 +28,7 @@ export interface WorkspaceMagicLinkComposition {
 /** The reviewed Better Auth composition. Domain admission remains outside this object. */
 export function createAuth(
   config: ServerConfig,
-  database: SQLiteDatabase,
+  database: SQLiteBetterAuthDatabase,
   options?: { readonly magicLink?: WorkspaceMagicLinkComposition }
 ) {
   const workspaceMagicLink = options?.magicLink;
@@ -44,13 +40,7 @@ export function createAuth(
     trustedOrigins: [config.baseUrl, ...config.trustedOrigins],
     database: drizzleAdapter(database, {
       provider: 'sqlite',
-      schema: {
-        auth_users: authUsers,
-        auth_accounts: authAccounts,
-        auth_sessions: authSessions,
-        auth_verifications: authVerifications,
-        auth_rate_limits: authRateLimits
-      },
+      schema: SQLITE_BETTER_AUTH_SCHEMA,
       transaction: true
     }),
     user: {

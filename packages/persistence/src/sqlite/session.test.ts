@@ -41,7 +41,7 @@ function fixture() {
       id TEXT PRIMARY KEY, status TEXT NOT NULL, display_name TEXT NOT NULL,
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, version INTEGER NOT NULL
     ) STRICT;
-    CREATE TABLE foundation_trial_operation_receipts (
+    CREATE TABLE operation_log (
       id TEXT PRIMARY KEY, operation_name TEXT NOT NULL,
       operation_version INTEGER NOT NULL, result_json TEXT NOT NULL
     ) STRICT;
@@ -210,6 +210,31 @@ describe('disposable SQLite Session repository', () => {
       sqlite.exec('COMMIT;');
       expect(sessions.countSessionSchedulePlacements({ workspaceId, eventId }, sessionId)).toBe(1);
       expect(sessions.countSessionSchedulePlacements({ workspaceId, eventId }, otherSessionId)).toBe(0);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  test('counts submission-origin and engagement references for guarded new-Session removal', () => {
+    const { sqlite, sessions } = fixture();
+    try {
+      sqlite.exec(`
+        CREATE TABLE submission_session_origins (
+          workspace_id TEXT NOT NULL, event_id TEXT NOT NULL, submission_id TEXT NOT NULL,
+          session_id TEXT NOT NULL, PRIMARY KEY (workspace_id, event_id, submission_id)
+        ) STRICT, WITHOUT ROWID;
+        CREATE TABLE engagement_heads (
+          workspace_id TEXT NOT NULL, event_id TEXT NOT NULL, id TEXT NOT NULL,
+          session_id TEXT NOT NULL, PRIMARY KEY (workspace_id, event_id, id)
+        ) STRICT, WITHOUT ROWID;
+      `);
+      expect(sessions.countSessionCanonicalReferences({ workspaceId, eventId }, sessionId)).toBe(0);
+      sqlite.query(`INSERT INTO submission_session_origins VALUES (?, ?, ?, ?)`)
+        .run(workspaceId, eventId, '019c1df7-86b5-769b-bba4-5f7097bfa601', sessionId);
+      expect(sessions.countSessionCanonicalReferences({ workspaceId, eventId }, sessionId)).toBe(1);
+      sqlite.query(`INSERT INTO engagement_heads VALUES (?, ?, ?, ?)`)
+        .run(workspaceId, eventId, '019c1df7-86b5-769b-bba4-5f7097bfa602', sessionId);
+      expect(sessions.countSessionCanonicalReferences({ workspaceId, eventId }, sessionId)).toBe(2);
     } finally {
       sqlite.close();
     }

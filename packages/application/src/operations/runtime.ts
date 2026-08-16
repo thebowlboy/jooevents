@@ -31,7 +31,7 @@ export interface CreateApplicationOperationRuntimeInput {
   readonly read: ReadOperationExecutorOptions;
   readonly unitOfWork: EffectUnitOfWorkPort;
   readonly effectBuilder?: EffectInvocationBuilderOptions;
-  readonly newReceiptId?: () => string;
+  readonly newOperationLogId?: () => string;
 }
 
 const moduleIdPattern = /^[a-z][a-z0-9.-]{0,127}$/;
@@ -88,7 +88,7 @@ export async function createApplicationOperationRuntime(
     read: input.read,
     unitOfWork: input.unitOfWork,
     ...(input.effectBuilder ? { effectBuilder: input.effectBuilder } : {}),
-    ...(input.newReceiptId ? { newReceiptId: input.newReceiptId } : {})
+    ...(input.newOperationLogId ? { newOperationLogId: input.newOperationLogId } : {})
   });
 }
 

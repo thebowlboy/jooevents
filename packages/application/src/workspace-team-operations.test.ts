@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  WORKSPACE_TEAM_DRAFT_HANDLER_CAPABILITY,
-  WORKSPACE_TEAM_INVITE_DRAFT_OPERATION,
+  WORKSPACE_TEAM_MUTATION_HANDLER_CAPABILITY,
+  WORKSPACE_TEAM_INVITE_OPERATION,
   WORKSPACE_TEAM_OPERATION_ACCESS,
   createWorkspaceTeamOperationModule,
-  sealWorkspaceTeamDraftPreparation,
-  workspaceTeamDraftContributionSchema
+  sealWorkspaceTeamMutationPreparation,
+  workspaceTeamMutationContributionSchema
 } from './workspace-team-operations';
 import {
   createHmacIdempotencyCredentialSealer,
@@ -14,7 +14,7 @@ import {
   type EffectInvocationContext
 } from './operations';
 import {
-  workspaceTeamInviteDraftInputSchema,
+  workspaceTeamInviteInputSchema,
   type WorkspaceTeamSnapshot
 } from '@jooevents/contracts';
 import {
@@ -70,7 +70,7 @@ function module(wrong = false) {
     scopePartitionProfile: profile,
     requestCanonicalizationProfile: profile,
     requestHashSealer: createHmacRequestHashSealer({
-      profile: WORKSPACE_TEAM_DRAFT_HANDLER_CAPABILITY,
+      profile: WORKSPACE_TEAM_MUTATION_HANDLER_CAPABILITY,
       keyBytes: new Uint8Array(32).fill(0x31)
     }),
     idempotencyCredentialProfile: profile,
@@ -82,24 +82,24 @@ function module(wrong = false) {
 }
 
 describe('workspace team registered operations', () => {
-  test('compiles deterministic operator-only member and draft bindings', async () => {
+  test('compiles deterministic operator-only member and direct mutation bindings', async () => {
     const first = await createOperationRegistry(module().source);
     const second = await createOperationRegistry(module().source);
     expect(first.manifestDigestSha256).toBe(second.manifestDigestSha256);
     expect(first.safeManifest.operations.map((operation) => operation.name)).toEqual([
-      'workspace_team.invite.draft',
+      'workspace_team.invite',
       'workspace_team.members.read',
-      'workspace_team.removal.draft',
-      'workspace_team.role_change.draft'
+      'workspace_team.remove',
+      'workspace_team.role_change'
     ]);
     expect(first.operatorHttpBindings).toEqual([{
       operationName: 'workspace_team.members.read', operationVersion: 1,
       surface: 'operator_http', method: 'GET', path: '/api/workspace/team', input: 'query'
     }]);
     expect(first.operatorHttpEffectBindings.map((binding) => binding.path).sort()).toEqual([
-      '/api/workspace/team/invitations/drafts',
-      '/api/workspace/team/removals/drafts',
-      '/api/workspace/team/role-changes/drafts'
+      '/api/workspace/team/invitations',
+      '/api/workspace/team/removals',
+      '/api/workspace/team/role-changes'
     ]);
     expect(first.appModelEffectBindings).toEqual([]);
   });
@@ -119,35 +119,26 @@ describe('workspace team registered operations', () => {
       email: 'invitee@example.test', roleKey: 'viewer', expectedTeamVersion: 1,
       expectedTeamDigestSha256: 'a'.repeat(64)
     };
-    expect(workspaceTeamInviteDraftInputSchema.safeParse(input).success).toBe(true);
+    expect(workspaceTeamInviteInputSchema.safeParse(input).success).toBe(true);
     for (const field of ['workspaceId', 'actorUserId', 'evaluatedAt', 'authority']) {
-      expect(workspaceTeamInviteDraftInputSchema.safeParse({ ...input, [field]: 'forged' }).success)
+      expect(workspaceTeamInviteInputSchema.safeParse({ ...input, [field]: 'forged' }).success)
         .toBe(false);
     }
   });
 
-  test('uses a capability-bound synchronous one-shot draft preparation', () => {
+  test('uses a capability-bound synchronous one-shot mutation preparation', () => {
     const operationModule = module();
     const handler = operationModule.source.effectHandlers?.[0];
     if (!handler) throw new TypeError('handler missing');
     const context = Object.freeze({
-      operation: WORKSPACE_TEAM_INVITE_DRAFT_OPERATION
+      operation: WORKSPACE_TEAM_INVITE_OPERATION
     }) as EffectInvocationContext;
     const contribution = {
       result: {
         kind: 'success',
         data: {
           schemaVersion: 1, action: 'invite',
-          changesetId: '019c2d90-0000-7000-8000-000000000101',
-          headVersion: 1, status: 'draft', riskTier: 'normal',
-          approvalPolicy: {
-            reference: { key: 'workspace_team.trial', version: 1 },
-            definitionDigestSha256: 'e'.repeat(64), requirement: 'distinct_current_human'
-          },
-          revision: {
-            id: '019c2d90-0000-7000-8000-000000000102', number: 1,
-            digestSha256: 'b'.repeat(64)
-          },
+          teamVersion: 2,
           safeDiff: {
             action: 'invite', recipientHint: 'recipient-cccccccccccc',
             role: { key: 'viewer', name: 'Viewer', version: 1 },
@@ -156,30 +147,22 @@ describe('workspace team registered operations', () => {
         }
       },
       domain: {
-        kind: 'workspace_team_changeset_draft',
+        kind: 'workspace_team_direct_mutation',
         preparationHandle: '019c2d90-0000-7000-8000-000000000103',
-        action: 'invite', workspaceId,
-        changesetId: '019c2d90-0000-7000-8000-000000000101',
-        revisionId: '019c2d90-0000-7000-8000-000000000102',
-        revisionDigestSha256: 'b'.repeat(64), recordDigestSha256: 'd'.repeat(64),
+        action: 'invite', workspaceId, resultingTeamVersion: 2,
         occurredAt: now
       },
-      receiptChildren: [{
-        kind: 'timeline', timelineId: '019c2d90-0000-7000-8000-000000000104',
-        sourceKind: 'changeset_revision', workspaceId,
-        changesetId: '019c2d90-0000-7000-8000-000000000101',
-        revisionId: '019c2d90-0000-7000-8000-000000000102', occurredAt: now
-      }]
+      effectContributions: []
     };
-    expect(workspaceTeamDraftContributionSchema.safeParse(contribution).success).toBe(true);
-    const sealed = sealWorkspaceTeamDraftPreparation({
-      capability: WORKSPACE_TEAM_DRAFT_HANDLER_CAPABILITY,
+    expect(workspaceTeamMutationContributionSchema.safeParse(contribution).success).toBe(true);
+    const sealed = sealWorkspaceTeamMutationPreparation({
+      capability: WORKSPACE_TEAM_MUTATION_HANDLER_CAPABILITY,
       context,
       preparation: { prepare: () => contribution }
     });
     expect(handler.handle({ businessInput: {}, context, snapshot: sealed })).toEqual(contribution);
     expect(() => handler.handle({ businessInput: {}, context, snapshot: sealed }))
-      .toThrow('workspace_team_draft_preparation_invalid');
+      .toThrow('workspace_team_mutation_preparation_invalid');
     expect(JSON.stringify(contribution)).not.toContain('invitee@example.test');
   });
 });

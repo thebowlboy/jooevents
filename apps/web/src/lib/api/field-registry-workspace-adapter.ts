@@ -91,12 +91,6 @@ function readFailure(result: Exclude<FieldRegistryLiveReadResult, { readonly kin
 
 function applyFailure(result: Exclude<FieldRegistryLiveApplyResult, { readonly kind: 'success' }>): AdapterFailure {
 	if (result.kind === 'outcome') return outcomeFailure(result.outcome);
-	if (result.kind === 'confirmation_required') {
-		return {
-			code: 'distinct_current_human_required',
-			reason: 'This change needs confirmation from another currently authorized person.'
-		};
-	}
 	if (result.kind === 'unavailable') {
 		return { code: result.reason, reason: 'Speaker-field changes are not available in this live workspace.' };
 	}

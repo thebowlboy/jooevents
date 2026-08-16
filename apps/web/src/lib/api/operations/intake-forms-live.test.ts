@@ -1,367 +1,120 @@
 import { describe, expect, test } from 'bun:test';
 import {
+	intakeFormDirectOperationResultSchema,
+	intakeFormVersionReviewDraftOperationResultSchema,
 	safeOperationManifestSchema,
 	type OperationEffect,
-	type SafeOperationManifest,
-	type SafeOperationManifestEntry,
-	intakeFormDraftOperationResultSchema
+	type SafeOperationManifestEntry
 } from '@jooevents/contracts';
-import {
-	intakeFormsFixtureIds,
-	sampleOrganizerFormCatalogDto,
-	sampleOrganizerFormDetailDtos
-} from '../fixtures/intake-forms';
-import {
-	createIntakeFormsLivePort,
-	INTAKE_FORMS_OPERATIONS,
-	type IntakeFormsRequester
-} from './intake-forms-live';
+import { intakeFormsFixtureIds, sampleFormRegistryPin, sampleOrganizerFormCatalogDto,
+	sampleOrganizerFormDetailDtos } from '../fixtures/intake-forms';
+import { mapFormDefinitionToAuthorInput } from '../mappers/intake-forms';
+import { createIntakeFormsLivePort, INTAKE_FORMS_OPERATIONS,
+	type IntakeFormsRequester } from './intake-forms-live';
 
-const id = (value: number) => `00000000-0000-4000-8000-${value.toString(16).padStart(12, '0')}`;
-const digest = (seed: string) => seed.repeat(64);
-const correlationId = id(990);
+const paths = Object.freeze({ list: '/api/events/current/forms', detail: '/api/events/current/forms/detail',
+	create: '/api/events/current/forms/create', revise: '/api/events/current/forms/revise',
+	closing: '/api/events/current/forms/closing', lifecycle: '/api/events/current/forms/lifecycle',
+	draftPublish: '/api/events/current/forms/publish/draft', publish: '/api/events/current/forms/publish' });
+type Key = keyof typeof INTAKE_FORMS_OPERATIONS;
+const id = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
+const correlationId = id(90);
 
-type OperationKey = keyof typeof INTAKE_FORMS_OPERATIONS;
-
-function bindingPath(key: OperationKey): string {
-	return {
-		list: '/api/events/current/forms',
-		detail: '/api/events/current/forms/detail',
-		draftCreate: '/api/events/current/forms/drafts/create',
-		draftRevise: '/api/events/current/forms/drafts/revise',
-		draftPublish: '/api/events/current/forms/drafts/publish',
-		draftLifecycle: '/api/events/current/forms/drafts/lifecycle',
-		draftClosing: '/api/events/current/forms/drafts/closing',
-		diff: '/api/changesets/diff',
-		propose: '/api/changesets/proposals',
-		commit: '/api/changesets/commits'
-	}[key];
+function entry(key: Key): SafeOperationManifestEntry {
+	const operation = INTAKE_FORMS_OPERATIONS[key];
+	const effect = operation.effect as OperationEffect;
+	return { name: operation.name, version: 1, lifecycle: { status: 'active' }, summary: operation.name,
+		effect, maxRisk: effect === 'read' ? 'low' : 'normal', consequenceTags: [],
+		autonomy: { policy: { key: `autonomy.${operation.name}`, version: 1 }, riskFloor: 'low',
+			unattendedRiskCeiling: 'normal', requiresSeparateApproval: false,
+			supportedDispositions: ['proceed', 'block'], triggerDispositions: {
+				authority_lost: 'block', unattended_bounds_exceeded: 'block', approval_required: 'block',
+				known_retryable_failure: 'block', ambiguous_external_effect: 'block', stale_plan: 'block',
+				compensation_required: 'block', terminal_failure: 'block' } },
+		inputSchema: operation.inputSchema,
+		idempotency: effect === 'read' ? { required: false } : { required: true,
+			keySource: { key: 'idempotency.operator', version: 1 },
+			credentialVerifierProfile: { key: 'credential.operator', version: 1 },
+			requestHashProfile: { key: 'request-hash.form', version: 1 } },
+		concurrency: effect === 'read' ? { kind: 'read_snapshot' }
+			: { kind: 'registered', definition: { key: 'concurrency.form', version: 1 } }, outcomes: [],
+		enabledBindings: [{ surface: 'operator_http', protocol: 'http', method: operation.method,
+			path: paths[key], input: operation.input, resultSchema: operation.resultSchema,
+			browserResumption: { kind: 'none' } }] };
 }
+const manifest = safeOperationManifestSchema.parse({ schemaVersion: 1,
+	registryDigestSha256: 'f'.repeat(64), operations: (Object.keys(INTAKE_FORMS_OPERATIONS) as Key[]).map(entry) });
+const draftDetail = sampleOrganizerFormDetailDtos[intakeFormsFixtureIds.draftForm]!;
+const definition = mapFormDefinitionToAuthorInput(draftDetail.head.definition);
+const safeBefore = { id: draftDetail.head.id, version: draftDetail.head.version, status: draftDetail.head.status,
+	currentPublishedVersionId: draftDetail.head.currentPublishedVersionId, definition: draftDetail.head.definition };
+const reviewData = { schemaVersion: 1 as const, action: 'publish_and_open' as const, draftId: id(40), status: 'draft' as const,
+	revision: { id: id(41), number: 1 as const, digestSha256: 'a'.repeat(64) }, safeDiff: {
+		action: 'publish_and_open' as const, before: safeBefore,
+		after: { ...safeBefore, version: safeBefore.version + 1, status: 'open' as const,
+			currentPublishedVersionId: id(42) },
+		publishedVersion: { id: id(42), number: 1, definitionDigestSha256: 'b'.repeat(64) },
+		surfaceSuccessors: [] } };
 
-function operation(key: OperationKey, overrides: Partial<SafeOperationManifestEntry> = {}) {
-	const expected = INTAKE_FORMS_OPERATIONS[key];
-	const effect = expected.effect as OperationEffect;
-	return {
-		name: expected.name,
-		version: expected.version,
-		lifecycle: { status: 'active' as const },
-		summary: `Execute ${expected.name}.`,
-		effect,
-		maxRisk: effect === 'commit' ? 'consequential' as const : effect === 'read' ? 'low' as const : 'normal' as const,
-		autonomy: {
-			policy: { key: `autonomy.${expected.name}`, version: 1 },
-			riskFloor: 'low' as const,
-			unattendedRiskCeiling: 'low' as const,
-			requiresSeparateApproval: false,
-			supportedDispositions: ['proceed' as const, 'block' as const],
-			triggerDispositions: {
-				authority_lost: 'block' as const,
-				unattended_bounds_exceeded: 'block' as const,
-				approval_required: 'block' as const,
-				known_retryable_failure: 'block' as const,
-				ambiguous_external_effect: 'block' as const,
-				stale_plan: 'block' as const,
-				compensation_required: 'block' as const,
-				terminal_failure: 'block' as const
-			}
-		},
-		consequenceTags: [],
-		inputSchema: expected.inputSchema,
-		idempotency: expected.idempotencyRequired
-			? {
-					required: true as const,
-					keySource: { key: 'idempotency.operator_header', version: 1 },
-					credentialVerifierProfile: { key: 'credential.idempotency', version: 1 },
-					requestHashProfile: { key: 'request_hash.form', version: 1 }
-				}
-			: { required: false as const },
-		concurrency: effect === 'read'
-			? { kind: 'read_snapshot' as const }
-			: { kind: 'registered' as const, definition: { key: `concurrency.${expected.name}`, version: 1 } },
-		outcomes: [],
-		enabledBindings: [{
-			surface: 'operator_http' as const,
-			protocol: 'http' as const,
-			method: expected.method,
-			path: bindingPath(key),
-			input: expected.input,
-			resultSchema: expected.resultSchema,
-			browserResumption: { kind: 'none' as const }
-		}],
-		...overrides
+function writeResult(action: 'create' | 'revise' | 'set_closing' | 'close' | 'publish_and_open', operationName: string) {
+	return intakeFormDirectOperationResultSchema.parse({ kind: 'success', correlationId,
+		receipt: { id: id(50), operationName, operationVersion: 1 }, data: { schemaVersion: 1, action,
+			formId: draftDetail.head.id, formDefinitionVersion: draftDetail.head.version + 1,
+			catalogVersion: sampleOrganizerFormCatalogDto.catalogVersion + 1,
+			publishedVersionId: action === 'publish_and_open' ? id(42) : null } });
+}
+function requester(calls: unknown[]): IntakeFormsRequester {
+	return async (request) => {
+		calls.push(request);
+		if (request.path === paths.draftPublish) return { kind: 'success', data:
+			intakeFormVersionReviewDraftOperationResultSchema.parse({ kind: 'success', correlationId,
+				receipt: { id: id(51), operationName: 'form.version.publish.draft', operationVersion: 1 }, data: reviewData }) };
+		const keyed = (Object.keys(paths) as Key[]).find((key) => paths[key] === request.path);
+		if (!keyed || keyed === 'list' || keyed === 'detail' || keyed === 'draftPublish') throw new TypeError('unexpected_path');
+		const action = keyed === 'create' ? 'create' : keyed === 'revise' ? 'revise'
+			: keyed === 'closing' ? 'set_closing' : keyed === 'lifecycle' ? 'close' : 'publish_and_open';
+		return { kind: 'success', data: writeResult(action, INTAKE_FORMS_OPERATIONS[keyed].name) };
 	};
 }
 
-function manifest(keys: readonly OperationKey[] = Object.keys(INTAKE_FORMS_OPERATIONS) as OperationKey[]): SafeOperationManifest {
-	return safeOperationManifestSchema.parse({
-		schemaVersion: 1,
-		registryDigestSha256: digest('f'),
-		operations: keys.map((key) => operation(key))
-	});
-}
-
-const receipt = (operationName: string) => ({
-	id: id(991),
-	operationName,
-	operationVersion: 1
-});
-const readSuccess = (data: unknown) => ({ kind: 'success', data, correlationId });
-const effectSuccess = (data: unknown, operationName: string) => ({
-	kind: 'success', data, receipt: receipt(operationName), correlationId
-});
-
-function requesterFor(payloads: Readonly<Record<string, unknown>>, calls: unknown[]): IntakeFormsRequester {
-	return async (input) => {
-		calls.push(input);
-		return { kind: 'success', data: payloads[input.path] };
-	};
-}
-
-describe('pure-live organizer Forms port', () => {
-	test('manifest-resolves catalog and detail reads and maps canonical DTOs', async () => {
-		const calls: unknown[] = [];
-		const detailPath = `${bindingPath('detail')}?formId=${encodeURIComponent(intakeFormsFixtureIds.openForm)}`;
-		const port = createIntakeFormsLivePort({
-			manifest: manifest(),
-			request: requesterFor({
-				[bindingPath('list')]: readSuccess(sampleOrganizerFormCatalogDto),
-				[detailPath]: readSuccess(sampleOrganizerFormDetailDtos[intakeFormsFixtureIds.openForm])
-			}, calls)
-		});
-
-		const listed = await port.list();
-		expect(listed).toMatchObject({ kind: 'success', data: { catalogVersion: 3 } });
-		expect(listed.kind === 'success' ? listed.data.forms[0]?.id : null)
-			.toBe(intakeFormsFixtureIds.openForm);
-		expect(await port.readDetail(intakeFormsFixtureIds.openForm)).toMatchObject({
-			kind: 'success',
-			data: { form: { id: intakeFormsFixtureIds.openForm, status: 'open' } }
-		});
-		expect(calls).toMatchObject([
-			{ path: bindingPath('list'), method: 'GET' },
-			{ path: detailPath, method: 'GET' }
-		]);
+describe('Form direct and owner-native live client', () => {
+	test('uses all six exact write bindings once with each caller key unchanged', async () => {
+		const calls: { idempotencyKey?: string; path?: string }[] = [];
+		const port = createIntakeFormsLivePort({ manifest, request: requester(calls) });
+		const common = { formId: draftDetail.head.id, expectedDefinitionVersion: draftDetail.head.version };
+		const actions = [
+			() => port.create({ expectedCatalogVersion: sampleOrganizerFormCatalogDto.catalogVersion,
+				expectedRegistryVersion: sampleFormRegistryPin.version, definition: { ...definition,
+					availability: { kind: 'evergreen' } } }, 'form-create-key'),
+			() => port.revise({ ...common, expectedRegistryVersion: sampleFormRegistryPin.version,
+				definition }, 'form-revise-key'),
+			() => port.closing({ ...common, closesAt: '2027-01-01' }, 'form-closing-key'),
+			() => port.lifecycle({ ...common, transition: 'close' }, 'form-lifecycle-key'),
+			() => port.draftPublish({ action: 'publish_and_open', ...common,
+				expectedRegistryVersion: sampleFormRegistryPin.version }, 'form-publish-draft-key'),
+			() => port.publish({ draftId: id(40), revisionId: id(41), revisionDigestSha256: 'a'.repeat(64) },
+				'form-publish-key')
+		];
+		for (const invoke of actions) await invoke();
+		expect(calls).toHaveLength(6);
+		expect(calls.map((call) => call.idempotencyKey)).toEqual(['form-create-key', 'form-revise-key',
+			'form-closing-key', 'form-lifecycle-key', 'form-publish-draft-key', 'form-publish-key']);
+		expect(calls.map((call) => call.path)).toEqual([paths.create, paths.revise, paths.closing,
+			paths.lifecycle, paths.draftPublish, paths.publish]);
 	});
 
-	test('maps the entire draft, diff, propose, commit sequence and carries effect keys only in headers', async () => {
-		const calls: Array<{ path?: string; body?: unknown; idempotencyKey?: string }> = [];
-		const detail = sampleOrganizerFormDetailDtos[intakeFormsFixtureIds.openForm];
-		if (!detail) throw new TypeError('Fixture detail missing.');
-		const selector = { changesetId: id(700), revisionId: id(701), revisionDigest: digest('c') };
-		const safeHead = {
-			id: detail.head.id,
-			version: detail.head.version,
-			status: detail.head.status,
-			currentPublishedVersionId: detail.head.currentPublishedVersionId,
-			definition: detail.head.definition
-		};
-		const safeDiff = {
-			action: 'lifecycle',
-			before: safeHead,
-			after: { ...safeHead, version: 3, status: 'closed' },
-			publishedVersion: null
-		} as const;
-		const approvalPolicy = {
-			reference: { key: 'approval.form', version: 1 },
-			definitionDigestSha256: digest('d'),
-			requirement: 'none'
-		} as const;
-		const draftData = {
-			schemaVersion: 1,
-			action: 'lifecycle',
-			changesetId: selector.changesetId,
-			headVersion: 1,
-			status: 'draft',
-			revision: { id: selector.revisionId, number: 1, digestSha256: selector.revisionDigest },
-			riskTier: 'normal',
-			approvalPolicy,
-			safeDiff
-		};
-		const diff = {
-			changesetId: selector.changesetId,
-			headVersion: 1,
-			status: 'draft',
-			revisionId: selector.revisionId,
-			revisionNumber: 1,
-			revisionDigest: selector.revisionDigest,
-			riskTier: 'normal',
-			approvalPolicy,
-			operations: [{
-				kind: 'intake.form.mutate',
-				version: 2,
-				riskTier: 'normal',
-				dependencyGroup: 'intake_form',
-				safeDiff,
-				consequences: ['intake_form_changed']
-			}]
-		};
-		const diffPath = `${bindingPath('diff')}?${new URLSearchParams(selector).toString()}`;
-		const port = createIntakeFormsLivePort({
-			manifest: manifest(),
-			request: requesterFor({
-				[bindingPath('draftLifecycle')]: effectSuccess(draftData, INTAKE_FORMS_OPERATIONS.draftLifecycle.name),
-				[diffPath]: readSuccess(diff),
-				[bindingPath('propose')]: effectSuccess({ schemaVersion: 1, action: 'propose', diff: { ...diff, headVersion: 2, status: 'proposed' } }, INTAKE_FORMS_OPERATIONS.propose.name),
-				[bindingPath('commit')]: effectSuccess({
-					schemaVersion: 1,
-					action: 'commit',
-					changesetId: selector.changesetId,
-					expectedHeadVersion: 2,
-					committedHeadVersion: 3,
-					revisionId: selector.revisionId,
-					revisionDigest: selector.revisionDigest
-				}, INTAKE_FORMS_OPERATIONS.commit.name)
-			}, calls)
-		});
-		const debugDraft = intakeFormDraftOperationResultSchema.safeParse(
-			effectSuccess(draftData, INTAKE_FORMS_OPERATIONS.draftLifecycle.name)
-		);
-		if (!debugDraft.success) throw new TypeError(debugDraft.error.message);
-
-		const drafted = await port.draftLifecycle({
-			transition: 'close',
-			formId: intakeFormsFixtureIds.openForm,
-			expectedDefinitionVersion: 2
-		}, 'form-close-draft');
-		expect(drafted).toMatchObject({ kind: 'success', data: { action: 'lifecycle' } });
-		expect(await port.readDiff(selector)).toMatchObject({ kind: 'success', data: { status: 'draft' } });
-		expect(await port.propose({ ...selector, expectedHeadVersion: 1 }, 'form-close-propose'))
-			.toMatchObject({ kind: 'success', data: { status: 'proposed', headVersion: 2 } });
-		expect(await port.commit({ ...selector, expectedHeadVersion: 2 }, 'form-close-commit'))
-			.toMatchObject({ kind: 'success', data: { committedHeadVersion: 3 } });
-		expect(calls.map((call) => call.idempotencyKey)).toEqual([
-			'form-close-draft', undefined, 'form-close-propose', 'form-close-commit'
-		]);
-		expect(JSON.stringify(calls.map((call) => call.body))).not.toContain('form-close-draft');
-	});
-
-	test('dispatches closing intent through the Form-owned operation without a browser deadline id', async () => {
-		const calls: Array<{ path?: string; body?: unknown; idempotencyKey?: string }> = [];
-		const detail = sampleOrganizerFormDetailDtos[intakeFormsFixtureIds.openForm];
-		if (!detail) throw new TypeError('Fixture detail missing.');
-		const deadlineId = id(750);
-		const safeHead = {
-			id: detail.head.id,
-			version: detail.head.version,
-			status: detail.head.status,
-			currentPublishedVersionId: detail.head.currentPublishedVersionId,
-			definition: detail.head.definition
-		};
-		const safeDiff = {
-			action: 'closing' as const,
-			before: safeHead,
-			after: {
-				...safeHead,
-				version: safeHead.version + 1,
-				definition: {
-					...safeHead.definition,
-					availability: { kind: 'deadline' as const, deadlineId }
-				}
-			},
-			deadline: {
-				action: 'create' as const,
-				before: null,
-				after: {
-					id: deadlineId,
-					status: 'active' as const,
-					version: 1,
-					displayDate: '2026-11-01',
-					effectiveAt: '2026-11-01T23:59:59.000Z',
-					gracePolicy: 'soft' as const
-				},
-				representedConsequences: ['deadline_changed'] as const
-			}
-		};
-		const draftData = {
-			schemaVersion: 1,
-			action: 'closing',
-			changesetId: id(751),
-			headVersion: 1,
-			status: 'draft',
-			revision: { id: id(752), number: 1, digestSha256: digest('a') },
-			riskTier: 'normal',
-			approvalPolicy: {
-				reference: { key: 'approval.form', version: 1 },
-				definitionDigestSha256: digest('d'),
-				requirement: 'none'
-			},
-			safeDiff
-		};
-		const port = createIntakeFormsLivePort({
-			manifest: manifest(),
-			request: requesterFor({
-				[bindingPath('draftClosing')]: effectSuccess(
-					draftData,
-					INTAKE_FORMS_OPERATIONS.draftClosing.name
-				)
-			}, calls)
-		});
-		expect(await port.draftClosing({
-			formId: intakeFormsFixtureIds.openForm,
-			expectedDefinitionVersion: detail.head.version,
-			closesAt: '2026-11-01'
-		}, 'form-closing-draft')).toMatchObject({
-			kind: 'success', data: { action: 'closing', safeDiff: { deadline: { action: 'create' } } }
-		});
-		expect(calls).toMatchObject([{
-			path: bindingPath('draftClosing'),
-			body: {
-				formId: intakeFormsFixtureIds.openForm,
-				expectedDefinitionVersion: detail.head.version,
-				closesAt: '2026-11-01'
-			},
-			idempotencyKey: 'form-closing-draft'
-		}]);
-		expect(JSON.stringify(calls[0]?.body)).not.toContain(deadlineId);
-	});
-
-	test('fails closed on a missing binding and never substitutes sample data', async () => {
+	test('fails closed for a mismatched publish receipt and invalid input before transport', async () => {
 		let calls = 0;
-		const port = createIntakeFormsLivePort({
-			manifest: manifest(['detail']),
-			request: async () => {
-				calls += 1;
-				return { kind: 'success', data: readSuccess(sampleOrganizerFormCatalogDto) };
-			}
-		});
-		expect(await port.list()).toEqual({
-			kind: 'unavailable', operation: 'list', reason: 'operation_not_registered'
-		});
-		expect(calls).toBe(0);
-	});
-
-	test('fails closed before dispatch when a Form result schema digest drifts', async () => {
-		const list = operation('list');
-		const advertisedBinding = list.enabledBindings[0];
-		if (!advertisedBinding || advertisedBinding.surface !== 'operator_http') {
-			throw new TypeError('list_operator_binding_fixture_missing');
-		}
-		const candidate = safeOperationManifestSchema.parse({
-			schemaVersion: 1,
-			registryDigestSha256: digest('f'),
-			operations: [{
-				...list,
-				enabledBindings: [{
-					...advertisedBinding,
-					resultSchema: {
-						...advertisedBinding.resultSchema,
-						digestSha256: digest('0')
-					}
-				}]
-			}]
-		});
-		let calls = 0;
-		const port = createIntakeFormsLivePort({
-			manifest: candidate,
-			request: async () => {
-				calls += 1;
-				return { kind: 'success', data: readSuccess(sampleOrganizerFormCatalogDto) };
-			}
-		});
-
-		expect(await port.list()).toEqual({
-			kind: 'unavailable', operation: 'list', reason: 'operation_contract_mismatch'
-		});
-		expect(calls).toBe(0);
+		const port = createIntakeFormsLivePort({ manifest, request: async (request) => {
+			calls += 1;
+			return { kind: 'success', data: { ...writeResult('publish_and_open', 'form.version.publish'),
+				receipt: { id: id(60), operationName: 'form.version.publish.draft', operationVersion: 1 } } };
+		} });
+		expect(await port.publish({ draftId: id(40), revisionId: id(41),
+			revisionDigestSha256: 'a'.repeat(64) }, 'publish-key')).toEqual({ kind: 'transport_error',
+			error: { code: 'invalid_contract', retryable: true } });
+		expect(await port.lifecycle({ transition: 'close', formId: 'bad', expectedDefinitionVersion: 1 }, 'key'))
+			.toEqual({ kind: 'transport_error', error: { code: 'invalid_request', retryable: false } });
+		expect(calls).toBe(1);
 	});
 });

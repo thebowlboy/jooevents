@@ -8,7 +8,7 @@ import type { VersionedDefinitionRef } from '@jooevents/contracts';
 export interface OutboundEmailDeliveryPreparedContribution {
   readonly result: unknown;
   readonly domain: unknown;
-  readonly receiptChildren: readonly unknown[];
+  readonly effectContributions: readonly unknown[];
 }
 
 export interface OutboundEmailDeliveryPreparation {
@@ -74,7 +74,7 @@ export function createOutboundEmailDeliveryHandler(input: {
         return {
           result: contribution.result,
           domain: contribution.domain,
-          receiptChildren: [...contribution.receiptChildren]
+          effectContributions: [...contribution.effectContributions]
         };
       } catch (error) {
         sealed.phase = 'spent';

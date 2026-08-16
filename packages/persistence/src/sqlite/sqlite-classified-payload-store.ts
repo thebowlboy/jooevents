@@ -38,7 +38,7 @@ const sha256Pattern = /^[a-f0-9]{64}$/;
 const canonicalContentTypePattern = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,63}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$/;
 const maximumNonceAttempts = 8;
 
-/** Additive schema for explicitly ephemeral SQLite compositions only. */
+/** This schema contributes to the accepted epoch-2 baseline and may also serve isolated fixtures. */
 export const SQLITE_CLASSIFIED_PAYLOAD_STORE_SQL = `
 CREATE TABLE classified_payload_records (
   payload_ref_id TEXT PRIMARY KEY

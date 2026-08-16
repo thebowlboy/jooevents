@@ -629,7 +629,6 @@ describe('organizer communication pagination and schema identities', () => {
       'prepareBatchPreview',
       'getPreview',
       'listPreviewRecipients',
-      'getPlan',
       'getHistory',
       'listAttention',
       'getThread',

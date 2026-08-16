@@ -7,7 +7,6 @@
   "scripts": { "check": "tsc --noEmit", "test": "bun test" },
   "name": "@jooevents/template-authoring",
   "dependencies": {
-    "@jooevents/changesets": "workspace:*",
     "@jooevents/contracts": "workspace:*",
     "@jooevents/kernel": "workspace:*",
     "@jooevents/model-adapter": "workspace:*",

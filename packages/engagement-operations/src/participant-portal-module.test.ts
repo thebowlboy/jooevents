@@ -788,7 +788,7 @@ describe('respond preparation contribution (the transaction adapter contract)', 
       activityId: 'aaaaaaa1-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       occurredAt: NOW
     });
-    const children = contribution.receiptChildren as readonly Record<string, unknown>[];
+    const children = contribution.effectContributions as readonly Record<string, unknown>[];
     expect(children).toHaveLength(3);
     expect(children[0]).toMatchObject({
       kind: 'engagement_response', engagementId: ENG_MAYA_S1, personId: MAYA, attribution: 'self'
@@ -800,9 +800,9 @@ describe('respond preparation contribution (the transaction adapter contract)', 
 
     // Tampered attribution is incoherent evidence: the schema refuses it.
     const tampered = structuredClone(contribution) as unknown as {
-      receiptChildren: { attribution?: string }[];
+      effectContributions: { attribution?: string }[];
     };
-    tampered.receiptChildren[1]!.attribution = 'self';
+    tampered.effectContributions[1]!.attribution = 'self';
     expect(participantEngagementRespondContributionSchema.safeParse(tampered).success).toBe(false);
   });
 
@@ -834,7 +834,7 @@ describe('respond preparation contribution (the transaction adapter contract)', 
       class: 'access_denied', kind: 'portal.unknown_record', retryable: false
     });
     expect(parsed.domain).toBeNull();
-    expect(parsed.receiptChildren).toEqual([]);
+    expect(parsed.effectContributions).toEqual([]);
     // An undeclared refusal kind can never parse as a contribution.
     const forged = structuredClone(contribution) as {
       result: { outcome: { kind: string } };

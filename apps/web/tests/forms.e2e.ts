@@ -71,7 +71,7 @@ test('form cards derive their question counts and open enabled doors', async ({ 
 	expect(overflow).toBeLessThanOrEqual(1);
 });
 
-test('ticks stage locally and commit together on Apply, with one receipt that undoes', async ({
+test('ticks stage locally and commit together on Apply, with forward correction copy', async ({
 	page
 }) => {
 	await openConfigurator(page, 'form-cfp', 'Call for Proposals');
@@ -92,7 +92,10 @@ test('ticks stage locally and commit together on Apply, with one receipt that un
 	await expect(page.locator('.conf__meta')).toContainText('14 questions');
 	await expect(applyRow).toHaveCount(0);
 
-	await receipt.getByRole('button', { name: 'Undo' }).click();
+	await expect(receipt.getByRole('button', { name: 'Undo' })).toHaveCount(0);
+	await expect(receipt).toContainText('Edit the current questions and apply another change');
+	await page.getByLabel('Ask “Where you’re based” on this form').check();
+	await page.locator('.applyrow').getByRole('button', { name: 'Apply 1 change' }).click();
 	await expect(page.locator('.conf__meta')).toContainText('15 questions', { timeout: 10000 });
 	await expect(page.getByLabel('Ask “Where you’re based” on this form')).toBeChecked();
 });
@@ -366,7 +369,7 @@ test('a session target is offered from live collecting sessions and lands on the
 	);
 });
 
-test('the close date is edited where the form is configured, with an undoable receipt', async ({
+test('the close date is edited where the form is configured, with forward correction copy', async ({
 	page
 }) => {
 	await openConfigurator(page, 'form-cfp', 'Call for Proposals');
@@ -395,8 +398,11 @@ test('the close date is edited where the form is configured, with an undoable re
 	await expect(closes).toHaveValue('');
 	await expect(page.getByRole('button', { name: 'Remove close date' })).toHaveCount(0);
 
-	// The undo compensates: the date returns.
-	await receiptOf(page, 'Removed the close date').getByRole('button', { name: 'Undo' }).click();
+	const removed = receiptOf(page, 'Removed the close date');
+	await expect(removed.getByRole('button', { name: 'Undo' })).toHaveCount(0);
+	await expect(removed).toContainText('Edit the current close date and apply another change');
+	await closes.fill('2027-06-30');
+	await closes.press('Enter');
 	await expect(closes).toHaveValue('2027-06-30', { timeout: 10000 });
 });
 
@@ -410,9 +416,17 @@ test('the lifecycle walks forward beside the close date: open, close, reopen', a
 	});
 	await expect(page.locator('.conf__title')).toContainText('Draft');
 
-	// Opening publishes — the receipt names the compensating act, not an undo.
-	await page.getByRole('button', { name: 'Open form' }).click();
-	const opened = receiptOf(page, 'Opened “Lifecycle rehearsal”');
+	// Publication is a visible two-press owner review; closing it performs no write.
+	await page.getByRole('button', { name: 'Publish and open' }).click();
+	const review = page.getByRole('dialog', { name: 'Review publication' });
+	await expect(review).toContainText('Lifecycle rehearsal');
+	await expect(review.getByText('Open', { exact: true })).toBeVisible();
+	await review.getByRole('button', { name: 'Cancel' }).click();
+	await expect(page.locator('.conf__title')).toContainText('Draft');
+	await page.getByRole('button', { name: 'Publish and open' }).click();
+	await page.getByRole('dialog', { name: 'Review publication' })
+		.getByRole('button', { name: 'Publish and open' }).click();
+	const opened = receiptOf(page, 'Published and opened “Lifecycle rehearsal”');
 	await expect(opened).toBeVisible({ timeout: 10000 });
 	await expect(opened.getByRole('button', { name: 'Undo' })).toHaveCount(0);
 	await expect(page.locator('.conf__title')).toContainText('Open');

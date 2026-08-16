@@ -37,7 +37,7 @@ import { z } from 'zod';
 import {
   RELEASE_DRAFT_ACCESS_POLICY,
   type ReleaseCurrentEventSource
-} from './draft-module';
+} from './policy';
 
 export const RELEASE_OVERVIEW_READ_OPERATION = Object.freeze({
   name: 'release.overview.read', version: 1

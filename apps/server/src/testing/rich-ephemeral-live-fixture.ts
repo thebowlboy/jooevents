@@ -4,14 +4,18 @@ import {
   createReadOperationResultSchema,
   currentEventReadResultSchema,
   currentEventSettingsReadResultSchema,
-  eventCreateDraftOperationResultSchema,
-  eventSettingsUpdateDraftOperationResultSchema,
+  eventCreateOperationResultSchema,
+  eventSettingsUpdateOperationResultSchema,
   fieldRegistrySnapshotReadResultSchema,
   formVersionSchema,
+  intakeFormDirectOperationResultSchema,
+  intakeFormVersionPublishOperationResultSchema,
+  intakeFormVersionReviewDraftOperationResultSchema,
   organizerFormCatalogSchema,
   organizerFormDetailSchema,
   programVocabularySnapshotReadResultSchema,
-  releaseDraftOperationResultSchema,
+  releasePublishOperationResultSchema,
+  releaseReviewDraftOperationResultSchema,
   templateArtifactListOperationResultSchema,
   type EventSettingsSlotMinutes,
   type FormDefinitionAuthorInput,
@@ -26,31 +30,23 @@ import {
   type FormTargetReferencePinDto
 } from '@jooevents/contracts';
 import {
-  reviewerRosterChangeDraftOperationResultSchema,
+  reviewerRosterDirectOperationResultSchema,
   reviewerRosterSnapshotReadResultSchema
 } from '@jooevents/contracts/reviewer-roster';
 import {
-  reviewChangeDraftOperationResultSchema,
+  reviewDirectOperationResultSchema,
   reviewSnapshotReadResultSchema
 } from '@jooevents/contracts/reviews';
 import {
   sessionCatalogReadResultSchema,
-  sessionDraftOperationResultSchema
+  sessionDirectOperationResultSchema
 } from '@jooevents/contracts/sessions';
 import {
-  workspaceTeamDraftOperationResultSchema,
+  workspaceTeamMutationOperationResultSchema,
   workspaceTeamMembersReadResultSchema
 } from '@jooevents/contracts/workspace-team';
-import {
-  changesetLifecycleOperationResultSchema
-} from '@jooevents/changeset-operations';
-import {
-  intakeFormDraftOperationResultSchema
-} from '@jooevents/intake-operations';
+import { programVocabularyDirectOperationResultSchema } from '@jooevents/contracts';
 import { encodeCanonicalJson } from '@jooevents/kernel';
-import {
-  programVocabularyDraftOperationResultSchema
-} from '@jooevents/program-operations';
 import {
   loadEphemeralLiveConfig,
   type ServerConfig
@@ -113,7 +109,7 @@ const formSpecs = Object.freeze([
 const sessionSpecs = Object.freeze([
   Object.freeze({
     key: 'programmed_keynote',
-    title: 'Deterministic Changesets in Production',
+    title: 'Deterministic Operations in Production',
     plannedDurationMinutes: 45,
     format: 'talk',
     track: 'evaluation_reliability'
@@ -253,15 +249,9 @@ export const RICH_EPHEMERAL_LIVE_SCENARIO = deepFreeze({
     }),
     review: Object.freeze({ catalogs: 0, rounds: 0, roundCriteria: 0, assignments: 0 }),
     deadlines: Object.freeze({ total: 0, catalogs: 0 }),
-    changesets: 45,
-    operationReceipts: 135,
-    history: Object.freeze({
-      draftTimelineEntries: 45,
-      lifecycleTimelineEntries: 90,
-      domainFacts: 45,
-      outboxPointers: 45,
-      commitLinks: 45
-    })
+    operationReceipts: 0,
+    operationLogs: 55,
+    history: Object.freeze({ operationLogEntries: 55 })
   }),
   reviewPins: Object.freeze({
     /**
@@ -278,7 +268,7 @@ export const RICH_EPHEMERAL_LIVE_SCENARIO = deepFreeze({
      * Opening a review round plans reviewer-submission assignments and
      * refuses `no_assignments` when the pairing is empty. Submissions are
      * creatable in this composition via organizer direct entry
-     * (`submission.direct_entry.create.draft`); this fixture deliberately
+     * (`submission.direct_entry.create`); this fixture deliberately
      * seeds none, so the typed refusal is the truthful served response for
      * the scenario as built — a seeds-nothing consequence, not a mount gap.
      */
@@ -292,11 +282,11 @@ export const RICH_EPHEMERAL_LIVE_SCENARIO = deepFreeze({
   extensionSlots: Object.freeze({
     submissions: Object.freeze({
       status: 'seedable_unseeded' as const,
-      reason: 'Organizer direct entry (submission.direct_entry.create.draft) and the public Intake apply ceremony (application.public.mutate, serving only while a published apply-surface release pins a form) are both mounted. The fixture seeds no submissions and publishes no apply surface today — an extension may seed them through the registered direct-entry draft + lifecycle commit, or publish an apply surface release and drive the public ceremony.'
+      reason: 'Organizer direct entry (submission.direct_entry.create) and the public Intake apply ceremony (application.public.mutate, serving only while a published apply-surface release pins a form) are both mounted. The fixture seeds no submissions and publishes no apply surface today — an extension may seed them through the registered direct operation, or publish an apply surface release and drive the public ceremony.'
     }),
     reviewRounds: Object.freeze({
       status: 'requires_submissions' as const,
-      reason: 'review.round.change.draft open_round refuses no_assignments while the scenario seeds no submission; seeding one through direct entry (see submissions slot) unlocks an open round with its atomic review_due deadline.'
+      reason: 'review.round.change open_round refuses no_assignments while the scenario seeds no submission; seeding one through direct entry (see submissions slot) unlocks an open round with its atomic review_due deadline.'
     })
   })
 });
@@ -452,16 +442,11 @@ export interface RichEphemeralLiveBaseline {
     readonly reviewAssignments: number;
     readonly deadlines: number;
     readonly deadlineCatalogs: number;
-    readonly changesets: number;
-    readonly committedChangesets: number;
     readonly operationReceipts: number;
+    readonly operationLogs: number;
   };
   readonly historyCounts: {
-    readonly draftTimelineEntries: number;
-    readonly lifecycleTimelineEntries: number;
-    readonly domainFacts: number;
-    readonly outboxPointers: number;
-    readonly commitLinks: number;
+    readonly operationLogEntries: number;
   };
   readonly extensionSlots: typeof RICH_EPHEMERAL_LIVE_SCENARIO.extensionSlots;
 }
@@ -516,9 +501,9 @@ interface SeedContext {
 
 interface DraftResult {
   readonly data: {
-    readonly changesetId: string;
-    readonly headVersion: number;
+    readonly draftId: string;
     readonly revision: { readonly id: string; readonly digestSha256: string };
+    readonly safeDiff: { readonly action: string };
   };
 }
 
@@ -602,12 +587,12 @@ async function createOwnerSession(
  * Mints the second workspace principal through the exact admission seam the
  * owner already uses: raw better-auth rows plus an open access reservation
  * consumed by `/api/me/access-context`. No registered operation can admit a
- * brand-new principal in this composition — `workspace_team.invite.draft`
+ * brand-new principal in this composition — `workspace_team.invite`
  * records a classified invitation whose sign-in activation ceremony is not
  * mounted — so the reservation rows mirror `bootstrapEmptyInstall`'s owner
  * reservation verbatim. The reservation grants only the seeded `viewer`
  * preset role; the reviewer capabilities are granted later through the
- * registered `workspace_team.role_change.draft` operation, and every
+ * registered `workspace_team.role_change` operation, and every
  * JooEvents-domain write past admission flows through operations.
  */
 async function createReviewerPrincipal(
@@ -721,52 +706,44 @@ async function effect<Result>(input: {
     body: JSON.stringify(input.body)
   });
   if (response.status !== 200) {
-    throw new TypeError(`rich_fixture_effect_failed:${input.path}:${response.status}`);
+    throw new TypeError(`rich_fixture_effect_failed:${input.path}:${response.status}:${await response.text()}`);
   }
   return input.parse(await response.json());
 }
 
-async function commitDraft(context: SeedContext, key: string, draft: DraftResult): Promise<void> {
-  const selector = Object.freeze({
-    changesetId: draft.data.changesetId,
-    revisionId: draft.data.revision.id,
-    revisionDigest: draft.data.revision.digestSha256
-  });
-  const proposal = requireSuccess(changesetLifecycleOperationResultSchema.parse(await effect({
+async function publishRelease(context: SeedContext, key: string, draft: DraftResult): Promise<void> {
+  const published = requireSuccess(releasePublishOperationResultSchema.parse(await effect({
     context,
-    path: '/api/changesets/proposals',
-    key: `${key}-propose`,
-    body: { ...selector, expectedHeadVersion: draft.data.headVersion },
+    path: '/api/events/current/releases/publish',
+    key: `${key}-publish`,
+    body: {
+      draftId: draft.data.draftId,
+      revisionId: draft.data.revision.id,
+      revisionDigestSha256: draft.data.revision.digestSha256
+    },
     parse: (value) => value
-  })), `${key}_proposal`);
-  if (proposal.data.action !== 'propose') throw new TypeError(`rich_fixture_${key}_proposal_invalid`);
-  const committed = requireSuccess(changesetLifecycleOperationResultSchema.parse(await effect({
-    context,
-    path: '/api/changesets/commits',
-    key: `${key}-commit`,
-    body: { ...selector, expectedHeadVersion: proposal.data.diff.headVersion },
-    parse: (value) => value
-  })), `${key}_commit`);
-  if (committed.data.action !== 'commit') throw new TypeError(`rich_fixture_${key}_commit_invalid`);
+  })), `${key}_publish`);
+  if (published.data.action !== draft.data.safeDiff.action) {
+    throw new TypeError(`rich_fixture_${key}_publish_action_invalid`);
+  }
 }
 
 async function createEvent(context: SeedContext): Promise<string> {
-  const draft = requireSuccess(eventCreateDraftOperationResultSchema.parse(await effect({
+  const created = requireSuccess(eventCreateOperationResultSchema.parse(await effect({
     context,
-    path: '/api/events/drafts/create',
-    key: 'rich-v1-event-draft',
-    body: RICH_EPHEMERAL_LIVE_SCENARIO.event,
+    path: '/api/events',
+    key: 'rich-v1-event-create',
+    body: { expectedEventSetVersion: 1, ...RICH_EPHEMERAL_LIVE_SCENARIO.event },
     parse: (value) => value
-  })), 'event_draft');
-  await commitDraft(context, 'rich-v1-event', draft);
-  return draft.data.safeDiff.after.id;
+  })), 'event_create');
+  return created.data.event.id;
 }
 
 async function updateEventSettings(context: SeedContext, eventId: string): Promise<void> {
-  const draft = requireSuccess(eventSettingsUpdateDraftOperationResultSchema.parse(await effect({
+  requireSuccess(eventSettingsUpdateOperationResultSchema.parse(await effect({
     context,
-    path: '/api/events/current/settings/drafts/update',
-    key: 'rich-v1-event-settings-draft',
+    path: '/api/events/current/settings',
+    key: 'rich-v1-event-settings-update',
     body: {
       expectedEventId: eventId,
       expectedEventSetVersion: 2,
@@ -775,8 +752,7 @@ async function updateEventSettings(context: SeedContext, eventId: string): Promi
       ...RICH_EPHEMERAL_LIVE_SCENARIO.eventSettings
     },
     parse: (value) => value
-  })), 'event_settings_draft');
-  await commitDraft(context, 'rich-v1-event-settings', draft);
+  })), 'event_settings_update');
 }
 
 async function readVocabulary(context: SeedContext) {
@@ -809,18 +785,19 @@ async function createVocabulary(
           capacity: spec.capacity
         }
       : { kind: spec.kind, expectedSetVersion: snapshot.setVersion, name: spec.name };
-    const draft = requireSuccess(programVocabularyDraftOperationResultSchema.parse(await effect({
+    const mutation = requireSuccess(programVocabularyDirectOperationResultSchema.parse(await effect({
       context,
-      path: '/api/events/current/program-vocabulary/drafts/create',
-      key: `rich-v1-vocabulary-${spec.key}-draft`,
+      path: '/api/events/current/program-vocabulary/create',
+      key: `rich-v1-vocabulary-${spec.key}-create`,
       body,
       parse: (value) => value
-    })), `vocabulary_${spec.key}_draft`);
-    if (draft.data.safeDiff.action !== 'create') {
-      throw new TypeError(`rich_fixture_vocabulary_${spec.key}_diff_invalid`);
+    })), `vocabulary_${spec.key}_create`);
+    if (mutation.data.action !== 'create') {
+      throw new TypeError(`rich_fixture_vocabulary_${spec.key}_action_invalid`);
     }
-    handles[spec.key] = draft.data.safeDiff.after.id;
-    await commitDraft(context, `rich-v1-vocabulary-${spec.key}`, draft);
+    const createdId = mutation.data.affectedIds[0];
+    if (!createdId) throw new TypeError(`rich_fixture_vocabulary_${spec.key}_created_id_missing`);
+    handles[spec.key] = createdId;
   }
   return handles;
 }
@@ -840,7 +817,7 @@ async function mutateVocabulary(input: {
   if (!item || item.kind !== spec.kind) {
     throw new TypeError(`rich_fixture_vocabulary_item_missing:${input.key}`);
   }
-  const path = `/api/events/current/program-vocabulary/drafts/${input.action}`;
+  const path = `/api/events/current/program-vocabulary/${input.action}`;
   const body = input.action === 'edit'
     ? {
         kind: item.kind,
@@ -855,14 +832,13 @@ async function mutateVocabulary(input: {
         expectedSetVersion: snapshot.setVersion,
         expectedItemVersion: item.version
       };
-  const draft = requireSuccess(programVocabularyDraftOperationResultSchema.parse(await effect({
+  requireSuccess(programVocabularyDirectOperationResultSchema.parse(await effect({
     context: input.context,
     path,
-    key: `rich-v1-vocabulary-${input.key}-${input.action}-draft`,
+    key: `rich-v1-vocabulary-${input.key}-${input.action}`,
     body,
     parse: (value) => value
-  })), `vocabulary_${input.key}_${input.action}_draft`);
-  await commitDraft(input.context, `rich-v1-vocabulary-${input.key}-${input.action}`, draft);
+  })), `vocabulary_${input.key}_${input.action}`);
 }
 
 type RichRegistrySnapshot = Awaited<ReturnType<typeof readFieldRegistry>>;
@@ -956,22 +932,21 @@ async function createForm(
   definition: FormDefinitionCreateAuthorInput
 ): Promise<string> {
   const catalog = await readFormCatalog(context);
-  const draft = requireSuccess(intakeFormDraftOperationResultSchema.parse(await effect({
+  const mutation = requireSuccess(intakeFormDirectOperationResultSchema.parse(await effect({
     context,
-    path: '/api/events/current/forms/drafts/create',
-    key: `rich-v1-form-${key}-create-draft`,
+    path: '/api/events/current/forms/create',
+    key: `rich-v1-form-${key}-create`,
     body: {
       expectedCatalogVersion: catalog.catalogVersion,
       expectedRegistryVersion: catalog.registryPin.version,
       definition
     },
     parse: (value) => value
-  })), `form_${key}_create_draft`);
-  if (draft.data.safeDiff.action !== 'create') {
-    throw new TypeError(`rich_fixture_form_${key}_create_diff_invalid`);
+  })), `form_${key}_create`);
+  if (mutation.data.action !== 'create') {
+    throw new TypeError(`rich_fixture_form_${key}_create_action_invalid`);
   }
-  await commitDraft(context, `rich-v1-form-${key}-create`, draft);
-  return draft.data.safeDiff.after.id;
+  return mutation.data.formId;
 }
 
 async function mutateForm(input: {
@@ -983,9 +958,8 @@ async function mutateForm(input: {
   readonly occurrence?: number;
 }): Promise<void> {
   const detail = await readFormDetail(input.context, input.formId);
-  const routeAction = input.action === 'publish_and_open' || input.action === 'close'
-    ? 'lifecycle'
-    : input.action;
+  const reviewed = input.action === 'publish' || input.action === 'publish_and_open';
+  const routeAction = input.action === 'close' ? 'lifecycle' : input.action;
   const body = input.action === 'revise'
     ? {
         formId: input.formId,
@@ -993,7 +967,7 @@ async function mutateForm(input: {
         expectedRegistryVersion: detail.registryPin.version,
         definition: input.definition
       }
-    : input.action === 'publish'
+    : reviewed
       ? {
           formId: input.formId,
           expectedDefinitionVersion: detail.head.version,
@@ -1002,20 +976,37 @@ async function mutateForm(input: {
       : {
           transition: input.action,
           formId: input.formId,
-          expectedDefinitionVersion: detail.head.version,
-          ...(input.action === 'publish_and_open'
-            ? { expectedRegistryVersion: detail.registryPin.version }
-            : {})
+          expectedDefinitionVersion: detail.head.version
         };
   const keySuffix = `${input.action}${input.occurrence ? `-${input.occurrence}` : ''}`;
-  const draft = requireSuccess(intakeFormDraftOperationResultSchema.parse(await effect({
+  if (reviewed) {
+    const review = requireSuccess(intakeFormVersionReviewDraftOperationResultSchema.parse(await effect({
+      context: input.context,
+      path: '/api/events/current/forms/publish/draft',
+      key: `rich-v1-form-${input.key}-${keySuffix}-review`,
+      body: { action: input.action, ...body },
+      parse: (value) => value
+    })), `form_${input.key}_${input.action}_review`);
+    requireSuccess(intakeFormVersionPublishOperationResultSchema.parse(await effect({
+      context: input.context,
+      path: '/api/events/current/forms/publish',
+      key: `rich-v1-form-${input.key}-${keySuffix}-publish`,
+      body: {
+        draftId: review.data.draftId,
+        revisionId: review.data.revision.id,
+        revisionDigestSha256: review.data.revision.digestSha256
+      },
+      parse: (value) => value
+    })), `form_${input.key}_${input.action}_publish`);
+    return;
+  }
+  requireSuccess(intakeFormDirectOperationResultSchema.parse(await effect({
     context: input.context,
-    path: `/api/events/current/forms/drafts/${routeAction}`,
-    key: `rich-v1-form-${input.key}-${keySuffix}-draft`,
+    path: `/api/events/current/forms/${routeAction}`,
+    key: `rich-v1-form-${input.key}-${keySuffix}`,
     body,
     parse: (value) => value
-  })), `form_${input.key}_${input.action}_draft`);
-  await commitDraft(input.context, `rich-v1-form-${input.key}-${keySuffix}`, draft);
+  })), `form_${input.key}_${input.action}`);
 }
 
 async function createForms(
@@ -1126,10 +1117,10 @@ async function createSessions(
     const spec = sessionSpecs.find((candidate) => candidate.key === input.key);
     if (!spec) throw new TypeError(`rich_fixture_session_spec_missing:${input.key}`);
     const catalog = await readSessionCatalog(context);
-    const draft = requireSuccess(sessionDraftOperationResultSchema.parse(await effect({
+    const committed = requireSuccess(sessionDirectOperationResultSchema.parse(await effect({
       context,
-      path: '/api/events/current/sessions/drafts',
-      key: `rich-v1-session-${input.key}-create-draft`,
+      path: '/api/events/current/sessions',
+      key: `rich-v1-session-${input.key}-create`,
       body: {
         action: 'create',
         expectedCatalogVersion: catalog.version,
@@ -1141,14 +1132,13 @@ async function createSessions(
         trackId: vocabulary[spec.track]
       },
       parse: (value) => value
-    })), `session_${input.key}_create_draft`);
-    const after = draft.data.safeDiff.after;
-    if (draft.data.safeDiff.action !== 'create' || after === null
+    })), `session_${input.key}_create`);
+    const after = committed.data.session;
+    if (committed.data.action !== 'create' || after === null
         || after.lifecycle !== input.lifecycle) {
-      throw new TypeError(`rich_fixture_session_${input.key}_create_diff_invalid`);
+      throw new TypeError(`rich_fixture_session_${input.key}_create_result_invalid`);
     }
     handles[input.key] = after.id;
-    await commitDraft(context, `rich-v1-session-${input.key}-create`, draft);
   };
 
   await create({ key: 'programmed_keynote', lifecycle: 'programmed' });
@@ -1161,10 +1151,10 @@ async function createSessions(
   if (!container || container.lifecycle !== 'draft') {
     throw new TypeError('rich_fixture_session_collecting_panel_missing');
   }
-  const transition = requireSuccess(sessionDraftOperationResultSchema.parse(await effect({
+  const transition = requireSuccess(sessionDirectOperationResultSchema.parse(await effect({
     context,
-    path: '/api/events/current/sessions/drafts',
-    key: 'rich-v1-session-collecting_panel-transition-draft',
+    path: '/api/events/current/sessions',
+    key: 'rich-v1-session-collecting_panel-transition',
     body: {
       action: 'transition',
       expectedCatalogVersion: catalog.version,
@@ -1175,12 +1165,11 @@ async function createSessions(
       to: 'collecting'
     },
     parse: (value) => value
-  })), 'session_collecting_panel_transition_draft');
-  if (transition.data.safeDiff.action !== 'transition'
-      || transition.data.safeDiff.after?.lifecycle !== 'collecting') {
+  })), 'session_collecting_panel_transition');
+  if (transition.data.action !== 'transition'
+      || transition.data.session?.lifecycle !== 'collecting') {
     throw new TypeError('rich_fixture_session_collecting_panel_transition_invalid');
   }
-  await commitDraft(context, 'rich-v1-session-collecting_panel-transition', transition);
   return handles;
 }
 
@@ -1197,7 +1186,7 @@ async function publishSurface(input: {
   readonly styleSetReleaseId: string;
   readonly formRef: null | { readonly formId: string; readonly formVersionId: string };
 }): Promise<void> {
-  const draft = requireSuccess(releaseDraftOperationResultSchema.parse(await effect({
+  const draft = requireSuccess(releaseReviewDraftOperationResultSchema.parse(await effect({
     context: input.context,
     path: '/api/events/current/releases/drafts',
     key: `rich-v1-release-surface-${input.key}-draft`,
@@ -1212,10 +1201,10 @@ async function publishSurface(input: {
     },
     parse: (value) => value
   })), `release_surface_${input.key}_draft`);
-  await commitDraft(input.context, `rich-v1-release-surface-${input.key}`, draft);
+  await publishRelease(input.context, `rich-v1-release-surface-${input.key}`, draft);
 }
 
-/** Publishes the fixture only through the registered release changeset lane. */
+/** Publishes the fixture only through the registered owner-native Release lane. */
 async function publishFixture(input: {
   readonly context: SeedContext;
   readonly forms: Readonly<Record<RichFormKey, string>>;
@@ -1257,16 +1246,16 @@ async function publishFixture(input: {
       }
     };
   };
-  const program = requireSuccess(releaseDraftOperationResultSchema.parse(await effect({
+  const program = requireSuccess(releaseReviewDraftOperationResultSchema.parse(await effect({
     context: input.context,
     path: '/api/events/current/releases/drafts',
     key: 'rich-v1-release-program-draft',
     body: { action: 'publish_schedule', expectedCurrentReleaseNumber: null },
     parse: (value) => value
   })), 'release_program_draft');
-  await commitDraft(input.context, 'rich-v1-release-program', program);
+  await publishRelease(input.context, 'rich-v1-release-program', program);
 
-  const style = requireSuccess(releaseDraftOperationResultSchema.parse(await effect({
+  const style = requireSuccess(releaseReviewDraftOperationResultSchema.parse(await effect({
     context: input.context,
     path: '/api/events/current/releases/drafts',
     key: 'rich-v1-release-style-draft',
@@ -1281,7 +1270,7 @@ async function publishFixture(input: {
   if (style.data.safeDiff.action !== 'style_set_publish') {
     throw new TypeError('rich_fixture_release_style_diff_invalid');
   }
-  await commitDraft(input.context, 'rich-v1-release-style', style);
+  await publishRelease(input.context, 'rich-v1-release-style', style);
   const styleSetReleaseId = style.data.safeDiff.after.releaseId;
 
   const schedule = surface('schedule');
@@ -1334,7 +1323,7 @@ function teamMember(
  * Widens the reviewer principal from the admission-time `viewer` role to
  * `speaker_reviewer` — the preset carrying exactly the six
  * REVIEWER_CAPABILITY_IDS — through the registered
- * `workspace_team.role_change.draft` operation and the shared lifecycle.
+ * direct `workspace_team.role_change` operation.
  */
 async function grantReviewerCapabilities(
   context: SeedContext,
@@ -1345,10 +1334,10 @@ async function grantReviewerCapabilities(
   if (member.role.key !== 'viewer') {
     throw new TypeError('rich_fixture_reviewer_admission_role_invalid');
   }
-  const draft = requireSuccess(workspaceTeamDraftOperationResultSchema.parse(await effect({
+  const mutation = requireSuccess(workspaceTeamMutationOperationResultSchema.parse(await effect({
     context,
-    path: '/api/workspace/team/role-changes/drafts',
-    key: 'rich-v1-reviewer-role-change-draft',
+    path: '/api/workspace/team/role-changes',
+    key: 'rich-v1-reviewer-role-change',
     body: {
       subject: { kind: 'member', membershipId: member.id, version: member.version },
       roleKey: 'speaker_reviewer',
@@ -1356,12 +1345,11 @@ async function grantReviewerCapabilities(
       expectedTeamDigestSha256: team.digestSha256
     },
     parse: (value) => value
-  })), 'reviewer_role_change_draft');
-  if (draft.data.safeDiff.action !== 'change_role'
-      || draft.data.safeDiff.after.key !== 'speaker_reviewer') {
+  })), 'reviewer_role_change');
+  if (mutation.data.safeDiff.action !== 'change_role'
+      || mutation.data.safeDiff.after.key !== 'speaker_reviewer') {
     throw new TypeError('rich_fixture_reviewer_role_change_diff_invalid');
   }
-  await commitDraft(context, 'rich-v1-reviewer-role-change', draft);
   return member.id;
 }
 
@@ -1384,10 +1372,10 @@ async function registerReviewer(
     throw new TypeError('rich_fixture_reviewer_registration_subject_invalid');
   }
   const roster = await readReviewerRoster(context);
-  const draft = requireSuccess(reviewerRosterChangeDraftOperationResultSchema.parse(await effect({
+  const mutation = requireSuccess(reviewerRosterDirectOperationResultSchema.parse(await effect({
     context,
-    path: '/api/events/current/reviewer-roster/drafts',
-    key: 'rich-v1-reviewer-roster-register-draft',
+    path: '/api/events/current/reviewer-roster/changes',
+    key: 'rich-v1-reviewer-roster-register',
     body: {
       action: 'register',
       reviewerId: RICH_REVIEWER_ID,
@@ -1401,19 +1389,11 @@ async function registerReviewer(
       expectedRosterDigestSha256: roster.rosterDigestSha256
     },
     parse: (value) => value
-  })), 'reviewer_roster_register_draft');
-  if (draft.data.action !== 'register' || draft.data.reviewerId !== RICH_REVIEWER_ID) {
+  })), 'reviewer_roster_register');
+  if (mutation.data.action !== 'register'
+      || mutation.data.reviewer.reviewerId !== RICH_REVIEWER_ID) {
     throw new TypeError('rich_fixture_reviewer_roster_register_invalid');
   }
-  // The roster draft contract returns only the revision selector; a freshly
-  // authored changeset head is always at version 1 for the propose guard.
-  await commitDraft(context, 'rich-v1-reviewer-roster-register', {
-    data: {
-      changesetId: draft.data.changesetId,
-      headVersion: 1,
-      revision: draft.data.revision
-    }
-  });
 }
 
 /**
@@ -1443,17 +1423,17 @@ async function capturePreRegistrationReviewSnapshot(
 
 /**
  * Attempts to open a review round through the registered operation. The
- * composition has no reviewable submission, so the draft must refuse with the
+ * composition has no reviewable submission, so the operation must refuse with the
  * typed `no_assignments` stale-revision outcome; the refusal is pinned as the
- * served truth and leaves no changeset behind.
+ * served truth and leaves no partial round behind.
  */
 async function attemptOpenReviewRound(
   context: SeedContext
 ): Promise<typeof RICH_EPHEMERAL_LIVE_SCENARIO.reviewPins.openRoundAttempt> {
-  const result = reviewChangeDraftOperationResultSchema.parse(await effect({
+  const result = reviewDirectOperationResultSchema.parse(await effect({
     context,
-    path: '/api/events/current/review/round-drafts',
-    key: 'rich-v1-review-open-round-draft',
+    path: '/api/events/current/review/rounds',
+    key: 'rich-v1-review-open-round',
     body: { action: 'open_round', deadlineDate: '2027-06-11', anonymized: true },
     parse: (value) => value
   }));
@@ -1844,70 +1824,10 @@ async function captureBaseline(input: {
       reviewAssignments: count(input.context.runtime, 'review_assignments'),
       deadlines: count(input.context.runtime, 'deadlines'),
       deadlineCatalogs: count(input.context.runtime, 'deadline_catalogs'),
-      changesets: count(input.context.runtime, 'changeset_heads'),
-      committedChangesets: count(
-        input.context.runtime,
-        'changeset_heads',
-        "WHERE status = 'committed'"
-      ),
-      operationReceipts: count(input.context.runtime, 'foundation_trial_operation_receipts')
+      operationReceipts: 0,
+      operationLogs: count(input.context.runtime, 'operation_log')
     },
-    historyCounts: {
-      draftTimelineEntries:
-        count(input.context.runtime, 'event_create_draft_timeline')
-        + count(input.context.runtime, 'event_settings_update_draft_timeline')
-        + count(input.context.runtime, 'program_vocabulary_draft_timeline')
-        + count(input.context.runtime, 'intake_form_draft_timeline')
-        + count(input.context.runtime, 'session_draft_timeline')
-        + count(input.context.runtime, 'workspace_team_draft_timeline')
-        + count(input.context.runtime, 'reviewer_roster_draft_timeline')
-        + count(input.context.runtime, 'review_draft_timeline')
-        + count(input.context.runtime, 'deadline_draft_timeline')
-        + count(input.context.runtime, 'engagement_draft_timeline')
-        + count(input.context.runtime, 'release_draft_timeline'),
-      lifecycleTimelineEntries:
-        count(input.context.runtime, 'event_creation_changeset_timeline')
-        + count(input.context.runtime, 'event_settings_changeset_timeline')
-        + count(input.context.runtime, 'changeset_lifecycle_timeline_projection')
-        + count(input.context.runtime, 'intake_form_changeset_timeline')
-        + count(input.context.runtime, 'session_changeset_timeline')
-        + count(input.context.runtime, 'workspace_team_changeset_timeline')
-        + count(input.context.runtime, 'reviewer_roster_changeset_timeline')
-        + count(input.context.runtime, 'review_changeset_timeline')
-        + count(input.context.runtime, 'deadline_changeset_timeline')
-        + count(input.context.runtime, 'engagement_changeset_timeline')
-        + count(input.context.runtime, 'release_changeset_timeline')
-        // Per-delivery history threads of the send wave; the scenario sends
-        // nothing, so the covered delta stays exactly zero.
-        + count(input.context.runtime, 'communication_outbound_delivery_history'),
-      domainFacts:
-        count(input.context.runtime, 'event_creation_changeset_domain_facts')
-        + count(input.context.runtime, 'event_settings_changeset_domain_facts')
-        + count(input.context.runtime, 'changeset_lifecycle_domain_facts')
-        + count(input.context.runtime, 'intake_form_changeset_domain_facts')
-        + count(input.context.runtime, 'session_changeset_domain_facts')
-        + count(input.context.runtime, 'workspace_team_changeset_domain_facts')
-        + count(input.context.runtime, 'reviewer_roster_changeset_domain_facts')
-        + count(input.context.runtime, 'review_changeset_domain_facts')
-        + count(input.context.runtime, 'deadline_changeset_domain_facts')
-        + count(input.context.runtime, 'engagement_changeset_domain_facts')
-        + count(input.context.runtime, 'release_changeset_domain_facts')
-        + count(input.context.runtime, 'communication_outbound_delivery_facts'),
-      outboxPointers:
-        count(input.context.runtime, 'event_creation_changeset_outbox_pointers')
-        + count(input.context.runtime, 'event_settings_changeset_outbox_pointers')
-        + count(input.context.runtime, 'changeset_lifecycle_outbox_pointers')
-        + count(input.context.runtime, 'intake_form_changeset_outbox_pointers')
-        + count(input.context.runtime, 'session_changeset_outbox_pointers')
-        + count(input.context.runtime, 'workspace_team_changeset_outbox_pointers')
-        + count(input.context.runtime, 'reviewer_roster_changeset_outbox_pointers')
-        + count(input.context.runtime, 'review_changeset_outbox_pointers')
-        + count(input.context.runtime, 'deadline_changeset_outbox_pointers')
-        + count(input.context.runtime, 'engagement_changeset_outbox_pointers')
-        + count(input.context.runtime, 'release_changeset_outbox_pointers')
-        + count(input.context.runtime, 'communication_outbound_delivery_outbox'),
-      commitLinks: count(input.context.runtime, 'changeset_commit_links')
-    },
+    historyCounts: { operationLogEntries: count(input.context.runtime, 'operation_log') },
     extensionSlots: RICH_EPHEMERAL_LIVE_SCENARIO.extensionSlots
   });
 }
@@ -1968,9 +1888,8 @@ function assertExpectedBaseline(baseline: RichEphemeralLiveBaseline): void {
     expectedReviews: baseline.review.roundSetup.expectedReviews,
     deadlines: baseline.durableCounts.deadlines,
     deadlineCatalogs: baseline.durableCounts.deadlineCatalogs,
-    changesets: baseline.durableCounts.changesets,
-    committedChangesets: baseline.durableCounts.committedChangesets,
-    operationReceipts: baseline.durableCounts.operationReceipts
+    operationReceipts: baseline.durableCounts.operationReceipts,
+    operationLogs: baseline.durableCounts.operationLogs
   };
   const wanted = {
     eventHeads: expected.events,
@@ -2014,9 +1933,8 @@ function assertExpectedBaseline(baseline: RichEphemeralLiveBaseline): void {
     expectedReviews: expected.review.assignments,
     deadlines: expected.deadlines.total,
     deadlineCatalogs: expected.deadlines.catalogs,
-    changesets: expected.changesets,
-    committedChangesets: expected.changesets,
-    operationReceipts: expected.operationReceipts
+    operationReceipts: expected.operationReceipts,
+    operationLogs: expected.operationLogs
   };
   if (JSON.stringify(actual) !== JSON.stringify(wanted)) {
     throw new TypeError(`rich_fixture_baseline_mismatch:${JSON.stringify(actual)}`);
@@ -2031,7 +1949,7 @@ function assertExpectedBaseline(baseline: RichEphemeralLiveBaseline): void {
 /**
  * Creates a private temporary SQLite database and fills it only through the
  * same registered Event, Event Settings, Program Vocabulary, Form, Session,
- * Workspace Team, Reviewer Roster, Review, and changeset operations used by
+ * Workspace Team, Reviewer Roster, Review, and direct operations used by
  * the live server. Every call owns a separate runtime and database.
  */
 export async function createRichEphemeralLiveFixture(input: {

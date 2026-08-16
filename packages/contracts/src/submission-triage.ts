@@ -290,7 +290,7 @@ export const submissionTriageExpectedHeadSchema = z.strictObject({
   version: intakeVersionSchema
 });
 
-export const submissionTriageTransitionDraftInputSchema = z.strictObject({
+export const submissionTriageTransitionInputSchema = z.strictObject({
   action: submissionTriageActionSchema,
   submissionIds: z.array(intakeIdInputSchema).min(1).max(SUBMISSION_TRIAGE_BULK_MAX),
   expectedHeads: z.array(submissionTriageExpectedHeadSchema).min(1).max(SUBMISSION_TRIAGE_BULK_MAX),
@@ -321,96 +321,31 @@ export const submissionTriageTransitionDraftInputSchema = z.strictObject({
   }
 });
 
-export const submissionTriageHeadImageSchema = z.strictObject({
-  submissionId: intakeIdSchema,
-  version: intakeVersionSchema,
-  state: submissionTriageStateSchema,
-  setAsideAttribution: submissionTriageAttributionSchema.nullable(),
-  updatedAt: intakeInstantSchema
-}).superRefine((head, context) => {
-  const coherent = head.state === 'set_aside'
-    ? head.setAsideAttribution !== null
-    : head.setAsideAttribution === null;
-  if (!coherent) {
-    context.addIssue({
-      code: 'custom',
-      path: ['setAsideAttribution'],
-      message: 'set-aside attribution must be present exactly while set aside'
-    });
-  }
-});
-
-export const submissionTriageSafeTransitionSchema = z.strictObject({
-  submissionId: intakeIdSchema,
-  arrivalClassification: submissionArrivalClassificationSchema,
-  beforeVisibleTray: submissionTriageVisibleTraySchema,
-  afterVisibleTray: submissionTriageVisibleTraySchema,
-  before: submissionTriageHeadImageSchema,
-  after: submissionTriageHeadImageSchema
-}).superRefine((transition, context) => {
-  if (transition.before.submissionId !== transition.submissionId
-      || transition.after.submissionId !== transition.submissionId
-      || transition.after.version !== transition.before.version + 1) {
-    context.addIssue({ code: 'custom', message: 'triage transition versions are incoherent' });
-  }
-});
-
-export const submissionTriageSafeDiffSchema = z.strictObject({
+export const submissionTriageTransitionPlanSchema = z.strictObject({
   schemaVersion: z.literal(1),
-  action: z.enum([
-    'set_aside',
-    'return_to_inbox',
-    'discard_recoverable',
-    'restore',
-    'restore_exact'
-  ]),
+  action: submissionTriageActionSchema,
+  scope: z.strictObject({ workspaceId: intakeIdSchema, eventId: intakeIdSchema }),
+  attribution: submissionTriageAttributionSchema,
   queryGuard: z.strictObject({
     before: submissionTriageQueryGuardSchema,
     after: submissionTriageQueryGuardSchema
   }),
-  transitions: z.array(submissionTriageSafeTransitionSchema)
-    .min(1)
-    .max(SUBMISSION_TRIAGE_BULK_MAX)
-}).superRefine((diff, context) => {
-  addCanonicalOrderIssues(
-    diff.transitions.map((transition) => transition.submissionId),
-    context,
-    ['transitions'],
-    'transitions must be unique and use canonical code-unit order'
-  );
-  if (diff.queryGuard.after.version !== diff.queryGuard.before.version + 1) {
-    context.addIssue({
-      code: 'custom',
-      path: ['queryGuard', 'after', 'version'],
-      message: 'query guard must advance exactly once'
-    });
-  }
+  transitions: z.array(z.strictObject({
+    submissionId: intakeIdSchema,
+    arrivalDigestSha256: intakeDigestSchema,
+    arrivalClassification: submissionArrivalClassificationSchema,
+    beforeVisibleTray: submissionTriageVisibleTraySchema,
+    afterVisibleTray: submissionTriageVisibleTraySchema,
+    before: submissionTriageHeadSchema,
+    after: submissionTriageHeadSchema
+  })).min(1).max(SUBMISSION_TRIAGE_BULK_MAX)
 });
 
-export const submissionTriageDraftDataSchema = z.strictObject({
+export const submissionTriageTransitionDataSchema = z.strictObject({
   schemaVersion: z.literal(1),
   action: submissionTriageActionSchema,
-  changesetId: canonicalApplicationIdSchema,
-  headVersion: intakeVersionSchema,
-  status: z.literal('draft'),
-  revision: z.strictObject({
-    id: canonicalApplicationIdSchema,
-    number: intakeVersionSchema,
-    digestSha256: intakeDigestSchema
-  }),
-  affectedCount: z.number().int().positive().max(SUBMISSION_TRIAGE_BULK_MAX),
-  riskTier: z.enum(['normal', 'consequential']),
-  approvalPolicy: z.strictObject({
-    reference: versionedDefinitionRefSchema,
-    definitionDigestSha256: intakeDigestSchema,
-    requirement: z.enum(['none', 'distinct_current_human'])
-  }),
-  safeDiff: submissionTriageSafeDiffSchema
-}).superRefine((data, context) => {
-  if (data.safeDiff.action !== data.action
-      || data.affectedCount !== data.safeDiff.transitions.length) {
-    context.addIssue({ code: 'custom', message: 'triage draft summary is incoherent' });
-  }
+  queryGuard: submissionTriageQueryGuardSchema,
+  submissionIds: z.array(intakeIdSchema).min(1).max(SUBMISSION_TRIAGE_BULK_MAX)
 });
 
 export const submissionTriageListCanonicalResultSchema = z.discriminatedUnion('kind', [
@@ -421,8 +356,8 @@ export const submissionTriageReadCanonicalResultSchema = z.discriminatedUnion('k
   z.strictObject({ kind: z.literal('success'), data: submissionTriageReadSchema }),
   z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
 ]);
-export const submissionTriageDraftCanonicalResultSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('success'), data: submissionTriageDraftDataSchema }),
+export const submissionTriageTransitionCanonicalResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success'), data: submissionTriageTransitionDataSchema }),
   z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
 ]);
 
@@ -430,8 +365,8 @@ export const submissionTriageListOperationResultSchema =
   createReadOperationResultSchema(submissionTriageListSchema);
 export const submissionTriageReadOperationResultSchema =
   createReadOperationResultSchema(submissionTriageReadSchema);
-export const submissionTriageDraftOperationResultSchema =
-  createEffectfulOperationResultSchema(submissionTriageDraftDataSchema);
+export const submissionTriageTransitionOperationResultSchema =
+  createEffectfulOperationResultSchema(submissionTriageTransitionDataSchema);
 
 export const SUBMISSION_TRIAGE_OPERATION_SCHEMA_REFS = Object.freeze({
   list: createOperationSchemaManifestRefs({
@@ -446,11 +381,11 @@ export const SUBMISSION_TRIAGE_OPERATION_SCHEMA_REFS = Object.freeze({
     resultKey: 'schema.submission.triage-read.operator-result',
     resultSchema: submissionTriageReadOperationResultSchema
   }),
-  draft: createOperationSchemaManifestRefs({
-    inputKey: 'schema.submission.triage-transition-draft.input',
-    inputSchema: submissionTriageTransitionDraftInputSchema,
-    resultKey: 'schema.submission.triage-transition-draft.operator-result',
-    resultSchema: submissionTriageDraftOperationResultSchema
+  transition: createOperationSchemaManifestRefs({
+    inputKey: 'schema.submission.triage-transition.input',
+    inputSchema: submissionTriageTransitionInputSchema,
+    resultKey: 'schema.submission.triage-transition.operator-result',
+    resultSchema: submissionTriageTransitionOperationResultSchema
   })
 });
 
@@ -467,9 +402,7 @@ export type SubmissionTriageListInput = z.infer<typeof submissionTriageListInput
 export type SubmissionTriageListDto = z.infer<typeof submissionTriageListSchema>;
 export type SubmissionTriageReadDto = z.infer<typeof submissionTriageReadSchema>;
 export type SubmissionTriageAction = z.infer<typeof submissionTriageActionSchema>;
-export type SubmissionTriageTransitionDraftInput =
-  z.infer<typeof submissionTriageTransitionDraftInputSchema>;
-export type SubmissionTriageSafeTransition = z.infer<typeof submissionTriageSafeTransitionSchema>;
-export type SubmissionTriageSafeDiff = z.infer<typeof submissionTriageSafeDiffSchema>;
-export type SubmissionTriageDraftData = z.infer<typeof submissionTriageDraftDataSchema>;
+export type SubmissionTriageTransitionInput = z.infer<typeof submissionTriageTransitionInputSchema>;
+export type SubmissionTriageTransitionPlanDto = z.infer<typeof submissionTriageTransitionPlanSchema>;
+export type SubmissionTriageTransitionData = z.infer<typeof submissionTriageTransitionDataSchema>;
 export type OrganizerSubmissionChoiceDto = z.infer<typeof organizerSubmissionChoiceSchema>;

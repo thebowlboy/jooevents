@@ -217,7 +217,7 @@ export const deadlineMutationResultSchema = z.strictObject({
   pin: deadlineReferencePinSchema.nullable()
 });
 
-export const deadlineChangeDraftInputSchema = z.discriminatedUnion('action', [
+export const deadlineChangeInputSchema = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('create'), displayDate: deadlineDisplayDateSchema }),
   z.strictObject({
     action: z.literal('update'), deadlineId: deadlineIdSchema,
@@ -238,30 +238,18 @@ export const deadlineGetProjectionSchema = z.strictObject({
 export const deadlineListReadResultSchema = createReadOperationResultSchema(deadlineCatalogSnapshotSchema);
 export const deadlineGetReadResultSchema = createReadOperationResultSchema(deadlineGetProjectionSchema);
 
-export const deadlineDraftDataSchema = z.strictObject({
+export const deadlineChangeDataSchema = z.strictObject({
   schemaVersion: z.literal(1),
   action: z.enum(['create', 'update', 'clear']),
-  changesetId: deadlineIdSchema,
-  headVersion: deadlineVersionSchema,
-  status: z.literal('draft'),
-  revision: z.strictObject({
-    id: deadlineIdSchema,
-    number: deadlineVersionSchema,
-    digestSha256: deadlineDigestSchema
-  }),
-  riskTier: z.literal('low'),
-  approvalPolicy: z.strictObject({
-    reference: versionedDefinitionRefSchema,
-    definitionDigestSha256: deadlineDigestSchema,
-    requirement: z.literal('none')
-  }),
-  safeDiff: deadlineSafeDiffSchema
+  catalogVersion: deadlineVersionSchema,
+  deadline: deadlineHeadSchema,
+  pin: deadlineReferencePinSchema.nullable()
 });
-export const deadlineDraftCanonicalResultSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('success'), data: deadlineDraftDataSchema }),
+export const deadlineChangeCanonicalResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success'), data: deadlineChangeDataSchema }),
   z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
 ]);
-export const deadlineDraftOperationResultSchema = createEffectfulOperationResultSchema(deadlineDraftDataSchema);
+export const deadlineChangeOperationResultSchema = createEffectfulOperationResultSchema(deadlineChangeDataSchema);
 
 /** Exact public schema identities projected into the operator operation manifest. */
 export const DEADLINE_OPERATION_SCHEMA_REFS = Object.freeze({
@@ -277,11 +265,11 @@ export const DEADLINE_OPERATION_SCHEMA_REFS = Object.freeze({
     resultKey: 'schema.deadline.current-read.operator-result',
     resultSchema: deadlineGetReadResultSchema
   }),
-  changeDraft: createOperationSchemaManifestRefs({
-    inputKey: 'schema.deadline.change-draft.input',
-    inputSchema: deadlineChangeDraftInputSchema,
-    resultKey: 'schema.deadline.change-draft.operator-result',
-    resultSchema: deadlineDraftOperationResultSchema
+  change: createOperationSchemaManifestRefs({
+    inputKey: 'schema.deadline.change.input',
+    inputSchema: deadlineChangeInputSchema,
+    resultKey: 'schema.deadline.change.operator-result',
+    resultSchema: deadlineChangeOperationResultSchema
   })
 });
 
@@ -310,6 +298,6 @@ export type DeadlineMutationPlanningInput = z.input<typeof deadlineMutationPlann
 export type DeadlineMutationPlanDto = z.infer<typeof deadlineMutationPlanSchema>;
 export type DeadlineSafeDiff = z.infer<typeof deadlineSafeDiffSchema>;
 export type DeadlineMutationResult = z.infer<typeof deadlineMutationResultSchema>;
-export type DeadlineChangeDraftInput = z.infer<typeof deadlineChangeDraftInputSchema>;
-export type DeadlineDraftData = z.infer<typeof deadlineDraftDataSchema>;
+export type DeadlineChangeInput = z.infer<typeof deadlineChangeInputSchema>;
+export type DeadlineChangeData = z.infer<typeof deadlineChangeDataSchema>;
 export type DeadlineChangedFactPayload = z.infer<typeof deadlineChangedFactPayloadSchema>;

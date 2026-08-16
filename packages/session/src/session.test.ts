@@ -1,19 +1,19 @@
 import { describe, expect, test } from 'bun:test';
-import type { SessionRestorePlanDto } from '@jooevents/contracts';
 import { createProgramVocabularyState } from '@jooevents/program';
 import { parseSchedulePlacementScope } from '@jooevents/schedule';
 import {
   applySessionMutationPlan,
+  applyNewSessionRemovalPlan,
   applySessionRestorePlan,
   createEmptySessionCatalog,
   createSchedulePlaceableSessionPort,
-  createSessionChangesetBundle,
   createSessionFormTargetPort,
   findSession,
   planSessionCompensation,
   planSessionGraduationFrom,
   planSessionGraduationReversalFrom,
   planSessionMutation,
+  planNewSessionRemoval,
   projectSessionGraduationDiff,
   sessionGraduationAggregateRefs,
   sessionGraduationFactPayload,
@@ -257,121 +257,33 @@ describe('canonical Session foundation', () => {
       .toThrow('stale_catalog');
   });
 
+  test('removes only the exact unchanged version 1 Session and refuses replay', () => {
+    const empty = createEmptySessionCatalog(scope);
+    const created = applySessionMutationPlan({ catalog: empty, vocabulary: vocabulary(), plan: createPlan(empty) });
+    const current = findSession(created.catalog, sessionId)!;
+    const removal = planNewSessionRemoval({ current, catalog: created.catalog, actorUserId: userId, occurredAt: later });
+    expect(removal.action).toBe('remove_new_session');
+    const removed = applyNewSessionRemovalPlan({ catalog: created.catalog, plan: removal });
+    expect(removed.result).toMatchObject({ action: 'remove_new_session', session: null });
+    expect(removed.catalog.sessions).toEqual([]);
+    expect(() => applyNewSessionRemovalPlan({ catalog: removed.catalog, plan: removal })).toThrow('stale_catalog');
+
+    const changedPlan = planSessionMutation({ catalog: created.catalog, vocabulary: vocabulary(), planningInput: {
+      action: 'transition', scope, sessionId, actorUserId: userId, occurredAt: later,
+      expectedCatalogVersion: created.catalog.version, expectedCatalogDigestSha256: created.catalog.digestSha256,
+      expectedSessionVersion: current.version, expectedSessionDigestSha256: current.digestSha256, to: 'collecting'
+    } });
+    const changed = applySessionMutationPlan({ catalog: created.catalog, vocabulary: vocabulary(), plan: changedPlan });
+    expect(() => planNewSessionRemoval({ current: findSession(changed.catalog, sessionId)!, catalog: changed.catalog,
+      actorUserId: userId, occurredAt: later })).toThrow('stale_session');
+  });
+
   test('never treats a Schedule occurrence row as Session identity', () => {
     const source = { readSessionCatalog: () => createEmptySessionCatalog(scope) };
     const occurrence = { sessionId, roomId: trackId, startAt: now, endAt: later };
     expect(occurrence.sessionId).toBe(sessionId);
     expect(createSchedulePlaceableSessionPort(source).readPlaceableSession(scheduleScope, sessionId as never))
       .toBeUndefined();
-  });
-
-  test('registers the Session mutation definition in the generic changeset registry', () => {
-    const bundle = createSessionChangesetBundle();
-    expect(bundle.registry.get('session.mutate', 1)).toBe(bundle.definition);
-  });
-
-  test('blocks deriving the compensating delete of a create while the Session is placed', () => {
-    const bundle = createSessionChangesetBundle();
-    const empty = createEmptySessionCatalog(scope);
-    const plan = createPlan(empty, 'programmed');
-    const catalog = applySessionMutationPlan({ catalog: empty, vocabulary: vocabulary(), plan }).catalog;
-    let placements = 1;
-    const port = {
-      readSessionCatalog: () => catalog,
-      readSessionVocabulary: () => vocabulary(),
-      countSessionSchedulePlacements: (_: typeof scope, id: string) =>
-        id === sessionId ? placements : 0
-    };
-    const snapshot = { getPort: <Port>() => port as unknown as Port };
-
-    expect(bundle.definition.deriveCompensation(plan, snapshot))
-      .toEqual({ kind: 'blocked', reasonKey: 'session.placed' });
-
-    placements = 0;
-    expect(bundle.definition.deriveCompensation(plan, snapshot)).toMatchObject({
-      kind: 'exact',
-      authorInput: { action: 'restore', expectedCurrent: { id: sessionId }, restore: null }
-    });
-  });
-
-  test('keeps prior-image compensation ungated while the Session is placed', () => {
-    const bundle = createSessionChangesetBundle();
-    const empty = createEmptySessionCatalog(scope);
-    const created = applySessionMutationPlan({
-      catalog: empty, vocabulary: vocabulary(), plan: createPlan(empty, 'collecting')
-    }).catalog;
-    const collecting = findSession(created, sessionId)!;
-    const transition = planSessionMutation({
-      catalog: created,
-      vocabulary: vocabulary(),
-      planningInput: {
-        action: 'transition', scope, sessionId, actorUserId: userId, occurredAt: later,
-        expectedCatalogVersion: created.version,
-        expectedCatalogDigestSha256: created.digestSha256,
-        expectedSessionVersion: collecting.version,
-        expectedSessionDigestSha256: collecting.digestSha256,
-        to: 'programmed'
-      }
-    });
-    const catalog = applySessionMutationPlan({
-      catalog: created, vocabulary: vocabulary(), plan: transition
-    }).catalog;
-    const port = {
-      readSessionCatalog: () => catalog,
-      readSessionVocabulary: () => vocabulary(),
-      countSessionSchedulePlacements: () => 1
-    };
-    const derived = bundle.definition.deriveCompensation(transition, {
-      getPort: <Port>() => port as unknown as Port
-    });
-    expect(derived).toMatchObject({
-      kind: 'exact',
-      authorInput: { action: 'restore', restore: { lifecycle: 'collecting' } }
-    });
-    const restorePlan = (derived as { readonly authorInput: SessionRestorePlanDto }).authorInput;
-    expect(bundle.definition.validateWithin(restorePlan, {
-      getPort: <Port>() => port as unknown as Port
-    })).toEqual({ kind: 'ready', validated: restorePlan });
-  });
-
-  test('refuses a stored deleting restore at replan and commit validate after a placement lands', () => {
-    const bundle = createSessionChangesetBundle();
-    const empty = createEmptySessionCatalog(scope);
-    const plan = createPlan(empty, 'programmed');
-    const catalog = applySessionMutationPlan({ catalog: empty, vocabulary: vocabulary(), plan }).catalog;
-    let placements = 0;
-    const port = {
-      readSessionCatalog: () => catalog,
-      readSessionVocabulary: () => vocabulary(),
-      countSessionSchedulePlacements: (_: typeof scope, id: string) =>
-        id === sessionId ? placements : 0
-    };
-    const snapshot = { getPort: <Port>() => port as unknown as Port };
-    const validation = { getPort: <Port>() => port as unknown as Port };
-
-    const derived = bundle.definition.deriveCompensation(plan, snapshot);
-    expect(derived).toMatchObject({ kind: 'exact' });
-    const restorePlan = (derived as { readonly authorInput: SessionRestorePlanDto }).authorInput;
-    expect(bundle.definition.plan(restorePlan, snapshot)).toMatchObject({ plan: restorePlan });
-    expect(bundle.definition.validateWithin(restorePlan, validation))
-      .toEqual({ kind: 'ready', validated: restorePlan });
-
-    // The placement lands after the compensation was derived and proposed. It
-    // moves neither the Session digest nor the catalog digest, so only the
-    // reference gate can refuse the delete.
-    placements = 1;
-    expect(() => bundle.definition.plan(restorePlan, snapshot)).toThrow('session_placed');
-    expect(bundle.definition.validateWithin(restorePlan, validation)).toEqual({
-      kind: 'outcome',
-      outcome: {
-        class: 'stale_revision',
-        kind: 'session.changed',
-        retryable: false,
-        subjects: [{ type: 'session', id: sessionId }],
-        detail: { code: 'session_placed', action: 'restore', sessionId },
-        detailSchemaVersion: 3
-      }
-    });
   });
 
   test('seeds create-time participants with person-keyed dedup and canonical positions', () => {
@@ -585,69 +497,6 @@ describe('canonical Session foundation', () => {
         publiclyVisible: true
       }
     })).toThrow('stale_session');
-
-    const bundle = createSessionChangesetBundle();
-    const port = {
-      readSessionCatalog: () => hidden,
-      readSessionVocabulary: () => vocabulary({ setVersion: 2 }),
-      countSessionSchedulePlacements: () => 1
-    };
-    const snapshot = { getPort: <Port>() => port as unknown as Port };
-    const derived = bundle.definition.deriveCompensation(hidePlan, snapshot);
-    expect(derived).toMatchObject({ kind: 'exact', authorInput: { action: 'restore' } });
-    const restored = applySessionRestorePlan({
-      catalog: hidden,
-      plan: (derived as { readonly authorInput: SessionRestorePlanDto }).authorInput
-    });
-    const visibleAgain = findSession(restored.catalog, sessionId)!;
-    expect(visibleAgain.roster.participants).toEqual(programmed.roster.participants);
-    expect(visibleAgain.roster.version).toBe(programmed.roster.version);
-  });
-
-  test('roster visibility plans fence only the catalog guard, never the vocabulary set', () => {
-    const empty = createEmptySessionCatalog(scope);
-    const source = { kind: 'submission', id: sessionId, version: 1 };
-    const created = applySessionMutationPlan({
-      catalog: empty,
-      vocabulary: vocabulary(),
-      plan: planSessionMutation({
-        catalog: empty,
-        vocabulary: vocabulary(),
-        planningInput: {
-          action: 'create', scope, sessionId, actorUserId: userId, occurredAt: now,
-          expectedCatalogVersion: empty.version,
-          expectedCatalogDigestSha256: empty.digestSha256,
-          title: 'Guarded Panel', plannedDurationMinutes: 60,
-          lifecycle: 'programmed', formatId, trackId,
-          participants: [{ personId: personA, role: 'speaker', publiclyVisible: true, source }]
-        }
-      })
-    }).catalog;
-    const programmed = findSession(created, sessionId)!;
-    const bundle = createSessionChangesetBundle();
-    const port = {
-      readSessionCatalog: () => created,
-      readSessionVocabulary: () => vocabulary(),
-      countSessionSchedulePlacements: () => 0
-    };
-    const planned = bundle.definition.plan({
-      action: 'roster_visibility', scope, sessionId, actorUserId: userId, occurredAt: later,
-      expectedCatalogVersion: created.version,
-      expectedCatalogDigestSha256: created.digestSha256,
-      expectedSessionVersion: programmed.version,
-      expectedSessionDigestSha256: programmed.digestSha256,
-      personId: personA,
-      publiclyVisible: false
-    }, { getPort: <Port>() => port as unknown as Port });
-    if (planned instanceof Promise) throw new Error('expected a synchronous plan');
-    expect(planned.guardRefs).toEqual([{
-      id: `session_catalog:${scope.eventId}`,
-      version: created.version,
-      digest: created.digestSha256
-    }]);
-    expect(planned.aggregateRefs).toEqual([
-      { id: `session:${sessionId}`, version: programmed.version }
-    ]);
   });
 
   test('graduation collaboration plans spawn and attach, pins the applied head, and reverses', () => {

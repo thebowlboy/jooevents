@@ -5,8 +5,7 @@ import {
 } from '@jooevents/contracts';
 import {
 	REVIEW_OPERATION_SCHEMA_REFS,
-	reviewChangeDraftDataSchema,
-	reviewChangeDraftOperationResultSchema,
+	reviewDirectOperationResultSchema,
 	reviewDraftSaveInputSchema,
 	reviewDraftSaveOperationResultSchema,
 	reviewEvaluationChangeDraftInputSchema,
@@ -16,13 +15,13 @@ import {
 	reviewSnapshotReadResultSchema,
 	reviewStepBackChangeDraftInputSchema,
 	type ReviewDraftSaveResult,
+	type ReviewMutationResult,
 	type ReviewRoundSetupProjection,
 	type ReviewSnapshot
 } from '@jooevents/contracts/reviews';
 import type { z } from 'zod';
 import { requestJson, type ApiResult, type SafeApiError } from '../client';
 import {
-	mapReviewChangeDraft,
 	mapReviewDraftSave,
 	mapReviewRoundSetup,
 	mapReviewSnapshot
@@ -32,15 +31,14 @@ import type {
 	ReviewCoreOperation,
 	ReviewCorePort,
 	ReviewCoreReadResult,
-	ReviewEvaluationChangeDraftRequest,
+	ReviewEvaluationChangeRequest,
 	ReviewEvaluationDraftSaveRequest,
 	ReviewIdempotencyKey,
-	ReviewRoundChangeDraftRequest,
+	ReviewRoundChangeRequest,
 	ReviewSnapshotRequest,
-	ReviewStepBackDraftRequest
+	ReviewStepBackRequest
 } from '../review-core-port';
 import type {
-	ReviewChangeDraftView,
 	ReviewDraftSaveView,
 	ReviewRoundSetupView,
 	ReviewSnapshotView
@@ -50,8 +48,6 @@ import {
 	type ExpectedOperatorHttpOperation,
 	type OperatorHttpBindingResolution
 } from './operator-http-binding';
-
-type ReviewChangeDraftData = z.infer<typeof reviewChangeDraftDataSchema>;
 
 /**
  * Frozen browser expectations mirrored from the Review operation package.
@@ -76,32 +72,32 @@ export const REVIEW_LIVE_OPERATIONS = Object.freeze({
 		idempotencyRequired: false,
 		path: '/api/events/current/review/round-setup'
 	} as const),
-	round_change_draft: Object.freeze({
-		name: 'review.round.change.draft',
+	round_change: Object.freeze({
+		name: 'review.round.change',
 		version: 1,
-		effect: 'draft',
+		effect: 'commit',
 		method: 'POST',
 		input: 'body',
 		idempotencyRequired: true,
-		path: '/api/events/current/review/round-drafts'
+		path: '/api/events/current/review/rounds'
 	} as const),
-	step_back_draft: Object.freeze({
-		name: 'review.assignment.step-back.draft',
+	step_back: Object.freeze({
+		name: 'review.assignment.step_back',
 		version: 1,
-		effect: 'draft',
+		effect: 'commit',
 		method: 'POST',
 		input: 'body',
 		idempotencyRequired: true,
-		path: '/api/events/current/review/step-back-drafts'
+		path: '/api/events/current/review/assignments/step-back'
 	} as const),
-	evaluation_change_draft: Object.freeze({
-		name: 'review.evaluation.change.draft',
+	evaluation_change: Object.freeze({
+		name: 'review.evaluation.change',
 		version: 1,
-		effect: 'draft',
+		effect: 'commit',
 		method: 'POST',
 		input: 'body',
 		idempotencyRequired: true,
-		path: '/api/events/current/review/evaluation-drafts'
+		path: '/api/events/current/review/evaluations'
 	} as const),
 	evaluation_draft_save: Object.freeze({
 		name: 'review.evaluation.draft.save',
@@ -126,17 +122,17 @@ const EXPECTED_OPERATIONS = Object.freeze({
 		...REVIEW_LIVE_OPERATIONS.round_setup,
 		...REVIEW_OPERATION_SCHEMA_REFS.roundSetupRead
 	}),
-	round_change_draft: Object.freeze({
-		...REVIEW_LIVE_OPERATIONS.round_change_draft,
-		...REVIEW_OPERATION_SCHEMA_REFS.roundChangeDraft
+	round_change: Object.freeze({
+		...REVIEW_LIVE_OPERATIONS.round_change,
+		...REVIEW_OPERATION_SCHEMA_REFS.roundChange
 	}),
-	step_back_draft: Object.freeze({
-		...REVIEW_LIVE_OPERATIONS.step_back_draft,
-		...REVIEW_OPERATION_SCHEMA_REFS.stepBackDraft
+	step_back: Object.freeze({
+		...REVIEW_LIVE_OPERATIONS.step_back,
+		...REVIEW_OPERATION_SCHEMA_REFS.stepBack
 	}),
-	evaluation_change_draft: Object.freeze({
-		...REVIEW_LIVE_OPERATIONS.evaluation_change_draft,
-		...REVIEW_OPERATION_SCHEMA_REFS.evaluationChangeDraft
+	evaluation_change: Object.freeze({
+		...REVIEW_LIVE_OPERATIONS.evaluation_change,
+		...REVIEW_OPERATION_SCHEMA_REFS.evaluationChange
 	}),
 	evaluation_draft_save: Object.freeze({
 		...REVIEW_LIVE_OPERATIONS.evaluation_draft_save,
@@ -198,12 +194,14 @@ function resolveExactBinding(
 }
 
 function resolveBindings(manifest: unknown): Bindings {
-	return Object.freeze(Object.fromEntries(
-		Object.entries(EXPECTED_OPERATIONS).map(([key, expected]) => [
-			key,
-			resolveExactBinding(manifest, expected)
-		])
-	) as unknown as Bindings);
+	return Object.freeze({
+		snapshot: resolveExactBinding(manifest, EXPECTED_OPERATIONS.snapshot),
+		round_setup: resolveExactBinding(manifest, EXPECTED_OPERATIONS.round_setup),
+		round_change: resolveExactBinding(manifest, EXPECTED_OPERATIONS.round_change),
+		step_back: resolveExactBinding(manifest, EXPECTED_OPERATIONS.step_back),
+		evaluation_change: resolveExactBinding(manifest, EXPECTED_OPERATIONS.evaluation_change),
+		evaluation_draft_save: resolveExactBinding(manifest, EXPECTED_OPERATIONS.evaluation_draft_save)
+	});
 }
 
 function unavailable(
@@ -304,12 +302,13 @@ export function createReviewLivePort(input: {
 
 	async function effect<Input, Data, View>(options: {
 		readonly operation: Extract<ReviewCoreOperation,
-			'round_change_draft' | 'step_back_draft' | 'evaluation_change_draft' | 'evaluation_draft_save'>;
+			'round_change' | 'step_back' | 'evaluation_change' | 'evaluation_draft_save'>;
 		readonly rawInput: Input;
 		readonly inputSchema: z.ZodType;
 		readonly idempotencyKey: ReviewIdempotencyKey;
 		readonly resultSchema: z.ZodType<CanonicalEffectResult<Data>>;
 		readonly map: (data: Data) => View;
+		readonly expectedAction?: string;
 		readonly signal?: AbortSignal;
 	}): Promise<ReviewCoreEffectResult<View>> {
 		const parsedInput = options.inputSchema.safeParse(options.rawInput);
@@ -330,6 +329,11 @@ export function createReviewLivePort(input: {
 			schema: options.resultSchema
 		});
 		if (response.kind === 'transport_error') return response;
+		if (response.result.kind === 'success' && options.expectedAction !== undefined) {
+			const data = response.result.data;
+			if (typeof data !== 'object' || data === null || !('action' in data)
+				|| data.action !== options.expectedAction) return invalidContract();
+		}
 		return mapEffectResult({
 			result: response.result,
 			operation: REVIEW_LIVE_OPERATIONS[options.operation],
@@ -381,54 +385,57 @@ export function createReviewLivePort(input: {
 			return mapReadResult(response.result, mapReviewRoundSetup);
 		},
 
-		draftRoundChange(
-			rawInput: ReviewRoundChangeDraftRequest,
+		changeRound(
+			rawInput: ReviewRoundChangeRequest,
 			idempotencyKey: ReviewIdempotencyKey,
 			options: { readonly signal?: AbortSignal } = {}
-		): Promise<ReviewCoreEffectResult<ReviewChangeDraftView>> {
-			return effect<ReviewRoundChangeDraftRequest, ReviewChangeDraftData, ReviewChangeDraftView>({
-				operation: 'round_change_draft',
+		): Promise<ReviewCoreEffectResult<ReviewMutationResult>> {
+			return effect<ReviewRoundChangeRequest, ReviewMutationResult, ReviewMutationResult>({
+				operation: 'round_change',
 				rawInput,
 				inputSchema: reviewRoundChangeDraftInputSchema,
 				idempotencyKey,
-				resultSchema: reviewChangeDraftOperationResultSchema,
-				map: mapReviewChangeDraft,
+				resultSchema: reviewDirectOperationResultSchema,
+				expectedAction: rawInput.action,
+				map: (data) => data,
 				...(options.signal ? { signal: options.signal } : {})
 			});
 		},
 
-		draftStepBack(
-			rawInput: ReviewStepBackDraftRequest,
+		stepBack(
+			rawInput: ReviewStepBackRequest,
 			idempotencyKey: ReviewIdempotencyKey,
 			options: { readonly signal?: AbortSignal } = {}
-		): Promise<ReviewCoreEffectResult<ReviewChangeDraftView>> {
-			return effect<ReviewStepBackDraftRequest, ReviewChangeDraftData, ReviewChangeDraftView>({
-				operation: 'step_back_draft',
+		): Promise<ReviewCoreEffectResult<ReviewMutationResult>> {
+			return effect<ReviewStepBackRequest, ReviewMutationResult, ReviewMutationResult>({
+				operation: 'step_back',
 				rawInput,
 				inputSchema: reviewStepBackChangeDraftInputSchema,
 				idempotencyKey,
-				resultSchema: reviewChangeDraftOperationResultSchema,
-				map: mapReviewChangeDraft,
+				resultSchema: reviewDirectOperationResultSchema,
+				expectedAction: rawInput.action,
+				map: (data) => data,
 				...(options.signal ? { signal: options.signal } : {})
 			});
 		},
 
-		draftEvaluationChange(
-			rawInput: ReviewEvaluationChangeDraftRequest,
+		changeEvaluation(
+			rawInput: ReviewEvaluationChangeRequest,
 			idempotencyKey: ReviewIdempotencyKey,
 			options: { readonly signal?: AbortSignal } = {}
-		): Promise<ReviewCoreEffectResult<ReviewChangeDraftView>> {
+		): Promise<ReviewCoreEffectResult<ReviewMutationResult>> {
 			return effect<
-				ReviewEvaluationChangeDraftRequest,
-				ReviewChangeDraftData,
-				ReviewChangeDraftView
+				ReviewEvaluationChangeRequest,
+				ReviewMutationResult,
+				ReviewMutationResult
 			>({
-				operation: 'evaluation_change_draft',
+				operation: 'evaluation_change',
 				rawInput,
 				inputSchema: reviewEvaluationChangeDraftInputSchema,
 				idempotencyKey,
-				resultSchema: reviewChangeDraftOperationResultSchema,
-				map: mapReviewChangeDraft,
+				resultSchema: reviewDirectOperationResultSchema,
+				expectedAction: rawInput.action,
+				map: (data) => data,
 				...(options.signal ? { signal: options.signal } : {})
 			});
 		},

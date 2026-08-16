@@ -491,36 +491,21 @@ export const fieldRegistryChangeResultSchema = z.strictObject({
   position: z.number().int().nonnegative().safe().nullable()
 });
 
-export const fieldRegistryDraftDataSchema = z.strictObject({
-  schemaVersion: z.literal(1),
+export const fieldRegistryDirectDataSchema = z.strictObject({
   action: fieldRegistryDraftActionSchema,
-  changesetId: fieldRegistryIdSchema,
-  headVersion: fieldRegistryVersionSchema,
-  status: z.literal('draft'),
-  revision: z.strictObject({
-    id: fieldRegistryIdSchema,
-    number: fieldRegistryVersionSchema,
-    digestSha256: fieldRegistryDigestSchema
-  }),
-  riskTier: z.enum(['low', 'normal', 'consequential']),
-  approvalPolicy: z.strictObject({
-    reference: versionedDefinitionRefSchema,
-    definitionDigestSha256: fieldRegistryDigestSchema,
-    requirement: z.enum(['none', 'distinct_current_human'])
-  }),
+  mutation: fieldRegistryChangeResultSchema,
   safeDiff: fieldRegistrySafeDiffSchema
 }).superRefine((data, context) => {
-  if (data.action !== data.safeDiff.action) {
-    context.addIssue({ code: 'custom', path: ['safeDiff', 'action'], message: 'Action mismatch.' });
+  if (data.action !== data.mutation.action || data.action !== data.safeDiff.action) {
+    context.addIssue({ code: 'custom', message: 'Field Registry direct action mismatch.' });
   }
 });
-
-export const fieldRegistryDraftCanonicalResultSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('success'), data: fieldRegistryDraftDataSchema }),
+export const fieldRegistryDirectCanonicalResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success'), data: fieldRegistryDirectDataSchema }),
   z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
 ]);
-export const fieldRegistryDraftOperationResultSchema =
-  createEffectfulOperationResultSchema(fieldRegistryDraftDataSchema);
+export const fieldRegistryDirectOperationResultSchema =
+  createEffectfulOperationResultSchema(fieldRegistryDirectDataSchema);
 
 const draftRequestSchemas = Object.freeze({
   add: fieldRegistryAddDraftRequestSchema,
@@ -537,14 +522,14 @@ export const FIELD_REGISTRY_OPERATION_SCHEMA_REFS = Object.freeze({
     resultKey: 'schema.field_registry.snapshot-read.operator-result',
     resultSchema: fieldRegistrySnapshotReadResultSchema
   }),
-  drafts: Object.freeze(Object.fromEntries(
+  direct: Object.freeze(Object.fromEntries(
     Object.entries(draftRequestSchemas).map(([action, inputSchema]) => [
       action,
       createOperationSchemaManifestRefs({
-        inputKey: `schema.field_registry.${action}-draft.input`,
+        inputKey: `schema.field_registry.${action}.input`,
         inputSchema,
-        resultKey: 'schema.field_registry.changeset-draft.operator-result',
-        resultSchema: fieldRegistryDraftOperationResultSchema
+        resultKey: 'schema.field_registry.direct.operator-result',
+        resultSchema: fieldRegistryDirectOperationResultSchema
       })
     ])
   ) as {
@@ -579,4 +564,4 @@ export type FieldRegistryDraftAction = z.infer<typeof fieldRegistryDraftActionSc
 export type FieldRegistryDraftRequest = z.infer<typeof fieldRegistryDraftRequestSchema>;
 export type FieldRegistrySafeDiff = z.infer<typeof fieldRegistrySafeDiffSchema>;
 export type FieldRegistryChangeResult = z.infer<typeof fieldRegistryChangeResultSchema>;
-export type FieldRegistryDraftData = z.infer<typeof fieldRegistryDraftDataSchema>;
+export type FieldRegistryDirectData = z.infer<typeof fieldRegistryDirectDataSchema>;

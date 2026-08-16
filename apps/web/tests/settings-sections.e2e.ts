@@ -8,8 +8,9 @@ const sections = [
 	{ label: 'About', href: '/app/settings/about', region: 'About JooEvents' }
 ];
 
-const settingsNav = (page: Page) => page.getByRole('navigation', { name: 'Settings' });
-const disclosure = (page: Page) => settingsNav(page).getByRole('button');
+const settingsNav = (page: Page) =>
+	page.getByRole('navigation', { name: 'Workspace controls', exact: true });
+const sectionTabs = (page: Page) => page.getByRole('navigation', { name: 'Settings sections' });
 
 /** The sidebar is static chrome at desktop width and a drawer on touch. */
 async function reachNav(page: Page, projectName: string) {
@@ -34,11 +35,11 @@ test('the group address opens on the first section', async ({ page }) => {
 	await expect(page.getByRole('region', { name: 'Event identity' })).toBeVisible({
 		timeout: 15000
 	});
-	// The area title is the area, not the section: the rail says which section.
+	// The area title is the area, not the section: the tabs say which section.
 	await expect(page.getByRole('banner').getByRole('heading', { level: 1, name: 'Settings' })).toBeVisible();
 });
 
-test('every section is its own address, deep-linkable and marked in the rail', async ({
+test('every section is its own address, named in the surface tabs and marked once', async ({
 	page
 }, testInfo) => {
 	for (const section of sections) {
@@ -46,94 +47,61 @@ test('every section is its own address, deep-linkable and marked in the rail', a
 		await expect(page.getByRole('region', { name: section.region })).toBeVisible({
 			timeout: 15000
 		});
-		await reachNav(page, testInfo.project.name);
 
-		// Being inside the group is what opens it; the section holds the one
-		// current-page mark and the group above it is only the location.
-		await expect(disclosure(page)).toHaveAttribute('aria-expanded', 'true');
-		const link = settingsNav(page).getByRole('link', { name: section.label, exact: true });
-		await expect(link).toHaveAttribute('aria-current', 'page');
-		await expect(settingsNav(page).getByRole('link', { name: 'Settings', exact: true })).toHaveAttribute(
-			'aria-current',
-			'location'
-		);
-		await expect(settingsNav(page).locator('a[aria-current="page"]')).toHaveCount(1);
+		// The surface's own head carries every section; the one being read holds
+		// the one current-page mark among them.
+		const tabs = sectionTabs(page);
+		for (const other of sections) {
+			await expect(tabs.getByRole('link', { name: other.label, exact: true })).toBeVisible();
+		}
+		const tab = tabs.getByRole('link', { name: section.label, exact: true });
+		await expect(tab).toHaveAttribute('aria-current', 'page');
+		await expect(tabs.locator('a[aria-current="page"]')).toHaveCount(1);
+
+		// The controls rail names Settings once, with no second Settings menu.
+		// Approvals stays off the rail until the external agent lane activates
+		// (navigation.ts gates it); its row returns here with that activation.
+		await reachNav(page, testInfo.project.name);
+		const railRow = settingsNav(page).getByRole('link', { name: 'Settings', exact: true });
+		await expect(railRow).toHaveAttribute('aria-current', 'page');
+		await expect(settingsNav(page).getByRole('link')).toHaveCount(1);
 		if (testInfo.project.name === 'mobile') await page.keyboard.press('Escape');
 	}
 });
 
-test('moving between sections keeps one column and lands on the section chosen', async ({
+test('moving between sections is the surface tabs, and lands on the section chosen', async ({
 	page
-}, testInfo) => {
+}) => {
 	await page.goto('/app/settings/event');
 	await expect(page.getByRole('region', { name: 'Event identity' })).toBeVisible({
 		timeout: 15000
 	});
-	await reachNav(page, testInfo.project.name);
 
-	await settingsNav(page).getByRole('link', { name: 'Program', exact: true }).click();
+	await sectionTabs(page).getByRole('link', { name: 'Program', exact: true }).click();
 	await expect(page).toHaveURL(/\/app\/settings\/program$/);
 	await expect(page.getByRole('region', { name: 'Program basics' })).toBeVisible({
 		timeout: 15000
 	});
-	// The drawer is modal on touch and closes on arrival; at desktop the rail
-	// stays exactly where it was, one column, with the new section marked.
-	if (testInfo.project.name === 'mobile') {
-		await expect(openDrawer(page)).toHaveCount(0);
-		await reachNav(page, testInfo.project.name);
-	}
 	await expect(
-		settingsNav(page).getByRole('link', { name: 'Program', exact: true })
+		sectionTabs(page).getByRole('link', { name: 'Program', exact: true })
 	).toHaveAttribute('aria-current', 'page');
-	await expect(settingsNav(page)).toHaveCount(1);
+	// One section menu on the page — the tabs — not a second copy in the rail.
+	await expect(sectionTabs(page)).toHaveCount(1);
 });
 
-test('the group closes and opens from the keyboard, and moves between its sections', async ({
-	page
-}, testInfo) => {
-	test.skip(testInfo.project.name !== 'desktop', 'hardware-keyboard path');
-
-	// Outside Settings the group is closed and its sections are out of reach.
-	await page.goto('/app/speakers');
-	const toggle = disclosure(page);
-	await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-	await expect(settingsNav(page).getByRole('link', { name: 'Program', exact: true })).toHaveCount(0);
-
-	await toggle.focus();
-	await page.keyboard.press('Enter');
-	await expect(toggle).toHaveAttribute('aria-expanded', 'true');
-
-	await page.keyboard.press('ArrowDown');
-	await expect(settingsNav(page).getByRole('link', { name: 'Event', exact: true })).toBeFocused();
-	await page.keyboard.press('ArrowDown');
-	await expect(settingsNav(page).getByRole('link', { name: 'Program', exact: true })).toBeFocused();
-	await page.keyboard.press('ArrowUp');
-	await expect(settingsNav(page).getByRole('link', { name: 'Event', exact: true })).toBeFocused();
-
-	// Escape closes the group and hands focus back to the control that owns it.
-	await page.keyboard.press('Escape');
-	await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-	await expect(toggle).toBeFocused();
-
-	await page.keyboard.press(' ');
-	await expect(toggle).toHaveAttribute('aria-expanded', 'true');
-	await page.keyboard.press('End');
-	await expect(settingsNav(page).getByRole('link', { name: 'About', exact: true })).toBeFocused();
-	await page.keyboard.press('Enter');
-	await expect(page).toHaveURL(/\/app\/settings\/about$/);
-	await expect(page.getByRole('region', { name: 'About JooEvents' })).toBeVisible();
-});
-
-test('the touch drawer reaches a section and closes behind it', async ({ page }, testInfo) => {
+test('the touch drawer reaches Settings and closes behind it', async ({ page }, testInfo) => {
 	test.skip(testInfo.project.name !== 'mobile', 'drawer modality');
 
 	await page.goto('/app/speakers');
 	await reachNav(page, testInfo.project.name);
-	await disclosure(page).click();
-	await settingsNav(page).getByRole('link', { name: 'Team', exact: true }).click();
+	await settingsNav(page).getByRole('link', { name: 'Settings', exact: true }).click();
 
-	await expect(page).toHaveURL(/\/app\/settings\/team$/);
+	await expect(page).toHaveURL(/\/app\/settings\/event$/);
 	await expect(openDrawer(page)).toHaveCount(0);
+	// The sections are on the surface itself, so a phone reaches Team without
+	// reopening the drawer.
+	await sectionTabs(page).getByRole('link', { name: 'Team', exact: true }).click();
+	await expect(page).toHaveURL(/\/app\/settings\/team$/);
 	await expect(page.getByRole('region', { name: 'Team' })).toBeVisible({ timeout: 15000 });
 	expect(await documentOverflow(page)).toBeLessThanOrEqual(1);
 });

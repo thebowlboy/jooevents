@@ -408,7 +408,7 @@ describe('reviewers namespace', () => {
 		expect(collecting.find((row) => row.ref.id === 'ses-12')?.reviewers).toBe(0);
 	});
 
-	test('setScope refuses refs to nothing, replaces the set, and restoreScope puts the prior set back', async () => {
+	test('setScope refuses refs to nothing and replaces the set without browser-state restoration', async () => {
 		const refused = await api.reviewers.setScope('mem-2', [{ kind: 'track', id: 'trk-missing' }]);
 		expect(refused).toEqual({ ok: false, reason: 'Scope names a track that does not exist' });
 
@@ -417,10 +417,8 @@ describe('reviewers namespace', () => {
 		let roster = await api.reviewers.list();
 		expect(roster.generalists).toBe(1);
 
-		await api.reviewers.restoreScope('mem-2', []);
-		roster = await api.reviewers.list();
-		expect(roster.reviewers.find((reviewer) => reviewer.id === 'mem-2')?.scope).toEqual([]);
-		expect(roster.generalists).toBe(2);
+		expect(roster.reviewers.find((reviewer) => reviewer.id === 'mem-2')?.scope)
+			.toEqual([{ kind: 'session', id: 'ses-11' }]);
 	});
 
 	test('invite reports per line and admits reviewers as members — one system, no parallel roster', async () => {
@@ -488,7 +486,7 @@ describe('reviewers namespace', () => {
 		const without = await api.reviewers.list();
 		expect(without.reviewers.some((reviewer) => reviewer.id === 'mem-8')).toBe(false);
 
-		await api.reviewers.restore(marc, index);
+		await api.reviewers.restore('mem-8');
 		const restored = await api.reviewers.list();
 		expect(restored.reviewers[index]?.id).toBe('mem-8');
 		// The load came back from the plans, not from the carried record.

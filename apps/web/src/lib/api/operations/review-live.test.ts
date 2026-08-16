@@ -1,393 +1,117 @@
 import { describe, expect, test } from 'bun:test';
-import {
-	safeOperationManifestSchema,
-	type OperationEffect,
-	type SafeOperationManifest,
-	type SafeOperationManifestEntry
-} from '@jooevents/contracts';
-import {
-	REVIEW_OPERATION_SCHEMA_REFS,
-	reviewDraftSaveOperationResultSchema,
-	reviewRoundSetupReadResultSchema,
-	reviewSnapshotReadResultSchema
-} from '@jooevents/contracts/reviews';
-import type { ExpectedOperatorHttpOperation } from './operator-http-binding';
-import {
-	createReviewLivePort,
-	REVIEW_LIVE_OPERATIONS,
-	type ReviewRequestInput,
-	type ReviewRequester
-} from './review-live';
+import { safeOperationManifestSchema, type OperationEffect, type SafeOperationManifestEntry } from '@jooevents/contracts';
+import { REVIEW_OPERATION_SCHEMA_REFS, reviewDirectOperationResultSchema,
+	reviewDraftSaveOperationResultSchema } from '@jooevents/contracts/reviews';
+import { createReviewLivePort, REVIEW_LIVE_OPERATIONS, type ReviewRequester } from './review-live';
 
-const id = (value: number) =>
-	`00000000-0000-4000-8000-${value.toString(16).padStart(12, '0')}`;
-const digest = (seed: string) => seed.repeat(64);
-const correlationId = id(900);
-
-type BindingKey = keyof typeof REVIEW_LIVE_OPERATIONS;
-
-const schemaRefs = Object.freeze({
-	snapshot: REVIEW_OPERATION_SCHEMA_REFS.snapshotRead,
-	round_setup: REVIEW_OPERATION_SCHEMA_REFS.roundSetupRead,
-	round_change_draft: REVIEW_OPERATION_SCHEMA_REFS.roundChangeDraft,
-	step_back_draft: REVIEW_OPERATION_SCHEMA_REFS.stepBackDraft,
-	evaluation_change_draft: REVIEW_OPERATION_SCHEMA_REFS.evaluationChangeDraft,
-	evaluation_draft_save: REVIEW_OPERATION_SCHEMA_REFS.draftSave
-});
-
-function expected(key: BindingKey): ExpectedOperatorHttpOperation {
-	return { ...REVIEW_LIVE_OPERATIONS[key], ...schemaRefs[key] };
-}
-
-function manifestEntry(
-	key: BindingKey,
-	overrides: Partial<SafeOperationManifestEntry> = {}
-): SafeOperationManifestEntry {
-	const operation = expected(key);
-	const effect = operation.effect as OperationEffect;
-	return {
-		name: operation.name,
-		version: operation.version,
-		lifecycle: { status: 'active' },
-		summary: `Execute ${operation.name}.`,
-		effect,
-		maxRisk: 'low',
-		autonomy: {
-			policy: { key: `autonomy.${operation.name}`, version: 1 },
-			riskFloor: 'low',
-			unattendedRiskCeiling: 'low',
-			requiresSeparateApproval: false,
-			supportedDispositions: ['proceed', 'block'],
-			triggerDispositions: {
-				authority_lost: 'block',
-				unattended_bounds_exceeded: 'block',
-				approval_required: 'block',
-				known_retryable_failure: 'block',
-				ambiguous_external_effect: 'block',
-				stale_plan: 'block',
-				compensation_required: 'block',
-				terminal_failure: 'block'
-			}
-		},
-		consequenceTags: [],
-		inputSchema: operation.inputSchema,
-		idempotency: operation.idempotencyRequired
-			? {
-					required: true,
-					keySource: { key: `idempotency.${operation.name}`, version: 1 },
-					credentialVerifierProfile: { key: 'credential.review', version: 1 },
-					requestHashProfile: { key: 'request-hash.review.operations', version: 1 }
-				}
-			: { required: false },
-		concurrency: effect === 'read'
-			? { kind: 'read_snapshot' }
-			: { kind: 'registered', definition: { key: `concurrency.${operation.name}`, version: 1 } },
-		outcomes: [],
-		enabledBindings: [{
-			surface: 'operator_http',
-			protocol: 'http',
-			method: operation.method,
-			path: REVIEW_LIVE_OPERATIONS[key].path,
-			input: operation.input,
-			resultSchema: operation.resultSchema,
-			browserResumption: { kind: 'none' }
-		}],
-		...overrides
+const id = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
+const correlationId = id(90);
+const scope = { workspaceId: id(80), eventId: id(81) };
+const criterion = { id: id(5), key: 'overall', label: 'Overall', position: 0,
+	weightBps: 10_000, scaleMin: 1, scaleMax: 5 };
+const refs = Object.freeze({ snapshot: REVIEW_OPERATION_SCHEMA_REFS.snapshotRead,
+	round_setup: REVIEW_OPERATION_SCHEMA_REFS.roundSetupRead, round_change: REVIEW_OPERATION_SCHEMA_REFS.roundChange,
+	step_back: REVIEW_OPERATION_SCHEMA_REFS.stepBack, evaluation_change: REVIEW_OPERATION_SCHEMA_REFS.evaluationChange,
+	evaluation_draft_save: REVIEW_OPERATION_SCHEMA_REFS.draftSave });
+type Key = keyof typeof REVIEW_LIVE_OPERATIONS;
+function entry(key: Key): SafeOperationManifestEntry {
+	const op = REVIEW_LIVE_OPERATIONS[key]; const schemas = refs[key]; const effect: OperationEffect = op.effect;
+	return { name: op.name, version: op.version, lifecycle: { status: 'active' }, summary: op.name,
+		effect, maxRisk: effect === 'read' ? 'low' : 'normal', consequenceTags: [], inputSchema: schemas.inputSchema,
+		autonomy: { policy: { key: `autonomy.${op.name}`, version: 1 }, riskFloor: 'low',
+			unattendedRiskCeiling: 'normal', requiresSeparateApproval: false,
+			supportedDispositions: ['proceed', 'block'], triggerDispositions: { authority_lost: 'block',
+				unattended_bounds_exceeded: 'block', approval_required: 'block', known_retryable_failure: 'block',
+				ambiguous_external_effect: 'block', stale_plan: 'block', compensation_required: 'block', terminal_failure: 'block' } },
+		idempotency: op.idempotencyRequired ? { required: true, keySource: { key: 'idempotency.review', version: 1 },
+			credentialVerifierProfile: { key: 'credential.review', version: 1 },
+			requestHashProfile: { key: 'request-hash.review', version: 1 } } : { required: false },
+		concurrency: effect === 'read' ? { kind: 'read_snapshot' }
+			: { kind: 'registered', definition: { key: 'concurrency.review', version: 1 } }, outcomes: [],
+		enabledBindings: [{ surface: 'operator_http', protocol: 'http', method: op.method, path: op.path,
+			input: op.input, resultSchema: schemas.resultSchema, browserResumption: { kind: 'none' } }]
 	};
 }
-
-function manifest(input: {
-	readonly omit?: readonly BindingKey[];
-	readonly replace?: Partial<Record<BindingKey, SafeOperationManifestEntry>>;
-} = {}): SafeOperationManifest {
-	const keys = Object.keys(REVIEW_LIVE_OPERATIONS) as BindingKey[];
-	return safeOperationManifestSchema.parse({
-		schemaVersion: 1,
-		registryDigestSha256: digest('f'),
-		operations: keys
-			.filter((key) => !input.omit?.includes(key))
-			.map((key) => input.replace?.[key] ?? manifestEntry(key))
-	});
+function manifest() { return safeOperationManifestSchema.parse({ schemaVersion: 1,
+	registryDigestSha256: 'f'.repeat(64), operations: (Object.keys(REVIEW_LIVE_OPERATIONS) as Key[]).map(entry) }); }
+const round = (state: 'open' | 'discarded') => ({ schemaVersion: 1, scope, id: id(10), ordinal: 1,
+	name: 'Round 1', version: 2, deadline: { deadlineId: id(11), kind: 'review_due', version: 1,
+		digestSha256: 'a'.repeat(64), effectiveAt: '2027-03-20T23:59:59.000Z' }, criteria: [criterion],
+	visibility: { participantIdentity: 'hidden', peerReviewerIdentity: 'hidden', peerContentUnlock: 'after_own_commit' },
+	openedByUserId: id(12), openedAt: '2027-03-01T00:00:00.000Z', state,
+	...(state === 'discarded' ? { discardedByUserId: id(12), discardedAt: '2027-03-02T00:00:00.000Z' } : {}) });
+const assignment = { schemaVersion: 1, scope, id: id(20), roundId: id(10), submissionId: id(21),
+	reviewerId: id(22), version: 3, state: 'stepped_back', assignedAt: '2027-03-01T00:00:00.000Z',
+	steppedBackAt: '2027-03-02T00:00:00.000Z', steppedBackByUserId: id(22) };
+const head = { schemaVersion: 1, scope, assignmentId: id(20), version: 1, currentRevisionId: id(30),
+	firstCommittedAt: '2027-03-02T00:00:00.000Z', peerUnlockedAt: '2027-03-02T00:00:00.000Z' };
+const revision = { schemaVersion: 1, scope, id: id(30), assignmentId: id(20), revisionNumber: 1,
+	scores: [{ criterionId: id(5), score: 4 }], weightedScore: 4, comment: 'Good',
+	committedByReviewerId: id(22), committedByUserId: id(22), committedAt: '2027-03-02T00:00:00.000Z', postUnlock: false };
+function direct(action: 'open_round' | 'discard_empty_round' | 'step_back' | 'commit_review' | 'amend_review') {
+	const data = action === 'open_round' ? { action, round: round('open'), assignmentCount: 2 }
+		: action === 'discard_empty_round' ? { action, round: round('discarded') }
+			: action === 'step_back' ? { action, assignment }
+				: { action, head, revision };
+	return reviewDirectOperationResultSchema.parse({ kind: 'success', data,
+		receipt: { id: id(40), operationName: action === 'open_round' || action === 'discard_empty_round'
+			? 'review.round.change' : action === 'step_back' ? 'review.assignment.step_back' : 'review.evaluation.change',
+			operationVersion: 1 }, correlationId });
 }
 
-function emptySnapshot() {
-	return {
-		schemaVersion: 1 as const,
-		viewer: { kind: 'organizer' as const },
-		plans: [],
-		roundSetup: {
-			activeReviewers: 0,
-			invitedReviewers: 0,
-			submissions: 0,
-			expectedReviews: 0,
-			perReviewer: []
-		},
-		standings: {}
-	};
-}
-
-function eventRequiredOutcome() {
-	return {
-		kind: 'outcome' as const,
-		outcome: {
-			class: 'conflict' as const,
-			kind: 'review.event_required',
-			retryable: false,
-			subjects: [],
-			detail: null,
-			detailSchemaVersion: 1
-		},
-		terminal: false as const,
-		correlationId
-	};
-}
-
-describe('live Review operation port', () => {
-	test('pins the six frozen operation identities and HTTP paths', () => {
-		expect(Object.fromEntries(
-			Object.entries(REVIEW_LIVE_OPERATIONS).map(([key, value]) => [
-				key,
-				{ name: value.name, path: value.path }
-			])
-		)).toEqual({
-			snapshot: {
-				name: 'review.snapshot.read',
-				path: '/api/events/current/review/snapshot'
-			},
-			round_setup: {
-				name: 'review.round.setup.read',
-				path: '/api/events/current/review/round-setup'
-			},
-			round_change_draft: {
-				name: 'review.round.change.draft',
-				path: '/api/events/current/review/round-drafts'
-			},
-			step_back_draft: {
-				name: 'review.assignment.step-back.draft',
-				path: '/api/events/current/review/step-back-drafts'
-			},
-			evaluation_change_draft: {
-				name: 'review.evaluation.change.draft',
-				path: '/api/events/current/review/evaluation-drafts'
-			},
-			evaluation_draft_save: {
-				name: 'review.evaluation.draft.save',
-				path: '/api/events/current/review/evaluation-draft'
-			}
-		});
-	});
-
-	test('reads a manifest-resolved snapshot with repeated standing ids and no caller scope', async () => {
-		const calls: unknown[] = [];
-		const request: ReviewRequester = async (input) => {
-			calls.push(input);
-			return {
-				kind: 'success',
-				data: reviewSnapshotReadResultSchema.parse({
-					kind: 'success', data: emptySnapshot(), correlationId
-				})
-			};
-		};
-		const first = id(20);
-		const second = id(21);
-		const result = await createReviewLivePort({ manifest: manifest(), request }).readSnapshot({
-			standingSubmissionIds: [first, second],
-			standingSlice: 'all'
-		});
-
-		expect(result).toMatchObject({
-			kind: 'success',
-			data: { viewer: { kind: 'organizer' }, plans: [], standings: {} },
-			correlationId
-		});
-		if (result.kind !== 'success') throw new TypeError('Expected snapshot success.');
-		expect(Object.isFrozen(result.data)).toBe(true);
-		expect(calls).toEqual([{
-			path: `${REVIEW_LIVE_OPERATIONS.snapshot.path}?standingSubmissionIds=${first}&standingSubmissionIds=${second}&standingSlice=all`,
-			method: 'GET',
-			schema: expect.anything()
-		}]);
-	});
-
-	test('keeps open-round date intent as the whole wire input for the atomic review_due join', async () => {
-		const calls: ReviewRequestInput[] = [];
-		const outcome = eventRequiredOutcome();
-		const result = await createReviewLivePort({
-			manifest: manifest(),
-			request: async (input) => {
-				calls.push(input);
-				return { kind: 'success', data: outcome };
-			}
-		}).draftRoundChange({
-			action: 'open_round',
-			deadlineDate: '2026-09-01'
-		}, 'review-open-round');
-
-		expect(result).toEqual(outcome);
-		expect(calls).toEqual([{
-			path: REVIEW_LIVE_OPERATIONS.round_change_draft.path,
-			method: 'POST',
-			schema: expect.anything(),
-			body: {
-				action: 'open_round',
-				deadlineDate: '2026-09-01',
-				anonymized: true
-			},
-			idempotencyKey: 'review-open-round'
-		}]);
-		// The browser only sends date intent; the server mints the Deadline
-		// identity and creates the review_due Deadline in the round-open commit.
-		expect(JSON.stringify(calls[0]?.body)).not.toContain('deadlineId');
-	});
-
-	test('dispatches only the remaining three canonical effect capabilities', async () => {
-		const calls: Array<{ readonly path: string; readonly body?: unknown; readonly idempotencyKey?: string }> = [];
-		const port = createReviewLivePort({
-			manifest: manifest(),
-			request: async (input) => {
-				calls.push(input);
-				return { kind: 'success', data: eventRequiredOutcome() };
-			}
-		});
-		const assignmentId = id(30);
-		const criterionId = id(31);
-		const revisionId = id(32);
-
-		expect(await port.draftStepBack({
-			action: 'step_back', assignmentId, expectedAssignmentVersion: 2
-		}, 'review-step-back')).toMatchObject({
-			kind: 'outcome', outcome: { kind: 'review.event_required' }
-		});
-		expect(await port.draftEvaluationChange({
-			action: 'commit_review',
-			assignmentId,
-			expectedAssignmentVersion: 2,
-			expectedDraftVersion: 1
-		}, 'review-commit-draft')).toMatchObject({
-			kind: 'outcome', outcome: { kind: 'review.event_required' }
-		});
-		expect(await port.draftEvaluationChange({
-			action: 'amend_review',
-			assignmentId,
-			expectedAssignmentVersion: 2,
-			expectedReviewVersion: 3,
-			expectedCurrentRevisionId: revisionId,
-			scores: [{ criterionId, score: 4 }],
-			comment: 'A bounded amendment.'
-		}, 'review-amend-draft')).toMatchObject({
-			kind: 'outcome', outcome: { kind: 'review.event_required' }
-		});
-		expect(await port.saveEvaluationDraft({
-			assignmentId,
-			expectedDraftVersion: null,
-			scores: [{ criterionId, score: 3 }],
-			comment: 'Independent notes.'
-		}, 'review-save-draft')).toMatchObject({
-			kind: 'outcome', outcome: { kind: 'review.event_required' }
-		});
-
+describe('Review direct live port', () => {
+	test('uses one exact request and unchanged key for every ordinary arm', async () => {
+		const calls: { path: string; idempotencyKey?: string; body?: unknown }[] = [];
+		const request: ReviewRequester = async (input) => { calls.push(input);
+			if (typeof input.body !== 'object' || input.body === null || !('action' in input.body)) throw new Error('action_missing');
+			const action = input.body.action;
+			if (action !== 'open_round' && action !== 'discard_empty_round' && action !== 'step_back'
+				&& action !== 'commit_review' && action !== 'amend_review') throw new Error('action_invalid');
+			return { kind: 'success', data: direct(action) }; };
+		const port = createReviewLivePort({ manifest: manifest(), request });
+		const attempts = [
+			port.changeRound({ action: 'open_round', deadlineDate: '2027-03-20', anonymized: true }, 'review-open-key'),
+			port.changeRound({ action: 'discard_empty_round', roundId: id(10), expectedRoundVersion: 2 }, 'review-discard-key'),
+			port.stepBack({ action: 'step_back', assignmentId: id(20), expectedAssignmentVersion: 2 }, 'review-step-key'),
+			port.changeEvaluation({ action: 'commit_review', assignmentId: id(20), expectedAssignmentVersion: 2,
+				expectedDraftVersion: 1 }, 'review-commit-key'),
+			port.changeEvaluation({ action: 'amend_review', assignmentId: id(20), expectedAssignmentVersion: 2,
+				expectedReviewVersion: 1, expectedCurrentRevisionId: id(30), scores: [{ criterionId: id(5), score: 4 }],
+				comment: 'Good' }, 'review-amend-key')
+		];
+		const results = await Promise.all(attempts);
+		expect(results.every((result) => result.kind === 'success')).toBe(true);
 		expect(calls.map(({ path, idempotencyKey }) => ({ path, idempotencyKey }))).toEqual([
-			{ path: REVIEW_LIVE_OPERATIONS.step_back_draft.path, idempotencyKey: 'review-step-back' },
-			{ path: REVIEW_LIVE_OPERATIONS.evaluation_change_draft.path, idempotencyKey: 'review-commit-draft' },
-			{ path: REVIEW_LIVE_OPERATIONS.evaluation_change_draft.path, idempotencyKey: 'review-amend-draft' },
-			{ path: REVIEW_LIVE_OPERATIONS.evaluation_draft_save.path, idempotencyKey: 'review-save-draft' }
+			{ path: '/api/events/current/review/rounds', idempotencyKey: 'review-open-key' },
+			{ path: '/api/events/current/review/rounds', idempotencyKey: 'review-discard-key' },
+			{ path: '/api/events/current/review/assignments/step-back', idempotencyKey: 'review-step-key' },
+			{ path: '/api/events/current/review/evaluations', idempotencyKey: 'review-commit-key' },
+			{ path: '/api/events/current/review/evaluations', idempotencyKey: 'review-amend-key' }
 		]);
 	});
 
-	test('maps a saved draft with its assignment and criterion versions intact', async () => {
-		const assignmentId = id(40);
-		const criterionId = id(41);
-		const draft = {
-			schemaVersion: 1 as const,
-			scope: { workspaceId: id(1), eventId: id(2) },
-			assignmentId,
-			version: 2,
-			scores: [{ criterionId, score: 5 }],
-			comment: 'Must-have.',
-			updatedByReviewerId: id(42),
-			updatedByUserId: id(43),
-			updatedAt: '2026-08-13T12:00:00.000Z'
-		};
-		const response = reviewDraftSaveOperationResultSchema.parse({
-			kind: 'success',
-			data: { draft },
-			receipt: {
-				id: id(44),
-				operationName: REVIEW_LIVE_OPERATIONS.evaluation_draft_save.name,
-				operationVersion: 1
-			},
-			correlationId
-		});
-		const result = await createReviewLivePort({
-			manifest: manifest(),
-			request: async () => ({ kind: 'success', data: response })
-		}).saveEvaluationDraft({
-			assignmentId,
-			expectedDraftVersion: 1,
-			scores: [{ criterionId, score: 5 }],
-			comment: 'Must-have.'
-		}, 'review-save-success');
-
-		expect(result).toMatchObject({ kind: 'success', data: { draft }, correlationId });
-		if (result.kind !== 'success') throw new TypeError('Expected draft-save success.');
-		expect(Object.isFrozen(result.data.draft.scores)).toBe(true);
+	test('retains the feature-owned evaluation draft save call', async () => {
+		const calls: unknown[] = [];
+		const saved = reviewDraftSaveOperationResultSchema.parse({ kind: 'success', correlationId,
+			receipt: { id: id(50), operationName: 'review.evaluation.draft.save', operationVersion: 1 },
+			data: { draft: { schemaVersion: 1, scope, assignmentId: id(20), version: 1,
+				scores: [{ criterionId: id(5), score: 4 }], comment: 'Notes', updatedByReviewerId: id(22),
+				updatedByUserId: id(22), updatedAt: '2027-03-02T00:00:00.000Z' } } });
+		const port = createReviewLivePort({ manifest: manifest(), request: async (input) => {
+			calls.push(input); return { kind: 'success', data: saved }; } });
+		expect(await port.saveEvaluationDraft({ assignmentId: id(20), expectedDraftVersion: null,
+			scores: [{ criterionId: id(5), score: 4 }], comment: 'Notes' }, 'review-save-key'))
+			.toMatchObject({ kind: 'success', receipt: { operationName: 'review.evaluation.draft.save' } });
+		expect(calls).toHaveLength(1);
 	});
 
-	test('fails closed on missing and path-drifted operation contracts', async () => {
-		let calls = 0;
-		const request: ReviewRequester = async () => {
-			calls += 1;
-			return { kind: 'success', data: eventRequiredOutcome() };
-		};
-		const missing = createReviewLivePort({
-			manifest: manifest({ omit: ['snapshot'] }), request
-		});
-		expect(await missing.readSnapshot()).toEqual({
-			kind: 'unavailable', operation: 'snapshot', reason: 'operation_not_registered'
-		});
-
-		const driftedEntry = manifestEntry('round_setup');
-		const binding = driftedEntry.enabledBindings[0];
-		if (!binding || binding.protocol !== 'http') throw new TypeError('HTTP binding missing.');
-		const drifted = createReviewLivePort({
-			manifest: manifest({
-				replace: {
-					round_setup: {
-						...driftedEntry,
-						enabledBindings: [{ ...binding, path: '/api/events/current/review/setup-v2' }]
-					}
-				}
-			}),
-			request
-		});
-		expect(await drifted.readRoundSetup()).toEqual({
-			kind: 'unavailable', operation: 'round_setup', reason: 'operation_contract_mismatch'
-		});
-		expect(calls).toBe(0);
-	});
-
-	test('exposes no tuned-screen capability the backend does not own', () => {
-		const port = createReviewLivePort({ manifest: manifest(), request: async () => ({
-			kind: 'success',
-			data: reviewRoundSetupReadResultSchema.parse({
-				kind: 'success',
-				data: emptySnapshot().roundSetup,
-				correlationId
-			})
-		}) });
-		expect(Object.keys(port).sort()).toEqual([
-			'draftEvaluationChange',
-			'draftRoundChange',
-			'draftStepBack',
-			'readRoundSetup',
-			'readSnapshot',
-			'saveEvaluationDraft',
-			'source'
-		]);
-		expect(port).not.toHaveProperty('comparables');
-		expect(port).not.toHaveProperty('accoladeDefs');
-		expect(port).not.toHaveProperty('profile');
-		expect(port).not.toHaveProperty('remind');
-		expect(port).not.toHaveProperty('commitReview');
+	test('fails malformed and action-mismatched direct results closed', async () => {
+		const malformed = structuredClone(direct('step_back')); Reflect.deleteProperty(malformed, 'receipt');
+		const bad = createReviewLivePort({ manifest: manifest(), request: async () => ({ kind: 'success', data: malformed }) });
+		expect(await bad.stepBack({ action: 'step_back', assignmentId: id(20), expectedAssignmentVersion: 2 }, 'review-step-key'))
+			.toEqual({ kind: 'transport_error', error: { code: 'invalid_contract', retryable: true } });
+		const mismatch = createReviewLivePort({ manifest: manifest(), request: async () => ({ kind: 'success', data: direct('open_round') }) });
+		expect(await mismatch.stepBack({ action: 'step_back', assignmentId: id(20), expectedAssignmentVersion: 2 }, 'review-step-key'))
+			.toEqual({ kind: 'transport_error', error: { code: 'invalid_contract', retryable: true } });
 	});
 });

@@ -140,7 +140,7 @@ describe('MCP result envelopes', () => {
     );
     const success = {
       kind: 'success',
-      data: { changesetId: 'change-1' },
+      data: { eventId: 'event-1' },
       receipt: {
         id: receiptId,
         operationName: 'other.operation',

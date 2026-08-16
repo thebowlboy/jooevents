@@ -2,8 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, lstatSync, realpathSync, rmSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { makeSignature } from 'better-auth/crypto';
-import { eventCreateDraftOperationResultSchema } from '@jooevents/contracts';
-import { changesetLifecycleOperationResultSchema } from '@jooevents/changeset-operations';
+import { eventCreateOperationResultSchema } from '@jooevents/contracts';
 import {
   workspaceSenderIdentityReadResultSchema,
   workspaceSenderIdentityUpdateResultSchema
@@ -133,38 +132,20 @@ async function createEvent(
   runtime: EphemeralLiveRuntime,
   session: BrowserSession
 ): Promise<void> {
-  const draft = eventCreateDraftOperationResultSchema.parse(await effect({
+  const created = eventCreateOperationResultSchema.parse(await effect({
     runtime,
     session,
-    path: '/api/events/drafts/create',
-    key: 'magic-link-event-draft',
+    path: '/api/events',
+    key: 'magic-link-event-create',
     body: {
+      expectedEventSetVersion: 1,
       name: 'Magic Link Event',
       timezone: 'Asia/Singapore',
       startDate: '2027-06-10',
       endDate: '2027-06-12'
     }
   }));
-  if (draft.kind !== 'success') throw new Error('workspace_magic_link_event_draft_failed');
-  const selector = Object.freeze({
-    changesetId: draft.data.changesetId,
-    revisionId: draft.data.revision.id,
-    revisionDigest: draft.data.revision.digestSha256
-  });
-  const proposed = changesetLifecycleOperationResultSchema.parse(await effect({
-    runtime, session,
-    path: '/api/changesets/proposals',
-    key: 'magic-link-event-propose',
-    body: { ...selector, expectedHeadVersion: 1 }
-  }));
-  expect(proposed).toMatchObject({ kind: 'success', data: { action: 'propose' } });
-  const committed = changesetLifecycleOperationResultSchema.parse(await effect({
-    runtime, session,
-    path: '/api/changesets/commits',
-    key: 'magic-link-event-commit',
-    body: { ...selector, expectedHeadVersion: 2 }
-  }));
-  expect(committed).toMatchObject({ kind: 'success', data: { action: 'commit' } });
+  if (created.kind !== 'success') throw new Error('workspace_magic_link_event_create_failed');
 }
 
 function insertOpenReservation(runtime: EphemeralLiveRuntime, email: string): void {

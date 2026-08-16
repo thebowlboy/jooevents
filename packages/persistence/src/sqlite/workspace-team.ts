@@ -40,7 +40,7 @@ import {
 } from '@jooevents/kernel';
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 
-/** Additive schema installed only in an explicitly disposable SQLite runtime. */
+/** This schema contributes to the accepted epoch-2 baseline and may also serve isolated fixtures. */
 export const WORKSPACE_TEAM_SQL = `
 CREATE TABLE workspace_team_heads (
   workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON UPDATE RESTRICT ON DELETE RESTRICT,
@@ -580,12 +580,12 @@ export class SQLiteWorkspaceTeamRepository {
         ? plan.createdAt : plan.action === 'change_role' ? plan.changedAt : plan.removedAt));
   }
 
-  /** Exact changeset transaction-port alias; mutation semantics remain single-owned. */
+  /** Exact direct-operation transaction-port alias; mutation semantics remain single-owned. */
   applyWorkspaceTeamPlan(plan: WorkspaceTeamMutationPlan): void {
     this.applyPlan(plan);
   }
 
-  /** Exact changeset read-port alias. */
+  /** Exact direct-operation read-port alias. */
   readWorkspaceTeam(workspaceId: string): WorkspaceTeamPlanningSnapshot | undefined {
     try {
       return this.readPlanningSnapshot(parseWorkspaceId(workspaceId));

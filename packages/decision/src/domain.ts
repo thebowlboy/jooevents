@@ -4,8 +4,6 @@ import {
   decisionMutationPlanSchema,
   decisionMutationResultSchema,
   decisionMutationPlanningInputSchema,
-  decisionRestorePlanSchema,
-  decisionSafeDiffSchema,
   type DecisionAuthorInput,
   type DecisionEvidenceDto,
   type DecisionHeadDto,
@@ -13,9 +11,7 @@ import {
   type DecisionMutationPlanningInput,
   type DecisionMutationResult,
   type DecisionPlanningGraduation,
-  type DecisionRestorePlanDto,
   type DecisionRowPlanDto,
-  type DecisionSafeDiffDto,
   type DecisionScopeDto,
   type DecisionTargetPinDto,
   type DecisionTargetUnavailableDetail,
@@ -25,19 +21,17 @@ import {
 import { encodeCanonicalJson } from '@jooevents/kernel';
 import {
   applySessionMutationPlan,
-  applySessionRestorePlan,
   planSessionGraduationFrom,
-  planSessionGraduationReversalAgainst,
   sessionGraduationFactPayload,
   SessionPlanningError,
   type SessionCatalog,
-  type SessionChangesetReadPort,
+  type SessionGraduationReadPort,
   type SessionGraduationContribution,
   type SessionPlanningErrorCode
 } from '@jooevents/session';
 import {
   decisionHeadDigest,
-  type DecisionChangesetReadPort,
+  type DecisionOperationReadPort,
   type DecisionScope
 } from './model';
 
@@ -96,8 +90,8 @@ export class DecisionTargetUnavailableError extends Error {
 }
 
 export interface DecisionEnvironment {
-  readonly decisions: DecisionChangesetReadPort;
-  readonly sessions: SessionChangesetReadPort;
+  readonly decisions: DecisionOperationReadPort;
+  readonly sessions: SessionGraduationReadPort;
 }
 
 export function planDecisionMutation(input: {
@@ -250,59 +244,6 @@ export function validateDecisionMutationPlan(input: {
     : { kind: 'stale', code: 'invalid_plan', submissionId: subjectSubmissionId(input.plan) };
 }
 
-/**
- * Revalidates a compensating restore plan against current state: pinned
- * decision heads and origin links must match exactly, and every graduation
- * reversal must still apply against the current Session catalog. Rows that
- * reverse a graduation also re-check the schedule reference gate the plan was
- * derived under — a placement moves neither the Session digest nor the catalog
- * digest, so a Session that gained one since derivation refuses
- * `session_placed` here instead of unspawning under a live schedule occurrence;
- * the re-derived compensation then leaves that Session standing.
- */
-export function validateDecisionRestorePlan(input: {
-  readonly plan: DecisionRestorePlanDto;
-  readonly environment: DecisionEnvironment;
-}): DecisionPlanRefusal | undefined {
-  const plan = decisionRestorePlanSchema.parse(input.plan);
-  const scope = plan.scope;
-  let view: SessionCatalog | undefined;
-  for (const row of plan.rows) {
-    const current = input.environment.decisions.readDecisionHead(scope, row.submissionId);
-    if (!current || current.version !== row.expectedCurrent.version
-        || current.digestSha256 !== row.expectedCurrent.digestSha256) {
-      return { kind: 'stale', code: 'stale_decision', submissionId: row.submissionId };
-    }
-    if (row.unlinkOrigin !== null) {
-      const origin = input.environment.decisions.readSubmissionSessionOrigin(scope, row.submissionId);
-      if (!origin || canonical(origin) !== canonical(row.unlinkOrigin)) {
-        return { kind: 'stale', code: 'origin_changed', submissionId: row.submissionId };
-      }
-    }
-    if (row.sessionRestore !== null) {
-      const placements = input.environment.decisions.countSessionSchedulePlacements(
-        scope,
-        row.sessionRestore.expectedCurrent.id
-      );
-      if (placements !== 0) {
-        return { kind: 'stale', code: 'session_placed', submissionId: row.submissionId };
-      }
-      view ??= input.environment.sessions.readSessionCatalog(scope);
-      if (!view) return { kind: 'stale', code: 'wrong_scope', submissionId: row.submissionId };
-      try {
-        view = applySessionRestorePlan({ plan: row.sessionRestore, catalog: view }).catalog;
-      } catch (error) {
-        return {
-          kind: 'stale',
-          code: error instanceof SessionPlanningError ? error.code : 'invalid_plan',
-          submissionId: row.submissionId
-        };
-      }
-    }
-  }
-  return undefined;
-}
-
 export function decisionMutationResultFromPlan(plan: DecisionMutationPlanDto): DecisionMutationResult {
   return decisionMutationResultSchema.parse({
     action: 'decide',
@@ -315,150 +256,6 @@ export function decisionMutationResultFromPlan(plan: DecisionMutationPlanDto): D
       row.graduation === null ? [] : [sessionGraduationFactPayload(row.graduation)]
     )
   });
-}
-
-export function decisionMutationResultFromRestore(plan: DecisionRestorePlanDto): DecisionMutationResult {
-  return decisionMutationResultSchema.parse({
-    action: 'restore',
-    rows: plan.rows.map((row) => ({
-      submissionId: row.submissionId,
-      head: row.restore,
-      origin: null
-    })),
-    sessions: plan.rows.flatMap((row) => row.sessionRestore === null ? [] : [{
-      action: 'restore' as const,
-      catalogVersion: row.sessionRestore.catalogVersion.after,
-      session: row.sessionRestore.restore
-    }])
-  });
-}
-
-export function projectDecisionSafeDiff(
-  plan: DecisionMutationPlanDto | DecisionRestorePlanDto
-): DecisionSafeDiffDto {
-  if (isDecisionRestorePlan(plan)) {
-    return decisionSafeDiffSchema.parse({
-      action: 'restore',
-      rows: plan.rows.map((row) => ({
-        submissionId: row.submissionId,
-        before: row.expectedCurrent,
-        after: row.restore,
-        evidence: null,
-        session: row.sessionRestore === null ? null : {
-          action: 'restore' as const,
-          before: row.sessionRestore.expectedCurrent,
-          after: row.sessionRestore.restore
-        }
-      }))
-    });
-  }
-  return decisionSafeDiffSchema.parse({
-    action: 'decide',
-    rows: plan.rows.map((row) => ({
-      submissionId: row.submissionId,
-      before: row.before,
-      after: row.after,
-      evidence: row.evidence,
-      session: row.graduation === null ? null : {
-        action: row.graduation.input.action,
-        before: row.graduation.before,
-        after: row.graduation.after
-      }
-    }))
-  });
-}
-
-export type DecisionCompensationPlan =
-  | { readonly kind: 'exact'; readonly plan: DecisionRestorePlanDto }
-  | { readonly kind: 'semantic'; readonly plan: DecisionRestorePlanDto; readonly noteKey: string }
-  | { readonly kind: 'blocked'; readonly reasonKey: string };
-
-/**
- * Compensation is always a new restore plan validated against current state.
- * A graduated Session unspawns or detaches only while it is exactly as this
- * plan left it and nothing else references it — no schedule placement and no
- * origin link from any other submission; otherwise the Session stays standing
- * and only this submission's decision head and origin link are reverted.
- * Rows are reversed in reverse plan order so same-session chains unwind.
- */
-export function planDecisionCompensation(input: {
-  readonly original: DecisionMutationPlanDto;
-  readonly environment: DecisionEnvironment;
-  readonly actorUserId: string;
-  readonly occurredAt: string;
-}): DecisionCompensationPlan {
-  const scope = input.original.input.scope;
-  let sessionsStanding = 0;
-  let view: SessionCatalog | undefined;
-  const rows = [];
-  for (const row of [...input.original.rows].reverse()) {
-    const current = input.environment.decisions.readDecisionHead(scope, row.submissionId);
-    if (!current || current.digestSha256 !== row.after.digestSha256) {
-      return { kind: 'blocked', reasonKey: 'decision.changed' };
-    }
-    let unlinkOrigin: SubmissionSessionOriginDto | null = null;
-    let sessionRestore = null;
-    if (row.graduation !== null && row.origin !== null) {
-      const origin = input.environment.decisions.readSubmissionSessionOrigin(scope, row.submissionId);
-      if (!origin || canonical(origin) !== canonical(row.origin)) {
-        return { kind: 'blocked', reasonKey: 'decision.origin_changed' };
-      }
-      unlinkOrigin = origin;
-      view ??= input.environment.sessions.readSessionCatalog(scope);
-      if (!view) return { kind: 'blocked', reasonKey: 'decision.scope_missing' };
-      const sessionId = row.graduation.after.id;
-      const currentSession = view.sessions.find((session) => session.id === sessionId);
-      const untouched = currentSession !== undefined
-        && currentSession.digestSha256 === row.graduation.after.digestSha256;
-      const otherOrigins = input.environment.decisions.listSessionOrigins(scope, sessionId)
-        .filter((linked) => linked.submissionId !== row.submissionId);
-      const placements = input.environment.decisions.countSessionSchedulePlacements(scope, sessionId);
-      if (untouched && otherOrigins.length === 0 && placements === 0) {
-        try {
-          const restore = planSessionGraduationReversalAgainst({
-            original: row.graduation,
-            catalog: view,
-            actorUserId: input.actorUserId,
-            occurredAt: input.occurredAt
-          });
-          view = applySessionRestorePlan({ plan: restore, catalog: view }).catalog;
-          sessionRestore = restore;
-        } catch {
-          return { kind: 'blocked', reasonKey: 'decision.session_changed' };
-        }
-      } else {
-        sessionsStanding += 1;
-      }
-    }
-    const restoredHead = row.before === null ? null : (() => {
-      const { digestSha256: _digest, ...unsigned } = row.before;
-      const bumped = { ...unsigned, version: current.version + 1 };
-      return { ...bumped, digestSha256: decisionHeadDigest(bumped) };
-    })();
-    rows.push({
-      submissionId: row.submissionId,
-      expectedCurrent: current,
-      restore: restoredHead,
-      sessionRestore,
-      unlinkOrigin
-    });
-  }
-  const plan = decisionRestorePlanSchema.parse({
-    action: 'restore',
-    scope,
-    actorUserId: input.actorUserId,
-    occurredAt: input.occurredAt,
-    rows
-  });
-  return sessionsStanding === 0
-    ? { kind: 'exact', plan }
-    : { kind: 'semantic', plan, noteKey: 'decision.session_stays_standing' };
-}
-
-export function isDecisionRestorePlan(
-  value: DecisionMutationPlanDto | DecisionRestorePlanDto
-): value is DecisionRestorePlanDto {
-  return 'action' in value && value.action === 'restore';
 }
 
 /**
@@ -590,11 +387,11 @@ interface SessionViewPort {
  * advances the in-memory catalog, so chained graduations inside one decide plan
  * line their catalog and per-session guards up for sequential apply.
  */
-function openSessionView(scope: DecisionScope, sessions: SessionChangesetReadPort): SessionViewPort {
+function openSessionView(scope: DecisionScope, sessions: SessionGraduationReadPort): SessionViewPort {
   let catalog = sessions.readSessionCatalog(scope);
   const vocabulary = sessions.readSessionVocabulary(scope);
   if (!catalog || !vocabulary) throw new DecisionPlanningError('wrong_scope');
-  const overlay: SessionChangesetReadPort = Object.freeze({
+  const overlay: SessionGraduationReadPort = Object.freeze({
     readSessionCatalog: () => catalog,
     readSessionVocabulary: () => vocabulary,
     countSessionSchedulePlacements: (placementScope: DecisionScope, sessionId: string) =>

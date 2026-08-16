@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import {
   autonomyInterventionOutcomeDeclarations,
   autonomyInterventionOutcomes,
@@ -30,24 +29,16 @@ import {
 } from '@jooevents/contracts';
 import {
   REVIEW_OPERATION_SCHEMA_REFS,
-  reviewChangeDraftCanonicalResultSchema,
-  reviewChangeDraftDataSchema,
-  reviewChangeDraftOperationResultSchema,
   reviewDraftSaveCanonicalResultSchema,
   reviewDraftSaveInputSchema,
   reviewDraftSaveOperationResultSchema,
   reviewDraftSaveResultSchema,
-  reviewEvaluationChangeDraftInputSchema,
-  reviewMutationPlanSchema,
-  reviewRoundChangeDraftInputSchema,
   reviewRoundSetupProjectionSchema,
   reviewRoundSetupReadInputSchema,
   reviewRoundSetupReadResultSchema,
-  reviewSha256Schema,
   reviewSnapshotReadInputSchema,
   reviewSnapshotReadResultSchema,
   reviewSnapshotSchema,
-  reviewStepBackChangeDraftInputSchema,
   reviewVersionSchema,
   reviewVisibilityPolicySchema,
   type ReviewVisibilityPolicyDto
@@ -62,7 +53,6 @@ import {
   type VersionedKeyProfileRef
 } from '@jooevents/identity-access';
 import {
-  encodeCanonicalJson,
   isApplicationId,
   parseContractVersion,
   parseEventId,
@@ -83,25 +73,13 @@ import {
   type ReviewRepository
 } from '@jooevents/review';
 import { z } from 'zod';
-import {
-  createReviewChangeDraftHandler,
-  createReviewEvaluationDraftSaveHandler
-} from './preparation';
+import { createReviewEvaluationDraftSaveHandler } from './preparation';
 
 export const REVIEW_SNAPSHOT_READ_OPERATION = Object.freeze({
   name: 'review.snapshot.read', version: 1
 });
 export const REVIEW_ROUND_SETUP_READ_OPERATION = Object.freeze({
   name: 'review.round.setup.read', version: 1
-});
-export const REVIEW_ROUND_CHANGE_DRAFT_OPERATION = Object.freeze({
-  name: 'review.round.change.draft', version: 1
-});
-export const REVIEW_STEP_BACK_DRAFT_OPERATION = Object.freeze({
-  name: 'review.assignment.step-back.draft', version: 1
-});
-export const REVIEW_EVALUATION_CHANGE_DRAFT_OPERATION = Object.freeze({
-  name: 'review.evaluation.change.draft', version: 1
 });
 export const REVIEW_EVALUATION_DRAFT_SAVE_OPERATION = Object.freeze({
   name: 'review.evaluation.draft.save', version: 1
@@ -133,30 +111,6 @@ export const REVIEW_EVALUATE_PERMISSION_IDS = Object.freeze([
   'submission.comment', 'submission.score'
 ] satisfies readonly PermissionId[]);
 
-export type ReviewChangesetAction =
-  | 'open_round'
-  | 'discard_empty_round'
-  | 'step_back'
-  | 'commit_review'
-  | 'amend_review';
-
-/** Exact grants the generic diff owner seam must re-check for this stored plan. */
-export function reviewDiffReadPermissionIdsForAction(
-  action: ReviewChangesetAction
-): readonly PermissionId[] {
-  if (action === 'open_round' || action === 'discard_empty_round') {
-    return REVIEW_MANAGE_PERMISSION_IDS;
-  }
-  if (action === 'step_back') return REVIEW_STEP_BACK_PERMISSION_IDS;
-  return REVIEW_EVALUATE_PERMISSION_IDS;
-}
-
-export function reviewDiffReadPermissionIdsFromStoredPlan(
-  storedPlan: unknown
-): readonly PermissionId[] {
-  return reviewDiffReadPermissionIdsForAction(reviewMutationPlanSchema.parse(storedPlan).action);
-}
-
 /**
  * The three visibility axes (`participantIdentity`, `peerReviewerIdentity`,
  * `peerContentUnlock`) are the canonical round policy; the single `anonymized`
@@ -179,21 +133,11 @@ export function reviewOpenRoundVisibilityPolicy(anonymized: boolean): ReviewVisi
       });
 }
 
-export const REVIEW_CHANGE_DRAFT_HANDLER_CAPABILITY = ref(
-  'capability.review.changeset-draft'
-);
 export const REVIEW_DRAFT_SAVE_HANDLER_CAPABILITY = ref(
   'capability.review.evaluation-draft-save'
 );
 export const REVIEW_REQUEST_HASH_PROFILE = ref('request-hash.review.operations');
-export const REVIEW_CHANGE_DRAFT_REQUEST_HASH_PROFILE = REVIEW_REQUEST_HASH_PROFILE;
 export const REVIEW_DRAFT_SAVE_REQUEST_HASH_PROFILE = REVIEW_REQUEST_HASH_PROFILE;
-
-export const REVIEW_CHANGE_APPROVAL_POLICY = (() => {
-  const reference = ref('policy.review.change.bounded');
-  const definition = Object.freeze({ reference, requirement: 'none' as const });
-  return Object.freeze({ ...definition, definitionDigestSha256: digest(definition) });
-})();
 
 const applicationIdSchema = z.string().refine(isApplicationId, {
   message: 'Application IDs must be canonical lowercase UUIDv4 or UUIDv7 values.'
@@ -228,94 +172,6 @@ export const reviewCanonicalChangedDetailSchema = z.strictObject({
   subjectId: z.string().trim().min(1).max(512)
 });
 
-const permissionIdSchema = z.enum([
-  'event.manage', 'submission.score', 'submission.comment'
-]);
-export const reviewChangesetDraftDomainContributionSchema = z.strictObject({
-  kind: z.literal('review_changeset_draft'),
-  preparationHandle: applicationIdSchema,
-  workspaceId: applicationIdSchema,
-  eventId: applicationIdSchema,
-  changesetId: applicationIdSchema,
-  revisionId: applicationIdSchema,
-  revisionDigestSha256: reviewSha256Schema,
-  recordDigestSha256: reviewSha256Schema,
-  action: z.enum([
-    'open_round', 'discard_empty_round', 'step_back', 'commit_review', 'amend_review'
-  ]),
-  diffReadPermissionIds: z.array(permissionIdSchema).min(1).max(2),
-  occurredAt: instantSchema
-}).superRefine((domain, context) => {
-  const expected = reviewDiffReadPermissionIdsForAction(domain.action);
-  if (domain.diffReadPermissionIds.length !== expected.length
-      || domain.diffReadPermissionIds.some((permission, index) => permission !== expected[index])) {
-    context.addIssue({
-      code: 'custom', path: ['diffReadPermissionIds'],
-      message: 'diff owner grants must match the exact Review action'
-    });
-  }
-});
-
-export const reviewChangesetDraftEvidenceChildSchema = z.strictObject({
-  kind: z.literal('timeline'),
-  timelineId: applicationIdSchema,
-  sourceKind: z.literal('changeset_revision'),
-  workspaceId: applicationIdSchema,
-  eventId: applicationIdSchema,
-  changesetId: applicationIdSchema,
-  revisionId: applicationIdSchema,
-  occurredAt: instantSchema
-});
-
-const changeDraftSuccessContributionSchema = z.strictObject({
-  result: z.strictObject({ kind: z.literal('success'), data: reviewChangeDraftDataSchema }),
-  domain: reviewChangesetDraftDomainContributionSchema,
-  receiptChildren: z.tuple([reviewChangesetDraftEvidenceChildSchema])
-}).superRefine((contribution, context) => {
-  const data = contribution.result.data;
-  const domain = contribution.domain;
-  const evidence = contribution.receiptChildren[0];
-  if (data.action !== domain.action
-      || data.changesetId !== domain.changesetId
-      || data.revision.id !== domain.revisionId
-      || data.revision.digestSha256 !== domain.revisionDigestSha256
-      || evidence.workspaceId !== domain.workspaceId
-      || evidence.eventId !== domain.eventId
-      || evidence.changesetId !== domain.changesetId
-      || evidence.revisionId !== domain.revisionId
-      || evidence.occurredAt !== domain.occurredAt) {
-    context.addIssue({ code: 'custom', message: 'Review draft evidence is incoherent.' });
-  }
-});
-
-const changeDraftOutcomeContributionSchema = z.strictObject({
-  result: z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema }),
-  domain: z.null(),
-  receiptChildren: z.tuple([])
-}).superRefine((contribution, context) => {
-  const outcome = contribution.result.outcome;
-  const allowed = new Set([
-    'conflict:review.event_required',
-    'conflict:review.viewer_required',
-    'stale_revision:review.canonical_changed',
-    'conflict:changeset.id_collision'
-  ]);
-  const detailSchema = outcome.kind === 'review.canonical_changed'
-    ? reviewCanonicalChangedDetailSchema
-    : nullDetailSchema;
-  if (!allowed.has(`${outcome.class}:${outcome.kind}`)
-      || outcome.retryable
-      || outcome.detailSchemaVersion !== 1
-      || !detailSchema.safeParse(outcome.detail).success) {
-    context.addIssue({ code: 'custom', message: 'Review change refusal is invalid.' });
-  }
-});
-
-export const reviewChangesetDraftContributionSchema = z.union([
-  changeDraftSuccessContributionSchema,
-  changeDraftOutcomeContributionSchema
-]);
-
 export const reviewEvaluationDraftSavedDomainContributionSchema = z.strictObject({
   kind: z.literal('review_evaluation_draft_saved'),
   preparationHandle: applicationIdSchema,
@@ -329,7 +185,7 @@ export const reviewEvaluationDraftSavedDomainContributionSchema = z.strictObject
 const draftSaveSuccessContributionSchema = z.strictObject({
   result: z.strictObject({ kind: z.literal('success'), data: reviewDraftSaveResultSchema }),
   domain: reviewEvaluationDraftSavedDomainContributionSchema,
-  receiptChildren: z.tuple([])
+  effectContributions: z.tuple([])
 }).superRefine((contribution, context) => {
   const draft = contribution.result.data.draft;
   if (draft.scope.workspaceId !== contribution.domain.workspaceId
@@ -343,7 +199,7 @@ const draftSaveSuccessContributionSchema = z.strictObject({
 const draftSaveOutcomeContributionSchema = z.strictObject({
   result: z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema }),
   domain: z.null(),
-  receiptChildren: z.tuple([])
+  effectContributions: z.tuple([])
 }).superRefine((contribution, context) => {
   const outcome = contribution.result.outcome;
   const allowed = new Set([
@@ -371,10 +227,6 @@ function ref(key: string): VersionedDefinitionRef {
 function schemaRef(key: string, schema: z.ZodType): SafeSchemaManifestRef {
   return createSafeSchemaManifestRef(key, schema);
 }
-function digest(value: unknown): string {
-  return createHash('sha256').update(encodeCanonicalJson(value)).digest('hex');
-}
-
 const schemas = Object.freeze({
   snapshotInput: REVIEW_OPERATION_SCHEMA_REFS.snapshotRead.inputSchema,
   snapshotCanonical: schemaRef('schema.review.snapshot-read.canonical-result', reviewSnapshotCanonicalResultSchema),
@@ -382,14 +234,6 @@ const schemas = Object.freeze({
   setupInput: REVIEW_OPERATION_SCHEMA_REFS.roundSetupRead.inputSchema,
   setupCanonical: schemaRef('schema.review.round-setup-read.canonical-result', reviewRoundSetupCanonicalResultSchema),
   setupProjected: REVIEW_OPERATION_SCHEMA_REFS.roundSetupRead.resultSchema,
-  roundDraftInput: REVIEW_OPERATION_SCHEMA_REFS.roundChangeDraft.inputSchema,
-  stepDraftInput: REVIEW_OPERATION_SCHEMA_REFS.stepBackDraft.inputSchema,
-  evaluationDraftInput: REVIEW_OPERATION_SCHEMA_REFS.evaluationChangeDraft.inputSchema,
-  changeContribution: schemaRef('schema.review.change-draft.contribution', reviewChangesetDraftContributionSchema),
-  changeCanonical: schemaRef('schema.review.change-draft.canonical-result', reviewChangeDraftCanonicalResultSchema),
-  roundDraftProjected: REVIEW_OPERATION_SCHEMA_REFS.roundChangeDraft.resultSchema,
-  stepDraftProjected: REVIEW_OPERATION_SCHEMA_REFS.stepBackDraft.resultSchema,
-  evaluationDraftProjected: REVIEW_OPERATION_SCHEMA_REFS.evaluationChangeDraft.resultSchema,
   saveInput: REVIEW_OPERATION_SCHEMA_REFS.draftSave.inputSchema,
   saveContribution: schemaRef('schema.review.evaluation-draft-save.contribution', reviewEvaluationDraftSaveContributionSchema),
   saveCanonical: schemaRef('schema.review.evaluation-draft-save.canonical-result', reviewDraftSaveCanonicalResultSchema),
@@ -451,9 +295,6 @@ export function createReviewOperationModule(
   });
   const manageLane = parseOperationAccessLane({
     kind: 'operator', surface: 'operator_http', policy: input.policies.manage
-  });
-  const stepLane = parseOperationAccessLane({
-    kind: 'operator', surface: 'operator_http', policy: input.policies.stepBack
   });
   const evaluateLane = parseOperationAccessLane({
     kind: 'operator', surface: 'operator_http', policy: input.policies.evaluate
@@ -577,64 +418,18 @@ export function createReviewOperationModule(
     }
   });
 
-  const effects = [
-    effectRuntime({
-      key: 'review.round-change-draft', operation: REVIEW_ROUND_CHANGE_DRAFT_OPERATION,
-      effect: 'draft', lane: manageLane, inputSchema: schemas.roundDraftInput,
-      inputParser: reviewRoundChangeDraftInputSchema,
-      projectedSchema: schemas.roundDraftProjected,
-      contributionSchema: schemas.changeContribution,
-      contributionParser: reviewChangesetDraftContributionSchema,
-      canonicalSchema: schemas.changeCanonical,
-      canonicalParser: reviewChangeDraftCanonicalResultSchema,
-      handlerCapability: REVIEW_CHANGE_DRAFT_HANDLER_CAPABILITY,
-      strategy: 'change', path: '/api/events/current/review/round-drafts',
-      requestHashProfile: REVIEW_CHANGE_DRAFT_REQUEST_HASH_PROFILE,
-      outcomes: changeOutcomes(accessOutcomes)
-    }, input, scopeResolver),
-    effectRuntime({
-      key: 'review.step-back-draft', operation: REVIEW_STEP_BACK_DRAFT_OPERATION,
-      effect: 'draft', lane: stepLane, inputSchema: schemas.stepDraftInput,
-      inputParser: reviewStepBackChangeDraftInputSchema,
-      projectedSchema: schemas.stepDraftProjected,
-      contributionSchema: schemas.changeContribution,
-      contributionParser: reviewChangesetDraftContributionSchema,
-      canonicalSchema: schemas.changeCanonical,
-      canonicalParser: reviewChangeDraftCanonicalResultSchema,
-      handlerCapability: REVIEW_CHANGE_DRAFT_HANDLER_CAPABILITY,
-      strategy: 'change', path: '/api/events/current/review/step-back-drafts',
-      requestHashProfile: REVIEW_CHANGE_DRAFT_REQUEST_HASH_PROFILE,
-      outcomes: changeOutcomes(accessOutcomes)
-    }, input, scopeResolver),
-    effectRuntime({
-      key: 'review.evaluation-change-draft', operation: REVIEW_EVALUATION_CHANGE_DRAFT_OPERATION,
-      effect: 'draft', lane: evaluateLane, inputSchema: schemas.evaluationDraftInput,
-      inputParser: reviewEvaluationChangeDraftInputSchema,
-      projectedSchema: schemas.evaluationDraftProjected,
-      contributionSchema: schemas.changeContribution,
-      contributionParser: reviewChangesetDraftContributionSchema,
-      canonicalSchema: schemas.changeCanonical,
-      canonicalParser: reviewChangeDraftCanonicalResultSchema,
-      handlerCapability: REVIEW_CHANGE_DRAFT_HANDLER_CAPABILITY,
-      strategy: 'change', path: '/api/events/current/review/evaluation-drafts',
-      requestHashProfile: REVIEW_CHANGE_DRAFT_REQUEST_HASH_PROFILE,
-      outcomes: changeOutcomes(accessOutcomes)
-    }, input, scopeResolver),
-    effectRuntime({
+  const effects = [effectRuntime({
       key: 'review.evaluation-draft-save', operation: REVIEW_EVALUATION_DRAFT_SAVE_OPERATION,
-      effect: 'commit', lane: evaluateLane, inputSchema: schemas.saveInput,
-      inputParser: reviewDraftSaveInputSchema,
+      lane: evaluateLane, inputSchema: schemas.saveInput,
       projectedSchema: schemas.saveProjected,
       contributionSchema: schemas.saveContribution,
-      contributionParser: reviewEvaluationDraftSaveContributionSchema,
       canonicalSchema: schemas.saveCanonical,
       canonicalParser: reviewDraftSaveCanonicalResultSchema,
       handlerCapability: REVIEW_DRAFT_SAVE_HANDLER_CAPABILITY,
-      strategy: 'save', path: '/api/events/current/review/evaluation-draft',
+      path: '/api/events/current/review/evaluation-draft',
       requestHashProfile: REVIEW_DRAFT_SAVE_REQUEST_HASH_PROFILE,
       outcomes: saveOutcomes(accessOutcomes)
-    }, input, scopeResolver)
-  ] as const;
+    }, input, scopeResolver)] as const;
 
   const recordProfile = Object.freeze({
     reference: ref('record-profile.review.operation-audit'),
@@ -670,14 +465,6 @@ export function createReviewOperationModule(
         { reference: schemas.setupInput, schema: reviewRoundSetupReadInputSchema },
         { reference: schemas.setupCanonical, schema: reviewRoundSetupCanonicalResultSchema },
         { reference: schemas.setupProjected, schema: reviewRoundSetupReadResultSchema },
-        { reference: schemas.roundDraftInput, schema: reviewRoundChangeDraftInputSchema },
-        { reference: schemas.stepDraftInput, schema: reviewStepBackChangeDraftInputSchema },
-        { reference: schemas.evaluationDraftInput, schema: reviewEvaluationChangeDraftInputSchema },
-        { reference: schemas.changeContribution, schema: reviewChangesetDraftContributionSchema },
-        { reference: schemas.changeCanonical, schema: reviewChangeDraftCanonicalResultSchema },
-        { reference: schemas.roundDraftProjected, schema: reviewChangeDraftOperationResultSchema },
-        { reference: schemas.stepDraftProjected, schema: reviewChangeDraftOperationResultSchema },
-        { reference: schemas.evaluationDraftProjected, schema: reviewChangeDraftOperationResultSchema },
         { reference: schemas.saveInput, schema: reviewDraftSaveInputSchema },
         { reference: schemas.saveContribution, schema: reviewEvaluationDraftSaveContributionSchema },
         { reference: schemas.saveCanonical, schema: reviewDraftSaveCanonicalResultSchema },
@@ -927,17 +714,13 @@ function effectRuntime(
   spec: {
     readonly key: string;
     readonly operation: { readonly name: string; readonly version: number };
-    readonly effect: 'draft' | 'commit';
     readonly lane: ReturnType<typeof parseOperationAccessLane>;
     readonly inputSchema: SafeSchemaManifestRef;
-    readonly inputParser: z.ZodType;
     readonly projectedSchema: SafeSchemaManifestRef;
     readonly contributionSchema: SafeSchemaManifestRef;
-    readonly contributionParser: z.ZodType;
     readonly canonicalSchema: SafeSchemaManifestRef;
     readonly canonicalParser: z.ZodType;
     readonly handlerCapability: VersionedDefinitionRef;
-    readonly strategy: 'change' | 'save';
     readonly path: string;
     readonly requestHashProfile: VersionedDefinitionRef;
     readonly outcomes: readonly OperationOutcomeDeclaration[];
@@ -964,7 +747,7 @@ function effectRuntime(
   const context = createEffectInvocationContextBuilder({
     reference: refs.context,
     operation: spec.operation,
-    effect: spec.effect,
+    effect: 'commit',
     lanes: [spec.lane],
     scopeResolver,
     authorityResolver: input.currentAuthority,
@@ -994,7 +777,7 @@ function effectRuntime(
     reference: refs.phase,
     family: refs.family,
     operation: spec.operation,
-    effect: spec.effect,
+    effect: 'commit',
     handler: refs.handler,
     handlerCapability: spec.handlerCapability,
     contributionSchema: spec.contributionSchema,
@@ -1010,9 +793,7 @@ function effectRuntime(
     operation: spec.operation,
     resolve: () => Object.freeze({
       risk: 'low' as const,
-      consequenceTags: Object.freeze([
-        spec.strategy === 'change' ? 'changeset-drafted' : 'review-draft-saved'
-      ]),
+      consequenceTags: Object.freeze(['review-draft-saved']),
       evidenceIds: Object.freeze([`${spec.key}.risk`])
     })
   });
@@ -1055,19 +836,12 @@ function effectRuntime(
     approvalResolver: refs.approval,
     interventionOutcomes: autonomyInterventionOutcomes(1)
   });
-  const handler = spec.strategy === 'change'
-    ? createReviewChangeDraftHandler({
-        reference: refs.handler,
-        handlerCapability: spec.handlerCapability,
-        contributionSchema: spec.contributionSchema,
-        canonicalResultSchema: spec.canonicalSchema
-      })
-    : createReviewEvaluationDraftSaveHandler({
-        reference: refs.handler,
-        handlerCapability: spec.handlerCapability,
-        contributionSchema: spec.contributionSchema,
-        canonicalResultSchema: spec.canonicalSchema
-      });
+  const handler = createReviewEvaluationDraftSaveHandler({
+    reference: refs.handler,
+    handlerCapability: spec.handlerCapability,
+    contributionSchema: spec.contributionSchema,
+    canonicalResultSchema: spec.canonicalSchema
+  });
   const resultProjection = projection(
     refs.projection,
     spec.canonicalSchema,
@@ -1078,13 +852,11 @@ function effectRuntime(
   const definition = Object.freeze({
     ...spec.operation,
     lifecycle: { status: 'active' as const },
-    summary: spec.strategy === 'change'
-      ? 'Draft one guarded Review change for confirmation.'
-      : 'Save one reviewer evaluation draft without committing the review.',
-    effect: spec.effect,
+    summary: 'Save one reviewer evaluation working draft without committing the review.',
+    effect: 'commit' as const,
     maxRisk: 'low' as const,
     autonomyPolicy: refs.autonomy,
-    consequenceTags: [spec.strategy === 'change' ? 'changeset-drafted' : 'review-draft-saved'],
+    consequenceTags: ['review-draft-saved'],
     inputSchema: spec.inputSchema,
     contributionSchema: spec.contributionSchema,
     canonicalResultSchema: spec.canonicalSchema,
@@ -1120,21 +892,6 @@ function effectRuntime(
     autonomy: autonomyPolicy, context, family, terminalization, phase, risk,
     evidence, approval, preflight, handler, projection: resultProjection, definition
   });
-}
-
-function changeOutcomes(
-  accessOutcomes: readonly OperationOutcomeDeclaration[]
-): readonly OperationOutcomeDeclaration[] {
-  return Object.freeze([
-    { class: 'idempotency_conflict' as const, kind: 'operation.request_changed', retryable: false, detailSchema: schemas.nullDetail },
-    ...accessOutcomes,
-    { class: 'conflict' as const, kind: 'review.event_required', retryable: false, detailSchema: schemas.nullDetail },
-    { class: 'conflict' as const, kind: 'review.viewer_required', retryable: false, detailSchema: schemas.nullDetail },
-    { class: 'stale_revision' as const, kind: 'review.canonical_changed', retryable: false, detailSchema: schemas.staleDetail },
-    { class: 'conflict' as const, kind: 'changeset.id_collision', retryable: false, detailSchema: schemas.nullDetail },
-    { class: 'conflict' as const, kind: 'operation.in_progress', retryable: true, detailSchema: schemas.nullDetail },
-    ...autonomyInterventionOutcomeDeclarations(schemas.nullDetail)
-  ]);
 }
 
 function saveOutcomes(

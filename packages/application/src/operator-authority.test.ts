@@ -68,7 +68,7 @@ const workspaceScope: ResolvedScope = Object.freeze({
   subjects: Object.freeze([]),
   resolutionEvidenceIds: Object.freeze(['scope-resolution'])
 });
-const changesetScope: ResolvedScope = Object.freeze({
+const operationScope: ResolvedScope = Object.freeze({
   workspaceId,
   eventId,
   subjects: Object.freeze([
@@ -76,19 +76,19 @@ const changesetScope: ResolvedScope = Object.freeze({
     { kind: 'event' as const, id: eventId },
     {
       kind: 'domain' as const,
-      domain: 'changeset',
+      domain: 'operation',
       entity: 'owner',
       id: 'program_vocabulary'
     }
   ]),
-  resolutionEvidenceIds: Object.freeze(['changeset-owner-resolution'])
+  resolutionEvidenceIds: Object.freeze(['operation-owner-resolution'])
 });
 
-const changesetPermissionRegistration: OperatorAuthorityPolicyRegistration = Object.freeze({
+const operationPermissionRegistration: OperatorAuthorityPolicyRegistration = Object.freeze({
   policy: lane.policy,
   permission: Object.freeze({
     kind: 'domain_subject' as const,
-    domain: 'changeset',
+    domain: 'operation',
     entity: 'owner',
     mappings: Object.freeze([
       Object.freeze({ id: 'program_vocabulary', permissionId: 'program.vocabulary.manage' as const })
@@ -149,7 +149,7 @@ async function operatorReadAndEffectRegistry() {
   const effectContributionSchema = z.strictObject({
     result: effectCanonicalSchema,
     domain: z.null(),
-    receiptChildren: z.array(z.never())
+    effectContributions: z.array(z.never())
   });
   const readAutonomy = createOperationAutonomyPolicy({
     definition: refs.readAutonomy,
@@ -299,7 +299,7 @@ async function operatorReadAndEffectRegistry() {
       contributionSchema: refs.effectContribution,
       canonicalResultSchema: refs.effectCanonical,
       handle: () => ({
-        result: { kind: 'success', data: { value: 'draft' } }, domain: null, receiptChildren: []
+        result: { kind: 'success', data: { value: 'draft' } }, domain: null, effectContributions: []
       })
     }],
     effectOperations: [{
@@ -526,7 +526,7 @@ describe('ordinary operator current authority', () => {
       policy: lane.policy,
       permission: {
         kind: 'domain_subject',
-        domain: 'changeset',
+        domain: 'operation',
         entity: 'owner',
         mappings: [
           { id: 'program_vocabulary', permissionId: 'program.vocabulary.manage' },
@@ -565,7 +565,7 @@ describe('ordinary operator current authority', () => {
       policy: lane.policy,
       permission: {
         kind: 'domain_subject',
-        domain: 'changeset',
+        domain: 'operation',
         entity: 'owner',
         mappings: [
           { id: 'program_vocabulary', permissionId: 'event.manage' },
@@ -577,7 +577,7 @@ describe('ordinary operator current authority', () => {
       policy: lane.policy,
       permission: {
         kind: 'domain_subject',
-        domain: 'changeset',
+        domain: 'operation',
         entity: 'owner',
         mappings: [{ id: 'program_vocabulary', permissionId: 'unknown.permission' as PermissionId }]
       }
@@ -586,7 +586,7 @@ describe('ordinary operator current authority', () => {
       policy: lane.policy,
       permission: {
         kind: 'domain_subject',
-        domain: 'changeset',
+        domain: 'operation',
         entity: 'owner',
         mappings: [{
           id: 'workspace_team',
@@ -601,7 +601,7 @@ describe('ordinary operator current authority', () => {
       policy: lane.policy,
       permission: Object.freeze({
         kind: 'domain_subject' as const,
-        domain: 'changeset',
+        domain: 'operation',
         entity: 'owner',
         mappings: Object.freeze([Object.freeze({
           id: 'workspace_team',
@@ -619,12 +619,12 @@ describe('ordinary operator current authority', () => {
         { kind: 'workspace' as const, id: workspaceId },
         {
           kind: 'domain' as const,
-          domain: 'changeset',
+          domain: 'operation',
           entity: 'owner',
           id: 'workspace_team'
         }
       ]),
-      resolutionEvidenceIds: Object.freeze(['changeset-owner-resolution'])
+      resolutionEvidenceIds: Object.freeze(['operation-owner-resolution'])
     });
 
     for (const permissionId of [
@@ -664,10 +664,10 @@ describe('ordinary operator current authority', () => {
 
   test('derives one exact permission from one authenticated domain subject', async () => {
     const authorized = fixture({
-      policyRegistration: changesetPermissionRegistration,
+      policyRegistration: operationPermissionRegistration,
       rolePermissionIds: ['program.vocabulary.manage']
     });
-    const result = await authorized.resolver.resolve(resolutionInput(changesetScope));
+    const result = await authorized.resolver.resolve(resolutionInput(operationScope));
     expect(result.kind).toBe('authorized');
     if (result.kind === 'authorized') {
       expect(result.authority.grants).toEqual([
@@ -676,8 +676,8 @@ describe('ordinary operator current authority', () => {
     }
 
     const unmapped = Object.freeze({
-      ...changesetScope,
-      subjects: Object.freeze(changesetScope.subjects.map((subject) =>
+      ...operationScope,
+      subjects: Object.freeze(operationScope.subjects.map((subject) =>
         subject.kind === 'domain' ? Object.freeze({ ...subject, id: 'form_definition' }) : subject
       ))
     });
@@ -686,8 +686,8 @@ describe('ordinary operator current authority', () => {
     });
 
     const missing = Object.freeze({
-      ...changesetScope,
-      subjects: Object.freeze(changesetScope.subjects.filter((subject) =>
+      ...operationScope,
+      subjects: Object.freeze(operationScope.subjects.filter((subject) =>
         subject.kind !== 'domain'
       ))
     });
@@ -696,10 +696,10 @@ describe('ordinary operator current authority', () => {
     });
 
     const multiple = Object.freeze({
-      ...changesetScope,
+      ...operationScope,
       subjects: Object.freeze([
-        ...changesetScope.subjects,
-        { kind: 'domain' as const, domain: 'changeset', entity: 'owner', id: 'form_definition' }
+        ...operationScope.subjects,
+        { kind: 'domain' as const, domain: 'operation', entity: 'owner', id: 'form_definition' }
       ])
     });
     expect(await authorized.resolver.resolve(resolutionInput(multiple))).toEqual({
@@ -707,9 +707,9 @@ describe('ordinary operator current authority', () => {
     });
 
     const extra = Object.freeze({
-      ...changesetScope,
+      ...operationScope,
       subjects: Object.freeze([
-        ...changesetScope.subjects,
+        ...operationScope.subjects,
         { kind: 'workspace_user' as const, id: userId }
       ])
     });

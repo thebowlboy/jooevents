@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import {
   createEffectInvocationContextBuilder,
   autonomyInterventionOutcomeDeclarations,
@@ -30,7 +29,6 @@ import {
   eventCreateInputSchema,
   eventCreateOperationResultSchema,
   eventCreateResultSchema,
-  eventCreateSafeDiffSchema,
   structuredOutcomeSchema,
   type CurrentEventProjection,
   type SafeSchemaManifestRef,
@@ -38,8 +36,6 @@ import {
   type VersionedDefinitionRef
 } from '@jooevents/contracts';
 import {
-  diffEventCreatePlan,
-  eventCreatePlanDigest,
   eventCreateResult,
   parseEventCreatePlan,
   type EventCreatePlan
@@ -53,7 +49,7 @@ import {
   type VersionedKeyProfileRef
 } from '@jooevents/identity-access';
 import {
-  encodeCanonicalJson,
+  canonicalJsonText,
   parseContractVersion,
   parseEventId,
   parseInstant,
@@ -85,10 +81,6 @@ function schemaRef(key: string, schema: z.ZodType): SafeSchemaManifestRef {
   return createSafeSchemaManifestRef(key, schema);
 }
 
-function canonicalDigest(value: unknown): string {
-  return createHash('sha256').update(encodeCanonicalJson(value)).digest('hex');
-}
-
 const nullDetailSchema = z.null();
 const canonicalReadResultSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('success'), data: currentEventProjectionSchema }),
@@ -108,73 +100,32 @@ const eventCreatePlanSchema = z.custom<EventCreatePlan>(
 
 export const eventCreateDomainContributionSchema = z.strictObject({
   kind: z.literal('event_create'),
-  preparationHandle: z.string().trim().min(1).max(256),
-  planDigestSha256: z.string().regex(/^[a-f0-9]{64}$/)
+  plan: eventCreatePlanSchema
 });
-
-export const eventCreateEvidenceChildSchema = z.discriminatedUnion('kind', [
-  z.strictObject({
-    kind: z.literal('domain_fact'),
-    factId: z.uuid(),
-    factKind: z.literal('event_created'),
-    factVersion: z.literal(1),
-    eventId: z.uuid(),
-    sourcePlan: eventCreatePlanSchema,
-    safeDiff: eventCreateSafeDiffSchema
-  }),
-  z.strictObject({
-    kind: z.literal('outbox_pointer'),
-    pointerId: z.uuid(),
-    sourceKind: z.literal('domain_fact'),
-    factId: z.uuid()
-  }),
-  z.strictObject({
-    kind: z.literal('timeline'),
-    timelineId: z.uuid(),
-    sourceKind: z.literal('domain_fact'),
-    factId: z.uuid(),
-    workspaceId: z.uuid(),
-    eventId: z.uuid(),
-    occurredAt: z.iso.datetime({ offset: true })
-  })
-]);
 
 const eventCreateSuccessContributionSchema = z.strictObject({
   result: canonicalCreateResultSchema,
   domain: eventCreateDomainContributionSchema,
-  receiptChildren: z.tuple([
-    eventCreateEvidenceChildSchema.options[0],
-    eventCreateEvidenceChildSchema.options[1],
-    eventCreateEvidenceChildSchema.options[2]
-  ])
+  effectContributions: z.tuple([])
 }).superRefine((contribution, context) => {
   if (contribution.result.kind !== 'success') {
     context.addIssue({ code: 'custom', message: 'Event create contribution must succeed.' });
     return;
   }
-  const [fact, pointer, timeline] = contribution.receiptChildren;
   let sourcePlan: EventCreatePlan;
-  try { sourcePlan = parseEventCreatePlan(fact.sourcePlan); } catch {
-    context.addIssue({ code: 'custom', message: 'Invalid source Event create plan.', path: ['receiptChildren', 0, 'sourcePlan'] });
+  try { sourcePlan = parseEventCreatePlan(contribution.domain.plan); } catch {
+    context.addIssue({ code: 'custom', message: 'Invalid Event create plan.', path: ['domain', 'plan'] });
     return;
   }
-  if (
-    contribution.domain.planDigestSha256 !== eventCreatePlanDigest(sourcePlan)
-    || canonicalDigest(contribution.result.data) !== canonicalDigest(eventCreateResult(sourcePlan))
-    || canonicalDigest(fact.safeDiff) !== canonicalDigest(diffEventCreatePlan(sourcePlan))
-    || fact.eventId !== sourcePlan.after.id
-    || pointer.factId !== fact.factId
-    || timeline.factId !== fact.factId
-    || timeline.eventId !== sourcePlan.after.id
-    || timeline.workspaceId !== sourcePlan.workspaceId
-    || timeline.occurredAt !== sourcePlan.after.createdAt
-  ) context.addIssue({ code: 'custom', message: 'Event create evidence is incoherent.' });
+  if (canonicalJsonText(contribution.result.data) !== canonicalJsonText(eventCreateResult(sourcePlan))) {
+    context.addIssue({ code: 'custom', message: 'Event create contribution is incoherent.' });
+  }
 });
 
 const eventCreateOutcomeContributionSchema = z.strictObject({
   result: z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema }),
   domain: z.null(),
-  receiptChildren: z.tuple([])
+  effectContributions: z.tuple([])
 }).superRefine((contribution, context) => {
   const key = `${contribution.result.outcome.class}:${contribution.result.outcome.kind}`;
   if (![
@@ -417,10 +368,12 @@ export function createEventOperationModule(input: CreateEventOperationModuleInpu
   });
   const execution = Object.freeze({
     kind: 'single_unit_of_work' as const,
+    profile: 'direct_audited' as const,
     family: refs.executionFamily,
     phase: refs.executionPhase,
     terminalization: refs.terminalization,
-    autonomyPreflight: refs.autonomyPreflight
+    autonomyPreflight: refs.autonomyPreflight,
+    history: { summary: 'Created an event' }
   });
   const readCapability: ReadCapabilityRegistration = Object.freeze({
     reference: refs.readCapability,
@@ -507,6 +460,7 @@ export function createEventOperationModule(input: CreateEventOperationModuleInpu
         ...EVENT_CREATE_OPERATION, lifecycle: { status: 'active' as const },
         summary: 'Create and select the first Event in the active workspace.', effect: 'commit' as const,
         maxRisk: 'normal' as const, autonomyPolicy: refs.createAutonomy, consequenceTags: ['event-created'],
+        agentAction: { eligible: true as const, displayLabel: 'Create an event', consequences: ['A new event becomes the active event for this workspace.'], externalEffect: 'none' as const },
         inputSchema: schemas.createInput, contributionSchema: schemas.createContribution,
         canonicalResultSchema: schemas.createCanonical,
         outcomes: [{ class: 'idempotency_conflict' as const, kind: 'operation.request_changed', retryable: false, detailSchema: schemas.nullDetail }, ...accessOutcomes,

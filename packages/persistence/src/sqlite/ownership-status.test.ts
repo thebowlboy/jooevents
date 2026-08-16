@@ -112,13 +112,13 @@ describe('file-backed SQLite lifetime ownership', () => {
   test('a pending adoption owner excludes a second adopter', () => {
     const path = pathFor();
     const legacy = new Database(path, { create: true, strict: true });
-    legacy.exec(readFileSync(SQLITE_MIGRATION_MANIFEST.migrations[0].artifact, 'utf8'));
+    legacy.exec(readFileSync(SQLITE_MIGRATION_MANIFEST.predecessor.artifact, 'utf8'));
     legacy.close();
     const canonical = canonicalSQLiteTarget(path);
     const pending = acquireSQLiteOwner({
       canonicalDatabasePath: canonical,
       kind: 'pending-adoption',
-      sourceFingerprint: SQLITE_MIGRATION_MANIFEST.migrations[0].expectedApplicationFingerprint
+      sourceFingerprint: SQLITE_MIGRATION_MANIFEST.predecessor.expectedApplicationFingerprint
     });
     foundationError(() => openSQLite(path, { migrationPolicy: 'apply' }), 'database_busy');
     pending.release();
@@ -171,13 +171,13 @@ describe('file-backed SQLite lifetime ownership', () => {
   });
 
   for (const scenario of [
-    { point: 'after_schema_before_receipt', expectedOpen: 'adopted' },
+    { point: 'after_schema_before_receipt', expectedOpen: 'bridged' },
     { point: 'after_commit_before_return', expectedOpen: 'current' }
   ] as const) {
     test(`recovers a dead pending adopter at ${scenario.point} without guessing state`, async () => {
       const path = pathFor();
       const legacy = new Database(path, { create: true, strict: true });
-      legacy.exec(readFileSync(SQLITE_MIGRATION_MANIFEST.migrations[0].artifact, 'utf8'));
+      legacy.exec(readFileSync(SQLITE_MIGRATION_MANIFEST.predecessor.artifact, 'utf8'));
       legacy.close();
       expect((await child(['crash-adoption', path, scenario.point])).code).toBe(76);
       const canonical = canonicalSQLiteTarget(path);
@@ -186,7 +186,7 @@ describe('file-backed SQLite lifetime ownership', () => {
       recoverStaleSQLiteOwner(canonical, stale!.ownerId);
       expect(listSQLiteOwners(canonical)).toEqual([]);
 
-      const reopened = scenario.expectedOpen === 'adopted'
+      const reopened = scenario.expectedOpen === 'bridged'
         ? openSQLite(path, { migrationPolicy: 'apply' })
         : openSQLite(path);
       opened.push(reopened);

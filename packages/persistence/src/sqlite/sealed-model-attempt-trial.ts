@@ -352,7 +352,7 @@ function requireInstalled(sqlite: Database, table: string, code: string): void {
 
 /** Validates composition order; it creates no Foundation or model schema as a side effect. */
 export function installSealedModelAttemptTrial(sqlite: Database): void {
-  requireInstalled(sqlite, 'foundation_trial_operation_receipts', 'foundation_trial_receipt_schema_required');
+  requireInstalled(sqlite, 'operation_log', 'operation_log_schema_required');
   requireInstalled(sqlite, 'model_attempt_payload_adoptions_trial', 'model_durability_trial_schema_required');
   sqlite.exec('PRAGMA foreign_keys = ON');
 }
@@ -375,7 +375,7 @@ export function createSealedModelAttemptTrialComposition(input: {
   readonly newToolCallId: () => string;
   readonly newPayloadRefId: () => string;
   readonly newCorrelationId: () => string;
-  readonly newReceiptId: () => string;
+  readonly newOperationLogId: () => string;
   readonly faults?: SealedModelAttemptTrialFaults;
 }): SealedModelAttemptTrialComposition {
   installSealedModelAttemptTrial(input.sqlite);
@@ -405,7 +405,7 @@ export function createSealedModelAttemptTrialComposition(input: {
   const effectExecutor = createEffectOperationExecutor({
     registry: input.operationRegistry,
     unitOfWork: input.effectUnitOfWork,
-    newReceiptId: input.newReceiptId
+    newOperationLogId: input.newOperationLogId
   });
 
   const now = (): UtcInstant => parseInstant(readClock());

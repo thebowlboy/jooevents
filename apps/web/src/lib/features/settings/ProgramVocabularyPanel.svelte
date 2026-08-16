@@ -2,14 +2,16 @@
 	import { onMount } from 'svelte';
 	import { Button, Field } from '$lib/ui';
 	import type {
-		EventProgramDraftRequest,
+		EventProgramDirectRequest,
+		EventProgramEffectResult,
+		EventProgramMergeDraftRequest,
 		EventProgramPort
 	} from '$lib/api/event-program/port';
+	import type { ProgramVocabularyDirectData, ProgramVocabularyMergeReviewData } from '@jooevents/contracts';
 	import type {
 		ProgramFormatView,
 		ProgramRoomView,
 		ProgramTrackView,
-		ProgramVocabularyDraftView,
 		ProgramVocabularySnapshotView
 	} from '$lib/api/view-models/program-vocabulary';
 
@@ -18,7 +20,7 @@
 
 	interface Props {
 		port: EventProgramPort;
-		ondraft?: (draft: ProgramVocabularyDraftView) => void;
+		ondraft?: (draft: ProgramVocabularyMergeReviewData) => void;
 	}
 
 	let { port, ondraft }: Props = $props();
@@ -67,7 +69,7 @@
 	}
 
 	function reviewedDraftError(
-		result: Exclude<Awaited<ReturnType<EventProgramPort['vocabulary']['draft']>>, { kind: 'success' }>
+		result: Exclude<Awaited<ReturnType<EventProgramPort['vocabulary']['draftMerge']>>, { kind: 'success' }>
 	): string {
 		if (result.kind === 'unavailable') return 'This draft operation is not available in this build.';
 		if (result.kind === 'transport_error') {
@@ -84,16 +86,63 @@
 		return 'JooEvents could not prepare that vocabulary draft.';
 	}
 
-	async function prepare(key: string, request: EventProgramDraftRequest) {
+	function directError(
+		result: Exclude<EventProgramEffectResult<ProgramVocabularyDirectData>, { kind: 'success' }>
+	): string {
+		if (result.kind === 'unavailable') return 'This vocabulary action is not available in this build.';
+		if (result.kind === 'transport_error') {
+			return result.error.retryable
+				? 'The vocabulary change could not reach JooEvents. Try again when the connection is back.'
+				: 'The vocabulary request was not accepted.';
+		}
+		if (result.outcome.class === 'stale_revision') {
+			return 'The vocabulary changed since this list loaded. Reload and try again.';
+		}
+		if (result.outcome.kind === 'program_vocabulary.delete_referenced') {
+			return 'That item is still referenced and cannot be deleted.';
+		}
+		return 'JooEvents could not apply that vocabulary change.';
+	}
+
+	async function applyDirect(key: string, request: EventProgramDirectRequest) {
 		pending = key;
 		message = '';
 		const replayKey = `${request.action}:${JSON.stringify(request.input)}`;
 		const idempotencyKey = idempotencyKeys.get(replayKey) ?? crypto.randomUUID();
 		idempotencyKeys.set(replayKey, idempotencyKey);
 		try {
-			const result = await port.vocabulary.draft(request, { idempotencyKey });
+			const result = request.action === 'create'
+				? await port.vocabulary.create(request.input, { idempotencyKey })
+				: request.action === 'edit'
+					? await port.vocabulary.edit(request.input, { idempotencyKey })
+					: request.action === 'retire'
+						? await port.vocabulary.retire(request.input, { idempotencyKey })
+						: request.action === 'restore'
+							? await port.vocabulary.restore(request.input, { idempotencyKey })
+							: await port.vocabulary.delete(request.input, { idempotencyKey });
 			if (result.kind === 'success') {
-				message = 'Draft ready for review. The effective vocabulary has not changed.';
+				idempotencyKeys.delete(replayKey);
+				message = 'Vocabulary updated.';
+				await load();
+				return;
+			}
+			message = directError(result);
+		} finally {
+			pending = '';
+		}
+	}
+
+	async function prepareMerge(key: string, request: EventProgramMergeDraftRequest) {
+		pending = key;
+		message = '';
+		const replayKey = `merge:${JSON.stringify(request.input)}`;
+		const idempotencyKey = idempotencyKeys.get(replayKey) ?? crypto.randomUUID();
+		idempotencyKeys.set(replayKey, idempotencyKey);
+		try {
+			const result = await port.vocabulary.draftMerge(request, { idempotencyKey });
+			if (result.kind === 'success') {
+				idempotencyKeys.delete(replayKey);
+				message = 'Review the affected references below. Nothing has changed yet.';
 				ondraft?.(result.data);
 				return;
 			}
@@ -112,11 +161,11 @@
 			message = 'Room capacity must be a positive whole number, or left unset.';
 			return;
 		}
-		const request: EventProgramDraftRequest = kind === 'room'
+		const request: EventProgramDirectRequest = kind === 'room'
 			? { action: 'create', input: { kind, name, capacity: addCapacity,
 				expectedSetVersion: snapshot.setVersion } }
 			: { action: 'create', input: { kind, name, expectedSetVersion: snapshot.setVersion } };
-		void prepare(`add-${kind}`, request);
+		void applyDirect(`add-${kind}`, request);
 	}
 
 	function edit(entry: VocabularyEntry) {
@@ -129,7 +178,7 @@
 			message = 'Room capacity must be a positive whole number, or left unset.';
 			return;
 		}
-		const request: EventProgramDraftRequest = entry.kind === 'room'
+		const request: EventProgramDirectRequest = entry.kind === 'room'
 			? { action: 'edit', input: {
 				kind: entry.kind, id: entry.id, expectedSetVersion: snapshot.setVersion,
 				expectedItemVersion: entry.version,
@@ -139,7 +188,7 @@
 				kind: entry.kind, id: entry.id, expectedSetVersion: snapshot.setVersion,
 				expectedItemVersion: entry.version, changes: { name }
 			} };
-		void prepare(`edit-${entry.id}`, request);
+		void applyDirect(`edit-${entry.id}`, request);
 	}
 
 	function lifecycle(action: 'retire' | 'restore' | 'delete', entry: VocabularyEntry) {
@@ -150,10 +199,10 @@
 			expectedSetVersion: snapshot.setVersion,
 			expectedItemVersion: entry.version
 		};
-		const request: EventProgramDraftRequest = action === 'retire'
+		const request: EventProgramDirectRequest = action === 'retire'
 			? { action, input }
 			: action === 'restore' ? { action, input } : { action, input };
-		void prepare(`${action}-${entry.id}`, request);
+		void applyDirect(`${action}-${entry.id}`, request);
 	}
 
 	function merge(kind: VocabularyKind, entries: readonly VocabularyEntry[]) {
@@ -163,7 +212,7 @@
 		const source = entries.find((entry) => entry.id === sourceId);
 		const target = entries.find((entry) => entry.id === targetId);
 		if (!source || !target || source.id === target.id) return;
-		void prepare(`merge-${kind}`, {
+		void prepareMerge(`merge-${kind}`, {
 			action: 'merge',
 			input: {
 				kind,
@@ -190,7 +239,7 @@
 	<header class="panel-header">
 		<div>
 			<h2 id="program-vocabulary-title">Program vocabulary</h2>
-			<p>Rooms, tracks, and formats are shared references. Changes are prepared as reviewable drafts.</p>
+			<p>Add, edit, retire, restore, and delete apply immediately. A merge shows the affected references before anything changes.</p>
 		</div>
 		{#if port.source.kind === 'sample'}
 			<span class="sample-label">Sample · {port.source.label}</span>
@@ -246,18 +295,18 @@
 									</div>
 									<div class="entry-actions">
 										<Button variant="secondary" size="sm" loading={pending === `edit-${entry.id}`}
-											disabled={pending !== ''} onclick={() => edit(entry)}>Draft change</Button>
+										disabled={pending !== ''} onclick={() => edit(entry)}>Save</Button>
 										{#if entry.status === 'active'}
 											<Button variant="ghost" size="sm" loading={pending === `retire-${entry.id}`}
-												disabled={pending !== ''} onclick={() => lifecycle('retire', entry)}>Draft retirement</Button>
+											disabled={pending !== ''} onclick={() => lifecycle('retire', entry)}>Retire</Button>
 										{:else}
 											<Button variant="ghost" size="sm" loading={pending === `restore-${entry.id}`}
-												disabled={pending !== ''} onclick={() => lifecycle('restore', entry)}>Draft restore</Button>
+											disabled={pending !== ''} onclick={() => lifecycle('restore', entry)}>Restore</Button>
 										{/if}
 									<Button variant="danger" size="sm" loading={pending === `delete-${entry.id}`}
 										disabled={pending !== '' || entry.deleteAvailability.kind === 'unavailable'}
 										aria-describedby={entry.deleteAvailability.kind === 'unavailable' ? `delete-note-${entry.id}` : undefined}
-										onclick={() => lifecycle('delete', entry)}>Draft delete</Button>
+										onclick={() => lifecycle('delete', entry)}>Delete</Button>
 								</div>
 								{#if entry.deleteAvailability.kind === 'unavailable'}
 									<p class="delete-note" id={`delete-note-${entry.id}`}>{deleteUnavailableCopy(entry)}</p>
@@ -284,7 +333,7 @@
 						{/if}
 						<Button variant="secondary" size="sm" loading={pending === `add-${group.kind}`}
 							disabled={pending !== '' || !addNames[group.kind].trim()}
-							onclick={() => create(group.kind)}>Draft add</Button>
+							onclick={() => create(group.kind)}>Add</Button>
 					</div>
 
 					{#if group.entries.length >= 2}
@@ -304,7 +353,7 @@
 							<Button variant="secondary" size="sm" loading={pending === `merge-${group.kind}`}
 								disabled={pending !== '' || !mergeSources[group.kind] || !mergeTargets[group.kind]
 									|| mergeSources[group.kind] === mergeTargets[group.kind]}
-								onclick={() => merge(group.kind, group.entries)}>Draft merge</Button>
+								onclick={() => merge(group.kind, group.entries)}>Review merge</Button>
 						</div>
 					{/if}
 				</section>

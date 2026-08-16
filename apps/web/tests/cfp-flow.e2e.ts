@@ -71,7 +71,10 @@ test('with a form open but nothing arrived, the empty inbox switches to sharing'
 	await expect(
 		page.getByRole('heading', { level: 1, name: 'Call for proposals' })
 	).toBeVisible({ timeout: 15000 });
-	await page.getByRole('button', { name: 'Open form' }).click();
+	await page.getByRole('button', { name: 'Publish and open' }).click();
+	const publicationReview = page.getByRole('dialog', { name: 'Review publication' });
+	await expect(publicationReview).toBeVisible();
+	await publicationReview.getByRole('button', { name: 'Publish and open' }).click();
 
 	await page.getByRole('link', { name: 'Submissions' }).click();
 	const empty = page.locator('.empty');

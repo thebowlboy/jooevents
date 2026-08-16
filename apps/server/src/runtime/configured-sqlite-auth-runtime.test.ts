@@ -94,7 +94,7 @@ function count(runtime: ConfiguredSQLiteAuthRuntime, table: string): number {
 }
 
 describe('configured SQLite auth runtime', () => {
-  test('reopens the retained epoch-1 database without adding disposable domain schema', async () => {
+  test('reopens the retained epoch-2 baseline without adding runtime schema overlays', async () => {
     const directory = temporaryDirectory();
     const path = join(directory, 'jooevents.sqlite');
     const databaseId = createRetainedDatabase(path);
@@ -104,8 +104,8 @@ describe('configured SQLite auth runtime', () => {
     runtimes.push(first);
     expect(first.database.migration).toMatchObject({
       status: 'current',
-      coordinate: { schemaEpoch: 1, sequence: 1 },
-      migrationId: 'e1_0001_identity_access',
+      coordinate: { schemaEpoch: 2, sequence: 1 },
+      migrationId: 'e2_0001_jooevents_foundation',
       databaseClass: 'retained_development',
       databaseId,
       schemaFingerprint: SQLITE_MIGRATION_MANIFEST.expectedCurrentFullFingerprint

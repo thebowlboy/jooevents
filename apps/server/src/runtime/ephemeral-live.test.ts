@@ -9,15 +9,19 @@ import {
   currentEventReadResultSchema,
   currentEventSettingsReadResultSchema,
   createReadOperationResultSchema,
-  decisionDecideDraftOperationResultSchema,
+  decisionDecideOperationResultSchema,
   decisionStateReadResultSchema,
   emailProviderConfigurationReadOperationResultSchema,
-  engagementChangeDraftOperationResultSchema,
+  engagementChangeOperationResultSchema,
   engagementSnapshotReadResultSchema,
   emailProviderReadinessReadOperationResultSchema,
-  eventCreateDraftOperationResultSchema,
-  eventSettingsUpdateDraftOperationResultSchema,
+  eventCreateOperationResultSchema,
+  eventSettingsUpdateOperationResultSchema,
+  fieldRegistryDirectOperationResultSchema,
   fieldRegistrySnapshotReadResultSchema,
+  intakeFormDirectOperationResultSchema,
+  intakeFormVersionPublishOperationResultSchema,
+  intakeFormVersionReviewDraftOperationResultSchema,
   organizerCommunicationAudienceOptionPageOperationResultSchema,
   organizerCommunicationAuthoringPayloadOperationResultSchema,
   organizerCommunicationDraftMutationOperationResultSchema,
@@ -33,56 +37,51 @@ import {
   organizerSubmissionContactSchema,
   portalEngagementRespondResultSchema,
   portalSnapshotReadResultSchema,
+  programVocabularyDirectOperationResultSchema,
+  programVocabularyMergePublishOperationResultSchema,
+  programVocabularyMergeReviewOperationResultSchema,
   programVocabularySnapshotReadResultSchema,
   publicApplicationDraftResumeSchema,
-  releaseDraftOperationResultSchema,
+  releasePublishOperationResultSchema,
+  releaseReviewDraftOperationResultSchema,
   releaseOverviewReadResultSchema,
   safeOperationManifestSchema,
   servedPublicFormSchema,
   servedPublicPresentationSchema,
   servedPublicRosterSchema,
   servedPublicScheduleSchema,
-  submissionDirectEntryDraftOperationResultSchema,
+  submissionDirectEntryOperationResultSchema,
   taskBoardReadResultSchema,
-  taskDraftOperationResultSchema,
   templateArtifactListOperationResultSchema,
-  templateArtifactMutationDraftOperationResultSchema,
+  templateArtifactPublishOperationResultSchema,
+  templateArtifactReviewDraftOperationResultSchema,
   templateEditClassifyOperationResultSchema,
   templateEditModelChoicesOperationResultSchema,
   templateEditReviseOperationResultSchema
 } from '@jooevents/contracts';
 import { workspaceOverviewReadResultSchema } from '@jooevents/contracts/workspace-overview';
 import {
-  workspaceTeamDraftOperationResultSchema,
+  workspaceTeamMutationOperationResultSchema,
   workspaceTeamMembersReadResultSchema
 } from '@jooevents/contracts/workspace-team';
 import {
-  reviewChangeDraftOperationResultSchema,
+  reviewDirectOperationResultSchema,
   reviewSnapshotReadResultSchema
 } from '@jooevents/contracts/reviews';
 import {
   sessionCatalogReadResultSchema,
-  sessionDraftOperationResultSchema
+  sessionDirectOperationResultSchema
 } from '@jooevents/contracts/sessions';
 import {
-  reviewerRosterChangeDraftOperationResultSchema,
+  reviewerRosterDirectOperationResultSchema,
   reviewerRosterSnapshotReadResultSchema
 } from '@jooevents/contracts/reviewer-roster';
 import {
   submissionTriageListOperationResultSchema
 } from '@jooevents/contracts/submission-triage';
+import { deadlineGetReadResultSchema, deadlineListReadResultSchema } from '@jooevents/contracts/deadlines';
+import { schedulePlacementSnapshotReadResultSchema } from '@jooevents/schedule-operations';
 import {
-  deadlineDraftOperationResultSchema,
-  deadlineGetReadResultSchema,
-  deadlineListReadResultSchema
-} from '@jooevents/contracts/deadlines';
-import { programVocabularyDraftOperationResultSchema } from '@jooevents/program-operations';
-import {
-  schedulePlacementDraftOperationResultSchema,
-  schedulePlacementSnapshotReadResultSchema
-} from '@jooevents/schedule-operations';
-import {
-  intakeFormDraftOperationResultSchema,
   intakePublicMutationOperationResultSchema
 } from '@jooevents/intake-operations';
 import {
@@ -90,10 +89,6 @@ import {
   INTAKE_PUBLIC_CONTINUATION_MINT_PATH,
   INTAKE_PUBLIC_FORM_SELECTOR_HEADER
 } from '@jooevents/persistence/intake-public-ceremony';
-import {
-  changesetDiffOperationResultSchema,
-  changesetLifecycleOperationResultSchema
-} from '@jooevents/changeset-operations';
 import { DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG } from '@jooevents/workspace-operations';
 import { loadEphemeralLiveConfig } from '../config';
 import { createEphemeralLiveRuntime, type EphemeralLiveRuntime } from './ephemeral-live';
@@ -251,6 +246,12 @@ function count(runtime: EphemeralLiveRuntime, table: string, where = ''): number
   ).get()?.count ?? -1;
 }
 
+function totalChanges(runtime: EphemeralLiveRuntime): number {
+  return runtime.database.sqlite.query<{ readonly total: number }, []>(
+    'SELECT total_changes() AS total'
+  ).get()?.total ?? -1;
+}
+
 async function effect<Result>(input: {
   readonly runtime: EphemeralLiveRuntime;
   readonly session: BrowserSession;
@@ -318,55 +319,108 @@ async function presentationTemplates(
   });
 }
 
-async function commitDraft(input: {
+async function publishTemplateDraft(input: {
   readonly runtime: EphemeralLiveRuntime;
   readonly session: BrowserSession;
   readonly key: string;
   readonly draft: {
     readonly data: {
-      readonly changesetId: string;
+      readonly draftId: string;
       readonly revision: { readonly id: string; readonly digestSha256: string };
     };
   };
 }) {
   const selector = {
-    changesetId: input.draft.data.changesetId,
+    draftId: input.draft.data.draftId,
     revisionId: input.draft.data.revision.id,
-    revisionDigest: input.draft.data.revision.digestSha256
+    revisionDigestSha256: input.draft.data.revision.digestSha256
   };
-  const proposed = changesetLifecycleOperationResultSchema.parse(await effect({
+  const committed = templateArtifactPublishOperationResultSchema.parse(await effect({
     runtime: input.runtime,
     session: input.session,
-    path: '/api/changesets/proposals',
-    key: `${input.key}-propose`,
-    body: { ...selector, expectedHeadVersion: 1 },
+    path: '/api/events/current/template-artifacts/publish',
+    key: input.key,
+    body: selector,
     parse: (value) => value
   }));
-  expect(proposed).toMatchObject({ kind: 'success', data: { action: 'propose' } });
-  const committed = changesetLifecycleOperationResultSchema.parse(await effect({
-    runtime: input.runtime,
-    session: input.session,
-    path: '/api/changesets/commits',
-    key: `${input.key}-commit`,
-    body: { ...selector, expectedHeadVersion: 2 },
-    parse: (value) => value
-  }));
-  expect(committed).toMatchObject({ kind: 'success', data: { action: 'commit' } });
-  if (committed.kind !== 'success') throw new Error('Changeset commit failed.');
+  expect(committed).toMatchObject({
+    kind: 'success',
+    receipt: { operationName: 'template.artifact.change', operationVersion: 1 }
+  });
+  if (committed.kind !== 'success') throw new Error('Template publish failed.');
   return { selector, committed };
 }
 
-async function createEventThroughChangeset(input: {
+async function publishReleaseDraft(input: {
+  readonly runtime: EphemeralLiveRuntime;
+  readonly session: BrowserSession;
+  readonly key: string;
+  readonly draft: {
+    readonly data: {
+      readonly draftId: string;
+      readonly revision: { readonly id: string; readonly digestSha256: string };
+    };
+  };
+}) {
+  const selector = {
+    draftId: input.draft.data.draftId,
+    revisionId: input.draft.data.revision.id,
+    revisionDigestSha256: input.draft.data.revision.digestSha256
+  };
+  const published = releasePublishOperationResultSchema.parse(await effect({
+    runtime: input.runtime,
+    session: input.session,
+    path: '/api/events/current/releases/publish',
+    key: input.key,
+    body: selector,
+    parse: (value) => value
+  }));
+  expect(published).toMatchObject({ kind: 'success' });
+  if (published.kind !== 'success') throw new Error('Release publish failed.');
+  return { selector, published };
+}
+
+async function publishFormReview(input: {
+  readonly runtime: EphemeralLiveRuntime;
+  readonly session: BrowserSession;
+  readonly key: string;
+  readonly draft: {
+    readonly data: {
+      readonly draftId: string;
+      readonly revision: { readonly id: string; readonly digestSha256: string };
+    };
+  };
+}) {
+  const selector = {
+    draftId: input.draft.data.draftId,
+    revisionId: input.draft.data.revision.id,
+    revisionDigestSha256: input.draft.data.revision.digestSha256
+  };
+  const published = intakeFormVersionPublishOperationResultSchema.parse(await effect({
+    runtime: input.runtime,
+    session: input.session,
+    path: '/api/events/current/forms/publish',
+    key: input.key,
+    body: selector,
+    parse: (value) => value
+  }));
+  expect(published).toMatchObject({ kind: 'success' });
+  if (published.kind !== 'success') throw new Error('Form publish failed.');
+  return { selector, published };
+}
+
+async function createEventDirect(input: {
   readonly runtime: EphemeralLiveRuntime;
   readonly session: BrowserSession;
   readonly key: string;
 }) {
-  const draft = eventCreateDraftOperationResultSchema.parse(await effect({
+  const created = eventCreateOperationResultSchema.parse(await effect({
     runtime: input.runtime,
     session: input.session,
-    path: '/api/events/drafts/create',
-    key: `${input.key}-draft`,
+    path: '/api/events',
+    key: input.key,
     body: {
+      expectedEventSetVersion: 1,
       name: eventInput.name,
       timezone: eventInput.timezone,
       startDate: eventInput.startDate,
@@ -374,19 +428,154 @@ async function createEventThroughChangeset(input: {
     },
     parse: (value) => value
   }));
-  expect(draft).toMatchObject({
+  expect(created).toMatchObject({
     kind: 'success',
-    data: { action: 'create', headVersion: 1, safeDiff: { action: 'create' } },
-    receipt: { operationName: 'event.create.draft', operationVersion: 1 }
+    data: { eventSetVersion: 2, event: { version: 1 } },
+    receipt: { operationName: 'event.create', operationVersion: 1 }
   });
-  if (draft.kind !== 'success') throw new Error('Event draft failed.');
-  const lifecycle = await commitDraft({
+  if (created.kind !== 'success') throw new Error('Event create failed.');
+  return created;
+}
+
+async function createProgramVocabularyItem(input: {
+  readonly runtime: EphemeralLiveRuntime;
+  readonly session: BrowserSession;
+  readonly key: string;
+  readonly expectedSetVersion: number;
+  readonly kind: 'room' | 'track' | 'format';
+  readonly name: string;
+  readonly capacity?: number | null;
+}) {
+  const created = programVocabularyDirectOperationResultSchema.parse(await effect({
     runtime: input.runtime,
     session: input.session,
+    path: '/api/events/current/program-vocabulary/create',
     key: input.key,
-    draft
+    body: {
+      kind: input.kind,
+      expectedSetVersion: input.expectedSetVersion,
+      name: input.name,
+      ...(input.kind === 'room' ? { capacity: input.capacity ?? null } : {})
+    },
+    parse: (value) => value
+  }));
+  if (created.kind !== 'success') throw new Error('Program Vocabulary create failed.');
+  return created;
+}
+
+async function createAndOpenForm(input: {
+  readonly runtime: EphemeralLiveRuntime;
+  readonly session: BrowserSession;
+  readonly key: string;
+  readonly expectedCatalogVersion: number;
+  readonly expectedRegistryVersion: number;
+  readonly definition: unknown;
+}) {
+  const created = intakeFormDirectOperationResultSchema.parse(await effect({
+    runtime: input.runtime,
+    session: input.session,
+    path: '/api/events/current/forms/create',
+    key: `${input.key}-create`,
+    body: {
+      expectedCatalogVersion: input.expectedCatalogVersion,
+      expectedRegistryVersion: input.expectedRegistryVersion,
+      definition: input.definition
+    },
+    parse: (value) => value
+  }));
+  if (created.kind !== 'success' || created.data.action !== 'create') {
+    throw new Error('Form create failed.');
+  }
+  const review = intakeFormVersionReviewDraftOperationResultSchema.parse(await effect({
+    runtime: input.runtime,
+    session: input.session,
+    path: '/api/events/current/forms/publish/draft',
+    key: `${input.key}-publish-draft`,
+    body: {
+      action: 'publish_and_open',
+      formId: created.data.formId,
+      expectedDefinitionVersion: created.data.formDefinitionVersion,
+      expectedRegistryVersion: input.expectedRegistryVersion
+    },
+    parse: (value) => value
+  }));
+  if (review.kind !== 'success') throw new Error('Form publish review failed.');
+  const published = await publishFormReview({
+    runtime: input.runtime,
+    session: input.session,
+    key: `${input.key}-publish`,
+    draft: review
   });
-  return Object.freeze({ draft, ...lifecycle });
+  return Object.freeze({ created, review, published, formId: created.data.formId });
+}
+
+async function createFormatTargetOpenForm(input: {
+  readonly runtime: EphemeralLiveRuntime;
+  readonly session: BrowserSession;
+  readonly key: string;
+  readonly formName: string;
+}) {
+  const format = await createProgramVocabularyItem({
+    runtime: input.runtime,
+    session: input.session,
+    key: `${input.key}-format`,
+    expectedSetVersion: 1,
+    kind: 'format',
+    name: 'Talk'
+  });
+  const formatId = format.data.affectedIds[0]!;
+  const registryResult = fieldRegistrySnapshotReadResultSchema.parse(await (
+    await input.runtime.app.request('/api/events/current/field-registry', {
+      headers: eventHeaders({ session: input.session, correlationId: crypto.randomUUID() })
+    })
+  ).json());
+  if (registryResult.kind !== 'success') throw new Error('Field registry read failed.');
+  const registry = registryResult.data;
+  const requireField = (mapsTo: string, kind: string): string => {
+    const id = registry.fields.find(
+      (field) => field.mapsTo === mapsTo && field.kind === kind
+    )?.id;
+    if (!id) throw new Error(`Registry field missing: ${mapsTo}`);
+    return id;
+  };
+  const titleFieldId = requireField('talk.title', 'text');
+  const nameFieldId = requireField('person.name', 'text');
+  const emailFieldId = requireField('person.email', 'email');
+  const included = new Set([titleFieldId, nameFieldId, emailFieldId]);
+  const definition = (name: string) => ({
+    ...formDefinitionInput,
+    name,
+    target: { kind: 'category' as const, category: { kind: 'format' as const, id: formatId } },
+    composition: {
+      excludedFieldIds: registry.fields
+        .filter((field) => field.scope.kind === 'shared'
+          && field.contexts.apply.visible
+          && !included.has(field.id))
+        .map((field) => field.id)
+        .sort(),
+      requiredOverrides: {},
+      optionExposure: {}
+    }
+  });
+  await createAndOpenForm({
+    runtime: input.runtime,
+    session: input.session,
+    key: `${input.key}-form`,
+    expectedCatalogVersion: 1,
+    expectedRegistryVersion: registry.version,
+    definition: definition(input.formName)
+  });
+  const catalog = organizerFormCatalogReadResultSchema.parse(await (
+    await input.runtime.app.request('/api/events/current/forms', {
+      headers: eventHeaders({ session: input.session, correlationId: crypto.randomUUID() })
+    })
+  ).json());
+  if (catalog.kind !== 'success') throw new Error('Form catalog read failed.');
+  const openForm = catalog.data.forms.find((form) => form.status === 'open');
+  if (!openForm) throw new Error('Open form missing from the catalog.');
+  return Object.freeze({
+    registry, titleFieldId, nameFieldId, emailFieldId, openForm, definition
+  });
 }
 
 const embedBuildDirectories: string[] = [];
@@ -419,18 +608,17 @@ async function seedAcceptedSpeakers(input: {
   readonly speakers: readonly SeededSpeakerInput[];
 }): Promise<readonly SeededSpeaker[]> {
   const { runtime, session, key } = input;
-  await createEventThroughChangeset({ runtime, session, key: `${key}-event` });
+  await createEventDirect({ runtime, session, key: `${key}-event` });
 
-  const formatDraft = programVocabularyDraftOperationResultSchema.parse(await effect({
+  const formatCreated = programVocabularyDirectOperationResultSchema.parse(await effect({
     runtime,
     session,
-    path: '/api/events/current/program-vocabulary/drafts/create',
-    key: `${key}-format-draft`,
+    path: '/api/events/current/program-vocabulary/create',
+    key: `${key}-format`,
     body: { kind: 'format', expectedSetVersion: 1, name: 'Talk' },
     parse: (value) => value
   }));
-  if (formatDraft.kind !== 'success') throw new Error('Format draft failed.');
-  await commitDraft({ runtime, session, key: `${key}-format`, draft: formatDraft });
+  if (formatCreated.kind !== 'success') throw new Error('Format create failed.');
   const vocabulary = programVocabularySnapshotReadResultSchema.parse(await (
     await runtime.app.request('/api/events/current/program-vocabulary', {
       headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
@@ -459,11 +647,11 @@ async function seedAcceptedSpeakers(input: {
   const emailFieldId = requireField('person.email', 'email');
   const included = new Set([titleFieldId, nameFieldId, emailFieldId]);
 
-  const formCreateDraft = intakeFormDraftOperationResultSchema.parse(await effect({
+  const formCreated = intakeFormDirectOperationResultSchema.parse(await effect({
     runtime,
     session,
-    path: '/api/events/current/forms/drafts/create',
-    key: `${key}-form-create-draft`,
+    path: '/api/events/current/forms/create',
+    key: `${key}-form-create`,
     body: {
       expectedCatalogVersion: 1,
       expectedRegistryVersion: registry.version,
@@ -485,26 +673,24 @@ async function seedAcceptedSpeakers(input: {
     },
     parse: (value) => value
   }));
-  if (formCreateDraft.kind !== 'success'
-      || formCreateDraft.data.safeDiff.action !== 'create') {
-    throw new Error('Form create draft failed.');
+  if (formCreated.kind !== 'success' || formCreated.data.action !== 'create') {
+    throw new Error('Form create failed.');
   }
-  await commitDraft({ runtime, session, key: `${key}-form-create`, draft: formCreateDraft });
-  const openDraft = intakeFormDraftOperationResultSchema.parse(await effect({
+  const openDraft = intakeFormVersionReviewDraftOperationResultSchema.parse(await effect({
     runtime,
     session,
-    path: '/api/events/current/forms/drafts/lifecycle',
+    path: '/api/events/current/forms/publish/draft',
     key: `${key}-form-open-draft`,
     body: {
-      transition: 'publish_and_open',
-      formId: formCreateDraft.data.safeDiff.after.id,
+      action: 'publish_and_open',
+      formId: formCreated.data.formId,
       expectedDefinitionVersion: 1,
       expectedRegistryVersion: registry.version
     },
     parse: (value) => value
   }));
-  if (openDraft.kind !== 'success') throw new Error('Form open draft failed.');
-  await commitDraft({ runtime, session, key: `${key}-form-open`, draft: openDraft });
+  if (openDraft.kind !== 'success') throw new Error('Form publication review failed.');
+  await publishFormReview({ runtime, session, key: `${key}-form-open`, draft: openDraft });
   const catalog = organizerFormCatalogReadResultSchema.parse(await (
     await runtime.app.request('/api/events/current/forms', {
       headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
@@ -516,11 +702,11 @@ async function seedAcceptedSpeakers(input: {
 
   const submissionIds: string[] = [];
   for (const speaker of input.speakers) {
-    const entryDraft = submissionDirectEntryDraftOperationResultSchema.parse(await effect({
+    const entryResult = submissionDirectEntryOperationResultSchema.parse(await effect({
       runtime,
       session,
-      path: '/api/events/current/submissions/direct-entry/drafts',
-      key: `${key}-entry-${speaker.key}-draft`,
+      path: '/api/events/current/submissions/direct-entry',
+      key: `${key}-entry-${speaker.key}`,
       body: {
         formId: openForm.id,
         expectedFormDefinitionVersion: openForm.version,
@@ -532,18 +718,15 @@ async function seedAcceptedSpeakers(input: {
       },
       parse: (value) => value
     }));
-    if (entryDraft.kind !== 'success') throw new Error('Direct entry draft failed.');
-    submissionIds.push(entryDraft.data.safeDiff.submission.id);
-    await commitDraft({
-      runtime, session, key: `${key}-entry-${speaker.key}`, draft: entryDraft
-    });
+    if (entryResult.kind !== 'success') throw new Error('Direct entry failed.');
+    submissionIds.push(entryResult.data.submissionId);
   }
 
-  const decideDraft = decisionDecideDraftOperationResultSchema.parse(await effect({
+  const decideResult = decisionDecideOperationResultSchema.parse(await effect({
     runtime,
     session,
-    path: '/api/events/current/decisions/decide-drafts',
-    key: `${key}-decide-draft`,
+    path: '/api/events/current/decisions',
+    key: `${key}-decide`,
     body: {
       action: 'decide',
       decisions: submissionIds.map((submissionId) => ({
@@ -556,8 +739,7 @@ async function seedAcceptedSpeakers(input: {
     },
     parse: (value) => value
   }));
-  if (decideDraft.kind !== 'success') throw new Error('Decide draft failed.');
-  await commitDraft({ runtime, session, key: `${key}-decide`, draft: decideDraft });
+  if (decideResult.kind !== 'success') throw new Error('Decide failed.');
 
   const sessions = sessionCatalogReadResultSchema.parse(await (
     await runtime.app.request('/api/events/current/sessions', {
@@ -627,26 +809,6 @@ describe('ephemeral live Foundation server composition', () => {
       )
     }))).toEqual([
       {
-        name: 'changeset.commit', version: 1, effect: 'commit',
-        bindings: ['POST /api/changesets/commits']
-      },
-      {
-        name: 'changeset.correction.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/changesets/corrections']
-      },
-      {
-        name: 'changeset.diff.read', version: 1, effect: 'read',
-        bindings: ['GET /api/changesets/diff']
-      },
-      {
-        name: 'changeset.propose', version: 1, effect: 'draft',
-        bindings: ['POST /api/changesets/proposals']
-      },
-      {
-        name: 'changeset.rebuild', version: 1, effect: 'draft',
-        bindings: ['POST /api/changesets/rebuilds']
-      },
-      {
         name: 'communication.email_readiness.read', version: 1, effect: 'read',
         bindings: ['GET /api/communications/email-readiness']
       },
@@ -671,16 +833,16 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['GET /api/events/current/deadlines']
       },
       {
-        name: 'deadline.change.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/deadlines/drafts']
+        name: 'deadline.change', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/deadlines']
       },
       {
         name: 'deadline.current.read', version: 1, effect: 'read',
         bindings: ['GET /api/events/current/deadlines/current']
       },
       {
-        name: 'decision.decide.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/decisions/decide-drafts']
+        name: 'decision.decide', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/decisions']
       },
       {
         name: 'decision.state.read', version: 1, effect: 'read',
@@ -691,16 +853,16 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['POST /api/events/current/communications/drafts/discard']
       },
       {
-        name: 'engagement.change.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/engagements/drafts']
+        name: 'engagement.change', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/engagements']
       },
       {
         name: 'engagement.snapshot.read', version: 1, effect: 'read',
         bindings: ['GET /api/events/current/engagements']
       },
       {
-        name: 'event.create.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/drafts/create']
+        name: 'event.create', version: 1, effect: 'commit',
+        bindings: ['POST /api/events']
       },
       { name: 'event.current.read', version: 1, effect: 'read', bindings: ['GET /api/events/current'] },
       {
@@ -708,28 +870,28 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['GET /api/events/current/settings']
       },
       {
-        name: 'event.settings.update.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/settings/drafts/update']
+        name: 'event.settings.update', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/settings']
       },
       {
-        name: 'field_registry.add.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/field-registry/drafts/add']
+        name: 'field_registry.add', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/field-registry/add']
       },
       {
-        name: 'field_registry.edit.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/field-registry/drafts/edit']
+        name: 'field_registry.edit', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/field-registry/edit']
       },
       {
-        name: 'field_registry.move.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/field-registry/drafts/move']
+        name: 'field_registry.move', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/field-registry/move']
       },
       {
-        name: 'field_registry.remove.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/field-registry/drafts/remove']
+        name: 'field_registry.remove', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/field-registry/remove']
       },
       {
-        name: 'field_registry.restore.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/field-registry/drafts/restore']
+        name: 'field_registry.restore', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/field-registry/restore']
       },
       {
         name: 'field_registry.snapshot.read', version: 1, effect: 'read',
@@ -755,9 +917,6 @@ describe('ephemeral live Foundation server composition', () => {
         name: 'file.request.create', version: 1, effect: 'commit',
         bindings: ['POST /api/events/current/files/requests/create']
       },
-      // The agent ask-draft rides the app_model tool surface only; it has no
-      // HTTP binding in this composition.
-      { name: 'file.request.create.draft', version: 1, effect: 'draft', bindings: [] },
       {
         name: 'file.request.fulfill', version: 1, effect: 'commit',
         bindings: ['POST /api/events/current/files/requests/fulfill']
@@ -783,20 +942,20 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['POST /api/events/current/files/uploads/intent']
       },
       {
-        name: 'form.closing.change.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/forms/drafts/closing']
+        name: 'form.closing.change', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/forms/closing']
       },
       {
-        name: 'form.definition.create.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/forms/drafts/create']
+        name: 'form.definition.create', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/forms/create']
       },
       {
-        name: 'form.definition.revise.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/forms/drafts/revise']
+        name: 'form.definition.revise', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/forms/revise']
       },
       {
-        name: 'form.lifecycle.change.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/forms/drafts/lifecycle']
+        name: 'form.lifecycle.change', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/forms/lifecycle']
       },
       {
         name: 'form.list', version: 1, effect: 'read',
@@ -807,8 +966,12 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['GET /api/events/current/forms/detail']
       },
       {
+        name: 'form.version.publish', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/forms/publish']
+      },
+      {
         name: 'form.version.publish.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/forms/drafts/publish']
+        bindings: ['POST /api/events/current/forms/publish/draft']
       },
       {
         name: 'get_communication_purpose', version: 1, effect: 'read',
@@ -851,6 +1014,10 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['GET /api/events/current/communications/templates']
       },
       {
+        name: 'operation.history.list', version: 1, effect: 'read',
+        bindings: ['GET /api/workspace/history']
+      },
+      {
         name: 'portal.engagement.respond', version: 1, effect: 'commit',
         bindings: ['POST /api/portal/engagements/respond']
       },
@@ -867,28 +1034,32 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['POST /api/events/current/communications/previews/adopt']
       },
       {
-        name: 'program_vocabulary.create.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/program-vocabulary/drafts/create']
+        name: 'program_vocabulary.create', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/program-vocabulary/create']
       },
       {
-        name: 'program_vocabulary.delete.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/program-vocabulary/drafts/delete']
+        name: 'program_vocabulary.delete', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/program-vocabulary/delete']
       },
       {
-        name: 'program_vocabulary.edit.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/program-vocabulary/drafts/edit']
+        name: 'program_vocabulary.edit', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/program-vocabulary/edit']
+      },
+      {
+        name: 'program_vocabulary.merge', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/program-vocabulary/merge']
       },
       {
         name: 'program_vocabulary.merge.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/program-vocabulary/drafts/merge']
+        bindings: ['POST /api/events/current/program-vocabulary/merge/draft']
       },
       {
-        name: 'program_vocabulary.restore.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/program-vocabulary/drafts/restore']
+        name: 'program_vocabulary.restore', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/program-vocabulary/restore']
       },
       {
-        name: 'program_vocabulary.retire.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/program-vocabulary/drafts/retire']
+        name: 'program_vocabulary.retire', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/program-vocabulary/retire']
       },
       {
         name: 'program_vocabulary.snapshot.read', version: 1, effect: 'read',
@@ -903,20 +1074,24 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['GET /api/events/current/releases']
       },
       {
-        name: 'review.assignment.step-back.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/review/step-back-drafts']
+        name: 'release.publish', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/releases/publish']
       },
       {
-        name: 'review.evaluation.change.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/review/evaluation-drafts']
+        name: 'review.assignment.step_back', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/review/assignments/step-back']
+      },
+      {
+        name: 'review.evaluation.change', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/review/evaluations']
       },
       {
         name: 'review.evaluation.draft.save', version: 1, effect: 'commit',
         bindings: ['POST /api/events/current/review/evaluation-draft']
       },
       {
-        name: 'review.round.change.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/review/round-drafts']
+        name: 'review.round.change', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/review/rounds']
       },
       {
         name: 'review.round.setup.read', version: 1, effect: 'read',
@@ -927,8 +1102,8 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['GET /api/events/current/review/snapshot']
       },
       {
-        name: 'reviewer_roster.change.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/reviewer-roster/drafts']
+        name: 'reviewer_roster.change', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/reviewer-roster/changes']
       },
       {
         name: 'reviewer_roster.snapshot.read', version: 1, effect: 'read',
@@ -939,8 +1114,8 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['POST /api/events/current/communications/drafts/revise']
       },
       {
-        name: 'schedule.placement.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/schedule/placements/drafts']
+        name: 'schedule.placement', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/schedule/placements']
       },
       {
         name: 'schedule.placement.snapshot.read', version: 1, effect: 'read',
@@ -955,8 +1130,8 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['GET /api/events/current/sessions']
       },
       {
-        name: 'session.change.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/sessions/drafts']
+        name: 'session.change', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/sessions']
       },
       {
         name: 'store_communication_authoring_payload', version: 1, effect: 'draft',
@@ -967,8 +1142,8 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['GET /api/events/current/submissions/contact']
       },
       {
-        name: 'submission.direct_entry.create.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/submissions/direct-entry/drafts']
+        name: 'submission.direct_entry.create', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/submissions/direct-entry']
       },
       {
         name: 'submission.list', version: 1, effect: 'read',
@@ -987,16 +1162,20 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['GET /api/events/current/submissions/triage/detail']
       },
       {
-        name: 'submission.triage.transition.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/submissions/triage/drafts']
+        name: 'submission.triage.transition', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/submissions/triage']
       },
       {
         name: 'task.board.read', version: 1, effect: 'read',
         bindings: ['GET /api/events/current/tasks']
       },
       {
-        name: 'task.mutation.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/events/current/tasks/drafts']
+        name: 'task.mutation', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/tasks']
+      },
+      {
+        name: 'template.artifact.change', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/template-artifacts/publish']
       },
       {
         name: 'template.artifact.change.draft', version: 1, effect: 'draft',
@@ -1023,79 +1202,60 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['POST /api/events/current/template-edit/revisions']
       },
       {
-        name: 'workspace_team.invite.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/workspace/team/invitations/drafts']
+        name: 'workspace_team.invite', version: 1, effect: 'commit',
+        bindings: ['POST /api/workspace/team/invitations']
       },
       {
         name: 'workspace_team.members.read', version: 1, effect: 'read',
         bindings: ['GET /api/workspace/team']
       },
       {
-        name: 'workspace_team.removal.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/workspace/team/removals/drafts']
+        name: 'workspace_team.remove', version: 1, effect: 'commit',
+        bindings: ['POST /api/workspace/team/removals']
       },
       {
-        name: 'workspace_team.role_change.draft', version: 1, effect: 'draft',
-        bindings: ['POST /api/workspace/team/role-changes/drafts']
+        name: 'workspace_team.role_change', version: 1, effect: 'commit',
+        bindings: ['POST /api/workspace/team/role-changes']
       },
       {
         name: 'workspace.overview.read', version: 1, effect: 'read',
         bindings: ['GET /api/workspace/overview']
       }
     ]);
-    expect(runtime.database.installedSchemaArtifacts.map((artifact) => artifact.id))
-      .toContain('event-spine');
-    expect(runtime.database.installedSchemaArtifacts.map((artifact) => artifact.id))
-      .toEqual(expect.arrayContaining([
-        'changeset-lifecycle',
-        'event-create-draft-effect',
-        'event-creation-changeset-effect',
-        'event-settings-domain',
-        'event-settings-draft-effect',
-        'event-settings-changeset-effect',
-        'template-authoring-domain',
-        'template-artifact-draft-effect',
-        'template-artifact-changeset-effect',
-        'template-edit-effect',
-        'deadline-domain',
-        'deadline-draft-effect',
-        'deadline-changeset-effect',
-        'program-vocabulary-domain',
-        'program-vocabulary-draft-effect',
-        'program-vocabulary-changeset-effect',
-        'schedule-placement-domain',
-        'schedule-placement-draft-effect',
-        'schedule-placement-changeset-effect',
-        'classified-payload-store',
-        'communication-organizer-authoring',
-        'communication-organizer-authoring-effect',
-        'communication-organizer-audience-preview',
-        'communication-email-provider-configuration',
-        'intake-domain',
-        'intake-form-draft-effect',
-        'intake-form-changeset-effect',
-        'field-registry-domain',
-        'field-registry-draft-effect',
-        'field-registry-changeset-effect',
-        'submission-triage-domain',
-        'submission-triage-draft-effect',
-        'submission-triage-changeset-effect',
-        'intake-direct-entry-effect',
-        'workspace-team-domain',
-        'workspace-team-draft-effect',
-        'workspace-team-changeset-effect',
-        'decision-domain',
-        'decision-draft-effect',
-        'decision-changeset-effect'
-      ]));
+    const history = manifest.operations.find((operation) =>
+      operation.name === 'operation.history.list' && operation.version === 1
+    );
+    expect(history?.enabledBindings.map((binding) =>
+      binding.protocol === 'http'
+        ? `${binding.surface}:${binding.method}:${binding.path}`
+        : `${binding.surface}:${binding.toolName}`
+    )).toEqual([
+      'app_model:operation.history.list',
+      'external_mcp:operation.history.list',
+      'operator_http:GET:/api/workspace/history'
+    ]);
+    expect(runtime.database.installedSchemaArtifacts).toEqual([]);
+    expect(runtime.database.retainedBaseline).toMatchObject({
+      status: 'current',
+      coordinate: { schemaEpoch: 2, sequence: 1 },
+      migrationId: 'e2_0001_jooevents_foundation',
+      databaseClass: 'ephemeral'
+    });
+    expect(runtime.database.sqlite.query<{ readonly name: string }, []>(`
+      SELECT name FROM sqlite_schema
+       WHERE name LIKE 'changeset_%'
+          OR name LIKE '%_changeset_%'
+          OR name LIKE '%_draft_timeline'
+       ORDER BY name
+    `).all()).toEqual([]);
     expect(runtime.database.runtimeSchemaFingerprint)
-      .not.toBe(runtime.database.retainedBaseline.schemaFingerprint);
+      .toBe(runtime.database.retainedBaseline.schemaFingerprint!);
     expect((await runtime.app.request('/api/program-vocabulary')).status).toBe(404);
     expect((await runtime.app.request('/api/events', {
       method: 'POST',
       headers: { 'content-type': 'application/json', origin: config.baseUrl },
       body: '{}'
-    })).status).toBe(404);
+    })).status).toBe(400);
     // The gated public form read fails closed before any apply surface
     // release exists: the refusal is an undistinguishing 401, never a serve.
     expect((await runtime.app.request('/api/public/forms/current')).status).toBe(401);
@@ -1192,7 +1352,7 @@ describe('ephemeral live Foundation server composition', () => {
     expect(result.kind).toBe('closed_private_tree_retained');
   });
 
-  test('joins owner admission and classified Team invitations to the shared lifecycle', async () => {
+  test('joins owner admission and classified Team invitations to direct audited execution', async () => {
     const runtime = await createEphemeralLiveRuntime({ config });
     runtimes.push(runtime);
     const session = await createOwnerSession(runtime);
@@ -1216,7 +1376,7 @@ describe('ephemeral live Foundation server composition', () => {
     });
     if (before.kind !== 'success') throw new Error('Workspace Team read failed.');
 
-    const rejected = await runtime.app.request('/api/workspace/team/invitations/drafts', {
+    const rejected = await runtime.app.request('/api/workspace/team/invitations', {
       method: 'POST',
       headers: eventHeaders({
         session, correlationId: crypto.randomUUID(), idempotencyKey: 'team-forged-scope',
@@ -1235,11 +1395,11 @@ describe('ephemeral live Foundation server composition', () => {
       kind: 'transport_error', code: 'invalid_request', retryable: false
     });
 
-    const draft = workspaceTeamDraftOperationResultSchema.parse(await effect({
+    const mutation = workspaceTeamMutationOperationResultSchema.parse(await effect({
       runtime,
       session,
-      path: '/api/workspace/team/invitations/drafts',
-      key: 'team-invite-draft',
+      path: '/api/workspace/team/invitations',
+      key: 'team-invite',
       body: {
         email: 'invitee@example.test', roleKey: 'viewer',
         expectedTeamVersion: before.data.version,
@@ -1247,32 +1407,22 @@ describe('ephemeral live Foundation server composition', () => {
       },
       parse: (value) => value
     }));
-    expect(draft).toMatchObject({
+    expect(mutation).toMatchObject({
       kind: 'success',
       data: {
-        action: 'invite', headVersion: 1, status: 'draft',
+        action: 'invite', teamVersion: 3,
         safeDiff: {
           action: 'invite', role: { key: 'viewer' },
           invitationStatus: 'recorded', delivery: 'awaiting_activation'
         }
       },
-      receipt: { operationName: 'workspace_team.invite.draft', operationVersion: 1 }
+      receipt: { operationName: 'workspace_team.invite', operationVersion: 1 }
     });
-    if (draft.kind !== 'success') throw new Error('Workspace Team draft failed.');
+    if (mutation.kind !== 'success') throw new Error('Workspace Team mutation failed.');
     expect(Buffer.from(runtime.database.sqlite.serialize()).includes(
       Buffer.from('invitee@example.test')
     )).toBe(false);
 
-    const unchangedResponse = await runtime.app.request('/api/workspace/team', {
-      headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
-    });
-    const unchanged = workspaceTeamMembersReadResultSchema.parse(
-      await unchangedResponse.json()
-    );
-    expect(unchanged).toMatchObject({ kind: 'success', data: { version: 2 } });
-    if (unchanged.kind === 'success') expect(unchanged.data.members).toHaveLength(1);
-
-    await commitDraft({ runtime, session, key: 'team-invite', draft });
     const afterResponse = await runtime.app.request('/api/workspace/team', {
       headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
     });
@@ -1286,8 +1436,6 @@ describe('ephemeral live Foundation server composition', () => {
     expect(Buffer.from(runtime.database.sqlite.serialize()).includes(
       Buffer.from('invitee@example.test')
     )).toBe(false);
-    expect(count(runtime, 'workspace_team_changeset_domain_facts')).toBe(1);
-    expect(count(runtime, 'workspace_team_changeset_outbox_pointers')).toBe(1);
     const overviewResponse = await runtime.app.request('/api/workspace/overview', {
       headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
     });
@@ -1301,7 +1449,7 @@ describe('ephemeral live Foundation server composition', () => {
     });
   });
 
-  test('provisions the owner and commits the first Event through one typed changeset', async () => {
+  test('provisions the owner and creates the first Event through one direct audited operation', async () => {
     const runtime = await createEphemeralLiveRuntime({ config });
     runtimes.push(runtime);
     const session = await createOwnerSession(runtime);
@@ -1334,7 +1482,7 @@ describe('ephemeral live Foundation server composition', () => {
           forms: { kind: 'unavailable', reason: 'event_required' },
           submissions: { kind: 'unavailable', reason: 'event_required' },
           programVocabulary: { kind: 'unavailable', reason: 'event_required' },
-          changesets: { kind: 'unavailable', reason: 'event_required' }
+          operations: { kind: 'unavailable', reason: 'event_required' },
         }
       },
       correlationId: noEventOverviewCorrelation
@@ -1358,7 +1506,7 @@ describe('ephemeral live Foundation server composition', () => {
       correlationId: noEventTriageCorrelation
     });
 
-    const callerAuthorityResponse = await runtime.app.request('/api/events/drafts/create', {
+    const callerAuthorityResponse = await runtime.app.request('/api/events', {
       method: 'POST',
       headers: eventHeaders({
         session,
@@ -1367,6 +1515,7 @@ describe('ephemeral live Foundation server composition', () => {
         origin: config.baseUrl
       }),
       body: JSON.stringify({
+        expectedEventSetVersion: 1,
         name: eventInput.name,
         timezone: eventInput.timezone,
         startDate: eventInput.startDate,
@@ -1380,104 +1529,72 @@ describe('ephemeral live Foundation server composition', () => {
     expect(await callerAuthorityResponse.json()).toMatchObject({
       kind: 'transport_error', code: 'invalid_request', retryable: false
     });
-    expect(count(runtime, 'foundation_trial_operation_receipts')).toBe(0);
+    expect(count(runtime, 'operation_log', "WHERE operation_name = 'event.create'")).toBe(0);
     expect(count(runtime, 'event_spine_heads')).toBe(0);
 
-    const draftKey = 'create-first-event-from-browser-draft';
-    const draftCorrelation = crypto.randomUUID();
-    const draftBody = {
+    const createKey = 'create-first-event-from-browser';
+    const createCorrelation = crypto.randomUUID();
+    const createBody = {
+      expectedEventSetVersion: 1,
       name: eventInput.name,
       timezone: eventInput.timezone,
       startDate: eventInput.startDate,
       endDate: eventInput.endDate
     };
-    const draftResponse = await runtime.app.request('/api/events/drafts/create', {
+    const createResponse = await runtime.app.request('/api/events', {
       method: 'POST',
       headers: eventHeaders({
-        session, correlationId: draftCorrelation,
-        idempotencyKey: draftKey, origin: config.baseUrl
+        session, correlationId: createCorrelation,
+        idempotencyKey: createKey, origin: config.baseUrl
       }),
-      body: JSON.stringify(draftBody)
+      body: JSON.stringify(createBody)
     });
-    expect(draftResponse.status).toBe(200);
-    const drafted = eventCreateDraftOperationResultSchema.parse(await draftResponse.json());
-    expect(drafted).toMatchObject({
+    expect(createResponse.status).toBe(200);
+    const created = eventCreateOperationResultSchema.parse(await createResponse.json());
+    expect(created).toMatchObject({
       kind: 'success',
       data: {
-        action: 'create', headVersion: 1,
-        safeDiff: {
-          before: null,
-          after: {
-            name: eventInput.name,
-            timezone: eventInput.timezone,
-            startDate: eventInput.startDate,
-            endDate: eventInput.endDate,
-            version: 1
-          },
-          eventSetVersion: { before: 1, after: 2 }
+        eventSetVersion: 2,
+        event: {
+          name: eventInput.name,
+          timezone: eventInput.timezone,
+          startDate: eventInput.startDate,
+          endDate: eventInput.endDate,
+          version: 1
         }
       },
-      correlationId: draftCorrelation,
-      receipt: { operationName: 'event.create.draft', operationVersion: 1 }
+      correlationId: createCorrelation,
+      receipt: { operationName: 'event.create', operationVersion: 1 }
     });
-    if (drafted.kind !== 'success') throw new Error('Event draft failed.');
-    expect(count(runtime, 'event_spine_heads')).toBe(0);
-    expect(count(runtime, 'changeset_heads')).toBe(1);
-    expect(count(runtime, 'event_create_draft_receipt_links')).toBe(1);
-    expect(count(runtime, 'event_create_draft_timeline')).toBe(1);
+    if (created.kind !== 'success') throw new Error('Event create failed.');
+    expect(count(runtime, 'event_spine_heads')).toBe(1);
+    expect(count(runtime, 'operation_log')).toBe(1);
 
-    const replayResponse = await runtime.app.request('/api/events/drafts/create', {
+    const replayResponse = await runtime.app.request('/api/events', {
       method: 'POST',
       headers: eventHeaders({
         session, correlationId: crypto.randomUUID(),
-        idempotencyKey: draftKey, origin: config.baseUrl
+        idempotencyKey: createKey, origin: config.baseUrl
       }),
-      body: JSON.stringify(draftBody)
+      body: JSON.stringify(createBody)
     });
     expect(replayResponse.status).toBe(200);
-    expect(eventCreateDraftOperationResultSchema.parse(await replayResponse.json())).toEqual(drafted);
+    expect(eventCreateOperationResultSchema.parse(await replayResponse.json())).toEqual(created);
 
     const conflictCorrelation = crypto.randomUUID();
-    const conflictResponse = await runtime.app.request('/api/events/drafts/create', {
+    const conflictResponse = await runtime.app.request('/api/events', {
       method: 'POST',
       headers: eventHeaders({
         session, correlationId: conflictCorrelation,
-        idempotencyKey: draftKey, origin: config.baseUrl
+        idempotencyKey: createKey, origin: config.baseUrl
       }),
-      body: JSON.stringify({ ...draftBody, name: 'Changed request under the same key' })
+      body: JSON.stringify({ ...createBody, name: 'Changed request under the same key' })
     });
     expect(conflictResponse.status).toBe(200);
-    expect(eventCreateDraftOperationResultSchema.parse(await conflictResponse.json())).toMatchObject({
+    expect(eventCreateOperationResultSchema.parse(await conflictResponse.json())).toMatchObject({
       kind: 'outcome',
       outcome: { class: 'idempotency_conflict', kind: 'operation.request_changed' },
       correlationId: conflictCorrelation
-    });
-
-    const selector = {
-      changesetId: drafted.data.changesetId,
-      revisionId: drafted.data.revision.id,
-      revisionDigest: drafted.data.revision.digestSha256
-    };
-    const diffResponse = await runtime.app.request(
-      `/api/changesets/diff?${new URLSearchParams(selector).toString()}`,
-      { headers: eventHeaders({ session, correlationId: crypto.randomUUID() }) }
-    );
-    expect(changesetDiffOperationResultSchema.parse(await diffResponse.json())).toMatchObject({
-      kind: 'success',
-      data: {
-        changesetId: selector.changesetId,
-        headVersion: 1,
-        status: 'draft',
-        operations: [{ kind: 'event.creation' }]
-      }
-    });
-
-    const lifecycle = await commitDraft({
-      runtime, session, key: 'create-first-event-from-browser', draft: drafted
-    });
-    expect(lifecycle.committed).toMatchObject({
-      kind: 'success', data: { action: 'commit', committedHeadVersion: 3 },
-      receipt: { operationName: 'changeset.commit', operationVersion: 1 }
     });
 
     const currentCorrelation = crypto.randomUUID();
@@ -1488,7 +1605,7 @@ describe('ephemeral live Foundation server composition', () => {
       kind: 'success',
       data: {
         schemaVersion: 1, kind: 'current_event', eventSetVersion: 2,
-        event: drafted.data.safeDiff.after
+        event: created.data.event
       },
       correlationId: currentCorrelation
     });
@@ -1574,9 +1691,7 @@ describe('ephemeral live Foundation server composition', () => {
             tracks: { total: 0, active: 0, retired: 0 },
             formats: { total: 0, active: 0, retired: 0 }
           },
-          changesets: {
-            kind: 'exact', total: 0, draft: 0, proposed: 0, committed: 0, discarded: 0
-          }
+          operations: { kind: 'exact', total: expect.any(Number) },
         },
         history: {
           total: 1,
@@ -1584,9 +1699,8 @@ describe('ephemeral live Foundation server composition', () => {
           threads: [{
             domain: 'event',
             root: {
-              kind: 'changeset',
-              changesetId: selector.changesetId,
-              status: 'committed'
+              kind: 'operation',
+              receiptId: created.receipt.id
             }
           }]
         }
@@ -1595,25 +1709,18 @@ describe('ephemeral live Foundation server composition', () => {
     });
 
     expect(count(runtime, 'event_spine_heads')).toBe(1);
-    expect(count(runtime, 'event_spine_create_links')).toBe(0);
-    expect(count(runtime, 'event_spine_create_plans')).toBe(0);
-    expect(count(runtime, 'event_creation_changeset_receipt_links')).toBe(2);
-    expect(count(runtime, 'event_creation_changeset_domain_facts')).toBe(1);
-    expect(count(runtime, 'event_creation_changeset_outbox_pointers')).toBe(1);
-    expect(count(runtime, 'event_creation_changeset_timeline')).toBe(2);
-    expect(count(runtime, 'changeset_commit_links')).toBe(1);
 
-    const beforeReplayReceipts = count(runtime, 'foundation_trial_operation_receipts');
+    const beforeReplayLogs = count(runtime, 'operation_log');
     const replayCommit = await effect({
       runtime,
       session,
-      path: '/api/changesets/commits',
-      key: 'create-first-event-from-browser-commit',
-      body: { ...selector, expectedHeadVersion: 2 },
-      parse: changesetLifecycleOperationResultSchema.parse
+      path: '/api/events',
+      key: createKey,
+      body: createBody,
+      parse: eventCreateOperationResultSchema.parse
     });
-    expect(replayCommit).toEqual(lifecycle.committed);
-    expect(count(runtime, 'foundation_trial_operation_receipts')).toBe(beforeReplayReceipts);
+    expect(replayCommit).toEqual(created);
+    expect(count(runtime, 'operation_log')).toBe(beforeReplayLogs);
 
     runtime.database.sqlite.query(`
       UPDATE workspace_memberships
@@ -1623,10 +1730,10 @@ describe('ephemeral live Foundation server composition', () => {
     const revoked = await effect({
       runtime,
       session,
-      path: '/api/changesets/commits',
-      key: 'create-first-event-from-browser-commit',
-      body: { ...selector, expectedHeadVersion: 2 },
-      parse: changesetLifecycleOperationResultSchema.parse
+      path: '/api/events',
+      key: createKey,
+      body: createBody,
+      parse: eventCreateOperationResultSchema.parse
     });
     expect(revoked).toMatchObject({
       kind: 'outcome', outcome: { class: 'access_denied', kind: 'authority.revoked' }
@@ -1639,7 +1746,7 @@ describe('ephemeral live Foundation server composition', () => {
     runtimes.push(runtime);
     const session = await createOwnerSession(runtime);
     await provisionOwner(runtime, session);
-    await createEventThroughChangeset({ runtime, session, key: 'review-join-event' });
+    await createEventDirect({ runtime, session, key: 'review-join-event' });
 
     const rosterResponse = await runtime.app.request('/api/events/current/reviewer-roster', {
       headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
@@ -1688,7 +1795,7 @@ describe('ephemeral live Foundation server composition', () => {
     runtimes.push(runtime);
     const session = await createOwnerSession(runtime);
     const appUserId = await provisionOwner(runtime, session);
-    await createEventThroughChangeset({ runtime, session, key: 'roster-wins-event' });
+    await createEventDirect({ runtime, session, key: 'roster-wins-event' });
 
     const membership = runtime.database.sqlite.query<
       { readonly id: string; readonly version: number },
@@ -1706,10 +1813,10 @@ describe('ephemeral live Foundation server composition', () => {
     ).json());
     if (roster.kind !== 'success') throw new Error('roster snapshot unavailable');
 
-    const draft = reviewerRosterChangeDraftOperationResultSchema.parse(await effect({
+    const registered = reviewerRosterDirectOperationResultSchema.parse(await effect({
       runtime,
       session,
-      path: '/api/events/current/reviewer-roster/drafts',
+      path: '/api/events/current/reviewer-roster/changes',
       key: 'roster-wins-register',
       body: {
         action: 'register',
@@ -1725,9 +1832,8 @@ describe('ephemeral live Foundation server composition', () => {
       },
       parse: (value) => value
     }));
-    expect(draft).toMatchObject({ kind: 'success', data: { action: 'register' } });
-    if (draft.kind !== 'success') throw new Error('roster draft failed');
-    await commitDraft({ runtime, session, key: 'roster-wins', draft });
+    expect(registered).toMatchObject({ kind: 'success', data: { action: 'register' } });
+    if (registered.kind !== 'success') throw new Error('roster registration failed');
 
     // The owner still holds workspace-admin event.manage, which resolved the
     // organizer view before registration. The roster match must win now: a
@@ -1740,7 +1846,7 @@ describe('ephemeral live Foundation server composition', () => {
     ).json());
     expect(snapshot).toMatchObject({
       kind: 'success',
-      data: { viewer: { kind: 'reviewer', reviewerId: draft.data.reviewerId } }
+      data: { viewer: { kind: 'reviewer', reviewerId: registered.data.reviewer.reviewerId } }
     });
 
     // The duplicate-subject guard refuses a second registration typed instead
@@ -1753,10 +1859,10 @@ describe('ephemeral live Foundation server composition', () => {
       })
     ).json());
     if (refreshed.kind !== 'success') throw new Error('roster snapshot unavailable');
-    const duplicate = reviewerRosterChangeDraftOperationResultSchema.parse(await effect({
+    const duplicate = reviewerRosterDirectOperationResultSchema.parse(await effect({
       runtime,
       session,
-      path: '/api/events/current/reviewer-roster/drafts',
+      path: '/api/events/current/reviewer-roster/changes',
       key: 'roster-wins-duplicate',
       body: {
         action: 'register',
@@ -1778,137 +1884,11 @@ describe('ephemeral live Foundation server composition', () => {
     });
   });
 
-  test('creates, updates, and clears the current Event deadline through the shared lifecycle', async () => {
+  test('updates Event settings in one direct audited transaction and replays without writes', async () => {
     const runtime = await createEphemeralLiveRuntime({ config });
     runtimes.push(runtime);
     const session = await createOwnerSession(runtime);
-    await provisionOwner(runtime, session);
-
-    const noEventResponse = await runtime.app.request('/api/events/current/deadlines', {
-      headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
-    });
-    expect(noEventResponse.status).toBe(200);
-    expect(deadlineListReadResultSchema.parse(await noEventResponse.json())).toMatchObject({
-      kind: 'outcome',
-      outcome: { class: 'conflict', kind: 'deadline.event_required', retryable: false }
-    });
-
-    await createEventThroughChangeset({ runtime, session, key: 'deadline-event' });
-
-    const initialCatalogResponse = await runtime.app.request('/api/events/current/deadlines', {
-      headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
-    });
-    expect(initialCatalogResponse.status).toBe(200);
-    expect(deadlineListReadResultSchema.parse(await initialCatalogResponse.json())).toMatchObject({
-      kind: 'success', data: { schemaVersion: 1, version: 1, deadlines: [] }
-    });
-
-    const createDraft = deadlineDraftOperationResultSchema.parse(await effect({
-      runtime,
-      session,
-      path: '/api/events/current/deadlines/drafts',
-      key: 'deadline-create-draft',
-      body: { action: 'create', displayDate: '2027-02-01' },
-      parse: (value) => value
-    }));
-    expect(createDraft).toMatchObject({
-      kind: 'success',
-      data: {
-        action: 'create', headVersion: 1,
-        safeDiff: {
-          action: 'create', before: null,
-          after: { status: 'active', version: 1, displayDate: '2027-02-01' },
-          representedConsequences: ['deadline_changed']
-        }
-      },
-      receipt: { operationName: 'deadline.change.draft', operationVersion: 1 }
-    });
-    if (createDraft.kind !== 'success') throw new Error('Deadline create draft failed.');
-    const deadlineId = createDraft.data.safeDiff.after.id;
-    expect(count(runtime, 'deadlines')).toBe(0);
-    await commitDraft({ runtime, session, key: 'deadline-create', draft: createDraft });
-
-    const currentAfterCreateResponse = await runtime.app.request(
-      `/api/events/current/deadlines/current?${new URLSearchParams({ deadlineId }).toString()}`,
-      { headers: eventHeaders({ session, correlationId: crypto.randomUUID() }) }
-    );
-    expect(currentAfterCreateResponse.status).toBe(200);
-    expect(deadlineGetReadResultSchema.parse(await currentAfterCreateResponse.json())).toMatchObject({
-      kind: 'success',
-      data: { deadline: { id: deadlineId, status: 'active', version: 1, displayDate: '2027-02-01' } }
-    });
-
-    const updateDraft = deadlineDraftOperationResultSchema.parse(await effect({
-      runtime,
-      session,
-      path: '/api/events/current/deadlines/drafts',
-      key: 'deadline-update-draft',
-      body: { action: 'update', deadlineId, expectedVersion: 1, displayDate: '2027-02-02' },
-      parse: (value) => value
-    }));
-    expect(updateDraft).toMatchObject({
-      kind: 'success',
-      data: {
-        action: 'update',
-        safeDiff: {
-          before: { id: deadlineId, status: 'active', version: 1, displayDate: '2027-02-01' },
-          after: { id: deadlineId, status: 'active', version: 2, displayDate: '2027-02-02' }
-        }
-      }
-    });
-    if (updateDraft.kind !== 'success') throw new Error('Deadline update draft failed.');
-    await commitDraft({ runtime, session, key: 'deadline-update', draft: updateDraft });
-
-    const clearDraft = deadlineDraftOperationResultSchema.parse(await effect({
-      runtime,
-      session,
-      path: '/api/events/current/deadlines/drafts',
-      key: 'deadline-clear-draft',
-      body: { action: 'clear', deadlineId, expectedVersion: 2 },
-      parse: (value) => value
-    }));
-    expect(clearDraft).toMatchObject({
-      kind: 'success',
-      data: {
-        action: 'clear',
-        safeDiff: {
-          before: { id: deadlineId, status: 'active', version: 2, displayDate: '2027-02-02' },
-          after: { id: deadlineId, status: 'cleared', version: 3, displayDate: null }
-        }
-      }
-    });
-    if (clearDraft.kind !== 'success') throw new Error('Deadline clear draft failed.');
-    await commitDraft({ runtime, session, key: 'deadline-clear', draft: clearDraft });
-
-    const finalCatalogResponse = await runtime.app.request('/api/events/current/deadlines', {
-      headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
-    });
-    expect(finalCatalogResponse.status).toBe(200);
-    expect(deadlineListReadResultSchema.parse(await finalCatalogResponse.json())).toMatchObject({
-      kind: 'success',
-      data: {
-        version: 4,
-        deadlines: [{ id: deadlineId, status: 'cleared', version: 3, displayDate: null }]
-      }
-    });
-    const currentAfterClearResponse = await runtime.app.request(
-      `/api/events/current/deadlines/current?${new URLSearchParams({ deadlineId }).toString()}`,
-      { headers: eventHeaders({ session, correlationId: crypto.randomUUID() }) }
-    );
-    expect(deadlineGetReadResultSchema.parse(await currentAfterClearResponse.json())).toMatchObject({
-      kind: 'success', data: { deadline: null }
-    });
-    expect(count(runtime, 'deadlines')).toBe(1);
-    expect(count(runtime, 'deadline_draft_receipt_links')).toBe(3);
-    expect(count(runtime, 'deadline_changeset_domain_facts')).toBe(3);
-    expect(count(runtime, 'deadline_changeset_outbox_pointers')).toBe(3);
-  });
-
-  test('initializes and updates current Event settings through the shared changeset lifecycle', async () => {
-    const runtime = await createEphemeralLiveRuntime({ config });
-    runtimes.push(runtime);
-    const session = await createOwnerSession(runtime);
-    await provisionOwner(runtime, session);
+    const appUserId = await provisionOwner(runtime, session);
 
     const noEventCorrelation = crypto.randomUUID();
     const noEventResponse = await runtime.app.request('/api/events/current/settings', {
@@ -1927,10 +1907,30 @@ describe('ephemeral live Foundation server composition', () => {
       correlationId: noEventCorrelation
     });
 
-    const event = await createEventThroughChangeset({
+    const beforeNoEvent = totalChanges(runtime);
+    const noEventUpdate = eventSettingsUpdateOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/settings',
+      key: 'event-settings-no-event',
+      body: {
+        ...eventInput,
+        expectedEventId: crypto.randomUUID(), expectedEventSetVersion: 1,
+        expectedEventVersion: 1,
+        location: '', venueNote: '', dayStart: '09:00', dayEnd: '18:00', slotMinutes: 15
+      },
+      parse: (value) => value
+    }));
+    expect(noEventUpdate).toMatchObject({
+      kind: 'outcome', terminal: false,
+      outcome: { class: 'access_denied', kind: 'authority.missing' }
+    });
+    expect(totalChanges(runtime) - beforeNoEvent).toBe(0);
+
+    const event = await createEventDirect({
       runtime, session, key: 'event-settings-event'
     });
-    const eventId = event.draft.data.safeDiff.after.id;
+    const eventId = event.data.event.id;
 
     const initialCorrelation = crypto.randomUUID();
     const initialResponse = await runtime.app.request('/api/events/current/settings', {
@@ -1976,38 +1976,98 @@ describe('ephemeral live Foundation server composition', () => {
       dayEnd: '18:00',
       slotMinutes: 30
     });
-    const drafted = eventSettingsUpdateDraftOperationResultSchema.parse(await effect({
+    runtime.database.sqlite.exec(`
+      CREATE TRIGGER operation_log_force_settings_failure
+      BEFORE INSERT ON operation_log
+      WHEN NEW.operation_name = 'event.settings.update'
+      BEGIN SELECT RAISE(ABORT, 'forced settings log failure'); END;
+    `);
+    const lateFailureResponse = await runtime.app.request('/api/events/current/settings', {
+      method: 'POST',
+      headers: eventHeaders({
+        session, correlationId: crypto.randomUUID(),
+        idempotencyKey: 'event-settings-forced-late', origin: config.baseUrl
+      }),
+      body: JSON.stringify(updateBody)
+    });
+    expect(lateFailureResponse.status).toBe(500);
+    expect(count(runtime, 'operation_log', "WHERE operation_name = 'event.settings.update'")).toBe(0);
+    expect(runtime.database.sqlite.query<{ readonly version: number }, [string, string]>(`
+      SELECT version FROM event_spine_heads WHERE workspace_id = ? AND id = ?
+    `).get(runtime.workspaceId, eventId)?.version).toBe(1);
+    expect(runtime.database.sqlite.query<{ readonly event_version: number }, [string, string]>(`
+      SELECT event_version FROM event_settings_companions WHERE workspace_id = ? AND event_id = ?
+    `).get(runtime.workspaceId, eventId)?.event_version).toBe(1);
+    runtime.database.sqlite.exec('DROP TRIGGER operation_log_force_settings_failure');
+
+    const beforeChanges = totalChanges(runtime);
+    const updated = eventSettingsUpdateOperationResultSchema.parse(await effect({
       runtime,
       session,
-      path: '/api/events/current/settings/drafts/update',
-      key: 'event-settings-update-draft',
+      path: '/api/events/current/settings',
+      key: 'event-settings-update',
       body: updateBody,
       parse: (value) => value
     }));
-    expect(drafted).toMatchObject({
+    expect(updated).toMatchObject({
       kind: 'success',
       data: {
         action: 'update',
-        headVersion: 1,
-        safeDiff: {
-          action: 'update',
-          before: { eventId, eventSetVersion: 2, eventVersion: 1 },
-          after: {
-            eventId, eventSetVersion: 2, eventVersion: 2,
-            name: updateBody.name,
-            location: updateBody.location,
-            venueNote: updateBody.venueNote
-          }
-        }
+        eventId,
+        eventSetVersion: 2,
+        eventVersion: 2
       },
-      receipt: { operationName: 'event.settings.update.draft', operationVersion: 1 }
+      receipt: { operationName: 'event.settings.update', operationVersion: 1 }
     });
-    if (drafted.kind !== 'success') throw new Error('Event settings draft failed.');
-    expect(count(runtime, 'event_settings_update_draft_receipt_links')).toBe(1);
+    expect(totalChanges(runtime) - beforeChanges).toBe(3);
+    expect(count(runtime, 'operation_log', "WHERE operation_name = 'event.settings.update'")).toBe(1);
+    const settingsLog = runtime.database.sqlite.query<{
+      readonly id: string;
+      readonly summary: string;
+      readonly subjects_json: string;
+      readonly result_json: string;
+      readonly action_batch_id: string | null;
+      readonly action_step_id: string | null;
+    }, []>(`
+      SELECT id, summary, subjects_json, result_json, action_batch_id, action_step_id
+        FROM operation_log WHERE operation_name = 'event.settings.update'
+    `).get();
+    expect(settingsLog?.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    );
+    expect(settingsLog?.summary).toBe('Updated event settings');
+    const settingsSubjects = JSON.parse(settingsLog?.subjects_json ?? 'null') as Array<{
+      readonly id: string;
+      readonly kind: string;
+    }>;
+    expect(settingsSubjects).toHaveLength(2);
+    expect(settingsSubjects).toEqual(expect.arrayContaining([
+      { id: runtime.workspaceId, kind: 'workspace' },
+      { id: eventId, kind: 'event' }
+    ]));
+    expect(JSON.parse(settingsLog?.result_json ?? 'null')).toEqual(updated);
+    expect(settingsLog?.action_batch_id).toBeNull();
+    expect(settingsLog?.action_step_id).toBeNull();
 
-    await commitDraft({
-      runtime, session, key: 'event-settings-update', draft: drafted
+    const beforeReplay = totalChanges(runtime);
+    const replay = eventSettingsUpdateOperationResultSchema.parse(await effect({
+      runtime, session, path: '/api/events/current/settings', key: 'event-settings-update',
+      body: updateBody, parse: (value) => value
+    }));
+    expect(replay).toEqual(updated);
+    expect(totalChanges(runtime) - beforeReplay).toBe(0);
+
+    const beforeChangedRequest = totalChanges(runtime);
+    const changedRequest = eventSettingsUpdateOperationResultSchema.parse(await effect({
+      runtime, session, path: '/api/events/current/settings', key: 'event-settings-update',
+      body: { ...updateBody, venueNote: 'A changed request under the same action key.' },
+      parse: (value) => value
+    }));
+    expect(changedRequest).toMatchObject({
+      kind: 'outcome', terminal: false,
+      outcome: { class: 'idempotency_conflict', kind: 'operation.request_changed' }
     });
+    expect(totalChanges(runtime) - beforeChangedRequest).toBe(0);
 
     const updatedCorrelation = crypto.randomUUID();
     const updatedResponse = await runtime.app.request('/api/events/current/settings', {
@@ -2052,11 +2112,12 @@ describe('ephemeral live Foundation server composition', () => {
       }
     });
 
-    const stale = eventSettingsUpdateDraftOperationResultSchema.parse(await effect({
+    const beforeStale = totalChanges(runtime);
+    const stale = eventSettingsUpdateOperationResultSchema.parse(await effect({
       runtime,
       session,
-      path: '/api/events/current/settings/drafts/update',
-      key: 'event-settings-stale-draft',
+      path: '/api/events/current/settings',
+      key: 'event-settings-stale',
       body: updateBody,
       parse: (value) => value
     }));
@@ -2068,9 +2129,130 @@ describe('ephemeral live Foundation server composition', () => {
         retryable: false
       }
     });
-    expect(count(runtime, 'event_settings_changeset_domain_facts')).toBe(1);
-    expect(count(runtime, 'event_settings_changeset_outbox_pointers')).toBe(1);
-    expect(count(runtime, 'event_settings_changeset_receipt_links')).toBe(2);
+    expect(totalChanges(runtime) - beforeStale).toBe(0);
+    expect(count(runtime, 'operation_log', "WHERE operation_name = 'event.settings.update'")).toBe(1);
+
+    const concurrentBody = Object.freeze({
+      ...updateBody,
+      expectedEventVersion: 2,
+      name: 'JooEvents Summit 2027 Concurrent'
+    });
+    const beforeConcurrent = totalChanges(runtime);
+    const concurrentResponses = await Promise.all([0, 1].map(() =>
+      runtime.app.request('/api/events/current/settings', {
+        method: 'POST',
+        headers: eventHeaders({
+          session, correlationId: crypto.randomUUID(),
+          idempotencyKey: 'event-settings-concurrent', origin: config.baseUrl
+        }),
+        body: JSON.stringify(concurrentBody)
+      })
+    ));
+    expect(concurrentResponses.map((response) => response.status)).toEqual([200, 200]);
+    const concurrentResults = await Promise.all(concurrentResponses.map(async (response) =>
+      eventSettingsUpdateOperationResultSchema.parse(await response.json())
+    ));
+    expect(concurrentResults[0]).toEqual(concurrentResults[1]);
+    expect(totalChanges(runtime) - beforeConcurrent).toBe(3);
+    expect(count(runtime, 'operation_log', "WHERE operation_name = 'event.settings.update'")).toBe(2);
+
+    runtime.database.sqlite.query(`
+      UPDATE workspace_memberships
+         SET status = 'suspended', version = version + 1, updated_at = ?
+       WHERE workspace_id = ? AND user_id = ?
+    `).run(Date.now(), runtime.workspaceId, appUserId);
+    const beforeDeniedReplay = totalChanges(runtime);
+    const deniedReplay = eventSettingsUpdateOperationResultSchema.parse(await effect({
+      runtime, session, path: '/api/events/current/settings', key: 'event-settings-concurrent',
+      body: concurrentBody, parse: (value) => value
+    }));
+    expect(deniedReplay).toMatchObject({
+      kind: 'outcome', terminal: false,
+      outcome: { class: 'access_denied', kind: 'authority.revoked' }
+    });
+    expect(totalChanges(runtime) - beforeDeniedReplay).toBe(0);
+  });
+
+  test('runs Field Registry add/edit/move/remove/restore as direct audited forward actions', async () => {
+    const runtime = await createEphemeralLiveRuntime({ config });
+    runtimes.push(runtime);
+    const session = await createOwnerSession(runtime);
+    await provisionOwner(runtime, session);
+    await createEventDirect({ runtime, session, key: 'field-registry-event' });
+
+    const readRegistry = async () => {
+      const parsed = fieldRegistrySnapshotReadResultSchema.parse(await (
+        await runtime.app.request('/api/events/current/field-registry', {
+          headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+        })
+      ).json());
+      if (parsed.kind !== 'success') throw new Error('Field Registry read failed.');
+      return parsed.data;
+    };
+    const initial = await readRegistry();
+    const addBody = {
+      expectedRegistryVersion: initial.version,
+      field: {
+        kind: 'text', label: 'Employer', help: 'Where do you work?', answerOwner: 'person',
+        scope: { kind: 'shared' },
+        contexts: {
+          apply: { visible: true, required: false },
+          onboard: { visible: true, required: false },
+          profile: { visible: true, required: false }
+        },
+        options: { kind: 'none' }
+      }
+    } as const;
+    const run = async (path: string, key: string, body: unknown) =>
+      fieldRegistryDirectOperationResultSchema.parse(await effect({
+        runtime, session, path, key, body, parse: (value) => value
+      }));
+    const added = await run('/api/events/current/field-registry/add', 'field-add', addBody);
+    expect(added).toMatchObject({
+      kind: 'success', data: { action: 'add', mutation: { registryVersion: 2 } },
+      receipt: { operationName: 'field_registry.add', operationVersion: 1 }
+    });
+    if (added.kind !== 'success') throw new Error('Field add failed.');
+    const fieldId = added.data.mutation.fieldId;
+    const replay = await run('/api/events/current/field-registry/add', 'field-add', addBody);
+    expect(replay).toEqual(added);
+    const conflict = await run('/api/events/current/field-registry/add', 'field-add', {
+      ...addBody, field: { ...addBody.field, label: 'Changed request' }
+    });
+    expect(conflict).toMatchObject({
+      kind: 'outcome', terminal: false,
+      outcome: { class: 'idempotency_conflict', kind: 'operation.request_changed' }
+    });
+
+    const edited = await run('/api/events/current/field-registry/edit', 'field-edit', {
+      fieldId, expectedFieldVersion: 1, expectedRegistryVersion: 2,
+      changes: { label: 'Organization' }
+    });
+    expect(edited).toMatchObject({ kind: 'success', data: { action: 'edit', mutation: { fieldId, registryVersion: 3, fieldVersion: 2 } } });
+    const moved = await run('/api/events/current/field-registry/move', 'field-move', {
+      fieldId, expectedFieldVersion: 2, expectedRegistryVersion: 3, toIndex: 0
+    });
+    expect(moved).toMatchObject({ kind: 'success', data: { action: 'move', mutation: { fieldId, registryVersion: 4, position: 0 } } });
+    const removed = await run('/api/events/current/field-registry/remove', 'field-remove', {
+      fieldId, expectedFieldVersion: 2, expectedRegistryVersion: 4
+    });
+    expect(removed).toMatchObject({ kind: 'success', data: { action: 'remove', mutation: { fieldId, registryVersion: 5, position: null } } });
+    const restored = await run('/api/events/current/field-registry/restore', 'field-restore', {
+      fieldId, expectedFieldVersion: 2, expectedRegistryVersion: 5, toIndex: 0
+    });
+    expect(restored).toMatchObject({ kind: 'success', data: { action: 'restore', mutation: { fieldId, registryVersion: 6, fieldVersion: 3, position: 0 } } });
+    expect((await readRegistry()).fields.find((field) => field.id === fieldId)).toMatchObject({
+      id: fieldId, version: 3, label: 'Organization', position: 0
+    });
+    expect(runtime.database.sqlite.query<{ readonly summary: string }, []>(`
+      SELECT summary FROM operation_log
+       WHERE operation_name LIKE 'field_registry.%' ORDER BY occurred_at_ms, id
+    `).all().map((row) => row.summary)).toEqual([
+      'Added a speaker field', 'Updated a speaker field', 'Moved a speaker field',
+      'Removed a speaker field', 'Restored a speaker field'
+    ]);
+    expect(count(runtime, 'operation_log', "WHERE operation_name LIKE 'field_registry.%'")).toBe(5);
+    expect(runtime.database.sqlite.query<Record<string, unknown>, []>('PRAGMA foreign_key_check').all()).toEqual([]);
   });
 
   test('keeps Template artifact drafts inert, commits atomically, and reverts forward', async () => {
@@ -2089,7 +2271,7 @@ describe('ephemeral live Foundation server composition', () => {
       outcome: { class: 'conflict', kind: 'template.artifact.event_required' }
     });
 
-    await createEventThroughChangeset({ runtime, session, key: 'template-artifact-event' });
+    await createEventDirect({ runtime, session, key: 'template-artifact-event' });
     const readArtifacts = async () => templateArtifactListOperationResultSchema.parse(await (
       await runtime.app.request('/api/events/current/template-artifacts', {
         headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
@@ -2171,7 +2353,7 @@ describe('ephemeral live Foundation server composition', () => {
       (artifact) => artifact.head.artifactId === original.head.artifactId
     )?.current).toEqual(original.current);
     const replacementDocument = modelRevision.data.document;
-    const drafted = templateArtifactMutationDraftOperationResultSchema.parse(await effect({
+    const drafted = templateArtifactReviewDraftOperationResultSchema.parse(await effect({
       runtime,
       session,
       path: '/api/events/current/template-artifacts/drafts',
@@ -2208,7 +2390,16 @@ describe('ephemeral live Foundation server composition', () => {
       (artifact) => artifact.head.artifactId === original.head.artifactId
     )?.current).toEqual(original.current);
 
-    await commitDraft({ runtime, session, key: 'template-artifact-replace', draft: drafted });
+    const published = await publishTemplateDraft({
+      runtime, session, key: 'template-artifact-replace', draft: drafted
+    });
+    expect(published.committed).toMatchObject({
+      kind: 'success', data: { action: 'replace', safeDiff: drafted.data.safeDiff }
+    });
+    const replayed = await publishTemplateDraft({
+      runtime, session, key: 'template-artifact-replace', draft: drafted
+    });
+    expect(replayed.committed).toEqual(published.committed);
     const afterCommit = await readArtifacts();
     if (afterCommit.kind !== 'success') throw new Error('Template artifact read failed.');
     const revised = afterCommit.data.artifacts.find(
@@ -2219,7 +2410,7 @@ describe('ephemeral live Foundation server composition', () => {
       current: { number: 2, document: replacementDocument }
     });
 
-    const revertDraft = templateArtifactMutationDraftOperationResultSchema.parse(await effect({
+    const revertDraft = templateArtifactReviewDraftOperationResultSchema.parse(await effect({
       runtime,
       session,
       path: '/api/events/current/template-artifacts/drafts',
@@ -2244,7 +2435,26 @@ describe('ephemeral live Foundation server composition', () => {
       }
     });
     if (revertDraft.kind !== 'success') throw new Error('Template artifact revert draft failed.');
-    await commitDraft({ runtime, session, key: 'template-artifact-revert', draft: revertDraft });
+    const changedRequest = templateArtifactPublishOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/template-artifacts/publish',
+      key: 'template-artifact-replace',
+      body: {
+        draftId: revertDraft.data.draftId,
+        revisionId: revertDraft.data.revision.id,
+        revisionDigestSha256: revertDraft.data.revision.digestSha256
+      },
+      parse: (value) => value
+    }));
+    expect(changedRequest).toMatchObject({
+      kind: 'outcome', outcome: {
+        class: 'idempotency_conflict', kind: 'operation.request_changed', retryable: false
+      }
+    });
+    await publishTemplateDraft({
+      runtime, session, key: 'template-artifact-revert', draft: revertDraft
+    });
 
     const reverted = await readArtifacts();
     if (reverted.kind !== 'success') throw new Error('Template artifact read failed.');
@@ -2255,882 +2465,189 @@ describe('ephemeral live Foundation server composition', () => {
       current: { number: 3, document: original.current.document },
       history: [{ number: 1 }, { number: 2 }, { number: 3 }]
     });
-    expect(count(runtime, 'template_artifact_draft_receipt_links')).toBe(2);
+    expect(count(runtime, 'template_artifact_review_drafts')).toBe(2);
+    expect(count(runtime, 'template_artifact_review_revisions')).toBe(2);
     expect(count(runtime, 'template_edit_model_receipts')).toBe(2);
-    expect(count(runtime, 'template_artifact_changeset_domain_facts')).toBe(2);
-    expect(count(runtime, 'template_artifact_changeset_outbox_pointers')).toBe(2);
+    expect(runtime.database.sqlite.query(`
+      SELECT summary FROM operation_log
+      WHERE operation_name = 'template.artifact.change'
+      ORDER BY occurred_at_ms, id
+    `).all()).toEqual([
+      { summary: 'Updated a template revision' },
+      { summary: 'Restored a template revision' }
+    ]);
   });
 
-  test('drafts and atomically commits a task_due definition with exact confirmed-speaker assignments', async () => {
+  test('runs Program Vocabulary create/edit/retire/restore/delete as direct audited forward actions', async () => {
     const runtime = await createEphemeralLiveRuntime({ config });
     runtimes.push(runtime);
     const session = await createOwnerSession(runtime);
     await provisionOwner(runtime, session);
-    const [speaker, laterSpeaker] = await seedAcceptedSpeakers({
-      runtime,
-      session,
-      key: 'task-loop',
-      speakers: [{
-        key: 'mina',
-        title: 'Reliable organizer workflows',
-        name: 'Mina Tasker',
-        email: 'mina.tasker@example.test'
-      }, {
-        key: 'later',
-        title: 'Compounding task rules',
-        name: 'Lena Later',
-        email: 'lena.later@example.test'
-      }]
-    });
-    if (!speaker || !laterSpeaker) throw new Error('Seeded task speakers missing.');
-    const confirmation = engagementChangeDraftOperationResultSchema.parse(await effect({
-      runtime,
-      session,
-      path: '/api/events/current/engagements/drafts',
-      key: 'task-loop-confirm-draft',
-      body: {
-        action: 'record_confirmation',
-        engagementId: speaker.engagementId,
-        expectedEngagementVersion: 1,
-        attribution: 'organizer_recorded'
-      },
-      parse: (value) => value
-    }));
-    if (confirmation.kind !== 'success') throw new Error('Task speaker confirmation failed.');
-    await commitDraft({ runtime, session, key: 'task-loop-confirm', draft: confirmation });
+    await createEventDirect({ runtime, session, key: 'program-vocabulary-direct-event' });
 
-    const readBoard = async () => taskBoardReadResultSchema.parse(await (
-      await runtime.app.request('/api/events/current/tasks', {
-        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
-      })
-    ).json());
-    const empty = await readBoard();
-    expect(empty).toMatchObject({
-      kind: 'success',
-      data: { catalogVersion: 1, definitions: [], assignments: [] }
-    });
-
-    const draft = taskDraftOperationResultSchema.parse(await effect({
+    const invoke = (action: string, key: string, body: Record<string, unknown>) => effect({
       runtime,
       session,
-      path: '/api/events/current/tasks/drafts',
-      key: 'task-loop-create-draft',
+      path: `/api/events/current/program-vocabulary/${action}`,
+      key,
+      body,
+      parse: programVocabularyDirectOperationResultSchema.parse
+    });
+    const created = await invoke('create', 'program-direct-create-room', {
+      kind: 'room', expectedSetVersion: 1, name: 'Main Hall', capacity: 250
+    });
+    expect(created).toMatchObject({ kind: 'success', data: { action: 'create', kind: 'room', setVersion: 2 } });
+    if (created.kind !== 'success') throw new TypeError('program_direct_create_failed');
+    const roomId = created.data.affectedIds[0]!;
+    const committedCounts = {
+      rooms: count(runtime, 'program_vocabulary_rooms'),
+      log: count(runtime, 'operation_log')
+    };
+    expect(await invoke('create', 'program-direct-create-room', {
+      kind: 'room', expectedSetVersion: 1, name: 'Main Hall', capacity: 250
+    })).toMatchObject({ kind: 'success', receipt: { id: created.receipt.id } });
+    expect({ rooms: count(runtime, 'program_vocabulary_rooms'), log: count(runtime, 'operation_log') })
+      .toEqual(committedCounts);
+    expect(await invoke('create', 'program-direct-create-room', {
+      kind: 'room', expectedSetVersion: 1, name: 'Changed Hall', capacity: 250
+    })).toMatchObject({ kind: 'outcome', outcome: { class: 'idempotency_conflict', kind: 'operation.request_changed' } });
+
+    expect(await invoke('edit', 'program-direct-edit-room', {
+      kind: 'room', id: roomId, expectedSetVersion: 2, expectedItemVersion: 1,
+      changes: { name: 'Grand Hall', capacity: 300 }
+    })).toMatchObject({ kind: 'success', data: { action: 'edit', kind: 'room', setVersion: 3 } });
+    expect(await invoke('retire', 'program-direct-retire-room', {
+      kind: 'room', id: roomId, expectedSetVersion: 3, expectedItemVersion: 2
+    })).toMatchObject({ kind: 'success', data: { action: 'retire', kind: 'room', setVersion: 4 } });
+    expect(await invoke('restore', 'program-direct-restore-room', {
+      kind: 'room', id: roomId, expectedSetVersion: 4, expectedItemVersion: 3
+    })).toMatchObject({ kind: 'success', data: { action: 'restore', kind: 'room', setVersion: 5 } });
+    expect(await invoke('delete', 'program-direct-delete-room', {
+      kind: 'room', id: roomId, expectedSetVersion: 5, expectedItemVersion: 4
+    })).toMatchObject({ kind: 'success', data: { action: 'delete', kind: 'room', setVersion: 6 } });
+    expect(count(runtime, 'program_vocabulary_rooms')).toBe(0);
+    expect(runtime.database.sqlite.query<{ readonly summary: string }, []>(`
+      SELECT summary FROM operation_log
+       WHERE operation_name LIKE 'program_vocabulary.%'
+       ORDER BY occurred_at_ms, operation_name
+    `).all().map((row) => row.summary).sort()).toEqual([
+      'Created a room', 'Deleted a room', 'Restored a room', 'Retired a room', 'Updated a room'
+    ].sort());
+  });
+
+  test('reviews and publishes one Program Vocabulary merge with exact replay and readable history', async () => {
+    const runtime = await createEphemeralLiveRuntime({ config });
+    runtimes.push(runtime);
+    const session = await createOwnerSession(runtime);
+    await provisionOwner(runtime, session);
+    await createEventDirect({ runtime, session, key: 'program-vocabulary-merge-event' });
+
+    const direct = (key: string, body: Record<string, unknown>) => effect({
+      runtime,
+      session,
+      path: '/api/events/current/program-vocabulary/create',
+      key,
+      body,
+      parse: programVocabularyDirectOperationResultSchema.parse
+    });
+    const source = await direct('program-merge-source', {
+      kind: 'track', expectedSetVersion: 1, name: 'Platform'
+    });
+    const target = await direct('program-merge-target', {
+      kind: 'track', expectedSetVersion: 2, name: 'Infrastructure'
+    });
+    if (source.kind !== 'success' || target.kind !== 'success') {
+      throw new TypeError('program_merge_fixture_failed');
+    }
+    const sourceId = source.data.affectedIds[0]!;
+    const targetId = target.data.affectedIds[0]!;
+    const beforeDraft = {
+      tracks: count(runtime, 'program_vocabulary_tracks'),
+      mergeLog: count(runtime, 'operation_log', "WHERE operation_name = 'program_vocabulary.merge'")
+    };
+    const draft = programVocabularyMergeReviewOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/program-vocabulary/merge/draft',
+      key: 'program-merge-draft',
       body: {
-        action: 'create_definition',
-        name: 'Upload headshot',
-        description: 'Provide a high-resolution event headshot.',
-        completionMode: 'file_upload',
-        required: true,
-        dueOn: '2027-05-31'
+        kind: 'track', sourceId, targetId, expectedSetVersion: 3,
+        expectedSourceVersion: 1, expectedTargetVersion: 1
       },
       parse: (value) => value
     }));
     expect(draft).toMatchObject({
       kind: 'success',
-      data: {
-        action: 'create_definition',
-        status: 'draft',
-        safeDiff: {
-          action: 'create_definition',
-          definition: {
-            name: 'Upload headshot',
-            completionMode: 'file_upload',
-            required: true,
-            dueOn: '2027-05-31'
-          },
-          assignments: [{ engagementId: speaker.engagementId }],
-          representedConsequences: [
-            'deadline_changed',
-            'task_definition_created',
-            'task_assignments_materialized'
-          ]
-        }
-      }
-    });
-    if (draft.kind !== 'success') throw new Error('Task draft failed.');
-    const stillEmpty = await readBoard();
-    if (stillEmpty.kind !== 'success') throw new Error('Task board read failed.');
-    expect(stillEmpty.data).toMatchObject({ definitions: [], assignments: [] });
-
-    await commitDraft({ runtime, session, key: 'task-loop-create', draft });
-    const committed = await readBoard();
-    expect(committed).toMatchObject({
-      kind: 'success',
-      data: {
-        catalogVersion: 2,
-        definitions: [{
-          current: {
-            name: 'Upload headshot',
-            completionMode: 'file_upload',
-            required: true,
-            deadline: { kind: 'task_due' }
-          }
-        }],
-        assignments: [{
-          engagementId: speaker.engagementId,
-          personId: speaker.personId,
-          state: 'pending',
-          version: 1,
-          deadline: { kind: 'task_due' }
-        }]
-      }
-    });
-    expect(count(runtime, 'deadlines', "WHERE kind = 'task_due'")).toBe(1);
-    expect(count(runtime, 'task_definition_revisions')).toBe(1);
-    expect(count(runtime, 'task_assignments')).toBe(1);
-    expect(count(runtime, 'task_events', "WHERE kind = 'assigned'")).toBe(1);
-    expect(count(runtime, 'task_changeset_domain_facts')).toBe(1);
-    expect(count(runtime, 'task_changeset_outbox_pointers')).toBe(1);
-
-    const laterConfirmation = engagementChangeDraftOperationResultSchema.parse(await effect({
-      runtime,
-      session,
-      path: '/api/events/current/engagements/drafts',
-      key: 'task-loop-later-confirm-draft',
-      body: {
-        action: 'record_confirmation',
-        engagementId: laterSpeaker.engagementId,
-        expectedEngagementVersion: 1,
-        attribution: 'organizer_recorded'
-      },
-      parse: (value) => value
-    }));
-    expect(laterConfirmation).toMatchObject({
-      kind: 'success',
-      data: {
-        safeDiff: {
-          action: 'record_confirmation',
-          collaborations: [{
-            contributor: { key: 'task.engagement-confirmation', version: 1 },
-            safeDiff: {
-              action: 'materialize',
-              engagementId: laterSpeaker.engagementId,
-              afterState: 'pending'
-            },
-            representedConsequences: ['task_assignments_materialized']
-          }]
-        }
-      }
-    });
-    if (laterConfirmation.kind !== 'success') throw new Error('Later confirmation draft failed.');
-    await commitDraft({
-      runtime, session, key: 'task-loop-later-confirm', draft: laterConfirmation
-    });
-    const reconciled = await readBoard();
-    if (reconciled.kind !== 'success') throw new Error('Reconciled Task board read failed.');
-    expect(reconciled.data.assignments.map((assignment) => assignment.engagementId).sort())
-      .toEqual([speaker.engagementId, laterSpeaker.engagementId].sort());
-    expect(count(runtime, 'task_assignments')).toBe(2);
-    expect(count(runtime, 'task_events', "WHERE kind = 'assigned'")).toBe(2);
-
-    // The refined reminder act composes Task's opaque engagement audience
-    // through the ordinary Communications authoring -> preview -> send lane.
-    // No address is present in browser input or ordinary SQLite rows.
-    const purposes = organizerCommunicationPurposePageOperationResultSchema.parse(await (
-      await runtime.app.request('/api/events/current/communications/purposes', {
-        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
-      })
-    ).json());
-    if (purposes.kind !== 'success') throw new Error('Task reminder purpose read failed.');
-    const reminderPurpose = purposes.data.rows.find(
-      (row) => row.revision.purposeKey === 'task_reminder'
-    )?.revision;
-    if (!reminderPurpose) throw new Error('Task reminder purpose missing.');
-    const storeReminderPayload = async (label: string, payload: unknown) => {
-      const stored = organizerCommunicationAuthoringPayloadOperationResultSchema.parse(await effect({
-        runtime, session,
-        path: '/api/events/current/communications/authoring-payloads',
-        key: `task-reminder-${label}`,
-        body: { payload }, parse: (value) => value
-      }));
-      if (stored.kind !== 'success') throw new Error(`Task reminder ${label} payload failed.`);
-      return stored.data;
-    };
-    const reminderContent = await storeReminderPayload('content', {
-      payloadKind: 'message_content', schemaVersion: 1,
-      value: {
-        kind: 'email/v1', subject: 'Outstanding speaker tasks',
-        body: { kind: 'plain_text/v1', text: 'Please review your outstanding speaker tasks.' }
-      }
-    });
-    const reminderAudience = await storeReminderPayload('audience', {
-      payloadKind: 'message_audience_draft', schemaVersion: 1,
-      value: {
-        schemaVersion: 1, binding: 'current_snapshot', purposeRevision: reminderPurpose,
-        source: {
-          kind: 'explicit_contacts',
-          contactRefIds: [speaker.engagementId, laterSpeaker.engagementId]
-            .map((id) => `task-engagement:${id}`).sort()
-        }
-      }
-    });
-    const reminderDraft = organizerCommunicationDraftMutationOperationResultSchema.parse(await effect({
-      runtime, session, path: '/api/events/current/communications/drafts/create',
-      key: 'task-reminder-draft',
-      body: {
-        channel: 'email', purposeRevision: reminderPurpose,
-        initial: {
-          kind: 'adopted_payload_refs',
-          contentPayload: reminderContent, audiencePayload: reminderAudience
-        }
-      },
-      parse: (value) => value
-    }));
-    if (reminderDraft.kind !== 'success') throw new Error('Task reminder draft failed.');
-    const preparedReminder = organizerPrepareMessagePreviewOperationResultSchema.parse(await (
-      await runtime.app.request(
-        '/api/events/current/communications/previews/prepare'
-          + `?draftId=${encodeURIComponent(reminderDraft.data.draftId)}`
-          + `&expectedDraftVersion=${reminderDraft.data.version}`,
-        { headers: eventHeaders({ session, correlationId: crypto.randomUUID() }) }
-      )
-    ).json());
-    expect(preparedReminder).toMatchObject({ kind: 'success', data: { state: 'prepared' } });
-    const adoptedReminder = organizerPreviewMessageBatchOperationResultSchema.parse(await effect({
-      runtime, session, path: '/api/events/current/communications/previews/adopt',
-      key: 'task-reminder-adopt',
-      body: {
-        draftId: reminderDraft.data.draftId,
-        expectedDraftVersion: reminderDraft.data.version
-      },
-      parse: (value) => value
-    }));
-    expect(adoptedReminder).toMatchObject({
-      kind: 'success', data: { counts: { includedCount: 2, excludedCount: 0 } }
-    });
-    if (adoptedReminder.kind !== 'success') throw new Error('Task reminder adoption failed.');
-    const reminderSend = organizerSendMessagesOperationResultSchema.parse(await effect({
-      runtime, session, path: '/api/events/current/communications/messages/send',
-      key: 'task-reminder-send',
-      body: {
-        audienceSpecId: adoptedReminder.data.identity.audienceSpecId,
-        batchId: 'batch.http.task-reminder',
-        subject: 'Outstanding speaker tasks',
-        audienceLabel: 'Selected speakers with outstanding tasks'
-      },
-      parse: (value) => value
-    }));
-    expect(reminderSend).toMatchObject({
-      kind: 'success', data: { releaseCount: 2, deliveryCount: 2 }
-    });
-    expect(Buffer.from(runtime.database.sqlite.serialize()).includes(
-      Buffer.from('mina.tasker@example.test')
-    )).toBe(false);
-  });
-
-  test('joins current Event scope to inert Program Vocabulary drafts and keeps read/manage authority distinct', async () => {
-    const runtime = await createEphemeralLiveRuntime({ config });
-    runtimes.push(runtime);
-    const session = await createOwnerSession(runtime);
-    const appUserId = await provisionOwner(runtime, session);
-
-    const noEventCorrelation = crypto.randomUUID();
-    const noEvent = await runtime.app.request('/api/events/current/program-vocabulary', {
-      headers: eventHeaders({ session, correlationId: noEventCorrelation })
-    });
-    expect(noEvent.status).toBe(200);
-    expect(programVocabularySnapshotReadResultSchema.parse(await noEvent.json())).toEqual({
-      kind: 'outcome',
-      outcome: {
-        class: 'conflict',
-        kind: 'program_vocabulary.event_required',
-        retryable: false,
-        subjects: [],
-        detail: null,
-        detailSchemaVersion: 1
-      },
-      correlationId: noEventCorrelation
-    });
-
-    const event = await createEventThroughChangeset({
-      runtime, session, key: 'program-vocabulary-event'
-    });
-
-    const readCorrelation = crypto.randomUUID();
-    const emptyRead = await runtime.app.request('/api/events/current/program-vocabulary', {
-      headers: eventHeaders({ session, correlationId: readCorrelation })
-    });
-    expect(emptyRead.status).toBe(200);
-    expect(programVocabularySnapshotReadResultSchema.parse(await emptyRead.json())).toEqual({
-      kind: 'success',
-      data: {
-        schemaVersion: 1,
-        scope: { workspaceId: runtime.workspaceId, eventId: event.draft.data.safeDiff.after.id },
-        setVersion: 1,
-        rooms: [],
-        tracks: [],
-        formats: []
-      },
-      correlationId: readCorrelation
-    });
-
-    const draftCorrelation = crypto.randomUUID();
-    const draftResponse = await runtime.app.request(
-      '/api/events/current/program-vocabulary/drafts/create',
-      {
-        method: 'POST',
-        headers: eventHeaders({
-          session,
-          correlationId: draftCorrelation,
-          idempotencyKey: 'program-vocabulary-room-draft',
-          origin: config.baseUrl
-        }),
-        body: JSON.stringify({
-          kind: 'room', expectedSetVersion: 1, name: 'Main Hall', capacity: 250
-        })
-      }
-    );
-    expect(draftResponse.status).toBe(200);
-    const drafted = programVocabularyDraftOperationResultSchema.parse(await draftResponse.json());
-    expect(drafted).toMatchObject({
-        kind: 'success',
-        data: { action: 'create', status: 'draft', safeDiff: { action: 'create' } },
-        correlationId: draftCorrelation,
-        receipt: {
-          operationName: 'program_vocabulary.create.draft',
-          operationVersion: 1
-        }
-      });
-    if (drafted.kind !== 'success') throw new Error('Program Vocabulary draft failed.');
-    expect(count(runtime, 'program_vocabulary_sets')).toBe(0);
-    expect(count(runtime, 'program_vocabulary_rooms')).toBe(0);
-    expect(count(runtime, 'changeset_heads')).toBe(2);
-    expect(count(runtime, 'changeset_revisions')).toBe(2);
-    expect(count(runtime, 'program_vocabulary_draft_receipt_links')).toBe(1);
-    expect(count(runtime, 'program_vocabulary_draft_timeline')).toBe(1);
-
-    const selector = Object.freeze({
-      changesetId: drafted.data.changesetId,
-      revisionId: drafted.data.revision.id,
-      revisionDigest: drafted.data.revision.digestSha256
-    });
-    const diffCorrelation = crypto.randomUUID();
-    const diffQuery = new URLSearchParams(selector).toString();
-    const diffResponse = await runtime.app.request(`/api/changesets/diff?${diffQuery}`, {
-      headers: eventHeaders({ session, correlationId: diffCorrelation })
-    });
-    expect(diffResponse.status).toBe(200);
-    expect(changesetDiffOperationResultSchema.parse(await diffResponse.json())).toMatchObject({
-      kind: 'success',
-      data: {
-        changesetId: selector.changesetId,
-        headVersion: 1,
-        status: 'draft',
-        revisionId: selector.revisionId,
-        revisionDigest: selector.revisionDigest,
-        operations: [{ kind: 'program.vocabulary.mutate' }]
-      },
-      correlationId: diffCorrelation
-    });
-
-    const proposeResponse = await runtime.app.request('/api/changesets/proposals', {
-      method: 'POST',
-      headers: eventHeaders({
-        session,
-        correlationId: crypto.randomUUID(),
-        idempotencyKey: 'program-vocabulary-room-propose',
-        origin: config.baseUrl
-      }),
-      body: JSON.stringify({ ...selector, expectedHeadVersion: 1 })
-    });
-    expect(proposeResponse.status).toBe(200);
-    expect(changesetLifecycleOperationResultSchema.parse(await proposeResponse.json()))
-      .toMatchObject({
-        kind: 'success',
-        data: { action: 'propose', diff: { headVersion: 2, status: 'proposed' } },
-        receipt: { operationName: 'changeset.propose', operationVersion: 1 }
-      });
-    expect(count(runtime, 'program_vocabulary_sets')).toBe(0);
-    expect(count(runtime, 'program_vocabulary_rooms')).toBe(0);
-
-    const commitCorrelation = crypto.randomUUID();
-    const commitInput = Object.freeze({ ...selector, expectedHeadVersion: 2 });
-    const commitResponse = await runtime.app.request('/api/changesets/commits', {
-      method: 'POST',
-      headers: eventHeaders({
-        session,
-        correlationId: commitCorrelation,
-        idempotencyKey: 'program-vocabulary-room-commit',
-        origin: config.baseUrl
-      }),
-      body: JSON.stringify(commitInput)
-    });
-    expect(commitResponse.status).toBe(200);
-    const committed = changesetLifecycleOperationResultSchema.parse(await commitResponse.json());
-    expect(committed).toMatchObject({
-      kind: 'success',
-      data: { action: 'commit', expectedHeadVersion: 2, committedHeadVersion: 3 },
-      correlationId: commitCorrelation,
-      receipt: { operationName: 'changeset.commit', operationVersion: 1 }
-    });
-    if (committed.kind !== 'success') throw new Error('Program Vocabulary commit failed.');
-    expect(count(runtime, 'program_vocabulary_sets')).toBe(1);
-    expect(count(runtime, 'program_vocabulary_rooms')).toBe(1);
-    expect(count(runtime, 'changeset_lifecycle_domain_facts')).toBe(1);
-    expect(count(runtime, 'changeset_lifecycle_outbox_pointers')).toBe(1);
-    expect(count(runtime, 'changeset_lifecycle_effect_receipt_links')).toBe(2);
-
-    const committedRead = programVocabularySnapshotReadResultSchema.parse(await (
-      await runtime.app.request('/api/events/current/program-vocabulary', {
-        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
-      })
-    ).json());
-    expect(committedRead).toMatchObject({
-      kind: 'success',
-      data: {
-        setVersion: 2,
-        rooms: [{ name: 'Main Hall', capacity: 250, status: 'active', version: 1 }]
-      }
-    });
-
-    const replayCorrelation = crypto.randomUUID();
-    const replayResponse = await runtime.app.request('/api/changesets/commits', {
-      method: 'POST',
-      headers: eventHeaders({
-        session,
-        correlationId: replayCorrelation,
-        idempotencyKey: 'program-vocabulary-room-commit',
-        origin: config.baseUrl
-      }),
-      body: JSON.stringify(commitInput)
-    });
-    expect(replayResponse.headers.get('x-correlation-id')).toBe(replayCorrelation);
-    expect(changesetLifecycleOperationResultSchema.parse(await replayResponse.json()))
-      .toEqual(committed);
-
-    const correctionResponse = await runtime.app.request('/api/changesets/corrections', {
-      method: 'POST',
-      headers: eventHeaders({
-        session,
-        correlationId: crypto.randomUUID(),
-        idempotencyKey: 'program-vocabulary-room-correction',
-        origin: config.baseUrl
-      }),
-      body: JSON.stringify({
-        sourceChangesetId: selector.changesetId,
-        sourceRevisionId: selector.revisionId,
-        sourceRevisionDigest: selector.revisionDigest,
-        sourceCommitReceiptId: committed.receipt.id
-      })
-    });
-    expect(correctionResponse.status).toBe(200);
-    const correction = changesetLifecycleOperationResultSchema.parse(
-      await correctionResponse.json()
-    );
-    expect(correction).toMatchObject({
-      kind: 'success',
-      data: { action: 'correction', resultKind: 'exact', target: { status: 'draft' } },
-      receipt: { operationName: 'changeset.correction.draft', operationVersion: 1 }
-    });
-    if (correction.kind !== 'success'
-        || correction.data.action !== 'correction'
-        || correction.data.target === null) {
-      throw new Error('Program Vocabulary correction draft failed.');
-    }
-    const correctionSelector = Object.freeze({
-      changesetId: correction.data.target.changesetId,
-      revisionId: correction.data.target.revisionId,
-      revisionDigest: correction.data.target.revisionDigest
-    });
-    const correctionProposal = changesetLifecycleOperationResultSchema.parse(await (
-      await runtime.app.request('/api/changesets/proposals', {
-        method: 'POST',
-        headers: eventHeaders({
-          session,
-          correlationId: crypto.randomUUID(),
-          idempotencyKey: 'program-vocabulary-room-correction-propose',
-          origin: config.baseUrl
-        }),
-        body: JSON.stringify({
-          ...correctionSelector,
-          expectedHeadVersion: correction.data.target.headVersion
-        })
-      })
-    ).json());
-    expect(correctionProposal).toMatchObject({
-      kind: 'success',
-      data: { action: 'propose', diff: { status: 'proposed' } }
-    });
-    if (correctionProposal.kind !== 'success'
-        || correctionProposal.data.action !== 'propose') {
-      throw new Error('Program Vocabulary correction proposal failed.');
-    }
-    const correctionCommit = changesetLifecycleOperationResultSchema.parse(await (
-      await runtime.app.request('/api/changesets/commits', {
-        method: 'POST',
-        headers: eventHeaders({
-          session,
-          correlationId: crypto.randomUUID(),
-          idempotencyKey: 'program-vocabulary-room-correction-commit',
-          origin: config.baseUrl
-        }),
-        body: JSON.stringify({
-          ...correctionSelector,
-          expectedHeadVersion: correctionProposal.data.diff.headVersion
-        })
-      })
-    ).json());
-    expect(correctionCommit).toMatchObject({
-      kind: 'success',
-      data: { action: 'commit' },
-      receipt: { operationName: 'changeset.commit', operationVersion: 1 }
-    });
-    expect(programVocabularySnapshotReadResultSchema.parse(await (
-      await runtime.app.request('/api/events/current/program-vocabulary', {
-        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
-      })
-    ).json())).toMatchObject({
-      kind: 'success',
-      data: { setVersion: 3, rooms: [] }
-    });
-    expect(count(runtime, 'changeset_correction_links')).toBe(1);
-    expect(count(runtime, 'changeset_lifecycle_domain_facts')).toBe(2);
-    expect(count(runtime, 'changeset_lifecycle_outbox_pointers')).toBe(2);
-
-    expect(runtime.database.sqlite.query<{ readonly count: number }, []>(`
-      SELECT count(*) AS count
-        FROM roles AS roles
-        JOIN role_permissions AS permissions ON permissions.role_id = roles.id
-       WHERE roles.source_preset_key = 'workspace_admin'
-         AND permissions.permission_id = 'program.vocabulary.manage'
-    `).get()?.count).toBe(0);
-    expect(runtime.database.sqlite.query<{ readonly count: number }, [string]>(`
-      SELECT count(*) AS count FROM permission_overrides
-       WHERE user_id = ? AND permission_id = 'program.vocabulary.manage'
-         AND effect = 'grant' AND scope_kind = 'workspace' AND event_id IS NULL
-    `).get(appUserId)?.count).toBe(1);
-    expect(runtime.database.sqlite.query<{ readonly count: number }, []>(`
-      SELECT count(*) AS count
-        FROM roles AS roles
-        JOIN role_permissions AS permissions ON permissions.role_id = roles.id
-       WHERE roles.source_preset_key = 'workspace_admin'
-         AND permissions.permission_id = 'communication.provider.manage'
-    `).get()?.count).toBe(0);
-    expect(runtime.database.sqlite.query<{ readonly count: number }, [string]>(`
-      SELECT count(*) AS count FROM permission_overrides
-       WHERE user_id = ? AND permission_id = 'communication.provider.manage'
-         AND effect = 'grant' AND scope_kind = 'workspace' AND event_id IS NULL
-    `).get(appUserId)?.count).toBe(1);
-
-    const readerRoleId = crypto.randomUUID();
-    const now = Date.now();
-    runtime.database.sqlite.query(`
-      INSERT INTO roles (
-        id, workspace_id, name, description, created_at, updated_at, version
-      ) VALUES (?, ?, 'Foundation Reader', 'Read-only joined runtime proof', ?, ?, 1)
-    `).run(readerRoleId, runtime.workspaceId, now, now);
-    runtime.database.sqlite.query(`
-      INSERT INTO role_permissions (role_id, permission_id) VALUES (?, 'event.read')
-    `).run(readerRoleId);
-    runtime.database.sqlite.query(`
-      DELETE FROM role_assignments WHERE workspace_id = ? AND user_id = ?
-    `).run(runtime.workspaceId, appUserId);
-    runtime.database.sqlite.query(`
-      INSERT INTO role_assignments (
-        id, user_id, role_id, workspace_id, scope_kind, event_id, assigned_at, version
-      ) VALUES (?, ?, ?, ?, 'workspace', NULL, ?, 1)
-    `).run(crypto.randomUUID(), appUserId, readerRoleId, runtime.workspaceId, now);
-    runtime.database.sqlite.query(`
-      DELETE FROM permission_overrides
-       WHERE workspace_id = ? AND user_id = ?
-         AND permission_id IN ('program.vocabulary.manage', 'communication.provider.manage')
-    `).run(runtime.workspaceId, appUserId);
-
-    const readerProgramRead = await runtime.app.request('/api/events/current/program-vocabulary', {
-      headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
-    });
-    expect(programVocabularySnapshotReadResultSchema.parse(await readerProgramRead.json()).kind)
-      .toBe('success');
-    const readerFormRead = await runtime.app.request('/api/events/current/forms', {
-      headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
-    });
-    expect(await readerFormRead.json()).toMatchObject({
-      kind: 'success',
-      data: { schemaVersion: 1, catalogVersion: 1, forms: [] }
-    });
-    const deniedProviderRead = emailProviderReadinessReadOperationResultSchema.parse(await (
-      await runtime.app.request('/api/communications/email-readiness', {
-        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
-      })
-    ).json());
-    expect(deniedProviderRead).toMatchObject({
-      kind: 'outcome',
-      outcome: { class: 'access_denied', kind: 'authority.not_authorized' }
-    });
-
-    const deniedEvent = eventCreateDraftOperationResultSchema.parse(await (
-      await runtime.app.request('/api/events/drafts/create', {
-        method: 'POST',
-        headers: eventHeaders({
-          session,
-          correlationId: crypto.randomUUID(),
-          idempotencyKey: 'reader-cannot-manage-event',
-          origin: config.baseUrl
-        }),
-        body: JSON.stringify({
-          name: eventInput.name,
-          timezone: eventInput.timezone,
-          startDate: eventInput.startDate,
-          endDate: eventInput.endDate
-        })
-      })
-    ).json());
-    expect(deniedEvent).toMatchObject({
-      kind: 'outcome',
-      outcome: { class: 'access_denied', kind: 'authority.not_authorized' }
-    });
-
-    const deniedDraft = programVocabularyDraftOperationResultSchema.parse(await (
-      await runtime.app.request('/api/events/current/program-vocabulary/drafts/create', {
-        method: 'POST',
-        headers: eventHeaders({
-          session,
-          correlationId: crypto.randomUUID(),
-          idempotencyKey: 'reader-cannot-manage-vocabulary',
-          origin: config.baseUrl
-        }),
-        body: JSON.stringify({
-          kind: 'room', expectedSetVersion: 1, name: 'Reader Hall', capacity: null
-        })
-      })
-    ).json());
-    expect(deniedDraft).toMatchObject({
-      kind: 'outcome',
-      outcome: { class: 'access_denied', kind: 'authority.not_authorized' }
-    });
-    const deniedFormDraft = intakeFormDraftOperationResultSchema.parse(await (
-      await runtime.app.request('/api/events/current/forms/drafts/create', {
-        method: 'POST',
-        headers: eventHeaders({
-          session,
-          correlationId: crypto.randomUUID(),
-          idempotencyKey: 'reader-cannot-manage-form',
-          origin: config.baseUrl
-        }),
-        body: JSON.stringify({
-          expectedCatalogVersion: 1,
-          expectedRegistryVersion: 1,
-          definition: formDefinitionInput
-        })
-      })
-    ).json());
-    expect(deniedFormDraft).toMatchObject({
-      kind: 'outcome',
-      outcome: { class: 'access_denied', kind: 'authority.not_authorized' }
-    });
-    expect(count(runtime, 'changeset_heads')).toBe(3);
-    expect(count(runtime, 'program_vocabulary_rooms')).toBe(0);
-  });
-
-  test('mounts Schedule placement truth without inventing a canonical Session owner', async () => {
-    const runtime = await createEphemeralLiveRuntime({ config });
-    runtimes.push(runtime);
-    const session = await createOwnerSession(runtime);
-    const appUserId = await provisionOwner(runtime, session);
-    const range = '?startAt=2027-06-10T08%3A00%3A00.000Z'
-      + '&endAt=2027-06-10T18%3A00%3A00.000Z&limit=20';
-
-    const noEventCorrelation = crypto.randomUUID();
-    const noEventResponse = await runtime.app.request(
-      `/api/events/current/schedule/placements${range}`,
-      { headers: eventHeaders({ session, correlationId: noEventCorrelation }) }
-    );
-    expect(noEventResponse.status).toBe(200);
-    expect(schedulePlacementSnapshotReadResultSchema.parse(
-      await noEventResponse.json()
-    )).toEqual({
-      kind: 'outcome',
-      outcome: {
-        class: 'conflict',
-        kind: 'schedule.event_required',
-        retryable: false,
-        subjects: [],
-        detail: null,
-        detailSchemaVersion: 1
-      },
-      correlationId: noEventCorrelation
-    });
-
-    const event = await createEventThroughChangeset({
-      runtime,
-      session,
-      key: 'schedule-placement-event'
-    });
-    const eventId = event.draft.data.safeDiff.after.id;
-    const emptyCorrelation = crypto.randomUUID();
-    const emptyResponse = await runtime.app.request(
-      `/api/events/current/schedule/placements${range}`,
-      { headers: eventHeaders({ session, correlationId: emptyCorrelation }) }
-    );
-    expect(emptyResponse.status).toBe(200);
-    expect(schedulePlacementSnapshotReadResultSchema.parse(
-      await emptyResponse.json()
-    )).toEqual({
-      kind: 'success',
-      data: {
-        schemaVersion: 1,
-        scope: { workspaceId: runtime.workspaceId, eventId },
-        scheduleVersion: 1,
-        occurrences: []
-      },
-      correlationId: emptyCorrelation
-    });
-    const overview = workspaceOverviewReadResultSchema.parse(await (
-      await runtime.app.request('/api/workspace/overview', {
-        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
-      })
-    ).json());
-    expect(overview).toMatchObject({
-      kind: 'success',
-      data: {
-        areas: expect.arrayContaining([{
-          area: 'schedule',
-          status: 'partial',
-          availableCapabilities: [
-            'release.change.draft',
-            'schedule.placement.draft',
-            'schedule.placement.snapshot.read',
-            'schedule.session.manage',
-            'schedule.session.read'
-          ],
-          unavailableCapabilities: [
-            'schedule.break.manage',
-            'schedule.placement.unplace'
-          ]
-        }, {
-          area: 'messages',
-          status: 'partial',
-          availableCapabilities: [
-            'communication.email_readiness.read',
-            'create_message_draft',
-            'discard_message_draft',
-            'get_communication_purpose',
-            'get_delivery_history',
-            'get_message_batch_preview',
-            'get_message_draft',
-            'get_message_template',
-            'list_audience_options',
-            'list_communication_purposes',
-            'list_message_drafts',
-            'list_message_preview_recipients',
-            'list_message_templates',
-            'prepare_message_batch_preview',
-            'preview_message_batch',
-            'revise_message_batch',
-            'send_messages',
-            'store_communication_authoring_payload'
-          ],
-          unavailableCapabilities: [
-            'create_email_provider_connection_draft'
-          ]
-        }])
-      }
-    });
-
-    const beforeMissingSession = Object.freeze({
-      changesets: count(runtime, 'changeset_heads'),
-      draftLinks: count(runtime, 'schedule_placement_draft_receipt_links'),
-      receipts: count(runtime, 'foundation_trial_operation_receipts'),
-      sets: count(runtime, 'schedule_placement_sets'),
-      occurrences: count(runtime, 'schedule_occurrences')
-    });
-    const missingSession = schedulePlacementDraftOperationResultSchema.parse(await effect({
-      runtime,
-      session,
-      path: '/api/events/current/schedule/placements/drafts',
-      key: 'schedule-placement-session-missing',
-      body: {
-        action: 'place',
-        expectedScheduleVersion: 1,
-        sessionId: crypto.randomUUID(),
-        roomId: crypto.randomUUID(),
-        startAt: '2027-06-10T09:00:00.000Z',
-        endAt: '2027-06-10T10:00:00.000Z'
-      },
-      parse: (value) => value
-    }));
-    expect(missingSession).toMatchObject({
-      kind: 'outcome',
-      outcome: {
-        class: 'stale_revision',
-        kind: 'schedule_placement_changed',
-        retryable: false,
-        detail: { code: 'session_missing', action: 'place' }
-      }
+      data: { action: 'merge', status: 'draft', safeDiff: { action: 'merge' } },
+      receipt: { operationName: 'program_vocabulary.merge.draft', operationVersion: 1 }
     });
     expect({
-      changesets: count(runtime, 'changeset_heads'),
-      draftLinks: count(runtime, 'schedule_placement_draft_receipt_links'),
-      receipts: count(runtime, 'foundation_trial_operation_receipts'),
-      sets: count(runtime, 'schedule_placement_sets'),
-      occurrences: count(runtime, 'schedule_occurrences')
-    }).toEqual(beforeMissingSession);
+      tracks: count(runtime, 'program_vocabulary_tracks'),
+      mergeLog: count(runtime, 'operation_log', "WHERE operation_name = 'program_vocabulary.merge'")
+    }).toEqual(beforeDraft);
+    expect(count(runtime, 'program_vocabulary_merge_drafts')).toBe(1);
+    expect(count(runtime, 'program_vocabulary_merge_revisions')).toBe(1);
+    if (draft.kind !== 'success') throw new TypeError('program_merge_draft_failed');
 
-    const readerRoleId = crypto.randomUUID();
-    const assignedAt = Date.now();
-    runtime.database.sqlite.query(`
-      INSERT INTO roles (
-        id, workspace_id, name, description, created_at, updated_at, version
-      ) VALUES (?, ?, 'Schedule Reader', 'Read-only Schedule proof', ?, ?, 1)
-    `).run(readerRoleId, runtime.workspaceId, assignedAt, assignedAt);
-    runtime.database.sqlite.query(`
-      INSERT INTO role_permissions (role_id, permission_id)
-      VALUES (?, 'event.read'), (?, 'schedule.read')
-    `).run(readerRoleId, readerRoleId);
-    runtime.database.sqlite.query(`
-      DELETE FROM role_assignments WHERE workspace_id = ? AND user_id = ?
-    `).run(runtime.workspaceId, appUserId);
-    runtime.database.sqlite.query(`
-      INSERT INTO role_assignments (
-        id, user_id, role_id, workspace_id, scope_kind, event_id, assigned_at, version
-      ) VALUES (?, ?, ?, ?, 'workspace', NULL, ?, 1)
-    `).run(crypto.randomUUID(), appUserId, readerRoleId, runtime.workspaceId, assignedAt);
-
-    const readerRead = schedulePlacementSnapshotReadResultSchema.parse(await (
-      await runtime.app.request(`/api/events/current/schedule/placements${range}`, {
-        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
-      })
-    ).json());
-    expect(readerRead).toMatchObject({
-      kind: 'success', data: { scheduleVersion: 1, occurrences: [] }
-    });
-    const deniedManage = schedulePlacementDraftOperationResultSchema.parse(await effect({
+    const selector = {
+      draftId: draft.data.draftId,
+      revisionId: draft.data.revision.id,
+      revisionDigestSha256: draft.data.revision.digestSha256
+    };
+    const published = programVocabularyMergePublishOperationResultSchema.parse(await effect({
       runtime,
       session,
-      path: '/api/events/current/schedule/placements/drafts',
-      key: 'schedule-reader-cannot-place',
-      body: {
-        action: 'place',
-        expectedScheduleVersion: 1,
-        sessionId: crypto.randomUUID(),
-        roomId: crypto.randomUUID(),
-        startAt: '2027-06-10T10:00:00.000Z',
-        endAt: '2027-06-10T11:00:00.000Z'
-      },
+      path: '/api/events/current/program-vocabulary/merge',
+      key: 'program-merge-publish',
+      body: selector,
       parse: (value) => value
     }));
-    expect(deniedManage).toMatchObject({
-      kind: 'outcome',
-      outcome: { class: 'access_denied', kind: 'authority.not_authorized' }
+    expect(published).toMatchObject({
+      kind: 'success',
+      data: { action: 'merge', kind: 'track', setVersion: 4, affectedIds: [sourceId, targetId] },
+      receipt: { operationName: 'program_vocabulary.merge', operationVersion: 1 }
     });
-    expect(count(runtime, 'schedule_placement_draft_receipt_links')).toBe(0);
-
-    runtime.database.sqlite.query(`
-      UPDATE workspace_memberships
-         SET status = 'suspended', version = version + 1, updated_at = ?
-       WHERE workspace_id = ? AND user_id = ?
-    `).run(Date.now(), runtime.workspaceId, appUserId);
-    const revokedRead = schedulePlacementSnapshotReadResultSchema.parse(await (
-      await runtime.app.request(`/api/events/current/schedule/placements${range}`, {
+    if (published.kind !== 'success') throw new TypeError('program_merge_publish_failed');
+    const mergedSnapshot = programVocabularySnapshotReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/program-vocabulary', {
         headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
       })
     ).json());
-    expect(revokedRead).toMatchObject({
-      kind: 'outcome', outcome: { class: 'access_denied', kind: 'authority.revoked' }
+    expect(mergedSnapshot).toMatchObject({ kind: 'success', data: { setVersion: 4 } });
+    if (mergedSnapshot.kind !== 'success') throw new TypeError('program_merge_read_failed');
+    expect(mergedSnapshot.data.tracks.find((track) => track.id === sourceId))
+      .toMatchObject({ status: 'retired', version: 2 });
+    expect(mergedSnapshot.data.tracks.find((track) => track.id === targetId))
+      .toMatchObject({ status: 'active', version: 1 });
+    expect(runtime.database.sqlite.query<{ readonly status: string }, []>(`
+      SELECT status FROM program_vocabulary_merge_drafts
+    `).get()?.status).toBe('published');
+    expect(runtime.database.sqlite.query<{ readonly summary: string }, []>(`
+      SELECT summary FROM operation_log WHERE operation_name = 'program_vocabulary.merge'
+    `).get()?.summary).toBe('Merged program categories');
+
+    const replay = programVocabularyMergePublishOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/program-vocabulary/merge',
+      key: 'program-merge-publish',
+      body: selector,
+      parse: (value) => value
+    }));
+    expect(replay).toMatchObject({ kind: 'success', receipt: { id: published.receipt.id } });
+    expect(count(runtime, 'operation_log', "WHERE operation_name = 'program_vocabulary.merge'")).toBe(1);
+    expect(programVocabularyMergePublishOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/program-vocabulary/merge',
+      key: 'program-merge-publish',
+      body: { ...selector, revisionId: crypto.randomUUID() },
+      parse: (value) => value
+    }))).toMatchObject({
+      kind: 'outcome',
+      outcome: { class: 'idempotency_conflict', kind: 'operation.request_changed' }
     });
-    expect(runtime.database.sqlite.query<Record<string, unknown>, []>(
-      'PRAGMA foreign_key_check'
-    ).all()).toEqual([]);
+    expect(count(runtime, 'operation_log', "WHERE operation_name = 'program_vocabulary.merge'")).toBe(1);
   });
 
   test('mounts factual Communications catalogs with the seeded decision-notification defaults and inert classified authoring', async () => {
@@ -3192,7 +2709,7 @@ describe('ephemeral live Foundation server composition', () => {
       correlationId: noEventCorrelation
     });
 
-    await createEventThroughChangeset({
+    await createEventDirect({
       runtime, session, key: 'organizer-communication-event'
     });
     // Created events are seeded with the recorded decision-notification
@@ -3335,147 +2852,217 @@ describe('ephemeral live Foundation server composition', () => {
     expect(count(runtime, 'organizer_communication_authoring_receipt_links')).toBe(1);
   });
 
-  test('joins organizer Form drafts to the shared changeset lifecycle before exposing effective state', async () => {
+  test('writes ordinary Form definition and closing changes directly with replay and readable history', async () => {
     const runtime = await createEphemeralLiveRuntime({ config });
     runtimes.push(runtime);
     const session = await createOwnerSession(runtime);
     await provisionOwner(runtime, session);
+    await createEventDirect({ runtime, session, key: 'intake-form-direct-event' });
 
-    const noEventCorrelation = crypto.randomUUID();
-    const noEvent = await runtime.app.request('/api/events/current/forms', {
-      headers: eventHeaders({ session, correlationId: noEventCorrelation })
-    });
-    expect(noEvent.status).toBe(200);
-    expect(await noEvent.json()).toEqual({
-      kind: 'outcome',
-      outcome: {
-        class: 'conflict', kind: 'intake.event_required', retryable: false,
-        subjects: [], detail: null, detailSchemaVersion: 1
-      },
-      correlationId: noEventCorrelation
-    });
-
-    await createEventThroughChangeset({ runtime, session, key: 'intake-form-event' });
-
-    const emptyForms = await runtime.app.request('/api/events/current/forms', {
-      headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
-    });
-    expect(emptyForms.status).toBe(200);
-    const listedEmptyForms = organizerFormCatalogReadResultSchema.parse(
-      await emptyForms.json()
-    );
-    expect(listedEmptyForms).toMatchObject({
-      kind: 'success',
-      data: { schemaVersion: 1, catalogVersion: 1, forms: [] }
-    });
-    if (listedEmptyForms.kind !== 'success') {
-      throw new Error('Expected an empty Form catalog.');
-    }
-
-    const draftResponse = await runtime.app.request('/api/events/current/forms/drafts/create', {
-      method: 'POST',
-      headers: eventHeaders({
-        session,
-        correlationId: crypto.randomUUID(),
-        idempotencyKey: 'intake-form-create-draft',
-        origin: config.baseUrl
-      }),
-      body: JSON.stringify({
-        expectedCatalogVersion: listedEmptyForms.data.catalogVersion,
-        expectedRegistryVersion: listedEmptyForms.data.registryPin.version,
-        definition: formDefinitionInput
+    const listed = organizerFormCatalogReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/forms', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
       })
-    });
-    expect(draftResponse.status).toBe(200);
-    const drafted = intakeFormDraftOperationResultSchema.parse(await draftResponse.json());
-    expect(drafted).toMatchObject({
+    ).json());
+    if (listed.kind !== 'success') throw new Error('Expected the Form catalog.');
+    const createBody = {
+      expectedCatalogVersion: listed.data.catalogVersion,
+      expectedRegistryVersion: listed.data.registryPin.version,
+      definition: formDefinitionInput
+    };
+    const created = intakeFormDirectOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/forms/create',
+      key: 'intake-form-direct-create',
+      body: createBody,
+      parse: (value) => value
+    }));
+    expect(created).toMatchObject({
       kind: 'success',
-      data: { action: 'create', status: 'draft', safeDiff: { action: 'create' } },
-      receipt: { operationName: 'form.definition.create.draft', operationVersion: 1 }
+      data: { action: 'create', formDefinitionVersion: 1, catalogVersion: 2 },
+      receipt: { operationName: 'form.definition.create', operationVersion: 1 }
     });
-    if (drafted.kind !== 'success') throw new Error('Form draft did not succeed.');
-    const formId = drafted.data.safeDiff.after.id;
-    expect(count(runtime, 'intake_form_heads')).toBe(0);
-    expect(count(runtime, 'intake_form_draft_receipt_links')).toBe(1);
-    expect(count(runtime, 'intake_form_draft_timeline')).toBe(1);
-    expect(await (await runtime.app.request('/api/events/current/forms', {
-      headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
-    })).json()).toMatchObject({
-      kind: 'success', data: { schemaVersion: 1, catalogVersion: 1, forms: [] }
-    });
+    if (created.kind !== 'success') throw new Error('Direct Form create failed.');
+    const formId = created.data.formId;
+    expect(count(runtime, 'intake_form_heads')).toBe(1);
+    expect(count(runtime, 'operation_log', "WHERE operation_name = 'form.definition.create'")).toBe(1);
 
-    const selector = Object.freeze({
-      changesetId: drafted.data.changesetId,
-      revisionId: drafted.data.revision.id,
-      revisionDigest: drafted.data.revision.digestSha256
-    });
-    const propose = await runtime.app.request('/api/changesets/proposals', {
-      method: 'POST',
-      headers: eventHeaders({
-        session,
-        correlationId: crypto.randomUUID(),
-        idempotencyKey: 'intake-form-create-propose',
-        origin: config.baseUrl
-      }),
-      body: JSON.stringify({ ...selector, expectedHeadVersion: 1 })
-    });
-    expect(changesetLifecycleOperationResultSchema.parse(await propose.json())).toMatchObject({
-      kind: 'success', data: { action: 'propose', diff: { status: 'proposed' } }
-    });
-    expect(count(runtime, 'intake_form_heads')).toBe(0);
-
-    const commit = await runtime.app.request('/api/changesets/commits', {
-      method: 'POST',
-      headers: eventHeaders({
-        session,
-        correlationId: crypto.randomUUID(),
-        idempotencyKey: 'intake-form-create-commit',
-        origin: config.baseUrl
-      }),
-      body: JSON.stringify({ ...selector, expectedHeadVersion: 2 })
-    });
-    expect(changesetLifecycleOperationResultSchema.parse(await commit.json())).toMatchObject({
-      kind: 'success', data: { action: 'commit', committedHeadVersion: 3 }
+    const replay = intakeFormDirectOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/forms/create',
+      key: 'intake-form-direct-create',
+      body: createBody,
+      parse: (value) => value
+    }));
+    expect(replay).toMatchObject({
+      kind: 'success',
+      data: { formId },
+      receipt: { id: created.receipt.id }
     });
     expect(count(runtime, 'intake_form_heads')).toBe(1);
-    expect(count(runtime, 'intake_form_versions')).toBe(0);
-    expect(count(runtime, 'intake_form_changeset_receipt_links')).toBe(2);
-    expect(count(runtime, 'intake_form_changeset_timeline')).toBe(2);
+    expect(count(runtime, 'operation_log', "WHERE operation_name = 'form.definition.create'")).toBe(1);
 
-    const forms = await runtime.app.request('/api/events/current/forms', {
-      headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+    const conflict = intakeFormDirectOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/forms/create',
+      key: 'intake-form-direct-create',
+      body: { ...createBody, definition: { ...formDefinitionInput, name: 'Changed request' } },
+      parse: (value) => value
+    }));
+    expect(conflict).toMatchObject({
+      kind: 'outcome', terminal: false,
+      outcome: { class: 'idempotency_conflict', kind: 'operation.request_changed' }
     });
-    expect(await forms.json()).toMatchObject({
+
+    const revised = intakeFormDirectOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/forms/revise',
+      key: 'intake-form-direct-revise',
+      body: {
+        formId,
+        expectedDefinitionVersion: 1,
+        expectedRegistryVersion: listed.data.registryPin.version,
+        definition: { ...formDefinitionInput, name: 'Updated CFP' }
+      },
+      parse: (value) => value
+    }));
+    expect(revised).toMatchObject({
+      kind: 'success',
+      data: { action: 'revise', formId, formDefinitionVersion: 2, catalogVersion: 3 }
+    });
+
+    const setClosing = intakeFormDirectOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/forms/closing',
+      key: 'intake-form-direct-closing-set',
+      body: { formId, expectedDefinitionVersion: 2, closesAt: '2027-05-31' },
+      parse: (value) => value
+    }));
+    expect(setClosing).toMatchObject({
+      kind: 'success', data: { action: 'set_closing', formId, formDefinitionVersion: 3 }
+    });
+    const updatedClosing = intakeFormDirectOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/forms/closing',
+      key: 'intake-form-direct-closing-update',
+      body: { formId, expectedDefinitionVersion: 3, closesAt: '2027-06-01' },
+      parse: (value) => value
+    }));
+    expect(updatedClosing).toMatchObject({
+      kind: 'success', data: { action: 'update_closing', formId, formDefinitionVersion: 4 }
+    });
+    const removedClosing = intakeFormDirectOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/forms/closing',
+      key: 'intake-form-direct-closing-remove',
+      body: { formId, expectedDefinitionVersion: 4, closesAt: null },
+      parse: (value) => value
+    }));
+    expect(removedClosing).toMatchObject({
+      kind: 'success', data: { action: 'remove_closing', formId, formDefinitionVersion: 5 }
+    });
+
+    const review = intakeFormVersionReviewDraftOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/forms/publish/draft',
+      key: 'intake-form-version-review',
+      body: {
+        action: 'publish_and_open', formId,
+        expectedDefinitionVersion: 5,
+        expectedRegistryVersion: listed.data.registryPin.version
+      },
+      parse: (value) => value
+    }));
+    expect(review).toMatchObject({
       kind: 'success',
       data: {
-        schemaVersion: 1,
-        catalogVersion: 2,
-        forms: [{ id: formId, name: 'Main CFP', status: 'draft', submissionCount: 0 }]
-      }
+        action: 'publish_and_open', status: 'draft',
+        safeDiff: {
+          action: 'publish_and_open', before: { id: formId, version: 5, status: 'draft' },
+          after: { id: formId, version: 6, status: 'open' },
+          publishedVersion: { number: 1 }
+        }
+      },
+      receipt: { operationName: 'form.version.publish.draft', operationVersion: 1 }
     });
-    const detail = await runtime.app.request(
-      `/api/events/current/forms/detail?formId=${encodeURIComponent(formId)}`,
-      { headers: eventHeaders({ session, correlationId: crypto.randomUUID() }) }
-    );
-    expect(await detail.json()).toMatchObject({
+    if (review.kind !== 'success') throw new Error('Form version review failed.');
+    expect(count(runtime, 'intake_form_versions')).toBe(0);
+    expect(count(runtime, 'intake_form_version_review_drafts')).toBe(1);
+
+    const firstPublish = await publishFormReview({
+      runtime, session, key: 'intake-form-version-publish', draft: review
+    });
+    expect(firstPublish.published).toMatchObject({
       kind: 'success',
-      data: { head: { id: formId, definition: { name: 'Main CFP' } }, currentPublishedVersion: null }
+      data: {
+        action: 'publish_and_open', formId, formDefinitionVersion: 6,
+        publishedVersionId: review.data.safeDiff.publishedVersion.id
+      },
+      receipt: { operationName: 'form.version.publish', operationVersion: 1 }
     });
-    const submissions = await runtime.app.request('/api/events/current/submissions', {
-      headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+    expect(count(runtime, 'intake_form_versions')).toBe(1);
+
+    const replayPublish = await publishFormReview({
+      runtime, session, key: 'intake-form-version-publish', draft: review
     });
-    expect(await submissions.json()).toMatchObject({ kind: 'success', data: [] });
+    expect(replayPublish.published).toEqual(firstPublish.published);
+    expect(count(runtime, 'intake_form_versions')).toBe(1);
+
+    const closed = intakeFormDirectOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/forms/lifecycle',
+      key: 'intake-form-direct-close',
+      body: { transition: 'close', formId, expectedDefinitionVersion: 6 },
+      parse: (value) => value
+    }));
+    expect(closed).toMatchObject({
+      kind: 'success', data: { action: 'close', formId, formDefinitionVersion: 7 }
+    });
+    const reopened = intakeFormDirectOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/forms/lifecycle',
+      key: 'intake-form-direct-reopen',
+      body: { transition: 'reopen', formId, expectedDefinitionVersion: 7 },
+      parse: (value) => value
+    }));
+    expect(reopened).toMatchObject({
+      kind: 'success', data: { action: 'reopen', formId, formDefinitionVersion: 8 }
+    });
+    expect(runtime.database.sqlite.query<{ readonly summary: string }, []>(`
+      SELECT summary FROM operation_log
+       WHERE operation_name LIKE 'form.%' ORDER BY occurred_at_ms, id
+    `).all().map((row) => row.summary)).toEqual([
+      'Created a form',
+      'Updated a form',
+      "Set a form's closing date",
+      "Updated a form's closing date",
+      "Removed a form's closing date",
+      'Completed form.version.publish.draft',
+      'Published and opened a form',
+      'Closed a form',
+      'Reopened a form'
+    ]);
     expect(runtime.database.sqlite.query<Record<string, unknown>, []>(
       'PRAGMA foreign_key_check'
     ).all()).toEqual([]);
   });
 
-  test('commits an organizer direct entry through the shared lifecycle into triage and the Review basis', async () => {
+  test('commits an organizer direct entry into triage and the Review basis', async () => {
     const runtime = await createEphemeralLiveRuntime({ config });
     runtimes.push(runtime);
     const session = await createOwnerSession(runtime);
     await provisionOwner(runtime, session);
-    await createEventThroughChangeset({ runtime, session, key: 'direct-entry-event' });
+    await createEventDirect({ runtime, session, key: 'direct-entry-event' });
 
     const registryResult = fieldRegistrySnapshotReadResultSchema.parse(await (
       await runtime.app.request('/api/events/current/field-registry', {
@@ -3492,54 +3079,27 @@ describe('ephemeral live Foundation server composition', () => {
     )?.id;
     if (!titleFieldId || !emailFieldId) throw new Error('Identity fields missing.');
     const included = new Set([titleFieldId, emailFieldId]);
-    const createDraft = intakeFormDraftOperationResultSchema.parse(await effect({
+    await createAndOpenForm({
       runtime,
       session,
-      path: '/api/events/current/forms/drafts/create',
-      key: 'direct-entry-form-create-draft',
-      body: {
-        expectedCatalogVersion: 1,
-        expectedRegistryVersion: registry.version,
-        definition: {
-          ...formDefinitionInput,
-          name: 'Direct Entry CFP',
-          composition: {
-            excludedFieldIds: registry.fields
-              .filter((field) => field.scope.kind === 'shared'
-                && field.contexts.apply.visible
-                && !included.has(field.id))
-              .map((field) => field.id)
-              .sort(),
-            requiredOverrides: {},
-            optionExposure: {}
-          }
+      key: 'direct-entry-form',
+      expectedCatalogVersion: 1,
+      expectedRegistryVersion: registry.version,
+      definition: {
+        ...formDefinitionInput,
+        name: 'Direct Entry CFP',
+        composition: {
+          excludedFieldIds: registry.fields
+            .filter((field) => field.scope.kind === 'shared'
+              && field.contexts.apply.visible
+              && !included.has(field.id))
+            .map((field) => field.id)
+            .sort(),
+          requiredOverrides: {},
+          optionExposure: {}
         }
-      },
-      parse: (value) => value
-    }));
-    expect(createDraft).toMatchObject({ kind: 'success', data: { action: 'create' } });
-    if (createDraft.kind !== 'success' || createDraft.data.safeDiff.action !== 'create') {
-      throw new Error('Form create draft failed.');
-    }
-    await commitDraft({
-      runtime, session, key: 'direct-entry-form-create', draft: createDraft
+      }
     });
-    const openDraft = intakeFormDraftOperationResultSchema.parse(await effect({
-      runtime,
-      session,
-      path: '/api/events/current/forms/drafts/lifecycle',
-      key: 'direct-entry-form-open-draft',
-      body: {
-        transition: 'publish_and_open',
-        formId: createDraft.data.safeDiff.after.id,
-        expectedDefinitionVersion: 1,
-        expectedRegistryVersion: registry.version
-      },
-      parse: (value) => value
-    }));
-    expect(openDraft).toMatchObject({ kind: 'success', data: { action: 'lifecycle' } });
-    if (openDraft.kind !== 'success') throw new Error('Form open draft failed.');
-    await commitDraft({ runtime, session, key: 'direct-entry-form-open', draft: openDraft });
 
     // The wire input pins the form identity and definition version the
     // organizer actually read, not draft outputs.
@@ -3552,11 +3112,11 @@ describe('ephemeral live Foundation server composition', () => {
     const openForm = catalog.data.forms.find((form) => form.status === 'open');
     if (!openForm) throw new Error('Open form missing from the catalog.');
 
-    const entryDraft = submissionDirectEntryDraftOperationResultSchema.parse(await effect({
+    const entryResult = submissionDirectEntryOperationResultSchema.parse(await effect({
       runtime,
       session,
-      path: '/api/events/current/submissions/direct-entry/drafts',
-      key: 'direct-entry-submission-draft',
+      path: '/api/events/current/submissions/direct-entry',
+      key: 'direct-entry-submission',
       body: {
         formId: openForm.id,
         expectedFormDefinitionVersion: openForm.version,
@@ -3567,48 +3127,23 @@ describe('ephemeral live Foundation server composition', () => {
       },
       parse: (value) => value
     }));
-    expect(entryDraft).toMatchObject({
+    expect(entryResult).toMatchObject({
       kind: 'success',
       data: {
         action: 'create',
-        headVersion: 1,
-        status: 'draft',
-        safeDiff: {
-          action: 'create',
-          submission: { formId: openForm.id, source: 'direct_entry' }
-        }
+        formId: openForm.id,
+        source: 'direct_entry'
       },
       receipt: {
-        operationName: 'submission.direct_entry.create.draft',
+        operationName: 'submission.direct_entry.create',
         operationVersion: 1
       }
     });
-    if (entryDraft.kind !== 'success') throw new Error('Direct entry draft failed.');
-    const submissionId = entryDraft.data.safeDiff.submission.id;
-    expect(count(runtime, 'intake_direct_entry_draft_receipt_links')).toBe(1);
-    expect(count(runtime, 'intake_direct_entry_draft_timeline')).toBe(1);
-    expect(count(runtime, 'intake_submission_heads')).toBe(0);
-    expect(count(runtime, 'submission_triage_heads')).toBe(0);
-    const beforeCommit = submissionTriageListOperationResultSchema.parse(await (
-      await runtime.app.request('/api/events/current/submissions/triage', {
-        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
-      })
-    ).json());
-    expect(beforeCommit).toMatchObject({
-      kind: 'outcome',
-      outcome: { class: 'conflict', kind: 'submission_triage.not_initialized' }
-    });
-
-    await commitDraft({
-      runtime, session, key: 'direct-entry-submission', draft: entryDraft
-    });
+    if (entryResult.kind !== 'success') throw new Error('Direct entry failed.');
+    const submissionId = entryResult.data.submissionId;
     expect(count(runtime, 'intake_submission_heads')).toBe(1);
     expect(count(runtime, 'submission_arrival_facts')).toBe(1);
     expect(count(runtime, 'submission_triage_heads')).toBe(1);
-    expect(count(runtime, 'intake_direct_entry_changeset_receipt_links')).toBe(2);
-    expect(count(runtime, 'intake_direct_entry_changeset_domain_facts')).toBe(1);
-    expect(count(runtime, 'intake_direct_entry_changeset_outbox_pointers')).toBe(1);
-    expect(count(runtime, 'intake_direct_entry_changeset_timeline')).toBe(2);
 
     const triage = submissionTriageListOperationResultSchema.parse(await (
       await runtime.app.request('/api/events/current/submissions/triage', {
@@ -3649,9 +3184,6 @@ describe('ephemeral live Foundation server composition', () => {
 
     // Governed answer values live only in the classified store: the committed
     // record and its whole database never disclose the entered email.
-    expect(JSON.stringify(runtime.database.sqlite
-      .query('SELECT * FROM changeset_revisions').all()
-    )).not.toContain('direct.speaker@example.test');
     expect(Buffer.from(runtime.database.sqlite.serialize()).includes(
       Buffer.from('direct.speaker@example.test')
     )).toBe(false);
@@ -3665,27 +3197,14 @@ describe('ephemeral live Foundation server composition', () => {
     runtimes.push(runtime);
     const session = await createOwnerSession(runtime);
     const appUserId = await provisionOwner(runtime, session);
-    await createEventThroughChangeset({ runtime, session, key: 'decision-loop-event' });
+    await createEventDirect({ runtime, session, key: 'decision-loop-event' });
 
     // A spawnable candidate needs a format: pin the CFP to a format category.
-    const formatDraft = programVocabularyDraftOperationResultSchema.parse(await effect({
-      runtime,
-      session,
-      path: '/api/events/current/program-vocabulary/drafts/create',
-      key: 'decision-loop-format-draft',
-      body: { kind: 'format', expectedSetVersion: 1, name: 'Talk' },
-      parse: (value) => value
-    }));
-    if (formatDraft.kind !== 'success') throw new Error('Format draft failed.');
-    await commitDraft({ runtime, session, key: 'decision-loop-format', draft: formatDraft });
-    const vocabulary = programVocabularySnapshotReadResultSchema.parse(await (
-      await runtime.app.request('/api/events/current/program-vocabulary', {
-        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
-      })
-    ).json());
-    if (vocabulary.kind !== 'success') throw new Error('Vocabulary read failed.');
-    const format = vocabulary.data.formats.find((candidate) => candidate.name === 'Talk');
-    if (!format) throw new Error('Committed format missing.');
+    const format = await createProgramVocabularyItem({
+      runtime, session, key: 'decision-loop-format', expectedSetVersion: 1,
+      kind: 'format', name: 'Talk'
+    });
+    const formatId = format.data.affectedIds[0]!;
 
     const registryResult = fieldRegistrySnapshotReadResultSchema.parse(await (
       await runtime.app.request('/api/events/current/field-registry', {
@@ -3702,57 +3221,31 @@ describe('ephemeral live Foundation server composition', () => {
     )?.id;
     if (!titleFieldId || !emailFieldId) throw new Error('Identity fields missing.');
     const included = new Set([titleFieldId, emailFieldId]);
-    const formCreateDraft = intakeFormDraftOperationResultSchema.parse(await effect({
+    await createAndOpenForm({
       runtime,
       session,
-      path: '/api/events/current/forms/drafts/create',
-      key: 'decision-loop-form-create-draft',
-      body: {
-        expectedCatalogVersion: 1,
-        expectedRegistryVersion: registry.version,
-        definition: {
-          ...formDefinitionInput,
-          name: 'Talks CFP',
-          target: {
-            kind: 'category',
-            category: { kind: 'format', id: format.id }
-          },
-          composition: {
-            excludedFieldIds: registry.fields
-              .filter((field) => field.scope.kind === 'shared'
-                && field.contexts.apply.visible
-                && !included.has(field.id))
-              .map((field) => field.id)
-              .sort(),
-            requiredOverrides: {},
-            optionExposure: {}
-          }
+      key: 'decision-loop-form',
+      expectedCatalogVersion: 1,
+      expectedRegistryVersion: registry.version,
+      definition: {
+        ...formDefinitionInput,
+        name: 'Talks CFP',
+        target: {
+          kind: 'category',
+          category: { kind: 'format', id: formatId }
+        },
+        composition: {
+          excludedFieldIds: registry.fields
+            .filter((field) => field.scope.kind === 'shared'
+              && field.contexts.apply.visible
+              && !included.has(field.id))
+            .map((field) => field.id)
+            .sort(),
+          requiredOverrides: {},
+          optionExposure: {}
         }
-      },
-      parse: (value) => value
-    }));
-    if (formCreateDraft.kind !== 'success'
-        || formCreateDraft.data.safeDiff.action !== 'create') {
-      throw new Error('Form create draft failed.');
-    }
-    await commitDraft({
-      runtime, session, key: 'decision-loop-form-create', draft: formCreateDraft
+      }
     });
-    const openDraft = intakeFormDraftOperationResultSchema.parse(await effect({
-      runtime,
-      session,
-      path: '/api/events/current/forms/drafts/lifecycle',
-      key: 'decision-loop-form-open-draft',
-      body: {
-        transition: 'publish_and_open',
-        formId: formCreateDraft.data.safeDiff.after.id,
-        expectedDefinitionVersion: 1,
-        expectedRegistryVersion: registry.version
-      },
-      parse: (value) => value
-    }));
-    if (openDraft.kind !== 'success') throw new Error('Form open draft failed.');
-    await commitDraft({ runtime, session, key: 'decision-loop-form-open', draft: openDraft });
     const catalog = organizerFormCatalogReadResultSchema.parse(await (
       await runtime.app.request('/api/events/current/forms', {
         headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
@@ -3762,11 +3255,11 @@ describe('ephemeral live Foundation server composition', () => {
     const openForm = catalog.data.forms.find((form) => form.status === 'open');
     if (!openForm) throw new Error('Open form missing from the catalog.');
 
-    const entryDraft = submissionDirectEntryDraftOperationResultSchema.parse(await effect({
+    const entryResult = submissionDirectEntryOperationResultSchema.parse(await effect({
       runtime,
       session,
-      path: '/api/events/current/submissions/direct-entry/drafts',
-      key: 'decision-loop-entry-draft',
+      path: '/api/events/current/submissions/direct-entry',
+      key: 'decision-loop-entry',
       body: {
         formId: openForm.id,
         expectedFormDefinitionVersion: openForm.version,
@@ -3777,9 +3270,8 @@ describe('ephemeral live Foundation server composition', () => {
       },
       parse: (value) => value
     }));
-    if (entryDraft.kind !== 'success') throw new Error('Direct entry draft failed.');
-    const submissionId = entryDraft.data.safeDiff.submission.id;
-    await commitDraft({ runtime, session, key: 'decision-loop-entry', draft: entryDraft });
+    if (entryResult.kind !== 'success') throw new Error('Direct entry failed.');
+    const submissionId = entryResult.data.submissionId;
 
     const membership = runtime.database.sqlite.query<
       { readonly id: string; readonly version: number },
@@ -3795,11 +3287,11 @@ describe('ephemeral live Foundation server composition', () => {
       })
     ).json());
     if (roster.kind !== 'success') throw new Error('roster snapshot unavailable');
-    const registerDraft = reviewerRosterChangeDraftOperationResultSchema.parse(await effect({
+    const registerResult = reviewerRosterDirectOperationResultSchema.parse(await effect({
       runtime,
       session,
-      path: '/api/events/current/reviewer-roster/drafts',
-      key: 'decision-loop-register-draft',
+      path: '/api/events/current/reviewer-roster/changes',
+      key: 'decision-loop-register',
       body: {
         action: 'register',
         reviewerId: crypto.randomUUID(),
@@ -3814,41 +3306,79 @@ describe('ephemeral live Foundation server composition', () => {
       },
       parse: (value) => value
     }));
-    expect(registerDraft).toMatchObject({ kind: 'success', data: { action: 'register' } });
-    if (registerDraft.kind !== 'success') throw new Error('roster draft failed');
-    await commitDraft({ runtime, session, key: 'decision-loop-register', draft: registerDraft });
+    expect(registerResult).toMatchObject({
+      kind: 'success',
+      data: { action: 'register' },
+      receipt: { operationName: 'reviewer_roster.change', operationVersion: 1 }
+    });
+    if (registerResult.kind !== 'success') throw new Error('roster change failed');
 
     // With a reviewable candidate and an active reviewer the open now
     // succeeds where the empty composition pins the no_assignments refusal.
     expect(count(runtime, 'review_rounds')).toBe(0);
     expect(count(runtime, 'deadlines', "WHERE kind = 'review_due'")).toBe(0);
-    const roundDraft = reviewChangeDraftOperationResultSchema.parse(await effect({
+    const openRoundBody = {
+      action: 'open_round' as const,
+      deadlineDate: '2027-06-11',
+      anonymized: true
+    };
+    const roundResult = reviewDirectOperationResultSchema.parse(await effect({
       runtime,
       session,
-      path: '/api/events/current/review/round-drafts',
-      key: 'decision-loop-open-round-draft',
-      body: { action: 'open_round', deadlineDate: '2027-06-11', anonymized: true },
+      path: '/api/events/current/review/rounds',
+      key: 'decision-loop-open-round',
+      body: openRoundBody,
       parse: (value) => value
     }));
-    expect(roundDraft).toMatchObject({
+    expect(roundResult).toMatchObject({
       kind: 'success',
       data: {
         action: 'open_round',
-        headVersion: 1,
-        status: 'draft',
-        safeDiff: { action: 'open_round', assignmentCount: 1 }
+        assignmentCount: 1
       },
-      receipt: { operationName: 'review.round.change.draft', operationVersion: 1 }
+      receipt: { operationName: 'review.round.change', operationVersion: 1 }
     });
-    if (roundDraft.kind !== 'success') throw new Error('Open round draft failed.');
-    expect(count(runtime, 'review_rounds')).toBe(0);
-    expect(count(runtime, 'deadlines', "WHERE kind = 'review_due'")).toBe(0);
-    await commitDraft({ runtime, session, key: 'decision-loop-open-round', draft: roundDraft });
-    // One changeset commit lands the round, its assignment, and the
-    // collaborating review_due Deadline atomically.
+    if (roundResult.kind !== 'success') throw new Error('Open round failed.');
+    const afterOpenCounts = {
+      rounds: count(runtime, 'review_rounds'),
+      assignments: count(runtime, 'review_assignments'),
+      deadlines: count(runtime, 'deadlines', "WHERE kind = 'review_due'"),
+      log: count(runtime, 'operation_log')
+    };
+    expect(reviewDirectOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/review/rounds',
+      key: 'decision-loop-open-round',
+      body: openRoundBody,
+      parse: (value) => value
+    }))).toMatchObject({ kind: 'success', receipt: { id: roundResult.receipt.id } });
+    expect({
+      rounds: count(runtime, 'review_rounds'),
+      assignments: count(runtime, 'review_assignments'),
+      deadlines: count(runtime, 'deadlines', "WHERE kind = 'review_due'"),
+      log: count(runtime, 'operation_log')
+    }).toEqual(afterOpenCounts);
+    expect(reviewDirectOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/review/rounds',
+      key: 'decision-loop-open-round',
+      body: { ...openRoundBody, deadlineDate: '2027-06-12' },
+      parse: (value) => value
+    }))).toMatchObject({
+      kind: 'outcome',
+      outcome: { class: 'idempotency_conflict', kind: 'operation.request_changed' }
+    });
+    // One direct audited call lands the round, assignment, collaborating
+    // review_due Deadline, and readable history atomically.
     expect(count(runtime, 'review_rounds')).toBe(1);
     expect(count(runtime, 'review_assignments')).toBe(1);
     expect(count(runtime, 'deadlines', "WHERE kind = 'review_due'")).toBe(1);
+    expect(runtime.database.sqlite.query<{ readonly summary: string }, []>(`
+      SELECT summary FROM operation_log
+       WHERE operation_name = 'review.round.change'
+    `).all()).toEqual([{ summary: 'Opened a review round' }]);
     const deadlines = deadlineListReadResultSchema.parse(await (
       await runtime.app.request('/api/events/current/deadlines', {
         headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
@@ -3881,11 +3411,11 @@ describe('ephemeral live Foundation server composition', () => {
       data: { schemaVersion: 1, rows: [{ submissionId, head: null, origin: null }] }
     });
 
-    const decideDraft = decisionDecideDraftOperationResultSchema.parse(await effect({
+    const decideResult = decisionDecideOperationResultSchema.parse(await effect({
       runtime,
       session,
-      path: '/api/events/current/decisions/decide-drafts',
-      key: 'decision-loop-decide-draft',
+      path: '/api/events/current/decisions',
+      key: 'decision-loop-decide',
       body: {
         action: 'decide',
         decisions: [{
@@ -3898,42 +3428,18 @@ describe('ephemeral live Foundation server composition', () => {
       },
       parse: (value) => value
     }));
-    expect(decideDraft).toMatchObject({
+    expect(decideResult).toMatchObject({
       kind: 'success',
       data: {
-        action: 'decide',
-        headVersion: 1,
-        status: 'draft',
-        safeDiff: {
-          action: 'decide',
-          rows: [{
-            submissionId,
-            before: null,
-            after: { submissionId, state: 'accepted', version: 1 }
-          }]
-        }
+        rows: [{ submissionId, head: { submissionId, state: 'accepted', version: 1 } }]
       },
-      receipt: { operationName: 'decision.decide.draft', operationVersion: 1 }
+      receipt: { operationName: 'decision.decide', operationVersion: 1 }
     });
-    if (decideDraft.kind !== 'success') throw new Error('Decide draft failed.');
-    // The draft is inert: no Decision head, origin link, Session, or seeded
-    // engagement yet.
-    expect(count(runtime, 'decision_draft_receipt_links')).toBe(1);
-    expect(count(runtime, 'decision_draft_timeline')).toBe(1);
-    expect(count(runtime, 'decision_heads')).toBe(0);
-    expect(count(runtime, 'submission_session_origins')).toBe(0);
-    expect(count(runtime, 'sessions')).toBe(0);
-    expect(count(runtime, 'engagement_heads')).toBe(0);
-
-    await commitDraft({ runtime, session, key: 'decision-loop-decide', draft: decideDraft });
+    if (decideResult.kind !== 'success') throw new Error('Decide failed.');
     expect(count(runtime, 'decision_heads')).toBe(1);
     expect(count(runtime, 'submission_session_origins')).toBe(1);
     expect(count(runtime, 'sessions')).toBe(1);
     expect(count(runtime, 'engagement_heads')).toBe(1);
-    expect(count(runtime, 'decision_changeset_receipt_links')).toBe(2);
-    expect(count(runtime, 'decision_changeset_domain_facts')).toBe(1);
-    expect(count(runtime, 'decision_changeset_outbox_pointers')).toBe(1);
-    expect(count(runtime, 'decision_changeset_timeline')).toBe(2);
 
     const decided = decisionStateReadResultSchema.parse(await (
       await runtime.app.request(
@@ -4038,13 +3544,13 @@ describe('ephemeral live Foundation server composition', () => {
     // decision pin") — replaying it here would need a collecting attach
     // target plus staged post-commit drift, which this loop does not stage.
 
-    // The organizer records the speaker's confirmation through the mounted
-    // response draft; the draft is inert until its lifecycle commit.
-    const confirmDraft = engagementChangeDraftOperationResultSchema.parse(await effect({
+    // The organizer records the speaker's confirmation through one direct
+    // audited write.
+    const confirmResult = engagementChangeOperationResultSchema.parse(await effect({
       runtime,
       session,
-      path: '/api/events/current/engagements/drafts',
-      key: 'decision-loop-confirm-draft',
+      path: '/api/events/current/engagements',
+      key: 'decision-loop-confirm',
       body: {
         action: 'record_confirmation',
         engagementId: seededEngagement.id,
@@ -4053,30 +3559,15 @@ describe('ephemeral live Foundation server composition', () => {
       },
       parse: (value) => value
     }));
-    expect(confirmDraft).toMatchObject({
+    expect(confirmResult).toMatchObject({
       kind: 'success',
       data: {
         action: 'record_confirmation',
-        headVersion: 1,
-        status: 'draft',
-        safeDiff: {
-          action: 'record_confirmation',
-          before: { id: seededEngagement.id, state: 'invited', version: 1 },
-          after: { id: seededEngagement.id, state: 'confirmed', version: 2 }
-        }
+        engagement: { id: seededEngagement.id, state: 'confirmed', version: 2 }
       },
-      receipt: { operationName: 'engagement.change.draft', operationVersion: 1 }
+      receipt: { operationName: 'engagement.change', operationVersion: 1 }
     });
-    if (confirmDraft.kind !== 'success') throw new Error('Confirmation draft failed.');
-    expect(count(runtime, 'engagement_draft_receipt_links')).toBe(1);
-    expect(count(runtime, 'engagement_draft_timeline')).toBe(1);
-    expect(count(runtime, 'engagement_heads', "WHERE state = 'invited'")).toBe(1);
-
-    await commitDraft({ runtime, session, key: 'decision-loop-confirm', draft: confirmDraft });
-    expect(count(runtime, 'engagement_changeset_receipt_links')).toBe(2);
-    expect(count(runtime, 'engagement_changeset_domain_facts')).toBe(1);
-    expect(count(runtime, 'engagement_changeset_outbox_pointers')).toBe(1);
-    expect(count(runtime, 'engagement_changeset_timeline')).toBe(2);
+    if (confirmResult.kind !== 'success') throw new Error('Confirmation failed.');
     const confirmed = engagementSnapshotReadResultSchema.parse(await (
       await runtime.app.request('/api/events/current/engagements', {
         headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
@@ -4111,108 +3602,17 @@ describe('ephemeral live Foundation server composition', () => {
     runtimes.push(runtime);
     const session = await createOwnerSession(runtime);
     const appUserId = await provisionOwner(runtime, session);
-    await createEventThroughChangeset({ runtime, session, key: 'send-wave-event' });
+    await createEventDirect({ runtime, session, key: 'send-wave-event' });
 
-    const formatDraft = programVocabularyDraftOperationResultSchema.parse(await effect({
-      runtime,
-      session,
-      path: '/api/events/current/program-vocabulary/drafts/create',
-      key: 'send-wave-format-draft',
-      body: { kind: 'format', expectedSetVersion: 1, name: 'Talk' },
-      parse: (value) => value
-    }));
-    if (formatDraft.kind !== 'success') throw new Error('Format draft failed.');
-    await commitDraft({ runtime, session, key: 'send-wave-format', draft: formatDraft });
-    const vocabulary = programVocabularySnapshotReadResultSchema.parse(await (
-      await runtime.app.request('/api/events/current/program-vocabulary', {
-        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
-      })
-    ).json());
-    if (vocabulary.kind !== 'success') throw new Error('Vocabulary read failed.');
-    const format = vocabulary.data.formats.find((candidate) => candidate.name === 'Talk');
-    if (!format) throw new Error('Committed format missing.');
-
-    const registryResult = fieldRegistrySnapshotReadResultSchema.parse(await (
-      await runtime.app.request('/api/events/current/field-registry', {
-        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
-      })
-    ).json());
-    if (registryResult.kind !== 'success') throw new Error('Field registry read failed.');
-    const registry = registryResult.data;
-    const titleFieldId = registry.fields.find((field) =>
-      field.mapsTo === 'talk.title' && field.kind === 'text'
-    )?.id;
-    const emailFieldId = registry.fields.find((field) =>
-      field.mapsTo === 'person.email' && field.kind === 'email'
-    )?.id;
-    if (!titleFieldId || !emailFieldId) throw new Error('Identity fields missing.');
-    const included = new Set([titleFieldId, emailFieldId]);
-    const formCreateDraft = intakeFormDraftOperationResultSchema.parse(await effect({
-      runtime,
-      session,
-      path: '/api/events/current/forms/drafts/create',
-      key: 'send-wave-form-create-draft',
-      body: {
-        expectedCatalogVersion: 1,
-        expectedRegistryVersion: registry.version,
-        definition: {
-          ...formDefinitionInput,
-          name: 'Send wave CFP',
-          target: {
-            kind: 'category',
-            category: { kind: 'format', id: format.id }
-          },
-          composition: {
-            excludedFieldIds: registry.fields
-              .filter((field) => field.scope.kind === 'shared'
-                && field.contexts.apply.visible
-                && !included.has(field.id))
-              .map((field) => field.id)
-              .sort(),
-            requiredOverrides: {},
-            optionExposure: {}
-          }
-        }
-      },
-      parse: (value) => value
-    }));
-    if (formCreateDraft.kind !== 'success'
-        || formCreateDraft.data.safeDiff.action !== 'create') {
-      throw new Error('Form create draft failed.');
-    }
-    await commitDraft({
-      runtime, session, key: 'send-wave-form-create', draft: formCreateDraft
+    const { titleFieldId, emailFieldId, openForm } = await createFormatTargetOpenForm({
+      runtime, session, key: 'send-wave', formName: 'Send wave CFP'
     });
-    const openDraft = intakeFormDraftOperationResultSchema.parse(await effect({
-      runtime,
-      session,
-      path: '/api/events/current/forms/drafts/lifecycle',
-      key: 'send-wave-form-open-draft',
-      body: {
-        transition: 'publish_and_open',
-        formId: formCreateDraft.data.safeDiff.after.id,
-        expectedDefinitionVersion: 1,
-        expectedRegistryVersion: registry.version
-      },
-      parse: (value) => value
-    }));
-    if (openDraft.kind !== 'success') throw new Error('Form open draft failed.');
-    await commitDraft({ runtime, session, key: 'send-wave-form-open', draft: openDraft });
-    const catalog = organizerFormCatalogReadResultSchema.parse(await (
-      await runtime.app.request('/api/events/current/forms', {
-        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
-      })
-    ).json());
-    if (catalog.kind !== 'success') throw new Error('Form catalog read failed.');
-    const openForm = catalog.data.forms.find((form) => form.status === 'open');
-    if (!openForm) throw new Error('Open form missing from the catalog.');
-
     const enterSubmission = async (label: string, email: string) => {
-      const entryDraft = submissionDirectEntryDraftOperationResultSchema.parse(await effect({
+      const entryResult = submissionDirectEntryOperationResultSchema.parse(await effect({
         runtime,
         session,
-        path: '/api/events/current/submissions/direct-entry/drafts',
-        key: `send-wave-entry-${label}-draft`,
+        path: '/api/events/current/submissions/direct-entry',
+        key: `send-wave-entry-${label}`,
         body: {
           formId: openForm.id,
           expectedFormDefinitionVersion: openForm.version,
@@ -4223,18 +3623,15 @@ describe('ephemeral live Foundation server composition', () => {
         },
         parse: (value) => value
       }));
-      if (entryDraft.kind !== 'success') throw new Error(`Direct entry ${label} failed.`);
-      await commitDraft({
-        runtime, session, key: `send-wave-entry-${label}`, draft: entryDraft
-      });
-      return entryDraft.data.safeDiff.submission.id;
+      if (entryResult.kind !== 'success') throw new Error(`Direct entry ${label} failed.`);
+      return entryResult.data.submissionId;
     };
     const decide = async (label: string, submissionId: string) => {
-      const decideDraft = decisionDecideDraftOperationResultSchema.parse(await effect({
+      const decideResult = decisionDecideOperationResultSchema.parse(await effect({
         runtime,
         session,
-        path: '/api/events/current/decisions/decide-drafts',
-        key: `send-wave-decide-${label}-draft`,
+        path: '/api/events/current/decisions',
+        key: `send-wave-decide-${label}`,
         body: {
           action: 'decide',
           decisions: [{
@@ -4247,10 +3644,7 @@ describe('ephemeral live Foundation server composition', () => {
         },
         parse: (value) => value
       }));
-      if (decideDraft.kind !== 'success') throw new Error(`Decide ${label} draft failed.`);
-      await commitDraft({
-        runtime, session, key: `send-wave-decide-${label}`, draft: decideDraft
-      });
+      if (decideResult.kind !== 'success') throw new Error(`Decide ${label} failed.`);
     };
     const firstEmail = 'send.wave.one@example.test';
     const submissionA = await enterSubmission('one', firstEmail);
@@ -4343,10 +3737,10 @@ describe('ephemeral live Foundation server composition', () => {
       readonly authority_principal_key: string;
     }, []>(`
       SELECT scope_partition_key, authority_principal_key
-        FROM foundation_trial_operation_receipts
-       WHERE operation_name = 'changeset.commit' LIMIT 1
+        FROM operation_log
+       WHERE operation_name = 'decision.decide' LIMIT 1
     `).get();
-    if (!attributionRow) throw new Error('No operator commit receipt to attribute.');
+    if (!attributionRow) throw new Error('No operator decision log to attribute.');
     const attribution = Object.freeze({
       scopePartitionKey: attributionRow.scope_partition_key,
       authorityPrincipalKey: attributionRow.authority_principal_key,
@@ -4368,16 +3762,9 @@ describe('ephemeral live Foundation server composition', () => {
       dispatchGeneration: 1,
       releaseCount: 1
     });
-    // The reused changeset ceremony: drafted -> proposed -> committed inside
-    // the one send transaction (BLOCKED-3), with the commit receipt linked.
-    expect(runtime.database.sqlite.query<{
-      readonly status: string;
-      readonly head_version: number;
-    }, [string]>(`
-      SELECT status, head_version FROM changeset_heads WHERE changeset_id = ?
-    `).get(sent.changesetId)).toEqual({ status: 'committed', head_version: 3 });
-    expect(count(runtime, 'communication_release_receipt_links', "WHERE action = 'commit'"))
-      .toBe(1);
+    expect(runtime.database.sqlite.query<{ readonly batch_id: string }, [string]>(`
+      SELECT batch_id FROM communication_release_commits WHERE commit_id = ?
+    `).get(sent.releaseCommitId)).toEqual({ batch_id: 'batch.decision-notification.send-wave' });
     expect(count(runtime, 'communication_message_releases')).toBe(1);
     expect(count(runtime, 'communication_release_effect_specs')).toBe(1);
     expect(count(runtime, 'communication_outbound_delivery_heads', "WHERE state = 'pending'"))
@@ -4451,15 +3838,14 @@ describe('ephemeral live Foundation server composition', () => {
         detail: { includedCount: 1, irreversibleExternalEffectCount: 1 }
       }
     });
-    // The refused ceremony rolled back whole: no release, delivery, receipt
-    // link, or changeset row survives it.
+    // The refused send adds no release, delivery, or owner-native commit.
     expect(count(runtime, 'communication_message_releases')).toBe(1);
     expect(count(runtime, 'communication_release_effect_specs')).toBe(1);
-    expect(count(runtime, 'communication_release_receipt_links')).toBe(1);
+    expect(count(runtime, 'communication_release_commits')).toBe(1);
     expect(count(runtime, 'communication_outbound_delivery_heads')).toBe(1);
     expect(runtime.database.sqlite.query<{ readonly total: number }, [string]>(`
-      SELECT count(*) AS total FROM changeset_heads WHERE changeset_id = ?
-    `).get(sent.changesetId)?.total).toBe(1);
+      SELECT count(*) AS total FROM communication_release_commits WHERE commit_id = ?
+    `).get(sent.releaseCommitId)?.total).toBe(1);
     expect(runtime.database.sqlite.query<Record<string, unknown>, []>(
       'PRAGMA foreign_key_check'
     ).all()).toEqual([]);
@@ -4470,105 +3856,17 @@ describe('ephemeral live Foundation server composition', () => {
     runtimes.push(runtime);
     const session = await createOwnerSession(runtime);
     await provisionOwner(runtime, session);
-    await createEventThroughChangeset({ runtime, session, key: 'http-send-event' });
+    await createEventDirect({ runtime, session, key: 'http-send-event' });
 
-    const formatDraft = programVocabularyDraftOperationResultSchema.parse(await effect({
-      runtime,
-      session,
-      path: '/api/events/current/program-vocabulary/drafts/create',
-      key: 'http-send-format-draft',
-      body: { kind: 'format', expectedSetVersion: 1, name: 'Talk' },
-      parse: (value) => value
-    }));
-    if (formatDraft.kind !== 'success') throw new Error('Format draft failed.');
-    await commitDraft({ runtime, session, key: 'http-send-format', draft: formatDraft });
-    const vocabulary = programVocabularySnapshotReadResultSchema.parse(await (
-      await runtime.app.request('/api/events/current/program-vocabulary', {
-        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
-      })
-    ).json());
-    if (vocabulary.kind !== 'success') throw new Error('Vocabulary read failed.');
-    const format = vocabulary.data.formats.find((candidate) => candidate.name === 'Talk');
-    if (!format) throw new Error('Committed format missing.');
-
-    const registryResult = fieldRegistrySnapshotReadResultSchema.parse(await (
-      await runtime.app.request('/api/events/current/field-registry', {
-        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
-      })
-    ).json());
-    if (registryResult.kind !== 'success') throw new Error('Field registry read failed.');
-    const registry = registryResult.data;
-    const titleFieldId = registry.fields.find((field) =>
-      field.mapsTo === 'talk.title' && field.kind === 'text'
-    )?.id;
-    const emailFieldId = registry.fields.find((field) =>
-      field.mapsTo === 'person.email' && field.kind === 'email'
-    )?.id;
-    if (!titleFieldId || !emailFieldId) throw new Error('Identity fields missing.');
-    const included = new Set([titleFieldId, emailFieldId]);
-    const formCreateDraft = intakeFormDraftOperationResultSchema.parse(await effect({
-      runtime,
-      session,
-      path: '/api/events/current/forms/drafts/create',
-      key: 'http-send-form-create-draft',
-      body: {
-        expectedCatalogVersion: 1,
-        expectedRegistryVersion: registry.version,
-        definition: {
-          ...formDefinitionInput,
-          name: 'HTTP send CFP',
-          target: { kind: 'category', category: { kind: 'format', id: format.id } },
-          composition: {
-            excludedFieldIds: registry.fields
-              .filter((field) => field.scope.kind === 'shared'
-                && field.contexts.apply.visible
-                && !included.has(field.id))
-              .map((field) => field.id)
-              .sort(),
-            requiredOverrides: {},
-            optionExposure: {}
-          }
-        }
-      },
-      parse: (value) => value
-    }));
-    if (formCreateDraft.kind !== 'success'
-        || formCreateDraft.data.safeDiff.action !== 'create') {
-      throw new Error('Form create draft failed.');
-    }
-    await commitDraft({
-      runtime, session, key: 'http-send-form-create', draft: formCreateDraft
+    const { titleFieldId, emailFieldId, openForm } = await createFormatTargetOpenForm({
+      runtime, session, key: 'http-send', formName: 'HTTP send CFP'
     });
-    const openDraft = intakeFormDraftOperationResultSchema.parse(await effect({
-      runtime,
-      session,
-      path: '/api/events/current/forms/drafts/lifecycle',
-      key: 'http-send-form-open-draft',
-      body: {
-        transition: 'publish_and_open',
-        formId: formCreateDraft.data.safeDiff.after.id,
-        expectedDefinitionVersion: 1,
-        expectedRegistryVersion: registry.version
-      },
-      parse: (value) => value
-    }));
-    if (openDraft.kind !== 'success') throw new Error('Form open draft failed.');
-    await commitDraft({ runtime, session, key: 'http-send-form-open', draft: openDraft });
-    const catalog = organizerFormCatalogReadResultSchema.parse(await (
-      await runtime.app.request('/api/events/current/forms', {
-        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
-      })
-    ).json());
-    if (catalog.kind !== 'success') throw new Error('Form catalog read failed.');
-    const openForm = catalog.data.forms.find((form) => form.status === 'open');
-    if (!openForm) throw new Error('Open form missing from the catalog.');
-
     const enterSubmission = async (label: string, email: string) => {
-      const entryDraft = submissionDirectEntryDraftOperationResultSchema.parse(await effect({
+      const entryResult = submissionDirectEntryOperationResultSchema.parse(await effect({
         runtime,
         session,
-        path: '/api/events/current/submissions/direct-entry/drafts',
-        key: `http-send-entry-${label}-draft`,
+        path: '/api/events/current/submissions/direct-entry',
+        key: `http-send-entry-${label}`,
         body: {
           formId: openForm.id,
           expectedFormDefinitionVersion: openForm.version,
@@ -4579,18 +3877,15 @@ describe('ephemeral live Foundation server composition', () => {
         },
         parse: (value) => value
       }));
-      if (entryDraft.kind !== 'success') throw new Error(`Direct entry ${label} failed.`);
-      await commitDraft({
-        runtime, session, key: `http-send-entry-${label}`, draft: entryDraft
-      });
-      return entryDraft.data.safeDiff.submission.id;
+      if (entryResult.kind !== 'success') throw new Error(`Direct entry ${label} failed.`);
+      return entryResult.data.submissionId;
     };
     const decide = async (label: string, submissionId: string) => {
-      const decideDraft = decisionDecideDraftOperationResultSchema.parse(await effect({
+      const decideResult = decisionDecideOperationResultSchema.parse(await effect({
         runtime,
         session,
-        path: '/api/events/current/decisions/decide-drafts',
-        key: `http-send-decide-${label}-draft`,
+        path: '/api/events/current/decisions',
+        key: `http-send-decide-${label}`,
         body: {
           action: 'decide',
           decisions: [{
@@ -4603,10 +3898,7 @@ describe('ephemeral live Foundation server composition', () => {
         },
         parse: (value) => value
       }));
-      if (decideDraft.kind !== 'success') throw new Error(`Decide ${label} draft failed.`);
-      await commitDraft({
-        runtime, session, key: `http-send-decide-${label}`, draft: decideDraft
-      });
+      if (decideResult.kind !== 'success') throw new Error(`Decide ${label} failed.`);
     };
     const submissionA = await enterSubmission('one', 'http.send.one@example.test');
     const submissionB = await enterSubmission('two', 'http.send.two@example.test');
@@ -4779,11 +4071,12 @@ describe('ephemeral live Foundation server composition', () => {
     expect(count(runtime, 'communication_outbound_delivery_attempts',
       "WHERE adapter_key = 'fake.email'")).toBe(1);
 
-    const history = organizerCommunicationHistoryPageOperationResultSchema.parse(await (
+    const historyWire = await (
       await runtime.app.request('/api/events/current/communications/deliveries/history', {
         headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
       })
-    ).json());
+    ).json();
+    const history = organizerCommunicationHistoryPageOperationResultSchema.parse(historyWire);
     if (history.kind !== 'success') throw new Error('Delivery history read failed.');
     expect(history.data.rows).toEqual([expect.objectContaining({
       schemaVersion: 1,
@@ -4821,14 +4114,15 @@ describe('ephemeral live Foundation server composition', () => {
     );
 
     // An identical retry replays the terminal receipt instead of re-sending.
-    const replayed = organizerSendMessagesOperationResultSchema.parse(await effect({
+    const replayWire = await effect({
       runtime,
       session,
       path: '/api/events/current/communications/messages/send',
       key: 'http-send-commit',
       body: sendBody,
       parse: (value) => value
-    }));
+    });
+    const replayed = organizerSendMessagesOperationResultSchema.parse(replayWire);
     if (replayed.kind !== 'success') throw new Error('Send replay failed.');
     expect(replayed.receipt).toEqual(sent.receipt);
     expect(count(runtime, 'communication_message_releases')).toBe(1);
@@ -4869,34 +4163,27 @@ describe('ephemeral live Foundation server composition', () => {
     });
     expect(count(runtime, 'communication_message_releases')).toBe(1);
     expect(count(runtime, 'communication_release_effect_specs')).toBe(1);
-    expect(count(runtime, 'communication_release_receipt_links')).toBe(1);
+    expect(count(runtime, 'communication_release_commits')).toBe(1);
     expect(count(runtime, 'communication_outbound_delivery_heads')).toBe(1);
     expect(runtime.database.sqlite.query<Record<string, unknown>, []>(
       'PRAGMA foreign_key_check'
     ).all()).toEqual([]);
   });
 
-  test('joins effective category-target Forms to Vocabulary delete, merge, and compensation', async () => {
+  test('joins effective category-target Forms to direct delete and reviewed Vocabulary merge', async () => {
     const runtime = await createEphemeralLiveRuntime({ config });
     runtimes.push(runtime);
     const session = await createOwnerSession(runtime);
     await provisionOwner(runtime, session);
 
-    await createEventThroughChangeset({
+    await createEventDirect({
       runtime, session, key: 'category-reference-event'
     });
 
     const createTrack = async (name: string, expectedSetVersion: number, key: string) => {
-      const draft = programVocabularyDraftOperationResultSchema.parse(await effect({
-        runtime,
-        session,
-        path: '/api/events/current/program-vocabulary/drafts/create',
-        key: `${key}-draft`,
-        body: { kind: 'track', expectedSetVersion, name },
-        parse: (value) => value
-      }));
-      if (draft.kind !== 'success') throw new Error('Track draft failed.');
-      await commitDraft({ runtime, session, key, draft });
+      await createProgramVocabularyItem({
+        runtime, session, key, expectedSetVersion, kind: 'track', name
+      });
       const snapshot = programVocabularySnapshotReadResultSchema.parse(await (
         await runtime.app.request('/api/events/current/program-vocabulary', {
           headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
@@ -4910,35 +4197,16 @@ describe('ephemeral live Foundation server composition', () => {
     const source = await createTrack('Source Track', 1, 'category-source');
     const target = await createTrack('Target Track', 2, 'category-target');
 
-    const formDraft = intakeFormDraftOperationResultSchema.parse(await effect({
+    const form = await createAndOpenForm({
       runtime,
       session,
-      path: '/api/events/current/forms/drafts/create',
-      key: 'category-form-create-draft',
-      body: {
-        expectedCatalogVersion: 1,
-        expectedRegistryVersion: 1,
-        definition: categoryFormDefinition(source.id)
-      },
-      parse: (value) => value
-    }));
-    if (formDraft.kind !== 'success') throw new Error('Category Form draft failed.');
-    const formId = formDraft.data.safeDiff.after.id;
-    await commitDraft({ runtime, session, key: 'category-form-create', draft: formDraft });
-
-    const publishDraft = intakeFormDraftOperationResultSchema.parse(await effect({
-      runtime,
-      session,
-      path: '/api/events/current/forms/drafts/publish',
-      key: 'category-form-publish-draft',
-      body: { formId, expectedDefinitionVersion: 1, expectedRegistryVersion: 1 },
-      parse: (value) => value
-    }));
-    if (publishDraft.kind !== 'success') throw new Error('Category Form publish draft failed.');
-    await commitDraft({ runtime, session, key: 'category-form-publish', draft: publishDraft });
-    const publishedVersionId = publishDraft.data.safeDiff.action === 'publish'
-      ? publishDraft.data.safeDiff.publishedVersion.id
-      : (() => { throw new Error('Expected publish diff.'); })();
+      key: 'category-form',
+      expectedCatalogVersion: 1,
+      expectedRegistryVersion: 1,
+      definition: categoryFormDefinition(source.id)
+    });
+    const formId = form.formId;
+    const publishedVersionId = form.review.data.safeDiff.publishedVersion.id;
     const immutableVersion = runtime.database.sqlite.query<{
       readonly version_json: string;
       readonly version_digest_sha256: string;
@@ -4947,33 +4215,12 @@ describe('ephemeral live Foundation server composition', () => {
        WHERE form_version_id = ?
     `).get(publishedVersionId);
 
-    const staleFormDraft = intakeFormDraftOperationResultSchema.parse(await effect({
-      runtime,
-      session,
-      path: '/api/events/current/forms/drafts/revise',
-      key: 'category-form-stale-revise-draft',
-      body: {
-        formId,
-        expectedDefinitionVersion: 2,
-        expectedRegistryVersion: 1,
-        definition: { ...categoryFormDefinition(source.id), name: 'Track CFP future edit' }
-      },
-      parse: (value) => value
-    }));
-    if (staleFormDraft.kind !== 'success') throw new Error('Stale Form fixture draft failed.');
-    const staleFormSelector = {
-      changesetId: staleFormDraft.data.changesetId,
-      revisionId: staleFormDraft.data.revision.id,
-      revisionDigest: staleFormDraft.data.revision.digestSha256
+    const staleReviseInput = {
+      formId,
+      expectedDefinitionVersion: 2,
+      expectedRegistryVersion: 1,
+      definition: { ...categoryFormDefinition(source.id), name: 'Track CFP future edit' }
     };
-    expect(changesetLifecycleOperationResultSchema.parse(await effect({
-      runtime,
-      session,
-      path: '/api/changesets/proposals',
-      key: 'category-form-stale-revise-propose',
-      body: { ...staleFormSelector, expectedHeadVersion: 1 },
-      parse: (value) => value
-    }))).toMatchObject({ kind: 'success', data: { action: 'propose' } });
 
     const vocabularyWithUsage = programVocabularySnapshotReadResultSchema.parse(await (
       await runtime.app.request('/api/events/current/program-vocabulary', {
@@ -4990,10 +4237,10 @@ describe('ephemeral live Foundation server composition', () => {
     expect(vocabularyWithUsage.data.tracks.find((track) => track.id === target.id))
       .toMatchObject({ usage: { current: 0, historicalPins: 0 } });
 
-    const deleteDraft = programVocabularyDraftOperationResultSchema.parse(await effect({
+    const deleteResult = programVocabularyDirectOperationResultSchema.parse(await effect({
       runtime,
       session,
-      path: '/api/events/current/program-vocabulary/drafts/delete',
+      path: '/api/events/current/program-vocabulary/delete',
       key: 'category-source-delete-blocked',
       body: {
         kind: 'track', id: source.id,
@@ -5001,20 +4248,20 @@ describe('ephemeral live Foundation server composition', () => {
       },
       parse: (value) => value
     }));
-    expect(deleteDraft).toMatchObject({
+    expect(deleteResult).toMatchObject({
       kind: 'outcome',
       outcome: {
         class: 'policy_violation',
         kind: 'program_vocabulary.change_refused',
-        detail: { code: 'delete_referenced', action: 'delete', kind: 'track', ids: [source.id] }
+        detail: { code: 'delete_referenced', action: 'delete', kind: 'track', id: source.id }
       }
     });
-    expect(count(runtime, 'program_vocabulary_draft_receipt_links')).toBe(2);
+    expect(count(runtime, 'operation_log', "WHERE operation_name = 'program_vocabulary.delete'")).toBe(0);
 
-    const mergeDraft = programVocabularyDraftOperationResultSchema.parse(await effect({
+    const mergeDraft = programVocabularyMergeReviewOperationResultSchema.parse(await effect({
       runtime,
       session,
-      path: '/api/events/current/program-vocabulary/drafts/merge',
+      path: '/api/events/current/program-vocabulary/merge/draft',
       key: 'category-track-merge-draft',
       body: {
         kind: 'track', sourceId: source.id, targetId: target.id,
@@ -5031,9 +4278,19 @@ describe('ephemeral live Foundation server composition', () => {
       }
     });
     if (mergeDraft.kind !== 'success') throw new Error('Track merge draft failed.');
-    const mergeCommit = await commitDraft({
-      runtime, session, key: 'category-track-merge', draft: mergeDraft
-    });
+    const mergeSelector = {
+      draftId: mergeDraft.data.draftId,
+      revisionId: mergeDraft.data.revision.id,
+      revisionDigestSha256: mergeDraft.data.revision.digestSha256
+    };
+    expect(programVocabularyMergePublishOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/program-vocabulary/merge',
+      key: 'category-track-merge',
+      body: mergeSelector,
+      parse: (value) => value
+    }))).toMatchObject({ kind: 'success', data: { action: 'merge', setVersion: 4 } });
 
     const detailAfterMerge = await runtime.app.request(
       `/api/events/current/forms/detail?formId=${encodeURIComponent(formId)}`,
@@ -5068,12 +4325,12 @@ describe('ephemeral live Foundation server composition', () => {
       kind: 'success', data: { catalogVersion: 4, forms: [{ id: formId, version: 3 }] }
     });
 
-    const staleFormCommit = changesetLifecycleOperationResultSchema.parse(await effect({
+    const staleFormCommit = intakeFormDirectOperationResultSchema.parse(await effect({
       runtime,
       session,
-      path: '/api/changesets/commits',
-      key: 'category-form-stale-revise-commit',
-      body: { ...staleFormSelector, expectedHeadVersion: 2 },
+      path: '/api/events/current/forms/revise',
+      key: 'category-form-stale-revise',
+      body: staleReviseInput,
       parse: (value) => value
     }));
     expect(staleFormCommit).toMatchObject({
@@ -5081,13 +4338,7 @@ describe('ephemeral live Foundation server composition', () => {
       terminal: false,
       outcome: {
         class: 'stale_revision',
-        kind: 'changeset.lifecycle_refused',
-        detail: {
-          code: 'base_version_changed',
-          subjectId: `intake_form:${formId}`,
-          expected: 2,
-          actual: 3
-        }
+        kind: 'intake_form.changed'
       }
     });
     expect(await (await runtime.app.request(
@@ -5103,79 +4354,17 @@ describe('ephemeral live Foundation server composition', () => {
       }
     });
 
-    const correction = changesetLifecycleOperationResultSchema.parse(await effect({
-      runtime,
-      session,
-      path: '/api/changesets/corrections',
-      key: 'category-track-merge-correction',
-      body: {
-        sourceChangesetId: mergeCommit.selector.changesetId,
-        sourceRevisionId: mergeCommit.selector.revisionId,
-        sourceRevisionDigest: mergeCommit.selector.revisionDigest,
-        sourceCommitReceiptId: mergeCommit.committed.receipt.id
-      },
-      parse: (value) => value
-    }));
-    expect(correction).toMatchObject({
-      kind: 'success',
-      data: { action: 'correction', resultKind: 'exact', target: { status: 'draft' } }
-    });
-    if (correction.kind !== 'success'
-        || correction.data.action !== 'correction'
-        || correction.data.target === null) {
-      throw new Error('Track merge compensation draft failed.');
-    }
-    const correctionDraft = {
-      data: {
-        changesetId: correction.data.target.changesetId,
-        revision: {
-          id: correction.data.target.revisionId,
-          digestSha256: correction.data.target.revisionDigest
-        }
-      }
-    };
-    await commitDraft({
-      runtime, session, key: 'category-track-merge-compensation', draft: correctionDraft
-    });
-
-    const detailAfterCompensation = await runtime.app.request(
-      `/api/events/current/forms/detail?formId=${encodeURIComponent(formId)}`,
-      { headers: eventHeaders({ session, correlationId: crypto.randomUUID() }) }
-    );
-    expect(await detailAfterCompensation.json()).toMatchObject({
-      kind: 'success',
-      data: {
-        head: {
-          version: 4,
-          definition: { target: { category: { kind: 'track', id: source.id } } }
-        },
-        currentPublishedVersion: { id: publishedVersionId, targetPin: { id: source.id } }
-      }
-    });
-    expect(runtime.database.sqlite.query(`
-      SELECT version_json, version_digest_sha256 FROM intake_form_versions
-       WHERE form_version_id = ?
-    `).get(publishedVersionId)).toEqual(immutableVersion);
-    expect(organizerFormCatalogReadResultSchema.parse(await (
-      await runtime.app.request('/api/events/current/forms', {
-        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
-      })
-    ).json())).toMatchObject({
-      kind: 'success', data: { catalogVersion: 5, forms: [{ id: formId, version: 4 }] }
-    });
-    const compensatedVocabulary = programVocabularySnapshotReadResultSchema.parse(await (
+    const mergedVocabulary = programVocabularySnapshotReadResultSchema.parse(await (
       await runtime.app.request('/api/events/current/program-vocabulary', {
         headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
       })
     ).json());
-    expect(compensatedVocabulary).toMatchObject({ kind: 'success', data: { setVersion: 5 } });
-    if (compensatedVocabulary.kind !== 'success') {
-      throw new Error('Compensated Vocabulary read failed.');
-    }
-    expect(compensatedVocabulary.data.tracks.find((track) => track.id === source.id))
-      .toMatchObject({ status: 'active', usage: { current: 1, historicalPins: 1 } });
-    expect(compensatedVocabulary.data.tracks.find((track) => track.id === target.id))
-      .toMatchObject({ status: 'active', usage: { current: 0, historicalPins: 0 } });
+    expect(mergedVocabulary).toMatchObject({ kind: 'success', data: { setVersion: 4 } });
+    if (mergedVocabulary.kind !== 'success') throw new Error('Merged Vocabulary read failed.');
+    expect(mergedVocabulary.data.tracks.find((track) => track.id === source.id))
+      .toMatchObject({ status: 'retired', usage: { current: 0, historicalPins: 1 } });
+    expect(mergedVocabulary.data.tracks.find((track) => track.id === target.id))
+      .toMatchObject({ status: 'active', usage: { current: 1, historicalPins: 0 } });
     expect(runtime.database.sqlite.query<Record<string, unknown>, []>(
       'PRAGMA foreign_key_check'
     ).all()).toEqual([]);
@@ -5217,7 +4406,7 @@ describe('ephemeral live Foundation server composition', () => {
       correlationId: unauthorizedCorrelation
     });
     for (const origin of [undefined, 'https://attacker.example']) {
-      const response = await runtime.app.request('/api/events/drafts/create', {
+      const response = await runtime.app.request('/api/events', {
         method: 'POST',
         headers: eventHeaders({
           session,
@@ -5226,6 +4415,7 @@ describe('ephemeral live Foundation server composition', () => {
           ...(origin ? { origin } : {})
         }),
         body: JSON.stringify({
+          expectedEventSetVersion: 1,
           name: eventInput.name,
           timezone: eventInput.timezone,
           startDate: eventInput.startDate,
@@ -5240,7 +4430,7 @@ describe('ephemeral live Foundation server composition', () => {
       });
     }
 
-    const anonymousMutation = await runtime.app.request('/api/events/drafts/create', {
+    const anonymousMutation = await runtime.app.request('/api/events', {
       method: 'POST',
       headers: eventHeaders({
         correlationId: crypto.randomUUID(),
@@ -5248,6 +4438,7 @@ describe('ephemeral live Foundation server composition', () => {
         origin: config.baseUrl
       }),
       body: JSON.stringify({
+        expectedEventSetVersion: 1,
         name: eventInput.name,
         timezone: eventInput.timezone,
         startDate: eventInput.startDate,
@@ -5260,7 +4451,7 @@ describe('ephemeral live Foundation server composition', () => {
       code: 'unauthenticated',
       retryable: false
     });
-    expect(count(runtime, 'foundation_trial_operation_receipts')).toBe(0);
+    expect(count(runtime, 'operation_log', "WHERE operation_name = 'event.create'")).toBe(0);
     expect(count(runtime, 'event_spine_heads')).toBe(0);
   });
 
@@ -5276,7 +4467,7 @@ describe('ephemeral live Foundation server composition', () => {
       speakers: [
         {
           key: 'ada',
-          title: 'Typed changesets in production',
+          title: 'Typed operations in production',
           name: 'Ada Alpha',
           email: 'ada.alpha@example.test'
         },
@@ -5317,11 +4508,11 @@ describe('ephemeral live Foundation server composition', () => {
 
     // Ada and Bram confirm; Cleo stays invited-but-unconfirmed.
     for (const [index, speaker] of [ada, bram].entries()) {
-      const confirmDraft = engagementChangeDraftOperationResultSchema.parse(await effect({
+      const confirmResult = engagementChangeOperationResultSchema.parse(await effect({
         runtime,
         session,
-        path: '/api/events/current/engagements/drafts',
-        key: `publication-loop-confirm-${index}-draft`,
+        path: '/api/events/current/engagements',
+        key: `publication-loop-confirm-${index}`,
         body: {
           action: 'record_confirmation',
           engagementId: speaker.engagementId,
@@ -5330,10 +4521,7 @@ describe('ephemeral live Foundation server composition', () => {
         },
         parse: (value) => value
       }));
-      if (confirmDraft.kind !== 'success') throw new Error('Confirmation draft failed.');
-      await commitDraft({
-        runtime, session, key: `publication-loop-confirm-${index}`, draft: confirmDraft
-      });
+      if (confirmResult.kind !== 'success') throw new Error('Confirmation failed.');
     }
 
     // Non-programmed catalog content that must never enter a release: one
@@ -5354,11 +4542,11 @@ describe('ephemeral live Foundation server composition', () => {
       { key: 'collecting', title: 'Hallway lightning pod', lifecycle: 'collecting' as const },
       { key: 'draft', title: 'Working notes placeholder', lifecycle: 'draft' as const }
     ]) {
-      const createDraft = sessionDraftOperationResultSchema.parse(await effect({
+      const created = sessionDirectOperationResultSchema.parse(await effect({
         runtime,
         session,
-        path: '/api/events/current/sessions/drafts',
-        key: `publication-loop-${nonPublic.key}-draft`,
+        path: '/api/events/current/sessions',
+        key: `publication-loop-${nonPublic.key}`,
         body: {
           action: 'create',
           expectedCatalogVersion: catalogGuard.version,
@@ -5371,10 +4559,7 @@ describe('ephemeral live Foundation server composition', () => {
         },
         parse: (value) => value
       }));
-      if (createDraft.kind !== 'success') throw new Error('Session create draft failed.');
-      await commitDraft({
-        runtime, session, key: `publication-loop-${nonPublic.key}`, draft: createDraft
-      });
+      if (created.kind !== 'success') throw new Error('Session create failed.');
       const refreshed = sessionCatalogReadResultSchema.parse(await (
         await runtime.app.request('/api/events/current/sessions', {
           headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
@@ -5389,7 +4574,7 @@ describe('ephemeral live Foundation server composition', () => {
 
     // Release 1: both confirmed speakers visible. The reviewed diff carries
     // the audited name declassifications the commit copies into public state.
-    const publishOne = releaseDraftOperationResultSchema.parse(await effect({
+    const publishOne = releaseReviewDraftOperationResultSchema.parse(await effect({
       runtime,
       session,
       path: '/api/events/current/releases/drafts',
@@ -5408,7 +4593,9 @@ describe('ephemeral live Foundation server composition', () => {
     expect(diffOne.nameDeclassifications.map((entry) => entry.displayName).sort())
       .toEqual(['Ada Alpha', 'Bram Beta']);
     const releaseOneId = diffOne.after.releaseId;
-    await commitDraft({ runtime, session, key: 'publication-loop-publish-1', draft: publishOne });
+    await publishReleaseDraft({
+      runtime, session, key: 'publication-loop-publish-1', draft: publishOne
+    });
 
     const scheduleOne = await readPublic('/api/public/schedule/current');
     const scheduleOneResult = servedScheduleResultSchema.parse(scheduleOne.body);
@@ -5443,7 +4630,7 @@ describe('ephemeral live Foundation server composition', () => {
     }
 
     // The organizer turns Bram's public visibility off through the mounted
-    // roster_visibility session draft, then publishes the successor.
+    // roster_visibility direct operation, then publishes the successor.
     const catalogBeforeHide = sessionCatalogReadResultSchema.parse(await (
       await runtime.app.request('/api/events/current/sessions', {
         headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
@@ -5454,11 +4641,11 @@ describe('ephemeral live Foundation server composition', () => {
       (candidate) => candidate.id === bram.sessionId
     );
     if (!bramSession) throw new Error('Bram session missing from the catalog.');
-    const hideDraft = sessionDraftOperationResultSchema.parse(await effect({
+    const hidden = sessionDirectOperationResultSchema.parse(await effect({
       runtime,
       session,
-      path: '/api/events/current/sessions/drafts',
-      key: 'publication-loop-hide-draft',
+      path: '/api/events/current/sessions',
+      key: 'publication-loop-hide',
       body: {
         action: 'roster_visibility',
         expectedCatalogVersion: catalogBeforeHide.data.version,
@@ -5471,10 +4658,9 @@ describe('ephemeral live Foundation server composition', () => {
       },
       parse: (value) => value
     }));
-    if (hideDraft.kind !== 'success') throw new Error('Roster visibility draft failed.');
-    await commitDraft({ runtime, session, key: 'publication-loop-hide', draft: hideDraft });
+    if (hidden.kind !== 'success') throw new Error('Roster visibility change failed.');
 
-    const publishTwo = releaseDraftOperationResultSchema.parse(await effect({
+    const publishTwo = releaseReviewDraftOperationResultSchema.parse(await effect({
       runtime,
       session,
       path: '/api/events/current/releases/drafts',
@@ -5488,7 +4674,9 @@ describe('ephemeral live Foundation server composition', () => {
     expect(diffTwo.after.number).toBe(2);
     expect(diffTwo.nameDeclassifications.map((entry) => entry.displayName))
       .toEqual(['Ada Alpha']);
-    await commitDraft({ runtime, session, key: 'publication-loop-publish-2', draft: publishTwo });
+    await publishReleaseDraft({
+      runtime, session, key: 'publication-loop-publish-2', draft: publishTwo
+    });
 
     const scheduleTwo = await readPublic('/api/public/schedule/current');
     const scheduleTwoResult = servedScheduleResultSchema.parse(scheduleTwo.body);
@@ -5509,7 +4697,7 @@ describe('ephemeral live Foundation server composition', () => {
     // Rolling back to release 1 restores the program but re-gates against
     // CURRENT state: Bram is still hidden, so the restorative successor
     // withholds the appearance and the reviewed diff says exactly which one.
-    const rollback = releaseDraftOperationResultSchema.parse(await effect({
+    const rollback = releaseReviewDraftOperationResultSchema.parse(await effect({
       runtime,
       session,
       path: '/api/events/current/releases/drafts',
@@ -5530,7 +4718,9 @@ describe('ephemeral live Foundation server composition', () => {
     ]);
     expect(diffRollback.nameDeclassifications.map((entry) => entry.displayName))
       .toEqual(['Ada Alpha']);
-    await commitDraft({ runtime, session, key: 'publication-loop-rollback', draft: rollback });
+    await publishReleaseDraft({
+      runtime, session, key: 'publication-loop-rollback', draft: rollback
+    });
 
     const scheduleThree = await readPublic('/api/public/schedule/current');
     const scheduleThreeResult = servedScheduleResultSchema.parse(scheduleThree.body);
@@ -5571,7 +4761,7 @@ describe('ephemeral live Foundation server composition', () => {
     await expectDenyAll('/embed/schedule');
 
     const publicationTemplates = await presentationTemplates(runtime, session, 'schedule');
-    const styleDraft = releaseDraftOperationResultSchema.parse(await effect({
+    const styleDraft = releaseReviewDraftOperationResultSchema.parse(await effect({
       runtime,
       session,
       path: '/api/events/current/releases/drafts',
@@ -5588,9 +4778,11 @@ describe('ephemeral live Foundation server composition', () => {
     const styleDiff = styleDraft.data.safeDiff;
     if (styleDiff.action !== 'style_set_publish') throw new Error('Style diff wrong arm.');
     const styleSetReleaseId = styleDiff.after.releaseId;
-    await commitDraft({ runtime, session, key: 'publication-loop-style', draft: styleDraft });
+    await publishReleaseDraft({
+      runtime, session, key: 'publication-loop-style', draft: styleDraft
+    });
 
-    const surfaceDraft = releaseDraftOperationResultSchema.parse(await effect({
+    const surfaceDraft = releaseReviewDraftOperationResultSchema.parse(await effect({
       runtime,
       session,
       path: '/api/events/current/releases/drafts',
@@ -5610,7 +4802,9 @@ describe('ephemeral live Foundation server composition', () => {
     const surfaceDiff = surfaceDraft.data.safeDiff;
     if (surfaceDiff.action !== 'surface_publish') throw new Error('Surface diff wrong arm.');
     expect(surfaceDiff.after.allowedFrameOrigins).toEqual([]);
-    await commitDraft({ runtime, session, key: 'publication-loop-surface', draft: surfaceDraft });
+    await publishReleaseDraft({
+      runtime, session, key: 'publication-loop-surface', draft: surfaceDraft
+    });
 
     const presentationResponse = await runtime.app.request('/api/public/schedule/presentation');
     expect(presentationResponse.status).toBe(200);
@@ -5647,7 +4841,7 @@ describe('ephemeral live Foundation server composition', () => {
     // Published surface, empty allowlist: still deny-all.
     await expectDenyAll('/embed/schedule');
 
-    const allowDraft = releaseDraftOperationResultSchema.parse(await effect({
+    const allowDraft = releaseReviewDraftOperationResultSchema.parse(await effect({
       runtime,
       session,
       path: '/api/events/current/releases/drafts',
@@ -5665,7 +4859,9 @@ describe('ephemeral live Foundation server composition', () => {
     if (allowDiff.action !== 'surface_allowlist') throw new Error('Allowlist diff wrong arm.');
     expect(allowDiff.before.allowedFrameOrigins).toEqual([]);
     expect(allowDiff.after.allowedFrameOrigins).toEqual(['https://partner.example.com']);
-    await commitDraft({ runtime, session, key: 'publication-loop-allowlist', draft: allowDraft });
+    await publishReleaseDraft({
+      runtime, session, key: 'publication-loop-allowlist', draft: allowDraft
+    });
 
     const embedAllowed = await navigate('/embed/schedule');
     expect(embedAllowed.status).toBe(200);
@@ -5690,74 +4886,15 @@ describe('ephemeral live Foundation server composition', () => {
     runtimes.push(runtime);
     const session = await createOwnerSession(runtime);
     await provisionOwner(runtime, session);
-    await createEventThroughChangeset({ runtime, session, key: 'apply-loop-event' });
+    await createEventDirect({ runtime, session, key: 'apply-loop-event' });
 
     // The seeded-style CFP: title, name, and email over the canonical registry.
-    const registryResult = fieldRegistrySnapshotReadResultSchema.parse(await (
-      await runtime.app.request('/api/events/current/field-registry', {
-        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
-      })
-    ).json());
-    if (registryResult.kind !== 'success') throw new Error('Field registry read failed.');
-    const registry = registryResult.data;
-    const requireField = (mapsTo: string, kind: string): string => {
-      const id = registry.fields.find(
-        (field) => field.mapsTo === mapsTo && field.kind === kind
-      )?.id;
-      if (!id) throw new Error(`Registry field missing: ${mapsTo}`);
-      return id;
-    };
-    const titleFieldId = requireField('talk.title', 'text');
-    const nameFieldId = requireField('person.name', 'text');
-    const emailFieldId = requireField('person.email', 'email');
-    const included = new Set([titleFieldId, nameFieldId, emailFieldId]);
-    const definition = (name: string) => ({
-      ...formDefinitionInput,
-      name,
-      composition: {
-        excludedFieldIds: registry.fields
-          .filter((field) => field.scope.kind === 'shared'
-            && field.contexts.apply.visible
-            && !included.has(field.id))
-          .map((field) => field.id)
-          .sort(),
-        requiredOverrides: {},
-        optionExposure: {}
-      }
+    const {
+      registry, titleFieldId, nameFieldId, emailFieldId, openForm, definition
+    } = await createFormatTargetOpenForm({
+      runtime, session, key: 'apply-loop', formName: 'Public apply CFP'
     });
-    const formCreateDraft = intakeFormDraftOperationResultSchema.parse(await effect({
-      runtime,
-      session,
-      path: '/api/events/current/forms/drafts/create',
-      key: 'apply-loop-form-create-draft',
-      body: {
-        expectedCatalogVersion: 1,
-        expectedRegistryVersion: registry.version,
-        definition: definition('Public apply CFP')
-      },
-      parse: (value) => value
-    }));
-    if (formCreateDraft.kind !== 'success'
-        || formCreateDraft.data.safeDiff.action !== 'create') {
-      throw new Error('Form create draft failed.');
-    }
-    const formId = formCreateDraft.data.safeDiff.after.id;
-    await commitDraft({ runtime, session, key: 'apply-loop-form-create', draft: formCreateDraft });
-    const openDraft = intakeFormDraftOperationResultSchema.parse(await effect({
-      runtime,
-      session,
-      path: '/api/events/current/forms/drafts/lifecycle',
-      key: 'apply-loop-form-open-draft',
-      body: {
-        transition: 'publish_and_open',
-        formId,
-        expectedDefinitionVersion: 1,
-        expectedRegistryVersion: registry.version
-      },
-      parse: (value) => value
-    }));
-    if (openDraft.kind !== 'success') throw new Error('Form open draft failed.');
-    await commitDraft({ runtime, session, key: 'apply-loop-form-open', draft: openDraft });
+    const formId = openForm.id;
     const readFormDetail = async () => {
       const response = await runtime.app.request(
         `/api/events/current/forms/detail?formId=${formId}`,
@@ -5820,7 +4957,7 @@ describe('ephemeral live Foundation server composition', () => {
 
     // Publish the apply surface through the mounted release loop.
     const applicationTemplates = await presentationTemplates(runtime, session, 'application-form');
-    const styleDraft = releaseDraftOperationResultSchema.parse(await effect({
+    const styleDraft = releaseReviewDraftOperationResultSchema.parse(await effect({
       runtime,
       session,
       path: '/api/events/current/releases/drafts',
@@ -5837,8 +4974,8 @@ describe('ephemeral live Foundation server composition', () => {
       throw new Error('Style set draft failed.');
     }
     const styleSetReleaseId = styleDraft.data.safeDiff.after.releaseId;
-    await commitDraft({ runtime, session, key: 'apply-loop-style', draft: styleDraft });
-    const surfaceDraft = releaseDraftOperationResultSchema.parse(await effect({
+    await publishReleaseDraft({ runtime, session, key: 'apply-loop-style', draft: styleDraft });
+    const surfaceDraft = releaseReviewDraftOperationResultSchema.parse(await effect({
       runtime,
       session,
       path: '/api/events/current/releases/drafts',
@@ -5858,7 +4995,7 @@ describe('ephemeral live Foundation server composition', () => {
       throw new Error('Apply surface draft failed.');
     }
     const applyRelease1 = surfaceDraft.data.safeDiff.after.activeReleaseId;
-    await commitDraft({ runtime, session, key: 'apply-loop-surface', draft: surfaceDraft });
+    await publishReleaseDraft({ runtime, session, key: 'apply-loop-surface', draft: surfaceDraft });
 
     // The public read now serves exactly the pinned form.
     const servedResponse = await readCurrent();
@@ -5978,7 +5115,7 @@ describe('ephemeral live Foundation server composition', () => {
 
     // Idempotent replay after response loss: identical bytes, no new rows.
     const beforeReplay = {
-      receipts: count(runtime, 'foundation_trial_operation_receipts'),
+      receipts: count(runtime, 'operation_log'),
       submissions: count(runtime, 'intake_submission_heads'),
       arrivals: count(runtime, 'submission_arrival_facts')
     };
@@ -5988,7 +5125,7 @@ describe('ephemeral live Foundation server composition', () => {
     expect(replaySubmit.status).toBe(200);
     expect(await replaySubmit.json()).toEqual(submitBody);
     expect({
-      receipts: count(runtime, 'foundation_trial_operation_receipts'),
+      receipts: count(runtime, 'operation_log'),
       submissions: count(runtime, 'intake_submission_heads'),
       arrivals: count(runtime, 'submission_arrival_facts')
     }).toEqual(beforeReplay);
@@ -6003,11 +5140,11 @@ describe('ephemeral live Foundation server composition', () => {
     // Republish the form: the reviewed commit mints version 2 and the
     // successor apply surface release re-pins it without recomposition.
     detail = await readFormDetail();
-    const reviseDraft = intakeFormDraftOperationResultSchema.parse(await effect({
+    const revised = intakeFormDirectOperationResultSchema.parse(await effect({
       runtime,
       session,
-      path: '/api/events/current/forms/drafts/revise',
-      key: 'apply-loop-revise-draft',
+      path: '/api/events/current/forms/revise',
+      key: 'apply-loop-revise',
       body: {
         formId,
         expectedDefinitionVersion: detail.head.version,
@@ -6016,15 +5153,15 @@ describe('ephemeral live Foundation server composition', () => {
       },
       parse: (value) => value
     }));
-    if (reviseDraft.kind !== 'success') throw new Error('Form revise draft failed.');
-    await commitDraft({ runtime, session, key: 'apply-loop-revise', draft: reviseDraft });
+    if (revised.kind !== 'success') throw new Error('Form revise failed.');
     detail = await readFormDetail();
-    const republishDraft = intakeFormDraftOperationResultSchema.parse(await effect({
+    const republishDraft = intakeFormVersionReviewDraftOperationResultSchema.parse(await effect({
       runtime,
       session,
-      path: '/api/events/current/forms/drafts/publish',
+      path: '/api/events/current/forms/publish/draft',
       key: 'apply-loop-republish-draft',
       body: {
+        action: 'publish',
         formId,
         expectedDefinitionVersion: detail.head.version,
         expectedRegistryVersion: detail.registryPin.version
@@ -6032,7 +5169,9 @@ describe('ephemeral live Foundation server composition', () => {
       parse: (value) => value
     }));
     if (republishDraft.kind !== 'success') throw new Error('Form republish draft failed.');
-    await commitDraft({ runtime, session, key: 'apply-loop-republish', draft: republishDraft });
+    await publishFormReview({
+      runtime, session, key: 'apply-loop-republish', draft: republishDraft
+    });
     detail = await readFormDetail();
     const formVersion2 = detail.currentPublishedVersion?.id;
     if (!formVersion2 || formVersion2 === formVersion1) {
@@ -6057,7 +5196,7 @@ describe('ephemeral live Foundation server composition', () => {
 
     // Roll the apply surface head back to the release pinning version 1: the
     // pin is superseded, so the whole public surface fails closed at once.
-    const rollbackDraft = releaseDraftOperationResultSchema.parse(await effect({
+    const rollbackDraft = releaseReviewDraftOperationResultSchema.parse(await effect({
       runtime,
       session,
       path: '/api/events/current/releases/drafts',
@@ -6071,7 +5210,9 @@ describe('ephemeral live Foundation server composition', () => {
       parse: (value) => value
     }));
     if (rollbackDraft.kind !== 'success') throw new Error('Apply rollback draft failed.');
-    await commitDraft({ runtime, session, key: 'apply-loop-rollback', draft: rollbackDraft });
+    await publishReleaseDraft({
+      runtime, session, key: 'apply-loop-rollback', draft: rollbackDraft
+    });
 
     // A post-rollback write refuses with zero rows.
     const writesBefore = count(runtime, 'intake_public_mutation_receipt_links');
@@ -6353,5 +5494,30 @@ describe('ephemeral live Foundation server composition', () => {
     // Mounted and reachable; with no issued challenge it honestly answers none.
     expect(gatedResponse.status).toBe(200);
     expect(await gatedResponse.json()).toEqual({ kind: 'none' });
+  }, 120_000);
+
+  test('keeps the seeded live API mounted through production one-origin routing', async () => {
+    const runtime = await createEphemeralLiveRuntime({ config, devFixtures: true });
+    runtimes.push(runtime);
+    const directory = mkdtempSync(join(tmpdir(), 'jooevents-production-routing-'));
+    embedBuildDirectories.push(directory);
+    const buildRoot = join(directory, 'build');
+    mkdirSync(buildRoot, { recursive: true });
+    writeFileSync(join(buildRoot, 'index.html'), '<!doctype html><title>JooEvents shell</title>');
+    const handler = createProductionRequestHandler({
+      backend: runtime.app.fetch,
+      buildDirectory: buildRoot,
+      embedFraming: runtime.embedFraming
+    });
+
+    const manifest = await handler(new Request('http://localhost:5176/api/operations/manifest'));
+    expect(manifest.status).toBe(200);
+    expect(safeOperationManifestSchema.parse(await manifest.json()).operations.length)
+      .toBeGreaterThan(0);
+    expect((await handler(new Request('http://localhost:5176/api/workspace/overview'))).status)
+      .toBe(401);
+    expect((await handler(new Request('http://localhost:5176/', {
+      headers: { accept: 'text/html', 'sec-fetch-mode': 'navigate' }
+    }))).status).toBe(200);
   }, 120_000);
 });

@@ -48,7 +48,7 @@ import type { ProgramTrackView } from './view-models/program-vocabulary';
  */
 export type DecisionsPageLiveUnmountedCapability =
 	| 'decision_review_evidence'
-	| 'decision_undo_to_undecided'
+	| 'decision_undecided_unavailable'
 	| 'decision_withdrawn_authoring';
 
 type AdapterFailure = Readonly<{ code: string; reason: string; retryable: boolean }>;
@@ -77,7 +77,7 @@ const UNMOUNTED_COPY: Readonly<Record<DecisionsPageLiveUnmountedCapability, stri
 	Object.freeze({
 		decision_review_evidence:
 			'Individual committed reviews are not served on this surface; the standing beside the row is the whole aggregate evidence.',
-		decision_undo_to_undecided:
+		decision_undecided_unavailable:
 			'A committed decision cannot be returned to undecided from here.',
 		decision_withdrawn_authoring:
 			'Withdrawal belongs to the submitter; it cannot be set from this surface.'
@@ -768,15 +768,14 @@ export function createLiveDecisionsPagePort(input: {
 			 * One consequential decide per chunk of at most the wire's 100 rows,
 			 * guarded by the decision heads read immediately before drafting.
 			 * `undecided` and `withdrawn` have no organizer authoring path and
-			 * refuse typed — a failed undo states exactly why instead of
-			 * silently leaving the decision standing.
+			 * refuse typed; corrections choose another guarded result.
 			 */
 			async decide(
 				ids: string[],
 				decision: DecisionState,
 				trackIdsBySubmission: Readonly<Record<string, string>> = {}
 			): Promise<void> {
-				if (decision === 'undecided') throw unmounted('decision_undo_to_undecided');
+				if (decision === 'undecided') throw unmounted('decision_undecided_unavailable');
 				if (decision === 'withdrawn') throw unmounted('decision_withdrawn_authoring');
 				const distinct = [...new Set(ids)];
 				if (distinct.length === 0) return;

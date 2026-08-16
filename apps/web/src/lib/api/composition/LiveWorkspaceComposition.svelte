@@ -2,7 +2,6 @@
 	import { untrack, type Snippet } from 'svelte';
 	import { setEventProgramPort } from '$lib/api/event-program/context';
 	import { createLiveEventProgramPort } from '$lib/api/event-program/live';
-	import { createChangesetReviewLivePort } from '$lib/api/changesets';
 	import { createLiveCommunicationsReadinessPagePort } from '$lib/api/communications-readiness-page-live';
 	import { createCommunicationsAuthoringLivePort } from '$lib/api/operations/communications-authoring-live';
 	import { createCommunicationsProviderReadLivePort } from '$lib/api/operations/communications-provider-read-live';
@@ -53,6 +52,7 @@
 	import { createProgramVocabularySettingsAdapter } from '$lib/api/program-vocabulary-settings-adapter';
 	import { createWorkspaceTeamSettingsPort } from '$lib/api/workspace-team-settings-adapter';
 	import { createLiveSettingsPagePort } from '$lib/api/settings-page-port';
+	import { createLiveAgentActionsPagePort } from '$lib/api/agent-actions-page-port';
 	import { createLiveWorkspaceShellPort } from '$lib/api/workspace-shell-live';
 	import WorkspaceShell from '$lib/features/workspace/components/WorkspaceShell.svelte';
 	import {
@@ -75,7 +75,6 @@
 	const eventProgram = setEventProgramPort(createLiveEventProgramPort({ manifest: initial.manifest }));
 	const overview = createLiveOverviewPagePort({ overview: overviewRead, event: eventProgram.event });
 	const shell = createLiveWorkspaceShellPort({ user: initial.user, overview });
-	const changesets = createChangesetReviewLivePort({ manifest: initial.manifest });
 	const communicationsReadiness = createLiveCommunicationsReadinessPagePort({
 		provider: createCommunicationsProviderReadLivePort({ manifest: initial.manifest })
 	});
@@ -85,10 +84,7 @@
 		manifest: initial.manifest
 	});
 	const canonicalForms = setOrganizerFormsPort(createIntakeFormsLivePort({ manifest: initial.manifest }));
-	const vocabulary = createProgramVocabularySettingsAdapter({
-		program: eventProgram,
-		changesets
-	});
+	const vocabulary = createProgramVocabularySettingsAdapter({ program: eventProgram });
 	const fields = createFieldRegistryWorkspaceAdapter({
 		client: createFieldRegistryLiveClient({ manifest: initial.manifest })
 	});
@@ -164,7 +160,7 @@
 	});
 	// The tuned Submissions surface: triage rows joined with decision heads
 	// and whole-slice standings, plus the direct-entry door through the same
-	// changeset lifecycle. The tuned Decisions surface consumes the same list
+	// registered operation. The tuned Decisions surface consumes the same list
 	// so both tables state one truth.
 	const submissions = createLiveSubmissionsPagePort({
 		triage,
@@ -273,7 +269,6 @@
 	setLiveWorkspacePorts(Object.freeze({
 		overview,
 		eventProgram,
-		changesets,
 		communicationsReadiness,
 		forms,
 		submissions,
@@ -286,7 +281,8 @@
 		speakers,
 		files,
 		templates,
-		tasks
+		tasks,
+		agentActions: createLiveAgentActionsPagePort()
 	}));
 </script>
 

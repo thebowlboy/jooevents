@@ -1,5 +1,4 @@
 import {
-  structuredOutcomeSchema,
   taskAssignmentSchema,
   taskEventSchema,
   taskScopeSchema,
@@ -7,15 +6,10 @@ import {
   type TaskEventDto
 } from '@jooevents/contracts';
 import {
-  canonicalJsonSha256,
-  defineChangesetSchema,
-  type ChangesetPlanningSnapshot
-} from '@jooevents/changesets';
-import {
   type EngagementResponseCollaborationPlan,
   type EngagementResponseCollaborator,
   type EngagementResponseCorePlan,
-  isEngagementRestorePlan
+  type EngagementResponseReadPortKey
 } from '@jooevents/engagement';
 import { canonicalJsonValue } from '@jooevents/kernel';
 import { z } from 'zod';
@@ -27,11 +21,9 @@ import {
   taskCatalogGuardId,
   type TaskReadPort
 } from './model';
-import {
-  taskReadPort,
-  taskTransactionPort,
-  taskValidationPort
-} from './changesets';
+
+export const taskEngagementReadPort: EngagementResponseReadPortKey<TaskReadPort> =
+  Object.freeze({ key: 'task.engagement.read', version: 1 });
 
 const reference = Object.freeze({ key: 'task.engagement-confirmation', version: 1 });
 const planSchema = z.discriminatedUnion('action', [
@@ -52,24 +44,18 @@ const planSchema = z.discriminatedUnion('action', [
 ]);
 type Plan = z.infer<typeof planSchema>;
 
-const staleDetail = defineChangesetSchema({
-  key: 'task.engagement-collaboration.stale-detail', version: 1,
-  schema: z.strictObject({ engagementId: z.uuid() })
-});
-
 function actor(core: EngagementResponseCorePlan): string {
-  if (isEngagementRestorePlan(core)) return core.actorUserId;
   return core.input.actorUserId ?? core.after.confirmation?.personId ?? core.after.personId;
 }
 
 function occurredAt(core: EngagementResponseCorePlan): string {
-  return isEngagementRestorePlan(core) ? core.occurredAt : core.input.occurredAt;
+  return core.input.occurredAt;
 }
 
 function build(core: EngagementResponseCorePlan, tasks: TaskReadPort): Plan | undefined {
-  const scope = isEngagementRestorePlan(core) ? core.scope : core.input.scope;
-  const after = isEngagementRestorePlan(core) ? core.restore : core.after;
-  const before = isEngagementRestorePlan(core) ? core.expectedCurrent : core.before;
+  const scope = core.input.scope;
+  const after = core.after;
+  const before = core.before;
   const catalog = tasks.readTaskCatalog(scope);
   const board = tasks.readTaskBoard(scope);
   if (!catalog || !board || catalog.definitions.length === 0) return undefined;
@@ -161,51 +147,12 @@ function contribution(plan: Plan): EngagementResponseCollaborationPlan {
   };
 }
 
-function stale(plan: Plan) {
-  return {
-    kind: 'outcome' as const,
-    outcome: structuredOutcomeSchema.parse({
-      class: 'stale_revision', kind: 'task.engagement_reconciliation_changed', retryable: false,
-      subjects: [{ type: 'engagement', id: plan.engagementId }],
-      detail: { engagementId: plan.engagementId }, detailSchemaVersion: 1
-    })
-  };
-}
-
 const collaborator: EngagementResponseCollaborator = {
   reference,
-  readPorts: [taskReadPort], validationPorts: [taskValidationPort],
-  transactionPorts: [taskTransactionPort],
-  allowedAggregateKinds: ['task_assignment'], allowedGuardKinds: ['task_catalog'],
-  allowedConsequences: ['task_assignments_materialized', 'task_assignment_changed'],
-  allowedOutcomes: [{
-    class: 'stale_revision' as const, kind: 'task.engagement_reconciliation_changed', retryable: false,
-    detailSchema: staleDetail.reference
-  }],
-  allowedFacts: [
-    { kind: 'task_assignments_materialized', version: 1 },
-    { kind: 'task_assignment_changed', version: 1 }
-  ],
-  allowedEffects: [], schemas: [staleDetail],
+  readPort: taskEngagementReadPort,
   plan(core, snapshot) {
-    const plan = build(core, snapshot.getPort(taskReadPort));
+    const plan = build(core, snapshot.getPort(taskEngagementReadPort));
     return plan ? contribution(plan) : undefined;
-  },
-  validate(core, raw, validation) {
-    const plan = planSchema.parse(raw.plan);
-    const rebuilt = build(core, validation.getPort(taskValidationPort));
-    return rebuilt && canonicalJsonSha256(rebuilt) === canonicalJsonSha256(plan)
-      ? { kind: 'ready', validated: canonicalJsonValue(plan) }
-      : stale(plan);
-  },
-  apply(_core, raw, transaction) {
-    const plan = planSchema.parse(raw);
-    const result = transaction.getPort(taskTransactionPort).applyEngagementReconciliation(plan);
-    const kind = plan.action === 'materialize' ? 'task_assignments_materialized' : 'task_assignment_changed';
-    return {
-      result: canonicalJsonValue(result),
-      facts: [{ kind, version: 1, payload: canonicalJsonValue(result) }], effects: []
-    };
   }
 };
 

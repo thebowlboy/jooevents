@@ -78,9 +78,11 @@ test('touch navigation is modal, traps focus, and restores the page on close', a
 	const drawer = page.getByRole('dialog', { name: 'Navigation' });
 	const close = drawer.getByRole('button', { name: 'Close navigation' });
 	const firstLink = drawer.getByRole('link', { name: 'JooEvents' });
-	// Settings is a group now: its disclosure follows the Settings link and is
-	// therefore the drawer's actual final focusable control while collapsed.
-	const lastControl = drawer.getByRole('button', { name: 'Expand Settings sections' });
+	// The Settings row is the rail's one door to the area — its sections live on
+	// the surface itself — so it is the drawer's final focusable control.
+	const lastControl = drawer
+		.getByRole('navigation', { name: 'Settings' })
+		.getByRole('link', { name: 'Settings', exact: true });
 	await expect(drawer).toBeVisible();
 	await expect(open).toHaveAttribute('aria-expanded', 'true');
 	await expect(close).toBeFocused();

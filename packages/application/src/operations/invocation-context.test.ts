@@ -221,7 +221,7 @@ const effectCanonicalSchema = z.discriminatedUnion('kind', [
 const effectContributionSchema = z.strictObject({
   result: effectCanonicalSchema,
   domain: z.strictObject({ value: z.string() }),
-  receiptChildren: z.array(z.strictObject({ kind: z.literal('domain_evidence'), value: z.string() }))
+  effectContributions: z.array(z.strictObject({ kind: z.literal('domain_evidence'), value: z.string() }))
 });
 const effectProjectedSchema = createEffectfulOperationResultSchema(z.strictObject({ value: z.string() }));
 
@@ -254,14 +254,10 @@ class MemoryUnitOfWork implements EffectUnitOfWorkPort {
     const receipts = this.receipts;
     return work({
       recheckCurrentAuthority: (context) => recheckEffectInvocationCurrentAuthority(context),
-      acquireExecutionClaim: () => ({ kind: 'acquired' }),
       findTerminalReceipt: (identity) => receipts.get(identityKey(identity)),
       openHandlerSnapshot: () => ({ allowed: true }),
       applyDomainContribution: () => undefined,
-      insertReceiptParent: (receipt) => { receipts.set(identityKey(receipt.identity), receipt); },
-      insertTerminalNewOperationAudit: (record) => { this.audits.push(record); },
-      insertReceiptChild: () => undefined,
-      releaseExecutionClaim: () => undefined
+      insertOperationLog: (record) => { receipts.set(identityKey(record.receipt.identity), record.receipt); }
     });
   }
 }
@@ -456,7 +452,7 @@ async function operationHarness(
         return {
           result: { kind: 'success', data: { value: parsed.value } },
           domain: { value: parsed.value },
-          receiptChildren: [{ kind: 'domain_evidence', value: parsed.value }]
+          effectContributions: [{ kind: 'domain_evidence', value: parsed.value }]
         };
       }
     }],
@@ -663,7 +659,7 @@ describe('trusted operation invocation', () => {
     const effect = await createEffectOperationExecutor({
       registry: harness.registry,
       unitOfWork: new MemoryUnitOfWork(),
-      newReceiptId: () => receiptId
+      newOperationLogId: () => receiptId
     }).execute(invocation);
     expect(effect.kind).toBe('success');
     expect(harness.sealedKeys).toEqual([rawKey]);
@@ -895,28 +891,16 @@ describe('trusted operation invocation', () => {
       rawIdempotencyKey: 'must-not-be-sealed-after-denial'
     });
     let receiptLookups = 0;
-    const shortAudits: ShortOperationAuditRecord[] = [];
+    let shortAuditWrites = 0;
     const port: EffectUnitOfWorkPort = {
       findTerminalReceipt: () => { receiptLookups += 1; return undefined; },
-      recordShortOperationAudit: (record) => { shortAudits.push(record); },
+      recordShortOperationAudit: () => { shortAuditWrites += 1; },
       runInUnitOfWork: async () => { throw new Error('unit of work must not open'); }
     };
     const denied = await createEffectOperationExecutor({ registry: revoked.registry, unitOfWork: port }).execute(invocation);
     expect(denied).toMatchObject({ kind: 'outcome', terminal: false, outcome: { kind: 'authority.revoked' } });
     expect(receiptLookups).toBe(0);
-    expect(shortAudits).toHaveLength(1);
-    expect(shortAudits[0]).toMatchObject({
-      disposition: 'context_denied',
-      denialReason: 'revoked',
-      resultSummary: {
-        kind: 'outcome',
-        outcomeClass: 'access_denied',
-        outcomeKind: 'authority.revoked',
-        terminal: false
-      }
-    });
-    expect(shortAudits[0] && 'receiptId' in shortAudits[0]).toBe(false);
-    expect(shortAudits[0] && 'relatedReceiptId' in shortAudits[0]).toBe(false);
+    expect(shortAuditWrites).toBe(0);
     expect(revoked.effectHandlerCalls).toBe(0);
     expect(revoked.sealedKeys).toEqual([]);
   });

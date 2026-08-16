@@ -92,13 +92,8 @@ export interface OperationProducerRef {
   readonly operation: DefinitionRef<'operation'>;
 }
 
-export interface ChangesetOperationProducerRef {
-  readonly kind: 'changeset_operation';
-  readonly operation: DefinitionRef<'changeset_operation'>;
-}
-
 /** Every producer citation is an exact key and positive version, never a floating name. */
-export type ProducerRef = OperationProducerRef | ChangesetOperationProducerRef;
+export type ProducerRef = OperationProducerRef;
 
 export type ConsumerSourceRef =
   | DefinitionRef<'domain_fact'>

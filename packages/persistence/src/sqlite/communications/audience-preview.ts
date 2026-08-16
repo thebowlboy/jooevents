@@ -1585,7 +1585,7 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
    * binding still reads at the pinned version, and re-resolving the audience
    * plus address-policy state reproduces the adopted guard digest. Any drift —
    * a re-decide, a revised or discarded draft, a changed address or policy —
-   * fails closed to 'stale'. The send-wave changeset consumes this inside its
+   * fails closed to 'stale'. The reviewed send batch consumes this inside its
    * one commit transaction; the asynchronous full re-render check remains the
    * read path's stronger gate.
    */

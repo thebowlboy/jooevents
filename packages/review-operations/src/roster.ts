@@ -1,2 +1,2 @@
 export * from './roster-module';
-export * from './roster-preparation';
+export * from './roster-direct-preparation';

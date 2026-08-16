@@ -43,7 +43,7 @@ import {
   type SQLiteOrganizerCommunicationAuthoringRepository
 } from './organizer-authoring';
 
-/** Disposable evidence schema for the isolated organizer-authoring runtime seam. */
+/** This schema contributes to the accepted epoch-2 baseline and may also serve isolated fixtures. */
 export const SQLITE_ORGANIZER_COMMUNICATION_AUTHORING_EFFECT_SQL = `
 CREATE TABLE organizer_communication_authoring_receipt_links (
   receipt_id TEXT PRIMARY KEY,
@@ -72,7 +72,7 @@ CREATE TABLE organizer_communication_authoring_receipt_links (
       AND payload_ref_id IS NULL AND draft_id IS NOT NULL)
   ),
   FOREIGN KEY(receipt_id)
-    REFERENCES foundation_trial_operation_receipts(id)
+    REFERENCES operation_log(id)
     ON UPDATE RESTRICT ON DELETE RESTRICT,
   FOREIGN KEY(workspace_id,event_id)
     REFERENCES event_spine_scope_roots(workspace_id,event_id)
@@ -172,7 +172,7 @@ interface PreparedMutation {
   readonly domainCanonical: string;
   readonly resultDataCanonical: string;
   readonly timelineId: string;
-  phase: 'prepared' | 'applied' | 'evidence_complete' | 'claim_released';
+  phase: 'prepared' | 'applied' | 'evidence_complete' | 'effect_complete';
   receiptId?: string;
 }
 
@@ -428,7 +428,7 @@ implements SQLiteEffectDomainAdapter {
     this.#active = prepared;
   }
 
-  afterReceiptParentInserted(receipt: TerminalEffectReceipt): void {
+  afterOperationLogInserted(receipt: TerminalEffectReceipt): void {
     const active = this.#active;
     const parsedResult = active === undefined
       ? undefined
@@ -491,7 +491,7 @@ implements SQLiteEffectDomainAdapter {
     this.#expectedIdentity = receipt.identity;
   }
 
-  afterExecutionClaimReleased(identity: EffectOperationIdentity): void {
+  afterEffectApplicationCommitted(identity: EffectOperationIdentity): void {
     if (!this.input.sqlite.inTransaction) {
       throw new TypeError('organizer_communication_authoring_effect_transaction_required');
     }
@@ -510,7 +510,7 @@ implements SQLiteEffectDomainAdapter {
         || !effectOperationIdentitiesEqual(identity, this.#expectedIdentity)) {
       throw new TypeError('organizer_communication_authoring_effect_incomplete');
     }
-    active.phase = 'claim_released';
+    active.phase = 'effect_complete';
   }
 
   afterUnitOfWorkCommitted(): void {

@@ -28,7 +28,8 @@ import {
 } from '@jooevents/files';
 
 /**
- * Additive schema installed only in an explicitly disposable SQLite runtime.
+ * This schema contributes to the accepted epoch-2 baseline and may also serve
+ * isolated fixtures.
  * Five aggregates: upload intents (two-phase upload evidence), file assets
  * (blob metadata behind the D1 driver seam), attachments (asset OR typed link
  * on engagement/submission/session/resource-share subjects; the D7 refcount

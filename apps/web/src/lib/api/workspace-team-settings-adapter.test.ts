@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { workspaceTeamSnapshotSchema, type OperationReceiptRef } from '@jooevents/contracts';
 import { mapWorkspaceTeamSnapshot } from './mappers/workspace-team';
 import type {
-	WorkspaceTeamDraftRequest,
+	WorkspaceTeamMutationRequest,
 	WorkspaceTeamLiveApplyResult,
 	WorkspaceTeamLiveClient,
 	WorkspaceTeamLiveReadResult
@@ -73,16 +73,13 @@ function snapshot(input: {
 const before = snapshot({ version: 7, digestSeed: 'a', members: [invitation, member] });
 
 const commitReceipt: OperationReceiptRef = {
-	id: id(100), operationName: 'changeset.commit', operationVersion: 1
+	id: id(100), operationName: 'workspace_team.invite', operationVersion: 1
 };
 
 function committed(change: WorkspaceTeamSafeChangeView): WorkspaceTeamLiveApplyResult {
 	const data: WorkspaceTeamCommittedMutationView = {
 		action: change.action,
-		changesetId: id(101),
-		revisionId: id(102),
-		revisionDigest: digest('c'),
-		committedHeadVersion: 3,
+		teamVersion: 8,
 		change
 	};
 	return { kind: 'success', data, receipt: commitReceipt, correlationId };
@@ -95,7 +92,7 @@ function readSuccess(data: WorkspaceTeamSnapshotView): WorkspaceTeamLiveReadResu
 function client(input: {
 	readonly reads: readonly WorkspaceTeamLiveReadResult[];
 	readonly apply?: (
-		request: WorkspaceTeamDraftRequest,
+		request: WorkspaceTeamMutationRequest,
 		idempotencyKey: string
 	) => WorkspaceTeamLiveApplyResult | Promise<WorkspaceTeamLiveApplyResult>;
 }): WorkspaceTeamLiveClient {
@@ -128,7 +125,7 @@ describe('source-neutral Workspace Team Settings port', () => {
 			digestSeed: 'b',
 			members: [invitation, createdInvitation, member]
 		});
-		let captured: { request: WorkspaceTeamDraftRequest; key: string } | undefined;
+		let captured: { request: WorkspaceTeamMutationRequest; key: string } | undefined;
 		const port = createWorkspaceTeamSettingsPort({
 			client: client({
 				reads: [readSuccess(before), readSuccess(after)],
@@ -186,7 +183,7 @@ describe('source-neutral Workspace Team Settings port', () => {
 			digestSeed: 'd',
 			members: [invitation, { ...member, role: roles[1], version: 5 }]
 		});
-		let captured: WorkspaceTeamDraftRequest | undefined;
+		let captured: WorkspaceTeamMutationRequest | undefined;
 		const port = createWorkspaceTeamSettingsPort({
 			client: client({
 				reads: [readSuccess(before), readSuccess(after)],
@@ -228,7 +225,7 @@ describe('source-neutral Workspace Team Settings port', () => {
 
 	test('removes a member while keeping session revocation pending as a first-class fact', async () => {
 		const after = snapshot({ version: 8, digestSeed: 'e', members: [invitation] });
-		let captured: WorkspaceTeamDraftRequest | undefined;
+		let captured: WorkspaceTeamMutationRequest | undefined;
 		const port = createWorkspaceTeamSettingsPort({
 			client: client({
 				reads: [readSuccess(before), readSuccess(after)],
@@ -294,7 +291,7 @@ describe('source-neutral Workspace Team Settings port', () => {
 		});
 	});
 
-	test('returns typed local refusals before drafting stale or ambiguous work', async () => {
+	test('returns typed local refusals before sending stale or ambiguous work', async () => {
 		let applies = 0;
 		const port = createWorkspaceTeamSettingsPort({
 			client: client({

@@ -331,7 +331,7 @@ export interface SQLiteReviewRepositorySources {
  * source adapter, the reviewer roster from the durable roster repository joined
  * to lower-owner authority facts, and Deadline pins plus the three `review_due`
  * collaboration ports from the sibling Deadline repository, so one object can
- * serve every read, validation, and transaction port a Review changeset needs.
+ * serve every read, validation, and transaction port Review operations need.
  */
 export class SQLiteReviewRepository implements
   ReviewTransactionRepository,

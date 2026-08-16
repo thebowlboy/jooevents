@@ -124,6 +124,7 @@ export type AreaKey =
 	| 'templates'
 	| 'forms'
 	| 'embeds'
+	| 'approvals'
 	| 'settings';
 
 export interface AttentionItem {

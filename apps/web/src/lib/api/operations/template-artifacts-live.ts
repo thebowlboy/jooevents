@@ -1,11 +1,12 @@
 import {
 	TEMPLATE_AUTHORING_OPERATION_SCHEMA_REFS,
-	changesetRevisionSelectorSchema,
 	operationHttpIdempotencyKeySchema,
 	templateArtifactListInputSchema,
 	templateArtifactListOperationResultSchema,
-	templateArtifactMutationDraftOperationResultSchema,
 	templateArtifactMutationInputSchema,
+	templateArtifactPublishInputSchema,
+	templateArtifactPublishOperationResultSchema,
+	templateArtifactReviewDraftOperationResultSchema,
 	type OperationReceiptRef,
 	type StructuredOutcome,
 	type TemplateArtifactMutationInputDto,
@@ -13,8 +14,6 @@ import {
 	type TemplateArtifactSnapshotDto
 } from '@jooevents/contracts';
 import type { z } from 'zod';
-import { createChangesetReviewLivePort } from '../changesets/live';
-import type { ChangesetReviewResult } from '../changesets/port';
 import { requestJson, type ApiResult, type SafeApiError } from '../client';
 import { jsonEquivalent } from '../json-equivalence';
 import {
@@ -24,43 +23,53 @@ import {
 	type OperatorHttpBindingUnavailableReason
 } from './operator-http-binding';
 
+type ExactOperation = ExpectedOperatorHttpOperation & { readonly path: string };
+
 export const TEMPLATE_ARTIFACT_LIVE_OPERATIONS = Object.freeze({
 	list: {
 		name: 'template.artifact.list', version: 1, effect: 'read',
 		method: 'GET', input: 'query', idempotencyRequired: false,
+		path: '/api/events/current/template-artifacts',
 		...TEMPLATE_AUTHORING_OPERATION_SCHEMA_REFS.list
 	},
 	draft: {
 		name: 'template.artifact.change.draft', version: 1, effect: 'draft',
 		method: 'POST', input: 'body', idempotencyRequired: true,
-		...TEMPLATE_AUTHORING_OPERATION_SCHEMA_REFS.mutationDraft
+		path: '/api/events/current/template-artifacts/drafts',
+		...TEMPLATE_AUTHORING_OPERATION_SCHEMA_REFS.reviewDraft
+	},
+	publish: {
+		name: 'template.artifact.change', version: 1, effect: 'commit',
+		method: 'POST', input: 'body', idempotencyRequired: true,
+		path: '/api/events/current/template-artifacts/publish',
+		...TEMPLATE_AUTHORING_OPERATION_SCHEMA_REFS.publish
 	}
-} as const satisfies Record<string, ExpectedOperatorHttpOperation>);
+} as const satisfies Record<string, ExactOperation>);
 
-export type TemplateArtifactLiveOperation = 'list' | 'draft' | 'propose' | 'commit';
-type Unavailable = {
-	readonly kind: 'unavailable';
-	readonly operation: TemplateArtifactLiveOperation;
-	readonly reason: OperatorHttpBindingUnavailableReason;
-};
+export type TemplateArtifactLiveOperation = keyof typeof TEMPLATE_ARTIFACT_LIVE_OPERATIONS;
+export type TemplateArtifactMutationKeys = Readonly<{ draft: string; publish: string }>;
 export type TemplateArtifactLiveResult<Data> =
-	| { readonly kind: 'success'; readonly data: Data; readonly correlationId: string; readonly receipt?: OperationReceiptRef }
-	| { readonly kind: 'outcome'; readonly outcome: StructuredOutcome; readonly terminal?: boolean; readonly correlationId: string; readonly receipt?: OperationReceiptRef }
+	| { readonly kind: 'success'; readonly data: Data; readonly correlationId: string;
+		readonly receipt?: OperationReceiptRef }
+	| { readonly kind: 'outcome'; readonly outcome: StructuredOutcome; readonly terminal?: boolean;
+		readonly correlationId: string; readonly receipt?: OperationReceiptRef }
 	| { readonly kind: 'transport_error'; readonly error: SafeApiError }
-	| Unavailable;
+	| { readonly kind: 'unavailable'; readonly operation: TemplateArtifactLiveOperation;
+		readonly reason: OperatorHttpBindingUnavailableReason };
+
+export type TemplateArtifactLiveMutationData = Readonly<{
+	revision: TemplateArtifactSafeDiffDto['after'];
+	safeDiff: TemplateArtifactSafeDiffDto;
+}>;
 
 export interface TemplateArtifactLiveClient {
 	list(kind?: 'message' | 'surface' | 'theme', options?: { readonly signal?: AbortSignal }):
 		Promise<TemplateArtifactLiveResult<readonly TemplateArtifactSnapshotDto[]>>;
 	mutate(
 		mutation: TemplateArtifactMutationInputDto,
-		idempotencyKey: string,
+		keys: TemplateArtifactMutationKeys,
 		options?: { readonly signal?: AbortSignal }
-	): Promise<TemplateArtifactLiveResult<{
-		readonly revision: TemplateArtifactSafeDiffDto['after'];
-		readonly safeDiff: TemplateArtifactSafeDiffDto;
-		readonly committedHeadVersion: number;
-	}>>;
+	): Promise<TemplateArtifactLiveResult<TemplateArtifactLiveMutationData>>;
 }
 
 export interface TemplateArtifactRequestInput {
@@ -73,12 +82,18 @@ export interface TemplateArtifactRequestInput {
 }
 export type TemplateArtifactRequester =
 	(input: TemplateArtifactRequestInput) => Promise<ApiResult<unknown>>;
-type ListOperationResult = z.infer<typeof templateArtifactListOperationResultSchema>;
-type DraftOperationResult = z.infer<typeof templateArtifactMutationDraftOperationResultSchema>;
 
 function defaultRequester(input: TemplateArtifactRequestInput): Promise<ApiResult<unknown>> {
 	return requestJson(input);
 }
+
+function exactBinding(manifest: unknown, expected: ExactOperation): OperatorHttpBindingResolution {
+	const binding = resolveOperatorHttpBinding({ manifest, expected });
+	return binding.kind === 'available' && binding.path !== expected.path
+		? { kind: 'unavailable', reason: 'operation_contract_mismatch' }
+		: binding;
+}
+
 function invalidRequest<Data>(): TemplateArtifactLiveResult<Data> {
 	return { kind: 'transport_error', error: { code: 'invalid_request', retryable: false } };
 }
@@ -91,42 +106,27 @@ function unavailable<Data>(
 ): TemplateArtifactLiveResult<Data> {
 	return { kind: 'unavailable', operation, reason: binding.reason };
 }
-function receiptMatches(
-	receipt: OperationReceiptRef | undefined,
-	operation: { readonly name: string; readonly version: number }
-): receipt is OperationReceiptRef {
-	return receipt?.operationName === operation.name && receipt.operationVersion === operation.version;
+function receiptMatches(receipt: OperationReceiptRef, expected: ExactOperation): boolean {
+	return receipt.operationName === expected.name && receipt.operationVersion === expected.version;
 }
-function mapChangesetFailure<Data>(
-	result: Exclude<ChangesetReviewResult<unknown>, { readonly kind: 'success' }>,
-	operation: 'propose' | 'commit'
-): TemplateArtifactLiveResult<Data> {
-	if (result.kind === 'unavailable') return { kind: 'unavailable', operation, reason: result.reason };
-	if (result.kind === 'transport_error') return result;
-	return {
-		kind: 'outcome', outcome: result.outcome,
-		...(result.terminal === undefined ? {} : { terminal: result.terminal }),
-		correlationId: result.correlationId,
-		...(result.receipt === undefined ? {} : { receipt: result.receipt })
-	};
+function outcomeReceiptMatches(
+	result: { readonly terminal?: boolean; readonly receipt?: OperationReceiptRef },
+	expected: ExactOperation
+): boolean {
+	return result.terminal === true
+		? result.receipt !== undefined && receiptMatches(result.receipt, expected)
+		: result.receipt === undefined;
 }
 
-/** Pure-live client for the complete manual Template artifact review loop. */
+/** Pure-live read and owner-native reviewed Template artifact client. */
 export function createTemplateArtifactLiveClient(input: {
 	readonly manifest: unknown;
 	readonly request?: TemplateArtifactRequester;
 }): TemplateArtifactLiveClient {
-	const listBinding = resolveOperatorHttpBinding({
-		manifest: input.manifest, expected: TEMPLATE_ARTIFACT_LIVE_OPERATIONS.list
-	});
-	const draftBinding = resolveOperatorHttpBinding({
-		manifest: input.manifest, expected: TEMPLATE_ARTIFACT_LIVE_OPERATIONS.draft
-	});
+	const listBinding = exactBinding(input.manifest, TEMPLATE_ARTIFACT_LIVE_OPERATIONS.list);
+	const draftBinding = exactBinding(input.manifest, TEMPLATE_ARTIFACT_LIVE_OPERATIONS.draft);
+	const publishBinding = exactBinding(input.manifest, TEMPLATE_ARTIFACT_LIVE_OPERATIONS.publish);
 	const request = input.request ?? defaultRequester;
-	const changesets = createChangesetReviewLivePort({
-		manifest: input.manifest,
-		request: (requestInput) => request(requestInput)
-	});
 
 	return Object.freeze({
 		async list(
@@ -143,85 +143,90 @@ export function createTemplateArtifactLiveClient(input: {
 				...(options.signal ? { signal: options.signal } : {})
 			});
 			if (transport.kind === 'error') return { kind: 'transport_error', error: transport.error };
-			const parsed = templateArtifactListOperationResultSchema.safeParse(transport.data);
-			if (!parsed.success) return invalidContract();
-			const result = parsed.data as ListOperationResult;
-			return result.kind === 'success'
-				? { kind: 'success', data: result.data.artifacts, correlationId: result.correlationId }
-				: { kind: 'outcome', outcome: result.outcome, correlationId: result.correlationId };
+			const result = templateArtifactListOperationResultSchema.safeParse(transport.data);
+			if (!result.success) return invalidContract();
+			return result.data.kind === 'success'
+				? { kind: 'success', data: result.data.data.artifacts, correlationId: result.data.correlationId }
+				: { kind: 'outcome', outcome: result.data.outcome, correlationId: result.data.correlationId };
 		},
 
 		async mutate(
 			rawMutation: TemplateArtifactMutationInputDto,
-			rawKey: string,
+			rawKeys: TemplateArtifactMutationKeys,
 			options: { readonly signal?: AbortSignal } = {}
-		): Promise<TemplateArtifactLiveResult<{
-			readonly revision: TemplateArtifactSafeDiffDto['after'];
-			readonly safeDiff: TemplateArtifactSafeDiffDto;
-			readonly committedHeadVersion: number;
-		}>> {
+		): Promise<TemplateArtifactLiveResult<TemplateArtifactLiveMutationData>> {
 			const mutation = templateArtifactMutationInputSchema.safeParse(rawMutation);
-			const key = operationHttpIdempotencyKeySchema.safeParse(rawKey);
-			if (!mutation.success || !key.success) return invalidRequest();
+			const draftKey = operationHttpIdempotencyKeySchema.safeParse(rawKeys.draft);
+			const publishKey = operationHttpIdempotencyKeySchema.safeParse(rawKeys.publish);
+			if (!mutation.success || !draftKey.success || !publishKey.success) return invalidRequest();
 			if (draftBinding.kind === 'unavailable') return unavailable('draft', draftBinding);
+			if (publishBinding.kind === 'unavailable') return unavailable('publish', publishBinding);
+
 			const draftTransport = await request({
-				path: draftBinding.path,
-				method: 'POST', schema: templateArtifactMutationDraftOperationResultSchema,
-				body: mutation.data, idempotencyKey: `${key.data}.draft`,
+				path: draftBinding.path, method: 'POST',
+				schema: templateArtifactReviewDraftOperationResultSchema,
+				body: mutation.data, idempotencyKey: draftKey.data,
 				...(options.signal ? { signal: options.signal } : {})
 			});
 			if (draftTransport.kind === 'error') return { kind: 'transport_error', error: draftTransport.error };
-			const parsedDraft = templateArtifactMutationDraftOperationResultSchema.safeParse(draftTransport.data);
-			if (!parsedDraft.success) return invalidContract();
-			const draft = parsedDraft.data as DraftOperationResult;
-			if (draft.kind === 'outcome') return {
-				kind: 'outcome', outcome: draft.outcome, terminal: draft.terminal,
-				correlationId: draft.correlationId,
-				...('receipt' in draft ? { receipt: draft.receipt } : {})
-			};
-			if (!receiptMatches(draft.receipt, TEMPLATE_ARTIFACT_LIVE_OPERATIONS.draft)
-				|| draft.data.action !== mutation.data.action
-				|| draft.data.safeDiff.artifactId !== mutation.data.artifactId
-				|| draft.data.safeDiff.before.number !== mutation.data.expectedRevisionNumber
+			const drafted = templateArtifactReviewDraftOperationResultSchema.safeParse(draftTransport.data);
+			if (!drafted.success) return invalidContract();
+			if (drafted.data.kind === 'outcome') {
+				if (!outcomeReceiptMatches(drafted.data, TEMPLATE_ARTIFACT_LIVE_OPERATIONS.draft)) return invalidContract();
+				return {
+					kind: 'outcome', outcome: drafted.data.outcome, terminal: drafted.data.terminal,
+					correlationId: drafted.data.correlationId,
+					...('receipt' in drafted.data ? { receipt: drafted.data.receipt } : {})
+				};
+			}
+			if (!receiptMatches(drafted.data.receipt, TEMPLATE_ARTIFACT_LIVE_OPERATIONS.draft)
+				|| drafted.data.data.action !== mutation.data.action
+				|| drafted.data.data.safeDiff.artifactId !== mutation.data.artifactId
+				|| drafted.data.data.safeDiff.before.number !== mutation.data.expectedRevisionNumber
 				|| (mutation.data.action === 'replace'
-					&& !jsonEquivalent(draft.data.safeDiff.after.document, mutation.data.document))
+					&& !jsonEquivalent(drafted.data.data.safeDiff.after.document, mutation.data.document))
 				|| (mutation.data.action === 'revert'
-					&& draft.data.safeDiff.restoredFromRevisionNumber !== mutation.data.targetRevisionNumber)) {
+					&& drafted.data.data.safeDiff.restoredFromRevisionNumber !== mutation.data.targetRevisionNumber)) {
 				return invalidContract();
 			}
-			if (draft.data.approvalPolicy.requirement !== 'none') {
-				return invalidContract();
-			}
-			const selector = changesetRevisionSelectorSchema.parse({
-				changesetId: draft.data.changesetId,
-				revisionId: draft.data.revision.id,
-				revisionDigest: draft.data.revision.digestSha256
+
+			const selector = templateArtifactPublishInputSchema.safeParse({
+				draftId: drafted.data.data.draftId,
+				revisionId: drafted.data.data.revision.id,
+				revisionDigestSha256: drafted.data.data.revision.digestSha256
 			});
-			const proposed = await changesets.propose(
-				{ ...selector, expectedHeadVersion: draft.data.headVersion },
-				`${key.data}.propose`, options.signal ? { signal: options.signal } : {}
-			);
-			if (proposed.kind !== 'success') return mapChangesetFailure(proposed, 'propose');
-			const operations = proposed.data.groups.flatMap((group) => group.operations);
-			const operation = operations[0];
-			if (proposed.data.operationCount !== 1 || operations.length !== 1
-				|| operation?.kind !== 'template.artifact.change' || operation.version !== 1
-				|| operation.dependencyGroup !== 'template_artifact'
-				|| !jsonEquivalent(operation.safeDiff, draft.data.safeDiff)) return invalidContract();
-			const committed = await changesets.commit(
-				{ ...selector, expectedHeadVersion: proposed.data.headVersion },
-				`${key.data}.commit`, options.signal ? { signal: options.signal } : {}
-			);
-			if (committed.kind !== 'success') return mapChangesetFailure(committed, 'commit');
+			if (!selector.success) return invalidContract();
+			const publishTransport = await request({
+				path: publishBinding.path, method: 'POST', schema: templateArtifactPublishOperationResultSchema,
+				body: selector.data, idempotencyKey: publishKey.data,
+				...(options.signal ? { signal: options.signal } : {})
+			});
+			if (publishTransport.kind === 'error') return { kind: 'transport_error', error: publishTransport.error };
+			const published = templateArtifactPublishOperationResultSchema.safeParse(publishTransport.data);
+			if (!published.success) return invalidContract();
+			if (published.data.kind === 'outcome') {
+				if (!outcomeReceiptMatches(published.data, TEMPLATE_ARTIFACT_LIVE_OPERATIONS.publish)) return invalidContract();
+				return {
+					kind: 'outcome', outcome: published.data.outcome, terminal: published.data.terminal,
+					correlationId: published.data.correlationId,
+					...('receipt' in published.data ? { receipt: published.data.receipt } : {})
+				};
+			}
+			if (!receiptMatches(published.data.receipt, TEMPLATE_ARTIFACT_LIVE_OPERATIONS.publish)
+				|| published.data.data.action !== mutation.data.action
+				|| !jsonEquivalent(published.data.data.safeDiff, drafted.data.data.safeDiff)
+				|| published.data.data.revision.revisionId !== drafted.data.data.safeDiff.after.revisionId
+				|| published.data.data.revision.digestSha256 !== drafted.data.data.safeDiff.after.digestSha256) {
+				return invalidContract();
+			}
 			return {
 				kind: 'success',
 				data: {
-					revision: draft.data.safeDiff.after,
-					safeDiff: draft.data.safeDiff,
-					committedHeadVersion: committed.data.committedHeadVersion
+					revision: published.data.data.safeDiff.after,
+					safeDiff: published.data.data.safeDiff
 				},
-				correlationId: committed.correlationId ?? draft.correlationId,
-				receipt: committed.receipt
+				correlationId: published.data.correlationId,
+				receipt: published.data.receipt
 			};
 		}
 	});

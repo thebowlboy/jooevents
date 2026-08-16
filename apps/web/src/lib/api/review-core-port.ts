@@ -8,33 +8,35 @@ import type {
 	reviewEvaluationChangeDraftInputSchema,
 	reviewRoundChangeDraftInputSchema,
 	reviewSnapshotReadInputSchema,
-	reviewStepBackChangeDraftInputSchema
+	reviewStepBackChangeDraftInputSchema,
+	ReviewMutationResult
 } from '@jooevents/contracts/reviews';
 import type { z } from 'zod';
 import type { SafeApiError } from './client';
 import type { OperatorHttpBindingUnavailableReason } from './operations/operator-http-binding';
 import type {
-	ReviewChangeDraftView,
 	ReviewDraftSaveView,
 	ReviewRoundSetupView,
-	ReviewSnapshotView
+	ReviewSnapshotView,
+	ReviewView
 } from './view-models/review';
 
 export type ReviewSnapshotRequest = z.input<typeof reviewSnapshotReadInputSchema>;
-export type ReviewRoundChangeDraftRequest = z.input<typeof reviewRoundChangeDraftInputSchema>;
-export type ReviewStepBackDraftRequest = z.input<typeof reviewStepBackChangeDraftInputSchema>;
-export type ReviewEvaluationChangeDraftRequest = z.input<
+export type ReviewRoundChangeRequest = z.input<typeof reviewRoundChangeDraftInputSchema>;
+export type ReviewStepBackRequest = z.input<typeof reviewStepBackChangeDraftInputSchema>;
+export type ReviewEvaluationChangeRequest = z.input<
 	typeof reviewEvaluationChangeDraftInputSchema
 >;
+export type ReviewMutationView = ReviewView<ReviewMutationResult>;
 export type ReviewEvaluationDraftSaveRequest = z.input<typeof reviewDraftSaveInputSchema>;
 export type ReviewIdempotencyKey = z.input<typeof operationHttpIdempotencyKeySchema>;
 
 export type ReviewCoreOperation =
 	| 'snapshot'
 	| 'round_setup'
-	| 'round_change_draft'
-	| 'step_back_draft'
-	| 'evaluation_change_draft'
+	| 'round_change'
+	| 'step_back'
+	| 'evaluation_change'
 	| 'evaluation_draft_save';
 
 export type ReviewCoreUnavailableResult = {
@@ -102,21 +104,21 @@ export interface ReviewCorePort {
 	readRoundSetup(
 		options?: { readonly signal?: AbortSignal }
 	): Promise<ReviewCoreReadResult<ReviewRoundSetupView>>;
-	draftRoundChange(
-		input: ReviewRoundChangeDraftRequest,
+	changeRound(
+		input: ReviewRoundChangeRequest,
 		idempotencyKey: ReviewIdempotencyKey,
 		options?: { readonly signal?: AbortSignal }
-	): Promise<ReviewCoreEffectResult<ReviewChangeDraftView>>;
-	draftStepBack(
-		input: ReviewStepBackDraftRequest,
+	): Promise<ReviewCoreEffectResult<ReviewMutationView>>;
+	stepBack(
+		input: ReviewStepBackRequest,
 		idempotencyKey: ReviewIdempotencyKey,
 		options?: { readonly signal?: AbortSignal }
-	): Promise<ReviewCoreEffectResult<ReviewChangeDraftView>>;
-	draftEvaluationChange(
-		input: ReviewEvaluationChangeDraftRequest,
+	): Promise<ReviewCoreEffectResult<ReviewMutationView>>;
+	changeEvaluation(
+		input: ReviewEvaluationChangeRequest,
 		idempotencyKey: ReviewIdempotencyKey,
 		options?: { readonly signal?: AbortSignal }
-	): Promise<ReviewCoreEffectResult<ReviewChangeDraftView>>;
+	): Promise<ReviewCoreEffectResult<ReviewMutationView>>;
 	saveEvaluationDraft(
 		input: ReviewEvaluationDraftSaveRequest,
 		idempotencyKey: ReviewIdempotencyKey,

@@ -392,18 +392,12 @@ export const reviewerRosterChangeDraftInputSchema = z.discriminatedUnion('action
     ...expectedRosterFields
   })
 ]);
-export const reviewerRosterChangeDraftDataSchema = z.strictObject({
-  changesetId: reviewIdSchema,
-  revision: z.strictObject({ id: reviewIdSchema, digestSha256: reviewSha256Schema }),
-  action: z.enum(['register', 'set_scope', 'revoke', 'restore']),
-  reviewerId: reviewIdSchema
-});
-export const reviewerRosterChangeDraftCanonicalResultSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('success'), data: reviewerRosterChangeDraftDataSchema }),
+export const reviewerRosterDirectCanonicalResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success'), data: reviewerRosterMutationResultSchema }),
   z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
 ]);
-export const reviewerRosterChangeDraftOperationResultSchema =
-  createEffectfulOperationResultSchema(reviewerRosterChangeDraftDataSchema);
+export const reviewerRosterDirectOperationResultSchema =
+  createEffectfulOperationResultSchema(reviewerRosterMutationResultSchema);
 
 /** Exact public schema identities projected into the operator operation manifest. */
 export const REVIEWER_ROSTER_OPERATION_SCHEMA_REFS = Object.freeze({
@@ -413,11 +407,11 @@ export const REVIEWER_ROSTER_OPERATION_SCHEMA_REFS = Object.freeze({
     resultKey: 'schema.reviewer_roster.snapshot-read.result',
     resultSchema: reviewerRosterSnapshotReadResultSchema
   }),
-  changeDraft: createOperationSchemaManifestRefs({
-    inputKey: 'schema.reviewer_roster.change-draft.input',
+  change: createOperationSchemaManifestRefs({
+    inputKey: 'schema.reviewer_roster.change.input',
     inputSchema: reviewerRosterChangeDraftInputSchema,
-    resultKey: 'schema.reviewer_roster.change-draft.result',
-    resultSchema: reviewerRosterChangeDraftOperationResultSchema
+    resultKey: 'schema.reviewer_roster.change.result',
+    resultSchema: reviewerRosterDirectOperationResultSchema
   })
 });
 
@@ -438,7 +432,8 @@ export type ReviewerRosterGuardDto = z.infer<typeof reviewerRosterGuardSchema>;
 export type ReviewerRosterMutationPlanDto = z.infer<typeof reviewerRosterMutationPlanSchema>;
 export type ReviewerRosterSafeDiff = z.infer<typeof reviewerRosterSafeDiffSchema>;
 export type ReviewerRosterMutationResult = z.infer<typeof reviewerRosterMutationResultSchema>;
-export type ReviewerRosterChangeDraftData = z.infer<typeof reviewerRosterChangeDraftDataSchema>;
+export type ReviewerRosterDirectOperationResult =
+  z.infer<typeof reviewerRosterDirectOperationResultSchema>;
 
 export function compareScopeRef(
   left: ReviewerScopeRefDto,

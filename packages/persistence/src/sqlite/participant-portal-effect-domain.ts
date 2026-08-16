@@ -445,7 +445,7 @@ export function createSQLiteParticipantSessionAuthorityView(sqlite: Database) {
 type RespondSuccess = {
   readonly result: { readonly kind: 'success'; readonly data: unknown };
   readonly domain: NonNullable<unknown>;
-  readonly receiptChildren: readonly unknown[];
+  readonly effectContributions: readonly unknown[];
 };
 
 interface PreparedResponse {
@@ -610,7 +610,7 @@ export class SQLiteParticipantPortalEffectDomainAdapter implements SQLiteEffectD
     this.#active = prepared;
   }
 
-  afterReceiptParentInserted(receipt: TerminalEffectReceipt): void {
+  afterOperationLogInserted(receipt: TerminalEffectReceipt): void {
     const active = this.#active;
     const parsedResult = portalEngagementRespondResultSchema.safeParse(receipt.result);
     if (!this.input.sqlite.inTransaction || !active || active.phase !== 'applied'
@@ -629,13 +629,13 @@ export class SQLiteParticipantPortalEffectDomainAdapter implements SQLiteEffectD
     this.#expectedIdentity = receipt.identity;
   }
 
-  afterReceiptChildInserted(receiptId: string, contribution: unknown): void {
+  afterEffectContributionInserted(receiptId: string, contribution: unknown): void {
     const active = this.#active;
     if (!this.input.sqlite.inTransaction || !active || active.phase !== 'parent_linked'
         || !this.#expectedIdentity || active.receiptId !== receiptId) {
-      throw new TypeError('participant_portal_receipt_parent_missing');
+      throw new TypeError('participant_portal_operation_log_missing');
     }
-    const expected = active.contribution.receiptChildren[active.childrenSeen];
+    const expected = active.contribution.effectContributions[active.childrenSeen];
     if (expected === undefined
         || canonicalJsonText(contribution) !== canonicalJsonText(expected)) {
       throw new TypeError('participant_portal_evidence_mismatch');
@@ -643,7 +643,7 @@ export class SQLiteParticipantPortalEffectDomainAdapter implements SQLiteEffectD
     active.childrenSeen += 1;
   }
 
-  afterExecutionClaimReleased(identity: EffectOperationIdentity): void {
+  afterEffectApplicationCommitted(identity: EffectOperationIdentity): void {
     if (!this.input.sqlite.inTransaction) {
       throw new TypeError('participant_portal_transaction_required');
     }
@@ -657,7 +657,7 @@ export class SQLiteParticipantPortalEffectDomainAdapter implements SQLiteEffectD
       return;
     }
     if (active.phase !== 'parent_linked'
-        || active.childrenSeen !== active.contribution.receiptChildren.length
+        || active.childrenSeen !== active.contribution.effectContributions.length
         || !this.#expectedIdentity
         || !effectOperationIdentitiesEqual(identity, this.#expectedIdentity)) {
       throw new TypeError('participant_portal_incomplete');

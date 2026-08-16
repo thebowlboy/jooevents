@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { styleSetRecipeSchema } from './releases';
-import { changesetApplicationIdSchema } from './changeset-operations';
 import {
   createEffectfulOperationResultSchema,
   createOperationSchemaManifestRefs,
@@ -252,31 +251,51 @@ export const templateArtifactListOperationResultSchema =
 export const templateArtifactGetOperationResultSchema =
   createReadOperationResultSchema(templateArtifactSnapshotSchema);
 
-export const templateArtifactMutationDraftDataSchema = z.strictObject({
+export const templateArtifactReviewDraftDataSchema = z.strictObject({
   schemaVersion: z.literal(1),
   action: z.enum(['replace', 'revert']),
-  changesetId: changesetApplicationIdSchema,
-  headVersion: z.number().int().positive(),
+  draftId: id,
   status: z.literal('draft'),
   revision: z.strictObject({
-    id: changesetApplicationIdSchema,
-    number: z.number().int().positive(),
+    id,
+    number: z.literal(1),
     digestSha256: z.string().regex(DIGEST)
   }),
-  riskTier: z.enum(['low', 'normal', 'consequential']),
-  approvalPolicy: z.strictObject({
-    reference: versionedDefinitionRefSchema,
-    definitionDigestSha256: z.string().regex(DIGEST),
-    requirement: z.enum(['none', 'distinct_current_human'])
-  }),
   safeDiff: templateArtifactSafeDiffSchema
+}).superRefine((data, context) => {
+  if (data.action !== data.safeDiff.action) {
+    context.addIssue({ code: 'custom', message: 'Template review action mismatch.' });
+  }
 });
-export const templateArtifactMutationDraftCanonicalResultSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('success'), data: templateArtifactMutationDraftDataSchema }),
+export const templateArtifactReviewDraftCanonicalResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success'), data: templateArtifactReviewDraftDataSchema }),
   z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
 ]);
-export const templateArtifactMutationDraftOperationResultSchema =
-  createEffectfulOperationResultSchema(templateArtifactMutationDraftDataSchema);
+export const templateArtifactReviewDraftOperationResultSchema =
+  createEffectfulOperationResultSchema(templateArtifactReviewDraftDataSchema);
+export const templateArtifactPublishInputSchema = z.strictObject({
+  draftId: id,
+  revisionId: id,
+  revisionDigestSha256: z.string().regex(DIGEST)
+});
+export const templateArtifactPublishDataSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  action: z.enum(['replace', 'revert']),
+  revision: templateArtifactRevisionSchema,
+  safeDiff: templateArtifactSafeDiffSchema
+}).superRefine((data, context) => {
+  if (data.action !== data.safeDiff.action
+      || data.revision.revisionId !== data.safeDiff.after.revisionId
+      || data.revision.digestSha256 !== data.safeDiff.after.digestSha256) {
+    context.addIssue({ code: 'custom', message: 'Template publish result mismatch.' });
+  }
+});
+export const templateArtifactPublishCanonicalResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success'), data: templateArtifactPublishDataSchema }),
+  z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
+]);
+export const templateArtifactPublishOperationResultSchema =
+  createEffectfulOperationResultSchema(templateArtifactPublishDataSchema);
 
 export const templateEditModelChoiceSchema = z.strictObject({
   id: z.string().regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/).max(120),
@@ -354,11 +373,17 @@ export const TEMPLATE_AUTHORING_OPERATION_SCHEMA_REFS = Object.freeze({
     resultKey: 'schema.template_artifact.get.operator-result',
     resultSchema: templateArtifactGetOperationResultSchema
   }),
-  mutationDraft: createOperationSchemaManifestRefs({
-    inputKey: 'schema.template_artifact.mutation-draft.input',
+  reviewDraft: createOperationSchemaManifestRefs({
+    inputKey: 'schema.template_artifact.review-draft.input',
     inputSchema: templateArtifactMutationInputSchema,
-    resultKey: 'schema.template_artifact.mutation-draft.operator-result',
-    resultSchema: templateArtifactMutationDraftOperationResultSchema
+    resultKey: 'schema.template_artifact.review-draft.operator-result',
+    resultSchema: templateArtifactReviewDraftOperationResultSchema
+  }),
+  publish: createOperationSchemaManifestRefs({
+    inputKey: 'schema.template_artifact.publish.input',
+    inputSchema: templateArtifactPublishInputSchema,
+    resultKey: 'schema.template_artifact.publish.operator-result',
+    resultSchema: templateArtifactPublishOperationResultSchema
   }),
   modelChoices: createOperationSchemaManifestRefs({
     inputKey: 'schema.template_edit.model_choices.input',
@@ -392,6 +417,9 @@ export type TemplateArtifactMutationInputDto = z.infer<typeof templateArtifactMu
 export type TemplateArtifactAuthorInputDto = z.infer<typeof templateArtifactAuthorInputSchema>;
 export type TemplateArtifactMutationPlanDto = z.infer<typeof templateArtifactMutationPlanSchema>;
 export type TemplateArtifactSafeDiffDto = z.infer<typeof templateArtifactSafeDiffSchema>;
+export type TemplateArtifactReviewDraftDataDto = z.infer<typeof templateArtifactReviewDraftDataSchema>;
+export type TemplateArtifactPublishInputDto = z.infer<typeof templateArtifactPublishInputSchema>;
+export type TemplateArtifactPublishDataDto = z.infer<typeof templateArtifactPublishDataSchema>;
 export type TemplateEditModelChoiceDto = z.infer<typeof templateEditModelChoiceSchema>;
 export type TemplateEditClassificationDto = z.infer<typeof templateEditClassificationSchema>;
 export type TemplateEditRequestDto = z.infer<typeof templateEditRequestSchema>;

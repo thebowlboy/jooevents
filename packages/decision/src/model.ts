@@ -1,15 +1,15 @@
+import { canonicalJsonSha256 } from '@jooevents/kernel';
 import {
   decisionHeadSchema,
   submissionSessionOriginSchema,
   type DecisionHeadDto,
   type DecisionMutationPlanDto,
   type DecisionMutationResult,
-  type DecisionRestorePlanDto,
   type DecisionReviewPinDto,
   type DecisionScopeDto,
   type SubmissionSessionOriginDto
 } from '@jooevents/contracts';
-import { canonicalJsonSha256 } from '@jooevents/changesets';
+
 
 export type DecisionScope = DecisionScopeDto;
 export type DecisionHead = DecisionHeadDto;
@@ -74,15 +74,15 @@ export interface DecisionReadPort {
   countSessionSchedulePlacements(scope: DecisionScope, sessionId: string): number;
 }
 
-export interface DecisionChangesetReadPort extends DecisionReadPort, DecisionEnvironmentSource {}
+export interface DecisionOperationReadPort extends DecisionReadPort, DecisionEnvironmentSource {}
 
-export interface DecisionChangesetTransactionPort extends DecisionChangesetReadPort {
+export interface DecisionTransactionPort extends DecisionOperationReadPort {
   /**
    * Writes Decision heads and origin links for one validated plan. Session
    * graduation contributions are applied separately through the Session
    * graduation transaction port inside the same unit of work.
    */
-  applyDecisionPlan(plan: DecisionMutationPlanDto | DecisionRestorePlanDto): DecisionMutationResult;
+  applyDecisionPlan(plan: DecisionMutationPlanDto): DecisionMutationResult;
 }
 
 function deepFreeze<Value>(value: Value): Value {

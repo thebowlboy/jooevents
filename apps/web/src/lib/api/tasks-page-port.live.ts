@@ -56,8 +56,6 @@ export function createLiveTasksPagePort(input: {
 	readonly remind: (speakerIds: readonly string[], subject: string) => Promise<unknown>;
 }): TasksPagePort {
 	let boardRead: Promise<TaskBoardSnapshotDto> | null = null;
-	const committedByCell = new Map<string, CommittedTaskMutation['source']>();
-	const cell = (taskId: string, speakerId: string) => `${taskId}::${speakerId}`;
 
 	async function board(force = false): Promise<TaskBoardSnapshotDto> {
 		if (force) boardRead = null;
@@ -86,8 +84,7 @@ export function createLiveTasksPagePort(input: {
 		);
 		if (!current) return { ok: false, reason: 'This task is no longer assigned to this speaker.' };
 		try {
-			const committed = await mutate({ action, assignmentId: current.id, expectedVersion: current.version });
-			committedByCell.set(cell(taskId, speakerId), committed.source);
+			await mutate({ action, assignmentId: current.id, expectedVersion: current.version });
 			return { ok: true };
 		} catch (error) {
 			return {
@@ -126,15 +123,14 @@ export function createLiveTasksPagePort(input: {
 				_state: AssignmentState,
 				_overdue: boolean
 			): Promise<void> {
-				const source = committedByCell.get(cell(taskId, speakerId));
-				if (!source) throw new TasksPageLiveError({
-					code: 'task_compensation_source_missing',
+				const current = (await board(true)).assignments.find((entry) =>
+					entry.taskDefinitionId === taskId && entry.engagementId === speakerId
+				);
+				if (!current) throw new TasksPageLiveError({
+					code: 'task_restore_source_missing',
 					reason: 'This task change can no longer be undone from this screen.'
 				});
-				const result = await input.tasks.compensate(source, actionKey());
-				if (result.kind !== 'success') throw new TasksPageLiveError(failure(result));
-				committedByCell.delete(cell(taskId, speakerId));
-				boardRead = null;
+				await mutate({ action: 'restore_assignment', assignmentId: current.id, expectedVersion: current.version });
 			},
 			remind: (speakerIds: string[], subject: string) => input.remind(speakerIds, subject)
 		}),

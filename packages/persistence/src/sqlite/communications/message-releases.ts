@@ -157,7 +157,7 @@ export class SQLiteCommunicationMessageReleaseStore implements CommunicationMess
     private readonly ids: { newEnvelopePayloadRefId(): string }
   ) {}
 
-  /** Caller owns the transaction: releases commit with the send changeset or not at all. */
+  /** Caller owns the transaction: releases commit with the reviewed send batch or not at all. */
   put(candidate: CommunicationMessageRelease): void {
     if (!this.sqlite.inTransaction) {
       throw new SQLiteCommunicationMessageReleaseError('transaction_required');

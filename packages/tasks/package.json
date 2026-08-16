@@ -7,7 +7,6 @@
   "exports": { ".": "./src/index.ts" },
   "scripts": { "check": "tsc --noEmit", "test": "bun test" },
   "dependencies": {
-    "@jooevents/changesets": "workspace:*",
     "@jooevents/contracts": "workspace:*",
     "@jooevents/deadline": "workspace:*",
     "@jooevents/engagement": "workspace:*",

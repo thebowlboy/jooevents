@@ -2,7 +2,6 @@ import { Database } from 'bun:sqlite';
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { issueSynchronousClassifiedPayloadEncryptionProfile } from '@jooevents/application/synchronous-classified-payload-store';
-import type { ChangesetCommitTerminalReceipt } from '@jooevents/changeset-operations';
 import {
   buildCommunicationMessageRelease,
   createDecisionNotificationMergeRegistryRelease,
@@ -16,7 +15,6 @@ import type { OrganizerSubmissionContactDto } from '@jooevents/contracts';
 import { canonicalJsonText, parseEventId, parseInstant, parseWorkspaceId } from '@jooevents/kernel';
 import { installSQLiteClassifiedPayloadStoreSchema, SQLiteClassifiedPayloadStore } from '../sqlite-classified-payload-store';
 import { installDecisionSchema } from '../decision';
-import { installSQLiteChangesetLifecycleSchema } from '../changeset-lifecycle';
 import { installFoundationTrialUnitOfWorkSchema } from '../foundation-trial-uow';
 import { installSQLiteOutboundEmailDeliverySchema } from '../outbound-email-delivery';
 import {
@@ -33,8 +31,8 @@ import {
   SQLiteCommunicationMessageReleaseStore
 } from './message-releases';
 import {
-  commitSendMessagesChangeset,
-  installCommunicationReleaseChangesetSchema
+  commitSendMessagesRelease,
+  installCommunicationReleaseSchema
 } from './message-release-effect-domain';
 import {
   createSQLiteDecisionAudienceSource,
@@ -210,10 +208,9 @@ function fixture() {
   installSQLiteOrganizerAudiencePreviewSchema(sqlite);
   installSQLiteOrganizerCommunicationAuthoringSchema(sqlite);
   installFoundationTrialUnitOfWorkSchema(sqlite);
-  installSQLiteChangesetLifecycleSchema(sqlite);
   installSQLiteCommunicationMessageReleaseSchema(sqlite);
   installSQLiteOutboundEmailDeliverySchema(sqlite);
-  installCommunicationReleaseChangesetSchema(sqlite);
+  installCommunicationReleaseSchema(sqlite);
   sqlite.exec('PRAGMA foreign_keys = OFF');
   seedHead(sqlite, {
     submissionId: submissionAccepted, state: 'accepted', version: 1,
@@ -585,61 +582,6 @@ function sendUuid(suffix: number): string {
   return `019c1df7-86b5-769b-bba4-${suffix.toString(16).padStart(12, '0')}`;
 }
 
-function sendTerminalReceipt(sqlite: Database, receiptId: string) {
-  return (binding: {
-    readonly changesetId: string;
-    readonly expectedHeadVersion: number;
-    readonly committedHeadVersion: number;
-    readonly revisionId: string;
-    readonly revisionDigest: string;
-  }): ChangesetCommitTerminalReceipt => {
-    const receipt = {
-      id: receiptId,
-      operationName: 'changeset.commit',
-      operationVersion: 1
-    } as const;
-    const value: ChangesetCommitTerminalReceipt = {
-      ref: receipt,
-      identity: {
-        scopePartitionKey: receiptExpectation.scopePartitionKey,
-        authorityPrincipalKey,
-        operationName: 'changeset.commit',
-        operationVersion: 1,
-        surface: receiptExpectation.surface,
-        idempotencyVerifierProfile: { key: 'changeset.commit.idempotency', version: 1 },
-        idempotencyKeyVerifier: digest({ receiptId })
-      },
-      requestHash: receiptExpectation.requestHashSha256,
-      result: {
-        kind: 'success',
-        data: {
-          schemaVersion: 1,
-          action: 'commit',
-          changesetId: binding.changesetId,
-          expectedHeadVersion: binding.expectedHeadVersion,
-          committedHeadVersion: binding.committedHeadVersion,
-          revisionId: binding.revisionId,
-          revisionDigest: binding.revisionDigest
-        },
-        receipt,
-        correlationId: sendUuid(0x700)
-      }
-    };
-    sqlite.query(`
-      INSERT INTO foundation_trial_operation_receipts (
-        id, scope_partition_key, authority_principal_key, operation_name, operation_version,
-        surface, idempotency_verifier_profile_key, idempotency_verifier_profile_version,
-        idempotency_key_verifier, request_hash, result_json
-      ) VALUES (?, ?, ?, 'changeset.commit', 1, ?, 'changeset.commit.idempotency', 1, ?, ?, ?)
-    `).run(
-      receiptId, receiptExpectation.scopePartitionKey, authorityPrincipalKey,
-      receiptExpectation.surface, digest({ receiptId }), receiptExpectation.requestHashSha256,
-      canonicalJsonText(value.result)
-    );
-    return value;
-  };
-}
-
 /**
  * Drives the real one-transaction send commit against the adopted preview,
  * with the audience-preview repository itself as the live currency authority —
@@ -708,17 +650,11 @@ function sendCommit(input: Fixture, summary: OrganizerMessagePreviewSummary) {
   });
   let idSeq = 0x800;
   const nextId = () => sendUuid((idSeq += 1));
-  return inTransaction(input, () => commitSendMessagesChangeset({
+  return inTransaction(input, () => commitSendMessagesRelease({
     sqlite: input.sqlite,
     releases,
     previewCurrency: input.repository,
-    ids: {
-      newChangesetId: nextId,
-      newRevisionId: nextId,
-      newApprovalId: nextId,
-      newCorrectionAttemptId: nextId,
-      newEvidenceId: nextId
-    },
+    ids: { newEvidenceId: nextId },
     context: {
       workspaceId,
       eventId,
@@ -727,9 +663,7 @@ function sendCommit(input: Fixture, summary: OrganizerMessagePreviewSummary) {
       evaluatedAt: now
     },
     authorInput,
-    materializedReleases: [release],
-    receiptExpectation,
-    terminalReceipt: sendTerminalReceipt(input.sqlite, sendUuid(0x900))
+    materializedReleases: [release]
   }));
 }
 
@@ -781,7 +715,6 @@ describe('send commit currency over the adopted decision-set preview', () => {
     });
     expect(countRows(input.sqlite, 'communication_message_releases')).toBe(0);
     expect(countRows(input.sqlite, 'communication_release_effect_specs')).toBe(0);
-    expect(countRows(input.sqlite, 'communication_release_receipt_links')).toBe(0);
     expect(countRows(input.sqlite, 'communication_outbound_delivery_heads')).toBe(0);
     expect(countRows(input.sqlite, 'communication_outbound_delivery_outbox')).toBe(0);
   });

@@ -3,7 +3,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 /**
  * The Reviewers surface: the roster with typed scope chips (generalist =
  * absence of scope, rendered as words), the multi-address invite with per-line
- * outcomes, the scope editor's consequential write with receipt + undo, the
+ * outcomes, the scope editor's forward-only consequential writes, the
  * coverage panel's count-as-door onto the page's own `?scope=` filter, the Q30
  * "need another reviewer" badge rendered only while uncovered, the `?reviewer=`
  * arrival, and the schedule pool's programmed-only contract.
@@ -135,7 +135,7 @@ test('inviting two addresses reports each line, leaves an honest receipt, and gr
 	await expect(page.locator('.chips__tab').filter({ hasText: 'All' })).toContainText('8');
 });
 
-test('scoping a generalist commits with a receipt whose undo restores the generalist words exactly', async ({
+test('scoping a generalist corrects forward to the generalist words exactly', async ({
 	page
 }, testInfo) => {
 	await openRoster(page);
@@ -154,7 +154,7 @@ test('scoping a generalist commits with a receipt whose undo restores the genera
 	await expect(option).toHaveAttribute('aria-pressed', 'true');
 	await editor.getByRole('button', { name: 'Apply scope' }).click();
 
-	// One consequential write, one receipt, compensating undo.
+	// One consequential write, one receipt, and no scope compensation.
 	const receipt = page
 		.getByRole('status')
 		.filter({ hasText: 'Scoped Sofia Berg to Agents & Tools' });
@@ -164,10 +164,17 @@ test('scoping a generalist commits with a receipt whose undo restores the genera
 		timeout: 10000
 	});
 
-	await receipt.getByRole('button', { name: 'Undo' }).click();
+	await expect(receipt.getByRole('button', { name: 'Undo' })).toHaveCount(0);
+	await option.click();
+	await expect(option).toHaveAttribute('aria-pressed', 'false');
+	await editor.getByRole('button', { name: 'Apply scope' }).click();
+	const correction = page.getByRole('status').filter({
+		hasText: 'Cleared Sofia Berg’s scope — they review everything'
+	});
+	await expect(correction).toBeVisible({ timeout: 10000 });
+	await expect(correction.getByRole('button', { name: 'Undo' })).toHaveCount(0);
 	// Exactly the generalist words again — no chip left behind — and the open
-	// editor's draft resyncs to the restored truth instead of claiming a
-	// pending edit.
+	// editor is synchronized to the committed forward correction.
 	await expect(cell).toHaveText(everything(testInfo.project.name), { timeout: 10000 });
 	await expect(cell.locator('.ui-badge')).toHaveCount(0);
 	await expect(editor.getByRole('button', { name: 'Agents & Tools', exact: true })).toHaveAttribute(

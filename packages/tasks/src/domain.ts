@@ -1,9 +1,11 @@
+import { canonicalJsonSha256 } from '@jooevents/kernel';
 import {
   taskAssignmentRestorePlanSchema,
   taskMutationPlanSchema,
   taskMutationResultSchema,
   taskSafeDiffSchema,
   type TaskAssignmentDto,
+  type TaskEventDto,
   type TaskAssignmentRestorePlanDto,
   type TaskAuthorInput,
   type TaskMutationPlanDto,
@@ -11,7 +13,7 @@ import {
   type TaskSafeDiffDto,
   type TaskScopeDto
 } from '@jooevents/contracts';
-import { canonicalJsonSha256 } from '@jooevents/changesets';
+
 import {
   taskDueDeadlinePin,
   type TaskDueDeadlinePlanningPort
@@ -328,6 +330,40 @@ export function deriveTaskAssignmentRestore(input: {
       actorUserId: input.actorUserId,
       occurredAt: input.occurredAt,
       assignmentVersion: restore.version
+    }
+  });
+}
+
+/** Derive a direct Undo from the immutable event that produced the current row. */
+export function planTaskAssignmentRestore(input: {
+  readonly current: TaskAssignmentDto;
+  readonly latestEvent: TaskEventDto;
+  readonly actorUserId: string;
+  readonly occurredAt: string;
+}): TaskAssignmentRestorePlanDto {
+  const { current, latestEvent } = input;
+  if (latestEvent.assignmentId !== current.id
+      || latestEvent.assignmentVersion !== current.version
+      || latestEvent.toState !== current.state
+      || !['waived', 'fulfillment_accepted'].includes(latestEvent.kind)
+      || latestEvent.fromState === null) {
+    throw new TaskPlanningError('invalid_transition', current.id);
+  }
+  const restore = parseTaskAssignment({
+    ...current,
+    state: latestEvent.fromState,
+    version: current.version + 1,
+    updatedAt: input.occurredAt
+  });
+  return taskAssignmentRestorePlanSchema.parse({
+    action: 'restore_assignment', scope: current.scope, expectedCurrent: current, restore,
+    actorUserId: input.actorUserId, occurredAt: input.occurredAt,
+    event: {
+      schemaVersion: 1, scope: current.scope,
+      id: deterministicTaskEventId({ assignmentId: current.id, assignmentVersion: restore.version, kind: 'restored' }),
+      assignmentId: current.id, kind: 'restored', fromState: current.state,
+      toState: restore.state, actorUserId: input.actorUserId,
+      occurredAt: input.occurredAt, assignmentVersion: restore.version
     }
   });
 }

@@ -1,21 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { changesetRevisionSelectorSchema } from '@jooevents/contracts';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import flight from '../sample/flight';
 import fresh from '../sample/fresh';
 import { createSampleWorkspacePorts, projectSampleScenario } from './sample-workspace';
-
-function selector(draft: {
-	readonly changesetId: string;
-	readonly revision: { readonly id: string; readonly digestSha256: string };
-}) {
-	return changesetRevisionSelectorSchema.parse({
-		changesetId: draft.changesetId,
-		revisionId: draft.revision.id,
-		revisionDigest: draft.revision.digestSha256
-	});
-}
 
 describe('resettable sample workspace composition', () => {
 	test('projects the selected scenario through canonical event, vocabulary, and submissions ports', async () => {
@@ -47,42 +35,23 @@ describe('resettable sample workspace composition', () => {
 			&& vocabulary.data.tracks.some((track) => track.id === firstTarget.categoryId)).toBe(true);
 	});
 
-	test('keeps Program Vocabulary inert through draft and propose, commits once, and resets', async () => {
+	test('applies Program Vocabulary directly once with the caller key and resets', async () => {
 		const ports = createSampleWorkspacePorts(flight);
 		const before = await ports.eventProgram.vocabulary.read();
 		if (before.kind !== 'success') throw new TypeError('sample_vocabulary_unavailable');
-		const drafted = await ports.eventProgram.vocabulary.draft({
-			action: 'create',
-			input: {
-				kind: 'track',
-				name: 'Platform engineering',
-				expectedSetVersion: before.data.setVersion
-			}
-		}, { idempotencyKey: 'sample-platform-track-draft' });
-		if (drafted.kind !== 'success') throw new TypeError('sample_draft_failed');
-		const selected = selector(drafted.data);
-
-		const afterDraft = await ports.eventProgram.vocabulary.read();
-		expect(afterDraft.kind === 'success' ? afterDraft.data : afterDraft).toEqual(before.data);
-		const diff = await ports.programChangesets.readDiff(selected);
-		expect(diff).toMatchObject({
+		const key = 'sample-platform-track-direct';
+		const createInput = {
+			kind: 'track' as const,
+			name: 'Platform engineering',
+			expectedSetVersion: before.data.setVersion
+		};
+		const applied = await ports.eventProgram.vocabulary.create(createInput, { idempotencyKey: key });
+		const replay = await ports.eventProgram.vocabulary.create(createInput, { idempotencyKey: key });
+		expect(replay).toEqual(applied);
+		expect(applied).toMatchObject({
 			kind: 'success',
-			data: { status: { value: 'draft' }, groups: [{ operations: [{
-				kind: 'program.vocabulary.mutate',
-				safeDiff: { action: 'create', after: { name: 'Platform engineering' } }
-			}] }] }
-		});
-		expect(await ports.programChangesets.propose(
-			{ ...selected, expectedHeadVersion: 1 },
-			'sample-platform-track-propose'
-		)).toMatchObject({ kind: 'success', data: { status: { value: 'proposed' }, headVersion: 2 } });
-		const afterPropose = await ports.eventProgram.vocabulary.read();
-		expect(afterPropose.kind === 'success' ? afterPropose.data : afterPropose).toEqual(before.data);
-		expect(await ports.programChangesets.commit(
-			{ ...selected, expectedHeadVersion: 2 },
-			'sample-platform-track-commit'
-		)).toMatchObject({
-			kind: 'success', data: { expectedHeadVersion: 2, committedHeadVersion: 3 }
+			data: { action: 'create', kind: 'track', setVersion: before.data.setVersion + 1 },
+			receipt: { operationName: 'program_vocabulary.create', operationVersion: 1 }
 		});
 
 		const committed = await ports.eventProgram.vocabulary.read();
@@ -93,7 +62,6 @@ describe('resettable sample workspace composition', () => {
 		ports.reset();
 		const afterReset = await ports.eventProgram.vocabulary.read();
 		expect(afterReset.kind === 'success' ? afterReset.data : afterReset).toEqual(before.data);
-		expect(await ports.programChangesets.readDiff(selected)).toMatchObject({ kind: 'outcome' });
 	});
 
 	test('resets committed Form state through the same root-owned reset', async () => {
@@ -102,30 +70,15 @@ describe('resettable sample workspace composition', () => {
 		if (baseline.kind !== 'success') throw new TypeError('sample_forms_unavailable');
 		const open = baseline.data.forms.find((form) => form.status === 'open');
 		if (!open) throw new TypeError('sample_open_form_missing');
-		const drafted = await ports.forms.draftLifecycle({
+		const changed = await ports.forms.lifecycle({
 			transition: 'close',
 			formId: open.id,
 			expectedDefinitionVersion: open.version
-		}, 'sample-close-form-draft');
-		if (drafted.kind !== 'success') throw new TypeError('sample_form_draft_failed');
-		const selected = changesetRevisionSelectorSchema.parse({
-			changesetId: drafted.data.changesetId,
-			revisionId: drafted.data.revisionId,
-			revisionDigest: drafted.data.revisionDigest
-		});
-
-		const afterDraft = await ports.forms.list();
-		if (afterDraft.kind !== 'success') throw new TypeError('sample_forms_unavailable');
-		expect(afterDraft.data.forms.find((form) => form.id === open.id)?.status).toBe('open');
-		expect(await ports.formChangesets.propose(
-			{ ...selected, expectedHeadVersion: 1 }, 'sample-close-form-propose'
-		)).toMatchObject({ kind: 'success' });
-		expect(await ports.formChangesets.commit(
-			{ ...selected, expectedHeadVersion: 2 }, 'sample-close-form-commit'
-		)).toMatchObject({ kind: 'success' });
-		const changed = await ports.forms.list();
-		if (changed.kind !== 'success') throw new TypeError('sample_forms_unavailable');
-		expect(changed.data.forms.find((form) => form.id === open.id)?.status).toBe('closed');
+		}, 'sample-close-form');
+		expect(changed).toMatchObject({ kind: 'success', data: { action: 'close' } });
+		const afterChange = await ports.forms.list();
+		if (afterChange.kind !== 'success') throw new TypeError('sample_forms_unavailable');
+		expect(afterChange.data.forms.find((form) => form.id === open.id)?.status).toBe('closed');
 
 		ports.reset();
 		const restored = await ports.forms.list();
@@ -149,7 +102,6 @@ describe('sample source selection', () => {
 			'operator-page.sample.svelte',
 			'sample-workspace.ts',
 			join('..', 'event-program', 'sample.ts'),
-			join('..', 'changesets', 'forms-sample.ts'),
 			join('..', 'sample', 'intake-forms.ts'),
 			join('..', 'sample', 'intake-submissions.ts')
 		];

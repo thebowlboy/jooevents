@@ -1,13 +1,11 @@
 import type { Database } from 'bun:sqlite';
 import {
   engagementMutationPlanSchema,
-  engagementRestorePlanSchema,
   engagementSeedPlanSchema,
   engagementSeedReversalPlanSchema,
   type EngagementHeadDto,
   type EngagementMutationPlanDto,
   type EngagementMutationResult,
-  type EngagementRestorePlanDto,
   type EngagementScopeDto,
   type EngagementSeedPlanDto,
   type EngagementSeedResultDto,
@@ -16,18 +14,16 @@ import {
 } from '@jooevents/contracts';
 import {
   engagementMutationResultFromPlan,
-  engagementMutationResultFromRestore,
   engagementSeedResultFromPlan,
   engagementSeedResultFromReversal,
-  isEngagementRestorePlan,
   parseEngagementHead,
   parseEngagementSnapshot,
-  type EngagementChangesetTransactionPort,
+  type EngagementReadPort,
   type EngagementSeedTransactionPort
 } from '@jooevents/engagement';
 import { canonicalJsonText } from '@jooevents/kernel';
 
-/** Additive schema installed only in an explicitly disposable SQLite runtime. */
+/** This schema contributes to the accepted epoch-2 baseline and may also serve isolated fixtures. */
 export const SQLITE_ENGAGEMENT_SQL = `
 CREATE TABLE engagement_heads (
   workspace_id TEXT NOT NULL CHECK(length(workspace_id) = 36),
@@ -112,14 +108,14 @@ interface ScopeRow { readonly event_id: string }
 interface CountRow { readonly count: number }
 
 /**
- * Canonical engagement persistence: the response changeset ports and the seed
+ * Canonical engagement persistence: the direct response write and the seed
  * collaboration ports on one caller-owned handle. Every write is guarded by
  * the exact expected row image and refuses on any drift; seeding inserts are
  * additionally fenced by the physical `(sessionId, personId)` uniqueness, so a
  * racing duplicate seed is a conflict, never a second row.
  */
 export class SQLiteEngagementRepository
-implements EngagementChangesetTransactionPort, EngagementSeedTransactionPort {
+implements EngagementReadPort, EngagementSeedTransactionPort {
   constructor(private readonly sqlite: Database) {}
 
   readEngagementHead(scope: EngagementScopeDto, engagementId: string): EngagementHeadDto | undefined {
@@ -176,15 +172,8 @@ implements EngagementChangesetTransactionPort, EngagementSeedTransactionPort {
     }
   }
 
-  applyEngagementPlan(
-    plan: EngagementMutationPlanDto | EngagementRestorePlanDto
-  ): EngagementMutationResult {
+  applyEngagementPlan(plan: EngagementMutationPlanDto): EngagementMutationResult {
     if (!this.sqlite.inTransaction) throw new SQLiteEngagementError('transaction_required');
-    if (isEngagementRestorePlan(plan)) {
-      const parsed = engagementRestorePlanSchema.parse(plan);
-      this.updateHead(parsed.scope, parsed.expectedCurrent, parsed.restore);
-      return engagementMutationResultFromRestore(parsed);
-    }
     const parsed = engagementMutationPlanSchema.parse(plan);
     this.updateHead(parsed.input.scope, parsed.before, parsed.after);
     return engagementMutationResultFromPlan(parsed);

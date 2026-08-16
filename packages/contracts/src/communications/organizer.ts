@@ -1,6 +1,5 @@
 import { parseInstant } from '@jooevents/kernel';
 import { z } from 'zod';
-import { changesetRevisionSelectorSchema } from '../changeset-operations';
 import {
   createEffectfulOperationResultSchema,
   createOperationSchemaManifestRefs,
@@ -1068,37 +1067,6 @@ export const organizerCommunicationTimelinePageSchema = z.strictObject({
   }
 });
 
-export const organizerCommunicationPlanProjectionSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  changeset: changesetRevisionSelectorSchema,
-  preview: organizerMessagePreviewSummarySchema,
-  authority: z.strictObject({ kind: z.literal('canonical_changeset') }),
-  senderPresentation: organizerCommunicationDefinitionRefSchema,
-  routingPolicy: organizerCommunicationDefinitionRefSchema,
-  providerConnectionRevisionId: organizerCommunicationOpaqueIdSchema,
-  readiness: organizerEmailReadinessProjectionSchema,
-  guardCodes: z.array(organizerCommunicationStableKeySchema).max(100),
-  irreversibleExternalEffectCount: z.number().int().nonnegative()
-    .max(ORGANIZER_COMMUNICATION_AUDIENCE_MEMBER_LIMIT),
-  estimatedSpendMinor: z.discriminatedUnion('knowledge', [
-    z.strictObject({
-      knowledge: z.literal('known'),
-      amount: z.number().int().nonnegative().safe(),
-      currency: z.string().regex(/^[A-Z]{3}$/)
-    }),
-    z.strictObject({ knowledge: z.literal('unknown'), reasonCode: organizerCommunicationStableKeySchema })
-  ])
-}).superRefine((plan, context) => {
-  addCanonicalOrderIssues(plan.guardCodes, context, ['guardCodes'],
-    'Plan guard codes must be unique and use canonical order.');
-  if (plan.irreversibleExternalEffectCount !== plan.preview.counts.includedCount) {
-    context.addIssue({ code: 'custom', path: ['irreversibleExternalEffectCount'],
-      message: 'Irreversible effect count must match the exact included preview count.' });
-  }
-});
-
-export const organizerCommunicationPlanGetInputSchema = changesetRevisionSelectorSchema;
-
 /**
  * The consequential send wave over one adopted, reviewed preview. The wire
  * carries only the adopted preview's audience identity, the operator's batch
@@ -1119,7 +1087,7 @@ export const organizerSendMessagesInputSchema = z.strictObject({
 export const organizerSendMessagesResultSchema = z.strictObject({
   schemaVersion: z.literal(1),
   batchId: organizerCommunicationOpaqueIdSchema,
-  changesetId: organizerCommunicationOpaqueIdSchema,
+  releaseCommitId: organizerCommunicationOpaqueIdSchema,
   dispatchGeneration: z.literal(1),
   releaseCount: z.number().int().positive()
     .max(ORGANIZER_COMMUNICATION_AUDIENCE_MEMBER_LIMIT),
@@ -1160,8 +1128,6 @@ export const organizerMessageBatchPreviewDetailCanonicalResultSchema =
   canonicalResultSchema(organizerMessageBatchPreviewDetailSchema);
 export const organizerMessagePreviewRecipientPageCanonicalResultSchema =
   canonicalResultSchema(organizerMessagePreviewRecipientPageSchema);
-export const organizerCommunicationPlanCanonicalResultSchema =
-  canonicalResultSchema(organizerCommunicationPlanProjectionSchema);
 export const organizerCommunicationHistoryPageCanonicalResultSchema =
   canonicalResultSchema(organizerCommunicationHistoryPageSchema);
 export const organizerCommunicationAttentionPageCanonicalResultSchema =
@@ -1202,8 +1168,6 @@ export const organizerMessageBatchPreviewDetailOperationResultSchema =
   createReadOperationResultSchema(organizerMessageBatchPreviewDetailSchema);
 export const organizerMessagePreviewRecipientPageOperationResultSchema =
   createReadOperationResultSchema(organizerMessagePreviewRecipientPageSchema);
-export const organizerCommunicationPlanOperationResultSchema =
-  createReadOperationResultSchema(organizerCommunicationPlanProjectionSchema);
 export const organizerCommunicationHistoryPageOperationResultSchema =
   createReadOperationResultSchema(organizerCommunicationHistoryPageSchema);
 export const organizerCommunicationAttentionPageOperationResultSchema =
@@ -1316,12 +1280,6 @@ export const ORGANIZER_COMMUNICATION_OPERATION_SCHEMA_REFS = Object.freeze({
     resultKey: 'schema.communication.organizer.message-preview-recipient-page.operator-result',
     resultSchema: organizerMessagePreviewRecipientPageOperationResultSchema
   }),
-  getPlan: createOperationSchemaManifestRefs({
-    inputKey: 'schema.communication.organizer.get-message-plan.input',
-    inputSchema: organizerCommunicationPlanGetInputSchema,
-    resultKey: 'schema.communication.organizer.message-plan.operator-result',
-    resultSchema: organizerCommunicationPlanOperationResultSchema
-  }),
   getHistory: createOperationSchemaManifestRefs({
     inputKey: 'schema.communication.organizer.get-delivery-history.input',
     inputSchema: organizerCommunicationHistoryListInputSchema,
@@ -1424,9 +1382,6 @@ export type OrganizerCommunicationThreadPage = z.infer<
 >;
 export type OrganizerCommunicationTimelinePage = z.infer<
   typeof organizerCommunicationTimelinePageSchema
->;
-export type OrganizerCommunicationPlanProjection = z.infer<
-  typeof organizerCommunicationPlanProjectionSchema
 >;
 export type OrganizerCommunicationHistoryPage = z.infer<
   typeof organizerCommunicationHistoryPageSchema

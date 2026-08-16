@@ -3,6 +3,7 @@ import {
   createEffectfulOperationResultSchema,
   createOperationSchemaManifestRefs,
   createReadOperationResultSchema,
+  structuredOutcomeSchema,
   versionedDefinitionRefSchema
 } from './operations';
 import {
@@ -912,8 +913,8 @@ export const releaseMutationResultSchema = z.discriminatedUnion('action', [
 ]);
 
 /**
- * Cross-domain successor collaboration: a form republish hosts, inside its own
- * reviewed changeset, successor surface releases for every submission-bearing
+ * Cross-domain successor collaboration: a reviewed Form-version publish hosts
+ * successor surface releases for every submission-bearing
  * surface whose active release renders the republished form. Read-only
  * surfaces never appear here.
  */
@@ -1001,38 +1002,43 @@ export const releaseOverviewSchema = z.strictObject({
   }
 });
 
-/** Exact selector and inert plan an operator needs to review one release draft. */
-export const releaseDraftDataSchema = z.strictObject({
+export const releaseOverviewReadInputSchema = z.strictObject({});
+export const releaseOverviewReadResultSchema = createReadOperationResultSchema(releaseOverviewSchema);
+
+/** Owner-native reviewed Release revision with its own draft and publish selector. */
+export const releaseReviewDraftDataSchema = z.strictObject({
   schemaVersion: z.literal(1),
   action: releaseActionSchema,
-  changesetId: releaseIdSchema,
-  headVersion: releaseVersionSchema,
+  draftId: releaseIdSchema,
   status: z.literal('draft'),
   revision: z.strictObject({
     id: releaseIdSchema,
-    number: releaseVersionSchema,
+    number: z.literal(1),
     digestSha256: digestSchema
-  }),
-  riskTier: z.literal('consequential'),
-  approvalPolicy: z.strictObject({
-    reference: versionedDefinitionRefSchema,
-    definitionDigestSha256: digestSchema,
-    requirement: z.enum(['none', 'distinct_current_human'])
   }),
   safeDiff: releaseSafeDiffSchema
 }).superRefine((data, context) => {
   if (data.safeDiff.action !== data.action) {
-    context.addIssue({
-      code: 'custom', path: ['safeDiff', 'action'],
-      message: 'Draft action and safe diff action must match.'
-    });
+    context.addIssue({ code: 'custom', path: ['safeDiff', 'action'], message: 'Draft action and safe diff action must match.' });
   }
 });
-
-export const releaseOverviewReadInputSchema = z.strictObject({});
-export const releaseOverviewReadResultSchema = createReadOperationResultSchema(releaseOverviewSchema);
-export const releaseDraftOperationResultSchema =
-  createEffectfulOperationResultSchema(releaseDraftDataSchema);
+export const releaseReviewDraftCanonicalResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success'), data: releaseReviewDraftDataSchema }),
+  z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
+]);
+export const releaseReviewDraftOperationResultSchema =
+  createEffectfulOperationResultSchema(releaseReviewDraftDataSchema);
+export const releasePublishInputSchema = z.strictObject({
+  draftId: releaseIdSchema,
+  revisionId: releaseIdSchema,
+  revisionDigestSha256: digestSchema
+});
+export const releasePublishCanonicalResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success'), data: releaseMutationResultSchema }),
+  z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
+]);
+export const releasePublishOperationResultSchema =
+  createEffectfulOperationResultSchema(releaseMutationResultSchema);
 
 /**
  * Served public projections: named strict DTOs derived from an immutable
@@ -1182,11 +1188,17 @@ export const RELEASE_OPERATION_SCHEMA_REFS = Object.freeze({
     resultKey: 'schema.release.overview-read.operator-result',
     resultSchema: releaseOverviewReadResultSchema
   }),
-  draft: createOperationSchemaManifestRefs({
-    inputKey: 'schema.release.change-draft.input',
+  reviewDraft: createOperationSchemaManifestRefs({
+    inputKey: 'schema.release.review-draft.input',
     inputSchema: releaseAuthorInputSchema,
-    resultKey: 'schema.release.change-draft.operator-result',
-    resultSchema: releaseDraftOperationResultSchema
+    resultKey: 'schema.release.review-draft.operator-result',
+    resultSchema: releaseReviewDraftOperationResultSchema
+  }),
+  publish: createOperationSchemaManifestRefs({
+    inputKey: 'schema.release.publish.input',
+    inputSchema: releasePublishInputSchema,
+    resultKey: 'schema.release.publish.operator-result',
+    resultSchema: releasePublishOperationResultSchema
   })
 });
 
@@ -1225,7 +1237,8 @@ export type ReleaseMutationResultDto = z.infer<typeof releaseMutationResultSchem
 export type ReleaseSurfaceSuccessorInputDto = z.infer<typeof releaseSurfaceSuccessorInputSchema>;
 export type ReleaseSurfaceSuccessorPlanDto = z.infer<typeof releaseSurfaceSuccessorPlanSchema>;
 export type ReleaseOverviewDto = z.infer<typeof releaseOverviewSchema>;
-export type ReleaseDraftData = z.infer<typeof releaseDraftDataSchema>;
+export type ReleaseReviewDraftData = z.infer<typeof releaseReviewDraftDataSchema>;
+export type ReleasePublishInput = z.infer<typeof releasePublishInputSchema>;
 export type ServedPublicScheduleSessionDto = z.infer<typeof servedPublicScheduleSessionSchema>;
 export type ServedPublicScheduleDto = z.infer<typeof servedPublicScheduleSchema>;
 export type ServedPublicSpeakerSessionDto = z.infer<typeof servedPublicSpeakerSessionSchema>;

@@ -76,7 +76,7 @@ const afterInvite: WorkspaceTeamSnapshotView = {
 
 const receipt: OperationReceiptRef = {
 	id: id(20),
-	operationName: 'changeset.commit',
+	operationName: 'workspace_team.invite',
 	operationVersion: 1
 };
 
@@ -118,8 +118,7 @@ function teamPort(input: {
 function vocabulary(kind: 'sample' | 'live') {
 	const sample = createSampleEventProgramPort({ fixture: configuredEventProgramFixture });
 	const adapter = createProgramVocabularySettingsAdapter({
-		program: sample.port,
-		changesets: sample.changesets
+		program: sample.port
 	});
 	return kind === 'sample'
 		? adapter
@@ -132,10 +131,7 @@ function committedInvite(): WorkspaceTeamSettingsMutationResult {
 		data: {
 			committed: {
 				action: 'invite',
-				changesetId: id(22),
-				revisionId: id(23),
-				revisionDigest: digest('c'),
-				committedHeadVersion: 2,
+				teamVersion: 2,
 				change: {
 					action: 'invite',
 					recipientHint: 'recipient-0123456789ab',

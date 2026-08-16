@@ -427,6 +427,13 @@ export interface OrdinaryEffectOperationDefinition {
   readonly maxRisk: OperationRisk;
   readonly autonomyPolicy: VersionedDefinitionRef;
   readonly consequenceTags: readonly string[];
+  /** Explicit opt-in metadata for the internal approved agent-action lane. */
+  readonly agentAction?: {
+    readonly eligible: true;
+    readonly displayLabel: string;
+    readonly consequences: readonly string[];
+    readonly externalEffect: 'none' | 'reconcilable';
+  };
   readonly inputSchema: SafeSchemaManifestRef;
   readonly contributionSchema: SafeSchemaManifestRef;
   readonly canonicalResultSchema: SafeSchemaManifestRef;
@@ -448,13 +455,32 @@ export interface OrdinaryEffectOperationDefinition {
     readonly requestHashProfile: VersionedDefinitionRef;
   };
   readonly concurrency: VersionedDefinitionRef;
-  readonly execution: {
-    readonly kind: 'single_unit_of_work';
-    readonly family: VersionedDefinitionRef;
-    readonly phase: VersionedDefinitionRef;
-    readonly terminalization: VersionedDefinitionRef;
-    readonly autonomyPreflight: VersionedDefinitionRef;
-  };
+  readonly execution:
+    | {
+        /** Pre-PLAN-009 ordinary evidence path retained only during bounded conversion. */
+        readonly kind: 'single_unit_of_work';
+        readonly family: VersionedDefinitionRef;
+        readonly phase: VersionedDefinitionRef;
+        readonly terminalization: VersionedDefinitionRef;
+        readonly autonomyPreflight: VersionedDefinitionRef;
+      }
+    | {
+        /** Direct domain contribution plus exactly one compact operation-log row. */
+        readonly kind: 'single_unit_of_work';
+        readonly profile: 'direct_audited';
+        readonly family: VersionedDefinitionRef;
+        readonly phase: VersionedDefinitionRef;
+        readonly terminalization: VersionedDefinitionRef;
+        readonly autonomyPreflight: VersionedDefinitionRef;
+        readonly history:
+          | { readonly summary: string }
+          | {
+              readonly summariesByAction: Readonly<Record<string, string>>;
+            }
+          | {
+              readonly summariesByActionAndKind: Readonly<Record<string, string>>;
+            };
+      };
   readonly bindings: readonly EffectOperationBindingDefinition[];
   readonly registeredConsumerBindings?: readonly RegisteredConsumerEffectBindingDefinition[];
   readonly registeredJobBindings?: readonly RegisteredJobEffectBindingDefinition[];
@@ -627,6 +653,19 @@ export interface TerminalEffectReceipt {
   readonly identity: EffectOperationIdentity;
   readonly requestHash: string;
   readonly result: EffectfulOperationResult;
+}
+
+/** The one compact terminal row emitted by a successful direct-audited mutation. */
+export interface DirectOperationLogRecord {
+  readonly receipt: TerminalEffectReceipt;
+  readonly registryDigestSha256: string;
+  readonly actor: ActorRef;
+  readonly scope: OperationAuditScope;
+  readonly summary: string;
+  readonly occurredAt: Instant;
+  readonly correlationId: CorrelationId;
+  readonly actionBatchId?: string;
+  readonly actionStepId?: string;
 }
 
 export interface OperationAuditScope {
@@ -832,14 +871,6 @@ export type ShortOperationAuditRecord =
 export type OperationAuditRecord = TerminalNewOperationAuditRecord | ShortOperationAuditRecord;
 
 export interface EffectUnitOfWork {
-  acquireExecutionClaim(
-    identity: EffectOperationIdentity,
-    requestHash: string
-  ): ReturnTypeOrPromise<
-    | { readonly kind: 'acquired' }
-    | { readonly kind: 'contended_same_request' }
-    | { readonly kind: 'contended_changed_request' }
-  >;
   findTerminalReceipt(identity: EffectOperationIdentity): ReturnTypeOrPromise<TerminalEffectReceipt | undefined>;
   /** Reloads exact current authority through the transaction-bound adapter view. */
   recheckCurrentAuthority(
@@ -854,16 +885,44 @@ export interface EffectUnitOfWork {
     capability: VersionedDefinitionRef,
     contribution: unknown
   ): ReturnTypeOrPromise<void>;
-  insertReceiptParent(receipt: TerminalEffectReceipt): ReturnTypeOrPromise<void>;
-  insertTerminalNewOperationAudit(record: TerminalNewOperationAuditRecord): ReturnTypeOrPromise<void>;
-  insertReceiptChild(receiptId: string, contribution: unknown): ReturnTypeOrPromise<void>;
-  releaseExecutionClaim(identity: EffectOperationIdentity): ReturnTypeOrPromise<void>;
+  insertOperationLog?(record: DirectOperationLogRecord): ReturnTypeOrPromise<void>;
+  applyEffectContribution?(operationLogId: string, contribution: unknown): ReturnTypeOrPromise<void>;
+  finishEffectApplication?(identity: EffectOperationIdentity): ReturnTypeOrPromise<void>;
 }
 
 export interface EffectUnitOfWorkPort {
   findTerminalReceipt(identity: EffectOperationIdentity): ReturnTypeOrPromise<TerminalEffectReceipt | undefined>;
+  /** @deprecated Nonterminal attempts are operational telemetry, not shared durable state. */
   recordShortOperationAudit(record: ShortOperationAuditRecord): ReturnTypeOrPromise<void>;
   runInUnitOfWork<Value>(work: (unitOfWork: EffectUnitOfWork) => Promise<Value>): Promise<Value>;
+  /** Present only in runtimes that admit the PLAN-009 direct-audited profile. */
+  findTerminalOperationLog?(
+    identity: EffectOperationIdentity
+  ): ReturnTypeOrPromise<TerminalEffectReceipt | undefined>;
+  /** Present only in runtimes that admit the PLAN-009 direct-audited profile. */
+  runInDirectUnitOfWork?<Value>(
+    work: (unitOfWork: DirectAuditedUnitOfWork) => Promise<Value>
+  ): Promise<Value>;
+}
+
+export interface DirectAuditedUnitOfWork {
+  /** Reloads exact current authority through the transaction-bound adapter view. */
+  recheckCurrentAuthority(
+    context: EffectInvocationContext
+  ): ReturnTypeOrPromise<SealedEffectAuthorityRecheckResult>;
+  findTerminalOperationLog(
+    identity: EffectOperationIdentity
+  ): ReturnTypeOrPromise<TerminalEffectReceipt | undefined>;
+  openHandlerSnapshot(
+    capability: VersionedDefinitionRef,
+    context: EffectInvocationContext,
+    authorityRecheck: SealedEffectAuthorityRecheckResult
+  ): ReturnTypeOrPromise<EffectHandlerSnapshot>;
+  applyDomainContribution(
+    capability: VersionedDefinitionRef,
+    contribution: unknown
+  ): ReturnTypeOrPromise<void>;
+  insertOperationLog(record: DirectOperationLogRecord): ReturnTypeOrPromise<void>;
 }
 
 export interface EffectOperationExecutor {

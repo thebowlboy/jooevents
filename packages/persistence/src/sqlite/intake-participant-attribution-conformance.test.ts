@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import { parseCeremonyEvidenceId } from '@jooevents/kernel';
-import { openSQLite } from './database';
 import {
   assertIntakeParticipantAttributionSource,
   createSQLiteCeremonyMintedIntakeParticipantAttributionSource,
@@ -13,7 +13,8 @@ const id = (suffix: number): string =>
 
 describe('SQLite Intake participant attribution conformance source', () => {
   test('requires one transaction-local exact partition and prevents cross-role identity swaps', () => {
-    const { sqlite } = openSQLite(':memory:');
+    const sqlite = new Database(':memory:', { create: true, strict: true });
+    sqlite.exec('PRAGMA foreign_keys = ON;');
     try {
       installSQLiteIntakeParticipantAttributionConformanceSchema(sqlite);
       const source = createSQLiteIntakeParticipantAttributionConformance(sqlite);
@@ -65,7 +66,8 @@ describe('SQLite Intake participant attribution conformance source', () => {
   });
 
   test('ceremony-minted attribution mints one immutable identity per ceremony, idempotently', () => {
-    const { sqlite } = openSQLite(':memory:');
+    const sqlite = new Database(':memory:', { create: true, strict: true });
+    sqlite.exec('PRAGMA foreign_keys = ON;');
     try {
       installSQLiteIntakeParticipantAttributionConformanceSchema(sqlite);
       let minted = 0x10;

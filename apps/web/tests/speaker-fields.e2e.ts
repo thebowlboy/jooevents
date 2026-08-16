@@ -33,10 +33,13 @@ async function leaveAndReturn(page: Page, projectName: string) {
 		timeout: 15000
 	});
 	await reachNav(page, projectName);
-	// Settings is a group of sections; away from it the group is closed, so the
-	// way back is its disclosure and then the section this panel lives on.
-	await page.getByRole('button', { name: 'Expand Settings sections' }).click();
-	await page.locator('.side__link[href="/app/settings/program"]').click();
+	// The rail opens the area; the section this panel lives on is chosen by the
+	// surface's own tabs.
+	await page.locator('.side__link[href="/app/settings"]').click();
+	await page
+		.getByRole('navigation', { name: 'Settings sections' })
+		.getByRole('link', { name: 'Program', exact: true })
+		.click();
 	await expect(panelOf(page).getByRole('heading', { name: 'Speaker fields' })).toBeVisible({
 		timeout: 15000
 	});

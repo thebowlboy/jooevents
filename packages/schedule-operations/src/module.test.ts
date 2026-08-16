@@ -9,12 +9,13 @@ import {
   parseWorkspaceId
 } from '@jooevents/kernel';
 import {
-  SCHEDULE_PLACEMENT_DRAFT_OPERATION,
-  SCHEDULE_PLACEMENT_DRAFT_REQUEST_HASH_PROFILE,
   SCHEDULE_PLACEMENT_MANAGE_ACCESS_POLICY,
+  SCHEDULE_PLACEMENT_OPERATION,
+  SCHEDULE_PLACEMENT_REQUEST_HASH_PROFILE,
   SCHEDULE_PLACEMENT_READ_ACCESS_POLICY,
   SCHEDULE_PLACEMENT_SNAPSHOT_READ_OPERATION,
   createSchedulePlacementOperationModule,
+  createSchedulePlacementDirectOperationModule,
   schedulePlacementReadQueryInputSchema
 } from '.';
 
@@ -39,7 +40,7 @@ function module() {
     scopePartitionProfile: profile,
     requestCanonicalizationProfile: profile,
     requestHashSealer: createHmacRequestHashSealer({
-      profile: SCHEDULE_PLACEMENT_DRAFT_REQUEST_HASH_PROFILE,
+      profile: SCHEDULE_PLACEMENT_REQUEST_HASH_PROFILE,
       keyBytes: new Uint8Array(32).fill(0x61)
     }),
     idempotencyCredentialProfile: profile,
@@ -54,8 +55,47 @@ function module() {
   });
 }
 
+function directModule() {
+  const input = moduleInput();
+  return createSchedulePlacementDirectOperationModule({
+    ...input,
+    requestHashSealer: createHmacRequestHashSealer({
+      profile: SCHEDULE_PLACEMENT_REQUEST_HASH_PROFILE,
+      keyBytes: new Uint8Array(32).fill(0x62)
+    })
+  });
+}
+
+function moduleInput() {
+  return {
+    workspaceId,
+    policies: { read: SCHEDULE_PLACEMENT_READ_ACCESS_POLICY, manage: SCHEDULE_PLACEMENT_MANAGE_ACCESS_POLICY },
+    currentAuthority: { resolve: () => Object.freeze({ kind: 'denied' as const, reason: 'missing' as const }) },
+    currentEvent: { resolveCurrentEvent: () => ({ evidenceIds: ['event.none'] }) },
+    scheduleRead: { readSchedule: () => undefined },
+    clock: { now: () => parseInstant('2026-08-12T12:00:00.000Z') },
+    ids: { newInvocationId: () => parseInvocationId(crypto.randomUUID()) },
+    authorityPrincipalKeyProfile: profile, scopePartitionProfile: profile,
+    requestCanonicalizationProfile: profile,
+    requestHashSealer: createHmacRequestHashSealer({
+      profile: SCHEDULE_PLACEMENT_REQUEST_HASH_PROFILE, keyBytes: new Uint8Array(32).fill(0x61)
+    }),
+    idempotencyCredentialProfile: profile,
+    idempotencyCredentialSealer: { seal(raw: string) { return { verifierProfile: profile,
+      verifierSha256: createHash('sha256').update(`schedule:${raw}`).digest('hex') }; } }
+  };
+}
+
 describe('Schedule placement operation module', () => {
-  test('registers one read and one inert draft path through the ordinary registry', async () => {
+	test('registers the direct audited placement operation on the canonical POST path', async () => {
+		const registry = await createOperationRegistry(directModule().source);
+		expect(registry.operatorHttpEffectBindings.map((binding) => ({
+			operation: `${binding.operationName}@${binding.operationVersion}`, path: binding.path
+		}))).toEqual([{ operation: `${SCHEDULE_PLACEMENT_OPERATION.name}@1`,
+			path: '/api/events/current/schedule/placements' }]);
+		expect(directModule().source.effectOperations?.[0]?.execution).toMatchObject({ profile: 'direct_audited' });
+	});
+  test('registers only the placement read path in the read module', async () => {
     const registry = await createOperationRegistry(module().source);
     expect(registry.operatorHttpBindings.map((binding) => ({
       operation: `${binding.operationName}@${binding.operationVersion}`,
@@ -66,15 +106,7 @@ describe('Schedule placement operation module', () => {
       method: 'GET',
       path: '/api/events/current/schedule/placements'
     }]);
-    expect(registry.operatorHttpEffectBindings.map((binding) => ({
-      operation: `${binding.operationName}@${binding.operationVersion}`,
-      method: binding.method,
-      path: binding.path
-    }))).toEqual([{
-      operation: `${SCHEDULE_PLACEMENT_DRAFT_OPERATION.name}@1`,
-      method: 'POST',
-      path: '/api/events/current/schedule/placements/drafts'
-    }]);
+    expect(registry.operatorHttpEffectBindings).toEqual([]);
   });
 
   test('registers the canonical numeric read input now decoded by the shared GET adapter', () => {
@@ -118,7 +150,7 @@ describe('Schedule placement operation module', () => {
     } as const;
     expect(schedulePlacementInputSchema.safeParse(ordinary).success).toBe(true);
     for (const field of [
-      'scope', 'actor', 'occurrenceId', 'changesetId', 'revisionId',
+      'scope', 'actor', 'occurrenceId', 'clientOwnedId', 'revisionId',
       'receiptId', 'approval', 'occurredAt'
     ]) {
       expect(schedulePlacementInputSchema.safeParse({

@@ -6,20 +6,17 @@ import {
 import {
 	REVIEWER_ROSTER_OPERATION_SCHEMA_REFS,
 	reviewerRosterChangeDraftInputSchema,
-	reviewerRosterChangeDraftOperationResultSchema,
+	reviewerRosterDirectOperationResultSchema,
 	reviewerRosterSnapshotReadInputSchema,
 	reviewerRosterSnapshotReadResultSchema,
-	type ReviewerRosterChangeDraftData,
+	type ReviewerRosterMutationResult,
 	type ReviewerRosterSnapshotDto
 } from '@jooevents/contracts/reviewer-roster';
 import type { z } from 'zod';
 import { requestJson, type ApiResult, type SafeApiError } from '../client';
-import {
-	mapReviewerRosterChangeDraft,
-	mapReviewerRosterSnapshot
-} from '../mappers/reviewer-roster';
+import { mapReviewerRosterSnapshot } from '../mappers/reviewer-roster';
 import type {
-	ReviewerRosterChangeDraftRequest,
+	ReviewerRosterChangeRequest,
 	ReviewerRosterCoreEffectResult,
 	ReviewerRosterCoreOperation,
 	ReviewerRosterCorePort,
@@ -27,10 +24,7 @@ import type {
 	ReviewerRosterIdempotencyKey,
 	ReviewerRosterSnapshotRequest
 } from '../reviewer-roster-core-port';
-import type {
-	ReviewerRosterChangeDraftView,
-	ReviewerRosterSnapshotView
-} from '../view-models/reviewer-roster';
+import type { ReviewerRosterSnapshotView } from '../view-models/reviewer-roster';
 import {
 	resolveOperatorHttpBinding,
 	type ExpectedOperatorHttpOperation,
@@ -52,14 +46,14 @@ export const REVIEWER_ROSTER_LIVE_OPERATIONS = Object.freeze({
 		idempotencyRequired: false,
 		path: '/api/events/current/reviewer-roster'
 	} as const),
-	change_draft: Object.freeze({
-		name: 'reviewer_roster.change.draft',
+	change: Object.freeze({
+		name: 'reviewer_roster.change',
 		version: 1,
-		effect: 'draft',
+		effect: 'commit',
 		method: 'POST',
 		input: 'body',
 		idempotencyRequired: true,
-		path: '/api/events/current/reviewer-roster/drafts'
+		path: '/api/events/current/reviewer-roster/changes'
 	} as const)
 });
 
@@ -71,9 +65,9 @@ const EXPECTED_OPERATIONS = Object.freeze({
 		...REVIEWER_ROSTER_LIVE_OPERATIONS.snapshot,
 		...REVIEWER_ROSTER_OPERATION_SCHEMA_REFS.snapshotRead
 	}),
-	change_draft: Object.freeze({
-		...REVIEWER_ROSTER_LIVE_OPERATIONS.change_draft,
-		...REVIEWER_ROSTER_OPERATION_SCHEMA_REFS.changeDraft
+	change: Object.freeze({
+		...REVIEWER_ROSTER_LIVE_OPERATIONS.change,
+		...REVIEWER_ROSTER_OPERATION_SCHEMA_REFS.change
 	})
 } satisfies Readonly<Record<BindingKey, ExactExpectedOperation>>);
 
@@ -133,12 +127,10 @@ function resolveExactBinding(
 }
 
 function resolveBindings(manifest: unknown): Bindings {
-	return Object.freeze(Object.fromEntries(
-		Object.entries(EXPECTED_OPERATIONS).map(([key, expected]) => [
-			key,
-			resolveExactBinding(manifest, expected)
-		])
-	) as unknown as Bindings);
+	return Object.freeze({
+		snapshot: resolveExactBinding(manifest, EXPECTED_OPERATIONS.snapshot),
+		change: resolveExactBinding(manifest, EXPECTED_OPERATIONS.change)
+	});
 }
 
 function unavailable(
@@ -227,49 +219,47 @@ export function createReviewerRosterLivePort(input: {
 			}
 		},
 
-		async draftChange(
-			rawInput: ReviewerRosterChangeDraftRequest,
+		async change(
+			rawInput: ReviewerRosterChangeRequest,
 			idempotencyKey: ReviewerRosterIdempotencyKey,
 			options: { readonly signal?: AbortSignal } = {}
-		): Promise<ReviewerRosterCoreEffectResult<ReviewerRosterChangeDraftView>> {
+		): Promise<ReviewerRosterCoreEffectResult<ReviewerRosterMutationResult>> {
 			const parsedInput = reviewerRosterChangeDraftInputSchema.safeParse(rawInput);
 			const parsedKey = operationHttpIdempotencyKeySchema.safeParse(idempotencyKey);
 			if (!parsedInput.success || !parsedKey.success) return invalidRequest();
-			const binding = bindings.change_draft;
-			if (binding.kind === 'unavailable') return unavailable('change_draft', binding);
+			const binding = bindings.change;
+			if (binding.kind === 'unavailable') return unavailable('change', binding);
 			const response = await parsedResponse<
-				CanonicalEffectResult<ReviewerRosterChangeDraftData>
+				CanonicalEffectResult<ReviewerRosterMutationResult>
 			>({
 				request,
 				requestInput: {
 					path: binding.path,
 					method: 'POST',
-					schema: reviewerRosterChangeDraftOperationResultSchema,
+					schema: reviewerRosterDirectOperationResultSchema,
 					body: parsedInput.data,
 					idempotencyKey: parsedKey.data,
 					...(options.signal ? { signal: options.signal } : {})
 				},
-				schema: reviewerRosterChangeDraftOperationResultSchema
+				schema: reviewerRosterDirectOperationResultSchema
 			});
 			if (response.kind === 'transport_error') return response;
 			const result = response.result;
 			if (result.kind === 'outcome') {
 				if (
 					result.terminal
-					&& !receiptMatches(result.receipt, REVIEWER_ROSTER_LIVE_OPERATIONS.change_draft)
+					&& !receiptMatches(result.receipt, REVIEWER_ROSTER_LIVE_OPERATIONS.change)
 				) {
 					return invalidContract();
 				}
 				return result;
 			}
-			if (!receiptMatches(result.receipt, REVIEWER_ROSTER_LIVE_OPERATIONS.change_draft)) {
+			if (!receiptMatches(result.receipt, REVIEWER_ROSTER_LIVE_OPERATIONS.change)
+				|| result.data.action !== parsedInput.data.action
+				|| result.data.reviewer.reviewerId !== parsedInput.data.reviewerId) {
 				return invalidContract();
 			}
-			try {
-				return { ...result, data: mapReviewerRosterChangeDraft(result.data) };
-			} catch {
-				return invalidContract();
-			}
+			return result;
 		}
 	});
 }

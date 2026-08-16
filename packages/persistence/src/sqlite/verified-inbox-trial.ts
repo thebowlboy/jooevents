@@ -62,7 +62,7 @@ import {
   type VerifiedInboxState
 } from '@jooevents/reliability';
 
-/** Disposable SQLite proof only. These objects are not part of the retained schema chain. */
+/** This schema contributes to the accepted epoch-2 baseline and may also serve isolated fixtures. */
 export const VERIFIED_INBOX_TRIAL_SQL = `
 CREATE TABLE verified_inbox_binding_profiles_trial (
   profile_key TEXT NOT NULL CHECK(length(profile_key) BETWEEN 1 AND 160),

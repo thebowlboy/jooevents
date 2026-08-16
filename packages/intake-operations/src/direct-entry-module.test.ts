@@ -4,12 +4,12 @@ import { createHmacRequestHashSealer } from '@jooevents/application';
 import { parseContractVersion, parseInvocationId, parseWorkspaceId } from '@jooevents/kernel';
 import {
   SUBMISSION_DIRECT_ENTRY_ACCESS_POLICY,
-  SUBMISSION_DIRECT_ENTRY_DRAFT_HANDLER_CAPABILITY,
-  SUBMISSION_DIRECT_ENTRY_DRAFT_OPERATION,
-  SUBMISSION_DIRECT_ENTRY_DRAFT_REQUEST_HASH_PROFILE,
+  SUBMISSION_DIRECT_ENTRY_DIRECT_HANDLER_CAPABILITY,
+  SUBMISSION_DIRECT_ENTRY_CREATE_OPERATION,
+  SUBMISSION_DIRECT_ENTRY_REQUEST_HASH_PROFILE,
   SUBMISSION_DIRECT_ENTRY_HTTP_PATHS,
-  createSubmissionDirectEntryDraftOperationModule,
-  submissionDirectEntryDraftContributionSchema
+  createSubmissionDirectEntryOperationModule,
+  submissionDirectEntryDirectContributionSchema
 } from './direct-entry-module';
 
 const workspaceId = parseWorkspaceId('550e8400-e29b-41d4-a716-446655440000');
@@ -30,7 +30,7 @@ function moduleInput(policy = SUBMISSION_DIRECT_ENTRY_ACCESS_POLICY) {
       scopePartitionProfile: profile,
       requestCanonicalizationProfile: profile,
       requestHashSealer: createHmacRequestHashSealer({
-        profile: SUBMISSION_DIRECT_ENTRY_DRAFT_REQUEST_HASH_PROFILE,
+        profile: SUBMISSION_DIRECT_ENTRY_REQUEST_HASH_PROFILE,
         keyBytes: new Uint8Array(32).fill(0x11)
       }),
       idempotencyCredentialProfile: profile,
@@ -46,17 +46,17 @@ function moduleInput(policy = SUBMISSION_DIRECT_ENTRY_ACCESS_POLICY) {
   };
 }
 
-describe('direct entry draft operation module', () => {
-  test('registers one operator draft operation bound to the direct-entry capability', () => {
-    const module = createSubmissionDirectEntryDraftOperationModule(moduleInput());
-    expect(module.id).toBe('submission-direct-entry.draft-operation');
+describe('direct entry operation module', () => {
+  test('registers one direct audited operator operation', () => {
+    const module = createSubmissionDirectEntryOperationModule(moduleInput());
+    expect(module.id).toBe('submission-direct-entry.create-operation');
     const operation = module.source.effectOperations?.[0];
     expect(operation).toMatchObject({
-      name: SUBMISSION_DIRECT_ENTRY_DRAFT_OPERATION.name,
+      name: SUBMISSION_DIRECT_ENTRY_CREATE_OPERATION.name,
       version: 1,
-      effect: 'draft',
+      effect: 'commit',
       maxRisk: 'low',
-      handlerCapability: SUBMISSION_DIRECT_ENTRY_DRAFT_HANDLER_CAPABILITY
+      handlerCapability: SUBMISSION_DIRECT_ENTRY_DIRECT_HANDLER_CAPABILITY
     });
     expect(operation?.accessLanes).toEqual([{
       kind: 'operator',
@@ -66,13 +66,13 @@ describe('direct entry draft operation module', () => {
     expect(operation?.bindings).toMatchObject([{
       surface: 'operator_http',
       method: 'POST',
-      path: SUBMISSION_DIRECT_ENTRY_HTTP_PATHS.draft
+      path: SUBMISSION_DIRECT_ENTRY_HTTP_PATHS.create
     }]);
     expect(module.source.effectHandlers?.length).toBe(1);
   });
 
   test('refuses a policy reference the catalog does not declare', () => {
-    expect(() => createSubmissionDirectEntryDraftOperationModule(moduleInput({
+    expect(() => createSubmissionDirectEntryOperationModule(moduleInput({
       key: 'authority.other', version: parseContractVersion(1)
     }))).toThrow('submission_direct_entry_policy_catalog_mismatch');
   });
@@ -90,16 +90,16 @@ describe('direct entry draft operation module', () => {
         detailSchemaVersion: 1
       } },
       domain: null,
-      receiptChildren: []
+      effectContributions: []
     };
-    expect(submissionDirectEntryDraftContributionSchema.parse(refusal)).toBeDefined();
-    expect(submissionDirectEntryDraftContributionSchema.safeParse({
+    expect(submissionDirectEntryDirectContributionSchema.parse(refusal)).toBeDefined();
+    expect(submissionDirectEntryDirectContributionSchema.safeParse({
       ...refusal,
       result: { kind: 'outcome', outcome: {
         ...refusal.result.outcome, retryable: true
       } }
     }).success).toBe(false);
-    expect(submissionDirectEntryDraftContributionSchema.safeParse({
+    expect(submissionDirectEntryDirectContributionSchema.safeParse({
       ...refusal,
       result: { kind: 'outcome', outcome: {
         ...refusal.result.outcome, kind: 'submission_triage.changed'

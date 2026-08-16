@@ -1,4 +1,3 @@
-import type { ChangesetApplyContribution, GuardRef, VersionRef } from '@jooevents/changesets';
 import {
   deadlineDisplayDateSchema,
   deadlineMutationPlanSchema,
@@ -9,11 +8,6 @@ import {
   type DeadlineScopeDto
 } from '@jooevents/contracts/deadlines';
 import { reviewDeadlinePinSchema, type ReviewDeadlinePinDto } from '@jooevents/contracts/reviews';
-import {
-  defineChangesetReadPort,
-  defineChangesetTransactionPort,
-  defineChangesetValidationPort
-} from '@jooevents/changesets';
 import {
   deadlineChangedFactPayload,
   planDeadlineMutation,
@@ -63,8 +57,14 @@ export interface ReviewDueDeadlineValidationPort extends DeadlineRepository, Dea
   validateReviewDueDeadline(contribution: ReviewDueDeadlineContribution): ReviewDueDeadlineValidation;
 }
 
-export interface ReviewDueDeadlineAppliedContribution extends
-  ChangesetApplyContribution<DeadlineMutationResult> {
+export interface ReviewDueDeadlineAppliedContribution {
+  readonly result: DeadlineMutationResult;
+  readonly facts: readonly {
+    readonly kind: string;
+    readonly version: number;
+    readonly payload: ReturnType<typeof deadlineChangedFactPayload>;
+  }[];
+  readonly effects: readonly never[];
   readonly pin: DeadlineReferencePinDto | null;
 }
 
@@ -73,18 +73,6 @@ export interface ReviewDueDeadlineTransactionPort extends DeadlineTransactionRep
     contribution: ReviewDueDeadlineContribution
   ): ReviewDueDeadlineAppliedContribution;
 }
-
-export const reviewDueDeadlinePlanningPort = defineChangesetReadPort<ReviewDueDeadlinePlanningPort>(
-  'review_due_deadline.planning', 1
-);
-export const reviewDueDeadlineValidationPort =
-  defineChangesetValidationPort<ReviewDueDeadlineValidationPort>(
-    'review_due_deadline.validation', 1
-  );
-export const reviewDueDeadlineTransactionPort =
-  defineChangesetTransactionPort<ReviewDueDeadlineTransactionPort>(
-    'review_due_deadline.transaction', 1
-  );
 
 export function planReviewDueDeadlineChangeFrom(
   port: DeadlineRepository & DeadlineEventTimeSource,
@@ -173,7 +161,7 @@ export function applyReviewDueDeadlineFrom(
 
 export function reviewDueDeadlineAggregateRefs(
   contribution: ReviewDueDeadlineContribution
-): readonly VersionRef[] {
+): readonly { readonly id: string; readonly version: number }[] {
   return Object.freeze([
     ...(contribution.before
       ? [{ id: deadlineAggregateId(contribution.before.id), version: contribution.before.version }]
@@ -189,7 +177,7 @@ export function reviewDueDeadlineAggregateRefs(
 
 export function reviewDueDeadlineGuardRefs(
   contribution: ReviewDueDeadlineContribution
-): readonly GuardRef[] {
+): readonly { readonly id: string; readonly version: number; readonly digest: string }[] {
   return Object.freeze([{
     id: deadlineCatalogGuardId(contribution.input.scope.eventId),
     version: contribution.catalog.beforeVersion,

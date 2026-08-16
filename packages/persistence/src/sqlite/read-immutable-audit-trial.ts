@@ -9,7 +9,7 @@ import { Database } from 'bun:sqlite';
 const eventKind = 'read_immutable_audit' as const;
 const maximumRecordBytes = 131_072;
 
-/** Ephemeral-runtime schema; it is intentionally absent from the retained migration chain. */
+/** This schema contributes to the accepted epoch-2 baseline and may also serve isolated fixtures. */
 export const READ_IMMUTABLE_AUDIT_TRIAL_SQL = `
 CREATE TABLE _trial_read_immutable_audits (
   event_id TEXT NOT NULL CHECK(length(event_id) = 36),

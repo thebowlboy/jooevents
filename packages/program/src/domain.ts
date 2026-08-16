@@ -474,6 +474,36 @@ export function programVocabularySetDigest(state: ProgramVocabularyState): strin
   });
 }
 
+/** User-readable owner-native diff for direct and reviewed merge operations. */
+export function projectProgramVocabularySafeDiff(
+  plan: ProgramVocabularyMutationPlan
+): import('@jooevents/contracts').ProgramVocabularySafeDiff {
+  if (plan.action === 'create') return { action: 'create', before: null, after: plan.after };
+  if (plan.action === 'edit') return { action: 'edit', before: plan.before, after: plan.after };
+  if (plan.action === 'retire') return { action: 'retire', before: plan.before, after: plan.after };
+  if (plan.action === 'restore') return { action: 'restore', before: plan.before, after: plan.after };
+  if (plan.action === 'delete') {
+    return {
+      action: 'delete', before: plan.before, after: null,
+      usage: {
+        current: plan.references.reduce((sum, contributor) =>
+          sum + contributor.liveRepoints.length, 0),
+        historicalPins: plan.references.reduce((sum, contributor) =>
+          sum + contributor.historicalPins.length, 0)
+      }
+    };
+  }
+  const counts = mergeReferenceCounts(plan);
+  return {
+    action: plan.action,
+    sourceBefore: plan.sourceBefore,
+    sourceAfter: plan.sourceAfter,
+    target: plan.target,
+    liveRepoints: counts.liveRepoints,
+    historicalPinsPreserved: counts.historicalPins
+  };
+}
+
 export function programVocabularyAggregateId(item: Pick<PlannedProgramVocabularyItem, 'kind' | 'id'>): string {
   return `program_${item.kind}:${item.id}`;
 }

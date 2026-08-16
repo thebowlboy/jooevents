@@ -73,48 +73,8 @@ export type ProgramVocabularyDiffItemView =
 			readonly version: number;
 	  };
 
-export type ProgramVocabularyDraftChangeView =
-	| {
-			readonly action: 'create';
-			readonly before: null;
-			readonly after: ProgramVocabularyDiffItemView;
-	  }
-	| {
-			readonly action: 'edit' | 'retire' | 'restore';
-			readonly before: ProgramVocabularyDiffItemView;
-			readonly after: ProgramVocabularyDiffItemView;
-	  }
-	| {
-			readonly action: 'delete';
-			readonly before: ProgramVocabularyDiffItemView;
-			readonly after: null;
-			readonly usage: ProgramVocabularyUsageView;
-	  }
-	| {
-			readonly action: 'merge';
-			readonly sourceBefore: ProgramVocabularyDiffItemView;
-			readonly sourceAfter: ProgramVocabularyDiffItemView;
-			readonly target: ProgramVocabularyDiffItemView;
-			readonly liveRepoints: number;
-			readonly historicalPinsPreserved: number;
-	  };
-
-export interface ProgramVocabularyDraftView {
-	readonly schemaVersion: 1;
-	readonly changesetId: string;
-	readonly headVersion: number;
-	readonly status: 'draft';
-	readonly revision: {
-		readonly id: string;
-		readonly number: number;
-		readonly digestSha256: string;
-	};
-	readonly riskTier: 'low' | 'normal' | 'consequential';
-	readonly approvalPolicy: {
-		readonly key: string;
-		readonly version: number;
-		readonly definitionDigestSha256: string;
-		readonly requirement: 'none' | 'distinct_current_human';
-	};
-	readonly change: ProgramVocabularyDraftChangeView;
-}
+export type ProgramVocabularyChangeView =
+	| { readonly action: 'create'; readonly before: null; readonly after: ProgramVocabularyDiffItemView }
+	| { readonly action: 'edit' | 'retire' | 'restore'; readonly before: ProgramVocabularyDiffItemView; readonly after: ProgramVocabularyDiffItemView }
+	| { readonly action: 'delete'; readonly before: ProgramVocabularyDiffItemView; readonly after: null; readonly usage: ProgramVocabularyUsageView }
+	| { readonly action: 'merge'; readonly sourceBefore: ProgramVocabularyDiffItemView; readonly sourceAfter: ProgramVocabularyDiffItemView; readonly target: ProgramVocabularyDiffItemView; readonly liveRepoints: number; readonly historicalPinsPreserved: number };

@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import {
   autonomyInterventionOutcomeDeclarations,
   autonomyInterventionOutcomes,
@@ -29,10 +28,11 @@ import {
 } from '@jooevents/contracts';
 import {
   REVIEWER_ROSTER_OPERATION_SCHEMA_REFS,
-  reviewerRosterChangeDraftCanonicalResultSchema,
-  reviewerRosterChangeDraftDataSchema,
   reviewerRosterChangeDraftInputSchema,
-  reviewerRosterChangeDraftOperationResultSchema,
+  reviewerRosterDirectCanonicalResultSchema,
+  reviewerRosterDirectOperationResultSchema,
+  reviewerRosterMutationPlanSchema,
+  reviewerRosterMutationResultSchema,
   reviewerRosterSnapshotCanonicalResultSchema,
   reviewerRosterSnapshotReadInputSchema,
   reviewerRosterSnapshotReadResultSchema,
@@ -48,7 +48,6 @@ import {
   type VersionedKeyProfileRef
 } from '@jooevents/identity-access';
 import {
-  encodeCanonicalJson,
   isApplicationId,
   parseContractVersion,
   parseEventId,
@@ -63,13 +62,13 @@ import {
   type ReviewerRosterReadEnvironment
 } from '@jooevents/review/roster';
 import { z } from 'zod';
-import { createReviewerRosterDraftHandler } from './roster-preparation';
+import { createReviewerRosterDirectHandler } from './roster-direct-preparation';
 
 export const REVIEWER_ROSTER_SNAPSHOT_READ_OPERATION = Object.freeze({
   name: 'reviewer_roster.snapshot.read', version: 1
 });
-export const REVIEWER_ROSTER_CHANGE_DRAFT_OPERATION = Object.freeze({
-  name: 'reviewer_roster.change.draft', version: 1
+export const REVIEWER_ROSTER_CHANGE_OPERATION = Object.freeze({
+  name: 'reviewer_roster.change', version: 1
 });
 
 export const REVIEWER_ROSTER_MANAGE_ACCESS_POLICY: VersionedAccessPolicyRef = Object.freeze({
@@ -78,19 +77,15 @@ export const REVIEWER_ROSTER_MANAGE_ACCESS_POLICY: VersionedAccessPolicyRef = Ob
 export const REVIEWER_ROSTER_PERMISSION_IDS = Object.freeze([
   'event.manage'
 ] satisfies readonly PermissionId[]);
-export const REVIEWER_ROSTER_DRAFT_HANDLER_CAPABILITY = ref(
-  'capability.reviewer_roster.changeset_draft'
+export const REVIEWER_ROSTER_DIRECT_HANDLER_CAPABILITY = ref(
+  'capability.reviewer_roster.direct'
 );
-export const REVIEWER_ROSTER_DRAFT_REQUEST_HASH_PROFILE = ref(
-  'request-hash.reviewer_roster.change-draft'
+export const REVIEWER_ROSTER_DIRECT_REQUEST_HASH_PROFILE = ref(
+  'request-hash.reviewer_roster.change'
 );
 
 const applicationIdSchema = z.string().refine(isApplicationId, {
   message: 'Application IDs must be canonical lowercase UUIDv4 or UUIDv7 values.'
-});
-const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
-const instantSchema = z.string().refine((value) => {
-  try { return parseInstant(value) === value; } catch { return false; }
 });
 const nullDetailSchema = z.null();
 export const reviewerRosterChangedDetailSchema = z.strictObject({
@@ -104,58 +99,26 @@ export const reviewerRosterChangedDetailSchema = z.strictObject({
   reviewerId: applicationIdSchema
 });
 
-export const reviewerRosterDraftDomainContributionSchema = z.strictObject({
-  kind: z.literal('reviewer_roster_changeset_draft'),
-  preparationHandle: applicationIdSchema,
-  workspaceId: applicationIdSchema,
-  eventId: applicationIdSchema,
-  changesetId: applicationIdSchema,
-  revisionId: applicationIdSchema,
-  revisionDigestSha256: sha256Schema,
-  action: z.enum(['register', 'set_scope', 'revoke', 'restore']),
-  reviewerId: applicationIdSchema,
-  diffReadPermissionIds: z.tuple([z.literal('event.manage')]),
-  occurredAt: instantSchema
-});
-export const reviewerRosterDraftEvidenceChildSchema = z.strictObject({
-  kind: z.literal('timeline'),
-  timelineId: applicationIdSchema,
-  sourceKind: z.literal('changeset_revision'),
-  workspaceId: applicationIdSchema,
-  eventId: applicationIdSchema,
-  changesetId: applicationIdSchema,
-  revisionId: applicationIdSchema,
-  occurredAt: instantSchema
-});
-const draftSuccessContributionSchema = z.strictObject({
-  result: z.strictObject({ kind: z.literal('success'), data: reviewerRosterChangeDraftDataSchema }),
-  domain: reviewerRosterDraftDomainContributionSchema,
-  receiptChildren: z.tuple([reviewerRosterDraftEvidenceChildSchema])
-}).superRefine((contribution, context) => {
-  const { data } = contribution.result;
-  const domain = contribution.domain;
-  const timeline = contribution.receiptChildren[0];
-  if (data.action !== domain.action
-      || data.reviewerId !== domain.reviewerId
-      || data.changesetId !== domain.changesetId
-      || data.revision.id !== domain.revisionId
-      || data.revision.digestSha256 !== domain.revisionDigestSha256
-      || timeline.workspaceId !== domain.workspaceId
-      || timeline.eventId !== domain.eventId
-      || timeline.changesetId !== domain.changesetId
-      || timeline.revisionId !== domain.revisionId
-      || timeline.occurredAt !== domain.occurredAt) {
-    context.addIssue({ code: 'custom', message: 'Reviewer roster draft evidence is incoherent.' });
-  }
-});
-const draftOutcomeContributionSchema = z.strictObject({
+const outcomeContributionSchema = z.strictObject({
   result: z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema }),
   domain: z.null(),
-  receiptChildren: z.tuple([])
+  effectContributions: z.tuple([])
 });
-export const reviewerRosterDraftContributionSchema = z.union([
-  draftSuccessContributionSchema,
-  draftOutcomeContributionSchema
+export const reviewerRosterDirectContributionSchema = z.union([
+  z.strictObject({
+    result: z.strictObject({ kind: z.literal('success'), data: reviewerRosterMutationResultSchema }),
+    domain: z.strictObject({
+      kind: z.literal('reviewer_roster_direct_change'),
+      plan: reviewerRosterMutationPlanSchema
+    }),
+    effectContributions: z.tuple([])
+  }).superRefine((value, context) => {
+    if (value.result.data.action !== value.domain.plan.action
+        || value.result.data.reviewer.reviewerId !== value.domain.plan.after.reviewerId) {
+      context.addIssue({ code: 'custom', message: 'Reviewer roster direct contribution is incoherent.' });
+    }
+  }),
+  outcomeContributionSchema
 ]);
 
 function ref(key: string): VersionedDefinitionRef {
@@ -166,10 +129,6 @@ function schemaRef(key: string, schema: z.ZodType): SafeSchemaManifestRef {
   return createSafeSchemaManifestRef(key, schema);
 }
 
-function digest(value: unknown): string {
-  return createHash('sha256').update(encodeCanonicalJson(value)).digest('hex');
-}
-
 const schemas = Object.freeze({
   readInput: REVIEWER_ROSTER_OPERATION_SCHEMA_REFS.snapshotRead.inputSchema,
   readCanonical: schemaRef(
@@ -177,15 +136,14 @@ const schemas = Object.freeze({
     reviewerRosterSnapshotCanonicalResultSchema
   ),
   readProjected: REVIEWER_ROSTER_OPERATION_SCHEMA_REFS.snapshotRead.resultSchema,
-  draftInput: REVIEWER_ROSTER_OPERATION_SCHEMA_REFS.changeDraft.inputSchema,
-  draftContribution: schemaRef(
-    'schema.reviewer_roster.change-draft.contribution', reviewerRosterDraftContributionSchema
+  directInput: REVIEWER_ROSTER_OPERATION_SCHEMA_REFS.change.inputSchema,
+  directContribution: schemaRef(
+    'schema.reviewer_roster.change.contribution', reviewerRosterDirectContributionSchema
   ),
-  draftCanonical: schemaRef(
-    'schema.reviewer_roster.change-draft.canonical-result',
-    reviewerRosterChangeDraftCanonicalResultSchema
+  directCanonical: schemaRef(
+    'schema.reviewer_roster.change.canonical-result', reviewerRosterDirectCanonicalResultSchema
   ),
-  draftProjected: REVIEWER_ROSTER_OPERATION_SCHEMA_REFS.changeDraft.resultSchema,
+  directProjected: REVIEWER_ROSTER_OPERATION_SCHEMA_REFS.change.resultSchema,
   changedDetail: schemaRef(
     'schema.reviewer_roster.changed.detail', reviewerRosterChangedDetailSchema
   ),
@@ -199,19 +157,19 @@ const refs = Object.freeze({
   readHandler: ref('handler.reviewer_roster.snapshot-read'),
   readProjection: ref('projection.reviewer_roster.snapshot-read.operator'),
   readTrace: ref('trace.reviewer_roster.snapshot-read'),
-  draftContext: ref('context.reviewer_roster.change-draft'),
-  draftAutonomy: ref('autonomy.reviewer_roster.change-draft'),
-  draftConcurrency: ref('concurrency.reviewer_roster.change-draft'),
-  draftFamily: ref('reviewer_roster.change-draft.execution-family'),
-  draftPhase: ref('reviewer_roster.change-draft.phase.single-uow'),
-  draftTerminalization: ref('reviewer_roster.change-draft.terminalization'),
-  draftRisk: ref('reviewer_roster.change-draft.risk-resolver'),
-  draftAutonomyEvidence: ref('reviewer_roster.change-draft.autonomy-evidence'),
-  draftApproval: ref('reviewer_roster.change-draft.approval-resolver'),
-  draftPreflight: ref('reviewer_roster.change-draft.autonomy-preflight'),
-  draftHandler: ref('handler.reviewer_roster.change-draft'),
-  draftProjection: ref('projection.reviewer_roster.change-draft.operator'),
-  audit: ref('audit.reviewer_roster.change-draft'),
+  directContext: ref('context.reviewer_roster.change'),
+  directAutonomy: ref('autonomy.reviewer_roster.change'),
+  directConcurrency: ref('concurrency.reviewer_roster.change'),
+  directFamily: ref('reviewer_roster.change.execution-family'),
+  directPhase: ref('reviewer_roster.change.phase.single-uow'),
+  directTerminalization: ref('reviewer_roster.change.terminalization'),
+  directRisk: ref('reviewer_roster.change.risk-resolver'),
+  directAutonomyEvidence: ref('reviewer_roster.change.autonomy-evidence'),
+  directApproval: ref('reviewer_roster.change.approval-resolver'),
+  directPreflight: ref('reviewer_roster.change.autonomy-preflight'),
+  directHandler: ref('handler.reviewer_roster.change'),
+  directProjection: ref('projection.reviewer_roster.change.operator'),
+  audit: ref('audit.reviewer_roster.change'),
   auditRecordProfile: ref('record-profile.reviewer_roster.operation-audit'),
   keySource: ref('idempotency.operator-header')
 });
@@ -235,13 +193,9 @@ export interface CreateReviewerRosterOperationModuleInput {
   readonly authorityPrincipalKeyProfile: VersionedKeyProfileRef;
   readonly scopePartitionProfile: VersionedKeyProfileRef;
   readonly requestCanonicalizationProfile: VersionedKeyProfileRef;
-  readonly requestHashSealer: RequestHashSealer;
+  readonly directRequestHashSealer: RequestHashSealer;
   readonly idempotencyCredentialProfile: VersionedKeyProfileRef;
   readonly idempotencyCredentialSealer: IdempotencyCredentialSealer;
-}
-
-export function reviewerRosterDiffReadPermissionIds(): readonly PermissionId[] {
-  return REVIEWER_ROSTER_PERMISSION_IDS;
 }
 
 export function createReviewerRosterOperationModule(
@@ -257,7 +211,6 @@ export function createReviewerRosterOperationModule(
     kind: 'operator', surface: 'operator_http', policy: input.policy
   });
   const readAutonomy = autonomy(REVIEWER_ROSTER_SNAPSHOT_READ_OPERATION, refs.readAutonomy);
-  const draftAutonomy = autonomy(REVIEWER_ROSTER_CHANGE_DRAFT_OPERATION, refs.draftAutonomy);
   const readContext = createReadInvocationContextBuilder({
     reference: refs.readContext,
     operation: REVIEWER_ROSTER_SNAPSHOT_READ_OPERATION,
@@ -282,57 +235,58 @@ export function createReviewerRosterOperationModule(
         : Object.freeze({ kind: 'unavailable' });
     }
   });
-  const draftContext = createEffectInvocationContextBuilder({
-    reference: refs.draftContext,
-    operation: REVIEWER_ROSTER_CHANGE_DRAFT_OPERATION,
-    effect: 'draft', lanes: [lane], scopeResolver,
+  const directAutonomy = autonomy(REVIEWER_ROSTER_CHANGE_OPERATION, refs.directAutonomy);
+  const directContext = createEffectInvocationContextBuilder({
+    reference: refs.directContext,
+    operation: REVIEWER_ROSTER_CHANGE_OPERATION,
+    effect: 'commit', lanes: [lane], scopeResolver,
     authorityResolver: input.currentAuthority, clock: input.clock,
     newInvocationId: input.ids.newInvocationId,
     authorityPrincipalKeyProfile: input.authorityPrincipalKeyProfile,
     scopePartitionProfile: input.scopePartitionProfile,
     requestCanonicalizationProfile: input.requestCanonicalizationProfile,
-    requestHashProfile: REVIEWER_ROSTER_DRAFT_REQUEST_HASH_PROFILE,
-    requestHashSealer: input.requestHashSealer,
+    requestHashProfile: REVIEWER_ROSTER_DIRECT_REQUEST_HASH_PROFILE,
+    requestHashSealer: input.directRequestHashSealer,
     idempotencyCredentialProfile: input.idempotencyCredentialProfile,
     idempotencyCredentialSealer: input.idempotencyCredentialSealer,
     deniedAuthorityOutcome: authorityOutcome
   });
-  const draftFamily = createSingleUnitOfWorkFamilyRegistration({
-    reference: refs.draftFamily, phase: refs.draftPhase
+  const directFamily = createSingleUnitOfWorkFamilyRegistration({
+    reference: refs.directFamily, phase: refs.directPhase
   });
-  const draftTerminalization = createTerminalizationResolverRegistration({
-    reference: refs.draftTerminalization,
-    operation: REVIEWER_ROSTER_CHANGE_DRAFT_OPERATION,
-    phase: refs.draftPhase,
+  const directTerminalization = createTerminalizationResolverRegistration({
+    reference: refs.directTerminalization,
+    operation: REVIEWER_ROSTER_CHANGE_OPERATION,
+    phase: refs.directPhase,
     resolve: ({ result }) => result.kind === 'success'
       ? Object.freeze({ kind: 'terminal' as const })
       : Object.freeze({ kind: 'nonterminal' as const })
   });
-  const draftPhase = createSingleUnitOfWorkPhaseRegistration({
-    reference: refs.draftPhase, family: refs.draftFamily,
-    operation: REVIEWER_ROSTER_CHANGE_DRAFT_OPERATION,
-    effect: 'draft', handler: refs.draftHandler,
-    handlerCapability: REVIEWER_ROSTER_DRAFT_HANDLER_CAPABILITY,
-    contributionSchema: schemas.draftContribution,
-    terminalization: refs.draftTerminalization,
+  const directPhase = createSingleUnitOfWorkPhaseRegistration({
+    reference: refs.directPhase, family: refs.directFamily,
+    operation: REVIEWER_ROSTER_CHANGE_OPERATION,
+    effect: 'commit', handler: refs.directHandler,
+    handlerCapability: REVIEWER_ROSTER_DIRECT_HANDLER_CAPABILITY,
+    contributionSchema: schemas.directContribution,
+    terminalization: refs.directTerminalization,
     terminalOutcomeKeys: [],
     contentionOutcome: Object.freeze({
       class: 'conflict' as const, kind: 'operation.in_progress', retryable: true,
       subjects: [], detail: null, detailSchemaVersion: 1
     })
   });
-  const draftRisk = createOperationRiskResolverRegistration({
-    reference: refs.draftRisk,
-    operation: REVIEWER_ROSTER_CHANGE_DRAFT_OPERATION,
+  const directRisk = createOperationRiskResolverRegistration({
+    reference: refs.directRisk,
+    operation: REVIEWER_ROSTER_CHANGE_OPERATION,
     resolve: () => Object.freeze({
       risk: 'low' as const,
-      consequenceTags: Object.freeze(['changeset-drafted']),
-      evidenceIds: Object.freeze(['reviewer_roster.change.draft.risk'])
+      consequenceTags: Object.freeze(['reviewer-roster-changed']),
+      evidenceIds: Object.freeze(['reviewer_roster.change.risk'])
     })
   });
-  const draftAutonomyEvidence = createAutonomyEvidenceResolverRegistration({
-    reference: refs.draftAutonomyEvidence,
-    operation: REVIEWER_ROSTER_CHANGE_DRAFT_OPERATION,
+  const directAutonomyEvidence = createAutonomyEvidenceResolverRegistration({
+    reference: refs.directAutonomyEvidence,
+    operation: REVIEWER_ROSTER_CHANGE_OPERATION,
     resolve: ({ subject }) => {
       const notAfter = parseInstant(new Date(Date.parse(subject.evaluatedAt) + 60_000).toISOString());
       const bounds = Object.freeze({
@@ -344,32 +298,32 @@ export function createReviewerRosterOperationModule(
         hardBounds: bounds, unattendedBounds: bounds,
         spendMicros: 0, actionCount: 1, completesBy: subject.evaluatedAt,
         proposedAction: Object.freeze({
-          key: 'reviewer_roster.change.draft.execute', version: 1,
+          key: 'reviewer_roster.change.execute', version: 1,
           digestSha256: subject.requestHashSha256
         }),
         failure: Object.freeze({ kind: 'none' as const })
       });
     }
   });
-  const draftApproval = createRenewedApprovalResolverRegistration({
-    reference: refs.draftApproval,
-    operation: REVIEWER_ROSTER_CHANGE_DRAFT_OPERATION,
+  const directApproval = createRenewedApprovalResolverRegistration({
+    reference: refs.directApproval,
+    operation: REVIEWER_ROSTER_CHANGE_OPERATION,
     resolve: () => Object.freeze({ approverCurrentlyAuthorized: false })
   });
-  const draftPreflight = createAutonomyPreflightRegistration({
-    reference: refs.draftPreflight,
-    operation: REVIEWER_ROSTER_CHANGE_DRAFT_OPERATION,
-    policy: refs.draftAutonomy,
-    riskResolver: refs.draftRisk,
-    evidenceResolver: refs.draftAutonomyEvidence,
-    approvalResolver: refs.draftApproval,
+  const directPreflight = createAutonomyPreflightRegistration({
+    reference: refs.directPreflight,
+    operation: REVIEWER_ROSTER_CHANGE_OPERATION,
+    policy: refs.directAutonomy,
+    riskResolver: refs.directRisk,
+    evidenceResolver: refs.directAutonomyEvidence,
+    approvalResolver: refs.directApproval,
     interventionOutcomes: autonomyInterventionOutcomes(1)
   });
-  const draftHandler = createReviewerRosterDraftHandler({
-    reference: refs.draftHandler,
-    handlerCapability: REVIEWER_ROSTER_DRAFT_HANDLER_CAPABILITY,
-    contributionSchema: schemas.draftContribution,
-    canonicalResultSchema: schemas.draftCanonical
+  const directHandler = createReviewerRosterDirectHandler({
+    reference: refs.directHandler,
+    handlerCapability: REVIEWER_ROSTER_DIRECT_HANDLER_CAPABILITY,
+    contributionSchema: schemas.directContribution,
+    canonicalResultSchema: schemas.directCanonical
   });
   const accessOutcomes = CURRENT_AUTHORITY_DENIAL_REASONS.map((reason) => Object.freeze({
     class: 'access_denied' as const,
@@ -377,26 +331,25 @@ export function createReviewerRosterOperationModule(
     retryable: false,
     detailSchema: schemas.nullDetail
   }));
-
   return Object.freeze({
     id: 'reviewer-roster.operations',
     source: Object.freeze({
-      effectExecutionFamilies: Object.freeze([draftFamily]),
-      effectPhases: Object.freeze([draftPhase]),
-      terminalizationResolvers: Object.freeze([draftTerminalization]),
-      riskResolvers: Object.freeze([draftRisk]),
-      autonomyEvidenceResolvers: Object.freeze([draftAutonomyEvidence]),
-      renewedApprovalResolvers: Object.freeze([draftApproval]),
-      autonomyPreflights: Object.freeze([draftPreflight]),
-      autonomyPolicies: Object.freeze([readAutonomy, draftAutonomy]),
+      effectExecutionFamilies: Object.freeze([directFamily]),
+      effectPhases: Object.freeze([directPhase]),
+      terminalizationResolvers: Object.freeze([directTerminalization]),
+      riskResolvers: Object.freeze([directRisk]),
+      autonomyEvidenceResolvers: Object.freeze([directAutonomyEvidence]),
+      renewedApprovalResolvers: Object.freeze([directApproval]),
+      autonomyPreflights: Object.freeze([directPreflight]),
+      autonomyPolicies: Object.freeze([readAutonomy, directAutonomy]),
       schemas: Object.freeze([
         { reference: schemas.readInput, schema: reviewerRosterSnapshotReadInputSchema },
         { reference: schemas.readCanonical, schema: reviewerRosterSnapshotCanonicalResultSchema },
         { reference: schemas.readProjected, schema: reviewerRosterSnapshotReadResultSchema },
-        { reference: schemas.draftInput, schema: reviewerRosterChangeDraftInputSchema },
-        { reference: schemas.draftContribution, schema: reviewerRosterDraftContributionSchema },
-        { reference: schemas.draftCanonical, schema: reviewerRosterChangeDraftCanonicalResultSchema },
-        { reference: schemas.draftProjected, schema: reviewerRosterChangeDraftOperationResultSchema },
+        { reference: schemas.directInput, schema: reviewerRosterChangeDraftInputSchema },
+        { reference: schemas.directContribution, schema: reviewerRosterDirectContributionSchema },
+        { reference: schemas.directCanonical, schema: reviewerRosterDirectCanonicalResultSchema },
+        { reference: schemas.directProjected, schema: reviewerRosterDirectOperationResultSchema },
         { reference: schemas.changedDetail, schema: reviewerRosterChangedDetailSchema },
         { reference: schemas.nullDetail, schema: nullDetailSchema }
       ]),
@@ -425,10 +378,10 @@ export function createReviewerRosterOperationModule(
         projectedResultSchema: schemas.readProjected,
         project: (candidate: unknown) => reviewerRosterSnapshotCanonicalResultSchema.parse(candidate)
       }, {
-        reference: refs.draftProjection,
-        canonicalResultSchema: schemas.draftCanonical,
-        projectedResultSchema: schemas.draftProjected,
-        project: (candidate: unknown) => reviewerRosterChangeDraftCanonicalResultSchema.parse(candidate)
+        reference: refs.directProjection,
+        canonicalResultSchema: schemas.directCanonical,
+        projectedResultSchema: schemas.directProjected,
+        project: (candidate: unknown) => reviewerRosterDirectCanonicalResultSchema.parse(candidate)
       }]),
       readOperationalTraceTargets: Object.freeze([{
         reference: refs.readTrace,
@@ -474,50 +427,59 @@ export function createReviewerRosterOperationModule(
           browserResumption: { kind: 'none' as const }, projection: refs.readProjection
         }]
       }]),
-      effectContextBuilders: Object.freeze([draftContext]),
-      effectHandlers: Object.freeze([draftHandler]),
+      effectContextBuilders: Object.freeze([directContext]),
+      effectHandlers: Object.freeze([directHandler]),
       effectOperations: Object.freeze([{
-        ...REVIEWER_ROSTER_CHANGE_DRAFT_OPERATION,
+        ...REVIEWER_ROSTER_CHANGE_OPERATION,
         lifecycle: { status: 'active' as const },
-        summary: 'Draft a reviewer roster registration, scope, revoke, or restore change.',
-        effect: 'draft' as const,
+        summary: 'Change the current event reviewer roster.',
+        effect: 'commit' as const,
         maxRisk: 'low' as const,
-        autonomyPolicy: refs.draftAutonomy,
-        consequenceTags: ['changeset-drafted'],
-        inputSchema: schemas.draftInput,
-        contributionSchema: schemas.draftContribution,
-        canonicalResultSchema: schemas.draftCanonical,
+        autonomyPolicy: refs.directAutonomy,
+        consequenceTags: ['reviewer-roster-changed'],
+        agentAction: { eligible: true as const, displayLabel: 'Change the reviewer roster', consequences: ['Reviewer roster membership or scope may change.'], externalEffect: 'none' as const },
+        inputSchema: schemas.directInput,
+        contributionSchema: schemas.directContribution,
+        canonicalResultSchema: schemas.directCanonical,
         outcomes: [
           { class: 'idempotency_conflict' as const, kind: 'operation.request_changed', retryable: false, detailSchema: schemas.nullDetail },
           ...accessOutcomes,
           { class: 'conflict' as const, kind: 'reviewer_roster.event_required', retryable: false, detailSchema: schemas.nullDetail },
           { class: 'stale_revision' as const, kind: 'reviewer_roster.changed', retryable: false, detailSchema: schemas.changedDetail },
-          { class: 'conflict' as const, kind: 'changeset.id_collision', retryable: false, detailSchema: schemas.nullDetail },
           { class: 'conflict' as const, kind: 'operation.in_progress', retryable: true, detailSchema: schemas.nullDetail },
           ...autonomyInterventionOutcomeDeclarations(schemas.nullDetail)
         ],
         accessLanes: [lane],
-        contextBuilder: refs.draftContext,
-        handlerCapability: REVIEWER_ROSTER_DRAFT_HANDLER_CAPABILITY,
-        handler: refs.draftHandler,
+        contextBuilder: refs.directContext,
+        handlerCapability: REVIEWER_ROSTER_DIRECT_HANDLER_CAPABILITY,
+        handler: refs.directHandler,
         audit: { mode: 'required' as const, target: refs.audit },
         idempotency: {
           keySource: refs.keySource,
           credentialVerifierProfile: input.idempotencyCredentialProfile,
-          requestHashProfile: REVIEWER_ROSTER_DRAFT_REQUEST_HASH_PROFILE
+          requestHashProfile: REVIEWER_ROSTER_DIRECT_REQUEST_HASH_PROFILE
         },
-        concurrency: refs.draftConcurrency,
+        concurrency: refs.directConcurrency,
         execution: {
           kind: 'single_unit_of_work' as const,
-          family: refs.draftFamily,
-          phase: refs.draftPhase,
-          terminalization: refs.draftTerminalization,
-          autonomyPreflight: refs.draftPreflight
+          profile: 'direct_audited' as const,
+          family: refs.directFamily,
+          phase: refs.directPhase,
+          terminalization: refs.directTerminalization,
+          autonomyPreflight: refs.directPreflight,
+          history: {
+            summariesByAction: Object.freeze({
+              register: 'Added a reviewer',
+              set_scope: "Changed a reviewer's scope",
+              revoke: 'Revoked a reviewer',
+              restore: 'Restored a reviewer'
+            })
+          }
         },
         bindings: [{
           surface: 'operator_http' as const, method: 'POST' as const,
-          path: '/api/events/current/reviewer-roster/drafts', input: 'body' as const,
-          browserResumption: { kind: 'none' as const }, projection: refs.draftProjection
+          path: '/api/events/current/reviewer-roster/changes', input: 'body' as const,
+          browserResumption: { kind: 'none' as const }, projection: refs.directProjection
         }]
       }])
     })
@@ -604,9 +566,3 @@ function unavailableOutcome(): StructuredOutcome {
     subjects: [], detail: null, detailSchemaVersion: 1
   });
 }
-
-export const REVIEWER_ROSTER_OPERATION_DEFINITION_DIGEST = digest({
-  read: REVIEWER_ROSTER_SNAPSHOT_READ_OPERATION,
-  draft: REVIEWER_ROSTER_CHANGE_DRAFT_OPERATION,
-  permissionIds: REVIEWER_ROSTER_PERMISSION_IDS
-});

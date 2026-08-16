@@ -168,19 +168,29 @@ function insertReceipt(
     result
   });
   sqlite.query(`
-    INSERT INTO foundation_trial_operation_receipts (
-      id, scope_partition_key, authority_principal_key, operation_name,
-      operation_version, surface, idempotency_verifier_profile_key,
+    INSERT INTO operation_log (
+      id, operation_name, operation_version, registry_digest_sha256, surface,
+      actor_json, authority_principal_key, workspace_id, event_id, subjects_json,
+      summary, occurred_at_ms, correlation_id, scope_partition_key,
+      idempotency_verifier_profile_key,
       idempotency_verifier_profile_version, idempotency_key_verifier,
       request_hash, result_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     receipt.ref.id,
-    receipt.identity.scopePartitionKey,
-    receipt.identity.authorityPrincipalKey,
     receipt.identity.operationName,
     receipt.identity.operationVersion,
+    HASH_A,
     receipt.identity.surface,
+    '{}',
+    receipt.identity.authorityPrincipalKey,
+    '00000000-0000-4000-8000-000000000101',
+    '00000000-0000-4000-8000-000000000102',
+    '[{"kind":"job","id":"00000000-0000-4000-8000-000000000201"}]',
+    'Completed a registered job',
+    0,
+    result.correlationId,
+    receipt.identity.scopePartitionKey,
     receipt.identity.idempotencyVerifierProfile.key,
     receipt.identity.idempotencyVerifierProfile.version,
     receipt.identity.idempotencyKeyVerifier,
@@ -417,7 +427,7 @@ describe('disposable SQLite reliability job store', () => {
     expect(store.readLatestDisposition(input.id)?.disposition).toBe('attention');
   });
 
-  test('requires the real receipt parent and atomically rolls receipt/job completion together', async () => {
+  test('requires the real operation log and atomically rolls receipt/job completion together', async () => {
     const { sqlite, store } = setup();
     const input = await createInput();
     store.create(input);
@@ -473,7 +483,7 @@ describe('disposable SQLite reliability job store', () => {
         }
       });
     })()).toThrow(/crash-after-job-completion/);
-    expect(tableCount(sqlite, 'foundation_trial_operation_receipts')).toBe(0);
+    expect(tableCount(sqlite, 'operation_log')).toBe(0);
     expect(store.require(input.id).job.state).toBe('leased');
     expect(store.listAttemptEvidence(input.id)[0]?.completion).toBeNull();
 

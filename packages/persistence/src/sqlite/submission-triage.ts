@@ -28,7 +28,7 @@ import {
 } from '@jooevents/submission-triage';
 import { SQLiteIntakeRepository } from './intake';
 
-/** Additive trial schema. It is intentionally not a retained migration. */
+/** This schema contributes to the accepted epoch-2 baseline and may also serve isolated fixtures. */
 export const SQLITE_SUBMISSION_TRIAGE_SQL = `
 CREATE TABLE submission_triage_event_heads (
   workspace_id TEXT NOT NULL CHECK(length(workspace_id) = 36 AND workspace_id = lower(workspace_id)),

@@ -1,5 +1,4 @@
 import type {
-	ReviewerRosterChangeDraftData,
 	ReviewerRosterMemberProjectionDto,
 	ReviewerRosterSnapshotDto
 } from '@jooevents/contracts/reviewer-roster';
@@ -27,4 +26,3 @@ export type ReviewerRosterView<Value> =
 
 export type ReviewerRosterSnapshotView = ReviewerRosterView<ReviewerRosterSnapshotDto>;
 export type ReviewerRosterMemberView = ReviewerRosterView<ReviewerRosterMemberProjectionDto>;
-export type ReviewerRosterChangeDraftView = ReviewerRosterView<ReviewerRosterChangeDraftData>;

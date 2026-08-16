@@ -4,7 +4,6 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "paths": {
-      "@jooevents/changesets": ["../changesets/src/index.ts"],
       "@jooevents/contracts/reviews": ["../contracts/src/reviews.ts"],
       "@jooevents/kernel": ["../kernel/src/index.ts"]
     },

@@ -1,3 +1,4 @@
+import { canonicalJsonSha256 } from '@jooevents/kernel';
 import type { Database } from 'bun:sqlite';
 import {
   fieldRegistryScopeSchema,
@@ -30,10 +31,10 @@ import {
   type FieldRegistryState,
   type FieldRegistryTransactionPort
 } from '@jooevents/field-registry';
-import { canonicalJsonSha256 } from '@jooevents/changesets';
+
 import { canonicalJsonText } from '@jooevents/kernel';
 
-/** Additive schema installed only in an explicitly disposable SQLite runtime. */
+/** This schema contributes to the accepted epoch-2 baseline and may also serve isolated fixtures. */
 export const FIELD_REGISTRY_SQL = `
 CREATE TABLE field_registry_aggregates (
   workspace_id TEXT NOT NULL CHECK(length(workspace_id) = 36),

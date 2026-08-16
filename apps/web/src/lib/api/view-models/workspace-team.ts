@@ -86,32 +86,8 @@ export type WorkspaceTeamSafeChangeView =
 			readonly sessionRevocation: 'not_applicable' | 'awaiting_activation';
 	  };
 
-export interface WorkspaceTeamDraftView {
-	readonly schemaVersion: 1;
-	readonly action: 'invite' | 'change_role' | 'remove';
-	readonly changesetId: string;
-	readonly headVersion: number;
-	readonly status: 'draft';
-	readonly revision: {
-		readonly id: string;
-		readonly number: 1;
-		readonly digestSha256: string;
-	};
-	readonly riskTier: 'normal' | 'consequential';
-	readonly approvalPolicy: {
-		readonly key: string;
-		readonly version: number;
-		readonly definitionDigestSha256: string;
-		readonly requirement: 'none' | 'distinct_current_human';
-	};
-	readonly change: WorkspaceTeamSafeChangeView;
-}
-
 export interface WorkspaceTeamCommittedMutationView {
-	readonly action: WorkspaceTeamDraftView['action'];
-	readonly changesetId: string;
-	readonly revisionId: string;
-	readonly revisionDigest: string;
-	readonly committedHeadVersion: number;
-	readonly change: WorkspaceTeamSafeChangeView;
+  readonly action: 'invite' | 'change_role' | 'remove';
+  readonly teamVersion: number;
+  readonly change: WorkspaceTeamSafeChangeView;
 }

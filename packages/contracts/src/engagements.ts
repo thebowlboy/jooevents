@@ -3,6 +3,7 @@ import {
   createEffectfulOperationResultSchema,
   createOperationSchemaManifestRefs,
   createReadOperationResultSchema,
+  structuredOutcomeSchema,
   versionedDefinitionRefSchema
 } from './operations';
 import { sessionRosterSourceRefSchema } from './sessions';
@@ -365,46 +366,8 @@ export const engagementMutationPlanSchema = z.strictObject({
   }
 });
 
-/** Internal compensating image restore; it is never an ordinary authoring input. */
-export const engagementRestorePlanSchema = z.strictObject({
-  action: z.literal('restore'),
-  scope: engagementScopeSchema,
-  actorUserId: engagementIdSchema,
-  occurredAt: canonicalInstantSchema,
-  expectedCurrent: engagementHeadSchema,
-  restore: engagementHeadSchema
-}).superRefine((plan, context) => {
-  if (plan.restore.id !== plan.expectedCurrent.id) {
-    context.addIssue({ code: 'custom', message: 'restore images must address one engagement' });
-  }
-  if (plan.restore.version !== plan.expectedCurrent.version + 1) {
-    context.addIssue({
-      code: 'custom', path: ['restore', 'version'],
-      message: 'a restore advances the current engagement version by one'
-    });
-  }
-  if (plan.restore.submissionId !== plan.expectedCurrent.submissionId
-      || !sameSeedProvenance(plan.restore.seededByDecision, plan.expectedCurrent.seededByDecision)) {
-    context.addIssue({
-      code: 'custom', path: ['restore', 'seededByDecision'],
-      message: 'a restore never rewrites an engagement\'s seed provenance'
-    });
-  }
-});
-
-export const engagementSafeDiffSchema = z.strictObject({
-  action: z.enum([...engagementResponseActionSchema.options, 'restore']),
-  before: engagementHeadSchema.nullable(),
-  after: engagementHeadSchema.nullable(),
-  collaborations: z.array(z.strictObject({
-    contributor: versionedDefinitionRefSchema,
-    safeDiff: z.json(),
-    representedConsequences: z.array(z.string().min(1).max(160)).max(64)
-  })).max(32).optional()
-});
-
 export const engagementMutationResultSchema = z.strictObject({
-  action: z.enum([...engagementResponseActionSchema.options, 'restore']),
+  action: engagementResponseActionSchema,
   engagement: engagementHeadSchema,
   collaborations: z.array(z.strictObject({
     contributor: versionedDefinitionRefSchema,
@@ -539,38 +502,19 @@ export const engagementSeedResultSchema = z.strictObject({
 });
 
 /** Exact selector and inert plan an operator needs to review, propose, and commit one response draft. */
-export const engagementChangeDraftDataSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  action: engagementResponseActionSchema,
-  changesetId: engagementIdSchema,
-  headVersion: engagementVersionSchema,
-  status: z.literal('draft'),
-  revision: z.strictObject({
-    id: engagementIdSchema,
-    number: engagementVersionSchema,
-    digestSha256: z.string().regex(/^[a-f0-9]{64}$/)
-  }),
-  riskTier: z.literal('consequential'),
-  approvalPolicy: z.strictObject({
-    reference: versionedDefinitionRefSchema,
-    definitionDigestSha256: z.string().regex(/^[a-f0-9]{64}$/),
-    requirement: z.literal('none')
-  }),
-  safeDiff: engagementSafeDiffSchema
-}).superRefine((data, context) => {
-  if (data.safeDiff.action !== data.action) {
-    context.addIssue({
-      code: 'custom', path: ['safeDiff', 'action'],
-      message: 'Draft action and safe diff action must match.'
-    });
-  }
+export const engagementChangeDataSchema = engagementMutationResultSchema.extend({
+  action: engagementResponseActionSchema
 });
 
 export const engagementSnapshotReadInputSchema = z.strictObject({});
 export const engagementSnapshotReadResultSchema =
   createReadOperationResultSchema(engagementSnapshotSchema);
-export const engagementChangeDraftOperationResultSchema =
-  createEffectfulOperationResultSchema(engagementChangeDraftDataSchema);
+export const engagementChangeCanonicalResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success'), data: engagementChangeDataSchema }),
+  z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
+]);
+export const engagementChangeOperationResultSchema =
+  createEffectfulOperationResultSchema(engagementChangeDataSchema);
 
 export const ENGAGEMENT_OPERATION_SCHEMA_REFS = Object.freeze({
   snapshotRead: createOperationSchemaManifestRefs({
@@ -579,11 +523,11 @@ export const ENGAGEMENT_OPERATION_SCHEMA_REFS = Object.freeze({
     resultKey: 'schema.engagement.snapshot-read.operator-result',
     resultSchema: engagementSnapshotReadResultSchema
   }),
-  changeDraft: createOperationSchemaManifestRefs({
-    inputKey: 'schema.engagement.change-draft.input',
+  change: createOperationSchemaManifestRefs({
+    inputKey: 'schema.engagement.change.input',
     inputSchema: engagementAuthorInputSchema,
-    resultKey: 'schema.engagement.change-draft.operator-result',
-    resultSchema: engagementChangeDraftOperationResultSchema
+    resultKey: 'schema.engagement.change.operator-result',
+    resultSchema: engagementChangeOperationResultSchema
   })
 });
 
@@ -601,11 +545,9 @@ export type EngagementResponseAction = z.infer<typeof engagementResponseActionSc
 export type EngagementMutationPlanningInput =
   z.infer<typeof engagementMutationPlanningInputSchema>;
 export type EngagementMutationPlanDto = z.infer<typeof engagementMutationPlanSchema>;
-export type EngagementRestorePlanDto = z.infer<typeof engagementRestorePlanSchema>;
-export type EngagementSafeDiffDto = z.infer<typeof engagementSafeDiffSchema>;
 export type EngagementMutationResult = z.infer<typeof engagementMutationResultSchema>;
 export type EngagementSeedInputDto = z.infer<typeof engagementSeedInputSchema>;
 export type EngagementSeedPlanDto = z.infer<typeof engagementSeedPlanSchema>;
 export type EngagementSeedReversalPlanDto = z.infer<typeof engagementSeedReversalPlanSchema>;
 export type EngagementSeedResultDto = z.infer<typeof engagementSeedResultSchema>;
-export type EngagementChangeDraftData = z.infer<typeof engagementChangeDraftDataSchema>;
+export type EngagementChangeData = z.infer<typeof engagementChangeDataSchema>;

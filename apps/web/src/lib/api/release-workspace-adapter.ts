@@ -1,5 +1,9 @@
 import type { ReleaseOverviewDto, SurfaceKind } from '@jooevents/contracts';
-import type { ReleaseLiveClient, ReleaseLiveResult } from './operations/release-live';
+import type {
+	ReleaseLiveClient,
+	ReleaseLiveResult,
+	ReleaseMutationKeys
+} from './operations/release-live';
 import type { MutationOutcome } from './types';
 
 type Failure = Readonly<{ code: string; reason: string }>;
@@ -35,8 +39,11 @@ function failure(result: Exclude<ReleaseLiveResult<unknown>, { readonly kind: 's
 	return { code: result.outcome.kind, reason: 'This publication change could not be applied.' };
 }
 
-function idempotencyKey(): string {
-	return `je.release.surface-allowlist.${globalThis.crypto.randomUUID()}`;
+function idempotencyKeys(): ReleaseMutationKeys {
+	return Object.freeze({
+		draft: `je.release.surface-allowlist.draft.${globalThis.crypto.randomUUID()}`,
+		publish: `je.release.surface-allowlist.publish.${globalThis.crypto.randomUUID()}`
+	});
 }
 
 /** One browser projection of the canonical release owner, shared by operator areas. */
@@ -63,7 +70,7 @@ export function createReleaseWorkspacePort(client: ReleaseLiveClient): ReleaseWo
 				kind,
 				allowedFrameOrigins: [...origins],
 				expectedSurfaceHeadVersion: current.version
-			}, idempotencyKey());
+			}, idempotencyKeys());
 			return result.kind === 'success'
 				? { ok: true }
 				: { ok: false, reason: failure(result).reason };

@@ -4,7 +4,7 @@ import {
   submissionArrivalFactSchema,
   submissionTriageHeadSchema,
   submissionTriageProjectionSchema,
-  submissionTriageTransitionDraftInputSchema
+  submissionTriageTransitionInputSchema
 } from './submission-triage';
 
 const workspaceId = '018f0000-0000-7000-8000-000000000001';
@@ -155,8 +155,8 @@ describe('submission triage contracts', () => {
       expectedHeads: [{ submissionId, version: 1 }],
       expectedQueryGuard: { version: 1, digestSha256: digest }
     } as const;
-    expect(submissionTriageTransitionDraftInputSchema.parse(input).submissionIds).toEqual([submissionId]);
-    expect(submissionTriageTransitionDraftInputSchema.safeParse({
+    expect(submissionTriageTransitionInputSchema.parse(input).submissionIds).toEqual([submissionId]);
+    expect(submissionTriageTransitionInputSchema.safeParse({
       ...input,
       submissionIds: [submissionId, submissionId],
       expectedHeads: [
@@ -168,7 +168,7 @@ describe('submission triage contracts', () => {
     const tooMany = Array.from({ length: SUBMISSION_TRIAGE_BULK_MAX + 1 }, (_, index) =>
       `018f0000-0000-7000-8000-${(index + 100).toString().padStart(12, '0')}`
     );
-    expect(submissionTriageTransitionDraftInputSchema.safeParse({
+    expect(submissionTriageTransitionInputSchema.safeParse({
       ...input,
       submissionIds: tooMany,
       expectedHeads: tooMany.map((id) => ({ submissionId: id, version: 1 }))

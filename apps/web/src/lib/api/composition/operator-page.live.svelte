@@ -15,6 +15,7 @@
 	import SpeakersPage from '$lib/features/speakers/SpeakersPage.svelte';
 	import TemplatesPage from '$lib/features/templates/TemplatesPage.svelte';
 	import TasksPage from '$lib/features/tasks/TasksPage.svelte';
+	import AgentActionsPage from '$lib/features/agent-actions/AgentActionsPage.svelte';
 	import { useLiveWorkspacePorts } from './live-workspace';
 	import { ReviewResolutionError } from './review-resolution';
 	import { isSettingsPage, settingsSectionOf, type OperatorPageId } from './operator-pages';
@@ -52,6 +53,7 @@
 		forms: 'Forms',
 		templates: 'Templates',
 		embeds: 'Embeds',
+		approvals: 'Approvals',
 		settings: 'Settings',
 		settings_event: 'Settings',
 		settings_program: 'Settings',
@@ -122,6 +124,8 @@
 	<EmbedsPage port={ports.embeds} />
 {:else if area === 'communications'}
 	<CommunicationsReadinessPage port={ports.communicationsReadiness} />
+{:else if area === 'approvals'}
+	<AgentActionsPage port={ports.agentActions} />
 {:else if isSettingsPage(area)}
 	<SettingsPage port={ports.settings} section={settingsSectionOf(area)} />
 {:else}

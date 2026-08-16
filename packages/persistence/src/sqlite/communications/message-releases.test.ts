@@ -2,7 +2,6 @@ import { Database } from 'bun:sqlite';
 import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { issueSynchronousClassifiedPayloadEncryptionProfile } from '@jooevents/application/synchronous-classified-payload-store';
-import type { ChangesetCommitTerminalReceipt } from '@jooevents/changeset-operations';
 import {
   FAKE_PROVIDER_SCENARIO_KEYS,
   OutboundEmailDeliveryWorkerError,
@@ -21,7 +20,6 @@ import {
   installSQLiteClassifiedPayloadStoreSchema,
   SQLiteClassifiedPayloadStore
 } from '../sqlite-classified-payload-store';
-import { installSQLiteChangesetLifecycleSchema } from '../changeset-lifecycle';
 import { installFoundationTrialUnitOfWorkSchema } from '../foundation-trial-uow';
 import {
   installSQLiteOutboundEmailDeliverySchema,
@@ -36,9 +34,8 @@ import {
 } from './message-releases';
 import {
   CommunicationReleasePlanningError,
-  commitSendMessagesChangeset,
-  createSQLiteCommunicationReleaseChangesetOwnerRegistration,
-  installCommunicationReleaseChangesetSchema
+  commitSendMessagesRelease,
+  installCommunicationReleaseSchema
 } from './message-release-effect-domain';
 
 const workspaceId = parseWorkspaceId('550e8400-e29b-41d4-a716-446655440000');
@@ -149,11 +146,10 @@ function fixture() {
   databases.push(sqlite);
   installSQLiteClassifiedPayloadStoreSchema(sqlite);
   installFoundationTrialUnitOfWorkSchema(sqlite);
-  installSQLiteChangesetLifecycleSchema(sqlite);
   installSQLiteOrganizerAudiencePreviewSchema(sqlite);
   installSQLiteCommunicationMessageReleaseSchema(sqlite);
   installSQLiteOutboundEmailDeliverySchema(sqlite);
-  installCommunicationReleaseChangesetSchema(sqlite);
+  installCommunicationReleaseSchema(sqlite);
   sqlite.exec('PRAGMA foreign_keys = OFF');
   sqlite.query(`
     INSERT INTO communication_message_preview_snapshots (
@@ -290,70 +286,9 @@ const receiptExpectation = Object.freeze({
 });
 const authorityPrincipalKey = '5'.repeat(64);
 
-function terminalReceiptFactory(sqlite: Database, receiptId: string) {
-  return (binding: {
-    readonly changesetId: string;
-    readonly expectedHeadVersion: number;
-    readonly committedHeadVersion: number;
-    readonly revisionId: string;
-    readonly revisionDigest: string;
-  }): ChangesetCommitTerminalReceipt => {
-    const receipt = {
-      id: receiptId,
-      operationName: 'changeset.commit',
-      operationVersion: 1
-    } as const;
-    const value: ChangesetCommitTerminalReceipt = {
-      ref: receipt,
-      identity: {
-        scopePartitionKey: receiptExpectation.scopePartitionKey,
-        authorityPrincipalKey,
-        operationName: 'changeset.commit',
-        operationVersion: 1,
-        surface: receiptExpectation.surface,
-        idempotencyVerifierProfile: { key: 'changeset.commit.idempotency', version: 1 },
-        idempotencyKeyVerifier: digest({ receiptId })
-      },
-      requestHash: receiptExpectation.requestHashSha256,
-      result: {
-        kind: 'success',
-        data: {
-          schemaVersion: 1,
-          action: 'commit',
-          changesetId: binding.changesetId,
-          expectedHeadVersion: binding.expectedHeadVersion,
-          committedHeadVersion: binding.committedHeadVersion,
-          revisionId: binding.revisionId,
-          revisionDigest: binding.revisionDigest
-        },
-        receipt,
-        correlationId: uuid(0x700)
-      }
-    };
-    // Mirror the foundation unit of work: the durable operation receipt row
-    // exists in the same transaction before the lifecycle store verifies it.
-    sqlite.query(`
-      INSERT INTO foundation_trial_operation_receipts (
-        id, scope_partition_key, authority_principal_key, operation_name, operation_version,
-        surface, idempotency_verifier_profile_key, idempotency_verifier_profile_version,
-        idempotency_key_verifier, request_hash, result_json
-      ) VALUES (?, ?, ?, 'changeset.commit', 1, ?, 'changeset.commit.idempotency', 1, ?, ?, ?)
-    `).run(
-      receiptId, receiptExpectation.scopePartitionKey, authorityPrincipalKey,
-      receiptExpectation.surface, digest({ receiptId }), receiptExpectation.requestHashSha256,
-      canonicalJsonText(value.result)
-    );
-    return value;
-  };
-}
-
-function commitIds(prefix: number) {
+function releaseIds(prefix: number) {
   let sequence = 0;
   return {
-    newChangesetId: () => uuid(prefix + (sequence += 1)),
-    newRevisionId: () => uuid(prefix + (sequence += 1)),
-    newApprovalId: () => uuid(prefix + (sequence += 1)),
-    newCorrectionAttemptId: () => uuid(prefix + (sequence += 1)),
     newEvidenceId: () => uuid(prefix + (sequence += 1))
   };
 }
@@ -374,11 +309,11 @@ function commit(input: ReturnType<typeof fixture>, options: {
   readonly evidence?: PreviewEvidenceOverrides;
   readonly currency?: 'current' | 'stale';
 }) {
-  return transaction(input.sqlite, () => commitSendMessagesChangeset({
+  return transaction(input.sqlite, () => commitSendMessagesRelease({
     sqlite: input.sqlite,
     releases: input.releases,
     previewCurrency: currencyStub(options.currency ?? 'current'),
-    ids: commitIds(options.idPrefix ?? 0x800),
+    ids: releaseIds(options.idPrefix ?? 0x800),
     context: {
       workspaceId,
       eventId,
@@ -387,9 +322,7 @@ function commit(input: ReturnType<typeof fixture>, options: {
       evaluatedAt: now
     },
     authorInput: authorInput(options.specs, options.previewGeneration ?? 1, options.evidence ?? {}),
-    materializedReleases: options.materializedReleases,
-    receiptExpectation,
-    terminalReceipt: terminalReceiptFactory(input.sqlite, options.receiptId ?? uuid(0x900))
+    materializedReleases: options.materializedReleases
   }));
 }
 
@@ -405,7 +338,7 @@ describe('send_messages atomic commit and the immutable release store', () => {
     });
     expect(count(input.sqlite, 'communication_message_releases')).toBe(3);
     expect(count(input.sqlite, 'communication_release_effect_specs')).toBe(3);
-    expect(count(input.sqlite, 'communication_release_receipt_links')).toBe(1);
+    expect(count(input.sqlite, 'communication_release_commits')).toBe(1);
     expect(count(input.sqlite, 'communication_outbound_delivery_heads')).toBe(3);
     expect(count(input.sqlite, 'communication_outbound_delivery_facts')).toBe(3);
     expect(count(input.sqlite, 'communication_outbound_delivery_outbox')).toBe(3);
@@ -421,17 +354,8 @@ describe('send_messages atomic commit and the immutable release store', () => {
       expect(head.dispatch_generation).toBe(1);
       expect(head.receipt_id).not.toBeNull();
     }
-    // The committed changeset record is readable through the lifecycle owner registration.
-    const registration = createSQLiteCommunicationReleaseChangesetOwnerRegistration({
-      sqlite: input.sqlite,
-      workspaceId
-    });
     const committed = outcome as Extract<typeof outcome, { kind: 'committed' }>;
-    expect(committed.record.head.status).toBe('committed');
-    expect(registration.ownerId).toBe('communication_release');
-    expect(await registration.ownerResolution.resolveOwner(committed.record)).toMatchObject({
-      id: 'communication_release'
-    });
+    expect(committed.releaseCommitId).toBeString();
   });
 
   test('a mid-transaction failure rolls the whole send commit back', () => {
@@ -439,11 +363,11 @@ describe('send_messages atomic commit and the immutable release store', () => {
     const releases = [materialized(0), materialized(1)];
     const specs = releases.map((release, index) => specFor(release, index));
     expect(() => transaction(input.sqlite, () => {
-      const outcome = commitSendMessagesChangeset({
+      const outcome = commitSendMessagesRelease({
         sqlite: input.sqlite,
         releases: input.releases,
         previewCurrency: currencyStub('current'),
-        ids: commitIds(0x810),
+        ids: releaseIds(0x810),
         context: {
           workspaceId,
           eventId,
@@ -452,9 +376,7 @@ describe('send_messages atomic commit and the immutable release store', () => {
           evaluatedAt: now
         },
         authorInput: authorInput(specs),
-        materializedReleases: releases,
-        receiptExpectation,
-        terminalReceipt: terminalReceiptFactory(input.sqlite, uuid(0x901))
+        materializedReleases: releases
       });
       expect(outcome.kind).toBe('committed');
       throw new Error('late failure');
@@ -462,7 +384,6 @@ describe('send_messages atomic commit and the immutable release store', () => {
     expect(count(input.sqlite, 'communication_message_releases')).toBe(0);
     expect(count(input.sqlite, 'communication_release_effect_specs')).toBe(0);
     expect(count(input.sqlite, 'communication_outbound_delivery_heads')).toBe(0);
-    expect(count(input.sqlite, 'changeset_heads')).toBe(0);
     expect(count(input.sqlite, 'classified_payload_records')).toBe(0);
   });
 
@@ -506,7 +427,6 @@ describe('send_messages atomic commit and the immutable release store', () => {
     });
     expect(count(input.sqlite, 'communication_message_releases')).toBe(0);
     expect(count(input.sqlite, 'communication_release_effect_specs')).toBe(0);
-    expect(count(input.sqlite, 'communication_release_receipt_links')).toBe(0);
     expect(count(input.sqlite, 'communication_outbound_delivery_heads')).toBe(0);
   });
 
@@ -532,7 +452,6 @@ describe('send_messages atomic commit and the immutable release store', () => {
     })).toThrow(new CommunicationReleasePlanningError('preview_changed'));
     expect(count(input.sqlite, 'communication_message_releases')).toBe(0);
     expect(count(input.sqlite, 'communication_outbound_delivery_heads')).toBe(0);
-    expect(count(input.sqlite, 'changeset_heads')).toBe(0);
   });
 
   test('a reused delivery identity with different work refuses and rolls back', () => {

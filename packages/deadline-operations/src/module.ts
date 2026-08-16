@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import {
   autonomyInterventionOutcomeDeclarations,
   autonomyInterventionOutcomes,
@@ -31,16 +30,16 @@ import {
   DEADLINE_OPERATION_SCHEMA_REFS,
   activeDeadlineHeadSchema,
   deadlineCatalogSnapshotSchema,
-  deadlineChangeDraftInputSchema,
-  deadlineDraftCanonicalResultSchema,
-  deadlineDraftDataSchema,
-  deadlineDraftOperationResultSchema,
+  deadlineChangeInputSchema,
+  deadlineChangeCanonicalResultSchema,
+  deadlineChangeDataSchema,
+  deadlineChangeOperationResultSchema,
   deadlineGetProjectionSchema,
   deadlineGetReadInputSchema,
   deadlineGetReadResultSchema,
   deadlineListReadInputSchema,
   deadlineListReadResultSchema,
-  deadlineSafeDiffSchema,
+  deadlineMutationPlanSchema,
   deadlineVersionSchema
 } from '@jooevents/contracts/deadlines';
 import type { DeadlineRepository } from '@jooevents/deadline';
@@ -54,7 +53,6 @@ import {
   type VersionedKeyProfileRef
 } from '@jooevents/identity-access';
 import {
-  encodeCanonicalJson,
   isApplicationId,
   parseContractVersion,
   parseEventId,
@@ -65,7 +63,7 @@ import {
   type WorkspaceId
 } from '@jooevents/kernel';
 import { z } from 'zod';
-import { createDeadlineDraftHandler } from './preparation';
+import { createDeadlineDirectHandler } from './preparation';
 
 export const DEADLINE_CATALOG_READ_OPERATION = Object.freeze({
   name: 'deadline.catalog.read', version: 1
@@ -73,8 +71,8 @@ export const DEADLINE_CATALOG_READ_OPERATION = Object.freeze({
 export const DEADLINE_CURRENT_READ_OPERATION = Object.freeze({
   name: 'deadline.current.read', version: 1
 });
-export const DEADLINE_CHANGE_DRAFT_OPERATION = Object.freeze({
-  name: 'deadline.change.draft', version: 1
+export const DEADLINE_CHANGE_OPERATION = Object.freeze({
+  name: 'deadline.change', version: 1
 });
 
 export const DEADLINE_READ_ACCESS_POLICY: VersionedAccessPolicyRef = Object.freeze({
@@ -86,25 +84,12 @@ export const DEADLINE_MANAGE_ACCESS_POLICY: VersionedAccessPolicyRef = Object.fr
 // V1 treats Deadline configuration as Event operating detail; no preset is silently widened.
 export const DEADLINE_READ_PERMISSION_ID: PermissionId = 'event.read';
 export const DEADLINE_MANAGE_PERMISSION_ID: PermissionId = 'event.manage';
-export const DEADLINE_DRAFT_REQUEST_HASH_PROFILE = ref('request-hash.deadline.change-draft');
-export const DEADLINE_DRAFT_HANDLER_CAPABILITY = ref(
-  'capability.deadline.change-changeset-draft'
+export const DEADLINE_CHANGE_REQUEST_HASH_PROFILE = ref('request-hash.deadline.change');
+export const DEADLINE_CHANGE_HANDLER_CAPABILITY = ref(
+  'capability.deadline.change-direct'
 );
-export const DEADLINE_DRAFT_APPROVAL_POLICY = (() => {
-  const reference = ref('policy.deadline.change.bounded');
-  const definition = Object.freeze({ reference, requirement: 'none' as const });
-  return Object.freeze({
-    ...definition,
-    definitionDigestSha256: digest(definition)
-  });
-})();
-
 const applicationIdSchema = z.string().refine(isApplicationId, {
   message: 'Application IDs must be canonical lowercase UUIDv4 or UUIDv7 values.'
-});
-const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
-const canonicalInstantSchema = z.string().refine((value) => {
-  try { return parseInstant(value) === value; } catch { return false; }
 });
 const nullDetailSchema = z.null();
 
@@ -129,62 +114,25 @@ export const deadlineChangeStaleDetailSchema = z.strictObject({
   deadlineId: applicationIdSchema
 });
 
-export const deadlineDraftDomainContributionSchema = z.strictObject({
-  kind: z.literal('deadline_changeset_draft'),
-  preparationHandle: applicationIdSchema,
-  workspaceId: applicationIdSchema,
-  eventId: applicationIdSchema,
-  changesetId: applicationIdSchema,
-  revisionId: applicationIdSchema,
-  revisionDigestSha256: sha256Schema,
-  recordDigestSha256: sha256Schema,
-  action: z.enum(['create', 'update', 'clear']),
-  occurredAt: canonicalInstantSchema
+const directSuccessContributionSchema = z.strictObject({
+  result: z.strictObject({ kind: z.literal('success'), data: deadlineChangeDataSchema }),
+  domain: z.strictObject({
+    kind: z.literal('deadline_direct_change'),
+    plan: deadlineMutationPlanSchema
+  }),
+  effectContributions: z.tuple([])
 });
 
-export const deadlineDraftEvidenceChildSchema = z.strictObject({
-  kind: z.literal('timeline'),
-  timelineId: applicationIdSchema,
-  sourceKind: z.literal('changeset_revision'),
-  workspaceId: applicationIdSchema,
-  eventId: applicationIdSchema,
-  changesetId: applicationIdSchema,
-  revisionId: applicationIdSchema,
-  occurredAt: canonicalInstantSchema
-});
-
-const draftSuccessContributionSchema = z.strictObject({
-  result: z.strictObject({ kind: z.literal('success'), data: deadlineDraftDataSchema }),
-  domain: deadlineDraftDomainContributionSchema,
-  receiptChildren: z.tuple([deadlineDraftEvidenceChildSchema])
-}).superRefine((contribution, context) => {
-  const data = contribution.result.data;
-  const domain = contribution.domain;
-  const timeline = contribution.receiptChildren[0];
-  if (data.action !== domain.action
-      || data.changesetId !== domain.changesetId
-      || data.revision.id !== domain.revisionId
-      || data.revision.digestSha256 !== domain.revisionDigestSha256
-      || timeline.workspaceId !== domain.workspaceId
-      || timeline.eventId !== domain.eventId
-      || timeline.changesetId !== domain.changesetId
-      || timeline.revisionId !== domain.revisionId
-      || timeline.occurredAt !== domain.occurredAt) {
-    context.addIssue({ code: 'custom', message: 'Deadline draft evidence is incoherent.' });
-  }
-});
-
-const draftOutcomeContributionSchema = z.strictObject({
+const directOutcomeContributionSchema = z.strictObject({
   result: z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema }),
   domain: z.null(),
-  receiptChildren: z.tuple([])
+  effectContributions: z.tuple([])
 }).superRefine((contribution, context) => {
   const outcome = contribution.result.outcome;
   const allowed = new Set([
     'conflict:deadline.event_required',
     'conflict:deadline.no_change',
     'stale_revision:deadline.canonical_changed',
-    'conflict:changeset.id_collision'
   ]);
   const detailSchema = outcome.kind === 'deadline.canonical_changed'
     ? deadlineChangeStaleDetailSchema
@@ -193,15 +141,15 @@ const draftOutcomeContributionSchema = z.strictObject({
       || outcome.retryable
       || outcome.detailSchemaVersion !== 1
       || !detailSchema.safeParse(outcome.detail).success) {
-    context.addIssue({ code: 'custom', message: 'Deadline draft refusal is invalid.' });
+    context.addIssue({ code: 'custom', message: 'Deadline direct refusal is invalid.' });
   }
 });
 
-export const deadlineDraftContributionSchema = z.union([
-  draftSuccessContributionSchema,
-  draftOutcomeContributionSchema
+export const deadlineDirectContributionSchema = z.union([
+  directSuccessContributionSchema,
+  directOutcomeContributionSchema
 ]);
-export type DeadlineDraftContribution = z.infer<typeof deadlineDraftContributionSchema>;
+export type DeadlineDirectContribution = z.infer<typeof deadlineDirectContributionSchema>;
 
 function ref(key: string): VersionedDefinitionRef {
   return Object.freeze({ key, version: 1 });
@@ -209,10 +157,6 @@ function ref(key: string): VersionedDefinitionRef {
 
 function schemaRef(key: string, schema: z.ZodType): SafeSchemaManifestRef {
   return createSafeSchemaManifestRef(key, schema);
-}
-
-function digest(value: unknown): string {
-  return createHash('sha256').update(encodeCanonicalJson(value)).digest('hex');
 }
 
 export const DEADLINE_OPERATION_RUNTIME_SCHEMA_REFS = Object.freeze({
@@ -226,14 +170,14 @@ export const DEADLINE_OPERATION_RUNTIME_SCHEMA_REFS = Object.freeze({
     'schema.deadline.current-read.canonical-result', deadlineCurrentCanonicalResultSchema
   ),
   currentProjected: DEADLINE_OPERATION_SCHEMA_REFS.currentRead.resultSchema,
-  draftInput: DEADLINE_OPERATION_SCHEMA_REFS.changeDraft.inputSchema,
-  draftContribution: schemaRef(
-    'schema.deadline.change-draft.contribution', deadlineDraftContributionSchema
+  changeInput: DEADLINE_OPERATION_SCHEMA_REFS.change.inputSchema,
+  changeContribution: schemaRef(
+    'schema.deadline.change.contribution', deadlineDirectContributionSchema
   ),
-  draftCanonical: schemaRef(
-    'schema.deadline.change-draft.canonical-result', deadlineDraftCanonicalResultSchema
+  changeCanonical: schemaRef(
+    'schema.deadline.change.canonical-result', deadlineChangeCanonicalResultSchema
   ),
-  draftProjected: DEADLINE_OPERATION_SCHEMA_REFS.changeDraft.resultSchema,
+  changeProjected: DEADLINE_OPERATION_SCHEMA_REFS.change.resultSchema,
   staleDetail: schemaRef(
     'schema.deadline.canonical-changed.detail', deadlineChangeStaleDetailSchema
   ),
@@ -254,19 +198,19 @@ const refs = Object.freeze({
   currentHandler: ref('handler.deadline.current-read'),
   currentProjection: ref('projection.deadline.current-read.operator'),
   currentTrace: ref('trace.deadline.current-read'),
-  draftContext: ref('context.deadline.change-draft'),
-  draftAutonomy: ref('autonomy.deadline.change-draft'),
-  draftConcurrency: ref('concurrency.deadline.change-draft'),
-  draftFamily: ref('deadline.change-draft.execution-family'),
-  draftPhase: ref('deadline.change-draft.phase.single-uow'),
-  draftTerminalization: ref('deadline.change-draft.terminalization'),
-  draftRisk: ref('deadline.change-draft.risk-resolver'),
-  draftAutonomyEvidence: ref('deadline.change-draft.autonomy-evidence'),
-  draftApproval: ref('deadline.change-draft.approval-resolver'),
-  draftPreflight: ref('deadline.change-draft.autonomy-preflight'),
-  draftHandler: ref('handler.deadline.change-draft'),
-  draftProjection: ref('projection.deadline.change-draft.operator'),
-  audit: ref('audit.deadline.change-draft'),
+  changeContext: ref('context.deadline.change'),
+  changeAutonomy: ref('autonomy.deadline.change'),
+  changeConcurrency: ref('concurrency.deadline.change'),
+  changeFamily: ref('deadline.change.execution-family'),
+  changePhase: ref('deadline.change.phase.direct-uow'),
+  changeTerminalization: ref('deadline.change.terminalization'),
+  changeRisk: ref('deadline.change.risk-resolver'),
+  changeAutonomyEvidence: ref('deadline.change.autonomy-evidence'),
+  changeApproval: ref('deadline.change.approval-resolver'),
+  changePreflight: ref('deadline.change.autonomy-preflight'),
+  changeHandler: ref('handler.deadline.change'),
+  changeProjection: ref('projection.deadline.change.operator'),
+  audit: ref('audit.deadline.change'),
   auditRecordProfile: ref('record-profile.deadline.operation-audit'),
   keySource: ref('idempotency.operator-header')
 });
@@ -394,7 +338,7 @@ export function createDeadlineOperationModule(
   });
   const catalogAutonomy = autonomy(DEADLINE_CATALOG_READ_OPERATION, refs.catalogAutonomy);
   const currentAutonomy = autonomy(DEADLINE_CURRENT_READ_OPERATION, refs.currentAutonomy);
-  const draftAutonomy = autonomy(DEADLINE_CHANGE_DRAFT_OPERATION, refs.draftAutonomy);
+  const changeAutonomy = autonomy(DEADLINE_CHANGE_OPERATION, refs.changeAutonomy);
 
   const catalogContext = createReadInvocationContextBuilder({
     reference: refs.catalogContext,
@@ -440,59 +384,59 @@ export function createDeadlineOperationModule(
     openSnapshot: openDeadlineSnapshot
   });
 
-  const draftContext = createEffectInvocationContextBuilder({
-    reference: refs.draftContext,
-    operation: DEADLINE_CHANGE_DRAFT_OPERATION,
-    effect: 'draft', lanes: [manageLane], scopeResolver,
+  const changeContext = createEffectInvocationContextBuilder({
+    reference: refs.changeContext,
+    operation: DEADLINE_CHANGE_OPERATION,
+    effect: 'commit', lanes: [manageLane], scopeResolver,
     authorityResolver: input.currentAuthority, clock: input.clock,
     newInvocationId: input.ids.newInvocationId,
     authorityPrincipalKeyProfile: input.authorityPrincipalKeyProfile,
     scopePartitionProfile: input.scopePartitionProfile,
     requestCanonicalizationProfile: input.requestCanonicalizationProfile,
-    requestHashProfile: DEADLINE_DRAFT_REQUEST_HASH_PROFILE,
+    requestHashProfile: DEADLINE_CHANGE_REQUEST_HASH_PROFILE,
     requestHashSealer: input.requestHashSealer,
     idempotencyCredentialProfile: input.idempotencyCredentialProfile,
     idempotencyCredentialSealer: input.idempotencyCredentialSealer,
     deniedAuthorityOutcome: authorityOutcome
   });
-  const draftFamily = createSingleUnitOfWorkFamilyRegistration({
-    reference: refs.draftFamily, phase: refs.draftPhase
+  const changeFamily = createSingleUnitOfWorkFamilyRegistration({
+    reference: refs.changeFamily, phase: refs.changePhase
   });
-  const draftTerminalization = createTerminalizationResolverRegistration({
-    reference: refs.draftTerminalization,
-    operation: DEADLINE_CHANGE_DRAFT_OPERATION,
-    phase: refs.draftPhase,
+  const changeTerminalization = createTerminalizationResolverRegistration({
+    reference: refs.changeTerminalization,
+    operation: DEADLINE_CHANGE_OPERATION,
+    phase: refs.changePhase,
     resolve: ({ result }) => result.kind === 'success'
       ? Object.freeze({ kind: 'terminal' as const })
       : Object.freeze({ kind: 'nonterminal' as const })
   });
-  const draftPhase = createSingleUnitOfWorkPhaseRegistration({
-    reference: refs.draftPhase,
-    family: refs.draftFamily,
-    operation: DEADLINE_CHANGE_DRAFT_OPERATION,
-    effect: 'draft',
-    handler: refs.draftHandler,
-    handlerCapability: DEADLINE_DRAFT_HANDLER_CAPABILITY,
-    contributionSchema: schemas.draftContribution,
-    terminalization: refs.draftTerminalization,
+  const changePhase = createSingleUnitOfWorkPhaseRegistration({
+    reference: refs.changePhase,
+    family: refs.changeFamily,
+    operation: DEADLINE_CHANGE_OPERATION,
+    effect: 'commit',
+    handler: refs.changeHandler,
+    handlerCapability: DEADLINE_CHANGE_HANDLER_CAPABILITY,
+    contributionSchema: schemas.changeContribution,
+    terminalization: refs.changeTerminalization,
     terminalOutcomeKeys: [],
     contentionOutcome: Object.freeze({
       class: 'conflict' as const, kind: 'operation.in_progress', retryable: true,
       subjects: [], detail: null, detailSchemaVersion: 1
     })
   });
-  const draftRisk = createOperationRiskResolverRegistration({
-    reference: refs.draftRisk,
-    operation: DEADLINE_CHANGE_DRAFT_OPERATION,
+  const changeRisk = createOperationRiskResolverRegistration({
+    reference: refs.changeRisk,
+    operation: DEADLINE_CHANGE_OPERATION,
     resolve: () => Object.freeze({
       risk: 'low' as const,
-      consequenceTags: Object.freeze(['changeset-drafted']),
-      evidenceIds: Object.freeze(['deadline.change.draft.risk'])
+      consequenceTags: Object.freeze(['deadline-changed']),
+      evidenceIds: Object.freeze(['deadline.change.risk'])
     })
   });
-  const draftAutonomyEvidence = createAutonomyEvidenceResolverRegistration({
-    reference: refs.draftAutonomyEvidence,
-    operation: DEADLINE_CHANGE_DRAFT_OPERATION,
+  const changeAutonomyEvidence = createAutonomyEvidenceResolverRegistration({
+    reference: refs.changeAutonomyEvidence,
+    operation: DEADLINE_CHANGE_OPERATION,
     resolve: ({ subject }) => {
       const notAfter = parseInstant(new Date(Date.parse(subject.evaluatedAt) + 60_000).toISOString());
       const bounds = Object.freeze({
@@ -509,32 +453,32 @@ export function createDeadlineOperationModule(
         actionCount: 1,
         completesBy: subject.evaluatedAt,
         proposedAction: Object.freeze({
-          key: 'deadline.change.draft.execute', version: 1,
+          key: 'deadline.change.execute', version: 1,
           digestSha256: subject.requestHashSha256
         }),
         failure: Object.freeze({ kind: 'none' as const })
       });
     }
   });
-  const draftApproval = createRenewedApprovalResolverRegistration({
-    reference: refs.draftApproval,
-    operation: DEADLINE_CHANGE_DRAFT_OPERATION,
+  const changeApproval = createRenewedApprovalResolverRegistration({
+    reference: refs.changeApproval,
+    operation: DEADLINE_CHANGE_OPERATION,
     resolve: () => Object.freeze({ approverCurrentlyAuthorized: false })
   });
-  const draftPreflight = createAutonomyPreflightRegistration({
-    reference: refs.draftPreflight,
-    operation: DEADLINE_CHANGE_DRAFT_OPERATION,
-    policy: refs.draftAutonomy,
-    riskResolver: refs.draftRisk,
-    evidenceResolver: refs.draftAutonomyEvidence,
-    approvalResolver: refs.draftApproval,
+  const changePreflight = createAutonomyPreflightRegistration({
+    reference: refs.changePreflight,
+    operation: DEADLINE_CHANGE_OPERATION,
+    policy: refs.changeAutonomy,
+    riskResolver: refs.changeRisk,
+    evidenceResolver: refs.changeAutonomyEvidence,
+    approvalResolver: refs.changeApproval,
     interventionOutcomes: autonomyInterventionOutcomes(1)
   });
-  const draftHandler = createDeadlineDraftHandler({
-    reference: refs.draftHandler,
-    handlerCapability: DEADLINE_DRAFT_HANDLER_CAPABILITY,
-    contributionSchema: schemas.draftContribution,
-    canonicalResultSchema: schemas.draftCanonical
+  const changeHandler = createDeadlineDirectHandler({
+    reference: refs.changeHandler,
+    handlerCapability: DEADLINE_CHANGE_HANDLER_CAPABILITY,
+    contributionSchema: schemas.changeContribution,
+    canonicalResultSchema: schemas.changeCanonical
   });
   const accessOutcomes = CURRENT_AUTHORITY_DENIAL_REASONS.map((reason) => Object.freeze({
     class: 'access_denied' as const,
@@ -546,14 +490,14 @@ export function createDeadlineOperationModule(
   return Object.freeze({
     id: 'deadline.operations',
     source: Object.freeze({
-      effectExecutionFamilies: Object.freeze([draftFamily]),
-      effectPhases: Object.freeze([draftPhase]),
-      terminalizationResolvers: Object.freeze([draftTerminalization]),
-      riskResolvers: Object.freeze([draftRisk]),
-      autonomyEvidenceResolvers: Object.freeze([draftAutonomyEvidence]),
-      renewedApprovalResolvers: Object.freeze([draftApproval]),
-      autonomyPreflights: Object.freeze([draftPreflight]),
-      autonomyPolicies: Object.freeze([catalogAutonomy, currentAutonomy, draftAutonomy]),
+      effectExecutionFamilies: Object.freeze([changeFamily]),
+      effectPhases: Object.freeze([changePhase]),
+      terminalizationResolvers: Object.freeze([changeTerminalization]),
+      riskResolvers: Object.freeze([changeRisk]),
+      autonomyEvidenceResolvers: Object.freeze([changeAutonomyEvidence]),
+      renewedApprovalResolvers: Object.freeze([changeApproval]),
+      autonomyPreflights: Object.freeze([changePreflight]),
+      autonomyPolicies: Object.freeze([catalogAutonomy, currentAutonomy, changeAutonomy]),
       schemas: Object.freeze([
         { reference: schemas.catalogInput, schema: deadlineListReadInputSchema },
         { reference: schemas.catalogCanonical, schema: deadlineCatalogCanonicalResultSchema },
@@ -561,10 +505,10 @@ export function createDeadlineOperationModule(
         { reference: schemas.currentInput, schema: deadlineGetReadInputSchema },
         { reference: schemas.currentCanonical, schema: deadlineCurrentCanonicalResultSchema },
         { reference: schemas.currentProjected, schema: deadlineGetReadResultSchema },
-        { reference: schemas.draftInput, schema: deadlineChangeDraftInputSchema },
-        { reference: schemas.draftContribution, schema: deadlineDraftContributionSchema },
-        { reference: schemas.draftCanonical, schema: deadlineDraftCanonicalResultSchema },
-        { reference: schemas.draftProjected, schema: deadlineDraftOperationResultSchema },
+        { reference: schemas.changeInput, schema: deadlineChangeInputSchema },
+        { reference: schemas.changeContribution, schema: deadlineDirectContributionSchema },
+        { reference: schemas.changeCanonical, schema: deadlineChangeCanonicalResultSchema },
+        { reference: schemas.changeProjected, schema: deadlineChangeOperationResultSchema },
         { reference: schemas.staleDetail, schema: deadlineChangeStaleDetailSchema },
         { reference: schemas.nullDetail, schema: nullDetailSchema }
       ]),
@@ -617,10 +561,10 @@ export function createDeadlineOperationModule(
         projectedResultSchema: schemas.currentProjected,
         project: (candidate: unknown) => deadlineCurrentCanonicalResultSchema.parse(candidate)
       }, {
-        reference: refs.draftProjection,
-        canonicalResultSchema: schemas.draftCanonical,
-        projectedResultSchema: schemas.draftProjected,
-        project: (candidate: unknown) => deadlineDraftCanonicalResultSchema.parse(candidate)
+        reference: refs.changeProjection,
+        canonicalResultSchema: schemas.changeCanonical,
+        projectedResultSchema: schemas.changeProjected,
+        project: (candidate: unknown) => deadlineChangeCanonicalResultSchema.parse(candidate)
       }]),
       readOperationalTraceTargets: Object.freeze([{
         reference: refs.catalogTrace,
@@ -673,19 +617,25 @@ export function createDeadlineOperationModule(
           accessOutcomes
         })
       ]),
-      effectContextBuilders: Object.freeze([draftContext]),
-      effectHandlers: Object.freeze([draftHandler]),
+      effectContextBuilders: Object.freeze([changeContext]),
+      effectHandlers: Object.freeze([changeHandler]),
       effectOperations: Object.freeze([{
-        ...DEADLINE_CHANGE_DRAFT_OPERATION,
+        ...DEADLINE_CHANGE_OPERATION,
         lifecycle: { status: 'active' as const },
-        summary: 'Draft one canonical Deadline create, update, or clear for review.',
-        effect: 'draft' as const,
+        summary: 'Change one canonical Deadline.',
+        effect: 'commit' as const,
         maxRisk: 'low' as const,
-        autonomyPolicy: refs.draftAutonomy,
-        consequenceTags: ['changeset-drafted'],
-        inputSchema: schemas.draftInput,
-        contributionSchema: schemas.draftContribution,
-        canonicalResultSchema: schemas.draftCanonical,
+        autonomyPolicy: refs.changeAutonomy,
+        consequenceTags: ['deadline-changed'],
+        agentAction: {
+          eligible: true as const,
+          displayLabel: 'Change a deadline',
+          consequences: ['A deadline may be created, updated, or cleared.'],
+          externalEffect: 'none' as const
+        },
+        inputSchema: schemas.changeInput,
+        contributionSchema: schemas.changeContribution,
+        canonicalResultSchema: schemas.changeCanonical,
         outcomes: [
           {
             class: 'idempotency_conflict' as const,
@@ -710,41 +660,44 @@ export function createDeadlineOperationModule(
           },
           {
             class: 'conflict' as const,
-            kind: 'changeset.id_collision', retryable: false,
-            detailSchema: schemas.nullDetail
-          },
-          {
-            class: 'conflict' as const,
             kind: 'operation.in_progress', retryable: true,
             detailSchema: schemas.nullDetail
           },
           ...autonomyInterventionOutcomeDeclarations(schemas.nullDetail)
         ],
         accessLanes: [manageLane],
-        contextBuilder: refs.draftContext,
-        handlerCapability: DEADLINE_DRAFT_HANDLER_CAPABILITY,
-        handler: refs.draftHandler,
+        contextBuilder: refs.changeContext,
+        handlerCapability: DEADLINE_CHANGE_HANDLER_CAPABILITY,
+        handler: refs.changeHandler,
         audit: { mode: 'required' as const, target: refs.audit },
         idempotency: {
           keySource: refs.keySource,
           credentialVerifierProfile: input.idempotencyCredentialProfile,
-          requestHashProfile: DEADLINE_DRAFT_REQUEST_HASH_PROFILE
+          requestHashProfile: DEADLINE_CHANGE_REQUEST_HASH_PROFILE
         },
-        concurrency: refs.draftConcurrency,
+        concurrency: refs.changeConcurrency,
         execution: {
           kind: 'single_unit_of_work' as const,
-          family: refs.draftFamily,
-          phase: refs.draftPhase,
-          terminalization: refs.draftTerminalization,
-          autonomyPreflight: refs.draftPreflight
+          profile: 'direct_audited' as const,
+          family: refs.changeFamily,
+          phase: refs.changePhase,
+          terminalization: refs.changeTerminalization,
+          autonomyPreflight: refs.changePreflight,
+          history: {
+            summariesByAction: Object.freeze({
+              create: 'Created a deadline',
+              update: 'Updated a deadline',
+              clear: 'Cleared a deadline'
+            })
+          }
         },
         bindings: [{
           surface: 'operator_http' as const,
           method: 'POST' as const,
-          path: '/api/events/current/deadlines/drafts',
+          path: '/api/events/current/deadlines',
           input: 'body' as const,
           browserResumption: { kind: 'none' as const },
-          projection: refs.draftProjection
+          projection: refs.changeProjection
         }]
       }])
     })

@@ -1,7 +1,8 @@
 import {
-	changesetDiffDataSchema,
 	formDefinitionContentSchema,
 	formVersionSchema,
+	intakeFormVersionReviewDraftDataSchema,
+	intakeFormWriteDataSchema,
 	organizerFormCatalogSchema,
 	organizerFormDetailSchema,
 	type FormDefinitionAuthorInput,
@@ -10,7 +11,11 @@ import {
 	type FormDefinitionHeadDto,
 	type FormFieldDefinitionDto,
 	type FormVersionDto,
-	type IntakeFormSafeDiff,
+	type IntakeFormVersionPublishInput,
+	type IntakeFormVersionReviewInput,
+	type IntakeFormVersionReviewSafeDiff,
+	type IntakeFormWriteAction,
+	type IntakeFormWriteData,
 	type OrganizerFormDetailDto,
 	type OrganizerFormFieldRowDto,
 	type StructuredOutcome
@@ -22,40 +27,23 @@ import {
 	sampleOrganizerFormDetailDtos,
 	sampleOrganizerFormRows
 } from '../fixtures/intake-forms';
-import {
-	mapOrganizerFormCatalog,
-	mapOrganizerFormChangesetDiff,
-	mapOrganizerFormDetail,
-	mapOrganizerFormDraft
-} from '../mappers/intake-forms';
-import type {
-	OrganizerFormsChangesetEffectInput,
-	OrganizerFormsChangesetSelector,
-	OrganizerFormsPort,
-	OrganizerFormsResult
-} from '../view-models/intake-forms';
+import { mapOrganizerFormCatalog, mapOrganizerFormDetail } from '../mappers/intake-forms';
+import type { OrganizerFormsPort, OrganizerFormsResult,
+	OrganizerFormVersionReviewView } from '../view-models/intake-forms';
 
-type SampleAction = 'create' | 'revise' | 'publish' | 'lifecycle' | 'closing';
-
-interface SamplePendingChange {
-	readonly action: SampleAction;
-	readonly changesetId: string;
+interface SamplePendingPublish {
+	readonly input: IntakeFormVersionReviewInput;
+	readonly draftId: string;
 	readonly revisionId: string;
 	readonly revisionDigest: string;
-	readonly safeDiff: IntakeFormSafeDiff;
-	status: 'draft' | 'proposed' | 'committed';
-	headVersion: number;
+	readonly safeDiff: IntakeFormVersionReviewSafeDiff;
+	status: 'draft' | 'published';
 	readonly apply: () => void;
 }
 
 const scope = Object.freeze({
 	workspaceId: intakeFormsFixtureIds.workspace,
 	eventId: intakeFormsFixtureIds.event
-});
-const approvalPolicy = Object.freeze({
-	reference: Object.freeze({ key: 'approval.form_ordinary', version: 1 }),
-	definitionDigestSha256: 'd'.repeat(64),
-	requirement: 'none' as const
 });
 
 function clone<Value>(value: Value): Value {
@@ -319,12 +307,12 @@ export interface IntakeFormsSamplePort extends OrganizerFormsPort {
 	reset(): void;
 }
 
-/** Resettable canonical demo. Effective state changes only after exact proposal and commit. */
+/** Resettable canonical demo. Publication stays inert until its exact owner revision is published. */
 export function createIntakeFormsSamplePort(): IntakeFormsSamplePort {
 	let catalogVersion = sampleOrganizerFormCatalogDto.catalogVersion;
 	let details = clone(sampleOrganizerFormDetailDtos) as Record<string, OrganizerFormDetailDto>;
 	let closesAt = new Map(sampleOrganizerFormCatalogDto.forms.map((form) => [form.id, form.closesAt]));
-	let pending = new Map<string, SamplePendingChange>();
+	let pending = new Map<string, SamplePendingPublish>();
 	let idempotency = new Map<string, OrganizerFormsResult<unknown>>();
 	let submissionCounts = new Map(
 		sampleOrganizerFormCatalogDto.forms.map((form) => [form.id, form.submissionCount])
@@ -369,79 +357,18 @@ export function createIntakeFormsSamplePort(): IntakeFormsSamplePort {
 		}).sort((left, right) => left.id.localeCompare(right.id))
 	});
 
-	const makePending = (
-		action: SampleAction,
-		safeDiff: IntakeFormSafeDiff,
-		operationName: string,
-		key: string,
-		apply: () => void
-	): OrganizerFormsResult<ReturnType<typeof mapOrganizerFormDraft>> => {
-		const replayed = idempotency.get(key);
-		if (replayed) return replayed as OrganizerFormsResult<ReturnType<typeof mapOrganizerFormDraft>>;
-		const changesetId = uuid();
-		const revisionId = uuid();
-		const revisionDigest = digest(revisionId);
-		const change: SamplePendingChange = {
-			action,
-			changesetId,
-			revisionId,
-			revisionDigest,
-			safeDiff,
-			status: 'draft',
-			headVersion: 1,
-			apply
-		};
-		pending.set(changesetId, change);
-		const data = mapOrganizerFormDraft({
-			schemaVersion: 1,
-			action,
-			changesetId,
-			headVersion: 1,
-			status: 'draft',
-			revision: { id: revisionId, number: 1, digestSha256: revisionDigest },
-			riskTier: 'normal',
-			approvalPolicy,
-			safeDiff
-		});
-		const result = {
-			kind: 'success' as const,
-			data,
-			correlationId: uuid(),
-			receipt: sampleReceipt(operationName)
-		};
-		idempotency.set(key, result);
-		return result;
-	};
-
 	const replay = <Data>(key: string): OrganizerFormsResult<Data> | null =>
 		(idempotency.get(key) as OrganizerFormsResult<Data> | undefined) ?? null;
 
-	const readChange = (selector: OrganizerFormsChangesetSelector) => {
-		const change = pending.get(selector.changesetId);
-		return change && change.revisionId === selector.revisionId
-			&& change.revisionDigest === selector.revisionDigest ? change : null;
+	const writeSuccess = (key: string, operationName: string, action: IntakeFormWriteAction,
+		formId: string, formDefinitionVersion: number, publishedVersionId: string | null
+	): OrganizerFormsResult<IntakeFormWriteData> => {
+		const data = intakeFormWriteDataSchema.parse({ schemaVersion: 1, action, formId,
+			formDefinitionVersion, catalogVersion, publishedVersionId });
+		const result = { kind: 'success' as const, data, correlationId: uuid(), receipt: sampleReceipt(operationName) };
+		idempotency.set(key, result);
+		return result;
 	};
-
-	const mapDiff = (change: SamplePendingChange) => mapOrganizerFormChangesetDiff(
-		changesetDiffDataSchema.parse({
-			changesetId: change.changesetId,
-			headVersion: change.headVersion,
-			status: change.status,
-			revisionId: change.revisionId,
-			revisionNumber: 1,
-			revisionDigest: change.revisionDigest,
-			riskTier: 'normal',
-			approvalPolicy,
-			operations: [{
-				kind: 'intake.form.mutate',
-				version: 2,
-				riskTier: 'normal',
-				dependencyGroup: 'intake_form',
-				safeDiff: change.safeDiff,
-				consequences: ['intake_form_changed']
-			}]
-		})
-	);
 
 	const source = Object.freeze({
 		kind: 'sample' as const,
@@ -468,8 +395,8 @@ export function createIntakeFormsSamplePort(): IntakeFormsSamplePort {
 			});
 			return { kind: 'success', data: mapOrganizerFormDetail(joined), correlationId: uuid() };
 		},
-		async draftCreate(input, key) {
-			const prior = replay<ReturnType<typeof mapOrganizerFormDraft>>(key);
+		async create(input, key) {
+			const prior = replay<IntakeFormWriteData>(key);
 			if (prior) return prior;
 			if (input.expectedCatalogVersion !== catalogVersion
 				|| input.expectedRegistryVersion !== sampleFormRegistryPin.version) {
@@ -490,9 +417,7 @@ export function createIntakeFormsSamplePort(): IntakeFormsSamplePort {
 				updatedByUserId: intakeFormsFixtureIds.user,
 				updatedAt: at
 			};
-			const diff: IntakeFormSafeDiff = { action: 'create', before: null, after: safeHead(head) };
-			return makePending('create', diff, 'form.definition.create.draft', key, () => {
-				details[head.id] = organizerFormDetailSchema.parse({
+			details[head.id] = organizerFormDetailSchema.parse({
 					schemaVersion: 1,
 					head,
 					registryPin: sampleFormRegistryPin,
@@ -500,12 +425,12 @@ export function createIntakeFormsSamplePort(): IntakeFormsSamplePort {
 					configurationIssues: [],
 					currentPublishedVersion: null
 				});
-				closesAt.set(head.id, materialized.closesAt);
-				catalogVersion += 1;
-			});
+			closesAt.set(head.id, materialized.closesAt);
+			catalogVersion += 1;
+			return writeSuccess(key, 'form.definition.create', 'create', head.id, head.version, null);
 		},
-		async draftRevise(input, key) {
-			const prior = replay<ReturnType<typeof mapOrganizerFormDraft>>(key);
+		async revise(input, key) {
+			const prior = replay<IntakeFormWriteData>(key);
 			if (prior) return prior;
 			const detail = details[input.formId];
 			if (!detail || detail.head.version !== input.expectedDefinitionVersion
@@ -519,20 +444,17 @@ export function createIntakeFormsSamplePort(): IntakeFormsSamplePort {
 				updatedByUserId: intakeFormsFixtureIds.user,
 				updatedAt: now()
 			};
-			const diff: IntakeFormSafeDiff = {
-				action: 'revise', before: safeHead(detail.head), after: safeHead(after)
-			};
-			return makePending('revise', diff, 'form.definition.revise.draft', key, () => {
-				details[input.formId] = organizerFormDetailSchema.parse({
+			details[input.formId] = organizerFormDetailSchema.parse({
 					...detail,
 					head: after,
 					fields: joinedRows(after.definition, detail.fields)
 				});
-				catalogVersion += 1;
-			});
+			catalogVersion += 1;
+			return writeSuccess(key, 'form.definition.revise', 'revise', input.formId, after.version,
+				after.currentPublishedVersionId);
 		},
 		async draftPublish(input, key) {
-			const prior = replay<ReturnType<typeof mapOrganizerFormDraft>>(key);
+			const prior = replay<OrganizerFormVersionReviewView>(key);
 			if (prior) return prior;
 			const detail = details[input.formId];
 			if (!detail || detail.head.version !== input.expectedDefinitionVersion
@@ -543,6 +465,7 @@ export function createIntakeFormsSamplePort(): IntakeFormsSamplePort {
 			const after: FormDefinitionHeadDto = {
 				...detail.head,
 				version: detail.head.version + 1,
+				status: input.action === 'publish_and_open' ? 'open' : detail.head.status,
 				currentPublishedVersionId: version.id,
 				updatedAt: version.publishedAt
 			};
@@ -551,69 +474,59 @@ export function createIntakeFormsSamplePort(): IntakeFormsSamplePort {
 				number: version.number,
 				definitionDigestSha256: version.definitionDigestSha256
 			};
-			const diff: IntakeFormSafeDiff = {
-				action: 'publish',
+			const safeDiff: IntakeFormVersionReviewSafeDiff = {
+				action: input.action,
 				before: safeHead(detail.head),
 				after: safeHead(after),
-				publishedVersion
+				publishedVersion,
+				surfaceSuccessors: []
 			};
-			return makePending('publish', diff, 'form.version.publish.draft', key, () => {
+			const draftId = uuid();
+			const revisionId = uuid();
+			const revisionDigest = digest(revisionId);
+			pending.set(draftId, { input, draftId, revisionId, revisionDigest, safeDiff, status: 'draft', apply: () => {
 				details[input.formId] = organizerFormDetailSchema.parse({
 					...detail, head: after, currentPublishedVersion: version
 				});
 				catalogVersion += 1;
-			});
+			} });
+			const data = intakeFormVersionReviewDraftDataSchema.parse({ schemaVersion: 1, action: input.action,
+				draftId, status: 'draft', revision: { id: revisionId, number: 1, digestSha256: revisionDigest }, safeDiff });
+			const result = { kind: 'success' as const, data, correlationId: uuid(),
+				receipt: sampleReceipt('form.version.publish.draft') };
+			idempotency.set(key, result);
+			return result;
 		},
-		async draftLifecycle(input, key) {
-			const prior = replay<ReturnType<typeof mapOrganizerFormDraft>>(key);
+		async lifecycle(input, key) {
+			const prior = replay<IntakeFormWriteData>(key);
 			if (prior) return prior;
 			const detail = details[input.formId];
 			if (!detail || detail.head.version !== input.expectedDefinitionVersion) {
 				return sampleOutcome('intake_form.changed', input.formId);
 			}
-			const publishing = input.transition === 'publish_and_open';
-			if ((publishing && (detail.head.status !== 'draft'
-					|| input.expectedRegistryVersion !== detail.registryPin.version))
-				|| (input.transition === 'reopen' && detail.head.status !== 'closed')
+			if ((input.transition === 'reopen' && detail.head.status !== 'closed')
 				|| (input.transition === 'close' && detail.head.status !== 'open')) {
 				return sampleOutcome('intake_form.lifecycle_refused', input.formId);
 			}
-			const version = publishing
-				? publishVersion(detail, closesAt.get(input.formId) ?? null)
-				: null;
 			const after: FormDefinitionHeadDto = {
 				...detail.head,
 				version: detail.head.version + 1,
 				status: input.transition === 'close' ? 'closed' : 'open',
-				currentPublishedVersionId: version?.id ?? detail.head.currentPublishedVersionId,
-				updatedAt: version?.publishedAt ?? now()
+				updatedAt: now()
 			};
 			if (after.currentPublishedVersionId === null) {
 				return sampleOutcome('intake_form.publication_required', input.formId);
 			}
-			const diff: IntakeFormSafeDiff = {
-				action: 'lifecycle',
-				before: safeHead(detail.head),
-				after: safeHead(after),
-				publishedVersion: version
-					? {
-							id: version.id,
-							number: version.number,
-							definitionDigestSha256: version.definitionDigestSha256
-						}
-					: null
-			};
-			return makePending('lifecycle', diff, 'form.lifecycle.change.draft', key, () => {
-				details[input.formId] = organizerFormDetailSchema.parse({
+			details[input.formId] = organizerFormDetailSchema.parse({
 					...detail,
-					head: after,
-					currentPublishedVersion: version ?? detail.currentPublishedVersion
+				head: after
 				});
-				catalogVersion += 1;
-			});
+			catalogVersion += 1;
+			return writeSuccess(key, 'form.lifecycle.change', input.transition, input.formId, after.version,
+				after.currentPublishedVersionId);
 		},
-		async draftClosing(input, key) {
-			const prior = replay<ReturnType<typeof mapOrganizerFormDraft>>(key);
+		async closing(input, key) {
+			const prior = replay<IntakeFormWriteData>(key);
 			if (prior) return prior;
 			const detail = details[input.formId];
 			if (!detail || detail.head.version !== input.expectedDefinitionVersion) {
@@ -665,72 +578,31 @@ export function createIntakeFormsSamplePort(): IntakeFormsSamplePort {
 				},
 				updatedAt: now()
 			};
-			const diff: IntakeFormSafeDiff = {
-				action: 'closing',
-				before: safeHead(detail.head),
-				after: safeHead(after),
-				deadline: {
-					action: beforeDate === null ? 'create' : input.closesAt === null ? 'clear' : 'update',
-					before: beforeDeadline,
-					after: afterDeadline,
-					representedConsequences: ['deadline_changed']
-				}
-			};
-			return makePending('closing', diff, 'form.closing.change.draft', key, () => {
-				details[input.formId] = organizerFormDetailSchema.parse({ ...detail, head: after });
-				closesAt.set(input.formId, input.closesAt);
-				deadlineVersions.set(deadlineId, afterVersion);
-				catalogVersion += 1;
-			});
+			void beforeDeadline;
+			void afterDeadline;
+			details[input.formId] = organizerFormDetailSchema.parse({ ...detail, head: after });
+			closesAt.set(input.formId, input.closesAt);
+			deadlineVersions.set(deadlineId, afterVersion);
+			catalogVersion += 1;
+			const action = beforeDate === null ? 'set_closing' as const
+				: input.closesAt === null ? 'remove_closing' as const : 'update_closing' as const;
+			return writeSuccess(key, 'form.closing.change', action, input.formId, after.version,
+				after.currentPublishedVersionId);
 		},
-		async readDiff(selector) {
-			const change = readChange(selector);
-			return change
-				? { kind: 'success', data: mapDiff(change), correlationId: uuid() }
-				: sampleOutcome('changeset.revision_missing', selector.changesetId);
-		},
-		async propose(input: OrganizerFormsChangesetEffectInput, key) {
-			const replayed = idempotency.get(key);
-			if (replayed) return replayed as Awaited<ReturnType<IntakeFormsSamplePort['propose']>>;
-			const change = readChange(input);
-			if (!change || change.headVersion !== input.expectedHeadVersion || change.status !== 'draft') {
-				return sampleOutcome('changeset.lifecycle_refused', input.changesetId);
-			}
-			change.status = 'proposed';
-			change.headVersion += 1;
-			const result = {
-				kind: 'success' as const,
-				data: mapDiff(change),
-				correlationId: uuid(),
-				receipt: sampleReceipt('changeset.propose')
-			};
-			idempotency.set(key, result);
-			return result;
-		},
-		async commit(input: OrganizerFormsChangesetEffectInput, key) {
-			const replayed = idempotency.get(key);
-			if (replayed) return replayed as Awaited<ReturnType<IntakeFormsSamplePort['commit']>>;
-			const change = readChange(input);
-			if (!change || change.headVersion !== input.expectedHeadVersion || change.status !== 'proposed') {
-				return sampleOutcome('changeset.lifecycle_refused', input.changesetId);
+		async publish(input: IntakeFormVersionPublishInput, key) {
+			const prior = replay<IntakeFormWriteData>(key);
+			if (prior) return prior;
+			const change = pending.get(input.draftId);
+			if (!change || change.revisionId !== input.revisionId
+				|| change.revisionDigest !== input.revisionDigestSha256 || change.status !== 'draft') {
+				return sampleOutcome('intake_form.publish_revision_changed', input.draftId);
 			}
 			change.apply();
-			change.status = 'committed';
-			change.headVersion += 1;
-			const result = {
-				kind: 'success' as const,
-				data: {
-					changesetId: change.changesetId,
-					expectedHeadVersion: input.expectedHeadVersion,
-					committedHeadVersion: change.headVersion,
-					revisionId: change.revisionId,
-					revisionDigest: change.revisionDigest
-				},
-				correlationId: uuid(),
-				receipt: sampleReceipt('changeset.commit')
-			};
-			idempotency.set(key, result);
-			return result;
+			change.status = 'published';
+			const detail = details[change.input.formId];
+			if (!detail) return sampleOutcome('intake_form.missing', change.input.formId);
+			return writeSuccess(key, 'form.version.publish', change.input.action, change.input.formId,
+				detail.head.version, detail.head.currentPublishedVersionId);
 		}
 	};
 

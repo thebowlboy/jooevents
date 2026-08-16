@@ -390,7 +390,7 @@ export const VERIFIED_INBOX_PROCESSING_TRIAL_SQL = `
         ON UPDATE RESTRICT ON DELETE RESTRICT,
       FOREIGN KEY (job_id) REFERENCES reliability_jobs_trial(job_id)
         ON UPDATE RESTRICT ON DELETE RESTRICT,
-      FOREIGN KEY (terminal_receipt_id) REFERENCES foundation_trial_operation_receipts(id)
+      FOREIGN KEY (terminal_receipt_id) REFERENCES operation_log(id)
         ON UPDATE RESTRICT ON DELETE RESTRICT,
       CHECK(
         (state = 'queued' AND terminal_receipt_id IS NULL AND resolved_at_ms IS NULL)
@@ -936,7 +936,7 @@ export class SQLiteVerifiedInboxProcessingTrial {
       SELECT h.job_id, h.state
       FROM verified_inbox_processing_heads_trial h
       JOIN reliability_job_attempt_completions_trial c ON c.job_id = h.job_id
-      JOIN foundation_trial_operation_receipts r ON r.id = c.receipt_id
+      JOIN operation_log r ON r.id = c.receipt_id
       WHERE c.receipt_id = ? AND c.completion_state = 'succeeded'
         AND r.operation_name = ? AND r.operation_version = ? AND r.surface = 'application_job'
     `).get(receipt.ref.id, receipt.ref.operationName, receipt.ref.operationVersion);
@@ -1046,15 +1046,15 @@ export function withVerifiedInboxProcessingTerminalReduction(
   return Object.freeze({
     openHandlerSnapshot: domain.openHandlerSnapshot.bind(domain),
     applyDomainContribution: domain.applyDomainContribution.bind(domain),
-    async afterReceiptParentInserted(receipt: TerminalEffectReceipt) {
+    async afterOperationLogInserted(receipt: TerminalEffectReceipt) {
       processing.completeWithAuthenticReceipt(receipt);
-      await domain.afterReceiptParentInserted?.(receipt);
+      await domain.afterOperationLogInserted?.(receipt);
     },
-    ...(domain.afterReceiptChildInserted
-      ? { afterReceiptChildInserted: domain.afterReceiptChildInserted.bind(domain) }
+    ...(domain.afterEffectContributionInserted
+      ? { afterEffectContributionInserted: domain.afterEffectContributionInserted.bind(domain) }
       : {}),
-    ...(domain.afterExecutionClaimReleased
-      ? { afterExecutionClaimReleased: domain.afterExecutionClaimReleased.bind(domain) }
+    ...(domain.afterEffectApplicationCommitted
+      ? { afterEffectApplicationCommitted: domain.afterEffectApplicationCommitted.bind(domain) }
       : {}),
     ...(domain.afterUnitOfWorkCommitted
       ? { afterUnitOfWorkCommitted: domain.afterUnitOfWorkCommitted.bind(domain) }

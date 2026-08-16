@@ -9,7 +9,7 @@ const baseURL = `http://127.0.0.1:${port}`;
 
 export default defineConfig({
   testDir: './tests',
-  testMatch: '**/*.joined-live.ts',
+  testMatch: ['**/*.joined-live.ts', '**/*.direct-joined-live.ts'],
   fullyParallel: false,
   workers: 1,
   forbidOnly: true,

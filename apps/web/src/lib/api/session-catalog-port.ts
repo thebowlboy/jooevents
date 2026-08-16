@@ -17,7 +17,7 @@ export type SessionTransitionRequest = Extract<
 >;
 export type SessionCatalogIdempotencyKey = z.input<typeof operationHttpIdempotencyKeySchema>;
 
-export type SessionCatalogCoreOperation = 'catalog' | 'draft' | 'propose' | 'commit';
+export type SessionCatalogCoreOperation = 'catalog' | 'change';
 
 export type SessionCatalogUnavailableResult = {
 	readonly kind: 'unavailable';
@@ -68,9 +68,8 @@ export type SessionCatalogCoreSource =
  * Source-neutral boundary over the canonical Session catalog only.
  *
  * It deliberately carries just what the backend owns today: the catalog read
- * and the inert change draft (`create` | `retarget` | forward-only `transition`
- * | roster visibility), which a
- * client completes through the generic changeset propose/commit lifecycle.
+ * and one direct audited change (`create` | `remove_new_session` | `retarget` |
+ * forward-only `transition` | roster visibility).
  * Rosters with resolvable people, submission attachment, per-session proposal
  * counts, breaks, and publication have no canonical owner here; a live source
  * never fills those gaps with sample behavior or inferred facts, and `restore`
@@ -83,11 +82,6 @@ export interface SessionCatalogCorePort {
 		options?: { readonly signal?: AbortSignal }
 	): Promise<SessionCatalogReadResult>;
 
-	/**
-	 * Drafts one authored Session change and commits it through the generic
-	 * changeset lifecycle (draft -> propose -> commit). The draft is inert; no
-	 * effective state changes until the commit receipt arrives.
-	 */
 	applyChange(
 		request: SessionAuthorRequest,
 		idempotencyKey: SessionCatalogIdempotencyKey,

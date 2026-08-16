@@ -3,8 +3,7 @@ import { z } from 'zod';
 import {
   createEffectfulOperationResultSchema,
   createOperationSchemaManifestRefs,
-  createReadOperationResultSchema,
-  versionedDefinitionRefSchema
+  createReadOperationResultSchema
 } from './operations';
 import { programVocabularyIdSchema, programVocabularyScopeSchema } from './program-vocabulary';
 
@@ -156,33 +155,6 @@ export const schedulePlacementResultSchema = z.strictObject({
   occurrence: schedulePlacementOccurrenceSchema.nullable()
 });
 
-export const schedulePlacementDraftDataSchema = z.strictObject({
-  schemaVersion: z.literal(1),
-  action: z.enum(['place', 'move']),
-  changesetId: schedulePlacementIdSchema,
-  headVersion: schedulePlacementVersionSchema,
-  status: z.literal('draft'),
-  revision: z.strictObject({
-    id: schedulePlacementIdSchema,
-    number: schedulePlacementVersionSchema,
-    digestSha256: z.string().regex(/^[a-f0-9]{64}$/)
-  }),
-  riskTier: z.literal('normal'),
-  approvalPolicy: z.strictObject({
-    reference: versionedDefinitionRefSchema,
-    definitionDigestSha256: z.string().regex(/^[a-f0-9]{64}$/),
-    requirement: z.literal('none')
-  }),
-  safeDiff: schedulePlacementPlanSchema
-}).superRefine((data, context) => {
-  if (data.safeDiff.input.action !== data.action) {
-    context.addIssue({
-      code: 'custom', path: ['safeDiff', 'input', 'action'],
-      message: 'Draft action and safe diff action must match.'
-    });
-  }
-});
-
 export const schedulePlacementConflictDetailSchema = z.strictObject({
   severity: z.literal('block'),
   roomId: schedulePlacementIdSchema,
@@ -202,8 +174,6 @@ export const schedulePlacementReadResultSchema = createReadOperationResultSchema
 );
 export const schedulePlacementOperationResultSchema =
   createEffectfulOperationResultSchema(schedulePlacementResultSchema);
-export const schedulePlacementDraftOperationResultSchema =
-  createEffectfulOperationResultSchema(schedulePlacementDraftDataSchema);
 
 /** Exact public schema identities projected into the operator operation manifest. */
 export const SCHEDULE_PLACEMENT_OPERATION_SCHEMA_REFS = Object.freeze({
@@ -213,12 +183,10 @@ export const SCHEDULE_PLACEMENT_OPERATION_SCHEMA_REFS = Object.freeze({
     resultKey: 'schema.schedule.placement-snapshot-read.operator-result',
     resultSchema: schedulePlacementReadResultSchema
   }),
-  placementDraft: createOperationSchemaManifestRefs({
-    inputKey: 'schema.schedule.placement-draft.input',
-    inputSchema: schedulePlacementInputSchema,
-    resultKey: 'schema.schedule.placement-draft.operator-result',
-    resultSchema: schedulePlacementDraftOperationResultSchema,
-    version: 2
+  placement: createOperationSchemaManifestRefs({
+    inputKey: 'schema.schedule.placement.input', inputSchema: schedulePlacementAuthorInputSchema,
+    resultKey: 'schema.schedule.placement.operator-result', resultSchema: schedulePlacementOperationResultSchema,
+    version: 1
   })
 });
 
@@ -231,7 +199,6 @@ export type SchedulePlacementAuthorInput = z.infer<typeof schedulePlacementAutho
 export type SchedulePlacementPlanningInput = z.infer<typeof schedulePlacementPlanningInputSchema>;
 export type SchedulePlacementPlanDto = z.infer<typeof schedulePlacementPlanSchema>;
 export type SchedulePlacementResult = z.infer<typeof schedulePlacementResultSchema>;
-export type SchedulePlacementDraftData = z.infer<typeof schedulePlacementDraftDataSchema>;
 export type SchedulePlacementConflictDetail = z.infer<typeof schedulePlacementConflictDetailSchema>;
 
 function compareOccurrence(

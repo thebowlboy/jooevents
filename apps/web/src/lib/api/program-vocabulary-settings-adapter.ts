@@ -1,5 +1,4 @@
 import {
-	changesetRevisionSelectorSchema,
 	operationHttpIdempotencyKeySchema,
 	programVocabularyCreateDraftRequestSchema,
 	programVocabularyDeleteDraftRequestSchema,
@@ -8,18 +7,17 @@ import {
 	programVocabularyRestoreDraftRequestSchema,
 	programVocabularyRetireDraftRequestSchema,
 	programVocabularySafeDiffSchema,
-	type ChangesetRevisionSelector,
 	type OperationReceiptRef,
+	type ProgramVocabularyDirectData,
+	type ProgramVocabularyMergePublishInput,
+	type ProgramVocabularyMergeReviewData,
 	type ProgramVocabularySafeDiff,
 	type StructuredOutcome
 } from '@jooevents/contracts';
-import type {
-	ChangesetReviewPort,
-	ChangesetReviewResult
-} from './changesets/port';
 import type { SafeApiError } from './client';
 import type {
-	EventProgramDraftRequest,
+	EventProgramDirectRequest,
+	EventProgramMergeDraftRequest,
 	EventProgramPort,
 	EventProgramSource
 } from './event-program/port';
@@ -29,7 +27,7 @@ import type {
 	ProgramFormatView,
 	ProgramRoomView,
 	ProgramTrackView,
-	ProgramVocabularyDraftChangeView,
+	ProgramVocabularyChangeView,
 	ProgramVocabularySnapshotView,
 	ProgramVocabularyUsageView
 } from './view-models/program-vocabulary';
@@ -47,19 +45,17 @@ export type ProgramVocabularySettingsEntry =
 	| ProgramFormatView;
 export type ProgramVocabularySettingsKind = ProgramVocabularySettingsEntry['kind'];
 
+const directReceiptOperations = Object.freeze({
+	create: { name: 'program_vocabulary.create', version: 1 },
+	edit: { name: 'program_vocabulary.edit', version: 1 },
+	retire: { name: 'program_vocabulary.retire', version: 1 },
+	restore: { name: 'program_vocabulary.restore', version: 1 },
+	delete: { name: 'program_vocabulary.delete', version: 1 }
+} as const);
 const draftReceiptOperations = Object.freeze({
-	create: { name: 'program_vocabulary.create.draft', version: 1 },
-	edit: { name: 'program_vocabulary.edit.draft', version: 1 },
-	retire: { name: 'program_vocabulary.retire.draft', version: 1 },
-	restore: { name: 'program_vocabulary.restore.draft', version: 1 },
-	delete: { name: 'program_vocabulary.delete.draft', version: 1 },
 	merge: { name: 'program_vocabulary.merge.draft', version: 1 }
 } as const);
-
-const changesetReceiptOperations = Object.freeze({
-	propose: { name: 'changeset.propose', version: 1 },
-	commit: { name: 'changeset.commit', version: 1 }
-} as const);
+const publishReceiptOperation = Object.freeze({ name: 'program_vocabulary.merge', version: 1 } as const);
 
 export type ProgramVocabularySettingsCommand =
 	| { readonly action: 'create'; readonly kind: 'room'; readonly name: string; readonly capacity: number | null }
@@ -88,20 +84,15 @@ export type ProgramVocabularySettingsCommand =
 			readonly targetId: string;
 	  };
 
-export type ProgramVocabularySettingsOperation = 'read' | 'draft' | 'propose' | 'commit';
+export type ProgramVocabularySettingsOperation =
+	| 'read' | 'create' | 'edit' | 'retire' | 'restore' | 'delete'
+	| 'draft' | 'publish';
 
 export type ProgramVocabularySettingsRefusalCode =
 	| 'invalid_request'
 	| 'item_not_found'
 	| 'merge_target_not_found'
 	| 'merge_same_item';
-
-export interface ProgramVocabularySettingsCorrectionSource {
-	readonly changesetId: string;
-	readonly revisionId: string;
-	readonly revisionDigest: string;
-	readonly sourceCommitReceiptId: string;
-}
 
 export type ProgramVocabularySettingsCorrection =
 	| {
@@ -113,24 +104,25 @@ export type ProgramVocabularySettingsCorrection =
 			};
 	  }
 	| {
-			readonly kind: 'changeset_correction_required';
-			readonly source: ProgramVocabularySettingsCorrectionSource;
+			readonly kind: 'forward_change_required';
+			readonly action: 'create' | 'edit' | 'delete';
 	  };
 
-export interface ProgramVocabularySettingsCommittedMutation {
-	readonly action: ProgramVocabularySettingsCommand['action'];
-	readonly selector: ChangesetRevisionSelector;
-	readonly committedHeadVersion: number;
-	readonly change: ProgramVocabularyDraftChangeView;
+export type ProgramVocabularySettingsCommittedMutation =
+	| {
+	readonly action: Exclude<ProgramVocabularySettingsCommand['action'], 'merge'>;
+	readonly change: ProgramVocabularyChangeView;
 	readonly correction: ProgramVocabularySettingsCorrection;
-}
+	  }
+	| {
+	readonly action: 'merge';
+	readonly change: ProgramVocabularyChangeView;
+	  };
 
 export interface ProgramVocabularySettingsConfirmationRequired {
-	readonly action: ProgramVocabularySettingsCommand['action'];
-	readonly selector: ChangesetRevisionSelector;
-	readonly headVersion: number;
-	readonly change: ProgramVocabularyDraftChangeView;
-	readonly requirement: 'distinct_current_human';
+	readonly action: 'merge';
+	readonly selector: ProgramVocabularyMergePublishInput;
+	readonly change: ProgramVocabularyChangeView;
 }
 
 export type ProgramVocabularySettingsApplyResult =
@@ -197,6 +189,7 @@ export interface ProgramVocabularySettingsPort {
 	tracks(options?: { readonly signal?: AbortSignal }): Promise<ProgramTrackView[]>;
 	formats(options?: { readonly signal?: AbortSignal }): Promise<ProgramFormatView[]>;
 	apply(command: ProgramVocabularySettingsCommand, options?: ApplyOptions): Promise<ProgramVocabularySettingsApplyResult>;
+	publishMerge(confirmation: ProgramVocabularySettingsConfirmationRequired, options?: ApplyOptions): Promise<ProgramVocabularySettingsApplyResult>;
 	addRoom(name: string, capacity: number | null): Promise<ProgramRoomView>;
 	addTrack(name: string): Promise<ProgramTrackView>;
 	addFormat(name: string): Promise<ProgramFormatView>;
@@ -212,9 +205,9 @@ export interface ProgramVocabularySettingsPort {
 	restoreRoom(id: string): Promise<ProgramVocabularySettingsMutationOutcome>;
 	restoreTrack(id: string): Promise<ProgramVocabularySettingsMutationOutcome>;
 	restoreFormat(id: string): Promise<ProgramVocabularySettingsMutationOutcome>;
-	mergeRoom(sourceId: string, targetId: string): Promise<ProgramVocabularySettingsMutationOutcome>;
-	mergeTrack(sourceId: string, targetId: string): Promise<ProgramVocabularySettingsMutationOutcome>;
-	mergeFormat(sourceId: string, targetId: string): Promise<ProgramVocabularySettingsMutationOutcome>;
+	mergeRoom(sourceId: string, targetId: string): Promise<ProgramVocabularySettingsApplyResult>;
+	mergeTrack(sourceId: string, targetId: string): Promise<ProgramVocabularySettingsApplyResult>;
+	mergeFormat(sourceId: string, targetId: string): Promise<ProgramVocabularySettingsApplyResult>;
 }
 
 type AdapterFailure = Readonly<{ code: string; reason: string }>;
@@ -263,15 +256,6 @@ function sameJson(left: unknown, right: unknown): boolean {
 	return JSON.stringify(ordered(left)) === JSON.stringify(ordered(right));
 }
 
-function sameSelector(
-	left: { readonly changesetId: string; readonly revisionId: string; readonly revisionDigest: string },
-	right: { readonly changesetId: string; readonly revisionId: string; readonly revisionDigest: string }
-): boolean {
-	return left.changesetId === right.changesetId
-		&& left.revisionId === right.revisionId
-		&& left.revisionDigest === right.revisionDigest;
-}
-
 function itemFrom(
 	snapshot: ProgramVocabularySnapshotView,
 	kind: ProgramVocabularySettingsKind,
@@ -303,25 +287,22 @@ function safeItem(item: ProgramVocabularySettingsEntry) {
 	}
 }
 
-function rawSafeDiff(change: ProgramVocabularyDraftChangeView): ProgramVocabularySafeDiff | null {
-	const raw = change.action === 'delete'
-		? {
-				action: change.action,
-				before: change.before,
-				after: change.after,
-				usage: {
-					current: change.usage.currentReferences,
-					historicalPins: change.usage.historicalPins
-				}
-			}
-		: change;
-	const parsed = programVocabularySafeDiffSchema.safeParse(raw);
-	return parsed.success ? parsed.data : null;
+function mergeChange(draft: ProgramVocabularyMergeReviewData): ProgramVocabularyChangeView {
+	const diff = draft.safeDiff;
+	if (diff.action !== 'merge') throw new TypeError('program_vocabulary_merge_diff_required');
+	return Object.freeze({
+		action: 'merge',
+		sourceBefore: Object.freeze({ ...diff.sourceBefore }),
+		sourceAfter: Object.freeze({ ...diff.sourceAfter }),
+		target: Object.freeze({ ...diff.target }),
+		liveRepoints: diff.liveRepoints,
+		historicalPinsPreserved: diff.historicalPinsPreserved
+	});
 }
 
 function safeDiffMatchesRequest(
 	diff: ProgramVocabularySafeDiff,
-	request: EventProgramDraftRequest,
+	request: EventProgramDirectRequest | EventProgramMergeDraftRequest,
 	snapshot: ProgramVocabularySnapshotView
 ): boolean {
 	if (diff.action !== request.action) return false;
@@ -404,7 +385,7 @@ function safeDiffMatchesRequest(
 }
 
 type RequestBuild =
-	| { readonly kind: 'request'; readonly request: EventProgramDraftRequest }
+	| { readonly kind: 'request'; readonly request: EventProgramDirectRequest | EventProgramMergeDraftRequest }
 	| {
 			readonly kind: 'refused';
 			readonly code: ProgramVocabularySettingsRefusalCode;
@@ -487,125 +468,86 @@ function buildRequest(
 			: programVocabularyDeleteDraftRequestSchema;
 	const parsed = schema.safeParse(base);
 	return parsed.success
-		? { kind: 'request', request: { action: command.action, input: parsed.data } as EventProgramDraftRequest }
+		? { kind: 'request', request: { action: command.action, input: parsed.data } }
 		: { kind: 'refused', code: 'invalid_request', reason: 'Review this vocabulary action and try again.' };
 }
 
-async function workflowKeys(
-	rawKey: string,
-	action: ProgramVocabularySettingsCommand['action']
-): Promise<Readonly<{ draft: string; propose: string; commit: string }> | undefined> {
-	const parsed = operationHttpIdempotencyKeySchema.safeParse(rawKey);
-	if (!parsed.success) return undefined;
-	const digest = await globalThis.crypto.subtle.digest(
-		'SHA-256',
-		new TextEncoder().encode(parsed.data)
-	);
-	const anchor = Array.from(new Uint8Array(digest), (byte) =>
-		byte.toString(16).padStart(2, '0')
-	).join('');
-	return Object.freeze({
-		draft: `je.program-vocabulary.${action}.draft.${anchor}`,
-		propose: `je.program-vocabulary.${action}.propose.${anchor}`,
-		commit: `je.program-vocabulary.${action}.commit.${anchor}`
-	});
-}
+function directChange(input: {
+	readonly command: Exclude<ProgramVocabularySettingsCommand, { readonly action: 'merge' }>;
+	readonly request: EventProgramDirectRequest;
+	readonly before: ProgramVocabularySnapshotView;
+	readonly after: ProgramVocabularySnapshotView;
+	readonly result: ProgramVocabularyDirectData;
+}): ProgramVocabularyChangeView | null {
+	const { command, request, before, after, result } = input;
+	if (result.action !== command.action
+		|| result.kind !== command.kind
+		|| result.setVersion !== before.setVersion + 1
+		|| after.setVersion !== result.setVersion
+		|| result.liveRepoints !== 0
+		|| result.affectedIds.length !== 1) return null;
 
-function mapReviewFailure(
-	result: Exclude<ChangesetReviewResult<unknown>, { readonly kind: 'success' }>,
-	operation: 'propose' | 'commit'
-): ProgramVocabularySettingsApplyResult {
-	if (result.kind === 'unavailable') {
-		return { kind: 'unavailable', operation, reason: result.reason };
-	}
-	if (result.kind === 'transport_error') return result;
-	if (typeof result.terminal !== 'boolean') return invalidContract();
-	const expected = changesetReceiptOperations[operation];
-	if ((result.terminal && !receiptMatches(result.receipt, expected))
-		|| (!result.terminal && result.receipt !== undefined)) return invalidContract();
-	return {
-		kind: 'outcome',
-		outcome: result.outcome,
-		terminal: result.terminal,
-		...(result.receipt ? { receipt: result.receipt } : {}),
-		correlationId: result.correlationId
-	};
-}
-
-function proposedMatches(input: {
-	readonly result: Extract<ChangesetReviewResult<unknown>, { readonly kind: 'success' }>['data'];
-	readonly selector: ChangesetRevisionSelector;
-	readonly expectedHeadVersion: number;
-	readonly expectedRevisionNumber: number;
-	readonly expectedRisk: 'low' | 'normal' | 'consequential';
-	readonly expectedApproval: 'none' | 'distinct_current_human';
-	readonly expectedSafeDiff: ProgramVocabularySafeDiff;
-}): boolean {
-	const result = input.result as {
-		readonly selector: ChangesetRevisionSelector;
-		readonly headVersion: number;
-		readonly status: { readonly value: string };
-		readonly revisionNumber: number;
-		readonly risk: { readonly value: string };
-		readonly approval: { readonly requirement: string };
-		readonly operationCount: number;
-		readonly groups: readonly {
-			readonly operations: readonly {
-				readonly kind: string;
-				readonly version: number;
-				readonly risk: { readonly value: string };
-				readonly dependencyGroup: string;
-				readonly safeDiff: unknown;
-			}[];
-		}[];
-	};
-	const operations = result.groups.flatMap((group) => group.operations);
-	const operation = operations[0];
-	const diff = programVocabularySafeDiffSchema.safeParse(operation?.safeDiff);
-	return sameSelector(result.selector, input.selector)
-		&& result.headVersion === input.expectedHeadVersion + 1
-		&& result.status.value === 'proposed'
-		&& result.revisionNumber === input.expectedRevisionNumber
-		&& result.risk.value === input.expectedRisk
-		&& result.approval.requirement === input.expectedApproval
-		&& result.operationCount === 1
-		&& operations.length === 1
-		&& operation?.kind === 'program.vocabulary.mutate'
-		&& operation.version === 1
-		&& operation.risk.value === input.expectedRisk
-		&& operation.dependencyGroup === 'program_vocabulary'
-		&& diff.success
-		&& sameJson(diff.data, input.expectedSafeDiff);
-}
-
-function correctionFor(input: {
-	readonly command: ProgramVocabularySettingsCommand;
-	readonly selector: ChangesetRevisionSelector;
-	readonly receipt: OperationReceiptRef;
-	readonly change: ProgramVocabularyDraftChangeView;
-}): ProgramVocabularySettingsCorrection {
-	if (input.command.action === 'retire' || input.command.action === 'restore') {
-		const after = input.change.action === input.command.action ? input.change.after : null;
-		if (after) {
-			return Object.freeze({
-				kind: 'forward_lifecycle',
-				command: Object.freeze({
-					action: input.command.action === 'retire' ? 'restore' as const : 'retire' as const,
-					kind: after.kind,
-					id: after.id
-				})
-			});
+	let raw: unknown;
+	if (command.action === 'create') {
+		const created = itemFrom(after, command.kind, result.affectedIds[0]!);
+		if (!created) return null;
+		raw = { action: 'create', before: null, after: safeItem(created) };
+	} else {
+		if (result.affectedIds[0] !== command.id) return null;
+		const previous = itemFrom(before, command.kind, command.id);
+		if (!previous) return null;
+		if (command.action === 'delete') {
+			if (itemFrom(after, command.kind, command.id)) return null;
+			raw = {
+				action: 'delete', before: safeItem(previous), after: null,
+				usage: { current: previous.usage.currentReferences, historicalPins: previous.usage.historicalPins }
+			};
+		} else {
+			const updated = itemFrom(after, command.kind, command.id);
+			if (!updated) return null;
+			raw = { action: command.action, before: safeItem(previous), after: safeItem(updated) };
 		}
 	}
-	return Object.freeze({
-		kind: 'changeset_correction_required',
-		source: Object.freeze({
-			changesetId: input.selector.changesetId,
-			revisionId: input.selector.revisionId,
-			revisionDigest: input.selector.revisionDigest,
-			sourceCommitReceiptId: input.receipt.id
-		})
-	});
+	const diff = programVocabularySafeDiffSchema.safeParse(raw);
+	if (!diff.success || !safeDiffMatchesRequest(diff.data, request, before)) return null;
+	switch (diff.data.action) {
+		case 'create':
+			return Object.freeze({ action: 'create', before: null, after: Object.freeze({ ...diff.data.after }) });
+		case 'edit':
+		case 'retire':
+		case 'restore':
+			return Object.freeze({ action: diff.data.action,
+				before: Object.freeze({ ...diff.data.before }), after: Object.freeze({ ...diff.data.after }) });
+		case 'delete':
+			return Object.freeze({ action: 'delete', before: Object.freeze({ ...diff.data.before }), after: null,
+				usage: Object.freeze({ currentReferences: diff.data.usage.current,
+					historicalPins: diff.data.usage.historicalPins }) });
+		case 'merge':
+			return null;
+		default:
+			return null;
+	}
+}
+
+function directCorrection(
+	command: Exclude<ProgramVocabularySettingsCommand, { readonly action: 'merge' }>,
+	change: ProgramVocabularyChangeView
+): ProgramVocabularySettingsCorrection {
+	if ((command.action === 'retire' || command.action === 'restore')
+		&& change.action === command.action) {
+		return Object.freeze({
+			kind: 'forward_lifecycle',
+			command: Object.freeze({
+				action: command.action === 'retire' ? 'restore' as const : 'retire' as const,
+				kind: command.kind,
+				id: command.id
+			})
+		});
+	}
+	if (command.action === 'create' || command.action === 'edit' || command.action === 'delete') {
+		return Object.freeze({ kind: 'forward_change_required', action: command.action });
+	}
+	throw new TypeError('program_vocabulary_direct_correction_mismatch');
 }
 
 function failureCopy(
@@ -614,8 +556,8 @@ function failureCopy(
 	if (result.kind === 'refused') return { code: result.code, reason: result.reason };
 	if (result.kind === 'confirmation_required') {
 		return {
-			code: 'distinct_current_human_required',
-			reason: 'This vocabulary change needs confirmation from another currently authorized person.'
+			code: 'merge_review_required',
+			reason: 'Review the affected references before merging these program categories.'
 		};
 	}
 	if (result.kind === 'unavailable') {
@@ -683,7 +625,7 @@ function readFailure(
 }
 
 function createdEntry(
-	change: ProgramVocabularyDraftChangeView
+	change: ProgramVocabularyChangeView
 ): ProgramVocabularySettingsEntry | null {
 	if (change.action !== 'create') return null;
 	const usage = Object.freeze({ currentReferences: 0, historicalPins: 0 });
@@ -697,12 +639,8 @@ function defaultIdempotencyKey(): string {
 
 export function createProgramVocabularySettingsAdapter(input: {
 	readonly program: EventProgramPort;
-	readonly changesets: ChangesetReviewPort;
 	readonly newIdempotencyKey?: () => string;
 }): ProgramVocabularySettingsPort {
-	if (input.program.source.kind !== input.changesets.source.kind) {
-		throw new TypeError('program_vocabulary_source_mismatch');
-	}
 	const newIdempotencyKey = input.newIdempotencyKey ?? defaultIdempotencyKey;
 	const replayKeys = new Map<string, string>();
 
@@ -743,14 +681,67 @@ export function createProgramVocabularySettingsAdapter(input: {
 			?? replayKeys.get(fingerprint)
 			?? newIdempotencyKey();
 		if (options.idempotencyKey === undefined) replayKeys.set(fingerprint, baseKey);
-		const keys = await workflowKeys(baseKey, command.action);
-		if (!keys) return invalidRequest();
+		if (!operationHttpIdempotencyKeySchema.safeParse(baseKey).success) return invalidRequest();
 
-		const draft = await input.program.vocabulary.draft(built.request, {
-			idempotencyKey: keys.draft,
+		if (built.request.action !== 'merge' && command.action !== 'merge') {
+			const direct = built.request.action === 'create'
+				? await input.program.vocabulary.create(built.request.input, {
+					idempotencyKey: baseKey, ...(options.signal ? { signal: options.signal } : {})
+				})
+				: built.request.action === 'edit'
+					? await input.program.vocabulary.edit(built.request.input, {
+						idempotencyKey: baseKey, ...(options.signal ? { signal: options.signal } : {})
+					})
+					: built.request.action === 'retire'
+						? await input.program.vocabulary.retire(built.request.input, {
+							idempotencyKey: baseKey, ...(options.signal ? { signal: options.signal } : {})
+						})
+						: built.request.action === 'restore'
+							? await input.program.vocabulary.restore(built.request.input, {
+								idempotencyKey: baseKey, ...(options.signal ? { signal: options.signal } : {})
+							})
+							: await input.program.vocabulary.delete(built.request.input, {
+								idempotencyKey: baseKey, ...(options.signal ? { signal: options.signal } : {})
+							});
+			const directOperation = directReceiptOperations[built.request.action];
+			if (direct.kind === 'outcome') {
+				if ((direct.terminal && !receiptMatches(direct.receipt, directOperation))
+					|| (!direct.terminal && direct.receipt !== undefined)) return invalidContract();
+				if (direct.terminal) replayKeys.delete(fingerprint);
+				return direct;
+			}
+			if (direct.kind === 'transport_error') return direct;
+			if (direct.kind === 'unavailable') {
+				return { kind: 'unavailable', operation: built.request.action, reason: direct.reason };
+			}
+			if (!receiptMatches(direct.receipt, directOperation)) return invalidContract();
+			const refreshed = await readSnapshot(options.signal ? { signal: options.signal } : {});
+			if (refreshed.kind === 'outcome') {
+				return { kind: 'outcome', outcome: refreshed.outcome, terminal: false,
+					correlationId: refreshed.correlationId };
+			}
+			if (refreshed.kind === 'transport_error') return refreshed;
+			if (refreshed.kind === 'unavailable') {
+				return { kind: 'unavailable', operation: 'read', reason: refreshed.reason };
+			}
+			const change = directChange({ command, request: built.request, before: current.data,
+				after: refreshed.data, result: direct.data });
+			if (!change) return invalidContract();
+			replayKeys.delete(fingerprint);
+			return {
+				kind: 'success',
+				data: Object.freeze({ action: command.action, change,
+					correction: directCorrection(command, change) }),
+				receipt: direct.receipt,
+				correlationId: direct.correlationId
+			};
+		}
+		if (built.request.action !== 'merge' || command.action !== 'merge') return invalidContract();
+		const draft = await input.program.vocabulary.draftMerge(built.request, {
+			idempotencyKey: baseKey,
 			...(options.signal ? { signal: options.signal } : {})
 		});
-		const draftOperation = draftReceiptOperations[command.action];
+		const draftOperation = draftReceiptOperations.merge;
 		if (draft.kind === 'outcome') {
 			if ((draft.terminal && !receiptMatches(draft.receipt, draftOperation))
 				|| (!draft.terminal && draft.receipt !== undefined)) return invalidContract();
@@ -761,86 +752,81 @@ export function createProgramVocabularySettingsAdapter(input: {
 		if (draft.kind === 'unavailable') {
 			return { kind: 'unavailable', operation: 'draft', reason: draft.reason };
 		}
-		const draftSafeDiff = rawSafeDiff(draft.data.change);
+		const draftSafeDiff = draft.data.safeDiff;
 		if (!receiptMatches(draft.receipt, draftOperation)
-			|| !draftSafeDiff
 			|| !safeDiffMatchesRequest(draftSafeDiff, built.request, current.data)) {
-			return invalidContract();
-		}
-		const selector = changesetRevisionSelectorSchema.safeParse({
-			changesetId: draft.data.changesetId,
-			revisionId: draft.data.revision.id,
-			revisionDigest: draft.data.revision.digestSha256
-		});
-		if (!selector.success) return invalidContract();
-		if (draft.data.approvalPolicy.requirement === 'distinct_current_human') {
-			replayKeys.delete(fingerprint);
-			return {
-				kind: 'confirmation_required',
-				data: Object.freeze({
-					action: command.action,
-					selector: Object.freeze({ ...selector.data }),
-					headVersion: draft.data.headVersion,
-					change: draft.data.change,
-					requirement: 'distinct_current_human' as const
-				}),
-				receipt: draft.receipt,
-				correlationId: draft.correlationId
-			};
-		}
-
-		const proposed = await input.changesets.propose(
-			{ ...selector.data, expectedHeadVersion: draft.data.headVersion },
-			keys.propose,
-			options.signal ? { signal: options.signal } : {}
-		);
-		if (proposed.kind !== 'success') return mapReviewFailure(proposed, 'propose');
-		if (!receiptMatches(proposed.receipt, changesetReceiptOperations.propose)
-			|| proposed.correlationId === undefined
-			|| !proposedMatches({
-				result: proposed.data,
-				selector: selector.data,
-				expectedHeadVersion: draft.data.headVersion,
-				expectedRevisionNumber: draft.data.revision.number,
-				expectedRisk: draft.data.riskTier,
-				expectedApproval: draft.data.approvalPolicy.requirement,
-				expectedSafeDiff: draftSafeDiff
-			})) return invalidContract();
-
-		const committed = await input.changesets.commit(
-			{ ...selector.data, expectedHeadVersion: proposed.data.headVersion },
-			keys.commit,
-			options.signal ? { signal: options.signal } : {}
-		);
-		if (committed.kind !== 'success') return mapReviewFailure(committed, 'commit');
-		if (!receiptMatches(committed.receipt, changesetReceiptOperations.commit)
-			|| committed.correlationId === undefined
-			|| !sameSelector({
-				changesetId: committed.data.changesetId,
-				revisionId: committed.data.revisionId,
-				revisionDigest: committed.data.revisionDigest
-			}, selector.data)
-			|| committed.data.expectedHeadVersion !== proposed.data.headVersion
-			|| committed.data.committedHeadVersion !== proposed.data.headVersion + 1) {
 			return invalidContract();
 		}
 		replayKeys.delete(fingerprint);
 		return {
-			kind: 'success',
+			kind: 'confirmation_required',
 			data: Object.freeze({
-				action: command.action,
-				selector: Object.freeze({ ...selector.data }),
-				committedHeadVersion: committed.data.committedHeadVersion,
-				change: draft.data.change,
-				correction: correctionFor({
-					command,
-					selector: selector.data,
-					receipt: committed.receipt,
-					change: draft.data.change
-				})
+				action: 'merge',
+				selector: Object.freeze({
+					draftId: draft.data.draftId,
+					revisionId: draft.data.revision.id,
+					revisionDigestSha256: draft.data.revision.digestSha256
+				}),
+				change: mergeChange(draft.data)
 			}),
-			receipt: committed.receipt,
-			correlationId: committed.correlationId
+			receipt: draft.receipt,
+			correlationId: draft.correlationId
+		};
+	}
+
+	async function publishMerge(
+		confirmation: ProgramVocabularySettingsConfirmationRequired,
+		options: ApplyOptions = {}
+	): Promise<ProgramVocabularySettingsApplyResult> {
+		options.signal?.throwIfAborted();
+		if (confirmation.action !== 'merge' || confirmation.change.action !== 'merge') return invalidRequest();
+		const fingerprint = `publish:${JSON.stringify(confirmation.selector)}`;
+		const idempotencyKey = options.idempotencyKey
+			?? replayKeys.get(fingerprint)
+			?? newIdempotencyKey();
+		if (options.idempotencyKey === undefined) replayKeys.set(fingerprint, idempotencyKey);
+		if (!operationHttpIdempotencyKeySchema.safeParse(idempotencyKey).success) return invalidRequest();
+		const published = await input.program.vocabulary.publishMerge(confirmation.selector, {
+			idempotencyKey,
+			...(options.signal ? { signal: options.signal } : {})
+		});
+		if (published.kind === 'outcome') {
+			if ((published.terminal && !receiptMatches(published.receipt, publishReceiptOperation))
+				|| (!published.terminal && published.receipt !== undefined)) return invalidContract();
+			if (published.terminal) replayKeys.delete(fingerprint);
+			return published;
+		}
+		if (published.kind === 'transport_error') return published;
+		if (published.kind === 'unavailable') {
+			return { kind: 'unavailable', operation: 'publish', reason: published.reason };
+		}
+		if (!receiptMatches(published.receipt, publishReceiptOperation)
+			|| published.data.action !== 'merge'
+			|| published.data.kind !== confirmation.change.sourceBefore.kind
+			|| published.data.liveRepoints !== confirmation.change.liveRepoints
+			|| published.data.affectedIds.length !== 2
+			|| !published.data.affectedIds.includes(confirmation.change.sourceBefore.id)
+			|| !published.data.affectedIds.includes(confirmation.change.target.id)) return invalidContract();
+		const refreshed = await readSnapshot(options.signal ? { signal: options.signal } : {});
+		if (refreshed.kind === 'outcome') {
+			return { kind: 'outcome', outcome: refreshed.outcome, terminal: false, correlationId: refreshed.correlationId };
+		}
+		if (refreshed.kind === 'transport_error') return refreshed;
+		if (refreshed.kind === 'unavailable') return { kind: 'unavailable', operation: 'read', reason: refreshed.reason };
+		const source = itemFrom(refreshed.data, confirmation.change.sourceBefore.kind,
+			confirmation.change.sourceBefore.id);
+		const target = itemFrom(refreshed.data, confirmation.change.target.kind,
+			confirmation.change.target.id);
+		if (!source || !target || source.status !== 'retired'
+			|| source.version !== confirmation.change.sourceAfter.version
+			|| source.usage.currentReferences !== 0
+			|| refreshed.data.setVersion !== published.data.setVersion) return invalidContract();
+		replayKeys.delete(fingerprint);
+		return {
+			kind: 'success',
+			data: Object.freeze({ action: 'merge', change: confirmation.change }),
+			receipt: published.receipt,
+			correlationId: published.correlationId
 		};
 	}
 
@@ -878,6 +864,7 @@ export function createProgramVocabularySettingsAdapter(input: {
 		tracks: (options = {}) => list((snapshot) => snapshot.tracks, options),
 		formats: (options = {}) => list((snapshot) => snapshot.formats, options),
 		apply,
+		publishMerge,
 		async addRoom(name, capacity) {
 			const entry = await add({ action: 'create', kind: 'room', name, capacity });
 			if (entry.kind !== 'room') throw new TypeError('program_vocabulary_created_kind_mismatch');
@@ -905,9 +892,9 @@ export function createProgramVocabularySettingsAdapter(input: {
 		restoreRoom: (id) => mutation({ action: 'restore', kind: 'room', id }),
 		restoreTrack: (id) => mutation({ action: 'restore', kind: 'track', id }),
 		restoreFormat: (id) => mutation({ action: 'restore', kind: 'format', id }),
-		mergeRoom: (sourceId, targetId) => mutation({ action: 'merge', kind: 'room', sourceId, targetId }),
-		mergeTrack: (sourceId, targetId) => mutation({ action: 'merge', kind: 'track', sourceId, targetId }),
-		mergeFormat: (sourceId, targetId) => mutation({ action: 'merge', kind: 'format', sourceId, targetId })
+		mergeRoom: (sourceId, targetId) => apply({ action: 'merge', kind: 'room', sourceId, targetId }),
+		mergeTrack: (sourceId, targetId) => apply({ action: 'merge', kind: 'track', sourceId, targetId }),
+		mergeFormat: (sourceId, targetId) => apply({ action: 'merge', kind: 'format', sourceId, targetId })
 	} satisfies ProgramVocabularySettingsPort);
 }
 

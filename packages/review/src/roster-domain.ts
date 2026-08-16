@@ -1,3 +1,4 @@
+import { canonicalJsonSha256 } from '@jooevents/kernel';
 import {
   REVIEWER_CAPABILITY_IDS,
   reviewerRosterMutationInputSchema,
@@ -20,7 +21,7 @@ import {
   type ReviewerScopeTargetSetDto
 } from '@jooevents/contracts/reviewer-roster';
 import type { ReviewRosterSet } from './model';
-import { canonicalJsonSha256 } from '@jooevents/changesets';
+
 import {
   parseReviewerAuthoritySet,
   parseReviewerRosterRecord,

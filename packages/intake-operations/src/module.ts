@@ -24,21 +24,10 @@ import {
   createEffectfulOperationResultSchema,
   createSafeSchemaManifestRef,
   createReadOperationResultSchema,
-  formClosingChangeDraftInputSchema,
-  formDefinitionCreateDraftInputSchema,
-  formDefinitionReviseDraftInputSchema,
-  formLifecycleChangeDraftInputSchema,
-  formVersionPublishDraftInputSchema,
   INTAKE_OPERATION_SCHEMA_REFS,
   intakeEmptyReadInputSchema,
   intakeFormReadInputSchema,
   intakeSubmissionReadInputSchema,
-  intakeDigestSchema,
-  intakeFormDraftActionSchema,
-  intakeFormDraftCanonicalResultSchema,
-  intakeFormDraftDataSchema,
-  intakeFormDraftOperationResultSchema,
-  intakeFormSafeDiffSchema,
   intakeIdInputSchema,
   intakeIdSchema,
   organizerFormCatalogSchema,
@@ -60,7 +49,6 @@ import {
   publicApplicationSubmitResultSchema,
   servedPublicFormSchema,
   structuredOutcomeSchema,
-  type IntakeFormDraftAction,
   type OrganizerFormDetailDto,
   type OrganizerFormCatalogDto,
   type OrganizerSubmissionContactDto,
@@ -97,15 +85,6 @@ import {
 import { z } from 'zod';
 import { createIntakeHandler } from './preparation';
 
-export {
-  intakeFormDraftActionSchema,
-  intakeFormDraftCanonicalResultSchema,
-  intakeFormDraftDataSchema,
-  intakeFormDraftOperationResultSchema,
-  intakeFormSafeDiffSchema,
-  type IntakeFormDraftAction
-} from '@jooevents/contracts';
-
 function ref(key: string): VersionedDefinitionRef {
   return Object.freeze({ key, version: parseContractVersion(1) });
 }
@@ -126,26 +105,8 @@ export const INTAKE_SUBMISSION_CONTACT_READ_OPERATION = Object.freeze({
   name: 'submission.contact.read', version: 1
 });
 export const INTAKE_PUBLIC_MUTATE_OPERATION = Object.freeze({ name: 'application.public.mutate', version: 1 });
-export const INTAKE_FORM_CREATE_DRAFT_OPERATION = Object.freeze({
-  name: 'form.definition.create.draft', version: 1
-});
-export const INTAKE_FORM_REVISE_DRAFT_OPERATION = Object.freeze({
-  name: 'form.definition.revise.draft', version: 1
-});
-export const INTAKE_FORM_PUBLISH_DRAFT_OPERATION = Object.freeze({
-  name: 'form.version.publish.draft', version: 1
-});
-export const INTAKE_FORM_LIFECYCLE_DRAFT_OPERATION = Object.freeze({
-  name: 'form.lifecycle.change.draft', version: 1
-});
-export const INTAKE_FORM_CLOSING_DRAFT_OPERATION = Object.freeze({
-  name: 'form.closing.change.draft', version: 1
-});
-
 export const INTAKE_PUBLIC_MUTATION_HANDLER_CAPABILITY = ref('capability.application.public.mutate');
 export const INTAKE_PUBLIC_MUTATION_REQUEST_HASH_PROFILE = ref('request-hash.application.public.mutate');
-export const INTAKE_FORM_DRAFT_HANDLER_CAPABILITY = ref('capability.intake.form.changeset-draft');
-export const INTAKE_FORM_DRAFT_REQUEST_HASH_PROFILE = ref('request-hash.intake.form.draft');
 
 export const INTAKE_EVENT_READ_ACCESS_POLICY = Object.freeze({
   key: 'authority.intake.event-read', version: parseContractVersion(1)
@@ -185,131 +146,6 @@ export const intakePublicMutateInputSchema = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('save'), input: publicApplicationDraftSaveInputSchema }),
   z.strictObject({ action: z.literal('submit'), input: publicApplicationSubmitInputSchema })
 ]);
-
-const intakeFormDraftOperations = Object.freeze([
-  Object.freeze({
-    action: 'create' as const,
-    operation: INTAKE_FORM_CREATE_DRAFT_OPERATION,
-    inputSchema: formDefinitionCreateDraftInputSchema,
-    path: '/api/events/current/forms/drafts/create'
-  }),
-  Object.freeze({
-    action: 'revise' as const,
-    operation: INTAKE_FORM_REVISE_DRAFT_OPERATION,
-    inputSchema: formDefinitionReviseDraftInputSchema,
-    path: '/api/events/current/forms/drafts/revise'
-  }),
-  Object.freeze({
-    action: 'publish' as const,
-    operation: INTAKE_FORM_PUBLISH_DRAFT_OPERATION,
-    inputSchema: formVersionPublishDraftInputSchema,
-    path: '/api/events/current/forms/drafts/publish'
-  }),
-  Object.freeze({
-    action: 'lifecycle' as const,
-    operation: INTAKE_FORM_LIFECYCLE_DRAFT_OPERATION,
-    inputSchema: formLifecycleChangeDraftInputSchema,
-    path: '/api/events/current/forms/drafts/lifecycle'
-  }),
-  Object.freeze({
-    action: 'closing' as const,
-    operation: INTAKE_FORM_CLOSING_DRAFT_OPERATION,
-    inputSchema: formClosingChangeDraftInputSchema,
-    path: '/api/events/current/forms/drafts/closing'
-  })
-]);
-
-export function intakeFormDraftActionForOperation(
-  operationName: string,
-  operationVersion: number
-): IntakeFormDraftAction | undefined {
-  return intakeFormDraftOperations.find(({ operation }) =>
-    operation.name === operationName && operation.version === operationVersion
-  )?.action;
-}
-
-export const intakeFormDraftDomainContributionSchema = z.strictObject({
-  kind: z.literal('intake_form_changeset_draft'),
-  preparationHandle: canonicalUuid,
-  action: intakeFormDraftActionSchema,
-  workspaceId: canonicalUuid,
-  eventId: canonicalUuid,
-  changesetId: canonicalUuid,
-  revisionId: canonicalUuid,
-  revisionDigestSha256: intakeDigestSchema,
-  recordDigestSha256: intakeDigestSchema,
-  occurredAt: z.iso.datetime({ offset: true })
-});
-
-export const intakeFormDraftEvidenceChildSchema = z.strictObject({
-  kind: z.literal('timeline'),
-  timelineId: canonicalUuid,
-  sourceKind: z.literal('changeset_revision'),
-  workspaceId: canonicalUuid,
-  eventId: canonicalUuid,
-  changesetId: canonicalUuid,
-  revisionId: canonicalUuid,
-  occurredAt: z.iso.datetime({ offset: true })
-});
-
-const intakeFormDraftDetailSchema = z.strictObject({
-  code: z.enum([
-    'wrong_scope', 'stale_catalog', 'stale_definition', 'stale_registry',
-    'form_exists', 'form_missing', 'form_not_publishable', 'form_version_exists',
-    'category_missing', 'category_changed', 'session_unavailable', 'session_changed',
-    'deadline_unavailable', 'deadline_changed',
-    'invalid_identity_assignment', 'invalid_definition', 'invalid_transition', 'invalid_plan'
-  ]),
-  action: intakeFormDraftActionSchema,
-  formId: intakeIdInputSchema
-});
-
-const intakeFormDraftSuccessContributionSchema = z.strictObject({
-  result: z.strictObject({ kind: z.literal('success'), data: intakeFormDraftDataSchema }),
-  domain: intakeFormDraftDomainContributionSchema,
-  receiptChildren: z.tuple([intakeFormDraftEvidenceChildSchema])
-}).superRefine((value, context) => {
-  const data = value.result.data;
-  const domain = value.domain;
-  const timeline = value.receiptChildren[0];
-  if (data.action !== domain.action || data.changesetId !== domain.changesetId
-      || data.revision.id !== domain.revisionId
-      || data.revision.digestSha256 !== domain.revisionDigestSha256
-      || timeline.workspaceId !== domain.workspaceId || timeline.eventId !== domain.eventId
-      || timeline.changesetId !== domain.changesetId || timeline.revisionId !== domain.revisionId
-      || timeline.occurredAt !== domain.occurredAt) {
-    context.addIssue({ code: 'custom', message: 'Form draft evidence is incoherent.' });
-  }
-});
-
-const intakeFormDraftOutcomeContributionSchema = z.strictObject({
-  result: z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema }),
-  domain: z.null(),
-  receiptChildren: z.tuple([])
-}).superRefine((value, context) => {
-  const outcome = value.result.outcome;
-  const allowed = new Set([
-    'conflict:intake_form.event_required',
-    'stale_revision:intake_form.changed',
-    'policy_violation:intake_form.change_refused',
-    'conflict:changeset.id_collision'
-  ]);
-  const detail = outcome.kind === 'intake_form.changed'
-      || outcome.kind === 'intake_form.change_refused'
-    ? intakeFormDraftDetailSchema
-    : z.null();
-  if (!allowed.has(`${outcome.class}:${outcome.kind}`) || outcome.retryable
-      || outcome.detailSchemaVersion !== 1 || !detail.safeParse(outcome.detail).success) {
-    context.addIssue({ code: 'custom', message: 'Form draft refusal is invalid.' });
-  }
-});
-
-export const intakeFormDraftContributionSchema = z.union([
-  intakeFormDraftSuccessContributionSchema,
-  intakeFormDraftOutcomeContributionSchema
-]);
-
-export type IntakeFormDraftContribution = z.infer<typeof intakeFormDraftContributionSchema>;
 
 const formIdInputSchema = intakeFormReadInputSchema;
 const emptyInputSchema = intakeEmptyReadInputSchema;
@@ -362,7 +198,7 @@ function contributionSchema(result: z.ZodType) {
     z.strictObject({
       result: z.strictObject({ kind: z.literal('success'), data: result }),
       domain: intakeMutationDomainContributionSchema,
-      receiptChildren: z.tuple([
+      effectContributions: z.tuple([
         intakeMutationEvidenceChildSchema,
         intakeMutationEvidenceChildSchema,
         intakeMutationEvidenceChildSchema
@@ -371,7 +207,7 @@ function contributionSchema(result: z.ZodType) {
     z.strictObject({
       result: z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema }),
       domain: z.null(),
-      receiptChildren: z.tuple([])
+      effectContributions: z.tuple([])
     })
   ]);
 }
@@ -974,247 +810,6 @@ export function createIntakePublicConformanceReadOperationModule(input: {
   });
 }
 
-/** Explicit organizer draft operations; none writes effective Form state. */
-export function createIntakeFormDraftOperationModule(input: {
-  readonly workspaceId: WorkspaceId;
-  readonly policy: VersionedAccessPolicyRef;
-  readonly currentAuthority: CurrentAuthorityResolver<InvocationEvidence>;
-  readonly currentEvent: IntakeCurrentEventSource;
-  readonly clock: Clock;
-  readonly ids: IntakeOperationIds;
-  readonly crypto: IntakeOperationCrypto;
-}): OperationRegistryModule {
-  assertPolicy(input.policy, INTAKE_EVENT_MANAGE_ACCESS_POLICY,
-    'intake_event_manage_policy_catalog_mismatch');
-  const workspaceId = parseWorkspaceId(input.workspaceId);
-  const lane = operatorLane(input.policy);
-  const scopeResolver = eventScope(workspaceId, input.currentEvent);
-  const nullDetail = z.null();
-  const schema = Object.freeze({
-    contribution: schemaRef('schema.intake.form-draft.contribution', intakeFormDraftContributionSchema),
-    canonical: schemaRef('schema.intake.form-draft.canonical-result', intakeFormDraftCanonicalResultSchema),
-    projected: INTAKE_OPERATION_SCHEMA_REFS.formDrafts.create.resultSchema,
-    detail: schemaRef('schema.intake.form-draft.refusal-detail', intakeFormDraftDetailSchema),
-    nullDetail: schemaRef('schema.intake.form-draft.null-detail', nullDetail),
-    inputs: Object.freeze(Object.fromEntries(intakeFormDraftOperations.map((entry) => [
-      entry.action,
-      INTAKE_OPERATION_SCHEMA_REFS.formDrafts[entry.action].inputSchema
-    ])) as Record<IntakeFormDraftAction, SafeSchemaManifestRef>)
-  });
-  const shared = Object.freeze({
-    handler: ref('handler.intake.form.changeset-draft'),
-    projection: ref('projection.intake.form.changeset-draft.operator'),
-    audit: ref('audit.intake.form.changeset-draft'),
-    auditProfile: ref('record-profile.intake.form-draft.operation-audit'),
-    keySource: ref('idempotency.operator-header')
-  });
-  const built = intakeFormDraftOperations.map((entry) => {
-    const refs = Object.freeze({
-      context: ref(`context.intake.form.${entry.action}-draft`),
-      autonomy: ref(`autonomy.intake.form.${entry.action}-draft`),
-      concurrency: ref(`concurrency.intake.form.${entry.action}-draft`),
-      family: ref(`intake.form.${entry.action}-draft.execution-family`),
-      phase: ref(`intake.form.${entry.action}-draft.phase.single-uow`),
-      terminalization: ref(`intake.form.${entry.action}-draft.terminalization`),
-      risk: ref(`intake.form.${entry.action}-draft.risk-resolver`),
-      evidence: ref(`intake.form.${entry.action}-draft.autonomy-evidence`),
-      approval: ref(`intake.form.${entry.action}-draft.approval-resolver`),
-      preflight: ref(`intake.form.${entry.action}-draft.autonomy-preflight`)
-    });
-    const policy = autonomy(entry.operation, refs.autonomy, 'low');
-    const context = createEffectInvocationContextBuilder({
-      reference: refs.context,
-      operation: entry.operation,
-      effect: 'draft',
-      lanes: [lane],
-      scopeResolver,
-      authorityResolver: input.currentAuthority,
-      clock: input.clock,
-      newInvocationId: input.ids.newInvocationId,
-      authorityPrincipalKeyProfile: input.crypto.authorityPrincipalKeyProfile,
-      scopePartitionProfile: input.crypto.scopePartitionProfile,
-      requestCanonicalizationProfile: input.crypto.requestCanonicalizationProfile,
-      requestHashProfile: INTAKE_FORM_DRAFT_REQUEST_HASH_PROFILE,
-      requestHashSealer: input.crypto.requestHashSealer,
-      idempotencyCredentialProfile: input.crypto.idempotencyCredentialProfile,
-      idempotencyCredentialSealer: input.crypto.idempotencyCredentialSealer,
-      deniedAuthorityOutcome: authorityOutcome
-    });
-    const family = createSingleUnitOfWorkFamilyRegistration({
-      reference: refs.family, phase: refs.phase
-    });
-    const terminalization = createTerminalizationResolverRegistration({
-      reference: refs.terminalization,
-      operation: entry.operation,
-      phase: refs.phase,
-      resolve: ({ result }) => result.kind === 'success'
-        ? Object.freeze({ kind: 'terminal' as const })
-        : Object.freeze({ kind: 'nonterminal' as const })
-    });
-    const phase = createSingleUnitOfWorkPhaseRegistration({
-      reference: refs.phase,
-      family: refs.family,
-      operation: entry.operation,
-      effect: 'draft',
-      handler: shared.handler,
-      handlerCapability: INTAKE_FORM_DRAFT_HANDLER_CAPABILITY,
-      contributionSchema: schema.contribution,
-      terminalization: refs.terminalization,
-      terminalOutcomeKeys: [],
-      contentionOutcome: {
-        class: 'conflict', kind: 'operation.in_progress', retryable: true,
-        subjects: [], detail: null, detailSchemaVersion: 1
-      }
-    });
-    const risk = createOperationRiskResolverRegistration({
-      reference: refs.risk,
-      operation: entry.operation,
-      resolve: () => ({
-        risk: 'low', consequenceTags: ['changeset-drafted'],
-        evidenceIds: [`intake.form.${entry.action}.draft.risk`]
-      })
-    });
-    const evidence = createAutonomyEvidenceResolverRegistration({
-      reference: refs.evidence,
-      operation: entry.operation,
-      resolve: ({ subject }) => {
-        const bounds = {
-          scopeKeys: [...subject.scopeKeys], maximumSpendMicros: 0, maximumActions: 1,
-          notAfter: parseInstant(new Date(Date.parse(subject.evaluatedAt) + 60_000).toISOString())
-        };
-        return {
-          evaluatedAt: subject.evaluatedAt,
-          hardBounds: bounds,
-          unattendedBounds: bounds,
-          spendMicros: 0,
-          actionCount: 1,
-          completesBy: subject.evaluatedAt,
-          proposedAction: {
-            key: `intake.form.${entry.action}.draft.execute`, version: 1,
-            digestSha256: subject.requestHashSha256
-          },
-          failure: { kind: 'none' }
-        };
-      }
-    });
-    const approval = createRenewedApprovalResolverRegistration({
-      reference: refs.approval,
-      operation: entry.operation,
-      resolve: () => ({ approverCurrentlyAuthorized: false })
-    });
-    const preflight = createAutonomyPreflightRegistration({
-      reference: refs.preflight,
-      operation: entry.operation,
-      policy: refs.autonomy,
-      riskResolver: refs.risk,
-      evidenceResolver: refs.evidence,
-      approvalResolver: refs.approval,
-      interventionOutcomes: autonomyInterventionOutcomes(1)
-    });
-    return Object.freeze({ ...entry, refs, policy, context, family, terminalization, phase,
-      risk, evidence, approval, preflight });
-  });
-  const handler = createIntakeHandler({
-    reference: shared.handler,
-    effect: 'draft',
-    handlerCapability: INTAKE_FORM_DRAFT_HANDLER_CAPABILITY,
-    contributionSchema: schema.contribution,
-    canonicalResultSchema: schema.canonical
-  });
-  const accessOutcomes = CURRENT_AUTHORITY_DENIAL_REASONS.map((reason) => ({
-    class: 'access_denied' as const, kind: `authority.${reason}`, retryable: false,
-    detailSchema: schema.nullDetail
-  }));
-  return Object.freeze({
-    id: 'intake.form-draft-operations',
-    source: Object.freeze({
-      autonomyPolicies: built.map((entry) => entry.policy),
-      schemas: [
-        ...built.map((entry) => ({
-          reference: schema.inputs[entry.action], schema: entry.inputSchema
-        })),
-        { reference: schema.contribution, schema: intakeFormDraftContributionSchema },
-        { reference: schema.canonical, schema: intakeFormDraftCanonicalResultSchema },
-        { reference: schema.projected, schema: intakeFormDraftOperationResultSchema },
-        { reference: schema.detail, schema: intakeFormDraftDetailSchema },
-        { reference: schema.nullDetail, schema: nullDetail }
-      ],
-      contextBuilders: [], readCapabilities: [], handlers: [],
-      projections: [{
-        reference: shared.projection,
-        canonicalResultSchema: schema.canonical,
-        projectedResultSchema: schema.projected,
-        project: (candidate: unknown) => intakeFormDraftCanonicalResultSchema.parse(candidate)
-      }],
-      operationAuditTargets: [{
-        reference: shared.audit, kind: 'operation_audit_record' as const,
-        recordProfile: shared.auditProfile
-      }],
-      operationAuditRecordProfiles: [{
-        reference: shared.auditProfile, kind: 'canonical_json' as const, maximumBytes: 262_144
-      }],
-      operations: [],
-      effectContextBuilders: built.map((entry) => entry.context),
-      effectHandlers: [handler],
-      effectExecutionFamilies: built.map((entry) => entry.family),
-      effectPhases: built.map((entry) => entry.phase),
-      terminalizationResolvers: built.map((entry) => entry.terminalization),
-      riskResolvers: built.map((entry) => entry.risk),
-      autonomyEvidenceResolvers: built.map((entry) => entry.evidence),
-      renewedApprovalResolvers: built.map((entry) => entry.approval),
-      autonomyPreflights: built.map((entry) => entry.preflight),
-      effectOperations: built.map((entry) => ({
-        ...entry.operation,
-        lifecycle: { status: 'active' as const },
-        summary: `Draft a Form ${entry.action} change for review.`,
-        effect: 'draft' as const,
-        maxRisk: 'low' as const,
-        autonomyPolicy: entry.refs.autonomy,
-        consequenceTags: ['changeset-drafted'],
-        inputSchema: schema.inputs[entry.action],
-        contributionSchema: schema.contribution,
-        canonicalResultSchema: schema.canonical,
-        outcomes: [
-          { class: 'idempotency_conflict' as const, kind: 'operation.request_changed', retryable: false, detailSchema: schema.nullDetail },
-          ...accessOutcomes,
-          { class: 'conflict' as const, kind: 'intake_form.event_required', retryable: false, detailSchema: schema.nullDetail },
-          { class: 'stale_revision' as const, kind: 'intake_form.changed', retryable: false, detailSchema: schema.detail },
-          { class: 'policy_violation' as const, kind: 'intake_form.change_refused', retryable: false, detailSchema: schema.detail },
-          { class: 'conflict' as const, kind: 'changeset.id_collision', retryable: false, detailSchema: schema.nullDetail },
-          { class: 'conflict' as const, kind: 'operation.in_progress', retryable: true, detailSchema: schema.nullDetail },
-          ...autonomyInterventionOutcomeDeclarations(schema.nullDetail)
-        ],
-        accessLanes: [lane],
-        contextBuilder: entry.refs.context,
-        handlerCapability: INTAKE_FORM_DRAFT_HANDLER_CAPABILITY,
-        handler: shared.handler,
-        audit: { mode: 'required' as const, target: shared.audit },
-        idempotency: {
-          keySource: shared.keySource,
-          credentialVerifierProfile: input.crypto.idempotencyCredentialProfile,
-          requestHashProfile: INTAKE_FORM_DRAFT_REQUEST_HASH_PROFILE
-        },
-        concurrency: entry.refs.concurrency,
-        execution: {
-          kind: 'single_unit_of_work' as const,
-          family: entry.refs.family,
-          phase: entry.refs.phase,
-          terminalization: entry.refs.terminalization,
-          autonomyPreflight: entry.refs.preflight
-        },
-        bindings: [{
-          surface: 'operator_http' as const,
-          method: 'POST' as const,
-          path: entry.path,
-          input: 'body' as const,
-          browserResumption: { kind: 'none' as const },
-          projection: shared.projection
-        }]
-      }))
-    })
-  });
-}
-
 function effectModule(input: {
   readonly id: string;
   readonly operation: { readonly name: string; readonly version: number };
@@ -1288,7 +883,7 @@ function effectModule(input: {
   });
   const approval = createRenewedApprovalResolverRegistration({ reference: r.approval, operation, resolve: () => ({ approverCurrentlyAuthorized: false }) });
   const preflight = createAutonomyPreflightRegistration({ reference: r.preflight, operation, policy: r.autonomy, riskResolver: r.risk, evidenceResolver: r.evidence, approvalResolver: r.approval, interventionOutcomes: autonomyInterventionOutcomes(1) });
-  const handler = createIntakeHandler({ reference: r.handler, effect: 'commit', handlerCapability: input.capability, contributionSchema: r.contribution, canonicalResultSchema: r.canonical });
+  const handler = createIntakeHandler({ reference: r.handler, handlerCapability: input.capability, contributionSchema: r.contribution, canonicalResultSchema: r.canonical });
   const accessOutcomes = CURRENT_AUTHORITY_DENIAL_REASONS.map((reason) => ({ class: 'access_denied' as const, kind: `authority.${reason}`, retryable: false, detailSchema: refs.nullDetail }));
   return Object.freeze({
     id: input.id,

@@ -3,43 +3,43 @@ import {
   accessContextSchema,
   createReadOperationResultSchema,
   currentEventSettingsReadResultSchema,
-  decisionDecideDraftOperationResultSchema,
-  engagementChangeDraftOperationResultSchema,
+  decisionDecideOperationResultSchema,
+  engagementChangeOperationResultSchema,
   engagementSnapshotReadResultSchema,
-  eventCreateDraftOperationResultSchema,
-  eventSettingsUpdateDraftOperationResultSchema,
+  eventCreateOperationResultSchema,
+  eventSettingsUpdateOperationResultSchema,
   fieldRegistrySnapshotReadResultSchema,
+  intakeFormDirectOperationResultSchema,
+  intakeFormVersionPublishOperationResultSchema,
+  intakeFormVersionReviewDraftOperationResultSchema,
   organizerFormCatalogSchema,
   organizerFormDetailSchema,
   programVocabularySnapshotReadResultSchema,
-  releaseDraftOperationResultSchema,
-  submissionDirectEntryDraftOperationResultSchema,
-  taskDraftOperationResultSchema,
+  releasePublishOperationResultSchema,
+  releaseReviewDraftOperationResultSchema,
+  schedulePlacementOperationResultSchema,
+  submissionDirectEntryOperationResultSchema,
+  taskMutationOperationResultSchema,
   type FormDefinitionCreateAuthorInput,
   type FormTarget
 } from '@jooevents/contracts';
 import {
-  reviewerRosterChangeDraftOperationResultSchema,
+  reviewerRosterDirectOperationResultSchema,
   reviewerRosterSnapshotReadResultSchema
 } from '@jooevents/contracts/reviewer-roster';
 import {
-  reviewChangeDraftOperationResultSchema,
+  reviewDirectOperationResultSchema,
   reviewDraftSaveOperationResultSchema,
   reviewSnapshotReadResultSchema
 } from '@jooevents/contracts/reviews';
 import { sessionCatalogReadResultSchema } from '@jooevents/contracts/sessions';
 import {
-  workspaceTeamDraftOperationResultSchema,
+  workspaceTeamMutationOperationResultSchema,
   workspaceTeamMembersReadResultSchema
 } from '@jooevents/contracts/workspace-team';
-import { changesetLifecycleOperationResultSchema } from '@jooevents/changeset-operations';
 import { normalizeEmail } from '@jooevents/identity-access';
-import { intakeFormDraftOperationResultSchema } from '@jooevents/intake-operations';
-import { programVocabularyDraftOperationResultSchema } from '@jooevents/program-operations';
-import {
-  schedulePlacementDraftOperationResultSchema,
-  schedulePlacementSnapshotReadResultSchema
-} from '@jooevents/schedule-operations';
+import { programVocabularyDirectOperationResultSchema } from '@jooevents/contracts';
+import { schedulePlacementSnapshotReadResultSchema } from '@jooevents/schedule-operations';
 import type { ServerConfig } from '../config';
 import type { EphemeralLiveRuntime } from '../runtime/ephemeral-live';
 
@@ -139,8 +139,8 @@ const FEATURED_SUBMISSIONS: readonly SubmissionSpec[] = Object.freeze([
     name: 'Nadia Okonkwo',
     email: 'nadia.okonkwo@example.test',
     trackKey: 'platform_reliability',
-    title: 'Changesets All the Way Down',
-    abstract: 'Every consequential change in our platform is drafted, diffed, and committed as one typed changeset. This talk walks through what that bought us — and the three places it hurt — after two years of running it in production.'
+    title: 'Guarded Operations All the Way Down',
+    abstract: 'Every effective change in our platform passes through one typed, guarded operation. This talk covers the resulting authority, replay, and history guarantees after two years in production.'
   }),
   Object.freeze({
     key: 'lindqvist',
@@ -307,8 +307,9 @@ interface SeedContext {
 
 interface DraftSelectorSource {
   readonly data: {
-    readonly changesetId: string;
+    readonly draftId: string;
     readonly revision: { readonly id: string; readonly digestSha256: string };
+    readonly safeDiff: { readonly action: string };
   };
 }
 
@@ -377,38 +378,25 @@ async function effect<Result>(input: {
   return input.parse(await response.json());
 }
 
-/**
- * Proposes and commits an authored changeset revision through the shared
- * lifecycle routes. A freshly authored head is always at version 1, and the
- * proposal's own served diff carries the head version the commit must pin.
- */
-async function commitDraft(
+async function publishRelease(
   context: SeedContext,
   key: string,
-  draft: DraftSelectorSource,
-  headVersion = 1
+  draft: DraftSelectorSource
 ): Promise<void> {
-  const selector = Object.freeze({
-    changesetId: draft.data.changesetId,
-    revisionId: draft.data.revision.id,
-    revisionDigest: draft.data.revision.digestSha256
-  });
-  const proposal = requireSuccess(changesetLifecycleOperationResultSchema.parse(await effect({
+  const published = requireSuccess(releasePublishOperationResultSchema.parse(await effect({
     context,
-    path: '/api/changesets/proposals',
-    key: `${key}-propose`,
-    body: { ...selector, expectedHeadVersion: headVersion },
+    path: '/api/events/current/releases/publish',
+    key: `${key}-publish`,
+    body: {
+      draftId: draft.data.draftId,
+      revisionId: draft.data.revision.id,
+      revisionDigestSha256: draft.data.revision.digestSha256
+    },
     parse: (value) => value
-  })), `${key}_proposal`);
-  if (proposal.data.action !== 'propose') fail(`${key}_proposal_invalid`, proposal.data.action);
-  const committed = requireSuccess(changesetLifecycleOperationResultSchema.parse(await effect({
-    context,
-    path: '/api/changesets/commits',
-    key: `${key}-commit`,
-    body: { ...selector, expectedHeadVersion: proposal.data.diff.headVersion },
-    parse: (value) => value
-  })), `${key}_commit`);
-  if (committed.data.action !== 'commit') fail(`${key}_commit_invalid`, committed.data.action);
+  })), `${key}_publish`);
+  if (published.data.action !== draft.data.safeDiff.action) {
+    fail(`${key}_publish_action`, published.data.action);
+  }
 }
 
 /**
@@ -571,15 +559,14 @@ async function readSchedule(context: SeedContext) {
 }
 
 async function createEvent(context: SeedContext): Promise<string> {
-  const draft = requireSuccess(eventCreateDraftOperationResultSchema.parse(await effect({
+  const created = requireSuccess(eventCreateOperationResultSchema.parse(await effect({
     context,
-    path: '/api/events/drafts/create',
-    key: 'joocon-event-draft',
-    body: EVENT,
+    path: '/api/events',
+    key: 'joocon-event-create',
+    body: { expectedEventSetVersion: 1, ...EVENT },
     parse: (value) => value
-  })), 'event_draft');
-  await commitDraft(context, 'joocon-event', draft);
-  return draft.data.safeDiff.after.id;
+  })), 'event_create');
+  return created.data.event.id;
 }
 
 /**
@@ -590,10 +577,10 @@ async function updateEventSettings(context: SeedContext): Promise<void> {
   const served = requireSuccess(currentEventSettingsReadResultSchema.parse(await read(
     context, '/api/events/current/settings', (value) => value
   )), 'event_settings_read').data;
-  const draft = requireSuccess(eventSettingsUpdateDraftOperationResultSchema.parse(await effect({
+  requireSuccess(eventSettingsUpdateOperationResultSchema.parse(await effect({
     context,
-    path: '/api/events/current/settings/drafts/update',
-    key: 'joocon-event-settings-draft',
+    path: '/api/events/current/settings',
+    key: 'joocon-event-settings-update',
     body: {
       expectedEventId: served.eventId,
       expectedEventSetVersion: served.eventSetVersion,
@@ -608,8 +595,7 @@ async function updateEventSettings(context: SeedContext): Promise<void> {
       ...EVENT_SETTINGS_TEXT
     },
     parse: (value) => value
-  })), 'event_settings_draft');
-  await commitDraft(context, 'joocon-event-settings', draft);
+  })), 'event_settings_update');
 }
 
 async function createVocabulary(
@@ -631,16 +617,17 @@ async function createVocabulary(
           capacity: spec.capacity
         }
       : { kind: spec.kind, expectedSetVersion: snapshot.setVersion, name: spec.name };
-    const draft = requireSuccess(programVocabularyDraftOperationResultSchema.parse(await effect({
+    const mutation = requireSuccess(programVocabularyDirectOperationResultSchema.parse(await effect({
       context,
-      path: '/api/events/current/program-vocabulary/drafts/create',
-      key: `joocon-vocabulary-${spec.key}-draft`,
+      path: '/api/events/current/program-vocabulary/create',
+      key: `joocon-vocabulary-${spec.key}-create`,
       body,
       parse: (value) => value
-    })), `vocabulary_${spec.key}_draft`);
-    if (draft.data.safeDiff.action !== 'create') fail(`vocabulary_${spec.key}_diff`, draft.data.safeDiff.action);
-    handles[spec.key] = draft.data.safeDiff.after.id;
-    await commitDraft(context, `joocon-vocabulary-${spec.key}`, draft);
+    })), `vocabulary_${spec.key}_create`);
+    if (mutation.data.action !== 'create') fail(`vocabulary_${spec.key}_action`, mutation.data.action);
+    const createdId = mutation.data.affectedIds[0];
+    if (!createdId) fail(`vocabulary_${spec.key}_created_id`, null);
+    handles[spec.key] = createdId;
   }
   return Object.freeze(handles) as Readonly<Record<VocabularyKey, string>>;
 }
@@ -714,37 +701,44 @@ async function createOpenForm(input: {
 }): Promise<string> {
   const { context, key } = input;
   const catalog = await readFormCatalog(context);
-  const createDraft = requireSuccess(intakeFormDraftOperationResultSchema.parse(await effect({
+  const created = requireSuccess(intakeFormDirectOperationResultSchema.parse(await effect({
     context,
-    path: '/api/events/current/forms/drafts/create',
-    key: `joocon-form-${key}-create-draft`,
+    path: '/api/events/current/forms/create',
+    key: `joocon-form-${key}-create`,
     body: {
       expectedCatalogVersion: catalog.catalogVersion,
       expectedRegistryVersion: catalog.registryPin.version,
       definition: input.definition
     },
     parse: (value) => value
-  })), `form_${key}_create_draft`);
-  if (createDraft.data.safeDiff.action !== 'create') {
-    fail(`form_${key}_create_diff`, createDraft.data.safeDiff.action);
-  }
-  const formId = createDraft.data.safeDiff.after.id;
-  await commitDraft(context, `joocon-form-${key}-create`, createDraft);
+  })), `form_${key}_create`);
+  if (created.data.action !== 'create') fail(`form_${key}_create_action`, created.data.action);
+  const formId = created.data.formId;
 
   const detail = await readFormDetail(context, formId);
-  const openDraft = requireSuccess(intakeFormDraftOperationResultSchema.parse(await effect({
+  const review = requireSuccess(intakeFormVersionReviewDraftOperationResultSchema.parse(await effect({
     context,
-    path: '/api/events/current/forms/drafts/lifecycle',
-    key: `joocon-form-${key}-open-draft`,
+    path: '/api/events/current/forms/publish/draft',
+    key: `joocon-form-${key}-publish-review`,
     body: {
-      transition: 'publish_and_open',
+      action: 'publish_and_open',
       formId,
       expectedDefinitionVersion: detail.head.version,
       expectedRegistryVersion: detail.registryPin.version
     },
     parse: (value) => value
-  })), `form_${key}_open_draft`);
-  await commitDraft(context, `joocon-form-${key}-open`, openDraft);
+  })), `form_${key}_publish_review`);
+  requireSuccess(intakeFormVersionPublishOperationResultSchema.parse(await effect({
+    context,
+    path: '/api/events/current/forms/publish',
+    key: `joocon-form-${key}-publish`,
+    body: {
+      draftId: review.data.draftId,
+      revisionId: review.data.revision.id,
+      revisionDigestSha256: review.data.revision.digestSha256
+    },
+    parse: (value) => value
+  })), `form_${key}_publish`);
   return formId;
 }
 
@@ -760,10 +754,10 @@ async function createDirectEntries(input: {
   if (!form) fail('open_form_missing', input.formId);
   const submissionIds = new Map<string, string>();
   for (const spec of input.specs) {
-    const draft = requireSuccess(submissionDirectEntryDraftOperationResultSchema.parse(await effect({
+    const result = requireSuccess(submissionDirectEntryOperationResultSchema.parse(await effect({
       context,
-      path: '/api/events/current/submissions/direct-entry/drafts',
-      key: `joocon-entry-${spec.key}-draft`,
+      path: '/api/events/current/submissions/direct-entry',
+      key: `joocon-entry-${spec.key}`,
       body: {
         formId: form.id,
         expectedFormDefinitionVersion: form.version,
@@ -775,9 +769,8 @@ async function createDirectEntries(input: {
         ]
       },
       parse: (value) => value
-    })), `entry_${spec.key}_draft`);
-    submissionIds.set(spec.key, draft.data.safeDiff.submission.id);
-    await commitDraft(context, `joocon-entry-${spec.key}`, draft);
+    })), `entry_${spec.key}`);
+    submissionIds.set(spec.key, result.data.submissionId);
   }
   return submissionIds;
 }
@@ -792,10 +785,10 @@ async function grantReviewerRole(context: SeedContext, reviewerUserId: string): 
     (candidate) => candidate.kind === 'member' && candidate.userId === reviewerUserId
   );
   if (!member || member.kind !== 'member') fail('reviewer_member_missing', reviewerUserId);
-  const draft = requireSuccess(workspaceTeamDraftOperationResultSchema.parse(await effect({
+  requireSuccess(workspaceTeamMutationOperationResultSchema.parse(await effect({
     context,
-    path: '/api/workspace/team/role-changes/drafts',
-    key: 'joocon-reviewer-role-change-draft',
+    path: '/api/workspace/team/role-changes',
+    key: 'joocon-reviewer-role-change',
     body: {
       subject: { kind: 'member', membershipId: member.id, version: member.version },
       roleKey: 'speaker_reviewer',
@@ -803,8 +796,7 @@ async function grantReviewerRole(context: SeedContext, reviewerUserId: string): 
       expectedTeamDigestSha256: team.digestSha256
     },
     parse: (value) => value
-  })), 'reviewer_role_change_draft');
-  await commitDraft(context, 'joocon-reviewer-role-change', draft);
+  })), 'reviewer_role_change');
 }
 
 async function registerReviewer(input: {
@@ -822,10 +814,10 @@ async function registerReviewer(input: {
     context, '/api/events/current/reviewer-roster', (value) => value
   )), 'reviewer_roster_read').data;
   const reviewerId = crypto.randomUUID();
-  const draft = requireSuccess(reviewerRosterChangeDraftOperationResultSchema.parse(await effect({
+  const mutation = requireSuccess(reviewerRosterDirectOperationResultSchema.parse(await effect({
     context,
-    path: '/api/events/current/reviewer-roster/drafts',
-    key: `joocon-roster-${input.key}-draft`,
+    path: '/api/events/current/reviewer-roster/changes',
+    key: `joocon-roster-${input.key}-register`,
     body: {
       action: 'register',
       reviewerId,
@@ -839,26 +831,21 @@ async function registerReviewer(input: {
       expectedRosterDigestSha256: roster.rosterDigestSha256
     },
     parse: (value) => value
-  })), `roster_${input.key}_draft`);
-  if (draft.data.action !== 'register') fail(`roster_${input.key}_action`, draft.data.action);
-  await commitDraft(context, `joocon-roster-${input.key}`, {
-    data: { changesetId: draft.data.changesetId, revision: draft.data.revision }
-  });
+  })), `roster_${input.key}_register`);
+  if (mutation.data.action !== 'register') fail(`roster_${input.key}_action`, mutation.data.action);
   return reviewerId;
 }
 
 async function openReviewRound(context: SeedContext): Promise<number> {
-  const draft = requireSuccess(reviewChangeDraftOperationResultSchema.parse(await effect({
+  const mutation = requireSuccess(reviewDirectOperationResultSchema.parse(await effect({
     context,
-    path: '/api/events/current/review/round-drafts',
-    key: 'joocon-review-open-round-draft',
+    path: '/api/events/current/review/rounds',
+    key: 'joocon-review-open-round',
     body: { action: 'open_round', deadlineDate: REVIEW_DUE_DATE, anonymized: true },
     parse: (value) => value
-  })), 'review_open_round_draft');
-  const diff = draft.data.safeDiff;
-  if (diff.action !== 'open_round') fail('review_open_round_diff', diff.action);
-  await commitDraft(context, 'joocon-review-open-round', draft, draft.data.headVersion);
-  return diff.assignmentCount;
+  })), 'review_open_round');
+  if (mutation.data.action !== 'open_round') fail('review_open_round_action', mutation.data.action);
+  return mutation.data.assignmentCount;
 }
 
 /**
@@ -898,10 +885,10 @@ async function commitEvaluations(input: {
       parse: (value) => value
     })), `review_${input.key}_${index}_save`);
 
-    const draft = requireSuccess(reviewChangeDraftOperationResultSchema.parse(await effect({
+    const mutation = requireSuccess(reviewDirectOperationResultSchema.parse(await effect({
       context,
-      path: '/api/events/current/review/evaluation-drafts',
-      key: `joocon-review-${input.key}-${index}-draft`,
+      path: '/api/events/current/review/evaluations',
+      key: `joocon-review-${input.key}-${index}-commit`,
       body: {
         action: 'commit_review',
         assignmentId: item.assignmentId,
@@ -909,10 +896,10 @@ async function commitEvaluations(input: {
         expectedDraftVersion: saved.data.draft.version
       },
       parse: (value) => value
-    })), `review_${input.key}_${index}_draft`);
-    await commitDraft(
-      context, `joocon-review-${input.key}-${index}`, draft, draft.data.headVersion
-    );
+    })), `review_${input.key}_${index}_commit`);
+    if (mutation.data.action !== 'commit_review') {
+      fail(`review_${input.key}_${index}_action`, mutation.data.action);
+    }
     committed += 1;
   }
   return committed;
@@ -929,10 +916,10 @@ async function commitDecisions(
   context: SeedContext,
   plans: readonly DecisionPlan[]
 ): Promise<void> {
-  const draft = requireSuccess(decisionDecideDraftOperationResultSchema.parse(await effect({
+  requireSuccess(decisionDecideOperationResultSchema.parse(await effect({
     context,
-    path: '/api/events/current/decisions/decide-drafts',
-    key: 'joocon-decisions-draft',
+    path: '/api/events/current/decisions',
+    key: 'joocon-decisions',
     body: {
       action: 'decide',
       decisions: plans.map((plan) => ({
@@ -946,8 +933,7 @@ async function commitDecisions(
       }))
     },
     parse: (value) => value
-  })), 'decisions_draft');
-  await commitDraft(context, 'joocon-decisions', draft, draft.data.headVersion);
+  })), 'decisions');
 }
 
 async function placeSessions(input: {
@@ -963,10 +949,10 @@ async function placeSessions(input: {
     const sessionId = title === undefined ? undefined : input.sessionIdByTitle.get(title);
     if (!sessionId) fail('placement_session_missing', placement.submissionKey);
     const schedule = await readSchedule(context);
-    const draft = requireSuccess(schedulePlacementDraftOperationResultSchema.parse(await effect({
+    requireSuccess(schedulePlacementOperationResultSchema.parse(await effect({
       context,
-      path: '/api/events/current/schedule/placements/drafts',
-      key: `joocon-placement-${placement.submissionKey}-draft`,
+      path: '/api/events/current/schedule/placements',
+      key: `joocon-placement-${placement.submissionKey}`,
       body: {
         action: 'place',
         expectedScheduleVersion: schedule.scheduleVersion,
@@ -976,10 +962,7 @@ async function placeSessions(input: {
         endAt: placement.endAt
       },
       parse: (value) => value
-    })), `placement_${placement.submissionKey}_draft`);
-    await commitDraft(
-      context, `joocon-placement-${placement.submissionKey}`, draft, draft.data.headVersion
-    );
+    })), `placement_${placement.submissionKey}`);
     placed += 1;
   }
   return placed;
@@ -1000,10 +983,10 @@ async function confirmEngagements(input: {
     );
     if (!engagement) fail('confirmation_engagement_missing', key);
     if (engagement.state === 'confirmed') continue;
-    const draft = requireSuccess(engagementChangeDraftOperationResultSchema.parse(await effect({
+    requireSuccess(engagementChangeOperationResultSchema.parse(await effect({
       context,
-      path: '/api/events/current/engagements/drafts',
-      key: `joocon-confirm-${key}-draft`,
+      path: '/api/events/current/engagements',
+      key: `joocon-confirm-${key}`,
       body: {
         action: 'record_confirmation',
         engagementId: engagement.id,
@@ -1011,8 +994,7 @@ async function confirmEngagements(input: {
         attribution: 'organizer_recorded'
       },
       parse: (value) => value
-    })), `confirm_${key}_draft`);
-    await commitDraft(context, `joocon-confirm-${key}`, draft, draft.data.headVersion);
+    })), `confirm_${key}`);
     confirmed += 1;
   }
   return confirmed;
@@ -1020,10 +1002,10 @@ async function confirmEngagements(input: {
 
 async function createSpeakerTasks(context: SeedContext): Promise<number> {
   for (const task of SPEAKER_TASKS) {
-    const draft = requireSuccess(taskDraftOperationResultSchema.parse(await effect({
+    requireSuccess(taskMutationOperationResultSchema.parse(await effect({
       context,
-      path: '/api/events/current/tasks/drafts',
-      key: `joocon-task-${task.key}-draft`,
+      path: '/api/events/current/tasks',
+      key: `joocon-task-${task.key}`,
       body: {
         action: 'create_definition',
         name: task.name,
@@ -1033,14 +1015,13 @@ async function createSpeakerTasks(context: SeedContext): Promise<number> {
         dueOn: task.dueOn
       },
       parse: (value) => value
-    })), `task_${task.key}_draft`);
-    await commitDraft(context, `joocon-task-${task.key}`, draft, draft.data.headVersion);
+    })), `task_${task.key}`);
   }
   return SPEAKER_TASKS.length;
 }
 
 async function publishSchedule(context: SeedContext): Promise<number> {
-  const draft = requireSuccess(releaseDraftOperationResultSchema.parse(await effect({
+  const draft = requireSuccess(releaseReviewDraftOperationResultSchema.parse(await effect({
     context,
     path: '/api/events/current/releases/drafts',
     key: 'joocon-publish-schedule-draft',
@@ -1049,7 +1030,7 @@ async function publishSchedule(context: SeedContext): Promise<number> {
   })), 'publish_schedule_draft');
   const diff = draft.data.safeDiff;
   if (diff.action !== 'publish_schedule') fail('publish_schedule_diff', diff.action);
-  await commitDraft(context, 'joocon-publish-schedule', draft, draft.data.headVersion);
+  await publishRelease(context, 'joocon-publish-schedule', draft);
   return diff.after.number;
 }
 

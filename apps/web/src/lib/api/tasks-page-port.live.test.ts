@@ -44,24 +44,13 @@ function board(): TaskBoardSnapshotDto {
 }
 
 describe('live tuned Tasks page port', () => {
-	test('projects the canonical board and carries mutations through exact compensation', async () => {
+	test('projects the canonical board and restores through a fresh direct mutation', async () => {
 		const mutations: unknown[] = [];
-		const compensations: unknown[] = [];
 		const client = {
 			async readBoard() { return { kind: 'success', data: board(), correlationId: id(90) }; },
 			async mutate(input: unknown) {
 				mutations.push(input);
-				return { kind: 'success', correlationId: id(90), data: {
-					safeDiff: {} as never,
-					source: {
-						changesetId: id(20), revisionId: id(21), revisionDigest: digest,
-						commitReceiptId: id(22)
-					}
-				} };
-			},
-			async compensate(source: unknown) {
-				compensations.push(source);
-				return { kind: 'success', correlationId: id(90), data: {} as never };
+				return { kind: 'success', correlationId: id(90), data: { action: 'restore_assignment' } as never };
 			}
 		} as unknown as TaskLiveClient;
 		const port = createLiveTasksPagePort({
@@ -81,7 +70,9 @@ describe('live tuned Tasks page port', () => {
 			action: 'waive_assignment', assignmentId: id(5), expectedVersion: 1
 		});
 		await port.tasks.restoreAssignment(id(3), id(6), 'todo', false);
-		expect(compensations).toHaveLength(1);
+		expect(mutations.at(-1)).toEqual({
+			action: 'restore_assignment', assignmentId: id(5), expectedVersion: 1
+		});
 		const created = await port.tasks.createDefinition({
 			name: 'Slides', description: null, completionMode: 'file_upload',
 			required: false, dueOn: '2027-06-01'

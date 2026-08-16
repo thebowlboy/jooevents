@@ -19,7 +19,7 @@ export type SchedulePlacementReadRange = z.input<typeof schedulePlacementReadInp
 export type SchedulePlacementMutationRequest = z.input<typeof schedulePlacementInputSchema>;
 export type SchedulePlacementIdempotencyKey = z.input<typeof operationHttpIdempotencyKeySchema>;
 
-export type SchedulePlacementCoreOperation = 'snapshot' | 'draft' | 'propose' | 'commit';
+export type SchedulePlacementCoreOperation = 'snapshot' | 'mutation';
 
 export type SchedulePlacementUnavailableResult = {
 	readonly kind: 'unavailable';

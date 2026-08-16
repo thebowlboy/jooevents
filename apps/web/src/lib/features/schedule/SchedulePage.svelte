@@ -939,7 +939,6 @@
 		}
 		busy = true;
 		const session = row.session;
-		const wasState = session.state;
 		const outcome = await api.schedule.transitionSession(session.id, 'programmed');
 		if (outcome.ok) {
 			recordAction({
@@ -949,9 +948,8 @@
 						? ` — ${proposalsLabel(row.proposalCount)} stay in Decisions`
 						: ''
 				}`,
-				undo: async () => {
-					await api.schedule.transitionSession(session.id, wasState);
-				}
+				notUndoableReason:
+					'This session is now in the program. Correct its format, track, speakers, or schedule in place.'
 			});
 		} else {
 			announcement = outcome.reason;

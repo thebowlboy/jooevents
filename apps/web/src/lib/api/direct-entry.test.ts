@@ -7,9 +7,8 @@ import { api } from './workspace';
  * at creation, graduating into the program — carrying attribution from the
  * signed-in member, never from the caller's input.
  *
- * These run against the loaded scenario's live working copy, so each test
- * compensates through `removeDirectEntry` — the same write the add receipt's
- * undo performs — and asserts the workspace returns to where it started.
+ * Corrections use the same named forward actions the product offers; creation
+ * has no generic removal or prior-absence restoration.
  */
 
 const baseInput = {
@@ -46,15 +45,14 @@ describe('inbox disposition', () => {
 		expect(page.rows[0]?.id).toBe(created.id);
 		expect(page.trayTotals.inbox).toBe(totalsBefore.inbox + 1);
 
-		await api.submissions.removeDirectEntry(created.id);
-		const after = await api.submissions.list({});
-		expect(after.rows.some((row) => row.id === created.id)).toBe(false);
-		expect(after.trayTotals).toEqual(totalsBefore);
+		await api.submissions.discard([created.id]);
+		expect((await api.submissions.list({ tray: 'discarded' })).rows
+			.some((row) => row.id === created.id)).toBe(true);
 	});
 });
 
 describe('accepted disposition', () => {
-	test('graduates into the program at creation; undo reverses the graduation', async () => {
+	test('graduates into the program at creation; a later decision corrects forward', async () => {
 		const sessionsBefore = (await api.schedule.state()).sessions.length;
 		const created = await api.submissions.addDirectEntry({
 			...baseInput,
@@ -73,25 +71,8 @@ describe('accepted disposition', () => {
 			(await api.speakers.list()).some((row) => row.email === 'noor@directentry.example')
 		).toBe(true);
 
-		await api.submissions.removeDirectEntry(created.id);
+		await api.decisions.decide([created.id], 'declined');
 		expect((await api.schedule.state()).sessions.length).toBe(sessionsBefore);
-		expect(
-			(await api.submissions.list({})).rows.some((row) => row.id === created.id)
-		).toBe(false);
-		// The person this add introduced leaves with it — no phantom roster row.
-		expect(
-			(await api.speakers.list()).some((row) => row.email === 'noor@directentry.example')
-		).toBe(false);
-	});
-});
-
-describe('compensation guards', () => {
-	test('removal only answers for direct entries', async () => {
-		const before = await api.submissions.list({});
-		const cfpRow = before.rows.find((row) => row.source === 'cfp');
-		expect(cfpRow).toBeDefined();
-		await api.submissions.removeDirectEntry(cfpRow!.id);
-		const after = await api.submissions.list({});
-		expect(after.rows.some((row) => row.id === cfpRow!.id)).toBe(true);
+		expect((await api.submissions.get(created.id))?.decision).toBe('declined');
 	});
 });

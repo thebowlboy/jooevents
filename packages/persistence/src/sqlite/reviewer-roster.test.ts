@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import type { ChangesetPlanningSnapshot } from '@jooevents/changesets';
 import {
   REVIEWER_CAPABILITY_IDS,
   type ReviewerAuthoritySetDto,
@@ -13,12 +12,10 @@ import {
 import { parseApplicationId } from '@jooevents/kernel';
 import {
   applyReviewerRosterMutationPlan,
-  createReviewerRosterChangesetBundle,
   planReviewerRosterMutation,
   projectReviewerRosterSnapshot,
   reviewerAuthorityFactDigest,
   reviewerAuthoritySetDigest,
-  reviewerRosterChangesetReadPort,
   reviewerScopeTargetFactDigest,
   reviewerScopeTargetSetDigest,
   type ReviewerRosterPlanningSource
@@ -95,7 +92,7 @@ const sources: ReviewerRosterPlanningSource = Object.freeze({
   readReviewerScopeTargets: () => targetSet()
 });
 
-function setup(compensation?: () => typeof attribution | undefined) {
+function setup() {
   const sqlite = new Database(':memory:', { strict: true });
   sqlite.exec(`
     PRAGMA foreign_keys = ON;
@@ -108,7 +105,7 @@ function setup(compensation?: () => typeof attribution | undefined) {
       VALUES ('${scope.workspaceId}', '${scope.eventId}');
   `);
   installReviewerRosterSchema(sqlite);
-  const repository = new SQLiteReviewerRosterRepository(sqlite, sources, compensation);
+  const repository = new SQLiteReviewerRosterRepository(sqlite, sources);
   return { sqlite, repository };
 }
 
@@ -138,17 +135,6 @@ function register(
     action: 'register', scope, reviewerId, accessSubject, reviews,
     expectedRosterVersion: roster.version,
     expectedRosterDigestSha256: roster.digestSha256
-  });
-}
-
-function snapshotFor(port: SQLiteReviewerRosterRepository): ChangesetPlanningSnapshot {
-  return Object.freeze({
-    getPort: <Port>(key: { readonly key: string; readonly version: number }): Port => {
-      if (key !== reviewerRosterChangesetReadPort) {
-        throw new TypeError('unexpected_reviewer_roster_read_port');
-      }
-      return port as unknown as Port;
-    }
   });
 }
 
@@ -279,27 +265,4 @@ describe('SQLite reviewer roster repository', () => {
     target.sqlite.close();
   });
 
-  test('compensation stays blocked without the attribution resolver and derives exactly with it', () => {
-    const target = setup(() => attribution);
-    const plan = register(
-      target, reviewerA, { kind: 'access_reservation', id: reservationA, version: 1 }, []
-    );
-    const bundle = createReviewerRosterChangesetBundle();
-    const unattributed = new SQLiteReviewerRosterRepository(target.sqlite, sources);
-    expect(bundle.definition.deriveCompensation(plan, snapshotFor(unattributed))).toEqual({
-      kind: 'blocked',
-      reasonKey: 'reviewer_roster.fresh_attribution_required'
-    });
-    expect(unattributed.readReviewerRosterCompensationAttribution(scope)).toBeUndefined();
-    expect(target.repository.readReviewerRosterCompensationAttribution(scope)).toEqual(attribution);
-    const derivation = bundle.definition.deriveCompensation(plan, snapshotFor(target.repository));
-    expect(derivation).toMatchObject({
-      kind: 'exact',
-      authorInput: {
-        request: { action: 'revoke', reviewerId: reviewerA },
-        attribution
-      }
-    });
-    target.sqlite.close();
-  });
 });

@@ -3,6 +3,7 @@ import { isAbsolute, relative, resolve } from 'node:path';
 import { createProvisioningService } from '@jooevents/application';
 import {
   bootstrapEmptyInstall,
+  createSQLiteBetterAuthDatabase,
   createSQLiteProvisioningStore,
   openSQLite,
   type OpenSQLiteResult
@@ -34,8 +35,8 @@ function closeAfterCompositionFailure(database: OpenSQLiteResult, error: unknown
 }
 
 /**
- * Opens only the retained epoch-1 authentication and admission composition.
- * Domain operations and disposable Foundation schemas are deliberately absent.
+ * Opens the retained epoch-2 Foundation baseline with the authentication and
+ * admission runtime composition. Domain operation routes remain deliberately absent.
  */
 export function createConfiguredSQLiteAuthRuntime(input: {
   readonly config: ConfiguredServerConfig;
@@ -64,7 +65,7 @@ export function createConfiguredSQLiteAuthRuntime(input: {
     // This auth-only runtime has no communications composition, so no link can
     // ever be delivered — but the request surface still acknowledges every
     // well-formed address identically instead of failing differently.
-    const auth = createAuth(config, database.db, {
+    const auth = createAuth(config, createSQLiteBetterAuthDatabase(database.sqlite), {
       magicLink: { deliver: async () => {} }
     });
     const accessContext = createProvisioningService({

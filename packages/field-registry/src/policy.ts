@@ -1,4 +1,4 @@
-import { canonicalJsonSha256, type RiskTier } from '@jooevents/changesets';
+import { canonicalJsonSha256 } from '@jooevents/kernel';
 import { z } from 'zod';
 
 const policyKeySchema = z.string().regex(/^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$/).max(160);
@@ -8,7 +8,7 @@ export interface FieldRegistryOrdinaryPolicy {
   readonly activation: 'ordinary';
   readonly key: string;
   readonly version: number;
-  readonly ordinaryRisk: Extract<RiskTier, 'low' | 'normal'>;
+  readonly ordinaryRisk: 'low' | 'normal';
   readonly approval: 'none' | 'distinct_current_human';
   readonly definitionDigestSha256: string;
 }
@@ -41,7 +41,7 @@ const issuedPolicies = new WeakSet<object>();
 export function createFieldRegistryOrdinaryPolicy(input: {
   readonly key: string;
   readonly version: number;
-  readonly ordinaryRisk?: Extract<RiskTier, 'low' | 'normal'>;
+  readonly ordinaryRisk?: 'low' | 'normal';
   readonly approval?: 'none' | 'distinct_current_human';
 }): FieldRegistryOrdinaryPolicy {
   const definition = {

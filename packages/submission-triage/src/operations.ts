@@ -34,19 +34,19 @@ import {
 } from '@jooevents/application';
 import {
   SUBMISSION_TRIAGE_OPERATION_SCHEMA_REFS,
-  submissionTriageDraftCanonicalResultSchema,
-  submissionTriageDraftDataSchema,
-  submissionTriageDraftOperationResultSchema,
+  submissionTriageTransitionCanonicalResultSchema,
+  submissionTriageTransitionDataSchema,
+  submissionTriageTransitionOperationResultSchema,
   submissionTriageListCanonicalResultSchema,
   submissionTriageListInputSchema,
   submissionTriageListOperationResultSchema,
   submissionTriageReadCanonicalResultSchema,
   submissionTriageReadInputSchema,
   submissionTriageReadOperationResultSchema,
-  submissionTriageSafeDiffSchema,
-  submissionTriageTransitionDraftInputSchema,
-  type SubmissionTriageDraftData,
-  type SubmissionTriageTransitionDraftInput
+  submissionTriageTransitionPlanSchema,
+  submissionTriageTransitionInputSchema,
+  type SubmissionTriageTransitionData,
+  type SubmissionTriageTransitionInput
 } from '@jooevents/contracts/submission-triage';
 import {
   createSafeSchemaManifestRef,
@@ -87,21 +87,21 @@ export const SUBMISSION_TRIAGE_LIST_OPERATION = Object.freeze({
 export const SUBMISSION_TRIAGE_READ_OPERATION = Object.freeze({
   name: 'submission.triage.read', version: 1
 });
-export const SUBMISSION_TRIAGE_DRAFT_OPERATION = Object.freeze({
-  name: 'submission.triage.transition.draft', version: 1
+export const SUBMISSION_TRIAGE_TRANSITION_OPERATION = Object.freeze({
+  name: 'submission.triage.transition', version: 1
 });
 
-export const SUBMISSION_TRIAGE_DRAFT_HANDLER_CAPABILITY = ref(
-  'capability.submission.triage.changeset-draft'
+export const SUBMISSION_TRIAGE_DIRECT_HANDLER_CAPABILITY = ref(
+  'capability.submission.triage.direct'
 );
-export const SUBMISSION_TRIAGE_DRAFT_REQUEST_HASH_PROFILE = ref(
-  'request-hash.submission.triage.draft'
+export const SUBMISSION_TRIAGE_REQUEST_HASH_PROFILE = ref(
+  'request-hash.submission.triage.transition'
 );
 
 export const SUBMISSION_TRIAGE_HTTP_PATHS = Object.freeze({
   list: '/api/events/current/submissions/triage',
   read: '/api/events/current/submissions/triage/detail',
-  draft: '/api/events/current/submissions/triage/drafts'
+  transition: '/api/events/current/submissions/triage'
 });
 export const SUBMISSION_TRIAGE_MCP_TOOLS = Object.freeze({
   list: 'submission_triage_list',
@@ -136,12 +136,12 @@ export interface SubmissionTriageOperationPolicies {
 export interface SubmissionTriagePreparedContribution {
   readonly result: unknown;
   readonly domain: unknown;
-  readonly receiptChildren: readonly unknown[];
+  readonly effectContributions: readonly unknown[];
 }
 
-export interface SubmissionTriageDraftPreparation {
+export interface SubmissionTriageDirectPreparation {
   prepare(input: {
-    readonly businessInput: SubmissionTriageTransitionDraftInput;
+    readonly businessInput: SubmissionTriageTransitionInput;
     readonly context: EffectInvocationContext;
   }): SubmissionTriagePreparedContribution;
 }
@@ -149,18 +149,18 @@ export interface SubmissionTriageDraftPreparation {
 interface SealedPreparation {
   readonly capability: VersionedDefinitionRef;
   readonly context: EffectInvocationContext;
-  readonly prepare: SubmissionTriageDraftPreparation['prepare'];
+  readonly prepare: SubmissionTriageDirectPreparation['prepare'];
   phase: 'ready' | 'preparing' | 'spent';
 }
 
 const sealedPreparations = new WeakMap<object, SealedPreparation>();
 
-export function sealSubmissionTriageDraftPreparation(input: {
+export function sealSubmissionTriageDirectPreparation(input: {
   readonly capability: VersionedDefinitionRef;
   readonly context: EffectInvocationContext;
-  readonly preparation: SubmissionTriageDraftPreparation;
+  readonly preparation: SubmissionTriageDirectPreparation;
 }): EffectHandlerSnapshot {
-  if (!isSealedInvocationContext(input.context) || input.context.operation.effect !== 'draft') {
+  if (!isSealedInvocationContext(input.context) || input.context.operation.effect !== 'commit') {
     throw new TypeError('submission_triage_preparation_context_invalid');
   }
   if (typeof input.preparation.prepare !== 'function') {
@@ -179,15 +179,15 @@ export function sealSubmissionTriageDraftPreparation(input: {
   return snapshot;
 }
 
-function createDraftHandler(input: {
+function createDirectHandler(input: {
   readonly reference: VersionedDefinitionRef;
   readonly contributionSchema: SafeSchemaManifestRef;
   readonly canonicalResultSchema: SafeSchemaManifestRef;
 }): EffectHandlerRegistration {
-  const capability = SUBMISSION_TRIAGE_DRAFT_HANDLER_CAPABILITY;
+  const capability = SUBMISSION_TRIAGE_DIRECT_HANDLER_CAPABILITY;
   return Object.freeze({
     reference: input.reference,
-    effect: 'draft' as const,
+    effect: 'commit' as const,
     handlerCapability: capability,
     contributionSchema: input.contributionSchema,
     canonicalResultSchema: input.canonicalResultSchema,
@@ -197,11 +197,11 @@ function createDraftHandler(input: {
       if (!sealed
           || !sameReference(sealed.capability, capability)
           || sealed.context !== context
-          || context.operation.effect !== 'draft'
+          || context.operation.effect !== 'commit'
           || sealed.phase !== 'ready') {
         throw new TypeError('invalid_submission_triage_preparation');
       }
-      const parsed = submissionTriageTransitionDraftInputSchema.parse(businessInput);
+      const parsed = submissionTriageTransitionInputSchema.parse(businessInput);
       sealed.phase = 'preparing';
       try {
         const contribution = sealed.prepare({ businessInput: parsed, context });
@@ -219,91 +219,52 @@ function createDraftHandler(input: {
   });
 }
 
-const canonicalUuid = z.uuid().refine((value) => value === value.toLowerCase());
-
-export const submissionTriageDraftDomainContributionSchema = z.strictObject({
-  kind: z.literal('submission_triage_changeset_draft'),
-  preparationHandle: canonicalUuid,
-  workspaceId: canonicalUuid,
-  eventId: canonicalUuid,
-  action: z.enum(['set_aside', 'return_to_inbox', 'discard_recoverable', 'restore']),
-  changesetId: canonicalUuid,
-  revisionId: canonicalUuid,
-  revisionDigestSha256: intakeDigestSchema,
-  recordDigestSha256: intakeDigestSchema,
-  occurredAt: z.iso.datetime({ offset: true })
+export const submissionTriageDirectDomainContributionSchema = z.strictObject({
+  kind: z.literal('submission_triage_direct'),
+  plan: submissionTriageTransitionPlanSchema
 });
 
-export const submissionTriageDraftEvidenceChildSchema = z.strictObject({
-  kind: z.literal('timeline'),
-  timelineId: canonicalUuid,
-  sourceKind: z.literal('changeset_revision'),
-  workspaceId: canonicalUuid,
-  eventId: canonicalUuid,
-  changesetId: canonicalUuid,
-  revisionId: canonicalUuid,
-  occurredAt: z.iso.datetime({ offset: true })
-});
-
-export const submissionTriageDraftRefusalDetailSchema = z.strictObject({
+export const submissionTriageRefusalDetailSchema = z.strictObject({
   code: z.enum([
     'wrong_scope', 'projection_incomplete', 'source_changed', 'submission_missing',
     'stale_query_set', 'stale_submission', 'invalid_transition', 'invalid_plan'
   ]),
-  action: z.enum([
-    'set_aside', 'return_to_inbox', 'discard_recoverable', 'restore', 'restore_exact'
-  ]),
+  action: submissionTriageTransitionInputSchema.shape.action,
   submissionIds: z.array(intakeIdInputSchema).min(1).max(200)
 });
 
-const draftSuccessContributionSchema = z.strictObject({
-  result: z.strictObject({ kind: z.literal('success'), data: submissionTriageDraftDataSchema }),
-  domain: submissionTriageDraftDomainContributionSchema,
-  receiptChildren: z.tuple([submissionTriageDraftEvidenceChildSchema])
-}).superRefine((value, context) => {
-  const data = value.result.data;
-  const domain = value.domain;
-  const timeline = value.receiptChildren[0];
-  if (data.action !== domain.action
-      || data.changesetId !== domain.changesetId
-      || data.revision.id !== domain.revisionId
-      || data.revision.digestSha256 !== domain.revisionDigestSha256
-      || timeline.workspaceId !== domain.workspaceId
-      || timeline.eventId !== domain.eventId
-      || timeline.changesetId !== domain.changesetId
-      || timeline.revisionId !== domain.revisionId
-      || timeline.occurredAt !== domain.occurredAt) {
-    context.addIssue({ code: 'custom', message: 'triage draft evidence is incoherent' });
-  }
+const directSuccessContributionSchema = z.strictObject({
+  result: z.strictObject({ kind: z.literal('success'), data: submissionTriageTransitionDataSchema }),
+  domain: submissionTriageDirectDomainContributionSchema,
+  effectContributions: z.tuple([])
 });
 
-const draftOutcomeContributionSchema = z.strictObject({
+const directOutcomeContributionSchema = z.strictObject({
   result: z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema }),
   domain: z.null(),
-  receiptChildren: z.tuple([])
+  effectContributions: z.tuple([])
 }).superRefine((value, context) => {
   const outcome = value.result.outcome;
   const allowed = new Set([
     'conflict:submission_triage.event_required',
     'stale_revision:submission_triage.changed',
     'policy_violation:submission_triage.change_refused',
-    'conflict:changeset.id_collision'
   ]);
   const detailSchema = outcome.kind === 'submission_triage.changed'
       || outcome.kind === 'submission_triage.change_refused'
-    ? submissionTriageDraftRefusalDetailSchema
+    ? submissionTriageRefusalDetailSchema
     : z.null();
   if (!allowed.has(`${outcome.class}:${outcome.kind}`)
       || outcome.retryable
       || outcome.detailSchemaVersion !== 1
       || !detailSchema.safeParse(outcome.detail).success) {
-    context.addIssue({ code: 'custom', message: 'triage draft refusal is invalid' });
+    context.addIssue({ code: 'custom', message: 'triage direct refusal is invalid' });
   }
 });
 
-export const submissionTriageDraftContributionSchema = z.union([
-  draftSuccessContributionSchema,
-  draftOutcomeContributionSchema
+export const submissionTriageDirectContributionSchema = z.union([
+  directSuccessContributionSchema,
+  directOutcomeContributionSchema
 ]);
 
 interface ReadSnapshot extends Readonly<Record<string, unknown>> {
@@ -635,7 +596,7 @@ function readOutcome(kind: string) {
   };
 }
 
-export function createSubmissionTriageDraftOperationModule(input: {
+export function createSubmissionTriageTransitionOperationModule(input: {
   readonly workspaceId: WorkspaceId;
   readonly policy: VersionedAccessPolicyRef;
   readonly currentAuthority: CurrentAuthorityResolver<InvocationEvidence>;
@@ -648,44 +609,44 @@ export function createSubmissionTriageDraftOperationModule(input: {
     'submission_triage_manage_policy_catalog_mismatch');
   const workspaceId = parseWorkspaceId(input.workspaceId);
   const lane = operatorLane(input.policy);
-  const operation = SUBMISSION_TRIAGE_DRAFT_OPERATION;
+  const operation = SUBMISSION_TRIAGE_TRANSITION_OPERATION;
   const nullDetail = z.null();
   const refs = {
-    input: SUBMISSION_TRIAGE_OPERATION_SCHEMA_REFS.draft.inputSchema,
+    input: SUBMISSION_TRIAGE_OPERATION_SCHEMA_REFS.transition.inputSchema,
     contribution: schemaRef(
-      'schema.submission.triage-draft.contribution', submissionTriageDraftContributionSchema
+      'schema.submission.triage-transition.contribution', submissionTriageDirectContributionSchema
     ),
     canonical: schemaRef(
-      'schema.submission.triage-draft.canonical-result',
-      submissionTriageDraftCanonicalResultSchema
+      'schema.submission.triage-transition.canonical-result',
+      submissionTriageTransitionCanonicalResultSchema
     ),
-    projected: SUBMISSION_TRIAGE_OPERATION_SCHEMA_REFS.draft.resultSchema,
+    projected: SUBMISSION_TRIAGE_OPERATION_SCHEMA_REFS.transition.resultSchema,
     detail: schemaRef(
-      'schema.submission.triage-draft.refusal-detail',
-      submissionTriageDraftRefusalDetailSchema
+      'schema.submission.triage-transition.refusal-detail',
+      submissionTriageRefusalDetailSchema
     ),
-    nullDetail: schemaRef('schema.submission.triage-draft.null-detail', nullDetail),
-    context: ref('context.submission.triage.transition-draft'),
-    handler: ref('handler.submission.triage.changeset-draft'),
-    projection: ref('projection.submission.triage.changeset-draft.operator'),
-    autonomy: ref('autonomy.submission.triage.transition-draft'),
-    audit: ref('audit.submission.triage.changeset-draft'),
-    auditProfile: ref('record-profile.submission.triage-draft.operation-audit'),
+    nullDetail: schemaRef('schema.submission.triage-transition.null-detail', nullDetail),
+    context: ref('context.submission.triage.transition'),
+    handler: ref('handler.submission.triage.direct'),
+    projection: ref('projection.submission.triage.direct.operator'),
+    autonomy: ref('autonomy.submission.triage.transition'),
+    audit: ref('audit.submission.triage.direct'),
+    auditProfile: ref('record-profile.submission.triage-transition.operation-audit'),
     keySource: ref('idempotency.operator-header'),
-    concurrency: ref('concurrency.submission.triage.transition-draft'),
-    family: ref('submission.triage.transition-draft.execution-family'),
-    phase: ref('submission.triage.transition-draft.phase.single-uow'),
-    terminalization: ref('submission.triage.transition-draft.terminalization'),
-    risk: ref('submission.triage.transition-draft.risk-resolver'),
-    evidence: ref('submission.triage.transition-draft.autonomy-evidence'),
-    approval: ref('submission.triage.transition-draft.approval-resolver'),
-    preflight: ref('submission.triage.transition-draft.autonomy-preflight')
+    concurrency: ref('concurrency.submission.triage.transition'),
+    family: ref('submission.triage.transition.execution-family'),
+    phase: ref('submission.triage.transition.phase.single-uow'),
+    terminalization: ref('submission.triage.transition.terminalization'),
+    risk: ref('submission.triage.transition.risk-resolver'),
+    evidence: ref('submission.triage.transition.autonomy-evidence'),
+    approval: ref('submission.triage.transition.approval-resolver'),
+    preflight: ref('submission.triage.transition.autonomy-preflight')
   };
   const operationAutonomy = autonomy(operation, refs.autonomy, 'low');
   const context = createEffectInvocationContextBuilder({
     reference: refs.context,
     operation,
-    effect: 'draft',
+    effect: 'commit',
     lanes: [lane],
     scopeResolver: eventScope(workspaceId, input.currentEvent),
     authorityResolver: input.currentAuthority,
@@ -694,7 +655,7 @@ export function createSubmissionTriageDraftOperationModule(input: {
     authorityPrincipalKeyProfile: input.crypto.authorityPrincipalKeyProfile,
     scopePartitionProfile: input.crypto.scopePartitionProfile,
     requestCanonicalizationProfile: input.crypto.requestCanonicalizationProfile,
-    requestHashProfile: SUBMISSION_TRIAGE_DRAFT_REQUEST_HASH_PROFILE,
+    requestHashProfile: SUBMISSION_TRIAGE_REQUEST_HASH_PROFILE,
     requestHashSealer: input.crypto.requestHashSealer,
     idempotencyCredentialProfile: input.crypto.idempotencyCredentialProfile,
     idempotencyCredentialSealer: input.crypto.idempotencyCredentialSealer,
@@ -715,9 +676,9 @@ export function createSubmissionTriageDraftOperationModule(input: {
     reference: refs.phase,
     family: refs.family,
     operation,
-    effect: 'draft',
+    effect: 'commit',
     handler: refs.handler,
-    handlerCapability: SUBMISSION_TRIAGE_DRAFT_HANDLER_CAPABILITY,
+    handlerCapability: SUBMISSION_TRIAGE_DIRECT_HANDLER_CAPABILITY,
     contributionSchema: refs.contribution,
     terminalization: refs.terminalization,
     terminalOutcomeKeys: [],
@@ -731,8 +692,8 @@ export function createSubmissionTriageDraftOperationModule(input: {
     operation,
     resolve: () => ({
       risk: 'low',
-      consequenceTags: ['changeset-drafted'],
-      evidenceIds: ['submission.triage.transition.draft.risk']
+      consequenceTags: ['directed'],
+      evidenceIds: ['submission.triage.transition.risk']
     })
   });
   const evidence = createAutonomyEvidenceResolverRegistration({
@@ -753,7 +714,7 @@ export function createSubmissionTriageDraftOperationModule(input: {
         actionCount: 1,
         completesBy: subject.evaluatedAt,
         proposedAction: {
-          key: 'submission.triage.transition.draft.execute',
+          key: 'submission.triage.transition.execute',
           version: 1,
           digestSha256: subject.requestHashSha256
         },
@@ -775,7 +736,7 @@ export function createSubmissionTriageDraftOperationModule(input: {
     approvalResolver: refs.approval,
     interventionOutcomes: autonomyInterventionOutcomes(1)
   });
-  const handler = createDraftHandler({
+  const handler = createDirectHandler({
     reference: refs.handler,
     contributionSchema: refs.contribution,
     canonicalResultSchema: refs.canonical
@@ -787,17 +748,16 @@ export function createSubmissionTriageDraftOperationModule(input: {
     detailSchema: refs.nullDetail
   }));
   return Object.freeze({
-    id: 'submission-triage.draft-operation',
+    id: 'submission-triage.transition-operation',
     source: Object.freeze({
       autonomyPolicies: [operationAutonomy],
       schemas: [
-        { reference: refs.input, schema: submissionTriageTransitionDraftInputSchema },
-        { reference: refs.contribution, schema: submissionTriageDraftContributionSchema },
-        { reference: refs.canonical, schema: submissionTriageDraftCanonicalResultSchema },
-        { reference: refs.projected, schema: submissionTriageDraftOperationResultSchema },
-        { reference: refs.detail, schema: submissionTriageDraftRefusalDetailSchema },
-        { reference: refs.nullDetail, schema: nullDetail },
-        { reference: schemaRef('schema.submission.triage.safe-diff', submissionTriageSafeDiffSchema), schema: submissionTriageSafeDiffSchema }
+        { reference: refs.input, schema: submissionTriageTransitionInputSchema },
+        { reference: refs.contribution, schema: submissionTriageDirectContributionSchema },
+        { reference: refs.canonical, schema: submissionTriageTransitionCanonicalResultSchema },
+        { reference: refs.projected, schema: submissionTriageTransitionOperationResultSchema },
+        { reference: refs.detail, schema: submissionTriageRefusalDetailSchema },
+        { reference: refs.nullDetail, schema: nullDetail }
       ],
       contextBuilders: [],
       readCapabilities: [],
@@ -806,7 +766,7 @@ export function createSubmissionTriageDraftOperationModule(input: {
         reference: refs.projection,
         canonicalResultSchema: refs.canonical,
         projectedResultSchema: refs.projected,
-        project: (candidate: unknown) => submissionTriageDraftCanonicalResultSchema.parse(candidate)
+        project: (candidate: unknown) => submissionTriageTransitionCanonicalResultSchema.parse(candidate)
       }],
       operationAuditTargets: [{
         reference: refs.audit,
@@ -831,11 +791,11 @@ export function createSubmissionTriageDraftOperationModule(input: {
       effectOperations: [{
         ...operation,
         lifecycle: { status: 'active' as const },
-        summary: 'Draft bounded submission-triage transitions for review.',
-        effect: 'draft' as const,
+        summary: 'Move submissions between triage trays.',
+        effect: 'commit' as const,
         maxRisk: 'low' as const,
         autonomyPolicy: refs.autonomy,
-        consequenceTags: ['changeset-drafted'],
+        consequenceTags: ['directed'],
         inputSchema: refs.input,
         contributionSchema: refs.contribution,
         canonicalResultSchema: refs.canonical,
@@ -845,32 +805,38 @@ export function createSubmissionTriageDraftOperationModule(input: {
           { class: 'conflict' as const, kind: 'submission_triage.event_required', retryable: false, detailSchema: refs.nullDetail },
           { class: 'stale_revision' as const, kind: 'submission_triage.changed', retryable: false, detailSchema: refs.detail },
           { class: 'policy_violation' as const, kind: 'submission_triage.change_refused', retryable: false, detailSchema: refs.detail },
-          { class: 'conflict' as const, kind: 'changeset.id_collision', retryable: false, detailSchema: refs.nullDetail },
           { class: 'conflict' as const, kind: 'operation.in_progress', retryable: true, detailSchema: refs.nullDetail },
           ...autonomyInterventionOutcomeDeclarations(refs.nullDetail)
         ],
         accessLanes: [lane],
         contextBuilder: refs.context,
-        handlerCapability: SUBMISSION_TRIAGE_DRAFT_HANDLER_CAPABILITY,
+        handlerCapability: SUBMISSION_TRIAGE_DIRECT_HANDLER_CAPABILITY,
         handler: refs.handler,
         audit: { mode: 'required' as const, target: refs.audit },
         idempotency: {
           keySource: refs.keySource,
           credentialVerifierProfile: input.crypto.idempotencyCredentialProfile,
-          requestHashProfile: SUBMISSION_TRIAGE_DRAFT_REQUEST_HASH_PROFILE
+          requestHashProfile: SUBMISSION_TRIAGE_REQUEST_HASH_PROFILE
         },
         concurrency: refs.concurrency,
         execution: {
           kind: 'single_unit_of_work' as const,
+          profile: 'direct_audited' as const,
           family: refs.family,
           phase: refs.phase,
           terminalization: refs.terminalization,
-          autonomyPreflight: refs.preflight
+          autonomyPreflight: refs.preflight,
+          history: { summariesByAction: Object.freeze({
+            set_aside: 'Set submissions aside',
+            return_to_inbox: 'Returned submissions to the inbox',
+            discard_recoverable: 'Marked submissions as spam',
+            restore: 'Restored submissions to the inbox'
+          }) }
         },
         bindings: [{
           surface: 'operator_http' as const,
           method: 'POST' as const,
-          path: SUBMISSION_TRIAGE_HTTP_PATHS.draft,
+          path: SUBMISSION_TRIAGE_HTTP_PATHS.transition,
           input: 'body' as const,
           browserResumption: { kind: 'none' as const },
           projection: refs.projection

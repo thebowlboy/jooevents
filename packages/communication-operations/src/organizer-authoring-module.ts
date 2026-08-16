@@ -134,7 +134,7 @@ export const organizerCommunicationMutationContributionSchema = z.union([
   z.strictObject({
     result: z.strictObject({ kind: z.literal('success'), data: mutationSuccessDataSchema }),
     domain: organizerCommunicationMutationDomainContributionSchema,
-    receiptChildren: z.tuple([])
+    effectContributions: z.tuple([])
   }).superRefine((contribution, context) => {
     const data = contribution.result.data;
     const isPayload = 'payloadRefId' in data;
@@ -147,7 +147,7 @@ export const organizerCommunicationMutationContributionSchema = z.union([
   z.strictObject({
     result: z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema }),
     domain: z.null(),
-    receiptChildren: z.tuple([])
+    effectContributions: z.tuple([])
   })
 ]);
 
