@@ -21,6 +21,7 @@
 	import ArrivalTile from './ArrivalTile.svelte';
 	import NewEventModal from './NewEventModal.svelte';
 	import StatTile from './StatTile.svelte';
+	import DormantShape from './DormantShape.svelte';
 	import TrayLedger from './TrayLedger.svelte';
 
 	let { port }: { readonly port: OverviewPagePort } = $props();
@@ -592,9 +593,13 @@
 				</header>
 				{#if summary.sections.attention.kind === 'locked'}
 					<p class="panel__calm">{summary.sections.attention.condition}</p>
+					<div class="panel__dormant"><DormantShape shape="rows" rows={3} /></div>
 				{:else if summary.sections.attention.kind === 'unavailable'}
 					<p class="panel__calm">{summary.sections.attention.message}</p>
+					<div class="panel__dormant"><DormantShape shape="rows" rows={3} /></div>
 				{:else if listItems.length === 0}
+					<!-- A live zero, not dormancy: the watch is running and found
+					     nothing. No dormant shape — that would claim "not started". -->
 					<p class="panel__calm">Nothing is waiting on you right now.</p>
 				{:else}
 					<ul class="attention">
@@ -740,8 +745,10 @@
 					<!-- A fact about the event, not an absence of wiring: it states what
 					     the first deadline will be rather than apologising for having none. -->
 					<p class="panel__calm">{summary.sections.deadlines.condition}</p>
+					<div class="panel__dormant"><DormantShape shape="rows" rows={3} /></div>
 				{:else if summary.sections.deadlines.kind === 'unavailable'}
 					<p class="panel__calm">{summary.sections.deadlines.message}</p>
+					<div class="panel__dormant"><DormantShape shape="rows" rows={3} /></div>
 				{:else if summary.deadlines.length === 0}
 					<p class="panel__calm">No event deadlines are recorded.</p>
 				{:else}
@@ -793,8 +800,10 @@
 				<header class="panel__head"><h2>Holding areas</h2></header>
 				{#if summary.sections.trays.kind === 'locked'}
 					<p class="panel__calm">{summary.sections.trays.condition}</p>
+					<div class="panel__dormant"><DormantShape shape="rows" rows={3} /></div>
 				{:else if summary.sections.trays.kind === 'unavailable'}
 					<p class="panel__calm">{summary.sections.trays.message}</p>
+					<div class="panel__dormant"><DormantShape shape="rows" rows={3} /></div>
 				{:else}
 					<TrayLedger trays={summary.trays} />
 				{/if}
@@ -1050,6 +1059,12 @@
 		margin: 0;
 		font-size: var(--je-font-size-sm);
 		color: var(--je-color-text-muted);
+	}
+
+	/* The dormant silhouette under a locked/unavailable sentence; a live zero
+	   never gets one (a running watch that found nothing is not dormancy). */
+	.panel__dormant {
+		margin-block-start: var(--je-space-3);
 	}
 
 	.attention {
