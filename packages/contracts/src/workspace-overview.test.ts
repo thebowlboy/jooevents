@@ -2,7 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import {
   WORKSPACE_OVERVIEW_AREAS,
   WORKSPACE_OVERVIEW_OPERATION_SCHEMA_REFS,
-  workspaceOverviewProjectionSchema
+  workspaceOverviewProjectionSchema,
+  workspaceOverviewTriageMetricSchema
 } from './workspace-overview';
 
 const unavailableAreas = WORKSPACE_OVERVIEW_AREAS.map((area) => area === 'overview'
@@ -19,7 +20,13 @@ describe('workspace overview contract', () => {
         forms: { kind: 'unavailable', reason: 'event_required' },
         submissions: { kind: 'unavailable', reason: 'event_required' },
         programVocabulary: { kind: 'unavailable', reason: 'event_required' },
-        operations: { kind: 'unavailable', reason: 'event_required' }
+        operations: { kind: 'unavailable', reason: 'event_required' },
+        triage: { kind: 'unavailable', reason: 'event_required' },
+        reviews: { kind: 'unavailable', reason: 'event_required' },
+        decisions: { kind: 'unavailable', reason: 'event_required' },
+        engagements: { kind: 'unavailable', reason: 'event_required' },
+        sessions: { kind: 'unavailable', reason: 'event_required' },
+        communications: { kind: 'unavailable', reason: 'event_required' }
       },
       history: { total: 0, truncated: false, threads: [] }
     }).event.kind).toBe('no_event');
@@ -34,7 +41,13 @@ describe('workspace overview contract', () => {
         forms: { kind: 'unavailable', reason: 'event_required' },
         submissions: { kind: 'unavailable', reason: 'event_required' },
         programVocabulary: { kind: 'unavailable', reason: 'event_required' },
-        operations: { kind: 'unavailable', reason: 'event_required' }
+        operations: { kind: 'unavailable', reason: 'event_required' },
+        triage: { kind: 'unavailable', reason: 'event_required' },
+        reviews: { kind: 'unavailable', reason: 'event_required' },
+        decisions: { kind: 'unavailable', reason: 'event_required' },
+        engagements: { kind: 'unavailable', reason: 'event_required' },
+        sessions: { kind: 'unavailable', reason: 'event_required' },
+        communications: { kind: 'unavailable', reason: 'event_required' }
       },
       history: { total: 0, truncated: false, threads: [] }
     })).toThrow();
@@ -83,7 +96,13 @@ describe('workspace overview contract', () => {
         forms: { kind: 'unavailable', reason: 'event_required' },
         submissions: { kind: 'unavailable', reason: 'event_required' },
         programVocabulary: { kind: 'unavailable', reason: 'event_required' },
-        operations: { kind: 'unavailable', reason: 'event_required' }
+        operations: { kind: 'unavailable', reason: 'event_required' },
+        triage: { kind: 'unavailable', reason: 'event_required' },
+        reviews: { kind: 'unavailable', reason: 'event_required' },
+        decisions: { kind: 'unavailable', reason: 'event_required' },
+        engagements: { kind: 'unavailable', reason: 'event_required' },
+        sessions: { kind: 'unavailable', reason: 'event_required' },
+        communications: { kind: 'unavailable', reason: 'event_required' }
       }
     } as const;
     expect(workspaceOverviewProjectionSchema.safeParse({
@@ -139,5 +158,45 @@ describe('workspace overview contract', () => {
         ]
       }
     }).success).toBe(true);
+  });
+
+  test('rejects impossible subset counts in the added exact metrics', () => {
+    const exactMetrics = {
+      forms: { kind: 'exact', total: 0, draft: 0, open: 0, closed: 0 },
+      submissions: { kind: 'exact', total: 0 },
+      programVocabulary: {
+        kind: 'exact',
+        rooms: { total: 0, active: 0, retired: 0 },
+        tracks: { total: 0, active: 0, retired: 0 },
+        formats: { total: 0, active: 0, retired: 0 }
+      },
+      operations: { kind: 'exact', total: 0 },
+      triage: { kind: 'exact', arrived: 1, sorted: 2 },
+      reviews: { kind: 'exact', rounds: 1, assignments: 1, committed: 2 },
+      decisions: { kind: 'exact', decided: 0, undecided: 0 },
+      engagements: { kind: 'exact', total: 1, confirmed: 2 },
+      sessions: { kind: 'exact', total: 1, placed: 2 },
+      communications: { kind: 'exact', recipients: 1, sent: 2 }
+    } as const;
+    const candidate = {
+      schemaVersion: 1,
+      event: { schemaVersion: 1, kind: 'no_event', eventSetVersion: 1 },
+      areas: unavailableAreas,
+      metrics: exactMetrics,
+      history: { total: 0, truncated: false, threads: [] }
+    };
+    expect(workspaceOverviewProjectionSchema.safeParse(candidate).success).toBe(false);
+  });
+
+  test('rejects a sorted triage subset larger than immutable arrivals', () => {
+    expect(workspaceOverviewTriageMetricSchema.safeParse({
+      kind: 'exact', arrived: 1, sorted: 2
+    }).success).toBe(false);
+    expect(workspaceOverviewTriageMetricSchema.parse({
+      kind: 'exact', arrived: 2, sorted: 2
+    })).toEqual({ kind: 'exact', arrived: 2, sorted: 2 });
+    expect(workspaceOverviewTriageMetricSchema.parse({
+      kind: 'unavailable', reason: 'dependency_unavailable'
+    })).toEqual({ kind: 'unavailable', reason: 'dependency_unavailable' });
   });
 });

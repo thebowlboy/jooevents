@@ -38,9 +38,20 @@ const REQUIRED_TABLES = Object.freeze([
   'event_spine_workspace_sets',
   'intake_form_heads',
   'intake_submission_heads',
+  'submission_arrival_facts',
+  'submission_triage_heads',
   'program_vocabulary_formats',
   'program_vocabulary_rooms',
   'program_vocabulary_tracks',
+  'review_rounds',
+  'review_assignments',
+  'review_heads',
+  'decision_heads',
+  'engagement_heads',
+  'sessions',
+  'schedule_occurrences',
+  'communication_message_releases',
+  'communication_outbound_delivery_heads'
 ]);
 const EVENT_REQUIRED_AREAS = new Set([
   'submissions', 'review', 'decisions', 'speakers', 'reviewers', 'tasks', 'schedule',
@@ -54,6 +65,16 @@ interface ExistingTableRow { readonly name: string; }
 interface StatusCountRow { readonly total: number; readonly draft: number; readonly open: number; readonly closed: number; }
 interface VocabularyCountRow { readonly total: number; readonly active: number; readonly retired: number; }
 interface TotalCountRow { readonly total: number; }
+interface TriageCountRow { readonly arrived: number; readonly sorted: number; }
+interface ReviewCountRow {
+  readonly rounds: number;
+  readonly assignments: number;
+  readonly committed: number;
+}
+interface DecisionCountRow { readonly decided: number; readonly submissions: number; }
+interface EngagementCountRow { readonly total: number; readonly confirmed: number; }
+interface SessionCountRow { readonly total: number; readonly placed: number; }
+interface CommunicationCountRow { readonly recipients: number; readonly sent: number; }
 interface HistoryRow {
   readonly id: string;
   readonly domain: WorkspaceOverviewHistoryDomain;
@@ -97,6 +118,17 @@ function vocabularyCounts(row: VocabularyCountRow | null): VocabularyCountRow {
     throw new SQLiteWorkspaceOverviewError('count_evidence_corrupt');
   }
   return parsed;
+}
+function subsetCounts<TotalKey extends string, SubsetKey extends string>(
+  row: Record<TotalKey | SubsetKey, unknown> | null,
+  totalKey: TotalKey,
+  subsetKey: SubsetKey
+): Record<TotalKey | SubsetKey, number> {
+  if (!row) throw new SQLiteWorkspaceOverviewError('count_evidence_corrupt');
+  const total = safeCount(row[totalKey]);
+  const subset = safeCount(row[subsetKey]);
+  if (subset > total) throw new SQLiteWorkspaceOverviewError('count_evidence_corrupt');
+  return { [totalKey]: total, [subsetKey]: subset } as Record<TotalKey | SubsetKey, number>;
 }
 function actorCategory(value: unknown): WorkspaceOverviewHistoryActor {
   switch (value) {
@@ -254,7 +286,13 @@ export class SQLiteWorkspaceOverviewProjection {
       forms: { kind: 'unavailable' as const, reason: 'event_required' as const },
       submissions: { kind: 'unavailable' as const, reason: 'event_required' as const },
       programVocabulary: { kind: 'unavailable' as const, reason: 'event_required' as const },
-      operations: { kind: 'unavailable' as const, reason: 'event_required' as const }
+      operations: { kind: 'unavailable' as const, reason: 'event_required' as const },
+      triage: { kind: 'unavailable' as const, reason: 'event_required' as const },
+      reviews: { kind: 'unavailable' as const, reason: 'event_required' as const },
+      decisions: { kind: 'unavailable' as const, reason: 'event_required' as const },
+      engagements: { kind: 'unavailable' as const, reason: 'event_required' as const },
+      sessions: { kind: 'unavailable' as const, reason: 'event_required' as const },
+      communications: { kind: 'unavailable' as const, reason: 'event_required' as const }
     } : this.#readMetrics(workspaceId, eventId);
     const rows = this.input.sqlite.query<HistoryRow,
       [WorkspaceId, string | null, string | null, string | null, string | null]>(HISTORY_SQL)
@@ -295,12 +333,115 @@ export class SQLiteWorkspaceOverviewProjection {
        )
     `).get(workspaceId, eventId, eventId);
     if (!operations) throw new SQLiteWorkspaceOverviewError('count_evidence_corrupt');
+    const triage = subsetCounts(
+      this.input.sqlite.query<TriageCountRow,
+        [WorkspaceId, string, WorkspaceId, string]>(`
+        SELECT
+          (SELECT COUNT(*) FROM submission_arrival_facts
+            WHERE workspace_id = ? AND event_id = ?) AS arrived,
+          (SELECT COUNT(*) FROM submission_triage_heads
+            WHERE workspace_id = ? AND event_id = ? AND state <> 'inbox') AS sorted
+      `).get(workspaceId, eventId, workspaceId, eventId) ?? null,
+      'arrived',
+      'sorted'
+    );
+    const reviews = this.input.sqlite.query<ReviewCountRow, [WorkspaceId, string,
+      WorkspaceId, string, WorkspaceId, string]>(`
+      SELECT
+        (SELECT COUNT(*) FROM review_rounds
+          WHERE workspace_id = ? AND event_id = ? AND state <> 'discarded') AS rounds,
+        (SELECT COUNT(*) FROM review_assignments AS assignment
+          JOIN review_rounds AS round
+            ON round.workspace_id = assignment.workspace_id
+           AND round.event_id = assignment.event_id
+           AND round.id = assignment.round_id
+         WHERE assignment.workspace_id = ? AND assignment.event_id = ?
+           AND assignment.state = 'assigned' AND round.state <> 'discarded') AS assignments,
+        (SELECT COUNT(*) FROM review_heads AS head
+          JOIN review_assignments AS assignment
+            ON assignment.workspace_id = head.workspace_id
+           AND assignment.event_id = head.event_id
+           AND assignment.id = head.assignment_id
+          JOIN review_rounds AS round
+            ON round.workspace_id = assignment.workspace_id
+           AND round.event_id = assignment.event_id
+           AND round.id = assignment.round_id
+         WHERE head.workspace_id = ? AND head.event_id = ?
+           AND assignment.state = 'assigned' AND round.state <> 'discarded') AS committed
+    `).get(workspaceId, eventId, workspaceId, eventId, workspaceId, eventId);
+    if (!reviews) throw new SQLiteWorkspaceOverviewError('count_evidence_corrupt');
+    const reviewCounts = {
+      rounds: safeCount(reviews.rounds),
+      ...subsetCounts(reviews, 'assignments', 'committed')
+    };
+    const decisions = this.input.sqlite.query<DecisionCountRow,
+      [WorkspaceId, string, WorkspaceId, string]>(`
+      SELECT
+        (SELECT COUNT(*) FROM decision_heads
+          WHERE workspace_id = ? AND event_id = ?) AS decided,
+        (SELECT COUNT(*) FROM intake_submission_heads
+          WHERE workspace_id = ? AND event_id = ?) AS submissions
+    `).get(workspaceId, eventId, workspaceId, eventId);
+    if (!decisions) throw new SQLiteWorkspaceOverviewError('count_evidence_corrupt');
+    const decided = safeCount(decisions.decided);
+    const decisionPopulation = safeCount(decisions.submissions);
+    if (decided > decisionPopulation) {
+      throw new SQLiteWorkspaceOverviewError('count_evidence_corrupt');
+    }
+    const engagements = subsetCounts(
+      this.input.sqlite.query<EngagementCountRow, [WorkspaceId, string]>(`
+        SELECT COUNT(*) AS total,
+               COALESCE(SUM(state = 'confirmed'), 0) AS confirmed
+          FROM engagement_heads
+         WHERE workspace_id = ? AND event_id = ?
+           AND state IN ('invited', 'confirmed')
+      `).get(workspaceId, eventId) ?? null,
+      'total',
+      'confirmed'
+    );
+    const sessions = subsetCounts(
+      this.input.sqlite.query<SessionCountRow, [WorkspaceId, string, WorkspaceId, string]>(`
+        SELECT
+          (SELECT COUNT(*) FROM sessions
+            WHERE workspace_id = ? AND event_id = ?) AS total,
+          (SELECT COUNT(DISTINCT session_id) FROM schedule_occurrences
+            WHERE workspace_id = ? AND event_id = ?) AS placed
+      `).get(workspaceId, eventId, workspaceId, eventId) ?? null,
+      'total',
+      'placed'
+    );
+    const communications = subsetCounts(
+      this.input.sqlite.query<CommunicationCountRow,
+        [WorkspaceId, string, WorkspaceId, string]>(`
+        SELECT
+          (SELECT COUNT(*) FROM communication_message_releases
+            WHERE workspace_id = ? AND event_id = ?) AS recipients,
+          (SELECT COUNT(DISTINCT delivery.release_id)
+             FROM communication_outbound_delivery_heads AS delivery
+             JOIN communication_message_releases AS release
+               ON release.release_id = delivery.release_id
+            WHERE delivery.workspace_id = ? AND delivery.event_id = ?
+              AND delivery.state = 'accepted') AS sent
+      `).get(workspaceId, eventId, workspaceId, eventId) ?? null,
+      'recipients',
+      'sent'
+    );
     return {
       forms: { kind: 'exact' as const, ...forms },
       submissions: { kind: 'exact' as const, total: safeCount(submissions.total) },
       programVocabulary: { kind: 'exact' as const, rooms: vocabulary('rooms'),
         tracks: vocabulary('tracks'), formats: vocabulary('formats') },
-      operations: { kind: 'exact' as const, total: safeCount(operations.total) }
+      operations: { kind: 'exact' as const, total: safeCount(operations.total) },
+      triage: { kind: 'exact' as const, ...triage },
+      reviews: { kind: 'exact' as const, ...reviewCounts },
+      decisions: {
+        kind: 'exact' as const,
+        decided,
+        undecided: decisionPopulation - decided
+      },
+      engagements: { kind: 'exact' as const, ...engagements },
+      sessions: { kind: 'exact' as const, ...sessions },
+      communications: { kind: 'exact' as const, ...communications }
     };
   }
 }

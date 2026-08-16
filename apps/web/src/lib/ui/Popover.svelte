@@ -3,12 +3,21 @@
 	 * A reason, a provenance line, or a score that varies per row, revealed in
 	 * place from the mark that carries it.
 	 *
-	 * It is a press-and-focus disclosure, never a hover tooltip: hover-carried
-	 * meaning never arrives on a touch device and arrives too late everywhere
-	 * else. The trigger is a real button with `aria-expanded`, the panel follows
-	 * it in the DOM so reading order matches, Escape closes and returns focus,
-	 * and `onreveal` lets the surface mirror the same words to its polite live
-	 * region.
+	 * It is a press-and-focus disclosure, never a hover-only tooltip:
+	 * hover-carried meaning never arrives on a touch device and arrives too
+	 * late everywhere else. The trigger is a real button with `aria-expanded`,
+	 * the panel follows it in the DOM so reading order matches, Escape closes
+	 * and returns focus, and `onreveal` lets the surface mirror the same words
+	 * to its polite live region.
+	 *
+	 * `hoverOpen` (owner call, 2026-08-15) additionally opens the panel on
+	 * hover where a fine, hover-capable pointer exists — an accelerator on top
+	 * of the press path, never a replacement for it, which is what keeps the
+	 * hover law intact: press, tap, and keyboard open the same panel
+	 * everywhere. A hover-open is provisional — it closes when the pointer
+	 * leaves trigger and panel, skips `onreveal` (sweeping a column must not
+	 * flood the live region), and a press while it is showing pins it open
+	 * instead of toggling it shut.
 	 *
 	 * The panel is positioned in viewport coordinates because these marks sit
 	 * inside scrolling table wrappers and schedule grids, which clip and contain
@@ -63,9 +72,19 @@
 		fill?: boolean;
 		/** The panel body. The mark is the heading; the panel does not repeat it. */
 		children: Snippet;
+		/** Also open on hover, on fine hover-capable pointers only. See above. */
+		hoverOpen?: boolean;
 	}
 
-	let { label, onreveal, trigger, children, kind = 'mark', fill = false }: Props = $props();
+	let {
+		label,
+		onreveal,
+		trigger,
+		children,
+		kind = 'mark',
+		fill = false,
+		hoverOpen = false
+	}: Props = $props();
 
 	const uid = $props.id();
 
@@ -80,7 +99,10 @@
 		placed = true;
 	}
 
-	async function show() {
+	/** Open by hover alone — provisional, closes on leave, pinned by a press. */
+	let hoverHeld = $state(false);
+
+	async function show(announce = true) {
 		open = true;
 		placed = false;
 		await tick();
@@ -88,19 +110,67 @@
 		// stacking context, which is what a mark inside a scrolling grid needs.
 		raise(panel);
 		place();
-		onreveal?.();
+		if (announce) onreveal?.();
 	}
 
 	function hide(refocus = true) {
 		if (!open) return;
 		open = false;
 		placed = false;
+		hoverHeld = false;
 		if (refocus) triggerButton?.focus();
 	}
 
 	function toggle() {
+		// The press outranks any hover intent still in flight: without this, a
+		// pending open-timer could re-mark a just-pinned panel as hover-held
+		// and let the next mouseleave close what the person deliberately kept.
+		clearTimeout(hoverTimer);
+		// A press on a hover-held panel is the person keeping it: it pins and
+		// announces rather than snapping shut under the pointer that opened it.
+		if (open && hoverHeld) {
+			hoverHeld = false;
+			onreveal?.();
+			return;
+		}
 		if (open) hide();
 		else void show();
+	}
+
+	// The hover accelerator. Delays are what keep a sweep across a column from
+	// strobing panels open and shut: a short dwell earns the open, and a short
+	// grace lets the pointer cross the gap into the panel. Timers are owned
+	// handles, cleared on supersession and teardown.
+	const HOVER_OPEN_MS = 150;
+	const HOVER_CLOSE_MS = 200;
+	let hoverTimer: ReturnType<typeof setTimeout> | undefined;
+
+	$effect(() => () => clearTimeout(hoverTimer));
+
+	function finePointer(): boolean {
+		return window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+	}
+
+	function onRootEnter() {
+		if (!hoverOpen || !finePointer()) return;
+		clearTimeout(hoverTimer);
+		if (open) return;
+		hoverTimer = setTimeout(() => {
+			// A press may have landed while the dwell ran; what is open stays
+			// exactly as the press left it.
+			if (open) return;
+			hoverHeld = true;
+			void show(false);
+		}, HOVER_OPEN_MS);
+	}
+
+	function onRootLeave() {
+		if (!hoverOpen) return;
+		clearTimeout(hoverTimer);
+		if (!open || !hoverHeld) return;
+		hoverTimer = setTimeout(() => {
+			if (hoverHeld) hide(false);
+		}, HOVER_CLOSE_MS);
 	}
 
 	// A scroll anywhere between the mark and the viewport moves the anchor, so
@@ -136,11 +206,17 @@
 
 <svelte:window onpointerdown={onWindowPointerdown} onkeydown={onKeydown} />
 
+<!-- The hover handlers are a pointer-only accelerator on a wrapper whose real
+     interactive semantics live on the button inside it; assistive tech never
+     needs to reach them, so the wrapper stays a plain span. -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
 <span
 	class="ui-popover ui-popover--{kind}"
 	class:ui-popover--fill={fill}
 	bind:this={root}
-	onfocusout={onFocusout}>
+	onfocusout={onFocusout}
+	onmouseenter={onRootEnter}
+	onmouseleave={onRootLeave}>
 	<button
 		type="button"
 		class="ui-popover__trigger ui-popover__trigger--{kind}"

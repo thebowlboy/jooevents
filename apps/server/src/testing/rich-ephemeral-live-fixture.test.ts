@@ -398,7 +398,13 @@ describe('rich ephemeral live SQLite fixture', () => {
           // Overview metrics are current-Event scoped; the fixture's one
           // workspace-level Team role change remains visible in History but
           // is not an Event operation.
-          operations: { kind: 'exact', total: expected.operationLogs - 1 }
+          operations: { kind: 'exact', total: expected.operationLogs - 1 },
+          triage: { kind: 'exact', arrived: expected.submissions, sorted: 0 },
+          reviews: { kind: 'exact', rounds: 0, assignments: 0, committed: 0 },
+          decisions: { kind: 'exact', decided: 0, undecided: 0 },
+          engagements: { kind: 'exact', total: 0, confirmed: 0 },
+          sessions: { kind: 'exact', total: expected.sessions.total, placed: 0 },
+          communications: { kind: 'exact', recipients: 0, sent: 0 }
         },
         history: { total: expected.operationLogs, truncated: true }
       },

@@ -1483,6 +1483,12 @@ describe('ephemeral live Foundation server composition', () => {
           submissions: { kind: 'unavailable', reason: 'event_required' },
           programVocabulary: { kind: 'unavailable', reason: 'event_required' },
           operations: { kind: 'unavailable', reason: 'event_required' },
+          triage: { kind: 'unavailable', reason: 'event_required' },
+          reviews: { kind: 'unavailable', reason: 'event_required' },
+          decisions: { kind: 'unavailable', reason: 'event_required' },
+          engagements: { kind: 'unavailable', reason: 'event_required' },
+          sessions: { kind: 'unavailable', reason: 'event_required' },
+          communications: { kind: 'unavailable', reason: 'event_required' }
         }
       },
       correlationId: noEventOverviewCorrelation
@@ -1692,6 +1698,12 @@ describe('ephemeral live Foundation server composition', () => {
             formats: { total: 0, active: 0, retired: 0 }
           },
           operations: { kind: 'exact', total: expect.any(Number) },
+          triage: { kind: 'exact', arrived: 0, sorted: 0 },
+          reviews: { kind: 'exact', rounds: 0, assignments: 0, committed: 0 },
+          decisions: { kind: 'exact', decided: 0, undecided: 0 },
+          engagements: { kind: 'exact', total: 0, confirmed: 0 },
+          sessions: { kind: 'exact', total: 0, placed: 0 },
+          communications: { kind: 'exact', recipients: 0, sent: 0 }
         },
         history: {
           total: 1,

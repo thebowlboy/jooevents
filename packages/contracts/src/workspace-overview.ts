@@ -137,11 +137,82 @@ export const workspaceOverviewOperationsMetricSchema = z.union([
   unavailableMetricSchema
 ]);
 
+export const workspaceOverviewTriageMetricSchema = z.union([
+  z.strictObject({
+    kind: z.literal('exact'),
+    arrived: safeCountSchema,
+    sorted: safeCountSchema
+  }).refine((value) => value.sorted <= value.arrived, {
+    message: 'Sorted submissions cannot exceed arrived submissions.'
+  }),
+  unavailableMetricSchema
+]);
+
+export const workspaceOverviewReviewsMetricSchema = z.union([
+  z.strictObject({
+    kind: z.literal('exact'),
+    rounds: safeCountSchema,
+    assignments: safeCountSchema,
+    committed: safeCountSchema
+  }).refine((value) => value.committed <= value.assignments, {
+    message: 'Committed reviews cannot exceed active assignments.'
+  }),
+  unavailableMetricSchema
+]);
+
+export const workspaceOverviewDecisionsMetricSchema = z.union([
+  z.strictObject({
+    kind: z.literal('exact'),
+    decided: safeCountSchema,
+    undecided: safeCountSchema
+  }),
+  unavailableMetricSchema
+]);
+
+export const workspaceOverviewEngagementsMetricSchema = z.union([
+  z.strictObject({
+    kind: z.literal('exact'),
+    total: safeCountSchema,
+    confirmed: safeCountSchema
+  }).refine((value) => value.confirmed <= value.total, {
+    message: 'Confirmed engagements cannot exceed active engagements.'
+  }),
+  unavailableMetricSchema
+]);
+
+export const workspaceOverviewSessionsMetricSchema = z.union([
+  z.strictObject({
+    kind: z.literal('exact'),
+    total: safeCountSchema,
+    placed: safeCountSchema
+  }).refine((value) => value.placed <= value.total, {
+    message: 'Placed sessions cannot exceed sessions.'
+  }),
+  unavailableMetricSchema
+]);
+
+export const workspaceOverviewCommunicationsMetricSchema = z.union([
+  z.strictObject({
+    kind: z.literal('exact'),
+    recipients: safeCountSchema,
+    sent: safeCountSchema
+  }).refine((value) => value.sent <= value.recipients, {
+    message: 'Sent communications cannot exceed released recipients.'
+  }),
+  unavailableMetricSchema
+]);
+
 export const workspaceOverviewMetricsSchema = z.strictObject({
   forms: workspaceOverviewFormsMetricSchema,
   submissions: workspaceOverviewSubmissionsMetricSchema,
   programVocabulary: workspaceOverviewProgramVocabularyMetricSchema,
-  operations: workspaceOverviewOperationsMetricSchema
+  operations: workspaceOverviewOperationsMetricSchema,
+  triage: workspaceOverviewTriageMetricSchema,
+  reviews: workspaceOverviewReviewsMetricSchema,
+  decisions: workspaceOverviewDecisionsMetricSchema,
+  engagements: workspaceOverviewEngagementsMetricSchema,
+  sessions: workspaceOverviewSessionsMetricSchema,
+  communications: workspaceOverviewCommunicationsMetricSchema
 });
 
 export const workspaceOverviewHistoryDomainSchema = z.enum([

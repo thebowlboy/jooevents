@@ -91,7 +91,13 @@ const projection = workspaceOverviewProjectionSchema.parse({
 		forms: { kind: 'unavailable', reason: 'event_required' },
 		submissions: { kind: 'unavailable', reason: 'event_required' },
 		programVocabulary: { kind: 'unavailable', reason: 'event_required' },
-		operations: { kind: 'unavailable', reason: 'event_required' }
+		operations: { kind: 'unavailable', reason: 'event_required' },
+		triage: { kind: 'unavailable', reason: 'event_required' },
+		reviews: { kind: 'unavailable', reason: 'event_required' },
+		decisions: { kind: 'unavailable', reason: 'event_required' },
+		engagements: { kind: 'unavailable', reason: 'event_required' },
+		sessions: { kind: 'unavailable', reason: 'event_required' },
+		communications: { kind: 'unavailable', reason: 'event_required' }
 	},
 	history: { total: 0, truncated: false, threads: [] }
 });
