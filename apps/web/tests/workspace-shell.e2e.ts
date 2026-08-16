@@ -155,7 +155,7 @@ test('a touch anywhere on a clipped entry expands it', async ({ page }, testInfo
 test('the operator route serves the same overview shell', async ({ page }) => {
 	await page.goto('/app');
 	await expect(page.getByRole('heading', { level: 1, name: 'Overview' })).toBeVisible();
-	await expect(page.getByRole('navigation', { name: 'Workspace' })).toBeAttached();
+	await expect(page.locator('nav[aria-label="Workspace"]')).toBeAttached();
 });
 
 test('a slow destination hands over whole, never as a torn frame', async ({ page }, testInfo) => {

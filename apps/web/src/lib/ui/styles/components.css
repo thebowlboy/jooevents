@@ -1152,6 +1152,9 @@
     border-bottom: 1px solid var(--je-color-border);
   }
 
+  /* A tab may be a button (switching panels in place) or a link (each tab its
+     own address); selection is aria-selected on the first and aria-current on
+     the second. One face either way. */
   .ui-tab {
     position: relative;
     display: inline-flex;
@@ -1165,14 +1168,17 @@
     font-size: var(--je-font-size-sm);
     font-weight: 650;
     white-space: nowrap;
+    text-decoration: none;
     cursor: pointer;
   }
 
-  .ui-tab[aria-selected='true'] {
+  .ui-tab[aria-selected='true'],
+  .ui-tab[aria-current='page'] {
     color: var(--je-color-text);
   }
 
-  .ui-tab[aria-selected='true']::after {
+  .ui-tab[aria-selected='true']::after,
+  .ui-tab[aria-current='page']::after {
     position: absolute;
     right: 0.55rem;
     bottom: -1px;

@@ -34,7 +34,7 @@ for (const destination of destinations) {
 		await expect(
 			page.getByRole('banner').getByRole('heading', { level: 1, name: destination.title })
 		).toBeVisible();
-		await expect(page.getByRole('navigation', { name: 'Workspace' })).toBeAttached();
+		await expect(page.locator('nav[aria-label="Workspace"]')).toBeAttached();
 
 		// Let the sample transport resolve so the settled composition is measured.
 		await page.waitForTimeout(600);

@@ -3,7 +3,7 @@
 	import { tick } from 'svelte';
 	import { navigating, page } from '$app/state';
 	import { afterNavigate } from '$app/navigation';
-	import { ChevronDown, ChevronRight, ChevronsUpDown, Lock, Menu, Plus, RotateCcw, X } from 'lucide-svelte';
+	import { ChevronsUpDown, Lock, Menu, Plus, RotateCcw, X } from 'lucide-svelte';
 	import wordmarkUrl from '$lib/assets/brand/jooevents-wordmark-login-256.png';
 	import type {
 		WorkspaceShellPort,
@@ -23,10 +23,8 @@
 		isActive as matchesPath,
 		navHref,
 		navMeta,
-		navModel,
-		settingsSectionItems
+		navModel
 	} from '../navigation';
-	import { settingsNavExpanded, settingsNavKeydown } from '../settings-nav';
 
 	let {
 		port,
@@ -54,8 +52,6 @@
 
 	let summary = $state<WorkspaceShellSummary | null>(null);
 	let navOpen = $state(false);
-	/** The Settings group's own answer, until the next navigation asks again. */
-	let settingsToggled = $state<boolean | null>(null);
 	let isNarrow = $state(false);
 	let navigationDialog = $state<HTMLElement>();
 	let closeButton = $state<HTMLButtonElement>();
@@ -82,9 +78,6 @@
 	afterNavigate(() => {
 		void loadSummary();
 		if (navOpen) closeNav();
-		// Expansion follows the route again on every arrival: the group a person
-		// closed stays closed for that surface, not for the rest of the session.
-		settingsToggled = null;
 	});
 
 	// ---- The signed-in account, for the one identity mark in the top bar. ----
@@ -171,30 +164,6 @@
 
 	function isActive(href: string) {
 		return matchesPath(current, href);
-	}
-
-	// ---- The Settings group: one column, expanded in place. ----
-	const settingsOpen = $derived(
-		settingsNavExpanded({ pathname: current, toggled: settingsToggled })
-	);
-
-	/** Row 0 is the disclosure control; rows 1..n are the section links. */
-	function focusSettingsRow(row: number) {
-		document.getElementById(`settings-nav-row-${row}`)?.focus();
-	}
-
-	function onSettingsKeydown(event: KeyboardEvent) {
-		const declared = (event.target as HTMLElement | null)?.dataset.navRow;
-		if (declared === undefined) return;
-		const row = Number(declared);
-		const intent = settingsNavKeydown({ key: event.key, row, expanded: settingsOpen });
-		if (!intent) return;
-		event.preventDefault();
-		if (intent.kind !== 'focus') settingsToggled = intent.kind === 'expand';
-		if (intent.focus === undefined) return;
-		// The rows being moved to may have just been disclosed, so focus waits for
-		// them to exist rather than for the frame they were requested in.
-		tick().then(() => focusSettingsRow(intent.focus ?? 0));
 	}
 
 	function metaFor(key: AreaKey) {
@@ -470,60 +439,24 @@
 		</nav>
 		<!-- Identity renders once, in the top bar's account menu; the foot keeps
 		     only the Settings door and stands down when the viewer has none.
-		     The door is a group: it expands in place into its sections rather
-		     than opening a second column, and its own link still leads to
-		     /app/settings, which lands on the first section. -->
-		{#if nav.settings}
+		     One row like every other area: which part of Settings is chosen on
+		     the surface itself, by its section tabs — the rail never grows a
+		     second menu for one area's insides. -->
+		{#if nav.settings || nav.approvals}
 			{@const settingsItem = nav.settings}
-			{@const within = isActive(settingsItem.href)}
-			<nav class="side__foot" aria-label="Settings">
-				<div class="side__grouprow">
-					<!-- `location`, not `page`: the section beneath is the page. Two
-					     rows claiming `page` would name two current destinations. -->
-					<a
-						class="side__link side__link--group"
-						class:side__link--active={within}
-						href={settingsItem.href}
-						data-nav-row="0"
-						aria-current={within ? 'location' : undefined}
-						onkeydown={onSettingsKeydown}>
+			<nav class="side__foot" aria-label="Workspace controls">
+				{#if nav.approvals}
+					{@const approvals = nav.approvals}
+					<a class="side__link" class:side__link--active={isActive(approvals.href)} href={approvals.href} aria-current={isActive(approvals.href) ? 'page' : undefined}>
+						<approvals.icon size={16} aria-hidden="true" />{approvals.label}
+					</a>
+				{/if}
+				{#if settingsItem}
+					{@const within = isActive(settingsItem.href)}
+					<a class="side__link" class:side__link--active={within} href={settingsItem.href} aria-current={within ? 'page' : undefined}>
 						<settingsItem.icon size={16} aria-hidden="true" />{settingsItem.label}
 					</a>
-					<button
-						type="button"
-						id="settings-nav-row-0"
-						class="ui-button ui-button--ghost ui-button--icon ui-button--sm side__disclose"
-						data-nav-row="0"
-						aria-expanded={settingsOpen}
-						aria-controls="settings-nav-sections"
-						aria-label={settingsOpen ? 'Collapse Settings sections' : 'Expand Settings sections'}
-						onclick={() => (settingsToggled = !settingsOpen)}
-						onkeydown={onSettingsKeydown}>
-						{#if settingsOpen}
-							<ChevronDown size={14} />
-						{:else}
-							<ChevronRight size={14} />
-						{/if}
-					</button>
-				</div>
-				<!-- Hidden rather than absent: `aria-controls` must point at something
-				     that exists, and `hidden` takes the closed rows out of the tab
-				     order and out of the drawer's focus trap. -->
-				<ul class="side__sub" id="settings-nav-sections" hidden={!settingsOpen}>
-					{#each settingsSectionItems as section, index (section.href)}
-						{@const currentSection = isActive(section.href)}
-						<li>
-							<a
-								id={`settings-nav-row-${index + 1}`}
-								class="side__link side__sublink"
-								class:side__link--active={currentSection}
-								href={section.href}
-								data-nav-row={index + 1}
-								aria-current={currentSection ? 'page' : undefined}
-								onkeydown={onSettingsKeydown}>{section.label}</a>
-						</li>
-					{/each}
-				</ul>
+				{/if}
 			</nav>
 		{/if}
 	</aside>
@@ -831,62 +764,6 @@
 		gap: 0;
 		border-block-start: 1px solid var(--je-color-border);
 		padding-block-start: var(--je-space-3);
-	}
-
-	/* The group's own row: one link, and one control that only opens it. */
-	.side__grouprow {
-		display: flex;
-		align-items: center;
-		gap: var(--je-space-1);
-	}
-
-	.side__link--group {
-		flex: 1;
-		min-inline-size: 0;
-	}
-
-	/* The group is the ancestor of the current page, not the page. It takes the
-	   selected row's ink without its surface or brand bar, so exactly one row in
-	   the rail reads as chosen — the section. */
-	.side__link--group.side__link--active {
-		background: transparent;
-		color: var(--je-color-text);
-	}
-
-	.side__link--group.side__link--active::before {
-		content: none;
-	}
-
-	.side__link--group.side__link--active:hover {
-		background: var(--je-color-surface);
-	}
-
-	.side__disclose {
-		flex-shrink: 0;
-		color: var(--je-color-text-muted);
-	}
-
-	.side__sub {
-		display: flex;
-		flex-direction: column;
-		gap: 0;
-		margin: 0;
-		padding: 0;
-		list-style: none;
-	}
-
-	/* The flex display above would otherwise win against the `hidden`
-	   attribute's own rule and leave the closed group readable. */
-	.side__sub[hidden] {
-		display: none;
-	}
-
-	/* Indented to the group's label, not to its glyph: the sections read as a
-	   continuation of the word "Settings" rather than as a second icon column.
-	   Left at the small size, one step under the rows above them. */
-	.side__sublink {
-		padding-inline-start: var(--je-space-8);
-		font-size: var(--je-font-size-sm);
 	}
 
 	/* Body */

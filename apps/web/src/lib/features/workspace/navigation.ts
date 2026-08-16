@@ -8,6 +8,7 @@ import type { Icon } from 'lucide-svelte';
 import {
 	Activity,
 	CalendarDays,
+	ClipboardCheck,
 	CodeXml,
 	FileText,
 	FolderOpen,
@@ -22,7 +23,6 @@ import {
 	Users
 } from 'lucide-svelte';
 import type { AreaKey, NavCounts } from '$lib/api/types';
-import { settingsSections } from '$lib/features/settings/sections';
 
 /** Viewer facts needed to shape navigation, independent of any data source. */
 export type WorkspaceNavigationViewer =
@@ -116,33 +116,23 @@ export const settingsItem: NavItem = {
 	icon: Settings
 };
 
-/**
- * The Settings item's own destinations. They expand in place beneath it — one
- * column, never a second — and carry no icons: the group's mark already says
- * which area these belong to, and a glyph per plain noun would only compete
- * with it.
- */
-export interface NavSubItem {
-	readonly key: string;
-	readonly label: string;
-	readonly href: string;
-}
-
-export const settingsSectionItems: readonly NavSubItem[] = settingsSections.map((section) => ({
-	key: section.key,
-	label: section.label,
-	href: section.href
-}));
+export const approvalsItem: NavItem = {
+	key: 'approvals',
+	label: 'Approvals',
+	href: '/app/approvals',
+	icon: ClipboardCheck
+};
 
 /*
  * Sections are deliberately absent here: the destination title names the area a
  * person is in, and every settings section is Settings. The section names
- * itself in the rail and in its own panel heading.
+ * itself in the surface's own tabs and in its panel heading.
  */
 const allItems = [
 	overviewItem,
 	pulseItem,
 	...navGroups.flatMap((group) => group.items),
+	approvalsItem,
 	settingsItem
 ];
 
@@ -170,6 +160,8 @@ export interface NavModel {
 	pulse?: NavItem;
 	groups: NavGroup[];
 	/** Present when the viewer administers the workspace. */
+	approvals?: NavItem;
+	/** Present when the viewer administers the workspace. */
 	settings?: NavItem;
 }
 
@@ -183,6 +175,9 @@ export function navModel(viewer: WorkspaceNavigationViewer): NavModel {
 			overview: overviewItem,
 			pulse: pulseItem,
 			groups: navGroups,
+			// Approvals stays off the rail until the external agent lane is
+			// activated; the route remains reachable by direct URL and keeps
+			// its destination title through allItems.
 			settings: settingsItem
 		};
 	}
