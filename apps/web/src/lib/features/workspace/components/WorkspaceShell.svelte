@@ -364,9 +364,14 @@
 					</Popover>
 				</div>
 			{:else}
-				<div class="side__event side__event--loading">
+				<!-- No live events collection yet (wave item 3): identity only, and
+				     deliberately not dressed as a control — the trigger's card skin
+				     on a dead block is what read as a broken button. The one line
+				     below speaks the refusal where a person looks for the action. -->
+				<div class="side__event side__event--static">
 					<span class="side__event-name">{event.name}</span>
 					<span class="side__event-dates">{event.dates}{event.location ? ` · ${event.location}` : ''}</span>
+					<span class="side__event-note">Switching and new events are not available in this live workspace yet.</span>
 				</div>
 			{/if}
 		{:else}
@@ -603,6 +608,20 @@
 
 	.side__event--loading {
 		cursor: default;
+	}
+
+	/* Identity without affordance: no border, no surface, no caret space —
+	   nothing suggests a press where no press exists. */
+	.side__event--static {
+		cursor: default;
+		border: none;
+		background: none;
+		padding-inline-end: var(--je-space-3);
+	}
+
+	.side__event-note {
+		font-size: var(--je-font-size-2xs);
+		color: var(--je-color-text-muted);
 	}
 
 	/* Each fill is one line box inside the line it stands in for, so the chip
