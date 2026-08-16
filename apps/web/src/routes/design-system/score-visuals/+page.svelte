@@ -1025,6 +1025,28 @@
 				remain comparable across rounds.
 			</p>
 		</div>
+
+		<div class="read">
+			<h3 class="read__title">Hover accelerator (<code>hoverOpen</code>)</h3>
+			<p class="note">
+				A figure disclosure may additionally open on hover where a fine, hover-capable pointer
+				exists (owner call, 2026-08-15 — the submissions journey strip is the reference use).
+				Hover never carries it alone: press, tap, and keyboard open the same panel everywhere, a
+				150ms dwell keeps a sweep from strobing panels, a press pins it open through
+				pointer-leave, and hover-opens skip <code>onreveal</code> so the live region is not
+				flooded.
+			</p>
+			<Popover label="Speaker tasks, 3 of 5 complete — breakdown" kind="figure" hoverOpen>
+				{#snippet trigger()}
+					<span class="anchors__item"><span class="anchors__num">3 of 5</span>
+						<span class="anchors__cap">hover or press</span></span>
+				{/snippet}
+				{#snippet children()}
+					<p class="pop__line pop__line--lead">3 of 5 steps done — next: result sent</p>
+					<p class="pop__line">Opened by hover on a mouse, by tap on touch, by Enter from the keyboard.</p>
+				{/snippet}
+			</Popover>
+		</div>
 	</section>
 
 	<section class="block">
