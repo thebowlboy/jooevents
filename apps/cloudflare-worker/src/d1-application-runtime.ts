@@ -172,6 +172,7 @@ import { createD1OrganizerCommunicationReadPort } from './d1-organizer-communica
 import { createD1OrganizerAudiencePreviewReadPort } from './d1-organizer-audience-preview-read';
 import {
   createD1OrganizerCommunicationDraftCreateEffectDomainRegistration,
+  createD1OrganizerCommunicationDraftEditEffectDomainRegistrations,
   createD1OrganizerCommunicationPayloadEffectDomainRegistration
 } from './d1-organizer-communication-mutation';
 import { createD1ProgramVocabularySnapshotReadSource } from './d1-program-vocabulary';
@@ -931,7 +932,12 @@ export async function createConfiguredD1ApplicationRuntime(
           ORGANIZER_COMMUNICATION_PROFILES.idempotencyCredentialProfile
         )
       }),
-      enabledOperations: ['store_communication_authoring_payload', 'create_message_draft']
+      enabledOperations: [
+        'store_communication_authoring_payload',
+        'create_message_draft',
+        'revise_message_batch',
+        'discard_message_draft'
+      ]
     });
   const organizerCommunicationAuthoringOperations =
     composeOrganizerCommunicationAuthoringOperationModules({
@@ -1170,6 +1176,11 @@ export async function createConfiguredD1ApplicationRuntime(
       ids: { newTimelineId: () => crypto.randomUUID() }
     }),
     createD1OrganizerCommunicationDraftCreateEffectDomainRegistration({
+      workspaceId,
+      classifiedPayload: classifiedD1CommunicationProfiles(cryptoProfiles),
+      ids: { newTimelineId: () => crypto.randomUUID() }
+    }),
+    ...createD1OrganizerCommunicationDraftEditEffectDomainRegistrations({
       workspaceId,
       classifiedPayload: classifiedD1CommunicationProfiles(cryptoProfiles),
       ids: { newTimelineId: () => crypto.randomUUID() }

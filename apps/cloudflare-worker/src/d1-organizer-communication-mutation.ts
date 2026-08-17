@@ -20,20 +20,31 @@ import {
   sealOrganizerCommunicationMutationPreparation
 } from '@jooevents/communication-operations';
 import {
+  OrganizerMessageDraftError,
   createOrganizerMessageDraft,
+  discardOrganizerMessageDraft,
   OrganizerAuthoringPayloadError,
   canonicalizeOrganizerAuthoringPayload,
   createOrganizerAuthoringPayloadRef,
-  type OrganizerAuthoringPayloadKind
+  reviseOrganizerMessageDraft,
+  type OrganizerAuthoringPayloadKind,
+  type OrganizerMessageDraftRecord
 } from '@jooevents/communications';
 import {
+  ORGANIZER_COMMUNICATION_EMPTY_AUDIENCE_REF_ID,
+  ORGANIZER_COMMUNICATION_EMPTY_CONTENT_REF_ID,
   organizerCommunicationAudienceDraftSchema,
   organizerCommunicationAuthoringPayloadInputSchema,
   organizerCommunicationAuthoringPayloadOperationResultSchema,
   organizerCommunicationDraftMutationOperationResultSchema,
   organizerCommunicationDraftMutationResultSchema,
+  organizerCommunicationDraftProvenanceSchema,
   organizerCreateCommunicationDraftInputSchema,
+  organizerDiscardCommunicationDraftInputSchema,
   organizerEmailMessageContentSchema,
+  organizerMessageAudiencePayloadRefSchema,
+  organizerMessageContentPayloadRefSchema,
+  organizerReviseCommunicationDraftInputSchema,
   organizerStoreAuthoringPayloadInputSchema,
   type VersionedDefinitionRef
 } from '@jooevents/contracts';
@@ -65,6 +76,9 @@ import type {
 const OPERATION_NAME = 'store_communication_authoring_payload';
 const CAPABILITY =
   ORGANIZER_COMMUNICATION_MUTATION_HANDLER_CAPABILITY_BY_OPERATION[OPERATION_NAME];
+const MAXIMUM_PRELOADED_AUTHORING_PAYLOADS = 1_000;
+const MAXIMUM_PRELOADED_AUTHORING_BYTES = 16 * 1_048_576;
+const MAXIMUM_PRELOADED_DRAFT_PAYLOAD_REFS = 2_000;
 
 interface EventSetRow {
   readonly version: number;
@@ -110,6 +124,10 @@ interface PreparedDraftCreate {
   phase: 'prepared' | 'applied' | 'evidence_complete';
 }
 
+interface PreparedDraftEdit extends PreparedDraftCreate {
+  readonly operationName: 'revise_message_batch' | 'discard_message_draft';
+}
+
 interface PurposeRow {
   readonly purpose_id: string;
   readonly purpose_key: string;
@@ -125,6 +143,41 @@ interface TemplateRow {
   readonly lifecycle: string;
   readonly current_revision_id: string;
   readonly purpose_revision_id: string;
+  readonly template_revision_id: string;
+  readonly revision_number: number;
+  readonly digest_sha256: string;
+}
+
+interface DraftRow {
+  readonly workspace_id: string;
+  readonly event_id: string;
+  readonly draft_id: string;
+  readonly owner_key: string;
+  readonly version: number;
+  readonly state: 'active' | 'proposed' | 'discarded';
+  readonly channel: 'email';
+  readonly purpose_revision_id: string;
+  readonly template_revision_id: string | null;
+  readonly authoring_state: 'uninitialized' | 'ready';
+  readonly content_payload_ref_id: string;
+  readonly audience_payload_ref_id: string;
+  readonly subject: string | null;
+  readonly provenance_json: string;
+  readonly discard_reason_code: string | null;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+interface PurposeRevisionRow {
+  readonly purpose_id: string;
+  readonly purpose_key: string;
+  readonly revision_id: string;
+  readonly revision_number: number;
+  readonly digest_sha256: string;
+}
+
+interface TemplateRevisionRow {
+  readonly template_id: string;
   readonly template_revision_id: string;
   readonly revision_number: number;
   readonly digest_sha256: string;
@@ -156,7 +209,8 @@ function isPermissionGrant(grant: { readonly kind: string; readonly key: string 
 }
 
 function outcome(
-  outcomeClass: 'conflict' | 'policy_violation' | 'quota_exceeded' | 'idempotency_conflict',
+  outcomeClass: 'conflict' | 'stale_revision' | 'policy_violation' | 'quota_exceeded'
+    | 'idempotency_conflict',
   kind: string
 ) {
   return organizerCommunicationMutationContributionSchema.parse({
@@ -686,7 +740,9 @@ class D1OrganizerCommunicationDraftCreateEffectDomainAdapter implements D1Effect
       WHERE workspace_id=? AND event_id=? AND owner_key=? LIMIT 1001`
     ).bind(this.#workspaceId, eventId, context.authorityPrincipalKey)
       .all<MetadataRow>()).results;
-    const payloadsBounded = metadata.length <= 1000;
+    const payloadsBounded = metadata.length <= MAXIMUM_PRELOADED_AUTHORING_PAYLOADS
+      && metadata.reduce((total, row) => total + row.byte_size, 0)
+        <= MAXIMUM_PRELOADED_AUTHORING_BYTES;
     const records = payloadsBounded
       ? await readD1ClassifiedPayloadRecords(
           this.input.unitOfWork.readSession,
@@ -1004,6 +1060,547 @@ class D1OrganizerCommunicationDraftCreateEffectDomainAdapter implements D1Effect
   }
 }
 
+class D1OrganizerCommunicationDraftEditEffectDomainAdapter implements D1EffectDomainAdapter {
+  readonly #workspaceId: WorkspaceId;
+  #prepared: PreparedDraftEdit | undefined;
+
+  constructor(private readonly input: {
+    readonly unitOfWork: D1BufferedUnitOfWork;
+    readonly workspaceId: WorkspaceId;
+    readonly classifiedPayload: ImmutableClassifiedPayloadRecordCodecOptions;
+    readonly ids: { newTimelineId(): string };
+  }) {
+    this.#workspaceId = parseWorkspaceId(input.workspaceId);
+  }
+
+  async openHandlerSnapshot(
+    capability: VersionedDefinitionRef,
+    context: EffectInvocationContext,
+    authorityRecheck: SealedEffectAuthorityRecheckResult
+  ): Promise<EffectHandlerSnapshot> {
+    const operationName = sameRef(
+      capability,
+      ORGANIZER_COMMUNICATION_MUTATION_HANDLER_CAPABILITY_BY_OPERATION.revise_message_batch
+    )
+      ? 'revise_message_batch' as const
+      : sameRef(
+          capability,
+          ORGANIZER_COMMUNICATION_MUTATION_HANDLER_CAPABILITY_BY_OPERATION.discard_message_draft
+        )
+        ? 'discard_message_draft' as const
+        : undefined;
+    if (operationName === undefined
+        || context.operation.name !== operationName
+        || context.operation.version !== 1
+        || context.operation.effect !== 'draft'
+        || (context.surface !== 'operator_http' && context.surface !== 'app_model')
+        || context.scope.workspaceId !== this.#workspaceId
+        || !exactSubjects(context)) {
+      throw new TypeError('d1_organizer_communication_draft_edit_binding_mismatch');
+    }
+    const authority = resolveEffectInvocationAuthorityRecheckAttribution(context, authorityRecheck);
+    resolveEffectInvocationCurrentAuthorityRecheckTime(context, authorityRecheck);
+    if (!sameRef(authority.lane.policy, ORGANIZER_COMMUNICATION_DRAFT_ACCESS_POLICY)
+        || !authority.grants.some(isPermissionGrant)) {
+      throw new TypeError('d1_organizer_communication_draft_edit_authority_mismatch');
+    }
+    if (context.surface === 'operator_http') {
+      if (context.provenance.kind !== 'operator'
+          || authority.lane.kind !== 'operator'
+          || authority.lane.surface !== 'operator_http'
+          || authority.actor.kind !== 'workspace_user'
+          || authority.principal.kind !== 'workspace_user'
+          || context.actor.kind !== 'workspace_user'
+          || authority.actor.userId !== authority.principal.userId
+          || authority.actor.userId !== context.actor.userId) {
+        throw new TypeError('d1_organizer_communication_draft_edit_authority_mismatch');
+      }
+    } else if (context.provenance.kind !== 'app_model'
+        || authority.lane.kind !== 'app_model'
+        || authority.lane.surface !== 'app_model'
+        || authority.actor.kind !== 'app_model_run'
+        || context.actor.kind !== 'app_model_run'
+        || authority.actor.agentRunId !== context.actor.agentRunId
+        || authority.actor.delegatedByPrincipalId !== context.actor.delegatedByPrincipalId
+        || authority.actor.agentRunId !== context.provenance.agentRunId
+        || (authority.principal.kind !== 'workspace_user'
+          && authority.principal.kind !== 'service')) {
+      throw new TypeError('d1_organizer_communication_draft_edit_authority_mismatch');
+    }
+
+    const eventSet = await this.input.unitOfWork.readSession.prepare(
+      `SELECT version,current_event_id FROM event_spine_workspace_sets WHERE workspace_id=?`
+    ).bind(this.#workspaceId).first<EventSetRow>();
+    if (!eventSet || eventSet.current_event_id !== (context.scope.eventId ?? null)) {
+      throw new TypeError('d1_organizer_communication_draft_edit_current_event_mismatch');
+    }
+    this.input.unitOfWork.assertCurrent(`EXISTS (SELECT 1 FROM event_spine_workspace_sets
+      WHERE workspace_id=? AND version=? AND current_event_id IS ?)`, [
+      this.#workspaceId, eventSet.version, context.scope.eventId ?? null
+    ]);
+    if (context.scope.eventId === undefined) {
+      return sealOrganizerCommunicationMutationPreparation({
+        capability,
+        context,
+        operationName,
+        preparation: {
+          prepare: ({ operationName: receivedOperation, context: receivedContext }) => {
+            if (receivedOperation !== operationName || receivedContext !== context) {
+              throw new TypeError('d1_organizer_communication_draft_edit_context_substitution');
+            }
+            return outcome('conflict', 'communication.event_required');
+          }
+        }
+      });
+    }
+    const eventId = parseEventId(context.scope.eventId);
+    const drafts = (await this.input.unitOfWork.readSession.prepare(`SELECT
+      workspace_id,event_id,draft_id,owner_key,version,state,channel,purpose_revision_id,
+      template_revision_id,authoring_state,content_payload_ref_id,audience_payload_ref_id,
+      subject,provenance_json,discard_reason_code,created_at,updated_at
+      FROM communication_drafts WHERE workspace_id=? AND event_id=? AND owner_key=? LIMIT 1001`
+    ).bind(this.#workspaceId, eventId, context.authorityPrincipalKey).all<DraftRow>()).results;
+    const purposeRevisions = (await this.input.unitOfWork.readSession.prepare(`SELECT
+      purpose_id,purpose_key,revision_id,revision_number,digest_sha256
+      FROM communication_purpose_revisions WHERE workspace_id=? AND event_id=? LIMIT 1001`
+    ).bind(this.#workspaceId, eventId).all<PurposeRevisionRow>()).results;
+    const templateRevisions = (await this.input.unitOfWork.readSession.prepare(`SELECT
+      template_id,template_revision_id,revision_number,digest_sha256
+      FROM message_template_revisions WHERE workspace_id=? AND event_id=? LIMIT 1001`
+    ).bind(this.#workspaceId, eventId).all<TemplateRevisionRow>()).results;
+    if (drafts.length > 1000 || purposeRevisions.length > 1000
+        || templateRevisions.length > 1000) {
+      throw new TypeError('d1_organizer_communication_draft_edit_snapshot_unbounded');
+    }
+    const metadata = operationName === 'revise_message_batch'
+      ? (await this.input.unitOfWork.readSession.prepare(`SELECT
+          payload_ref_id,workspace_id,event_id,owner_key,payload_kind,payload_schema_key,
+          payload_schema_version,classification_key,content_type,digest_sha256,byte_size,
+          created_at
+          FROM communication_authoring_payloads
+          WHERE workspace_id=? AND event_id=? AND owner_key=? LIMIT 1001`
+        ).bind(this.#workspaceId, eventId, context.authorityPrincipalKey)
+          .all<MetadataRow>()).results
+      : (await this.input.unitOfWork.readSession.prepare(`SELECT DISTINCT
+          payload.payload_ref_id,payload.workspace_id,payload.event_id,payload.owner_key,
+          payload.payload_kind,payload.payload_schema_key,payload.payload_schema_version,
+          payload.classification_key,payload.content_type,payload.digest_sha256,
+          payload.byte_size,payload.created_at
+          FROM communication_authoring_payloads payload
+          INNER JOIN communication_drafts draft
+            ON draft.workspace_id=payload.workspace_id
+            AND draft.event_id=payload.event_id
+            AND draft.owner_key=payload.owner_key
+            AND (draft.content_payload_ref_id=payload.payload_ref_id
+              OR draft.audience_payload_ref_id=payload.payload_ref_id)
+          WHERE payload.workspace_id=? AND payload.event_id=? AND payload.owner_key=?
+          LIMIT 2001`
+        ).bind(this.#workspaceId, eventId, context.authorityPrincipalKey)
+          .all<MetadataRow>()).results;
+    const payloadsBounded = operationName === 'revise_message_batch'
+      ? metadata.length <= MAXIMUM_PRELOADED_AUTHORING_PAYLOADS
+        && metadata.reduce((total, row) => total + row.byte_size, 0)
+          <= MAXIMUM_PRELOADED_AUTHORING_BYTES
+      : metadata.length <= MAXIMUM_PRELOADED_DRAFT_PAYLOAD_REFS;
+    const records = payloadsBounded && operationName === 'revise_message_batch'
+      ? await readD1ClassifiedPayloadRecords(
+          this.input.unitOfWork.readSession,
+          metadata.map((row) => parsePayloadRefId(row.payload_ref_id))
+        )
+      : [];
+    if (payloadsBounded && operationName === 'revise_message_batch'
+        && records.length !== metadata.length) {
+      throw new TypeError('d1_organizer_communication_draft_edit_payload_corrupt');
+    }
+    const metadataById = new Map(metadata.map((row) => [row.payload_ref_id, row]));
+    if (metadataById.size !== metadata.length) {
+      throw new TypeError('d1_organizer_communication_draft_edit_payload_corrupt');
+    }
+    const store = new D1BufferedClassifiedPayloadStore({
+      ...this.input.classifiedPayload,
+      unitOfWork: this.input.unitOfWork,
+      preloadedRecords: records
+    });
+    const timelineId = this.input.ids.newTimelineId();
+    parsePayloadRefId(timelineId);
+    this.#prepared = undefined;
+
+    const openPayload = (payloadRefId: string, kind: OrganizerAuthoringPayloadKind) => {
+      const row = metadataById.get(payloadRefId);
+      if (!row || row.workspace_id !== this.#workspaceId || row.event_id !== eventId
+          || row.owner_key !== context.authorityPrincipalKey || row.payload_kind !== kind) {
+        return undefined;
+      }
+      parseInstant(row.created_at);
+      let bytes: Uint8Array | undefined;
+      let canonical: ReturnType<typeof canonicalizeOrganizerAuthoringPayload> | undefined;
+      try {
+        bytes = store.read({
+          payloadRef: createPayloadRef(parsePayloadRefId(payloadRefId)),
+          expectedBinding: createCommunicationAuthoringClassifiedPayloadBinding({
+            scope: { workspaceId: this.#workspaceId, eventId },
+            ownerKey: context.authorityPrincipalKey,
+            kind
+          }),
+          purpose: communicationAuthoringClassifiedPayloadPurpose(kind)
+        });
+        const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+        const envelope = organizerCommunicationAuthoringPayloadInputSchema.parse(JSON.parse(text));
+        canonical = canonicalizeOrganizerAuthoringPayload(envelope);
+        if (envelope.payloadKind !== kind || canonicalJsonText(envelope) !== text
+            || !bytesEqual(bytes, canonical.bytes)
+            || canonical.digestSha256 !== row.digest_sha256
+            || canonical.bytes.byteLength !== row.byte_size
+            || canonical.profile.payloadKind !== row.payload_kind
+            || canonical.profile.schemaKey !== row.payload_schema_key
+            || canonical.profile.schemaVersion !== row.payload_schema_version
+            || canonical.profile.classification !== row.classification_key
+            || canonical.profile.contentType !== row.content_type) {
+          throw new TypeError('d1_organizer_communication_draft_edit_payload_corrupt');
+        }
+        guardMetadata(this.input.unitOfWork, row);
+        return Object.freeze({
+          envelope,
+          ref: createOrganizerAuthoringPayloadRef({
+            payloadRefId: parsePayloadRefId(payloadRefId),
+            canonical
+          })
+        });
+      } finally {
+        bytes?.fill(0);
+        canonical?.bytes.fill(0);
+      }
+    };
+
+    const currentRecord = (row: DraftRow): OrganizerMessageDraftRecord => {
+      if (row.workspace_id !== this.#workspaceId || row.event_id !== eventId
+          || row.owner_key !== context.authorityPrincipalKey || row.channel !== 'email'
+          || !Number.isSafeInteger(row.version) || row.version < 1) {
+        throw new TypeError('d1_organizer_communication_draft_edit_row_corrupt');
+      }
+      const purpose = purposeRevisions.find((candidate) =>
+        candidate.revision_id === row.purpose_revision_id);
+      if (!purpose) throw new TypeError('d1_organizer_communication_draft_edit_row_corrupt');
+      const template = row.template_revision_id === null ? undefined : templateRevisions.find(
+        (candidate) => candidate.template_revision_id === row.template_revision_id
+      );
+      if (row.template_revision_id !== null && !template) {
+        throw new TypeError('d1_organizer_communication_draft_edit_row_corrupt');
+      }
+      const provenance = organizerCommunicationDraftProvenanceSchema.parse(
+        JSON.parse(row.provenance_json)
+      );
+      let authoring: OrganizerMessageDraftRecord['authoring'];
+      if (row.authoring_state === 'uninitialized') {
+        if (row.content_payload_ref_id !== ORGANIZER_COMMUNICATION_EMPTY_CONTENT_REF_ID
+            || row.audience_payload_ref_id !== ORGANIZER_COMMUNICATION_EMPTY_AUDIENCE_REF_ID
+            || row.subject !== null || row.state === 'proposed') {
+          throw new TypeError('d1_organizer_communication_draft_edit_row_corrupt');
+        }
+        authoring = Object.freeze({
+          state: 'uninitialized' as const,
+          contentRefId: ORGANIZER_COMMUNICATION_EMPTY_CONTENT_REF_ID,
+          audienceRefId: ORGANIZER_COMMUNICATION_EMPTY_AUDIENCE_REF_ID
+        });
+      } else {
+        if (operationName === 'discard_message_draft') {
+          const content = metadataById.get(row.content_payload_ref_id);
+          const audience = metadataById.get(row.audience_payload_ref_id);
+          if (!content || !audience || content.payload_kind !== 'message_content'
+              || audience.payload_kind !== 'message_audience_draft' || row.subject === null) {
+            throw new TypeError('d1_organizer_communication_draft_edit_row_corrupt');
+          }
+          guardMetadata(this.input.unitOfWork, content);
+          guardMetadata(this.input.unitOfWork, audience);
+          authoring = Object.freeze({
+            state: 'ready' as const,
+            contentPayload: organizerMessageContentPayloadRefSchema.parse({
+              payloadRefId: content.payload_ref_id,
+              payloadRefVersion: 1,
+              payloadKind: content.payload_kind,
+              schemaKey: content.payload_schema_key,
+              schemaVersion: content.payload_schema_version,
+              classification: content.classification_key
+            }),
+            audiencePayload: organizerMessageAudiencePayloadRefSchema.parse({
+              payloadRefId: audience.payload_ref_id,
+              payloadRefVersion: 1,
+              payloadKind: audience.payload_kind,
+              schemaKey: audience.payload_schema_key,
+              schemaVersion: audience.payload_schema_version,
+              classification: audience.classification_key
+            })
+          });
+        } else {
+          const content = openPayload(row.content_payload_ref_id, 'message_content');
+          const audience = openPayload(row.audience_payload_ref_id, 'message_audience_draft');
+          const message = content === undefined ? undefined
+            : organizerEmailMessageContentSchema.safeParse(content.envelope.value);
+          const audienceDraft = audience === undefined ? undefined
+            : organizerCommunicationAudienceDraftSchema.safeParse(audience.envelope.value);
+          if (!content || !audience || !message?.success || !audienceDraft?.success
+              || message.data.subject !== row.subject
+              || audienceDraft.data.purposeRevision.revisionId !== purpose.revision_id) {
+            throw new TypeError('d1_organizer_communication_draft_edit_row_corrupt');
+          }
+          authoring = Object.freeze({
+            state: 'ready' as const,
+            contentPayload: organizerMessageContentPayloadRefSchema.parse(content.ref),
+            audiencePayload: organizerMessageAudiencePayloadRefSchema.parse(audience.ref)
+          });
+        }
+      }
+      return Object.freeze({
+        workspaceId: this.#workspaceId,
+        eventId,
+        ownerKey: context.authorityPrincipalKey,
+        draftId: row.draft_id,
+        version: row.version,
+        state: row.state,
+        channel: 'email' as const,
+        purposeRevision: Object.freeze({
+          purposeId: purpose.purpose_id,
+          purposeKey: purpose.purpose_key,
+          revisionId: purpose.revision_id,
+          revisionNumber: purpose.revision_number,
+          digestSha256: purpose.digest_sha256
+        }),
+        ...(template === undefined ? {} : {
+          templateRevision: Object.freeze({
+            templateId: template.template_id,
+            templateRevisionId: template.template_revision_id,
+            revisionNumber: template.revision_number,
+            digestSha256: template.digest_sha256
+          })
+        }),
+        authoring,
+        provenance,
+        createdAt: parseInstant(row.created_at),
+        updatedAt: parseInstant(row.updated_at),
+        ...(row.discard_reason_code === null ? {} : {
+          discardReasonCode: row.discard_reason_code
+        })
+      });
+    };
+
+    const guardDraft = (row: DraftRow) => {
+      this.input.unitOfWork.assertCurrent(`EXISTS (SELECT 1 FROM communication_drafts
+        WHERE workspace_id=? AND event_id=? AND draft_id=? AND owner_key=?
+          AND version=? AND state=? AND authoring_state=?
+          AND content_payload_ref_id=? AND audience_payload_ref_id=?
+          AND subject IS ? AND provenance_json=? AND discard_reason_code IS ?
+          AND updated_at=?)`, [
+        row.workspace_id, row.event_id, row.draft_id, row.owner_key, row.version,
+        row.state, row.authoring_state, row.content_payload_ref_id,
+        row.audience_payload_ref_id, row.subject, row.provenance_json,
+        row.discard_reason_code, row.updated_at
+      ]);
+    };
+
+    return sealOrganizerCommunicationMutationPreparation({
+      capability,
+      context,
+      operationName,
+      preparation: {
+        prepare: ({ operationName: receivedOperation, businessInput, context: receivedContext }) => {
+          if (receivedOperation !== operationName || receivedContext !== context
+              || this.#prepared !== undefined) {
+            throw new TypeError('d1_organizer_communication_draft_edit_context_substitution');
+          }
+          if (!payloadsBounded) {
+            return outcome('quota_exceeded', 'communication.authoring_quota');
+          }
+          const parsed = operationName === 'revise_message_batch'
+            ? organizerReviseCommunicationDraftInputSchema.safeParse(businessInput)
+            : organizerDiscardCommunicationDraftInputSchema.safeParse(businessInput);
+          if (!parsed.success) return outcome('policy_violation', 'communication.authoring_invalid');
+          const row = drafts.find((candidate) => candidate.draft_id === parsed.data.draftId);
+          if (!row) return outcome('conflict', 'communication.not_found');
+          if (row.version !== parsed.data.expectedVersion) {
+            return outcome('stale_revision', 'communication.revision_changed');
+          }
+          if (row.state !== 'active') {
+            return outcome('conflict', 'communication.draft_not_active');
+          }
+          const current = currentRecord(row);
+          guardDraft(row);
+          let next: OrganizerMessageDraftRecord;
+          let subject: string | null = row.subject;
+          let contentRef: ReturnType<typeof createOrganizerAuthoringPayloadRef> | undefined;
+          let audienceRef: ReturnType<typeof createOrganizerAuthoringPayloadRef> | undefined;
+          try {
+            if (operationName === 'revise_message_batch') {
+              const revision = organizerReviseCommunicationDraftInputSchema.parse(parsed.data);
+              const content = openPayload(revision.contentPayload.payloadRefId, 'message_content');
+              const audience = openPayload(
+                revision.audiencePayload.payloadRefId,
+                'message_audience_draft'
+              );
+              const message = content === undefined ? undefined
+                : organizerEmailMessageContentSchema.safeParse(content.envelope.value);
+              const audienceDraft = audience === undefined ? undefined
+                : organizerCommunicationAudienceDraftSchema.safeParse(audience.envelope.value);
+              if (!content || !audience || !message?.success || !audienceDraft?.success
+                  || audienceDraft.data.purposeRevision.revisionId
+                    !== current.purposeRevision.revisionId
+                  || canonicalJsonText(content.ref) !== canonicalJsonText(revision.contentPayload)
+                  || canonicalJsonText(audience.ref) !== canonicalJsonText(revision.audiencePayload)) {
+                return outcome('policy_violation', 'communication.authoring_invalid');
+              }
+              next = reviseOrganizerMessageDraft({
+                current,
+                businessInput: revision,
+                now: context.receivedAt
+              });
+              subject = message.data.subject;
+              contentRef = content.ref;
+              audienceRef = audience.ref;
+              this.input.unitOfWork.write(`UPDATE communication_drafts
+                SET version=?,authoring_state='ready',content_payload_ref_id=?,
+                    audience_payload_ref_id=?,subject=?,updated_at=?
+                WHERE workspace_id=? AND event_id=? AND draft_id=? AND owner_key=?
+                  AND version=? AND state='active'`, [
+                next.version, revision.contentPayload.payloadRefId,
+                revision.audiencePayload.payloadRefId, subject, next.updatedAt,
+                this.#workspaceId, eventId, row.draft_id, context.authorityPrincipalKey,
+                row.version
+              ]);
+            } else {
+              const discard = organizerDiscardCommunicationDraftInputSchema.parse(parsed.data);
+              next = discardOrganizerMessageDraft({
+                current,
+                businessInput: discard,
+                now: context.receivedAt
+              });
+              this.input.unitOfWork.write(`UPDATE communication_drafts
+                SET version=?,state='discarded',discard_reason_code=?,updated_at=?
+                WHERE workspace_id=? AND event_id=? AND draft_id=? AND owner_key=?
+                  AND version=? AND state='active'`, [
+                next.version, discard.reasonCode, next.updatedAt, this.#workspaceId,
+                eventId, row.draft_id, context.authorityPrincipalKey, row.version
+              ]);
+            }
+          } catch (error) {
+            if (error instanceof OrganizerMessageDraftError) {
+              return error.code === 'stale_revision'
+                ? outcome('stale_revision', 'communication.revision_changed')
+                : error.code === 'draft_not_active'
+                  ? outcome('conflict', 'communication.draft_not_active')
+                  : outcome('policy_violation', 'communication.authoring_invalid');
+            }
+            throw error;
+          }
+          const resultData = organizerCommunicationDraftMutationResultSchema.parse({
+            schemaVersion: 1,
+            draftId: next.draftId,
+            version: next.version,
+            state: next.state,
+            authoring: next.authoring.state === 'uninitialized'
+              ? {
+                  state: 'uninitialized',
+                  contentRefId: next.authoring.contentRefId,
+                  audienceRefId: next.authoring.audienceRefId
+                }
+              : {
+                  state: 'ready',
+                  subject,
+                  recipientEstimate: {
+                    knowledge: 'unknown', reasonCode: 'audience.not_resolved'
+                  },
+                  contentPayload: contentRef ?? next.authoring.contentPayload,
+                  audiencePayload: audienceRef ?? next.authoring.audiencePayload
+                },
+            nextRead: {
+              operationName: 'get_message_draft',
+              draftId: next.draftId,
+              expectedVersion: next.version
+            }
+          });
+          const contribution = organizerCommunicationMutationContributionSchema.parse({
+            result: { kind: 'success', data: resultData },
+            domain: {
+              kind: 'organizer_communication_authoring',
+              operationName,
+              workspaceId: this.#workspaceId,
+              eventId,
+              entityId: next.draftId,
+              entityVersion: next.version,
+              occurredAt: parseInstant(context.receivedAt)
+            },
+            effectContributions: []
+          });
+          if (contribution.result.kind !== 'success' || contribution.domain === null) {
+            throw new TypeError('d1_organizer_communication_draft_edit_evidence_missing');
+          }
+          this.#prepared = {
+            context,
+            operationName,
+            contribution,
+            domainCanonical: canonicalJsonText(contribution.domain),
+            resultDataCanonical: canonicalJsonText(contribution.result.data),
+            timelineId,
+            phase: 'prepared'
+          };
+          return contribution;
+        }
+      }
+    });
+  }
+
+  applyDomainContribution(contribution: unknown): void {
+    const parsed = organizerCommunicationMutationDomainContributionSchema.parse(contribution);
+    if (!this.#prepared || this.#prepared.phase !== 'prepared'
+        || canonicalJsonText(parsed) !== this.#prepared.domainCanonical) {
+      throw new TypeError('d1_organizer_communication_draft_edit_preparation_invalid');
+    }
+    this.#prepared.phase = 'applied';
+  }
+
+  afterOperationLogInserted(receipt: TerminalEffectReceipt): void {
+    const prepared = this.#prepared;
+    const result = organizerCommunicationDraftMutationOperationResultSchema.safeParse(
+      receipt.result
+    );
+    if (!prepared || prepared.phase !== 'applied' || !result.success
+        || result.data.kind !== 'success'
+        || !effectOperationIdentityMatchesContext(receipt.identity, prepared.context)
+        || receipt.requestHash !== prepared.context.requestBinding.requestHashSha256
+        || receipt.ref.operationName !== prepared.operationName
+        || receipt.ref.operationVersion !== 1
+        || result.data.receipt.id !== receipt.ref.id
+        || canonicalJsonText(result.data.data) !== prepared.resultDataCanonical) {
+      throw new TypeError('d1_organizer_communication_draft_edit_receipt_mismatch');
+    }
+    const domain = prepared.contribution.domain;
+    this.input.unitOfWork.write(`INSERT INTO organizer_communication_authoring_receipt_links (
+      receipt_id,workspace_id,event_id,authority_principal_key,operation_name,
+      operation_version,payload_ref_id,draft_id,entity_version,request_hash,occurred_at_ms
+    ) VALUES (?,?,?,?,?,1,NULL,?,?,?,?)`, [
+      receipt.ref.id,
+      domain.workspaceId,
+      domain.eventId,
+      prepared.context.authorityPrincipalKey,
+      prepared.operationName,
+      domain.entityId,
+      domain.entityVersion,
+      receipt.requestHash,
+      Date.parse(parseInstant(domain.occurredAt))
+    ]);
+    this.input.unitOfWork.write(`INSERT INTO organizer_communication_authoring_timeline (
+      timeline_id,receipt_id,occurred_at_ms,source_kind
+    ) VALUES (?,?,?,'operation_receipt')`, [
+      prepared.timelineId,
+      receipt.ref.id,
+      Date.parse(parseInstant(domain.occurredAt))
+    ]);
+    prepared.phase = 'evidence_complete';
+  }
+
+  afterUnitOfWorkFinished(): void {
+    this.#prepared = undefined;
+  }
+}
+
 /** Mounts the encrypted authoring-payload operation independently of draft mutation rollout. */
 export function createD1OrganizerCommunicationPayloadEffectDomainRegistration(input: {
   readonly workspaceId: WorkspaceId;
@@ -1041,4 +1638,25 @@ export function createD1OrganizerCommunicationDraftCreateEffectDomainRegistratio
         ids: input.ids
       })
   });
+}
+
+/** Mounts guarded draft revision and discard against the retained D1 authoring snapshot. */
+export function createD1OrganizerCommunicationDraftEditEffectDomainRegistrations(input: {
+  readonly workspaceId: WorkspaceId;
+  readonly classifiedPayload: ImmutableClassifiedPayloadRecordCodecOptions;
+  readonly ids: { newTimelineId(): string };
+}): readonly D1EffectDomainAdapterRegistration[] {
+  const workspaceId = parseWorkspaceId(input.workspaceId);
+  return (['revise_message_batch', 'discard_message_draft'] as const).map(
+    (operationName) => Object.freeze({
+      capability: ORGANIZER_COMMUNICATION_MUTATION_HANDLER_CAPABILITY_BY_OPERATION[operationName],
+      create: (unitOfWork: D1BufferedUnitOfWork) =>
+        new D1OrganizerCommunicationDraftEditEffectDomainAdapter({
+          unitOfWork,
+          workspaceId,
+          classifiedPayload: input.classifiedPayload,
+          ids: input.ids
+        })
+    })
+  );
 }

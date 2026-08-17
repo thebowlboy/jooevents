@@ -136,6 +136,7 @@ describe('configured D1 application HTTP slice', () => {
       'deadline.catalog.read',
       'deadline.change',
       'deadline.current.read',
+      'discard_message_draft',
       'event.create',
       'event.current.read',
       'event.list.read',
@@ -175,6 +176,7 @@ describe('configured D1 application HTTP slice', () => {
       'program_vocabulary.restore',
       'program_vocabulary.retire',
       'program_vocabulary.snapshot.read',
+      'revise_message_batch',
       'schedule.placement',
       'schedule.placement.snapshot.read',
       'session.catalog.read',
@@ -809,6 +811,98 @@ describe('configured D1 application HTTP slice', () => {
       kind: 'success',
       data: { version: 1, state: 'active', authoring: { state: 'uninitialized' } }
     });
+    const revisedContentPayload = await storeAuthoringPayload({
+      payload: {
+        ...authoringPayloadInput.payload,
+        value: {
+          ...authoringPayloadInput.payload.value,
+          subject: 'Revised D1 authoring payload'
+        }
+      }
+    }, 'd1-store-revised-authoring-payload');
+    expect(
+      revisedContentPayload.status,
+      await revisedContentPayload.clone().text()
+    ).toBe(200);
+    const revisedContentPayloadBody = await revisedContentPayload.json<{
+      readonly kind: string;
+      readonly data: typeof storedAuthoringPayloadBody.data;
+    }>();
+    const reviseDraftInput = {
+      draftId: createdDraftBody.data.draftId,
+      expectedVersion: 1,
+      contentPayload: revisedContentPayloadBody.data,
+      audiencePayload: storedAudiencePayloadBody.data
+    };
+    const editDraft = (path: 'revise' | 'discard', body: unknown, idempotencyKey: string) =>
+      handleRequest(new Request(
+        `${baseUrl}/api/events/current/communications/drafts/${path}`,
+        {
+          method: 'POST',
+          headers: {
+            cookie: headers.cookie,
+            origin: baseUrl,
+            'content-type': 'application/json',
+            'idempotency-key': idempotencyKey
+          },
+          body: JSON.stringify(body)
+        }
+      ), environment());
+    const revisedDraft = await editDraft(
+      'revise', reviseDraftInput, 'd1-revise-message-draft'
+    );
+    expect(revisedDraft.status, await revisedDraft.clone().text()).toBe(200);
+    const revisedDraftBody = await revisedDraft.json<{
+      readonly kind: string;
+      readonly data: { readonly draftId: string; readonly version: number };
+    }>();
+    expect(revisedDraftBody).toMatchObject({
+      kind: 'success',
+      data: {
+        draftId: createdDraftBody.data.draftId,
+        version: 2,
+        state: 'active',
+        authoring: { state: 'ready', subject: 'Revised D1 authoring payload' }
+      }
+    });
+    const revisedDraftReplay = await editDraft(
+      'revise', reviseDraftInput, 'd1-revise-message-draft'
+    );
+    expect(await revisedDraftReplay.json()).toEqual(revisedDraftBody);
+    const changedDraftRevision = await editDraft('revise', {
+      ...reviseDraftInput,
+      contentPayload: storedAuthoringPayloadBody.data
+    }, 'd1-revise-message-draft');
+    expect(await changedDraftRevision.json()).toMatchObject({
+      kind: 'outcome',
+      outcome: { class: 'idempotency_conflict', kind: 'operation.request_changed' }
+    });
+    const discardDraftInput = {
+      draftId: createdDraftBody.data.draftId,
+      expectedVersion: 2,
+      reasonCode: 'organizer.cancelled'
+    };
+    const discardedDraft = await editDraft(
+      'discard', discardDraftInput, 'd1-discard-message-draft'
+    );
+    expect(discardedDraft.status, await discardedDraft.clone().text()).toBe(200);
+    const discardedDraftBody = await discardedDraft.json();
+    expect(discardedDraftBody).toMatchObject({
+      kind: 'success',
+      data: { draftId: createdDraftBody.data.draftId, version: 3, state: 'discarded' }
+    });
+    const discardedDraftReplay = await editDraft(
+      'discard', discardDraftInput, 'd1-discard-message-draft'
+    );
+    expect(await discardedDraftReplay.json()).toEqual(discardedDraftBody);
+    const discardedDraftEdit = await editDraft('discard', {
+      ...discardDraftInput,
+      expectedVersion: 3
+    }, 'd1-discard-message-draft-again');
+    expect(await discardedDraftEdit.json()).toMatchObject({
+      kind: 'outcome',
+      outcome: { class: 'conflict', kind: 'communication.draft_not_active' }
+    });
     const createdDraftDetail = await handleRequest(
       new Request(`${baseUrl}/api/events/current/communications/drafts/detail?draftId=${
         createdDraftBody.data.draftId}`, { headers }),
@@ -816,7 +910,7 @@ describe('configured D1 application HTTP slice', () => {
     );
     expect(await createdDraftDetail.json()).toMatchObject({
       kind: 'success',
-      data: { draftId: createdDraftBody.data.draftId, version: 1, state: 'active' }
+      data: { draftId: createdDraftBody.data.draftId, version: 3, state: 'discarded' }
     });
     const authoringRows = await env.DB.batch([
       env.DB.prepare(`SELECT count(*) AS count FROM communication_authoring_payloads
@@ -837,13 +931,22 @@ describe('configured D1 application HTTP slice', () => {
         FROM organizer_communication_authoring_timeline t
         JOIN organizer_communication_authoring_receipt_links l ON l.receipt_id=t.receipt_id
         WHERE l.draft_id=? AND l.operation_name='create_message_draft'`)
-        .bind(createdDraftBody.data.draftId)
+        .bind(createdDraftBody.data.draftId),
+      env.DB.prepare(`SELECT count(*) AS count
+        FROM organizer_communication_authoring_receipt_links WHERE draft_id=?`)
+        .bind(createdDraftBody.data.draftId),
+      env.DB.prepare(`SELECT count(*) AS count
+        FROM organizer_communication_authoring_timeline t
+        JOIN organizer_communication_authoring_receipt_links l ON l.receipt_id=t.receipt_id
+        WHERE l.draft_id=?`).bind(createdDraftBody.data.draftId)
     ]);
     expect((authoringRows[0] as D1Result<{ count: number }>).results[0]?.count).toBe(1);
     expect((authoringRows[1] as D1Result<{ count: number }>).results[0]?.count).toBe(1);
     expect((authoringRows[2] as D1Result<{ count: number }>).results[0]?.count).toBe(1);
     expect((authoringRows[4] as D1Result<{ count: number }>).results[0]?.count).toBe(1);
     expect((authoringRows[5] as D1Result<{ count: number }>).results[0]?.count).toBe(1);
+    expect((authoringRows[6] as D1Result<{ count: number }>).results[0]?.count).toBe(3);
+    expect((authoringRows[7] as D1Result<{ count: number }>).results[0]?.count).toBe(3);
     const ciphertext = (authoringRows[3] as D1Result<{
       ciphertext: ArrayBuffer | readonly number[];
     }>).results[0]?.ciphertext;
@@ -1613,7 +1716,7 @@ describe('configured D1 application HTTP slice', () => {
     const operationCount = await env.DB.prepare(
       'SELECT count(*) AS count FROM operation_log WHERE workspace_id = ?'
     ).bind(workspaceId).first<{ readonly count: number }>();
-    expect(operationCount?.count).toBe(20);
+    expect(operationCount?.count).toBe(23);
     const logs = await env.DB.prepare('SELECT count(*) AS count FROM operation_log WHERE id = ?')
       .bind(firstBody.receipt.id).first<{ readonly count: number }>();
     expect(logs?.count).toBe(1);
