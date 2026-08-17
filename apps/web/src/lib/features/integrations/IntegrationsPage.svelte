@@ -1,10 +1,12 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
+	import { formatInstant, formatRelative } from '@jooevents/contracts';
 	import { ChevronRight } from 'lucide-svelte';
 	import airtableMark from '$lib/assets/integrations/airtable-mark.svg';
 	import type {
 		AirtableAreaDirection,
+		AirtableHistoryItem,
 		AirtableIntegrationView,
 		AirtableSelectableBase,
 		IntegrationsPagePort
@@ -20,6 +22,7 @@
 	let bases = $state<readonly AirtableSelectableBase[]>([]);
 	let selectedBaseId = $state('');
 	let draftDirections = $state<Record<string, AirtableAreaDirection>>({});
+	const viewedAt = Date.now();
 
 	const panel = $derived(page.url.searchParams.get('panel'));
 	const historyScope = $derived(page.url.searchParams.get('scope') ?? 'all');
@@ -71,6 +74,20 @@
 		keep_airtable_updated: 'Keep Airtable updated',
 		work_from_airtable: 'Work from Airtable'
 	};
+
+	const historyKind: Record<AirtableHistoryItem['kind'], { readonly label: string; readonly tone: string }> = {
+		applied: { label: 'From Airtable', tone: 'applied' },
+		refused: { label: 'Restored', tone: 'refused' },
+		sharing: { label: 'Sharing', tone: 'sharing' },
+		connection: { label: 'Connection', tone: 'connection' }
+	};
+
+	function historyAction(item: AirtableHistoryItem) {
+		const actorPrefix = item.actorLabel ? `${item.actorLabel} ` : '';
+		return actorPrefix && item.summary.startsWith(actorPrefix)
+			? item.summary.slice(actorPrefix.length)
+			: item.summary;
+	}
 
 	function status(view: AirtableIntegrationView) {
 		return {
@@ -273,9 +290,23 @@
 			<div class="section-title"><h3>History</h3><nav class="history-filters" aria-label="Filter Airtable history"><a class:active={historyScope === 'all'} href="?panel=history&scope=all">All</a><a class:active={historyScope === 'airtable'} href="?panel=history&scope=airtable">From Airtable</a><a class:active={historyScope === 'refused'} href="?panel=history&scope=refused">Refused</a><a class:active={historyScope === 'connection'} href="?panel=history&scope=connection">Connection & sharing</a></nav></div>
 			<div class="history-list">
 				{#each filteredHistory as item (item.id)}
+					{@const kind = historyKind[item.kind]}
+					{@const absoluteTime = formatInstant(item.occurredAt, 'UTC', { zone: true })}
 					<article class="history-row">
-						<p>{item.summary} · <time>{item.occurredAt}</time></p>
-						{#if item.before !== undefined && item.after !== undefined}<p class="change"><span>Before: “{item.before}”</span><span>After: “{item.after}”</span></p>{/if}
+						<div class="history-row__meta">
+							<span class="history-kind history-kind--{kind.tone}">{kind.label}</span>
+							<time class="history-time" datetime={item.occurredAt} title={absoluteTime} aria-label={`${formatRelative(item.occurredAt, viewedAt)}; ${absoluteTime}`}>{formatRelative(item.occurredAt, viewedAt)}</time>
+						</div>
+						<p class="history-row__summary">
+							{#if item.actorLabel}<strong>{item.actorLabel}</strong>{/if}
+							<span>{historyAction(item)}</span>
+						</p>
+						{#if item.before !== undefined && item.after !== undefined}
+							<dl class="change">
+								<div><dt>Before</dt><dd>“{item.before}”</dd></div>
+								<div class="change__after"><dt>After</dt><dd>“{item.after}”</dd></div>
+							</dl>
+						{/if}
 						{#if item.revertLabel}<Button variant="ghost" size="sm" loading={busy === `revert-${item.id}`} onclick={() => act(`revert-${item.id}`, () => port.revertHistory(item.id), `Changed back to “${item.before}”. Airtable updates in a moment.`)}>{item.revertLabel}</Button>{/if}
 					</article>
 				{:else}
@@ -304,7 +335,8 @@
 		.airtable-detail{display:grid;gap:var(--je-space-5)}.airtable-head{display:flex;justify-content:space-between;align-items:start;gap:var(--je-space-4)}.head-actions{display:flex;align-items:center;gap:var(--je-space-3);flex-wrap:wrap;justify-content:end}.back{display:inline-block;margin-block-end:var(--je-space-3)}.card,.section{padding:var(--je-space-5)}.setup{display:grid;gap:var(--je-space-4)}.setup-moments{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--je-space-3)}.setup-moments span{display:flex;gap:var(--je-space-2);align-items:center;color:var(--je-color-text-muted)}.setup-moments b{display:grid;place-items:center;flex:0 0 1.75rem;block-size:1.75rem;border-radius:999px;background:var(--je-color-surface-sunken);color:var(--je-color-text)}.boundary{font-size:var(--je-font-size-sm)}
 		.setup-config{gap:var(--je-space-5)}.step-label{font-size:var(--je-font-size-xs);font-weight:700;letter-spacing:.08em;margin:0;color:var(--je-color-text-muted)}.setup-divider{border-block-start:1px solid var(--je-color-border)}.setup-directions{border:1px solid var(--je-color-border);border-radius:var(--je-radius-control);padding-inline:var(--je-space-4)}.preview-summary{display:grid;gap:var(--je-space-4)}.preview-summary dl{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--je-space-3);margin:0}.preview-summary dl div{padding:var(--je-space-3);border-radius:var(--je-radius-control);background:var(--je-color-surface-sunken)}.preview-summary dt{color:var(--je-color-text-muted);font-size:var(--je-font-size-sm)}.preview-summary dd{margin:.25rem 0 0;font-size:var(--je-font-size-lg);font-weight:700}
 	.state-banner{display:flex;align-items:center;gap:var(--je-space-3);padding:var(--je-space-4);border-color:color-mix(in srgb,var(--je-color-warning-fill) 38%,transparent);background:linear-gradient(var(--je-color-warning-soft),var(--je-color-warning-soft)),var(--je-color-surface)}.state-banner span{color:var(--je-color-text-muted)}.state-banner :global(.ui-button){margin-inline-start:auto}.section-title{display:flex;align-items:center;justify-content:space-between;gap:var(--je-space-4);margin-block-end:var(--je-space-3)}.attention-list,.value-list,.history-list{display:grid}.attention-row,.value-row,.history-row{border-block-start:1px solid var(--je-color-border);padding-block:var(--je-space-3)}.attention-row:first-child,.value-row:first-child,.history-row:first-child{border-block-start:0}.attention-row{display:flex;justify-content:space-between;gap:var(--je-space-4);color:inherit;text-decoration:none}.attention-row strong{color:var(--je-color-link)}.value-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(14rem,20rem);align-items:center;gap:var(--je-space-4)}.value-row>span{text-align:end;color:var(--je-color-text-muted)}
-	.activity-list{display:grid;margin:0 0 var(--je-space-4)}.activity-list div{display:grid;grid-template-columns:minmax(12rem,1fr) minmax(12rem,1fr);gap:var(--je-space-4);padding-block:var(--je-space-2);border-block-start:1px solid var(--je-color-border)}.activity-list div:first-child{border-block-start:0}.activity-list dt{color:var(--je-color-text-muted)}.activity-list dd{margin:0}.history-filters{display:flex;flex-wrap:wrap;gap:var(--je-space-3);font-size:var(--je-font-size-sm)}.history-filters a{color:var(--je-color-text-muted)}.history-filters a.active{color:var(--je-color-text);font-weight:700}.history-row p{margin:.2rem 0}.change{display:flex;flex-wrap:wrap;gap:var(--je-space-4);font-size:var(--je-font-size-sm)}.quiet{color:var(--je-color-text-muted)}
+	.activity-list{display:grid;margin:0 0 var(--je-space-4)}.activity-list div{display:grid;grid-template-columns:minmax(12rem,1fr) minmax(12rem,1fr);gap:var(--je-space-4);padding-block:var(--je-space-2);border-block-start:1px solid var(--je-color-border)}.activity-list div:first-child{border-block-start:0}.activity-list dt{color:var(--je-color-text-muted)}.activity-list dd{margin:0}.history-filters{display:flex;flex-wrap:wrap;gap:var(--je-space-3);font-size:var(--je-font-size-sm)}.history-filters a{color:var(--je-color-text-muted)}.history-filters a.active{color:var(--je-color-text);font-weight:700}.history-row{display:grid;gap:var(--je-space-3)}.history-row__meta{display:flex;align-items:baseline;justify-content:space-between;gap:var(--je-space-4)}.history-kind{font-size:var(--je-font-size-xs);font-weight:700;letter-spacing:.07em;text-transform:uppercase}.history-kind--applied{color:var(--je-color-info)}.history-kind--refused{color:var(--je-color-warning)}.history-kind--sharing{color:var(--je-color-success)}.history-kind--connection{color:var(--je-color-text-muted)}.history-time{color:var(--je-color-text-subtle);font-size:var(--je-font-size-sm);font-variant-numeric:tabular-nums;white-space:nowrap}.history-row__summary{display:flex;flex-wrap:wrap;gap:.28rem;margin:0;color:var(--je-color-text)}.history-row__summary strong{font-weight:700}.change{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));margin:0;overflow:hidden;border:1px solid var(--je-color-border);border-radius:var(--je-radius-control);background:var(--je-color-surface-sunken);font-size:var(--je-font-size-sm)}.change div{padding:var(--je-space-3)}.change__after{border-inline-start:1px solid var(--je-color-border)}.change dt{color:var(--je-color-text-subtle);font-size:var(--je-font-size-xs);font-weight:700;letter-spacing:.06em;text-transform:uppercase}.change dd{margin:.2rem 0 0;color:var(--je-color-text)}.change__after dd{font-weight:700}.quiet{color:var(--je-color-text-muted)}
 	.connection-row{display:flex;align-items:center;justify-content:space-between;gap:var(--je-space-5);padding-block:var(--je-space-3);border-block-start:1px solid var(--je-color-border)}.connection-row p{display:grid;gap:.2rem;margin:0}.support{display:flex;align-items:center;gap:var(--je-space-3);padding-block-start:var(--je-space-3);border-block-start:1px solid var(--je-color-border);color:var(--je-color-text-muted)}.skeleton-title,.skeleton-line{display:block}.skeleton-title{inline-size:18rem;block-size:2rem}.skeleton-line{inline-size:min(36rem,90%);block-size:1rem;margin-block-start:1rem}.announcements{position:absolute;inline-size:1px;block-size:1px;overflow:hidden;clip-path:inset(50%)}
 		@media(max-width:920px){.airtable-detail{gap:var(--je-space-4)}.airtable-head,.state-banner,.section-title,.connection-row{align-items:stretch;display:grid}.head-actions{justify-content:start}.integration-card{grid-template-columns:auto minmax(0,1fr) auto}.integration-card__state{grid-column:2;justify-items:start}.setup-moments,.preview-summary dl{grid-template-columns:1fr}.value-row,.activity-list div{grid-template-columns:1fr}.value-row>span{text-align:start}.section,.card{padding:var(--je-space-4)}.attention-row{align-items:start}.history-filters{gap:var(--je-space-2) var(--je-space-3)}.state-banner :global(.ui-button){margin-inline-start:0;inline-size:fit-content}.connection-row :global(.ui-button){min-block-size:44px;inline-size:fit-content}}
+	@media(max-width:560px){.change{grid-template-columns:1fr}.change__after{border-block-start:1px solid var(--je-color-border);border-inline-start:0}}
 </style>

@@ -78,7 +78,14 @@ function disconnected(): AirtableIntegrationView {
 	return { state: 'not_connected', areas: areas(), attention: [], history: [] };
 }
 
-export function createSampleIntegrationsPagePort(connected = true): IntegrationsPagePort {
+const HOUR_MS = 60 * 60 * 1_000;
+const DAY_MS = 24 * HOUR_MS;
+
+export function createSampleIntegrationsPagePort(
+	connected = true,
+	now: () => number = Date.now
+): IntegrationsPagePort {
+	const ago = (distance: number) => new Date(now() - distance).toISOString();
 	let view: AirtableIntegrationView = connected ? {
 		state: 'needs_review',
 		baseName: 'Riverside Conf 2027 base',
@@ -95,9 +102,9 @@ export function createSampleIntegrationsPagePort(connected = true): Integrations
 			{ id: 'request-1', kind: 'request', title: "Airtable asks to cancel Jonas Weber's session", href: '/app/speakers?request=cancellation', actionLabel: 'Review there' }
 		],
 		history: [
-			{ id: 'history-1', kind: 'applied', summary: "Dana Ryu changed Maya Chen's session title in Airtable", actorLabel: 'Dana Ryu', before: 'Scaling Postgres', after: 'Scaling PostgreSQL', occurredAt: '12:04', revertLabel: 'Change back to “Scaling Postgres”' },
-			{ id: 'history-2', kind: 'refused', summary: "Dana Ryu edited Keynote's room in Airtable, but that value is view-only. JooEvents put it back.", actorLabel: 'Dana Ryu', before: 'Room 4', after: 'Room 7', occurredAt: 'Yesterday 16:12' },
-			{ id: 'history-3', kind: 'sharing', summary: 'Sharing changed: Speaker tasks now update JooEvents (1 field).', actorLabel: 'Maya Chen', occurredAt: '13 Aug' }
+			{ id: 'history-1', kind: 'applied', summary: "Dana Ryu changed Maya Chen's session title in Airtable", actorLabel: 'Dana Ryu', before: 'Scaling Postgres', after: 'Scaling PostgreSQL', occurredAt: ago(2 * HOUR_MS), revertLabel: 'Change back to “Scaling Postgres”' },
+			{ id: 'history-2', kind: 'refused', summary: "Dana Ryu edited Keynote's room in Airtable, but that value is view-only. JooEvents put it back.", actorLabel: 'Dana Ryu', before: 'Room 4', after: 'Room 7', occurredAt: ago(30 * HOUR_MS) },
+			{ id: 'history-3', kind: 'sharing', summary: 'Sharing changed: Speaker tasks now update JooEvents (1 field).', actorLabel: 'Maya Chen', occurredAt: ago(4 * DAY_MS) }
 		]
 	} : disconnected();
 	const copy = () => structuredClone(view);
@@ -122,7 +129,7 @@ export function createSampleIntegrationsPagePort(connected = true): Integrations
 				...view,
 				areas: view.areas.map((area) => area.key === key ? { ...area, direction } : area),
 				state: 'pending',
-				history: [{ id: `sharing-${key}`, kind: 'sharing', summary: `${view.areas.find((area) => area.key === key)?.label ?? key} sharing changed.`, occurredAt: 'Just now' }, ...view.history]
+				history: [{ id: `sharing-${key}`, kind: 'sharing', summary: `${view.areas.find((area) => area.key === key)?.label ?? key} sharing changed.`, occurredAt: new Date(now()).toISOString() }, ...view.history]
 			};
 			return copy();
 		},
@@ -193,7 +200,7 @@ const airtableViewSchema: z.ZodType<AirtableIntegrationView> = z.object({
 		id: z.string(),
 		kind: z.enum(['applied', 'refused', 'sharing', 'connection']),
 		summary: z.string(),
-		occurredAt: z.string(),
+		occurredAt: z.iso.datetime({ offset: true }),
 		actorLabel: z.string().optional(),
 		before: z.string().optional(),
 		after: z.string().optional(),

@@ -43,7 +43,7 @@ export const airtableIntegrationViewSchema = z.object({
     id: z.string().min(1).max(160),
     kind: z.enum(['applied', 'refused', 'sharing', 'connection']),
     summary: z.string().min(1).max(1_000),
-    occurredAt: z.string().min(1).max(160),
+    occurredAt: z.iso.datetime({ offset: true }),
     actorLabel: z.string().min(1).max(320).optional(),
     before: z.string().max(2_000).optional(),
     after: z.string().max(2_000).optional(),

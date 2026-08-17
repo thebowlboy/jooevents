@@ -43,6 +43,16 @@ test('Airtable explains the shared-team outcome and keeps each area direction ex
 	const scheduleDirection = page.getByRole('combobox', { name: 'Direction for Schedule' });
 	await expect(scheduleDirection).toHaveText(/Keep Airtable updated/);
 	await expect(page.getByText(/Review scores, private notes, and sign-in or access data never go to Airtable/)).toBeVisible();
+	const history = page.locator('#history');
+	await expect(history.locator('.history-kind').filter({ hasText: /^From Airtable$/ })).toBeVisible();
+	await expect(history.locator('.history-kind').filter({ hasText: /^Restored$/ })).toBeVisible();
+	await expect(history.locator('.history-kind').filter({ hasText: /^Sharing$/ })).toBeVisible();
+	await expect(history.getByText('2 hours ago', { exact: true })).toBeVisible();
+	await expect(history.getByText('1 day ago', { exact: true })).toBeVisible();
+	await expect(history.getByText('4 days ago', { exact: true })).toBeVisible();
+	await expect(history.locator('.history-row__summary strong').first()).toHaveText('Dana Ryu');
+	await expect(history.locator('.change').first().getByText('Before', { exact: true })).toBeVisible();
+	await expect(history.locator('.change').first().getByText('After', { exact: true })).toBeVisible();
 
 	const headerGap = await blockGap(page, '.airtable-head', '#waiting');
 	const sectionGap = await blockGap(page, '#waiting', '#shared');
