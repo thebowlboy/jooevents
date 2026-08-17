@@ -74,6 +74,25 @@ export interface EventSettingsState {
   readonly companion: EventSettingsCompanion;
 }
 
+export const CREATED_EVENT_SETTINGS_DEFAULTS = Object.freeze({
+  location: '',
+  venueNote: '',
+  dayStart: '09:00',
+  dayEnd: '18:00',
+  slotMinutes: 15
+} as const);
+
+/** Canonical settings companion installed atomically with every new Event root. */
+export function createInitialEventSettingsCompanion(eventInput: Event): EventSettingsCompanion {
+  const event = parseEventState(eventInput);
+  return parseEventSettingsCompanion({
+    workspaceId: event.workspaceId,
+    eventId: event.id,
+    eventVersion: event.version,
+    ...CREATED_EVENT_SETTINGS_DEFAULTS
+  });
+}
+
 export interface EventSettingsReadPort {
   readEventSettings(scope: EventSettingsScope): EventSettingsState | undefined;
 }

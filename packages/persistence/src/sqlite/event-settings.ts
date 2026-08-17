@@ -6,6 +6,7 @@ import {
 } from '@jooevents/contracts';
 import {
   applyEventSettingsUpdatePlan,
+  createInitialEventSettingsCompanion,
   parseEventSettingsCompanion,
   parseEventSettingsState,
   projectEventSettings,
@@ -97,11 +98,6 @@ interface CompanionRow {
   readonly day_end: string | null;
   readonly slot_minutes: number | null;
 }
-
-/** Schedule-grid geometry seeded for every newly created Event. */
-const CREATED_EVENT_DAY_START = '09:00';
-const CREATED_EVENT_DAY_END = '18:00';
-const CREATED_EVENT_SLOT_MINUTES = 15;
 
 function requireTransaction(sqlite: Database): void {
   if (!sqlite.inTransaction) throw new SQLiteEventSettingsError('transaction_required');
@@ -214,13 +210,19 @@ export class SQLiteEventSettingsRepository implements EventSettingsTransactionPo
       throw new SQLiteEventSettingsError('selection_changed');
     }
     const existing = this.readCompanion(scope);
+    const initialCompanion = createInitialEventSettingsCompanion(current.currentEvent);
+    if (initialCompanion.dayStart === null
+        || initialCompanion.dayEnd === null
+        || initialCompanion.slotMinutes === null) {
+      throw new SQLiteEventSettingsError('settings_companion_conflict');
+    }
     if (existing) {
       if (existing.eventVersion !== current.currentEvent.version
-          || existing.location !== ''
-          || existing.venueNote !== ''
-          || existing.dayStart !== CREATED_EVENT_DAY_START
-          || existing.dayEnd !== CREATED_EVENT_DAY_END
-          || existing.slotMinutes !== CREATED_EVENT_SLOT_MINUTES) {
+          || existing.location !== initialCompanion.location
+          || existing.venueNote !== initialCompanion.venueNote
+          || existing.dayStart !== initialCompanion.dayStart
+          || existing.dayEnd !== initialCompanion.dayEnd
+          || existing.slotMinutes !== initialCompanion.slotMinutes) {
         throw new SQLiteEventSettingsError('settings_companion_conflict');
       }
       return this.requireEventSettings(scope);
@@ -248,9 +250,9 @@ export class SQLiteEventSettingsRepository implements EventSettingsTransactionPo
         current.currentEvent.workspaceId,
         current.currentEvent.id,
         current.currentEvent.version,
-        CREATED_EVENT_DAY_START,
-        CREATED_EVENT_DAY_END,
-        CREATED_EVENT_SLOT_MINUTES,
+        initialCompanion.dayStart,
+        initialCompanion.dayEnd,
+        initialCompanion.slotMinutes,
         current.currentEvent.workspaceId,
         current.currentEvent.id,
         current.currentEvent.version

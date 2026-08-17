@@ -28,6 +28,7 @@ import {
   parseWorkspaceId
 } from '@jooevents/kernel';
 import { beforeAll, describe, expect, test } from 'vitest';
+import { createD1CreatedEventInitializer } from '../src/d1-created-event-initializer';
 import {
   createD1EventCreateEffectDomainRegistration,
   createD1EventSelectEffectDomainRegistration
@@ -139,18 +140,12 @@ describe('registered Event operation over D1', () => {
       createD1EventCreateEffectDomainRegistration({
         workspaceId,
         newEventId: () => eventId,
-        createdEventInitializer: {
-          initializeCreatedEvent({ unitOfWork, event }) {
-            unitOfWork.write(`INSERT INTO events (id,workspace_id,name,created_at,updated_at)
-              VALUES (?,?,?,?,?)`, [
-              event.id,
-              event.workspaceId,
-              event.name,
-              Date.parse(event.createdAt),
-              Date.parse(event.createdAt)
-            ]);
+        createdEventInitializer: createD1CreatedEventInitializer({
+          ids: {
+            newFieldId: () => uuid(invocationSequence++),
+            newChoiceId: () => uuid(invocationSequence++)
           }
-        }
+        })
       }),
       createD1EventSelectEffectDomainRegistration({ workspaceId })
     ]);
@@ -228,6 +223,26 @@ describe('registered Event operation over D1', () => {
     expect(eventSet).toEqual({ version: 2, current_event_id: eventId });
     expect(heads?.count).toBe(1);
     expect(identityEvents?.count).toBe(1);
+    expect((await env.DB.prepare(`SELECT count(*) AS count FROM field_registry_aggregates
+      WHERE workspace_id = ? AND event_id = ?`).bind(
+        workspaceId,
+        eventId
+      ).first<CountRow>())?.count).toBe(1);
+    expect((await env.DB.prepare(`SELECT count(*) AS count FROM event_settings_companions
+      WHERE workspace_id = ? AND event_id = ?`).bind(
+        workspaceId,
+        eventId
+      ).first<CountRow>())?.count).toBe(1);
+    expect((await env.DB.prepare(`SELECT count(*) AS count FROM template_artifact_heads
+      WHERE workspace_id = ? AND event_id = ?`).bind(
+        workspaceId,
+        eventId
+      ).first<CountRow>())?.count).toBe(10);
+    expect((await env.DB.prepare(`SELECT count(*) AS count FROM template_artifact_revisions
+      WHERE workspace_id = ? AND event_id = ?`).bind(
+        workspaceId,
+        eventId
+      ).first<CountRow>())?.count).toBe(10);
     expect(logs?.count).toBe(1);
 
     await env.DB.batch([
