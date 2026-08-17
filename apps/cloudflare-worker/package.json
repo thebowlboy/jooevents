@@ -13,6 +13,7 @@
     "@jooevents/application": "workspace:*",
     "@jooevents/auth": "workspace:*",
     "@jooevents/cloudflare-email": "workspace:*",
+    "@jooevents/communication-operations": "workspace:*",
     "@jooevents/communications": "workspace:*",
     "@jooevents/contracts": "workspace:*",
     "@jooevents/deadline": "workspace:*",

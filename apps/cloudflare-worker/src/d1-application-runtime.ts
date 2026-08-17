@@ -2,14 +2,22 @@ import {
   composeOperationRegistryModules,
   API_KEY_MANAGE_ACCESS_POLICY,
   API_KEY_MUTATION_REQUEST_HASH_PROFILE,
+  COMMUNICATION_PROVIDER_MANAGE_ACCESS_POLICY,
   createApiKeyOperationModule,
   createApplicationOperationRuntime,
+  createCommunicationProviderReadOperationModule,
   createOperatorAuthorityPolicyCatalog,
   createWorkspaceTeamOperationModule,
   WORKSPACE_TEAM_MUTATION_REQUEST_HASH_PROFILE,
   WORKSPACE_TEAM_OPERATION_ACCESS,
   type InvocationEvidence
 } from '@jooevents/application';
+import {
+  WORKSPACE_SENDER_IDENTITY_ACCESS_POLICY,
+  WORKSPACE_SENDER_IDENTITY_UPDATE_REQUEST_HASH_PROFILE,
+  createWorkspaceSenderIdentityOperationModule
+} from '@jooevents/communication-operations';
+import type { InstallationMailSenderIdentity } from '@jooevents/communications';
 import {
   DEADLINE_CHANGE_REQUEST_HASH_PROFILE,
   DEADLINE_MANAGE_ACCESS_POLICY,
@@ -115,6 +123,7 @@ import {
   type CloudflareAuthBindings
 } from './auth-config';
 import { createD1CreatedEventInitializer } from './d1-created-event-initializer';
+import { createD1CommunicationProviderReadPorts } from './d1-communication-provider-read';
 import {
   createD1DeadlineDirectEffectDomainRegistration,
   createD1DeadlineReadSource
@@ -169,6 +178,10 @@ import { createD1WorkspaceOverviewReadSource } from './d1-workspace-overview';
 import { createD1WorkspaceShellSummaryReadSource } from './d1-workspace-summary';
 import { createD1WorkspaceTeamReadSource } from './d1-workspace-team';
 import { createD1WorkspaceTeamMutationEffectDomainRegistration } from './d1-workspace-team-mutation';
+import {
+  createD1WorkspaceSenderIdentityEffectDomainRegistration,
+  createD1WorkspaceSenderIdentityReadPort
+} from './d1-workspace-sender-identity';
 import { createR2FileBlobStore } from './r2-file-blob-store';
 
 export type D1ApplicationRuntimeEnvironment = CloudflareAuthBindings & {
@@ -177,6 +190,9 @@ export type D1ApplicationRuntimeEnvironment = CloudflareAuthBindings & {
   readonly JOOEVENTS_FILES_MAX_UPLOAD_BYTES_SPEAKER?: string;
   readonly JOOEVENTS_FILES_MAX_UPLOAD_BYTES_ORGANIZER?: string;
   readonly JOOEVENTS_FILES_MAX_TOTAL_BYTES_PER_SPEAKER_EVENT?: string;
+  readonly JOOEVENTS_MAIL_FROM_ADDRESS?: string;
+  readonly JOOEVENTS_MAIL_FROM_NAME?: string;
+  readonly JOOEVENTS_MAIL_REPLY_TO?: string;
 };
 
 export function loadD1CryptoProfiles(
@@ -257,6 +273,54 @@ const FILES_OPERATION_KEY_PROFILES = Object.freeze({
     version: parseContractVersion(1)
   })
 });
+
+const COMMUNICATION_PROVIDER_READ_PROFILES = Object.freeze({
+  authorityPrincipalKeyProfile: Object.freeze({
+    key: 'key-profile.communication.provider-principal',
+    version: parseContractVersion(1)
+  }),
+  scopePartitionProfile: Object.freeze({
+    key: 'key-profile.communication.provider-workspace-scope',
+    version: parseContractVersion(1)
+  }),
+  requestCanonicalizationProfile: Object.freeze({
+    key: 'key-profile.communication.provider-request-canonicalization',
+    version: parseContractVersion(1)
+  })
+});
+
+const SENDER_IDENTITY_OPERATION_KEY_PROFILES = Object.freeze({
+  authorityPrincipal: Object.freeze({
+    key: 'key-profile.communication.sender-identity-principal',
+    version: parseContractVersion(1)
+  }),
+  scopePartition: Object.freeze({
+    key: 'key-profile.communication.sender-identity-workspace-scope',
+    version: parseContractVersion(1)
+  }),
+  requestCanonicalization: Object.freeze({
+    key: 'key-profile.communication.sender-identity-request-canonicalization',
+    version: parseContractVersion(1)
+  }),
+  idempotencyCredential: Object.freeze({
+    key: 'key-profile.communication.sender-identity-idempotency-credential',
+    version: parseContractVersion(1)
+  })
+});
+
+function loadInstallationMailSenderIdentity(
+  environment: D1ApplicationRuntimeEnvironment
+): InstallationMailSenderIdentity {
+  const fromAddress = environment.JOOEVENTS_MAIL_FROM_ADDRESS?.trim();
+  if (!fromAddress) throw new TypeError('JOOEVENTS_MAIL_FROM_ADDRESS is required');
+  const fromDisplayName = environment.JOOEVENTS_MAIL_FROM_NAME?.trim();
+  const replyToAddress = environment.JOOEVENTS_MAIL_REPLY_TO?.trim();
+  return Object.freeze({
+    fromAddress,
+    ...(fromDisplayName ? { fromDisplayName } : {}),
+    ...(replyToAddress ? { replyToAddress } : {})
+  });
+}
 
 const PROGRAM_VOCABULARY_OPERATION_KEY_PROFILES = Object.freeze({
   authorityPrincipal: Object.freeze({
@@ -376,7 +440,9 @@ export async function createConfiguredD1ApplicationRuntime(
     { policy: SCHEDULE_PLACEMENT_MANAGE_ACCESS_POLICY, permissionId: 'schedule.manage' },
     { policy: SESSION_READ_ACCESS_POLICY, permissionId: 'event.read' },
     { policy: SESSION_MANAGE_ACCESS_POLICY, permissionId: 'schedule.manage' },
-    { policy: API_KEY_MANAGE_ACCESS_POLICY, permissionId: 'integration.api.manage' }
+    { policy: API_KEY_MANAGE_ACCESS_POLICY, permissionId: 'integration.api.manage' },
+    { policy: COMMUNICATION_PROVIDER_MANAGE_ACCESS_POLICY,
+      permissionId: 'communication.provider.manage' }
   ]);
   const currentAuthority = createD1OperatorCurrentAuthorityResolver({
     session: environment.DB.withSession('first-primary'),
@@ -447,6 +513,16 @@ export async function createConfiguredD1ApplicationRuntime(
       environment.JOOEVENTS_FILES_MAX_UPLOAD_BYTES_ORGANIZER,
     JOOEVENTS_FILES_MAX_TOTAL_BYTES_PER_SPEAKER_EVENT:
       environment.JOOEVENTS_FILES_MAX_TOTAL_BYTES_PER_SPEAKER_EVENT
+  });
+  const communicationProvider = createD1CommunicationProviderReadPorts({
+    database: environment.DB,
+    workspaceId
+  });
+  const installationMailSender = loadInstallationMailSenderIdentity(environment);
+  const senderIdentity = createD1WorkspaceSenderIdentityReadPort({
+    database: environment.DB,
+    workspaceId,
+    installation: installationMailSender
   });
   const common = Object.freeze({
     workspaceId,
@@ -714,6 +790,39 @@ export async function createConfiguredD1ApplicationRuntime(
       FILES_OPERATION_KEY_PROFILES.idempotencyCredential
     )
   });
+  const communicationProviderReadOperations = createCommunicationProviderReadOperationModule({
+    workspaceId,
+    policy: COMMUNICATION_PROVIDER_MANAGE_ACCESS_POLICY,
+    currentAuthority,
+    configuration: communicationProvider.configuration,
+    readiness: communicationProvider.readiness,
+    clock,
+    ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+    crypto: COMMUNICATION_PROVIDER_READ_PROFILES
+  });
+  const senderIdentityOperations = createWorkspaceSenderIdentityOperationModule({
+    workspaceId,
+    policy: WORKSPACE_SENDER_IDENTITY_ACCESS_POLICY,
+    currentAuthority,
+    read: senderIdentity,
+    clock,
+    ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+    crypto: Object.freeze({
+      authorityPrincipalKeyProfile:
+        SENDER_IDENTITY_OPERATION_KEY_PROFILES.authorityPrincipal,
+      scopePartitionProfile: SENDER_IDENTITY_OPERATION_KEY_PROFILES.scopePartition,
+      requestCanonicalizationProfile:
+        SENDER_IDENTITY_OPERATION_KEY_PROFILES.requestCanonicalization,
+      requestHashSealer: cryptoProfiles.requestHashSealer(
+        WORKSPACE_SENDER_IDENTITY_UPDATE_REQUEST_HASH_PROFILE
+      ),
+      idempotencyCredentialProfile:
+        SENDER_IDENTITY_OPERATION_KEY_PROFILES.idempotencyCredential,
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(
+        SENDER_IDENTITY_OPERATION_KEY_PROFILES.idempotencyCredential
+      )
+    })
+  });
   const programVocabularyReadOperations = createProgramVocabularyReadOperationModule({
     workspaceId,
     readPolicy: PROGRAM_VOCABULARY_READ_ACCESS_POLICY,
@@ -924,6 +1033,10 @@ export async function createConfiguredD1ApplicationRuntime(
         newFactId: () => crypto.randomUUID()
       }
     }),
+    createD1WorkspaceSenderIdentityEffectDomainRegistration({
+      workspaceId,
+      installation: installationMailSender
+    }),
     ...createD1TemplateArtifactNativeEffectDomainRegistrations({
       workspaceId,
       ids: {
@@ -974,6 +1087,8 @@ export async function createConfiguredD1ApplicationRuntime(
       apiKeyOperations,
       fileReadOperations,
       fileCommandOperations,
+      communicationProviderReadOperations,
+      senderIdentityOperations,
       programVocabularyReadOperations,
       programVocabularyDirectOperations,
       programVocabularyMergeOperations,

@@ -1,5 +1,11 @@
 import { env } from 'cloudflare:workers';
 import { makeSignature } from 'better-auth/crypto';
+import {
+  CLOUDFLARE_EMAIL_ADAPTER_VERSION,
+  CLOUDFLARE_WORKERS_EMAIL_ADAPTER_KEY,
+  CLOUDFLARE_WORKERS_EMAIL_SETUP_MANIFEST
+} from '@jooevents/cloudflare-email';
+import { emailProviderConnectionProjectionSchema } from '@jooevents/contracts';
 import { canonicalJsonText, parseWorkspaceId } from '@jooevents/kernel';
 import { beforeAll, describe, expect, test } from 'vitest';
 import { handleRequest, type CloudflareApplicationEnvironment } from '../src/index';
@@ -62,6 +68,8 @@ beforeAll(async () => {
       .bind(roleId, 'schedule.manage'),
     env.DB.prepare('INSERT INTO role_permissions (role_id,permission_id) VALUES (?,?)')
       .bind(roleId, 'program.vocabulary.manage'),
+    env.DB.prepare('INSERT INTO role_permissions (role_id,permission_id) VALUES (?,?)')
+      .bind(roleId, 'communication.provider.manage'),
     env.DB.prepare(`INSERT INTO role_assignments
       (id,user_id,role_id,workspace_id,scope_kind,event_id,assigned_by_user_id,
        assigned_at,expires_at,version)
@@ -81,6 +89,8 @@ function environment(): CloudflareApplicationEnvironment {
     JOOEVENTS_D1_RELEASE_FLOOR: env.JOOEVENTS_D1_RELEASE_FLOOR,
     JOOEVENTS_AUTH_RUNTIME_ENABLED: 'true',
     JOOEVENTS_APPLICATION_RUNTIME_ENABLED: 'true',
+    JOOEVENTS_MAIL_FROM_ADDRESS: 'events@mail.jooevents.com',
+    JOOEVENTS_MAIL_FROM_NAME: 'JooEvents',
     JOOEVENTS_BASE_URL: baseUrl,
     JOOEVENTS_AUTH_SECRETS: `1:${secret}`,
     JOOEVENTS_REQUEST_HASH_KEYS: ring(0x31),
@@ -111,6 +121,10 @@ describe('configured D1 application HTTP slice', () => {
       readonly operations: readonly { readonly name: string }[];
     }>();
     expect(manifestBody.operations.map((operation) => operation.name).sort()).toEqual([
+      'communication.email_readiness.read',
+      'communication.provider_connection.read',
+      'communication.sender_identity.read',
+      'communication.sender_identity.update',
       'deadline.catalog.read',
       'deadline.change',
       'deadline.current.read',
@@ -247,6 +261,150 @@ describe('configured D1 application HTTP slice', () => {
         ]),
         metrics: { operations: { kind: 'unavailable', reason: 'event_required' } },
         history: { total: 0, truncated: false, threads: [] }
+      }
+    });
+
+    const initialSender = await handleRequest(
+      new Request(`${baseUrl}/api/communications/sender-identity`, { headers }),
+      environment()
+    );
+    expect(initialSender.status, await initialSender.clone().text()).toBe(200);
+    expect(await initialSender.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        workspaceId,
+        headVersion: 1,
+        displayName: null,
+        replyToAddress: null,
+        effective: {
+          fromAddress: 'events@mail.jooevents.com',
+          fromDisplayName: 'JooEvents',
+          source: 'installation'
+        }
+      }
+    });
+    const initialEmailReadiness = await handleRequest(
+      new Request(`${baseUrl}/api/communications/email-readiness`, { headers }),
+      environment()
+    );
+    expect(initialEmailReadiness.status, await initialEmailReadiness.clone().text()).toBe(200);
+    expect(await initialEmailReadiness.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        outbound: { state: 'unknown', nextStepCode: 'configure_email_provider' },
+        callbacks: { state: 'not_supported' },
+        inbound: { state: 'not_enabled' }
+      }
+    });
+    const missingProvider = await handleRequest(
+      new Request(`${baseUrl}/api/communications/provider-connection?connectionId=${uuid(799)}`, {
+        headers
+      }),
+      environment()
+    );
+    expect(missingProvider.status, await missingProvider.clone().text()).toBe(200);
+    expect(await missingProvider.json()).toMatchObject({
+      kind: 'outcome',
+      outcome: { class: 'conflict', kind: 'communication.provider_connection_unavailable' }
+    });
+    const providerConnectionId = uuid(790);
+    const providerRevisionId = uuid(791);
+    const providerCreatedAt = new Date().toISOString();
+    const providerCandidate =
+      emailProviderConnectionProjectionSchema.shape.candidateRevisions.element.parse({
+        revisionId: providerRevisionId,
+        connectionId: providerConnectionId,
+        revisionNumber: 1,
+        adapterKey: CLOUDFLARE_WORKERS_EMAIL_ADAPTER_KEY,
+        adapterVersion: CLOUDFLARE_EMAIL_ADAPTER_VERSION,
+        setupManifestKey: CLOUDFLARE_WORKERS_EMAIL_SETUP_MANIFEST.manifestKey,
+        setupManifestVersion: CLOUDFLARE_WORKERS_EMAIL_SETUP_MANIFEST.manifestVersion,
+        setupManifestDigestSha256:
+          CLOUDFLARE_WORKERS_EMAIL_SETUP_MANIFEST.manifestDigestSha256,
+        configSchemaVersion: 1,
+        configRef: {
+          payloadRefId: uuid(792),
+          payloadRefVersion: 1,
+          payloadKind: 'email_provider_configuration',
+          schemaKey: 'cloudflare.email.workers.configuration',
+          schemaVersion: 1,
+          classification: 'restricted'
+        },
+        secretRequirements: [],
+        configDigestSha256: 'a'.repeat(64),
+        callbacks: { state: 'not_supported' },
+        inbound: { state: 'not_enabled' },
+        createdAt: providerCreatedAt
+      });
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO email_provider_connections (
+        connection_id,workspace_id,display_name,adapter_key,lifecycle,head_version,
+        current_revision_id,created_at,updated_at
+      ) VALUES (?,?,?,?,'active_outbound',1,?,?,?)`).bind(
+        providerConnectionId,
+        workspaceId,
+        'Cloudflare Email Sending',
+        CLOUDFLARE_WORKERS_EMAIL_ADAPTER_KEY,
+        providerRevisionId,
+        providerCreatedAt,
+        providerCreatedAt
+      ),
+      env.DB.prepare(`INSERT INTO email_provider_connection_revisions (
+        revision_id,connection_id,revision_number,adapter_key,adapter_version,
+        manifest_key,manifest_version,manifest_digest_sha256,config_digest_sha256,
+        revision_json,created_at
+      ) VALUES (?,?,1,?,?,?,?,?,?,?,?)`).bind(
+        providerRevisionId,
+        providerConnectionId,
+        CLOUDFLARE_WORKERS_EMAIL_ADAPTER_KEY,
+        CLOUDFLARE_EMAIL_ADAPTER_VERSION,
+        CLOUDFLARE_WORKERS_EMAIL_SETUP_MANIFEST.manifestKey,
+        CLOUDFLARE_WORKERS_EMAIL_SETUP_MANIFEST.manifestVersion,
+        CLOUDFLARE_WORKERS_EMAIL_SETUP_MANIFEST.manifestDigestSha256,
+        providerCandidate.configDigestSha256,
+        canonicalJsonText(providerCandidate),
+        providerCreatedAt
+      )
+    ]);
+    const configuredProvider = await handleRequest(
+      new Request(`${baseUrl}/api/communications/provider-connection?connectionId=${providerConnectionId}`, {
+        headers
+      }),
+      environment()
+    );
+    expect(configuredProvider.status, await configuredProvider.clone().text()).toBe(200);
+    expect(await configuredProvider.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        connectionId: providerConnectionId,
+        workspaceId,
+        lifecycle: 'active_outbound',
+        currentRevisionId: providerRevisionId,
+        candidateRevisions: [{
+          revisionId: providerRevisionId,
+          adapterKey: CLOUDFLARE_WORKERS_EMAIL_ADAPTER_KEY,
+          callbacks: { state: 'not_supported' },
+          inbound: { state: 'not_enabled' }
+        }]
+      }
+    });
+    const configuredReadiness = await handleRequest(
+      new Request(`${baseUrl}/api/communications/email-readiness`, { headers }),
+      environment()
+    );
+    expect(configuredReadiness.status, await configuredReadiness.clone().text()).toBe(200);
+    expect(await configuredReadiness.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        provider: {
+          adapterKey: CLOUDFLARE_WORKERS_EMAIL_ADAPTER_KEY,
+          displayName: 'Cloudflare Email Sending'
+        },
+        outbound: {
+          state: 'action_required',
+          reasonCode: 'email_provider_readiness_unknown',
+          nextStepCode: 'run_email_provider_readiness_check'
+        }
       }
     });
 
@@ -1048,6 +1206,107 @@ describe('configured D1 application HTTP slice', () => {
       .bind(firstBody.receipt.id).first<{ readonly count: number }>();
     expect(logs?.count).toBe(1);
 
+    const senderUpdateRequest = () => new Request(
+      `${baseUrl}/api/communications/sender-identity`,
+      {
+        method: 'POST',
+        headers: {
+          cookie: headers.cookie,
+          origin: baseUrl,
+          'content-type': 'application/json',
+          'idempotency-key': 'd1-application-sender-identity-update'
+        },
+        body: JSON.stringify({
+          expectedHeadVersion: 1,
+          displayName: 'D1 Application Summit',
+          replyToAddress: 'organizers@example.invalid'
+        })
+      }
+    );
+    const senderUpdate = await handleRequest(senderUpdateRequest(), environment());
+    expect(senderUpdate.status, await senderUpdate.clone().text()).toBe(200);
+    const senderUpdateBody = await senderUpdate.json();
+    expect(senderUpdateBody).toMatchObject({
+      kind: 'success',
+      data: {
+        headVersion: 2,
+        displayName: 'D1 Application Summit',
+        replyToAddress: 'organizers@example.invalid',
+        effective: {
+          fromAddress: 'events@mail.jooevents.com',
+          fromDisplayName: 'D1 Application Summit',
+          replyToAddress: 'organizers@example.invalid',
+          source: 'workspace'
+        }
+      }
+    });
+    const senderReplay = await handleRequest(senderUpdateRequest(), environment());
+    expect(senderReplay.status, await senderReplay.clone().text()).toBe(200);
+    expect(await senderReplay.json()).toEqual(senderUpdateBody);
+
+    const refusedSender = await handleRequest(new Request(
+      `${baseUrl}/api/communications/sender-identity`,
+      {
+        method: 'POST',
+        headers: {
+          cookie: headers.cookie,
+          origin: baseUrl,
+          'content-type': 'application/json',
+          'idempotency-key': 'd1-application-sender-identity-refused'
+        },
+        body: JSON.stringify({
+          expectedHeadVersion: 2,
+          displayName: 'Unsafe\nHeader',
+          replyToAddress: null
+        })
+      }
+    ), environment());
+    expect(refusedSender.status, await refusedSender.clone().text()).toBe(200);
+    expect(await refusedSender.json()).toMatchObject({
+      kind: 'outcome',
+      outcome: {
+        class: 'policy_violation',
+        kind: 'communication.sender_identity_refused',
+        detail: { field: 'display_name' }
+      }
+    });
+    const staleSender = await handleRequest(new Request(
+      `${baseUrl}/api/communications/sender-identity`,
+      {
+        method: 'POST',
+        headers: {
+          cookie: headers.cookie,
+          origin: baseUrl,
+          'content-type': 'application/json',
+          'idempotency-key': 'd1-application-sender-identity-stale'
+        },
+        body: JSON.stringify({
+          expectedHeadVersion: 1,
+          displayName: 'Stale overwrite',
+          replyToAddress: null
+        })
+      }
+    ), environment());
+    expect(staleSender.status, await staleSender.clone().text()).toBe(200);
+    expect(await staleSender.json()).toMatchObject({
+      kind: 'outcome',
+      outcome: {
+        class: 'stale_revision',
+        kind: 'communication.sender_identity_changed',
+        detail: { code: 'head_version_changed', headVersion: 2 }
+      }
+    });
+    expect(await env.DB.prepare(`SELECT head_version,display_name,reply_to_address
+      FROM workspace_mail_sender_identity WHERE workspace_id = ?`
+    ).bind(workspaceId).first()).toEqual({
+      head_version: 2,
+      display_name: 'D1 Application Summit',
+      reply_to_address: 'organizers@example.invalid'
+    });
+    expect(await env.DB.prepare(`SELECT count(*) AS count FROM operation_log
+      WHERE workspace_id = ? AND operation_name = 'communication.sender_identity.update'`
+    ).bind(workspaceId).first()).toEqual({ count: 1 });
+
     const initialRegistry = await handleRequest(
       new Request(`${baseUrl}/api/events/current/field-registry`, { headers }),
       environment()
@@ -1669,7 +1928,10 @@ describe('configured D1 application HTTP slice', () => {
       };
     }>();
     const finalOperationCount = await env.DB.prepare(`SELECT count(*) AS count
-      FROM operation_log WHERE workspace_id = ?`).bind(workspaceId)
+      FROM operation_log WHERE workspace_id = ? AND (
+        event_id = ? OR (operation_name = 'event.create'
+          AND json_extract(result_json,'$.data.event.id') = ?)
+      )`).bind(workspaceId, firstBody.data.event.id, firstBody.data.event.id)
       .first<{ readonly count: number }>();
     expect(overviewBody.kind).toBe('success');
     expect(overviewBody.data.event).toMatchObject({

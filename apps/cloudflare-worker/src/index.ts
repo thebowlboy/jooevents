@@ -20,8 +20,15 @@ export type CloudflareApplicationEnvironment = Omit<
   | 'JOOEVENTS_FILES_MAX_UPLOAD_BYTES_SPEAKER'
   | 'JOOEVENTS_FILES_MAX_UPLOAD_BYTES_ORGANIZER'
   | 'JOOEVENTS_FILES_MAX_TOTAL_BYTES_PER_SPEAKER_EVENT'
+  | 'JOOEVENTS_MAIL_FROM_ADDRESS'
+  | 'JOOEVENTS_MAIL_FROM_NAME'
 >
-  & CloudflareAuthBindings;
+  & CloudflareAuthBindings
+  & {
+    readonly JOOEVENTS_MAIL_FROM_ADDRESS?: string;
+    readonly JOOEVENTS_MAIL_FROM_NAME?: string;
+    readonly JOOEVENTS_MAIL_REPLY_TO?: string;
+  };
 
 export interface CloudflareWakeMessage {
   readonly version: 1;
@@ -221,6 +228,9 @@ function isConfiguredApplicationPath(pathname: string): boolean {
     || pathname === '/api/workspace/team/invitations'
     || pathname === '/api/workspace/team/role-changes'
     || pathname === '/api/workspace/team/removals'
+    || pathname === '/api/communications/provider-connection'
+    || pathname === '/api/communications/email-readiness'
+    || pathname === '/api/communications/sender-identity'
     || pathname === '/api/events/current'
     || pathname === '/api/events/current/files'
     || pathname.startsWith('/api/events/current/files/')

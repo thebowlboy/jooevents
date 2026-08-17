@@ -161,6 +161,8 @@ function environment(): CloudflareApplicationEnvironment {
     JOOEVENTS_D1_RELEASE_FLOOR: env.JOOEVENTS_D1_RELEASE_FLOOR,
     JOOEVENTS_AUTH_RUNTIME_ENABLED: 'true',
     JOOEVENTS_APPLICATION_RUNTIME_ENABLED: 'true',
+    JOOEVENTS_MAIL_FROM_ADDRESS: 'events@mail.jooevents.com',
+    JOOEVENTS_MAIL_FROM_NAME: 'JooEvents',
     JOOEVENTS_BASE_URL: baseUrl,
     JOOEVENTS_AUTH_SECRETS: `1:${secret}`,
     JOOEVENTS_REQUEST_HASH_KEYS: ring(0x61),
