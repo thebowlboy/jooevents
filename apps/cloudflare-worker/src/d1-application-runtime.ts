@@ -49,6 +49,7 @@ import {
   WORKSPACE_OVERVIEW_READ_ACCESS_POLICY,
   WORKSPACE_SHELL_SUMMARY_READ_ACCESS_POLICY,
   createOperationHistoryReadOperationModule,
+  createWorkspaceOverviewOperationModule,
   createWorkspaceShellSummaryOperationModule
 } from '@jooevents/workspace-operations';
 import {
@@ -101,6 +102,7 @@ import {
 } from './d1-effect-unit-of-work';
 import { createD1OperatorCurrentAuthorityResolver } from './d1-operator-authority';
 import { createD1OperationHistoryReadSource } from './d1-operation-history';
+import { createD1WorkspaceOverviewReadSource } from './d1-workspace-overview';
 import { createD1WorkspaceShellSummaryReadSource } from './d1-workspace-summary';
 
 export type D1ApplicationRuntimeEnvironment = CloudflareAuthBindings & {
@@ -171,6 +173,10 @@ export async function createConfiguredD1ApplicationRuntime(
     workspaceId
   });
   const workspaceSummary = createD1WorkspaceShellSummaryReadSource({
+    database: environment.DB,
+    workspaceId
+  });
+  const workspaceOverview = createD1WorkspaceOverviewReadSource({
     database: environment.DB,
     workspaceId
   });
@@ -361,6 +367,17 @@ export async function createConfiguredD1ApplicationRuntime(
       requestCanonicalizationProfile: EVENT_OPERATION_KEY_PROFILES.requestCanonicalization
     })
   });
+  const workspaceOverviewOperations = createWorkspaceOverviewOperationModule({
+    workspaceId,
+    policy: WORKSPACE_OVERVIEW_READ_ACCESS_POLICY,
+    currentAuthority,
+    overviewRead: workspaceOverview,
+    clock,
+    ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+    authorityPrincipalKeyProfile: EVENT_OPERATION_KEY_PROFILES.authorityPrincipal,
+    scopePartitionProfile: EVENT_OPERATION_KEY_PROFILES.scopePartition,
+    requestCanonicalizationProfile: EVENT_OPERATION_KEY_PROFILES.requestCanonicalization
+  });
   const domains = createD1EffectDomainAdapterRegistry([
     createD1EventCreateEffectDomainRegistration({
       workspaceId,
@@ -429,7 +446,8 @@ export async function createConfiguredD1ApplicationRuntime(
       templateArtifactReadOperations,
       templateArtifactNativeOperations,
       operationHistoryOperations,
-      workspaceSummaryOperations
+      workspaceSummaryOperations,
+      workspaceOverviewOperations
     ]),
     read: {
       operationalTrace: { emit() {} },

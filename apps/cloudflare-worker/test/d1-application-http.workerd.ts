@@ -122,6 +122,7 @@ describe('configured D1 application HTTP slice', () => {
       'template.artifact.change.draft',
       'template.artifact.get',
       'template.artifact.list',
+      'workspace.overview.read',
       'workspace.shell.summary.read'
     ]);
 
@@ -143,6 +144,24 @@ describe('configured D1 application HTTP slice', () => {
       data: {
         workspace: { id: workspaceId, name: 'D1 application workspace' },
         event: null
+      }
+    });
+    const initialOverview = await handleRequest(
+      new Request(`${baseUrl}/api/workspace/overview`, { headers }),
+      environment()
+    );
+    expect(initialOverview.status, await initialOverview.clone().text()).toBe(200);
+    expect(await initialOverview.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        event: { kind: 'no_event' },
+        areas: expect.arrayContaining([
+          { area: 'submissions', status: 'unavailable', reason: 'not_composed' },
+          { area: 'tasks', status: 'locked', reason: 'event_required' },
+          { area: 'templates', status: 'locked', reason: 'event_required' }
+        ]),
+        metrics: { operations: { kind: 'unavailable', reason: 'event_required' } },
+        history: { total: 0, truncated: false, threads: [] }
       }
     });
 
@@ -922,6 +941,52 @@ describe('configured D1 application HTTP slice', () => {
       { operation_name: 'template.artifact.change', count: 2 },
       { operation_name: 'template.artifact.change.draft', count: 2 }
     ]);
+
+    const overview = await handleRequest(
+      new Request(`${baseUrl}/api/workspace/overview`, { headers }),
+      environment()
+    );
+    expect(overview.status, await overview.clone().text()).toBe(200);
+    const overviewBody = await overview.json<{
+      readonly kind: string;
+      readonly data: {
+        readonly event: { readonly kind: string; readonly event?: { readonly id: string } };
+        readonly areas: readonly {
+          readonly area: string;
+          readonly status: string;
+          readonly availableCapabilities?: readonly string[];
+          readonly reason?: string;
+        }[];
+        readonly metrics: { readonly operations: { readonly kind: string; readonly total: number } };
+        readonly history: { readonly total: number; readonly truncated: boolean };
+      };
+    }>();
+    const finalOperationCount = await env.DB.prepare(`SELECT count(*) AS count
+      FROM operation_log WHERE workspace_id = ?`).bind(workspaceId)
+      .first<{ readonly count: number }>();
+    expect(overviewBody.kind).toBe('success');
+    expect(overviewBody.data.event).toMatchObject({
+      kind: 'current_event', event: { id: firstBody.data.event.id }
+    });
+    expect(overviewBody.data.areas.find((area) => area.area === 'submissions')).toEqual({
+      area: 'submissions', status: 'unavailable', reason: 'not_composed'
+    });
+    expect(overviewBody.data.areas.find((area) => area.area === 'templates')).toMatchObject({
+      area: 'templates',
+      status: 'partial',
+      availableCapabilities: [
+        'template.artifact.change',
+        'template.artifact.change.draft',
+        'template.artifact.get',
+        'template.artifact.list'
+      ]
+    });
+    expect(overviewBody.data.metrics.operations).toEqual({
+      kind: 'exact', total: finalOperationCount?.count
+    });
+    expect(overviewBody.data.history).toMatchObject({
+      total: finalOperationCount?.count, truncated: false
+    });
 
     const eventHistory = await handleRequest(
       new Request(`${baseUrl}/api/workspace/history?view=event&limit=3`, { headers }),
