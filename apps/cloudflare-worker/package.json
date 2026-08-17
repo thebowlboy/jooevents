@@ -30,6 +30,8 @@
     "@jooevents/program-operations": "workspace:*",
     "@jooevents/schedule": "workspace:*",
     "@jooevents/schedule-operations": "workspace:*",
+    "@jooevents/session": "workspace:*",
+    "@jooevents/session-operations": "workspace:*",
     "@jooevents/template-authoring": "workspace:*",
     "@jooevents/template-authoring-operations": "workspace:*",
     "@jooevents/task-operations": "workspace:*",

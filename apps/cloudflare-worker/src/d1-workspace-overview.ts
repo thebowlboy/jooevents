@@ -46,8 +46,11 @@ export const D1_WORKSPACE_OVERVIEW_AREA_CATALOG: WorkspaceOverviewAreaCatalog =
     {
       area: 'schedule',
       status: 'partial',
-      availableCapabilities: ['schedule.placement.snapshot.read'],
-      unavailableCapabilities: ['schedule.placement']
+      availableCapabilities: [
+        'schedule.placement.snapshot.read',
+        'session.catalog.read'
+      ],
+      unavailableCapabilities: ['schedule.placement', 'session.change']
     },
     { area: 'messages', status: 'unavailable', reason: 'not_composed' },
     {

@@ -125,6 +125,7 @@ describe('configured D1 application HTTP slice', () => {
       'operation.history.list',
       'program_vocabulary.snapshot.read',
       'schedule.placement.snapshot.read',
+      'session.catalog.read',
       'task.board.read',
       'task.mutation',
       'template.artifact.change',
@@ -176,6 +177,15 @@ describe('configured D1 application HTTP slice', () => {
     expect(await initialSchedule.json()).toMatchObject({
       kind: 'outcome',
       outcome: { class: 'conflict', kind: 'schedule.event_required' }
+    });
+    const initialSessions = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/sessions`, { headers }),
+      environment()
+    );
+    expect(initialSessions.status, await initialSessions.clone().text()).toBe(200);
+    expect(await initialSessions.json()).toMatchObject({
+      kind: 'outcome',
+      outcome: { class: 'conflict', kind: 'session.event_required' }
     });
     const initialDownload = await handleRequest(
       new Request(`${baseUrl}/api/events/current/files/download/${uuid(709)}`, { headers }),
@@ -326,6 +336,20 @@ describe('configured D1 application HTTP slice', () => {
         scope: { workspaceId, eventId },
         scheduleVersion: 1,
         occurrences: []
+      }
+    });
+    const sessions = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/sessions`, { headers }),
+      environment()
+    );
+    expect(sessions.status, await sessions.clone().text()).toBe(200);
+    expect(await sessions.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        schemaVersion: 1,
+        scope: { workspaceId, eventId },
+        version: 1,
+        sessions: []
       }
     });
     const asset = {

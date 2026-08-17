@@ -52,6 +52,10 @@ import {
   createSchedulePlacementOperationModule
 } from '@jooevents/schedule-operations';
 import {
+  SESSION_READ_ACCESS_POLICY,
+  createSessionOperationModule
+} from '@jooevents/session-operations';
+import {
   TASK_MANAGE_ACCESS_POLICY,
   TASK_MUTATION_REQUEST_HASH_PROFILE,
   TASK_OPERATION_KEY_PROFILES,
@@ -135,6 +139,7 @@ import { createD1OperatorCurrentAuthorityResolver } from './d1-operator-authorit
 import { createD1OperationHistoryReadSource } from './d1-operation-history';
 import { createD1ProgramVocabularySnapshotReadSource } from './d1-program-vocabulary';
 import { createD1SchedulePlacementReadSource } from './d1-schedule-placement';
+import { createD1SessionCatalogReadSource } from './d1-session-catalog';
 import { createD1WorkspaceOverviewReadSource } from './d1-workspace-overview';
 import { createD1WorkspaceShellSummaryReadSource } from './d1-workspace-summary';
 import { createD1WorkspaceTeamReadSource } from './d1-workspace-team';
@@ -255,6 +260,21 @@ const SCHEDULE_OPERATION_KEY_PROFILES = Object.freeze({
   })
 });
 
+const SESSION_OPERATION_KEY_PROFILES = Object.freeze({
+  authorityPrincipal: Object.freeze({
+    key: 'key-profile.session.operator-principal',
+    version: parseContractVersion(1)
+  }),
+  scopePartition: Object.freeze({
+    key: 'key-profile.session.event-scope',
+    version: parseContractVersion(1)
+  }),
+  requestCanonicalization: Object.freeze({
+    key: 'key-profile.session.request-canonicalization',
+    version: parseContractVersion(1)
+  })
+});
+
 function classifiedWorkspaceInvitationProfiles(
   cryptoProfiles: DurableCryptoProfileComposition
 ) {
@@ -310,6 +330,7 @@ export async function createConfiguredD1ApplicationRuntime(
     { policy: FILE_READ_ACCESS_POLICY, permissionId: 'submission.read' },
     { policy: PROGRAM_VOCABULARY_READ_ACCESS_POLICY, permissionId: 'event.read' },
     { policy: SCHEDULE_PLACEMENT_READ_ACCESS_POLICY, permissionId: 'schedule.read' },
+    { policy: SESSION_READ_ACCESS_POLICY, permissionId: 'event.read' },
     { policy: API_KEY_MANAGE_ACCESS_POLICY, permissionId: 'integration.api.manage' }
   ]);
   const currentAuthority = createD1OperatorCurrentAuthorityResolver({
@@ -338,6 +359,10 @@ export async function createConfiguredD1ApplicationRuntime(
     workspaceId
   });
   const schedule = createD1SchedulePlacementReadSource({
+    database: environment.DB,
+    workspaceId
+  });
+  const sessions = createD1SessionCatalogReadSource({
     database: environment.DB,
     workspaceId
   });
@@ -656,6 +681,18 @@ export async function createConfiguredD1ApplicationRuntime(
       SCHEDULE_OPERATION_KEY_PROFILES.idempotencyCredential
     )
   });
+  const sessionReadOperations = createSessionOperationModule({
+    workspaceId,
+    readPolicy: SESSION_READ_ACCESS_POLICY,
+    currentAuthority,
+    currentEvent: reads,
+    sessions,
+    clock,
+    ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+    authorityPrincipalKeyProfile: SESSION_OPERATION_KEY_PROFILES.authorityPrincipal,
+    scopePartitionProfile: SESSION_OPERATION_KEY_PROFILES.scopePartition,
+    requestCanonicalizationProfile: SESSION_OPERATION_KEY_PROFILES.requestCanonicalization
+  });
   const workspaceTeamMutationDomain = cryptoProfiles.withPersistentHmacKeySelection(
     'security.workspace-invitation-lookup',
     (selection) => createD1WorkspaceTeamMutationEffectDomainRegistration({
@@ -757,7 +794,8 @@ export async function createConfiguredD1ApplicationRuntime(
       apiKeyOperations,
       fileReadOperations,
       programVocabularyReadOperations,
-      scheduleReadOperations
+      scheduleReadOperations,
+      sessionReadOperations
     ]),
     read: {
       operationalTrace: { emit() {} },

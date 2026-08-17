@@ -37,7 +37,7 @@ import {
   type InvocationId,
   type WorkspaceId
 } from '@jooevents/kernel';
-import type { SessionReadPort } from '@jooevents/session';
+import type { SessionCatalog, SessionScope } from '@jooevents/session';
 import { z } from 'zod';
 
 export const SESSION_CATALOG_READ_OPERATION = Object.freeze({
@@ -103,7 +103,10 @@ export interface CreateSessionOperationModuleInput {
   readonly authorityPrincipalKeyProfile: VersionedKeyProfileRef;
   readonly scopePartitionProfile: VersionedKeyProfileRef;
   readonly requestCanonicalizationProfile: VersionedKeyProfileRef;
-  readonly sessions: SessionReadPort;
+  readonly sessions: {
+    readSessionCatalog(scope: SessionScope): SessionCatalog | undefined
+      | Promise<SessionCatalog | undefined>;
+  };
 }
 
 function authorityOutcome(reason: CurrentAuthorityDenialReason): StructuredOutcome {
@@ -198,9 +201,9 @@ export function createSessionOperationModule(
     requestCanonicalizationProfile: input.requestCanonicalizationProfile,
     deniedAuthorityOutcome: authorityOutcome
   });
-  const openSnapshot = (invocation: ReadInvocationContext) => {
+  const openSnapshot = async (invocation: ReadInvocationContext) => {
     if (invocation.scope.eventId === undefined) return Object.freeze({ kind: 'event_required' as const });
-    const catalog = input.sessions.readSessionCatalog({
+    const catalog = await input.sessions.readSessionCatalog({
       workspaceId: invocation.scope.workspaceId,
       eventId: invocation.scope.eventId
     });
