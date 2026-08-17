@@ -50,6 +50,7 @@ import {
   parseInstant,
   parseWorkspaceId,
   type Clock,
+  type EventId,
   type InvocationId,
   type WorkspaceId
 } from '@jooevents/kernel';
@@ -70,6 +71,24 @@ export const TASK_READ_ACCESS_POLICY: VersionedAccessPolicyRef = Object.freeze({
 });
 export const TASK_MANAGE_ACCESS_POLICY: VersionedAccessPolicyRef = Object.freeze({
   key: 'authority.task.manage', version: parseContractVersion(1)
+});
+export const TASK_OPERATION_KEY_PROFILES = Object.freeze({
+  authorityPrincipal: Object.freeze({
+    key: 'key-profile.task.operator-principal',
+    version: parseContractVersion(1)
+  }),
+  scopePartition: Object.freeze({
+    key: 'key-profile.task.current-event-scope',
+    version: parseContractVersion(1)
+  }),
+  requestCanonicalization: Object.freeze({
+    key: 'key-profile.task.request-canonicalization',
+    version: parseContractVersion(1)
+  }),
+  idempotencyCredential: Object.freeze({
+    key: 'key-profile.task.idempotency-credential',
+    version: parseContractVersion(1)
+  })
 });
 const nullSchema = z.null();
 const staleDetailSchema = z.strictObject({
@@ -149,7 +168,7 @@ function autonomy(
 
 export interface TaskOperationIds { newInvocationId(): InvocationId; }
 export interface TaskBoardReadSource {
-  readCurrent(workspaceId: WorkspaceId): TaskBoardSnapshotDto | undefined
+  readCurrent(workspaceId: WorkspaceId, eventId: EventId): TaskBoardSnapshotDto | undefined
     | Promise<TaskBoardSnapshotDto | undefined>;
 }
 export interface SharedTaskOperationInput {
@@ -207,7 +226,9 @@ export function createTaskBoardReadOperationModule(input: SharedTaskOperationInp
   const capability: ReadCapabilityRegistration = Object.freeze({
     reference: refs.capability,
     openSnapshot: async (context: EffectInvocationContext) => Object.freeze({
-      board: await input.tasks.readCurrent(context.scope.workspaceId)
+      board: context.scope.eventId === undefined
+        ? undefined
+        : await input.tasks.readCurrent(context.scope.workspaceId, context.scope.eventId)
     })
   });
   const accessOutcomes = CURRENT_AUTHORITY_DENIAL_REASONS.map((reason) => ({

@@ -12,6 +12,7 @@ import {
   deadlineMutationPlanSchema,
   type DeadlineCatalogSnapshotDto,
   type DeadlineHeadDto,
+  type DeadlineMutationPlanDto,
   type DeadlineMutationPlanningInput,
   type DeadlineScopeDto
 } from '@jooevents/contracts/deadlines';
@@ -136,7 +137,7 @@ function headFromRow(row: DeadlineRow): DeadlineHeadDto {
       });
 }
 
-async function readCatalog(
+export async function readD1DeadlineCatalog(
   source: D1ReadSource,
   scope: DeadlineScopeDto
 ): Promise<DeadlineCatalogSnapshotDto | undefined> {
@@ -188,7 +189,7 @@ export function createD1DeadlineReadSource(input: {
       if (scope.workspaceId !== workspaceId) {
         throw new TypeError('d1_deadline_workspace_mismatch');
       }
-      return readCatalog(input.database, scope);
+      return readD1DeadlineCatalog(input.database, scope);
     }
   });
 }
@@ -249,6 +250,89 @@ function persistedHead(head: DeadlineHeadDto): readonly unknown[] {
     head.updatedByUserId,
     Date.parse(head.updatedAt)
   ]);
+}
+
+export function guardD1DeadlineCatalog(
+  unitOfWork: D1BufferedUnitOfWork,
+  catalog: DeadlineCatalogSnapshotDto
+): void {
+  if (catalog.version === 1) {
+    unitOfWork.assertCurrent(`NOT EXISTS (SELECT 1 FROM deadline_catalogs
+      WHERE workspace_id = ? AND event_id = ?)`, [
+      catalog.scope.workspaceId,
+      catalog.scope.eventId
+    ]);
+    return;
+  }
+  unitOfWork.assertCurrent(`EXISTS (SELECT 1 FROM deadline_catalogs
+    WHERE workspace_id = ? AND event_id = ? AND version = ? AND digest_sha256 = ?)`, [
+    catalog.scope.workspaceId,
+    catalog.scope.eventId,
+    catalog.version,
+    catalog.digestSha256
+  ]);
+}
+
+/** Validates and buffers one Deadline plan into its caller's atomic D1 operation. */
+export function bufferD1DeadlinePlan(input: {
+  readonly unitOfWork: D1BufferedUnitOfWork;
+  readonly catalog: DeadlineCatalogSnapshotDto;
+  readonly plan: DeadlineMutationPlanDto;
+}): void {
+  const plan = deadlineMutationPlanSchema.parse(input.plan);
+  applyDeadlinePlanToCatalog({
+    plan,
+    catalog: input.catalog,
+    ...(plan.eventTimeBasis === null ? {} : { eventTimeBasis: plan.eventTimeBasis })
+  });
+  if (plan.catalog.beforeVersion === 1) {
+    input.unitOfWork.write(`INSERT INTO deadline_catalogs (
+      workspace_id,event_id,version,digest_sha256
+    ) SELECT ?,?,?,? FROM event_spine_scope_roots
+      WHERE workspace_id = ? AND event_id = ?
+        AND NOT EXISTS (SELECT 1 FROM deadline_catalogs
+          WHERE workspace_id = ? AND event_id = ?)`, [
+      plan.input.scope.workspaceId,
+      plan.input.scope.eventId,
+      plan.catalog.afterVersion,
+      plan.catalog.afterDigestSha256,
+      plan.input.scope.workspaceId,
+      plan.input.scope.eventId,
+      plan.input.scope.workspaceId,
+      plan.input.scope.eventId
+    ]);
+  }
+  if (plan.input.action === 'create') {
+    input.unitOfWork.write(`INSERT INTO deadlines (${DEADLINE_COLUMNS})
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, persistedHead(plan.after));
+  } else {
+    const values = persistedHead(plan.after);
+    input.unitOfWork.write(`UPDATE deadlines SET
+      status = ?,version = ?,digest_sha256 = ?,grace_policy = ?,display_date = ?,
+      effective_at_ms = ?,boundary_profile_key = ?,boundary_profile_version = ?,
+      boundary_profile_digest_sha256 = ?,event_timezone = ?,event_version = ?,
+      local_boundary_date = ?,updated_by_user_id = ?,updated_at_ms = ?
+      WHERE workspace_id = ? AND event_id = ? AND id = ?
+        AND version = ? AND digest_sha256 = ?`, [
+      values[4], values[5], values[6], values[7], values[8], values[9],
+      values[10], values[11], values[12], values[13], values[14], values[15],
+      values[18], values[19], plan.before!.scope.workspaceId,
+      plan.before!.scope.eventId, plan.before!.id, plan.before!.version,
+      plan.before!.digestSha256
+    ]);
+  }
+  if (plan.catalog.beforeVersion !== 1) {
+    input.unitOfWork.write(`UPDATE deadline_catalogs
+      SET version = ?,digest_sha256 = ?
+      WHERE workspace_id = ? AND event_id = ? AND version = ? AND digest_sha256 = ?`, [
+      plan.catalog.afterVersion,
+      plan.catalog.afterDigestSha256,
+      plan.input.scope.workspaceId,
+      plan.input.scope.eventId,
+      plan.catalog.beforeVersion,
+      plan.catalog.beforeDigestSha256
+    ]);
+  }
 }
 
 interface PreparedDeadlineChange {
@@ -331,17 +415,9 @@ export class D1DeadlineDirectEffectDomainAdapter implements D1EffectDomainAdapte
       WHERE workspace_id = ? AND id = ? AND timezone = ? AND version = ?)`, [
       this.#workspaceId, eventId, eventHead.timezone, eventHead.version
     ]);
-    const catalog = await readCatalog(this.input.unitOfWork.readSession, scope);
+    const catalog = await readD1DeadlineCatalog(this.input.unitOfWork.readSession, scope);
     if (!catalog) throw new TypeError('d1_deadline_catalog_missing');
-    if (catalog.version === 1) {
-      this.input.unitOfWork.assertCurrent(`NOT EXISTS (SELECT 1 FROM deadline_catalogs
-        WHERE workspace_id = ? AND event_id = ?)`, [scope.workspaceId, scope.eventId]);
-    } else {
-      this.input.unitOfWork.assertCurrent(`EXISTS (SELECT 1 FROM deadline_catalogs
-        WHERE workspace_id = ? AND event_id = ? AND version = ? AND digest_sha256 = ?)`, [
-        scope.workspaceId, scope.eventId, catalog.version, catalog.digestSha256
-      ]);
-    }
+    guardD1DeadlineCatalog(this.input.unitOfWork, catalog);
     this.#prepared = undefined;
     return sealDeadlineDirectPreparation({
       capability,
@@ -412,61 +488,11 @@ export class D1DeadlineDirectEffectDomainAdapter implements D1EffectDomainAdapte
         || canonicalJsonText(prepared.plan) !== canonicalJsonText(plan)) {
       throw new TypeError('d1_deadline_preparation_invalid');
     }
-    applyDeadlinePlanToCatalog({
-      plan: prepared.plan,
+    bufferD1DeadlinePlan({
+      unitOfWork: this.input.unitOfWork,
       catalog: prepared.catalog,
-      ...(prepared.plan.eventTimeBasis === null ? {} : {
-        eventTimeBasis: prepared.plan.eventTimeBasis
-      })
+      plan: prepared.plan
     });
-    if (plan.catalog.beforeVersion === 1) {
-      this.input.unitOfWork.write(`INSERT INTO deadline_catalogs (
-        workspace_id,event_id,version,digest_sha256
-      ) SELECT ?,?,?,? FROM event_spine_scope_roots
-        WHERE workspace_id = ? AND event_id = ?
-          AND NOT EXISTS (SELECT 1 FROM deadline_catalogs
-            WHERE workspace_id = ? AND event_id = ?)`, [
-        plan.input.scope.workspaceId,
-        plan.input.scope.eventId,
-        plan.catalog.afterVersion,
-        plan.catalog.afterDigestSha256,
-        plan.input.scope.workspaceId,
-        plan.input.scope.eventId,
-        plan.input.scope.workspaceId,
-        plan.input.scope.eventId
-      ]);
-    }
-    if (plan.input.action === 'create') {
-      this.input.unitOfWork.write(`INSERT INTO deadlines (${DEADLINE_COLUMNS})
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, persistedHead(plan.after));
-    } else {
-      const values = persistedHead(plan.after);
-      this.input.unitOfWork.write(`UPDATE deadlines SET
-        status = ?,version = ?,digest_sha256 = ?,grace_policy = ?,display_date = ?,
-        effective_at_ms = ?,boundary_profile_key = ?,boundary_profile_version = ?,
-        boundary_profile_digest_sha256 = ?,event_timezone = ?,event_version = ?,
-        local_boundary_date = ?,updated_by_user_id = ?,updated_at_ms = ?
-        WHERE workspace_id = ? AND event_id = ? AND id = ?
-          AND version = ? AND digest_sha256 = ?`, [
-        values[4], values[5], values[6], values[7], values[8], values[9],
-        values[10], values[11], values[12], values[13], values[14], values[15],
-        values[18], values[19], plan.before!.scope.workspaceId,
-        plan.before!.scope.eventId, plan.before!.id, plan.before!.version,
-        plan.before!.digestSha256
-      ]);
-    }
-    if (plan.catalog.beforeVersion !== 1) {
-      this.input.unitOfWork.write(`UPDATE deadline_catalogs
-        SET version = ?,digest_sha256 = ?
-        WHERE workspace_id = ? AND event_id = ? AND version = ? AND digest_sha256 = ?`, [
-        plan.catalog.afterVersion,
-        plan.catalog.afterDigestSha256,
-        plan.input.scope.workspaceId,
-        plan.input.scope.eventId,
-        plan.catalog.beforeVersion,
-        plan.catalog.beforeDigestSha256
-      ]);
-    }
     prepared.phase = 'applied';
   }
 

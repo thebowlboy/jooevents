@@ -25,6 +25,8 @@
     "@jooevents/kernel": "workspace:*",
     "@jooevents/persistence": "workspace:*",
     "@jooevents/template-authoring": "workspace:*",
+    "@jooevents/task-operations": "workspace:*",
+    "@jooevents/tasks": "workspace:*",
     "better-auth": "1.6.26",
     "drizzle-orm": "0.45.2",
     "hono": "4.13.1",

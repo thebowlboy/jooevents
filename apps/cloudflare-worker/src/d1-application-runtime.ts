@@ -32,6 +32,13 @@ import {
   createFieldRegistryOperationModule
 } from '@jooevents/field-registry';
 import {
+  TASK_MANAGE_ACCESS_POLICY,
+  TASK_MUTATION_REQUEST_HASH_PROFILE,
+  TASK_OPERATION_KEY_PROFILES,
+  createTaskBoardReadOperationModule,
+  createTaskMutationOperationModule
+} from '@jooevents/task-operations';
+import {
   parseInstant,
   parseInvocationId,
   parseWorkspaceId
@@ -68,6 +75,10 @@ import {
   createD1FieldRegistrySnapshotSource
 } from './d1-field-registry';
 import {
+  createD1TaskBoardReadSource,
+  createD1TaskDirectEffectDomainRegistration
+} from './d1-task';
+import {
   D1EffectUnitOfWorkPort,
   createD1EffectDomainAdapterRegistry
 } from './d1-effect-unit-of-work';
@@ -97,7 +108,7 @@ function classifiedCommunicationProfile(cryptoProfiles: DurableCryptoProfileComp
   ).encryptionProfile;
 }
 
-/** Builds the authenticated Event, Field Registry, and Deadline application slice over D1. */
+/** Builds the authenticated Event, Field Registry, Deadline, and Task application slice over D1. */
 export async function createConfiguredD1ApplicationRuntime(
   environment: D1ApplicationRuntimeEnvironment
 ) {
@@ -114,7 +125,8 @@ export async function createConfiguredD1ApplicationRuntime(
     { policy: FIELD_REGISTRY_READ_ACCESS_POLICY, permissionId: 'event.read' },
     { policy: FIELD_REGISTRY_MANAGE_ACCESS_POLICY, permissionId: 'event.manage' },
     { policy: DEADLINE_READ_ACCESS_POLICY, permissionId: 'event.read' },
-    { policy: DEADLINE_MANAGE_ACCESS_POLICY, permissionId: 'event.manage' }
+    { policy: DEADLINE_MANAGE_ACCESS_POLICY, permissionId: 'event.manage' },
+    { policy: TASK_MANAGE_ACCESS_POLICY, permissionId: 'event.manage' }
   ]);
   const currentAuthority = createD1OperatorCurrentAuthorityResolver({
     session: environment.DB.withSession('first-primary'),
@@ -128,6 +140,7 @@ export async function createConfiguredD1ApplicationRuntime(
     workspaceId
   });
   const deadlines = createD1DeadlineReadSource({ database: environment.DB, workspaceId });
+  const tasks = createD1TaskBoardReadSource({ database: environment.DB, workspaceId });
   const common = Object.freeze({
     workspaceId,
     currentAuthority,
@@ -222,6 +235,34 @@ export async function createConfiguredD1ApplicationRuntime(
       DEADLINE_OPERATION_KEY_PROFILES.idempotencyCredential
     )
   });
+  const taskBoardOperations = createTaskBoardReadOperationModule({
+    workspaceId,
+    readPolicy: EVENT_READ_ACCESS_POLICY,
+    currentAuthority,
+    currentEvent: reads,
+    tasks,
+    clock,
+    ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+    authorityPrincipalKeyProfile: TASK_OPERATION_KEY_PROFILES.authorityPrincipal,
+    scopePartitionProfile: TASK_OPERATION_KEY_PROFILES.scopePartition,
+    requestCanonicalizationProfile: TASK_OPERATION_KEY_PROFILES.requestCanonicalization
+  });
+  const taskMutationOperations = createTaskMutationOperationModule({
+    workspaceId,
+    managePolicy: TASK_MANAGE_ACCESS_POLICY,
+    currentAuthority,
+    currentEvent: reads,
+    clock,
+    ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+    authorityPrincipalKeyProfile: TASK_OPERATION_KEY_PROFILES.authorityPrincipal,
+    scopePartitionProfile: TASK_OPERATION_KEY_PROFILES.scopePartition,
+    requestCanonicalizationProfile: TASK_OPERATION_KEY_PROFILES.requestCanonicalization,
+    requestHashSealer: cryptoProfiles.requestHashSealer(TASK_MUTATION_REQUEST_HASH_PROFILE),
+    idempotencyCredentialProfile: TASK_OPERATION_KEY_PROFILES.idempotencyCredential,
+    idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(
+      TASK_OPERATION_KEY_PROFILES.idempotencyCredential
+    )
+  });
   const domains = createD1EffectDomainAdapterRegistry([
     createD1EventCreateEffectDomainRegistration({
       workspaceId,
@@ -246,6 +287,14 @@ export async function createConfiguredD1ApplicationRuntime(
     createD1DeadlineDirectEffectDomainRegistration({
       workspaceId,
       newDeadlineId: () => crypto.randomUUID()
+    }),
+    createD1TaskDirectEffectDomainRegistration({
+      workspaceId,
+      ids: {
+        newTaskDefinitionId: () => crypto.randomUUID(),
+        newTaskDefinitionRevisionId: () => crypto.randomUUID(),
+        newDeadlineId: () => crypto.randomUUID()
+      }
     })
   ]);
   const unitOfWork = new D1EffectUnitOfWorkPort(environment.DB, domains, {
@@ -268,7 +317,9 @@ export async function createConfiguredD1ApplicationRuntime(
       eventSettingsReadOperations,
       eventSettingsUpdateOperations,
       fieldRegistryOperations,
-      deadlineOperations
+      deadlineOperations,
+      taskBoardOperations,
+      taskMutationOperations
     ]),
     read: {
       operationalTrace: { emit() {} },

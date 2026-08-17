@@ -294,6 +294,7 @@ import {
 import {
   TASK_MANAGE_ACCESS_POLICY,
   TASK_MUTATION_REQUEST_HASH_PROFILE,
+  TASK_OPERATION_KEY_PROFILES,
   createTaskBoardReadOperationModule,
   createTaskMutationOperationModule
 } from '@jooevents/task-operations';
@@ -773,25 +774,6 @@ const filesPortalProfiles = Object.freeze({
   }),
   idempotencyCredential: Object.freeze({
     key: 'key-profile.file.portal-idempotency-credential',
-    version: parseContractVersion(1)
-  })
-});
-
-const taskProfiles = Object.freeze({
-  authorityPrincipal: Object.freeze({
-    key: 'key-profile.task.operator-principal',
-    version: parseContractVersion(1)
-  }),
-  scopePartition: Object.freeze({
-    key: 'key-profile.task.current-event-scope',
-    version: parseContractVersion(1)
-  }),
-  requestCanonicalization: Object.freeze({
-    key: 'key-profile.task.request-canonicalization',
-    version: parseContractVersion(1)
-  }),
-  idempotencyCredential: Object.freeze({
-    key: 'key-profile.task.idempotency-credential',
     version: parseContractVersion(1)
   })
 });
@@ -4076,21 +4058,21 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       currentAuthority,
       currentEvent,
       tasks: Object.freeze({
-        readCurrent(requestedWorkspaceId: typeof workspaceId) {
-          const selected = currentEvent.resolveCurrentEvent(requestedWorkspaceId);
-          return selected.eventId === undefined
-            ? undefined
-            : taskRepository.readTaskBoard({
-                workspaceId: requestedWorkspaceId,
-                eventId: selected.eventId
-              });
+        readCurrent(
+          requestedWorkspaceId: typeof workspaceId,
+          eventId: ReturnType<typeof parseEventId>
+        ) {
+          return taskRepository.readTaskBoard({
+            workspaceId: requestedWorkspaceId,
+            eventId
+          });
         }
       }),
       clock,
       ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
-      authorityPrincipalKeyProfile: taskProfiles.authorityPrincipal,
-      scopePartitionProfile: taskProfiles.scopePartition,
-      requestCanonicalizationProfile: taskProfiles.requestCanonicalization
+      authorityPrincipalKeyProfile: TASK_OPERATION_KEY_PROFILES.authorityPrincipal,
+      scopePartitionProfile: TASK_OPERATION_KEY_PROFILES.scopePartition,
+      requestCanonicalizationProfile: TASK_OPERATION_KEY_PROFILES.requestCanonicalization
     });
     const taskMutationOperations = createTaskMutationOperationModule({
       workspaceId,
@@ -4100,12 +4082,14 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       currentEvent,
       clock,
       ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
-      authorityPrincipalKeyProfile: taskProfiles.authorityPrincipal,
-      scopePartitionProfile: taskProfiles.scopePartition,
-      requestCanonicalizationProfile: taskProfiles.requestCanonicalization,
+      authorityPrincipalKeyProfile: TASK_OPERATION_KEY_PROFILES.authorityPrincipal,
+      scopePartitionProfile: TASK_OPERATION_KEY_PROFILES.scopePartition,
+      requestCanonicalizationProfile: TASK_OPERATION_KEY_PROFILES.requestCanonicalization,
       requestHashSealer: cryptoProfiles.requestHashSealer(TASK_MUTATION_REQUEST_HASH_PROFILE),
-      idempotencyCredentialProfile: taskProfiles.idempotencyCredential,
-      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(taskProfiles.idempotencyCredential)
+      idempotencyCredentialProfile: TASK_OPERATION_KEY_PROFILES.idempotencyCredential,
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(
+        TASK_OPERATION_KEY_PROFILES.idempotencyCredential
+      )
     });
     const eventSettingsDirectDomain =
       createSQLiteEventSettingsDirectEffectDomainRegistration({

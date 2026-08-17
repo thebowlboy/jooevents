@@ -114,7 +114,9 @@ describe('configured D1 application HTTP slice', () => {
       'field_registry.move',
       'field_registry.remove',
       'field_registry.restore',
-      'field_registry.snapshot.read'
+      'field_registry.snapshot.read',
+      'task.board.read',
+      'task.mutation'
     ]);
 
     const initial = await handleRequest(
@@ -543,6 +545,111 @@ describe('configured D1 application HTTP slice', () => {
       FROM operation_log WHERE workspace_id = ? AND operation_name = 'deadline.change'`)
       .bind(workspaceId).first<{ readonly count: number }>();
     expect(deadlineOperationCount?.count).toBe(3);
+
+    const initialTasks = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/tasks`, { headers }),
+      environment()
+    );
+    expect(initialTasks.status, await initialTasks.clone().text()).toBe(200);
+    expect(await initialTasks.json()).toMatchObject({
+      kind: 'success',
+      data: { catalogVersion: 1, definitions: [], assignments: [] }
+    });
+    const taskCreateBody = {
+      action: 'create_definition',
+      name: 'Confirm profile',
+      description: 'Review your speaker profile.',
+      completionMode: 'acknowledge',
+      required: true,
+      dueOn: '2027-03-11'
+    } as const;
+    const taskMutation = (key: string, body: unknown) => handleRequest(
+      new Request(`${baseUrl}/api/events/current/tasks`, {
+        method: 'POST',
+        headers: {
+          cookie: headers.cookie,
+          origin: baseUrl,
+          'content-type': 'application/json',
+          'idempotency-key': key
+        },
+        body: JSON.stringify(body)
+      }),
+      environment()
+    );
+    const createdTask = await taskMutation('d1-task-create', taskCreateBody);
+    expect(createdTask.status, await createdTask.clone().text()).toBe(200);
+    const createdTaskBody = await createdTask.json<{
+      readonly kind: string;
+      readonly data: {
+        readonly definition: {
+          readonly head: { readonly id: string; readonly version: number };
+          readonly current: {
+            readonly deadline: {
+              readonly kind: string;
+              readonly reference: { readonly id: string; readonly displayDate: string };
+            };
+          };
+        };
+        readonly assignments: readonly unknown[];
+      };
+    }>();
+    expect(createdTaskBody).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'create_definition',
+        definition: {
+          head: { version: 1 },
+          current: {
+            name: 'Confirm profile',
+            completionMode: 'acknowledge',
+            required: true,
+            deadline: { kind: 'task_due', reference: { displayDate: '2027-03-11' } }
+          }
+        },
+        assignments: []
+      }
+    });
+    const taskDefinitionId = createdTaskBody.data.definition.head.id;
+    const taskDeadlineId = createdTaskBody.data.definition.current.deadline.reference.id;
+    const taskReplay = await taskMutation('d1-task-create', taskCreateBody);
+    expect(await taskReplay.json()).toEqual(createdTaskBody);
+    const changedTaskRequest = await taskMutation('d1-task-create', {
+      ...taskCreateBody,
+      name: 'Changed task request'
+    });
+    expect(await changedTaskRequest.json()).toMatchObject({
+      kind: 'outcome',
+      outcome: { class: 'idempotency_conflict', kind: 'operation.request_changed' }
+    });
+    const finalTasks = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/tasks`, { headers }),
+      environment()
+    );
+    expect(await finalTasks.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        catalogVersion: 2,
+        definitions: [{
+          head: { id: taskDefinitionId, version: 1 },
+          current: {
+            name: 'Confirm profile',
+            deadline: { reference: { id: taskDeadlineId } }
+          }
+        }],
+        assignments: []
+      }
+    });
+    const embeddedDeadline = await env.DB.prepare(`SELECT status,version,display_date
+      FROM deadlines WHERE workspace_id = ? AND event_id = ? AND id = ?`)
+      .bind(workspaceId, firstBody.data.event.id, taskDeadlineId)
+      .first<{ readonly status: string; readonly version: number; readonly display_date: string }>();
+    expect(embeddedDeadline).toEqual({
+      status: 'active', version: 1, display_date: '2027-03-11'
+    });
+    const taskOperationCount = await env.DB.prepare(`SELECT count(*) AS count
+      FROM operation_log WHERE workspace_id = ? AND operation_name = 'task.mutation'`)
+      .bind(workspaceId).first<{ readonly count: number }>();
+    expect(taskOperationCount?.count).toBe(1);
   });
 
   test('keeps the application slice closed when activation or a durable key duty is incomplete', async () => {
