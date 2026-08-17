@@ -6,6 +6,7 @@ import {
   CLOUDFLARE_WORKERS_EMAIL_SETUP_MANIFEST
 } from '@jooevents/cloudflare-email';
 import { emailProviderConnectionProjectionSchema } from '@jooevents/contracts';
+import { sendMessagesAuthorInputSchema } from '@jooevents/communication-operations';
 import { canonicalJsonText, parseWorkspaceId } from '@jooevents/kernel';
 import { beforeAll, describe, expect, test } from 'vitest';
 import { handleRequest, type CloudflareApplicationEnvironment } from '../src/index';
@@ -161,6 +162,7 @@ describe('configured D1 application HTTP slice', () => {
       'file.upload.confirm',
       'file.upload.intent',
       'get_communication_purpose',
+      'get_delivery_history',
       'get_message_draft',
       'get_message_template',
       'list_audience_options',
@@ -284,6 +286,14 @@ describe('configured D1 application HTTP slice', () => {
     );
     expect(initialAudienceOptions.status, await initialAudienceOptions.clone().text()).toBe(200);
     expect(await initialAudienceOptions.json()).toMatchObject({
+      kind: 'outcome', outcome: { class: 'conflict', kind: 'communication.event_required' }
+    });
+    const initialDeliveryHistory = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/communications/deliveries/history`, { headers }),
+      environment()
+    );
+    expect(initialDeliveryHistory.status, await initialDeliveryHistory.clone().text()).toBe(200);
+    expect(await initialDeliveryHistory.json()).toMatchObject({
       kind: 'outcome', outcome: { class: 'conflict', kind: 'communication.event_required' }
     });
     const initialDraftCreate = await handleRequest(
@@ -671,6 +681,94 @@ describe('configured D1 application HTTP slice', () => {
     expect(await reboundAudienceCursor.json()).toMatchObject({
       kind: 'outcome',
       outcome: { class: 'policy_violation', kind: 'communication.preview_invalid' }
+    });
+    const historyBatchId = uuid(791);
+    const historyReceiptId = uuid(792);
+    const historyReleaseId = uuid(793);
+    const historyPlan = sendMessagesAuthorInputSchema.parse({
+      schemaVersion: 1,
+      action: 'send',
+      scope: { workspaceId, eventId },
+      batchId: historyBatchId,
+      purposeRevision: decisionPurpose.revision,
+      subject: 'Decision history over D1',
+      audienceLabel: 'Accepted proposals',
+      preview: {
+        identity: {
+          audienceSpecId: uuid(794),
+          draftId: uuid(795),
+          draftVersion: 1,
+          previewGeneration: 1,
+          previewDigestProfile: 'communication.preview.sha256',
+          previewDigestVersion: 1,
+          previewDigestSha256: 'a'.repeat(64)
+        },
+        membershipDigestSha256: 'b'.repeat(64),
+        evidenceDigestSha256: 'c'.repeat(64),
+        sourceVersions: [{
+          sourceKey: 'decision-set.accepted',
+          sourceVersion: 1,
+          digestSha256: 'd'.repeat(64)
+        }]
+      },
+      releases: [{
+        releaseId: historyReleaseId,
+        deliveryId: uuid(796),
+        recipientRefId: uuid(797),
+        personRefId: userId,
+        contactRefId: uuid(798),
+        templateRevisionRefId: uuid(799),
+        contentRefId: uuid(800),
+        reviewedMessageDigestSha256: 'e'.repeat(64),
+        reviewedEnvelopeDigestSha256: 'f'.repeat(64),
+        providerConnectionRevisionId: 'provider.connection.rev-1',
+        externalDeliveryKey: 'provider.delivery.history-1',
+        senderProfileRevisionId: 'sender.profile.rev-1',
+        senderPresentationContractKey: 'sender.presentation.email-v1',
+        senderPresentationContractVersion: 1,
+        senderPresentationDigestSha256: '1'.repeat(64),
+        channelAddressId: 'channel.address.history-1',
+        channelAddressVersion: 1,
+        addressLookupFingerprintProfile: 'communication.address-fingerprint.hmac-sha256',
+        addressLookupFingerprintVersion: 1,
+        addressLookupFingerprintSha256: '2'.repeat(64)
+      }],
+      requestedAt: new Date().toISOString()
+    });
+    await env.DB.prepare(`INSERT INTO communication_release_commits
+      (commit_id,workspace_id,event_id,batch_id,plan_digest_sha256,plan_json,occurred_at_ms)
+      VALUES (?,?,?,?,?,?,?)`).bind(
+        historyReceiptId, workspaceId, eventId, historyBatchId, '3'.repeat(64),
+        canonicalJsonText(historyPlan), Date.now()
+      ).run();
+    const deliveryHistory = await handleRequest(new Request(
+      `${baseUrl}/api/events/current/communications/deliveries/history?messageRefId=${historyBatchId}`,
+      { headers }
+    ), environment());
+    expect(deliveryHistory.status, await deliveryHistory.clone().text()).toBe(200);
+    expect(await deliveryHistory.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        rows: [{
+          historyItemId: historyReceiptId,
+          messageRefId: historyBatchId,
+          subject: 'Decision history over D1',
+          state: 'known_failed',
+          counts: {
+            audience: { knowledge: 'known', value: 1 },
+            materialized: { knowledge: 'known', value: 0 },
+            delivered: { knowledge: 'not_supported' }
+          }
+        }],
+        page: { hasMore: false }
+      }
+    });
+    const invalidDeliveryHistory = await handleRequest(new Request(
+      `${baseUrl}/api/events/current/communications/deliveries/history?cursor=invalid`,
+      { headers }
+    ), environment());
+    expect(await invalidDeliveryHistory.json()).toMatchObject({
+      kind: 'transport_error'
     });
     const authoringPayloadInput = {
       payload: {

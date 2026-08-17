@@ -81,7 +81,7 @@ enough to suggest putting an actual attendee list into it.
 
 The Cloudflare production composition is now under active implementation, but it is
 still not a production application. Local workerd tests prove retained D1 migrations,
-authentication and admission, and 70 of the joined runtime's 115 organizer
+authentication and admission, and 71 of the joined runtime's 115 organizer
 operations. The mounted set includes Events and settings, the Field Registry,
 Program Vocabulary changes and reviewed merges, Deadlines, Tasks, Schedule placement,
 Session changes, native Template artifacts, operation history, the workspace shell
@@ -95,6 +95,9 @@ creation can adopt those exact encrypted payloads or start empty, with guarded c
 replay, receipt, and timeline checks. Revision reopens and validates the exact encrypted
 payloads before a guarded update; discard advances the retained draft without opening
 message bodies, so unrelated authoring history cannot prevent that terminal action.
+Delivery history projects committed batches and live per-recipient state counts from
+D1 without returning recipient addresses; provider-confirmed delivery remains explicitly
+unsupported rather than inferred.
 Registered audience choices can also be listed with scope- and filter-bound cursors;
 recipient-level preview reads remain closed.
 API-key plaintext is returned only with the fresh committing response and is absent

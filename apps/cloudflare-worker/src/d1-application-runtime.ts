@@ -18,6 +18,7 @@ import {
   WORKSPACE_SENDER_IDENTITY_ACCESS_POLICY,
   WORKSPACE_SENDER_IDENTITY_UPDATE_REQUEST_HASH_PROFILE,
   composeOrganizerCommunicationAuthoringOperationModules,
+  createCommunicationDeliveryHistoryReadOperationModule,
   createOrganizerAudiencePreviewReadOperationModule,
   createOrganizerCommunicationMutationOperationModule,
   createOrganizerCommunicationReadOperationModule,
@@ -131,6 +132,7 @@ import {
 } from './auth-config';
 import { createD1CreatedEventInitializer } from './d1-created-event-initializer';
 import { createD1CommunicationProviderReadPorts } from './d1-communication-provider-read';
+import { createD1CommunicationDeliveryHistoryReadPort } from './d1-communication-delivery-history';
 import {
   createD1DeadlineDirectEffectDomainRegistration,
   createD1DeadlineReadSource
@@ -600,6 +602,10 @@ export async function createConfiguredD1ApplicationRuntime(
     workspaceId,
     cryptoProfiles
   });
+  const communicationDeliveryHistoryRead = createD1CommunicationDeliveryHistoryReadPort({
+    database: environment.DB,
+    workspaceId
+  });
   const organizerCommunicationCurrentEvent = Object.freeze({
     async resolveCurrentEvent(requestedWorkspaceId: WorkspaceId) {
       const selected = await reads.resolveCurrentEvent(requestedWorkspaceId);
@@ -956,6 +962,17 @@ export async function createConfiguredD1ApplicationRuntime(
       crypto: ORGANIZER_COMMUNICATION_PROFILES,
       enabledOperations: ['list_audience_options']
     });
+  const communicationDeliveryHistoryReadOperations =
+    createCommunicationDeliveryHistoryReadOperationModule({
+      workspaceId,
+      policy: ORGANIZER_COMMUNICATION_DRAFT_ACCESS_POLICY,
+      currentAuthority,
+      currentEvent: organizerCommunicationCurrentEvent,
+      read: communicationDeliveryHistoryRead,
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      crypto: ORGANIZER_COMMUNICATION_PROFILES
+    });
   const programVocabularyReadOperations = createProgramVocabularyReadOperationModule({
     workspaceId,
     readPolicy: PROGRAM_VOCABULARY_READ_ACCESS_POLICY,
@@ -1239,6 +1256,7 @@ export async function createConfiguredD1ApplicationRuntime(
       senderIdentityOperations,
       organizerCommunicationAuthoringOperations,
       organizerAudiencePreviewReadOperations,
+      communicationDeliveryHistoryReadOperations,
       programVocabularyReadOperations,
       programVocabularyDirectOperations,
       programVocabularyMergeOperations,

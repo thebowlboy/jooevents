@@ -80,6 +80,7 @@
     "./message-releases": "./src/sqlite/communications/message-releases.ts",
     "./message-release-effect-domain": "./src/sqlite/communications/message-release-effect-domain.ts",
     "./submission-confirmation-delivery": "./src/sqlite/communications/submission-confirmation-delivery.ts",
+    "./submission-confirmation-release-plan": "./src/submission-confirmation-release-plan.ts",
     "./release": "./src/sqlite/release.ts",
     "./release-native-effect-domain": "./src/sqlite/release-native-effect-domain.ts",
     "./files": "./src/sqlite/files.ts",

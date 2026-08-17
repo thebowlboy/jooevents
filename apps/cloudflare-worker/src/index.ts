@@ -242,6 +242,7 @@ function isConfiguredApplicationPath(pathname: string): boolean {
     || pathname === '/api/events/current/communications/drafts/discard'
     || pathname === '/api/events/current/communications/authoring-payloads'
     || pathname === '/api/events/current/communications/audiences/options'
+    || pathname === '/api/events/current/communications/deliveries/history'
     || pathname === '/api/events/current'
     || pathname === '/api/events/current/files'
     || pathname.startsWith('/api/events/current/files/')
