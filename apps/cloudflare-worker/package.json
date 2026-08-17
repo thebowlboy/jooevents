@@ -26,6 +26,8 @@
     "@jooevents/identity-access": "workspace:*",
     "@jooevents/kernel": "workspace:*",
     "@jooevents/persistence": "workspace:*",
+    "@jooevents/program": "workspace:*",
+    "@jooevents/program-operations": "workspace:*",
     "@jooevents/template-authoring": "workspace:*",
     "@jooevents/template-authoring-operations": "workspace:*",
     "@jooevents/task-operations": "workspace:*",

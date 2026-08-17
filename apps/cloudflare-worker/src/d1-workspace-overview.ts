@@ -75,6 +75,7 @@ export const D1_WORKSPACE_OVERVIEW_AREA_CATALOG: WorkspaceOverviewAreaCatalog =
         'field_registry.remove',
         'field_registry.restore',
         'field_registry.snapshot.read',
+        'program_vocabulary.snapshot.read',
         'workspace.api_key.create',
         'workspace.api_key.list',
         'workspace.api_key.revoke',
@@ -85,7 +86,6 @@ export const D1_WORKSPACE_OVERVIEW_AREA_CATALOG: WorkspaceOverviewAreaCatalog =
         'workspace_team.role_change'
       ],
       unavailableCapabilities: [
-        'program_vocabulary.snapshot.read',
         'workspace_team.delivery.activate',
         'workspace_team.session_revocation.activate'
       ]

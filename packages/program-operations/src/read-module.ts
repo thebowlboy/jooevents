@@ -14,6 +14,7 @@ import {
   programVocabularySnapshotReadInputSchema,
   programVocabularySnapshotReadResultSchema,
   programVocabularySnapshotSchema,
+  type ProgramVocabularySnapshotDto,
   type SafeSchemaManifestRef,
   type StructuredOutcome,
   type VersionedDefinitionRef
@@ -69,6 +70,14 @@ export interface ProgramVocabularyCurrentEventSource {
 
 export interface ProgramVocabularyOperationIds {
   newInvocationId(): InvocationId;
+}
+
+/** Runtime-neutral projected source for asynchronous database adapters such as D1. */
+export interface ProgramVocabularySnapshotReadSource {
+  readSnapshot(scope: {
+    readonly workspaceId: WorkspaceId;
+    readonly eventId: ReturnType<typeof parseEventId>;
+  }): ProgramVocabularySnapshotDto | undefined | Promise<ProgramVocabularySnapshotDto | undefined>;
 }
 
 function ref(key: string): VersionedDefinitionRef {
@@ -133,25 +142,37 @@ function scopeResolver(workspaceId: WorkspaceId,
   });
 }
 
+type ProgramVocabularyReadSourceInput =
+  | {
+      readonly snapshotRead: ProgramVocabularySnapshotReadSource;
+      readonly vocabularyRead?: never;
+      readonly referenceRegistry?: never;
+    }
+  | {
+      readonly snapshotRead?: never;
+      readonly vocabularyRead: ProgramVocabularyReadPort;
+      readonly referenceRegistry: ProgramReferenceContributorRegistry;
+    };
+
 export function createProgramVocabularyReadOperationModule(input: {
   readonly workspaceId: WorkspaceId;
   readonly readPolicy: VersionedAccessPolicyRef;
   readonly currentAuthority: CurrentAuthorityResolver<InvocationEvidence>;
   readonly currentEvent: ProgramVocabularyCurrentEventSource;
-  readonly vocabularyRead: ProgramVocabularyReadPort;
-  readonly referenceRegistry: ProgramReferenceContributorRegistry;
   readonly clock: Clock;
   readonly ids: ProgramVocabularyOperationIds;
   readonly authorityPrincipalKeyProfile: VersionedKeyProfileRef;
   readonly scopePartitionProfile: VersionedKeyProfileRef;
   readonly requestCanonicalizationProfile: VersionedKeyProfileRef;
-}): OperationRegistryModule {
+} & ProgramVocabularyReadSourceInput): OperationRegistryModule {
   const workspaceId = parseWorkspaceId(input.workspaceId);
   if (input.readPolicy.key !== PROGRAM_VOCABULARY_READ_ACCESS_POLICY.key
       || input.readPolicy.version !== PROGRAM_VOCABULARY_READ_ACCESS_POLICY.version) {
     throw new TypeError('program_vocabulary_read_policy_catalog_mismatch');
   }
-  assertProgramReferenceContributorRegistry(input.referenceRegistry);
+  if (input.snapshotRead === undefined) {
+    assertProgramReferenceContributorRegistry(input.referenceRegistry);
+  }
   const lane = parseOperationAccessLane({ kind: 'operator', surface: 'operator_http',
     policy: input.readPolicy });
   const autonomy = createOperationAutonomyPolicy({ definition: refs.autonomy,
@@ -174,8 +195,19 @@ export function createProgramVocabularyReadOperationModule(input: {
     requestCanonicalizationProfile: input.requestCanonicalizationProfile,
     deniedAuthorityOutcome: authorityOutcome });
   const capability: ReadCapabilityRegistration = Object.freeze({ reference: refs.capability,
-    openSnapshot(readContext: ReadInvocationContext) {
+    async openSnapshot(readContext: ReadInvocationContext) {
       if (readContext.scope.eventId === undefined) return Object.freeze({ kind: 'event_required' });
+      if (input.snapshotRead !== undefined) {
+        const snapshot = await input.snapshotRead.readSnapshot({
+          workspaceId: readContext.scope.workspaceId,
+          eventId: readContext.scope.eventId
+        });
+        if (!snapshot) throw new TypeError('program_vocabulary_current_event_state_missing');
+        return Object.freeze({
+          kind: 'snapshot',
+          value: programVocabularySnapshotSchema.parse(snapshot)
+        });
+      }
       const state = input.vocabularyRead.readVocabulary({ workspaceId: readContext.scope.workspaceId,
         eventId: readContext.scope.eventId });
       if (!state) throw new TypeError('program_vocabulary_current_event_state_missing');

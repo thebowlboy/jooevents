@@ -82,8 +82,9 @@ enough to suggest putting an actual attendee list into it.
 The Cloudflare production composition is now under active implementation, but it is
 still not a production application. Local workerd tests prove retained D1 migrations,
 authentication and admission, guarded Event and settings operations, the Field
-Registry, Deadlines, Tasks, native Template artifacts, safe operation history, and the
-workspace shell, workspace Team changes, human API-key inventory plus show-once
+Registry, Program Vocabulary reads with current and historical usage guards, Deadlines,
+Tasks, native Template artifacts, safe operation history, and the workspace shell,
+workspace Team changes, human API-key inventory plus show-once
 create/rotate/revoke, and organizer Files metadata. API-key plaintext is returned
 only with the fresh committing response and is absent from D1 and operation history.
 An authenticated organizer download now streams retained R2 bytes with

@@ -42,6 +42,10 @@ import {
   createFilesReadOperationModule
 } from '@jooevents/files-operations';
 import {
+  PROGRAM_VOCABULARY_READ_ACCESS_POLICY,
+  createProgramVocabularyReadOperationModule
+} from '@jooevents/program-operations';
+import {
   TASK_MANAGE_ACCESS_POLICY,
   TASK_MUTATION_REQUEST_HASH_PROFILE,
   TASK_OPERATION_KEY_PROFILES,
@@ -123,6 +127,7 @@ import {
 } from './d1-effect-unit-of-work';
 import { createD1OperatorCurrentAuthorityResolver } from './d1-operator-authority';
 import { createD1OperationHistoryReadSource } from './d1-operation-history';
+import { createD1ProgramVocabularySnapshotReadSource } from './d1-program-vocabulary';
 import { createD1WorkspaceOverviewReadSource } from './d1-workspace-overview';
 import { createD1WorkspaceShellSummaryReadSource } from './d1-workspace-summary';
 import { createD1WorkspaceTeamReadSource } from './d1-workspace-team';
@@ -209,6 +214,21 @@ const FILES_OPERATION_KEY_PROFILES = Object.freeze({
   })
 });
 
+const PROGRAM_VOCABULARY_OPERATION_KEY_PROFILES = Object.freeze({
+  authorityPrincipal: Object.freeze({
+    key: 'key-profile.program-vocabulary.operator-principal',
+    version: parseContractVersion(1)
+  }),
+  scopePartition: Object.freeze({
+    key: 'key-profile.program-vocabulary.event-scope',
+    version: parseContractVersion(1)
+  }),
+  requestCanonicalization: Object.freeze({
+    key: 'key-profile.program-vocabulary.request-canonicalization',
+    version: parseContractVersion(1)
+  })
+});
+
 function classifiedWorkspaceInvitationProfiles(
   cryptoProfiles: DurableCryptoProfileComposition
 ) {
@@ -262,6 +282,7 @@ export async function createConfiguredD1ApplicationRuntime(
       permissionId: WORKSPACE_TEAM_OPERATION_ACCESS.remove.permissionId
     },
     { policy: FILE_READ_ACCESS_POLICY, permissionId: 'submission.read' },
+    { policy: PROGRAM_VOCABULARY_READ_ACCESS_POLICY, permissionId: 'event.read' },
     { policy: API_KEY_MANAGE_ACCESS_POLICY, permissionId: 'integration.api.manage' }
   ]);
   const currentAuthority = createD1OperatorCurrentAuthorityResolver({
@@ -282,6 +303,10 @@ export async function createConfiguredD1ApplicationRuntime(
     workspaceId
   });
   const operationHistory = createD1OperationHistoryReadSource({
+    database: environment.DB,
+    workspaceId
+  });
+  const programVocabulary = createD1ProgramVocabularySnapshotReadSource({
     database: environment.DB,
     workspaceId
   });
@@ -564,6 +589,20 @@ export async function createConfiguredD1ApplicationRuntime(
     requestCanonicalizationProfile: FILES_OPERATION_KEY_PROFILES.requestCanonicalization,
     read: files
   });
+  const programVocabularyReadOperations = createProgramVocabularyReadOperationModule({
+    workspaceId,
+    readPolicy: PROGRAM_VOCABULARY_READ_ACCESS_POLICY,
+    currentAuthority,
+    currentEvent: reads,
+    snapshotRead: programVocabulary,
+    clock,
+    ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+    authorityPrincipalKeyProfile:
+      PROGRAM_VOCABULARY_OPERATION_KEY_PROFILES.authorityPrincipal,
+    scopePartitionProfile: PROGRAM_VOCABULARY_OPERATION_KEY_PROFILES.scopePartition,
+    requestCanonicalizationProfile:
+      PROGRAM_VOCABULARY_OPERATION_KEY_PROFILES.requestCanonicalization
+  });
   const workspaceTeamMutationDomain = cryptoProfiles.withPersistentHmacKeySelection(
     'security.workspace-invitation-lookup',
     (selection) => createD1WorkspaceTeamMutationEffectDomainRegistration({
@@ -663,7 +702,8 @@ export async function createConfiguredD1ApplicationRuntime(
       workspaceOverviewOperations,
       workspaceTeamOperations,
       apiKeyOperations,
-      fileReadOperations
+      fileReadOperations,
+      programVocabularyReadOperations
     ]),
     read: {
       operationalTrace: { emit() {} },

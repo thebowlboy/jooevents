@@ -121,6 +121,7 @@ describe('configured D1 application HTTP slice', () => {
       'field_registry.snapshot.read',
       'file.overview.read',
       'operation.history.list',
+      'program_vocabulary.snapshot.read',
       'task.board.read',
       'task.mutation',
       'template.artifact.change',
@@ -154,6 +155,15 @@ describe('configured D1 application HTTP slice', () => {
     expect(initialFiles.status, await initialFiles.clone().text()).toBe(200);
     expect(await initialFiles.json()).toMatchObject({
       kind: 'outcome', outcome: { class: 'conflict', kind: 'file.event_required' }
+    });
+    const initialVocabulary = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/program-vocabulary`, { headers }),
+      environment()
+    );
+    expect(initialVocabulary.status, await initialVocabulary.clone().text()).toBe(200);
+    expect(await initialVocabulary.json()).toMatchObject({
+      kind: 'outcome',
+      outcome: { class: 'conflict', kind: 'program_vocabulary.event_required' }
     });
     const initialDownload = await handleRequest(
       new Request(`${baseUrl}/api/events/current/files/download/${uuid(709)}`, { headers }),
@@ -233,6 +243,65 @@ describe('configured D1 application HTTP slice', () => {
     const linkAttachmentId = uuid(711);
     const scope = { workspaceId, eventId };
     const assetBytes = new TextEncoder().encode('speaker guide');
+    const roomId = uuid(713);
+    const trackId = uuid(714);
+    const formatId = uuid(715);
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO program_vocabulary_sets
+        (workspace_id,event_id,set_version,created_by_user_id,created_at_ms,
+         updated_by_user_id,updated_at_ms) VALUES (?,?,2,?,?,?,?)`)
+        .bind(workspaceId, eventId, userId, recordedAtMs, userId, recordedAtMs),
+      env.DB.prepare(`INSERT INTO program_vocabulary_rooms
+        (workspace_id,event_id,id,name,capacity,status,version,created_by_user_id,
+         created_at_ms,updated_by_user_id,updated_at_ms)
+         VALUES (?,?,?,'Auditorium',450,'active',1,?,?,?,?)`)
+        .bind(workspaceId, eventId, roomId, userId, recordedAtMs, userId, recordedAtMs),
+      env.DB.prepare(`INSERT INTO program_vocabulary_tracks
+        (workspace_id,event_id,id,name,status,version,created_by_user_id,created_at_ms,
+         updated_by_user_id,updated_at_ms)
+         VALUES (?,?,?,'Architecture','active',1,?,?,?,?)`)
+        .bind(workspaceId, eventId, trackId, userId, recordedAtMs, userId, recordedAtMs),
+      env.DB.prepare(`INSERT INTO program_vocabulary_formats
+        (workspace_id,event_id,id,name,status,version,created_by_user_id,created_at_ms,
+         updated_by_user_id,updated_at_ms)
+         VALUES (?,?,?,'Talk','retired',1,?,?,?,?)`)
+        .bind(workspaceId, eventId, formatId, userId, recordedAtMs, userId, recordedAtMs)
+    ]);
+    const vocabulary = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/program-vocabulary`, { headers }),
+      environment()
+    );
+    expect(vocabulary.status, await vocabulary.clone().text()).toBe(200);
+    expect(await vocabulary.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        schemaVersion: 1,
+        scope: { workspaceId, eventId },
+        setVersion: 2,
+        rooms: [{
+          id: roomId,
+          name: 'Auditorium',
+          capacity: 450,
+          status: 'active',
+          usage: { current: 0, historicalPins: 0 },
+          deleteEligibility: { kind: 'eligible' }
+        }],
+        tracks: [{
+          id: trackId,
+          name: 'Architecture',
+          status: 'active',
+          usage: { current: 0, historicalPins: 0 },
+          deleteEligibility: { kind: 'eligible' }
+        }],
+        formats: [{
+          id: formatId,
+          name: 'Talk',
+          status: 'retired',
+          usage: { current: 0, historicalPins: 0 },
+          deleteEligibility: { kind: 'eligible' }
+        }]
+      }
+    });
     const asset = {
       schemaVersion: 1, id: assetId, scope,
       uploader: { kind: 'operator_user', userId },
