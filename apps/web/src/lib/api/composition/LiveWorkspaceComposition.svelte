@@ -45,6 +45,8 @@
 	import { createTemplatePublicationLivePort } from '$lib/api/template-publication-live';
 	import { createLiveEmbedsPagePort } from '$lib/api/embeds-page-port.live';
 	import { createWorkspaceTeamLiveClient } from '$lib/api/operations/workspace-team-live';
+	import { createEventLiveClient } from '$lib/api/operations/event-live';
+	import { createWorkspaceShellSummaryLivePort } from '$lib/api/operations/workspace-shell-summary-live';
 	import { createWorkspaceSenderIdentityLiveClient } from '$lib/api/operations/workspace-sender-identity-live';
 	import { createLiveSenderIdentitySettingsPort } from '$lib/api/sender-identity-settings-port';
 	import { createEventSettingsWorkspaceAdapter } from '$lib/api/event-settings-workspace-adapter';
@@ -52,8 +54,12 @@
 	import { createProgramVocabularySettingsAdapter } from '$lib/api/program-vocabulary-settings-adapter';
 	import { createWorkspaceTeamSettingsPort } from '$lib/api/workspace-team-settings-adapter';
 	import { createLiveSettingsPagePort } from '$lib/api/settings-page-port';
+	import { createLiveApiKeysPagePort } from '$lib/api/api-keys-page-port.live';
 	import { createLiveAgentActionsPagePort } from '$lib/api/agent-actions-page-port';
-	import { createLiveWorkspaceShellPort } from '$lib/api/workspace-shell-live';
+	import {
+		createLiveWorkspaceEventCollection,
+		createLiveWorkspaceShellPort
+	} from '$lib/api/workspace-shell-live';
 	import {
 		createLivePulsePagePort,
 		createPulseHistoryLivePort
@@ -78,7 +84,18 @@
 	const overviewRead = createWorkspaceOverviewLivePort({ manifest: initial.manifest });
 	const eventProgram = setEventProgramPort(createLiveEventProgramPort({ manifest: initial.manifest }));
 	const overview = createLiveOverviewPagePort({ overview: overviewRead, event: eventProgram.event });
-	const shell = createLiveWorkspaceShellPort({ user: initial.user, overview });
+	const shellEvents = createEventLiveClient({ manifest: initial.manifest });
+	const shell = createLiveWorkspaceShellPort({
+		user: initial.user,
+		overview,
+		shellSummary: createWorkspaceShellSummaryLivePort({ manifest: initial.manifest }),
+		events: createLiveWorkspaceEventCollection({
+			events: shellEvents,
+			// The same guarded create the first-run panel uses, so one Event is
+			// created one way whichever control started it.
+			createEvent: overview.createEvent
+		})
+	});
 	const communicationsReadiness = createLiveCommunicationsReadinessPagePort({
 		provider: createCommunicationsProviderReadLivePort({ manifest: initial.manifest })
 	});
@@ -130,7 +147,8 @@
 		fields,
 		senderIdentity: createLiveSenderIdentitySettingsPort({
 			client: createWorkspaceSenderIdentityLiveClient({ manifest: initial.manifest })
-		})
+		}),
+		apiKeys: createLiveApiKeysPagePort({ manifest: initial.manifest })
 	});
 
 	// The joined program aggregates share one canonical core per concern:

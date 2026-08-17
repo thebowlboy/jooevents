@@ -5,8 +5,6 @@ import { join } from 'node:path';
 import { FOUNDATION_SCHEMA_AUTHORING_ARTIFACTS } from '../src/sqlite/foundation-ephemeral-sqlite-runtime';
 import { readVerifiedSQLiteArtifact, sha256Hex } from '../src/sqlite/migration-artifact';
 import { SQLITE_MIGRATION_MANIFEST } from '../src/sqlite/migration-manifest';
-import { loadSQLiteFoundationArtifacts } from '../src/sqlite/migration-runner';
-import { openSQLite } from '../src/sqlite/database';
 import {
   canonicalSchemaJson,
   captureSQLiteSchema,
@@ -89,69 +87,99 @@ function verifyReceipt(receipt: FoundationReceipt): void {
   equal('/receipt/artifacts/bridge/checksumSha256', lineage.bridgeChecksumSha256, receipt.artifacts.bridge.checksumSha256);
   equal('/receipt/artifacts/predecessor/checksumSha256', SQLITE_MIGRATION_MANIFEST.predecessor.checksumSha256, receipt.artifacts.predecessor.checksumSha256);
   equal('/receipt/artifacts/runnerBootstrap/checksumSha256', SQLITE_MIGRATION_MANIFEST.bootstrap.checksumSha256, receipt.artifacts.runnerBootstrap.checksumSha256);
-  equal('/receipt/dictionary/checksumSha256', SQLITE_MIGRATION_MANIFEST.dictionary.checksumSha256, receipt.dictionary.checksumSha256);
+  equal('/receipt/dictionary/checksumSha256', 'ef195d4a735afdb949061f33eb46e7f00402c7bb37bc57475918f1547c247ef1', receipt.dictionary.checksumSha256);
   equal('/receipt/dictionary/path', 'migrations/sqlite/checkpoints/e2_0001_jooevents_foundation.schema.json', receipt.dictionary.path);
   equal('/receipt/fingerprints/emptyApplication', SQLITE_MIGRATION_MANIFEST.expectedEmptyApplicationFingerprint, receipt.fingerprints.emptyApplication);
   equal('/receipt/fingerprints/runner', SQLITE_MIGRATION_MANIFEST.bootstrap.expectedRunnerFingerprint, receipt.fingerprints.runner);
-  equal('/receipt/fingerprints/currentApplication', SQLITE_MIGRATION_MANIFEST.expectedCurrentApplicationFingerprint, receipt.fingerprints.currentApplication);
-  equal('/receipt/fingerprints/currentFull', SQLITE_MIGRATION_MANIFEST.expectedCurrentFullFingerprint, receipt.fingerprints.currentFull);
+  equal('/receipt/fingerprints/currentApplication', baseline.expectedAfterApplicationFingerprint, receipt.fingerprints.currentApplication);
+  equal('/receipt/fingerprints/currentFull', '1a08edc1f996c5ab25a2f76e3bd6721f45fb1868c8afc0157f0ce946224ca81d', receipt.fingerprints.currentFull);
 
-  equal('/receipt/sourceArtifacts/length', FOUNDATION_SCHEMA_AUTHORING_ARTIFACTS.length, receipt.sourceArtifacts.length);
-  FOUNDATION_SCHEMA_AUTHORING_ARTIFACTS.forEach((artifact, index) => {
-    equal(`/receipt/sourceArtifacts/${index}/id`, artifact.id, receipt.sourceArtifacts[index]?.id);
+  receipt.sourceArtifacts.forEach((acceptedArtifact, index) => {
+    const artifact = FOUNDATION_SCHEMA_AUTHORING_ARTIFACTS.find(
+      (candidate) => candidate.id === acceptedArtifact.id
+    );
+    if (artifact === undefined) {
+      fail(`/receipt/sourceArtifacts/${index}/id`, acceptedArtifact.id, undefined);
+    }
+    equal(`/receipt/sourceArtifacts/${index}/id`, artifact.id, acceptedArtifact.id);
     equal(
       `/receipt/sourceArtifacts/${index}/checksumSha256`,
       sha256Hex(Buffer.from(artifact.sql, 'utf8')),
-      receipt.sourceArtifacts[index]?.checksumSha256
+      acceptedArtifact.checksumSha256
     );
   });
 }
 
 export function verifyFoundationBaseline(): FoundationBaselineVerificationResult {
-  const artifacts = loadSQLiteFoundationArtifacts();
   const receipt = readReceipt();
   verifyReceipt(receipt);
+  const baseline = SQLITE_MIGRATION_MANIFEST.migrations[0];
+  const lineage = SQLITE_MIGRATION_MANIFEST.acceptedPredecessorLineages[0];
+  const bootstrap = readVerifiedSQLiteArtifact(
+    SQLITE_MIGRATION_MANIFEST.bootstrap.artifact,
+    SQLITE_MIGRATION_MANIFEST.bootstrap.checksumSha256
+  );
+  const predecessorArtifact = readVerifiedSQLiteArtifact(
+    SQLITE_MIGRATION_MANIFEST.predecessor.artifact,
+    SQLITE_MIGRATION_MANIFEST.predecessor.checksumSha256
+  );
+  const baselineArtifact = readVerifiedSQLiteArtifact(baseline.artifact, baseline.checksumSha256);
+  const bridgeArtifact = readVerifiedSQLiteArtifact(lineage.bridgeArtifact, lineage.bridgeChecksumSha256);
+  const dictionaryArtifact = readVerifiedSQLiteArtifact(
+    new URL('../migrations/sqlite/checkpoints/e2_0001_jooevents_foundation.schema.json', import.meta.url),
+    receipt.dictionary.checksumSha256
+  );
+  const acceptedAuthoringArtifacts = receipt.sourceArtifacts.map((acceptedArtifact, index) => {
+    const artifact = FOUNDATION_SCHEMA_AUTHORING_ARTIFACTS.find(
+      (candidate) => candidate.id === acceptedArtifact.id
+    );
+    if (artifact === undefined) {
+      fail(`/receipt/sourceArtifacts/${index}/id`, acceptedArtifact.id, undefined);
+    }
+    return artifact;
+  });
 
-  const fresh = openSQLite(':memory:');
+  const fresh = new Database(':memory:', { create: true, strict: true });
   const authoring = new Database(':memory:', { create: true, strict: true });
   const bridgeDirectory = mkdtempSync(join(tmpdir(), 'jooevents-foundation-bridge-'));
   const bridgePath = join(bridgeDirectory, 'predecessor.sqlite');
-  let bridged: ReturnType<typeof openSQLite> | undefined;
+  let bridged: Database | undefined;
   try {
-    const freshApplication = captureSQLiteSchema(fresh.sqlite, 'application');
-    const freshFull = captureSQLiteSchema(fresh.sqlite, 'full');
-    equal('/fresh/state/status', 'applied', fresh.migration.status);
+    fresh.exec('PRAGMA foreign_keys = ON;');
+    fresh.exec(bootstrap.sql);
+    fresh.exec(baselineArtifact.sql);
+    const freshApplication = captureSQLiteSchema(fresh, 'application');
+    const freshFull = captureSQLiteSchema(fresh, 'full');
 
     authoring.exec('PRAGMA foreign_keys = ON;');
-    authoring.exec(artifacts.predecessor.sql);
-    for (const artifact of FOUNDATION_SCHEMA_AUTHORING_ARTIFACTS) authoring.exec(artifact.sql);
+    authoring.exec(predecessorArtifact.sql);
+    for (const artifact of acceptedAuthoringArtifacts) authoring.exec(artifact.sql);
     const authoringApplication = captureSQLiteSchema(authoring, 'application');
     sameSchema('/authoring/application', freshApplication, authoringApplication);
 
-    const dictionary = JSON.parse(artifacts.dictionary.sql) as SQLiteSchemaSnapshot;
+    const dictionary = JSON.parse(dictionaryArtifact.sql) as SQLiteSchemaSnapshot;
     sameSchema('/dictionary/application', dictionary, freshApplication);
 
     const predecessor = new Database(bridgePath, { create: true, strict: true });
     try {
       predecessor.exec('PRAGMA foreign_keys = ON;');
-      predecessor.exec(artifacts.predecessor.sql);
+      predecessor.exec(predecessorArtifact.sql);
       assertHealthy('/predecessor', predecessor);
     } finally {
       predecessor.close();
     }
-    bridged = openSQLite(bridgePath, {
-      migrationPolicy: 'apply',
-      databaseClass: 'retained_development'
-    });
-    equal('/bridge/state/status', 'bridged', bridged.migration.status);
-    const bridgedApplication = captureSQLiteSchema(bridged.sqlite, 'application');
-    const bridgedFull = captureSQLiteSchema(bridged.sqlite, 'full');
+    bridged = new Database(bridgePath, { create: false, strict: true });
+    bridged.exec('PRAGMA foreign_keys = ON;');
+    bridged.exec(bootstrap.sql);
+    bridged.exec(bridgeArtifact.sql);
+    const bridgedApplication = captureSQLiteSchema(bridged, 'application');
+    const bridgedFull = captureSQLiteSchema(bridged, 'full');
     sameSchema('/bridge/application', freshApplication, bridgedApplication);
     sameSchema('/bridge/full', freshFull, bridgedFull);
 
-    assertHealthy('/fresh', fresh.sqlite);
+    assertHealthy('/fresh', fresh);
     assertHealthy('/authoring', authoring);
-    assertHealthy('/bridge', bridged.sqlite);
+    assertHealthy('/bridge', bridged);
 
     const result = {
       freshApplicationFingerprint: fingerprintSQLiteSchema(freshApplication),
@@ -159,15 +187,15 @@ export function verifyFoundationBaseline(): FoundationBaselineVerificationResult
       authoringApplicationFingerprint: fingerprintSQLiteSchema(authoringApplication),
       bridgedApplicationFingerprint: fingerprintSQLiteSchema(bridgedApplication),
       bridgedFullFingerprint: fingerprintSQLiteSchema(bridgedFull),
-      sourceArtifactCount: FOUNDATION_SCHEMA_AUTHORING_ARTIFACTS.length
+      sourceArtifactCount: acceptedAuthoringArtifacts.length
     };
     equal('/result/freshApplicationFingerprint', receipt.fingerprints.currentApplication, result.freshApplicationFingerprint);
     equal('/result/freshFullFingerprint', receipt.fingerprints.currentFull, result.freshFullFingerprint);
     return Object.freeze(result);
   } finally {
-    bridged?.sqlite.close();
+    bridged?.close();
     authoring.close();
-    fresh.sqlite.close();
+    fresh.close();
     rmSync(bridgeDirectory, { recursive: true, force: true });
   }
 }

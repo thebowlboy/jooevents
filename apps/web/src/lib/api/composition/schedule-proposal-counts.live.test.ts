@@ -23,7 +23,7 @@ const correlationId = id(900);
 const sessionA = id(70);
 const sessionB = id(71);
 
-type RowState = 'inbox' | 'set_aside' | 'discarded_recoverable';
+type RowState = 'inbox' | 'set_aside' | 'spam';
 
 /**
  * One canonical triage projection, coherent under the contract's own
@@ -110,8 +110,8 @@ function row(input: {
 			recordedAt: submittedAt
 		},
 		visibleTray:
-			input.state === 'discarded_recoverable'
-				? 'discarded'
+			input.state === 'spam'
+				? 'spam'
 				: input.state === 'set_aside'
 					? 'set_aside'
 					: input.late
@@ -122,7 +122,7 @@ function row(input: {
 
 function page(
 	rows: ReturnType<typeof row>[],
-	trayTotals: { inbox: number; set_aside: number; late: number; discarded: number }
+	trayTotals: { inbox: number; set_aside: number; late: number; spam: number }
 ): SubmissionTriagePageView {
 	const parsed: SubmissionTriageListDto = submissionTriageListSchema.parse({
 		schemaVersion: 1,
@@ -206,16 +206,16 @@ describe('live schedule proposal-counts source', () => {
 			// Two open proposals target session A, in different visible trays.
 			row({ value: 21, state: 'inbox', sessionId: sessionA }),
 			row({ value: 22, state: 'set_aside', sessionId: sessionA }),
-			// A late arrival still in the inbox state counts: late is not discarded.
+			// A late arrival still in the inbox state counts: late is not spam.
 			row({ value: 23, state: 'inbox', sessionId: sessionA, late: true }),
-			// Session B's only proposal is discarded (recoverable) — not open.
-			row({ value: 24, state: 'discarded_recoverable', sessionId: sessionB }),
+			// Session B's only proposal is spam (recoverable) — not open.
+			row({ value: 24, state: 'spam', sessionId: sessionB }),
 			// General-pool submissions target no session.
 			row({ value: 25, state: 'inbox' })
 		];
 		const { source, queries } = sourceOver({
 			kind: 'success',
-			data: page(rows, { inbox: 2, set_aside: 1, late: 1, discarded: 1 }),
+			data: page(rows, { inbox: 2, set_aside: 1, late: 1, spam: 1 }),
 			correlationId
 		});
 
@@ -232,14 +232,14 @@ describe('live schedule proposal-counts source', () => {
 		const rows = [
 			row({ value: 21, state: 'inbox', sessionId: sessionA }),
 			row({ value: 22, state: 'set_aside', sessionId: sessionA }),
-			// Discarded rows never reach the decision read: not open regardless.
-			row({ value: 24, state: 'discarded_recoverable', sessionId: sessionB })
+			// Spam rows never reach the decision read: not open regardless.
+			row({ value: 24, state: 'spam', sessionId: sessionB })
 		];
 		const asked: string[][] = [];
 		const { source } = sourceOver(
 			{
 				kind: 'success',
-				data: page(rows, { inbox: 1, set_aside: 1, late: 0, discarded: 1 }),
+				data: page(rows, { inbox: 1, set_aside: 1, late: 0, spam: 1 }),
 				correlationId
 			},
 			decisionReader([id(22)], asked)
@@ -248,7 +248,7 @@ describe('live schedule proposal-counts source', () => {
 			kind: 'success',
 			data: { [sessionA]: 1 }
 		});
-		// Exactly the session-targeting, non-discarded candidates were read.
+		// Exactly the session-targeting, non-spam candidates were read.
 		expect(asked).toEqual([[id(21), id(22)]]);
 	});
 
@@ -257,7 +257,7 @@ describe('live schedule proposal-counts source', () => {
 		const { source } = sourceOver(
 			{
 				kind: 'success',
-				data: page(rows, { inbox: 1, set_aside: 0, late: 0, discarded: 0 }),
+				data: page(rows, { inbox: 1, set_aside: 0, late: 0, spam: 0 }),
 				correlationId
 			},
 			async () => ({
@@ -278,7 +278,7 @@ describe('live schedule proposal-counts source', () => {
 		// window did not serve, so no fold over the window may claim a total.
 		const { source } = sourceOver({
 			kind: 'success',
-			data: page(rows, { inbox: 2, set_aside: 0, late: 0, discarded: 0 }),
+			data: page(rows, { inbox: 2, set_aside: 0, late: 0, spam: 0 }),
 			correlationId
 		});
 

@@ -27,7 +27,7 @@ const flight: WorkspaceDataset = {
 		},
 		lockedAreas: [],
 		navCounts: {
-			/* Held, not collected-ever: the discarded row is recoverable, not waiting. */
+			/* Held, not collected-ever: the spam row is recoverable, not waiting. */
 			submissions: '13',
 			review: '62%',
 			decisions: { value: '3', tone: 'warning' },
@@ -217,7 +217,7 @@ const flight: WorkspaceDataset = {
 		],
 		trays: [
 			{ kind: 'late', label: 'Late submissions', count: 1, href: '/app/submissions?tray=late' },
-			{ kind: 'discarded', label: 'Spam, recoverable', count: 1, href: '/app/submissions?tray=discarded' },
+			{ kind: 'spam', label: 'Spam, recoverable', count: 1, href: '/app/submissions?tray=spam' },
 			{ kind: 'unresolved-import', label: 'Unresolved import items', count: 4 },
 			{ kind: 'stranded-drafts', label: 'Stranded form drafts', count: 3 },
 			{ kind: 'inbound-mail', label: 'Inbound mail review', count: 2 },
@@ -489,7 +489,7 @@ const flight: WorkspaceDataset = {
 			formatId: 'fmt-talk',
 			submittedAt: daysAgo(14),
 			source: 'cfp',
-			tray: 'discarded',
+			tray: 'spam',
 			decision: 'declined',
 			decidedAt: daysAgo(12),
 			notified: true,
@@ -520,7 +520,7 @@ const flight: WorkspaceDataset = {
 			reviewCount: 3
 		}
 	],
-	submissionTrayTotals: { inbox: 10, 'set-aside': 2, late: 1, discarded: 1 },
+	submissionTrayTotals: { inbox: 10, 'set-aside': 2, late: 1, spam: 1 },
 	/* In here most working days, so the diff worth showing is today's: what
 	   happened yesterday is still in this person's head. */
 	previousVisit: hoursAgo(26),

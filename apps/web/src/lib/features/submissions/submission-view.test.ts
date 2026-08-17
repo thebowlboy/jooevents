@@ -118,7 +118,7 @@ describe('the untracked scope', () => {
 });
 
 describe('the tray scope set', () => {
-	const totals: Record<TrayKey, number> = { inbox: 9, 'set-aside': 3, late: 1, discarded: 4 };
+	const totals: Record<TrayKey, number> = { inbox: 9, 'set-aside': 3, late: 1, spam: 4 };
 
 	test('carries all four members, in funnel order, with their counts', () => {
 		const scopes = trayScopes(totals);
@@ -155,7 +155,7 @@ describe('decision states', () => {
 		expect(decisionStatusFor({ decision: 'undecided', tray: 'inbox' }).label).toBe('Decision needed');
 		expect(decisionStatusFor({ decision: 'undecided', tray: 'late' }).label).toBe('Decision needed');
 		expect(decisionStatusFor({ decision: 'undecided', tray: 'set-aside' }).label).toBe('No decision');
-		expect(decisionStatusFor({ decision: 'undecided', tray: 'discarded' }).label).toBe('No decision');
+		expect(decisionStatusFor({ decision: 'undecided', tray: 'spam' }).label).toBe('No decision');
 	});
 
 	test('a result owed to speakers has one compact state label', () => {
@@ -240,8 +240,8 @@ describe('the decision cell against its group band', () => {
 			status: { key: 'notStarted', label: 'No decision' },
 			notice: false
 		});
-		const discarded = row({ tray: 'discarded', decision: 'accepted', notified: false });
-		expect(decisionCellFor(discarded, 'all')).toEqual({
+		const spam = row({ tray: 'spam', decision: 'accepted', notified: false });
+		expect(decisionCellFor(spam, 'all')).toEqual({
 			status: { key: 'accepted', label: 'Accepted' },
 			notice: true
 		});
@@ -297,7 +297,7 @@ describe('the journey', () => {
 	});
 
 	test('a parked row is not being decided, and the line says so', () => {
-		const steps = journeyOf(row({ tray: 'discarded' }), { round: null });
+		const steps = journeyOf(row({ tray: 'spam' }), { round: null });
 		expect(states(steps)).toEqual(['done', 'skipped', 'skipped', 'skipped', 'skipped']);
 		expect(notes(steps).decided).toBe('Marked as spam — not being decided');
 	});

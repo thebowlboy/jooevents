@@ -1,0 +1,22 @@
+# JooEvents API documentation
+
+> Public guides for organizers, operators, and third-party API integrators. JooEvents does not host an agent-direct surface; API paths in agent examples belong to the organizer's own installation.
+
+## API integrations
+
+- [Connect through the API](https://docs.jooevents.com/agents/quickstart.md): Safely create and configure a key, then orient an external agent.
+- [External API operating model](https://docs.jooevents.com/agents/operating-model.md): Direct reads, human-approved plans, availability, outcomes, and recovery.
+- [External API recipes](https://docs.jooevents.com/agents/recipes.md): Discovery-first call sequences for common agent work.
+
+## Installation and operation
+
+- [Install the browser sample](https://docs.jooevents.com/installation/browser-sample.md): Run the synthetic browser-local sample; it is not a production installation.
+- [Cloudflare demo guide](https://docs.jooevents.com/operator/cloudflare-demo.md): Deploy the synthetic demo with Cloudflare controls.
+
+## Reference
+
+- [Licensing](https://docs.jooevents.com/reference/licensing.md): License information for this release.
+
+## Optional
+
+- [Product walkthrough](https://jooevents.com/): Public product overview.

@@ -16,6 +16,13 @@
         "typescript": "6.0.3",
       },
     },
+    "apps/docs-worker": {
+      "name": "@jooevents/docs-worker",
+      "version": "0.0.0",
+      "devDependencies": {
+        "typescript": "6.0.3",
+      },
+    },
     "apps/server": {
       "name": "@jooevents/server",
       "version": "0.0.0",
@@ -924,6 +931,8 @@
     "@jooevents/decision-operations": ["@jooevents/decision-operations@workspace:packages/decision-operations"],
 
     "@jooevents/demo-worker": ["@jooevents/demo-worker@workspace:apps/demo-worker"],
+
+    "@jooevents/docs-worker": ["@jooevents/docs-worker@workspace:apps/docs-worker"],
 
     "@jooevents/engagement": ["@jooevents/engagement@workspace:packages/engagement"],
 

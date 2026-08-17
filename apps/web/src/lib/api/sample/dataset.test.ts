@@ -5,7 +5,7 @@ import quiet from './quiet';
 import crunch from './crunch';
 
 const aieScenarios = [opening, flight, quiet, crunch];
-const trayKeys = ['inbox', 'set-aside', 'late', 'discarded'] as const;
+const trayKeys = ['inbox', 'set-aside', 'late', 'spam'] as const;
 
 function navNumber(value: string | { value: string }): number {
 	return Number(typeof value === 'string' ? value : value.value);
@@ -90,11 +90,11 @@ describe('AI Engineer demo scenarios', () => {
 	test('direct demo counts resolve to the same fixture rows as their destinations', () => {
 		for (const scenario of aieScenarios) {
 			// The badge counts what the area still has to work through, so a
-			// discarded row — kept, recoverable, and nobody's task — is out of it.
+			// spam row — kept, recoverable, and nobody's task — is out of it.
 			// The Overview's arrival total reads the same population, which is why
 			// the two agree on screen instead of differing by the discard tray.
 			expect(navNumber(scenario.summary.navCounts.submissions!)).toBe(
-				scenario.submissions.filter((submission) => submission.tray !== 'discarded').length
+				scenario.submissions.filter((submission) => submission.tray !== 'spam').length
 			);
 			expect(navNumber(scenario.summary.navCounts.speakers!)).toBe(scenario.speakers.length);
 
@@ -105,9 +105,9 @@ describe('AI Engineer demo scenarios', () => {
 			}
 
 			const lateTray = scenario.summary.trays.find((tray) => tray.kind === 'late');
-			const discardedTray = scenario.summary.trays.find((tray) => tray.kind === 'discarded');
+			const spamTray = scenario.summary.trays.find((tray) => tray.kind === 'spam');
 			expect(lateTray?.count).toBe(scenario.submissionTrayTotals.late);
-			expect(discardedTray?.count).toBe(scenario.submissionTrayTotals.discarded);
+			expect(spamTray?.count).toBe(scenario.submissionTrayTotals.spam);
 
 			const cfp = scenario.forms.find((form) => form.id === 'form-cfp');
 			if (cfp) {

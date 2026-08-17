@@ -384,9 +384,21 @@ function accessDenialReason(input: {
   }
 }
 
-interface ResolvedPermissionRequirement {
+export interface ResolvedPermissionRequirement {
   readonly kind: 'all_of' | 'any_of';
   readonly permissionIds: readonly PermissionId[];
+}
+
+/** Resolves one sealed policy mapping without exposing the catalog's mutable internals. */
+export function resolveOperatorAuthorityPermissionRequirement(input: {
+  readonly catalog: OperatorAuthorityPolicyCatalog;
+  readonly policy: VersionedAccessPolicyRef;
+  readonly scope: ResolvedScope;
+}): ResolvedPermissionRequirement | undefined {
+  const policies = policyCatalogEntries.get(input.catalog);
+  if (!policies) throw new TypeError('Unsealed operator authority policy catalog.');
+  const registration = policies.get(policyKey(input.policy));
+  return registration ? permissionsForScope(registration, input.scope) : undefined;
 }
 
 function permissionsForScope(

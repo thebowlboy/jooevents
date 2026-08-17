@@ -140,7 +140,7 @@ function source(options: SourceOptions = {}): ReadOperationRegistrySource {
         const actor = input.evidence.kind === 'external_mcp'
           ? {
               kind: 'external_mcp_client' as const,
-              oauthClientId: input.evidence.oauthClientId,
+              clientKey: input.evidence.clientKey,
               authorityPrincipalId: 'principal-read-observation'
             }
           : input.evidence.kind === 'app_model'
@@ -356,8 +356,8 @@ function invocation(
           kind: 'external_mcp' as const,
           surface,
           client: { key: clientKey },
-          oauthTokenHandle: 'raw-oauth-secret-canary',
-          oauthClientId: 'client.read-observation'
+          credentialHandle: 'raw-oauth-secret-canary',
+          clientKey: 'client.read-observation'
         }
       : {
           kind: 'app_model' as const,
@@ -594,7 +594,7 @@ describe('read executor observability', () => {
         ...invocation('external_mcp'),
         verifiedEvidence: {
           kind: 'external_mcp', surface: 'external_mcp', client: { key: 'bad-evidence' },
-          oauthClientId: 'client.read-observation'
+          clientKey: 'client.read-observation'
         }
       }],
       ['read_snapshot', { snapshotFailure: true }, invocation('external_mcp')],

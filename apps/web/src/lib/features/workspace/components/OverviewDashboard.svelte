@@ -328,9 +328,9 @@
 		? known.pipeline.some((stage) => stage.availability.kind === 'unavailable')
 		: false;
 
-	/** The tray a discarded proposal is recoverable from, for the arrival panel. */
-	const discardedHref = $derived(
-		summary?.trays.find((tray) => tray.kind === 'discarded')?.href
+	/** The tray a spam proposal is recoverable from, for the arrival panel. */
+	const spamHref = $derived(
+		summary?.trays.find((tray) => tray.kind === 'spam')?.href
 	);
 </script>
 
@@ -570,7 +570,7 @@
 		     weekly rates live on Pulse, whose door is its own rail row — this
 		     band never grows charts of its own. -->
 		{#if summary.arrivals && timezone !== ''}
-			<ArrivalTile arrivals={summary.arrivals} {timezone} {discardedHref} />
+			<ArrivalTile arrivals={summary.arrivals} {timezone} {spamHref} />
 		{/if}
 		{#each summary.stats as stat (stat.label)}
 			<StatTile

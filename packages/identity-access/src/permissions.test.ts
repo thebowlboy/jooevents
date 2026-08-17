@@ -76,3 +76,19 @@ test('registers provider management without silently widening version-one preset
     !Array.from(preset.permissionIds, String).includes('communication.provider.manage')
   )).toBe(true);
 });
+
+test('registers API-key management without silently widening version-one presets', () => {
+  expect(PERMISSIONS.find((permission) => permission.id === 'integration.api.manage'))
+    .toEqual({
+      id: 'integration.api.manage',
+      group: 'integrations',
+      label: 'Manage API keys',
+      description: 'Create, rotate, list, and revoke external agent credentials.',
+      risk: 'consequential',
+      allowedScopes: ['workspace']
+    });
+
+  expect(ROLE_PRESETS.every((preset) =>
+    !Array.from(preset.permissionIds, String).includes('integration.api.manage')
+  )).toBe(true);
+});

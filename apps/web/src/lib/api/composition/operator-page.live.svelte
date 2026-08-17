@@ -58,6 +58,7 @@
 		settings_program: 'Settings',
 		settings_team: 'Settings',
 		settings_email: 'Settings',
+		settings_api_keys: 'Settings',
 		settings_about: 'Settings'
 	});
 </script>

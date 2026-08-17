@@ -116,19 +116,16 @@ export const trayLabels: Record<TrayKey, string> = {
 	   none of them is a decision the submitter ever sees. "Set aside" replaced
 	   "Folded": a coinage that taught nothing, and whose nearest reading —
 	   poker, where you fold your *own* hand — is the reverse of what happens.
-	   "Spam" replaced "Discarded" (owner, 2026-08-15): the pair read as two
-	   near-synonym put-aways, and the fix is widening the words — "Set aside"
-	   stays the judgment-free parking, "Spam" names the junk population and
-	   imports the learned email model, where a filter flags suspects, a human
-	   confirms, and "Not spam" is the ever-available reversal. The canonical
-	   `discarded` identifiers follow in the gated migration packet (Q25
-	   amendment); the tray stays recoverable either way. */
+	   "Set aside" stays the judgment-free parking; "Spam" names the junk
+	   population and uses the familiar email model, where a filter flags
+	   suspects, a human confirms, and "Not spam" is the available reversal.
+	   The tray remains retained and recoverable. */
 	'set-aside': 'Set aside',
 	late: 'Late',
-	discarded: 'Spam'
+	spam: 'Spam'
 };
 
-export const TRAY_ORDER: readonly TrayKey[] = ['inbox', 'set-aside', 'late', 'discarded'];
+export const TRAY_ORDER: readonly TrayKey[] = ['inbox', 'set-aside', 'late', 'spam'];
 
 /** One member of the tray scope set, before the surface attaches its glyph. */
 export interface TrayScope {
@@ -180,7 +177,7 @@ export const decisionStatus: Record<DecisionState, DecisionStatus> = {
  * The decision wording the organizer needs on this row.
  *
  * Inbox and Late are decision-bearing custody: an undecided row there needs
- * the organizer's action. Set aside and Discarded are deliberately outside the
+ * the organizer's action. Set aside and Spam are deliberately outside the
  * decision pass, so "Needs decision" would manufacture an obligation the tray
  * explicitly suspended; those rows keep the neutral "No decision" fact.
  */
@@ -241,7 +238,7 @@ export function noticeAge(
 }
 
 /** The station-group vocabulary the queue renders rows inside. `all` is a flat
- *  tray with no group bands (set-aside, discarded). */
+ *  tray with no group bands (set-aside, spam). */
 export type RowSection = 'review' | 'deciding' | 'notice' | 'done' | 'all';
 
 /** What the Decision cell may say for a row inside a given section. */
@@ -324,7 +321,7 @@ export function journeyOf(
 	} = { round: null }
 ): JourneyStep[] {
 	const decided = row.decision !== 'undecided';
-	const parked = !decided && (row.tray === 'set-aside' || row.tray === 'discarded');
+	const parked = !decided && (row.tray === 'set-aside' || row.tray === 'spam');
 	const target = input.round?.open ? input.round.reviewsPerSubmission : undefined;
 
 	// Reviewed: covered while an open round still owes it reviews; done once

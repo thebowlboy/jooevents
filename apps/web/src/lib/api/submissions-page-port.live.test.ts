@@ -38,7 +38,7 @@ const formVersionId = id(4);
 const trackId = id(11);
 const formatId = id(12);
 
-type RowState = 'inbox' | 'set_aside' | 'discarded_recoverable';
+type RowState = 'inbox' | 'set_aside' | 'spam';
 
 function triageRowDto(input: {
 	readonly value: number;
@@ -118,7 +118,7 @@ function triageRowDto(input: {
 			recordedAt: submittedAt
 		},
 		visibleTray:
-			state === 'discarded_recoverable' ? 'discarded' : state === 'set_aside' ? 'set_aside' : 'inbox'
+			state === 'spam' ? 'spam' : state === 'set_aside' ? 'set_aside' : 'inbox'
 	};
 }
 
@@ -130,7 +130,7 @@ const queryGuard = {
 };
 
 function triagePage(rows: ReturnType<typeof triageRowDto>[], totals: {
-	inbox: number; set_aside: number; late: number; discarded: number;
+	inbox: number; set_aside: number; late: number; spam: number;
 }) {
 	return mapSubmissionTriageList(submissionTriageListSchema.parse({
 		schemaVersion: 1,
@@ -458,7 +458,7 @@ describe('live tuned Submissions page port', () => {
 		const undecided = triageRowDto({ value: 21, source: 'direct_entry' });
 		const decided = triageRowDto({ value: 22, state: 'set_aside' });
 		const page = triagePage([undecided, decided], {
-			inbox: 1, set_aside: 1, late: 0, discarded: 0
+			inbox: 1, set_aside: 1, late: 0, spam: 0
 		});
 		const port = composePort({
 			triage: fakeTriage({ page }),
@@ -484,7 +484,7 @@ describe('live tuned Submissions page port', () => {
 		});
 
 		const served = await port.submissions.list({});
-		expect(served.trayTotals).toEqual({ inbox: 1, 'set-aside': 1, late: 0, discarded: 0 });
+		expect(served.trayTotals).toEqual({ inbox: 1, 'set-aside': 1, late: 0, spam: 0 });
 		const first = served.rows[0]!;
 		expect(first).toMatchObject({
 			id: id(21),
@@ -536,7 +536,7 @@ describe('live tuned Submissions page port', () => {
 		});
 		expect(await port.submissions.list({})).toEqual({
 			rows: [],
-			trayTotals: { inbox: 0, 'set-aside': 0, late: 0, discarded: 0 }
+			trayTotals: { inbox: 0, 'set-aside': 0, late: 0, spam: 0 }
 		});
 	});
 

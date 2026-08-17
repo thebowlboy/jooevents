@@ -258,7 +258,7 @@ export function chooseArrivalWindow(input: {
 
 /**
  * The pulse over a set of arrival instants. `arrivals` is the population the
- * figures speak for — a caller that excludes discarded rows from the total must
+ * figures speak for — a caller that excludes spam rows from the total must
  * exclude them here too, or the header and the breakdown disagree.
  */
 export function summarizeArrivals(input: {

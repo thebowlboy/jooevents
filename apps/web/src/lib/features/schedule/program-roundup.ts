@@ -42,14 +42,14 @@ const placedIds = (schedule: ScheduleState) =>
 	new Set(schedule.placements.map((placement) => placement.sessionId));
 
 /**
- * Open proposals per target session. Discarded submissions stay recoverable
+ * Open proposals per target session. Spam submissions stay recoverable
  * (P2) but are not pending work; every other undecided proposal is.
  */
 export function proposalCounts(submissions: readonly Submission[]): Map<string, number> {
 	const counts = new Map<string, number>();
 	for (const submission of submissions) {
 		if (!submission.targetSessionId) continue;
-		if (submission.decision !== 'undecided' || submission.tray === 'discarded') continue;
+		if (submission.decision !== 'undecided' || submission.tray === 'spam') continue;
 		counts.set(submission.targetSessionId, (counts.get(submission.targetSessionId) ?? 0) + 1);
 	}
 	return counts;

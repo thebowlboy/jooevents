@@ -4,12 +4,21 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeSignature } from 'better-auth/crypto';
 import {
+  assertExternalAgentAuthorityPolicyCatalogCoversOperationRegistry,
   assertOperatorAuthorityPolicyCatalogCoversOperationRegistry,
+  API_KEY_MANAGE_ACCESS_POLICY,
+  API_KEY_MUTATION_REQUEST_HASH_PROFILE,
+  API_KEY_OPERATIONS,
   COMMUNICATION_PROVIDER_MANAGE_ACCESS_POLICY,
   COMMUNICATION_PROVIDER_OPERATIONS,
   composeOperationRegistryModules,
   createAgentActionPlanSurface,
   createAgentActionRunner,
+  createApiKeyOperationModule,
+  createExternalAgentAuthorityResolver,
+  getCompiledEffectOperation,
+  getCompiledReadOperation,
+  resolveOperatorAuthorityPermissionRequirement,
   createApplicationOperationRuntime,
   createRegisteredAgentActionEligibilityCatalog,
   createRegisteredAgentActionExecutor,
@@ -317,6 +326,7 @@ import {
   createFoundationEphemeralSQLiteRuntime,
   createSQLiteBetterAuthDatabase,
   createSQLiteAccessRepositories,
+  createSQLiteOperatorAuthorityPersistence,
   createSQLiteDeadlineDirectEffectDomainRegistration,
   createSQLiteDecisionDirectEffectDomainRegistration,
   createSQLiteEngagementDirectEffectDomainRegistration,
@@ -340,8 +350,14 @@ import {
   SQLiteTemplateAuthoringRepository,
   SQLiteReadImmutableAuditPort,
   SQLiteAgentActionRunRepository,
+  SQLiteApiKeyStore,
+  SQLiteApiKeyManagementReadPort,
+  SQLiteExternalApiIdempotencyStore,
+  SQLiteExternalApiRateLimiter,
+  createSQLiteApiKeyEffectDomainRegistration,
   type EphemeralSQLiteRuntime
 } from '@jooevents/persistence';
+import { createMcpToolRegistry } from '@jooevents/mcp';
 import { SQLiteDeadlineRepository } from '@jooevents/persistence/deadline';
 import {
   SQLiteDecisionCandidateSourceAdapter,
@@ -514,6 +530,8 @@ import {
   type JooEventsAuth
 } from '../auth/better-auth';
 import { createBetterAuthOperatorEvidenceVerifier } from '../auth/operator-evidence';
+import { createApiKeyEvidenceVerifier } from '../auth/api-key-evidence';
+import { ApiKeySecretDeliveryVault } from '../auth/api-key-secret-delivery';
 import { createSQLiteAuthPrincipalReader } from '../auth/principal-reader';
 import { SHARP_FILE_IMAGE_REENCODER } from './file-image-reencoder';
 import type { ServerConfig } from '../config';
@@ -524,6 +542,7 @@ import {
   type MailSenderConfig
 } from '../config/communications';
 import { createHttpApp } from '../http/app';
+import { createExternalAgentApi } from '../http/external-agent-api';
 import { createAgentActionRunsHttpAdapter } from '../http/agent-action-runs';
 import type { EmbedFramingPolicySource } from '../http/embed-security';
 import {
@@ -1123,6 +1142,7 @@ function bootstrapEphemeralOwnerPermissionGrants(input: {
   for (const [permissionId, reason] of [
     ['program.vocabulary.manage', 'Ephemeral live Program Vocabulary owner grant'],
     ['communication.provider.manage', 'Ephemeral live email provider owner grant'],
+    ['integration.api.manage', 'Ephemeral live external API owner grant'],
     // `publication.manage` is minted with no preset carrying it; this
     // explicit reservation override is a bootstrap-only grant so the owner
     // principal can publish in the joined ephemeral runtime.
@@ -2137,6 +2157,10 @@ export async function createEphemeralLiveRuntime(input: {
       policies: Object.freeze([
         Object.freeze({ policy: EVENT_READ_ACCESS_POLICY, permissionId: 'event.read' as const }),
         Object.freeze({
+          policy: API_KEY_MANAGE_ACCESS_POLICY,
+          permissionId: 'integration.api.manage' as const
+        }),
+        Object.freeze({
           policy: WORKSPACE_OVERVIEW_READ_ACCESS_POLICY,
           permissionId: 'event.read' as const
         }),
@@ -2322,6 +2346,64 @@ export async function createEphemeralLiveRuntime(input: {
       clock,
       eventRelationships
     });
+    const apiKeys = new SQLiteApiKeyStore(database.sqlite);
+    const externalAuthorityPersistence = createSQLiteOperatorAuthorityPersistence({
+      sqlite: database.sqlite,
+      workspaceId,
+      eventRelationships
+    });
+    const externalAuthority = createExternalAgentAuthorityResolver({
+      workspaceId,
+      policies: authority.policies,
+      apiKeys,
+      memberships: externalAuthorityPersistence.memberships,
+      authorization: externalAuthorityPersistence.authorization,
+      scopeRelationships: externalAuthorityPersistence.scopeRelationships
+    });
+    const currentAuthority: CurrentAuthorityResolver<InvocationEvidence> = Object.freeze({
+      resolve(
+        resolutionInput: Parameters<CurrentAuthorityResolver<InvocationEvidence>['resolve']>[0]
+      ) {
+        return resolutionInput.lane.kind === 'external_mcp'
+          ? externalAuthority.resolve(resolutionInput)
+          : authority.resolver.resolve(resolutionInput);
+      }
+    });
+    const apiKeyRead = new SQLiteApiKeyManagementReadPort({
+      sqlite: database.sqlite,
+      workspaceId,
+      ...(input.config.apiKeyPolicy === undefined ? {} : { policy: input.config.apiKeyPolicy }),
+      now: () => new Date().toISOString()
+    });
+    const apiKeyOperations = createApiKeyOperationModule({
+      workspaceId,
+      policy: API_KEY_MANAGE_ACCESS_POLICY,
+      currentAuthority,
+      read: apiKeyRead,
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      authorityPrincipalKeyProfile: eventProfiles.authorityPrincipal,
+      scopePartitionProfile: eventProfiles.scopePartition,
+      requestCanonicalizationProfile: eventProfiles.requestCanonicalization,
+      requestHashSealer: createHmacRequestHashSealer({
+        profile: API_KEY_MUTATION_REQUEST_HASH_PROFILE,
+        keyBytes: randomHmacKey()
+      }),
+      idempotencyCredentialProfile: eventProfiles.idempotencyCredential,
+      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
+        profile: eventProfiles.idempotencyCredential,
+        keyBytes: randomHmacKey()
+      })
+    });
+    const apiKeySecretDelivery = new ApiKeySecretDeliveryVault();
+    const apiKeyDomain = createSQLiteApiKeyEffectDomainRegistration({
+      sqlite: database.sqlite,
+      workspaceId,
+      ...(input.config.apiKeyPolicy === undefined ? {} : { policy: input.config.apiKeyPolicy }),
+      now: () => new Date().toISOString(),
+      newApiKeyId: () => crypto.randomUUID(),
+      secretDelivery: apiKeySecretDelivery
+    });
     const requestHashSealer = createHmacRequestHashSealer({
       profile: EVENT_CREATE_REQUEST_HASH_PROFILE,
       keyBytes: randomHmacKey()
@@ -2336,7 +2418,7 @@ export async function createEphemeralLiveRuntime(input: {
         read: EVENT_READ_ACCESS_POLICY,
         manage: EVENT_MANAGE_ACCESS_POLICY
       }),
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEventRead: Object.freeze({
         readCurrent(requestedWorkspaceId: typeof workspaceId) {
           if (requestedWorkspaceId !== workspaceId) {
@@ -2362,7 +2444,7 @@ export async function createEphemeralLiveRuntime(input: {
     const eventListOperations = createEventListReadOperationModule({
       workspaceId,
       readPolicy: EVENT_READ_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       list: Object.freeze({
         readList(requestedWorkspaceId: typeof workspaceId) {
           if (requestedWorkspaceId !== workspaceId) {
@@ -2382,7 +2464,7 @@ export async function createEphemeralLiveRuntime(input: {
     const eventSelectOperations = createEventSelectOperationModule({
       workspaceId,
       managePolicy: EVENT_MANAGE_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       clock,
       ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
       authorityPrincipalKeyProfile: eventProfiles.authorityPrincipal,
@@ -2398,7 +2480,7 @@ export async function createEphemeralLiveRuntime(input: {
     const eventSettingsReadOperations = createEventSettingsReadOperationModule({
       workspaceId,
       readPolicy: EVENT_READ_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentSettingsRead: Object.freeze({
         readCurrent(requestedWorkspaceId: typeof workspaceId) {
           if (requestedWorkspaceId !== workspaceId) {
@@ -2418,7 +2500,7 @@ export async function createEphemeralLiveRuntime(input: {
     const eventSettingsUpdateOperations = createEventSettingsUpdateOperationModule({
       workspaceId,
       managePolicy: EVENT_MANAGE_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       clock,
       ids: Object.freeze({
         newInvocationId: () => parseInvocationId(crypto.randomUUID())
@@ -2436,7 +2518,7 @@ export async function createEphemeralLiveRuntime(input: {
     const workspaceOverviewOperations = createWorkspaceOverviewOperationModule({
       workspaceId,
       policy: WORKSPACE_OVERVIEW_READ_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       overviewRead: createSQLiteWorkspaceOverviewProjection({
         sqlite: database.sqlite,
         areaCatalog: DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG
@@ -2452,7 +2534,7 @@ export async function createEphemeralLiveRuntime(input: {
     const workspaceShellSummaryOperations = createWorkspaceShellSummaryOperationModule({
       workspaceId,
       policy: WORKSPACE_SHELL_SUMMARY_READ_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       read: createSQLiteWorkspaceShellSummaryProjection(database.sqlite),
       clock,
       ids: Object.freeze({
@@ -2486,7 +2568,7 @@ export async function createEphemeralLiveRuntime(input: {
     const operationHistoryOperations = createOperationHistoryReadOperationModule({
       workspaceId,
       policy: WORKSPACE_OVERVIEW_READ_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       read: createSQLiteOperationHistoryReader(database.sqlite),
       clock,
@@ -2502,7 +2584,7 @@ export async function createEphemeralLiveRuntime(input: {
     const templateArtifactReadOperations = createTemplateArtifactReadOperationModule({
       workspaceId,
       readPolicy: EVENT_READ_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentRead: Object.freeze({
         listCurrent(requestedWorkspaceId: typeof workspaceId) {
           const selected = currentEvent.resolveCurrentEvent(requestedWorkspaceId);
@@ -2525,7 +2607,7 @@ export async function createEphemeralLiveRuntime(input: {
     const templateArtifactNativeOperations = createTemplateArtifactNativeOperationModule({
       workspaceId,
       policy: EVENT_MANAGE_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       clock,
       ids: Object.freeze({
@@ -2551,7 +2633,7 @@ export async function createEphemeralLiveRuntime(input: {
     const templateEditOperations = createTemplateEditOperationModule({
       workspaceId,
       policies: { read: EVENT_READ_ACCESS_POLICY, manage: EVENT_MANAGE_ACCESS_POLICY },
-      currentAuthority: authority.resolver,
+      currentAuthority,
       choices: () => templateEditService.choices(),
       clock,
       ids: Object.freeze({
@@ -2646,7 +2728,7 @@ export async function createEphemeralLiveRuntime(input: {
     const organizerCommunicationReadOperations = createOrganizerCommunicationReadOperationModule({
       workspaceId,
       policy: ORGANIZER_COMMUNICATION_DRAFT_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent: organizerCommunicationCurrentEvent,
       read: organizerCommunicationAuthoring,
       clock,
@@ -2657,7 +2739,7 @@ export async function createEphemeralLiveRuntime(input: {
       createOrganizerCommunicationMutationOperationModule({
         workspaceId,
         policy: ORGANIZER_COMMUNICATION_DRAFT_ACCESS_POLICY,
-        currentAuthority: authority.resolver,
+        currentAuthority,
         currentEvent: organizerCommunicationCurrentEvent,
         clock,
         ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
@@ -2683,7 +2765,7 @@ export async function createEphemeralLiveRuntime(input: {
       createCommunicationProviderReadOperationModule({
         workspaceId,
         policy: COMMUNICATION_PROVIDER_MANAGE_ACCESS_POLICY,
-        currentAuthority: authority.resolver,
+        currentAuthority,
         configuration: emailProviderConfiguration,
         readiness: emailProviderReadiness,
         clock,
@@ -2694,7 +2776,7 @@ export async function createEphemeralLiveRuntime(input: {
       workspaceId,
       draftPolicy: ORGANIZER_COMMUNICATION_DRAFT_ACCESS_POLICY,
       sendPolicy: SEND_MESSAGES_DRAFT_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent: organizerCommunicationCurrentEvent,
       adoptionPreparer: communicationSendRuntime.adoptionPreparer,
       clock,
@@ -2713,7 +2795,7 @@ export async function createEphemeralLiveRuntime(input: {
       createCommunicationDeliveryHistoryReadOperationModule({
         workspaceId,
         policy: ORGANIZER_COMMUNICATION_DRAFT_ACCESS_POLICY,
-        currentAuthority: authority.resolver,
+        currentAuthority,
         currentEvent: organizerCommunicationCurrentEvent,
         read: createSQLiteCommunicationDeliveryHistorySource({ sqlite: database.sqlite }),
         clock,
@@ -2821,7 +2903,7 @@ export async function createEphemeralLiveRuntime(input: {
         read: DEADLINE_READ_ACCESS_POLICY,
         manage: DEADLINE_MANAGE_ACCESS_POLICY
       }),
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       deadlineRead: deadlineDirectDomain.deadlineRead,
       clock,
@@ -2940,7 +3022,7 @@ export async function createEphemeralLiveRuntime(input: {
     const releaseNativeOperations = createReleaseNativeOperationModule({
       workspaceId,
       policy: RELEASE_DRAFT_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       clock,
       ids: Object.freeze({
@@ -2966,7 +3048,7 @@ export async function createEphemeralLiveRuntime(input: {
     const releaseOverviewOperations = createReleaseOverviewOperationModule({
       workspaceId,
       readPolicy: RELEASE_DRAFT_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       read: releaseRepository,
       clock,
@@ -3070,7 +3152,7 @@ export async function createEphemeralLiveRuntime(input: {
     const programVocabularyOperations = createProgramVocabularyReadOperationModule({
       workspaceId,
       readPolicy: PROGRAM_VOCABULARY_READ_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       vocabularyRead,
       referenceRegistry,
@@ -3085,7 +3167,7 @@ export async function createEphemeralLiveRuntime(input: {
     const programVocabularyDirectOperations = createProgramVocabularyDirectOperationModule({
       workspaceId,
       managePolicy: PROGRAM_VOCABULARY_MANAGE_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       clock,
       ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
@@ -3102,7 +3184,7 @@ export async function createEphemeralLiveRuntime(input: {
     const programVocabularyMergeOperations = createProgramVocabularyMergeOperationModule({
       workspaceId,
       managePolicy: PROGRAM_VOCABULARY_MANAGE_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       clock,
       ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
@@ -3126,7 +3208,7 @@ export async function createEphemeralLiveRuntime(input: {
         read: SCHEDULE_PLACEMENT_READ_ACCESS_POLICY,
         manage: SCHEDULE_PLACEMENT_MANAGE_ACCESS_POLICY
       }),
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       scheduleRead: schedulePlacementDirectDomain.scheduleRead,
       clock,
@@ -3152,7 +3234,7 @@ export async function createEphemeralLiveRuntime(input: {
         read: SCHEDULE_PLACEMENT_READ_ACCESS_POLICY,
         manage: SCHEDULE_PLACEMENT_MANAGE_ACCESS_POLICY
       }),
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       scheduleRead: schedulePlacementDirectDomain.scheduleRead,
       clock,
@@ -3175,7 +3257,7 @@ export async function createEphemeralLiveRuntime(input: {
     const sessionOperations = createSessionOperationModule({
       workspaceId,
       readPolicy: SESSION_READ_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       clock,
       ids: Object.freeze({
@@ -3189,7 +3271,7 @@ export async function createEphemeralLiveRuntime(input: {
     const sessionDirectOperations = createSessionDirectOperationModule({
       workspaceId,
       managePolicy: SESSION_MANAGE_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       clock,
       ids: Object.freeze({
@@ -3214,7 +3296,7 @@ export async function createEphemeralLiveRuntime(input: {
         read: FIELD_REGISTRY_READ_ACCESS_POLICY,
         manage: FIELD_REGISTRY_MANAGE_ACCESS_POLICY
       }),
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       registryRead: fieldRegistryRepository,
       optionSource: fieldRegistryOptionSource,
@@ -3245,7 +3327,7 @@ export async function createEphemeralLiveRuntime(input: {
         publicOpen: INTAKE_PUBLIC_OPEN_ACCESS_POLICY,
         publicCeremony: INTAKE_PUBLIC_CEREMONY_ACCESS_POLICY
       }),
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       read: Object.freeze({
         listForms: intakeRepository.listForms.bind(intakeRepository),
@@ -3274,7 +3356,7 @@ export async function createEphemeralLiveRuntime(input: {
     const intakeFormWriteOperations = createIntakeFormWriteOperationModule({
       workspaceId,
       policy: INTAKE_EVENT_MANAGE_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       clock,
       ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
@@ -3302,7 +3384,7 @@ export async function createEphemeralLiveRuntime(input: {
         operatorRead: SUBMISSION_TRIAGE_OPERATOR_READ_ACCESS_POLICY,
         externalMcpRead: SUBMISSION_TRIAGE_MCP_READ_ACCESS_POLICY
       }),
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       read: submissionTriageRepository,
       clock,
@@ -3316,7 +3398,7 @@ export async function createEphemeralLiveRuntime(input: {
     const submissionTriageTransitionOperations = createSubmissionTriageTransitionOperationModule({
       workspaceId,
       policy: SUBMISSION_TRIAGE_MANAGE_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       clock,
       ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
@@ -3339,7 +3421,7 @@ export async function createEphemeralLiveRuntime(input: {
       createSubmissionDirectEntryOperationModule({
         workspaceId,
         policy: SUBMISSION_DIRECT_ENTRY_ACCESS_POLICY,
-        currentAuthority: authority.resolver,
+        currentAuthority,
         currentEvent,
         clock,
         ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
@@ -3363,7 +3445,7 @@ export async function createEphemeralLiveRuntime(input: {
         changeRole: WORKSPACE_TEAM_OPERATION_ACCESS.changeRole.policy,
         remove: WORKSPACE_TEAM_OPERATION_ACCESS.remove.policy
       }),
-      currentAuthority: authority.resolver,
+      currentAuthority,
       teamRead: Object.freeze({
         readWorkspaceTeam(requestedWorkspaceId: typeof workspaceId) {
           if (requestedWorkspaceId !== workspaceId) {
@@ -3459,7 +3541,7 @@ export async function createEphemeralLiveRuntime(input: {
         stepBack: REVIEW_STEP_BACK_ACCESS_POLICY,
         evaluate: REVIEW_EVALUATE_ACCESS_POLICY
       }),
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       viewer: reviewViewer,
       repository: reviewRepository,
@@ -3487,7 +3569,7 @@ export async function createEphemeralLiveRuntime(input: {
         stepBack: REVIEW_STEP_BACK_ACCESS_POLICY,
         evaluate: REVIEW_EVALUATE_ACCESS_POLICY
       }),
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       clock,
       ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
@@ -3507,7 +3589,7 @@ export async function createEphemeralLiveRuntime(input: {
     const reviewerRosterOperations = createReviewerRosterOperationModule({
       workspaceId,
       policy: REVIEWER_ROSTER_MANAGE_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       rosterRead: Object.freeze({
         repository: reviewerRosterRepository,
@@ -3531,7 +3613,7 @@ export async function createEphemeralLiveRuntime(input: {
     const decisionOperations = createDecisionOperationModule({
       workspaceId,
       readPolicy: DECISION_READ_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       clock,
       ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
@@ -3543,7 +3625,7 @@ export async function createEphemeralLiveRuntime(input: {
     const decisionDirectOperations = createDecisionDirectOperationModule({
       workspaceId,
       managePolicy: DECISION_MANAGE_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       clock,
       ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
@@ -3563,7 +3645,7 @@ export async function createEphemeralLiveRuntime(input: {
     const engagementOperations = createEngagementOperationModule({
       workspaceId,
       readPolicy: ENGAGEMENT_READ_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       clock,
       ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
@@ -3577,7 +3659,7 @@ export async function createEphemeralLiveRuntime(input: {
     const engagementDirectOperations = createEngagementDirectOperationModule({
       workspaceId,
       managePolicy: ENGAGEMENT_MANAGE_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       clock,
       ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
@@ -3597,7 +3679,7 @@ export async function createEphemeralLiveRuntime(input: {
     const taskBoardOperations = createTaskBoardReadOperationModule({
       workspaceId,
       readPolicy: EVENT_READ_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       tasks: Object.freeze({
         readCurrent(requestedWorkspaceId: typeof workspaceId) {
@@ -3619,7 +3701,7 @@ export async function createEphemeralLiveRuntime(input: {
     const taskMutationOperations = createTaskMutationOperationModule({
       workspaceId,
       managePolicy: TASK_MANAGE_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       clock,
       ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
@@ -4037,7 +4119,7 @@ export async function createEphemeralLiveRuntime(input: {
       // the lane is registered vocabulary — this composition mounts no MCP
       // transport, so nothing serves it yet.
       mcpReadPolicy: FILE_MCP_READ_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       clock,
       ids: filesOperationIds,
@@ -4049,7 +4131,7 @@ export async function createEphemeralLiveRuntime(input: {
     const filesCommandOperations = createFilesCommandOperationModule({
       workspaceId,
       commandPolicy: FILES_COMMAND_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       currentEvent,
       clock,
       ids: filesOperationIds,
@@ -4063,7 +4145,7 @@ export async function createEphemeralLiveRuntime(input: {
     const senderIdentityOperations = createWorkspaceSenderIdentityOperationModule({
       workspaceId,
       policy: WORKSPACE_SENDER_IDENTITY_ACCESS_POLICY,
-      currentAuthority: authority.resolver,
+      currentAuthority,
       read: senderIdentity.read,
       clock,
       ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
@@ -4111,7 +4193,8 @@ export async function createEphemeralLiveRuntime(input: {
       files.effectDomain,
       senderIdentity.effectDomain,
       ...organizerCommunicationAuthoringDomains,
-      ...communicationSendRuntime.effectDomains
+      ...communicationSendRuntime.effectDomains,
+      apiKeyDomain
     ]);
     // The in-transaction authority recheck dispatches by lane: participant
     // invocations re-prove the participant session (without sliding it),
@@ -4135,6 +4218,7 @@ export async function createEphemeralLiveRuntime(input: {
       effectRecheckSource
     );
     const source = composeOperationRegistryModules([
+      apiKeyOperations,
       workspaceShellSummaryOperations,
       workspaceOverviewOperations,
       operationHistoryOperations,
@@ -4213,6 +4297,10 @@ export async function createEphemeralLiveRuntime(input: {
       unitOfWork
     });
     assertOperatorAuthorityPolicyCatalogCoversOperationRegistry({
+      catalog: authority.policies,
+      registry: operations.registry
+    });
+    assertExternalAgentAuthorityPolicyCatalogCoversOperationRegistry({
       catalog: authority.policies,
       registry: operations.registry
     });
@@ -4355,6 +4443,44 @@ export async function createEphemeralLiveRuntime(input: {
       participantOperations: { operations, evidence: participantEvidence },
       requestSerialization
     });
+    const apiKeyManageLane = parseOperationAccessLane({
+      kind: 'operator', surface: 'operator_http', policy: API_KEY_MANAGE_ACCESS_POLICY
+    });
+    app.post('/api/workspace/api-key-secrets/:handle', async (context) => {
+      const handle = context.req.param('handle');
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(handle)) {
+        return context.json({ kind: 'unavailable' as const }, 404);
+      }
+      const verified = await evidence.verify({
+        request: context.req.raw,
+        correlationId: context.get('correlationId' as never) as string,
+        binding: { method: 'POST' } as Parameters<typeof evidence.verify>[0]['binding']
+      });
+      if (verified.kind !== 'verified') {
+        return context.json(
+          { kind: 'unavailable' as const },
+          verified.reason === 'unauthenticated' ? 401 : 403
+        );
+      }
+      const resolution = await authority.resolver.resolve({
+        operation: { ...API_KEY_OPERATIONS.create, effect: 'commit' },
+        evidence: verified.evidence as InvocationEvidence,
+        lane: apiKeyManageLane,
+        scope: Object.freeze({
+          workspaceId,
+          subjects: Object.freeze([{ kind: 'workspace' as const, id: workspaceId }]),
+          resolutionEvidenceIds: Object.freeze(['workspace.current'])
+        }),
+        evaluatedAt: clock.now()
+      });
+      if (resolution.kind !== 'authorized' || resolution.authority.actor.kind !== 'workspace_user') {
+        return context.json({ kind: 'unavailable' as const }, 403);
+      }
+      const secret = apiKeySecretDelivery.consume(handle, resolution.authority.actor.userId);
+      return secret === undefined
+        ? context.json({ kind: 'unavailable' as const }, 404)
+        : context.json({ kind: 'delivered' as const, secret });
+    });
     const agentActionRuns = new SQLiteAgentActionRunRepository(
       database.sqlite,
       ({ approval }) => approval.approvedByPrincipalId.length > 0
@@ -4367,6 +4493,274 @@ export async function createEphemeralLiveRuntime(input: {
       catalog: agentActionCatalog,
       now: () => new Date().toISOString()
     });
+    const externalToolRegistry = await createMcpToolRegistry(
+      operations.registry.safeManifest,
+      { enableCommitTools: false }
+    );
+    const externalRateLimiter = new SQLiteExternalApiRateLimiter(database.sqlite);
+    const externalIdempotency = new SQLiteExternalApiIdempotencyStore(database.sqlite);
+    app.route('/', createExternalAgentApi({
+      operations,
+      tools: externalToolRegistry,
+      evidence: createApiKeyEvidenceVerifier({
+        workspaceId,
+        apiKeys,
+        now: () => new Date().toISOString(),
+        ownerIsCurrent(key) {
+          return database.sqlite.query<{ readonly current: number }, [string, string]>(`
+            SELECT 1 AS current FROM workspace_memberships
+             WHERE workspace_id=? AND user_id=? AND status='active'
+          `).get(key.workspaceId, key.ownerUserId)?.current === 1;
+        }
+      }),
+      owner: Object.freeze({
+        displayName(key) {
+          return database.sqlite.query<{ readonly display_name: string }, [string]>(
+            'SELECT display_name FROM users WHERE id = ?'
+          ).get(key.ownerUserId)?.display_name ?? 'Unknown user';
+        }
+      }),
+      rateLimiter: externalRateLimiter,
+      idempotency: externalIdempotency,
+      idempotencySealer: idempotencyCredentialSealer,
+      plans: agentActionPlanSurface,
+      planRepository: agentActionRuns,
+      planOperations: agentActionCatalog.entries,
+      now: () => new Date().toISOString(),
+      reviewUrl: (batchId) => `/app/approvals?batchId=${encodeURIComponent(batchId)}`,
+      clientAddress(request) {
+        return request.headers.get('cf-connecting-ip')
+          ?? request.headers.get('x-real-ip')
+          ?? 'unavailable';
+      },
+      ...(input.config.externalAgentApiPolicy === undefined
+        ? {}
+        : { policy: input.config.externalAgentApiPolicy }),
+      async toolAvailability(key, tool) {
+        const compiled = getCompiledReadOperation(
+          operations.registry,
+          tool.contract.operation.name,
+          tool.contract.operation.version,
+          'external_mcp'
+        );
+        const lane = compiled?.operation.definition.accessLanes.find(
+          (lane) => lane.kind === 'external_mcp' && lane.surface === 'external_mcp'
+        );
+        if (!compiled || !lane) {
+          return { state: 'locked_owner' as const, permissionIds: ['event.read'], note: 'The operation policy is not available in this workspace.' };
+        }
+        const current = events.readCurrentEventState(workspaceId)?.currentEvent;
+        const scope = Object.freeze({
+          workspaceId,
+          ...(current ? { eventId: parseEventId(current.id) } : {}),
+          subjects: Object.freeze([
+            Object.freeze({ kind: 'workspace' as const, id: workspaceId }),
+            ...(current ? [Object.freeze({ kind: 'event' as const, id: parseEventId(current.id) })] : [])
+          ]),
+          resolutionEvidenceIds: Object.freeze(['external-tool-catalog.current'])
+        });
+        const requirement = resolveOperatorAuthorityPermissionRequirement({
+          catalog: authority.policies,
+          policy: lane.policy,
+          scope
+        });
+        if (!requirement) {
+          return { state: 'locked_owner' as const, permissionIds: ['event.read'], note: 'The owner cannot reach this tool in the current scope.' };
+        }
+        const relationship = await externalAuthorityPersistence.scopeRelationships.validate({
+          userId: key.ownerUserId, scope, evaluatedAt: clock.now()
+        });
+        const membership = await externalAuthorityPersistence.memberships.find(workspaceId, key.ownerUserId);
+        const roles = await externalAuthorityPersistence.authorization.listRoles(workspaceId);
+        const assignments = await externalAuthorityPersistence.authorization.listAssignments(workspaceId, key.ownerUserId);
+        const overrides = await externalAuthorityPersistence.authorization.listOverrides(workspaceId, key.ownerUserId);
+        const requestedScope = current
+          ? { kind: 'event' as const, workspaceId, eventId: parseEventId(current.id) }
+          : { kind: 'workspace' as const, workspaceId };
+        const decisions = requirement.permissionIds.map((permissionId) => ({
+          permissionId,
+          ownerAllows: relationship.kind === 'valid' && evaluateAccess({
+            userId: key.ownerUserId, permissionId, requestedScope,
+            ...(membership ? { membership } : {}), roles, assignments, overrides,
+            now: clock.now()
+          }).allowed
+        }));
+        const ownerAllows = requirement.kind === 'all_of'
+          ? decisions.every((decision) => decision.ownerAllows)
+          : decisions.some((decision) => decision.ownerAllows);
+        if (!ownerAllows) return {
+          state: 'locked_owner' as const,
+          permissionIds: [...requirement.permissionIds],
+          note: 'The key owner does not currently hold the permission required by this tool.'
+        };
+        const keyAllows = requirement.kind === 'all_of'
+          ? decisions.every((decision) => decision.ownerAllows && key.permissionIds.includes(decision.permissionId))
+          : decisions.some((decision) => decision.ownerAllows && key.permissionIds.includes(decision.permissionId));
+        return keyAllows
+          ? { state: 'active' as const }
+          : {
+              state: 'locked_scope' as const,
+              permissionIds: [...requirement.permissionIds],
+              note: 'This key does not carry the permission required by this tool.',
+              humanDoor: '/app/settings/api-keys' as const
+            };
+      },
+      async planOperationAvailability(key, operation, planScope) {
+        const planEventId = planScope.eventId === undefined
+          ? undefined
+          : parseEventId(planScope.eventId);
+        if (key.eventIds.length > 0
+            && (planEventId === undefined || !key.eventIds.includes(planEventId))) {
+          return {
+            state: 'locked_scope' as const,
+            permissionIds: ['event.read'],
+            note: 'This key is not scoped to the plan event.',
+            humanDoor: '/app/settings/api-keys' as const
+          };
+        }
+        const manifest = operations.registry.safeManifest.operations.find((candidate) =>
+          candidate.name === operation.operationName && candidate.version === operation.operationVersion
+        );
+        const bindingSurface = manifest?.enabledBindings[0]?.surface;
+        if (!manifest || !bindingSurface || manifest.effect === 'read') return {
+          state: 'locked_owner' as const,
+          permissionIds: ['event.manage'],
+          note: 'The operation policy is not available in this workspace.'
+        };
+        const compiled = getCompiledEffectOperation(
+          operations.registry, operation.operationName, operation.operationVersion, bindingSurface
+        );
+        const lane = compiled?.operation.definition.accessLanes.find((candidate) =>
+          candidate.kind === 'operator'
+        );
+        if (!compiled || !lane) return {
+          state: 'locked_owner' as const,
+          permissionIds: ['event.manage'],
+          note: 'The operation authority lane is not available in this workspace.'
+        };
+        const scope = Object.freeze({
+          workspaceId,
+          ...(planEventId === undefined ? {} : { eventId: planEventId }),
+          subjects: Object.freeze(planScope.subjects.map((subject) => Object.freeze({
+            kind: subject.type, id: subject.id
+          }))),
+          resolutionEvidenceIds: Object.freeze(['external-plan.current'])
+        });
+        const requirement = resolveOperatorAuthorityPermissionRequirement({
+          catalog: authority.policies,
+          policy: lane.policy,
+          scope: scope as Parameters<typeof resolveOperatorAuthorityPermissionRequirement>[0]['scope']
+        });
+        if (!requirement) return {
+          state: 'locked_owner' as const,
+          permissionIds: ['event.manage'],
+          note: 'The owner cannot reach this operation in the requested scope.'
+        };
+        const relationship = await externalAuthorityPersistence.scopeRelationships.validate({
+          userId: key.ownerUserId,
+          scope: scope as Parameters<typeof externalAuthorityPersistence.scopeRelationships.validate>[0]['scope'],
+          evaluatedAt: clock.now()
+        });
+        const membership = await externalAuthorityPersistence.memberships.find(workspaceId, key.ownerUserId);
+        const roles = await externalAuthorityPersistence.authorization.listRoles(workspaceId);
+        const assignments = await externalAuthorityPersistence.authorization.listAssignments(workspaceId, key.ownerUserId);
+        const overrides = await externalAuthorityPersistence.authorization.listOverrides(workspaceId, key.ownerUserId);
+        const requestedScope = planEventId === undefined
+          ? { kind: 'workspace' as const, workspaceId }
+          : { kind: 'event' as const, workspaceId, eventId: planEventId };
+        const decisions = requirement.permissionIds.map((permissionId) => ({
+          permissionId,
+          ownerAllows: relationship.kind === 'valid' && evaluateAccess({
+            userId: key.ownerUserId, permissionId, requestedScope,
+            ...(membership ? { membership } : {}), roles, assignments, overrides,
+            now: clock.now()
+          }).allowed
+        }));
+        const ownerAllows = requirement.kind === 'all_of'
+          ? decisions.every((decision) => decision.ownerAllows)
+          : decisions.some((decision) => decision.ownerAllows);
+        if (!ownerAllows) return {
+          state: 'locked_owner' as const,
+          permissionIds: [...requirement.permissionIds],
+          note: 'The key owner does not currently hold the permission required by this operation.'
+        };
+        const keyAllows = requirement.kind === 'all_of'
+          ? decisions.every((decision) => decision.ownerAllows && key.permissionIds.includes(decision.permissionId))
+          : decisions.some((decision) => decision.ownerAllows && key.permissionIds.includes(decision.permissionId));
+        return keyAllows
+          ? { state: 'active' as const }
+          : {
+              state: 'locked_scope' as const,
+              permissionIds: [...requirement.permissionIds],
+              note: 'This key does not carry the permission required by this operation.',
+              humanDoor: '/app/settings/api-keys' as const
+            };
+      },
+      async dormantPermissionIds(key) {
+        const current = events.readCurrentEventState(workspaceId)?.currentEvent;
+        const membership = await externalAuthorityPersistence.memberships.find(workspaceId, key.ownerUserId);
+        const roles = await externalAuthorityPersistence.authorization.listRoles(workspaceId);
+        const assignments = await externalAuthorityPersistence.authorization.listAssignments(workspaceId, key.ownerUserId);
+        const overrides = await externalAuthorityPersistence.authorization.listOverrides(workspaceId, key.ownerUserId);
+        const requestedScope = current
+          ? { kind: 'event' as const, workspaceId, eventId: parseEventId(current.id) }
+          : { kind: 'workspace' as const, workspaceId };
+        return key.permissionIds.filter((permissionId) => !evaluateAccess({
+          userId: key.ownerUserId, permissionId, requestedScope,
+          ...(membership ? { membership } : {}), roles, assignments, overrides,
+          now: clock.now()
+        }).allowed);
+      },
+      async pendingAttention(key, pendingCorrelationId) {
+        const verifiedEvidence = Object.freeze({
+          kind: 'external_mcp' as const,
+          surface: 'external_mcp' as const,
+          client: Object.freeze({ key: 'api.v1.pending' }),
+          credentialHandle: key.apiKeyId,
+          clientKey: `api-key:${key.apiKeyId}`
+        });
+        const [drafts, deliveries] = await Promise.all([
+          operations.readExecutor.execute({
+            operationName: 'list_message_drafts', operationVersion: 1,
+            surface: 'external_mcp', correlationId: pendingCorrelationId,
+            businessInput: { limit: 100 }, verifiedEvidence
+          }),
+          operations.readExecutor.execute({
+            operationName: 'get_delivery_history', operationVersion: 1,
+            surface: 'external_mcp', correlationId: pendingCorrelationId,
+            businessInput: { limit: 100 }, verifiedEvidence
+          })
+        ]);
+        if (drafts.kind !== 'success' || deliveries.kind !== 'success') return [];
+        const draftRows = (drafts.data as { readonly rows?: readonly {
+          readonly state?: string;
+          readonly authoring?: { readonly state?: string };
+        }[] }).rows ?? [];
+        const deliveryRows = (deliveries.data as { readonly rows?: readonly {
+          readonly state?: string;
+        }[] }).rows ?? [];
+        const draftsAwaitingSend = draftRows.filter((draft) =>
+          draft.state === 'active' && draft.authoring?.state === 'ready'
+        ).length;
+        const inFlightStates = new Set([
+          'authorized', 'deferred', 'materialized', 'attempting',
+          'accepted', 'delayed', 'acceptance_unknown'
+        ]);
+        const batchesInFlight = deliveryRows.filter((batch) =>
+          batch.state !== undefined && inFlightStates.has(batch.state)
+        ).length;
+        if (draftsAwaitingSend === 0 && batchesInFlight === 0) return [];
+        const draftText = `${draftsAwaitingSend} message draft${draftsAwaitingSend === 1 ? '' : 's'} ${draftsAwaitingSend === 1 ? 'is' : 'are'} waiting for a send decision`;
+        const batchText = `${batchesInFlight} sent batch${batchesInFlight === 1 ? '' : 'es'} still ${batchesInFlight === 1 ? 'has' : 'have'} deliveries in flight`;
+        return [{
+          area: 'communications' as const,
+          summary: `${draftText}, and ${batchText}.`,
+          counts: { draftsAwaitingSend, batchesInFlight },
+          tools: ['list_message_drafts', 'get_delivery_history'] as const,
+          humanDoor: '/app/messages' as const
+        }];
+      }
+    }));
     app.route('/', createAgentActionRunsHttpAdapter({
       repository: agentActionRuns,
       allowedOrigins: [input.config.baseUrl, ...input.config.trustedOrigins],

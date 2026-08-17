@@ -17,6 +17,7 @@ describe('the settings registry', () => {
 			'program',
 			'team',
 			'email',
+			'api_keys',
 			'about'
 		]);
 		expect(settingsSections.map((section) => section.label)).toEqual([
@@ -24,6 +25,7 @@ describe('the settings registry', () => {
 			'Program',
 			'Team',
 			'Email',
+			'API keys',
 			'About'
 		]);
 		expect(settingsSections.map((section) => section.href)).toEqual([
@@ -31,6 +33,7 @@ describe('the settings registry', () => {
 			'/app/settings/program',
 			'/app/settings/team',
 			'/app/settings/email',
+			'/app/settings/api-keys',
 			'/app/settings/about'
 		]);
 	});
@@ -81,6 +84,8 @@ describe('the on-this-page rail', () => {
 		expect(settingsRail(settingsSectionByKey('team')).visible).toBe(false);
 		// Email's two editable values commit as one unit, so they are one panel.
 		expect(settingsRail(settingsSectionByKey('email')).visible).toBe(false);
+		// One panel, one anchor: the key creation flow lives in a dialog.
+		expect(settingsRail(settingsSectionByKey('api_keys')).visible).toBe(false);
 	});
 
 	test('an unresolved section offers nothing rather than an empty frame', () => {

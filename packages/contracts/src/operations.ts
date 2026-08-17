@@ -213,6 +213,7 @@ export const operationTransportErrorCodeSchema = z.enum([
   'invalid_request',
   'unauthenticated',
   'forbidden',
+  'rate_limited',
   'internal_error'
 ]);
 

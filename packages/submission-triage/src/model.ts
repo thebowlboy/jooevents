@@ -190,8 +190,8 @@ export function submissionTriageVisibleTray(input: {
   readonly arrival: Pick<SubmissionArrivalFactDto, 'classification'>;
 }): SubmissionTriageVisibleTray {
   return submissionTriageVisibleTraySchema.parse(
-    input.head.state === 'discarded_recoverable'
-      ? 'discarded'
+    input.head.state === 'spam'
+      ? 'spam'
       : input.head.state === 'set_aside'
         ? 'set_aside'
         : input.arrival.classification === 'late'
@@ -399,7 +399,7 @@ export function projectSubmissionTriageList(input: {
     inbox: rows.filter((row) => row.visibleTray === 'inbox').length,
     set_aside: rows.filter((row) => row.visibleTray === 'set_aside').length,
     late: rows.filter((row) => row.visibleTray === 'late').length,
-    discarded: rows.filter((row) => row.visibleTray === 'discarded').length
+    spam: rows.filter((row) => row.visibleTray === 'spam').length
   };
   const scoped = rows.filter((row) =>
     (query.tray === undefined || row.visibleTray === query.tray)
@@ -451,16 +451,16 @@ function nextHead(input: {
   const { action, before } = input;
   const state = action === 'set_aside'
     ? 'set_aside'
-    : action === 'discard_recoverable'
-      ? 'discarded_recoverable'
+    : action === 'mark_spam'
+      ? 'spam'
       : 'inbox';
   const allowed = action === 'set_aside'
     ? before.state === 'inbox'
     : action === 'return_to_inbox'
       ? before.state === 'set_aside'
-      : action === 'discard_recoverable'
-        ? before.state !== 'discarded_recoverable'
-        : before.state === 'discarded_recoverable';
+      : action === 'mark_spam'
+        ? before.state !== 'spam'
+        : before.state === 'spam';
   if (!allowed) throw new SubmissionTriageDomainError('invalid_transition');
   return submissionTriageHeadSchema.parse({
     ...before,

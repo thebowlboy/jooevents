@@ -47,14 +47,14 @@ function addCanonicalOrderIssues(
 export const submissionTriageStateSchema = z.enum([
   'inbox',
   'set_aside',
-  'discarded_recoverable'
+  'spam'
 ]);
 
 export const submissionTriageVisibleTraySchema = z.enum([
   'inbox',
   'set_aside',
   'late',
-  'discarded'
+  'spam'
 ]);
 
 export const submissionArrivalClassificationSchema = z.enum(['on_time', 'late']);
@@ -211,8 +211,8 @@ export const submissionTriageProjectionSchema = z.strictObject({
       || row.arrival.submittedAt !== row.source.summary.submittedAt) {
     context.addIssue({ code: 'custom', message: 'triage projection evidence is cross-bound' });
   }
-  const expected = row.triage.state === 'discarded_recoverable'
-    ? 'discarded'
+  const expected = row.triage.state === 'spam'
+    ? 'spam'
     : row.triage.state === 'set_aside'
       ? 'set_aside'
       : row.arrival.classification === 'late'
@@ -248,7 +248,7 @@ export const submissionTriageTrayTotalsSchema = z.strictObject({
   inbox: z.number().int().nonnegative().safe(),
   set_aside: z.number().int().nonnegative().safe(),
   late: z.number().int().nonnegative().safe(),
-  discarded: z.number().int().nonnegative().safe()
+  spam: z.number().int().nonnegative().safe()
 });
 
 export const submissionTriageListSchema = z.strictObject({
@@ -281,8 +281,8 @@ export const submissionTriageReadSchema = z.strictObject({
 export const submissionTriageActionSchema = z.enum([
   'set_aside',
   'return_to_inbox',
-  'discard_recoverable',
-  'restore'
+  'mark_spam',
+  'not_spam'
 ]);
 
 export const submissionTriageExpectedHeadSchema = z.strictObject({

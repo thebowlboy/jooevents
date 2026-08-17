@@ -51,6 +51,8 @@ export type ReturnTypeOrPromise<Value> = Value | Promise<Value>;
 export interface RegisteredOperationSchema {
   readonly reference: SafeSchemaManifestRef;
   readonly schema: ZodType;
+  /** Disclosure-safe draft-2020-12 form captured before the executable parser is sealed. */
+  readonly jsonSchema?: unknown;
 }
 
 export type ReadInvocationContext = InvocationContext;

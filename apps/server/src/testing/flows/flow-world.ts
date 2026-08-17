@@ -338,7 +338,7 @@ export class FlowWorld implements J2FlowWorld {
         'SELECT count(*) AS count FROM events'
       ).get()?.count ?? -1;
       if (baseline.coordinate?.schemaEpoch !== 2
-          || baseline.migrationId !== 'e2_0001_jooevents_foundation'
+          || baseline.migrationId !== 'e2_0005_api_key_never_expire'
           || runtime.database.installedSchemaArtifacts.length !== 0
           || operationCount !== 0 || eventCount !== 0) {
         runtime.close();

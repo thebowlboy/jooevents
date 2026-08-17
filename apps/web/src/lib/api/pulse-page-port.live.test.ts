@@ -34,7 +34,7 @@ function triageRow(input: {
 	readonly submission: number;
 	readonly submittedAt: string;
 	readonly track?: { readonly id: string; readonly label: string };
-	readonly tray?: 'inbox' | 'late' | 'set_aside' | 'discarded';
+	readonly tray?: 'inbox' | 'late' | 'set_aside' | 'spam';
 }): SubmissionTriageRowView {
 	return {
 		source: {
@@ -212,7 +212,7 @@ function sources(input: {
 			async list() {
 				calls.push('triage');
 				return { kind: 'success' as const, correlationId: id(802), data: {
-					rows, trayTotals: { inbox: input.trayTotal ?? rows.length - 1, late: 0, set_aside: rows.length > 1 ? 1 : 0, discarded: 0 },
+					rows, trayTotals: { inbox: input.trayTotal ?? rows.length - 1, late: 0, set_aside: rows.length > 1 ? 1 : 0, spam: 0 },
 					search: null, queryGuard: rows[0]?.queryGuard ?? {
 						schemaVersion: 1 as const, scope: { workspaceId, eventId }, version: 1, digestSha256: digest('a')
 					}

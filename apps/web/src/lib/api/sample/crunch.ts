@@ -33,7 +33,7 @@ const crunch: WorkspaceDataset = {
 		},
 		lockedAreas: [],
 		navCounts: {
-			/* The held population. A discarded proposal is kept and recoverable,
+			/* The held population. A spam proposal is kept and recoverable,
 			   but it is not work waiting in this area, so it is out of the badge
 			   and out of the Overview total that reads the same rows. */
 			submissions: '15',
@@ -232,7 +232,7 @@ const crunch: WorkspaceDataset = {
 		],
 		trays: [
 			{ kind: 'late', label: 'Late submissions', count: 1, href: '/app/submissions?tray=late' },
-			{ kind: 'discarded', label: 'Spam, recoverable', count: 1, href: '/app/submissions?tray=discarded' },
+			{ kind: 'spam', label: 'Spam, recoverable', count: 1, href: '/app/submissions?tray=spam' },
 			{ kind: 'inbound-mail', label: 'Inbound mail review', count: 6 },
 			{ kind: 'appeals', label: 'Appeals awaiting reply', count: 4 },
 			{ kind: 'bounced', label: 'Bounced recipients', count: 3, href: '/app/messages' },
@@ -591,7 +591,7 @@ const crunch: WorkspaceDataset = {
 			formatId: 'fmt-talk',
 			submittedAt: daysAgo(14),
 			source: 'cfp',
-			tray: 'discarded',
+			tray: 'spam',
 			decision: 'declined',
 			decidedAt: daysAgo(13),
 			notified: true,
@@ -609,7 +609,7 @@ const crunch: WorkspaceDataset = {
 			appealCount: 2
 		}
 	],
-	submissionTrayTotals: { inbox: 13, 'set-aside': 1, late: 1, discarded: 1 },
+	submissionTrayTotals: { inbox: 13, 'set-aside': 1, late: 1, spam: 1 },
 	/* Away for nearly two weeks. Neither today nor this week covers what they
 	   missed, so the arrival window widens to the absence itself. */
 	previousVisit: daysAgo(13),

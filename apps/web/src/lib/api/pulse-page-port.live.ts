@@ -365,13 +365,13 @@ function custodyNote(
 ): string | undefined {
 	const waiting = rows.filter((row) => decisions.get(row.source.id) === 'undecided');
 	if (waiting.length === 0) return undefined;
-	const counts = { inbox: 0, late: 0, set_aside: 0, discarded: 0 };
+	const counts = { inbox: 0, late: 0, set_aside: 0, spam: 0 };
 	for (const row of waiting) counts[row.visibleTray] += 1;
 	const parts: string[] = [];
 	if (counts.inbox > 0) parts.push(`${counts.inbox} in the inbox`);
 	if (counts.late > 0) parts.push(`${counts.late} late`);
 	if (counts.set_aside > 0) parts.push(`${counts.set_aside} set aside`);
-	if (counts.discarded > 0) parts.push(`${counts.discarded} discarded`);
+	if (counts.spam > 0) parts.push(`${counts.spam} spam`);
 	return `Of the ${waiting.length} waiting: ${parts.join(', ')}.`;
 }
 

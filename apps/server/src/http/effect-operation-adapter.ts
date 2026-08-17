@@ -61,7 +61,7 @@ function idempotencyKey(request: Request): string | undefined {
   return candidate.success ? candidate.data : undefined;
 }
 
-async function boundedJsonBody(request: Request): Promise<unknown> {
+export async function boundedJsonBody(request: Request): Promise<unknown> {
   const declaredLength = request.headers.get('content-length');
   if (declaredLength !== null && (!/^\d+$/.test(declaredLength) || Number(declaredLength) > maxJsonBodyBytes)) {
     throw new OperationInputError();

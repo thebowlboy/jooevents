@@ -331,10 +331,10 @@ function parseActor(value: unknown): ActorRef {
         if (!exactKeys(value, ['kind', 'serviceIdentityId'])) throw new TypeError();
         return { kind: value.kind, serviceIdentityId: parseServiceIdentityId(value.serviceIdentityId) };
       case 'external_mcp_client':
-        if (!exactKeys(value, ['kind', 'oauthClientId', 'authorityPrincipalId'])) throw new TypeError();
+        if (!exactKeys(value, ['kind', 'clientKey', 'authorityPrincipalId'])) throw new TypeError();
         return {
           kind: value.kind,
-          oauthClientId: boundedString(value.oauthClientId, 'oauth client id'),
+          clientKey: boundedString(value.clientKey, 'oauth client id'),
           authorityPrincipalId: boundedString(value.authorityPrincipalId, 'authority principal id')
         };
       case 'app_model_run':

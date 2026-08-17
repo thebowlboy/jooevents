@@ -22,7 +22,7 @@ export const operationHistoryActorSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('service'), serviceIdentityId: applicationIdSchema }),
   z.strictObject({
     kind: z.literal('external_mcp_client'),
-    oauthClientId: z.string().min(1).max(255),
+    clientKey: z.string().min(1).max(255),
     authorityPrincipalId: z.string().min(1).max(255)
   }),
   z.strictObject({

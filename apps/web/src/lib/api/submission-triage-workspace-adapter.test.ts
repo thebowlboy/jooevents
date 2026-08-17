@@ -33,7 +33,7 @@ const queryGuard = Object.freeze({
 });
 
 function row(input: {
-	readonly state?: 'inbox' | 'set_aside' | 'discarded_recoverable';
+	readonly state?: 'inbox' | 'set_aside' | 'spam';
 	readonly tray?: SubmissionTriageVisibleTray;
 	readonly version?: number;
 } = {}): SubmissionTriageRowView {
@@ -100,7 +100,7 @@ function row(input: {
 function page(view: SubmissionTriageRowView = row()): SubmissionTriagePageView {
 	return {
 		rows: [view],
-		trayTotals: { inbox: 0, set_aside: 0, late: 1, discarded: 0 },
+		trayTotals: { inbox: 0, set_aside: 0, late: 1, spam: 0 },
 		search: null,
 		queryGuard
 	};
@@ -109,8 +109,8 @@ function page(view: SubmissionTriageRowView = row()): SubmissionTriagePageView {
 function stateForAction(action: SubmissionTriageAction) {
 	return action === 'return_to_inbox'
 		? { state: 'set_aside' as const, tray: 'set_aside' as const }
-		: action === 'restore'
-			? { state: 'discarded_recoverable' as const, tray: 'discarded' as const }
+		: action === 'not_spam'
+			? { state: 'spam' as const, tray: 'spam' as const }
 			: { state: 'inbox' as const, tray: 'late' as const };
 }
 
@@ -175,19 +175,19 @@ describe('source-neutral Submission Triage workspace adapter', () => {
 			expect(serialized).not.toContain(`\"${absent}\"`);
 		}
 		expect(Object.keys(port).sort()).toEqual([
-			'discard', 'list', 'read', 'restore', 'returnToInbox', 'setAside'
+			'list', 'markSpam', 'notSpam', 'read', 'returnToInbox', 'setAside'
 		]);
 	});
 
 	test('uses cached server query/head guards for every ordinary action', async () => {
 		const cases: readonly {
-			readonly method: 'setAside' | 'returnToInbox' | 'discard' | 'restore';
+			readonly method: 'setAside' | 'returnToInbox' | 'markSpam' | 'notSpam';
 			readonly action: SubmissionTriageAction;
 		}[] = [
 			{ method: 'setAside', action: 'set_aside' },
 			{ method: 'returnToInbox', action: 'return_to_inbox' },
-			{ method: 'discard', action: 'discard_recoverable' },
-			{ method: 'restore', action: 'restore' }
+			{ method: 'markSpam', action: 'mark_spam' },
+			{ method: 'notSpam', action: 'not_spam' }
 		];
 		for (const entry of cases) {
 			const state = stateForAction(entry.action);

@@ -3,9 +3,11 @@ import { Database } from 'bun:sqlite';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { canonicalJsonSha256, canonicalJsonText } from '@jooevents/kernel';
 import { openSQLite, type OpenSQLiteResult } from './database';
 import { SQLiteFoundationError } from './foundation-errors';
 import { SQLITE_MIGRATION_MANIFEST } from './migration-manifest';
+import { loadSQLiteFoundationArtifacts, migrateOrValidateSQLite } from './migration-runner';
 
 const temporaryDirectories: string[] = [];
 const opened: OpenSQLiteResult[] = [];
@@ -56,20 +58,22 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
   test('migrates an empty ephemeral database once with a terminal receipt', () => {
     const database = openSQLite(':memory:');
     opened.push(database);
+    const terminal = SQLITE_MIGRATION_MANIFEST.migrations.at(-1)!;
     expect(database.migration).toMatchObject({
       status: 'applied',
-      coordinate: { schemaEpoch: 2, sequence: 1 },
-      migrationId: 'e2_0001_jooevents_foundation',
+      coordinate: { schemaEpoch: terminal.schemaEpoch, sequence: terminal.sequence },
+      migrationId: terminal.migrationId,
       databaseClass: 'ephemeral',
       schemaFingerprint: SQLITE_MIGRATION_MANIFEST.expectedCurrentFullFingerprint
     });
     expect(database.migration.databaseId).toMatch(/^[0-9a-f]{32}$/);
-    expect(database.sqlite.query<{ receipt_kind: string; checksum_sha256: string }, []>(
-      'select receipt_kind, checksum_sha256 from schema_migrations'
-    ).get()).toEqual({
+    expect(database.sqlite.query<{ migration_id: string; receipt_kind: string; checksum_sha256: string }, []>(
+      'select migration_id, receipt_kind, checksum_sha256 from schema_migrations order by schema_epoch,sequence'
+    ).all()).toEqual(SQLITE_MIGRATION_MANIFEST.migrations.map((migration) => ({
+      migration_id: migration.migrationId,
       receipt_kind: 'executed',
-      checksum_sha256: SQLITE_MIGRATION_MANIFEST.migrations[0].checksumSha256
-    });
+      checksum_sha256: migration.checksumSha256
+    })));
     expect(database.sqlite.query('PRAGMA foreign_key_check').all()).toEqual([]);
   });
 
@@ -85,7 +89,243 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
     const replay = openSQLite(path);
     opened.push(replay);
     expect(replay.migration).toMatchObject({ status: 'current', databaseClass: 'retained_development', databaseId });
-    expect(replay.sqlite.query<{ count: number }, []>('select count(*) as count from schema_migrations').get()?.count).toBe(1);
+    expect(replay.sqlite.query<{ count: number }, []>('select count(*) as count from schema_migrations').get()?.count)
+      .toBe(SQLITE_MIGRATION_MANIFEST.migrations.length);
+  });
+
+  test('refuses the API-key prefix migration when sequence 3 already holds a key', () => {
+    const path = temporaryDatabasePath();
+    let schemaPass = 0;
+    const held = new Database(path, { create: true, strict: true });
+    held.exec('PRAGMA foreign_keys = ON;');
+    expectFoundationError(() => migrateOrValidateSQLite({
+      database: held,
+      artifacts: loadSQLiteFoundationArtifacts(),
+      policy: 'apply',
+      databaseClass: 'retained_development',
+      isMemory: false,
+      fault(point) {
+        if (point === 'after_schema_before_receipt' && (schemaPass += 1) === 4) {
+          throw new Error('hold_before_e2_0004_receipt');
+        }
+      }
+    }), 'migration_transaction_failed');
+    held.close();
+
+    const workspaceId = '01890f47-9abc-7def-8123-000000000101';
+    const userId = '01890f47-9abc-7def-8123-000000000102';
+    const apiKeyId = '01890f47-9abc-7def-8123-000000000103';
+    const seed = new Database(path, { create: false, strict: true });
+    seed.exec('PRAGMA foreign_keys = ON; BEGIN IMMEDIATE;');
+    seed.query(`INSERT INTO workspaces (id,name,state,created_at,updated_at,version)
+      VALUES (?,'Prefix migration workspace','active',0,0,1)`).run(workspaceId);
+    seed.query(`INSERT INTO users (id,status,display_name,created_at,updated_at,version)
+      VALUES (?,'active','Prefix migration owner',0,0,1)`).run(userId);
+    seed.query(`INSERT INTO api_keys
+      (api_key_id,workspace_id,owner_user_id,display_name,token_hash_sha256,token_hint,
+       may_read,may_submit_plans,created_at_ms,expires_at_ms,standing,version)
+      VALUES (?,?,?,'Sequence 3 key',?,'joak1_AAAA',1,0,0,1,'active',1)`)
+      .run(apiKeyId, workspaceId, userId, 'a'.repeat(64));
+    seed.exec('COMMIT;');
+    seed.close();
+
+    const refusal = expectFoundationError(
+      () => openSQLite(path, { migrationPolicy: 'apply' }),
+      'migration_transaction_failed'
+    );
+    expect(refusal.details.cause).toBe(
+      'e2_0004_api_key_prefix requires an empty api_keys table because issued hash-only credentials cannot be converted'
+    );
+
+    const preserved = new Database(path, { create: false, strict: true });
+    expect(preserved.query<{ token_hint: string; version: number }, [string]>(
+      'SELECT token_hint,version FROM api_keys WHERE api_key_id = ?'
+    ).get(apiKeyId)).toEqual({ token_hint: 'joak1_AAAA', version: 1 });
+    expect(preserved.query<{ sql: string }, []>(
+      "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'api_keys'"
+    ).get()?.sql).toContain('length(token_hint) = 10');
+    expect(preserved.query<{ count: number }, []>(
+      "SELECT count(*) AS count FROM sqlite_schema WHERE name = 'api_keys_next'"
+    ).get()).toEqual({ count: 0 });
+    expect(preserved.query<{ migration_id: string }, []>(
+      'SELECT migration_id FROM schema_migrations ORDER BY schema_epoch,sequence'
+    ).all().map((row) => row.migration_id)).toEqual(
+      SQLITE_MIGRATION_MANIFEST.migrations.slice(0, 3).map((migration) => migration.migrationId)
+    );
+    expect(preserved.query('PRAGMA foreign_key_check').all()).toEqual([]);
+    preserved.close();
+  });
+
+  test('preserves issued API keys and immutable scopes when expiry becomes nullable', () => {
+    const path = temporaryDatabasePath();
+    let schemaPass = 0;
+    const held = new Database(path, { create: true, strict: true });
+    held.exec('PRAGMA foreign_keys = ON;');
+    expectFoundationError(() => migrateOrValidateSQLite({
+      database: held,
+      artifacts: loadSQLiteFoundationArtifacts(),
+      policy: 'apply',
+      databaseClass: 'retained_development',
+      isMemory: false,
+      fault(point) {
+        if (point === 'after_schema_before_receipt' && (schemaPass += 1) === 5) {
+          throw new Error('hold_before_e2_0005_receipt');
+        }
+      }
+    }), 'migration_transaction_failed');
+    held.close();
+
+    const workspaceId = '01890f47-9abc-7def-8123-000000000201';
+    const userId = '01890f47-9abc-7def-8123-000000000202';
+    const apiKeyId = '01890f47-9abc-7def-8123-000000000203';
+    const seed = new Database(path, { create: false, strict: true });
+    seed.exec('PRAGMA foreign_keys = ON; BEGIN IMMEDIATE;');
+    seed.query(`INSERT INTO workspaces (id,name,state,created_at,updated_at,version)
+      VALUES (?,'Never-expire migration workspace','active',0,0,1)`).run(workspaceId);
+    seed.query(`INSERT INTO users (id,status,display_name,created_at,updated_at,version)
+      VALUES (?,'active','Never-expire migration owner',0,0,1)`).run(userId);
+    seed.query(`INSERT INTO api_keys
+      (api_key_id,workspace_id,owner_user_id,display_name,token_hash_sha256,token_hint,
+       may_read,may_submit_plans,created_at_ms,expires_at_ms,standing,version)
+      VALUES (?,?,?,'Issued before nullable expiry',?,'jooak1_AAAA',1,0,0,86400000,'active',1)`)
+      .run(apiKeyId, workspaceId, userId, 'a'.repeat(64));
+    seed.query(`INSERT INTO api_key_permission_scopes(api_key_id,permission_id)
+      VALUES (?,'event.read')`).run(apiKeyId);
+    seed.exec('COMMIT;');
+    seed.close();
+
+    const migrated = openSQLite(path, { migrationPolicy: 'apply' });
+    opened.push(migrated);
+    expect(migrated.migration).toMatchObject({
+      status: 'applied', migrationId: 'e2_0005_api_key_never_expire',
+      coordinate: { schemaEpoch: 2, sequence: 5 }
+    });
+    expect(migrated.sqlite.query<{ readonly expires_at_ms: number | null }, [string]>(
+      'SELECT expires_at_ms FROM api_keys WHERE api_key_id = ?'
+    ).get(apiKeyId)).toEqual({ expires_at_ms: 86_400_000 });
+    expect(migrated.sqlite.query<{ readonly permission_id: string }, [string]>(
+      'SELECT permission_id FROM api_key_permission_scopes WHERE api_key_id = ?'
+    ).get(apiKeyId)).toEqual({ permission_id: 'event.read' });
+    expect(migrated.sqlite.query<{ readonly sql: string }, []>(
+      "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'api_keys'"
+    ).get()?.sql).toContain('expires_at_ms INTEGER CHECK(expires_at_ms IS NULL OR expires_at_ms > created_at_ms)');
+    expect(migrated.sqlite.query<{ readonly expires_at_ms: number | null }, []>(`
+      INSERT INTO api_keys (
+        api_key_id,workspace_id,owner_user_id,display_name,token_hash_sha256,token_hint,
+        may_read,may_submit_plans,created_at_ms,expires_at_ms,standing,version
+      ) VALUES (
+        '01890f47-9abc-7def-8123-000000000204',
+        '${workspaceId}',
+        '${userId}',
+        'Never expires',
+        '${'b'.repeat(64)}',
+        'jooak1_BBBB',
+        1,0,1,NULL,'active',1
+      ) RETURNING expires_at_ms
+    `).get()).toEqual({ expires_at_ms: null });
+    expect(migrated.sqlite.query('PRAGMA foreign_key_check').all()).toEqual([]);
+  });
+
+  test('advances a retained baseline row to spam and the prepared inverse restores its exact schema', () => {
+    const path = temporaryDatabasePath();
+    let schemaPass = 0;
+    const held = new Database(path, { create: true, strict: true });
+    held.exec('PRAGMA foreign_keys = ON;');
+    expectFoundationError(() => migrateOrValidateSQLite({
+      database: held,
+      artifacts: loadSQLiteFoundationArtifacts(),
+      policy: 'apply',
+      databaseClass: 'retained_development',
+      isMemory: false,
+      fault(point) {
+        if (point === 'after_schema_before_receipt' && (schemaPass += 1) === 2) {
+          throw new Error('hold_at_e2_0001');
+        }
+      }
+    }), 'migration_transaction_failed');
+    held.close();
+
+    const workspaceId = '01890f47-9abc-7def-8123-000000000001';
+    const eventId = '01890f47-9abc-7def-8123-000000000002';
+    const userId = '01890f47-9abc-7def-8123-000000000003';
+    const submissionId = '01890f47-9abc-7def-8123-000000000004';
+    const arrivalId = '01890f47-9abc-7def-8123-000000000005';
+    const formId = '01890f47-9abc-7def-8123-000000000006';
+    const formVersionId = '01890f47-9abc-7def-8123-000000000007';
+    const updatedAt = '2026-08-17T00:00:00.000Z';
+    const oldHead = {
+      schemaVersion: 1,
+      scope: { workspaceId, eventId },
+      submissionId,
+      version: 2,
+      state: 'discarded_recoverable',
+      setAsideAttribution: null,
+      updatedAt
+    };
+    const seed = new Database(path, { create: false, strict: true });
+    seed.exec('PRAGMA foreign_keys = ON; BEGIN IMMEDIATE;');
+    seed.query(`INSERT INTO workspaces (id,name,state,created_at,updated_at,version)
+      VALUES (?,'Migration workspace','active',0,0,1)`).run(workspaceId);
+    seed.query(`INSERT INTO users (id,status,display_name,created_at,updated_at,version)
+      VALUES (?,'active','Migration owner',0,0,1)`).run(userId);
+    seed.query(`INSERT INTO event_spine_workspace_sets (workspace_id,version,current_event_id)
+      VALUES (?,1,NULL)`).run(workspaceId);
+    seed.query(`INSERT INTO event_spine_heads
+      (workspace_id,id,name,timezone,start_date,end_date,version,created_by_user_id,created_at_ms,create_plan_digest_sha256)
+      VALUES (?,?,'Migration event','UTC','2026-08-17','2026-08-17',1,?,0,?)`)
+      .run(workspaceId, eventId, userId, '1'.repeat(64));
+    seed.query('INSERT INTO event_spine_scope_roots (workspace_id,event_id) VALUES (?,?)')
+      .run(workspaceId, eventId);
+    seed.query(`INSERT INTO submission_triage_event_heads
+      (workspace_id,event_id,query_version,query_digest_sha256) VALUES (?,?,2,?)`)
+      .run(workspaceId, eventId, '2'.repeat(64));
+    seed.query(`INSERT INTO submission_arrival_facts
+      (workspace_id,event_id,submission_id,arrival_id,form_id,form_version_id,source,classification,
+       submitted_at_ms,recorded_at_ms,fact_json,fact_digest_sha256)
+      VALUES (?,?,?,?,?,?,'public_form','on_time',0,0,?,?)`).run(
+        workspaceId, eventId, submissionId, arrivalId, formId, formVersionId,
+        canonicalJsonText({ id: arrivalId, submissionId, classification: 'on_time' }), '3'.repeat(64)
+      );
+    seed.query(`INSERT INTO submission_triage_heads
+      (workspace_id,event_id,submission_id,head_version,state,updated_at_ms,head_json,head_digest_sha256)
+      VALUES (?,?,?,2,'discarded_recoverable',?,?,?)`).run(
+        workspaceId, eventId, submissionId, Date.parse(updatedAt),
+        canonicalJsonText(oldHead), canonicalJsonSha256(oldHead)
+      );
+    seed.exec('COMMIT;');
+    seed.close();
+
+    const migrated = openSQLite(path, { migrationPolicy: 'apply' });
+    opened.push(migrated);
+    const row = migrated.sqlite.query<{ state: string; head_json: string; head_digest_sha256: string }, []>(
+      'SELECT state,head_json,head_digest_sha256 FROM submission_triage_heads'
+    ).get()!;
+    const newHead = { ...oldHead, state: 'spam' };
+    expect(row).toEqual({
+      state: 'spam',
+      head_json: canonicalJsonText(newHead),
+      head_digest_sha256: canonicalJsonSha256(newHead)
+    });
+    expect(migrated.sqlite.query('PRAGMA foreign_key_check').all()).toEqual([]);
+
+    migrated.sqlite.exec(`
+      CREATE TEMP TABLE e2_0002_submission_triage_discarded_rows (
+        workspace_id TEXT NOT NULL,event_id TEXT NOT NULL,submission_id TEXT NOT NULL,
+        head_json TEXT NOT NULL,head_digest_sha256 TEXT NOT NULL,
+        PRIMARY KEY(workspace_id,event_id,submission_id)
+      ) STRICT, WITHOUT ROWID;
+    `);
+    migrated.sqlite.query(`INSERT INTO temp.e2_0002_submission_triage_discarded_rows
+      (workspace_id,event_id,submission_id,head_json,head_digest_sha256) VALUES (?,?,?,?,?)`).run(
+        workspaceId, eventId, submissionId, canonicalJsonText(oldHead), canonicalJsonSha256(oldHead)
+      );
+    migrated.sqlite.exec('BEGIN IMMEDIATE;');
+    migrated.sqlite.exec(readFileSync(new URL(
+      '../../migrations/sqlite/rollback/e2_0002_submission_triage_spam.sql', import.meta.url
+    ), 'utf8'));
+    migrated.sqlite.exec('COMMIT;');
+    expect(migrated.sqlite.query<{ state: string }, []>('SELECT state FROM submission_triage_heads').get())
+      .toEqual({ state: 'discarded_recoverable' });
   });
 
   test('validate is non-creating and reports an exact predecessor as migration-required', () => {
@@ -142,14 +382,18 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
 
     const adopted = openSQLite(path, { migrationPolicy: 'apply' });
     opened.push(adopted);
+    const terminal = SQLITE_MIGRATION_MANIFEST.migrations.at(-1)!;
     expect(adopted.migration).toMatchObject({
-      status: 'bridged',
-      coordinate: { schemaEpoch: 2, sequence: 1 },
+      status: 'applied',
+      coordinate: { schemaEpoch: terminal.schemaEpoch, sequence: terminal.sequence },
       databaseClass: 'retained_development'
     });
     expect(adopted.sqlite.query<{ receipt_kind: string }, []>(
       'SELECT receipt_kind FROM schema_migrations ORDER BY schema_epoch,sequence'
-    ).all().map((row) => row.receipt_kind)).toEqual(['legacy_adoption', 'epoch_bridge']);
+    ).all().map((row) => row.receipt_kind)).toEqual([
+      'legacy_adoption', 'epoch_bridge',
+      ...SQLITE_MIGRATION_MANIFEST.migrations.slice(1).map(() => 'executed')
+    ]);
     expect(applicationRows(adopted.sqlite, predecessorTables)).toBe(before);
   });
 

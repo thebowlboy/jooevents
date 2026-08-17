@@ -43,7 +43,7 @@ test('an attention row lands on its own rows, says so, and gives them all back',
 });
 
 test('a submissions address restores the tray and the search it names', async ({ page }) => {
-	await page.goto('/app/submissions?tray=discarded&search=Crypto');
+	await page.goto('/app/submissions?tray=spam&search=Crypto');
 
 	// A closed set of mutually exclusive populations is a radio group: the
 	// address restores which one is checked.

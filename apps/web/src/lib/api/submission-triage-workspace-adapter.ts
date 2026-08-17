@@ -25,8 +25,8 @@ export interface SubmissionTriageWorkspacePort {
 	read(id: string): Promise<SubmissionTriageRowView | null>;
 	setAside(ids: readonly string[]): Promise<void>;
 	returnToInbox(ids: readonly string[]): Promise<void>;
-	discard(ids: readonly string[]): Promise<void>;
-	restore(ids: readonly string[]): Promise<void>;
+	markSpam(ids: readonly string[]): Promise<void>;
+	notSpam(ids: readonly string[]): Promise<void>;
 }
 
 type AdapterFailure = Readonly<{ code: string; reason: string }>;
@@ -220,7 +220,7 @@ export function createSubmissionTriageWorkspaceAdapter(input: {
 
 		setAside: (ids: readonly string[]) => mutate(ids, 'set_aside'),
 		returnToInbox: (ids: readonly string[]) => mutate(ids, 'return_to_inbox'),
-		discard: (ids: readonly string[]) => mutate(ids, 'discard_recoverable'),
-		restore: (ids: readonly string[]) => mutate(ids, 'restore')
+		markSpam: (ids: readonly string[]) => mutate(ids, 'mark_spam'),
+		notSpam: (ids: readonly string[]) => mutate(ids, 'not_spam')
 	});
 }

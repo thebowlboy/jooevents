@@ -108,8 +108,8 @@ export type InvocationEvidence =
       readonly ceremonyEvidenceId: CeremonyEvidenceId;
     })
   | (EvidenceBase<'external_mcp', 'external_mcp'> & {
-      readonly oauthTokenHandle: string;
-      readonly oauthClientId: string;
+      readonly credentialHandle: string;
+      readonly clientKey: string;
     })
   | (EvidenceBase<'app_model', 'app_model'> & {
       readonly agentRunId: AgentRunId;
@@ -232,7 +232,7 @@ export type InvocationProvenance =
   | { readonly kind: 'participant'; readonly participantSessionId: ParticipantSessionId }
   | { readonly kind: 'public_open'; readonly publicPolicyRevisionId: PublicPolicyRevisionId }
   | { readonly kind: 'public_ceremony'; readonly ceremonyEvidenceId: CeremonyEvidenceId }
-  | { readonly kind: 'external_mcp'; readonly oauthClientId: string }
+  | { readonly kind: 'external_mcp'; readonly clientKey: string }
   | { readonly kind: 'app_model'; readonly agentRunId: AgentRunId; readonly modelAttemptId: ModelAttemptId; readonly modelToolCallId: ModelToolCallId }
   | { readonly kind: 'registered_job'; readonly jobId: JobId }
   | { readonly kind: 'registered_consumer'; readonly consumerDeliveryId: ConsumerDeliveryId; readonly consumerAttemptId: ConsumerAttemptId }
@@ -425,8 +425,8 @@ export function parseInvocationEvidence(value: unknown): InvocationEvidence {
         if (!exactKeys(value, ['kind', 'surface', 'client', 'ceremonyEvidenceId']) || value.surface !== 'public_http') throw new TypeError();
         return Object.freeze({ kind: 'public_ceremony', surface: 'public_http', client: parseClient(value.client), ceremonyEvidenceId: parseCeremonyEvidenceId(value.ceremonyEvidenceId) });
       case 'external_mcp':
-        if (!exactKeys(value, ['kind', 'surface', 'client', 'oauthTokenHandle', 'oauthClientId']) || value.surface !== 'external_mcp') throw new TypeError();
-        return Object.freeze({ kind: 'external_mcp', surface: 'external_mcp', client: parseClient(value.client), oauthTokenHandle: nonEmptyBoundedString(value.oauthTokenHandle), oauthClientId: nonEmptyBoundedString(value.oauthClientId, 256) });
+        if (!exactKeys(value, ['kind', 'surface', 'client', 'credentialHandle', 'clientKey']) || value.surface !== 'external_mcp') throw new TypeError();
+        return Object.freeze({ kind: 'external_mcp', surface: 'external_mcp', client: parseClient(value.client), credentialHandle: nonEmptyBoundedString(value.credentialHandle), clientKey: nonEmptyBoundedString(value.clientKey, 256) });
       case 'app_model':
         if (!exactKeys(value, ['kind', 'surface', 'client', 'agentRunId', 'modelAttemptId', 'modelToolCallId']) || value.surface !== 'app_model') throw new TypeError();
         return Object.freeze({ kind: 'app_model', surface: 'app_model', client: parseClient(value.client), agentRunId: parseAgentRunId(value.agentRunId), modelAttemptId: parseModelAttemptId(value.modelAttemptId), modelToolCallId: parseModelToolCallId(value.modelToolCallId) });
@@ -527,8 +527,8 @@ function normalizeActor(value: unknown): ActorRef {
         if (!exactKeys(value, ['kind', 'serviceIdentityId'])) throw new TypeError();
         return Object.freeze({ kind: 'service', serviceIdentityId: parseServiceIdentityId(value.serviceIdentityId) });
       case 'external_mcp_client':
-        if (!exactKeys(value, ['kind', 'oauthClientId', 'authorityPrincipalId'])) throw new TypeError();
-        return Object.freeze({ kind: 'external_mcp_client', oauthClientId: nonEmptyBoundedString(value.oauthClientId, 256), authorityPrincipalId: nonEmptyBoundedString(value.authorityPrincipalId, 256) });
+        if (!exactKeys(value, ['kind', 'clientKey', 'authorityPrincipalId'])) throw new TypeError();
+        return Object.freeze({ kind: 'external_mcp_client', clientKey: nonEmptyBoundedString(value.clientKey, 256), authorityPrincipalId: nonEmptyBoundedString(value.authorityPrincipalId, 256) });
       case 'app_model_run':
         if (!exactKeys(value, ['kind', 'agentRunId', 'delegatedByPrincipalId'])) throw new TypeError();
         return Object.freeze({ kind: 'app_model_run', agentRunId: parseAgentRunId(value.agentRunId), delegatedByPrincipalId: nonEmptyBoundedString(value.delegatedByPrincipalId, 256) });
@@ -680,7 +680,7 @@ function authorityMatchesEvidence(authority: CurrentResolvedAuthority, evidence:
         && principal.authority.ceremonyEvidenceId === evidence.ceremonyEvidenceId
         && actor.publicPolicyRevisionId === principal.publicPolicyRevisionId;
     case 'external_mcp':
-      return actor.kind === 'external_mcp_client' && actor.oauthClientId === evidence.oauthClientId
+      return actor.kind === 'external_mcp_client' && actor.clientKey === evidence.clientKey
         && (principal.kind === 'workspace_user' || principal.kind === 'service');
     case 'app_model':
       return actor.kind === 'app_model_run' && actor.agentRunId === evidence.agentRunId
@@ -742,7 +742,7 @@ function provenanceForEvidence(evidence: InvocationEvidence): InvocationProvenan
     case 'public_ceremony':
       return Object.freeze({ kind: 'public_ceremony', ceremonyEvidenceId: evidence.ceremonyEvidenceId });
     case 'external_mcp':
-      return Object.freeze({ kind: 'external_mcp', oauthClientId: evidence.oauthClientId });
+      return Object.freeze({ kind: 'external_mcp', clientKey: evidence.clientKey });
     case 'app_model':
       return Object.freeze({ kind: 'app_model', agentRunId: evidence.agentRunId, modelAttemptId: evidence.modelAttemptId, modelToolCallId: evidence.modelToolCallId });
     case 'registered_job':

@@ -56,6 +56,7 @@ export const PERMISSIONS = [
   { id: 'access.users.suspend', group: 'access', label: 'Suspend users', description: 'End workspace access and revoke active sessions.', risk: 'consequential', allowedScopes: ['workspace'] },
   { id: 'integration.airtable.read', group: 'integrations', label: 'View Airtable sync', description: 'Read connection status, field mappings, and sync history.', risk: 'sensitive', allowedScopes: ['workspace', 'event'] },
   { id: 'integration.airtable.manage', group: 'integrations', label: 'Manage Airtable sync', description: 'Change mappings, conflict policy, and connection credentials.', risk: 'consequential', allowedScopes: ['workspace', 'event'] },
+  { id: 'integration.api.manage', group: 'integrations', label: 'Manage API keys', description: 'Create, rotate, list, and revoke external agent credentials.', risk: 'consequential', allowedScopes: ['workspace'] },
   { id: 'audit.read', group: 'audit', label: 'View audit history', description: 'Read security and consequential-change history.', risk: 'sensitive', allowedScopes: ['workspace', 'event'] }
 ] as const satisfies readonly PermissionDefinition[];
 

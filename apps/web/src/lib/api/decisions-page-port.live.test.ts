@@ -423,7 +423,7 @@ function composePort(overrides: Partial<Parameters<typeof createLiveDecisionsPag
 				sessions: [], placements: [], breaks: [], published: false
 			}) satisfies ScheduleState as ScheduleState
 		},
-		submissions: { list: async () => ({ rows: [], trayTotals: { inbox: 0, 'set-aside': 0, late: 0, discarded: 0 } }) },
+		submissions: { list: async () => ({ rows: [], trayTotals: { inbox: 0, 'set-aside': 0, late: 0, spam: 0 } }) },
 		communications: fakeCommunications().port,
 		readiness: readyReadiness,
 		newIdempotencyKey: () => 'je.test.decisions.key',

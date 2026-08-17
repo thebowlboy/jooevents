@@ -108,10 +108,11 @@ describe('ephemeral SQLite runtime', () => {
     expect(statSync(runtime.databasePath).mode & 0o777).toBe(0o600);
     expect(statSync(markerPath).mode & 0o777).toBe(0o600);
     expect(statSync(ownersPath).mode & 0o777).toBe(0o700);
+    const terminal = SQLITE_MIGRATION_MANIFEST.migrations.at(-1)!;
     expect(runtime.retainedBaseline).toMatchObject({
       status: 'current',
-      coordinate: { schemaEpoch: 2, sequence: 1 },
-      migrationId: 'e2_0001_jooevents_foundation',
+      coordinate: { schemaEpoch: terminal.schemaEpoch, sequence: terminal.sequence },
+      migrationId: terminal.migrationId,
       databaseClass: 'ephemeral',
       schemaFingerprint: SQLITE_MIGRATION_MANIFEST.expectedCurrentFullFingerprint
     });
@@ -186,14 +187,14 @@ describe('ephemeral SQLite runtime', () => {
     const runtime = trackRuntime(createFoundationEphemeralSQLiteRuntime());
 
     expect(runtime.installedSchemaArtifacts).toEqual([]);
-    expect(FOUNDATION_SCHEMA_AUTHORING_ARTIFACTS).toHaveLength(52);
+    expect(FOUNDATION_SCHEMA_AUTHORING_ARTIFACTS).toHaveLength(54);
     expect(Object.isFrozen(FOUNDATION_SCHEMA_AUTHORING_ARTIFACTS)).toBe(true);
     expect(FOUNDATION_SCHEMA_AUTHORING_ARTIFACTS.every(Object.isFrozen)).toBe(true);
     expect(runtime.sqlite.query<{ count: number }, []>(`
       select count(*) as count
         from sqlite_schema
        where type in ('table', 'view') and name not like 'sqlite_%'
-    `).get()?.count).toBe(201);
+    `).get()?.count).toBe(207);
     expect(runtime.sqlite.query<{ name: string }, []>(`
       select name
         from sqlite_schema

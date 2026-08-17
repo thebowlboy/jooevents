@@ -17,7 +17,7 @@ import {
 } from './intake-participant-attribution-conformance';
 import { SQLITE_INTAKE_PUBLIC_MUTATION_EFFECT_SQL } from './intake-public-mutation-effect-domain';
 import { SQLITE_INTAKE_SQL } from './intake';
-import { SQLITE_SUBMISSION_TRIAGE_SQL } from './submission-triage';
+import { SQLITE_SUBMISSION_TRIAGE_E2_0001_SQL } from './submission-triage';
 import {
   createEphemeralSQLiteRuntime,
   type EphemeralSQLiteRuntime,
@@ -65,6 +65,8 @@ import { VERIFIED_INBOX_PROCESSING_TRIAL_SQL } from './verified-inbox-processing
 import { VERIFIED_INBOX_TRIAL_SQL } from './verified-inbox-trial';
 import { SQLITE_CLASSIFIED_PAYLOAD_STORE_SQL } from './sqlite-classified-payload-store';
 import { WORKSPACE_TEAM_SQL } from './workspace-team';
+import { SQLITE_API_KEYS_SQL } from './api-keys';
+import { SQLITE_EXTERNAL_API_RATE_LIMIT_SQL } from './external-api-rate-limits';
 
 function schemaArtifact(id: string, sql: string): EphemeralSQLiteSchemaArtifact {
   return Object.freeze({ id, sql });
@@ -94,11 +96,13 @@ export const FOUNDATION_SCHEMA_AUTHORING_ARTIFACTS: readonly EphemeralSQLiteSche
     schemaArtifact('communication-email-provider-configuration', SQLITE_EMAIL_PROVIDER_CONFIGURATION_SQL),
     schemaArtifact('communication-workspace-sender-identity', SQLITE_WORKSPACE_SENDER_IDENTITY_SQL),
     schemaArtifact('workspace-team-domain', WORKSPACE_TEAM_SQL),
+    schemaArtifact('api-keys-domain', SQLITE_API_KEYS_SQL),
+    schemaArtifact('external-api-rate-limits', SQLITE_EXTERNAL_API_RATE_LIMIT_SQL),
     schemaArtifact('intake-domain', SQLITE_INTAKE_SQL),
     schemaArtifact('release-domain', SQLITE_RELEASE_SQL),
     schemaArtifact('release-native-effect', SQLITE_RELEASE_NATIVE_EFFECT_SQL),
     schemaArtifact('intake-form-write-effect', SQLITE_INTAKE_FORM_WRITE_EFFECT_SQL),
-    schemaArtifact('submission-triage-domain', SQLITE_SUBMISSION_TRIAGE_SQL),
+    schemaArtifact('submission-triage-domain', SQLITE_SUBMISSION_TRIAGE_E2_0001_SQL),
     schemaArtifact('field-registry-domain', FIELD_REGISTRY_SQL),
     schemaArtifact('read-audit', READ_IMMUTABLE_AUDIT_TRIAL_SQL),
     schemaArtifact('reliability-fact-effect', RELIABILITY_FACT_EFFECT_TRIAL_SQL),

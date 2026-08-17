@@ -110,6 +110,14 @@ export const ORGANIZER_COMMUNICATION_MUTATION_OPERATIONS = Object.freeze({
 });
 
 const canonicalIdSchema = z.string().min(1).max(256);
+const readSummaries: Readonly<Record<keyof typeof ORGANIZER_COMMUNICATION_READ_OPERATIONS, string>> = Object.freeze({
+  listPurposes: 'List the communication purposes available when choosing why a message should be sent.',
+  getPurpose: 'Get one communication purpose and the constraints that shape its message.',
+  listTemplates: 'List message templates available for drafting communication in the selected event.',
+  getTemplate: 'Get one message template with its current authored content and metadata.',
+  listDrafts: 'List message drafts and their current readiness so pending send decisions are visible.',
+  getDraft: 'Get one message draft with the content and audience state needed for review.'
+});
 export const organizerCommunicationMutationDomainContributionSchema = z.strictObject({
   kind: z.literal('organizer_communication_authoring'),
   operationName: z.enum([
@@ -529,7 +537,7 @@ export function createOrganizerCommunicationReadOperationModule(input: {
       operations: Object.freeze(entries.map((entry) => ({
         ...entry.operation,
         lifecycle: { status: 'active' as const },
-        summary: `Read ${entry.operation.name}.`,
+        summary: readSummaries[entry.key],
         effect: 'read' as const,
         maxRisk: 'low' as const,
         autonomyPolicy: entry.refs.autonomy,

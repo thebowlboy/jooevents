@@ -45,8 +45,8 @@ describe('inbox disposition', () => {
 		expect(page.rows[0]?.id).toBe(created.id);
 		expect(page.trayTotals.inbox).toBe(totalsBefore.inbox + 1);
 
-		await api.submissions.discard([created.id]);
-		expect((await api.submissions.list({ tray: 'discarded' })).rows
+		await api.submissions.markSpam([created.id]);
+		expect((await api.submissions.list({ tray: 'spam' })).rows
 			.some((row) => row.id === created.id)).toBe(true);
 	});
 });

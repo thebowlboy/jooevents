@@ -17,7 +17,7 @@ let subject: Submission;
 let origin: TrayKey;
 
 async function trayOf(id: string): Promise<TrayKey | null> {
-	for (const tray of ['inbox', 'set-aside', 'late', 'discarded'] as TrayKey[]) {
+	for (const tray of ['inbox', 'set-aside', 'late', 'spam'] as TrayKey[]) {
 		const page = await api.submissions.list({ tray });
 		if (page.rows.some((row) => row.id === id)) return tray;
 	}
@@ -42,13 +42,13 @@ describe('a mutation is visible to the next read', () => {
 		expect(await trayOf(subject.id)).toBe('inbox');
 	});
 
-	test('discard', async () => {
-		await api.submissions.discard([subject.id]);
-		expect(await trayOf(subject.id)).toBe('discarded');
+	test('markSpam', async () => {
+		await api.submissions.markSpam([subject.id]);
+		expect(await trayOf(subject.id)).toBe('spam');
 	});
 
-	test('restore', async () => {
-		await api.submissions.restore([subject.id]);
+	test('notSpam', async () => {
+		await api.submissions.notSpam([subject.id]);
 		expect(await trayOf(subject.id)).toBe('inbox');
 	});
 
@@ -90,7 +90,7 @@ describe('the two modes agree', () => {
 			{ tray: 'inbox' as TrayKey },
 			{ tray: 'inbox' as TrayKey, search: 'a' },
 			{ tray: 'inbox' as TrayKey, search: 'kubernetes' },
-			{ tray: 'discarded' as TrayKey }
+			{ tray: 'spam' as TrayKey }
 		];
 		for (const query of queries) {
 			const first = await api.submissions.list(query);

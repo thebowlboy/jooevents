@@ -293,7 +293,7 @@ export function createOperationHistoryReadOperationModule(input: {
             browserResumption: { kind: 'none' as const },
             projection: refs.projection
           },
-          { surface: 'external_mcp' as const, toolName: OPERATION_HISTORY_LIST_OPERATION.name,
+          { surface: 'external_mcp' as const, toolName: 'list_operation_history',
             projection: refs.projection },
           { surface: 'app_model' as const, toolName: OPERATION_HISTORY_LIST_OPERATION.name,
             projection: refs.projection }

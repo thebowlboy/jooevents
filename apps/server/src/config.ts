@@ -24,7 +24,17 @@ const environmentSchema = z.object({
   JOOEVENTS_DATA_DIRECTORY: z.string().min(1).optional(),
   JOOEVENTS_LINK_TOKEN_TTL_SECONDS: z.coerce.number().int().min(300).max(3600).default(900),
   JOOEVENTS_LINK_REAUTH_MAX_AGE_SECONDS: z.coerce.number().int().min(60).max(3600).default(600),
-  JOOEVENTS_LINK_REQUIRE_AUTH_TIME: z.enum(['true', 'false']).default('false')
+  JOOEVENTS_LINK_REQUIRE_AUTH_TIME: z.enum(['true', 'false']).default('false'),
+  JOOEVENTS_API_KEY_DEFAULT_TTL_DAYS: z.coerce.number().int().min(1).max(3650).default(90),
+  JOOEVENTS_API_KEY_MAX_TTL_DAYS: z.coerce.number().int().min(1).max(3650).default(365),
+  JOOEVENTS_API_KEY_ROTATION_GRACE_HOURS: z.coerce.number().int().min(0).max(2160).default(168),
+  JOOEVENTS_EXTERNAL_API_REQUESTS_PER_MINUTE: z.coerce.number().int().min(1).max(1000000).default(120),
+  JOOEVENTS_EXTERNAL_API_BURST_PER_TEN_SECONDS: z.coerce.number().int().min(1).max(1000000).default(40),
+  JOOEVENTS_EXTERNAL_API_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(1000).default(4),
+  JOOEVENTS_EXTERNAL_API_PLAN_SUBMISSIONS_PER_DAY: z.coerce.number().int().min(1).max(1000000).default(60),
+  JOOEVENTS_EXTERNAL_API_MAX_OPEN_PLANS: z.coerce.number().int().min(1).max(10000).default(10),
+  JOOEVENTS_EXTERNAL_API_FAILED_AUTH_PER_MINUTE: z.coerce.number().int().min(1).max(1000000).default(20),
+  JOOEVENTS_EXTERNAL_API_OPENAPI_PER_MINUTE: z.coerce.number().int().min(1).max(1000000).default(30)
 });
 
 export interface AuthSecret {
@@ -51,6 +61,8 @@ export interface ServerConfig {
   readonly linkTokenTtlSeconds: number;
   readonly linkReauthMaxAgeSeconds: number;
   readonly linkRequireAuthTime: boolean;
+  readonly apiKeyPolicy?: import('@jooevents/identity-access').ApiKeyPolicy;
+  readonly externalAgentApiPolicy?: import('./http/external-agent-api').ExternalAgentApiPolicy;
 }
 
 export interface ConfiguredServerConfig extends ServerConfig {
@@ -140,6 +152,9 @@ function parseConfig(
   if (env.JOOEVENTS_ADMISSION_MODE === 'workspace_domain' && !env.JOOEVENTS_GOOGLE_HOSTED_DOMAIN) {
     issues.push('JOOEVENTS_GOOGLE_HOSTED_DOMAIN is required for workspace_domain admission');
   }
+  if (env.JOOEVENTS_API_KEY_DEFAULT_TTL_DAYS > env.JOOEVENTS_API_KEY_MAX_TTL_DAYS) {
+    issues.push('JOOEVENTS_API_KEY_DEFAULT_TTL_DAYS cannot exceed JOOEVENTS_API_KEY_MAX_TTL_DAYS');
+  }
   if (lifetime === 'configured' && env.JOOEVENTS_DATABASE_DRIVER === 'sqlite' && !env.JOOEVENTS_DATABASE_PATH) {
     issues.push('JOOEVENTS_DATABASE_PATH is required for the sqlite database driver');
   }
@@ -171,7 +186,21 @@ function parseConfig(
     ...(lifetime === 'configured' && env.JOOEVENTS_DATA_DIRECTORY ? { dataDirectory: env.JOOEVENTS_DATA_DIRECTORY } : {}),
     linkTokenTtlSeconds: env.JOOEVENTS_LINK_TOKEN_TTL_SECONDS,
     linkReauthMaxAgeSeconds: env.JOOEVENTS_LINK_REAUTH_MAX_AGE_SECONDS,
-    linkRequireAuthTime: env.JOOEVENTS_LINK_REQUIRE_AUTH_TIME === 'true'
+    linkRequireAuthTime: env.JOOEVENTS_LINK_REQUIRE_AUTH_TIME === 'true',
+    apiKeyPolicy: Object.freeze({
+      defaultTtlDays: env.JOOEVENTS_API_KEY_DEFAULT_TTL_DAYS,
+      maximumTtlDays: env.JOOEVENTS_API_KEY_MAX_TTL_DAYS,
+      rotationGraceHours: env.JOOEVENTS_API_KEY_ROTATION_GRACE_HOURS
+    }),
+    externalAgentApiPolicy: Object.freeze({
+      requestsPerMinute: env.JOOEVENTS_EXTERNAL_API_REQUESTS_PER_MINUTE,
+      burstPerTenSeconds: env.JOOEVENTS_EXTERNAL_API_BURST_PER_TEN_SECONDS,
+      maximumConcurrency: env.JOOEVENTS_EXTERNAL_API_MAX_CONCURRENCY,
+      planSubmissionsPerDay: env.JOOEVENTS_EXTERNAL_API_PLAN_SUBMISSIONS_PER_DAY,
+      maximumOpenPlans: env.JOOEVENTS_EXTERNAL_API_MAX_OPEN_PLANS,
+      failedAuthPerMinute: env.JOOEVENTS_EXTERNAL_API_FAILED_AUTH_PER_MINUTE,
+      openapiPerMinute: env.JOOEVENTS_EXTERNAL_API_OPENAPI_PER_MINUTE
+    })
   };
 }
 

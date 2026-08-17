@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { canonicalJsonValue } from '@jooevents/kernel';
 import {
   McpRegistryValidationError,
+  assertExternalAgentToolCatalog,
   createMcpToolRegistry
 } from './registry';
 import {
@@ -12,6 +13,29 @@ import {
 } from './test-fixtures';
 
 describe('MCP tool registry', () => {
+  test('lints the external agent name grammar and mechanical descriptions', async () => {
+    const valid = await createMcpToolRegistry(await manifestFixture([
+      operationFixture({ name: 'record.read', toolName: 'get_record' })
+    ]));
+    expect(() => assertExternalAgentToolCatalog(valid)).not.toThrow();
+
+    const invalidName = await createMcpToolRegistry(await manifestFixture([
+      operationFixture({ name: 'record.read', toolName: 'record_read' })
+    ]));
+    expect(() => assertExternalAgentToolCatalog(invalidName)).toThrow(McpRegistryValidationError);
+
+    const wrongNumber = await createMcpToolRegistry(await manifestFixture([
+      operationFixture({ name: 'record.list', toolName: 'list_record' })
+    ]));
+    expect(() => assertExternalAgentToolCatalog(wrongNumber)).toThrow(McpRegistryValidationError);
+
+    const fallback = await createMcpToolRegistry(await manifestFixture([{
+      ...operationFixture({ name: 'record.read', toolName: 'get_record' }),
+      summary: 'Read record.read.'
+    }]));
+    expect(() => assertExternalAgentToolCatalog(fallback)).toThrow(McpRegistryValidationError);
+  });
+
   test('is order-independent, JSON-only, and withholds commit by default', async () => {
     const manifest = await completeManifest();
     const reversed = {

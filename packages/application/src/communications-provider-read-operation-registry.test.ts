@@ -52,8 +52,8 @@ const mcpEvidence: InvocationEvidence = Object.freeze({
   kind: 'external_mcp',
   surface: 'external_mcp',
   client: Object.freeze({ key: 'mcp.provider-settings' }),
-  oauthTokenHandle: 'mcp-oauth-secret-canary',
-  oauthClientId: 'mcp_client_opsdesk'
+  credentialHandle: 'mcp-oauth-secret-canary',
+  clientKey: 'mcp_client_opsdesk'
 });
 
 class UnusedUnitOfWork implements EffectUnitOfWorkPort {
@@ -122,7 +122,7 @@ function fixture(options: FixtureOptions = {}) {
         const actor = resolution.evidence.kind === 'external_mcp'
           ? {
               kind: 'external_mcp_client' as const,
-              oauthClientId: resolution.evidence.oauthClientId,
+              clientKey: resolution.evidence.clientKey,
               authorityPrincipalId: 'principal_maya_comms'
             }
           : resolution.evidence.kind === 'operator'

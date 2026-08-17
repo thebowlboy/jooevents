@@ -30,6 +30,8 @@ export interface McpRegistryValidationIssue {
     | 'invalid_idempotency'
     | 'invalid_lane'
     | 'invalid_activation'
+    | 'invalid_tool_name'
+    | 'fallback_description'
     | 'hidden_operation';
   readonly operationName?: string;
   readonly operationVersion?: number;
@@ -408,4 +410,44 @@ export function findMcpTool(
   toolName: string
 ): McpToolDefinition | undefined {
   return registry.tools.find((tool) => tool.name === toolName);
+}
+
+const EXTERNAL_AGENT_TOOL_NAME = /^(?:get|list)_[a-z0-9]+(?:_[a-z0-9]+)*$/;
+const SINGULAR_NOUNS_ENDING_IN_S = new Set([
+  'access', 'address', 'progress', 'readiness', 'series', 'status'
+]);
+
+function toolNameHasExpectedNumber(name: string): boolean {
+  const [verb, ...parts] = name.split('_');
+  const noun = parts.at(-1) ?? '';
+  if (verb === 'list') return noun.endsWith('s') || noun === 'history';
+  if (verb === 'get') return !noun.endsWith('s') || SINGULAR_NOUNS_ENDING_IN_S.has(noun);
+  return false;
+}
+
+/**
+ * The public agent catalog uses one stable function-calling grammar and must
+ * never expose the registry's mechanical description fallback.
+ */
+export function assertExternalAgentToolCatalog(registry: McpToolRegistry): void {
+  const issues: McpRegistryValidationIssue[] = [];
+  for (const tool of registry.tools) {
+    if (!EXTERNAL_AGENT_TOOL_NAME.test(tool.name) || !toolNameHasExpectedNumber(tool.name)) {
+      issues.push({
+        code: 'invalid_tool_name',
+        operationName: tool.contract.operation.name,
+        operationVersion: tool.contract.operation.version,
+        detail: `External tool ${tool.name} must use the closed get-singular/list-plural snake_case grammar.`
+      });
+    }
+    if (tool.description === `Read ${tool.contract.operation.name}.`) {
+      issues.push({
+        code: 'fallback_description',
+        operationName: tool.contract.operation.name,
+        operationVersion: tool.contract.operation.version,
+        detail: `External tool ${tool.name} needs an authored relay-safe description.`
+      });
+    }
+  }
+  if (issues.length > 0) throw new McpRegistryValidationError(issues);
 }

@@ -242,6 +242,12 @@ const readCatalog: Readonly<Record<ReadKey, {
   })
 });
 
+const readSummaries: Readonly<Record<ReadKey, string>> = Object.freeze({
+  listAudienceOptions: 'List the registered audience choices available when preparing an event message.',
+  getPreview: 'Get one message-batch preview with its audience, content, and current evidence.',
+  listPreviewRecipients: 'List the recipients in one message preview when recipient-level review is needed.'
+});
+
 function exactDisclosure(context: ReadInvocationContext): OrganizerPreviewContactDisclosure {
   return context.authority.grants.some((grant) =>
     grant.kind === 'permission' && grant.key === ORGANIZER_COMMUNICATION_EXACT_CONTACT_PERMISSION
@@ -400,7 +406,7 @@ export function createOrganizerAudiencePreviewReadOperationModule(input: {
       operations: Object.freeze(entries.map((entry) => ({
         ...entry.operation,
         lifecycle: { status: 'active' as const },
-        summary: `Read ${entry.operation.name}.`,
+        summary: readSummaries[entry.key],
         effect: 'read' as const,
         maxRisk: entry.catalog.risk,
         autonomyPolicy: entry.refs.autonomy,

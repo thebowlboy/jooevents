@@ -447,7 +447,7 @@ function normalizeSchemaArtifacts(value: unknown): readonly CompiledSchemaArtifa
 }
 
 function assertRetainedBaseline(state: SQLiteMigrationState): void {
-  const migration = SQLITE_MIGRATION_MANIFEST.migrations[0];
+  const migration = SQLITE_MIGRATION_MANIFEST.migrations.at(-1)!;
   if (
     state.coordinate?.schemaEpoch !== migration.schemaEpoch ||
     state.coordinate.sequence !== migration.sequence ||

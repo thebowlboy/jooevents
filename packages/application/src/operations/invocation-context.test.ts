@@ -521,7 +521,7 @@ describe('closed invocation evidence', () => {
       { kind: 'participant', surface: 'participant_http', client, participantSessionId: ids.participantSession },
       { kind: 'public_open', surface: 'public_http', client, publicPolicyRevisionId: ids.publicPolicy },
       { kind: 'public_ceremony', surface: 'public_http', client, ceremonyEvidenceId: ids.ceremony },
-      { kind: 'external_mcp', surface: 'external_mcp', client, oauthTokenHandle: 'token-handle', oauthClientId: 'client-id' },
+      { kind: 'external_mcp', surface: 'external_mcp', client, credentialHandle: 'token-handle', clientKey: 'client-id' },
       { kind: 'app_model', surface: 'app_model', client, agentRunId: ids.agentRun, modelAttemptId: ids.modelAttempt, modelToolCallId: ids.modelToolCall },
       { kind: 'registered_job', surface: 'application_job', client, jobId: ids.job },
       { kind: 'registered_consumer', surface: 'application_job', client, consumerDeliveryId: ids.delivery, consumerAttemptId: ids.attempt },
@@ -587,8 +587,8 @@ describe('trusted operation invocation', () => {
         kind: 'external_mcp',
         surface: 'external_mcp',
         client: { key: 'secret-client-shape' },
-        oauthTokenHandle: 'oauth-token-super-secret',
-        oauthClientId: 'oauth-client-secret-canary'
+        credentialHandle: 'oauth-token-super-secret',
+        clientKey: 'oauth-client-secret-canary'
       }
     });
 
@@ -669,7 +669,7 @@ describe('trusted operation invocation', () => {
       expect(Object.isFrozen(context)).toBe(true);
       expect(serialized).not.toContain(operatorEvidence.sessionHandle);
       expect(serialized).not.toContain(rawKey);
-      expect(serialized).not.toContain('oauthTokenHandle');
+      expect(serialized).not.toContain('credentialHandle');
       expect(context.requestBinding.requestHashSha256).toMatch(/^[a-f0-9]{64}$/);
       if (context.operation.effect !== 'read') {
         expect(context.requestBinding.requestHashProfile).toEqual(refs.requestHash);
@@ -934,7 +934,7 @@ describe('trusted operation invocation', () => {
       businessInput: { value: 'read' },
       verifiedEvidence: {
         kind: 'external_mcp', surface: 'external_mcp', client: { key: 'mcp.test' },
-        oauthTokenHandle: 'verified-token-handle', oauthClientId: 'client-id'
+        credentialHandle: 'verified-token-handle', clientKey: 'client-id'
       }
     })).rejects.toBeInstanceOf(OperationExecutionError);
 
@@ -969,7 +969,7 @@ describe('trusted operation invocation', () => {
     const resolver: CurrentAuthorityResolver<InvocationEvidence> = {
       resolve(input) {
         const actor = input.evidence.kind === 'external_mcp'
-          ? { kind: 'external_mcp_client' as const, oauthClientId: input.evidence.oauthClientId, authorityPrincipalId: 'principal-ref' }
+          ? { kind: 'external_mcp_client' as const, clientKey: input.evidence.clientKey, authorityPrincipalId: 'principal-ref' }
           : input.evidence.kind === 'app_model'
             ? { kind: 'app_model_run' as const, agentRunId: input.evidence.agentRunId, delegatedByPrincipalId: 'principal-ref' }
             : undefined;
@@ -1006,7 +1006,7 @@ describe('trusted operation invocation', () => {
     const mcp = await createReadInvocationContextBuilder({ ...common, lanes: [lane('external_mcp')] }).build({
       operationName: 'delegated.read', operationVersion: 1, surface: 'external_mcp', correlationId,
       businessInput: { value: 'same' },
-      verifiedEvidence: { kind: 'external_mcp', surface: 'external_mcp', client: { key: 'mcp.test' }, oauthTokenHandle: mcpToken, oauthClientId: 'client-id' }
+      verifiedEvidence: { kind: 'external_mcp', surface: 'external_mcp', client: { key: 'mcp.test' }, credentialHandle: mcpToken, clientKey: 'client-id' }
     });
     const model = await createReadInvocationContextBuilder({ ...common, lanes: [lane('app_model')] }).build({
       operationName: 'delegated.read', operationVersion: 1, surface: 'app_model', correlationId,

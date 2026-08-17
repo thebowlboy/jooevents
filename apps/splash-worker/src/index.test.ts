@@ -22,6 +22,7 @@ describe('JooEvents splash Worker', () => {
     expect(response.headers.get('content-security-policy')).toContain("default-src 'self'");
     expect(response.headers.get('x-frame-options')).toBe('DENY');
     expect(response.headers.get('cache-control')).toContain('must-revalidate');
+    expect(response.headers.get('link')).toBe('</llms.txt>; rel="describedby"');
   });
 
   test('revalidates stable stylesheet URLs after every deployment', async () => {
@@ -30,5 +31,19 @@ describe('JooEvents splash Worker', () => {
 
     expect(cacheControl).toBe('public, max-age=0, must-revalidate');
     expect(cacheControl).not.toContain('stale-while-revalidate');
+  });
+
+  test('serves the discovery manifest as Markdown', async () => {
+    const response = await handleRequest(new Request('https://jooevents.com/llms.txt'), environment);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('text/markdown; charset=utf-8');
+  });
+
+  test('publishes a visible documentation entry point', async () => {
+    const source = await Bun.file(new URL('../public/index.html', import.meta.url)).text();
+
+    expect(source).toContain('href="https://docs.jooevents.com/"');
+    expect(source).toContain('API documentation');
   });
 });

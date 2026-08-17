@@ -78,5 +78,7 @@ describe('operator operations HTTP composition', () => {
     }
     expect(isServerOwnedOperationPath('/api/events/current')).toBe(false);
     expect(isServerOwnedOperationPath('/api/program-vocabulary')).toBe(false);
+    expect(isServerOwnedOperationPath('/api/workspace/api-key-secrets/example')).toBe(true);
+    expect(isServerOwnedOperationPath('/api/v1/me')).toBe(true);
   });
 });

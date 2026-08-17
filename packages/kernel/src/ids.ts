@@ -8,6 +8,7 @@ export const APPLICATION_ID_KINDS = [
   'membership',
   'participant_identity',
   'participant_session',
+  'api_key',
   'service_identity',
   'agent_run',
   'model_attempt',
@@ -70,6 +71,7 @@ export type PersonId = ApplicationId<'person'>;
 export type MembershipId = ApplicationId<'membership'>;
 export type ParticipantIdentityId = ApplicationId<'participant_identity'>;
 export type ParticipantSessionId = ApplicationId<'participant_session'>;
+export type ApiKeyId = ApplicationId<'api_key'>;
 export type ServiceIdentityId = ApplicationId<'service_identity'>;
 export type AgentRunId = ApplicationId<'agent_run'>;
 export type ModelAttemptId = ApplicationId<'model_attempt'>;
@@ -105,6 +107,7 @@ export const parsePersonId = parser('person');
 export const parseMembershipId = parser('membership');
 export const parseParticipantIdentityId = parser('participant_identity');
 export const parseParticipantSessionId = parser('participant_session');
+export const parseApiKeyId = parser('api_key');
 export const parseServiceIdentityId = parser('service_identity');
 export const parseAgentRunId = parser('agent_run');
 export const parseModelAttemptId = parser('model_attempt');

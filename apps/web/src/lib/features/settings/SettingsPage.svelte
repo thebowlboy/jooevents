@@ -10,6 +10,7 @@
 	import type { EventSettings } from '$lib/api/types';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
 	import AboutPanel from './AboutPanel.svelte';
+	import ApiKeysPanel from './ApiKeysPanel.svelte';
 	import EmailSenderPanel from './EmailSenderPanel.svelte';
 	import EventIdentityPanel from './EventIdentityPanel.svelte';
 	import OnThisPageRail from './OnThisPageRail.svelte';
@@ -42,10 +43,10 @@
 	const rail = $derived(settingsRail(settingsSectionByKey(section)));
 
 	onMount(async () => {
-		// About describes the software and Email describes the workspace, so both
-		// read before any event exists. Neither asks this shell for one; Email
-		// owns its own read and its own waiting shell.
-		if (section === 'about' || section === 'email') {
+		// About describes the software, and Email and API keys describe the
+		// workspace, so all three read before any event exists. None asks this
+		// shell for one; each panel owns its own read and its own waiting shell.
+		if (section === 'about' || section === 'email' || section === 'api_keys') {
 			loaded = true;
 			return;
 		}
@@ -90,6 +91,9 @@
 			     this section is not gated on the event read above. -->
 			<EmailSenderPanel {port} />
 			<CommitReceipt />
+		{:else if section === 'api_keys'}
+			<!-- Workspace-scoped credentials: readable before any event exists. -->
+			<ApiKeysPanel apiKeys={port.apiKeys} {narrow} />
 		{:else if !loaded && known !== null && !expectEvent}
 			{#if known}
 				<!-- Evidence says this workspace has no event yet, so the start panel is

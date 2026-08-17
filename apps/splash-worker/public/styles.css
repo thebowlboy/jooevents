@@ -133,6 +133,7 @@ h1 {
 .primary-action:hover { background: var(--accent-dark); transform: translateY(-1px); }
 
 .primary-action:focus-visible,
+.secondary-action:focus-visible,
 .parent-link:focus-visible,
 footer a:focus-visible {
   outline: 3px solid rgb(224 74 43 / .3);
@@ -154,15 +155,10 @@ footer a:focus-visible {
   background: rgb(255 253 249 / .64);
   font-size: .86rem;
   font-weight: 750;
-  cursor: not-allowed;
+  text-decoration: none;
 }
 
-.secondary-action em {
-  color: rgb(113 107 101 / .7);
-  font-size: .66rem;
-  font-style: normal;
-  letter-spacing: .02em;
-}
+.secondary-action:hover { border-color: rgb(224 74 43 / .35); color: var(--accent-dark); }
 
 .action-label {
   display: inline-flex;

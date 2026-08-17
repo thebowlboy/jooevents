@@ -1,9 +1,12 @@
 import { Database } from 'bun:sqlite';
 import { randomBytes } from 'node:crypto';
-import { canonicalJsonSha256 } from '@jooevents/kernel';
+import { canonicalJsonSha256, canonicalJsonText } from '@jooevents/kernel';
 import { SQLiteFoundationError } from './foundation-errors';
 import { readVerifiedSQLiteArtifact, type VerifiedSQLiteArtifact } from './migration-artifact';
-import { SQLITE_MIGRATION_MANIFEST } from './migration-manifest';
+import {
+  SQLITE_MIGRATION_MANIFEST,
+  type SQLiteMigrationManifestEntry
+} from './migration-manifest';
 import {
   captureSQLiteSchema,
   diffSQLiteSchemas,
@@ -23,7 +26,7 @@ export type SQLiteMigrationFaultPoint =
 export interface SQLiteFoundationArtifacts {
   readonly bootstrap: VerifiedSQLiteArtifact;
   readonly predecessor: VerifiedSQLiteArtifact;
-  readonly baseline: VerifiedSQLiteArtifact;
+  readonly migrations: readonly VerifiedSQLiteArtifact[];
   readonly bridge: VerifiedSQLiteArtifact;
   readonly dictionary: VerifiedSQLiteArtifact;
 }
@@ -41,6 +44,7 @@ interface ExpectedSnapshots {
   readonly emptyApplication: SQLiteSchemaSnapshot;
   readonly predecessorApplication: SQLiteSchemaSnapshot;
   readonly currentApplication: SQLiteSchemaSnapshot;
+  readonly applicationByMigrationId: ReadonlyMap<string, SQLiteSchemaSnapshot>;
   readonly runner: SQLiteSchemaSnapshot;
   readonly currentFull: SQLiteSchemaSnapshot;
 }
@@ -93,6 +97,7 @@ interface MetadataRow {
 }
 
 const baseline = SQLITE_MIGRATION_MANIFEST.migrations[0];
+const currentMigration = SQLITE_MIGRATION_MANIFEST.migrations.at(-1)!;
 const lineage = SQLITE_MIGRATION_MANIFEST.acceptedPredecessorLineages[0];
 let expectedSnapshotCache: ExpectedSnapshots | undefined;
 
@@ -106,7 +111,9 @@ export function loadSQLiteFoundationArtifacts(): SQLiteFoundationArtifacts {
       SQLITE_MIGRATION_MANIFEST.predecessor.artifact,
       SQLITE_MIGRATION_MANIFEST.predecessor.checksumSha256
     ),
-    baseline: readVerifiedSQLiteArtifact(baseline.artifact, baseline.checksumSha256),
+    migrations: SQLITE_MIGRATION_MANIFEST.migrations.map((migration) =>
+      readVerifiedSQLiteArtifact(migration.artifact, migration.checksumSha256)
+    ),
     bridge: readVerifiedSQLiteArtifact(lineage.bridgeArtifact, lineage.bridgeChecksumSha256),
     dictionary: readVerifiedSQLiteArtifact(
       SQLITE_MIGRATION_MANIFEST.dictionary.artifact,
@@ -133,6 +140,61 @@ function assertFingerprint(label: string, actual: string, expected: string): voi
       expectedFingerprint: expected,
       actualFingerprint: actual
     });
+  }
+}
+
+interface SubmissionTriageSpamRow {
+  readonly workspace_id: string;
+  readonly event_id: string;
+  readonly submission_id: string;
+  readonly head_json: string;
+}
+
+/** Prepare deterministic transformed values that SQLite cannot hash itself. */
+function prepareMigration(database: Database, migration: SQLiteMigrationManifestEntry): void {
+  if (migration.migrationId === 'e2_0004_api_key_prefix') {
+    const existing = database.query<{ count: number }, []>(
+      'SELECT count(*) AS count FROM api_keys'
+    ).get()?.count ?? 0;
+    if (existing !== 0) {
+      throw new Error(
+        'e2_0004_api_key_prefix requires an empty api_keys table because issued hash-only credentials cannot be converted'
+      );
+    }
+    return;
+  }
+  if (migration.migrationId !== 'e2_0002_submission_triage_spam') return;
+  database.exec(`
+    CREATE TEMP TABLE e2_0002_submission_triage_spam_rows (
+      workspace_id TEXT NOT NULL,
+      event_id TEXT NOT NULL,
+      submission_id TEXT NOT NULL,
+      head_json TEXT NOT NULL,
+      head_digest_sha256 TEXT NOT NULL,
+      PRIMARY KEY (workspace_id,event_id,submission_id)
+    ) STRICT, WITHOUT ROWID;
+  `);
+  const rows = database.query<SubmissionTriageSpamRow, []>(`
+    SELECT workspace_id,event_id,submission_id,head_json
+      FROM submission_triage_heads
+     WHERE state = 'discarded_recoverable'
+     ORDER BY workspace_id,event_id,submission_id
+  `).all();
+  const insert = database.query<never, [string, string, string, string, string]>(`
+    INSERT INTO temp.e2_0002_submission_triage_spam_rows
+      (workspace_id,event_id,submission_id,head_json,head_digest_sha256)
+    VALUES (?,?,?,?,?)
+  `);
+  for (const row of rows) {
+    const parsed = JSON.parse(row.head_json) as Record<string, unknown>;
+    const transformed = Object.freeze({ ...parsed, state: 'spam' });
+    insert.run(
+      row.workspace_id,
+      row.event_id,
+      row.submission_id,
+      canonicalJsonText(transformed),
+      canonicalJsonSha256(transformed)
+    );
   }
 }
 
@@ -165,7 +227,20 @@ function expectedSnapshots(artifacts: SQLiteFoundationArtifacts): ExpectedSnapsh
         fingerprintSQLiteSchema(runner),
         SQLITE_MIGRATION_MANIFEST.bootstrap.expectedRunnerFingerprint
       );
-      current.exec(artifacts.baseline.sql);
+      const applicationByMigrationId = new Map<string, SQLiteSchemaSnapshot>();
+      for (const [index, migration] of SQLITE_MIGRATION_MANIFEST.migrations.entries()) {
+        const before = fingerprintSQLiteSchema(captureSQLiteSchema(current, 'application'));
+        assertFingerprint(`${migration.migrationId} source schema`, before, migration.expectedBeforeApplicationFingerprint);
+        prepareMigration(current, migration);
+        current.exec(artifacts.migrations[index]!.sql);
+        const after = captureSQLiteSchema(current, 'application');
+        assertFingerprint(
+          `${migration.migrationId} result schema`,
+          fingerprintSQLiteSchema(after),
+          migration.expectedAfterApplicationFingerprint
+        );
+        applicationByMigrationId.set(migration.migrationId, after);
+      }
       const currentApplication = captureSQLiteSchema(current, 'application');
       const currentFull = captureSQLiteSchema(current, 'full');
       assertFingerprint(
@@ -189,6 +264,7 @@ function expectedSnapshots(artifacts: SQLiteFoundationArtifacts): ExpectedSnapsh
         emptyApplication,
         predecessorApplication,
         currentApplication,
+        applicationByMigrationId,
         runner,
         currentFull
       };
@@ -306,8 +382,23 @@ function isBaselineReceipt(row: ReceiptRow | undefined, kind: 'executed' | 'epoc
     && row.source_fingerprint === (kind === 'executed'
       ? SQLITE_MIGRATION_MANIFEST.expectedEmptyApplicationFingerprint
       : lineage.sourceApplicationFingerprint)
-    && row.result_fingerprint === SQLITE_MIGRATION_MANIFEST.expectedCurrentApplicationFingerprint
+    && row.result_fingerprint === baseline.expectedAfterApplicationFingerprint
     && row.transition_id === (kind === 'executed' ? null : lineage.transitionId));
+}
+
+function isExecutedReceipt(
+  row: ReceiptRow | undefined,
+  migration: SQLiteMigrationManifestEntry
+): row is ReceiptRow {
+  return Boolean(row && validCommonReceipt(row)
+    && row.migration_id === migration.migrationId
+    && row.schema_epoch === migration.schemaEpoch
+    && row.sequence === migration.sequence
+    && row.checksum_sha256 === migration.checksumSha256
+    && row.receipt_kind === 'executed'
+    && row.source_fingerprint === migration.expectedBeforeApplicationFingerprint
+    && row.result_fingerprint === migration.expectedAfterApplicationFingerprint
+    && row.transition_id === null);
 }
 
 function isTransition(row: TransitionRow | undefined): row is TransitionRow {
@@ -322,7 +413,7 @@ function isTransition(row: TransitionRow | undefined): row is TransitionRow {
     && row.destination_epoch === baseline.schemaEpoch
     && row.destination_migration_id === baseline.migrationId
     && row.destination_baseline_checksum === baseline.checksumSha256
-    && row.destination_fingerprint === SQLITE_MIGRATION_MANIFEST.expectedCurrentApplicationFingerprint
+    && row.destination_fingerprint === baseline.expectedAfterApplicationFingerprint
     && row.bridge_artifact_id === lineage.bridgeArtifactId
     && row.bridge_artifact_checksum === lineage.bridgeChecksumSha256
     && row.atomicity === 'transactional'
@@ -358,24 +449,43 @@ function validateManagedDatabase(
   const meta = metadata(database, requestedClass);
   const receiptRows = receipts(database);
   const transitionRows = transitions(database);
-  const fresh = receiptRows.length === 1 && isBaselineReceipt(receiptRows[0], 'executed')
-    && transitionRows.length === 0;
-  const bridged = receiptRows.length === 2 && isPredecessorReceipt(receiptRows[0])
+  const bridged = isPredecessorReceipt(receiptRows[0])
     && isBaselineReceipt(receiptRows[1], 'epoch_bridge')
     && transitionRows.length === 1 && isTransition(transitionRows[0]);
-  if (!fresh && !bridged) {
+  const fresh = isBaselineReceipt(receiptRows[0], 'executed') && transitionRows.length === 0;
+  const offset = bridged ? 1 : 0;
+  const migrationReceipts = receiptRows.slice(offset);
+  const acceptedPrefix = (fresh || bridged)
+    && migrationReceipts.length >= 1
+    && migrationReceipts.length <= SQLITE_MIGRATION_MANIFEST.migrations.length
+    && migrationReceipts.every((row, index) => index === 0
+      ? isBaselineReceipt(row, bridged ? 'epoch_bridge' : 'executed')
+      : isExecutedReceipt(row, SQLITE_MIGRATION_MANIFEST.migrations[index]!));
+  if (!acceptedPrefix) {
     throw new SQLiteFoundationError('receipt_chain_malformed', 'The migration receipt chain is not an accepted epoch-2 lineage.', {
       receiptCount: receiptRows.length,
       transitionCount: transitionRows.length
     });
   }
+  const applied = SQLITE_MIGRATION_MANIFEST.migrations[migrationReceipts.length - 1]!;
+  const application = captureSQLiteSchema(database, 'application');
+  if (fingerprintSQLiteSchema(application) !== applied.expectedAfterApplicationFingerprint) {
+    throw schemaDrift(
+      expected.applicationByMigrationId.get(applied.migrationId)!,
+      application,
+      'The live application schema disagrees with its terminal migration receipt.'
+    );
+  }
+  const terminal = applied.migrationId === currentMigration.migrationId;
   return {
     status: 'current',
-    coordinate: { schemaEpoch: baseline.schemaEpoch, sequence: baseline.sequence },
-    migrationId: baseline.migrationId,
+    coordinate: { schemaEpoch: applied.schemaEpoch, sequence: applied.sequence },
+    migrationId: applied.migrationId,
     databaseClass: asDatabaseClass(meta.database_class)!,
     databaseId: meta.database_id,
-    schemaFingerprint: assertCurrentSchema(database, expected)
+    schemaFingerprint: terminal
+      ? assertCurrentSchema(database, expected)
+      : fingerprintSQLiteSchema(captureSQLiteSchema(database, 'full'))
   };
 }
 
@@ -454,13 +564,73 @@ function insertTransition(database: Database, appliedAt: number): void {
     baseline.schemaEpoch,
     baseline.migrationId,
     baseline.checksumSha256,
-    SQLITE_MIGRATION_MANIFEST.expectedCurrentApplicationFingerprint,
+    baseline.expectedAfterApplicationFingerprint,
     lineage.bridgeArtifactId,
     lineage.bridgeChecksumSha256,
     lineage.verifierSetDigestSha256,
     SQLITE_MIGRATION_MANIFEST.runnerVersion,
     appliedAt
   );
+}
+
+function applyPendingMigrations(input: {
+  readonly database: Database;
+  readonly artifacts: SQLiteFoundationArtifacts;
+  readonly expected: ExpectedSnapshots;
+  readonly appliedCount: number;
+  readonly databaseClass: SQLiteDatabaseClass;
+  readonly databaseId: string;
+  readonly fault?: (point: SQLiteMigrationFaultPoint) => void;
+}): SQLiteMigrationState {
+  for (let index = input.appliedCount; index < SQLITE_MIGRATION_MANIFEST.migrations.length; index += 1) {
+    const migration = SQLITE_MIGRATION_MANIFEST.migrations[index]!;
+    const artifact = input.artifacts.migrations[index]!;
+    const appliedAt = Date.now();
+    immediateTransaction(input.database, () => {
+      const before = captureSQLiteSchema(input.database, 'application');
+      if (fingerprintSQLiteSchema(before) !== migration.expectedBeforeApplicationFingerprint) {
+        throw schemaDrift(
+          input.expected.applicationByMigrationId.get(SQLITE_MIGRATION_MANIFEST.migrations[index - 1]!.migrationId)!,
+          before,
+          `${migration.migrationId} source schema changed before the migration lock.`
+        );
+      }
+      prepareMigration(input.database, migration);
+      input.database.exec(artifact.sql);
+      const after = captureSQLiteSchema(input.database, 'application');
+      if (fingerprintSQLiteSchema(after) !== migration.expectedAfterApplicationFingerprint) {
+        throw schemaDrift(
+          input.expected.applicationByMigrationId.get(migration.migrationId)!,
+          after,
+          `${migration.migrationId} did not reach its checked-in schema.`
+        );
+      }
+      if (input.database.query<Record<string, unknown>, []>('PRAGMA foreign_key_check').all().length !== 0) {
+        throw new SQLiteFoundationError('schema_drift', `${migration.migrationId} produced a foreign-key violation.`);
+      }
+      input.fault?.('after_schema_before_receipt');
+      insertReceipt(input.database, {
+        migrationId: migration.migrationId,
+        schemaEpoch: migration.schemaEpoch,
+        sequence: migration.sequence,
+        checksumSha256: migration.checksumSha256,
+        receiptKind: 'executed',
+        sourceFingerprint: migration.expectedBeforeApplicationFingerprint,
+        resultFingerprint: migration.expectedAfterApplicationFingerprint,
+        transitionId: null,
+        appliedAt
+      });
+      input.fault?.('after_receipt_before_commit');
+    });
+  }
+  return {
+    status: 'applied',
+    coordinate: { schemaEpoch: currentMigration.schemaEpoch, sequence: currentMigration.sequence },
+    migrationId: currentMigration.migrationId,
+    databaseClass: input.databaseClass,
+    databaseId: input.databaseId,
+    schemaFingerprint: assertCurrentSchema(input.database, input.expected)
+  };
 }
 
 function applyFreshDatabase(input: {
@@ -472,17 +642,24 @@ function applyFreshDatabase(input: {
 }): SQLiteMigrationState {
   const appliedAt = Date.now();
   const databaseId = randomBytes(16).toString('hex');
-  const result = immediateTransaction(input.database, () => {
+  immediateTransaction(input.database, () => {
     const before = captureSQLiteSchema(input.database, 'application');
     if (fingerprintSQLiteSchema(before) !== SQLITE_MIGRATION_MANIFEST.expectedEmptyApplicationFingerprint
         || runnerObjectCount(input.database) !== 0) {
       throw schemaDrift(input.expected.emptyApplication, before, 'The database stopped being empty before the migration lock.');
     }
     input.database.exec(input.artifacts.bootstrap.sql);
-    input.database.exec(input.artifacts.baseline.sql);
+    input.database.exec(input.artifacts.migrations[0]!.sql);
     ensureRunnerSchema(input.database, input.expected);
     insertMetadata(input.database, input.databaseClass, databaseId, appliedAt);
-    assertCurrentSchema(input.database, input.expected);
+    const application = captureSQLiteSchema(input.database, 'application');
+    if (fingerprintSQLiteSchema(application) !== baseline.expectedAfterApplicationFingerprint) {
+      throw schemaDrift(
+        input.expected.applicationByMigrationId.get(baseline.migrationId)!,
+        application,
+        'The baseline migration did not reach its checked-in schema.'
+      );
+    }
     input.fault?.('after_schema_before_receipt');
     insertReceipt(input.database, {
       migrationId: baseline.migrationId,
@@ -491,19 +668,20 @@ function applyFreshDatabase(input: {
       checksumSha256: baseline.checksumSha256,
       receiptKind: 'executed',
       sourceFingerprint: SQLITE_MIGRATION_MANIFEST.expectedEmptyApplicationFingerprint,
-      resultFingerprint: SQLITE_MIGRATION_MANIFEST.expectedCurrentApplicationFingerprint,
+      resultFingerprint: baseline.expectedAfterApplicationFingerprint,
       transitionId: null,
       appliedAt
     });
     input.fault?.('after_receipt_before_commit');
-    return {
-      status: 'applied' as const,
-      coordinate: { schemaEpoch: baseline.schemaEpoch, sequence: baseline.sequence },
-      migrationId: baseline.migrationId,
-      databaseClass: input.databaseClass,
-      databaseId,
-      schemaFingerprint: SQLITE_MIGRATION_MANIFEST.expectedCurrentFullFingerprint
-    };
+  });
+  const result = applyPendingMigrations({
+    database: input.database,
+    artifacts: input.artifacts,
+    expected: input.expected,
+    appliedCount: 1,
+    databaseClass: input.databaseClass,
+    databaseId,
+    ...(input.fault ? { fault: input.fault } : {})
   });
   input.fault?.('after_commit_before_return');
   return result;
@@ -517,7 +695,7 @@ function bridgeUntrackedPredecessor(input: {
 }): SQLiteMigrationState {
   const appliedAt = Date.now();
   const databaseId = randomBytes(16).toString('hex');
-  const result = immediateTransaction(input.database, () => {
+  immediateTransaction(input.database, () => {
     const before = captureSQLiteSchema(input.database, 'application');
     if (runnerObjectCount(input.database) !== 0
         || fingerprintSQLiteSchema(before) !== lineage.sourceApplicationFingerprint) {
@@ -539,8 +717,12 @@ function bridgeUntrackedPredecessor(input: {
     });
     input.database.exec(input.artifacts.bridge.sql);
     const after = captureSQLiteSchema(input.database, 'application');
-    if (fingerprintSQLiteSchema(after) !== SQLITE_MIGRATION_MANIFEST.expectedCurrentApplicationFingerprint) {
-      throw schemaDrift(input.expected.currentApplication, after, 'The retained bridge did not reach the epoch-2 baseline.');
+    if (fingerprintSQLiteSchema(after) !== baseline.expectedAfterApplicationFingerprint) {
+      throw schemaDrift(
+        input.expected.applicationByMigrationId.get(baseline.migrationId)!,
+        after,
+        'The retained bridge did not reach the epoch-2 baseline.'
+      );
     }
     if (input.database.query<Record<string, unknown>, []>('PRAGMA foreign_key_check').all().length !== 0) {
       throw new SQLiteFoundationError('schema_drift', 'The retained bridge produced a foreign-key violation.');
@@ -556,20 +738,20 @@ function bridgeUntrackedPredecessor(input: {
       checksumSha256: baseline.checksumSha256,
       receiptKind: 'epoch_bridge',
       sourceFingerprint: lineage.sourceApplicationFingerprint,
-      resultFingerprint: SQLITE_MIGRATION_MANIFEST.expectedCurrentApplicationFingerprint,
+      resultFingerprint: baseline.expectedAfterApplicationFingerprint,
       transitionId: lineage.transitionId,
       appliedAt
     });
-    assertCurrentSchema(input.database, input.expected);
     input.fault?.('after_receipt_before_commit');
-    return {
-      status: 'bridged' as const,
-      coordinate: { schemaEpoch: baseline.schemaEpoch, sequence: baseline.sequence },
-      migrationId: baseline.migrationId,
-      databaseClass: 'retained_development' as const,
-      databaseId,
-      schemaFingerprint: SQLITE_MIGRATION_MANIFEST.expectedCurrentFullFingerprint
-    };
+  });
+  const result = applyPendingMigrations({
+    database: input.database,
+    artifacts: input.artifacts,
+    expected: input.expected,
+    appliedCount: 1,
+    databaseClass: 'retained_development',
+    databaseId,
+    ...(input.fault ? { fault: input.fault } : {})
   });
   input.fault?.('after_commit_before_return');
   return result;
@@ -588,6 +770,27 @@ export function migrateOrValidateSQLite(input: {
   const runnerObjects = runnerObjectCount(input.database);
   if (runnerObjects > 0) {
     const state = validateManagedDatabase(input.database, expected, input.databaseClass);
+    const appliedCount = SQLITE_MIGRATION_MANIFEST.migrations.findIndex(
+      (migration) => migration.migrationId === state.migrationId
+    ) + 1;
+    if (state.migrationId !== currentMigration.migrationId) {
+      if (input.policy === 'validate') {
+        throw new SQLiteFoundationError(
+          'migration_required',
+          `The managed SQLite database requires ${currentMigration.migrationId}.`,
+          { currentMigrationId: state.migrationId, requiredMigrationId: currentMigration.migrationId }
+        );
+      }
+      return applyPendingMigrations({
+        database: input.database,
+        artifacts: input.artifacts,
+        expected,
+        appliedCount,
+        databaseClass: state.databaseClass!,
+        databaseId: state.databaseId!,
+        ...(input.fault ? { fault: input.fault } : {})
+      });
+    }
     if (input.policy === 'apply') {
       input.database.exec(!input.isMemory && state.databaseClass === 'ephemeral' && input.allowFileBackedEphemeral
         ? 'PRAGMA journal_mode = DELETE;'
@@ -642,6 +845,19 @@ export function migrateOrValidateSQLite(input: {
     });
   }
   throw schemaDrift(expected.currentApplication, application, 'The untracked SQLite schema is not empty or the exact epoch-1 predecessor.');
+}
+
+/** Validate an accepted managed coordinate without requiring it to be terminal. */
+export function validateManagedSQLiteCoordinate(input: {
+  readonly database: Database;
+  readonly artifacts: SQLiteFoundationArtifacts;
+  readonly databaseClass?: SQLiteDatabaseClass;
+}): SQLiteMigrationState {
+  const expected = expectedSnapshots(input.artifacts);
+  if (runnerObjectCount(input.database) === 0) {
+    throw new SQLiteFoundationError('migration_required', 'The SQLite database is not yet managed.');
+  }
+  return validateManagedDatabase(input.database, expected, input.databaseClass);
 }
 
 export function skippedSQLiteMigrationState(databaseClass: SQLiteDatabaseClass | null): SQLiteMigrationState {

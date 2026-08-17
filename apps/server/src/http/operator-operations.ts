@@ -41,7 +41,9 @@ const reservedPrefixes = [
   '/api/auth/',
   '/api/entry/',
   '/api/operations/manifest/',
-  '/api/public/'
+  '/api/public/',
+  '/api/workspace/api-key-secrets/',
+  '/api/v1/'
 ];
 
 export function isServerOwnedOperationPath(path: string): boolean {

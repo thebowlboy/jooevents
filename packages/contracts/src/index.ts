@@ -1,5 +1,7 @@
 export * from './access';
 export * from './agent-action-runs';
+export * from './api-keys';
+export * from './external-agent-api';
 export * from './account-linking';
 export * from './communications/organizer';
 export * from './decisions';

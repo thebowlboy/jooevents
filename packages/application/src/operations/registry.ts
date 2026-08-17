@@ -16,6 +16,7 @@ import {
 } from '@jooevents/contracts';
 import { parseOperationAccessLane, type OperationAccessLane } from '@jooevents/identity-access';
 import { canonicalJsonSha256, canonicalJsonText, parseCapabilityRevisionId } from '@jooevents/kernel';
+import { z } from 'zod';
 import type {
   AgentActionEligibilityCatalog,
   AgentActionEligibleOperation
@@ -231,6 +232,10 @@ function sameRef(left: VersionedDefinitionRef, right: VersionedDefinitionRef): b
   return left.key === right.key && left.version === right.version;
 }
 
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function sameSchemaRef(left: SafeSchemaManifestRef, right: SafeSchemaManifestRef): boolean {
   return sameRef(left, right) && left.digestSha256 === right.digestSha256;
 }
@@ -271,8 +276,17 @@ function sealedReadonlyMap<Key, Value>(source: ReadonlyMap<Key, Value>): Readonl
 function capturedSchemaRegistration(registration: RegisteredOperationSchema): RegisteredOperationSchema {
   const parser = registration.schema;
   const safeParse = parser?.safeParse;
+  const jsonSchema = registration.jsonSchema ?? (
+    parser && typeof parser === 'object' && '_zod' in parser
+      ? z.toJSONSchema(parser, {
+          target: 'draft-2020-12',
+          unrepresentable: 'any'
+        })
+      : undefined
+  );
   return Object.freeze({
     reference: deepFreeze({ ...registration.reference }),
+    ...(jsonSchema === undefined ? {} : { jsonSchema: deepFreeze(jsonSchema) }),
     schema: Object.freeze({
       safeParse(value: unknown) {
         if (typeof safeParse !== 'function') throw new TypeError('registered schema has no captured parser');
@@ -2256,7 +2270,7 @@ export async function createOperationRegistry(
       inputSchema: operation.inputSchema.reference,
       idempotency: { required: false },
       concurrency: { kind: 'read_snapshot' },
-      outcomes: [...operation.definition.outcomes].sort((left, right) => left.class.localeCompare(right.class) || left.kind.localeCompare(right.kind)),
+      outcomes: [...operation.definition.outcomes].sort((left, right) => compareText(left.class, right.class) || compareText(left.kind, right.kind)),
       enabledBindings: [...operation.bindings.values()].map((binding) => {
         if (
           binding.public.surface === 'operator_http'
@@ -2280,11 +2294,11 @@ export async function createOperationRegistry(
           resultSchema: binding.projectedResultSchema.reference
         };
       }).sort((left, right) => {
-            const surface = left.surface.localeCompare(right.surface);
+            const surface = compareText(left.surface, right.surface);
             if (surface !== 0) return surface;
             const leftSelector = left.protocol === 'http' ? `${left.method} ${left.path}` : left.toolName;
             const rightSelector = right.protocol === 'http' ? `${right.method} ${right.path}` : right.toolName;
-            return leftSelector.localeCompare(rightSelector);
+            return compareText(leftSelector, rightSelector);
           })
     }));
   const effectEntries: SafeOperationManifestEntry[] = [...compiledEffects.values()]
@@ -2301,7 +2315,7 @@ export async function createOperationRegistry(
       inputSchema: operation.inputSchema.reference,
       idempotency: { required: true, ...operation.definition.idempotency },
       concurrency: { kind: 'registered', definition: operation.definition.concurrency },
-      outcomes: [...operation.definition.outcomes].sort((left, right) => left.class.localeCompare(right.class) || left.kind.localeCompare(right.kind)),
+      outcomes: [...operation.definition.outcomes].sort((left, right) => compareText(left.class, right.class) || compareText(left.kind, right.kind)),
       enabledBindings: [...operation.bindings.values()].map((binding) => {
         if (binding.surface === 'operator_http' || binding.surface === 'participant_http') {
           return {
@@ -2332,15 +2346,15 @@ export async function createOperationRegistry(
           resultSchema: binding.projectedResultSchema.reference
         };
       }).sort((left, right) => {
-            const surface = left.surface.localeCompare(right.surface);
+            const surface = compareText(left.surface, right.surface);
             if (surface !== 0) return surface;
             const leftSelector = left.protocol === 'http' ? `${left.method} ${left.path}` : left.toolName;
             const rightSelector = right.protocol === 'http' ? `${right.method} ${right.path}` : right.toolName;
-            return leftSelector.localeCompare(rightSelector);
+            return compareText(leftSelector, rightSelector);
           })
     }));
   const entries = [...readEntries, ...effectEntries]
-    .sort((left, right) => left.name.localeCompare(right.name) || left.version - right.version);
+    .sort((left, right) => compareText(left.name, right.name) || left.version - right.version);
   const body: SafeOperationManifestBody = safeOperationManifestBodySchema.parse({ schemaVersion: 1, operations: entries });
   const registryDigestSha256 = await sha256(body);
   const safeManifest = deepFreeze(safeOperationManifestSchema.parse({ ...body, registryDigestSha256 }));
@@ -2508,6 +2522,7 @@ export interface RegisteredAgentActionEligibility {
   readonly displayLabel: string;
   readonly consequences: readonly string[];
   readonly externalEffect: 'none' | 'reconcilable';
+  readonly maxRisk?: 'low' | 'normal' | 'consequential';
 }
 
 /** Builds the only catalog the approved runner may use from the compiled registry. */
@@ -2557,7 +2572,10 @@ export function createRegisteredAgentActionEligibilityCatalog(
     contractDigestSha256: operation.contractDigestSha256,
     displayLabel: operation.displayLabel(),
     consequences: Object.freeze([...operation.consequences()]),
-    externalEffect: operation.externalEffect
+    externalEffect: operation.externalEffect,
+    maxRisk: registry.safeManifest.operations.find((entry) =>
+      entry.name === operation.operationName && entry.version === operation.operationVersion
+    )!.maxRisk
   })));
   return Object.freeze({
     entries,

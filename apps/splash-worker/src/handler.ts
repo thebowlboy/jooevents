@@ -21,6 +21,8 @@ export async function handleRequest(request: Request, environment: Env): Promise
   // Public asset names are stable, so revalidate every response to avoid serving
   // a new document with stale CSS after a deployment.
   headers.set('Cache-Control', 'public, max-age=0, must-revalidate');
+  if (url.pathname === '/') headers.set('Link', '</llms.txt>; rel="describedby"');
+  if (url.pathname === '/llms.txt') headers.set('Content-Type', 'text/markdown; charset=utf-8');
 
   return new Response(response.body, {
     status: response.status,

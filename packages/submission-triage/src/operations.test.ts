@@ -108,7 +108,7 @@ function moduleFixture(options: { readonly event?: boolean; readonly denied?: bo
         const actor = input.evidence.kind === 'external_mcp'
           ? {
               kind: 'external_mcp_client' as const,
-              oauthClientId: input.evidence.oauthClientId,
+              clientKey: input.evidence.clientKey,
               authorityPrincipalId: `workspace_user:${userId}`
             }
           : { kind: 'workspace_user' as const, userId };
@@ -162,7 +162,7 @@ const operatorEvidence: InvocationEvidence = {
 };
 const mcpEvidence: InvocationEvidence = {
   kind: 'external_mcp', surface: 'external_mcp', client: { key: 'mcp.agent' },
-  oauthTokenHandle: 'current-mcp-token', oauthClientId: 'mcp-client'
+  credentialHandle: 'current-mcp-token', clientKey: 'mcp-client'
 };
 
 describe('submission triage read operations', () => {

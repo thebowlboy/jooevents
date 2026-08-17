@@ -56,7 +56,7 @@ const fresh: WorkspaceDataset = {
 	formats: [],
 
 	submissions: [],
-	submissionTrayTotals: { inbox: 0, 'set-aside': 0, late: 0, discarded: 0 },
+	submissionTrayTotals: { inbox: 0, 'set-aside': 0, late: 0, spam: 0 },
 
 	reviewPlans: [],
 	/* No event, so nobody has been invited to review anything. */

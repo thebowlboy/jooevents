@@ -32,7 +32,7 @@ export type ActorRef =
   | { readonly kind: 'service'; readonly serviceIdentityId: ServiceIdentityId }
   | {
       readonly kind: 'external_mcp_client';
-      readonly oauthClientId: string;
+      readonly clientKey: string;
       readonly authorityPrincipalId: string;
     }
   | {

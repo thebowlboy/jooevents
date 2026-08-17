@@ -76,7 +76,7 @@ CREATE TABLE submission_triage_heads (
   event_id TEXT NOT NULL,
   submission_id TEXT NOT NULL,
   head_version INTEGER NOT NULL CHECK(head_version > 0),
-  state TEXT NOT NULL CHECK(state IN ('inbox', 'set_aside', 'discarded_recoverable')),
+  state TEXT NOT NULL CHECK(state IN ('inbox', 'set_aside', 'spam')),
   updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms BETWEEN 0 AND 8640000000000000),
   head_json TEXT NOT NULL CHECK(
     json_valid(head_json) AND json_type(head_json) = 'object'
@@ -120,6 +120,12 @@ BEGIN SELECT RAISE(ABORT, 'submission triage head version is invalid'); END;
 CREATE TRIGGER submission_triage_heads_no_delete BEFORE DELETE ON submission_triage_heads
 BEGIN SELECT RAISE(ABORT, 'submission triage heads cannot be deleted'); END;
 `;
+
+/** Immutable epoch-2 baseline bytes; current runtimes advance through e2_0002. */
+export const SQLITE_SUBMISSION_TRIAGE_E2_0001_SQL = SQLITE_SUBMISSION_TRIAGE_SQL.replace(
+  "state IN ('inbox', 'set_aside', 'spam')",
+  "state IN ('inbox', 'set_aside', 'discarded_recoverable')"
+);
 
 export type SQLiteSubmissionTriageErrorCode =
   | 'transaction_required'

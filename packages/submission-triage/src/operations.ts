@@ -104,8 +104,8 @@ export const SUBMISSION_TRIAGE_HTTP_PATHS = Object.freeze({
   transition: '/api/events/current/submissions/triage'
 });
 export const SUBMISSION_TRIAGE_MCP_TOOLS = Object.freeze({
-  list: 'submission_triage_list',
-  read: 'submission_triage_read'
+  list: 'list_triage_submissions',
+  read: 'get_triage_submission'
 });
 
 export interface SubmissionTriageOperationIds {
@@ -544,7 +544,9 @@ export function createSubmissionTriageReadOperationModule(input: {
       operations: built.map((entry) => ({
         ...entry.operation,
         lifecycle: { status: 'active' as const },
-        summary: `Read ${entry.operation.name}.`,
+        summary: entry.operation.name === SUBMISSION_TRIAGE_LIST_OPERATION.name
+          ? 'List triaged submissions and their current recovery tray for the selected event.'
+          : 'Get one triaged submission with the evidence needed to understand its current tray.',
         effect: 'read' as const,
         maxRisk: 'low' as const,
         autonomyPolicy: entry.refs.autonomy,
@@ -829,8 +831,8 @@ export function createSubmissionTriageTransitionOperationModule(input: {
           history: { summariesByAction: Object.freeze({
             set_aside: 'Set submissions aside',
             return_to_inbox: 'Returned submissions to the inbox',
-            discard_recoverable: 'Marked submissions as spam',
-            restore: 'Restored submissions to the inbox'
+            mark_spam: 'Marked submissions as spam',
+            not_spam: 'Marked submissions as not spam'
           }) }
         },
         bindings: [{

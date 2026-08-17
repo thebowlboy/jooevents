@@ -369,7 +369,7 @@ syncProgramRoundup();
 // delta its own submissions do not back, and a delta written into a file is
 // wrong the day after it is written.
 //
-// Discarded proposals are excluded from every figure here. They are kept and
+// Spam proposals are excluded from every figure here. They are kept and
 // recoverable, but they are not part of what this event has to work through,
 // and counting them would overstate the load on every surface that reads this.
 
@@ -382,7 +382,7 @@ function visitHistory(): string[] {
 function submissionArrivals(): SubmissionArrivals | null {
 	const timezone = db.summary.event?.timezone;
 	if (!timezone) return null;
-	const held = db.submissions.filter((row) => row.tray !== 'discarded');
+	const held = db.submissions.filter((row) => row.tray !== 'spam');
 	const pulse = summarizeArrivals({
 		arrivals: held.map((row) => row.submittedAt),
 		visits: visitHistory(),
@@ -397,7 +397,7 @@ function submissionArrivals(): SubmissionArrivals | null {
 			setAside: held.filter((row) => row.tray === 'set-aside').length,
 			late: held.filter((row) => row.tray === 'late').length
 		},
-		discarded: db.submissions.length - held.length
+		spam: db.submissions.length - held.length
 	};
 }
 
@@ -1976,20 +1976,20 @@ export const api = {
 				}
 			}
 		},
-		async discard(ids: string[]): Promise<void> {
+		async markSpam(ids: string[]): Promise<void> {
 			await latency();
 			for (const submission of db.submissions) {
-				if (ids.includes(submission.id) && submission.tray !== 'discarded') {
-					moveTrayCount(submission.tray, 'discarded');
-					submission.tray = 'discarded';
+				if (ids.includes(submission.id) && submission.tray !== 'spam') {
+					moveTrayCount(submission.tray, 'spam');
+					submission.tray = 'spam';
 				}
 			}
 		},
-		async restore(ids: string[]): Promise<void> {
+		async notSpam(ids: string[]): Promise<void> {
 			await latency();
 			for (const submission of db.submissions) {
-				if (ids.includes(submission.id) && submission.tray === 'discarded') {
-					moveTrayCount('discarded', 'inbox');
+				if (ids.includes(submission.id) && submission.tray === 'spam') {
+					moveTrayCount('spam', 'inbox');
 					submission.tray = 'inbox';
 				}
 			}
@@ -2877,7 +2877,7 @@ export const api = {
 				(submission) =>
 					submission.targetSessionId === id &&
 					submission.decision === 'undecided' &&
-					submission.tray !== 'discarded'
+					submission.tray !== 'spam'
 			).length;
 			if (proposals > 0) {
 				return {
@@ -2914,7 +2914,7 @@ export const api = {
 			const counts: Record<string, number> = {};
 			for (const submission of db.submissions) {
 				if (!submission.targetSessionId) continue;
-				if (submission.decision !== 'undecided' || submission.tray === 'discarded') continue;
+				if (submission.decision !== 'undecided' || submission.tray === 'spam') continue;
 				counts[submission.targetSessionId] = (counts[submission.targetSessionId] ?? 0) + 1;
 			}
 			return counts;

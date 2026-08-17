@@ -22,7 +22,7 @@ const fieldId = id(7);
 const runId = id(8);
 
 function row(input: {
-	readonly state?: 'inbox' | 'set_aside' | 'discarded_recoverable';
+	readonly state?: 'inbox' | 'set_aside' | 'spam';
 	readonly arrival?: 'on_time' | 'late';
 	readonly source?: 'public_form' | 'direct_entry' | 'import' | 'email';
 	readonly attribution?: 'manual' | 'registered_run' | null;
@@ -33,8 +33,8 @@ function row(input: {
 	const arrival = input.arrival ?? 'on_time';
 	const source = input.source ?? 'public_form';
 	const attribution = input.attribution ?? (state === 'set_aside' ? 'registered_run' : null);
-	const visibleTray = state === 'discarded_recoverable'
-		? 'discarded'
+	const visibleTray = state === 'spam'
+		? 'spam'
 		: state === 'set_aside'
 			? 'set_aside'
 			: arrival === 'late' ? 'late' : 'inbox';
@@ -182,11 +182,11 @@ describe('Submission Triage source-neutral mapper', () => {
 			schemaVersion: 1,
 			queryGuard,
 			rows: [row({ source: 'email', categories: true })],
-			trayTotals: { inbox: 1, set_aside: 2, late: 3, discarded: 4 },
+			trayTotals: { inbox: 1, set_aside: 2, late: 3, spam: 4 },
 			search: { query: 'durable', matched: 1, scanned: 1 }
 		}));
 		expect(mapped).toMatchObject({
-			trayTotals: { inbox: 1, set_aside: 2, late: 3, discarded: 4 },
+			trayTotals: { inbox: 1, set_aside: 2, late: 3, spam: 4 },
 			search: { query: 'durable', matched: 1, scanned: 1 },
 			rows: [{ source: { source: 'email', track: { label: 'Infrastructure' } } }]
 		});

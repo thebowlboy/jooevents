@@ -23,7 +23,7 @@ import {
 } from './file-ownership';
 import {
   loadSQLiteFoundationArtifacts,
-  migrateOrValidateSQLite,
+  validateManagedSQLiteCoordinate,
   type SQLiteDatabaseClass
 } from './migration-runner';
 import { SQLITE_MIGRATION_MANIFEST } from './migration-manifest';
@@ -181,12 +181,10 @@ function validateState(input: {
   if (!input.expectedDatabaseId) {
     refuse('backup_invalid', 'A managed retained SQLite artifact requires its expected database ID.');
   }
-  const state = migrateOrValidateSQLite({
+  const state = validateManagedSQLiteCoordinate({
     database: input.database,
     artifacts: loadSQLiteFoundationArtifacts(),
-    policy: 'validate',
-    databaseClass: input.expectedDatabaseClass,
-    isMemory: false
+    databaseClass: input.expectedDatabaseClass
   });
   if (
     state.databaseId !== input.expectedDatabaseId ||

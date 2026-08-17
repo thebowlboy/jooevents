@@ -5,6 +5,7 @@ import {
   createReadOperationResultSchema,
   operationEffectSchema,
   operationHttpIdempotencyKeySchema,
+  operationTransportErrorCodeSchema,
   safeOperationAutonomySchema,
   safeOperationManifestSchema,
   structuredOutcomeSchema
@@ -52,6 +53,11 @@ describe('operation result contracts', () => {
     expect(schema.safeParse({ kind: 'outcome', outcome, correlationId, terminal: true }).success).toBe(false);
     expect(schema.safeParse({ kind: 'outcome', outcome, correlationId, terminal: false, receipt }).success).toBe(false);
   });
+});
+
+test('external transports can report rate limiting without weakening other errors', () => {
+  expect(operationTransportErrorCodeSchema.safeParse('rate_limited').success).toBe(true);
+  expect(operationTransportErrorCodeSchema.safeParse('quota_guess').success).toBe(false);
 });
 
 test('effectful HTTP idempotency keys use one bounded non-joinable wire shape', () => {

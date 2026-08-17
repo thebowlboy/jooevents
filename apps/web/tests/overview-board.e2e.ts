@@ -105,7 +105,7 @@ test.describe('a steady mid-flight event', () => {
 		// Five days of visits in the last week is a daily habit, so the diff worth
 		// showing is today's — the window is chosen from the rotation, not fixed.
 		await expect(band(page)).toContainText(/\+\d+ today/);
-		// Thirteen held rows, not the fourteen collected: the discarded proposal
+		// Thirteen held rows, not the fourteen collected: the spam proposal
 		// is recoverable, but it is not work the event has to get through.
 		await expect(band(page).getByText('13', { exact: true })).toBeVisible();
 	});

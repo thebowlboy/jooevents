@@ -113,7 +113,7 @@ describe('proposalCounts', () => {
 			proposal({ id: 'sub-1', targetSessionId: 'ses-1' }),
 			proposal({ id: 'sub-2', targetSessionId: 'ses-1' }),
 			proposal({ id: 'sub-3', targetSessionId: 'ses-1', decision: 'accepted' }),
-			proposal({ id: 'sub-4', targetSessionId: 'ses-1', tray: 'discarded' }),
+			proposal({ id: 'sub-4', targetSessionId: 'ses-1', tray: 'spam' }),
 			proposal({ id: 'sub-5' })
 		]);
 		expect(counts.get('ses-1')).toBe(2);

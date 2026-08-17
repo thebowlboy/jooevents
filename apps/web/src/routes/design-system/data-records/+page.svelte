@@ -77,7 +77,7 @@
 			decision: 'accepted',
 			notified: false,
 			abstract:
-				'Two years of running a 900-submission call with a volunteer committee of five. What we automated, what we deliberately refused to automate, and the three review patterns that turned a fortnight of triage into an afternoon: staged deadlines, expectation setting before the form opens, and a discard tray nobody is afraid of.'
+				'Two years of running a 900-submission call with a volunteer committee of five. What we automated, what we deliberately refused to automate, and the three review patterns that turned a fortnight of triage into an afternoon: staged deadlines, expectation setting before the form opens, and a Spam tray nobody is afraid of.'
 		},
 		{
 			id: 'sub-2',
@@ -137,7 +137,7 @@
 		{ value: 'inbox', label: 'Inbox', count: 9, icon: submissionTrayIcon.inbox },
 		{ value: 'set-aside', label: 'Set aside', short: 'Aside', count: 3, icon: submissionTrayIcon['set-aside'] },
 		{ value: 'late', label: 'Late', count: 1, icon: submissionTrayIcon.late },
-		{ value: 'discarded', label: 'Spam', short: 'Spam', count: 4, icon: submissionTrayIcon.discarded }
+		{ value: 'spam', label: 'Spam', short: 'Spam', count: 4, icon: submissionTrayIcon.spam }
 	];
 
 	let tray = $state('inbox');

@@ -49,7 +49,10 @@ unexpected_public_docs="$(
     $0 == "SECURITY.md" ||
     $0 == "TRADEMARKS.md" ||
     $0 == "CODE_OF_CONDUCT.md" { next }
-    $0 ~ /^docs\/(user|installation|operator|integration|reference|releases|security)\// { next }
+    $0 == "docs/index.md" ||
+    $0 == "docs/index.html" ||
+    $0 == "docs/llms.txt" { next }
+    $0 ~ /^docs\/(user|installation|operator|integration|agents|reference|releases|security)\// { next }
     { print }
   '
 )"

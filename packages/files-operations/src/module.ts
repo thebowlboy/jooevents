@@ -418,7 +418,9 @@ function readModule(input: {
             .filter((lane) => lane.surface === 'external_mcp')
             .map(() => ({
               surface: 'external_mcp' as const,
-              toolName: item.entry.operation.name,
+              toolName: item.entry.operation.name === FILE_OVERVIEW_READ_OPERATION.name
+                ? 'get_file_overview'
+                : item.entry.operation.name,
               projection: item.refs.projection
             }))
         ]

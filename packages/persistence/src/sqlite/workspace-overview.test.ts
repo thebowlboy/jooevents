@@ -195,7 +195,7 @@ function seedPipelineMetricRows(sqlite: ReturnType<typeof openRuntime>['runtime'
       ) VALUES (?, ?, ?, 1, ?, ?, ?, ?)
     `);
     for (const [index, state] of [
-      'inbox', 'set_aside', 'discarded_recoverable'
+      'inbox', 'set_aside', 'spam'
     ].entries()) {
       const submissionId = id(`${660 + index}`);
       const arrivalId = id(`${800 + index}`);

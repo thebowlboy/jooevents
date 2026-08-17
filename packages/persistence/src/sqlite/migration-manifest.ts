@@ -9,7 +9,7 @@ export interface SQLiteMigrationManifestEntry extends SQLiteMigrationReference {
   readonly artifact: URL;
   readonly checksumSha256: string;
   readonly atomicity: 'transactional';
-  readonly dependsOn: null;
+  readonly dependsOn: SQLiteMigrationReference | null;
   readonly expectedBeforeApplicationFingerprint: string;
   readonly expectedAfterApplicationFingerprint: string;
 }
@@ -46,7 +46,7 @@ export interface SQLiteMigrationManifest {
     readonly checksumSha256: string;
     readonly expectedApplicationFingerprint: string;
   };
-  readonly migrations: readonly [SQLiteMigrationManifestEntry];
+  readonly migrations: readonly [SQLiteMigrationManifestEntry, ...SQLiteMigrationManifestEntry[]];
   readonly expectedEmptyApplicationFingerprint: string;
   readonly expectedCurrentApplicationFingerprint: string;
   readonly expectedCurrentFullFingerprint: string;
@@ -61,6 +61,30 @@ const destinationBaseline = Object.freeze({
   migrationId: 'e2_0001_jooevents_foundation',
   schemaEpoch: 2,
   sequence: 1
+});
+
+const submissionTriageSpam = Object.freeze({
+  migrationId: 'e2_0002_submission_triage_spam',
+  schemaEpoch: 2,
+  sequence: 2
+});
+
+const externalAgentApi = Object.freeze({
+  migrationId: 'e2_0003_external_agent_api',
+  schemaEpoch: 2,
+  sequence: 3
+});
+
+const apiKeyPrefix = Object.freeze({
+  migrationId: 'e2_0004_api_key_prefix',
+  schemaEpoch: 2,
+  sequence: 4
+});
+
+const apiKeyNeverExpire = Object.freeze({
+  migrationId: 'e2_0005_api_key_never_expire',
+  schemaEpoch: 2,
+  sequence: 5
 });
 
 /** Exact public epoch-2 baseline plus the sole known retained epoch-1 lineage. */
@@ -78,22 +102,64 @@ export const SQLITE_MIGRATION_MANIFEST: SQLiteMigrationManifest = Object.freeze(
     checksumSha256: '7bcc91ff77f3cb57b6d553dbf73546ec1d2972da24840d238d12323b7f50305c',
     expectedApplicationFingerprint: 'a5c5c8d6a0894112ba7061ed02f7e2d8f527042c512a408b305d0a86248dd5db'
   }),
-  migrations: Object.freeze([Object.freeze({
-    ...destinationBaseline,
-    dialect: 'sqlite' as const,
-    artifact: new URL('../../migrations/sqlite/e2_0001_jooevents_foundation.sql', import.meta.url),
-    checksumSha256: '5ce9cfb08f06e8cd9a84296fe20d0850cf4876f283b479caafc128ad967bf6aa',
-    atomicity: 'transactional' as const,
-    dependsOn: null,
-    expectedBeforeApplicationFingerprint: 'e3ded6858faee915d966f4bcaf5b768070aaaa4d5f1021ac04c713440106b89d',
-    expectedAfterApplicationFingerprint: '8760a700ec1ff8cc84e8d030d2fbc4d19f09c432b88e327149d0070d24b47fab'
-  })]) as readonly [SQLiteMigrationManifestEntry],
+  migrations: Object.freeze([
+    Object.freeze({
+      ...destinationBaseline,
+      dialect: 'sqlite' as const,
+      artifact: new URL('../../migrations/sqlite/e2_0001_jooevents_foundation.sql', import.meta.url),
+      checksumSha256: '5ce9cfb08f06e8cd9a84296fe20d0850cf4876f283b479caafc128ad967bf6aa',
+      atomicity: 'transactional' as const,
+      dependsOn: null,
+      expectedBeforeApplicationFingerprint: 'e3ded6858faee915d966f4bcaf5b768070aaaa4d5f1021ac04c713440106b89d',
+      expectedAfterApplicationFingerprint: '8760a700ec1ff8cc84e8d030d2fbc4d19f09c432b88e327149d0070d24b47fab'
+    }),
+    Object.freeze({
+      ...submissionTriageSpam,
+      dialect: 'sqlite' as const,
+      artifact: new URL('../../migrations/sqlite/e2_0002_submission_triage_spam.sql', import.meta.url),
+      checksumSha256: '8754ca57db09082b3fb2897ce89c8958a5af6f457cada1f0834dc3037201401e',
+      atomicity: 'transactional' as const,
+      dependsOn: destinationBaseline,
+      expectedBeforeApplicationFingerprint: '8760a700ec1ff8cc84e8d030d2fbc4d19f09c432b88e327149d0070d24b47fab',
+      expectedAfterApplicationFingerprint: '115bc77a2ad42509eca775d41ce25b5ce9dd000428ba8728de661b112bcd2153'
+    }),
+    Object.freeze({
+      ...externalAgentApi,
+      dialect: 'sqlite' as const,
+      artifact: new URL('../../migrations/sqlite/e2_0003_external_agent_api.sql', import.meta.url),
+      checksumSha256: '2acf6112c34fcdfcbb7f0f483c99617eab7f08445f94deb8cd3be4cb4948acc2',
+      atomicity: 'transactional' as const,
+      dependsOn: submissionTriageSpam,
+      expectedBeforeApplicationFingerprint: '115bc77a2ad42509eca775d41ce25b5ce9dd000428ba8728de661b112bcd2153',
+      expectedAfterApplicationFingerprint: '16ab3891073679c60cf4a9aa4578e5252c97558be3739c730d6b71c02237d33f'
+    }),
+    Object.freeze({
+      ...apiKeyPrefix,
+      dialect: 'sqlite' as const,
+      artifact: new URL('../../migrations/sqlite/e2_0004_api_key_prefix.sql', import.meta.url),
+      checksumSha256: '0e9d629d779c0ed22531eb1dea516e0419f504fef421116b7cacf2bf38b68ff7',
+      atomicity: 'transactional' as const,
+      dependsOn: externalAgentApi,
+      expectedBeforeApplicationFingerprint: '16ab3891073679c60cf4a9aa4578e5252c97558be3739c730d6b71c02237d33f',
+      expectedAfterApplicationFingerprint: '82bcf31c9b256cd059cdc44cbdb6ca8ae4de15d38f6aacd5856cf04438100dd0'
+    }),
+    Object.freeze({
+      ...apiKeyNeverExpire,
+      dialect: 'sqlite' as const,
+      artifact: new URL('../../migrations/sqlite/e2_0005_api_key_never_expire.sql', import.meta.url),
+      checksumSha256: '2f43f7a8d2bf7781c9fb104f9cd5664e9e7fee04374c3df6f054e15e764a2cdd',
+      atomicity: 'transactional' as const,
+      dependsOn: apiKeyPrefix,
+      expectedBeforeApplicationFingerprint: '82bcf31c9b256cd059cdc44cbdb6ca8ae4de15d38f6aacd5856cf04438100dd0',
+      expectedAfterApplicationFingerprint: '3ad3833b3b387f16ec2e04c72a611ba3ea27c1ca7b4c407697e369ef5d4d7830'
+    })
+  ]) as readonly [SQLiteMigrationManifestEntry, ...SQLiteMigrationManifestEntry[]],
   expectedEmptyApplicationFingerprint: 'e3ded6858faee915d966f4bcaf5b768070aaaa4d5f1021ac04c713440106b89d',
-  expectedCurrentApplicationFingerprint: '8760a700ec1ff8cc84e8d030d2fbc4d19f09c432b88e327149d0070d24b47fab',
-  expectedCurrentFullFingerprint: '1a08edc1f996c5ab25a2f76e3bd6721f45fb1868c8afc0157f0ce946224ca81d',
+  expectedCurrentApplicationFingerprint: '3ad3833b3b387f16ec2e04c72a611ba3ea27c1ca7b4c407697e369ef5d4d7830',
+  expectedCurrentFullFingerprint: '38807d08caef0f344ecf5e9c8c29ef11c1202f6539c8ec60c3166a248093537a',
   dictionary: Object.freeze({
-    artifact: new URL('../../migrations/sqlite/checkpoints/e2_0001_jooevents_foundation.schema.json', import.meta.url),
-    checksumSha256: 'ef195d4a735afdb949061f33eb46e7f00402c7bb37bc57475918f1547c247ef1'
+    artifact: new URL('../../migrations/sqlite/checkpoints/e2_0005_api_key_never_expire.schema.json', import.meta.url),
+    checksumSha256: 'e260ecec3c666dd310c5210faa622553896e068cc3ec15fcbbdc46db13a2ab0a'
   }),
   acceptedPredecessorLineages: Object.freeze([Object.freeze({
     transitionId: 'e1_identity_access_to_e2_foundation',

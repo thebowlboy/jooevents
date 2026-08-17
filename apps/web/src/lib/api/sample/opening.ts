@@ -112,7 +112,7 @@ const opening: WorkspaceDataset = {
 		],
 		trays: [
 			{ kind: 'late', label: 'Late submissions', count: 0, href: '/app/submissions?tray=late' },
-			{ kind: 'discarded', label: 'Spam, recoverable', count: 0, href: '/app/submissions?tray=discarded' },
+			{ kind: 'spam', label: 'Spam, recoverable', count: 0, href: '/app/submissions?tray=spam' },
 			{ kind: 'unresolved-import', label: 'Unresolved import items', count: 0 },
 			{ kind: 'bounced', label: 'Bounced recipients', count: 0, href: '/app/messages' }
 		]
@@ -301,7 +301,7 @@ const opening: WorkspaceDataset = {
 			reviewCount: 0
 		}
 	],
-	submissionTrayTotals: { inbox: 9, 'set-aside': 0, late: 0, discarded: 0 },
+	submissionTrayTotals: { inbox: 9, 'set-aside': 0, late: 0, spam: 0 },
 	/* Here every few days while the CFP fills: the week is the diff that
 	   matches how often they actually look. */
 	previousVisit: daysAgo(2),

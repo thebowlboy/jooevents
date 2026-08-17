@@ -1,0 +1,18 @@
+# JooEvents
+
+> JooEvents helps organizers run proposals, review, speakers, schedules, and the operational details around an event. This public site is a product overview, not an agent-direct surface or the API origin for a particular installation.
+
+## External API integration
+
+- [Connect through the API](https://docs.jooevents.com/agents/quickstart.md): Safely configure a third-party agent for one JooEvents installation.
+- [External API operating model](https://docs.jooevents.com/agents/operating-model.md): Direct reads, human-approved plans, availability, and recovery.
+- [External API recipes](https://docs.jooevents.com/agents/recipes.md): Discovery-first sequences for common agent work.
+- [API documentation index](https://docs.jooevents.com/llms.txt): The concise map of public JooEvents API documentation.
+
+## Product
+
+- [Product walkthrough](https://jooevents.com/): Public overview and demo entry point.
+
+## Optional
+
+- [Licensing](https://docs.jooevents.com/reference/licensing.md): License information for this release.

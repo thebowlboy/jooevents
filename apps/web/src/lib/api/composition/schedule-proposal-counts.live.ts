@@ -39,7 +39,7 @@ const DECISION_READ_CHUNK = 100;
  *
  * What counts as an open proposal: the tuned page's established meaning
  * (fixed by the sample gateway it was built against) is "undecided,
- * non-discarded submissions targeting this session". The Decision spine now
+ * non-spam submissions targeting this session". The Decision spine now
  * serves head state, so the fold additionally excludes decided submissions —
  * and that exclusion stays provably whole-population, because it reads the
  * decision heads of exactly the session-targeting rows the already-proven
@@ -83,7 +83,7 @@ export function createLiveScheduleProposalCountsSource(input: {
 				return { kind: 'unavailable', reason: result.reason };
 			}
 			const totals = result.data.trayTotals;
-			const population = totals.inbox + totals.set_aside + totals.late + totals.discarded;
+			const population = totals.inbox + totals.set_aside + totals.late + totals.spam;
 			if (population !== result.data.rows.length) {
 				// The page window is smaller than the population, so a fold over it
 				// would be exactly the row-window count the contract forbids.
@@ -91,7 +91,7 @@ export function createLiveScheduleProposalCountsSource(input: {
 			}
 			const candidates: { readonly submissionId: string; readonly sessionId: string }[] = [];
 			for (const row of result.data.rows) {
-				if (row.visibleTray === 'discarded') continue;
+				if (row.visibleTray === 'spam') continue;
 				const target = row.source.target;
 				if (target.kind !== 'session') continue;
 				candidates.push({ submissionId: row.source.id, sessionId: target.sessionId });

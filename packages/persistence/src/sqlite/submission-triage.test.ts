@@ -267,7 +267,7 @@ describe('SQLite submission triage repository', () => {
       const staleBefore = repository.readTriageState(scope)!;
       const stale = planSubmissionTriageTransition({
         state: staleBefore,
-        action: 'discard_recoverable',
+        action: 'mark_spam',
         submissionIds: [id(12)],
         expectedHeads: [{ submissionId: id(12), version: 1 }],
         expectedQueryGuard: staleBefore.queryGuard,
@@ -323,7 +323,7 @@ describe('SQLite submission triage repository', () => {
       sqlite.exec('COMMIT');
       const state = repository.readTriageState(scope)!;
       const page = projectSubmissionTriageList({ state, sourceRows: rows });
-      expect(page.trayTotals).toEqual({ inbox: 0, set_aside: 1, late: 1, discarded: 0 });
+      expect(page.trayTotals).toEqual({ inbox: 0, set_aside: 1, late: 1, spam: 0 });
       expect(page.rows.map((row) => row.visibleTray)).toEqual(['set_aside', 'late']);
       expect(projectSubmissionTriageList({
         state, sourceRows: [rows[1]!, rows[0]!]
@@ -342,9 +342,9 @@ describe('SQLite submission triage repository', () => {
       expect(JSON.stringify(detail)).not.toContain('@');
       expect(JSON.stringify(detail)).not.toContain('email');
 
-      const discard = planSubmissionTriageTransition({
+      const markSpam = planSubmissionTriageTransition({
         state,
-        action: 'discard_recoverable',
+        action: 'mark_spam',
         submissionIds: [id(11)],
         expectedHeads: [{ submissionId: id(11), version: 1 }],
         expectedQueryGuard: state.queryGuard,
@@ -352,28 +352,28 @@ describe('SQLite submission triage repository', () => {
         changedAt: '2026-08-12T10:04:00.000Z'
       });
       sqlite.exec('BEGIN IMMEDIATE');
-      repository.applyTransitionPlan(discard);
+      repository.applyTransitionPlan(markSpam);
       sqlite.exec('COMMIT');
-      const discarded = repository.readTriageState(scope)!;
+      const spam = repository.readTriageState(scope)!;
       expect(projectSubmissionTriageRead({
-        state: discarded, sourceRows: rows, submissionId: id(11)
+        state: spam, sourceRows: rows, submissionId: id(11)
       })?.row).toMatchObject({
-        visibleTray: 'discarded',
-        triage: { state: 'discarded_recoverable' },
+        visibleTray: 'spam',
+        triage: { state: 'spam' },
         arrival: { classification: 'late' }
       });
 
-      const restore = planSubmissionTriageTransition({
-        state: discarded,
-        action: 'restore',
+      const notSpam = planSubmissionTriageTransition({
+        state: spam,
+        action: 'not_spam',
         submissionIds: [id(11)],
         expectedHeads: [{ submissionId: id(11), version: 2 }],
-        expectedQueryGuard: discarded.queryGuard,
+        expectedQueryGuard: spam.queryGuard,
         attribution,
         changedAt: '2026-08-12T10:05:00.000Z'
       });
       sqlite.exec('BEGIN IMMEDIATE');
-      repository.applyTransitionPlan(restore);
+      repository.applyTransitionPlan(notSpam);
       sqlite.exec('COMMIT');
       const restored = repository.readTriageState(scope)!;
       expect(projectSubmissionTriageRead({
@@ -542,7 +542,7 @@ describe('conformance: submission triage tray totals state the whole population'
       // arrivals that sit entirely outside the served window.
       expect(page.rows.every((row) => row.visibleTray === 'inbox')).toBe(true);
       expect(page.trayTotals).toEqual({
-        inbox: onTimeCount, set_aside: 0, late: lateCount, discarded: 0
+        inbox: onTimeCount, set_aside: 0, late: lateCount, spam: 0
       });
 
       // A tray-filtered window keeps whole-population totals as well.
@@ -551,7 +551,7 @@ describe('conformance: submission triage tray totals state the whole population'
       });
       expect(lateTray.rows).toHaveLength(lateCount);
       expect(lateTray.trayTotals).toEqual({
-        inbox: onTimeCount, set_aside: 0, late: lateCount, discarded: 0
+        inbox: onTimeCount, set_aside: 0, late: lateCount, spam: 0
       });
     } finally {
       if (sqlite.inTransaction) sqlite.exec('ROLLBACK');

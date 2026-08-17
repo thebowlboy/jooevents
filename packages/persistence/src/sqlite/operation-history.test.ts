@@ -102,4 +102,17 @@ describe('SQLite operation history reader', () => {
     });
     expect(remaining.entries.map((entry) => entry.summary)).toEqual(['Created a deadline']);
   });
+
+  test('keeps an unknown legacy action summary verbatim instead of dropping history', () => {
+    const runtime = openRuntime();
+    insertOperation(runtime, {
+      id: '019c42ab-0000-7000-8000-000000000014',
+      eventId,
+      summary: 'discard_recoverable',
+      at: 4_000
+    });
+    expect(createSQLiteOperationHistoryReader(runtime.sqlite)
+      .list({ workspaceId, eventId }, { view: 'event', limit: 50 }).entries[0]?.summary)
+      .toBe('discard_recoverable');
+  });
 });

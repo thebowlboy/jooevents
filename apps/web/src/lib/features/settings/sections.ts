@@ -8,7 +8,7 @@
  * for the setting would say out loud.
  */
 
-export type SettingsSectionKey = 'event' | 'program' | 'team' | 'email' | 'about';
+export type SettingsSectionKey = 'event' | 'program' | 'team' | 'email' | 'api_keys' | 'about';
 
 /** One in-page destination: the element it scrolls to, and what it is called. */
 export interface SettingsAnchor {
@@ -67,6 +67,17 @@ export const settingsSections: readonly SettingsSection[] = Object.freeze([
 		label: 'Email',
 		href: `${SETTINGS_ROOT}/email`,
 		anchors: Object.freeze([Object.freeze({ id: 'settings-email-sender', label: 'Sender' })])
+	}),
+	/*
+	 * API keys are workspace-scoped credentials for outside callers — agents,
+	 * dashboards, scripts — so the section reads before any event exists. One
+	 * panel, one anchor: the creation flow lives in a dialog, not on the rail.
+	 */
+	Object.freeze({
+		key: 'api_keys',
+		label: 'API keys',
+		href: `${SETTINGS_ROOT}/api-keys`,
+		anchors: Object.freeze([Object.freeze({ id: 'settings-api-keys', label: 'API keys' })])
 	}),
 	/*
 	 * About describes the software rather than the workspace, so it reads before

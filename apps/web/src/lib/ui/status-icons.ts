@@ -173,7 +173,7 @@ export const trayIcon: Record<TrayKind, IconComponent> = {
 	late: Hourglass,
 	/* One concept, one symbol: the Overview ledger's spam pill wears the same
 	   glyph as the Submissions tray it opens. */
-	discarded: Ban,
+	spam: Ban,
 	'unresolved-import': FileInput,
 	'stranded-drafts': FilePen,
 	'inbound-mail': MailOpen,
@@ -184,18 +184,16 @@ export const trayIcon: Record<TrayKind, IconComponent> = {
 /**
  * The four fates a submission can be in during triage.
  *
- * `discarded` reads as **Spam** (owner, 2026-08-15) and wears the email
- * vocabulary's prohibition glyph, because the tray now leans on that learned
- * model: a filter flags suspects, a human confirms, "Not spam" reverses. A
- * waste basket stays banned for the same reason it always was — the tray is
- * recoverable for the life of the event, and a bin says the opposite.
+ * `spam` wears the email vocabulary's prohibition glyph: a filter flags
+ * suspects, a human confirms, and "Not spam" reverses. A waste basket would
+ * imply deletion, but the tray remains recoverable for the life of the event.
  */
-export const submissionTrayIcon: Record<'inbox' | 'set-aside' | 'late' | 'discarded', IconComponent> =
+export const submissionTrayIcon: Record<'inbox' | 'set-aside' | 'late' | 'spam', IconComponent> =
 	{
 		inbox: Inbox,
 		'set-aside': ArrowRightFromLine,
 		late: Hourglass,
-		discarded: Ban
+		spam: Ban
 	};
 
 /**

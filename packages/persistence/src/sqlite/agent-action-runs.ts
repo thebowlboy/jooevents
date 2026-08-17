@@ -118,6 +118,7 @@ BEGIN SELECT RAISE(ABORT, 'agent action step plan is immutable'); END;
 
 interface BatchRow {
   id: string; plan_json: string; plan_digest_sha256: string; status: AgentActionBatchStatus;
+  source_surface: 'external_mcp' | 'app_model'; source_principal_id: string;
   version: number; current_ordinal: number; approved_plan_digest_sha256: string | null;
   approved_by_principal_id: string | null; approved_at_ms: number | null;
   approval_expires_at_ms: number | null; approval_policy_key: string | null;
@@ -207,6 +208,62 @@ export class SQLiteAgentActionRunRepository implements AgentActionRunRepository 
       ? this.sqlite.query<BatchRow, [string, number]>('SELECT * FROM agent_action_batches WHERE status = ? ORDER BY updated_at_ms DESC,id LIMIT ?').all(input.status, limit)
       : this.sqlite.query<BatchRow, [number]>('SELECT * FROM agent_action_batches ORDER BY updated_at_ms DESC,id LIMIT ?').all(limit);
     return Object.freeze(rows.map((row) => this.view(row)));
+  }
+
+  listOwned(input: {
+    readonly sourceSurface: 'external_mcp' | 'app_model';
+    readonly proposingPrincipalId: string;
+    readonly clientKey: string;
+    readonly limit?: number;
+    readonly cursor?: string;
+    readonly status?: AgentActionBatchStatus;
+  }): { readonly items: readonly AgentActionBatchView[]; readonly nextCursor: string | null } {
+    const limit = input.limit ?? 50;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100
+        || input.proposingPrincipalId.length < 1 || input.proposingPrincipalId.length > 256
+        || input.clientKey.length < 1 || input.clientKey.length > 160) {
+      throw new TypeError('agent_action_owned_list_invalid');
+    }
+    let cursorUpdatedAt = Number.MAX_SAFE_INTEGER;
+    let cursorId = 'ffffffff-ffff-ffff-ffff-ffffffffffff';
+    if (input.cursor !== undefined) {
+      let decoded: string;
+      try { decoded = Buffer.from(input.cursor, 'base64url').toString('utf8'); }
+      catch { throw new TypeError('agent_action_cursor_invalid'); }
+      const separator = decoded.indexOf(':');
+      cursorUpdatedAt = Number(decoded.slice(0, separator));
+      cursorId = decoded.slice(separator + 1);
+      if (separator < 1 || !Number.isSafeInteger(cursorUpdatedAt)
+          || !/^[0-9a-f-]{36}$/.test(cursorId)) {
+        throw new TypeError('agent_action_cursor_invalid');
+      }
+    }
+    const rows = this.sqlite.query<BatchRow, [string, string, string, string, string, number, number, string, number]>(`
+      SELECT * FROM agent_action_batches
+       WHERE source_surface=? AND source_principal_id=?
+         AND json_extract(plan_json, '$.source.clientKey')=?
+         AND (?='' OR status=?)
+         AND (updated_at_ms < ? OR (updated_at_ms = ? AND id < ?))
+       ORDER BY updated_at_ms DESC,id DESC LIMIT ?
+    `).all(
+      input.sourceSurface,
+      input.proposingPrincipalId,
+      input.clientKey,
+      input.status ?? '',
+      input.status ?? '',
+      cursorUpdatedAt,
+      cursorUpdatedAt,
+      cursorId,
+      limit + 1
+    ) as BatchRow[];
+    const page = rows.slice(0, limit);
+    const last = page.at(-1);
+    return Object.freeze({
+      items: Object.freeze(page.map((row) => this.view(row))),
+      nextCursor: rows.length > limit && last
+        ? Buffer.from(`${last.updated_at_ms}:${last.id}`, 'utf8').toString('base64url')
+        : null
+    });
   }
 
   approve(input: { batchId: string; expectedVersion: number; expectedPlanDigestSha256: string; approval: AgentActionApproval }): AgentActionBatchView {

@@ -125,6 +125,7 @@ export type AreaKey =
 	| 'forms'
 	| 'embeds'
 	| 'approvals'
+	| 'integrations'
 	| 'settings';
 
 export interface AttentionItem {
@@ -206,7 +207,7 @@ export interface ActivityItem {
 
 export type TrayKind =
 	| 'late'
-	| 'discarded'
+	| 'spam'
 	| 'unresolved-import'
 	| 'stranded-drafts'
 	| 'inbound-mail'
@@ -259,17 +260,17 @@ export interface StatItem {
  * `@jooevents/contracts`.
  */
 export interface SubmissionArrivals {
-	/** The pulse over the held population; discarded rows are not in it. */
+	/** The pulse over the held population; spam rows are not in it. */
 	pulse: ArrivalPulse;
 	/** How the held total is composed, by the tray each row sits in. */
 	held: { inbox: number; setAside: number; late: number };
 	/**
 	 * Kept and recoverable, and deliberately outside every figure above. A
-	 * discarded proposal is not part of what the event has to work through, so
+	 * spam proposal is not part of what the event has to work through, so
 	 * counting it in the total would overstate the load — but it is not gone
 	 * either, so the breakdown still says how many and where they are.
 	 */
-	discarded: number;
+	spam: number;
 }
 
 export interface NavCounts {
@@ -306,7 +307,7 @@ export interface WorkspaceSummary {
 // ---------------------------------------------------------------------------
 // Submissions and triage
 
-export type TrayKey = 'inbox' | 'set-aside' | 'late' | 'discarded';
+export type TrayKey = 'inbox' | 'set-aside' | 'late' | 'spam';
 
 export type DecisionState = 'undecided' | 'accepted' | 'waitlisted' | 'declined' | 'withdrawn';
 

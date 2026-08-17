@@ -42,7 +42,7 @@ function arrival(classification: 'on_time' | 'late') {
   } as const;
 }
 
-function head(state: 'inbox' | 'set_aside' | 'discarded_recoverable') {
+function head(state: 'inbox' | 'set_aside' | 'spam') {
   return {
     schemaVersion: 1,
     scope,
@@ -93,7 +93,7 @@ describe('submission triage contracts', () => {
     expect(submissionTriageHeadSchema.safeParse({ ...head('inbox'), state: 'late' }).success).toBe(false);
   });
 
-  test('visible tray precedence keeps late orthogonal to set-aside and discard', () => {
+  test('visible tray precedence keeps late orthogonal to set-aside and spam', () => {
     expect(submissionTriageProjectionSchema.parse({
       schemaVersion: 1,
       source: source(),
@@ -113,10 +113,10 @@ describe('submission triage contracts', () => {
     expect(submissionTriageProjectionSchema.parse({
       schemaVersion: 1,
       source: source(),
-      triage: head('discarded_recoverable'),
+      triage: head('spam'),
       arrival: arrival('late'),
-      visibleTray: 'discarded'
-    }).visibleTray).toBe('discarded');
+      visibleTray: 'spam'
+    }).visibleTray).toBe('spam');
   });
 
   test('late evidence requires and agrees with its close fact', () => {

@@ -75,6 +75,8 @@
     "./release-native-effect-domain": "./src/sqlite/release-native-effect-domain.ts",
     "./files": "./src/sqlite/files.ts",
     "./participant-access": "./src/sqlite/participant-access.ts",
+    "./api-keys": "./src/sqlite/api-keys.ts",
+    "./external-api-rate-limits": "./src/sqlite/external-api-rate-limits.ts",
     "./participant-challenge-delivery": "./src/sqlite/participant-challenge-delivery.ts",
     "./workspace-sign-in-link": "./src/sqlite/workspace-sign-in-link.ts"
   },

@@ -143,20 +143,20 @@ function chunked<Value>(values: readonly Value[], size: number): readonly (reado
 	return chunks;
 }
 
-const WIRE_TRAY: Readonly<Record<TrayKey, 'inbox' | 'set_aside' | 'late' | 'discarded'>> =
+const WIRE_TRAY: Readonly<Record<TrayKey, 'inbox' | 'set_aside' | 'late' | 'spam'>> =
 	Object.freeze({
 		inbox: 'inbox',
 		'set-aside': 'set_aside',
 		late: 'late',
-		discarded: 'discarded'
+		spam: 'spam'
 	});
 
-const VIEW_TRAY: Readonly<Record<'inbox' | 'set_aside' | 'late' | 'discarded', TrayKey>> =
+const VIEW_TRAY: Readonly<Record<'inbox' | 'set_aside' | 'late' | 'spam', TrayKey>> =
 	Object.freeze({
 		inbox: 'inbox',
 		set_aside: 'set-aside',
 		late: 'late',
-		discarded: 'discarded'
+		spam: 'spam'
 	});
 
 /**
@@ -285,7 +285,7 @@ export function createLiveSubmissionsPagePort(input: {
 		inbox: 0,
 		'set-aside': 0,
 		late: 0,
-		discarded: 0
+		spam: 0
 	});
 
 	async function readTriagePage(query: SubmissionQuery): Promise<SubmissionTriagePageView | null> {
@@ -406,7 +406,7 @@ export function createLiveSubmissionsPagePort(input: {
 	 * draft, propose, and commit. Ids travel in canonical code-unit order.
 	 */
 	async function transition(
-		action: 'set_aside' | 'return_to_inbox' | 'discard_recoverable' | 'restore',
+		action: 'set_aside' | 'return_to_inbox' | 'mark_spam' | 'not_spam',
 		ids: readonly string[]
 	): Promise<void> {
 		if (ids.length === 0) return;
@@ -600,7 +600,7 @@ export function createLiveSubmissionsPagePort(input: {
 						inbox: page.trayTotals.inbox,
 						'set-aside': page.trayTotals.set_aside,
 						late: page.trayTotals.late,
-						discarded: page.trayTotals.discarded
+						spam: page.trayTotals.spam
 					},
 					...(page.search
 						? {
@@ -651,11 +651,11 @@ export function createLiveSubmissionsPagePort(input: {
 			async returnToInbox(ids: readonly string[]): Promise<void> {
 				await transition('return_to_inbox', ids);
 			},
-			async discard(ids: readonly string[]): Promise<void> {
-				await transition('discard_recoverable', ids);
+			async markSpam(ids: readonly string[]): Promise<void> {
+				await transition('mark_spam', ids);
 			},
-			async restore(ids: readonly string[]): Promise<void> {
-				await transition('restore', ids);
+			async notSpam(ids: readonly string[]): Promise<void> {
+				await transition('not_spam', ids);
 			}
 		}),
 		speakers: Object.freeze({

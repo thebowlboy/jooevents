@@ -354,8 +354,8 @@
 	/*
 	 * The decidable custody trays (inbox, late — the same population the
 	 * decision table draws from) group by station, in funnel order; set-aside
-	 * and discarded stay flat lists, because they are not decidable and a
-	 * decided-then-discarded row's badges already tell its story. A group with
+	 * and spam stay flat lists, because they are not decidable and a
+	 * decided-then-spam row's badges already tell its story. A group with
 	 * nothing in it does not render.
 	 */
 	/**
@@ -489,8 +489,8 @@
 	const triageCopy = {
 		setAside: 'Set aside',
 		returnToInbox: 'Moved back to the inbox',
-		discard: 'Marked as spam',
-		restore: 'Restored'
+		markSpam: 'Marked as spam',
+		notSpam: 'Marked as not spam'
 	} as const;
 
 	async function act(action: keyof typeof triageCopy, ids: string[]) {
@@ -1086,13 +1086,13 @@
 							{#snippet trayActions()}
 								{#if row.tray === 'set-aside'}
 									<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('returnToInbox', [row.id])}>Move back to inbox</button>
-								{:else if row.tray === 'discarded'}
+								{:else if row.tray === 'spam'}
 									<!-- The email pair's learned reversal: pressing it moves the
 									     row back to the inbox, which the receipt then says. -->
-									<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('restore', [row.id])}>Not spam — restore to inbox</button>
+									<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('notSpam', [row.id])}>Not spam — restore to inbox</button>
 								{:else}
 									<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('setAside', [row.id])}>Set aside</button>
-									<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('discard', [row.id])}>Mark as spam</button>
+									<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('markSpam', [row.id])}>Mark as spam</button>
 								{/if}
 							{/snippet}
 							<!-- One clause, and only the half a reader cannot already see.
@@ -1122,7 +1122,7 @@
 										timezone={pulseView?.timezone}
 										origin={row.decision === 'accepted' ? origins[row.id] : undefined}
 										actions={trayActions}
-										footnote={row.tray !== 'set-aside' && row.tray !== 'discarded' ? fates : undefined}
+										footnote={row.tray !== 'set-aside' && row.tray !== 'spam' ? fates : undefined}
 										onclose={() => openRow(null)} />
 								</td>
 							</tr>
@@ -1164,11 +1164,11 @@
 		<span class="bulkbar__count">{selected.length} selected</span>
 		{#if tray === 'set-aside'}
 			<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('returnToInbox', selected)}>Move back to inbox</button>
-		{:else if tray === 'discarded'}
-			<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('restore', selected)}>Not spam — restore</button>
+		{:else if tray === 'spam'}
+			<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('notSpam', selected)}>Not spam — restore</button>
 		{:else}
 			<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('setAside', selected)}>Set aside</button>
-			<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('discard', selected)}>Mark as spam</button>
+			<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled={busy} onclick={() => act('markSpam', selected)}>Mark as spam</button>
 		{/if}
 		<button type="button" class="ui-button ui-button--ghost ui-button--sm" onclick={() => (selected = [])}>Clear</button>
 	</div>

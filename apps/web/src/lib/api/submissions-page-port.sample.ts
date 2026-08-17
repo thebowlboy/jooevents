@@ -10,8 +10,8 @@ export function createSampleSubmissionsPagePort(api: WorkspaceApi): SubmissionsP
 			addDirectEntry: api.submissions.addDirectEntry,
 			setAside: (ids: readonly string[]) => api.submissions.setAside([...ids]),
 			returnToInbox: (ids: readonly string[]) => api.submissions.returnToInbox([...ids]),
-			discard: (ids: readonly string[]) => api.submissions.discard([...ids]),
-			restore: (ids: readonly string[]) => api.submissions.restore([...ids])
+			markSpam: (ids: readonly string[]) => api.submissions.markSpam([...ids]),
+			notSpam: (ids: readonly string[]) => api.submissions.notSpam([...ids])
 		}),
 		speakers: Object.freeze({ profile: api.speakers.profile }),
 		review: Object.freeze({

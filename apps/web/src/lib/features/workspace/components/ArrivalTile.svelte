@@ -8,7 +8,7 @@
 	 * did they come from* (twelve weeks of arrivals, and the breakdown behind
 	 * them).
 	 *
-	 * Discarded proposals are outside every figure above the fold, because they
+	 * Spam proposals are outside every figure above the fold, because they
 	 * are not part of what the event has to work through — and inside the
 	 * breakdown, because they are kept and recoverable and somebody eventually
 	 * asks. That is the whole rule: a number in the total is work; a number in
@@ -31,7 +31,7 @@
 	let {
 		arrivals = null,
 		timezone = '',
-		discardedHref
+		spamHref
 	}: {
 		/**
 		 * Absent while the figure is still being read. The placeholder is then
@@ -41,7 +41,7 @@
 		 */
 		readonly arrivals?: SubmissionArrivals | null;
 		readonly timezone?: string;
-		readonly discardedHref?: string;
+		readonly spamHref?: string;
 	} = $props();
 
 	/**
@@ -151,16 +151,16 @@
 				{#if composition.length > 0}
 					<p class="panel__note">{composition.join(' · ')}.</p>
 				{/if}
-				{#if arrivals && arrivals.discarded > 0}
+				{#if arrivals && arrivals.spam > 0}
 					<!-- Counted, kept, and deliberately outside every figure above:
 					     said in words rather than left for someone to discover by
 					     adding the trays up and finding a gap. -->
 					<p class="panel__note">
-						{arrivals.discarded}
-						{arrivals.discarded === 1 ? 'proposal' : 'proposals'} marked as spam
-						{arrivals.discarded === 1 ? 'is' : 'are'} not counted in that total.
-						{#if discardedHref}
-							<a href={discardedHref}>Open the spam tray</a>
+						{arrivals.spam}
+						{arrivals.spam === 1 ? 'proposal' : 'proposals'} marked as spam
+						{arrivals.spam === 1 ? 'is' : 'are'} not counted in that total.
+						{#if spamHref}
+							<a href={spamHref}>Open the spam tray</a>
 						{/if}
 					</p>
 				{/if}

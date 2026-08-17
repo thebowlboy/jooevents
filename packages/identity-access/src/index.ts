@@ -1,4 +1,5 @@
 export * from './authorization';
+export * from './api-keys';
 export * from './authority-principal';
 export * from './gateway-authority';
 export * from './account-linking';

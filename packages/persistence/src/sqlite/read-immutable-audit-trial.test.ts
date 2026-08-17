@@ -156,7 +156,7 @@ function contextBuilder(nextInvocationId = () => ids.invocation) {
         const actor = input.evidence.kind === 'external_mcp'
           ? {
               kind: 'external_mcp_client' as const,
-              oauthClientId: input.evidence.oauthClientId,
+              clientKey: input.evidence.clientKey,
               authorityPrincipalId: 'principal-read-audit-trial'
             }
           : input.evidence.kind === 'app_model'
@@ -231,8 +231,8 @@ async function sealedAuditRecords(): Promise<{
       kind: 'external_mcp',
       surface: 'external_mcp',
       client: { key: 'read-audit-trial-client' },
-      oauthTokenHandle: sourceCanaries[4],
-      oauthClientId: 'client.read-audit-trial'
+      credentialHandle: sourceCanaries[4],
+      clientKey: 'client.read-audit-trial'
     }
   });
   if (resolution.kind !== 'ready') throw new Error('expected a ready read context');
@@ -455,8 +455,8 @@ describe('file-backed immutable read-audit trial', () => {
             kind: 'external_mcp',
             surface: 'external_mcp',
             client: { key: 'read-audit-trial-client' },
-            oauthTokenHandle: sourceCanaries[4],
-            oauthClientId: 'client.read-audit-trial'
+            credentialHandle: sourceCanaries[4],
+            clientKey: 'client.read-audit-trial'
           }
         });
       } catch (error) {

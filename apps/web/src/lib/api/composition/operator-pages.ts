@@ -33,6 +33,7 @@ export const operatorPageIds = Object.freeze([
 	'settings_program',
 	'settings_team',
 	'settings_email',
+	'settings_api_keys',
 	'settings_about'
 ] as const);
 
@@ -44,6 +45,7 @@ const settingsPages: Readonly<Partial<Record<OperatorPageId, SettingsSectionKey>
 	settings_program: 'program',
 	settings_team: 'team',
 	settings_email: 'email',
+	settings_api_keys: 'api_keys',
 	settings_about: 'about'
 });
 

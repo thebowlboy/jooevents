@@ -163,6 +163,8 @@ export interface NavModel {
 	approvals?: NavItem;
 	/** Present when the viewer administers the workspace. */
 	settings?: NavItem;
+	/** Present when the viewer may connect external working surfaces. */
+	integrations?: NavItem;
 }
 
 /** The areas a reviewer-only principal has a surface for. */

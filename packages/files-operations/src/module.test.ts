@@ -102,7 +102,7 @@ describe('files read operation modules', () => {
     // The MCP lane is served by an external_mcp tool binding, never by SPA paths.
     expect(sourceOperation.bindings).toContainEqual(expect.objectContaining({
       surface: 'external_mcp',
-      toolName: FILE_OVERVIEW_READ_OPERATION.name
+      toolName: 'get_file_overview'
     }));
   });
 

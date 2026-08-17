@@ -145,7 +145,7 @@ const quiet: WorkspaceDataset = {
 		],
 		trays: [
 			{ kind: 'late', label: 'Late submissions', count: 1, href: '/app/submissions?tray=late' },
-			{ kind: 'discarded', label: 'Spam, recoverable', count: 0, href: '/app/submissions?tray=discarded' },
+			{ kind: 'spam', label: 'Spam, recoverable', count: 0, href: '/app/submissions?tray=spam' },
 			{ kind: 'unresolved-import', label: 'Unresolved import items', count: 0 },
 			{ kind: 'stranded-drafts', label: 'Stranded form drafts', count: 0 },
 			{ kind: 'inbound-mail', label: 'Inbound mail review', count: 0 },
@@ -388,7 +388,7 @@ const quiet: WorkspaceDataset = {
 			reviewCount: 0
 		}
 	],
-	submissionTrayTotals: { inbox: 8, 'set-aside': 1, late: 1, discarded: 0 },
+	submissionTrayTotals: { inbox: 8, 'set-aside': 1, late: 1, spam: 0 },
 	/* Nothing is waiting, so they drop in a couple of times a week. */
 	previousVisit: daysAgo(3),
 	visitHistory: [hoursAgo(4), daysAgo(3), daysAgo(6)],

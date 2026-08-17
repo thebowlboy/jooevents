@@ -3,6 +3,8 @@ import {
 	type SampleSenderIdentitySource,
 	type SettingsPageSenderIdentityPort
 } from './sender-identity-settings-port';
+import type { ApiKeysPagePort } from './api-keys-page-port';
+import { createSampleApiKeysPagePort } from './api-keys-page-port.sample';
 import type { WorkspaceTeamSettingsMutationResult, WorkspaceTeamSettingsPort } from './workspace-team-settings-adapter';
 import type { WorkspaceTeamLiveReadResult } from './operations/workspace-team-live';
 import type { ProgramVocabularySettingsPort } from './program-vocabulary-settings-adapter';
@@ -114,6 +116,8 @@ export interface SettingsPagePort {
 	 * event exists, so this seam is not gated on `event.get()`.
 	 */
 	readonly senderIdentity: SettingsPageSenderIdentityPort;
+	/** Absent where the live credential seam is not composed. */
+	readonly apiKeys?: ApiKeysPagePort;
 }
 
 function cloneMember(member: Member): Member {
@@ -214,6 +218,7 @@ export function createLiveSettingsPagePort(input: {
 	readonly vocab: ProgramVocabularySettingsPort;
 	readonly fields: SettingsPageFieldsPort;
 	readonly senderIdentity: SettingsPageSenderIdentityPort;
+	readonly apiKeys?: ApiKeysPagePort;
 	readonly summarySnapshot?: () => WorkspaceSummary | null;
 }): SettingsPagePort {
 	if (input.vocab.source.kind !== 'live' || input.team.source.kind !== 'live') {
@@ -289,7 +294,8 @@ export function createLiveSettingsPagePort(input: {
 			restoreFormat: (id: string) => vocabularyOutcome(input.vocab.restoreFormat(id))
 		}),
 		fields: input.fields,
-		senderIdentity: input.senderIdentity
+		senderIdentity: input.senderIdentity,
+		...(input.apiKeys === undefined ? {} : { apiKeys: input.apiKeys })
 	});
 }
 
@@ -321,6 +327,7 @@ export function createSampleSettingsPagePort(api: SampleSettingsPageSource): Set
 		}),
 		vocab: api.vocab,
 		fields: api.fields,
-		senderIdentity: createSampleSenderIdentitySettingsPort(api.communications.senderIdentity)
+		senderIdentity: createSampleSenderIdentitySettingsPort(api.communications.senderIdentity),
+		apiKeys: createSampleApiKeysPagePort()
 	});
 }

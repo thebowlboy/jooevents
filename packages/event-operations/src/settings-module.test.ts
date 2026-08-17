@@ -116,7 +116,8 @@ describe('Event settings operations', () => {
       contractDigestSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
       displayLabel: 'Update event settings',
       consequences: ['The event name, dates, or timezone may change.'],
-      externalEffect: 'none'
+      externalEffect: 'none',
+      maxRisk: 'low'
     }]);
     const entry = eligibility.resolve(
       EVENT_SETTINGS_UPDATE_OPERATION.name,

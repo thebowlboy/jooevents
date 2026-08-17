@@ -19,6 +19,8 @@
     "demo:setup": "bun apps/setup-cli/src/index.ts",
     "splash:dev:cloudflare": "bunx wrangler dev --config wrangler.splash.jsonc",
     "splash:deploy:cloudflare": "bunx wrangler deploy --config wrangler.splash.jsonc",
+    "docs:dev:cloudflare": "bunx wrangler dev --config wrangler.docs.jsonc",
+    "docs:deploy:cloudflare": "bunx wrangler deploy --config wrangler.docs.jsonc",
     "cloudflare:whoami": "bunx wrangler whoami",
     "check": "bun run --workspaces check && ./scripts/check-motion.sh",
     "check:motion": "./scripts/check-motion.sh",

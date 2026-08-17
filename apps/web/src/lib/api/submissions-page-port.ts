@@ -29,8 +29,8 @@ export interface SubmissionsPagePort {
 		addDirectEntry(input: DirectEntryInput): Promise<Submission>;
 		setAside(ids: readonly string[]): Promise<void>;
 		returnToInbox(ids: readonly string[]): Promise<void>;
-		discard(ids: readonly string[]): Promise<void>;
-		restore(ids: readonly string[]): Promise<void>;
+		markSpam(ids: readonly string[]): Promise<void>;
+		notSpam(ids: readonly string[]): Promise<void>;
 	};
 	readonly speakers: {
 		profile(email: string): Promise<SpeakerProfile | null>;

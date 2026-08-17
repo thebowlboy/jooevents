@@ -104,8 +104,8 @@ describe('configured SQLite auth runtime', () => {
     runtimes.push(first);
     expect(first.database.migration).toMatchObject({
       status: 'current',
-      coordinate: { schemaEpoch: 2, sequence: 1 },
-      migrationId: 'e2_0001_jooevents_foundation',
+      coordinate: { schemaEpoch: 2, sequence: 5 },
+      migrationId: 'e2_0005_api_key_never_expire',
       databaseClass: 'retained_development',
       databaseId,
       schemaFingerprint: SQLITE_MIGRATION_MANIFEST.expectedCurrentFullFingerprint
@@ -124,7 +124,7 @@ describe('configured SQLite auth runtime', () => {
       ) VALUES ('retained-user', 'Retained User', 'retained@example.com', 1, NULL, ?, ?)
     `).run(now, now);
     const workspaceId = first.workspaceId;
-    expect(count(first, 'schema_migrations')).toBe(1);
+    expect(count(first, 'schema_migrations')).toBe(SQLITE_MIGRATION_MANIFEST.migrations.length);
     expect(count(first, 'bootstrap_state')).toBe(1);
     expect(count(first, 'workspaces')).toBe(1);
     expect(count(first, 'access_reservations')).toBe(1);
@@ -141,7 +141,7 @@ describe('configured SQLite auth runtime', () => {
     expect(reopened.database.sqlite.query<{ readonly email: string }, [string]>(
       'SELECT email FROM auth_users WHERE id = ?'
     ).get('retained-user')).toEqual({ email: 'retained@example.com' });
-    expect(count(reopened, 'schema_migrations')).toBe(1);
+    expect(count(reopened, 'schema_migrations')).toBe(SQLITE_MIGRATION_MANIFEST.migrations.length);
     expect(count(reopened, 'bootstrap_state')).toBe(1);
     expect(count(reopened, 'workspaces')).toBe(1);
     expect(count(reopened, 'access_reservations')).toBe(1);

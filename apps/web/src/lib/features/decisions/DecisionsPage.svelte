@@ -333,7 +333,7 @@
 	}
 
 	/**
-	 * Candidates are the inbox and late trays. Set-aside and discarded submissions
+	 * Candidates are the inbox and late trays. Set-aside and spam submissions
 	 * are triage outcomes, so they are never decided from this table.
 	 *
 	 * The table-wide dim is a reload treatment: first paint has skeletons and

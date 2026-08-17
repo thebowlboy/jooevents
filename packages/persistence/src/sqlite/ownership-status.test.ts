@@ -171,7 +171,7 @@ describe('file-backed SQLite lifetime ownership', () => {
   });
 
   for (const scenario of [
-    { point: 'after_schema_before_receipt', expectedOpen: 'bridged' },
+    { point: 'after_schema_before_receipt', expectedOpen: 'applied' },
     { point: 'after_commit_before_return', expectedOpen: 'current' }
   ] as const) {
     test(`recovers a dead pending adopter at ${scenario.point} without guessing state`, async () => {
@@ -186,7 +186,7 @@ describe('file-backed SQLite lifetime ownership', () => {
       recoverStaleSQLiteOwner(canonical, stale!.ownerId);
       expect(listSQLiteOwners(canonical)).toEqual([]);
 
-      const reopened = scenario.expectedOpen === 'bridged'
+      const reopened = scenario.expectedOpen === 'applied'
         ? openSQLite(path, { migrationPolicy: 'apply' })
         : openSQLite(path);
       opened.push(reopened);
@@ -194,7 +194,7 @@ describe('file-backed SQLite lifetime ownership', () => {
     });
   }
 
-  test('two independent migrators converge on one receipt', async () => {
+  test('two independent migrators converge on one complete receipt chain', async () => {
     const path = pathFor();
     const [left, right] = await Promise.all([
       child(['open', path, '40']),
@@ -207,7 +207,8 @@ describe('file-backed SQLite lifetime ownership', () => {
 
     const verified = openSQLite(path);
     opened.push(verified);
-    expect(verified.sqlite.query<{ count: number }, []>('select count(*) as count from schema_migrations').get()?.count).toBe(1);
+    expect(verified.sqlite.query<{ count: number }, []>('select count(*) as count from schema_migrations').get()?.count)
+      .toBe(SQLITE_MIGRATION_MANIFEST.migrations.length);
   });
 });
 
@@ -398,7 +399,8 @@ describe('SQLite migration process termination', () => {
       const recovered = openSQLite(path, { migrationPolicy: 'apply', databaseClass: 'retained_development' });
       opened.push(recovered);
       expect(recovered.migration.status).toBe('applied');
-      expect(recovered.sqlite.query<{ count: number }, []>('select count(*) as count from schema_migrations').get()?.count).toBe(1);
+      expect(recovered.sqlite.query<{ count: number }, []>('select count(*) as count from schema_migrations').get()?.count)
+        .toBe(SQLITE_MIGRATION_MANIFEST.migrations.length);
     });
   }
 
@@ -409,6 +411,7 @@ describe('SQLite migration process termination', () => {
     const recovered = openSQLite(path);
     opened.push(recovered);
     expect(recovered.migration.status).toBe('current');
-    expect(recovered.sqlite.query<{ count: number }, []>('select count(*) as count from schema_migrations').get()?.count).toBe(1);
+    expect(recovered.sqlite.query<{ count: number }, []>('select count(*) as count from schema_migrations').get()?.count)
+      .toBe(SQLITE_MIGRATION_MANIFEST.migrations.length);
   });
 });
