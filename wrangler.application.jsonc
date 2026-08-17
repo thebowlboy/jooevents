@@ -34,6 +34,12 @@
   "r2_buckets": [
     { "binding": "FILES", "bucket_name": "jooevents-application-local-files" }
   ],
+  "send_email": [
+    {
+      "name": "EMAIL",
+      "allowed_sender_addresses": ["events@mail.jooevents.com"]
+    }
+  ],
   "queues": {
     "producers": [
       { "binding": "JOBS", "queue": "jooevents-application-local-jobs" }
@@ -76,6 +82,12 @@
       "r2_buckets": [
         { "binding": "FILES", "bucket_name": "jooevents-application-staging-files" }
       ],
+      "send_email": [
+        {
+          "name": "EMAIL",
+          "allowed_sender_addresses": ["events@mail.jooevents.com"]
+        }
+      ],
       "queues": {
         "producers": [
           { "binding": "JOBS", "queue": "jooevents-application-staging-jobs" }
@@ -111,6 +123,12 @@
       ],
       "r2_buckets": [
         { "binding": "FILES", "bucket_name": "jooevents-application-production-files" }
+      ],
+      "send_email": [
+        {
+          "name": "EMAIL",
+          "allowed_sender_addresses": ["events@mail.jooevents.com"]
+        }
       ],
       "queues": {
         "producers": [

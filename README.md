@@ -86,10 +86,12 @@ Registry, Deadlines, Tasks, native Template artifacts, safe operation history, a
 workspace shell, workspace Team changes, API-key inventory, and organizer Files
 metadata. An authenticated organizer download now streams retained R2 bytes with
 attachment-only inert headers; Queue, Cron, and multipart R2 adapter tests also pass.
-The checked-in authentication and application activation flags remain off: the
-remaining application families, Files uploads and mutations, production jobs/email
-and recovery composition, account-level R2 enablement, staging, and live deployment
-must close before Cloudflare can accept real traffic.
+The Email Sending binding is present and restricted to the configured sender, but no
+D1 outbox consumer calls it yet. The checked-in authentication and application
+activation flags remain off: the remaining application families, Files uploads and
+mutations, production jobs/email and recovery composition, account-level R2
+enablement, staging, and live deployment must close before Cloudflare can accept real
+traffic.
 
 ## Build and inspect
 

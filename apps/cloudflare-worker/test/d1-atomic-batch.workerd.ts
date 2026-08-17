@@ -40,7 +40,12 @@ describe('D1 atomic batch in workerd', () => {
       status: string;
       ready: boolean;
       applicationRuntimeReady: boolean;
-      adapters: { d1: boolean; d1BufferedUnitOfWork: boolean; r2: boolean };
+      adapters: {
+        d1: boolean;
+        d1BufferedUnitOfWork: boolean;
+        r2: boolean;
+        emailBinding: boolean;
+      };
     }>();
     expect(response.status).toBe(503);
     expect(response.headers.get('cache-control')).toBe('private, no-store');
@@ -48,7 +53,12 @@ describe('D1 atomic batch in workerd', () => {
       status: 'adapter_foundation_ready',
       ready: false,
       applicationRuntimeReady: false,
-      adapters: { d1: true, d1BufferedUnitOfWork: true, r2: true }
+      adapters: {
+        d1: true,
+        d1BufferedUnitOfWork: true,
+        r2: true,
+        emailBinding: true
+      }
     });
   });
 

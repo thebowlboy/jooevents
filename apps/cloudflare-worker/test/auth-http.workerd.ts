@@ -133,6 +133,7 @@ describe('Worker auth/access HTTP boundary', () => {
     const environment: CloudflareApplicationEnvironment = {
       DB: env.DB,
       FILES: env.FILES,
+      EMAIL: env.EMAIL,
       JOBS: env.JOBS,
       ASSETS: env.ASSETS,
       JOOEVENTS_DEPLOYMENT_ENVIRONMENT: env.JOOEVENTS_DEPLOYMENT_ENVIRONMENT,

@@ -97,6 +97,7 @@ async function healthResponse(environment: CloudflareApplicationEnvironment): Pr
           OR (type = 'trigger' AND name = 'd1_operation_batch_guard_abort')
     `).first<RuntimeInfrastructureCountRow>();
     await environment.FILES.list({ limit: 1 });
+    const emailBindingConfigured = typeof environment.EMAIL.send === 'function';
 
     const floor = SQLITE_E2_S7_RELEASE_FLOOR;
     const adaptersReady = environment.JOOEVENTS_D1_RELEASE_FLOOR === floor.releaseFloorId
@@ -119,6 +120,7 @@ async function healthResponse(environment: CloudflareApplicationEnvironment): Pr
         r2: true,
         queues: true,
         cron: true,
+        emailBinding: emailBindingConfigured,
         authActivationRequested: cloudflareAuthRuntimeEnabled(environment),
         applicationActivationRequested: cloudflareApplicationRuntimeEnabled(environment)
       },

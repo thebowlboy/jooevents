@@ -152,6 +152,7 @@ function environment(): CloudflareApplicationEnvironment {
   return {
     DB: env.DB,
     FILES: env.FILES,
+    EMAIL: env.EMAIL,
     JOBS: env.JOBS,
     ASSETS: env.ASSETS,
     JOOEVENTS_DEPLOYMENT_ENVIRONMENT: env.JOOEVENTS_DEPLOYMENT_ENVIRONMENT,
