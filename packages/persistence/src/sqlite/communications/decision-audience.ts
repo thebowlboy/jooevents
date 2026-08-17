@@ -2,8 +2,14 @@ import type { Database } from 'bun:sqlite';
 import { createHash, createHmac } from 'node:crypto';
 import {
   DECISION_NOTIFICATION_PURPOSE_KEY,
+  EVENT_DECISION_AUDIENCE_STATUSES,
+  EVENT_DECISION_SEED_OWNER_KEY,
   TASK_REMINDER_PURPOSE_KEY,
   OrganizerAudienceResolutionError,
+  createDecisionAudienceOption,
+  createDecisionAudienceRecipeSource,
+  createDecisionAudienceSourceDefinition,
+  createEventCommunicationSeedPlan,
   organizerAddressPolicyResolutionSchema,
   organizerAudienceCandidateSchema,
   type OrganizerAddressPolicyResolution,
@@ -13,13 +19,12 @@ import {
   type OrganizerMergeValueSource,
   type OrganizerRenderContentBinding,
   type OrganizerRenderContentSource,
-  type OrganizerResolvedMergeValue
+  type OrganizerResolvedMergeValue,
+  type EventDecisionAudienceStatus
 } from '@jooevents/communications';
 import {
   ORGANIZER_COMMUNICATION_AUDIENCE_MEMBER_LIMIT,
   organizerCommunicationAudienceDraftSchema,
-  organizerCommunicationAudienceOptionSchema,
-  organizerCommunicationDefinitionRefSchema,
   organizerCommunicationDraftProjectionSchema,
   organizerCommunicationPurposeRevisionRefSchema,
   organizerMessagePreviewSourceVersionSchema,
@@ -43,9 +48,9 @@ import type {
 } from './audience-preview';
 
 /** Recorder default BLOCKED-4/12: the two decided-set audiences this wave mints. */
-export const DECISION_AUDIENCE_STATUSES = Object.freeze(['accepted', 'declined'] as const);
+export const DECISION_AUDIENCE_STATUSES = EVENT_DECISION_AUDIENCE_STATUSES;
 
-export type DecisionAudienceStatus = (typeof DECISION_AUDIENCE_STATUSES)[number];
+export type DecisionAudienceStatus = EventDecisionAudienceStatus;
 
 const CONTACT_REF_PREFIX = 'submission-contact:';
 
@@ -95,78 +100,18 @@ function scope(value: OrganizerCommunicationScope): OrganizerAudienceScope {
  * The definition digest pins the exact query semantics, never a result set.
  */
 export function decisionAudienceSourceDefinition(status: DecisionAudienceStatus) {
-  const reference = Object.freeze({
-    key: `audience-source.communication.decision-set.${status}`,
-    version: 1
-  });
-  return organizerCommunicationDefinitionRefSchema.parse({
-    reference,
-    definitionDigestSha256: digest({
-      schemaVersion: 1,
-      kind: 'decision_set',
-      binding: 'current_snapshot',
-      reference,
-      statuses: [status]
-    })
-  });
+  return createDecisionAudienceSourceDefinition(status);
 }
 
 export function decisionAudienceRecipeSource(status: DecisionAudienceStatus) {
-  const sourceDefinition = decisionAudienceSourceDefinition(status);
-  const recipeId = `recipe.communication.decision-set.${status}`;
-  return Object.freeze({
-    kind: 'registered_query' as const,
-    recipeId,
-    recipeVersion: 1,
-    recipeDigestSha256: digest({
-      schemaVersion: 1,
-      recipeId,
-      recipeVersion: 1,
-      sourceDefinition,
-      statuses: [status]
-    }),
-    sourceDefinition
-  });
+  return createDecisionAudienceRecipeSource(status);
 }
-
-const OPTION_LABELS: Readonly<Record<DecisionAudienceStatus, string>> = Object.freeze({
-  accepted: 'Accepted submissions',
-  declined: 'Declined submissions'
-});
 
 export function decisionAudienceOption(input: {
   readonly status: DecisionAudienceStatus;
   readonly purposeRevision: OrganizerCommunicationPurposeRevisionRef;
 }): OrganizerCommunicationAudienceOption {
-  const purposeRevision = organizerCommunicationPurposeRevisionRefSchema.parse(
-    input.purposeRevision
-  );
-  const source = decisionAudienceRecipeSource(input.status);
-  const audienceDraft: OrganizerCommunicationAudienceDraft =
-    organizerCommunicationAudienceDraftSchema.parse({
-      schemaVersion: 1,
-      binding: 'current_snapshot',
-      purposeRevision,
-      source
-    });
-  const optionId = `option.communication.decision-set.${input.status}`;
-  const body = {
-    schemaVersion: 1,
-    optionId,
-    optionVersion: 1,
-    label: OPTION_LABELS[input.status],
-    // Honest by construction: membership is resolved live at preview time, so
-    // an immutable option row never carries a count that can go stale.
-    recipientEstimate: Object.freeze({
-      knowledge: 'unknown' as const,
-      reasonCode: 'audience.resolved_at_preview'
-    }),
-    audienceDraft
-  };
-  return organizerCommunicationAudienceOptionSchema.parse({
-    ...body,
-    optionDigestSha256: digest(body)
-  });
+  return createDecisionAudienceOption(input);
 }
 
 /**
@@ -620,7 +565,7 @@ export function createSQLiteDraftRenderContentSource(input: {
   });
 }
 
-export const DECISION_NOTIFICATION_SEED_OWNER_KEY = 'system.communication.decision-seed';
+export const DECISION_NOTIFICATION_SEED_OWNER_KEY = EVENT_DECISION_SEED_OWNER_KEY;
 
 export interface DecisionNotificationSeedAuthoring {
   storeAuthoringPayload(input: {
@@ -642,66 +587,6 @@ export interface DecisionNotificationSeedResult {
     digestSha256: string;
   }>[];
 }
-
-function templateContent(status: DecisionAudienceStatus) {
-  // Inline text nodes are canonical (no edge whitespace), so separators lead
-  // with punctuation and merge fields start their segments.
-  const opening = status === 'accepted'
-    ? ', good news — your submission was accepted.'
-    : ', thank you for submitting. After review, your submission was not selected this time.';
-  return Object.freeze({
-    kind: 'email/v1' as const,
-    subject: [
-      { kind: 'merge_field' as const, fieldKey: 'submission.title' },
-      { kind: 'text' as const, value: status === 'accepted' ? ': accepted' : ': decision update' }
-    ],
-    body: {
-      mode: 'composed' as const,
-      blocks: [
-        {
-          kind: 'paragraph' as const,
-          content: [
-            { kind: 'merge_field' as const, fieldKey: 'person.name' },
-            { kind: 'text' as const, value: opening }
-          ]
-        },
-        {
-          kind: 'detail_rows' as const,
-          rows: [
-            {
-              label: [{ kind: 'text' as const, value: 'Submission' }],
-              value: [{ kind: 'merge_field' as const, fieldKey: 'submission.title' }]
-            },
-            {
-              label: [{ kind: 'text' as const, value: 'Decision' }],
-              value: [{ kind: 'merge_field' as const, fieldKey: 'decision.status' }]
-            }
-          ]
-        }
-      ]
-    },
-    plainTextPolicy: 'derive_v1' as const,
-    attachmentSlotKeys: []
-  });
-}
-
-const TEMPLATE_FIELD_BINDINGS = Object.freeze([
-  Object.freeze({
-    fieldKey: 'decision.status',
-    requirement: 'required' as const,
-    fallback: Object.freeze({ kind: 'none' as const })
-  }),
-  Object.freeze({
-    fieldKey: 'person.name',
-    requirement: 'required' as const,
-    fallback: Object.freeze({ kind: 'none' as const })
-  }),
-  Object.freeze({
-    fieldKey: 'submission.title',
-    requirement: 'required' as const,
-    fallback: Object.freeze({ kind: 'none' as const })
-  })
-]);
 
 /**
  * Verified at implementation (BLOCKED-4): the authoring surface has no
@@ -727,41 +612,17 @@ export function seedDecisionNotificationCommunications(input: {
 }): DecisionNotificationSeedResult {
   if (!input.sqlite.inTransaction) throw new SQLiteDecisionAudienceError('invalid_input');
   const selected = scope(input.scope);
-  const renderer = organizerCommunicationDefinitionRefSchema.parse(input.renderer);
-  const mergeRegistry = organizerCommunicationDefinitionRefSchema.parse(input.mergeRegistry);
-  const purposeId = deterministicUuid('communication.purpose.decision-notification', selected);
-  const revisionId = deterministicUuid('communication.purpose-revision.decision-notification', selected);
-  const allowedAudienceSources = DECISION_AUDIENCE_STATUSES
-    .map((status) => decisionAudienceSourceDefinition(status))
-    .sort((left, right) =>
-      `${left.reference.key}@${left.reference.version}`
-        < `${right.reference.key}@${right.reference.version}` ? -1 : 1
-    );
-  const policyDigestSha256 = digest({
-    schemaVersion: 1,
-    purposeKey: DECISION_NOTIFICATION_PURPOSE_KEY,
-    communicationClass: 'transactional',
-    consent: 'not_required',
-    allowedAudienceSources
+  const plan = createEventCommunicationSeedPlan({
+    scope: selected,
+    renderer: input.renderer,
+    mergeRegistry: input.mergeRegistry
   });
-  const purposeRevision = organizerCommunicationPurposeRevisionRefSchema.parse({
-    purposeId,
-    purposeKey: DECISION_NOTIFICATION_PURPOSE_KEY,
-    revisionId,
-    revisionNumber: 1,
-    digestSha256: digest({
-      schemaVersion: 1,
-      purposeId,
-      purposeKey: DECISION_NOTIFICATION_PURPOSE_KEY,
-      revisionId,
-      revisionNumber: 1,
-      policyDigestSha256
-    })
-  });
+  const purposeSeed = plan.decisionPurpose;
+  const { purposeRevision } = purposeSeed;
   const existingPurpose = input.sqlite.query<{ readonly purpose_key: string }, [string, string, string]>(`
     SELECT purpose_key FROM communication_purposes
      WHERE workspace_id = ? AND event_id = ? AND purpose_id = ? LIMIT 2
-  `).all(selected.workspaceId, selected.eventId, purposeId);
+  `).all(selected.workspaceId, selected.eventId, purposeRevision.purposeId);
   if (existingPurpose.length > 1) throw new SQLiteDecisionAudienceError('data_corrupt');
   if (existingPurpose.length === 0) {
     input.sqlite.query(`
@@ -769,8 +630,8 @@ export function seedDecisionNotificationCommunications(input: {
         workspace_id, event_id, purpose_id, purpose_key, lifecycle, current_revision_id
       ) VALUES (?, ?, ?, ?, 'active', ?)
     `).run(
-      selected.workspaceId, selected.eventId, purposeId,
-      DECISION_NOTIFICATION_PURPOSE_KEY, revisionId
+      selected.workspaceId, selected.eventId, purposeRevision.purposeId,
+      purposeRevision.purposeKey, purposeRevision.revisionId
     );
     input.sqlite.query(`
       INSERT INTO communication_purpose_revisions (
@@ -779,64 +640,36 @@ export function seedDecisionNotificationCommunications(input: {
         allowed_audience_sources_json
       ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, 'transactional', ?, ?, ?)
     `).run(
-      selected.workspaceId, selected.eventId, purposeId, DECISION_NOTIFICATION_PURPOSE_KEY,
-      revisionId, purposeRevision.digestSha256, 'Decision notifications',
-      policyDigestSha256,
-      'Transactional acceptance and decline notifications for decided submissions.',
-      canonicalJsonText(allowedAudienceSources)
+      selected.workspaceId, selected.eventId, purposeRevision.purposeId,
+      purposeRevision.purposeKey, purposeRevision.revisionId,
+      purposeRevision.digestSha256, purposeSeed.label,
+      purposeSeed.policyDigestSha256, purposeSeed.description,
+      canonicalJsonText(purposeSeed.allowedAudienceSources)
     );
   } else if (existingPurpose[0]!.purpose_key !== DECISION_NOTIFICATION_PURPOSE_KEY) {
     throw new SQLiteDecisionAudienceError('data_corrupt');
   }
 
-  const templates = DECISION_AUDIENCE_STATUSES.map((status) => {
-    const templateId = deterministicUuid(`communication.template.decision-${status}`, selected);
-    const templateRevisionId = deterministicUuid(
-      `communication.template-revision.decision-${status}`, selected
-    );
-    const contentPayloadRefId = deterministicUuid(
-      `communication.template-content.decision-${status}`, selected
-    );
-    const bindingsPayloadRefId = deterministicUuid(
-      `communication.template-bindings.decision-${status}`, selected
-    );
-    const digestSha256 = digest({
-      schemaVersion: 1,
-      templateId,
-      templateRevisionId,
-      revisionNumber: 1,
-      content: templateContent(status),
-      fieldBindings: TEMPLATE_FIELD_BINDINGS,
-      renderer,
-      mergeRegistry
-    });
+  const templates = plan.templates.map((template) => {
     const existing = input.sqlite.query<{ readonly template_key: string }, [string, string, string]>(`
       SELECT template_key FROM message_templates
        WHERE workspace_id = ? AND event_id = ? AND template_id = ? LIMIT 2
-    `).all(selected.workspaceId, selected.eventId, templateId);
+    `).all(selected.workspaceId, selected.eventId, template.templateId);
     if (existing.length > 1) throw new SQLiteDecisionAudienceError('data_corrupt');
     if (existing.length === 0) {
       input.authoring.storeAuthoringPayload({
         scope: selected,
         ownerKey: DECISION_NOTIFICATION_SEED_OWNER_KEY,
-        payloadRefId: contentPayloadRefId,
+        payloadRefId: template.contentPayloadRefId,
         createdAt: input.now,
-        payload: {
-          payloadKind: 'template_content',
-          schemaVersion: 1,
-          value: templateContent(status)
-        }
+        payload: template.contentPayload
       });
       input.authoring.storeAuthoringPayload({
         scope: selected,
         ownerKey: DECISION_NOTIFICATION_SEED_OWNER_KEY,
-        payloadRefId: bindingsPayloadRefId,
+        payloadRefId: template.bindingsPayloadRefId,
         createdAt: input.now,
-        payload: {
-          payloadKind: 'template_field_bindings',
-          schemaVersion: 1,
-          value: TEMPLATE_FIELD_BINDINGS
-        }
+        payload: template.bindingsPayload
       });
       input.sqlite.query(`
         INSERT INTO message_templates (
@@ -844,9 +677,9 @@ export function seedDecisionNotificationCommunications(input: {
           purpose_revision_id, current_revision_id
         ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
       `).run(
-        selected.workspaceId, selected.eventId, templateId, `decision.${status}`,
-        status === 'accepted' ? 'Decision accepted' : 'Decision declined',
-        revisionId, templateRevisionId
+        selected.workspaceId, selected.eventId, template.templateId,
+        template.templateKey, template.templateName,
+        purposeRevision.revisionId, template.templateRevisionId
       );
       input.sqlite.query(`
         INSERT INTO message_template_revisions (
@@ -856,19 +689,21 @@ export function seedDecisionNotificationCommunications(input: {
           merge_registry_key, merge_registry_version, merge_registry_digest_sha256
         ) VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
-        selected.workspaceId, selected.eventId, templateId, templateRevisionId,
-        digestSha256, contentPayloadRefId, bindingsPayloadRefId,
-        renderer.reference.key, renderer.reference.version, renderer.definitionDigestSha256,
-        mergeRegistry.reference.key, mergeRegistry.reference.version,
-        mergeRegistry.definitionDigestSha256
+        selected.workspaceId, selected.eventId, template.templateId,
+        template.templateRevisionId, template.digestSha256,
+        template.contentPayloadRefId, template.bindingsPayloadRefId,
+        template.renderer.reference.key, template.renderer.reference.version,
+        template.renderer.definitionDigestSha256,
+        template.mergeRegistry.reference.key, template.mergeRegistry.reference.version,
+        template.mergeRegistry.definitionDigestSha256
       );
     }
     return Object.freeze({
-      status,
-      templateId,
-      templateRevisionId,
+      status: template.status,
+      templateId: template.templateId,
+      templateRevisionId: template.templateRevisionId,
       revisionNumber: 1 as const,
-      digestSha256
+      digestSha256: template.digestSha256
     });
   });
   return Object.freeze({ purposeRevision, templates: Object.freeze(templates) });

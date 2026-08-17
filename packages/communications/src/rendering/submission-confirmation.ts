@@ -4,6 +4,17 @@ export const SUBMISSION_CONFIRMATION_PURPOSE_KEY = 'submission_confirmation' as 
 export const SUBMISSION_CONFIRMATION_TEMPLATE_REVISION_REF_ID =
   'template.submission-confirmation.v1' as const;
 
+export const SUBMISSION_CONFIRMATION_STANDING_POLICY = Object.freeze({
+  key: 'standing-policy.submission-confirmation',
+  version: 1,
+  communicationClass: 'event_transactional',
+  owner: 'workspace_owner',
+  trigger: 'application_submitted@1',
+  maximumRegistrationsPerSubmission: 1,
+  producerAuthorizationLifetimeMs: 300_000,
+  revocationSwitch: 'JOOEVENTS_SUBMISSION_CONFIRMATIONS'
+} as const);
+
 /**
  * Frozen merge inventory for the first submission receipt. Every value comes
  * from committed event/submission state; the portal URL is application-owned.

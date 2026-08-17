@@ -1,15 +1,10 @@
 import type { Database } from 'bun:sqlite';
 import { createHash } from 'node:crypto';
-import {
-  createClassifiedPayloadProfileRef,
-  type ClassifiedPayloadProfiles,
-  type EffectInvocationContext
-} from '@jooevents/application';
+import type { EffectInvocationContext } from '@jooevents/application';
 import {
   adoptSynchronousClassifiedPayload,
   openSynchronousClassifiedPayloadAdoptionReceipt,
   SynchronousClassifiedPayloadStoreError,
-  type SynchronousClassifiedPayloadBinding,
   type SynchronousClassifiedPayloadStore
 } from '@jooevents/application/synchronous-classified-payload-store';
 import {
@@ -70,6 +65,10 @@ import {
   type Instant,
   type PayloadRefId
 } from '@jooevents/kernel';
+import {
+  communicationAuthoringClassifiedPayloadPurpose,
+  createCommunicationAuthoringClassifiedPayloadBinding
+} from '../../communication-authoring-classified-payload';
 
 export const SQLITE_ORGANIZER_COMMUNICATION_AUTHORING_SQL = `
 CREATE TABLE communication_authoring_payloads (
@@ -241,45 +240,6 @@ function digest(value: unknown): string {
 
 function bytesDigest(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex');
-}
-
-function profiles(kind: OrganizerAuthoringPayloadKind): ClassifiedPayloadProfiles {
-  const profile = ORGANIZER_AUTHORING_PAYLOAD_PROFILES[kind];
-  return Object.freeze({
-    classification: createClassifiedPayloadProfileRef(
-      'classification', `classification.${profile.classification}`, 1
-    ),
-    schema: createClassifiedPayloadProfileRef('schema', `schema.${profile.schemaKey}`, 1),
-    content: createClassifiedPayloadProfileRef('content', `content.${kind}`, 1),
-    integrity: createClassifiedPayloadProfileRef('integrity', 'integrity.sha256', 1),
-    descriptorAuth: createClassifiedPayloadProfileRef(
-      'descriptor_auth', 'descriptor_auth.communication.authoring', 1
-    )
-  });
-}
-
-function scopeBinding(scope: OrganizerCommunicationScope, ownerKey: string): string {
-  return canonicalJsonText({
-    eventId: parseEventId(scope.eventId),
-    ownerKey,
-    workspaceId: parseWorkspaceId(scope.workspaceId)
-  });
-}
-
-function payloadBinding(input: {
-  readonly scope: OrganizerCommunicationScope;
-  readonly ownerKey: string;
-  readonly kind: OrganizerAuthoringPayloadKind;
-}): SynchronousClassifiedPayloadBinding {
-  return Object.freeze({
-    profiles: profiles(input.kind),
-    scopeBinding: scopeBinding(input.scope, input.ownerKey),
-    contentType: ORGANIZER_AUTHORING_PAYLOAD_PROFILES[input.kind].contentType
-  });
-}
-
-function payloadPurpose(kind: OrganizerAuthoringPayloadKind): string {
-  return `communication.authoring.${kind}`;
 }
 
 function instant(value: unknown): Instant {
@@ -491,12 +451,12 @@ export class SQLiteOrganizerCommunicationAuthoringRepository implements Organize
     try {
       bytes = this.classifiedStore.read({
         payloadRef: createPayloadRef(parsePayloadRefId(row.payload_ref_id)),
-        expectedBinding: payloadBinding({
+        expectedBinding: createCommunicationAuthoringClassifiedPayloadBinding({
           scope: input.scope,
           ownerKey: row.owner_key,
           kind: row.payload_kind
         }),
-        purpose: payloadPurpose(row.payload_kind)
+        purpose: communicationAuthoringClassifiedPayloadPurpose(row.payload_kind)
       });
       if (bytes.byteLength !== row.byte_size || bytesDigest(bytes) !== row.digest_sha256) {
         throw new SQLiteOrganizerCommunicationAuthoringError('data_corrupt');
@@ -569,12 +529,12 @@ export class SQLiteOrganizerCommunicationAuthoringRepository implements Organize
           store: this.classifiedStore,
           put: {
             payloadRefId,
-            binding: payloadBinding({
+            binding: createCommunicationAuthoringClassifiedPayloadBinding({
               scope: input.scope,
               ownerKey: input.ownerKey,
               kind: canonical.profile.payloadKind
             }),
-            purpose: payloadPurpose(canonical.profile.payloadKind),
+            purpose: communicationAuthoringClassifiedPayloadPurpose(canonical.profile.payloadKind),
             bytes: canonical.bytes,
             createdAt
           }

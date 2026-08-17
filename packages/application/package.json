@@ -9,6 +9,7 @@
     "./public-effect-conformance": "./src/public-effect-conformance.ts",
     "./public-mutation-effect-completion": "./src/public-mutation-effect-completion.ts",
     "./public-mutation-continuation": "./src/public-mutation-continuation.ts",
+    "./immutable-classified-payload-record": "./src/immutable-classified-payload-record.ts",
     "./synchronous-classified-payload-store": "./src/synchronous-classified-payload-store.ts",
     "./verified-ingress": "./src/verified-ingress.ts",
     "./workspace-team-operations": "./src/workspace-team-operations.ts"

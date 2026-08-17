@@ -2,6 +2,8 @@ import {
   createInitialEventSettingsCompanion,
   type Event
 } from '@jooevents/event';
+import type { SynchronousClassifiedPayloadEncryptionProfile } from '@jooevents/application/synchronous-classified-payload-store';
+import { createEventCommunicationSeedRendererDefinition } from '@jooevents/communications';
 import {
   createCanonicalFieldRegistryBaseline,
   fieldRegistryStateDigest,
@@ -14,12 +16,14 @@ import {
 } from '@jooevents/template-authoring';
 import type { D1BufferedUnitOfWork } from './d1-atomic-batch';
 import type { D1CreatedEventInitializer } from './d1-event-domain';
+import { initializeD1EventCommunicationRoots } from './d1-event-communication-initializer';
 
 export interface D1CreatedEventInitializerIds extends CanonicalFieldRegistryBaselineIds {}
 
 /** Buffers the runtime-neutral Event companions into the caller's Event-create batch. */
 export function createD1CreatedEventInitializer(input: {
   readonly ids: D1CreatedEventInitializerIds;
+  readonly classifiedPayloadEncryptionProfile: SynchronousClassifiedPayloadEncryptionProfile;
 }): D1CreatedEventInitializer {
   if (typeof input.ids.newFieldId !== 'function' || typeof input.ids.newChoiceId !== 'function') {
     throw new TypeError('d1_created_event_initializer_ids_invalid');
@@ -74,6 +78,13 @@ export function createD1CreatedEventInitializer(input: {
         settings.dayEnd,
         settings.slotMinutes
       ]);
+
+      initializeD1EventCommunicationRoots({
+        unitOfWork,
+        event,
+        encryptionProfile: input.classifiedPayloadEncryptionProfile,
+        renderer: createEventCommunicationSeedRendererDefinition()
+      });
 
       for (const seed of starterTemplateArtifacts({
         scope: { workspaceId: event.workspaceId, eventId: event.id },

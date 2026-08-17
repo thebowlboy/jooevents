@@ -3,12 +3,12 @@ import { createHash } from 'node:crypto';
 import {
   OrganizerAudienceResolutionError,
   TASK_REMINDER_PURPOSE_KEY,
+  createEventCommunicationPurposeSeedPlan,
   organizerAudienceCandidateSchema,
   type OrganizerAudienceCandidate,
   type OrganizerMergeValueSource
 } from '@jooevents/communications';
 import {
-  organizerCommunicationPurposeRevisionRefSchema,
   organizerMessagePreviewSourceVersionSchema,
   type OrganizerCommunicationPurposeRevisionRef
 } from '@jooevents/contracts/communications/organizer';
@@ -23,42 +23,27 @@ export const TASK_REMINDER_CONTACT_REF_PREFIX = 'task-engagement:' as const;
 const digest = (value: unknown) =>
   createHash('sha256').update(canonicalJsonText(value), 'utf8').digest('hex');
 
-function deterministicUuid(namespace: string, material: unknown): string {
-  const value = digest({ namespace, material });
-  return `${value.slice(0, 8)}-${value.slice(8, 12)}-4${value.slice(13, 16)}`
-    + `-8${value.slice(17, 20)}-${value.slice(20, 32)}`;
-}
-
 /** Installs the transactional purpose; message content remains organizer-authored. */
 export function seedTaskReminderPurpose(input: {
   readonly sqlite: Database;
   readonly scope: { readonly workspaceId: string; readonly eventId: string };
 }): OrganizerCommunicationPurposeRevisionRef {
   if (!input.sqlite.inTransaction) throw new TypeError('task_reminder_seed_transaction_required');
-  const purposeId = deterministicUuid('communication.purpose.task-reminder', input.scope);
-  const revisionId = deterministicUuid('communication.purpose-revision.task-reminder', input.scope);
-  const policyDigestSha256 = digest({
-    schemaVersion: 1, purposeKey: TASK_REMINDER_PURPOSE_KEY,
-    communicationClass: 'transactional', consent: 'not_required',
-    audience: 'explicit_task_engagements@1'
-  });
-  const purposeRevision = organizerCommunicationPurposeRevisionRefSchema.parse({
-    purposeId, purposeKey: TASK_REMINDER_PURPOSE_KEY, revisionId, revisionNumber: 1,
-    digestSha256: digest({
-      schemaVersion: 1, purposeId, purposeKey: TASK_REMINDER_PURPOSE_KEY,
-      revisionId, revisionNumber: 1, policyDigestSha256
-    })
-  });
+  const seed = createEventCommunicationPurposeSeedPlan(input.scope).taskReminderPurpose;
+  const { purposeRevision } = seed;
   const exists = input.sqlite.query<{ purpose_key: string }, [string, string, string]>(`
     SELECT purpose_key FROM communication_purposes
      WHERE workspace_id=? AND event_id=? AND purpose_id=? LIMIT 2
-  `).all(input.scope.workspaceId, input.scope.eventId, purposeId);
+  `).all(input.scope.workspaceId, input.scope.eventId, purposeRevision.purposeId);
   if (exists.length === 0) {
     input.sqlite.query(`
       INSERT INTO communication_purposes(
         workspace_id,event_id,purpose_id,purpose_key,lifecycle,current_revision_id
       ) VALUES (?,?,?,?,'active',?)
-    `).run(input.scope.workspaceId, input.scope.eventId, purposeId, TASK_REMINDER_PURPOSE_KEY, revisionId);
+    `).run(
+      input.scope.workspaceId, input.scope.eventId, purposeRevision.purposeId,
+      purposeRevision.purposeKey, purposeRevision.revisionId
+    );
     input.sqlite.query(`
       INSERT INTO communication_purpose_revisions(
         workspace_id,event_id,purpose_id,purpose_key,revision_id,revision_number,
@@ -66,9 +51,10 @@ export function seedTaskReminderPurpose(input: {
         allowed_audience_sources_json
       ) VALUES (?,?,?,?,?,1,?,?,'transactional',?,?,?)
     `).run(
-      input.scope.workspaceId, input.scope.eventId, purposeId, TASK_REMINDER_PURPOSE_KEY,
-      revisionId, purposeRevision.digestSha256, 'Speaker task reminders', policyDigestSha256,
-      'Organizer-reviewed reminders for currently incomplete speaker tasks.', '[]'
+      input.scope.workspaceId, input.scope.eventId, purposeRevision.purposeId,
+      purposeRevision.purposeKey, purposeRevision.revisionId,
+      purposeRevision.digestSha256, seed.label, seed.policyDigestSha256,
+      seed.description, canonicalJsonText(seed.allowedAudienceSources)
     );
   } else if (exists.length !== 1 || exists[0]!.purpose_key !== TASK_REMINDER_PURPOSE_KEY) {
     throw new TypeError('task_reminder_seed_collision');

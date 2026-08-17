@@ -117,6 +117,7 @@ import {
   createDeterministicFakeEmailProvider,
   createEmailProviderConfigurationService,
   createEmailProviderReadinessReader,
+  createEventCommunicationSeedRendererDefinition,
   createHmacOrganizerPreviewOpaqueTokenCodec,
   createOrganizerMergeRegistryRelease,
   createOrganizerPlainTextRenderStrategyPort,
@@ -2375,10 +2376,7 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
         authoring: organizerCommunicationAuthoring,
         scope,
         mergeRegistry: organizerPlainTextMergeRegistry.identity,
-        renderer: communicationDefinitionRef(
-          'renderer.communication.plain-text',
-          Object.freeze({ kind: 'plain_text', version: 1 })
-        ),
+        renderer: createEventCommunicationSeedRendererDefinition(),
         now: clock.now()
       });
       mintDecisionAudienceRecipes({

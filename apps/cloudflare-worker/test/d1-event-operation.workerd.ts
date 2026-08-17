@@ -6,6 +6,7 @@ import {
   createOperatorAuthorityPolicyCatalog,
   type InvocationEvidence
 } from '@jooevents/application';
+import { issueSynchronousClassifiedPayloadEncryptionProfile } from '@jooevents/application/synchronous-classified-payload-store';
 import {
   eventCreateOperationResultSchema,
   eventSelectOperationResultSchema
@@ -141,6 +142,10 @@ describe('registered Event operation over D1', () => {
         workspaceId,
         newEventId: () => eventId,
         createdEventInitializer: createD1CreatedEventInitializer({
+          classifiedPayloadEncryptionProfile: issueSynchronousClassifiedPayloadEncryptionProfile({
+            reference: { key: 'encryption.d1-event-communication-test', version: 1 },
+            keyBytes: new Uint8Array(32).fill(0x77)
+          }),
           ids: {
             newFieldId: () => uuid(invocationSequence++),
             newChoiceId: () => uuid(invocationSequence++)
@@ -243,6 +248,43 @@ describe('registered Event operation over D1', () => {
         workspaceId,
         eventId
       ).first<CountRow>())?.count).toBe(10);
+    expect((await env.DB.prepare(`SELECT count(*) AS count FROM communication_purposes
+      WHERE workspace_id = ? AND event_id = ?`).bind(
+        workspaceId,
+        eventId
+      ).first<CountRow>())?.count).toBe(3);
+    expect((await env.DB.prepare(`SELECT count(*) AS count FROM communication_purpose_revisions
+      WHERE workspace_id = ? AND event_id = ?`).bind(
+        workspaceId,
+        eventId
+      ).first<CountRow>())?.count).toBe(3);
+    expect((await env.DB.prepare(`SELECT count(*) AS count FROM message_templates
+      WHERE workspace_id = ? AND event_id = ?`).bind(
+        workspaceId,
+        eventId
+      ).first<CountRow>())?.count).toBe(2);
+    expect((await env.DB.prepare(`SELECT count(*) AS count FROM message_template_revisions
+      WHERE workspace_id = ? AND event_id = ?`).bind(
+        workspaceId,
+        eventId
+      ).first<CountRow>())?.count).toBe(2);
+    expect((await env.DB.prepare(`SELECT count(*) AS count
+      FROM communication_registered_audience_recipes
+      WHERE workspace_id = ? AND event_id = ?`).bind(
+        workspaceId,
+        eventId
+      ).first<CountRow>())?.count).toBe(2);
+    expect((await env.DB.prepare(`SELECT count(*) AS count FROM communication_authoring_payloads
+      WHERE workspace_id = ? AND event_id = ?`).bind(
+        workspaceId,
+        eventId
+      ).first<CountRow>())?.count).toBe(4);
+    expect((await env.DB.prepare(`SELECT count(*) AS count FROM classified_payload_records p
+      JOIN communication_authoring_payloads a ON a.payload_ref_id = p.payload_ref_id
+      WHERE a.workspace_id = ? AND a.event_id = ?`).bind(
+        workspaceId,
+        eventId
+      ).first<CountRow>())?.count).toBe(4);
     expect(logs?.count).toBe(1);
 
     await env.DB.batch([

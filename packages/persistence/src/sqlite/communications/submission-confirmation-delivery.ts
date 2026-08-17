@@ -3,8 +3,10 @@ import { createHash, createHmac } from 'node:crypto';
 import {
   buildCommunicationMessageRelease,
   composeCommunicationSenderPresentation,
+  createEventCommunicationPurposeSeedPlan,
   renderSubmissionConfirmationMessage,
   SUBMISSION_CONFIRMATION_PURPOSE_KEY,
+  SUBMISSION_CONFIRMATION_STANDING_POLICY,
   SUBMISSION_CONFIRMATION_TEMPLATE_REVISION_REF_ID,
   type MailSenderPresentationResolver
 } from '@jooevents/communications';
@@ -23,16 +25,7 @@ import {
 } from '../outbound-email-delivery';
 import type { SQLiteCommunicationMessageReleaseStore } from './message-releases';
 
-export const SUBMISSION_CONFIRMATION_STANDING_POLICY = Object.freeze({
-  key: 'standing-policy.submission-confirmation',
-  version: 1,
-  communicationClass: 'event_transactional',
-  owner: 'workspace_owner',
-  trigger: 'application_submitted@1',
-  maximumRegistrationsPerSubmission: 1,
-  producerAuthorizationLifetimeMs: 300_000,
-  revocationSwitch: 'JOOEVENTS_SUBMISSION_CONFIRMATIONS'
-} as const);
+export { SUBMISSION_CONFIRMATION_STANDING_POLICY } from '@jooevents/communications';
 
 export const SUBMISSION_CONFIRMATION_UNCONFIGURED_PROVIDER_CONNECTION_REVISION_ID =
   'provider.connection.not-activated';
@@ -108,36 +101,21 @@ export function seedSubmissionConfirmationPurpose(input: {
   if (!input.sqlite.inTransaction) {
     throw new TypeError('submission_confirmation_seed_transaction_required');
   }
-  const purposeId = deterministicUuid('communication.purpose.submission-confirmation', input.scope);
-  const revisionId = deterministicUuid(
-    'communication.purpose-revision.submission-confirmation', input.scope
-  );
-  const purposeRevision = organizerCommunicationPurposeRevisionRefSchema.parse({
-    purposeId,
-    purposeKey: SUBMISSION_CONFIRMATION_PURPOSE_KEY,
-    revisionId,
-    revisionNumber: 1,
-    digestSha256: digest({
-      schemaVersion: 1,
-      purposeId,
-      purposeKey: SUBMISSION_CONFIRMATION_PURPOSE_KEY,
-      revisionId,
-      revisionNumber: 1,
-      policyDigestSha256: policyDigest()
-    })
-  });
+  const seed = createEventCommunicationPurposeSeedPlan(input.scope)
+    .submissionConfirmationPurpose;
+  const { purposeRevision } = seed;
   const rows = input.sqlite.query<{ readonly purpose_key: string }, [string, string, string]>(`
     SELECT purpose_key FROM communication_purposes
      WHERE workspace_id = ? AND event_id = ? AND purpose_id = ? LIMIT 2
-  `).all(input.scope.workspaceId, input.scope.eventId, purposeId);
+  `).all(input.scope.workspaceId, input.scope.eventId, purposeRevision.purposeId);
   if (rows.length === 0) {
     input.sqlite.query(`
       INSERT INTO communication_purposes (
         workspace_id, event_id, purpose_id, purpose_key, lifecycle, current_revision_id
       ) VALUES (?, ?, ?, ?, 'active', ?)
     `).run(
-      input.scope.workspaceId, input.scope.eventId, purposeId,
-      SUBMISSION_CONFIRMATION_PURPOSE_KEY, revisionId
+      input.scope.workspaceId, input.scope.eventId, purposeRevision.purposeId,
+      purposeRevision.purposeKey, purposeRevision.revisionId
     );
     input.sqlite.query(`
       INSERT INTO communication_purpose_revisions (
@@ -146,10 +124,10 @@ export function seedSubmissionConfirmationPurpose(input: {
         allowed_audience_sources_json
       ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, 'transactional', ?, ?, '[]')
     `).run(
-      input.scope.workspaceId, input.scope.eventId, purposeId,
-      SUBMISSION_CONFIRMATION_PURPOSE_KEY, revisionId, purposeRevision.digestSha256,
-      'Submission confirmations', policyDigest(),
-      'A receipt sent once after a public application is committed.'
+      input.scope.workspaceId, input.scope.eventId, purposeRevision.purposeId,
+      purposeRevision.purposeKey, purposeRevision.revisionId,
+      purposeRevision.digestSha256, seed.label, seed.policyDigestSha256,
+      seed.description
     );
   } else if (rows.length !== 1 || rows[0]!.purpose_key !== SUBMISSION_CONFIRMATION_PURPOSE_KEY) {
     throw new TypeError('submission_confirmation_seed_collision');

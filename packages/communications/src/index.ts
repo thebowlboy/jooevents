@@ -14,6 +14,7 @@ export * from './providers/registry';
 export * from './providers/configuration';
 export * from './providers/readiness';
 export * from './release/store';
+export * from './seeding/event-communication-seeds';
 export * from './rendering/decision-notification';
 export * from './rendering/email-v1';
 export * from './rendering/merge-registry';
