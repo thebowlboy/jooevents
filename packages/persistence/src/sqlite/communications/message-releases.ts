@@ -1,13 +1,8 @@
 import type { Database } from 'bun:sqlite';
 import { createHash } from 'node:crypto';
 import {
-  createClassifiedPayloadProfileRef,
-  type ClassifiedPayloadProfiles
-} from '@jooevents/application';
-import {
   adoptSynchronousClassifiedPayload,
   openSynchronousClassifiedPayloadAdoptionReceipt,
-  type SynchronousClassifiedPayloadBinding,
   type SynchronousClassifiedPayloadStore
 } from '@jooevents/application/synchronous-classified-payload-store';
 import {
@@ -24,6 +19,10 @@ import {
   parseInstant,
   parsePayloadRefId
 } from '@jooevents/kernel';
+import {
+  COMMUNICATION_MESSAGE_RELEASE_ENVELOPE_PURPOSE,
+  communicationMessageReleaseEnvelopeBinding
+} from '../../communication-message-release-classification';
 
 /**
  * Immutable per-recipient message releases. Ordinary rows carry only opaque
@@ -88,42 +87,6 @@ function digestBytes(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
-function profiles(): ClassifiedPayloadProfiles {
-  return Object.freeze({
-    classification: createClassifiedPayloadProfileRef(
-      'classification', 'classification.communication.message-release.envelope', 1
-    ),
-    schema: createClassifiedPayloadProfileRef(
-      'schema', 'schema.communication.message-release.envelope', 1
-    ),
-    content: createClassifiedPayloadProfileRef(
-      'content', 'content.communication.message-release.envelope', 1
-    ),
-    integrity: createClassifiedPayloadProfileRef('integrity', 'integrity.sha256', 1),
-    descriptorAuth: createClassifiedPayloadProfileRef(
-      'descriptor_auth', 'descriptor_auth.communication.message-release', 1
-    )
-  });
-}
-
-function envelopeBinding(release: Pick<
-  CommunicationMessageRelease,
-  'workspaceId' | 'eventId' | 'batchId' | 'releaseId'
->): SynchronousClassifiedPayloadBinding {
-  return Object.freeze({
-    profiles: profiles(),
-    scopeBinding: canonicalJsonText({
-      workspaceId: release.workspaceId,
-      eventId: release.eventId,
-      batchId: release.batchId,
-      releaseId: release.releaseId
-    }),
-    contentType: 'application/json'
-  });
-}
-
-const ENVELOPE_PURPOSE = 'communication.message-release.envelope';
-
 interface ReleaseRow {
   readonly release_id: string;
   readonly workspace_id: string;
@@ -178,8 +141,8 @@ export class SQLiteCommunicationMessageReleaseStore implements CommunicationMess
         store: this.classifiedStore,
         put: {
           payloadRefId,
-          binding: envelopeBinding(release),
-          purpose: ENVELOPE_PURPOSE,
+        binding: communicationMessageReleaseEnvelopeBinding(release),
+        purpose: COMMUNICATION_MESSAGE_RELEASE_ENVELOPE_PURPOSE,
           bytes,
           createdAt: parseInstant(release.createdAt)
         }
@@ -258,13 +221,13 @@ export class SQLiteCommunicationMessageReleaseStore implements CommunicationMess
     try {
       bytes = this.classifiedStore.read({
         payloadRef: createPayloadRef(parsePayloadRefId(row.envelope_payload_ref_id)),
-        expectedBinding: envelopeBinding({
+        expectedBinding: communicationMessageReleaseEnvelopeBinding({
           workspaceId: row.workspace_id,
           eventId: row.event_id,
           batchId: row.batch_id,
           releaseId: row.release_id
         }),
-        purpose: ENVELOPE_PURPOSE
+        purpose: COMMUNICATION_MESSAGE_RELEASE_ENVELOPE_PURPOSE
       });
       if (bytes.byteLength !== row.envelope_byte_size
           || digestBytes(bytes) !== row.envelope_digest_sha256) {

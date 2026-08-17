@@ -130,7 +130,7 @@ export type D1ApplicationRuntimeEnvironment = CloudflareAuthBindings & {
   readonly FILES: R2Bucket;
 };
 
-function loadCryptoProfiles(
+export function loadD1CryptoProfiles(
   environment: D1ApplicationRuntimeEnvironment
 ): DurableCryptoProfileComposition {
   return createDurableCryptoProfileComposition({
@@ -141,13 +141,15 @@ function loadCryptoProfiles(
   });
 }
 
-function classifiedCommunicationProfile(cryptoProfiles: DurableCryptoProfileComposition) {
+export function classifiedD1CommunicationProfiles(
+  cryptoProfiles: DurableCryptoProfileComposition
+) {
   return cryptoProfiles.classifiedPayloadEncryptionProfiles(
     cryptoProfiles.profileSelection(
       'classified_payload',
       'encryption.communication-organizer-payload'
     )
-  ).encryptionProfile;
+  );
 }
 
 const WORKSPACE_TEAM_KEY_PROFILES = Object.freeze({
@@ -227,7 +229,7 @@ export async function createConfiguredD1ApplicationRuntime(
   }
   const config = loadCloudflareAuthRuntimeConfiguration(environment);
   const workspaceId = parseWorkspaceId(config.workspaceId);
-  const cryptoProfiles = loadCryptoProfiles(environment);
+  const cryptoProfiles = loadD1CryptoProfiles(environment);
   const clock = Object.freeze({ now: () => parseInstant(new Date().toISOString()) });
   const policies = createOperatorAuthorityPolicyCatalog([
     { policy: EVENT_READ_ACCESS_POLICY, permissionId: 'event.read' },
@@ -579,7 +581,8 @@ export async function createConfiguredD1ApplicationRuntime(
       workspaceId,
       newEventId: () => crypto.randomUUID(),
       createdEventInitializer: createD1CreatedEventInitializer({
-        classifiedPayloadEncryptionProfile: classifiedCommunicationProfile(cryptoProfiles),
+        classifiedPayloadEncryptionProfile:
+          classifiedD1CommunicationProfiles(cryptoProfiles).encryptionProfile,
         ids: {
           newFieldId: () => crypto.randomUUID(),
           newChoiceId: () => crypto.randomUUID()

@@ -9,6 +9,7 @@ import {
   cloudflareApplicationRuntimeEnabled,
   createConfiguredD1ApplicationRuntime
 } from './d1-application-runtime';
+import { dispatchD1OutboundEmailWake } from './d1-outbound-email-queue';
 
 export type CloudflareApplicationEnvironment = Omit<
   Env,
@@ -233,7 +234,10 @@ function isConfiguredAuthPath(pathname: string): boolean {
     || pathname === '/api/me/access-context';
 }
 
-export async function handleQueue(batch: MessageBatch<unknown>): Promise<void> {
+export async function handleQueue(
+  batch: MessageBatch<unknown>,
+  environment: CloudflareApplicationEnvironment
+): Promise<void> {
   for (const message of batch.messages) {
     if (!isCloudflareWakeMessage(message.body)) {
       console.error(JSON.stringify({
@@ -244,12 +248,36 @@ export async function handleQueue(batch: MessageBatch<unknown>): Promise<void> {
       message.retry({ delaySeconds: 30 });
       continue;
     }
-    console.log(JSON.stringify({
-      event: 'cloudflare.queue.maintenance_wake',
-      messageId: message.id,
-      scheduledAtMs: message.body.scheduledAtMs
-    }));
-    message.ack();
+    if (!cloudflareApplicationRuntimeEnabled(environment)) {
+      console.log(JSON.stringify({
+        event: 'cloudflare.queue.maintenance_wake_inactive',
+        messageId: message.id,
+        scheduledAtMs: message.body.scheduledAtMs
+      }));
+      message.ack();
+      continue;
+    }
+    try {
+      const result = await dispatchD1OutboundEmailWake(environment);
+      console.log(JSON.stringify({
+        event: 'cloudflare.queue.maintenance_wake',
+        messageId: message.id,
+        scheduledAtMs: message.body.scheduledAtMs,
+        considered: result.considered,
+        dispatched: result.dispatched.length,
+        skipped: result.skipped,
+        faults: result.faults.length
+      }));
+      message.ack();
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: 'cloudflare.queue.maintenance_wake_failed',
+        messageId: message.id,
+        attempts: message.attempts,
+        errorName: error instanceof Error ? error.name : 'UnknownError'
+      }));
+      message.retry({ delaySeconds: 30 });
+    }
   }
 }
 

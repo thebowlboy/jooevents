@@ -8,6 +8,7 @@
     ".": "./src/index.ts",
     "./better-auth-schema-definition": "./src/better-auth-schema-definition.ts",
     "./communication-authoring-classified-payload": "./src/communication-authoring-classified-payload.ts",
+    "./communication-message-release-classification": "./src/communication-message-release-classification.ts",
     "./better-auth-schema": "./src/sqlite/better-auth-schema.ts",
     "./access-evidence": "./src/access-evidence.ts",
     "./ephemeral-sqlite-runtime": "./src/sqlite/ephemeral-sqlite-runtime.ts",
