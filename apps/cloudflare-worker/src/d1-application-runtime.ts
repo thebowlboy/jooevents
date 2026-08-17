@@ -46,6 +46,12 @@ import {
   createProgramVocabularyReadOperationModule
 } from '@jooevents/program-operations';
 import {
+  SCHEDULE_PLACEMENT_MANAGE_ACCESS_POLICY,
+  SCHEDULE_PLACEMENT_READ_ACCESS_POLICY,
+  SCHEDULE_PLACEMENT_REQUEST_HASH_PROFILE,
+  createSchedulePlacementOperationModule
+} from '@jooevents/schedule-operations';
+import {
   TASK_MANAGE_ACCESS_POLICY,
   TASK_MUTATION_REQUEST_HASH_PROFILE,
   TASK_OPERATION_KEY_PROFILES,
@@ -128,6 +134,7 @@ import {
 import { createD1OperatorCurrentAuthorityResolver } from './d1-operator-authority';
 import { createD1OperationHistoryReadSource } from './d1-operation-history';
 import { createD1ProgramVocabularySnapshotReadSource } from './d1-program-vocabulary';
+import { createD1SchedulePlacementReadSource } from './d1-schedule-placement';
 import { createD1WorkspaceOverviewReadSource } from './d1-workspace-overview';
 import { createD1WorkspaceShellSummaryReadSource } from './d1-workspace-summary';
 import { createD1WorkspaceTeamReadSource } from './d1-workspace-team';
@@ -229,6 +236,25 @@ const PROGRAM_VOCABULARY_OPERATION_KEY_PROFILES = Object.freeze({
   })
 });
 
+const SCHEDULE_OPERATION_KEY_PROFILES = Object.freeze({
+  authorityPrincipal: Object.freeze({
+    key: 'key-profile.schedule.operator-principal',
+    version: parseContractVersion(1)
+  }),
+  scopePartition: Object.freeze({
+    key: 'key-profile.schedule.event-scope',
+    version: parseContractVersion(1)
+  }),
+  requestCanonicalization: Object.freeze({
+    key: 'key-profile.schedule.request-canonicalization',
+    version: parseContractVersion(1)
+  }),
+  idempotencyCredential: Object.freeze({
+    key: 'key-profile.schedule.idempotency-credential',
+    version: parseContractVersion(1)
+  })
+});
+
 function classifiedWorkspaceInvitationProfiles(
   cryptoProfiles: DurableCryptoProfileComposition
 ) {
@@ -283,6 +309,7 @@ export async function createConfiguredD1ApplicationRuntime(
     },
     { policy: FILE_READ_ACCESS_POLICY, permissionId: 'submission.read' },
     { policy: PROGRAM_VOCABULARY_READ_ACCESS_POLICY, permissionId: 'event.read' },
+    { policy: SCHEDULE_PLACEMENT_READ_ACCESS_POLICY, permissionId: 'schedule.read' },
     { policy: API_KEY_MANAGE_ACCESS_POLICY, permissionId: 'integration.api.manage' }
   ]);
   const currentAuthority = createD1OperatorCurrentAuthorityResolver({
@@ -307,6 +334,10 @@ export async function createConfiguredD1ApplicationRuntime(
     workspaceId
   });
   const programVocabulary = createD1ProgramVocabularySnapshotReadSource({
+    database: environment.DB,
+    workspaceId
+  });
+  const schedule = createD1SchedulePlacementReadSource({
     database: environment.DB,
     workspaceId
   });
@@ -603,6 +634,28 @@ export async function createConfiguredD1ApplicationRuntime(
     requestCanonicalizationProfile:
       PROGRAM_VOCABULARY_OPERATION_KEY_PROFILES.requestCanonicalization
   });
+  const scheduleReadOperations = createSchedulePlacementOperationModule({
+    workspaceId,
+    policies: {
+      read: SCHEDULE_PLACEMENT_READ_ACCESS_POLICY,
+      manage: SCHEDULE_PLACEMENT_MANAGE_ACCESS_POLICY
+    },
+    currentAuthority,
+    currentEvent: reads,
+    scheduleRead: schedule,
+    clock,
+    ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+    authorityPrincipalKeyProfile: SCHEDULE_OPERATION_KEY_PROFILES.authorityPrincipal,
+    scopePartitionProfile: SCHEDULE_OPERATION_KEY_PROFILES.scopePartition,
+    requestCanonicalizationProfile: SCHEDULE_OPERATION_KEY_PROFILES.requestCanonicalization,
+    requestHashSealer: cryptoProfiles.requestHashSealer(
+      SCHEDULE_PLACEMENT_REQUEST_HASH_PROFILE
+    ),
+    idempotencyCredentialProfile: SCHEDULE_OPERATION_KEY_PROFILES.idempotencyCredential,
+    idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(
+      SCHEDULE_OPERATION_KEY_PROFILES.idempotencyCredential
+    )
+  });
   const workspaceTeamMutationDomain = cryptoProfiles.withPersistentHmacKeySelection(
     'security.workspace-invitation-lookup',
     (selection) => createD1WorkspaceTeamMutationEffectDomainRegistration({
@@ -703,7 +756,8 @@ export async function createConfiguredD1ApplicationRuntime(
       workspaceTeamOperations,
       apiKeyOperations,
       fileReadOperations,
-      programVocabularyReadOperations
+      programVocabularyReadOperations,
+      scheduleReadOperations
     ]),
     read: {
       operationalTrace: { emit() {} },

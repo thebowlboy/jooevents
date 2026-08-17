@@ -135,7 +135,8 @@ export interface CreateSchedulePlacementOperationModuleInput {
   readonly currentAuthority: CurrentAuthorityResolver<InvocationEvidence>;
   readonly currentEvent: SchedulePlacementCurrentEventSource;
   readonly scheduleRead: {
-    readSchedule(scope: SchedulePlacementScope): SchedulePlacementState | undefined;
+    readSchedule(scope: SchedulePlacementScope): SchedulePlacementState | undefined
+      | Promise<SchedulePlacementState | undefined>;
   };
   readonly clock: Clock;
   readonly ids: { newInvocationId(): InvocationId };
@@ -244,9 +245,9 @@ export function createSchedulePlacementOperationModule(
   });
   const capability: ReadCapabilityRegistration = Object.freeze({
     reference: refs.capability,
-    openSnapshot(invocation: ReadInvocationContext) {
+    async openSnapshot(invocation: ReadInvocationContext) {
       if (invocation.scope.eventId === undefined) return Object.freeze({ kind: 'event_required' });
-      const state = input.scheduleRead.readSchedule({
+      const state = await input.scheduleRead.readSchedule({
         workspaceId: invocation.scope.workspaceId, eventId: invocation.scope.eventId
       });
       if (!state) throw new TypeError('schedule_current_event_state_missing');

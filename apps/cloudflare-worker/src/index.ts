@@ -220,6 +220,7 @@ function isConfiguredApplicationPath(pathname: string): boolean {
     || pathname.startsWith('/api/events/current/files/download/')
     || pathname === '/api/events/current/settings'
     || pathname === '/api/events/current/program-vocabulary'
+    || pathname === '/api/events/current/schedule/placements'
     || pathname === '/api/events/current/field-registry'
     || pathname.startsWith('/api/events/current/field-registry/')
     || pathname === '/api/events/current/deadlines'

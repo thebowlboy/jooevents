@@ -55,6 +55,8 @@ beforeAll(async () => {
       .bind(roleId, 'event.manage'),
     env.DB.prepare('INSERT INTO role_permissions (role_id,permission_id) VALUES (?,?)')
       .bind(roleId, 'submission.read'),
+    env.DB.prepare('INSERT INTO role_permissions (role_id,permission_id) VALUES (?,?)')
+      .bind(roleId, 'schedule.read'),
     env.DB.prepare(`INSERT INTO role_assignments
       (id,user_id,role_id,workspace_id,scope_kind,event_id,assigned_by_user_id,
        assigned_at,expires_at,version)
@@ -122,6 +124,7 @@ describe('configured D1 application HTTP slice', () => {
       'file.overview.read',
       'operation.history.list',
       'program_vocabulary.snapshot.read',
+      'schedule.placement.snapshot.read',
       'task.board.read',
       'task.mutation',
       'template.artifact.change',
@@ -164,6 +167,15 @@ describe('configured D1 application HTTP slice', () => {
     expect(await initialVocabulary.json()).toMatchObject({
       kind: 'outcome',
       outcome: { class: 'conflict', kind: 'program_vocabulary.event_required' }
+    });
+    const initialSchedule = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/schedule/placements?startAt=2027-03-10T00%3A00%3A00.000Z&endAt=2027-03-13T00%3A00%3A00.000Z&limit=100`, { headers }),
+      environment()
+    );
+    expect(initialSchedule.status, await initialSchedule.clone().text()).toBe(200);
+    expect(await initialSchedule.json()).toMatchObject({
+      kind: 'outcome',
+      outcome: { class: 'conflict', kind: 'schedule.event_required' }
     });
     const initialDownload = await handleRequest(
       new Request(`${baseUrl}/api/events/current/files/download/${uuid(709)}`, { headers }),
@@ -300,6 +312,20 @@ describe('configured D1 application HTTP slice', () => {
           usage: { current: 0, historicalPins: 0 },
           deleteEligibility: { kind: 'eligible' }
         }]
+      }
+    });
+    const schedule = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/schedule/placements?startAt=2027-03-10T00%3A00%3A00.000Z&endAt=2027-03-13T00%3A00%3A00.000Z&limit=100`, { headers }),
+      environment()
+    );
+    expect(schedule.status, await schedule.clone().text()).toBe(200);
+    expect(await schedule.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        schemaVersion: 1,
+        scope: { workspaceId, eventId },
+        scheduleVersion: 1,
+        occurrences: []
       }
     });
     const asset = {

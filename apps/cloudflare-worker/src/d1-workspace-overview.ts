@@ -43,7 +43,12 @@ export const D1_WORKSPACE_OVERVIEW_AREA_CATALOG: WorkspaceOverviewAreaCatalog =
       availableCapabilities: ['task.board.read', 'task.mutation'],
       unavailableCapabilities: ['task.reminder.send']
     },
-    { area: 'schedule', status: 'unavailable', reason: 'not_composed' },
+    {
+      area: 'schedule',
+      status: 'partial',
+      availableCapabilities: ['schedule.placement.snapshot.read'],
+      unavailableCapabilities: ['schedule.placement']
+    },
     { area: 'messages', status: 'unavailable', reason: 'not_composed' },
     {
       area: 'templates',

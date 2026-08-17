@@ -10,6 +10,7 @@ import {
   D1ProgramVocabularyReadError,
   createD1ProgramVocabularySnapshotReadSource
 } from '../src/d1-program-vocabulary';
+import { createD1SchedulePlacementReadSource } from '../src/d1-schedule-placement';
 
 const uuid = (suffix: number): string =>
   `019c1df8-a7c6-7abc-8def-${suffix.toString(16).padStart(12, '0')}`;
@@ -138,6 +139,28 @@ describe('D1 Program Vocabulary snapshot read source', () => {
       name: 'D1ProgramVocabularyReadError',
       code: 'wrong_scope'
     } satisfies Partial<D1ProgramVocabularyReadError>);
+  });
+
+  test('projects the same current placement through the canonical schedule state', async () => {
+    const source = createD1SchedulePlacementReadSource({
+      database: env.DB,
+      workspaceId
+    });
+
+    const schedule = await source.readSchedule({ workspaceId, eventId });
+
+    expect(schedule).toMatchObject({
+      scope: { workspaceId, eventId },
+      scheduleVersion: 2,
+      occurrences: [{
+        id: uuid(807),
+        sessionId: uuid(808),
+        roomId,
+        startAt: '2027-04-02T09:00:00.000Z',
+        endAt: '2027-04-02T10:00:00.000Z',
+        version: 1
+      }]
+    });
   });
 
   test('fails closed when a retained reference projection digest is corrupt', async () => {
