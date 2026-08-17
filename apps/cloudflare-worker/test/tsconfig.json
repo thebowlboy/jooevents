@@ -1,0 +1,12 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["@cloudflare/vitest-pool-workers/types", "node"]
+  },
+  "include": [
+    "./**/*.ts",
+    "../src/d1-atomic-batch.ts",
+    "../worker-configuration.d.ts"
+  ],
+  "exclude": []
+}

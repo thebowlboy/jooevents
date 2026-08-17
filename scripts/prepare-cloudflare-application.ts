@@ -20,6 +20,23 @@ const REPOSITORY_ROOT = resolve(import.meta.dir, '..');
 const GENERATED_ROOT = resolve(REPOSITORY_ROOT, 'apps/cloudflare-worker/.generated');
 const CLOUDFLARE_ASSET_ROOT = resolve(REPOSITORY_ROOT, 'apps/web/build-live');
 const GENERATED_MARKER = 'jooevents-cloudflare-generated-v1';
+const D1_RUNTIME_INFRASTRUCTURE: GeneratedCloudflareMigration = Object.freeze({
+  fileName: '1000_d1_runtime_v1.sql',
+  sql: `CREATE TABLE d1_operation_batch_guards (
+  batch_id TEXT NOT NULL,
+  guard_sequence INTEGER NOT NULL CHECK (guard_sequence > 0),
+  passed INTEGER NOT NULL CHECK (passed = 1),
+  PRIMARY KEY (batch_id, guard_sequence)
+) STRICT, WITHOUT ROWID;
+
+CREATE TRIGGER d1_operation_batch_guard_abort
+BEFORE INSERT ON d1_operation_batch_guards
+WHEN NEW.passed <> 1
+BEGIN
+  SELECT RAISE(ABORT, 'jooevents_d1_guard_conflict');
+END;
+`
+});
 
 export interface GeneratedCloudflareMigration {
   readonly fileName: string;
@@ -124,6 +141,7 @@ export function renderCloudflareD1Migrations(): readonly GeneratedCloudflareMigr
       sql: `${d1Sql}\n\n-- Canonical retained-migration receipt.\n${migrationReceipt(entry)}\n`
     });
   }
+  files.push(D1_RUNTIME_INFRASTRUCTURE);
   return Object.freeze(files.map((file) => Object.freeze(file)));
 }
 

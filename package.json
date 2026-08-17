@@ -24,7 +24,7 @@
     "cloudflare:whoami": "bunx wrangler whoami",
     "cloudflare:prepare": "bun scripts/prepare-cloudflare-application.ts",
     "cloudflare:types": "bunx wrangler types --config wrangler.application.jsonc apps/cloudflare-worker/worker-configuration.d.ts",
-    "cloudflare:check": "bun run cloudflare:prepare && bun run cloudflare:types && bun run --filter @jooevents/cloudflare-worker check && bunx wrangler deploy --config wrangler.application.jsonc --env= --dry-run",
+    "cloudflare:check": "bun run cloudflare:prepare && bun run cloudflare:types && bun run --cwd apps/cloudflare-worker check && bun run --cwd apps/cloudflare-worker test:workerd && bunx wrangler deploy --config wrangler.application.jsonc --env= --dry-run",
     "cloudflare:dev": "bun run cloudflare:prepare && bunx wrangler dev --config wrangler.application.jsonc --test-scheduled",
     "check": "bun run --workspaces check && ./scripts/check-motion.sh",
     "check:motion": "./scripts/check-motion.sh",

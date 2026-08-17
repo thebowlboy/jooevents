@@ -14,6 +14,7 @@ interface TerminalReceiptRow {
 }
 
 interface ReceiptCountRow { readonly count: number }
+interface RuntimeInfrastructureCountRow { readonly count: number }
 interface DatabaseMetadataRow {
   readonly database_class: string;
   readonly database_id: string;
@@ -73,6 +74,12 @@ async function healthResponse(environment: Env): Promise<Response> {
         FROM database_instance_metadata
        WHERE singleton_key = 1
     `).first<DatabaseMetadataRow>();
+    const runtimeInfrastructure = await environment.DB.prepare(`
+      SELECT count(*) AS count
+        FROM sqlite_master
+       WHERE (type = 'table' AND name = 'd1_operation_batch_guards')
+          OR (type = 'trigger' AND name = 'd1_operation_batch_guard_abort')
+    `).first<RuntimeInfrastructureCountRow>();
     await environment.FILES.list({ limit: 1 });
 
     const floor = SQLITE_E2_S6_RELEASE_FLOOR;
@@ -83,13 +90,20 @@ async function healthResponse(environment: Env): Promise<Response> {
       && terminal.result_fingerprint === floor.expectedApplicationFingerprint
       && receiptCount?.count === floor.terminalMigration.sequence
       && metadata?.database_class === 'frozen_release'
-      && /^[0-9a-f]{32}$/.test(metadata.database_id);
+      && /^[0-9a-f]{32}$/.test(metadata.database_id)
+      && runtimeInfrastructure?.count === 2;
 
     return json({
       status: adaptersReady ? 'adapter_foundation_ready' : 'adapter_foundation_invalid',
       ready: false,
       applicationRuntimeReady: false,
-      adapters: { d1: adaptersReady, r2: true, queues: true, cron: true },
+      adapters: {
+        d1: adaptersReady,
+        d1BufferedUnitOfWork: runtimeInfrastructure?.count === 2,
+        r2: true,
+        queues: true,
+        cron: true
+      },
       releaseFloor: floor.releaseFloorId,
       environment: environment.JOOEVENTS_DEPLOYMENT_ENVIRONMENT,
       correlationId

@@ -6,7 +6,7 @@ import { renderCloudflareD1Migrations } from './prepare-cloudflare-application';
 describe('Cloudflare D1 migration generation', () => {
   test('derives one runner migration and the exact canonical application chain', async () => {
     const generated = renderCloudflareD1Migrations();
-    expect(generated).toHaveLength(SQLITE_MIGRATION_MANIFEST.migrations.length + 1);
+    expect(generated).toHaveLength(SQLITE_MIGRATION_MANIFEST.migrations.length + 2);
     expect(generated[0]?.fileName).toBe('0000_jooevents_runner.sql');
     expect(generated[0]?.sql).toContain("'frozen_release'");
 
@@ -22,6 +22,10 @@ describe('Cloudflare D1 migration generation', () => {
       expect(createHash('sha256').update(await canonicalBytes).digest('hex'))
         .toBe(canonical.checksumSha256);
     }
+    const runtime = generated.at(-1)!;
+    expect(runtime.fileName).toBe('1000_d1_runtime_v1.sql');
+    expect(runtime.sql).toContain('d1_operation_batch_guards');
+    expect(runtime.sql).toContain("RAISE(ABORT, 'jooevents_d1_guard_conflict')");
     const rendered = generated.map((migration) => migration.sql).join('\n');
     expect(rendered).not.toMatch(/\bTEMP\s+TABLE/i);
     expect(rendered).not.toContain('temp.e2_');

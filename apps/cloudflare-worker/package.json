@@ -5,15 +5,18 @@
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "scripts": {
-    "check": "tsc --noEmit",
-    "test": "bun test"
+    "check": "tsc --noEmit && tsc -p test/tsconfig.json",
+    "test": "bun test",
+    "test:workerd": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
     "@jooevents/files": "workspace:*",
     "@jooevents/persistence": "workspace:*"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.21.3",
     "@types/node": "26.2.0",
-    "typescript": "6.0.3"
+    "typescript": "6.0.3",
+    "vitest": "^4.1.0"
   }
 }
