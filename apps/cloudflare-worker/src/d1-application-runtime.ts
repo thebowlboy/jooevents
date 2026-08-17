@@ -109,6 +109,7 @@ import { createD1OperationHistoryReadSource } from './d1-operation-history';
 import { createD1WorkspaceOverviewReadSource } from './d1-workspace-overview';
 import { createD1WorkspaceShellSummaryReadSource } from './d1-workspace-summary';
 import { createD1WorkspaceTeamReadSource } from './d1-workspace-team';
+import { createD1WorkspaceTeamMutationEffectDomainRegistration } from './d1-workspace-team-mutation';
 
 export type D1ApplicationRuntimeEnvironment = CloudflareAuthBindings & {
   readonly DB: D1Database;
@@ -192,6 +193,18 @@ export async function createConfiguredD1ApplicationRuntime(
     {
       policy: WORKSPACE_TEAM_OPERATION_ACCESS.read.policy,
       permissionId: WORKSPACE_TEAM_OPERATION_ACCESS.read.permissionId
+    },
+    {
+      policy: WORKSPACE_TEAM_OPERATION_ACCESS.invite.policy,
+      permissionId: WORKSPACE_TEAM_OPERATION_ACCESS.invite.permissionId
+    },
+    {
+      policy: WORKSPACE_TEAM_OPERATION_ACCESS.changeRole.policy,
+      permissionId: WORKSPACE_TEAM_OPERATION_ACCESS.changeRole.permissionId
+    },
+    {
+      policy: WORKSPACE_TEAM_OPERATION_ACCESS.remove.policy,
+      permissionId: WORKSPACE_TEAM_OPERATION_ACCESS.remove.permissionId
     }
   ]);
   const currentAuthority = createD1OperatorCurrentAuthorityResolver({
@@ -448,9 +461,25 @@ export async function createConfiguredD1ApplicationRuntime(
     idempotencyCredentialProfile: WORKSPACE_TEAM_KEY_PROFILES.idempotencyCredential,
     idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(
       WORKSPACE_TEAM_KEY_PROFILES.idempotencyCredential
-    ),
-    mountMutations: false
+    )
   });
+  const workspaceTeamMutationDomain = cryptoProfiles.withPersistentHmacKeySelection(
+    'security.workspace-invitation-lookup',
+    (selection) => createD1WorkspaceTeamMutationEffectDomainRegistration({
+      workspaceId,
+      classifiedPayload: classifiedWorkspaceInvitationProfiles(cryptoProfiles),
+      invitationLookupKeyBytes: selection.active.keyBytes,
+      ids: {
+        newPreparationHandle: () => crypto.randomUUID(),
+        newReservationId: () => crypto.randomUUID(),
+        newReservationRoleAssignmentId: () => crypto.randomUUID(),
+        newReleaseIntentId: () => crypto.randomUUID(),
+        newHistoryId: () => crypto.randomUUID(),
+        newPayloadRefId: () => crypto.randomUUID(),
+        newSessionRevocationIntentId: () => crypto.randomUUID()
+      }
+    })
+  );
   const domains = createD1EffectDomainAdapterRegistry([
     createD1EventCreateEffectDomainRegistration({
       workspaceId,
@@ -491,7 +520,8 @@ export async function createConfiguredD1ApplicationRuntime(
         newRevisionId: () => crypto.randomUUID(),
         newArtifactRevisionId: () => crypto.randomUUID()
       }
-    })
+    }),
+    workspaceTeamMutationDomain
   ]);
   const unitOfWork = new D1EffectUnitOfWorkPort(environment.DB, domains, {
     authorityRecheck: (buffered) => ({

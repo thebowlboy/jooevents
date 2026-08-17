@@ -26,6 +26,10 @@ const reservationId = uuid(808);
 const reservationAssignmentId = uuid(809);
 const payloadRefId = uuid(810);
 const releaseIntentId = uuid(811);
+const secondUserId = uuid(812);
+const secondMembershipId = uuid(813);
+const secondEmailId = uuid(814);
+const secondAssignmentId = uuid(815);
 const roleIds = new Map(
   WORKSPACE_TEAM_ROLES.map((role, index) => [role.key, uuid(820 + index)])
 );
@@ -34,6 +38,8 @@ const secret = 'd1-workspace-team-auth-secret-at-least-thirty-two-characters';
 const baseUrl = 'https://workspace-team.jooevents.invalid';
 const email = 'workspace-owner@example.invalid';
 const invitationEmail = 'future-teammate@example.invalid';
+const secondEmail = 'second-teammate@example.invalid';
+const newInvitationEmail = 'new-teammate@example.invalid';
 const lookupBinding = 'a'.repeat(64);
 const recipientHint = 'recipient-aaaaaaaaaaaa';
 
@@ -91,6 +97,18 @@ beforeAll(async () => {
         roleKey: 'workspace_admin'
       },
       hasAdditionalAccess: false
+    }, {
+      membershipId: secondMembershipId,
+      version: 1,
+      status: 'active',
+      userId: secondUserId,
+      role: {
+        assignmentId: secondAssignmentId,
+        assignmentVersion: 1,
+        roleId: viewerRoleId,
+        roleKey: 'viewer'
+      },
+      hasAdditionalAccess: false
     }],
     invitations: [{
       reservationId,
@@ -118,6 +136,20 @@ beforeAll(async () => {
        created_at,updated_at,version)
       VALUES (?,?,?,'active',?,?,NULL,?,?,1)`)
       .bind(membershipId, workspaceId, userId, userId, now, now, now),
+    env.DB.prepare(`INSERT INTO users
+      (id,status,display_name,primary_email_id,avatar_asset_id,created_at,updated_at,version)
+      VALUES (?,'active','D1 Second Teammate',?,NULL,?,?,1)`)
+      .bind(secondUserId, secondEmailId, now, now),
+    env.DB.prepare(`INSERT INTO user_emails
+      (id,user_id,normalized_email,display_email,verified,source,is_primary,
+       verified_at,revoked_at,created_at)
+      VALUES (?,?,?, ?,1,'auth_provider',1,?,NULL,?)`)
+      .bind(secondEmailId, secondUserId, secondEmail, secondEmail, now, now),
+    env.DB.prepare(`INSERT INTO workspace_memberships
+      (id,workspace_id,user_id,status,approved_by_user_id,approved_at,decision_reason,
+       created_at,updated_at,version)
+      VALUES (?,?,?,'active',?,?,NULL,?,?,1)`)
+      .bind(secondMembershipId, workspaceId, secondUserId, userId, now, now, now),
     env.DB.prepare(`INSERT INTO auth_users
       (id,name,email,email_verified,image,created_at,updated_at)
       VALUES (?,'D1 Workspace Owner',?,1,NULL,?,?)`)
@@ -183,11 +215,22 @@ beforeAll(async () => {
       .bind(adminRoleId, 'access.users.read'),
     env.DB.prepare('INSERT INTO role_permissions (role_id,permission_id) VALUES (?,?)')
       .bind(adminRoleId, 'event.read'),
+    env.DB.prepare('INSERT INTO role_permissions (role_id,permission_id) VALUES (?,?)')
+      .bind(adminRoleId, 'access.users.invite'),
+    env.DB.prepare('INSERT INTO role_permissions (role_id,permission_id) VALUES (?,?)')
+      .bind(adminRoleId, 'access.roles.manage'),
+    env.DB.prepare('INSERT INTO role_permissions (role_id,permission_id) VALUES (?,?)')
+      .bind(adminRoleId, 'access.users.suspend'),
     env.DB.prepare(`INSERT INTO role_assignments
       (id,user_id,role_id,workspace_id,scope_kind,event_id,assigned_by_user_id,
        assigned_at,expires_at,version)
       VALUES (?,?,?,?,'workspace',NULL,?,?,NULL,1)`)
       .bind(assignmentId, userId, adminRoleId, workspaceId, userId, now),
+    env.DB.prepare(`INSERT INTO role_assignments
+      (id,user_id,role_id,workspace_id,scope_kind,event_id,assigned_by_user_id,
+       assigned_at,expires_at,version)
+      VALUES (?,?,?,?,'workspace',NULL,?,?,NULL,1)`)
+      .bind(secondAssignmentId, secondUserId, viewerRoleId, workspaceId, userId, now),
     env.DB.prepare(`INSERT INTO access_reservations
       (id,workspace_id,normalized_email,status,expires_at,created_by_user_id,
        consumed_by_user_id,consumed_at,created_at,version)
@@ -240,24 +283,63 @@ async function cookie(): Promise<string> {
   return `__Secure-better-auth.session_token=${rawSessionToken}.${signature}`;
 }
 
-describe('D1 workspace Team read', () => {
-  test('serves the verified Team aggregate while leaving direct mutations unmounted', async () => {
-    const headers = { cookie: await cookie() };
-    const team = await handleRequest(
-      new Request(`${baseUrl}/api/workspace/team`, { headers }),
-      environment()
-    );
-    expect(team.status, await team.clone().text()).toBe(200);
-    const teamBody = await team.json<{
-      readonly data: { readonly members: readonly unknown[] };
-    }>();
+interface TeamBody {
+  readonly kind: 'success';
+  readonly data: {
+    readonly schemaVersion: 1;
+    readonly version: number;
+    readonly digestSha256: string;
+    readonly roles: readonly unknown[];
+    readonly members: readonly {
+      readonly id: string;
+      readonly kind: 'member' | 'invitation';
+      readonly userId?: string;
+      readonly name: string;
+      readonly email: string;
+      readonly role: { readonly key: string };
+      readonly status: string;
+      readonly version: number;
+      readonly hasAdditionalAccess: boolean;
+      readonly delivery?: string;
+    }[];
+  };
+}
+
+describe('D1 workspace Team operations', () => {
+  test('reads classified recipients and runs guarded mutations with deferred activators', async () => {
+    const cookieHeader = await cookie();
+    const headers = { cookie: cookieHeader };
+    const readTeam = async (): Promise<TeamBody> => {
+      const response = await handleRequest(
+        new Request(`${baseUrl}/api/workspace/team`, { headers }),
+        environment()
+      );
+      expect(response.status, await response.clone().text()).toBe(200);
+      return response.json<TeamBody>();
+    };
+    const mutate = async (
+      path: string,
+      idempotencyKey: string,
+      body: unknown
+    ): Promise<Readonly<Record<string, unknown>>> => {
+      const response = await handleRequest(new Request(`${baseUrl}${path}`, {
+        method: 'POST',
+        headers: {
+          cookie: cookieHeader,
+          origin: baseUrl,
+          'content-type': 'application/json',
+          'idempotency-key': idempotencyKey
+        },
+        body: JSON.stringify(body)
+      }), environment());
+      expect(response.status, await response.clone().text()).toBe(200);
+      return response.json<Readonly<Record<string, unknown>>>();
+    };
+
+    let teamBody = await readTeam();
     expect(teamBody).toMatchObject({
       kind: 'success',
-      data: {
-        schemaVersion: 1,
-        version: 1,
-        roles: WORKSPACE_TEAM_ROLES
-      }
+      data: { schemaVersion: 1, version: 1, roles: WORKSPACE_TEAM_ROLES }
     });
     expect(teamBody.data.members).toEqual(expect.arrayContaining([expect.objectContaining({
       id: membershipId,
@@ -270,16 +352,161 @@ describe('D1 workspace Team read', () => {
       version: 1,
       hasAdditionalAccess: false
     }), expect.objectContaining({
+      id: secondMembershipId,
+      kind: 'member',
+      userId: secondUserId,
+      role: expect.objectContaining({ key: 'viewer' })
+    }), expect.objectContaining({
       id: reservationId,
       kind: 'invitation',
-      name: 'Pending invitation',
       email: invitationEmail,
       role: expect.objectContaining({ key: 'viewer' }),
-      status: 'invited',
       delivery: 'awaiting_activation',
-      version: 1,
-      hasAdditionalAccess: false
+      version: 1
     })]));
+
+    const roleChangeInput = {
+      subject: { kind: 'invitation', reservationId, version: 1 },
+      roleKey: 'speaker_reviewer',
+      expectedTeamVersion: teamBody.data.version,
+      expectedTeamDigestSha256: teamBody.data.digestSha256
+    };
+    const roleChanged = await mutate(
+      '/api/workspace/team/role-changes',
+      'd1-team-role-change',
+      roleChangeInput
+    );
+    expect(roleChanged).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'change_role',
+        teamVersion: 2,
+        safeDiff: {
+          action: 'change_role',
+          before: { key: 'viewer' },
+          after: { key: 'speaker_reviewer' }
+        }
+      }
+    });
+    expect(await mutate(
+      '/api/workspace/team/role-changes',
+      'd1-team-role-change',
+      roleChangeInput
+    )).toEqual(roleChanged);
+    expect(await mutate(
+      '/api/workspace/team/role-changes',
+      'd1-team-role-change-stale',
+      { ...roleChangeInput, roleKey: 'scheduler' }
+    )).toMatchObject({
+      kind: 'outcome',
+      outcome: {
+        class: 'stale_revision',
+        kind: 'workspace_team.change_refused',
+        detail: { code: 'stale_team', action: 'change_role' }
+      }
+    });
+
+    teamBody = await readTeam();
+    const changedInvitation = teamBody.data.members.find((member) => member.id === reservationId);
+    expect(changedInvitation).toMatchObject({
+      kind: 'invitation', version: 2, role: { key: 'speaker_reviewer' }
+    });
+    const invited = await mutate(
+      '/api/workspace/team/invitations',
+      'd1-team-invite',
+      {
+        email: newInvitationEmail,
+        roleKey: 'viewer',
+        expectedTeamVersion: teamBody.data.version,
+        expectedTeamDigestSha256: teamBody.data.digestSha256
+      }
+    );
+    expect(invited).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'invite',
+        teamVersion: 3,
+        safeDiff: {
+          action: 'invite',
+          invitationStatus: 'recorded',
+          delivery: 'awaiting_activation'
+        }
+      }
+    });
+    expect(JSON.stringify(invited)).not.toContain(newInvitationEmail);
+
+    teamBody = await readTeam();
+    const newInvitation = teamBody.data.members.find(
+      (member) => member.kind === 'invitation' && member.email === newInvitationEmail
+    );
+    if (!newInvitation) throw new TypeError('new D1 invitation missing');
+    const removedInvitation = await mutate(
+      '/api/workspace/team/removals',
+      'd1-team-remove-invitation',
+      {
+        subject: { kind: 'invitation', reservationId, version: 2 },
+        expectedTeamVersion: teamBody.data.version,
+        expectedTeamDigestSha256: teamBody.data.digestSha256
+      }
+    );
+    expect(removedInvitation).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'remove',
+        teamVersion: 4,
+        safeDiff: { action: 'remove', sessionRevocation: 'not_applicable' }
+      }
+    });
+
+    teamBody = await readTeam();
+    const removedMember = await mutate(
+      '/api/workspace/team/removals',
+      'd1-team-remove-member',
+      {
+        subject: { kind: 'member', membershipId: secondMembershipId, version: 1 },
+        expectedTeamVersion: teamBody.data.version,
+        expectedTeamDigestSha256: teamBody.data.digestSha256
+      }
+    );
+    expect(removedMember).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'remove',
+        teamVersion: 5,
+        safeDiff: { action: 'remove', sessionRevocation: 'awaiting_activation' }
+      }
+    });
+
+    teamBody = await readTeam();
+    expect(teamBody.data.version).toBe(5);
+    expect(teamBody.data.members.some((member) => member.id === reservationId)).toBe(false);
+    expect(teamBody.data.members.some((member) => member.id === secondMembershipId)).toBe(false);
+    expect(teamBody.data.members).toEqual(expect.arrayContaining([expect.objectContaining({
+      id: newInvitation.id,
+      kind: 'invitation',
+      email: newInvitationEmail,
+      delivery: 'awaiting_activation'
+    })]));
+
+    const [oldRelease, newRelease, revocation, logs, history] = await env.DB.batch([
+      env.DB.prepare(`SELECT status FROM workspace_team_invitation_release_intents
+        WHERE reservation_id = ?`).bind(reservationId),
+      env.DB.prepare(`SELECT status FROM workspace_team_invitation_release_intents
+        WHERE reservation_id = ?`).bind(newInvitation.id),
+      env.DB.prepare(`SELECT status FROM workspace_team_session_revocation_intents
+        WHERE membership_id = ?`).bind(secondMembershipId),
+      env.DB.prepare(`SELECT count(*) AS count FROM operation_log
+        WHERE workspace_id = ? AND operation_name LIKE 'workspace_team.%'`).bind(workspaceId),
+      env.DB.prepare(`SELECT count(*) AS count FROM workspace_team_history
+        WHERE workspace_id = ?`).bind(workspaceId)
+    ]);
+    expect((oldRelease as D1Result<{ status: string }>).results[0]?.status).toBe('cancelled');
+    expect((newRelease as D1Result<{ status: string }>).results[0]?.status)
+      .toBe('awaiting_activation');
+    expect((revocation as D1Result<{ status: string }>).results[0]?.status)
+      .toBe('awaiting_activation');
+    expect((logs as D1Result<{ count: number }>).results[0]?.count).toBe(4);
+    expect((history as D1Result<{ count: number }>).results[0]?.count).toBe(4);
 
     const manifest = await handleRequest(
       new Request(`${baseUrl}/api/operations/manifest`, { headers }),
@@ -288,10 +515,12 @@ describe('D1 workspace Team read', () => {
     const names = (await manifest.json<{
       readonly operations: readonly { readonly name: string }[];
     }>()).operations.map((operation) => operation.name);
-    expect(names).toContain('workspace_team.members.read');
-    expect(names).not.toContain('workspace_team.invite');
-    expect(names).not.toContain('workspace_team.role_change');
-    expect(names).not.toContain('workspace_team.remove');
+    expect(names).toEqual(expect.arrayContaining([
+      'workspace_team.members.read',
+      'workspace_team.invite',
+      'workspace_team.role_change',
+      'workspace_team.remove'
+    ]));
 
     const overview = await handleRequest(
       new Request(`${baseUrl}/api/workspace/overview`, { headers }),
@@ -307,11 +536,13 @@ describe('D1 workspace Team read', () => {
       };
     }>();
     const settings = body.data.areas.find((area) => area.area === 'settings');
-    expect(settings?.availableCapabilities).toContain('workspace_team.members.read');
-    expect(settings?.unavailableCapabilities).toEqual(expect.arrayContaining([
+    expect(settings?.availableCapabilities).toEqual(expect.arrayContaining([
+      'workspace_team.members.read',
       'workspace_team.invite',
       'workspace_team.role_change',
-      'workspace_team.remove',
+      'workspace_team.remove'
+    ]));
+    expect(settings?.unavailableCapabilities).toEqual(expect.arrayContaining([
       'workspace_team.delivery.activate',
       'workspace_team.session_revocation.activate'
     ]));

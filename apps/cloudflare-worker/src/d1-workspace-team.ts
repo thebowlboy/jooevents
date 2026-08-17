@@ -124,7 +124,7 @@ function applicationId(value: string) {
 
 /** Reads and verifies one classified workspace-Team projection from D1. */
 export async function readD1WorkspaceTeamSnapshot(input: {
-  readonly database: D1Database;
+  readonly database: D1Database | D1DatabaseSession;
   readonly workspaceId: WorkspaceId;
   readonly nowEpochMs: number;
   readonly classifiedPayload: ImmutableClassifiedPayloadRecordCodecOptions;
@@ -133,7 +133,9 @@ export async function readD1WorkspaceTeamSnapshot(input: {
   if (!Number.isSafeInteger(input.nowEpochMs) || input.nowEpochMs < 0) {
     throw new TypeError('d1_workspace_team_time_invalid');
   }
-  const session = input.database.withSession('first-primary');
+  const session = 'withSession' in input.database
+    ? input.database.withSession('first-primary')
+    : input.database;
   const [workspaceResult, headResult, roleResult, memberResult, invitationResult] =
     await session.batch([
       session.prepare('SELECT id FROM workspaces WHERE id = ? LIMIT 2').bind(workspaceId),
