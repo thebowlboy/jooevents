@@ -13,6 +13,7 @@ updated: 17 August 2026
 ## API integrations
 
 - [Connect an external agent through the API](agents/quickstart.md) — Give an organizer and their third-party agent one safe first-run path.
+- [Connect Airtable to a self-hosted installation](integration/airtable-self-host.md) — Register OAuth once, store credentials safely, and verify managed two-way sync.
 - [How the external API works](agents/operating-model.md) — Understand direct reads, proposed changes, approval, and recovery.
 - [External API recipes](agents/recipes.md) — Use short, discovery-first call sequences for common jobs.
 

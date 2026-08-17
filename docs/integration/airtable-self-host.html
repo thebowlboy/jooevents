@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>JooEvents API documentation</title>
-<meta name="description" content="Guides for evaluating the product, running its published samples, and integrating third-party software or agents through the API.">
+<title>Connect Airtable to a self-hosted JooEvents installation</title>
+<meta name="description" content="Register one OAuth integration, store its credentials safely, and verify managed two-way sync.">
 <meta name="generator" content="joodocs">
 <meta name="color-scheme" content="light dark">
 <style>
@@ -735,54 +735,110 @@ a.jd-symptom:hover { background: var(--jd-surface-sunken); }
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
 
-.jd-v-story { --jd-flow: 1.25em; }
-.jd-v-story .jd-content { font-size: 1.09rem; line-height: 1.68; }
-.jd-v-story .jd-progress { position: fixed; top: 0; left: 0; height: 2px; background: var(--jd-accent); width: 0; z-index: 40; transition: width 90ms linear; }
-.jd-v-story .jd-utility { position: absolute; top: 1.5rem; right: 1.5rem; z-index: 10; }
-.jd-v-story .jd-hero { position: relative; padding: 5rem 1.5rem 2.6rem; }
-.jd-v-story .jd-hero-inner { max-width: 46rem; margin: 0 auto; }
-.jd-v-story .jd-title { font-size: clamp(2.4rem, 6vw, 3.9rem); max-width: 15ch; }
-.jd-v-story .jd-hero .jd-subtitle { margin-top: 1rem; font-size: clamp(1.1rem, 1.8vw, 1.3rem); }
-.jd-v-story .jd-byline { margin-top: 1.6rem; padding-top: 1rem; border-top: 1px solid var(--jd-border-subtle); font-size: 0.82rem; color: var(--jd-text-subtle); display: flex; gap: 0.6rem; }
-.jd-v-story .jd-content { max-width: 40rem; margin: 0 auto; padding: 0 1.5rem; }
-.jd-v-story .jd-content > .jd-lede:first-child { font-size: clamp(1.25rem, 2.2vw, 1.5rem); color: var(--jd-text); max-width: none; }
-.jd-v-story .jd-content > .jd-lede:first-child > p:first-child::first-letter {
-  font-family: var(--jd-font-display); float: left; font-size: 3.1em; line-height: 0.82;
-  padding: 0.08em 0.09em 0 0; color: var(--jd-accent);
+.jd-v-trailhead .jd-hero { border-bottom: 1px solid var(--jd-border-subtle); background: linear-gradient(180deg, var(--jd-accent-soft), transparent); }
+.jd-v-trailhead .jd-hero-inner { max-width: var(--jd-page-max); margin: 0 auto; padding: 3.4rem 1.5rem 2.6rem; display: flex; flex-direction: column; gap: 0.7rem; }
+.jd-v-trailhead .jd-hero-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
+.jd-v-trailhead .jd-shell { max-width: var(--jd-page-max); margin: 0 auto; padding: 0 1.5rem; display: grid; gap: 2.5rem; grid-template-columns: 1fr; }
+@media (min-width: 1000px) {
+  .jd-v-trailhead .jd-shell { grid-template-columns: 14rem 1fr; gap: 3.5rem; }
+  .jd-v-trailhead .jd-shell--norail { grid-template-columns: 1fr; }
 }
-.jd-v-story .jd-prose > .jd-h2 { margin-top: 2.9em; }
-.jd-v-story .jd-h2 { font-size: clamp(1.5rem, 2.6vw, 1.9rem); }
-.jd-v-story .jd-pull { margin-block: 1.6em; padding-left: 1.1rem; border-left: 2px solid var(--jd-accent-line); max-width: none; }
-.jd-v-story .jd-band { margin-inline: calc(50% - 50vw); padding-inline: 1.5rem; width: 100vw; }
-.jd-v-story .jd-band-inner { max-width: 52rem; margin: 0 auto; }
-.jd-v-story .jd-footer { max-width: 40rem; margin-inline: auto; padding-inline: 1.5rem; }
+.jd-v-trailhead .jd-rail { display: none; }
+@media (min-width: 1000px) {
+  .jd-v-trailhead .jd-rail { display: block; position: sticky; top: 2rem; align-self: start; max-height: calc(100vh - 4rem); overflow-y: auto; padding: 2.6rem 0 2rem; }
+}
+.jd-v-trailhead .jd-content { padding: 2.6rem 0 0; max-width: 46rem; }
+.jd-v-trailhead .jd-content > .jd-lede:first-child { margin-bottom: 1.6em; }
+.jd-v-trailhead .jd-h2 { padding-top: 0.4rem; }
+.jd-v-trailhead .jd-footer { max-width: var(--jd-page-max); margin-inline: auto; padding-inline: 1.5rem; }
 </style>
 <script>(function(){try{var t=localStorage.getItem('jd-theme');if(t)document.documentElement.setAttribute('data-theme',t);}catch(e){}})()</script>
 </head>
 <body>
 
-<div class="jd-page jd-v-story">
-  <div class="jd-progress" data-jd-progress></div>
+<div class="jd-page jd-v-trailhead">
   <header class="jd-hero">
-    <div class="jd-utility"><button class="jd-themetoggle" type="button" data-jd-theme aria-label="Switch colour theme">
+    <div class="jd-hero-inner">
+      <div class="jd-hero-top">
+        <div><p class="jd-eyebrow">Airtable</p><h1 class="jd-title">Connect Airtable to a self-hosted JooEvents installation</h1></div>
+        <button class="jd-themetoggle" type="button" data-jd-theme aria-label="Switch colour theme">
 <svg data-jd-sun viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="8" r="3.1"/><path d="M8 1v1.6M8 13.4V15M15 8h-1.6M2.6 8H1M12.9 3.1l-1.1 1.1M4.2 11.8l-1.1 1.1M12.9 12.9l-1.1-1.1M4.2 4.2 3.1 3.1"/></svg>
 <svg data-jd-moon viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13.4 9.6A5.8 5.8 0 0 1 6.4 2.6a5.8 5.8 0 1 0 7 7Z"/></svg>
-</button></div>
-    <div class="jd-hero-inner">
-      <p class="jd-eyebrow">JooEvents</p>
-      <h1 class="jd-title">JooEvents API documentation</h1>
-      <p class="jd-subtitle">Guides for evaluating the product, running its published samples, and integrating third-party software or agents through the API.</p>
-      <p class="jd-byline"><span>17 August 2026</span></p>
+</button>
+      </div>
+      <p class="jd-subtitle">Register one OAuth integration, store its credentials safely, and verify managed two-way sync.</p>
     </div>
   </header>
-  <main class="jd-content jd-prose"><h1 id="jooevents-api-documentation" class="jd-h jd-h1">JooEvents API documentation<a class="jd-anchor" href="#jooevents-api-documentation" aria-label="Link to JooEvents API documentation">#</a></h1>
-<blockquote class="jd-quote"><p>JooEvents currently integrates third-party software and agents through an installation's external API. It does not host an agent-direct product surface; sample deployment guides remain sample-only.</p></blockquote>
-<h2 id="api-integrations" class="jd-h jd-h2">API integrations<a class="jd-anchor" href="#api-integrations" aria-label="Link to API integrations">#</a></h2>
-<ul class="jd-list"><li><a href="agents/quickstart.md">Connect an external agent through the API</a> — Give an organizer and their third-party agent one safe first-run path.</li><li><a href="integration/airtable-self-host.md">Connect Airtable to a self-hosted installation</a> — Register OAuth once, store credentials safely, and verify managed two-way sync.</li><li><a href="agents/operating-model.md">How the external API works</a> — Understand direct reads, proposed changes, approval, and recovery.</li><li><a href="agents/recipes.md">External API recipes</a> — Use short, discovery-first call sequences for common jobs.</li></ul>
-<h2 id="installation-and-operation" class="jd-h jd-h2">Installation and operation<a class="jd-anchor" href="#installation-and-operation" aria-label="Link to Installation and operation">#</a></h2>
-<ul class="jd-list"><li><a href="installation/browser-sample.md">Install the browser sample</a> — Run the synthetic, browser-local product sample. It is not a production installation.</li><li><a href="operator/cloudflare-demo.md">Deploy the sample demo to Cloudflare</a> — Publish the synthetic demo with the documented Cloudflare controls.</li></ul>
-<h2 id="reference" class="jd-h jd-h2">Reference<a class="jd-anchor" href="#reference" aria-label="Link to Reference">#</a></h2>
-<ul class="jd-list"><li><a href="reference/licensing.md">Licensing</a> — Review the license that applies to this release.</li></ul></main>
+  <div class="jd-shell">
+    <aside class="jd-rail"><nav class="jd-toc" data-jd-toc aria-label="The walk"><p class="jd-toc-label">The walk</p><ol><li data-depth="2"><a href="#give-this-page-to-your-setup-agent">Give this page to your setup agent</a></li><li data-depth="2"><a href="#before-registration">Before registration</a></li><li data-depth="2"><a href="#1-register-the-oauth-integration-operator-checkpoint">1. Register the OAuth integration — operator checkpoint</a></li><li data-depth="2"><a href="#2-configure-the-installation">2. Configure the installation</a></li><li data-depth="3"><a href="#single-machine-bun-deployment">Single-machine Bun deployment</a></li><li data-depth="3"><a href="#cloudflare-workers-deployment">Cloudflare Workers deployment</a></li><li data-depth="2"><a href="#3-connect-the-selected-base-workspace-owner-checkpoint">3. Connect the selected base — workspace-owner checkpoint</a></li><li data-depth="2"><a href="#4-verify-the-two-way-loop">4. Verify the two-way loop</a></li><li data-depth="2"><a href="#expected-boundaries">Expected boundaries</a></li><li data-depth="2"><a href="#if-setup-refuses">If setup refuses</a></li></ol></nav></aside>
+    <main class="jd-content jd-prose"><h1 id="connect-airtable-to-a-self-hosted-jooevents-installation" class="jd-h jd-h1">Connect Airtable to a self-hosted JooEvents installation<a class="jd-anchor" href="#connect-airtable-to-a-self-hosted-jooevents-installation" aria-label="Link to Connect Airtable to a self-hosted JooEvents installation">#</a></h1>
+<blockquote class="jd-quote"><p>The installation operator registers Airtable once. After that, workspace owners connect a base from <strong>Integrations → Airtable</strong> without copying tokens or configuring webhooks.</p></blockquote>
+<p>This guide is for an operator—or a coding agent working beside one—who already has a JooEvents installation with a canonical HTTPS origin. It covers the exact provider contract used by JooEvents. It does not turn the current browser sample into a production installation.</p>
+<h2 id="give-this-page-to-your-setup-agent" class="jd-h jd-h2">Give this page to your setup agent<a class="jd-anchor" href="#give-this-page-to-your-setup-agent" aria-label="Link to Give this page to your setup agent">#</a></h2>
+<blockquote class="jd-quote"><p>Inspect the installation before asking the operator for information. Determine its canonical HTTPS origin and deployment target, derive the callback URL exactly, and run safe local or deployment checks yourself. Guide the operator one checkpoint at a time. Pause for Airtable login, OAuth registration, consent, and secret entry. Never ask for a client secret, authorization code, callback URL containing OAuth parameters, or encryption key in chat. Never print or commit secret values. Resume from the last verified checkpoint.</p></blockquote>
+<p>The agent may calculate URLs, prepare non-secret configuration, generate the installation encryption key, invoke a concealed deployment-secret prompt, restart services, and verify results. The Airtable account owner must perform the authenticated Builder Hub and authorization steps.</p>
+<h2 id="before-registration" class="jd-h jd-h2">Before registration<a class="jd-anchor" href="#before-registration" aria-label="Link to Before registration">#</a></h2>
+<p>Confirm all of these first:</p>
+<ul class="jd-list"><li>The canonical origin is an exact public HTTPS origin such as <code>https://events.example.org</code>, with no path or trailing slash.</li><li>Airtable can reach that origin from the public internet. A private LAN, localhost, VPN-only, or tailnet-only address can complete a browser redirect but cannot receive real-time webhook notifications.</li><li>The operator has Airtable Owner or Creator permission.</li><li>The installation provides reachable support, privacy-policy, and terms-of-service pages when people outside the registering Airtable account will connect.</li></ul>
+<p>The OAuth callback is always:</p>
+<figure class="jd-code"><figcaption class="jd-code-title">text</figcaption><div class="jd-code-shell"><span class="jd-code-lang">text</span><button class="jd-copy" type="button" data-jd-copy aria-label="Copy code">Copy</button><pre><code class="language-text">https://events.example.org/api/integrations/airtable/oauth/callback</code></pre></div></figure>
+<p>Replace only the origin. Do not use an Airtable base URL, the Airtable authorization endpoint, a webhook URL, or a wildcard.</p>
+<h2 id="1-register-the-oauth-integration-operator-checkpoint" class="jd-h jd-h2">1. Register the OAuth integration — operator checkpoint<a class="jd-anchor" href="#1-register-the-oauth-integration-operator-checkpoint" aria-label="Link to 1. Register the OAuth integration — operator checkpoint">#</a></h2>
+<p>In Airtable, open <strong>Profile → Builder Hub → OAuth integrations</strong>, then choose <strong>Register an OAuth integration</strong>.</p>
+<p>Enter a recognizable installation name and the exact callback URL derived above. Register the integration, then configure:</p>
+<div class="jd-table-wrap"><table class="jd-table"><thead><tr><th style="text-align:left">Airtable section</th><th style="text-align:left">Permission</th></tr></thead><tbody><tr><td style="text-align:left">Record data</td><td style="text-align:left">Read and write</td></tr><tr><td style="text-align:left">Base schema</td><td style="text-align:left">Read and write</td></tr><tr><td style="text-align:left">User metadata / email</td><td style="text-align:left">Read</td></tr><tr><td style="text-align:left">Advanced developer features / webhooks</td><td style="text-align:left">Manage</td></tr></tbody></table></div>
+<p>These correspond to the exact scopes requested by JooEvents:</p>
+<figure class="jd-code"><figcaption class="jd-code-title">text</figcaption><div class="jd-code-shell"><span class="jd-code-lang">text</span><button class="jd-copy" type="button" data-jd-copy aria-label="Copy code">Copy</button><pre><code class="language-text">data.records:read
+data.records:write
+schema.bases:read
+schema.bases:write
+webhook:manage
+user.email:read</code></pre></div></figure>
+<p>Add the support email, privacy-policy URL, and terms-of-service URL required by Airtable for other users to authorize the integration. Save the integration and generate its server-side client secret.</p>
+<p>Do not put the client secret in chat, source control, issue trackers, command arguments, screenshots, or documentation. Keep the Client ID available for the next checkpoint; it is an identifier, not an authorization token.</p>
+<p>Official reference: <a href="https://support.airtable.com/articles/9362950318-using-builder-hub-in-airtable" target="_blank" rel="noreferrer noopener">Using Builder Hub in Airtable</a>.</p>
+<h2 id="2-configure-the-installation" class="jd-h jd-h2">2. Configure the installation<a class="jd-anchor" href="#2-configure-the-installation" aria-label="Link to 2. Configure the installation">#</a></h2>
+<p>JooEvents requires these names:</p>
+<div class="jd-table-wrap"><table class="jd-table"><thead><tr><th style="text-align:left">Name</th><th style="text-align:left">Kind</th><th style="text-align:left">Purpose</th></tr></thead><tbody><tr><td style="text-align:left"><code>JOOEVENTS_BASE_URL</code></td><td style="text-align:left">Non-secret configuration</td><td style="text-align:left">Canonical HTTPS origin used to derive the callback</td></tr><tr><td style="text-align:left"><code>JOOEVENTS_AIRTABLE_OAUTH_CLIENT_ID</code></td><td style="text-align:left">Non-secret configuration</td><td style="text-align:left">Airtable OAuth integration identifier</td></tr><tr><td style="text-align:left"><code>JOOEVENTS_AIRTABLE_OAUTH_CLIENT_SECRET</code></td><td style="text-align:left">Secret</td><td style="text-align:left">Server-side OAuth code exchange and refresh</td></tr><tr><td style="text-align:left"><code>JOOEVENTS_AIRTABLE_SECRET_STORE_KEY</code></td><td style="text-align:left">Secret</td><td style="text-align:left">Installation-owned 32-byte key, encoded as 43-character base64url</td></tr></tbody></table></div>
+<aside class="jd-callout jd-callout--note"><svg class="jd-callout-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6.4"/><path d="M8 7.2v4M8 4.9v.9"/></svg><div class="jd-callout-body"><p class="jd-callout-title">The personal access token is not used</p><p>End users authorize the registered OAuth integration and choose its Airtable resources. A personal access token used during development or provider conformance is not part of the installed connection.</p></div></aside>
+<h3 id="single-machine-bun-deployment" class="jd-h jd-h3">Single-machine Bun deployment<a class="jd-anchor" href="#single-machine-bun-deployment" aria-label="Link to Single-machine Bun deployment">#</a></h3>
+<p>Store the values in the installation's ignored server environment file or its service manager's secret facility. The setup agent should verify only that each required name exists and has a plausible shape; it must not display the values. Restart the server after configuration changes.</p>
+<h3 id="cloudflare-workers-deployment" class="jd-h jd-h3">Cloudflare Workers deployment<a class="jd-anchor" href="#cloudflare-workers-deployment" aria-label="Link to Cloudflare Workers deployment">#</a></h3>
+<p>Place the origin and Client ID in the Worker's non-secret <code>vars</code>. Declare the two sensitive values as required secrets:</p>
+<figure class="jd-code"><figcaption class="jd-code-title">jsonc</figcaption><div class="jd-code-shell"><span class="jd-code-lang">jsonc</span><button class="jd-copy" type="button" data-jd-copy aria-label="Copy code">Copy</button><pre><code class="language-jsonc">{
+  <span class="tok-string">&quot;vars&quot;</span>: {
+    <span class="tok-string">&quot;JOOEVENTS_BASE_URL&quot;</span>: <span class="tok-string">&quot;https://events.example.org&quot;</span>,
+    <span class="tok-string">&quot;JOOEVENTS_AIRTABLE_OAUTH_CLIENT_ID&quot;</span>: <span class="tok-string">&quot;your-client-id&quot;</span>
+  },
+  <span class="tok-string">&quot;secrets&quot;</span>: {
+    <span class="tok-string">&quot;required&quot;</span>: [
+      <span class="tok-string">&quot;JOOEVENTS_AIRTABLE_OAUTH_CLIENT_SECRET&quot;</span>,
+      <span class="tok-string">&quot;JOOEVENTS_AIRTABLE_SECRET_STORE_KEY&quot;</span>
+    ]
+  }
+}</code></pre></div></figure>
+<p>Start concealed prompts from the directory containing the Worker configuration:</p>
+<figure class="jd-code"><figcaption class="jd-code-title">sh</figcaption><div class="jd-code-shell"><span class="jd-code-lang">sh</span><button class="jd-copy" type="button" data-jd-copy aria-label="Copy code">Copy</button><pre><code class="language-sh">bunx wrangler secret put JOOEVENTS_AIRTABLE_OAUTH_CLIENT_SECRET
+bunx wrangler secret put JOOEVENTS_AIRTABLE_SECRET_STORE_KEY</code></pre></div></figure>
+<p>The operator enters the Airtable secret into Wrangler's prompt. The setup agent may generate and upload the separate 32-byte installation key without displaying it. For staging or another named Wrangler environment, use that environment consistently for configuration, secrets, deployment, and verification.</p>
+<p>Cloudflare treats deployed secrets as encrypted environment bindings; the values are hidden after entry. See <a href="https://developers.cloudflare.com/workers/configuration/secrets/" target="_blank" rel="noreferrer noopener">Cloudflare Workers secrets</a> and <a href="https://developers.cloudflare.com/workers/configuration/environment-variables/" target="_blank" rel="noreferrer noopener">environment variables</a>.</p>
+<p>The current public JooEvents release ships a browser-sample Worker, not the complete production Worker/D1/Queue composition. Do not use the sample deployment command as evidence that server-side Airtable sync is installed.</p>
+<h2 id="3-connect-the-selected-base-workspace-owner-checkpoint" class="jd-h jd-h2">3. Connect the selected base — workspace-owner checkpoint<a class="jd-anchor" href="#3-connect-the-selected-base-workspace-owner-checkpoint" aria-label="Link to 3. Connect the selected base — workspace-owner checkpoint">#</a></h2>
+<p>Sign in to the configured JooEvents installation and open <strong>Integrations → Airtable → Connect Airtable</strong>.</p>
+<p>Airtable shows the integration's requested permissions and its resource picker. Choose the dedicated base intended for JooEvents. Granting one base is sufficient; do not select an entire workspace or all current and future bases unless that wider access is deliberately required.</p>
+<p>After Airtable returns to JooEvents:</p>
+<ol class="jd-list"><li>Choose the visible base by name.</li><li>Set each area to <strong>Not connected</strong>, <strong>Keep Airtable updated</strong>, or <strong>Work from Airtable</strong>.</li><li>Confirm <strong>Add JooEvents tables</strong>.</li></ol>
+<p>JooEvents inspects the selected base before changing it. It preserves unrelated tables and stops if an existing table collides with a managed table name. The ordinary managed projection creates and maintains JooEvents tables inside the selected base; it does not require the user to find or paste a base ID.</p>
+<h2 id="4-verify-the-two-way-loop" class="jd-h jd-h2">4. Verify the two-way loop<a class="jd-anchor" href="#4-verify-the-two-way-loop" aria-label="Link to 4. Verify the two-way loop">#</a></h2>
+<p>Use disposable test records. Do not begin with production event or personal data.</p>
+<ol class="jd-steps"><li class="jd-step"><span class="jd-step-marker" aria-hidden="true">1</span><div class="jd-step-body"><p class="jd-step-term"><strong>Provisioning</strong></p><p>Confirm the integration reaches <strong>Current</strong>, the expected managed tables appear, and an unrelated Airtable table remains unchanged.</p></div></li><li class="jd-step"><span class="jd-step-marker" aria-hidden="true">2</span><div class="jd-step-body"><p class="jd-step-term"><strong>Outbound update</strong></p><p>Change one managed JooEvents task or session value, then confirm the corresponding Airtable record updates without duplication.</p></div></li><li class="jd-step"><span class="jd-step-marker" aria-hidden="true">3</span><div class="jd-step-body"><p class="jd-step-term"><strong>Allowed inbound update</strong></p><p>Change a speaker task between open and complete in Airtable, wait for settling, and confirm JooEvents applies the same registered task operation once.</p></div></li><li class="jd-step"><span class="jd-step-marker" aria-hidden="true">4</span><div class="jd-step-body"><p class="jd-step-term"><strong>Protected field</strong></p><p>Edit a JooEvents-owned field in Airtable and confirm the integration restores the canonical value rather than silently accepting it.</p></div></li><li class="jd-step"><span class="jd-step-marker" aria-hidden="true">5</span><div class="jd-step-body"><p class="jd-step-term"><strong>Conflict</strong></p><p>Change the same controlled value independently on both sides and confirm it is held for attention rather than merged by last write.</p></div></li><li class="jd-step"><span class="jd-step-marker" aria-hidden="true">6</span><div class="jd-step-body"><p class="jd-step-term"><strong>Recovery</strong></p><p>Use <strong>Sync now</strong>, then pause and resume the connection. Confirm health returns to <strong>Current</strong> without duplicate records.</p></div></li></ol>
+<p>Real-time inbound verification is complete only when Airtable's webhook requests reach the installation's public HTTPS endpoint. A successful browser callback alone does not prove this.</p>
+<h2 id="expected-boundaries" class="jd-h jd-h2">Expected boundaries<a class="jd-anchor" href="#expected-boundaries" aria-label="Link to Expected boundaries">#</a></h2>
+<ul class="jd-list"><li>JooEvents remains canonical for protected fields.</li><li><strong>Work from Airtable</strong> enables only the finite controlled fields shown by the UI; it is not permission to write every Airtable cell into application state.</li><li>Speaker cancellation edits become requests rather than silently cancelling an engagement.</li><li>Remote deletion becomes review and restoration, not immediate canonical deletion.</li><li>OAuth tokens and webhook MAC keys remain behind the installation's secret boundary.</li><li>Disconnecting or revoking Airtable access stops synchronization; reconnect replaces the grant while retaining the managed-base anchor when safe.</li></ul>
+<h2 id="if-setup-refuses" class="jd-h jd-h2">If setup refuses<a class="jd-anchor" href="#if-setup-refuses" aria-label="Link to If setup refuses">#</a></h2>
+<div class="jd-table-wrap"><table class="jd-table"><thead><tr><th style="text-align:left">Symptom</th><th style="text-align:left">Check</th></tr></thead><tbody><tr><td style="text-align:left">Airtable reports a mismatched redirect URI</td><td style="text-align:left">Compare the registered callback and <code>JOOEVENTS_BASE_URL</code> character for character, including scheme, host, port, and path.</td></tr><tr><td style="text-align:left">No bases are listed</td><td style="text-align:left">Edit the Airtable authorization and grant the integration access to the intended base.</td></tr><tr><td style="text-align:left">The base is visible but cannot be selected</td><td style="text-align:left">The authorizing Airtable user needs edit or creator access for managed schema and records.</td></tr><tr><td style="text-align:left">OAuth succeeds but the connection never becomes current</td><td style="text-align:left">Check schema-name collisions, required scopes, server logs using the displayed support code, and webhook reachability.</td></tr><tr><td style="text-align:left">Outbound works but Airtable edits arrive late or not at all</td><td style="text-align:left">Verify the installation is publicly reachable by Airtable and inspect webhook/reconciliation health.</td></tr><tr><td style="text-align:left">Airtable access was revoked</td><td style="text-align:left">Use <strong>Reconnect</strong> in JooEvents and authorize the same intended base again.</td></tr></tbody></table></div>
+<p>Never solve a refusal by broadening access to all workspaces without understanding the cause.</p></main>
+  </div>
   <footer class="jd-footer"><span>JooEvents</span><span>Updated 17 August 2026</span></footer>
 </div>
 <script>(function(){

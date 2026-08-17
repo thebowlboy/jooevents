@@ -5,6 +5,7 @@
 ## API integrations
 
 - [Connect through the API](https://docs.jooevents.com/agents/quickstart.md): Safely create and configure a key, then orient an external agent.
+- [Connect Airtable](https://docs.jooevents.com/integration/airtable-self-host.md): Register a self-hosted installation's OAuth integration, configure secrets, and verify managed two-way sync one checkpoint at a time.
 - [External API operating model](https://docs.jooevents.com/agents/operating-model.md): Direct reads, human-approved plans, availability, outcomes, and recovery.
 - [External API recipes](https://docs.jooevents.com/agents/recipes.md): Discovery-first call sequences for common agent work.
 
