@@ -1,4 +1,13 @@
 import { SQLITE_E2_S6_RELEASE_FLOOR } from '@jooevents/persistence/release-floor-contract';
+import {
+  CloudflareAuthConfigurationError,
+  cloudflareAuthRuntimeEnabled,
+  type CloudflareAuthBindings
+} from './auth-config';
+import { createConfiguredCloudflareAuthRuntime } from './auth-runtime';
+
+export type CloudflareApplicationEnvironment = Omit<Env, 'JOOEVENTS_AUTH_RUNTIME_ENABLED'>
+  & CloudflareAuthBindings;
 
 export interface CloudflareWakeMessage {
   readonly version: 1;
@@ -57,7 +66,7 @@ function protectedAssetResponse(response: Response): Response {
   });
 }
 
-async function healthResponse(environment: Env): Promise<Response> {
+async function healthResponse(environment: CloudflareApplicationEnvironment): Promise<Response> {
   const correlationId = crypto.randomUUID();
   try {
     const terminal = await environment.DB.prepare(`
@@ -102,7 +111,8 @@ async function healthResponse(environment: Env): Promise<Response> {
         d1BufferedUnitOfWork: runtimeInfrastructure?.count === 2,
         r2: true,
         queues: true,
-        cron: true
+        cron: true,
+        authActivationRequested: cloudflareAuthRuntimeEnabled(environment)
       },
       releaseFloor: floor.releaseFloorId,
       environment: environment.JOOEVENTS_DEPLOYMENT_ENVIRONMENT,
@@ -131,9 +141,29 @@ function isReservedApplicationPath(pathname: string): boolean {
     || pathname === '/embed' || pathname.startsWith('/embed/');
 }
 
-export async function handleRequest(request: Request, environment: Env): Promise<Response> {
+export async function handleRequest(
+  request: Request,
+  environment: CloudflareApplicationEnvironment
+): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname === '/health') return healthResponse(environment);
+  if (isConfiguredAuthPath(url.pathname) && cloudflareAuthRuntimeEnabled(environment)) {
+    try {
+      return await createConfiguredCloudflareAuthRuntime(environment).fetch(request);
+    } catch (error) {
+      const correlationId = crypto.randomUUID();
+      console.error(JSON.stringify({
+        event: 'cloudflare.auth.configuration_refused',
+        correlationId,
+        issueCodes: error instanceof CloudflareAuthConfigurationError ? error.issues : ['unknown']
+      }));
+      return json({
+        code: 'cloudflare_auth_configuration_invalid',
+        message: 'Authentication is not available yet.',
+        correlationId
+      }, 503);
+    }
+  }
   if (isReservedApplicationPath(url.pathname)) {
     return json({
       code: 'cloudflare_application_runtime_not_ready',
@@ -141,6 +171,13 @@ export async function handleRequest(request: Request, environment: Env): Promise
     }, 503);
   }
   return protectedAssetResponse(await environment.ASSETS.fetch(request));
+}
+
+function isConfiguredAuthPath(pathname: string): boolean {
+  return pathname === '/api/auth' || pathname.startsWith('/api/auth/')
+    || pathname === '/api/entry/google/start'
+    || pathname === '/api/entry/sign-out'
+    || pathname === '/api/me/access-context';
 }
 
 export async function handleQueue(batch: MessageBatch<unknown>): Promise<void> {

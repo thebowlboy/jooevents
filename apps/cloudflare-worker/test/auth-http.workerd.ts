@@ -6,6 +6,7 @@ import { createCloudflareAuthHttpApp } from '../src/auth-http';
 import { createD1Auth } from '../src/d1-auth';
 import { createD1AuthPrincipalReader } from '../src/d1-principal-reader';
 import { createD1ProvisioningStore } from '../src/d1-provisioning-store';
+import { handleRequest, type CloudflareApplicationEnvironment } from '../src/index';
 
 const uuid = (suffix: number): string =>
   `019c1df8-c9e8-7abc-8def-${suffix.toString(16).padStart(12, '0')}`;
@@ -125,6 +126,39 @@ describe('Worker auth/access HTTP boundary', () => {
     expect(await response.json()).toMatchObject({
       code: 'route_not_found',
       retryable: false
+    });
+  });
+
+  test('activates the default Worker auth route only behind complete validated bindings', async () => {
+    const environment: CloudflareApplicationEnvironment = {
+      DB: env.DB,
+      FILES: env.FILES,
+      JOBS: env.JOBS,
+      ASSETS: env.ASSETS,
+      JOOEVENTS_DEPLOYMENT_ENVIRONMENT: env.JOOEVENTS_DEPLOYMENT_ENVIRONMENT,
+      JOOEVENTS_D1_RELEASE_FLOOR: env.JOOEVENTS_D1_RELEASE_FLOOR,
+      JOOEVENTS_AUTH_RUNTIME_ENABLED: 'true',
+      JOOEVENTS_BASE_URL: baseUrl,
+      JOOEVENTS_AUTH_SECRETS: `1:${secret}`,
+      JOOEVENTS_GOOGLE_CLIENT_ID: 'http-google-client-id',
+      JOOEVENTS_GOOGLE_CLIENT_SECRET: 'http-google-client-secret',
+      JOOEVENTS_ADMISSION_MODE: 'pending',
+      JOOEVENTS_WORKSPACE_ID: workspaceId
+    };
+    const response = await handleRequest(
+      new Request(`${baseUrl}/api/me/access-context`),
+      environment
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ state: 'anonymous' });
+
+    const invalid = await handleRequest(
+      new Request(`${baseUrl}/api/me/access-context`),
+      { ...environment, JOOEVENTS_AUTH_SECRETS: 'too-short' }
+    );
+    expect(invalid.status).toBe(503);
+    expect(await invalid.json()).toMatchObject({
+      code: 'cloudflare_auth_configuration_invalid'
     });
   });
 });
