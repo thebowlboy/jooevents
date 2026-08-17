@@ -210,6 +210,7 @@ function isConfiguredApplicationPath(pathname: string): boolean {
     || pathname === '/api/workspace/team/role-changes'
     || pathname === '/api/workspace/team/removals'
     || pathname === '/api/events/current'
+    || pathname === '/api/events/current/files'
     || pathname === '/api/events/current/settings'
     || pathname === '/api/events/current/field-registry'
     || pathname.startsWith('/api/events/current/field-registry/')

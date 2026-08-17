@@ -38,6 +38,10 @@ import {
   createFieldRegistryOperationModule
 } from '@jooevents/field-registry';
 import {
+  FILE_READ_ACCESS_POLICY,
+  createFilesReadOperationModule
+} from '@jooevents/files-operations';
+import {
   TASK_MANAGE_ACCESS_POLICY,
   TASK_MUTATION_REQUEST_HASH_PROFILE,
   TASK_OPERATION_KEY_PROFILES,
@@ -96,6 +100,7 @@ import {
   createD1FieldRegistryDirectEffectDomainRegistration,
   createD1FieldRegistrySnapshotSource
 } from './d1-field-registry';
+import { createD1FilesOrganizerReadPort } from './d1-files';
 import {
   createD1TaskBoardReadSource,
   createD1TaskDirectEffectDomainRegistration
@@ -177,6 +182,21 @@ const API_KEY_OPERATION_KEY_PROFILES = Object.freeze({
   })
 });
 
+const FILES_OPERATION_KEY_PROFILES = Object.freeze({
+  authorityPrincipal: Object.freeze({
+    key: 'key-profile.file.operator-principal',
+    version: parseContractVersion(1)
+  }),
+  scopePartition: Object.freeze({
+    key: 'key-profile.file.current-event-scope',
+    version: parseContractVersion(1)
+  }),
+  requestCanonicalization: Object.freeze({
+    key: 'key-profile.file.request-canonicalization',
+    version: parseContractVersion(1)
+  })
+});
+
 function classifiedWorkspaceInvitationProfiles(
   cryptoProfiles: DurableCryptoProfileComposition
 ) {
@@ -229,6 +249,7 @@ export async function createConfiguredD1ApplicationRuntime(
       policy: WORKSPACE_TEAM_OPERATION_ACCESS.remove.policy,
       permissionId: WORKSPACE_TEAM_OPERATION_ACCESS.remove.permissionId
     },
+    { policy: FILE_READ_ACCESS_POLICY, permissionId: 'submission.read' },
     { policy: API_KEY_MANAGE_ACCESS_POLICY, permissionId: 'integration.api.manage' }
   ]);
   const currentAuthority = createD1OperatorCurrentAuthorityResolver({
@@ -270,6 +291,10 @@ export async function createConfiguredD1ApplicationRuntime(
     database: environment.DB,
     workspaceId,
     nowEpochMs: Date.now
+  });
+  const files = createD1FilesOrganizerReadPort({
+    database: environment.DB,
+    workspaceId
   });
   const common = Object.freeze({
     workspaceId,
@@ -509,6 +534,18 @@ export async function createConfiguredD1ApplicationRuntime(
     ),
     mountMutations: false
   });
+  const fileReadOperations = createFilesReadOperationModule({
+    workspaceId,
+    readPolicy: FILE_READ_ACCESS_POLICY,
+    currentAuthority,
+    currentEvent: reads,
+    clock,
+    ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+    authorityPrincipalKeyProfile: FILES_OPERATION_KEY_PROFILES.authorityPrincipal,
+    scopePartitionProfile: FILES_OPERATION_KEY_PROFILES.scopePartition,
+    requestCanonicalizationProfile: FILES_OPERATION_KEY_PROFILES.requestCanonicalization,
+    read: files
+  });
   const workspaceTeamMutationDomain = cryptoProfiles.withPersistentHmacKeySelection(
     'security.workspace-invitation-lookup',
     (selection) => createD1WorkspaceTeamMutationEffectDomainRegistration({
@@ -598,7 +635,8 @@ export async function createConfiguredD1ApplicationRuntime(
       workspaceSummaryOperations,
       workspaceOverviewOperations,
       workspaceTeamOperations,
-      apiKeyOperations
+      apiKeyOperations,
+      fileReadOperations
     ]),
     read: {
       operationalTrace: { emit() {} },

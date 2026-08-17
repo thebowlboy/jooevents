@@ -89,7 +89,8 @@ export const FILE_MANAGE_PERMISSION_ID: PermissionId = 'event.manage';
  * never an empty state: an event with no files serves an empty overview.
  */
 export interface FilesOrganizerReadPort {
-  readOrganizerFileOverview(scope: FileScopeDto): OrganizerFileOverviewDto | undefined;
+  readOrganizerFileOverview(scope: FileScopeDto):
+    OrganizerFileOverviewDto | undefined | Promise<OrganizerFileOverviewDto | undefined>;
 }
 
 export interface FilesPortalReadPort {
@@ -111,6 +112,12 @@ export interface FilesCurrentEventResolution {
 export interface FilesCurrentEventSource {
   resolveCurrentEvent(workspaceId: WorkspaceId):
     FilesCurrentEventResolution | Promise<FilesCurrentEventResolution>;
+}
+
+function isPromiseLike<T>(value: T | PromiseLike<T>): value is PromiseLike<T> {
+  return value !== null
+    && (typeof value === 'object' || typeof value === 'function')
+    && typeof (value as { readonly then?: unknown }).then === 'function';
 }
 
 // ---------------------------------------------------------------------------
@@ -245,7 +252,8 @@ interface ReadEntry {
   readonly read: (
     context: ReadInvocationContext,
     businessInput: unknown
-  ) => unknown | { readonly kind: 'outcome'; readonly outcome: StructuredOutcome };
+  ) => unknown | Promise<unknown>
+    | { readonly kind: 'outcome'; readonly outcome: StructuredOutcome };
 }
 
 function readModule(input: {
@@ -333,20 +341,23 @@ function readModule(input: {
           readonly businessInput: unknown;
           readonly context: ReadInvocationContext;
         }) => {
-          const value = item.entry.read(context, businessInput);
-          if (value !== null && typeof value === 'object' && 'kind' in (value as object)
-              && (value as { readonly kind: unknown }).kind === 'outcome') {
-            return value;
-          }
-          return value === undefined
-            ? Object.freeze({
-                kind: 'outcome' as const,
-                outcome: Object.freeze({
-                  class: 'conflict' as const, kind: 'file.not_found', retryable: false,
-                  subjects: [], detail: null, detailSchemaVersion: 1
+          const project = (value: unknown) => {
+            if (value !== null && typeof value === 'object' && 'kind' in value
+                && (value as { readonly kind: unknown }).kind === 'outcome') {
+              return value;
+            }
+            return value === undefined
+              ? Object.freeze({
+                  kind: 'outcome' as const,
+                  outcome: Object.freeze({
+                    class: 'conflict' as const, kind: 'file.not_found', retryable: false,
+                    subjects: [], detail: null, detailSchemaVersion: 1
+                  })
                 })
-              })
-            : Object.freeze({ kind: 'success' as const, data: value });
+              : Object.freeze({ kind: 'success' as const, data: value });
+          };
+          const value = item.entry.read(context, businessInput);
+          return isPromiseLike(value) ? Promise.resolve(value).then(project) : project(value);
         }
       })),
       projections: built.map((item) => Object.freeze({
@@ -509,13 +520,13 @@ export function createFilesReadOperationModule(
         schema: organizerFileOverviewReadResultSchema
       },
       extraOutcomes: [{ class: 'conflict', kind: 'file.event_required', retryable: false }],
-      read: (context) => {
+      read: async (context) => {
         if (!context.scope.eventId) return eventRequiredOutcome();
         const scope: FileScopeDto = {
           workspaceId: context.scope.workspaceId,
           eventId: context.scope.eventId
         };
-        const overview = input.read.readOrganizerFileOverview(scope);
+        const overview = await input.read.readOrganizerFileOverview(scope);
         // A resolved current event with a missing scope root is corrupt
         // composition state, never an honest empty overview.
         if (overview === undefined) throw new TypeError('files_overview_scope_missing');

@@ -52,6 +52,8 @@ beforeAll(async () => {
       .bind(roleId, 'event.read'),
     env.DB.prepare('INSERT INTO role_permissions (role_id,permission_id) VALUES (?,?)')
       .bind(roleId, 'event.manage'),
+    env.DB.prepare('INSERT INTO role_permissions (role_id,permission_id) VALUES (?,?)')
+      .bind(roleId, 'submission.read'),
     env.DB.prepare(`INSERT INTO role_assignments
       (id,user_id,role_id,workspace_id,scope_kind,event_id,assigned_by_user_id,
        assigned_at,expires_at,version)
@@ -115,6 +117,7 @@ describe('configured D1 application HTTP slice', () => {
       'field_registry.remove',
       'field_registry.restore',
       'field_registry.snapshot.read',
+      'file.overview.read',
       'operation.history.list',
       'task.board.read',
       'task.mutation',
@@ -138,6 +141,14 @@ describe('configured D1 application HTTP slice', () => {
     expect(initial.status).toBe(200);
     expect(await initial.json()).toMatchObject({
       kind: 'success', data: { kind: 'no_event', eventSetVersion: 1 }
+    });
+    const initialFiles = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/files`, { headers }),
+      environment()
+    );
+    expect(initialFiles.status, await initialFiles.clone().text()).toBe(200);
+    expect(await initialFiles.json()).toMatchObject({
+      kind: 'outcome', outcome: { class: 'conflict', kind: 'file.event_required' }
     });
     const initialShell = await handleRequest(
       new Request(`${baseUrl}/api/workspace/shell-summary`, { headers }),
@@ -199,6 +210,102 @@ describe('configured D1 application HTTP slice', () => {
     const replay = await handleRequest(request(), environment());
     expect(replay.status).toBe(200);
     expect(await replay.json()).toEqual(firstBody);
+
+    const eventId = firstBody.data.event.id;
+    const recordedAtMs = Date.now();
+    const recordedAt = new Date(recordedAtMs).toISOString();
+    const shareId = uuid(708);
+    const assetId = uuid(709);
+    const assetAttachmentId = uuid(710);
+    const linkAttachmentId = uuid(711);
+    const scope = { workspaceId, eventId };
+    const asset = {
+      schemaVersion: 1, id: assetId, scope,
+      uploader: { kind: 'operator_user', userId },
+      purpose: 'resource_share_material', displayFilename: 'Speaker guide.pdf',
+      contentType: 'application/pdf', byteSize: 4096, sha256: 'a'.repeat(64),
+      storageProvider: 'r2', storageKey: `${workspaceId}/${eventId}/${assetId}`,
+      lifecycle: 'available',
+      scan: { provider: 'none', verdict: 'released', checkedAt: recordedAt },
+      version: 1, createdAt: recordedAt, updatedAt: recordedAt
+    };
+    const share = {
+      schemaVersion: 1, id: shareId, scope, title: 'Speaker resources',
+      audience: { kind: 'all_confirmed' }, createdByUserId: userId,
+      state: 'active', version: 1, createdAt: recordedAt, revokedAt: null
+    };
+    const assetAttachment = {
+      schemaVersion: 1, id: assetAttachmentId, scope,
+      subject: { kind: 'resource_share', resourceShareId: shareId },
+      content: { kind: 'asset', assetId },
+      attachedBy: { kind: 'operator_user', userId }, state: 'attached', version: 1,
+      attachedAt: recordedAt, detachedAt: null
+    };
+    const linkAttachment = {
+      schemaVersion: 1, id: linkAttachmentId, scope,
+      subject: { kind: 'resource_share', resourceShareId: shareId },
+      content: {
+        kind: 'link',
+        link: { provider: 'url', label: 'Venue map', url: 'https://example.invalid/map' }
+      },
+      attachedBy: { kind: 'operator_user', userId }, state: 'attached', version: 1,
+      attachedAt: recordedAt, detachedAt: null
+    };
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO resource_shares
+        (workspace_id,event_id,id,title,audience_kind,audience_id,created_by_user_id,
+         state,version,head_json,created_at_ms,revoked_at_ms)
+        VALUES (?,?,?,?,'all_confirmed',NULL,?,'active',1,?,?,NULL)`)
+        .bind(workspaceId, eventId, shareId, share.title, userId, JSON.stringify(share), recordedAtMs),
+      env.DB.prepare(`INSERT INTO file_assets
+        (workspace_id,event_id,id,uploader_kind,uploader_id,purpose,display_filename,
+         content_type,byte_size,sha256,storage_provider,storage_key,lifecycle,
+         scan_provider,scan_verdict,scan_checked_at_ms,version,head_json,created_at_ms,updated_at_ms)
+        VALUES (?,?,?,'operator_user',?,'resource_share_material',?,'application/pdf',
+          4096,?,'r2',?,'available','none','released',?,1,?,?,?)`)
+        .bind(
+          workspaceId, eventId, assetId, userId, asset.displayFilename, asset.sha256,
+          asset.storageKey, recordedAtMs, JSON.stringify(asset), recordedAtMs, recordedAtMs
+        ),
+      env.DB.prepare(`INSERT INTO file_attachments
+        (workspace_id,event_id,id,subject_kind,subject_id,content_kind,asset_id,
+         link_provider,link_label,link_url,attached_by_kind,attached_by_id,state,
+         version,head_json,attached_at_ms,detached_at_ms)
+        VALUES (?,?,?,'resource_share',?,'asset',?,NULL,NULL,NULL,
+          'operator_user',?,'attached',1,?,?,NULL)`)
+        .bind(
+          workspaceId, eventId, assetAttachmentId, shareId, assetId, userId,
+          JSON.stringify(assetAttachment), recordedAtMs
+        ),
+      env.DB.prepare(`INSERT INTO file_attachments
+        (workspace_id,event_id,id,subject_kind,subject_id,content_kind,asset_id,
+         link_provider,link_label,link_url,attached_by_kind,attached_by_id,state,
+         version,head_json,attached_at_ms,detached_at_ms)
+        VALUES (?,?,?,'resource_share',?,'link',NULL,'url','Venue map',
+          'https://example.invalid/map','operator_user',?,'attached',1,?,?,NULL)`)
+        .bind(
+          workspaceId, eventId, linkAttachmentId, shareId, userId,
+          JSON.stringify(linkAttachment), recordedAtMs
+        )
+    ]);
+    const files = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/files`, { headers }),
+      environment()
+    );
+    expect(files.status, await files.clone().text()).toBe(200);
+    expect(await files.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        schemaVersion: 1,
+        scope,
+        attachments: [
+          { attachment: assetAttachment, asset },
+          { attachment: linkAttachment, asset: null }
+        ],
+        shares: [share],
+        requests: []
+      }
+    });
 
     const list = await handleRequest(
       new Request(`${baseUrl}/api/events`, { headers }),
