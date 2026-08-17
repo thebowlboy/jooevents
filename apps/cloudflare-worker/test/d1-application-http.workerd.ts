@@ -70,6 +70,8 @@ beforeAll(async () => {
       .bind(roleId, 'program.vocabulary.manage'),
     env.DB.prepare('INSERT INTO role_permissions (role_id,permission_id) VALUES (?,?)')
       .bind(roleId, 'communication.provider.manage'),
+    env.DB.prepare('INSERT INTO role_permissions (role_id,permission_id) VALUES (?,?)')
+      .bind(roleId, 'communication.draft'),
     env.DB.prepare(`INSERT INTO role_assignments
       (id,user_id,role_id,workspace_id,scope_kind,event_id,assigned_by_user_id,
        assigned_at,expires_at,version)
@@ -151,6 +153,12 @@ describe('configured D1 application HTTP slice', () => {
       'file.share.revoke',
       'file.upload.confirm',
       'file.upload.intent',
+      'get_communication_purpose',
+      'get_message_draft',
+      'get_message_template',
+      'list_communication_purposes',
+      'list_message_drafts',
+      'list_message_templates',
       'operation.history.list',
       'program_vocabulary.create',
       'program_vocabulary.delete',
@@ -224,6 +232,15 @@ describe('configured D1 application HTTP slice', () => {
     expect(await initialSessions.json()).toMatchObject({
       kind: 'outcome',
       outcome: { class: 'conflict', kind: 'session.event_required' }
+    });
+    const initialPurposes = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/communications/purposes`, { headers }),
+      environment()
+    );
+    expect(initialPurposes.status, await initialPurposes.clone().text()).toBe(200);
+    expect(await initialPurposes.json()).toMatchObject({
+      kind: 'outcome',
+      outcome: { class: 'conflict', kind: 'communication.event_required' }
     });
     const initialDownload = await handleRequest(
       new Request(`${baseUrl}/api/events/current/files/download/${uuid(709)}`, { headers }),
@@ -439,6 +456,95 @@ describe('configured D1 application HTTP slice', () => {
     expect(await replay.json()).toEqual(firstBody);
 
     const eventId = firstBody.data.event.id;
+    const purposesResponse = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/communications/purposes`, { headers }),
+      environment()
+    );
+    expect(purposesResponse.status, await purposesResponse.clone().text()).toBe(200);
+    const purposesBody = await purposesResponse.json<{
+      readonly kind: string;
+      readonly data: {
+        readonly rows: readonly {
+          readonly revision: { readonly purposeId: string; readonly purposeKey: string };
+          readonly lifecycle: string;
+        }[];
+      };
+    }>();
+    expect(purposesBody.kind).toBe('success');
+    const decisionPurpose = purposesBody.data.rows.find(
+      (row) => row.revision.purposeKey === 'decision_notification'
+    )!;
+    expect(decisionPurpose).toMatchObject({
+      revision: { purposeKey: 'decision_notification' },
+      lifecycle: 'active'
+    });
+    const purposeDetail = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/communications/purposes/detail?purposeId=${decisionPurpose.revision.purposeId}`, { headers }),
+      environment()
+    );
+    expect(purposeDetail.status, await purposeDetail.clone().text()).toBe(200);
+    expect(await purposeDetail.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        revision: { purposeKey: 'decision_notification' },
+        allowedAudienceSources: expect.any(Array)
+      }
+    });
+    const templatesResponse = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/communications/templates`, { headers }),
+      environment()
+    );
+    expect(templatesResponse.status, await templatesResponse.clone().text()).toBe(200);
+    const templatesBody = await templatesResponse.json<{
+      readonly kind: string;
+      readonly data: {
+        readonly rows: readonly {
+          readonly revision: { readonly templateId: string };
+          readonly key: string;
+          readonly subjectPreview: string;
+        }[];
+      };
+    }>();
+    expect(templatesBody.kind).toBe('success');
+    const acceptedTemplate = templatesBody.data.rows.find(
+      (row) => row.key === 'decision.accepted'
+    )!;
+    expect(acceptedTemplate).toMatchObject({
+      key: 'decision.accepted',
+      subjectPreview: expect.any(String)
+    });
+    const communicationTemplateDetail = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/communications/templates/detail?templateId=${acceptedTemplate.revision.templateId}`, { headers }),
+      environment()
+    );
+    expect(
+      communicationTemplateDetail.status,
+      await communicationTemplateDetail.clone().text()
+    ).toBe(200);
+    expect(await communicationTemplateDetail.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        key: 'decision.accepted',
+        content: { body: { mode: expect.any(String) } },
+        fieldBindings: expect.any(Array)
+      }
+    });
+    const draftsResponse = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/communications/drafts`, { headers }),
+      environment()
+    );
+    expect(draftsResponse.status, await draftsResponse.clone().text()).toBe(200);
+    expect(await draftsResponse.json()).toMatchObject({
+      kind: 'success', data: { rows: [], page: { hasMore: false } }
+    });
+    const missingDraft = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/communications/drafts/detail?draftId=${uuid(798)}`, { headers }),
+      environment()
+    );
+    expect(missingDraft.status, await missingDraft.clone().text()).toBe(200);
+    expect(await missingDraft.json()).toMatchObject({
+      kind: 'outcome', outcome: { class: 'conflict', kind: 'communication.not_found' }
+    });
     const recordedAtMs = Date.now();
     const recordedAt = new Date(recordedAtMs).toISOString();
     const shareId = uuid(708);

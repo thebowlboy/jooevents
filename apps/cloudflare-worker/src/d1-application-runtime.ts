@@ -13,8 +13,10 @@ import {
   type InvocationEvidence
 } from '@jooevents/application';
 import {
+  ORGANIZER_COMMUNICATION_DRAFT_ACCESS_POLICY,
   WORKSPACE_SENDER_IDENTITY_ACCESS_POLICY,
   WORKSPACE_SENDER_IDENTITY_UPDATE_REQUEST_HASH_PROFILE,
+  createOrganizerCommunicationReadOperationModule,
   createWorkspaceSenderIdentityOperationModule
 } from '@jooevents/communication-operations';
 import type { InstallationMailSenderIdentity } from '@jooevents/communications';
@@ -102,7 +104,8 @@ import {
   parseInstant,
   parseContractVersion,
   parseInvocationId,
-  parseWorkspaceId
+  parseWorkspaceId,
+  type WorkspaceId
 } from '@jooevents/kernel';
 import {
   createDurableCryptoProfileComposition,
@@ -161,6 +164,7 @@ import {
 } from './d1-effect-unit-of-work';
 import { createD1OperatorCurrentAuthorityResolver } from './d1-operator-authority';
 import { createD1OperationHistoryReadSource } from './d1-operation-history';
+import { createD1OrganizerCommunicationReadPort } from './d1-organizer-communication-read';
 import { createD1ProgramVocabularySnapshotReadSource } from './d1-program-vocabulary';
 import {
   createD1ProgramVocabularyDirectEffectDomainRegistration
@@ -285,6 +289,21 @@ const COMMUNICATION_PROVIDER_READ_PROFILES = Object.freeze({
   }),
   requestCanonicalizationProfile: Object.freeze({
     key: 'key-profile.communication.provider-request-canonicalization',
+    version: parseContractVersion(1)
+  })
+});
+
+const ORGANIZER_COMMUNICATION_READ_PROFILES = Object.freeze({
+  authorityPrincipalKeyProfile: Object.freeze({
+    key: 'key-profile.communication.organizer-principal',
+    version: parseContractVersion(1)
+  }),
+  scopePartitionProfile: Object.freeze({
+    key: 'key-profile.communication.organizer-event-scope',
+    version: parseContractVersion(1)
+  }),
+  requestCanonicalizationProfile: Object.freeze({
+    key: 'key-profile.communication.organizer-request-canonicalization',
     version: parseContractVersion(1)
   })
 });
@@ -442,7 +461,9 @@ export async function createConfiguredD1ApplicationRuntime(
     { policy: SESSION_MANAGE_ACCESS_POLICY, permissionId: 'schedule.manage' },
     { policy: API_KEY_MANAGE_ACCESS_POLICY, permissionId: 'integration.api.manage' },
     { policy: COMMUNICATION_PROVIDER_MANAGE_ACCESS_POLICY,
-      permissionId: 'communication.provider.manage' }
+      permissionId: 'communication.provider.manage' },
+    { policy: ORGANIZER_COMMUNICATION_DRAFT_ACCESS_POLICY,
+      permissionId: 'communication.draft' }
   ]);
   const currentAuthority = createD1OperatorCurrentAuthorityResolver({
     session: environment.DB.withSession('first-primary'),
@@ -523,6 +544,10 @@ export async function createConfiguredD1ApplicationRuntime(
     database: environment.DB,
     workspaceId,
     installation: installationMailSender
+  });
+  const organizerCommunicationRead = createD1OrganizerCommunicationReadPort({
+    database: environment.DB,
+    classifiedPayload: classifiedD1CommunicationProfiles(cryptoProfiles)
   });
   const common = Object.freeze({
     workspaceId,
@@ -823,6 +848,23 @@ export async function createConfiguredD1ApplicationRuntime(
       )
     })
   });
+  const organizerCommunicationReadOperations = createOrganizerCommunicationReadOperationModule({
+    workspaceId,
+    policy: ORGANIZER_COMMUNICATION_DRAFT_ACCESS_POLICY,
+    currentAuthority,
+    currentEvent: Object.freeze({
+      async resolveCurrentEvent(requestedWorkspaceId: WorkspaceId) {
+        const selected = await reads.resolveCurrentEvent(requestedWorkspaceId);
+        return selected.eventId === undefined
+          ? undefined
+          : Object.freeze({ eventId: selected.eventId, evidenceIds: selected.evidenceIds });
+      }
+    }),
+    read: organizerCommunicationRead,
+    clock,
+    ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+    crypto: ORGANIZER_COMMUNICATION_READ_PROFILES
+  });
   const programVocabularyReadOperations = createProgramVocabularyReadOperationModule({
     workspaceId,
     readPolicy: PROGRAM_VOCABULARY_READ_ACCESS_POLICY,
@@ -1089,6 +1131,7 @@ export async function createConfiguredD1ApplicationRuntime(
       fileCommandOperations,
       communicationProviderReadOperations,
       senderIdentityOperations,
+      organizerCommunicationReadOperations,
       programVocabularyReadOperations,
       programVocabularyDirectOperations,
       programVocabularyMergeOperations,
