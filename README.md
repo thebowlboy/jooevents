@@ -35,8 +35,9 @@ entrance fee.
 JooEvents is being completed first as a single-machine Bun and SQLite application. The
 production shape puts the web interface, HTTP API, authentication, application
 operations, database, files, and background work in one service on one origin.
-Cloudflare remains a later production target through the same application boundaries;
-it is not required for the first production release.
+Cloudflare can provide DNS, HTTPS, WAF, and private Tunnel ingress in front of that
+persistent origin. The separate Worker/D1 application composition is paused; it is
+not required for the first production release.
 
 ### Where the SQLite path stands
 
@@ -79,52 +80,12 @@ JooEvents is therefore pre-release and **not ready for production event data yet
 is close enough that the SQLite production work is the main story here; it is not close
 enough to suggest putting an actual attendee list into it.
 
-The Cloudflare production composition is now under active implementation, but it is
-still not a production application. Local workerd tests prove retained D1 migrations,
-authentication and admission, and 71 of the joined runtime's 115 organizer
-operations. The mounted set includes Events and settings, the Field Registry,
-Program Vocabulary changes and reviewed merges, Deadlines, Tasks, Schedule placement,
-Session changes, native Template artifacts, operation history, the workspace shell
-and Team, human API-key management, all organizer Files metadata and changes,
-communication provider/readiness reads, and workspace sender-identity reads and
-guarded updates. Purpose, template, and draft authoring reads retain event and owner
-scope while opening encrypted template/draft material only after its metadata binding
-is revalidated. The first authoring mutation now stores event- and owner-bound payloads
-as encrypted classified records with idempotent receipt and timeline evidence. Draft
-creation can adopt those exact encrypted payloads or start empty, with guarded catalog,
-replay, receipt, and timeline checks. Revision reopens and validates the exact encrypted
-payloads before a guarded update; discard advances the retained draft without opening
-message bodies, so unrelated authoring history cannot prevent that terminal action.
-Delivery history projects committed batches and live per-recipient state counts from
-D1 without returning recipient addresses; provider-confirmed delivery remains explicitly
-unsupported rather than inferred.
-Registered audience choices can also be listed with scope- and filter-bound cursors;
-recipient-level preview reads remain closed.
-API-key plaintext is returned only with the fresh committing response and is absent
-from D1 and operation history.
-The same operation registry now produces the Cloudflare and single-machine external-
-agent OpenAPI contract and origin-specific `llms.txt`; the Cloudflare discovery routes
-use retained per-IP limits and cache validators without exposing workspace facts.
-Cloudflare now authenticates hash-only bearer credentials for current standing and
-the authority-filtered read-tool catalog, rechecking the owner's live access and
-retained per-key limits on every request. Read execution, plan submission/status, and
-the approved runner remain closed on Cloudflare.
-
-Organizer upload bytes now stream to R2 only after current authority and intent
-ownership are checked. A retained transfer-attempt record prevents concurrent or
-acceptance-ambiguous multipart writes from silently changing the bytes described by
-D1; cleanup reconciles expired intents, old unattached assets, and crash-stranded R2
-objects. Authenticated downloads retain attachment-only inert headers. Queue and Cron
-adapter tests also pass.
-
-The sender-restricted Email Sending binding is joined to a bounded Queue consumer over
-the retained D1 delivery ledger. Local workerd proves exact provider-revision
-selection, encrypted reviewed-envelope resolution, lease/fence handling, and durable
-attempt/history settlement through an injected binding; no real email was sent. The
-checked-in authentication and application activation flags remain off: the remaining
-organizer, public, and participant operations, recovery and broader job composition,
-the controlled real-email checkpoint, account-level R2 enablement, staging, and live
-deployment must close before Cloudflare can accept real traffic.
+The repository retains disabled, locally tested Worker/D1/R2/Queue adapters as
+portability evidence. They are not a deployable Cloudflare-native product and their
+parity backlog does not block the single-machine release. Cloudflare Workers and
+Containers do not provide a persistent filesystem for the Bun process's SQLite file;
+run that file on the persistent application host. R2 may be selected later through
+the file or off-site-backup boundary, but it is not a live SQLite filesystem.
 
 ## Build and inspect
 
@@ -143,9 +104,9 @@ For local product development:
 bun run dev
 ```
 
-The current development UI uses synthetic sample data. It is useful for inspecting the
-product while the retained runtime composition is completed; it is not the production
-storage path.
+The ordinary development UI uses synthetic sample data for repeatable product
+inspection. The single-machine release builder produces the live application and
+serves it over the retained runtime; the sample is not its storage path.
 
 ## Demo
 

@@ -153,6 +153,30 @@ The packaged service binds `127.0.0.1` by default. Do not set
 override exists for controlled preview/container networking and makes the Bun port
 reachable on every interface allowed by the host firewall.
 
+### Cloudflare Tunnel ingress
+
+Cloudflare Tunnel is a supported way to put the canonical HTTPS hostname in front of
+the loopback service without opening an inbound port on the host. Install
+`cloudflared` on the same persistent machine, create a production tunnel, and map the
+exact public hostname to:
+
+```text
+http://127.0.0.1:5176
+```
+
+Keep `JOOEVENTS_BASE_URL` set to the public `https://` origin, not the loopback
+address. The tunnel is ingress only: Bun, the SQLite file, retained files, and the
+background worker continue to run on the persistent host. Do not place the SQLite
+file in R2 or on Container disk; R2 is object storage and Cloudflare Container disk is
+ephemeral.
+
+Run `cloudflared` under the host service manager, configure an unmatched catch-all to
+refuse traffic, and leave the Bun listener on loopback. After the route is active,
+verify the public hostname, Google callback, owner sign-in, an ordinary reserved API
+route, and a deliberate missing backend route. See Cloudflare's
+[Tunnel setup](https://developers.cloudflare.com/tunnel/setup/) and
+[routing reference](https://developers.cloudflare.com/tunnel/routing/).
+
 The single-machine SQLite service admits one backend request to application storage at
 a time. It can hold at most 128 additional requests for up to 30 seconds. A request
 past either bound receives `503 service_busy` with `Retry-After: 1`; proxies must pass
@@ -193,6 +217,17 @@ Copy the verified backup set off the machine as one unit. The manifest contains
 redacted configuration and the names of required secret values, never those values.
 Keep the owner-only environment file—or an independently protected secret copy—under
 your secret-management policy.
+
+A backup on another directory of the same disk does not protect against host loss.
+Before using production data, retain at least one verified backup set in independent
+off-host storage and document the maximum acceptable interval between backups. R2 or
+another S3-compatible service can hold that copy, but it is backup object storage—not
+the live SQLite filesystem. After downloading an off-host copy into a new absent
+directory, run `verify-backup` again before using it for a restore rehearsal.
+
+The packaged backup is currently a stopped snapshot, so its recovery point is the
+maintenance-window stop time. This release does not claim continuous replication or
+automatic failover.
 
 Rehearse into an absent root and a different origin. This never replaces the live
 installation:

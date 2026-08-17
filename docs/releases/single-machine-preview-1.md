@@ -43,6 +43,8 @@ changed, actively owned, or incompatible databases rather than guessing an upgra
 - The Bun listener defaults to `127.0.0.1`; terminate HTTPS at a reverse proxy. An
   explicit `0.0.0.0` override is for controlled preview or container networking only.
 - There is no high-availability or horizontal-write mode in this release series.
+- Packaged backups are stopped snapshots. Off-host retention is required for host-loss
+  protection; continuous replication and automatic failover are not claimed.
 
 ## Installation and recovery
 
@@ -61,8 +63,10 @@ always creates a new root and never replaces a live installation implicitly.
   upgrade, backup, restored-copy, and HTTPS walkthrough.
 - Outbound email remains installation-specific and must pass provider readiness plus a
   controlled delivery/receipt check before email-dependent workflows are enabled.
-- The Cloudflare Worker/D1/R2/Queues/Cron application composition is not included or
-  deployable as the production application in this preview.
+
+The separate Cloudflare Worker/D1/R2/Queues/Cron application composition is paused
+and is not part of this release series. Cloudflare Tunnel may front the persistent
+single-machine origin; that does not move SQLite or retained files into a Worker.
 
 The hosted browser demo remains a disposable product tour. Its behavior is not a
 storage, authentication, delivery, or recovery guarantee for this installation.

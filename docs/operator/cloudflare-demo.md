@@ -160,19 +160,18 @@ Access protects the deployed hostname at Cloudflare's edge, so the local preview
 no login gate. Do not expose it to an untrusted network. The ordinary `bun run dev`
 path also remains available.
 
-## What production will add
+## What this demo is not
 
-The production Cloudflare deployment is intentionally separate from this demo. Its
-planned shape is a Worker serving the web app and Hono API, with D1 for relational
-state, R2 for files, Queues and Cron Triggers for background work, application auth,
-and an outbound-email adapter. Cloudflare Email Sending is currently a public-beta,
-paid-plan option, so JooEvents keeps email behind a replaceable provider interface.
+The first production JooEvents release is a persistent single-machine Bun + SQLite
+application, not an expanded form of this browser-only Worker. Cloudflare may provide
+DNS, HTTPS, WAF, and Tunnel ingress in front of that origin, but the database and
+application process remain on the persistent host.
 
-Those runtime adapters and the production migration/deployment gate are not complete.
-Do not add production bindings to `wrangler.demo.jsonc`, and do not use this demo with
-real event data. A supported production guide will replace this note when the
-application can verify migrations, auth callbacks, email readiness, backups, and
-restore behavior end to end.
+The separate Worker/D1/R2/Queues/Cron application composition is paused and is not a
+release requirement. Disabled adapter evidence remains in the repository, but it is
+not a supported production deployment. Do not add production bindings to
+`wrangler.demo.jsonc`, and do not use this demo with real event data. Follow
+[Operate JooEvents on one machine](single-machine.md) for the production path.
 
 Cloudflare references:
 
