@@ -3,11 +3,33 @@ import { Database } from 'bun:sqlite';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { canonicalJsonSha256, canonicalJsonText } from '@jooevents/kernel';
+import {
+  canonicalJsonSha256,
+  canonicalJsonText,
+  parseEventId,
+  parseInstant,
+  parseUserId,
+  parseWorkspaceId
+} from '@jooevents/kernel';
+import {
+  captureRegisteredProgramReferences,
+  createProgramReferenceContributorRegistry,
+  planProgramVocabularyMutation
+} from '@jooevents/program';
+import { planSessionMutation } from '@jooevents/session';
 import { openSQLite, type OpenSQLiteResult } from './database';
 import { SQLiteFoundationError } from './foundation-errors';
 import { SQLITE_MIGRATION_MANIFEST } from './migration-manifest';
 import { loadSQLiteFoundationArtifacts, migrateOrValidateSQLite } from './migration-runner';
+import {
+  createSQLiteProgramVocabularyContributorAdapterRegistry,
+  SQLiteProgramVocabularyRepository
+} from './program-vocabulary';
+import {
+  SESSION_PROGRAM_VOCABULARY_CONTRIBUTOR,
+  SQLiteSessionRepository,
+  createSQLiteSessionProgramReferenceAdapter
+} from './session';
 
 const temporaryDirectories: string[] = [];
 const opened: OpenSQLiteResult[] = [];
@@ -75,6 +97,146 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
       checksum_sha256: migration.checksumSha256
     })));
     expect(database.sqlite.query('PRAGMA foreign_key_check').all()).toEqual([]);
+  });
+
+  test('upgrades sequence 7 Sessions into independently versioned format and track slots', () => {
+    const path = temporaryDatabasePath();
+    let schemaPass = 0;
+    const held = new Database(path, { create: true, strict: true });
+    held.exec('PRAGMA foreign_keys = ON;');
+    expectFoundationError(() => migrateOrValidateSQLite({
+      database: held,
+      artifacts: loadSQLiteFoundationArtifacts(),
+      policy: 'apply',
+      databaseClass: 'retained_development',
+      isMemory: false,
+      fault(point) {
+        if (point === 'after_schema_before_receipt' && (schemaPass += 1) === 8) {
+          throw new Error('hold_before_e2_0008_receipt');
+        }
+      }
+    }), 'migration_transaction_failed');
+    held.close();
+
+    const workspaceId = parseWorkspaceId('019c1df7-86b5-769b-bba4-600000000001');
+    const eventId = parseEventId('019c1df7-86b5-769b-bba4-600000000002');
+    const userId = parseUserId('019c1df7-86b5-769b-bba4-600000000003');
+    const formatId = '019c1df7-86b5-769b-bba4-600000000004';
+    const trackId = '019c1df7-86b5-769b-bba4-600000000005';
+    const sessionId = '019c1df7-86b5-769b-bba4-600000000006';
+    const now = parseInstant('2026-08-18T01:00:00.000Z');
+    const seed = new Database(path, { create: false, strict: true });
+    seed.exec('PRAGMA foreign_keys = ON; BEGIN IMMEDIATE;');
+    seed.query(`INSERT INTO workspaces (id,name,state,created_at,updated_at,version)
+      VALUES (?,'Sequence 7 workspace','active',0,0,1)`).run(workspaceId);
+    seed.query(`INSERT INTO users (id,status,display_name,created_at,updated_at,version)
+      VALUES (?,'active','Sequence 7 owner',0,0,1)`).run(userId);
+    seed.query(`INSERT INTO event_spine_workspace_sets (workspace_id,version,current_event_id)
+      VALUES (?,1,NULL)`).run(workspaceId);
+    seed.query(`INSERT INTO event_spine_heads (
+      workspace_id,id,name,timezone,start_date,end_date,version,created_by_user_id,
+      created_at_ms,create_plan_digest_sha256
+    ) VALUES (? ,? ,'Retained event','UTC','2026-09-01','2026-09-02',1,?,?,?)`)
+      .run(workspaceId, eventId, userId, Date.parse(now), 'a'.repeat(64));
+    seed.query(`INSERT INTO event_spine_scope_roots (workspace_id,event_id) VALUES (?,?)`)
+      .run(workspaceId, eventId);
+    seed.query(`UPDATE event_spine_workspace_sets SET version = 2,current_event_id = ?
+      WHERE workspace_id = ?`).run(eventId, workspaceId);
+    seed.exec('COMMIT;');
+
+    const emptyReferences = createProgramReferenceContributorRegistry({ expected: [], contributors: [] });
+    const emptyAdapters = createSQLiteProgramVocabularyContributorAdapterRegistry({
+      sqlite: seed, expected: [], adapters: []
+    });
+    const vocabulary = new SQLiteProgramVocabularyRepository(
+      seed,
+      emptyReferences,
+      emptyAdapters,
+      () => ({ actorUserId: userId, occurredAt: now })
+    );
+    for (const item of [
+      { kind: 'format' as const, id: formatId, name: 'Talk' },
+      { kind: 'track' as const, id: trackId, name: 'Platform' }
+    ]) {
+      const state = vocabulary.readVocabulary({ workspaceId, eventId })!;
+      const plan = planProgramVocabularyMutation({
+        state,
+        referenceRegistry: emptyReferences,
+        referenceSource: vocabulary,
+        authorInput: item.kind === 'format'
+          ? {
+              action: 'create', scope: { workspaceId, eventId },
+              expectedSetVersion: state.setVersion, item
+            }
+          : {
+              action: 'create', scope: { workspaceId, eventId },
+              expectedSetVersion: state.setVersion, item
+            }
+      });
+      seed.exec('BEGIN IMMEDIATE;');
+      vocabulary.applyVocabularyPlan(plan);
+      seed.exec('COMMIT;');
+    }
+    const sessions = new SQLiteSessionRepository(seed, vocabulary);
+    const catalog = sessions.readSessionCatalog({ workspaceId, eventId })!;
+    const createSession = planSessionMutation({
+      catalog,
+      vocabulary: sessions.readSessionVocabulary({ workspaceId, eventId })!,
+      planningInput: {
+        action: 'create', scope: { workspaceId, eventId }, sessionId,
+        actorUserId: userId, occurredAt: now,
+        expectedCatalogVersion: catalog.version,
+        expectedCatalogDigestSha256: catalog.digestSha256,
+        title: 'Retained Session', plannedDurationMinutes: 45,
+        lifecycle: 'collecting', formatId, trackId
+      }
+    });
+    seed.exec('BEGIN IMMEDIATE;');
+    sessions.applySessionPlan(createSession);
+    seed.exec('COMMIT;');
+    expect(seed.query<{ count: number }, []>(`
+      SELECT count(*) AS count FROM sqlite_schema
+       WHERE type = 'table' AND name = 'session_program_reference_slots'
+    `).get()).toEqual({ count: 0 });
+    seed.close();
+
+    const upgraded = openSQLite(path, { migrationPolicy: 'apply' });
+    opened.push(upgraded);
+    expect(upgraded.migration).toMatchObject({
+      status: 'applied',
+      migrationId: 'e2_0008_session_program_references',
+      coordinate: { schemaEpoch: 2, sequence: 8 }
+    });
+    expect(upgraded.sqlite.query<{ slot_kind: string; item_id: string; version: number }, []>(`
+      SELECT slot_kind,item_id,version FROM session_program_reference_slots
+       WHERE workspace_id = '${workspaceId}' AND event_id = '${eventId}' AND session_id = '${sessionId}'
+       ORDER BY slot_kind
+    `).all()).toEqual([
+      { slot_kind: 'format', item_id: formatId, version: 1 },
+      { slot_kind: 'track', item_id: trackId, version: 1 }
+    ]);
+    const registry = createProgramReferenceContributorRegistry({
+      expected: [SESSION_PROGRAM_VOCABULARY_CONTRIBUTOR],
+      contributors: [SESSION_PROGRAM_VOCABULARY_CONTRIBUTOR]
+    });
+    const adapters = createSQLiteProgramVocabularyContributorAdapterRegistry({
+      sqlite: upgraded.sqlite,
+      expected: [SESSION_PROGRAM_VOCABULARY_CONTRIBUTOR],
+      adapters: [createSQLiteSessionProgramReferenceAdapter({ sqlite: upgraded.sqlite })]
+    });
+    const upgradedVocabulary = new SQLiteProgramVocabularyRepository(
+      upgraded.sqlite,
+      registry,
+      adapters,
+      () => ({ actorUserId: userId, occurredAt: now })
+    );
+    expect(captureRegisteredProgramReferences({
+      registry,
+      scope: upgradedVocabulary.readVocabulary({ workspaceId, eventId })!.scope,
+      source: upgradedVocabulary
+    }).contributors[0]?.references).toHaveLength(2);
+    expect(upgraded.sqlite.query<Record<string, unknown>, []>('PRAGMA foreign_key_check').all())
+      .toEqual([]);
   });
 
   test('file creation requires a class and a replay remains one receipt', () => {
@@ -197,8 +359,8 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
     const migrated = openSQLite(path, { migrationPolicy: 'apply' });
     opened.push(migrated);
     expect(migrated.migration).toMatchObject({
-      status: 'applied', migrationId: 'e2_0007_accelevents_export',
-      coordinate: { schemaEpoch: 2, sequence: 7 }
+      status: 'applied', migrationId: 'e2_0008_session_program_references',
+      coordinate: { schemaEpoch: 2, sequence: 8 }
     });
     expect(migrated.sqlite.query<{ readonly expires_at_ms: number | null }, [string]>(
       'SELECT expires_at_ms FROM api_keys WHERE api_key_id = ?'

@@ -1,7 +1,20 @@
 import type { Database } from 'bun:sqlite';
 import type { SessionHeadDto, SessionMutationPlanDto, SessionMutationResult, SessionRemoveNewPlanDto, SessionRestorePlanDto } from '@jooevents/contracts/sessions';
-import { canonicalJsonText } from '@jooevents/kernel';
-import type { SQLiteProgramVocabularyRepository } from './program-vocabulary';
+import { canonicalJsonSha256, canonicalJsonText, parseAggregateVersion, parseInstant, parseUserId } from '@jooevents/kernel';
+import {
+  ProgramVocabularyPlanningError,
+  programVocabularySetDigest,
+  resolveProgramVocabularyItem,
+  type ProgramReferenceContributionPlan,
+  type ProgramReferenceContributorSnapshot,
+  type ProgramVocabularyState
+} from '@jooevents/program';
+import type {
+  ProgramVocabularyMutationAttribution,
+  SQLiteProgramVocabularyContributorAdapter,
+  SQLiteProgramVocabularyContributorResolution,
+  SQLiteProgramVocabularyRepository
+} from './program-vocabulary';
 import {
   applySessionMutationPlan,
   applyNewSessionRemovalPlan,
@@ -10,11 +23,18 @@ import {
   parseSessionCatalog,
   parseSessionHead,
   parseSessionScope,
+  sessionCatalogDigest,
+  sessionHeadDigest,
   type SessionCatalog,
   type SessionGraduationReadPort,
   type SessionTransactionPort,
   type SessionScope
 } from '@jooevents/session';
+
+export const SESSION_PROGRAM_VOCABULARY_CONTRIBUTOR = Object.freeze({
+  key: 'sessions.program-targets',
+  version: 1
+});
 
 /** This schema contributes to the accepted epoch-2 baseline and may also serve isolated fixtures. */
 export const SESSION_SQL = `
@@ -99,6 +119,136 @@ BEGIN
 END;
 `;
 
+/** Additive sequence-8 Session reference lineage, also installed by isolated fixtures. */
+export const SESSION_PROGRAM_REFERENCE_SQL = `CREATE TABLE session_program_reference_slots (
+  workspace_id TEXT NOT NULL CHECK(length(workspace_id) = 36),
+  event_id TEXT NOT NULL CHECK(length(event_id) = 36),
+  session_id TEXT NOT NULL CHECK(length(session_id) = 36),
+  slot_kind TEXT NOT NULL CHECK(slot_kind IN ('format', 'track')),
+  item_id TEXT NOT NULL CHECK(length(item_id) = 36),
+  version INTEGER NOT NULL CHECK(version > 0),
+  PRIMARY KEY (workspace_id, event_id, session_id, slot_kind),
+  FOREIGN KEY (workspace_id, event_id, session_id)
+    REFERENCES sessions(workspace_id, event_id, id)
+    ON UPDATE RESTRICT ON DELETE CASCADE
+) STRICT, WITHOUT ROWID;
+
+CREATE INDEX session_program_reference_slots_item
+  ON session_program_reference_slots(workspace_id, event_id, slot_kind, item_id, session_id);
+
+INSERT INTO session_program_reference_slots
+  (workspace_id, event_id, session_id, slot_kind, item_id, version)
+SELECT workspace_id, event_id, id, 'format', format_id, 1
+  FROM sessions
+ ORDER BY workspace_id, event_id, id;
+
+INSERT INTO session_program_reference_slots
+  (workspace_id, event_id, session_id, slot_kind, item_id, version)
+SELECT workspace_id, event_id, id, 'track', track_id, 1
+  FROM sessions
+ WHERE track_id IS NOT NULL
+ ORDER BY workspace_id, event_id, id;
+
+CREATE TRIGGER session_program_reference_slots_identity_immutable
+BEFORE UPDATE OF workspace_id, event_id, session_id, slot_kind
+  ON session_program_reference_slots
+BEGIN
+  SELECT RAISE(ABORT, 'session program reference slot identity is immutable');
+END;
+
+CREATE TRIGGER session_program_reference_slots_version_monotonic
+BEFORE UPDATE ON session_program_reference_slots
+WHEN NEW.version <> OLD.version + 1
+BEGIN
+  SELECT RAISE(ABORT, 'session program reference slot versions advance by one');
+END;
+
+CREATE TRIGGER session_program_reference_slots_insert_matches_head
+BEFORE INSERT ON session_program_reference_slots
+WHEN NOT EXISTS (
+  SELECT 1 FROM sessions s
+   WHERE s.workspace_id = NEW.workspace_id AND s.event_id = NEW.event_id
+     AND s.id = NEW.session_id
+     AND ((NEW.slot_kind = 'format' AND s.format_id = NEW.item_id)
+       OR (NEW.slot_kind = 'track' AND s.track_id = NEW.item_id))
+)
+BEGIN
+  SELECT RAISE(ABORT, 'session program reference slot must match its head');
+END;
+
+CREATE TRIGGER session_program_reference_slots_update_matches_head
+BEFORE UPDATE OF item_id ON session_program_reference_slots
+WHEN NOT EXISTS (
+  SELECT 1 FROM sessions s
+   WHERE s.workspace_id = NEW.workspace_id AND s.event_id = NEW.event_id
+     AND s.id = NEW.session_id
+     AND ((NEW.slot_kind = 'format' AND s.format_id = NEW.item_id)
+       OR (NEW.slot_kind = 'track' AND s.track_id = NEW.item_id))
+)
+BEGIN
+  SELECT RAISE(ABORT, 'session program reference slot must match its head');
+END;
+
+CREATE TRIGGER session_program_reference_slots_delete_follows_head
+BEFORE DELETE ON session_program_reference_slots
+WHEN EXISTS (
+  SELECT 1 FROM sessions s
+   WHERE s.workspace_id = OLD.workspace_id AND s.event_id = OLD.event_id
+     AND s.id = OLD.session_id
+     AND ((OLD.slot_kind = 'format' AND s.format_id = OLD.item_id)
+       OR (OLD.slot_kind = 'track' AND s.track_id = OLD.item_id))
+)
+BEGIN
+  SELECT RAISE(ABORT, 'current session program reference slot cannot be deleted');
+END;
+
+CREATE TRIGGER sessions_program_reference_slots_after_insert
+AFTER INSERT ON sessions
+BEGIN
+  INSERT INTO session_program_reference_slots
+    (workspace_id, event_id, session_id, slot_kind, item_id, version)
+  VALUES (NEW.workspace_id, NEW.event_id, NEW.id, 'format', NEW.format_id, 1);
+  INSERT INTO session_program_reference_slots
+    (workspace_id, event_id, session_id, slot_kind, item_id, version)
+  SELECT NEW.workspace_id, NEW.event_id, NEW.id, 'track', NEW.track_id, 1
+   WHERE NEW.track_id IS NOT NULL;
+END;
+
+CREATE TRIGGER sessions_program_reference_format_after_update
+AFTER UPDATE OF format_id ON sessions
+WHEN NEW.format_id <> OLD.format_id
+BEGIN
+  UPDATE session_program_reference_slots
+     SET item_id = NEW.format_id, version = version + 1
+   WHERE workspace_id = NEW.workspace_id AND event_id = NEW.event_id
+     AND session_id = NEW.id AND slot_kind = 'format' AND item_id = OLD.format_id;
+  SELECT CASE WHEN changes() <> 1
+    THEN RAISE(ABORT, 'session format reference slot is corrupt') END;
+END;
+
+CREATE TRIGGER sessions_program_reference_track_after_update
+AFTER UPDATE OF track_id ON sessions
+WHEN NEW.track_id IS NOT OLD.track_id
+BEGIN
+  DELETE FROM session_program_reference_slots
+   WHERE workspace_id = NEW.workspace_id AND event_id = NEW.event_id
+     AND session_id = NEW.id AND slot_kind = 'track' AND NEW.track_id IS NULL;
+  SELECT CASE WHEN NEW.track_id IS NULL AND changes() <> 1
+    THEN RAISE(ABORT, 'session track reference slot is corrupt') END;
+  UPDATE session_program_reference_slots
+     SET item_id = NEW.track_id, version = version + 1
+   WHERE workspace_id = NEW.workspace_id AND event_id = NEW.event_id
+     AND session_id = NEW.id AND slot_kind = 'track'
+     AND OLD.track_id IS NOT NULL AND NEW.track_id IS NOT NULL;
+  SELECT CASE WHEN OLD.track_id IS NOT NULL AND NEW.track_id IS NOT NULL AND changes() <> 1
+    THEN RAISE(ABORT, 'session track reference slot is corrupt') END;
+  INSERT INTO session_program_reference_slots
+    (workspace_id, event_id, session_id, slot_kind, item_id, version)
+  SELECT NEW.workspace_id, NEW.event_id, NEW.id, 'track', NEW.track_id, 1
+   WHERE OLD.track_id IS NULL AND NEW.track_id IS NOT NULL;
+END;
+`;
+
 export type SQLiteSessionErrorCode =
   | 'transaction_required'
   | 'scope_corrupt'
@@ -122,6 +272,7 @@ export function installSessionSchema(sqlite: Database): void {
   if (sqlite.inTransaction) throw new SQLiteSessionError('transaction_required');
   sqlite.exec('PRAGMA foreign_keys = ON;');
   sqlite.exec(SESSION_SQL);
+  sqlite.exec(SESSION_PROGRAM_REFERENCE_SQL);
 }
 
 export class SQLiteSessionRepository implements SessionTransactionPort, SessionGraduationReadPort {
@@ -305,6 +456,297 @@ export class SQLiteSessionRepository implements SessionTransactionPort, SessionG
   }
 }
 
+interface ProgramReferenceSlotRow {
+  readonly workspace_id: string;
+  readonly event_id: string;
+  readonly session_id: string;
+  readonly slot_kind: 'format' | 'track';
+  readonly item_id: string;
+  readonly version: number;
+}
+
+/** Adapts current Session format/track slots into the complete Program Vocabulary registry. */
+export function createSQLiteSessionProgramReferenceAdapter(input: {
+  readonly sqlite: Database;
+}): SQLiteProgramVocabularyContributorAdapter {
+  return Object.freeze({
+    contributor: SESSION_PROGRAM_VOCABULARY_CONTRIBUTOR,
+    read(readInput: Parameters<SQLiteProgramVocabularyContributorAdapter['read']>[0]):
+    SQLiteProgramVocabularyContributorResolution {
+      const { sqlite, scope } = readInput;
+      if (sqlite !== input.sqlite) throw new SQLiteSessionError('data_corrupt');
+      return readSessionProgramReferenceSnapshot(sqlite, scope);
+    },
+    applyRepoints(applyInput: Parameters<SQLiteProgramVocabularyContributorAdapter['applyRepoints']>[0]): void {
+      const { sqlite, scope, contribution, attribution, beforeVocabulary, afterVocabulary } = applyInput;
+      if (sqlite !== input.sqlite || !sqlite.inTransaction) {
+        throw new SQLiteSessionError(sqlite.inTransaction ? 'data_corrupt' : 'transaction_required');
+      }
+      const sessionScope = parseSessionScope(scope);
+      if (beforeVocabulary.scope.workspaceId !== sessionScope.workspaceId
+          || beforeVocabulary.scope.eventId !== sessionScope.eventId
+          || afterVocabulary.scope.workspaceId !== sessionScope.workspaceId
+          || afterVocabulary.scope.eventId !== sessionScope.eventId
+          || afterVocabulary.setVersion !== beforeVocabulary.setVersion + 1
+          || contribution.contributor.key !== SESSION_PROGRAM_VOCABULARY_CONTRIBUTOR.key
+          || contribution.contributor.version !== SESSION_PROGRAM_VOCABULARY_CONTRIBUTOR.version
+          || contribution.historicalPins.length !== 0) {
+        throw new ProgramVocabularyPlanningError('stale_reference');
+      }
+      const current = readSessionProgramReferenceSnapshot(sqlite, beforeVocabulary.scope);
+      if (current.kind !== 'available') throw new ProgramVocabularyPlanningError('stale_reference');
+      const snapshot = current.snapshot as ProgramReferenceContributorSnapshot;
+      if (snapshot.guard.id !== contribution.guard.id
+          || snapshot.guard.version !== contribution.guard.version
+          || snapshot.guard.digest !== contribution.guard.digest) {
+        throw new ProgramVocabularyPlanningError('stale_reference');
+      }
+      if (contribution.liveRepoints.length === 0) return;
+
+      const catalog = readValidatedSessionCatalog(sqlite, sessionScope);
+      if (!catalog || catalog.version !== contribution.guard.version) {
+        throw new ProgramVocabularyPlanningError('stale_reference');
+      }
+      const references = new Map(snapshot.references.map((reference) => [reference.referenceKey, reference]));
+      const repointsBySession = new Map<string, ProgramReferenceContributionPlan['liveRepoints'][number]>();
+      for (const repoint of contribution.liveRepoints) {
+        const currentReference = references.get(repoint.referenceKey);
+        const [sessionId, slotKind] = parseSessionReferenceDestination(repoint.destination.id);
+        if (!currentReference || currentReference.mode !== 'current'
+            || currentReference.version !== repoint.expectedVersion
+            || currentReference.item.kind !== repoint.from.kind
+            || currentReference.item.id !== repoint.from.id
+            || repoint.to.kind !== repoint.from.kind
+            || (repoint.to.kind !== 'format' && repoint.to.kind !== 'track')
+            || currentReference.destination.kind !== 'session.head'
+            || currentReference.destination.id !== repoint.destination.id
+            || slotKind !== repoint.from.kind
+            || repointsBySession.has(sessionId)) {
+          throw new ProgramVocabularyPlanningError('stale_reference');
+        }
+        repointsBySession.set(sessionId, repoint);
+      }
+
+      const actorUserId = parseUserId(attribution.actorUserId);
+      const occurredAt = parseInstant(attribution.occurredAt);
+      const occurredAtMs = Date.parse(occurredAt);
+      const nextHeads = catalog.sessions.map((head) => {
+        const repoint = repointsBySession.get(head.id);
+        if (!repoint) return head;
+        repointsBySession.delete(head.id);
+        const currentId = repoint.from.kind === 'format'
+          ? head.programTarget.format.id
+          : head.programTarget.track?.id;
+        if (currentId !== repoint.from.id) throw new ProgramVocabularyPlanningError('stale_reference');
+        const target = resolveSessionProgramTarget(
+          afterVocabulary,
+          repoint.from.kind === 'format' ? repoint.to.id : head.programTarget.format.id,
+          repoint.from.kind === 'track' ? repoint.to.id : head.programTarget.track?.id ?? null
+        );
+        const { digestSha256: _digest, ...unsignedBefore } = head;
+        const unsigned = {
+          ...unsignedBefore,
+          programTarget: target,
+          version: head.version + 1,
+          updatedByUserId: actorUserId,
+          updatedAt: occurredAt
+        };
+        const after = parseSessionHead({ ...unsigned, digestSha256: sessionHeadDigest(unsigned) });
+        updateRepointedSessionHead(sqlite, head, after);
+        return after;
+      });
+      if (repointsBySession.size !== 0) throw new ProgramVocabularyPlanningError('stale_reference');
+      const unsignedCatalog = {
+        schemaVersion: 1 as const,
+        scope: catalog.scope,
+        version: catalog.version + 1,
+        sessions: nextHeads
+      };
+      const nextCatalog = parseSessionCatalog({
+        ...unsignedCatalog,
+        digestSha256: sessionCatalogDigest(unsignedCatalog)
+      });
+      changedExactlyOnce(sqlite.query<never, [number, string, string, string, number, string]>(`
+        UPDATE session_catalogs SET version = ?, digest_sha256 = ?
+         WHERE workspace_id = ? AND event_id = ? AND version = ? AND digest_sha256 = ?
+      `).run(
+        nextCatalog.version,
+        nextCatalog.digestSha256,
+        sessionScope.workspaceId,
+        sessionScope.eventId,
+        catalog.version,
+        catalog.digestSha256
+      ), 'stale_catalog');
+    }
+  });
+}
+
+function readSessionProgramReferenceSnapshot(
+  sqlite: Database,
+  scopeInput: ProgramVocabularyState['scope']
+): SQLiteProgramVocabularyContributorResolution {
+  const scope = parseSessionScope(scopeInput);
+  const rootCount = sqlite.query<CountRow, [string, string]>(`
+    SELECT count(*) AS count FROM event_spine_scope_roots
+     WHERE workspace_id = ? AND event_id = ?
+  `).get(scope.workspaceId, scope.eventId)?.count ?? 0;
+  if (rootCount === 0) return { kind: 'missing' };
+  if (rootCount !== 1) throw new SQLiteSessionError('scope_corrupt');
+  const catalog = readValidatedSessionCatalog(sqlite, scope);
+  if (!catalog) throw new SQLiteSessionError('data_corrupt');
+  const slots = sqlite.query<ProgramReferenceSlotRow, [string, string]>(`
+    SELECT workspace_id,event_id,session_id,slot_kind,item_id,version
+      FROM session_program_reference_slots
+     WHERE workspace_id = ? AND event_id = ?
+     ORDER BY session_id COLLATE BINARY,slot_kind COLLATE BINARY
+  `).all(scope.workspaceId, scope.eventId);
+  const expected = new Map<string, { readonly itemId: string; readonly kind: 'format' | 'track' }>();
+  for (const head of catalog.sessions) {
+    expected.set(sessionReferenceKey(head.id, 'format'), {
+      itemId: head.programTarget.format.id,
+      kind: 'format'
+    });
+    if (head.programTarget.track) {
+      expected.set(sessionReferenceKey(head.id, 'track'), {
+        itemId: head.programTarget.track.id,
+        kind: 'track'
+      });
+    }
+  }
+  const references = slots.map((slot) => {
+    const key = sessionReferenceKey(slot.session_id, slot.slot_kind);
+    const expectedSlot = expected.get(key);
+    if (!expectedSlot || expectedSlot.kind !== slot.slot_kind || expectedSlot.itemId !== slot.item_id
+        || slot.workspace_id !== scope.workspaceId || slot.event_id !== scope.eventId) {
+      throw new SQLiteSessionError('data_corrupt');
+    }
+    expected.delete(key);
+    return {
+      referenceKey: key,
+      version: parseAggregateVersion(slot.version),
+      item: { kind: slot.slot_kind, id: slot.item_id },
+      mode: 'current' as const,
+      destination: { kind: 'session.head', id: sessionReferenceDestination(slot.session_id, slot.slot_kind) }
+    };
+  });
+  if (expected.size !== 0) throw new SQLiteSessionError('data_corrupt');
+  const guardVersion = parseAggregateVersion(catalog.version);
+  const contributor = SESSION_PROGRAM_VOCABULARY_CONTRIBUTOR;
+  return {
+    kind: 'available',
+    snapshot: {
+      contributor,
+      scope: scopeInput,
+      guard: {
+        id: 'program_reference:sessions.program-targets',
+        version: guardVersion,
+        digest: canonicalJsonSha256({ contributor, guardVersion, references })
+      },
+      references
+    } satisfies ProgramReferenceContributorSnapshot
+  };
+}
+
+function readValidatedSessionCatalog(sqlite: Database, scope: SessionScope): SessionCatalog | undefined {
+  const catalogRows = sqlite.query<CatalogRow, [string, string]>(`
+    SELECT version,digest_sha256 FROM session_catalogs
+     WHERE workspace_id = ? AND event_id = ? LIMIT 2
+  `).all(scope.workspaceId, scope.eventId);
+  if (catalogRows.length > 1) throw new SQLiteSessionError('data_corrupt');
+  const headRows = sqlite.query<HeadRow, [string, string]>(`
+    SELECT head_json FROM sessions
+     WHERE workspace_id = ? AND event_id = ? ORDER BY id COLLATE BINARY
+  `).all(scope.workspaceId, scope.eventId);
+  const heads = headRows.map((row) => parseSessionHead(JSON.parse(row.head_json)));
+  if (!catalogRows[0]) {
+    if (heads.length > 0) throw new SQLiteSessionError('data_corrupt');
+    return createEmptySessionCatalog(scope);
+  }
+  return parseSessionCatalog({
+    schemaVersion: 1,
+    scope,
+    version: catalogRows[0].version,
+    digestSha256: catalogRows[0].digest_sha256,
+    sessions: heads
+  });
+}
+
+function resolveSessionProgramTarget(
+  vocabulary: ProgramVocabularyState,
+  formatId: string,
+  trackId: string | null
+) {
+  const format = resolveProgramVocabularyItem(vocabulary, 'format', formatId);
+  const track = trackId === null ? null : resolveProgramVocabularyItem(vocabulary, 'track', trackId);
+  if (!format || format.status !== 'active' || (trackId !== null && (!track || track.status !== 'active'))) {
+    throw new ProgramVocabularyPlanningError('stale_reference');
+  }
+  return {
+    setVersion: vocabulary.setVersion,
+    setDigestSha256: programVocabularySetDigest(vocabulary),
+    format: {
+      kind: 'format' as const,
+      id: format.id,
+      name: format.name,
+      status: 'active' as const,
+      version: format.version
+    },
+    track: track ? {
+      kind: 'track' as const,
+      id: track.id,
+      name: track.name,
+      accent: track.accent,
+      status: 'active' as const,
+      version: track.version
+    } : null
+  };
+}
+
+function updateRepointedSessionHead(
+  sqlite: Database,
+  before: SessionHeadDto,
+  after: SessionHeadDto
+): void {
+  changedExactlyOnce(sqlite.query<never, [
+    string, string | null, number, string, string, number, string, string, number,
+    string, string, string, number, string
+  ]>(`
+    UPDATE sessions
+       SET format_id = ?,track_id = ?,program_set_version = ?,program_set_digest_sha256 = ?,
+           head_json = ?,version = ?,digest_sha256 = ?,updated_by_user_id = ?,updated_at_ms = ?
+     WHERE workspace_id = ? AND event_id = ? AND id = ? AND version = ? AND digest_sha256 = ?
+  `).run(
+    after.programTarget.format.id,
+    after.programTarget.track?.id ?? null,
+    after.programTarget.setVersion,
+    after.programTarget.setDigestSha256,
+    canonicalJsonText(after),
+    after.version,
+    after.digestSha256,
+    after.updatedByUserId,
+    Date.parse(after.updatedAt),
+    before.scope.workspaceId,
+    before.scope.eventId,
+    before.id,
+    before.version,
+    before.digestSha256
+  ), 'stale_session');
+}
+
+function sessionReferenceKey(sessionId: string, kind: 'format' | 'track'): string {
+  return `session:${sessionId}:${kind}`;
+}
+
+function sessionReferenceDestination(sessionId: string, kind: 'format' | 'track'): string {
+  return `${sessionId}:${kind}`;
+}
+
+function parseSessionReferenceDestination(value: string): readonly [string, 'format' | 'track'] {
+  const match = /^([0-9a-f-]{36}):(format|track)$/.exec(value);
+  if (!match) throw new ProgramVocabularyPlanningError('stale_reference');
+  return [match[1]!, match[2] as 'format' | 'track'];
+}
+
 function persistedHead(head: SessionHeadDto): readonly [
   string, string, string, string, number, string, string, string | null, number, string,
   number, string, string, string, number, string, string, number, string, number
@@ -320,7 +762,10 @@ function persistedHead(head: SessionHeadDto): readonly [
 }
 
 function changedExactlyOnce(result: { readonly changes: number }, code: SQLiteSessionErrorCode): void {
-  if (result.changes !== 1) throw new SQLiteSessionError(code);
+  // Bun reports rows changed by owned maintenance triggers in this total. Every
+  // caller's predicate is unique, so a positive result still proves the one parent
+  // row matched while zero remains the stale guard.
+  if (result.changes < 1) throw new SQLiteSessionError(code);
 }
 
 function isRestorePlan(

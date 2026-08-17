@@ -70,10 +70,7 @@ function setup() {
   insertEventRoot(sqlite, eventId);
   insertEventRoot(sqlite, otherEventId, false);
 
-  const scheduleAdapter = createSQLiteScheduleRoomReferenceAdapter({
-    sqlite,
-    attribution: () => ({ actorUserId: userId, occurredAt: now })
-  });
+  const scheduleAdapter = createSQLiteScheduleRoomReferenceAdapter({ sqlite });
   const referenceRegistry = createProgramReferenceContributorRegistry({
     expected: [SCHEDULE_PLACEMENT_ROOM_CONTRIBUTOR],
     contributors: [SCHEDULE_PLACEMENT_ROOM_CONTRIBUTOR]

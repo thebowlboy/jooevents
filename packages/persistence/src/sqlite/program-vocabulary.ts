@@ -337,6 +337,8 @@ export interface SQLiteProgramVocabularyContributorAdapter {
     readonly scope: ProgramVocabularyState['scope'];
     readonly contribution: ProgramReferenceContributionPlan;
     readonly attribution: ProgramVocabularyMutationAttribution;
+    readonly beforeVocabulary: ProgramVocabularyState;
+    readonly afterVocabulary: ProgramVocabularyState;
   }): void;
 }
 
@@ -347,6 +349,8 @@ export interface SQLiteProgramVocabularyContributorAdapterRegistry {
     readonly scope: ProgramVocabularyState['scope'];
     readonly contributions: readonly ProgramReferenceContributionPlan[];
     readonly attribution: ProgramVocabularyMutationAttribution;
+    readonly beforeVocabulary: ProgramVocabularyState;
+    readonly afterVocabulary: ProgramVocabularyState;
   }): void;
 }
 
@@ -472,10 +476,12 @@ export function createSQLiteProgramVocabularyContributorAdapterRegistry(input: {
   const registry: SQLiteProgramVocabularyContributorAdapterRegistry = Object.freeze({
     adapters,
     source,
-    applyRepoints({ scope, contributions, attribution }: {
+    applyRepoints({ scope, contributions, attribution, beforeVocabulary, afterVocabulary }: {
       readonly scope: ProgramVocabularyState['scope'];
       readonly contributions: readonly ProgramReferenceContributionPlan[];
       readonly attribution: ProgramVocabularyMutationAttribution;
+      readonly beforeVocabulary: ProgramVocabularyState;
+      readonly afterVocabulary: ProgramVocabularyState;
     }): void {
       if (!input.sqlite.inTransaction) {
         throw new SQLiteProgramVocabularyError('transaction_required');
@@ -497,7 +503,9 @@ export function createSQLiteProgramVocabularyContributorAdapterRegistry(input: {
             sqlite: input.sqlite,
             scope,
             contribution,
-            attribution
+            attribution,
+            beforeVocabulary,
+            afterVocabulary
           });
           if (result instanceof Promise) throw new SQLiteProgramVocabularyError('contributor_failed');
         } catch (error) {
@@ -702,7 +710,9 @@ implements ProgramVocabularyReadPort, ProgramVocabularyTransactionPort {
       this.contributors.applyRepoints({
         scope: state.scope,
         contributions: plan.references,
-        attribution
+        attribution,
+        beforeVocabulary: state,
+        afterVocabulary: nextState
       });
       const afterReferences = captureRegisteredProgramReferences({
         scope: state.scope,

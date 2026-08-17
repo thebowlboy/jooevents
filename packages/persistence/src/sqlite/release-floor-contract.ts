@@ -37,3 +37,16 @@ export const SQLITE_E2_S7_RELEASE_FLOOR: SQLiteReleaseFloor = Object.freeze({
   expectedFullFingerprint: '1c344b308b041b9adafe36aa91e71ce4ea5966b97f31fdca23badce94c24fa27',
   minimumRunnerVersion: 2
 });
+
+/** Current terminal floor; sequences 6 and 7 remain supported predecessors. */
+export const SQLITE_E2_S8_RELEASE_FLOOR: SQLiteReleaseFloor = Object.freeze({
+  releaseFloorId: 'sqlite-e2-s8',
+  terminalMigration: Object.freeze({
+    migrationId: 'e2_0008_session_program_references',
+    schemaEpoch: 2,
+    sequence: 8
+  }),
+  expectedApplicationFingerprint: '74b042329c6ed4a7fc401d93fc3761da56661a7deb9d591a193ccb91c505f43a',
+  expectedFullFingerprint: 'bc09fb4de0633d690b493341e6933702e48ad5e67585e6e0f372d6da53f1393b',
+  minimumRunnerVersion: 2
+});

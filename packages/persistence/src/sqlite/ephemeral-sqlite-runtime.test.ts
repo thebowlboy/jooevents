@@ -194,7 +194,7 @@ describe('ephemeral SQLite runtime', () => {
       select count(*) as count
         from sqlite_schema
        where type in ('table', 'view') and name not like 'sqlite_%'
-    `).get()?.count).toBe(229);
+    `).get()?.count).toBe(230);
     expect(runtime.sqlite.query<{ name: string }, []>(`
       select name
         from sqlite_schema

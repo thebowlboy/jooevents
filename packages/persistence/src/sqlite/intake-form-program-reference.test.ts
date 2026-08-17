@@ -19,6 +19,7 @@ import {
 import {
   captureRegisteredProgramReferences,
   createProgramReferenceContributorRegistry,
+  applyProgramVocabularyPlan,
   applyProgramReferenceRepoints,
   planProgramVocabularyMutation,
   programReferenceUsage,
@@ -265,12 +266,15 @@ describe('SQLite Intake Form Program Vocabulary references', () => {
       });
 
       const expectedReferenceSnapshot = applyProgramReferenceRepoints(before, merge);
+      const beforeVocabulary = h.vocabulary.readVocabulary(scope)!;
       h.sqlite.exec('BEGIN IMMEDIATE;');
       h.referenceAdapter.applyRepoints({
         sqlite: h.sqlite,
-        scope: h.vocabulary.readVocabulary(scope)!.scope,
+        scope: beforeVocabulary.scope,
         contribution: merge.references[0]!,
-        attribution: { actorUserId: userId, occurredAt: mergedAt }
+        attribution: { actorUserId: userId, occurredAt: mergedAt },
+        beforeVocabulary,
+        afterVocabulary: applyProgramVocabularyPlan(beforeVocabulary, merge)
       });
       const directlyAppliedReferenceSnapshot = captureRegisteredProgramReferences({
         registry: h.referenceRegistry, scope, source: h.vocabulary
@@ -604,11 +608,14 @@ describe('SQLite Intake Form Program Vocabulary references', () => {
       const beforeCatalog = h.intake.readFormCatalog(scope);
       const referenceScope = h.vocabulary.readVocabulary(scope)?.scope;
       if (!referenceScope) throw new Error('Vocabulary scope missing.');
+      const beforeVocabulary = h.vocabulary.readVocabulary(scope)!;
       expect(() => transaction(h.sqlite, () => h.referenceAdapter.applyRepoints({
         sqlite: h.sqlite,
         scope: referenceScope,
         contribution: redirected,
-        attribution: { actorUserId: userId, occurredAt: mergedAt }
+        attribution: { actorUserId: userId, occurredAt: mergedAt },
+        beforeVocabulary,
+        afterVocabulary: applyProgramVocabularyPlan(beforeVocabulary, merge)
       }))).toThrow('stale_reference');
       expect(h.intake.readFormHead(scope, formId)).toEqual(beforeHead);
       expect(h.intake.readFormCatalog(scope)).toEqual(beforeCatalog);

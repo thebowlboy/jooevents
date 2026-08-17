@@ -19,6 +19,7 @@ import type {
   SchedulePlacementResult
 } from '@jooevents/contracts';
 import type {
+  ProgramVocabularyMutationAttribution,
   SQLiteProgramVocabularyContributorAdapter,
   SQLiteProgramVocabularyContributorResolution,
   SQLiteProgramVocabularyRepository
@@ -318,7 +319,6 @@ export class SQLiteSchedulePlacementRepository implements SchedulePlacementTrans
 
 export function createSQLiteScheduleRoomReferenceAdapter(input: {
   readonly sqlite: Database;
-  readonly attribution: () => SchedulePlacementMutationAttribution;
 }): SQLiteProgramVocabularyContributorAdapter {
   return Object.freeze({
     contributor: SCHEDULE_PLACEMENT_ROOM_CONTRIBUTOR,
@@ -328,10 +328,11 @@ export function createSQLiteScheduleRoomReferenceAdapter(input: {
     }): SQLiteProgramVocabularyContributorResolution {
       return readScheduleReferenceSnapshot(input.sqlite, scope);
     },
-    applyRepoints({ scope, contribution }: {
+    applyRepoints({ scope, contribution, attribution }: {
       readonly sqlite: Database;
       readonly scope: ProgramVocabularyState['scope'];
       readonly contribution: ProgramReferenceContributionPlan;
+      readonly attribution: ProgramVocabularyMutationAttribution;
     }): void {
       if (!input.sqlite.inTransaction) throw new SQLiteSchedulePlacementError('transaction_required');
       const scheduleScope = parseSchedulePlacementScope(scope);
@@ -350,7 +351,7 @@ export function createSQLiteScheduleRoomReferenceAdapter(input: {
       }
       const byKey = new Map(snapshot.references.map((reference) => [reference.referenceKey, reference]));
       if (contribution.liveRepoints.length === 0) return;
-      const attribution = parseAttribution(input.attribution());
+      const parsedAttribution = parseAttribution(attribution);
       for (const repoint of contribution.liveRepoints) {
         const currentReference = byKey.get(repoint.referenceKey);
         if (!currentReference || currentReference.mode !== 'current'
@@ -369,7 +370,7 @@ export function createSQLiteScheduleRoomReferenceAdapter(input: {
              AND room_id = ? AND version = ? AND id = ?
         `).run(
           repoint.to.id, repoint.expectedVersion + 1,
-          attribution.actorUserId, attribution.occurredAtMs,
+          parsedAttribution.actorUserId, parsedAttribution.occurredAtMs,
           scheduleScope.workspaceId, scheduleScope.eventId, repoint.destination.id,
           repoint.from.id, repoint.expectedVersion, repoint.destination.id
         ), 'stale_reference');
@@ -380,7 +381,7 @@ export function createSQLiteScheduleRoomReferenceAdapter(input: {
          WHERE workspace_id = ? AND event_id = ? AND schedule_version = ?
       `).run(
         contribution.guard.version + 1,
-        attribution.actorUserId, attribution.occurredAtMs,
+        parsedAttribution.actorUserId, parsedAttribution.occurredAtMs,
         scheduleScope.workspaceId, scheduleScope.eventId, contribution.guard.version
       ), 'stale_reference');
     }

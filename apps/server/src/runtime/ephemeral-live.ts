@@ -519,7 +519,11 @@ import {
   SCHEDULE_PLACEMENT_ROOM_CONTRIBUTOR,
   createSQLiteScheduleRoomReferenceAdapter
 } from '@jooevents/persistence/schedule-placement';
-import { SQLiteSessionRepository } from '@jooevents/persistence/session';
+import {
+  SESSION_PROGRAM_VOCABULARY_CONTRIBUTOR,
+  SQLiteSessionRepository,
+  createSQLiteSessionProgramReferenceAdapter
+} from '@jooevents/persistence/session';
 import { SQLiteReviewRepository } from '@jooevents/persistence/review';
 import {
   createSQLiteReviewDirectEffectDomainRegistration
@@ -1753,28 +1757,35 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
     const intakeFormReferenceAdapter =
       createSQLiteIntakeFormProgramVocabularyReferenceAdapter();
     const scheduleRoomReferenceAdapter = createSQLiteScheduleRoomReferenceAdapter({
-      sqlite: database.sqlite,
-      attribution() {
-        throw new TypeError('schedule_room_reference_repoint_requires_session_owner');
-      }
+      sqlite: database.sqlite
+    });
+    const sessionProgramReferenceAdapter = createSQLiteSessionProgramReferenceAdapter({
+      sqlite: database.sqlite
     });
     const referenceRegistry = createProgramReferenceContributorRegistry({
       expected: [
         INTAKE_FORM_PROGRAM_VOCABULARY_CONTRIBUTOR,
-        SCHEDULE_PLACEMENT_ROOM_CONTRIBUTOR
+        SCHEDULE_PLACEMENT_ROOM_CONTRIBUTOR,
+        SESSION_PROGRAM_VOCABULARY_CONTRIBUTOR
       ],
       contributors: [
         INTAKE_FORM_PROGRAM_VOCABULARY_CONTRIBUTOR,
-        SCHEDULE_PLACEMENT_ROOM_CONTRIBUTOR
+        SCHEDULE_PLACEMENT_ROOM_CONTRIBUTOR,
+        SESSION_PROGRAM_VOCABULARY_CONTRIBUTOR
       ]
     });
     const contributorAdapters = createSQLiteProgramVocabularyContributorAdapterRegistry({
       sqlite: database.sqlite,
       expected: [
         INTAKE_FORM_PROGRAM_VOCABULARY_CONTRIBUTOR,
-        SCHEDULE_PLACEMENT_ROOM_CONTRIBUTOR
+        SCHEDULE_PLACEMENT_ROOM_CONTRIBUTOR,
+        SESSION_PROGRAM_VOCABULARY_CONTRIBUTOR
       ],
-      adapters: [intakeFormReferenceAdapter, scheduleRoomReferenceAdapter]
+      adapters: [
+        intakeFormReferenceAdapter,
+        scheduleRoomReferenceAdapter,
+        sessionProgramReferenceAdapter
+      ]
     });
     const vocabularyRead = new SQLiteProgramVocabularyRepository(
       database.sqlite,

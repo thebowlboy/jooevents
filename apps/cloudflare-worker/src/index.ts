@@ -1,4 +1,4 @@
-import { SQLITE_E2_S7_RELEASE_FLOOR } from '@jooevents/persistence/release-floor-contract';
+import { SQLITE_E2_S8_RELEASE_FLOOR } from '@jooevents/persistence/release-floor-contract';
 import {
   CloudflareAuthConfigurationError,
   cloudflareAuthRuntimeEnabled,
@@ -100,7 +100,7 @@ async function healthResponse(environment: CloudflareApplicationEnvironment): Pr
     await environment.FILES.list({ limit: 1 });
     const emailBindingConfigured = typeof environment.EMAIL.send === 'function';
 
-    const floor = SQLITE_E2_S7_RELEASE_FLOOR;
+    const floor = SQLITE_E2_S8_RELEASE_FLOOR;
     const adaptersReady = environment.JOOEVENTS_D1_RELEASE_FLOOR === floor.releaseFloorId
       && terminal?.migration_id === floor.terminalMigration.migrationId
       && terminal.schema_epoch === floor.terminalMigration.schemaEpoch

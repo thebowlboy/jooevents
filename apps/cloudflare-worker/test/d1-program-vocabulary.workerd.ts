@@ -5,6 +5,12 @@ import {
   parseUserId,
   parseWorkspaceId
 } from '@jooevents/kernel';
+import { createProgramVocabularyState } from '@jooevents/program';
+import {
+  applySessionMutationPlan,
+  createEmptySessionCatalog,
+  planSessionMutation
+} from '@jooevents/session';
 import { beforeAll, describe, expect, test } from 'vitest';
 import {
   D1ProgramVocabularyReadError,
@@ -20,7 +26,41 @@ const eventId = parseEventId(uuid(803));
 const roomId = uuid(804);
 const trackId = uuid(805);
 const formatId = uuid(806);
+const sessionId = uuid(808);
 const recordedAtMs = Date.parse('2026-08-18T12:00:00.000Z');
+const occurredAt = '2026-08-18T12:00:00.000Z';
+const scope = { workspaceId, eventId };
+const sessionVocabulary = createProgramVocabularyState({
+  scope,
+  setVersion: 2,
+  tracks: [{ id: trackId, name: 'Engineering', status: 'active', version: 1 }],
+  formats: [{ id: formatId, name: 'Talk', status: 'active', version: 1 }],
+  rooms: [{ id: roomId, name: 'Main Hall', capacity: 500, status: 'active', version: 1 }]
+});
+const emptySessionCatalog = createEmptySessionCatalog(scope);
+const sessionPlan = planSessionMutation({
+  catalog: emptySessionCatalog,
+  vocabulary: sessionVocabulary,
+  planningInput: {
+    action: 'create',
+    scope,
+    sessionId,
+    actorUserId: userId,
+    occurredAt,
+    expectedCatalogVersion: emptySessionCatalog.version,
+    expectedCatalogDigestSha256: emptySessionCatalog.digestSha256,
+    title: 'Program Vocabulary Session',
+    plannedDurationMinutes: 60,
+    lifecycle: 'collecting',
+    formatId,
+    trackId
+  }
+});
+const appliedSession = applySessionMutationPlan({
+  plan: sessionPlan,
+  catalog: emptySessionCatalog,
+  vocabulary: sessionVocabulary
+});
 
 beforeAll(async () => {
   const registryJson = canonicalJsonText({
@@ -73,6 +113,29 @@ beforeAll(async () => {
     env.DB.prepare(`INSERT INTO schedule_placement_sets
       (workspace_id,event_id,schedule_version,updated_by_user_id,updated_at_ms)
       VALUES (?,?,2,?,?)`).bind(workspaceId, eventId, userId, recordedAtMs),
+    env.DB.prepare(`INSERT INTO session_catalogs
+      (workspace_id,event_id,version,digest_sha256) VALUES (?,?,?,?)`)
+      .bind(
+        workspaceId,
+        eventId,
+        appliedSession.catalog.version,
+        appliedSession.catalog.digestSha256
+      ),
+    env.DB.prepare(`INSERT INTO sessions (
+      workspace_id,event_id,id,title,planned_duration_minutes,lifecycle,format_id,track_id,
+      program_set_version,program_set_digest_sha256,roster_version,roster_digest_sha256,
+      roster_json,head_json,version,digest_sha256,created_by_user_id,created_at_ms,
+      updated_by_user_id,updated_at_ms
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
+      workspaceId, eventId, sessionPlan.after.id, sessionPlan.after.title,
+      sessionPlan.after.plannedDurationMinutes, sessionPlan.after.lifecycle,
+      sessionPlan.after.programTarget.format.id, sessionPlan.after.programTarget.track?.id ?? null,
+      sessionPlan.after.programTarget.setVersion, sessionPlan.after.programTarget.setDigestSha256,
+      sessionPlan.after.roster.version, sessionPlan.after.roster.digestSha256,
+      canonicalJsonText(sessionPlan.after.roster), canonicalJsonText(sessionPlan.after),
+      sessionPlan.after.version, sessionPlan.after.digestSha256, sessionPlan.after.createdByUserId,
+      recordedAtMs, sessionPlan.after.updatedByUserId, recordedAtMs
+    ),
     env.DB.prepare(`INSERT INTO schedule_occurrences
       (workspace_id,event_id,id,session_id,room_id,start_at_ms,end_at_ms,version,
        updated_by_user_id,updated_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?)`)
@@ -80,7 +143,7 @@ beforeAll(async () => {
         workspaceId,
         eventId,
         uuid(807),
-        uuid(808),
+        sessionId,
         roomId,
         Date.parse('2027-04-02T09:00:00.000Z'),
         Date.parse('2027-04-02T10:00:00.000Z'),
@@ -92,7 +155,7 @@ beforeAll(async () => {
 });
 
 describe('D1 Program Vocabulary snapshot read source', () => {
-  test('projects current schedule usage into safe deletion eligibility', async () => {
+  test('projects current schedule and Session usage into safe deletion eligibility', async () => {
     const source = createD1ProgramVocabularySnapshotReadSource({
       database: env.DB,
       workspaceId
@@ -115,13 +178,21 @@ describe('D1 Program Vocabulary snapshot read source', () => {
       }],
       tracks: [{
         id: trackId,
-        usage: { current: 0, historicalPins: 0 },
-        deleteEligibility: { kind: 'eligible' }
+        usage: { current: 1, historicalPins: 0 },
+        deleteEligibility: {
+          kind: 'blocked',
+          currentReferences: 1,
+          historicalPins: 0
+        }
       }],
       formats: [{
         id: formatId,
-        usage: { current: 0, historicalPins: 0 },
-        deleteEligibility: { kind: 'eligible' }
+        usage: { current: 1, historicalPins: 0 },
+        deleteEligibility: {
+          kind: 'blocked',
+          currentReferences: 1,
+          historicalPins: 0
+        }
       }]
     });
   });
@@ -154,7 +225,7 @@ describe('D1 Program Vocabulary snapshot read source', () => {
       scheduleVersion: 2,
       occurrences: [{
         id: uuid(807),
-        sessionId: uuid(808),
+        sessionId,
         roomId,
         startAt: '2027-04-02T09:00:00.000Z',
         endAt: '2027-04-02T10:00:00.000Z',

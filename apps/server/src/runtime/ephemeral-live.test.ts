@@ -1288,8 +1288,8 @@ describe('ephemeral live Foundation server composition', () => {
     expect(runtime.database.installedSchemaArtifacts).toEqual([]);
     expect(runtime.database.retainedBaseline).toMatchObject({
       status: 'current',
-      coordinate: { schemaEpoch: 2, sequence: 7 },
-      migrationId: 'e2_0007_accelevents_export',
+      coordinate: { schemaEpoch: 2, sequence: 8 },
+      migrationId: 'e2_0008_session_program_references',
       databaseClass: 'ephemeral'
     });
     expect(runtime.database.sqlite.query<{ readonly name: string }, []>(`

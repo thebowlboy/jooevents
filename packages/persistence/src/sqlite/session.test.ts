@@ -8,8 +8,10 @@ import {
 } from '@jooevents/session';
 import { parseEventId, parseInstant, parseUserId, parseWorkspaceId } from '@jooevents/kernel';
 import {
+  captureRegisteredProgramReferences,
   createProgramReferenceContributorRegistry,
-  planProgramVocabularyMutation
+  planProgramVocabularyMutation,
+  programReferenceUsage
 } from '@jooevents/program';
 import { installEventSpineSchema } from './event-spine';
 import {
@@ -18,7 +20,12 @@ import {
   SQLiteProgramVocabularyRepository
 } from './program-vocabulary';
 import { installSchedulePlacementSchema } from './schedule-placement';
-import { installSessionSchema, SQLiteSessionRepository } from './session';
+import {
+  SESSION_PROGRAM_VOCABULARY_CONTRIBUTOR,
+  SQLiteSessionRepository,
+  createSQLiteSessionProgramReferenceAdapter,
+  installSessionSchema
+} from './session';
 
 const workspaceId = parseWorkspaceId('550e8400-e29b-41d4-a716-446655440000');
 const eventId = parseEventId('019c1df7-86b5-769b-bba4-5f7097bfa101');
@@ -26,6 +33,7 @@ const userId = parseUserId('019c1df7-86b5-769b-bba4-5f7097bfa201');
 const sessionId = '019c1df7-86b5-769b-bba4-5f7097bfa301';
 const formatId = '019c1df7-86b5-769b-bba4-5f7097bfa401';
 const trackId = '019c1df7-86b5-769b-bba4-5f7097bfa402';
+const targetTrackId = '019c1df7-86b5-769b-bba4-5f7097bfa403';
 const now = parseInstant('2026-08-13T08:00:00.000Z');
 const later = parseInstant('2026-08-13T08:05:00.000Z');
 
@@ -73,9 +81,14 @@ function fixture() {
   sqlite.query(`UPDATE event_spine_workspace_sets SET version = 2, current_event_id = ? WHERE workspace_id = ?`)
     .run(eventId, workspaceId);
 
-  const referenceRegistry = createProgramReferenceContributorRegistry({ expected: [], contributors: [] });
+  const referenceRegistry = createProgramReferenceContributorRegistry({
+    expected: [SESSION_PROGRAM_VOCABULARY_CONTRIBUTOR],
+    contributors: [SESSION_PROGRAM_VOCABULARY_CONTRIBUTOR]
+  });
   const adapterRegistry = createSQLiteProgramVocabularyContributorAdapterRegistry({
-    sqlite, expected: [], adapters: []
+    sqlite,
+    expected: [SESSION_PROGRAM_VOCABULARY_CONTRIBUTOR],
+    adapters: [createSQLiteSessionProgramReferenceAdapter({ sqlite })]
   });
   const program = new SQLiteProgramVocabularyRepository(
     sqlite,
@@ -112,7 +125,12 @@ function fixture() {
     program.applyVocabularyPlan(plan);
     sqlite.exec('COMMIT;');
   }
-  return { sqlite, program, sessions: new SQLiteSessionRepository(sqlite, program) };
+  return {
+    sqlite,
+    program,
+    referenceRegistry,
+    sessions: new SQLiteSessionRepository(sqlite, program)
+  };
 }
 
 function createPlan(repository: SQLiteSessionRepository) {
@@ -132,6 +150,83 @@ function createPlan(repository: SQLiteSessionRepository) {
 }
 
 describe('disposable SQLite Session repository', () => {
+  test('contributes independent format and track slots to delete and reviewed merge', () => {
+    const h = fixture();
+    h.sqlite.exec('BEGIN IMMEDIATE;');
+    h.sessions.applySessionPlan(createPlan(h.sessions));
+    h.sqlite.exec('COMMIT;');
+
+    const beforeTarget = h.program.readVocabulary({ workspaceId, eventId })!;
+    expect(() => planProgramVocabularyMutation({
+      state: beforeTarget,
+      referenceRegistry: h.referenceRegistry,
+      referenceSource: h.program,
+      authorInput: {
+        action: 'delete', scope: { workspaceId, eventId }, kind: 'track', id: trackId,
+        expectedSetVersion: beforeTarget.setVersion, expectedItemVersion: 1
+      }
+    })).toThrow('delete_referenced');
+
+    const createTarget = planProgramVocabularyMutation({
+      state: beforeTarget,
+      referenceRegistry: h.referenceRegistry,
+      referenceSource: h.program,
+      authorInput: {
+        action: 'create', scope: { workspaceId, eventId }, expectedSetVersion: beforeTarget.setVersion,
+        item: { kind: 'track', id: targetTrackId, name: 'Infrastructure' }
+      }
+    });
+    h.sqlite.exec('BEGIN IMMEDIATE;');
+    h.program.applyVocabularyPlan(createTarget);
+    h.sqlite.exec('COMMIT;');
+
+    const beforeMerge = h.program.readVocabulary({ workspaceId, eventId })!;
+    const merge = planProgramVocabularyMutation({
+      state: beforeMerge,
+      referenceRegistry: h.referenceRegistry,
+      referenceSource: h.program,
+      authorInput: {
+        action: 'merge', scope: { workspaceId, eventId }, kind: 'track',
+        sourceId: trackId, targetId: targetTrackId,
+        expectedSetVersion: beforeMerge.setVersion,
+        expectedSourceVersion: 1,
+        expectedTargetVersion: 1
+      }
+    });
+    if (merge.action !== 'merge') throw new TypeError('expected_session_track_merge');
+    expect(merge.references[0]?.liveRepoints).toHaveLength(1);
+    h.sqlite.exec('BEGIN IMMEDIATE;');
+    expect(h.program.applyVocabularyPlan(merge)).toMatchObject({ action: 'merge', liveRepoints: 1 });
+    h.sqlite.exec('COMMIT;');
+
+    const catalog = h.sessions.readSessionCatalog({ workspaceId, eventId })!;
+    expect(catalog.version).toBe(3);
+    expect(findSession(catalog, sessionId)?.programTarget).toMatchObject({
+      setVersion: beforeMerge.setVersion + 1,
+      track: { id: targetTrackId, version: 1 }
+    });
+    expect(h.sqlite.query<{ slot_kind: string; item_id: string; version: number }, []>(`
+      SELECT slot_kind,item_id,version FROM session_program_reference_slots
+       ORDER BY slot_kind
+    `).all()).toEqual([
+      { slot_kind: 'format', item_id: formatId, version: 1 },
+      { slot_kind: 'track', item_id: targetTrackId, version: 2 }
+    ]);
+    const references = captureRegisteredProgramReferences({
+      registry: h.referenceRegistry,
+      scope: beforeMerge.scope,
+      source: h.program
+    });
+    expect(programReferenceUsage(references, { kind: 'track', id: trackId })).toEqual({
+      current: 0, historicalPins: 0
+    });
+    expect(programReferenceUsage(references, { kind: 'track', id: targetTrackId })).toEqual({
+      current: 1, historicalPins: 0
+    });
+    expect(h.sqlite.query<Record<string, unknown>, []>('PRAGMA foreign_key_check').all()).toEqual([]);
+    h.sqlite.close();
+  });
+
   test('commits lifecycle state, refuses replay, and applies exact compensation', () => {
     const { sqlite, sessions } = fixture();
     try {

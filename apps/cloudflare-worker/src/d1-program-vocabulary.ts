@@ -16,6 +16,7 @@ import { parseFieldRegistryState, type FieldRegistryState } from '@jooevents/fie
 import { canonicalJsonText, parseEventId, parseWorkspaceId } from '@jooevents/kernel';
 import { parseProgramVocabularyState, type ProgramVocabularyState } from '@jooevents/program';
 import type { ProgramVocabularySnapshotReadSource } from '@jooevents/program-operations';
+import { createD1SessionCatalogReadSource } from './d1-session-catalog';
 
 const MAX_ROWS = 10_000;
 
@@ -45,6 +46,14 @@ interface CurrentReferenceRow {
 interface ScheduleReferenceRow {
   readonly reference_key: unknown;
   readonly item_kind: unknown;
+  readonly item_id: unknown;
+  readonly version: unknown;
+}
+interface SessionReferenceSlotRow {
+  readonly workspace_id: unknown;
+  readonly event_id: unknown;
+  readonly session_id: unknown;
+  readonly slot_kind: unknown;
   readonly item_id: unknown;
   readonly version: unknown;
 }
@@ -532,6 +541,12 @@ export function createD1ProgramVocabularySnapshotReadSource(input: {
             FROM intake_submission_submit_evidence
            WHERE workspace_id = ? AND event_id = ?
            ORDER BY submission_id COLLATE BINARY, evidence_id COLLATE BINARY
+           LIMIT ?`).bind(workspaceId, eventId, MAX_ROWS + 1),
+        session.prepare(`
+          SELECT workspace_id,event_id,session_id,slot_kind,item_id,version
+            FROM session_program_reference_slots
+           WHERE workspace_id = ? AND event_id = ?
+           ORDER BY session_id COLLATE BINARY,slot_kind COLLATE BINARY
            LIMIT ?`).bind(workspaceId, eventId, MAX_ROWS + 1)
       ]);
 
@@ -565,6 +580,14 @@ export function createD1ProgramVocabularySnapshotReadSource(input: {
       const submissionEvidence = await Promise.all(
         boundedRows(results[11] as D1Result<SubmissionEvidenceRow>).map(parseSubmissionEvidence)
       );
+      const sessionReferenceSlots = boundedRows(
+        results[12] as D1Result<SessionReferenceSlotRow>
+      );
+      const sessionCatalog = await createD1SessionCatalogReadSource({
+        database: { withSession: () => session } as unknown as D1Database,
+        workspaceId
+      }).readSessionCatalog({ workspaceId, eventId });
+      if (!sessionCatalog) throw new D1ProgramVocabularyReadError('data_corrupt');
       if (!catalog && formVersions.length > 0) {
         throw new D1ProgramVocabularyReadError('data_corrupt');
       }
@@ -633,6 +656,40 @@ export function createD1ProgramVocabularySnapshotReadSource(input: {
         positiveInteger(row.version);
         addReference(`schedule:${text(row.reference_key)}`, kind,
           programVocabularyIdSchema.parse(row.item_id), 'current');
+      }
+      const expectedSessionSlots = new Map<string, {
+        readonly kind: 'format' | 'track';
+        readonly itemId: string;
+      }>();
+      for (const head of sessionCatalog.sessions) {
+        expectedSessionSlots.set(`${head.id}:format`, {
+          kind: 'format', itemId: head.programTarget.format.id
+        });
+        if (head.programTarget.track) {
+          expectedSessionSlots.set(`${head.id}:track`, {
+            kind: 'track', itemId: head.programTarget.track.id
+          });
+        }
+      }
+      for (const row of sessionReferenceSlots) {
+        if (row.workspace_id !== workspaceId || row.event_id !== eventId
+            || typeof row.session_id !== 'string'
+            || (row.slot_kind !== 'format' && row.slot_kind !== 'track')
+            || typeof row.item_id !== 'string') {
+          throw new D1ProgramVocabularyReadError('data_corrupt');
+        }
+        const key = `${row.session_id}:${row.slot_kind}`;
+        const expected = expectedSessionSlots.get(key);
+        if (!expected || expected.kind !== row.slot_kind || expected.itemId !== row.item_id) {
+          throw new D1ProgramVocabularyReadError('data_corrupt');
+        }
+        expectedSessionSlots.delete(key);
+        positiveInteger(row.version);
+        addReference(`session:${key}`, row.slot_kind,
+          programVocabularyIdSchema.parse(row.item_id), 'current');
+      }
+      if (expectedSessionSlots.size !== 0) {
+        throw new D1ProgramVocabularyReadError('data_corrupt');
       }
       for (const version of formVersions) {
         if (version.targetPin?.kind === 'category') {
