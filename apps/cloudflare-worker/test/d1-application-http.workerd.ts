@@ -58,6 +58,8 @@ beforeAll(async () => {
     env.DB.prepare('INSERT INTO role_permissions (role_id,permission_id) VALUES (?,?)')
       .bind(roleId, 'schedule.read'),
     env.DB.prepare('INSERT INTO role_permissions (role_id,permission_id) VALUES (?,?)')
+      .bind(roleId, 'schedule.manage'),
+    env.DB.prepare('INSERT INTO role_permissions (role_id,permission_id) VALUES (?,?)')
       .bind(roleId, 'program.vocabulary.manage'),
     env.DB.prepare(`INSERT INTO role_assignments
       (id,user_id,role_id,workspace_id,scope_kind,event_id,assigned_by_user_id,
@@ -133,6 +135,7 @@ describe('configured D1 application HTTP slice', () => {
       'program_vocabulary.snapshot.read',
       'schedule.placement.snapshot.read',
       'session.catalog.read',
+      'session.change',
       'task.board.read',
       'task.mutation',
       'template.artifact.change',
@@ -385,9 +388,14 @@ describe('configured D1 application HTTP slice', () => {
     const createdFormat = await mutateVocabulary('create', 'd1-vocabulary-create', {
       kind: 'format', expectedSetVersion: 6, name: 'Workshop'
     });
-    expect(await createdFormat.json()).toMatchObject({
+    const createdFormatBody = await createdFormat.json<{
+      readonly kind: string;
+      readonly data: { readonly affectedIds: readonly string[] };
+    }>();
+    expect(createdFormatBody).toMatchObject({
       kind: 'success', data: { action: 'create', kind: 'format', setVersion: 7 }
     });
+    const workshopFormatId = createdFormatBody.data.affectedIds[0]!;
     const mutatedVocabulary = await handleRequest(
       new Request(`${baseUrl}/api/events/current/program-vocabulary`, { headers }),
       environment()
@@ -448,7 +456,15 @@ describe('configured D1 application HTTP slice', () => {
       environment()
     );
     expect(sessions.status, await sessions.clone().text()).toBe(200);
-    expect(await sessions.json()).toMatchObject({
+    const sessionsBody = await sessions.json<{
+      readonly kind: string;
+      readonly data: {
+        readonly version: number;
+        readonly digestSha256: string;
+        readonly sessions: readonly unknown[];
+      };
+    }>();
+    expect(sessionsBody).toMatchObject({
       kind: 'success',
       data: {
         schemaVersion: 1,
@@ -457,6 +473,208 @@ describe('configured D1 application HTTP slice', () => {
         sessions: []
       }
     });
+    const mutateSession = (key: string, body: unknown) => handleRequest(
+      new Request(`${baseUrl}/api/events/current/sessions`, {
+        method: 'POST',
+        headers: {
+          cookie: headers.cookie,
+          origin: baseUrl,
+          'content-type': 'application/json',
+          'idempotency-key': key
+        },
+        body: JSON.stringify(body)
+      }),
+      environment()
+    );
+    const participantId = uuid(718);
+    const createSessionBody = {
+      action: 'create',
+      expectedCatalogVersion: sessionsBody.data.version,
+      expectedCatalogDigestSha256: sessionsBody.data.digestSha256,
+      title: 'D1 Session lifecycle',
+      plannedDurationMinutes: 45,
+      lifecycle: 'draft',
+      formatId: workshopFormatId,
+      trackId,
+      participants: [{
+        personId: participantId,
+        role: 'speaker',
+        publiclyVisible: true,
+        source: { kind: 'operator', id: 'd1-http-test', version: 1 }
+      }]
+    } as const;
+    const createdSession = await mutateSession('d1-session-create', createSessionBody);
+    expect(createdSession.status, await createdSession.clone().text()).toBe(200);
+    const createdSessionBody = await createdSession.json<{
+      readonly kind: string;
+      readonly data: {
+        readonly catalogVersion: number;
+        readonly session: {
+          readonly id: string;
+          readonly version: number;
+          readonly digestSha256: string;
+        };
+      };
+    }>();
+    expect(createdSessionBody).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'create', catalogVersion: 2,
+        session: { title: 'D1 Session lifecycle', lifecycle: 'draft', version: 1 }
+      }
+    });
+    const sessionCreateReplay = await mutateSession('d1-session-create', createSessionBody);
+    expect(await sessionCreateReplay.json()).toEqual(createdSessionBody);
+    const changedSessionCreate = await mutateSession('d1-session-create', {
+      ...createSessionBody, title: 'Changed replay'
+    });
+    expect(await changedSessionCreate.json()).toMatchObject({
+      kind: 'outcome',
+      outcome: { class: 'idempotency_conflict', kind: 'operation.request_changed' }
+    });
+
+    const catalogAfterCreate = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/sessions`, { headers }), environment()
+    );
+    const catalogAfterCreateBody = await catalogAfterCreate.json<{
+      readonly data: {
+        readonly version: number;
+        readonly digestSha256: string;
+        readonly sessions: readonly {
+          readonly id: string;
+          readonly version: number;
+          readonly digestSha256: string;
+        }[];
+      };
+    }>();
+    const firstSession = catalogAfterCreateBody.data.sessions.find(
+      (session) => session.id === createdSessionBody.data.session.id
+    )!;
+    const transitionedSession = await mutateSession('d1-session-transition', {
+      action: 'transition',
+      expectedCatalogVersion: catalogAfterCreateBody.data.version,
+      expectedCatalogDigestSha256: catalogAfterCreateBody.data.digestSha256,
+      sessionId: firstSession.id,
+      expectedSessionVersion: firstSession.version,
+      expectedSessionDigestSha256: firstSession.digestSha256,
+      to: 'collecting'
+    });
+    const transitionedSessionBody = await transitionedSession.json<{
+      readonly data: {
+        readonly catalogVersion: number;
+        readonly session: { readonly id: string; readonly version: number;
+          readonly digestSha256: string };
+      };
+    }>();
+    expect(transitionedSessionBody).toMatchObject({
+      kind: 'success', data: { action: 'transition', catalogVersion: 3,
+        session: { lifecycle: 'collecting', version: 2 } }
+    });
+    const catalogAfterTransition = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/sessions`, { headers }), environment()
+    );
+    const catalogAfterTransitionBody = await catalogAfterTransition.json<{
+      readonly data: { readonly version: number; readonly digestSha256: string };
+    }>();
+    const hiddenParticipant = await mutateSession('d1-session-visibility', {
+      action: 'roster_visibility',
+      expectedCatalogVersion: catalogAfterTransitionBody.data.version,
+      expectedCatalogDigestSha256: catalogAfterTransitionBody.data.digestSha256,
+      sessionId: transitionedSessionBody.data.session.id,
+      expectedSessionVersion: transitionedSessionBody.data.session.version,
+      expectedSessionDigestSha256: transitionedSessionBody.data.session.digestSha256,
+      personId: participantId,
+      publiclyVisible: false
+    });
+    expect(await hiddenParticipant.json()).toMatchObject({
+      kind: 'success', data: { action: 'roster_visibility', catalogVersion: 4,
+        session: { version: 3, roster: { participants: [{ publiclyVisible: false }] } } }
+    });
+
+    const currentCatalog = async () => {
+      const response = await handleRequest(
+        new Request(`${baseUrl}/api/events/current/sessions`, { headers }), environment()
+      );
+      return response.json<{
+        readonly data: {
+          readonly version: number;
+          readonly digestSha256: string;
+          readonly sessions: readonly {
+            readonly id: string;
+            readonly version: number;
+            readonly digestSha256: string;
+          }[];
+        };
+      }>();
+    };
+    const removableCatalog = await currentCatalog();
+    const removableCreate = await mutateSession('d1-session-removable-create', {
+      action: 'create',
+      expectedCatalogVersion: removableCatalog.data.version,
+      expectedCatalogDigestSha256: removableCatalog.data.digestSha256,
+      title: 'Removable Session',
+      plannedDurationMinutes: 30,
+      lifecycle: 'draft',
+      formatId: workshopFormatId,
+      trackId
+    });
+    const removableCreateBody = await removableCreate.json<{
+      readonly data: { readonly session: { readonly id: string; readonly version: 1;
+        readonly digestSha256: string } };
+    }>();
+    const catalogWithRemovable = await currentCatalog();
+    const removedSession = await mutateSession('d1-session-remove', {
+      action: 'remove_new_session',
+      expectedCatalogVersion: catalogWithRemovable.data.version,
+      expectedCatalogDigestSha256: catalogWithRemovable.data.digestSha256,
+      sessionId: removableCreateBody.data.session.id,
+      expectedSessionVersion: 1,
+      expectedSessionDigestSha256: removableCreateBody.data.session.digestSha256
+    });
+    expect(await removedSession.json()).toMatchObject({
+      kind: 'success', data: { action: 'remove_new_session', session: null }
+    });
+
+    const referencedCatalog = await currentCatalog();
+    const referencedCreate = await mutateSession('d1-session-referenced-create', {
+      action: 'create',
+      expectedCatalogVersion: referencedCatalog.data.version,
+      expectedCatalogDigestSha256: referencedCatalog.data.digestSha256,
+      title: 'Referenced Session',
+      plannedDurationMinutes: 30,
+      lifecycle: 'draft',
+      formatId: workshopFormatId,
+      trackId
+    });
+    const referencedCreateBody = await referencedCreate.json<{
+      readonly data: { readonly session: { readonly id: string;
+        readonly digestSha256: string } };
+    }>();
+    await env.DB.prepare(`INSERT INTO schedule_occurrences
+      (workspace_id,event_id,id,session_id,room_id,start_at_ms,end_at_ms,version,
+       updated_by_user_id,updated_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?)`)
+      .bind(
+        workspaceId, eventId, uuid(719), referencedCreateBody.data.session.id, roomId,
+        Date.parse('2027-03-11T09:00:00.000Z'), Date.parse('2027-03-11T09:30:00.000Z'),
+        1, userId, recordedAtMs
+      ).run();
+    const catalogWithReference = await currentCatalog();
+    const refusedRemoval = await mutateSession('d1-session-remove-referenced', {
+      action: 'remove_new_session',
+      expectedCatalogVersion: catalogWithReference.data.version,
+      expectedCatalogDigestSha256: catalogWithReference.data.digestSha256,
+      sessionId: referencedCreateBody.data.session.id,
+      expectedSessionVersion: 1,
+      expectedSessionDigestSha256: referencedCreateBody.data.session.digestSha256
+    });
+    expect(await refusedRemoval.json()).toMatchObject({
+      kind: 'outcome', outcome: { class: 'stale_revision', kind: 'session.changed',
+        detail: { code: 'stale_session', action: 'remove_new_session' } }
+    });
+    const sessionOperationCount = await env.DB.prepare(`SELECT count(*) AS count
+      FROM operation_log WHERE workspace_id = ? AND operation_name = 'session.change'`)
+      .bind(workspaceId).first<{ readonly count: number }>();
+    expect(sessionOperationCount?.count).toBe(6);
     const asset = {
       schemaVersion: 1, id: assetId, scope,
       uploader: { kind: 'operator_user', userId },
@@ -716,7 +934,7 @@ describe('configured D1 application HTTP slice', () => {
     const operationCount = await env.DB.prepare(
       'SELECT count(*) AS count FROM operation_log WHERE workspace_id = ?'
     ).bind(workspaceId).first<{ readonly count: number }>();
-    expect(operationCount?.count).toBe(7);
+    expect(operationCount?.count).toBe(13);
     const logs = await env.DB.prepare('SELECT count(*) AS count FROM operation_log WHERE id = ?')
       .bind(firstBody.receipt.id).first<{ readonly count: number }>();
     expect(logs?.count).toBe(1);
@@ -1365,7 +1583,7 @@ describe('configured D1 application HTTP slice', () => {
       kind: 'exact', total: finalOperationCount?.count
     });
     expect(overviewBody.data.history).toMatchObject({
-      total: finalOperationCount?.count, truncated: false
+      total: finalOperationCount?.count, truncated: true
     });
 
     const eventHistory = await handleRequest(

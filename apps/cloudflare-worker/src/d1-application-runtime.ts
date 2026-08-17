@@ -55,7 +55,10 @@ import {
   createSchedulePlacementOperationModule
 } from '@jooevents/schedule-operations';
 import {
+  SESSION_CHANGE_REQUEST_HASH_PROFILE,
+  SESSION_MANAGE_ACCESS_POLICY,
   SESSION_READ_ACCESS_POLICY,
+  createSessionDirectOperationModule,
   createSessionOperationModule
 } from '@jooevents/session-operations';
 import {
@@ -146,6 +149,7 @@ import {
 } from './d1-program-vocabulary-mutation';
 import { createD1SchedulePlacementReadSource } from './d1-schedule-placement';
 import { createD1SessionCatalogReadSource } from './d1-session-catalog';
+import { createD1SessionDirectEffectDomainRegistration } from './d1-session-mutation';
 import { createD1WorkspaceOverviewReadSource } from './d1-workspace-overview';
 import { createD1WorkspaceShellSummaryReadSource } from './d1-workspace-summary';
 import { createD1WorkspaceTeamReadSource } from './d1-workspace-team';
@@ -282,6 +286,10 @@ const SESSION_OPERATION_KEY_PROFILES = Object.freeze({
   requestCanonicalization: Object.freeze({
     key: 'key-profile.session.request-canonicalization',
     version: parseContractVersion(1)
+  }),
+  idempotencyCredential: Object.freeze({
+    key: 'key-profile.session.idempotency-credential',
+    version: parseContractVersion(1)
   })
 });
 
@@ -343,6 +351,7 @@ export async function createConfiguredD1ApplicationRuntime(
       permissionId: 'program.vocabulary.manage' },
     { policy: SCHEDULE_PLACEMENT_READ_ACCESS_POLICY, permissionId: 'schedule.read' },
     { policy: SESSION_READ_ACCESS_POLICY, permissionId: 'event.read' },
+    { policy: SESSION_MANAGE_ACCESS_POLICY, permissionId: 'schedule.manage' },
     { policy: API_KEY_MANAGE_ACCESS_POLICY, permissionId: 'integration.api.manage' }
   ]);
   const currentAuthority = createD1OperatorCurrentAuthorityResolver({
@@ -726,6 +735,22 @@ export async function createConfiguredD1ApplicationRuntime(
     scopePartitionProfile: SESSION_OPERATION_KEY_PROFILES.scopePartition,
     requestCanonicalizationProfile: SESSION_OPERATION_KEY_PROFILES.requestCanonicalization
   });
+  const sessionDirectOperations = createSessionDirectOperationModule({
+    workspaceId,
+    managePolicy: SESSION_MANAGE_ACCESS_POLICY,
+    currentAuthority,
+    currentEvent: reads,
+    clock,
+    ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+    authorityPrincipalKeyProfile: SESSION_OPERATION_KEY_PROFILES.authorityPrincipal,
+    scopePartitionProfile: SESSION_OPERATION_KEY_PROFILES.scopePartition,
+    requestCanonicalizationProfile: SESSION_OPERATION_KEY_PROFILES.requestCanonicalization,
+    requestHashSealer: cryptoProfiles.requestHashSealer(SESSION_CHANGE_REQUEST_HASH_PROFILE),
+    idempotencyCredentialProfile: SESSION_OPERATION_KEY_PROFILES.idempotencyCredential,
+    idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(
+      SESSION_OPERATION_KEY_PROFILES.idempotencyCredential
+    )
+  });
   const workspaceTeamMutationDomain = cryptoProfiles.withPersistentHmacKeySelection(
     'security.workspace-invitation-lookup',
     (selection) => createD1WorkspaceTeamMutationEffectDomainRegistration({
@@ -768,6 +793,10 @@ export async function createConfiguredD1ApplicationRuntime(
     createD1ProgramVocabularyDirectEffectDomainRegistration({
       workspaceId,
       newVocabularyItemId: () => crypto.randomUUID()
+    }),
+    createD1SessionDirectEffectDomainRegistration({
+      workspaceId,
+      newSessionId: () => crypto.randomUUID()
     }),
     createD1DeadlineDirectEffectDomainRegistration({
       workspaceId,
@@ -833,7 +862,8 @@ export async function createConfiguredD1ApplicationRuntime(
       programVocabularyReadOperations,
       programVocabularyDirectOperations,
       scheduleReadOperations,
-      sessionReadOperations
+      sessionReadOperations,
+      sessionDirectOperations
     ]),
     read: {
       operationalTrace: { emit() {} },
