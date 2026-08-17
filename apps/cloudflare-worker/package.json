@@ -28,6 +28,7 @@
     "@jooevents/template-authoring-operations": "workspace:*",
     "@jooevents/task-operations": "workspace:*",
     "@jooevents/tasks": "workspace:*",
+    "@jooevents/workspace-operations": "workspace:*",
     "better-auth": "1.6.26",
     "drizzle-orm": "0.45.2",
     "hono": "4.13.1",

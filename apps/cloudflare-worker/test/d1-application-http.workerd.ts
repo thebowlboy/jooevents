@@ -115,6 +115,7 @@ describe('configured D1 application HTTP slice', () => {
       'field_registry.remove',
       'field_registry.restore',
       'field_registry.snapshot.read',
+      'operation.history.list',
       'task.board.read',
       'task.mutation',
       'template.artifact.change',
@@ -891,6 +892,50 @@ describe('configured D1 application HTTP slice', () => {
       { operation_name: 'template.artifact.change', count: 2 },
       { operation_name: 'template.artifact.change.draft', count: 2 }
     ]);
+
+    const eventHistory = await handleRequest(
+      new Request(`${baseUrl}/api/workspace/history?view=event&limit=3`, { headers }),
+      environment()
+    );
+    expect(eventHistory.status, await eventHistory.clone().text()).toBe(200);
+    const eventHistoryBody = await eventHistory.json<{
+      readonly kind: string;
+      readonly data: {
+        readonly scope: string;
+        readonly entries: ReadonlyArray<{
+          readonly id: string;
+          readonly operation: { readonly name: string };
+          readonly scope: { readonly eventId?: string };
+        }>;
+        readonly next: { readonly occurredAt: string; readonly id: string };
+      };
+    }>();
+    expect(eventHistoryBody).toMatchObject({ kind: 'success', data: { scope: 'event' } });
+    expect(eventHistoryBody.data.entries).toHaveLength(3);
+    expect(eventHistoryBody.data.entries.every(
+      (entry) => entry.scope.eventId === firstBody.data.event.id
+    )).toBe(true);
+    expect(eventHistoryBody.data.next).toBeDefined();
+    const nextEventHistory = await handleRequest(
+      new Request(`${baseUrl}/api/workspace/history?view=event&limit=100&beforeOccurredAt=${encodeURIComponent(eventHistoryBody.data.next.occurredAt)}&beforeId=${eventHistoryBody.data.next.id}`, { headers }),
+      environment()
+    );
+    expect(nextEventHistory.status, await nextEventHistory.clone().text()).toBe(200);
+    const nextEventHistoryBody = await nextEventHistory.json<{
+      readonly kind: string;
+      readonly data: { readonly entries: readonly { readonly operation: { readonly name: string } }[] };
+    }>();
+    expect(nextEventHistoryBody.data.entries.some(
+      (entry) => entry.operation.name === 'event.create'
+    )).toBe(true);
+    const workspaceHistory = await handleRequest(
+      new Request(`${baseUrl}/api/workspace/history?view=workspace&limit=100`, { headers }),
+      environment()
+    );
+    expect(workspaceHistory.status, await workspaceHistory.clone().text()).toBe(200);
+    expect(await workspaceHistory.json()).toMatchObject({
+      kind: 'success', data: { scope: 'workspace' }
+    });
   });
 
   test('keeps the application slice closed when activation or a durable key duty is incomplete', async () => {

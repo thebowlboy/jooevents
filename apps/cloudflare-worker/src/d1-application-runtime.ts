@@ -46,6 +46,10 @@ import {
   createTemplateArtifactReadOperationModule
 } from '@jooevents/template-authoring-operations';
 import {
+  WORKSPACE_OVERVIEW_READ_ACCESS_POLICY,
+  createOperationHistoryReadOperationModule
+} from '@jooevents/workspace-operations';
+import {
   parseInstant,
   parseInvocationId,
   parseWorkspaceId
@@ -94,6 +98,7 @@ import {
   createD1EffectDomainAdapterRegistry
 } from './d1-effect-unit-of-work';
 import { createD1OperatorCurrentAuthorityResolver } from './d1-operator-authority';
+import { createD1OperationHistoryReadSource } from './d1-operation-history';
 
 export type D1ApplicationRuntimeEnvironment = CloudflareAuthBindings & {
   readonly DB: D1Database;
@@ -119,7 +124,7 @@ function classifiedCommunicationProfile(cryptoProfiles: DurableCryptoProfileComp
   ).encryptionProfile;
 }
 
-/** Builds the authenticated Event, Field Registry, Deadline, Task, and Template slice over D1. */
+/** Builds the authenticated workspace-history and current Event application slice over D1. */
 export async function createConfiguredD1ApplicationRuntime(
   environment: D1ApplicationRuntimeEnvironment
 ) {
@@ -137,7 +142,8 @@ export async function createConfiguredD1ApplicationRuntime(
     { policy: FIELD_REGISTRY_MANAGE_ACCESS_POLICY, permissionId: 'event.manage' },
     { policy: DEADLINE_READ_ACCESS_POLICY, permissionId: 'event.read' },
     { policy: DEADLINE_MANAGE_ACCESS_POLICY, permissionId: 'event.manage' },
-    { policy: TASK_MANAGE_ACCESS_POLICY, permissionId: 'event.manage' }
+    { policy: TASK_MANAGE_ACCESS_POLICY, permissionId: 'event.manage' },
+    { policy: WORKSPACE_OVERVIEW_READ_ACCESS_POLICY, permissionId: 'event.read' }
   ]);
   const currentAuthority = createD1OperatorCurrentAuthorityResolver({
     session: environment.DB.withSession('first-primary'),
@@ -153,6 +159,10 @@ export async function createConfiguredD1ApplicationRuntime(
   const deadlines = createD1DeadlineReadSource({ database: environment.DB, workspaceId });
   const tasks = createD1TaskBoardReadSource({ database: environment.DB, workspaceId });
   const templateArtifacts = createD1TemplateArtifactReadSource({
+    database: environment.DB,
+    workspaceId
+  });
+  const operationHistory = createD1OperationHistoryReadSource({
     database: environment.DB,
     workspaceId
   });
@@ -316,6 +326,20 @@ export async function createConfiguredD1ApplicationRuntime(
       TEMPLATE_ARTIFACT_OPERATION_KEY_PROFILES.idempotencyCredential
     )
   });
+  const operationHistoryOperations = createOperationHistoryReadOperationModule({
+    workspaceId,
+    policy: WORKSPACE_OVERVIEW_READ_ACCESS_POLICY,
+    currentAuthority,
+    currentEvent: reads,
+    read: operationHistory,
+    clock,
+    ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+    crypto: Object.freeze({
+      authorityPrincipalKeyProfile: EVENT_OPERATION_KEY_PROFILES.authorityPrincipal,
+      scopePartitionProfile: EVENT_OPERATION_KEY_PROFILES.scopePartition,
+      requestCanonicalizationProfile: EVENT_OPERATION_KEY_PROFILES.requestCanonicalization
+    })
+  });
   const domains = createD1EffectDomainAdapterRegistry([
     createD1EventCreateEffectDomainRegistration({
       workspaceId,
@@ -382,7 +406,8 @@ export async function createConfiguredD1ApplicationRuntime(
       taskBoardOperations,
       taskMutationOperations,
       templateArtifactReadOperations,
-      templateArtifactNativeOperations
+      templateArtifactNativeOperations,
+      operationHistoryOperations
     ]),
     read: {
       operationalTrace: { emit() {} },
