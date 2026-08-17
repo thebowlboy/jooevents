@@ -5,8 +5,15 @@ import {
   type CloudflareAuthBindings
 } from './auth-config';
 import { createConfiguredCloudflareAuthRuntime } from './auth-runtime';
+import {
+  cloudflareApplicationRuntimeEnabled,
+  createConfiguredD1ApplicationRuntime
+} from './d1-application-runtime';
 
-export type CloudflareApplicationEnvironment = Omit<Env, 'JOOEVENTS_AUTH_RUNTIME_ENABLED'>
+export type CloudflareApplicationEnvironment = Omit<
+  Env,
+  'JOOEVENTS_AUTH_RUNTIME_ENABLED' | 'JOOEVENTS_APPLICATION_RUNTIME_ENABLED'
+>
   & CloudflareAuthBindings;
 
 export interface CloudflareWakeMessage {
@@ -112,7 +119,8 @@ async function healthResponse(environment: CloudflareApplicationEnvironment): Pr
         r2: true,
         queues: true,
         cron: true,
-        authActivationRequested: cloudflareAuthRuntimeEnabled(environment)
+        authActivationRequested: cloudflareAuthRuntimeEnabled(environment),
+        applicationActivationRequested: cloudflareApplicationRuntimeEnabled(environment)
       },
       releaseFloor: floor.releaseFloorId,
       environment: environment.JOOEVENTS_DEPLOYMENT_ENVIRONMENT,
@@ -164,6 +172,24 @@ export async function handleRequest(
       }, 503);
     }
   }
+  if (isConfiguredApplicationPath(url.pathname)
+      && cloudflareApplicationRuntimeEnabled(environment)) {
+    try {
+      return await (await createConfiguredD1ApplicationRuntime(environment)).fetch(request);
+    } catch (error) {
+      const correlationId = crypto.randomUUID();
+      console.error(JSON.stringify({
+        event: 'cloudflare.application.configuration_refused',
+        correlationId,
+        errorName: error instanceof Error ? error.name : 'UnknownError'
+      }));
+      return json({
+        code: 'cloudflare_application_configuration_invalid',
+        message: 'The application runtime is not available yet.',
+        correlationId
+      }, 503);
+    }
+  }
   if (isReservedApplicationPath(url.pathname)) {
     return json({
       code: 'cloudflare_application_runtime_not_ready',
@@ -171,6 +197,13 @@ export async function handleRequest(
     }, 503);
   }
   return protectedAssetResponse(await environment.ASSETS.fetch(request));
+}
+
+function isConfiguredApplicationPath(pathname: string): boolean {
+  return pathname === '/api/operations/manifest'
+    || pathname === '/api/events/current'
+    || pathname === '/api/events'
+    || pathname === '/api/events/select';
 }
 
 function isConfiguredAuthPath(pathname: string): boolean {

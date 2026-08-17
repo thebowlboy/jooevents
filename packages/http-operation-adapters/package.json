@@ -1,0 +1,16 @@
+{
+  "name": "@jooevents/http-operation-adapters",
+  "private": true,
+  "version": "0.0.0",
+  "license": "SEE LICENSE IN LICENSE",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "check": "tsc --noEmit", "test": "bun test" },
+  "dependencies": {
+    "@jooevents/application": "workspace:*",
+    "@jooevents/contracts": "workspace:*",
+    "@jooevents/kernel": "workspace:*",
+    "hono": "4.13.1"
+  },
+  "devDependencies": { "bun-types": "1.3.6", "typescript": "6.0.3" }
+}

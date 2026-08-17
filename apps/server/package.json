@@ -32,6 +32,7 @@
     "@jooevents/field-registry": "workspace:*",
     "@jooevents/files": "workspace:*",
     "@jooevents/files-operations": "workspace:*",
+    "@jooevents/http-operation-adapters": "workspace:*",
     "@jooevents/identity-access": "workspace:*",
     "@jooevents/intake": "workspace:*",
     "@jooevents/intake-operations": "workspace:*",

@@ -7,6 +7,10 @@ export interface CloudflareAuthBindings {
   readonly JOOEVENTS_TRUSTED_ORIGINS?: string;
   readonly JOOEVENTS_AUTH_SECRETS?: string;
   readonly JOOEVENTS_PERSISTENT_HMAC_KEYS?: string;
+  readonly JOOEVENTS_REQUEST_HASH_KEYS?: string;
+  readonly JOOEVENTS_IDEMPOTENCY_KEYS?: string;
+  readonly JOOEVENTS_CLASSIFIED_PAYLOAD_KEYS?: string;
+  readonly JOOEVENTS_APPLICATION_RUNTIME_ENABLED?: string;
   readonly JOOEVENTS_GOOGLE_CLIENT_ID?: string;
   readonly JOOEVENTS_GOOGLE_CLIENT_SECRET?: string;
   readonly JOOEVENTS_ADMISSION_MODE?: string;

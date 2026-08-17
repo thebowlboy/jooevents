@@ -54,7 +54,8 @@
   "vars": {
     "JOOEVENTS_DEPLOYMENT_ENVIRONMENT": "local",
     "JOOEVENTS_D1_RELEASE_FLOOR": "sqlite-e2-s6",
-    "JOOEVENTS_AUTH_RUNTIME_ENABLED": "false"
+    "JOOEVENTS_AUTH_RUNTIME_ENABLED": "false",
+    "JOOEVENTS_APPLICATION_RUNTIME_ENABLED": "false"
   },
   "observability": {
     "enabled": true,
@@ -94,7 +95,8 @@
       "vars": {
         "JOOEVENTS_DEPLOYMENT_ENVIRONMENT": "staging",
         "JOOEVENTS_D1_RELEASE_FLOOR": "sqlite-e2-s6",
-        "JOOEVENTS_AUTH_RUNTIME_ENABLED": "false"
+        "JOOEVENTS_AUTH_RUNTIME_ENABLED": "false",
+        "JOOEVENTS_APPLICATION_RUNTIME_ENABLED": "false"
       }
     },
     "production": {
@@ -129,7 +131,8 @@
       "vars": {
         "JOOEVENTS_DEPLOYMENT_ENVIRONMENT": "production",
         "JOOEVENTS_D1_RELEASE_FLOOR": "sqlite-e2-s6",
-        "JOOEVENTS_AUTH_RUNTIME_ENABLED": "false"
+        "JOOEVENTS_AUTH_RUNTIME_ENABLED": "false",
+        "JOOEVENTS_APPLICATION_RUNTIME_ENABLED": "false"
       }
     }
   }

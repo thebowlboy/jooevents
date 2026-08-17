@@ -174,6 +174,7 @@ import {
 } from '@jooevents/event';
 import {
   EVENT_CREATE_REQUEST_HASH_PROFILE,
+  EVENT_OPERATION_KEY_PROFILES,
   EVENT_SELECT_REQUEST_HASH_PROFILE,
   EVENT_MANAGE_ACCESS_POLICY,
   EVENT_READ_ACCESS_POLICY,
@@ -620,24 +621,7 @@ import { createWorkspaceSenderIdentityComposition } from './communication-sender
 import { createSQLiteOperatorAuthorityComposition } from './operator-authority';
 import type { DurableCryptoProfileComposition } from './durable-crypto-profiles';
 
-const eventProfiles = Object.freeze({
-  authorityPrincipal: Object.freeze({
-    key: 'key-profile.event.operator-principal',
-    version: parseContractVersion(1)
-  }),
-  scopePartition: Object.freeze({
-    key: 'key-profile.event.workspace-scope',
-    version: parseContractVersion(1)
-  }),
-  requestCanonicalization: Object.freeze({
-    key: 'key-profile.event.request-canonicalization',
-    version: parseContractVersion(1)
-  }),
-  idempotencyCredential: Object.freeze({
-    key: 'key-profile.event.idempotency-credential',
-    version: parseContractVersion(1)
-  })
-});
+const eventProfiles = EVENT_OPERATION_KEY_PROFILES;
 
 const templateArtifactProfiles = Object.freeze({
   authorityPrincipal: Object.freeze({
