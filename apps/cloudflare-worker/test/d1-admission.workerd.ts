@@ -1,6 +1,11 @@
 import { env } from 'cloudflare:workers';
-import { createProvisioningService } from '@jooevents/application';
+import {
+  createProvisioningService,
+  deriveDurableCryptoProfileKey
+} from '@jooevents/application';
 import { planSignIn, type ExternalIdentityClaims } from '@jooevents/identity-access';
+import { canonicalJsonText } from '@jooevents/kernel';
+import { createHmac } from 'node:crypto';
 import { beforeAll, describe, expect, test } from 'vitest';
 import { createD1AuthPrincipalReader } from '../src/d1-principal-reader';
 import { createD1ProvisioningStore } from '../src/d1-provisioning-store';
@@ -250,5 +255,123 @@ describe('D1 application admission', () => {
       WHERE auth_user_id = ?`).bind(conflictingAuthUserId).first<CountRow>())?.count).toBe(0);
     expect((await env.DB.prepare(`SELECT count(*) AS count FROM external_identities
       WHERE subject = 'different-google-subject'`).first<CountRow>())?.count).toBe(0);
+  });
+
+  test('admits a classified invitation without indexing the recipient mailbox as plaintext', async () => {
+    const classifiedAuthUserId = uuid(518);
+    const classifiedReservationId = uuid(519);
+    const payloadRefId = uuid(520);
+    const normalizedEmail = 'classified-owner@example.invalid';
+    const rootKeyBytes = new Uint8Array(32).fill(0x37);
+    const lookupKeyBytes = deriveDurableCryptoProfileKey({
+      rootKeyBytes,
+      coordinate: {
+        family: 'persistent_hmac',
+        purpose: 'persistent-domain-hmac',
+        key: 'security.workspace-invitation-lookup',
+        version: 1
+      }
+    });
+    rootKeyBytes.fill(0);
+    const lookupBinding = createHmac('sha256', lookupKeyBytes)
+      .update(canonicalJsonText({ workspaceId, normalizedEmail }))
+      .digest('hex');
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO classified_payload_records (
+        payload_ref_id,record_schema_version,
+        encryption_profile_key,encryption_profile_version,
+        classification_profile_key,classification_profile_version,
+        schema_profile_key,schema_profile_version,
+        content_profile_key,content_profile_version,
+        integrity_profile_key,integrity_profile_version,
+        descriptor_auth_profile_key,descriptor_auth_profile_version,
+        scope_binding,purpose,content_type,byte_size,
+        integrity_digest_sha256,authenticated_data_digest_sha256,
+        nonce,ciphertext,authentication_tag,created_at_ms
+      ) VALUES (?,1,'encryption.workspace-invitation',1,
+        'classification.workspace_invitation_recipient',1,
+        'schema.workspace_invitation_recipient',1,
+        'content.workspace_invitation_recipient',1,
+        'integrity.sha256',1,'descriptor_auth.workspace_invitation_recipient',1,
+        ?,'workspace_invitation.recipient',
+        'application/vnd.jooevents.workspace-invitation-recipient+json',0,
+        ?,?,?,?, ?,?)`).bind(
+        payloadRefId,
+        `workspace:${workspaceId}/reservation:${classifiedReservationId}`,
+        '0'.repeat(64),
+        '0'.repeat(64),
+        new ArrayBuffer(12),
+        new ArrayBuffer(0),
+        new ArrayBuffer(16),
+        nowMs
+      ),
+      env.DB.prepare(`INSERT INTO access_reservations
+        (id,workspace_id,normalized_email,status,created_at,version)
+        VALUES (?,?,?,'open',?,1)`).bind(
+        classifiedReservationId,
+        workspaceId,
+        lookupBinding,
+        nowMs
+      ),
+      env.DB.prepare(`INSERT INTO reservation_role_assignments
+        (reservation_id,role_id,scope_kind,event_id)
+        VALUES (?,?,'workspace',NULL)`).bind(classifiedReservationId, roleId),
+      env.DB.prepare(`INSERT INTO workspace_team_invitation_recipients
+        (reservation_id,workspace_id,payload_ref_id,lookup_binding,recipient_hint,created_at_ms)
+        VALUES (?,?,?,?,?,?)`).bind(
+        classifiedReservationId,
+        workspaceId,
+        payloadRefId,
+        lookupBinding,
+        `recipient-${lookupBinding.slice(0, 12)}`,
+        nowMs
+      ),
+      env.DB.prepare(`INSERT INTO auth_users
+        (id,name,email,email_verified,image,created_at,updated_at)
+        VALUES (?,'Classified Owner',?,1,NULL,?,?)`).bind(
+        classifiedAuthUserId,
+        normalizedEmail,
+        nowMs,
+        nowMs
+      ),
+      env.DB.prepare(`INSERT INTO auth_accounts
+        (id,account_id,provider_id,user_id,created_at,updated_at)
+        VALUES (?,'google-classified-owner','google',?,?,?)`).bind(
+        uuid(521),
+        classifiedAuthUserId,
+        nowMs,
+        nowMs
+      )
+    ]);
+    const store = createD1ProvisioningStore(env.DB, {
+      workspaceInvitationLookupKeyBytes: [lookupKeyBytes]
+    });
+    lookupKeyBytes.fill(0);
+    const result = await createProvisioningService({
+      principals: createD1AuthPrincipalReader(env.DB, {
+        issuerOrigin: 'https://auth-test.jooevents.invalid'
+      }),
+      store,
+      admission: { mode: 'reservation_only' }
+    }).ensureAuthPrincipalProvisioned({
+      authUserId: classifiedAuthUserId,
+      workspaceId,
+      correlationId: uuid(522),
+      now
+    });
+    expect(result).toMatchObject({
+      kind: 'success',
+      data: {
+        state: 'active',
+        user: { displayName: 'Classified Owner', primaryEmail: normalizedEmail }
+      }
+    });
+    expect((await env.DB.prepare(`SELECT count(*) AS count FROM access_reservations
+      WHERE workspace_id = ? AND normalized_email = ?`).bind(
+        workspaceId,
+        normalizedEmail
+      ).first<CountRow>())?.count).toBe(0);
+    expect((await env.DB.prepare(`SELECT status FROM access_reservations
+      WHERE id = ?`).bind(classifiedReservationId).first<ReservationRow>())?.status).toBe('consumed');
   });
 });

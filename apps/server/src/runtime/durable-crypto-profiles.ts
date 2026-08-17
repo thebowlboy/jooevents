@@ -1,6 +1,7 @@
 import {
   createHmacIdempotencyCredentialSealer,
   createHmacRequestHashSealer,
+  deriveDurableCryptoProfileKey,
   type IdempotencyCredentialSealer,
   type RequestHashSealer
 } from '@jooevents/application';
@@ -13,7 +14,7 @@ import {
   type VersionedDefinitionRef
 } from '@jooevents/contracts';
 import { parseContractVersion } from '@jooevents/kernel';
-import { hkdfSync, timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual } from 'node:crypto';
 
 export const DURABLE_CRYPTO_KEY_ENVIRONMENT_DUTIES = Object.freeze({
   requestHash: 'JOOEVENTS_REQUEST_HASH_KEYS',
@@ -144,7 +145,6 @@ interface DerivedKeyRecord {
 const canonicalBase64UrlKey = /^[A-Za-z0-9_-]{43}$/;
 const positiveInteger = /^[1-9][0-9]*$/;
 const keyLength = 32;
-const kdfSalt = new TextEncoder().encode('jooevents:durable-crypto-profile:hkdf-sha256:v1');
 const issuedCompositions = new WeakSet<object>();
 
 function issue(
@@ -299,13 +299,15 @@ function deriveProfileKey(input: {
   const existing = input.derived.find((record) => record.identity === identity);
   if (existing !== undefined) return Uint8Array.from(existing.keyBytes);
 
-  const derived = new Uint8Array(hkdfSync(
-    'sha256',
-    rootKey,
-    kdfSalt,
-    new TextEncoder().encode(identity),
-    keyLength
-  ));
+  const derived = deriveDurableCryptoProfileKey({
+    rootKeyBytes: rootKey,
+    coordinate: {
+      family: input.ring.family,
+      purpose: input.purpose,
+      key: profile.key,
+      version: Number(profile.version)
+    }
+  });
   if (input.allRawKeys.some((key) => sameBytes(key, derived))
       || input.derived.some((record) => sameBytes(record.keyBytes, derived))) {
     derived.fill(0);

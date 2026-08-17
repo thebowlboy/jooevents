@@ -140,6 +140,7 @@ describe('Worker auth/access HTTP boundary', () => {
       JOOEVENTS_AUTH_RUNTIME_ENABLED: 'true',
       JOOEVENTS_BASE_URL: baseUrl,
       JOOEVENTS_AUTH_SECRETS: `1:${secret}`,
+      JOOEVENTS_PERSISTENT_HMAC_KEYS: `1:${Buffer.alloc(32, 7).toString('base64url')}`,
       JOOEVENTS_GOOGLE_CLIENT_ID: 'http-google-client-id',
       JOOEVENTS_GOOGLE_CLIENT_SECRET: 'http-google-client-secret',
       JOOEVENTS_ADMISSION_MODE: 'pending',

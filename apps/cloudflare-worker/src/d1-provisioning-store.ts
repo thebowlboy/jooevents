@@ -15,6 +15,7 @@ import {
   type SignInPlan,
   type UserReference
 } from '@jooevents/identity-access';
+import { canonicalJsonText } from '@jooevents/kernel';
 import {
   runD1BufferedUnitOfWork,
   type D1BufferedUnitOfWork
@@ -116,8 +117,40 @@ function referencedUserId(plan: SignInPlan): string | undefined {
   ).at(0);
 }
 
+async function workspaceInvitationLookupBinding(input: {
+  readonly keyBytes: Uint8Array;
+  readonly workspaceId: string;
+  readonly normalizedEmail: string;
+}): Promise<string> {
+  if (input.keyBytes.byteLength < 32) throw new TypeError('workspace_invitation_lookup_key_invalid');
+  const key = await crypto.subtle.importKey(
+    'raw',
+    Uint8Array.from(input.keyBytes).buffer,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const signature = new Uint8Array(await crypto.subtle.sign(
+    'HMAC',
+    key,
+    new TextEncoder().encode(canonicalJsonText({
+      workspaceId: input.workspaceId,
+      normalizedEmail: input.normalizedEmail
+    }))
+  ));
+  return Array.from(signature, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 /** D1 implementation of the existing two-transaction admission store contract. */
-export function createD1ProvisioningStore(database: D1Database): ProvisioningStore {
+export function createD1ProvisioningStore(
+  database: D1Database,
+  options: { readonly workspaceInvitationLookupKeyBytes?: readonly Uint8Array[] } = {}
+): ProvisioningStore {
+  const workspaceInvitationLookupKeyBytes = (options.workspaceInvitationLookupKeyBytes ?? [])
+    .map((keyBytes) => Uint8Array.from(keyBytes));
+  if (workspaceInvitationLookupKeyBytes.some((keyBytes) => keyBytes.byteLength < 32)) {
+    throw new TypeError('workspace_invitation_lookup_key_invalid');
+  }
   const userIdFor = (reference: UserReference, newUserId: string | undefined): string => {
     if (reference.kind === 'existing') return reference.userId;
     if (!newUserId) throw new Error('sign_in_mutation_references_missing_new_user');
@@ -474,6 +507,39 @@ export function createD1ProvisioningStore(database: D1Database): ProvisioningSto
           Date.parse(input.claims.observedAt)
         ).first<Row>();
         if (row) reservation = await reservationFromRow(session, row);
+        if (!reservation && workspaceInvitationLookupKeyBytes.length > 0) {
+          const invitations = new Map<string, Row>();
+          for (const keyBytes of workspaceInvitationLookupKeyBytes) {
+            const binding = await workspaceInvitationLookupBinding({
+              keyBytes,
+              workspaceId: input.workspaceId,
+              normalizedEmail
+            });
+            const rows = await session.prepare(`
+              SELECT r.* FROM access_reservations r
+                JOIN workspace_team_invitation_recipients recipient
+                  ON recipient.reservation_id = r.id
+               WHERE r.workspace_id = ? AND recipient.lookup_binding = ?
+                 AND r.status = 'open' AND (r.expires_at IS NULL OR r.expires_at > ?)
+               LIMIT 2
+            `).bind(
+              input.workspaceId,
+              binding,
+              Date.parse(input.claims.observedAt)
+            ).all<Row>();
+            for (const invitation of rows.results) {
+              invitations.set(String(invitation.id), invitation);
+            }
+          }
+          if (invitations.size > 1) throw new Error('workspace_invitation_lookup_collision');
+          const invitation = invitations.values().next().value;
+          if (invitation) {
+            reservation = {
+              ...await reservationFromRow(session, invitation),
+              normalizedEmail
+            };
+          }
+        }
       }
       return {
         ...(identity ? {

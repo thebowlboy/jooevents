@@ -9,6 +9,7 @@ const valid = {
   JOOEVENTS_BASE_URL: 'https://events.example.com',
   JOOEVENTS_TRUSTED_ORIGINS: 'https://admin.example.com',
   JOOEVENTS_AUTH_SECRETS: '2:newest-secret-value-at-least-thirty-two-characters,1:previous-secret-value-at-least-thirty-two-characters',
+  JOOEVENTS_PERSISTENT_HMAC_KEYS: `1:${Buffer.alloc(32, 7).toString('base64url')}`,
   JOOEVENTS_GOOGLE_CLIENT_ID: 'google-client-id',
   JOOEVENTS_GOOGLE_CLIENT_SECRET: 'google-client-secret',
   JOOEVENTS_ADMISSION_MODE: 'reservation_only',
@@ -17,7 +18,8 @@ const valid = {
 
 describe('Cloudflare auth configuration', () => {
   test('returns the closed reviewed configuration only when every duty is valid', () => {
-    expect(loadCloudflareAuthRuntimeConfiguration(valid)).toEqual({
+    const config = loadCloudflareAuthRuntimeConfiguration(valid);
+    expect(config).toMatchObject({
       baseUrl: 'https://events.example.com',
       trustedOrigins: ['https://admin.example.com'],
       authSecrets: [
@@ -29,6 +31,7 @@ describe('Cloudflare auth configuration', () => {
       admissionMode: 'reservation_only',
       workspaceId: '019c1df8-c9e8-7abc-8def-000000000301'
     });
+    expect(JSON.stringify(config.keys)).toBe('{}');
   });
 
   test('reports all missing activation duties without embedding secret values', () => {
@@ -40,6 +43,7 @@ describe('Cloudflare auth configuration', () => {
       const issues = (error as CloudflareAuthConfigurationError).issues;
       expect(issues).toContain('base_url_missing');
       expect(issues).toContain('auth_secrets_missing');
+      expect(issues).toContain('persistent_hmac_keys_missing');
       expect(issues).toContain('google_client_id_missing');
       expect(issues).toContain('google_client_secret_missing');
       expect(issues).toContain('admission_mode_invalid');
@@ -68,6 +72,22 @@ describe('Cloudflare auth configuration', () => {
         'auth_secrets_not_newest_first',
         'google_hosted_domain_missing'
       ]));
+    }
+  });
+
+  test('refuses duplicate persistent HMAC material even under different versions', () => {
+    const duplicate = Buffer.alloc(32, 9).toString('base64url');
+    try {
+      loadCloudflareAuthRuntimeConfiguration({
+        ...valid,
+        JOOEVENTS_PERSISTENT_HMAC_KEYS: `2:${duplicate},1:${duplicate}`
+      });
+      throw new Error('expected configuration refusal');
+    } catch (error) {
+      expect(error).toBeInstanceOf(CloudflareAuthConfigurationError);
+      expect((error as CloudflareAuthConfigurationError).issues).toContain(
+        'persistent_hmac_keys_duplicate_material'
+      );
     }
   });
 });

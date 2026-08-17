@@ -14,19 +14,23 @@ export type CloudflareAuthEnvironment = CloudflareAuthBindings & { readonly DB: 
 export function createConfiguredCloudflareAuthRuntime(environment: CloudflareAuthEnvironment) {
   const config = loadCloudflareAuthRuntimeConfiguration(environment);
   const auth = createD1Auth(environment.DB, config);
-  return createCloudflareAuthHttpApp({
-    auth,
-    baseUrl: config.baseUrl,
-    workspaceId: config.workspaceId,
-    accessContext: createProvisioningService({
-      principals: createD1AuthPrincipalReader(environment.DB, {
-        issuerOrigin: new URL(config.baseUrl).origin
-      }),
-      store: createD1ProvisioningStore(environment.DB),
-      admission: {
-        mode: config.admissionMode,
-        ...(config.googleHostedDomain ? { hostedDomain: config.googleHostedDomain } : {})
-      }
+  return config.keys.withWorkspaceInvitationLookupKeys((workspaceInvitationLookupKeyBytes) =>
+    createCloudflareAuthHttpApp({
+      auth,
+      baseUrl: config.baseUrl,
+      workspaceId: config.workspaceId,
+      accessContext: createProvisioningService({
+        principals: createD1AuthPrincipalReader(environment.DB, {
+          issuerOrigin: new URL(config.baseUrl).origin
+        }),
+        store: createD1ProvisioningStore(environment.DB, {
+          workspaceInvitationLookupKeyBytes
+        }),
+        admission: {
+          mode: config.admissionMode,
+          ...(config.googleHostedDomain ? { hostedDomain: config.googleHostedDomain } : {})
+        }
+      })
     })
-  });
+  );
 }

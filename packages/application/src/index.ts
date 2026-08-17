@@ -11,3 +11,4 @@ export * from './external-agent-authority';
 export * from './workspace-team-operations';
 export * from './communications-provider-operations';
 export * from './communications-provider-read-operation-registry';
+export * from './durable-crypto-profile-key';
