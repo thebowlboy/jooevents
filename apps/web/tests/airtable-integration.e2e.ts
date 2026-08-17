@@ -6,6 +6,21 @@ async function documentOverflow(page: import('@playwright/test').Page): Promise<
 	);
 }
 
+async function blockGap(
+	page: import('@playwright/test').Page,
+	before: string,
+	after: string
+): Promise<number> {
+	return page.evaluate(({ before, after }) => {
+		const leading = document.querySelector(before);
+		const trailing = document.querySelector(after);
+		if (!(leading instanceof HTMLElement) || !(trailing instanceof HTMLElement)) {
+			throw new Error('airtable_spacing_targets_missing');
+		}
+		return trailing.getBoundingClientRect().top - leading.getBoundingClientRect().bottom;
+	}, { before, after });
+}
+
 test('Airtable explains the shared-team outcome and keeps each area direction explicit', async ({
 	page
 }) => {
@@ -29,6 +44,11 @@ test('Airtable explains the shared-team outcome and keeps each area direction ex
 	await expect(scheduleDirection).toHaveText(/Keep Airtable updated/);
 	await expect(page.getByText(/Review scores, private notes, and sign-in or access data never go to Airtable/)).toBeVisible();
 
+	const headerGap = await blockGap(page, '.airtable-head', '#waiting');
+	const sectionGap = await blockGap(page, '#waiting', '#shared');
+	expect(headerGap).toBeGreaterThanOrEqual(16);
+	expect(headerGap).toBeLessThanOrEqual(20);
+	expect(sectionGap).toBe(headerGap);
 	expect(await documentOverflow(page)).toBeLessThanOrEqual(1);
 });
 
