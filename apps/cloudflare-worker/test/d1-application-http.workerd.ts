@@ -25,6 +25,8 @@ const baseUrl = 'https://application-http.jooevents.invalid';
 
 const ring = (byte: number): string =>
   `1:${Buffer.alloc(32, byte).toString('base64url')}`;
+const rotatedRing = (activeByte: number, retainedByte: number): string =>
+  `2:${Buffer.alloc(32, activeByte).toString('base64url')},${ring(retainedByte)}`;
 
 beforeAll(async () => {
   const now = Date.now();
@@ -80,7 +82,9 @@ beforeAll(async () => {
   ]);
 });
 
-function environment(): CloudflareApplicationEnvironment {
+function environment(
+  overrides: Partial<CloudflareApplicationEnvironment> = {}
+): CloudflareApplicationEnvironment {
   return {
     DB: env.DB,
     FILES: env.FILES,
@@ -102,7 +106,8 @@ function environment(): CloudflareApplicationEnvironment {
     JOOEVENTS_GOOGLE_CLIENT_ID: 'application-http-google-client-id',
     JOOEVENTS_GOOGLE_CLIENT_SECRET: 'application-http-google-client-secret',
     JOOEVENTS_ADMISSION_MODE: 'pending',
-    JOOEVENTS_WORKSPACE_ID: workspaceId
+    JOOEVENTS_WORKSPACE_ID: workspaceId,
+    ...overrides
   };
 }
 
@@ -156,6 +161,7 @@ describe('configured D1 application HTTP slice', () => {
       'get_communication_purpose',
       'get_message_draft',
       'get_message_template',
+      'list_audience_options',
       'list_communication_purposes',
       'list_message_drafts',
       'list_message_templates',
@@ -267,6 +273,14 @@ describe('configured D1 application HTTP slice', () => {
     );
     expect(initialAuthoringPayload.status, await initialAuthoringPayload.clone().text()).toBe(200);
     expect(await initialAuthoringPayload.json()).toMatchObject({
+      kind: 'outcome', outcome: { class: 'conflict', kind: 'communication.event_required' }
+    });
+    const initialAudienceOptions = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/communications/audiences/options`, { headers }),
+      environment()
+    );
+    expect(initialAudienceOptions.status, await initialAudienceOptions.clone().text()).toBe(200);
+    expect(await initialAudienceOptions.json()).toMatchObject({
       kind: 'outcome', outcome: { class: 'conflict', kind: 'communication.event_required' }
     });
     const initialDownload = await handleRequest(
@@ -571,6 +585,49 @@ describe('configured D1 application HTTP slice', () => {
     expect(missingDraft.status, await missingDraft.clone().text()).toBe(200);
     expect(await missingDraft.json()).toMatchObject({
       kind: 'outcome', outcome: { class: 'conflict', kind: 'communication.not_found' }
+    });
+    const audienceOptions = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/communications/audiences/options?limit=1`, {
+        headers
+      }),
+      environment()
+    );
+    expect(audienceOptions.status, await audienceOptions.clone().text()).toBe(200);
+    const audienceOptionsBody = await audienceOptions.json<{
+      readonly kind: string;
+      readonly data: {
+        readonly rows: readonly { readonly optionId: string }[];
+        readonly page: { readonly hasMore: boolean; readonly nextCursor?: string };
+      };
+    }>();
+    expect(audienceOptionsBody).toMatchObject({
+      kind: 'success', data: { rows: [expect.any(Object)], page: { hasMore: true } }
+    });
+    expect(audienceOptionsBody.data.page.nextCursor).toMatch(/^cur1_/);
+    const audienceOptionsPageTwo = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/communications/audiences/options?limit=1&cursor=${
+        encodeURIComponent(audienceOptionsBody.data.page.nextCursor!)}`, { headers }),
+      environment({
+        JOOEVENTS_REQUEST_HASH_KEYS: rotatedRing(0x41, 0x31),
+        JOOEVENTS_IDEMPOTENCY_KEYS: rotatedRing(0x42, 0x32),
+        JOOEVENTS_CLASSIFIED_PAYLOAD_KEYS: rotatedRing(0x43, 0x33),
+        JOOEVENTS_PERSISTENT_HMAC_KEYS: rotatedRing(0x44, 0x34)
+      })
+    );
+    expect(audienceOptionsPageTwo.status, await audienceOptionsPageTwo.clone().text()).toBe(200);
+    expect(await audienceOptionsPageTwo.json()).toMatchObject({
+      kind: 'success', data: { rows: [expect.any(Object)], page: { hasMore: false } }
+    });
+    const reboundAudienceCursor = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/communications/audiences/options?limit=1&purposeId=${
+        uuid(797)}&cursor=${encodeURIComponent(audienceOptionsBody.data.page.nextCursor!)}`, {
+        headers
+      }),
+      environment()
+    );
+    expect(await reboundAudienceCursor.json()).toMatchObject({
+      kind: 'outcome',
+      outcome: { class: 'policy_violation', kind: 'communication.preview_invalid' }
     });
     const authoringPayloadInput = {
       payload: {

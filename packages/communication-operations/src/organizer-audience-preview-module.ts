@@ -57,6 +57,10 @@ export const ORGANIZER_COMMUNICATION_AUDIENCE_PREVIEW_READ_OPERATIONS = Object.f
   listPreviewRecipients: Object.freeze({ name: 'list_message_preview_recipients', version: 1 })
 });
 
+export type OrganizerAudiencePreviewReadOperationName =
+  (typeof ORGANIZER_COMMUNICATION_AUDIENCE_PREVIEW_READ_OPERATIONS)[keyof
+    typeof ORGANIZER_COMMUNICATION_AUDIENCE_PREVIEW_READ_OPERATIONS]['name'];
+
 /** Exact address disclosure is independent from ordinary communication drafting. */
 export const ORGANIZER_COMMUNICATION_EXACT_CONTACT_PERMISSION =
   'speaker.contact.read' as const satisfies PermissionId;
@@ -293,6 +297,7 @@ export function createOrganizerAudiencePreviewReadOperationModule(input: {
   readonly clock: Clock;
   readonly ids: OrganizerAudiencePreviewOperationIds;
   readonly crypto: OrganizerAudiencePreviewOperationCrypto;
+  readonly enabledOperations?: readonly OrganizerAudiencePreviewReadOperationName[];
 }): OperationRegistryModule {
   assertPolicy(input.policy);
   const workspaceId = parseWorkspaceId(input.workspaceId);
@@ -302,9 +307,22 @@ export function createOrganizerAudiencePreviewReadOperationModule(input: {
     parseOperationAccessLane({ kind: 'app_model', surface: 'app_model', policy: input.policy })
   ]);
   const resolvedScope = scopeResolver(workspaceId, input.currentEvent);
+  const enabledOperations = input.enabledOperations === undefined
+    ? undefined
+    : new Set(input.enabledOperations);
+  const knownOperations: ReadonlySet<string> = new Set(Object.values(
+    ORGANIZER_COMMUNICATION_AUDIENCE_PREVIEW_READ_OPERATIONS
+  ).map((operation) => operation.name));
+  if (enabledOperations !== undefined && (enabledOperations.size !== input.enabledOperations!.length
+      || [...enabledOperations].some((name) => !knownOperations.has(name)))) {
+    throw new TypeError('organizer_audience_preview_enabled_operations_invalid');
+  }
   const entries = (Object.keys(
     ORGANIZER_COMMUNICATION_AUDIENCE_PREVIEW_READ_OPERATIONS
-  ) as ReadKey[]).map((key) => {
+  ) as ReadKey[])
+    .filter((key) => enabledOperations === undefined
+      || enabledOperations.has(ORGANIZER_COMMUNICATION_AUDIENCE_PREVIEW_READ_OPERATIONS[key].name))
+    .map((key) => {
     const operation = ORGANIZER_COMMUNICATION_AUDIENCE_PREVIEW_READ_OPERATIONS[key];
     const catalog = readCatalog[key];
     const base = `communication.organizer.${operation.name}`;

@@ -18,6 +18,7 @@ import {
   WORKSPACE_SENDER_IDENTITY_ACCESS_POLICY,
   WORKSPACE_SENDER_IDENTITY_UPDATE_REQUEST_HASH_PROFILE,
   composeOrganizerCommunicationAuthoringOperationModules,
+  createOrganizerAudiencePreviewReadOperationModule,
   createOrganizerCommunicationMutationOperationModule,
   createOrganizerCommunicationReadOperationModule,
   createWorkspaceSenderIdentityOperationModule
@@ -168,6 +169,7 @@ import {
 import { createD1OperatorCurrentAuthorityResolver } from './d1-operator-authority';
 import { createD1OperationHistoryReadSource } from './d1-operation-history';
 import { createD1OrganizerCommunicationReadPort } from './d1-organizer-communication-read';
+import { createD1OrganizerAudiencePreviewReadPort } from './d1-organizer-audience-preview-read';
 import {
   createD1OrganizerCommunicationPayloadEffectDomainRegistration
 } from './d1-organizer-communication-payload-mutation';
@@ -591,6 +593,11 @@ export async function createConfiguredD1ApplicationRuntime(
     database: environment.DB,
     classifiedPayload: classifiedD1CommunicationProfiles(cryptoProfiles)
   });
+  const organizerAudiencePreviewRead = await createD1OrganizerAudiencePreviewReadPort({
+    database: environment.DB,
+    workspaceId,
+    cryptoProfiles
+  });
   const organizerCommunicationCurrentEvent = Object.freeze({
     async resolveCurrentEvent(requestedWorkspaceId: WorkspaceId) {
       const selected = await reads.resolveCurrentEvent(requestedWorkspaceId);
@@ -930,6 +937,18 @@ export async function createConfiguredD1ApplicationRuntime(
       read: organizerCommunicationReadOperations,
       mutation: organizerCommunicationMutationOperations
     });
+  const organizerAudiencePreviewReadOperations =
+    createOrganizerAudiencePreviewReadOperationModule({
+      workspaceId,
+      policy: ORGANIZER_COMMUNICATION_DRAFT_ACCESS_POLICY,
+      currentAuthority,
+      currentEvent: organizerCommunicationCurrentEvent,
+      read: organizerAudiencePreviewRead,
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      crypto: ORGANIZER_COMMUNICATION_PROFILES,
+      enabledOperations: ['list_audience_options']
+    });
   const programVocabularyReadOperations = createProgramVocabularyReadOperationModule({
     workspaceId,
     readPolicy: PROGRAM_VOCABULARY_READ_ACCESS_POLICY,
@@ -1202,6 +1221,7 @@ export async function createConfiguredD1ApplicationRuntime(
       communicationProviderReadOperations,
       senderIdentityOperations,
       organizerCommunicationAuthoringOperations,
+      organizerAudiencePreviewReadOperations,
       programVocabularyReadOperations,
       programVocabularyDirectOperations,
       programVocabularyMergeOperations,

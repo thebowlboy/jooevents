@@ -54,7 +54,11 @@ class UnusedUnitOfWork implements EffectUnitOfWorkPort {
   }
 }
 
-function fixture(exact: boolean) {
+function fixture(
+  exact: boolean,
+  enabledOperations?: readonly ('list_audience_options' | 'get_message_batch_preview'
+    | 'list_message_preview_recipients')[]
+) {
   const disclosures: OrganizerPreviewContactDisclosure[] = [];
   let invocation = 0;
   const module = createOrganizerAudiencePreviewReadOperationModule({
@@ -128,7 +132,8 @@ function fixture(exact: boolean) {
       authorityPrincipalKeyProfile: profile,
       scopePartitionProfile: profile,
       requestCanonicalizationProfile: profile
-    }
+    },
+    ...(enabledOperations === undefined ? {} : { enabledOperations })
   });
   const evidence: InvocationEvidence = {
     kind: 'operator', surface: 'operator_http', client: { key: 'web.operator' },
@@ -180,6 +185,14 @@ describe('organizer audience and preview read operations', () => {
     expect(input.module.source.operations.find(
       (operation) => operation.name === 'get_message_batch_preview'
     )?.observability.immutableAudit).toMatchObject({ mode: 'required', reason: 'classified' });
+  });
+
+  test('can advertise only a completed read subset', async () => {
+    const input = fixture(false, ['list_audience_options']);
+    expect(input.module.source.operations.map((operation) => operation.name)).toEqual([
+      'list_audience_options'
+    ]);
+    expect((await runtime(input)).registry.operatorHttpBindings).toHaveLength(1);
   });
 
   test('defaults to masked contact data and widens only under an independent exact grant', async () => {
