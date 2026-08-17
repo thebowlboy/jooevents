@@ -118,6 +118,41 @@ async function cookie(): Promise<string> {
 }
 
 describe('configured D1 application HTTP slice', () => {
+  test('serves cacheable registry-derived external-agent discovery without workspace facts', async () => {
+    const openApi = await handleRequest(new Request(`${baseUrl}/api/v1/openapi.json`, {
+      headers: { 'cf-connecting-ip': '192.0.2.10' }
+    }), environment());
+    expect(openApi.status, await openApi.clone().text()).toBe(200);
+    expect(openApi.headers.get('cache-control')).toBe('public, max-age=0, must-revalidate');
+    expect(openApi.headers.get('link')).toBe('</api/v1/llms.txt>; rel="describedby"');
+    const openApiEtag = openApi.headers.get('etag');
+    expect(openApiEtag).toMatch(/^"[a-f0-9]{64}"$/u);
+    const openApiBody = await openApi.json<{
+      readonly 'x-jooevents-registry-digest': string;
+      readonly paths: Readonly<Record<string, unknown>>;
+    }>();
+    expect(openApiBody['x-jooevents-registry-digest']).toMatch(/^[a-f0-9]{64}$/u);
+    expect(openApiBody.paths).toHaveProperty('/api/v1/tools/get_delivery_history');
+    expect(openApiBody.paths).not.toHaveProperty('/api/v1/tools/send_messages');
+    const notModified = await handleRequest(new Request(`${baseUrl}/api/v1/openapi.json`, {
+      headers: {
+        'cf-connecting-ip': '192.0.2.10',
+        'if-none-match': openApiEtag!
+      }
+    }), environment());
+    expect(notModified.status).toBe(304);
+    expect(notModified.headers.get('etag')).toBe(openApiEtag);
+
+    const llms = await handleRequest(new Request(`${baseUrl}/api/v1/llms.txt`, {
+      headers: { 'cf-connecting-ip': '192.0.2.11' }
+    }), environment());
+    expect(llms.status, await llms.clone().text()).toBe(200);
+    expect(llms.headers.get('content-type')).toBe('text/markdown; charset=utf-8');
+    const llmsText = await llms.text();
+    expect(llmsText).toContain(`${baseUrl}/api/v1/openapi.json`);
+    expect(llmsText).not.toContain(workspaceId);
+  });
+
   test('serves the exact partial manifest and runs Event create/read/replay over authenticated HTTP', async () => {
     const headers = { cookie: await cookie() };
     const manifest = await handleRequest(

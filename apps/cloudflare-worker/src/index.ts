@@ -216,7 +216,9 @@ export async function handleRequest(
 }
 
 function isConfiguredApplicationPath(pathname: string): boolean {
-  return pathname === '/api/operations/manifest'
+  return pathname === '/api/v1/openapi.json'
+    || pathname === '/api/v1/llms.txt'
+    || pathname === '/api/operations/manifest'
     || pathname === '/api/workspace/history'
     || pathname === '/api/workspace/shell-summary'
     || pathname === '/api/workspace/overview'

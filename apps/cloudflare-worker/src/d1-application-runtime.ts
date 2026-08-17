@@ -133,6 +133,7 @@ import {
 import { createD1CreatedEventInitializer } from './d1-created-event-initializer';
 import { createD1CommunicationProviderReadPorts } from './d1-communication-provider-read';
 import { createD1CommunicationDeliveryHistoryReadPort } from './d1-communication-delivery-history';
+import { createD1ExternalAgentDiscoveryTransport } from './d1-external-agent-discovery';
 import {
   createD1DeadlineDirectEffectDomainRegistration,
   createD1DeadlineReadSource
@@ -1290,7 +1291,7 @@ export async function createConfiguredD1ApplicationRuntime(
   const fileCommandBinding = operations.registry.operatorHttpEffectBindings.find((binding) =>
     binding.operationName === 'file.upload.intent' && binding.operationVersion === 1);
   if (!fileCommandBinding) throw new TypeError('cloudflare_file_command_binding_missing');
-  return createD1FilesOperatorHttpTransport({
+  const filesTransport = createD1FilesOperatorHttpTransport({
     database: environment.DB,
     workspaceId,
     delegate: operatorWithApiKeySecretHandoff,
@@ -1302,6 +1303,11 @@ export async function createConfiguredD1ApplicationRuntime(
     clock,
     assets: fileDownloadAssets,
     blobs: fileBlobs
+  });
+  return createD1ExternalAgentDiscoveryTransport({
+    database: environment.DB,
+    delegate: filesTransport,
+    operations
   });
 }
 

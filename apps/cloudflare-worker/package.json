@@ -26,6 +26,7 @@
     "@jooevents/http-operation-adapters": "workspace:*",
     "@jooevents/identity-access": "workspace:*",
     "@jooevents/kernel": "workspace:*",
+    "@jooevents/mcp": "workspace:*",
     "@jooevents/persistence": "workspace:*",
     "@jooevents/program": "workspace:*",
     "@jooevents/program-operations": "workspace:*",
