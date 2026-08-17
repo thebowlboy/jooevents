@@ -243,7 +243,7 @@ describe('SQLite public apply-surface gate', () => {
       .toEqual({ kind: 'refused', reason: 'no_published_apply_surface' });
   });
 
-  test('pins the active release form exactly, then fails closed on close and republish drift', () => {
+  test('pins the active release form exactly, marks close, and refuses republish drift', () => {
     const context = fixture();
     const styleSet = publishStyleSet(context);
     const release1 = publishApplySurface(context, {
@@ -266,8 +266,20 @@ describe('SQLite public apply-surface gate', () => {
     });
 
     context.forms.status = 'closed';
-    expect(context.gate.resolveApplySurface())
-      .toEqual({ kind: 'refused', reason: 'apply_form_closed' });
+    expect(context.gate.resolveApplySurface()).toEqual({
+      kind: 'closed',
+      pin: {
+        workspaceId, eventId, formId,
+        formVersionId: formVersion1,
+        surfaceReleaseId: release1,
+        surfaceHeadVersion: 1,
+        evidenceIds: [
+          `apply-surface:${release1}`,
+          'apply-surface-head:1',
+          `intake-form:${formId}#2`
+        ]
+      }
+    });
     context.forms.status = 'open';
 
     context.forms.currentPublishedVersionId = formVersion2;

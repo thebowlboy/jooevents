@@ -46,7 +46,8 @@
   /* Identity lives on the page; the panel is only the task. */
   .entry-main {
     display: grid;
-    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-rows: auto auto auto;
+    align-content: start;
   }
 
   .entry-panel {
@@ -158,12 +159,9 @@
     text-align: var(--je-entry-alignment, center);
   }
 
-  /* The one footprint that is still held: the initial resolver and the resting
-     card it resolves into share this measure, so arriving anonymous cannot
-     shift the panel. It is a resolution-stability contract, not the retired
-     error/retry reserve — which is why the admission wait is outside it. That
-     wait resolves into a destination, so holding a card's height for it would
-     reserve a screenful of blank for a composition that never arrives. */
+  /* The resolver alone holds a representative footprint. Resolution releases
+     that pending obligation in one settle; every durable state is intrinsic,
+     so confirmations and errors never inherit invisible future content. */
   .entry-state--reserved { min-block-size: 24.25rem; }
 
   /* Recovery content that appears into the compact box: the box grows
@@ -295,11 +293,6 @@
     align-self: center;
   }
 
-  /* The participant surface offers one method and no provider control, so it
-     reserves a shorter footprint than the operator card rather than inheriting
-     an operator-sized panel with dead space under it. */
-  .entry-state--portal { min-block-size: 17.5rem; }
-
   /* Participant resolver: the same four rows its resolved composition has —
      heading, method group, field, action — so nothing grows or collapses on
      arrival. Its helper runs two lines at this width, so the group fill is
@@ -307,6 +300,13 @@
   .entry-state .resolver--portal span:nth-child(2) { width: 100%; height: 3.35rem; border-radius: var(--je-radius-round); }
   .entry-state .resolver--portal span:nth-child(3) { width: 100%; height: 3.75rem; border-radius: var(--je-radius-control); }
   .entry-state .resolver--portal span:nth-child(4) { width: 100%; height: 2.75rem; border-radius: var(--je-radius-control); }
+  .entry-state .resolver__status {
+    width: 100%;
+    min-height: 1rem;
+    font-size: var(--je-font-size-sm);
+    line-height: 1rem;
+    text-align: center;
+  }
 
   .entry-state .entry-echo {
     color: var(--je-color-text);
@@ -437,10 +437,9 @@
   @media (max-width: 36rem) {
     .entry-page {
       grid-template-columns: minmax(0, 1fr);
-      /* Named explicitly because `stretch` would otherwise divide the viewport
-         between the task and the byline. Main keeps the whole leftover height —
-         which is what lets the panel center its content on a tall phone — and
-         the byline takes only the line it needs, at the foot of the screen. */
+      /* Main owns the leftover page height so the byline can stay at the foot,
+         but its own rows remain intrinsic: the task never stretches into that
+         space or inherits it as blank panel content. */
       grid-template-rows: minmax(0, 1fr) auto;
       place-content: stretch;
       padding: max(var(--je-space-6), env(safe-area-inset-top)) max(var(--je-space-5), env(safe-area-inset-right)) max(var(--je-space-8), env(safe-area-inset-bottom)) max(var(--je-space-5), env(safe-area-inset-left));

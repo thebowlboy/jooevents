@@ -19,6 +19,19 @@ test('participant entry asks once, confirms plainly, and keeps the panel in plac
   await expect(page.getByRole('heading', { name: 'Sign in', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /with Google/ })).toHaveCount(0);
   const restingPanel = await panelGeometry(page);
+  const footprint = await page.locator('.entry-state').evaluate((state) => {
+    const box = state.getBoundingClientRect();
+    const lastChildBottom = [...state.children].reduce(
+      (deepest, child) => Math.max(deepest, child.getBoundingClientRect().bottom),
+      box.top
+    );
+    return {
+      minBlockSize: getComputedStyle(state).minBlockSize,
+      trailingBlank: box.bottom - lastChildBottom
+    };
+  });
+  expect(['0px', 'auto']).toContain(footprint.minBlockSize);
+  expect(footprint.trailingBlank).toBeLessThan(4);
 
   // The same titled method group the operator lane uses, carrying this lane's
   // own warm helper — the heading above it still names no method.

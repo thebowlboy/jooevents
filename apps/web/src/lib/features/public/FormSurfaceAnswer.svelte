@@ -45,7 +45,11 @@
 		 * top-level tab — sign-in never happens inside a host's frame.
 		 */
 		presentation?: 'page' | 'embed';
-		/** Reports one completed submit from this mount — never a replayed one. */
+		/**
+		 * Reports at most once when a submit press settles on the completed
+		 * ceremony. This includes adopting a completion committed in another
+		 * tab; a mount that begins already submitted never reports it.
+		 */
 		onSubmitted?: () => void;
 	}
 
@@ -80,6 +84,10 @@
 	/** Format refusals stay quiet until the field is left or a submit is attempted. */
 	let touched = $state<Record<string, boolean>>({});
 	let submitNote = $state<string | null>(null);
+	/** Immediate acknowledgement across both the save flush and submit request. */
+	let submitPending = $state(false);
+	/** The host boundary is at-most-once even if session reconciliation repeats. */
+	let completionReported = false;
 	/** The confirmation panel, focused after this mount's own submit lands. */
 	let doneRegion = $state<HTMLElement>();
 
@@ -238,7 +246,7 @@
 
 	async function submit(event: SubmitEvent): Promise<void> {
 		event.preventDefault();
-		if (!editable) return;
+		if (!editable || submitPending) return;
 		const blockers = publicApplicationSubmitBlockers(form, snapshot.answers);
 		for (const blocker of blockers) {
 			errors[blocker.fieldId] = errors[blocker.fieldId] ?? blocker.message;
@@ -257,16 +265,23 @@
 			return;
 		}
 		submitNote = null;
-		const settled = await session.submit();
-		if (settled.phase === 'submitted') {
-			onSubmitted?.();
-			// This person's own press replaced the form with its confirmation:
-			// the transition announces itself and hands focus to the receipt, so
-			// the keyboard is beside the one action the panel offers.
-			await tick();
-			doneRegion?.focus();
-		} else if (settled.transport !== null) {
-			submitNote = 'That didn’t go through — check your connection and try again.';
+		submitPending = true;
+		try {
+			const settled = await session.submit();
+			if (settled.phase === 'submitted') {
+				if (!completionReported) {
+					completionReported = true;
+					onSubmitted?.();
+				}
+				// This press settled on the completed ceremony: the transition
+				// announces itself and hands focus to the receipt.
+				await tick();
+				doneRegion?.focus();
+			} else if (settled.transport !== null) {
+				submitNote = 'That didn’t go through — check your connection and try again.';
+			}
+		} finally {
+			submitPending = false;
 		}
 	}
 
@@ -509,9 +524,9 @@
 					<button
 						type="submit"
 						class="apply__submit"
-						disabled={!editable}
-						aria-busy={submitting || undefined}>
-						{submitting ? 'Submitting…' : 'Submit application'}
+						disabled={!editable || submitPending}
+						aria-busy={submitPending || submitting || undefined}>
+						{submitPending || submitting ? 'Submitting…' : 'Submit application'}
 					</button>
 					{#if saveStatus}
 						<span
@@ -909,7 +924,8 @@
 		gap: var(--je-space-4);
 	}
 
-	.apply__submit {
+	.apply__submit,
+	.apply__door-action {
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
@@ -917,23 +933,29 @@
 		padding-inline: var(--je-space-6);
 		background: var(--je-color-action);
 		color: var(--je-color-action-contrast);
-		border: 0;
 		border-radius: var(--je-radius-control);
 		font-family: inherit;
 		font-size: 1em;
 		font-weight: 650;
+	}
+
+	.apply__submit {
+		border: 0;
 		cursor: pointer;
 	}
 
-	.apply__submit:hover:enabled {
+	.apply__submit:hover:enabled,
+	.apply__door-action:hover {
 		background: var(--je-color-action-hover);
 	}
 
-	.apply__submit:active:enabled {
+	.apply__submit:active:enabled,
+	.apply__door-action:active {
 		background: var(--je-color-action-active);
 	}
 
-	.apply__submit:focus-visible {
+	.apply__submit:focus-visible,
+	.apply__door-action:focus-visible {
 		outline: 2px solid var(--je-color-focus);
 		outline-offset: 2px;
 	}
@@ -1010,30 +1032,7 @@
 	/* Same control the submit button was: the action colour moves from
 	   "send it" to the one thing left to do here. */
 	.apply__door-action {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		block-size: var(--je-control-height);
-		padding-inline: var(--je-space-6);
-		background: var(--je-color-action);
-		color: var(--je-color-action-contrast);
-		border-radius: var(--je-radius-control);
-		font-size: 1em;
-		font-weight: 650;
 		text-decoration: none;
-	}
-
-	.apply__door-action:hover {
-		background: var(--je-color-action-hover);
-	}
-
-	.apply__door-action:active {
-		background: var(--je-color-action-active);
-	}
-
-	.apply__door-action:focus-visible {
-		outline: 2px solid var(--je-color-focus);
-		outline-offset: 2px;
 	}
 
 	.apply__door-copy {

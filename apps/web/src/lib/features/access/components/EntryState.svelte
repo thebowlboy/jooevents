@@ -60,13 +60,12 @@
   );
 </script>
 
-<!-- Only the resolver and the resting card it becomes hold a shared footprint;
-     every other state is compact and grows downward when recovery content
-     appears (owner direction, 2026-08-14). The admission wait is outside that
-     pair on purpose: what it resolves into is a destination, not this card. -->
+<!-- Only the resolver reserves a representative footprint. Resolved states are
+     intrinsic: the one allowed settle releases the pending obligation, and
+     recovery content grows downward from the stable page anchor. -->
 <div
   class="entry-state"
-  class:entry-state--reserved={(state.kind === 'resolving' && state.awaiting !== 'admission') || surface?.kind === 'anonymous'}
+  class:entry-state--reserved={state.kind === 'resolving' && state.awaiting !== 'admission'}
   aria-live={state.kind === 'resolving' || state.kind === 'provisioning' ? 'polite' : 'off'}>
   {#if state.kind === 'resolving'}
     {#if state.awaiting !== 'admission'}

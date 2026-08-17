@@ -68,7 +68,6 @@ describe('apply-surface gated public form scope source', () => {
     const wrongRevision = parsePublicPolicyRevisionId(uuid(0x99));
     const cases: readonly IntakePublicApplySurfaceResolution[] = [
       { kind: 'refused', reason: 'no_published_apply_surface' },
-      { kind: 'refused', reason: 'apply_form_closed' },
       { kind: 'refused', reason: 'apply_form_version_superseded' }
     ];
     for (const resolution of cases) {
@@ -86,6 +85,23 @@ describe('apply-surface gated public form scope source', () => {
     });
     expect(await throwing.resolve({ formId: pin.formId, publicPolicyRevisionId: revision }))
       .toBeUndefined();
+  });
+
+  test('resolves the pinned form read as closed without opening the ceremony pin', async () => {
+    const source = createApplySurfaceGatedPublicFormScopeSource({
+      gate: gateOf({ kind: 'closed', pin })
+    });
+    const resolved = await source.resolve({
+      formId: pin.formId,
+      publicPolicyRevisionId: revision
+    });
+    expect(resolved).toMatchObject({ workspaceId: pin.workspaceId, eventId: pin.eventId });
+    expect(resolved?.evidenceIds).toContain('apply-form-state:closed');
+
+    const registry = createApplySurfaceGatedContinuationPolicySource({
+      gate: gateOf({ kind: 'closed', pin }), binding, security
+    });
+    expect(registry.resolve(binding)).toBeUndefined();
   });
 
   test('a malformed pin never becomes a served scope', async () => {

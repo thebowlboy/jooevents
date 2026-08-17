@@ -42,6 +42,7 @@ function conflict(kind: string): unknown {
 
 const notPublished = () => conflict('release.not_published');
 const formNotFound = () => conflict('intake.not_found');
+const formClosed = () => conflict('intake.form_closed');
 
 const ids = {
 	room: '018f6f00-0000-7000-8000-00000000000a',
@@ -358,11 +359,28 @@ describe('live public-surface port', () => {
 		expect(surfaces).toHaveLength(1);
 		// The served DTO keeps what the flattened template drops: field
 		// constraints and option identities.
-		expect(dto).toEqual(served as never);
+		expect(dto).toEqual({ kind: 'open', form: served as never });
 		expect(formReads).toBe(1);
 		// The embed ↔ standalone handoff exchange is not served yet: typed
 		// absence, never a query-string fallback.
 		expect(port.application?.continuationHandoff).toEqual({ kind: 'not_served' });
+	});
+
+	test('a closed form remains a typed marker without serving its questions', async () => {
+		const formId = '018f6f00-0000-7000-8000-0000000000f0';
+		const port = createLivePublicSurfacePort(
+			fetcherFor({
+				'/api/public/schedule/current': () => json(notPublished()),
+				'/api/public/speakers/current': () => json(notPublished()),
+				'/api/public/forms/presentation': () =>
+					json(success(servedPresentation('apply', 'Apply now'))),
+				[`/api/public/forms/current?formId=${formId}`]: () => json(formClosed())
+			}),
+			() => `http://127.0.0.1/s/apply?scope=form%3A${formId}`
+		);
+		expect(await port.application!.served({ formId })).toEqual({ kind: 'closed' });
+		expect((await port.templates.list()).surfaces).toEqual([]);
+		expect(await port.forms.list()).toEqual([]);
 	});
 
 	test('a port session carries the served target into the recorded re-offer', async () => {

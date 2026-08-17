@@ -3492,7 +3492,7 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
           return Object.freeze({ kind: 'denied' as const, reason: 'lane_mismatch' as const });
         }
         const resolution = applySurfaceGate.resolveApplySurface();
-        if (resolution.kind !== 'pinned'
+        if ((resolution.kind !== 'pinned' && resolution.kind !== 'closed')
             || input.lane.kind !== 'public_open'
             || input.lane.surface !== 'public_http'
             || input.lane.policy.key !== INTAKE_PUBLIC_OPEN_ACCESS_POLICY.key
@@ -5689,10 +5689,11 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
           if (binding.operationName === INTAKE_PUBLIC_FORM_READ_OPERATION.name
               && binding.operationVersion === INTAKE_PUBLIC_FORM_READ_OPERATION.version
               && binding.path === '/api/public/forms/current') {
-            // Gate-refused form reads answer 401; unknown and rolled-back
-            // surfaces are indistinguishable at this boundary.
+            // An absent/superseded surface remains indistinguishable. A closed
+            // surface may enter only the read operation, which returns its typed
+            // detail-free marker; the ceremony still accepts only `pinned`.
             const resolution = applySurfaceGate.resolveApplySurface();
-            if (resolution.kind !== 'pinned') {
+            if (resolution.kind !== 'pinned' && resolution.kind !== 'closed') {
               return Object.freeze({
                 kind: 'rejected' as const,
                 reason: 'unauthenticated' as const

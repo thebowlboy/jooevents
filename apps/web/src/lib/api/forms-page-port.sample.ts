@@ -10,11 +10,13 @@ export function createSampleFormsPagePort(api: WorkspaceApi): FormsPagePort {
 				const { surfaces } = await api.templates.list();
 				return surfaces.find((surface) => surface.kind === 'application-form')?.id ?? null;
 			},
-			async applicationSurfacePublished(): Promise<boolean | null> {
+			async applicationSurfacePublication() {
 				// The sample public pages serve whenever their surface exists, so
-				// that existence is the honest sample answer.
+				// every form lens is an honest sample address.
 				const { surfaces } = await api.templates.list();
-				return surfaces.some((surface) => surface.kind === 'application-form');
+				return surfaces.some((surface) => surface.kind === 'application-form')
+					? { kind: 'any' as const }
+					: { kind: 'none' as const };
 			}
 		}),
 		vocab: Object.freeze({ tracks: api.vocab.tracks, formats: api.vocab.formats }),

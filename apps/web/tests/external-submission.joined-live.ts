@@ -112,6 +112,36 @@ async function createAndPublishForm(
 	return href;
 }
 
+async function proveSecondOpenFormIsNotClaimedLive(
+	page: Page,
+	formName: string,
+	formatName: string
+): Promise<void> {
+	await page.goto('/app/forms');
+	await page.getByRole('button', { name: 'New form' }).first().click();
+	const dialog = page.getByRole('dialog', { name: 'New form' });
+	await dialog.getByLabel('Name').fill(formName);
+	await dialog.getByRole('combobox', { name: 'Collects for' }).click();
+	await page.getByRole('option', { name: /A category pool/ }).click();
+	await dialog.getByLabel('Which track or format').selectOption({ label: formatName });
+	await dialog.getByRole('button', { name: 'Create form' }).click();
+	await page.getByRole('button', { name: 'Publish and open', exact: true }).click();
+	await page.getByRole('dialog', { name: 'Review publication' })
+		.getByRole('button', { name: 'Publish and open', exact: true }).click();
+
+	const address = page.locator('.conf__address');
+	await expect(address).toContainText(
+		'The application page is published for a different form',
+		{ timeout: 15_000 }
+	);
+	await expect(address).toContainText('This address turns visitors away');
+	await expect(address.locator('.conf__address-url')).toHaveCount(0);
+
+	// Keep the shared joined fixture tidy for the next viewport.
+	await page.getByRole('button', { name: 'Close form', exact: true }).click();
+	await expect(page.getByRole('button', { name: 'Reopen form', exact: true })).toBeVisible();
+}
+
 async function addForeignSubmission(page: Page, input: {
 	name: string; email: string; title: string; trackName: string; formatName: string;
 }): Promise<void> {
@@ -167,6 +197,11 @@ test('an anonymous application becomes the same participant’s visible proposal
 	await ensureEvent(page);
 	await ensureVocabulary(page, trackName, formatName);
 	const publicAddress = await createAndPublishForm(page, formName, formatName);
+	await proveSecondOpenFormIsNotClaimedLive(
+		page,
+		`Unpinned CFP ${project} ${crypto.randomUUID()}`,
+		formatName
+	);
 	await addForeignSubmission(page, {
 		name: 'Foreign Speaker',
 		email: `foreign.${project}.${crypto.randomUUID()}@joined.example`,

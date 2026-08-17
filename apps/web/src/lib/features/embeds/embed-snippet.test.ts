@@ -11,7 +11,8 @@ import {
 	parseScope,
 	serializeScope,
 	specRefusals,
-	standaloneUrl
+	standaloneUrl,
+	SUBMISSION_EVENT
 } from './embed-snippet';
 import type { EmbedScope, EmbedSpec } from '$lib/api/types';
 
@@ -51,6 +52,9 @@ describe('scope round-trips as one attribute value', () => {
 });
 
 describe('addresses', () => {
+	test('the host completion event has one stable, detail-free contract name', () => {
+		expect(SUBMISSION_EVENT).toBe('joo-embed:submitted');
+	});
 	test('a whole-surface embed carries no query at all', () => {
 		expect(embedUrl('https://event.example', spec())).toBe('https://event.example/embed/speakers');
 	});

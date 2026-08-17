@@ -1,9 +1,14 @@
 import type {
 	FormDefinitionAuthorInput,
 	FormDefinitionCreateAuthorInput,
+	ReleaseOverviewDto,
 	StructuredOutcome
 } from '@jooevents/contracts';
-import type { FormPublishReview, FormsPagePort } from './forms-page-port';
+import type {
+	ApplicationSurfacePublication,
+	FormPublishReview,
+	FormsPagePort
+} from './forms-page-port';
 import type { WorkspaceFieldsApi } from './field-registry-workspace-adapter';
 import type { ProgramVocabularySettingsPort } from './program-vocabulary-settings-adapter';
 import type {
@@ -20,6 +25,16 @@ import type {
 } from './view-models/intake-forms';
 
 type AdapterFailure = Readonly<{ code: string; reason: string }>;
+
+/** Maps the release owner's one apply head to the exact form it serves. */
+export function applicationSurfacePublication(
+	overview: ReleaseOverviewDto
+): ApplicationSurfacePublication {
+	const active = overview.activeSurfaceReleases.find((candidate) => candidate.kind === 'apply');
+	return active?.kind === 'apply'
+		? { kind: 'pinned', formId: active.formRef.formId }
+		: { kind: 'none' };
+}
 
 /** Safe, reviewed-copy failure at the tuned Forms boundary. */
 export class FormsPageLiveAdapterError extends Error {
@@ -74,7 +89,7 @@ function outcomeFailure(outcome: StructuredOutcome): AdapterFailure {
 	}
 	if (code === 'required_choice_has_no_options') {
 		return {
-			code,
+			code: outcome.kind,
 			reason: 'A required choice has no answers, so nobody could submit this Form. Add an active track or format, or make the question optional or hide it.'
 		};
 	}
@@ -166,7 +181,7 @@ export function createLiveFormsPagePort(input: {
 	readonly vocabulary: Pick<ProgramVocabularySettingsPort, 'tracks' | 'formats'>;
 	readonly templates: {
 		applicationFormSurfaceId(): Promise<string | null>;
-		applicationSurfacePublished(): Promise<boolean | null>;
+		applicationSurfacePublication(): Promise<ApplicationSurfacePublication>;
 	};
 	readonly newIdempotencyKey?: () => string;
 }): FormsPagePort {
@@ -236,8 +251,20 @@ export function createLiveFormsPagePort(input: {
 
 	const port: FormsPagePort = {
 		templates: Object.freeze({
-			applicationFormSurfaceId: () => input.templates.applicationFormSurfaceId(),
-			applicationSurfacePublished: () => input.templates.applicationSurfacePublished()
+			async applicationFormSurfaceId() {
+				try {
+					return await input.templates.applicationFormSurfaceId();
+				} catch {
+					return null;
+				}
+			},
+			async applicationSurfacePublication() {
+				try {
+					return await input.templates.applicationSurfacePublication();
+				} catch {
+					return null;
+				}
+			}
 		}),
 		vocab: Object.freeze({
 			async tracks() {

@@ -22,6 +22,12 @@ export default defineConfig({
   webServer: {
     command: `bun run dev:live -- --host 127.0.0.1 --port ${port}`,
 		url: `${baseURL}/app`,
+    env: {
+      ...process.env,
+      // The live browser suite is the only configured host for its own embed
+      // documents. Every other route still carries the deny-all policy.
+      JOOEVENTS_DEV_EMBED_FRAME_ANCESTORS: baseURL
+    },
     reuseExistingServer: false,
     timeout: 60_000
   },

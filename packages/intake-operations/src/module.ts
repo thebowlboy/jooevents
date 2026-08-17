@@ -491,8 +491,30 @@ type ReadEntry = {
   readonly lane: HttpReadLane;
   readonly scope: InvocationScopeResolver;
   readonly requiresEvent?: boolean;
-  readonly read: (context: ReadInvocationContext, input: unknown) => unknown;
+  readonly extraOutcomes?: readonly {
+    readonly class: StructuredOutcome['class'];
+    readonly kind: string;
+    readonly retryable: boolean;
+  }[];
+  readonly read: (
+    context: ReadInvocationContext,
+    input: unknown
+  ) => unknown | ReadEntryOutcome;
 };
+
+/** Private handler signal; cannot collide with a domain projection's `kind`. */
+type ReadEntryOutcome = {
+  readonly kind: 'read_entry_outcome';
+  readonly outcome: StructuredOutcome;
+};
+
+function isReadEntryOutcome(value: unknown): value is ReadEntryOutcome {
+  return value !== null
+    && typeof value === 'object'
+    && 'kind' in value
+    && value.kind === 'read_entry_outcome'
+    && 'outcome' in value;
+}
 
 type HttpReadLane = Extract<OperationAccessLane, {
   readonly surface: 'operator_http' | 'public_http';
@@ -597,6 +619,9 @@ function readModule(input: {
             });
           }
           const value = entry.read(context, businessInput);
+          if (isReadEntryOutcome(value)) {
+            return Object.freeze({ kind: 'outcome' as const, outcome: value.outcome });
+          }
           return value === undefined
             ? Object.freeze({ kind: 'outcome', outcome: { class: 'conflict', kind: 'intake.not_found', retryable: false, subjects: [], detail: null, detailSchemaVersion: 1 } })
             : Object.freeze({ kind: 'success', data: value });
@@ -623,6 +648,10 @@ function readModule(input: {
             retryable: false,
             detailSchema: refs.nullDetail
           }] : []),
+          ...(entry.extraOutcomes ?? []).map((outcome) => ({
+            ...outcome,
+            detailSchema: refs.nullDetail
+          })),
           { class: 'conflict' as const, kind: 'intake.not_found', retryable: false,
             detailSchema: refs.nullDetail }
         ],
@@ -635,6 +664,24 @@ function readModule(input: {
       }))
     })
   });
+}
+
+function closedPublicFormOutcome(): ReadEntryOutcome {
+  return {
+    kind: 'read_entry_outcome' as const,
+    outcome: {
+      class: 'conflict' as const,
+      kind: 'intake.form_closed',
+      retryable: false,
+      subjects: [],
+      detail: null,
+      detailSchemaVersion: 1
+    }
+  };
+}
+
+function publicFormIsClosed(context: ReadInvocationContext): boolean {
+  return context.scope.resolutionEvidenceIds.includes('apply-form-state:closed');
 }
 
 function eventRequired(context: ReadInvocationContext): { readonly workspaceId: WorkspaceId; readonly eventId: EventId } {
@@ -732,7 +779,9 @@ export function createIntakePublicFormReadOperationModule(input: {
       path: '/api/public/forms/current',
       lane: publicOpenLane(input.policy),
       scope: publicFormScope(input.publicFormScope),
+      extraOutcomes: [{ class: 'conflict', kind: 'intake.form_closed', retryable: false }],
       read: (context, raw) => {
+        if (publicFormIsClosed(context)) return closedPublicFormOutcome();
         const currentScope = eventRequired(context);
         const { formId } = formIdInputSchema.parse(raw);
         const value = input.read.readServedForm(currentScope, formId);
@@ -775,7 +824,9 @@ export function createIntakePublicConformanceReadOperationModule(input: {
         path: '/api/public/forms/current',
         lane: publicOpen,
         scope: publicFormScope(input.publicFormScope),
+        extraOutcomes: [{ class: 'conflict', kind: 'intake.form_closed', retryable: false }],
         read: (context, raw) => {
+          if (publicFormIsClosed(context)) return closedPublicFormOutcome();
           const currentScope = eventRequired(context);
           const { formId } = formIdInputSchema.parse(raw);
           const value = input.read.readServedForm(currentScope, formId);

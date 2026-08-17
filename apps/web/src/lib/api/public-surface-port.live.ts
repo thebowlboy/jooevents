@@ -15,6 +15,7 @@ import { defaultThemeRecipe } from '$lib/theme/theme-contract';
 import { createPublicApplicationClient } from './public-application-client';
 import { createPublicApplicationSession } from './public-application-session';
 import type { PublicSurfacePort } from './public-surface-port';
+import type { PublicApplicationFormAvailability } from './public-surface-port';
 import type {
 	EventTheme,
 	FormSummary,
@@ -72,11 +73,16 @@ type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 /** The typed-absence outcome kinds the public lane serves for "nothing published". */
 const ABSENCE_OUTCOME_KINDS = new Set(['release.not_published', 'intake.not_found']);
 
-async function readPublic<Data>(
+type PublicReadState<Data> =
+	| { readonly kind: 'served'; readonly data: Data }
+	| { readonly kind: 'not_published' }
+	| { readonly kind: 'closed' };
+
+async function readPublicState<Data>(
 	fetcher: FetchLike,
 	path: string,
 	schema: { safeParse(value: unknown): { success: true; data: unknown } | { success: false } }
-): Promise<Data | null> {
+): Promise<PublicReadState<Data>> {
 	let response: Response;
 	try {
 		response = await fetcher(path, { headers: { accept: 'application/json' } });
@@ -103,10 +109,24 @@ async function readPublic<Data>(
 	const result = parsed.data as
 		| { kind: 'success'; data: Data }
 		| { kind: 'outcome'; outcome: { class: string; kind: string; retryable: boolean } };
-	if (result.kind === 'success') return result.data;
+	if (result.kind === 'success') return { kind: 'served', data: result.data };
 	const outcome = result.outcome;
-	if (outcome.class === 'conflict' && ABSENCE_OUTCOME_KINDS.has(outcome.kind)) return null;
+	if (outcome.class === 'conflict' && outcome.kind === 'intake.form_closed') {
+		return { kind: 'closed' };
+	}
+	if (outcome.class === 'conflict' && ABSENCE_OUTCOME_KINDS.has(outcome.kind)) {
+		return { kind: 'not_published' };
+	}
 	throw new PublicSurfaceLiveError({ code: outcome.kind, retryable: outcome.retryable });
+}
+
+async function readPublic<Data>(
+	fetcher: FetchLike,
+	path: string,
+	schema: { safeParse(value: unknown): { success: true; data: unknown } | { success: false } }
+): Promise<Data | null> {
+	const state = await readPublicState<Data>(fetcher, path, schema);
+	return state.kind === 'served' ? state.data : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -431,15 +451,18 @@ export function createLivePublicSurfacePort(
 				presentationResultSchema
 			)
 		);
-	const form = () => {
+	const form = (): Promise<PublicApplicationFormAvailability> => {
 		const formId = scopedFormId();
-		if (formId === null) return Promise.resolve(null);
+		if (formId === null) return Promise.resolve({ kind: 'not_published' });
 		return shared(`form:${formId}`, () =>
-			readPublic<ServedPublicFormDto>(
+			readPublicState<ServedPublicFormDto>(
 				fetcher,
 				`${PUBLIC_FORM_PATH}?formId=${encodeURIComponent(formId)}`,
 				formResultSchema
 			)
+		).then((state) => state.kind === 'served'
+			? { kind: 'open' as const, form: state.data }
+			: state
 		);
 	};
 
@@ -462,8 +485,8 @@ export function createLivePublicSurfacePort(
 				if (servedRoster !== null && rosterPresentation !== null) {
 					surfaces.push(rosterTemplate(rosterPresentation));
 				}
-				if (servedForm !== null && applyPresentation !== null) {
-					surfaces.push(applyFormTemplate(servedForm, applyPresentation));
+				if (servedForm.kind === 'open' && applyPresentation !== null) {
+					surfaces.push(applyFormTemplate(servedForm.form, applyPresentation));
 				}
 				return { surfaces };
 			}
@@ -508,7 +531,7 @@ export function createLivePublicSurfacePort(
 		forms: {
 			list: async () => {
 				const served = await form();
-				return served === null ? [] : [mapServedFormSummary(served)];
+				return served.kind === 'open' ? [mapServedFormSummary(served.form)] : [];
 			}
 		},
 		application: {
@@ -517,11 +540,14 @@ export function createLivePublicSurfacePort(
 			// served answer.
 			served: (input: { readonly formId: string }) =>
 				shared(`form:${input.formId}`, () =>
-					readPublic<ServedPublicFormDto>(
+					readPublicState<ServedPublicFormDto>(
 						fetcher,
 						`${PUBLIC_FORM_PATH}?formId=${encodeURIComponent(input.formId)}`,
 						formResultSchema
 					)
+				).then((state) => state.kind === 'served'
+					? { kind: 'open' as const, form: state.data }
+					: state
 				),
 			// The ceremony lane over the same fetcher: mint + begin on start,
 			// autosave while editing, one idempotent submit. Whether the server

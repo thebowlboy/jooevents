@@ -37,12 +37,21 @@
   const showLiveDevLink = import.meta.env.DEV && import.meta.env.MODE === 'live';
 </script>
 
-<div class="entry-state entry-state--portal" aria-live={state.kind === 'resolving' || state.kind === 'completing' ? 'polite' : 'off'}>
+<div class="entry-state" aria-live={state.kind === 'resolving' || state.kind === 'completing' ? 'polite' : 'off'}>
   {#if state.kind === 'resolving' || state.kind === 'completing'}
     <!-- Four fills for the four rows this lane resolves to: heading, the named
-         method group, its email field, the action. -->
-    <div class="resolver resolver--portal" aria-label="Checking access"><span></span><span></span><span></span><span></span></div>
-    {#if state.delayed}<p class="status">{state.kind === 'completing' ? 'Signing you in…' : 'Checking your access…'}</p>{/if}
+         method group, its email field, the action. A delayed sentence replaces
+         the heading fill instead of becoming a fifth row. -->
+    <div class="resolver resolver--portal" aria-label="Checking access">
+      {#if state.delayed}
+        <p class="resolver__status status">
+          {state.kind === 'completing' ? 'Signing you in…' : 'Checking your access…'}
+        </p>
+      {:else}
+        <span></span>
+      {/if}
+      <span></span><span></span><span></span>
+    </div>
   {:else if form}
     {@const open = form}
     <h1 data-entry-heading tabindex="-1">{participantEntryCopy.heading}</h1>

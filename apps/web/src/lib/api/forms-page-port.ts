@@ -30,6 +30,13 @@ export type FormPublishPreparation =
 	| { readonly ok: true; readonly review: FormPublishReview }
 	| { readonly ok: false; readonly reason: string };
 
+/** Which form the one published application surface currently serves. */
+export type ApplicationSurfacePublication =
+	| { readonly kind: 'pinned'; readonly formId: string }
+	| { readonly kind: 'any' }
+	| { readonly kind: 'none' }
+	| null;
+
 /**
  * Everything the tuned Forms page consumes. Source selection belongs to the
  * composition root; the page keeps one interaction model for sample and live.
@@ -38,14 +45,12 @@ export interface FormsPagePort {
 	readonly templates: {
 		applicationFormSurfaceId(): Promise<string | null>;
 		/**
-		 * Whether the shared application page — the `/s/apply` surface every
-		 * form's public address renders through — currently has a published
-		 * release. The form's own publication is a separate release record;
-		 * an address is live only when both stand. `null` means the
-		 * composition cannot say, and the page keeps its silence rather than
-		 * guessing in either direction.
+		 * Which form the shared `/s/apply` surface currently pins. A live
+		 * release serves exactly one form; the sample composition may truthfully
+		 * answer `any`. `null` means the composition cannot say, which the page
+		 * states without guessing or collapsing the address region.
 		 */
-		applicationSurfacePublished(): Promise<boolean | null>;
+		applicationSurfacePublication(): Promise<ApplicationSurfacePublication>;
 	};
 	readonly vocab: {
 		tracks(): Promise<Track[]>;

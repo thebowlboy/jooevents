@@ -11,6 +11,11 @@ import type {
 	Track
 } from './types';
 
+export type PublicApplicationFormAvailability =
+	| { readonly kind: 'open'; readonly form: ServedPublicFormDto }
+	| { readonly kind: 'closed' }
+	| { readonly kind: 'not_published' };
+
 /**
  * Factual capabilities consumed by the hosted public pages (`/s/*`) and the
  * embed documents (`/embed/*`): the published surface, its brand, and the
@@ -64,7 +69,7 @@ export interface PublicSurfacePort {
 		 * the flattened `SurfaceTemplate.fields` pool drops option ids and is
 		 * presentation-only.
 		 */
-		served(input: { readonly formId: string }): Promise<ServedPublicFormDto | null>;
+		served(input: { readonly formId: string }): Promise<PublicApplicationFormAvailability>;
 		/**
 		 * One submitter's autosave/resume/submit session for the published
 		 * apply surface's pinned form. Standalone and embedded rendering call

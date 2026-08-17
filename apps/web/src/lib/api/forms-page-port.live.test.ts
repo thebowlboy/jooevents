@@ -1,7 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { intakeFormsFixtureIds } from './fixtures/intake-forms';
-import { createLiveFormsPagePort } from './forms-page-port.live';
+import {
+	applicationSurfacePublication,
+	createLiveFormsPagePort
+} from './forms-page-port.live';
+import type { ReleaseOverviewDto } from '@jooevents/contracts';
 import { createIntakeFormsSamplePort } from './sample/intake-forms';
 import type { WorkspaceFieldsApi } from './field-registry-workspace-adapter';
 import type { ProgramVocabularySettingsPort } from './program-vocabulary-settings-adapter';
@@ -24,12 +28,26 @@ const fields = Object.freeze({ async list() { return []; }, async add() { throw 
 function port(forms: OrganizerFormsPort = liveForms(), keys: string[] = []) {
 	let sequence = 0;
 	return createLiveFormsPagePort({ forms, fields, vocabulary,
-		templates: { async applicationFormSurfaceId() { return null; },
-			async applicationSurfacePublished() { return null; } },
+			templates: { async applicationFormSurfaceId() { return null; },
+			async applicationSurfacePublication() { return null; } },
 		newIdempotencyKey: () => keys.shift() ?? `forms-live-test-${sequence += 1}` });
 }
 
 describe('live tuned Forms page adapter', () => {
+	test('maps the active apply release to its one pinned form', () => {
+		const formId = intakeFormsFixtureIds.openForm;
+		const overview = {
+			activeSurfaceReleases: [{
+				kind: 'apply',
+				formRef: { formId, formVersionId: crypto.randomUUID() }
+			}]
+		} as ReleaseOverviewDto;
+		expect(applicationSurfacePublication(overview)).toEqual({ kind: 'pinned', formId });
+		expect(applicationSurfacePublication({
+			activeSurfaceReleases: []
+		} as unknown as ReleaseOverviewDto)).toEqual({ kind: 'none' });
+	});
+
 	test('projects catalog, joined rows, vocabulary, and capability absence', async () => {
 		const adapter = port();
 		const [forms, rows, tracks, formats, sessions] = await Promise.all([adapter.forms.list(),
@@ -41,6 +59,18 @@ describe('live tuned Forms page adapter', () => {
 		expect(tracks).toMatchObject([{ id: intakeFormsFixtureIds.track }]);
 		expect(formats).toEqual([]);
 		expect(sessions).toEqual([]);
+	});
+
+	test('maps an unavailable application template lookup to capability absence', async () => {
+		const adapter = createLiveFormsPagePort({
+			forms: liveForms(), fields, vocabulary,
+			templates: {
+				async applicationFormSurfaceId() { throw new Error('template read failed'); },
+				async applicationSurfacePublication() { throw new Error('release read failed'); }
+			}
+		});
+		expect(await adapter.templates.applicationFormSurfaceId()).toBeNull();
+		expect(await adapter.templates.applicationSurfacePublication()).toBeNull();
 	});
 
 	test('uses direct create, composition, closing, close, and reopen behavior', async () => {
@@ -82,7 +112,7 @@ describe('live tuned Forms page adapter', () => {
 	test('requires live source and has no predecessor or raw transport dependency', () => {
 		expect(() => createLiveFormsPagePort({ forms: createIntakeFormsSamplePort(), fields, vocabulary,
 			templates: { async applicationFormSurfaceId() { return null; },
-				async applicationSurfacePublished() { return null; } } })).toThrow('forms_page_live_source_required');
+				async applicationSurfacePublication() { return null; } } })).toThrow('forms_page_live_source_required');
 		const source = readFileSync(import.meta.path.replace(/\.test\.ts$/u, '.ts'), 'utf8');
 		expect(source).not.toMatch(/(?:from|import\s*\()[^\n]*\/sample(?:\/|['"])/u);
 		expect(source).not.toMatch(/readDiff|\.propose\(|\.commit\(|changesetId|restoreComposition/u);

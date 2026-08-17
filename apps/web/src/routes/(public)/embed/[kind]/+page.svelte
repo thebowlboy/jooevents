@@ -78,10 +78,12 @@
 
 {#if kind}
 	<div class="embed-doc" bind:this={body}>
-		<!-- The completion boundary of this presentation: a finished submit is
-		     reported to the identified host as the envelope-only protocol
-		     notice, and the success action opens the participant route in a
-		     top-level tab rather than signing in inside the host's frame. -->
+		<!-- The completion boundary of this presentation: a submit press that
+		     settles on the completed ceremony is reported at most once to the
+		     identified host as the envelope-only protocol notice. That includes
+		     adopting a completion from another tab; a mount that arrives already
+		     completed reports nothing. The success action opens the participant
+		     route top-level rather than signing in inside the host's frame. -->
 		<PublicSurfacePage
 			{kind}
 			presentation="embed"

@@ -2,6 +2,7 @@ import {
 	EMBED_ELEMENT_TAG,
 	EMBED_FRAME_MIN_HEIGHT_PX,
 	EMBED_LOADER_PATH,
+	EMBED_SUBMISSION_EVENT,
 	normalizeEmbedFrameOrigin,
 	type EmbedFrameOriginNormalization,
 	type EmbedFrameOriginRefusalCode
@@ -62,6 +63,8 @@ const ROUTE: Record<SurfaceKind, string> = {
 /** The custom element's tag, and the one script that defines it — the contract's own constants. */
 export const EMBED_TAG = EMBED_ELEMENT_TAG;
 export const LOADER_PATH = EMBED_LOADER_PATH;
+/** Stable host event; the internal frame-message envelope is not public API. */
+export const SUBMISSION_EVENT = EMBED_SUBMISSION_EVENT;
 
 /**
  * A scope as one attribute value: `all`, or `kind:id`. Flat on purpose — it has
@@ -124,7 +127,10 @@ export function embedUrl(origin: string, spec: EmbedSpec): string {
 }
 
 /** The canonical standalone page the same surface publishes — the escape from every embed. */
-export function standaloneUrl(origin: string, spec: EmbedSpec): string {
+export function standaloneUrl(
+	origin: string,
+	spec: Pick<EmbedSpec, 'kind' | 'scope'>
+): string {
 	const base = `${trimOrigin(origin)}/s/${ROUTE[spec.kind]}`;
 	const scope = serializeScope(spec.scope);
 	return scope === 'all' ? base : `${base}?scope=${encodeURIComponent(scope)}`;

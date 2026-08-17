@@ -16,7 +16,12 @@
 		statusIcon
 	} from '$lib/ui';
 	import type { DescribedOption, IconComponent } from '$lib/ui';
-	import type { FormPublishReview, FormsPagePort } from '$lib/api/forms-page-port';
+	import type {
+		ApplicationSurfacePublication,
+		FormPublishReview,
+		FormsPagePort
+	} from '$lib/api/forms-page-port';
+	import { standaloneUrl } from '$lib/features/embeds/embed-snippet';
 	import { param, paramFlag, applyParams, clearParams } from '$lib/features/workspace/url-state.svelte';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
@@ -78,13 +83,16 @@
 		void reloadForms();
 		// The application surface the Preview door lands on: one template serves
 		// every form, so the id is resolved once.
-		void port.templates.applicationFormSurfaceId().then((id) => (surfaceId = id));
+		void port.templates.applicationFormSurfaceId().then(
+			(id) => (surfaceId = id),
+			() => (surfaceId = null)
+		);
 		// The other half of "is the public address actually live": the shared
 		// application page's own release. A form and its page publish
 		// separately, and an address serves only when both stand.
-		void port.templates.applicationSurfacePublished().then(
-			(published) => (surfacePublished = published),
-			() => (surfacePublished = null)
+		void port.templates.applicationSurfacePublication().then(
+			(publication) => (surfacePublication = publication),
+			() => (surfacePublication = null)
 		);
 		// Target references resolve against the live vocabulary and sessions at
 		// render time — a form stores only the reference, never a copied name.
@@ -113,10 +121,9 @@
 
 	/**
 	 * The application page's release state: `undefined` while it resolves,
-	 * `null` when this composition cannot say (the address block then stays
-	 * silent rather than claiming either way), otherwise the fact.
+	 * `null` when this composition cannot say, otherwise the exact serving pin.
 	 */
-	let surfacePublished = $state<boolean | null | undefined>(undefined);
+	let surfacePublication = $state<ApplicationSurfacePublication | undefined>(undefined);
 
 	/**
 	 * A form's public address, spelled against whatever host serves this
@@ -125,8 +132,24 @@
 	function publicAddress(id: string): string {
 		const origin =
 			typeof window === 'undefined' ? 'https://your-event.example' : window.location.origin;
-		return `${origin}/s/apply?scope=${encodeURIComponent(`form:${id}`)}`;
+		return standaloneUrl(origin, {
+			kind: 'application-form',
+			scope: { kind: 'form', formId: id }
+		});
 	}
+
+	function publicationServes(formId: string): boolean {
+		return surfacePublication?.kind === 'any'
+			|| (surfacePublication?.kind === 'pinned' && surfacePublication.formId === formId);
+	}
+
+	function publicationMismatch(formId: string): boolean {
+		return surfacePublication?.kind === 'pinned' && surfacePublication.formId !== formId;
+	}
+
+	const pinnedFormId = $derived(
+		surfacePublication?.kind === 'pinned' ? surfacePublication.formId : null
+	);
 
 	// Plain-language target labels: the badge says which kind of door this is;
 	// the reference it points at is said in the target line beside it.
@@ -877,6 +900,17 @@
 	);
 </script>
 
+{#snippet publicationWarning(title: string, message: string)}
+	<div class="conf__address-warn">
+		<Alert tone="warning" {title} {message} />
+		{#if surfaceEditorHref}
+			<a class="ui-button ui-button--secondary ui-button--sm" href={surfaceEditorHref}>
+				Publish the page in Templates
+			</a>
+		{/if}
+	</div>
+{/snippet}
+
 {#if formId}
 	<!-- ================= One form's questions ================= -->
 	<div class="conf" aria-busy={!rows && !missingForm}>
@@ -1009,10 +1043,9 @@
 				     own publication (badged in the title) and the application
 				     page's. An address is live only when both stand, and the trap
 				     this block exists to prevent is sharing a URL that fail-closes. -->
-				{#if surfacePublished !== null}
-					<div class="conf__address">
-						<p class="conf__address-label" id="conf-address-label">Public address</p>
-						{#if !form || surfacePublished === undefined}
+				<div class="conf__address">
+					<p class="conf__address-label" id="conf-address-label">Public address</p>
+					{#if !form || surfacePublication === undefined}
 							<!-- The resolved composition's own two lines (address, then its
 							     state sentence) with skeleton fills, so resolution cannot
 							     move the questions below — a drag in flight would land a
@@ -1025,28 +1058,25 @@
 								<span class="ui-skeleton sk-line" style="inline-size: 24rem" aria-hidden="true"
 								></span>
 							</p>
-						{:else if form.status === 'draft'}
-							<p class="conf__address-note">
-								{#if surfacePublished}
-									Not live yet — this form hasn’t been published and opened.
-								{:else}
-									Not live yet — this form is a draft, and the application page isn’t
-									published.
-								{/if}
-							</p>
-						{:else if !surfacePublished}
-							<div class="conf__address-warn">
-								<Alert
-									tone="warning"
-									title="The application page isn’t published"
-									message="This form’s address turns visitors away until the page is published." />
-								{#if surfaceEditorHref}
-									<a class="ui-button ui-button--secondary ui-button--sm" href={surfaceEditorHref}>
-										Publish the page in Templates
-									</a>
-								{/if}
-							</div>
-						{:else}
+					{:else if surfacePublication === null}
+						<p class="conf__address-line">Publication status couldn’t be checked.</p>
+						<p class="conf__address-note">Reload this page to check again.</p>
+					{:else if form.status === 'draft'}
+						<p class="conf__address-note">
+							Not live yet — this form hasn’t been published and opened.
+						</p>
+						<p class="conf__address-note">Publish and open it when it is ready.</p>
+					{:else if surfacePublication.kind === 'none'}
+						{@render publicationWarning(
+							'The application page isn’t published',
+							'This form’s address turns visitors away until the page is published.'
+						)}
+					{:else if publicationMismatch(form.id)}
+						{@render publicationWarning(
+							'The application page is published for a different form',
+							'This address turns visitors away until the page is published for this form.'
+						)}
+					{:else if publicationServes(form.id)}
 							{@const address = publicAddress(form.id)}
 							<p class="conf__address-line">
 								<a
@@ -1067,9 +1097,8 @@
 									Closed — this address no longer accepts applications.
 								{/if}
 							</p>
-						{/if}
-					</div>
-				{/if}
+					{/if}
+				</div>
 				<div class="conf__actions">
 					{#if previewHref}
 						<a class="ui-button ui-button--secondary ui-button--sm" href={previewHref}>
@@ -1424,17 +1453,20 @@
 			<!-- One cause shared by every open card is said once, above them: the
 			     application page all these addresses render through isn't
 			     published, so no address is live whatever the cards say. -->
-			{#if surfacePublished === false && forms.some((entry) => entry.status === 'open')}
+			{#if surfacePublication?.kind === 'none' && forms.some((entry) => entry.status === 'open')}
 				<div class="list__warn">
-					<Alert
-						tone="warning"
-						title="The application page isn’t published"
-						message="Open forms have public addresses, but the page they render isn’t published — every address turns visitors away." />
-					{#if surfaceEditorHref}
-						<a class="ui-button ui-button--secondary ui-button--sm" href={surfaceEditorHref}>
-							Publish the page in Templates
-						</a>
-					{/if}
+					{@render publicationWarning(
+						'The application page isn’t published',
+						'Open forms have public addresses, but the page they render isn’t published — every address turns visitors away.'
+					)}
+				</div>
+			{:else if pinnedFormId
+				&& forms.some((entry) => entry.status === 'open' && entry.id !== pinnedFormId)}
+				<div class="list__warn">
+					{@render publicationWarning(
+						'The application page serves only one open form',
+						'Other open-form addresses turn visitors away until the page is published for them.'
+					)}
 				</div>
 			{/if}
 			<div class="cards">

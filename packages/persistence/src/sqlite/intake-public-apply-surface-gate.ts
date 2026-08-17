@@ -85,7 +85,24 @@ export function createSQLiteIntakePublicApplySurfaceGate(input: {
       if (!formHead || formHead.id !== release.formRef.formId) {
         return refused('no_published_apply_surface');
       }
-      if (formHead.status !== 'open') return refused('apply_form_closed');
+      if (formHead.status !== 'open') {
+        return Object.freeze({
+          kind: 'closed' as const,
+          pin: Object.freeze({
+            workspaceId,
+            eventId,
+            formId: release.formRef.formId,
+            formVersionId: release.formRef.formVersionId,
+            surfaceReleaseId: release.id,
+            surfaceHeadVersion: head.version,
+            evidenceIds: Object.freeze([
+              `apply-surface:${release.id}`,
+              `apply-surface-head:${head.version}`,
+              `intake-form:${formHead.id}#${formHead.version}`
+            ])
+          })
+        });
+      }
       if (formHead.currentPublishedVersionId !== release.formRef.formVersionId) {
         return refused('apply_form_version_superseded');
       }

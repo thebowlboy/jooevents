@@ -26,8 +26,9 @@ import { INTAKE_PUBLIC_MUTATE_OPERATION, type IntakePublicFormScopeSource } from
  * composes one gate instance into (a) the public form-read scope source,
  * (b) the continuation policy registry the ceremony boundary re-resolves on
  * every mint/admit/effect, and (c) the public policy revision stamped into
- * `public_open` evidence. Absence, rollback, closing, and re-pinning all fail
- * closed through the same single resolution.
+ * `public_open` evidence. Absence, rollback, and re-pinning fail closed.
+ * Closing preserves only a detail-free marker on the form-read lane while
+ * still sealing every ceremony path.
  */
 
 export const INTAKE_PUBLIC_APPLY_SURFACE_REFUSAL_REASONS = [
@@ -64,6 +65,7 @@ export interface IntakePublicApplySurfacePin {
 
 export type IntakePublicApplySurfaceResolution =
   | { readonly kind: 'pinned'; readonly pin: IntakePublicApplySurfacePin }
+  | { readonly kind: 'closed'; readonly pin: IntakePublicApplySurfacePin }
   | { readonly kind: 'refused'; readonly reason: IntakePublicApplySurfaceRefusalReason };
 
 /**
@@ -75,16 +77,27 @@ export interface IntakePublicApplySurfaceGate {
   resolveApplySurface(): IntakePublicApplySurfaceResolution;
 }
 
-function currentPin(gate: IntakePublicApplySurfaceGate): IntakePublicApplySurfacePin | undefined {
+function currentSurface(
+  gate: IntakePublicApplySurfaceGate
+): Extract<IntakePublicApplySurfaceResolution, { readonly kind: 'pinned' | 'closed' }> | undefined {
   let resolution: IntakePublicApplySurfaceResolution;
   try {
     resolution = gate.resolveApplySurface();
   } catch {
     return undefined;
   }
-  if (!resolution || resolution.kind !== 'pinned') return undefined;
+  if (!resolution || (resolution.kind !== 'pinned' && resolution.kind !== 'closed')) {
+    return undefined;
+  }
   const parsed = applySurfacePinSchema.safeParse(resolution.pin);
-  return parsed.success ? Object.freeze(parsed.data) : undefined;
+  return parsed.success
+    ? Object.freeze({ kind: resolution.kind, pin: Object.freeze(parsed.data) })
+    : undefined;
+}
+
+function currentPin(gate: IntakePublicApplySurfaceGate): IntakePublicApplySurfacePin | undefined {
+  const resolution = currentSurface(gate);
+  return resolution?.kind === 'pinned' ? resolution.pin : undefined;
 }
 
 /**
@@ -102,15 +115,17 @@ export function intakePublicApplyPolicyRevision(
 /**
  * Gates `form.public.read` on the published apply surface: the requested form
  * must be the pinned form and the caller's `public_open` evidence must carry
- * the pin's own policy revision. Anything else resolves to absence.
+ * the pin's own policy revision. The resolved scope also distinguishes an
+ * open pin from its closed marker; anything else resolves to absence.
  */
 export function createApplySurfaceGatedPublicFormScopeSource(input: {
   readonly gate: IntakePublicApplySurfaceGate;
 }): IntakePublicFormScopeSource {
   return Object.freeze({
     resolve(request: { readonly formId: string; readonly publicPolicyRevisionId: PublicPolicyRevisionId }) {
-      const pin = currentPin(input.gate);
-      if (!pin || pin.formId !== request.formId
+      const resolution = currentSurface(input.gate);
+      const pin = resolution?.pin;
+      if (!resolution || !pin || pin.formId !== request.formId
           || intakePublicApplyPolicyRevision(pin) !== request.publicPolicyRevisionId) {
         return undefined;
       }
@@ -120,6 +135,7 @@ export function createApplySurfaceGatedPublicFormScopeSource(input: {
         evidenceIds: Object.freeze([...new Set([
           ...pin.evidenceIds,
           `apply-surface:${pin.surfaceReleaseId}`,
+          `apply-form-state:${resolution.kind === 'pinned' ? 'open' : 'closed'}`,
           `public-policy:${intakePublicApplyPolicyRevision(pin)}`
         ])])
       });

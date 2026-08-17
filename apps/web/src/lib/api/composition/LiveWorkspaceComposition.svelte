@@ -8,7 +8,10 @@
 	import { createCommunicationsProviderSetupLivePort } from '$lib/api/operations/communications-provider-setup-live';
 	import { setOrganizerFormsPort } from '$lib/api/intake-forms-context';
 	import { createIntakeFormsLivePort } from '$lib/api/operations/intake-forms-live';
-	import { createLiveFormsPagePort } from '$lib/api/forms-page-port.live';
+	import {
+		applicationSurfacePublication,
+		createLiveFormsPagePort
+	} from '$lib/api/forms-page-port.live';
 	import { createDecisionsLiveClient } from '$lib/api/operations/decisions-live';
 	import { createDirectEntryLiveClient } from '$lib/api/operations/direct-entry-live';
 	import { createEngagementsLiveClient } from '$lib/api/operations/engagements-live';
@@ -137,13 +140,13 @@
 					&& result.outcome.kind === 'template.artifact.event_required') return null;
 				throw new Error('The application form Template could not be loaded.');
 			},
-			async applicationSurfacePublished() {
-				// The release owner's head list is the fact: an active `apply`
-				// release means the public address serves. An unreadable overview
-				// answers null — the Forms page then says nothing about it.
+			async applicationSurfacePublication() {
+				// The active immutable release is the fact: an `apply` release pins
+				// exactly one form, so a page-wide boolean would lie for every other
+				// open form. An unreadable overview answers null honestly.
 				try {
 					const overview = await release.overview();
-					return overview.surfaceHeads.some((head) => head.kind === 'apply');
+					return applicationSurfacePublication(overview);
 				} catch {
 					return null;
 				}

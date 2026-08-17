@@ -22,16 +22,19 @@ async function panelGeometry(page: Page) {
   });
 }
 
-/* Whether the composition currently on screen fits the footprint the state
-   reserves — the property the resolver-to-card transition depends on. */
-async function reserve(page: Page) {
+/* A resolved task owns only the content it is showing. The resolver may reserve
+   a representative footprint while work is pending; that debt ends on settle. */
+async function settledFootprint(page: Page) {
   return page.locator('.entry-state').evaluate((state) => {
-    const top = state.getBoundingClientRect().top;
-    const used = [...state.children].reduce(
-      (deepest, child) => Math.max(deepest, child.getBoundingClientRect().bottom - top),
-      0
+    const box = state.getBoundingClientRect();
+    const lastChildBottom = [...state.children].reduce(
+      (deepest, child) => Math.max(deepest, child.getBoundingClientRect().bottom),
+      box.top
     );
-    return { fits: used <= parseFloat(getComputedStyle(state).minBlockSize) };
+    return {
+      minBlockSize: getComputedStyle(state).minBlockSize,
+      trailingBlank: box.bottom - lastChildBottom
+    };
   });
 }
 
@@ -41,12 +44,11 @@ function expectSamePlace(before: { left: number; top: number; width: number }, a
   expect(Math.abs(before.width - after.width)).toBeLessThan(2);
 }
 
-test('anonymous entry is neutral, secure, and usable without horizontal overflow', async ({ page, baseURL }, testInfo) => {
+test('anonymous entry is neutral, secure, and usable without horizontal overflow', async ({ page, baseURL }) => {
   await useSampleEntry(page, baseURL, { 'je-latency': '1200' });
   const response = await page.goto('/');
   await expect(page.getByLabel('Checking access')).toBeVisible();
   const resolvingPanel = await panelGeometry(page);
-  const resolvingBox = await page.locator('.entry-panel').boundingBox();
   await expect(page).toHaveURL('/sign-in');
   await expect(page.getByRole('heading', { name: 'Sign in', exact: true })).toBeVisible();
   const brandImage = page.getByRole('link', { name: 'JooEvents home' }).locator('img');
@@ -59,13 +61,10 @@ test('anonymous entry is neutral, secure, and usable without horizontal overflow
     naturalHeight: image.naturalHeight
   }))).toEqual({ complete: true, naturalWidth: 512, naturalHeight: 90 });
   const resolvedPanel = await panelGeometry(page);
-  const resolvedBox = await page.locator('.entry-panel').boundingBox();
   expectSamePlace(resolvingPanel, resolvedPanel);
-  expect(Math.abs((resolvingBox?.height ?? 0) - (resolvedBox?.height ?? 0))).toBeLessThan(2);
-  // On a desktop card the reserve is the mechanism: the resting composition
-  // fits the footprint the resolver was already holding. A narrow viewport
-  // gets its stillness from a panel that fills the screen instead.
-  if (testInfo.project.name === 'desktop') expect(await reserve(page)).toEqual({ fits: true });
+  const footprint = await settledFootprint(page);
+  expect(['0px', 'auto']).toContain(footprint.minBlockSize);
+  expect(footprint.trailingBlank).toBeLessThan(4);
   await expect(page.getByRole('button', { name: 'Continue with Google' })).toBeVisible();
   await expect(page.getByText("Events for people who don't want to manage events.")).toBeVisible();
   await expect(page.getByText('Entry is for those who know.')).toBeVisible();

@@ -47,7 +47,7 @@
 		 * action opens, and that a completed submit is reported to the frame.
 		 */
 		presentation?: 'page' | 'embed';
-		/** One completed submit from this document; the embed route relays it. */
+		/** One submit press settling completed; the embed route relays it at most once. */
 		onSubmitted?: () => void;
 	}
 
@@ -64,6 +64,8 @@
 	let eventMeta = $state('');
 	let indexing = $state(false);
 	let missing = $state(false);
+	/** A published call whose questions stay private after its close. */
+	let applyClosed = $state(false);
 
 	/**
 	 * The reads themselves failed — a different fact from "nothing is published
@@ -87,6 +89,8 @@
 
 	async function load() {
 		failed = false;
+		applyClosed = false;
+		liveApply = null;
 		try {
 			const [library, brand, summary, settings] = await Promise.all([
 				api.templates.list(),
@@ -119,16 +123,20 @@
 					// The served DTO carries what answering needs — field constraints
 					// and option identities — which the flattened template pool does
 					// not; both reads resolve from the one in-flight served answer.
-					const [summaries, served] = await Promise.all([
+					const [summaries, availability] = await Promise.all([
 						api.forms.list(),
 						application.served({ formId: scope.formId })
 					]);
 					forms = summaries;
-					if (served) {
+					if (availability.kind === 'open') {
+						const served = availability.form;
 						liveApply = {
 							form: served,
 							session: application.session({ formId: served.formId, target: served.target })
 						};
+					} else if (availability.kind === 'closed') {
+						applyClosed = true;
+						missing = false;
 					}
 				} else {
 					forms = await api.forms.list();
@@ -225,6 +233,11 @@
 				<button type="button" class="ui-button ui-button--primary" onclick={() => void load()}>
 					Try again
 				</button>
+			</div>
+		{:else if applyClosed}
+			<div class="public__state" role="status">
+				<p class="public__state-title">This call is closed.</p>
+				<p class="public__state-copy">Applications are no longer being accepted.</p>
 			</div>
 		{:else if !ready}
 			<!-- The page's own shape, held while it arrives, so the first painted

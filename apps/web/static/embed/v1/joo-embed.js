@@ -13,6 +13,7 @@
 (function () {
 	'use strict';
 	var TAG = 'joo-embed';
+	var SUBMISSION_EVENT = 'joo-embed:submitted';
 	var PROTOCOL_VERSION = 1;
 	var HEIGHT_MAX_PX = 20000;
 	var HOSTED_PATH = /^\/s\/(schedule|speakers|apply)(\?scope=[a-z]+:[A-Za-z0-9._-]{1,64})?$/;
@@ -136,6 +137,14 @@
 			if (message.kind === 'height_changed') {
 				frame.style.height = message.heightPx + 'px';
 				frame.style.minHeight = '0';
+				return;
+			}
+			if (message.kind === 'submission_complete') {
+				// Stable host API: the protocol envelope stays private to the loader.
+				// No submission, identity, answer, or ceremony detail crosses here.
+				element.dispatchEvent(
+					new CustomEvent(SUBMISSION_EVENT, { bubbles: true, composed: true })
+				);
 				return;
 			}
 			if (message.kind === 'navigate') {

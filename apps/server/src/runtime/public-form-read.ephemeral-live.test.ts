@@ -502,9 +502,8 @@ describe('ephemeral live open public Form read', () => {
     }
     expect(withOrganizerSession.result.data).toEqual(anonymous.result.data);
 
-    // Closing the form closes the whole gate: the surface release still pins
-    // the form, but a closed form fails the resolution, so the read reverts
-    // to the same undistinguishing 401 an unpublished surface answers.
+    // Closing leaves one detail-free public fact: this exact published call
+    // closed. The form body remains absent and the ceremony remains sealed.
     await changeForm({
       runtime,
       session,
@@ -512,10 +511,19 @@ describe('ephemeral live open public Form read', () => {
       key: 'public-read-form-close',
       body: { transition: 'close', formId, expectedDefinitionVersion: 2 }
     });
-    await expectFailedClosed(runtime, formId);
-    // The gate-refused body and the wrong-id-while-pinned body are the same
-    // bytes under the same correlation id: the two refusals are one refusal.
-    expect(await probe(formId)).toBe(unservedProbe);
+    const closed = await publicRead(runtime, formId);
+    expect(closed.result).toMatchObject({
+      kind: 'outcome',
+      outcome: {
+        class: 'conflict',
+        kind: 'intake.form_closed',
+        retryable: false,
+        detail: null
+      }
+    });
+    expect(JSON.stringify(closed.result)).not.toContain(FORM_NAME);
+    // A different id is still indistinguishable from no surface at all.
+    expect(await probe(crypto.randomUUID())).toBe(unservedProbe);
 
     // The application ceremony paths are mounted but sealed: requests
     // without the ceremony protocol are invalid, and the read binding

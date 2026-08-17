@@ -16,6 +16,8 @@ import {
 /** The custom element's tag, and the one script that defines it. */
 export const EMBED_ELEMENT_TAG = 'joo-embed';
 export const EMBED_LOADER_PATH = '/embed/v1/joo-embed.js';
+/** Detail-free CustomEvent dispatched by an inline application embed. */
+export const EMBED_SUBMISSION_EVENT = 'joo-embed:submitted';
 
 /** Route root for embedded surface documents; kinds are the path segments. */
 export const EMBED_ROUTE_PREFIX = '/embed';

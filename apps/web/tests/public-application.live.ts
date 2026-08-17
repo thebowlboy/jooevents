@@ -106,7 +106,7 @@ const receipt = {
 
 async function mockCeremony(
 	page: Page,
-	options: { submitDelayMs?: number } = {}
+	options: { formClosed?: boolean; saveDelayMs?: number; submitDelayMs?: number } = {}
 ): Promise<CeremonyLog> {
 	const log: CeremonyLog = { saves: [], submits: [] };
 	let draftVersion = 0;
@@ -146,7 +146,18 @@ async function mockCeremony(
 	);
 	await page.route('**/api/public/forms/current*', (route) =>
 		route.fulfill(
-			json({
+			json(options.formClosed ? {
+				kind: 'outcome',
+				outcome: {
+					class: 'conflict',
+					kind: 'intake.form_closed',
+					retryable: false,
+					subjects: [],
+					detail: null,
+					detailSchemaVersion: 1
+				},
+				correlationId: '018f6f00-0000-7000-8000-0000000000cd'
+			} : {
 				kind: 'success',
 				data: servedForm,
 				correlationId: '018f6f00-0000-7000-8000-0000000000cd'
@@ -164,6 +175,9 @@ async function mockCeremony(
 		const correlationId = '018f6f00-0000-7000-8000-0000000000ce';
 		if (body.action === 'submit' && options.submitDelayMs) {
 			await new Promise((resolve) => setTimeout(resolve, options.submitDelayMs));
+		}
+		if (body.action === 'save' && options.saveDelayMs) {
+			await new Promise((resolve) => setTimeout(resolve, options.saveDelayMs));
 		}
 		if (body.action === 'begin') {
 			draftVersion = 1;
@@ -275,6 +289,17 @@ test('a blocked submit points at the missing answers instead of sending', async 
 	expect(log.submits).toHaveLength(0);
 });
 
+test('a closed published call says so without exposing its questions', async ({ page }) => {
+	await mockCeremony(page, { formClosed: true });
+	await page.goto(`/s/apply?scope=form%3A${formId}`);
+	await expect(page.getByText('This call is closed.', { exact: true })).toBeVisible({
+		timeout: 15_000
+	});
+	await expect(page.getByText('Applications are no longer being accepted.')).toBeVisible();
+	await expect(page.getByText('Talk title', { exact: true })).toHaveCount(0);
+	await expect(page.getByText(/isn’t published yet/)).toHaveCount(0);
+});
+
 test('the embed document drives the identical ceremony, not a second form', async ({ page }) => {
 	const log = await mockCeremony(page);
 	await page.goto(`/embed/apply?scope=form%3A${formId}`);
@@ -345,6 +370,26 @@ test('a submit in flight refuses a second activation', async ({ page }) => {
 	expect(log.submits).toHaveLength(1);
 });
 
+test('a submit press is latched while dirty answers flush first', async ({ page }) => {
+	const log = await mockCeremony(page, { saveDelayMs: 700 });
+	await openApply(page);
+
+	await page.getByLabel(/Talk title/).fill('Intent, drafted');
+	await page.getByLabel(/Contact email/).fill('ada@example.org');
+	const submit = page.getByRole('button', { name: /Submit|Submitting/ });
+	await submit.click();
+	await expect(submit).toBeDisabled();
+	await expect(submit).toHaveAttribute('aria-busy', 'true');
+	// A programmatic second activation during the pre-submit save window hits
+	// the same component guard a fast second pointer/keyboard press would.
+	await page.locator('form.apply__body').evaluate((form) =>
+		(form as HTMLFormElement).requestSubmit()
+	);
+	await expect(page.locator('.apply__done')).toBeVisible({ timeout: 15_000 });
+	expect(log.saves).toHaveLength(1);
+	expect(log.submits).toHaveLength(1);
+});
+
 test('the embed presentation opens the participant door in a top-level tab', async ({ page }) => {
 	const log = await mockCeremony(page);
 	await page.goto(`/embed/apply?scope=form%3A${formId}`);
@@ -363,5 +408,67 @@ test('the embed presentation opens the participant door in a top-level tab', asy
 	await expect(door).toHaveAttribute('href', '/portal/sign-in');
 	await expect(door).toHaveAttribute('target', '_blank');
 	await expect(door).toHaveAttribute('rel', 'noopener');
+	expect(log.submits).toHaveLength(1);
+});
+
+test('the embed loader exposes one detail-free completion event to its host', async ({ page }) => {
+	const log = await mockCeremony(page);
+	await openApply(page);
+	await page.evaluate(async (id) => {
+		const script = document.createElement('script');
+		script.src = '/embed/v1/joo-embed.js';
+		document.head.appendChild(script);
+		await new Promise<void>((resolve, reject) => {
+			script.addEventListener('load', () => resolve(), { once: true });
+			script.addEventListener('error', () => reject(new Error('embed_loader_failed')), { once: true });
+		});
+		await customElements.whenDefined('joo-embed');
+		const embed = document.createElement('joo-embed');
+		embed.setAttribute('src', `${location.origin}/embed/apply?scope=form%3A${id}`);
+		(window as unknown as { completionEvents: unknown[] }).completionEvents = [];
+		embed.addEventListener('joo-embed:submitted', (event) => {
+			(window as unknown as { completionEvents: unknown[] }).completionEvents.push({
+				detail: (event as CustomEvent).detail,
+				targetIsEmbed: event.target === embed
+			});
+		});
+		const host = document.createElement('section');
+		host.id = 'embed-host-fixture';
+		host.appendChild(embed);
+		document.body.appendChild(host);
+	}, formId);
+	// The production loader deliberately lazy-loads its frame. Bring the host
+	// into view before waiting for the frame navigation.
+	await page.locator('#embed-host-fixture').scrollIntoViewIfNeeded();
+
+	await expect
+		.poll(() =>
+			page.frames().some((frame) => {
+				try {
+					return new URL(frame.url()).pathname === '/embed/apply';
+				} catch {
+					return false;
+				}
+			})
+		)
+		.toBe(true);
+	const embedded = page.frames().find((frame) => {
+		try {
+			return new URL(frame.url()).pathname === '/embed/apply';
+		} catch {
+			return false;
+		}
+	});
+	if (embedded === undefined) throw new Error('embed_frame_not_mounted');
+	await expect(embedded.locator('.apply__title')).toContainText('Speak at the Summit', {
+		timeout: 15_000
+	});
+	await embedded.getByLabel(/Talk title/).fill('Embedded completion');
+	await embedded.getByLabel(/Contact email/).fill('ada@example.org');
+	await embedded.getByRole('button', { name: 'Submit application' }).click();
+	await expect(embedded.locator('.apply__done')).toBeVisible({ timeout: 15_000 });
+	await expect.poll(() => page.evaluate(() =>
+		(window as unknown as { completionEvents: unknown[] }).completionEvents
+	)).toEqual([{ detail: null, targetIsEmbed: true }]);
 	expect(log.submits).toHaveLength(1);
 });
