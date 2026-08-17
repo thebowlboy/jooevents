@@ -71,8 +71,10 @@ export type OutboundEmailAttemptCompletion = Readonly<{
   head: OutboundEmailDeliveryHead;
 }>;
 
+type MaybePromise<Value> = Value | Promise<Value>;
+
 export interface OutboundEmailDeliveryLedger {
-  read(deliveryId: string): OutboundEmailDeliveryHead | undefined;
+  read(deliveryId: string): MaybePromise<OutboundEmailDeliveryHead | undefined>;
   /**
    * Takes the delivery's lease when it is claimable — `pending`, retryable, or
    * a `request_started` whose lease has actually lapsed — and refuses without
@@ -83,7 +85,7 @@ export interface OutboundEmailDeliveryLedger {
     readonly claimId: string;
     readonly now: string;
     readonly leaseMs: number;
-  }): OutboundEmailDeliveryClaimOutcome;
+  }): MaybePromise<OutboundEmailDeliveryClaimOutcome>;
   /**
    * Gives a claim back before any attempt started, so a delivery abandoned for a
    * reason other than a crash is takeable immediately instead of after expiry.
@@ -93,7 +95,7 @@ export interface OutboundEmailDeliveryLedger {
     readonly deliveryId: string;
     readonly claimId: string;
     readonly now: string;
-  }): void;
+  }): MaybePromise<void>;
   recordAttemptStarted(input: {
     readonly deliveryId: string;
     readonly expectedDeliveryVersion: number;
@@ -113,7 +115,7 @@ export interface OutboundEmailDeliveryLedger {
     readonly capabilities: EmailDeliveryAdapter['capabilities'];
     readonly providerRequestDigestSha256: string;
     readonly startedAt: string;
-  }): OutboundEmailDeliveryAttempt;
+  }): MaybePromise<OutboundEmailDeliveryAttempt>;
   recordProviderResolution(input: {
     readonly deliveryId: string;
     readonly attemptId: string;
@@ -121,14 +123,14 @@ export interface OutboundEmailDeliveryLedger {
     readonly claimId: string;
     readonly resolution: ProviderAttemptResolution;
     readonly completedAt: string;
-  }): OutboundEmailAttemptCompletion;
+  }): MaybePromise<OutboundEmailAttemptCompletion>;
   recordBoundaryAmbiguity(input: {
     readonly deliveryId: string;
     readonly attemptId: string;
     readonly claimId: string;
     readonly code: 'worker_result_lost' | 'provider_boundary_failure';
     readonly completedAt: string;
-  }): OutboundEmailAttemptCompletion;
+  }): MaybePromise<OutboundEmailAttemptCompletion>;
 }
 
 export interface OutboundEmailEnvelopeResolver {
@@ -259,15 +261,15 @@ export function createOutboundEmailDeliveryWorker(input: {
    * delivery key is carried on every request, but this provider family does not
    * promise to honour it, so a lapsed lease must never become a silent resend.
    */
-  function recoverStarted(
+  async function recoverStarted(
     head: OutboundEmailDeliveryHead,
     claimId: string
-  ): OutboundEmailDispatchResult {
+  ): Promise<OutboundEmailDispatchResult> {
     if (head.state !== 'request_started' || head.currentAttemptId === null) {
       throw new OutboundEmailDeliveryWorkerError('delivery_not_dispatchable');
     }
     const attemptId = head.currentAttemptId;
-    const completed = input.ledger.recordBoundaryAmbiguity({
+    const completed = await input.ledger.recordBoundaryAmbiguity({
       deliveryId: head.deliveryId,
       attemptId,
       claimId,
@@ -289,7 +291,7 @@ export function createOutboundEmailDeliveryWorker(input: {
       readonly afterProviderResult?: () => void;
     }): Promise<OutboundEmailDispatchOutcome> {
       const claimId = input.ids.newClaimId();
-      const claim = input.ledger.claim({
+      const claim = await input.ledger.claim({
         deliveryId: inputDelivery.deliveryId,
         claimId,
         now: input.clock.now(),
@@ -356,7 +358,7 @@ export function createOutboundEmailDeliveryWorker(input: {
         if (prepared.reviewedEnvelopeDigestSha256 !== submittedEnvelopeDigestSha256) {
           throw new OutboundEmailDeliveryWorkerError('reviewed_envelope_changed');
         }
-        input.ledger.recordAttemptStarted({
+        await input.ledger.recordAttemptStarted({
           deliveryId: head.deliveryId,
           expectedDeliveryVersion: head.version,
           claimId,
@@ -384,7 +386,7 @@ export function createOutboundEmailDeliveryWorker(input: {
         }
         // Nothing was submitted and no attempt is in flight, so holding the
         // lease until it expires would only delay an honest retry.
-        input.ledger.releaseClaim({
+        await input.ledger.releaseClaim({
           deliveryId: head.deliveryId,
           claimId,
           now: input.clock.now()
@@ -396,7 +398,7 @@ export function createOutboundEmailDeliveryWorker(input: {
       try {
         normalized = normalizeProviderSubmissionOutcome(await input.provider.submit(prepared));
       } catch {
-        const completed = input.ledger.recordBoundaryAmbiguity({
+        const completed = await input.ledger.recordBoundaryAmbiguity({
           deliveryId: head.deliveryId,
           attemptId,
           claimId,
@@ -412,7 +414,7 @@ export function createOutboundEmailDeliveryWorker(input: {
       }
 
       inputDelivery.afterProviderResult?.();
-      const completed = input.ledger.recordProviderResolution({
+      const completed = await input.ledger.recordProviderResolution({
         deliveryId: head.deliveryId,
         attemptId,
         claimId,
@@ -423,4 +425,3 @@ export function createOutboundEmailDeliveryWorker(input: {
     }
   });
 }
-
