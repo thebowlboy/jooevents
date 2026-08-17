@@ -272,6 +272,7 @@ export function mapServedFormSummary(served: ServedPublicFormDto): FormSummary {
 						}
 					: { kind: 'session', sessionId: served.target.sessionId },
 		status: 'open',
+		currentPublishedVersionId: served.formVersionId,
 		...(served.availability.kind === 'closes'
 			? { closesAt: served.availability.effectiveAt.slice(0, 10) }
 			: {}),

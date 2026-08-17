@@ -17,6 +17,7 @@ import {
   parseInstant,
   parseInvocationId,
   parseMembershipId,
+  parsePublicPolicyRevisionId,
   parseUserId,
   parseWorkspaceId
 } from '@jooevents/kernel';
@@ -47,6 +48,9 @@ const eventId = '018f7d5a-4b3c-7abc-8def-012345678902';
 const formId = '018f7d5a-4b3c-7abc-8def-012345678903';
 const formVersionId = '018f7d5a-4b3c-7abc-8def-012345678904';
 const draftId = '018f7d5a-4b3c-7abc-8def-012345678905';
+const publicPolicyRevisionId = parsePublicPolicyRevisionId(
+  '018f7d5a-4b3c-7abc-8def-012345678910'
+);
 const profile = Object.freeze({ key: 'intake.operation-test', version: parseContractVersion(1) });
 const authority: CurrentAuthorityResolver<InvocationEvidence> = Object.freeze({
   resolve: () => Object.freeze({ kind: 'denied' as const, reason: 'not_authorized' as const })
@@ -131,6 +135,42 @@ const allowedAuthority: CurrentAuthorityResolver<InvocationEvidence> = Object.fr
   }
 });
 
+const publicAuthority: CurrentAuthorityResolver<InvocationEvidence> = Object.freeze({
+  resolve(resolution: Parameters<CurrentAuthorityResolver<InvocationEvidence>['resolve']>[0]) {
+    return Object.freeze({
+      kind: 'authorized' as const,
+      authority: Object.freeze({
+        actor: Object.freeze({
+          kind: 'public_request' as const,
+          publicPolicyRevisionId,
+          authority: Object.freeze({ kind: 'open_policy' as const })
+        }),
+        principal: Object.freeze({
+          kind: 'public_capability' as const,
+          publicPolicyRevisionId,
+          authority: Object.freeze({ kind: 'open_policy' as const })
+        }),
+        lane: resolution.lane,
+        scope: resolution.scope,
+        grants: Object.freeze([{
+          kind: 'public_policy' as const,
+          key: INTAKE_PUBLIC_OPEN_ACCESS_POLICY.key
+        }]),
+        evidenceIds: Object.freeze(['public-policy:intake-test']),
+        authorityCitationIds: Object.freeze([]),
+        evaluatedAt: resolution.evaluatedAt
+      })
+    });
+  }
+});
+
+const publicOpenEvidence: InvocationEvidence = Object.freeze({
+  kind: 'public_open',
+  surface: 'public_http',
+  client: { key: 'web.public-application' },
+  publicPolicyRevisionId
+});
+
 function endpointTable(module: ReturnType<typeof createIntakeReadOperationModule>) {
   return [
     ...(module.source.operations ?? []).flatMap((operation) => operation.bindings.flatMap((binding) =>
@@ -198,7 +238,7 @@ describe('Intake operation modules', () => {
       policies,
       currentAuthority: authority,
       publicFormScope: {
-        resolve: () => ({ workspaceId, eventId, evidenceIds: ['form:served'] })
+        resolve: () => ({ workspaceId, eventId, availability: 'open', evidenceIds: ['form:served'] })
       },
       ceremonyScope: {
         resolve: () => ({
@@ -225,7 +265,7 @@ describe('Intake operation modules', () => {
       policy: policies.publicOpen,
       currentAuthority: authority,
       publicFormScope: {
-        resolve: () => ({ workspaceId, eventId, evidenceIds: ['form:served'] })
+        resolve: () => ({ workspaceId, eventId, availability: 'open', evidenceIds: ['form:served'] })
       },
       read,
       clock,
@@ -300,6 +340,68 @@ describe('Intake operation modules', () => {
         action: 'submit', input: { expectedDraftVersion: 1 }, ...trusted
       }).success).toBe(false);
     }
+  });
+
+  test('uses typed served-form availability for the shared closed-call outcome', async () => {
+    let availability: 'open' | 'closed' = 'closed';
+    let readCalls = 0;
+    const module = createIntakePublicFormReadOperationModule({
+      policy: policies.publicOpen,
+      currentAuthority: publicAuthority,
+      publicFormScope: {
+        resolve: () => ({
+          workspaceId,
+          eventId,
+          availability,
+          evidenceIds: ['form:served']
+        })
+      },
+      read: {
+        readServedForm: () => {
+          readCalls += 1;
+          return undefined;
+        }
+      },
+      clock,
+      ids,
+      crypto
+    });
+    const runtime = await createApplicationOperationRuntime({
+      source: module.source,
+      read: {
+        operationalTrace: { emit() {} },
+        immutableAudit: { append() {} },
+        clock: { now: () => parseInstant('2026-08-12T12:00:00.000Z') },
+        newInvocationId: ids.newInvocationId
+      },
+      unitOfWork: unusedUnitOfWork
+    });
+    const execute = () => runtime.readExecutor.execute({
+      operationName: 'form.public.read',
+      operationVersion: 1,
+      surface: 'public_http',
+      correlationId: parseCorrelationId('018f7d5a-4b3c-7abc-8def-012345678911'),
+      businessInput: { formId },
+      verifiedEvidence: publicOpenEvidence
+    });
+
+    await expect(execute()).resolves.toMatchObject({
+      kind: 'outcome',
+      outcome: {
+        class: 'conflict',
+        kind: 'intake.form_closed',
+        retryable: false,
+        detail: null
+      }
+    });
+    expect(readCalls).toBe(0);
+
+    availability = 'open';
+    await expect(execute()).resolves.toMatchObject({
+      kind: 'outcome',
+      outcome: { class: 'conflict', kind: 'intake.not_found' }
+    });
+    expect(readCalls).toBe(1);
   });
 
   test('freezes the direct and owner-native Form write bindings', () => {

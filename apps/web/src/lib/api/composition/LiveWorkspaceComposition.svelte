@@ -143,13 +143,9 @@
 			async applicationSurfacePublication() {
 				// The active immutable release is the fact: an `apply` release pins
 				// exactly one form, so a page-wide boolean would lie for every other
-				// open form. An unreadable overview answers null honestly.
-				try {
-					const overview = await release.overview();
-					return applicationSurfacePublication(overview);
-				} catch {
-					return null;
-				}
+				// open form. The Forms port owns failure-to-null for this capability.
+				const overview = await release.overview();
+				return applicationSurfacePublication(overview);
 			}
 		}
 	});

@@ -115,7 +115,8 @@ async function createAndPublishForm(
 async function proveSecondOpenFormIsNotClaimedLive(
 	page: Page,
 	formName: string,
-	formatName: string
+	formatName: string,
+	pinnedFormName: string
 ): Promise<void> {
 	await page.goto('/app/forms');
 	await page.getByRole('button', { name: 'New form' }).first().click();
@@ -136,6 +137,31 @@ async function proveSecondOpenFormIsNotClaimedLive(
 	);
 	await expect(address).toContainText('This address turns visitors away');
 	await expect(address.locator('.conf__address-url')).toHaveCount(0);
+
+	// Closing the pinned form means the shared page serves no open form, even
+	// while this sibling remains open. The list must name that state and its fix.
+	await page.goto('/app/forms');
+	const forms = page.getByRole('region', { name: 'Forms' });
+	await forms.locator('.card').filter({ hasText: pinnedFormName })
+		.getByRole('link', { name: 'Questions' }).click();
+	await page.getByRole('button', { name: 'Close form', exact: true }).click();
+	await expect(page.getByRole('button', { name: 'Reopen form', exact: true })).toBeVisible();
+
+	await page.goto('/app/forms');
+	const warning = page.locator('.list__warn');
+	await expect(warning).toContainText('No open form is currently served');
+	await expect(warning).toContainText(
+		`Reopen ${pinnedFormName}, or publish the application page for an open form.`
+	);
+
+	// Restore the shared fixture, then close the sibling for the next viewport.
+	await forms.locator('.card').filter({ hasText: pinnedFormName })
+		.getByRole('link', { name: 'Questions' }).click();
+	await page.getByRole('button', { name: 'Reopen form', exact: true }).click();
+	await expect(page.getByRole('button', { name: 'Close form', exact: true })).toBeVisible();
+	await page.goto('/app/forms');
+	await forms.locator('.card').filter({ hasText: formName })
+		.getByRole('link', { name: 'Questions' }).click();
 
 	// Keep the shared joined fixture tidy for the next viewport.
 	await page.getByRole('button', { name: 'Close form', exact: true }).click();
@@ -200,7 +226,8 @@ test('an anonymous application becomes the same participant’s visible proposal
 	await proveSecondOpenFormIsNotClaimedLive(
 		page,
 		`Unpinned CFP ${project} ${crypto.randomUUID()}`,
-		formatName
+		formatName,
+		formName
 	);
 	await addForeignSubmission(page, {
 		name: 'Foreign Speaker',

@@ -32,7 +32,11 @@ export function applicationSurfacePublication(
 ): ApplicationSurfacePublication {
 	const active = overview.activeSurfaceReleases.find((candidate) => candidate.kind === 'apply');
 	return active?.kind === 'apply'
-		? { kind: 'pinned', formId: active.formRef.formId }
+		? {
+				kind: 'pinned',
+				formId: active.formRef.formId,
+				formVersionId: active.formRef.formVersionId
+			}
 		: { kind: 'none' };
 }
 
@@ -159,6 +163,7 @@ function tunedSummary(summary: OrganizerFormSummaryView): FormSummary {
 		name: summary.name,
 		target: tunedTarget(summary.target),
 		status: summary.status,
+		currentPublishedVersionId: summary.currentPublishedVersionId,
 		...(summary.closesAt === null ? {} : { closesAt: summary.closesAt }),
 		version: summary.version,
 		submissionCount: summary.submissionCount,

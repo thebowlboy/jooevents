@@ -12,5 +12,5 @@ document.querySelector('joo-embed')?.addEventListener('joo-embed:submitted', () 
 ```
 
 The event deliberately has no `detail`. Submission answers, identity, tokens,
-and internal message envelopes never cross into the host page. A single embed
-mount dispatches the event at most once.
+and internal message envelopes never cross into the host page. Each completed
+application ceremony dispatches the event at most once.

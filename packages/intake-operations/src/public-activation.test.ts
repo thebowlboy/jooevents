@@ -59,7 +59,9 @@ describe('apply-surface gated public form scope source', () => {
   test('serves the pinned form under the pin-derived policy revision with surface evidence', async () => {
     const source = createApplySurfaceGatedPublicFormScopeSource({ gate: gateOf(pinned) });
     const resolved = await source.resolve({ formId: pin.formId, publicPolicyRevisionId: revision });
-    expect(resolved).toMatchObject({ workspaceId: pin.workspaceId, eventId: pin.eventId });
+    expect(resolved).toMatchObject({
+      workspaceId: pin.workspaceId, eventId: pin.eventId, availability: 'open'
+    });
     expect(resolved?.evidenceIds).toContain(`apply-surface:${pin.surfaceReleaseId}`);
     expect(resolved?.evidenceIds).toContain(`public-policy:${revision}`);
   });
@@ -95,8 +97,10 @@ describe('apply-surface gated public form scope source', () => {
       formId: pin.formId,
       publicPolicyRevisionId: revision
     });
-    expect(resolved).toMatchObject({ workspaceId: pin.workspaceId, eventId: pin.eventId });
-    expect(resolved?.evidenceIds).toContain('apply-form-state:closed');
+    expect(resolved).toMatchObject({
+      workspaceId: pin.workspaceId, eventId: pin.eventId, availability: 'closed'
+    });
+    expect(resolved?.evidenceIds).not.toContain('apply-form-state:closed');
 
     const registry = createApplySurfaceGatedContinuationPolicySource({
       gate: gateOf({ kind: 'closed', pin }), binding, security

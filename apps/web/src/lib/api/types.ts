@@ -1563,6 +1563,8 @@ export interface FormSummary {
 	name: string;
 	target: FormTarget;
 	status: 'draft' | 'open' | 'closed';
+	/** The exact published form version; null until the first publication. */
+	currentPublishedVersionId: string | null;
 	/**
 	 * ISO date (yyyy-mm-dd) after which normal intake ends — the materialized
 	 * fixed-anchor close deadline. Absent = no close date: the form stays open

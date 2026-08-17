@@ -1613,6 +1613,9 @@ function asForm(seed: FormSeed): FormSummary {
 		name: seed.name,
 		target: seed.target,
 		status: seed.status,
+		currentPublishedVersionId: seed.status === 'draft'
+			? null
+			: `${seed.id}:published:${seed.version}`,
 		...(seed.closesAt ? { closesAt: seed.closesAt } : {}),
 		version: seed.version,
 		submissionCount: seed.submissionCount,

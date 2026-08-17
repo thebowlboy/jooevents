@@ -280,6 +280,16 @@ describe('SQLite public apply-surface gate', () => {
         ]
       }
     });
+
+    context.forms.currentPublishedVersionId = formVersion2;
+    expect(context.gate.resolveApplySurface())
+      .toEqual({ kind: 'refused', reason: 'apply_form_version_superseded' });
+
+    context.forms.currentPublishedVersionId = formVersion1;
+    context.forms.status = 'draft';
+    expect(context.gate.resolveApplySurface())
+      .toEqual({ kind: 'refused', reason: 'no_published_apply_surface' });
+
     context.forms.status = 'open';
 
     context.forms.currentPublishedVersionId = formVersion2;

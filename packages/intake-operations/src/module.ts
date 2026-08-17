@@ -236,8 +236,21 @@ export interface IntakeCurrentEventSource {
   resolveCurrentEvent(workspaceId: WorkspaceId): { readonly eventId?: string; readonly evidenceIds: readonly string[] } | Promise<{ readonly eventId?: string; readonly evidenceIds: readonly string[] }>;
 }
 
+export type IntakePublicFormAvailability = 'open' | 'closed';
+
+export interface IntakePublicFormScopeResolution {
+  readonly workspaceId: string;
+  readonly eventId: string;
+  readonly availability: IntakePublicFormAvailability;
+  readonly evidenceIds: readonly string[];
+}
+
 export interface IntakePublicFormScopeSource {
-  resolve(input: { readonly formId: string; readonly publicPolicyRevisionId: PublicPolicyRevisionId }): { readonly workspaceId: string; readonly eventId: string; readonly evidenceIds: readonly string[] } | undefined | Promise<{ readonly workspaceId: string; readonly eventId: string; readonly evidenceIds: readonly string[] } | undefined>;
+  resolve(input: {
+    readonly formId: string;
+    readonly publicPolicyRevisionId: PublicPolicyRevisionId;
+  }): IntakePublicFormScopeResolution | undefined
+    | Promise<IntakePublicFormScopeResolution | undefined>;
 }
 
 export interface IntakePublicCeremonyScopeSource {
@@ -325,13 +338,23 @@ function eventScope(workspaceId: WorkspaceId, source: IntakeCurrentEventSource):
   }});
 }
 
-function publicFormScope(source: IntakePublicFormScopeSource): InvocationScopeResolver {
+function publicFormScope(
+  source: IntakePublicFormScopeSource,
+  availabilityByBusinessInput: WeakMap<object, IntakePublicFormAvailability>
+): InvocationScopeResolver {
   return Object.freeze({ async resolve({ businessInput, evidence }:
     Parameters<InvocationScopeResolver['resolve']>[0]) {
     if (evidence.kind !== 'public_open') throw new TypeError('intake_public_open_evidence_required');
     const { formId } = formIdInputSchema.parse(businessInput);
     const resolved = await source.resolve({ formId, publicPolicyRevisionId: evidence.publicPolicyRevisionId });
     if (!resolved) throw new TypeError('intake_public_form_unavailable');
+    if (resolved.availability !== 'open' && resolved.availability !== 'closed') {
+      throw new TypeError('intake_public_form_availability_invalid');
+    }
+    if (typeof businessInput !== 'object' || businessInput === null) {
+      throw new TypeError('intake_public_form_input_invalid');
+    }
+    availabilityByBusinessInput.set(businessInput, resolved.availability);
     const workspaceId = parseWorkspaceId(resolved.workspaceId);
     const eventId = parseEventId(resolved.eventId);
     return Object.freeze({
@@ -680,13 +703,46 @@ function closedPublicFormOutcome(): ReadEntryOutcome {
   };
 }
 
-function publicFormIsClosed(context: ReadInvocationContext): boolean {
-  return context.scope.resolutionEvidenceIds.includes('apply-form-state:closed');
-}
-
 function eventRequired(context: ReadInvocationContext): { readonly workspaceId: WorkspaceId; readonly eventId: EventId } {
   if (!context.scope.eventId) throw new TypeError('intake_current_event_required');
   return { workspaceId: context.scope.workspaceId, eventId: context.scope.eventId };
+}
+
+/**
+ * The one public-form read definition used by the served-only and conformance
+ * modules. Availability is server-resolved with scope and correlated to the
+ * parsed request object without turning provenance strings into control state.
+ */
+function publicFormReadEntry(input: {
+  readonly lane: PublicOpenLane;
+  readonly source: IntakePublicFormScopeSource;
+  readonly read: Pick<IntakeReadPort, 'readServedForm'>;
+}): ReadEntry {
+  const availabilityByBusinessInput = new WeakMap<object, IntakePublicFormAvailability>();
+  return {
+    operation: INTAKE_PUBLIC_FORM_READ_OPERATION,
+    key: 'publicForm',
+    path: '/api/public/forms/current',
+    lane: input.lane,
+    scope: publicFormScope(input.source, availabilityByBusinessInput),
+    extraOutcomes: [{ class: 'conflict', kind: 'intake.form_closed', retryable: false }],
+    read: (context, raw) => {
+      if (typeof raw !== 'object' || raw === null) {
+        throw new TypeError('intake_public_form_input_invalid');
+      }
+      const availability = availabilityByBusinessInput.get(raw);
+      availabilityByBusinessInput.delete(raw);
+      if (!availability) throw new TypeError('intake_public_form_availability_missing');
+      if (availability === 'closed') return closedPublicFormOutcome();
+      const currentScope = eventRequired(context);
+      const { formId } = formIdInputSchema.parse(raw);
+      const value = input.read.readServedForm(currentScope, formId);
+      if (value && value.formId !== formId) {
+        throw new TypeError('intake_read_projection_id_mismatch');
+      }
+      return value;
+    }
+  };
 }
 
 function assertProjectionScope(
@@ -773,24 +829,11 @@ export function createIntakePublicFormReadOperationModule(input: {
     clock: input.clock,
     ids: input.ids,
     crypto: input.crypto,
-    entries: [{
-      operation: INTAKE_PUBLIC_FORM_READ_OPERATION,
-      key: 'publicForm',
-      path: '/api/public/forms/current',
+    entries: [publicFormReadEntry({
       lane: publicOpenLane(input.policy),
-      scope: publicFormScope(input.publicFormScope),
-      extraOutcomes: [{ class: 'conflict', kind: 'intake.form_closed', retryable: false }],
-      read: (context, raw) => {
-        if (publicFormIsClosed(context)) return closedPublicFormOutcome();
-        const currentScope = eventRequired(context);
-        const { formId } = formIdInputSchema.parse(raw);
-        const value = input.read.readServedForm(currentScope, formId);
-        if (value && value.formId !== formId) {
-          throw new TypeError('intake_read_projection_id_mismatch');
-        }
-        return value;
-      }
-    }]
+      source: input.publicFormScope,
+      read: input.read
+    })]
   });
 }
 
@@ -818,24 +861,11 @@ export function createIntakePublicConformanceReadOperationModule(input: {
     ids: input.ids,
     crypto: input.crypto,
     entries: [
-      {
-        operation: INTAKE_PUBLIC_FORM_READ_OPERATION,
-        key: 'publicForm',
-        path: '/api/public/forms/current',
+      publicFormReadEntry({
         lane: publicOpen,
-        scope: publicFormScope(input.publicFormScope),
-        extraOutcomes: [{ class: 'conflict', kind: 'intake.form_closed', retryable: false }],
-        read: (context, raw) => {
-          if (publicFormIsClosed(context)) return closedPublicFormOutcome();
-          const currentScope = eventRequired(context);
-          const { formId } = formIdInputSchema.parse(raw);
-          const value = input.read.readServedForm(currentScope, formId);
-          if (value && value.formId !== formId) {
-            throw new TypeError('intake_read_projection_id_mismatch');
-          }
-          return value;
-        }
-      },
+        source: input.publicFormScope,
+        read: input.read
+      }),
       {
         operation: INTAKE_PUBLIC_DRAFT_RESUME_OPERATION,
         key: 'publicResume',

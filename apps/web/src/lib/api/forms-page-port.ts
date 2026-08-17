@@ -32,10 +32,21 @@ export type FormPublishPreparation =
 
 /** Which form the one published application surface currently serves. */
 export type ApplicationSurfacePublication =
-	| { readonly kind: 'pinned'; readonly formId: string }
+	| { readonly kind: 'pinned'; readonly formId: string; readonly formVersionId: string }
 	| { readonly kind: 'any' }
 	| { readonly kind: 'none' }
 	| null;
+
+/** Whether the active application release serves this exact published form version. */
+export function applicationSurfacePublicationServes(
+	publication: ApplicationSurfacePublication | undefined,
+	form: Pick<FormSummary, 'id' | 'currentPublishedVersionId'>
+): boolean {
+	return publication?.kind === 'any'
+		|| (publication?.kind === 'pinned'
+			&& publication.formId === form.id
+			&& publication.formVersionId === form.currentPublishedVersionId);
+}
 
 /**
  * Everything the tuned Forms page consumes. Source selection belongs to the

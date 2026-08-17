@@ -5,6 +5,7 @@ import {
 	applicationSurfacePublication,
 	createLiveFormsPagePort
 } from './forms-page-port.live';
+import { applicationSurfacePublicationServes } from './forms-page-port';
 import type { ReleaseOverviewDto } from '@jooevents/contracts';
 import { createIntakeFormsSamplePort } from './sample/intake-forms';
 import type { WorkspaceFieldsApi } from './field-registry-workspace-adapter';
@@ -36,13 +37,25 @@ function port(forms: OrganizerFormsPort = liveForms(), keys: string[] = []) {
 describe('live tuned Forms page adapter', () => {
 	test('maps the active apply release to its one pinned form', () => {
 		const formId = intakeFormsFixtureIds.openForm;
+		const formVersionId = crypto.randomUUID();
 		const overview = {
 			activeSurfaceReleases: [{
 				kind: 'apply',
-				formRef: { formId, formVersionId: crypto.randomUUID() }
+				formRef: { formId, formVersionId }
 			}]
 		} as ReleaseOverviewDto;
-		expect(applicationSurfacePublication(overview)).toEqual({ kind: 'pinned', formId });
+		expect(applicationSurfacePublication(overview)).toEqual({
+			kind: 'pinned', formId, formVersionId
+		});
+		const publication = applicationSurfacePublication(overview);
+		expect(applicationSurfacePublicationServes(publication, {
+			id: formId,
+			currentPublishedVersionId: formVersionId
+		})).toBe(true);
+		expect(applicationSurfacePublicationServes(publication, {
+			id: formId,
+			currentPublishedVersionId: crypto.randomUUID()
+		})).toBe(false);
 		expect(applicationSurfacePublication({
 			activeSurfaceReleases: []
 		} as unknown as ReleaseOverviewDto)).toEqual({ kind: 'none' });

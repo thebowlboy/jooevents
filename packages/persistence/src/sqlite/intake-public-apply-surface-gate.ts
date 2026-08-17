@@ -44,9 +44,9 @@ function refused(reason: IntakePublicApplySurfaceRefusalReason): IntakePublicApp
  * The published apply-surface gate over this database's release and intake
  * tables. Serving truth is re-read on every resolution: the current `apply`
  * surface head, its immutable active release's `formRef` pin, and the pinned
- * form's live head. Absence, a rolled-back head, a closed form, and a pin
- * that no longer names the form's current published version each fail closed
- * as their own typed refusal; nothing is cached and nothing is inferred.
+ * form's live head. A pin must still name the current published version before
+ * a genuinely closed form may serve its detail-free marker. Draft, drifted,
+ * absent, and malformed states fail closed; nothing is cached or inferred.
  */
 export function createSQLiteIntakePublicApplySurfaceGate(input: {
   readonly sqlite: Database;
@@ -85,7 +85,10 @@ export function createSQLiteIntakePublicApplySurfaceGate(input: {
       if (!formHead || formHead.id !== release.formRef.formId) {
         return refused('no_published_apply_surface');
       }
-      if (formHead.status !== 'open') {
+      if (formHead.currentPublishedVersionId !== release.formRef.formVersionId) {
+        return refused('apply_form_version_superseded');
+      }
+      if (formHead.status === 'closed') {
         return Object.freeze({
           kind: 'closed' as const,
           pin: Object.freeze({
@@ -103,9 +106,7 @@ export function createSQLiteIntakePublicApplySurfaceGate(input: {
           })
         });
       }
-      if (formHead.currentPublishedVersionId !== release.formRef.formVersionId) {
-        return refused('apply_form_version_superseded');
-      }
+      if (formHead.status !== 'open') return refused('no_published_apply_surface');
       return Object.freeze({
         kind: 'pinned' as const,
         pin: Object.freeze({

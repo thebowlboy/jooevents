@@ -132,10 +132,10 @@ export function createApplySurfaceGatedPublicFormScopeSource(input: {
       return Object.freeze({
         workspaceId: pin.workspaceId,
         eventId: pin.eventId,
+        availability: resolution.kind === 'pinned' ? 'open' as const : 'closed' as const,
         evidenceIds: Object.freeze([...new Set([
           ...pin.evidenceIds,
           `apply-surface:${pin.surfaceReleaseId}`,
-          `apply-form-state:${resolution.kind === 'pinned' ? 'open' : 'closed'}`,
           `public-policy:${intakePublicApplyPolicyRevision(pin)}`
         ])])
       });

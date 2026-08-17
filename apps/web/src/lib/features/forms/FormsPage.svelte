@@ -21,6 +21,7 @@
 		FormPublishReview,
 		FormsPagePort
 	} from '$lib/api/forms-page-port';
+	import { applicationSurfacePublicationServes } from '$lib/api/forms-page-port';
 	import { standaloneUrl } from '$lib/features/embeds/embed-snippet';
 	import { param, paramFlag, applyParams, clearParams } from '$lib/features/workspace/url-state.svelte';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
@@ -83,16 +84,12 @@
 		void reloadForms();
 		// The application surface the Preview door lands on: one template serves
 		// every form, so the id is resolved once.
-		void port.templates.applicationFormSurfaceId().then(
-			(id) => (surfaceId = id),
-			() => (surfaceId = null)
-		);
+		void port.templates.applicationFormSurfaceId().then((id) => (surfaceId = id));
 		// The other half of "is the public address actually live": the shared
 		// application page's own release. A form and its page publish
 		// separately, and an address serves only when both stand.
 		void port.templates.applicationSurfacePublication().then(
-			(publication) => (surfacePublication = publication),
-			() => (surfacePublication = null)
+			(publication) => (surfacePublication = publication)
 		);
 		// Target references resolve against the live vocabulary and sessions at
 		// render time — a form stores only the reference, never a copied name.
@@ -138,17 +135,25 @@
 		});
 	}
 
-	function publicationServes(formId: string): boolean {
-		return surfacePublication?.kind === 'any'
-			|| (surfacePublication?.kind === 'pinned' && surfacePublication.formId === formId);
+	function publicationServes(form: FormSummary): boolean {
+		return applicationSurfacePublicationServes(surfacePublication, form);
 	}
 
 	function publicationMismatch(formId: string): boolean {
 		return surfacePublication?.kind === 'pinned' && surfacePublication.formId !== formId;
 	}
 
+	function publicationVersionMismatch(form: FormSummary): boolean {
+		return surfacePublication?.kind === 'pinned'
+			&& surfacePublication.formId === form.id
+			&& surfacePublication.formVersionId !== form.currentPublishedVersionId;
+	}
+
 	const pinnedFormId = $derived(
 		surfacePublication?.kind === 'pinned' ? surfacePublication.formId : null
+	);
+	const pinnedForm = $derived(
+		pinnedFormId && forms ? forms.find((entry) => entry.id === pinnedFormId) ?? null : null
 	);
 
 	// Plain-language target labels: the badge says which kind of door this is;
@@ -1058,14 +1063,22 @@
 								<span class="ui-skeleton sk-line" style="inline-size: 24rem" aria-hidden="true"
 								></span>
 							</p>
+					{:else if form.status === 'draft'}
+						<p class="conf__address-note">
+							{#if surfacePublication?.kind === 'none'}
+								Not live yet — this form hasn’t been published and opened, and the application page isn’t published.
+							{:else}
+								Not live yet — this form hasn’t been published and opened.
+							{/if}
+						</p>
+						<p class="conf__address-note">
+							{surfacePublication?.kind === 'none'
+								? 'Publish and open the form first, then publish the application page.'
+								: 'Publish and open it when it is ready.'}
+						</p>
 					{:else if surfacePublication === null}
 						<p class="conf__address-line">Publication status couldn’t be checked.</p>
 						<p class="conf__address-note">Reload this page to check again.</p>
-					{:else if form.status === 'draft'}
-						<p class="conf__address-note">
-							Not live yet — this form hasn’t been published and opened.
-						</p>
-						<p class="conf__address-note">Publish and open it when it is ready.</p>
 					{:else if surfacePublication.kind === 'none'}
 						{@render publicationWarning(
 							'The application page isn’t published',
@@ -1076,7 +1089,12 @@
 							'The application page is published for a different form',
 							'This address turns visitors away until the page is published for this form.'
 						)}
-					{:else if publicationServes(form.id)}
+					{:else if publicationVersionMismatch(form)}
+						{@render publicationWarning(
+							'The application page has an older version of this form',
+							'This address turns visitors away until the application page is published again.'
+						)}
+					{:else if publicationServes(form)}
 							{@const address = publicAddress(form.id)}
 							<p class="conf__address-line">
 								<a
@@ -1460,12 +1478,30 @@
 						'Open forms have public addresses, but the page they render isn’t published — every address turns visitors away.'
 					)}
 				</div>
+			{:else if pinnedForm
+				&& pinnedForm.status !== 'open'
+				&& forms.some((entry) => entry.status === 'open')}
+				<div class="list__warn">
+					{@render publicationWarning(
+						'No open form is currently served',
+						`Reopen ${pinnedForm.name}, or publish the application page for an open form.`
+					)}
+				</div>
+			{:else if pinnedForm
+				&& pinnedForm.status === 'open'
+				&& publicationVersionMismatch(pinnedForm)}
+				<div class="list__warn">
+					{@render publicationWarning(
+						'The application page has an older form version',
+						`Publish the application page again for ${pinnedForm.name} before sharing its address.`
+					)}
+				</div>
 			{:else if pinnedFormId
 				&& forms.some((entry) => entry.status === 'open' && entry.id !== pinnedFormId)}
 				<div class="list__warn">
 					{@render publicationWarning(
 						'The application page serves only one open form',
-						'Other open-form addresses turn visitors away until the page is published for them.'
+						'Each other open-form address turns visitors away until the page is published for that form.'
 					)}
 				</div>
 			{/if}

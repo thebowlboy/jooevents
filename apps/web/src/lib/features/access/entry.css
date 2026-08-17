@@ -302,7 +302,7 @@
   .entry-state .resolver--portal span:nth-child(4) { width: 100%; height: 2.75rem; border-radius: var(--je-radius-control); }
   .entry-state .resolver__status {
     width: 100%;
-    min-height: 1rem;
+    min-height: 1.65rem;
     font-size: var(--je-font-size-sm);
     line-height: 1rem;
     text-align: center;

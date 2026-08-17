@@ -64,7 +64,7 @@ export type SpeakerSeed = Omit<SpeakerRow, 'position'> & { position?: number };
  * it, so the card's number can't disagree with the configurator's rows. An
  * omitted composition means the standard application.
  */
-export type FormSeed = Omit<FormSummary, 'fieldCount' | 'composition'> & {
+export type FormSeed = Omit<FormSummary, 'fieldCount' | 'composition' | 'currentPublishedVersionId'> & {
 	composition?: Partial<FormComposition>;
 };
 
