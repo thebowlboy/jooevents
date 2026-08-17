@@ -15,6 +15,7 @@
     "@jooevents/event": "workspace:*",
     "@jooevents/event-operations": "workspace:*",
     "@jooevents/files": "workspace:*",
+    "@jooevents/identity-access": "workspace:*",
     "@jooevents/kernel": "workspace:*",
     "@jooevents/persistence": "workspace:*"
   },
