@@ -135,6 +135,8 @@ describe('Event and Program Vocabulary aggregate ports', () => {
 		const live = createLiveEventProgramPort({
 			manifest: {},
 			eventRequest: {
+				list() { throw new TypeError('should_not_request'); },
+				select() { throw new TypeError('should_not_request'); },
 				read: async () => {
 					requested = true;
 					throw new TypeError('should_not_request');
