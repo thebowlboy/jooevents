@@ -1,7 +1,8 @@
 import type { Database } from 'bun:sqlite';
 import {
-  createClassifiedPayloadProfileRef,
-  type ClassifiedPayloadProfiles
+  WORKSPACE_INVITATION_CLASSIFIED_PROFILES,
+  WORKSPACE_INVITATION_RECIPIENT_CONTENT_TYPE,
+  WORKSPACE_INVITATION_RECIPIENT_PURPOSE
 } from '@jooevents/application';
 import {
   adoptSynchronousClassifiedPayload,
@@ -120,16 +121,11 @@ BEFORE DELETE ON workspace_team_history
 BEGIN SELECT RAISE(ABORT, 'workspace team history is immutable'); END;
 `;
 
-export const WORKSPACE_INVITATION_CLASSIFIED_PROFILES: ClassifiedPayloadProfiles = Object.freeze({
-  classification: createClassifiedPayloadProfileRef('classification', 'classification.workspace_invitation_recipient', 1),
-  schema: createClassifiedPayloadProfileRef('schema', 'schema.workspace_invitation_recipient', 1),
-  content: createClassifiedPayloadProfileRef('content', 'content.workspace_invitation_recipient', 1),
-  integrity: createClassifiedPayloadProfileRef('integrity', 'integrity.sha256', 1),
-  descriptorAuth: createClassifiedPayloadProfileRef('descriptor_auth', 'descriptor_auth.workspace_invitation_recipient', 1)
-});
-
-export const WORKSPACE_INVITATION_RECIPIENT_CONTENT_TYPE = 'application/vnd.jooevents.workspace-invitation-recipient+json';
-export const WORKSPACE_INVITATION_RECIPIENT_PURPOSE = 'workspace_invitation.recipient';
+export {
+  WORKSPACE_INVITATION_CLASSIFIED_PROFILES,
+  WORKSPACE_INVITATION_RECIPIENT_CONTENT_TYPE,
+  WORKSPACE_INVITATION_RECIPIENT_PURPOSE
+};
 
 export class SQLiteWorkspaceTeamError extends Error {
   constructor(readonly code:

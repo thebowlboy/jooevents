@@ -123,7 +123,8 @@ describe('configured D1 application HTTP slice', () => {
       'template.artifact.get',
       'template.artifact.list',
       'workspace.overview.read',
-      'workspace.shell.summary.read'
+      'workspace.shell.summary.read',
+      'workspace_team.members.read'
     ]);
 
     const initial = await handleRequest(

@@ -2,6 +2,9 @@ import {
   composeOperationRegistryModules,
   createApplicationOperationRuntime,
   createOperatorAuthorityPolicyCatalog,
+  createWorkspaceTeamOperationModule,
+  WORKSPACE_TEAM_MUTATION_REQUEST_HASH_PROFILE,
+  WORKSPACE_TEAM_OPERATION_ACCESS,
   type InvocationEvidence
 } from '@jooevents/application';
 import {
@@ -54,6 +57,7 @@ import {
 } from '@jooevents/workspace-operations';
 import {
   parseInstant,
+  parseContractVersion,
   parseInvocationId,
   parseWorkspaceId
 } from '@jooevents/kernel';
@@ -104,6 +108,7 @@ import { createD1OperatorCurrentAuthorityResolver } from './d1-operator-authorit
 import { createD1OperationHistoryReadSource } from './d1-operation-history';
 import { createD1WorkspaceOverviewReadSource } from './d1-workspace-overview';
 import { createD1WorkspaceShellSummaryReadSource } from './d1-workspace-summary';
+import { createD1WorkspaceTeamReadSource } from './d1-workspace-team';
 
 export type D1ApplicationRuntimeEnvironment = CloudflareAuthBindings & {
   readonly DB: D1Database;
@@ -129,6 +134,40 @@ function classifiedCommunicationProfile(cryptoProfiles: DurableCryptoProfileComp
   ).encryptionProfile;
 }
 
+const WORKSPACE_TEAM_KEY_PROFILES = Object.freeze({
+  authorityPrincipal: Object.freeze({
+    key: 'key-profile.workspace-team.operator-principal',
+    version: parseContractVersion(1)
+  }),
+  scopePartition: Object.freeze({
+    key: 'key-profile.workspace-team.workspace-scope',
+    version: parseContractVersion(1)
+  }),
+  requestCanonicalization: Object.freeze({
+    key: 'key-profile.workspace-team.request-canonicalization',
+    version: parseContractVersion(1)
+  }),
+  idempotencyCredential: Object.freeze({
+    key: 'key-profile.workspace-team.idempotency-credential',
+    version: parseContractVersion(1)
+  })
+});
+
+function classifiedWorkspaceInvitationProfiles(
+  cryptoProfiles: DurableCryptoProfileComposition
+) {
+  const selected = cryptoProfiles.classifiedPayloadEncryptionProfiles(
+    cryptoProfiles.profileSelection(
+      'classified_payload',
+      'encryption.workspace-invitation'
+    )
+  );
+  return Object.freeze({
+    encryptionProfile: selected.encryptionProfile,
+    retainedEncryptionProfiles: selected.retainedEncryptionProfiles
+  });
+}
+
 /** Builds the authenticated workspace-history and current Event application slice over D1. */
 export async function createConfiguredD1ApplicationRuntime(
   environment: D1ApplicationRuntimeEnvironment
@@ -149,7 +188,11 @@ export async function createConfiguredD1ApplicationRuntime(
     { policy: DEADLINE_MANAGE_ACCESS_POLICY, permissionId: 'event.manage' },
     { policy: TASK_MANAGE_ACCESS_POLICY, permissionId: 'event.manage' },
     { policy: WORKSPACE_OVERVIEW_READ_ACCESS_POLICY, permissionId: 'event.read' },
-    { policy: WORKSPACE_SHELL_SUMMARY_READ_ACCESS_POLICY, permissionId: 'event.read' }
+    { policy: WORKSPACE_SHELL_SUMMARY_READ_ACCESS_POLICY, permissionId: 'event.read' },
+    {
+      policy: WORKSPACE_TEAM_OPERATION_ACCESS.read.policy,
+      permissionId: WORKSPACE_TEAM_OPERATION_ACCESS.read.permissionId
+    }
   ]);
   const currentAuthority = createD1OperatorCurrentAuthorityResolver({
     session: environment.DB.withSession('first-primary'),
@@ -179,6 +222,12 @@ export async function createConfiguredD1ApplicationRuntime(
   const workspaceOverview = createD1WorkspaceOverviewReadSource({
     database: environment.DB,
     workspaceId
+  });
+  const workspaceTeam = createD1WorkspaceTeamReadSource({
+    database: environment.DB,
+    workspaceId,
+    nowEpochMs: Date.now,
+    classifiedPayload: classifiedWorkspaceInvitationProfiles(cryptoProfiles)
   });
   const common = Object.freeze({
     workspaceId,
@@ -378,6 +427,30 @@ export async function createConfiguredD1ApplicationRuntime(
     scopePartitionProfile: EVENT_OPERATION_KEY_PROFILES.scopePartition,
     requestCanonicalizationProfile: EVENT_OPERATION_KEY_PROFILES.requestCanonicalization
   });
+  const workspaceTeamOperations = createWorkspaceTeamOperationModule({
+    workspaceId,
+    policies: Object.freeze({
+      read: WORKSPACE_TEAM_OPERATION_ACCESS.read.policy,
+      invite: WORKSPACE_TEAM_OPERATION_ACCESS.invite.policy,
+      changeRole: WORKSPACE_TEAM_OPERATION_ACCESS.changeRole.policy,
+      remove: WORKSPACE_TEAM_OPERATION_ACCESS.remove.policy
+    }),
+    currentAuthority,
+    teamRead: workspaceTeam,
+    clock,
+    ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+    authorityPrincipalKeyProfile: WORKSPACE_TEAM_KEY_PROFILES.authorityPrincipal,
+    scopePartitionProfile: WORKSPACE_TEAM_KEY_PROFILES.scopePartition,
+    requestCanonicalizationProfile: WORKSPACE_TEAM_KEY_PROFILES.requestCanonicalization,
+    requestHashSealer: cryptoProfiles.requestHashSealer(
+      WORKSPACE_TEAM_MUTATION_REQUEST_HASH_PROFILE
+    ),
+    idempotencyCredentialProfile: WORKSPACE_TEAM_KEY_PROFILES.idempotencyCredential,
+    idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(
+      WORKSPACE_TEAM_KEY_PROFILES.idempotencyCredential
+    ),
+    mountMutations: false
+  });
   const domains = createD1EffectDomainAdapterRegistry([
     createD1EventCreateEffectDomainRegistration({
       workspaceId,
@@ -447,7 +520,8 @@ export async function createConfiguredD1ApplicationRuntime(
       templateArtifactNativeOperations,
       operationHistoryOperations,
       workspaceSummaryOperations,
-      workspaceOverviewOperations
+      workspaceOverviewOperations,
+      workspaceTeamOperations
     ]),
     read: {
       operationalTrace: { emit() {} },

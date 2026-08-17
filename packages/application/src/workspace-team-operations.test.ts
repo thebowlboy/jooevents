@@ -43,7 +43,7 @@ const snapshot: WorkspaceTeamSnapshot = {
   members: []
 };
 
-function module(wrong = false) {
+function module(wrong = false, mountMutations = true) {
   let id = 1;
   const policies = {
     read: WORKSPACE_TEAM_OPERATION_ACCESS.read.policy,
@@ -59,7 +59,9 @@ function module(wrong = false) {
     currentAuthority: {
       resolve: () => ({ kind: 'denied' as const, reason: 'not_authorized' as const })
     },
-    teamRead: { readWorkspaceTeam: () => snapshot },
+    teamRead: {
+      readWorkspaceTeam: () => mountMutations ? snapshot : Promise.resolve(snapshot)
+    },
     clock: { now: () => now },
     ids: {
       newInvocationId: () => parseInvocationId(
@@ -77,7 +79,8 @@ function module(wrong = false) {
     idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
       profile,
       keyBytes: new Uint8Array(32).fill(0x32)
-    })
+    }),
+    mountMutations
   });
 }
 
@@ -112,6 +115,16 @@ describe('workspace team registered operations', () => {
       remove: { permissionId: 'access.users.suspend' }
     });
     expect(() => module(true)).toThrow('workspace_team_operation_policy_catalog_mismatch');
+  });
+
+  test('can mount the asynchronous Team read without advertising uncomposed mutations', async () => {
+    const readOnly = module(false, false);
+    const registry = await createOperationRegistry(readOnly.source);
+    expect(registry.safeManifest.operations.map((operation) => operation.name)).toEqual([
+      'workspace_team.members.read'
+    ]);
+    expect(registry.operatorHttpEffectBindings).toEqual([]);
+    expect(readOnly.source.effectHandlers).toEqual([]);
   });
 
   test('keeps browser input free of trusted scope, actor, and time', () => {

@@ -74,13 +74,13 @@ export const D1_WORKSPACE_OVERVIEW_AREA_CATALOG: WorkspaceOverviewAreaCatalog =
         'field_registry.move',
         'field_registry.remove',
         'field_registry.restore',
-        'field_registry.snapshot.read'
+        'field_registry.snapshot.read',
+        'workspace_team.members.read'
       ],
       unavailableCapabilities: [
         'program_vocabulary.snapshot.read',
         'workspace_team.delivery.activate',
         'workspace_team.invite',
-        'workspace_team.members.read',
         'workspace_team.remove',
         'workspace_team.role_change',
         'workspace_team.session_revocation.activate'

@@ -12,6 +12,10 @@ import {
   createTerminalizationResolverRegistration
 } from './operations';
 import { createOperationAutonomyPolicy } from './autonomy';
+import {
+  createClassifiedPayloadProfileRef,
+  type ClassifiedPayloadProfiles
+} from './classified-payloads';
 import type {
   EffectHandlerRegistration,
   EffectHandlerSnapshot,
@@ -104,6 +108,26 @@ export const WORKSPACE_TEAM_MUTATION_HANDLER_CAPABILITY = ref(
   'capability.workspace_team.direct_mutation'
 );
 
+export const WORKSPACE_INVITATION_CLASSIFIED_PROFILES: ClassifiedPayloadProfiles =
+  Object.freeze({
+    classification: createClassifiedPayloadProfileRef(
+      'classification', 'classification.workspace_invitation_recipient', 1
+    ),
+    schema: createClassifiedPayloadProfileRef(
+      'schema', 'schema.workspace_invitation_recipient', 1
+    ),
+    content: createClassifiedPayloadProfileRef(
+      'content', 'content.workspace_invitation_recipient', 1
+    ),
+    integrity: createClassifiedPayloadProfileRef('integrity', 'integrity.sha256', 1),
+    descriptorAuth: createClassifiedPayloadProfileRef(
+      'descriptor_auth', 'descriptor_auth.workspace_invitation_recipient', 1
+    )
+  });
+export const WORKSPACE_INVITATION_RECIPIENT_CONTENT_TYPE =
+  'application/vnd.jooevents.workspace-invitation-recipient+json';
+export const WORKSPACE_INVITATION_RECIPIENT_PURPOSE = 'workspace_invitation.recipient';
+
 const applicationIdSchema = z.string().uuid();
 const instantSchema = z.iso.datetime({ offset: true });
 
@@ -165,7 +189,9 @@ export type WorkspaceTeamMutationContribution =
   z.infer<typeof workspaceTeamMutationContributionSchema>;
 
 export interface WorkspaceTeamReadPort {
-  readWorkspaceTeam(workspaceId: WorkspaceId): WorkspaceTeamSnapshot;
+  readWorkspaceTeam(
+    workspaceId: WorkspaceId
+  ): WorkspaceTeamSnapshot | Promise<WorkspaceTeamSnapshot>;
 }
 
 export interface WorkspaceTeamMutationPreparedContribution {
@@ -379,6 +405,8 @@ export interface CreateWorkspaceTeamOperationModuleInput {
   readonly requestHashSealer: RequestHashSealer;
   readonly idempotencyCredentialProfile: VersionedKeyProfileRef;
   readonly idempotencyCredentialSealer: IdempotencyCredentialSealer;
+  /** Mount only the classified Team read when direct mutations are not composed yet. */
+  readonly mountMutations?: boolean;
 }
 
 function exactPolicy(actual: VersionedAccessPolicyRef, expected: VersionedAccessPolicyRef): boolean {
@@ -443,6 +471,7 @@ export function createWorkspaceTeamOperationModule(
     throw new TypeError('workspace_team_operation_policy_catalog_mismatch');
   }
   const scopeResolver = workspaceScopeResolver(workspaceId);
+  const mountMutations = input.mountMutations ?? true;
   const readLane = parseOperationAccessLane({
     kind: 'operator', surface: 'operator_http', policy: input.policies.read
   });
@@ -460,8 +489,10 @@ export function createWorkspaceTeamOperationModule(
   });
   const readCapability: ReadCapabilityRegistration = Object.freeze({
     reference: commonRefs.readCapability,
-    openSnapshot(context: ReadInvocationContext) {
-      return Object.freeze({ team: input.teamRead.readWorkspaceTeam(context.scope.workspaceId) });
+    async openSnapshot(context: ReadInvocationContext) {
+      return Object.freeze({
+        team: await input.teamRead.readWorkspaceTeam(context.scope.workspaceId)
+      });
     }
   });
 
@@ -569,22 +600,37 @@ export function createWorkspaceTeamOperationModule(
   return Object.freeze({
     id: 'workspace-team.operations',
     source: Object.freeze({
-      effectExecutionFamilies: Object.freeze(mutations.map((entry) => entry.family)),
-      effectPhases: Object.freeze(mutations.map((entry) => entry.phase)),
-      terminalizationResolvers: Object.freeze(mutations.map((entry) => entry.terminalization)),
-      riskResolvers: Object.freeze(mutations.map((entry) => entry.risk)),
-      autonomyEvidenceResolvers: Object.freeze(mutations.map((entry) => entry.evidence)),
-      renewedApprovalResolvers: Object.freeze(mutations.map((entry) => entry.approval)),
-      autonomyPreflights: Object.freeze(mutations.map((entry) => entry.preflight)),
-      autonomyPolicies: Object.freeze([readAutonomy, ...mutations.map((entry) => entry.autonomy)]),
+      effectExecutionFamilies: Object.freeze(
+        mountMutations ? mutations.map((entry) => entry.family) : []
+      ),
+      effectPhases: Object.freeze(mountMutations ? mutations.map((entry) => entry.phase) : []),
+      terminalizationResolvers: Object.freeze(
+        mountMutations ? mutations.map((entry) => entry.terminalization) : []
+      ),
+      riskResolvers: Object.freeze(mountMutations ? mutations.map((entry) => entry.risk) : []),
+      autonomyEvidenceResolvers: Object.freeze(
+        mountMutations ? mutations.map((entry) => entry.evidence) : []
+      ),
+      renewedApprovalResolvers: Object.freeze(
+        mountMutations ? mutations.map((entry) => entry.approval) : []
+      ),
+      autonomyPreflights: Object.freeze(
+        mountMutations ? mutations.map((entry) => entry.preflight) : []
+      ),
+      autonomyPolicies: Object.freeze([
+        readAutonomy,
+        ...(mountMutations ? mutations.map((entry) => entry.autonomy) : [])
+      ]),
       schemas: Object.freeze([
         { reference: schemas.readInput, schema: workspaceTeamMembersReadInputSchema },
         { reference: schemas.readCanonical, schema: workspaceTeamMembersCanonicalResultSchema },
         { reference: schemas.readProjected, schema: workspaceTeamMembersReadResultSchema },
-        ...mutations.map((entry) => ({ reference: entry.inputRef, schema: entry.inputSchema })),
-        { reference: schemas.mutationContribution, schema: workspaceTeamMutationContributionSchema },
-        { reference: schemas.mutationCanonical, schema: workspaceTeamMutationCanonicalResultSchema },
-        { reference: schemas.mutationProjected, schema: workspaceTeamMutationOperationResultSchema },
+        ...(mountMutations ? [
+          ...mutations.map((entry) => ({ reference: entry.inputRef, schema: entry.inputSchema })),
+          { reference: schemas.mutationContribution, schema: workspaceTeamMutationContributionSchema },
+          { reference: schemas.mutationCanonical, schema: workspaceTeamMutationCanonicalResultSchema },
+          { reference: schemas.mutationProjected, schema: workspaceTeamMutationOperationResultSchema }
+        ] : []),
         { reference: schemas.nullDetail, schema: z.null() },
         { reference: schemas.refusalDetail, schema: workspaceTeamMutationRefusalDetailSchema }
       ]),
@@ -604,12 +650,12 @@ export function createWorkspaceTeamOperationModule(
         canonicalResultSchema: schemas.readCanonical,
         projectedResultSchema: schemas.readProjected,
         project: (candidate: unknown) => workspaceTeamMembersCanonicalResultSchema.parse(candidate)
-      }, {
+      }, ...(mountMutations ? [{
         reference: commonRefs.mutationProjection,
         canonicalResultSchema: schemas.mutationCanonical,
         projectedResultSchema: schemas.mutationProjected,
         project: (candidate: unknown) => workspaceTeamMutationCanonicalResultSchema.parse(candidate)
-      }]),
+      }] : [])]),
       readOperationalTraceTargets: Object.freeze([{
         reference: commonRefs.readTrace,
         kind: 'read_operational_trace_record' as const,
@@ -657,9 +703,11 @@ export function createWorkspaceTeamOperationModule(
           projection: commonRefs.readProjection
         }]
       }]),
-      effectContextBuilders: Object.freeze(mutations.map((entry) => entry.context)),
-      effectHandlers: Object.freeze([mutationHandler]),
-      effectOperations: Object.freeze(mutations.map((entry) => ({
+      effectContextBuilders: Object.freeze(
+        mountMutations ? mutations.map((entry) => entry.context) : []
+      ),
+      effectHandlers: Object.freeze(mountMutations ? [mutationHandler] : []),
+      effectOperations: Object.freeze((mountMutations ? mutations : []).map((entry) => ({
         ...entry.operation,
         lifecycle: { status: 'active' as const },
         summary: entry.action === 'invite' ? 'Invite a workspace teammate.'
