@@ -202,6 +202,7 @@ export async function handleRequest(
 function isConfiguredApplicationPath(pathname: string): boolean {
   return pathname === '/api/operations/manifest'
     || pathname === '/api/events/current'
+    || pathname === '/api/events/current/settings'
     || pathname === '/api/events'
     || pathname === '/api/events/select';
 }

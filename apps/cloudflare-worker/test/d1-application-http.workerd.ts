@@ -100,7 +100,12 @@ describe('configured D1 application HTTP slice', () => {
       readonly operations: readonly { readonly name: string }[];
     }>();
     expect(manifestBody.operations.map((operation) => operation.name).sort()).toEqual([
-      'event.create', 'event.current.read', 'event.list.read', 'event.select'
+      'event.create',
+      'event.current.read',
+      'event.list.read',
+      'event.select',
+      'event.settings.current.read',
+      'event.settings.update'
     ]);
 
     const initial = await handleRequest(
@@ -155,6 +160,118 @@ describe('configured D1 application HTTP slice', () => {
         events: [{ id: firstBody.data.event.id, name: 'D1 Application Summit' }]
       }
     });
+    const settings = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/settings`, { headers }),
+      environment()
+    );
+    expect(settings.status).toBe(200);
+    expect(await settings.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        eventId: firstBody.data.event.id,
+        eventSetVersion: 2,
+        eventVersion: 1,
+        name: 'D1 Application Summit',
+        location: '',
+        dayStart: '09:00',
+        dayEnd: '18:00',
+        slotMinutes: 15
+      }
+    });
+    const updateRequest = () => new Request(`${baseUrl}/api/events/current/settings`, {
+      method: 'POST',
+      headers: {
+        cookie: headers.cookie,
+        origin: baseUrl,
+        'content-type': 'application/json',
+        'idempotency-key': 'd1-application-update-event-settings'
+      },
+      body: JSON.stringify({
+        expectedEventId: firstBody.data.event.id,
+        expectedEventSetVersion: 2,
+        expectedEventVersion: 1,
+        name: 'D1 Application Summit',
+        timezone: 'Asia/Singapore',
+        startDate: '2027-03-10',
+        endDate: '2027-03-12',
+        location: 'Suntec Convention Centre',
+        venueNote: 'Level three',
+        dayStart: '09:00',
+        dayEnd: '18:00',
+        slotMinutes: 15
+      })
+    });
+    const updated = await handleRequest(updateRequest(), environment());
+    expect(updated.status, await updated.clone().text()).toBe(200);
+    const updatedBody = await updated.json();
+    expect(updatedBody).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'update',
+        eventId: firstBody.data.event.id,
+        eventSetVersion: 2,
+        eventVersion: 2
+      }
+    });
+    const updateReplay = await handleRequest(updateRequest(), environment());
+    expect(updateReplay.status).toBe(200);
+    expect(await updateReplay.json()).toEqual(updatedBody);
+    const updatedSettings = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/settings`, { headers }),
+      environment()
+    );
+    expect(await updatedSettings.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        eventVersion: 2,
+        location: 'Suntec Convention Centre',
+        venueNote: 'Level three'
+      }
+    });
+    const stale = await handleRequest(new Request(`${baseUrl}/api/events/current/settings`, {
+      method: 'POST',
+      headers: {
+        cookie: headers.cookie,
+        origin: baseUrl,
+        'content-type': 'application/json',
+        'idempotency-key': 'd1-application-stale-event-settings'
+      },
+      body: JSON.stringify({
+        expectedEventId: firstBody.data.event.id,
+        expectedEventSetVersion: 2,
+        expectedEventVersion: 1,
+        name: 'Stale name',
+        timezone: 'Asia/Singapore',
+        startDate: '2027-03-10',
+        endDate: '2027-03-12',
+        location: '',
+        venueNote: '',
+        dayStart: '09:00',
+        dayEnd: '18:00',
+        slotMinutes: 15
+      })
+    }), environment());
+    expect(stale.status).toBe(200);
+    expect(await stale.json()).toMatchObject({
+      kind: 'outcome',
+      outcome: { kind: 'event.settings_changed', detail: { code: 'stale_event' } }
+    });
+    const settingsRows = await env.DB.prepare(`SELECT h.version AS event_version,
+      c.event_version AS companion_version,c.location
+      FROM event_spine_heads h JOIN event_settings_companions c
+        ON c.workspace_id = h.workspace_id AND c.event_id = h.id
+      WHERE h.workspace_id = ? AND h.id = ?`)
+      .bind(workspaceId, firstBody.data.event.id)
+      .first<{ event_version: number; companion_version: number; location: string }>();
+    expect(settingsRows).toEqual({
+      event_version: 2,
+      companion_version: 2,
+      location: 'Suntec Convention Centre'
+    });
+    const operationCount = await env.DB.prepare(
+      'SELECT count(*) AS count FROM operation_log WHERE workspace_id = ?'
+    ).bind(workspaceId).first<{ readonly count: number }>();
+    expect(operationCount?.count).toBe(2);
     const logs = await env.DB.prepare('SELECT count(*) AS count FROM operation_log WHERE id = ?')
       .bind(firstBody.receipt.id).first<{ readonly count: number }>();
     expect(logs?.count).toBe(1);

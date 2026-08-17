@@ -10,9 +10,12 @@ import {
   EVENT_OPERATION_KEY_PROFILES,
   EVENT_READ_ACCESS_POLICY,
   EVENT_SELECT_REQUEST_HASH_PROFILE,
+  EVENT_SETTINGS_UPDATE_REQUEST_HASH_PROFILE,
   createEventListReadOperationModule,
   createEventOperationModule,
-  createEventSelectOperationModule
+  createEventSelectOperationModule,
+  createEventSettingsReadOperationModule,
+  createEventSettingsUpdateOperationModule
 } from '@jooevents/event-operations';
 import {
   parseInstant,
@@ -38,6 +41,10 @@ import {
   createD1EventSelectEffectDomainRegistration
 } from './d1-event-domain';
 import { createD1EventReadSource } from './d1-event-read';
+import {
+  createD1EventSettingsEffectDomainRegistration,
+  createD1EventSettingsReadSource
+} from './d1-event-settings';
 import {
   D1EffectUnitOfWorkPort,
   createD1EffectDomainAdapterRegistry
@@ -89,6 +96,7 @@ export async function createConfiguredD1ApplicationRuntime(
     policies
   });
   const reads = createD1EventReadSource({ database: environment.DB, workspaceId });
+  const settings = createD1EventSettingsReadSource({ database: environment.DB, workspaceId });
   const common = Object.freeze({
     workspaceId,
     currentAuthority,
@@ -125,6 +133,20 @@ export async function createConfiguredD1ApplicationRuntime(
     idempotencyCredentialProfile: EVENT_OPERATION_KEY_PROFILES.idempotencyCredential,
     idempotencyCredentialSealer
   });
+  const eventSettingsReadOperations = createEventSettingsReadOperationModule({
+    ...common,
+    readPolicy: EVENT_READ_ACCESS_POLICY,
+    currentSettingsRead: settings
+  });
+  const eventSettingsUpdateOperations = createEventSettingsUpdateOperationModule({
+    ...common,
+    managePolicy: EVENT_MANAGE_ACCESS_POLICY,
+    requestHashSealer: cryptoProfiles.requestHashSealer(
+      EVENT_SETTINGS_UPDATE_REQUEST_HASH_PROFILE
+    ),
+    idempotencyCredentialProfile: EVENT_OPERATION_KEY_PROFILES.idempotencyCredential,
+    idempotencyCredentialSealer
+  });
   const domains = createD1EffectDomainAdapterRegistry([
     createD1EventCreateEffectDomainRegistration({
       workspaceId,
@@ -137,7 +159,8 @@ export async function createConfiguredD1ApplicationRuntime(
         }
       })
     }),
-    createD1EventSelectEffectDomainRegistration({ workspaceId })
+    createD1EventSelectEffectDomainRegistration({ workspaceId }),
+    createD1EventSettingsEffectDomainRegistration({ workspaceId })
   ]);
   const unitOfWork = new D1EffectUnitOfWorkPort(environment.DB, domains, {
     authorityRecheck: (buffered) => ({
@@ -155,7 +178,9 @@ export async function createConfiguredD1ApplicationRuntime(
     source: composeOperationRegistryModules([
       eventOperations,
       eventListOperations,
-      eventSelectOperations
+      eventSelectOperations,
+      eventSettingsReadOperations,
+      eventSettingsUpdateOperations
     ]),
     read: {
       operationalTrace: { emit() {} },
