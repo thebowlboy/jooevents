@@ -81,24 +81,29 @@ enough to suggest putting an actual attendee list into it.
 
 The Cloudflare production composition is now under active implementation, but it is
 still not a production application. Local workerd tests prove retained D1 migrations,
-authentication and admission, guarded Event and settings operations, the Field
-Registry, Program Vocabulary reads plus guarded create/edit/retire/restore/delete,
-Deadlines, Tasks, draft Schedule placement reads plus guarded changes, and Session
-catalog reads plus guarded Session changes, native Template artifacts,
-safe operation history, and the workspace shell,
-workspace Team changes, human API-key inventory plus show-once
-create/rotate/revoke, and organizer Files metadata. API-key plaintext is returned
-only with the fresh committing response and is absent from D1 and operation history.
-An authenticated organizer download now streams retained R2 bytes with
-attachment-only inert headers; Queue, Cron, and multipart R2 adapter tests also pass.
+authentication and admission, and 55 of the joined runtime's 115 organizer
+operations. The mounted set includes Events and settings, the Field Registry,
+Program Vocabulary changes and reviewed merges, Deadlines, Tasks, Schedule placement,
+Session changes, native Template artifacts, operation history, the workspace shell
+and Team, human API-key management, and all organizer Files metadata and changes.
+API-key plaintext is returned only with the fresh committing response and is absent
+from D1 and operation history.
+
+Organizer upload bytes now stream to R2 only after current authority and intent
+ownership are checked. A retained transfer-attempt record prevents concurrent or
+acceptance-ambiguous multipart writes from silently changing the bytes described by
+D1; cleanup reconciles expired intents, old unattached assets, and crash-stranded R2
+objects. Authenticated downloads retain attachment-only inert headers. Queue and Cron
+adapter tests also pass.
+
 The sender-restricted Email Sending binding is joined to a bounded Queue consumer over
 the retained D1 delivery ledger. Local workerd proves exact provider-revision
 selection, encrypted reviewed-envelope resolution, lease/fence handling, and durable
 attempt/history settlement through an injected binding; no real email was sent. The
 checked-in authentication and application activation flags remain off: the remaining
-application families, Files uploads and mutations, recovery and broader job
-composition, the controlled real-email checkpoint, account-level R2 enablement,
-staging, and live deployment must close before Cloudflare can accept real traffic.
+organizer, public, and participant operations, recovery and broader job composition,
+the controlled real-email checkpoint, account-level R2 enablement, staging, and live
+deployment must close before Cloudflare can accept real traffic.
 
 ## Build and inspect
 
