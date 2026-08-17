@@ -20,7 +20,12 @@ export const COMMUNICATION_PROVIDER_OPERATIONS = Object.freeze({
   getConnection: Object.freeze({ name: 'communication.provider_connection.read', version: 1 }),
   getReadiness: Object.freeze({ name: 'communication.email_readiness.read', version: 1 }),
   runReadinessCheck: Object.freeze({ name: 'communication.email_readiness.check', version: 1 }),
-  sendDiagnosticTest: Object.freeze({ name: 'communication.email_diagnostic.send_test', version: 1 })
+  sendDiagnosticTest: Object.freeze({ name: 'communication.email_diagnostic.send_test', version: 1 }),
+  checkDeliverability: Object.freeze({
+    name: 'communication.email_deliverability.check',
+    version: 1
+  }),
+  getSetupGuide: Object.freeze({ name: 'communication.email_setup_guide.read', version: 1 })
 });
 
 /**
@@ -34,7 +39,11 @@ export const COMMUNICATION_PROVIDER_OPERATION_ACTIVATION = Object.freeze({
   getConnection: 'read_leaf_ready',
   getReadiness: 'read_leaf_ready',
   runReadinessCheck: 'external_effect_executor_mounted',
-  sendDiagnosticTest: 'external_effect_executor_mounted'
+  sendDiagnosticTest: 'external_effect_executor_mounted',
+  // Advisory public-DNS lookups and the manifest-derived guide ride the same
+  // provider-manage executor family: both exist only for a configured provider.
+  checkDeliverability: 'external_effect_executor_mounted',
+  getSetupGuide: 'external_effect_executor_mounted'
 } as const);
 
 export interface CommunicationProviderConfigurationReadPort {

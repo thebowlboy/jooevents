@@ -81,6 +81,28 @@ test('a refused magic-link request keeps the address and states the reason', asy
   await expect(page.getByRole('heading', { name: 'Check your email' })).toBeVisible();
 });
 
+test('auth completion names the work immediately instead of showing a blank waiting panel', async ({ page }) => {
+  let releaseContext!: () => void;
+  const contextGate = new Promise<void>((resolve) => { releaseContext = resolve; });
+  await page.route('**/api/me/access-context', async (route) => {
+    await contextGate;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ state: 'anonymous' })
+    });
+  });
+
+  await page.goto('/auth/complete?returnTo=%2Fapp');
+  await expect(page.getByRole('heading', { name: 'Finishing sign-in' })).toBeVisible();
+  await expect(page.getByText("We're checking your JooEvents access.")).toBeVisible();
+  await expect(page.locator('.entry-rail')).toHaveCount(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth)).toBe(false);
+
+  releaseContext();
+  await expect(page).toHaveURL('/sign-in');
+});
+
 test('provisioning is a compact box with a real support code, not a pre-reserved blank', async ({ page }, testInfo) => {
   // Owner direction 2026-08-14: no state pre-reserves height for the
   // error/retry block; the box is as tall as its content and grows downward

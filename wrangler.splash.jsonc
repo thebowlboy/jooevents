@@ -1,21 +1,15 @@
 {
+  // Preview-only worker: deploys to workers.dev and binds no production
+  // domain. Production routing for jooevents.com is managed outside this
+  // repository; this checked-in splash is the rollback artifact, and
+  // `splash:deploy:cloudflare` deliberately cannot reach the live site.
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "jooevents-splash",
+  "name": "jooevents-repository-splash-preview",
   "main": "./apps/splash-worker/src/index.ts",
   "compatibility_date": "2026-08-13",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "preview_urls": false,
-  "routes": [
-    {
-      "pattern": "jooevents.com",
-      "custom_domain": true
-    },
-    {
-      "pattern": "www.jooevents.com",
-      "custom_domain": true
-    }
-  ],
   "limits": {
     "cpu_ms": 10
   },

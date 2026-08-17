@@ -33,10 +33,10 @@ export type LinkRequestedState = { readonly kind: 'link_requested'; readonly ema
 export type EntrySurfaceState = AnonymousState | LinkRequestedState;
 
 export type AccessEntryState =
-  /* `awaiting` names which of the two server questions this neutral composition
+  /* `awaiting` names which of the two server questions this resolver composition
      is holding for: who this browser is, or whether that identity is admitted
-     here. It carries no claim either way — the admission wait is deliberately
-     wordless until it has actually been slow. */
+     here. It carries no outcome claim either way; the admission variant names
+     only the work in flight until the server supplies a concrete result. */
   | { readonly kind: 'resolving'; readonly delayed: boolean; readonly awaiting?: 'identity' | 'admission' }
   | EntrySurfaceState
   /* Carries the surface it started from — including any previous failure and
@@ -141,7 +141,7 @@ export class AccessEntryController {
     this.#abort = abort;
     const generation = ++this.#generation;
     const retainedState = options.retainState ? this.#state : undefined;
-    /* An admission episode already owns the composition — the wordless hold or
+    /* An admission episode already owns the composition — the compact status hold or
        the painted interstitial. Its own re-checks must not blank back to the
        neutral resolver and repaint: the wait they ask about is the same wait,
        and a screen that restarts every couple of seconds is the flicker this
@@ -268,7 +268,7 @@ export class AccessEntryController {
       this.#clearRetry();
       return;
     }
-    /* A wordless admission hold is as much a live wait as the painted one, so
+    /* A compact admission hold is as much a live wait as the painted one, so
        returning to the tab re-checks it too rather than resuming a timer that
        the hidden tab already cancelled. */
     if (
@@ -328,7 +328,7 @@ export class AccessEntryController {
           this.#clearAdmissionPaint();
           this.#set({ kind: 'provisioning', retryAfterSeconds, correlationId: context.correlationId, delayed });
         } else {
-          /* Still inside the quiet window: hold the neutral composition and let
+          /* Still inside the quiet window: hold the compact status composition and let
              the clock, not this answer, decide whether the wait ever earns a
              screen. */
           this.#armAdmissionPaint(ADMISSION_QUIET_MS - waited);
@@ -346,7 +346,7 @@ export class AccessEntryController {
     }
   }
 
-  /** True while the neutral composition is standing in for an admission wait. */
+  /** True while the compact status composition is standing in for an admission wait. */
   #isAdmissionHold(state: AccessEntryState) {
     return state.kind === 'resolving' && this.#provisioningStartedAt !== undefined;
   }

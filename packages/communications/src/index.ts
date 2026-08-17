@@ -6,6 +6,7 @@ export * from './delivery/model';
 export * from './delivery/resend';
 export * from './delivery/worker';
 export * from './providers/callback-verifier-registry';
+export * from './providers/deliverability';
 export * from './providers/fake';
 export * from './providers/outcomes';
 export * from './providers/port';

@@ -32,8 +32,9 @@ test('an empty inbox with no open form nudges toward the CFP, and the door lands
 
 	await createEvent(page, 'DevOps Days Tallinn 2027');
 
-	// The Overview already points the same way, in the same words.
-	await expect(page.getByText('Open your call for proposals (CFP)').first()).toBeVisible();
+	// The Overview's dormant rail already points the same way, through the same
+	// door: its gate names the act and lands inside creation.
+	await expect(page.getByRole('link', { name: 'Open a call for proposals' })).toBeVisible();
 
 	await page.getByRole('link', { name: 'Submissions' }).click();
 	const empty = page.locator('.empty');

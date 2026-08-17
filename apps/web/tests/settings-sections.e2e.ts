@@ -5,6 +5,7 @@ const sections = [
 	{ label: 'Program', href: '/app/settings/program', region: 'Program basics' },
 	{ label: 'Team', href: '/app/settings/team', region: 'Team' },
 	{ label: 'Email', href: '/app/settings/email', region: 'Email sender' },
+	{ label: 'API keys', href: '/app/settings/api-keys', region: 'API keys' },
 	{ label: 'About', href: '/app/settings/about', region: 'About JooEvents' }
 ];
 
@@ -64,7 +65,7 @@ test('every section is its own address, named in the surface tabs and marked onc
 		await reachNav(page, testInfo.project.name);
 		const railRow = settingsNav(page).getByRole('link', { name: 'Settings', exact: true });
 		await expect(railRow).toHaveAttribute('aria-current', 'page');
-		await expect(settingsNav(page).getByRole('link')).toHaveCount(1);
+		await expect(settingsNav(page).getByRole('link', { name: 'Settings', exact: true })).toHaveCount(1);
 		if (testInfo.project.name === 'mobile') await page.keyboard.press('Escape');
 	}
 });
@@ -156,7 +157,12 @@ test('no settings section overflows the document at compact desktop or touch wid
 			await page.waitForTimeout(600);
 			expect(await documentOverflow(page), `${section.href} at ${width}px`).toBeLessThanOrEqual(1);
 			const rail = page.getByRole('navigation', { name: 'On this page' });
-			await expect(rail).toHaveCount(width >= 1180 && section.href.endsWith('/program') ? 1 : 0);
+			// Program and Email each hold two panels, so they alone earn the rail.
+			await expect(rail).toHaveCount(
+				width >= 1180 && (section.href.endsWith('/program') || section.href.endsWith('/email'))
+					? 1
+					: 0
+			);
 		}
 	}
 });

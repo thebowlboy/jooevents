@@ -144,13 +144,13 @@ const crunch: WorkspaceDataset = {
 		pipeline: [
 			{ key: 'collect', label: 'Collect', headline: '16', sub: 'CFP closed two weeks ago · 1 late', state: 'ok' },
 			{ key: 'triage', label: 'Triage', headline: '13', sub: 'inbox · 1 set aside · 1 late', state: 'ok' },
-			/* 97% reads calm; 17 reviews against a deadline that lands tomorrow
-			   is not. Pace answers to the clock, not to the fraction. */
+			/* A nearly-full meter reads calm; 17 reviews against a deadline that
+			   lands tomorrow is not. Pace answers to the clock, not the fraction. */
 			{
 				key: 'review',
 				label: 'Review',
-				headline: '97%',
-				sub: '17 still open, across 3 reviewers',
+				headline: '583',
+				sub: 'of 600 reviews are in · 17 still open, across 3 reviewers',
 				state: 'attention',
 				progress: { done: 583, required: 600 },
 				paceTone: 'behind',
@@ -160,7 +160,7 @@ const crunch: WorkspaceDataset = {
 				key: 'decide',
 				label: 'Decide',
 				headline: '6',
-				sub: '4 accepted · 4 still waiting to hear',
+				sub: 'of 16 decided · 4 accepted · 4 still waiting to hear',
 				state: 'attention',
 				progress: { done: 6, required: 16 },
 				paceTone: 'behind',
@@ -180,8 +180,8 @@ const crunch: WorkspaceDataset = {
 			{
 				key: 'schedule',
 				label: 'Schedule',
-				headline: '18/19',
-				sub: 'placed · 5 conflicts',
+				headline: '18',
+				sub: 'of 19 placed · 5 conflicts',
 				state: 'blocked',
 				progress: { done: 18, required: 19 },
 				paceTone: 'behind',

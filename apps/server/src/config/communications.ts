@@ -1,3 +1,4 @@
+import { UNCONFIGURED_MAIL_FROM_ADDRESS } from '@jooevents/contracts';
 import { z } from 'zod';
 
 const boundedIdentity = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:@/-]*$/);
@@ -125,7 +126,7 @@ export function loadCommunicationsProviderConfig(
 }
 
 export type MailSenderConfig =
-  | Readonly<{ configured: false; fromAddress: 'no-reply@unconfigured.invalid' }>
+  | Readonly<{ configured: false; fromAddress: typeof UNCONFIGURED_MAIL_FROM_ADDRESS }>
   | Readonly<{
       configured: true;
       fromAddress: string;
@@ -135,7 +136,7 @@ export type MailSenderConfig =
 
 const UNCONFIGURED_MAIL_SENDER: MailSenderConfig = Object.freeze({
   configured: false,
-  fromAddress: 'no-reply@unconfigured.invalid'
+  fromAddress: UNCONFIGURED_MAIL_FROM_ADDRESS
 });
 
 function trimmedOrUndefined(value: string | undefined): string | undefined {

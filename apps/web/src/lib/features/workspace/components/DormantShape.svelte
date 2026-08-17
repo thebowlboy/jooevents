@@ -30,6 +30,11 @@
 	 *
 	 * Decorative by construction, so it is `aria-hidden`; the sentence its
 	 * caller renders is the whole accessible answer.
+	 *
+	 * On the Overview panels the `rows` shape still read as loading despite
+	 * the ink distinction, so those panels carry a worded situation note
+	 * (glyph + sentence) instead. `bars` keeps its chart-slot job, where
+	 * geometry parity with a real plot is the point.
 	 */
 
 	let {

@@ -5,12 +5,14 @@ import type {
 	WorkspaceOverviewHistoryThread,
 	WorkspaceOverviewProjection
 } from '@jooevents/contracts/workspace-overview';
+import type { CommunicationsReadinessPagePort } from './communications-readiness-page-port';
 import type { EventProgramPort } from './event-program/port';
 import type { WorkspaceOverviewPort } from './operations/workspace-overview-live';
-import { formatDateRange } from '@jooevents/contracts';
+import { EMAIL_READINESS_CURRENCY_REASON_CODES, formatDateRange } from '@jooevents/contracts';
 import type {
 	ActivityItem,
 	AreaKey,
+	AttentionItem,
 	EventInfo,
 	MutationOutcome,
 	StatItem
@@ -22,6 +24,7 @@ import {
 	type OverviewPipelineStage,
 	type OverviewSectionAvailability
 } from './overview-page-port';
+import { pipelineStageMeta } from './pipeline-stages';
 
 /**
  * A section whose projection does not exist yet says so as a fact, in the
@@ -52,22 +55,12 @@ const lockedDeadlines = Object.freeze({
 });
 
 /**
- * `Comms` was an abbreviation, which the design system forbids on anything a
- * person reads as a control; this lane links to the area the sidebar labels
- * Communications, and `Messages` is the name that matches its route and area
- * key inside the label column's width.
+ * Stage order and names come from the one pipeline model, so a lane cannot
+ * spell its label differently from the rail drawn above it.
  */
-const stageDefinitions = Object.freeze([
-	{ key: 'collect', label: 'Collect' },
-	{ key: 'triage', label: 'Triage' },
-	{ key: 'review', label: 'Review' },
-	{ key: 'decide', label: 'Decide' },
-	{ key: 'speakers', label: 'Speakers' },
-	{ key: 'schedule', label: 'Schedule' },
-	{ key: 'comms', label: 'Messages' }
-] as const);
+const stageDefinitions = pipelineStageMeta.map(({ key, label }) => ({ key, label }));
 
-type StageKey = (typeof stageDefinitions)[number]['key'];
+type StageKey = (typeof pipelineStageMeta)[number]['key'];
 
 /** The area whose availability answers for each stage's capability wiring. */
 const stageArea: Record<StageKey, WorkspaceOverviewArea> = {
@@ -86,15 +79,18 @@ const stageArea: Record<StageKey, WorkspaceOverviewArea> = {
  * shown only against the proof recorded beside it in `stageResolvers`, so a
  * lane can never claim a lock it has not established.
  */
+const stageUnlock = new Map(pipelineStageMeta.map((stage) => [stage.key, stage.unlock]));
 const UNLOCK = Object.freeze({
-	collect: 'Collecting starts when you open a form.',
-	triage: 'The first submission to arrive lands here.',
-	reviewRound: 'Reviewing starts when you open a round.',
+	collect: stageUnlock.get('collect')!,
+	triage: stageUnlock.get('triage')!,
+	reviewRound: stageUnlock.get('review')!,
+	// The round exists but nobody holds anything yet — a second, narrower lock
+	// the shared model's one not-started sentence cannot carry.
 	reviewAssignment: 'Reviewers start once submissions are assigned to them.',
-	decide: 'Submissions get their answer here, once they arrive.',
-	speakers: 'Speakers appear here once you invite someone.',
-	schedule: 'Scheduling starts with the first session in the programme.',
-	comms: 'Messages appear here once you send your first one.'
+	decide: stageUnlock.get('decide')!,
+	speakers: stageUnlock.get('speakers')!,
+	schedule: stageUnlock.get('schedule')!,
+	comms: stageUnlock.get('comms')!
 });
 
 function plural(count: number, singular: string, many: string): string {
@@ -246,18 +242,21 @@ const stageResolvers: Record<
 	StageKey,
 	(metrics: WorkspaceOverviewProjection['metrics']) => StageResolution | null
 > = {
+	// A running lane's figure is said once: the headline leads and the sentence
+	// finishes it — "3" + "of 20 submissions are in the inbox" — never the same
+	// number as a figure and again inside its own sentence.
 	collect: ({ forms }) => {
 		if (forms.kind !== 'exact') return null;
 		if (forms.open > 0) {
 			return running(
 				String(forms.open),
-				`${forms.open} ${plural(forms.open, 'form is', 'forms are')} open to submissions`
+				`${plural(forms.open, 'form is', 'forms are')} open to submissions`
 			);
 		}
 		if (forms.closed > 0) {
 			return running(
 				String(forms.closed),
-				`${forms.closed} ${plural(forms.closed, 'form is', 'forms are')} closed, none open`
+				`${plural(forms.closed, 'form is', 'forms are')} closed, none open`
 			);
 		}
 		// Never opened: only drafts, or nothing at all.
@@ -272,7 +271,7 @@ const stageResolvers: Record<
 		if (waiting === 0) return running(String(waiting), 'The inbox is clear');
 		return running(
 			String(waiting),
-			`${waiting} of ${triage.arrived} submissions ${plural(waiting, 'is', 'are')} in the inbox`
+			`of ${triage.arrived} submissions ${plural(waiting, 'is', 'are')} in the inbox`
 		);
 	},
 	review: ({ reviews }) => {
@@ -283,7 +282,7 @@ const stageResolvers: Record<
 		if (reviews.assignments === 0) return held(UNLOCK.reviewAssignment);
 		return running(
 			String(reviews.committed),
-			`${reviews.committed} of ${reviews.assignments} ${plural(reviews.assignments, 'review is', 'reviews are')} in`
+			`of ${reviews.assignments} ${plural(reviews.assignments, 'review is', 'reviews are')} in`
 		);
 	},
 	decide: ({ decisions }) => {
@@ -295,7 +294,7 @@ const stageResolvers: Record<
 		}
 		return running(
 			String(decisions.undecided),
-			`${decisions.undecided} of ${population} submissions ${plural(decisions.undecided, 'is', 'are')} waiting for your answer`
+			`of ${population} submissions ${plural(decisions.undecided, 'is', 'are')} waiting for your answer`
 		);
 	},
 	speakers: ({ engagements }) => {
@@ -303,7 +302,7 @@ const stageResolvers: Record<
 		if (engagements.total === 0) return held(UNLOCK.speakers);
 		return running(
 			String(engagements.confirmed),
-			`${engagements.confirmed} of ${engagements.total} ${plural(engagements.total, 'speaker has', 'speakers have')} confirmed`
+			`of ${engagements.total} ${plural(engagements.total, 'speaker has', 'speakers have')} confirmed`
 		);
 	},
 	schedule: ({ sessions }) => {
@@ -314,7 +313,7 @@ const stageResolvers: Record<
 		}
 		return running(
 			String(sessions.placed),
-			`${sessions.placed} of ${sessions.total} sessions ${plural(sessions.placed, 'has', 'have')} a time and a room`
+			`of ${sessions.total} sessions ${plural(sessions.placed, 'has', 'have')} a time and a room`
 		);
 	},
 	comms: ({ communications }) => {
@@ -328,7 +327,7 @@ const stageResolvers: Record<
 		}
 		return running(
 			String(communications.sent),
-			`${communications.sent} of ${communications.recipients} messages ${plural(communications.sent, 'has', 'have')} been sent`
+			`of ${communications.recipients} messages ${plural(communications.sent, 'has', 'have')} been sent`
 		);
 	}
 };
@@ -393,7 +392,60 @@ function lockedAreas(projection: WorkspaceOverviewProjection): AreaKey[] {
 		.map((entry) => entry.area as AreaKey);
 }
 
-function mapLiveSummary(projection: WorkspaceOverviewProjection): OverviewPageSummary {
+/**
+ * The one live attention row this port derives itself: email setup. The
+ * readiness read is workspace truth the overview projection does not carry
+ * yet, and its absence — a failed or missing read — yields no row rather than
+ * a fabricated calm. Severity stays `soon` for now: escalating to `now`
+ * belongs to a blocked-send count this surface cannot read yet.
+ */
+async function emailSetupAttention(
+	readiness: Pick<CommunicationsReadinessPagePort, 'read'> | undefined,
+	options: { readonly signal?: AbortSignal }
+): Promise<AttentionItem[]> {
+	if (readiness === undefined) return [];
+	try {
+		const result = await readiness.read(options);
+		if (result.kind !== 'success') return [];
+		const outbound = result.data.outbound;
+		if (outbound.state === 'ready') return [];
+		// Passed readiness evidence expires within minutes by design, so a
+		// healthy configured install spends most of its life at "expired" or
+		// "not checked yet". That is evidence currency, not a setup defect, and
+		// a permanent row would teach people to ignore this panel; the
+		// Communications and Settings surfaces still show it. The set is the
+		// contract's, shared with the Settings panel making the same call.
+		if (
+			outbound.state === 'action_required'
+			&& (EMAIL_READINESS_CURRENCY_REASON_CODES as readonly string[]).includes(outbound.reasonCode)
+		) {
+			return [];
+		}
+		// Two different facts, two different sentences: no provider at all
+		// (`unknown`) versus a configured provider that is not ready to send.
+		// One title for both had this row claiming "not set up" while the
+		// Settings panel said the connection exists — two diagnoses of one fact.
+		const configured = outbound.state !== 'unknown';
+		return [{
+			id: 'email-setup',
+			severity: 'soon',
+			area: 'settings',
+			title: configured ? 'Email sending needs attention' : 'Email is not set up',
+			detail: configured
+				? 'An email provider is connected but not ready to send. Sign-in links, invitations, and decisions wait until it is.'
+				: 'Sign-in links, invitations, and decisions cannot be emailed until outbound email is configured and verified.',
+			action: configured ? 'Open email settings' : 'Finish email setup',
+			href: '/app/settings/email'
+		}];
+	} catch {
+		return [];
+	}
+}
+
+function mapLiveSummary(
+	projection: WorkspaceOverviewProjection,
+	attention: AttentionItem[]
+): OverviewPageSummary {
 	const submissions = projection.metrics.submissions;
 	const activity = historyActivity(projection.history.threads);
 	return {
@@ -405,13 +457,15 @@ function mapLiveSummary(projection: WorkspaceOverviewProjection): OverviewPageSu
 		// stays absent rather than being fabricated from a total.
 		arrivals: null,
 		stats: stats(projection),
-		attention: [],
+		attention,
 		pipeline: pipelineStages(projection),
 		deadlines: [],
 		activity,
 		trays: [],
 		sections: {
-			attention: unavailableAttention,
+			// With a real row the section is running; with none it still refuses
+			// to claim a watched calm, because only email setup is derived here.
+			attention: attention.length > 0 ? overviewAvailable : unavailableAttention,
 			// The lanes now state their own truth, so the section carries no
 			// apology of its own.
 			pipeline: overviewAvailable,
@@ -470,6 +524,7 @@ function createFailure(
 export function createLiveOverviewPagePort(input: {
 	readonly overview: WorkspaceOverviewPort;
 	readonly event: EventProgramPort['event'];
+	readonly readiness?: Pick<CommunicationsReadinessPagePort, 'read'>;
 }): OverviewPagePort {
 	let snapshot: OverviewPageSummary | null = null;
 	let eventSetVersion: number | null = null;
@@ -477,10 +532,13 @@ export function createLiveOverviewPagePort(input: {
 		source: Object.freeze({ kind: 'live' as const }),
 		snapshot: () => snapshot,
 		async read(options = {}) {
-			const result = await input.overview.read(options);
+			const [result, attention] = await Promise.all([
+				input.overview.read(options),
+				emailSetupAttention(input.readiness, options)
+			]);
 			if (result.kind !== 'success') return readUnavailable(result);
 			eventSetVersion = result.data.event.eventSetVersion;
-			snapshot = mapLiveSummary(result.data);
+			snapshot = mapLiveSummary(result.data, attention);
 			return { kind: 'success' as const, data: snapshot };
 		},
 		async createEvent(event) {

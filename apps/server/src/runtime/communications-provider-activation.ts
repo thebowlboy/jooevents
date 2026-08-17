@@ -3,17 +3,24 @@ import type { Database } from 'bun:sqlite';
 import {
   computeEmailProviderConfigurationDigest,
   emailProviderDiagnosticTestProjectionSchema,
+  emailSetupGuideProjectionSchema,
+  type EmailDeliverabilityCheckProjection,
   type EmailProviderConnectionProjection,
   type EmailProviderConnectionRevisionCandidate,
   type EmailProviderDiagnosticTestProjection,
   type EmailProviderReadinessCheckProjection,
+  type EmailSetupGuideProjection,
   type SafeEvidence
 } from '@jooevents/contracts';
 import {
+  checkEmailDeliverability,
   computeReviewedEmailEnvelopeDigestSha256,
   parseEmailAddress,
   prepareEmailProviderReadinessRequest,
+  senderDomainFromAddress,
+  type DnsTxtResolver,
   type EmailProviderConfigurationService,
+  type ExpectedDnsRecord,
   type ImmutableEmailDiagnosticSubmission,
   type ImmutableEmailEnvelope,
   type OutboundEmailProviderRegistration
@@ -50,9 +57,12 @@ const DIAGNOSTIC_VALIDITY_MS = 10 * 60_000;
 export class CommunicationsProviderActivationError extends Error {
   constructor(readonly code:
     | 'connection_revision_unavailable'
+    | 'deliverability_declaration_invalid'
+    | 'deliverability_not_supported'
     | 'diagnostics_not_supported'
     | 'open_transaction'
-    | 'readiness_check_undeclared') {
+    | 'readiness_check_undeclared'
+    | 'sender_domain_unavailable') {
     super(code);
     this.name = 'CommunicationsProviderActivationError';
   }
@@ -78,6 +88,12 @@ export interface CommunicationsProviderActivationInput {
   readonly clock: { now(): string };
   readonly nowEpochMs: () => number;
   readonly ids: { newId(): string };
+  /** Advisory public-DNS deliverability diagnostics; absent when not composed. */
+  readonly deliverability?: Readonly<{
+    resolver: DnsTxtResolver;
+    resolverKey: string;
+    expectedRecords: (domain: string) => readonly ExpectedDnsRecord[];
+  }>;
 }
 
 export interface ActiveOutboundConnection {
@@ -95,6 +111,13 @@ export interface CommunicationsProviderActivation {
   sendDiagnosticTest(input: Readonly<{ recipient: string }>): Promise<
     EmailProviderDiagnosticTestProjection
   >;
+  /**
+   * External-effect executor: advisory public-DNS lookups for the sending
+   * domain's declared records. Unpersisted by design — a diagnosis, not a gate.
+   */
+  checkDeliverability(): Promise<EmailDeliverabilityCheckProjection>;
+  /** Non-secret manifest-derived setup steps for the configured provider. */
+  getSetupGuide(): EmailSetupGuideProjection;
 }
 
 function sha256Hex(value: unknown): string {
@@ -372,23 +395,88 @@ export function createCommunicationsProviderActivation(
       const prepared = input.registration.diagnostics.prepare(submission);
       // Provider I/O — no database transaction may be open here.
       const outcome = await input.registration.diagnostics.submit(prepared);
-      const observedAt = input.clock.now();
-      const state = outcome.kind === 'accepted'
-        ? 'accepted' as const
-        : outcome.kind === 'acceptance_unknown'
-          ? 'acceptance_unknown' as const
-          : 'known_failed' as const;
-      return emailProviderDiagnosticTestProjectionSchema.parse({
+      return finishDiagnostic(outcome, diagnosticAttemptId, revision.revisionId);
+    },
+
+    async checkDeliverability(): Promise<EmailDeliverabilityCheckProjection> {
+      assertNoOpenTransaction();
+      if (input.deliverability === undefined) {
+        throw new CommunicationsProviderActivationError('deliverability_not_supported');
+      }
+      const domain = senderDomainFromAddress(input.sender.fromAddress);
+      if (domain === null) {
+        throw new CommunicationsProviderActivationError('sender_domain_unavailable');
+      }
+      // The adapter's declaration is validated against the projection bounds
+      // BEFORE any lookup runs: a declaration the final schema would reject
+      // must refuse as a typed adapter defect, not spend three DNS round
+      // trips and then surface an uncaught parse error.
+      const records = input.deliverability.expectedRecords(domain);
+      const declarationValid =
+        records.length >= 1 && records.length <= 8
+        && records.every((record) =>
+          record.recordName.length <= 253
+          && record.mustContain.length >= 1 && record.mustContain.length <= 8
+          && record.mustContain.every((marker) => marker.length >= 1 && marker.length <= 200));
+      if (!declarationValid) {
+        throw new CommunicationsProviderActivationError('deliverability_declaration_invalid');
+      }
+      // DNS I/O — read-only public lookups, still strictly outside any transaction.
+      return checkEmailDeliverability({
+        domain,
+        records,
+        resolver: input.deliverability.resolver,
+        resolverKey: input.deliverability.resolverKey,
+        checkedAt: input.clock.now()
+      });
+    },
+
+    getSetupGuide(): EmailSetupGuideProjection {
+      const links = new Map(manifest.officialLinks.map((link) => [link.key, link]));
+      return emailSetupGuideProjectionSchema.parse({
         schemaVersion: 1,
-        diagnosticAttemptId,
-        connectionRevisionId: revision.revisionId,
-        state,
-        outcomeCode: outcome.evidence.registeredCode,
-        evidence: evidenceRef(outcome.evidence, input.ids.newId(), observedAt),
-        providerMessageRecorded: outcome.kind === 'accepted',
-        cost: null,
-        observedAt
+        provider: Object.freeze({
+          adapterKey: manifest.adapterKey,
+          displayName: CONNECTION_DISPLAY_NAME
+        }),
+        fromAddress: input.sender.fromAddress,
+        senderDomain: senderDomainFromAddress(input.sender.fromAddress),
+        steps: manifest.humanSteps.map((step) => ({
+          key: step.key,
+          title: step.title,
+          instruction: step.instruction,
+          officialLink: step.officialLinkKey === undefined
+            ? null
+            : (() => {
+                const link = links.get(step.officialLinkKey);
+                return link === undefined ? null : { label: link.label, href: link.href };
+              })()
+        }))
       });
     }
   });
+
+  function finishDiagnostic(
+    outcome: Awaited<ReturnType<typeof input.registration.diagnostics.submit>>,
+    diagnosticAttemptId: string,
+    connectionRevisionId: string
+  ): EmailProviderDiagnosticTestProjection {
+    const observedAt = input.clock.now();
+    const state = outcome.kind === 'accepted'
+      ? 'accepted' as const
+      : outcome.kind === 'acceptance_unknown'
+        ? 'acceptance_unknown' as const
+        : 'known_failed' as const;
+    return emailProviderDiagnosticTestProjectionSchema.parse({
+      schemaVersion: 1,
+      diagnosticAttemptId,
+      connectionRevisionId,
+      state,
+      outcomeCode: outcome.evidence.registeredCode,
+      evidence: evidenceRef(outcome.evidence, input.ids.newId(), observedAt),
+      providerMessageRecorded: outcome.kind === 'accepted',
+      cost: null,
+      observedAt
+    });
+  }
 }

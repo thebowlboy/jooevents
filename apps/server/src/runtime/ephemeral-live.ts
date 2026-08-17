@@ -106,7 +106,10 @@ import {
   WORKSPACE_SENDER_IDENTITY_ACCESS_POLICY,
   WORKSPACE_SENDER_IDENTITY_UPDATE_REQUEST_HASH_PROFILE
 } from '@jooevents/communication-operations';
-import type { CloudflareFetch } from '@jooevents/cloudflare-email';
+import {
+  cloudflareEmailSendingExpectedDnsRecords,
+  type CloudflareFetch
+} from '@jooevents/cloudflare-email';
 import {
   DECISION_NOTIFICATION_MERGE_FIELDS,
   createDeterministicFakeEmailProvider,
@@ -579,6 +582,7 @@ import {
   type CommunicationSendLane
 } from './communication-send-lane';
 import {
+  CommunicationsProviderActivationError,
   createCommunicationsProviderActivation,
   type CommunicationsProviderActivation
 } from './communications-provider-activation';
@@ -588,6 +592,7 @@ import {
   type OpaqueSecretTextResolver
 } from './communications-provider-runtime';
 import { createDeploymentSecretFileResolver } from './deployment-secret-resolver';
+import { createDohTxtResolver, DOH_TXT_RESOLVER_KEY } from './doh-txt-resolver';
 import {
   createSQLiteCommunicationDeliveryHistorySource
 } from './communication-delivery-history';
@@ -1532,7 +1537,18 @@ export async function createEphemeralLiveRuntime(input: {
         sender: mailSender,
         clock,
         nowEpochMs: () => Date.now(),
-        ids: Object.freeze({ newId: () => crypto.randomUUID() })
+        ids: Object.freeze({ newId: () => crypto.randomUUID() }),
+        // Advisory deliverability diagnostics ride the same injectable fetch
+        // as the provider transport, so tests can fake DNS-over-HTTPS answers
+        // and no composition path performs hidden network I/O.
+        deliverability: Object.freeze({
+          resolver: createDohTxtResolver({
+            fetch: input.communications?.fetch
+              ?? ((request, init) => globalThis.fetch(request, init))
+          }),
+          resolverKey: DOH_TXT_RESOLVER_KEY,
+          expectedRecords: cloudflareEmailSendingExpectedDnsRecords
+        })
       });
       const activeConnection = await providerActivation.ensureActiveOutboundConnection();
       communicationDeliveryRoute = Object.freeze({
@@ -5738,7 +5754,8 @@ export async function createEphemeralLiveRuntime(input: {
       });
       const requireProviderManageAuthority = async (
         request: Request,
-        operation: { readonly name: string; readonly version: number }
+        operation: { readonly name: string; readonly version: number },
+        method: 'GET' | 'POST' = 'POST'
       ): Promise<
         | { readonly kind: 'authorized' }
         | { readonly kind: 'refused'; readonly status: 401 | 403 }
@@ -5746,7 +5763,7 @@ export async function createEphemeralLiveRuntime(input: {
         const verified = await evidence.verify({
           request,
           correlationId: crypto.randomUUID(),
-          binding: { method: 'POST' } as Parameters<typeof evidence.verify>[0]['binding']
+          binding: { method } as Parameters<typeof evidence.verify>[0]['binding']
         });
         if (verified.kind !== 'verified') {
           return { kind: 'refused', status: verified.reason === 'unauthenticated' ? 401 : 403 };
@@ -5797,6 +5814,61 @@ export async function createEphemeralLiveRuntime(input: {
           throw error;
         }
         return context.json({ kind: 'completed' as const, diagnostic });
+      });
+      // Advisory deliverability diagnostics: public-DNS lookups for the
+      // sending domain's declared records. Never persisted, never a gate —
+      // the provider's own readiness evidence stays authoritative.
+      app.post('/api/communications/email-deliverability/check', async (context) => {
+        const authorized = await requireProviderManageAuthority(
+          context.req.raw,
+          COMMUNICATION_PROVIDER_OPERATIONS.checkDeliverability
+        );
+        if (authorized.kind === 'refused') {
+          return context.json({ kind: 'refused' as const }, authorized.status);
+        }
+        let deliverability;
+        try {
+          deliverability = await executorActivation.checkDeliverability();
+        } catch (error) {
+          if (
+            error instanceof CommunicationsProviderActivationError
+            && (error.code === 'deliverability_not_supported'
+              || error.code === 'deliverability_declaration_invalid')
+          ) {
+            // No usable diagnostic exists here at all, so the capability is
+            // honestly absent (an invalid adapter declaration included).
+            return context.json({ kind: 'not_available' as const }, 409);
+          }
+          if (
+            error instanceof CommunicationsProviderActivationError
+            && error.code === 'sender_domain_unavailable'
+          ) {
+            // A configured provider whose from-address has no checkable
+            // public domain is a completed advisory answer, not an absent
+            // capability — conflating it with `not_available` is what let a
+            // working Delivery panel latch into a false "not configured".
+            return context.json({ kind: 'sender_domain_unavailable' as const });
+          }
+          throw error;
+        }
+        return context.json({ kind: 'completed' as const, deliverability });
+      });
+      // The manifest-derived, non-secret setup steps for the one configured
+      // provider, so the settings surface and a guided agent session read the
+      // same checklist the adapter declares instead of copying it.
+      app.get('/api/communications/email-setup-guide', async (context) => {
+        const authorized = await requireProviderManageAuthority(
+          context.req.raw,
+          COMMUNICATION_PROVIDER_OPERATIONS.getSetupGuide,
+          'GET'
+        );
+        if (authorized.kind === 'refused') {
+          return context.json({ kind: 'refused' as const }, authorized.status);
+        }
+        return context.json({
+          kind: 'completed' as const,
+          guide: executorActivation.getSetupGuide()
+        });
       });
     }
     const testSupport = input.devFixtures === true

@@ -1213,7 +1213,10 @@
   .ui-tab[aria-current='page']::after {
     position: absolute;
     right: 0.55rem;
-    bottom: -1px;
+    /* Inside the tab's own box: the container is a scroll container
+       (overflow-x auto for narrow widths), so anything past its padding box —
+       the old -1px border overlay — manufactures a permanent scrollbar. */
+    bottom: 0;
     left: 0.55rem;
     height: 2px;
     border-radius: 2px 2px 0 0;

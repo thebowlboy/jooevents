@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { success, type AuthUserLink, type ExternalIdentityClaims } from '@jooevents/identity-access';
+import { failure, success, type AuthUserLink, type ExternalIdentityClaims } from '@jooevents/identity-access';
 import { createProvisioningService, type ProvisioningStore } from './reconciliation';
 
 const now = '2026-08-09T08:00:00.000Z';
@@ -89,6 +89,233 @@ describe('provisioning service', () => {
     expect(result.kind).toBe('success');
     if (result.kind === 'success') expect(result.data).toEqual({ state: 'blocked', code: 'suspended' });
     expect(projectionCalls).toBe(0);
+  });
+
+  test('a later reservation admits an already-ready pending link through the normal sign-in plan', async () => {
+    const link: AuthUserLink = {
+      authUserId: 'auth_ada',
+      userId: 'user_ada',
+      provisioningState: 'ready',
+      attempts: 1,
+      createdAt: now,
+      updatedAt: now
+    };
+    const pending = {
+      user: { id: 'user_ada', displayName: 'Ada Lovelace', primaryEmail: 'ada@example.com' },
+      membership: {
+        id: 'membership_ada',
+        workspaceId: 'workspace_summit',
+        status: 'pending_review' as const,
+        version: 1
+      },
+      workspace: { id: 'workspace_summit', name: 'Summit Operations' }
+    };
+    let committedPlanCode: string | undefined;
+    const service = createProvisioningService({
+      principals: { getVerifiedClaims: async () => success(claims) },
+      store: store({
+        findAuthUserLink: async () => link,
+        readCommittedAccess: async () => success(pending),
+        loadSignInEvidence: async () => ({
+          identityLink: {
+            id: 'identity_ada',
+            userId: 'user_ada',
+            provider: claims.provider,
+            issuer: claims.issuer,
+            subject: claims.subject,
+            emailSnapshot: 'ada@example.com',
+            emailVerifiedSnapshot: true,
+            displayNameSnapshot: 'Ada Lovelace',
+            linkedAt: now,
+            lastObservedAt: now
+          },
+          linkedUser: {
+            id: 'user_ada',
+            status: 'pending_review',
+            displayName: 'Ada Lovelace',
+            createdAt: now,
+            updatedAt: now,
+            version: 1
+          },
+          linkedMembership: {
+            id: 'membership_ada',
+            workspaceId: 'workspace_summit',
+            userId: 'user_ada',
+            status: 'pending_review',
+            createdAt: now,
+            updatedAt: now,
+            version: 1
+          },
+          reservation: {
+            id: 'reservation_ada',
+            workspaceId: 'workspace_summit',
+            normalizedEmail: 'ada@example.com',
+            roleAssignments: [],
+            permissionOverrides: [],
+            status: 'open',
+            createdByUserId: 'system_bootstrap',
+            createdAt: now
+          }
+        }),
+        commitSignInPlan: async (input) => {
+          committedPlanCode = input.plan.code;
+          return success({
+            ...pending,
+            membership: { ...pending.membership, status: 'active', version: 2 }
+          });
+        }
+      }),
+      admission: { mode: 'pending' }
+    });
+
+    const result = await service.ensureAuthPrincipalProvisioned({
+      authUserId: 'auth_ada',
+      workspaceId: 'workspace_summit',
+      correlationId: 'corr_ada',
+      now
+    });
+
+    expect(committedPlanCode).toBe('existing_preapproved_member');
+    expect(result.kind).toBe('success');
+    if (result.kind === 'success') expect(result.data.state).toBe('active');
+  });
+
+  test('checking an unchanged ready pending link does not commit another pending plan', async () => {
+    const link: AuthUserLink = {
+      authUserId: 'auth_ada',
+      userId: 'user_ada',
+      provisioningState: 'ready',
+      attempts: 1,
+      createdAt: now,
+      updatedAt: now
+    };
+    let commits = 0;
+    const service = createProvisioningService({
+      principals: { getVerifiedClaims: async () => success(claims) },
+      store: store({
+        findAuthUserLink: async () => link,
+        readCommittedAccess: async () => success({
+          user: { id: 'user_ada', displayName: 'Ada Lovelace' },
+          membership: {
+            id: 'membership_ada',
+            workspaceId: 'workspace_summit',
+            status: 'pending_review',
+            version: 1
+          },
+          workspace: { id: 'workspace_summit', name: 'Summit Operations' }
+        }),
+        loadSignInEvidence: async () => ({}),
+        commitSignInPlan: async () => {
+          commits += 1;
+          throw new Error('must not commit');
+        }
+      }),
+      admission: { mode: 'pending' }
+    });
+
+    const result = await service.ensureAuthPrincipalProvisioned({
+      authUserId: 'auth_ada',
+      workspaceId: 'workspace_summit',
+      correlationId: 'corr_ada',
+      now
+    });
+
+    expect(commits).toBe(0);
+    expect(result.kind).toBe('success');
+    if (result.kind === 'success') expect(result.data.state).toBe('pending_review');
+  });
+
+  test('a failed reservation upgrade leaves the ready pending link undegraded', async () => {
+    const link: AuthUserLink = {
+      authUserId: 'auth_ada',
+      userId: 'user_ada',
+      provisioningState: 'ready',
+      attempts: 1,
+      createdAt: now,
+      updatedAt: now
+    };
+    const pending = {
+      user: { id: 'user_ada', displayName: 'Ada Lovelace', primaryEmail: 'ada@example.com' },
+      membership: {
+        id: 'membership_ada',
+        workspaceId: 'workspace_summit',
+        status: 'pending_review' as const,
+        version: 1
+      },
+      workspace: { id: 'workspace_summit', name: 'Summit Operations' }
+    };
+    let failuresMarked = 0;
+    const service = createProvisioningService({
+      principals: { getVerifiedClaims: async () => success(claims) },
+      store: store({
+        findAuthUserLink: async () => link,
+        readCommittedAccess: async () => success(pending),
+        loadSignInEvidence: async () => ({
+          identityLink: {
+            id: 'identity_ada',
+            userId: 'user_ada',
+            provider: claims.provider,
+            issuer: claims.issuer,
+            subject: claims.subject,
+            emailSnapshot: 'ada@example.com',
+            emailVerifiedSnapshot: true,
+            displayNameSnapshot: 'Ada Lovelace',
+            linkedAt: now,
+            lastObservedAt: now
+          },
+          linkedUser: {
+            id: 'user_ada',
+            status: 'pending_review',
+            displayName: 'Ada Lovelace',
+            createdAt: now,
+            updatedAt: now,
+            version: 1
+          },
+          linkedMembership: {
+            id: 'membership_ada',
+            workspaceId: 'workspace_summit',
+            userId: 'user_ada',
+            status: 'pending_review',
+            createdAt: now,
+            updatedAt: now,
+            version: 1
+          },
+          reservation: {
+            id: 'reservation_ada',
+            workspaceId: 'workspace_summit',
+            normalizedEmail: 'ada@example.com',
+            roleAssignments: [],
+            permissionOverrides: [],
+            status: 'open',
+            createdByUserId: 'system_bootstrap',
+            createdAt: now
+          }
+        }),
+        // A routine status poll racing another poll: the upgrade commit loses
+        // its version guard and returns a typed error. The healthy link must
+        // keep answering pending — never flip to provisioning-failed.
+        commitSignInPlan: async () => failure({
+          code: 'provisioning_dependency_failed',
+          message: 'version conflict',
+          retryable: true
+        }),
+        markProvisioningFailure: async () => {
+          failuresMarked += 1;
+        }
+      }),
+      admission: { mode: 'pending' }
+    });
+
+    const result = await service.ensureAuthPrincipalProvisioned({
+      authUserId: 'auth_ada',
+      workspaceId: 'workspace_summit',
+      correlationId: 'corr_ada',
+      now
+    });
+
+    expect(failuresMarked).toBe(0);
+    expect(result.kind).toBe('success');
+    if (result.kind === 'success') expect(result.data.state).toBe('pending_review');
   });
 
   test('injects a server projection only for a committed active membership', async () => {

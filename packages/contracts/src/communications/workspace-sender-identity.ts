@@ -27,6 +27,14 @@ const instantSchema = z.string().refine((value) => {
 /** Bounds the wire value only; header acceptance is the operation's structured refusal. */
 const submittedTextSchema = z.string().max(1_024);
 
+/**
+ * The installation's explicit unconfigured sender posture. One definition:
+ * the server config emits it and any surface stating the "cannot send email"
+ * consequence compares against it, so renaming the sentinel cannot silently
+ * strand a consumer on a stale string.
+ */
+export const UNCONFIGURED_MAIL_FROM_ADDRESS = 'no-reply@unconfigured.invalid';
+
 export const workspaceSenderDisplayNameSchema = z.string().min(1).max(200);
 export const workspaceSenderReplyToAddressSchema = z.string().min(3).max(320);
 

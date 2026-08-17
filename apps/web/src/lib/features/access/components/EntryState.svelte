@@ -75,11 +75,16 @@
            control, aside. -->
       <div class="resolver" aria-label="Checking access"><span></span><span></span><span></span><span></span><span></span><span></span></div>
     {/if}
-    <!-- Waiting on admission holds no fills: the composition it resolves into is
-         a destination, not a card, so there is no shape to stand in for. The
-         panel's own rail carries the wait, and the admission screen — when the
-         wait earns one — grows in beneath it. -->
-    {#if state.delayed}<p class="status">Checking your access…</p>{/if}
+    {#if state.awaiting === 'admission'}
+      <!-- The callback has a real task even before the server can name its
+           outcome. State it immediately: a moving rail inside an otherwise
+           blank panel does not tell the person whether sign-in is continuing.
+           The fuller provisioning screen still waits for server evidence. -->
+      <h1 data-entry-heading tabindex="-1">Finishing sign-in</h1>
+      <p>We're checking your JooEvents access.</p>
+    {:else if state.delayed}
+      <p class="status">Checking your access…</p>
+    {/if}
   {:else if surface}
     <h1 data-entry-heading tabindex="-1">
       {#if surface.kind === 'link_requested'}<EntryGlyph name="envelope" />{/if}{heading}

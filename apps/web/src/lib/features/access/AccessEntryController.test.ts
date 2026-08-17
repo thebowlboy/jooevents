@@ -427,7 +427,7 @@ test('the re-check is fast twice, then the server says when', async () => {
   // the quiet window that decides whether this wait earns a screen, two fast
   // probes, then the server's own hint for as long as it keeps answering.
   expect(clock.scheduled()).toEqual([300, 600, 250, 750, 2000, 2000]);
-  // One neutral composition for the whole wait: the re-checks under it never
+  // One compact status composition for the whole wait: the re-checks under it never
   // blank the panel back to the resolver and repaint it.
   expect(seen.filter((kind) => kind === 'resolving')).toHaveLength(2);
   instance.dispose();
@@ -466,7 +466,7 @@ test('a hidden tab stops asking, and returning to it asks again without repainti
   instance.handleVisibility(true);
   await clock.flush();
   expect(asked()).toBe(2);
-  // Still the wordless hold, and the cadence resumed rather than restarted.
+  // Still the compact status hold, and the cadence resumed rather than restarted.
   expect(instance.state.kind).toBe('resolving');
   expect(clock.pending()).toContain(750);
   expect(seen).not.toContain('provisioning');

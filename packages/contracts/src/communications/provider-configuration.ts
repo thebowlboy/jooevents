@@ -474,6 +474,80 @@ export const emailProviderDiagnosticTestProjectionSchema = z.strictObject({
   }
 });
 
+const dnsNameSchema = z.string().min(1).max(253)
+  .regex(/^[a-z0-9_]([a-z0-9-]{0,62}[a-z0-9])?(\.[a-z0-9_]([a-z0-9-]{0,62}[a-z0-9])?)+$/);
+
+/**
+ * Readiness reason codes that describe evidence currency rather than a defect:
+ * passed evidence expires within minutes by design, so a healthy configured
+ * install spends most of its life in one of these. Every surface deciding
+ * "is this a problem or just an unchecked connection" consumes this one set —
+ * a local copy is how two surfaces end up disagreeing about the same state.
+ */
+export const EMAIL_READINESS_CURRENCY_REASON_CODES = Object.freeze([
+  'email_provider_readiness_expired',
+  'email_provider_readiness_unknown',
+  'email_provider_readiness_checking'
+] as const);
+
+/**
+ * Advisory public-DNS deliverability diagnostics. These records are read over
+ * public resolvers and never gate the send lane: the provider's own readiness
+ * evidence stays authoritative, so every state here is a diagnosis to act on,
+ * not an authorization.
+ */
+export const emailDeliverabilityRecordCheckSchema = z.strictObject({
+  key: z.enum(['spf', 'dkim', 'dmarc']),
+  recordName: dnsNameSchema,
+  recordType: z.literal('TXT'),
+  mustContain: z.array(z.string().min(1).max(200)).min(1).max(8),
+  state: z.enum(['found', 'missing', 'mismatch', 'lookup_failed']),
+  observedValues: z.array(z.string().max(512)).max(8)
+});
+
+export const emailDeliverabilityCheckProjectionSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  advisory: z.literal(true),
+  domain: dnsNameSchema,
+  resolverKey: providerStableKeySchema,
+  records: z.array(emailDeliverabilityRecordCheckSchema).min(1).max(8),
+  overall: z.enum(['pass', 'action_required', 'unknown']),
+  checkedAt: instantSchema
+}).superRefine((check, context) => {
+  const states = check.records.map((record) => record.state);
+  const expected = states.some((state) => state === 'missing' || state === 'mismatch')
+    ? 'action_required'
+    : states.some((state) => state === 'lookup_failed')
+      ? 'unknown'
+      : 'pass';
+  if (check.overall !== expected) {
+    context.addIssue({ code: 'custom', path: ['overall'],
+      message: 'overall deliverability must aggregate the record states' });
+  }
+});
+
+/** Non-secret, manifest-derived setup guidance for the configured provider. */
+export const emailSetupGuideStepSchema = z.strictObject({
+  key: providerStableKeySchema,
+  title: z.string().min(1).max(120),
+  instruction: z.string().min(1).max(500),
+  officialLink: z.strictObject({
+    label: z.string().min(1).max(120),
+    href: z.url()
+  }).nullable()
+});
+
+export const emailSetupGuideProjectionSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  provider: z.strictObject({
+    adapterKey: providerStableKeySchema,
+    displayName: canonicalText
+  }),
+  fromAddress: z.string().min(3).max(320),
+  senderDomain: dnsNameSchema.nullable(),
+  steps: z.array(emailSetupGuideStepSchema).max(32)
+});
+
 export const emailProviderConnectionCanonicalResultSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('success'), data: emailProviderConnectionProjectionSchema }),
   z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
@@ -568,3 +642,9 @@ export type EmailProviderDiagnosticTestInput = z.infer<
 export type EmailProviderDiagnosticTestProjection = z.infer<
   typeof emailProviderDiagnosticTestProjectionSchema
 >;
+export type EmailDeliverabilityRecordCheck = z.infer<typeof emailDeliverabilityRecordCheckSchema>;
+export type EmailDeliverabilityCheckProjection = z.infer<
+  typeof emailDeliverabilityCheckProjectionSchema
+>;
+export type EmailSetupGuideStep = z.infer<typeof emailSetupGuideStepSchema>;
+export type EmailSetupGuideProjection = z.infer<typeof emailSetupGuideProjectionSchema>;

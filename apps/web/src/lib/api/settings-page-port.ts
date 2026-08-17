@@ -1,3 +1,8 @@
+import type {
+	EmailDeliverabilityCheckProjection,
+	EmailProviderReadinessCheckProjection,
+	EmailSetupGuideProjection
+} from '@jooevents/contracts';
 import {
 	createSampleSenderIdentitySettingsPort,
 	type SampleSenderIdentitySource,
@@ -5,6 +10,12 @@ import {
 } from './sender-identity-settings-port';
 import type { ApiKeysPagePort } from './api-keys-page-port';
 import { createSampleApiKeysPagePort } from './api-keys-page-port.sample';
+import type { CommunicationsReadinessResult } from './communications-readiness-page-port';
+import type {
+	ProviderDeliverabilityResult,
+	ProviderSetupResult,
+	ProviderTestSendResult
+} from './operations/communications-provider-setup-live';
 import type { WorkspaceTeamSettingsMutationResult, WorkspaceTeamSettingsPort } from './workspace-team-settings-adapter';
 import type { WorkspaceTeamLiveReadResult } from './operations/workspace-team-live';
 import type { ProgramVocabularySettingsPort } from './program-vocabulary-settings-adapter';
@@ -102,6 +113,29 @@ export interface SettingsPageTeamPort {
 	removeMember(id: string): Promise<SettingsTeamActionResult>;
 }
 
+/**
+ * The Email section's delivery seam: stored readiness, the manifest-derived
+ * setup guide, and the three owner-lane executors. Everything here is either a
+ * read or an advisory diagnostic — the send lane is gated elsewhere.
+ */
+export interface SettingsEmailDeliveryPort {
+	readiness(options?: {
+		readonly signal?: AbortSignal;
+	}): Promise<CommunicationsReadinessResult>;
+	guide(options?: {
+		readonly signal?: AbortSignal;
+	}): Promise<ProviderSetupResult<EmailSetupGuideProjection>>;
+	runReadinessCheck(options?: {
+		readonly signal?: AbortSignal;
+	}): Promise<ProviderSetupResult<EmailProviderReadinessCheckProjection>>;
+	checkDns(options?: {
+		readonly signal?: AbortSignal;
+	}): Promise<ProviderDeliverabilityResult>;
+	sendTest(recipient: string, options?: {
+		readonly signal?: AbortSignal;
+	}): Promise<ProviderTestSendResult>;
+}
+
 export interface SettingsPagePort {
 	readonly source: { readonly kind: 'sample' | 'live' };
 	readonly workspace: {
@@ -116,6 +150,8 @@ export interface SettingsPagePort {
 	 * event exists, so this seam is not gated on `event.get()`.
 	 */
 	readonly senderIdentity: SettingsPageSenderIdentityPort;
+	/** Absent where the live delivery seam is not composed (sample workspaces). */
+	readonly emailDelivery?: SettingsEmailDeliveryPort;
 	/** Absent where the live credential seam is not composed. */
 	readonly apiKeys?: ApiKeysPagePort;
 }
@@ -218,6 +254,7 @@ export function createLiveSettingsPagePort(input: {
 	readonly vocab: ProgramVocabularySettingsPort;
 	readonly fields: SettingsPageFieldsPort;
 	readonly senderIdentity: SettingsPageSenderIdentityPort;
+	readonly emailDelivery?: SettingsEmailDeliveryPort;
 	readonly apiKeys?: ApiKeysPagePort;
 	readonly summarySnapshot?: () => WorkspaceSummary | null;
 }): SettingsPagePort {
@@ -295,6 +332,7 @@ export function createLiveSettingsPagePort(input: {
 		}),
 		fields: input.fields,
 		senderIdentity: input.senderIdentity,
+		...(input.emailDelivery === undefined ? {} : { emailDelivery: input.emailDelivery }),
 		...(input.apiKeys === undefined ? {} : { apiKeys: input.apiKeys })
 	});
 }

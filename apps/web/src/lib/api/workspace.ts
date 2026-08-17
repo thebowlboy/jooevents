@@ -2191,8 +2191,10 @@ export const api = {
 				stage.key === 'review'
 					? {
 							...stage,
-							headline: '0%',
-							sub: `round 1 open · ${total} reviews expected`,
+							// The figure is said once: headline and sentence compose one
+							// claim — "0" + "of 40 reviews are in · round 1 open".
+							headline: '0',
+							sub: `of ${total} reviews are in · round 1 open`,
 							state: 'ok' as const,
 							progress: { done: 0, required: total }
 						}

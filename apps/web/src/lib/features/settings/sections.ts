@@ -57,16 +57,19 @@ export const settingsSections: readonly SettingsSection[] = Object.freeze([
 		anchors: Object.freeze([Object.freeze({ id: 'settings-team', label: 'Team' })])
 	}),
 	/*
-	 * Email is workspace-scoped, so it reads before any event exists. Its two
-	 * editable values commit as one optimistic-concurrency unit against one
-	 * head version, so they are one panel and one anchor: splitting them into
-	 * two rail destinations would mean two saves that overwrite each other.
+	 * Email is workspace-scoped, so it reads before any event exists. The two
+	 * editable sender values commit as one optimistic-concurrency unit against
+	 * one head version, so they stay one panel and one anchor; Delivery is the
+	 * separate read-and-diagnose panel for provider readiness and DNS records.
 	 */
 	Object.freeze({
 		key: 'email',
 		label: 'Email',
 		href: `${SETTINGS_ROOT}/email`,
-		anchors: Object.freeze([Object.freeze({ id: 'settings-email-sender', label: 'Sender' })])
+		anchors: Object.freeze([
+			Object.freeze({ id: 'settings-email-sender', label: 'Sender' }),
+			Object.freeze({ id: 'settings-email-delivery', label: 'Delivery' })
+		])
 	}),
 	/*
 	 * API keys are workspace-scoped credentials for outside callers — agents,

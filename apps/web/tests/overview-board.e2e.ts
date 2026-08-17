@@ -55,10 +55,12 @@ test.describe('a steady mid-flight event', () => {
 		});
 		expect(attentionFirst).toBe(true);
 
-		// Review has a stated denominator, so it carries a meter whose digits
-		// are absolute — and it is on pace, so no pace word appears anywhere.
+		// Review has a stated denominator, so it carries a meter — and its
+		// absolute is said once: the figure leads and the sentence finishes it,
+		// with no separate digits restating either. On pace, so no pace word.
 		const review = lane(page, 'review');
-		await expect(review).toContainText('224 of 360');
+		await expect(review).toContainText('224 of 360 reviews are in');
+		await expect(review.locator('.lane__headline')).toHaveText('224');
 		await expect(review.locator('.ui-meter')).toHaveCount(1);
 		await expect(review.locator('.lane__pace')).toHaveCount(0);
 
@@ -66,9 +68,8 @@ test.describe('a steady mid-flight event', () => {
 		// alone — a date with no distance is arithmetic homework, a countdown with
 		// no date leaves nothing to diarise.
 		await expect(review).toHaveAccessibleName(
-			/^Review: 224 of 360, due \d{1,2}\s\w{3}, in \d+ weeks? — open Review$/
+			/^Review: 224 of 360 reviews are in, due \d{1,2}\s\w{3}, in \d+ weeks? — open Review$/
 		);
-		await expect(review).toContainText('62%');
 		await expect(review.locator('.lane__deadline')).toContainText('due');
 
 		// The document itself never scrolls sideways.
@@ -88,7 +89,7 @@ test.describe('a steady mid-flight event', () => {
 		await expect(schedule.getByText('Behind', { exact: true })).toBeVisible();
 		await expect(schedule).toContainText('publish target');
 		await expect(schedule).toHaveAccessibleName(
-			/^Schedule: 8 of 12, behind, publish target \d{1,2}\s\w{3}, in \d+ months? — open Schedule$/
+			/^Schedule: 8 of 12 placed · 2 conflicts, behind, publish target \d{1,2}\s\w{3}, in \d+ months? — open Schedule$/
 		);
 
 		// The lane is an orientation door and lands at the area root — the
@@ -173,7 +174,7 @@ test.describe('a crunch week', () => {
 
 		await expect(decide.getByText('Behind', { exact: true })).toBeVisible();
 		await expect(decide).toHaveAccessibleName(
-			/^Decide: 6 of 16, behind, notify by \d{1,2}\s\w{3}, in \d+ days — open Decisions$/
+			/^Decide: 6 of 16 decided · 4 accepted · 4 still waiting to hear, behind, notify by \d{1,2}\s\w{3}, in \d+ days — open Decisions$/
 		);
 
 		await decide.click();
@@ -272,5 +273,60 @@ test.describe('the first days of a CFP', () => {
 
 		await band(page).locator('button[aria-expanded]').first().click();
 		await expect(page.locator('.ui-popover__panel').first()).toContainText('Counted from Monday');
+	});
+});
+
+test.describe('a brand-new event', () => {
+	test('the dormant page is the rail: seven stages, one gate, no zero-band, no apologies', async ({
+		page
+	}, testInfo) => {
+		test.skip(
+			testInfo.project.name !== 'desktop',
+			'one viewport covers the dormant-regime contract; the rail\u2019s touch collapse is a CSS re-composition inspected in the width sweep'
+		);
+
+		// Create a fresh event, so no stage has begun and nothing has arrived.
+		await page.goto('/app');
+		await expect(page.getByRole('button', { name: 'Switch event' })).toBeVisible({
+			timeout: 15000
+		});
+		await page.getByRole('button', { name: 'Switch event' }).click();
+		await page.getByRole('button', { name: 'New event' }).click();
+		const dialog = page.getByRole('dialog', { name: 'New event' });
+		await dialog.getByLabel('Name').fill('Dormancy Conf 2027');
+		await page.locator('#new-event-start').fill('2027-10-01');
+		await page.locator('#new-event-start').press('Enter');
+		await page.locator('#new-event-end').fill('2027-10-02');
+		await page.locator('#new-event-end').press('Enter');
+		await dialog.getByRole('button', { name: 'Create event' }).click();
+		await expect(page).toHaveURL(/\/app$/, { timeout: 15000 });
+
+		// The rail hero: all seven stages in work order, exactly one ringed gate.
+		const rail = page.locator('.rail--hero');
+		await expect(rail).toBeVisible({ timeout: 15000 });
+		await expect(rail.locator('li')).toHaveCount(7);
+		await expect(rail.locator('.rail__node--gate')).toHaveCount(1);
+		await expect(rail.locator('.rail__node--gate')).toContainText('Collect');
+
+		// The fact is the sentence; the act is the door — landing inside form
+		// creation, the same address the empty inbox's nudge uses.
+		const region = page.getByRole('region', { name: 'Pipeline' });
+		await expect(
+			region.getByText('Collecting starts when your call for proposals (CFP) opens.')
+		).toBeVisible();
+		const door = region.getByRole('link', { name: 'Open a call for proposals' });
+		await expect(door).toHaveAttribute('href', '/app/forms?new=1');
+
+		// No zero-band and no per-panel apology sentences: a dormant panel with
+		// no facts does not render, and the one next step is said exactly once.
+		await expect(page.getByRole('region', { name: 'Key numbers' })).toHaveCount(0);
+		await expect(page.getByText('No recorded activity yet.')).toHaveCount(0);
+		await expect(page.getByText('No event deadlines are recorded.')).toHaveCount(0);
+
+		// The document itself never scrolls sideways.
+		const overflow = await page.evaluate(
+			() => document.documentElement.scrollWidth - document.documentElement.clientWidth
+		);
+		expect(overflow).toBeLessThanOrEqual(1);
 	});
 });

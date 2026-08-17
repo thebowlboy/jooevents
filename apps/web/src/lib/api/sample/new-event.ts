@@ -56,18 +56,12 @@ export function newEventDataset(seed: CreatedEventSeed): WorkspaceDataset {
 				{ label: 'Decided', value: '—', sub: 'Nothing to decide yet' },
 				{ label: 'Placed', value: '—', sub: 'No sessions on the grid yet' }
 			],
-			attention: [
-				{
-					id: 'open-intake',
-					severity: 'fyi',
-					area: 'forms',
-					title: 'Open your call for proposals (CFP)',
-					detail:
-						'The standard application form is ready to trim and open. Submissions, review, and the schedule fill from what it collects.',
-					action: 'Start from the standard application',
-					href: '/app/forms?new=1'
-				}
-			],
+			/* No authored attention row: on a dormant event the pipeline rail is
+			   the page, and its gate carries the one next step — opening the call
+			   for proposals — with the same words and the same landing as the
+			   empty submissions inbox's nudge. A row here too was the same fact
+			   behind two doors. */
+			attention: [],
 			pipeline: [],
 			deadlines: [],
 			activity: [],

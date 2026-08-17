@@ -2,7 +2,7 @@
 	import { onMount, untrack } from 'svelte';
 	import { AlertTriangle } from 'lucide-svelte';
 	import { DATE_CLASS, describeCalendarDeadline } from '@jooevents/contracts';
-	import { Badge, Meter, badgeFor, statusIcon, statusToneClass } from '$lib/ui';
+	import { Badge, Meter, badgeFor, situationIcon, statusIcon } from '$lib/ui';
 	import type { StatusTone } from '$lib/ui';
 	import {
 		navGroups,
@@ -11,17 +11,18 @@
 		overviewItem,
 		settingsItem
 	} from '$lib/features/workspace/navigation';
+	import { pipelineStageByKey, pipelineStageMeta } from '$lib/api/pipeline-stages';
 	import type {
 		OverviewPagePort,
 		OverviewPageSummary,
 		OverviewPipelineStage
 	} from '$lib/api/overview-page-port';
-	import type { AreaKey, DeadlineItem } from '$lib/api/types';
+	import type { DeadlineItem } from '$lib/api/types';
 	import ActivityFeed from './ActivityFeed.svelte';
 	import ArrivalTile from './ArrivalTile.svelte';
 	import NewEventModal from './NewEventModal.svelte';
+	import PipelineRail, { type RailNode } from './PipelineRail.svelte';
 	import StatTile from './StatTile.svelte';
-	import DormantShape from './DormantShape.svelte';
 	import TrayLedger from './TrayLedger.svelte';
 
 	let { port }: { readonly port: OverviewPagePort } = $props();
@@ -84,16 +85,6 @@
 		return run;
 	}
 
-	// What the shell already knows about this workspace shapes the placeholder.
-	// Two regions here can resolve to absent — the act-now banner, and the whole
-	// dashboard body on a workspace with no event — and a placeholder for either
-	// would collapse everything below it the moment the summary lands.
-	const known = untrack(() => port.snapshot());
-	const expectEvent = known?.event != null;
-	const expectBanner = known?.attention.some((item) => item.severity === 'now') ?? false;
-	// The banner takes the first act-now item; the rest stay in the list.
-	const expectedListRows = known ? known.attention.length - (expectBanner ? 1 : 0) : 0;
-
 	// The banner tier renders only while an act-now item exists; everything else
 	// stays in the list.
 	const banner = $derived(summary?.attention.find((item) => item.severity === 'now'));
@@ -140,9 +131,21 @@
 
 	const navItems = [overviewItem, ...navGroups.flatMap((group) => group.items), settingsItem];
 
-	/* Reuses the destination glyphs from the navigation model, so an attention
-	   row's action shows where it lands using the same mark as the sidebar. */
+	/* Reuses the destination glyphs from the navigation model, so a stage — on
+	   the rail, on its lane, and on an attention row's action — shows where it
+	   lands using the same mark as the sidebar. */
 	const areaIcon = Object.fromEntries(navItems.map((item) => [item.key, item.icon]));
+
+	/**
+	 * A settled empty panel wears a glyph and its sentence — never a row
+	 * silhouette, which reads as loading whatever ink it is drawn in. Dashed
+	 * circle = present, not started; question mark = not counted here; check =
+	 * watched and clear. Neutral ink on all three: calm is not a success
+	 * event, and none of these is an alarm.
+	 */
+	const DormantMark = statusIcon.notStarted;
+	const UncountedMark = statusIcon.notChecked;
+	const AllClearMark = situationIcon.allClear;
 
 	/* Stage health as a shape, not only a hue. */
 	const stageIcon = {
@@ -152,36 +155,113 @@
 		unavailable: statusIcon.notConfigured
 	} as const;
 
-	/**
-	 * A lane's mark answers its *availability* before its health, because a
-	 * stage that has not begun and a stage nobody counted are two different
-	 * absences and neither is a health verdict.
-	 *
-	 * Both glyphs come from the closed vocabulary and already mean exactly
-	 * this: `notStarted` is the task board's word for work that has not begun,
-	 * `notChecked` is the readiness vocabulary's word for a question nobody
-	 * answered. A padlock is deliberately not used — `Lock` is already spent on
-	 * a closed form, and one meaning takes one symbol.
-	 */
-	function laneIcon(stage: OverviewPipelineStage) {
-		if (stage.availability.kind === 'locked') return statusIcon.notStarted;
-		if (stage.availability.kind === 'unavailable') return statusIcon.notChecked;
-		return stageIcon[stage.state];
-	}
-
 	const navItemByKey = Object.fromEntries(navItems.map((item) => [item.key, item]));
 
-	/* The area whose screen answers for each stage's facts. Collect and triage
-	   both resolve on the submissions screen; comms resolves on messages. */
-	const stageArea: Record<OverviewPipelineStage['key'], AreaKey> = {
-		collect: 'submissions',
-		triage: 'submissions',
-		review: 'review',
-		decide: 'decisions',
-		speakers: 'speakers',
-		schedule: 'schedule',
-		comms: 'messages'
-	};
+	/**
+	 * The pipeline read as a path: which stages run, which one is the next
+	 * gate, which have not begun, and which nobody counts. Position only —
+	 * the rail spends no status colour, because health already speaks once,
+	 * on the lanes, in shape and hue beside its words.
+	 *
+	 * The gate is the first not-started stage in work order: its condition is
+	 * the page's one next step, said once here rather than once per held lane —
+	 * the same say-it-once rule the uncounted footnote already follows.
+	 */
+	interface RailGate {
+		readonly condition: string;
+		readonly door?: { readonly label: string; readonly href: string };
+	}
+	interface RailInfo {
+		readonly nodes: RailNode[];
+		readonly gate: RailGate | null;
+		readonly anyRunning: boolean;
+	}
+
+	function railInfo(pipeline: readonly OverviewPipelineStage[]): RailInfo {
+		const byKey = new Map(pipeline.map((stage) => [stage.key, stage]));
+		const resolved = pipelineStageMeta.map((meta) => {
+			const lane = byKey.get(meta.key);
+			const base: 'running' | 'upcoming' | 'uncounted' =
+				lane?.availability.kind === 'available'
+					? 'running'
+					: lane?.availability.kind === 'unavailable'
+						? 'uncounted'
+						: 'upcoming';
+			return { meta, lane, base };
+		});
+		const first = resolved.find((entry) => entry.base === 'upcoming');
+		const nodes: RailNode[] = resolved.map((entry) => ({
+			key: entry.meta.key,
+			label: entry.meta.label,
+			icon: areaIcon[entry.meta.iconArea ?? entry.meta.area],
+			state: entry === first ? 'gate' : entry.base
+		}));
+		const gate: RailGate | null = first
+			? {
+					condition:
+						first.lane?.availability.kind === 'locked'
+							? first.lane.availability.condition
+							: first.meta.unlock,
+					...(first.meta.door ? { door: first.meta.door } : {})
+				}
+			: null;
+		return { nodes, gate, anyRunning: resolved.some((entry) => entry.base === 'running') };
+	}
+
+	const rail = $derived(summary ? railInfo(summary.pipeline) : null);
+
+	/**
+	 * The regimes: an event where no stage runs yet is *dormant*, and its page
+	 * is the path ahead — the rail as hero, the gate as the one instruction,
+	 * and only panels that carry facts. Twelve correct sentences that all mean
+	 * "nothing yet" were one fact stated twelve times; the rail states it once,
+	 * structurally. The moment any stage runs, the working dashboard returns,
+	 * with the rail shrunk to a one-line map that renders only while some stage
+	 * is still missing from the lanes below it.
+	 */
+	/* A page classified dormant must be able to state its one next step, so
+	   dormancy additionally requires a gate. An event whose stages are all
+	   uncounted has no not-started stage to gate on — it is unmeasured, not
+	   dormant — and it keeps the working dashboard, where uncounted lanes
+	   already carry their dash and the shared footnote. */
+	const dormant = $derived(
+		summary?.event != null && rail !== null && !rail.anyRunning && rail.gate !== null
+	);
+	const stripShown = $derived(
+		rail !== null && rail.anyRunning && rail.nodes.some((node) => node.state !== 'running')
+	);
+
+	/**
+	 * Only running stages keep lane rows. A locked stage's whole payload is its
+	 * unlock condition — now the gate line — and an uncounted stage's is the
+	 * footnote; a row per absence was the wordiness this composition retires.
+	 */
+	const availableLanes = $derived(
+		summary ? summary.pipeline.filter((stage) => stage.availability.kind === 'available') : []
+	);
+
+	// What the shell already knows about this workspace shapes the placeholder.
+	// The snapshot decides the regime too, so the skeleton holds the same
+	// composition the summary resolves into — hero for a dormant event, the
+	// working dashboard otherwise.
+	const known = untrack(() => port.snapshot());
+	const expectEvent = known?.event != null;
+	const expectBanner = known?.attention.some((item) => item.severity === 'now') ?? false;
+	// The banner takes the first act-now item; the rest stay in the list.
+	const expectedListRows = known ? known.attention.length - (expectBanner ? 1 : 0) : 0;
+
+	const knownRail = known ? railInfo(known.pipeline) : null;
+	const knownDormant =
+		expectEvent && knownRail !== null && !knownRail.anyRunning && knownRail.gate !== null;
+	const knownStrip =
+		knownRail !== null && knownRail.anyRunning
+		&& knownRail.nodes.some((node) => node.state !== 'running');
+	const knownAvailableLanes = known
+		? known.pipeline.filter((stage) => stage.availability.kind === 'available')
+		: [];
+	const knownHasUncounted = known
+		? known.pipeline.some((stage) => stage.availability.kind === 'unavailable')
+		: false;
 
 	/**
 	 * A lane lands where its facts already land: the exact address the sidebar
@@ -192,7 +272,7 @@
 	 * address for the conflicts fact itself.
 	 */
 	function laneDoor(stage: OverviewPipelineStage, counts: OverviewPageSummary['navCounts']) {
-		const item = navItemByKey[stageArea[stage.key]];
+		const item = navItemByKey[pipelineStageByKey.get(stage.key)!.area];
 		return { href: navHref(item, navMeta(counts, item.key)), area: item.label };
 	}
 
@@ -210,12 +290,6 @@
 	 * whose deadline lands tomorrow is amber, and a stage at 20% with three
 	 * weeks left is green. The mark at the lane's start carries the same value
 	 * as a shape, so the two channels are one fact rather than two opinions.
-	 *
-	 * It used to fill with a wash of the action hue for "fine", which the design
-	 * record forbids reading as a status and which sits three degrees from the
-	 * danger family — so a healthy lane and a failing one were nearly the same
-	 * colour. Green now means healthy, as it does everywhere else a person has
-	 * ever read a bar.
 	 */
 	const laneTone: Record<OverviewPipelineStage['state'], StatusTone> = {
 		ok: 'positive',
@@ -265,14 +339,19 @@
 		});
 	}
 
+	/**
+	 * The figure and its sentence are one claim — "224" + "of 360 reviews are
+	 * in" — so the accessible name reads them as the sentence they compose. A
+	 * lane whose figure is the sanctioned no-measurement dash speaks its
+	 * sentence alone: "—" is a refusal to say, not a word.
+	 */
 	function laneName(stage: OverviewPipelineStage, area: string): string {
-		const figure = stage.progress
-			? `${stage.progress.done} of ${stage.progress.required}`
-			: stage.headline;
+		const figure = stage.headline === '—' ? '' : stage.headline;
+		const lead = [figure, stage.sub].filter(Boolean).join(' ');
 		const pace = paceWord(stage);
 		const deadline = laneDeadline(stage);
 		const parts = [
-			figure,
+			lead,
 			...(pace ? [pace.toLowerCase()] : []),
 			...(deadline ? [`${deadline.label} ${deadline.absolute}, ${deadline.relative}`] : [])
 		];
@@ -302,37 +381,124 @@
 		return `JooEvents does not yet count ${named} on this event.`;
 	});
 
-	/**
-	 * One shared cause, said once above the lanes and carrying its own next step,
-	 * rather than repeated down a column. It renders only while the whole intake
-	 * chain is held by the same fact — the moment a form opens, the lanes differ
-	 * and each states its own condition.
-	 */
-	const intakeHeld = $derived.by(() => {
-		const lanes = summary?.pipeline;
-		if (!lanes) return false;
-		const locked = (key: OverviewPipelineStage['key']) =>
-			lanes.find((stage) => stage.key === key)?.availability.kind === 'locked';
-		return locked('collect') && locked('triage');
-	});
-
-	/**
-	 * The same two questions asked of the snapshot, so the placeholder reserves
-	 * the held line and the footnote exactly where the resolved panel puts them.
-	 */
-	const knownIntakeHeld = known
-		? ['collect', 'triage'].every((key) =>
-			known.pipeline.find((stage) => stage.key === key)?.availability.kind === 'locked')
-		: false;
-	const knownHasUncounted = known
-		? known.pipeline.some((stage) => stage.availability.kind === 'unavailable')
-		: false;
-
 	/** The tray a spam proposal is recoverable from, for the arrival panel. */
 	const spamHref = $derived(
 		summary?.trays.find((tray) => tray.kind === 'spam')?.href
 	);
 </script>
+
+{#snippet attentionPanel(current: OverviewPageSummary)}
+	<section class="panel" aria-label="Needs attention">
+		<header class="panel__head">
+			<h2>Needs attention</h2>
+			<span class="panel__count">{listItems.length}</span>
+		</header>
+		{#if current.sections.attention.kind === 'locked'}
+			<p class="panel__calm panel__situation"><span class="panel__situation-mark" aria-hidden="true"><DormantMark size={15} /></span>{current.sections.attention.condition}</p>
+		{:else if current.sections.attention.kind === 'unavailable'}
+			<p class="panel__calm panel__situation"><span class="panel__situation-mark" aria-hidden="true"><UncountedMark size={15} /></span>{current.sections.attention.message}</p>
+		{:else if listItems.length === 0}
+			<!-- A live zero: the watch ran and found nothing, and the check in
+			     neutral ink says so before the sentence is read. -->
+			<p class="panel__calm panel__situation"><span class="panel__situation-mark" aria-hidden="true"><AllClearMark size={15} /></span>Nothing is waiting on you right now.</p>
+		{:else}
+			<ul class="attention">
+				{#each listItems as item (item.id)}
+					{@const Destination = areaIcon[item.area]}
+					{@const mark = severityMark[item.severity]}
+					<li class="attention__row">
+						<span class="attention__sev">
+							<Badge
+								tone={mark.tone}
+								icon={mark.icon}
+								emphasis={item.severity === 'now'}
+								value={severityLabel[item.severity]} />
+						</span>
+						<div class="attention__copy">
+							<p class="attention__title">{item.title}</p>
+							<p class="attention__detail">{item.detail}</p>
+						</div>
+						<a class="ui-button ui-button--secondary ui-button--sm attention__action" href={destination(item)}
+							><Destination aria-hidden="true" />{item.action}</a
+						>
+					</li>
+				{/each}
+			</ul>
+		{/if}
+	</section>
+{/snippet}
+
+{#snippet deadlinesPanel(current: OverviewPageSummary)}
+	<section class="panel" aria-label="Deadlines">
+		<header class="panel__head"><h2>Deadlines</h2></header>
+		{#if current.sections.deadlines.kind === 'locked'}
+			<!-- A fact about the event, not an absence of wiring: it states what
+			     the first deadline will be rather than apologising for having none. -->
+			<p class="panel__calm panel__situation"><span class="panel__situation-mark" aria-hidden="true"><DormantMark size={15} /></span>{current.sections.deadlines.condition}</p>
+		{:else if current.sections.deadlines.kind === 'unavailable'}
+			<p class="panel__calm panel__situation"><span class="panel__situation-mark" aria-hidden="true"><UncountedMark size={15} /></span>{current.sections.deadlines.message}</p>
+		{:else if current.deadlines.length === 0}
+			<p class="panel__calm panel__situation"><span class="panel__situation-mark" aria-hidden="true"><DormantMark size={15} /></span>No event deadlines are recorded.</p>
+		{:else}
+			<ul class="dates">
+				{#each current.deadlines as deadline (deadline.label)}
+					{@const described = panelDeadline(deadline)}
+					<li class="dates__row" class:dates__row--quiet={described?.ink === 'quiet'}>
+						<span class="dates__label {DATE_CLASS.label}">{deadline.label}</span>
+						{#if described && described.state !== 'upcoming'}
+							<!-- The state is always a word. Colour ranks it; it never
+							     carries it alone. -->
+							<Badge tone={described.tone}>{described.stateWord}</Badge>
+						{/if}
+						<span class="dates__relative {DATE_CLASS.column}">{described?.relative ?? ''}</span>
+						<span class="dates__line">
+							<!-- The date's own span is the only thing that refuses to wrap;
+							     a qualifier inside it would inherit that and push the row
+							     past the viewport rather than breaking onto a second line. -->
+							<span class="{DATE_CLASS.column} {DATE_CLASS.value}"
+								>{described?.absolute ?? ''}</span>{#if deadline.note}<span
+									class="dates__note"> · {deadline.note}</span
+								>{/if}
+						</span>
+					</li>
+				{/each}
+			</ul>
+		{/if}
+	</section>
+{/snippet}
+
+{#snippet activityPanel(current: OverviewPageSummary)}
+	<section class="panel" aria-label="Activity">
+		<header class="panel__head"><h2>Activity</h2></header>
+		{#if current.sections.activity.kind === 'locked'}
+			<p class="panel__calm panel__situation"><span class="panel__situation-mark" aria-hidden="true"><DormantMark size={15} /></span>{current.sections.activity.condition}</p>
+		{:else if current.sections.activity.kind === 'unavailable'}
+			<p class="panel__calm panel__situation"><span class="panel__situation-mark" aria-hidden="true"><UncountedMark size={15} /></span>{current.sections.activity.message}</p>
+		{:else if current.activity.length === 0}
+			<p class="panel__calm panel__situation"><span class="panel__situation-mark" aria-hidden="true"><DormantMark size={15} /></span>No recorded activity yet.</p>
+		{:else}
+			<ActivityFeed items={current.activity} {timezone} {now} />
+		{/if}
+	</section>
+{/snippet}
+
+{#snippet traysPanel(current: OverviewPageSummary)}
+	<!-- Named for what it lists, not for the guarantee behind it: "Everything
+	     has a place" was the design principle worn as a heading, and beside
+	     Pipeline / Deadlines / Activity it read as a riddle. The pills are
+	     the places things are held outside the main queues; the heading
+	     says so and stops. -->
+	<section class="panel" aria-label="Holding areas">
+		<header class="panel__head"><h2>Holding areas</h2></header>
+		{#if current.sections.trays.kind === 'locked'}
+			<p class="panel__calm panel__situation"><span class="panel__situation-mark" aria-hidden="true"><DormantMark size={15} /></span>{current.sections.trays.condition}</p>
+		{:else if current.sections.trays.kind === 'unavailable'}
+			<p class="panel__calm panel__situation"><span class="panel__situation-mark" aria-hidden="true"><UncountedMark size={15} /></span>{current.sections.trays.message}</p>
+		{:else}
+			<TrayLedger trays={current.trays} />
+		{/if}
+	</section>
+{/snippet}
 
 {#if !summary && loadError}
 	<section class="welcome" aria-label="Overview unavailable">
@@ -342,7 +508,95 @@
 	</section>
 {:else if !summary}
 	<section class="loading" aria-label="Loading overview">
-		{#if expectEvent && known}
+		{#if knownDormant && known && knownRail}
+			<!-- The snapshot says this event is dormant, so the placeholder is the
+			     dormant composition itself: the rail is static geometry and renders
+			     for real; only the words hold skeleton fills. -->
+			<div class="dormant" aria-hidden="true">
+				{#if expectBanner}
+					<section class="banner">
+						<span class="banner__plate ui-skeleton"></span>
+						<div class="banner__copy">
+							<p class="banner__title"><span class="ui-skeleton skeleton-line" style="inline-size: 20rem"></span></p>
+							<p class="banner__detail"><span class="ui-skeleton skeleton-line" style="inline-size: 30rem"></span></p>
+						</div>
+						<span class="ui-skeleton skeleton-action"></span>
+					</section>
+				{/if}
+				{#if expectedListRows > 0}
+					<section class="panel">
+						<header class="panel__head">
+							<h2>Needs attention</h2>
+							<span class="panel__count"><span class="ui-skeleton skeleton-line" style="inline-size: 0.75rem"></span></span>
+						</header>
+						<ul class="attention">
+							{#each Array(expectedListRows) as _, index (index)}
+								<li class="attention__row">
+									<span class="ui-skeleton skeleton-chip attention__sev"></span>
+									<div class="attention__copy">
+										<p class="attention__title"><span class="ui-skeleton skeleton-line" style="inline-size: 17rem"></span></p>
+										<p class="attention__detail"><span class="ui-skeleton skeleton-line" style="inline-size: 26rem"></span></p>
+									</div>
+									<span class="ui-skeleton skeleton-action attention__action"></span>
+								</li>
+							{/each}
+						</ul>
+					</section>
+				{/if}
+				<section class="panel">
+					<header class="panel__head"><h2>Pipeline</h2></header>
+					<PipelineRail nodes={knownRail.nodes} variant="hero" />
+					{#if knownRail.gate}
+						<div class="gate gate--hero">
+							<p class="gate__condition"><span class="ui-skeleton skeleton-line" style="inline-size: min(20rem, 100%)"></span></p>
+							{#if knownRail.gate.door}
+								<span class="ui-skeleton skeleton-action skeleton-action--lg"></span>
+							{/if}
+						</div>
+					{/if}
+					{#if knownHasUncounted}
+						<p class="stages__note"><span class="ui-skeleton skeleton-line" style="inline-size: min(23rem, 100%)"></span></p>
+					{/if}
+				</section>
+				{#if known.deadlines.length > 0}
+					<section class="panel">
+						<header class="panel__head"><h2>Deadlines</h2></header>
+						<ul class="dates">
+							{#each Array(known.deadlines.length) as _, index (index)}
+								<li class="dates__row">
+									<span class="dates__label"><span class="ui-skeleton skeleton-line" style="inline-size: 8rem"></span></span>
+									<span class="dates__relative"><span class="ui-skeleton skeleton-line" style="inline-size: 4rem"></span></span>
+									<span class="dates__line"><span class="ui-skeleton skeleton-line" style="inline-size: 9rem"></span></span>
+								</li>
+							{/each}
+						</ul>
+					</section>
+				{/if}
+				{#if known.activity.length > 0}
+					<section class="panel">
+						<header class="panel__head"><h2>Activity</h2></header>
+						<ol class="feed-rows">
+							{#each Array(known.activity.length) as _, index (index)}
+								<li class="feed-rows__row">
+									<span class="ui-avatar ui-avatar--sm feed-rows__mark"></span>
+									<span class="ui-skeleton skeleton-line" style="inline-size: min(15rem, 100%)"></span>
+								</li>
+							{/each}
+						</ol>
+					</section>
+				{/if}
+				{#if known.trays.length > 0}
+					<section class="panel">
+						<header class="panel__head"><h2>Holding areas</h2></header>
+						<ul class="ledger-rows">
+							{#each Array(known.trays.length) as _, index (index)}
+								<li><span class="ui-skeleton skeleton-pill"></span></li>
+							{/each}
+						</ul>
+					</section>
+				{/if}
+			</div>
+		{:else if expectEvent && known && knownRail}
 			<!-- Every placeholder below is the resolved composition's own markup
 			     holding skeleton fills, so its geometry comes from the same CSS as
 			     the resolved state and cannot drift from it. -->
@@ -402,39 +656,27 @@
 
 					<section class="panel" aria-hidden="true">
 						<header class="panel__head"><h2>Pipeline</h2></header>
-						{#if knownIntakeHeld}
-							<!-- The held line and its action are a block above the list; a
-							     placeholder that omitted them would push every lane upward
-							     the moment the summary landed. -->
-							<div class="stages__held">
-								<p class="stages__held-fact"><span class="ui-skeleton skeleton-line" style="inline-size: min(19rem, 100%)"></span></p>
-								<span class="ui-skeleton skeleton-action"></span>
-							</div>
+						{#if knownStrip}
+							<div class="stages__map"><PipelineRail nodes={knownRail.nodes} variant="strip" /></div>
 						{/if}
 						<ul class="stages">
-							<!-- Each placeholder lane keeps the shape its own stage resolves
-							     to: a meter only where the stage carries a denominator, a
-							     lane end only where it names a deadline or falls behind. -->
-							{#each known.pipeline as stage (stage.key)}
+							<!-- Only running stages hold lane rows; each keeps the shape its
+							     own stage resolves to — a meter only where the stage carries
+							     a denominator, a lane end only where it names a deadline or
+							     falls behind. The stage's glyph is static identity, so it
+							     renders for real. -->
+							{#each knownAvailableLanes as stage (stage.key)}
+								{@const AreaGlyph = areaIcon[(pipelineStageByKey.get(stage.key)!.iconArea ?? pipelineStageByKey.get(stage.key)!.area)]}
 								<li class="stages__item">
-									<span class="lane" class:lane--locked={stage.availability.kind === 'locked'}>
+									<span class="lane">
 										<span class="lane__mark lane__mark--pending"></span>
+										<span class="lane__glyph"><AreaGlyph size={16} /></span>
 										<span class="lane__label"><span class="ui-skeleton skeleton-line" style="inline-size: 4rem"></span></span>
-										<!-- A held lane resolves to no figure at all and an uncounted
-										     one to a dash, so neither reserves the figure slot the
-										     measured lanes use. -->
-										{#if stage.availability.kind === 'available'}
-											<span class="lane__headline"><span class="ui-skeleton skeleton-line" style="inline-size: 2.5rem"></span></span>
-										{:else if stage.availability.kind === 'unavailable'}
-											<span class="lane__headline"><span class="ui-skeleton skeleton-line" style="inline-size: 0.75rem"></span></span>
-										{/if}
-										{#if stage.availability.kind !== 'unavailable'}
-											<span class="lane__sub"><span class="ui-skeleton skeleton-line" style="inline-size: 12rem"></span></span>
-										{/if}
+										<span class="lane__headline"><span class="ui-skeleton skeleton-line" style="inline-size: 2rem"></span></span>
+										<span class="lane__sub"><span class="ui-skeleton skeleton-line" style="inline-size: 12rem"></span></span>
 										{#if stage.progress}
 											<span class="lane__meter">
 												<span class="lane__track"></span>
-												<span class="lane__digits"><span class="ui-skeleton skeleton-line" style="inline-size: 3.5rem"></span></span>
 											</span>
 										{/if}
 										{#if stage.deadline || paceWord(stage)}
@@ -451,6 +693,14 @@
 								</li>
 							{/each}
 						</ul>
+						{#if knownRail.gate}
+							<div class="gate gate--line">
+								<p class="gate__condition"><span class="ui-skeleton skeleton-line" style="inline-size: min(19rem, 100%)"></span></p>
+								{#if knownRail.gate.door}
+									<span class="ui-skeleton skeleton-action"></span>
+								{/if}
+							</div>
+						{/if}
 						{#if knownHasUncounted}
 							<p class="stages__note"><span class="ui-skeleton skeleton-line" style="inline-size: min(23rem, 100%)"></span></p>
 						{/if}
@@ -550,6 +800,51 @@
 		     all — so the refusal was invisible exactly where it was needed. -->
 		<p class="welcome__note">Describing your event to the assistant is not available yet.</p>
 	</section>
+{:else if dormant && rail}
+	<!-- A dormant event's page is the path ahead. Panels render only when they
+	     carry facts; their "nothing yet" conditions are absorbed by the rail,
+	     whose gate states the one condition that actually starts things. -->
+	<div class="dormant">
+		{#if banner}
+			<section class="banner" aria-label="Act now">
+				<span class="banner__plate" aria-hidden="true"><AlertTriangle size={16} /></span>
+				<div class="banner__copy">
+					<p class="banner__title">{banner.title}</p>
+					<p class="banner__detail">{banner.detail}</p>
+				</div>
+				<a class="ui-button ui-button--primary ui-button--sm banner__action" href={destination(banner)}>{banner.action}</a>
+			</section>
+		{/if}
+		{#if listItems.length > 0}
+			{@render attentionPanel(summary)}
+		{/if}
+		<section class="panel" aria-label="Pipeline">
+			<header class="panel__head"><h2>Pipeline</h2></header>
+			<PipelineRail nodes={rail.nodes} variant="hero" />
+			{#if rail.gate}
+				<!-- The fact is the sentence; the verb is the button — one consequence
+				     for the whole path, rather than a condition on every held lane. -->
+				<div class="gate gate--hero">
+					<p class="gate__condition">{rail.gate.condition}</p>
+					{#if rail.gate.door}
+						<a class="ui-button ui-button--primary gate__door" href={rail.gate.door.href}>{rail.gate.door.label}</a>
+					{/if}
+				</div>
+			{/if}
+			{#if uncountedNote}
+				<p class="stages__note">{uncountedNote}</p>
+			{/if}
+		</section>
+		{#if summary.deadlines.length > 0}
+			{@render deadlinesPanel(summary)}
+		{/if}
+		{#if summary.sections.activity.kind === 'available' && summary.activity.length > 0}
+			{@render activityPanel(summary)}
+		{/if}
+		{#if summary.sections.trays.kind === 'available' && summary.trays.length > 0}
+			{@render traysPanel(summary)}
+		{/if}
+	</div>
 {:else}
 	{#if banner}
 		<section class="banner" aria-label="Act now">
@@ -586,106 +881,47 @@
 		<div class="columns__main">
 			<!-- The attention queue is required reading and outranks orientation,
 			     so it renders before the pipeline lanes. -->
-			<section class="panel" aria-label="Needs attention">
-				<header class="panel__head">
-					<h2>Needs attention</h2>
-					<span class="panel__count">{listItems.length}</span>
-				</header>
-				{#if summary.sections.attention.kind === 'locked'}
-					<p class="panel__calm">{summary.sections.attention.condition}</p>
-					<div class="panel__dormant"><DormantShape shape="rows" rows={3} /></div>
-				{:else if summary.sections.attention.kind === 'unavailable'}
-					<p class="panel__calm">{summary.sections.attention.message}</p>
-					<div class="panel__dormant"><DormantShape shape="rows" rows={3} /></div>
-				{:else if listItems.length === 0}
-					<!-- A live zero, not dormancy: the watch is running and found
-					     nothing. No dormant shape — that would claim "not started". -->
-					<p class="panel__calm">Nothing is waiting on you right now.</p>
-				{:else}
-					<ul class="attention">
-						{#each listItems as item (item.id)}
-							{@const Destination = areaIcon[item.area]}
-							{@const mark = severityMark[item.severity]}
-							<li class="attention__row">
-								<span class="attention__sev">
-									<Badge
-										tone={mark.tone}
-										icon={mark.icon}
-										emphasis={item.severity === 'now'}
-										value={severityLabel[item.severity]} />
-								</span>
-								<div class="attention__copy">
-									<p class="attention__title">{item.title}</p>
-									<p class="attention__detail">{item.detail}</p>
-								</div>
-								<a class="ui-button ui-button--secondary ui-button--sm attention__action" href={destination(item)}
-									><Destination aria-hidden="true" />{item.action}</a
-								>
-							</li>
-						{/each}
-					</ul>
-				{/if}
-			</section>
+			{@render attentionPanel(summary)}
 
 			<section class="panel" aria-label="Pipeline">
 				<header class="panel__head"><h2>Pipeline</h2></header>
-				{#if intakeHeld}
-					<!-- The fact is the line; the verb is the button. One consequence for
-					     the whole panel, rather than a door on every held lane leading to
-					     the same nothing. -->
-					<div class="stages__held">
-						<p class="stages__held-fact">No form is open, so nothing has arrived yet.</p>
-						<a class="ui-button ui-button--secondary ui-button--sm" href={areaHref.forms}
-							>Make a form</a>
-					</div>
+				{#if stripShown && rail}
+					<!-- The rail, shrunk to a one-line map: it renders only while some
+					     stage is still missing from the lanes below, because once every
+					     stage runs the lanes are the whole story and the map would say
+					     each of their names twice. -->
+					<div class="stages__map"><PipelineRail nodes={rail.nodes} variant="strip" /></div>
 				{/if}
 				<ul class="stages">
-					{#each summary.pipeline as stage (stage.key)}
-						{@const Health = laneIcon(stage)}
+					{#each availableLanes as stage (stage.key)}
+						{@const Health = stageIcon[stage.state]}
+						{@const AreaGlyph = areaIcon[(pipelineStageByKey.get(stage.key)!.iconArea ?? pipelineStageByKey.get(stage.key)!.area)]}
+						{@const door = laneDoor(stage, summary.navCounts)}
+						{@const pace = paceWord(stage)}
+						{@const deadline = laneDeadline(stage)}
+						<!-- The whole lane is one door; nothing inside it is separately
+						     pressable, so the row can be a plain link. -->
 						<li class="stages__item">
-							{#if stage.availability.kind === 'locked'}
-								<!-- Present, not started. It carries no figure at all: the dash
-								     was a refusal to say, and the condition is the answer. Not a
-								     door either — there are no rows behind it, and the panel
-								     above already offers the one live next step. -->
-								<span class="lane lane--locked" data-stage={stage.key}>
-									<span class="lane__mark lane__mark--locked" aria-hidden="true"
-										><Health size={14} /></span
-									>
-									<span class="lane__label">{stage.label}</span>
-									<span class="lane__sub">{stage.availability.condition}</span>
-								</span>
-							{:else if stage.availability.kind === 'unavailable'}
-								<!-- No measurement exists. The dash says so and the footnote
-								     under the list says why, once, for every lane wearing one. -->
-								<span class="lane lane--uncounted" data-stage={stage.key}>
-									<span class="lane__mark lane__mark--unavailable" aria-hidden="true"
-										><Health size={14} /></span
-									>
-									<span class="lane__label">{stage.label}</span>
-									<span class="lane__headline">{stage.headline}</span>
-								</span>
-							{:else}
-								{@const door = laneDoor(stage, summary.navCounts)}
-								{@const pace = paceWord(stage)}
-								{@const deadline = laneDeadline(stage)}
-								<!-- The whole lane is one door; nothing inside it is separately
-								     pressable, so the row can be a plain link. -->
-								<a
-									class="lane"
-									href={door.href}
-									data-stage={stage.key}
-									aria-label={laneName(stage, door.area)}>
+							<a
+								class="lane"
+								href={door.href}
+								data-stage={stage.key}
+								aria-label={laneName(stage, door.area)}>
 								<span class="lane__mark lane__mark--{stage.state}" aria-hidden="true"
 									><Health size={14} /></span
 								>
+								<span class="lane__glyph" aria-hidden="true"><AreaGlyph size={16} /></span>
 								<span class="lane__label">{stage.label}</span>
+								<!-- The figure is said once: the headline leads and the sentence
+								     finishes it — "224" + "of 360 reviews are in" — so a lane
+								     never states one number as a figure, again in its sentence,
+								     and a third time beside the bar. -->
 								<span class="lane__headline">{stage.headline}</span>
 								<span class="lane__sub">{stage.sub}</span>
 								{#if stage.progress}
-									<!-- Digits carry the absolute; the fill's hue carries the
+									<!-- The words carry the absolute; the fill's hue carries the
 									     lane's health, never its raw completion. -->
-									<span class="lane__meter lane__meter--{statusToneClass[laneTone[stage.state]]}">
+									<span class="lane__meter">
 										<span class="lane__track">
 											<Meter
 												value={meterPercent(stage.progress)}
@@ -693,7 +929,6 @@
 												valueText={`${stage.progress.done} of ${stage.progress.required}`}
 												tone={laneTone[stage.state]} />
 										</span>
-										<span class="lane__digits">{stage.progress.done} of {stage.progress.required}</span>
 									</span>
 								{/if}
 								{#if deadline || pace}
@@ -725,11 +960,22 @@
 										{/if}
 									</span>
 								{/if}
-								</a>
-							{/if}
+							</a>
 						</li>
 					{/each}
 				</ul>
+				{#if rail?.gate}
+					<!-- The next stage's condition, said once under the running lanes —
+					     the same say-it-once rule as the uncounted footnote, but carrying
+					     its own next step where an organizer act exists. -->
+					<div class="gate gate--line">
+						<p class="gate__condition">{rail.gate.condition}</p>
+						{#if rail.gate.door}
+							<a class="ui-button ui-button--secondary ui-button--sm" href={rail.gate.door.href}
+								>{rail.gate.door.label}</a>
+						{/if}
+					</div>
+				{/if}
 				{#if uncountedNote}
 					<!-- Said once, under the list, the way the tray ledger says once why
 					     some of its pills are figures rather than links. -->
@@ -739,75 +985,9 @@
 		</div>
 
 		<div class="columns__aside">
-			<section class="panel" aria-label="Deadlines">
-				<header class="panel__head"><h2>Deadlines</h2></header>
-				{#if summary.sections.deadlines.kind === 'locked'}
-					<!-- A fact about the event, not an absence of wiring: it states what
-					     the first deadline will be rather than apologising for having none. -->
-					<p class="panel__calm">{summary.sections.deadlines.condition}</p>
-					<div class="panel__dormant"><DormantShape shape="rows" rows={3} /></div>
-				{:else if summary.sections.deadlines.kind === 'unavailable'}
-					<p class="panel__calm">{summary.sections.deadlines.message}</p>
-					<div class="panel__dormant"><DormantShape shape="rows" rows={3} /></div>
-				{:else if summary.deadlines.length === 0}
-					<p class="panel__calm">No event deadlines are recorded.</p>
-				{:else}
-					<ul class="dates">
-						{#each summary.deadlines as deadline (deadline.label)}
-							{@const described = panelDeadline(deadline)}
-							<li class="dates__row" class:dates__row--quiet={described?.ink === 'quiet'}>
-								<span class="dates__label {DATE_CLASS.label}">{deadline.label}</span>
-								{#if described && described.state !== 'upcoming'}
-									<!-- The state is always a word. Colour ranks it; it never
-									     carries it alone. -->
-									<Badge tone={described.tone}>{described.stateWord}</Badge>
-								{/if}
-								<span class="dates__relative {DATE_CLASS.column}">{described?.relative ?? ''}</span>
-								<span class="dates__line">
-									<!-- The date's own span is the only thing that refuses to wrap;
-									     a qualifier inside it would inherit that and push the row
-									     past the viewport rather than breaking onto a second line. -->
-									<span class="{DATE_CLASS.column} {DATE_CLASS.value}"
-										>{described?.absolute ?? ''}</span>{#if deadline.note}<span
-											class="dates__note"> · {deadline.note}</span
-										>{/if}
-								</span>
-							</li>
-						{/each}
-					</ul>
-				{/if}
-			</section>
-
-			<section class="panel" aria-label="Activity">
-				<header class="panel__head"><h2>Activity</h2></header>
-				{#if summary.sections.activity.kind === 'locked'}
-					<p class="panel__calm">{summary.sections.activity.condition}</p>
-				{:else if summary.sections.activity.kind === 'unavailable'}
-					<p class="panel__calm">{summary.sections.activity.message}</p>
-				{:else if summary.activity.length === 0}
-					<p class="panel__calm">No recorded activity yet.</p>
-				{:else}
-					<ActivityFeed items={summary.activity} {timezone} {now} />
-				{/if}
-			</section>
-
-			<!-- Named for what it lists, not for the guarantee behind it: "Everything
-			     has a place" was the design principle worn as a heading, and beside
-			     Pipeline / Deadlines / Activity it read as a riddle. The pills are
-			     the places things are held outside the main queues; the heading
-			     says so and stops. -->
-			<section class="panel" aria-label="Holding areas">
-				<header class="panel__head"><h2>Holding areas</h2></header>
-				{#if summary.sections.trays.kind === 'locked'}
-					<p class="panel__calm">{summary.sections.trays.condition}</p>
-					<div class="panel__dormant"><DormantShape shape="rows" rows={3} /></div>
-				{:else if summary.sections.trays.kind === 'unavailable'}
-					<p class="panel__calm">{summary.sections.trays.message}</p>
-					<div class="panel__dormant"><DormantShape shape="rows" rows={3} /></div>
-				{:else}
-					<TrayLedger trays={summary.trays} />
-				{/if}
-			</section>
+			{@render deadlinesPanel(summary)}
+			{@render activityPanel(summary)}
+			{@render traysPanel(summary)}
 		</div>
 	</div>
 {/if}
@@ -961,6 +1141,18 @@
 		align-content: center;
 	}
 
+	/* The dormant composition: one readable column, because a page whose whole
+	   story is "here is the path, here is the first step" earns no two-column
+	   working layout. The measure fits the seven-node rail with room to breathe. */
+	.dormant {
+		inline-size: 100%;
+		max-inline-size: 52rem;
+		margin-inline: auto;
+		display: flex;
+		flex-direction: column;
+		gap: var(--je-space-4);
+	}
+
 	/* Banner: the single act-now surface. The red is carried by the area
 	   treatment (tinted surface + emphasis plate), not a stripe. */
 	.banner {
@@ -1061,10 +1253,20 @@
 		color: var(--je-color-text-muted);
 	}
 
-	/* The dormant silhouette under a locked/unavailable sentence; a live zero
-	   never gets one (a running watch that found nothing is not dormancy). */
-	.panel__dormant {
-		margin-block-start: var(--je-space-3);
+	/* A settled empty answer: glyph beside sentence. The mark anchors to the
+	   first text line and takes subtle ink — non-text UI, 4.14:1, above the
+	   3:1 floor — while the sentence keeps the calm muted ink. */
+	.panel__situation {
+		display: flex;
+		align-items: flex-start;
+		gap: var(--je-space-2);
+	}
+
+	.panel__situation-mark {
+		display: inline-flex;
+		flex-shrink: 0;
+		margin-block-start: 0.1875rem;
+		color: var(--je-color-text-subtle);
 	}
 
 	.attention {
@@ -1122,13 +1324,22 @@
 		border-block-start: 1px solid var(--je-color-border);
 	}
 
+	/* The one-line map above the lanes, separated the way the lanes separate
+	   from each other, so the rail reads as the panel's head matter rather than
+	   as an eighth lane. */
+	.stages__map {
+		padding-block-end: var(--je-space-3);
+		margin-block-end: var(--je-space-2);
+		border-block-end: 1px solid var(--je-color-border);
+	}
+
 	/* One lane, one door: the row itself is the link, bled to the panel edge so
 	   the hover plate reads as the whole row without moving its text. */
 	/* Wrapping is the default rather than a breakpoint's job. A lane carrying a
-	   mark, a label, a headline, a sentence, a meter with digits, a pace badge
-	   and a deadline needs about 700px; at compact desktop the panel gives it
-	   473, and without wrapping flexbox paid for that by shrinking the sentence
-	   to **zero width** — the prose vanished silently and the deadline ran out
+	   mark, a glyph, a label, a figure, a sentence, a meter, a pace badge and a
+	   deadline needs about 700px; at compact desktop the panel gives it 473,
+	   and without wrapping flexbox paid for that by shrinking the sentence to
+	   **zero width** — the prose vanished silently and the deadline ran out
 	   past the panel edge. `flex-basis` on the sentence is what turns that into
 	   a second line instead, and it holds at every width without a query. */
 	.lane {
@@ -1180,46 +1391,51 @@
 		color: var(--je-color-danger);
 	}
 
-	.lane__mark--unavailable,
-	.lane__mark--locked {
-		/* Non-text UI, so the 3:1 floor applies and subtle ink clears it at
-		   4.14:1. The lane's own words never take this step — see below. */
-		color: var(--je-color-text-subtle);
-	}
-
-	/* Present, not started. One ink step on the label is the visible level
-	   change; the missing figure, meter and lane end are the rest of the
-	   quieting. No fill and no border: the live lanes' hover already owns the
-	   sunken surface, and on a new event every lane is held, so a per-lane wash
-	   would distinguish nothing. What makes it read deliberate is the sentence. */
-	.lane--locked .lane__label {
+	/* The stage's destination glyph — identity, not state, so it stays on the
+	   ink ladder: the same mark the sidebar and the rail use for this area,
+	   letting the row say what it is before its label is read. */
+	.lane__glyph {
+		align-self: center;
+		inline-size: 1rem;
+		display: grid;
+		place-items: center;
+		flex-shrink: 0;
 		color: var(--je-color-text-muted);
 	}
 
-	/* This sentence is the whole payload of a held lane, so it wraps at every
-	   width rather than inheriting the measured lane's single-line ellipsis —
-	   truncating it would hide the one thing the lane exists to say. It stays on
-	   `text-muted` and never steps to `text-subtle`, which measures 4.14:1 and is
-	   below the 4.5:1 floor for ordinary text: dimmed must not mean illegible. */
-	.lane--locked .lane__sub {
-		white-space: normal;
-		overflow: visible;
-		text-overflow: clip;
-	}
-
-	/* The shared cause, above the lanes it holds, carrying the one next step. */
-	.stages__held {
+	/* The next stage's condition, under the lanes, carrying its one next step. */
+	.gate {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
 		justify-content: space-between;
 		gap: var(--je-space-3);
-		margin-block-end: var(--je-space-4);
 	}
 
-	.stages__held-fact {
-		margin: 0;
+	.gate--line {
+		margin-block-start: var(--je-space-4);
+	}
+
+	.gate--line .gate__condition {
 		font-size: var(--je-font-size-sm);
+	}
+
+	/* The hero's gate is the page's one instruction: the sentence centred under
+	   the rail, the door beneath it — the welcome panel's own arrangement. */
+	.gate--hero {
+		flex-direction: column;
+		justify-content: center;
+		margin-block-start: var(--je-space-6);
+		gap: var(--je-space-3);
+	}
+
+	.gate--hero .gate__condition {
+		font-size: var(--je-font-size-md);
+		text-align: center;
+	}
+
+	.gate__condition {
+		margin: 0;
 		color: var(--je-color-text-muted);
 	}
 
@@ -1237,8 +1453,15 @@
 		font-weight: 600;
 	}
 
+	/* The lane's answer, sized to be read before the sentence is. A fixed box
+	   with right-aligned digits puts every lane's figure on one shared edge, so
+	   the column can be compared down the panel — emphasis is only spent where
+	   alignment already lets the eye use it. */
 	.lane__headline {
-		font-size: var(--je-font-size-md);
+		inline-size: 2.5rem;
+		text-align: end;
+		font-size: var(--je-font-size-lg);
+		font-weight: 600;
 		font-variant-numeric: tabular-nums;
 		flex-shrink: 0;
 	}
@@ -1257,25 +1480,20 @@
 	}
 
 	/* The meter is a second channel beside the words, never their replacement:
-	   digits carry the absolute, the fill's hue carries health alone. */
+	   the figure and its sentence carry the absolute, the fill's hue carries
+	   health alone. */
 	.lane__meter {
 		display: flex;
 		align-items: center;
-		gap: var(--je-space-2);
 		flex-shrink: 0;
 		align-self: center;
 	}
 
+	/* Wide enough that the fill's hue and length register at a glance; 5.5rem
+	   read as an ornament beside the sentence rather than a channel. */
 	.lane__track {
-		inline-size: 5.5rem;
+		inline-size: 8rem;
 		display: block;
-	}
-
-	.lane__digits {
-		font-size: var(--je-font-size-xs);
-		font-variant-numeric: tabular-nums;
-		color: var(--je-color-text-muted);
-		white-space: nowrap;
 	}
 
 	.lane__end {
@@ -1412,6 +1630,13 @@
 
 		.lane__label {
 			inline-size: auto;
+		}
+
+		/* The stacked lane has no shared figure edge to align to; the box and
+		   right-alignment are the wide layout's machinery. */
+		.lane__headline {
+			inline-size: auto;
+			text-align: start;
 		}
 
 		.lane__sub {

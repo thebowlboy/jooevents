@@ -37,7 +37,10 @@ const resolver: OpaqueSecretTextResolver = {
   }
 };
 
-function setup(fetchStub: CloudflareFetch) {
+function setup(
+  fetchStub: CloudflareFetch,
+  deliverability?: Parameters<typeof createCommunicationsProviderActivation>[0]['deliverability']
+) {
   const database = createFoundationEphemeralSQLiteRuntime();
   runtimes.push(database);
   database.sqlite.query(`INSERT INTO workspaces (
@@ -83,7 +86,8 @@ function setup(fetchStub: CloudflareFetch) {
     },
     clock: { now: () => new Date().toISOString() },
     nowEpochMs: () => Date.now(),
-    ids: { newId: () => crypto.randomUUID() }
+    ids: { newId: () => crypto.randomUUID() },
+    ...(deliverability === undefined ? {} : { deliverability })
   });
   const readiness = createEmailProviderReadinessReader({
     configuration,
@@ -202,5 +206,60 @@ describe('communications provider activation', () => {
     );
     expect(sent[0]?.authorization).toBe(`Bearer ${SECRET_TOKEN}`);
     expect(JSON.stringify(diagnostic)).not.toContain(SECRET_TOKEN);
+  });
+
+  test('checks deliverability against the declared records without persisting anything', async () => {
+    const asked: string[] = [];
+    const { sqlite, activation } = setup(async () => tokenVerifyResponse(200), {
+      resolver: {
+        resolveTxt: (name) => {
+          asked.push(name);
+          return Promise.resolve(name.startsWith('_dmarc.')
+            ? { kind: 'no_records' as const }
+            : { kind: 'answers' as const, values: ['v=spf1 include:x v=DKIM1'] });
+        }
+      },
+      resolverKey: 'doh.test',
+      expectedRecords: (domain) => [
+        { key: 'spf', recordName: `cf-bounce.${domain}`, mustContain: ['v=spf1'] },
+        { key: 'dmarc', recordName: `_dmarc.${domain}`, mustContain: ['v=DMARC1'] }
+      ]
+    });
+    await activation.ensureActiveOutboundConnection();
+
+    const projection = await activation.checkDeliverability();
+    expect(projection.domain).toBe('mail.example.test');
+    expect(asked).toEqual(['cf-bounce.mail.example.test', '_dmarc.mail.example.test']);
+    expect(projection.records.map((record) => record.state)).toEqual(['found', 'missing']);
+    expect(projection.overall).toBe('action_required');
+    expect(projection.advisory).toBe(true);
+    // A diagnosis, not state: no readiness row is written by a DNS check.
+    const checks = sqlite.query<{ n: number }, []>(
+      'SELECT COUNT(*) AS n FROM email_provider_readiness_checks'
+    ).get();
+    expect(checks?.n).toBe(0);
+  });
+
+  test('refuses deliverability as a typed error when the diagnostics are not composed', async () => {
+    const { activation } = setup(async () => tokenVerifyResponse(200));
+    await activation.ensureActiveOutboundConnection();
+    await expect(activation.checkDeliverability()).rejects.toThrow('deliverability_not_supported');
+  });
+
+  test('derives the setup guide from the adapter manifest, links resolved', () => {
+    const { activation } = setup(async () => tokenVerifyResponse(200));
+    const guide = activation.getSetupGuide();
+    expect(guide.provider.adapterKey).toBe('cloudflare.email.rest');
+    expect(guide.fromAddress).toBe('events@mail.example.test');
+    expect(guide.senderDomain).toBe('mail.example.test');
+    expect(guide.steps.map((step) => step.key)).toEqual([
+      'cloudflare.step_01_onboard_domain',
+      'cloudflare.step_02_stage_token',
+      'cloudflare.step_03_verify_readiness'
+    ]);
+    expect(guide.steps[0]?.officialLink?.href).toBe(
+      'https://developers.cloudflare.com/email-service/configuration/domains/'
+    );
+    expect(guide.steps[2]?.officialLink).toBeNull();
   });
 });

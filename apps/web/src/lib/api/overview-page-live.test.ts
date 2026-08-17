@@ -211,7 +211,7 @@ describe('live Overview page port', () => {
 		// Held, each with the one sentence naming what turns it on. No figure at
 		// all: the dash was a refusal to say, and the condition is the answer.
 		expect(data.pipeline.map((stage) => [stage.key, stage.availability])).toEqual([
-			['collect', { kind: 'locked', condition: 'Collecting starts when you open a form.' }],
+			['collect', { kind: 'locked', condition: 'Collecting starts when your call for proposals (CFP) opens.' }],
 			// Proven by its own arrival count now, not borrowed from the submission
 			// total one lane over.
 			['triage', { kind: 'locked', condition: 'The first submission to arrive lands here.' }],
@@ -246,30 +246,30 @@ describe('live Overview page port', () => {
 		});
 
 		expect(lane(data, 'collect')).toMatchObject({
-			headline: '2', sub: '2 forms are open to submissions', state: 'ok'
+			headline: '2', sub: 'forms are open to submissions', state: 'ok'
 		});
 		expect(lane(data, 'review')).toMatchObject({
-			headline: '3', sub: '3 of 8 reviews are in', state: 'ok'
+			headline: '3', sub: 'of 8 reviews are in', state: 'ok'
 		});
 		// The count the reader will meet at the destination, and the approved
 		// wording for it.
 		expect(lane(data, 'decide')).toMatchObject({
-			headline: '10', sub: '10 of 12 submissions are waiting for your answer', state: 'ok'
+			headline: '10', sub: 'of 12 submissions are waiting for your answer', state: 'ok'
 		});
 		expect(lane(data, 'speakers')).toMatchObject({
-			headline: '1', sub: '1 of 4 speakers have confirmed', state: 'ok'
+			headline: '1', sub: 'of 4 speakers have confirmed', state: 'ok'
 		});
 		expect(lane(data, 'schedule')).toMatchObject({
-			headline: '2', sub: '2 of 6 sessions have a time and a room', state: 'ok'
+			headline: '2', sub: 'of 6 sessions have a time and a room', state: 'ok'
 		});
 		expect(lane(data, 'comms')).toMatchObject({
-			headline: '4', sub: '4 of 5 messages have been sent', state: 'ok'
+			headline: '4', sub: 'of 5 messages have been sent', state: 'ok'
 		});
 
 		// The outstanding half, matching Decide: the count the reader meets at the
 		// destination, whose default tray is the Inbox.
 		expect(lane(data, 'triage')).toMatchObject({
-			headline: '8', sub: '8 of 12 submissions are in the inbox', state: 'ok'
+			headline: '8', sub: 'of 12 submissions are in the inbox', state: 'ok'
 		});
 
 		// No lane draws a bar. A meter's job is the tone, a tone is a judgment
@@ -305,7 +305,7 @@ describe('live Overview page port', () => {
 			sessions: { kind: 'exact', total: 6, placed: 6 },
 			communications: { kind: 'exact', recipients: 5, sent: 5 }
 		});
-		expect(lane(data, 'collect').sub).toBe('1 form is closed, none open');
+		expect(lane(data, 'collect').sub).toBe('form is closed, none open');
 		expect(lane(data, 'triage').sub).toBe('The inbox is clear');
 		expect(lane(data, 'decide').sub).toBe('Every submission has an answer');
 		expect(lane(data, 'schedule').sub).toBe('Every session has a time and a room');

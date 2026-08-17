@@ -78,6 +78,15 @@ describe('ephemeral live provider activation composition', () => {
     // The executor routes are not mounted at all: reserved-namespace 404,
     // not an authentication refusal.
     expect(denied.status).toBe(404);
+    const guide = await runtime.app.request('/api/communications/email-setup-guide', {
+      headers: { origin: 'http://localhost:5176' }
+    });
+    expect(guide.status).toBe(404);
+    const deliverability = await runtime.app.request(
+      '/api/communications/email-deliverability/check',
+      { method: 'POST', headers: { origin: 'http://localhost:5176' } }
+    );
+    expect(deliverability.status).toBe(404);
   });
 
   test('activates the lifecycle row and mounts the owner-gated executors', async () => {
@@ -113,11 +122,118 @@ describe('ephemeral live provider activation composition', () => {
       body: JSON.stringify({ recipient: 'owner@example.test' })
     });
     expect(diagnostic.status).toBe(401);
+    const guide = await runtime.app.request('/api/communications/email-setup-guide', {
+      headers: { origin: 'http://localhost:5176' }
+    });
+    expect(guide.status).toBe(401);
+    const deliverability = await runtime.app.request(
+      '/api/communications/email-deliverability/check',
+      { method: 'POST', headers: { origin: 'http://localhost:5176' } }
+    );
+    expect(deliverability.status).toBe(401);
 
     // The composed executor itself runs against the injected seams.
     const check = await runtime.providerActivation!.runReadinessCheck();
     expect(check.state).toBe('passed');
     expect(check.readiness).toBe('ready');
+  });
+
+  test('the deliverability executor and setup guide run against the injected seams', async () => {
+    const runtime = await activatedRuntime((url) => {
+      if (url.startsWith('https://cloudflare-dns.com/dns-query')) {
+        const name = new URL(url).searchParams.get('name') ?? '';
+        return new Response(JSON.stringify({
+          Status: 0,
+          Answer: name.startsWith('_dmarc.')
+            ? [{ type: 16, data: '"v=DMARC1; p=none;"' }]
+            : name.startsWith('cf-bounce._domainkey.')
+              ? [{ type: 16, data: '"v=DKIM1; p=abc"' }]
+              : [{ type: 16, data: '"v=spf1 include:_spf.mx.cloudflare.net ~all"' }]
+        }), { status: 200, headers: { 'content-type': 'application/dns-json' } });
+      }
+      return new Response(JSON.stringify({
+        success: true,
+        result: { status: 'active' }
+      }), { status: 200 });
+    });
+
+    const projection = await runtime.providerActivation!.checkDeliverability();
+    expect(projection.domain).toBe('mail.example.test');
+    expect(projection.overall).toBe('pass');
+    expect(projection.advisory).toBe(true);
+
+    const guide = runtime.providerActivation!.getSetupGuide();
+    expect(guide.provider.adapterKey).toBe('cloudflare.email.rest');
+    expect(guide.senderDomain).toBe('mail.example.test');
+    expect(guide.steps.map((step) => step.key)).toContain('cloudflare.step_01_onboard_domain');
+  });
+
+  test('an admitted owner exercises the guide and deliverability routes end to end', async () => {
+    const runtime = await createEphemeralLiveRuntime({
+      config,
+      devFixtures: true,
+      communications: {
+        provider: loadCommunicationsProviderConfig({
+          JOOEVENTS_EMAIL_PROVIDER_MODE: 'cloudflare_rest',
+          JOOEVENTS_CLOUDFLARE_EMAIL_ACCOUNT_ID: 'account_123',
+          JOOEVENTS_CLOUDFLARE_EMAIL_API_TOKEN_SECRET_STORE: 'deployment.secret',
+          JOOEVENTS_CLOUDFLARE_EMAIL_API_TOKEN_SECRET_REFERENCE: 'cloudflare-email-token'
+        }),
+        mailSender: loadMailSenderConfig({
+          JOOEVENTS_MAIL_FROM_ADDRESS: 'events@mail.example.test',
+          JOOEVENTS_MAIL_FROM_NAME: 'JooEvents'
+        }),
+        secretResolver: stubResolver,
+        fetch: async (url) => {
+          const address = String(url);
+          if (address.startsWith('https://cloudflare-dns.com/dns-query')) {
+            const name = new URL(address).searchParams.get('name') ?? '';
+            return new Response(JSON.stringify({
+              Status: 0,
+              Answer: name.startsWith('_dmarc.')
+                ? [{ type: 16, data: '"v=DMARC1; p=none;"' }]
+                : name.startsWith('cf-bounce._domainkey.')
+                  ? [{ type: 16, data: '"v=DKIM1; p=abc"' }]
+                  : [{ type: 16, data: '"v=spf1 include:_spf.mx.cloudflare.net ~all"' }]
+            }), { status: 200, headers: { 'content-type': 'application/dns-json' } });
+          }
+          return new Response(JSON.stringify({
+            success: true,
+            result: { status: 'active' }
+          }), { status: 200 });
+        }
+      }
+    });
+    runtimes.push(runtime);
+    const support = runtime.testSupport;
+    if (!support) throw new Error('ephemeral test support missing');
+    const { organizer } = await support.bootstrapActors();
+
+    const guide = await runtime.app.request('/api/communications/email-setup-guide', {
+      headers: { origin: 'http://localhost:5176', cookie: organizer.cookie }
+    });
+    expect(guide.status).toBe(200);
+    const guideBody = await guide.json() as {
+      kind: string;
+      guide: { senderDomain: string; steps: readonly { key: string }[] };
+    };
+    expect(guideBody.kind).toBe('completed');
+    expect(guideBody.guide.senderDomain).toBe('mail.example.test');
+    expect(guideBody.guide.steps.length).toBeGreaterThan(0);
+
+    const deliverability = await runtime.app.request(
+      '/api/communications/email-deliverability/check',
+      { method: 'POST', headers: { origin: 'http://localhost:5176', cookie: organizer.cookie } }
+    );
+    expect(deliverability.status).toBe(200);
+    const deliverabilityBody = await deliverability.json() as {
+      kind: string;
+      deliverability: { overall: string; advisory: boolean; domain: string };
+    };
+    expect(deliverabilityBody.kind).toBe('completed');
+    expect(deliverabilityBody.deliverability.domain).toBe('mail.example.test');
+    expect(deliverabilityBody.deliverability.overall).toBe('pass');
+    expect(deliverabilityBody.deliverability.advisory).toBe(true);
   });
 
   test('refuses activation without a configured sender identity', async () => {

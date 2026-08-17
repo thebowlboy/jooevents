@@ -71,13 +71,19 @@ describe('operator operations HTTP composition', () => {
       '/api/auth', '/api/auth/session',
       '/api/entry', '/api/entry/admission',
       '/api/me/access-context', '/api/openapi.json',
-      '/api/integrations/airtable', '/api/integrations/airtable/base',
+      '/api/communications/email-readiness/check',
+      '/api/communications/email-diagnostic/send-test',
+      '/api/communications/email-deliverability/check',
+      '/api/communications/email-setup-guide',
+      '/api/integrations/airtable',
+      '/api/integrations/airtable/base',
       '/api/operations/manifest', '/api/operations/manifest/v2',
       '/api/public', '/api/public/forms/example'
     ]) {
       expect(isServerOwnedOperationPath(path)).toBe(true);
     }
     expect(isServerOwnedOperationPath('/api/events/current')).toBe(false);
+    expect(isServerOwnedOperationPath('/api/communications/email-readiness')).toBe(false);
     expect(isServerOwnedOperationPath('/api/program-vocabulary')).toBe(false);
     expect(isServerOwnedOperationPath('/api/workspace/api-key-secrets/example')).toBe(true);
     expect(isServerOwnedOperationPath('/api/v1/me')).toBe(true);

@@ -141,28 +141,56 @@ export function createProvisioningService(dependencies: {
   return {
     async ensureAuthPrincipalProvisioned(input: EnsureProvisionedInput): Promise<AdapterOutcome<AccessContext>> {
       const existingLink = await dependencies.store.findAuthUserLink(input.authUserId);
+      let readyPendingState: CommittedAccessState | undefined;
       if (existingLink?.provisioningState === 'ready') {
         const committed = await dependencies.store.readCommittedAccess(input.authUserId, input.workspaceId);
         if (committed.kind === 'success') {
-          return success(
-            await contextFromCommitted(committed.data, dependencies.gatewayAuthority),
-            committed.notices
-          );
+          if (
+            committed.data.membership.status !== 'pending_review' &&
+            committed.data.membership.status !== 'invited'
+          ) {
+            return success(
+              await contextFromCommitted(committed.data, dependencies.gatewayAuthority),
+              committed.notices
+            );
+          }
+          // A reservation may be added after a first sign-in created a ready
+          // pending link. Re-evaluate only that pending branch so the normal
+          // reservation transaction can admit it; active/blocked links remain
+          // current-state reads and an unchanged pending link is never logged
+          // again merely because the person checks status.
+          readyPendingState = committed.data;
+        } else if (committed.kind === 'error') {
+          return failure(committed.error, committed.notices);
+        } else {
+          return {
+            kind: 'needs_confirmation',
+            ...(committed.proposed ? {
+              proposed: await contextFromCommitted(committed.proposed, dependencies.gatewayAuthority)
+            } : {}),
+            confirmation: committed.confirmation,
+            notices: committed.notices
+          };
         }
-        if (committed.kind === 'error') return failure(committed.error, committed.notices);
-        return {
-          kind: 'needs_confirmation',
-          ...(committed.proposed ? {
-            proposed: await contextFromCommitted(committed.proposed, dependencies.gatewayAuthority)
-          } : {}),
-          confirmation: committed.confirmation,
-          notices: committed.notices
-        };
       }
 
       const principal = await dependencies.principals.getVerifiedClaims(input.authUserId);
-      if (principal.kind === 'error') return failure(principal.error, principal.notices);
+      if (principal.kind === 'error') {
+        if (readyPendingState) {
+          return success(
+            await contextFromCommitted(readyPendingState, dependencies.gatewayAuthority),
+            principal.notices
+          );
+        }
+        return failure(principal.error, principal.notices);
+      }
       if (principal.kind === 'needs_confirmation') {
+        if (readyPendingState) {
+          return success(
+            await contextFromCommitted(readyPendingState, dependencies.gatewayAuthority),
+            principal.notices
+          );
+        }
         return { kind: 'needs_confirmation', confirmation: principal.confirmation, notices: principal.notices };
       }
 
@@ -171,6 +199,12 @@ export function createProvisioningService(dependencies: {
           workspaceId: input.workspaceId,
           claims: principal.data
         });
+        if (readyPendingState && !evidence.reservation) {
+          return success(
+            await contextFromCommitted(readyPendingState, dependencies.gatewayAuthority),
+            principal.notices
+          );
+        }
         if (!evidence.identityLink && !evidence.sameEmailUser && !admissionAllowsNewPerson(dependencies.admission, principal.data, evidence.reservation)) {
           return success({ state: 'blocked', code: 'not_admitted' }, principal.notices);
         }
@@ -181,6 +215,12 @@ export function createProvisioningService(dependencies: {
           ...evidence,
           now: input.now
         });
+        if (readyPendingState && plan.code !== 'existing_preapproved_member') {
+          return success(
+            await contextFromCommitted(readyPendingState, dependencies.gatewayAuthority),
+            [...principal.notices, ...plan.notices]
+          );
+        }
         if (plan.result === 'confirmation_required') {
           return success({ state: 'blocked', code: 'not_admitted' }, [...principal.notices, ...plan.notices]);
         }
@@ -212,9 +252,24 @@ export function createProvisioningService(dependencies: {
             notices: [...principal.notices, ...committed.notices]
           };
         }
+        if (readyPendingState) {
+          // A failed reservation upgrade must not degrade the healthy pending
+          // link it was trying to improve: the link stays ready and the next
+          // status check simply retries the admission.
+          return success(
+            await contextFromCommitted(readyPendingState, dependencies.gatewayAuthority),
+            [...principal.notices, ...committed.notices]
+          );
+        }
         await dependencies.store.markProvisioningFailure(input.authUserId, committed.error.code, input.now);
         return failure(committed.error, [...principal.notices, ...committed.notices]);
       } catch {
+        if (readyPendingState) {
+          return success(
+            await contextFromCommitted(readyPendingState, dependencies.gatewayAuthority),
+            principal.notices
+          );
+        }
         await dependencies.store.markProvisioningFailure(input.authUserId, 'provisioning_dependency_failed', input.now);
         return failure({
           code: 'provisioning_dependency_failed',

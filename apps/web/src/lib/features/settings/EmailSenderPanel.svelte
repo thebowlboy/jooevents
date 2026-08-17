@@ -12,6 +12,7 @@
 	 * reads its own state rather than waiting on the shell's event read.
 	 */
 	import { onMount } from 'svelte';
+	import { UNCONFIGURED_MAIL_FROM_ADDRESS } from '@jooevents/contracts';
 	import { Button, CopyValue, Field, Term } from '$lib/ui';
 	import type { SettingsPagePort } from '$lib/api/settings-page-port';
 	import type {
@@ -211,6 +212,16 @@
 			<span class="from__value">
 				<CopyValue value={view.effective.fromAddress} label="from address" />
 			</span>
+			{#if view.effective.fromAddress === UNCONFIGURED_MAIL_FROM_ADDRESS}
+				<!-- The contract's one unconfigured sentinel, compared exactly — a
+				     suffix sniff would silently stop firing if the sentinel were
+				     ever renamed. The consequence is stated here where the address
+				     is read, not discovered at the first failed send. -->
+				<p class="from__warning" role="alert">
+					No sending address is configured for this installation yet, so JooEvents
+					cannot send email — sign-in links included.
+				</p>
+			{/if}
 			{@render installationNote()}
 		</div>
 
@@ -349,6 +360,13 @@
 		margin: 0;
 		font-size: var(--je-font-size-xs);
 		color: var(--je-color-text-muted);
+		max-inline-size: 58ch;
+	}
+
+	.from__warning {
+		margin: 0;
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-danger);
 		max-inline-size: 58ch;
 	}
 

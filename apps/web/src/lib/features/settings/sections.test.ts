@@ -82,8 +82,9 @@ describe('the on-this-page rail', () => {
 		});
 		expect(settingsRail(settingsSectionByKey('event')).visible).toBe(false);
 		expect(settingsRail(settingsSectionByKey('team')).visible).toBe(false);
-		// Email's two editable values commit as one unit, so they are one panel.
-		expect(settingsRail(settingsSectionByKey('email')).visible).toBe(false);
+		// Email is two panels now — the Sender commit unit and the Delivery
+		// diagnostics — so its rail earns its column.
+		expect(settingsRail(settingsSectionByKey('email')).visible).toBe(true);
 		// One panel, one anchor: the key creation flow lives in a dialog.
 		expect(settingsRail(settingsSectionByKey('api_keys')).visible).toBe(false);
 	});

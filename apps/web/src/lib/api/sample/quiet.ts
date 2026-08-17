@@ -69,8 +69,8 @@ const quiet: WorkspaceDataset = {
 			{
 				key: 'review',
 				label: 'Review',
-				headline: '100%',
-				sub: 'round 1 and round 2 closed',
+				headline: '536',
+				sub: 'of 536 reviews are in · round 1 and round 2 closed',
 				state: 'ok',
 				progress: { done: 536, required: 536 },
 				paceTone: 'on',
@@ -82,7 +82,7 @@ const quiet: WorkspaceDataset = {
 				key: 'decide',
 				label: 'Decide',
 				headline: '10',
-				sub: '5 accepted · everyone has been told',
+				sub: 'of 10 decided · 5 accepted · everyone has been told',
 				state: 'ok',
 				progress: { done: 10, required: 10 }
 			},
@@ -100,8 +100,8 @@ const quiet: WorkspaceDataset = {
 			{
 				key: 'schedule',
 				label: 'Schedule',
-				headline: '24/24',
-				sub: 'placed and published',
+				headline: '24',
+				sub: 'of 24 placed and published',
 				state: 'ok',
 				progress: { done: 24, required: 24 },
 				paceTone: 'on',

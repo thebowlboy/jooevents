@@ -5,6 +5,7 @@
 	import { createLiveCommunicationsReadinessPagePort } from '$lib/api/communications-readiness-page-live';
 	import { createCommunicationsAuthoringLivePort } from '$lib/api/operations/communications-authoring-live';
 	import { createCommunicationsProviderReadLivePort } from '$lib/api/operations/communications-provider-read-live';
+	import { createCommunicationsProviderSetupLivePort } from '$lib/api/operations/communications-provider-setup-live';
 	import { setOrganizerFormsPort } from '$lib/api/intake-forms-context';
 	import { createIntakeFormsLivePort } from '$lib/api/operations/intake-forms-live';
 	import { createLiveFormsPagePort } from '$lib/api/forms-page-port.live';
@@ -84,7 +85,16 @@
 	const initial = untrack(() => ready);
 	const overviewRead = createWorkspaceOverviewLivePort({ manifest: initial.manifest });
 	const eventProgram = setEventProgramPort(createLiveEventProgramPort({ manifest: initial.manifest }));
-	const overview = createLiveOverviewPagePort({ overview: overviewRead, event: eventProgram.event });
+	const communicationsReadiness = createLiveCommunicationsReadinessPagePort({
+		provider: createCommunicationsProviderReadLivePort({ manifest: initial.manifest })
+	});
+	// The overview derives its one live attention row — email setup — from the
+	// same canonical readiness read the Communications surface consumes.
+	const overview = createLiveOverviewPagePort({
+		overview: overviewRead,
+		event: eventProgram.event,
+		readiness: communicationsReadiness
+	});
 	const shellEvents = createEventLiveClient({ manifest: initial.manifest });
 	const shell = createLiveWorkspaceShellPort({
 		user: initial.user,
@@ -96,9 +106,6 @@
 			// created one way whichever control started it.
 			createEvent: overview.createEvent
 		})
-	});
-	const communicationsReadiness = createLiveCommunicationsReadinessPagePort({
-		provider: createCommunicationsProviderReadLivePort({ manifest: initial.manifest })
 	});
 	// One canonical communication authoring/preview/send client; the Decisions
 	// notify loop and any future Messages surface ride the same lane.
@@ -141,6 +148,10 @@
 	const workspaceTeam = createWorkspaceTeamSettingsPort({
 		client: createWorkspaceTeamLiveClient({ manifest: initial.manifest })
 	});
+	// The Settings Email section's delivery seam: the canonical readiness read
+	// plus the owner-lane setup executors (readiness check, DNS diagnostics,
+	// setup guide, test send). Refusals stay typed; nothing here sends product mail.
+	const providerSetup = createCommunicationsProviderSetupLivePort();
 	const settings = createLiveSettingsPagePort({
 		event: eventSettings,
 		team: workspaceTeam,
@@ -149,6 +160,13 @@
 		senderIdentity: createLiveSenderIdentitySettingsPort({
 			client: createWorkspaceSenderIdentityLiveClient({ manifest: initial.manifest })
 		}),
+		emailDelivery: {
+			readiness: (options) => communicationsReadiness.read(options),
+			guide: (options) => providerSetup.getSetupGuide(options),
+			runReadinessCheck: (options) => providerSetup.runReadinessCheck(options),
+			checkDns: (options) => providerSetup.checkDeliverability(options),
+			sendTest: (recipient, options) => providerSetup.sendDiagnosticTest(recipient, options)
+		},
 		apiKeys: createLiveApiKeysPagePort({ manifest: initial.manifest })
 	});
 

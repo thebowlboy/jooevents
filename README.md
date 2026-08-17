@@ -4,12 +4,12 @@
 
 # JooEvents
 
-## Manage as little as possible.
+## Event management, minus most of the manual work.
 
-JooEvents is event management for people who would prefer not to spend their days
-managing an event. It is being built to handle the work between putting up a Call for
-Speakers and putting the programme on your website: submissions, review, decisions,
-speaker tasks, scheduling, communications, and publishing.
+JooEvents is for people who would prefer not to spend their days chasing an event
+along. It is being built to handle the work between putting up a Call for Speakers
+and putting the programme on your website: submissions, review, decisions, speaker
+tasks, scheduling, communications, and publishing.
 
 Proposals arrive, get sorted and scored. Speakers get chased for their headshots. The
 schedule gets built and the programme lands on your website. Your part is the yes, the

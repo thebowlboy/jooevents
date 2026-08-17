@@ -146,8 +146,8 @@ const flight: WorkspaceDataset = {
 			{
 				key: 'review',
 				label: 'Review',
-				headline: '62%',
-				sub: '224 of 360 committed',
+				headline: '224',
+				sub: 'of 360 reviews are in',
 				state: 'attention',
 				progress: { done: 224, required: 360 },
 				paceTone: 'on',
@@ -159,7 +159,7 @@ const flight: WorkspaceDataset = {
 				key: 'decide',
 				label: 'Decide',
 				headline: '6',
-				sub: '4 accepted · 3 still waiting to hear',
+				sub: 'of 14 decided · 4 accepted · 3 still waiting to hear',
 				state: 'attention',
 				progress: { done: 6, required: 14 }
 			},
@@ -177,8 +177,8 @@ const flight: WorkspaceDataset = {
 			{
 				key: 'schedule',
 				label: 'Schedule',
-				headline: '8/12',
-				sub: 'placed · 2 conflicts',
+				headline: '8',
+				sub: 'of 12 placed · 2 conflicts',
 				state: 'blocked',
 				progress: { done: 8, required: 12 },
 				paceTone: 'behind',

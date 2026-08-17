@@ -11,6 +11,7 @@
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
 	import AboutPanel from './AboutPanel.svelte';
 	import ApiKeysPanel from './ApiKeysPanel.svelte';
+	import EmailDeliveryPanel from './EmailDeliveryPanel.svelte';
 	import EmailSenderPanel from './EmailSenderPanel.svelte';
 	import EventIdentityPanel from './EventIdentityPanel.svelte';
 	import OnThisPageRail from './OnThisPageRail.svelte';
@@ -90,6 +91,7 @@
 			<!-- Workspace-scoped: a workspace with no event still sends mail, so
 			     this section is not gated on the event read above. -->
 			<EmailSenderPanel {port} />
+			<EmailDeliveryPanel delivery={port.emailDelivery} />
 			<CommitReceipt />
 		{:else if section === 'api_keys'}
 			<!-- Workspace-scoped credentials: readable before any event exists. -->
@@ -149,10 +151,11 @@
 </div>
 
 <style>
-	/* Head to content is a section-tier boundary; the tab underline already
-	   draws the line, so the space says the rest. */
+	/* The tab underline already draws the boundary line, so the space below it
+	   stays modest — a section-tier gap here reads as dead air between the
+	   tabs and the first panel. */
 	.sections {
-		margin-block-end: var(--je-space-6);
+		margin-block-end: var(--je-space-4);
 	}
 
 	.settings {

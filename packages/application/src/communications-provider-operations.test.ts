@@ -67,7 +67,9 @@ describe('communication provider application reads', () => {
       getConnection: 'read_leaf_ready',
       getReadiness: 'read_leaf_ready',
       runReadinessCheck: 'external_effect_executor_mounted',
-      sendDiagnosticTest: 'external_effect_executor_mounted'
+      sendDiagnosticTest: 'external_effect_executor_mounted',
+      checkDeliverability: 'external_effect_executor_mounted',
+      getSetupGuide: 'external_effect_executor_mounted'
     });
   });
 });

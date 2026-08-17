@@ -20,6 +20,7 @@ const destinations = [
 	{ path: '/app/settings/program', title: 'Settings' },
 	{ path: '/app/settings/team', title: 'Settings' },
 	{ path: '/app/settings/email', title: 'Settings' },
+	{ path: '/app/settings/api-keys', title: 'Settings' },
 	{ path: '/app/settings/about', title: 'Settings' }
 ];
 
