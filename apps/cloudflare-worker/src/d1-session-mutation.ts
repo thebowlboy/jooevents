@@ -9,7 +9,6 @@ import {
   sessionDirectInputSchema,
   sessionMutationPlanSchema,
   sessionRemoveNewPlanSchema,
-  type ProgramVocabularySnapshotDto,
   type SessionHeadDto,
   type SessionMutationPlanDto,
   type SessionRemoveNewPlanDto
@@ -21,7 +20,6 @@ import {
   parseWorkspaceId,
   type WorkspaceId
 } from '@jooevents/kernel';
-import { parseProgramVocabularyState, type ProgramVocabularyState } from '@jooevents/program';
 import {
   applyNewSessionRemovalPlan,
   applySessionMutationPlan,
@@ -44,7 +42,10 @@ import type {
   D1EffectDomainAdapter,
   D1EffectDomainAdapterRegistration
 } from './d1-effect-unit-of-work';
-import { createD1ProgramVocabularySnapshotReadSource } from './d1-program-vocabulary';
+import {
+  createD1ProgramVocabularySnapshotReadSource,
+  programVocabularyStateFromSnapshot
+} from './d1-program-vocabulary';
 import { createD1SessionCatalogReadSource } from './d1-session-catalog';
 
 const MAX_REFERENCES = 10_000;
@@ -78,22 +79,6 @@ function applicationUuid(value: unknown): string {
     throw new TypeError('d1_session_id_invalid');
   }
   return value.toLowerCase();
-}
-
-function vocabularyFromSnapshot(snapshot: ProgramVocabularySnapshotDto): ProgramVocabularyState {
-  return parseProgramVocabularyState({
-    scope: snapshot.scope,
-    setVersion: snapshot.setVersion,
-    rooms: snapshot.rooms.map(({ id, name, capacity, status, version }) => ({
-      id, name, capacity, status, version
-    })),
-    tracks: snapshot.tracks.map(({ id, name, status, version }) => ({
-      id, name, status, version
-    })),
-    formats: snapshot.formats.map(({ id, name, status, version }) => ({
-      id, name, status, version
-    }))
-  });
 }
 
 function referencedSessionIds(rows: readonly SessionReferenceRow[]): ReadonlySet<string> {
@@ -215,7 +200,7 @@ export class D1SessionDirectEffectDomainAdapter implements D1EffectDomainAdapter
         .bind(this.#workspaceId, eventId, MAX_REFERENCES + 1).all<SessionReferenceRow>()
     ]);
     if (!catalog || !vocabularySnapshot) throw new SessionPlanningError('wrong_scope');
-    const vocabulary = vocabularyFromSnapshot(vocabularySnapshot);
+    const vocabulary = programVocabularyStateFromSnapshot(vocabularySnapshot);
     const referenced = new Set<string>([
       ...referencedSessionIds(scheduleReferences.results),
       ...referencedSessionIds(submissionReferences.results),

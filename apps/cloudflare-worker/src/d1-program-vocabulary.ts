@@ -14,7 +14,7 @@ import {
 } from '@jooevents/contracts';
 import { parseFieldRegistryState, type FieldRegistryState } from '@jooevents/field-registry';
 import { canonicalJsonText, parseEventId, parseWorkspaceId } from '@jooevents/kernel';
-import { parseProgramVocabularyState } from '@jooevents/program';
+import { parseProgramVocabularyState, type ProgramVocabularyState } from '@jooevents/program';
 import type { ProgramVocabularySnapshotReadSource } from '@jooevents/program-operations';
 
 const MAX_ROWS = 10_000;
@@ -111,6 +111,25 @@ export class D1ProgramVocabularyReadError extends Error {
   ) {
     super(code, options);
   }
+}
+
+/** Rehydrates the canonical planning state from an integrity-checked safe snapshot. */
+export function programVocabularyStateFromSnapshot(
+  snapshot: ProgramVocabularySnapshotDto
+): ProgramVocabularyState {
+  return parseProgramVocabularyState({
+    scope: snapshot.scope,
+    setVersion: snapshot.setVersion,
+    rooms: snapshot.rooms.map(({ id, name, capacity, status, version }) => ({
+      id, name, capacity, status, version
+    })),
+    tracks: snapshot.tracks.map(({ id, name, status, version }) => ({
+      id, name, status, version
+    })),
+    formats: snapshot.formats.map(({ id, name, status, version }) => ({
+      id, name, status, version
+    }))
+  });
 }
 
 function oneOrNone<Row>(result: D1Result<Row>): Row | undefined {

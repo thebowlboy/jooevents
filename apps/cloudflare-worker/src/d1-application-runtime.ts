@@ -52,6 +52,7 @@ import {
   SCHEDULE_PLACEMENT_MANAGE_ACCESS_POLICY,
   SCHEDULE_PLACEMENT_READ_ACCESS_POLICY,
   SCHEDULE_PLACEMENT_REQUEST_HASH_PROFILE,
+  createSchedulePlacementDirectOperationModule,
   createSchedulePlacementOperationModule
 } from '@jooevents/schedule-operations';
 import {
@@ -148,6 +149,9 @@ import {
   createD1ProgramVocabularyDirectEffectDomainRegistration
 } from './d1-program-vocabulary-mutation';
 import { createD1SchedulePlacementReadSource } from './d1-schedule-placement';
+import {
+  createD1SchedulePlacementDirectEffectDomainRegistration
+} from './d1-schedule-placement-mutation';
 import { createD1SessionCatalogReadSource } from './d1-session-catalog';
 import { createD1SessionDirectEffectDomainRegistration } from './d1-session-mutation';
 import { createD1WorkspaceOverviewReadSource } from './d1-workspace-overview';
@@ -350,6 +354,7 @@ export async function createConfiguredD1ApplicationRuntime(
     { policy: PROGRAM_VOCABULARY_MANAGE_ACCESS_POLICY,
       permissionId: 'program.vocabulary.manage' },
     { policy: SCHEDULE_PLACEMENT_READ_ACCESS_POLICY, permissionId: 'schedule.read' },
+    { policy: SCHEDULE_PLACEMENT_MANAGE_ACCESS_POLICY, permissionId: 'schedule.manage' },
     { policy: SESSION_READ_ACCESS_POLICY, permissionId: 'event.read' },
     { policy: SESSION_MANAGE_ACCESS_POLICY, permissionId: 'schedule.manage' },
     { policy: API_KEY_MANAGE_ACCESS_POLICY, permissionId: 'integration.api.manage' }
@@ -723,6 +728,28 @@ export async function createConfiguredD1ApplicationRuntime(
       SCHEDULE_OPERATION_KEY_PROFILES.idempotencyCredential
     )
   });
+  const scheduleDirectOperations = createSchedulePlacementDirectOperationModule({
+    workspaceId,
+    policies: {
+      read: SCHEDULE_PLACEMENT_READ_ACCESS_POLICY,
+      manage: SCHEDULE_PLACEMENT_MANAGE_ACCESS_POLICY
+    },
+    currentAuthority,
+    currentEvent: reads,
+    scheduleRead: schedule,
+    clock,
+    ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+    authorityPrincipalKeyProfile: SCHEDULE_OPERATION_KEY_PROFILES.authorityPrincipal,
+    scopePartitionProfile: SCHEDULE_OPERATION_KEY_PROFILES.scopePartition,
+    requestCanonicalizationProfile: SCHEDULE_OPERATION_KEY_PROFILES.requestCanonicalization,
+    requestHashSealer: cryptoProfiles.requestHashSealer(
+      SCHEDULE_PLACEMENT_REQUEST_HASH_PROFILE
+    ),
+    idempotencyCredentialProfile: SCHEDULE_OPERATION_KEY_PROFILES.idempotencyCredential,
+    idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(
+      SCHEDULE_OPERATION_KEY_PROFILES.idempotencyCredential
+    )
+  });
   const sessionReadOperations = createSessionOperationModule({
     workspaceId,
     readPolicy: SESSION_READ_ACCESS_POLICY,
@@ -798,6 +825,10 @@ export async function createConfiguredD1ApplicationRuntime(
       workspaceId,
       newSessionId: () => crypto.randomUUID()
     }),
+    createD1SchedulePlacementDirectEffectDomainRegistration({
+      workspaceId,
+      newOccurrenceId: () => crypto.randomUUID()
+    }),
     createD1DeadlineDirectEffectDomainRegistration({
       workspaceId,
       newDeadlineId: () => crypto.randomUUID()
@@ -862,6 +893,7 @@ export async function createConfiguredD1ApplicationRuntime(
       programVocabularyReadOperations,
       programVocabularyDirectOperations,
       scheduleReadOperations,
+      scheduleDirectOperations,
       sessionReadOperations,
       sessionDirectOperations
     ]),

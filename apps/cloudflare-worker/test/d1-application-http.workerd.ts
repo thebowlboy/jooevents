@@ -133,6 +133,7 @@ describe('configured D1 application HTTP slice', () => {
       'program_vocabulary.restore',
       'program_vocabulary.retire',
       'program_vocabulary.snapshot.read',
+      'schedule.placement',
       'schedule.placement.snapshot.read',
       'session.catalog.read',
       'session.change',
@@ -675,6 +676,101 @@ describe('configured D1 application HTTP slice', () => {
       FROM operation_log WHERE workspace_id = ? AND operation_name = 'session.change'`)
       .bind(workspaceId).first<{ readonly count: number }>();
     expect(sessionOperationCount?.count).toBe(6);
+
+    const mutatePlacement = (key: string, body: unknown) => handleRequest(
+      new Request(`${baseUrl}/api/events/current/schedule/placements`, {
+        method: 'POST',
+        headers: {
+          cookie: headers.cookie,
+          origin: baseUrl,
+          'content-type': 'application/json',
+          'idempotency-key': key
+        },
+        body: JSON.stringify(body)
+      }),
+      environment()
+    );
+    const placeBody = {
+      action: 'place',
+      expectedScheduleVersion: 2,
+      sessionId: transitionedSessionBody.data.session.id,
+      roomId,
+      startAt: '2027-03-10T11:00:00.000Z',
+      endAt: '2027-03-10T12:00:00.000Z'
+    } as const;
+    const placed = await mutatePlacement('d1-schedule-place', placeBody);
+    expect(placed.status, await placed.clone().text()).toBe(200);
+    const placedBody = await placed.json<{
+      readonly kind: string;
+      readonly data: { readonly scheduleVersion: number; readonly occurrence: {
+        readonly id: string; readonly version: number;
+      } };
+    }>();
+    expect(placedBody.kind, JSON.stringify(placedBody)).toBe('success');
+    expect(placedBody).toMatchObject({
+      kind: 'success', data: { action: 'place', scheduleVersion: 3,
+        occurrence: { sessionId: transitionedSessionBody.data.session.id,
+          roomId, version: 1 } }
+    });
+    const placedReplay = await mutatePlacement('d1-schedule-place', placeBody);
+    expect(await placedReplay.json()).toEqual(placedBody);
+    const changedPlace = await mutatePlacement('d1-schedule-place', {
+      ...placeBody, endAt: '2027-03-10T12:30:00.000Z'
+    });
+    expect(await changedPlace.json()).toMatchObject({
+      kind: 'outcome',
+      outcome: { class: 'idempotency_conflict', kind: 'operation.request_changed' }
+    });
+    const overlap = await mutatePlacement('d1-schedule-overlap', {
+      ...placeBody,
+      expectedScheduleVersion: 3,
+      startAt: '2027-03-10T11:30:00.000Z',
+      endAt: '2027-03-10T12:30:00.000Z'
+    });
+    expect(await overlap.json()).toMatchObject({
+      kind: 'outcome', outcome: { class: 'conflict', kind: 'schedule_room_overlap',
+        detail: { severity: 'block', roomId,
+          conflicts: [{ occurrenceId: placedBody.data.occurrence.id }] } }
+    });
+    const movedPlacement = await mutatePlacement('d1-schedule-move', {
+      action: 'move',
+      expectedScheduleVersion: 3,
+      occurrenceId: placedBody.data.occurrence.id,
+      expectedOccurrenceVersion: 1,
+      roomId,
+      startAt: '2027-03-10T12:00:00.000Z',
+      endAt: '2027-03-10T13:00:00.000Z'
+    });
+    const movedPlacementBody = await movedPlacement.json<{
+      readonly data: { readonly occurrence: { readonly id: string;
+        readonly version: number } };
+    }>();
+    expect(movedPlacementBody).toMatchObject({
+      kind: 'success', data: { action: 'move', scheduleVersion: 4,
+        occurrence: { id: placedBody.data.occurrence.id, version: 2,
+          startAt: '2027-03-10T12:00:00.000Z' } }
+    });
+    const unplaced = await mutatePlacement('d1-schedule-unplace', {
+      action: 'unplace',
+      expectedScheduleVersion: 4,
+      occurrenceId: movedPlacementBody.data.occurrence.id,
+      expectedOccurrenceVersion: movedPlacementBody.data.occurrence.version
+    });
+    expect(await unplaced.json()).toMatchObject({
+      kind: 'success', data: { action: 'unplace', scheduleVersion: 5, occurrence: null }
+    });
+    const finalSchedule = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/schedule/placements?startAt=2027-03-10T00%3A00%3A00.000Z&endAt=2027-03-13T00%3A00%3A00.000Z&limit=100`, { headers }),
+      environment()
+    );
+    expect(await finalSchedule.json()).toMatchObject({
+      kind: 'success', data: { scheduleVersion: 5,
+        occurrences: [{ id: uuid(719), sessionId: referencedCreateBody.data.session.id }] }
+    });
+    const placementOperationCount = await env.DB.prepare(`SELECT count(*) AS count
+      FROM operation_log WHERE workspace_id = ? AND operation_name = 'schedule.placement'`)
+      .bind(workspaceId).first<{ readonly count: number }>();
+    expect(placementOperationCount?.count).toBe(3);
     const asset = {
       schemaVersion: 1, id: assetId, scope,
       uploader: { kind: 'operator_user', userId },
@@ -934,7 +1030,7 @@ describe('configured D1 application HTTP slice', () => {
     const operationCount = await env.DB.prepare(
       'SELECT count(*) AS count FROM operation_log WHERE workspace_id = ?'
     ).bind(workspaceId).first<{ readonly count: number }>();
-    expect(operationCount?.count).toBe(13);
+    expect(operationCount?.count).toBe(16);
     const logs = await env.DB.prepare('SELECT count(*) AS count FROM operation_log WHERE id = ?')
       .bind(firstBody.receipt.id).first<{ readonly count: number }>();
     expect(logs?.count).toBe(1);

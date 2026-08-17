@@ -83,8 +83,8 @@ The Cloudflare production composition is now under active implementation, but it
 still not a production application. Local workerd tests prove retained D1 migrations,
 authentication and admission, guarded Event and settings operations, the Field
 Registry, Program Vocabulary reads plus guarded create/edit/retire/restore/delete,
-Deadlines, Tasks, draft Schedule placement, and Session catalog reads plus guarded
-Session changes, native Template artifacts,
+Deadlines, Tasks, draft Schedule placement reads plus guarded changes, and Session
+catalog reads plus guarded Session changes, native Template artifacts,
 safe operation history, and the workspace shell,
 workspace Team changes, human API-key inventory plus show-once
 create/rotate/revoke, and organizer Files metadata. API-key plaintext is returned
