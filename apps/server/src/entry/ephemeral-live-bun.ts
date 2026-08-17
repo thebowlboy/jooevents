@@ -4,6 +4,7 @@ import {
   loadCommunicationsProviderConfig,
   loadMailSenderConfig
 } from '../config/communications';
+import { loadAirtableProviderConfig } from '../config/airtable';
 import { createEphemeralLiveRuntime } from '../runtime/ephemeral-live';
 import {
   createRuntimeRequestHandler,
@@ -19,6 +20,7 @@ if (config.databaseDriver !== 'sqlite') {
 const buildDirectory = resolve(import.meta.dir, '../../../web/build-live');
 const buildIdentity = validateLiveBuildIdentity(buildDirectory);
 const listener = resolveBunListenerConfiguration(Bun.env);
+const airtable = loadAirtableProviderConfig(Bun.env);
 // The dev-only issued-link token oracle mounts only in development mode, which
 // binds loopback (127.0.0.1). Production mode binds 0.0.0.0, so the oracle is
 // structurally absent beyond loopback — no remote peer can mint a magic-link
@@ -33,7 +35,8 @@ const runtime = await createEphemeralLiveRuntime({
   communications: {
     provider: loadCommunicationsProviderConfig(Bun.env),
     mailSender: loadMailSenderConfig(Bun.env)
-  }
+  },
+  ...(airtable ? { airtable: { provider: airtable } } : {})
 });
 const fetch = createRuntimeRequestHandler({
   mode: listener.mode,

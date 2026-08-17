@@ -52,9 +52,11 @@ import {
 	OctagonX,
 	PencilLine,
 	Presentation,
+	RefreshCw,
 	Send,
 	Siren,
 	TriangleAlert,
+	Unplug,
 	Undo2,
 	UserRoundX,
 	Users,
@@ -106,6 +108,14 @@ export type StatusIconKey =
 	// Schedule conflict severity.
 	| 'blocking'
 	| 'warning'
+	// Airtable live-sync lifecycle.
+	| 'syncCurrent'
+	| 'syncPending'
+	| 'syncNeedsReview'
+	| 'syncDelayed'
+	| 'syncPaused'
+	| 'syncReconnect'
+	| 'syncConflict'
 	// Attention-rail priority.
 	| 'actNow'
 	| 'soon'
@@ -158,6 +168,14 @@ export const statusIcon: Record<StatusIconKey, IconComponent> = {
 
 	blocking: OctagonX,
 	warning: TriangleAlert,
+
+	syncCurrent: CircleCheck,
+	syncPending: RefreshCw,
+	syncNeedsReview: TriangleAlert,
+	syncDelayed: Clock,
+	syncPaused: CirclePause,
+	syncReconnect: Unplug,
+	syncConflict: OctagonX,
 
 	actNow: Siren,
 	soon: Clock,

@@ -1,13 +1,47 @@
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
+import {
+  composeOperationRegistryModules,
+  createApplicationOperationRuntime,
+  createHmacRequestHashSealer
+} from '@jooevents/application';
+import { taskMutationOperationResultSchema } from '@jooevents/contracts';
 import { planEventCreation } from '@jooevents/event';
 import {
+  canonicalJsonText,
+  parseContractVersion,
+  parseEventId,
+  parseIntegrationInboxReceiptId,
+  parseInstant,
+  parseInvocationId,
+  parseSourceConnectionId,
+  parseUserId,
+  parseVerifierRevisionId,
+  parseWorkspaceId
+} from '@jooevents/kernel';
+import {
+  TASK_MANAGE_ACCESS_POLICY,
+  TASK_MUTATION_OPERATION,
+  TASK_MUTATION_REQUEST_HASH_PROFILE,
+  createTaskMutationOperationModule
+} from '@jooevents/task-operations';
+import {
+  deterministicTaskEventId,
   deriveTaskAssignmentRestore,
+  parseTaskAssignment,
+  parseTaskEvent,
   planTaskMutation,
   validateTaskMutation
 } from '@jooevents/tasks';
 import { installDeadlineSchema, SQLiteDeadlineRepository } from './deadline';
 import { installEventSpineSchema, SQLiteEventSpineRepository } from './event-spine';
+import {
+  createSQLiteEffectDomainAdapterRegistry,
+  installFoundationTrialUnitOfWorkSchema
+} from './foundation-trial-uow';
+import { SQLiteEffectUnitOfWorkPort } from './sqlite-effect-unit-of-work';
+import { createSQLiteTaskDirectEffectDomainRegistration } from './task-direct-effect-domain';
 import { installTaskSchema, SQLiteTaskRepository } from './tasks';
 
 const workspaceId = '550e8400-e29b-41d4-a716-446655440000';
@@ -24,6 +58,11 @@ const personB = '019c1df7-86b5-769b-bba4-5f7097bfba0a';
 const personC = '019c1df7-86b5-769b-bba4-5f7097bfba0b';
 const scope = { workspaceId, eventId } as const;
 const occurredAt = '2026-08-15T09:00:00.000Z';
+const profile = Object.freeze({ key: 'task-airtable-test', version: parseContractVersion(1) });
+
+function uuid(suffix: number): string {
+  return `019c1df7-86b5-769b-bba4-${suffix.toString(16).padStart(12, '0')}`;
+}
 
 function setup() {
   const sqlite = new Database(':memory:', { strict: true });
@@ -40,6 +79,7 @@ function setup() {
     INSERT INTO workspaces VALUES ('${workspaceId}', 'Workspace', 'active', 1, 1, 1);
     INSERT INTO users VALUES ('${userId}', 'active', 'Organizer', 1, 1, 1);
   `);
+  installFoundationTrialUnitOfWorkSchema(sqlite);
   installEventSpineSchema(sqlite);
   const spine = new SQLiteEventSpineRepository(sqlite);
   transaction(sqlite, () => {
@@ -82,6 +122,124 @@ function setup() {
   };
 }
 
+function providerEffect(fixture: ReturnType<typeof setup>) {
+  let invocationId = 0x700;
+  let operationLogId = 0x800;
+  let correlationId = 0x900;
+  const sourceConnectionId = parseSourceConnectionId(uuid(0xa01));
+  const typedWorkspaceId = parseWorkspaceId(workspaceId);
+  const typedEventId = parseEventId(eventId);
+  const typedUserId = parseUserId(userId);
+  const executionTime = parseInstant('2026-08-15T11:00:00.000Z');
+  const authority: Parameters<typeof createTaskMutationOperationModule>[0]['currentAuthority'] = {
+    resolve(input) {
+      if (input.evidence.kind !== 'verified_inbox') {
+        return Object.freeze({ kind: 'denied' as const, reason: 'lane_mismatch' as const });
+      }
+      return Object.freeze({ kind: 'authorized' as const, authority: Object.freeze({
+        actor: Object.freeze({
+          kind: 'verified_inbox_processing' as const,
+          inboxReceiptId: input.evidence.inboxReceiptId,
+          sourceConnectionId
+        }),
+        principal: Object.freeze({
+          kind: 'verified_inbox_processing' as const,
+          inboxReceiptId: input.evidence.inboxReceiptId,
+          verifierRevisionId: parseVerifierRevisionId(uuid(0xa02))
+        }),
+        lane: input.lane,
+        scope: input.scope,
+        grants: Object.freeze([Object.freeze({ kind: 'permission' as const, key: 'event.manage' })]),
+        evidenceIds: Object.freeze(['airtable.inbox.current']),
+        authorityCitationIds: Object.freeze([]),
+        evaluatedAt: input.evaluatedAt
+      }) });
+    }
+  };
+  const module = createTaskMutationOperationModule({
+    workspaceId: typedWorkspaceId,
+    managePolicy: TASK_MANAGE_ACCESS_POLICY,
+    currentAuthority: authority,
+    currentEvent: {
+      resolveCurrentEvent: () => Object.freeze({
+        eventId: typedEventId,
+        evidenceIds: Object.freeze(['event.current.selection'])
+      })
+    },
+    clock: { now: () => executionTime },
+    ids: { newInvocationId: () => parseInvocationId(uuid(invocationId++)) },
+    authorityPrincipalKeyProfile: profile,
+    scopePartitionProfile: profile,
+    requestCanonicalizationProfile: profile,
+    requestHashSealer: createHmacRequestHashSealer({
+      profile: TASK_MUTATION_REQUEST_HASH_PROFILE,
+      keyBytes: new Uint8Array(32).fill(0x74)
+    }),
+    idempotencyCredentialProfile: profile,
+    idempotencyCredentialSealer: {
+      seal(raw: string) {
+        return Object.freeze({
+          verifierProfile: profile,
+          verifierSha256: createHash('sha256').update(`task-airtable:${raw}`).digest('hex')
+        });
+      }
+    },
+    enableVerifiedInbox: true
+  });
+  const adapters = createSQLiteEffectDomainAdapterRegistry([
+    createSQLiteTaskDirectEffectDomainRegistration({
+      sqlite: fixture.sqlite,
+      workspaceId: typedWorkspaceId,
+      eventRelationships: {
+        validateEvent: () => Object.freeze({
+          kind: 'valid' as const,
+          evidenceIds: Object.freeze(['airtable.connection.owner.current'])
+        })
+      },
+      ids: {
+        newTaskDefinitionId: () => uuid(0xb01),
+        newTaskDefinitionRevisionId: () => uuid(0xb02),
+        newDeadlineId: () => uuid(0xb03)
+      },
+      verifiedInboxAttribution: {
+        resolve: (input) => input.sourceConnectionId === sourceConnectionId ? typedUserId : undefined
+      }
+    })
+  ]);
+  const unitOfWork = new SQLiteEffectUnitOfWorkPort(fixture.sqlite, adapters, {
+    resolveAuthority: authority.resolve,
+    now: () => executionTime
+  });
+  return async (businessInput: unknown, idempotencyKey: string) => {
+    const runtime = await createApplicationOperationRuntime({
+      source: composeOperationRegistryModules([module]),
+      read: {
+        operationalTrace: { emit() {} },
+        immutableAudit: { append() {} },
+        clock: { now: () => executionTime },
+        newInvocationId: () => parseInvocationId(uuid(invocationId++))
+      },
+      unitOfWork,
+      newOperationLogId: () => uuid(operationLogId++)
+    });
+    const invocation = await runtime.effectBuilder.build({
+      operationName: TASK_MUTATION_OPERATION.name,
+      operationVersion: TASK_MUTATION_OPERATION.version,
+      surface: 'provider_ingress',
+      correlationId: uuid(correlationId++),
+      businessInput,
+      verifiedEvidence: Object.freeze({
+        kind: 'verified_inbox' as const,
+        surface: 'provider_ingress' as const,
+        client: Object.freeze({ key: 'airtable.settle' }),
+        inboxReceiptId: parseIntegrationInboxReceiptId(uuid(0xa03))
+      }),
+      rawIdempotencyKey: idempotencyKey
+    });
+    return taskMutationOperationResultSchema.parse(await runtime.effectExecutor.execute(invocation));
+  };
+}
+
 function createPlan(fixture: ReturnType<typeof setup>) {
   return planTaskMutation({
     action: 'create_definition',
@@ -104,6 +262,91 @@ function createPlan(fixture: ReturnType<typeof setup>) {
 }
 
 describe('ephemeral SQLite canonical Tasks repository', () => {
+  test('verified Airtable inbox accepts then restores one received fulfillment through task.mutation', async () => {
+    const fixture = setup();
+    try {
+      const create = createPlan(fixture);
+      if (create.action !== 'create_definition') throw new TypeError('wrong_plan');
+      transaction(fixture.sqlite, () => {
+        fixture.deadlines.applyTaskDueDeadline(create.deadlineContribution);
+        fixture.tasks.applyTaskPlan(create);
+      });
+      const pending = create.assignments[0]!;
+      const receivedAt = '2026-08-15T10:00:00.000Z';
+      const received = parseTaskAssignment({
+        ...pending,
+        state: 'received_pending_check',
+        completionEvidence: { kind: 'acknowledged', acknowledgedAt: receivedAt },
+        updatedAt: receivedAt,
+        version: 2
+      });
+      const receivedEvent = parseTaskEvent({
+        schemaVersion: 1,
+        scope,
+        id: deterministicTaskEventId({
+          assignmentId: received.id,
+          assignmentVersion: received.version,
+          kind: 'fulfillment_received'
+        }),
+        assignmentId: received.id,
+        kind: 'fulfillment_received',
+        fromState: 'pending',
+        toState: 'received_pending_check',
+        actorUserId: userId,
+        occurredAt: receivedAt,
+        assignmentVersion: received.version
+      });
+      transaction(fixture.sqlite, () => {
+        fixture.sqlite.query(`
+          UPDATE task_assignments
+             SET state=?, version=?, assignment_json=?, updated_at_ms=?
+           WHERE workspace_id=? AND event_id=? AND id=? AND version=1
+        `).run(
+          received.state,
+          received.version,
+          canonicalJsonText(received),
+          Date.parse(receivedAt),
+          workspaceId,
+          eventId,
+          received.id
+        );
+        fixture.sqlite.query(`
+          INSERT INTO task_events (
+            workspace_id,event_id,id,assignment_id,kind,assignment_version,event_json,occurred_at_ms
+          ) VALUES (?,?,?,?,?,?,?,?)
+        `).run(
+          workspaceId,
+          eventId,
+          receivedEvent.id,
+          received.id,
+          receivedEvent.kind,
+          receivedEvent.assignmentVersion,
+          canonicalJsonText(receivedEvent),
+          Date.parse(receivedAt)
+        );
+      });
+
+      const execute = providerEffect(fixture);
+      expect(await execute({
+        action: 'accept_fulfillment', assignmentId: received.id, expectedVersion: 2
+      }, 'airtable-task-complete')).toMatchObject({
+        kind: 'success', data: { action: 'accept_fulfillment', assignment: { state: 'complete', version: 3 } }
+      });
+      expect(await execute({
+        action: 'restore_assignment', assignmentId: received.id, expectedVersion: 3
+      }, 'airtable-task-restore')).toMatchObject({
+        kind: 'success', data: { action: 'restore_assignment', assignment: {
+          state: 'received_pending_check', version: 4
+        } }
+      });
+      expect(fixture.sqlite.query<{ count: number }, []>(
+        "SELECT count(*) AS count FROM operation_log WHERE surface='provider_ingress'"
+      ).get()).toEqual({ count: 2 });
+    } finally {
+      fixture.sqlite.close();
+    }
+  });
+
   test('atomically creates one task_due definition and materializes exactly confirmed speakers', () => {
     const fixture = setup();
     try {

@@ -158,11 +158,18 @@ export interface CompiledAppModelEffectBinding {
   readonly projectedResultSchema: RegisteredOperationSchema;
 }
 
+export interface CompiledVerifiedInboxEffectBinding {
+  readonly surface: 'provider_ingress';
+  readonly projection: ReadProjectionRegistration;
+  readonly projectedResultSchema: RegisteredOperationSchema;
+}
+
 export type CompiledEffectBinding =
   | CompiledOperatorHttpEffectBinding
   | CompiledParticipantHttpEffectBinding
   | CompiledPublicHttpEffectBinding
-  | CompiledAppModelEffectBinding;
+  | CompiledAppModelEffectBinding
+  | CompiledVerifiedInboxEffectBinding;
 
 export interface CompiledRegisteredConsumerEffectBinding {
   readonly surface: 'application_job';
@@ -528,10 +535,24 @@ function normalizeOperationAccessLanes(
   const registeredJobBindings = 'registeredJobBindings' in operation
     ? operation.registeredJobBindings ?? []
     : [];
+  const verifiedInboxBindings = 'verifiedInboxBindings' in operation
+    ? operation.verifiedInboxBindings ?? []
+    : [];
+  if (verifiedInboxBindings.length > 1
+      || verifiedInboxBindings.some((binding) =>
+        binding.surface !== 'provider_ingress' || binding.lane !== 'verified_inbox')) {
+    issues.push({
+      code: 'invalid_access_lane',
+      detail: 'Verified inbox binding must be the sole internal provider-ingress binding.',
+      operationName: operation.name,
+      operationVersion: operation.version
+    });
+  }
   const boundSurfaces = new Set<string>([
     ...operation.bindings.map((binding) => binding.surface),
     ...registeredConsumerBindings.map((binding) => binding.surface),
-    ...registeredJobBindings.map((binding) => binding.surface)
+    ...registeredJobBindings.map((binding) => binding.surface),
+    ...verifiedInboxBindings.map((binding) => binding.surface)
   ]);
   const laneSurfaces = new Set<string>(parsed.map((lane) => lane.surface));
   for (const surface of boundSurfaces) {
@@ -1990,6 +2011,32 @@ export async function createOperationRegistry(
       }
     }
 
+    for (const binding of operation.verifiedInboxBindings ?? []) {
+      if (!accessLanes.some((lane) =>
+        lane.surface === 'provider_ingress' && lane.kind === 'verified_inbox')) {
+        issues.push({ code: 'invalid_access_lane', detail: 'Verified inbox binding requires its exact access lane.', operationName: operation.name, operationVersion: operation.version });
+        continue;
+      }
+      const projection = findDefinition({ map: projections, reference: binding.projection, usage: 'projection for provider_ingress', issues, operation });
+      if (projection && !sameSchemaRef(projection.canonicalResultSchema, operation.canonicalResultSchema)) {
+        issues.push({ code: 'projection_input_mismatch', detail: 'The verified-inbox projection canonical schema does not match the operation contract.', operationName: operation.name, operationVersion: operation.version });
+      }
+      const projectedResultSchema = projection
+        ? findSchema(schemas, projection.projectedResultSchema, 'projection result for provider_ingress', issues, operation)
+        : undefined;
+      if (projection && projectedResultSchema) {
+        if (idempotencyConflict && !projectedResultSchema.schema.safeParse({
+          kind: 'outcome', outcome: idempotencyConflictFixture(idempotencyConflict.detailSchema.version),
+          terminal: false, correlationId: '018f0f47-7a86-7d36-8a25-9f86589c7a4d'
+        }).success) {
+          issues.push({ code: 'idempotency_conflict_projection_mismatch', detail: 'The verified-inbox result schema must admit request-changed.', operationName: operation.name, operationVersion: operation.version });
+        }
+        compiledBindings.set('provider_ingress', {
+          surface: 'provider_ingress', projection, projectedResultSchema
+        });
+      }
+    }
+
     const compiledRegisteredConsumerBindings = new Map<
       string,
       CompiledRegisteredConsumerEffectBinding
@@ -2302,7 +2349,9 @@ export async function createOperationRegistry(
           })
     }));
   const effectEntries: SafeOperationManifestEntry[] = [...compiledEffects.values()]
-    .filter((operation) => operation.bindings.size > 0)
+    .filter((operation) => [...operation.bindings.values()].some(
+      (binding) => binding.surface !== 'provider_ingress'
+    ))
     .map((operation) => safeOperationManifestEntrySchema.parse({
       name: operation.definition.name,
       version: operation.definition.version,
@@ -2316,7 +2365,10 @@ export async function createOperationRegistry(
       idempotency: { required: true, ...operation.definition.idempotency },
       concurrency: { kind: 'registered', definition: operation.definition.concurrency },
       outcomes: [...operation.definition.outcomes].sort((left, right) => compareText(left.class, right.class) || compareText(left.kind, right.kind)),
-      enabledBindings: [...operation.bindings.values()].map((binding) => {
+      enabledBindings: [...operation.bindings.values()]
+        .filter((binding): binding is Exclude<CompiledEffectBinding, CompiledVerifiedInboxEffectBinding> =>
+          binding.surface !== 'provider_ingress')
+        .map((binding) => {
         if (binding.surface === 'operator_http' || binding.surface === 'participant_http') {
           return {
             surface: binding.surface,

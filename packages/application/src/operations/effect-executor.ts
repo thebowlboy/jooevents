@@ -3,6 +3,7 @@ import {
   effectfulOperationResultSchema,
   operationReceiptRefSchema,
   structuredOutcomeSchema,
+  versionedDefinitionRefSchema,
   type EffectfulOperationResult,
   type StructuredOutcome
 } from '@jooevents/contracts';
@@ -39,6 +40,8 @@ import type {
   BuildEffectInvocationInput,
   BuildRegisteredConsumerEffectInvocationInput,
   BuildRegisteredJobEffectInvocationInput,
+  DirectOperationFeatureContribution,
+  DirectOperationFeatureContributor,
   EffectHandlerSnapshot,
   EffectInvocationBuilder,
   EffectInvocationBuilderOptions,
@@ -92,6 +95,7 @@ interface InternalEffectInvocation {
 }
 
 const sealedInvocations = new WeakMap<SealedEffectInvocation, InternalEffectInvocation>();
+const directFeatureContexts = new WeakMap<SealedEffectInvocation, unknown>();
 const executingInvocations = new WeakSet<SealedEffectInvocation>();
 const completedInvocations = new WeakSet<SealedEffectInvocation>();
 const issuedTerminalReceipts = new WeakMap<TerminalEffectReceipt, InternalEffectInvocation>();
@@ -155,6 +159,68 @@ function freezeHandlerSnapshot(value: unknown): EffectHandlerSnapshot {
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   return Boolean(value && (typeof value === 'object' || typeof value === 'function') && typeof (value as { then?: unknown }).then === 'function');
+}
+
+function bindDirectFeatureContributor(
+  candidate: DirectOperationFeatureContributor | undefined
+): DirectOperationFeatureContributor | undefined {
+  if (candidate === undefined) return undefined;
+  const reference = versionedDefinitionRefSchema.safeParse(candidate.reference);
+  if (!reference.success || typeof candidate.contribute !== 'function') {
+    throw new TypeError('direct_operation_feature_contributor_invalid');
+  }
+  return Object.freeze({
+    reference: Object.freeze({ ...reference.data }),
+    contribute: candidate.contribute.bind(candidate)
+  });
+}
+
+function resolveDirectFeatureContribution(input: Readonly<{
+  contributor: DirectOperationFeatureContributor | undefined;
+  invocation: InternalEffectInvocation;
+  canonicalResult: unknown;
+  operationLogId: string;
+  featureContext?: unknown;
+}>): DirectOperationFeatureContribution | undefined {
+  if (!input.contributor) return undefined;
+  const candidate = input.contributor.contribute(Object.freeze({
+    operation: Object.freeze({
+      name: input.invocation.operation.definition.name,
+      version: input.invocation.operation.definition.version
+    }),
+    businessInput: structuredClone(input.invocation.businessInput),
+    canonicalResult: structuredClone(input.canonicalResult),
+    scope: input.invocation.contextResolution.kind === 'ready'
+      ? structuredClone(input.invocation.contextResolution.context.scope)
+      : (() => { throw new OperationExecutionError('contribution'); })(),
+    occurredAt: input.invocation.contextResolution.kind === 'ready'
+      ? input.invocation.contextResolution.context.receivedAt
+      : (() => { throw new OperationExecutionError('contribution'); })(),
+    provenance: input.invocation.contextResolution.kind === 'ready'
+      ? structuredClone(input.invocation.contextResolution.context.provenance)
+      : (() => { throw new OperationExecutionError('contribution'); })(),
+    ...(input.featureContext === undefined
+      ? {}
+      : { featureContext: structuredClone(input.featureContext) })
+  }));
+  if (isPromiseLike(candidate)) {
+    throw new TypeError('direct operation feature contributor returned a promise');
+  }
+  if (candidate === undefined) return undefined;
+  let canonicalText: string;
+  try {
+    canonicalText = canonicalJsonText(candidate);
+  } catch (error) {
+    throw new OperationExecutionError('contribution', error);
+  }
+  if (new TextEncoder().encode(canonicalText).byteLength > 262_144) {
+    throw new OperationExecutionError('contribution');
+  }
+  return deepFreeze({
+    contributor: { ...input.contributor.reference },
+    operationLogId: input.operationLogId,
+    value: JSON.parse(canonicalText) as unknown
+  });
 }
 
 async function phase<Value>(name: OperationExecutionPhase, execute: () => Value | Promise<Value>): Promise<Value> {
@@ -514,6 +580,8 @@ async function executeDirectAudited(input: {
   readonly unitOfWork: EffectUnitOfWorkPort;
   readonly registryDigestSha256: string;
   readonly newOperationLogId: () => string;
+  readonly featureContributor: DirectOperationFeatureContributor | undefined;
+  readonly featureContext?: unknown;
 }): Promise<EffectfulOperationResult> {
   const { invocation } = input;
   if (!isDirectAudited(invocation)) throw new OperationExecutionError('binding');
@@ -649,6 +717,15 @@ async function executeDirectAudited(input: {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(logId)) {
       throw new OperationExecutionError('operation_log');
     }
+    const featureContribution = await phase('feature_contribution', () =>
+      resolveDirectFeatureContribution({
+        contributor: input.featureContributor,
+        invocation,
+        canonicalResult: canonical,
+        operationLogId: logId,
+        ...(input.featureContext === undefined ? {} : { featureContext: input.featureContext })
+      })
+    );
     await phase('domain_contribution', () => unitOfWork.applyDomainContribution(
       invocation.operation.definition.handlerCapability,
       sealedContribution.data.domain
@@ -675,6 +752,14 @@ async function executeDirectAudited(input: {
       occurredAt: readyContext.context.receivedAt,
       correlationId: readyContext.context.correlationId
     })));
+    if (featureContribution) {
+      if (!unitOfWork.applyFeatureContribution) {
+        throw new OperationExecutionError('feature_contribution');
+      }
+      await phase('feature_contribution', () =>
+        unitOfWork.applyFeatureContribution!(featureContribution)
+      );
+    }
     return terminal.result;
   }));
 
@@ -706,8 +791,10 @@ export function createEffectOperationExecutor(input: {
   readonly registry: OperationRegistry;
   readonly unitOfWork: EffectUnitOfWorkPort;
   readonly newOperationLogId?: () => string;
+  readonly directFeatureContributor?: DirectOperationFeatureContributor;
 }): EffectOperationExecutor {
   const newOperationLogId = input.newOperationLogId ?? newUuidV7;
+  const featureContributor = bindDirectFeatureContributor(input.directFeatureContributor);
   return Object.freeze({
     async execute(sealed: SealedEffectInvocation) {
       const invocation = sealedInvocations.get(sealed);
@@ -725,7 +812,11 @@ export function createEffectOperationExecutor(input: {
             invocation,
             unitOfWork: input.unitOfWork,
             registryDigestSha256: input.registry.manifestDigestSha256,
-            newOperationLogId
+            newOperationLogId,
+            featureContributor,
+            ...(directFeatureContexts.has(sealed)
+              ? { featureContext: directFeatureContexts.get(sealed) }
+              : {})
           });
           completed = true;
           return result;
@@ -901,6 +992,32 @@ export function createEffectOperationExecutor(input: {
       }
     }
   });
+}
+
+/**
+ * Attaches bounded feature-owned context to an authentic invocation without
+ * widening its registered business input. Only the direct contributor can see it;
+ * handlers, request hashes, and public manifests remain unchanged.
+ */
+export function attachDirectOperationFeatureContext(
+  invocation: SealedEffectInvocation,
+  context: unknown
+): SealedEffectInvocation {
+  const internal = sealedInvocations.get(invocation);
+  if (!internal || executingInvocations.has(invocation) || completedInvocations.has(invocation)) {
+    throw new OperationExecutionError('binding');
+  }
+  let canonicalText: string;
+  try {
+    canonicalText = canonicalJsonText(context);
+  } catch (error) {
+    throw new OperationExecutionError('binding', error);
+  }
+  if (new TextEncoder().encode(canonicalText).byteLength > 65_536) {
+    throw new OperationExecutionError('binding');
+  }
+  directFeatureContexts.set(invocation, deepFreeze(JSON.parse(canonicalText) as unknown));
+  return invocation;
 }
 
 /**

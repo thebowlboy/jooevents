@@ -4,6 +4,7 @@ import {
   loadCommunicationsProviderConfig,
   loadMailSenderConfig
 } from '../config/communications';
+import { loadAirtableProviderConfig } from '../config/airtable';
 import { createDevFixtureClock } from '../runtime/dev-fixture-clock';
 import { createEphemeralLiveRuntime } from '../runtime/ephemeral-live';
 import {
@@ -21,6 +22,7 @@ if (config.databaseDriver !== 'sqlite') {
 const buildDirectory = resolve(import.meta.dir, '../../../web/build-live');
 const buildIdentity = validateLiveBuildIdentity(buildDirectory);
 const listener = resolveBunListenerConfiguration(Bun.env);
+const airtable = loadAirtableProviderConfig(Bun.env);
 const fixtureClock = createDevFixtureClock();
 // Identical listener/runtime composition to the empty ephemeral live entry:
 // the dev-only issued-link token oracle mounts only in development mode, which
@@ -33,7 +35,8 @@ const runtime = await createEphemeralLiveRuntime({
   communications: {
     provider: loadCommunicationsProviderConfig(Bun.env),
     mailSender: loadMailSenderConfig(Bun.env)
-  }
+  },
+  ...(airtable ? { airtable: { provider: airtable } } : {})
 });
 
 // The playground is filled before the first request is served, so no client

@@ -44,6 +44,7 @@ export type OperationExecutionPhase =
   | 'write_snapshot'
   | 'domain_contribution'
   | 'operation_log'
+  | 'feature_contribution'
   | 'effect_contributions'
   | 'invocation_release';
 

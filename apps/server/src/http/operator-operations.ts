@@ -33,6 +33,7 @@ const reservedExactPaths = new Set([
   '/api/auth',
   '/api/entry',
   '/api/me/access-context',
+  '/api/integrations/airtable',
   '/api/openapi.json',
   '/api/operations/manifest',
   '/api/public'
@@ -43,6 +44,7 @@ const reservedPrefixes = [
   '/api/operations/manifest/',
   '/api/public/',
   '/api/workspace/api-key-secrets/',
+  '/api/integrations/airtable/',
   '/api/v1/'
 ];
 

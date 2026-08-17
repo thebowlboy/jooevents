@@ -4,6 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeSignature } from 'better-auth/crypto';
 import {
+  createAirtableDirectFeatureContributor,
+  createAirtableVerifiedInboxAuthorityResolver,
+  RegisteredOperationAirtableInboundPort
+} from '@jooevents/airtable-sync';
+import {
   assertExternalAgentAuthorityPolicyCatalogCoversOperationRegistry,
   assertOperatorAuthorityPolicyCatalogCoversOperationRegistry,
   API_KEY_MANAGE_ACCESS_POLICY,
@@ -312,12 +317,16 @@ import {
   parseContractVersion,
   parseEventId,
   parseInstant,
+  parseIntegrationInboxReceiptId,
   parseInvocationId,
   parseJobId,
   parseParticipantIdentityId,
   parseParticipantSessionId,
   parsePersonId,
   parsePublicPolicyRevisionId,
+  parseSourceConnectionId,
+  parseUserId,
+  parseVerifierRevisionId,
   parseWorkspaceId
 } from '@jooevents/kernel';
 import type { Clock } from '@jooevents/kernel';
@@ -354,6 +363,7 @@ import {
   SQLiteApiKeyManagementReadPort,
   SQLiteExternalApiIdempotencyStore,
   SQLiteExternalApiRateLimiter,
+  SQLiteAirtableProjectionContributionAdapter,
   createSQLiteApiKeyEffectDomainRegistration,
   type EphemeralSQLiteRuntime
 } from '@jooevents/persistence';
@@ -535,6 +545,7 @@ import { ApiKeySecretDeliveryVault } from '../auth/api-key-secret-delivery';
 import { createSQLiteAuthPrincipalReader } from '../auth/principal-reader';
 import { SHARP_FILE_IMAGE_REENCODER } from './file-image-reencoder';
 import type { ServerConfig } from '../config';
+import type { AirtableProviderConfig } from '../config/airtable';
 import {
   loadCommunicationsProviderConfig,
   loadMailSenderConfig,
@@ -554,6 +565,12 @@ import {
 } from '../http/participant-entry';
 import { createPublicOperationsHttpAdapter } from '../http/public-operations';
 import { createSerialHttpRequestBoundary } from '../http/request-serialization';
+import {
+  AIRTABLE_INTEGRATION_MANAGE_ACCESS_POLICY,
+  AIRTABLE_INTEGRATION_READ_ACCESS_POLICY,
+  createAirtableLiveRuntime,
+  type AirtableLiveRuntime
+} from './airtable-live-runtime';
 import { createCloudflareTokenVerificationReadinessProbe } from './cloudflare-email-readiness-probe';
 import {
   buildDeploymentSenderPresentation,
@@ -1142,6 +1159,8 @@ function bootstrapEphemeralOwnerPermissionGrants(input: {
   for (const [permissionId, reason] of [
     ['program.vocabulary.manage', 'Ephemeral live Program Vocabulary owner grant'],
     ['communication.provider.manage', 'Ephemeral live email provider owner grant'],
+    ['integration.airtable.read', 'Ephemeral live Airtable connection read grant'],
+    ['integration.airtable.manage', 'Ephemeral live Airtable connection management grant'],
     ['integration.api.manage', 'Ephemeral live external API owner grant'],
     // `publication.manage` is minted with no preset carrying it; this
     // explicit reservation override is a bootstrap-only grant so the owner
@@ -1306,8 +1325,14 @@ export async function createEphemeralLiveRuntime(input: {
     /** Test seam. Defaults to global fetch. */
     readonly fetch?: CloudflareFetch;
   };
+  /** Structurally inert unless the entry supplies a complete OAuth configuration. */
+  readonly airtable?: {
+    readonly provider: AirtableProviderConfig;
+    readonly fetch?: import('@jooevents/airtable').AirtableFetch;
+  };
 }): Promise<EphemeralLiveRuntime> {
   const database = createFoundationEphemeralSQLiteRuntime();
+  let airtableLive: AirtableLiveRuntime | undefined;
   let filesBlobRootDirectory: string | undefined;
   try {
     const bootstrap = bootstrapEmptyInstall({
@@ -2018,15 +2043,30 @@ export async function createEphemeralLiveRuntime(input: {
       eventRelationships,
       newSessionId: () => crypto.randomUUID()
     });
+    const airtableVerifiedInboxAttribution = Object.freeze({
+      resolve(request: { readonly sourceConnectionId: string; readonly workspaceId: string }) {
+        const userId = database.sqlite.query<{ readonly user_id: string }, [string, string]>(`
+          SELECT membership.user_id
+            FROM airtable_sync_connections connection
+            JOIN workspace_memberships membership
+              ON membership.workspace_id=connection.workspace_id AND membership.status='active'
+           WHERE connection.id=? AND connection.workspace_id=? AND connection.state='active'
+           ORDER BY membership.created_at,membership.id LIMIT 1
+        `).get(request.sourceConnectionId, request.workspaceId)?.user_id;
+        return userId ? parseUserId(userId) : undefined;
+      }
+    });
     const engagementDirectDomain = createSQLiteEngagementDirectEffectDomainRegistration({
       sqlite: database.sqlite,
       workspaceId,
-      eventRelationships
+      eventRelationships,
+      verifiedInboxAttribution: airtableVerifiedInboxAttribution
     });
     const taskDirectDomain = createSQLiteTaskDirectEffectDomainRegistration({
       sqlite: database.sqlite,
       workspaceId,
       eventRelationships,
+      verifiedInboxAttribution: airtableVerifiedInboxAttribution,
       ids: Object.freeze({
         newTaskDefinitionId: () => crypto.randomUUID(),
         newTaskDefinitionRevisionId: () => crypto.randomUUID(),
@@ -2159,6 +2199,14 @@ export async function createEphemeralLiveRuntime(input: {
         Object.freeze({
           policy: API_KEY_MANAGE_ACCESS_POLICY,
           permissionId: 'integration.api.manage' as const
+        }),
+        Object.freeze({
+          policy: AIRTABLE_INTEGRATION_READ_ACCESS_POLICY,
+          permissionId: 'integration.airtable.read' as const
+        }),
+        Object.freeze({
+          policy: AIRTABLE_INTEGRATION_MANAGE_ACCESS_POLICY,
+          permissionId: 'integration.airtable.manage' as const
         }),
         Object.freeze({
           policy: WORKSPACE_OVERVIEW_READ_ACCESS_POLICY,
@@ -2360,12 +2408,50 @@ export async function createEphemeralLiveRuntime(input: {
       authorization: externalAuthorityPersistence.authorization,
       scopeRelationships: externalAuthorityPersistence.scopeRelationships
     });
+    const airtableInboundAuthority = createAirtableVerifiedInboxAuthorityResolver({
+      policies: Object.freeze([TASK_MANAGE_ACCESS_POLICY, ENGAGEMENT_MANAGE_ACCESS_POLICY]),
+      source: Object.freeze({
+        async resolve(inboxReceiptId: string) {
+          const receiptId = parseIntegrationInboxReceiptId(inboxReceiptId);
+          const row = database.sqlite.query<{
+            readonly connection_id: string;
+            readonly workspace_id: string;
+            readonly state: 'active' | 'paused' | 'needs_reconnect' | 'disconnected';
+            readonly event_id: string | null;
+          }, [string]>(`
+            SELECT settle.connection_id,connection.workspace_id,connection.state,
+                   COALESCE(task.event_id,engagement.event_id) AS event_id
+              FROM airtable_sync_settle_heads settle
+              JOIN airtable_sync_connections connection ON connection.id=settle.connection_id
+              JOIN airtable_sync_record_links link
+                ON link.connection_id=settle.connection_id
+               AND link.provider_table_id=settle.provider_table_id
+               AND link.provider_record_id=settle.provider_record_id
+              LEFT JOIN task_assignments task
+                ON link.subject_kind='task_assignment' AND task.id=link.subject_id
+              LEFT JOIN engagement_heads engagement
+                ON link.subject_kind='engagement' AND engagement.id=link.subject_id
+             WHERE settle.id=? LIMIT 2
+          `).get(receiptId);
+          if (!row?.event_id || row.state !== 'active') return undefined;
+          return Object.freeze({
+            sourceConnectionId: parseSourceConnectionId(row.connection_id),
+            verifierRevisionId: parseVerifierRevisionId('019c30db-4e00-7000-8000-0000000000a1'),
+            workspaceId: parseWorkspaceId(row.workspace_id),
+            eventId: parseEventId(row.event_id),
+            state: row.state
+          });
+        }
+      })
+    });
     const currentAuthority: CurrentAuthorityResolver<InvocationEvidence> = Object.freeze({
       resolve(
         resolutionInput: Parameters<CurrentAuthorityResolver<InvocationEvidence>['resolve']>[0]
       ) {
         return resolutionInput.lane.kind === 'external_mcp'
           ? externalAuthority.resolve(resolutionInput)
+          : resolutionInput.lane.kind === 'verified_inbox'
+            ? airtableInboundAuthority.resolve(resolutionInput)
           : authority.resolver.resolve(resolutionInput);
       }
     });
@@ -3660,6 +3746,7 @@ export async function createEphemeralLiveRuntime(input: {
       workspaceId,
       managePolicy: ENGAGEMENT_MANAGE_ACCESS_POLICY,
       currentAuthority,
+      enableVerifiedInbox: true,
       currentEvent,
       clock,
       ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
@@ -3702,6 +3789,7 @@ export async function createEphemeralLiveRuntime(input: {
       workspaceId,
       managePolicy: TASK_MANAGE_ACCESS_POLICY,
       currentAuthority,
+      enableVerifiedInbox: true,
       currentEvent,
       clock,
       ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
@@ -4209,13 +4297,24 @@ export async function createEphemeralLiveRuntime(input: {
         ? participantAuthority.resolve(recheckInput)
         : recheckInput.lane.kind === 'public_ceremony'
           ? intakePublicCeremonies.currentAuthority.resolve(recheckInput)
-          : authority.effectRecheckSource.resolveAuthority(recheckInput),
+          : recheckInput.lane.kind === 'verified_inbox'
+            ? airtableInboundAuthority.resolve(recheckInput)
+            : authority.effectRecheckSource.resolveAuthority(recheckInput),
       now: authority.effectRecheckSource.now
     });
+    const airtableProjectionContribution = new SQLiteAirtableProjectionContributionAdapter(
+      database.sqlite,
+      () => crypto.randomUUID(),
+      Object.freeze({
+        async publish(wake: { readonly connectionId: string }) { airtableLive?.wake(wake.connectionId); }
+      })
+    );
     const unitOfWork = new SQLiteEffectUnitOfWorkPort(
       database.sqlite,
       domains,
-      effectRecheckSource
+      effectRecheckSource,
+      {},
+      airtableProjectionContribution
     );
     const source = composeOperationRegistryModules([
       apiKeyOperations,
@@ -4275,7 +4374,8 @@ export async function createEphemeralLiveRuntime(input: {
         clock,
         newInvocationId: () => parseInvocationId(crypto.randomUUID())
       },
-      unitOfWork
+      unitOfWork,
+      directFeatureContributor: createAirtableDirectFeatureContributor()
     });
     // ONE public registry behind ONE adapter: the gated intake form read,
     // the ceremony resume read, the two release reads, and the one public
@@ -4340,6 +4440,85 @@ export async function createEphemeralLiveRuntime(input: {
       sessions: { getSession: (headers) => auth.api.getSession({ headers }) },
       allowedOrigins: [input.config.baseUrl, ...input.config.trustedOrigins]
     });
+    if (input.airtable) {
+      const readLane = parseOperationAccessLane({
+        kind: 'operator', surface: 'operator_http', policy: AIRTABLE_INTEGRATION_READ_ACCESS_POLICY
+      });
+      const manageLane = parseOperationAccessLane({
+        kind: 'operator', surface: 'operator_http', policy: AIRTABLE_INTEGRATION_MANAGE_ACCESS_POLICY
+      });
+      airtableLive = createAirtableLiveRuntime({
+        sqlite: database.sqlite,
+        workspaceId,
+        baseUrl: input.config.baseUrl,
+        config: input.airtable.provider,
+        ...(input.airtable.fetch ? { fetch: input.airtable.fetch } : {}),
+        controlledOperationsForClaim: (claim) => new RegisteredOperationAirtableInboundPort({
+          builder: operations.effectBuilder,
+          executor: operations.effectExecutor,
+          verifiedInboxEvidence: Object.freeze({
+            kind: 'verified_inbox' as const,
+            surface: 'provider_ingress' as const,
+            client: Object.freeze({ key: 'airtable.sync', version: '1' }),
+            inboxReceiptId: parseIntegrationInboxReceiptId(claim.settleId)
+          } satisfies InvocationEvidence),
+          deletionReview: Object.freeze({
+            async request() {
+              database.sqlite.query(`
+                INSERT INTO airtable_sync_boundary_observations(
+                  id,connection_id,record_link_id,field_key,kind,classification,
+                  before_json,after_json,inbox_receipt_id,occurred_at_ms
+                )
+                SELECT ?,settle.connection_id,link.id,'record.deleted','request','ordinary',
+                       '{"deleted":false}','{"deleted":true}',settle.id,?
+                  FROM airtable_sync_settle_heads settle
+                  JOIN airtable_sync_record_links link
+                    ON link.connection_id=settle.connection_id
+                   AND link.provider_table_id=settle.provider_table_id
+                   AND link.provider_record_id=settle.provider_record_id
+                 WHERE settle.id=?
+                   AND NOT EXISTS (
+                     SELECT 1 FROM airtable_sync_boundary_observations prior
+                      WHERE prior.connection_id=settle.connection_id
+                        AND prior.inbox_receipt_id=settle.id
+                        AND prior.field_key='record.deleted' AND prior.kind='request'
+                   )
+              `).run(crypto.randomUUID(), Date.parse(clock.now()), claim.settleId);
+              return Object.freeze({
+                kind: 'applied' as const,
+                operationReceiptId: `airtable-deletion-review:${claim.settleId}`
+              });
+            }
+          }),
+          newCorrelationId: () => crypto.randomUUID()
+        }),
+        async authorize(request) {
+          const verified = await evidence.verify({
+            request: request.request,
+            correlationId: crypto.randomUUID(),
+            binding: { method: request.request.method } as Parameters<typeof evidence.verify>[0]['binding']
+          });
+          if (verified.kind !== 'verified') return verified.reason;
+          const read = request.action === 'read';
+          const resolution = await authority.resolver.resolve({
+            operation: {
+              name: read ? 'airtable.integration.read' : 'airtable.integration.manage',
+              version: 1,
+              effect: read ? 'read' : 'commit'
+            },
+            evidence: verified.evidence as InvocationEvidence,
+            lane: read ? readLane : manageLane,
+            scope: Object.freeze({
+              workspaceId,
+              subjects: Object.freeze([{ kind: 'workspace' as const, id: workspaceId }]),
+              resolutionEvidenceIds: Object.freeze(['workspace.current'])
+            }),
+            evaluatedAt: clock.now()
+          });
+          return resolution.kind === 'authorized' ? 'authorized' : 'forbidden';
+        }
+      });
+    }
     const participantAllowedOrigins = new Set([
       input.config.baseUrl,
       ...input.config.trustedOrigins
@@ -4441,6 +4620,10 @@ export async function createEphemeralLiveRuntime(input: {
       operatorOperations: { operations, evidence },
       participantEntry: participantEntryRuntime,
       participantOperations: { operations, evidence: participantEvidence },
+      ...(airtableLive ? {
+        airtableIntegration: airtableLive.integration,
+        airtableWebhookIngress: airtableLive.webhookIngress
+      } : {}),
       requestSerialization
     });
     const apiKeyManageLane = parseOperationAccessLane({
@@ -5882,6 +6065,7 @@ export async function createEphemeralLiveRuntime(input: {
     const close = () => {
       if (!closed) {
         if (outboundDispatchPump !== undefined) clearInterval(outboundDispatchPump);
+        airtableLive?.close();
         closeResult = database.close();
         closed = true;
         try {

@@ -20,6 +20,14 @@ import {
   RequestSerializationAbortedError,
   type HttpRequestSerializationBoundary
 } from './request-serialization';
+import {
+  createAirtableWebhookHttpAdapter,
+  type AirtableWebhookIngressRuntime
+} from './airtable-webhook';
+import {
+  createAirtableIntegrationHttpAdapter,
+  type AirtableIntegrationHttpRuntime
+} from './airtable-integration';
 
 export interface AccessContextService {
   ensureAuthPrincipalProvisioned(input: {
@@ -38,6 +46,8 @@ export function createHttpApp(input: {
   readonly operatorOperations?: OperatorOperationsHttpRuntime;
   readonly participantEntry?: ParticipantEntryRuntime;
   readonly participantOperations?: ParticipantOperationsHttpRuntime;
+  readonly airtableWebhookIngress?: AirtableWebhookIngressRuntime;
+  readonly airtableIntegration?: AirtableIntegrationHttpRuntime;
   readonly requestSerialization?: HttpRequestSerializationBoundary;
 }) {
   const app = new OpenAPIHono();
@@ -242,6 +252,12 @@ export function createHttpApp(input: {
   }
   if (input.participantOperations) {
     app.route('/', createParticipantOperationsHttpAdapter(input.participantOperations));
+  }
+  if (input.airtableWebhookIngress) {
+    app.route('/', createAirtableWebhookHttpAdapter(input.airtableWebhookIngress));
+  }
+  if (input.airtableIntegration) {
+    app.route('/', createAirtableIntegrationHttpAdapter(input.airtableIntegration));
   }
 
   app.get('/health', (context) => context.json({ ok: true }));

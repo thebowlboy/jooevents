@@ -28,9 +28,12 @@ import {
   parseContractVersion,
   parseEventId,
   parseInstant,
+  parseIntegrationInboxReceiptId,
   parseInvocationId,
   parseMembershipId,
   parseUserId,
+  parseSourceConnectionId,
+  parseVerifierRevisionId,
   parseWorkspaceId
 } from '@jooevents/kernel';
 import {
@@ -180,15 +183,30 @@ function fixture() {
   return { sqlite, engagements };
 }
 
-function directEffect(fx: ReturnType<typeof fixture>) {
+function directEffect(fx: ReturnType<typeof fixture>, providerIngress = false) {
   let nextId = 0x700;
   let receiptId = 0x900;
   let correlationId = 0xa00;
   const next = () => uuid(nextId++);
   const authority: Parameters<typeof createEngagementDirectOperationModule>[0]['currentAuthority'] = {
     resolve(input) {
-      if (input.evidence.kind !== 'operator') {
+      if ((!providerIngress && input.evidence.kind !== 'operator')
+          || (providerIngress && input.evidence.kind !== 'verified_inbox')) {
         return Object.freeze({ kind: 'denied' as const, reason: 'lane_mismatch' as const });
+      }
+      if (providerIngress && input.evidence.kind === 'verified_inbox') {
+        return Object.freeze({ kind: 'authorized' as const, authority: Object.freeze({
+          actor: Object.freeze({ kind: 'verified_inbox_processing' as const,
+            inboxReceiptId: input.evidence.inboxReceiptId,
+            sourceConnectionId: parseSourceConnectionId(uuid(0xb01)) }),
+          principal: Object.freeze({ kind: 'verified_inbox_processing' as const,
+            inboxReceiptId: input.evidence.inboxReceiptId,
+            verifierRevisionId: parseVerifierRevisionId(uuid(0xb02)) }),
+          lane: input.lane, scope: input.scope,
+          grants: Object.freeze([Object.freeze({ kind: 'permission' as const, key: 'event.manage' })]),
+          evidenceIds: Object.freeze(['airtable.inbox.current']), authorityCitationIds: Object.freeze([]),
+          evaluatedAt: input.evaluatedAt
+        }) });
       }
       return Object.freeze({
         kind: 'authorized' as const,
@@ -243,13 +261,15 @@ function directEffect(fx: ReturnType<typeof fixture>) {
           verifierSha256: createHash('sha256').update(`engagement-key:${raw}`).digest('hex')
         });
       }
-    }
+    },
+    enableVerifiedInbox: providerIngress
   });
   const adapters = createSQLiteEffectDomainAdapterRegistry([
     createSQLiteEngagementDirectEffectDomainRegistration({
       sqlite: fx.sqlite,
       workspaceId,
       eventRelationships: createSQLiteEventSpineOperatorEventRelationshipSource()
+      , ...(providerIngress ? { verifiedInboxAttribution: { resolve: () => userId } } : {})
     })
   ]);
   const unitOfWork = new SQLiteEffectUnitOfWorkPort(fx.sqlite, adapters, {
@@ -272,10 +292,14 @@ function directEffect(fx: ReturnType<typeof fixture>) {
     const invocation = await composed.effectBuilder.build({
       operationName: ENGAGEMENT_CHANGE_OPERATION.name,
       operationVersion: ENGAGEMENT_CHANGE_OPERATION.version,
-      surface: 'operator_http',
+      surface: providerIngress ? 'provider_ingress' : 'operator_http',
       correlationId: uuid(correlationId++),
       businessInput,
-      verifiedEvidence: evidence,
+      verifiedEvidence: providerIngress ? Object.freeze({
+        kind: 'verified_inbox' as const, surface: 'provider_ingress' as const,
+        client: Object.freeze({ key: 'airtable.settle' }),
+        inboxReceiptId: parseIntegrationInboxReceiptId(uuid(0xb03))
+      }) : evidence,
       rawIdempotencyKey: key
     });
     return engagementChangeOperationResultSchema.parse(
@@ -479,6 +503,36 @@ describe('disposable SQLite engagement repository', () => {
 });
 
 describe('SQLite Engagement direct effect domain', () => {
+  test('verified Airtable inbox requests and withdraws cancellation through the same operation', async () => {
+    const fx = fixture();
+    try {
+      applySeed(fx);
+      const head = fx.engagements.readSessionPersonEngagement(scope, sessionId, personA)!;
+      const effect = directEffect(fx, true);
+      expect(await effect({
+        action: 'request_cancellation', engagementId: head.id,
+        expectedEngagementVersion: 1, requestedBy: 'organizer', note: 'Travel changed'
+      }, 'airtable-request')).toMatchObject({
+        kind: 'success', data: { action: 'request_cancellation', engagement: {
+          state: 'invited', version: 2, cancellationRequest: { note: 'Travel changed' }
+        } }
+      });
+      expect(await effect({
+        action: 'withdraw_cancellation', engagementId: head.id,
+        expectedEngagementVersion: 2
+      }, 'airtable-withdraw')).toMatchObject({
+        kind: 'success', data: { action: 'withdraw_cancellation', engagement: {
+          state: 'invited', version: 3, cancellationRequest: null
+        } }
+      });
+      expect(fx.sqlite.query<{ count: number }, []>(
+        "SELECT count(*) AS count FROM operation_log WHERE surface = 'provider_ingress'"
+      ).get()).toEqual({ count: 2 });
+    } finally {
+      fx.sqlite.close();
+    }
+  });
+
   test('one call commits the head and log atomically, replays, and key-conflicts changed bytes', async () => {
     const fx = fixture();
     try {

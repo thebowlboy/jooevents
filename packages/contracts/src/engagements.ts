@@ -252,15 +252,22 @@ export const engagementAcceptCancellationInputSchema = z.strictObject({
   ...respondActionGuards
 });
 
+export const engagementWithdrawCancellationInputSchema = z.strictObject({
+  action: z.literal('withdraw_cancellation'),
+  ...respondActionGuards
+});
+
 export const engagementAuthorInputSchema = z.discriminatedUnion('action', [
   engagementRecordConfirmationInputSchema,
   engagementDeclineInputSchema,
   engagementRequestCancellationInputSchema,
+  engagementWithdrawCancellationInputSchema,
   engagementAcceptCancellationInputSchema
 ]);
 
 export const engagementResponseActionSchema = z.enum([
-  'record_confirmation', 'decline', 'request_cancellation', 'accept_cancellation'
+  'record_confirmation', 'decline', 'request_cancellation', 'withdraw_cancellation',
+  'accept_cancellation'
 ]);
 
 const planningAttribution = {
@@ -333,6 +340,11 @@ export const engagementMutationPlanningInputSchema = z.discriminatedUnion('actio
   }),
   z.strictObject({
     action: z.literal('accept_cancellation'),
+    ...planningAttribution,
+    ...planningGuards
+  }),
+  z.strictObject({
+    action: z.literal('withdraw_cancellation'),
     ...planningAttribution,
     ...planningGuards
   })

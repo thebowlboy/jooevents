@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { createOperationRegistry } from '@jooevents/application';
+import { createOperationRegistry, getCompiledEffectOperation } from '@jooevents/application';
 import {
   parseContractVersion,
   parseEventId,
@@ -95,7 +95,8 @@ describe('Engagement operation modules', () => {
           verifierProfile: profile,
           verifierSha256: createHash('sha256').update(`engagement-key:${raw}`).digest('hex')
         })
-      }
+      },
+      enableVerifiedInbox: true
     });
     const registry = await createOperationRegistry(module.source);
     expect(registry.operatorHttpEffectBindings.map((binding) => ({
@@ -117,6 +118,14 @@ describe('Engagement operation modules', () => {
       .outcomes.map((outcome) => `${outcome.class}:${outcome.kind}`);
     expect(outcomeKeys).toContain('stale_revision:engagement.changed');
     expect(outcomeKeys).toContain('conflict:engagement.event_required');
+    expect(manifest?.enabledBindings.map((binding) => binding.surface)).toEqual(['operator_http']);
+    expect(JSON.stringify(manifest)).not.toContain('provider_ingress');
+    expect(getCompiledEffectOperation(
+      registry,
+      ENGAGEMENT_CHANGE_OPERATION.name,
+      ENGAGEMENT_CHANGE_OPERATION.version,
+      'provider_ingress'
+    )?.binding).toMatchObject({ surface: 'provider_ingress' });
   });
 
   test('refusal contribution accepts only the declared typed outcomes with matching details', () => {

@@ -17,6 +17,7 @@
 	import TemplatesPage from '$lib/features/templates/TemplatesPage.svelte';
 	import TasksPage from '$lib/features/tasks/TasksPage.svelte';
 	import AgentActionsPage from '$lib/features/agent-actions/AgentActionsPage.svelte';
+	import IntegrationsPage from '$lib/features/integrations/IntegrationsPage.svelte';
 	import { useLiveWorkspacePorts } from './live-workspace';
 	import { ReviewResolutionError } from './review-resolution';
 	import { isSettingsPage, settingsSectionOf, type OperatorPageId } from './operator-pages';
@@ -53,6 +54,8 @@
 		templates: 'Templates',
 		embeds: 'Embeds',
 		approvals: 'Approvals',
+		integrations: 'Integrations',
+		integrations_airtable: 'Integrations',
 		settings: 'Settings',
 		settings_event: 'Settings',
 		settings_program: 'Settings',
@@ -128,6 +131,8 @@
 	<CommunicationsReadinessPage port={ports.communicationsReadiness} />
 {:else if area === 'approvals'}
 	<AgentActionsPage port={ports.agentActions} />
+{:else if area === 'integrations' || area === 'integrations_airtable'}
+	<IntegrationsPage port={ports.integrations} detail={area === 'integrations_airtable'} />
 {:else if isSettingsPage(area)}
 	<SettingsPage port={ports.settings} section={settingsSectionOf(area)} />
 {:else}

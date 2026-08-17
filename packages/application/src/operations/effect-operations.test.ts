@@ -74,6 +74,8 @@ import {
 } from './registry';
 import type {
   DirectAuditedUnitOfWork,
+  DirectOperationFeatureContribution,
+  DirectOperationFeatureContributor,
   DirectOperationLogRecord,
   EffectOperationIdentity,
   EffectHandlerRegistration,
@@ -622,6 +624,7 @@ interface MemoryState {
   readonly directLogs: Map<string, DirectOperationLogRecord>;
   readonly domain: unknown[];
   readonly children: { readonly receiptId: string; readonly contribution: unknown }[];
+  readonly featureContributions: DirectOperationFeatureContribution[];
   readonly audits: Map<string, OperationAuditRecord>;
 }
 
@@ -631,6 +634,7 @@ function cloneState(state: MemoryState): MemoryState {
     directLogs: new Map(state.directLogs),
     domain: [...state.domain],
     children: [...state.children],
+    featureContributions: [...state.featureContributions],
     audits: new Map(state.audits)
   };
 }
@@ -639,7 +643,7 @@ class InMemoryEffectUnitOfWork implements EffectUnitOfWorkPort {
   readonly trace: string[] = [];
   readonly failure: FailurePoint | undefined;
   private state: MemoryState = {
-    receipts: new Map(), directLogs: new Map(), domain: [], children: [],
+    receipts: new Map(), directLogs: new Map(), domain: [], children: [], featureContributions: [],
     audits: new Map()
   };
   commits = 0;
@@ -661,6 +665,7 @@ class InMemoryEffectUnitOfWork implements EffectUnitOfWorkPort {
   get childCount() { return this.state.children.length; }
   get storedReceipts() { return [...this.state.receipts.values()]; }
   get storedChildren() { return [...this.state.children]; }
+  get storedFeatureContributions() { return [...this.state.featureContributions]; }
   get storedAudits() { return [...this.state.audits.values()]; }
 
   private fail(point: FailurePoint) {
@@ -782,6 +787,10 @@ class InMemoryEffectUnitOfWork implements EffectUnitOfWorkPort {
         const key = identityKey(record.receipt.identity);
         if (working.directLogs.has(key)) throw new Error('duplicate direct log');
         working.directLogs.set(key, record);
+      },
+      applyFeatureContribution(contribution) {
+        trace.push('feature_contribution');
+        working.featureContributions.push(structuredClone(contribution));
       }
     };
     try {
@@ -818,6 +827,7 @@ async function harness(options: {
   readonly directAudited?: boolean;
   readonly directAction?: string;
   readonly directSummariesByAction?: Readonly<Record<string, string>>;
+  readonly directFeatureContributor?: DirectOperationFeatureContributor;
 } = {}) {
   const observed = tracker();
   const registry = await createOperationRegistry(fixture({
@@ -847,6 +857,9 @@ async function harness(options: {
     executor: createEffectOperationExecutor({
       registry,
       unitOfWork: port,
+      ...(options.directFeatureContributor
+        ? { directFeatureContributor: options.directFeatureContributor }
+        : {}),
       newOperationLogId: () => receiptIds[nextReceipt++] ?? crypto.randomUUID()
     })
   };
@@ -2296,6 +2309,38 @@ describe('direct audited effect executor', () => {
     });
     expect(direct.port.domainCount).toBe(1);
     expect(direct.port.directLogCount).toBe(1);
+  });
+
+  test('commits one versioned feature contribution atomically after the operation log', async () => {
+    const direct = await harness({
+      effect: 'commit', handlerEffect: 'commit', directAudited: true,
+      directFeatureContributor: {
+        reference: { key: 'feature.airtable.projection-impact', version: 1 },
+        contribute: ({ operation, canonicalResult, scope, occurredAt }) => ({
+          schemaVersion: 1,
+          operation,
+          canonicalResult,
+          workspaceId: scope.workspaceId,
+          occurredAt
+        })
+      }
+    });
+    const result = await direct.executor.execute(await sealed({
+      builder: direct.builder, effect: 'commit', rawKey: 'feature-key', value: 'alpha'
+    }));
+    expect(result.kind).toBe('success');
+    expect(direct.port.trace).toEqual([
+      'direct_log_preflight', 'direct_begin', 'authority_recheck', 'direct_log_recheck',
+      'snapshot', 'domain', 'direct_log', 'feature_contribution', 'direct_commit'
+    ]);
+    expect(direct.port.storedFeatureContributions).toEqual([expect.objectContaining({
+      contributor: { key: 'feature.airtable.projection-impact', version: 1 },
+      operationLogId: receiptIds[0],
+      value: expect.objectContaining({
+        schemaVersion: 1,
+        operation: { name: 'note.commit', version: 1 }
+      })
+    })]);
   });
 
   test('resolves a safe history summary from the committed action and rolls back an unmapped action', async () => {

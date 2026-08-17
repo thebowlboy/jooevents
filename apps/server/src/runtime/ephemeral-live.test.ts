@@ -1268,8 +1268,8 @@ describe('ephemeral live Foundation server composition', () => {
     expect(runtime.database.installedSchemaArtifacts).toEqual([]);
     expect(runtime.database.retainedBaseline).toMatchObject({
       status: 'current',
-      coordinate: { schemaEpoch: 2, sequence: 5 },
-      migrationId: 'e2_0005_api_key_never_expire',
+      coordinate: { schemaEpoch: 2, sequence: 6 },
+      migrationId: 'e2_0006_airtable_sync',
       databaseClass: 'ephemeral'
     });
     expect(runtime.database.sqlite.query<{ readonly name: string }, []>(`

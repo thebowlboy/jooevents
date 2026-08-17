@@ -71,6 +71,7 @@ describe('operator operations HTTP composition', () => {
       '/api/auth', '/api/auth/session',
       '/api/entry', '/api/entry/admission',
       '/api/me/access-context', '/api/openapi.json',
+      '/api/integrations/airtable', '/api/integrations/airtable/base',
       '/api/operations/manifest', '/api/operations/manifest/v2',
       '/api/public', '/api/public/forms/example'
     ]) {

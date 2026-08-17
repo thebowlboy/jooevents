@@ -420,6 +420,13 @@ export interface RegisteredJobEffectBindingDefinition {
   readonly projection: VersionedDefinitionRef;
 }
 
+/** Internal verified-inbox binding; never published as an HTTP/tool surface. */
+export interface VerifiedInboxEffectBindingDefinition {
+  readonly surface: 'provider_ingress';
+  readonly lane: 'verified_inbox';
+  readonly projection: VersionedDefinitionRef;
+}
+
 export interface OrdinaryEffectOperationDefinition {
   readonly name: string;
   readonly version: number;
@@ -486,6 +493,7 @@ export interface OrdinaryEffectOperationDefinition {
   readonly bindings: readonly EffectOperationBindingDefinition[];
   readonly registeredConsumerBindings?: readonly RegisteredConsumerEffectBindingDefinition[];
   readonly registeredJobBindings?: readonly RegisteredJobEffectBindingDefinition[];
+  readonly verifiedInboxBindings?: readonly VerifiedInboxEffectBindingDefinition[];
 }
 
 export interface OperationRegistrySource extends ReadOperationRegistrySource {
@@ -907,6 +915,31 @@ export interface EffectUnitOfWorkPort {
   ): Promise<Value>;
 }
 
+/**
+ * One optional, versioned feature contribution produced from a successful direct
+ * operation. The contributor is synchronous and capability-free: it can identify
+ * affected stable subjects, but it cannot perform reads, writes, or external I/O.
+ */
+export interface DirectOperationFeatureContributor {
+  readonly reference: VersionedDefinitionRef;
+  contribute(input: Readonly<{
+    operation: Readonly<{ readonly name: string; readonly version: number }>;
+    businessInput: unknown;
+    canonicalResult: unknown;
+    scope: ResolvedScope;
+    occurredAt: Instant;
+    provenance?: InvocationProvenance;
+    /** Trusted process-local feature material attached after invocation sealing. */
+    featureContext?: unknown;
+  }>): unknown | undefined;
+}
+
+export interface DirectOperationFeatureContribution {
+  readonly contributor: VersionedDefinitionRef;
+  readonly operationLogId: string;
+  readonly value: unknown;
+}
+
 export interface DirectAuditedUnitOfWork {
   /** Reloads exact current authority through the transaction-bound adapter view. */
   recheckCurrentAuthority(
@@ -925,6 +958,13 @@ export interface DirectAuditedUnitOfWork {
     contribution: unknown
   ): ReturnTypeOrPromise<void>;
   insertOperationLog(record: DirectOperationLogRecord): ReturnTypeOrPromise<void>;
+  /**
+   * Feature-owned current-state discovery committed beside domain state and the
+   * operation log. Absent unless this runtime has explicitly mounted a contributor.
+   */
+  applyFeatureContribution?(
+    contribution: DirectOperationFeatureContribution
+  ): ReturnTypeOrPromise<void>;
 }
 
 export interface EffectOperationExecutor {

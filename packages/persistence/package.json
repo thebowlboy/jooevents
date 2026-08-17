@@ -62,6 +62,8 @@
     "./testing/event-spine": "./src/sqlite/event-spine.ts",
     "./testing/reliability-consumer-trial": "./src/sqlite/reliability-consumer-trial.ts",
     "./testing/model-durability-trial": "./src/sqlite/model-durability-trial.ts",
+    "./airtable-sync": "./src/sqlite/airtable-sync.ts",
+    "./sqlite-secret-store": "./src/sqlite/sqlite-secret-store.ts",
     "./decision": "./src/sqlite/decision.ts",
     "./decision-direct-effect-domain": "./src/sqlite/decision-direct-effect-domain.ts",
     "./intake-direct-entry-effect-domain": "./src/sqlite/intake-direct-entry-effect-domain.ts",
@@ -86,6 +88,8 @@
   },
   "dependencies": {
     "@jooevents/application": "workspace:*",
+    "@jooevents/airtable": "workspace:*",
+    "@jooevents/airtable-sync": "workspace:*",
     "@jooevents/communication-operations": "workspace:*",
     "@jooevents/communications": "workspace:*",
     "@jooevents/contracts": "workspace:*",

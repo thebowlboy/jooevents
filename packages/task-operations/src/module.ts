@@ -294,6 +294,8 @@ export function createTaskMutationOperationModule(input: SharedTaskOperationInpu
   readonly requestHashSealer: RequestHashSealer;
   readonly idempotencyCredentialProfile: VersionedKeyProfileRef;
   readonly idempotencyCredentialSealer: IdempotencyCredentialSealer;
+  /** Enabled only when a verified-inbox runtime mounts the finite Airtable allowlist. */
+  readonly enableVerifiedInbox?: boolean;
 }): OperationRegistryModule {
   const workspaceId = parseWorkspaceId(input.workspaceId);
   if (input.managePolicy.key !== TASK_MANAGE_ACCESS_POLICY.key
@@ -321,9 +323,13 @@ export function createTaskMutationOperationModule(input: SharedTaskOperationInpu
   const lane = parseOperationAccessLane({
     kind: 'operator', surface: 'operator_http', policy: input.managePolicy
   });
+  const inboundLane = input.enableVerifiedInbox ? parseOperationAccessLane({
+    kind: 'verified_inbox', surface: 'provider_ingress', policy: input.managePolicy
+  }) : undefined;
+  const lanes = inboundLane ? [lane, inboundLane] : [lane];
   const policy = autonomy(refs.autonomy, TASK_MUTATION_OPERATION);
   const context = createEffectInvocationContextBuilder({
-    reference: refs.context, operation: TASK_MUTATION_OPERATION, effect: 'commit', lanes: [lane],
+    reference: refs.context, operation: TASK_MUTATION_OPERATION, effect: 'commit', lanes,
     scopeResolver: eventScope(workspaceId, input.currentEvent), authorityResolver: input.currentAuthority,
     clock: input.clock, newInvocationId: input.ids.newInvocationId,
     authorityPrincipalKeyProfile: input.authorityPrincipalKeyProfile,
@@ -442,7 +448,7 @@ export function createTaskMutationOperationModule(input: SharedTaskOperationInpu
           { class: 'conflict' as const, kind: 'operation.in_progress', retryable: true, detailSchema: schemas.null },
           ...autonomyInterventionOutcomeDeclarations(schemas.null)
         ],
-        accessLanes: [lane], contextBuilder: refs.context,
+        accessLanes: lanes, contextBuilder: refs.context,
         handlerCapability: TASK_MUTATION_HANDLER_CAPABILITY, handler: refs.handler,
         audit: { mode: 'required' as const, target: refs.audit },
         idempotency: {
@@ -468,7 +474,11 @@ export function createTaskMutationOperationModule(input: SharedTaskOperationInpu
           surface: 'operator_http' as const, method: 'POST' as const,
           path: TASK_MUTATION_PATH, input: 'body' as const,
           browserResumption: { kind: 'none' as const }, projection: refs.projection
-        }]
+        }],
+        ...(inboundLane ? { verifiedInboxBindings: [{
+          surface: 'provider_ingress' as const, lane: 'verified_inbox' as const,
+          projection: refs.projection
+        }] } : {})
       }]
     })
   });

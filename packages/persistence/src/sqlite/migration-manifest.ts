@@ -87,6 +87,12 @@ const apiKeyNeverExpire = Object.freeze({
   sequence: 5
 });
 
+const airtableSync = Object.freeze({
+  migrationId: 'e2_0006_airtable_sync',
+  schemaEpoch: 2,
+  sequence: 6
+});
+
 /** Exact public epoch-2 baseline plus the sole known retained epoch-1 lineage. */
 export const SQLITE_MIGRATION_MANIFEST: SQLiteMigrationManifest = Object.freeze({
   formatVersion: 1,
@@ -152,14 +158,24 @@ export const SQLITE_MIGRATION_MANIFEST: SQLiteMigrationManifest = Object.freeze(
       dependsOn: apiKeyPrefix,
       expectedBeforeApplicationFingerprint: '82bcf31c9b256cd059cdc44cbdb6ca8ae4de15d38f6aacd5856cf04438100dd0',
       expectedAfterApplicationFingerprint: '3ad3833b3b387f16ec2e04c72a611ba3ea27c1ca7b4c407697e369ef5d4d7830'
+    }),
+    Object.freeze({
+      ...airtableSync,
+      dialect: 'sqlite' as const,
+      artifact: new URL('../../migrations/sqlite/e2_0006_airtable_sync.sql', import.meta.url),
+      checksumSha256: '6c40cebf88f6577654234fd822ad608927d739502f8c0808546f4d76c2b11c65',
+      atomicity: 'transactional' as const,
+      dependsOn: apiKeyNeverExpire,
+      expectedBeforeApplicationFingerprint: '3ad3833b3b387f16ec2e04c72a611ba3ea27c1ca7b4c407697e369ef5d4d7830',
+      expectedAfterApplicationFingerprint: 'fc5d0a46bd51e3b4671172da707844af9e63039c6d1f829373d9d7881dedfa31'
     })
   ]) as readonly [SQLiteMigrationManifestEntry, ...SQLiteMigrationManifestEntry[]],
   expectedEmptyApplicationFingerprint: 'e3ded6858faee915d966f4bcaf5b768070aaaa4d5f1021ac04c713440106b89d',
-  expectedCurrentApplicationFingerprint: '3ad3833b3b387f16ec2e04c72a611ba3ea27c1ca7b4c407697e369ef5d4d7830',
-  expectedCurrentFullFingerprint: '38807d08caef0f344ecf5e9c8c29ef11c1202f6539c8ec60c3166a248093537a',
+  expectedCurrentApplicationFingerprint: 'fc5d0a46bd51e3b4671172da707844af9e63039c6d1f829373d9d7881dedfa31',
+  expectedCurrentFullFingerprint: '93c2bd560351a6e8607d4c07ae926376b6959c879c8908903011efd8348bb03f',
   dictionary: Object.freeze({
-    artifact: new URL('../../migrations/sqlite/checkpoints/e2_0005_api_key_never_expire.schema.json', import.meta.url),
-    checksumSha256: 'e260ecec3c666dd310c5210faa622553896e068cc3ec15fcbbdc46db13a2ab0a'
+    artifact: new URL('../../migrations/sqlite/checkpoints/e2_0006_airtable_sync.schema.json', import.meta.url),
+    checksumSha256: '5284ceabd4da1eeb93bec0fe39ce7d99d790aa320a3ee7070705a3cc4646027e'
   }),
   acceptedPredecessorLineages: Object.freeze([Object.freeze({
     transitionId: 'e1_identity_access_to_e2_foundation',

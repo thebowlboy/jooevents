@@ -8,6 +8,7 @@ import type {
   EffectInvocationBuilderOptions,
   EffectOperationExecutor,
   EffectUnitOfWorkPort,
+  DirectOperationFeatureContributor,
   OperationRegistry,
   OperationRegistrySource,
   ReadOperationExecutor,
@@ -32,6 +33,7 @@ export interface CreateApplicationOperationRuntimeInput {
   readonly unitOfWork: EffectUnitOfWorkPort;
   readonly effectBuilder?: EffectInvocationBuilderOptions;
   readonly newOperationLogId?: () => string;
+  readonly directFeatureContributor?: DirectOperationFeatureContributor;
 }
 
 const moduleIdPattern = /^[a-z][a-z0-9.-]{0,127}$/;
@@ -88,7 +90,10 @@ export async function createApplicationOperationRuntime(
     read: input.read,
     unitOfWork: input.unitOfWork,
     ...(input.effectBuilder ? { effectBuilder: input.effectBuilder } : {}),
-    ...(input.newOperationLogId ? { newOperationLogId: input.newOperationLogId } : {})
+    ...(input.newOperationLogId ? { newOperationLogId: input.newOperationLogId } : {}),
+    ...(input.directFeatureContributor
+      ? { directFeatureContributor: input.directFeatureContributor }
+      : {})
   });
 }
 

@@ -13,6 +13,7 @@ import {
 	FileText,
 	FolderOpen,
 	Inbox,
+	Plug,
 	LayoutDashboard,
 	LayoutTemplate,
 	ListChecks,
@@ -116,6 +117,13 @@ export const settingsItem: NavItem = {
 	icon: Settings
 };
 
+export const integrationsItem: NavItem = {
+	key: 'integrations',
+	label: 'Integrations',
+	href: '/app/integrations',
+	icon: Plug
+};
+
 export const approvalsItem: NavItem = {
 	key: 'approvals',
 	label: 'Approvals',
@@ -133,6 +141,7 @@ const allItems = [
 	pulseItem,
 	...navGroups.flatMap((group) => group.items),
 	approvalsItem,
+	integrationsItem,
 	settingsItem
 ];
 
@@ -177,6 +186,7 @@ export function navModel(viewer: WorkspaceNavigationViewer): NavModel {
 			overview: overviewItem,
 			pulse: pulseItem,
 			groups: navGroups,
+			integrations: integrationsItem,
 			// Approvals stays off the rail until the external agent lane is
 			// activated; the route remains reachable by direct URL and keeps
 			// its destination title through allItems.

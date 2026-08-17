@@ -104,8 +104,8 @@ describe('configured SQLite auth runtime', () => {
     runtimes.push(first);
     expect(first.database.migration).toMatchObject({
       status: 'current',
-      coordinate: { schemaEpoch: 2, sequence: 5 },
-      migrationId: 'e2_0005_api_key_never_expire',
+      coordinate: { schemaEpoch: 2, sequence: 6 },
+      migrationId: 'e2_0006_airtable_sync',
       databaseClass: 'retained_development',
       databaseId,
       schemaFingerprint: SQLITE_MIGRATION_MANIFEST.expectedCurrentFullFingerprint

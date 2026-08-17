@@ -32,6 +32,7 @@ import { SQLiteDeadlineRepository } from './deadline';
 import { SQLiteEventSpineRepository } from './event-spine';
 import type { SQLiteOperatorEventRelationshipSource } from './operator-authority-repositories';
 import { SQLiteTaskRepository } from './tasks';
+import type { SQLiteVerifiedInboxAttributionResolver } from './verified-inbox-attribution';
 
 function sameRef(left: { readonly key: string; readonly version: number }, right: { readonly key: string; readonly version: number }) {
   return left.key === right.key && left.version === right.version;
@@ -70,6 +71,7 @@ export class SQLiteTaskDirectEffectDomainAdapter implements SQLiteEffectDomainAd
     readonly workspaceId: WorkspaceId;
     readonly eventRelationships: SQLiteOperatorEventRelationshipSource;
     readonly ids: SQLiteTaskDirectIds;
+    readonly verifiedInboxAttribution?: SQLiteVerifiedInboxAttributionResolver;
   }) {
     this.#workspaceId = parseWorkspaceId(input.workspaceId);
     this.#tasks = new SQLiteTaskRepository(input.sqlite);
@@ -85,34 +87,50 @@ export class SQLiteTaskDirectEffectDomainAdapter implements SQLiteEffectDomainAd
     if (!sameRef(capability, TASK_MUTATION_HANDLER_CAPABILITY)) throw new TypeError('task_direct_capability_mismatch');
     if (context.operation.name !== TASK_MUTATION_OPERATION.name
         || context.operation.version !== TASK_MUTATION_OPERATION.version
-        || context.operation.effect !== 'commit' || context.surface !== 'operator_http'
+        || context.operation.effect !== 'commit'
+        || (context.surface !== 'operator_http' && context.surface !== 'provider_ingress')
         || context.scope.workspaceId !== this.#workspaceId || !exactSubjects(context)) {
       throw new TypeError('task_direct_scope_mismatch');
     }
     const authority = resolveEffectInvocationAuthorityRecheckAttribution(context, authorityRecheck);
     const evaluatedAt = resolveEffectInvocationCurrentAuthorityRecheckTime(context, authorityRecheck);
-    if (authority.actor.kind !== 'workspace_user' || authority.principal.kind !== 'workspace_user'
-        || authority.actor.userId !== authority.principal.userId
-        || context.actor.kind !== 'workspace_user' || context.actor.userId !== authority.actor.userId
-        || authority.lane.kind !== 'operator' || authority.lane.surface !== 'operator_http'
+    const operator = authority.actor.kind === 'workspace_user'
+      && authority.principal.kind === 'workspace_user'
+      && authority.actor.userId === authority.principal.userId
+      && context.actor.kind === 'workspace_user' && context.actor.userId === authority.actor.userId
+      && authority.lane.kind === 'operator' && authority.lane.surface === 'operator_http';
+    const inbox = authority.actor.kind === 'verified_inbox_processing'
+      && authority.principal.kind === 'verified_inbox_processing'
+      && context.actor.kind === 'verified_inbox_processing'
+      && authority.actor.inboxReceiptId === authority.principal.inboxReceiptId
+      && context.actor.inboxReceiptId === authority.actor.inboxReceiptId
+      && authority.lane.kind === 'verified_inbox' && authority.lane.surface === 'provider_ingress';
+    if ((!operator && !inbox)
         || !sameRef(authority.lane.policy, TASK_MANAGE_ACCESS_POLICY)
         || !authority.grants.some((grant) => grant.kind === 'permission' && grant.key === TASK_MANAGE_PERMISSION_ID)) {
       throw new TypeError('task_direct_authority_mismatch');
     }
     const eventId = context.scope.eventId!;
+    const actorUserId = authority.actor.kind === 'workspace_user'
+      ? parseUserId(authority.actor.userId)
+      : authority.actor.kind === 'verified_inbox_processing'
+        ? this.input.verifiedInboxAttribution?.resolve({
+          sourceConnectionId: authority.actor.sourceConnectionId,
+          workspaceId: this.#workspaceId, eventId, evaluatedAt
+        }) : undefined;
+    if (!actorUserId) throw new TypeError('task_direct_verified_inbox_attribution_missing');
     const current = new SQLiteEventSpineRepository(this.input.sqlite)
       .readCurrentEventState(this.#workspaceId);
     const relationship = this.input.eventRelationships.validateEvent({
       sqlite: this.input.sqlite,
       workspaceId: this.#workspaceId,
       eventId,
-      userId: parseUserId(authority.actor.userId),
+      userId: actorUserId,
       evaluatedAt
     });
     if (relationship.kind !== 'valid' || current?.currentEvent?.id !== eventId) {
       throw new TypeError('task_direct_current_event_mismatch');
     }
-    const actorUserId = parseUserId(authority.actor.userId);
     const scope = { workspaceId: this.#workspaceId, eventId };
     return sealTaskDirectPreparation({ capability, context, preparation: {
       prepare: ({ businessInput, context: received }) => {

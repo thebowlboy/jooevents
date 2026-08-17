@@ -118,6 +118,17 @@ function respond(
       version: before.version + 1
     });
   }
+  if (input.action === 'withdraw_cancellation') {
+    if (before.state !== 'invited' && before.state !== 'confirmed') {
+      throw new EngagementPlanningError('invalid_transition', engagementId);
+    }
+    if (before.cancellationRequest === null) {
+      throw new EngagementPlanningError('cancellation_not_requested', engagementId);
+    }
+    return parseEngagementHead({
+      ...before, cancellationRequest: null, version: before.version + 1
+    });
+  }
   if (before.state !== 'invited' && before.state !== 'confirmed') {
     throw new EngagementPlanningError('invalid_transition', engagementId);
   }

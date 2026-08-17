@@ -9,6 +9,7 @@ import {
   isSealedOperationAuditRecord,
   type EffectAuthorityRecheckSource,
   type DirectAuditedUnitOfWork,
+  type DirectOperationFeatureContribution,
   type DirectOperationLogRecord,
   type SealedEffectAuthorityRecheckResult,
   type ShortOperationAuditRecord,
@@ -239,6 +240,16 @@ export interface SQLiteEffectAuditHooks {
 
 export type SQLiteTrialEffectAuditHooks = SQLiteEffectAuditHooks;
 
+/**
+ * A feature-owned transaction contribution. `apply` runs inside the canonical
+ * mutation transaction; post-commit wake publication belongs in the optional hook.
+ */
+export interface SQLiteOperationFeatureContributionAdapter {
+  apply(contribution: DirectOperationFeatureContribution): void | Promise<void>;
+  afterUnitOfWorkCommitted?(): void | Promise<void>;
+  afterUnitOfWorkFinished?(outcome: { readonly committed: boolean }): void | Promise<void>;
+}
+
 interface ReceiptRow {
   readonly id: string;
   readonly scope_partition_key: string;
@@ -341,7 +352,8 @@ class SQLiteEffectUnitOfWorkBase implements EffectUnitOfWorkPort {
     private readonly sqlite: Database,
     private readonly resolveDomain: (capability: VersionedDefinitionRef) => SQLiteEffectDomainAdapter,
     authorityRecheck: EffectAuthorityRecheckSource,
-    private readonly auditHooks: SQLiteEffectAuditHooks = {}
+    private readonly auditHooks: SQLiteEffectAuditHooks = {},
+    private readonly featureContribution?: SQLiteOperationFeatureContributionAdapter
   ) {
     if (!authorityRecheck
       || typeof authorityRecheck.resolveAuthority !== 'function'
@@ -628,7 +640,13 @@ class SQLiteEffectUnitOfWorkBase implements EffectUnitOfWorkPort {
           this.#agentActionStep?.stepId ?? record.actionStepId ?? null
         );
         this.completeApprovedAgentActionStep(record.receipt.ref.id);
-      }
+      },
+      ...(this.featureContribution
+        ? {
+            applyFeatureContribution: (contribution: DirectOperationFeatureContribution) =>
+              this.featureContribution!.apply(contribution)
+          }
+        : {})
     });
 
     try {
@@ -638,6 +656,7 @@ class SQLiteEffectUnitOfWorkBase implements EffectUnitOfWorkPort {
       this.sqlite.exec('COMMIT;');
       committed = true;
       await selectedDomain?.adapter.afterUnitOfWorkCommitted?.();
+      await this.featureContribution?.afterUnitOfWorkCommitted?.();
       return result;
     } catch (error) {
       if (beganOwnTransaction && this.sqlite.inTransaction) this.sqlite.exec('ROLLBACK;');
@@ -646,7 +665,11 @@ class SQLiteEffectUnitOfWorkBase implements EffectUnitOfWorkPort {
       try {
         await selectedDomain?.adapter.afterUnitOfWorkFinished?.({ committed });
       } finally {
-        this.#active = false;
+        try {
+          await this.featureContribution?.afterUnitOfWorkFinished?.({ committed });
+        } finally {
+          this.#active = false;
+        }
       }
     }
   }
@@ -657,7 +680,8 @@ export class SQLiteEffectUnitOfWorkPort extends SQLiteEffectUnitOfWorkBase {
     sqlite: Database,
     registry: SQLiteEffectDomainAdapterRegistry,
     authorityRecheck: EffectAuthorityRecheckSource,
-    auditHooks: SQLiteEffectAuditHooks = {}
+    auditHooks: SQLiteEffectAuditHooks = {},
+    featureContribution?: SQLiteOperationFeatureContributionAdapter
   ) {
     if (!registeredEffectDomains.has(registry)) {
       throw new TypeError('sqlite_effect_domain_adapter_registry_unsealed');
@@ -666,7 +690,8 @@ export class SQLiteEffectUnitOfWorkPort extends SQLiteEffectUnitOfWorkBase {
       sqlite,
       (capability) => resolveRegisteredEffectDomain(registry, capability),
       authorityRecheck,
-      auditHooks
+      auditHooks,
+      featureContribution
     );
   }
 
@@ -677,9 +702,10 @@ export class SQLiteTrialEffectUnitOfWorkPort extends SQLiteEffectUnitOfWorkBase 
     sqlite: Database,
     domain: SQLiteTrialEffectDomainAdapter,
     authorityRecheck: EffectAuthorityRecheckSource,
-    auditHooks: SQLiteTrialEffectAuditHooks = {}
+    auditHooks: SQLiteTrialEffectAuditHooks = {},
+    featureContribution?: SQLiteOperationFeatureContributionAdapter
   ) {
     const boundDomain = bindDomainAdapter(domain);
-    super(sqlite, () => boundDomain, authorityRecheck, auditHooks);
+    super(sqlite, () => boundDomain, authorityRecheck, auditHooks, featureContribution);
   }
 }

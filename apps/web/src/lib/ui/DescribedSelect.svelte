@@ -215,6 +215,7 @@
 		class="ui-control dsel__trigger"
 		role="combobox"
 		aria-haspopup="listbox"
+		aria-label={label}
 		aria-expanded={open}
 		aria-controls={listboxId}
 		aria-activedescendant={open && activeOption ? `${uid}-option-${activeIndex}` : undefined}

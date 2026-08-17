@@ -259,6 +259,8 @@ export interface CreateEngagementDirectOperationModuleInput {
   readonly requestHashSealer: RequestHashSealer;
   readonly idempotencyCredentialProfile: VersionedKeyProfileRef;
   readonly idempotencyCredentialSealer: IdempotencyCredentialSealer;
+  /** Enabled only when a verified-inbox runtime mounts the finite Airtable allowlist. */
+  readonly enableVerifiedInbox?: boolean;
 }
 
 function authorityOutcome(reason: CurrentAuthorityDenialReason): StructuredOutcome {
@@ -283,6 +285,10 @@ export function createEngagementDirectOperationModule(
   const lane = parseOperationAccessLane({
     kind: 'operator', surface: 'operator_http', policy: input.managePolicy
   });
+  const inboundLane = input.enableVerifiedInbox ? parseOperationAccessLane({
+    kind: 'verified_inbox', surface: 'provider_ingress', policy: input.managePolicy
+  }) : undefined;
+  const lanes = inboundLane ? [lane, inboundLane] : [lane];
   const autonomy = createOperationAutonomyPolicy({
     definition: refs.autonomy,
     operation: ENGAGEMENT_CHANGE_OPERATION,
@@ -308,7 +314,7 @@ export function createEngagementDirectOperationModule(
     reference: refs.context,
     operation: ENGAGEMENT_CHANGE_OPERATION,
     effect: 'commit',
-    lanes: [lane],
+    lanes,
     scopeResolver: currentEventScopeResolver({ workspaceId, source: input.currentEvent }),
     authorityResolver: input.currentAuthority,
     clock: input.clock,
@@ -497,7 +503,7 @@ export function createEngagementDirectOperationModule(
           },
           ...autonomyInterventionOutcomeDeclarations(schemas.nullDetail)
         ],
-        accessLanes: [lane],
+        accessLanes: lanes,
         contextBuilder: refs.context,
         handlerCapability: ENGAGEMENT_DIRECT_HANDLER_CAPABILITY,
         handler: refs.handler,
@@ -519,6 +525,7 @@ export function createEngagementDirectOperationModule(
             record_confirmation: 'Recorded a speaker confirmation',
             decline: 'Recorded a speaker decline',
             request_cancellation: 'Requested a speaker cancellation',
+            withdraw_cancellation: 'Withdrew a speaker cancellation request',
             accept_cancellation: 'Accepted a speaker cancellation'
           }) }
         },
@@ -529,7 +536,11 @@ export function createEngagementDirectOperationModule(
           input: 'body' as const,
           browserResumption: { kind: 'none' as const },
           projection: refs.projection
-        }]
+        }],
+        ...(inboundLane ? { verifiedInboxBindings: [{
+          surface: 'provider_ingress' as const, lane: 'verified_inbox' as const,
+          projection: refs.projection
+        }] } : {})
       }])
     })
   });

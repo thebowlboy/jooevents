@@ -95,6 +95,15 @@ export const statusTone: Record<StatusIconKey, StatusTone> = {
 	blocking: 'negative',
 	warning: 'caution',
 
+	// Airtable live-sync lifecycle.
+	syncCurrent: 'positive',
+	syncPending: 'info',
+	syncNeedsReview: 'caution',
+	syncDelayed: 'caution',
+	syncPaused: 'neutral',
+	syncReconnect: 'negative',
+	syncConflict: 'negative',
+
 	// Attention-rail priority.
 	actNow: 'negative',
 	soon: 'caution',

@@ -24,6 +24,8 @@ export const operatorPageIds = Object.freeze([
 	'templates',
 	'embeds',
 	'approvals',
+	'integrations',
+	'integrations_airtable',
 	/*
 	 * Settings is a group of sections, each its own address. The group id stays
 	 * for `/app/settings` itself, which opens on the first section.
