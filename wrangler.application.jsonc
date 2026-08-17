@@ -55,7 +55,11 @@
     "JOOEVENTS_DEPLOYMENT_ENVIRONMENT": "local",
     "JOOEVENTS_D1_RELEASE_FLOOR": "sqlite-e2-s6"
   },
-  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.01 }
+  },
   "env": {
     "staging": {
       "name": "jooevents-application-staging",

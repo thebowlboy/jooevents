@@ -16,6 +16,20 @@ export type StreamingSha256Factory = () => StreamingSha256;
 
 const R2_MULTIPART_PART_BYTES = 5 * 1024 * 1024;
 
+async function* readR2Body(body: ReadableStream<Uint8Array>): AsyncIterable<Uint8Array> {
+  const reader = body.getReader();
+  try {
+    while (true) {
+      const result = await reader.read();
+      if (result.done) return;
+      if (!(result.value instanceof Uint8Array)) throw new TypeError('file_blob_chunk_invalid');
+      yield result.value;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 function createWorkerdSha256(): StreamingSha256 {
   const digest = createHash('sha256');
   let finished = false;
@@ -121,7 +135,7 @@ export function createR2FileBlobStore(input: {
       return Object.freeze({
         kind: 'found',
         byteSize: object.size,
-        bytes: object.body as unknown as AsyncIterable<Uint8Array>
+        bytes: readR2Body(object.body)
       });
     },
 
