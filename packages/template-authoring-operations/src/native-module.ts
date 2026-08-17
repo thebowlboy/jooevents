@@ -42,7 +42,7 @@ import {
   type VersionedAccessPolicyRef,
   type VersionedKeyProfileRef
 } from '@jooevents/identity-access';
-import { parseEventId, parseInstant, parseWorkspaceId, type Clock, type InvocationId, type WorkspaceId } from '@jooevents/kernel';
+import { parseContractVersion, parseEventId, parseInstant, parseWorkspaceId, type Clock, type InvocationId, type WorkspaceId } from '@jooevents/kernel';
 import { z } from 'zod';
 import { createTemplateArtifactNativeHandler } from './native-preparation';
 export const TEMPLATE_ARTIFACT_MUTATION_DRAFT_OPERATION = Object.freeze({
@@ -53,6 +53,24 @@ export const TEMPLATE_ARTIFACT_NATIVE_DRAFT_HANDLER_CAPABILITY = ref('capability
 export const TEMPLATE_ARTIFACT_NATIVE_PUBLISH_HANDLER_CAPABILITY = ref('capability.template.artifact.publish');
 export const TEMPLATE_ARTIFACT_NATIVE_DRAFT_REQUEST_HASH_PROFILE = ref('request-hash.template.artifact.review-draft');
 export const TEMPLATE_ARTIFACT_NATIVE_PUBLISH_REQUEST_HASH_PROFILE = ref('request-hash.template.artifact.publish');
+export const TEMPLATE_ARTIFACT_OPERATION_KEY_PROFILES = Object.freeze({
+  authorityPrincipal: Object.freeze({
+    key: 'key-profile.template-artifact.operator-principal',
+    version: parseContractVersion(1)
+  }),
+  scopePartition: Object.freeze({
+    key: 'key-profile.template-artifact.workspace-scope',
+    version: parseContractVersion(1)
+  }),
+  requestCanonicalization: Object.freeze({
+    key: 'key-profile.template-artifact.request-canonicalization',
+    version: parseContractVersion(1)
+  }),
+  idempotencyCredential: Object.freeze({
+    key: 'key-profile.template-artifact.idempotency-credential',
+    version: parseContractVersion(1)
+  })
+});
 
 const nullSchema = z.null();
 const staleSchema = z.strictObject({
@@ -124,10 +142,16 @@ export function createTemplateArtifactNativeOperationModule(input: CreateTemplat
   if (input.policy.key !== EVENT_MANAGE_ACCESS_POLICY.key || input.policy.version !== EVENT_MANAGE_ACCESS_POLICY.version) throw new TypeError('template_artifact_native_policy_mismatch');
   const workspaceId = parseWorkspaceId(input.workspaceId);
   const lane = parseOperationAccessLane({ kind: 'operator', surface: 'operator_http', policy: input.policy });
-  const scope: InvocationScopeResolver = Object.freeze({ async resolve() {
+  const scope: InvocationScopeResolver = Object.freeze({ async resolve(
+    resolution: Parameters<InvocationScopeResolver['resolve']>[0]
+  ) {
+    const { operation, businessInput } = resolution;
     const current = await input.currentEvent.resolveCurrentEvent(workspaceId);
     const eventId = current.eventId ? parseEventId(current.eventId) : undefined;
-    return Object.freeze({ workspaceId, ...(eventId ? { eventId } : {}), subjects: Object.freeze(eventId ? [{ kind: 'workspace' as const, id: workspaceId }, { kind: 'event' as const, id: eventId }] : [{ kind: 'workspace' as const, id: workspaceId }]), resolutionEvidenceIds: Object.freeze([...new Set(current.evidenceIds)].sort()) });
+    const targetEvidence = operation.name === TEMPLATE_ARTIFACT_MUTATION_DRAFT_OPERATION.name
+      ? `template-artifact-request:${templateArtifactMutationInputSchema.parse(businessInput).artifactId}`
+      : `template-review-draft-request:${templateArtifactPublishInputSchema.parse(businessInput).draftId}`;
+    return Object.freeze({ workspaceId, ...(eventId ? { eventId } : {}), subjects: Object.freeze(eventId ? [{ kind: 'workspace' as const, id: workspaceId }, { kind: 'event' as const, id: eventId }] : [{ kind: 'workspace' as const, id: workspaceId }]), resolutionEvidenceIds: Object.freeze([...new Set([...current.evidenceIds, targetEvidence])].sort()) });
   } });
   const entries = [
     { key: 'draft' as const, operation: TEMPLATE_ARTIFACT_MUTATION_DRAFT_OPERATION, effect: 'draft' as const, capability: TEMPLATE_ARTIFACT_NATIVE_DRAFT_HANDLER_CAPABILITY, hash: TEMPLATE_ARTIFACT_NATIVE_DRAFT_REQUEST_HASH_PROFILE, sealer: input.draftRequestHashSealer, inputRef: schemas.draftInput, inputSchema: templateArtifactMutationInputSchema, contributionRef: schemas.draftContribution, contributionSchema: templateArtifactNativeDraftContributionSchema, canonicalRef: schemas.draftCanonical, canonicalSchema: templateArtifactReviewDraftCanonicalResultSchema, projectedRef: schemas.draftProjected, projectedSchema: templateArtifactReviewDraftOperationResultSchema, path: '/api/events/current/template-artifacts/drafts', risk: 'normal' as const },

@@ -313,6 +313,7 @@ import {
 import {
   TEMPLATE_ARTIFACT_NATIVE_DRAFT_REQUEST_HASH_PROFILE,
   TEMPLATE_ARTIFACT_NATIVE_PUBLISH_REQUEST_HASH_PROFILE,
+  TEMPLATE_ARTIFACT_OPERATION_KEY_PROFILES,
   TEMPLATE_EDIT_REQUEST_HASH_PROFILE,
   createTemplateArtifactNativeOperationModule,
   createTemplateArtifactReadOperationModule,
@@ -625,25 +626,6 @@ import { createSQLiteOperatorAuthorityComposition } from './operator-authority';
 import type { DurableCryptoProfileComposition } from './durable-crypto-profiles';
 
 const eventProfiles = EVENT_OPERATION_KEY_PROFILES;
-
-const templateArtifactProfiles = Object.freeze({
-  authorityPrincipal: Object.freeze({
-    key: 'key-profile.template-artifact.operator-principal',
-    version: parseContractVersion(1)
-  }),
-  scopePartition: Object.freeze({
-    key: 'key-profile.template-artifact.workspace-scope',
-    version: parseContractVersion(1)
-  }),
-  requestCanonicalization: Object.freeze({
-    key: 'key-profile.template-artifact.request-canonicalization',
-    version: parseContractVersion(1)
-  }),
-  idempotencyCredential: Object.freeze({
-    key: 'key-profile.template-artifact.idempotency-credential',
-    version: parseContractVersion(1)
-  })
-});
 
 const programVocabularyProfiles = Object.freeze({
   authorityPrincipal: Object.freeze({
@@ -3092,24 +3074,25 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       workspaceId,
       readPolicy: EVENT_READ_ACCESS_POLICY,
       currentAuthority,
+      currentEvent,
       currentRead: Object.freeze({
-        listCurrent(requestedWorkspaceId: typeof workspaceId) {
-          const selected = currentEvent.resolveCurrentEvent(requestedWorkspaceId);
-          return selected.eventId === undefined
-            ? undefined
-            : templateAuthoringRepository.listArtifacts({
-                workspaceId: requestedWorkspaceId,
-                eventId: selected.eventId
-              });
+        listCurrent(
+          requestedWorkspaceId: typeof workspaceId,
+          requestedEventId: ReturnType<typeof parseEventId>
+        ) {
+          return templateAuthoringRepository.listArtifacts({
+            workspaceId: requestedWorkspaceId,
+            eventId: requestedEventId
+          });
         }
       }),
       clock,
       ids: Object.freeze({
         newInvocationId: () => parseInvocationId(crypto.randomUUID())
       }),
-      authorityPrincipalKeyProfile: templateArtifactProfiles.authorityPrincipal,
-      scopePartitionProfile: templateArtifactProfiles.scopePartition,
-      requestCanonicalizationProfile: templateArtifactProfiles.requestCanonicalization
+      authorityPrincipalKeyProfile: TEMPLATE_ARTIFACT_OPERATION_KEY_PROFILES.authorityPrincipal,
+      scopePartitionProfile: TEMPLATE_ARTIFACT_OPERATION_KEY_PROFILES.scopePartition,
+      requestCanonicalizationProfile: TEMPLATE_ARTIFACT_OPERATION_KEY_PROFILES.requestCanonicalization
     });
     const templateArtifactNativeOperations = createTemplateArtifactNativeOperationModule({
       workspaceId,
@@ -3120,13 +3103,13 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       ids: Object.freeze({
         newInvocationId: () => parseInvocationId(crypto.randomUUID())
       }),
-      authorityPrincipalKeyProfile: templateArtifactProfiles.authorityPrincipal,
-      scopePartitionProfile: templateArtifactProfiles.scopePartition,
-      requestCanonicalizationProfile: templateArtifactProfiles.requestCanonicalization,
+      authorityPrincipalKeyProfile: TEMPLATE_ARTIFACT_OPERATION_KEY_PROFILES.authorityPrincipal,
+      scopePartitionProfile: TEMPLATE_ARTIFACT_OPERATION_KEY_PROFILES.scopePartition,
+      requestCanonicalizationProfile: TEMPLATE_ARTIFACT_OPERATION_KEY_PROFILES.requestCanonicalization,
       draftRequestHashSealer: cryptoProfiles.requestHashSealer(TEMPLATE_ARTIFACT_NATIVE_DRAFT_REQUEST_HASH_PROFILE),
       publishRequestHashSealer: cryptoProfiles.requestHashSealer(TEMPLATE_ARTIFACT_NATIVE_PUBLISH_REQUEST_HASH_PROFILE),
-      idempotencyCredentialProfile: templateArtifactProfiles.idempotencyCredential,
-      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(templateArtifactProfiles.idempotencyCredential)
+      idempotencyCredentialProfile: TEMPLATE_ARTIFACT_OPERATION_KEY_PROFILES.idempotencyCredential,
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(TEMPLATE_ARTIFACT_OPERATION_KEY_PROFILES.idempotencyCredential)
     });
     const templateEditOperations = createTemplateEditOperationModule({
       workspaceId,
@@ -3137,12 +3120,12 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       ids: Object.freeze({
         newInvocationId: () => parseInvocationId(crypto.randomUUID())
       }),
-      authorityPrincipalKeyProfile: templateArtifactProfiles.authorityPrincipal,
-      scopePartitionProfile: templateArtifactProfiles.scopePartition,
-      requestCanonicalizationProfile: templateArtifactProfiles.requestCanonicalization,
+      authorityPrincipalKeyProfile: TEMPLATE_ARTIFACT_OPERATION_KEY_PROFILES.authorityPrincipal,
+      scopePartitionProfile: TEMPLATE_ARTIFACT_OPERATION_KEY_PROFILES.scopePartition,
+      requestCanonicalizationProfile: TEMPLATE_ARTIFACT_OPERATION_KEY_PROFILES.requestCanonicalization,
       requestHashSealer: cryptoProfiles.requestHashSealer(TEMPLATE_EDIT_REQUEST_HASH_PROFILE),
-      idempotencyCredentialProfile: templateArtifactProfiles.idempotencyCredential,
-      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(templateArtifactProfiles.idempotencyCredential)
+      idempotencyCredentialProfile: TEMPLATE_ARTIFACT_OPERATION_KEY_PROFILES.idempotencyCredential,
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(TEMPLATE_ARTIFACT_OPERATION_KEY_PROFILES.idempotencyCredential)
     });
     const organizerCommunicationCurrentEvent = Object.freeze({
       resolveCurrentEvent(requestedWorkspaceId: typeof workspaceId) {

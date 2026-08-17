@@ -25,6 +25,7 @@
     "@jooevents/kernel": "workspace:*",
     "@jooevents/persistence": "workspace:*",
     "@jooevents/template-authoring": "workspace:*",
+    "@jooevents/template-authoring-operations": "workspace:*",
     "@jooevents/task-operations": "workspace:*",
     "@jooevents/tasks": "workspace:*",
     "better-auth": "1.6.26",

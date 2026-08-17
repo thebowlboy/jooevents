@@ -208,6 +208,8 @@ function isConfiguredApplicationPath(pathname: string): boolean {
     || pathname === '/api/events/current/deadlines'
     || pathname === '/api/events/current/deadlines/current'
     || pathname === '/api/events/current/tasks'
+    || pathname === '/api/events/current/template-artifacts'
+    || pathname.startsWith('/api/events/current/template-artifacts/')
     || pathname === '/api/events'
     || pathname === '/api/events/select';
 }

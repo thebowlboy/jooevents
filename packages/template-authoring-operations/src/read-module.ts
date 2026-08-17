@@ -30,7 +30,14 @@ import {
   type VersionedAccessPolicyRef,
   type VersionedKeyProfileRef
 } from '@jooevents/identity-access';
-import { parseWorkspaceId, type Clock, type InvocationId, type WorkspaceId } from '@jooevents/kernel';
+import {
+  parseEventId,
+  parseWorkspaceId,
+  type Clock,
+  type EventId,
+  type InvocationId,
+  type WorkspaceId
+} from '@jooevents/kernel';
 import { z } from 'zod';
 
 export const TEMPLATE_ARTIFACT_LIST_OPERATION = Object.freeze({ name: 'template.artifact.list', version: 1 });
@@ -42,8 +49,25 @@ function ref(key: string): VersionedDefinitionRef { return Object.freeze({ key, 
 function denied(reason: CurrentAuthorityDenialReason): StructuredOutcome {
   return { class: 'access_denied', kind: `authority.${reason}`, retryable: false, subjects: [], detail: null, detailSchemaVersion: 1 };
 }
-function scope(workspaceId: WorkspaceId): InvocationScopeResolver {
-  return Object.freeze({ resolve: () => Object.freeze({ workspaceId, subjects: Object.freeze([{ kind: 'workspace' as const, id: workspaceId }]), resolutionEvidenceIds: Object.freeze(['workspace.current']) }) });
+function scope(
+  workspaceId: WorkspaceId,
+  currentEvent: TemplateArtifactCurrentEventSource
+): InvocationScopeResolver {
+  return Object.freeze({ async resolve() {
+    const current = await currentEvent.resolveCurrentEvent(workspaceId);
+    const eventId = current.eventId === undefined ? undefined : parseEventId(current.eventId);
+    return Object.freeze({
+      workspaceId,
+      ...(eventId === undefined ? {} : { eventId }),
+      subjects: Object.freeze(eventId === undefined
+        ? [{ kind: 'workspace' as const, id: workspaceId }]
+        : [
+            { kind: 'workspace' as const, id: workspaceId },
+            { kind: 'event' as const, id: eventId }
+          ]),
+      resolutionEvidenceIds: Object.freeze([...current.evidenceIds])
+    });
+  } });
 }
 
 const refs = Object.freeze({
@@ -65,13 +89,24 @@ const schemas = Object.freeze({
 });
 
 export interface TemplateArtifactOperationIds { newInvocationId(): InvocationId; }
+export interface TemplateArtifactCurrentEventSource {
+  resolveCurrentEvent(workspaceId: WorkspaceId): {
+    readonly eventId?: string;
+    readonly evidenceIds: readonly string[];
+  } | Promise<{
+    readonly eventId?: string;
+    readonly evidenceIds: readonly string[];
+  }>;
+}
 export interface TemplateArtifactCurrentReadPort {
-  listCurrent(workspaceId: WorkspaceId): readonly TemplateArtifactSnapshotDto[] | undefined | Promise<readonly TemplateArtifactSnapshotDto[] | undefined>;
+  listCurrent(workspaceId: WorkspaceId, eventId: EventId): readonly TemplateArtifactSnapshotDto[]
+    | undefined | Promise<readonly TemplateArtifactSnapshotDto[] | undefined>;
 }
 export interface CreateTemplateArtifactReadOperationModuleInput {
   readonly workspaceId: WorkspaceId;
   readonly readPolicy: VersionedAccessPolicyRef;
   readonly currentAuthority: CurrentAuthorityResolver<InvocationEvidence>;
+  readonly currentEvent: TemplateArtifactCurrentEventSource;
   readonly currentRead: TemplateArtifactCurrentReadPort;
   readonly clock: Clock;
   readonly ids: TemplateArtifactOperationIds;
@@ -86,8 +121,8 @@ export function createTemplateArtifactReadOperationModule(input: CreateTemplateA
   const lane = parseOperationAccessLane({ kind: 'operator', surface: 'operator_http', policy: input.readPolicy });
   const operations = [{ key: 'list' as const, operation: TEMPLATE_ARTIFACT_LIST_OPERATION }, { key: 'get' as const, operation: TEMPLATE_ARTIFACT_GET_OPERATION }];
   const autonomies = operations.map(({ key, operation }) => createOperationAutonomyPolicy({ definition: refs[key].autonomy, operation, riskFloor: 'low', unattendedRiskCeiling: 'low', supportedDispositions: ['proceed','safe_retry','reconcile','renewed_approval','replan','compensate','block','attention'], triggerDispositions: { authority_lost:'block', unattended_bounds_exceeded:'renewed_approval', approval_required:'renewed_approval', known_retryable_failure:'safe_retry', ambiguous_external_effect:'reconcile', stale_plan:'replan', compensation_required:'compensate', terminal_failure:'attention' }, requiresSeparateApproval: false }));
-  const contexts = operations.map(({ key, operation }) => createReadInvocationContextBuilder({ reference: refs[key].context, operation, effect: 'read', lanes: [lane], scopeResolver: scope(workspaceId), authorityResolver: input.currentAuthority, clock: input.clock, newInvocationId: input.ids.newInvocationId, authorityPrincipalKeyProfile: input.authorityPrincipalKeyProfile, scopePartitionProfile: input.scopePartitionProfile, requestCanonicalizationProfile: input.requestCanonicalizationProfile, deniedAuthorityOutcome: denied }));
-  const capability: ReadCapabilityRegistration = Object.freeze({ reference: refs.capability, openSnapshot: async (context: EffectInvocationContext) => Object.freeze({ artifacts: await input.currentRead.listCurrent(context.scope.workspaceId) }) });
+  const contexts = operations.map(({ key, operation }) => createReadInvocationContextBuilder({ reference: refs[key].context, operation, effect: 'read', lanes: [lane], scopeResolver: scope(workspaceId, input.currentEvent), authorityResolver: input.currentAuthority, clock: input.clock, newInvocationId: input.ids.newInvocationId, authorityPrincipalKeyProfile: input.authorityPrincipalKeyProfile, scopePartitionProfile: input.scopePartitionProfile, requestCanonicalizationProfile: input.requestCanonicalizationProfile, deniedAuthorityOutcome: denied }));
+  const capability: ReadCapabilityRegistration = Object.freeze({ reference: refs.capability, openSnapshot: async (context: EffectInvocationContext) => Object.freeze({ artifacts: context.scope.eventId === undefined ? undefined : await input.currentRead.listCurrent(context.scope.workspaceId, context.scope.eventId) }) });
   const conflict = (kind: 'template.artifact.event_required' | 'template.artifact.not_found') => ({ kind: 'outcome' as const, outcome: { class: 'conflict' as const, kind, retryable: false, subjects: [], detail: null, detailSchemaVersion: 1 } });
   const access = CURRENT_AUTHORITY_DENIAL_REASONS.map((reason) => ({ class: 'access_denied' as const, kind: `authority.${reason}`, retryable: false, detailSchema: schemas.null }));
   return Object.freeze({ id: 'template-artifact-read.operation', source: Object.freeze({

@@ -39,6 +39,13 @@ import {
   createTaskMutationOperationModule
 } from '@jooevents/task-operations';
 import {
+  TEMPLATE_ARTIFACT_NATIVE_DRAFT_REQUEST_HASH_PROFILE,
+  TEMPLATE_ARTIFACT_NATIVE_PUBLISH_REQUEST_HASH_PROFILE,
+  TEMPLATE_ARTIFACT_OPERATION_KEY_PROFILES,
+  createTemplateArtifactNativeOperationModule,
+  createTemplateArtifactReadOperationModule
+} from '@jooevents/template-authoring-operations';
+import {
   parseInstant,
   parseInvocationId,
   parseWorkspaceId
@@ -79,6 +86,10 @@ import {
   createD1TaskDirectEffectDomainRegistration
 } from './d1-task';
 import {
+  createD1TemplateArtifactNativeEffectDomainRegistrations,
+  createD1TemplateArtifactReadSource
+} from './d1-template-artifact';
+import {
   D1EffectUnitOfWorkPort,
   createD1EffectDomainAdapterRegistry
 } from './d1-effect-unit-of-work';
@@ -108,7 +119,7 @@ function classifiedCommunicationProfile(cryptoProfiles: DurableCryptoProfileComp
   ).encryptionProfile;
 }
 
-/** Builds the authenticated Event, Field Registry, Deadline, and Task application slice over D1. */
+/** Builds the authenticated Event, Field Registry, Deadline, Task, and Template slice over D1. */
 export async function createConfiguredD1ApplicationRuntime(
   environment: D1ApplicationRuntimeEnvironment
 ) {
@@ -141,6 +152,10 @@ export async function createConfiguredD1ApplicationRuntime(
   });
   const deadlines = createD1DeadlineReadSource({ database: environment.DB, workspaceId });
   const tasks = createD1TaskBoardReadSource({ database: environment.DB, workspaceId });
+  const templateArtifacts = createD1TemplateArtifactReadSource({
+    database: environment.DB,
+    workspaceId
+  });
   const common = Object.freeze({
     workspaceId,
     currentAuthority,
@@ -263,6 +278,44 @@ export async function createConfiguredD1ApplicationRuntime(
       TASK_OPERATION_KEY_PROFILES.idempotencyCredential
     )
   });
+  const templateArtifactReadOperations = createTemplateArtifactReadOperationModule({
+    workspaceId,
+    readPolicy: EVENT_READ_ACCESS_POLICY,
+    currentAuthority,
+    currentEvent: reads,
+    currentRead: templateArtifacts,
+    clock,
+    ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+    authorityPrincipalKeyProfile:
+      TEMPLATE_ARTIFACT_OPERATION_KEY_PROFILES.authorityPrincipal,
+    scopePartitionProfile: TEMPLATE_ARTIFACT_OPERATION_KEY_PROFILES.scopePartition,
+    requestCanonicalizationProfile:
+      TEMPLATE_ARTIFACT_OPERATION_KEY_PROFILES.requestCanonicalization
+  });
+  const templateArtifactNativeOperations = createTemplateArtifactNativeOperationModule({
+    workspaceId,
+    policy: EVENT_MANAGE_ACCESS_POLICY,
+    currentAuthority,
+    currentEvent: reads,
+    clock,
+    ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+    authorityPrincipalKeyProfile:
+      TEMPLATE_ARTIFACT_OPERATION_KEY_PROFILES.authorityPrincipal,
+    scopePartitionProfile: TEMPLATE_ARTIFACT_OPERATION_KEY_PROFILES.scopePartition,
+    requestCanonicalizationProfile:
+      TEMPLATE_ARTIFACT_OPERATION_KEY_PROFILES.requestCanonicalization,
+    draftRequestHashSealer: cryptoProfiles.requestHashSealer(
+      TEMPLATE_ARTIFACT_NATIVE_DRAFT_REQUEST_HASH_PROFILE
+    ),
+    publishRequestHashSealer: cryptoProfiles.requestHashSealer(
+      TEMPLATE_ARTIFACT_NATIVE_PUBLISH_REQUEST_HASH_PROFILE
+    ),
+    idempotencyCredentialProfile:
+      TEMPLATE_ARTIFACT_OPERATION_KEY_PROFILES.idempotencyCredential,
+    idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(
+      TEMPLATE_ARTIFACT_OPERATION_KEY_PROFILES.idempotencyCredential
+    )
+  });
   const domains = createD1EffectDomainAdapterRegistry([
     createD1EventCreateEffectDomainRegistration({
       workspaceId,
@@ -295,6 +348,14 @@ export async function createConfiguredD1ApplicationRuntime(
         newTaskDefinitionRevisionId: () => crypto.randomUUID(),
         newDeadlineId: () => crypto.randomUUID()
       }
+    }),
+    ...createD1TemplateArtifactNativeEffectDomainRegistrations({
+      workspaceId,
+      ids: {
+        newDraftId: () => crypto.randomUUID(),
+        newRevisionId: () => crypto.randomUUID(),
+        newArtifactRevisionId: () => crypto.randomUUID()
+      }
     })
   ]);
   const unitOfWork = new D1EffectUnitOfWorkPort(environment.DB, domains, {
@@ -319,7 +380,9 @@ export async function createConfiguredD1ApplicationRuntime(
       fieldRegistryOperations,
       deadlineOperations,
       taskBoardOperations,
-      taskMutationOperations
+      taskMutationOperations,
+      templateArtifactReadOperations,
+      templateArtifactNativeOperations
     ]),
     read: {
       operationalTrace: { emit() {} },

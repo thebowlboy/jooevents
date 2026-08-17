@@ -116,7 +116,11 @@ describe('configured D1 application HTTP slice', () => {
       'field_registry.restore',
       'field_registry.snapshot.read',
       'task.board.read',
-      'task.mutation'
+      'task.mutation',
+      'template.artifact.change',
+      'template.artifact.change.draft',
+      'template.artifact.get',
+      'template.artifact.list'
     ]);
 
     const initial = await handleRequest(
@@ -650,6 +654,243 @@ describe('configured D1 application HTTP slice', () => {
       FROM operation_log WHERE workspace_id = ? AND operation_name = 'task.mutation'`)
       .bind(workspaceId).first<{ readonly count: number }>();
     expect(taskOperationCount?.count).toBe(1);
+
+    type TemplateArtifact = {
+      readonly head: {
+        readonly artifactId: string;
+        readonly artifactKind: 'message' | 'surface' | 'theme';
+        readonly currentRevisionNumber: number;
+        readonly version: number;
+      };
+      readonly current: {
+        readonly revisionId: string;
+        readonly number: number;
+        readonly document: Record<string, unknown> & { readonly kind: string };
+      };
+      readonly history: readonly { readonly number: number }[];
+    };
+    const initialTemplates = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/template-artifacts`, { headers }),
+      environment()
+    );
+    expect(initialTemplates.status, await initialTemplates.clone().text()).toBe(200);
+    const initialTemplatesBody = await initialTemplates.json<{
+      readonly kind: string;
+      readonly data: { readonly artifacts: readonly TemplateArtifact[] };
+    }>();
+    expect(initialTemplatesBody).toMatchObject({ kind: 'success' });
+    expect(initialTemplatesBody.data.artifacts).toHaveLength(10);
+    expect(initialTemplatesBody.data.artifacts.filter(
+      (artifact) => artifact.head.artifactKind === 'message'
+    )).toHaveLength(6);
+    expect(initialTemplatesBody.data.artifacts.filter(
+      (artifact) => artifact.head.artifactKind === 'surface'
+    )).toHaveLength(3);
+    expect(initialTemplatesBody.data.artifacts.filter(
+      (artifact) => artifact.head.artifactKind === 'theme'
+    )).toHaveLength(1);
+    const messageTemplate = initialTemplatesBody.data.artifacts.find(
+      (artifact) => artifact.head.artifactKind === 'message'
+    );
+    if (!messageTemplate || messageTemplate.current.document.kind !== 'message') {
+      throw new Error('D1 seeded message Template missing.');
+    }
+    const templateDetail = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/template-artifacts/detail?artifactId=${messageTemplate.head.artifactId}`, {
+        headers
+      }),
+      environment()
+    );
+    expect(await templateDetail.json()).toMatchObject({
+      kind: 'success',
+      data: { head: { artifactId: messageTemplate.head.artifactId, version: 1 } }
+    });
+    const originalSubject = messageTemplate.current.document.subject;
+    if (typeof originalSubject !== 'string') throw new Error('D1 message subject missing.');
+    const replacementDocument = {
+      ...messageTemplate.current.document,
+      subject: `${originalSubject} — updated`
+    };
+    const templateMutation = (path: string, key: string, body: unknown) => handleRequest(
+      new Request(`${baseUrl}${path}`, {
+        method: 'POST',
+        headers: {
+          cookie: headers.cookie,
+          origin: baseUrl,
+          'content-type': 'application/json',
+          'idempotency-key': key
+        },
+        body: JSON.stringify(body)
+      }),
+      environment()
+    );
+    const draftedTemplate = await templateMutation(
+      '/api/events/current/template-artifacts/drafts',
+      'd1-template-draft',
+      {
+        action: 'replace',
+        artifactId: messageTemplate.head.artifactId,
+        expectedRevisionNumber: 1,
+        document: replacementDocument,
+        author: 'organizer',
+        note: 'Clarify the subject line.'
+      }
+    );
+    expect(draftedTemplate.status, await draftedTemplate.clone().text()).toBe(200);
+    const draftedTemplateBody = await draftedTemplate.json<{
+      readonly kind: string;
+      readonly data: {
+        readonly draftId: string;
+        readonly revision: { readonly id: string; readonly digestSha256: string };
+      };
+    }>();
+    expect(draftedTemplateBody).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'replace',
+        status: 'draft',
+        safeDiff: {
+          artifactId: messageTemplate.head.artifactId,
+          before: { number: 1 },
+          after: { number: 2, document: replacementDocument }
+        }
+      }
+    });
+    const beforeTemplatePublish = await env.DB.prepare(`SELECT version
+      FROM template_artifact_heads
+      WHERE workspace_id = ? AND event_id = ? AND artifact_id = ?`)
+      .bind(workspaceId, firstBody.data.event.id, messageTemplate.head.artifactId)
+      .first<{ readonly version: number }>();
+    expect(beforeTemplatePublish?.version).toBe(1);
+    const publishSelector = {
+      draftId: draftedTemplateBody.data.draftId,
+      revisionId: draftedTemplateBody.data.revision.id,
+      revisionDigestSha256: draftedTemplateBody.data.revision.digestSha256
+    };
+    const publishedTemplate = await templateMutation(
+      '/api/events/current/template-artifacts/publish',
+      'd1-template-publish',
+      publishSelector
+    );
+    expect(publishedTemplate.status, await publishedTemplate.clone().text()).toBe(200);
+    const publishedTemplateBody = await publishedTemplate.json();
+    expect(publishedTemplateBody).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'replace',
+        revision: { number: 2, document: replacementDocument }
+      }
+    });
+    const templatePublishReplay = await templateMutation(
+      '/api/events/current/template-artifacts/publish',
+      'd1-template-publish',
+      publishSelector
+    );
+    expect(await templatePublishReplay.json()).toEqual(publishedTemplateBody);
+    const changedTemplatePublish = await templateMutation(
+      '/api/events/current/template-artifacts/publish',
+      'd1-template-publish',
+      { ...publishSelector, revisionDigestSha256: '0'.repeat(64) }
+    );
+    expect(await changedTemplatePublish.json()).toMatchObject({
+      kind: 'outcome',
+      outcome: { class: 'idempotency_conflict', kind: 'operation.request_changed' }
+    });
+    const revertTemplateDraft = await templateMutation(
+      '/api/events/current/template-artifacts/drafts',
+      'd1-template-revert-draft',
+      {
+        action: 'revert',
+        artifactId: messageTemplate.head.artifactId,
+        expectedRevisionNumber: 2,
+        targetRevisionNumber: 1
+      }
+    );
+    expect(revertTemplateDraft.status, await revertTemplateDraft.clone().text()).toBe(200);
+    const revertTemplateDraftBody = await revertTemplateDraft.json<{
+      readonly kind: string;
+      readonly data: {
+        readonly draftId: string;
+        readonly revision: { readonly id: string; readonly digestSha256: string };
+      };
+    }>();
+    expect(revertTemplateDraftBody).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'revert',
+        safeDiff: {
+          before: { number: 2 },
+          after: { number: 3, document: messageTemplate.current.document },
+          restoredFromRevisionNumber: 1
+        }
+      }
+    });
+    const revertedTemplate = await templateMutation(
+      '/api/events/current/template-artifacts/publish',
+      'd1-template-revert',
+      {
+        draftId: revertTemplateDraftBody.data.draftId,
+        revisionId: revertTemplateDraftBody.data.revision.id,
+        revisionDigestSha256: revertTemplateDraftBody.data.revision.digestSha256
+      }
+    );
+    expect(revertedTemplate.status, await revertedTemplate.clone().text()).toBe(200);
+    expect(await revertedTemplate.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'revert',
+        revision: { number: 3, document: messageTemplate.current.document }
+      }
+    });
+    const staleTemplateDraft = await templateMutation(
+      '/api/events/current/template-artifacts/drafts',
+      'd1-template-stale-draft',
+      {
+        action: 'replace',
+        artifactId: messageTemplate.head.artifactId,
+        expectedRevisionNumber: 1,
+        document: replacementDocument,
+        author: 'organizer',
+        note: 'Stale draft.'
+      }
+    );
+    expect(await staleTemplateDraft.json()).toMatchObject({
+      kind: 'outcome',
+      outcome: {
+        class: 'stale_revision',
+        kind: 'template.artifact_changed',
+        detail: { code: 'stale_revision', action: 'replace' }
+      }
+    });
+    const finalTemplateDetail = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/template-artifacts/detail?artifactId=${messageTemplate.head.artifactId}`, {
+        headers
+      }),
+      environment()
+    );
+    expect(await finalTemplateDetail.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        head: { currentRevisionNumber: 3, version: 3 },
+        current: { number: 3, document: messageTemplate.current.document },
+        history: [{ number: 1 }, { number: 2 }, { number: 3 }]
+      }
+    });
+    const templateDraftRow = await env.DB.prepare(`SELECT status,published_by_user_id
+      FROM template_artifact_review_drafts
+      WHERE workspace_id = ? AND event_id = ? AND id = ?`)
+      .bind(workspaceId, firstBody.data.event.id, draftedTemplateBody.data.draftId)
+      .first<{ readonly status: string; readonly published_by_user_id: string | null }>();
+    expect(templateDraftRow).toEqual({ status: 'published', published_by_user_id: userId });
+    const templateOperationCounts = await env.DB.prepare(`SELECT operation_name,
+      count(*) AS count FROM operation_log
+      WHERE workspace_id = ? AND operation_name LIKE 'template.artifact.%'
+      GROUP BY operation_name ORDER BY operation_name`)
+      .bind(workspaceId).all<{ readonly operation_name: string; readonly count: number }>();
+    expect(templateOperationCounts.results).toEqual([
+      { operation_name: 'template.artifact.change', count: 2 },
+      { operation_name: 'template.artifact.change.draft', count: 2 }
+    ]);
   });
 
   test('keeps the application slice closed when activation or a durable key duty is incomplete', async () => {
