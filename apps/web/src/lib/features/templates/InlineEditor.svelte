@@ -15,7 +15,7 @@
 	 */
 	import { tick } from 'svelte';
 	import { ChevronDown } from 'lucide-svelte';
-	import { Button, Checkbox, Radio } from '$lib/ui';
+	import { Button, Checkbox, ChoiceGroup, Radio } from '$lib/ui';
 	import { ANCHOR_EDGE, lower, placeNear, raise } from '$lib/ui/anchored.svelte';
 	import type { FieldContext, MergeFieldDef, RegistryField } from '$lib/api/types';
 	import type { InlineEditResult, InlineUnit, RosterKnobs, ScheduleKnobs } from './inline-edit';
@@ -591,12 +591,11 @@
 				</div>
 			{/if}
 		{:else if unit.type === 'merge'}
-			<fieldset class="ied__group">
-				<legend class="ied__legend">This field</legend>
+			<ChoiceGroup legend="This field">
 				{#each mergeFields as def (def.key)}
 					<Radio name="{uid}-swap" value={def.key} bind:group={swapKey} label={def.label} description={def.sample} />
 				{/each}
-			</fieldset>
+			</ChoiceGroup>
 			<div class="ied__stack">
 				<label class="ied__legend" for="{uid}-insert">Insert another field…</label>
 				<select id="{uid}-insert" class="ui-select" bind:value={insertKey}>
@@ -637,12 +636,11 @@
 						onclick={() => (knobs.density = 'compact')}>Compact</button>
 				</div>
 			</div>
-			<fieldset class="ied__group">
-				<legend class="ied__legend">Show</legend>
+			<ChoiceGroup legend="Show">
 				<Checkbox label="Rooms" bind:checked={knobs.showRoom} />
 				<Checkbox label="Track chips" bind:checked={knobs.showTrack} />
 				<Checkbox label="Speakers" bind:checked={knobs.showSpeakers} />
-			</fieldset>
+			</ChoiceGroup>
 		{:else if unit.type === 'roster-knobs'}
 			<div class="ied__row">
 				<span class="ied__legend" id="{uid}-layout">Layout</span>
@@ -694,12 +692,11 @@
 						onclick={() => (rosterKnobs.density = 'compact')}>Compact</button>
 				</div>
 			</div>
-			<fieldset class="ied__group">
-				<legend class="ied__legend">Show</legend>
+			<ChoiceGroup legend="Show">
 				<Checkbox label="One-line bio" bind:checked={rosterKnobs.showHeadline} />
 				<Checkbox label="Their sessions" bind:checked={rosterKnobs.showSessions} />
 				<Checkbox label="Their links" bind:checked={rosterKnobs.showLinks} />
-			</fieldset>
+			</ChoiceGroup>
 			<!-- Who is on the lineup and what order they are in is roster state,
 			     shared by every presentation of it; this panel only decides how it
 			     is laid out. The door says where the other half lives. -->
@@ -732,12 +729,11 @@
 						bind:value={fieldOptions}></textarea>
 				</div>
 			{/if}
-			<fieldset class="ied__group">
-				<legend class="ied__legend">Required</legend>
+			<ChoiceGroup legend="Required">
 				{#each field?.collectAt ?? [] as context (context)}
 					<Checkbox label={requiredLabels[context]} bind:checked={fieldRequired[context]} />
 				{/each}
-			</fieldset>
+			</ChoiceGroup>
 			<p class="ied__note">One registry: this question changes everywhere it’s asked.</p>
 		{/if}
 
@@ -811,15 +807,6 @@
 		min-block-size: 5.5rem;
 		padding: var(--je-space-2) var(--je-space-3);
 		resize: vertical;
-	}
-
-	.ied__group {
-		display: grid;
-		gap: var(--je-space-2);
-		margin: 0;
-		padding: 0;
-		border: 0;
-		min-inline-size: 0;
 	}
 
 	.ied__stack {

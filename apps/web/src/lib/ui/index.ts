@@ -3,6 +3,7 @@ export { default as Avatar } from './Avatar.svelte';
 export { default as Badge } from './Badge.svelte';
 export { default as Button } from './Button.svelte';
 export { default as Checkbox } from './Checkbox.svelte';
+export { default as ChoiceGroup } from './ChoiceGroup.svelte';
 export { default as CopyValue } from './CopyValue.svelte';
 export { default as ClampedText } from './ClampedText.svelte';
 export { default as DatePicker } from './DatePicker.svelte';

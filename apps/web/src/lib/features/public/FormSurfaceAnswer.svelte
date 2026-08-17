@@ -736,7 +736,9 @@
 
 	.apply__choices-legend {
 		padding: 0;
-		margin-block-end: var(--je-space-2);
+		/* Legends need an explicit boundary from their collection; fieldset
+		   formatting does not honor a parent layout gap around the legend. */
+		margin-block-end: var(--je-space-3);
 	}
 
 	.apply__choice-list {

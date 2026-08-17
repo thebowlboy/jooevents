@@ -4,6 +4,7 @@
 	import {
 		Badge,
 		Button,
+		ChoiceGroup,
 		Field,
 		Popover,
 		Radio,
@@ -2553,8 +2554,7 @@
 		{#if nsVocabNote}
 			<p class="new-session__vocab-note" role="status">{nsVocabNote}</p>
 		{/if}
-		<fieldset class="new-session__state">
-			<legend>Starts as</legend>
+		<ChoiceGroup legend="Starts as">
 			<Radio
 				name="new-session-state"
 				value="programmed"
@@ -2576,7 +2576,7 @@
 				description="Visible to organizers only, off the grid for now."
 				bind:group={nsState}
 				disabled={creatingSession} />
-		</fieldset>
+		</ChoiceGroup>
 		<!-- One creation, one placement, zero re-finding it in a list: Create
 		     and place… commits, then the new session is already in hand. The
 		     door decides the emphasis — standing at the board, placing is the
@@ -2969,8 +2969,7 @@
 				{/snippet}
 			</Field>
 		</div>
-		<fieldset class="break-form__rooms">
-			<legend class="ui-label">Rooms</legend>
+		<ChoiceGroup legend="Rooms">
 			{#each activeRooms as room (room.id)}
 				<label class="break-form__room">
 					<input
@@ -2982,7 +2981,7 @@
 					{room.name}
 				</label>
 			{/each}
-		</fieldset>
+		</ChoiceGroup>
 		<p class="break-form__hint">
 			A break reserves the time: placement snaps flush against it, and a session typed over it
 			carries a visible warning.
@@ -4136,24 +4135,6 @@
 		gap: var(--je-space-3);
 	}
 
-	.new-session__state {
-		display: grid;
-		gap: var(--je-space-2);
-		margin: 0;
-		padding: 0;
-		border: 0;
-	}
-
-	.new-session__state legend {
-		padding: 0;
-		margin-block-end: var(--je-space-1);
-		font-size: var(--je-font-size-xs);
-		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: var(--je-tracking-caps);
-		color: var(--je-color-text-muted);
-	}
-
 	.new-session__actions {
 		display: flex;
 		gap: var(--je-space-2);
@@ -4359,14 +4340,6 @@
 		display: grid;
 		grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr);
 		gap: var(--je-space-3);
-	}
-
-	.break-form__rooms {
-		display: grid;
-		gap: var(--je-space-2);
-		margin: 0;
-		padding: 0;
-		border: 0;
 	}
 
 	.break-form__room {

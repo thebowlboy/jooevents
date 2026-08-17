@@ -8,7 +8,7 @@
 	ceremony of a single low-tier create, not a deployment.
 -->
 <script lang="ts">
-	import { Button, Field, Modal, Radio } from '$lib/ui';
+	import { Button, ChoiceGroup, Field, Modal, Radio } from '$lib/ui';
 	import { describePortFailure } from '$lib/api/port-failure';
 	import type { SubmissionsPagePort } from '$lib/api/submissions-page-port';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
@@ -382,8 +382,7 @@
 			</Field>
 		</div>
 
-		<fieldset class="entry__fork">
-			<legend class="ui-label">Where it lands</legend>
+		<ChoiceGroup legend="Where it lands">
 			<Radio
 				name="{uid}-disposition"
 				value="inbox"
@@ -398,7 +397,7 @@
 				disabled={adding}
 				label="Accepted right away"
 				description="An invited talk — it joins the program immediately." />
-		</fieldset>
+		</ChoiceGroup>
 
 		<!-- Last on purpose: the collecting list resolves a beat after the dialog
 		     opens, and arriving below everything means nothing the person is
@@ -488,20 +487,6 @@
 
 	.entry__choice .ui-select-wait {
 		align-self: stretch;
-	}
-
-	.entry__fork {
-		display: flex;
-		flex-direction: column;
-		gap: var(--je-space-2);
-		margin: 0;
-		padding: 0;
-		border: 0;
-	}
-
-	.entry__fork legend {
-		padding: 0;
-		margin-block-end: var(--je-space-1);
 	}
 
 	.entry__error {

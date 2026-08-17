@@ -2,7 +2,7 @@
 	import { onMount, tick } from 'svelte';
 	import { flip } from 'svelte/animate';
 	import { GripVertical, Lock } from 'lucide-svelte';
-	import { Button, Checkbox, Field, createRowDrag, motionMs } from '$lib/ui';
+	import { Button, Checkbox, ChoiceGroup, Field, createRowDrag, motionMs } from '$lib/ui';
 	import type { SettingsPageFieldsPort } from '$lib/api/settings-page-port';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
 	import type { FieldContext, FieldGroup, FieldKind, RegistryField } from '$lib/api/types';
@@ -461,20 +461,17 @@
 					</div>
 				{/if}
 			</div>
-			<fieldset class="composer__contexts">
-				<legend class="composer__legend">Ask</legend>
-				<div class="composer__choices">
-					<Checkbox label="At apply" bind:checked={newContexts.apply} disabled={pending !== ''} />
-					<Checkbox
-						label="At onboarding"
-						bind:checked={newContexts.onboard}
-						disabled={pending !== ''} />
-					<Checkbox
-						label="In profile"
-						bind:checked={newContexts.profile}
-						disabled={pending !== ''} />
-				</div>
-			</fieldset>
+			<ChoiceGroup legend="Ask" layout="inline">
+				<Checkbox label="At apply" bind:checked={newContexts.apply} disabled={pending !== ''} />
+				<Checkbox
+					label="At onboarding"
+					bind:checked={newContexts.onboard}
+					disabled={pending !== ''} />
+				<Checkbox
+					label="In profile"
+					bind:checked={newContexts.profile}
+					disabled={pending !== ''} />
+			</ChoiceGroup>
 			<Button
 				type="submit"
 				variant="secondary"
@@ -669,27 +666,6 @@
 
 	.composer__wide {
 		grid-column: 1 / -1;
-	}
-
-	.composer__contexts {
-		display: grid;
-		gap: var(--je-space-2);
-		margin: 0;
-		padding: 0;
-		border: 0;
-	}
-
-	.composer__legend {
-		padding: 0;
-		font-size: var(--je-font-size-xs);
-		font-weight: 650;
-		color: var(--je-color-text-muted);
-	}
-
-	.composer__choices {
-		display: flex;
-		flex-wrap: wrap;
-		gap: var(--je-space-2) var(--je-space-4);
 	}
 
 	@media (max-width: 920px) {

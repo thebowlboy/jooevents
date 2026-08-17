@@ -713,20 +713,6 @@
   .choice-stack { display: grid; gap: 0.85rem; }
   .choice-divider { height: 1px; background: var(--je-color-border); }
 
-  .choice-fieldset {
-    display: grid;
-    gap: 0.85rem;
-    margin: 0;
-    padding: 0;
-    border: 0;
-  }
-
-  .choice-fieldset legend {
-    margin-bottom: 0.75rem;
-    font-size: var(--je-font-size-sm);
-    font-weight: 700;
-  }
-
   .mode-preview {
     min-height: 7rem;
     padding: 1rem;

@@ -50,6 +50,7 @@
     Badge,
     Button,
     Checkbox,
+    ChoiceGroup,
     createRowDrag,
     motionMs,
     ClampedText,
@@ -627,12 +628,11 @@
         </ShowcaseCard>
 
         <ShowcaseCard title="Radio groups" description="Use when exactly one visible option is required.">
-          <fieldset class="choice-fieldset">
-            <legend>Review queue</legend>
+          <ChoiceGroup legend="Review queue">
             <Radio name="review-mode" value="assigned" bind:group={reviewMode} label="Assigned to me" description="Only proposals you own." />
             <Radio name="review-mode" value="unreviewed" bind:group={reviewMode} label="All unreviewed" description="Across your permitted events." />
             <Radio name="review-mode" value="all" bind:group={reviewMode} label="Everything" description="Includes completed reviews." />
-          </fieldset>
+          </ChoiceGroup>
         </ShowcaseCard>
 
         <ShowcaseCard title="Segmented control" description="A small set of peer modes—not a substitute for tabs between pages.">

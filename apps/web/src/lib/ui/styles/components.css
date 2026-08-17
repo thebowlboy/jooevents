@@ -236,6 +236,38 @@
     color: var(--je-color-success);
   }
 
+  /* A fieldset legend is removed from grid/flex layout by the browser's special
+     fieldset formatting context, so a parent's gap does not separate it from
+     the first choice. Keep the set's two relationships explicit here: the
+     legend brackets the collection, while the smaller gap joins peer choices. */
+  .ui-choice-group {
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .ui-choice-group__legend {
+    margin: 0 0 var(--je-space-3);
+    padding: 0;
+    color: var(--je-color-text);
+    font-size: var(--je-font-size-sm);
+    font-weight: 650;
+    line-height: var(--je-leading-snug);
+  }
+
+  .ui-choice-group__choices {
+    display: grid;
+    gap: var(--je-space-2);
+    min-width: 0;
+  }
+
+  .ui-choice-group__choices--inline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--je-space-2) var(--je-space-4);
+  }
+
   .ui-control,
   .ui-textarea,
   .ui-select {

@@ -9,7 +9,7 @@
 	 */
 	import { onMount } from 'svelte';
 	import { formatInstant, formatInstantDate, formatRelative } from '@jooevents/contracts';
-	import { Badge, Button, Checkbox, CopyValue, Field, Modal, Radio, Switch } from '$lib/ui';
+	import { Badge, Button, Checkbox, ChoiceGroup, CopyValue, Field, Modal, Radio, Switch } from '$lib/ui';
 	import type {
 		ApiKeyPermissionGroup,
 		ApiKeyView,
@@ -584,27 +584,24 @@
 				{/snippet}
 			</Field>
 
-			<fieldset class="choice-block">
-				<legend class="caption">What is this key for?</legend>
-				<div class="profiles">
-					{#each apiKeys.profiles as profile (profile.key)}
-						<Radio
-							name="api-key-profile"
-							value={profile.key}
-							label={profile.label}
-							description={profile.description}
-							bind:group={profileChoice} />
-					{/each}
+			<ChoiceGroup legend="What is this key for?">
+				{#each apiKeys.profiles as profile (profile.key)}
 					<Radio
 						name="api-key-profile"
-						value="custom"
-						label="Custom"
-						description={customBase
-							? `Based on ${customBase}, adjusted below.`
-							: 'Choose each permission yourself below.'}
+						value={profile.key}
+						label={profile.label}
+						description={profile.description}
 						bind:group={profileChoice} />
-				</div>
-			</fieldset>
+				{/each}
+				<Radio
+					name="api-key-profile"
+					value="custom"
+					label="Custom"
+					description={customBase
+						? `Based on ${customBase}, adjusted below.`
+						: 'Choose each permission yourself below.'}
+					bind:group={profileChoice} />
+			</ChoiceGroup>
 
 			<div class="capability">
 				<Switch
@@ -672,32 +669,29 @@
 				{/if}
 			</div>
 
-			<fieldset class="choice-block">
-				<legend class="caption">Events</legend>
-				<div class="event-scope">
-					<Radio
-						name="api-key-events"
-						value="all"
-						label="All events"
-						description="Every event in this workspace, current and future."
-						bind:group={eventScope} />
-					<Radio
-						name="api-key-events"
-						value="chosen"
-						label="Only chosen events"
-						bind:group={eventScope} />
-					{#if eventScope === 'chosen'}
-						<div class="event-choices">
-							{#each apiKeys.events as event (event.id)}
-								<Checkbox
-									label={event.name}
-									checked={chosenEvents[event.id] === true}
-									onchange={(value) => (chosenEvents = { ...chosenEvents, [event.id]: value })} />
-							{/each}
-						</div>
-					{/if}
-				</div>
-			</fieldset>
+			<ChoiceGroup legend="Events">
+				<Radio
+					name="api-key-events"
+					value="all"
+					label="All events"
+					description="Every event in this workspace, current and future."
+					bind:group={eventScope} />
+				<Radio
+					name="api-key-events"
+					value="chosen"
+					label="Only chosen events"
+					bind:group={eventScope} />
+				{#if eventScope === 'chosen'}
+					<div class="event-choices">
+						{#each apiKeys.events as event (event.id)}
+							<Checkbox
+								label={event.name}
+								checked={chosenEvents[event.id] === true}
+								onchange={(value) => (chosenEvents = { ...chosenEvents, [event.id]: value })} />
+						{/each}
+					</div>
+				{/if}
+			</ChoiceGroup>
 
 			<Field
 				id="api-key-expiry"
@@ -977,29 +971,6 @@
 	.create {
 		display: grid;
 		gap: var(--je-space-5);
-	}
-
-	.choice-block {
-		margin: 0;
-		padding: 0;
-		border: 0;
-		display: grid;
-		gap: var(--je-space-2);
-	}
-
-	.caption {
-		padding: 0;
-		font-size: var(--je-font-size-xs);
-		font-weight: 650;
-		text-transform: uppercase;
-		letter-spacing: var(--je-tracking-caps);
-		color: var(--je-color-text-muted);
-	}
-
-	.profiles,
-	.event-scope {
-		display: grid;
-		gap: var(--je-space-2);
 	}
 
 	.event-choices {

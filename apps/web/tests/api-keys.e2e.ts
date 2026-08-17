@@ -43,6 +43,20 @@ test('creation leads with profiles, drifts to Custom on any flipped switch, and 
 	await expect(dialog.getByRole('radio', { name: 'Full access' })).toBeVisible();
 	await expect(dialog.getByRole('radio', { name: 'Dashboard' })).toBeVisible();
 	await expect(dialog.getByRole('radio', { name: 'Schedule display' })).toBeVisible();
+	// Fieldset legends do not participate in normal grid layout. Keep the
+	// legend-to-collection gap wider than the rhythm between peer choices.
+	const purpose = dialog.getByRole('group', { name: 'What is this key for?' });
+	const [legendBox, choicesBox, firstBox, secondBox] = await Promise.all([
+		purpose.locator('legend').boundingBox(),
+		purpose.locator('.ui-choice-group__choices').boundingBox(),
+		purpose.locator('.ui-choice').nth(0).boundingBox(),
+		purpose.locator('.ui-choice').nth(1).boundingBox()
+	]);
+	const legendToChoices =
+		(choicesBox?.y ?? 0) - ((legendBox?.y ?? 0) + (legendBox?.height ?? 0));
+	const choiceToChoice =
+		(secondBox?.y ?? 0) - ((firstBox?.y ?? 0) + (firstBox?.height ?? 0));
+	expect(legendToChoices).toBeGreaterThan(choiceToChoice);
 	// The summary restates the preset grant before anything is minted.
 	await expect(dialog.getByText('Reads and proposes · 5 permissions · All events', { exact: false })).toBeVisible();
 	await dialog.getByLabel('Expires').selectOption('never');
