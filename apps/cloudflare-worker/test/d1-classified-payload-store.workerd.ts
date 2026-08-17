@@ -52,6 +52,30 @@ function bytes(value: ArrayBuffer | readonly number[]): Uint8Array {
 }
 
 describe('D1 buffered classified-payload store', () => {
+  test('bounds retained ciphertext reads below the D1 parameter ceiling', async () => {
+    const boundBatches: unknown[][] = [];
+    const session = {
+      prepare() {
+        return {
+          bind(...values: unknown[]) {
+            boundBatches.push(values);
+            return {
+              async all() {
+                return { results: [] };
+              }
+            };
+          }
+        };
+      }
+    } as unknown as D1DatabaseSession;
+    const payloadRefIds = Array.from({ length: 101 }, (_, index) => parsePayloadRefId(
+      `019c35e4-4624-7db0-8e6e-${(index + 1).toString(16).padStart(12, '0')}`
+    ));
+
+    expect(await readD1ClassifiedPayloadRecords(session, payloadRefIds)).toEqual([]);
+    expect(boundBatches.map((batch) => batch.length)).toEqual([50, 50, 1]);
+  });
+
   test('atomically adopts ciphertext, reads it through the shared codec, and replays exactly', async () => {
     await runD1BufferedUnitOfWork({
       database: env.DB,

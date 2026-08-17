@@ -32,6 +32,7 @@ import {
   organizerMessageTemplateGetInputSchema,
   organizerMessageTemplateListInputSchema,
   organizerMessageTemplatePageSchema,
+  type OrganizerCommunicationAuthoringPayloadInput,
   type OrganizerCommunicationDraftProvenance
 } from '@jooevents/contracts/communications/organizer';
 import {
@@ -130,6 +131,19 @@ interface DraftRow {
   readonly updated_at: string;
 }
 
+interface DraftListRow extends DraftRow {
+  readonly purpose_id: string | null;
+  readonly purpose_key: string | null;
+  readonly purpose_revision_number: number | null;
+  readonly purpose_digest_sha256: string | null;
+  readonly purpose_lifecycle: string | null;
+  readonly purpose_current_revision_id: string | null;
+  readonly joined_template_id: string | null;
+  readonly joined_template_revision_id: string | null;
+  readonly template_revision_number: number | null;
+  readonly template_digest_sha256: string | null;
+}
+
 function encodeDraftCursor(row: Pick<DraftRow, 'draft_id' | 'updated_at'>): string {
   return `cur1_${Buffer.from(canonicalJsonText({
     cursorKind: 'drafts',
@@ -176,6 +190,35 @@ interface AuthoringMetadataRow {
   readonly created_at: string;
 }
 
+interface PurposeRevisionRecord {
+  readonly purposeId: string;
+  readonly purposeKey: string;
+  readonly revisionId: string;
+  readonly revisionNumber: number;
+  readonly digestSha256: string;
+  readonly lifecycle: string;
+  readonly currentRevisionId: string;
+}
+
+interface TemplateRevisionRecord {
+  readonly templateId: string;
+  readonly templateRevisionId: string;
+  readonly revisionNumber: number;
+  readonly digestSha256: string;
+}
+
+interface TemplateProjectionRow {
+  readonly template_id: string;
+  readonly template_key: string;
+  readonly template_name: string;
+  readonly lifecycle: 'draft' | 'active' | 'archived';
+  readonly purpose_revision_id: string;
+  readonly template_revision_id: string;
+  readonly revision_number: number;
+  readonly digest_sha256: string;
+  readonly content_payload_ref_id: string;
+}
+
 function payloadKind(value: unknown): OrganizerAuthoringPayloadKind {
   if (typeof value !== 'string' || !(value in ORGANIZER_AUTHORING_PAYLOAD_PROFILES)) {
     throw new D1OrganizerCommunicationReadError('data_corrupt');
@@ -197,6 +240,13 @@ function canonicalMetadata(row: AuthoringMetadataRow): AuthoringMetadataRow & {
   }
   instant(row.created_at);
   return Object.freeze({ ...row, payload_kind: kind });
+}
+
+type CanonicalAuthoringMetadata = ReturnType<typeof canonicalMetadata>;
+
+interface OpenedAuthoringPayload {
+  readonly metadata: CanonicalAuthoringMetadata;
+  readonly envelope: OrganizerCommunicationAuthoringPayloadInput;
 }
 
 async function sha256(bytes: Uint8Array): Promise<string> {
@@ -230,13 +280,40 @@ class D1OrganizerCommunicationReadPort implements OrganizerCommunicationReadPort
     return rows.results[0] === undefined ? undefined : canonicalMetadata(rows.results[0]);
   }
 
-  async #exactMetadata<Kind extends OrganizerAuthoringPayloadKind>(session: D1DatabaseSession, input: {
-    readonly scope: OrganizerCommunicationScope;
-    readonly ownerKey?: string;
-    readonly payloadRefId: string;
-    readonly kind: Kind;
-  }): Promise<ReturnType<typeof canonicalMetadata> & { readonly payload_kind: Kind }> {
-    const row = await this.#metadata(session, input.payloadRefId);
+  async #metadataBatch(
+    session: D1DatabaseSession,
+    payloadRefIds: readonly string[]
+  ): Promise<ReadonlyMap<string, ReturnType<typeof canonicalMetadata>>> {
+    const unique = [...new Set(payloadRefIds)];
+    const metadata = new Map<string, ReturnType<typeof canonicalMetadata>>();
+    for (let offset = 0; offset < unique.length; offset += 50) {
+      const batch = unique.slice(offset, offset + 50);
+      const placeholders = batch.map(() => '?').join(',');
+      const rows = await session.prepare(`SELECT payload_ref_id,workspace_id,event_id,owner_key,
+        payload_kind,payload_schema_key,payload_schema_version,classification_key,content_type,
+        digest_sha256,byte_size,created_at FROM communication_authoring_payloads
+        WHERE payload_ref_id IN (${placeholders})`
+      ).bind(...batch).all<AuthoringMetadataRow>();
+      for (const rawRow of rows.results) {
+        const row = canonicalMetadata(rawRow);
+        if (metadata.has(row.payload_ref_id)) {
+          throw new D1OrganizerCommunicationReadError('data_corrupt');
+        }
+        metadata.set(row.payload_ref_id, row);
+      }
+    }
+    return metadata;
+  }
+
+  #validateExactMetadata<Kind extends OrganizerAuthoringPayloadKind>(
+    row: ReturnType<typeof canonicalMetadata> | undefined,
+    input: {
+      readonly scope: OrganizerCommunicationScope;
+      readonly ownerKey?: string;
+      readonly payloadRefId: string;
+      readonly kind: Kind;
+    }
+  ): ReturnType<typeof canonicalMetadata> & { readonly payload_kind: Kind } {
     if (!row || row.workspace_id !== input.scope.workspaceId || row.event_id !== input.scope.eventId
         || (input.ownerKey !== undefined && row.owner_key !== input.ownerKey)
         || row.payload_kind !== input.kind) {
@@ -245,48 +322,89 @@ class D1OrganizerCommunicationReadPort implements OrganizerCommunicationReadPort
     return row as ReturnType<typeof canonicalMetadata> & { readonly payload_kind: Kind };
   }
 
+  async #exactMetadata<Kind extends OrganizerAuthoringPayloadKind>(session: D1DatabaseSession, input: {
+    readonly scope: OrganizerCommunicationScope;
+    readonly ownerKey?: string;
+    readonly payloadRefId: string;
+    readonly kind: Kind;
+  }): Promise<ReturnType<typeof canonicalMetadata> & { readonly payload_kind: Kind }> {
+    const row = await this.#metadata(session, input.payloadRefId);
+    return this.#validateExactMetadata(row, input);
+  }
+
+  async #openPayloadBatch(session: D1DatabaseSession, inputs: readonly {
+    readonly scope: OrganizerCommunicationScope;
+    readonly ownerKey?: string;
+    readonly payloadRefId: string;
+    readonly kind: OrganizerAuthoringPayloadKind;
+  }[]): Promise<ReadonlyMap<string, OpenedAuthoringPayload>> {
+    const requirements = new Map<string, (typeof inputs)[number]>();
+    for (const input of inputs) {
+      const existing = requirements.get(input.payloadRefId);
+      if (existing !== undefined && (existing.scope.workspaceId !== input.scope.workspaceId
+          || existing.scope.eventId !== input.scope.eventId || existing.ownerKey !== input.ownerKey
+          || existing.kind !== input.kind)) {
+        throw new D1OrganizerCommunicationReadError('payload_ref_invalid');
+      }
+      requirements.set(input.payloadRefId, input);
+    }
+    const payloadRefIds = [...requirements.keys()];
+    const metadata = await this.#metadataBatch(session, payloadRefIds);
+    const parsedRefIds = payloadRefIds.map(parsePayloadRefId);
+    const records = await readD1ClassifiedPayloadRecords(session, parsedRefIds);
+    const recordById = new Map(records.map((record) => [record.payloadRefId, record]));
+    if (recordById.size !== payloadRefIds.length) {
+      throw new D1OrganizerCommunicationReadError('data_corrupt');
+    }
+    const opened = new Map<string, OpenedAuthoringPayload>();
+    for (const [payloadRefId, input] of requirements) {
+      const row = this.#validateExactMetadata(metadata.get(payloadRefId), input);
+      const record = recordById.get(parsePayloadRefId(payloadRefId));
+      if (record === undefined) throw new D1OrganizerCommunicationReadError('data_corrupt');
+      let bytes: Uint8Array | undefined;
+      try {
+        bytes = this.#codec.read(record, {
+          payloadRef: createPayloadRef(parsePayloadRefId(payloadRefId)),
+          expectedBinding: createCommunicationAuthoringClassifiedPayloadBinding({
+            scope: input.scope,
+            ownerKey: row.owner_key,
+            kind: row.payload_kind
+          }),
+          purpose: communicationAuthoringClassifiedPayloadPurpose(row.payload_kind)
+        });
+        if (bytes.byteLength !== row.byte_size || await sha256(bytes) !== row.digest_sha256) {
+          throw new D1OrganizerCommunicationReadError('data_corrupt');
+        }
+        const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+        const envelope = organizerCommunicationAuthoringPayloadInputSchema.parse(JSON.parse(text));
+        if (envelope.payloadKind !== input.kind || canonicalJsonText(envelope) !== text) {
+          throw new D1OrganizerCommunicationReadError('data_corrupt');
+        }
+        opened.set(payloadRefId, Object.freeze({ metadata: row, envelope }));
+      } catch (error) {
+        if (error instanceof D1OrganizerCommunicationReadError) throw error;
+        throw new D1OrganizerCommunicationReadError('data_corrupt', error);
+      } finally {
+        bytes?.fill(0);
+      }
+    }
+    return opened;
+  }
+
   async #openPayload(session: D1DatabaseSession, input: {
     readonly scope: OrganizerCommunicationScope;
     readonly ownerKey?: string;
     readonly payloadRefId: string;
     readonly kind: OrganizerAuthoringPayloadKind;
   }) {
-    const row = await this.#exactMetadata(session, input);
-    const payloadRefId = parsePayloadRefId(row.payload_ref_id);
-    const records = await readD1ClassifiedPayloadRecords(session, [payloadRefId]);
-    if (records.length !== 1) throw new D1OrganizerCommunicationReadError('data_corrupt');
-    let bytes: Uint8Array | undefined;
-    try {
-      bytes = this.#codec.read(records[0]!, {
-        payloadRef: createPayloadRef(payloadRefId),
-        expectedBinding: createCommunicationAuthoringClassifiedPayloadBinding({
-          scope: input.scope,
-          ownerKey: row.owner_key,
-          kind: row.payload_kind
-        }),
-        purpose: communicationAuthoringClassifiedPayloadPurpose(row.payload_kind)
-      });
-      if (bytes.byteLength !== row.byte_size || await sha256(bytes) !== row.digest_sha256) {
-        throw new D1OrganizerCommunicationReadError('data_corrupt');
-      }
-      const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-      const envelope = organizerCommunicationAuthoringPayloadInputSchema.parse(JSON.parse(text));
-      if (envelope.payloadKind !== input.kind || canonicalJsonText(envelope) !== text) {
-        throw new D1OrganizerCommunicationReadError('data_corrupt');
-      }
-      return envelope;
-    } catch (error) {
-      if (error instanceof D1OrganizerCommunicationReadError) throw error;
-      throw new D1OrganizerCommunicationReadError('data_corrupt', error);
-    } finally {
-      bytes?.fill(0);
-    }
+    const opened = await this.#openPayloadBatch(session, [input]);
+    return opened.get(input.payloadRefId)!.envelope;
   }
 
   async #purposeRevision(session: D1DatabaseSession, input: {
     readonly scope: OrganizerCommunicationScope;
     readonly revisionId: string;
-  }) {
+  }): Promise<PurposeRevisionRecord | undefined> {
     interface Row {
       purpose_id: string; purpose_key: string; revision_id: string; revision_number: number;
       digest_sha256: string; lifecycle: string; current_revision_id: string;
@@ -330,34 +448,47 @@ class D1OrganizerCommunicationReadPort implements OrganizerCommunicationReadPort
     readonly audiencePayloadRefId: string;
     readonly purposeRevisionId: string;
   }) {
-    const [contentMetadata, audienceMetadata, contentEnvelope, audienceEnvelope] = await Promise.all([
-      this.#exactMetadata(session, {
+    const opened = await this.#openPayloadBatch(session, [
+      {
         scope: input.scope, ownerKey: input.ownerKey,
         payloadRefId: input.contentPayloadRefId, kind: 'message_content'
-      }),
-      this.#exactMetadata(session, {
+      },
+      {
         scope: input.scope, ownerKey: input.ownerKey,
         payloadRefId: input.audiencePayloadRefId, kind: 'message_audience_draft'
-      }),
-      this.#openPayload(session, {
-        scope: input.scope, ownerKey: input.ownerKey,
-        payloadRefId: input.contentPayloadRefId, kind: 'message_content'
-      }),
-      this.#openPayload(session, {
-        scope: input.scope, ownerKey: input.ownerKey,
-        payloadRefId: input.audiencePayloadRefId, kind: 'message_audience_draft'
-      })
+      }
     ]);
-    const content = organizerEmailMessageContentSchema.parse(contentEnvelope.value);
-    const audience = organizerCommunicationAudienceDraftSchema.parse(audienceEnvelope.value);
+    return this.#readyAuthoringFromOpened(input, opened);
+  }
+
+  #readyAuthoringFromOpened(input: {
+    readonly scope: OrganizerCommunicationScope;
+    readonly ownerKey: string;
+    readonly contentPayloadRefId: string;
+    readonly audiencePayloadRefId: string;
+    readonly purposeRevisionId: string;
+  }, opened: ReadonlyMap<string, OpenedAuthoringPayload>) {
+    const contentOpened = opened.get(input.contentPayloadRefId);
+    const audienceOpened = opened.get(input.audiencePayloadRefId);
+    if (contentOpened === undefined || audienceOpened === undefined) {
+      throw new D1OrganizerCommunicationReadError('data_corrupt');
+    }
+    const content = organizerEmailMessageContentSchema.parse(contentOpened.envelope.value);
+    const audience = organizerCommunicationAudienceDraftSchema.parse(audienceOpened.envelope.value);
     if (audience.purposeRevision.revisionId !== input.purposeRevisionId) {
       throw new D1OrganizerCommunicationReadError('payload_ref_invalid');
     }
     return Object.freeze({
       content,
       audience,
-      contentPayload: this.#publicPayloadRef(contentMetadata),
-      audiencePayload: this.#publicPayloadRef(audienceMetadata)
+      contentPayload: this.#publicPayloadRef(
+        contentOpened.metadata as CanonicalAuthoringMetadata & { payload_kind: 'message_content' }
+      ),
+      audiencePayload: this.#publicPayloadRef(
+        audienceOpened.metadata as CanonicalAuthoringMetadata & {
+          payload_kind: 'message_audience_draft';
+        }
+      )
     });
   }
 
@@ -390,7 +521,7 @@ class D1OrganizerCommunicationReadPort implements OrganizerCommunicationReadPort
     session: D1DatabaseSession,
     scope: OrganizerCommunicationScope,
     revisionId: string
-  ) {
+  ): Promise<TemplateRevisionRecord> {
     interface Row {
       template_id: string; template_revision_id: string;
       revision_number: number; digest_sha256: string;
@@ -412,9 +543,14 @@ class D1OrganizerCommunicationReadPort implements OrganizerCommunicationReadPort
   async #draftRecord(
     session: D1DatabaseSession,
     scope: OrganizerCommunicationScope,
-    row: DraftRow
+    row: DraftRow,
+    resolved?: Readonly<{
+      purpose: PurposeRevisionRecord;
+      templateRevision?: TemplateRevisionRecord;
+      opened: ReadonlyMap<string, OpenedAuthoringPayload>;
+    }>
   ): Promise<OrganizerMessageDraftRecord> {
-    const purpose = await this.#purposeRevision(session, {
+    const purpose = resolved?.purpose ?? await this.#purposeRevision(session, {
       scope, revisionId: row.purpose_revision_id
     });
     if (!purpose) throw new D1OrganizerCommunicationReadError('data_corrupt');
@@ -438,13 +574,16 @@ class D1OrganizerCommunicationReadPort implements OrganizerCommunicationReadPort
       });
     } else {
       if (row.subject === null) throw new D1OrganizerCommunicationReadError('data_corrupt');
-      const ready = await this.#readyAuthoring(session, {
+      const readyInput = {
         scope,
         ownerKey: row.owner_key,
         contentPayloadRefId: row.content_payload_ref_id,
         audiencePayloadRefId: row.audience_payload_ref_id,
         purposeRevisionId: row.purpose_revision_id
-      });
+      };
+      const ready = resolved === undefined
+        ? await this.#readyAuthoring(session, readyInput)
+        : this.#readyAuthoringFromOpened(readyInput, resolved.opened);
       if (ready.content.subject !== row.subject) {
         throw new D1OrganizerCommunicationReadError('data_corrupt');
       }
@@ -453,6 +592,14 @@ class D1OrganizerCommunicationReadPort implements OrganizerCommunicationReadPort
         contentPayload: ready.contentPayload,
         audiencePayload: ready.audiencePayload
       });
+    }
+    let templateRevision: TemplateRevisionRecord | undefined;
+    if (row.template_revision_id !== null) {
+      templateRevision = resolved?.templateRevision
+        ?? await this.#templateRevisionRef(session, scope, row.template_revision_id);
+      if (templateRevision.templateRevisionId !== row.template_revision_id) {
+        throw new D1OrganizerCommunicationReadError('data_corrupt');
+      }
     }
     return Object.freeze({
       workspaceId: row.workspace_id,
@@ -469,9 +616,7 @@ class D1OrganizerCommunicationReadPort implements OrganizerCommunicationReadPort
         revisionNumber: purpose.revisionNumber,
         digestSha256: purpose.digestSha256
       }),
-      ...(row.template_revision_id === null ? {} : {
-        templateRevision: await this.#templateRevisionRef(session, scope, row.template_revision_id)
-      }),
+      ...(templateRevision === undefined ? {} : { templateRevision }),
       authoring,
       provenance,
       createdAt: instant(row.created_at),
@@ -480,8 +625,17 @@ class D1OrganizerCommunicationReadPort implements OrganizerCommunicationReadPort
     });
   }
 
-  async #draftSummary(session: D1DatabaseSession, scope: OrganizerCommunicationScope, row: DraftRow) {
-    const record = await this.#draftRecord(session, scope, row);
+  async #draftSummary(
+    session: D1DatabaseSession,
+    scope: OrganizerCommunicationScope,
+    row: DraftRow,
+    resolved?: Readonly<{
+      purpose: PurposeRevisionRecord;
+      templateRevision?: TemplateRevisionRecord;
+      opened: ReadonlyMap<string, OpenedAuthoringPayload>;
+    }>
+  ) {
+    const record = await this.#draftRecord(session, scope, row, resolved);
     return organizerCommunicationDraftSummarySchema.parse({
       schemaVersion: 1,
       draftId: record.draftId,
@@ -528,6 +682,31 @@ class D1OrganizerCommunicationReadPort implements OrganizerCommunicationReadPort
       communicationClass: row.communication_class,
       lifecycle: row.lifecycle,
       policyDigestSha256: row.policy_digest_sha256
+    });
+  }
+
+  #joinedPurpose(row: {
+    readonly purpose_revision_id: string;
+    readonly purpose_id: string | null;
+    readonly purpose_key: string | null;
+    readonly purpose_revision_number: number | null;
+    readonly purpose_digest_sha256: string | null;
+    readonly purpose_lifecycle: string | null;
+    readonly purpose_current_revision_id: string | null;
+  }): PurposeRevisionRecord {
+    if (row.purpose_id === null || row.purpose_key === null
+        || row.purpose_revision_number === null || row.purpose_digest_sha256 === null
+        || row.purpose_lifecycle === null || row.purpose_current_revision_id === null) {
+      throw new D1OrganizerCommunicationReadError('data_corrupt');
+    }
+    return Object.freeze({
+      purposeId: row.purpose_id,
+      purposeKey: row.purpose_key,
+      revisionId: row.purpose_revision_id,
+      revisionNumber: row.purpose_revision_number,
+      digestSha256: row.purpose_digest_sha256,
+      lifecycle: row.purpose_lifecycle,
+      currentRevisionId: row.purpose_current_revision_id
     });
   }
 
@@ -610,17 +789,20 @@ class D1OrganizerCommunicationReadPort implements OrganizerCommunicationReadPort
     });
   }
 
-  async #templateProjection(session: D1DatabaseSession, scope: OrganizerCommunicationScope, row: {
-    readonly template_id: string; readonly template_key: string; readonly template_name: string;
-    readonly lifecycle: 'draft' | 'active' | 'archived'; readonly purpose_revision_id: string;
-    readonly template_revision_id: string; readonly revision_number: number;
-    readonly digest_sha256: string; readonly content_payload_ref_id: string;
-  }) {
-    const purpose = await this.#purposeRevision(session, {
+  async #templateProjection(
+    session: D1DatabaseSession,
+    scope: OrganizerCommunicationScope,
+    row: TemplateProjectionRow,
+    resolved?: Readonly<{
+      purpose: PurposeRevisionRecord;
+      envelope: OrganizerCommunicationAuthoringPayloadInput;
+    }>
+  ) {
+    const purpose = resolved?.purpose ?? await this.#purposeRevision(session, {
       scope, revisionId: row.purpose_revision_id
     });
     if (!purpose) throw new D1OrganizerCommunicationReadError('data_corrupt');
-    const envelope = await this.#openPayload(session, {
+    const envelope = resolved?.envelope ?? await this.#openPayload(session, {
       scope, payloadRefId: row.content_payload_ref_id, kind: 'template_content'
     });
     if (envelope.payloadKind !== 'template_content') {
@@ -665,9 +847,17 @@ class D1OrganizerCommunicationReadPort implements OrganizerCommunicationReadPort
     const values: Array<string | number> = [scope.workspaceId, scope.eventId];
     let sql = `SELECT t.template_id,t.template_key,t.template_name,t.lifecycle,
       t.purpose_revision_id,r.template_revision_id,r.revision_number,r.digest_sha256,
-      r.content_payload_ref_id FROM message_templates t JOIN message_template_revisions r
+      r.content_payload_ref_id,pr.purpose_id,pr.purpose_key,
+      pr.revision_number AS purpose_revision_number,
+      pr.digest_sha256 AS purpose_digest_sha256,p.lifecycle AS purpose_lifecycle,
+      p.current_revision_id AS purpose_current_revision_id
+      FROM message_templates t JOIN message_template_revisions r
         ON r.workspace_id=t.workspace_id AND r.event_id=t.event_id
        AND r.template_revision_id=t.current_revision_id
+      LEFT JOIN communication_purpose_revisions pr ON pr.workspace_id=t.workspace_id
+       AND pr.event_id=t.event_id AND pr.revision_id=t.purpose_revision_id
+      LEFT JOIN communication_purposes p ON p.workspace_id=pr.workspace_id
+       AND p.event_id=pr.event_id AND p.purpose_id=pr.purpose_id
       WHERE t.workspace_id=? AND t.event_id=?`;
     if (after !== undefined) { sql += ' AND t.template_id > ?'; values.push(after); }
     if (request.lifecycle !== undefined) { sql += ' AND t.lifecycle = ?'; values.push(request.lifecycle); }
@@ -679,20 +869,25 @@ class D1OrganizerCommunicationReadPort implements OrganizerCommunicationReadPort
     }
     sql += ' ORDER BY t.template_id ASC LIMIT ?';
     values.push(limit + 1);
-    interface Row {
-      template_id: string; template_key: string; template_name: string;
-      lifecycle: 'draft' | 'active' | 'archived'; purpose_revision_id: string;
-      template_revision_id: string; revision_number: number; digest_sha256: string;
-      content_payload_ref_id: string;
+    interface Row extends TemplateProjectionRow {
+      purpose_id: string | null; purpose_key: string | null;
+      purpose_revision_number: number | null; purpose_digest_sha256: string | null;
+      purpose_lifecycle: string | null; purpose_current_revision_id: string | null;
     }
     const session = this.input.database.withSession('first-primary');
     const rows = await session.prepare(sql).bind(...values).all<Row>();
     const selected = rows.results.slice(0, limit);
+    const opened = await this.#openPayloadBatch(session, selected.map((row) => ({
+      scope, payloadRefId: row.content_payload_ref_id, kind: 'template_content' as const
+    })));
     return Object.freeze({
       kind: 'success' as const,
       data: organizerMessageTemplatePageSchema.parse({
         schemaVersion: 1,
-        rows: await Promise.all(selected.map((row) => this.#templateProjection(session, scope, row))),
+        rows: await Promise.all(selected.map((row) => this.#templateProjection(session, scope, row, {
+          purpose: this.#joinedPurpose(row),
+          envelope: opened.get(row.content_payload_ref_id)!.envelope
+        }))),
         page: rows.results.length > limit
           ? { hasMore: true, nextCursor: encodeCursor('templates', selected.at(-1)!.template_id) }
           : { hasMore: false }
@@ -794,25 +989,76 @@ class D1OrganizerCommunicationReadPort implements OrganizerCommunicationReadPort
     }
     const limit = request.limit ?? 50;
     const values: Array<string | number> = [scope.workspaceId, scope.eventId, ownerKey];
-    let sql = `SELECT workspace_id,event_id,draft_id,owner_key,version,state,channel,
-      purpose_revision_id,template_revision_id,authoring_state,content_payload_ref_id,
-      audience_payload_ref_id,subject,provenance_json,discard_reason_code,created_at,updated_at
-      FROM communication_drafts WHERE workspace_id=? AND event_id=? AND owner_key=?`;
+    let sql = `SELECT d.workspace_id,d.event_id,d.draft_id,d.owner_key,d.version,d.state,
+      d.channel,d.purpose_revision_id,d.template_revision_id,d.authoring_state,
+      d.content_payload_ref_id,d.audience_payload_ref_id,d.subject,d.provenance_json,
+      d.discard_reason_code,d.created_at,d.updated_at,pr.purpose_id,pr.purpose_key,
+      pr.revision_number AS purpose_revision_number,
+      pr.digest_sha256 AS purpose_digest_sha256,p.lifecycle AS purpose_lifecycle,
+      p.current_revision_id AS purpose_current_revision_id,
+      tr.template_id AS joined_template_id,
+      tr.template_revision_id AS joined_template_revision_id,
+      tr.revision_number AS template_revision_number,
+      tr.digest_sha256 AS template_digest_sha256
+      FROM communication_drafts d
+      LEFT JOIN communication_purpose_revisions pr ON pr.workspace_id=d.workspace_id
+       AND pr.event_id=d.event_id AND pr.revision_id=d.purpose_revision_id
+      LEFT JOIN communication_purposes p ON p.workspace_id=pr.workspace_id
+       AND p.event_id=pr.event_id AND p.purpose_id=pr.purpose_id
+      LEFT JOIN message_template_revisions tr ON tr.workspace_id=d.workspace_id
+       AND tr.event_id=d.event_id AND tr.template_revision_id=d.template_revision_id
+      WHERE d.workspace_id=? AND d.event_id=? AND d.owner_key=?`;
     if (after !== undefined) {
-      sql += ' AND (updated_at < ? OR (updated_at = ? AND draft_id < ?))';
+      sql += ' AND (d.updated_at < ? OR (d.updated_at = ? AND d.draft_id < ?))';
       values.push(after.updatedAt, after.updatedAt, after.lastId);
     }
-    if (request.state !== undefined) { sql += ' AND state = ?'; values.push(request.state); }
-    sql += ' ORDER BY updated_at DESC, draft_id DESC LIMIT ?';
+    if (request.state !== undefined) { sql += ' AND d.state = ?'; values.push(request.state); }
+    sql += ' ORDER BY d.updated_at DESC, d.draft_id DESC LIMIT ?';
     values.push(limit + 1);
     const session = this.input.database.withSession('first-primary');
-    const rows = await session.prepare(sql).bind(...values).all<DraftRow>();
+    const rows = await session.prepare(sql).bind(...values).all<DraftListRow>();
     const selected = rows.results.slice(0, limit);
+    const opened = await this.#openPayloadBatch(session, selected.flatMap((row) =>
+      row.authoring_state === 'ready'
+        ? [
+            {
+              scope, ownerKey: row.owner_key,
+              payloadRefId: row.content_payload_ref_id, kind: 'message_content' as const
+            },
+            {
+              scope, ownerKey: row.owner_key,
+              payloadRefId: row.audience_payload_ref_id, kind: 'message_audience_draft' as const
+            }
+          ]
+        : []
+    ));
     return Object.freeze({
       kind: 'success' as const,
       data: organizerCommunicationDraftPageSchema.parse({
         schemaVersion: 1,
-        rows: await Promise.all(selected.map((row) => this.#draftSummary(session, scope, row))),
+        rows: await Promise.all(selected.map((row) => {
+          let templateRevision: TemplateRevisionRecord | undefined;
+          if (row.template_revision_id !== null) {
+            if (row.joined_template_id === null || row.joined_template_revision_id === null
+                || row.template_revision_number === null || row.template_digest_sha256 === null) {
+              throw new D1OrganizerCommunicationReadError('data_corrupt');
+            }
+            templateRevision = Object.freeze({
+              templateId: row.joined_template_id,
+              templateRevisionId: row.joined_template_revision_id,
+              revisionNumber: row.template_revision_number,
+              digestSha256: row.template_digest_sha256
+            });
+          } else if (row.joined_template_id !== null || row.joined_template_revision_id !== null
+              || row.template_revision_number !== null || row.template_digest_sha256 !== null) {
+            throw new D1OrganizerCommunicationReadError('data_corrupt');
+          }
+          return this.#draftSummary(session, scope, row, {
+            purpose: this.#joinedPurpose(row),
+            ...(templateRevision === undefined ? {} : { templateRevision }),
+            opened
+          });
+        })),
         page: rows.results.length > limit
           ? { hasMore: true, nextCursor: encodeDraftCursor(selected.at(-1)!) }
           : { hasMore: false }

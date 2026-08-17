@@ -40,6 +40,8 @@ const INSERT_SQL = `INSERT INTO classified_payload_records (
   nonce,ciphertext,authentication_tag,created_at_ms
 ) VALUES (?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`;
 
+const READ_BATCH_SIZE = 50;
+
 function arrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
@@ -54,16 +56,20 @@ export async function readD1ClassifiedPayloadRecords(
   if (unique.length !== payloadRefIds.length) {
     throw new SynchronousClassifiedPayloadStoreError('invalid_payload_input');
   }
-  const placeholders = unique.map(() => '?').join(',');
-  let rows: D1Result<ImmutableClassifiedPayloadRecordRow>;
+  const records: ImmutableClassifiedPayloadRecord[] = [];
   try {
-    rows = await session.prepare(`SELECT ${READ_COLUMNS}
-      FROM classified_payload_records WHERE payload_ref_id IN (${placeholders})`)
-      .bind(...unique).all<ImmutableClassifiedPayloadRecordRow>();
+    for (let offset = 0; offset < unique.length; offset += READ_BATCH_SIZE) {
+      const batch = unique.slice(offset, offset + READ_BATCH_SIZE);
+      const placeholders = batch.map(() => '?').join(',');
+      const rows = await session.prepare(`SELECT ${READ_COLUMNS}
+        FROM classified_payload_records WHERE payload_ref_id IN (${placeholders})`)
+        .bind(...batch).all<ImmutableClassifiedPayloadRecordRow>();
+      records.push(...rows.results.map(parseImmutableClassifiedPayloadRecord));
+    }
   } catch {
     throw new SynchronousClassifiedPayloadStoreError('payload_store_failure');
   }
-  return Object.freeze(rows.results.map(parseImmutableClassifiedPayloadRecord));
+  return Object.freeze(records);
 }
 
 export interface D1BufferedClassifiedPayloadStoreOptions
