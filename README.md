@@ -105,8 +105,10 @@ from D1 and operation history.
 The same operation registry now produces the Cloudflare and single-machine external-
 agent OpenAPI contract and origin-specific `llms.txt`; the Cloudflare discovery routes
 use retained per-IP limits and cache validators without exposing workspace facts.
-Bearer-authenticated reads, plan submission, and the approved runner remain closed on
-Cloudflare.
+Cloudflare now authenticates hash-only bearer credentials for current standing and
+the authority-filtered read-tool catalog, rechecking the owner's live access and
+retained per-key limits on every request. Read execution, plan submission/status, and
+the approved runner remain closed on Cloudflare.
 
 Organizer upload bytes now stream to R2 only after current authority and intent
 ownership are checked. A retained transfer-attempt record prevents concurrent or

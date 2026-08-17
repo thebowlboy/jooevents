@@ -5,7 +5,12 @@ import {
   CLOUDFLARE_WORKERS_EMAIL_ADAPTER_KEY,
   CLOUDFLARE_WORKERS_EMAIL_SETUP_MANIFEST
 } from '@jooevents/cloudflare-email';
-import { emailProviderConnectionProjectionSchema } from '@jooevents/contracts';
+import {
+  emailProviderConnectionProjectionSchema,
+  externalAgentMeResponseSchema,
+  externalAgentToolsResponseSchema
+} from '@jooevents/contracts';
+import { hashApiKey } from '@jooevents/identity-access';
 import { sendMessagesAuthorInputSchema } from '@jooevents/communication-operations';
 import { canonicalJsonText, parseWorkspaceId } from '@jooevents/kernel';
 import { beforeAll, describe, expect, test } from 'vitest';
@@ -21,6 +26,10 @@ const authUserId = uuid(704);
 const sessionId = uuid(705);
 const rawSessionToken = 'd1-application-http-session-token';
 const roleId = uuid(706);
+const externalApiKeyId = uuid(708);
+const externalApiSecret = `jooak1_${'B'.repeat(43)}`;
+const planOnlyApiKeyId = uuid(709);
+const planOnlyApiSecret = `jooak1_${'C'.repeat(43)}`;
 const secret = 'd1-application-http-auth-secret-at-least-thirty-two-characters';
 const baseUrl = 'https://application-http.jooevents.invalid';
 
@@ -79,7 +88,33 @@ beforeAll(async () => {
       (id,user_id,role_id,workspace_id,scope_kind,event_id,assigned_by_user_id,
        assigned_at,expires_at,version)
       VALUES (?,?,?,?,'workspace',NULL,?,?,NULL,1)`)
-      .bind(uuid(707), userId, roleId, workspaceId, userId, now)
+      .bind(uuid(707), userId, roleId, workspaceId, userId, now),
+    env.DB.prepare(`INSERT INTO api_keys (
+      api_key_id,workspace_id,owner_user_id,display_name,token_hash_sha256,token_hint,
+      may_read,may_submit_plans,created_at_ms,expires_at_ms,last_used_at_ms,standing,
+      revoked_at_ms,revoked_by_user_id,revoke_reason,rotation_successor_id,version
+    ) VALUES (?,?,?,?,?,?,1,1,?,?,NULL,'active',NULL,NULL,NULL,NULL,1)`)
+      .bind(
+        externalApiKeyId, workspaceId, userId, 'D1 protected API test',
+        hashApiKey(externalApiSecret), externalApiSecret.slice(0, 11),
+        now, now + 30 * 86_400_000
+      ),
+    env.DB.prepare(`INSERT INTO api_key_permission_scopes(api_key_id,permission_id)
+      VALUES (?,?)`).bind(externalApiKeyId, 'access.roles.manage'),
+    env.DB.prepare(`INSERT INTO api_key_permission_scopes(api_key_id,permission_id)
+      VALUES (?,?)`).bind(externalApiKeyId, 'event.read'),
+    env.DB.prepare(`INSERT INTO api_keys (
+      api_key_id,workspace_id,owner_user_id,display_name,token_hash_sha256,token_hint,
+      may_read,may_submit_plans,created_at_ms,expires_at_ms,last_used_at_ms,standing,
+      revoked_at_ms,revoked_by_user_id,revoke_reason,rotation_successor_id,version
+    ) VALUES (?,?,?,?,?,?,0,1,?,?,NULL,'active',NULL,NULL,NULL,NULL,1)`)
+      .bind(
+        planOnlyApiKeyId, workspaceId, userId, 'D1 plan-only API test',
+        hashApiKey(planOnlyApiSecret), planOnlyApiSecret.slice(0, 11),
+        now, now + 30 * 86_400_000
+      ),
+    env.DB.prepare(`INSERT INTO api_key_permission_scopes(api_key_id,permission_id)
+      VALUES (?,?)`).bind(planOnlyApiKeyId, 'event.read')
   ]);
 });
 
@@ -151,6 +186,89 @@ describe('configured D1 application HTTP slice', () => {
     const llmsText = await llms.text();
     expect(llmsText).toContain(`${baseUrl}/api/v1/openapi.json`);
     expect(llmsText).not.toContain(workspaceId);
+  });
+
+  test('serves current API-key standing and the authority-filtered read catalog', async () => {
+    const malformed = await handleRequest(new Request(`${baseUrl}/api/v1/me`, {
+      headers: {
+        authorization: `Bearer jooak1_${'!'.repeat(43)}`,
+        cookie: await cookie(),
+        'cf-connecting-ip': '192.0.2.21'
+      }
+    }), environment());
+    expect(malformed.status).toBe(401);
+    expect(await malformed.json()).toMatchObject({
+      kind: 'transport_error', code: 'unauthenticated', retryable: false
+    });
+    const planOnly = await handleRequest(new Request(`${baseUrl}/api/v1/me`, {
+      headers: {
+        authorization: `Bearer ${planOnlyApiSecret}`,
+        'cf-connecting-ip': '192.0.2.23'
+      }
+    }), environment());
+    expect(planOnly.status).toBe(403);
+    expect(await planOnly.json()).toMatchObject({
+      kind: 'transport_error', code: 'forbidden', retryable: false
+    });
+
+    const authHeaders = {
+      authorization: `Bearer ${externalApiSecret}`,
+      'cf-connecting-ip': '192.0.2.22'
+    };
+    const meResponse = await handleRequest(
+      new Request(`${baseUrl}/api/v1/me`, { headers: authHeaders }), environment()
+    );
+    expect(meResponse.status, await meResponse.clone().text()).toBe(200);
+    expect(meResponse.headers.get('cache-control')).toBe('no-store, max-age=0');
+    const me = externalAgentMeResponseSchema.parse(await meResponse.json());
+    expect(me).toMatchObject({
+      workspace: { id: workspaceId },
+      owner: { id: userId, displayName: 'D1 application owner' },
+      capabilities: { read: true, submitPlans: true },
+      permissionScopes: ['access.roles.manage', 'event.read'],
+      standing: {
+        warnings: [{
+          code: 'scopes_dormant',
+          permissionIds: ['access.roles.manage']
+        }],
+        pending: { awaitingApproval: 0, needsAttention: 0, hint: '/api/v1/pending' }
+      }
+    });
+    const used = await env.DB.prepare(`SELECT token_hash_sha256,last_used_at_ms,version
+      FROM api_keys WHERE api_key_id = ?`).bind(externalApiKeyId).first<{
+      readonly token_hash_sha256: string;
+      readonly last_used_at_ms: number | null;
+      readonly version: number;
+    }>();
+    expect(used?.token_hash_sha256).toBe(hashApiKey(externalApiSecret));
+    expect(used?.last_used_at_ms).toBeTypeOf('number');
+    expect(used?.version).toBe(2);
+    expect(JSON.stringify(used)).not.toContain(externalApiSecret);
+
+    const toolsResponse = await handleRequest(
+      new Request(`${baseUrl}/api/v1/tools`, { headers: authHeaders }), environment()
+    );
+    expect(toolsResponse.status, await toolsResponse.clone().text()).toBe(200);
+    const tools = externalAgentToolsResponseSchema.parse(await toolsResponse.json());
+    expect(toolsResponse.headers.get('etag')).toBe(`"${tools.registryDigestSha256}"`);
+    expect(tools.tools.some((tool) => tool.name === 'list_operation_history'
+      && tool.availability.state === 'active')).toBe(true);
+    expect(tools.unavailableTools.some((tool) =>
+      tool.name === 'get_delivery_history'
+        && tool.availability.state === 'locked_scope'
+        && tool.availability.permissionIds.includes('communication.draft')
+    )).toBe(true);
+    expect(tools.upcoming).toHaveLength(2);
+    const coalesced = await env.DB.prepare(`SELECT version FROM api_keys
+      WHERE api_key_id = ?`).bind(externalApiKeyId).first<{ readonly version: number }>();
+    expect(coalesced?.version).toBe(2);
+
+    await env.DB.prepare(`UPDATE api_keys SET standing='revoked',revoked_at_ms=?,
+      revoked_by_user_id=?,revoke_reason='security',version=version+1
+      WHERE api_key_id=?`).bind(Date.now(), userId, externalApiKeyId).run();
+    expect((await handleRequest(
+      new Request(`${baseUrl}/api/v1/me`, { headers: authHeaders }), environment()
+    )).status).toBe(401);
   });
 
   test('serves the exact partial manifest and runs Event create/read/replay over authenticated HTTP', async () => {

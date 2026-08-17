@@ -35,8 +35,12 @@ import {
   EXTERNAL_AGENT_DISCOVERY_LINK,
   EXTERNAL_AGENT_GUIDANCE_V1,
   EXTERNAL_AGENT_UPCOMING,
+  DEFAULT_EXTERNAL_AGENT_API_POLICY,
   createExternalAgentOpenApiDocument,
-  externalAgentLlmsText
+  externalAgentLlmsText,
+  externalAgentToolCatalogProjection,
+  externalAgentToolGuidance,
+  type ExternalAgentApiPolicy
 } from '@jooevents/http-operation-adapters';
 import type { ApiKeyRecord } from '@jooevents/identity-access';
 import { canonicalJsonSha256 } from '@jooevents/kernel';
@@ -68,25 +72,7 @@ export const GUIDANCE_V1 = EXTERNAL_AGENT_GUIDANCE_V1;
 export const EXTERNAL_API_UPCOMING = EXTERNAL_AGENT_UPCOMING;
 export { EXTERNAL_AGENT_CONDUCT, externalAgentLlmsText };
 
-export interface ExternalAgentApiPolicy {
-  readonly requestsPerMinute: number;
-  readonly burstPerTenSeconds: number;
-  readonly maximumConcurrency: number;
-  readonly planSubmissionsPerDay: number;
-  readonly maximumOpenPlans: number;
-  readonly failedAuthPerMinute: number;
-  readonly openapiPerMinute: number;
-}
-
-export const DEFAULT_EXTERNAL_AGENT_API_POLICY: ExternalAgentApiPolicy = Object.freeze({
-  requestsPerMinute: 120,
-  burstPerTenSeconds: 40,
-  maximumConcurrency: 4,
-  planSubmissionsPerDay: 60,
-  maximumOpenPlans: 10,
-  failedAuthPerMinute: 20,
-  openapiPerMinute: 30
-});
+export { DEFAULT_EXTERNAL_AGENT_API_POLICY, type ExternalAgentApiPolicy };
 
 type OwnedPlanPage = {
   readonly items: readonly AgentActionBatchView[];
@@ -296,21 +282,6 @@ function jsonSchema(schema: z.ZodType): unknown {
   }))) as unknown;
 }
 
-function toolCatalogProjection(runtime: ExternalAgentApiRuntime, tool: McpToolDefinition) {
-  const compiled = getCompiledReadOperation(
-    runtime.operations.registry,
-    tool.contract.operation.name,
-    tool.contract.operation.version,
-    'external_mcp'
-  );
-  if (!compiled) throw new TypeError('external_agent_tool_binding_missing');
-  return Object.freeze({
-    ...tool,
-    inputJsonSchema: registeredJsonSchema(compiled.operation.inputSchema),
-    resultJsonSchema: registeredJsonSchema(compiled.binding.projectedResultSchema)
-  });
-}
-
 function operationInputJsonSchema(runtime: ExternalAgentApiRuntime, operationName: string, version: number): unknown {
   const manifest = runtime.operations.registry.safeManifest.operations.find((entry) =>
     entry.name === operationName && entry.version === version
@@ -319,11 +290,6 @@ function operationInputJsonSchema(runtime: ExternalAgentApiRuntime, operationNam
   if (!manifest || !surface || manifest.effect === 'read') return {};
   const compiled = getCompiledEffectOperation(runtime.operations.registry, operationName, version, surface);
   return compiled ? registeredJsonSchema(compiled.operation.inputSchema) : {};
-}
-
-function toolGuidance(tool: McpToolDefinition): ExternalAgentGuidance {
-  const key = tool.contract.maxRisk === 'low' ? 'read_routine' : 'read_sensitive';
-  return Object.freeze({ key, message: GUIDANCE_V1[key] });
 }
 
 function planGuidance(operation: RegisteredAgentActionEligibility): ExternalAgentGuidance {
@@ -627,7 +593,9 @@ export function createExternalAgentApi(runtime: ExternalAgentApiRuntime) {
     return context.json(externalAgentToolsResponseSchema.parse({
       registryDigestSha256: runtime.tools.registryDigestSha256,
       tools: visible.map(({ tool, availability }) => ({
-        ...toolCatalogProjection(runtime, tool), availability, guidance: toolGuidance(tool)
+        ...externalAgentToolCatalogProjection(runtime.operations, tool),
+        availability,
+        guidance: externalAgentToolGuidance(tool)
       })),
       unavailableTools: unavailable,
       upcoming: EXTERNAL_API_UPCOMING,

@@ -134,6 +134,7 @@ import { createD1CreatedEventInitializer } from './d1-created-event-initializer'
 import { createD1CommunicationProviderReadPorts } from './d1-communication-provider-read';
 import { createD1CommunicationDeliveryHistoryReadPort } from './d1-communication-delivery-history';
 import { createD1ExternalAgentDiscoveryTransport } from './d1-external-agent-discovery';
+import { createD1ExternalAgentApiTransport } from './d1-external-agent-api';
 import {
   createD1DeadlineDirectEffectDomainRegistration,
   createD1DeadlineReadSource
@@ -1304,10 +1305,17 @@ export async function createConfiguredD1ApplicationRuntime(
     assets: fileDownloadAssets,
     blobs: fileBlobs
   });
-  return createD1ExternalAgentDiscoveryTransport({
+  const discoveryTransport = createD1ExternalAgentDiscoveryTransport({
     database: environment.DB,
     delegate: filesTransport,
     operations
+  });
+  return createD1ExternalAgentApiTransport({
+    database: environment.DB,
+    workspaceId,
+    delegate: discoveryTransport,
+    operations,
+    policies
   });
 }
 

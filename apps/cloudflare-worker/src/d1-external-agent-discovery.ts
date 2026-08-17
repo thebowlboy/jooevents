@@ -27,14 +27,24 @@ function ipScope(request: Request): string {
   return `discovery:${canonicalJsonSha256(address)}`;
 }
 
-export async function consumeD1ExternalAgentDiscoveryRateLimit(input: {
+export async function consumeD1ExternalApiRateLimit(input: {
   readonly database: D1Database;
   readonly scopeKey: string;
   readonly nowMs: number;
-}): Promise<{ readonly kind: 'allowed' } | {
+  readonly windowMs: number;
+  readonly limit: number;
+}): Promise<{ readonly kind: 'allowed'; readonly requestCount: number } | {
   readonly kind: 'limited';
   readonly retryAfterSeconds: number;
 }> {
+  if (!Number.isSafeInteger(input.nowMs) || input.nowMs < 0
+      || !Number.isSafeInteger(input.windowMs) || input.windowMs < 1_000
+      || input.windowMs > 86_400_000
+      || !Number.isSafeInteger(input.limit) || input.limit < 1
+      || input.limit > 1_000_000
+      || input.scopeKey.length < 1 || input.scopeKey.length > 200) {
+    throw new TypeError('d1_external_api_rate_limit_input_invalid');
+  }
   const row = await input.database.withSession('first-primary').prepare(`
     INSERT INTO external_api_rate_limit_heads(
       scope_key,window_started_at_ms,window_ms,request_count,version
@@ -58,20 +68,41 @@ export async function consumeD1ExternalAgentDiscoveryRateLimit(input: {
       version=external_api_rate_limit_heads.version+1
     RETURNING window_started_at_ms,request_count
   `).bind(
-    input.scopeKey, input.nowMs, WINDOW_MS, REQUEST_LIMIT + 1, REQUEST_LIMIT + 1
+    input.scopeKey, input.nowMs, input.windowMs, input.limit + 1, input.limit + 1
   ).first<RateLimitRow>();
   if (!row || !Number.isSafeInteger(row.window_started_at_ms)
       || !Number.isSafeInteger(row.request_count) || row.request_count < 1) {
     throw new TypeError('d1_external_agent_discovery_rate_limit_corrupt');
   }
-  if (row.request_count <= REQUEST_LIMIT) return Object.freeze({ kind: 'allowed' as const });
+  if (row.request_count <= input.limit) return Object.freeze({
+    kind: 'allowed' as const,
+    requestCount: row.request_count
+  });
   return Object.freeze({
     kind: 'limited' as const,
     retryAfterSeconds: Math.max(
       1,
-      Math.ceil((row.window_started_at_ms + WINDOW_MS - input.nowMs) / 1_000)
+      Math.ceil((row.window_started_at_ms + input.windowMs - input.nowMs) / 1_000)
     )
   });
+}
+
+export async function consumeD1ExternalAgentDiscoveryRateLimit(input: {
+  readonly database: D1Database;
+  readonly scopeKey: string;
+  readonly nowMs: number;
+}): Promise<{ readonly kind: 'allowed' } | {
+  readonly kind: 'limited';
+  readonly retryAfterSeconds: number;
+}> {
+  const result = await consumeD1ExternalApiRateLimit({
+    ...input,
+    windowMs: WINDOW_MS,
+    limit: REQUEST_LIMIT
+  });
+  return result.kind === 'allowed'
+    ? Object.freeze({ kind: 'allowed' as const })
+    : result;
 }
 
 function commonHeaders(input: {

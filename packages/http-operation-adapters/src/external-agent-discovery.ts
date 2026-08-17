@@ -14,10 +14,32 @@ import {
   externalAgentPlanSubmitResponseSchema,
   externalAgentToolsResponseSchema,
   externalAgentTransportErrorResponseSchema,
-  readOperationResultSchema
+  readOperationResultSchema,
+  type ExternalAgentGuidance
 } from '@jooevents/contracts';
 import type { McpToolRegistry } from '@jooevents/mcp';
+import type { McpToolDefinition } from '@jooevents/mcp';
 import { z } from 'zod';
+
+export interface ExternalAgentApiPolicy {
+  readonly requestsPerMinute: number;
+  readonly burstPerTenSeconds: number;
+  readonly maximumConcurrency: number;
+  readonly planSubmissionsPerDay: number;
+  readonly maximumOpenPlans: number;
+  readonly failedAuthPerMinute: number;
+  readonly openapiPerMinute: number;
+}
+
+export const DEFAULT_EXTERNAL_AGENT_API_POLICY: ExternalAgentApiPolicy = Object.freeze({
+  requestsPerMinute: 120,
+  burstPerTenSeconds: 40,
+  maximumConcurrency: 4,
+  planSubmissionsPerDay: 60,
+  maximumOpenPlans: 10,
+  failedAuthPerMinute: 20,
+  openapiPerMinute: 30
+});
 
 export const EXTERNAL_AGENT_GUIDANCE_V1 = Object.freeze({
   read_routine: 'Call freely whenever it helps — reading changes nothing.',
@@ -95,6 +117,29 @@ function registeredJsonSchema(registration: { readonly jsonSchema?: unknown }): 
     return jsonSchema(candidate as z.ZodType);
   }
   return candidate;
+}
+
+export function externalAgentToolCatalogProjection(
+  operations: ApplicationOperationRuntime,
+  tool: McpToolDefinition
+) {
+  const compiled = getCompiledReadOperation(
+    operations.registry,
+    tool.contract.operation.name,
+    tool.contract.operation.version,
+    'external_mcp'
+  );
+  if (!compiled) throw new TypeError('external_agent_tool_binding_missing');
+  return Object.freeze({
+    ...tool,
+    inputJsonSchema: registeredJsonSchema(compiled.operation.inputSchema),
+    resultJsonSchema: registeredJsonSchema(compiled.binding.projectedResultSchema)
+  });
+}
+
+export function externalAgentToolGuidance(tool: McpToolDefinition): ExternalAgentGuidance {
+  const key = tool.contract.maxRisk === 'low' ? 'read_routine' : 'read_sensitive';
+  return Object.freeze({ key, message: EXTERNAL_AGENT_GUIDANCE_V1[key] });
 }
 
 function assertUpcomingDoesNotCollide(tools: McpToolRegistry): void {
