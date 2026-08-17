@@ -47,7 +47,9 @@ import {
 } from '@jooevents/template-authoring-operations';
 import {
   WORKSPACE_OVERVIEW_READ_ACCESS_POLICY,
-  createOperationHistoryReadOperationModule
+  WORKSPACE_SHELL_SUMMARY_READ_ACCESS_POLICY,
+  createOperationHistoryReadOperationModule,
+  createWorkspaceShellSummaryOperationModule
 } from '@jooevents/workspace-operations';
 import {
   parseInstant,
@@ -99,6 +101,7 @@ import {
 } from './d1-effect-unit-of-work';
 import { createD1OperatorCurrentAuthorityResolver } from './d1-operator-authority';
 import { createD1OperationHistoryReadSource } from './d1-operation-history';
+import { createD1WorkspaceShellSummaryReadSource } from './d1-workspace-summary';
 
 export type D1ApplicationRuntimeEnvironment = CloudflareAuthBindings & {
   readonly DB: D1Database;
@@ -143,7 +146,8 @@ export async function createConfiguredD1ApplicationRuntime(
     { policy: DEADLINE_READ_ACCESS_POLICY, permissionId: 'event.read' },
     { policy: DEADLINE_MANAGE_ACCESS_POLICY, permissionId: 'event.manage' },
     { policy: TASK_MANAGE_ACCESS_POLICY, permissionId: 'event.manage' },
-    { policy: WORKSPACE_OVERVIEW_READ_ACCESS_POLICY, permissionId: 'event.read' }
+    { policy: WORKSPACE_OVERVIEW_READ_ACCESS_POLICY, permissionId: 'event.read' },
+    { policy: WORKSPACE_SHELL_SUMMARY_READ_ACCESS_POLICY, permissionId: 'event.read' }
   ]);
   const currentAuthority = createD1OperatorCurrentAuthorityResolver({
     session: environment.DB.withSession('first-primary'),
@@ -163,6 +167,10 @@ export async function createConfiguredD1ApplicationRuntime(
     workspaceId
   });
   const operationHistory = createD1OperationHistoryReadSource({
+    database: environment.DB,
+    workspaceId
+  });
+  const workspaceSummary = createD1WorkspaceShellSummaryReadSource({
     database: environment.DB,
     workspaceId
   });
@@ -340,6 +348,19 @@ export async function createConfiguredD1ApplicationRuntime(
       requestCanonicalizationProfile: EVENT_OPERATION_KEY_PROFILES.requestCanonicalization
     })
   });
+  const workspaceSummaryOperations = createWorkspaceShellSummaryOperationModule({
+    workspaceId,
+    policy: WORKSPACE_SHELL_SUMMARY_READ_ACCESS_POLICY,
+    currentAuthority,
+    read: workspaceSummary,
+    clock,
+    ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+    crypto: Object.freeze({
+      authorityPrincipalKeyProfile: EVENT_OPERATION_KEY_PROFILES.authorityPrincipal,
+      scopePartitionProfile: EVENT_OPERATION_KEY_PROFILES.scopePartition,
+      requestCanonicalizationProfile: EVENT_OPERATION_KEY_PROFILES.requestCanonicalization
+    })
+  });
   const domains = createD1EffectDomainAdapterRegistry([
     createD1EventCreateEffectDomainRegistration({
       workspaceId,
@@ -407,7 +428,8 @@ export async function createConfiguredD1ApplicationRuntime(
       taskMutationOperations,
       templateArtifactReadOperations,
       templateArtifactNativeOperations,
-      operationHistoryOperations
+      operationHistoryOperations,
+      workspaceSummaryOperations
     ]),
     read: {
       operationalTrace: { emit() {} },

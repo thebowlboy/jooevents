@@ -121,7 +121,8 @@ describe('configured D1 application HTTP slice', () => {
       'template.artifact.change',
       'template.artifact.change.draft',
       'template.artifact.get',
-      'template.artifact.list'
+      'template.artifact.list',
+      'workspace.shell.summary.read'
     ]);
 
     const initial = await handleRequest(
@@ -131,6 +132,18 @@ describe('configured D1 application HTTP slice', () => {
     expect(initial.status).toBe(200);
     expect(await initial.json()).toMatchObject({
       kind: 'success', data: { kind: 'no_event', eventSetVersion: 1 }
+    });
+    const initialShell = await handleRequest(
+      new Request(`${baseUrl}/api/workspace/shell-summary`, { headers }),
+      environment()
+    );
+    expect(initialShell.status, await initialShell.clone().text()).toBe(200);
+    expect(await initialShell.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        workspace: { id: workspaceId, name: 'D1 application workspace' },
+        event: null
+      }
     });
 
     const request = () => new Request(`${baseUrl}/api/events`, {
@@ -174,6 +187,23 @@ describe('configured D1 application HTTP slice', () => {
         eventSetVersion: 2,
         currentEventId: firstBody.data.event.id,
         events: [{ id: firstBody.data.event.id, name: 'D1 Application Summit' }]
+      }
+    });
+    const selectedShell = await handleRequest(
+      new Request(`${baseUrl}/api/workspace/shell-summary`, { headers }),
+      environment()
+    );
+    expect(await selectedShell.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        workspace: { id: workspaceId, name: 'D1 application workspace' },
+        event: {
+          id: firstBody.data.event.id,
+          name: 'D1 Application Summit',
+          timezone: 'Asia/Singapore',
+          startDate: '2027-03-10',
+          endDate: '2027-03-12'
+        }
       }
     });
     const settings = await handleRequest(
