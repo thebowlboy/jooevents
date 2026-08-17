@@ -132,6 +132,25 @@ describe('organizer communication authoring operation modules', () => {
     expect(registry.appModelEffectBindings).toHaveLength(4);
   });
 
+  test('can mount an explicitly complete mutation subset without advertising siblings', async () => {
+    const module = createOrganizerCommunicationMutationOperationModule({
+      workspaceId,
+      policy: ORGANIZER_COMMUNICATION_DRAFT_ACCESS_POLICY,
+      currentAuthority: authority,
+      currentEvent,
+      clock: { now: () => now },
+      ids,
+      crypto,
+      enabledOperations: ['store_communication_authoring_payload']
+    });
+    expect(module.source.effectOperations?.map((operation) => operation.name)).toEqual([
+      'store_communication_authoring_payload'
+    ]);
+    const registry = await createOperationRegistry(module.source);
+    expect(registry.operatorHttpEffectBindings).toHaveLength(1);
+    expect(registry.appModelEffectBindings).toHaveLength(1);
+  });
+
   test('joins the read and mutation halves with one exact shared registration set', async () => {
     const read = createOrganizerCommunicationReadOperationModule({
       workspaceId,

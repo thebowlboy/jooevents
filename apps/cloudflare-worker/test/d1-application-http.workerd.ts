@@ -172,6 +172,7 @@ describe('configured D1 application HTTP slice', () => {
       'schedule.placement.snapshot.read',
       'session.catalog.read',
       'session.change',
+      'store_communication_authoring_payload',
       'task.board.read',
       'task.mutation',
       'template.artifact.change',
@@ -241,6 +242,32 @@ describe('configured D1 application HTTP slice', () => {
     expect(await initialPurposes.json()).toMatchObject({
       kind: 'outcome',
       outcome: { class: 'conflict', kind: 'communication.event_required' }
+    });
+    const initialAuthoringPayload = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/communications/authoring-payloads`, {
+        method: 'POST',
+        headers: {
+          cookie: headers.cookie,
+          origin: baseUrl,
+          'content-type': 'application/json',
+          'idempotency-key': 'd1-initial-authoring-payload'
+        },
+        body: JSON.stringify({
+          payload: {
+            payloadKind: 'message_content',
+            schemaVersion: 1,
+            value: {
+              kind: 'email/v1', subject: 'No event',
+              body: { kind: 'plain_text/v1', text: '' }
+            }
+          }
+        })
+      }),
+      environment()
+    );
+    expect(initialAuthoringPayload.status, await initialAuthoringPayload.clone().text()).toBe(200);
+    expect(await initialAuthoringPayload.json()).toMatchObject({
+      kind: 'outcome', outcome: { class: 'conflict', kind: 'communication.event_required' }
     });
     const initialDownload = await handleRequest(
       new Request(`${baseUrl}/api/events/current/files/download/${uuid(709)}`, { headers }),
@@ -545,6 +572,76 @@ describe('configured D1 application HTTP slice', () => {
     expect(await missingDraft.json()).toMatchObject({
       kind: 'outcome', outcome: { class: 'conflict', kind: 'communication.not_found' }
     });
+    const authoringPayloadInput = {
+      payload: {
+        payloadKind: 'message_content',
+        schemaVersion: 1,
+        value: {
+          kind: 'email/v1',
+          subject: 'D1 authoring payload',
+          body: { kind: 'plain_text/v1', text: 'PRIVATE-D1-AUTHORING-CANARY' }
+        }
+      }
+    };
+    const storeAuthoringPayload = (body: unknown) => handleRequest(
+      new Request(`${baseUrl}/api/events/current/communications/authoring-payloads`, {
+        method: 'POST',
+        headers: {
+          cookie: headers.cookie,
+          origin: baseUrl,
+          'content-type': 'application/json',
+          'idempotency-key': 'd1-store-authoring-payload'
+        },
+        body: JSON.stringify(body)
+      }),
+      environment()
+    );
+    const storedAuthoringPayload = await storeAuthoringPayload(authoringPayloadInput);
+    expect(
+      storedAuthoringPayload.status,
+      await storedAuthoringPayload.clone().text()
+    ).toBe(200);
+    const storedAuthoringPayloadBody = await storedAuthoringPayload.json<{
+      readonly kind: string;
+      readonly data: { readonly payloadRefId: string; readonly payloadKind: string };
+    }>();
+    expect(storedAuthoringPayloadBody).toMatchObject({
+      kind: 'success', data: { payloadKind: 'message_content' }
+    });
+    const storedAuthoringPayloadReplay = await storeAuthoringPayload(authoringPayloadInput);
+    expect(await storedAuthoringPayloadReplay.json()).toEqual(storedAuthoringPayloadBody);
+    const changedAuthoringPayload = await storeAuthoringPayload({
+      payload: {
+        ...authoringPayloadInput.payload,
+        value: { ...authoringPayloadInput.payload.value, subject: 'Changed payload' }
+      }
+    });
+    expect(await changedAuthoringPayload.json()).toMatchObject({
+      kind: 'outcome',
+      outcome: { class: 'idempotency_conflict', kind: 'operation.request_changed' }
+    });
+    const authoringRows = await env.DB.batch([
+      env.DB.prepare(`SELECT count(*) AS count FROM communication_authoring_payloads
+        WHERE payload_ref_id=?`).bind(storedAuthoringPayloadBody.data.payloadRefId),
+      env.DB.prepare(`SELECT count(*) AS count FROM organizer_communication_authoring_receipt_links
+        WHERE payload_ref_id=?`).bind(storedAuthoringPayloadBody.data.payloadRefId),
+      env.DB.prepare(`SELECT count(*) AS count FROM organizer_communication_authoring_timeline t
+        JOIN organizer_communication_authoring_receipt_links l ON l.receipt_id=t.receipt_id
+        WHERE l.payload_ref_id=?`).bind(storedAuthoringPayloadBody.data.payloadRefId),
+      env.DB.prepare(`SELECT r.ciphertext FROM classified_payload_records r
+        JOIN communication_authoring_payloads p ON p.payload_ref_id=r.payload_ref_id
+        WHERE p.payload_ref_id=?`).bind(storedAuthoringPayloadBody.data.payloadRefId)
+    ]);
+    expect((authoringRows[0] as D1Result<{ count: number }>).results[0]?.count).toBe(1);
+    expect((authoringRows[1] as D1Result<{ count: number }>).results[0]?.count).toBe(1);
+    expect((authoringRows[2] as D1Result<{ count: number }>).results[0]?.count).toBe(1);
+    const ciphertext = (authoringRows[3] as D1Result<{
+      ciphertext: ArrayBuffer | readonly number[];
+    }>).results[0]?.ciphertext;
+    expect(ciphertext).toBeDefined();
+    expect(new TextDecoder().decode(
+      ciphertext instanceof ArrayBuffer ? new Uint8Array(ciphertext) : Uint8Array.from(ciphertext!)
+    )).not.toContain('PRIVATE-D1-AUTHORING-CANARY');
     const recordedAtMs = Date.now();
     const recordedAt = new Date(recordedAtMs).toISOString();
     const shareId = uuid(708);
@@ -1307,7 +1404,7 @@ describe('configured D1 application HTTP slice', () => {
     const operationCount = await env.DB.prepare(
       'SELECT count(*) AS count FROM operation_log WHERE workspace_id = ?'
     ).bind(workspaceId).first<{ readonly count: number }>();
-    expect(operationCount?.count).toBe(16);
+    expect(operationCount?.count).toBe(17);
     const logs = await env.DB.prepare('SELECT count(*) AS count FROM operation_log WHERE id = ?')
       .bind(firstBody.receipt.id).first<{ readonly count: number }>();
     expect(logs?.count).toBe(1);

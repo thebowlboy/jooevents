@@ -630,6 +630,7 @@ export function createOrganizerCommunicationMutationOperationModule(input: {
   readonly clock: Clock;
   readonly ids: OrganizerCommunicationOperationIds;
   readonly crypto: OrganizerCommunicationOperationCrypto;
+  readonly enabledOperations?: readonly OrganizerCommunicationMutationOperationName[];
 }): OperationRegistryModule {
   assertPolicy(input.policy);
   const workspaceId = parseWorkspaceId(input.workspaceId);
@@ -638,7 +639,18 @@ export function createOrganizerCommunicationMutationOperationModule(input: {
     parseOperationAccessLane({ kind: 'app_model', surface: 'app_model', policy: input.policy })
   ]);
   const scope = scopeResolver(workspaceId, input.currentEvent);
-  const entries = (Object.keys(ORGANIZER_COMMUNICATION_MUTATION_OPERATIONS) as MutationKey[]).map((key) => {
+  const enabledOperations = input.enabledOperations === undefined
+    ? undefined
+    : new Set(input.enabledOperations);
+  if (enabledOperations !== undefined && (enabledOperations.size !== input.enabledOperations!.length
+      || [...enabledOperations].some((name) =>
+        !(name in ORGANIZER_COMMUNICATION_MUTATION_HANDLER_CAPABILITY_BY_OPERATION)))) {
+    throw new TypeError('organizer_communication_enabled_operations_invalid');
+  }
+  const entries = (Object.keys(ORGANIZER_COMMUNICATION_MUTATION_OPERATIONS) as MutationKey[])
+    .filter((key) => enabledOperations === undefined
+      || enabledOperations.has(ORGANIZER_COMMUNICATION_MUTATION_OPERATIONS[key].name))
+    .map((key) => {
     const operation = ORGANIZER_COMMUNICATION_MUTATION_OPERATIONS[key];
     const operationName = operation.name as OrganizerCommunicationMutationOperationName;
     const catalog = mutationCatalog[key];

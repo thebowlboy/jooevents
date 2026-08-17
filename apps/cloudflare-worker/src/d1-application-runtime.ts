@@ -14,8 +14,11 @@ import {
 } from '@jooevents/application';
 import {
   ORGANIZER_COMMUNICATION_DRAFT_ACCESS_POLICY,
+  ORGANIZER_COMMUNICATION_MUTATION_OPERATIONS,
   WORKSPACE_SENDER_IDENTITY_ACCESS_POLICY,
   WORKSPACE_SENDER_IDENTITY_UPDATE_REQUEST_HASH_PROFILE,
+  composeOrganizerCommunicationAuthoringOperationModules,
+  createOrganizerCommunicationMutationOperationModule,
   createOrganizerCommunicationReadOperationModule,
   createWorkspaceSenderIdentityOperationModule
 } from '@jooevents/communication-operations';
@@ -165,6 +168,9 @@ import {
 import { createD1OperatorCurrentAuthorityResolver } from './d1-operator-authority';
 import { createD1OperationHistoryReadSource } from './d1-operation-history';
 import { createD1OrganizerCommunicationReadPort } from './d1-organizer-communication-read';
+import {
+  createD1OrganizerCommunicationPayloadEffectDomainRegistration
+} from './d1-organizer-communication-payload-mutation';
 import { createD1ProgramVocabularySnapshotReadSource } from './d1-program-vocabulary';
 import {
   createD1ProgramVocabularyDirectEffectDomainRegistration
@@ -293,20 +299,56 @@ const COMMUNICATION_PROVIDER_READ_PROFILES = Object.freeze({
   })
 });
 
-const ORGANIZER_COMMUNICATION_READ_PROFILES = Object.freeze({
+const ORGANIZER_COMMUNICATION_PROFILES = Object.freeze({
   authorityPrincipalKeyProfile: Object.freeze({
     key: 'key-profile.communication.organizer-principal',
     version: parseContractVersion(1)
   }),
   scopePartitionProfile: Object.freeze({
-    key: 'key-profile.communication.organizer-event-scope',
+    key: 'key-profile.communication.current-event-scope',
     version: parseContractVersion(1)
   }),
   requestCanonicalizationProfile: Object.freeze({
-    key: 'key-profile.communication.organizer-request-canonicalization',
+    key: 'key-profile.communication.request-canonicalization',
+    version: parseContractVersion(1)
+  }),
+  idempotencyCredentialProfile: Object.freeze({
+    key: 'key-profile.communication.idempotency-credential',
     version: parseContractVersion(1)
   })
 });
+
+function createOrganizerCommunicationRequestHashSealer(
+  cryptoProfiles: DurableCryptoProfileComposition
+) {
+  const operationNames: ReadonlySet<string> = new Set(
+    Object.values(ORGANIZER_COMMUNICATION_MUTATION_OPERATIONS)
+      .map((operation) => operation.name)
+  );
+  return Object.freeze({
+    seal(canonicalRequestBytes: Uint8Array) {
+      if (!(canonicalRequestBytes instanceof Uint8Array)
+          || canonicalRequestBytes.byteLength === 0) {
+        throw new TypeError('communication_request_hash_input_invalid');
+      }
+      let operationName: string;
+      try {
+        const request = JSON.parse(new TextDecoder().decode(canonicalRequestBytes)) as {
+          readonly operation?: { readonly name?: unknown };
+        };
+        if (typeof request.operation?.name !== 'string'
+            || !operationNames.has(request.operation.name)) throw new TypeError();
+        operationName = request.operation.name;
+      } catch {
+        throw new TypeError('communication_request_hash_operation_invalid');
+      }
+      return cryptoProfiles.requestHashSealer(Object.freeze({
+        key: `request-hash.communication.organizer.${operationName}`,
+        version: parseContractVersion(1)
+      })).seal(canonicalRequestBytes);
+    }
+  });
+}
 
 const SENDER_IDENTITY_OPERATION_KEY_PROFILES = Object.freeze({
   authorityPrincipal: Object.freeze({
@@ -548,6 +590,14 @@ export async function createConfiguredD1ApplicationRuntime(
   const organizerCommunicationRead = createD1OrganizerCommunicationReadPort({
     database: environment.DB,
     classifiedPayload: classifiedD1CommunicationProfiles(cryptoProfiles)
+  });
+  const organizerCommunicationCurrentEvent = Object.freeze({
+    async resolveCurrentEvent(requestedWorkspaceId: WorkspaceId) {
+      const selected = await reads.resolveCurrentEvent(requestedWorkspaceId);
+      return selected.eventId === undefined
+        ? undefined
+        : Object.freeze({ eventId: selected.eventId, evidenceIds: selected.evidenceIds });
+    }
   });
   const common = Object.freeze({
     workspaceId,
@@ -852,19 +902,34 @@ export async function createConfiguredD1ApplicationRuntime(
     workspaceId,
     policy: ORGANIZER_COMMUNICATION_DRAFT_ACCESS_POLICY,
     currentAuthority,
-    currentEvent: Object.freeze({
-      async resolveCurrentEvent(requestedWorkspaceId: WorkspaceId) {
-        const selected = await reads.resolveCurrentEvent(requestedWorkspaceId);
-        return selected.eventId === undefined
-          ? undefined
-          : Object.freeze({ eventId: selected.eventId, evidenceIds: selected.evidenceIds });
-      }
-    }),
+    currentEvent: organizerCommunicationCurrentEvent,
     read: organizerCommunicationRead,
     clock,
     ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
-    crypto: ORGANIZER_COMMUNICATION_READ_PROFILES
+    crypto: ORGANIZER_COMMUNICATION_PROFILES
   });
+  const organizerCommunicationMutationOperations =
+    createOrganizerCommunicationMutationOperationModule({
+      workspaceId,
+      policy: ORGANIZER_COMMUNICATION_DRAFT_ACCESS_POLICY,
+      currentAuthority,
+      currentEvent: organizerCommunicationCurrentEvent,
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      crypto: Object.freeze({
+        ...ORGANIZER_COMMUNICATION_PROFILES,
+        requestHashSealer: createOrganizerCommunicationRequestHashSealer(cryptoProfiles),
+        idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(
+          ORGANIZER_COMMUNICATION_PROFILES.idempotencyCredentialProfile
+        )
+      }),
+      enabledOperations: ['store_communication_authoring_payload']
+    });
+  const organizerCommunicationAuthoringOperations =
+    composeOrganizerCommunicationAuthoringOperationModules({
+      read: organizerCommunicationReadOperations,
+      mutation: organizerCommunicationMutationOperations
+    });
   const programVocabularyReadOperations = createProgramVocabularyReadOperationModule({
     workspaceId,
     readPolicy: PROGRAM_VOCABULARY_READ_ACCESS_POLICY,
@@ -1079,6 +1144,11 @@ export async function createConfiguredD1ApplicationRuntime(
       workspaceId,
       installation: installationMailSender
     }),
+    createD1OrganizerCommunicationPayloadEffectDomainRegistration({
+      workspaceId,
+      classifiedPayload: classifiedD1CommunicationProfiles(cryptoProfiles),
+      ids: { newTimelineId: () => crypto.randomUUID() }
+    }),
     ...createD1TemplateArtifactNativeEffectDomainRegistrations({
       workspaceId,
       ids: {
@@ -1131,7 +1201,7 @@ export async function createConfiguredD1ApplicationRuntime(
       fileCommandOperations,
       communicationProviderReadOperations,
       senderIdentityOperations,
-      organizerCommunicationReadOperations,
+      organizerCommunicationAuthoringOperations,
       programVocabularyReadOperations,
       programVocabularyDirectOperations,
       programVocabularyMergeOperations,
