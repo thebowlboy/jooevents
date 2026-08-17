@@ -14,6 +14,8 @@
     "@jooevents/auth": "workspace:*",
     "@jooevents/communications": "workspace:*",
     "@jooevents/contracts": "workspace:*",
+    "@jooevents/deadline": "workspace:*",
+    "@jooevents/deadline-operations": "workspace:*",
     "@jooevents/event": "workspace:*",
     "@jooevents/event-operations": "workspace:*",
     "@jooevents/field-registry": "workspace:*",

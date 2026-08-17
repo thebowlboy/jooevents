@@ -40,7 +40,9 @@ import {
   deadlineListReadInputSchema,
   deadlineListReadResultSchema,
   deadlineMutationPlanSchema,
-  deadlineVersionSchema
+  deadlineVersionSchema,
+  type DeadlineCatalogSnapshotDto,
+  type DeadlineScopeDto
 } from '@jooevents/contracts/deadlines';
 import type { DeadlineRepository } from '@jooevents/deadline';
 import {
@@ -88,6 +90,24 @@ export const DEADLINE_CHANGE_REQUEST_HASH_PROFILE = ref('request-hash.deadline.c
 export const DEADLINE_CHANGE_HANDLER_CAPABILITY = ref(
   'capability.deadline.change-direct'
 );
+export const DEADLINE_OPERATION_KEY_PROFILES = Object.freeze({
+  authorityPrincipal: Object.freeze({
+    key: 'key-profile.deadline.operator-principal',
+    version: parseContractVersion(1)
+  }),
+  scopePartition: Object.freeze({
+    key: 'key-profile.deadline.current-event-scope',
+    version: parseContractVersion(1)
+  }),
+  requestCanonicalization: Object.freeze({
+    key: 'key-profile.deadline.request-canonicalization',
+    version: parseContractVersion(1)
+  }),
+  idempotencyCredential: Object.freeze({
+    key: 'key-profile.deadline.idempotency-credential',
+    version: parseContractVersion(1)
+  })
+});
 const applicationIdSchema = z.string().refine(isApplicationId, {
   message: 'Application IDs must be canonical lowercase UUIDv4 or UUIDv7 values.'
 });
@@ -230,12 +250,17 @@ export interface DeadlineOperationPolicies {
   readonly manage: VersionedAccessPolicyRef;
 }
 
+export interface DeadlineCatalogReadSource {
+  readDeadlineCatalog(scope: DeadlineScopeDto):
+    DeadlineCatalogSnapshotDto | undefined | Promise<DeadlineCatalogSnapshotDto | undefined>;
+}
+
 export interface CreateDeadlineOperationModuleInput {
   readonly workspaceId: WorkspaceId;
   readonly policies: DeadlineOperationPolicies;
   readonly currentAuthority: CurrentAuthorityResolver<InvocationEvidence>;
   readonly currentEvent: DeadlineCurrentEventSource;
-  readonly deadlineRead: Pick<DeadlineRepository, 'readDeadlineCatalog'>;
+  readonly deadlineRead: Pick<DeadlineRepository, 'readDeadlineCatalog'> | DeadlineCatalogReadSource;
   readonly clock: Clock;
   readonly ids: { newInvocationId(): InvocationId };
   readonly authorityPrincipalKeyProfile: VersionedKeyProfileRef;
@@ -362,9 +387,9 @@ export function createDeadlineOperationModule(
     requestCanonicalizationProfile: input.requestCanonicalizationProfile,
     deniedAuthorityOutcome: authorityOutcome
   });
-  const openDeadlineSnapshot = (context: ReadInvocationContext) => {
+  const openDeadlineSnapshot = async (context: ReadInvocationContext) => {
     if (context.scope.eventId === undefined) return Object.freeze({ kind: 'event_required' });
-    const catalog = input.deadlineRead.readDeadlineCatalog({
+    const catalog = await input.deadlineRead.readDeadlineCatalog({
       workspaceId: context.scope.workspaceId,
       eventId: context.scope.eventId
     });

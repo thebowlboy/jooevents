@@ -5,6 +5,13 @@ import {
   type InvocationEvidence
 } from '@jooevents/application';
 import {
+  DEADLINE_CHANGE_REQUEST_HASH_PROFILE,
+  DEADLINE_MANAGE_ACCESS_POLICY,
+  DEADLINE_OPERATION_KEY_PROFILES,
+  DEADLINE_READ_ACCESS_POLICY,
+  createDeadlineOperationModule
+} from '@jooevents/deadline-operations';
+import {
   EVENT_CREATE_REQUEST_HASH_PROFILE,
   EVENT_MANAGE_ACCESS_POLICY,
   EVENT_OPERATION_KEY_PROFILES,
@@ -43,6 +50,10 @@ import {
   type CloudflareAuthBindings
 } from './auth-config';
 import { createD1CreatedEventInitializer } from './d1-created-event-initializer';
+import {
+  createD1DeadlineDirectEffectDomainRegistration,
+  createD1DeadlineReadSource
+} from './d1-deadline';
 import {
   createD1EventCreateEffectDomainRegistration,
   createD1EventSelectEffectDomainRegistration
@@ -86,7 +97,7 @@ function classifiedCommunicationProfile(cryptoProfiles: DurableCryptoProfileComp
   ).encryptionProfile;
 }
 
-/** Builds the authenticated Event and Field Registry application slice over D1. */
+/** Builds the authenticated Event, Field Registry, and Deadline application slice over D1. */
 export async function createConfiguredD1ApplicationRuntime(
   environment: D1ApplicationRuntimeEnvironment
 ) {
@@ -101,7 +112,9 @@ export async function createConfiguredD1ApplicationRuntime(
     { policy: EVENT_READ_ACCESS_POLICY, permissionId: 'event.read' },
     { policy: EVENT_MANAGE_ACCESS_POLICY, permissionId: 'event.manage' },
     { policy: FIELD_REGISTRY_READ_ACCESS_POLICY, permissionId: 'event.read' },
-    { policy: FIELD_REGISTRY_MANAGE_ACCESS_POLICY, permissionId: 'event.manage' }
+    { policy: FIELD_REGISTRY_MANAGE_ACCESS_POLICY, permissionId: 'event.manage' },
+    { policy: DEADLINE_READ_ACCESS_POLICY, permissionId: 'event.read' },
+    { policy: DEADLINE_MANAGE_ACCESS_POLICY, permissionId: 'event.manage' }
   ]);
   const currentAuthority = createD1OperatorCurrentAuthorityResolver({
     session: environment.DB.withSession('first-primary'),
@@ -114,6 +127,7 @@ export async function createConfiguredD1ApplicationRuntime(
     database: environment.DB,
     workspaceId
   });
+  const deadlines = createD1DeadlineReadSource({ database: environment.DB, workspaceId });
   const common = Object.freeze({
     workspaceId,
     currentAuthority,
@@ -187,6 +201,27 @@ export async function createConfiguredD1ApplicationRuntime(
       FIELD_REGISTRY_OPERATION_KEY_PROFILES.idempotencyCredential
     )
   });
+  const deadlineOperations = createDeadlineOperationModule({
+    workspaceId,
+    policies: Object.freeze({
+      read: DEADLINE_READ_ACCESS_POLICY,
+      manage: DEADLINE_MANAGE_ACCESS_POLICY
+    }),
+    currentAuthority,
+    currentEvent: reads,
+    deadlineRead: deadlines,
+    clock,
+    ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+    authorityPrincipalKeyProfile: DEADLINE_OPERATION_KEY_PROFILES.authorityPrincipal,
+    scopePartitionProfile: DEADLINE_OPERATION_KEY_PROFILES.scopePartition,
+    requestCanonicalizationProfile:
+      DEADLINE_OPERATION_KEY_PROFILES.requestCanonicalization,
+    requestHashSealer: cryptoProfiles.requestHashSealer(DEADLINE_CHANGE_REQUEST_HASH_PROFILE),
+    idempotencyCredentialProfile: DEADLINE_OPERATION_KEY_PROFILES.idempotencyCredential,
+    idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(
+      DEADLINE_OPERATION_KEY_PROFILES.idempotencyCredential
+    )
+  });
   const domains = createD1EffectDomainAdapterRegistry([
     createD1EventCreateEffectDomainRegistration({
       workspaceId,
@@ -207,6 +242,10 @@ export async function createConfiguredD1ApplicationRuntime(
         newFieldId: () => crypto.randomUUID(),
         newChoiceId: () => crypto.randomUUID()
       }
+    }),
+    createD1DeadlineDirectEffectDomainRegistration({
+      workspaceId,
+      newDeadlineId: () => crypto.randomUUID()
     })
   ]);
   const unitOfWork = new D1EffectUnitOfWorkPort(environment.DB, domains, {
@@ -228,7 +267,8 @@ export async function createConfiguredD1ApplicationRuntime(
       eventSelectOperations,
       eventSettingsReadOperations,
       eventSettingsUpdateOperations,
-      fieldRegistryOperations
+      fieldRegistryOperations,
+      deadlineOperations
     ]),
     read: {
       operationalTrace: { emit() {} },

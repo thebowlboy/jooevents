@@ -100,6 +100,9 @@ describe('configured D1 application HTTP slice', () => {
       readonly operations: readonly { readonly name: string }[];
     }>();
     expect(manifestBody.operations.map((operation) => operation.name).sort()).toEqual([
+      'deadline.catalog.read',
+      'deadline.change',
+      'deadline.current.read',
       'event.create',
       'event.current.read',
       'event.list.read',
@@ -432,6 +435,114 @@ describe('configured D1 application HTTP slice', () => {
       FROM operation_log WHERE workspace_id = ? AND operation_name LIKE 'field_registry.%'`)
       .bind(workspaceId).first<{ readonly count: number }>();
     expect(fieldOperationCount?.count).toBe(5);
+
+    const initialDeadlines = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/deadlines`, { headers }),
+      environment()
+    );
+    expect(initialDeadlines.status, await initialDeadlines.clone().text()).toBe(200);
+    expect(await initialDeadlines.json()).toMatchObject({
+      kind: 'success',
+      data: { version: 1, deadlines: [] }
+    });
+    const deadlineMutation = (key: string, body: unknown) => handleRequest(
+      new Request(`${baseUrl}/api/events/current/deadlines`, {
+        method: 'POST',
+        headers: {
+          cookie: headers.cookie,
+          origin: baseUrl,
+          'content-type': 'application/json',
+          'idempotency-key': key
+        },
+        body: JSON.stringify(body)
+      }),
+      environment()
+    );
+    const deadlineCreateBody = { action: 'create', displayDate: '2027-03-09' } as const;
+    const createdDeadline = await deadlineMutation('d1-deadline-create', deadlineCreateBody);
+    expect(createdDeadline.status, await createdDeadline.clone().text()).toBe(200);
+    const createdDeadlineBody = await createdDeadline.json<{
+      readonly kind: string;
+      readonly data: { readonly deadline: { readonly id: string } };
+    }>();
+    expect(createdDeadlineBody).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'create',
+        catalogVersion: 2,
+        deadline: { status: 'active', version: 1, displayDate: '2027-03-09' }
+      }
+    });
+    const deadlineId = createdDeadlineBody.data.deadline.id;
+    const deadlineReplay = await deadlineMutation('d1-deadline-create', deadlineCreateBody);
+    expect(await deadlineReplay.json()).toEqual(createdDeadlineBody);
+    const staleDeadline = await deadlineMutation('d1-deadline-stale', {
+      action: 'update',
+      deadlineId,
+      expectedVersion: 9,
+      displayDate: '2027-03-10'
+    });
+    expect(await staleDeadline.json()).toMatchObject({
+      kind: 'outcome',
+      outcome: {
+        class: 'stale_revision',
+        kind: 'deadline.canonical_changed',
+        detail: { code: 'stale_deadline', action: 'update', deadlineId }
+      }
+    });
+    const updatedDeadline = await deadlineMutation('d1-deadline-update', {
+      action: 'update',
+      deadlineId,
+      expectedVersion: 1,
+      displayDate: '2027-03-10'
+    });
+    expect(await updatedDeadline.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'update',
+        catalogVersion: 3,
+        deadline: { id: deadlineId, status: 'active', version: 2 }
+      }
+    });
+    const currentDeadline = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/deadlines/current?deadlineId=${deadlineId}`, {
+        headers
+      }),
+      environment()
+    );
+    expect(await currentDeadline.json()).toMatchObject({
+      kind: 'success',
+      data: { deadline: { id: deadlineId, version: 2, displayDate: '2027-03-10' } }
+    });
+    const clearedDeadline = await deadlineMutation('d1-deadline-clear', {
+      action: 'clear',
+      deadlineId,
+      expectedVersion: 2
+    });
+    expect(await clearedDeadline.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'clear',
+        catalogVersion: 4,
+        deadline: { id: deadlineId, status: 'cleared', version: 3 },
+        pin: null
+      }
+    });
+    const finalDeadlines = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/deadlines`, { headers }),
+      environment()
+    );
+    expect(await finalDeadlines.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        version: 4,
+        deadlines: [{ id: deadlineId, status: 'cleared', version: 3 }]
+      }
+    });
+    const deadlineOperationCount = await env.DB.prepare(`SELECT count(*) AS count
+      FROM operation_log WHERE workspace_id = ? AND operation_name = 'deadline.change'`)
+      .bind(workspaceId).first<{ readonly count: number }>();
+    expect(deadlineOperationCount?.count).toBe(3);
   });
 
   test('keeps the application slice closed when activation or a durable key duty is incomplete', async () => {

@@ -127,6 +127,7 @@ import {
 import {
   DEADLINE_CHANGE_REQUEST_HASH_PROFILE,
   DEADLINE_MANAGE_ACCESS_POLICY,
+  DEADLINE_OPERATION_KEY_PROFILES,
   DEADLINE_READ_ACCESS_POLICY,
   createDeadlineOperationModule
 } from '@jooevents/deadline-operations';
@@ -772,25 +773,6 @@ const filesPortalProfiles = Object.freeze({
   }),
   idempotencyCredential: Object.freeze({
     key: 'key-profile.file.portal-idempotency-credential',
-    version: parseContractVersion(1)
-  })
-});
-
-const deadlineProfiles = Object.freeze({
-  authorityPrincipal: Object.freeze({
-    key: 'key-profile.deadline.operator-principal',
-    version: parseContractVersion(1)
-  }),
-  scopePartition: Object.freeze({
-    key: 'key-profile.deadline.current-event-scope',
-    version: parseContractVersion(1)
-  }),
-  requestCanonicalization: Object.freeze({
-    key: 'key-profile.deadline.request-canonicalization',
-    version: parseContractVersion(1)
-  }),
-  idempotencyCredential: Object.freeze({
-    key: 'key-profile.deadline.idempotency-credential',
     version: parseContractVersion(1)
   })
 });
@@ -3431,12 +3413,14 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       ids: Object.freeze({
         newInvocationId: () => parseInvocationId(crypto.randomUUID())
       }),
-      authorityPrincipalKeyProfile: deadlineProfiles.authorityPrincipal,
-      scopePartitionProfile: deadlineProfiles.scopePartition,
-      requestCanonicalizationProfile: deadlineProfiles.requestCanonicalization,
+      authorityPrincipalKeyProfile: DEADLINE_OPERATION_KEY_PROFILES.authorityPrincipal,
+      scopePartitionProfile: DEADLINE_OPERATION_KEY_PROFILES.scopePartition,
+      requestCanonicalizationProfile: DEADLINE_OPERATION_KEY_PROFILES.requestCanonicalization,
       requestHashSealer: cryptoProfiles.requestHashSealer(DEADLINE_CHANGE_REQUEST_HASH_PROFILE),
-      idempotencyCredentialProfile: deadlineProfiles.idempotencyCredential,
-      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(deadlineProfiles.idempotencyCredential)
+      idempotencyCredentialProfile: DEADLINE_OPERATION_KEY_PROFILES.idempotencyCredential,
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(
+        DEADLINE_OPERATION_KEY_PROFILES.idempotencyCredential
+      )
     });
     // Public intake surface: `public_open` evidence is honored only against a
     // FRESH gate resolution — the served policy revision IS the active apply
