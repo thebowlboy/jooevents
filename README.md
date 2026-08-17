@@ -63,10 +63,12 @@ drains it before storage closes. A frozen retained journey now crosses public
 submission, review, decision, speaker confirmation, tasks, scheduling, publication,
 participant entry, restart, and idempotent retry.
 
-The remaining line is release closure. The final artifact still needs its clean,
-committed-checkout build; supported operating-system service activation and HTTPS
-deployment must be verified; and the controlled outbound-email checkpoint plus final
-release-byte recovery sweep must close. The
+The remaining line is release closure. A clean committed-checkout artifact has passed
+installation, running verification, stopped upgrade, complete backup, isolated
+restore, and accepted-data reads from the restored copy. Supported operating-system
+service activation and the HTTPS endpoint still need their final deployment receipt;
+one controlled outbound-email checkpoint and the final tagged-release audit must also
+close. The
 [single-machine operator guide](docs/operator/single-machine.md) now documents the
 executable install, doctor, verification, upgrade, backup, and restore-rehearsal path;
 it remains a pre-release guide until walked through from the tagged artifact. The
