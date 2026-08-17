@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { excludeGeneratedReviewOverlay } from './exclude-demo-private-overlay';
 import {
   SQLITE_MIGRATION_MANIFEST,
   type SQLiteMigrationManifestEntry
@@ -17,6 +18,7 @@ import {
 
 const REPOSITORY_ROOT = resolve(import.meta.dir, '..');
 const GENERATED_ROOT = resolve(REPOSITORY_ROOT, 'apps/cloudflare-worker/.generated');
+const CLOUDFLARE_ASSET_ROOT = resolve(REPOSITORY_ROOT, 'apps/web/build-live');
 const GENERATED_MARKER = 'jooevents-cloudflare-generated-v1';
 
 export interface GeneratedCloudflareMigration {
@@ -180,6 +182,13 @@ function command(arguments_: readonly string[]): void {
 export function prepareCloudflareApplication(): void {
   writeCloudflareD1Migrations();
   command(['bun', 'run', '--cwd', 'apps/web', 'build:live']);
+  const exclusion = excludeGeneratedReviewOverlay(CLOUDFLARE_ASSET_ROOT);
+  if (existsSync(resolve(CLOUDFLARE_ASSET_ROOT, 'reviews'))) {
+    throw new TypeError('Cloudflare application assets still contain generated review material.');
+  }
+  if (exclusion.removed) {
+    console.log(`Excluded ${exclusion.fileCount} generated review artifact(s) from Cloudflare application assets.`);
+  }
 }
 
 if (import.meta.main) {

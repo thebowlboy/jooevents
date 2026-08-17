@@ -2,7 +2,10 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { excludeDemoPrivateOverlay } from './exclude-demo-private-overlay';
+import {
+  excludeDemoPrivateOverlay,
+  excludeGeneratedReviewOverlay
+} from './exclude-demo-private-overlay';
 
 const temporaryDirectories: string[] = [];
 
@@ -33,7 +36,7 @@ describe('demo private-overlay exclusion', () => {
 
   test('is a no-op when the build has no review subtree', () => {
     const build = fixture();
-    expect(excludeDemoPrivateOverlay(build)).toEqual({ removed: false, fileCount: 0 });
+    expect(excludeGeneratedReviewOverlay(build)).toEqual({ removed: false, fileCount: 0 });
   });
 
   test('refuses links instead of traversing them', () => {
@@ -43,7 +46,7 @@ describe('demo private-overlay exclusion', () => {
     symlinkSync(outside, join(build, 'reviews'));
 
     expect(() => excludeDemoPrivateOverlay(build))
-      .toThrow('demo_overlay_target_must_be_an_ordinary_directory');
+      .toThrow('generated_review_overlay_target_must_be_an_ordinary_directory');
     expect(existsSync(join(outside, 'keep.txt'))).toBe(true);
   });
 });
