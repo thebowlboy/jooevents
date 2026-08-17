@@ -79,9 +79,15 @@ JooEvents is therefore pre-release and **not ready for production event data yet
 is close enough that the SQLite production work is the main story here; it is not close
 enough to suggest putting an actual attendee list into it.
 
-The Cloudflare production composition—Worker, D1, R2, Queues, Cron, application auth,
-and outbound email—comes after the single-machine release. Its adapters and boundaries
-are being kept portable, but that composition is not deployable today.
+The Cloudflare production composition is now under active implementation, but it is
+still not a production application. Local workerd tests prove retained D1 migrations,
+authentication and admission, guarded Event and settings operations, the Field
+Registry, Deadlines, Tasks, native Template artifacts, safe operation history, and the
+workspace shell. Queue, Cron, and multipart R2 adapter tests also pass. The checked-in
+authentication and application activation flags remain off: the remaining application
+families, production jobs/files/email and recovery composition, account-level R2
+enablement, staging, and live deployment must close before Cloudflare can accept real
+traffic.
 
 ## Build and inspect
 
