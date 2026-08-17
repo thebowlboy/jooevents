@@ -7,6 +7,8 @@
     "./**/*.ts",
     "../src/d1-atomic-batch.ts",
     "../src/d1-auth.ts",
+    "../src/d1-principal-reader.ts",
+    "../src/d1-provisioning-store.ts",
     "../worker-configuration.d.ts"
   ],
   "exclude": []
