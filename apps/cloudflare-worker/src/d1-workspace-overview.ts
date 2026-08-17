@@ -87,6 +87,8 @@ export const D1_WORKSPACE_OVERVIEW_AREA_CATALOG: WorkspaceOverviewAreaCatalog =
         'program_vocabulary.create',
         'program_vocabulary.delete',
         'program_vocabulary.edit',
+        'program_vocabulary.merge',
+        'program_vocabulary.merge.draft',
         'program_vocabulary.restore',
         'program_vocabulary.retire',
         'program_vocabulary.snapshot.read',

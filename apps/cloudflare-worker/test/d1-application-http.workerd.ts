@@ -130,6 +130,8 @@ describe('configured D1 application HTTP slice', () => {
       'program_vocabulary.create',
       'program_vocabulary.delete',
       'program_vocabulary.edit',
+      'program_vocabulary.merge',
+      'program_vocabulary.merge.draft',
       'program_vocabulary.restore',
       'program_vocabulary.retire',
       'program_vocabulary.snapshot.read',
@@ -1762,6 +1764,255 @@ describe('configured D1 application HTTP slice', () => {
       .first<{ readonly set_version: number }>();
     expect(freshSet).toEqual({ set_version: 2 });
   }, 10_000);
+
+  test('drafts, replays, and publishes a guarded Program Vocabulary merge over D1', async () => {
+    const headers = { cookie: await cookie() };
+    const current = await env.DB.prepare(`SELECT current_event_id FROM event_spine_workspace_sets
+      WHERE workspace_id = ?`).bind(workspaceId)
+      .first<{ readonly current_event_id: string }>();
+    const eventId = current!.current_event_id;
+    const source = await env.DB.prepare(`SELECT id,version FROM program_vocabulary_rooms
+      WHERE workspace_id = ? AND event_id = ? AND name = 'Studio'`)
+      .bind(workspaceId, eventId).first<{ readonly id: string; readonly version: number }>();
+    const mutate = (path: string, key: string, body: unknown) => handleRequest(
+      new Request(`${baseUrl}/api/events/current/program-vocabulary/${path}`, {
+        method: 'POST',
+        headers: {
+          cookie: headers.cookie,
+          origin: baseUrl,
+          'content-type': 'application/json',
+          'idempotency-key': key
+        },
+        body: JSON.stringify(body)
+      }),
+      environment()
+    );
+    const created = await mutate('create', 'd1-merge-target-create', {
+      kind: 'room', expectedSetVersion: 2, name: 'Main Studio', capacity: 120
+    });
+    expect(created.status, await created.clone().text()).toBe(200);
+    const createdBody = await created.json<{
+      readonly data: { readonly affectedIds: readonly string[]; readonly setVersion: number };
+    }>();
+    const targetId = createdBody.data.affectedIds[0]!;
+    const now = Date.now();
+    const occurrenceId = uuid(799);
+    const concurrentOccurrenceId = uuid(797);
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO schedule_placement_sets
+        (workspace_id,event_id,schedule_version,updated_by_user_id,updated_at_ms)
+        VALUES (?,?,2,?,?)`).bind(workspaceId, eventId, userId, now),
+      env.DB.prepare(`INSERT INTO schedule_occurrences
+        (workspace_id,event_id,id,session_id,room_id,start_at_ms,end_at_ms,version,
+         updated_by_user_id,updated_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?)`)
+        .bind(workspaceId, eventId, occurrenceId, uuid(798), source!.id,
+          Date.parse('2027-04-10T09:00:00.000Z'), Date.parse('2027-04-10T10:00:00.000Z'),
+          1, userId, now),
+      env.DB.prepare(`INSERT INTO schedule_occurrences
+        (workspace_id,event_id,id,session_id,room_id,start_at_ms,end_at_ms,version,
+         updated_by_user_id,updated_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?)`)
+        .bind(workspaceId, eventId, concurrentOccurrenceId, uuid(796), source!.id,
+          Date.parse('2027-04-10T10:00:00.000Z'), Date.parse('2027-04-10T11:00:00.000Z'),
+          1, userId, now)
+    ]);
+    const draftInput = {
+      kind: 'room', sourceId: source!.id, targetId,
+      expectedSetVersion: createdBody.data.setVersion,
+      expectedSourceVersion: source!.version,
+      expectedTargetVersion: 1
+    } as const;
+    const draft = await mutate('merge/draft', 'd1-vocabulary-merge-draft', draftInput);
+    expect(draft.status, await draft.clone().text()).toBe(200);
+    const draftBody = await draft.json<{
+      readonly kind: string;
+      readonly data: {
+        readonly draftId: string;
+        readonly revision: { readonly id: string; readonly digestSha256: string };
+        readonly safeDiff: { readonly liveRepoints: number };
+      };
+    }>();
+    expect(draftBody).toMatchObject({
+      kind: 'success',
+      data: { status: 'draft', safeDiff: { liveRepoints: 2 } }
+    });
+    const draftReplay = await mutate('merge/draft', 'd1-vocabulary-merge-draft', draftInput);
+    expect(await draftReplay.json()).toEqual(draftBody);
+    const changedDraft = await mutate('merge/draft', 'd1-vocabulary-merge-draft', {
+      ...draftInput, expectedTargetVersion: 2
+    });
+    expect(await changedDraft.json()).toMatchObject({
+      kind: 'outcome',
+      outcome: { class: 'idempotency_conflict', kind: 'operation.request_changed' }
+    });
+
+    const stalePublishInput = {
+      draftId: draftBody.data.draftId,
+      revisionId: draftBody.data.revision.id,
+      revisionDigestSha256: draftBody.data.revision.digestSha256
+    };
+    await env.DB.batch([
+      env.DB.prepare(`UPDATE schedule_occurrences SET room_id = ?,version = 2,
+        updated_by_user_id = ?,updated_at_ms = ?
+        WHERE workspace_id = ? AND event_id = ? AND id = ? AND room_id = ? AND version = 1`)
+        .bind(targetId, userId, now + 1, workspaceId, eventId, concurrentOccurrenceId, source!.id),
+      env.DB.prepare(`UPDATE schedule_placement_sets SET schedule_version = 3,
+        updated_by_user_id = ?,updated_at_ms = ?
+        WHERE workspace_id = ? AND event_id = ? AND schedule_version = 2`)
+        .bind(userId, now + 1, workspaceId, eventId)
+    ]);
+    const stalePublish = await mutate(
+      'merge', 'd1-vocabulary-merge-stale-publish', stalePublishInput
+    );
+    expect(await stalePublish.json()).toMatchObject({
+      kind: 'outcome', outcome: {
+        class: 'stale_revision', kind: 'program_vocabulary.changed',
+        detail: { code: 'stale_reference', action: 'merge', kind: 'room' }
+      }
+    });
+    const sourceAfterStalePublish = await env.DB.prepare(`SELECT status,version
+      FROM program_vocabulary_rooms WHERE workspace_id = ? AND event_id = ? AND id = ?`)
+      .bind(workspaceId, eventId, source!.id).first();
+    expect(sourceAfterStalePublish).toEqual({ status: 'active', version: 1 });
+
+    const refreshedDraft = await mutate(
+      'merge/draft', 'd1-vocabulary-merge-refreshed-draft', draftInput
+    );
+    expect(refreshedDraft.status, await refreshedDraft.clone().text()).toBe(200);
+    const refreshedDraftBody = await refreshedDraft.json<typeof draftBody>();
+    expect(refreshedDraftBody).toMatchObject({
+      kind: 'success', data: { status: 'draft', safeDiff: { liveRepoints: 1 } }
+    });
+    const publishInput = {
+      draftId: refreshedDraftBody.data.draftId,
+      revisionId: refreshedDraftBody.data.revision.id,
+      revisionDigestSha256: refreshedDraftBody.data.revision.digestSha256
+    };
+    const published = await mutate('merge', 'd1-vocabulary-merge-publish', publishInput);
+    expect(published.status, await published.clone().text()).toBe(200);
+    const publishedBody = await published.json();
+    expect(publishedBody).toMatchObject({
+      kind: 'success',
+      data: { action: 'merge', kind: 'room', affectedIds: [source!.id, targetId],
+        setVersion: 4, liveRepoints: 1 }
+    });
+    const publishReplay = await mutate('merge', 'd1-vocabulary-merge-publish', publishInput);
+    expect(await publishReplay.json()).toEqual(publishedBody);
+    const changedPublishedDraft = await mutate(
+      'merge', 'd1-vocabulary-merge-published-draft-changed', publishInput
+    );
+    expect(await changedPublishedDraft.json()).toMatchObject({
+      kind: 'outcome', outcome: {
+        class: 'conflict', kind: 'program_vocabulary.merge_draft_changed'
+      }
+    });
+    const rows = await env.DB.batch([
+      env.DB.prepare(`SELECT status,version FROM program_vocabulary_rooms
+        WHERE workspace_id = ? AND event_id = ? AND id = ?`).bind(workspaceId, eventId, source!.id),
+      env.DB.prepare(`SELECT room_id,version FROM schedule_occurrences
+        WHERE workspace_id = ? AND event_id = ? AND id = ?`).bind(workspaceId, eventId, occurrenceId),
+      env.DB.prepare(`SELECT schedule_version FROM schedule_placement_sets
+        WHERE workspace_id = ? AND event_id = ?`).bind(workspaceId, eventId),
+      env.DB.prepare(`SELECT status FROM program_vocabulary_merge_drafts
+        WHERE workspace_id = ? AND event_id = ? AND id = ?`)
+        .bind(workspaceId, eventId, refreshedDraftBody.data.draftId),
+      env.DB.prepare(`SELECT room_id,version FROM schedule_occurrences
+        WHERE workspace_id = ? AND event_id = ? AND id = ?`)
+        .bind(workspaceId, eventId, concurrentOccurrenceId),
+      env.DB.prepare(`SELECT status FROM program_vocabulary_merge_drafts
+        WHERE workspace_id = ? AND event_id = ? AND id = ?`)
+        .bind(workspaceId, eventId, draftBody.data.draftId)
+    ]);
+    expect(rows[0]!.results[0]).toEqual({ status: 'retired', version: 2 });
+    expect(rows[1]!.results[0]).toEqual({ room_id: targetId, version: 2 });
+    expect(rows[2]!.results[0]).toEqual({ schedule_version: 4 });
+    expect(rows[3]!.results[0]).toEqual({ status: 'published' });
+    expect(rows[4]!.results[0]).toEqual({ room_id: targetId, version: 2 });
+    expect(rows[5]!.results[0]).toEqual({ status: 'draft' });
+
+    const createItem = async (key: string, body: unknown) => {
+      const response = await mutate('create', key, body);
+      expect(response.status, await response.clone().text()).toBe(200);
+      return response.json<{
+        readonly data: { readonly affectedIds: readonly string[]; readonly setVersion: number };
+      }>();
+    };
+    const format = await createItem('d1-merge-session-format', {
+      kind: 'format', expectedSetVersion: 4, name: 'Roundtable'
+    });
+    const sourceTrack = await createItem('d1-merge-session-source-track', {
+      kind: 'track', expectedSetVersion: 5, name: 'Foundations'
+    });
+    const targetTrack = await createItem('d1-merge-session-target-track', {
+      kind: 'track', expectedSetVersion: 6, name: 'Platform'
+    });
+    const catalogResponse = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/sessions`, { headers }), environment()
+    );
+    const catalog = await catalogResponse.json<{
+      readonly data: { readonly version: number; readonly digestSha256: string };
+    }>();
+    const sessionResponse = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/sessions`, {
+        method: 'POST',
+        headers: {
+          cookie: headers.cookie, origin: baseUrl, 'content-type': 'application/json',
+          'idempotency-key': 'd1-merge-session-create'
+        },
+        body: JSON.stringify({
+          action: 'create', expectedCatalogVersion: catalog.data.version,
+          expectedCatalogDigestSha256: catalog.data.digestSha256,
+          title: 'Merge-linked Session', plannedDurationMinutes: 45, lifecycle: 'draft',
+          formatId: format.data.affectedIds[0], trackId: sourceTrack.data.affectedIds[0]
+        })
+      }),
+      environment()
+    );
+    expect(sessionResponse.status, await sessionResponse.clone().text()).toBe(200);
+    const sessionBody = await sessionResponse.json<{
+      readonly data: { readonly session: { readonly id: string } };
+    }>();
+    const trackDraftInput = {
+      kind: 'track', sourceId: sourceTrack.data.affectedIds[0],
+      targetId: targetTrack.data.affectedIds[0], expectedSetVersion: 7,
+      expectedSourceVersion: 1, expectedTargetVersion: 1
+    } as const;
+    const trackDraftResponse = await mutate(
+      'merge/draft', 'd1-vocabulary-session-merge-draft', trackDraftInput
+    );
+    expect(trackDraftResponse.status, await trackDraftResponse.clone().text()).toBe(200);
+    const trackDraft = await trackDraftResponse.json<{
+      readonly data: {
+        readonly draftId: string;
+        readonly revision: { readonly id: string; readonly digestSha256: string };
+        readonly safeDiff: { readonly liveRepoints: number };
+      };
+    }>();
+    expect(trackDraft.data.safeDiff.liveRepoints).toBe(1);
+    const trackPublish = await mutate('merge', 'd1-vocabulary-session-merge-publish', {
+      draftId: trackDraft.data.draftId,
+      revisionId: trackDraft.data.revision.id,
+      revisionDigestSha256: trackDraft.data.revision.digestSha256
+    });
+    expect(trackPublish.status, await trackPublish.clone().text()).toBe(200);
+    expect(await trackPublish.json()).toMatchObject({
+      kind: 'success', data: { action: 'merge', kind: 'track', setVersion: 8, liveRepoints: 1 }
+    });
+    const repointedSession = await env.DB.prepare(`SELECT track_id,version,head_json
+      FROM sessions WHERE workspace_id = ? AND event_id = ? AND id = ?`)
+      .bind(workspaceId, eventId, sessionBody.data.session.id)
+      .first<{ readonly track_id: string; readonly version: number; readonly head_json: string }>();
+    expect(repointedSession).toMatchObject({
+      track_id: targetTrack.data.affectedIds[0], version: 2
+    });
+    expect(JSON.parse(repointedSession!.head_json)).toMatchObject({
+      programTarget: { setVersion: 8, track: { id: targetTrack.data.affectedIds[0] } }
+    });
+    const repointedSessionSlot = await env.DB.prepare(`SELECT item_id,version
+      FROM session_program_reference_slots
+      WHERE workspace_id = ? AND event_id = ? AND session_id = ? AND slot_kind = 'track'`)
+      .bind(workspaceId, eventId, sessionBody.data.session.id).first();
+    expect(repointedSessionSlot).toEqual({ item_id: targetTrack.data.affectedIds[0], version: 2 });
+  }, 20_000);
 
   test('keeps the application slice closed when activation or a durable key duty is incomplete', async () => {
     const headers = { cookie: await cookie() };

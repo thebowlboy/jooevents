@@ -38,6 +38,7 @@ const AREA_REFRESHES_BY_OPERATION: Readonly<Record<string, readonly (typeof SYNC
   'engagement.change@1': refreshAreas('people'),
   'program_vocabulary.create@1': refreshAreas('submissions', 'sessions', 'schedule'),
   'program_vocabulary.edit@1': refreshAreas('submissions', 'sessions', 'schedule'),
+  'program_vocabulary.merge@1': refreshAreas('submissions', 'sessions', 'schedule'),
   'program_vocabulary.retire@1': refreshAreas('submissions', 'sessions', 'schedule'),
   'program_vocabulary.restore@1': refreshAreas('submissions', 'sessions', 'schedule'),
   'program_vocabulary.delete@1': refreshAreas('submissions', 'sessions', 'schedule')

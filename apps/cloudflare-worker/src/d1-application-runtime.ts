@@ -44,8 +44,11 @@ import {
 import {
   PROGRAM_VOCABULARY_DIRECT_REQUEST_HASH_PROFILE,
   PROGRAM_VOCABULARY_MANAGE_ACCESS_POLICY,
+  PROGRAM_VOCABULARY_MERGE_DRAFT_REQUEST_HASH_PROFILE,
+  PROGRAM_VOCABULARY_MERGE_PUBLISH_REQUEST_HASH_PROFILE,
   PROGRAM_VOCABULARY_READ_ACCESS_POLICY,
   createProgramVocabularyDirectOperationModule,
+  createProgramVocabularyMergeOperationModule,
   createProgramVocabularyReadOperationModule
 } from '@jooevents/program-operations';
 import {
@@ -148,6 +151,9 @@ import { createD1ProgramVocabularySnapshotReadSource } from './d1-program-vocabu
 import {
   createD1ProgramVocabularyDirectEffectDomainRegistration
 } from './d1-program-vocabulary-mutation';
+import {
+  createD1ProgramVocabularyMergeEffectDomainRegistrations
+} from './d1-program-vocabulary-merge';
 import { createD1SchedulePlacementReadSource } from './d1-schedule-placement';
 import {
   createD1SchedulePlacementDirectEffectDomainRegistration
@@ -706,6 +712,30 @@ export async function createConfiguredD1ApplicationRuntime(
       PROGRAM_VOCABULARY_OPERATION_KEY_PROFILES.idempotencyCredential
     )
   });
+  const programVocabularyMergeOperations = createProgramVocabularyMergeOperationModule({
+    workspaceId,
+    managePolicy: PROGRAM_VOCABULARY_MANAGE_ACCESS_POLICY,
+    currentAuthority,
+    currentEvent: reads,
+    clock,
+    ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+    authorityPrincipalKeyProfile:
+      PROGRAM_VOCABULARY_OPERATION_KEY_PROFILES.authorityPrincipal,
+    scopePartitionProfile: PROGRAM_VOCABULARY_OPERATION_KEY_PROFILES.scopePartition,
+    requestCanonicalizationProfile:
+      PROGRAM_VOCABULARY_OPERATION_KEY_PROFILES.requestCanonicalization,
+    draftRequestHashSealer: cryptoProfiles.requestHashSealer(
+      PROGRAM_VOCABULARY_MERGE_DRAFT_REQUEST_HASH_PROFILE
+    ),
+    publishRequestHashSealer: cryptoProfiles.requestHashSealer(
+      PROGRAM_VOCABULARY_MERGE_PUBLISH_REQUEST_HASH_PROFILE
+    ),
+    idempotencyCredentialProfile:
+      PROGRAM_VOCABULARY_OPERATION_KEY_PROFILES.idempotencyCredential,
+    idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(
+      PROGRAM_VOCABULARY_OPERATION_KEY_PROFILES.idempotencyCredential
+    )
+  });
   const scheduleReadOperations = createSchedulePlacementOperationModule({
     workspaceId,
     policies: {
@@ -821,6 +851,13 @@ export async function createConfiguredD1ApplicationRuntime(
       workspaceId,
       newVocabularyItemId: () => crypto.randomUUID()
     }),
+    ...createD1ProgramVocabularyMergeEffectDomainRegistrations({
+      workspaceId,
+      ids: {
+        newDraftId: () => crypto.randomUUID(),
+        newRevisionId: () => crypto.randomUUID()
+      }
+    }),
     createD1SessionDirectEffectDomainRegistration({
       workspaceId,
       newSessionId: () => crypto.randomUUID()
@@ -892,6 +929,7 @@ export async function createConfiguredD1ApplicationRuntime(
       fileReadOperations,
       programVocabularyReadOperations,
       programVocabularyDirectOperations,
+      programVocabularyMergeOperations,
       scheduleReadOperations,
       scheduleDirectOperations,
       sessionReadOperations,
