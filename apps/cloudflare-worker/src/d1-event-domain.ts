@@ -5,15 +5,21 @@ import {
   type EffectInvocationContext,
   type SealedEffectAuthorityRecheckResult
 } from '@jooevents/application';
-import { eventCreateInputSchema } from '@jooevents/contracts';
+import { eventCreateInputSchema, eventSelectInputSchema } from '@jooevents/contracts';
 import {
   applyEventCreatePlan,
+  applyEventSelectPlan,
   eventCreatePlanDigest,
   eventCreateResult,
+  eventSelectResult,
   parseEventCreatePlan,
+  parseEventSelectPlan,
+  parseEventState,
   parseWorkspaceEventSetState,
   planEventCreation,
+  planEventSelection,
   type EventCreatePlan,
+  type EventSelectPlan,
   type Event,
   type WorkspaceEventSet
 } from '@jooevents/event';
@@ -21,9 +27,14 @@ import {
   EVENT_CREATE_HANDLER_CAPABILITY,
   EVENT_CREATE_OPERATION,
   EVENT_MANAGE_ACCESS_POLICY,
+  EVENT_SELECT_HANDLER_CAPABILITY,
+  EVENT_SELECT_OPERATION,
   eventCreateContributionSchema,
   eventCreateDomainContributionSchema,
-  sealEventCreatePreparation
+  eventSelectContributionSchema,
+  eventSelectDomainContributionSchema,
+  sealEventCreatePreparation,
+  sealEventSelectPreparation
 } from '@jooevents/event-operations';
 import {
   canonicalJsonText,
@@ -42,6 +53,18 @@ interface EventSetRow {
   readonly workspace_id: string;
   readonly version: number;
   readonly current_event_id: string | null;
+}
+
+interface EventHeadRow {
+  readonly workspace_id: string;
+  readonly id: string;
+  readonly name: string;
+  readonly timezone: string;
+  readonly start_date: string;
+  readonly end_date: string;
+  readonly version: number;
+  readonly created_by_user_id: string;
+  readonly created_at_ms: number;
 }
 
 interface PreparedEventCreate {
@@ -85,6 +108,56 @@ async function requireEventSet(
      WHERE workspace_id = ? AND version = ? AND current_event_id IS ?
   )`, [eventSet.workspaceId, eventSet.version, eventSet.currentEventId]);
   return eventSet;
+}
+
+async function readEventHeads(
+  unitOfWork: D1BufferedUnitOfWork,
+  workspaceId: WorkspaceId
+): Promise<ReadonlyMap<string, Event>> {
+  const rows = await unitOfWork.readSession.prepare(`
+    SELECT h.workspace_id,h.id,h.name,h.timezone,h.start_date,h.end_date,
+           h.version,h.created_by_user_id,h.created_at_ms
+      FROM event_spine_heads h
+      JOIN event_spine_scope_roots root
+        ON root.workspace_id = h.workspace_id AND root.event_id = h.id
+     WHERE h.workspace_id = ?
+     ORDER BY h.id
+  `).bind(workspaceId).all<EventHeadRow>();
+  return new Map(rows.results.map((row) => {
+    const event = parseEventState({
+      id: row.id,
+      workspaceId: row.workspace_id,
+      name: row.name,
+      timezone: row.timezone,
+      startDate: row.start_date,
+      endDate: row.end_date,
+      version: row.version,
+      createdByUserId: row.created_by_user_id,
+      createdAt: new Date(row.created_at_ms).toISOString()
+    });
+    return [event.id, event] as const;
+  }));
+}
+
+function assertEventHeadCurrent(unitOfWork: D1BufferedUnitOfWork, event: Event): void {
+  unitOfWork.assertCurrent(`EXISTS (
+    SELECT 1 FROM event_spine_heads h
+      JOIN event_spine_scope_roots root
+        ON root.workspace_id = h.workspace_id AND root.event_id = h.id
+     WHERE h.workspace_id = ? AND h.id = ? AND h.name = ? AND h.timezone = ?
+       AND h.start_date = ? AND h.end_date = ? AND h.version = ?
+       AND h.created_by_user_id = ? AND h.created_at_ms = ?
+  )`, [
+    event.workspaceId,
+    event.id,
+    event.name,
+    event.timezone,
+    event.startDate,
+    event.endDate,
+    event.version,
+    event.createdByUserId,
+    Date.parse(event.createdAt)
+  ]);
 }
 
 /** D1 Event-create adapter for the unchanged registered Event operation. */
@@ -237,6 +310,128 @@ export function createD1EventCreateEffectDomainRegistration(input: {
       workspaceId: input.workspaceId,
       newEventId: input.newEventId,
       createdEventInitializer: input.createdEventInitializer
+    })
+  });
+}
+
+interface PreparedEventSelect {
+  readonly context: EffectInvocationContext;
+  readonly eventSet: WorkspaceEventSet;
+  readonly targetEvent: Event;
+  readonly plan: EventSelectPlan;
+  phase: 'prepared' | 'applied';
+}
+
+/** D1 Event-select adapter for the unchanged registered Event operation. */
+export class D1EventSelectEffectDomainAdapter implements D1EffectDomainAdapter {
+  readonly #workspaceId: WorkspaceId;
+  #prepared: PreparedEventSelect | undefined;
+
+  constructor(private readonly input: {
+    readonly unitOfWork: D1BufferedUnitOfWork;
+    readonly workspaceId: WorkspaceId;
+  }) {
+    this.#workspaceId = parseWorkspaceId(input.workspaceId);
+  }
+
+  async openHandlerSnapshot(
+    capability: { readonly key: string; readonly version: number },
+    context: EffectInvocationContext,
+    authorityRecheck: SealedEffectAuthorityRecheckResult
+  ): Promise<EffectHandlerSnapshot> {
+    if (!sameRef(capability, EVENT_SELECT_HANDLER_CAPABILITY)) {
+      throw new TypeError('d1_event_select_capability_mismatch');
+    }
+    if (
+      context.operation.name !== EVENT_SELECT_OPERATION.name
+      || context.operation.version !== EVENT_SELECT_OPERATION.version
+      || context.operation.effect !== 'commit'
+      || context.surface !== 'operator_http'
+      || context.scope.workspaceId !== this.#workspaceId
+      || context.scope.eventId !== undefined
+      || context.scope.subjects.length !== 1
+      || context.scope.subjects[0]?.kind !== 'workspace'
+      || context.scope.subjects[0].id !== this.#workspaceId
+    ) throw new TypeError('d1_event_select_scope_mismatch');
+
+    const authority = resolveEffectInvocationAuthorityRecheckAttribution(context, authorityRecheck);
+    if (
+      authority.actor.kind !== 'workspace_user'
+      || authority.principal.kind !== 'workspace_user'
+      || authority.actor.userId !== authority.principal.userId
+      || context.actor.kind !== 'workspace_user'
+      || context.actor.userId !== authority.actor.userId
+      || authority.lane.kind !== 'operator'
+      || authority.lane.surface !== 'operator_http'
+      || !sameRef(authority.lane.policy, EVENT_MANAGE_ACCESS_POLICY)
+      || !authority.grants.some((grant) =>
+        grant.kind === 'permission' && grant.key === 'event.manage'
+      )
+    ) throw new TypeError('d1_event_select_authority_mismatch');
+
+    const eventSet = await requireEventSet(this.input.unitOfWork, this.#workspaceId);
+    const eventHeads = await readEventHeads(this.input.unitOfWork, this.#workspaceId);
+    this.#prepared = undefined;
+    return sealEventSelectPreparation({
+      capability,
+      preparation: {
+        prepare: ({ businessInput, context: receivedContext }) => {
+          if (receivedContext !== context) {
+            throw new TypeError('d1_event_select_context_substitution');
+          }
+          const wire = eventSelectInputSchema.parse(businessInput);
+          const targetEvent = eventHeads.get(wire.eventId);
+          const plan = planEventSelection({ eventSet, targetEvent, authorInput: wire });
+          const contribution = eventSelectContributionSchema.parse({
+            result: { kind: 'success', data: eventSelectResult(plan) },
+            domain: { kind: 'event_select', plan },
+            effectContributions: []
+          });
+          if (!targetEvent || contribution.result.kind !== 'success' || contribution.domain === null) {
+            throw new TypeError('d1_event_select_success_contribution_invalid');
+          }
+          assertEventHeadCurrent(this.input.unitOfWork, targetEvent);
+          this.#prepared = { context, eventSet, targetEvent, plan, phase: 'prepared' };
+          return contribution;
+        }
+      }
+    });
+  }
+
+  applyDomainContribution(contribution: unknown): void {
+    const parsed = eventSelectDomainContributionSchema.parse(contribution);
+    const plan = parseEventSelectPlan(parsed.plan);
+    const prepared = this.#prepared;
+    if (!prepared || prepared.phase !== 'prepared'
+        || canonicalJsonText(plan) !== canonicalJsonText(prepared.plan)) {
+      throw new TypeError('d1_event_select_preparation_invalid');
+    }
+    const eventSet = applyEventSelectPlan(prepared.eventSet, prepared.targetEvent, plan);
+    this.input.unitOfWork.write(`UPDATE event_spine_workspace_sets
+      SET version = ?,current_event_id = ?
+      WHERE workspace_id = ? AND version = ? AND current_event_id IS ?`, [
+      eventSet.version,
+      eventSet.currentEventId,
+      eventSet.workspaceId,
+      prepared.eventSet.version,
+      prepared.eventSet.currentEventId
+    ]);
+    prepared.phase = 'applied';
+  }
+
+  afterUnitOfWorkCommitted(): void {
+    this.#prepared = undefined;
+  }
+}
+
+export function createD1EventSelectEffectDomainRegistration(input: {
+  readonly workspaceId: WorkspaceId;
+}): D1EffectDomainAdapterRegistration {
+  return Object.freeze({
+    capability: EVENT_SELECT_HANDLER_CAPABILITY,
+    create: (unitOfWork: D1BufferedUnitOfWork) => new D1EventSelectEffectDomainAdapter({
+      unitOfWork,
+      workspaceId: input.workspaceId
     })
   });
 }

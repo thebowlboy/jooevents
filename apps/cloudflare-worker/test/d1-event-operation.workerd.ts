@@ -6,13 +6,18 @@ import {
   createOperatorAuthorityPolicyCatalog,
   type InvocationEvidence
 } from '@jooevents/application';
-import { eventCreateOperationResultSchema } from '@jooevents/contracts';
+import {
+  eventCreateOperationResultSchema,
+  eventSelectOperationResultSchema
+} from '@jooevents/contracts';
 import { createWorkspaceEventSet, projectCurrentEvent } from '@jooevents/event';
 import {
   EVENT_CREATE_REQUEST_HASH_PROFILE,
   EVENT_MANAGE_ACCESS_POLICY,
   EVENT_READ_ACCESS_POLICY,
-  createEventOperationModule
+  EVENT_SELECT_REQUEST_HASH_PROFILE,
+  createEventOperationModule,
+  createEventSelectOperationModule
 } from '@jooevents/event-operations';
 import {
   parseContractVersion,
@@ -23,7 +28,10 @@ import {
   parseWorkspaceId
 } from '@jooevents/kernel';
 import { beforeAll, describe, expect, test } from 'vitest';
-import { createD1EventCreateEffectDomainRegistration } from '../src/d1-event-domain';
+import {
+  createD1EventCreateEffectDomainRegistration,
+  createD1EventSelectEffectDomainRegistration
+} from '../src/d1-event-domain';
 import {
   D1EffectUnitOfWorkPort,
   createD1EffectDomainAdapterRegistry
@@ -37,6 +45,8 @@ const userId = parseUserId(uuid(302));
 const membershipId = parseMembershipId(uuid(303));
 const eventId = uuid(304);
 const receiptId = uuid(305);
+const secondEventId = uuid(309);
+const selectReceiptId = uuid(310);
 const now = parseInstant('2026-08-17T12:00:00.000Z');
 const profile = { key: 'd1-event-operation-test', version: parseContractVersion(1) } as const;
 let invocationSequence = 400;
@@ -141,7 +151,8 @@ describe('registered Event operation over D1', () => {
             ]);
           }
         }
-      })
+      }),
+      createD1EventSelectEffectDomainRegistration({ workspaceId })
     ]);
     const unitOfWork = new D1EffectUnitOfWorkPort(env.DB, domains, {
       authorityRecheck: (buffered) => {
@@ -219,11 +230,128 @@ describe('registered Event operation over D1', () => {
     expect(identityEvents?.count).toBe(1);
     expect(logs?.count).toBe(1);
 
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO event_spine_heads (
+        workspace_id,id,name,timezone,start_date,end_date,version,
+        created_by_user_id,created_at_ms,create_plan_digest_sha256
+      ) VALUES (?,?,?,'Europe/Helsinki','2027-01-12','2027-01-13',1,?,?,?)`).bind(
+        workspaceId,
+        secondEventId,
+        'D1 Winter Summit',
+        userId,
+        Date.parse(now),
+        'a'.repeat(64)
+      ),
+      env.DB.prepare(`INSERT INTO event_spine_scope_roots (workspace_id,event_id)
+        VALUES (?,?)`).bind(workspaceId, secondEventId),
+      env.DB.prepare(`INSERT INTO events (id,workspace_id,name,created_at,updated_at)
+        VALUES (?,?,?,?,?)`).bind(
+        secondEventId,
+        workspaceId,
+        'D1 Winter Summit',
+        Date.parse(now),
+        Date.parse(now)
+      )
+    ]);
+    const selectModule = createEventSelectOperationModule({
+      workspaceId,
+      managePolicy: EVENT_MANAGE_ACCESS_POLICY,
+      currentAuthority: createD1OperatorCurrentAuthorityResolver({
+        session: env.DB.withSession('first-primary'),
+        workspaceId,
+        policies
+      }),
+      clock: { now: () => now },
+      ids: { newInvocationId: () => parseInvocationId(uuid(invocationSequence++)) },
+      authorityPrincipalKeyProfile: profile,
+      scopePartitionProfile: profile,
+      requestCanonicalizationProfile: profile,
+      requestHashSealer: createHmacRequestHashSealer({
+        profile: EVENT_SELECT_REQUEST_HASH_PROFILE,
+        keyBytes: new Uint8Array(32).fill(0x55)
+      }),
+      idempotencyCredentialProfile: profile,
+      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
+        profile,
+        keyBytes: new Uint8Array(32).fill(0x66)
+      })
+    });
+    const selectOperations = await createApplicationOperationRuntime({
+      source: selectModule.source,
+      read: {
+        operationalTrace: { emit() {} },
+        immutableAudit: { append() {} },
+        clock: { now: () => now },
+        newInvocationId: () => parseInvocationId(uuid(invocationSequence++))
+      },
+      unitOfWork,
+      newOperationLogId: () => selectReceiptId
+    });
+    const buildSelection = (input: {
+      readonly eventId?: string;
+      readonly expectedEventSetVersion?: number;
+      readonly rawIdempotencyKey?: string;
+    } = {}) => selectOperations.effectBuilder.build({
+      operationName: 'event.select',
+      operationVersion: 1,
+      surface: 'operator_http',
+      correlationId: uuid(invocationSequence++),
+      businessInput: {
+        eventId: input.eventId ?? secondEventId,
+        expectedEventSetVersion: input.expectedEventSetVersion ?? 2
+      },
+      verifiedEvidence: evidence,
+      rawIdempotencyKey: input.rawIdempotencyKey ?? 'd1-select-second-event'
+    });
+    const selected = eventSelectOperationResultSchema.parse(
+      await selectOperations.effectExecutor.execute(await buildSelection())
+    );
+    const selectReplay = eventSelectOperationResultSchema.parse(
+      await selectOperations.effectExecutor.execute(await buildSelection())
+    );
+    expect(selected).toMatchObject({
+      kind: 'success',
+      data: { eventSetVersion: 3, event: { id: secondEventId, name: 'D1 Winter Summit' } },
+      receipt: { id: selectReceiptId, operationName: 'event.select', operationVersion: 1 }
+    });
+    expect(selectReplay).toEqual(selected);
+    expect(await env.DB.prepare(`SELECT version,current_event_id
+      FROM event_spine_workspace_sets WHERE workspace_id = ?`)
+      .bind(workspaceId).first<EventSetRow>()).toEqual({
+        version: 3,
+        current_event_id: secondEventId
+      });
+    expect((await env.DB.prepare(`SELECT count(*) AS count FROM operation_log
+      WHERE id = ?`).bind(selectReceiptId).first<CountRow>())?.count).toBe(1);
+    expect(eventSelectOperationResultSchema.parse(
+      await selectOperations.effectExecutor.execute(await buildSelection({
+        expectedEventSetVersion: 3,
+        rawIdempotencyKey: 'd1-select-already-current'
+      }))
+    )).toMatchObject({
+      kind: 'outcome',
+      terminal: false,
+      outcome: { class: 'conflict', kind: 'event.already_selected', retryable: false }
+    });
+    expect(eventSelectOperationResultSchema.parse(
+      await selectOperations.effectExecutor.execute(await buildSelection({
+        eventId: uuid(399),
+        expectedEventSetVersion: 3,
+        rawIdempotencyKey: 'd1-select-missing-event'
+      }))
+    )).toMatchObject({
+      kind: 'outcome',
+      terminal: false,
+      outcome: { class: 'conflict', kind: 'event.not_found', retryable: false }
+    });
+    expect((await env.DB.prepare(`SELECT count(*) AS count FROM operation_log
+      WHERE workspace_id = ?`).bind(workspaceId).first<CountRow>())?.count).toBe(2);
+
     await env.DB.prepare(`UPDATE workspace_memberships
       SET status = 'suspended',updated_at = 2,version = version + 1 WHERE id = ?`)
       .bind(membershipId).run();
     const denied = eventCreateOperationResultSchema.parse(
-      await operations.effectExecutor.execute(await buildInvocation('after-revocation', 2))
+      await operations.effectExecutor.execute(await buildInvocation('after-revocation', 3))
     );
     expect(denied).toMatchObject({
       kind: 'outcome',
@@ -231,6 +359,6 @@ describe('registered Event operation over D1', () => {
       outcome: { class: 'access_denied', kind: 'authority.revoked', retryable: false }
     });
     expect((await env.DB.prepare(`SELECT count(*) AS count FROM event_spine_heads
-      WHERE workspace_id = ?`).bind(workspaceId).first<CountRow>())?.count).toBe(1);
+      WHERE workspace_id = ?`).bind(workspaceId).first<CountRow>())?.count).toBe(2);
   });
 });
