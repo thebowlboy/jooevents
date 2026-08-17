@@ -42,7 +42,10 @@ import {
   createFilesReadOperationModule
 } from '@jooevents/files-operations';
 import {
+  PROGRAM_VOCABULARY_DIRECT_REQUEST_HASH_PROFILE,
+  PROGRAM_VOCABULARY_MANAGE_ACCESS_POLICY,
   PROGRAM_VOCABULARY_READ_ACCESS_POLICY,
+  createProgramVocabularyDirectOperationModule,
   createProgramVocabularyReadOperationModule
 } from '@jooevents/program-operations';
 import {
@@ -138,6 +141,9 @@ import {
 import { createD1OperatorCurrentAuthorityResolver } from './d1-operator-authority';
 import { createD1OperationHistoryReadSource } from './d1-operation-history';
 import { createD1ProgramVocabularySnapshotReadSource } from './d1-program-vocabulary';
+import {
+  createD1ProgramVocabularyDirectEffectDomainRegistration
+} from './d1-program-vocabulary-mutation';
 import { createD1SchedulePlacementReadSource } from './d1-schedule-placement';
 import { createD1SessionCatalogReadSource } from './d1-session-catalog';
 import { createD1WorkspaceOverviewReadSource } from './d1-workspace-overview';
@@ -238,6 +244,10 @@ const PROGRAM_VOCABULARY_OPERATION_KEY_PROFILES = Object.freeze({
   requestCanonicalization: Object.freeze({
     key: 'key-profile.program-vocabulary.request-canonicalization',
     version: parseContractVersion(1)
+  }),
+  idempotencyCredential: Object.freeze({
+    key: 'key-profile.program-vocabulary.idempotency-credential',
+    version: parseContractVersion(1)
   })
 });
 
@@ -329,6 +339,8 @@ export async function createConfiguredD1ApplicationRuntime(
     },
     { policy: FILE_READ_ACCESS_POLICY, permissionId: 'submission.read' },
     { policy: PROGRAM_VOCABULARY_READ_ACCESS_POLICY, permissionId: 'event.read' },
+    { policy: PROGRAM_VOCABULARY_MANAGE_ACCESS_POLICY,
+      permissionId: 'program.vocabulary.manage' },
     { policy: SCHEDULE_PLACEMENT_READ_ACCESS_POLICY, permissionId: 'schedule.read' },
     { policy: SESSION_READ_ACCESS_POLICY, permissionId: 'event.read' },
     { policy: API_KEY_MANAGE_ACCESS_POLICY, permissionId: 'integration.api.manage' }
@@ -659,6 +671,27 @@ export async function createConfiguredD1ApplicationRuntime(
     requestCanonicalizationProfile:
       PROGRAM_VOCABULARY_OPERATION_KEY_PROFILES.requestCanonicalization
   });
+  const programVocabularyDirectOperations = createProgramVocabularyDirectOperationModule({
+    workspaceId,
+    managePolicy: PROGRAM_VOCABULARY_MANAGE_ACCESS_POLICY,
+    currentAuthority,
+    currentEvent: reads,
+    clock,
+    ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+    authorityPrincipalKeyProfile:
+      PROGRAM_VOCABULARY_OPERATION_KEY_PROFILES.authorityPrincipal,
+    scopePartitionProfile: PROGRAM_VOCABULARY_OPERATION_KEY_PROFILES.scopePartition,
+    requestCanonicalizationProfile:
+      PROGRAM_VOCABULARY_OPERATION_KEY_PROFILES.requestCanonicalization,
+    requestHashSealer: cryptoProfiles.requestHashSealer(
+      PROGRAM_VOCABULARY_DIRECT_REQUEST_HASH_PROFILE
+    ),
+    idempotencyCredentialProfile:
+      PROGRAM_VOCABULARY_OPERATION_KEY_PROFILES.idempotencyCredential,
+    idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(
+      PROGRAM_VOCABULARY_OPERATION_KEY_PROFILES.idempotencyCredential
+    )
+  });
   const scheduleReadOperations = createSchedulePlacementOperationModule({
     workspaceId,
     policies: {
@@ -732,6 +765,10 @@ export async function createConfiguredD1ApplicationRuntime(
         newChoiceId: () => crypto.randomUUID()
       }
     }),
+    createD1ProgramVocabularyDirectEffectDomainRegistration({
+      workspaceId,
+      newVocabularyItemId: () => crypto.randomUUID()
+    }),
     createD1DeadlineDirectEffectDomainRegistration({
       workspaceId,
       newDeadlineId: () => crypto.randomUUID()
@@ -794,6 +831,7 @@ export async function createConfiguredD1ApplicationRuntime(
       apiKeyOperations,
       fileReadOperations,
       programVocabularyReadOperations,
+      programVocabularyDirectOperations,
       scheduleReadOperations,
       sessionReadOperations
     ]),

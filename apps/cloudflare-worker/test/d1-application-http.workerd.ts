@@ -57,6 +57,8 @@ beforeAll(async () => {
       .bind(roleId, 'submission.read'),
     env.DB.prepare('INSERT INTO role_permissions (role_id,permission_id) VALUES (?,?)')
       .bind(roleId, 'schedule.read'),
+    env.DB.prepare('INSERT INTO role_permissions (role_id,permission_id) VALUES (?,?)')
+      .bind(roleId, 'program.vocabulary.manage'),
     env.DB.prepare(`INSERT INTO role_assignments
       (id,user_id,role_id,workspace_id,scope_kind,event_id,assigned_by_user_id,
        assigned_at,expires_at,version)
@@ -123,6 +125,11 @@ describe('configured D1 application HTTP slice', () => {
       'field_registry.snapshot.read',
       'file.overview.read',
       'operation.history.list',
+      'program_vocabulary.create',
+      'program_vocabulary.delete',
+      'program_vocabulary.edit',
+      'program_vocabulary.restore',
+      'program_vocabulary.retire',
       'program_vocabulary.snapshot.read',
       'schedule.placement.snapshot.read',
       'session.catalog.read',
@@ -324,6 +331,75 @@ describe('configured D1 application HTTP slice', () => {
         }]
       }
     });
+    const mutateVocabulary = (path: string, key: string, body: unknown) => handleRequest(
+      new Request(`${baseUrl}/api/events/current/program-vocabulary/${path}`, {
+        method: 'POST',
+        headers: {
+          cookie: headers.cookie,
+          origin: baseUrl,
+          'content-type': 'application/json',
+          'idempotency-key': key
+        },
+        body: JSON.stringify(body)
+      }),
+      environment()
+    );
+    const editTrackBody = {
+      kind: 'track', id: trackId, expectedSetVersion: 2, expectedItemVersion: 1,
+      changes: { name: 'Systems Architecture' }
+    } as const;
+    const editedTrack = await mutateVocabulary('edit', 'd1-vocabulary-edit', editTrackBody);
+    expect(editedTrack.status, await editedTrack.clone().text()).toBe(200);
+    const editedTrackBody = await editedTrack.json();
+    expect(editedTrackBody).toMatchObject({
+      kind: 'success',
+      data: { action: 'edit', kind: 'track', affectedIds: [trackId], setVersion: 3 }
+    });
+    const editReplay = await mutateVocabulary('edit', 'd1-vocabulary-edit', editTrackBody);
+    expect(await editReplay.json()).toEqual(editedTrackBody);
+    const changedEdit = await mutateVocabulary('edit', 'd1-vocabulary-edit', {
+      ...editTrackBody, changes: { name: 'Changed replay' }
+    });
+    expect(await changedEdit.json()).toMatchObject({
+      kind: 'outcome',
+      outcome: { class: 'idempotency_conflict', kind: 'operation.request_changed' }
+    });
+    const retiredRoom = await mutateVocabulary('retire', 'd1-vocabulary-retire', {
+      kind: 'room', id: roomId, expectedSetVersion: 3, expectedItemVersion: 1
+    });
+    expect(await retiredRoom.json()).toMatchObject({
+      kind: 'success', data: { action: 'retire', setVersion: 4 }
+    });
+    const restoredRoom = await mutateVocabulary('restore', 'd1-vocabulary-restore', {
+      kind: 'room', id: roomId, expectedSetVersion: 4, expectedItemVersion: 2
+    });
+    expect(await restoredRoom.json()).toMatchObject({
+      kind: 'success', data: { action: 'restore', setVersion: 5 }
+    });
+    const deletedFormat = await mutateVocabulary('delete', 'd1-vocabulary-delete', {
+      kind: 'format', id: formatId, expectedSetVersion: 5, expectedItemVersion: 1
+    });
+    expect(await deletedFormat.json()).toMatchObject({
+      kind: 'success', data: { action: 'delete', setVersion: 6 }
+    });
+    const createdFormat = await mutateVocabulary('create', 'd1-vocabulary-create', {
+      kind: 'format', expectedSetVersion: 6, name: 'Workshop'
+    });
+    expect(await createdFormat.json()).toMatchObject({
+      kind: 'success', data: { action: 'create', kind: 'format', setVersion: 7 }
+    });
+    const mutatedVocabulary = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/program-vocabulary`, { headers }),
+      environment()
+    );
+    expect(await mutatedVocabulary.json()).toMatchObject({
+      kind: 'success', data: {
+        setVersion: 7,
+        rooms: [{ id: roomId, status: 'active', version: 3 }],
+        tracks: [{ id: trackId, name: 'Systems Architecture', version: 2 }],
+        formats: [{ name: 'Workshop', status: 'active', version: 1 }]
+      }
+    });
     const schedule = await handleRequest(
       new Request(`${baseUrl}/api/events/current/schedule/placements?startAt=2027-03-10T00%3A00%3A00.000Z&endAt=2027-03-13T00%3A00%3A00.000Z&limit=100`, { headers }),
       environment()
@@ -338,6 +414,35 @@ describe('configured D1 application HTTP slice', () => {
         occurrences: []
       }
     });
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO schedule_placement_sets
+        (workspace_id,event_id,schedule_version,updated_by_user_id,updated_at_ms)
+        VALUES (?,?,2,?,?)`)
+        .bind(workspaceId, eventId, userId, recordedAtMs),
+      env.DB.prepare(`INSERT INTO schedule_occurrences
+        (workspace_id,event_id,id,session_id,room_id,start_at_ms,end_at_ms,version,
+         updated_by_user_id,updated_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?)`)
+        .bind(
+          workspaceId, eventId, uuid(716), uuid(717), roomId,
+          Date.parse('2027-03-10T09:00:00.000Z'),
+          Date.parse('2027-03-10T10:00:00.000Z'),
+          1, userId, recordedAtMs
+        )
+    ]);
+    const referencedDelete = await mutateVocabulary('delete', 'd1-vocabulary-delete-referenced', {
+      kind: 'room', id: roomId, expectedSetVersion: 7, expectedItemVersion: 3
+    });
+    expect(await referencedDelete.json()).toMatchObject({
+      kind: 'outcome',
+      outcome: {
+        class: 'policy_violation',
+        kind: 'program_vocabulary.change_refused',
+        detail: { code: 'delete_referenced', action: 'delete', kind: 'room', id: roomId }
+      }
+    });
+    await env.DB.prepare(`DELETE FROM schedule_occurrences
+      WHERE workspace_id = ? AND event_id = ? AND id = ?`)
+      .bind(workspaceId, eventId, uuid(716)).run();
     const sessions = await handleRequest(
       new Request(`${baseUrl}/api/events/current/sessions`, { headers }),
       environment()
@@ -611,7 +716,7 @@ describe('configured D1 application HTTP slice', () => {
     const operationCount = await env.DB.prepare(
       'SELECT count(*) AS count FROM operation_log WHERE workspace_id = ?'
     ).bind(workspaceId).first<{ readonly count: number }>();
-    expect(operationCount?.count).toBe(2);
+    expect(operationCount?.count).toBe(7);
     const logs = await env.DB.prepare('SELECT count(*) AS count FROM operation_log WHERE id = ?')
       .bind(firstBody.receipt.id).first<{ readonly count: number }>();
     expect(logs?.count).toBe(1);
@@ -1306,7 +1411,43 @@ describe('configured D1 application HTTP slice', () => {
     expect(await workspaceHistory.json()).toMatchObject({
       kind: 'success', data: { scope: 'workspace' }
     });
-  });
+
+    const freshEvent = await handleRequest(new Request(`${baseUrl}/api/events`, {
+      method: 'POST',
+      headers: {
+        cookie: headers.cookie,
+        origin: baseUrl,
+        'content-type': 'application/json',
+        'idempotency-key': 'd1-application-create-fresh-vocabulary-event'
+      },
+      body: JSON.stringify({
+        expectedEventSetVersion: 2,
+        name: 'Fresh Vocabulary Summit',
+        timezone: 'Asia/Singapore',
+        startDate: '2027-04-10',
+        endDate: '2027-04-11'
+      })
+    }), environment());
+    expect(freshEvent.status, await freshEvent.clone().text()).toBe(200);
+    const freshEventBody = await freshEvent.json<{
+      readonly kind: string;
+      readonly data: { readonly event: { readonly id: string } };
+    }>();
+    const firstVocabularyItem = await mutateVocabulary(
+      'create',
+      'd1-vocabulary-create-from-empty-set',
+      { kind: 'room', expectedSetVersion: 1, name: 'Studio', capacity: 80 }
+    );
+    expect(firstVocabularyItem.status, await firstVocabularyItem.clone().text()).toBe(200);
+    expect(await firstVocabularyItem.json()).toMatchObject({
+      kind: 'success', data: { action: 'create', kind: 'room', setVersion: 2 }
+    });
+    const freshSet = await env.DB.prepare(`SELECT set_version
+      FROM program_vocabulary_sets WHERE workspace_id = ? AND event_id = ?`)
+      .bind(workspaceId, freshEventBody.data.event.id)
+      .first<{ readonly set_version: number }>();
+    expect(freshSet).toEqual({ set_version: 2 });
+  }, 10_000);
 
   test('keeps the application slice closed when activation or a durable key duty is incomplete', async () => {
     const headers = { cookie: await cookie() };
