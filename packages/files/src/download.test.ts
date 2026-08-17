@@ -25,12 +25,15 @@ describe('inert download source (L1)', () => {
     try {
       const blobs = createFilesystemFileBlobStore({ rootDirectory: root });
       const payload = new TextEncoder().encode('%PDF-1.7 pretend');
-      const asset = fixtureAsset({ displayFilename: 'Straße talk.pdf' });
+      const asset = fixtureAsset({
+        displayFilename: 'Straße talk.pdf',
+        byteSize: payload.byteLength
+      });
       await blobs.writeStream({
         key: asset.storageKey, bytes: singleChunk(payload), maximumByteSize: payload.byteLength
       });
       const outcome = await openInertFileDownload({
-        assets: { readAssetForDownload: () => asset },
+        assets: { readAssetForDownload: async () => asset },
         blobs,
         scope: FIXTURE_SCOPE,
         assetId: asset.id
@@ -119,6 +122,27 @@ describe('inert download source (L1)', () => {
         assets: { readAssetForDownload: () => undefined },
         blobs, scope: FIXTURE_SCOPE, assetId: dangling.id
       })).toEqual({ kind: 'not_found' });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('refuses to stream an object whose retained size differs from its asset record', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'jooevents-files-download-test-'));
+    try {
+      const blobs = createFilesystemFileBlobStore({ rootDirectory: root });
+      const asset = fixtureAsset({ byteSize: 2 });
+      await blobs.writeStream({
+        key: asset.storageKey,
+        bytes: singleChunk(new TextEncoder().encode('abc')),
+        maximumByteSize: 3
+      });
+      await expect(openInertFileDownload({
+        assets: { readAssetForDownload: () => asset },
+        blobs,
+        scope: FIXTURE_SCOPE,
+        assetId: asset.id
+      })).rejects.toThrow('file_download_blob_size_mismatch');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

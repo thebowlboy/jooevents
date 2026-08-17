@@ -1,5 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { makeSignature } from 'better-auth/crypto';
+import { canonicalJsonText } from '@jooevents/kernel';
 import { beforeAll, describe, expect, test } from 'vitest';
 import { handleRequest, type CloudflareApplicationEnvironment } from '../src/index';
 
@@ -150,6 +151,14 @@ describe('configured D1 application HTTP slice', () => {
     expect(await initialFiles.json()).toMatchObject({
       kind: 'outcome', outcome: { class: 'conflict', kind: 'file.event_required' }
     });
+    const initialDownload = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/files/download/${uuid(709)}`, { headers }),
+      environment()
+    );
+    expect(initialDownload.status).toBe(409);
+    expect(await initialDownload.json()).toMatchObject({
+      kind: 'refused', code: 'event_required'
+    });
     const initialShell = await handleRequest(
       new Request(`${baseUrl}/api/workspace/shell-summary`, { headers }),
       environment()
@@ -219,12 +228,14 @@ describe('configured D1 application HTTP slice', () => {
     const assetAttachmentId = uuid(710);
     const linkAttachmentId = uuid(711);
     const scope = { workspaceId, eventId };
+    const assetBytes = new TextEncoder().encode('speaker guide');
     const asset = {
       schemaVersion: 1, id: assetId, scope,
       uploader: { kind: 'operator_user', userId },
       purpose: 'resource_share_material', displayFilename: 'Speaker guide.pdf',
-      contentType: 'application/pdf', byteSize: 4096, sha256: 'a'.repeat(64),
-      storageProvider: 'r2', storageKey: `${workspaceId}/${eventId}/${assetId}`,
+      contentType: 'application/pdf', byteSize: assetBytes.byteLength, sha256: 'a'.repeat(64),
+      storageProvider: 'cloudflare-r2',
+      storageKey: `files/${workspaceId}/${eventId}/${assetId}`,
       lifecycle: 'available',
       scan: { provider: 'none', verdict: 'released', checkedAt: recordedAt },
       version: 1, createdAt: recordedAt, updatedAt: recordedAt
@@ -262,10 +273,11 @@ describe('configured D1 application HTTP slice', () => {
          content_type,byte_size,sha256,storage_provider,storage_key,lifecycle,
          scan_provider,scan_verdict,scan_checked_at_ms,version,head_json,created_at_ms,updated_at_ms)
         VALUES (?,?,?,'operator_user',?,'resource_share_material',?,'application/pdf',
-          4096,?,'r2',?,'available','none','released',?,1,?,?,?)`)
+          ?,?,'cloudflare-r2',?,'available','none','released',?,1,?,?,?)`)
         .bind(
-          workspaceId, eventId, assetId, userId, asset.displayFilename, asset.sha256,
-          asset.storageKey, recordedAtMs, JSON.stringify(asset), recordedAtMs, recordedAtMs
+          workspaceId, eventId, assetId, userId, asset.displayFilename, asset.byteSize,
+          asset.sha256, asset.storageKey, recordedAtMs, canonicalJsonText(asset), recordedAtMs,
+          recordedAtMs
         ),
       env.DB.prepare(`INSERT INTO file_attachments
         (workspace_id,event_id,id,subject_kind,subject_id,content_kind,asset_id,
@@ -306,6 +318,34 @@ describe('configured D1 application HTTP slice', () => {
         requests: []
       }
     });
+    await env.FILES.put(asset.storageKey, assetBytes);
+    const anonymousDownload = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/files/download/${assetId}`),
+      environment()
+    );
+    expect(anonymousDownload.status).toBe(401);
+    expect(await anonymousDownload.json()).toMatchObject({
+      kind: 'refused', code: 'unauthenticated'
+    });
+    const download = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/files/download/${assetId}`, { headers }),
+      environment()
+    );
+    expect(download.status).toBe(200);
+    expect(download.headers.get('content-type')).toBe('application/pdf');
+    expect(download.headers.get('content-disposition')).toBe(
+      `attachment; filename="Speaker guide.pdf"; filename*=UTF-8''Speaker%20guide.pdf`
+    );
+    expect(download.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(download.headers.get('cache-control')).toBe('private, no-store');
+    expect(download.headers.get('content-length')).toBe(String(assetBytes.byteLength));
+    expect(new Uint8Array(await download.arrayBuffer())).toEqual(assetBytes);
+    const missingDownload = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/files/download/${uuid(712)}`, { headers }),
+      environment()
+    );
+    expect(missingDownload.status).toBe(404);
+    expect(await missingDownload.json()).toEqual({ kind: 'not_found' });
 
     const list = await handleRequest(
       new Request(`${baseUrl}/api/events`, { headers }),

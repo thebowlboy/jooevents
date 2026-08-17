@@ -1,4 +1,5 @@
 import type { FilesOrganizerReadPort } from '@jooevents/files-operations';
+import type { FileDownloadAssetSource } from '@jooevents/files/download';
 import {
   fileAssetSchema,
   fileAttachmentSchema,
@@ -7,7 +8,12 @@ import {
   resourceShareSchema,
   type FileScopeDto
 } from '@jooevents/contracts/files';
-import { parseEventId, parseWorkspaceId, type WorkspaceId } from '@jooevents/kernel';
+import {
+  canonicalJsonText,
+  parseEventId,
+  parseWorkspaceId,
+  type WorkspaceId
+} from '@jooevents/kernel';
 
 interface ScopeRootRow { readonly event_id: string }
 interface AttachmentRow {
@@ -15,6 +21,45 @@ interface AttachmentRow {
   readonly asset_json: string | null;
 }
 interface HeadRow { readonly head_json: string }
+
+/** Exact asset metadata source for the separately authorized inert-download transport. */
+export function createD1FileDownloadAssetSource(input: {
+  readonly database: D1Database;
+  readonly workspaceId: WorkspaceId;
+}): FileDownloadAssetSource {
+  const workspaceId = parseWorkspaceId(input.workspaceId);
+  return Object.freeze({
+    async readAssetForDownload(requestedScope: FileScopeDto, assetId: string) {
+      const scope = Object.freeze({
+        workspaceId: parseWorkspaceId(requestedScope.workspaceId),
+        eventId: parseEventId(requestedScope.eventId)
+      });
+      if (scope.workspaceId !== workspaceId) {
+        throw new TypeError('d1_file_download_workspace_mismatch');
+      }
+      const result = await input.database.withSession('first-primary').prepare(
+        `SELECT head_json FROM file_assets
+          WHERE workspace_id = ? AND event_id = ? AND id = ? LIMIT 2`
+      ).bind(scope.workspaceId, scope.eventId, assetId).all<HeadRow>();
+      if (result.results.length > 1) throw new D1FilesReadError('data_corrupt');
+      const row = result.results[0];
+      if (!row) return undefined;
+      try {
+        const asset = fileAssetSchema.parse(json(row.head_json));
+        if (asset.id !== assetId
+            || asset.scope.workspaceId !== scope.workspaceId
+            || asset.scope.eventId !== scope.eventId
+            || canonicalJsonText(asset) !== row.head_json) {
+          throw new D1FilesReadError('data_corrupt');
+        }
+        return asset;
+      } catch (error) {
+        if (error instanceof D1FilesReadError) throw error;
+        throw new D1FilesReadError('data_corrupt', { cause: error });
+      }
+    }
+  });
+}
 
 export class D1FilesReadError extends Error {
   readonly name = 'D1FilesReadError';

@@ -100,7 +100,11 @@ import {
   createD1FieldRegistryDirectEffectDomainRegistration,
   createD1FieldRegistrySnapshotSource
 } from './d1-field-registry';
-import { createD1FilesOrganizerReadPort } from './d1-files';
+import {
+  createD1FileDownloadAssetSource,
+  createD1FilesOrganizerReadPort
+} from './d1-files';
+import { createD1FilesOperatorHttpTransport } from './d1-files-http';
 import {
   createD1TaskBoardReadSource,
   createD1TaskDirectEffectDomainRegistration
@@ -119,9 +123,11 @@ import { createD1WorkspaceOverviewReadSource } from './d1-workspace-overview';
 import { createD1WorkspaceShellSummaryReadSource } from './d1-workspace-summary';
 import { createD1WorkspaceTeamReadSource } from './d1-workspace-team';
 import { createD1WorkspaceTeamMutationEffectDomainRegistration } from './d1-workspace-team-mutation';
+import { createR2FileBlobStore } from './r2-file-blob-store';
 
 export type D1ApplicationRuntimeEnvironment = CloudflareAuthBindings & {
   readonly DB: D1Database;
+  readonly FILES: R2Bucket;
 };
 
 function loadCryptoProfiles(
@@ -296,6 +302,11 @@ export async function createConfiguredD1ApplicationRuntime(
     database: environment.DB,
     workspaceId
   });
+  const fileDownloadAssets = createD1FileDownloadAssetSource({
+    database: environment.DB,
+    workspaceId
+  });
+  const fileBlobs = createR2FileBlobStore({ bucket: environment.FILES });
   const common = Object.freeze({
     workspaceId,
     currentAuthority,
@@ -651,7 +662,21 @@ export async function createConfiguredD1ApplicationRuntime(
     sessions: { getSession: (headers) => auth.api.getSession({ headers }) },
     allowedOrigins: [config.baseUrl, ...config.trustedOrigins]
   });
-  return createOperatorOperationsHttpAdapter({ operations, evidence });
+  const operator = createOperatorOperationsHttpAdapter({ operations, evidence });
+  const fileReadBinding = operations.registry.operatorHttpBindings.find((binding) =>
+    binding.operationName === 'file.overview.read' && binding.operationVersion === 1);
+  if (!fileReadBinding) throw new TypeError('cloudflare_file_read_binding_missing');
+  return createD1FilesOperatorHttpTransport({
+    workspaceId,
+    delegate: operator,
+    evidence,
+    evidenceBinding: fileReadBinding,
+    currentAuthority,
+    currentEvent: reads,
+    clock,
+    assets: fileDownloadAssets,
+    blobs: fileBlobs
+  });
 }
 
 export function cloudflareApplicationRuntimeEnabled(

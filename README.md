@@ -83,11 +83,13 @@ The Cloudflare production composition is now under active implementation, but it
 still not a production application. Local workerd tests prove retained D1 migrations,
 authentication and admission, guarded Event and settings operations, the Field
 Registry, Deadlines, Tasks, native Template artifacts, safe operation history, and the
-workspace shell. Queue, Cron, and multipart R2 adapter tests also pass. The checked-in
-authentication and application activation flags remain off: the remaining application
-families, production jobs/files/email and recovery composition, account-level R2
-enablement, staging, and live deployment must close before Cloudflare can accept real
-traffic.
+workspace shell, workspace Team changes, API-key inventory, and organizer Files
+metadata. An authenticated organizer download now streams retained R2 bytes with
+attachment-only inert headers; Queue, Cron, and multipart R2 adapter tests also pass.
+The checked-in authentication and application activation flags remain off: the
+remaining application families, Files uploads and mutations, production jobs/email
+and recovery composition, account-level R2 enablement, staging, and live deployment
+must close before Cloudflare can accept real traffic.
 
 ## Build and inspect
 

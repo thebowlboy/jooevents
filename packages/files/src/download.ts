@@ -32,7 +32,10 @@ export type InertDownloadOutcome =
     };
 
 export interface FileDownloadAssetSource {
-  readAssetForDownload(scope: FileScopeDto, assetId: string): FileAssetDto | undefined;
+  readAssetForDownload(
+    scope: FileScopeDto,
+    assetId: string
+  ): FileAssetDto | undefined | Promise<FileAssetDto | undefined>;
 }
 
 const FORBIDDEN = new Set<string>(INERT_DOWNLOAD_FORBIDDEN_CONTENT_TYPES);
@@ -83,7 +86,7 @@ export async function openInertFileDownload(input: {
   readonly scope: FileScopeDto;
   readonly assetId: string;
 }): Promise<InertDownloadOutcome> {
-  const asset = input.assets.readAssetForDownload(input.scope, input.assetId);
+  const asset = await input.assets.readAssetForDownload(input.scope, input.assetId);
   if (!asset) return deepFreeze({ kind: 'not_found' });
   if (asset.lifecycle === 'blocked') {
     return deepFreeze({ kind: 'refused', code: 'asset_blocked' });
@@ -97,6 +100,9 @@ export async function openInertFileDownload(input: {
   const read = await input.blobs.openReadStream(asset.storageKey);
   if (read.kind === 'missing') {
     return deepFreeze({ kind: 'refused', code: 'blob_missing' });
+  }
+  if (read.byteSize !== asset.byteSize) {
+    throw new TypeError('file_download_blob_size_mismatch');
   }
   return Object.freeze({
     kind: 'stream' as const,
