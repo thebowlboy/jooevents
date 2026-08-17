@@ -132,6 +132,7 @@ describe('configured D1 application HTTP slice', () => {
       'communication.provider_connection.read',
       'communication.sender_identity.read',
       'communication.sender_identity.update',
+      'create_message_draft',
       'deadline.catalog.read',
       'deadline.change',
       'deadline.current.read',
@@ -281,6 +282,37 @@ describe('configured D1 application HTTP slice', () => {
     );
     expect(initialAudienceOptions.status, await initialAudienceOptions.clone().text()).toBe(200);
     expect(await initialAudienceOptions.json()).toMatchObject({
+      kind: 'outcome', outcome: { class: 'conflict', kind: 'communication.event_required' }
+    });
+    const initialDraftCreate = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/communications/drafts/create`, {
+        method: 'POST',
+        headers: {
+          cookie: headers.cookie,
+          origin: baseUrl,
+          'content-type': 'application/json',
+          'idempotency-key': 'd1-initial-draft-create'
+        },
+        body: JSON.stringify({
+          channel: 'email',
+          purposeRevision: {
+            purposeId: uuid(795),
+            purposeKey: 'initial-purpose',
+            revisionId: uuid(796),
+            revisionNumber: 1,
+            digestSha256: 'a'.repeat(64)
+          },
+          initial: {
+            kind: 'registered_empty_refs',
+            contentRefId: 'je.communication.message-draft.empty-content/v1',
+            audienceRefId: 'je.communication.message-draft.empty-audience/v1'
+          }
+        })
+      }),
+      environment()
+    );
+    expect(initialDraftCreate.status, await initialDraftCreate.clone().text()).toBe(200);
+    expect(await initialDraftCreate.json()).toMatchObject({
       kind: 'outcome', outcome: { class: 'conflict', kind: 'communication.event_required' }
     });
     const initialDownload = await handleRequest(
@@ -506,7 +538,13 @@ describe('configured D1 application HTTP slice', () => {
       readonly kind: string;
       readonly data: {
         readonly rows: readonly {
-          readonly revision: { readonly purposeId: string; readonly purposeKey: string };
+          readonly revision: {
+            readonly purposeId: string;
+            readonly purposeKey: string;
+            readonly revisionId: string;
+            readonly revisionNumber: number;
+            readonly digestSha256: string;
+          };
           readonly lifecycle: string;
         }[];
       };
@@ -596,7 +634,10 @@ describe('configured D1 application HTTP slice', () => {
     const audienceOptionsBody = await audienceOptions.json<{
       readonly kind: string;
       readonly data: {
-        readonly rows: readonly { readonly optionId: string }[];
+        readonly rows: readonly {
+          readonly optionId: string;
+          readonly audienceDraft: unknown;
+        }[];
         readonly page: { readonly hasMore: boolean; readonly nextCursor?: string };
       };
     }>();
@@ -640,42 +681,142 @@ describe('configured D1 application HTTP slice', () => {
         }
       }
     };
-    const storeAuthoringPayload = (body: unknown) => handleRequest(
+    const storeAuthoringPayload = (body: unknown, idempotencyKey: string) => handleRequest(
       new Request(`${baseUrl}/api/events/current/communications/authoring-payloads`, {
         method: 'POST',
         headers: {
           cookie: headers.cookie,
           origin: baseUrl,
           'content-type': 'application/json',
-          'idempotency-key': 'd1-store-authoring-payload'
+          'idempotency-key': idempotencyKey
         },
         body: JSON.stringify(body)
       }),
       environment()
     );
-    const storedAuthoringPayload = await storeAuthoringPayload(authoringPayloadInput);
+    const storedAuthoringPayload = await storeAuthoringPayload(
+      authoringPayloadInput,
+      'd1-store-authoring-payload'
+    );
     expect(
       storedAuthoringPayload.status,
       await storedAuthoringPayload.clone().text()
     ).toBe(200);
     const storedAuthoringPayloadBody = await storedAuthoringPayload.json<{
       readonly kind: string;
-      readonly data: { readonly payloadRefId: string; readonly payloadKind: string };
+      readonly data: {
+        readonly payloadRefId: string;
+        readonly payloadRefVersion: number;
+        readonly payloadKind: string;
+        readonly schemaKey: string;
+        readonly schemaVersion: number;
+        readonly classification: string;
+      };
     }>();
     expect(storedAuthoringPayloadBody).toMatchObject({
       kind: 'success', data: { payloadKind: 'message_content' }
     });
-    const storedAuthoringPayloadReplay = await storeAuthoringPayload(authoringPayloadInput);
+    const storedAuthoringPayloadReplay = await storeAuthoringPayload(
+      authoringPayloadInput,
+      'd1-store-authoring-payload'
+    );
     expect(await storedAuthoringPayloadReplay.json()).toEqual(storedAuthoringPayloadBody);
     const changedAuthoringPayload = await storeAuthoringPayload({
       payload: {
         ...authoringPayloadInput.payload,
         value: { ...authoringPayloadInput.payload.value, subject: 'Changed payload' }
       }
-    });
+    }, 'd1-store-authoring-payload');
     expect(await changedAuthoringPayload.json()).toMatchObject({
       kind: 'outcome',
       outcome: { class: 'idempotency_conflict', kind: 'operation.request_changed' }
+    });
+    const storedAudiencePayload = await storeAuthoringPayload({
+      payload: {
+        payloadKind: 'message_audience_draft',
+        schemaVersion: 1,
+        value: audienceOptionsBody.data.rows[0]!.audienceDraft
+      }
+    }, 'd1-store-authoring-audience-payload');
+    expect(storedAudiencePayload.status, await storedAudiencePayload.clone().text()).toBe(200);
+    const storedAudiencePayloadBody = await storedAudiencePayload.json<{
+      readonly kind: string;
+      readonly data: typeof storedAuthoringPayloadBody.data;
+    }>();
+    expect(storedAudiencePayloadBody).toMatchObject({
+      kind: 'success', data: { payloadKind: 'message_audience_draft' }
+    });
+    const createDraftInput = {
+      channel: 'email',
+      purposeRevision: decisionPurpose.revision,
+      initial: {
+        kind: 'adopted_payload_refs',
+        contentPayload: storedAuthoringPayloadBody.data,
+        audiencePayload: storedAudiencePayloadBody.data
+      }
+    };
+    const createDraftRequest = (
+      body: unknown = createDraftInput,
+      idempotencyKey = 'd1-create-message-draft'
+    ) => new Request(
+      `${baseUrl}/api/events/current/communications/drafts/create`,
+      {
+        method: 'POST',
+        headers: {
+          cookie: headers.cookie,
+          origin: baseUrl,
+          'content-type': 'application/json',
+          'idempotency-key': idempotencyKey
+        },
+        body: JSON.stringify(body)
+      }
+    );
+    const createdDraft = await handleRequest(createDraftRequest(), environment());
+    expect(createdDraft.status, await createdDraft.clone().text()).toBe(200);
+    const createdDraftBody = await createdDraft.json<{
+      readonly kind: string;
+      readonly data: { readonly draftId: string; readonly version: number };
+    }>();
+    expect(createdDraftBody, JSON.stringify(createdDraftBody)).toMatchObject({
+      kind: 'success',
+      data: {
+        version: 1,
+        state: 'active',
+        authoring: { state: 'ready', subject: 'D1 authoring payload' }
+      }
+    });
+    const createdDraftReplay = await handleRequest(createDraftRequest(), environment());
+    expect(await createdDraftReplay.json()).toEqual(createdDraftBody);
+    const changedDraftCreate = await handleRequest(createDraftRequest({
+      ...createDraftInput,
+      purposeRevision: { ...decisionPurpose.revision, digestSha256: 'b'.repeat(64) }
+    }), environment());
+    expect(await changedDraftCreate.json()).toMatchObject({
+      kind: 'outcome',
+      outcome: { class: 'idempotency_conflict', kind: 'operation.request_changed' }
+    });
+    const uninitializedDraft = await handleRequest(createDraftRequest({
+      channel: 'email',
+      purposeRevision: decisionPurpose.revision,
+      initial: {
+        kind: 'registered_empty_refs',
+        contentRefId: 'je.communication.message-draft.empty-content/v1',
+        audienceRefId: 'je.communication.message-draft.empty-audience/v1'
+      }
+    }, 'd1-create-empty-message-draft'), environment());
+    expect(uninitializedDraft.status, await uninitializedDraft.clone().text()).toBe(200);
+    expect(await uninitializedDraft.json()).toMatchObject({
+      kind: 'success',
+      data: { version: 1, state: 'active', authoring: { state: 'uninitialized' } }
+    });
+    const createdDraftDetail = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/communications/drafts/detail?draftId=${
+        createdDraftBody.data.draftId}`, { headers }),
+      environment()
+    );
+    expect(await createdDraftDetail.json()).toMatchObject({
+      kind: 'success',
+      data: { draftId: createdDraftBody.data.draftId, version: 1, state: 'active' }
     });
     const authoringRows = await env.DB.batch([
       env.DB.prepare(`SELECT count(*) AS count FROM communication_authoring_payloads
@@ -687,11 +828,22 @@ describe('configured D1 application HTTP slice', () => {
         WHERE l.payload_ref_id=?`).bind(storedAuthoringPayloadBody.data.payloadRefId),
       env.DB.prepare(`SELECT r.ciphertext FROM classified_payload_records r
         JOIN communication_authoring_payloads p ON p.payload_ref_id=r.payload_ref_id
-        WHERE p.payload_ref_id=?`).bind(storedAuthoringPayloadBody.data.payloadRefId)
+        WHERE p.payload_ref_id=?`).bind(storedAuthoringPayloadBody.data.payloadRefId),
+      env.DB.prepare(`SELECT count(*) AS count
+        FROM organizer_communication_authoring_receipt_links
+        WHERE draft_id=? AND operation_name='create_message_draft'`)
+        .bind(createdDraftBody.data.draftId),
+      env.DB.prepare(`SELECT count(*) AS count
+        FROM organizer_communication_authoring_timeline t
+        JOIN organizer_communication_authoring_receipt_links l ON l.receipt_id=t.receipt_id
+        WHERE l.draft_id=? AND l.operation_name='create_message_draft'`)
+        .bind(createdDraftBody.data.draftId)
     ]);
     expect((authoringRows[0] as D1Result<{ count: number }>).results[0]?.count).toBe(1);
     expect((authoringRows[1] as D1Result<{ count: number }>).results[0]?.count).toBe(1);
     expect((authoringRows[2] as D1Result<{ count: number }>).results[0]?.count).toBe(1);
+    expect((authoringRows[4] as D1Result<{ count: number }>).results[0]?.count).toBe(1);
+    expect((authoringRows[5] as D1Result<{ count: number }>).results[0]?.count).toBe(1);
     const ciphertext = (authoringRows[3] as D1Result<{
       ciphertext: ArrayBuffer | readonly number[];
     }>).results[0]?.ciphertext;
@@ -1461,7 +1613,7 @@ describe('configured D1 application HTTP slice', () => {
     const operationCount = await env.DB.prepare(
       'SELECT count(*) AS count FROM operation_log WHERE workspace_id = ?'
     ).bind(workspaceId).first<{ readonly count: number }>();
-    expect(operationCount?.count).toBe(17);
+    expect(operationCount?.count).toBe(20);
     const logs = await env.DB.prepare('SELECT count(*) AS count FROM operation_log WHERE id = ?')
       .bind(firstBody.receipt.id).first<{ readonly count: number }>();
     expect(logs?.count).toBe(1);
