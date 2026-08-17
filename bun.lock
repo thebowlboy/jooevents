@@ -14,6 +14,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@jooevents/application": "workspace:*",
+        "@jooevents/auth": "workspace:*",
         "@jooevents/contracts": "workspace:*",
         "@jooevents/event": "workspace:*",
         "@jooevents/event-operations": "workspace:*",
@@ -21,6 +22,8 @@
         "@jooevents/identity-access": "workspace:*",
         "@jooevents/kernel": "workspace:*",
         "@jooevents/persistence": "workspace:*",
+        "better-auth": "1.6.26",
+        "drizzle-orm": "0.45.2",
       },
       "devDependencies": {
         "@cloudflare/vitest-pool-workers": "0.21.3",
@@ -52,6 +55,7 @@
         "@jooevents/airtable": "workspace:*",
         "@jooevents/airtable-sync": "workspace:*",
         "@jooevents/application": "workspace:*",
+        "@jooevents/auth": "workspace:*",
         "@jooevents/cloudflare-email": "workspace:*",
         "@jooevents/communication-operations": "workspace:*",
         "@jooevents/communications": "workspace:*",
@@ -185,6 +189,19 @@
         "@jooevents/identity-access": "workspace:*",
         "@jooevents/kernel": "workspace:*",
         "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/auth": {
+      "name": "@jooevents/auth",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/persistence": "workspace:*",
+        "better-auth": "1.6.26",
+        "drizzle-orm": "0.45.2",
       },
       "devDependencies": {
         "bun-types": "1.3.6",
@@ -972,6 +989,8 @@
     "@jooevents/airtable-sync": ["@jooevents/airtable-sync@workspace:packages/airtable-sync"],
 
     "@jooevents/application": ["@jooevents/application@workspace:packages/application"],
+
+    "@jooevents/auth": ["@jooevents/auth@workspace:packages/auth"],
 
     "@jooevents/cloudflare-email": ["@jooevents/cloudflare-email@workspace:packages/cloudflare-email"],
 

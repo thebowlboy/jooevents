@@ -11,13 +11,16 @@
   },
   "dependencies": {
     "@jooevents/application": "workspace:*",
+    "@jooevents/auth": "workspace:*",
     "@jooevents/contracts": "workspace:*",
     "@jooevents/event": "workspace:*",
     "@jooevents/event-operations": "workspace:*",
     "@jooevents/files": "workspace:*",
     "@jooevents/identity-access": "workspace:*",
     "@jooevents/kernel": "workspace:*",
-    "@jooevents/persistence": "workspace:*"
+    "@jooevents/persistence": "workspace:*",
+    "better-auth": "1.6.26",
+    "drizzle-orm": "0.45.2"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "0.21.3",

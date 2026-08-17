@@ -1,3 +1,4 @@
+export * from './better-auth-schema-definition';
 export * from './sqlite/better-auth-schema';
 export * from './sqlite/database';
 export * from './sqlite/ephemeral-sqlite-runtime';

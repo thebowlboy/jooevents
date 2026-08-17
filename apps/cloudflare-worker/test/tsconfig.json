@@ -6,6 +6,7 @@
   "include": [
     "./**/*.ts",
     "../src/d1-atomic-batch.ts",
+    "../src/d1-auth.ts",
     "../worker-configuration.d.ts"
   ],
   "exclude": []

@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@hono/zod-openapi": "1.5.2",
+    "@jooevents/auth": "workspace:*",
     "@jooevents/application": "workspace:*",
     "@jooevents/airtable": "workspace:*",
     "@jooevents/airtable-sync": "workspace:*",
