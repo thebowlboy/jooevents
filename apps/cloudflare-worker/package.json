@@ -10,7 +10,12 @@
     "test:workerd": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
+    "@jooevents/application": "workspace:*",
+    "@jooevents/contracts": "workspace:*",
+    "@jooevents/event": "workspace:*",
+    "@jooevents/event-operations": "workspace:*",
     "@jooevents/files": "workspace:*",
+    "@jooevents/kernel": "workspace:*",
     "@jooevents/persistence": "workspace:*"
   },
   "devDependencies": {
