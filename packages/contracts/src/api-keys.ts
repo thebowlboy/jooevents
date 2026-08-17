@@ -145,6 +145,26 @@ export const apiKeyCreateOperationResultSchema = createEffectfulOperationResultS
 export const apiKeyRotateOperationResultSchema = createEffectfulOperationResultSchema(apiKeyRotateDataSchema);
 export const apiKeyRevokeOperationResultSchema = createEffectfulOperationResultSchema(apiKeyViewSchema);
 
+const oneTimeApiKeySecretSchema = z.string().regex(/^jooak1_[A-Za-z0-9_-]{43}$/);
+
+/**
+ * HTTP-only result variants for runtimes that must return the one-time secret in
+ * the committing response. The canonical operation result and its durable receipt
+ * remain the secret-free schemas above.
+ */
+export const apiKeyCreateHttpResultSchema = z.union([
+  createEffectfulOperationResultSchema(apiKeyMintDataSchema.extend({
+    oneTimeSecret: oneTimeApiKeySecretSchema
+  })),
+  apiKeyCreateOperationResultSchema
+]);
+export const apiKeyRotateHttpResultSchema = z.union([
+  createEffectfulOperationResultSchema(apiKeyRotateDataSchema.extend({
+    oneTimeSecret: oneTimeApiKeySecretSchema
+  })),
+  apiKeyRotateOperationResultSchema
+]);
+
 export const API_KEY_OPERATION_SCHEMA_REFS = Object.freeze({
   list: createOperationSchemaManifestRefs({
     inputKey: 'schema.workspace.api-key.list.input', inputSchema: apiKeyListInputSchema,

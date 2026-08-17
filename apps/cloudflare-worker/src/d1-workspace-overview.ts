@@ -75,7 +75,10 @@ export const D1_WORKSPACE_OVERVIEW_AREA_CATALOG: WorkspaceOverviewAreaCatalog =
         'field_registry.remove',
         'field_registry.restore',
         'field_registry.snapshot.read',
+        'workspace.api_key.create',
         'workspace.api_key.list',
+        'workspace.api_key.revoke',
+        'workspace.api_key.rotate',
         'workspace_team.invite',
         'workspace_team.members.read',
         'workspace_team.remove',
@@ -83,9 +86,6 @@ export const D1_WORKSPACE_OVERVIEW_AREA_CATALOG: WorkspaceOverviewAreaCatalog =
       ],
       unavailableCapabilities: [
         'program_vocabulary.snapshot.read',
-        'workspace.api_key.create',
-        'workspace.api_key.revoke',
-        'workspace.api_key.rotate',
         'workspace_team.delivery.activate',
         'workspace_team.session_revocation.activate'
       ]

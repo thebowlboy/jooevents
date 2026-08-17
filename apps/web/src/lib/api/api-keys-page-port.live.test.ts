@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
 	API_KEY_OPERATION_SCHEMA_REFS,
+	apiKeyCreateHttpResultSchema,
 	apiKeyCreateOperationResultSchema,
 	apiKeyListOperationResultSchema,
 	apiKeySecretDeliveryResultSchema,
@@ -108,5 +109,36 @@ describe('live API key settings port', () => {
 		expect(calls).toEqual([
 			operations.list.path, operations.create.path, `/api/workspace/api-key-secrets/${id(4)}`
 		]);
+	});
+
+	test('uses a one-time secret returned with the committing response without a second request', async () => {
+		const manifest = safeOperationManifestSchema.parse({
+			schemaVersion: 1, registryDigestSha256: digest,
+			operations: Object.values(operations).map(entry)
+		});
+		const calls: string[] = [];
+		const request: ApiKeysPageRequester = async (input) => {
+			calls.push(input.path);
+			if (input.path === operations.create.path) return {
+				kind: 'success',
+				data: apiKeyCreateHttpResultSchema.parse({
+					kind: 'success',
+					data: {
+						key,
+						secretHandle: id(14),
+						oneTimeSecret: `jooak1_${'B'.repeat(43)}`
+					},
+					receipt: { id: id(15), operationName: operations.create.name, operationVersion: 1 },
+					correlationId: id(92)
+				})
+			};
+			throw new Error(`unexpected request ${input.path}`);
+		};
+		const port = createLiveApiKeysPagePort({ manifest, request });
+		expect(await port.create({
+			name: 'Assistant', proposesChanges: true, permissionIds: ['event.read'],
+			eventIds: [], expiresInDays: 90
+		})).toMatchObject({ kind: 'created', secret: `jooak1_${'B'.repeat(43)}` });
+		expect(calls).toEqual([operations.create.path]);
 	});
 });

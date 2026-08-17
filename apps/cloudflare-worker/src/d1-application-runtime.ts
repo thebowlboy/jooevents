@@ -79,6 +79,10 @@ import {
 import { createD1Auth } from './d1-auth';
 import { createD1ApiKeyManagementReadPort } from './d1-api-key-management';
 import {
+  createD1ApiKeyMutationEffectDomainRegistration,
+  createD1ApiKeyResponseSecretHandoff
+} from './d1-api-key-mutation';
+import {
   loadCloudflareAuthRuntimeConfiguration,
   type CloudflareAuthBindings
 } from './auth-config';
@@ -300,6 +304,7 @@ export async function createConfiguredD1ApplicationRuntime(
     workspaceId,
     nowEpochMs: Date.now
   });
+  const apiKeySecretHandoff = createD1ApiKeyResponseSecretHandoff();
   const files = createD1FilesOrganizerReadPort({
     database: environment.DB,
     workspaceId
@@ -545,7 +550,7 @@ export async function createConfiguredD1ApplicationRuntime(
     idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(
       API_KEY_OPERATION_KEY_PROFILES.idempotencyCredential
     ),
-    mountMutations: false
+    mountMutations: true
   });
   const fileReadOperations = createFilesReadOperationModule({
     workspaceId,
@@ -618,7 +623,15 @@ export async function createConfiguredD1ApplicationRuntime(
         newArtifactRevisionId: () => crypto.randomUUID()
       }
     }),
-    workspaceTeamMutationDomain
+    workspaceTeamMutationDomain,
+    createD1ApiKeyMutationEffectDomainRegistration({
+      workspaceId,
+      ids: {
+        newApiKeyId: () => crypto.randomUUID(),
+        newSecretHandle: () => crypto.randomUUID()
+      },
+      secretDelivery: apiKeySecretHandoff
+    })
   ]);
   const unitOfWork = new D1EffectUnitOfWorkPort(environment.DB, domains, {
     authorityRecheck: (buffered) => ({
@@ -666,12 +679,17 @@ export async function createConfiguredD1ApplicationRuntime(
     allowedOrigins: [config.baseUrl, ...config.trustedOrigins]
   });
   const operator = createOperatorOperationsHttpAdapter({ operations, evidence });
+  const operatorWithApiKeySecretHandoff = Object.freeze({
+    async fetch(request: Request): Promise<Response> {
+      return apiKeySecretHandoff.attach(await operator.fetch(request));
+    }
+  });
   const fileReadBinding = operations.registry.operatorHttpBindings.find((binding) =>
     binding.operationName === 'file.overview.read' && binding.operationVersion === 1);
   if (!fileReadBinding) throw new TypeError('cloudflare_file_read_binding_missing');
   return createD1FilesOperatorHttpTransport({
     workspaceId,
-    delegate: operator,
+    delegate: operatorWithApiKeySecretHandoff,
     evidence,
     evidenceBinding: fileReadBinding,
     currentAuthority,

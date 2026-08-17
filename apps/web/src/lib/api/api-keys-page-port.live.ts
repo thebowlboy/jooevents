@@ -1,12 +1,12 @@
 import {
 	API_KEY_OPERATION_SCHEMA_REFS,
+	apiKeyCreateHttpResultSchema,
 	apiKeyCreateInputSchema,
-	apiKeyCreateOperationResultSchema,
 	apiKeyListOperationResultSchema,
 	apiKeyRevokeInputSchema,
 	apiKeyRevokeOperationResultSchema,
 	apiKeyRotateInputSchema,
-	apiKeyRotateOperationResultSchema,
+	apiKeyRotateHttpResultSchema,
 	apiKeySecretDeliveryResultSchema,
 	type ApiKeyListDataDto,
 	type ApiKeyViewDto
@@ -158,15 +158,17 @@ export function createLiveApiKeysPagePort(input: {
 			});
 			if (!body.success) return { kind: 'refused' as const, reason: 'Choose at least one valid permission for this key.' };
 			const response = await request({
-				path: binding.path, method: 'POST', schema: apiKeyCreateOperationResultSchema,
+				path: binding.path, method: 'POST', schema: apiKeyCreateHttpResultSchema,
 				body: body.data, idempotencyKey: crypto.randomUUID()
 			});
 			if (response.kind !== 'success') return { kind: 'refused' as const, reason: transportRefusal() };
-			const parsed = apiKeyCreateOperationResultSchema.safeParse(response.data);
+			const parsed = apiKeyCreateHttpResultSchema.safeParse(response.data);
 			if (!parsed.success) return { kind: 'refused' as const, reason: transportRefusal() };
 			if (parsed.data.kind !== 'success') return { kind: 'refused' as const, reason: refusal(parsed.data) };
 			remember([parsed.data.data.key]);
-			const secret = await deliver(parsed.data.data.secretHandle);
+			const secret = 'oneTimeSecret' in parsed.data.data
+				? parsed.data.data.oneTimeSecret
+				: await deliver(parsed.data.data.secretHandle);
 			return secret === undefined
 				? { kind: 'refused' as const, reason: 'The key was created, but its one-time value could not be shown. Rotate it to get a replacement.' }
 				: { kind: 'created' as const, key: keyView(parsed.data.data.key), secret };
@@ -178,15 +180,17 @@ export function createLiveApiKeysPagePort(input: {
 			const body = apiKeyRotateInputSchema.safeParse({ apiKeyId: id, expectedVersion: versions.get(id) });
 			if (!body.success) return { kind: 'refused' as const, reason: 'That key is no longer available. Reload and try again.' };
 			const response = await request({
-				path: binding.path, method: 'POST', schema: apiKeyRotateOperationResultSchema,
+				path: binding.path, method: 'POST', schema: apiKeyRotateHttpResultSchema,
 				body: body.data, idempotencyKey: crypto.randomUUID()
 			});
 			if (response.kind !== 'success') return { kind: 'refused' as const, reason: transportRefusal() };
-			const parsed = apiKeyRotateOperationResultSchema.safeParse(response.data);
+			const parsed = apiKeyRotateHttpResultSchema.safeParse(response.data);
 			if (!parsed.success) return { kind: 'refused' as const, reason: transportRefusal() };
 			if (parsed.data.kind !== 'success') return { kind: 'refused' as const, reason: refusal(parsed.data) };
 			remember([parsed.data.data.predecessor, parsed.data.data.successor]);
-			const secret = await deliver(parsed.data.data.secretHandle);
+			const secret = 'oneTimeSecret' in parsed.data.data
+				? parsed.data.data.oneTimeSecret
+				: await deliver(parsed.data.data.secretHandle);
 			return secret === undefined
 				? { kind: 'refused' as const, reason: 'The key was rotated, but its one-time value could not be shown. Rotate the replacement again.' }
 				: {

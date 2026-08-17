@@ -83,8 +83,10 @@ The Cloudflare production composition is now under active implementation, but it
 still not a production application. Local workerd tests prove retained D1 migrations,
 authentication and admission, guarded Event and settings operations, the Field
 Registry, Deadlines, Tasks, native Template artifacts, safe operation history, and the
-workspace shell, workspace Team changes, API-key inventory, and organizer Files
-metadata. An authenticated organizer download now streams retained R2 bytes with
+workspace shell, workspace Team changes, human API-key inventory plus show-once
+create/rotate/revoke, and organizer Files metadata. API-key plaintext is returned
+only with the fresh committing response and is absent from D1 and operation history.
+An authenticated organizer download now streams retained R2 bytes with
 attachment-only inert headers; Queue, Cron, and multipart R2 adapter tests also pass.
 The sender-restricted Email Sending binding is joined to a bounded Queue consumer over
 the retained D1 delivery ledger. Local workerd proves exact provider-revision

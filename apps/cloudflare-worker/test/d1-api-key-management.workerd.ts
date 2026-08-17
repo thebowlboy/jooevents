@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { makeSignature } from 'better-auth/crypto';
 import { beforeAll, describe, expect, test } from 'vitest';
+import { hashApiKey } from '@jooevents/identity-access';
 import { handleRequest, type CloudflareApplicationEnvironment } from '../src/index';
 
 const uuid = (suffix: number): string =>
@@ -31,6 +32,7 @@ const secret = 'd1-api-key-auth-secret-at-least-thirty-two-characters';
 const baseUrl = 'https://api-key-management.jooevents.invalid';
 const ring = (byte: number): string =>
   `1:${Buffer.alloc(32, byte).toString('base64url')}`;
+interface CountRow { readonly count: number }
 
 beforeAll(async () => {
   const now = Date.now();
@@ -265,9 +267,9 @@ describe('D1 API key management read', () => {
       readonly operations: readonly { readonly name: string }[];
     }>()).operations.map((operation) => operation.name);
     expect(operationNames).toContain('workspace.api_key.list');
-    expect(operationNames).not.toContain('workspace.api_key.create');
-    expect(operationNames).not.toContain('workspace.api_key.rotate');
-    expect(operationNames).not.toContain('workspace.api_key.revoke');
+    expect(operationNames).toContain('workspace.api_key.create');
+    expect(operationNames).toContain('workspace.api_key.rotate');
+    expect(operationNames).toContain('workspace.api_key.revoke');
 
     const overview = await handleRequest(
       new Request(`${baseUrl}/api/workspace/overview`, {
@@ -286,10 +288,208 @@ describe('D1 API key management read', () => {
     }>();
     const settings = overviewBody.data.areas.find((area) => area.area === 'settings');
     expect(settings?.availableCapabilities).toContain('workspace.api_key.list');
-    expect(settings?.unavailableCapabilities).toEqual(expect.arrayContaining([
+    expect(settings?.availableCapabilities).toEqual(expect.arrayContaining([
       'workspace.api_key.create',
       'workspace.api_key.rotate',
       'workspace.api_key.revoke'
     ]));
+  });
+
+  test('creates, rotates, and revokes through guarded D1 operations with same-response secret handoff', async () => {
+    const idempotencyKey = crypto.randomUUID();
+    const createBody = {
+      name: 'Cloudflare assistant',
+      mayRead: true,
+      maySubmitPlans: false,
+      permissionIds: ['event.read'],
+      eventIds: [],
+      expiresInDays: null
+    };
+    const request = (path: string, body: unknown, key: string) => new Request(`${baseUrl}${path}`, {
+      method: 'POST',
+      headers: {
+        cookie: '',
+        origin: baseUrl,
+        'content-type': 'application/json',
+        'idempotency-key': key
+      },
+      body: JSON.stringify(body)
+    });
+    const ownerCookie = await cookie(ownerSessionToken);
+    const createRequest = request('/api/workspace/api-keys/create', createBody, idempotencyKey);
+    createRequest.headers.set('cookie', ownerCookie);
+    const createdResponse = await handleRequest(createRequest, environment());
+    expect(createdResponse.status, await createdResponse.clone().text()).toBe(200);
+    const created = await createdResponse.json<{
+      readonly kind: 'success';
+      readonly data: {
+        readonly key: { readonly id: string; readonly version: number; readonly expiresAt: string | null };
+        readonly secretHandle: string;
+        readonly oneTimeSecret: string;
+      };
+      readonly receipt: { readonly id: string };
+    }>();
+    expect(created.kind).toBe('success');
+    expect(created.data.key).toMatchObject({ version: 1, expiresAt: null });
+    expect(created.data.oneTimeSecret).toMatch(/^jooak1_[A-Za-z0-9_-]{43}$/);
+
+    const stored = await env.DB.prepare(`SELECT token_hash_sha256,token_hint,standing,version
+      FROM api_keys WHERE api_key_id = ?`).bind(created.data.key.id).first<{
+        readonly token_hash_sha256: string;
+        readonly token_hint: string;
+        readonly standing: string;
+        readonly version: number;
+      }>();
+    expect(stored).toMatchObject({
+      token_hash_sha256: hashApiKey(created.data.oneTimeSecret),
+      token_hint: created.data.oneTimeSecret.slice(0, 11),
+      standing: 'active',
+      version: 1
+    });
+    const durableCreateResult = await env.DB.prepare(
+      'SELECT result_json FROM operation_log WHERE id = ?'
+    ).bind(created.receipt.id).first<{ readonly result_json: string }>();
+    expect(durableCreateResult?.result_json).not.toContain(created.data.oneTimeSecret);
+    expect(durableCreateResult?.result_json).not.toContain(stored!.token_hash_sha256);
+    expect(durableCreateResult?.result_json).toContain(created.data.secretHandle);
+
+    const replayRequest = request('/api/workspace/api-keys/create', createBody, idempotencyKey);
+    replayRequest.headers.set('cookie', ownerCookie);
+    const replay = await handleRequest(replayRequest, environment());
+    expect(replay.status, await replay.clone().text()).toBe(200);
+    const replayBody = await replay.json<{
+      readonly kind: 'success';
+      readonly data: { readonly secretHandle: string; readonly oneTimeSecret?: string };
+    }>();
+    expect(replayBody.data.secretHandle).toBe(created.data.secretHandle);
+    expect(replayBody.data.oneTimeSecret).toBeUndefined();
+
+    const rotateRequest = request('/api/workspace/api-keys/rotate', {
+      apiKeyId: created.data.key.id,
+      expectedVersion: 1
+    }, crypto.randomUUID());
+    rotateRequest.headers.set('cookie', ownerCookie);
+    const rotatedResponse = await handleRequest(rotateRequest, environment());
+    expect(rotatedResponse.status, await rotatedResponse.clone().text()).toBe(200);
+    const rotated = await rotatedResponse.json<{
+      readonly kind: 'success';
+      readonly data: {
+        readonly predecessor: { readonly id: string; readonly version: number; readonly expiresAt: string };
+        readonly successor: { readonly id: string; readonly version: number; readonly expiresAt: null };
+        readonly oneTimeSecret: string;
+      };
+    }>();
+    expect(rotated.data.predecessor).toMatchObject({ id: created.data.key.id, version: 2 });
+    expect(Date.parse(rotated.data.predecessor.expiresAt)).toBeGreaterThan(Date.now());
+    expect(rotated.data.successor).toMatchObject({ version: 1, expiresAt: null });
+    expect(rotated.data.oneTimeSecret).toMatch(/^jooak1_[A-Za-z0-9_-]{43}$/);
+
+    const revokeRequest = request('/api/workspace/api-keys/revoke', {
+      apiKeyId: rotated.data.successor.id,
+      expectedVersion: 1,
+      reason: 'owner_request'
+    }, crypto.randomUUID());
+    revokeRequest.headers.set('cookie', ownerCookie);
+    const revokedResponse = await handleRequest(revokeRequest, environment());
+    expect(revokedResponse.status, await revokedResponse.clone().text()).toBe(200);
+    expect(await revokedResponse.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        id: rotated.data.successor.id,
+        standing: 'revoked',
+        revokeReason: 'owner_request',
+        version: 2
+      }
+    });
+  });
+
+  test('keeps ownership, administrator revocation, and Event scope checks fail-closed', async () => {
+    const post = async (input: {
+      readonly token: string;
+      readonly path: string;
+      readonly body: unknown;
+    }) => handleRequest(new Request(`${baseUrl}${input.path}`, {
+      method: 'POST',
+      headers: {
+        cookie: await cookie(input.token),
+        origin: baseUrl,
+        'content-type': 'application/json',
+        'idempotency-key': crypto.randomUUID()
+      },
+      body: JSON.stringify(input.body)
+    }), environment());
+
+    const foreignRotate = await post({
+      token: secondSessionToken,
+      path: '/api/workspace/api-keys/rotate',
+      body: { apiKeyId: ownerKeyId, expectedVersion: 1 }
+    });
+    expect(foreignRotate.status, await foreignRotate.clone().text()).toBe(200);
+    expect(await foreignRotate.json()).toMatchObject({
+      kind: 'outcome',
+      terminal: true,
+      outcome: { class: 'conflict', detail: { code: 'not_owner' } }
+    });
+    expect(await env.DB.prepare('SELECT version FROM api_keys WHERE api_key_id = ?')
+      .bind(ownerKeyId).first()).toEqual({ version: 1 });
+
+    const invalidEventCreate = await post({
+      token: ownerSessionToken,
+      path: '/api/workspace/api-keys/create',
+      body: {
+        name: 'Cross-scope refusal',
+        mayRead: true,
+        maySubmitPlans: false,
+        permissionIds: ['event.read'],
+        eventIds: [uuid(9999)],
+        expiresInDays: 90
+      }
+    });
+    expect(invalidEventCreate.status, await invalidEventCreate.clone().text()).toBe(200);
+    expect(await invalidEventCreate.json()).toMatchObject({
+      kind: 'outcome',
+      terminal: true,
+      outcome: { class: 'conflict', detail: { code: 'missing' } }
+    });
+    expect((await env.DB.prepare(`SELECT count(*) AS count FROM api_keys
+      WHERE display_name = 'Cross-scope refusal'`).first<CountRow>())?.count).toBe(0);
+
+    const collaboratorCreate = await post({
+      token: secondSessionToken,
+      path: '/api/workspace/api-keys/create',
+      body: {
+        name: 'Collaborator-owned key',
+        mayRead: true,
+        maySubmitPlans: false,
+        permissionIds: ['event.read'],
+        eventIds: [],
+        expiresInDays: 90
+      }
+    });
+    expect(collaboratorCreate.status, await collaboratorCreate.clone().text()).toBe(200);
+    const collaborator = await collaboratorCreate.json<{
+      readonly kind: 'success';
+      readonly data: { readonly key: { readonly id: string } };
+    }>();
+    const adminRevoke = await post({
+      token: ownerSessionToken,
+      path: '/api/workspace/api-keys/revoke',
+      body: {
+        apiKeyId: collaborator.data.key.id,
+        expectedVersion: 1,
+        reason: 'admin_request'
+      }
+    });
+    expect(adminRevoke.status, await adminRevoke.clone().text()).toBe(200);
+    expect(await adminRevoke.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        id: collaborator.data.key.id,
+        ownerUserId: secondUserId,
+        standing: 'revoked',
+        revokeReason: 'admin_request',
+        version: 2
+      }
+    });
   });
 });
