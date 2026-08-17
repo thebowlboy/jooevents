@@ -29,6 +29,9 @@ describe('Cloudflare D1 migration generation', () => {
     const rendered = generated.map((migration) => migration.sql).join('\n');
     expect(rendered).not.toMatch(/\bTEMP\s+TABLE/i);
     expect(rendered).not.toContain('temp.e2_');
+    expect(rendered).not.toContain("token_hint GLOB 'joak1_");
+    expect(rendered).not.toContain("token_hint GLOB 'jooak1_");
+    expect(rendered).toContain("instr('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-', substr(token_hint, 8, 1)) > 0");
   });
 
   test('does not embed an accepted legacy bridge in a fresh D1 database', () => {

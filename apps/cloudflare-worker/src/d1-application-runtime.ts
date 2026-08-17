@@ -1,5 +1,8 @@
 import {
   composeOperationRegistryModules,
+  API_KEY_MANAGE_ACCESS_POLICY,
+  API_KEY_MUTATION_REQUEST_HASH_PROFILE,
+  createApiKeyOperationModule,
   createApplicationOperationRuntime,
   createOperatorAuthorityPolicyCatalog,
   createWorkspaceTeamOperationModule,
@@ -70,6 +73,7 @@ import {
   createOperatorOperationsHttpAdapter
 } from '@jooevents/http-operation-adapters';
 import { createD1Auth } from './d1-auth';
+import { createD1ApiKeyManagementReadPort } from './d1-api-key-management';
 import {
   loadCloudflareAuthRuntimeConfiguration,
   type CloudflareAuthBindings
@@ -154,6 +158,25 @@ const WORKSPACE_TEAM_KEY_PROFILES = Object.freeze({
   })
 });
 
+const API_KEY_OPERATION_KEY_PROFILES = Object.freeze({
+  authorityPrincipal: Object.freeze({
+    key: 'key-profile.workspace-api-key.operator-principal',
+    version: parseContractVersion(1)
+  }),
+  scopePartition: Object.freeze({
+    key: 'key-profile.workspace-api-key.workspace-scope',
+    version: parseContractVersion(1)
+  }),
+  requestCanonicalization: Object.freeze({
+    key: 'key-profile.workspace-api-key.request-canonicalization',
+    version: parseContractVersion(1)
+  }),
+  idempotencyCredential: Object.freeze({
+    key: 'key-profile.workspace-api-key.idempotency-credential',
+    version: parseContractVersion(1)
+  })
+});
+
 function classifiedWorkspaceInvitationProfiles(
   cryptoProfiles: DurableCryptoProfileComposition
 ) {
@@ -205,7 +228,8 @@ export async function createConfiguredD1ApplicationRuntime(
     {
       policy: WORKSPACE_TEAM_OPERATION_ACCESS.remove.policy,
       permissionId: WORKSPACE_TEAM_OPERATION_ACCESS.remove.permissionId
-    }
+    },
+    { policy: API_KEY_MANAGE_ACCESS_POLICY, permissionId: 'integration.api.manage' }
   ]);
   const currentAuthority = createD1OperatorCurrentAuthorityResolver({
     session: environment.DB.withSession('first-primary'),
@@ -241,6 +265,11 @@ export async function createConfiguredD1ApplicationRuntime(
     workspaceId,
     nowEpochMs: Date.now,
     classifiedPayload: classifiedWorkspaceInvitationProfiles(cryptoProfiles)
+  });
+  const apiKeys = createD1ApiKeyManagementReadPort({
+    database: environment.DB,
+    workspaceId,
+    nowEpochMs: Date.now
   });
   const common = Object.freeze({
     workspaceId,
@@ -463,6 +492,23 @@ export async function createConfiguredD1ApplicationRuntime(
       WORKSPACE_TEAM_KEY_PROFILES.idempotencyCredential
     )
   });
+  const apiKeyOperations = createApiKeyOperationModule({
+    workspaceId,
+    policy: API_KEY_MANAGE_ACCESS_POLICY,
+    currentAuthority,
+    read: apiKeys,
+    clock,
+    ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+    authorityPrincipalKeyProfile: API_KEY_OPERATION_KEY_PROFILES.authorityPrincipal,
+    scopePartitionProfile: API_KEY_OPERATION_KEY_PROFILES.scopePartition,
+    requestCanonicalizationProfile: API_KEY_OPERATION_KEY_PROFILES.requestCanonicalization,
+    requestHashSealer: cryptoProfiles.requestHashSealer(API_KEY_MUTATION_REQUEST_HASH_PROFILE),
+    idempotencyCredentialProfile: API_KEY_OPERATION_KEY_PROFILES.idempotencyCredential,
+    idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(
+      API_KEY_OPERATION_KEY_PROFILES.idempotencyCredential
+    ),
+    mountMutations: false
+  });
   const workspaceTeamMutationDomain = cryptoProfiles.withPersistentHmacKeySelection(
     'security.workspace-invitation-lookup',
     (selection) => createD1WorkspaceTeamMutationEffectDomainRegistration({
@@ -551,7 +597,8 @@ export async function createConfiguredD1ApplicationRuntime(
       operationHistoryOperations,
       workspaceSummaryOperations,
       workspaceOverviewOperations,
-      workspaceTeamOperations
+      workspaceTeamOperations,
+      apiKeyOperations
     ]),
     read: {
       operationalTrace: { emit() {} },

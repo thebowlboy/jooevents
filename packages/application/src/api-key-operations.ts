@@ -22,9 +22,12 @@ import {
 } from '@jooevents/contracts';
 import {
   CURRENT_AUTHORITY_DENIAL_REASONS,
+  FEATURE_GROUPS,
+  PERMISSIONS,
   parseOperationAccessLane,
   type CurrentAuthorityDenialReason,
   type CurrentAuthorityResolver,
+  type PermissionId,
   type VersionedAccessPolicyRef,
   type VersionedKeyProfileRef
 } from '@jooevents/identity-access';
@@ -73,6 +76,63 @@ export const API_KEY_OPERATIONS = Object.freeze({
 });
 export const API_KEY_MUTATION_HANDLER_CAPABILITY = ref('capability.workspace.api-key.mutation');
 export const API_KEY_MUTATION_REQUEST_HASH_PROFILE = ref('request-hash.workspace.api-key.mutation');
+
+export const API_KEY_MANAGEMENT_PROFILES = Object.freeze([
+  Object.freeze({
+    key: 'full', label: 'Full access',
+    description: 'Everything you can currently do, including proposed changes.',
+    proposesChanges: true, permissionIds: 'everything-held'
+  }),
+  Object.freeze({
+    key: 'assistant', label: 'Assistant',
+    description: 'Program, submission, schedule, speaker-directory, and communication-draft access.',
+    proposesChanges: true,
+    permissionIds: Object.freeze([
+      'communication.draft', 'event.read', 'schedule.read',
+      'speaker.directory.read', 'submission.read'
+    ])
+  }),
+  Object.freeze({
+    key: 'dashboard', label: 'Dashboard',
+    description: 'Routine read access for dashboards, reports, and polling scripts.',
+    proposesChanges: false,
+    permissionIds: Object.freeze([
+      'event.read', 'schedule.read', 'speaker.directory.read', 'submission.read'
+    ])
+  }),
+  Object.freeze({
+    key: 'schedule', label: 'Schedule display',
+    description: 'Working schedule and event basics for venue screens.',
+    proposesChanges: false,
+    permissionIds: Object.freeze(['event.read', 'schedule.read'])
+  })
+]);
+
+export function createApiKeyManagementProfiles(): ApiKeyListDataDto['profiles'] {
+  return API_KEY_MANAGEMENT_PROFILES.map((profile) => ({
+    ...profile,
+    permissionIds: profile.permissionIds === 'everything-held'
+      ? profile.permissionIds
+      : [...profile.permissionIds]
+  }));
+}
+
+export function createApiKeyManagementPermissionViews(
+  heldPermissionIds: ReadonlySet<PermissionId>
+): ApiKeyListDataDto['permissions'] {
+  const groupLabels = new Map(FEATURE_GROUPS.map((group) => [group.id, group.label]));
+  return PERMISSIONS
+    .filter((permission) => permission.id !== 'integration.api.manage')
+    .map((permission) => Object.freeze({
+      id: permission.id,
+      group: permission.group,
+      groupLabel: groupLabels.get(permission.group)!,
+      label: permission.label,
+      description: permission.description,
+      risk: permission.risk,
+      held: heldPermissionIds.has(permission.id)
+    }));
+}
 
 type MutationAction = 'create' | 'rotate' | 'revoke';
 
@@ -264,12 +324,15 @@ export function createApiKeyOperationModule(input: {
   readonly requestHashSealer: RequestHashSealer;
   readonly idempotencyCredentialProfile: VersionedKeyProfileRef;
   readonly idempotencyCredentialSealer: IdempotencyCredentialSealer;
+  /** Mount only the human-readable key inventory when mutation secret delivery is not composed. */
+  readonly mountMutations?: boolean;
 }): OperationRegistryModule {
   if (input.policy.key !== API_KEY_MANAGE_ACCESS_POLICY.key
       || input.policy.version !== API_KEY_MANAGE_ACCESS_POLICY.version) {
     throw new TypeError('api_key_manage_policy_catalog_mismatch');
   }
   const workspaceId = parseWorkspaceId(input.workspaceId);
+  const mountMutations = input.mountMutations ?? true;
   const lane = parseOperationAccessLane({
     kind: 'operator', surface: 'operator_http', policy: input.policy
   });
@@ -391,18 +454,21 @@ export function createApiKeyOperationModule(input: {
   return Object.freeze({
     id: 'workspace.api-key.operations',
     source: Object.freeze({
-      autonomyPolicies: [readAutonomy, ...mutationEntries.map((entry) => entry.autonomy)],
+      autonomyPolicies: [
+        readAutonomy,
+        ...(mountMutations ? mutationEntries.map((entry) => entry.autonomy) : [])
+      ],
       schemas: [
         { reference: API_KEY_OPERATION_SCHEMA_REFS.list.inputSchema, schema: apiKeyListInputSchema },
         { reference: API_KEY_OPERATION_SCHEMA_REFS.list.resultSchema, schema: apiKeyListOperationResultSchema },
         { reference: createSafeSchemaManifestRef('schema.workspace.api-key.list.canonical-result', apiKeyListCanonicalResultSchema), schema: apiKeyListCanonicalResultSchema },
         { reference: nullRef, schema: nullDetailSchema }, { reference: refusalRef, schema: apiKeyMutationRefusalDetailSchema },
-        ...mutationEntries.flatMap((entry) => [
+        ...(mountMutations ? mutationEntries.flatMap((entry) => [
           { reference: entry.catalog.inputRef, schema: entry.catalog.inputSchema },
           { reference: entry.catalog.resultRef, schema: entry.catalog.resultSchema },
           { reference: entry.schemas.canonical, schema: entry.catalog.canonicalSchema },
           { reference: entry.schemas.contribution, schema: entry.catalog.contributionSchema }
-        ])
+        ]) : [])
       ],
       contextBuilders: [readContext],
       readCapabilities: [{
@@ -424,13 +490,15 @@ export function createApiKeyOperationModule(input: {
         canonicalResultSchema: createSafeSchemaManifestRef('schema.workspace.api-key.list.canonical-result', apiKeyListCanonicalResultSchema),
         projectedResultSchema: API_KEY_OPERATION_SCHEMA_REFS.list.resultSchema,
         project: (candidate: unknown) => apiKeyListCanonicalResultSchema.parse(candidate)
-      }, ...mutationEntries.map((entry) => ({
+      }, ...(mountMutations ? mutationEntries.map((entry) => ({
         reference: entry.refs.projection, canonicalResultSchema: entry.schemas.canonical,
         projectedResultSchema: entry.catalog.resultRef,
         project: (candidate: unknown) => entry.catalog.canonicalSchema.parse(candidate)
-      }))],
+      })) : [])],
       readOperationalTraceTargets: [{ reference: readRefs.trace, kind: 'read_operational_trace_record' as const, recordProfile: record }],
-      operationAuditTargets: [{ reference: audit, kind: 'operation_audit_record' as const, recordProfile: record }],
+      operationAuditTargets: mountMutations
+        ? [{ reference: audit, kind: 'operation_audit_record' as const, recordProfile: record }]
+        : [],
       operationAuditRecordProfiles: [{ reference: record, kind: 'canonical_json' as const, maximumBytes: 131_072 }],
       operations: [{
         ...API_KEY_OPERATIONS.list, lifecycle: { status: 'active' as const },
@@ -445,19 +513,29 @@ export function createApiKeyOperationModule(input: {
           path: '/api/workspace/api-keys', input: 'query' as const,
           browserResumption: { kind: 'none' as const }, projection: readRefs.projection }]
       }],
-      effectExecutionFamilies: mutationEntries.map((entry) => entry.family),
-      effectPhases: mutationEntries.map((entry) => entry.phase),
-      terminalizationResolvers: mutationEntries.map((entry) => entry.terminalization),
-      riskResolvers: mutationEntries.map((entry) => entry.risk),
-      autonomyEvidenceResolvers: mutationEntries.map((entry) => entry.evidence),
-      renewedApprovalResolvers: mutationEntries.map((entry) => entry.approval),
-      autonomyPreflights: mutationEntries.map((entry) => entry.preflight),
-      effectContextBuilders: mutationEntries.map((entry) => entry.context),
-      effectHandlers: mutationEntries.map((entry) => createMutationHandler({
+      effectExecutionFamilies: mountMutations ? mutationEntries.map((entry) => entry.family) : [],
+      effectPhases: mountMutations ? mutationEntries.map((entry) => entry.phase) : [],
+      terminalizationResolvers: mountMutations
+        ? mutationEntries.map((entry) => entry.terminalization)
+        : [],
+      riskResolvers: mountMutations ? mutationEntries.map((entry) => entry.risk) : [],
+      autonomyEvidenceResolvers: mountMutations
+        ? mutationEntries.map((entry) => entry.evidence)
+        : [],
+      renewedApprovalResolvers: mountMutations
+        ? mutationEntries.map((entry) => entry.approval)
+        : [],
+      autonomyPreflights: mountMutations
+        ? mutationEntries.map((entry) => entry.preflight)
+        : [],
+      effectContextBuilders: mountMutations
+        ? mutationEntries.map((entry) => entry.context)
+        : [],
+      effectHandlers: (mountMutations ? mutationEntries : []).map((entry) => createMutationHandler({
         action: entry.action, reference: entry.refs.handler,
         contributionSchema: entry.schemas.contribution, canonicalResultSchema: entry.schemas.canonical
       })),
-      effectOperations: mutationEntries.map((entry) => ({
+      effectOperations: (mountMutations ? mutationEntries : []).map((entry) => ({
         ...entry.catalog.operation, lifecycle: { status: 'active' as const },
         summary: `Human-only ${entry.action} API key operation.`, effect: 'commit' as const,
         maxRisk: 'consequential' as const, autonomyPolicy: entry.refs.autonomy,

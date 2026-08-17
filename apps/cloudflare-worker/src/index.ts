@@ -204,6 +204,7 @@ function isConfiguredApplicationPath(pathname: string): boolean {
     || pathname === '/api/workspace/history'
     || pathname === '/api/workspace/shell-summary'
     || pathname === '/api/workspace/overview'
+    || pathname === '/api/workspace/api-keys'
     || pathname === '/api/workspace/team'
     || pathname === '/api/workspace/team/invitations'
     || pathname === '/api/workspace/team/role-changes'

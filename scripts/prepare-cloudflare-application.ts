@@ -91,6 +91,25 @@ CREATE TABLE e2_0002_submission_triage_spam_rows (
 
 `;
 
+function adaptApiKeyHintConstraintForD1(
+  sql: string,
+  input: { readonly prefix: string; readonly length: number }
+): string {
+  const characterClass = '[A-Za-z0-9_-]';
+  const source = `length(token_hint) = ${input.length} AND token_hint GLOB '${input.prefix}${characterClass.repeat(4)}'`;
+  if (!sql.includes(source)) {
+    throw new TypeError(`Canonical API-key migration is missing its reviewed ${input.prefix} hint constraint.`);
+  }
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-';
+  const characterChecks = Array.from({ length: 4 }, (_, index) =>
+    `instr('${alphabet}', substr(token_hint, ${input.prefix.length + index + 1}, 1)) > 0`
+  ).join('\n      AND ');
+  return sql.replace(
+    source,
+    `length(token_hint) = ${input.length}\n      AND substr(token_hint, 1, ${input.prefix.length}) = '${input.prefix}'\n      AND ${characterChecks}`
+  );
+}
+
 /** D1 runs migration statements on connections that do not share TEMP state. */
 function adaptCanonicalMigrationForD1(entry: SQLiteMigrationManifestEntry, sql: string): string {
   let adapted = sql;
@@ -102,6 +121,13 @@ function adaptCanonicalMigrationForD1(entry: SQLiteMigrationManifestEntry, sql: 
       'CREATE TEMP TABLE e2_0004_api_key_prefix_guard',
       'CREATE TABLE e2_0004_api_key_prefix_guard'
     );
+  }
+  if (entry.migrationId === 'e2_0003_external_agent_api') {
+    adapted = adaptApiKeyHintConstraintForD1(adapted, { prefix: 'joak1_', length: 10 });
+  }
+  if (entry.migrationId === 'e2_0004_api_key_prefix'
+      || entry.migrationId === 'e2_0005_api_key_never_expire') {
+    adapted = adaptApiKeyHintConstraintForD1(adapted, { prefix: 'jooak1_', length: 11 });
   }
   adapted = adapted.replaceAll('temp.e2_0002_submission_triage_spam_rows', 'e2_0002_submission_triage_spam_rows');
   adapted = adapted.replaceAll('temp.e2_0004_api_key_prefix_guard', 'e2_0004_api_key_prefix_guard');

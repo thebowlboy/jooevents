@@ -122,6 +122,7 @@ describe('configured D1 application HTTP slice', () => {
       'template.artifact.change.draft',
       'template.artifact.get',
       'template.artifact.list',
+      'workspace.api_key.list',
       'workspace.overview.read',
       'workspace.shell.summary.read',
       'workspace_team.invite',

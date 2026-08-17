@@ -9,6 +9,8 @@ import {
   apiKeyRevokeDomainContributionSchema,
   apiKeyRotateContributionSchema,
   apiKeyRotateDomainContributionSchema,
+  createApiKeyManagementProfiles,
+  createApiKeyManagementPermissionViews,
   resolveEffectInvocationAuthorityRecheckAttribution,
   sealApiKeyMutationPreparation,
   type ApiKeyManagementReadPort,
@@ -25,7 +27,6 @@ import {
 } from '@jooevents/contracts';
 import {
   API_KEY_DEFAULT_POLICY,
-  FEATURE_GROUPS,
   PERMISSIONS,
   evaluateAccess,
   mintApiKey,
@@ -160,23 +161,16 @@ export class SQLiteApiKeyManagementReadPort implements ApiKeyManagementReadPort 
       requestedScope: { kind: 'workspace', workspaceId: this.#workspaceId },
       ...(membership ? { membership } : {}), roles, assignments, overrides, now
     }).allowed;
-    const groupLabels = new Map(FEATURE_GROUPS.map((group) => [group.id, group.label]));
-    const permissions = PERMISSIONS
+    const heldPermissionIds = new Set<PermissionId>(PERMISSIONS
       .filter((permission) => permission.id !== 'integration.api.manage')
-      .map((permission) => ({
-        id: permission.id,
-        group: permission.group,
-        groupLabel: groupLabels.get(permission.group)!,
-        label: permission.label,
-        description: permission.description,
-        risk: permission.risk,
-        held: evaluateAccess({
+      .filter((permission) => evaluateAccess({
           userId,
           permissionId: permission.id,
           requestedScope: { kind: 'workspace', workspaceId: this.#workspaceId },
           ...(membership ? { membership } : {}), roles, assignments, overrides, now
-        }).allowed
-      }));
+        }).allowed)
+      .map((permission) => permission.id));
+    const permissions = createApiKeyManagementPermissionViews(heldPermissionIds);
     const events = this.input.sqlite.query<{ readonly id: string; readonly name: string }, [string]>(`
       SELECT id,name FROM event_spine_heads WHERE workspace_id=? ORDER BY name,id
     `).all(this.#workspaceId).map((event) => ({ id: parseEventId(event.id), name: event.name }));
@@ -194,12 +188,7 @@ export class SQLiteApiKeyManagementReadPort implements ApiKeyManagementReadPort 
       })
         .map((key) => view(this.input.sqlite, key)),
       permissions,
-      profiles: [
-        { key: 'full', label: 'Full access', description: 'Everything you can currently do, including proposed changes.', proposesChanges: true, permissionIds: 'everything-held' },
-        { key: 'assistant', label: 'Assistant', description: 'Program, submission, schedule, speaker-directory, and communication-draft access.', proposesChanges: true, permissionIds: ['communication.draft', 'event.read', 'schedule.read', 'speaker.directory.read', 'submission.read'] },
-        { key: 'dashboard', label: 'Dashboard', description: 'Routine read access for dashboards, reports, and polling scripts.', proposesChanges: false, permissionIds: ['event.read', 'schedule.read', 'speaker.directory.read', 'submission.read'] },
-        { key: 'schedule', label: 'Schedule display', description: 'Working schedule and event basics for venue screens.', proposesChanges: false, permissionIds: ['event.read', 'schedule.read'] }
-      ],
+      profiles: createApiKeyManagementProfiles(),
       events,
       expiry: {
         defaultDays: this.#policy.defaultTtlDays,
