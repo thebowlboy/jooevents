@@ -68,6 +68,24 @@ describe('embed child channel', () => {
 		expect(stub.sent.every((entry) => entry.targetOrigin === hostOrigin)).toBe(true);
 	});
 
+	test('a completed submission is reported as the envelope-only notice', () => {
+		const stub = frameStub();
+		const channel = createEmbedChildChannel({ embedId, hostOrigin, frame: stub.frame });
+		channel.reportSubmissionComplete();
+		// The whole message: kind and envelope. No form value, email, or token
+		// can ride it, because the schema owns the shape.
+		expect(stub.sent).toEqual([
+			{
+				data: {
+					kind: 'submission_complete',
+					protocolVersion: EMBED_MESSAGE_PROTOCOL_VERSION,
+					embedId
+				},
+				targetOrigin: hostOrigin
+			}
+		]);
+	});
+
 	test('heights are clamped into the protocol bound before sending', () => {
 		const stub = frameStub();
 		const channel = createEmbedChildChannel({ embedId, hostOrigin, frame: stub.frame });
@@ -90,6 +108,7 @@ describe('embed child channel', () => {
 			expect(inert.active).toBe(false);
 			inert.announceReady();
 			inert.reportHeight(500);
+			inert.reportSubmissionComplete();
 		}
 		expect(stub.sent).toEqual([]);
 	});

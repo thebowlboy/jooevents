@@ -268,5 +268,9 @@ describe('ephemeral live flow test support', () => {
     expect(runtime.database.sqlite.query<{ readonly count: number }, []>(
       'SELECT count(*) AS count FROM operation_log'
     ).get()?.count).toBe(3); // two actor invitations plus one action-run operation
+    await runtime.startBackgroundWork();
+    expect(runtime.background.snapshot().jobs.find(
+      (job) => job.name === 'approved_agent_actions'
+    )).toMatchObject({ state: 'succeeded', consecutiveFailures: 0 });
   });
 });

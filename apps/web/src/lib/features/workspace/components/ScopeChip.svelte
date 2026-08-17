@@ -53,6 +53,7 @@
 	}
 
 	.scope__clear {
+		position: relative;
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
@@ -76,11 +77,22 @@
 	}
 
 	@media (max-width: 920px), (pointer: coarse) {
-		/* Touch-sized without changing the chip's height: the hit area grows past
-		   the glyph rather than the pill growing around it. */
+		/* Touch-sized without changing the chip's height: the visible glyph area
+		   grows a little, and an invisible overlay carries the rest of the 44px
+		   floor past the pill — nothing else interactive sits in that halo, so
+		   the enlarged target steals from no one. */
 		.scope__clear {
 			inline-size: 1.75rem;
 			block-size: 1.75rem;
+		}
+
+		.scope__clear::after {
+			content: '';
+			position: absolute;
+			inset-block-start: calc(50% - 1.375rem);
+			inset-inline-start: calc(50% - 1.375rem);
+			inline-size: 2.75rem;
+			block-size: 2.75rem;
 		}
 	}
 </style>

@@ -22,21 +22,30 @@
     "docs:dev:cloudflare": "bunx wrangler dev --config wrangler.docs.jsonc",
     "docs:deploy:cloudflare": "bunx wrangler deploy --config wrangler.docs.jsonc",
     "cloudflare:whoami": "bunx wrangler whoami",
+    "cloudflare:prepare": "bun scripts/prepare-cloudflare-application.ts",
+    "cloudflare:types": "bunx wrangler types --config wrangler.application.jsonc apps/cloudflare-worker/worker-configuration.d.ts",
+    "cloudflare:check": "bun run cloudflare:prepare && bun run cloudflare:types && bun run --filter @jooevents/cloudflare-worker check && bunx wrangler deploy --config wrangler.application.jsonc --env= --dry-run",
+    "cloudflare:dev": "bun run cloudflare:prepare && bunx wrangler dev --config wrangler.application.jsonc --test-scheduled",
     "check": "bun run --workspaces check && ./scripts/check-motion.sh",
     "check:motion": "./scripts/check-motion.sh",
     "check:public-boundary": "./scripts/check-public-boundary.sh",
+    "release:single-machine": "bun scripts/build-single-machine-release.ts",
+    "operator": "bun apps/server/src/entry/operator.ts",
     "db:migrate": "bun packages/persistence/src/sqlite/cli.ts migrate",
     "db:status": "bun packages/persistence/src/sqlite/cli.ts status",
     "db:backup": "bun packages/persistence/src/sqlite/cli.ts backup",
     "db:restore-rehearsal": "bun packages/persistence/src/sqlite/cli.ts restore-rehearsal",
+    "db:promote-release": "bun packages/persistence/src/sqlite/cli.ts promote-release",
     "test": "bun test",
     "test:backend": "bun test packages/kernel packages/identity-access packages/contracts packages/application packages/reliability packages/model-adapter packages/mcp packages/airtable packages/airtable-sync packages/event packages/event-operations packages/deadline packages/deadline-operations packages/program packages/program-operations packages/session packages/session-operations packages/decision packages/decision-operations packages/engagement packages/engagement-operations packages/release packages/release-operations packages/schedule packages/schedule-operations packages/intake packages/intake-operations packages/field-registry packages/submission-triage packages/review packages/review-operations packages/communications packages/communication-operations packages/cloudflare-email packages/workspace-operations packages/persistence/src apps/server/src",
     "test:foundation": "bun run test:backend",
     "test:foundation-db": "bun test packages/persistence/src/sqlite",
     "test:e2e": "bun run --cwd apps/web test:e2e",
+    "test:e2e:live:joined": "bun run --cwd apps/web test:e2e:live:joined",
     "preview": "bun run --cwd apps/web preview"
   },
   "devDependencies": {
+    "typescript": "6.0.3",
     "wrangler": "4.122.0"
   }
 }

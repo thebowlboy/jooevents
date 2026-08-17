@@ -93,6 +93,21 @@ function openFixture() {
   sqlite.query(`UPDATE event_spine_workspace_sets
     SET version = 2, current_event_id = ? WHERE workspace_id = ?`).run(eventId, workspaceId);
   sqlite.exec('COMMIT');
+  sqlite.query(`INSERT INTO program_vocabulary_sets (
+      workspace_id, event_id, set_version, created_by_user_id, created_at_ms,
+      updated_by_user_id, updated_at_ms
+    ) VALUES (?, ?, 2, ?, ?, ?, ?)`)
+    .run(workspaceId, eventId, userId, Date.parse(start), userId, Date.parse(start));
+  sqlite.query(`INSERT INTO program_vocabulary_tracks (
+      workspace_id, event_id, id, name, status, version,
+      created_by_user_id, created_at_ms, updated_by_user_id, updated_at_ms
+    ) VALUES (?, ?, ?, 'Engineering', 'active', 1, ?, ?, ?, ?)`)
+    .run(workspaceId, eventId, id(0x501), userId, Date.parse(start), userId, Date.parse(start));
+  sqlite.query(`INSERT INTO program_vocabulary_formats (
+      workspace_id, event_id, id, name, status, version,
+      created_by_user_id, created_at_ms, updated_by_user_id, updated_at_ms
+    ) VALUES (?, ?, ?, 'Talk', 'active', 1, ?, ?, ?, ?)`)
+    .run(workspaceId, eventId, id(0x502), userId, Date.parse(start), userId, Date.parse(start));
   let generated = 0x1000;
   const next = () => id(generated++);
   sqlite.transaction(() => initializeCanonicalFieldRegistry({
@@ -210,6 +225,68 @@ function count(fixture: ReturnType<typeof openFixture>, table: string): number {
 }
 
 describe('SQLite Intake Form owner write effect domain', () => {
+  test('refuses publication when a required vocabulary choice exposes no answers', async () => {
+    const fixture = openFixture();
+    try {
+      fixture.sqlite.query(`UPDATE program_vocabulary_tracks
+        SET status = 'retired', version = 2, updated_at_ms = updated_at_ms + 1
+        WHERE workspace_id = ? AND event_id = ?`).run(workspaceId, eventId);
+      const registry = fixture.repository.readFieldRegistrySnapshot({ workspaceId, eventId });
+      if (!registry) throw new Error('Field registry missing.');
+      const created = intakeFormDirectOperationResultSchema.parse(await fixture.effect(
+        INTAKE_FORM_CREATE_OPERATION,
+        {
+          expectedCatalogVersion: 1,
+          expectedRegistryVersion: registry.version,
+          definition: {
+            kind: 'cfp',
+            name: 'Impossible CFP',
+            target: { kind: 'general_pool' },
+            availability: { kind: 'evergreen' },
+            confirmation: 'Application received.',
+            composition: {
+              excludedFieldIds: [],
+              requiredOverrides: {},
+              optionExposure: {}
+            },
+            rules: []
+          }
+        },
+        'impossible-form-create'
+      ));
+      expect(created.kind).toBe('success');
+      if (created.kind !== 'success') throw new Error('Form create failed.');
+      const review = intakeFormVersionReviewDraftOperationResultSchema.parse(await fixture.effect(
+        INTAKE_FORM_VERSION_REVIEW_DRAFT_OPERATION,
+        {
+          action: 'publish_and_open',
+          formId: created.data.formId,
+          expectedDefinitionVersion: 1,
+          expectedRegistryVersion: registry.version
+        },
+        'impossible-form-review'
+      ));
+      expect(review).toMatchObject({
+        kind: 'outcome',
+        outcome: {
+          class: 'policy_violation',
+          kind: 'intake_form.change_refused',
+          detail: {
+            code: 'required_choice_has_no_options',
+            action: 'publish_and_open',
+            formId: created.data.formId
+          }
+        }
+      });
+      expect(count(fixture, 'intake_form_versions')).toBe(0);
+      expect(fixture.repository.readFormHead(
+        { workspaceId, eventId }, created.data.formId
+      )?.status).toBe('draft');
+    } finally {
+      fixture.close();
+    }
+  });
+
   test('keeps review inert, publishes exactly, replays, and corrects lifecycle forward', async () => {
     const fixture = openFixture();
     try {

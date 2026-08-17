@@ -1,4 +1,4 @@
-import { createHash, createHmac as createNodeHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -37,6 +37,7 @@ import {
   type InvocationEvidence,
   type AgentActionCurrentAuthority,
   type ApprovedAgentActionOperationExecutionPort,
+  type CurrentOperatorSessionRepository,
   type RegisteredAgentActionEligibility,
   type OperationRegistryModule,
   WORKSPACE_TEAM_MUTATION_REQUEST_HASH_PROFILE,
@@ -47,7 +48,8 @@ import {
   createPublicMutationContinuationBoundary
 } from '@jooevents/application/public-mutation-continuation';
 import {
-  issueSynchronousClassifiedPayloadEncryptionProfile
+  issueSynchronousClassifiedPayloadEncryptionProfile,
+  sealSynchronousClassifiedPayload
 } from '@jooevents/application/synchronous-classified-payload-store';
 import {
   accessContextSchema,
@@ -313,6 +315,7 @@ import {
 } from '@jooevents/template-authoring-operations';
 import {
   canonicalJsonText,
+  parseApiKeyId,
   parseAuditEventId,
   parseAuthorityCitationId,
   parseCapabilityRevisionId,
@@ -394,6 +397,9 @@ import {
   SQLiteCommunicationMessageReleaseStore,
   createSQLiteOutboundEmailEnvelopeResolver
 } from '@jooevents/persistence/message-releases';
+import {
+  createSQLiteMailSenderPresentationResolver
+} from '@jooevents/persistence/workspace-sender-identity';
 import { SQLiteOutboundEmailDeliveryLedger } from '@jooevents/persistence/outbound-email-delivery';
 import {
   createSQLiteOutboundEmailDeliveryEffectDomainRegistration
@@ -418,6 +424,11 @@ import {
 import {
   createSQLiteParticipantChallengeDelivery
 } from '@jooevents/persistence/participant-challenge-delivery';
+import {
+  createSQLiteSubmissionConfirmationRegistration,
+  seedSubmissionConfirmationPurpose,
+  type SubmissionConfirmationRegistrationPort
+} from '@jooevents/persistence/submission-confirmation-delivery';
 import {
   createSQLiteWorkspaceSignInLinkDelivery,
   decideWorkspaceSignInLinkEligibility,
@@ -547,7 +558,7 @@ import { createApiKeyEvidenceVerifier } from '../auth/api-key-evidence';
 import { ApiKeySecretDeliveryVault } from '../auth/api-key-secret-delivery';
 import { createSQLiteAuthPrincipalReader } from '../auth/principal-reader';
 import { SHARP_FILE_IMAGE_REENCODER } from './file-image-reencoder';
-import type { ServerConfig } from '../config';
+import type { ConfiguredServerConfig, ServerConfig } from '../config';
 import type { AirtableProviderConfig } from '../config/airtable';
 import {
   loadCommunicationsProviderConfig,
@@ -574,6 +585,11 @@ import {
   createAirtableLiveRuntime,
   type AirtableLiveRuntime
 } from './airtable-live-runtime';
+import {
+  createBackgroundSupervisor,
+  type BackgroundSupervisor,
+  type BackgroundSupervisorSnapshot
+} from './background-supervisor';
 import { createCloudflareTokenVerificationReadinessProbe } from './cloudflare-email-readiness-probe';
 import {
   buildDeploymentSenderPresentation,
@@ -601,6 +617,7 @@ import { createOutboundDispatchLoop, type OutboundDispatchLoop } from './outboun
 import { createFilesLiveComposition, type FilesLiveComposition } from './files-live';
 import { createWorkspaceSenderIdentityComposition } from './communication-sender-identity-live';
 import { createSQLiteOperatorAuthorityComposition } from './operator-authority';
+import type { DurableCryptoProfileComposition } from './durable-crypto-profiles';
 
 const eventProfiles = Object.freeze({
   authorityPrincipal: Object.freeze({
@@ -1056,11 +1073,10 @@ function communicationDefinitionRef(key: string, definition: unknown) {
 }
 
 function createOrganizerCommunicationRequestHashSealer(
-  keyBytesInput: Uint8Array,
+  requestHashSealer: DurableCryptoProfileComposition['requestHashSealer'],
   operations: readonly { readonly name: string }[] =
     Object.values(ORGANIZER_COMMUNICATION_MUTATION_OPERATIONS)
 ) {
-  const keyBytes = Uint8Array.from(keyBytesInput);
   const operationNames: ReadonlySet<string> = new Set(
     operations.map((operation) => operation.name)
   );
@@ -1081,15 +1097,11 @@ function createOrganizerCommunicationRequestHashSealer(
       } catch {
         throw new TypeError('communication_request_hash_operation_invalid');
       }
-      return Object.freeze({
-        verifierProfile: Object.freeze({
-          key: `request-hash.communication.organizer.${operationName}`,
-          version: parseContractVersion(1)
-        }),
-        verifierSha256: createNodeHmac('sha256', keyBytes)
-          .update(canonicalRequestBytes)
-          .digest('hex')
+      const profile = Object.freeze({
+        key: `request-hash.communication.organizer.${operationName}`,
+        version: parseContractVersion(1)
       });
+      return requestHashSealer(profile).seal(canonicalRequestBytes);
     }
   });
 }
@@ -1135,7 +1147,7 @@ function omitSharedIntakeInfrastructure(module: OperationRegistryModule): Operat
 }
 
 function bootstrapEventSet(
-  database: EphemeralSQLiteRuntime,
+  database: Pick<EphemeralSQLiteRuntime, 'sqlite'>,
   workspaceId: ReturnType<typeof parseWorkspaceId>
 ): SQLiteEventSpineRepository {
   const repository = new SQLiteEventSpineRepository(database.sqlite);
@@ -1152,32 +1164,46 @@ function bootstrapEventSet(
   }
 }
 
-function bootstrapEphemeralOwnerPermissionGrants(input: {
-  readonly database: EphemeralSQLiteRuntime;
+function bootstrapInitialOwnerPermissionGrants(input: {
+  readonly database: Pick<EphemeralSQLiteRuntime, 'sqlite'>;
   readonly ownerReservationId: string;
+  readonly mode: 'ephemeral' | 'retained_release';
 }): void {
   const insert = input.database.sqlite.query<never, [string, string, string, string]>(`
     INSERT INTO reservation_permission_overrides (
       id, reservation_id, permission_id, effect, scope_kind, event_id, reason
     ) VALUES (?, ?, ?, 'grant', 'workspace', NULL, ?)
   `);
-  for (const [permissionId, reason] of [
-    ['program.vocabulary.manage', 'Ephemeral live Program Vocabulary owner grant'],
-    ['communication.provider.manage', 'Ephemeral live email provider owner grant'],
-    ['integration.airtable.read', 'Ephemeral live Airtable connection read grant'],
-    ['integration.airtable.manage', 'Ephemeral live Airtable connection management grant'],
-    ['integration.api.manage', 'Ephemeral live external API owner grant'],
-    // `publication.manage` is minted with no preset carrying it; this
-    // explicit reservation override is a bootstrap-only grant so the owner
-    // principal can publish in the joined ephemeral runtime.
-    ['publication.manage', 'Ephemeral live publication owner grant (bootstrap-only)']
-  ] as const) {
+  const releaseGrants = [
+    ['program.vocabulary.manage', 'Initial release owner Program Vocabulary grant'],
+    ['communication.provider.manage', 'Initial release owner email provider grant'],
+    ['integration.api.manage', 'Initial release owner external API grant'],
+    ['publication.manage', 'Initial release owner publication grant']
+  ] as const;
+  const grants = input.mode === 'ephemeral'
+    ? [
+        ...releaseGrants,
+        ['integration.airtable.read', 'Ephemeral live Airtable connection read grant'],
+        ['integration.airtable.manage', 'Ephemeral live Airtable connection management grant']
+      ] as const
+    : releaseGrants;
+  for (const [permissionId, reason] of grants) {
     insert.run(crypto.randomUUID(), input.ownerReservationId, permissionId, reason);
   }
 }
 
-export interface EphemeralLiveRuntime {
-  readonly database: EphemeralSQLiteRuntime;
+export interface JoinedLiveDatabaseRuntime {
+  readonly sqlite: EphemeralSQLiteRuntime['sqlite'];
+  close(): unknown;
+}
+
+/**
+ * The complete joined application composition over a caller-owned SQLite
+ * lifetime. The generic keeps disposable-test and retained-production storage
+ * identities distinct while sharing one operation/HTTP composition.
+ */
+export interface JoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabaseRuntime> {
+  readonly database: DatabaseRuntime;
   readonly auth: JooEventsAuth;
   readonly app: ReturnType<typeof createHttpApp>;
   readonly workspaceId: string;
@@ -1220,6 +1246,11 @@ export interface EphemeralLiveRuntime {
     FilesLiveComposition,
     'limits' | 'blobs' | 'repository' | 'sweepOrphanBlobs' | 'sweepExpiredIntents'
   >;
+  /** Named, supervised runtime work and its sanitized operational state. */
+  readonly background: {
+    snapshot(): BackgroundSupervisorSnapshot;
+    runNow(name: string): Promise<boolean>;
+  };
   /**
    * Structurally test-only access to the compiled operator executor, real
    * admission path, and a read-only public-binding snapshot. It is absent unless
@@ -1227,8 +1258,12 @@ export interface EphemeralLiveRuntime {
    * database mutation primitive.
    */
   readonly testSupport?: EphemeralLiveTestSupport;
-  close(): ReturnType<EphemeralSQLiteRuntime['close']>;
+  /** Starts external/background work only after the listener is known-good. */
+  startBackgroundWork(): Promise<void>;
+  close(): Promise<void>;
 }
+
+export type EphemeralLiveRuntime = JoinedLiveRuntime<EphemeralSQLiteRuntime>;
 
 export type EphemeralLiveTestActorPersona = 'organizer' | 'reviewer' | 'second-organizer';
 
@@ -1237,6 +1272,7 @@ export interface EphemeralLiveTestActor {
   readonly userId: string;
   readonly membership: { readonly id: string; readonly version: number };
   readonly cookie: string;
+  readonly sessionHandle: string;
 }
 
 export interface EphemeralLiveTestPublicEffectBinding {
@@ -1276,6 +1312,8 @@ export interface EphemeralLiveTestSupport {
     readonly reviewer: EphemeralLiveTestActor;
     readonly secondOrganizer: EphemeralLiveTestActor;
   }>;
+  /** Revalidates retained test actors after the configured runtime is reopened. */
+  resumeActors(actors: readonly EphemeralLiveTestActor[]): Promise<void>;
   /** Frozen registry-derived plan metadata; no handler or mutation capability escapes. */
   agentActionPlanCatalog(): {
     readonly registryDigestSha256: string;
@@ -1294,8 +1332,7 @@ export interface EphemeralLiveTestSupport {
   }): Promise<AgentActionBatchView>;
 }
 
-/** Opens one process-lifetime isolated organizer runtime over a new database. */
-export async function createEphemeralLiveRuntime(input: {
+export interface EphemeralLiveRuntimeOptions {
   readonly config: ServerConfig;
   /**
    * Server-composition-only fixture seam. The runtime neither returns nor
@@ -1335,11 +1372,386 @@ export async function createEphemeralLiveRuntime(input: {
     readonly provider: AirtableProviderConfig;
     readonly fetch?: import('@jooevents/airtable').AirtableFetch;
   };
-}): Promise<EphemeralLiveRuntime> {
-  const database = createFoundationEphemeralSQLiteRuntime();
+}
+
+type JoinedLiveBlobStorage =
+  | { readonly kind: 'ephemeral' }
+  | { readonly kind: 'retained'; readonly rootDirectory: string };
+
+type JoinedLiveCryptoProfiles = Pick<
+  DurableCryptoProfileComposition,
+  'requestHashSealer' | 'idempotencyCredentialSealer' |
+  'classifiedPayloadEncryptionProfiles' | 'profileSelection' |
+  'withPersistentHmacKey' | 'withPersistentHmacKeySelection'
+>;
+
+function assertRetainedCryptoProfileVersionsAvailable(input: {
+  readonly sqlite: EphemeralSQLiteRuntime['sqlite'];
+  readonly cryptoProfiles: JoinedLiveCryptoProfiles;
+}): void {
+  const versions = (family: 'classified_payload' | 'persistent_hmac', key: string) =>
+    new Set([
+      input.cryptoProfiles.profileSelection(family, key).active.version,
+      ...input.cryptoProfiles.profileSelection(family, key).retained.map(
+        (profile) => profile.version
+      )
+    ]);
+  const classifiedVersions = versions(
+    'classified_payload',
+    'encryption.retained-reference-check'
+  );
+  const persistentHmacVersions = versions(
+    'persistent_hmac',
+    'security.retained-reference-check'
+  );
+  const unavailableClassified = input.sqlite.query<{ readonly version: number }, []>(`
+    SELECT DISTINCT encryption_profile_version AS version
+      FROM classified_payload_records
+  `).all().some((row) => !classifiedVersions.has(row.version));
+  const unavailablePersistent = input.sqlite.query<{ readonly version: number }, []>(`
+    SELECT DISTINCT version FROM (
+      SELECT principal_profile_version AS version
+        FROM public_mutation_continuations_trial
+      UNION
+      SELECT replay_profile_version AS version
+        FROM public_mutation_continuations_trial
+      UNION
+      SELECT profile_version AS version
+        FROM public_mutation_continuation_aliases_trial
+      UNION
+      SELECT lookup_version AS version
+        FROM communication_channel_address_versions
+      UNION
+      SELECT address_lookup_fingerprint_version AS version
+        FROM communication_outbound_delivery_heads
+    )
+  `).all().some((row) => !persistentHmacVersions.has(row.version));
+  if (unavailableClassified || unavailablePersistent) {
+    throw new TypeError('retained_crypto_profile_version_unavailable');
+  }
+}
+
+interface InstallationCryptoCheckEvidence {
+  readonly schemaVersion: 1;
+  readonly bundleVersion: number;
+  readonly requestHashVerifierSha256: string;
+  readonly idempotencyVerifierSha256: string;
+  readonly classifiedPayloadVerifierSha256: string;
+  readonly persistentHmacVerifierSha256: string;
+}
+
+async function installationCryptoCheckEvidence(input: {
+  readonly cryptoProfiles: JoinedLiveCryptoProfiles;
+  readonly workspaceId: string;
+  readonly version: number;
+}): Promise<InstallationCryptoCheckEvidence> {
+  const version = parseContractVersion(input.version);
+  const material = canonicalJsonText({
+    schemaVersion: 1,
+    namespace: 'jooevents.installation.crypto-check',
+    workspaceId: input.workspaceId,
+    version
+  });
+  const bytes = new TextEncoder().encode(material);
+  const request = await input.cryptoProfiles.requestHashSealer(Object.freeze({
+    key: 'installation.crypto-check.request-hash',
+    version
+  })).seal(bytes);
+  const idempotency = await input.cryptoProfiles.idempotencyCredentialSealer(Object.freeze({
+    key: 'installation.crypto-check.idempotency',
+    version
+  })).seal(material);
+  const classified = input.cryptoProfiles.classifiedPayloadEncryptionProfiles({
+    active: Object.freeze({ key: 'installation.crypto-check.classified-payload', version })
+  }).encryptionProfile;
+  const authenticatedData = new TextEncoder().encode('jooevents.installation.crypto-check.aad.v1');
+  const encrypted = sealSynchronousClassifiedPayload({
+    profile: classified,
+    plaintext: bytes,
+    authenticatedData,
+    nonceSource: (size) => new Uint8Array(size).fill(0x5a)
+  });
+  const classifiedPayloadVerifierSha256 = createHash('sha256')
+    .update(encrypted.nonce)
+    .update(encrypted.ciphertext)
+    .update(encrypted.authenticationTag)
+    .digest('hex');
+  const persistentHmacVerifierSha256 = input.cryptoProfiles.withPersistentHmacKey(
+    Object.freeze({ key: 'installation.crypto-check.persistent-hmac', version }),
+    (keyBytes) => createHmac('sha256', keyBytes).update(material, 'utf8').digest('hex')
+  );
+  bytes.fill(0);
+  authenticatedData.fill(0);
+  return Object.freeze({
+    schemaVersion: 1,
+    bundleVersion: version,
+    requestHashVerifierSha256: request.verifierSha256,
+    idempotencyVerifierSha256: idempotency.verifierSha256,
+    classifiedPayloadVerifierSha256,
+    persistentHmacVerifierSha256
+  });
+}
+
+async function assertOrCreateInstallationCryptoChecks(input: {
+  readonly sqlite: EphemeralSQLiteRuntime['sqlite'];
+  readonly cryptoProfiles: JoinedLiveCryptoProfiles;
+  readonly workspaceId: string;
+  readonly now: string;
+}): Promise<void> {
+  const rows = input.sqlite.query<{ readonly evidence_json: string }, [string]>(`
+    SELECT evidence_json FROM audit_events
+     WHERE workspace_id = ? AND actor_type = 'system'
+       AND action = 'bootstrap.crypto.profile_bound'
+       AND target_type = 'workspace' AND target_id = workspace_id
+     ORDER BY occurred_at, id
+  `).all(input.workspaceId);
+  const observed = new Set<number>();
+  for (const row of rows) {
+    try {
+      const stored = JSON.parse(row.evidence_json) as InstallationCryptoCheckEvidence;
+      if (stored.schemaVersion !== 1 || !Number.isSafeInteger(stored.bundleVersion)
+          || stored.bundleVersion < 1 || observed.has(stored.bundleVersion)) {
+        throw new TypeError('invalid');
+      }
+      const expected = await installationCryptoCheckEvidence({
+        cryptoProfiles: input.cryptoProfiles,
+        workspaceId: input.workspaceId,
+        version: stored.bundleVersion
+      });
+      if (canonicalJsonText(stored) !== canonicalJsonText(expected)) {
+        throw new TypeError('invalid');
+      }
+      observed.add(stored.bundleVersion);
+    } catch {
+      throw new TypeError('installation_crypto_check_failed');
+    }
+  }
+  const activeVersion = input.cryptoProfiles.profileSelection(
+    'persistent_hmac',
+    'installation.crypto-check.active-version'
+  ).active.version;
+  if (observed.has(activeVersion)) return;
+  const evidence = await installationCryptoCheckEvidence({
+    cryptoProfiles: input.cryptoProfiles,
+    workspaceId: input.workspaceId,
+    version: activeVersion
+  });
+  input.sqlite.query(`
+    INSERT INTO audit_events (
+      id, actor_type, action, target_type, target_id, workspace_id,
+      evidence_json, correlation_id, occurred_at
+    ) VALUES (?, 'system', 'bootstrap.crypto.profile_bound', 'workspace', ?, ?, ?, ?, ?)
+  `).run(
+    crypto.randomUUID(),
+    input.workspaceId,
+    input.workspaceId,
+    canonicalJsonText(evidence),
+    crypto.randomUUID(),
+    Date.parse(input.now)
+  );
+}
+
+function createEphemeralJoinedLiveCryptoProfiles(): JoinedLiveCryptoProfiles {
+  const requestHashSealers = new Map<
+    string,
+    ReturnType<JoinedLiveCryptoProfiles['requestHashSealer']>
+  >();
+  const idempotencyCredentialSealers = new Map<
+    string,
+    ReturnType<JoinedLiveCryptoProfiles['idempotencyCredentialSealer']>
+  >();
+  const encryptionProfiles = new Map<
+    string,
+    ReturnType<typeof issueSynchronousClassifiedPayloadEncryptionProfile>
+  >();
+  const persistentHmacKeys = new Map<string, Uint8Array>();
+  const identity = (reference: Readonly<{ key: string; version: number }>) =>
+    `${reference.key}@${reference.version}`;
+  const encryptionProfile = (
+    reference: Parameters<
+      JoinedLiveCryptoProfiles['classifiedPayloadEncryptionProfiles']
+    >[0]['active']
+  ) => {
+    const key = identity(reference);
+    const existing = encryptionProfiles.get(key);
+    if (existing !== undefined) return existing;
+    const created = issueSynchronousClassifiedPayloadEncryptionProfile({
+      reference,
+      keyBytes: randomHmacKey()
+    });
+    encryptionProfiles.set(key, created);
+    return created;
+  };
+  return Object.freeze({
+    requestHashSealer: (profile) => {
+      const key = identity(profile);
+      const existing = requestHashSealers.get(key);
+      if (existing !== undefined) return existing;
+      const created = createHmacRequestHashSealer({
+        profile,
+        keyBytes: randomHmacKey()
+      });
+      requestHashSealers.set(key, created);
+      return created;
+    },
+    idempotencyCredentialSealer: (profile) => {
+      const key = identity(profile);
+      const existing = idempotencyCredentialSealers.get(key);
+      if (existing !== undefined) return existing;
+      const created = createHmacIdempotencyCredentialSealer({
+        profile: Object.freeze({
+        key: profile.key,
+        version: parseContractVersion(profile.version)
+        }),
+        keyBytes: randomHmacKey()
+      });
+      idempotencyCredentialSealers.set(key, created);
+      return created;
+    },
+    classifiedPayloadEncryptionProfiles: (selection) => Object.freeze({
+      encryptionProfile: encryptionProfile(selection.active),
+      retainedEncryptionProfiles: Object.freeze(
+        (selection.retained ?? []).map(encryptionProfile)
+      )
+    }),
+    profileSelection: (_family, key) => Object.freeze({
+      active: Object.freeze({ key, version: parseContractVersion(1) }),
+      retained: Object.freeze([])
+    }),
+    withPersistentHmacKey: (profile, create) => {
+      const key = identity(profile);
+      let retained = persistentHmacKeys.get(key);
+      if (retained === undefined) {
+        retained = randomHmacKey();
+        persistentHmacKeys.set(key, retained);
+      }
+      const temporary = Uint8Array.from(retained);
+      try {
+        return create(temporary);
+      } finally {
+        temporary.fill(0);
+      }
+    },
+    withPersistentHmacKeySelection: (key, create) => {
+      const reference = Object.freeze({ key, version: parseContractVersion(1) });
+      const identityKey = identity(reference);
+      let retained = persistentHmacKeys.get(identityKey);
+      if (retained === undefined) {
+        retained = randomHmacKey();
+        persistentHmacKeys.set(identityKey, retained);
+      }
+      const temporary = Uint8Array.from(retained);
+      try {
+        return create(Object.freeze({
+          active: Object.freeze({ reference, keyBytes: temporary }),
+          retained: Object.freeze([])
+        }));
+      } finally {
+        temporary.fill(0);
+      }
+    }
+  });
+}
+
+type JoinedLiveRuntimeOptions<DatabaseRuntime extends JoinedLiveDatabaseRuntime> =
+  EphemeralLiveRuntimeOptions & {
+    readonly database: DatabaseRuntime;
+    readonly blobStorage: JoinedLiveBlobStorage;
+    readonly cryptoProfiles: JoinedLiveCryptoProfiles;
+    readonly initialOwnerGrantMode: 'ephemeral' | 'retained_release';
+  };
+
+/** Opens one process-lifetime isolated organizer runtime over a new database. */
+export async function createEphemeralLiveRuntime(
+  input: EphemeralLiveRuntimeOptions
+): Promise<EphemeralLiveRuntime> {
+  return createJoinedLiveRuntime({
+    ...input,
+    database: createFoundationEphemeralSQLiteRuntime(),
+    blobStorage: Object.freeze({ kind: 'ephemeral' as const }),
+    cryptoProfiles: createEphemeralJoinedLiveCryptoProfiles(),
+    initialOwnerGrantMode: 'ephemeral'
+  });
+}
+
+export type RetainedJoinedLiveRuntime<
+  DatabaseRuntime extends JoinedLiveDatabaseRuntime = JoinedLiveDatabaseRuntime
+> = JoinedLiveRuntime<DatabaseRuntime>;
+
+export interface RetainedJoinedLiveRuntimeOptions<
+  DatabaseRuntime extends JoinedLiveDatabaseRuntime
+> extends Omit<EphemeralLiveRuntimeOptions, 'config' | 'devFixtures' | 'devFixtureClock'> {
+  readonly config: ConfiguredServerConfig;
+  readonly database: DatabaseRuntime;
+  readonly blobRootDirectory: string;
+}
+
+/**
+ * Composes the complete application over caller-owned retained storage. The
+ * caller must open/validate SQLite and validate the blob root before calling;
+ * this function owns and closes both lifetimes after successful handoff.
+ */
+export async function createRetainedJoinedLiveRuntime<
+  DatabaseRuntime extends JoinedLiveDatabaseRuntime
+>(
+  input: RetainedJoinedLiveRuntimeOptions<DatabaseRuntime>
+): Promise<RetainedJoinedLiveRuntime<DatabaseRuntime>> {
+  return createJoinedLiveRuntime({
+    ...input,
+    blobStorage: Object.freeze({
+      kind: 'retained' as const,
+      rootDirectory: input.blobRootDirectory
+    }),
+    cryptoProfiles: input.config.durableCryptoProfiles,
+    initialOwnerGrantMode: 'retained_release'
+  });
+}
+
+/**
+ * Test-only retained composition used to drive the production adapters through
+ * registered operations before restart/recovery acceptance. Production entries
+ * cannot enable fixture routes through the configured runtime constructor.
+ */
+export async function createRetainedJoinedLiveRuntimeForTesting<
+  DatabaseRuntime extends JoinedLiveDatabaseRuntime
+>(
+  input: RetainedJoinedLiveRuntimeOptions<DatabaseRuntime> & {
+    readonly devFixtures: true;
+    readonly devFixtureClock?: Clock;
+  }
+): Promise<RetainedJoinedLiveRuntime<DatabaseRuntime>> {
+  if (process.env.NODE_ENV === 'production') {
+    throw new TypeError('retained_live_test_fixture_forbidden_in_production');
+  }
+  return createJoinedLiveRuntime({
+    ...input,
+    blobStorage: Object.freeze({
+      kind: 'retained' as const,
+      rootDirectory: input.blobRootDirectory
+    }),
+    cryptoProfiles: input.config.durableCryptoProfiles,
+    initialOwnerGrantMode: 'retained_release'
+  });
+}
+
+/**
+ * One composition root for every SQLite lifetime. Retained callers are added
+ * only after durable crypto and role/bootstrap duties can be supplied; keeping
+ * this function private prevents an unsafe partial production constructor.
+ */
+async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabaseRuntime>(
+  input: JoinedLiveRuntimeOptions<DatabaseRuntime>
+): Promise<JoinedLiveRuntime<DatabaseRuntime>> {
+  const database = input.database;
+  const cryptoProfiles = input.cryptoProfiles;
   let airtableLive: AirtableLiveRuntime | undefined;
+  let backgroundSupervisor: BackgroundSupervisor | undefined;
   let filesBlobRootDirectory: string | undefined;
   try {
+    assertRetainedCryptoProfileVersionsAvailable({
+      sqlite: database.sqlite,
+      cryptoProfiles
+    });
     const bootstrap = bootstrapEmptyInstall({
       sqlite: database.sqlite,
       ownerEmail: input.config.bootstrapOwnerEmail,
@@ -1347,10 +1759,19 @@ export async function createEphemeralLiveRuntime(input: {
       now: new Date().toISOString()
     });
     const workspaceId = parseWorkspaceId(bootstrap.workspaceId);
-    bootstrapEphemeralOwnerPermissionGrants({
-      database,
-      ownerReservationId: bootstrap.ownerReservationId
+    await assertOrCreateInstallationCryptoChecks({
+      sqlite: database.sqlite,
+      cryptoProfiles,
+      workspaceId,
+      now: new Date().toISOString()
     });
+    if (bootstrap.created) {
+      bootstrapInitialOwnerPermissionGrants({
+        database,
+        ownerReservationId: bootstrap.ownerReservationId,
+        mode: input.initialOwnerGrantMode
+      });
+    }
     const events = bootstrapEventSet(database, workspaceId);
     // The magic-link deliver seam late-binds: the gated outbox delivery needs
     // the communications composition, which composes after auth. Until it is
@@ -1426,28 +1847,27 @@ export async function createEphemeralLiveRuntime(input: {
     const sessionRepository = new SQLiteSessionRepository(database.sqlite, vocabularyRead);
     const placeableSessions: PlaceableSessionIdentityPort =
       createSchedulePlaceableSessionPort(sessionRepository);
-    const intakeClassifiedStore = new SQLiteClassifiedPayloadStore(database.sqlite, {
-      encryptionProfile: issueSynchronousClassifiedPayloadEncryptionProfile({
-        reference: Object.freeze({ key: 'encryption.intake-answer', version: 1 }),
-        keyBytes: randomHmacKey()
-      })
-    });
-    const workspaceTeamClassifiedStore = new SQLiteClassifiedPayloadStore(database.sqlite, {
-      encryptionProfile: issueSynchronousClassifiedPayloadEncryptionProfile({
-        reference: Object.freeze({ key: 'encryption.workspace-invitation', version: 1 }),
-        keyBytes: randomHmacKey()
-      })
-    });
+    const classifiedStoreOptions = (key: string) => {
+      const selected = cryptoProfiles.classifiedPayloadEncryptionProfiles(
+        cryptoProfiles.profileSelection('classified_payload', key)
+      );
+      return Object.freeze({
+        encryptionProfile: selected.encryptionProfile,
+        retainedEncryptionProfiles: selected.retainedEncryptionProfiles
+      });
+    };
+    const intakeClassifiedStore = new SQLiteClassifiedPayloadStore(
+      database.sqlite,
+      classifiedStoreOptions('encryption.intake-answer')
+    );
+    const workspaceTeamClassifiedStore = new SQLiteClassifiedPayloadStore(
+      database.sqlite,
+      classifiedStoreOptions('encryption.workspace-invitation')
+    );
     const organizerCommunicationClassifiedStore = new SQLiteClassifiedPayloadStore(
       database.sqlite,
       {
-        encryptionProfile: issueSynchronousClassifiedPayloadEncryptionProfile({
-          reference: Object.freeze({
-            key: 'encryption.communication-organizer-payload',
-            version: 1
-          }),
-          keyBytes: randomHmacKey()
-        })
+        ...classifiedStoreOptions('encryption.communication-organizer-payload')
       }
     );
     const organizerCommunicationAuthoring =
@@ -1565,7 +1985,8 @@ export async function createEphemeralLiveRuntime(input: {
       // `createDecisionNotificationMergeRegistryRelease()` exactly.
       fields: DECISION_NOTIFICATION_MERGE_FIELDS
     });
-    const workspaceTeamInvitationLookupKey = randomHmacKey();
+    const workspaceTeamInvitationLookupProfileKey =
+      'security.workspace-invitation-lookup';
     const workspaceTeamRepository = new SQLiteWorkspaceTeamRepository(
       database.sqlite,
       workspaceTeamClassifiedStore
@@ -1585,12 +2006,21 @@ export async function createEphemeralLiveRuntime(input: {
       principals: createSQLiteAuthPrincipalReader(database.sqlite, {
         issuerOrigin: new URL(input.config.baseUrl).origin
       }),
-      store: createSQLiteProvisioningStore(database.sqlite, {
-        workspaceTeam: createWorkspaceTeamProvisioningSynchronizationPort(
-          workspaceTeamRepository
-        ),
-        workspaceInvitationLookupKeyBytes: workspaceTeamInvitationLookupKey
-      }),
+      store: cryptoProfiles.withPersistentHmacKeySelection(
+        workspaceTeamInvitationLookupProfileKey,
+        (selection) => createSQLiteProvisioningStore(
+          database.sqlite,
+          {
+            workspaceTeam: createWorkspaceTeamProvisioningSynchronizationPort(
+              workspaceTeamRepository
+            ),
+            workspaceInvitationLookupKeyBytes: selection.active.keyBytes,
+            workspaceInvitationRetainedLookupKeyBytes: selection.retained.map(
+              (profile) => profile.keyBytes
+            )
+          }
+        )
+      ),
       admission: {
         mode: input.config.admissionMode,
         ...(input.config.googleHostedDomain
@@ -1697,10 +2127,26 @@ export async function createEphemeralLiveRuntime(input: {
       })
     );
     const intakePublicBootstrapVerifier = createOffUnlessConfiguredPublicIntakeBootstrapVerifier();
-    const intakePublicKeyProfile = (key: string) => Object.freeze({
-      reference: Object.freeze({ key, version: parseContractVersion(1) }),
-      keyBytes: randomHmacKey()
-    });
+    const intakePublicKeyProfiles = (key: string) =>
+      cryptoProfiles.withPersistentHmacKeySelection(key, (selection) => Object.freeze({
+        active: Object.freeze({
+          reference: selection.active.reference,
+          keyBytes: Uint8Array.from(selection.active.keyBytes)
+        }),
+        retained: Object.freeze(selection.retained.map((profile) => Object.freeze({
+          reference: profile.reference,
+          keyBytes: Uint8Array.from(profile.keyBytes)
+        })))
+      }));
+    const intakePublicContinuationProfiles = intakePublicKeyProfiles(
+      'key-profile.intake.public-continuation'
+    );
+    const intakePublicPartitionProfiles = intakePublicKeyProfiles(
+      'key-profile.intake.public-partition'
+    );
+    const intakePublicBootstrapReplayProfiles = intakePublicKeyProfiles(
+      'key-profile.intake.public-bootstrap-replay'
+    );
     const intakePublicCeremonyBoundary = createPublicMutationContinuationBoundary({
       binding: intakePublicContinuationBinding,
       policies: createApplySurfaceGatedContinuationPolicySource({
@@ -1710,12 +2156,11 @@ export async function createEphemeralLiveRuntime(input: {
           lifetimeMs: 900_000,
           ...INTAKE_PUBLIC_APPLY_UNCONFIGURED_ABUSE_POLICIES,
           continuationProfiles: [
-            intakePublicKeyProfile('key-profile.intake.public-continuation')
+            intakePublicContinuationProfiles.active,
+            ...intakePublicContinuationProfiles.retained
           ],
-          principalPartitionProfile:
-            intakePublicKeyProfile('key-profile.intake.public-partition'),
-          bootstrapReplayProfile:
-            intakePublicKeyProfile('key-profile.intake.public-bootstrap-replay')
+          principalPartitionProfile: intakePublicPartitionProfiles.active,
+          bootstrapReplayProfile: intakePublicBootstrapReplayProfiles.active
         }
       }),
       bootstrapVerifiers: Object.freeze({
@@ -1766,6 +2211,17 @@ export async function createEphemeralLiveRuntime(input: {
       newTimelineId: () => crypto.randomUUID(),
       newCompletionReference: newPublicCompletionReference
     });
+    let submissionConfirmationRegistration: SubmissionConfirmationRegistrationPort | undefined;
+    const submissionConfirmationForwarder: SubmissionConfirmationRegistrationPort = Object.freeze({
+      registerWithinTransaction(
+        request: Parameters<SubmissionConfirmationRegistrationPort['registerWithinTransaction']>[0]
+      ) {
+        if (submissionConfirmationRegistration === undefined) {
+          throw new TypeError('submission_confirmation_runtime_not_composed');
+        }
+        return submissionConfirmationRegistration.registerWithinTransaction(request);
+      }
+    });
     const intakePublicMutationDomain = createSQLiteIntakePublicMutationEffectDomainRegistration({
       sqlite: database.sqlite,
       workspaceId,
@@ -1780,6 +2236,7 @@ export async function createEphemeralLiveRuntime(input: {
         store: submissionTriageRepository,
         ids: Object.freeze({ newArrivalId: () => crypto.randomUUID() })
       }),
+      submissionConfirmation: submissionConfirmationForwarder,
       ids: intakePublicMutationIds
     });
     const reviewerAuthoritySource = new SQLiteReviewerAuthoritySource(
@@ -1828,12 +2285,19 @@ export async function createEphemeralLiveRuntime(input: {
     // Live decision-set audience source over the same decision heads and
     // classified intake contacts the mounted Decision and Submissions
     // surfaces serve; identity is personId-bearing evidence, never email.
-    const decisionAudienceSource = createSQLiteDecisionAudienceSource({
-      sqlite: database.sqlite,
-      contacts: intakeRepository,
-      submissions: submissionTriageSource,
-      addressFingerprintKeyBytes: randomHmacKey()
-    });
+    const decisionAudienceSource = cryptoProfiles.withPersistentHmacKeySelection(
+      'security.communication-address-fingerprint',
+      (selection) => createSQLiteDecisionAudienceSource({
+        sqlite: database.sqlite,
+        contacts: intakeRepository,
+        submissions: submissionTriageSource,
+        addressFingerprintKeyBytes: selection.active.keyBytes,
+        addressFingerprintProfile: Object.freeze({
+          key: 'communication.address-fingerprint.hmac-sha256',
+          version: selection.active.reference.version
+        })
+      })
+    );
     const taskReminderAudienceSource = createSQLiteTaskReminderAudienceSource({
       sqlite: database.sqlite,
       tasks: taskRepository,
@@ -1841,10 +2305,12 @@ export async function createEphemeralLiveRuntime(input: {
       submissions: submissionTriageSource,
       submissionAddresses: decisionAudienceSource
     });
-    const organizerCommunicationPreview = new SQLiteOrganizerAudiencePreviewRepository(
-      database.sqlite,
-      organizerCommunicationClassifiedStore,
-      Object.freeze({
+    const organizerCommunicationPreview = cryptoProfiles.withPersistentHmacKeySelection(
+      'security.communication-audience-cursor',
+      (cursorSelection) => new SQLiteOrganizerAudiencePreviewRepository(
+        database.sqlite,
+        organizerCommunicationClassifiedStore,
+        Object.freeze({
         drafts: createOrganizerPreviewDraftBindingSource({
           authoring: organizerCommunicationAuthoring,
           plainTextRenderer: communicationDefinitionRef(
@@ -1853,10 +2319,16 @@ export async function createEphemeralLiveRuntime(input: {
           ),
           plainTextMergeRegistry: organizerPlainTextMergeRegistry.identity
         }),
-        opaqueTokens: createHmacOrganizerPreviewOpaqueTokenCodec({
-          keyBytes: randomHmacKey(),
-          profile: Object.freeze({ key: 'communication.preview.opaque-token', version: 1 })
-        }),
+        opaqueTokens: cryptoProfiles.withPersistentHmacKeySelection(
+          'security.communication-preview-opaque-token',
+          (selection) => createHmacOrganizerPreviewOpaqueTokenCodec({
+            keyBytes: selection.active.keyBytes,
+            profile: Object.freeze({
+              key: 'communication.preview.opaque-token',
+              version: selection.active.reference.version
+            })
+          })
+        ),
         render: createOrganizerPlainTextRenderStrategyPort({
           mergeRegistry: organizerPlainTextMergeRegistry,
           content: createSQLiteDraftRenderContentSource({
@@ -1872,12 +2344,16 @@ export async function createEphemeralLiveRuntime(input: {
           })
         }),
         digestProfile: Object.freeze({ key: 'communication.preview.sha256', version: 1 }),
-        audienceCursorKeyBytes: randomHmacKey(),
+        audienceCursorKeyBytes: cursorSelection.active.keyBytes,
+        audienceCursorRetainedKeyBytes: cursorSelection.retained.map(
+          (profile) => profile.keyBytes
+        ),
         registeredSources: [
           ...decisionAudienceDelegates(decisionAudienceSource),
           taskReminderAudienceSource
         ]
-      })
+        })
+      )
     );
     /**
      * Recorder defaults BLOCKED-4/BLOCKED-5/BLOCKED-12: installs the one
@@ -1911,6 +2387,7 @@ export async function createEphemeralLiveRuntime(input: {
         purposeRevision: seeded.purposeRevision
       });
       seedTaskReminderPurpose({ sqlite: database.sqlite, scope });
+      seedSubmissionConfirmationPurpose({ sqlite: database.sqlite, scope });
     };
     const communicationMessageReleases = new SQLiteCommunicationMessageReleaseStore(
       database.sqlite,
@@ -1963,36 +2440,6 @@ export async function createEphemeralLiveRuntime(input: {
      * dispatch pass runs — with only the deterministic fake composed, every
      * delivery still resolves terminally not-delivered (BLOCKED-2).
      */
-    // With a real provider activated, the outbox is pumped continuously so
-    // time-sensitive security mail (portal and workspace sign-in links) leaves
-    // promptly — those lanes register deliveries outside any send commit, so
-    // the after-commit pass alone would strand them as pending forever. The
-    // inert fake composition deliberately gets no pump: joined tests keep
-    // deterministic dispatch timing.
-    let outboundDispatchPump: ReturnType<typeof setInterval> | undefined;
-    if (providerRuntime.registration?.delivery) {
-      let pumping = false;
-      outboundDispatchPump = setInterval(() => {
-        if (pumping) return;
-        pumping = true;
-        void outboundDispatch.runOnce()
-          .then(() => {
-            /* Per-delivery faults no longer abort the pass, so they surface
-               here instead — one bad row must be visible without silencing
-               every delivery queued behind it. */
-            for (const fault of outboundDispatch.faults()) {
-              console.error(
-                `[jooevents] outbound delivery ${fault.deliveryId} failed`,
-                fault.error
-              );
-            }
-          })
-          .catch((error) => {
-            console.error('[jooevents] outbound dispatch pass failed', error);
-          })
-          .finally(() => { pumping = false; });
-      }, 2000);
-    }
     const communicationSendRuntime = createCommunicationSendOperationRuntime({
       sqlite: database.sqlite,
       workspaceId,
@@ -2207,9 +2654,57 @@ export async function createEphemeralLiveRuntime(input: {
         newReleaseId: () => crypto.randomUUID()
       })
     });
+    const approvedActionSessions = new Map<string, {
+      readonly userId: string;
+      readonly expiresAt: string;
+    }>();
+    const internalOperatorSessions: CurrentOperatorSessionRepository = Object.freeze({
+      resolveCurrent(
+        request: Parameters<CurrentOperatorSessionRepository['resolveCurrent']>[0]
+      ) {
+        const { sessionHandle, evaluatedAt } = request;
+        const session = approvedActionSessions.get(sessionHandle);
+        if (!session) return Object.freeze({ kind: 'denied' as const, reason: 'missing' as const });
+        if (Date.parse(session.expiresAt) <= Date.parse(evaluatedAt)) {
+          return Object.freeze({ kind: 'denied' as const, reason: 'revoked' as const });
+        }
+        return Object.freeze({
+          kind: 'current' as const,
+          session: Object.freeze({
+            sessionId: sessionHandle,
+            authUserId: `approved-agent-action:${session.userId}`,
+            userId: parseUserId(session.userId),
+            expiresAt: parseInstant(session.expiresAt),
+            evidenceIds: Object.freeze([`agent-action-approval:${sessionHandle}`])
+          })
+        });
+      }
+    });
+    const withApprovedActionSession = async <Value>(input: {
+      readonly userId: string;
+      readonly expiresAt: string;
+      work(evidence: InvocationEvidence): Promise<Value>;
+    }): Promise<Value> => {
+      const handle = `approved-action-${crypto.randomUUID()}`;
+      approvedActionSessions.set(handle, {
+        userId: parseUserId(input.userId),
+        expiresAt: parseInstant(input.expiresAt)
+      });
+      try {
+        return await input.work(Object.freeze({
+          kind: 'operator' as const,
+          surface: 'operator_http' as const,
+          client: Object.freeze({ key: 'worker.approved-agent-action', version: '1' }),
+          sessionHandle: handle
+        }));
+      } finally {
+        approvedActionSessions.delete(handle);
+      }
+    };
     const authority = createSQLiteOperatorAuthorityComposition({
       sqlite: database.sqlite,
       workspaceId,
+      internalSessions: internalOperatorSessions,
       policies: Object.freeze([
         Object.freeze({ policy: EVENT_READ_ACCESS_POLICY, permissionId: 'event.read' as const }),
         Object.freeze({
@@ -2487,15 +2982,9 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: eventProfiles.authorityPrincipal,
       scopePartitionProfile: eventProfiles.scopePartition,
       requestCanonicalizationProfile: eventProfiles.requestCanonicalization,
-      requestHashSealer: createHmacRequestHashSealer({
-        profile: API_KEY_MUTATION_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
+      requestHashSealer: cryptoProfiles.requestHashSealer(API_KEY_MUTATION_REQUEST_HASH_PROFILE),
       idempotencyCredentialProfile: eventProfiles.idempotencyCredential,
-      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
-        profile: eventProfiles.idempotencyCredential,
-        keyBytes: randomHmacKey()
-      })
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(eventProfiles.idempotencyCredential)
     });
     const apiKeySecretDelivery = new ApiKeySecretDeliveryVault();
     const apiKeyDomain = createSQLiteApiKeyEffectDomainRegistration({
@@ -2506,14 +2995,8 @@ export async function createEphemeralLiveRuntime(input: {
       newApiKeyId: () => crypto.randomUUID(),
       secretDelivery: apiKeySecretDelivery
     });
-    const requestHashSealer = createHmacRequestHashSealer({
-      profile: EVENT_CREATE_REQUEST_HASH_PROFILE,
-      keyBytes: randomHmacKey()
-    });
-    const idempotencyCredentialSealer = createHmacIdempotencyCredentialSealer({
-      profile: eventProfiles.idempotencyCredential,
-      keyBytes: randomHmacKey()
-    });
+    const requestHashSealer = cryptoProfiles.requestHashSealer(EVENT_CREATE_REQUEST_HASH_PROFILE);
+    const idempotencyCredentialSealer = cryptoProfiles.idempotencyCredentialSealer(eventProfiles.idempotencyCredential);
     const eventOperations = createEventOperationModule({
       workspaceId,
       policies: Object.freeze({
@@ -2572,10 +3055,7 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: eventProfiles.authorityPrincipal,
       scopePartitionProfile: eventProfiles.scopePartition,
       requestCanonicalizationProfile: eventProfiles.requestCanonicalization,
-      requestHashSealer: createHmacRequestHashSealer({
-        profile: EVENT_SELECT_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
+      requestHashSealer: cryptoProfiles.requestHashSealer(EVENT_SELECT_REQUEST_HASH_PROFILE),
       idempotencyCredentialProfile: eventProfiles.idempotencyCredential,
       idempotencyCredentialSealer
     });
@@ -2610,10 +3090,7 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: eventProfiles.authorityPrincipal,
       scopePartitionProfile: eventProfiles.scopePartition,
       requestCanonicalizationProfile: eventProfiles.requestCanonicalization,
-      requestHashSealer: createHmacRequestHashSealer({
-        profile: EVENT_SETTINGS_UPDATE_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
+      requestHashSealer: cryptoProfiles.requestHashSealer(EVENT_SETTINGS_UPDATE_REQUEST_HASH_PROFILE),
       idempotencyCredentialProfile: eventProfiles.idempotencyCredential,
       idempotencyCredentialSealer
     });
@@ -2718,19 +3195,10 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: templateArtifactProfiles.authorityPrincipal,
       scopePartitionProfile: templateArtifactProfiles.scopePartition,
       requestCanonicalizationProfile: templateArtifactProfiles.requestCanonicalization,
-      draftRequestHashSealer: createHmacRequestHashSealer({
-        profile: TEMPLATE_ARTIFACT_NATIVE_DRAFT_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
-      publishRequestHashSealer: createHmacRequestHashSealer({
-        profile: TEMPLATE_ARTIFACT_NATIVE_PUBLISH_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
+      draftRequestHashSealer: cryptoProfiles.requestHashSealer(TEMPLATE_ARTIFACT_NATIVE_DRAFT_REQUEST_HASH_PROFILE),
+      publishRequestHashSealer: cryptoProfiles.requestHashSealer(TEMPLATE_ARTIFACT_NATIVE_PUBLISH_REQUEST_HASH_PROFILE),
       idempotencyCredentialProfile: templateArtifactProfiles.idempotencyCredential,
-      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
-        profile: templateArtifactProfiles.idempotencyCredential,
-        keyBytes: randomHmacKey()
-      })
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(templateArtifactProfiles.idempotencyCredential)
     });
     const templateEditOperations = createTemplateEditOperationModule({
       workspaceId,
@@ -2744,15 +3212,9 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: templateArtifactProfiles.authorityPrincipal,
       scopePartitionProfile: templateArtifactProfiles.scopePartition,
       requestCanonicalizationProfile: templateArtifactProfiles.requestCanonicalization,
-      requestHashSealer: createHmacRequestHashSealer({
-        profile: TEMPLATE_EDIT_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
+      requestHashSealer: cryptoProfiles.requestHashSealer(TEMPLATE_EDIT_REQUEST_HASH_PROFILE),
       idempotencyCredentialProfile: templateArtifactProfiles.idempotencyCredential,
-      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
-        profile: templateArtifactProfiles.idempotencyCredential,
-        keyBytes: randomHmacKey()
-      })
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(templateArtifactProfiles.idempotencyCredential)
     });
     const organizerCommunicationCurrentEvent = Object.freeze({
       resolveCurrentEvent(requestedWorkspaceId: typeof workspaceId) {
@@ -2820,12 +3282,11 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: organizerCommunicationProfiles.authorityPrincipal,
       scopePartitionProfile: organizerCommunicationProfiles.scopePartition,
       requestCanonicalizationProfile: organizerCommunicationProfiles.requestCanonicalization,
-      requestHashSealer: createOrganizerCommunicationRequestHashSealer(randomHmacKey()),
+      requestHashSealer: createOrganizerCommunicationRequestHashSealer(
+        cryptoProfiles.requestHashSealer
+      ),
       idempotencyCredentialProfile: organizerCommunicationProfiles.idempotencyCredential,
-      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
-        profile: organizerCommunicationProfiles.idempotencyCredential,
-        keyBytes: randomHmacKey()
-      })
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(organizerCommunicationProfiles.idempotencyCredential)
     });
     const organizerCommunicationReadOperations = createOrganizerCommunicationReadOperationModule({
       workspaceId,
@@ -2888,7 +3349,7 @@ export async function createEphemeralLiveRuntime(input: {
         // The shared communication sealer allowlists per-operation profile
         // keys; the send-lane effects hash under their own operation names.
         requestHashSealer: createOrganizerCommunicationRequestHashSealer(
-          randomHmacKey(),
+          cryptoProfiles.requestHashSealer,
           Object.values(COMMUNICATION_SEND_LANE_OPERATIONS)
         )
       })
@@ -2989,15 +3450,9 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: outboundDispatchProfiles.authorityPrincipal,
       scopePartitionProfile: outboundDispatchProfiles.scopePartition,
       requestCanonicalizationProfile: outboundDispatchProfiles.requestCanonicalization,
-      requestHashSealer: createHmacRequestHashSealer({
-        profile: OUTBOUND_DISPATCH_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
+      requestHashSealer: cryptoProfiles.requestHashSealer(OUTBOUND_DISPATCH_REQUEST_HASH_PROFILE),
       idempotencyCredentialProfile: outboundDispatchProfiles.idempotencyCredential,
-      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
-        profile: outboundDispatchProfiles.idempotencyCredential,
-        keyBytes: randomHmacKey()
-      })
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(outboundDispatchProfiles.idempotencyCredential)
     });
     const deadlineOperations = createDeadlineOperationModule({
       workspaceId,
@@ -3015,15 +3470,9 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: deadlineProfiles.authorityPrincipal,
       scopePartitionProfile: deadlineProfiles.scopePartition,
       requestCanonicalizationProfile: deadlineProfiles.requestCanonicalization,
-      requestHashSealer: createHmacRequestHashSealer({
-        profile: DEADLINE_CHANGE_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
+      requestHashSealer: cryptoProfiles.requestHashSealer(DEADLINE_CHANGE_REQUEST_HASH_PROFILE),
       idempotencyCredentialProfile: deadlineProfiles.idempotencyCredential,
-      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
-        profile: deadlineProfiles.idempotencyCredential,
-        keyBytes: randomHmacKey()
-      })
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(deadlineProfiles.idempotencyCredential)
     });
     // Public intake surface: `public_open` evidence is honored only against a
     // FRESH gate resolution — the served policy revision IS the active apply
@@ -3110,15 +3559,9 @@ export async function createEphemeralLiveRuntime(input: {
       ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
       crypto: Object.freeze({
         ...intakePublicReadCrypto,
-        requestHashSealer: createHmacRequestHashSealer({
-          profile: INTAKE_PUBLIC_MUTATION_REQUEST_HASH_PROFILE,
-          keyBytes: randomHmacKey()
-        }),
+        requestHashSealer: cryptoProfiles.requestHashSealer(INTAKE_PUBLIC_MUTATION_REQUEST_HASH_PROFILE),
         idempotencyCredentialProfile: intakeProfiles.idempotencyCredential,
-        idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
-          profile: intakeProfiles.idempotencyCredential,
-          keyBytes: randomHmacKey()
-        })
+        idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(intakeProfiles.idempotencyCredential)
       })
     });
     const releaseNativeOperations = createReleaseNativeOperationModule({
@@ -3133,19 +3576,10 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: releaseProfiles.authorityPrincipal,
       scopePartitionProfile: releaseProfiles.scopePartition,
       requestCanonicalizationProfile: releaseProfiles.requestCanonicalization,
-      draftRequestHashSealer: createHmacRequestHashSealer({
-        profile: RELEASE_NATIVE_DRAFT_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
-      publishRequestHashSealer: createHmacRequestHashSealer({
-        profile: RELEASE_NATIVE_PUBLISH_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
+      draftRequestHashSealer: cryptoProfiles.requestHashSealer(RELEASE_NATIVE_DRAFT_REQUEST_HASH_PROFILE),
+      publishRequestHashSealer: cryptoProfiles.requestHashSealer(RELEASE_NATIVE_PUBLISH_REQUEST_HASH_PROFILE),
       idempotencyCredentialProfile: releaseProfiles.idempotencyCredential,
-      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
-        profile: releaseProfiles.idempotencyCredential,
-        keyBytes: randomHmacKey()
-      })
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(releaseProfiles.idempotencyCredential)
     });
     const releaseOverviewOperations = createReleaseOverviewOperationModule({
       workspaceId,
@@ -3247,10 +3681,7 @@ export async function createEphemeralLiveRuntime(input: {
         requestCanonicalizationProfile: releaseProfiles.requestCanonicalization
       })
     });
-    const programVocabularyIdempotencyCredentialSealer = createHmacIdempotencyCredentialSealer({
-      profile: programVocabularyProfiles.idempotencyCredential,
-      keyBytes: randomHmacKey()
-    });
+    const programVocabularyIdempotencyCredentialSealer = cryptoProfiles.idempotencyCredentialSealer(programVocabularyProfiles.idempotencyCredential);
     const programVocabularyOperations = createProgramVocabularyReadOperationModule({
       workspaceId,
       readPolicy: PROGRAM_VOCABULARY_READ_ACCESS_POLICY,
@@ -3276,10 +3707,7 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: programVocabularyProfiles.authorityPrincipal,
       scopePartitionProfile: programVocabularyProfiles.scopePartition,
       requestCanonicalizationProfile: programVocabularyProfiles.requestCanonicalization,
-      requestHashSealer: createHmacRequestHashSealer({
-        profile: PROGRAM_VOCABULARY_DIRECT_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
+      requestHashSealer: cryptoProfiles.requestHashSealer(PROGRAM_VOCABULARY_DIRECT_REQUEST_HASH_PROFILE),
       idempotencyCredentialProfile: programVocabularyProfiles.idempotencyCredential,
       idempotencyCredentialSealer: programVocabularyIdempotencyCredentialSealer
     });
@@ -3293,14 +3721,8 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: programVocabularyProfiles.authorityPrincipal,
       scopePartitionProfile: programVocabularyProfiles.scopePartition,
       requestCanonicalizationProfile: programVocabularyProfiles.requestCanonicalization,
-      draftRequestHashSealer: createHmacRequestHashSealer({
-        profile: PROGRAM_VOCABULARY_MERGE_DRAFT_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
-      publishRequestHashSealer: createHmacRequestHashSealer({
-        profile: PROGRAM_VOCABULARY_MERGE_PUBLISH_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
+      draftRequestHashSealer: cryptoProfiles.requestHashSealer(PROGRAM_VOCABULARY_MERGE_DRAFT_REQUEST_HASH_PROFILE),
+      publishRequestHashSealer: cryptoProfiles.requestHashSealer(PROGRAM_VOCABULARY_MERGE_PUBLISH_REQUEST_HASH_PROFILE),
       idempotencyCredentialProfile: programVocabularyProfiles.idempotencyCredential,
       idempotencyCredentialSealer: programVocabularyIdempotencyCredentialSealer
     });
@@ -3320,15 +3742,9 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: schedulePlacementProfiles.authorityPrincipal,
       scopePartitionProfile: schedulePlacementProfiles.scopePartition,
       requestCanonicalizationProfile: schedulePlacementProfiles.requestCanonicalization,
-      requestHashSealer: createHmacRequestHashSealer({
-        profile: SCHEDULE_PLACEMENT_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
+      requestHashSealer: cryptoProfiles.requestHashSealer(SCHEDULE_PLACEMENT_REQUEST_HASH_PROFILE),
       idempotencyCredentialProfile: schedulePlacementProfiles.idempotencyCredential,
-      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
-        profile: schedulePlacementProfiles.idempotencyCredential,
-        keyBytes: randomHmacKey()
-      })
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(schedulePlacementProfiles.idempotencyCredential)
     });
     const schedulePlacementDirectOperations = createSchedulePlacementDirectOperationModule({
       workspaceId,
@@ -3346,15 +3762,9 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: schedulePlacementProfiles.authorityPrincipal,
       scopePartitionProfile: schedulePlacementProfiles.scopePartition,
       requestCanonicalizationProfile: schedulePlacementProfiles.requestCanonicalization,
-      requestHashSealer: createHmacRequestHashSealer({
-        profile: SCHEDULE_PLACEMENT_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
+      requestHashSealer: cryptoProfiles.requestHashSealer(SCHEDULE_PLACEMENT_REQUEST_HASH_PROFILE),
       idempotencyCredentialProfile: schedulePlacementProfiles.idempotencyCredential,
-      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
-        profile: schedulePlacementProfiles.idempotencyCredential,
-        keyBytes: randomHmacKey()
-      })
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(schedulePlacementProfiles.idempotencyCredential)
     });
     const sessionOperations = createSessionOperationModule({
       workspaceId,
@@ -3382,15 +3792,9 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: sessionProfiles.authorityPrincipal,
       scopePartitionProfile: sessionProfiles.scopePartition,
       requestCanonicalizationProfile: sessionProfiles.requestCanonicalization,
-      requestHashSealer: createHmacRequestHashSealer({
-        profile: SESSION_CHANGE_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
+      requestHashSealer: cryptoProfiles.requestHashSealer(SESSION_CHANGE_REQUEST_HASH_PROFILE),
       idempotencyCredentialProfile: sessionProfiles.idempotencyCredential,
-      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
-        profile: sessionProfiles.idempotencyCredential,
-        keyBytes: randomHmacKey()
-      })
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(sessionProfiles.idempotencyCredential)
     });
     const fieldRegistryOperations = createFieldRegistryOperationModule({
       workspaceId,
@@ -3409,15 +3813,9 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: fieldRegistryProfiles.authorityPrincipal,
       scopePartitionProfile: fieldRegistryProfiles.scopePartition,
       requestCanonicalizationProfile: fieldRegistryProfiles.requestCanonicalization,
-      requestHashSealer: createHmacRequestHashSealer({
-        profile: FIELD_REGISTRY_DIRECT_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
+      requestHashSealer: cryptoProfiles.requestHashSealer(FIELD_REGISTRY_DIRECT_REQUEST_HASH_PROFILE),
       idempotencyCredentialProfile: fieldRegistryProfiles.idempotencyCredential,
-      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
-        profile: fieldRegistryProfiles.idempotencyCredential,
-        keyBytes: randomHmacKey()
-      })
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(fieldRegistryProfiles.idempotencyCredential)
     });
     const intakeReadOperations = createIntakeReadOperationModule({
       workspaceId,
@@ -3451,10 +3849,7 @@ export async function createEphemeralLiveRuntime(input: {
         requestCanonicalizationProfile: intakeProfiles.requestCanonicalization
       })
     });
-    const intakeIdempotencyCredentialSealer = createHmacIdempotencyCredentialSealer({
-      profile: intakeProfiles.idempotencyCredential,
-      keyBytes: randomHmacKey()
-    });
+    const intakeIdempotencyCredentialSealer = cryptoProfiles.idempotencyCredentialSealer(intakeProfiles.idempotencyCredential);
     const intakeFormWriteOperations = createIntakeFormWriteOperationModule({
       workspaceId,
       policy: INTAKE_EVENT_MANAGE_ACCESS_POLICY,
@@ -3465,18 +3860,9 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: intakeProfiles.authorityPrincipal,
       scopePartitionProfile: intakeProfiles.scopePartition,
       requestCanonicalizationProfile: intakeProfiles.requestCanonicalization,
-      directRequestHashSealer: createHmacRequestHashSealer({
-        profile: INTAKE_FORM_DIRECT_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
-      reviewRequestHashSealer: createHmacRequestHashSealer({
-        profile: INTAKE_FORM_REVIEW_DRAFT_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
-      publishRequestHashSealer: createHmacRequestHashSealer({
-        profile: INTAKE_FORM_PUBLISH_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
+      directRequestHashSealer: cryptoProfiles.requestHashSealer(INTAKE_FORM_DIRECT_REQUEST_HASH_PROFILE),
+      reviewRequestHashSealer: cryptoProfiles.requestHashSealer(INTAKE_FORM_REVIEW_DRAFT_REQUEST_HASH_PROFILE),
+      publishRequestHashSealer: cryptoProfiles.requestHashSealer(INTAKE_FORM_PUBLISH_REQUEST_HASH_PROFILE),
       idempotencyCredentialProfile: intakeProfiles.idempotencyCredential,
       idempotencyCredentialSealer: intakeIdempotencyCredentialSealer
     });
@@ -3508,15 +3894,9 @@ export async function createEphemeralLiveRuntime(input: {
         authorityPrincipalKeyProfile: submissionTriageProfiles.authorityPrincipal,
         scopePartitionProfile: submissionTriageProfiles.scopePartition,
         requestCanonicalizationProfile: submissionTriageProfiles.requestCanonicalization,
-        requestHashSealer: createHmacRequestHashSealer({
-          profile: SUBMISSION_TRIAGE_REQUEST_HASH_PROFILE,
-          keyBytes: randomHmacKey()
-        }),
+        requestHashSealer: cryptoProfiles.requestHashSealer(SUBMISSION_TRIAGE_REQUEST_HASH_PROFILE),
         idempotencyCredentialProfile: submissionTriageProfiles.idempotencyCredential,
-        idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
-          profile: submissionTriageProfiles.idempotencyCredential,
-          keyBytes: randomHmacKey()
-        })
+        idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(submissionTriageProfiles.idempotencyCredential)
       })
     });
     const submissionDirectEntryOperations =
@@ -3531,10 +3911,7 @@ export async function createEphemeralLiveRuntime(input: {
           authorityPrincipalKeyProfile: intakeProfiles.authorityPrincipal,
           scopePartitionProfile: intakeProfiles.scopePartition,
           requestCanonicalizationProfile: intakeProfiles.requestCanonicalization,
-          requestHashSealer: createHmacRequestHashSealer({
-            profile: SUBMISSION_DIRECT_ENTRY_REQUEST_HASH_PROFILE,
-            keyBytes: randomHmacKey()
-          }),
+          requestHashSealer: cryptoProfiles.requestHashSealer(SUBMISSION_DIRECT_ENTRY_REQUEST_HASH_PROFILE),
           idempotencyCredentialProfile: intakeProfiles.idempotencyCredential,
           idempotencyCredentialSealer: intakeIdempotencyCredentialSealer
         })
@@ -3561,15 +3938,9 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: workspaceTeamProfiles.authorityPrincipal,
       scopePartitionProfile: workspaceTeamProfiles.scopePartition,
       requestCanonicalizationProfile: workspaceTeamProfiles.requestCanonicalization,
-      requestHashSealer: createHmacRequestHashSealer({
-        profile: WORKSPACE_TEAM_MUTATION_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
+      requestHashSealer: cryptoProfiles.requestHashSealer(WORKSPACE_TEAM_MUTATION_REQUEST_HASH_PROFILE),
       idempotencyCredentialProfile: workspaceTeamProfiles.idempotencyCredential,
-      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
-        profile: workspaceTeamProfiles.idempotencyCredential,
-        keyBytes: randomHmacKey()
-      })
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(workspaceTeamProfiles.idempotencyCredential)
     });
     const reviewViewerAccess = createSQLiteAccessRepositories(database.sqlite);
     /**
@@ -3654,15 +4025,9 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: reviewProfiles.authorityPrincipal,
       scopePartitionProfile: reviewProfiles.scopePartition,
       requestCanonicalizationProfile: reviewProfiles.requestCanonicalization,
-      requestHashSealer: createHmacRequestHashSealer({
-        profile: REVIEW_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
+      requestHashSealer: cryptoProfiles.requestHashSealer(REVIEW_REQUEST_HASH_PROFILE),
       idempotencyCredentialProfile: reviewProfiles.idempotencyCredential,
-      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
-        profile: reviewProfiles.idempotencyCredential,
-        keyBytes: randomHmacKey()
-      })
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(reviewProfiles.idempotencyCredential)
     });
     const reviewDirectOperations = createReviewDirectOperationModule({
       workspaceId,
@@ -3678,15 +4043,9 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: reviewProfiles.authorityPrincipal,
       scopePartitionProfile: reviewProfiles.scopePartition,
       requestCanonicalizationProfile: reviewProfiles.requestCanonicalization,
-      requestHashSealer: createHmacRequestHashSealer({
-        profile: REVIEW_DIRECT_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
+      requestHashSealer: cryptoProfiles.requestHashSealer(REVIEW_DIRECT_REQUEST_HASH_PROFILE),
       idempotencyCredentialProfile: reviewProfiles.idempotencyCredential,
-      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
-        profile: reviewProfiles.idempotencyCredential,
-        keyBytes: randomHmacKey()
-      })
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(reviewProfiles.idempotencyCredential)
     });
     const reviewerRosterOperations = createReviewerRosterOperationModule({
       workspaceId,
@@ -3702,15 +4061,9 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: reviewerRosterProfiles.authorityPrincipal,
       scopePartitionProfile: reviewerRosterProfiles.scopePartition,
       requestCanonicalizationProfile: reviewerRosterProfiles.requestCanonicalization,
-      directRequestHashSealer: createHmacRequestHashSealer({
-        profile: REVIEWER_ROSTER_DIRECT_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
+      directRequestHashSealer: cryptoProfiles.requestHashSealer(REVIEWER_ROSTER_DIRECT_REQUEST_HASH_PROFILE),
       idempotencyCredentialProfile: reviewerRosterProfiles.idempotencyCredential,
-      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
-        profile: reviewerRosterProfiles.idempotencyCredential,
-        keyBytes: randomHmacKey()
-      })
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(reviewerRosterProfiles.idempotencyCredential)
     });
     const decisionOperations = createDecisionOperationModule({
       workspaceId,
@@ -3734,15 +4087,9 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: decisionProfiles.authorityPrincipal,
       scopePartitionProfile: decisionProfiles.scopePartition,
       requestCanonicalizationProfile: decisionProfiles.requestCanonicalization,
-      requestHashSealer: createHmacRequestHashSealer({
-        profile: DECISION_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
+      requestHashSealer: cryptoProfiles.requestHashSealer(DECISION_REQUEST_HASH_PROFILE),
       idempotencyCredentialProfile: decisionProfiles.idempotencyCredential,
-      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
-        profile: decisionProfiles.idempotencyCredential,
-        keyBytes: randomHmacKey()
-      })
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(decisionProfiles.idempotencyCredential)
     });
     const engagementOperations = createEngagementOperationModule({
       workspaceId,
@@ -3769,15 +4116,9 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: engagementProfiles.authorityPrincipal,
       scopePartitionProfile: engagementProfiles.scopePartition,
       requestCanonicalizationProfile: engagementProfiles.requestCanonicalization,
-      requestHashSealer: createHmacRequestHashSealer({
-        profile: ENGAGEMENT_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
+      requestHashSealer: cryptoProfiles.requestHashSealer(ENGAGEMENT_REQUEST_HASH_PROFILE),
       idempotencyCredentialProfile: engagementProfiles.idempotencyCredential,
-      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
-        profile: engagementProfiles.idempotencyCredential,
-        keyBytes: randomHmacKey()
-      })
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(engagementProfiles.idempotencyCredential)
     });
     const taskBoardOperations = createTaskBoardReadOperationModule({
       workspaceId,
@@ -3812,15 +4153,9 @@ export async function createEphemeralLiveRuntime(input: {
       authorityPrincipalKeyProfile: taskProfiles.authorityPrincipal,
       scopePartitionProfile: taskProfiles.scopePartition,
       requestCanonicalizationProfile: taskProfiles.requestCanonicalization,
-      requestHashSealer: createHmacRequestHashSealer({
-        profile: TASK_MUTATION_REQUEST_HASH_PROFILE,
-        keyBytes: randomHmacKey()
-      }),
+      requestHashSealer: cryptoProfiles.requestHashSealer(TASK_MUTATION_REQUEST_HASH_PROFILE),
       idempotencyCredentialProfile: taskProfiles.idempotencyCredential,
-      idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
-        profile: taskProfiles.idempotencyCredential,
-        keyBytes: randomHmacKey()
-      })
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(taskProfiles.idempotencyCredential)
     });
     const eventSettingsDirectDomain =
       createSQLiteEventSettingsDirectEffectDomainRegistration({
@@ -3890,22 +4225,25 @@ export async function createEphemeralLiveRuntime(input: {
         newChoiceId: () => crypto.randomUUID()
       })
     });
-    const workspaceTeamMutationDomain =
-      createSQLiteWorkspaceTeamMutationEffectDomainRegistration({
-        sqlite: database.sqlite,
-        workspaceId,
-        classifiedStore: workspaceTeamClassifiedStore,
-        invitationLookupKeyBytes: workspaceTeamInvitationLookupKey,
-        ids: Object.freeze({
-          newPreparationHandle: () => crypto.randomUUID(),
-          newReservationId: () => crypto.randomUUID(),
-          newReservationRoleAssignmentId: () => crypto.randomUUID(),
-          newReleaseIntentId: () => crypto.randomUUID(),
-          newHistoryId: () => crypto.randomUUID(),
-          newPayloadRefId: () => crypto.randomUUID(),
-          newSessionRevocationIntentId: () => crypto.randomUUID()
+    const workspaceTeamMutationDomain = cryptoProfiles.withPersistentHmacKeySelection(
+      workspaceTeamInvitationLookupProfileKey,
+      (selection) =>
+        createSQLiteWorkspaceTeamMutationEffectDomainRegistration({
+          sqlite: database.sqlite,
+          workspaceId,
+          classifiedStore: workspaceTeamClassifiedStore,
+          invitationLookupKeyBytes: selection.active.keyBytes,
+          ids: Object.freeze({
+            newPreparationHandle: () => crypto.randomUUID(),
+            newReservationId: () => crypto.randomUUID(),
+            newReservationRoleAssignmentId: () => crypto.randomUUID(),
+            newReleaseIntentId: () => crypto.randomUUID(),
+            newHistoryId: () => crypto.randomUUID(),
+            newPayloadRefId: () => crypto.randomUUID(),
+            newSessionRevocationIntentId: () => crypto.randomUUID()
+          })
         })
-      });
+    );
     const reviewDirectDomain = createSQLiteReviewDirectEffectDomainRegistration({
       sqlite: database.sqlite,
       workspaceId,
@@ -4011,6 +4349,56 @@ export async function createEphemeralLiveRuntime(input: {
       workspaceId,
       installation: installationSenderIdentity
     });
+    const submissionConfirmationSenderResolver = createSQLiteMailSenderPresentationResolver({
+      sqlite: database.sqlite,
+      workspaceId,
+      installation: mailSender.configured
+        ? Object.freeze({
+            fromAddress: mailSender.fromAddress,
+            ...(mailSender.fromDisplayName === undefined
+              ? {}
+              : { fromDisplayName: mailSender.fromDisplayName }),
+            ...(mailSender.replyToAddress === undefined
+              ? {}
+              : { replyToAddress: mailSender.replyToAddress })
+          })
+        : Object.freeze({ fromAddress: 'events@unconfigured.invalid' })
+    });
+    const submissionConfirmationPolicySetting =
+      process.env.JOOEVENTS_SUBMISSION_CONFIRMATIONS;
+    if (submissionConfirmationPolicySetting !== undefined
+        && submissionConfirmationPolicySetting !== 'on'
+        && submissionConfirmationPolicySetting !== 'off') {
+      throw new TypeError('JOOEVENTS_SUBMISSION_CONFIRMATIONS must be on or off');
+    }
+    submissionConfirmationRegistration = cryptoProfiles.withPersistentHmacKeySelection(
+      'security.communication-address-fingerprint',
+      (selection) => createSQLiteSubmissionConfirmationRegistration({
+        sqlite: database.sqlite,
+        intake: intakeRepository,
+        submissions: submissionTriageSource,
+        releases: communicationMessageReleases,
+        senderResolver: submissionConfirmationSenderResolver,
+        portalOrigin: input.config.baseUrl,
+        purposeRevision: (scope) => seedSubmissionConfirmationPurpose({
+          sqlite: database.sqlite,
+          scope
+        }),
+        addressFingerprint: Object.freeze({
+          keyBytes: selection.active.keyBytes,
+          version: selection.active.reference.version
+        }),
+        policyActive: submissionConfirmationPolicySetting !== 'off',
+        ...(communicationDeliveryRoute === undefined
+          ? {}
+          : {
+              providerRoute: Object.freeze({
+                providerConnectionRevisionId:
+                  communicationDeliveryRoute.providerConnectionRevisionId
+              })
+            })
+      })
+    );
     const participantDelivery = createSQLiteParticipantChallengeDelivery({
       sqlite: database.sqlite,
       releases: communicationMessageReleases,
@@ -4156,15 +4544,9 @@ export async function createEphemeralLiveRuntime(input: {
         authorityPrincipalKeyProfile: participantPortalProfiles.authorityPrincipal,
         scopePartitionProfile: participantPortalProfiles.scopePartition,
         requestCanonicalizationProfile: participantPortalProfiles.requestCanonicalization,
-        requestHashSealer: createHmacRequestHashSealer({
-          profile: PORTAL_ENGAGEMENT_RESPOND_REQUEST_HASH_PROFILE,
-          keyBytes: randomHmacKey()
-        }),
+        requestHashSealer: cryptoProfiles.requestHashSealer(PORTAL_ENGAGEMENT_RESPOND_REQUEST_HASH_PROFILE),
         idempotencyCredentialProfile: participantPortalProfiles.idempotencyCredential,
-        idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
-          profile: participantPortalProfiles.idempotencyCredential,
-          keyBytes: randomHmacKey()
-        })
+        idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(participantPortalProfiles.idempotencyCredential)
       }),
       identities: participantStore,
       relationships: participantRelationships,
@@ -4191,7 +4573,9 @@ export async function createEphemeralLiveRuntime(input: {
     // Blob bytes are as disposable as the database, but the ephemeral SQLite
     // runtime owns its directory exclusively, so the blobs get their own
     // process-lifetime temp tree, removed on close.
-    filesBlobRootDirectory = mkdtempSync(join(tmpdir(), 'jooevents-ephemeral-files-'));
+    filesBlobRootDirectory = input.blobStorage.kind === 'ephemeral'
+      ? mkdtempSync(join(tmpdir(), 'jooevents-ephemeral-files-'))
+      : input.blobStorage.rootDirectory;
     const files = createFilesLiveComposition({
       sqlite: database.sqlite,
       workspaceId,
@@ -4208,14 +4592,8 @@ export async function createEphemeralLiveRuntime(input: {
     const filesOperationIds = Object.freeze({
       newInvocationId: () => parseInvocationId(crypto.randomUUID())
     });
-    const filesRequestHashSealer = createHmacRequestHashSealer({
-      profile: FILES_COMMAND_REQUEST_HASH_PROFILE,
-      keyBytes: randomHmacKey()
-    });
-    const filesIdempotencyCredentialSealer = createHmacIdempotencyCredentialSealer({
-      profile: filesProfiles.idempotencyCredential,
-      keyBytes: randomHmacKey()
-    });
+    const filesRequestHashSealer = cryptoProfiles.requestHashSealer(FILES_COMMAND_REQUEST_HASH_PROFILE);
+    const filesIdempotencyCredentialSealer = cryptoProfiles.idempotencyCredentialSealer(filesProfiles.idempotencyCredential);
     const filesReadOperations = createFilesReadOperationModule({
       workspaceId,
       readPolicy: FILE_READ_ACCESS_POLICY,
@@ -4257,15 +4635,9 @@ export async function createEphemeralLiveRuntime(input: {
         authorityPrincipalKeyProfile: senderIdentityProfiles.authorityPrincipal,
         scopePartitionProfile: senderIdentityProfiles.scopePartition,
         requestCanonicalizationProfile: senderIdentityProfiles.requestCanonicalization,
-        requestHashSealer: createHmacRequestHashSealer({
-          profile: WORKSPACE_SENDER_IDENTITY_UPDATE_REQUEST_HASH_PROFILE,
-          keyBytes: randomHmacKey()
-        }),
+        requestHashSealer: cryptoProfiles.requestHashSealer(WORKSPACE_SENDER_IDENTITY_UPDATE_REQUEST_HASH_PROFILE),
         idempotencyCredentialProfile: senderIdentityProfiles.idempotencyCredential,
-        idempotencyCredentialSealer: createHmacIdempotencyCredentialSealer({
-          profile: senderIdentityProfiles.idempotencyCredential,
-          keyBytes: randomHmacKey()
-        })
+        idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(senderIdentityProfiles.idempotencyCredential)
       })
     });
     const domains = createSQLiteEffectDomainAdapterRegistry([
@@ -4456,6 +4828,9 @@ export async function createEphemeralLiveRuntime(input: {
       sessions: { getSession: (headers) => auth.api.getSession({ headers }) },
       allowedOrigins: [input.config.baseUrl, ...input.config.trustedOrigins]
     });
+    // One retained SQLite connection is shared by HTTP and supervised jobs.
+    // Every asynchronous owner enters this boundary before touching it.
+    const requestSerialization = createSerialHttpRequestBoundary();
     if (input.airtable) {
       const readLane = parseOperationAccessLane({
         kind: 'operator', surface: 'operator_http', policy: AIRTABLE_INTEGRATION_READ_ACCESS_POLICY
@@ -4468,6 +4843,7 @@ export async function createEphemeralLiveRuntime(input: {
         workspaceId,
         baseUrl: input.config.baseUrl,
         config: input.airtable.provider,
+        serializeWork: (work) => requestSerialization.run(work),
         ...(input.airtable.fetch ? { fetch: input.airtable.fetch } : {}),
         controlledOperationsForClaim: (claim) => new RegisteredOperationAirtableInboundPort({
           builder: operations.effectBuilder,
@@ -4627,7 +5003,6 @@ export async function createEphemeralLiveRuntime(input: {
         });
       }
     });
-    const requestSerialization = createSerialHttpRequestBoundary();
     const app = createHttpApp({
       auth,
       accessContext,
@@ -4640,6 +5015,12 @@ export async function createEphemeralLiveRuntime(input: {
         airtableIntegration: airtableLive.integration,
         airtableWebhookIngress: airtableLive.webhookIngress
       } : {}),
+      health: Object.freeze({
+        read: () => Object.freeze({
+          ok: true as const,
+          background: backgroundSupervisor!.snapshot()
+        })
+      }),
       requestSerialization
     });
     const apiKeyManageLane = parseOperationAccessLane({
@@ -4691,6 +5072,271 @@ export async function createEphemeralLiveRuntime(input: {
       repository: agentActionRuns,
       catalog: agentActionCatalog,
       now: () => new Date().toISOString()
+    });
+    const agentActionAuthority: AgentActionCurrentAuthority = Object.freeze({
+      async recheck(request: Parameters<AgentActionCurrentAuthority['recheck']>[0]) {
+        const { batch, step, now } = request;
+        const approval = batch.approval;
+        if (!approval || batch.plan.scope.workspaceId !== workspaceId) {
+          return { kind: 'paused' as const, reason: 'current_approval_authority_changed' };
+        }
+        const compiled = getCompiledEffectOperation(
+          operations.registry,
+          step.operationName,
+          step.operationVersion,
+          'operator_http'
+        );
+        const lane = compiled?.operation.definition.accessLanes.find(
+          (candidate) => candidate.kind === 'operator' && candidate.surface === 'operator_http'
+        );
+        if (!compiled || !lane) {
+          return { kind: 'paused' as const, reason: 'operation_authority_lane_unavailable' };
+        }
+        const scope = Object.freeze({
+          workspaceId,
+          ...(batch.plan.scope.eventId === undefined
+            ? {}
+            : { eventId: parseEventId(batch.plan.scope.eventId) }),
+          subjects: Object.freeze(batch.plan.scope.subjects.map((subject) => Object.freeze({
+            kind: subject.type,
+            id: subject.id
+          }))),
+          resolutionEvidenceIds: Object.freeze([
+            `agent-action-batch:${batch.plan.batchId}`,
+            `agent-action-step:${step.id}`
+          ])
+        }) as Parameters<typeof authority.resolver.resolve>[0]['scope'];
+        const requirement = resolveOperatorAuthorityPermissionRequirement({
+          catalog: authority.policies,
+          policy: lane.policy,
+          scope
+        });
+        if (!requirement) {
+          return { kind: 'paused' as const, reason: 'operation_authority_policy_unavailable' };
+        }
+
+        if (batch.plan.source.surface === 'external_mcp') {
+          const match = /^api-key:([0-9a-f-]{36})$/.exec(batch.plan.source.clientKey);
+          const key = match ? apiKeys.get(parseApiKeyId(match[1]!)) : undefined;
+          const eventAllowed = key && (key.eventIds.length === 0
+            || (batch.plan.scope.eventId !== undefined
+              && key.eventIds.includes(parseEventId(batch.plan.scope.eventId))));
+          const grantAllows = key && (requirement.kind === 'all_of'
+            ? requirement.permissionIds.every((permissionId) => key.permissionIds.includes(permissionId))
+            : requirement.permissionIds.some((permissionId) => key.permissionIds.includes(permissionId)));
+          if (!key
+              || key.workspaceId !== workspaceId
+              || key.ownerUserId !== parseUserId(batch.plan.source.proposingPrincipalId)
+              || key.standing !== 'active'
+              || !key.maySubmitPlans
+              || (key.expiresAt !== null && Date.parse(key.expiresAt) <= Date.parse(now))
+              || !eventAllowed
+              || !grantAllows) {
+            return { kind: 'paused' as const, reason: 'current_source_grant_changed' };
+          }
+          const relationship = await externalAuthorityPersistence.scopeRelationships.validate({
+            userId: key.ownerUserId,
+            scope,
+            evaluatedAt: parseInstant(now)
+          });
+          const membership = await externalAuthorityPersistence.memberships.find(
+            workspaceId,
+            key.ownerUserId
+          );
+          const roles = await externalAuthorityPersistence.authorization.listRoles(workspaceId);
+          const assignments = await externalAuthorityPersistence.authorization.listAssignments(
+            workspaceId,
+            key.ownerUserId
+          );
+          const overrides = await externalAuthorityPersistence.authorization.listOverrides(
+            workspaceId,
+            key.ownerUserId
+          );
+          const requestedScope = batch.plan.scope.eventId === undefined
+            ? { kind: 'workspace' as const, workspaceId }
+            : {
+                kind: 'event' as const,
+                workspaceId,
+                eventId: parseEventId(batch.plan.scope.eventId)
+              };
+          const sourceStillAllowed = relationship.kind === 'valid'
+            && (requirement.kind === 'all_of'
+              ? requirement.permissionIds.every((permissionId) => evaluateAccess({
+                  userId: key.ownerUserId,
+                  permissionId,
+                  requestedScope,
+                  ...(membership ? { membership } : {}),
+                  roles,
+                  assignments,
+                  overrides,
+                  now: parseInstant(now)
+                }).allowed)
+              : requirement.permissionIds.some((permissionId) => evaluateAccess({
+                  userId: key.ownerUserId,
+                  permissionId,
+                  requestedScope,
+                  ...(membership ? { membership } : {}),
+                  roles,
+                  assignments,
+                  overrides,
+                  now: parseInstant(now)
+                }).allowed));
+          if (!sourceStillAllowed) {
+            return { kind: 'paused' as const, reason: 'current_source_authority_changed' };
+          }
+        } else if (!(input.devFixtures === true
+          && batch.plan.source.clientKey.startsWith('test.'))) {
+          // App-model execution is activated only with a durable model-run
+          // authority reader. No such production adapter is composed yet.
+          return { kind: 'paused' as const, reason: 'current_source_grant_unavailable' };
+        }
+
+        return withApprovedActionSession({
+          userId: approval.approvedByPrincipalId,
+          expiresAt: approval.approvalExpiresAt,
+          async work(evidence) {
+            const resolution = await authority.resolver.resolve({
+              operation: {
+                name: step.operationName,
+                version: step.operationVersion,
+                effect: compiled.operation.definition.effect
+              },
+              evidence,
+              lane,
+              scope,
+              evaluatedAt: parseInstant(now)
+            });
+            return resolution.kind === 'authorized'
+              ? { kind: 'allowed' as const }
+              : {
+                  kind: 'paused' as const,
+                  reason: 'current_approval_authority_changed',
+                  detail: { denial: resolution.reason }
+                };
+          }
+        });
+      }
+    });
+    let crashAfterAtomicCommitForBatch: string | undefined;
+    const registeredAgentActionExecutor = createRegisteredAgentActionExecutor({
+      catalog: agentActionCatalog,
+      operationExecutor: Object.freeze({
+        async executeRegistered(
+          request: Parameters<ApprovedAgentActionOperationExecutionPort['executeRegistered']>[0]
+        ) {
+          const result = await withApprovedActionSession({
+            userId: request.approval.approvedByPrincipalId,
+            expiresAt: request.approval.approvalExpiresAt,
+            async work(evidence) {
+              return unitOfWork.executeApprovedAgentActionStep({
+                batchId: request.batchId,
+                stepId: request.stepId,
+                workerId: request.lease.workerId,
+                leaseVersion: request.lease.leaseVersion,
+                leaseExpiresAt: request.lease.leaseExpiresAt,
+                completedAt: request.now,
+                execute: async () => {
+                  const invocation = await operations.effectBuilder.build({
+                    operationName: request.operation.name,
+                    operationVersion: request.operation.version,
+                    surface: 'operator_http',
+                    correlationId: crypto.randomUUID(),
+                    businessInput: request.businessInput,
+                    verifiedEvidence: evidence,
+                    rawIdempotencyKey: request.semanticIdempotencyKey
+                  });
+                  return effectfulOperationResultSchema.parse(
+                    await operations.effectExecutor.execute(invocation)
+                  );
+                }
+              });
+            }
+          });
+          if (result.kind === 'success' || result.terminal === true) {
+            if (crashAfterAtomicCommitForBatch === request.batchId) {
+              throw new Error('ephemeral_agent_action_crash_after_atomic_commit');
+            }
+            return { kind: 'succeeded' as const, terminalLogId: result.receipt.id };
+          }
+          return { kind: 'paused' as const, outcome: result.outcome };
+        }
+      })
+    });
+    const createLiveAgentActionRunner = (at?: string) => createAgentActionRunner({
+      repository: agentActionRuns,
+      catalog: agentActionCatalog,
+      authority: agentActionAuthority,
+      executor: registeredAgentActionExecutor,
+      now: () => at ?? new Date().toISOString(),
+      leaseDurationMs: 60_000
+    });
+    const actionWorkerId = `agent-action:${crypto.randomUUID()}`;
+    backgroundSupervisor = createBackgroundSupervisor({
+      jobs: Object.freeze([
+        ...(providerRuntime.registration?.delivery
+          ? [{
+              name: 'outbound_email_dispatch',
+              intervalMs: 2_000,
+              runOnStart: true,
+              async run() {
+                await requestSerialization.run(async () => {
+                  await outboundDispatch.runOnce();
+                  for (const fault of outboundDispatch.faults()) {
+                    console.error(
+                      `[jooevents] outbound delivery ${fault.deliveryId} failed`,
+                      fault.error
+                    );
+                  }
+                });
+              }
+            }]
+          : []),
+        {
+          name: 'approved_agent_actions',
+          intervalMs: 1_000,
+          runOnStart: true,
+          async run() {
+            await requestSerialization.run(async () => {
+              const batches = [
+                ...agentActionRuns.list({ status: 'queued', limit: 100 }),
+                ...agentActionRuns.list({ status: 'running', limit: 100 }),
+                ...agentActionRuns.list({ status: 'cancel_requested', limit: 100 })
+              ];
+              let failed = false;
+              for (const batch of batches) {
+                try {
+                  await createLiveAgentActionRunner().advance(
+                    batch.plan.batchId,
+                    actionWorkerId
+                  );
+                } catch (error) {
+                  failed = true;
+                  console.error(
+                    `[jooevents] approved action batch ${batch.plan.batchId} failed to advance`,
+                    error
+                  );
+                }
+              }
+              if (failed) throw new Error('agent_action_advance_failed');
+            });
+          }
+        },
+        {
+          name: 'expired_file_intents',
+          intervalMs: 5 * 60_000,
+          runOnStart: true,
+          run: () => requestSerialization.run(() => files.sweepExpiredIntents()).then(() => {})
+        },
+        {
+          name: 'orphan_file_blobs',
+          intervalMs: 60 * 60_000,
+          runOnStart: true,
+          run: () => requestSerialization.run(() => files.sweepOrphanBlobs()).then(() => {})
+        }
+      ]),
+      onError(jobName, error) {
+        console.error(`[jooevents] background job ${jobName} failed`, error);
+      }
     });
     const externalToolRegistry = await createMcpToolRegistry(
       operations.registry.safeManifest,
@@ -5128,14 +5774,8 @@ export async function createEphemeralLiveRuntime(input: {
     // surface composes lazily per current event because the portal read
     // module pins its lane eagerly and no event exists at boot.
     // ------------------------------------------------------------------
-    const filesPortalRequestHashSealer = createHmacRequestHashSealer({
-      profile: FILES_COMMAND_REQUEST_HASH_PROFILE,
-      keyBytes: randomHmacKey()
-    });
-    const filesPortalIdempotencySealer = createHmacIdempotencyCredentialSealer({
-      profile: filesPortalProfiles.idempotencyCredential,
-      keyBytes: randomHmacKey()
-    });
+    const filesPortalRequestHashSealer = cryptoProfiles.requestHashSealer(FILES_COMMAND_REQUEST_HASH_PROFILE);
+    const filesPortalIdempotencySealer = cryptoProfiles.idempotencyCredentialSealer(filesPortalProfiles.idempotencyCredential);
     interface FilesPortalComposition {
       readonly runtime: Awaited<ReturnType<typeof createApplicationOperationRuntime>>;
       readonly adapter: ReturnType<typeof createParticipantOperationsHttpAdapter>;
@@ -5875,7 +6515,6 @@ export async function createEphemeralLiveRuntime(input: {
       ? (() => {
           type OperatorEvidence = Extract<InvocationEvidence, { readonly kind: 'operator' }>;
           const actorEvidence = new WeakMap<EphemeralLiveTestActor, OperatorEvidence>();
-          const actorEvidenceByUserId = new Map<string, OperatorEvidence>();
           const requireEvidence = (actor: EphemeralLiveTestActor): OperatorEvidence => {
             const resolved = actorEvidence.get(actor);
             if (!resolved) throw new TypeError('ephemeral_test_actor_not_admitted');
@@ -5983,10 +6622,10 @@ export async function createEphemeralLiveRuntime(input: {
               persona: details.persona,
               userId: access.user.id,
               membership: Object.freeze({ id: member.id, version: member.version }),
-              cookie
+              cookie,
+              sessionHandle: session.id
             });
             actorEvidence.set(actor, evidence);
-            actorEvidenceByUserId.set(actor.userId, evidence);
             return actor;
           };
           let actors: Promise<{
@@ -6036,49 +6675,35 @@ export async function createEphemeralLiveRuntime(input: {
             }, requireEvidence(organizer));
             return Object.freeze({ organizer, reviewer, secondOrganizer });
           })();
-          let crashAfterAtomicCommitForBatch: string | undefined;
-          const registeredAgentActionExecutor = createRegisteredAgentActionExecutor({
-            catalog: agentActionCatalog,
-            operationExecutor: Object.freeze({
-              async executeRegistered(
-                request: Parameters<ApprovedAgentActionOperationExecutionPort['executeRegistered']>[0]
-              ) {
-                const evidence = actorEvidenceByUserId.get(request.approval.approvedByPrincipalId);
-                if (!evidence) {
-                  return { kind: 'paused' as const, outcome: { reason: 'approver_not_admitted' } };
-                }
-                const result = await unitOfWork.executeApprovedAgentActionStep({
-                  batchId: request.batchId,
-                  stepId: request.stepId,
-                  workerId: request.lease.workerId,
-                  leaseVersion: request.lease.leaseVersion,
-                  leaseExpiresAt: request.lease.leaseExpiresAt,
-                  completedAt: request.now,
-                  execute: async () => {
-                    const invocation = await operations.effectBuilder.build({
-                      operationName: request.operation.name,
-                      operationVersion: request.operation.version,
-                      surface: 'operator_http',
-                      correlationId: crypto.randomUUID(),
-                      businessInput: request.businessInput,
-                      verifiedEvidence: evidence,
-                      rawIdempotencyKey: request.semanticIdempotencyKey
-                    });
-                    return effectfulOperationResultSchema.parse(
-                      await operations.effectExecutor.execute(invocation)
-                    );
-                  }
-                });
-                if (result.kind === 'success' || result.terminal === true) {
-                  if (crashAfterAtomicCommitForBatch === request.batchId) {
-                    throw new Error('ephemeral_agent_action_crash_after_atomic_commit');
-                  }
-                  return { kind: 'succeeded' as const, terminalLogId: result.receipt.id };
-                }
-                return { kind: 'paused' as const, outcome: result.outcome };
+          const resumeActors = async (candidates: readonly EphemeralLiveTestActor[]): Promise<void> => {
+            if (candidates.length === 0) throw new TypeError('ephemeral_test_resume_actors_empty');
+            for (const actor of candidates) {
+              const response = await app.request('/api/me/access-context', {
+                headers: { cookie: actor.cookie, 'x-correlation-id': crypto.randomUUID() }
+              });
+              if (response.status !== 200) throw new TypeError(`ephemeral_test_resume_http_${response.status}`);
+              const access = accessContextSchema.parse(await response.json());
+              if (access.state !== 'active' || access.workspace.id !== workspaceId || access.user.id !== actor.userId) {
+                throw new TypeError('ephemeral_test_resume_identity_changed');
               }
-            })
-          });
+              actorEvidence.set(actor, Object.freeze({
+                kind: 'operator' as const,
+                surface: 'operator_http' as const,
+                client: Object.freeze({ key: 'test.ephemeral.flow' }),
+                sessionHandle: actor.sessionHandle
+              }));
+            }
+            const organizer = candidates.find((actor) => actor.persona === 'organizer');
+            if (!organizer) throw new TypeError('ephemeral_test_resume_organizer_missing');
+            const team = await readTeam(requireEvidence(organizer));
+            for (const actor of candidates) {
+              const member = team.members.find((candidate) =>
+                candidate.kind === 'member' && candidate.id === actor.membership.id
+                  && candidate.status === 'active' && candidate.userId === actor.userId
+              );
+              if (!member) throw new TypeError('ephemeral_test_resume_membership_changed');
+            }
+          };
           return Object.freeze({
             publicEffectBindings: () => Object.freeze(
               publicRuntime.registry.publicHttpEffectBindings.map((binding) => Object.freeze({
@@ -6093,6 +6718,7 @@ export async function createEphemeralLiveRuntime(input: {
             invokeEffect: (request: Parameters<EphemeralLiveTestSupport['invokeEffect']>[0]) =>
               executeEffect({ ...request, evidence: requireEvidence(request.actor) }),
             bootstrapActors,
+            resumeActors,
             agentActionPlanCatalog: () => Object.freeze({
               registryDigestSha256: operations.registry.manifestDigestSha256,
               operations: agentActionCatalog.entries
@@ -6103,23 +6729,7 @@ export async function createEphemeralLiveRuntime(input: {
               request: Parameters<EphemeralLiveTestSupport['advanceAgentActionRun']>[0]
             ) => {
               const at = request.at ?? new Date().toISOString();
-              const runner = createAgentActionRunner({
-                repository: agentActionRuns,
-                catalog: agentActionCatalog,
-                authority: Object.freeze({
-                  recheck({ batch }: Parameters<AgentActionCurrentAuthority['recheck']>[0]) {
-                    const approval = batch.approval;
-                    return approval
-                      && actorEvidenceByUserId.has(approval.approvedByPrincipalId)
-                      && batch.plan.scope.workspaceId === workspaceId
-                      ? { kind: 'allowed' as const }
-                      : { kind: 'paused' as const, reason: 'current_approval_authority_changed' };
-                  }
-                }) satisfies AgentActionCurrentAuthority,
-                executor: registeredAgentActionExecutor,
-                now: () => at,
-                leaseDurationMs: 60_000
-              });
+              const runner = createLiveAgentActionRunner(at);
               crashAfterAtomicCommitForBatch = request.crashAfterAtomicCommit
                 ? request.batchId
                 : undefined;
@@ -6132,23 +6742,50 @@ export async function createEphemeralLiveRuntime(input: {
           }) satisfies EphemeralLiveTestSupport;
         })()
       : undefined;
-    let closed = false;
-    let closeResult: ReturnType<EphemeralSQLiteRuntime['close']> | undefined;
-    const close = () => {
-      if (!closed) {
-        if (outboundDispatchPump !== undefined) clearInterval(outboundDispatchPump);
-        airtableLive?.close();
-        closeResult = database.close();
-        closed = true;
-        try {
-          if (filesBlobRootDirectory !== undefined) {
-            rmSync(filesBlobRootDirectory, { recursive: true, force: true });
-          }
-        } catch (error) {
-          console.error('[jooevents] ephemeral files blob cleanup failed', error);
+    let closePromise: Promise<void> | undefined;
+    const cleanEphemeralBlobs = () => {
+      try {
+        if (filesBlobRootDirectory !== undefined && input.blobStorage.kind === 'ephemeral') {
+          rmSync(filesBlobRootDirectory, { recursive: true, force: true });
         }
+      } catch (error) {
+        console.error('[jooevents] ephemeral files blob cleanup failed', error);
       }
-      return closeResult!;
+    };
+    const closeDatabase = (): Promise<void> => {
+      try {
+        const result = database.close();
+        if (result !== null && typeof result === 'object' && 'then' in result) {
+          return Promise.resolve(result).then(cleanEphemeralBlobs);
+        }
+        cleanEphemeralBlobs();
+        return Promise.resolve();
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    };
+    const closeStorage = (): Promise<void> => {
+      const backgroundRunning = backgroundSupervisor?.snapshot().jobs.some(
+        (job) => job.state === 'running'
+      ) ?? false;
+      const airtableRunning = airtableLive?.hasInFlightWork() ?? false;
+      const drains = [backgroundSupervisor?.close(), airtableLive?.close()]
+        .filter((value): value is Promise<void> => value !== undefined);
+      if (!backgroundRunning && !airtableRunning) {
+        const databaseClose = closeDatabase();
+        return Promise.all([...drains, databaseClose]).then(() => undefined);
+      }
+      return Promise.all(drains).then(closeDatabase);
+    };
+    const close = (): Promise<void> => {
+      if (closePromise === undefined) {
+        closePromise = closeStorage();
+      }
+      return closePromise!;
+    };
+    const startBackgroundWork = async (): Promise<void> => {
+      await backgroundSupervisor!.start();
+      airtableLive?.start();
     };
     // Per-request framing policy over the current event's surface heads —
     // never cached; the surface allowlist is mutable event configuration.
@@ -6181,12 +6818,19 @@ export async function createEphemeralLiveRuntime(input: {
         sweepOrphanBlobs: files.sweepOrphanBlobs,
         sweepExpiredIntents: files.sweepExpiredIntents
       }),
+      background: Object.freeze({
+        snapshot: () => backgroundSupervisor!.snapshot(),
+        runNow: (name: string) => backgroundSupervisor!.runNow(name)
+      }),
       ...(testSupport === undefined ? {} : { testSupport }),
+      startBackgroundWork,
       close
     });
   } catch (error) {
-    database.close();
-    if (filesBlobRootDirectory !== undefined) {
+    await backgroundSupervisor?.close();
+    await airtableLive?.close();
+    await database.close();
+    if (filesBlobRootDirectory !== undefined && input.blobStorage.kind === 'ephemeral') {
       try {
         rmSync(filesBlobRootDirectory, { recursive: true, force: true });
       } catch {

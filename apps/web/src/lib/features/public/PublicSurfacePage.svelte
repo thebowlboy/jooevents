@@ -40,9 +40,18 @@
 	interface Props {
 		/** Which public surface this address serves. */
 		kind: SurfaceKind;
+		/**
+		 * How this document is being shown: the hosted page itself, or the
+		 * `/embed/*` presentation of the same surface. The one difference it
+		 * makes is the application's completion boundary — where the success
+		 * action opens, and that a completed submit is reported to the frame.
+		 */
+		presentation?: 'page' | 'embed';
+		/** One completed submit from this document; the embed route relays it. */
+		onSubmitted?: () => void;
 	}
 
-	let { kind }: Props = $props();
+	let { kind, presentation = 'page', onSubmitted }: Props = $props();
 
 	const api = usePublicSurfacePort();
 
@@ -251,7 +260,9 @@
 				session={liveApply.session}
 				{theme}
 				{eventName}
-				{eventMeta} />
+				{eventMeta}
+				{presentation}
+				{onSubmitted} />
 		{:else if shownForm && theme}
 			<!--
 				The questions are real and the page is real; taking answers is not

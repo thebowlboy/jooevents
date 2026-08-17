@@ -37,6 +37,15 @@ export type FormPublishPreparation =
 export interface FormsPagePort {
 	readonly templates: {
 		applicationFormSurfaceId(): Promise<string | null>;
+		/**
+		 * Whether the shared application page — the `/s/apply` surface every
+		 * form's public address renders through — currently has a published
+		 * release. The form's own publication is a separate release record;
+		 * an address is live only when both stand. `null` means the
+		 * composition cannot say, and the page keeps its silence rather than
+		 * guessing in either direction.
+		 */
+		applicationSurfacePublished(): Promise<boolean | null>;
 	};
 	readonly vocab: {
 		tracks(): Promise<Track[]>;

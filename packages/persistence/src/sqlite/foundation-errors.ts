@@ -17,6 +17,8 @@ export type SQLiteFoundationErrorCode =
   | 'owner_record_malformed'
   | 'platform_unsupported'
   | 'receipt_chain_malformed'
+  | 'release_promotion_failed'
+  | 'release_promotion_refused'
   | 'runner_schema_malformed'
   | 'schema_drift'
   | 'status_unstable'

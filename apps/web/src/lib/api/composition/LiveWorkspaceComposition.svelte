@@ -136,6 +136,17 @@
 				if (result.kind === 'outcome'
 					&& result.outcome.kind === 'template.artifact.event_required') return null;
 				throw new Error('The application form Template could not be loaded.');
+			},
+			async applicationSurfacePublished() {
+				// The release owner's head list is the fact: an active `apply`
+				// release means the public address serves. An unreadable overview
+				// answers null — the Forms page then says nothing about it.
+				try {
+					const overview = await release.overview();
+					return overview.surfaceHeads.some((head) => head.kind === 'apply');
+				} catch {
+					return null;
+				}
 			}
 		}
 	});

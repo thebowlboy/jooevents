@@ -12,6 +12,7 @@ const environmentSchema = z.object({
   JOOEVENTS_REQUEST_HASH_KEYS: z.string().optional(),
   JOOEVENTS_IDEMPOTENCY_KEYS: z.string().optional(),
   JOOEVENTS_CLASSIFIED_PAYLOAD_KEYS: z.string().optional(),
+  JOOEVENTS_PERSISTENT_HMAC_KEYS: z.string().optional(),
   JOOEVENTS_GOOGLE_CLIENT_ID: z.string().min(1),
   JOOEVENTS_GOOGLE_CLIENT_SECRET: z.string().min(1),
   JOOEVENTS_ADMISSION_MODE: z.enum(['pending', 'workspace_domain', 'reservation_only']),
@@ -133,7 +134,8 @@ function parseConfig(
       durableCryptoProfiles = createDurableCryptoProfileComposition({
         requestHashKeys: env.JOOEVENTS_REQUEST_HASH_KEYS,
         idempotencyKeys: env.JOOEVENTS_IDEMPOTENCY_KEYS,
-        classifiedPayloadKeys: env.JOOEVENTS_CLASSIFIED_PAYLOAD_KEYS
+        classifiedPayloadKeys: env.JOOEVENTS_CLASSIFIED_PAYLOAD_KEYS,
+        persistentHmacKeys: env.JOOEVENTS_PERSISTENT_HMAC_KEYS
       });
     } catch (error) {
       if (error instanceof DurableCryptoProfileConfigurationError) {

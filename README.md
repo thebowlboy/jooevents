@@ -4,12 +4,12 @@
 
 # JooEvents
 
-## Event management, minus most of the manual work.
+## Manage as little as possible.
 
-JooEvents is for people who would prefer not to spend their days chasing an event
-along. It is being built to handle the work between putting up a Call for Speakers
-and putting the programme on your website: submissions, review, decisions, speaker
-tasks, scheduling, communications, and publishing.
+JooEvents is event management for people who would prefer not to spend their days
+managing an event. It is being built to handle the work between putting up a Call for
+Speakers and putting the programme on your website: submissions, review, decisions,
+speaker tasks, scheduling, communications, and publishing.
 
 Proposals arrive, get sorted and scored. Speakers get chased for their headshots. The
 schedule gets built and the programme lands on your website. Your part is the yes, the
@@ -48,23 +48,34 @@ The single-machine path is substantially implemented. The repository already con
   startup refusal when the database is not safe to open;
 - Google authentication, bootstrap-owner creation, admission, sessions, and current
   access checks over retained SQLite;
-- offline verified backup and restore-rehearsal commands; and
+- a public-only release builder plus installer, doctor, service definitions, running
+  verification, and stopped upgrade commands;
+- verified complete-install backup and non-replacing restore-rehearsal commands for
+  SQLite, retained files, and redacted configuration; and
 - SQLite repositories and reviewed change operations across events, forms,
   submissions, review, decisions, speakers, scheduling, publishing, and communications.
 
-The retained migration chain now contains the application schema as well as identity
-and admission, with a verified upgrade from the earlier identity/access database.
-The remaining line is runtime composition rather than schema promotion: the configured
-server still mounts the identity and admission slice, while the broader event workflow
-runs as one joined SQLite application in development and tests. Files, outbound
-delivery, operational packaging, and an end-to-end recovery rehearsal also need their
-production checkpoints.
+The retained migration chain now contains the complete application schema as well as
+identity and admission, with a verified upgrade from the earlier identity/access
+database. The configured server mounts the joined event workflow over the retained
+database and filesystem, starts supervised background work after the listener, and
+drains it before storage closes. A frozen retained journey now crosses public
+submission, review, decision, speaker confirmation, tasks, scheduling, publication,
+participant entry, restart, and idempotent retry.
+
+The remaining line is release closure. The final artifact still needs its clean,
+committed-checkout build; supported operating-system service activation and HTTPS
+deployment must be verified; and the controlled outbound-email checkpoint plus final
+release-byte recovery sweep must close. The
+[single-machine operator guide](docs/operator/single-machine.md) now documents the
+executable install, doctor, verification, upgrade, backup, and restore-rehearsal path;
+it remains a pre-release guide until walked through from the tagged artifact. The
+[single-machine preview 1 notes](docs/releases/single-machine-preview-1.md) name the
+current compatibility floor, operating limits, and remaining non-claims.
 
 JooEvents is therefore pre-release and **not ready for production event data yet**. It
 is close enough that the SQLite production work is the main story here; it is not close
-enough to suggest putting an actual attendee list into it. Supported installation and
-upgrade instructions will be published when that retained composition is verified end
-to end.
+enough to suggest putting an actual attendee list into it.
 
 The Cloudflare production composition—Worker, D1, R2, Queues, Cron, application auth,
 and outbound email—comes after the single-machine release. Its adapters and boundaries

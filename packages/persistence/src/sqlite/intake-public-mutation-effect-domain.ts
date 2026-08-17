@@ -62,6 +62,7 @@ import {
   type WorkspaceId
 } from '@jooevents/kernel';
 import type { SubmissionTriageInitializationPort } from '@jooevents/submission-triage';
+import type { SubmissionConfirmationRegistrationPort } from './communications/submission-confirmation-delivery';
 import type { SQLiteEffectDomainAdapter } from './foundation-trial-uow';
 import { SQLiteIntakeRepository } from './intake';
 import type { SQLiteIntakeClassifiedProjection } from './intake-classified-projection';
@@ -273,6 +274,7 @@ implements SQLiteEffectDomainAdapter {
     readonly ceremonies: IntakePublicCeremonyDirectory;
     readonly participantAttribution: IntakeParticipantAttributionSource;
     readonly submissionTriage: SubmissionTriageInitializationPort;
+    readonly submissionConfirmation?: SubmissionConfirmationRegistrationPort;
     readonly ids: SQLiteIntakePublicMutationEffectIds;
   }) {
     this.input = Object.freeze({ ...input, workspaceId: parseWorkspaceId(input.workspaceId) });
@@ -281,6 +283,10 @@ implements SQLiteEffectDomainAdapter {
     assertIntakeParticipantAttributionSource(input.participantAttribution);
     if (typeof input.submissionTriage?.initializeWithinTransaction !== 'function') {
       throw new TypeError('intake_public_submission_triage_invalid');
+    }
+    if (input.submissionConfirmation !== undefined
+        && typeof input.submissionConfirmation.registerWithinTransaction !== 'function') {
+      throw new TypeError('intake_public_submission_confirmation_invalid');
     }
     for (const method of Object.keys(input.ids) as (keyof SQLiteIntakePublicMutationEffectIds)[]) {
       if (typeof input.ids[method] !== 'function') throw new TypeError('intake_public_ids_invalid');
@@ -689,6 +695,18 @@ implements SQLiteEffectDomainAdapter {
       `).run(child.factId, receiptId, child.factKind, child.action, child.workspaceId,
         child.eventId, child.planDigestSha256, canonicalJsonText(child.sourcePlan),
         Date.parse(child.occurredAt));
+      const active = this.#active;
+      if (child.factKind === 'application_submitted'
+          && active?.plan.action === 'submit'
+          && this.input.submissionConfirmation !== undefined) {
+        this.input.submissionConfirmation.registerWithinTransaction({
+          scope: active.plan.submission.scope,
+          submissionId: active.plan.submission.id,
+          causationFactId: child.factId,
+          intakeReceiptId: receiptId,
+          submittedAt: active.plan.submission.submittedAt
+        });
+      }
     } else if (child.kind === 'outbox_pointer') {
       this.input.sqlite.query(`
         INSERT INTO intake_public_mutation_pointers (

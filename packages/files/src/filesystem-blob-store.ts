@@ -7,12 +7,11 @@ import {
   openSync,
   realpathSync,
   renameSync,
-  statSync,
   unlinkSync,
   writeSync
 } from 'node:fs';
 import { createReadStream } from 'node:fs';
-import { dirname, join, sep } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 import {
   assertFileStorageKey,
   type FileBlobReadOutcome,
@@ -25,6 +24,7 @@ export class FilesystemFileBlobStoreError extends Error {
     readonly code:
       | 'root_directory_invalid'
       | 'object_path_escapes_root'
+      | 'object_directory_unsafe'
       | 'partial_cleanup_failed',
     cause?: unknown
   ) {
@@ -53,6 +53,33 @@ export function createFilesystemFileBlobStore(input: {
     return resolved;
   }
 
+  function ensureObjectDirectory(finalPath: string): string {
+    const directory = dirname(finalPath);
+    const fromRoot = relative(root, directory);
+    let cursor = root;
+    for (const segment of fromRoot.split(sep).filter(Boolean)) {
+      cursor = join(cursor, segment);
+      try {
+        const existing = lstatSync(cursor);
+        if (!existing.isDirectory() || existing.isSymbolicLink()) {
+          throw new FilesystemFileBlobStoreError('object_directory_unsafe');
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        mkdirSync(cursor, { mode: 0o700 });
+        const created = lstatSync(cursor);
+        if (!created.isDirectory() || created.isSymbolicLink()) {
+          throw new FilesystemFileBlobStoreError('object_directory_unsafe');
+        }
+      }
+      const canonical = realpathSync(cursor);
+      if (canonical !== root && !canonical.startsWith(`${root}${sep}`)) {
+        throw new FilesystemFileBlobStoreError('object_directory_unsafe');
+      }
+    }
+    return directory;
+  }
+
   return Object.freeze({
     provider: 'filesystem',
 
@@ -65,8 +92,7 @@ export function createFilesystemFileBlobStore(input: {
         throw new TypeError('file_blob_maximum_byte_size_invalid');
       }
       const finalPath = objectPath(key);
-      const directory = dirname(finalPath);
-      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      const directory = ensureObjectDirectory(finalPath);
       const partialPath = `${finalPath}.partial-${randomBytes(8).toString('hex')}`;
       const descriptor = openSync(partialPath, 'wx', 0o600);
       const hash = createHash('sha256');
@@ -158,13 +184,14 @@ export function createFilesystemFileBlobStore(input: {
 function resolveRoot(rootDirectory: string): string {
   let resolved: string;
   try {
+    const supplied = lstatSync(rootDirectory);
+    if (!supplied.isDirectory() || supplied.isSymbolicLink() || (supplied.mode & 0o077) !== 0) {
+      throw new FilesystemFileBlobStoreError('root_directory_invalid');
+    }
     resolved = realpathSync(rootDirectory);
   } catch (error) {
+    if (error instanceof FilesystemFileBlobStoreError) throw error;
     throw new FilesystemFileBlobStoreError('root_directory_invalid', error);
-  }
-  const stat = statSync(resolved);
-  if (!stat.isDirectory()) {
-    throw new FilesystemFileBlobStoreError('root_directory_invalid');
   }
   return resolved;
 }

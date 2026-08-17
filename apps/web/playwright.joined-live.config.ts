@@ -20,7 +20,7 @@ export default defineConfig({
     trace: 'retain-on-failure'
   },
   webServer: {
-    command: `JOOEVENTS_BROWSER_TEST_PORT=${port} bun --cwd ../server src/testing/ephemeral-live-browser-server.ts`,
+    command: `JOOEVENTS_BROWSER_TEST_PORT=${port} bun --cwd ../server src/testing/retained-live-browser-server.ts`,
     url: `${baseURL}/health`,
     reuseExistingServer: false,
     timeout: 60_000

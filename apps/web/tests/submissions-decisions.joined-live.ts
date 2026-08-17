@@ -88,8 +88,10 @@ async function ensureOpenForm(page: Page, formName: string, formatName: string):
 	await page.getByRole('option', { name: /A category pool/ }).click();
 	await dialog.getByLabel('Which track or format').selectOption({ label: formatName });
 	await dialog.getByRole('button', { name: 'Create form' }).click();
-	// Creation lands on the questions page; opening publishes the definition.
-	await page.getByRole('button', { name: 'Open form', exact: true }).click();
+	// Creation lands on the questions page; owner review publishes and opens it.
+	await page.getByRole('button', { name: 'Publish and open', exact: true }).click();
+	await page.getByRole('dialog', { name: 'Review publication' })
+		.getByRole('button', { name: 'Publish and open', exact: true }).click();
 	await expect(page.getByRole('button', { name: 'Close form', exact: true })).toBeVisible();
 }
 
@@ -213,6 +215,7 @@ test('decisions carries the entry through accept-with-spawn into the program poo
 	page
 }, testInfo) => {
 	const entryTitle = `Joined direct entry (${testInfo.project.name})`;
+	const trackName = `Joined track ${testInfo.project.name}`;
 
 	await page.goto('/app/decisions');
 	await expect(page.locator('[data-je-scenario]')).toHaveCount(0);
@@ -225,11 +228,16 @@ test('decisions carries the entry through accept-with-spawn into the program poo
 	// Accept: a consequential decide committed through the direct operation
 	// boundary; a general-pool entry spawns its session in the same commit.
 	await verdicts.getByRole('button', { name: 'Accept', exact: true }).click();
-	await expect(page.getByText('Decided', { exact: true })).toBeVisible();
+	const confirmation = page.getByRole('dialog', { name: 'Accept 1 submission?' });
+	if (await confirmation.count()) {
+		await confirmation.getByRole('combobox', { name: entryTitle }).selectOption({ label: trackName });
+		await confirmation.getByRole('button', { name: 'Accept 1', exact: true }).click();
+	}
+	await expect(page.getByText('Decided', { exact: true })).toBeVisible({ timeout: 15_000 });
 	const decidedRow = page.getByRole('row', {
 		name: new RegExp(entryTitle.replace(/[()]/g, '\\$&'))
 	});
-	await expect(decidedRow.getByText('Accepted', { exact: true })).toBeVisible();
+	await expect(decidedRow.getByText('Accepted', { exact: true })).toBeVisible({ timeout: 15_000 });
 
 	// The notify door opens onto the real deliberate-send review: the seeded
 	// acceptance template over the minted decision-set audience, this entry's

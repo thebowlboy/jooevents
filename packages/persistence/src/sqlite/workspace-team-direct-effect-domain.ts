@@ -125,10 +125,17 @@ export class SQLiteWorkspaceTeamMutationEffectDomainAdapter
 implements SQLiteEffectDomainAdapter {
   readonly #workspaceId: WorkspaceId;
   readonly #ids: SQLiteWorkspaceTeamMutationIds;
+  readonly #input: {
+    readonly sqlite: Database;
+    readonly workspaceId: WorkspaceId;
+    readonly classifiedStore: SynchronousClassifiedPayloadStore;
+    readonly invitationLookupKeyBytes: Uint8Array;
+    readonly ids: SQLiteWorkspaceTeamMutationIds;
+  };
   readonly #issued = new Set<string>();
   readonly #prepared = new Map<string, PreparedMutation>();
 
-  constructor(private readonly input: {
+  constructor(input: {
     readonly sqlite: Database;
     readonly workspaceId: WorkspaceId;
     readonly classifiedStore: SynchronousClassifiedPayloadStore;
@@ -137,6 +144,14 @@ implements SQLiteEffectDomainAdapter {
   }) {
     this.#workspaceId = parseWorkspaceId(input.workspaceId);
     this.#ids = input.ids;
+    if (!(input.invitationLookupKeyBytes instanceof Uint8Array)
+        || input.invitationLookupKeyBytes.byteLength < 32) {
+      throw new TypeError('workspace_invitation_lookup_key_invalid');
+    }
+    this.#input = Object.freeze({
+      ...input,
+      invitationLookupKeyBytes: Uint8Array.from(input.invitationLookupKeyBytes)
+    });
   }
 
   openHandlerSnapshot(
@@ -144,7 +159,7 @@ implements SQLiteEffectDomainAdapter {
     context: EffectInvocationContext,
     authorityRecheck: SealedEffectAuthorityRecheckResult
   ): EffectHandlerSnapshot {
-    if (!this.input.sqlite.inTransaction
+    if (!this.#input.sqlite.inTransaction
         || capability.key !== WORKSPACE_TEAM_MUTATION_HANDLER_CAPABILITY.key
         || capability.version !== WORKSPACE_TEAM_MUTATION_HANDLER_CAPABILITY.version) {
       throw new TypeError('workspace_team_mutation_capability_mismatch');
@@ -177,7 +192,7 @@ implements SQLiteEffectDomainAdapter {
     }
     const actorUserId = parseUserId(authority.actor.userId);
     const repository = new SQLiteWorkspaceTeamRepository(
-      this.input.sqlite, this.input.classifiedStore
+      this.#input.sqlite, this.#input.classifiedStore
     );
     return sealWorkspaceTeamMutationPreparation({
       capability,
@@ -185,7 +200,7 @@ implements SQLiteEffectDomainAdapter {
       preparation: {
         prepare: ({ action: receivedAction, businessInput, context: receivedContext }) => {
           if (receivedAction !== action || receivedContext !== context
-              || !this.input.sqlite.inTransaction) {
+              || !this.#input.sqlite.inTransaction) {
             throw new TypeError('workspace_team_mutation_context_substitution');
           }
           const handle = this.#fresh(this.#ids.newPreparationHandle);
@@ -199,7 +214,7 @@ implements SQLiteEffectDomainAdapter {
               const payloadRefId = parsePayloadRefId(this.#fresh(this.#ids.newPayloadRefId));
               const normalizedEmail = normalizeEmail(request.email);
               const lookupBinding = workspaceInvitationLookupBinding({
-                keyBytes: this.input.invitationLookupKeyBytes,
+                keyBytes: this.#input.invitationLookupKeyBytes,
                 workspaceId: this.#workspaceId,
                 normalizedEmail
               });
@@ -295,7 +310,7 @@ implements SQLiteEffectDomainAdapter {
   }
 
   applyDomainContribution(contribution: unknown): void {
-    if (!this.input.sqlite.inTransaction) {
+    if (!this.#input.sqlite.inTransaction) {
       throw new TypeError('workspace_team_mutation_transaction_required');
     }
     const parsed = workspaceTeamMutationDomainContributionSchema.parse(contribution);
@@ -306,12 +321,12 @@ implements SQLiteEffectDomainAdapter {
     }
     if (prepared.invitationAdoption) {
       const adopted = adoptWorkspaceInvitationRecipient({
-        store: this.input.classifiedStore,
+        store: this.#input.classifiedStore,
         workspaceId: this.#workspaceId,
         reservationId: prepared.invitationAdoption.reservationId,
         payloadRefId: parsePayloadRefId(prepared.invitationAdoption.payloadRefId),
         normalizedEmail: prepared.invitationAdoption.normalizedEmail,
-        lookupKeyBytes: this.input.invitationLookupKeyBytes,
+        lookupKeyBytes: this.#input.invitationLookupKeyBytes,
         createdAt: parseInstant(parsed.occurredAt)
       });
       const planned = prepared.plan.action === 'invite' ? {
@@ -324,7 +339,7 @@ implements SQLiteEffectDomainAdapter {
       }
     }
     new SQLiteWorkspaceTeamRepository(
-      this.input.sqlite, this.input.classifiedStore
+      this.#input.sqlite, this.#input.classifiedStore
     ).applyPlan(prepared.plan);
     this.#prepared.delete(parsed.preparationHandle);
   }

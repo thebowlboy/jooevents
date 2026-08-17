@@ -68,6 +68,45 @@ describe('managed Bun runtime lifecycle', () => {
     expect(signalSource.listenerCount('SIGTERM')).toBe(0);
   });
 
+  test('starts background work only after the listener exists', async () => {
+    const order: string[] = [];
+    const managed = await startManagedBunRuntime({
+      runtime: {
+        startBackgroundWork: () => { order.push('background.start'); },
+        close: () => { order.push('runtime.close'); }
+      },
+      start: () => {
+        order.push('server.start');
+        return { stop: () => { order.push('server.stop'); } };
+      },
+      signalSource: new TestSignalSource(),
+      onSignalError: () => {}
+    });
+
+    expect(order).toEqual(['server.start', 'background.start']);
+    await managed.close();
+    expect(order).toEqual([
+      'server.start', 'background.start', 'server.stop', 'runtime.close'
+    ]);
+  });
+
+  test('stops the listener and closes storage when background startup fails', async () => {
+    const failure = new Error('background_start_failed');
+    const order: string[] = [];
+    const starting = startManagedBunRuntime({
+      runtime: {
+        startBackgroundWork: () => { throw failure; },
+        close: () => { order.push('runtime.close'); }
+      },
+      start: () => ({ stop: () => { order.push('server.stop'); } }),
+      signalSource: new TestSignalSource(),
+      onSignalError: () => {}
+    });
+
+    await expect(starting).rejects.toBe(failure);
+    expect(order).toEqual(['server.stop', 'runtime.close']);
+  });
+
   test('coalesces signal-driven shutdown with an explicit close', async () => {
     const signalSource = new TestSignalSource();
     let serverStopCount = 0;

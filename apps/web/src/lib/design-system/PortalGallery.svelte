@@ -322,10 +322,12 @@
 					<Receipt
 						label="Saved your changes to “Typed Tool Contracts”"
 						undoing={undoingSpecimen}
-						onundo={demonstrateUndo} />
+						onundo={demonstrateUndo}
+						ondismiss={() => undefined} />
 					<Receipt
 						label="Withdrew “What We Broke Migrating”"
-						finalNote="The organizers have been told. Email them if this was a mistake." />
+						finalNote="The organizers have been told. Email them if this was a mistake."
+						ondismiss={() => undefined} />
 				</div>
 			</ShowcaseCard>
 		</div>

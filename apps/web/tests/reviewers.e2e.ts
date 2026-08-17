@@ -59,15 +59,16 @@ test('the roster renders scope as typed chips, and a generalist in plain words',
 	// A generalist is the absence of scope: words, never an invented chip.
 	const sofia = rows.filter({ hasText: 'Sofia Berg' });
 	await expect(scopeCellOf(sofia)).toHaveText(everything(testInfo.project.name));
-	await expect(scopeCellOf(sofia).locator('.ui-badge')).toHaveCount(0);
+	await expect(scopeCellOf(sofia).locator('.ui-badge, .ui-track')).toHaveCount(0);
 	await expect(scopeCellOf(rows.filter({ hasText: 'Marc Dubois' }))).toHaveText(
 		everything(testInfo.project.name)
 	);
 
-	// Typed refs render in the referenced entity's own voice: a track chip
-	// carries the track's accent…
+	// Typed refs render in the referenced entity's own voice: a track keeps
+	// its one product-wide representation — the shared TrackChip in the accent
+	// the event's track order assigns it (Evals & Reliability is second).
 	const priya = rows.filter({ hasText: 'Priya Nair' });
-	await expect(scopeCellOf(priya).locator('.ui-badge--lavender')).toContainText(
+	await expect(scopeCellOf(priya).locator('.ui-track--2')).toContainText(
 		'Evals & Reliability'
 	);
 	await expect(priya.locator('.ui-badge--info').filter({ hasText: 'Invited' })).toBeVisible();
@@ -145,13 +146,26 @@ test('scoping a generalist corrects forward to the generalist words exactly', as
 	await rosterOf(page).getByRole('button', { name: 'Details for Sofia Berg' }).click();
 	const editor = rosterOf(page).locator('.detail');
 	await expect(editor).toBeVisible();
-	// The editor names the default in plain words before anything is selected.
-	await expect(editor).toContainText('Reviews everything — every submission in each plan');
+	// The heading asks "What they review"; while the draft is empty the answer
+	// is the full-presence word, and the hint teaches the rule beneath it.
+	await expect(editor.locator('.detail__fact')).toHaveText('Everything');
+	await expect(editor).toContainText(
+		'they review everything: every submission in each plan they join'
+	);
 
 	const option = editor.getByRole('button', { name: 'Agents & Tools', exact: true });
 	await expect(option).toHaveAttribute('aria-pressed', 'false');
 	await option.click();
 	await expect(option).toHaveAttribute('aria-pressed', 'true');
+	// The words follow the draft the moment it changes: the "Everything" answer
+	// leaves, the not-applied condition arrives, and the roster cell keeps the
+	// saved truth until the write commits — the two surfaces are reconciled by
+	// the sentence, not by pretending.
+	await expect(editor.locator('.detail__fact')).toHaveCount(0);
+	await expect(editor).toContainText(
+		'Not applied yet — the roster still shows Sofia Berg’s saved scope.'
+	);
+	await expect(scopeCellOf(sofia)).toHaveText(everything(testInfo.project.name));
 	await editor.getByRole('button', { name: 'Apply scope' }).click();
 
 	// One consequential write, one receipt, and no scope compensation.
@@ -160,7 +174,9 @@ test('scoping a generalist corrects forward to the generalist words exactly', as
 		.filter({ hasText: 'Scoped Sofia Berg to Agents & Tools' });
 	await expect(receipt).toBeVisible({ timeout: 10000 });
 	const cell = scopeCellOf(sofia);
-	await expect(cell.locator('.ui-badge--sea')).toContainText('Agents & Tools', {
+	// Agents & Tools is first in the event's track order, so its chip wears the
+	// same first accent here as on Submissions, Decisions, and the Schedule.
+	await expect(cell.locator('.ui-track--1')).toContainText('Agents & Tools', {
 		timeout: 10000
 	});
 
@@ -176,7 +192,7 @@ test('scoping a generalist corrects forward to the generalist words exactly', as
 	// Exactly the generalist words again — no chip left behind — and the open
 	// editor is synchronized to the committed forward correction.
 	await expect(cell).toHaveText(everything(testInfo.project.name), { timeout: 10000 });
-	await expect(cell.locator('.ui-badge')).toHaveCount(0);
+	await expect(cell.locator('.ui-badge, .ui-track')).toHaveCount(0);
 	await expect(editor.getByRole('button', { name: 'Agents & Tools', exact: true })).toHaveAttribute(
 		'aria-pressed',
 		'false'
@@ -190,6 +206,12 @@ test('a coverage reviewers count doors into this page scoped, and dismissing cle
 
 	const coverage = page.getByRole('region', { name: 'Review coverage' });
 	await expect(coverage).toContainText('2 generalists review everything');
+
+	// A track row keeps the track's one product-wide representation, so the
+	// coverage list answers to the same hue as the roster chips above it.
+	await expect(
+		coverage.locator('.row').filter({ hasText: 'Models & Infrastructure' }).locator('.ui-track--3')
+	).toBeVisible();
 
 	// Jonas and Tomás hold the infrastructure track: its row's count is a door.
 	await coverage
@@ -231,6 +253,19 @@ test('selecting a track marks its sessions included — reason reachable, never 
 		sessionsGroup.getByRole('group', { name: 'Models & Infrastructure sessions' })
 	).toBeVisible();
 	await expect(panel).toHaveAttribute('aria-pressed', 'false');
+
+	// The track's identity swatch sits on its option and again on its session
+	// cluster's header — the same hue its chip wears everywhere — so the eye
+	// pairs option and cluster without re-reading names. Identity, not state:
+	// it is there before anything is selected.
+	await expect(
+		editor.getByRole('button', { name: 'Models & Infrastructure', exact: true }).locator('.swatch')
+	).toBeVisible();
+	await expect(
+		sessionsGroup
+			.getByRole('group', { name: 'Models & Infrastructure sessions' })
+			.locator('.subgroup__name .swatch')
+	).toBeVisible();
 
 	// Selecting the track covers its sessions: checked as soft members of the
 	// selection family — the included tint class — no longer individually
@@ -401,7 +436,7 @@ test('the column header reads "Reviews", the editor asks "What they review", and
 	const editor = rosterOf(page).locator('.detail');
 	await expect(editor.getByRole('heading', { name: 'What they review' })).toBeVisible();
 	// The explainer teaches the term scope inline instead of assuming it.
-	await expect(editor).toContainText('the set becomes the reviewer’s scope');
+	await expect(editor).toContainText('that set is the reviewer’s scope');
 	// The old section headings are gone with the composition they organized:
 	// the editor leads, and removal is the quiet footer row — destructive
 	// voice intact, same confirmation ceremony.
@@ -511,9 +546,11 @@ test('a scope ref to a retired format keeps rendering, flagged — in the chip, 
 	await openRoster(page);
 
 	const tomas = rowsOf(page).filter({ hasText: 'Tomás Rivera' });
-	const chip = scopeCellOf(tomas).locator('.ui-badge').filter({ hasText: 'Lightning' });
+	// The chip and its flag travel as one unit: the badge names the format,
+	// the quiet flag beside it says its target is no longer offered.
+	const chip = scopeCellOf(tomas).locator('.chip').filter({ hasText: 'Lightning' });
 	await expect(chip).toBeVisible();
-	// The quiet flag: still rendering, no longer offered.
+	await expect(chip.locator('.ui-badge')).toContainText('Lightning');
 	await expect(chip).toContainText('retired');
 
 	// The editor keeps the selected retired entry so it can be taken back out…
@@ -598,7 +635,7 @@ test.describe('a reviewer row as a press target', () => {
 		await expect(editor).toBeVisible();
 
 		// The editor is presentation of the open row, not a second press target.
-		await editor.getByText(/every submission in each plan they join/).click();
+		await editor.getByText(/matches any selection/).click();
 		await expect(chevron).toHaveAttribute('aria-expanded', 'true');
 		await expect(editor).toBeVisible();
 	});

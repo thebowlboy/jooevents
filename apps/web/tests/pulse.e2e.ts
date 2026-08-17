@@ -100,7 +100,7 @@ test('opening: flows that have not begun state why instead of charting zeros', a
 	await expect(beats.getByText('9', { exact: true })).toBeVisible({ timeout: 15000 });
 	await expect(beats.getByText('Reviews chart here once a round opens', { exact: false })).toBeVisible();
 	await expect(
-		beats.getByText('No proposals have been decided', { exact: false })
+		beats.getByText('Decisions chart here once the first one is made', { exact: false })
 	).toBeVisible();
 
 	await expect(page.getByText('All 9 proposals are waiting for your answer.')).toBeVisible();

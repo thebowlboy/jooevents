@@ -71,6 +71,31 @@ test('form cards derive their question counts and open enabled doors', async ({ 
 	expect(overflow).toBeLessThanOrEqual(1);
 });
 
+test('the configurator states the public address with both releases behind it', async ({ page }) => {
+	await openConfigurator(page, 'form-cfp', 'Call for Proposals');
+	const address = page.locator('.conf__address');
+	await expect(address).toContainText('Public address');
+
+	// The live address names this exact form and opens outside the console.
+	const url = address.locator('.conf__address-url');
+	await expect(url).toHaveText(/\/s\/apply\?scope=form%3Aform-cfp$/);
+	await expect(url).toHaveAttribute('target', '_blank');
+
+	// The page's own release state is said beside the form's (badged above),
+	// so a shared URL is legibly live rather than assumed live.
+	await expect(address).toContainText(
+		'The application page is published — this address takes applications.'
+	);
+
+	// A transported value keeps its copy shortcut beside the selectable text.
+	await expect(address.getByRole('button', { name: 'Copy the public address' })).toBeVisible();
+
+	const overflow = await page.evaluate(
+		() => document.documentElement.scrollWidth - document.documentElement.clientWidth
+	);
+	expect(overflow).toBeLessThanOrEqual(1);
+});
+
 test('ticks stage locally and commit together on Apply, with forward correction copy', async ({
 	page
 }) => {
@@ -230,14 +255,28 @@ test('a real drag reorders the questions — vertical, committed on drop, undone
 
 	// Grab the handle and pull the row below its neighbour; the drop commits.
 	const grip = page.getByRole('button', { name: 'Reorder “Talk title” — drag, or press the arrow keys' });
-	const gripBox = (await grip.boundingBox())!;
 	const targetRow = page.locator('.qrow', { hasText: 'Abstract' });
+	// Keep this one-row gesture away from the viewport edge: edge holding is
+	// intentionally an auto-scroll gesture and would ask to move farther. Force
+	// this setup scroll to finish synchronously: the document's smooth-scroll
+	// rule must not keep changing row coordinates after the boxes are sampled.
+	await targetRow.evaluate((node) => {
+		const root = document.documentElement;
+		const previous = root.style.scrollBehavior;
+		root.style.scrollBehavior = 'auto';
+		node.scrollIntoView({ block: 'center' });
+		root.style.scrollBehavior = previous;
+	});
+	const gripBox = (await grip.boundingBox())!;
 	const targetBox = (await targetRow.boundingBox())!;
 	await page.mouse.move(gripBox.x + gripBox.width / 2, gripBox.y + gripBox.height / 2);
 	await page.mouse.down();
-	await page.mouse.move(gripBox.x + gripBox.width / 2, targetBox.y + targetBox.height + 4, {
+	// Aim inside the lower half of the intended neighbour. Crossing its midpoint
+	// selects the slot after it without relying on the next row's height or gap.
+	await page.mouse.move(gripBox.x + gripBox.width / 2, targetBox.y + targetBox.height * 0.75, {
 		steps: 8
 	});
+	await expect(page.locator('.ui-drag-indicator')).toBeVisible();
 	await page.mouse.up();
 
 	await expect(labels.nth(from)).toHaveText('Abstract', { timeout: 10000 });

@@ -6,6 +6,10 @@ declare module 'jooevents-public-surface-root' {
 
 declare module 'jooevents-public-surface-page' {
 	import type { Component } from 'svelte';
-	const PublicSurfacePage: Component<{ kind?: string }>;
+	const PublicSurfacePage: Component<{
+		kind?: string;
+		presentation?: 'page' | 'embed';
+		onSubmitted?: () => void;
+	}>;
 	export default PublicSurfacePage;
 }

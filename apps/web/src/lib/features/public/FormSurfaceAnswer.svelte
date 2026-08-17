@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { themeStyleProperties } from '$lib/theme/theme-contract';
 	import {
 		formatInstant,
@@ -39,9 +39,25 @@
 		eventName: string;
 		/** e.g. "12–14 Oct 2026 · New York City"; empty hides the meta lines. */
 		eventMeta: string;
+		/**
+		 * How this artifact is being shown. In `embed` presentation the
+		 * success action opens the canonical participant route in a new
+		 * top-level tab — sign-in never happens inside a host's frame.
+		 */
+		presentation?: 'page' | 'embed';
+		/** Reports one completed submit from this mount — never a replayed one. */
+		onSubmitted?: () => void;
 	}
 
-	let { form, session, theme, eventName, eventMeta }: Props = $props();
+	let {
+		form,
+		session,
+		theme,
+		eventName,
+		eventMeta,
+		presentation = 'page',
+		onSubmitted
+	}: Props = $props();
 
 	const uid = $props.id();
 
@@ -64,6 +80,8 @@
 	/** Format refusals stay quiet until the field is left or a submit is attempted. */
 	let touched = $state<Record<string, boolean>>({});
 	let submitNote = $state<string | null>(null);
+	/** The confirmation panel, focused after this mount's own submit lands. */
+	let doneRegion = $state<HTMLElement>();
 
 	// Reconciliation bookkeeping outside the render graph: the server draft is
 	// adopted into the controls once on first readiness and again whenever a
@@ -240,7 +258,14 @@
 		}
 		submitNote = null;
 		const settled = await session.submit();
-		if (settled.phase !== 'submitted' && settled.transport !== null) {
+		if (settled.phase === 'submitted') {
+			onSubmitted?.();
+			// This person's own press replaced the form with its confirmation:
+			// the transition announces itself and hands focus to the receipt, so
+			// the keyboard is beside the one action the panel offers.
+			await tick();
+			doneRegion?.focus();
+		} else if (settled.transport !== null) {
 			submitNote = 'That didn’t go through — check your connection and try again.';
 		}
 	}
@@ -282,12 +307,28 @@
 		</header>
 
 		{#if submitted}
-			<div class="apply__done" role="status">
+			<div class="apply__done" role="status" tabindex="-1" bind:this={doneRegion}>
 				<p class="apply__done-title">Application received</p>
 				{#each confirmationParagraphs as paragraph (paragraph)}
 					<p class="apply__done-copy">{paragraph}</p>
 				{/each}
 				{#if submittedAtLabel}<p class="apply__done-meta">Submitted {submittedAtLabel}</p>{/if}
+				<!-- The application-owned door to the participant portal: a
+				     template can rewrite the confirmation paragraph above, never
+				     this. The link carries no submission data, email, or token —
+				     the entry page asks for the address itself. -->
+				<div class="apply__door">
+					<a
+						class="apply__door-action"
+						href="/portal/sign-in"
+						target={presentation === 'embed' ? '_blank' : undefined}
+						rel={presentation === 'embed' ? 'noopener' : undefined}>
+						See your application
+					</a>
+					<p class="apply__door-copy">
+						We’ll ask for your email and send a sign-in link. No password.
+					</p>
+				</div>
 			</div>
 		{:else}
 			<form class="apply__body" aria-label={form.name} novalidate onsubmit={submit}>
@@ -947,6 +988,58 @@
 	.apply__done-meta {
 		margin: 0;
 		font-size: 0.875em;
+		color: var(--je-color-text-muted);
+	}
+
+	/* Programmatic focus lands here after submit; the panel is not a tab stop
+	   a keyboard user chose, so it draws no ring of its own. */
+	.apply__done:focus {
+		outline: none;
+	}
+
+	/* The portal door is its own group under the receipt: the panel's own gap
+	   plus this margin adds up to the group-to-group tier, so the door reads
+	   as the next thing rather than another receipt line. */
+	.apply__door {
+		display: grid;
+		gap: var(--je-space-2);
+		justify-items: start;
+		margin-block-start: var(--je-space-3);
+	}
+
+	/* Same control the submit button was: the action colour moves from
+	   "send it" to the one thing left to do here. */
+	.apply__door-action {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		block-size: var(--je-control-height);
+		padding-inline: var(--je-space-6);
+		background: var(--je-color-action);
+		color: var(--je-color-action-contrast);
+		border-radius: var(--je-radius-control);
+		font-size: 1em;
+		font-weight: 650;
+		text-decoration: none;
+	}
+
+	.apply__door-action:hover {
+		background: var(--je-color-action-hover);
+	}
+
+	.apply__door-action:active {
+		background: var(--je-color-action-active);
+	}
+
+	.apply__door-action:focus-visible {
+		outline: 2px solid var(--je-color-focus);
+		outline-offset: 2px;
+	}
+
+	.apply__door-copy {
+		margin: 0;
+		font-size: 0.875em;
+		line-height: var(--je-leading-snug);
 		color: var(--je-color-text-muted);
 	}
 

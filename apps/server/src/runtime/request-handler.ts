@@ -4,6 +4,7 @@ import { lstat, readFile, realpath } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { classifyRoutePath } from '@jooevents/contracts/route-namespaces';
 import type { LiveBuildIdentity } from '@jooevents/contracts/live-build-identity';
+import { parseFileUploadLimits } from '@jooevents/files';
 import { protectBackendNotFoundResponse } from '../http/backend-not-found';
 import {
   denyAllHtmlSecurityHeaders,
@@ -232,6 +233,7 @@ export interface BunListenerConfiguration {
   readonly hostname: '127.0.0.1' | '0.0.0.0';
   readonly port: number;
   readonly development: boolean;
+  readonly maxRequestBodySize: number;
 }
 
 export function resolveBunListenerConfiguration(
@@ -240,15 +242,24 @@ export function resolveBunListenerConfiguration(
   const mode: BunRuntimeMode = environment.NODE_ENV === 'production' ? 'production' : 'development';
   const rawPort = environment.JOOEVENTS_INTERNAL_HTTP_PORT;
   const port = rawPort ? Number(rawPort) : mode === 'production' ? 5176 : 5177;
+  const rawHostname = environment.JOOEVENTS_INTERNAL_HTTP_HOST ?? '127.0.0.1';
+  const fileLimits = parseFileUploadLimits(environment);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
     throw new Error('JOOEVENTS_INTERNAL_HTTP_PORT must be a valid TCP port');
+  }
+  if (rawHostname !== '127.0.0.1' && rawHostname !== '0.0.0.0') {
+    throw new Error('JOOEVENTS_INTERNAL_HTTP_HOST must be 127.0.0.1 or 0.0.0.0');
   }
 
   return {
     mode,
-    hostname: mode === 'production' ? '0.0.0.0' : '127.0.0.1',
+    hostname: rawHostname,
     port,
-    development: mode !== 'production'
+    development: mode !== 'production',
+    maxRequestBodySize: Math.max(
+      fileLimits.maxUploadBytesOrganizer,
+      fileLimits.maxUploadBytesSpeaker
+    )
   };
 }
 

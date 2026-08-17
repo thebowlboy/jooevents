@@ -2,7 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   createSerialHttpRequestBoundary,
-  RequestSerializationAbortedError
+  DEFAULT_HTTP_SERIALIZATION_LIMITS,
+  RequestSerializationAbortedError,
+  RequestSerializationUnavailableError
 } from './request-serialization';
 
 function deferred(): { readonly promise: Promise<void>; resolve(): void } {
@@ -91,5 +93,83 @@ describe('serialized HTTP request boundary', () => {
     abort.abort();
     await expect(active).rejects.toBe(canceled);
     expect(await boundary.run(() => 'next')).toBe('next');
+  });
+
+  test('the bounded waiting list refuses excess work without disturbing accepted leases', async () => {
+    const boundary = createSerialHttpRequestBoundary({
+      maximumQueuedRequests: 1,
+      maximumWaitMilliseconds: 1_000
+    });
+    const firstStarted = deferred();
+    const finishFirst = deferred();
+    const first = boundary.run(async () => {
+      firstStarted.resolve();
+      await finishFirst.promise;
+      return 'first';
+    });
+    await firstStarted.promise;
+    const accepted = boundary.run(() => 'accepted');
+
+    await expect(boundary.run(() => 'excess')).rejects.toMatchObject({
+      name: 'RequestSerializationUnavailableError',
+      reason: 'queue_full'
+    });
+    finishFirst.resolve();
+    expect(await first).toBe('first');
+    expect(await accepted).toBe('accepted');
+  });
+
+  test('the supported default admits exactly 128 waiters behind the active request', async () => {
+    const boundary = createSerialHttpRequestBoundary();
+    const firstStarted = deferred();
+    const finishFirst = deferred();
+    const first = boundary.run(async () => {
+      firstStarted.resolve();
+      await finishFirst.promise;
+    });
+    await firstStarted.promise;
+    const accepted = Array.from(
+      { length: DEFAULT_HTTP_SERIALIZATION_LIMITS.maximumQueuedRequests },
+      (_, index) => boundary.run(() => index)
+    );
+
+    await expect(boundary.run(() => 'excess')).rejects.toMatchObject({ reason: 'queue_full' });
+    finishFirst.resolve();
+    await first;
+    expect(await Promise.all(accepted)).toEqual(
+      Array.from({ length: 128 }, (_, index) => index)
+    );
+  });
+
+  test('a timed-out waiter is removed and the following lease can still run', async () => {
+    const boundary = createSerialHttpRequestBoundary({
+      maximumQueuedRequests: 1,
+      maximumWaitMilliseconds: 5
+    });
+    const firstStarted = deferred();
+    const finishFirst = deferred();
+    const first = boundary.run(async () => {
+      firstStarted.resolve();
+      await finishFirst.promise;
+    });
+    await firstStarted.promise;
+
+    await expect(boundary.run(() => 'timed out')).rejects.toEqual(
+      new RequestSerializationUnavailableError('queue_timeout')
+    );
+    finishFirst.resolve();
+    await first;
+    expect(await boundary.run(() => 'next')).toBe('next');
+  });
+
+  test('invalid resource limits are rejected at startup', () => {
+    expect(() => createSerialHttpRequestBoundary({
+      maximumQueuedRequests: -1,
+      maximumWaitMilliseconds: 1
+    })).toThrow('http_serialization_maximum_queued_requests_invalid');
+    expect(() => createSerialHttpRequestBoundary({
+      maximumQueuedRequests: 1,
+      maximumWaitMilliseconds: 0
+    })).toThrow('http_serialization_maximum_wait_milliseconds_invalid');
   });
 });

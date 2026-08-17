@@ -96,7 +96,9 @@ async function ensureOpenForm(page: Page, formName: string, formatName: string):
 	await page.getByRole('option', { name: /A category pool/ }).click();
 	await dialog.getByLabel('Which track or format').selectOption({ label: formatName });
 	await dialog.getByRole('button', { name: 'Create form' }).click();
-	await page.getByRole('button', { name: 'Open form', exact: true }).click();
+	await page.getByRole('button', { name: 'Publish and open', exact: true }).click();
+	await page.getByRole('dialog', { name: 'Review publication' })
+		.getByRole('button', { name: 'Publish and open', exact: true }).click();
 	await expect(page.getByRole('button', { name: 'Close form', exact: true })).toBeVisible();
 }
 
@@ -123,15 +125,20 @@ async function addSubmission(page: Page, input: {
 }
 
 /** Accept on Decisions: the same commit graduates the session and seeds the invited engagement. */
-async function acceptSubmission(page: Page, title: string): Promise<void> {
+async function acceptSubmission(page: Page, title: string, trackName: string): Promise<void> {
 	await page.goto('/app/decisions');
 	const verdicts = page.getByRole('group', { name: `Set decision for “${title}”` });
 	await expect(verdicts).toBeVisible({ timeout: 15000 });
 	await verdicts.getByRole('button', { name: 'Accept', exact: true }).click();
+	const confirmation = page.getByRole('dialog', { name: 'Accept 1 submission?' });
+	if (await confirmation.count()) {
+		await confirmation.getByRole('combobox', { name: title }).selectOption({ label: trackName });
+		await confirmation.getByRole('button', { name: 'Accept 1', exact: true }).click();
+	}
 	const decidedRow = page.getByRole('row', {
 		name: new RegExp(title.replace(/[()]/g, '\\$&'))
 	});
-	await expect(decidedRow.getByText('Accepted', { exact: true })).toBeVisible();
+	await expect(decidedRow.getByText('Accepted', { exact: true })).toBeVisible({ timeout: 15_000 });
 }
 
 async function requestPortalLink(page: Page, email: string): Promise<void> {
@@ -217,7 +224,7 @@ test('the magic-link ceremony resumes the intake-attributed identity onto the li
 		trackName: `Portal track ${project}`,
 		formatName: `Portal format ${project}`
 	});
-	await acceptSubmission(page, title);
+	await acceptSubmission(page, title, `Portal track ${project}`);
 
 	await signIn(page, email);
 	// Live world, no sample fallback anywhere on it.

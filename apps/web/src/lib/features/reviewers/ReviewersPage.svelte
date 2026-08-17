@@ -454,15 +454,17 @@
 	<div class="detail">
 		<div class="detail__main">
 			<h3 class="detail__heading">What they review</h3>
+			{#if draft.length === 0}
+				<!-- The heading asks; this answers — derived from the draft, the same
+				     value the picker marks, so the words and the chips can never
+				     disagree mid-edit. Words at full presence, never a minted chip:
+				     generalist stays the absence of scope. -->
+				<p class="detail__fact">Everything</p>
+			{/if}
 			<p class="detail__hint">
-				{#if row.scope.length === 0}
-					Reviews everything — every submission in each plan they join lands in their queue.
-					Selecting tracks, formats, or sessions narrows that: the set becomes the reviewer’s
-					scope.
-				{:else}
-					A submission lands in their queue when it matches any selection — that set is the
-					reviewer’s scope. Clear every selection and they review everything.
-				{/if}
+				A submission lands in their queue when it matches any selection — that set is the
+				reviewer’s scope. With nothing selected they review everything: every submission in each
+				plan they join.
 			</p>
 			{#if vocabularyState.kind === 'unavailable'}
 				<!-- No picker at all rather than an empty one: a picker with no
@@ -492,6 +494,12 @@
 						class="ui-button ui-button--ghost ui-button--sm"
 						disabled={busyId !== null}
 						onclick={() => resetDraft(row)}>Reset</button>
+					<!-- The condition, stated where it resolves: the roster row above
+					     and this editor deliberately disagree while a draft is open,
+					     and this line is the sentence that reconciles them. -->
+					<p class="detail__pending" role="status">
+						Not applied yet — the roster still shows {row.name}’s saved scope.
+					</p>
 				{/if}
 			</div>
 		</div>
@@ -796,6 +804,7 @@
 	<CoveragePanel
 		coverage={roster.coverage}
 		generalists={roster.generalists}
+		trackOrder={tracks.map((track) => track.id)}
 		{activeCount}
 		invitedCount={reviewers.length - activeCount} />
 {/if}
@@ -1107,11 +1116,26 @@
 		color: var(--je-color-text-muted);
 	}
 
+	/* The heading's answer while the draft is empty: total coverage in words,
+	   at full presence — the widest scope must not be the faintest line. */
+	.detail__fact {
+		margin: 0 0 var(--je-space-2);
+		font-size: var(--je-font-size-md);
+		font-weight: 600;
+		color: var(--je-color-text);
+	}
+
 	.detail__hint {
 		margin: 0 0 var(--je-space-3);
 		max-inline-size: 56ch;
 		font-size: var(--je-font-size-sm);
 		line-height: var(--je-leading-normal);
+		color: var(--je-color-text-muted);
+	}
+
+	.detail__pending {
+		margin: 0;
+		font-size: var(--je-font-size-xs);
 		color: var(--je-color-text-muted);
 	}
 

@@ -104,11 +104,46 @@ const receipt = {
 	operationVersion: 1
 };
 
-async function mockCeremony(page: Page): Promise<CeremonyLog> {
+async function mockCeremony(
+	page: Page,
+	options: { submitDelayMs?: number } = {}
+): Promise<CeremonyLog> {
 	const log: CeremonyLog = { saves: [], submits: [] };
 	let draftVersion = 0;
 	await page.route('**/api/public/schedule/current', (route) => route.fulfill(json(notPublished())));
 	await page.route('**/api/public/speakers/current', (route) => route.fulfill(json(notPublished())));
+	// The released presentation reads the port now performs beside the served
+	// data: schedule and speakers stay unpublished; the apply surface serves.
+	await page.route('**/api/public/schedule/presentation', (route) =>
+		route.fulfill(json(notPublished()))
+	);
+	await page.route('**/api/public/speakers/presentation', (route) =>
+		route.fulfill(json(notPublished()))
+	);
+	await page.route('**/api/public/forms/presentation', (route) =>
+		route.fulfill(
+			json({
+				kind: 'success',
+				data: {
+					schemaVersion: 1,
+					surfaceKind: 'apply',
+					surfaceReleaseNumber: 2,
+					manifest: { schemaVersion: 1, heading: 'Speak at the Summit', intro: null },
+					styleSetReleaseNumber: 1,
+					style: {
+						name: 'Released brand',
+						canvas: '#f4f1ed',
+						surface: '#ffffff',
+						text: '#29231f',
+						action: '#a14e42',
+						radius: 8,
+						controlHeight: 38
+					}
+				},
+				correlationId: '018f6f00-0000-7000-8000-0000000000cf'
+			})
+		)
+	);
 	await page.route('**/api/public/forms/current*', (route) =>
 		route.fulfill(
 			json({
@@ -121,12 +156,15 @@ async function mockCeremony(page: Page): Promise<CeremonyLog> {
 	await page.route('**/api/public/forms/application/continuations', (route) =>
 		route.fulfill(json({ kind: 'issued', continuation, expiresAt: '2026-08-14T12:30:00.000Z' }))
 	);
-	await page.route('**/api/public/forms/application/mutate', (route) => {
+	await page.route('**/api/public/forms/application/mutate', async (route) => {
 		const body = route.request().postDataJSON() as {
 			action: 'begin' | 'save' | 'submit';
 			input: { answers?: { fieldId: string; value?: string }[] };
 		};
 		const correlationId = '018f6f00-0000-7000-8000-0000000000ce';
+		if (body.action === 'submit' && options.submitDelayMs) {
+			await new Promise((resolve) => setTimeout(resolve, options.submitDelayMs));
+		}
 		if (body.action === 'begin') {
 			draftVersion = 1;
 			return route.fulfill(
@@ -269,6 +307,61 @@ test('a completed call submits once and lands on the served confirmation', async
 	await expect(done).toContainText('Thanks — the programme team reads every proposal.');
 	await expect(page.locator('.apply__submit')).toHaveCount(0);
 
+	// The transition hands the keyboard to the confirmation, so the next Tab
+	// stop is the panel's one action.
+	await expect(done).toBeFocused();
+
+	// The application-owned door: one action, the participant entry route, no
+	// submission data, email, or token in the address, same tab on the hosted page.
+	const door = page.getByRole('link', { name: 'See your application' });
+	await expect(door).toBeVisible();
+	await expect(door).toHaveAttribute('href', '/portal/sign-in');
+	await expect(door).not.toHaveAttribute('target', /.+/);
+	await expect(done).toContainText(
+		'We’ll ask for your email and send a sign-in link. No password.'
+	);
+
+	const overflow = await page.evaluate(
+		() => document.documentElement.scrollWidth - document.documentElement.clientWidth
+	);
+	expect(overflow).toBeLessThanOrEqual(1);
+
 	expect(log.submits).toHaveLength(1);
 	expect(log.submits[0]?.idempotencyKey.length).toBeGreaterThan(0);
+});
+
+test('a submit in flight refuses a second activation', async ({ page }) => {
+	const log = await mockCeremony(page, { submitDelayMs: 700 });
+	await openApply(page);
+
+	await page.getByLabel(/Talk title/).fill('Intent, drafted');
+	await page.getByLabel(/Contact email/).fill('ada@example.org');
+	const submit = page.getByRole('button', { name: /Submit|Submitting/ });
+	await submit.click();
+	// The press was taken: the control reports it and cannot be pressed again.
+	await expect(submit).toBeDisabled();
+	await expect(submit).toHaveAttribute('aria-busy', 'true');
+	await expect(page.locator('.apply__done')).toBeVisible({ timeout: 15000 });
+	expect(log.submits).toHaveLength(1);
+});
+
+test('the embed presentation opens the participant door in a top-level tab', async ({ page }) => {
+	const log = await mockCeremony(page);
+	await page.goto(`/embed/apply?scope=form%3A${formId}`);
+	await expect(page.locator('.apply__title')).toContainText('Speak at the Summit', {
+		timeout: 15000
+	});
+
+	await page.getByLabel(/Talk title/).fill('Embedded intent');
+	await page.getByLabel(/Contact email/).fill('ada@example.org');
+	await page.getByRole('button', { name: 'Submit application' }).click();
+	await expect(page.locator('.apply__done')).toBeVisible({ timeout: 15000 });
+
+	// Inside a host's frame the door never signs in embedded: it opens the
+	// canonical route top-level, and the address still carries nothing.
+	const door = page.getByRole('link', { name: 'See your application' });
+	await expect(door).toHaveAttribute('href', '/portal/sign-in');
+	await expect(door).toHaveAttribute('target', '_blank');
+	await expect(door).toHaveAttribute('rel', 'noopener');
+	expect(log.submits).toHaveLength(1);
 });

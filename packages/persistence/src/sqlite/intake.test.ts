@@ -64,7 +64,7 @@ function openDatabase(): { readonly sqlite: Database; readonly repository: SQLit
   return { sqlite, repository };
 }
 
-function createInput(): FormDefinitionCreateDraftInput {
+function createInput(excludedFieldIds: readonly string[]): FormDefinitionCreateDraftInput {
   return {
     expectedCatalogVersion: 1,
     expectedRegistryVersion: 1,
@@ -74,7 +74,7 @@ function createInput(): FormDefinitionCreateDraftInput {
       target: { kind: 'general_pool' },
       availability: { kind: 'evergreen' },
       confirmation: 'Application received.',
-      composition: { excludedFieldIds: [], requiredOverrides: {}, optionExposure: {} },
+      composition: { excludedFieldIds: [...excludedFieldIds], requiredOverrides: {}, optionExposure: {} },
       rules: []
     }
   };
@@ -104,10 +104,14 @@ describe('ephemeral SQLite Intake repository', () => {
       const scope = { workspaceId, eventId };
       const catalog = parseFormCatalogState({ scope, version: 1, heads: [] });
       const registry = repository.readFieldRegistrySnapshot(scope)!;
+      const choiceFieldIds = registry.fields
+        .filter((field) => field.mapsTo === 'talk.track' || field.mapsTo === 'talk.format')
+        .map((field) => field.id);
+      expect(choiceFieldIds).toHaveLength(2);
       const create = planFormCreation({
         catalog,
         registry,
-        authorInput: createInput(),
+        authorInput: createInput(choiceFieldIds),
         identities: { formId, rules: [] },
         references: repository,
         deadlineContribution: null,

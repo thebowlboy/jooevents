@@ -5,6 +5,7 @@ export interface BunRuntimeServer {
 }
 
 export interface BunRuntimeCloseTarget {
+  startBackgroundWork?(): void | Promise<void>;
   close(): void | Promise<void>;
 }
 
@@ -80,6 +81,18 @@ export async function startManagedBunRuntime<Server extends BunRuntimeServer>(in
     server = input.start();
   } catch (error) {
     return closeRuntimeAfterStartupFailure(input.runtime, error);
+  }
+
+  try {
+    await input.runtime.startBackgroundWork?.();
+  } catch (error) {
+    const errors = [error];
+    try {
+      await stopServerThenCloseRuntime({ server, runtime: input.runtime });
+    } catch (closeError) {
+      errors.push(closeError);
+    }
+    throwFailures(errors, 'Bun background startup and runtime cleanup failed.');
   }
 
   const signalSource = input.signalSource ?? process;

@@ -100,6 +100,7 @@ import {
 } from '@jooevents/persistence/intake-public-ceremony';
 import { DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG } from '@jooevents/workspace-operations';
 import { loadEphemeralLiveConfig } from '../config';
+import { createSQLiteCommunicationDeliveryHistorySource } from './communication-delivery-history';
 import { createEphemeralLiveRuntime, type EphemeralLiveRuntime } from './ephemeral-live';
 import { createProductionRequestHandler } from './request-handler';
 
@@ -1380,7 +1381,7 @@ describe('ephemeral live Foundation server composition', () => {
     expect(first.workspaceId).not.toBe(second.workspaceId);
     const result = first.close();
     expect(first.close()).toBe(result);
-    expect(result.kind).toBe('closed_private_tree_retained');
+    await result;
   });
 
   test('joins owner admission and classified Team invitations to direct audited execution', async () => {
@@ -2920,10 +2921,10 @@ describe('ephemeral live Foundation server composition', () => {
       runtime, session, key: 'organizer-communication-event'
     });
     // Created events are seeded with the recorded decision-notification
-    // defaults (BLOCKED-4/BLOCKED-5/BLOCKED-12): the decision-notification
-    // purpose, the Task reminder purpose, two active decision templates, and
-    // the two immutable decision-set audience recipes. Drafts remain empty —
-    // nothing authors messages by default.
+    // defaults (BLOCKED-4/BLOCKED-5/BLOCKED-12): decision notifications,
+    // Task reminders, the submission-confirmation receipt, two active decision
+    // templates, and the two immutable decision-set audience recipes. Drafts
+    // remain empty — nothing authors messages by default.
     const read = async <Value>(path: string, schema: { parse(value: unknown): Value }) =>
       schema.parse(await (
         await runtime.app.request(path, {
@@ -2943,7 +2944,7 @@ describe('ephemeral live Foundation server composition', () => {
     });
     if (purposes.kind !== 'success') throw new Error('purposes_read_failed');
     expect(purposes.data.rows.map((row) => row.revision.purposeKey).sort())
-      .toEqual(['decision_notification', 'task_reminder']);
+      .toEqual(['decision_notification', 'submission_confirmation', 'task_reminder']);
     const templates = await read(
       '/api/events/current/communications/templates',
       organizerMessageTemplatePageOperationResultSchema
@@ -3065,6 +3066,22 @@ describe('ephemeral live Foundation server composition', () => {
     const session = await createOwnerSession(runtime);
     await provisionOwner(runtime, session);
     await createEventDirect({ runtime, session, key: 'intake-form-direct-event' });
+    await createProgramVocabularyItem({
+      runtime,
+      session,
+      key: 'intake-form-direct-track',
+      expectedSetVersion: 1,
+      kind: 'track',
+      name: 'Form test track'
+    });
+    await createProgramVocabularyItem({
+      runtime,
+      session,
+      key: 'intake-form-direct-format',
+      expectedSetVersion: 2,
+      kind: 'format',
+      name: 'Form test format'
+    });
 
     const listed = organizerFormCatalogReadResultSchema.parse(await (
       await runtime.app.request('/api/events/current/forms', {
@@ -4403,6 +4420,14 @@ describe('ephemeral live Foundation server composition', () => {
     };
     const source = await createTrack('Source Track', 1, 'category-source');
     const target = await createTrack('Target Track', 2, 'category-target');
+    await createProgramVocabularyItem({
+      runtime,
+      session,
+      key: 'category-format',
+      expectedSetVersion: 3,
+      kind: 'format',
+      name: 'Category form format'
+    });
 
     const form = await createAndOpenForm({
       runtime,
@@ -4434,7 +4459,7 @@ describe('ephemeral live Foundation server composition', () => {
         headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
       })
     ).json());
-    expect(vocabularyWithUsage).toMatchObject({ kind: 'success', data: { setVersion: 3 } });
+    expect(vocabularyWithUsage).toMatchObject({ kind: 'success', data: { setVersion: 4 } });
     if (vocabularyWithUsage.kind !== 'success') throw new Error('Vocabulary usage read failed.');
     expect(vocabularyWithUsage.data.tracks.find((track) => track.id === source.id))
       .toMatchObject({
@@ -4451,7 +4476,7 @@ describe('ephemeral live Foundation server composition', () => {
       key: 'category-source-delete-blocked',
       body: {
         kind: 'track', id: source.id,
-        expectedSetVersion: 3, expectedItemVersion: source.version
+        expectedSetVersion: 4, expectedItemVersion: source.version
       },
       parse: (value) => value
     }));
@@ -4472,7 +4497,7 @@ describe('ephemeral live Foundation server composition', () => {
       key: 'category-track-merge-draft',
       body: {
         kind: 'track', sourceId: source.id, targetId: target.id,
-        expectedSetVersion: 3,
+        expectedSetVersion: 4,
         expectedSourceVersion: source.version,
         expectedTargetVersion: target.version
       },
@@ -4497,7 +4522,7 @@ describe('ephemeral live Foundation server composition', () => {
       key: 'category-track-merge',
       body: mergeSelector,
       parse: (value) => value
-    }))).toMatchObject({ kind: 'success', data: { action: 'merge', setVersion: 4 } });
+    }))).toMatchObject({ kind: 'success', data: { action: 'merge', setVersion: 5 } });
 
     const detailAfterMerge = await runtime.app.request(
       `/api/events/current/forms/detail?formId=${encodeURIComponent(formId)}`,
@@ -4566,7 +4591,7 @@ describe('ephemeral live Foundation server composition', () => {
         headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
       })
     ).json());
-    expect(mergedVocabulary).toMatchObject({ kind: 'success', data: { setVersion: 4 } });
+    expect(mergedVocabulary).toMatchObject({ kind: 'success', data: { setVersion: 5 } });
     if (mergedVocabulary.kind !== 'success') throw new Error('Merged Vocabulary read failed.');
     expect(mergedVocabulary.data.tracks.find((track) => track.id === source.id))
       .toMatchObject({ status: 'retired', usage: { current: 0, historicalPins: 1 } });
@@ -5093,7 +5118,7 @@ describe('ephemeral live Foundation server composition', () => {
     runtimes.push(runtime);
     const session = await createOwnerSession(runtime);
     await provisionOwner(runtime, session);
-    await createEventDirect({ runtime, session, key: 'apply-loop-event' });
+    const createdEvent = await createEventDirect({ runtime, session, key: 'apply-loop-event' });
 
     // The seeded-style CFP: title, name, and email over the canonical registry.
     const {
@@ -5320,11 +5345,79 @@ describe('ephemeral live Foundation server composition', () => {
     expect(contact.participantIdentityId).toMatch(/^[0-9a-f-]{36}$/);
     expect(contact.personId).not.toBe(contact.participantIdentityId);
 
+    // The submit transaction registered exactly one non-security confirmation
+    // release. Provider I/O is still outside that transaction; the inert
+    // deployment records a truthful terminal not-delivered result when the
+    // worker later claims it.
+    const confirmation = runtime.database.sqlite.query<{
+      readonly release_id: string;
+      readonly delivery_id: string;
+      readonly state: string;
+    }, [string]>(`
+      SELECT r.release_id, h.delivery_id, h.state
+        FROM communication_message_releases r
+        JOIN communication_outbound_delivery_heads h ON h.release_id = r.release_id
+       WHERE r.batch_id = ?
+    `).get(`submission-confirmation.${submissionId}`);
+    expect(confirmation).toMatchObject({ state: 'pending' });
+    if (!confirmation) throw new Error('Submission confirmation was not registered.');
+    const confirmationRelease = runtime.communicationReleases.read(confirmation.release_id);
+    expect(confirmationRelease).toMatchObject({
+      purposeKey: 'submission_confirmation',
+      personRefId: contact.personId,
+      envelope: { to: { address: speakerEmail } }
+    });
+    expect(confirmationRelease?.envelope.textBody).toContain(speakerTitle);
+    expect(confirmationRelease?.envelope.textBody).toContain('/portal/sign-in');
+    expect(confirmationRelease?.envelope.textBody).not.toContain('?');
+    await runtime.outboundDispatch.dispatchOne(confirmation.delivery_id);
+    expect(runtime.database.sqlite.query<{ readonly state: string }, [string]>(`
+      SELECT state FROM communication_outbound_delivery_heads WHERE delivery_id = ?
+    `).get(confirmation.delivery_id)).toEqual({ state: 'known_rejected_terminal' });
+    const confirmationHistory = createSQLiteCommunicationDeliveryHistorySource({
+      sqlite: runtime.database.sqlite
+    }).listDeliveryHistory({
+      workspaceId: runtime.workspaceId,
+      eventId: createdEvent.data.event.id
+    }, { messageRefId: `submission-confirmation.${submissionId}` });
+    expect(confirmationHistory).toMatchObject({
+      kind: 'success',
+      data: {
+        rows: [{
+          messageRefId: `submission-confirmation.${submissionId}`,
+          purposeRevision: { purposeKey: 'submission_confirmation', revisionNumber: 1 },
+          state: 'known_failed',
+          actor: {
+            kind: 'standing_policy',
+            displayLabel: 'Submission confirmation policy',
+            policyRevision: {
+              reference: { key: 'standing-policy.submission-confirmation', version: 1 }
+            }
+          },
+          cause: {
+            summary: 'Registered after the public application was received.',
+            subjectKind: 'submission',
+            subjectRefId: submissionId,
+            subjectVersion: 1
+          },
+          counts: {
+            audience: { knowledge: 'known', value: 1 },
+            materialized: { knowledge: 'known', value: 1 },
+            delivered: { knowledge: 'not_supported' },
+            knownFailed: { knowledge: 'known', value: 1 }
+          },
+          availableActions: ['continue_provider_setup']
+        }]
+      }
+    });
+
     // Idempotent replay after response loss: identical bytes, no new rows.
     const beforeReplay = {
       receipts: count(runtime, 'operation_log'),
       submissions: count(runtime, 'intake_submission_heads'),
-      arrivals: count(runtime, 'submission_arrival_facts')
+      arrivals: count(runtime, 'submission_arrival_facts'),
+      confirmationReleases: count(runtime, 'communication_message_releases'),
+      confirmationDeliveries: count(runtime, 'communication_outbound_delivery_heads')
     };
     const replaySubmit = await mutate(token, {
       action: 'submit', input: { expectedDraftVersion: 999 }
@@ -5334,7 +5427,9 @@ describe('ephemeral live Foundation server composition', () => {
     expect({
       receipts: count(runtime, 'operation_log'),
       submissions: count(runtime, 'intake_submission_heads'),
-      arrivals: count(runtime, 'submission_arrival_facts')
+      arrivals: count(runtime, 'submission_arrival_facts'),
+      confirmationReleases: count(runtime, 'communication_message_releases'),
+      confirmationDeliveries: count(runtime, 'communication_outbound_delivery_heads')
     }).toEqual(beforeReplay);
     expect(count(runtime, 'public_mutation_registered_effect_completions')).toBe(1);
 

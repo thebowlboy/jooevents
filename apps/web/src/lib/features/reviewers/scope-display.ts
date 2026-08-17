@@ -8,6 +8,7 @@
  */
 
 import type { Format, ScopeRef, ScopeRefKind, SessionItem, Track } from '$lib/api/types';
+import { trackAccent, type TrackAccent } from '$lib/ui';
 
 /** The records a scope ref resolves against. */
 export interface ScopeEntities {
@@ -22,8 +23,12 @@ export interface ScopeDisplay {
 	/** Stable render/address key, `kind:id` — also the `?scope=` wire format. */
 	key: string;
 	label: string;
-	/** The track's own accent; formats and sessions stay neutral. */
-	accent: 'lavender' | 'sea' | 'neutral';
+	/**
+	 * The track's accent slot in the shared palette — the same accent the
+	 * track wears on every other surface, derived from the event's own track
+	 * order. Formats and sessions carry none and stay neutral.
+	 */
+	accent: TrackAccent | null;
 	/** The referenced entry is retired: it keeps rendering, flagged quietly. */
 	retired: boolean;
 	/** The referenced session is still collecting applicants. */
@@ -55,13 +60,16 @@ export function parseScopeParam(value: string | null): ScopeRef | null {
  * its id so the row still renders something identifiable.
  */
 export function resolveRef(ref: ScopeRef, entities: ScopeEntities): ScopeDisplay {
-	const base = { ref, key: scopeKey(ref), accent: 'neutral' as const, retired: false, collecting: false };
+	const base = { ref, key: scopeKey(ref), accent: null, retired: false, collecting: false };
 	if (ref.kind === 'track') {
 		const track = entities.tracks.find((entry) => entry.id === ref.id);
 		return {
 			...base,
 			label: track?.name ?? ref.id,
-			accent: track?.accent === 'lavender' || track?.accent === 'sea' ? track.accent : 'neutral',
+			accent: trackAccent(
+				ref.id,
+				entities.tracks.map((entry) => entry.id)
+			),
 			retired: track?.status === 'retired'
 		};
 	}

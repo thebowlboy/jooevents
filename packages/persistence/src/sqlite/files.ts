@@ -581,15 +581,15 @@ export class SQLiteFilesRepository implements
 
   subjectExists(scope: FileScopeDto, subject: FileAttachmentSubjectDto): boolean {
     const columns = subjectColumns(subject);
-    const table = {
-      engagement: 'engagement_heads',
-      submission: 'intake_submission_heads',
-      session: 'sessions',
-      resource_share: 'resource_shares'
+    const location = {
+      engagement: { table: 'engagement_heads', key: 'id' },
+      submission: { table: 'intake_submission_heads', key: 'submission_id' },
+      session: { table: 'sessions', key: 'id' },
+      resource_share: { table: 'resource_shares', key: 'id' }
     }[subject.kind];
     const row = this.sqlite.query<CountRow, [string, string, string]>(`
-      SELECT count(*) AS count FROM ${table}
-       WHERE workspace_id = ? AND event_id = ? AND id = ?
+      SELECT count(*) AS count FROM ${location.table}
+       WHERE workspace_id = ? AND event_id = ? AND ${location.key} = ?
     `).get(scope.workspaceId, scope.eventId, columns.id);
     return (row?.count ?? 0) === 1;
   }

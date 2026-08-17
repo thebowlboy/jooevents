@@ -40,6 +40,7 @@ export * from './sqlite/ephemeral-rebuild';
 export * from './sqlite/migration-artifact';
 export * from './sqlite/migration-manifest';
 export * from './sqlite/migration-runner';
+export * from './sqlite/release-floor';
 export * from './sqlite/schema-snapshot';
 export * from './sqlite/status';
 export * from './sqlite/retained-backup';

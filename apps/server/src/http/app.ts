@@ -18,6 +18,7 @@ import {
 } from './participant-operations';
 import {
   RequestSerializationAbortedError,
+  RequestSerializationUnavailableError,
   type HttpRequestSerializationBoundary
 } from './request-serialization';
 import {
@@ -38,6 +39,10 @@ export interface AccessContextService {
   }): ReturnTypeOrPromise<import('@jooevents/identity-access').AdapterOutcome<AccessContext>>;
 }
 
+export interface RuntimeHealthSource {
+  read(): Readonly<Record<string, unknown>> & { readonly ok: boolean };
+}
+
 export function createHttpApp(input: {
   readonly auth: JooEventsAuth;
   readonly accessContext: AccessContextService;
@@ -49,6 +54,7 @@ export function createHttpApp(input: {
   readonly airtableWebhookIngress?: AirtableWebhookIngressRuntime;
   readonly airtableIntegration?: AirtableIntegrationHttpRuntime;
   readonly requestSerialization?: HttpRequestSerializationBoundary;
+  readonly health?: RuntimeHealthSource;
 }) {
   const app = new OpenAPIHono();
 
@@ -66,6 +72,25 @@ export function createHttpApp(input: {
       try {
         await requestSerialization.run(next, context.req.raw.signal);
       } catch (error) {
+        if (error instanceof RequestSerializationUnavailableError) {
+          context.res = Response.json(
+            {
+              code: 'service_busy',
+              message: 'JooEvents is busy. Try again shortly.',
+              retryable: true,
+              correlationId: context.get('correlationId' as never) as string
+            },
+            {
+              status: 503,
+              headers: {
+                'cache-control': 'no-store, max-age=0',
+                'retry-after': '1',
+                'x-correlation-id': context.get('correlationId' as never) as string
+              }
+            }
+          );
+          return;
+        }
         if (!(error instanceof RequestSerializationAbortedError)) throw error;
         context.res = new Response(null, {
           status: 499,
@@ -260,7 +285,7 @@ export function createHttpApp(input: {
     app.route('/', createAirtableIntegrationHttpAdapter(input.airtableIntegration));
   }
 
-  app.get('/health', (context) => context.json({ ok: true }));
+  app.get('/health', (context) => context.json(input.health?.read() ?? { ok: true }));
   app.doc('/api/openapi.json', {
     openapi: '3.1.0',
     info: { title: 'JooEvents API', version: '0.1.0' }

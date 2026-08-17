@@ -116,6 +116,14 @@ function fixture() {
   installProgramVocabularySchema(sqlite);
   installSessionSchema(sqlite);
   installEngagementSchema(sqlite);
+  sqlite.exec(`
+    CREATE TABLE intake_submission_heads (
+      workspace_id TEXT NOT NULL,
+      event_id TEXT NOT NULL,
+      submission_id TEXT NOT NULL,
+      PRIMARY KEY (workspace_id, event_id, submission_id)
+    ) STRICT, WITHOUT ROWID;
+  `);
   installFilesSchema(sqlite);
   sqlite.query(`
     INSERT INTO workspaces (id, name, state, created_at, updated_at, version)
@@ -193,6 +201,10 @@ function fixture() {
   applyEngagementSeedFrom(engagements, seed);
   sqlite.exec('COMMIT;');
   const engagementId = deterministicEngagementId(scope, sessionId, personA);
+  sqlite.query(`
+    INSERT INTO intake_submission_heads (workspace_id, event_id, submission_id)
+    VALUES (?, ?, ?)
+  `).run(workspaceId, eventId, submissionA);
 
   const files = new SQLiteFilesRepository(sqlite);
   return { sqlite, files, engagementId };
@@ -308,6 +320,12 @@ describe('SQLite files persistence', () => {
     )).toBe(true);
     expect(fx.files.subjectExists(
       scope, { kind: 'engagement', engagementId: newId() }
+    )).toBe(false);
+    expect(fx.files.subjectExists(
+      scope, { kind: 'submission', submissionId: submissionA }
+    )).toBe(true);
+    expect(fx.files.subjectExists(
+      scope, { kind: 'submission', submissionId: newId() }
     )).toBe(false);
     expect(fx.files.subjectExists(scope, { kind: 'session', sessionId })).toBe(true);
     expect(fx.files.subjectExists(scope, { kind: 'session', sessionId: newId() })).toBe(false);

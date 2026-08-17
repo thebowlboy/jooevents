@@ -50,5 +50,6 @@
 		{placement}
 		{undoing}
 		onundo={receipt.undo ? undo : undefined}
-		finalNote={receipt.notUndoableReason} />
+		finalNote={receipt.notUndoableReason}
+		ondismiss={() => (shownId = null)} />
 {/if}

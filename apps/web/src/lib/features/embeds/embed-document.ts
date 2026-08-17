@@ -24,6 +24,11 @@ export interface EmbedChildChannel {
 	readonly active: boolean;
 	announceReady(): void;
 	reportHeight(heightPx: number): void;
+	/**
+	 * The completion notice of the protocol: a submission finished in this
+	 * frame. Envelope only — no form values, identity, or address ever ride it.
+	 */
+	reportSubmissionComplete(): void;
 	/** Wires the host-message listener; returns the disposer. */
 	listen(handler: (message: EmbedHostMessage) => void): () => void;
 }
@@ -32,6 +37,7 @@ const inertChannel: EmbedChildChannel = Object.freeze({
 	active: false,
 	announceReady() {},
 	reportHeight() {},
+	reportSubmissionComplete() {},
 	listen() {
 		return () => {};
 	}
@@ -71,6 +77,13 @@ export function createEmbedChildChannel(input: {
 				protocolVersion: EMBED_MESSAGE_PROTOCOL_VERSION,
 				embedId: embedId.data,
 				heightPx: Math.min(EMBED_HEIGHT_MAX_PX, Math.max(0, Math.round(heightPx)))
+			});
+		},
+		reportSubmissionComplete() {
+			send({
+				kind: 'submission_complete',
+				protocolVersion: EMBED_MESSAGE_PROTOCOL_VERSION,
+				embedId: embedId.data
 			});
 		},
 		listen(handler: (message: EmbedHostMessage) => void) {

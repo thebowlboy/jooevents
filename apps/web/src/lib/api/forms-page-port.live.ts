@@ -72,6 +72,12 @@ function outcomeFailure(outcome: StructuredOutcome): AdapterFailure {
 			reason: 'That close date is no longer available. Reload the form and try again.'
 		};
 	}
+	if (code === 'required_choice_has_no_options') {
+		return {
+			code,
+			reason: 'A required choice has no answers, so nobody could submit this Form. Add an active track or format, or make the question optional or hide it.'
+		};
+	}
 	return { code: outcome.kind, reason: 'This form change could not be applied.' };
 }
 
@@ -160,6 +166,7 @@ export function createLiveFormsPagePort(input: {
 	readonly vocabulary: Pick<ProgramVocabularySettingsPort, 'tracks' | 'formats'>;
 	readonly templates: {
 		applicationFormSurfaceId(): Promise<string | null>;
+		applicationSurfacePublished(): Promise<boolean | null>;
 	};
 	readonly newIdempotencyKey?: () => string;
 }): FormsPagePort {
@@ -229,7 +236,8 @@ export function createLiveFormsPagePort(input: {
 
 	const port: FormsPagePort = {
 		templates: Object.freeze({
-			applicationFormSurfaceId: () => input.templates.applicationFormSurfaceId()
+			applicationFormSurfaceId: () => input.templates.applicationFormSurfaceId(),
+			applicationSurfacePublished: () => input.templates.applicationSurfacePublished()
 		}),
 		vocab: Object.freeze({
 			async tracks() {

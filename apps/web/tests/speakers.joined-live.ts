@@ -78,7 +78,9 @@ async function ensureOpenForm(page: Page, formName: string, formatName: string):
 	await page.getByRole('option', { name: /A category pool/ }).click();
 	await dialog.getByLabel('Which track or format').selectOption({ label: formatName });
 	await dialog.getByRole('button', { name: 'Create form' }).click();
-	await page.getByRole('button', { name: 'Open form', exact: true }).click();
+	await page.getByRole('button', { name: 'Publish and open', exact: true }).click();
+	await page.getByRole('dialog', { name: 'Review publication' })
+		.getByRole('button', { name: 'Publish and open', exact: true }).click();
 	await expect(page.getByRole('button', { name: 'Close form', exact: true })).toBeVisible();
 }
 
@@ -177,10 +179,16 @@ test('an accepted submission appears on the live roster as an invited engagement
 	const verdicts = page.getByRole('group', { name: `Set decision for “${entryTitle}”` });
 	await expect(verdicts).toBeVisible({ timeout: 15000 });
 	await verdicts.getByRole('button', { name: 'Accept', exact: true }).click();
+	const confirmation = page.getByRole('dialog', { name: 'Accept 1 submission?' });
+	if (await confirmation.count()) {
+		await confirmation.getByRole('combobox', { name: entryTitle })
+			.selectOption({ label: `Speakers track ${project}` });
+		await confirmation.getByRole('button', { name: 'Accept 1', exact: true }).click();
+	}
 	const decidedRow = page.getByRole('row', {
 		name: new RegExp(entryTitle.replace(/[()]/g, '\\$&'))
 	});
-	await expect(decidedRow.getByText('Accepted', { exact: true })).toBeVisible();
+	await expect(decidedRow.getByText('Accepted', { exact: true })).toBeVisible({ timeout: 15_000 });
 
 	// The roster serves the engagement the accept seeded — canonical state,
 	// no sample fallback, joined with session identity and the disclosed

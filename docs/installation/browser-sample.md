@@ -96,9 +96,10 @@ do not expose it to an untrusted network.
 ## What this does not install
 
 There is no supported production installation yet. This command also does not install
-the substantially implemented single-machine Bun/SQLite runtime. Its retained
-database, auth, migration, backup, and server foundations exist, but the full joined
-event workflow has not yet been promoted into that retained composition.
+the substantially implemented single-machine Bun/SQLite runtime. That separate path
+now has the joined event workflow, retained database and files, authentication,
+background work, packaging, upgrade, and complete-install recovery mechanisms; its
+final release and operator verification gates remain open.
 
 The sample path does not configure D1, R2, Queues, Cron, application login, outbound
 email, backups, restore, or shared event state. Production instructions will be

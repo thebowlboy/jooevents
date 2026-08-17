@@ -223,18 +223,20 @@ describe('production request routing', () => {
 });
 
 describe('Bun runtime routing selection', () => {
-  test('keeps development Hono-only on loopback and production one-origin on the public listener', async () => {
+  test('keeps development Hono-only and defaults every internal listener to loopback', async () => {
     expect(resolveBunListenerConfiguration({})).toEqual({
       mode: 'development',
       hostname: '127.0.0.1',
       port: 5177,
-      development: true
+      development: true,
+      maxRequestBodySize: 250 * 1024 * 1024
     });
     expect(resolveBunListenerConfiguration({ NODE_ENV: 'production' })).toEqual({
       mode: 'production',
-      hostname: '0.0.0.0',
+      hostname: '127.0.0.1',
       port: 5176,
-      development: false
+      development: false,
+      maxRequestBodySize: 250 * 1024 * 1024
     });
 
     const backend: WebFetchHandler = () => Response.json({ source: 'hono' });
@@ -254,5 +256,29 @@ describe('Bun runtime routing selection', () => {
         'JOOEVENTS_INTERNAL_HTTP_PORT'
       );
     }
+  });
+
+  test('requires an explicit exact opt-in before binding beyond loopback', () => {
+    expect(resolveBunListenerConfiguration({
+      NODE_ENV: 'production',
+      JOOEVENTS_INTERNAL_HTTP_HOST: '0.0.0.0'
+    }).hostname).toBe('0.0.0.0');
+    for (const value of ['localhost', '::', '::1', '192.0.2.1', ' 0.0.0.0']) {
+      expect(() => resolveBunListenerConfiguration({
+        NODE_ENV: 'production',
+        JOOEVENTS_INTERNAL_HTTP_HOST: value
+      })).toThrow('JOOEVENTS_INTERNAL_HTTP_HOST');
+    }
+  });
+
+  test('aligns Bun request admission with the configured streaming upload ceiling', () => {
+    expect(resolveBunListenerConfiguration({
+      JOOEVENTS_FILES_MAX_UPLOAD_BYTES_SPEAKER: '1048576',
+      JOOEVENTS_FILES_MAX_UPLOAD_BYTES_ORGANIZER: '2097152',
+      JOOEVENTS_FILES_MAX_TOTAL_BYTES_PER_SPEAKER_EVENT: '4194304'
+    }).maxRequestBodySize).toBe(2 * 1024 * 1024);
+    expect(() => resolveBunListenerConfiguration({
+      JOOEVENTS_FILES_MAX_UPLOAD_BYTES_ORGANIZER: 'unbounded'
+    })).toThrow('JOOEVENTS_FILES_MAX_UPLOAD_BYTES_ORGANIZER');
   });
 });

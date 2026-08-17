@@ -1,0 +1,129 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "jooevents-application-local",
+  "main": "apps/cloudflare-worker/src/index.ts",
+  "compatibility_date": "2026-08-17",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "apps/web/build-live",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": [
+      "/.well-known/*",
+      "/.well-known",
+      "/api",
+      "/api/*",
+      "/mcp",
+      "/mcp/*",
+      "/webhooks/*",
+      "/webhooks",
+      "/health",
+      "/__scheduled",
+      "/embed",
+      "/embed/*"
+    ]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "jooevents-application-local",
+      "migrations_table": "d1_migrations",
+      "migrations_dir": "apps/cloudflare-worker/.generated/migrations"
+    }
+  ],
+  "r2_buckets": [
+    { "binding": "FILES", "bucket_name": "jooevents-application-local-files" }
+  ],
+  "queues": {
+    "producers": [
+      { "binding": "JOBS", "queue": "jooevents-application-local-jobs" }
+    ],
+    "consumers": [
+      {
+        "queue": "jooevents-application-local-jobs",
+        "max_batch_size": 10,
+        "max_batch_timeout": 5,
+        "max_retries": 3,
+        "dead_letter_queue": "jooevents-application-local-jobs-dlq",
+        "max_concurrency": 4,
+        "retry_delay": 30
+      }
+    ]
+  },
+  "triggers": { "crons": ["*/5 * * * *"] },
+  "vars": {
+    "JOOEVENTS_DEPLOYMENT_ENVIRONMENT": "local",
+    "JOOEVENTS_D1_RELEASE_FLOOR": "sqlite-e2-s6"
+  },
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  "env": {
+    "staging": {
+      "name": "jooevents-application-staging",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "jooevents-application-staging",
+          "migrations_table": "d1_migrations",
+          "migrations_dir": "apps/cloudflare-worker/.generated/migrations"
+        }
+      ],
+      "r2_buckets": [
+        { "binding": "FILES", "bucket_name": "jooevents-application-staging-files" }
+      ],
+      "queues": {
+        "producers": [
+          { "binding": "JOBS", "queue": "jooevents-application-staging-jobs" }
+        ],
+        "consumers": [
+          {
+            "queue": "jooevents-application-staging-jobs",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5,
+            "max_retries": 3,
+            "dead_letter_queue": "jooevents-application-staging-jobs-dlq",
+            "max_concurrency": 4,
+            "retry_delay": 30
+          }
+        ]
+      },
+      "vars": {
+        "JOOEVENTS_DEPLOYMENT_ENVIRONMENT": "staging",
+        "JOOEVENTS_D1_RELEASE_FLOOR": "sqlite-e2-s6"
+      }
+    },
+    "production": {
+      "name": "jooevents-application-production",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "jooevents-application-production",
+          "migrations_table": "d1_migrations",
+          "migrations_dir": "apps/cloudflare-worker/.generated/migrations"
+        }
+      ],
+      "r2_buckets": [
+        { "binding": "FILES", "bucket_name": "jooevents-application-production-files" }
+      ],
+      "queues": {
+        "producers": [
+          { "binding": "JOBS", "queue": "jooevents-application-production-jobs" }
+        ],
+        "consumers": [
+          {
+            "queue": "jooevents-application-production-jobs",
+            "max_batch_size": 10,
+            "max_batch_timeout": 5,
+            "max_retries": 3,
+            "dead_letter_queue": "jooevents-application-production-jobs-dlq",
+            "max_concurrency": 4,
+            "retry_delay": 30
+          }
+        ]
+      },
+      "vars": {
+        "JOOEVENTS_DEPLOYMENT_ENVIRONMENT": "production",
+        "JOOEVENTS_D1_RELEASE_FLOOR": "sqlite-e2-s6"
+      }
+    }
+  }
+}

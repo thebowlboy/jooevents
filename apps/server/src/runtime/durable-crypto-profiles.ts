@@ -18,7 +18,8 @@ import { hkdfSync, timingSafeEqual } from 'node:crypto';
 export const DURABLE_CRYPTO_KEY_ENVIRONMENT_DUTIES = Object.freeze({
   requestHash: 'JOOEVENTS_REQUEST_HASH_KEYS',
   idempotency: 'JOOEVENTS_IDEMPOTENCY_KEYS',
-  classifiedPayload: 'JOOEVENTS_CLASSIFIED_PAYLOAD_KEYS'
+  classifiedPayload: 'JOOEVENTS_CLASSIFIED_PAYLOAD_KEYS',
+  persistentHmac: 'JOOEVENTS_PERSISTENT_HMAC_KEYS'
 } as const);
 
 type DurableCryptoKeyEnvironmentDuty =
@@ -34,6 +35,7 @@ export const DURABLE_CRYPTO_PROFILE_ERROR_CODES = Object.freeze([
   'invalid_profile_reference',
   'profile_version_unavailable',
   'invalid_retained_profile_order',
+  'misaligned_key_versions',
   'derived_key_collision'
 ] as const);
 
@@ -63,6 +65,7 @@ export interface DurableCryptoProfileEnvironment {
   readonly requestHashKeys?: string | undefined;
   readonly idempotencyKeys?: string | undefined;
   readonly classifiedPayloadKeys?: string | undefined;
+  readonly persistentHmacKeys?: string | undefined;
 }
 
 export interface ClassifiedPayloadEncryptionProfileSelection {
@@ -76,6 +79,12 @@ export interface ClassifiedPayloadEncryptionProfileComposition {
   readonly retainedEncryptionProfiles: readonly SynchronousClassifiedPayloadEncryptionProfile[];
 }
 
+export interface DurableCryptoProfileSelection {
+  readonly active: VersionedDefinitionRef;
+  /** Older configured versions, newest first. */
+  readonly retained: readonly VersionedDefinitionRef[];
+}
+
 declare const durableCryptoProfileCompositionBrand: unique symbol;
 
 /** Server-only opaque composition. No method returns or accepts raw key material. */
@@ -86,9 +95,34 @@ export interface DurableCryptoProfileComposition {
   classifiedPayloadEncryptionProfiles(
     selection: ClassifiedPayloadEncryptionProfileSelection
   ): ClassifiedPayloadEncryptionProfileComposition;
+  profileSelection(
+    family: KeyFamily,
+    key: string
+  ): DurableCryptoProfileSelection;
+  /**
+   * Supplies one purpose-separated temporary key to a synchronous factory.
+   * The temporary bytes are zeroed before this method returns; factories must
+   * copy the bytes they need and must never return or retain this exact view.
+   */
+  withPersistentHmacKey<Result>(
+    profile: VersionedDefinitionRef,
+    create: (keyBytes: Uint8Array) => Result
+  ): Result;
+  withPersistentHmacKeySelection<Result>(
+    key: string,
+    create: (selection: {
+      readonly active: { readonly reference: VersionedDefinitionRef; readonly keyBytes: Uint8Array };
+      readonly retained: readonly {
+        readonly reference: VersionedDefinitionRef;
+        readonly keyBytes: Uint8Array;
+      }[];
+    }) => Result
+  ): Result;
 }
 
-type KeyFamily = 'request_hash' | 'idempotency' | 'classified_payload';
+export type DurableCryptoKeyFamily =
+  'request_hash' | 'idempotency' | 'classified_payload' | 'persistent_hmac';
+type KeyFamily = DurableCryptoKeyFamily;
 
 interface KeyRingEntry {
   readonly version: number;
@@ -203,6 +237,18 @@ function assertNoRepeatedRawMaterial(
   }
 }
 
+function assertAlignedKeyVersions(
+  rings: readonly KeyRing[],
+  issues: DurableCryptoProfileConfigurationIssue[]
+): void {
+  const expected = rings[0]?.entries.map((entry) => entry.version).join(',');
+  for (const ring of rings.slice(1)) {
+    if (ring.entries.map((entry) => entry.version).join(',') !== expected) {
+      issues.push(issue(ring.duty, 'misaligned_key_versions'));
+    }
+  }
+}
+
 function profileIdentity(input: {
   readonly family: KeyFamily;
   readonly purpose: string;
@@ -313,8 +359,20 @@ export function createDurableCryptoProfileComposition(
     duty: DURABLE_CRYPTO_KEY_ENVIRONMENT_DUTIES.classifiedPayload,
     issues
   });
-  const rings = Object.freeze([requestHash, idempotency, classifiedPayload]);
+  const persistentHmac = parseKeyRing({
+    value: environment.persistentHmacKeys,
+    family: 'persistent_hmac',
+    duty: DURABLE_CRYPTO_KEY_ENVIRONMENT_DUTIES.persistentHmac,
+    issues
+  });
+  const rings = Object.freeze([
+    requestHash,
+    idempotency,
+    classifiedPayload,
+    persistentHmac
+  ]);
   assertNoRepeatedRawMaterial(rings, issues);
+  assertAlignedKeyVersions(rings, issues);
   if (issues.length > 0) throw new DurableCryptoProfileConfigurationError(issues);
 
   const allRawKeys = Object.freeze(rings.flatMap((ring) => ring.entries.map((entry) => entry.keyBytes)));
@@ -346,6 +404,22 @@ export function createDurableCryptoProfileComposition(
     } finally {
       keyBytes.fill(0);
     }
+  };
+  const selection = (ring: KeyRing, key: string): DurableCryptoProfileSelection => {
+    const references = ring.entries.map((entry) => normalizeProfile(
+      Object.freeze({ key, version: entry.version }),
+      ring.duty
+    ));
+    const active = references[0];
+    if (active === undefined) {
+      throw new DurableCryptoProfileConfigurationError([
+        issue(ring.duty, 'missing_key_ring')
+      ]);
+    }
+    return Object.freeze({
+      active,
+      retained: Object.freeze(references.slice(1))
+    });
   };
 
   const composition = Object.freeze({
@@ -384,6 +458,59 @@ export function createDurableCryptoProfileComposition(
         encryptionProfile: encryptionProfile(active),
         retainedEncryptionProfiles: Object.freeze(retained.map(encryptionProfile))
       });
+    },
+    profileSelection(
+      family: KeyFamily,
+      key: string
+    ): DurableCryptoProfileSelection {
+      const ring = family === 'request_hash'
+        ? requestHash
+        : family === 'idempotency'
+          ? idempotency
+          : family === 'classified_payload'
+            ? classifiedPayload
+            : persistentHmac;
+      return selection(ring, key);
+    },
+    withPersistentHmacKey<Result>(
+      profile: VersionedDefinitionRef,
+      create: (keyBytes: Uint8Array) => Result
+    ): Result {
+      const normalized = normalizeProfile(profile, persistentHmac.duty);
+      const keyBytes = derive(
+        persistentHmac,
+        'persistent-domain-hmac',
+        normalized
+      );
+      try {
+        return create(keyBytes);
+      } finally {
+        keyBytes.fill(0);
+      }
+    },
+    withPersistentHmacKeySelection<Result>(
+      key: string,
+      create: (selection: {
+        readonly active: { readonly reference: VersionedDefinitionRef; readonly keyBytes: Uint8Array };
+        readonly retained: readonly {
+          readonly reference: VersionedDefinitionRef;
+          readonly keyBytes: Uint8Array;
+        }[];
+      }) => Result
+    ): Result {
+      const references = selection(persistentHmac, key);
+      const temporary = [references.active, ...references.retained].map((reference) => ({
+        reference,
+        keyBytes: derive(persistentHmac, 'persistent-domain-hmac', reference)
+      }));
+      try {
+        return create(Object.freeze({
+          active: temporary[0]!,
+          retained: Object.freeze(temporary.slice(1))
+        }));
+      } finally {
+        for (const profile of temporary) profile.keyBytes.fill(0);
+      }
     }
   }) as DurableCryptoProfileComposition;
   issuedCompositions.add(composition);

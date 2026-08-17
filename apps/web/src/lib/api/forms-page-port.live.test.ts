@@ -24,7 +24,8 @@ const fields = Object.freeze({ async list() { return []; }, async add() { throw 
 function port(forms: OrganizerFormsPort = liveForms(), keys: string[] = []) {
 	let sequence = 0;
 	return createLiveFormsPagePort({ forms, fields, vocabulary,
-		templates: { async applicationFormSurfaceId() { return null; } },
+		templates: { async applicationFormSurfaceId() { return null; },
+			async applicationSurfacePublished() { return null; } },
 		newIdempotencyKey: () => keys.shift() ?? `forms-live-test-${sequence += 1}` });
 }
 
@@ -80,7 +81,8 @@ describe('live tuned Forms page adapter', () => {
 
 	test('requires live source and has no predecessor or raw transport dependency', () => {
 		expect(() => createLiveFormsPagePort({ forms: createIntakeFormsSamplePort(), fields, vocabulary,
-			templates: { async applicationFormSurfaceId() { return null; } } })).toThrow('forms_page_live_source_required');
+			templates: { async applicationFormSurfaceId() { return null; },
+				async applicationSurfacePublished() { return null; } } })).toThrow('forms_page_live_source_required');
 		const source = readFileSync(import.meta.path.replace(/\.test\.ts$/u, '.ts'), 'utf8');
 		expect(source).not.toMatch(/(?:from|import\s*\()[^\n]*\/sample(?:\/|['"])/u);
 		expect(source).not.toMatch(/readDiff|\.propose\(|\.commit\(|changesetId|restoreComposition/u);

@@ -64,7 +64,8 @@ const reconciledAt = parseInstant('2026-08-12T13:00:00.000Z');
 function definition(
   trackId: string,
   trackFieldId: string,
-  titleFieldId: string
+  titleFieldId: string,
+  formatFieldId: string
 ): FormDefinitionCreateDraftInput['definition'] {
   return {
     kind: 'cfp',
@@ -73,7 +74,7 @@ function definition(
     availability: { kind: 'evergreen' },
     confirmation: 'Application received.',
     composition: {
-      excludedFieldIds: [],
+      excludedFieldIds: [formatFieldId],
       requiredOverrides: {},
       optionExposure: { [trackFieldId]: [trackId] }
     },
@@ -138,8 +139,11 @@ function setup() {
     }
   }));
   const trackFieldId = registry.fields.find((field) => field.mapsTo === 'talk.track')?.id;
+  const formatFieldId = registry.fields.find((field) => field.mapsTo === 'talk.format')?.id;
   const titleFieldId = registry.fields.find((field) => field.mapsTo === 'talk.title')?.id;
-  if (!trackFieldId || !titleFieldId) throw new TypeError('baseline_registry_incomplete');
+  if (!trackFieldId || !formatFieldId || !titleFieldId) {
+    throw new TypeError('baseline_registry_incomplete');
+  }
 
   const referenceAdapter = createSQLiteIntakeFormProgramVocabularyReferenceAdapter();
   const referenceRegistry = createProgramReferenceContributorRegistry({
@@ -183,7 +187,9 @@ function setup() {
   const intake = new SQLiteIntakeRepository(sqlite, targetReferences);
   createTrack(sqlite, vocabulary, sourceTrackId, 'Source Track');
   createTrack(sqlite, vocabulary, targetTrackId, 'Target Track');
-  installPublishedOpenForm(sqlite, intake, targetReferences, trackFieldId, titleFieldId);
+  installPublishedOpenForm(
+    sqlite, intake, targetReferences, trackFieldId, titleFieldId, formatFieldId
+  );
   return {
     sqlite,
     vocabulary,
@@ -639,7 +645,8 @@ function installPublishedOpenForm(
   intake: SQLiteIntakeRepository,
   targetReferences: FormTargetReferenceResolver,
   trackFieldId: string,
-  titleFieldId: string
+  titleFieldId: string,
+  formatFieldId: string
 ): void {
   const scope = { workspaceId, eventId };
   const empty = parseFormCatalogState({ scope, version: 1, heads: [] });
@@ -650,7 +657,7 @@ function installPublishedOpenForm(
     authorInput: {
       expectedCatalogVersion: 1,
       expectedRegistryVersion: registry.version,
-      definition: definition(sourceTrackId, trackFieldId, titleFieldId)
+      definition: definition(sourceTrackId, trackFieldId, titleFieldId, formatFieldId)
     },
     identities: identities(),
     references: targetReferences,

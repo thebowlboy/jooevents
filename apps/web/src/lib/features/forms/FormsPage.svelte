@@ -3,8 +3,10 @@
 	import { flip } from 'svelte/animate';
 	import { ArrowLeft, GripVertical, Lock } from 'lucide-svelte';
 	import {
+		Alert,
 		Button,
 		Checkbox,
+		CopyValue,
 		DatePicker,
 		DescribedSelect,
 		Field,
@@ -77,6 +79,13 @@
 		// The application surface the Preview door lands on: one template serves
 		// every form, so the id is resolved once.
 		void port.templates.applicationFormSurfaceId().then((id) => (surfaceId = id));
+		// The other half of "is the public address actually live": the shared
+		// application page's own release. A form and its page publish
+		// separately, and an address serves only when both stand.
+		void port.templates.applicationSurfacePublished().then(
+			(published) => (surfacePublished = published),
+			() => (surfacePublished = null)
+		);
 		// Target references resolve against the live vocabulary and sessions at
 		// render time — a form stores only the reference, never a copied name.
 		void Promise.all([port.vocab.tracks(), port.vocab.formats(), port.schedule.sessions()]).then(
@@ -101,6 +110,23 @@
 	let formats = $state<Format[]>([]);
 	let sessionTitles = $state<Record<string, string>>({});
 	let collectingSessions = $state<{ id: string; title: string }[]>([]);
+
+	/**
+	 * The application page's release state: `undefined` while it resolves,
+	 * `null` when this composition cannot say (the address block then stays
+	 * silent rather than claiming either way), otherwise the fact.
+	 */
+	let surfacePublished = $state<boolean | null | undefined>(undefined);
+
+	/**
+	 * A form's public address, spelled against whatever host serves this
+	 * console — the same working answer the Embeds builder gives.
+	 */
+	function publicAddress(id: string): string {
+		const origin =
+			typeof window === 'undefined' ? 'https://your-event.example' : window.location.origin;
+		return `${origin}/s/apply?scope=${encodeURIComponent(`form:${id}`)}`;
+	}
 
 	// Plain-language target labels: the badge says which kind of door this is;
 	// the reference it points at is said in the target line beside it.
@@ -844,6 +870,11 @@
 			? `/app/templates?tab=surfaces&template=${surfaceId}&form=${formId}`
 			: null
 	);
+
+	/** Where the application page publishes — the same door Preview opens. */
+	const surfaceEditorHref = $derived(
+		surfaceId ? `/app/templates?tab=surfaces&template=${surfaceId}` : null
+	);
 </script>
 
 {#if formId}
@@ -974,6 +1005,71 @@
 						{/if}
 					</div>
 				</div>
+				<!-- The two releases behind one address, read together: the form's
+				     own publication (badged in the title) and the application
+				     page's. An address is live only when both stand, and the trap
+				     this block exists to prevent is sharing a URL that fail-closes. -->
+				{#if surfacePublished !== null}
+					<div class="conf__address">
+						<p class="conf__address-label" id="conf-address-label">Public address</p>
+						{#if !form || surfacePublished === undefined}
+							<!-- The resolved composition's own two lines (address, then its
+							     state sentence) with skeleton fills, so resolution cannot
+							     move the questions below — a drag in flight would land a
+							     row off if this region grew under it. -->
+							<p class="conf__address-line" aria-busy="true">
+								<span class="ui-skeleton sk-line" style="inline-size: 18rem" aria-hidden="true"
+								></span>
+							</p>
+							<p class="conf__address-note" aria-busy="true">
+								<span class="ui-skeleton sk-line" style="inline-size: 24rem" aria-hidden="true"
+								></span>
+							</p>
+						{:else if form.status === 'draft'}
+							<p class="conf__address-note">
+								{#if surfacePublished}
+									Not live yet — this form hasn’t been published and opened.
+								{:else}
+									Not live yet — this form is a draft, and the application page isn’t
+									published.
+								{/if}
+							</p>
+						{:else if !surfacePublished}
+							<div class="conf__address-warn">
+								<Alert
+									tone="warning"
+									title="The application page isn’t published"
+									message="This form’s address turns visitors away until the page is published." />
+								{#if surfaceEditorHref}
+									<a class="ui-button ui-button--secondary ui-button--sm" href={surfaceEditorHref}>
+										Publish the page in Templates
+									</a>
+								{/if}
+							</div>
+						{:else}
+							{@const address = publicAddress(form.id)}
+							<p class="conf__address-line">
+								<a
+									class="conf__address-url"
+									href={address}
+									target="_blank"
+									rel="noopener"
+									aria-describedby="conf-address-label">{address}</a>
+								<CopyValue value={address} label="Copy the public address" />
+							</p>
+							<p class="conf__address-note">
+								{#if form.status === 'open'}
+									The application page is published — this address takes applications.
+								{:else}
+									<!-- The weakest sentence true on every composition: the live
+									     lane serves a closed form's address as an absent page,
+									     while the sample lane still shows its questions. -->
+									Closed — this address no longer accepts applications.
+								{/if}
+							</p>
+						{/if}
+					</div>
+				{/if}
 				<div class="conf__actions">
 					{#if previewHref}
 						<a class="ui-button ui-button--secondary ui-button--sm" href={previewHref}>
@@ -1325,6 +1421,22 @@
 					onclick={() => (newFormOpen = true)}>New form</button>
 			</div>
 		{:else}
+			<!-- One cause shared by every open card is said once, above them: the
+			     application page all these addresses render through isn't
+			     published, so no address is live whatever the cards say. -->
+			{#if surfacePublished === false && forms.some((entry) => entry.status === 'open')}
+				<div class="list__warn">
+					<Alert
+						tone="warning"
+						title="The application page isn’t published"
+						message="Open forms have public addresses, but the page they render isn’t published — every address turns visitors away." />
+					{#if surfaceEditorHref}
+						<a class="ui-button ui-button--secondary ui-button--sm" href={surfaceEditorHref}>
+							Publish the page in Templates
+						</a>
+					{/if}
+				</div>
+			{/if}
 			<div class="cards">
 				{#each forms as form (form.id)}
 					{@const target = targetBadge[form.target.kind]}
@@ -1805,6 +1917,60 @@
 		flex-wrap: wrap;
 		align-items: center;
 		gap: var(--je-space-2) var(--je-space-4);
+	}
+
+	/* One address, two release records: label as the quiet question, the URL
+	   or the reason it is not live as the answer beneath it. */
+	.conf__address {
+		display: grid;
+		gap: var(--je-space-1);
+		justify-items: start;
+		margin-block-start: var(--je-space-2);
+	}
+
+	.conf__address-label {
+		margin: 0;
+		font-size: var(--je-font-size-sm);
+		font-weight: 600;
+		line-height: var(--je-leading-snug);
+	}
+
+	.conf__address-line {
+		margin: 0;
+		display: flex;
+		align-items: center;
+		gap: var(--je-space-1);
+		min-inline-size: 0;
+		max-inline-size: 100%;
+	}
+
+	/* A live address navigates, so it reads as a link; long hosts wrap rather
+	   than widening the page. */
+	.conf__address-url {
+		min-inline-size: 0;
+		overflow-wrap: anywhere;
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-link);
+	}
+
+	.conf__address-note {
+		margin: 0;
+		max-inline-size: 58ch;
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
+	}
+
+	.conf__address-warn,
+	.list__warn {
+		display: grid;
+		gap: var(--je-space-2);
+		justify-items: start;
+	}
+
+	/* The list section carries no own gap; the shared-cause notice keeps a
+	   group boundary from the cards it speaks for. */
+	.list__warn {
+		margin-block-end: var(--je-space-4);
 	}
 
 	.conf__split {

@@ -18,7 +18,7 @@
 	 */
 	import { Check } from 'lucide-svelte';
 	import type { Format, ScopeRef, SessionItem, Track } from '$lib/api/types';
-	import { createSettler } from '$lib/ui';
+	import { createSettler, trackAccent, type TrackAccent } from '$lib/ui';
 	import { scopeKey } from './scope-display';
 
 	let {
@@ -36,6 +36,9 @@
 	} = $props();
 
 	const keys = $derived(new Set(selected.map(scopeKey)));
+
+	/** The event's own track order — the accent walk every surface shares. */
+	const trackIds = $derived(tracks.map((track) => track.id));
 
 	const trackOptions = $derived(
 		tracks.filter((track) => track.status === 'active' || keys.has(`track:${track.id}`))
@@ -84,18 +87,28 @@
 	}
 
 	/** Sessions grouped by their track, in track order; sessions whose track is
-	 * not in the vocabulary trail in a neutral group. Narrowing by the filter
-	 * changes which rows show, never what is selected or included. */
+	 * not in the vocabulary trail in a neutral group. Each group carries its
+	 * track's accent so the eye can jump from a track option to its session
+	 * cluster by hue. Narrowing by the filter changes which rows show, never
+	 * what is selected or included. */
 	const sessionGroups = $derived.by(() => {
 		const shown = matching(query);
-		const groups: { key: string; label: string; list: SessionItem[] }[] = [];
+		const groups: { key: string; label: string; accent: TrackAccent | null; list: SessionItem[] }[] =
+			[];
 		for (const track of tracks) {
 			const list = shown.filter((session) => session.trackId === track.id);
-			if (list.length > 0) groups.push({ key: track.id, label: track.name, list });
+			if (list.length > 0)
+				groups.push({
+					key: track.id,
+					label: track.name,
+					accent: trackAccent(track.id, trackIds),
+					list
+				});
 		}
-		const known = new Set(tracks.map((track) => track.id));
+		const known = new Set(trackIds);
 		const untracked = shown.filter((session) => !known.has(session.trackId));
-		if (untracked.length > 0) groups.push({ key: 'no-track', label: 'No track', list: untracked });
+		if (untracked.length > 0)
+			groups.push({ key: 'no-track', label: 'No track', accent: null, list: untracked });
 		return groups;
 	});
 
@@ -119,7 +132,18 @@
 	}
 </script>
 
-{#snippet option(ref: ScopeRef, label: string, retired: boolean)}
+{#snippet swatch(accent: TrackAccent)}
+	<!-- The track's identity, not its state: the same soft-and-ink pair the
+	     track's chip wears everywhere, so recognition built on any other
+	     surface carries into this control. Selection still speaks through the
+	     marking tint and the check, never through this hue. -->
+	<span
+		class="swatch"
+		style="--swatch: var(--je-color-track-{accent}-soft); --swatch-ring: var(--je-color-track-{accent}-ink)"
+		aria-hidden="true"></span>
+{/snippet}
+
+{#snippet option(ref: ScopeRef, label: string, retired: boolean, accent: TrackAccent | null)}
 	{@const on = keys.has(scopeKey(ref))}
 	<button
 		type="button"
@@ -127,6 +151,7 @@
 		class:option--on={on}
 		aria-pressed={on}
 		onclick={() => ontoggle(ref)}>
+		{#if accent}{@render swatch(accent)}{/if}
 		{#if on}<Check size={12} aria-hidden="true" />{/if}
 		{label}
 		{#if retired}<span class="option__flag">retired</span>{/if}
@@ -177,7 +202,12 @@
 			<span class="group__name" aria-hidden="true">Tracks</span>
 			<div class="group__options">
 				{#each trackOptions as track (track.id)}
-					{@render option({ kind: 'track', id: track.id }, track.name, track.status === 'retired')}
+					{@render option(
+						{ kind: 'track', id: track.id },
+						track.name,
+						track.status === 'retired',
+						trackAccent(track.id, trackIds)
+					)}
 				{/each}
 			</div>
 		</div>
@@ -190,7 +220,8 @@
 					{@render option(
 						{ kind: 'format', id: format.id },
 						format.name,
-						format.status === 'retired'
+						format.status === 'retired',
+						null
 					)}
 				{/each}
 			</div>
@@ -221,7 +252,10 @@
 			{/if}
 			{#each sessionGroups as group (group.key)}
 				<div class="subgroup" role="group" aria-label={`${group.label} sessions`}>
-					<span class="subgroup__name" aria-hidden="true">{group.label}</span>
+					<span class="subgroup__name" aria-hidden="true">
+						{#if group.accent}{@render swatch(group.accent)}{/if}
+						{group.label}
+					</span>
 					<div class="group__options">
 						{#each group.list as session (session.id)}
 							{@render sessionOption(session)}
@@ -242,6 +276,14 @@
 	.group {
 		display: grid;
 		gap: var(--je-space-1);
+	}
+
+	/* The boundary between kinds is named by a hairline, not left to space
+	   alone — the same rule the coverage panel's groups follow — so Tracks,
+	   Formats, and Sessions read as three checkpoints on one walk down. */
+	.group + .group {
+		border-block-start: 1px solid var(--je-color-border);
+		padding-block-start: var(--je-space-3);
 	}
 
 	.group__name {
@@ -282,12 +324,28 @@
 		gap: var(--je-space-1);
 	}
 
-	/* The header is text, not a color block: the track's name in the quiet
-	   voice — grouping is its whole job, so it spends no accent. */
+	/* The header stays text in the quiet voice; the swatch beside it is the
+	   track's identity at chip scale, so the cluster under a selected track
+	   option is found again by the same hue, not by re-reading names. */
 	.subgroup__name {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--je-space-1);
 		font-size: var(--je-font-size-2xs);
 		font-weight: 600;
 		color: var(--je-color-text-muted);
+	}
+
+	/* Identity, never state: the track's soft fill ringed by its ink — the
+	   palette pair its chip wears on every surface — kept apart from the
+	   marking tint that says "chosen". */
+	.swatch {
+		flex: none;
+		inline-size: 0.625rem;
+		block-size: 0.625rem;
+		border-radius: 0.1875rem;
+		background: var(--swatch);
+		border: 1px solid var(--swatch-ring);
 	}
 
 	.option {
@@ -361,9 +419,11 @@
 		color: var(--je-color-text-muted);
 	}
 
+	/* The 44px touch floor from the mobile standard: min-height, so a wrapped
+	   long title still grows past it rather than clipping. */
 	@media (pointer: coarse) {
 		.option {
-			min-block-size: 2.5rem;
+			min-block-size: 2.75rem;
 		}
 	}
 </style>

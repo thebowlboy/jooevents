@@ -12,7 +12,7 @@
 	 * words, the states, and the geometry are settled here rather than per
 	 * surface.
 	 */
-	import { Undo2 } from 'lucide-svelte';
+	import { Undo2, X } from 'lucide-svelte';
 
 	interface Props {
 		/** What happened, specific enough to recognise without looking away. */
@@ -28,6 +28,8 @@
 		undoing?: boolean;
 		/** Why there is no way back. Shown when `onundo` is absent. */
 		finalNote?: string;
+		/** Clears the fixed dock without changing or undoing its recorded action. */
+		ondismiss?: () => void;
 	}
 
 	let {
@@ -37,7 +39,8 @@
 		hrefLabel,
 		onundo,
 		undoing = false,
-		finalNote
+		finalNote,
+		ondismiss
 	}: Props = $props();
 </script>
 
@@ -59,6 +62,15 @@
 		</button>
 	{:else if finalNote}
 		<p class="receipt__final">{finalNote}</p>
+	{/if}
+	{#if ondismiss}
+		<button
+			type="button"
+			class="ui-button ui-button--ghost ui-button--sm ui-button--icon receipt__dismiss"
+			aria-label="Dismiss confirmation"
+			onclick={ondismiss}>
+			<X size={14} aria-hidden="true" />
+		</button>
 	{/if}
 </div>
 
@@ -100,11 +112,23 @@
 		font-size: var(--je-font-size-xs);
 	}
 
+	.receipt__dismiss {
+		flex: 0 0 auto;
+		margin-inline-start: auto;
+	}
+
 	/* Below the rail's breakpoint there is no rail to clear. */
 	@media (max-width: 920px) {
 		.receipt--rail {
 			inset-inline-start: var(--je-space-3);
 			inset-inline-end: var(--je-space-3);
+		}
+	}
+
+	@media (pointer: coarse) {
+		.receipt__dismiss {
+			min-inline-size: 2.75rem;
+			min-block-size: 2.75rem;
 		}
 	}
 </style>

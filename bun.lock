@@ -5,7 +5,20 @@
     "": {
       "name": "jooevents",
       "devDependencies": {
+        "typescript": "6.0.3",
         "wrangler": "4.122.0",
+      },
+    },
+    "apps/cloudflare-worker": {
+      "name": "@jooevents/cloudflare-worker",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/files": "workspace:*",
+        "@jooevents/persistence": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "26.2.0",
+        "typescript": "6.0.3",
       },
     },
     "apps/demo-worker": {
@@ -28,6 +41,8 @@
       "version": "0.0.0",
       "dependencies": {
         "@hono/zod-openapi": "1.5.2",
+        "@jooevents/airtable": "workspace:*",
+        "@jooevents/airtable-sync": "workspace:*",
         "@jooevents/application": "workspace:*",
         "@jooevents/cloudflare-email": "workspace:*",
         "@jooevents/communication-operations": "workspace:*",
@@ -48,6 +63,7 @@
         "@jooevents/intake": "workspace:*",
         "@jooevents/intake-operations": "workspace:*",
         "@jooevents/kernel": "workspace:*",
+        "@jooevents/mcp": "workspace:*",
         "@jooevents/persistence": "workspace:*",
         "@jooevents/program": "workspace:*",
         "@jooevents/program-operations": "workspace:*",
@@ -71,7 +87,6 @@
         "zod": "4.4.3",
       },
       "devDependencies": {
-        "@jooevents/mcp": "workspace:*",
         "bun-types": "1.3.6",
         "typescript": "6.0.3",
       },
@@ -503,11 +518,11 @@
         "@jooevents/template-authoring": "workspace:*",
         "@jooevents/template-authoring-operations": "workspace:*",
         "drizzle-orm": "0.45.2",
+        "zod": "4.4.3",
       },
       "devDependencies": {
         "bun-types": "1.3.6",
         "typescript": "6.0.3",
-        "zod": "4.4.3",
       },
     },
     "packages/program": {
@@ -949,6 +964,8 @@
     "@jooevents/application": ["@jooevents/application@workspace:packages/application"],
 
     "@jooevents/cloudflare-email": ["@jooevents/cloudflare-email@workspace:packages/cloudflare-email"],
+
+    "@jooevents/cloudflare-worker": ["@jooevents/cloudflare-worker@workspace:apps/cloudflare-worker"],
 
     "@jooevents/communication-operations": ["@jooevents/communication-operations@workspace:packages/communication-operations"],
 

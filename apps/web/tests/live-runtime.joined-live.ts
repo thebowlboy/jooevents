@@ -43,12 +43,14 @@ test('real same-origin runtime exposes live data and no sample fallback', async 
 
 	await expect(page.getByRole('img', { name: 'JooEvents' }).first()).toBeVisible();
 	if (testInfo.project.name === 'desktop') {
-		// The joined server is shared across projects, and later desktop specs
-		// create the first Event — only the first project sees first-run.
-		await expect(
-			page.getByRole('heading', { level: 2, name: 'Welcome to JooEvents' })
-		).toBeVisible();
-		await expect(page.getByRole('button', { name: 'Fill in details myself' })).toBeEnabled();
+		// The joined server is shared across specs. Either this is the first
+		// desktop spec, or an earlier acceptance journey already created the Event.
+		const welcome = page.getByRole('heading', { level: 2, name: 'Welcome to JooEvents' });
+		const pipeline = page.getByRole('region', { name: 'Pipeline' });
+		await expect(welcome.or(pipeline).first()).toBeVisible();
+		if (await welcome.isVisible()) {
+			await expect(page.getByRole('button', { name: 'Fill in details myself' })).toBeEnabled();
+		}
 	}
 	await expect(page.getByText(/Mid-flight|Decision crunch|All clear/)).toHaveCount(0);
 	await expect(page.locator('[data-je-scenario]')).toHaveCount(0);
@@ -59,7 +61,7 @@ test('real same-origin runtime exposes live data and no sample fallback', async 
 	if ((page.viewportSize()?.width ?? 0) < 720) {
 		await page.getByRole('button', { name: 'Open navigation' }).click();
 	}
-	await page.getByRole('link', { name: 'Communications' }).click();
+	await page.getByRole('link', { name: 'Communications', exact: true }).click();
 	await expect(page.getByRole('heading', { level: 1, name: 'Communications' })).toBeVisible();
 	await expect(page.getByRole('heading', { level: 2, name: 'Email delivery' })).toBeVisible();
 
@@ -80,9 +82,7 @@ test('touch navigation is modal, traps focus, and restores the page on close', a
 	const firstLink = drawer.getByRole('link', { name: 'JooEvents' });
 	// The Settings row is the rail's one door to the area — its sections live on
 	// the surface itself — so it is the drawer's final focusable control.
-	const lastControl = drawer
-		.getByRole('navigation', { name: 'Settings' })
-		.getByRole('link', { name: 'Settings', exact: true });
+	const lastControl = drawer.getByRole('link', { name: 'Settings', exact: true });
 	await expect(drawer).toBeVisible();
 	await expect(open).toHaveAttribute('aria-expanded', 'true');
 	await expect(close).toBeFocused();

@@ -93,6 +93,7 @@ test('live schedule renders the settings-derived grid, publication state, and a 
 		await page.getByLabel('Room name').fill('Joined Hall');
 		await page.getByLabel('Seats').fill('120');
 		await page.getByRole('button', { name: 'Add room' }).click();
+		await page.getByRole('button', { name: 'Dismiss confirmation' }).click();
 	}
 
 	// The rendered grid: day columns from the event's own date range —
@@ -144,6 +145,10 @@ test('live schedule renders the settings-derived grid, publication state, and a 
 	await dialog.getByRole('button', { name: 'Add', exact: true }).click();
 	await expect(dialog.getByText(`“${formatName}” added to the event's formats and selected.`))
 		.toBeVisible();
+	const track = dialog.getByLabel('Track');
+	if (await track.locator('option').count() > 1) {
+		await track.selectOption({ index: 1 });
+	}
 	await dialog.getByRole('button', { name: 'Create', exact: true }).click();
 
 	// The created session lands in the program pool from the canonical catalog.

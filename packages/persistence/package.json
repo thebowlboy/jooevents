@@ -10,6 +10,7 @@
     "./ephemeral-sqlite-runtime": "./src/sqlite/ephemeral-sqlite-runtime.ts",
     "./foundation-ephemeral-sqlite-runtime": "./src/sqlite/foundation-ephemeral-sqlite-runtime.ts",
     "./retained-backup": "./src/sqlite/retained-backup.ts",
+    "./release-floor-contract": "./src/sqlite/release-floor-contract.ts",
     "./workspace-overview": "./src/sqlite/workspace-overview.ts",
     "./workspace-shell-summary": "./src/sqlite/workspace-shell-summary.ts",
     "./operation-history": "./src/sqlite/operation-history.ts",
@@ -73,6 +74,7 @@
     "./organizer-task-reminder-audience": "./src/sqlite/communications/task-reminder-audience.ts",
     "./message-releases": "./src/sqlite/communications/message-releases.ts",
     "./message-release-effect-domain": "./src/sqlite/communications/message-release-effect-domain.ts",
+    "./submission-confirmation-delivery": "./src/sqlite/communications/submission-confirmation-delivery.ts",
     "./release": "./src/sqlite/release.ts",
     "./release-native-effect-domain": "./src/sqlite/release-native-effect-domain.ts",
     "./files": "./src/sqlite/files.ts",
@@ -124,11 +126,11 @@
     "@jooevents/tasks": "workspace:*",
     "@jooevents/task-operations": "workspace:*",
     "@jooevents/template-authoring-operations": "workspace:*",
-    "drizzle-orm": "0.45.2"
+    "drizzle-orm": "0.45.2",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "bun-types": "1.3.6",
-    "typescript": "6.0.3",
-    "zod": "4.4.3"
+    "typescript": "6.0.3"
   }
 }

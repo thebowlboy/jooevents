@@ -225,9 +225,16 @@ export function createSQLiteDecisionAudienceSource(input: {
   readonly submissions: Pick<SubmissionTriageSourcePort, 'readSourceRow'>;
   /** Keys the address lookup fingerprint; ephemeral runtimes pass a process key. */
   readonly addressFingerprintKeyBytes: Uint8Array;
+  readonly addressFingerprintProfile: { readonly key: string; readonly version: number };
 }): SQLiteDecisionAudienceSource {
   if (!(input.addressFingerprintKeyBytes instanceof Uint8Array)
       || input.addressFingerprintKeyBytes.byteLength < 32) {
+    throw new SQLiteDecisionAudienceError('invalid_input');
+  }
+  if (typeof input.addressFingerprintProfile.key !== 'string'
+      || input.addressFingerprintProfile.key.length === 0
+      || !Number.isSafeInteger(input.addressFingerprintProfile.version)
+      || input.addressFingerprintProfile.version < 1) {
     throw new SQLiteDecisionAudienceError('invalid_input');
   }
   const fingerprintKey = Uint8Array.from(input.addressFingerprintKeyBytes);
@@ -433,8 +440,8 @@ export function createSQLiteDecisionAudienceSource(input: {
           lifecycle: 'active',
           lifecycleEvidence: evidenceRef('decision-audience.address.lifecycle', addressMaterial),
           lookupFingerprint: {
-            profile: 'communication.address-fingerprint.hmac-sha256',
-            version: 1,
+            profile: input.addressFingerprintProfile.key,
+            version: input.addressFingerprintProfile.version,
             keyedValue: createHmac('sha256', fingerprintKey)
               .update(contact.email, 'utf8')
               .digest('hex')

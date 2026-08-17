@@ -9,6 +9,12 @@ export function createSampleFormsPagePort(api: WorkspaceApi): FormsPagePort {
 			async applicationFormSurfaceId(): Promise<string | null> {
 				const { surfaces } = await api.templates.list();
 				return surfaces.find((surface) => surface.kind === 'application-form')?.id ?? null;
+			},
+			async applicationSurfacePublished(): Promise<boolean | null> {
+				// The sample public pages serve whenever their surface exists, so
+				// that existence is the honest sample answer.
+				const { surfaces } = await api.templates.list();
+				return surfaces.some((surface) => surface.kind === 'application-form');
 			}
 		}),
 		vocab: Object.freeze({ tracks: api.vocab.tracks, formats: api.vocab.formats }),

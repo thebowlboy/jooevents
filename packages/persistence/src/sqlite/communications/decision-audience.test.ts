@@ -276,7 +276,11 @@ function fixture() {
         return triageRow(submissionId, 'Declined Topic', 'Grace Hopper');
       }
     },
-    addressFingerprintKeyBytes: new Uint8Array(32).fill(0x42)
+    addressFingerprintKeyBytes: new Uint8Array(32).fill(0x42),
+    addressFingerprintProfile: {
+      key: 'communication.address-fingerprint.hmac-sha256',
+      version: 1
+    }
   });
   const repository = new SQLiteOrganizerAudiencePreviewRepository(sqlite, classifiedStore, {
     drafts: createOrganizerPreviewDraftBindingSource({

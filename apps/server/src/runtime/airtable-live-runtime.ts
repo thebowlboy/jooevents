@@ -73,8 +73,10 @@ export const AIRTABLE_INTEGRATION_MANAGE_ACCESS_POLICY: VersionedAccessPolicyRef
 export interface AirtableLiveRuntime {
   readonly integration: AirtableIntegrationHttpRuntime;
   readonly webhookIngress: AirtableWebhookIngressRuntime;
+  start(): void;
   wake(connectionId?: string): void;
-  close(): void;
+  hasInFlightWork(): boolean;
+  close(): Promise<void>;
 }
 
 /** Composes provider I/O only when an entry explicitly supplies Airtable configuration. */
@@ -88,6 +90,7 @@ export function createAirtableLiveRuntime(input: Readonly<{
     action: AirtableIntegrationAction;
   }>): Promise<'authorized' | 'unauthenticated' | 'forbidden'>;
   controlledOperations?: AirtableControlledOperationPort;
+  serializeWork?<Value>(work: () => Promise<Value>): Promise<Value>;
   controlledOperationsForClaim?(claim: import('@jooevents/airtable-sync').AirtableShadowSettleClaim): AirtableControlledOperationPort;
   fetch?: AirtableFetch;
   now?: () => number;
@@ -151,17 +154,25 @@ export function createAirtableLiveRuntime(input: Readonly<{
   });
   const reconciliation = new SQLiteAirtableReconciliationRepository(input.sqlite);
   const running = new Set<string>();
+  const activePasses = new Set<Promise<void>>();
   const scheduled = new Map<string, ReturnType<typeof setTimeout>>();
+  let sweep: ReturnType<typeof setInterval> | undefined;
+  let started = false;
   let closed = false;
 
   const schedule = (connectionId: string, delayMs = 0) => {
-    if (closed || scheduled.has(connectionId)) return;
+    if (!started || closed || scheduled.has(connectionId)) return;
     scheduled.set(connectionId, setTimeout(() => {
       scheduled.delete(connectionId);
-      void pump(connectionId).catch((error) => {
+      const pass = (input.serializeWork
+        ? input.serializeWork(() => pump(connectionId))
+        : pump(connectionId)).catch((error) => {
         console.error('[jooevents] Airtable sync wake failed', error);
         schedule(connectionId, 30_000);
+      }).finally(() => {
+        activePasses.delete(pass);
       });
+      activePasses.add(pass);
     }, delayMs));
   };
   const reconnectRequired = (code: string): boolean =>
@@ -604,25 +615,37 @@ export function createAirtableLiveRuntime(input: Readonly<{
       }
     }
   });
-  const current = repository.readWorkspaceConnection(input.workspaceId);
-  if (current?.state === 'provisioning' || current?.state === 'active') schedule(current.id);
-  const sweep = setInterval(() => {
-    const connection = repository.readWorkspaceConnection(input.workspaceId);
-    if (connection?.state === 'provisioning' || connection?.state === 'active') schedule(connection.id);
-  }, 60_000);
   return Object.freeze({
     integration,
     webhookIngress,
+    start() {
+      if (started || closed) return;
+      started = true;
+      const current = repository.readWorkspaceConnection(input.workspaceId);
+      if (current?.state === 'provisioning' || current?.state === 'active') schedule(current.id);
+      sweep = setInterval(() => {
+        const connection = repository.readWorkspaceConnection(input.workspaceId);
+        if (connection?.state === 'provisioning' || connection?.state === 'active') {
+          schedule(connection.id);
+        }
+      }, 60_000);
+      sweep.unref?.();
+    },
     wake(connectionId?: string) {
       const id = connectionId ?? repository.readWorkspaceConnection(input.workspaceId)?.id;
       if (id) schedule(id);
     },
-    close() {
-      if (closed) return;
+    hasInFlightWork: () => activePasses.size > 0,
+    async close() {
+      if (closed) {
+        await Promise.all([...activePasses]);
+        return;
+      }
       closed = true;
-      clearInterval(sweep);
+      if (sweep !== undefined) clearInterval(sweep);
       for (const timer of scheduled.values()) clearTimeout(timer);
       scheduled.clear();
+      await Promise.all([...activePasses]);
     }
   });
 }

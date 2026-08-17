@@ -4,7 +4,10 @@
   "version": "0.0.0",
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
+  "exports": {
+    ".": "./src/index.ts",
+    "./blob": "./src/blob.ts"
+  },
   "scripts": { "check": "tsc --noEmit", "test": "bun test" },
   "dependencies": {
     "@jooevents/contracts": "workspace:*",

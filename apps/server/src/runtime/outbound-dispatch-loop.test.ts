@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   FAKE_PROVIDER_SCENARIO_KEYS,
   OUTBOUND_EMAIL_DELIVERY_LEASE_MS,
@@ -33,11 +36,14 @@ const BASE_MS = Date.parse('2026-08-15T00:00:00.000Z');
 
 const digest = (value: string) => value.repeat(64);
 
-function harness() {
+function harness(options: {
+  readonly sqlite?: Database;
+  readonly installSchema?: boolean;
+} = {}) {
   let sequence = 0;
   const nextId = (prefix: string) => `${prefix}-${(sequence += 1)}`;
-  const sqlite = new Database(':memory:');
-  installSQLiteOutboundEmailDeliverySchema(sqlite);
+  const sqlite = options.sqlite ?? new Database(':memory:');
+  if (options.installSchema !== false) installSQLiteOutboundEmailDeliverySchema(sqlite);
   const envelope: ImmutableEmailEnvelope = createFakeEmailEnvelope({
     from: 'sender@example.test',
     to: 'recipient@example.test',
@@ -251,6 +257,31 @@ describe('outbound dispatch loop', () => {
       leaseClaimId: null
     });
     context.sqlite.close();
+  });
+
+  test('a pending durable delivery resumes after the SQLite process restarts', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'jooevents-outbound-restart-'));
+    const path = join(directory, 'delivery.sqlite');
+    try {
+      const before = harness({ sqlite: new Database(path) });
+      before.register('delivery-after-restart', BASE_MS);
+      before.sqlite.close();
+
+      const after = harness({
+        sqlite: new Database(path),
+        installSchema: false
+      });
+      const resumed = await after.loop.runOnce();
+      expect(resumed).toHaveLength(1);
+      expect(resumed[0]).toMatchObject({
+        deliveryId: 'delivery-after-restart',
+        state: 'accepted'
+      });
+      expect(after.ledger.listAttempts('delivery-after-restart')).toHaveLength(1);
+      after.sqlite.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   test('a delivery is claimable again once its attempt settles', async () => {

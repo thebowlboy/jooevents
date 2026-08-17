@@ -2,17 +2,18 @@
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import PublicSurfacePage from 'jooevents-public-surface-page';
-	import { createEmbedChildChannel } from '$lib/features/embeds/embed-document';
+	import { createEmbedChildChannel, type EmbedChildChannel } from '$lib/features/embeds/embed-document';
 	import type { SurfaceKind } from '$lib/api/types';
 
 	/**
 	 * `/embed/apply`, `/embed/schedule`, `/embed/speakers` — the same published
 	 * surface the hosted page serves, presented for somebody else's page: the
 	 * document sizes to its content instead of a viewport, and when the loader
-	 * identified this frame it speaks the versioned child protocol (ready and
-	 * measured height) to exactly the host origin the loader named. Framing
-	 * itself is governed by the response's `frame-ancestors` policy, which the
-	 * server derives from the surface's own allowlist.
+	 * identified this frame it speaks the versioned child protocol (ready,
+	 * measured height, and the completion notice) to exactly the host origin
+	 * the loader named. Framing itself is governed by the response's
+	 * `frame-ancestors` policy, which the server derives from the surface's own
+	 * allowlist.
 	 */
 	const ROUTES: Record<string, SurfaceKind> = {
 		apply: 'application-form',
@@ -23,15 +24,18 @@
 	const kind = $derived(ROUTES[page.params.kind ?? '']);
 
 	let body = $state<HTMLElement | null>(null);
+	/** The loader-identified frame protocol; stays null for a direct open. */
+	let channel = $state<EmbedChildChannel | null>(null);
 
 	onMount(() => {
 		const query = page.url.searchParams;
-		const channel = createEmbedChildChannel({
+		const opened = createEmbedChildChannel({
 			embedId: query.get('embed'),
 			hostOrigin: query.get('host'),
 			frame: window
 		});
-		if (!channel.active) return;
+		if (!opened.active) return;
+		channel = opened;
 
 		let reported = -1;
 		const measure = () => {
@@ -40,15 +44,15 @@
 			);
 			if (height !== reported) {
 				reported = height;
-				channel.reportHeight(height);
+				opened.reportHeight(height);
 			}
 		};
-		channel.announceReady();
+		opened.announceReady();
 		measure();
 		const observer = new ResizeObserver(measure);
 		observer.observe(document.documentElement);
 		if (body) observer.observe(body);
-		const stopListening = channel.listen((message) => {
+		const stopListening = opened.listen((message) => {
 			// Constrained display context only; the surface keeps the event's own
 			// brand, and the hint is recorded as data for the document.
 			document.documentElement.setAttribute(
@@ -59,6 +63,7 @@
 		return () => {
 			observer.disconnect();
 			stopListening();
+			channel = null;
 		};
 	});
 </script>
@@ -73,7 +78,14 @@
 
 {#if kind}
 	<div class="embed-doc" bind:this={body}>
-		<PublicSurfacePage {kind} />
+		<!-- The completion boundary of this presentation: a finished submit is
+		     reported to the identified host as the envelope-only protocol
+		     notice, and the success action opens the participant route in a
+		     top-level tab rather than signing in inside the host's frame. -->
+		<PublicSurfacePage
+			{kind}
+			presentation="embed"
+			onSubmitted={() => channel?.reportSubmissionComplete()} />
 	</div>
 {:else}
 	<div class="embed-doc embed-doc--missing" bind:this={body}>

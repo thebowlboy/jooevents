@@ -2,6 +2,7 @@ import type { Database } from 'bun:sqlite';
 import {
   createOperatorAuthorityPolicyCatalog,
   createOperatorCurrentAuthorityResolver,
+  type CurrentOperatorSessionRepository,
   type EffectAuthorityRecheckSource,
   type OperatorAuthorityPolicyCatalog,
   type OperatorAuthorityPolicyRegistration
@@ -33,6 +34,8 @@ export function createSQLiteOperatorAuthorityComposition(input: {
   readonly clock: Clock;
   readonly eventRelationships?: SQLiteOperatorEventRelationshipSource;
   readonly additionalSubjectRelationships?: SQLiteOperatorSubjectRelationshipSource;
+  /** Server-minted, process-local evidence for an approved action step. */
+  readonly internalSessions?: CurrentOperatorSessionRepository;
 }): SQLiteOperatorAuthorityComposition {
   const policies = createOperatorAuthorityPolicyCatalog(input.policies);
   const persistence = createSQLiteOperatorAuthorityPersistence({
@@ -45,10 +48,22 @@ export function createSQLiteOperatorAuthorityComposition(input: {
       ? {}
       : { additionalSubjectRelationships: input.additionalSubjectRelationships })
   });
+  const sessions = input.internalSessions === undefined
+    ? persistence.sessions
+    : Object.freeze({
+        async resolveCurrent(
+          request: Parameters<CurrentOperatorSessionRepository['resolveCurrent']>[0]
+        ) {
+          const internal = await input.internalSessions!.resolveCurrent(request);
+          return internal.kind === 'current'
+            ? internal
+            : persistence.sessions.resolveCurrent(request);
+        }
+      }) satisfies CurrentOperatorSessionRepository;
   const resolver = createOperatorCurrentAuthorityResolver({
     workspaceId: input.workspaceId,
     policies,
-    sessions: persistence.sessions,
+    sessions,
     memberships: persistence.memberships,
     authorization: persistence.authorization,
     scopeRelationships: persistence.scopeRelationships
@@ -63,10 +78,22 @@ export function createSQLiteOperatorAuthorityComposition(input: {
       ? {}
       : { additionalSubjectRelationships: input.additionalSubjectRelationships })
   });
+  const transactionSessions = input.internalSessions === undefined
+    ? transactionPersistence.sessions
+    : Object.freeze({
+        async resolveCurrent(
+          request: Parameters<CurrentOperatorSessionRepository['resolveCurrent']>[0]
+        ) {
+          const internal = await input.internalSessions!.resolveCurrent(request);
+          return internal.kind === 'current'
+            ? internal
+            : transactionPersistence.sessions.resolveCurrent(request);
+        }
+      }) satisfies CurrentOperatorSessionRepository;
   const rawTransactionResolver = createOperatorCurrentAuthorityResolver({
     workspaceId: input.workspaceId,
     policies,
-    sessions: transactionPersistence.sessions,
+    sessions: transactionSessions,
     memberships: transactionPersistence.memberships,
     authorization: transactionPersistence.authorization,
     scopeRelationships: transactionPersistence.scopeRelationships

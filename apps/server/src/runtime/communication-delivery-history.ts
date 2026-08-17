@@ -8,6 +8,10 @@ import {
   type OrganizerCommunicationHistoryItem
 } from '@jooevents/contracts/communications/organizer';
 import { sendMessagesAuthorInputSchema } from '@jooevents/communication-operations';
+import {
+  parseSubmissionConfirmationReleasePlan,
+  type SubmissionConfirmationReleasePlan
+} from '@jooevents/persistence/submission-confirmation-delivery';
 import { parseEventId, parseWorkspaceId } from '@jooevents/kernel';
 import { z } from 'zod';
 
@@ -148,17 +152,28 @@ export function createSQLiteCommunicationDeliveryHistorySource(input: {
     scope: { workspaceId: string; eventId: string },
     link: CommitLinkRow
   ): OrganizerCommunicationHistoryItem {
-    let plan: ReturnType<typeof sendMessagesAuthorInputSchema.parse>;
+    let plan: ReturnType<typeof sendMessagesAuthorInputSchema.parse>
+      | SubmissionConfirmationReleasePlan;
     try {
       plan = sendMessagesAuthorInputSchema.parse(JSON.parse(link.plan_json));
-    } catch (error) {
-      throw new SQLiteCommunicationDeliveryHistoryError('data_corrupt', error);
+    } catch (sendPlanError) {
+      try {
+        plan = parseSubmissionConfirmationReleasePlan(JSON.parse(link.plan_json));
+      } catch {
+        throw new SQLiteCommunicationDeliveryHistoryError('data_corrupt', sendPlanError);
+      }
     }
     if (plan.batchId !== link.batch_id
         || plan.scope.workspaceId !== scope.workspaceId
         || plan.scope.eventId !== scope.eventId) {
       throw new SQLiteCommunicationDeliveryHistoryError('data_corrupt');
     }
+    const submissionPlan = 'kind' in plan && plan.kind === 'submission_confirmation'
+      ? plan
+      : undefined;
+    const sendPlan = submissionPlan === undefined
+      ? plan as ReturnType<typeof sendMessagesAuthorInputSchema.parse>
+      : undefined;
 
     const materialized = sqlite.query<{ readonly total: number }, [string, string, string]>(`
       SELECT count(*) AS total FROM communication_message_releases
@@ -198,24 +213,45 @@ export function createSQLiteCommunicationDeliveryHistorySource(input: {
       historyItemId: link.receipt_id,
       messageRefId: link.batch_id,
       purposeRevision: plan.purposeRevision,
-      ...(plan.templateRevision === undefined
+      ...(sendPlan?.templateRevision === undefined
         ? {}
-        : { templateRevision: plan.templateRevision }),
+        : { templateRevision: sendPlan.templateRevision }
+      ),
       subject: plan.subject,
       audienceLabel: clampLabel(plan.audienceLabel, 200),
       state,
       ...(stateReasonCode === undefined ? {} : { stateReasonCode }),
       // The commit ceremony records principal keys, not display identities;
       // the generic human label is the honest v1 projection of that evidence.
-      actor: { kind: 'human', displayLabel: 'Workspace operator' },
-      cause: {
-        summary: 'Committed from an adopted, reviewed decision-notification preview.',
-        subjectKind: 'communication_preview',
-        subjectRefId: plan.preview.identity.audienceSpecId,
-        subjectVersion: plan.preview.identity.previewGeneration
-      },
+      actor: submissionPlan !== undefined
+        ? {
+            kind: 'standing_policy',
+            displayLabel: 'Submission confirmation policy',
+            policyRevision: {
+              reference: {
+                key: submissionPlan.policy.key,
+                version: submissionPlan.policy.version
+              },
+              definitionDigestSha256: submissionPlan.policy.digestSha256
+            }
+          }
+        : { kind: 'human', displayLabel: 'Workspace operator' },
+      cause: submissionPlan !== undefined
+        ? {
+            summary: 'Registered after the public application was received.',
+            subjectKind: 'submission',
+            subjectRefId: submissionPlan.submissionId,
+            subjectVersion: 1
+          }
+        : {
+            summary: 'Committed from an adopted, reviewed decision-notification preview.',
+            subjectKind: 'communication_preview',
+            subjectRefId: sendPlan!.preview.identity.audienceSpecId,
+            subjectVersion: sendPlan!.preview.identity.previewGeneration
+          },
       counts: {
-        audience: { knowledge: 'known', value: plan.releases.length },
+        audience: { knowledge: 'known', value: submissionPlan === undefined
+          ? sendPlan!.releases.length : 1 },
         materialized: { knowledge: 'known', value: materialized },
         accepted: { knowledge: 'known', value: accepted },
         // Provider acceptance is the strongest evidence the ledger records;

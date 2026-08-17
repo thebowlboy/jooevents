@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readdirSync,
+  rmSync,
+  symlinkSync
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FileStorageKeyError, assertFileStorageKey, newFileStorageKey } from './blob';
@@ -112,6 +120,36 @@ describe('filesystem blob store (D1 v1 driver)', () => {
       bytes: chunked(new Uint8Array([1])),
       maximumByteSize: 10
     })).rejects.toThrow(FileStorageKeyError);
+  });
+
+  test('refuses an intermediate symlink instead of writing beyond the pinned root', async () => {
+    const root = newRoot();
+    const outside = newRoot();
+    mkdirSync(join(root, 'files'), { mode: 0o700 });
+    symlinkSync(outside, join(root, 'files', FIXTURE_SCOPE.workspaceId));
+    const store = createFilesystemFileBlobStore({ rootDirectory: root });
+    const key = newFileStorageKey(FIXTURE_SCOPE, '22222222-0000-4000-8000-000000000006');
+
+    await expect(store.writeStream({
+      key,
+      bytes: chunked(new Uint8Array([1, 2, 3])),
+      maximumByteSize: 10
+    })).rejects.toThrow('object_directory_unsafe');
+    expect(readdirSync(outside)).toEqual([]);
+  });
+
+  test('refuses a symlink or group-readable storage root', () => {
+    const target = newRoot();
+    const parent = newRoot();
+    const link = join(parent, 'blob-link');
+    symlinkSync(target, link);
+    expect(() => createFilesystemFileBlobStore({ rootDirectory: link }))
+      .toThrow('root_directory_invalid');
+
+    const permissive = newRoot();
+    chmodSync(permissive, 0o750);
+    expect(() => createFilesystemFileBlobStore({ rootDirectory: permissive }))
+      .toThrow('root_directory_invalid');
   });
 
   test('a missing root refuses at construction, never at first write', () => {

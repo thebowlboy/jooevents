@@ -8,7 +8,8 @@ import {
   DURABLE_CRYPTO_KEY_ENVIRONMENT_DUTIES,
   DurableCryptoProfileConfigurationError,
   assertDurableCryptoProfileComposition,
-  createDurableCryptoProfileComposition
+  createDurableCryptoProfileComposition,
+  type DurableCryptoProfileComposition
 } from './durable-crypto-profiles';
 
 function key(seed: number): string {
@@ -19,7 +20,8 @@ function environment() {
   return Object.freeze({
     requestHashKeys: `2:${key(1)},1:${key(2)}`,
     idempotencyKeys: `2:${key(3)},1:${key(4)}`,
-    classifiedPayloadKeys: `2:${key(5)},1:${key(6)}`
+    classifiedPayloadKeys: `2:${key(5)},1:${key(6)}`,
+    persistentHmacKeys: `2:${key(7)},1:${key(8)}`
   });
 }
 
@@ -88,11 +90,57 @@ describe('durable crypto profile composition', () => {
     expect(Object.keys(composition).sort()).toEqual([
       'classifiedPayloadEncryptionProfiles',
       'idempotencyCredentialSealer',
-      'requestHashSealer'
+      'profileSelection',
+      'requestHashSealer',
+      'withPersistentHmacKey',
+      'withPersistentHmacKeySelection'
     ]);
     expect(JSON.stringify(composition)).toBe('{}');
     expect(JSON.stringify(selected)).not.toContain(key(5));
     expect(JSON.stringify(selected)).not.toContain(key(6));
+  });
+
+  test('derives stable purpose-distinct persistent HMAC keys and clears the temporary view', () => {
+    const first = createDurableCryptoProfileComposition(environment());
+    const second = createDurableCryptoProfileComposition(environment());
+    const reference = profile('security.workspace-invitation-lookup', 1);
+    let supplied: Uint8Array | undefined;
+    const deriveDigest = (composition: DurableCryptoProfileComposition) =>
+      composition.withPersistentHmacKey(reference, (keyBytes) => {
+        supplied = keyBytes;
+        return Bun.CryptoHasher.hash('sha256', keyBytes, 'hex');
+      });
+
+    const firstDigest = deriveDigest(first);
+    expect(firstDigest).toBe(deriveDigest(second));
+    expect(firstDigest).not.toBe(second.withPersistentHmacKey(
+      profile('security.communication-address-fingerprint', 1),
+      (keyBytes) => Bun.CryptoHasher.hash('sha256', keyBytes, 'hex')
+    ));
+    expect(supplied).toBeDefined();
+    expect(supplied!.every((byte) => byte === 0)).toBe(true);
+  });
+
+  test('selects newest and retained versions and clears every persistent HMAC view', () => {
+    const composition = createDurableCryptoProfileComposition(environment());
+    expect(composition.profileSelection('classified_payload', 'encryption.intake-answer'))
+      .toEqual({
+        active: { key: 'encryption.intake-answer', version: 2 },
+        retained: [{ key: 'encryption.intake-answer', version: 1 }]
+      });
+    const supplied: Uint8Array[] = [];
+    const versions = composition.withPersistentHmacKeySelection(
+      'security.workspace-invitation-lookup',
+      (selection) => {
+        supplied.push(selection.active.keyBytes, ...selection.retained.map((item) => item.keyBytes));
+        return [
+          selection.active.reference.version,
+          ...selection.retained.map((item) => item.reference.version)
+        ];
+      }
+    );
+    expect(versions).toEqual([2, 1]);
+    expect(supplied.every((bytes) => bytes.every((byte) => byte === 0))).toBe(true);
   });
 
   test('fails closed for missing, weak, duplicate, unordered, or mis-versioned key rings', () => {
@@ -143,6 +191,14 @@ describe('durable crypto profile composition', () => {
       DURABLE_CRYPTO_KEY_ENVIRONMENT_DUTIES.idempotency,
       'duplicate_key_material',
       [key(1)]
+    );
+    expectSafeError(
+      () => createDurableCryptoProfileComposition({
+        ...source,
+        persistentHmacKeys: `1:${key(8)}`
+      }),
+      DURABLE_CRYPTO_KEY_ENVIRONMENT_DUTIES.persistentHmac,
+      'misaligned_key_versions'
     );
   });
 

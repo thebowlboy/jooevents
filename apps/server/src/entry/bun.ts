@@ -1,7 +1,12 @@
 import { resolve } from 'node:path';
 import { loadConfig } from '../config';
+import { loadAirtableProviderConfig } from '../config/airtable';
+import {
+  loadCommunicationsProviderConfig,
+  loadMailSenderConfig
+} from '../config/communications';
 import { startManagedBunRuntime } from '../runtime/bun-runtime-lifecycle';
-import { createConfiguredSQLiteAuthRuntime } from '../runtime/configured-sqlite-auth-runtime';
+import { createConfiguredSQLiteLiveRuntime } from '../runtime/configured-sqlite-live-runtime';
 import { validateLiveBuildIdentity } from '../runtime/live-build-identity';
 import { createRuntimeRequestHandler, resolveBunListenerConfiguration } from '../runtime/request-handler';
 
@@ -14,7 +19,15 @@ const buildIdentity = listener.mode === 'production'
   ? validateLiveBuildIdentity(buildDirectory)
   : undefined;
 const config = loadConfig(Bun.env);
-const runtime = createConfiguredSQLiteAuthRuntime({ config });
+const airtable = loadAirtableProviderConfig(Bun.env);
+const runtime = await createConfiguredSQLiteLiveRuntime({
+  config,
+  communications: {
+    provider: loadCommunicationsProviderConfig(Bun.env),
+    mailSender: loadMailSenderConfig(Bun.env)
+  },
+  ...(airtable ? { airtable: { provider: airtable } } : {})
+});
 
 await startManagedBunRuntime({
   runtime,
@@ -23,12 +36,14 @@ await startManagedBunRuntime({
       mode: listener.mode,
       backend: runtime.app.fetch,
       buildDirectory,
-      ...(buildIdentity ? { buildIdentity } : {})
+      ...(buildIdentity ? { buildIdentity } : {}),
+      embedFraming: runtime.embedFraming
     });
     return Bun.serve({
       hostname: listener.hostname,
       port: listener.port,
       development: listener.development,
+      maxRequestBodySize: listener.maxRequestBodySize,
       fetch
     });
   },

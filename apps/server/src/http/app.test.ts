@@ -11,6 +11,7 @@ import { createAuth } from '../auth/better-auth';
 import { createSQLiteAuthPrincipalReader } from '../auth/principal-reader';
 import { loadConfig } from '../config';
 import { createHttpApp } from './app';
+import { RequestSerializationUnavailableError } from './request-serialization';
 
 const databases: ReturnType<typeof openSQLite>[] = [];
 const config = loadConfig({
@@ -20,6 +21,7 @@ const config = loadConfig({
   JOOEVENTS_REQUEST_HASH_KEYS: `1:${Buffer.alloc(32, 1).toString('base64url')}`,
   JOOEVENTS_IDEMPOTENCY_KEYS: `1:${Buffer.alloc(32, 2).toString('base64url')}`,
   JOOEVENTS_CLASSIFIED_PAYLOAD_KEYS: `1:${Buffer.alloc(32, 3).toString('base64url')}`,
+  JOOEVENTS_PERSISTENT_HMAC_KEYS: `1:${Buffer.alloc(32, 4).toString('base64url')}`,
   JOOEVENTS_GOOGLE_CLIENT_ID: 'google-client',
   JOOEVENTS_GOOGLE_CLIENT_SECRET: 'google-secret',
   JOOEVENTS_ADMISSION_MODE: 'pending',
@@ -189,5 +191,37 @@ describe('HTTP/auth composition', () => {
       expect(response.headers.get('x-correlation-id')).toBeTruthy();
       expect(await response.json()).toMatchObject({ code: 'route_not_found', retryable: false });
     }
+  });
+
+  test('maps a saturated SQLite request queue to one retryable disclosure-safe refusal', async () => {
+    const opened = openSQLite(':memory:');
+    databases.push(opened);
+    const auth = createAuth(config, createSQLiteBetterAuthDatabase(opened.sqlite));
+    const app = createHttpApp({
+      auth,
+      baseUrl: config.baseUrl,
+      workspaceId: 'workspace_summit',
+      accessContext: {
+        ensureAuthPrincipalProvisioned: async () => {
+          throw new Error('must not provision a refused request');
+        }
+      },
+      requestSerialization: {
+        run: async () => {
+          throw new RequestSerializationUnavailableError('queue_full');
+        }
+      }
+    });
+
+    const response = await app.request('/api/me/access-context');
+    expect(response.status).toBe(503);
+    expect(response.headers.get('retry-after')).toBe('1');
+    expect(response.headers.get('cache-control')).toContain('no-store');
+    expect(correlationIdSchema.safeParse(response.headers.get('x-correlation-id')).success).toBe(true);
+    expect(await response.json()).toMatchObject({
+      code: 'service_busy',
+      retryable: true,
+      correlationId: response.headers.get('x-correlation-id')
+    });
   });
 });

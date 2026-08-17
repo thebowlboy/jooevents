@@ -10,6 +10,7 @@ const valid = {
   JOOEVENTS_REQUEST_HASH_KEYS: `2:${durableKey(1)},1:${durableKey(2)}`,
   JOOEVENTS_IDEMPOTENCY_KEYS: `2:${durableKey(3)},1:${durableKey(4)}`,
   JOOEVENTS_CLASSIFIED_PAYLOAD_KEYS: `2:${durableKey(5)},1:${durableKey(6)}`,
+  JOOEVENTS_PERSISTENT_HMAC_KEYS: `2:${durableKey(7)},1:${durableKey(8)}`,
   JOOEVENTS_GOOGLE_CLIENT_ID: 'google-client',
   JOOEVENTS_GOOGLE_CLIENT_SECRET: 'google-secret',
   JOOEVENTS_ADMISSION_MODE: 'pending',
@@ -89,6 +90,7 @@ describe('loadEphemeralLiveConfig', () => {
       JOOEVENTS_REQUEST_HASH_KEYS: _requestHashKeys,
       JOOEVENTS_IDEMPOTENCY_KEYS: _idempotencyKeys,
       JOOEVENTS_CLASSIFIED_PAYLOAD_KEYS: _classifiedPayloadKeys,
+      JOOEVENTS_PERSISTENT_HMAC_KEYS: _persistentHmacKeys,
       ...withoutStoragePaths } = environment;
     expect(loadEphemeralLiveConfig(withoutStoragePaths).databaseDriver).toBe('sqlite');
   });

@@ -59,6 +59,13 @@ test('J1 — cold start reaches an open CFP', async () => {
       venueNote: '', dayStart: '09:00', dayEnd: '18:00', slotMinutes: 30
     }, 'authority.not_authorized');
 
+    await organizer.do('program_vocabulary.create', {
+      kind: 'track', expectedSetVersion: 1, name: 'General program'
+    });
+    await organizer.do('program_vocabulary.create', {
+      kind: 'format', expectedSetVersion: 2, name: 'Conference talk'
+    });
+
     let registry!: { readonly version: number };
     await organizer.expectRead('field_registry.snapshot.read', (projection) => {
       registry = projection as typeof registry;

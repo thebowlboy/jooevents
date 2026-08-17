@@ -14,15 +14,20 @@
 	 * counts await the submission→target join).
 	 */
 	import type { CoverageRow, ReviewerCoverage } from '$lib/api/types';
+	import { TrackChip } from '$lib/ui';
 
 	let {
 		coverage,
 		generalists,
+		trackOrder,
 		activeCount,
 		invitedCount
 	}: {
 		coverage: ReviewerCoverage;
 		generalists: number;
+		/** The event's own track order — the shared accent walk, so a track row
+		 * here wears the same chip as the roster and every other surface. */
+		trackOrder: readonly string[];
 		/** Active reviewers on the roster; 0 means nobody has arrived yet. */
 		activeCount: number;
 		invitedCount: number;
@@ -55,7 +60,14 @@
 		{@const href = submissionsHref(row)}
 		<li class="row">
 			<span class="row__label">
-				{row.label}
+				{#if row.ref.kind === 'track'}
+					<!-- A track value rendered as a value keeps its one product-wide
+					     representation, so this list and the roster chips above answer
+					     to the same hue. -->
+					<TrackChip name={row.label} id={row.ref.id} order={trackOrder} />
+				{:else}
+					{row.label}
+				{/if}
 				{#if row.retired}
 					<span class="row__flag">retired — consider re-scoping</span>
 				{/if}
@@ -242,6 +254,20 @@
 	.row__label {
 		font-size: var(--je-font-size-sm);
 		min-inline-size: 0;
+	}
+
+	/* The label column is the reading column, and the full name lives in
+	   `title`, which a touch reader never receives — so the chip wraps rather
+	   than truncating, the same override the submissions and decisions records
+	   apply to the shared chip at record width. */
+	.row__label :global(.ui-track) {
+		white-space: normal;
+	}
+
+	.row__label :global(.ui-track__label) {
+		overflow: visible;
+		text-overflow: clip;
+		white-space: normal;
 	}
 
 	.row__flag {

@@ -688,6 +688,7 @@ export interface SQLiteOrganizerAudiencePreviewRepositoryOptions {
   readonly render: OrganizerPreviewRenderPort;
   readonly digestProfile: OrganizerPreviewDigestProfile;
   readonly audienceCursorKeyBytes: Uint8Array;
+  readonly audienceCursorRetainedKeyBytes?: readonly Uint8Array[];
   /** Live registered-query sources; recipes stay minted immutable rows. */
   readonly registeredSources?: readonly SQLiteRegisteredAudienceSourceDelegate[];
   /** Deliberately short: prepared material is process-local and nonrenewable. */
@@ -700,7 +701,7 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
   OrganizerAudienceSourcePort,
   OrganizerAddressPolicyPort,
   OrganizerAudiencePreviewReadPort {
-  readonly #cursorKey: Uint8Array;
+  readonly #cursorKeys: readonly Uint8Array[];
   readonly #preparedTtlMs: number;
   readonly #preparedRecords = new WeakMap<object, PreparedRecord>();
   readonly #livePreparedRecords = new Set<PreparedRecord>();
@@ -732,7 +733,15 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
       registeredSources.set(delegate.sourceDefinitionKey, delegate);
     }
     this.#registeredSources = registeredSources;
-    this.#cursorKey = Uint8Array.from(options.audienceCursorKeyBytes);
+    this.#cursorKeys = Object.freeze([
+      Uint8Array.from(options.audienceCursorKeyBytes),
+      ...(options.audienceCursorRetainedKeyBytes ?? []).map((keyBytes) => {
+        if (!(keyBytes instanceof Uint8Array) || keyBytes.byteLength < 32) {
+          throw new SQLiteOrganizerAudiencePreviewError('invalid_input');
+        }
+        return Uint8Array.from(keyBytes);
+      })
+    ]);
     this.#preparedTtlMs = ttl;
   }
 
@@ -1394,8 +1403,8 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
     });
   }
 
-  #audienceCursorTag(bindingDigestSha256: string, offset: number): string {
-    return createHmac('sha256', this.#cursorKey)
+  #audienceCursorTag(keyBytes: Uint8Array, bindingDigestSha256: string, offset: number): string {
+    return createHmac('sha256', keyBytes)
       .update(canonicalJsonText({
         schemaVersion: 1,
         namespace: 'communication.audience-options.cursor',
@@ -1407,7 +1416,11 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
   }
 
   #issueAudienceCursor(bindingDigestSha256: string, offset: number): string {
-    return `cur1_${offset.toString(36)}_${this.#audienceCursorTag(bindingDigestSha256, offset)}`;
+    return `cur1_${offset.toString(36)}_${this.#audienceCursorTag(
+      this.#cursorKeys[0]!,
+      bindingDigestSha256,
+      offset
+    )}`;
   }
 
   #readAudienceCursor(bindingDigestSha256: string, cursor: string | undefined): number {
@@ -1416,7 +1429,10 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
     if (match === null) throw new SQLiteOrganizerAudiencePreviewError('invalid_input');
     const offset = Number.parseInt(match[1]!, 36);
     if (!Number.isSafeInteger(offset) || offset < 0
-        || !equalAscii(this.#audienceCursorTag(bindingDigestSha256, offset), match[2]!)) {
+        || !this.#cursorKeys.some((keyBytes) => equalAscii(
+          this.#audienceCursorTag(keyBytes, bindingDigestSha256, offset),
+          match[2]!
+        ))) {
       throw new SQLiteOrganizerAudiencePreviewError('invalid_input');
     }
     return offset;

@@ -7,6 +7,7 @@ import {
 import { loadAirtableProviderConfig } from '../config/airtable';
 import { createDevFixtureClock } from '../runtime/dev-fixture-clock';
 import { createEphemeralLiveRuntime } from '../runtime/ephemeral-live';
+import { startManagedBunRuntime } from '../runtime/bun-runtime-lifecycle';
 import {
   createRuntimeRequestHandler,
   resolveBunListenerConfiguration
@@ -25,9 +26,8 @@ const listener = resolveBunListenerConfiguration(Bun.env);
 const airtable = loadAirtableProviderConfig(Bun.env);
 const fixtureClock = createDevFixtureClock();
 // Identical listener/runtime composition to the empty ephemeral live entry:
-// the dev-only issued-link token oracle mounts only in development mode, which
-// binds loopback (127.0.0.1). Production mode binds 0.0.0.0, so the oracle is
-// structurally absent beyond loopback.
+// the dev-only issued-link token oracle mounts only in development mode. The
+// production composition stays oracle-free regardless of bind address.
 const runtime = await createEphemeralLiveRuntime({
   config,
   devFixtures: listener.mode === 'development',
@@ -74,18 +74,17 @@ const fetch = createRuntimeRequestHandler({
   embedFraming: runtime.embedFraming
 });
 
-const server = Bun.serve({
-  hostname: listener.hostname,
-  port: listener.port,
-  development: listener.development,
-  fetch
+await startManagedBunRuntime({
+  runtime,
+  start: () => Bun.serve({
+    hostname: listener.hostname,
+    port: listener.port,
+    development: listener.development,
+    maxRequestBodySize: listener.maxRequestBodySize,
+    fetch
+  }),
+  onSignalError: (error) => {
+    process.exitCode = 1;
+    console.error('[jooevents] seeded ephemeral runtime shutdown failed', error);
+  }
 });
-let closing = false;
-const close = async () => {
-  if (closing) return;
-  closing = true;
-  await server.stop();
-  runtime.close();
-};
-process.once('SIGINT', () => { void close(); });
-process.once('SIGTERM', () => { void close(); });

@@ -1,6 +1,7 @@
 import { expect } from 'bun:test';
-import { existsSync, lstatSync, realpathSync, rmSync } from 'node:fs';
-import { basename, dirname } from 'node:path';
+import { chmodSync, existsSync, lstatSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { basename, dirname, join } from 'node:path';
 import { operationHistoryPageSchema } from '@jooevents/contracts/operation-history';
 import {
   INTAKE_PUBLIC_CONTINUATION_HEADER,
@@ -8,12 +9,17 @@ import {
   INTAKE_PUBLIC_FORM_SELECTOR_HEADER
 } from '@jooevents/persistence/intake-public-ceremony';
 import { RELEASE_PUBLIC_SCHEDULE_READ_PATH } from '@jooevents/release-operations';
-import { loadEphemeralLiveConfig } from '../../config';
+import { openSQLite } from '@jooevents/persistence';
+import { loadConfig, loadEphemeralLiveConfig, type ConfiguredServerConfig } from '../../config';
 import {
   createEphemeralLiveRuntime,
   type EphemeralLiveRuntime,
   type EphemeralLiveTestActor
 } from '../../runtime/ephemeral-live';
+import {
+  createConfiguredSQLiteLiveRuntimeForTesting,
+  type ConfiguredSQLiteLiveRuntime
+} from '../../runtime/configured-sqlite-live-runtime';
 import type { J2FlowWorld } from './j2-spine.flow';
 
 type FlowResult = {
@@ -50,15 +56,39 @@ const config = loadEphemeralLiveConfig({
   JOOEVENTS_DATA_DIRECTORY: '/tmp/ignored-flow-test'
 });
 
+type FlowRuntime = EphemeralLiveRuntime | ConfiguredSQLiteLiveRuntime;
+
+function retainedConfig(dataDirectory: string): ConfiguredServerConfig {
+  const key = (seed: number) => `1:${Buffer.alloc(32, seed).toString('base64url')}`;
+  return loadConfig({
+    JOOEVENTS_BASE_URL: config.baseUrl,
+    JOOEVENTS_TRUSTED_ORIGINS: '',
+    JOOEVENTS_AUTH_SECRETS: config.authSecrets.map((entry) => `${entry.version}:${entry.value}`).join(','),
+    JOOEVENTS_REQUEST_HASH_KEYS: key(1),
+    JOOEVENTS_IDEMPOTENCY_KEYS: key(2),
+    JOOEVENTS_CLASSIFIED_PAYLOAD_KEYS: key(3),
+    JOOEVENTS_PERSISTENT_HMAC_KEYS: key(4),
+    JOOEVENTS_GOOGLE_CLIENT_ID: 'flow-test-google-client',
+    JOOEVENTS_GOOGLE_CLIENT_SECRET: 'flow-test-google-secret',
+    JOOEVENTS_ADMISSION_MODE: 'reservation_only',
+    JOOEVENTS_BOOTSTRAP_OWNER_EMAIL: 'flow-owner@jooevents.example',
+    JOOEVENTS_DATABASE_DRIVER: 'sqlite',
+    JOOEVENTS_DATABASE_PATH: 'jooevents.sqlite',
+    JOOEVENTS_BLOB_DRIVER: 'filesystem',
+    JOOEVENTS_DATA_DIRECTORY: dataDirectory
+  });
+}
+
 function attemptKey(): string {
   return `flow-${crypto.randomUUID()}-${crypto.randomUUID()}`;
 }
 
-function cleanupEphemeralDirectory(path: string): void {
+function cleanupFlowDirectory(path: string): void {
   if (!existsSync(path)) return;
   const stat = lstatSync(path);
   if (!stat.isDirectory() || stat.isSymbolicLink() || realpathSync(path) !== path
-      || !basename(path).startsWith('jooevents-ephemeral-runtime-')
+      || !['jooevents-ephemeral-runtime-', 'jooevents-retained-flow-']
+        .some((prefix) => basename(path).startsWith(prefix))
       || dirname(path) !== realpathSync(dirname(path))) {
     throw new Error(`unsafe_flow_world_cleanup:${path}`);
   }
@@ -188,7 +218,7 @@ export class ActorHandle {
 }
 
 class PublicHandle {
-  constructor(private readonly runtime: EphemeralLiveRuntime, private readonly world: FlowWorld) {}
+  constructor(private readonly runtime: FlowRuntime, private readonly world: FlowWorld) {}
 
   async submitForm<T>(formId: string, answers: readonly unknown[]): Promise<FlowReceipt<T>> {
     const bootstrap = `${crypto.randomUUID().replaceAll('-', '')}${crypto.randomUUID().replaceAll('-', '')}`;
@@ -257,7 +287,7 @@ class SubmitterHandle {
   #cookie: string | undefined;
 
   constructor(
-    private readonly runtime: EphemeralLiveRuntime,
+    private readonly runtime: FlowRuntime,
     private readonly world: FlowWorld,
     private readonly email: string
   ) {}
@@ -286,7 +316,7 @@ class SubmitterHandle {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        origin: config.baseUrl,
+        origin: this.world.baseUrl(),
         'x-correlation-id': crypto.randomUUID()
       },
       body: JSON.stringify(body)
@@ -299,7 +329,7 @@ class SubmitterHandle {
     if (link.kind !== 'issued' || typeof link.url !== 'string') {
       throw new Error('portal issued-link fixture did not issue the submitter link');
     }
-    const token = new URL(link.url, config.baseUrl).searchParams.get('token');
+    const token = new URL(link.url, this.world.baseUrl()).searchParams.get('token');
     if (!token) throw new Error('portal issued-link fixture returned a link without a token');
     const completed = await post('/api/portal/entry/complete', { token });
     if (completed.status !== 200) throw new Error(`portal link completion returned HTTP ${completed.status}`);
@@ -315,21 +345,56 @@ export class FlowWorld implements J2FlowWorld {
   #trace: string[] = [];
 
   private constructor(
-    readonly runtime: EphemeralLiveRuntime,
+    public runtime: FlowRuntime,
     private readonly actors: {
       readonly organizer: EphemeralLiveTestActor;
       readonly reviewer: EphemeralLiveTestActor;
       readonly secondOrganizer: EphemeralLiveTestActor;
-    }
+    },
+    private readonly cleanupDirectory: string | null,
+    private retainedConfiguration?: ConfiguredServerConfig
   ) {}
 
   static async create(input: {
-    readonly database?: 'default' | 'migration-initialized-empty';
+    readonly database?: 'default' | 'migration-initialized-empty' | 'retained-frozen';
+    /** Test-only installed/restored runtime configuration; the caller owns its directory. */
+    readonly retainedConfiguration?: ConfiguredServerConfig;
   } = {}): Promise<FlowWorld> {
-    const runtime = await createEphemeralLiveRuntime({ config, devFixtures: true });
+    let runtime: FlowRuntime;
+    let cleanupDirectory: string | null;
+    let retainedConfiguration: ConfiguredServerConfig | undefined;
+    if (input.retainedConfiguration) {
+      if (input.database !== 'retained-frozen'
+          || input.retainedConfiguration.databaseDriver !== 'sqlite'
+          || input.retainedConfiguration.blobDriver !== 'filesystem'
+          || !input.retainedConfiguration.dataDirectory) {
+        throw new TypeError('flow_world_external_retained_configuration_invalid');
+      }
+      cleanupDirectory = null;
+      retainedConfiguration = input.retainedConfiguration;
+      runtime = await createConfiguredSQLiteLiveRuntimeForTesting({ config: retainedConfiguration });
+    } else if (input.database === 'retained-frozen') {
+      const ownedDirectory = realpathSync(mkdtempSync(`${join(tmpdir(), 'jooevents-retained-flow-')}`));
+      chmodSync(ownedDirectory, 0o700);
+      cleanupDirectory = ownedDirectory;
+      const initialized = openSQLite(join(ownedDirectory, 'jooevents.sqlite'), {
+        migrationPolicy: 'apply',
+        databaseClass: 'frozen_release'
+      });
+      initialized.sqlite.close();
+      retainedConfiguration = retainedConfig(ownedDirectory);
+      runtime = await createConfiguredSQLiteLiveRuntimeForTesting({ config: retainedConfiguration });
+    } else {
+      runtime = await createEphemeralLiveRuntime({ config, devFixtures: true });
+      cleanupDirectory = runtime.database.directoryPath;
+    }
     const support = runtime.testSupport;
     if (!support) throw new Error('flow world test support was not composed');
     if (input.database === 'migration-initialized-empty') {
+      if (!('retainedBaseline' in runtime.database) || !('installedSchemaArtifacts' in runtime.database)) {
+        runtime.close();
+        throw new Error('flow_world_ephemeral_database_shape_missing');
+      }
       const baseline = runtime.database.retainedBaseline;
       const operationCount = runtime.database.sqlite.query<{ readonly count: number }, []>(
         'SELECT count(*) AS count FROM operation_log'
@@ -345,7 +410,12 @@ export class FlowWorld implements J2FlowWorld {
         throw new Error('flow_world_migration_initialized_empty_invariant_failed');
       }
     }
-    return new FlowWorld(runtime, await support.bootstrapActors());
+    return new FlowWorld(
+      runtime,
+      await support.bootstrapActors(),
+      cleanupDirectory,
+      retainedConfiguration
+    );
   }
 
   support() {
@@ -380,14 +450,41 @@ export class FlowWorld implements J2FlowWorld {
   }
 
   record(line: string): void { this.#trace.push(line); }
+  baseUrl(): string { return this.retainedConfiguration?.baseUrl ?? config.baseUrl; }
   trace(): string { return this.#trace.length === 0 ? 'J2 trace: no completed steps' : `J2 trace:\n${this.#trace.map((line) => `  ${line}`).join('\n')}`; }
+  async restartRetained(): Promise<void> {
+    if (!this.retainedConfiguration) throw new TypeError('flow_world_is_not_retained');
+    await this.runtime.close();
+    this.runtime = await createConfiguredSQLiteLiveRuntimeForTesting({
+      config: this.retainedConfiguration
+    });
+    if (!this.runtime.testSupport) throw new TypeError('retained_flow_test_support_missing_after_restart');
+    await this.runtime.testSupport.resumeActors(Object.values(this.actors));
+    this.record('retained runtime → graceful restart');
+  }
+  async pauseRetained(): Promise<void> {
+    if (!this.retainedConfiguration) throw new TypeError('flow_world_is_not_retained');
+    await this.runtime.close();
+    this.record('retained runtime → stopped for installation backup');
+  }
+  async resumeRetained(configuration: ConfiguredServerConfig): Promise<void> {
+    if (!this.retainedConfiguration || configuration.databaseDriver !== 'sqlite'
+        || configuration.blobDriver !== 'filesystem' || !configuration.dataDirectory) {
+      throw new TypeError('flow_world_resume_configuration_invalid');
+    }
+    this.retainedConfiguration = configuration;
+    this.runtime = await createConfiguredSQLiteLiveRuntimeForTesting({ config: configuration });
+    if (!this.runtime.testSupport) throw new TypeError('retained_flow_test_support_missing_after_restore');
+    await this.runtime.testSupport.resumeActors(Object.values(this.actors));
+    this.record('retained runtime → restored copy resumed');
+  }
   close(): void {
-    const directory = this.runtime.database.directoryPath;
     this.runtime.close();
-    cleanupEphemeralDirectory(directory);
+    if (this.cleanupDirectory) cleanupFlowDirectory(this.cleanupDirectory);
   }
 }
 
 export async function flowWorld(input: {
-  readonly database?: 'default' | 'migration-initialized-empty';
+  readonly database?: 'default' | 'migration-initialized-empty' | 'retained-frozen';
+  readonly retainedConfiguration?: ConfiguredServerConfig;
 } = {}): Promise<FlowWorld> { return FlowWorld.create(input); }

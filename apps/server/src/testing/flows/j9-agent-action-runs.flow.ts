@@ -106,7 +106,7 @@ export async function runJ9AgentActionRuns(world: FlowWorld): Promise<void> {
   const submitted = support.submitAgentActionPlan({
     schemaVersion: 1, batchId,
     source: {
-      surface: 'app_model', clientKey: 'flow-harness.j9', runId: 'j9-lease-run',
+      surface: 'app_model', clientKey: 'test.flow-harness.j9', runId: 'j9-lease-run',
       proposingPrincipalId: 'model-profile.flow-harness'
     },
     scope: { workspaceId: world.runtime.workspaceId, eventId: settings.eventId, subjects: [subject] },

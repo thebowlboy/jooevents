@@ -1,8 +1,10 @@
-export interface SQLiteMigrationReference {
-  readonly migrationId: string;
-  readonly schemaEpoch: number;
-  readonly sequence: number;
-}
+import {
+  SQLITE_E2_S6_RELEASE_FLOOR,
+  type SQLiteMigrationReference,
+  type SQLiteReleaseFloor
+} from './release-floor-contract';
+
+export type { SQLiteMigrationReference, SQLiteReleaseFloor } from './release-floor-contract';
 
 export interface SQLiteMigrationManifestEntry extends SQLiteMigrationReference {
   readonly dialect: 'sqlite';
@@ -55,6 +57,7 @@ export interface SQLiteMigrationManifest {
     readonly checksumSha256: string;
   };
   readonly acceptedPredecessorLineages: readonly [SQLiteAcceptedPredecessorLineage];
+  readonly releaseFloors: readonly [SQLiteReleaseFloor, ...SQLiteReleaseFloor[]];
 }
 
 const destinationBaseline = Object.freeze({
@@ -177,6 +180,7 @@ export const SQLITE_MIGRATION_MANIFEST: SQLiteMigrationManifest = Object.freeze(
     artifact: new URL('../../migrations/sqlite/checkpoints/e2_0006_airtable_sync.schema.json', import.meta.url),
     checksumSha256: '5284ceabd4da1eeb93bec0fe39ce7d99d790aa320a3ee7070705a3cc4646027e'
   }),
+  releaseFloors: Object.freeze([SQLITE_E2_S6_RELEASE_FLOOR]) as readonly [SQLiteReleaseFloor],
   acceptedPredecessorLineages: Object.freeze([Object.freeze({
     transitionId: 'e1_identity_access_to_e2_foundation',
     lineageId: 'jooevents_identity_access_epoch_1',

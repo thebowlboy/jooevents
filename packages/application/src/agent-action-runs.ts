@@ -118,9 +118,13 @@ export interface AgentActionCurrentAuthority {
     readonly batch: AgentActionBatchView;
     readonly step: AgentActionStep;
     readonly now: string;
-  }):
+  }): Promise<
     | { readonly kind: 'allowed' }
-    | { readonly kind: 'paused'; readonly reason: string; readonly detail?: unknown };
+    | { readonly kind: 'paused'; readonly reason: string; readonly detail?: unknown }
+  > | (
+    | { readonly kind: 'allowed' }
+    | { readonly kind: 'paused'; readonly reason: string; readonly detail?: unknown }
+  );
 }
 
 export interface AgentActionRegisteredExecutor {
@@ -295,7 +299,7 @@ export function createAgentActionRunner(input: {
           externalWait: false
         });
       }
-      const authority = input.authority.recheck({ batch: current, step, now });
+      const authority = await input.authority.recheck({ batch: current, step, now });
       if (authority.kind === 'paused') {
         return input.repository.pauseStep({
           lease,

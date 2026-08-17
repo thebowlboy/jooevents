@@ -7,6 +7,7 @@ import {
   type RetainedSQLiteDatabaseClass
 } from './retained-backup';
 import { statusSQLite } from './status';
+import { promoteSQLiteReleaseFloorAtPath } from './release-floor';
 
 function flag(arguments_: readonly string[], name: string): string | undefined {
   const index = arguments_.indexOf(name);
@@ -18,6 +19,7 @@ function usage(): never {
     'Usage:',
     '  jooevents-db status --database /absolute/path.sqlite',
     '  jooevents-db migrate --database /absolute/path.sqlite [--class retained_development|frozen_release]',
+    '  jooevents-db promote-release --database /absolute/path.sqlite --expected-database-id ID [--release-floor sqlite-e2-s6]',
     '  jooevents-db backup --database /absolute/path.sqlite --backup /absolute/path.backup.sqlite [--expected-database-id ID] --class retained_development|frozen_release --max-bytes N',
     '  jooevents-db restore-rehearsal --backup /absolute/path.backup.sqlite --candidate /absolute/restored.sqlite [--expected-database-id ID] --expected-sha256 SHA256 --class retained_development|frozen_release --max-bytes N',
     ''
@@ -53,6 +55,19 @@ export function runSQLiteCli(arguments_: readonly string[]): number {
     } finally {
       opened.sqlite.close();
     }
+    return 0;
+  }
+
+  if (command === 'promote-release') {
+    const expectedDatabaseId = flag(arguments_, '--expected-database-id');
+    const releaseFloorId = flag(arguments_, '--release-floor');
+    if (!databasePath || !expectedDatabaseId || !/^[0-9a-f]{32}$/.test(expectedDatabaseId)) usage();
+    const promoted = promoteSQLiteReleaseFloorAtPath({
+      databasePath,
+      expectedDatabaseId,
+      ...(releaseFloorId ? { releaseFloorId } : {})
+    });
+    process.stdout.write(`${JSON.stringify(promoted)}\n`);
     return 0;
   }
 

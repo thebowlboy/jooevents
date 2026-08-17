@@ -75,6 +75,7 @@ export type FormPlanningErrorCode =
   | 'form_exists'
   | 'form_missing'
   | 'form_not_publishable'
+  | 'required_choice_has_no_options'
   | 'form_version_exists'
   | 'category_missing'
   | 'category_changed'
@@ -995,6 +996,13 @@ function materializeField(
           exposure: vocabularyExposure(field, definition)
         }
       : (() => { throw new FormPlanningError('form_not_publishable'); })();
+  if (required && field.options.kind === 'program_vocabulary') {
+    const exposed = definition.composition.optionExposure[field.id];
+    const available = exposed ?? field.resolvedOptions?.map((choice) => choice.id) ?? [];
+    if (available.length === 0) {
+      throw new FormPlanningError('required_choice_has_no_options');
+    }
+  }
   return field.kind === 'select'
     ? { ...base, kind: field.kind, options }
     : {
