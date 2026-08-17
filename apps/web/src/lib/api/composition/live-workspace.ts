@@ -18,6 +18,7 @@ import type { TasksPagePort } from '../tasks-page-port';
 import type { AgentActionsPagePort } from '../agent-actions-page-port';
 import type { PulsePagePort } from '../pulse-page-port';
 import type { IntegrationsPagePort } from '../integrations-page-port';
+import type { AcceleventsExportPort } from '../accelevents-export-port';
 
 /** Authenticated inputs from which the live workspace composition is built. */
 export interface LiveWorkspaceReady {
@@ -61,6 +62,7 @@ export interface LiveWorkspacePorts {
 	/** Human approval and durable partial-state directory for frozen agent plans. */
 	readonly agentActions: AgentActionsPagePort;
 	readonly integrations: IntegrationsPagePort;
+	readonly acceleventsExport: AcceleventsExportPort;
 }
 
 export const [useLiveWorkspacePorts, setLiveWorkspacePorts] = createContext<LiveWorkspacePorts>();

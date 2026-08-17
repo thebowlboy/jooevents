@@ -40,6 +40,8 @@ const reservedExactPaths = new Set([
   '/api/communications/email-deliverability/check',
   '/api/communications/email-setup-guide',
   '/api/integrations/airtable',
+  '/api/events/current/integrations/accelevents/locations.csv',
+  '/api/events/current/integrations/accelevents/package.zip',
   '/api/openapi.json',
   '/api/operations/manifest',
   '/api/public'

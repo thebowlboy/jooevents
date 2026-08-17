@@ -144,9 +144,9 @@ describe('retained SQLite backup and restore rehearsal', () => {
       formatVersion: 1,
       databaseId: source.databaseId,
       databaseClass: 'retained_development',
-      migrationId: 'e2_0006_airtable_sync',
+      migrationId: 'e2_0007_accelevents_export',
       schemaEpoch: 2,
-      sequence: 6
+      sequence: 7
     });
     expect(backup.bytes).toBeGreaterThan(0);
     expect(backup.sha256).toMatch(/^[0-9a-f]{64}$/);

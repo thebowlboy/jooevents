@@ -40,6 +40,8 @@
     "@jooevents/mcp": "workspace:*",
     "@jooevents/persistence": "workspace:*",
     "@jooevents/program": "workspace:*",
+    "@jooevents/program-export": "workspace:*",
+    "@jooevents/program-export-operations": "workspace:*",
     "@jooevents/program-operations": "workspace:*",
     "@jooevents/release": "workspace:*",
     "@jooevents/release-operations": "workspace:*",

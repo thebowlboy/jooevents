@@ -53,6 +53,7 @@ import {
 } from '@jooevents/application/synchronous-classified-payload-store';
 import {
   accessContextSchema,
+  acceleventsExportArtifactReadResultSchema,
   effectfulOperationResultSchema,
   intakeIdInputSchema,
   intakeIdSchema,
@@ -63,6 +64,7 @@ import {
   type ReadOperationResult,
   type WorkspaceTeamSnapshot
 } from '@jooevents/contracts';
+import { buildAcceleventsPackage, renderAcceleventsLocationsCsv } from '@jooevents/program-export';
 import type {
   FormTarget,
   FormTargetReferencePinDto,
@@ -72,6 +74,7 @@ import type {
 import { fileIdInputSchema } from '@jooevents/contracts/files';
 import {
   openInertFileDownload,
+  contentDispositionAttachment,
   streamFileUploadBytes,
   type InertDownloadOutcome,
   type StreamUploadBytesResult
@@ -263,6 +266,15 @@ import {
   createProgramVocabularyDirectOperationModule,
   createProgramVocabularyMergeOperationModule
 } from '@jooevents/program-operations';
+import {
+  ACCELEVENTS_EXPORT_CONFIG_ACCESS_POLICY,
+  ACCELEVENTS_EXPORT_CONFIG_REQUEST_HASH_PROFILE,
+  ACCELEVENTS_EXPORT_READ_ACCESS_POLICY,
+  createAcceleventsExportConfigOperationModule,
+  createAcceleventsExportReadOperationModule,
+  ACCELEVENTS_EXPORT_LOCATIONS_READ_OPERATION,
+  ACCELEVENTS_EXPORT_PACKAGE_READ_OPERATION
+} from '@jooevents/program-export-operations';
 import type { PlaceableSessionIdentityPort } from '@jooevents/schedule';
 import {
   SCHEDULE_PLACEMENT_REQUEST_HASH_PROFILE,
@@ -354,6 +366,7 @@ import {
   createSQLiteEventEffectDomainRegistration,
   createSQLiteEventSelectEffectDomainRegistration,
   createSQLiteEventSettingsDirectEffectDomainRegistration,
+  createSQLiteAcceleventsExportDirectEffectDomainRegistration,
   createSQLiteEventSettingsInitializer,
   createSQLiteTemplateArtifactNativeEffectDomainRegistrations,
   createSQLiteTemplateEditEffectDomainRegistration,
@@ -373,6 +386,7 @@ import {
   SQLiteAgentActionRunRepository,
   SQLiteApiKeyStore,
   SQLiteApiKeyManagementReadPort,
+  SQLiteAcceleventsExportRepository,
   SQLiteExternalApiIdempotencyStore,
   SQLiteExternalApiRateLimiter,
   SQLiteAirtableProjectionContributionAdapter,
@@ -1033,6 +1047,19 @@ const intakeClassifiedProfiles = Object.freeze({
 
 function randomHmacKey(): Uint8Array {
   return crypto.getRandomValues(new Uint8Array(32));
+}
+
+function newUuidV7(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  let milliseconds = Date.now();
+  for (let index = 5; index >= 0; index -= 1) {
+    bytes[index] = milliseconds & 0xff;
+    milliseconds = Math.floor(milliseconds / 256);
+  }
+  bytes[6] = 0x70 | (bytes[6]! & 0x0f);
+  bytes[8] = 0x80 | (bytes[8]! & 0x3f);
+  const hexadecimal = [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${hexadecimal.slice(0, 8)}-${hexadecimal.slice(8, 12)}-${hexadecimal.slice(12, 16)}-${hexadecimal.slice(16, 20)}-${hexadecimal.slice(20)}`;
 }
 
 function newPublicCompletionReference(): string {
@@ -1972,6 +1999,10 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       }),
       intakeClassifiedProjection
     );
+    const acceleventsExportRepository = new SQLiteAcceleventsExportRepository(
+      database.sqlite,
+      intakeRepository
+    );
     const fieldRegistryRepository = new SQLiteFieldRegistryRepository(
       database.sqlite,
       new SQLiteIntakeFieldRegistryFormReferenceResolver(database.sqlite)
@@ -2659,6 +2690,17 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
         }),
         Object.freeze({ policy: EVENT_MANAGE_ACCESS_POLICY, permissionId: 'event.manage' as const }),
         Object.freeze({
+          policy: ACCELEVENTS_EXPORT_READ_ACCESS_POLICY,
+          permission: Object.freeze({
+            kind: 'all_of' as const,
+            permissionIds: ['event.read', 'speaker.contact.read'] as const
+          })
+        }),
+        Object.freeze({
+          policy: ACCELEVENTS_EXPORT_CONFIG_ACCESS_POLICY,
+          permissionId: 'event.manage' as const
+        }),
+        Object.freeze({
           policy: DEADLINE_READ_ACCESS_POLICY,
           permissionId: 'event.read' as const
         }),
@@ -3053,6 +3095,36 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
           evidenceIds: Object.freeze(evidenceIds)
         });
       }
+    });
+    const acceleventsExportReadOperations = createAcceleventsExportReadOperationModule({
+      workspaceId,
+      policy: ACCELEVENTS_EXPORT_READ_ACCESS_POLICY,
+      currentAuthority,
+      currentEvent,
+      source: Object.freeze({
+        readSource(scope: { readonly workspaceId: string; readonly eventId: string }) {
+          return acceleventsExportRepository.readSource(scope);
+        }
+      }),
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      authorityPrincipalKeyProfile: eventProfiles.authorityPrincipal,
+      scopePartitionProfile: eventProfiles.scopePartition,
+      requestCanonicalizationProfile: eventProfiles.requestCanonicalization
+    });
+    const acceleventsExportConfigOperations = createAcceleventsExportConfigOperationModule({
+      workspaceId,
+      policy: ACCELEVENTS_EXPORT_CONFIG_ACCESS_POLICY,
+      currentAuthority,
+      currentEvent,
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      authorityPrincipalKeyProfile: eventProfiles.authorityPrincipal,
+      scopePartitionProfile: eventProfiles.scopePartition,
+      requestCanonicalizationProfile: eventProfiles.requestCanonicalization,
+      requestHashSealer: cryptoProfiles.requestHashSealer(ACCELEVENTS_EXPORT_CONFIG_REQUEST_HASH_PROFILE),
+      idempotencyCredentialProfile: eventProfiles.idempotencyCredential,
+      idempotencyCredentialSealer
     });
     const operationHistoryOperations = createOperationHistoryReadOperationModule({
       workspaceId,
@@ -4079,6 +4151,13 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
         sqlite: database.sqlite,
         workspaceId
       });
+    const acceleventsExportConfigDomain =
+      createSQLiteAcceleventsExportDirectEffectDomainRegistration({
+        sqlite: database.sqlite,
+        workspaceId,
+        intake: intakeRepository,
+        newConfigurationId: newUuidV7
+      });
     const templateArtifactNativeDomains =
       createSQLiteTemplateArtifactNativeEffectDomainRegistrations({
         sqlite: database.sqlite,
@@ -4561,6 +4640,7 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       eventDirectDomain,
       eventSelectDirectDomain,
       eventSettingsDirectDomain,
+      acceleventsExportConfigDomain,
       ...templateArtifactNativeDomains,
       templateEditDomain,
       deadlineDirectDomain,
@@ -4631,6 +4711,8 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       eventSelectOperations,
       eventSettingsReadOperations,
       eventSettingsUpdateOperations,
+      acceleventsExportReadOperations,
+      acceleventsExportConfigOperations,
       templateArtifactReadOperations,
       templateArtifactNativeOperations,
       templateEditOperations,
@@ -4926,6 +5008,79 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       workspaceId,
       baseUrl: input.config.baseUrl,
       operatorOperations: { operations, evidence },
+      acceleventsExportDownload: Object.freeze({
+        async download(downloadInput: {
+          readonly kind: 'locations' | 'package';
+          readonly request: Request;
+          readonly releaseId: string;
+          readonly correlationId: string;
+        }) {
+          const operation = downloadInput.kind === 'locations'
+            ? ACCELEVENTS_EXPORT_LOCATIONS_READ_OPERATION
+            : ACCELEVENTS_EXPORT_PACKAGE_READ_OPERATION;
+          const binding = operations.registry.operatorHttpBindings.find((candidate) =>
+            candidate.operationName === operation.name
+            && candidate.operationVersion === operation.version
+          );
+          if (!binding) throw new TypeError('accelevents_export_download_binding_missing');
+          const verified = await evidence.verify({
+            request: downloadInput.request,
+            correlationId: downloadInput.correlationId,
+            binding
+          });
+          if (verified.kind !== 'verified') {
+            return Response.json(
+              { code: verified.reason, retryable: false, correlationId: downloadInput.correlationId },
+              { status: verified.reason === 'unauthenticated' ? 401 : 403 }
+            );
+          }
+          const result = acceleventsExportArtifactReadResultSchema.parse(
+            await operations.readExecutor.execute({
+              operationName: operation.name,
+              operationVersion: operation.version,
+              surface: 'operator_http',
+              correlationId: downloadInput.correlationId,
+              businessInput: { releaseId: downloadInput.releaseId },
+              verifiedEvidence: verified.evidence
+            })
+          );
+          if (result.kind !== 'success') {
+            const status = result.outcome.class === 'access_denied' ? 403 : 409;
+            return Response.json({
+              code: result.outcome.kind,
+              message: 'The export is not ready. Reload the preparation and resolve its blockers.',
+              retryable: result.outcome.retryable,
+              correlationId: downloadInput.correlationId
+            }, { status });
+          }
+          const current = currentEvent.resolveCurrentEvent(workspaceId);
+          if (!current.eventId) {
+            return Response.json({ code: 'event_required', retryable: false, correlationId: downloadInput.correlationId }, { status: 409 });
+          }
+          const source = acceleventsExportRepository.readSource({ workspaceId, eventId: current.eventId });
+          const artifact = downloadInput.kind === 'locations'
+            ? {
+                bytes: new TextEncoder().encode(renderAcceleventsLocationsCsv(source)),
+                filename: 'locations.csv',
+                contentType: 'text/csv; charset=utf-8'
+              }
+            : (() => {
+                const built = buildAcceleventsPackage(source, result.data.generatedAt);
+                return { bytes: built.bytes, filename: built.filename, contentType: 'application/zip' };
+              })();
+          return new Response(new Uint8Array(artifact.bytes).buffer, {
+            status: 200,
+            headers: {
+              'content-type': artifact.contentType,
+              'content-disposition': contentDispositionAttachment(artifact.filename),
+              'content-length': String(artifact.bytes.byteLength),
+              'cache-control': 'no-store, max-age=0',
+              'x-content-type-options': 'nosniff',
+              'x-correlation-id': downloadInput.correlationId
+            }
+          });
+        }
+      }),
       participantEntry: participantEntryRuntime,
       participantOperations: { operations, evidence: participantEvidence },
       ...(airtableLive ? {

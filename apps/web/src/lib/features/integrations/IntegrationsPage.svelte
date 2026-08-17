@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { formatInstant, formatRelative } from '@jooevents/contracts';
-	import { ChevronRight } from 'lucide-svelte';
+	import { ChevronRight, Send } from 'lucide-svelte';
 	import airtableMark from '$lib/assets/integrations/airtable-mark.svg';
 	import type {
 		AirtableAreaDirection,
@@ -135,8 +135,9 @@
 	<section class="integrations-head">
 		<p class="eyebrow">WORKING SURFACES</p>
 		<h2>Keep the tools your team already works in</h2>
-		<p>Connect a shared surface without splitting the event into two versions of the truth.</p>
+		<p>Connect a shared surface, or hand finished work to the platform that delivers it — without splitting the event into two versions of the truth.</p>
 	</section>
+	<div class="integration-list">
 	<a class="integration-card" href="/app/integrations/airtable">
 		<!-- Decorative beside the visible integration name. -->
 		<span class="integration-card__brand" aria-hidden="true"><img src={airtableMark} alt="" width="26" height="22" /></span>
@@ -148,6 +149,13 @@
 		{/if}
 		<span class="integration-card__go" aria-hidden="true"><ChevronRight size={16} /></span>
 	</a>
+	<a class="integration-card integration-card--static" href="/app/integrations/accelevents">
+		<!-- Decorative beside the visible integration name. -->
+		<span class="integration-card__brand" aria-hidden="true"><Send size={22} /></span>
+		<span class="integration-card__name"><strong>Accelevents</strong><small>When the program is ready, its locations, speakers, and sessions become files Accelevents imports. Nothing connects or syncs — you run the import.</small></span>
+		<span class="integration-card__go" aria-hidden="true"><ChevronRight size={16} /></span>
+	</a>
+	</div>
 {:else if !view}
 	<section class="airtable-shell" aria-label="Loading Airtable integration">
 		<span class="ui-skeleton skeleton-title"></span><span class="ui-skeleton skeleton-line"></span>
@@ -331,7 +339,7 @@
 
 <style>
 	.airtable-shell{min-block-size:8rem}.integrations-head h2,.airtable-head h2,.card h3,.section h3{margin:.2rem 0}.integrations-head p,.airtable-head p,.card p,.section p{color:var(--je-color-text-muted);max-inline-size:48rem}.eyebrow{font-size:var(--je-font-size-xs);font-weight:700;letter-spacing:.08em;color:var(--je-color-text-muted)}
-	.integration-card,.card,.section,.state-banner{border:1px solid var(--je-color-border);border-radius:var(--je-radius-surface);background:var(--je-color-surface)}.integration-card{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:center;gap:var(--je-space-5);padding:var(--je-space-5);color:inherit;text-decoration:none}.integration-card__brand{display:grid;place-items:center;inline-size:2.75rem;block-size:2.75rem;border-radius:var(--je-radius-control);background:var(--je-color-surface-sunken)}.integration-card__brand img{display:block}.integration-card:hover{border-color:var(--je-color-border-strong)}.integration-card:hover .integration-card__go{color:var(--je-color-text)}.integration-card:focus-visible{outline:none;box-shadow:var(--je-focus-ring)}.integration-card__go{display:flex;color:var(--je-color-text-muted)}.integration-card small,.value-row small,.activity-list small{display:block;margin-block-start:.25rem;color:var(--je-color-text-muted)}.integration-card__state{display:grid;justify-items:end;gap:var(--je-space-2)}.card-status-skeleton{inline-size:8rem;block-size:1.5rem}
+	.integration-card,.card,.section,.state-banner{border:1px solid var(--je-color-border);border-radius:var(--je-radius-surface);background:var(--je-color-surface)}.integration-card{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;align-items:center;gap:var(--je-space-5);padding:var(--je-space-5);color:inherit;text-decoration:none}.integration-card__brand{display:grid;place-items:center;inline-size:2.75rem;block-size:2.75rem;border-radius:var(--je-radius-control);background:var(--je-color-surface-sunken)}.integration-card__brand img{display:block}.integration-card:hover{border-color:var(--je-color-border-strong)}.integration-card:hover .integration-card__go{color:var(--je-color-text)}.integration-card:focus-visible{outline:none;box-shadow:var(--je-focus-ring)}.integration-card__go{display:flex;color:var(--je-color-text-muted)}.integration-card--static{grid-template-columns:auto minmax(0,1fr) auto}.integration-card--static .integration-card__brand{color:var(--je-color-text-muted)}.integration-list{display:grid;gap:var(--je-space-3)}.integration-card small,.value-row small,.activity-list small{display:block;margin-block-start:.25rem;color:var(--je-color-text-muted)}.integration-card__state{display:grid;justify-items:end;gap:var(--je-space-2)}.card-status-skeleton{inline-size:8rem;block-size:1.5rem}
 		.airtable-detail{display:grid;gap:var(--je-space-5)}.airtable-head{display:flex;justify-content:space-between;align-items:start;gap:var(--je-space-4)}.head-actions{display:flex;align-items:center;gap:var(--je-space-3);flex-wrap:wrap;justify-content:end}.back{display:inline-block;margin-block-end:var(--je-space-3)}.card,.section{padding:var(--je-space-5)}.setup{display:grid;gap:var(--je-space-4)}.setup-moments{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--je-space-3)}.setup-moments span{display:flex;gap:var(--je-space-2);align-items:center;color:var(--je-color-text-muted)}.setup-moments b{display:grid;place-items:center;flex:0 0 1.75rem;block-size:1.75rem;border-radius:999px;background:var(--je-color-surface-sunken);color:var(--je-color-text)}.boundary{font-size:var(--je-font-size-sm)}
 		.setup-config{gap:var(--je-space-5)}.step-label{font-size:var(--je-font-size-xs);font-weight:700;letter-spacing:.08em;margin:0;color:var(--je-color-text-muted)}.setup-divider{border-block-start:1px solid var(--je-color-border)}.setup-directions{border:1px solid var(--je-color-border);border-radius:var(--je-radius-control);padding-inline:var(--je-space-4)}.preview-summary{display:grid;gap:var(--je-space-4)}.preview-summary dl{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--je-space-3);margin:0}.preview-summary dl div{padding:var(--je-space-3);border-radius:var(--je-radius-control);background:var(--je-color-surface-sunken)}.preview-summary dt{color:var(--je-color-text-muted);font-size:var(--je-font-size-sm)}.preview-summary dd{margin:.25rem 0 0;font-size:var(--je-font-size-lg);font-weight:700}
 	.state-banner{display:flex;align-items:center;gap:var(--je-space-3);padding:var(--je-space-4);border-color:color-mix(in srgb,var(--je-color-warning-fill) 38%,transparent);background:linear-gradient(var(--je-color-warning-soft),var(--je-color-warning-soft)),var(--je-color-surface)}.state-banner span{color:var(--je-color-text-muted)}.state-banner :global(.ui-button){margin-inline-start:auto}.section-title{display:flex;align-items:center;justify-content:space-between;gap:var(--je-space-4);margin-block-end:var(--je-space-3)}.attention-list,.value-list,.history-list{display:grid}.attention-row,.value-row,.history-row{border-block-start:1px solid var(--je-color-border);padding-block:var(--je-space-3)}.attention-row:first-child,.value-row:first-child,.history-row:first-child{border-block-start:0}.attention-row{display:flex;justify-content:space-between;gap:var(--je-space-4);color:inherit;text-decoration:none}.attention-row strong{color:var(--je-color-link)}.value-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(14rem,20rem);align-items:center;gap:var(--je-space-4)}.value-row>span{text-align:end;color:var(--je-color-text-muted)}

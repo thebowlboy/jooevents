@@ -11,6 +11,8 @@ import {
   apiKeyRevokeOperationResultSchema,
   apiKeyRotateOperationResultSchema,
   apiKeySecretDeliveryResultSchema,
+  acceleventsExportConfigSaveResultSchema,
+  acceleventsExportViewReadResultSchema,
   currentEventReadResultSchema,
   currentEventSettingsReadResultSchema,
   createReadOperationResultSchema,
@@ -44,6 +46,7 @@ import {
   organizerSubmissionContactSchema,
   portalEngagementRespondResultSchema,
   portalSnapshotReadResultSchema,
+  programReleaseSchema,
   programVocabularyDirectOperationResultSchema,
   programVocabularyMergePublishOperationResultSchema,
   programVocabularyMergeReviewOperationResultSchema,
@@ -67,7 +70,7 @@ import {
   templateEditReviseOperationResultSchema,
   workspaceShellSummaryReadResultSchema
 } from '@jooevents/contracts';
-import { canonicalJsonSha256 } from '@jooevents/kernel';
+import { canonicalJsonSha256, canonicalJsonText } from '@jooevents/kernel';
 import { workspaceOverviewReadResultSchema } from '@jooevents/contracts/workspace-overview';
 import {
   workspaceTeamMutationOperationResultSchema,
@@ -1046,6 +1049,22 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['POST /api/events/current/communications/previews/adopt']
       },
       {
+        name: 'program.export.accelevents.config.save', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/integrations/accelevents/configuration']
+      },
+      {
+        name: 'program.export.accelevents.locations.read', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/integrations/accelevents/locations/prepare']
+      },
+      {
+        name: 'program.export.accelevents.package.read', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/integrations/accelevents/package/prepare']
+      },
+      {
+        name: 'program.export.accelevents.view.read', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/integrations/accelevents']
+      },
+      {
         name: 'program_vocabulary.create', version: 1, effect: 'commit',
         bindings: ['POST /api/events/current/program-vocabulary/create']
       },
@@ -1269,8 +1288,8 @@ describe('ephemeral live Foundation server composition', () => {
     expect(runtime.database.installedSchemaArtifacts).toEqual([]);
     expect(runtime.database.retainedBaseline).toMatchObject({
       status: 'current',
-      coordinate: { schemaEpoch: 2, sequence: 6 },
-      migrationId: 'e2_0006_airtable_sync',
+      coordinate: { schemaEpoch: 2, sequence: 7 },
+      migrationId: 'e2_0007_accelevents_export',
       databaseClass: 'ephemeral'
     });
     expect(runtime.database.sqlite.query<{ readonly name: string }, []>(`
@@ -1352,6 +1371,184 @@ describe('ephemeral live Foundation server composition', () => {
       headers: { 'content-type': 'application/json', origin: config.baseUrl },
       body: '{}'
     })).status).toBe(404);
+  });
+
+  test('configures and downloads an Accelevents package through the live one-way boundary', async () => {
+    const runtime = await createEphemeralLiveRuntime({ config });
+    runtimes.push(runtime);
+    const session = await createOwnerSession(runtime);
+    const ownerUserId = await provisionOwner(runtime, session);
+    const created = await createEventDirect({ runtime, session, key: 'accelevents-event' });
+    const eventId = created.data.event.id;
+    const releaseId = crypto.randomUUID();
+    const roomId = crypto.randomUUID();
+    const formatId = crypto.randomUUID();
+    const sessionId = crypto.randomUUID();
+    const occurrenceId = crypto.randomUUID();
+    const digest = 'a'.repeat(64);
+    const release = programReleaseSchema.parse({
+      schemaVersion: 1,
+      scope: { workspaceId: runtime.workspaceId, eventId },
+      id: releaseId,
+      number: 1,
+      origin: { kind: 'publish' },
+      predecessor: null,
+      pins: {
+        sessionCatalog: { version: 1, digestSha256: digest },
+        scheduleVersion: 1,
+        engagementSnapshotDigestSha256: digest,
+        vocabulary: { setVersion: 1, digestSha256: digest },
+        eventSettingsVersion: 1
+      },
+      rooms: [{ id: roomId, name: 'Main Hall' }],
+      sessions: [{
+        sessionId,
+        title: 'Opening session',
+        plannedDurationMinutes: 60,
+        format: { id: formatId, name: 'Workshop' },
+        track: null,
+        occurrences: [{
+          occurrenceId,
+          roomId,
+          startAt: '2027-06-10T01:00:00.000Z',
+          endAt: '2027-06-10T02:00:00.000Z'
+        }],
+        participants: []
+      }],
+      nameDeclassifications: [],
+      releasedByUserId: ownerUserId,
+      releasedAt: '2026-08-17T10:00:00.000Z',
+      digestSha256: digest
+    });
+    runtime.database.sqlite.query(`
+      INSERT INTO program_releases (
+        workspace_id,event_id,id,number,origin_kind,restored_from_release_id,
+        predecessor_release_id,predecessor_digest_sha256,release_json,digest_sha256,
+        released_by_user_id,released_at_ms
+      ) VALUES (?,?,?,1,'publish',NULL,NULL,NULL,?,?,?,?)
+    `).run(runtime.workspaceId, eventId, releaseId, canonicalJsonText(release), digest, ownerUserId, Date.parse(release.releasedAt));
+
+    const before = acceleventsExportViewReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/integrations/accelevents', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (before.kind !== 'success') throw new Error('Accelevents export read failed.');
+    expect(before.data.preflight.ready).toBe(false);
+
+    const configurationRequest = {
+      eventId,
+      expectedVersion: 0,
+      selectedReleaseId: releaseId,
+      sessionType: 'IN_PERSON' as const,
+      formatMappings: [{ formatId, remoteFormat: 'WORKSHOP' as const }],
+      speakerNames: [],
+      roomBindings: [{ roomId, kind: 'remote' as const, locationId: 41 }],
+      primarySpeakers: []
+    };
+    const configured = acceleventsExportConfigSaveResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/integrations/accelevents/configuration',
+      key: 'accelevents-config',
+      body: configurationRequest,
+      parse: (value) => value
+    }));
+    if (configured.kind !== 'success') throw new Error('Accelevents configuration failed.');
+    expect(configured.data.preflight.ready).toBe(true);
+    expect(count(runtime, 'operation_log', "WHERE operation_name = 'program.export.accelevents.config.save'")).toBe(1);
+    const persisted = runtime.database.sqlite.query<{
+      readonly id: string;
+      readonly format_mappings_json: string;
+      readonly speaker_names_json: string;
+      readonly room_bindings_json: string;
+      readonly primary_speakers_json: string;
+    }, [string, string]>(`
+      SELECT id, format_mappings_json, speaker_names_json, room_bindings_json,
+             primary_speakers_json
+        FROM accelevents_export_configuration
+       WHERE workspace_id = ? AND event_id = ?
+    `).get(runtime.workspaceId, eventId);
+    expect(persisted?.id.at(14)).toBe('7');
+    expect(JSON.parse(persisted?.room_bindings_json ?? 'null')).toEqual({
+      items: [{ kind: 'remote', locationId: 41, roomId }], schemaVersion: 1
+    });
+    expect(JSON.stringify(persisted)).not.toContain('@');
+
+    const replay = acceleventsExportConfigSaveResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/integrations/accelevents/configuration',
+      key: 'accelevents-config',
+      body: configurationRequest,
+      parse: (value) => value
+    }));
+    expect(replay.kind).toBe('success');
+    expect(count(runtime, 'operation_log', "WHERE operation_name = 'program.export.accelevents.config.save'")).toBe(1);
+
+    const stale = acceleventsExportConfigSaveResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/integrations/accelevents/configuration',
+      key: 'accelevents-config-stale',
+      body: configurationRequest,
+      parse: (value) => value
+    }));
+    expect(stale).toMatchObject({
+      kind: 'outcome',
+      outcome: {
+        kind: 'program.export.accelevents.configuration_changed',
+        detail: { expectedVersion: 0, currentVersion: 1 }
+      }
+    });
+    expect(count(runtime, 'operation_log', "WHERE operation_name = 'program.export.accelevents.config.save'")).toBe(1);
+
+    const download = await runtime.app.request(
+      `/api/events/current/integrations/accelevents/package.zip?releaseId=${releaseId}`,
+      { headers: eventHeaders({ session, correlationId: crypto.randomUUID() }) }
+    );
+    expect(download.status).toBe(200);
+    expect(download.headers.get('content-type')).toBe('application/zip');
+    expect(download.headers.get('cache-control')).toBe('no-store, max-age=0');
+    expect(download.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(download.headers.get('content-disposition')).toContain("filename*=UTF-8''accelevents-program-export-");
+    const bytes = new Uint8Array(await download.arrayBuffer());
+    expect([...bytes.slice(0, 4)]).toEqual([0x50, 0x4b, 0x03, 0x04]);
+    const readableStoredZip = new TextDecoder().decode(bytes);
+    expect(readableStoredZip).toContain('locations.csv');
+    expect(readableStoredZip).toContain('speakers.csv');
+    expect(readableStoredZip).toContain('sessions.csv');
+    expect(readableStoredZip).toContain('Location,Source URL,Attendee Meetings');
+    expect(readableStoredZip).toContain('ID,Title,Format,Session Type');
+    const after = acceleventsExportViewReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/integrations/accelevents', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (after.kind !== 'success') throw new Error('Accelevents export re-read failed.');
+    expect(after.data.lastGenerated).toMatchObject({ releaseNumber: 1 });
+    expect(after.data.preflight.consequences.some((item) => item.id === 'repeat')).toBe(true);
+    expect(count(runtime, '_trial_read_immutable_audits')).toBe(3);
+
+    runtime.database.sqlite.query<never, [string]>(`
+      DELETE FROM role_permissions
+       WHERE permission_id = 'speaker.contact.read'
+         AND role_id IN (
+           SELECT id FROM roles
+            WHERE workspace_id = ?
+              AND source_preset_key = 'workspace_admin'
+         )
+    `).run(runtime.workspaceId);
+    const denied = acceleventsExportViewReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/integrations/accelevents', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    expect(denied).toMatchObject({
+      kind: 'outcome',
+      outcome: { class: 'access_denied' }
+    });
+    expect(count(runtime, '_trial_read_immutable_audits')).toBe(4);
   });
 
   test('states the messages area by operations this composition actually serves', async () => {

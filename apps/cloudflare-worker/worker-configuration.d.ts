@@ -7,7 +7,7 @@ interface __BaseEnv_Env {
 	JOBS: Queue;
 	ASSETS: Fetcher;
 	JOOEVENTS_DEPLOYMENT_ENVIRONMENT: "staging" | "production" | "local";
-	JOOEVENTS_D1_RELEASE_FLOOR: "sqlite-e2-s6";
+	JOOEVENTS_D1_RELEASE_FLOOR: "sqlite-e2-s7";
 	JOOEVENTS_AUTH_RUNTIME_ENABLED: "false";
 	JOOEVENTS_APPLICATION_RUNTIME_ENABLED: "false";
 }
@@ -21,7 +21,7 @@ declare namespace Cloudflare {
 		JOBS: Queue;
 		ASSETS: Fetcher;
 		JOOEVENTS_DEPLOYMENT_ENVIRONMENT: "staging";
-		JOOEVENTS_D1_RELEASE_FLOOR: "sqlite-e2-s6";
+		JOOEVENTS_D1_RELEASE_FLOOR: "sqlite-e2-s7";
 		JOOEVENTS_AUTH_RUNTIME_ENABLED: "false";
 		JOOEVENTS_APPLICATION_RUNTIME_ENABLED: "false";
 	}
@@ -31,7 +31,7 @@ declare namespace Cloudflare {
 		JOBS: Queue;
 		ASSETS: Fetcher;
 		JOOEVENTS_DEPLOYMENT_ENVIRONMENT: "production";
-		JOOEVENTS_D1_RELEASE_FLOOR: "sqlite-e2-s6";
+		JOOEVENTS_D1_RELEASE_FLOOR: "sqlite-e2-s7";
 		JOOEVENTS_AUTH_RUNTIME_ENABLED: "false";
 		JOOEVENTS_APPLICATION_RUNTIME_ENABLED: "false";
 	}

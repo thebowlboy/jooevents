@@ -403,7 +403,7 @@ export class FlowWorld implements J2FlowWorld {
         'SELECT count(*) AS count FROM events'
       ).get()?.count ?? -1;
       if (baseline.coordinate?.schemaEpoch !== 2
-          || baseline.migrationId !== 'e2_0006_airtable_sync'
+          || baseline.migrationId !== 'e2_0007_accelevents_export'
           || runtime.database.installedSchemaArtifacts.length !== 0
           || operationCount !== 0 || eventCount !== 0) {
         runtime.close();

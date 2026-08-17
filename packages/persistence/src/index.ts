@@ -11,6 +11,8 @@ export * from './sqlite/event-spine';
 export * from './sqlite/event-effect-domain';
 export * from './sqlite/event-settings';
 export * from './sqlite/event-settings-direct-effect-domain';
+export * from './sqlite/accelevents-export';
+export * from './sqlite/accelevents-export-direct-effect-domain';
 export * from './sqlite/deadline-direct-effect-domain';
 export * from './sqlite/task-direct-effect-domain';
 export * from './sqlite/session-direct-effect-domain';

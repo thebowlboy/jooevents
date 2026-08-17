@@ -197,8 +197,8 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
     const migrated = openSQLite(path, { migrationPolicy: 'apply' });
     opened.push(migrated);
     expect(migrated.migration).toMatchObject({
-      status: 'applied', migrationId: 'e2_0006_airtable_sync',
-      coordinate: { schemaEpoch: 2, sequence: 6 }
+      status: 'applied', migrationId: 'e2_0007_accelevents_export',
+      coordinate: { schemaEpoch: 2, sequence: 7 }
     });
     expect(migrated.sqlite.query<{ readonly expires_at_ms: number | null }, [string]>(
       'SELECT expires_at_ms FROM api_keys WHERE api_key_id = ?'

@@ -3,6 +3,7 @@ export * from './agent-action-runs';
 export * from './api-keys';
 export * from './external-agent-api';
 export * from './airtable-integration';
+export * from './accelevents-export';
 export * from './account-linking';
 export * from './communications/organizer';
 export * from './decisions';

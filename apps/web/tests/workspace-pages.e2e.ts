@@ -13,6 +13,7 @@ const destinations = [
 	{ path: '/app/embeds', title: 'Embeds' },
 	{ path: '/app/integrations', title: 'Integrations' },
 	{ path: '/app/integrations/airtable', title: 'Integrations' },
+	{ path: '/app/integrations/accelevents', title: 'Integrations' },
 	// Every settings section is Settings: the destination title names the area a
 	// person is in, and the section names itself in the rail and its own panel.
 	{ path: '/app/settings', title: 'Settings' },

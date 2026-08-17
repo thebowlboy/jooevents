@@ -91,6 +91,8 @@
         "@jooevents/mcp": "workspace:*",
         "@jooevents/persistence": "workspace:*",
         "@jooevents/program": "workspace:*",
+        "@jooevents/program-export": "workspace:*",
+        "@jooevents/program-export-operations": "workspace:*",
         "@jooevents/program-operations": "workspace:*",
         "@jooevents/release": "workspace:*",
         "@jooevents/release-operations": "workspace:*",
@@ -554,6 +556,8 @@
         "@jooevents/kernel": "workspace:*",
         "@jooevents/model-adapter": "workspace:*",
         "@jooevents/program": "workspace:*",
+        "@jooevents/program-export": "workspace:*",
+        "@jooevents/program-export-operations": "workspace:*",
         "@jooevents/program-operations": "workspace:*",
         "@jooevents/release": "workspace:*",
         "@jooevents/release-operations": "workspace:*",
@@ -583,6 +587,36 @@
       "dependencies": {
         "@jooevents/contracts": "workspace:*",
         "@jooevents/kernel": "workspace:*",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/program-export": {
+      "name": "@jooevents/program-export",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "@noble/hashes": "2.3.0",
+        "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/program-export-operations": {
+      "name": "@jooevents/program-export-operations",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/application": "workspace:*",
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/identity-access": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
+        "@jooevents/program-export": "workspace:*",
         "zod": "4.4.3",
       },
       "devDependencies": {
@@ -1072,6 +1106,10 @@
     "@jooevents/persistence": ["@jooevents/persistence@workspace:packages/persistence"],
 
     "@jooevents/program": ["@jooevents/program@workspace:packages/program"],
+
+    "@jooevents/program-export": ["@jooevents/program-export@workspace:packages/program-export"],
+
+    "@jooevents/program-export-operations": ["@jooevents/program-export-operations@workspace:packages/program-export-operations"],
 
     "@jooevents/program-operations": ["@jooevents/program-operations@workspace:packages/program-operations"],
 

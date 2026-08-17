@@ -34,7 +34,9 @@
 	import { createSampleSubmissionsPagePort } from '../submissions-page-port.sample';
 	import { createSampleAgentActionsPagePort } from '../agent-actions-page-port.sample';
 	import { createSampleIntegrationsPagePort } from '../integrations-page-port';
+	import { createSampleAcceleventsExportPort } from '../accelevents-export-port';
 	import IntegrationsPage from '$lib/features/integrations/IntegrationsPage.svelte';
+	import AcceleventsExportPage from '$lib/features/integrations/AcceleventsExportPage.svelte';
 	import { settingsSectionOf, type OperatorPageId } from './operator-pages';
 
 	let { area }: { readonly area: OperatorPageId } = $props();
@@ -56,6 +58,7 @@
 	const files = createSampleFilesPagePort();
 	const agentActions = createSampleAgentActionsPagePort();
 	const integrations = createSampleIntegrationsPagePort();
+	const acceleventsExport = createSampleAcceleventsExportPort();
 </script>
 
 {#if area === 'overview'}
@@ -92,6 +95,8 @@
 	<AgentActionsPage port={agentActions} />
 {:else if area === 'integrations' || area === 'integrations_airtable'}
 	<IntegrationsPage port={integrations} detail={area === 'integrations_airtable'} />
+{:else if area === 'integrations_accelevents'}
+	<AcceleventsExportPage port={acceleventsExport} />
 {:else}
 	<SettingsPage port={settings} section={settingsSectionOf(area)} />
 {/if}

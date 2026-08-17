@@ -29,6 +29,10 @@ import {
   createAirtableIntegrationHttpAdapter,
   type AirtableIntegrationHttpRuntime
 } from './airtable-integration';
+import {
+  createAcceleventsExportDownloadHttpAdapter,
+  type AcceleventsExportDownloadRuntime
+} from './accelevents-export';
 
 export interface AccessContextService {
   ensureAuthPrincipalProvisioned(input: {
@@ -53,6 +57,7 @@ export function createHttpApp(input: {
   readonly participantOperations?: ParticipantOperationsHttpRuntime;
   readonly airtableWebhookIngress?: AirtableWebhookIngressRuntime;
   readonly airtableIntegration?: AirtableIntegrationHttpRuntime;
+  readonly acceleventsExportDownload?: AcceleventsExportDownloadRuntime;
   readonly requestSerialization?: HttpRequestSerializationBoundary;
   readonly health?: RuntimeHealthSource;
 }) {
@@ -267,6 +272,9 @@ export function createHttpApp(input: {
 
   if (input.operatorOperations) {
     app.route('/', createOperatorOperationsHttpAdapter(input.operatorOperations));
+  }
+  if (input.acceleventsExportDownload) {
+    app.route('/', createAcceleventsExportDownloadHttpAdapter(input.acceleventsExportDownload));
   }
 
   // The participant lane: server-owned entry ceremony routes first, then the

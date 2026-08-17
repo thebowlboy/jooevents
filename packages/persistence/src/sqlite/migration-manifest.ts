@@ -1,5 +1,6 @@
 import {
   SQLITE_E2_S6_RELEASE_FLOOR,
+  SQLITE_E2_S7_RELEASE_FLOOR,
   type SQLiteMigrationReference,
   type SQLiteReleaseFloor
 } from './release-floor-contract';
@@ -96,6 +97,12 @@ const airtableSync = Object.freeze({
   sequence: 6
 });
 
+const acceleventsExport = Object.freeze({
+  migrationId: 'e2_0007_accelevents_export',
+  schemaEpoch: 2,
+  sequence: 7
+});
+
 /** Exact public epoch-2 baseline plus the sole known retained epoch-1 lineage. */
 export const SQLITE_MIGRATION_MANIFEST: SQLiteMigrationManifest = Object.freeze({
   formatVersion: 1,
@@ -171,16 +178,29 @@ export const SQLITE_MIGRATION_MANIFEST: SQLiteMigrationManifest = Object.freeze(
       dependsOn: apiKeyNeverExpire,
       expectedBeforeApplicationFingerprint: '3ad3833b3b387f16ec2e04c72a611ba3ea27c1ca7b4c407697e369ef5d4d7830',
       expectedAfterApplicationFingerprint: 'fc5d0a46bd51e3b4671172da707844af9e63039c6d1f829373d9d7881dedfa31'
+    }),
+    Object.freeze({
+      ...acceleventsExport,
+      dialect: 'sqlite' as const,
+      artifact: new URL('../../migrations/sqlite/e2_0007_accelevents_export.sql', import.meta.url),
+      checksumSha256: '789b91717715993d1680fc1cc34043fb0f27e95d3573a482ad622c2e0a0dfb1b',
+      atomicity: 'transactional' as const,
+      dependsOn: airtableSync,
+      expectedBeforeApplicationFingerprint: 'fc5d0a46bd51e3b4671172da707844af9e63039c6d1f829373d9d7881dedfa31',
+      expectedAfterApplicationFingerprint: '3da16ed9902c541954117fcdfbd1f570d96d3d2887e2df933a3e9aee1d9919b6'
     })
   ]) as readonly [SQLiteMigrationManifestEntry, ...SQLiteMigrationManifestEntry[]],
   expectedEmptyApplicationFingerprint: 'e3ded6858faee915d966f4bcaf5b768070aaaa4d5f1021ac04c713440106b89d',
-  expectedCurrentApplicationFingerprint: 'fc5d0a46bd51e3b4671172da707844af9e63039c6d1f829373d9d7881dedfa31',
-  expectedCurrentFullFingerprint: '93c2bd560351a6e8607d4c07ae926376b6959c879c8908903011efd8348bb03f',
+  expectedCurrentApplicationFingerprint: '3da16ed9902c541954117fcdfbd1f570d96d3d2887e2df933a3e9aee1d9919b6',
+  expectedCurrentFullFingerprint: '1c344b308b041b9adafe36aa91e71ce4ea5966b97f31fdca23badce94c24fa27',
   dictionary: Object.freeze({
-    artifact: new URL('../../migrations/sqlite/checkpoints/e2_0006_airtable_sync.schema.json', import.meta.url),
-    checksumSha256: '5284ceabd4da1eeb93bec0fe39ce7d99d790aa320a3ee7070705a3cc4646027e'
+    artifact: new URL('../../migrations/sqlite/checkpoints/e2_0007_accelevents_export.schema.json', import.meta.url),
+    checksumSha256: 'fa1bc208f3231a8def4ecdd5aab12447064c5b869d0d3704354cdad7c1d95bd4'
   }),
-  releaseFloors: Object.freeze([SQLITE_E2_S6_RELEASE_FLOOR]) as readonly [SQLiteReleaseFloor],
+  releaseFloors: Object.freeze([
+    SQLITE_E2_S6_RELEASE_FLOOR,
+    SQLITE_E2_S7_RELEASE_FLOOR
+  ]) as readonly [SQLiteReleaseFloor, ...SQLiteReleaseFloor[]],
   acceptedPredecessorLineages: Object.freeze([Object.freeze({
     transitionId: 'e1_identity_access_to_e2_foundation',
     lineageId: 'jooevents_identity_access_epoch_1',

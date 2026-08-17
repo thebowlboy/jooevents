@@ -6,6 +6,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./accelevents-export": "./src/accelevents-export.ts",
     "./communications/organizer": "./src/communications/organizer.ts",
     "./deadlines": "./src/deadlines.ts",
     "./field-registry": "./src/field-registry.ts",

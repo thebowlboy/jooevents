@@ -69,6 +69,7 @@
 		createPulseHistoryLivePort
 	} from '$lib/api/pulse-page-port.live';
 	import { createLiveIntegrationsPagePort } from '$lib/api/integrations-page-port';
+	import { createLiveAcceleventsExportPort } from '$lib/api/accelevents-export-port';
 	import WorkspaceShell from '$lib/features/workspace/components/WorkspaceShell.svelte';
 	import {
 		setLiveWorkspacePorts,
@@ -347,7 +348,8 @@
 		templates,
 		tasks,
 		agentActions: createLiveAgentActionsPagePort(),
-		integrations: createLiveIntegrationsPagePort()
+		integrations: createLiveIntegrationsPagePort(),
+		acceleventsExport: createLiveAcceleventsExportPort({ manifest: initial.manifest })
 	}));
 </script>
 

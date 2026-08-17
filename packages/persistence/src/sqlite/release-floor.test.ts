@@ -55,11 +55,13 @@ function retainedDatabase(): OpenSQLiteResult {
 }
 
 describe('SQLite first release floor', () => {
-  test('publishes one exact executable floor at the terminal migration', () => {
-    const floor = SQLITE_MIGRATION_MANIFEST.releaseFloors[0];
+  test('publishes the current executable floor at the terminal migration and retains its predecessor', () => {
+    const floor = SQLITE_MIGRATION_MANIFEST.releaseFloors.at(-1)!;
     const terminal = SQLITE_MIGRATION_MANIFEST.migrations.at(-1)!;
+    expect(SQLITE_MIGRATION_MANIFEST.releaseFloors.map((candidate) => candidate.releaseFloorId))
+      .toEqual(['sqlite-e2-s6', 'sqlite-e2-s7']);
     expect(floor).toEqual({
-      releaseFloorId: 'sqlite-e2-s6',
+      releaseFloorId: 'sqlite-e2-s7',
       terminalMigration: {
         migrationId: terminal.migrationId,
         schemaEpoch: terminal.schemaEpoch,
@@ -84,9 +86,9 @@ describe('SQLite first release floor', () => {
     });
     expect(result).toMatchObject({
       status: 'promoted',
-      releaseFloorId: 'sqlite-e2-s6',
-      coordinate: { schemaEpoch: 2, sequence: 6 },
-      migrationId: 'e2_0006_airtable_sync',
+      releaseFloorId: 'sqlite-e2-s7',
+      coordinate: { schemaEpoch: 2, sequence: 7 },
+      migrationId: 'e2_0007_accelevents_export',
       databaseClass: 'frozen_release',
       databaseId
     });
@@ -116,7 +118,7 @@ describe('SQLite first release floor', () => {
       expectedDatabaseId: fresh.migration.databaseId!
     })).toMatchObject({
       status: 'already_frozen',
-      releaseFloorId: 'sqlite-e2-s6',
+      releaseFloorId: 'sqlite-e2-s7',
       databaseClass: 'frozen_release'
     });
   });
@@ -133,7 +135,7 @@ describe('SQLite first release floor', () => {
       database: target.sqlite,
       artifacts: loadSQLiteFoundationArtifacts(),
       expectedDatabaseId: databaseId,
-      releaseFloorId: 'sqlite-e2-s6'
+      releaseFloorId: 'sqlite-e2-s7'
     })).toMatchObject({ status: 'already_frozen', databaseId });
     expectFoundationError(() => promoteManagedSQLiteReleaseFloor({
       database: target.sqlite,
@@ -247,7 +249,7 @@ describe('SQLite first release floor', () => {
     });
     expect(result).toMatchObject({
       status: 'promoted',
-      releaseFloorId: 'sqlite-e2-s6',
+      releaseFloorId: 'sqlite-e2-s7',
       schemaFingerprint: SQLITE_MIGRATION_MANIFEST.expectedCurrentFullFingerprint
     });
   });
@@ -278,7 +280,7 @@ describe('SQLite first release floor', () => {
     expect(promoted.exitCode).toBe(0);
     expect(JSON.parse(promoted.stdout.toString())).toMatchObject({
       status: 'promoted',
-      releaseFloorId: 'sqlite-e2-s6',
+      releaseFloorId: 'sqlite-e2-s7',
       databaseId
     });
     const replay = promoteSQLiteReleaseFloorAtPath({ databasePath: path, expectedDatabaseId: databaseId });
