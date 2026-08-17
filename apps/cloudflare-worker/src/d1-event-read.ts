@@ -97,6 +97,25 @@ export function createD1EventReadSource(input: {
       }
       const { eventSet, events } = await readSnapshot(input.database, workspaceId);
       return projectEventList(eventSet, events);
+    },
+    async resolveCurrentEvent(requestedWorkspaceId: WorkspaceId) {
+      if (parseWorkspaceId(requestedWorkspaceId) !== workspaceId) {
+        throw new TypeError('d1_event_scope_workspace_mismatch');
+      }
+      const { eventSet, events } = await readSnapshot(input.database, workspaceId);
+      const current = eventSet.currentEventId === null
+        ? undefined
+        : events.find((event) => event.id === eventSet.currentEventId);
+      if (eventSet.currentEventId !== null && !current) {
+        throw new TypeError('d1_current_event_missing');
+      }
+      return Object.freeze({
+        ...(current ? { eventId: current.id } : {}),
+        evidenceIds: Object.freeze([
+          `event-spine-set:${eventSet.workspaceId}@${eventSet.version}`,
+          ...(current ? [`event-spine-root:${current.id}@${current.version}`] : [])
+        ])
+      });
     }
   });
 }

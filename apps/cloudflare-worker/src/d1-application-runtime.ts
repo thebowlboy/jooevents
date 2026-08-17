@@ -18,6 +18,13 @@ import {
   createEventSettingsUpdateOperationModule
 } from '@jooevents/event-operations';
 import {
+  FIELD_REGISTRY_DIRECT_REQUEST_HASH_PROFILE,
+  FIELD_REGISTRY_MANAGE_ACCESS_POLICY,
+  FIELD_REGISTRY_OPERATION_KEY_PROFILES,
+  FIELD_REGISTRY_READ_ACCESS_POLICY,
+  createFieldRegistryOperationModule
+} from '@jooevents/field-registry';
+import {
   parseInstant,
   parseInvocationId,
   parseWorkspaceId
@@ -45,6 +52,10 @@ import {
   createD1EventSettingsEffectDomainRegistration,
   createD1EventSettingsReadSource
 } from './d1-event-settings';
+import {
+  createD1FieldRegistryDirectEffectDomainRegistration,
+  createD1FieldRegistrySnapshotSource
+} from './d1-field-registry';
 import {
   D1EffectUnitOfWorkPort,
   createD1EffectDomainAdapterRegistry
@@ -75,7 +86,7 @@ function classifiedCommunicationProfile(cryptoProfiles: DurableCryptoProfileComp
   ).encryptionProfile;
 }
 
-/** Builds the first production application slice: authenticated Event reads and writes over D1. */
+/** Builds the authenticated Event and Field Registry application slice over D1. */
 export async function createConfiguredD1ApplicationRuntime(
   environment: D1ApplicationRuntimeEnvironment
 ) {
@@ -88,7 +99,9 @@ export async function createConfiguredD1ApplicationRuntime(
   const clock = Object.freeze({ now: () => parseInstant(new Date().toISOString()) });
   const policies = createOperatorAuthorityPolicyCatalog([
     { policy: EVENT_READ_ACCESS_POLICY, permissionId: 'event.read' },
-    { policy: EVENT_MANAGE_ACCESS_POLICY, permissionId: 'event.manage' }
+    { policy: EVENT_MANAGE_ACCESS_POLICY, permissionId: 'event.manage' },
+    { policy: FIELD_REGISTRY_READ_ACCESS_POLICY, permissionId: 'event.read' },
+    { policy: FIELD_REGISTRY_MANAGE_ACCESS_POLICY, permissionId: 'event.manage' }
   ]);
   const currentAuthority = createD1OperatorCurrentAuthorityResolver({
     session: environment.DB.withSession('first-primary'),
@@ -97,6 +110,10 @@ export async function createConfiguredD1ApplicationRuntime(
   });
   const reads = createD1EventReadSource({ database: environment.DB, workspaceId });
   const settings = createD1EventSettingsReadSource({ database: environment.DB, workspaceId });
+  const fieldRegistry = createD1FieldRegistrySnapshotSource({
+    database: environment.DB,
+    workspaceId
+  });
   const common = Object.freeze({
     workspaceId,
     currentAuthority,
@@ -147,6 +164,29 @@ export async function createConfiguredD1ApplicationRuntime(
     idempotencyCredentialProfile: EVENT_OPERATION_KEY_PROFILES.idempotencyCredential,
     idempotencyCredentialSealer
   });
+  const fieldRegistryOperations = createFieldRegistryOperationModule({
+    workspaceId,
+    policies: Object.freeze({
+      read: FIELD_REGISTRY_READ_ACCESS_POLICY,
+      manage: FIELD_REGISTRY_MANAGE_ACCESS_POLICY
+    }),
+    currentAuthority,
+    currentEvent: reads,
+    snapshotRead: fieldRegistry,
+    clock,
+    ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+    authorityPrincipalKeyProfile: FIELD_REGISTRY_OPERATION_KEY_PROFILES.authorityPrincipal,
+    scopePartitionProfile: FIELD_REGISTRY_OPERATION_KEY_PROFILES.scopePartition,
+    requestCanonicalizationProfile:
+      FIELD_REGISTRY_OPERATION_KEY_PROFILES.requestCanonicalization,
+    requestHashSealer: cryptoProfiles.requestHashSealer(
+      FIELD_REGISTRY_DIRECT_REQUEST_HASH_PROFILE
+    ),
+    idempotencyCredentialProfile: FIELD_REGISTRY_OPERATION_KEY_PROFILES.idempotencyCredential,
+    idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(
+      FIELD_REGISTRY_OPERATION_KEY_PROFILES.idempotencyCredential
+    )
+  });
   const domains = createD1EffectDomainAdapterRegistry([
     createD1EventCreateEffectDomainRegistration({
       workspaceId,
@@ -160,7 +200,14 @@ export async function createConfiguredD1ApplicationRuntime(
       })
     }),
     createD1EventSelectEffectDomainRegistration({ workspaceId }),
-    createD1EventSettingsEffectDomainRegistration({ workspaceId })
+    createD1EventSettingsEffectDomainRegistration({ workspaceId }),
+    createD1FieldRegistryDirectEffectDomainRegistration({
+      workspaceId,
+      ids: {
+        newFieldId: () => crypto.randomUUID(),
+        newChoiceId: () => crypto.randomUUID()
+      }
+    })
   ]);
   const unitOfWork = new D1EffectUnitOfWorkPort(environment.DB, domains, {
     authorityRecheck: (buffered) => ({
@@ -180,7 +227,8 @@ export async function createConfiguredD1ApplicationRuntime(
       eventListOperations,
       eventSelectOperations,
       eventSettingsReadOperations,
-      eventSettingsUpdateOperations
+      eventSettingsUpdateOperations,
+      fieldRegistryOperations
     ]),
     read: {
       operationalTrace: { emit() {} },

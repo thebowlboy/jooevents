@@ -188,6 +188,7 @@ import {
 import {
   FIELD_REGISTRY_DIRECT_REQUEST_HASH_PROFILE,
   FIELD_REGISTRY_MANAGE_ACCESS_POLICY,
+  FIELD_REGISTRY_OPERATION_KEY_PROFILES,
   FIELD_REGISTRY_READ_ACCESS_POLICY,
   createFieldRegistryOperationModule
 } from '@jooevents/field-registry';
@@ -866,25 +867,6 @@ const intakeProfiles = Object.freeze({
   }),
   idempotencyCredential: Object.freeze({
     key: 'key-profile.intake.idempotency-credential',
-    version: parseContractVersion(1)
-  })
-});
-
-const fieldRegistryProfiles = Object.freeze({
-  authorityPrincipal: Object.freeze({
-    key: 'key-profile.field-registry.operator-principal',
-    version: parseContractVersion(1)
-  }),
-  scopePartition: Object.freeze({
-    key: 'key-profile.field-registry.current-event-scope',
-    version: parseContractVersion(1)
-  }),
-  requestCanonicalization: Object.freeze({
-    key: 'key-profile.field-registry.request-canonicalization',
-    version: parseContractVersion(1)
-  }),
-  idempotencyCredential: Object.freeze({
-    key: 'key-profile.field-registry.idempotency-credential',
     version: parseContractVersion(1)
   })
 });
@@ -3792,12 +3774,14 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       ids: Object.freeze({
         newInvocationId: () => parseInvocationId(crypto.randomUUID())
       }),
-      authorityPrincipalKeyProfile: fieldRegistryProfiles.authorityPrincipal,
-      scopePartitionProfile: fieldRegistryProfiles.scopePartition,
-      requestCanonicalizationProfile: fieldRegistryProfiles.requestCanonicalization,
+      authorityPrincipalKeyProfile: FIELD_REGISTRY_OPERATION_KEY_PROFILES.authorityPrincipal,
+      scopePartitionProfile: FIELD_REGISTRY_OPERATION_KEY_PROFILES.scopePartition,
+      requestCanonicalizationProfile: FIELD_REGISTRY_OPERATION_KEY_PROFILES.requestCanonicalization,
       requestHashSealer: cryptoProfiles.requestHashSealer(FIELD_REGISTRY_DIRECT_REQUEST_HASH_PROFILE),
-      idempotencyCredentialProfile: fieldRegistryProfiles.idempotencyCredential,
-      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(fieldRegistryProfiles.idempotencyCredential)
+      idempotencyCredentialProfile: FIELD_REGISTRY_OPERATION_KEY_PROFILES.idempotencyCredential,
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(
+        FIELD_REGISTRY_OPERATION_KEY_PROFILES.idempotencyCredential
+      )
     });
     const intakeReadOperations = createIntakeReadOperationModule({
       workspaceId,

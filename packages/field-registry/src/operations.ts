@@ -39,6 +39,8 @@ import {
   structuredOutcomeSchema,
   createSafeSchemaManifestRef,
   type FieldRegistryDraftAction,
+  type FieldRegistryScopeDto,
+  type FieldRegistrySnapshotDto,
   type SafeSchemaManifestRef,
   type StructuredOutcome,
   type VersionedDefinitionRef
@@ -102,6 +104,24 @@ export const FIELD_REGISTRY_DIRECT_REQUEST_HASH_PROFILE = ref(
 export const FIELD_REGISTRY_DIRECT_HANDLER_CAPABILITY = ref(
   'capability.field_registry.direct'
 );
+export const FIELD_REGISTRY_OPERATION_KEY_PROFILES = Object.freeze({
+  authorityPrincipal: Object.freeze({
+    key: 'key-profile.field-registry.operator-principal',
+    version: parseContractVersion(1)
+  }),
+  scopePartition: Object.freeze({
+    key: 'key-profile.field-registry.current-event-scope',
+    version: parseContractVersion(1)
+  }),
+  requestCanonicalization: Object.freeze({
+    key: 'key-profile.field-registry.request-canonicalization',
+    version: parseContractVersion(1)
+  }),
+  idempotencyCredential: Object.freeze({
+    key: 'key-profile.field-registry.idempotency-credential',
+    version: parseContractVersion(1)
+  })
+});
 
 const directOperations = Object.freeze([
   Object.freeze({
@@ -290,13 +310,16 @@ export interface FieldRegistryOperationPolicies {
   readonly manage: VersionedAccessPolicyRef;
 }
 
-export interface CreateFieldRegistryOperationModuleInput {
+export interface FieldRegistrySnapshotReadSource {
+  readSnapshot(scope: FieldRegistryScopeDto):
+    FieldRegistrySnapshotDto | undefined | Promise<FieldRegistrySnapshotDto | undefined>;
+}
+
+interface CreateFieldRegistryOperationModuleBaseInput {
   readonly workspaceId: WorkspaceId;
   readonly policies: FieldRegistryOperationPolicies;
   readonly currentAuthority: CurrentAuthorityResolver<InvocationEvidence>;
   readonly currentEvent: FieldRegistryCurrentEventSource;
-  readonly registryRead: FieldRegistryReadPort;
-  readonly optionSource: FieldRegistryLiveOptionSource;
   readonly clock: Clock;
   readonly ids: FieldRegistryOperationIds;
   readonly authorityPrincipalKeyProfile: VersionedKeyProfileRef;
@@ -306,6 +329,20 @@ export interface CreateFieldRegistryOperationModuleInput {
   readonly idempotencyCredentialProfile: VersionedKeyProfileRef;
   readonly idempotencyCredentialSealer: IdempotencyCredentialSealer;
 }
+
+export type CreateFieldRegistryOperationModuleInput =
+  CreateFieldRegistryOperationModuleBaseInput & (
+    | {
+        readonly snapshotRead: FieldRegistrySnapshotReadSource;
+        readonly registryRead?: never;
+        readonly optionSource?: never;
+      }
+    | {
+        readonly snapshotRead?: never;
+        readonly registryRead: FieldRegistryReadPort;
+        readonly optionSource: FieldRegistryLiveOptionSource;
+      }
+  );
 
 function authorityOutcome(reason: CurrentAuthorityDenialReason): StructuredOutcome {
   return Object.freeze({
@@ -452,22 +489,30 @@ export function createFieldRegistryOperationModule(
   });
   const readCapability: ReadCapabilityRegistration = Object.freeze({
     reference: refs.readCapability,
-    openSnapshot(context: ReadInvocationContext) {
+    async openSnapshot(context: ReadInvocationContext) {
       if (context.scope.eventId === undefined) {
         return Object.freeze({ kind: 'event_required' });
       }
-      const state = input.registryRead.readFieldRegistry({
+      const scope = {
         workspaceId: context.scope.workspaceId,
         eventId: context.scope.eventId
-      });
-      if (!state) throw new TypeError('field_registry_current_event_state_missing');
-      if (state.scope.workspaceId !== context.scope.workspaceId
-          || state.scope.eventId !== context.scope.eventId) {
+      };
+      const value = input.snapshotRead
+        ? await input.snapshotRead.readSnapshot(scope)
+        : (() => {
+            const state = input.registryRead.readFieldRegistry(scope);
+            return state
+              ? projectFieldRegistrySnapshot({ state, optionSource: input.optionSource })
+              : undefined;
+          })();
+      if (!value) throw new TypeError('field_registry_current_event_state_missing');
+      if (value.scope.workspaceId !== context.scope.workspaceId
+          || value.scope.eventId !== context.scope.eventId) {
         throw new TypeError('field_registry_current_event_state_scope_mismatch');
       }
       return Object.freeze({
         kind: 'snapshot',
-        value: projectFieldRegistrySnapshot({ state, optionSource: input.optionSource })
+        value
       });
     }
   });

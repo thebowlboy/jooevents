@@ -105,7 +105,13 @@ describe('configured D1 application HTTP slice', () => {
       'event.list.read',
       'event.select',
       'event.settings.current.read',
-      'event.settings.update'
+      'event.settings.update',
+      'field_registry.add',
+      'field_registry.edit',
+      'field_registry.move',
+      'field_registry.remove',
+      'field_registry.restore',
+      'field_registry.snapshot.read'
     ]);
 
     const initial = await handleRequest(
@@ -275,6 +281,157 @@ describe('configured D1 application HTTP slice', () => {
     const logs = await env.DB.prepare('SELECT count(*) AS count FROM operation_log WHERE id = ?')
       .bind(firstBody.receipt.id).first<{ readonly count: number }>();
     expect(logs?.count).toBe(1);
+
+    const initialRegistry = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/field-registry`, { headers }),
+      environment()
+    );
+    expect(initialRegistry.status, await initialRegistry.clone().text()).toBe(200);
+    expect(await initialRegistry.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        version: 1,
+        fields: expect.arrayContaining([expect.objectContaining({ key: 'person.email' })])
+      }
+    });
+    const addBody = {
+      expectedRegistryVersion: 1,
+      field: {
+        kind: 'text',
+        label: 'Employer',
+        help: 'Where do you work?',
+        answerOwner: 'person',
+        scope: { kind: 'shared' },
+        contexts: {
+          apply: { visible: true, required: false },
+          onboard: { visible: true, required: false },
+          profile: { visible: true, required: false }
+        },
+        options: { kind: 'none' }
+      }
+    } as const;
+    const fieldMutation = (action: string, key: string, body: unknown) => handleRequest(
+      new Request(`${baseUrl}/api/events/current/field-registry/${action}`, {
+        method: 'POST',
+        headers: {
+          cookie: headers.cookie,
+          origin: baseUrl,
+          'content-type': 'application/json',
+          'idempotency-key': key
+        },
+        body: JSON.stringify(body)
+      }),
+      environment()
+    );
+    const added = await fieldMutation('add', 'd1-field-add', addBody);
+    expect(added.status, await added.clone().text()).toBe(200);
+    const addedBody = await added.json<{
+      readonly kind: string;
+      readonly data: { readonly mutation: { readonly fieldId: string } };
+    }>();
+    expect(addedBody).toMatchObject({
+      kind: 'success',
+      data: { action: 'add', mutation: { registryVersion: 2, fieldVersion: 1 } }
+    });
+    const fieldId = addedBody.data.mutation.fieldId;
+    const addReplay = await fieldMutation('add', 'd1-field-add', addBody);
+    expect(await addReplay.json()).toEqual(addedBody);
+    const changedRequest = await fieldMutation('add', 'd1-field-add', {
+      ...addBody,
+      field: { ...addBody.field, label: 'Changed request' }
+    });
+    expect(await changedRequest.json()).toMatchObject({
+      kind: 'outcome',
+      outcome: { class: 'idempotency_conflict', kind: 'operation.request_changed' }
+    });
+    const edited = await fieldMutation('edit', 'd1-field-edit', {
+      fieldId,
+      expectedFieldVersion: 1,
+      expectedRegistryVersion: 2,
+      changes: { label: 'Organization' }
+    });
+    expect(await edited.json()).toMatchObject({
+      kind: 'success',
+      data: { action: 'edit', mutation: { fieldId, registryVersion: 3, fieldVersion: 2 } }
+    });
+    const moved = await fieldMutation('move', 'd1-field-move', {
+      fieldId,
+      expectedFieldVersion: 2,
+      expectedRegistryVersion: 3,
+      toIndex: 0
+    });
+    expect(await moved.json()).toMatchObject({
+      kind: 'success',
+      data: { action: 'move', mutation: { fieldId, registryVersion: 4, position: 0 } }
+    });
+    const removed = await fieldMutation('remove', 'd1-field-remove', {
+      fieldId,
+      expectedFieldVersion: 2,
+      expectedRegistryVersion: 4
+    });
+    expect(await removed.json()).toMatchObject({
+      kind: 'success',
+      data: { action: 'remove', mutation: { fieldId, registryVersion: 5, position: null } }
+    });
+    const restored = await fieldMutation('restore', 'd1-field-restore', {
+      fieldId,
+      expectedFieldVersion: 2,
+      expectedRegistryVersion: 5,
+      toIndex: 0
+    });
+    expect(await restored.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'restore',
+        mutation: { fieldId, registryVersion: 6, fieldVersion: 3, position: 0 }
+      }
+    });
+    const staleField = await fieldMutation('edit', 'd1-field-stale', {
+      fieldId,
+      expectedFieldVersion: 2,
+      expectedRegistryVersion: 5,
+      changes: { label: 'Stale label' }
+    });
+    expect(await staleField.json()).toMatchObject({
+      kind: 'outcome',
+      outcome: {
+        class: 'stale_revision',
+        kind: 'field_registry.changed',
+        detail: { code: 'stale_registry', action: 'edit', fieldId }
+      }
+    });
+    const finalRegistry = await handleRequest(
+      new Request(`${baseUrl}/api/events/current/field-registry`, { headers }),
+      environment()
+    );
+    expect(await finalRegistry.json()).toMatchObject({
+      kind: 'success',
+      data: {
+        version: 6,
+        fields: expect.arrayContaining([expect.objectContaining({
+          id: fieldId,
+          version: 3,
+          label: 'Organization',
+          position: 0
+        })])
+      }
+    });
+    const registryRow = await env.DB.prepare(`SELECT registry_version,state_json,
+      state_digest_sha256 FROM field_registry_aggregates
+      WHERE workspace_id = ? AND event_id = ?`)
+      .bind(workspaceId, firstBody.data.event.id)
+      .first<{
+        readonly registry_version: number;
+        readonly state_json: string;
+        readonly state_digest_sha256: string;
+      }>();
+    expect(registryRow?.registry_version).toBe(6);
+    expect(JSON.parse(registryRow?.state_json ?? '{}')).toMatchObject({ version: 6 });
+    expect(registryRow?.state_digest_sha256).toMatch(/^[a-f0-9]{64}$/);
+    const fieldOperationCount = await env.DB.prepare(`SELECT count(*) AS count
+      FROM operation_log WHERE workspace_id = ? AND operation_name LIKE 'field_registry.%'`)
+      .bind(workspaceId).first<{ readonly count: number }>();
+    expect(fieldOperationCount?.count).toBe(5);
   });
 
   test('keeps the application slice closed when activation or a durable key duty is incomplete', async () => {

@@ -203,6 +203,8 @@ function isConfiguredApplicationPath(pathname: string): boolean {
   return pathname === '/api/operations/manifest'
     || pathname === '/api/events/current'
     || pathname === '/api/events/current/settings'
+    || pathname === '/api/events/current/field-registry'
+    || pathname.startsWith('/api/events/current/field-registry/')
     || pathname === '/api/events'
     || pathname === '/api/events/select';
 }
