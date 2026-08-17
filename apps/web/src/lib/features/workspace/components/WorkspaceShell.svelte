@@ -371,7 +371,7 @@
 				<div class="side__event side__event--static">
 					<span class="side__event-name">{event.name}</span>
 					<span class="side__event-dates">{event.dates}{event.location ? ` · ${event.location}` : ''}</span>
-					<span class="side__event-note">Switching and new events are not available in this live workspace yet.</span>
+					<span class="side__event-note">Adding events isn't available yet.</span>
 				</div>
 			{/if}
 		{:else}
@@ -447,13 +447,20 @@
 		     One row like every other area: which part of Settings is chosen on
 		     the surface itself, by its section tabs — the rail never grows a
 		     second menu for one area's insides. -->
-		{#if nav.settings || nav.approvals}
+		{#if nav.settings || nav.integrations || nav.approvals}
 			{@const settingsItem = nav.settings}
 			<nav class="side__foot" aria-label="Workspace controls">
 				{#if nav.approvals}
 					{@const approvals = nav.approvals}
 					<a class="side__link" class:side__link--active={isActive(approvals.href)} href={approvals.href} aria-current={isActive(approvals.href) ? 'page' : undefined}>
 						<approvals.icon size={16} aria-hidden="true" />{approvals.label}
+					</a>
+				{/if}
+				{#if nav.integrations}
+					{@const integrations = nav.integrations}
+					{@const within = isActive(integrations.href)}
+					<a class="side__link" class:side__link--active={within} href={integrations.href} aria-current={within ? 'page' : undefined}>
+						<integrations.icon size={16} aria-hidden="true" />{integrations.label}
 					</a>
 				{/if}
 				{#if settingsItem}
