@@ -4,7 +4,8 @@ set -eu
 
 repository_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)"
 
-if [ ! -d "${repository_root}/.git" ]; then
+git_top_level="$(git -C "${repository_root}" rev-parse --show-toplevel 2>/dev/null || true)"
+if [ "${git_top_level}" != "${repository_root}" ]; then
   echo "Public boundary check requires a Git worktree: ${repository_root}" >&2
   exit 1
 fi

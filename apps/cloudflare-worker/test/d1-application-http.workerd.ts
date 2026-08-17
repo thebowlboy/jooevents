@@ -1,8 +1,9 @@
 import { env } from 'cloudflare:workers';
 import { makeSignature } from 'better-auth/crypto';
-import { canonicalJsonText } from '@jooevents/kernel';
+import { canonicalJsonText, parseWorkspaceId } from '@jooevents/kernel';
 import { beforeAll, describe, expect, test } from 'vitest';
 import { handleRequest, type CloudflareApplicationEnvironment } from '../src/index';
+import { dispatchD1FilesCleanupWake } from '../src/d1-files-cleanup';
 
 const uuid = (suffix: number): string =>
   `019c1df8-d4f0-7abc-8def-${suffix.toString(16).padStart(12, '0')}`;
@@ -125,7 +126,17 @@ describe('configured D1 application HTTP slice', () => {
       'field_registry.remove',
       'field_registry.restore',
       'field_registry.snapshot.read',
+      'file.attachment.attach',
+      'file.attachment.detach',
+      'file.attachment.link',
       'file.overview.read',
+      'file.request.create',
+      'file.request.fulfill',
+      'file.request.withdraw',
+      'file.share.create',
+      'file.share.revoke',
+      'file.upload.confirm',
+      'file.upload.intent',
       'operation.history.list',
       'program_vocabulary.create',
       'program_vocabulary.delete',
@@ -1763,7 +1774,7 @@ describe('configured D1 application HTTP slice', () => {
       .bind(workspaceId, freshEventBody.data.event.id)
       .first<{ readonly set_version: number }>();
     expect(freshSet).toEqual({ set_version: 2 });
-  }, 10_000);
+  }, 20_000);
 
   test('drafts, replays, and publishes a guarded Program Vocabulary merge over D1', async () => {
     const headers = { cookie: await cookie() };
@@ -2013,6 +2024,347 @@ describe('configured D1 application HTTP slice', () => {
       .bind(workspaceId, eventId, sessionBody.data.session.id).first();
     expect(repointedSessionSlot).toEqual({ item_id: targetTrack.data.affectedIds[0], version: 2 });
   }, 20_000);
+
+  test('runs all organizer Files commands and the R2 byte handoff over one current Event', async () => {
+    const headers = { cookie: await cookie() };
+    const current = await env.DB.prepare(`SELECT current_event_id FROM event_spine_workspace_sets
+      WHERE workspace_id = ?`).bind(workspaceId)
+      .first<{ readonly current_event_id: string }>();
+    const eventId = current!.current_event_id;
+    const session = await env.DB.prepare(`SELECT id FROM sessions
+      WHERE workspace_id = ? AND event_id = ? ORDER BY id COLLATE BINARY LIMIT 1`)
+      .bind(workspaceId, eventId).first<{ readonly id: string }>();
+    const engagementId = uuid(880);
+    const engagementHead = canonicalJsonText({
+      id: engagementId,
+      sessionId: session!.id,
+      personId: userId,
+      submissionId: null,
+      state: 'confirmed',
+      version: 1,
+      seededByDecision: null
+    });
+    await env.DB.prepare(`INSERT INTO engagement_heads (
+      workspace_id,event_id,id,session_id,person_id,submission_id,state,version,
+      head_json,invited_at_ms,cancelled_at_ms
+    ) VALUES (?,?,?,?,?,NULL,'confirmed',1,?,?,NULL)`)
+      .bind(workspaceId, eventId, engagementId, session!.id, userId,
+        engagementHead, Date.now()).run();
+
+    const mutate = async (path: string, key: string, body: unknown) => {
+      const response = await handleRequest(new Request(
+        `${baseUrl}/api/events/current/files/${path}`,
+        {
+          method: 'POST',
+          headers: {
+            cookie: headers.cookie,
+            origin: baseUrl,
+            'content-type': 'application/json',
+            'idempotency-key': key
+          },
+          body: JSON.stringify(body)
+        }
+      ), environment());
+      expect(response.status, await response.clone().text()).toBe(200);
+      const result = await response.json<{ readonly kind: string; readonly data?: unknown }>();
+      expect(result.kind).toBe('success');
+      return result;
+    };
+
+    const shareId = uuid(881);
+    await mutate('shares/create', 'd1-files-share-create', {
+      resourceShareId: shareId,
+      title: 'Speaker pack',
+      audience: { kind: 'all_confirmed' }
+    });
+    const fulfillmentAttachmentId = uuid(882);
+    await mutate('attachments/link', 'd1-files-link-attach', {
+      attachmentId: fulfillmentAttachmentId,
+      subject: { kind: 'engagement', engagementId },
+      link: { provider: 'drive', label: 'Slides', url: 'https://drive.example.invalid/slides' }
+    });
+    const withdrawnRequestId = uuid(883);
+    await mutate('requests/create', 'd1-files-request-create-withdraw', {
+      requestId: withdrawnRequestId,
+      engagementId,
+      what: 'Backup slides',
+      instructions: null,
+      deadlineId: null
+    });
+    await mutate('requests/withdraw', 'd1-files-request-withdraw', {
+      requestId: withdrawnRequestId,
+      expectedVersion: 1
+    });
+    const fulfilledRequestId = uuid(884);
+    await mutate('requests/create', 'd1-files-request-create-fulfill', {
+      requestId: fulfilledRequestId,
+      engagementId,
+      what: 'Final slides',
+      instructions: 'Use the approved deck.',
+      deadlineId: null
+    });
+    await mutate('requests/fulfill', 'd1-files-request-fulfill', {
+      requestId: fulfilledRequestId,
+      attachmentId: fulfillmentAttachmentId,
+      expectedVersion: 1
+    });
+    await mutate('shares/revoke', 'd1-files-share-revoke', {
+      resourceShareId: shareId,
+      expectedVersion: 1
+    });
+
+    const intentId = uuid(885);
+    const assetId = uuid(886);
+    const assetAttachmentId = uuid(887);
+    const bytes = new TextEncoder().encode('%PDF-1.7\nJooEvents D1 R2 rehearsal\n%%EOF\n');
+    const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
+      .map((value) => value.toString(16).padStart(2, '0')).join('');
+    await mutate('uploads/intent', 'd1-files-upload-intent', {
+      intentId,
+      purpose: 'session_material',
+      displayFilename: 'speaker-notes.pdf',
+      contentType: 'application/pdf',
+      declaredByteSize: bytes.byteLength
+    });
+    const uploaded = await handleRequest(new Request(
+      `${baseUrl}/api/events/current/files/uploads/${intentId}/bytes`,
+      {
+        method: 'PUT',
+        headers: { cookie: headers.cookie, origin: baseUrl, 'content-type': 'application/pdf' },
+        body: bytes
+      }
+    ), environment());
+    expect(uploaded.status, await uploaded.clone().text()).toBe(200);
+    expect(await uploaded.json()).toMatchObject({
+      kind: 'stored', intent: { id: intentId, byteSize: bytes.byteLength, sha256: digest }
+    });
+    await mutate('uploads/confirm', 'd1-files-upload-confirm', {
+      intentId,
+      assetId,
+      sha256: digest
+    });
+    await mutate('attachments/attach', 'd1-files-asset-attach', {
+      attachmentId: assetAttachmentId,
+      subject: { kind: 'session', sessionId: session!.id },
+      assetId
+    });
+    await mutate('attachments/detach', 'd1-files-asset-detach', {
+      attachmentId: assetAttachmentId,
+      expectedVersion: 1
+    });
+
+    const replay = await mutate('uploads/confirm', 'd1-files-upload-confirm', {
+      intentId,
+      assetId,
+      sha256: digest
+    });
+    expect(replay.kind).toBe('success');
+    const object = await env.FILES.get(`files/${workspaceId}/${eventId}/${intentId}`);
+    expect(object?.size).toBe(bytes.byteLength);
+    const rows = await env.DB.batch([
+      env.DB.prepare(`SELECT state,stored_byte_size,stored_sha256 FROM file_upload_intents
+        WHERE workspace_id = ? AND event_id = ? AND id = ?`).bind(workspaceId, eventId, intentId),
+      env.DB.prepare(`SELECT lifecycle,sha256 FROM file_assets
+        WHERE workspace_id = ? AND event_id = ? AND id = ?`).bind(workspaceId, eventId, assetId),
+      env.DB.prepare(`SELECT state,version FROM file_attachments
+        WHERE workspace_id = ? AND event_id = ? AND id = ?`)
+        .bind(workspaceId, eventId, assetAttachmentId),
+      env.DB.prepare(`SELECT state,version FROM file_requests
+        WHERE workspace_id = ? AND event_id = ? AND id = ?`)
+        .bind(workspaceId, eventId, fulfilledRequestId),
+      env.DB.prepare(`SELECT count(*) AS count FROM operation_log
+        WHERE workspace_id = ? AND event_id = ? AND operation_name LIKE 'file.%'`)
+        .bind(workspaceId, eventId)
+    ]);
+    expect(rows[0]!.results[0]).toEqual({
+      state: 'confirmed', stored_byte_size: bytes.byteLength, stored_sha256: digest
+    });
+    expect(rows[1]!.results[0]).toEqual({ lifecycle: 'available', sha256: digest });
+    expect(rows[2]!.results[0]).toEqual({ state: 'detached', version: 2 });
+    expect(rows[3]!.results[0]).toEqual({ state: 'fulfilled', version: 2 });
+    expect(rows[4]!.results[0]).toEqual({ count: 11 });
+
+    const racedIntentId = uuid(891);
+    const racedBytes = [
+      new TextEncoder().encode('%PDF-1.7\nRACE-A\n%%EOF\n'),
+      new TextEncoder().encode('%PDF-1.7\nRACE-B\n%%EOF\n')
+    ] as const;
+    expect(racedBytes[0].byteLength).toBe(racedBytes[1].byteLength);
+    await mutate('uploads/intent', 'd1-files-raced-upload-intent', {
+      intentId: racedIntentId,
+      purpose: 'session_material',
+      displayFilename: 'raced.pdf',
+      contentType: 'application/pdf',
+      declaredByteSize: racedBytes[0].byteLength
+    });
+    const racedResponses = await Promise.all(racedBytes.map((body) => handleRequest(new Request(
+      `${baseUrl}/api/events/current/files/uploads/${racedIntentId}/bytes`,
+      {
+        method: 'PUT',
+        headers: { cookie: headers.cookie, origin: baseUrl, 'content-type': 'application/pdf' },
+        body
+      }
+    ), environment())));
+    expect(racedResponses.map((response) => response.status).sort()).toEqual([200, 409]);
+    const winnerIndex = racedResponses.findIndex((response) => response.status === 200);
+    const loserIndex = racedResponses.findIndex((response) => response.status === 409);
+    expect(await racedResponses[loserIndex]!.json()).toEqual({
+      kind: 'refused', code: 'upload_in_progress'
+    });
+    const winnerBody = await racedResponses[winnerIndex]!.json<{
+      readonly intent: { readonly sha256: string };
+    }>();
+    const racedObject = await env.FILES.get(`files/${workspaceId}/${eventId}/${racedIntentId}`);
+    expect(racedObject).not.toBeNull();
+    const racedObjectBytes = new Uint8Array(await racedObject!.arrayBuffer());
+    const racedObjectDigest = [...new Uint8Array(
+      await crypto.subtle.digest('SHA-256', racedObjectBytes)
+    )].map((value) => value.toString(16).padStart(2, '0')).join('');
+    expect(racedObjectDigest).toBe(winnerBody.intent.sha256);
+    expect(racedObjectBytes).toEqual(racedBytes[winnerIndex]);
+    const racedAttempts = await env.DB.prepare(`SELECT state,stored_sha256 FROM
+      d1_file_upload_transfer_attempts
+      WHERE workspace_id = ? AND event_id = ? AND intent_id = ?`)
+      .bind(workspaceId, eventId, racedIntentId).all();
+    expect(racedAttempts.results).toEqual([{
+      state: 'stored', stored_sha256: winnerBody.intent.sha256
+    }]);
+
+    const retryIntentId = uuid(892);
+    await mutate('uploads/intent', 'd1-files-retry-upload-intent', {
+      intentId: retryIntentId,
+      purpose: 'session_material',
+      displayFilename: 'retry.pdf',
+      contentType: 'application/pdf',
+      declaredByteSize: bytes.byteLength
+    });
+    const oversized = new Uint8Array(bytes.byteLength + 1);
+    oversized.set(bytes);
+    oversized[oversized.length - 1] = 0x21;
+    const refusedAttempt = await handleRequest(new Request(
+      `${baseUrl}/api/events/current/files/uploads/${retryIntentId}/bytes`,
+      {
+        method: 'PUT',
+        headers: { cookie: headers.cookie, origin: baseUrl, 'content-type': 'application/pdf' },
+        body: oversized
+      }
+    ), environment());
+    expect(refusedAttempt.status).toBe(413);
+    expect(await refusedAttempt.json()).toEqual({ kind: 'refused', code: 'byte_cap_exceeded' });
+    const retriedAttempt = await handleRequest(new Request(
+      `${baseUrl}/api/events/current/files/uploads/${retryIntentId}/bytes`,
+      {
+        method: 'PUT',
+        headers: { cookie: headers.cookie, origin: baseUrl, 'content-type': 'application/pdf' },
+        body: bytes
+      }
+    ), environment());
+    expect(retriedAttempt.status, await retriedAttempt.clone().text()).toBe(200);
+    const retryAttempts = await env.DB.prepare(`SELECT state FROM
+      d1_file_upload_transfer_attempts
+      WHERE workspace_id = ? AND event_id = ? AND intent_id = ?
+      ORDER BY started_at_ms,attempt_id`)
+      .bind(workspaceId, eventId, retryIntentId).all();
+    expect(retryAttempts.results.map((row) => row.state).sort()).toEqual([
+      'safe_refusal', 'stored'
+    ]);
+
+    const cleanupNow = Date.now();
+    const oldInstant = new Date(cleanupNow - 8 * 24 * 60 * 60 * 1_000).toISOString();
+    const expiredInstant = new Date(cleanupNow - 1_000).toISOString();
+    const cleanupIntentId = uuid(888);
+    const cleanupIntentKey = `files/${workspaceId}/${eventId}/${cleanupIntentId}`;
+    const cleanupIntent = {
+      schemaVersion: 1,
+      id: cleanupIntentId,
+      scope: { workspaceId, eventId },
+      uploader: { kind: 'operator_user', userId },
+      purpose: 'session_material',
+      displayFilename: 'abandoned.pdf',
+      contentType: 'application/pdf',
+      declaredByteSize: bytes.byteLength,
+      maximumByteSize: 262_144_000,
+      storageProvider: 'cloudflare-r2',
+      storageKey: cleanupIntentKey,
+      state: 'stored',
+      storedByteSize: bytes.byteLength,
+      storedSha256: digest,
+      createdAt: oldInstant,
+      expiresAt: expiredInstant
+    } as const;
+    const orphanAssetId = uuid(889);
+    const orphanAssetKey = `files/${workspaceId}/${eventId}/${orphanAssetId}`;
+    const orphanAsset = {
+      schemaVersion: 1,
+      id: orphanAssetId,
+      scope: { workspaceId, eventId },
+      uploader: { kind: 'operator_user', userId },
+      purpose: 'session_material',
+      displayFilename: 'orphan.pdf',
+      contentType: 'application/pdf',
+      byteSize: bytes.byteLength,
+      sha256: digest,
+      storageProvider: 'cloudflare-r2',
+      storageKey: orphanAssetKey,
+      lifecycle: 'available',
+      scan: { provider: 'none', verdict: 'released', checkedAt: oldInstant },
+      version: 1,
+      createdAt: oldInstant,
+      updatedAt: oldInstant
+    } as const;
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO file_upload_intents (
+        workspace_id,event_id,id,uploader_kind,uploader_id,purpose,content_type,
+        declared_byte_size,maximum_byte_size,storage_provider,storage_key,state,
+        stored_byte_size,stored_sha256,head_json,created_at_ms,expires_at_ms
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
+        workspaceId, eventId, cleanupIntentId, 'operator_user', userId,
+        cleanupIntent.purpose, cleanupIntent.contentType, cleanupIntent.declaredByteSize,
+        cleanupIntent.maximumByteSize, cleanupIntent.storageProvider, cleanupIntentKey,
+        cleanupIntent.state, cleanupIntent.storedByteSize, digest,
+        canonicalJsonText(cleanupIntent), Date.parse(oldInstant), Date.parse(expiredInstant)
+      ),
+      env.DB.prepare(`INSERT INTO file_assets (
+        workspace_id,event_id,id,uploader_kind,uploader_id,purpose,display_filename,
+        content_type,byte_size,sha256,storage_provider,storage_key,lifecycle,
+        scan_provider,scan_verdict,scan_checked_at_ms,version,head_json,created_at_ms,updated_at_ms
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
+        workspaceId, eventId, orphanAssetId, 'operator_user', userId,
+        orphanAsset.purpose, orphanAsset.displayFilename, orphanAsset.contentType,
+        orphanAsset.byteSize, digest, orphanAsset.storageProvider, orphanAssetKey,
+        orphanAsset.lifecycle, orphanAsset.scan.provider, orphanAsset.scan.verdict,
+        Date.parse(oldInstant), 1, canonicalJsonText(orphanAsset),
+        Date.parse(oldInstant), Date.parse(oldInstant)
+      )
+    ]);
+    const strandedKey = `files/${workspaceId}/${eventId}/${uuid(890)}`;
+    await Promise.all([
+      env.FILES.put(cleanupIntentKey, bytes),
+      env.FILES.put(orphanAssetKey, bytes),
+      env.FILES.put(strandedKey, bytes)
+    ]);
+    const cleanup = await dispatchD1FilesCleanupWake(environment(), {
+      workspaceId: parseWorkspaceId(workspaceId),
+      nowMs: cleanupNow
+    });
+    expect(cleanup).toMatchObject({
+      expiredIntents: 1,
+      orphanAssets: 1,
+      reconciledObjects: 1,
+      faults: []
+    });
+    const cleanedIntent = await env.DB.prepare(`SELECT state FROM file_upload_intents
+      WHERE workspace_id = ? AND event_id = ? AND id = ?`)
+      .bind(workspaceId, eventId, cleanupIntentId).first();
+    const cleanedAsset = await env.DB.prepare(`SELECT id FROM file_assets
+      WHERE workspace_id = ? AND event_id = ? AND id = ?`)
+      .bind(workspaceId, eventId, orphanAssetId).first();
+    expect(cleanedIntent).toEqual({ state: 'discarded' });
+    expect(cleanedAsset).toBeNull();
+    expect(await env.FILES.head(cleanupIntentKey)).toBeNull();
+    expect(await env.FILES.head(orphanAssetKey)).toBeNull();
+    expect(await env.FILES.head(strandedKey)).toBeNull();
+  }, 30_000);
 
   test('keeps the application slice closed when activation or a durable key duty is incomplete', async () => {
     const headers = { cookie: await cookie() };

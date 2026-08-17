@@ -37,6 +37,64 @@ BEGIN
 END;
 `
 });
+const D1_FILE_TRANSFER_INFRASTRUCTURE: GeneratedCloudflareMigration = Object.freeze({
+  fileName: '1001_d1_file_transfer_attempts_v1.sql',
+  sql: `CREATE TABLE d1_file_upload_transfer_attempts (
+  attempt_id TEXT NOT NULL CHECK (length(attempt_id) = 36),
+  workspace_id TEXT NOT NULL CHECK (length(workspace_id) = 36),
+  event_id TEXT NOT NULL CHECK (length(event_id) = 36),
+  intent_id TEXT NOT NULL CHECK (length(intent_id) = 36),
+  storage_key TEXT NOT NULL CHECK (length(storage_key) BETWEEN 1 AND 512),
+  state TEXT NOT NULL CHECK (state IN (
+    'claimed', 'stored', 'safe_refusal', 'ambiguous_failure'
+  )),
+  outcome_code TEXT CHECK (outcome_code IS NULL OR length(outcome_code) BETWEEN 1 AND 100),
+  stored_byte_size INTEGER CHECK (stored_byte_size IS NULL OR stored_byte_size > 0),
+  stored_sha256 TEXT CHECK (stored_sha256 IS NULL OR length(stored_sha256) = 64),
+  started_at_ms INTEGER NOT NULL CHECK (started_at_ms BETWEEN 0 AND 8640000000000000),
+  finished_at_ms INTEGER CHECK (finished_at_ms IS NULL OR finished_at_ms BETWEEN started_at_ms AND 8640000000000000),
+  PRIMARY KEY (attempt_id),
+  FOREIGN KEY (workspace_id, event_id, intent_id)
+    REFERENCES file_upload_intents(workspace_id, event_id, id)
+    ON UPDATE RESTRICT ON DELETE RESTRICT,
+  CHECK (
+    (state = 'claimed' AND outcome_code IS NULL AND stored_byte_size IS NULL
+      AND stored_sha256 IS NULL AND finished_at_ms IS NULL)
+    OR (state = 'stored' AND outcome_code IS NULL AND stored_byte_size IS NOT NULL
+      AND stored_sha256 IS NOT NULL AND finished_at_ms IS NOT NULL)
+    OR (state IN ('safe_refusal', 'ambiguous_failure') AND outcome_code IS NOT NULL
+      AND stored_byte_size IS NULL AND stored_sha256 IS NULL AND finished_at_ms IS NOT NULL)
+  )
+) STRICT, WITHOUT ROWID;
+
+CREATE UNIQUE INDEX d1_file_upload_one_effective_transfer
+  ON d1_file_upload_transfer_attempts(workspace_id, event_id, intent_id)
+  WHERE state IN ('claimed', 'stored', 'ambiguous_failure');
+
+CREATE INDEX d1_file_upload_transfer_by_intent
+  ON d1_file_upload_transfer_attempts(workspace_id, event_id, intent_id, started_at_ms);
+
+CREATE TRIGGER d1_file_upload_transfer_one_resolution
+BEFORE UPDATE ON d1_file_upload_transfer_attempts
+WHEN OLD.state <> 'claimed'
+  OR NEW.state NOT IN ('stored', 'safe_refusal', 'ambiguous_failure')
+  OR OLD.attempt_id <> NEW.attempt_id
+  OR OLD.workspace_id <> NEW.workspace_id
+  OR OLD.event_id <> NEW.event_id
+  OR OLD.intent_id <> NEW.intent_id
+  OR OLD.storage_key <> NEW.storage_key
+  OR OLD.started_at_ms <> NEW.started_at_ms
+BEGIN
+  SELECT RAISE(ABORT, 'd1 file upload attempt may resolve exactly once');
+END;
+
+CREATE TRIGGER d1_file_upload_transfer_no_delete
+BEFORE DELETE ON d1_file_upload_transfer_attempts
+BEGIN
+  SELECT RAISE(ABORT, 'd1 file upload attempts are retained');
+END;
+`
+});
 
 export interface GeneratedCloudflareMigration {
   readonly fileName: string;
@@ -168,6 +226,7 @@ export function renderCloudflareD1Migrations(): readonly GeneratedCloudflareMigr
     });
   }
   files.push(D1_RUNTIME_INFRASTRUCTURE);
+  files.push(D1_FILE_TRANSFER_INFRASTRUCTURE);
   return Object.freeze(files.map((file) => Object.freeze(file)));
 }
 

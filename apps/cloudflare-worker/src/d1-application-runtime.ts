@@ -38,9 +38,13 @@ import {
   createFieldRegistryOperationModule
 } from '@jooevents/field-registry';
 import {
+  FILES_COMMAND_ACCESS_POLICY,
+  FILES_COMMAND_REQUEST_HASH_PROFILE,
   FILE_READ_ACCESS_POLICY,
+  createFilesCommandOperationModule,
   createFilesReadOperationModule
 } from '@jooevents/files-operations';
+import { parseFileUploadLimits } from '@jooevents/files/commands';
 import {
   PROGRAM_VOCABULARY_DIRECT_REQUEST_HASH_PROFILE,
   PROGRAM_VOCABULARY_MANAGE_ACCESS_POLICY,
@@ -133,6 +137,7 @@ import {
   createD1FilesOrganizerReadPort
 } from './d1-files';
 import { createD1FilesOperatorHttpTransport } from './d1-files-http';
+import { createD1FilesCommandEffectDomainRegistration } from './d1-files-mutation';
 import {
   createD1TaskBoardReadSource,
   createD1TaskDirectEffectDomainRegistration
@@ -169,6 +174,9 @@ import { createR2FileBlobStore } from './r2-file-blob-store';
 export type D1ApplicationRuntimeEnvironment = CloudflareAuthBindings & {
   readonly DB: D1Database;
   readonly FILES: R2Bucket;
+  readonly JOOEVENTS_FILES_MAX_UPLOAD_BYTES_SPEAKER?: string;
+  readonly JOOEVENTS_FILES_MAX_UPLOAD_BYTES_ORGANIZER?: string;
+  readonly JOOEVENTS_FILES_MAX_TOTAL_BYTES_PER_SPEAKER_EVENT?: string;
 };
 
 export function loadD1CryptoProfiles(
@@ -242,6 +250,10 @@ const FILES_OPERATION_KEY_PROFILES = Object.freeze({
   }),
   requestCanonicalization: Object.freeze({
     key: 'key-profile.file.request-canonicalization',
+    version: parseContractVersion(1)
+  }),
+  idempotencyCredential: Object.freeze({
+    key: 'key-profile.file.idempotency-credential',
     version: parseContractVersion(1)
   })
 });
@@ -356,6 +368,7 @@ export async function createConfiguredD1ApplicationRuntime(
       permissionId: WORKSPACE_TEAM_OPERATION_ACCESS.remove.permissionId
     },
     { policy: FILE_READ_ACCESS_POLICY, permissionId: 'submission.read' },
+    { policy: FILES_COMMAND_ACCESS_POLICY, permissionId: 'event.manage' },
     { policy: PROGRAM_VOCABULARY_READ_ACCESS_POLICY, permissionId: 'event.read' },
     { policy: PROGRAM_VOCABULARY_MANAGE_ACCESS_POLICY,
       permissionId: 'program.vocabulary.manage' },
@@ -427,6 +440,14 @@ export async function createConfiguredD1ApplicationRuntime(
     workspaceId
   });
   const fileBlobs = createR2FileBlobStore({ bucket: environment.FILES });
+  const fileLimits = parseFileUploadLimits({
+    JOOEVENTS_FILES_MAX_UPLOAD_BYTES_SPEAKER:
+      environment.JOOEVENTS_FILES_MAX_UPLOAD_BYTES_SPEAKER,
+    JOOEVENTS_FILES_MAX_UPLOAD_BYTES_ORGANIZER:
+      environment.JOOEVENTS_FILES_MAX_UPLOAD_BYTES_ORGANIZER,
+    JOOEVENTS_FILES_MAX_TOTAL_BYTES_PER_SPEAKER_EVENT:
+      environment.JOOEVENTS_FILES_MAX_TOTAL_BYTES_PER_SPEAKER_EVENT
+  });
   const common = Object.freeze({
     workspaceId,
     currentAuthority,
@@ -677,6 +698,22 @@ export async function createConfiguredD1ApplicationRuntime(
     requestCanonicalizationProfile: FILES_OPERATION_KEY_PROFILES.requestCanonicalization,
     read: files
   });
+  const fileCommandOperations = createFilesCommandOperationModule({
+    workspaceId,
+    commandPolicy: FILES_COMMAND_ACCESS_POLICY,
+    currentAuthority,
+    currentEvent: reads,
+    clock,
+    ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+    authorityPrincipalKeyProfile: FILES_OPERATION_KEY_PROFILES.authorityPrincipal,
+    scopePartitionProfile: FILES_OPERATION_KEY_PROFILES.scopePartition,
+    requestCanonicalizationProfile: FILES_OPERATION_KEY_PROFILES.requestCanonicalization,
+    requestHashSealer: cryptoProfiles.requestHashSealer(FILES_COMMAND_REQUEST_HASH_PROFILE),
+    idempotencyCredentialProfile: FILES_OPERATION_KEY_PROFILES.idempotencyCredential,
+    idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(
+      FILES_OPERATION_KEY_PROFILES.idempotencyCredential
+    )
+  });
   const programVocabularyReadOperations = createProgramVocabularyReadOperationModule({
     workspaceId,
     readPolicy: PROGRAM_VOCABULARY_READ_ACCESS_POLICY,
@@ -878,6 +915,15 @@ export async function createConfiguredD1ApplicationRuntime(
         newDeadlineId: () => crypto.randomUUID()
       }
     }),
+    createD1FilesCommandEffectDomainRegistration({
+      workspaceId,
+      limits: fileLimits,
+      storageProvider: fileBlobs.provider,
+      ids: {
+        newPreparationHandle: () => crypto.randomUUID(),
+        newFactId: () => crypto.randomUUID()
+      }
+    }),
     ...createD1TemplateArtifactNativeEffectDomainRegistrations({
       workspaceId,
       ids: {
@@ -927,6 +973,7 @@ export async function createConfiguredD1ApplicationRuntime(
       workspaceTeamOperations,
       apiKeyOperations,
       fileReadOperations,
+      fileCommandOperations,
       programVocabularyReadOperations,
       programVocabularyDirectOperations,
       programVocabularyMergeOperations,
@@ -957,11 +1004,16 @@ export async function createConfiguredD1ApplicationRuntime(
   const fileReadBinding = operations.registry.operatorHttpBindings.find((binding) =>
     binding.operationName === 'file.overview.read' && binding.operationVersion === 1);
   if (!fileReadBinding) throw new TypeError('cloudflare_file_read_binding_missing');
+  const fileCommandBinding = operations.registry.operatorHttpEffectBindings.find((binding) =>
+    binding.operationName === 'file.upload.intent' && binding.operationVersion === 1);
+  if (!fileCommandBinding) throw new TypeError('cloudflare_file_command_binding_missing');
   return createD1FilesOperatorHttpTransport({
+    database: environment.DB,
     workspaceId,
     delegate: operatorWithApiKeySecretHandoff,
     evidence,
     evidenceBinding: fileReadBinding,
+    commandEvidenceBinding: fileCommandBinding,
     currentAuthority,
     currentEvent: reads,
     clock,

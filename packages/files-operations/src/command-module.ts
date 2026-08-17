@@ -112,6 +112,7 @@ export const filesCommandRefusalCodeSchema = z.enum([
   'request_missing', 'request_not_open', 'stale_request', 'attachment_detached',
   'attachment_subject_mismatch', 'portal_not_related'
 ]);
+export type FilesCommandRefusalCode = z.infer<typeof filesCommandRefusalCodeSchema>;
 
 export const filesCommandRefusalDetailSchema = z.strictObject({
   action: filesCommandActionSchema,

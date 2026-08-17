@@ -1,4 +1,5 @@
 import { SQLITE_E2_S8_RELEASE_FLOOR } from '@jooevents/persistence/release-floor-contract';
+import { parseWorkspaceId } from '@jooevents/kernel';
 import {
   CloudflareAuthConfigurationError,
   cloudflareAuthRuntimeEnabled,
@@ -10,10 +11,15 @@ import {
   createConfiguredD1ApplicationRuntime
 } from './d1-application-runtime';
 import { dispatchD1OutboundEmailWake } from './d1-outbound-email-queue';
+import { dispatchD1FilesCleanupWake } from './d1-files-cleanup';
 
 export type CloudflareApplicationEnvironment = Omit<
   Env,
-  'JOOEVENTS_AUTH_RUNTIME_ENABLED' | 'JOOEVENTS_APPLICATION_RUNTIME_ENABLED'
+  | 'JOOEVENTS_AUTH_RUNTIME_ENABLED'
+  | 'JOOEVENTS_APPLICATION_RUNTIME_ENABLED'
+  | 'JOOEVENTS_FILES_MAX_UPLOAD_BYTES_SPEAKER'
+  | 'JOOEVENTS_FILES_MAX_UPLOAD_BYTES_ORGANIZER'
+  | 'JOOEVENTS_FILES_MAX_TOTAL_BYTES_PER_SPEAKER_EVENT'
 >
   & CloudflareAuthBindings;
 
@@ -217,7 +223,7 @@ function isConfiguredApplicationPath(pathname: string): boolean {
     || pathname === '/api/workspace/team/removals'
     || pathname === '/api/events/current'
     || pathname === '/api/events/current/files'
-    || pathname.startsWith('/api/events/current/files/download/')
+    || pathname.startsWith('/api/events/current/files/')
     || pathname === '/api/events/current/settings'
     || pathname === '/api/events/current/program-vocabulary'
     || pathname.startsWith('/api/events/current/program-vocabulary/')
@@ -265,15 +271,25 @@ export async function handleQueue(
       continue;
     }
     try {
-      const result = await dispatchD1OutboundEmailWake(environment);
+      const workspaceId = parseWorkspaceId(environment.JOOEVENTS_WORKSPACE_ID);
+      const [email, files] = await Promise.all([
+        dispatchD1OutboundEmailWake(environment),
+        dispatchD1FilesCleanupWake(environment, {
+          workspaceId,
+          nowMs: message.body.scheduledAtMs
+        })
+      ]);
       console.log(JSON.stringify({
         event: 'cloudflare.queue.maintenance_wake',
         messageId: message.id,
         scheduledAtMs: message.body.scheduledAtMs,
-        considered: result.considered,
-        dispatched: result.dispatched.length,
-        skipped: result.skipped,
-        faults: result.faults.length
+        emailConsidered: email.considered,
+        emailDispatched: email.dispatched.length,
+        emailSkipped: email.skipped,
+        expiredFileIntents: files.expiredIntents,
+        orphanFileAssets: files.orphanAssets,
+        reconciledFileObjects: files.reconciledObjects,
+        faults: email.faults.length + files.faults.length
       }));
       message.ack();
     } catch (error) {

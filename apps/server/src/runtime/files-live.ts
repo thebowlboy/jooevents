@@ -9,52 +9,36 @@ import {
 } from '@jooevents/application';
 import type { VersionedDefinitionRef } from '@jooevents/contracts';
 import {
-  fileAttachInputSchema,
-  fileLinkAttachInputSchema,
-  fileRequestFulfillInputSchema,
-  fileUploadConfirmInputSchema,
-  fileUploadIntentRegisterInputSchema,
   type FileAttachmentDto,
   type FileAttachmentViewDto,
-  type FilePurpose,
   type FileScopeDto,
-  type FileUploadLimitsDto,
-  type FileUploaderPrincipalDto
+  type FileUploadLimitsDto
 } from '@jooevents/contracts/files';
 import type { DeadlineReferenceResolver } from '@jooevents/deadline';
 import {
-  attachFileAsset,
-  attachFileLink,
-  confirmFileUpload,
-  createFileRequest,
   createFilesystemFileBlobStore,
-  createResourceShare,
-  detachFileAttachment,
-  fulfillFileRequest,
   NONE_SCAN_PROVIDER,
   parseFileUploadLimits,
-  registerFileUploadIntent,
-  revokeResourceShare,
   sweepExpiredUploadIntents,
   sweepOrphanFileBlobs,
-  withdrawFileRequest,
   type FileBlobStreamingStore,
   type FileOrphanSweepPort,
   type ExpiredIntentSweepPort,
   type ExpiredIntentSweepReport,
   type FileScanProvider,
   type FileUploadIntentRepository,
-  type FilesFact,
   type OrphanSweepReport,
   type ResourceShareAudienceSource
 } from '@jooevents/files';
 import {
+  dispatchFilesCommand,
   FILES_COMMAND_ACTIONS,
   FILES_COMMAND_HANDLER_CAPABILITY,
   FILES_PORTAL_COMMAND_ACTIONS,
   filesCommandContributionSchema,
   filesCommandDomainContributionSchema,
   sealFilesCommandPreparation,
+  type FilesCommandActor,
   type FilesCommandAction,
   type FilesCommandPreparedContribution,
   type FilesOrganizerReadPort,
@@ -74,37 +58,6 @@ import type { SQLiteEventSpineRepository } from '@jooevents/persistence/event-sp
  * files-command effect-domain adapter, and the D7 orphan sweep as a callable
  * seam — deliberately not a timer.
  */
-
-type FilesCommandRefusalCode =
-  | 'content_type_refused' | 'video_refused_use_link' | 'file_too_large'
-  | 'event_quota_exceeded' | 'display_filename_invalid' | 'intent_id_collision'
-  | 'intent_not_pending' | 'intent_expired' | 'byte_cap_exceeded' | 'empty_stream'
-  | 'image_reencoder_unavailable' | 'image_decode_failed' | 'image_reencode_invalid'
-  | 'intent_not_stored' | 'hash_mismatch' | 'asset_id_collision'
-  | 'attachment_id_collision' | 'subject_missing' | 'asset_missing'
-  | 'asset_not_available' | 'asset_blocked' | 'attachment_missing'
-  | 'already_detached' | 'stale_attachment' | 'share_id_collision' | 'track_missing'
-  | 'engagement_missing' | 'stale_share' | 'already_revoked' | 'share_missing'
-  | 'request_id_collision' | 'engagement_cancelled' | 'deadline_unavailable'
-  | 'request_missing' | 'request_not_open' | 'stale_request' | 'attachment_detached'
-  | 'attachment_subject_mismatch' | 'portal_not_related';
-
-interface FilesCommandSuccess {
-  readonly data: Record<string, unknown>;
-  readonly recordId: string;
-  readonly recordVersion: number;
-  readonly facts: readonly FilesFact<unknown>[];
-}
-
-type FilesCommandDispatch =
-  | { readonly kind: 'success'; readonly success: FilesCommandSuccess }
-  | { readonly kind: 'refused'; readonly code: FilesCommandRefusalCode };
-
-/** The participant lane may register bytes only for its own material asks. */
-const PORTAL_UPLOAD_PURPOSES: ReadonlySet<FilePurpose> = new Set([
-  'engagement_material',
-  'request_fulfillment'
-]);
 
 const FILES_COMMAND_OPERATION_NAMES: ReadonlySet<string> = new Set(
   FILES_COMMAND_ACTIONS.map((action) => `file.${action}`)
@@ -129,14 +82,6 @@ function engagementIdsFromGrants(grants: readonly unknown[]): readonly string[] 
     }
   }
   return Object.freeze(ids);
-}
-
-interface FilesCommandActor {
-  readonly principal: FileUploaderPrincipalDto;
-  /** Present exactly on the operator lane. */
-  readonly operatorUserId: string | undefined;
-  /** Present exactly on the participant lane: freshly recheck-proved relationship. */
-  readonly freshEngagementIds: readonly string[] | undefined;
 }
 
 /**
@@ -239,7 +184,19 @@ export class SQLiteFilesCommandEffectDomainAdapter implements SQLiteEffectDomain
           });
         }
         const scope: FileScopeDto = { workspaceId: context.scope.workspaceId, eventId };
-        const dispatched = this.dispatch({ action, businessInput, scope, actor, occurredAt });
+        const dispatched = dispatchFilesCommand({
+          action,
+          businessInput,
+          scope,
+          actor,
+          occurredAt,
+          repository: this.input.repository,
+          limits: this.input.limits,
+          storageProvider: this.input.storageProvider,
+          scanProvider: this.input.scanProvider,
+          deadlines: this.input.deadlines,
+          audiences: this.input.audiences
+        });
         if (dispatched.kind === 'refused') {
           return Object.freeze({
             result: Object.freeze({
@@ -343,269 +300,6 @@ export class SQLiteFilesCommandEffectDomainAdapter implements SQLiteEffectDomain
       operatorUserId: undefined,
       freshEngagementIds: engagementIdsFromGrants(authority.grants)
     });
-  }
-
-  private dispatch(input: {
-    readonly action: FilesCommandAction;
-    readonly businessInput: unknown;
-    readonly scope: FileScopeDto;
-    readonly actor: FilesCommandActor;
-    readonly occurredAt: string;
-  }): FilesCommandDispatch {
-    const { repository } = this.input;
-    const { scope, actor, occurredAt } = input;
-    const participant = actor.freshEngagementIds !== undefined;
-    const refuse = (code: FilesCommandRefusalCode): FilesCommandDispatch =>
-      Object.freeze({ kind: 'refused' as const, code });
-    const succeed = (success: FilesCommandSuccess): FilesCommandDispatch =>
-      Object.freeze({ kind: 'success' as const, success });
-    switch (input.action) {
-      case 'upload.intent': {
-        const registration = fileUploadIntentRegisterInputSchema.parse(input.businessInput);
-        if (participant && !PORTAL_UPLOAD_PURPOSES.has(registration.purpose)) {
-          return refuse('portal_not_related');
-        }
-        const result = registerFileUploadIntent({
-          scope,
-          uploader: actor.principal,
-          registration,
-          limits: this.input.limits,
-          usage: repository,
-          intents: repository,
-          storageProvider: this.input.storageProvider,
-          now: occurredAt
-        });
-        if (result.kind === 'refused') return refuse(result.code);
-        return succeed({
-          data: { action: 'upload.intent', intent: result.intent, idempotent: result.idempotent },
-          recordId: result.intent.id,
-          recordVersion: 1,
-          facts: []
-        });
-      }
-      case 'upload.confirm': {
-        const confirmation = fileUploadConfirmInputSchema.parse(input.businessInput);
-        const intent = repository.readIntent(scope, confirmation.intentId);
-        if (!intent) return refuse('intent_not_stored');
-        if (!this.ownsIntent(actor, intent.uploader)) return refuse('portal_not_related');
-        const result = confirmFileUpload({
-          intents: repository,
-          assets: repository,
-          scanProvider: this.input.scanProvider,
-          intent,
-          confirmation,
-          now: occurredAt
-        });
-        if (result.kind === 'refused') return refuse(result.code);
-        return succeed({
-          data: { action: 'upload.confirm', asset: result.asset, idempotent: result.idempotent },
-          recordId: result.asset.id,
-          recordVersion: result.asset.version,
-          facts: result.facts
-        });
-      }
-      case 'attachment.attach': {
-        const attach = fileAttachInputSchema.parse(input.businessInput);
-        if (participant) {
-          // The module guard scoped the subject at authorization time; the
-          // recheck-proved relationship re-scopes it here so a grant that
-          // changed between authorization and this transaction cannot be
-          // ridden (and a participant may only attach material they
-          // uploaded).
-          if (!this.participantOwnsSubject(actor, attach.subject)) {
-            return refuse('portal_not_related');
-          }
-          const asset = repository.readAsset(scope, attach.assetId);
-          if (asset && !this.ownsIntent(actor, asset.uploader)) {
-            return refuse('portal_not_related');
-          }
-        }
-        const result = attachFileAsset({
-          scope,
-          attach,
-          actor: actor.principal,
-          attachments: repository,
-          assets: repository,
-          subjects: repository,
-          now: occurredAt
-        });
-        if (result.kind === 'refused') return refuse(result.code);
-        return succeed({
-          data: {
-            action: 'attachment.attach',
-            attachment: result.attachment,
-            idempotent: result.idempotent
-          },
-          recordId: result.attachment.id,
-          recordVersion: result.attachment.version,
-          facts: result.facts
-        });
-      }
-      case 'attachment.link': {
-        const link = fileLinkAttachInputSchema.parse(input.businessInput);
-        if (participant && !this.participantOwnsSubject(actor, link.subject)) {
-          return refuse('portal_not_related');
-        }
-        const result = attachFileLink({
-          scope,
-          attach: input.businessInput as never,
-          actor: actor.principal,
-          attachments: repository,
-          subjects: repository,
-          now: occurredAt
-        });
-        if (result.kind === 'refused') return refuse(result.code);
-        return succeed({
-          data: {
-            action: 'attachment.link',
-            attachment: result.attachment,
-            idempotent: result.idempotent
-          },
-          recordId: result.attachment.id,
-          recordVersion: result.attachment.version,
-          facts: result.facts
-        });
-      }
-      case 'attachment.detach': {
-        const result = detachFileAttachment({
-          scope,
-          detach: input.businessInput as never,
-          attachments: repository,
-          now: occurredAt
-        });
-        if (result.kind === 'refused') return refuse(result.code);
-        return succeed({
-          data: { action: 'attachment.detach', attachment: result.attachment },
-          recordId: result.attachment.id,
-          recordVersion: result.attachment.version,
-          facts: result.facts
-        });
-      }
-      case 'share.create': {
-        if (actor.operatorUserId === undefined) {
-          throw new TypeError('files_command_share_requires_operator');
-        }
-        const result = createResourceShare({
-          scope,
-          create: input.businessInput as never,
-          createdByUserId: actor.operatorUserId,
-          shares: repository,
-          audiences: this.input.audiences,
-          now: occurredAt
-        });
-        if (result.kind === 'refused') return refuse(result.code);
-        return succeed({
-          data: { action: 'share.create', share: result.share, idempotent: result.idempotent },
-          recordId: result.share.id,
-          recordVersion: result.share.version,
-          facts: result.facts
-        });
-      }
-      case 'share.revoke': {
-        const result = revokeResourceShare({
-          scope,
-          revoke: input.businessInput as never,
-          shares: repository,
-          now: occurredAt
-        });
-        if (result.kind === 'refused') return refuse(result.code);
-        return succeed({
-          data: { action: 'share.revoke', share: result.share },
-          recordId: result.share.id,
-          recordVersion: result.share.version,
-          facts: result.facts
-        });
-      }
-      case 'request.create': {
-        if (actor.operatorUserId === undefined) {
-          throw new TypeError('files_command_request_requires_operator');
-        }
-        const result = createFileRequest({
-          scope,
-          create: input.businessInput as never,
-          createdByUserId: actor.operatorUserId,
-          requests: repository,
-          engagements: repository,
-          deadlines: this.input.deadlines,
-          now: occurredAt
-        });
-        if (result.kind === 'refused') return refuse(result.code);
-        return succeed({
-          data: {
-            action: 'request.create',
-            request: result.request,
-            deadline: result.deadline,
-            idempotent: result.idempotent
-          },
-          recordId: result.request.id,
-          recordVersion: result.request.version,
-          facts: result.facts
-        });
-      }
-      case 'request.withdraw': {
-        const result = withdrawFileRequest({
-          scope,
-          withdraw: input.businessInput as never,
-          requests: repository,
-          now: occurredAt
-        });
-        if (result.kind === 'refused') return refuse(result.code);
-        return succeed({
-          data: { action: 'request.withdraw', request: result.request },
-          recordId: result.request.id,
-          recordVersion: result.request.version,
-          facts: result.facts
-        });
-      }
-      case 'request.fulfill': {
-        const fulfill = fileRequestFulfillInputSchema.parse(input.businessInput);
-        if (participant) {
-          const request = repository.readFileRequest(scope, fulfill.requestId);
-          if (request && !(actor.freshEngagementIds ?? []).includes(request.engagementId)) {
-            return refuse('portal_not_related');
-          }
-        }
-        const result = fulfillFileRequest({
-          scope,
-          fulfill,
-          requests: repository,
-          attachments: repository,
-          now: occurredAt
-        });
-        if (result.kind === 'refused') return refuse(result.code);
-        return succeed({
-          data: { action: 'request.fulfill', request: result.request },
-          recordId: result.request.id,
-          recordVersion: result.request.version,
-          facts: result.facts
-        });
-      }
-    }
-  }
-
-  /**
-   * Participant subject scope, proved against the in-transaction recheck's
-   * grants — the only subject a portal actor may attach to is an engagement
-   * the recheck still relates them to.
-   */
-  private participantOwnsSubject(
-    actor: FilesCommandActor,
-    subject: { readonly kind: string; readonly engagementId?: string }
-  ): boolean {
-    return subject.kind === 'engagement'
-      && typeof subject.engagementId === 'string'
-      && (actor.freshEngagementIds ?? []).includes(subject.engagementId);
-  }
-
-  private ownsIntent(actor: FilesCommandActor, uploader: FileUploaderPrincipalDto): boolean {
-    if (actor.freshEngagementIds !== undefined) {
-      return actor.principal.kind === 'participant'
-        && uploader.kind === 'participant'
-        && uploader.participantIdentityId === actor.principal.participantIdentityId;
-    }
-    // Operator lane: operator material only. Cross-user confirm/attach stays
-    // permitted inside the event.manage-gated team; participant material is not.
-    return uploader.kind === 'operator_user';
   }
 
   private nextId(method: 'newPreparationHandle' | 'newFactId'): string {
