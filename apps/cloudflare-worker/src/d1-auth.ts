@@ -6,7 +6,7 @@ import {
 import { BETTER_AUTH_SCHEMA } from '@jooevents/persistence/better-auth-schema-definition';
 import { drizzle } from 'drizzle-orm/d1';
 
-/** Composes the reviewed auth policy with Cloudflare's D1 Drizzle driver. */
+/** Composes the shared auth policy with Cloudflare's D1 Drizzle driver. */
 export function createD1Auth(
   database: D1Database,
   config: JooEventsAuthConfiguration,

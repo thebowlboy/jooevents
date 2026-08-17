@@ -466,7 +466,7 @@ export interface OrdinaryEffectOperationDefinition {
   readonly concurrency: VersionedDefinitionRef;
   readonly execution:
     | {
-        /** Pre-PLAN-009 ordinary evidence path retained only during bounded conversion. */
+        /** Legacy ordinary-evidence profile retained only during bounded conversion. */
         readonly kind: 'single_unit_of_work';
         readonly family: VersionedDefinitionRef;
         readonly phase: VersionedDefinitionRef;
@@ -905,11 +905,11 @@ export interface EffectUnitOfWorkPort {
   /** @deprecated Nonterminal attempts are operational telemetry, not shared durable state. */
   recordShortOperationAudit(record: ShortOperationAuditRecord): ReturnTypeOrPromise<void>;
   runInUnitOfWork<Value>(work: (unitOfWork: EffectUnitOfWork) => Promise<Value>): Promise<Value>;
-  /** Present only in runtimes that admit the PLAN-009 direct-audited profile. */
+  /** Present only in runtimes that admit the direct-audited execution profile. */
   findTerminalOperationLog?(
     identity: EffectOperationIdentity
   ): ReturnTypeOrPromise<TerminalEffectReceipt | undefined>;
-  /** Present only in runtimes that admit the PLAN-009 direct-audited profile. */
+  /** Present only in runtimes that admit the direct-audited execution profile. */
   runInDirectUnitOfWork?<Value>(
     work: (unitOfWork: DirectAuditedUnitOfWork) => Promise<Value>
   ): Promise<Value>;

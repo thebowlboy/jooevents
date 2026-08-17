@@ -17,7 +17,7 @@ const valid = {
 } as const;
 
 describe('Cloudflare auth configuration', () => {
-  test('returns the closed reviewed configuration only when every duty is valid', () => {
+  test('returns the closed canonical configuration only when every duty is valid', () => {
     const config = loadCloudflareAuthRuntimeConfiguration(valid);
     expect(config).toMatchObject({
       baseUrl: 'https://events.example.com',

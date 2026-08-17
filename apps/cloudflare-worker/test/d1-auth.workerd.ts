@@ -5,7 +5,7 @@ import { createD1Auth } from '../src/d1-auth';
 interface CountRow { readonly count: number }
 
 describe('Better Auth over D1 in workerd', () => {
-  test('starts reviewed Google authorization and persists database-backed state', async () => {
+  test('starts canonical Google authorization and persists database-backed state', async () => {
     const auth = createD1Auth(env.DB, {
       baseUrl: 'https://auth-test.jooevents.invalid',
       trustedOrigins: [],
