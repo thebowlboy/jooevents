@@ -69,6 +69,18 @@ export function traysOf(
 }
 
 /**
+ * The sessions in a scoped set that also stand on the grid.
+ *
+ * A tray arrival scopes the pool, but the same sessions are cards among cards
+ * on the board, where nothing says which ones were asked for — the marked case
+ * in `product/07-flow-and-drill-down.md` R1. Rows holding no slot have no card
+ * to mark, so for them the scoped list is the whole answer.
+ */
+export function placedInTray(rows: readonly ProgramGroupRow[]): string[] {
+	return rows.filter((row) => row.placed).map((row) => row.session.id);
+}
+
+/**
  * The tray totals the summary reports — each count's denominator is its own
  * row set, rendered in the Program panel.
  */

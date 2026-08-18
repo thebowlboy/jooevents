@@ -12,6 +12,7 @@
 		RecordField,
 		TrackChip,
 		badgeFor,
+		markArrivalGroup,
 		revealTarget,
 		trackAccent,
 		trackPending
@@ -41,6 +42,7 @@
 	import {
 		groupHeading,
 		isRoundupTray,
+		placedInTray,
 		programGrouping,
 		trayLabel,
 		type ProgramGroupRow,
@@ -704,8 +706,10 @@
 	);
 
 	/**
-	 * A scoped arrival (`?tray=…`) filters the panel to the tray it names, with
-	 * the scope visible as a dismissible chip. The scope lives only in the URL.
+	 * A scoped arrival (`?tray=…`) filters the panel to the tray it names, and
+	 * the panel takes the tray's name as its heading for as long as it holds, so
+	 * the scope is read where the rows are rather than beside them. The scope
+	 * lives only in the URL, and one control gives the whole pool back.
 	 */
 	const trayFilter = $derived.by<RoundupTray | null>(() => {
 		const asked = param('tray');
@@ -1454,7 +1458,15 @@
 	});
 
 	// A scoped tray arrival lands on the Program panel the way `?panel=conflicts`
-	// lands on Conflicts: by name, no mark.
+	// lands on Conflicts: by name, no mark — the panel takes the tray's name
+	// while it is scoped, so its heading is what answers.
+	//
+	// The grid is the other half of the same arrival. A tray's placed sessions
+	// are already on the board, where they are cards among cards saying nothing
+	// about why this person came, so they wear the arrival mark (R1's crowd
+	// case). Only the ones the board is actually showing: a placement on another
+	// day has no card, and dragging the person to a different day would answer a
+	// question they did not ask — the scoped list already names every row.
 	let revealedTray: string | null = null;
 
 	$effect(() => {
@@ -1466,8 +1478,12 @@
 		}
 		if (revealedTray === tray) return;
 		revealedTray = tray;
+		const onGrid = placedInTray(trayRows);
 		announcement = `Program pool scoped to ${trayLabel[tray].toLowerCase()} — ${trayRows.length} session${trayRows.length === 1 ? '' : 's'}.`;
-		void tick().then(() => reveal(programPanel ?? null, { mark: false }));
+		void tick().then(() => {
+			reveal(programPanel ?? null, { mark: false });
+			markArrivalGroup(onGrid.map((id) => document.getElementById(`placed-${id}`)));
+		});
 	});
 
 	// The speakers panel's data travels with its address: arriving, switching
@@ -2148,8 +2164,11 @@
 			     each keep their one door. -->
 			<section class="panel" aria-label="Program" tabindex="-1" bind:this={programPanel}>
 				<header class="panel__head">
-					<h2>Program</h2>
-					<span class="panel__count">{grouping?.total ?? 0}</span>
+					<!-- Scoped, the panel is the tray: its heading says which one and its
+					     count counts the rows below it, so the scope is stated once, in
+					     the place a heading is already read. -->
+					<h2>{trayFilter ? trayLabel[trayFilter] : 'Program'}</h2>
+					<span class="panel__count">{trayFilter ? trayRows.length : (grouping?.total ?? 0)}</span>
 					<button
 						type="button"
 						class="ui-button ui-button--secondary ui-button--sm panel__head-action"
@@ -2167,8 +2186,9 @@
 				{/if}
 
 				{#if trayFilter}
+					<!-- The way back, and only that: the heading above already names the
+					     scope, so a badge repeating it would be the same fact twice. -->
 					<p class="panel__scope">
-						<Badge tone="mark" value={trayLabel[trayFilter]} />
 						<button
 							type="button"
 							class="ui-button ui-button--ghost ui-button--sm"

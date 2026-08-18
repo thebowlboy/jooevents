@@ -27,7 +27,14 @@ export { default as TimezoneCombobox } from './TimezoneCombobox.svelte';
 export { writeToClipboard } from './clipboard';
 export { createSettler } from './settle';
 export type { Settler } from './settle';
-export { ARRIVAL_MAX_MS, ARRIVAL_MIN_MS, arrival, markArrival, revealTarget } from './arrival.svelte';
+export {
+	ARRIVAL_MAX_MS,
+	ARRIVAL_MIN_MS,
+	arrival,
+	markArrival,
+	markArrivalGroup,
+	revealTarget
+} from './arrival.svelte';
 export type { ArrivalOptions, RevealOptions } from './arrival.svelte';
 export {
 	distinctResourceKinds,

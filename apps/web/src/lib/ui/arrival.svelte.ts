@@ -18,7 +18,10 @@
  * someone who arrives and then sits still. The fade consumes a duration token,
  * so reduced motion removes it instantly rather than animating.
  *
- * Only one arrival is ever marked; a second call clears the first.
+ * Only one arrival is ever marked; a second call clears the first. An arrival
+ * that names a *set* rather than one record — a scoped link that filters a list
+ * to a tray — marks that set through `markArrivalGroup`, which is still one
+ * arrival: one lifecycle, one release, every host lit and dropped together.
  *
  * **The anchor is not always the host.** A surface finds its record by some
  * element it can address — a name block, an id on a card — but the thing a
@@ -153,11 +156,59 @@ let release: (() => void) | null = null;
  * mark early; calling it twice is safe.
  */
 export function markArrival(element: HTMLElement | null, options: ArrivalOptions = {}): () => void {
+	return markArrivalGroup([element], options);
+}
+
+/** One marked host, with what has to be undone when the mark is released. */
+interface MarkedHost {
+	host: HTMLElement;
+	mark: string;
+	positioned: boolean;
+}
+
+/**
+ * Marks every host in a set as the things just navigated to.
+ *
+ * Some scoped links name a set rather than a record: a tray chip promises "the
+ * sessions that need speakers", and the crowd it lands in still cannot say
+ * which ones those are. That is one arrival with several answers, so it stays
+ * one lifecycle — the whole set lights together, releases together on the first
+ * sign the person has taken over, and a later arrival clears all of it.
+ *
+ * Nulls and hosts that cannot carry the ring are skipped rather than refused:
+ * a set whose members are partly off screen (another day of the grid) marks the
+ * part that is there. Duplicates resolving to one host are marked once.
+ */
+export function markArrivalGroup(
+	elements: readonly (HTMLElement | null)[],
+	options: ArrivalOptions = {}
+): () => void {
 	release?.();
-	if (!element || typeof window === 'undefined') return () => {};
-	const host = resolveHost(element);
-	// Decoration must never be the reason a navigation misbehaves.
-	if (!canHostRing(host)) return () => {};
+	if (typeof window === 'undefined') return () => {};
+
+	const marked: MarkedHost[] = [];
+	const seen = new Set<HTMLElement>();
+	for (const element of elements) {
+		if (!element) continue;
+		const host = resolveHost(element);
+		if (seen.has(host)) continue;
+		seen.add(host);
+		// Decoration must never be the reason a navigation misbehaves.
+		if (!canHostRing(host)) continue;
+		// A row wears the ring as a band across its own cells, so the containing
+		// blocks it needs are the cells, and the stylesheet establishes them.
+		const isRow = host.tagName === 'TR';
+		marked.push({
+			host,
+			mark: isRow ? ROW : MARK,
+			// The ring is an absolutely positioned pseudo-element, so it needs a
+			// positioned ancestor. Setting this in CSS would re-position anything
+			// already laid out as `absolute` — a schedule card, for one — so it is
+			// applied here, only when needed, and undone on release.
+			positioned: isRow || getComputedStyle(host).position !== 'static'
+		});
+	}
+	if (marked.length === 0) return () => {};
 
 	const minMs = options.minMs ?? ARRIVAL_MIN_MS;
 	const maxMs = Math.max(options.maxMs ?? ARRIVAL_MAX_MS, minMs);
@@ -167,33 +218,26 @@ export function markArrival(element: HTMLElement | null, options: ArrivalOptions
 	let origin: { x: number; y: number } | null = null;
 	const timers: ReturnType<typeof setTimeout>[] = [];
 
-	// A row wears the ring as a band across its own cells, so the containing
-	// blocks it needs are the cells, and the stylesheet establishes them.
-	const isRow = host.tagName === 'TR';
-	const mark = isRow ? ROW : MARK;
-
-	// The ring is an absolutely positioned pseudo-element, so it needs a
-	// positioned ancestor. Setting this in CSS would re-position anything already
-	// laid out as `absolute` — a schedule card, for one — so it is applied here,
-	// only when needed, and undone on release.
-	const positioned = isRow || getComputedStyle(host).position !== 'static';
-	if (!positioned) host.style.position = 'relative';
-
-	host.classList.add(mark);
+	for (const entry of marked) {
+		if (!entry.positioned) entry.host.style.position = 'relative';
+		entry.host.classList.add(entry.mark);
+	}
 
 	const finish = () => {
 		if (settled) return;
 		settled = true;
 		stopListening();
 		timers.forEach(clearTimeout);
-		host.classList.add(LEAVING);
+		for (const entry of marked) entry.host.classList.add(LEAVING);
 		// The token is 0ms under reduced motion, so this lands on the next tick
 		// rather than animating.
 		const fade = getComputedStyle(document.documentElement).getPropertyValue('--je-duration-slow');
 		const ms = fade.trim().endsWith('ms') ? Number.parseFloat(fade) : 280;
 		setTimeout(() => {
-			host.classList.remove(mark, LEAVING);
-			if (!positioned) host.style.removeProperty('position');
+			for (const entry of marked) {
+				entry.host.classList.remove(entry.mark, LEAVING);
+				if (!entry.positioned) entry.host.style.removeProperty('position');
+			}
 		}, Number.isFinite(ms) ? ms : 280);
 		if (release === finish) release = null;
 	};

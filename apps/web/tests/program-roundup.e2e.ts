@@ -202,22 +202,31 @@ test('a trackless private sketch must be classified before it can enter or be pl
 	});
 });
 
-test('?tray= scopes the panel to one tray behind a visible chip, and Clear restores the grouped view', async ({ page }, testInfo) => {
+test('?tray= renames the panel to the tray it scopes, and Clear restores the grouped view', async ({ page }, testInfo) => {
 	test.skip(testInfo.project.name !== 'desktop', 'one viewport covers the scope contract');
 
 	await page.goto('/app/schedule?tray=needs-speakers');
 	await expect(program(page)).toBeVisible({ timeout: 15000 });
 
-	// The scope is named on the surface and only the tray's rows render; the
-	// groups stand down while the filter holds.
-	await expect(program(page).locator('.panel__scope .ui-badge')).toHaveText('Needs speakers');
+	// The scope is the panel's own heading while it holds — the arriving person
+	// reads the name they clicked where the panel's name normally is — and the
+	// count counts the rows underneath it, not the whole pool. Only that one
+	// carrier: no chip repeating the heading beside it.
+	await expect(program(page).locator('.panel__head h2')).toHaveText('Needs speakers');
+	await expect(program(page).locator('.panel__head .panel__count')).toHaveText('1');
+	await expect(program(page).locator('.panel__scope .ui-badge')).toHaveCount(0);
+
+	// Only the tray's rows render; the groups stand down while the filter holds.
 	await expect(program(page).locator('.pool__row')).toHaveCount(1);
 	await expect(page.locator('#pool-ses-13')).toContainText('Closing Keynote');
 	await expect(program(page).locator('.pool-group')).toHaveCount(0);
 
-	// One press gives the whole partition back and the address goes clean.
+	// One press gives the whole partition back, name and denominator with it,
+	// and the address goes clean.
 	await program(page).getByRole('button', { name: 'Clear the needs speakers scope' }).click();
 	await expect(page).toHaveURL(/\/app\/schedule$/);
+	await expect(program(page).locator('.panel__head h2')).toHaveText('Program');
+	await expect(program(page).locator('.panel__head .panel__count')).toHaveText('4');
 	await expect(program(page).locator('.pool-group')).toHaveCount(2);
 	await expect(program(page).locator('.pool__row')).toHaveCount(4);
 });
@@ -456,5 +465,29 @@ test.describe('a crunch week', () => {
 			'href',
 			'/app/decisions?target=ses-19'
 		);
+	});
+
+	test('a tray arrival marks its placed sessions on the grid, where they are cards among cards', async ({
+		page
+	}, testInfo) => {
+		test.skip(testInfo.project.name !== 'desktop', 'one viewport covers the arrival contract');
+
+		// Held slots are placed by definition, so this tray's answer exists twice:
+		// as a scoped pool row, and as a card in a grid full of similar cards. The
+		// mark is asserted first — it is deliberately transient, released once the
+		// person takes over.
+		await page.goto('/app/schedule?day=day-2&tray=undecided-in-place');
+		await expect(page.locator('#placed-ses-19')).toHaveClass(/ui-arrival/, { timeout: 15000 });
+
+		// The same standing treatment every arrival uses, not a second highlight
+		// invented for this one: the card keeps its own state classes.
+		await expect(page.locator('#placed-ses-19')).toHaveClass(/card--collecting/);
+
+		// And the panel answers by name, for the same arrival.
+		await expect(program(page).locator('.panel__head h2')).toHaveText(
+			'Held slots awaiting decisions'
+		);
+		await expect(program(page).locator('.pool__row')).toHaveCount(1);
+		await expect(program(page).locator('#pool-ses-19')).toBeVisible();
 	});
 });

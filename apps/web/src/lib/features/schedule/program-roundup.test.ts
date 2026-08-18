@@ -2,10 +2,12 @@ import { describe, expect, test } from 'bun:test';
 import type { ScheduleState, SessionItem, Submission } from '$lib/api/types';
 import {
 	groupOf,
+	placedInTray,
 	programGrouping,
 	proposalCounts,
 	roundupCounts,
-	traysOf
+	traysOf,
+	type RoundupTray
 } from './program-roundup';
 
 const session = (over: Partial<SessionItem>): SessionItem => ({
@@ -117,6 +119,43 @@ describe('proposalCounts', () => {
 			proposal({ id: 'sub-5' })
 		]);
 		expect(counts.get('ses-1')).toBe(2);
+	});
+});
+
+describe('placedInTray', () => {
+	// The same partition the panel renders, scoped the way a `?tray=` arrival
+	// scopes it: every row whose predicates include the tray, whichever group it
+	// renders under.
+	const state = schedule(
+		[
+			session({ id: 'ses-unplaced', speakers: [] }),
+			session({ id: 'ses-placed-empty', speakers: [] }),
+			session({ id: 'ses-held', state: 'collecting', speakers: [] })
+		],
+		['ses-placed-empty', 'ses-held']
+	);
+	const grouping = programGrouping(state, new Map());
+	const scopedTo = (tray: RoundupTray) =>
+		grouping.order.flatMap((group) =>
+			(grouping.groups.get(group) ?? []).filter((row) => row.trays.includes(tray))
+		);
+
+	test('only the tray members holding a slot have a card to mark', () => {
+		// The unplaced one is in this tray too; it has no grid presence, so the
+		// scoped list is its whole answer.
+		expect(scopedTo('needs-speakers').map((row) => row.session.id)).toEqual([
+			'ses-unplaced',
+			'ses-placed-empty'
+		]);
+		expect(placedInTray(scopedTo('needs-speakers'))).toEqual(['ses-placed-empty']);
+	});
+
+	test('a held slot is placed by definition, so it marks', () => {
+		expect(placedInTray(scopedTo('undecided-in-place'))).toEqual(['ses-held']);
+	});
+
+	test('the unplaced tray has nothing on the grid to mark', () => {
+		expect(placedInTray(scopedTo('unplaced'))).toEqual([]);
 	});
 });
 
