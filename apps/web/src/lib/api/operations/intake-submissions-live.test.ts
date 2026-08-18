@@ -8,6 +8,7 @@ import {
 } from '@jooevents/contracts';
 import {
 	createIntakeSubmissionsLivePort,
+	INTAKE_PERSON_SUBMISSION_LIST_READ_OPERATION,
 	INTAKE_SUBMISSION_CONTACT_READ_OPERATION,
 	INTAKE_SUBMISSION_DETAIL_READ_OPERATION,
 	INTAKE_SUBMISSION_LIST_READ_OPERATION,
@@ -26,6 +27,15 @@ const bindings = {
 		path: '/api/events/current/submissions',
 		input: 'query',
 		resultSchema: INTAKE_OPERATION_SCHEMA_REFS.submissionList.resultSchema,
+		browserResumption: { kind: 'none' }
+	},
+	personList: {
+		surface: 'operator_http',
+		protocol: 'http',
+		method: 'GET',
+		path: '/api/events/current/submissions/by-person',
+		input: 'query',
+		resultSchema: INTAKE_OPERATION_SCHEMA_REFS.personSubmissionList.resultSchema,
 		browserResumption: { kind: 'none' }
 	},
 	detail: {
@@ -51,6 +61,7 @@ const bindings = {
 function operation(
 	ref:
 		| typeof INTAKE_SUBMISSION_LIST_READ_OPERATION
+		| typeof INTAKE_PERSON_SUBMISSION_LIST_READ_OPERATION
 		| typeof INTAKE_SUBMISSION_DETAIL_READ_OPERATION
 		| typeof INTAKE_SUBMISSION_CONTACT_READ_OPERATION,
 	binding: SafePublicOperationBinding,
@@ -94,6 +105,7 @@ function operation(
 function manifest(
 	operations: readonly SafeOperationManifestEntry[] = [
 		operation(INTAKE_SUBMISSION_LIST_READ_OPERATION, bindings.list, INTAKE_OPERATION_SCHEMA_REFS.submissionList),
+		operation(INTAKE_PERSON_SUBMISSION_LIST_READ_OPERATION, bindings.personList, INTAKE_OPERATION_SCHEMA_REFS.personSubmissionList),
 		operation(INTAKE_SUBMISSION_DETAIL_READ_OPERATION, bindings.detail, INTAKE_OPERATION_SCHEMA_REFS.submissionRead),
 		operation(INTAKE_SUBMISSION_CONTACT_READ_OPERATION, bindings.contact, INTAKE_OPERATION_SCHEMA_REFS.submissionContactRead)
 	]
@@ -225,6 +237,39 @@ describe('pure-live organizer submissions operation port', () => {
 		expect('read' in port.contact).toBe(false);
 		expect(await port.list()).toMatchObject({ kind: 'success' });
 		expect(calls).toEqual([bindings.list.path]);
+	});
+
+	test('reads every canonical Person proposal page without exposing identity in the result', async () => {
+		const calls: string[] = [];
+		const personId = id(500);
+		const firstCursor = id(100);
+		const firstPath = `${bindings.personList.path}?personId=${encodeURIComponent(personId)}`;
+		const secondPath = `${firstPath}&afterSubmissionId=${encodeURIComponent(firstCursor)}`;
+		const firstRows = Array.from({ length: 100 }, (_, index) => ({
+			...summary,
+			id: id(index + 1)
+		}));
+		const port = createIntakeSubmissionsLivePort({
+			manifest: manifest(),
+			contactCapability: { kind: 'available' },
+			request: requesterFor({
+				[firstPath]: success({
+					schemaVersion: 1,
+					rows: firstRows,
+					nextAfterSubmissionId: firstCursor
+				}),
+				[secondPath]: success({
+					schemaVersion: 1,
+					rows: [{ ...summary, id: id(101), title: 'A second proposal' }],
+					nextAfterSubmissionId: null
+				})
+			}, calls)
+		});
+
+		const result = await port.listForPerson(personId);
+		expect(result).toMatchObject({ kind: 'success', data: { length: 101 } });
+		expect(calls).toEqual([firstPath, secondPath]);
+		expect(JSON.stringify(result)).not.toContain(personId);
 	});
 
 	test('preserves a server access refusal as an outcome instead of contact data', async () => {

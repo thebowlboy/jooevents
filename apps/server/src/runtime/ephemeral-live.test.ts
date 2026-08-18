@@ -49,6 +49,7 @@ import {
   organizerFormCatalogSchema,
   organizerFormDetailSchema,
   organizerSubmissionContactSchema,
+  organizerPersonSubmissionPageReadResultSchema,
   portalEngagementRespondResultSchema,
   portalSnapshotReadResultSchema,
   programReleaseSchema,
@@ -1255,6 +1256,10 @@ describe('ephemeral live Foundation server composition', () => {
       {
         name: 'submission.list', version: 1, effect: 'read',
         bindings: ['GET /api/events/current/submissions']
+      },
+      {
+        name: 'submission.person.list', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/submissions/by-person']
       },
       {
         name: 'submission.read', version: 1, effect: 'read',
@@ -6044,6 +6049,21 @@ describe('ephemeral live Foundation server composition', () => {
     expect(contact.personId).toMatch(/^[0-9a-f-]{36}$/);
     expect(contact.participantIdentityId).toMatch(/^[0-9a-f-]{36}$/);
     expect(contact.personId).not.toBe(contact.participantIdentityId);
+
+    const personSubmissionsResponse = await runtime.app.request(
+      `/api/events/current/submissions/by-person?personId=${contact.personId}`,
+      { headers: eventHeaders({ session, correlationId: crypto.randomUUID() }) }
+    );
+    expect(personSubmissionsResponse.status).toBe(200);
+    expect(organizerPersonSubmissionPageReadResultSchema.parse(
+      await personSubmissionsResponse.json()
+    )).toMatchObject({
+      kind: 'success',
+      data: {
+        rows: [{ id: submissionId, title: speakerTitle }],
+        nextAfterSubmissionId: null
+      }
+    });
 
     // The submit transaction registered exactly one non-security confirmation
     // release. Provider I/O is still outside that transaction; the inert

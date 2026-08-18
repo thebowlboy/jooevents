@@ -28,6 +28,7 @@ import {
   intakeEmptyReadInputSchema,
   intakeFormReadInputSchema,
   intakeSubmissionReadInputSchema,
+  intakePersonSubmissionListInputSchema,
   intakeIdInputSchema,
   intakeIdSchema,
   organizerFormCatalogSchema,
@@ -40,6 +41,8 @@ import {
   organizerSubmissionDetailReadResultSchema,
   organizerSubmissionListReadResultSchema,
   organizerSubmissionListSchema,
+  organizerPersonSubmissionPageReadResultSchema,
+  organizerPersonSubmissionPageSchema,
   publicApplicationDraftBeginInputSchema,
   publicApplicationDraftReadInputSchema,
   publicApplicationDraftResumeSchema,
@@ -54,6 +57,7 @@ import {
   type OrganizerSubmissionContactDto,
   type OrganizerSubmissionDetailDto,
   type OrganizerSubmissionSummaryDto,
+  type OrganizerPersonSubmissionPageDto,
   type PublicApplicationDraftResumeDto,
   type SafeSchemaManifestRef,
   type ServedPublicFormDto,
@@ -100,6 +104,9 @@ export const INTAKE_PUBLIC_DRAFT_RESUME_OPERATION = Object.freeze({
   name: 'application.public.resume', version: 1
 });
 export const INTAKE_SUBMISSION_LIST_OPERATION = Object.freeze({ name: 'submission.list', version: 1 });
+export const INTAKE_PERSON_SUBMISSION_LIST_OPERATION = Object.freeze({
+  name: 'submission.person.list', version: 1
+});
 export const INTAKE_SUBMISSION_READ_OPERATION = Object.freeze({ name: 'submission.read', version: 1 });
 export const INTAKE_SUBMISSION_CONTACT_READ_OPERATION = Object.freeze({
   name: 'submission.contact.read', version: 1
@@ -224,6 +231,11 @@ export interface IntakeReadPort {
   readForm(scope: { readonly workspaceId: WorkspaceId; readonly eventId: EventId }, formId: string): OrganizerFormDetailDto | undefined;
   readServedForm(scope: { readonly workspaceId: WorkspaceId; readonly eventId: EventId }, formId: string): ServedPublicFormDto | undefined;
   listSubmissions(scope: { readonly workspaceId: WorkspaceId; readonly eventId: EventId }): readonly OrganizerSubmissionSummaryDto[];
+  listPersonSubmissions(
+    scope: { readonly workspaceId: WorkspaceId; readonly eventId: EventId },
+    personId: string,
+    afterSubmissionId?: string
+  ): OrganizerPersonSubmissionPageDto;
   readSubmission(scope: { readonly workspaceId: WorkspaceId; readonly eventId: EventId }, submissionId: string): OrganizerSubmissionDetailDto | undefined;
   readSubmissionContact(scope: { readonly workspaceId: WorkspaceId; readonly eventId: EventId }, submissionId: string): OrganizerSubmissionContactDto | undefined;
   readPublicDraftResume(
@@ -492,6 +504,13 @@ const readCatalog = Object.freeze({
     refs: INTAKE_OPERATION_SCHEMA_REFS.submissionList,
     projectedSchema: organizerSubmissionListReadResultSchema
   }),
+  personSubmissionList: readSchemas(
+    'submission.person-list', intakePersonSubmissionListInputSchema,
+    organizerPersonSubmissionPageSchema, {
+      refs: INTAKE_OPERATION_SCHEMA_REFS.personSubmissionList,
+      projectedSchema: organizerPersonSubmissionPageReadResultSchema
+    }
+  ),
   submissionRead: readSchemas(
     'submission.read', submissionIdInputSchema, organizerSubmissionDetailSchema, {
       refs: INTAKE_OPERATION_SCHEMA_REFS.submissionRead,
@@ -789,6 +808,11 @@ export function createIntakeReadOperationModule(input: {
         return value;
       } },
       { operation: INTAKE_SUBMISSION_LIST_OPERATION, key: 'submissionList', path: '/api/events/current/submissions', lane: submissionRead, scope: operatorScope, requiresEvent: true, read: (context) => input.read.listSubmissions(eventRequired(context)) },
+      { operation: INTAKE_PERSON_SUBMISSION_LIST_OPERATION, key: 'personSubmissionList', path: '/api/events/current/submissions/by-person', lane: submissionRead, scope: operatorScope, requiresEvent: true, read: (context, raw) => {
+        const currentScope = eventRequired(context);
+        const { personId, afterSubmissionId } = intakePersonSubmissionListInputSchema.parse(raw);
+        return input.read.listPersonSubmissions(currentScope, personId, afterSubmissionId);
+      } },
       { operation: INTAKE_SUBMISSION_READ_OPERATION, key: 'submissionRead', path: '/api/events/current/submissions/detail', lane: submissionRead, scope: operatorScope, requiresEvent: true, read: (context, raw) => {
         const currentScope = eventRequired(context);
         const { submissionId } = submissionIdInputSchema.parse(raw);

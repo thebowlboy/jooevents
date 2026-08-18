@@ -334,7 +334,6 @@
 		tasks: taskClient,
 		taskActions: tasks,
 		schedule,
-		triage,
 		decisions: decisionsClient,
 		intake: intakeSubmissions,
 		files

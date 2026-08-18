@@ -190,6 +190,12 @@ export const intakeFormReadInputSchema = z.strictObject({ formId: intakeIdInputS
 export const intakeSubmissionReadInputSchema = z.strictObject({
   submissionId: intakeIdInputSchema
 });
+export const intakePersonSubmissionListInputSchema = z.strictObject({
+  personId: intakeIdInputSchema,
+  afterSubmissionId: intakeIdInputSchema.optional()
+});
+
+export const ORGANIZER_PERSON_SUBMISSION_PAGE_SIZE = 100;
 
 export const organizerSubmissionListSchema = z.array(organizerSubmissionSummarySchema)
   .max(500)
@@ -205,12 +211,46 @@ export const organizerSubmissionListSchema = z.array(organizerSubmissionSummaryS
     }
   });
 
+/**
+ * A complete, cursor-bounded proposal projection for one canonical Person.
+ * The cursor is an opaque continuation to callers even though v1 uses the
+ * last canonical submission id. A non-null cursor must name the final row so
+ * missing or repeated pages fail contract validation instead of looking like
+ * complete coverage.
+ */
+export const organizerPersonSubmissionPageSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  rows: z.array(organizerSubmissionSummarySchema).max(ORGANIZER_PERSON_SUBMISSION_PAGE_SIZE),
+  nextAfterSubmissionId: intakeIdSchema.nullable()
+}).superRefine((page, context) => {
+  for (let index = 1; index < page.rows.length; index += 1) {
+    if (page.rows[index - 1]!.id >= page.rows[index]!.id) {
+      context.addIssue({
+        code: 'custom',
+        path: ['rows', index, 'id'],
+        message: 'items must have unique IDs in canonical code-unit order'
+      });
+    }
+  }
+  if (page.nextAfterSubmissionId !== null
+      && (page.rows.length !== ORGANIZER_PERSON_SUBMISSION_PAGE_SIZE
+        || page.rows.at(-1)?.id !== page.nextAfterSubmissionId)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['nextAfterSubmissionId'],
+      message: 'continuation must name the final row of a full page'
+    });
+  }
+});
+
 export const organizerFormCatalogReadResultSchema =
   createReadOperationResultSchema(organizerFormCatalogSchema);
 export const organizerFormDetailReadResultSchema =
   createReadOperationResultSchema(organizerFormDetailSchema);
 export const organizerSubmissionListReadResultSchema =
   createReadOperationResultSchema(organizerSubmissionListSchema);
+export const organizerPersonSubmissionPageReadResultSchema =
+  createReadOperationResultSchema(organizerPersonSubmissionPageSchema);
 export const organizerSubmissionDetailReadResultSchema =
   createReadOperationResultSchema(organizerSubmissionDetailSchema);
 export const organizerSubmissionContactReadResultSchema =
@@ -235,6 +275,12 @@ export const INTAKE_OPERATION_SCHEMA_REFS = Object.freeze({
     inputSchema: intakeEmptyReadInputSchema,
     resultKey: 'schema.submission.list.projected-result',
     resultSchema: organizerSubmissionListReadResultSchema
+  }),
+  personSubmissionList: createOperationSchemaManifestRefs({
+    inputKey: 'schema.submission.person-list.input',
+    inputSchema: intakePersonSubmissionListInputSchema,
+    resultKey: 'schema.submission.person-list.projected-result',
+    resultSchema: organizerPersonSubmissionPageReadResultSchema
   }),
   submissionRead: createOperationSchemaManifestRefs({
     inputKey: 'schema.submission.read.input',
@@ -297,3 +343,4 @@ export type IntakeFormVersionReviewAction = z.infer<typeof intakeFormVersionRevi
 export type IntakeFormVersionReviewInput = z.infer<typeof intakeFormVersionReviewInputSchema>;
 export type IntakeFormVersionReviewSafeDiff = z.infer<typeof intakeFormVersionReviewSafeDiffSchema>;
 export type IntakeFormVersionPublishInput = z.infer<typeof intakeFormVersionPublishInputSchema>;
+export type OrganizerPersonSubmissionPageDto = z.infer<typeof organizerPersonSubmissionPageSchema>;

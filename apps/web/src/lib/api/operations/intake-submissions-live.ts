@@ -1,6 +1,8 @@
 import {
 	INTAKE_OPERATION_SCHEMA_REFS,
 	intakeIdInputSchema,
+	intakePersonSubmissionListInputSchema,
+	organizerPersonSubmissionPageReadResultSchema,
 	organizerSubmissionContactReadResultSchema,
 	organizerSubmissionDetailReadResultSchema,
 	organizerSubmissionListReadResultSchema
@@ -13,6 +15,7 @@ import {
 	mapOrganizerSubmissionSummary
 } from '../mappers/intake-submissions';
 import type {
+	LiveOrganizerSubmissionsPort,
 	OrganizerSubmissionContactView,
 	OrganizerSubmissionDetailView,
 	OrganizerSubmissionOperation,
@@ -28,6 +31,10 @@ import {
 
 export const INTAKE_SUBMISSION_LIST_READ_OPERATION = Object.freeze({
 	name: 'submission.list',
+	version: 1
+} as const);
+export const INTAKE_PERSON_SUBMISSION_LIST_READ_OPERATION = Object.freeze({
+	name: 'submission.person.list',
 	version: 1
 } as const);
 export const INTAKE_SUBMISSION_DETAIL_READ_OPERATION = Object.freeze({
@@ -47,6 +54,7 @@ export {
 
 type OperationRef =
 	| typeof INTAKE_SUBMISSION_LIST_READ_OPERATION
+	| typeof INTAKE_PERSON_SUBMISSION_LIST_READ_OPERATION
 	| typeof INTAKE_SUBMISSION_DETAIL_READ_OPERATION
 	| typeof INTAKE_SUBMISSION_CONTACT_READ_OPERATION;
 
@@ -136,6 +144,65 @@ async function readList(
 	};
 }
 
+function pathForPerson(path: string, personId: string, afterSubmissionId?: string): string | null {
+	const parsed = intakePersonSubmissionListInputSchema.safeParse({
+		personId,
+		...(afterSubmissionId ? { afterSubmissionId } : {})
+	});
+	if (!parsed.success) return null;
+	const query = new URLSearchParams({ personId: parsed.data.personId });
+	if (parsed.data.afterSubmissionId) query.set('afterSubmissionId', parsed.data.afterSubmissionId);
+	return `${path}?${query.toString()}`;
+}
+
+async function readForPerson(
+	binding: BindingResolution,
+	request: IntakeSubmissionRequester,
+	personId: string,
+	options: { readonly signal?: AbortSignal }
+): Promise<OrganizerSubmissionReadResult<readonly OrganizerSubmissionSummaryView[]>> {
+	if (binding.kind === 'unavailable') return unavailable('person_list', binding);
+	const rows: OrganizerSubmissionSummaryView[] = [];
+	const seenCursors = new Set<string>();
+	let afterSubmissionId: string | undefined;
+	let correlationId: string | undefined;
+	for (;;) {
+		const path = pathForPerson(binding.path, personId, afterSubmissionId);
+		if (!path) return invalidSubmissionId();
+		const transport = await request({
+			path,
+			method: 'GET',
+			schema: organizerPersonSubmissionPageReadResultSchema,
+			...(options.signal ? { signal: options.signal } : {})
+		});
+		if (transport.kind === 'error') return { kind: 'transport_error', error: transport.error };
+		const parsed = organizerPersonSubmissionPageReadResultSchema.safeParse(transport.data);
+		if (!parsed.success) return invalidContract();
+		if (parsed.data.kind === 'outcome') return parsed.data;
+		correlationId = parsed.data.correlationId;
+		const pageRows = parsed.data.data.rows.map(mapOrganizerSubmissionSummary);
+		const priorCursor = afterSubmissionId;
+		if ((priorCursor !== undefined && pageRows.some((row) => row.id <= priorCursor))
+			|| (rows.length > 0 && pageRows.length > 0 && rows.at(-1)!.id >= pageRows[0]!.id)) {
+			return invalidContract();
+		}
+		rows.push(...pageRows);
+		const next = parsed.data.data.nextAfterSubmissionId;
+		if (next === null) {
+			return {
+				kind: 'success',
+				data: Object.freeze(rows),
+				...(correlationId ? { correlationId } : {})
+			};
+		}
+		if (seenCursors.has(next) || (afterSubmissionId !== undefined && next <= afterSubmissionId)) {
+			return invalidContract();
+		}
+		seenCursors.add(next);
+		afterSubmissionId = next;
+	}
+}
+
 async function readDetail(
 	binding: BindingResolution,
 	request: IntakeSubmissionRequester,
@@ -203,11 +270,16 @@ export function createIntakeSubmissionsLivePort(input: {
 	readonly manifest: unknown;
 	readonly contactCapability: LiveSubmissionContactCapability;
 	readonly request?: IntakeSubmissionRequester;
-}): OrganizerSubmissionsPort {
+}): LiveOrganizerSubmissionsPort {
 	const listBinding = resolveBinding(
 		input.manifest,
 		INTAKE_SUBMISSION_LIST_READ_OPERATION,
 		INTAKE_OPERATION_SCHEMA_REFS.submissionList
+	);
+	const personListBinding = resolveBinding(
+		input.manifest,
+		INTAKE_PERSON_SUBMISSION_LIST_READ_OPERATION,
+		INTAKE_OPERATION_SCHEMA_REFS.personSubmissionList
 	);
 	const detailBinding = resolveBinding(
 		input.manifest,
@@ -236,6 +308,10 @@ export function createIntakeSubmissionsLivePort(input: {
 		source: Object.freeze({ kind: 'live' as const }),
 		list: (options: { readonly signal?: AbortSignal } = {}) =>
 			readList(listBinding, request, options),
+		listForPerson: (
+			personId: string,
+			options: { readonly signal?: AbortSignal } = {}
+		) => readForPerson(personListBinding, request, personId, options),
 		readDetail: (submissionId: string, options: { readonly signal?: AbortSignal } = {}) =>
 			readDetail(detailBinding, request, submissionId, options),
 		contact

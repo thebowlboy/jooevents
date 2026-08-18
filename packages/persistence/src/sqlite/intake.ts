@@ -1,4 +1,5 @@
 import type { Database } from 'bun:sqlite';
+import { ORGANIZER_PERSON_SUBMISSION_PAGE_SIZE } from '@jooevents/contracts';
 import type {
   ApplicationDraftHeadDto,
   ApplicationDraftRevisionDto,
@@ -11,6 +12,7 @@ import type {
   OrganizerFormCatalogDto,
   OrganizerSubmissionDetailDto,
   OrganizerSubmissionSummaryDto,
+  OrganizerPersonSubmissionPageDto,
   OrganizerSubmissionContactDto,
   PublicApplicationDraftResumeDto,
   ServedPublicFormDto,
@@ -1248,6 +1250,44 @@ export class SQLiteIntakeRepository {
     scopeInput: SQLiteIntakeScopeInput
   ): readonly OrganizerSubmissionSummaryDto[] {
     return this.listSubmissionSummaries(scopeInput, false);
+  }
+
+  /**
+   * Complete canonical-Person proposal coverage in stable pages. This reads the
+   * retained person binding on the submission head; it never reconstructs
+   * identity from email or a display name and it does not widen the triage
+   * projection with participant identifiers.
+   */
+  listPersonSubmissions(
+    scopeInput: SQLiteIntakeScopeInput,
+    personId: string,
+    afterSubmissionId?: string
+  ): OrganizerPersonSubmissionPageDto {
+    const currentScope = scope(scopeInput);
+    const rows = this.sqlite.query<SubmissionHeadRow, [string, string, string, string, number]>(`
+      SELECT workspace_id, event_id, submission_id, form_id, form_version_id,
+             draft_id, submit_evidence_id, person_id, submitted_at_ms,
+             head_json AS value_json, head_digest_sha256 AS value_digest
+        FROM intake_submission_heads
+       WHERE workspace_id = ? AND event_id = ? AND person_id = ?
+         AND submission_id > ?
+       ORDER BY submission_id COLLATE BINARY
+       LIMIT ?
+    `).all(
+      currentScope.workspaceId,
+      currentScope.eventId,
+      personId,
+      afterSubmissionId ?? '',
+      ORGANIZER_PERSON_SUBMISSION_PAGE_SIZE + 1
+    );
+    const hasMore = rows.length > ORGANIZER_PERSON_SUBMISSION_PAGE_SIZE;
+    const pageRows = rows.slice(0, ORGANIZER_PERSON_SUBMISSION_PAGE_SIZE)
+      .map((row) => this.projectSubmissionSummary(currentScope, row));
+    return Object.freeze({
+      schemaVersion: 1 as const,
+      rows: pageRows,
+      nextAfterSubmissionId: hasMore ? pageRows.at(-1)!.id : null
+    });
   }
 
   /** Exact application-internal lookup; it does not scan the capped organizer list. */

@@ -11,6 +11,7 @@ import {
   organizerSubmissionAnswerSchema,
   organizerSubmissionContactSchema,
   organizerSubmissionDetailSchema,
+  organizerPersonSubmissionPageSchema,
   organizerSubmissionSummarySchema,
   publicApplicationDraftBeginInputSchema,
   publicApplicationDraftSaveInputSchema,
@@ -290,6 +291,34 @@ describe('Submission transport contracts', () => {
       target: { kind: 'general_pool' }, title: null, primaryParticipantName: null,
       submittedAt: '2026-08-12T10:00:00.000Z'
     }).title).toBeNull();
+  });
+
+  test('person-scoped proposal pages require a truthful canonical continuation', () => {
+    const rows = Array.from({ length: 100 }, (_, index) => ({
+      schemaVersion: 1 as const,
+      id: id(index + 1000),
+      formId: id(11),
+      formVersionId: id(12),
+      target: { kind: 'general_pool' as const },
+      title: `Proposal ${index + 1}`,
+      primaryParticipantName: 'Amina Diallo',
+      submittedAt: '2026-08-12T10:00:00.000Z'
+    }));
+    expect(organizerPersonSubmissionPageSchema.safeParse({
+      schemaVersion: 1,
+      rows,
+      nextAfterSubmissionId: rows.at(-1)!.id
+    }).success).toBe(true);
+    expect(organizerPersonSubmissionPageSchema.safeParse({
+      schemaVersion: 1,
+      rows,
+      nextAfterSubmissionId: id(9999)
+    }).success).toBe(false);
+    expect(organizerPersonSubmissionPageSchema.safeParse({
+      schemaVersion: 1,
+      rows: rows.slice(0, 2),
+      nextAfterSubmissionId: rows[1]!.id
+    }).success).toBe(false);
   });
 
   test('public draft status cannot claim incoherent submission linkage', () => {

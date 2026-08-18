@@ -3929,6 +3929,7 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
         readForm: intakeRepository.readFormDetail.bind(intakeRepository),
         readServedForm: intakeRepository.readServedForm.bind(intakeRepository),
         listSubmissions: intakeRepository.listSubmissions.bind(intakeRepository),
+        listPersonSubmissions: intakeRepository.listPersonSubmissions.bind(intakeRepository),
         readSubmission: intakeRepository.readSubmissionDetail.bind(intakeRepository),
         readSubmissionContact: intakeRepository.readSubmissionContact.bind(intakeRepository),
         readPublicDraftResume(scope, binding) {

@@ -774,6 +774,16 @@ describe('SQLite Intake public mutation effect domain', () => {
       expect(f.repository.listSubmissions({ workspaceId, eventId })[0]).toMatchObject({
         title: 'A precise proposal'
       });
+      expect(f.repository.listPersonSubmissions({ workspaceId, eventId }, personId)).toMatchObject({
+        schemaVersion: 1,
+        rows: [{ id: submit.data.submission.submissionId, title: 'A precise proposal' }],
+        nextAfterSubmissionId: null
+      });
+      expect(f.repository.listPersonSubmissions({ workspaceId, eventId }, id(999))).toEqual({
+        schemaVersion: 1,
+        rows: [],
+        nextAfterSubmissionId: null
+      });
       const safeDetail = f.repository.readSubmissionDetail({ workspaceId, eventId },
         submit.data.submission.submissionId);
       expect(safeDetail).toMatchObject({

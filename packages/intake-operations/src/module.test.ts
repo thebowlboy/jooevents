@@ -94,6 +94,7 @@ const read = Object.freeze({
   readForm: () => undefined,
   readServedForm: () => undefined,
   listSubmissions: () => [],
+  listPersonSubmissions: () => ({ schemaVersion: 1 as const, rows: [], nextAfterSubmissionId: null }),
   readSubmission: () => undefined,
   readSubmissionContact: () => undefined,
   readPublicDraftResume: () => undefined
@@ -216,6 +217,7 @@ describe('Intake operation modules', () => {
       { operation: 'form.list@1', effect: 'read', method: 'GET', path: '/api/events/current/forms', input: 'query', surface: 'operator_http' },
       { operation: 'form.read@1', effect: 'read', method: 'GET', path: '/api/events/current/forms/detail', input: 'query', surface: 'operator_http' },
       { operation: 'submission.list@1', effect: 'read', method: 'GET', path: '/api/events/current/submissions', input: 'query', surface: 'operator_http' },
+      { operation: 'submission.person.list@1', effect: 'read', method: 'GET', path: '/api/events/current/submissions/by-person', input: 'query', surface: 'operator_http' },
       { operation: 'submission.read@1', effect: 'read', method: 'GET', path: '/api/events/current/submissions/detail', input: 'query', surface: 'operator_http' },
       { operation: 'submission.contact.read@1', effect: 'read', method: 'GET', path: '/api/events/current/submissions/contact', input: 'query', surface: 'operator_http' }
     ]);

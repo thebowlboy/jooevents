@@ -169,12 +169,6 @@ function compose(overrides: Record<string, unknown> = {}) {
 			}
 		} as never,
 		schedule: { schedule: { state: async () => schedule() } } as never,
-		triage: {
-			read: async (readId: string) => ({
-				kind: 'success', correlationId: id(63),
-				data: { source: { id: readId, title: 'Reliable agents' } }
-			})
-		} as never,
 		decisions: {
 			readState: async (ids: readonly string[]) => ({
 				kind: 'success', correlationId: id(64),
@@ -190,6 +184,10 @@ function compose(overrides: Record<string, unknown> = {}) {
 			})
 		} as never,
 		intake: {
+			listForPerson: async () => ({
+				kind: 'success', correlationId: id(63),
+				data: [{ id: submissionId, title: 'Reliable agents' }]
+			}),
 			readDetail: async () => ({
 				kind: 'success', correlationId: id(65),
 				data: {
@@ -215,7 +213,7 @@ describe('live Speaker Record port', () => {
 			engagement: { id: engagementId, personId, name: 'Amina Diallo' },
 			publication: { onLineup: true, provisional: true },
 			provenance: { kind: 'submission', submissionId, title: 'Reliable agents' },
-			submissionCoverage: 'linked_only',
+			submissionCoverage: 'complete',
 			submissions: [{ id: submissionId, decision: 'accepted', notified: true }]
 		});
 		expect(record?.sessions[0]?.placement).toMatchObject({ room: 'Main stage' });

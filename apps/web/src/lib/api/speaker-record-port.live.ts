@@ -8,13 +8,13 @@ import {
 } from '@jooevents/contracts';
 import type { DecisionsLiveClient } from './operations/decisions-live';
 import type { EngagementsLiveClient } from './operations/engagements-live';
-import type { SubmissionTriageLiveClient } from './operations/submission-triage-live';
 import type { TaskLiveClient } from './operations/tasks-live';
 import type { FilesPagePort } from './files/files-page-port';
 import type { MaterialFileView } from './files/view-models';
 import type {
 	OrganizerSubmissionAnswerView,
-	OrganizerSubmissionsPort
+	OrganizerSubmissionsPort,
+	LiveOrganizerSubmissionsPort
 } from './view-models/intake-submissions';
 import type { SchedulePagePort } from './schedule-page-port';
 import type { SpeakersPagePort } from './speakers-page-port';
@@ -187,9 +187,8 @@ export function createLiveSpeakerRecordPort(input: {
 	readonly tasks: Pick<TaskLiveClient, 'readBoard'>;
 	readonly taskActions: TasksPagePort;
 	readonly schedule: Pick<SchedulePagePort, 'schedule'>;
-	readonly triage: Pick<SubmissionTriageLiveClient, 'read'>;
 	readonly decisions: Pick<DecisionsLiveClient, 'readState'>;
-	readonly intake: Pick<OrganizerSubmissionsPort, 'readDetail'>;
+	readonly intake: Pick<LiveOrganizerSubmissionsPort, 'readDetail' | 'listForPerson'>;
 	readonly files: Pick<FilesPagePort, 'read' | 'downloadPath'>;
 }): SpeakerRecordPort {
 	async function board(): Promise<TaskBoardSnapshotDto> {
@@ -215,17 +214,14 @@ export function createLiveSpeakerRecordPort(input: {
 			return unavailable('speaker_record_identity_unavailable', 'speaker identity');
 		}
 
-		const samePersonHeads = engagementResult.data.engagements.filter((entry) => entry.personId === head.personId);
-		const linkedSubmissionIds = [...new Set(samePersonHeads.flatMap((entry) =>
-			entry.submissionId === null ? [] : [entry.submissionId]
-		))];
-		const triageRows = await Promise.all(linkedSubmissionIds.map(async (submissionId) => {
-			const result = await input.triage.read(submissionId);
-			if (result.kind !== 'success') unavailable('speaker_record_submission_unavailable', 'linked proposal');
-			return result.data;
-		}));
+		const personSubmissions = await input.intake.listForPerson(head.personId);
+		if (personSubmissions.kind !== 'success') {
+			unavailable('speaker_record_submission_unavailable', 'speaker proposals');
+		}
+		const submissionRows = personSubmissions.data;
+		const submissionIds = submissionRows.map((row) => row.id);
 		const decisionRows = new Map<string, DecisionStateSnapshotDto['rows'][number]>();
-		for (const batch of chunks(linkedSubmissionIds, DECISION_DECIDE_ROWS_MAX)) {
+		for (const batch of chunks(submissionIds, DECISION_DECIDE_ROWS_MAX)) {
 			if (batch.length === 0) continue;
 			const result = await input.decisions.readState(batch);
 			if (result.kind !== 'success') unavailable('speaker_record_decisions_unavailable', 'proposal decisions');
@@ -233,19 +229,19 @@ export function createLiveSpeakerRecordPort(input: {
 			for (const row of result.data.rows) decisionRows.set(row.submissionId, row);
 		}
 
-		const proposalRows: SpeakerRecordSubmission[] = triageRows.map((row) => {
-			const decision = decisionRows.get(row.source.id);
+		const proposalRows: SpeakerRecordSubmission[] = submissionRows.map((row) => {
+			const decision = decisionRows.get(row.id);
 			if (!decision) unavailable('speaker_record_decisions_incomplete', 'proposal decisions');
 			if (decision.head !== null && decision.notificationAcceptedAt === undefined) {
 				unavailable('speaker_record_notification_evidence_unavailable', 'proposal notification evidence');
 			}
 			return {
-				id: row.source.id,
-				title: row.source.title,
+				id: row.id,
+				title: row.title || 'Untitled submission',
 				decision: (decision.head?.state ?? 'undecided') as DecisionState,
 				notified: decision.notificationAcceptedAt != null,
-				href: `/app/submissions?submission=${row.source.id}`,
-				decisionHref: `/app/decisions?submission=${row.source.id}`
+				href: `/app/submissions?submission=${row.id}`,
+				decisionHref: `/app/decisions?submission=${row.id}`
 			};
 		});
 
@@ -282,7 +278,7 @@ export function createLiveSpeakerRecordPort(input: {
 
 		const linkedTitle = head.submissionId === null
 			? undefined
-			: triageRows.find((row) => row.source.id === head.submissionId)?.source.title;
+			: submissionRows.find((row) => row.id === head.submissionId)?.title ?? undefined;
 		return {
 			engagement,
 			sessions: engagement.sessions.map((session) => {
@@ -310,7 +306,7 @@ export function createLiveSpeakerRecordPort(input: {
 			deliverables,
 			thread: await input.speakers.communications.thread(head.personId),
 			submissions: proposalRows,
-			submissionCoverage: 'linked_only',
+			submissionCoverage: 'complete',
 			publicCard: engagement.publiclyVisible
 				? { links: [], provisional: !engagement.contentApproved }
 				: null,

@@ -83,7 +83,7 @@ export interface OrganizerSubmissionContactView {
 	readonly email: string;
 }
 
-export type OrganizerSubmissionOperation = 'list' | 'detail' | 'contact';
+export type OrganizerSubmissionOperation = 'list' | 'person_list' | 'detail' | 'contact';
 
 export type OrganizerSubmissionUnavailableReason =
 	| 'invalid_operation_manifest'
@@ -155,6 +155,14 @@ export interface OrganizerSubmissionsPort {
 		options?: { readonly signal?: AbortSignal }
 	): Promise<OrganizerSubmissionReadResult<OrganizerSubmissionDetailView>>;
 	readonly contact: OrganizerSubmissionContactPort;
+}
+
+/** Live-only completeness read keyed by canonical Person identity. */
+export interface LiveOrganizerSubmissionsPort extends OrganizerSubmissionsPort {
+	listForPerson(
+		personId: string,
+		options?: { readonly signal?: AbortSignal }
+	): Promise<OrganizerSubmissionReadResult<readonly OrganizerSubmissionSummaryView[]>>;
 }
 
 /** Injection contract for the bounded organizer submissions component. */
