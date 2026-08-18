@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { icalGoldenInputs } from './ical.fixtures';
-import { renderIcalendar } from './ical';
+import { renderIcalendar, renderIcalendarBatch } from './ical';
 
 const goldenUrl = new URL('./__fixtures__/ical-goldens.json', import.meta.url);
 
@@ -55,5 +55,20 @@ describe('deterministic iCalendar/iTIP renderer', () => {
     expect(text).toContain('DESCRIPTION:Bring questions\\, examples\\; and notes.\\nSecond line proves esc\r\n aping.');
     expect(text).toContain('\r\n ');
     expect(text).toContain('LOCATION:Hall A\\, Level 2\r\n');
+  });
+
+  test('a batch is one method partition with deterministic ordered VEVENT bytes', () => {
+    const first = icalGoldenInputs.request!;
+    const second = { ...first, uid: 'commitment-43@calendar.jooevents', sequence: 1 };
+    const rendered = renderIcalendarBatch({ method: 'REQUEST', events: [first, second] });
+    const text = new TextDecoder().decode(rendered);
+    expect(text.match(/BEGIN:VCALENDAR/gu)).toHaveLength(1);
+    expect(text.match(/BEGIN:VTIMEZONE/gu)).toHaveLength(1);
+    expect(text.match(/BEGIN:VEVENT/gu)).toHaveLength(2);
+    expect(text.indexOf('UID:commitment-42')).toBeLessThan(text.indexOf('UID:commitment-43'));
+    expect(renderIcalendarBatch({ method: 'REQUEST', events: [first, second] })).toEqual(rendered);
+    expect(() => renderIcalendarBatch({
+      method: 'CANCEL', events: [first]
+    })).toThrow('calendar_ical_method_partition_invalid');
   });
 });

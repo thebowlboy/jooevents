@@ -1260,7 +1260,7 @@ export interface CommunicationAttentionItem {
 	count?: number;
 	/** The message row carrying the evidence, when one does. */
 	messageId?: string;
-	action: { label: string; kind: 'review' | 'open-message' | 'setup' };
+	action: { label: string; kind: 'review' | 'open-message' | 'setup' | 'open-schedule' };
 }
 
 /**

@@ -16,6 +16,11 @@ import {
   SUBMISSION_CONFIRMATION_TEMPLATE_REVISION_REF_ID
 } from '../rendering/submission-confirmation';
 import { TASK_REMINDER_PURPOSE_KEY } from '../rendering/task-reminder';
+import {
+  CALENDAR_NOTICE_PURPOSE_KEY,
+  CALENDAR_NOTICE_STANDING_POLICY,
+  CALENDAR_NOTICE_TEMPLATE_REVISION_REF_ID
+} from '../rendering/calendar-notice';
 
 export const EVENT_DECISION_AUDIENCE_STATUSES = Object.freeze(['accepted', 'declined'] as const);
 export type EventDecisionAudienceStatus = (typeof EVENT_DECISION_AUDIENCE_STATUSES)[number];
@@ -69,6 +74,7 @@ export interface EventCommunicationPurposeSeedPlan {
   readonly decisionPurpose: EventCommunicationPurposeSeed;
   readonly taskReminderPurpose: EventCommunicationPurposeSeed;
   readonly submissionConfirmationPurpose: EventCommunicationPurposeSeed;
+  readonly calendarNoticePurpose: EventCommunicationPurposeSeed;
 }
 
 function digest(value: unknown): string {
@@ -335,12 +341,28 @@ export function createEventCommunicationPurposeSeedPlan(
     },
     allowedAudienceSources: []
   });
+  const calendarPurpose = purposeSeed({
+    selected,
+    purposeKey: CALENDAR_NOTICE_PURPOSE_KEY,
+    namespace: 'calendar-notice',
+    variant: 'a',
+    label: 'Calendar notices',
+    description: 'Transactional invitations and updates for confirmed speakers.',
+    policyMaterial: {
+      ...CALENDAR_NOTICE_STANDING_POLICY,
+      purposeKey: CALENDAR_NOTICE_PURPOSE_KEY,
+      templateRevisionRefId: CALENDAR_NOTICE_TEMPLATE_REVISION_REF_ID,
+      consent: 'not_required_event_participation'
+    },
+    allowedAudienceSources: []
+  });
   return Object.freeze({
     scope: selected,
-    purposes: Object.freeze([decisionPurpose, taskPurpose, submissionPurpose]),
+    purposes: Object.freeze([decisionPurpose, taskPurpose, submissionPurpose, calendarPurpose]),
     decisionPurpose,
     taskReminderPurpose: taskPurpose,
-    submissionConfirmationPurpose: submissionPurpose
+    submissionConfirmationPurpose: submissionPurpose,
+    calendarNoticePurpose: calendarPurpose
   });
 }
 

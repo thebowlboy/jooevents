@@ -183,7 +183,7 @@ export function applyCalendarNoticeChange(input: {
   const updated = freezeGeneration({
     ...generation,
     items,
-    ...(urgent
+    ...(urgent && !generation.held
       ? {
           state: 'sealed' as const,
           sealReason: 'near_event_bypass' as const,

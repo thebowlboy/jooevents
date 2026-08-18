@@ -137,6 +137,35 @@ export interface CalendarProjectionAttentionItem {
   readonly destination: '/communications/calendar/projection-attention';
 }
 
+export interface CalendarNoticeGenerationSummary {
+  readonly generationId: string;
+  readonly scope: CalendarScope;
+  readonly personId: string;
+  readonly generationNumber: number;
+  readonly state: 'open' | 'sealed' | 'released';
+  readonly openedAt: string;
+  readonly sealAt: string;
+  readonly held: boolean;
+  readonly sealReason: 'window_expired' | 'near_event_bypass' | 'manual_release' | null;
+  readonly sealedAt: string | null;
+  readonly communicationReleaseId: string | null;
+  readonly version: number;
+  readonly netItemCount: number;
+}
+
+export interface CalendarNoticeGenerationItemRecord {
+  readonly commitment: CalendarCommitmentProjection;
+  readonly beforeMethod: 'REQUEST' | 'CANCEL' | null;
+  readonly beforeSequence: number | null;
+  readonly afterMethod: 'REQUEST' | 'CANCEL';
+  readonly afterSequence: number;
+  readonly netMethod: 'REQUEST' | 'CANCEL' | 'NONE';
+  readonly artifactSha256: string | null;
+}
+
+export const CALENDAR_NOTICE_WINDOW_MILLISECONDS = 21_600_000;
+export const CALENDAR_NOTICE_NEAR_EVENT_MILLISECONDS = 172_800_000;
+
 function isSQLiteBusy(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'code' in error
     && (error as { readonly code?: unknown }).code === 'SQLITE_BUSY';
@@ -228,28 +257,30 @@ export class SQLiteCalendarCanonicalStateRepository {
         }
         return fact;
       });
-      const before = this.readProjectorState(scope, cursor.last_intake_position);
-      const after = projectCalendarCommitmentFacts({
-        state: before,
-        facts,
-        identities: {
-          mintCommitment: ({ scope: identityScope, personId, sessionId, occurrenceId }) => {
-            const id = uuidFromSeed(
-              `calendar-commitment\0${identityScope.workspaceId}\0${identityScope.eventId}\0${personId}\0${sessionId}\0${occurrenceId}`
-            );
-            return Object.freeze({ id, uid: `urn:uuid:${id}` });
-          },
-          mintNoticeGeneration: (identityScope) => uuidFromSeed(
-            `calendar-generation\0${identityScope.workspaceId}\0${identityScope.eventId}\0${rows.at(-1)!.intake_position}`
-          )
-        }
-      });
+      let state = this.readProjectorState(scope, cursor.last_intake_position);
+      const identities = {
+        mintCommitment: ({ scope: identityScope, personId, sessionId, occurrenceId }: {
+          scope: CalendarScope; personId: string; sessionId: string; occurrenceId: string;
+        }) => {
+          const id = uuidFromSeed(
+            `calendar-commitment\0${identityScope.workspaceId}\0${identityScope.eventId}\0${personId}\0${sessionId}\0${occurrenceId}`
+          );
+          return Object.freeze({ id, uid: `urn:uuid:${id}` });
+        },
+        mintNoticeGeneration: (identityScope: CalendarScope) => uuidFromSeed(
+          `calendar-generation\0${identityScope.workspaceId}\0${identityScope.eventId}\0cursor`
+        )
+      };
       const terminal = rows.at(-1)!.intake_position;
       for (let index = 0; index < facts.length; index += 1) {
-        this.persistSourceFact(facts[index]!, rows[index]!.intake_position);
+        const fact = facts[index]!;
+        const intakePosition = rows[index]!.intake_position;
+        const next = projectCalendarCommitmentFacts({ state, facts: [fact], identities });
+        this.persistSourceFact(fact, intakePosition);
+        this.persistSourceProjection(next, intakePosition);
+        this.persistProjection(state, next, intakePosition, fact.occurredAt);
+        state = next;
       }
-      this.persistSourceProjection(after, terminal);
-      this.persistProjection(before, after, terminal, facts.at(-1)!.occurredAt);
       this.sqlite.query(`
         UPDATE calendar_commitment_cursors
            SET last_intake_position=?,version=version+1,state='ready',attention_code=NULL,
@@ -314,11 +345,112 @@ export class SQLiteCalendarCanonicalStateRepository {
     return Object.freeze(rows.map((row) => Object.freeze(this.projectionFromRow(row))));
   }
 
+  listNoticeGenerations(
+    scopeInput: CalendarScope,
+    state?: 'open' | 'sealed' | 'released'
+  ): readonly CalendarNoticeGenerationSummary[] {
+    const scope = calendarScopeSchema.parse(scopeInput);
+    const rows = state === undefined
+      ? this.sqlite.query<{
+          generation_id: string; workspace_id: string; event_id: string; person_id: string;
+          generation_number: number; state: CalendarNoticeGenerationSummary['state'];
+          opened_at_ms: number; seal_at_ms: number; held: number;
+          seal_reason: CalendarNoticeGenerationSummary['sealReason']; sealed_at_ms: number | null;
+          communication_release_id: string | null; version: number; net_item_count: number;
+        }, [string, string]>(`
+          SELECT generation.*,sum(CASE WHEN item.net_method='NONE' THEN 0 ELSE 1 END) AS net_item_count
+            FROM calendar_notice_generations generation
+            JOIN calendar_notice_generation_items item USING(generation_id)
+           WHERE generation.workspace_id=? AND generation.event_id=?
+           GROUP BY generation.generation_id ORDER BY generation.opened_at_ms,generation.generation_id
+        `).all(scope.workspaceId, scope.eventId)
+      : this.sqlite.query<{
+          generation_id: string; workspace_id: string; event_id: string; person_id: string;
+          generation_number: number; state: CalendarNoticeGenerationSummary['state'];
+          opened_at_ms: number; seal_at_ms: number; held: number;
+          seal_reason: CalendarNoticeGenerationSummary['sealReason']; sealed_at_ms: number | null;
+          communication_release_id: string | null; version: number; net_item_count: number;
+        }, [string, string, string]>(`
+          SELECT generation.*,sum(CASE WHEN item.net_method='NONE' THEN 0 ELSE 1 END) AS net_item_count
+            FROM calendar_notice_generations generation
+            JOIN calendar_notice_generation_items item USING(generation_id)
+           WHERE generation.workspace_id=? AND generation.event_id=? AND generation.state=?
+           GROUP BY generation.generation_id ORDER BY generation.opened_at_ms,generation.generation_id
+        `).all(scope.workspaceId, scope.eventId, state);
+    return Object.freeze(rows.map((row) => Object.freeze({
+      generationId: row.generation_id,
+      scope: Object.freeze({ workspaceId: row.workspace_id, eventId: row.event_id }),
+      personId: row.person_id,
+      generationNumber: row.generation_number,
+      state: row.state,
+      openedAt: instant(row.opened_at_ms),
+      sealAt: instant(row.seal_at_ms),
+      held: row.held === 1,
+      sealReason: row.seal_reason,
+      sealedAt: row.sealed_at_ms === null ? null : instant(row.sealed_at_ms),
+      communicationReleaseId: row.communication_release_id,
+      version: row.version,
+      netItemCount: row.net_item_count
+    })));
+  }
+
+  readNoticeGenerationItems(generationId: string): readonly CalendarNoticeGenerationItemRecord[] {
+    const rows = this.sqlite.query<CommitmentRow & {
+      before_method: CalendarNoticeGenerationItemRecord['beforeMethod'];
+      before_sequence: number | null;
+      after_method: CalendarNoticeGenerationItemRecord['afterMethod'];
+      after_sequence: number;
+      net_method: CalendarNoticeGenerationItemRecord['netMethod'];
+      artifact_sha256: string | null;
+    }, [string]>(`
+      SELECT commitment.*,item.before_method,item.before_sequence,item.after_method,
+             item.after_sequence,item.net_method,item.artifact_sha256
+        FROM calendar_notice_generation_items item
+        JOIN calendar_commitments commitment USING(commitment_id)
+       WHERE item.generation_id=? ORDER BY item.net_method,commitment.start_at_ms,commitment.commitment_id
+    `).all(generationId);
+    return Object.freeze(rows.map((row) => Object.freeze({
+      commitment: Object.freeze(this.projectionFromRow(row)),
+      beforeMethod: row.before_method,
+      beforeSequence: row.before_sequence,
+      afterMethod: row.after_method,
+      afterSequence: row.after_sequence,
+      netMethod: row.net_method,
+      artifactSha256: row.artifact_sha256
+    })));
+  }
+
+  sealDueGenerations(scopeInput: CalendarScope, evaluatedAt: string): number {
+    if (!this.sqlite.inTransaction) throw new SQLiteCalendarCanonicalStateError('transaction_required');
+    const scope = calendarScopeSchema.parse(scopeInput);
+    const at = milliseconds(evaluatedAt);
+    const due = this.sqlite.query<{ generation_id: string }, [string, string, number]>(`
+      SELECT generation_id FROM calendar_notice_generations
+       WHERE workspace_id=? AND event_id=? AND state='open' AND held=0 AND seal_at_ms<=?
+       ORDER BY seal_at_ms,generation_id
+    `).all(scope.workspaceId, scope.eventId, at);
+    for (const row of due) {
+      this.sqlite.query(`
+        UPDATE calendar_notice_generations
+           SET state='sealed',seal_reason='window_expired',sealed_at_ms=?,
+               sealed_intake_position=(
+                 SELECT max(commitment.last_projected_intake_position)
+                   FROM calendar_notice_generation_items item
+                   JOIN calendar_commitments commitment USING(commitment_id)
+                  WHERE item.generation_id=calendar_notice_generations.generation_id
+               ),version=version+1
+         WHERE generation_id=? AND state='open' AND held=0
+      `).run(at, row.generation_id);
+      this.assertChanged();
+    }
+    return due.length;
+  }
+
   setGenerationHold(generationId: string, expectedVersion: number, held: boolean): void {
     if (!this.sqlite.inTransaction) throw new SQLiteCalendarCanonicalStateError('transaction_required');
     this.sqlite.query(`
       UPDATE calendar_notice_generations SET held=?,version=version+1
-       WHERE generation_id=? AND version=? AND state IN ('open','sealed')
+       WHERE generation_id=? AND version=? AND state='open'
     `).run(held ? 1 : 0, generationId, expectedVersion);
     this.assertChanged();
   }
@@ -337,7 +469,8 @@ export class SQLiteCalendarCanonicalStateRepository {
                   AND cursor.event_id=calendar_notice_generations.event_id
              ),version=version+1
        WHERE generation_id=? AND version=? AND state='open'
-    `).run(input.reason, milliseconds(input.sealedAt), input.generationId, input.expectedVersion);
+         AND (held=0 OR ?='manual_release')
+    `).run(input.reason, milliseconds(input.sealedAt), input.generationId, input.expectedVersion, input.reason);
     this.assertChanged();
   }
 
@@ -601,14 +734,38 @@ export class SQLiteCalendarCanonicalStateRepository {
           generation_id,commitment_id,before_method,before_sequence,after_method,after_sequence,net_method,artifact_sha256
         ) VALUES (?,?,?,?,?,?,?,NULL)
         ON CONFLICT(generation_id,commitment_id) DO UPDATE SET
-          after_method=excluded.after_method,after_sequence=excluded.after_sequence,net_method=excluded.net_method
+          after_method=excluded.after_method,after_sequence=excluded.after_sequence,
+          net_method=CASE
+            WHEN calendar_notice_generation_items.before_method IS NULL
+              AND excluded.after_method='CANCEL' THEN 'NONE'
+            ELSE excluded.after_method
+          END,
+          artifact_sha256=NULL
       `).run(
         generationId, commitment.id,
         old ? (old.lifecycle === 'cancelled' ? 'CANCEL' : 'REQUEST') : null,
         old?.sequence ?? null,
         commitment.lifecycle === 'cancelled' ? 'CANCEL' : 'REQUEST', commitment.sequence,
-        commitment.lifecycle === 'cancelled' ? 'CANCEL' : 'REQUEST'
+        old === undefined && commitment.lifecycle === 'cancelled'
+          ? 'NONE'
+          : commitment.lifecycle === 'cancelled' ? 'CANCEL' : 'REQUEST'
       );
+      const priorStartAtMs = old === undefined ? null : milliseconds(old.startAt);
+      const newStartAtMs = commitment.lifecycle === 'cancelled' ? null : milliseconds(commitment.startAt);
+      const occurredAtMs = milliseconds(occurredAt);
+      const near = [priorStartAtMs, newStartAtMs].some((startAtMs) =>
+        startAtMs !== null
+        && startAtMs >= occurredAtMs
+        && startAtMs - occurredAtMs <= CALENDAR_NOTICE_NEAR_EVENT_MILLISECONDS
+      );
+      if (near) {
+        this.sqlite.query(`
+          UPDATE calendar_notice_generations
+             SET state='sealed',seal_reason='near_event_bypass',sealed_at_ms=?,
+                 sealed_intake_position=?,version=version+1
+           WHERE generation_id=? AND state='open' AND held=0
+        `).run(occurredAtMs, intakePosition, generationId);
+      }
     }
   }
 
@@ -675,7 +832,7 @@ export class SQLiteCalendarCanonicalStateRepository {
         communication_release_id,version
       ) VALUES (?,?,?,?,?,'open',?,?,?,0,NULL,NULL,NULL,NULL,1)
     `).run(id, commitment.workspaceId, commitment.eventId, commitment.personId, number,
-      opened, intakePosition, opened + 21_600_000);
+      opened, intakePosition, opened + CALENDAR_NOTICE_WINDOW_MILLISECONDS);
     return id;
   }
 

@@ -576,4 +576,36 @@ describe('live Schedule page correction boundary', () => {
 			}
 		]);
 	});
+
+	test('lists and controls pending calendar notices through the mounted operation client', async () => {
+		const generation = {
+			generationId: id(120), personId: id(121), generationNumber: 1,
+			state: 'open' as const, openedAt: '2026-08-18T01:00:00.000Z',
+			sealAt: '2026-08-18T01:15:00.000Z', held: false, sealReason: null,
+			sealedAt: null, communicationReleaseId: null, version: 1, pendingUpdateCount: 2
+		};
+		const controls: unknown[] = [];
+		const port = createLiveSchedulePagePort({
+			...base,
+			placements: { source: { kind: 'live' } } as never,
+			sessions: { source: { kind: 'live' } } as never,
+			calendar: {
+				list: async () => ({ kind: 'success', data: [generation] }),
+				control: async (command: unknown) => {
+					controls.push(command);
+					return { kind: 'success', data: generation, receipt: {
+						id: id(122), operationName: 'calendar.notice-generations.control', operationVersion: 1
+					} };
+				}
+			} as never
+		} as never);
+
+		expect(await port.calendar?.listNotices()).toEqual([generation]);
+		await port.calendar?.setNoticeHold(generation.generationId, 1, true);
+		await port.calendar?.releaseNotice(generation.generationId, 2);
+		expect(controls).toEqual([
+			{ action: 'set_hold', generationId: generation.generationId, expectedVersion: 1, held: true },
+			{ action: 'release_now', generationId: generation.generationId, expectedVersion: 2 }
+		]);
+	});
 });

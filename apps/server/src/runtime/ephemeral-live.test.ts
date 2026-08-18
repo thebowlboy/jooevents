@@ -68,6 +68,7 @@ import {
   releasePublishOperationResultSchema,
   releaseReviewDraftOperationResultSchema,
   releaseOverviewReadResultSchema,
+  schedulePlacementOperationResultSchema,
   safeOperationManifestSchema,
   servedPublicFormSchema,
   servedPublicPresentationSchema,
@@ -83,6 +84,10 @@ import {
   templateEditReviseOperationResultSchema,
   workspaceShellSummaryReadResultSchema
 } from '@jooevents/contracts';
+import {
+  calendarNoticeGenerationControlOperationResultSchema,
+  calendarNoticeGenerationListOperationResultSchema
+} from '@jooevents/contracts/calendar';
 import { canonicalJsonSha256, canonicalJsonText } from '@jooevents/kernel';
 import { workspaceOverviewReadResultSchema } from '@jooevents/contracts/workspace-overview';
 import {
@@ -878,6 +883,14 @@ describe('ephemeral live Foundation server composition', () => {
       )
     }))).toEqual([
       {
+        name: 'calendar.notice-generations.control', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/calendar/notices/control']
+      },
+      {
+        name: 'calendar.notice-generations.list', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/calendar/notices']
+      },
+      {
         name: 'communication.email_readiness.read', version: 1, effect: 'read',
         bindings: ['GET /api/communications/email-readiness']
       },
@@ -1488,6 +1501,174 @@ describe('ephemeral live Foundation server composition', () => {
       body: '{}'
     })).status).toBe(404);
   });
+
+  test('joins schedule facts to the pending calendar notice controls while delivery stays off', async () => {
+    const runtime = await createEphemeralLiveRuntime({ config });
+    runtimes.push(runtime);
+    const session = await createOwnerSession(runtime);
+    await provisionOwner(runtime, session);
+    const [speaker] = await seedAcceptedSpeakers({
+      runtime,
+      session,
+      key: 'calendar-notice-loop',
+      speakers: [{
+        key: 'speaker', title: 'Calendars without surprises',
+        name: 'Casey Calendar', email: 'casey.calendar@example.test'
+      }]
+    });
+    if (!speaker) throw new Error('Calendar notice speaker missing.');
+
+    const confirmed = engagementChangeOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/engagements',
+      key: 'calendar-notice-confirm',
+      body: {
+        action: 'record_confirmation', engagementId: speaker.engagementId,
+        expectedEngagementVersion: 1, attribution: 'organizer_recorded'
+      },
+      parse: (value) => value
+    }));
+    if (confirmed.kind !== 'success') throw new Error('Calendar notice confirmation failed.');
+
+    const room = await createProgramVocabularyItem({
+      runtime,
+      session,
+      key: 'calendar-notice-room',
+      expectedSetVersion: 2,
+      kind: 'room',
+      name: 'Calendar Hall'
+    });
+    const roomId = room.data.affectedIds[0];
+    if (!roomId) throw new Error('Calendar notice room missing.');
+    const placed = schedulePlacementOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/schedule/placements',
+      key: 'calendar-notice-place',
+      body: {
+        action: 'place', expectedScheduleVersion: 1,
+        sessionId: speaker.sessionId, roomId,
+        startAt: '2027-06-10T02:00:00.000Z', endAt: '2027-06-10T02:45:00.000Z'
+      },
+      parse: (value) => value
+    }));
+    if (placed.kind !== 'success') throw new Error('Calendar notice placement failed.');
+
+    await runtime.startBackgroundWork();
+    await runtime.background.runNow('calendar_notice_dispatch');
+    expect(count(runtime, 'calendar_commitment_facts')).toBeGreaterThan(0);
+    expect(count(runtime, 'calendar_commitments')).toBe(1);
+    const read = async () => calendarNoticeGenerationListOperationResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/calendar/notices', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    const readAttention = async () => organizerCommunicationAttentionPageOperationResultSchema.parse(
+      await (await runtime.app.request('/api/events/current/communications/attention', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })).json()
+    );
+    const pending = await read();
+    if (pending.kind !== 'success') throw new Error('Calendar notice list failed.');
+    expect(pending.data.rows).toHaveLength(1);
+    expect(pending.data.rows[0]).toMatchObject({
+      personId: speaker.personId, state: 'open', held: false, pendingUpdateCount: 1, version: 1
+    });
+    const generation = pending.data.rows[0]!;
+
+    const held = calendarNoticeGenerationControlOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/calendar/notices/control',
+      key: 'calendar-notice-hold',
+      body: {
+        action: 'set_hold', generationId: generation.generationId,
+        expectedVersion: generation.version, held: true
+      },
+      parse: (value) => value
+    }));
+    expect(held).toMatchObject({
+      kind: 'success', data: { action: 'set_hold', generation: { state: 'open', held: true, version: 2 } }
+    });
+    const heldAttention = await readAttention();
+    if (heldAttention.kind !== 'success') throw new Error('Held notice attention read failed.');
+    expect(heldAttention.data.rows.find((item) => item.reasonCode === 'calendar_notices_held'))
+      .toMatchObject({
+        affectedCount: { knowledge: 'known', value: 1 },
+        recommendedAction: { kind: 'open_schedule' }
+      });
+
+    const stale = calendarNoticeGenerationControlOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/calendar/notices/control',
+      key: 'calendar-notice-stale',
+      body: {
+        action: 'set_hold', generationId: generation.generationId,
+        expectedVersion: 1, held: false
+      },
+      parse: (value) => value
+    }));
+    expect(stale).toMatchObject({
+      kind: 'outcome', outcome: { class: 'stale_revision', kind: 'calendar.notice_generation_changed' }
+    });
+
+    const released = calendarNoticeGenerationControlOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/calendar/notices/control',
+      key: 'calendar-notice-release',
+      body: {
+        action: 'release_now', generationId: generation.generationId, expectedVersion: 2
+      },
+      parse: (value) => value
+    }));
+    expect(released).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'release_now',
+        generation: { state: 'sealed', held: true, sealReason: 'manual_release', version: 3 }
+      }
+    });
+    await runtime.background.runNow('calendar_notice_dispatch');
+    const sealed = await read();
+    if (sealed.kind !== 'success') throw new Error('Calendar notice sealed read failed.');
+    expect(sealed.data.rows[0]).toMatchObject({ state: 'sealed', held: true });
+    expect(count(runtime, 'communication_outbound_delivery_heads')).toBe(0);
+    expect(count(runtime, 'operation_log', "WHERE operation_name='calendar.notice-generations.control'"))
+      .toBe(2);
+
+    runtime.database.sqlite.query(`
+      UPDATE calendar_commitment_cursors
+         SET state='poisoned',attention_code='calendar_projection_poison_fact',
+             attention_fact_id=(SELECT fact_id FROM calendar_commitment_facts ORDER BY intake_position LIMIT 1),
+             version=version+1,updated_at_ms=updated_at_ms+1
+    `).run();
+    const poisonAttention = await readAttention();
+    if (poisonAttention.kind !== 'success') throw new Error('Poison attention read failed.');
+    expect(poisonAttention.data.rows.find(
+      (item) => item.reasonCode === 'calendar_projection_poison_fact'
+    )).toMatchObject({
+      summary: 'A calendar update could not be processed.',
+      affectedCount: { knowledge: 'known', value: 1 },
+      recommendedAction: { kind: 'open_schedule' }
+    });
+    runtime.database.sqlite.query(`
+      UPDATE calendar_commitment_cursors
+         SET state='stalled',attention_code='calendar_projection_stalled_cursor',
+             attention_fact_id=NULL,version=version+1,updated_at_ms=updated_at_ms+1
+    `).run();
+    const stalledAttention = await readAttention();
+    if (stalledAttention.kind !== 'success') throw new Error('Stalled attention read failed.');
+    expect(stalledAttention.data.rows.find(
+      (item) => item.reasonCode === 'calendar_projection_stalled_cursor'
+    )).toMatchObject({
+      summary: 'Calendar updates are not catching up.',
+      affectedCount: { knowledge: 'known', value: 1 },
+      recommendedAction: { kind: 'open_schedule' }
+    });
+  }, 120_000);
 
   test('attaches an accepted unlinked Submission and restores the exact prior Session', async () => {
     const runtime = await createEphemeralLiveRuntime({ config });
@@ -3339,7 +3520,7 @@ describe('ephemeral live Foundation server composition', () => {
     });
     // Created events are seeded with the recorded decision-notification
     // defaults (BLOCKED-4/BLOCKED-5/BLOCKED-12): decision notifications,
-    // Task reminders, the submission-confirmation receipt, two active decision
+    // Task reminders, the submission-confirmation receipt, calendar notices, two active decision
     // templates, and the two immutable decision-set audience recipes. Drafts
     // remain empty — nothing authors messages by default.
     const read = async <Value>(path: string, schema: { parse(value: unknown): Value }) =>
@@ -3361,7 +3542,7 @@ describe('ephemeral live Foundation server composition', () => {
     });
     if (purposes.kind !== 'success') throw new Error('purposes_read_failed');
     expect(purposes.data.rows.map((row) => row.revision.purposeKey).sort())
-      .toEqual(['decision_notification', 'submission_confirmation', 'task_reminder']);
+      .toEqual(['calendar_notice', 'decision_notification', 'submission_confirmation', 'task_reminder']);
     const templates = await read(
       '/api/events/current/communications/templates',
       organizerMessageTemplatePageOperationResultSchema

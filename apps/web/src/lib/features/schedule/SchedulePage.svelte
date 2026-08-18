@@ -22,6 +22,7 @@
 		SchedulePagePort,
 		SchedulePublicationReview
 	} from '$lib/api/schedule-page-port';
+	import type { CalendarNoticeGenerationDto } from '@jooevents/contracts/calendar';
 	import { describePortFailure } from '$lib/api/port-failure';
 	import { presentProgramRoomCapacity } from '$lib/api/program-vocabulary-presentation';
 	import {
@@ -88,6 +89,11 @@
 	let tracks = $state.raw<Track[]>([]);
 	let formats = $state.raw<Format[]>([]);
 	let roster = $state.raw<SpeakerRow[]>([]);
+	let calendarNotices = $state.raw<readonly CalendarNoticeGenerationDto[]>([]);
+	let calendarActionId = $state<string | null>(null);
+	let calendarActionError = $state('');
+	let calendarLoadError = $state('');
+	let armedCalendarReleaseId = $state<string | null>(null);
 	let busy = $state(false);
 	let publishReason = $state('');
 	/** The drafted release a person is reading, between the two presses. */
@@ -150,18 +156,32 @@
 	async function load() {
 		refreshing = true;
 		try {
-			const [next, targets, people] = await Promise.all([
+			const noticeRead = api.calendar
+				? api.calendar.listNotices().then(
+					(rows) => ({ rows, error: '' }),
+					(error: unknown) => ({
+						rows: calendarNotices,
+						error: describePortFailure(
+							error, 'Pending calendar updates could not be loaded.'
+						).message
+					})
+				)
+				: Promise.resolve({ rows: [], error: '' });
+			const [next, targets, people, notices] = await Promise.all([
 				api.schedule.state(),
 				api.schedule.proposalTargets(),
 				// Graduation and direct entry grow the roster from other surfaces,
 				// so the board's copy travels with every re-read.
-				api.speakers.list()
+				api.speakers.list(),
+				noticeRead
 			]);
 			// The page owns a snapshot of the returned state so a committed placement
 			// renders immediately without a full route reload.
 			schedule = { ...next, placements: [...next.placements], breaks: [...next.breaks] };
 			proposals = targets;
 			roster = people;
+			calendarNotices = notices.rows;
+			calendarLoadError = notices.error;
 		} finally {
 			refreshing = false;
 		}
@@ -192,6 +212,50 @@
 
 	const rooms = $derived(schedule?.rooms ?? []);
 	const days = $derived(schedule?.days ?? []);
+	const pendingCalendarNotices = $derived(
+		calendarNotices.filter((notice) => notice.state !== 'released')
+	);
+
+	function calendarPersonName(personId: string): string {
+		return roster.find((person) => person.personId === personId)?.name ?? 'Speaker';
+	}
+
+	async function setCalendarNoticeHold(notice: CalendarNoticeGenerationDto, held: boolean) {
+		if (!api.calendar || calendarActionId) return;
+		calendarActionId = notice.generationId;
+		calendarActionError = '';
+		try {
+			await api.calendar.setNoticeHold(notice.generationId, notice.version, held);
+			announcement = held
+				? `Held the calendar update for ${calendarPersonName(notice.personId)}.`
+				: `Resumed the calendar update for ${calendarPersonName(notice.personId)}.`;
+			await load();
+		} catch (error) {
+			const failure = describePortFailure(error, 'The calendar update could not be changed.');
+			calendarActionError = failure.message;
+			announcement = failure.message;
+		} finally {
+			calendarActionId = null;
+		}
+	}
+
+	async function releaseCalendarNotice(notice: CalendarNoticeGenerationDto) {
+		if (!api.calendar || calendarActionId) return;
+		calendarActionId = notice.generationId;
+		calendarActionError = '';
+		try {
+			await api.calendar.releaseNotice(notice.generationId, notice.version);
+			armedCalendarReleaseId = null;
+			announcement = `Released the calendar update for ${calendarPersonName(notice.personId)}.`;
+			await load();
+		} catch (error) {
+			const failure = describePortFailure(error, 'The calendar update could not be released.');
+			calendarActionError = failure.message;
+			announcement = failure.message;
+		} finally {
+			calendarActionId = null;
+		}
+	}
 
 	// The selected day is shareable state: a link can name the day it means, and
 	// an unknown or absent one falls back to the first day of the event.
@@ -469,6 +533,16 @@
 	});
 	const confirmBlocked = $derived(confirmConflicts.some((c) => c.severity === 'block'));
 	const confirmEnd = $derived(confirmStart + (placing?.durationMin ?? 0));
+	const confirmCalendarPeople = $derived.by(() => {
+		if (!placing) return [];
+		const seen = new Set<string>();
+		return placing.speakers.filter((speaker) => {
+			const key = speaker.personId ?? speaker.email;
+			if (seen.has(key)) return false;
+			seen.add(key);
+			return true;
+		});
+	});
 
 	/**
 	 * The occupants around the current start, recomputed as it changes — the
@@ -1683,6 +1757,79 @@
 				</button>
 			{/if}
 		</p>
+
+		{#if calendarLoadError}
+			<p class="head__calendar-error" role="alert">{calendarLoadError}</p>
+		{/if}
+
+		{#if pendingCalendarNotices.length > 0}
+			<div class="head__calendar">
+				<Popover
+					label={`${pendingCalendarNotices.length} calendar update${pendingCalendarNotices.length === 1 ? '' : 's'} pending — review`}
+					onreveal={() =>
+						(announcement = `${pendingCalendarNotices.length} calendar update${pendingCalendarNotices.length === 1 ? '' : 's'} pending.`)}>
+					{#snippet trigger()}
+						<Badge
+							{...badgeFor(pendingCalendarNotices.some((notice) => notice.held) ? 'held' : 'scheduled')}
+							value={`${pendingCalendarNotices.length} calendar update${pendingCalendarNotices.length === 1 ? '' : 's'} pending`} />
+					{/snippet}
+					{#snippet children()}
+						<div class="calendar-notices">
+							<p class="calendar-notices__intro">
+								Updates wait briefly so related schedule changes can travel together.
+							</p>
+							{#if calendarActionError}
+								<p class="ui-notice ui-notice--danger" role="alert">{calendarActionError}</p>
+							{/if}
+							<ul class="calendar-notices__list">
+								{#each pendingCalendarNotices as notice (notice.generationId)}
+									<li class="calendar-notices__row">
+										<div>
+											<p class="calendar-notices__person">{calendarPersonName(notice.personId)}</p>
+											<p class="calendar-notices__state">
+												{notice.pendingUpdateCount} change{notice.pendingUpdateCount === 1 ? '' : 's'} ·
+												{notice.held ? 'Held' : notice.state === 'sealed' ? 'Ready to send' : 'Collecting changes'}
+											</p>
+										</div>
+										<div class="calendar-notices__actions">
+											{#if notice.state === 'open'}
+												<button
+													type="button"
+													class="ui-button ui-button--ghost ui-button--sm"
+													disabled={calendarActionId !== null}
+													onclick={() => setCalendarNoticeHold(notice, !notice.held)}>
+													{notice.held ? 'Resume' : 'Hold'}
+												</button>
+											{/if}
+											{#if notice.state === 'open' && armedCalendarReleaseId === notice.generationId}
+												<button
+													type="button"
+													class="ui-button ui-button--primary ui-button--sm"
+													disabled={calendarActionId !== null}
+													onclick={() => releaseCalendarNotice(notice)}>
+													Confirm release
+												</button>
+											{:else if notice.state === 'open'}
+												<button
+													type="button"
+													class="ui-button ui-button--secondary ui-button--sm"
+													disabled={calendarActionId !== null}
+													onclick={() => (armedCalendarReleaseId = notice.generationId)}>
+													Release now
+												</button>
+											{/if}
+										</div>
+									</li>
+								{/each}
+							</ul>
+							<p class="calendar-notices__consequence">
+								Releasing prepares the current invitation immediately and sends it when calendar delivery is enabled.
+							</p>
+						</div>
+					{/snippet}
+				</Popover>
+			</div>
+		{/if}
 
 		<div class="head__publish">
 			<p class="publish__reason" role="status">{publishReason}</p>
@@ -3022,6 +3169,23 @@
 			</div>
 		</div>
 		<p class="confirm__ends">{placing.durationMin} min · ends {clockLabel(confirmEnd)}</p>
+		<section class="confirm__calendar" aria-labelledby="confirm-calendar-title">
+			<h3 id="confirm-calendar-title">Updates calendars ({confirmCalendarPeople.length})</h3>
+			{#if confirmCalendarPeople.length > 0}
+				<p>
+					{placingOrigin ? 'Moving' : 'Placing'} this session records the new time and room for
+					{confirmCalendarPeople.length === 1 ? ' this participant' : ' these participants'}.
+					Their calendar updates are collected after the placement.
+				</p>
+				<ul>
+					{#each confirmCalendarPeople as speaker (speaker.personId ?? speaker.email)}
+						<li>{speaker.name}</li>
+					{/each}
+				</ul>
+			{:else}
+				<p>No participant calendars are linked to this session yet.</p>
+			{/if}
+		</section>
 		{#if confirmConflicts.length > 0}
 			<ul class="confirm__conflicts">
 				{#each confirmConflicts as conflict, index (index)}
@@ -3272,6 +3436,67 @@
 		outline: none;
 		box-shadow: var(--je-focus-ring);
 		border-radius: 2px;
+	}
+
+	.head__calendar {
+		display: flex;
+		align-items: center;
+	}
+
+	.head__calendar-error {
+		margin: 0;
+		font-size: var(--je-font-size-sm);
+		font-weight: 650;
+		color: var(--je-color-danger);
+	}
+
+	.calendar-notices {
+		display: grid;
+		gap: var(--je-space-3);
+		min-inline-size: min(24rem, calc(100vw - 2 * var(--je-space-4)));
+		max-inline-size: 30rem;
+	}
+
+	.calendar-notices__intro,
+	.calendar-notices__consequence,
+	.calendar-notices__person,
+	.calendar-notices__state {
+		margin: 0;
+	}
+
+	.calendar-notices__intro,
+	.calendar-notices__consequence,
+	.calendar-notices__state {
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-text-muted);
+	}
+
+	.calendar-notices__list {
+		display: grid;
+		gap: var(--je-space-3);
+		list-style: none;
+		margin: 0;
+		padding: 0;
+	}
+
+	.calendar-notices__row {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		align-items: center;
+		gap: var(--je-space-3);
+		padding-block-start: var(--je-space-3);
+		border-block-start: 1px solid var(--je-color-border-subtle);
+	}
+
+	.calendar-notices__person {
+		font-weight: 650;
+	}
+
+	.calendar-notices__actions {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: end;
+		gap: var(--je-space-2);
 	}
 
 	.count {
@@ -4451,6 +4676,39 @@
 		font-variant-numeric: tabular-nums;
 	}
 
+	.confirm__calendar {
+		display: grid;
+		gap: var(--je-space-2);
+		margin-block-start: var(--je-space-4);
+		padding: var(--je-space-3);
+		border: 1px solid var(--je-color-border);
+		border-radius: var(--je-radius-control);
+		background: var(--je-color-surface-sunken);
+	}
+
+	.confirm__calendar h3,
+	.confirm__calendar p,
+	.confirm__calendar ul {
+		margin: 0;
+	}
+
+	.confirm__calendar h3 {
+		font-size: var(--je-font-size-sm);
+	}
+
+	.confirm__calendar p,
+	.confirm__calendar ul {
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-text-muted);
+	}
+
+	.confirm__calendar ul {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--je-space-1) var(--je-space-3);
+		padding-inline-start: var(--je-space-4);
+	}
+
 	.confirm__conflicts {
 		display: grid;
 		gap: var(--je-space-2);
@@ -4593,6 +4851,26 @@
 
 		.publish__reason {
 			max-inline-size: none;
+		}
+
+		.head__calendar {
+			order: 3;
+		}
+
+		.head__publish {
+			inline-size: 100%;
+		}
+
+		.calendar-notices {
+			min-inline-size: min(20rem, calc(100vw - 2 * var(--je-space-4)));
+		}
+
+		.calendar-notices__row {
+			grid-template-columns: minmax(0, 1fr);
+		}
+
+		.calendar-notices__actions {
+			justify-content: start;
 		}
 
 		.confirm__time {

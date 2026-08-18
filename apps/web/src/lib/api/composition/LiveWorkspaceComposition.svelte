@@ -24,6 +24,7 @@
 	import { createReviewLivePort } from '$lib/api/operations/review-live';
 	import { createReviewerRosterLivePort } from '$lib/api/operations/reviewer-roster-live';
 	import { createSchedulePlacementLivePort } from '$lib/api/operations/schedule-placement-live';
+	import { createCalendarNoticesLiveClient } from '$lib/api/operations/calendar-notices-live';
 	import { createSessionCatalogLivePort } from '$lib/api/operations/session-catalog-live';
 	import { createSessionSubmissionRouteLivePort } from '$lib/api/operations/session-submission-route-live';
 	import { createSubmissionTriageLiveClient } from '$lib/api/operations/submission-triage-live';
@@ -231,6 +232,7 @@
 	// the deferred owner is filled before any component can issue a read.
 	let templates: ReturnType<typeof createLiveTemplatesPagePort> | null = null;
 	const schedule = createLiveSchedulePagePort({
+		calendar: createCalendarNoticesLiveClient({ manifest: initial.manifest }),
 		placements: createSchedulePlacementLivePort({ manifest: initial.manifest }),
 		sessions: sessionCatalog,
 		vocabulary,

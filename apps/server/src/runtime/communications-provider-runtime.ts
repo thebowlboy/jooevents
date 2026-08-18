@@ -6,6 +6,7 @@ import {
   type CloudflareEmailReadinessProbe,
   type CloudflareEmailDeliveryLookupResult,
   type CloudflareEmailSendingBinding,
+  type CloudflareEmailContentResolver,
   type CloudflareFetch
 } from '@jooevents/cloudflare-email';
 import {
@@ -120,6 +121,7 @@ export function createCommunicationsProviderRuntime(input: Readonly<{
   secretResolver?: OpaqueSecretTextResolver;
   fetch?: CloudflareFetch;
   readinessProbe?: CloudflareEmailReadinessProbe;
+  contentResolver?: CloudflareEmailContentResolver;
 }>): CommunicationsProviderRuntime {
   if (input.config.mode === 'disabled') {
     return Object.freeze({
@@ -157,6 +159,7 @@ export function createCommunicationsProviderRuntime(input: Readonly<{
       accountId: input.config.accountId,
       tokenLease,
       fetch: input.fetch,
+      ...(input.contentResolver === undefined ? {} : { contentResolver: input.contentResolver }),
       ...(input.readinessProbe === undefined ? {} : { readinessProbe: input.readinessProbe })
     });
     deliveryLookup = createCloudflareEmailDeliveryLookup({

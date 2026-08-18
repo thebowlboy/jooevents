@@ -25,6 +25,10 @@ import {
   type OrganizerPreviewContactDisclosure
 } from '@jooevents/communication-operations';
 import type { EmailProviderReadinessReader } from '@jooevents/communications';
+import type {
+  SQLiteCalendarCanonicalStateRepository,
+  CalendarNoticeProductionReadiness
+} from '@jooevents/persistence';
 import {
   parseSubmissionConfirmationReleasePlan,
   type SubmissionConfirmationReleasePlan
@@ -149,6 +153,14 @@ export function createSQLiteCommunicationAttentionSource(input: {
   readonly history: {
     listDeliveryHistory(scope: OrganizerCommunicationScope, input: unknown): CanonicalResult;
   };
+  readonly calendar?: Pick<SQLiteCalendarCanonicalStateRepository,
+    'listAttentionItems' | 'listNoticeGenerations'>;
+  readonly calendarProducer?: () => {
+    inspectGeneration(candidate: {
+      readonly scope: OrganizerCommunicationScope;
+      readonly generationId: string;
+    }): CalendarNoticeProductionReadiness;
+  };
 }) {
   const observations = new SQLiteCommunicationDeliveryObservationRepository(input.sqlite);
   return Object.freeze({
@@ -165,6 +177,81 @@ export function createSQLiteCommunicationAttentionSource(input: {
       const limit = Math.min(parsed.data.limit ?? ORGANIZER_COMMUNICATION_PAGE_LIMIT,
         ORGANIZER_COMMUNICATION_PAGE_LIMIT);
       const items: Array<ReturnType<typeof organizerCommunicationAttentionItemSchema.parse>> = [];
+
+      for (const calendarItem of input.calendar?.listAttentionItems(selected) ?? []) {
+        const poison = calendarItem.code === 'calendar_projection_poison_fact';
+        items.push(organizerCommunicationAttentionItemSchema.parse({
+          schemaVersion: 1,
+          visibility: 'organizer_non_security',
+          attentionItemId: `attention.calendar.${calendarItem.code}`,
+          severity: 'action',
+          reasonCode: calendarItem.code,
+          summary: poison
+            ? 'A calendar update could not be processed.'
+            : 'Calendar updates are not catching up.',
+          detail: poison
+            ? 'JooEvents stopped applying calendar changes after one update could not be verified.'
+            : 'Calendar changes have stopped catching up and need inspection.',
+          affectedCount: { knowledge: 'known', value: calendarItem.count },
+          recommendedAction: { kind: 'open_schedule' }
+        }));
+      }
+
+      const held = input.calendar?.listNoticeGenerations(selected, 'open')
+        .filter((generation) => generation.held) ?? [];
+      if (held.length > 0) {
+        items.push(organizerCommunicationAttentionItemSchema.parse({
+          schemaVersion: 1,
+          visibility: 'organizer_non_security',
+          attentionItemId: 'attention.calendar.held',
+          severity: 'soon',
+          reasonCode: 'calendar_notices_held',
+          summary: `${held.length} calendar update${held.length === 1 ? ' is' : 's are'} held.`,
+          detail: 'Held calendar updates stay grouped until they are released from Schedule.',
+          affectedCount: { knowledge: 'known', value: held.length },
+          recommendedAction: { kind: 'open_schedule' }
+        }));
+      }
+
+      const blockedCalendar = new Map<CalendarNoticeProductionReadiness['kind'], number>();
+      const calendarProducer = input.calendarProducer?.();
+      if (input.calendar && calendarProducer) {
+        for (const generation of input.calendar.listNoticeGenerations(selected, 'sealed')) {
+          const readiness = calendarProducer.inspectGeneration({
+            scope: selected,
+            generationId: generation.generationId
+          });
+          if (readiness.kind === 'ready' || readiness.kind === 'no_op'
+              || readiness.kind === 'policy_inactive') continue;
+          blockedCalendar.set(readiness.kind, (blockedCalendar.get(readiness.kind) ?? 0) + 1);
+        }
+      }
+      for (const [reason, count] of [...blockedCalendar].sort(([left], [right]) =>
+        left.localeCompare(right))) {
+        const provider = reason === 'provider_not_ready';
+        const recipient = reason === 'recipient_unavailable';
+        items.push(organizerCommunicationAttentionItemSchema.parse({
+          schemaVersion: 1,
+          visibility: 'organizer_non_security',
+          attentionItemId: `attention.calendar.${reason}`,
+          severity: 'action',
+          reasonCode: `calendar_notice_${reason}`,
+          summary: provider
+            ? `${count} calendar update${count === 1 ? ' is' : 's are'} waiting for email setup.`
+            : recipient
+              ? `${count} calendar update${count === 1 ? ' has' : 's have'} no safe recipient.`
+              : `${count} older calendar update${count === 1 ? ' is' : 's are'} blocked.`,
+          detail: provider
+            ? 'No invitation is released until the provider can send raw calendar MIME and attachments.'
+            : recipient
+              ? 'Correct the speaker contact before releasing this calendar update.'
+              : 'A later invitation was already released, so JooEvents will not send an older update.',
+          affectedCount: { knowledge: 'known', value: count },
+          recommendedAction: provider
+            ? { kind: 'continue_provider_setup' }
+            : { kind: 'open_schedule' }
+        }));
+      }
 
       const drafts = await input.authoring.listDrafts(selected, authorityPrincipalKey, {
         state: 'active', limit: ORGANIZER_COMMUNICATION_PAGE_LIMIT
