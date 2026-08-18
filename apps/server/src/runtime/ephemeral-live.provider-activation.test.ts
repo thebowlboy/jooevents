@@ -40,9 +40,12 @@ const stubResolver: OpaqueSecretTextResolver = {
   }
 };
 
-async function activatedRuntime(fetchStub: (url: string) => Response | Promise<Response>) {
+async function activatedRuntime(
+  fetchStub: (url: string) => Response | Promise<Response>,
+  runtimeConfig = config
+) {
   const runtime = await createEphemeralLiveRuntime({
-    config,
+    config: runtimeConfig,
     communications: {
       provider: loadCommunicationsProviderConfig({
         JOOEVENTS_EMAIL_PROVIDER_MODE: 'cloudflare_rest',
@@ -137,6 +140,68 @@ describe('ephemeral live provider activation composition', () => {
     const check = await runtime.providerActivation!.runReadinessCheck();
     expect(check.state).toBe('passed');
     expect(check.readiness).toBe('ready');
+  });
+
+  test('refreshes readiness only in organizer review mode without overlapping checks', async () => {
+    let releaseProbe!: () => void;
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const blockedProbe = new Promise<void>((resolve) => { releaseProbe = resolve; });
+    let probeCalls = 0;
+    const runtime = await activatedRuntime(async () => {
+      probeCalls += 1;
+      markStarted();
+      await blockedProbe;
+      return new Response(JSON.stringify({
+        success: true,
+        result: { status: 'active' }
+      }), { status: 200 });
+    }, { ...config, reviewEntryMode: 'organizer' });
+
+    const starting = runtime.startBackgroundWork();
+    await started;
+    expect(runtime.background.snapshot().jobs.find(
+      (job) => job.name === 'review_email_readiness_refresh'
+    )).toMatchObject({ state: 'running', runs: 1 });
+    expect(await runtime.background.runNow('review_email_readiness_refresh')).toBe(false);
+    expect(probeCalls).toBe(1);
+    releaseProbe();
+    await starting;
+
+    expect(runtime.background.snapshot().jobs.find(
+      (job) => job.name === 'review_email_readiness_refresh'
+    )).toMatchObject({ state: 'succeeded', runs: 1, consecutiveFailures: 0 });
+    expect(runtime.database.sqlite.query<{ readonly state: string }, []>(`
+      SELECT state FROM email_provider_readiness_checks ORDER BY started_at DESC LIMIT 1
+    `).get()).toEqual({ state: 'passed' });
+  });
+
+  test('does not mount automatic readiness refresh in an ordinary deployment', async () => {
+    const runtime = await activatedRuntime(() => new Response(JSON.stringify({
+      success: true,
+      result: { status: 'active' }
+    }), { status: 200 }));
+    expect(runtime.background.snapshot().jobs.some(
+      (job) => job.name === 'review_email_readiness_refresh'
+    )).toBe(false);
+  });
+
+  test('records a failed review-mode refresh as blocked readiness', async () => {
+    const runtime = await activatedRuntime(
+      () => new Response(JSON.stringify({ success: false }), { status: 401 }),
+      { ...config, reviewEntryMode: 'organizer' }
+    );
+    await runtime.startBackgroundWork();
+    expect(runtime.database.sqlite.query<{
+      readonly state: string;
+      readonly projection_json: string;
+    }, []>(`
+      SELECT state, projection_json FROM email_provider_readiness_checks
+      ORDER BY started_at DESC LIMIT 1
+    `).get()).toMatchObject({
+      state: 'failed',
+      projection_json: expect.stringContaining('"readiness":"blocked"')
+    });
   });
 
   test('the deliverability executor and setup guide run against the injected seams', async () => {

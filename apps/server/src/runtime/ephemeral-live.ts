@@ -664,6 +664,7 @@ import {
   type BackgroundSupervisor,
   type BackgroundSupervisorSnapshot
 } from './background-supervisor';
+import { createReviewEmailReadinessRefreshJob } from './review-email-readiness-refresh';
 import { createCloudflareTokenVerificationReadinessProbe } from './cloudflare-email-readiness-probe';
 import {
   buildDeploymentSenderPresentation,
@@ -6064,6 +6065,16 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       if (registered) void backgroundSupervisor?.runNow('outbound_email_dispatch');
     };
     const actionWorkerId = `agent-action:${crypto.randomUUID()}`;
+    const outboundReadinessDeclaration = providerRuntime.registration?.setup.manifest.readinessChecks
+      .find((check) => check.capability === 'transactional_outbound');
+    const reviewEmailReadinessRefreshJob = createReviewEmailReadinessRefreshJob({
+      reviewEntryMode: input.config.reviewEntryMode,
+      ...(providerActivation === undefined ? {} : { providerActivation }),
+      ...(outboundReadinessDeclaration === undefined
+        ? {}
+        : { maximumValidityMs: outboundReadinessDeclaration.maximumValidityMs }),
+      serializeWork: (work) => requestSerialization.run(work)
+    });
     backgroundSupervisor = createBackgroundSupervisor({
       jobs: Object.freeze([
         {
@@ -6100,6 +6111,9 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
                 await requestSerialization.run(reconcileCloudflareDeliveryObservations);
               }
             }]),
+        ...(reviewEmailReadinessRefreshJob === undefined
+          ? []
+          : [reviewEmailReadinessRefreshJob]),
         {
           name: 'approved_agent_actions',
           intervalMs: 1_000,
