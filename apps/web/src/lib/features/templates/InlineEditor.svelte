@@ -325,13 +325,31 @@
 		if (!panel) return;
 		raise(panel);
 		place();
-		return () => lower(panel);
-	});
-
-	// Focus lands on the session's first control once the panel has a position.
-	$effect(() => {
-		if (!panel || !placed) return;
-		panel.querySelector<HTMLElement>('textarea, input, select, button')?.focus();
+		// Focus travels in the same effect that raises the popover: a separate
+		// placed-gated effect could run before the raise, and promoting the
+		// panel to the top layer hides it for a beat — blurring whatever was
+		// just focused back to the pressed unit. Click-to-edit means type-to-
+		// edit: the text field takes focus with the caret at its end.
+		// One frame out: the opening press's own dispatch finishes first, so
+		// nothing left in it can hand focus back to the pressed unit.
+		const raf = requestAnimationFrame(() => {
+			const target =
+				textEl ?? panel?.querySelector<HTMLElement>('textarea, input, select, button');
+			if (!target) return;
+			target.focus();
+			if (target === textEl && textEl) {
+				const end = textEl.value.length;
+				try {
+					textEl.setSelectionRange(end, end);
+				} catch {
+					/* Selection is a courtesy; focus is the contract. */
+				}
+			}
+		});
+		return () => {
+			cancelAnimationFrame(raf);
+			lower(panel);
+		};
 	});
 
 	// A scroll anywhere between the unit and the viewport moves the anchor.
