@@ -122,6 +122,7 @@ import {
 	unionAudienceGroups,
 	type AudienceGroupRows
 } from './audience-union';
+import { templateKind, templateKinds } from './template-kinds';
 import {
 	asSurfaceField,
 	contextFields,
@@ -1162,6 +1163,26 @@ function selectedAudienceGroups(
 			label: option.label,
 			rows: audienceRecipients(option, template, subject)
 		}));
+}
+
+/**
+ * A stable `custom-…` key for a hand-made template, derived from its name so
+ * the key reads like the starters' do rather than carrying a mint sequence.
+ * Two templates may share a name; their keys may not, so a collision takes a
+ * counter rather than overwriting the neighbour's identity.
+ */
+function uniqueTemplateKey(name: string): string {
+	const slug =
+		name
+			.toLowerCase()
+			.replace(/[^a-z0-9]+/g, '-')
+			.replace(/^-+|-+$/g, '')
+			.slice(0, 40) || 'template';
+	const base = `custom-${slug}`;
+	if (!db.templates.some((entry) => entry.key === base)) return base;
+	let suffix = 2;
+	while (db.templates.some((entry) => entry.key === `${base}-${suffix}`)) suffix += 1;
+	return `${base}-${suffix}`;
 }
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -3451,6 +3472,37 @@ export const api = {
 			const surface = db.surfaces.find((entry) => entry.id === id);
 			if (surface) return servedSurface(surface);
 			return db.templates.find((template) => template.id === id) ?? null;
+		},
+		/**
+		 * Mints a hand-made template from one of the offered kinds and stores it
+		 * beside the starters, which is what puts it in the composer's picker and
+		 * on the Templates page at once — one store, so a template a person made
+		 * in the composer is not a second class of thing.
+		 *
+		 * It arrives at revision 1 attributed to the operator, exactly as an
+		 * inline edit attributes them, so its history reads from its first line
+		 * rather than starting at whatever they changed next. `usedBy` stays
+		 * empty on purpose: no automatic flow sends it, and naming one would
+		 * claim a wiring that does not exist.
+		 */
+		async create(input: { name: string; kind: string }): Promise<MessageTemplate> {
+			await latency();
+			const kind = templateKind(input.kind) ?? templateKinds[0]!;
+			const name = input.name.trim();
+			const template: MessageTemplate = {
+				id: mintId('tpl'),
+				key: uniqueTemplateKey(name),
+				name,
+				purpose: kind.purpose,
+				subject: kind.subject,
+				blocks: structuredClone(kind.blocks),
+				mergeFields: structuredClone(kind.mergeFields),
+				revision: 1,
+				revisions: [{ number: 1, at: 'Just now', by: 'you', note: `Created — ${kind.label}` }],
+				usedBy: []
+			};
+			db.templates.push(template);
+			return template;
 		},
 		/**
 		 * The models an edit can be pinned to. The routing default (`auto`) is

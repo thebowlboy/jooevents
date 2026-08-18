@@ -1,7 +1,7 @@
 import type { AnyTemplate, MessageTemplate, RegistryField, SurfaceTemplate, TextStyle } from '$lib/api/types';
 import { isSurfaceTemplate } from '$lib/api/types';
 import { declaredTokens } from './merge-fields';
-import { normalizeTextStyle, type StyleUnitKind } from './text-style';
+import { normalizeTextStyle, styleChangeSummary, type StyleUnitKind } from './text-style';
 
 /**
  * Inline editing over template previews: the typed unit model behind
@@ -284,6 +284,60 @@ export function withRosterKnobs(
 	const block = next.blocks[blockIndex];
 	if (block?.type === 'roster-list') Object.assign(block, knobs);
 	return next;
+}
+
+/**
+ * The receipt one committed unit earns, and the words its undo entry carries.
+ * Shared so an edit made in the Templates editor and the same edit made in the
+ * composer's preview are recorded under one sentence — a history that renamed
+ * the act by where it was performed would describe the surface, not the change.
+ */
+export function inlineEditNote(unit: InlineUnit, result: InlineEditResult): string {
+	if (result.type === 'merge') {
+		const swapped = unit.type === 'merge' && result.swapKey !== unit.key;
+		if (swapped && result.insertKey) return 'Swapped and inserted merge fields';
+		return result.insertKey ? 'Inserted a merge field' : 'Swapped a merge field';
+	}
+	if (result.type === 'knobs') return 'Edited schedule layout';
+	if (result.type === 'roster-knobs') return 'Edited roster layout';
+	if (unit.type === 'text') {
+		// A style change names itself in the note: 'Edited heading (size: 24px → 28px)'.
+		const styled =
+			result.type === 'text' && unit.styleKind
+				? styleChangeSummary(unit.styleKind, unit.style, result.style)
+				: [];
+		return styled.length > 0 ? `Edited ${unit.noun} (${styled.join(', ')})` : `Edited ${unit.noun}`;
+	}
+	return 'Edited the template';
+}
+
+/**
+ * A message template with one unit's pending edit applied — what a live preview
+ * renders while its editor is open, and what the commit sends.
+ *
+ * Only the two unit kinds an email carries: its text and its merge tokens.
+ * Schedule and roster knobs belong to surface templates, and a question is a
+ * registry fact rather than template prose, so both are the caller's business.
+ * Null when the result shape does not fit the unit, which leaves the preview on
+ * the base copy rather than guessing at an edit.
+ */
+export function messageInlineDoc(
+	base: MessageTemplate,
+	unit: InlineUnit,
+	result: InlineEditResult
+): MessageTemplate | null {
+	if (result.type === 'text' && unit.type === 'text') {
+		let doc = withTextValue(base, unit.path, result.value) as MessageTemplate;
+		if (unit.styleKind) doc = withTextStyle(doc, unit.path, result.style) as MessageTemplate;
+		return doc;
+	}
+	if (result.type === 'merge' && unit.type === 'merge') {
+		return withMergeEdit(base, unit.blockIndex, unit.tokenIndex, {
+			swapKey: result.swapKey,
+			insertKey: result.insertKey || undefined
+		});
+	}
+	return null;
 }
 
 /** Short visible words for a unit's accessible name: `Edit: {excerpt}`. */

@@ -16,6 +16,8 @@
 	import { diffAnyTemplate, type TemplateDiffEntry } from './template-diff';
 	import {
 		editableUnits,
+		inlineEditNote,
+		messageInlineDoc,
 		resolveUnit,
 		withMergeEdit,
 		withRosterKnobs,
@@ -25,7 +27,7 @@
 		type InlineEditResult,
 		type InlineUnit
 	} from './inline-edit';
-	import { sameTextStyle, styleChangeSummary } from './text-style';
+	import { sameTextStyle } from './text-style';
 	import { applyFormLens } from '$lib/api/fields';
 	import { isSurfaceTemplate } from '$lib/api/types';
 	import type {
@@ -558,41 +560,19 @@
 		inlineAnchor = el;
 	}
 
-	function inlineNote(unit: InlineUnit, result: InlineEditResult): string {
-		if (result.type === 'merge') {
-			const swapped = unit.type === 'merge' && result.swapKey !== unit.key;
-			if (swapped && result.insertKey) return 'Swapped and inserted merge fields';
-			return result.insertKey ? 'Inserted a merge field' : 'Swapped a merge field';
-		}
-		if (result.type === 'knobs') return 'Edited schedule layout';
-		if (result.type === 'roster-knobs') return 'Edited roster layout';
-		if (unit.type === 'text') {
-			// A style change names itself in the note: 'Edited heading (size: 24px → 28px)'.
-			const styled =
-				result.type === 'text' && unit.styleKind
-					? styleChangeSummary(unit.styleKind, unit.style, result.style)
-					: [];
-			return styled.length > 0 ? `Edited ${unit.noun} (${styled.join(', ')})` : `Edited ${unit.noun}`;
-		}
-		return 'Edited the template';
-	}
-
 	/**
 	 * The base document with one unit's pending edit applied — what the live
 	 * preview renders while its editor is open. Null when the result shape does
 	 * not fit the unit, which leaves the preview on the base copy.
+	 *
+	 * An email's own two unit kinds are the shared seam in `./inline-edit`, so
+	 * the composer's editable preview applies them exactly as this editor does;
+	 * what stays here is what only a surface template has.
 	 */
 	function inlineDoc(base: AnyTemplate, unit: InlineUnit, result: InlineEditResult): AnyTemplate | null {
-		if (result.type === 'text' && unit.type === 'text') {
-			let doc = withTextValue(base, unit.path, result.value);
-			if (unit.styleKind) doc = withTextStyle(doc, unit.path, result.style);
-			return doc;
-		}
-		if (result.type === 'merge' && unit.type === 'merge') {
-			return withMergeEdit(base as MessageTemplate, unit.blockIndex, unit.tokenIndex, {
-				swapKey: result.swapKey,
-				insertKey: result.insertKey || undefined
-			});
+		if (!isSurfaceTemplate(base)) {
+			const doc = messageInlineDoc(base, unit, result);
+			if (doc) return doc;
 		}
 		if (result.type === 'knobs' && unit.type === 'knobs') {
 			return withScheduleKnobs(base as SurfaceTemplate, unit.blockIndex, result.knobs);
@@ -737,7 +717,7 @@
 			return;
 		}
 
-		const note = inlineNote(unit, result);
+		const note = inlineEditNote(unit, result);
 		const id = current.id;
 		const name = current.name;
 		const prior = current.revision;

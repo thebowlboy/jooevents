@@ -67,8 +67,20 @@
 	const attention = $derived<CommunicationAttentionItem[] | null>(queue?.attention ?? null);
 	/** The scoped person's own entries, present only while `?person=` names one. */
 	const thread = $derived<CommunicationThread | null>(queue?.thread ?? null);
-	/** Stored templates, read once: the review door and the composer share them. */
+	/**
+	 * Stored templates: the review door and the composer share them. Re-read
+	 * rather than read once, because the composer can now mint one and edit one,
+	 * and both surfaces answer to the same store.
+	 */
 	let templates = $state<MessageTemplate[] | null>(null);
+
+	async function loadTemplates(): Promise<void> {
+		try {
+			templates = (await api.templates.list()).messages;
+		} catch {
+			templates = [];
+		}
+	}
 	let expandedId = $state<string | null>(null);
 	let busy = $state(false);
 
@@ -204,10 +216,7 @@
 	 * an uncaught `void promise.then(...)` did.
 	 */
 	onMount(() => {
-		void api.templates.list().then(
-			(list) => (templates = list.messages),
-			() => (templates = [])
-		);
+		void loadTemplates();
 		void Promise.all([api.theme.get(), api.workspace.summary()]).then(
 			([brand, summary]) => {
 				theme = brand;
@@ -1022,7 +1031,8 @@
 	{eventName}
 	{eventMeta}
 	personId={personId ?? null}
-	onCreated={load} />
+	onCreated={load}
+	onTemplatesChanged={loadTemplates} />
 
 <style>
 	.card {

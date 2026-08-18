@@ -1,9 +1,20 @@
 <script lang="ts">
+	import { tick } from 'svelte';
 	import { Checkbox, ChoiceGroup, Field, Modal } from '$lib/ui';
 	import type { CommunicationsPagePort } from '$lib/api/communications-page-port';
 	import { LiveRead, type LiveReadState } from '$lib/api/live-read';
 	import { reachSentence } from '$lib/api/audience-union';
+	import { templateKinds } from '$lib/api/template-kinds';
 	import EmailRender from '$lib/features/templates/EmailRender.svelte';
+	import InlineEditor from '$lib/features/templates/InlineEditor.svelte';
+	import {
+		editableUnits,
+		inlineEditNote,
+		messageInlineDoc,
+		resolveUnit,
+		type InlineEditResult,
+		type InlineUnit
+	} from '$lib/features/templates/inline-edit';
 	import type {
 		AudienceOption,
 		AudiencePreview,
@@ -24,6 +35,11 @@
 		personId: string | null;
 		/** Called after a draft lands, so the page re-reads its queue. */
 		onCreated: () => void | Promise<void>;
+		/**
+		 * Called after a template is minted or edited here, so the page re-reads
+		 * the store both surfaces share.
+		 */
+		onTemplatesChanged: () => void | Promise<void>;
 	}
 
 	let {
@@ -34,7 +50,8 @@
 		eventName,
 		eventMeta,
 		personId,
-		onCreated
+		onCreated,
+		onTemplatesChanged
 	}: Props = $props();
 
 	const api = $derived(port);
@@ -124,6 +141,9 @@
 		openedFor = scope;
 		subject = '';
 		templateId = '';
+		// A composer is a fresh sheet, and so is the step it opens on.
+		step = 'compose';
+		closeInline();
 		// A fresh request per scope, and the newest one wins: reopening the
 		// composer on another person while the first count is still in flight
 		// used to let whichever answer landed last install its options, which was
@@ -134,24 +154,157 @@
 
 	const template = $derived(templates?.find((entry) => entry.id === templateId) ?? null);
 
+	// ------------------------------------------------------------- new template
+
+	/**
+	 * The composer is one dialog, and the wizard is a step inside it rather than
+	 * a second dialog over the first: this product stacks no modals anywhere, and
+	 * a dialog over a dialog would fight the focus trap the composer already
+	 * owns. Cancel returns to the fields exactly as they were left.
+	 */
+	let step = $state<'compose' | 'new-template'>('compose');
+	let newName = $state('');
+	let newKind = $state(templateKinds[0]!.id);
+	let creating = $state(false);
+	let createError = $state('');
+
+	function openNewTemplate() {
+		newName = '';
+		newKind = templateKinds[0]!.id;
+		createError = '';
+		step = 'new-template';
+	}
+
+	async function createTemplate() {
+		const name = newName.trim();
+		if (!name || creating) return;
+		creating = true;
+		createError = '';
+		try {
+			const made = await api.templates.create({ name, kind: newKind });
+			await onTemplatesChanged();
+			// Selected the way any other pick selects, so the subject seeds from
+			// the new template exactly as it would from a starter.
+			pickTemplate(made.id, made);
+			step = 'compose';
+		} catch (error) {
+			createError = error instanceof Error ? error.message : 'The template could not be created.';
+		} finally {
+			creating = false;
+		}
+	}
+
+	// ------------------------------------------------------- edit in the preview
+
+	/**
+	 * The preview is editable whenever a stored template is on screen and nothing
+	 * is mid-commit. The teaching line follows this same value rather than the
+	 * branch, so the composer never offers a press it would refuse.
+	 */
+	const inlineEnabled = $derived(template !== null && !busy && step === 'compose');
+
+	let inlineUnit = $state<InlineUnit | null>(null);
+	let inlineAnchor = $state<HTMLElement | null>(null);
+	let inlineBusy = $state(false);
+	let inlinePreview = $state<MessageTemplate | null>(null);
+	let reserveEl = $state<HTMLElement>();
+
+	// Whatever makes the preview inert also closes an open unit editor.
+	$effect(() => {
+		if (!inlineEnabled && inlineUnit) closeInline();
+	});
+
+	// The pressed unit holds its outline while its editor is open.
+	$effect(() => {
+		const el = inlineAnchor;
+		if (!el) return;
+		el.classList.add('ui-editable--active');
+		return () => el.classList.remove('ui-editable--active');
+	});
+
+	function closeInline() {
+		inlineUnit = null;
+		inlineAnchor = null;
+		inlineBusy = false;
+		inlinePreview = null;
+	}
+
+	function onUnitPress(path: string, el: HTMLElement) {
+		if (!template || !inlineEnabled) return;
+		if (inlineUnit?.path === path) return;
+		inlinePreview = null;
+		const unit = resolveUnit(template, path);
+		if (!unit) return;
+		inlineUnit = unit;
+		inlineAnchor = el;
+	}
+
+	/** Live-to-view: every change in the open editor re-renders the preview. */
+	function previewInline(result: InlineEditResult) {
+		const unit = inlineUnit;
+		if (!unit || !template) return;
+		inlinePreview = messageInlineDoc($state.snapshot(template) as MessageTemplate, unit, result);
+		// The re-render can replace the annotated element the editor anchors to;
+		// anchoring is by path, so a replaced element is re-resolved.
+		void tick().then(() => {
+			if (!inlineUnit || !inlineAnchor || inlineAnchor.isConnected) return;
+			const el = reserveEl?.querySelector<HTMLElement>(`[data-edit="${inlineUnit.path}"]`);
+			if (el) inlineAnchor = el;
+		});
+	}
+
+	/**
+	 * Commits the edit as the template's next revision through the same
+	 * organizer-lane write the Templates editor makes — one history, whichever
+	 * surface the change was made on.
+	 */
+	async function applyInline(result: InlineEditResult) {
+		const unit = inlineUnit;
+		if (!unit || !template) return;
+		const next = messageInlineDoc($state.snapshot(template) as MessageTemplate, unit, result);
+		if (!next) {
+			closeInline();
+			return;
+		}
+		inlineBusy = true;
+		const outcome = await api.templates.commitInline(
+			template.id,
+			next,
+			inlineEditNote(unit, result)
+		);
+		if (!outcome.ok) {
+			createError = outcome.reason;
+			inlineBusy = false;
+			return;
+		}
+		await onTemplatesChanged();
+		closeInline();
+	}
+
 	/**
 	 * The preview renders exactly what will send: the stored template with the
 	 * live subject line on top. An operator's rewritten subject is theirs and
 	 * survives switching templates; only an empty subject or the previous
 	 * template's untouched default is replaced.
 	 */
-	function pickTemplate(nextId: string) {
+	function pickTemplate(nextId: string, known?: MessageTemplate) {
 		const previousDefault = template?.subject ?? '';
 		templateId = nextId;
-		const next = templates?.find((entry) => entry.id === nextId);
+		// A freshly minted template is passed in rather than looked up: the
+		// picker's list is the page's prop, and seeding must not depend on when
+		// that re-read reaches this component.
+		const next = known ?? templates?.find((entry) => entry.id === nextId);
 		if (subject.trim() === '' || subject === previousDefault) {
 			subject = next?.subject ?? '';
 		}
 	}
 
-	const previewTemplate = $derived(
-		template ? { ...template, subject: subject.trim() === '' ? template.subject : subject } : null
-	);
+	// The open editor's pending copy wins over the stored one, so the preview
+	// shows the edit as it is typed; the subject stays the composer's own field.
+	const previewTemplate = $derived.by(() => {
+		const base = inlinePreview ?? template;
+		return base ? { ...base, subject: subject.trim() === '' ? base.subject : subject } : null;
+	});
 
 	async function createDraft() {
 		const line = subject.trim();
@@ -168,7 +321,46 @@
 	}
 </script>
 
-<Modal bind:open title="Compose message" size="lg">
+<Modal
+	bind:open
+	title={step === 'new-template' ? 'New template' : 'Compose message'}
+	size="lg">
+	{#if step === 'new-template'}
+		<!-- One step, not a ceremony: a name and what kind of thing it is. The
+		     composer's own fields are untouched behind it, so Cancel is a return
+		     rather than a restart. -->
+		<div class="wizard">
+			<Field id="new-template-name" label="Name" required description="What you’ll pick it by later.">
+				{#snippet children({ id, describedBy, invalid })}
+					<input
+						class="ui-control"
+						type="text"
+						{id}
+						aria-describedby={describedBy}
+						aria-invalid={invalid}
+						placeholder="Venue change"
+						bind:value={newName} />
+				{/snippet}
+			</Field>
+			<fieldset class="kinds">
+				<legend class="kinds__legend">What kind</legend>
+				{#each templateKinds as kind (kind.id)}
+					<label class="kind" class:kind--picked={newKind === kind.id}>
+						<input
+							type="radio"
+							name="new-template-kind"
+							class="ui-sr-only"
+							value={kind.id}
+							checked={newKind === kind.id}
+							onchange={() => (newKind = kind.id)} />
+						<span class="kind__label">{kind.label}</span>
+						<span class="kind__description">{kind.description}</span>
+					</label>
+				{/each}
+			</fieldset>
+			{#if createError}<p class="wizard__error" role="alert">{createError}</p>{/if}
+		</div>
+	{:else}
 	<div class="compose">
 		<div class="compose__fields">
 			<Field
@@ -188,6 +380,10 @@
 								<option value={entry.id}>{entry.name}</option>
 							{/each}
 						</select>
+						<!-- A control, not an option: an <option> that opens a dialog is a
+						     trap on keyboard and touch, where choosing it in order to read
+						     it is the same act as committing to it. -->
+						<button type="button" class="tpl__new" onclick={openNewTemplate}>New template…</button>
 						{#if template}
 							<!-- One fact, one door: the chosen template links to its editor. -->
 							<a
@@ -285,9 +481,33 @@
 			</p>
 		</div>
 		<div class="compose__preview">
-			<p class="compose__preview-label">Email preview</p>
+			<!-- The caption states the preview's edit capability, both halves of it:
+			     what this is, and — only while a press would actually be answered —
+			     how to change it. -->
+			<p class="compose__preview-label">
+				Email preview{#if inlineEnabled} · click any text to edit it.{/if}
+			</p>
 			{#if previewTemplate && theme}
-				<EmailRender template={previewTemplate} {theme} {eventName} {eventMeta} />
+				<div bind:this={reserveEl} use:editableUnits={{ enabled: inlineEnabled, onPress: onUnitPress }}>
+					<EmailRender
+						template={previewTemplate}
+						{theme}
+						{eventName}
+						{eventMeta}
+						editable={inlineEnabled} />
+				</div>
+				{#if inlineUnit && inlineAnchor}
+					{#key `${inlineUnit.type}:${inlineUnit.path}`}
+						<InlineEditor
+							unit={inlineUnit}
+							anchor={inlineAnchor}
+							mergeFields={template?.mergeFields ?? []}
+							busy={inlineBusy}
+							onchange={previewInline}
+							oncommit={applyInline}
+							oncancel={closeInline} />
+					{/key}
+				{/if}
 			{:else}
 				<!-- Same footprint as a rendered email, so choosing a template never
 				     jolts the dialog. -->
@@ -303,17 +523,35 @@
 			{/if}
 		</div>
 	</div>
+	{/if}
 	{#snippet footer(close)}
-		<button type="button" class="ui-button ui-button--ghost" disabled={busy} onclick={close}>Cancel</button>
-		<button
-			type="button"
-			class="ui-button ui-button--primary"
-			disabled={busy || !subject.trim() || audienceIds.length === 0}
-			aria-busy={busy || undefined}
-			onclick={createDraft}>
-			{#if busy}<span class="ui-spinner" aria-hidden="true"></span>{/if}
-			Create draft
-		</button>
+		{#if step === 'new-template'}
+			<button
+				type="button"
+				class="ui-button ui-button--ghost"
+				disabled={creating}
+				onclick={() => (step = 'compose')}>Cancel</button>
+			<button
+				type="button"
+				class="ui-button ui-button--primary"
+				disabled={creating || !newName.trim()}
+				aria-busy={creating || undefined}
+				onclick={createTemplate}>
+				{#if creating}<span class="ui-spinner" aria-hidden="true"></span>{/if}
+				Create
+			</button>
+		{:else}
+			<button type="button" class="ui-button ui-button--ghost" disabled={busy} onclick={close}>Cancel</button>
+			<button
+				type="button"
+				class="ui-button ui-button--primary"
+				disabled={busy || !subject.trim() || audienceIds.length === 0}
+				aria-busy={busy || undefined}
+				onclick={createDraft}>
+				{#if busy}<span class="ui-spinner" aria-hidden="true"></span>{/if}
+				Create draft
+			</button>
+		{/if}
 	{/snippet}
 </Modal>
 
@@ -382,6 +620,89 @@
 	.tpl__select {
 		flex: 1 1 auto;
 		min-inline-size: 0;
+	}
+
+	/* A door beside the picker, in the same text voice as the edit link next to
+	   it — nothing is committed by pressing it. */
+	.tpl__new {
+		flex: none;
+		margin: 0;
+		padding: 0;
+		border: 0;
+		background: none;
+		font: inherit;
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-link);
+		text-decoration: underline;
+		cursor: pointer;
+	}
+
+	.tpl__new:focus-visible {
+		outline: none;
+		box-shadow: var(--je-focus-ring);
+		border-radius: var(--je-radius-control);
+	}
+
+	.wizard {
+		display: grid;
+		gap: var(--je-space-4);
+		max-inline-size: 34rem;
+	}
+
+	.kinds {
+		display: grid;
+		gap: var(--je-space-2);
+		margin: 0;
+		padding: 0;
+		border: 0;
+	}
+
+	.kinds__legend {
+		padding: 0;
+		margin-block-end: var(--je-space-2);
+		font-size: var(--je-font-size-sm);
+		font-weight: 600;
+	}
+
+	/* Marking, not action: a picked card takes the mark surface every selected
+	   thing in this product takes, never the action colour. */
+	.kind {
+		display: grid;
+		gap: var(--je-space-1);
+		padding: var(--je-space-3);
+		border: 1px solid var(--je-color-border);
+		border-radius: var(--je-radius-surface);
+		background: var(--je-color-surface);
+		cursor: pointer;
+	}
+
+	.kind:hover {
+		border-color: var(--je-color-border-strong);
+	}
+
+	.kind--picked {
+		border-color: var(--je-color-mark-border);
+		background: var(--je-color-mark-surface);
+	}
+
+	.kind:has(input:focus-visible) {
+		outline: none;
+		box-shadow: var(--je-focus-ring);
+	}
+
+	.kind__label {
+		font-weight: 600;
+	}
+
+	.kind__description {
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-text-muted);
+	}
+
+	.wizard__error {
+		margin: 0;
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-danger);
 	}
 
 	.tpl__edit {

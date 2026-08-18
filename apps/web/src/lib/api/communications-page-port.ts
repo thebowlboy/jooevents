@@ -1,4 +1,5 @@
 import type {
+	AnyTemplate,
 	AudienceOption,
 	AudiencePreview,
 	CommunicationAttentionItem,
@@ -39,8 +40,27 @@ export interface CommunicationsPagePort {
 		send(id: string): Promise<MutationOutcome>;
 		resendBounced(id: string, email: string, correctedEmail: string): Promise<MutationOutcome>;
 	};
+	/**
+	 * The composer's own template surface. It is declared here rather than by
+	 * widening `TemplatesPagePort` on purpose: that port is implemented
+	 * member-by-member by the live templates adapter, and requiring `create`
+	 * there would break a lane this pass does not own. The sample workspace
+	 * satisfies both from one namespace.
+	 */
 	readonly templates: {
 		list(): Promise<{ readonly messages: MessageTemplate[] }>;
+		/**
+		 * Mints a hand-made template from one of the offered kinds and stores it
+		 * where the picker reads, so a template made here is the same kind of
+		 * record as a starter rather than a composer-only draft.
+		 */
+		create(input: { name: string; kind: string }): Promise<MessageTemplate>;
+		/**
+		 * Commits one edited unit as the template's next revision — the same
+		 * organizer-lane write the Templates editor makes, so a change made from
+		 * the composer lands in the one history.
+		 */
+		commitInline(id: string, next: AnyTemplate, note: string): Promise<MutationOutcome>;
 	};
 	readonly theme: {
 		get(): Promise<EventTheme>;
