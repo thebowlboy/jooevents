@@ -1,7 +1,13 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
 	import { ChevronDown, TriangleAlert } from 'lucide-svelte';
-	import { CopyValue, revealTarget, situationIcon, statusIcon } from '$lib/ui';
+	import {
+		CopyValue,
+		revealTarget,
+		shouldIgnoreRowPress,
+		situationIcon,
+		statusIcon
+	} from '$lib/ui';
 	import type { IconComponent } from '$lib/ui';
 	import type { SpeakersPagePort } from '$lib/api/speakers-page-port';
 	import { LiveRead, type LiveReadState } from '$lib/api/live-read';
@@ -183,6 +189,24 @@
 		if (askedSpeaker && askedSpeaker !== expandedId) {
 			void clearParams(['speaker'], { history: 'push' });
 		}
+	}
+
+	/**
+	 * The row is a bigger door to the same detail, for the pointer only. The
+	 * chevron stays the one focusable switch carrying `aria-expanded`, so the
+	 * accessible tree gains nothing to disambiguate and the keyboard path is
+	 * exactly what it was. The press routes through `toggleRow`, so opening by
+	 * row hands back a `?speaker=` arrival exactly as the chevron does. Which
+	 * presses belong to the row's own controls — the copy control, the toggle,
+	 * a panel opened over the row — or to a text selection, is the shared
+	 * row-press contract in `$lib/ui`.
+	 *
+	 * Roster only. The public lineup is a separate component behind the view
+	 * switch, where a row press would fight the drag that reorders it.
+	 */
+	function onRowPress(event: MouseEvent, id: string) {
+		if (shouldIgnoreRowPress(event)) return;
+		toggleRow(id);
 	}
 
 	/**
@@ -641,10 +665,16 @@
 						{/each}
 					{:else}
 						{#each filtered as row (row.id)}
+							<!-- svelte-ignore a11y_click_events_have_key_events -->
+							<!-- svelte-ignore a11y_no_static_element_interactions -->
 							<!-- `data-arrival-host`: the mark for `?speaker=` belongs to the
 							     whole row, which is what the eye reads as "this person" —
 							     the anchor inside it only says where to land. -->
-							<tr class:is-open={expandedId === row.id} data-arrival-host>
+							<tr
+								class="row"
+								class:is-open={expandedId === row.id}
+								data-arrival-host
+								onclick={(event) => onRowPress(event, row.id)}>
 								<td class="col-speaker">
 									<!-- The arrival anchor for `?speaker=`: the scroll and the caret
 									     stop on the name, so a table scrolled sideways still opens on
@@ -719,7 +749,12 @@
 			{:else}
 				{#each filtered as row (row.id)}
 					<li class="card" data-speaker={row.id}>
-						<div class="card__head">
+						<!-- The whole summary — everything above the expanded detail — is
+						     the door; the toggle inside it stays the one focusable switch,
+						     which is why no role or tabindex is added here. -->
+						<!-- svelte-ignore a11y_click_events_have_key_events -->
+						<!-- svelte-ignore a11y_no_static_element_interactions -->
+						<div class="card__head card__head--door" onclick={(event) => onRowPress(event, row.id)}>
 							<span class="ui-avatar card__mark" aria-hidden="true">{initials(row.name)}</span>
 							<span class="card__copy">
 								<span class="card__name">{row.name}</span>
@@ -1014,6 +1049,14 @@
 		rotate: 180deg;
 	}
 
+	/* The whole row opens its detail, so the whole row says so. Only the data
+	   rows: the detail and the skeletons are not doors. The hover tint the
+	   table already gives every row is the other half of the affordance and
+	   is left alone. */
+	tr.row {
+		cursor: pointer;
+	}
+
 	/* Marked things tint; open things lift. The pair in hand keeps the table's
 	   full surface brightness — on a white list a tint can only recede, and the
 	   row being worked on must never read below its neighbours — so a lifted
@@ -1186,6 +1229,14 @@
 		column-gap: var(--je-space-3);
 		row-gap: var(--je-space-2);
 		align-items: center;
+	}
+
+	/* The card's summary is the table row's door in the narrow composition; a
+	   skeleton head is not one, which is what the modifier separates. These
+	   cards mostly meet a coarse pointer, so no chrome is added beyond the
+	   cursor — the toggle's own states already carry the affordance. */
+	.card__head--door {
+		cursor: pointer;
 	}
 
 	.card__mark {
