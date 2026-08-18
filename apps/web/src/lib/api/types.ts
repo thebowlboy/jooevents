@@ -1230,7 +1230,14 @@ export interface CommunicationMessage {
 	heldReason?: string;
 	deliveredCount?: number;
 	bouncedCount?: number;
-	bounces?: { deliveryId?: string; deliveryVersion?: number; email: string; reason: string }[];
+	bounces?: {
+		deliveryId?: string;
+		deliveryVersion?: number;
+		email: string;
+		reason: string;
+		/** Exact marked-resend copy in sample evidence; live reads it from the retained release. */
+		resendPreview?: RenderedEmailPreview;
+	}[];
 	/** Provider evidence available on a live batch; no field implies no such fact. */
 	deliveryEvidence?: {
 		materialized?: number;
@@ -1309,6 +1316,8 @@ export interface CommunicationDeliveryTimelineEntry {
 export interface CommunicationDeliveryTimeline {
 	messageId: string;
 	entries: CommunicationDeliveryTimelineEntry[];
+	/** Exact marked-resend artifacts, keyed to bounced delivery ids. */
+	resendPreviews: Array<RenderedEmailPreview & { deliveryId: string }>;
 }
 
 /** A sendable audience, resolved and counted by the API from current records. */

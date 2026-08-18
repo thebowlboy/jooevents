@@ -464,7 +464,7 @@ function successPayloads(): Readonly<Record<string, unknown>> {
 		[paths.getDeliveryTimeline]: organizerCommunicationTimelinePageOperationResultSchema.parse(
 			readSuccess({
 				schemaVersion: 1, visibility: 'organizer_non_security', deliveryId: 'batch-1',
-				currentState: 'known_failed', rows: [], page: { hasMore: false }
+				currentState: 'known_failed', resendPreviews: [], rows: [], page: { hasMore: false }
 			})
 		)
 	});

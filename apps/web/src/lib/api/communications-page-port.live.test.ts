@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import type { CommunicationsAuthoringPort } from './communications-authoring-port';
+import type {
+	CommunicationsAuthoringPort,
+	CommunicationTimelineGetRequest
+} from './communications-authoring-port';
 import type { CommunicationsReadinessPagePort } from './communications-readiness-page-port';
 import { createLiveCommunicationsPagePort } from './communications-page-port.live';
 
@@ -46,7 +49,12 @@ function compose() {
 					audience: { knowledge: 'known', value: 1 }, materialized: { knowledge: 'known', value: 1 },
 					accepted: { knowledge: 'known', value: 0 }, delivered: { knowledge: 'not_supported' },
 					acceptanceUnknown: { knowledge: 'known', value: 0 }, knownFailed: { knowledge: 'known', value: 1 }
-				}, authorizedAt: '2026-08-18T01:00:00.000Z', availableActions: ['continue_provider_setup']
+				},
+				bounces: [{
+					deliveryId: 'delivery-1', deliveryVersion: 2,
+					safeLabel: 'Ada Speaker', reasonCode: 'provider.permanent_bounce'
+				}],
+				authorizedAt: '2026-08-18T01:00:00.000Z', availableActions: ['continue_provider_setup']
 			}], page: { hasMore: false }
 		}); },
 		async listAttentionItems() { return success({ schemaVersion: 1, visibility: 'organizer_non_security', rows: [], page: { hasMore: false } }); },
@@ -56,8 +64,12 @@ function compose() {
 				subject: 'Decision update', state: 'known_failed', actor: { kind: 'human', displayLabel: 'Workspace operator' } }],
 			page: { hasMore: false }
 		}); },
-		async getDeliveryTimeline() { return success({
+		async getDeliveryTimeline(value: CommunicationTimelineGetRequest) { return success({
 			schemaVersion: 1, visibility: 'organizer_non_security', deliveryId: 'batch-1', currentState: 'known_failed',
+			resendPreviews: value.resendDeliveryId ? [{
+				deliveryId: 'delivery-1', subject: '[Resend] Decision update',
+				plainText: 'This is the exact retained resend body.'
+			}] : [],
 			rows: [{ factId: 'attempt-1', sequence: 1, occurredAt: '2026-08-18T01:00:00.000Z', kind: 'known_failed',
 				actor: { kind: 'human', displayLabel: 'Casey Organizer' },
 				summaryCode: 'communication.outbound-email.known-rejected-terminal', recipient: {
@@ -131,6 +143,11 @@ describe('live Communications page port', () => {
 		expect(messages[0]).not.toHaveProperty('deliveredCount');
 		expect(thread?.entries[0]).toMatchObject({ outcome: 'failed', messageId: 'history-1' });
 		expect(timeline?.entries[0]).toMatchObject({ recipient: 'Ada Speaker', state: 'failed', attemptNumber: 1 });
+		expect(timeline?.resendPreviews).toEqual([]);
+		expect(await port.communications.previewResend('history-1', 'Ada Speaker')).toEqual({
+			subject: '[Resend] Decision update', plainText: 'This is the exact retained resend body.',
+			warningCodes: []
+		});
 		expect(JSON.stringify({ messages, thread, timeline })).not.toContain('@example.test');
 	});
 

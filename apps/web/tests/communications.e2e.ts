@@ -174,6 +174,11 @@ test('“See the addresses” lands on the bounce evidence, in view, and the row
 	// The remedy is real: correct the address and resend that one copy.
 	await bounces.getByRole('button', { name: 'Edit address for elena@sandboxworks.example' }).click();
 	const field = bounces.getByLabel('Corrected address for elena@sandboxworks.example');
+	const resendArtifact = bounces.getByRole('region', { name: 'What this sends' });
+	await expect(resendArtifact).toBeVisible();
+	await expect(resendArtifact).toContainText('[Resend] Speaker onboarding — what happens next');
+	await expect(resendArtifact).toContainText('If you already received this message');
+	await expect(bounces.getByRole('button', { name: 'Resend 1 email' })).toBeEnabled();
 	await field.fill('elena@corrected.example');
 	await bounces.getByRole('button', { name: 'Resend 1 email' }).click();
 

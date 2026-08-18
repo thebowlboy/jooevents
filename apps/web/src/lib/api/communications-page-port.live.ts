@@ -521,12 +521,24 @@ export function createLiveCommunicationsPagePort(input: {
 		};
 	}
 
-	async function timeline(messageId: string): Promise<CommunicationDeliveryTimeline | null> {
-		const result = await input.communications.getDeliveryTimeline({ deliveryId: messageId });
+	async function timeline(
+		messageId: string,
+		resendDeliveryId?: string
+	): Promise<CommunicationDeliveryTimeline | null> {
+		const result = await input.communications.getDeliveryTimeline({
+			deliveryId: messageId,
+			...(resendDeliveryId ? { resendDeliveryId } : {})
+		});
 		if (result.kind === 'outcome' && result.outcome.kind === 'communication.not_found') return null;
 		const page = requireSuccess(result, 'Delivery evidence');
 		return {
 			messageId,
+			resendPreviews: page.resendPreviews.map((preview) => ({
+				deliveryId: preview.deliveryId,
+				subject: preview.subject,
+				plainText: preview.plainText,
+				warningCodes: []
+			})),
 			entries: page.rows.flatMap((row) => row.recipient ? [{
 				id: row.factId,
 				deliveryId: row.recipient.deliveryId,
@@ -550,6 +562,39 @@ export function createLiveCommunicationsPagePort(input: {
 							: {})
 				} : {})
 			}] : [])
+		};
+	}
+
+	async function previewResend(
+		messageId: string,
+		safeLabel: string
+	): Promise<RenderedEmailPreview> {
+		const history = requireSuccess(
+			await input.communications.getDeliveryHistory(),
+			'Delivery history'
+		);
+		const row = history.rows.find((entry) => entry.historyItemId === messageId);
+		const matches = row?.bounces?.filter((bounce) => bounce.safeLabel === safeLabel) ?? [];
+		if (!row || matches.length !== 1) {
+			throw new CommunicationsPageLiveError(
+				'communication_resend_preview_changed',
+				'This bounced recipient changed. Reload and review the current delivery.'
+			);
+		}
+		const detail = await timeline(row.messageRefId, matches[0]!.deliveryId);
+		const preview = detail?.resendPreviews.find(
+			(candidate) => candidate.deliveryId === matches[0]!.deliveryId
+		);
+		if (!preview) {
+			throw new CommunicationsPageLiveError(
+				'communication_resend_preview_unavailable',
+				'The exact resend copy could not be loaded. Nothing can be resent until it is visible.'
+			);
+		}
+		return {
+			subject: preview.subject,
+			plainText: preview.plainText,
+			warningCodes: preview.warningCodes
 		};
 	}
 
@@ -788,7 +833,7 @@ export function createLiveCommunicationsPagePort(input: {
 	return Object.freeze({
 		source: Object.freeze({ kind: 'live' as const }),
 		communications: Object.freeze({
-			list, readiness, attention, thread, timeline, audiences,
+			list, readiness, attention, thread, timeline, previewResend, audiences,
 			async previewRecipients(audienceIds: readonly string[]): Promise<AudiencePreview> {
 				if (audienceIds.length === 0) return { rows: [], reach: 0, overlap: 0, label: '' };
 				const preview = await resolveSelection(audienceIds);

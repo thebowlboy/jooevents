@@ -593,10 +593,54 @@
 	 * as typed, and — rendered in place, never only announced — the reason a
 	 * resend was refused.
 	 */
-	let editingBounce = $state<{ messageId: string; email: string; value: string; refusal: string } | null>(null);
+	let editingBounce = $state<{
+		messageId: string;
+		email: string;
+		value: string;
+		refusal: string;
+		preview: RenderedEmailPreview | null;
+		previewLoading: boolean;
+		previewError: string;
+	} | null>(null);
 
 	function openBounceEdit(messageId: string, email: string) {
-		editingBounce = { messageId, email, value: email, refusal: '' };
+		editingBounce = {
+			messageId,
+			email,
+			value: email,
+			refusal: '',
+			preview: null,
+			previewLoading: false,
+			previewError: ''
+		};
+		void loadResendPreview(messageId, email);
+	}
+
+	/**
+	 * A resend cannot be the first time its consequence becomes legible. Load
+	 * the retained one-recipient artifact and keep the commit disabled until the
+	 * exact subject and body are visibly present.
+	 */
+	async function loadResendPreview(messageId: string, email: string) {
+		const editing = editingBounce;
+		if (!editing || editing.messageId !== messageId || editing.email !== email) return;
+		editingBounce = { ...editing, previewLoading: true, previewError: '' };
+		try {
+			const preview = await api.communications.previewResend(messageId, email);
+			const current = editingBounce;
+			if (!current || current.messageId !== messageId || current.email !== email) return;
+			editingBounce = { ...current, preview, previewLoading: false };
+		} catch (error) {
+			const current = editingBounce;
+			if (!current || current.messageId !== messageId || current.email !== email) return;
+			editingBounce = {
+				...current,
+				previewLoading: false,
+				previewError: error instanceof Error
+					? error.message
+					: 'The exact resend copy could not be loaded. Nothing was sent.'
+			};
+		}
 	}
 
 	/**
@@ -607,7 +651,7 @@
 	 */
 	async function resendBounced() {
 		const editing = editingBounce;
-		if (!editing || busy) return;
+		if (!editing || !editing.preview || busy) return;
 		const message = messages?.find((entry) => entry.id === editing.messageId);
 		busy = true;
 		const outcome = await api.communications.resendBounced(
@@ -786,6 +830,24 @@
 												bind:value={editing.value} />
 										{/snippet}
 									</Field>
+									{#if editing.preview}
+										<VerbatimBodyPeek
+											subject={editing.preview.subject}
+											body={editing.preview.plainText}
+											warningCodes={editing.preview.warningCodes}
+											note="The exact one-recipient copy this action sends." />
+									{:else if editing.previewError}
+										<p class="fix__refusal" role="alert">{editing.previewError}</p>
+										<button
+											type="button"
+											class="ui-button ui-button--secondary ui-button--sm"
+											disabled={editing.previewLoading}
+											onclick={() => void loadResendPreview(message.id, bounce.email)}>
+											Load email again
+										</button>
+									{:else}
+										<p class="calm" role="status">Loading the exact resend copy…</p>
+									{/if}
 									{#if editing.refusal}
 										<p class="fix__refusal" role="alert">{editing.refusal}</p>
 									{/if}
@@ -793,7 +855,7 @@
 										<button
 											type="button"
 											class="ui-button ui-button--primary ui-button--sm"
-											disabled={busy || !editing.value.trim()}
+											disabled={busy || !editing.value.trim() || !editing.preview}
 											aria-busy={busy || undefined}
 											onclick={resendBounced}>
 											{#if busy}<span class="ui-spinner" aria-hidden="true"></span>{/if}

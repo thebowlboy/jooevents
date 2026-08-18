@@ -2626,8 +2626,12 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       clock,
       addressFingerprintKeyBytes: communicationAddressFingerprint.keyBytes,
       addressFingerprintProfile: communicationAddressFingerprint.profile,
-      dispatchAfterCommit: async () => {
-        await outboundDispatch.runOnce();
+      dispatchAfterCommit: async (deliveryId) => {
+        if (deliveryId === undefined) {
+          await outboundDispatch.runOnce();
+          return;
+        }
+        await outboundDispatch.dispatchOne(deliveryId);
       },
       ...(communicationDeliveryRoute === undefined
         ? {}
@@ -3682,7 +3686,8 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       currentEvent: organizerCommunicationCurrentEvent,
       read: createSQLiteCommunicationTimelineSource({
         sqlite: database.sqlite,
-        previews: organizerCommunicationPreview
+        previews: organizerCommunicationPreview,
+        releases: communicationMessageReleases
       }),
       clock,
       ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),

@@ -22,6 +22,8 @@ export interface CommunicationsPagePort {
 		attention(): Promise<CommunicationAttentionItem[]>;
 		thread(personId: string): Promise<CommunicationThread | null>;
 		timeline(messageId: string): Promise<CommunicationDeliveryTimeline | null>;
+		/** The exact one-recipient artifact that the controlled resend will submit. */
+		previewResend(messageId: string, safeLabel: string): Promise<import('./types').RenderedEmailPreview>;
 		audiences(personId?: string): Promise<AudienceOption[]>;
 		/**
 		 * What a combination of audiences comes to, before anything is drafted:

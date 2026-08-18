@@ -179,13 +179,16 @@ export interface CommunicationSendOperationRuntimeInput {
   readonly addressFingerprintKeyBytes: Uint8Array;
   readonly addressFingerprintProfile: Readonly<{ key: string; version: number }>;
   /**
-   * Runs one outbound dispatch pass after a send commit has durably landed.
+   * Runs outbound dispatch after a send or deliberate retry has durably
+   * landed. A retry supplies its exact delivery id because the ordinary sweep
+   * intentionally excludes safe-retryable rows; only this reviewed human act
+   * may cross that boundary.
    * Provider I/O stays strictly outside the unit-of-work transaction; the
    * committed batch is receipt-recoverable if this pass faults, and with only
    * the deterministic fake composed every attempt still lands terminally
    * not-delivered (recorder default BLOCKED-2).
    */
-  readonly dispatchAfterCommit: () => Promise<void>;
+  readonly dispatchAfterCommit: (deliveryId?: string) => Promise<void>;
   /**
    * Route to the activated outbound provider connection. Absent (the default)
    * the send specs keep the inert-provider posture: sentinel connection
@@ -455,7 +458,14 @@ export function createCommunicationSendOperationRuntime(
           // here surfaces loudly while the committed batch stays
           // receipt-recoverable and every delivery keeps its honest state.
           if (applied !== undefined) {
-            await input.dispatchAfterCommit();
+            const domain = communicationSendLaneDomainContributionSchema.parse(
+              JSON.parse(applied.domainCanonical)
+            );
+            await input.dispatchAfterCommit(
+              domain.kind === 'communication_delivery_retry_requested'
+                ? domain.deliveryId
+                : undefined
+            );
           }
         },
         afterUnitOfWorkFinished(): void {

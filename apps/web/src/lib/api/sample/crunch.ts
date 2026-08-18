@@ -1229,9 +1229,30 @@ const crunch: WorkspaceDataset = {
 			deliveredCount: 280,
 			bouncedCount: 3,
 			bounces: [
-				{ email: 'elena@sandboxworks.example', reason: 'Mailbox full (soft bounce ×3)' },
-				{ email: 'britta@shipfast.tools', reason: 'Domain rejected the message (DMARC)' },
-				{ email: 'rex@vaultmoney.xyz', reason: 'Recipient address no longer exists' }
+				{
+					email: 'elena@sandboxworks.example', reason: 'Mailbox full (soft bounce ×3)',
+					resendPreview: {
+						subject: '[Resend] The CFP is closed — thank you',
+						plainText: 'This is a resend: our system could not confirm that the first attempt arrived. If you already received this message, please disregard this copy.\n\nThe call for proposals is closed. Thank you for sharing your work; we will email you when decisions are ready.',
+						warningCodes: []
+					}
+				},
+				{
+					email: 'britta@shipfast.tools', reason: 'Domain rejected the message (DMARC)',
+					resendPreview: {
+						subject: '[Resend] The CFP is closed — thank you',
+						plainText: 'This is a resend: our system could not confirm that the first attempt arrived. If you already received this message, please disregard this copy.\n\nThe call for proposals is closed. Thank you for sharing your work; we will email you when decisions are ready.',
+						warningCodes: []
+					}
+				},
+				{
+					email: 'rex@vaultmoney.xyz', reason: 'Recipient address no longer exists',
+					resendPreview: {
+						subject: '[Resend] The CFP is closed — thank you',
+						plainText: 'This is a resend: our system could not confirm that the first attempt arrived. If you already received this message, please disregard this copy.\n\nThe call for proposals is closed. Thank you for sharing your work; we will email you when decisions are ready.',
+						warningCodes: []
+					}
+				}
 			]
 		},
 		{

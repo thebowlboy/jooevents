@@ -1017,8 +1017,24 @@ const flight: WorkspaceDataset = {
 			deliveredCount: 16,
 			bouncedCount: 2,
 			bounces: [
-				{ email: 'elena@sandboxworks.example', reason: 'Mailbox full (soft bounce ×3)' },
-				{ email: 'daniel@edgequery.dev', reason: 'Domain rejected the message (DMARC)' }
+				{
+					email: 'elena@sandboxworks.example',
+					reason: 'Mailbox full (soft bounce ×3)',
+					resendPreview: {
+						subject: '[Resend] Speaker onboarding — what happens next',
+						plainText: 'This is a resend: our system could not confirm that the first attempt arrived. If you already received this message, please disregard this copy.\n\nWelcome to the speaker lineup. Your onboarding details are ready; reply to this email if anything needs correcting.',
+						warningCodes: []
+					}
+				},
+				{
+					email: 'daniel@edgequery.dev',
+					reason: 'Domain rejected the message (DMARC)',
+					resendPreview: {
+						subject: '[Resend] Speaker onboarding — what happens next',
+						plainText: 'This is a resend: our system could not confirm that the first attempt arrived. If you already received this message, please disregard this copy.\n\nWelcome to the speaker lineup. Your onboarding details are ready; reply to this email if anything needs correcting.',
+						warningCodes: []
+					}
+				}
 			]
 		},
 		{

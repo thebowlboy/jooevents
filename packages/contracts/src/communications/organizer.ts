@@ -1156,8 +1156,25 @@ export const organizerCommunicationTimelineFactSchema = z.strictObject({
 
 export const organizerCommunicationTimelineGetInputSchema = z.strictObject({
   deliveryId: organizerCommunicationOpaqueIdSchema,
+  /**
+   * Optional one-recipient disclosure for the controlled permanent-bounce
+   * resend ceremony. Ordinary timeline reads omit message bodies entirely.
+   */
+  resendDeliveryId: organizerCommunicationOpaqueIdSchema.optional(),
   cursor: organizerCommunicationCursorSchema.optional(),
   limit: z.number().int().positive().max(ORGANIZER_COMMUNICATION_TIMELINE_LIMIT).optional()
+});
+
+/**
+ * The exact marked-resend artifact for one retained delivery. It is derived
+ * from that recipient's immutable reviewed envelope by the same pure function
+ * the dispatch worker uses; it is never reconstructed from the current
+ * template revision.
+ */
+export const organizerCommunicationResendPreviewSchema = z.strictObject({
+  deliveryId: organizerCommunicationOpaqueIdSchema,
+  subject: canonicalSingleLine(998),
+  plainText: canonicalMultiline(1_000_000, true)
 });
 
 export const organizerCommunicationTimelinePageSchema = z.strictObject({
@@ -1165,6 +1182,7 @@ export const organizerCommunicationTimelinePageSchema = z.strictObject({
   visibility: z.literal('organizer_non_security'),
   deliveryId: organizerCommunicationOpaqueIdSchema,
   currentState: organizerCommunicationHistoryStateSchema,
+  resendPreviews: z.array(organizerCommunicationResendPreviewSchema).max(1),
   rows: z.array(organizerCommunicationTimelineFactSchema)
     .max(ORGANIZER_COMMUNICATION_TIMELINE_LIMIT),
   page: organizerCommunicationPageInfoSchema
@@ -1175,6 +1193,12 @@ export const organizerCommunicationTimelinePageSchema = z.strictObject({
         message: 'Timeline facts must use strictly increasing sequence order.' });
     }
   }
+  addCanonicalOrderIssues(
+    timeline.resendPreviews.map((preview) => preview.deliveryId),
+    context,
+    ['resendPreviews'],
+    'Resend previews must be unique and use canonical delivery order.'
+  );
 });
 
 /**

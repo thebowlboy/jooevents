@@ -24,7 +24,11 @@ import {
   type OrganizerAudiencePreviewReadPort,
   type OrganizerPreviewContactDisclosure
 } from '@jooevents/communication-operations';
-import type { EmailProviderReadinessReader } from '@jooevents/communications';
+import {
+  deriveMarkedResendEmailEnvelope,
+  type CommunicationMessageReleaseStore,
+  type EmailProviderReadinessReader
+} from '@jooevents/communications';
 import type {
   SQLiteCalendarCanonicalStateRepository,
   CalendarNoticeProductionReadiness
@@ -526,6 +530,7 @@ export function createSQLiteCommunicationThreadSource(input: {
 
 interface TimelineRow {
   readonly delivery_id: string;
+  readonly release_id: string;
   readonly safe_label: string | null;
   readonly recipient_ref_id: string;
   readonly plan_json: string;
@@ -547,6 +552,7 @@ interface TimelineRow {
 export function createSQLiteCommunicationTimelineSource(input: {
   readonly sqlite: Database;
   readonly previews: Pick<OrganizerAudiencePreviewReadPort, 'listMessagePreviewRecipients'>;
+  readonly releases: Pick<CommunicationMessageReleaseStore, 'read'>;
 }) {
   const observations = new SQLiteCommunicationDeliveryObservationRepository(input.sqlite);
   return Object.freeze({
@@ -567,7 +573,7 @@ export function createSQLiteCommunicationTimelineSource(input: {
       // history row's messageRefId (the release batch), so one expansion can
       // compare every recipient without exposing classified addresses.
       const rows = input.sqlite.query<TimelineRow, [string, string, string]>(`
-        SELECT h.delivery_id,r.recipient_ref_id,l.plan_json,c.safe_label,h.state,h.created_at_ms,h.updated_at_ms,
+        SELECT h.delivery_id,r.release_id,r.recipient_ref_id,l.plan_json,c.safe_label,h.state,h.created_at_ms,h.updated_at_ms,
                a.attempt_id,a.attempt_number,a.attempt_kind,a.state AS attempt_state,
                a.provider_outcome_reason,a.recovery_code,a.started_at_ms,a.completed_at_ms,
                o.actor_json,u.display_name AS actor_display_name
@@ -698,6 +704,24 @@ export function createSQLiteCommunicationTimelineSource(input: {
       const facts = chosen.map((fact, index) => organizerCommunicationTimelineFactSchema.parse({
         ...fact, sequence: offset + index + 1
       }));
+      const resendPreviews = deliveryRows.flatMap((row) => {
+        if (row.delivery_id !== parsed.data.resendDeliveryId
+            || dispositions.get(row.delivery_id)?.kind !== 'permanent_bounce') return [];
+        const release = input.releases.read(row.release_id);
+        if (release === undefined
+            || release.workspaceId !== selected.workspaceId
+            || release.eventId !== selected.eventId
+            || release.batchId !== parsed.data.deliveryId
+            || release.recipientRefId !== row.recipient_ref_id) {
+          throw new TypeError('communication_resend_preview_release_mismatch');
+        }
+        const envelope = deriveMarkedResendEmailEnvelope(release.envelope);
+        return [{
+          deliveryId: row.delivery_id,
+          subject: envelope.subject,
+          plainText: envelope.textBody
+        }];
+      });
       return Object.freeze({
         kind: 'success',
         data: organizerCommunicationTimelinePageSchema.parse({
@@ -705,6 +729,7 @@ export function createSQLiteCommunicationTimelineSource(input: {
           visibility: 'organizer_non_security',
           deliveryId: parsed.data.deliveryId,
           currentState,
+          resendPreviews,
           rows: facts,
           page: offset + chosen.length < ordered.length
             ? { hasMore: true, nextCursor: offsetCursor(offset + chosen.length) }

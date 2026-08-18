@@ -1154,6 +1154,7 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
        WHERE workspace_id=? AND event_id=? AND contact_ref_id=? LIMIT 2
     `).all(selected.workspaceId, selected.eventId, address.contactRefId);
     if (contact.length !== 1) throw new SQLiteOrganizerAudiencePreviewError('not_found');
+    const currentBefore = this.#currentAddressRow(selected, address.contactRefId);
     const existing = this.#addressRow(selected, address.addressRefId, address.addressVersion);
     if (existing !== undefined) {
       const opened = this.#openAddress(selected, existing);
@@ -1215,7 +1216,11 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
       selected.workspaceId, selected.eventId, address.contactRefId,
       address.addressRefId, address.addressVersion
     );
-    this.#bumpScopeState(selected);
+    if (currentBefore === undefined
+        || currentBefore.address_ref_id !== address.addressRefId
+        || currentBefore.address_version !== address.addressVersion) {
+      this.#bumpScopeState(selected);
+    }
   }
 
   readCurrentAddress(input: {
@@ -2108,6 +2113,26 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
       if (adopted.payloadRef.id !== payloadRefId) {
         throw new SQLiteOrganizerAudiencePreviewError('data_corrupt');
       }
+      // A released delivery must point at a retained address version. The
+      // prepared snapshot is classified evidence, but it is not the current
+      // address ledger used by bounce suppression and controlled correction.
+      // Materialize each included address inside the same adoption transaction,
+      // then pin the post-materialization guard so the preview is not born
+      // stale merely because its own evidence established those pointers.
+      for (const row of parsed.rows) {
+        if (row.state !== 'included' || row.address === undefined) continue;
+        // Registered live sources may resolve without first copying their
+        // subject into the local audience-contact projection. The retained
+        // address ledger is deliberately FK-bound to that exact subject,
+        // never to an equal email string, so adopt the subject evidence first.
+        this.upsertCurrentCandidate(selected, row.candidate);
+        this.putCurrentAddress({
+          scope: selected,
+          address: row.address,
+          createdAt: record.createdAt
+        });
+      }
+      const adoptedGuardDigestSha256 = this.#currentGuard({ scope: selected, ownerKey, binding });
       const summaryJson = canonicalJsonText(parsed.summary);
       // Summary is contract-classified as safe; exact address/render material lives only in ciphertext.
       this.sqlite.query(`
@@ -2121,7 +2146,7 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
         selected.workspaceId, selected.eventId, ownerKey, identity.audienceSpecId,
         identity.draftId, identity.draftVersion, identity.previewGeneration,
         identity.previewDigestProfile, identity.previewDigestVersion,
-        identity.previewDigestSha256, record.guardDigestSha256, summaryJson, payloadRefId,
+        identity.previewDigestSha256, adoptedGuardDigestSha256, summaryJson, payloadRefId,
         record.bytes.byteLength, bytesDigest(record.bytes), record.createdAt
       );
       this.sqlite.exec('RELEASE communication_audience_preview_adopt');

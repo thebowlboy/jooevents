@@ -588,6 +588,7 @@ describe('organizer communication history and readiness truth', () => {
       visibility: 'organizer_non_security' as const,
       deliveryId: 'delivery-1',
       currentState: 'accepted' as const,
+      resendPreviews: [],
       rows: [
         { factId: 'fact-1', sequence: 1, occurredAt: instant, kind: 'attempt_started' as const,
           actor: { kind: 'human' as const, displayLabel: 'Organizer' },

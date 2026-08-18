@@ -18,5 +18,12 @@ describe('sample tuned Communications page port', () => {
 		expect(templates.messages.length).toBeGreaterThan(0);
 		expect(theme).toHaveProperty('markText');
 		expect(summary.event).not.toBeNull();
+		const bounced = messages.find((message) => (message.bounces?.length ?? 0) > 0)!;
+		const preview = await port.communications.previewResend(
+			bounced.id,
+			bounced.bounces![0]!.email
+		);
+		expect(preview.subject).toStartWith('[Resend] ');
+		expect(preview.plainText).toContain('If you already received this message');
 	});
 });

@@ -52,6 +52,7 @@ import {
   organizerMessageTemplateMutationOperationResultSchema,
   organizerPrepareMessagePreviewOperationResultSchema,
   organizerPreviewMessageBatchOperationResultSchema,
+  organizerRetryMessageDeliveryOperationResultSchema,
   organizerSendMessagesOperationResultSchema,
   organizerFormCatalogSchema,
   organizerFormDetailSchema,
@@ -70,6 +71,8 @@ import {
   releaseReviewDraftOperationResultSchema,
   releaseOverviewReadResultSchema,
   schedulePlacementOperationResultSchema,
+  computeSafeEvidenceDigestSha256,
+  safeEvidenceSchema,
   safeOperationManifestSchema,
   servedPublicFormSchema,
   servedPublicPresentationSchema,
@@ -125,6 +128,10 @@ import {
 import { DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG } from '@jooevents/workspace-operations';
 import { loadEphemeralLiveConfig } from '../config';
 import { createSQLiteCommunicationDeliveryHistorySource } from './communication-delivery-history';
+import { MARKED_RESEND_BODY_NOTE } from '@jooevents/communications';
+import {
+  SQLiteCommunicationDeliveryObservationRepository
+} from '@jooevents/persistence/communication-delivery-observations';
 import { createEphemeralLiveRuntime, type EphemeralLiveRuntime } from './ephemeral-live';
 import { createProductionRequestHandler } from './request-handler';
 
@@ -5497,7 +5504,9 @@ describe('ephemeral live Foundation server composition', () => {
 			recipient: expect.objectContaining({ state: 'known_rejected_terminal' }),
 			attempt: expect.objectContaining({ attemptNumber: 1, attemptKind: 'original' })
 		})]);
+		expect(timeline.data.resendPreviews).toEqual([]);
 		expect(JSON.stringify(timeline)).not.toContain('http.send.one@example.test');
+
     // Derived, not assumed: the projected reason is exactly the outcome code
     // the deciding attempt recorded in the ledger.
     expect(history.data.rows[0]!.stateReasonCode).toBe(
@@ -5558,6 +5567,120 @@ describe('ephemeral live Foundation server composition', () => {
     expect(count(runtime, 'communication_release_effect_specs')).toBe(1);
     expect(count(runtime, 'communication_release_commits')).toBe(1);
     expect(count(runtime, 'communication_outbound_delivery_heads')).toBe(1);
+
+		// A later provider bounce opens the immutable retained release and derives
+		// the exact marked-resend artifact through the same pure transformation as
+		// the worker. It never reads today's template revision. Initial preview
+		// adoption must have retained the exact address parent first, or the
+		// suppression fact and controlled correction route cannot exist.
+		const bouncedDelivery = runtime.database.sqlite.query<{
+			readonly workspace_id: string;
+			readonly event_id: string;
+			readonly delivery_id: string;
+			readonly attempt_id: string;
+			readonly provider_connection_revision_id: string;
+			readonly delivery_version: number;
+			readonly has_address_parent: number;
+		}, [string]>(`
+			SELECT h.workspace_id,h.event_id,h.delivery_id,a.attempt_id,
+			       h.provider_connection_revision_id,h.version AS delivery_version,
+			       EXISTS(
+			         SELECT 1 FROM communication_channel_address_versions v
+			          WHERE v.workspace_id=h.workspace_id AND v.event_id=h.event_id
+			            AND v.address_ref_id=h.channel_address_id
+			            AND v.address_version=h.channel_address_version
+			       ) AS has_address_parent
+			  FROM communication_outbound_delivery_heads h
+			  JOIN communication_message_releases r ON r.release_id=h.release_id
+			  JOIN communication_outbound_delivery_attempts a ON a.delivery_id=h.delivery_id
+			 WHERE r.batch_id=? LIMIT 1
+		`).get(sendBody.batchId);
+		if (!bouncedDelivery) throw new Error('Sent delivery evidence missing.');
+		expect(bouncedDelivery.has_address_parent).toBe(1);
+		const evidenceBody = {
+			contractVersion: 1 as const,
+			schemaKey: 'je.communication.provider-safe-evidence' as const,
+			schemaVersion: 1 as const,
+			registeredCode: 'cloudflare.email.accepted' as never,
+			correlationId: 'corr1_abcdefghijklmnopqrstuvwx',
+			registeredFacts: [{
+				factKey: 'cloudflare.observation' as never,
+				factSchemaVersion: 1,
+				valueKind: 'enum' as const,
+				enumValue: 'accepted_permanent_bounce' as never
+			}]
+		};
+		const bounceEvidence = safeEvidenceSchema.parse({
+			...evidenceBody,
+			canonicalDigestSha256: computeSafeEvidenceDigestSha256(evidenceBody)
+		});
+		const observations = new SQLiteCommunicationDeliveryObservationRepository(
+			runtime.database.sqlite
+		);
+		runtime.database.sqlite.transaction(() => observations.append({
+			workspaceId: bouncedDelivery.workspace_id,
+			eventId: bouncedDelivery.event_id,
+			deliveryId: bouncedDelivery.delivery_id,
+			attemptId: bouncedDelivery.attempt_id,
+			providerConnectionRevisionId: bouncedDelivery.provider_connection_revision_id,
+			adapterKey: 'cloudflare.email-service',
+			providerEventKey: 'runtime-preview-bounce',
+			kind: 'permanent_bounce',
+			source: 'provider_lookup',
+			quality: 'provider_conclusive',
+			ingestedAt: '2026-08-18T12:00:00.000Z',
+			safeEvidence: bounceEvidence
+		})).immediate();
+		const bounceTimelineResponse = await runtime.app.request(
+			`/api/events/current/communications/timeline?deliveryId=${encodeURIComponent(sendBody.batchId)}&resendDeliveryId=${encodeURIComponent(bouncedDelivery.delivery_id)}`,
+			{ headers: eventHeaders({ session, correlationId: crypto.randomUUID() }) }
+		);
+		expect(
+			bounceTimelineResponse.status,
+			await bounceTimelineResponse.clone().text()
+		).toBe(200);
+		const bounceTimeline = organizerCommunicationTimelinePageOperationResultSchema.parse(
+			await bounceTimelineResponse.json()
+		);
+		if (bounceTimeline.kind !== 'success') throw new Error('Bounce timeline read failed.');
+		expect(bounceTimeline.data.resendPreviews).toEqual([expect.objectContaining({
+			deliveryId: bouncedDelivery.delivery_id,
+			subject: `[Resend] ${sendBody.subject}`,
+			plainText: expect.stringContaining(MARKED_RESEND_BODY_NOTE)
+		})]);
+		const correctedEmail = 'http.send.corrected@example.test';
+		const retried = organizerRetryMessageDeliveryOperationResultSchema.parse(await effect({
+			runtime,
+			session,
+			path: '/api/events/current/communications/deliveries/retry',
+			key: 'http-send-correct-and-retry',
+			body: {
+				deliveryId: bouncedDelivery.delivery_id,
+				expectedDeliveryVersion: bouncedDelivery.delivery_version,
+				correctedEmail
+			},
+			parse: (value) => value
+		}));
+		expect(retried).toMatchObject({
+			kind: 'success',
+			data: {
+				deliveryId: bouncedDelivery.delivery_id,
+				addressVersion: 2,
+				state: 'dispatch_requested'
+			}
+		});
+		expect(runtime.database.sqlite.query<{
+			readonly attempt_kind: string;
+		}, [string]>(`
+			SELECT attempt_kind FROM communication_outbound_delivery_attempts
+			 WHERE delivery_id=? ORDER BY attempt_number
+		`).all(bouncedDelivery.delivery_id)).toEqual([
+			{ attempt_kind: 'original' },
+			{ attempt_kind: 'marked_resend' }
+		]);
+		expect(Buffer.from(runtime.database.sqlite.serialize()).includes(
+			Buffer.from(correctedEmail)
+		)).toBe(false);
     expect(runtime.database.sqlite.query<Record<string, unknown>, []>(
       'PRAGMA foreign_key_check'
     ).all()).toEqual([]);
