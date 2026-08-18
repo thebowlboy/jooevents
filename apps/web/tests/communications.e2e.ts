@@ -142,8 +142,13 @@ test('compose previews the chosen template as the recipients get it', async ({ p
 		'/app/templates?template=tpl-decision-accepted'
 	);
 
-	// The audience count is served, not hardcoded: flight has 5 confirmed speakers.
-	await expect(dialog.getByLabel('Audience')).toContainText('Confirmed speakers · 5');
+	// Audiences combine, so the control is a checkable set rather than a list of
+	// alternatives. The count on each is served, not hardcoded: flight has 10
+	// confirmed speakers.
+	const audience = dialog.getByRole('group', { name: 'Audience' });
+	await expect(audience).toContainText('Confirmed speakers · 10');
+	// The first audience arrives picked, so a draft is one subject away.
+	await expect(audience.getByRole('checkbox', { name: /Confirmed speakers/ })).toBeChecked();
 });
 
 test('“See the addresses” lands on the bounce evidence, in view, and the row can be corrected and resent', async ({ page }) => {

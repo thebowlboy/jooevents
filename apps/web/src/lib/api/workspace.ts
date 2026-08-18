@@ -27,6 +27,7 @@ import type {
 	MyReviewItem,
 	AttentionItem,
 	AudienceOption,
+	AudiencePreview,
 	SessionItem,
 	SessionSpeaker,
 	SessionState,
@@ -116,6 +117,11 @@ import { computeStanding, tintStep } from './standing';
 import { accoladeCatalog, composeCapRefusal } from './accolades';
 import { suggestPlacement, type PlacementSuggestion } from './placement';
 import { sessionPlacementDisplay } from './session-placement';
+import {
+	audiencePreviewRows,
+	unionAudienceGroups,
+	type AudienceGroupRows
+} from './audience-union';
 import {
 	asSurfaceField,
 	contextFields,
@@ -1130,6 +1136,32 @@ function audienceRecipients(
 			});
 	}
 	return [];
+}
+
+/**
+ * The selected audiences resolved to rows, in the order they were picked — the
+ * one input both the pick-time preview and the frozen review are computed from,
+ * so the reach line and the review can never disagree about a selection.
+ *
+ * The scoped person is recovered from the selection itself: a `person-` id
+ * names them, and it is the only audience the option list has to be built for.
+ * An id that no longer resolves is dropped rather than substituted; a
+ * combination must never quietly become a different combination.
+ */
+function selectedAudienceGroups(
+	audienceIds: readonly string[],
+	template: MessageTemplate | undefined,
+	subject: string
+): AudienceGroupRows[] {
+	const scoped = audienceIds.find((id) => id.startsWith('person-'));
+	const options = audienceOptions(scoped?.slice('person-'.length));
+	return audienceIds
+		.map((id) => options.find((option) => option.id === id))
+		.filter((option): option is AudienceOption => option !== undefined)
+		.map((option) => ({
+			label: option.label,
+			rows: audienceRecipients(option, template, subject)
+		}));
 }
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -3289,6 +3321,25 @@ export const api = {
 			await latency();
 			return audienceOptions(personId);
 		},
+		/**
+		 * What the current selection actually comes to. Resolved from the same
+		 * records and the same union the draft will freeze, so the reach line an
+		 * operator reads while picking is the number the review states after.
+		 *
+		 * Copy is not resolved here: the pick-time list shows who and whether,
+		 * never addresses or rendered text, so choosing an audience discloses
+		 * less than examining the send does.
+		 */
+		async previewRecipients(audienceIds: readonly string[]): Promise<AudiencePreview> {
+			await latency();
+			const union = unionAudienceGroups(selectedAudienceGroups(audienceIds, undefined, ''));
+			return {
+				rows: audiencePreviewRows(union),
+				reach: union.reach,
+				overlap: union.overlap,
+				label: union.label
+			};
+		},
 		async send(id: string): Promise<MutationOutcome> {
 			await latency();
 			const message = db.communications.find((entry) => entry.id === id);
@@ -3347,32 +3398,31 @@ export const api = {
 		},
 		async compose(input: {
 			subject: string;
-			audienceId: string;
+			audienceIds: readonly string[];
 			templateId?: string;
 		}): Promise<CommunicationMessage> {
 			await latency();
-			const personId = input.audienceId.startsWith('person-')
-				? input.audienceId.slice('person-'.length)
-				: undefined;
-			const options = audienceOptions(personId);
-			const audience = options.find((option) => option.id === input.audienceId) ?? options[0];
 			const template = input.templateId
 				? db.templates.find((entry) => entry.id === input.templateId)
 				: undefined;
-			const recipients = audienceRecipients(audience, template, input.subject);
-			const included = recipients.filter((recipient) => recipient.state === 'included').length;
+			// The draft freezes the union, not the groups: one row per person, so
+			// nobody in two of the selected audiences is written to twice.
+			const union = unionAudienceGroups(
+				selectedAudienceGroups(input.audienceIds, template, input.subject)
+			);
+			const audienceLabel = union.label === '' ? 'No audience selected' : union.label;
 			const review: MessageReview = {
 				templateLabel: template
 					? `${template.key} @ revision ${template.revision}`
 					: 'No template — subject only',
-				audienceLabel: `${audience.label} (current snapshot)`,
+				audienceLabel: `${audienceLabel} (current snapshot)`,
 				binding: 'current_snapshot',
-				recipients,
+				recipients: union.recipients,
 				sender: senderIdentity(),
 				replyModel: 'Replies go to the organizer inbox',
 				irreversibleNote: 'Email cannot be recalled after the provider accepts it.'
 			};
-			return communicationEntry(input.subject, audience.label, included, 'draft', {
+			return communicationEntry(input.subject, audienceLabel, union.reach, 'draft', {
 				purpose: template ? template.name : 'One-off message',
 				cause: template
 					? `Composed by you from the “${template.name}” template`

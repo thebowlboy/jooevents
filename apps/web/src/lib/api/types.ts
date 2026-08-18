@@ -1209,6 +1209,35 @@ export interface AudienceOption {
 	personId?: string;
 }
 
+/**
+ * One person in the compose-time audience preview: who they are, and whether
+ * this send will reach them. It shares `RecipientRow`'s state vocabulary so the
+ * words do not change between picking an audience and reviewing the send, but
+ * it is deliberately narrower — no address, no resolved copy. Choosing an
+ * audience is not the authoritative check, and it must not disclose more about
+ * the people in it than the review discloses when the send is examined.
+ */
+export interface AudiencePreviewRow {
+	name: string;
+	state: RecipientRow['state'];
+	/** Present on exclusions and blocks: why this person is not being sent to. */
+	reason?: string;
+}
+
+/**
+ * What a combination of audiences comes to, resolved from current records.
+ * `reach` counts the people actually sent to and `overlap` the people more than
+ * one selected group claimed — never a sum of the groups' own counts, which
+ * would double-count anyone the groups share.
+ */
+export interface AudiencePreview {
+	rows: AudiencePreviewRow[];
+	reach: number;
+	overlap: number;
+	/** The combined audience in words, e.g. "Confirmed speakers + Reviewers". */
+	label: string;
+}
+
 export type ReadinessState = 'ready' | 'action_required' | 'unknown' | 'not_applicable';
 
 export interface EmailReadiness {
