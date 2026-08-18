@@ -177,6 +177,16 @@
 								aria-label={`${session.title} — opens in new window`}>
 								{session.title}<ExternalLink size={12} aria-hidden="true" />
 							</a>
+							<!-- Where and when they are due on stage, joined from the grid.
+							     Real text rather than a label on the link: this is the fact a
+							     cancellation makes urgent, so it has to reach a screen reader
+							     as content and survive being read out of order. A session
+							     nobody has placed yet says nothing here. -->
+							{#if session.placement}
+								<span class="peek__slot"
+									>{session.placement.day} · {session.placement.time} ·
+									{session.placement.room}</span>
+							{/if}
 						</li>
 					{/each}
 				</ul>
@@ -397,6 +407,14 @@
 		margin: 0;
 		padding: 0;
 		font-size: var(--je-font-size-sm);
+	}
+
+	/* The placed slot sits under its title in the same quiet voice the location
+	   line uses — one muted line, never competing with the title above it. */
+	.peek__slot {
+		display: block;
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
 	}
 
 	/* The new-window glyph rides the link's own line, a breath after the words. */

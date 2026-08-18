@@ -74,6 +74,10 @@ test('a profiled submitter opens beside the row, and Escape gives the name back'
 	});
 	await expect(sessionLink).toHaveAttribute('href', '/app/schedule?session=ses-2');
 	await expect(sessionLink).toHaveAttribute('target', '_blank');
+	// A placed session says when and where without costing a trip to Schedule —
+	// the question a cancellation makes urgent. Real text, so it is read out
+	// with the title rather than hidden in the link's name.
+	await expect(panel).toContainText('Tue Oct 13 · 10:30–11:00 · Main Stage');
 	const rosterLink = panel.getByRole('link', { name: 'Open in Speakers — opens in new window' });
 	await expect(rosterLink).toHaveAttribute('href', '/app/speakers?speaker=spk-1');
 	await expect(rosterLink).toHaveAttribute('target', '_blank');

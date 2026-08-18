@@ -820,9 +820,31 @@ export type EngagementState =
  * title because a speaker's session is a place on the schedule, not a string:
  * without it the roster can name a session it cannot take anyone to.
  */
+/**
+ * Where and when a session actually sits on the grid, in the words a reader
+ * sees. Display-ready on purpose: `day` and `room` are the schedule's own
+ * `ScheduleDayInfo.label` and `Room.name`, and `time` is the placement's clock
+ * range on the event's day-start offset — so a consumer never re-derives a
+ * second time format from `startMin`.
+ *
+ * Absent means not placed, or not counted at this seam: a session with no
+ * placement row, a composition that cannot see the schedule, or a placement
+ * whose day or room no longer resolves to a real one. A consumer renders
+ * nothing rather than guessing, and never prints a raw key — a machine date
+ * wearing a label's clothes is worse than silence.
+ */
+export interface SessionPlacementDisplay {
+	day: string;
+	/** Clock range on the event's own day start, e.g. `09:00–09:30`. */
+	time: string;
+	room: string;
+}
+
 export interface SpeakerSession {
 	id: string;
 	title: string;
+	/** Where this session is placed, when the composition counted it. */
+	placement?: SessionPlacementDisplay;
 }
 
 export interface SpeakerRow {

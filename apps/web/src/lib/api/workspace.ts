@@ -115,6 +115,7 @@ import { setOperatorEntryAuthCookie } from './composition/entry-deps';
 import { computeStanding, tintStep } from './standing';
 import { accoladeCatalog, composeCapRefusal } from './accolades';
 import { suggestPlacement, type PlacementSuggestion } from './placement';
+import { sessionPlacementDisplay } from './session-placement';
 import {
 	asSurfaceField,
 	contextFields,
@@ -984,7 +985,16 @@ function profileFor(email: string): SpeakerProfile | null {
 	if (seed.links && seed.links.length > 0) profile.links = seed.links;
 	if (roster) {
 		profile.speakerId = roster.id;
-		if (roster.sessions.length > 0) profile.sessions = roster.sessions;
+		// Placement is joined here rather than stored on the roster row: the grid
+		// is the authority on where a session sits, so a place or unplace in this
+		// session shows up on the next read with no second record to keep in step.
+		// An unplaced session keeps the shape it has always had — title only.
+		if (roster.sessions.length > 0) {
+			profile.sessions = roster.sessions.map((session) => {
+				const placement = sessionPlacementDisplay(db.schedule, session.id);
+				return { ...session, ...(placement ? { placement } : {}) };
+			});
+		}
 	}
 	return profile;
 }
