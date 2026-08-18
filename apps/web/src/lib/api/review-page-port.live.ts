@@ -5,6 +5,7 @@ import type { ProgramVocabularySettingsPort } from './program-vocabulary-setting
 import type { ReviewCoreEffectResult, ReviewCorePort } from './review-core-port';
 import type { ReviewPagePort, ReviewPageViewer } from './review-page-port';
 import type {
+	ComparableCard,
 	Format,
 	MutationOutcome,
 	MyReviewItem,
@@ -31,8 +32,6 @@ import type { ProgramFormatView, ProgramTrackView } from './view-models/program-
  * canonical owner exists.
  */
 export type ReviewPageLiveUnmountedCapability =
-	| 'review_evaluation_revert'
-	| 'review_comparison'
 	| 'review_accolade_change'
 	| 'reviewer_scope'
 	| 'reviewer_reminders';
@@ -51,10 +50,6 @@ export class ReviewPageLiveError extends Error {
 }
 
 const UNMOUNTED_COPY: Readonly<Record<ReviewPageLiveUnmountedCapability, string>> = Object.freeze({
-	review_evaluation_revert:
-		'Reverting an amendment is not available in this live workspace yet.',
-	review_comparison:
-		'Committed-review comparison is not available in this live workspace yet.',
 	review_accolade_change:
 		'Accolades are not available in this live workspace yet.',
 	reviewer_scope:
@@ -215,15 +210,18 @@ function myReviewItem(item: NonNullable<ReviewSnapshotView['queue']>[number]): M
 	const current = item.committed ? item.current : undefined;
 	const score = current ? current.score : item.draft?.score;
 	const comment = current ? current.comment : item.draft?.comment;
+	const priorRevisions = current
+		? item.revisions.filter((revision) => revision.revisionId !== current.revisionId)
+		: [];
 	return {
 		submissionId: item.submissionId,
 		...(score !== undefined ? { myScore: score } : {}),
 		...(comment !== undefined ? { myComment: comment } : {}),
 		committed: item.committed,
 		...(item.peerScores ? { peerScores: [...item.peerScores] } : {}),
-		...(item.revisions.length > 0
+		...(priorRevisions.length > 0
 			? {
-					revisions: item.revisions.map((revision) => ({
+				revisions: priorRevisions.map((revision) => ({
 						score: revision.score,
 						comment: revision.comment,
 						at: revision.at,
@@ -384,6 +382,48 @@ export function createLiveReviewPagePort(input: {
 			if (error instanceof ReviewPageLiveError) return { ok: false, reason: error.message };
 			throw error;
 		}
+	}
+
+	/**
+	 * Every correction, including receipt Undo, is a new guarded amendment.
+	 * Retained revisions are never deleted or rewound; putting an earlier value
+	 * back is itself attributable history.
+	 */
+	async function amendEvaluation(
+		snapshot: ReviewSnapshotView,
+		item: NonNullable<ReviewSnapshotView['queue']>[number],
+		score: number,
+		comment: string
+	): Promise<MyReviewItem | null> {
+		if (!item.committed || !item.current) {
+			throw new ReviewPageLiveError({ code: 'review_not_committed',
+				reason: 'Commit this review before amending it.' });
+		}
+		const plan = snapshot.plans.find((candidate) => candidate.id === item.roundId);
+		if (!plan || plan.criteria.length !== 1) {
+			throw new ReviewPageLiveError(invalidContract('review amendment'));
+		}
+		const criterion = plan.criteria[0]!;
+		if (!Number.isInteger(score) || score < criterion.scaleMin || score > criterion.scaleMax) {
+			throw new ReviewPageLiveError({ code: 'review_score_invalid',
+				reason: `Scores are whole numbers from ${criterion.scaleMin} to ${criterion.scaleMax}.` });
+		}
+		const changed = await input.review.changeEvaluation({
+			action: 'amend_review', assignmentId: item.assignmentId,
+			expectedAssignmentVersion: item.assignmentVersion,
+			expectedReviewVersion: item.revisions.length,
+			expectedCurrentRevisionId: item.current.revisionId,
+			scores: [{ criterionId: criterion.id, score }], comment
+		}, newAttemptKey());
+		if (changed.kind !== 'success') {
+			throw new ReviewPageLiveError(effectFailure(changed, 'review amendment'));
+		}
+		if (changed.data.action !== 'amend_review') {
+			throw new ReviewPageLiveError(invalidContract('review amendment'));
+		}
+		const after = await readSnapshot();
+		const amended = after.queue?.find((entry) => entry.submissionId === item.submissionId);
+		return amended ? myReviewItem(amended) : null;
 	}
 
 	return Object.freeze({
@@ -585,41 +625,50 @@ export function createLiveReviewPagePort(input: {
 			async amend(submissionId: string, score: number, comment: string): Promise<MyReviewItem | null> {
 				const snapshot = await readSnapshot();
 				const item = queueItem(snapshot, submissionId);
+				return amendEvaluation(snapshot, item, score, comment);
+			},
+			async revertAmend(submissionId: string): Promise<MyReviewItem | null> {
+				const snapshot = await readSnapshot();
+				const item = queueItem(snapshot, submissionId);
 				if (!item.committed || !item.current) {
 					throw new ReviewPageLiveError({ code: 'review_not_committed',
-						reason: 'Commit this review before amending it.' });
+						reason: 'Commit this review before restoring an earlier score.' });
 				}
-				const plan = snapshot.plans.find((candidate) => candidate.id === item.roundId);
-				if (!plan || plan.criteria.length !== 1) {
-					throw new ReviewPageLiveError(invalidContract('review amendment'));
-				}
-				const criterion = plan.criteria[0]!;
-				if (!Number.isInteger(score) || score < criterion.scaleMin || score > criterion.scaleMax) {
-					throw new ReviewPageLiveError({ code: 'review_score_invalid',
-						reason: `Scores are whole numbers from ${criterion.scaleMin} to ${criterion.scaleMax}.` });
-				}
-				const changed = await input.review.changeEvaluation({
-					action: 'amend_review', assignmentId: item.assignmentId,
-					expectedAssignmentVersion: item.assignmentVersion,
-					expectedReviewVersion: item.revisions.length,
-					expectedCurrentRevisionId: item.current.revisionId,
-					scores: [{ criterionId: criterion.id, score }], comment
-				}, newAttemptKey());
-				if (changed.kind !== 'success') {
-					throw new ReviewPageLiveError(effectFailure(changed, 'review amendment'));
-				}
-				if (changed.data.action !== 'amend_review') {
-					throw new ReviewPageLiveError(invalidContract('review amendment'));
-				}
-				const after = await readSnapshot();
-				const amended = after.queue?.find((entry) => entry.submissionId === submissionId);
-				return amended ? myReviewItem(amended) : null;
+				const currentIndex = item.revisions.findIndex(
+					(revision) => revision.revisionId === item.current?.revisionId
+				);
+				const prior = currentIndex > 0 ? item.revisions[currentIndex - 1] : undefined;
+				// No earlier revision means there is nothing to compensate. Return the
+				// served truth without manufacturing a write or a failure.
+				if (!prior) return myReviewItem(item);
+				return amendEvaluation(snapshot, item, prior.score, prior.comment);
 			},
-			async revertAmend(): Promise<never> {
-				throw unmounted('review_evaluation_revert');
-			},
-			async comparables(): Promise<never> {
-				throw unmounted('review_comparison');
+			async comparables(submissionId: string, slice: 'track' | 'all'): Promise<ComparableCard[]> {
+				const snapshot = await readSnapshot();
+				const anchor = queueItem(snapshot, submissionId);
+				if (!anchor.committed) return [];
+				const candidates = (snapshot.queue ?? []).filter((item) =>
+					item.committed
+					&& item.submissionId !== submissionId
+					&& (slice === 'all' || item.candidate.trackId === anchor.candidate.trackId)
+				);
+				const standings: Record<string, ScoreStanding> = {};
+				for (const ids of chunked(candidates.map((item) => item.submissionId), STANDINGS_READ_CHUNK)) {
+					const served = await readSnapshot({
+						standingSubmissionIds: [...ids],
+						standingSlice: slice
+					});
+					for (const [id, standing] of Object.entries(served.standings)) {
+						standings[id] = standingView(standing);
+					}
+				}
+				return candidates
+					.map((item) => ({
+						item: myReviewItem(item),
+						submission: reviewSubmission(item),
+						standing: standings[item.submissionId] ?? null
+					}))
+					.sort((left, right) => (right.item.myScore ?? 0) - (left.item.myScore ?? 0));
 			},
 			/** No accolade owner exists canonically, so no defs exist to offer. */
 			async accoladeDefs() {
