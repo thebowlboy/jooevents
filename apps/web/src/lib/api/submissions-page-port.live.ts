@@ -266,7 +266,6 @@ export function createLiveSubmissionsPagePort(input: {
 	readonly profileBatch?: SpeakerProfileBatchSource;
 	readonly newIdempotencyKey?: () => string;
 	readonly now?: () => number;
-	readonly profileBatch?: import('./speaker-profile-directory.live').SpeakerProfileBatchSource;
 }): SubmissionsPagePort {
 	if (
 		input.review.source.kind !== 'live'

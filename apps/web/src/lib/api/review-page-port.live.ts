@@ -26,7 +26,6 @@ import type {
 } from './view-models/review';
 import type { ProgramFormatView, ProgramTrackView } from './view-models/program-vocabulary';
 import { createInFlightSlot, shareInFlight } from './in-flight';
-import type { SpeakerProfileBatchSource } from './speaker-profile-directory.live';
 
 /**
  * The tuned page capabilities this deliberately partial live mount cannot

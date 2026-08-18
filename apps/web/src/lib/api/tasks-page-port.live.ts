@@ -17,7 +17,6 @@ import type {
 } from './types';
 import { taskAssignmentView, taskDefinitionView } from './mappers/tasks';
 import { sessionPlacementDisplay } from './session-placement';
-import type { SpeakerProfileBatchSource } from './speaker-profile-directory.live';
 
 type Failure = Readonly<{ code: string; reason: string }>;
 export class TasksPageLiveError extends Error {

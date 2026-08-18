@@ -334,9 +334,9 @@ describe('live tuned Speakers page port', () => {
 						singles += 1;
 						throw new Error('must not read contact per submission');
 					},
-					readMany: async (submissionIds) => ({
+					readMany: async (submissionIds: readonly string[]) => ({
 						kind: 'success',
-						data: submissionIds.map((submissionId) => ({
+						data: submissionIds.map((submissionId: string) => ({
 							submissionId, email: 'amina@example.org'
 						})),
 						correlationId
