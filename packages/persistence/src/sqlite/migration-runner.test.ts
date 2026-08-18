@@ -234,7 +234,7 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
     expect(migrated.sqlite.query('PRAGMA foreign_key_check').all()).toEqual([]);
   });
 
-  test('upgrades every supported epoch-2 predecessor floor through S16', () => {
+  test('upgrades every supported epoch-2 predecessor floor through S17', () => {
     for (const sequence of [6, 7, 8, 9, 10, 11, 12] as const) {
       const path = temporaryDatabasePath();
       let schemaPass = 0;
@@ -257,8 +257,8 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
       const upgraded = openSQLite(path, { migrationPolicy: 'apply' });
       expect(upgraded.migration).toMatchObject({
         status: 'applied',
-        migrationId: 'e2_0016_session_participant_support',
-        coordinate: { schemaEpoch: 2, sequence: 16 }
+        migrationId: 'e2_0017_speaker_profile_review_policy',
+        coordinate: { schemaEpoch: 2, sequence: 17 }
       });
       expect(upgraded.sqlite.query<{ sequence: number }, []>(`
         SELECT sequence FROM schema_migrations WHERE schema_epoch=2 ORDER BY sequence
@@ -268,6 +268,118 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
       expect(upgraded.sqlite.query('PRAGMA foreign_key_check').all()).toEqual([]);
       upgraded.sqlite.close();
     }
+  });
+
+  test('upgrades retained profile approvals without inventing a user actor', () => {
+    const path = temporaryDatabasePath();
+    let schemaPass = 0;
+    const held = new Database(path, { create: true, strict: true });
+    held.exec('PRAGMA foreign_keys = ON;');
+    expectFoundationError(() => migrateOrValidateSQLite({
+      database: held,
+      artifacts: loadSQLiteFoundationArtifacts(),
+      policy: 'apply',
+      databaseClass: 'retained_development',
+      isMemory: false,
+      fault(point) {
+        if (point === 'after_schema_before_receipt' && (schemaPass += 1) === 17) {
+          throw new Error('hold_before_e2_0017_receipt');
+        }
+      }
+    }), 'migration_transaction_failed');
+    held.close();
+
+    const workspaceId = '019c1df7-86b5-769b-bba4-610000000001';
+    const eventId = '019c1df7-86b5-769b-bba4-610000000002';
+    const userId = '019c1df7-86b5-769b-bba4-610000000003';
+    const personId = '019c1df7-86b5-769b-bba4-610000000004';
+    const approvalId = '019c1df7-86b5-769b-bba4-610000000005';
+    const nowMs = Date.parse('2026-08-18T03:00:00.000Z');
+    const seed = new Database(path, { create: false, strict: true });
+    seed.exec('PRAGMA foreign_keys = ON; BEGIN IMMEDIATE;');
+    seed.query(`INSERT INTO workspaces(id,name,state,created_at,updated_at,version)
+      VALUES (?,'Profile upgrade','active',?,?,1)`).run(workspaceId, nowMs, nowMs);
+    seed.query(`INSERT INTO users(id,status,display_name,created_at,updated_at,version)
+      VALUES (?,'active','Existing approver',?,?,1)`).run(userId, nowMs, nowMs);
+    seed.query(`INSERT INTO event_spine_workspace_sets(workspace_id,version,current_event_id)
+      VALUES (?,1,NULL)`).run(workspaceId);
+    seed.query(`INSERT INTO event_spine_heads(
+      workspace_id,id,name,timezone,start_date,end_date,version,created_by_user_id,
+      created_at_ms,create_plan_digest_sha256
+    ) VALUES (?,?,'Event','UTC','2026-11-01','2026-11-02',1,?,?,?)`)
+      .run(workspaceId, eventId, userId, nowMs, 'a'.repeat(64));
+    seed.query(`INSERT INTO event_spine_scope_roots(workspace_id,event_id) VALUES (?,?)`)
+      .run(workspaceId, eventId);
+    seed.query(`UPDATE event_spine_workspace_sets SET current_event_id = ? WHERE workspace_id = ?`)
+      .run(eventId, workspaceId);
+    seed.query(`INSERT INTO event_settings_companions(
+      workspace_id,event_id,event_version,location,venue_note,day_start,day_end,slot_minutes
+    ) VALUES (?,?,1,'','',NULL,NULL,NULL)`).run(workspaceId, eventId);
+    seed.query(`INSERT INTO workspace_people(workspace_id,person_id,registered_at_ms)
+      VALUES (?,?,?)`).run(workspaceId, personId, nowMs);
+    seed.query(`INSERT INTO speaker_lineup_entries(
+      workspace_id,event_id,person_id,position,category_id,publicly_visible,version
+    ) VALUES (?,?,?,0,NULL,1,1)`).run(workspaceId, eventId, personId);
+    seed.query(`INSERT INTO speaker_profile_heads(workspace_id,person_id,version,updated_at_ms)
+      VALUES (?,?,1,?)`).run(workspaceId, personId, nowMs);
+    const profileFields = [
+      ['headline', JSON.stringify('Engineer'), 'b'.repeat(64)],
+      ['biography', JSON.stringify('Builds reliable systems.'), 'c'.repeat(64)],
+      ['location', JSON.stringify('Singapore'), 'd'.repeat(64)],
+      ['links', JSON.stringify([]), 'e'.repeat(64)]
+    ] as const;
+    for (const [field, value, digest] of profileFields) {
+      seed.query(`INSERT INTO speaker_profile_field_revisions(
+        workspace_id,person_id,field_key,revision,value_json,digest_sha256,created_at_ms
+      ) VALUES (?,?,?,1,?,?,?)`).run(workspaceId, personId, field, value, digest, nowMs);
+      seed.query(`INSERT INTO speaker_profile_field_heads(
+        workspace_id,person_id,field_key,current_revision,current_digest_sha256
+      ) VALUES (?,?,?,1,?)`).run(workspaceId, personId, field, digest);
+    }
+    seed.query(`INSERT INTO content_approvals(
+      workspace_id,event_id,id,person_id,field_key,field_revision,
+      field_digest_sha256,approved_by_user_id,approved_at_ms
+    ) VALUES (?,?,?,?, 'headline',1,?,?,?)`)
+      .run(workspaceId, eventId, approvalId, personId, 'b'.repeat(64), userId, nowMs);
+    seed.exec('COMMIT;');
+    seed.close();
+
+    const upgraded = openSQLite(path, { migrationPolicy: 'apply' });
+    opened.push(upgraded);
+    expect(upgraded.sqlite.query<{ profile_content_review: number }, []>(`
+      SELECT profile_content_review FROM event_settings_companions
+       WHERE workspace_id = '${workspaceId}' AND event_id = '${eventId}'
+    `).get()).toEqual({ profile_content_review: 0 });
+    expect(upgraded.sqlite.query<{
+      field_key: string; actor_kind: string; approved_by_user_id: string | null;
+      policy_key: string | null; initiated_by_user_id: string | null;
+    }, []>(`
+      SELECT field_key,actor_kind,approved_by_user_id,policy_key,initiated_by_user_id
+        FROM content_approvals
+       WHERE workspace_id = '${workspaceId}' AND event_id = '${eventId}'
+       ORDER BY field_key
+    `).all()).toEqual([
+      {
+        field_key: 'biography', actor_kind: 'policy', approved_by_user_id: null,
+        policy_key: 'profile_content_review', initiated_by_user_id: null
+      },
+      {
+        field_key: 'headline', actor_kind: 'user', approved_by_user_id: userId,
+        policy_key: null, initiated_by_user_id: null
+      },
+      {
+        field_key: 'links', actor_kind: 'policy', approved_by_user_id: null,
+        policy_key: 'profile_content_review', initiated_by_user_id: null
+      },
+      {
+        field_key: 'location', actor_kind: 'policy', approved_by_user_id: null,
+        policy_key: 'profile_content_review', initiated_by_user_id: null
+      }
+    ]);
+    expect(upgraded.sqlite.query<{ count: number }, []>(
+      'SELECT count(*) AS count FROM users'
+    ).get()).toEqual({ count: 1 });
+    expect(upgraded.sqlite.query('PRAGMA foreign_key_check').all()).toEqual([]);
   });
 
   test('upgrades retained Sessions and backfills one lineup entry per person', () => {
@@ -430,8 +542,8 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
     opened.push(upgraded);
     expect(upgraded.migration).toMatchObject({
       status: 'applied',
-      migrationId: 'e2_0016_session_participant_support',
-      coordinate: { schemaEpoch: 2, sequence: 16 }
+      migrationId: 'e2_0017_speaker_profile_review_policy',
+      coordinate: { schemaEpoch: 2, sequence: 17 }
     });
     expect(upgraded.sqlite.query<{ slot_kind: string; item_id: string; version: number }, []>(`
       SELECT slot_kind,item_id,version FROM session_program_reference_slots
@@ -607,8 +719,8 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
     const migrated = openSQLite(path, { migrationPolicy: 'apply' });
     opened.push(migrated);
     expect(migrated.migration).toMatchObject({
-      status: 'applied', migrationId: 'e2_0016_session_participant_support',
-      coordinate: { schemaEpoch: 2, sequence: 16 }
+      status: 'applied', migrationId: 'e2_0017_speaker_profile_review_policy',
+      coordinate: { schemaEpoch: 2, sequence: 17 }
     });
     expect(migrated.sqlite.query<{ readonly expires_at_ms: number | null }, [string]>(
       'SELECT expires_at_ms FROM api_keys WHERE api_key_id = ?'

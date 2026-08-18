@@ -155,7 +155,7 @@ describe('calendar canonical-state migration', () => {
       const migrated = openSQLite(path, { migrationPolicy: 'apply' });
       opened.push(migrated);
       expect(migrated.migration).toMatchObject({
-        migrationId: 'e2_0016_session_participant_support', coordinate: { schemaEpoch: 2, sequence: 16 }
+        migrationId: 'e2_0017_speaker_profile_review_policy', coordinate: { schemaEpoch: 2, sequence: 17 }
       });
       expect(migrated.sqlite.query<{ source_kind: string; count: number }, []>(`
         SELECT source_kind,count(*) AS count FROM calendar_commitment_source_heads

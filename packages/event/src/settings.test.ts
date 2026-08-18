@@ -28,6 +28,7 @@ function state(input: {
   dayStart?: string | null;
   dayEnd?: string | null;
   slotMinutes?: number | null;
+  profileContentReview?: boolean;
 } = {}): EventSettingsState {
   const eventId = input.eventId ?? EVENT_ID;
   const eventVersion = input.eventVersion ?? 4;
@@ -56,7 +57,8 @@ function state(input: {
       venueNote: input.venueNote ?? 'Hall A',
       dayStart: input.dayStart === undefined ? '09:00' : input.dayStart,
       dayEnd: input.dayEnd === undefined ? '18:00' : input.dayEnd,
-      slotMinutes: input.slotMinutes === undefined ? 30 : input.slotMinutes
+      slotMinutes: input.slotMinutes === undefined ? 30 : input.slotMinutes,
+      profileContentReview: input.profileContentReview ?? false
     })
   };
 }
@@ -88,6 +90,7 @@ describe('Event settings planning', () => {
       eventId: EVENT_ID,
       eventSetVersion: 7,
       eventVersion: 4,
+      profileContentReview: false,
       name: 'JooConf 2027',
       timezone: 'Asia/Singapore',
       startDate: '2027-03-10',
@@ -108,7 +111,8 @@ describe('Event settings planning', () => {
       venueNote: 'Hall A',
       dayStart: '09:00',
       dayEnd: null,
-      slotMinutes: 30
+      slotMinutes: 30,
+      profileContentReview: false
     })).toThrow(new TypeError('invalid_event_settings_companion'));
   });
 

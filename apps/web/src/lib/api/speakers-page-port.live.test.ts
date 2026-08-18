@@ -2,6 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import type {
 	EngagementHeadDto,
 	EngagementSnapshotDto,
+	SpeakerProfileFieldKey,
+	SpeakerProfileReviewQueueDto,
 	SpeakerLineupSnapshotDto
 } from '@jooevents/contracts';
 import type {
@@ -15,6 +17,7 @@ import {
 	SpeakersPageLiveError
 } from './speakers-page-port.live';
 import type { OrganizerSubmissionsPort } from './view-models/intake-submissions';
+import type { SpeakerProfilesLiveClient } from './operations/speaker-profiles-live';
 
 const id = (value: number) =>
 	`00000000-0000-4000-8000-${value.toString(16).padStart(12, '0')}`;
@@ -228,6 +231,55 @@ function composePort(overrides: Partial<Parameters<typeof createLiveSpeakersPage
 	});
 }
 
+function fakeProfiles(input: {
+	readonly reviewRequired: boolean;
+	readonly approved?: readonly SpeakerProfileFieldKey[];
+	readonly approvals?: unknown[];
+}): SpeakerProfilesLiveClient {
+	const profile = {
+		schemaVersion: 1 as const,
+		workspaceId,
+		personId,
+		version: 3,
+		headline: { revision: 2, digestSha256: digest('h'), value: 'Systems engineer' },
+		biography: { revision: 1, digestSha256: digest('i'), value: '' },
+		location: { revision: 1, digestSha256: digest('j'), value: 'Singapore' },
+		links: { revision: 1, digestSha256: digest('k'), value: [] },
+		updatedAt: '2026-08-18T00:00:00.000Z'
+	};
+	const policy = {
+		schemaVersion: 1 as const, workspaceId, eventId, eventVersion: 4,
+		reviewRequired: input.reviewRequired
+	};
+	const queue: SpeakerProfileReviewQueueDto = {
+		schemaVersion: 1,
+		policy,
+		profiles: input.reviewRequired ? [{
+			personId,
+			profileVersion: profile.version,
+			presentFields: ['headline', 'location'],
+			approvedFields: [...(input.approved ?? [])]
+		}] : []
+	};
+	return {
+		async read() { throw new Error('unexpected profile read'); },
+		async readReviewQueue() { return { kind: 'success', data: queue, correlationId }; },
+		async update() { throw new Error('unexpected profile update'); },
+		async approve(authorInput) {
+			input.approvals?.push(authorInput);
+			return {
+				kind: 'success', data: {
+					schemaVersion: 1, workspaceId, eventId, personId,
+					reviewPolicy: policy, profile, approvals: []
+				},
+				receipt: { id: id(410), operationName: 'speaker.profile.approve', operationVersion: 1 },
+				correlationId
+			};
+		},
+		async updateReviewPolicy() { throw new Error('unexpected policy update'); }
+	};
+}
+
 describe('live tuned Speakers page port', () => {
 	test('refuses to compose over a non-live source', () => {
 		expect(() =>
@@ -254,6 +306,40 @@ describe('live tuned Speakers page port', () => {
 			publiclyVisible: true,
 			contentApproved: false,
 			position: 0
+		}]);
+	});
+
+	test('derives public-content release from the event profile policy and exact approvals', async () => {
+		const automatic = composePort({ profiles: fakeProfiles({ reviewRequired: false }) });
+		expect((await automatic.speakers.list())[0]?.contentApproved).toBe(true);
+		expect((await automatic.lineup.list())[0]?.contentApproved).toBe(true);
+
+		const pending = composePort({
+			profiles: fakeProfiles({ reviewRequired: true, approved: ['headline'] })
+		});
+		expect((await pending.speakers.list())[0]?.contentApproved).toBe(false);
+
+		const reviewed = composePort({
+			profiles: fakeProfiles({ reviewRequired: true, approved: ['headline', 'location'] })
+		});
+		expect((await reviewed.speakers.list())[0]?.contentApproved).toBe(true);
+	});
+
+	test('exposes the one review queue and commits one exact person approval', async () => {
+		const approvals: unknown[] = [];
+		const port = composePort({
+			profiles: fakeProfiles({ reviewRequired: true, approved: [], approvals })
+		});
+		expect((await port.profileReview!.read()).profiles).toHaveLength(1);
+		expect(await port.profileReview!.approve({
+			personId,
+			expectedProfileVersion: 3,
+			fields: ['headline', 'location']
+		})).toEqual({ ok: true });
+		expect(approvals).toEqual([{
+			personId,
+			expectedProfileVersion: 3,
+			fields: ['headline', 'location']
 		}]);
 	});
 

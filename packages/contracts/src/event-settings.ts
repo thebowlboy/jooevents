@@ -186,6 +186,7 @@ export const eventSettingsSchema = z.strictObject({
   eventId: eventIdSchema,
   eventSetVersion: eventVersionSchema,
   eventVersion: eventVersionSchema,
+  profileContentReview: z.boolean(),
   ...settingsValueFields
 }).refine((settings) => settings.endDate >= settings.startDate, {
   path: ['endDate'],

@@ -14,6 +14,7 @@
 	import { applyParams, clearParams, param, paramIn } from '$lib/features/workspace/url-state.svelte';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
 	import SpeakerLineup from './SpeakerLineup.svelte';
+	import SpeakerProfileReviewQueue from './SpeakerProfileReviewQueue.svelte';
 	import { engagementStateBadge } from './engagement-vocabulary';
 	import { speakerRecordHref } from '$lib/api/speaker-record';
 	import SpeakerRecordPage from './SpeakerRecordPage.svelte';
@@ -435,6 +436,10 @@
 		Nothing reaches a public surface until a speaker is confirmed and their content is approved.
 	</p>
 </div>
+
+{#if port.profileReview && speakers}
+	<SpeakerProfileReviewQueue port={port.profileReview} {speakers} onchanged={load} />
+{/if}
 
 {#if actionError}<p class="roster__error" role="alert">{actionError}</p>{/if}
 

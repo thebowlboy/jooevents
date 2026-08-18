@@ -25,6 +25,7 @@ import {
   speakerLineupSnapshotReadResultSchema,
   speakerProfileApproveResultSchema,
   speakerProfileReadResultSchema,
+  speakerProfileReviewPolicyUpdateResultSchema,
   speakerProfileUpdateResultSchema,
   sessionSubmissionRouteOperationResultSchema,
   emailProviderReadinessReadOperationResultSchema,
@@ -1273,6 +1274,14 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['GET /api/events/current/speakers/profile']
       },
       {
+        name: 'speaker.profile.review_policy.update', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/speakers/profile-review-policy']
+      },
+      {
+        name: 'speaker.profile.review_queue.read', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/speakers/profile-review']
+      },
+      {
         name: 'speaker.profile.update', version: 1, effect: 'commit',
         bindings: ['POST /api/events/current/speakers/profile']
       },
@@ -1404,8 +1413,8 @@ describe('ephemeral live Foundation server composition', () => {
     expect(runtime.database.installedSchemaArtifacts).toEqual([]);
     expect(runtime.database.retainedBaseline).toMatchObject({
       status: 'current',
-	  coordinate: { schemaEpoch: 2, sequence: 16 },
-	  migrationId: 'e2_0016_session_participant_support',
+	  coordinate: { schemaEpoch: 2, sequence: 17 },
+	  migrationId: 'e2_0017_speaker_profile_review_policy',
       databaseClass: 'ephemeral'
     });
     expect(runtime.database.sqlite.query<{ readonly name: string }, []>(`
@@ -2696,6 +2705,7 @@ describe('ephemeral live Foundation server composition', () => {
         eventId,
         eventSetVersion: 2,
         eventVersion: 1,
+		profileContentReview: false,
         name: eventInput.name,
         timezone: eventInput.timezone,
         startDate: eventInput.startDate,
@@ -2833,6 +2843,7 @@ describe('ephemeral live Foundation server composition', () => {
         eventId,
         eventSetVersion: 2,
         eventVersion: 2,
+		profileContentReview: false,
         name: updateBody.name,
         timezone: updateBody.timezone,
         startDate: updateBody.startDate,
@@ -5664,7 +5675,7 @@ describe('ephemeral live Foundation server composition', () => {
     expect(count(runtime, 'event_spine_heads')).toBe(0);
   });
 
-  test('joins exact speaker profile edits and per-field approvals through direct audited execution', async () => {
+  test('joins profile review policy, exact edits, and per-field approvals through direct audited execution', async () => {
     const runtime = await createEphemeralLiveRuntime({ config });
     runtimes.push(runtime);
     const session = await createOwnerSession(runtime);
@@ -5679,6 +5690,19 @@ describe('ephemeral live Foundation server composition', () => {
       }]
     });
     if (!speaker) throw new Error('Seeded profile speaker missing.');
+
+    const settingsResponse = await runtime.app.request('/api/events/current/settings', {
+      headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+    });
+    const settings = currentEventSettingsReadResultSchema.parse(await settingsResponse.json());
+    if (settings.kind !== 'success') throw new Error('Event settings read failed.');
+    const reviewPolicy = speakerProfileReviewPolicyUpdateResultSchema.parse(await effect({
+      runtime, session, path: '/api/events/current/speakers/profile-review-policy',
+      key: 'profile-loop-review-policy',
+      body: { expectedEventVersion: settings.data.eventVersion, reviewRequired: true },
+      parse: (value) => value
+    }));
+    if (reviewPolicy.kind !== 'success') throw new Error('Speaker profile review policy update failed.');
 
     const read = async () => {
       const response = await runtime.app.request(
@@ -5766,7 +5790,7 @@ describe('ephemeral live Foundation server composition', () => {
       outcome: { kind: 'speaker.profile.changed', detail: { code: 'stale_profile' } }
     });
     expect(count(runtime, 'operation_log', "WHERE operation_name LIKE 'speaker.profile.%'"))
-      .toBe(3);
+      .toBe(4);
     expect(count(runtime, 'content_approvals')).toBe(4);
     expect(count(runtime, 'speaker_profile_field_revisions')).toBe(5);
   });
@@ -5960,20 +5984,6 @@ describe('ephemeral live Foundation server composition', () => {
       parse: (value) => value
     }));
     if (adaProfile.kind !== 'success') throw new Error('Publication profile create failed.');
-    const adaApproval = speakerProfileApproveResultSchema.parse(await effect({
-      runtime,
-      session,
-      path: '/api/events/current/speakers/profile/approve',
-      key: 'publication-loop-profile-approve',
-      body: {
-        personId: ada.personId,
-        expectedProfileVersion: 1,
-        fields: ['headline', 'biography', 'location', 'links']
-      },
-      parse: (value) => value
-    }));
-    if (adaApproval.kind !== 'success') throw new Error('Publication profile approval failed.');
-
     // Release 1: both confirmed speakers visible. The reviewed diff carries
     // the audited name declassifications the commit copies into public state.
     const publishOne = releaseReviewDraftOperationResultSchema.parse(await effect({
@@ -5996,10 +6006,10 @@ describe('ephemeral live Foundation server composition', () => {
       .toEqual(['Ada Alpha', 'Bram Beta']);
     expect(diffOne.speakerProfiles?.profiles).toEqual([{
       personId: ada.personId,
-      headline: adaApproval.data.profile!.headline,
-      biography: adaApproval.data.profile!.biography,
-      location: adaApproval.data.profile!.location,
-      links: adaApproval.data.profile!.links
+      headline: adaProfile.data.profile!.headline,
+      biography: adaProfile.data.profile!.biography,
+      location: adaProfile.data.profile!.location,
+      links: adaProfile.data.profile!.links
     }]);
     const releaseOneId = diffOne.after.releaseId;
     await publishReleaseDraft({
@@ -6108,11 +6118,12 @@ describe('ephemeral live Foundation server composition', () => {
       .toEqual(['Ada Alpha', 'Bram Beta']);
     expect(diffTwo.speakerProfiles?.profiles[0]).toMatchObject({
       personId: ada.personId,
-      biography: adaApproval.data.profile!.biography,
-      location: adaApproval.data.profile!.location,
-      links: adaApproval.data.profile!.links
+      biography: editedProfile.data.profile!.biography,
+      location: editedProfile.data.profile!.location,
+      links: editedProfile.data.profile!.links
     });
-    expect(diffTwo.speakerProfiles?.profiles[0]?.headline).toBeUndefined();
+    expect(diffTwo.speakerProfiles?.profiles[0]?.headline)
+      .toEqual(editedProfile.data.profile!.headline);
     await publishReleaseDraft({
       runtime, session, key: 'publication-loop-publish-2', draft: publishTwo
     });

@@ -168,6 +168,7 @@
 	const workspaceTeam = createWorkspaceTeamSettingsPort({
 		client: createWorkspaceTeamLiveClient({ manifest: initial.manifest })
 	});
+	const speakerProfilesClient = createSpeakerProfilesLiveClient({ manifest: initial.manifest });
 	// The Settings Email section's delivery seam: the canonical readiness read
 	// plus the owner-lane setup executors (readiness check, DNS diagnostics,
 	// setup guide, test send). Refusals stay typed; nothing here sends product mail.
@@ -177,6 +178,7 @@
 		team: workspaceTeam,
 		vocab: vocabulary,
 		fields,
+		profiles: speakerProfilesClient,
 		senderIdentity: createLiveSenderIdentitySettingsPort({
 			client: createWorkspaceSenderIdentityLiveClient({ manifest: initial.manifest })
 		}),
@@ -202,7 +204,6 @@
 	const sessionCatalog = createSessionCatalogLivePort({ manifest: initial.manifest });
 	const decisionsClient = createDecisionsLiveClient({ manifest: initial.manifest });
 	const engagementsClient = createEngagementsLiveClient({ manifest: initial.manifest });
-	const speakerProfilesClient = createSpeakerProfilesLiveClient({ manifest: initial.manifest });
 	const taskClient = createTasksLiveClient({ manifest: initial.manifest });
 	// Build the canonical roster before Schedule so the board's attribution
 	// doors consume the same people as the Speakers surface. Profile enrichment
@@ -219,6 +220,7 @@
 		triage,
 		contacts: intakeSubmissions,
 		tasks: taskClient,
+		profiles: speakerProfilesClient,
 		communications: {
 			thread(personId) {
 				if (communicationsPage === null) throw new Error('The Communications page is not ready.');

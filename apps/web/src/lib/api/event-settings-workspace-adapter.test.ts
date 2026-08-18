@@ -20,6 +20,7 @@ const current: EventSettingsView = Object.freeze({
 	eventId,
 	eventSetVersion: 3,
 	eventVersion: 4,
+	profileContentReview: false,
 	name: 'JooEvents Assembly',
 	timezone: 'Asia/Singapore',
 	startDate: '2027-03-18',
@@ -82,14 +83,15 @@ describe('source-neutral Event Settings Workspace adapter', () => {
 			client: liveClient({ reads: [readSuccess()] })
 		});
 		const settings = await api.get();
-		expect(settings).toEqual({
+			expect(settings).toEqual({
 			name: current.name,
 			dates: current.dates,
 			startDate: current.startDate,
 			endDate: current.endDate,
 			location: current.location,
-			timezone: current.timezone,
-			venueNote: current.venueNote,
+				timezone: current.timezone,
+				venueNote: current.venueNote,
+				profileContentReview: false,
 			dayStart: current.dayStart,
 			dayEnd: current.dayEnd,
 			slotMinutes: current.slotMinutes
@@ -142,6 +144,7 @@ describe('source-neutral Event Settings Workspace adapter', () => {
 			location: updated.location,
 			timezone: updated.timezone,
 			venueNote: updated.venueNote,
+			profileContentReview: false,
 			dayStart: updated.dayStart,
 			dayEnd: updated.dayEnd,
 			slotMinutes: updated.slotMinutes

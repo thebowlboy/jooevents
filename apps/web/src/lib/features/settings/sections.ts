@@ -47,6 +47,7 @@ export const settingsSections: readonly SettingsSection[] = Object.freeze([
 		 */
 		anchors: Object.freeze([
 			Object.freeze({ id: 'settings-program-basics', label: 'Program basics' }),
+			Object.freeze({ id: 'settings-speaker-profile-publishing', label: 'Profile publishing' }),
 			Object.freeze({ id: 'settings-speaker-fields', label: 'Speaker fields' })
 		])
 	}),

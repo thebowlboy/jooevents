@@ -403,8 +403,8 @@ export class FlowWorld implements J2FlowWorld {
         'SELECT count(*) AS count FROM events'
       ).get()?.count ?? -1;
       if (baseline.coordinate?.schemaEpoch !== 2
-          || baseline.coordinate.sequence !== 16
-          || baseline.migrationId !== 'e2_0016_session_participant_support'
+          || baseline.coordinate.sequence !== 17
+          || baseline.migrationId !== 'e2_0017_speaker_profile_review_policy'
           || runtime.database.installedSchemaArtifacts.length !== 0
           || operationCount !== 0 || eventCount !== 0) {
         runtime.close();

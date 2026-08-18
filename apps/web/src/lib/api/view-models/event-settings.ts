@@ -8,6 +8,7 @@ export interface EventSettingsView {
 	readonly eventId: string;
 	readonly eventSetVersion: number;
 	readonly eventVersion: number;
+	readonly profileContentReview: boolean;
 	readonly name: string;
 	readonly timezone: string;
 	readonly startDate: string;

@@ -17,6 +17,7 @@
 	import OnThisPageRail from './OnThisPageRail.svelte';
 	import ProgramBasicsPanel from './ProgramBasicsPanel.svelte';
 	import SpeakerFieldsSection from './SpeakerFieldsSection.svelte';
+	import SpeakerProfileReviewSection from './SpeakerProfileReviewSection.svelte';
 	import StartPanel from './StartPanel.svelte';
 	import TeamPanel from './TeamPanel.svelte';
 	import {
@@ -129,6 +130,14 @@
 			     workspace without an event resolves to the start panel alone, this
 			     section included. -->
 			{#if loaded ? settings !== null : expectEvent}
+				{#if loaded && settings && port.profileReview}
+					<SpeakerProfileReviewSection
+						port={port.profileReview}
+						reviewRequired={settings.profileContentReview ?? false}
+						onchanged={(reviewRequired) => {
+							if (settings) settings = { ...settings, profileContentReview: reviewRequired };
+						}} />
+				{/if}
 				<SpeakerFieldsSection
 					id="settings-speaker-fields"
 					fields={port.fields}

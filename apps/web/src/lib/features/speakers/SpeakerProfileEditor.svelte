@@ -127,11 +127,15 @@
 
 <div class="profile-editor">
 	<div class="profile-editor__intro">
-		<p>
-			These details follow {personName} across this workspace. Approval is separate for each
-			field and applies only to this event.
-		</p>
-		{#if dirty && view.approvals.length > 0}
+		{#if view.reviewPolicy.reviewRequired}
+			<p>
+				These details follow {personName} across this workspace. Approval is separate for each
+				field and applies only to this event.
+			</p>
+		{:else}
+			<p>These details follow {personName} across this workspace and publish automatically when saved.</p>
+		{/if}
+		{#if view.reviewPolicy.reviewRequired && dirty && view.approvals.length > 0}
 			<p class="profile-editor__notice">
 				Save before approving. A changed field loses its current approval; unchanged fields keep theirs.
 			</p>
@@ -142,12 +146,14 @@
 		<div class="profile-field">
 			<div class="profile-field__heading">
 				<label class="ui-label" for="speaker-profile-headline">Headline</label>
-				{#if approved.has('headline')}
-					<span class="ui-badge ui-badge--success">Approved for this event</span>
-				{:else}
-					<button type="button" class="ui-button ui-button--soft ui-button--sm"
-						disabled={!current || dirty || busy !== null || !valuePresent('headline')}
-						onclick={() => void approve('headline')}>Approve headline</button>
+				{#if view.reviewPolicy.reviewRequired}
+					{#if approved.has('headline')}
+						<span class="ui-badge ui-badge--success">Approved for this event</span>
+					{:else}
+						<button type="button" class="ui-button ui-button--soft ui-button--sm"
+							disabled={!current || dirty || busy !== null || !valuePresent('headline')}
+							onclick={() => void approve('headline')}>Approve headline</button>
+					{/if}
 				{/if}
 			</div>
 			<input id="speaker-profile-headline" class="ui-control" type="text" maxlength="300"
@@ -157,12 +163,14 @@
 		<div class="profile-field">
 			<div class="profile-field__heading">
 				<label class="ui-label" for="speaker-profile-biography">Biography</label>
-				{#if approved.has('biography')}
-					<span class="ui-badge ui-badge--success">Approved for this event</span>
-				{:else}
-					<button type="button" class="ui-button ui-button--soft ui-button--sm"
-						disabled={!current || dirty || busy !== null || !valuePresent('biography')}
-						onclick={() => void approve('biography')}>Approve biography</button>
+				{#if view.reviewPolicy.reviewRequired}
+					{#if approved.has('biography')}
+						<span class="ui-badge ui-badge--success">Approved for this event</span>
+					{:else}
+						<button type="button" class="ui-button ui-button--soft ui-button--sm"
+							disabled={!current || dirty || busy !== null || !valuePresent('biography')}
+							onclick={() => void approve('biography')}>Approve biography</button>
+					{/if}
 				{/if}
 			</div>
 			<textarea id="speaker-profile-biography" class="ui-control" rows="6" maxlength="8000"
@@ -172,12 +180,14 @@
 		<div class="profile-field">
 			<div class="profile-field__heading">
 				<label class="ui-label" for="speaker-profile-location">Location</label>
-				{#if approved.has('location')}
-					<span class="ui-badge ui-badge--success">Approved for this event</span>
-				{:else}
-					<button type="button" class="ui-button ui-button--soft ui-button--sm"
-						disabled={!current || dirty || busy !== null || !valuePresent('location')}
-						onclick={() => void approve('location')}>Approve location</button>
+				{#if view.reviewPolicy.reviewRequired}
+					{#if approved.has('location')}
+						<span class="ui-badge ui-badge--success">Approved for this event</span>
+					{:else}
+						<button type="button" class="ui-button ui-button--soft ui-button--sm"
+							disabled={!current || dirty || busy !== null || !valuePresent('location')}
+							onclick={() => void approve('location')}>Approve location</button>
+					{/if}
 				{/if}
 			</div>
 			<input id="speaker-profile-location" class="ui-control" type="text" maxlength="300"
@@ -187,12 +197,14 @@
 		<fieldset class="profile-links">
 			<div class="profile-field__heading">
 				<legend class="ui-label">Links</legend>
-				{#if approved.has('links')}
-					<span class="ui-badge ui-badge--success">Approved for this event</span>
-				{:else}
-					<button type="button" class="ui-button ui-button--soft ui-button--sm"
-						disabled={!current || dirty || busy !== null || !valuePresent('links')}
-						onclick={() => void approve('links')}>Approve links</button>
+				{#if view.reviewPolicy.reviewRequired}
+					{#if approved.has('links')}
+						<span class="ui-badge ui-badge--success">Approved for this event</span>
+					{:else}
+						<button type="button" class="ui-button ui-button--soft ui-button--sm"
+							disabled={!current || dirty || busy !== null || !valuePresent('links')}
+							onclick={() => void approve('links')}>Approve links</button>
+					{/if}
 				{/if}
 			</div>
 			{#if links.length === 0}

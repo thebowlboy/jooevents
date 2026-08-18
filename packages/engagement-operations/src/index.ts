@@ -5,3 +5,4 @@ export * from './participant-portal-module';
 export * from './person-history-module';
 export * from './profile-module';
 export * from './profile-direct-module';
+export * from './profile-review-queue-module';

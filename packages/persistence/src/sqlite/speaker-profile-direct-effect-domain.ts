@@ -9,18 +9,22 @@ import {
 import {
   speakerProfileApproveInputSchema,
   speakerProfileApprovePlanSchema,
+  speakerProfileReviewPolicyUpdateInputSchema,
+  speakerProfileReviewPolicyUpdatePlanSchema,
   speakerProfileUpdateInputSchema,
   speakerProfileUpdatePlanSchema
 } from '@jooevents/contracts';
 import {
   SpeakerProfilePlanningError,
   planSpeakerProfileApproval,
+  planSpeakerProfileReviewPolicyUpdate,
   planSpeakerProfileUpdate
 } from '@jooevents/engagement';
 import {
   SPEAKER_PROFILE_APPROVE_OPERATION,
   SPEAKER_PROFILE_DIRECT_HANDLER_CAPABILITY,
   SPEAKER_PROFILE_MANAGE_ACCESS_POLICY,
+  SPEAKER_PROFILE_REVIEW_POLICY_UPDATE_OPERATION,
   SPEAKER_PROFILE_UPDATE_OPERATION,
   sealSpeakerProfileDirectPreparation,
   speakerProfileDirectContributionSchema
@@ -48,10 +52,15 @@ function exact(context: EffectInvocationContext): boolean {
       subject.kind === 'event' && subject.id === context.scope.eventId);
 }
 
-function supportedOperation(context: EffectInvocationContext): 'update' | 'approve' | undefined {
+function supportedOperation(
+  context: EffectInvocationContext
+): 'update' | 'approve' | 'review_policy_update' | undefined {
   if (context.operation.version !== 1) return undefined;
   if (context.operation.name === SPEAKER_PROFILE_UPDATE_OPERATION.name) return 'update';
   if (context.operation.name === SPEAKER_PROFILE_APPROVE_OPERATION.name) return 'approve';
+  if (context.operation.name === SPEAKER_PROFILE_REVIEW_POLICY_UPDATE_OPERATION.name) {
+    return 'review_policy_update';
+  }
   return undefined;
 }
 
@@ -121,7 +130,14 @@ export class SQLiteSpeakerProfileDirectEffectDomainAdapter implements SQLiteEffe
           if (operation === 'update') {
             const authorInput = speakerProfileUpdateInputSchema.parse(businessInput);
             const plan = planSpeakerProfileUpdate({
-              planningInput: { scope, actorUserId, occurredAt, authorInput }, profiles
+              planningInput: {
+                scope, actorUserId, occurredAt, authorInput,
+                autoApprovalIds: [
+                  this.input.newApprovalId(), this.input.newApprovalId(),
+                  this.input.newApprovalId(), this.input.newApprovalId()
+                ]
+              },
+              profiles
             });
             return speakerProfileDirectContributionSchema.parse({
               result: { kind: 'success', data: plan.after },
@@ -129,17 +145,35 @@ export class SQLiteSpeakerProfileDirectEffectDomainAdapter implements SQLiteEffe
               effectContributions: []
             });
           }
-          const authorInput = speakerProfileApproveInputSchema.parse(businessInput);
-          const plan = planSpeakerProfileApproval({
+          if (operation === 'approve') {
+            const authorInput = speakerProfileApproveInputSchema.parse(businessInput);
+            const plan = planSpeakerProfileApproval({
+              planningInput: {
+                scope, actorUserId, occurredAt, authorInput,
+                approvalIds: authorInput.fields.map(() => this.input.newApprovalId())
+              },
+              profiles
+            });
+            return speakerProfileDirectContributionSchema.parse({
+              result: { kind: 'success', data: plan.after },
+              domain: { kind: 'speaker_profile_approve_direct', plan },
+              effectContributions: []
+            });
+          }
+          const authorInput = speakerProfileReviewPolicyUpdateInputSchema.parse(businessInput);
+          const candidates = authorInput.reviewRequired
+            ? []
+            : profiles.readPolicyApprovalCandidates(scope);
+          const plan = planSpeakerProfileReviewPolicyUpdate({
             planningInput: {
               scope, actorUserId, occurredAt, authorInput,
-              approvalIds: authorInput.fields.map(() => this.input.newApprovalId())
+              approvalIds: candidates.map(() => this.input.newApprovalId())
             },
             profiles
           });
           return speakerProfileDirectContributionSchema.parse({
             result: { kind: 'success', data: plan.after },
-            domain: { kind: 'speaker_profile_approve_direct', plan },
+            domain: { kind: 'speaker_profile_review_policy_update_direct', plan },
             effectContributions: []
           });
         } catch (error) {
@@ -170,6 +204,12 @@ export class SQLiteSpeakerProfileDirectEffectDomainAdapter implements SQLiteEffe
     }
     if (candidate.kind === 'speaker_profile_approve_direct') {
       repository.applySpeakerProfileApprovePlan(speakerProfileApprovePlanSchema.parse(candidate.plan));
+      return;
+    }
+    if (candidate.kind === 'speaker_profile_review_policy_update_direct') {
+      repository.applyReviewPolicyUpdatePlan(
+        speakerProfileReviewPolicyUpdatePlanSchema.parse(candidate.plan)
+      );
       return;
     }
     throw new TypeError('speaker_profile_direct_contribution_invalid');

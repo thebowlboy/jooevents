@@ -1,5 +1,7 @@
 import type {
 	EngagementHeadDto,
+	SpeakerProfileApproveInput,
+	SpeakerProfileReviewQueueDto,
 	StructuredOutcome
 } from '@jooevents/contracts';
 import type { SafeApiError } from './client';
@@ -28,6 +30,10 @@ import type {
 import type { OrganizerSubmissionsPort } from './view-models/intake-submissions';
 import type { TaskLiveClient, TaskLiveResult } from './operations/tasks-live';
 import { taskAssignmentView, taskDefinitionView } from './mappers/tasks';
+import type {
+	SpeakerProfileReviewQueueLiveReadResult,
+	SpeakerProfilesLiveClient
+} from './operations/speaker-profiles-live';
 
 /** Failure translated at the live Speakers boundary into reviewed UI copy. */
 type AdapterFailure = Readonly<{ code: string; reason: string }>;
@@ -142,6 +148,20 @@ function defaultIdempotencyKey(): string {
 	return `je.speakers.page.action.${globalThis.crypto.randomUUID()}`;
 }
 
+/** Auto mode releases every profile edit. Review mode releases only a profile
+ * whose present current fields all have exact human approval evidence. */
+function profileContentApproved(
+	queue: SpeakerProfileReviewQueueDto | null,
+	personId: string
+): boolean {
+	if (queue === null) return false;
+	if (!queue.policy.reviewRequired) return true;
+	const profile = queue.profiles.find((entry) => entry.personId === personId);
+	if (!profile || profile.presentFields.length === 0) return false;
+	const approved = new Set(profile.approvedFields);
+	return profile.presentFields.every((field) => approved.has(field));
+}
+
 /**
  * Live tuned Speakers page port over the canonical engagement vertical: the
  * whole-event engagement snapshot joined with the Session catalog (session
@@ -158,8 +178,8 @@ function defaultIdempotencyKey(): string {
  * task counts and task lists are projections of the same canonical Task board
  * used by the Tasks area; communication threads are null (nothing has ever been
  * sent); category, order, and public-lineup visibility come from the canonical
- * person-level lineup; and `contentApproved` is false because no
- * content-approval record exists to read.
+ * person-level lineup; and `contentApproved` follows the event's canonical
+ * profile policy plus exact current-field approval evidence.
  */
 export function createLiveSpeakersPagePort(input: {
 	readonly engagements: EngagementsLiveClient;
@@ -170,6 +190,7 @@ export function createLiveSpeakersPagePort(input: {
 	readonly communications?: {
 		thread(personId: string): Promise<CommunicationThread | null>;
 	};
+	readonly profiles?: SpeakerProfilesLiveClient;
 	readonly newIdempotencyKey?: () => string;
 }): SpeakersPagePort {
 	if (input.sessions.source.kind !== 'live' || input.contacts.source.kind !== 'live') {
@@ -197,6 +218,18 @@ export function createLiveSpeakersPagePort(input: {
 		const result = await input.engagements.readLineup();
 		if (result.kind !== 'success') {
 			throw new SpeakersPageLiveError(readFailure(result, 'public lineup'));
+		}
+		return result.data;
+	}
+
+	async function readProfileReview(): Promise<SpeakerProfileReviewQueueDto | null> {
+		if (!input.profiles) return null;
+		const result = await input.profiles.readReviewQueue();
+		if (result.kind !== 'success') {
+			throw new SpeakersPageLiveError(readFailure(
+				result as Exclude<SpeakerProfileReviewQueueLiveReadResult, { readonly kind: 'success' }>,
+				'speaker profile review'
+			));
 		}
 		return result.data;
 	}
@@ -254,7 +287,7 @@ export function createLiveSpeakersPagePort(input: {
 	}
 
 	async function listRows(): Promise<SpeakerRow[]> {
-		const [snapshot, catalog, lineup, taskBoard] = await Promise.all([
+		const [snapshot, catalog, lineup, taskBoard, profileReview] = await Promise.all([
 			readSnapshot(),
 			readCatalog(),
 			readLineup(),
@@ -263,7 +296,8 @@ export function createLiveSpeakersPagePort(input: {
 					throw new SpeakersPageLiveError(readFailure(result, 'task board'));
 				}
 				return result.data;
-			}) ?? Promise.resolve(null)
+			}) ?? Promise.resolve(null),
+			readProfileReview()
 		]);
 		const submissionIds = [...new Set(
 			snapshot.engagements.flatMap((head) => head.submissionId === null ? [] : [head.submissionId])
@@ -299,9 +333,7 @@ export function createLiveSpeakersPagePort(input: {
 				// this person; an engagement whose person left every roster shows
 				// hidden, which is what the public composition would render.
 				publiclyVisible: lineupByPerson.get(head.personId)?.publiclyVisible ?? false,
-				// No content-approval record exists canonically, so nothing can
-				// have been approved.
-				contentApproved: false,
+				contentApproved: profileContentApproved(profileReview, head.personId),
 				...(head.cancellationRequest?.note != null
 					? { note: head.cancellationRequest.note }
 					: {})
@@ -327,8 +359,8 @@ export function createLiveSpeakersPagePort(input: {
 	}
 
 	async function listLineupRows(): Promise<SpeakerLineupRow[]> {
-		const [lineup, snapshot, catalog] = await Promise.all([
-			readLineup(), readSnapshot(), readCatalog()
+		const [lineup, snapshot, catalog, profileReview] = await Promise.all([
+			readLineup(), readSnapshot(), readCatalog(), readProfileReview()
 		]);
 		const submissionIds = [...new Set(
 			snapshot.engagements.flatMap((head) => head.submissionId === null ? [] : [head.submissionId])
@@ -363,7 +395,7 @@ export function createLiveSpeakersPagePort(input: {
 				state,
 				sessions: sessionRows,
 				publiclyVisible: entry.publiclyVisible,
-				contentApproved: false,
+				contentApproved: profileContentApproved(profileReview, entry.personId),
 				position: entry.position,
 				...(entry.categoryId === null ? {} : { categoryId: entry.categoryId })
 			};
@@ -418,6 +450,31 @@ export function createLiveSpeakersPagePort(input: {
 	}
 
 	return Object.freeze({
+		...(input.profiles === undefined ? {} : {
+			profileReview: Object.freeze({
+				async read(): Promise<SpeakerProfileReviewQueueDto> {
+					return (await readProfileReview())!;
+				},
+				async approve(authorInput: SpeakerProfileApproveInput): Promise<MutationOutcome> {
+					const result = await input.profiles!.approve(
+						authorInput,
+						newIdempotencyKey()
+					);
+					return result.kind === 'success'
+						? { ok: true }
+						: {
+							ok: false,
+							reason: result.kind === 'outcome'
+								? outcomeCopy(result.outcome, 'speaker profile', 'change')
+								: result.kind === 'unavailable'
+									? 'Speaker profile approval is not available in this workspace.'
+									: result.error.retryable
+										? 'Speaker profile approval could not be reached. Try again.'
+										: 'This speaker profile approval is not valid.'
+						};
+				}
+			})
+		}),
 		speakers: Object.freeze({
 			list: listRows,
 			recordConfirmation: (id: string) => respond(id, 'record_confirmation'),

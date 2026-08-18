@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import {
   planSpeakerProfileApproval,
+  planSpeakerProfileReviewPolicyUpdate,
   planSpeakerProfileUpdate
 } from '@jooevents/engagement';
 import { openSQLite, type OpenSQLiteResult } from './database';
@@ -17,7 +18,7 @@ const personId = id(4);
 const scope = { workspaceId, eventId };
 const opened: OpenSQLiteResult[] = [];
 
-function fixture() {
+function fixture(reviewRequired = true) {
   const database = openSQLite(':memory:');
   opened.push(database);
   const sqlite = database.sqlite;
@@ -42,6 +43,14 @@ function fixture() {
   `).run(workspaceId, eventId, userId, nowMs, 'a'.repeat(64));
   sqlite.query(`INSERT INTO event_spine_scope_roots(workspace_id,event_id) VALUES (?,?)`)
     .run(workspaceId, eventId);
+  sqlite.query(`UPDATE event_spine_workspace_sets SET current_event_id = ? WHERE workspace_id = ?`)
+    .run(eventId, workspaceId);
+  sqlite.query(`
+    INSERT INTO event_settings_companions(
+      workspace_id,event_id,event_version,location,venue_note,
+      day_start,day_end,slot_minutes,profile_content_review
+    ) VALUES (?,?,1,'','',NULL,NULL,NULL,?)
+  `).run(workspaceId, eventId, reviewRequired ? 1 : 0);
   sqlite.query(`
     INSERT INTO speaker_lineup_entries(
       workspace_id,event_id,person_id,position,category_id,publicly_visible,version
@@ -58,6 +67,7 @@ function update(
   const plan = planSpeakerProfileUpdate({
     planningInput: {
       scope, actorUserId: userId, occurredAt,
+      autoApprovalIds: [id(100), id(101), id(102), id(103)],
       authorInput: { personId, ...input }
     },
     profiles: fx.profiles
@@ -116,6 +126,7 @@ describe('SQLite speaker profile repository', () => {
     const plan = planSpeakerProfileUpdate({
       planningInput: {
         scope, actorUserId: userId, occurredAt: '2026-08-18T07:00:00.000Z',
+        autoApprovalIds: [id(100), id(101), id(102), id(103)],
         authorInput: {
           personId, expectedProfileVersion: null, patch: { biography: 'Biography' }
         }
@@ -140,5 +151,80 @@ describe('SQLite speaker profile repository', () => {
     expect(fx.profiles.hasEventPersonRelationship({
       workspaceId, eventId: id(99), personId
     })).toBe(false);
+  });
+
+  test('mints honest policy evidence with an automatic profile edit', () => {
+    const fx = fixture(false);
+    const saved = update(fx, {
+      expectedProfileVersion: null,
+      patch: { headline: 'Engineer', location: 'Singapore' }
+    }, '2026-08-18T07:00:00.000Z').saved;
+    expect(saved.reviewPolicy.reviewRequired).toBe(false);
+    expect(saved.approvals.map((entry) => [entry.field, entry.actor])).toEqual([
+      ['headline', {
+        kind: 'policy', policyKey: 'profile_content_review', policyVersion: 1,
+        initiatedByUserId: userId
+      }],
+      ['location', {
+        kind: 'policy', policyKey: 'profile_content_review', policyVersion: 1,
+        initiatedByUserId: userId
+      }]
+    ]);
+  });
+
+  test('switches review policy atomically, backfills exact policy evidence, and exposes all manual-mode profiles', () => {
+    const fx = fixture(true);
+    update(fx, {
+      expectedProfileVersion: null,
+      patch: { headline: 'Engineer', location: 'Singapore' }
+    }, '2026-08-18T07:00:00.000Z');
+    expect(fx.profiles.readReviewQueue(scope).profiles).toHaveLength(1);
+
+    const candidates = fx.profiles.readPolicyApprovalCandidates(scope);
+    const automatic = planSpeakerProfileReviewPolicyUpdate({
+      planningInput: {
+        scope,
+        actorUserId: userId,
+        occurredAt: '2026-08-18T07:05:00.000Z',
+        approvalIds: candidates.map((_, index) => id(200 + index)),
+        authorInput: { expectedEventVersion: 1, reviewRequired: false }
+      },
+      profiles: fx.profiles
+    });
+    fx.sqlite.exec('BEGIN IMMEDIATE');
+    fx.profiles.applyReviewPolicyUpdatePlan(automatic);
+    fx.sqlite.exec('COMMIT');
+
+    expect(fx.profiles.readReviewQueue(scope)).toMatchObject({
+      policy: { eventVersion: 2, reviewRequired: false },
+      profiles: []
+    });
+    expect(fx.profiles.readSpeakerProfileView({ ...scope, personId }).approvals).toHaveLength(4);
+    expect(fx.sqlite.query<{ count: number }, []>(`
+      SELECT count(*) AS count FROM content_approvals
+       WHERE actor_kind = 'policy' AND approved_by_user_id IS NULL
+    `).get()?.count).toBe(4);
+
+    const manual = planSpeakerProfileReviewPolicyUpdate({
+      planningInput: {
+        scope,
+        actorUserId: userId,
+        occurredAt: '2026-08-18T07:10:00.000Z',
+        approvalIds: [],
+        authorInput: { expectedEventVersion: 2, reviewRequired: true }
+      },
+      profiles: fx.profiles
+    });
+    fx.sqlite.exec('BEGIN IMMEDIATE');
+    fx.profiles.applyReviewPolicyUpdatePlan(manual);
+    fx.sqlite.exec('COMMIT');
+    const queue = fx.profiles.readReviewQueue(scope);
+    expect(queue.policy).toMatchObject({ eventVersion: 3, reviewRequired: true });
+    expect(queue.profiles).toHaveLength(1);
+    expect(queue.profiles[0]).toMatchObject({
+      personId, profileVersion: 1,
+      presentFields: ['headline', 'location'], approvedFields: []
+    });
+    expect(fx.sqlite.query('PRAGMA foreign_key_check').all()).toEqual([]);
   });
 });

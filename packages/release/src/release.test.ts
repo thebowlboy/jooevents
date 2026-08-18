@@ -222,6 +222,9 @@ function profileView(input: {
     schemaVersion: 1,
     ...scope,
     personId: personA,
+    reviewPolicy: {
+      schemaVersion: 1, ...scope, eventVersion: 1, reviewRequired: true
+    },
     profile: {
       schemaVersion: 1,
       workspaceId: scope.workspaceId,
@@ -237,7 +240,7 @@ function profileView(input: {
       field,
       fieldRevision: fields[field].revision,
       fieldDigestSha256: fields[field].digestSha256,
-      approvedByUserId: userId,
+      actor: { kind: 'user' as const, userId },
       approvedAt: now
     }))
   };
@@ -1196,7 +1199,13 @@ describe('served public projections', () => {
       ...port,
       readReleaseSpeakerProfileView: (_scope, personId) => personId === personA
         ? approved
-        : { schemaVersion: 1, ...scope, personId, profile: null, approvals: [] }
+        : {
+            schemaVersion: 1, ...scope, personId,
+            reviewPolicy: {
+              schemaVersion: 1, ...scope, eventVersion: 1, reviewRequired: true
+            },
+            profile: null, approvals: []
+          }
     }, releaseId1, null);
 
     expect(release.speakerProfiles?.profiles).toEqual([{
@@ -1240,7 +1249,13 @@ describe('served public projections', () => {
       ...port,
       readReleaseSpeakerProfileView: (_scope, personId) => personId === personA
         ? currentProfile
-        : { schemaVersion: 1, ...scope, personId, profile: null, approvals: [] }
+        : {
+            schemaVersion: 1, ...scope, personId,
+            reviewPolicy: {
+              schemaVersion: 1, ...scope, eventVersion: 1, reviewRequired: true
+            },
+            profile: null, approvals: []
+          }
     };
     const first = publishedRelease(state, profilePort, releaseId1, null);
     expect(projectServedPublicRoster(first).speakers[0]!.headline).toBe('Computing pioneer');
