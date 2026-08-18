@@ -17,6 +17,8 @@ import {
 } from '@jooevents/contracts/workspace-overview';
 import { OPERATION_SURFACES, parseWorkspaceId, type WorkspaceId } from '@jooevents/kernel';
 import { SQLiteEventSpineRepository } from './event-spine';
+import { SQLiteCommunicationDeliveryObservationRepository }
+  from './communications/delivery-observations';
 
 export type SQLiteWorkspaceOverviewErrorCode =
   | 'invalid_configuration'
@@ -46,12 +48,16 @@ const REQUIRED_TABLES = Object.freeze([
   'review_rounds',
   'review_assignments',
   'review_heads',
+  'review_assignment_vacancy_resolutions',
   'decision_heads',
   'engagement_heads',
+  'task_assignments',
   'sessions',
   'schedule_occurrences',
   'communication_message_releases',
-  'communication_outbound_delivery_heads'
+  'communication_outbound_delivery_heads',
+  'communication_outbound_delivery_attempts',
+  'communication_delivery_observations'
 ]);
 const EVENT_REQUIRED_AREAS = new Set([
   'submissions', 'review', 'decisions', 'speakers', 'reviewers', 'tasks', 'schedule',
@@ -75,6 +81,14 @@ interface DecisionCountRow { readonly decided: number; readonly submissions: num
 interface EngagementCountRow { readonly total: number; readonly confirmed: number; }
 interface SessionCountRow { readonly total: number; readonly placed: number; }
 interface CommunicationCountRow { readonly recipients: number; readonly sent: number; }
+interface AttentionCountRow {
+  readonly results_not_sent: number;
+  readonly overdue_speaker_tasks: number;
+  readonly uncovered_reviews: number;
+  readonly sessions_awaiting_placement: number;
+  readonly sessions_missing_speakers: number;
+}
+interface DeliveryIdRow { readonly delivery_id: string; readonly state: string; }
 interface HistoryRow {
   readonly id: string;
   readonly domain: WorkspaceOverviewHistoryDomain;
@@ -259,6 +273,7 @@ export class SQLiteWorkspaceOverviewProjection {
     readonly sqlite: Database;
     readonly areaCatalog: WorkspaceOverviewAreaCatalog;
     readonly historyLimit?: number;
+    readonly now?: () => string;
   }) {
     try { this.#catalog = deepFreeze(workspaceOverviewAreaCatalogSchema.parse(input.areaCatalog)); }
     catch (cause) { throw new SQLiteWorkspaceOverviewError('invalid_configuration', { cause }); }
@@ -293,7 +308,7 @@ export class SQLiteWorkspaceOverviewProjection {
       engagements: { kind: 'unavailable' as const, reason: 'event_required' as const },
       sessions: { kind: 'unavailable' as const, reason: 'event_required' as const },
       communications: { kind: 'unavailable' as const, reason: 'event_required' as const }
-    } : this.#readMetrics(workspaceId, eventId);
+    } : this.#readMetrics(workspaceId, eventId, this.input.now?.() ?? new Date().toISOString());
     const rows = this.input.sqlite.query<HistoryRow,
       [WorkspaceId, string | null, string | null, string | null, string | null]>(HISTORY_SQL)
       .all(workspaceId, eventId, eventId, eventId, eventId);
@@ -307,7 +322,7 @@ export class SQLiteWorkspaceOverviewProjection {
     }
   }
 
-  #readMetrics(workspaceId: WorkspaceId, eventId: string) {
+  #readMetrics(workspaceId: WorkspaceId, eventId: string, now: string) {
     const forms = statusCounts(this.input.sqlite.query<StatusCountRow, [WorkspaceId, string]>(`
       SELECT COUNT(*) AS total, COALESCE(SUM(status = 'draft'), 0) AS draft,
              COALESCE(SUM(status = 'open'), 0) AS open,
@@ -426,6 +441,101 @@ export class SQLiteWorkspaceOverviewProjection {
       'recipients',
       'sent'
     );
+    const attention = this.input.sqlite.query<AttentionCountRow,
+      [WorkspaceId, string, WorkspaceId, string, string, WorkspaceId, string,
+       WorkspaceId, string, WorkspaceId, string, WorkspaceId, string]>(`
+      SELECT
+        (SELECT COUNT(*)
+           FROM decision_heads AS decision
+          WHERE decision.workspace_id = ? AND decision.event_id = ?
+            AND decision.state IN ('accepted', 'declined')
+            AND NOT EXISTS (
+              SELECT 1
+                FROM communication_message_releases AS release
+                JOIN communication_outbound_delivery_heads AS delivery
+                  ON delivery.workspace_id = release.workspace_id
+                 AND delivery.event_id = release.event_id
+                 AND delivery.release_id = release.release_id
+               WHERE release.workspace_id = decision.workspace_id
+                 AND release.event_id = decision.event_id
+                 AND release.recipient_ref_id = decision.submission_id
+                 AND release.purpose_key = 'decision_notification'
+                 AND delivery.state = 'accepted'
+                 AND release.created_at >= strftime(
+                   '%Y-%m-%dT%H:%M:%fZ', decision.decided_at_ms / 1000.0, 'unixepoch'
+                 )
+                 AND delivery.updated_at_ms >= decision.decided_at_ms
+            )) AS results_not_sent,
+        (SELECT COUNT(*)
+           FROM task_assignments AS assignment
+          WHERE assignment.workspace_id = ? AND assignment.event_id = ?
+            AND assignment.state IN ('pending', 'received_pending_check')
+            AND COALESCE(
+              json_extract(assignment.assignment_json, '$.deadlineOverride.reference.effectiveAt'),
+              json_extract(assignment.assignment_json, '$.deadline.reference.effectiveAt')
+            ) < ?) AS overdue_speaker_tasks,
+        (SELECT COUNT(*)
+           FROM review_assignments AS assignment
+           JOIN review_rounds AS round
+             ON round.workspace_id = assignment.workspace_id
+            AND round.event_id = assignment.event_id
+            AND round.id = assignment.round_id
+          WHERE assignment.workspace_id = ? AND assignment.event_id = ?
+            AND assignment.state = 'stepped_back'
+            AND round.state <> 'discarded'
+            AND NOT EXISTS (
+              SELECT 1 FROM review_assignment_vacancy_resolutions AS resolution
+               WHERE resolution.workspace_id = assignment.workspace_id
+                 AND resolution.event_id = assignment.event_id
+                 AND resolution.vacated_assignment_id = assignment.id
+            )) AS uncovered_reviews,
+        ((SELECT COUNT(*) FROM sessions
+           WHERE workspace_id = ? AND event_id = ?)
+          - (SELECT COUNT(DISTINCT session_id) FROM schedule_occurrences
+              WHERE workspace_id = ? AND event_id = ?)) AS sessions_awaiting_placement,
+        (SELECT COUNT(*) FROM sessions
+          WHERE workspace_id = ? AND event_id = ?
+            AND json_array_length(roster_json, '$.participants') = 0) AS sessions_missing_speakers
+    `).get(
+      workspaceId, eventId,
+      workspaceId, eventId, now,
+      workspaceId, eventId,
+      workspaceId, eventId, workspaceId, eventId,
+      workspaceId, eventId
+    );
+    if (!attention) throw new SQLiteWorkspaceOverviewError('count_evidence_corrupt');
+    const possibleFailures = this.input.sqlite.query<DeliveryIdRow, [WorkspaceId, string]>(`
+      SELECT delivery_id, state
+        FROM communication_outbound_delivery_heads
+       WHERE workspace_id = ? AND event_id = ?
+         AND (
+           state IN ('known_rejected_terminal', 'known_rejected_safe_retryable')
+           OR EXISTS (
+             SELECT 1 FROM communication_delivery_observations AS observation
+              WHERE observation.delivery_id = communication_outbound_delivery_heads.delivery_id
+                AND observation.observation_kind IN ('permanent_bounce', 'delivery_failed')
+           )
+           OR EXISTS (
+             SELECT 1
+               FROM communication_outbound_delivery_attempts AS attempt,
+                    json_each(attempt.safe_evidence_json, '$.registeredFacts') AS fact
+              WHERE attempt.delivery_id = communication_outbound_delivery_heads.delivery_id
+                AND json_extract(fact.value, '$.factKey') = 'cloudflare.observation'
+                AND json_extract(fact.value, '$.valueKind') = 'enum'
+                AND json_extract(fact.value, '$.enumValue') IN (
+                  'accepted_permanent_bounce', 'delivery_failed'
+                )
+           )
+         )
+    `).all(workspaceId, eventId);
+    const observations = new SQLiteCommunicationDeliveryObservationRepository(this.input.sqlite);
+    const failedDeliveries = possibleFailures.filter((delivery) => {
+      const disposition = observations.currentDisposition(delivery.delivery_id)?.kind;
+      return delivery.state === 'known_rejected_terminal'
+        || delivery.state === 'known_rejected_safe_retryable'
+        || disposition === 'permanent_bounce'
+        || disposition === 'delivery_failed';
+    }).length;
     return {
       forms: { kind: 'exact' as const, ...forms },
       submissions: { kind: 'exact' as const, total: safeCount(submissions.total) },
@@ -441,7 +551,16 @@ export class SQLiteWorkspaceOverviewProjection {
       },
       engagements: { kind: 'exact' as const, ...engagements },
       sessions: { kind: 'exact' as const, ...sessions },
-      communications: { kind: 'exact' as const, ...communications }
+      communications: { kind: 'exact' as const, ...communications },
+      attention: {
+        kind: 'exact' as const,
+        resultsNotSent: safeCount(attention.results_not_sent),
+        overdueSpeakerTasks: safeCount(attention.overdue_speaker_tasks),
+        uncoveredReviews: safeCount(attention.uncovered_reviews),
+        sessionsAwaitingPlacement: safeCount(attention.sessions_awaiting_placement),
+        sessionsMissingSpeakers: safeCount(attention.sessions_missing_speakers),
+        failedDeliveries: safeCount(failedDeliveries)
+      }
     };
   }
 }
@@ -450,6 +569,7 @@ export function createSQLiteWorkspaceOverviewProjection(input: {
   readonly sqlite: Database;
   readonly areaCatalog: WorkspaceOverviewAreaCatalog;
   readonly historyLimit?: number;
+  readonly now?: () => string;
 }): SQLiteWorkspaceOverviewProjection {
   return new SQLiteWorkspaceOverviewProjection(input);
 }

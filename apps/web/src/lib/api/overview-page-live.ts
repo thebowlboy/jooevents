@@ -538,6 +538,64 @@ function workflowAttention(projection: WorkspaceOverviewProjection): AttentionRe
 			});
 		}
 	}
+	const attention = projection.metrics.attention;
+	if (attention?.kind === 'exact') {
+		checked = true;
+		if (attention.resultsNotSent > 0) {
+			const count = attention.resultsNotSent;
+			items.push({
+				id: 'decision-results-not-sent', severity: 'now', area: 'decisions',
+				title: `${count} ${plural(count, 'result has', 'results have')} not been sent`,
+				detail: `${plural(count, 'Its', 'Their')} current accept or decline decision has no provider-accepted notification.`,
+				action: 'Send results'
+			});
+		}
+		if (attention.overdueSpeakerTasks > 0) {
+			const count = attention.overdueSpeakerTasks;
+			items.push({
+				id: 'overdue-speaker-tasks', severity: 'now', area: 'tasks',
+				title: `${count} speaker ${plural(count, 'task is', 'tasks are')} overdue`,
+				detail: `${plural(count, 'It is', 'They are')} still waiting for completion or organizer review after the effective due time.`,
+				action: 'Open tasks'
+			});
+		}
+		if (attention.uncoveredReviews > 0) {
+			const count = attention.uncoveredReviews;
+			items.push({
+				id: 'uncovered-reviews', severity: 'now', area: 'review',
+				title: `${count} ${plural(count, 'review needs', 'reviews need')} coverage`,
+				detail: `${plural(count, 'A reviewer has', 'Reviewers have')} stepped back and ${plural(count, 'the vacancy has', 'those vacancies have')} not been resolved.`,
+				action: 'Resolve coverage'
+			});
+		}
+		if (attention.sessionsAwaitingPlacement > 0) {
+			const count = attention.sessionsAwaitingPlacement;
+			items.push({
+				id: 'sessions-awaiting-placement', severity: 'soon', area: 'schedule',
+				title: `${count} ${plural(count, 'session is', 'sessions are')} awaiting placement`,
+				detail: `${plural(count, 'It has', 'They have')} no current time-and-room occurrence.`,
+				action: 'Open schedule'
+			});
+		}
+		if (attention.sessionsMissingSpeakers > 0) {
+			const count = attention.sessionsMissingSpeakers;
+			items.push({
+				id: 'sessions-missing-speakers', severity: 'soon', area: 'schedule',
+				title: `${count} ${plural(count, 'session is', 'sessions are')} missing speakers`,
+				detail: `${plural(count, 'Its', 'Their')} current Session roster has no participants.`,
+				action: 'Add speakers'
+			});
+		}
+		if (attention.failedDeliveries > 0) {
+			const count = attention.failedDeliveries;
+			items.push({
+				id: 'failed-deliveries', severity: 'now', area: 'messages',
+				title: `${count} message ${plural(count, 'delivery needs', 'deliveries need')} attention`,
+				detail: `${plural(count, 'It has', 'They have')} current provider or delivery evidence recording a known failure.`,
+				action: 'Open messages'
+			});
+		}
+	}
 	return { items, checked };
 }
 

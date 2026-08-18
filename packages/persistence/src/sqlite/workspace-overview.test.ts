@@ -58,7 +58,9 @@ function createEvent(events: SQLiteEventSpineRepository) {
 }
 
 function projection(sqlite: ReturnType<typeof openRuntime>['runtime']['sqlite']) {
-  return createSQLiteWorkspaceOverviewProjection({ sqlite, areaCatalog });
+  return createSQLiteWorkspaceOverviewProjection({
+    sqlite, areaCatalog, now: () => '2026-08-12T08:30:00.000Z'
+  });
 }
 
 function insertOperation(sqlite: ReturnType<typeof openRuntime>['runtime']['sqlite'], input: {
@@ -218,7 +220,7 @@ function seedPipelineMetricRows(sqlite: ReturnType<typeof openRuntime>['runtime'
         format_id, track_id, program_set_version, program_set_digest_sha256,
         roster_version, roster_digest_sha256, roster_json, head_json, version,
         digest_sha256, created_by_user_id, created_at_ms, updated_by_user_id, updated_at_ms
-      ) VALUES (?, ?, ?, ?, 30, 'draft', ?, NULL, 1, ?, 1, ?, '{}', ?, 1, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, 30, 'draft', ?, NULL, 1, ?, 1, ?, '{"participants":[]}', ?, 1, ?, ?, ?, ?, ?)
     `);
     for (const [sessionId, title, sessionDigest] of [
       [sessionA, 'Opening session', digest('f')],
@@ -261,6 +263,28 @@ function seedPipelineMetricRows(sqlite: ReturnType<typeof openRuntime>['runtime'
       createdAtMs + 5400000, userId, createdAtMs
     );
 
+    sqlite.query(`
+      INSERT INTO review_assignments (
+        workspace_id, event_id, id, round_id, submission_id, reviewer_id,
+        version, state, assigned_at_ms, stepped_back_at_ms, stepped_back_by_user_id
+      ) VALUES (?, ?, ?, ?, ?, ?, 2, 'stepped_back', ?, ?, ?)
+    `).run(workspaceId, eventId, id('614'), openRoundId, id('634'), id('644'),
+      createdAtMs, createdAtMs, userId);
+    sqlite.query(`
+      INSERT INTO task_assignments (
+        workspace_id, event_id, id, task_definition_id, task_definition_revision_id,
+        engagement_id, person_id, state, version, assignment_json, updated_at_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 1, ?, ?)
+    `).run(
+      workspaceId, eventId, id('780'), id('781'), id('782'), id('720'), id('730'),
+      JSON.stringify({
+        id: id('780'), taskDefinitionId: id('781'), taskDefinitionRevisionId: id('782'),
+        engagementId: id('720'), personId: id('730'), state: 'pending', version: 1,
+        deadline: { reference: { effectiveAt: '2026-08-11T16:00:00.000Z' } },
+        deadlineOverride: null
+      }), createdAtMs
+    );
+
     const insertRelease = sqlite.query(`
       INSERT INTO communication_message_releases (
         release_id, workspace_id, event_id, batch_id, recipient_ref_id, person_ref_id,
@@ -272,7 +296,8 @@ function seedPipelineMetricRows(sqlite: ReturnType<typeof openRuntime>['runtime'
     `);
     for (let index = 0; index < 3; index += 1) {
       insertRelease.run(
-        `release-overview-${index}`, workspaceId, eventId, `recipient-${index}`, id(`${750 + index}`),
+        `release-overview-${index}`, workspaceId, eventId,
+        index === 0 ? id('660') : `recipient-${index}`, id(`${750 + index}`),
         `contact-${index}`, id('760'), id('761'), digest('4'), digest('5'), id(`${770 + index}`),
         digest('6'), createdAt
       );
@@ -359,6 +384,15 @@ describe('SQLite workspace overview projection', () => {
     expect(metrics.engagements).toEqual({ kind: 'exact', total: 2, confirmed: 1 });
     expect(metrics.sessions).toEqual({ kind: 'exact', total: 2, placed: 1 });
     expect(metrics.communications).toEqual({ kind: 'exact', recipients: 3, sent: 1 });
+    expect(metrics.attention).toEqual({
+      kind: 'exact',
+      resultsNotSent: 1,
+      overdueSpeakerTasks: 1,
+      uncoveredReviews: 1,
+      sessionsAwaitingPlacement: 1,
+      sessionsMissingSpeakers: 2,
+      failedDeliveries: 1
+    });
     expect(runtime.sqlite.query<{ readonly foreign_keys: number }, []>(
       'PRAGMA foreign_keys'
     ).get()?.foreign_keys).toBe(1);

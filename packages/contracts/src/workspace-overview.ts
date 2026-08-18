@@ -202,6 +202,20 @@ export const workspaceOverviewCommunicationsMetricSchema = z.union([
   unavailableMetricSchema
 ]);
 
+/** Rebuildable organizer-attention counts derived from current canonical state. */
+export const workspaceOverviewAttentionMetricSchema = z.union([
+  z.strictObject({
+    kind: z.literal('exact'),
+    resultsNotSent: safeCountSchema,
+    overdueSpeakerTasks: safeCountSchema,
+    uncoveredReviews: safeCountSchema,
+    sessionsAwaitingPlacement: safeCountSchema,
+    sessionsMissingSpeakers: safeCountSchema,
+    failedDeliveries: safeCountSchema
+  }),
+  unavailableMetricSchema
+]);
+
 export const workspaceOverviewMetricsSchema = z.strictObject({
   forms: workspaceOverviewFormsMetricSchema,
   submissions: workspaceOverviewSubmissionsMetricSchema,
@@ -212,7 +226,9 @@ export const workspaceOverviewMetricsSchema = z.strictObject({
   decisions: workspaceOverviewDecisionsMetricSchema,
   engagements: workspaceOverviewEngagementsMetricSchema,
   sessions: workspaceOverviewSessionsMetricSchema,
-  communications: workspaceOverviewCommunicationsMetricSchema
+  communications: workspaceOverviewCommunicationsMetricSchema,
+  // Optional while older deployment adapters roll forward to this additive projection.
+  attention: workspaceOverviewAttentionMetricSchema.optional()
 });
 
 export const workspaceOverviewHistoryDomainSchema = z.enum([

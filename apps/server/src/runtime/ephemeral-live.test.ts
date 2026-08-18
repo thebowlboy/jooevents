@@ -2644,7 +2644,12 @@ describe('ephemeral live Foundation server composition', () => {
           decisions: { kind: 'exact', decided: 0, undecided: 0 },
           engagements: { kind: 'exact', total: 0, confirmed: 0 },
           sessions: { kind: 'exact', total: 0, placed: 0 },
-          communications: { kind: 'exact', recipients: 0, sent: 0 }
+          communications: { kind: 'exact', recipients: 0, sent: 0 },
+          attention: {
+            kind: 'exact', resultsNotSent: 0, overdueSpeakerTasks: 0,
+            uncoveredReviews: 0, sessionsAwaitingPlacement: 0,
+            sessionsMissingSpeakers: 0, failedDeliveries: 0
+          }
         },
         history: {
           total: 1,

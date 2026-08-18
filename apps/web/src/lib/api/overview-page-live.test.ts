@@ -298,6 +298,30 @@ describe('live Overview page port', () => {
 		expect(data.pipeline.some((stage) => stage.availability.kind === 'unavailable')).toBe(false);
 	});
 
+	test('maps canonical cross-workflow attention counts without inventing unsupported rows', async () => {
+		const data = await readMounted({
+			triage: { kind: 'exact', arrived: 0, sorted: 0 },
+			decisions: { kind: 'exact', decided: 6, undecided: 0 },
+			attention: {
+				kind: 'exact', resultsNotSent: 4, overdueSpeakerTasks: 3,
+				uncoveredReviews: 2, sessionsAwaitingPlacement: 2,
+				sessionsMissingSpeakers: 1, failedDeliveries: 1
+			}
+		});
+
+		expect(data.attention.map((item) => [item.id, item.severity, item.area, item.title])).toEqual([
+			['decision-results-not-sent', 'now', 'decisions', '4 results have not been sent'],
+			['overdue-speaker-tasks', 'now', 'tasks', '3 speaker tasks are overdue'],
+			['uncovered-reviews', 'now', 'review', '2 reviews need coverage'],
+			['sessions-awaiting-placement', 'soon', 'schedule', '2 sessions are awaiting placement'],
+			['sessions-missing-speakers', 'soon', 'schedule', '1 session is missing speakers'],
+			['failed-deliveries', 'now', 'messages', '1 message delivery needs attention']
+		]);
+		expect(data.attention.some((item) => item.id.includes('import') || item.id.includes('conflict')))
+			.toBe(false);
+		expect(data.sections.attention).toEqual({ kind: 'available' });
+	});
+
 	test('joins the canonical active deadline catalog and ignores cleared heads', async () => {
 		const deadlines: DeadlineCatalogLivePort = {
 			async read() {

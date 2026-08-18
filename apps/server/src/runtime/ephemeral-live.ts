@@ -3366,7 +3366,8 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       currentAuthority,
       overviewRead: createSQLiteWorkspaceOverviewProjection({
         sqlite: database.sqlite,
-        areaCatalog: DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG
+        areaCatalog: DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG,
+        now: clock.now
       }),
       clock,
       ids: Object.freeze({
