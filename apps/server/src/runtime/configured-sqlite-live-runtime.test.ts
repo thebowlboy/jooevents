@@ -191,6 +191,7 @@ describe('configured SQLite live runtime', () => {
       background: {
         state: 'running',
         jobs: [
+          { name: 'calendar_notice_dispatch', state: 'succeeded' },
           { name: 'approved_agent_actions', state: 'succeeded' },
           { name: 'expired_file_intents', state: 'succeeded' },
           { name: 'orphan_file_blobs', state: 'succeeded' }
