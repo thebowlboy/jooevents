@@ -19,6 +19,7 @@ import {
 import {
   createProductionRequestHandler,
   createRuntimeRequestHandler,
+  REVIEW_CRAWL_POLICY,
   resolveBunListenerConfiguration,
   StaticBuildError,
   type WebFetchHandler
@@ -247,6 +248,51 @@ describe('Bun runtime routing selection', () => {
     });
     expect(development).toBe(backend);
     expect(await (await development(request('/app'))).json()).toEqual({ source: 'hono' });
+  });
+
+  test('disallows crawling only for an explicitly protected review runtime', async () => {
+    const fixture = buildFixture();
+    const backend: WebFetchHandler = () => Response.json({ source: 'hono' }, {
+      headers: { 'set-cookie': 'better-auth.session_token=usable; Path=/; HttpOnly' }
+    });
+    const review = createRuntimeRequestHandler({
+      mode: 'production',
+      backend,
+      buildDirectory: fixture.root,
+      disallowCrawling: true
+    });
+    for (const path of ['/', '/s/schedule', '/s/speakers', '/s/apply', '/app', '/sign-in']) {
+      const response = await review(request(path, {
+        headers: { accept: 'text/html', 'sec-fetch-mode': 'navigate' }
+      }));
+      expect(response.status).toBe(200);
+      expect(response.headers.get('x-robots-tag')).toBe(REVIEW_CRAWL_POLICY);
+    }
+    const api = await review(request('/api/me/access-context'));
+    expect(api.headers.get('x-robots-tag')).toBe(REVIEW_CRAWL_POLICY);
+    expect(api.headers.get('set-cookie')).toContain('better-auth.session_token=usable');
+
+    const robots = await review(request('/robots.txt'));
+    expect(robots.status).toBe(200);
+    expect(robots.headers.get('cache-control')).toBe('no-store, max-age=0');
+    expect(robots.headers.get('x-robots-tag')).toBe(REVIEW_CRAWL_POLICY);
+    expect(await robots.text()).toBe('User-agent: *\nDisallow: /\n');
+    const robotsHead = await review(request('/robots.txt', { method: 'HEAD' }));
+    expect(robotsHead.status).toBe(200);
+    expect(robotsHead.headers.get('x-robots-tag')).toBe(REVIEW_CRAWL_POLICY);
+    expect(await robotsHead.text()).toBe('');
+
+    const ordinary = createRuntimeRequestHandler({
+      mode: 'production',
+      backend,
+      buildDirectory: fixture.root
+    });
+    const ordinaryPage = await ordinary(request('/s/schedule', {
+      headers: { accept: 'text/html', 'sec-fetch-mode': 'navigate' }
+    }));
+    expect(ordinaryPage.headers.get('x-robots-tag')).toBeNull();
+    const ordinaryRobots = await ordinary(request('/robots.txt'));
+    expect(await ordinaryRobots.text()).toBe('User-agent: *\nDisallow: /app\n');
   });
 
   test('accepts a bounded explicit port and rejects invalid values', () => {

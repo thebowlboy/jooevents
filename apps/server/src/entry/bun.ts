@@ -37,7 +37,8 @@ await startManagedBunRuntime({
       backend: runtime.app.fetch,
       buildDirectory,
       ...(buildIdentity ? { buildIdentity } : {}),
-      embedFraming: runtime.embedFraming
+      embedFraming: runtime.embedFraming,
+      disallowCrawling: config.reviewEntryMode === 'organizer'
     });
     return Bun.serve({
       hostname: listener.hostname,

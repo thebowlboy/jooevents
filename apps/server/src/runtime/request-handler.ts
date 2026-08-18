@@ -15,6 +15,9 @@ import {
 
 export type WebFetchHandler = (request: Request) => Response | Promise<Response>;
 
+export const REVIEW_CRAWL_POLICY = 'noindex, nofollow, noarchive, nosnippet, noimageindex';
+const REVIEW_ROBOTS_BODY = 'User-agent: *\nDisallow: /\n';
+
 export class StaticBuildError extends Error {
   constructor(message: string) {
     super(message);
@@ -269,8 +272,9 @@ export function createRuntimeRequestHandler(input: {
   readonly buildDirectory: string;
   readonly buildIdentity?: LiveBuildIdentity;
   readonly embedFraming?: EmbedFramingPolicySource;
+  readonly disallowCrawling?: boolean;
 }): WebFetchHandler {
-  return input.mode === 'production'
+  const handler = input.mode === 'production'
     ? createProductionRequestHandler({
         backend: input.backend,
         buildDirectory: input.buildDirectory,
@@ -278,4 +282,23 @@ export function createRuntimeRequestHandler(input: {
         ...(input.embedFraming ? { embedFraming: input.embedFraming } : {})
       })
     : input.backend;
+  if (input.disallowCrawling !== true) return handler;
+
+  return async (request) => {
+    const url = new URL(request.url);
+    if (url.pathname === '/robots.txt'
+        && (request.method === 'GET' || request.method === 'HEAD')) {
+      return new Response(request.method === 'HEAD' ? null : REVIEW_ROBOTS_BODY, {
+        headers: {
+          'cache-control': 'no-store, max-age=0',
+          'content-type': 'text/plain; charset=utf-8',
+          'x-content-type-options': 'nosniff',
+          'x-robots-tag': REVIEW_CRAWL_POLICY
+        }
+      });
+    }
+    const response = await handler(request);
+    response.headers.set('x-robots-tag', REVIEW_CRAWL_POLICY);
+    return response;
+  };
 }

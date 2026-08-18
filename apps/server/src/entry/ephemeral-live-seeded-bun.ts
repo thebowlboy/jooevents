@@ -71,7 +71,8 @@ const fetch = createRuntimeRequestHandler({
   backend: runtime.app.fetch,
   buildDirectory,
   buildIdentity,
-  embedFraming: runtime.embedFraming
+  embedFraming: runtime.embedFraming,
+  disallowCrawling: config.reviewEntryMode === 'organizer'
 });
 
 await startManagedBunRuntime({
