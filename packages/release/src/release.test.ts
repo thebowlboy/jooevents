@@ -25,6 +25,7 @@ import {
   planReleaseCompensation,
   planReleaseMutation,
   projectReleaseSafeDiff,
+  projectServedPublicPresentation,
   projectServedPublicRoster,
   projectServedPublicSchedule,
   planReleaseSurfaceSuccessorFrom,
@@ -874,6 +875,9 @@ describe('style-set and surface releases', () => {
     });
     if (release.kind !== 'apply') throw new Error('wrong kind');
     expect(release.formRef).toEqual({ formId, formVersionId: formVersion1 });
+    const presentation = projectServedPublicPresentation({ surface: release, style: styleSet });
+    if (presentation.surfaceKind !== 'apply') throw new Error('wrong presentation kind');
+    expect(presentation.formRef).toEqual({ formId, formVersionId: formVersion1 });
   });
 
   test('surface rollback moves only the presentation pointer', () => {

@@ -209,7 +209,8 @@ export function projectServedPublicPresentation(input: {
     surfaceReleaseNumber: surface.number,
     manifest: surface.manifest,
     styleSetReleaseNumber: style.number,
-    style: style.recipe
+    style: style.recipe,
+    ...(surface.kind === 'apply' ? { formRef: surface.formRef } : {})
   }));
 }
 

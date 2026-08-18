@@ -125,11 +125,11 @@ function lineupRoster(): ServedPublicRosterDto {
 
 function servedPresentation(
 	surfaceKind: SurfaceKind,
-	heading: string
+	heading: string,
+	formRef?: { readonly formId: string; readonly formVersionId: string }
 ): ServedPublicPresentationDto {
-	return {
+	const common = {
 		schemaVersion: 1,
-		surfaceKind,
 		surfaceReleaseNumber: 2,
 		manifest: { schemaVersion: 1, heading, intro: `${heading} introduction` },
 		styleSetReleaseNumber: 1,
@@ -137,7 +137,13 @@ function servedPresentation(
 			name: 'Released brand', canvas: '#f4f1ed', surface: '#ffffff', text: '#29231f',
 			action: '#a14e42', radius: 8, controlHeight: 38
 		}
-	};
+	} as const;
+	if (surfaceKind === 'apply') {
+		if (!formRef) throw new TypeError('apply presentation fixture requires a form pin');
+		return { surfaceKind, ...common, formRef };
+	}
+	if (surfaceKind === 'schedule') return { surfaceKind, ...common };
+	return { surfaceKind, ...common };
 }
 
 function fetcherFor(routes: Record<string, () => Response>): (
@@ -340,7 +346,10 @@ describe('live public-surface port', () => {
 				'/api/public/schedule/current': () => json(notPublished()),
 				'/api/public/speakers/current': () => json(notPublished()),
 				'/api/public/forms/presentation': () =>
-					json(success(servedPresentation('apply', 'Apply now'))),
+					json(success(servedPresentation('apply', 'Apply now', {
+						formId: served.formId,
+						formVersionId: served.formVersionId
+					}))),
 				[`/api/public/forms/current?formId=${served.formId}`]: () => json(success(served))
 			}),
 			() => `http://127.0.0.1/s/apply?scope=form%3A${served.formId}`
@@ -391,7 +400,10 @@ describe('live public-surface port', () => {
 				'/api/public/schedule/current': () => json(notPublished()),
 				'/api/public/speakers/current': () => json(notPublished()),
 				'/api/public/forms/presentation': () =>
-					json(success(servedPresentation('apply', 'Apply now'))),
+					json(success(servedPresentation('apply', 'Apply now', {
+						formId: served.formId,
+						formVersionId: served.formVersionId
+					}))),
 				[`/api/public/forms/current?formId=${served.formId}`]: () => {
 					formReads += 1;
 					return json(success(served));
@@ -420,7 +432,10 @@ describe('live public-surface port', () => {
 				'/api/public/schedule/current': () => json(notPublished()),
 				'/api/public/speakers/current': () => json(notPublished()),
 				'/api/public/forms/presentation': () =>
-					json(success(servedPresentation('apply', 'Apply now'))),
+					json(success(servedPresentation('apply', 'Apply now', {
+						formId,
+						formVersionId: '018f6f00-0000-7000-8000-0000000000f2'
+					}))),
 				[`/api/public/forms/current?formId=${formId}`]: () => json(formClosed())
 			}),
 			() => `http://127.0.0.1/s/apply?scope=form%3A${formId}`
@@ -495,21 +510,49 @@ describe('live public-surface port', () => {
 		});
 	});
 
-	test('a bare apply address carries no form id and stays honestly absent, fetch-free', async () => {
+	test('a bare apply address discovers the exact form pinned by its published presentation', async () => {
 		let formFetches = 0;
+		const formId = '018f6f00-0000-7000-8000-0000000000f0';
+		const formVersionId = '018f6f00-0000-7000-8000-0000000000f2';
+		const served = {
+			schemaVersion: 1,
+			formId,
+			formVersionId,
+			formVersionNumber: 1,
+			name: 'Call for proposals',
+			confirmation: 'Thanks! We received it.',
+			target: { kind: 'general_pool' as const },
+			availability: { kind: 'evergreen' as const },
+			fields: [{
+				id: '018f6f00-0000-7000-8000-0000000000f1',
+				label: 'Talk title',
+				help: null,
+				required: true,
+				initiallyVisible: true,
+				position: 0,
+				kind: 'text' as const,
+				maximumLength: 500
+			}],
+			rules: []
+		};
 		const port = createLivePublicSurfacePort(
 			fetcherFor({
 				'/api/public/schedule/current': () => json(notPublished()),
 				'/api/public/speakers/current': () => json(notPublished()),
-				'/api/public/forms/current': () => {
+				'/api/public/forms/presentation': () => json(success(servedPresentation(
+					'apply',
+					'Apply now',
+					{ formId, formVersionId }
+				))),
+				[`/api/public/forms/current?formId=${formId}`]: () => {
 					formFetches += 1;
-					return json(formNotFound());
+					return json(success(served));
 				}
 			}),
 			() => 'http://127.0.0.1/s/apply'
 		);
-		expect((await port.templates.list()).surfaces).toEqual([]);
-		expect(await port.forms.list()).toEqual([]);
-		expect(formFetches).toBe(0);
+		expect((await port.templates.list()).surfaces).toHaveLength(1);
+		expect(await port.forms.list()).toMatchObject([{ id: formId, name: 'Call for proposals' }]);
+		expect(formFetches).toBe(1);
 	});
 });

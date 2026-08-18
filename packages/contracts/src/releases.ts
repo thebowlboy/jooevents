@@ -1388,17 +1388,34 @@ export const servedPublicRosterSchema = z.strictObject({
 /**
  * Public-safe presentation pinned by one active surface release. The surface
  * manifest and style recipe are immutable release content; actor, scope,
- * digest-chain, form-pin, and framing-policy fields deliberately do not cross
- * the anonymous boundary.
+ * digest-chain, and framing-policy fields deliberately do not cross the
+ * anonymous boundary. The apply presentation carries its exact immutable form
+ * pin because that is the public discovery pointer for the hosted `/s/apply`
+ * address; read-only presentations have no such data pin.
  */
-export const servedPublicPresentationSchema = z.strictObject({
+const servedPublicPresentationCommonFields = {
   schemaVersion: z.literal(1),
-  surfaceKind: surfaceKindSchema,
   surfaceReleaseNumber: releaseVersionSchema,
   manifest: surfaceManifestSchema,
   styleSetReleaseNumber: releaseVersionSchema,
   style: styleSetRecipeSchema
-});
+} as const;
+
+export const servedPublicPresentationSchema = z.discriminatedUnion('surfaceKind', [
+  z.strictObject({
+    surfaceKind: z.literal('schedule'),
+    ...servedPublicPresentationCommonFields
+  }),
+  z.strictObject({
+    surfaceKind: z.literal('speakers'),
+    ...servedPublicPresentationCommonFields
+  }),
+  z.strictObject({
+    surfaceKind: z.literal('apply'),
+    ...servedPublicPresentationCommonFields,
+    formRef: surfaceFormRefSchema
+  })
+]);
 
 export const RELEASE_OPERATION_SCHEMA_REFS = Object.freeze({
   overviewRead: createOperationSchemaManifestRefs({

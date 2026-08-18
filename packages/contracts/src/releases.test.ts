@@ -16,6 +16,7 @@ import {
   releaseSurfaceRollbackPlanSchema,
   servedPublicRosterSchema,
   servedPublicScheduleSchema,
+  servedPublicPresentationSchema,
   styleSetReleaseSchema,
   surfaceFrameOriginAllowlistSchema,
   surfaceHeadSchema,
@@ -369,6 +370,28 @@ describe('style set release contract', () => {
 });
 
 describe('served public projection contracts', () => {
+
+  test('only an apply presentation exposes its exact public form pin', () => {
+    const common = {
+      schemaVersion: 1,
+      surfaceReleaseNumber: 1,
+      manifest: { schemaVersion: 1, heading: null, intro: null },
+      styleSetReleaseNumber: 1,
+      style: {
+        name: 'Released', canvas: '#f4f1ed', surface: '#ffffff', text: '#29231f',
+        action: '#a14e42', radius: 8, controlHeight: 38
+      }
+    };
+    expect(servedPublicPresentationSchema.parse({
+      surfaceKind: 'apply', ...common, formRef: { formId, formVersionId }
+    }).surfaceKind).toBe('apply');
+    expect(() => servedPublicPresentationSchema.parse({
+      surfaceKind: 'apply', ...common
+    })).toThrow();
+    expect(() => servedPublicPresentationSchema.parse({
+      surfaceKind: 'schedule', ...common, formRef: { formId, formVersionId }
+    })).toThrow();
+  });
   const occurrence = {
     occurrenceId: '019c1df7-86b5-769b-bba4-5f7097bfe901',
     roomId,

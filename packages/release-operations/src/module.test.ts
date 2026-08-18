@@ -36,6 +36,8 @@ const eventId = '019c1df7-86b5-769b-bba4-5f7097bfd101';
 const roomId = '019c1df7-86b5-769b-bba4-5f7097bfd401';
 const sessionId = '019c1df7-86b5-769b-bba4-5f7097bfd201';
 const personId = '019c1df7-86b5-769b-bba4-5f7097bfd501';
+const formId = '019c1df7-86b5-769b-bba4-5f7097bfd801';
+const formVersionId = '019c1df7-86b5-769b-bba4-5f7097bfd802';
 const revisionId = parsePublicPolicyRevisionId('019c1df7-86b5-769b-bba4-5f7097bfd601');
 const profile = Object.freeze({ key: 'release.public-read-test', version: parseContractVersion(1) });
 const clock = Object.freeze({ now: () => parseInstant('2026-08-14T12:00:00.000Z') });
@@ -148,9 +150,8 @@ function servedRoster(releaseNumber: number, names: readonly string[]): ServedPu
 
 function servedPresentation(surfaceKind: 'schedule' | 'speakers' | 'apply'):
 ServedPublicPresentationDto {
-  return {
+  const common = {
     schemaVersion: 1,
-    surfaceKind,
     surfaceReleaseNumber: 1,
     manifest: { schemaVersion: 1, heading: 'Published', intro: 'Released presentation.' },
     styleSetReleaseNumber: 1,
@@ -158,7 +159,12 @@ ServedPublicPresentationDto {
       name: 'Released', canvas: '#f4f1ed', surface: '#ffffff', text: '#29231f',
       action: '#a14e42', radius: 8, controlHeight: 38
     }
-  };
+  } as const;
+  if (surfaceKind === 'apply') {
+    return { surfaceKind, ...common, formRef: { formId, formVersionId } };
+  }
+  if (surfaceKind === 'schedule') return { surfaceKind, ...common };
+  return { surfaceKind, ...common };
 }
 
 interface PortState {

@@ -425,11 +425,10 @@ export function createLivePublicSurfacePort(
 	}
 
 	/**
-	 * The public form read is form-addressed (`?formId=`): "current" names the
-	 * form's current published version, not an id-less lookup. The only public
-	 * carrier of that id is the page's own scope parameter (`scope=form:<id>`),
-	 * so a bare apply address honestly has no published form to serve until an
-	 * id-less current-form read exists on the public lane.
+	 * An explicit form scope remains a stable deep link and wins when present.
+	 * The hosted bare address discovers its form only from the active immutable
+	 * apply presentation's exact release pin; it never selects an organizer
+	 * draft or guesses from the mutable form list.
 	 */
 	function scopedFormId(): string | null {
 		try {
@@ -470,9 +469,15 @@ export function createLivePublicSurfacePort(
 				presentationResultSchema
 			)
 		);
-	const form = (): Promise<PublicApplicationFormAvailability> => {
-		const formId = scopedFormId();
-		if (formId === null) return Promise.resolve({ kind: 'not_published' });
+	const resolvedFormId = async (): Promise<string | null> => {
+		const explicit = scopedFormId();
+		if (explicit !== null) return explicit;
+		const released = await presentation('apply');
+		return released?.surfaceKind === 'apply' ? released.formRef.formId : null;
+	};
+	const form = async (): Promise<PublicApplicationFormAvailability> => {
+		const formId = await resolvedFormId();
+		if (formId === null) return { kind: 'not_published' };
 		return shared(`form:${formId}`, () =>
 			readPublicState<ServedPublicFormDto>(
 				fetcher,
