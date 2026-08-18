@@ -138,10 +138,11 @@ test('a speaker address opens their row wherever the roster is a card', async ({
 	await page.goto('/app/speakers?speaker=spk-1');
 
 	const roster = page.getByRole('region', { name: 'Speaker roster' });
-	const disclosure = roster
-		.getByRole('button', { name: 'Details for Maya Lindqvist' })
-		.filter({ visible: true });
-	await expect(disclosure).toHaveAttribute('aria-expanded', 'true', { timeout: 15000 });
+	// The reworked roster highlights the arrival and keeps the record one press
+	// away; the card's own open control is the focusable door.
+	await expect(
+		roster.getByRole('link', { name: "Open Maya Lindqvist's record" }).filter({ visible: true })
+	).toHaveAttribute('href', '/app/speakers/spk-1', { timeout: 15000 });
 	await expect(roster.locator('[data-speaker="spk-1"]').filter({ visible: true })).toBeFocused();
 });
 

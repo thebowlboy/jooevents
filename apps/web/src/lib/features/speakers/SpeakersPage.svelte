@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
-	import { ChevronDown, TriangleAlert } from 'lucide-svelte';
+	import { ChevronRight, TriangleAlert } from 'lucide-svelte';
 	import {
 		CopyValue,
+		Modal,
 		revealTarget,
 		shouldIgnoreRowPress,
 		situationIcon,
@@ -12,21 +13,21 @@
 	import { LiveRead, type LiveReadState } from '$lib/api/live-read';
 	import { applyParams, clearParams, param, paramIn } from '$lib/features/workspace/url-state.svelte';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
-	import SpeakerCommunications from './SpeakerCommunications.svelte';
 	import SpeakerLineup from './SpeakerLineup.svelte';
-	import {
-		assignmentStateBadge,
-		engagementStateBadge,
-		overdueBadge
-	} from './engagement-vocabulary';
+	import { engagementStateBadge } from './engagement-vocabulary';
 	import { speakerRecordHref } from '$lib/api/speaker-record';
+	import SpeakerRecordPage from './SpeakerRecordPage.svelte';
+	import type { SpeakerRecordPort } from '$lib/api/speaker-record-port';
+	import { goto } from '$app/navigation';
 	import type { SpeakerRow, TaskAssignment, TaskDef } from '$lib/api/types';
 
 	interface Props {
 		port: SpeakersPagePort;
+		/** Serves the record overlay; absent (the live roster today), a press follows the record route instead. */
+		recordPort?: SpeakerRecordPort;
 	}
 
-	let { port }: Props = $props();
+	let { port, recordPort }: Props = $props();
 	const api = $derived(port);
 
 	type FilterKey = 'all' | 'confirmed' | 'awaiting' | 'attention' | 'incomplete';
@@ -45,7 +46,6 @@
 
 	function switchView(next: ViewKey) {
 		if (view === next) return;
-		expandedId = null;
 		actionError = '';
 		// A view change replaces the scope the other view was carrying: a filter
 		// and a single-speaker arrival both belong to the roster view.
@@ -66,7 +66,6 @@
 	const speakers = $derived(resolvedRoster?.speakers ?? null);
 	const taskDefs = $derived(resolvedRoster?.defs ?? []);
 	const assignments = $derived(resolvedRoster?.assignments ?? []);
-	let expandedId = $state<string | null>(null);
 	let busyId = $state<string | null>(null);
 	let announcement = $state('');
 
@@ -162,30 +161,39 @@
 
 	function switchFilter(next: FilterKey) {
 		if (filter === next) return;
-		expandedId = null;
 		// One navigation, not two: a filter pass replaces whatever single speaker
 		// the address was scoped to, and both facts change together.
 		applyParams({ filter: next === 'all' ? null : next, speaker: null });
 	}
 
-	function toggleRow(id: string) {
-		expandedId = expandedId === id ? null : id;
-		// The address named one speaker; the moment the operator opens or closes a
-		// row themselves, what is showing is theirs rather than the link's — so the
-		// scope leaves the address, and Back puts the scoped arrival back.
-		if (askedSpeaker && askedSpeaker !== expandedId) {
-			void clearParams(['speaker'], { history: 'push' });
+	/**
+	 * The record overlay: a press on a person opens their whole record over the
+	 * pass — the flow grammar's focus-managed-modal allowance — addressed in
+	 * the URL so it is shareable and Back closes it. The dedicated route keeps
+	 * serving direct arrivals as a full page.
+	 */
+	const recordId = $derived(param('record'));
+	let recordOpen = $state(false);
+	$effect(() => {
+		recordOpen = Boolean(recordId && recordPort);
+	});
+	$effect(() => {
+		if (!recordOpen && param('record')) void clearParams(['record'], { history: 'push' });
+	});
+
+	function openRecord(id: string) {
+		if (recordPort) {
+			void applyParams({ record: id }, { history: 'push' });
+			return;
 		}
+		void goto(speakerRecordHref(id));
 	}
 
 	/**
-	 * The row is a bigger door to the same detail, for the pointer only. The
-	 * chevron stays the one focusable switch carrying `aria-expanded`, so the
-	 * accessible tree gains nothing to disambiguate and the keyboard path is
-	 * exactly what it was. The press routes through `toggleRow`, so opening by
-	 * row hands back a `?speaker=` arrival exactly as the chevron does. Which
-	 * presses belong to the row's own controls — the copy control, the toggle,
-	 * a panel opened over the row — or to a text selection, is the shared
+	 * The row is a door to the whole record, for the pointer only; the per-row
+	 * open control is the focusable path, so the accessible tree gains nothing
+	 * to disambiguate. Which presses belong to the row's own controls — copy,
+	 * a popover panel, the open control — or to a text selection is the shared
 	 * row-press contract in `$lib/ui`.
 	 *
 	 * Roster only. The public lineup is a separate component behind the view
@@ -193,7 +201,7 @@
 	 */
 	function onRowPress(event: MouseEvent, id: string) {
 		if (shouldIgnoreRowPress(event)) return;
-		toggleRow(id);
+		openRecord(id);
 	}
 
 	/**
@@ -219,8 +227,7 @@
 		revealedSpeaker = id;
 		const row = ready.find((entry) => entry.id === id);
 		if (!row) return;
-		expandedId = id;
-		announcement = `${row.name} — ${stateBadge[row.state].label}. Their roster row is open.`;
+		announcement = `${row.name} — ${stateBadge[row.state].label}. Their roster row is highlighted.`;
 		void showRow(row);
 	});
 
@@ -290,10 +297,6 @@
 
 
 	/** States that still owe the organizer a decision or a follow-up. */
-	function hasNextStep(row: SpeakerRow): boolean {
-		return row.state === 'invited' || row.state === 'cancel_requested' || row.state === 'cancelled';
-	}
-
 	interface SpeakerTask {
 		def: TaskDef;
 		assignment: TaskAssignment;
@@ -318,7 +321,6 @@
 	}
 
 	/* The same state vocabulary the task matrix uses: one meaning, one badge. */
-	const assignmentBadge = assignmentStateBadge;
 
 	/**
 	 * Where this speaker's outstanding work is worked. The scope travels in the
@@ -384,115 +386,6 @@
 			><Concealed class="ui-badge__icon" aria-hidden="true" />Hidden</span
 		>
 	{/if}
-{/snippet}
-
-{#snippet detail(row: SpeakerRow)}
-	{@const tasks = tasksFor(row.id)}
-	<div class="detail" class:detail--single={!hasNextStep(row)}>
-		<div class="detail__main">
-			<!-- The expansion stays the in-pass summary; the record is the whole
-			     answer. A named control carries the exit so the pass is only left
-			     on purpose, and it is the same URL the profile peek and every
-			     other person-shaped link resolve to. -->
-			<a class="ui-button ui-button--soft ui-button--sm detail__record" href={speakerRecordHref(row.id)}
-				>Open record</a>
-			<h3 class="detail__heading">Sessions</h3>
-			{#if row.sessions.length > 0}
-				<ul class="detail__sessions">
-					{#each row.sessions as session (session.id)}
-						<!-- A speaker's session is a place on the schedule, so the title is
-						     the way to it — already on the right day, already focused. -->
-						<li><a href={`/app/schedule?session=${session.id}`}>{session.title}</a></li>
-					{/each}
-				</ul>
-			{:else}
-				<p class="detail__none">No session is linked to this engagement.</p>
-			{/if}
-
-			{#if tasks.length > 0}
-				<div class="detail__section detail__section--spaced">
-					<h3 class="detail__heading">Tasks</h3>
-					<a class="ui-button ui-button--soft ui-button--sm" href={tasksHref(row)}>Open in Tasks</a>
-				</div>
-				<ul class="detail__tasks">
-					{#each tasks as entry (entry.def.id)}
-						{@const badge = entry.assignment.overdue
-							? overdueBadge
-							: assignmentBadge[entry.assignment.state]}
-						{@const State = badge.icon}
-						<li class="task">
-							<span class="task__name">{entry.def.name}</span>
-							<span class="ui-badge ui-badge--{badge.tone}" class:ui-badge--solid={badge.solid}
-								><State class="ui-badge__icon" aria-hidden="true" />{badge.label}</span>
-							<span class="task__due">{entry.def.dueRelative}</span>
-						</li>
-					{/each}
-				</ul>
-			{/if}
-
-			<SpeakerCommunications {port} speakerId={row.personId ?? row.id} />
-
-			{#if row.note}
-				<h3 class="detail__heading detail__heading--spaced">Note</h3>
-				<p class="detail__note">{row.note}</p>
-			{/if}
-		</div>
-
-		{#if hasNextStep(row)}
-			<div class="detail__side">
-				{#if row.state === 'invited'}
-					<h3 class="detail__heading">Confirmation</h3>
-					<p class="detail__hint">
-						Speakers confirm from their own portal link. This records that the speaker agreed
-						outside the product — attributed to you, not to them.
-					</p>
-				{:else if row.state === 'cancel_requested'}
-					<div class="ui-alert ui-alert--danger">
-						<span class="ui-alert__icon plate" aria-hidden="true"><TriangleAlert size={16} /></span>
-						<div class="ui-alert__copy">
-							<p class="ui-alert__title">Nothing about this has been sent</p>
-							<p class="ui-alert__message">
-								The request is recorded here only. No speaker message, public update, or schedule
-								change happens until you commit one — call first if you want to.
-							</p>
-						</div>
-					</div>
-				{:else if row.state === 'cancelled'}
-					<h3 class="detail__heading">Cancellation</h3>
-					<p class="detail__hint">
-						The cancellation is recorded. Nothing has gone out — write the message when you are
-						ready.
-					</p>
-				{/if}
-				<div class="detail__actions">
-					{#if row.state === 'invited'}
-						<button
-							type="button"
-							class="ui-button ui-button--secondary ui-button--sm"
-							disabled={busyId !== null}
-							aria-busy={busyId === row.id}
-							onclick={() => recordConfirmation(row)}>Record confirmation</button>
-					{:else if row.state === 'cancel_requested'}
-						<button
-							type="button"
-							class="ui-button ui-button--danger ui-button--sm"
-							disabled={busyId !== null}
-							aria-busy={busyId === row.id}
-							onclick={() => acceptCancellation(row)}>Accept cancellation</button>
-					{/if}
-					{#if hasNextStep(row)}
-						<!-- The compose dialog opens scoped to this person; a GET never
-						     sends anything. -->
-						<a
-							class="ui-button ui-button--secondary ui-button--sm"
-							href={`/app/messages?compose=1&person=${row.id}`}>
-							Compose email
-						</a>
-					{/if}
-				</div>
-			</div>
-		{/if}
-	</div>
 {/snippet}
 
 <div class="views">
@@ -649,7 +542,6 @@
 							     the anchor inside it only says where to land. -->
 							<tr
 								class="row"
-								class:is-open={expandedId === row.id}
 								data-arrival-host
 								onclick={(event) => onRowPress(event, row.id)}>
 								<td class="col-speaker">
@@ -678,22 +570,20 @@
 								<td class="ui-table__number">{@render taskProgress(row)}</td>
 								<td>{@render visibility(row)}</td>
 								<td class="col-expand">
-									<button
-										type="button"
-										class="ui-button ui-button--ghost ui-button--icon ui-button--sm expand"
-										class:expand--open={expandedId === row.id}
-										aria-expanded={expandedId === row.id}
-										aria-label={`Details for ${row.name}`}
-										onclick={() => toggleRow(row.id)}>
-										<ChevronDown size={15} />
-									</button>
+									<a
+										class="ui-button ui-button--ghost ui-button--icon ui-button--sm"
+										href={speakerRecordHref(row.id)}
+										aria-label={`Open ${row.name}'s record`}
+										onclick={(event) => {
+											if (recordPort) {
+												event.preventDefault();
+												openRecord(row.id);
+											}
+										}}>
+										<ChevronRight size={15} />
+									</a>
 								</td>
 							</tr>
-							{#if expandedId === row.id}
-								<tr class="detail-row">
-									<td colspan="6">{@render detail(row)}</td>
-								</tr>
-							{/if}
 						{/each}
 					{/if}
 				</tbody>
@@ -726,9 +616,9 @@
 			{:else}
 				{#each filtered as row (row.id)}
 					<li class="card" data-speaker={row.id}>
-						<!-- The whole summary — everything above the expanded detail — is
-						     the door; the toggle inside it stays the one focusable switch,
-						     which is why no role or tabindex is added here. -->
+						<!-- The whole summary is the door to the record; the open control
+						     inside it stays the one focusable path, which is why no role or
+						     tabindex is added here. -->
 						<!-- svelte-ignore a11y_click_events_have_key_events -->
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
 						<div class="card__head card__head--door" onclick={(event) => onRowPress(event, row.id)}>
@@ -737,15 +627,18 @@
 								<span class="card__name">{row.name}</span>
 								<span class="card__email"><CopyValue value={row.email} label="email address" /></span>
 							</span>
-							<button
-								type="button"
-								class="ui-button ui-button--ghost ui-button--icon ui-button--sm expand card__toggle"
-								class:expand--open={expandedId === row.id}
-								aria-expanded={expandedId === row.id}
-								aria-label={`Details for ${row.name}`}
-								onclick={() => toggleRow(row.id)}>
-								<ChevronDown size={15} />
-							</button>
+							<a
+								class="ui-button ui-button--ghost ui-button--icon ui-button--sm card__toggle"
+								href={speakerRecordHref(row.id)}
+								aria-label={`Open ${row.name}'s record`}
+								onclick={(event) => {
+									if (recordPort) {
+										event.preventDefault();
+										openRecord(row.id);
+									}
+								}}>
+								<ChevronRight size={15} />
+							</a>
 							<span class="card__tags">
 								{@render stateChip(row)}
 								{@render visibility(row)}
@@ -755,9 +648,6 @@
 								<span class="card__sessions">{@render sessionList(row)}</span>
 							{/if}
 						</div>
-						{#if expandedId === row.id}
-							<div class="card__detail">{@render detail(row)}</div>
-						{/if}
 					</li>
 				{/each}
 			{/if}
@@ -767,6 +657,19 @@
 {/if}
 
 <p class="ui-sr-only" role="status">{announcement}</p>
+
+{#if recordPort}
+	<Modal
+		bind:open={recordOpen}
+		title={(speakers ?? []).find((entry) => entry.id === recordId)?.name ?? 'Speaker record'}
+		size="lg">
+		{#if recordId}
+			{#key recordId}
+				<SpeakerRecordPage port={recordPort} engagementId={recordId} />
+			{/key}
+		{/if}
+	</Modal>
+{/if}
 
 <CommitReceipt onUndone={load} />
 
@@ -959,7 +862,7 @@
 	}
 
 	/* One clamped line so a long session title cannot claim the speaker column's
-	   width; the full list is in the row's detail. */
+	   width; the full list is on the record. */
 	.sessions {
 		--ui-clamp-lines: 1;
 		color: var(--je-color-text-muted);
@@ -1018,16 +921,8 @@
 		inline-size: 2.5rem;
 	}
 
-	.expand :global(svg) {
-		transition: rotate var(--je-duration-fast) var(--je-ease);
-	}
-
-	.expand--open :global(svg) {
-		rotate: 180deg;
-	}
-
-	/* The whole row opens its detail, so the whole row says so. Only the data
-	   rows: the detail and the skeletons are not doors. The hover tint the
+	/* The whole row opens the record, so the whole row says so. Only the data
+	   rows: the skeletons are not doors. The hover tint the
 	   table already gives every row is the other half of the affordance and
 	   is left alone. */
 	tr.row {
@@ -1038,93 +933,13 @@
 	   full surface brightness — on a white list a tint can only recede, and the
 	   row being worked on must never read below its neighbours — so a lifted
 	   boundary frames row and expansion as one raised unit instead. */
-	tr.is-open td {
-		border-bottom-color: transparent;
-		background: var(--je-color-surface);
-		border-top: 2px solid var(--je-color-border-strong);
-	}
-
-	tr.is-open td:first-child {
-		border-inline-start: 2px solid var(--je-color-border-strong);
-	}
-
-	tr.is-open td:last-child {
-		border-inline-end: 2px solid var(--je-color-border-strong);
-	}
-
-	.detail-row td {
-		background: var(--je-color-surface);
-		border-bottom: 2px solid var(--je-color-border-strong);
-	}
-
-	.detail-row td:first-child {
-		border-inline-start: 2px solid var(--je-color-border-strong);
-	}
-
-	.detail-row td:last-child {
-		border-inline-end: 2px solid var(--je-color-border-strong);
-	}
-
-	.detail {
-		display: grid;
-		grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-		gap: var(--je-space-6);
-		padding: var(--je-space-3) var(--je-space-2) var(--je-space-4);
-	}
-
-	.detail--single {
-		grid-template-columns: minmax(0, 1fr);
-	}
-
 	/* The exit from the pass, before the summary it summarises. It sits on its
 	   own line at the group-to-group tier so it belongs to the whole expansion
 	   rather than to the Sessions heading beneath it. */
-	.detail__record {
-		display: inline-flex;
-		margin-block-end: var(--je-space-4);
-	}
-
-	.detail__heading {
-		margin: 0 0 var(--je-space-2);
-		font-size: var(--je-font-size-xs);
-		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: var(--je-tracking-caps);
-		color: var(--je-color-text-muted);
-	}
-
 	/* The heading's own bottom margin spaces it from the content below when it
 	   stands alone. Inside this row it becomes a centring bug: flexbox centres the
 	   margin box, so an 8px bottom margin lifts the visible heading by half of it.
 	   The section owns that spacing instead, and the heading centres on its ink. */
-	.detail__section {
-		display: flex;
-		align-items: center;
-		gap: var(--je-space-3);
-		margin-block-end: var(--je-space-2);
-	}
-
-	.detail__section .detail__heading {
-		margin-block-end: 0;
-	}
-
-	.detail__section--spaced {
-		margin-block-start: var(--je-space-4);
-	}
-
-	.detail__heading--spaced {
-		margin-block-start: var(--je-space-4);
-	}
-
-	.detail__sessions {
-		margin: 0;
-		padding: 0;
-		list-style: none;
-		display: grid;
-		gap: var(--je-space-1);
-		font-size: var(--je-font-size-md);
-	}
-
 	/* Name, state, and due date read as one line per obligation; the state sits
 	   next to the name because "which ones are late" is the question this list
 	   exists to answer. */
@@ -1133,54 +948,8 @@
 	   landed at a different x and nothing aligned. Sizing to content rather
 	   than stretching also keeps the state beside its task instead of pushing
 	   it to the far edge of a wide column. */
-	.detail__tasks {
-		margin: 0;
-		padding: 0;
-		list-style: none;
-		display: grid;
-		grid-template-columns: minmax(0, max-content) max-content max-content;
-		justify-content: start;
-		gap: var(--je-space-1) var(--je-space-4);
-	}
-
-	.task {
-		display: grid;
-		grid-column: 1 / -1;
-		grid-template-columns: subgrid;
-		align-items: center;
-	}
-
-	.task__name {
-		font-size: var(--je-font-size-md);
-		min-inline-size: 0;
-	}
-
-	.task__due {
-		font-size: var(--je-font-size-xs);
-		color: var(--je-color-text-muted);
-	}
-
 	.detail__none,
 	.detail__note,
-	.detail__hint {
-		margin: 0;
-		font-size: var(--je-font-size-sm);
-		line-height: var(--je-leading-normal);
-		color: var(--je-color-text-muted);
-	}
-
-	.detail__hint {
-		margin-block-end: var(--je-space-3);
-		max-inline-size: 48ch;
-	}
-
-	.detail__actions {
-		display: flex;
-		flex-wrap: wrap;
-		gap: var(--je-space-2);
-		margin-block-start: var(--je-space-3);
-	}
-
 	/* Act-now tier: tinted card plus a solid emphasis plate, shown only for the
 	   open row so at most one is on screen. */
 	.plate {
@@ -1265,12 +1034,6 @@
 		color: var(--je-color-text-muted);
 	}
 
-	.card__detail {
-		margin-block-start: var(--je-space-3);
-		padding-block-start: var(--je-space-3);
-		border-block-start: 1px solid var(--je-color-border);
-	}
-
 	@media (max-width: 920px) {
 		.head {
 			grid-template-columns: minmax(0, 1fr);
@@ -1320,10 +1083,5 @@
 			display: block;
 		}
 
-		.detail {
-			grid-template-columns: minmax(0, 1fr);
-			gap: var(--je-space-4);
-			padding: 0;
-		}
 	}
 </style>

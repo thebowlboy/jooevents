@@ -130,7 +130,7 @@
 		     fills, so the geometry cannot disagree with what arrives. Only the
 		     header and the first section are placeholdered: what follows is
 		     conditional, and a placeholder asserts "this will exist". -->
-		<div class="header" aria-hidden="true">
+		<div class="rail" aria-hidden="true">
 			<div class="header__identity">
 				<span class="ui-skeleton sk-avatar"></span>
 				<span class="header__names">
@@ -157,8 +157,9 @@
 		{@const badge = engagementStateBadge[person.state]}
 		{@const Engagement = badge.icon}
 
-		<!-- ── 1. Who, and where they stand ─────────────────────────────────── -->
-		<header class="header" class:header--archived={archived}>
+		<div class="layout" class:layout--archived={archived}>
+		<!-- The rail: who this is, in one glance, always beside the work. -->
+		<aside class="rail" aria-label="Speaker">
 			<div class="header__identity">
 				<Avatar name={person.name} size="lg" />
 				<div class="header__names">
@@ -205,11 +206,24 @@
 				{/if}
 			</div>
 
+			{#if snapshot.publicCard && !snapshot.publicCard.provisional}
+				<!-- Their public face, where the reader looks for who this IS:
+				     headline, place, links — the bio half the fold was hiding. -->
+				<div class="rail__bio">
+					{#if snapshot.publicCard.headline}<p class="rail__headline">{snapshot.publicCard.headline}</p>{/if}
+					{#if snapshot.publicCard.location}<p class="rail__where">{snapshot.publicCard.location}</p>{/if}
+					{#if snapshot.publicCard.links.length > 0}
+						<ul class="published__links">
+							{#each snapshot.publicCard.links as link (link.href)}
+								<li><a href={link.href} target="_blank" rel="noopener noreferrer">{link.label}</a></li>
+							{/each}
+						</ul>
+					{/if}
+				</div>
+			{/if}
+
 			<p class="header__provenance">{provenanceSentence(snapshot)}</p>
 
-			{#if gap}
-				<p class="header__gap" role="note">{gap}</p>
-			{/if}
 
 			{#if snapshot.otherEngagements.length > 0}
 				<p class="header__others">
@@ -229,16 +243,10 @@
 				<p class="header__note">{person.note}</p>
 			{/if}
 
-			{#if step}
+			{#if step && step.tone !== 'danger'}
 				<div class="header__acts">
 					{#if step.href}
-						<!-- The walk's own URL. This page is the walk's best launching
-						     context; it never re-implements a step of it. -->
-						<a
-							class="ui-button ui-button--sm ui-button--{step.tone === 'danger'
-								? 'danger'
-								: 'primary'}"
-							href={step.href}>{step.label}</a>
+						<a class="ui-button ui-button--sm ui-button--primary" href={step.href}>{step.label}</a>
 					{:else}
 						<button
 							type="button"
@@ -253,36 +261,42 @@
 
 			{#if actionError}<p class="header__error" role="alert">{actionError}</p>{/if}
 			<p class="ui-sr-only" role="status">{announcement}{copied}</p>
-		</header>
+		</aside>
 
-		<!-- ── 2. Needs attention, scoped to this person ─────────────────────── -->
-		<section class="section" aria-labelledby="record-attention">
-			<h3 class="section__title" id="record-attention">Needs attention</h3>
-			{#if attention.length === 0}
-				{@const Calm = situationIcon.allClear}
-				<p class="calm">
-					<Calm size={16} aria-hidden="true" />{quietSentence(person.name, person.state)}
-				</p>
-			{:else}
-				<ul class="attention">
-					{#each attention as row (row.reason)}
-						<li class="attention__row attention__row--{row.tone}">
-							<div class="attention__body">
-								<!-- The fact is the title; the verb is the button. -->
-								<p class="attention__title">{row.title}</p>
-								{#if row.detail}<p class="attention__detail">{row.detail}</p>{/if}
-							</div>
-							{#if row.door}
-								<a class="ui-button ui-button--secondary ui-button--sm" href={row.door.href}
-									>{row.door.label}</a>
-							{/if}
-						</li>
-					{/each}
-				</ul>
-			{/if}
-		</section>
+		<div class="work">
+			<!-- Loud is tone and position, never area: each situation is one slim
+			     strip, the cancellation carries the walk door on itself, and calm
+			     is a single quiet line. -->
+			<section class="alerts" aria-label="Needs attention">
+				{#if attention.length === 0}
+					{@const Calm = situationIcon.allClear}
+					<p class="alerts__calm">
+						<Calm size={15} aria-hidden="true" />{quietSentence(person.name, person.state)}
+					</p>
+				{:else}
+					<ul class="alerts__list">
+						{#each attention as row (row.reason)}
+							<li class="strip strip--{row.tone}">
+								<p class="strip__text">
+									<strong class="strip__title">{row.title}</strong
+									>{#if row.detail}<span class="strip__detail"> — {row.detail}</span>{/if}
+								</p>
+								{#if row.reason === 'cancel_requested' && step?.href && step.tone === 'danger'}
+									<a class="ui-button ui-button--danger ui-button--sm" href={step.href}>{step.label}</a>
+								{:else if row.door}
+									<a class="ui-button ui-button--secondary ui-button--sm" href={row.door.href}
+										>{row.door.label}</a>
+								{/if}
+							</li>
+						{/each}
+					</ul>
+				{/if}
+				{#if gap}<p class="strip strip--note" role="note">{gap}</p>{/if}
+			</section>
 
-		<!-- ── 3. Speaking commitments ───────────────────────────────────────── -->
+		<!-- Deliverables, with their content ───────────────────────────── -->
+		<SpeakerDeliverables views={deliverables} engagement={person} {port} onchanged={reread} />
+		<!-- Speaking commitments ───────────────────────────────────────── -->
 		<section class="section" aria-labelledby="record-commitments">
 			<h3 class="section__title" id="record-commitments">Speaking commitments</h3>
 			{#if snapshot.sessions.length === 0}
@@ -307,11 +321,45 @@
 				</ul>
 			{/if}
 		</section>
+		<!-- Proposals: their submissions and where each decision stands ────────────────────────────────────────────── -->
+		<section class="section" aria-labelledby="record-program">
+			<h3 class="section__title" id="record-program">Proposals</h3>
 
-		<!-- ── 4. Deliverables, with their content ───────────────────────────── -->
-		<SpeakerDeliverables views={deliverables} engagement={person} {port} onchanged={reread} />
+			{#if snapshot.submissions.length === 0}
+				<p class="calm">
+					{snapshot.submissionCoverage === 'linked_only'
+						? `No accepted proposal is linked to this engagement.`
+						: `No proposal on this event carries ${person.name}’s address.`}
+				</p>
+			{:else}
+				<ul class="proposals">
+					{#each snapshot.submissions as proposal (proposal.id)}
+						<li class="proposal">
+							<a class="proposal__title" href={proposal.href}>{proposal.title}</a>
+							<span class="proposal__state">
+								{#if proposal.decision === 'undecided'}
+									<span class="ui-badge ui-badge--neutral">Decision needed</span>
+								{:else if !proposal.notified}
+									<span class="ui-badge ui-badge--warning">Result not sent</span>
+								{:else}
+									<span class="ui-badge ui-badge--success">Result sent</span>
+								{/if}
+							</span>
+							<a class="proposal__door" href={proposal.decisionHref}>Open in Decisions</a>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+			{#if snapshot.submissionCoverage === 'linked_only'}
+				<p class="calm">
+					This record knows which proposals created {person.name}’s speaking commitments.
+					Open <a href="/app/submissions">Submissions</a> to check for any other proposals
+					from this person.
+				</p>
+			{/if}
 
-		<!-- ── 5. Communications ─────────────────────────────────────────────── -->
+		</section>
+		<!-- Communications ─────────────────────────────────────────────── -->
 		<section class="section" aria-labelledby="record-communications">
 			<div class="section__head">
 				<h3 class="section__title" id="record-communications">Communications</h3>
@@ -353,76 +401,7 @@
 			<a class="ui-button ui-button--secondary ui-button--sm compose" href={composeHref(person.id)}
 				>Write to {person.name}</a>
 		</section>
-
-		<!-- ── 6. Program content ────────────────────────────────────────────── -->
-		<section class="section" aria-labelledby="record-program">
-			<h3 class="section__title" id="record-program">Program content</h3>
-
-			{#if snapshot.submissions.length === 0}
-				<p class="calm">
-					{snapshot.submissionCoverage === 'linked_only'
-						? `No accepted proposal is linked to this engagement.`
-						: `No proposal on this event carries ${person.name}’s address.`}
-				</p>
-			{:else}
-				<ul class="proposals">
-					{#each snapshot.submissions as proposal (proposal.id)}
-						<li class="proposal">
-							<a class="proposal__title" href={proposal.href}>{proposal.title}</a>
-							<span class="proposal__state">
-								{#if proposal.decision === 'undecided'}
-									<span class="ui-badge ui-badge--neutral">Decision needed</span>
-								{:else if !proposal.notified}
-									<span class="ui-badge ui-badge--warning">Result not sent</span>
-								{:else}
-									<span class="ui-badge ui-badge--success">Result sent</span>
-								{/if}
-							</span>
-							<a class="proposal__door" href={proposal.decisionHref}>Open in Decisions</a>
-						</li>
-					{/each}
-				</ul>
-			{/if}
-			{#if snapshot.submissionCoverage === 'linked_only'}
-				<p class="calm">
-					This record knows which proposals created {person.name}’s speaking commitments.
-					Open <a href="/app/submissions">Submissions</a> to check for any other proposals
-					from this person.
-				</p>
-			{/if}
-
-			<h4 class="section__subtitle">Published profile</h4>
-			{#if !snapshot.publicCard}
-				<p class="calm">
-					{person.name} is not on the public lineup, so nothing of theirs is published.
-				</p>
-			{:else if snapshot.publicCard.provisional}
-				<p class="calm">
-					The lineup lists {person.name} without a biography — nothing of theirs is approved to
-					show yet.
-				</p>
-			{:else}
-				<div class="published">
-					{#if snapshot.publicCard.headline}
-						<p class="published__headline">{snapshot.publicCard.headline}</p>
-					{/if}
-					{#if snapshot.publicCard.location}
-						<p class="published__where">{snapshot.publicCard.location}</p>
-					{/if}
-					{#if snapshot.publicCard.links.length > 0}
-						<ul class="published__links">
-							{#each snapshot.publicCard.links as link (link.href)}
-								<li>
-									<a href={link.href} target="_blank" rel="noopener noreferrer">{link.label}</a>
-								</li>
-							{/each}
-						</ul>
-					{/if}
-				</div>
-			{/if}
-		</section>
-
-		<!-- ── 7. History ────────────────────────────────────────────────────── -->
+		<!-- History ────────────────────────────────────────────────────── -->
 		<section class="section" aria-labelledby="record-history">
 			<h3 class="section__title" id="record-history">History</h3>
 			{#if snapshot.history.length === 0}
@@ -441,6 +420,8 @@
 				</ul>
 			{/if}
 		</section>
+		</div>
+		</div>
 	{/if}
 </section>
 
@@ -452,11 +433,101 @@
 	   long page. */
 	.record {
 		display: grid;
-		gap: var(--je-space-8);
+		gap: var(--je-space-5);
 		align-content: start;
 	}
 
-	.header,
+	/* One glance, two jobs: the rail says who, the work column says what needs
+	   you. Side by side where the viewport affords it; identity first, compact,
+	   when it does not — so the alerts still sit above the fold. */
+	.layout {
+		display: grid;
+		gap: var(--je-space-5);
+		align-items: start;
+	}
+
+	@media (min-width: 1100px) {
+		.layout {
+			grid-template-columns: 300px minmax(0, 1fr);
+		}
+
+		.rail {
+			position: sticky;
+			inset-block-start: var(--je-space-5);
+		}
+	}
+
+	.work {
+		display: grid;
+		gap: var(--je-space-5);
+		min-inline-size: 0;
+	}
+
+	/* The alert band: importance carried by tone and edge, not by height. */
+	.alerts {
+		display: grid;
+		gap: var(--je-space-2);
+	}
+
+	.alerts__list {
+		display: grid;
+		gap: var(--je-space-2);
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	.alerts__calm {
+		display: flex;
+		align-items: center;
+		gap: var(--je-space-2);
+		margin: 0;
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-text-muted);
+	}
+
+	.strip {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--je-space-3);
+		margin: 0;
+		padding: var(--je-space-2) var(--je-space-3);
+		border-inline-start: 3px solid var(--je-color-border-strong);
+		border-radius: var(--je-radius-control);
+		background: var(--je-color-surface);
+		font-size: var(--je-font-size-sm);
+	}
+
+	.strip--danger {
+		border-inline-start-color: var(--je-color-danger);
+		background: var(--je-color-danger-surface, var(--je-color-surface));
+	}
+
+	.strip--warning {
+		border-inline-start-color: var(--je-color-warning, var(--je-color-border-strong));
+	}
+
+	.strip--note {
+		border-inline-start-color: var(--je-color-border-strong);
+		background: var(--je-color-surface-sunken);
+		color: var(--je-color-text-muted);
+	}
+
+	.strip__text {
+		margin: 0;
+		min-inline-size: 0;
+	}
+
+	.strip__title {
+		font-weight: 600;
+	}
+
+	.strip__detail {
+		color: var(--je-color-text-muted);
+	}
+
+	.rail,
 	.section {
 		display: grid;
 		gap: var(--je-space-3);
@@ -466,15 +537,33 @@
 		background: var(--je-color-surface);
 	}
 
-	.header {
-		min-block-size: 12rem;
+	.rail {
 		align-content: start;
+		gap: var(--je-space-2);
+		min-block-size: 12rem;
+	}
+
+	.rail__bio {
+		display: grid;
+		gap: 2px;
+	}
+
+	.rail__headline {
+		margin: 0;
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-text);
+	}
+
+	.rail__where {
+		margin: 0;
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
 	}
 
 	/* A terminal engagement is an archive: the header steps back so the record
 	   reads as kept rather than current. Contrast is preserved — this is a
 	   surface step, not a text-ink step. */
-	.header--archived {
+	.layout--archived .rail {
 		background: var(--je-color-surface-sunken);
 	}
 
@@ -546,7 +635,6 @@
 	.header__provenance,
 	.header__others,
 	.header__note,
-	.header__gap,
 	.header__hint {
 		margin: 0;
 		max-inline-size: 68ch;
@@ -555,14 +643,6 @@
 	.header__note {
 		font-size: var(--je-font-size-sm);
 		color: var(--je-color-text);
-	}
-
-	.header__gap {
-		padding: var(--je-space-2) var(--je-space-3);
-		border-inline-start: 2px solid var(--je-color-border-strong);
-		background: var(--je-color-surface-sunken);
-		border-radius: var(--je-radius-control);
-		font-size: var(--je-font-size-sm);
 	}
 
 	.header__acts {
@@ -615,63 +695,8 @@
 		margin-inline-end: var(--je-space-2);
 	}
 
-	.attention,
-	.sessions,
-	.thread,
-	.proposals,
-	.history {
-		display: grid;
-		gap: var(--je-space-3);
-		margin: 0;
-		padding: 0;
-		list-style: none;
-	}
-
 	/* Marker rail plus content column, and the action takes its own line at
 	   narrow widths rather than crushing the copy between two fixed neighbours. */
-	.attention__row {
-		display: flex;
-		align-items: center;
-		flex-wrap: wrap;
-		gap: var(--je-space-2) var(--je-space-4);
-		padding: var(--je-space-3);
-		border-radius: var(--je-radius-control);
-		border-inline-start: 3px solid var(--je-color-border);
-		background: var(--je-color-surface-sunken);
-	}
-
-	.attention__row--danger {
-		border-inline-start-color: var(--je-color-danger);
-	}
-
-	.attention__row--warning {
-		border-inline-start-color: var(--je-color-warning);
-	}
-
-	.attention__row--info {
-		border-inline-start-color: var(--je-color-info);
-	}
-
-	.attention__body {
-		flex: 1 1 18rem;
-		min-inline-size: 0;
-		display: grid;
-		gap: 2px;
-	}
-
-	.attention__title {
-		margin: 0;
-		font-weight: 600;
-		overflow-wrap: anywhere;
-	}
-
-	.attention__detail {
-		margin: 0;
-		font-size: var(--je-font-size-sm);
-		color: var(--je-color-text-muted);
-		overflow-wrap: anywhere;
-	}
-
 	.session,
 	.proposal {
 		display: flex;
@@ -744,23 +769,6 @@
 		margin-block-start: var(--je-space-2);
 	}
 
-	.published {
-		display: grid;
-		gap: var(--je-space-2);
-	}
-
-	.published__headline {
-		margin: 0;
-		max-inline-size: 68ch;
-		line-height: var(--je-leading-normal);
-	}
-
-	.published__where {
-		margin: 0;
-		font-size: var(--je-font-size-sm);
-		color: var(--je-color-text-muted);
-	}
-
 	.published__links {
 		display: flex;
 		flex-wrap: wrap;
@@ -828,15 +836,14 @@
 			gap: var(--je-space-6);
 		}
 
-		.header,
+		.rail,
 		.section {
 			padding: var(--je-space-4);
 		}
 
-		/* The action cluster keeps its relationship to the copy rather than being
-		   re-ordered: two rows at a phone width, the same order as full width. */
-		.attention__row > :global(.ui-button) {
-			flex-basis: 100%;
+		/* A strip's door drops under its sentence at phone width, same order. */
+		.strip {
+			flex-wrap: wrap;
 		}
 
 		.proposal__door {

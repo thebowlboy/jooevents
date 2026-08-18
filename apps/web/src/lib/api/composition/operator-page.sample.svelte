@@ -80,7 +80,7 @@
 {:else if area === 'decisions'}
 	<DecisionsPage port={decisions} lineupPort={review} />
 {:else if area === 'speakers'}
-	<SpeakersPage port={speakers} />
+	<SpeakersPage port={speakers} recordPort={speakerRecord} />
 {:else if area === 'speaker_record'}
 	<!-- The route always carries the parameter; an empty one resolves to no
 	     record and the page says so, rather than the composition guessing. -->

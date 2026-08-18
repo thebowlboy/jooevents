@@ -37,6 +37,23 @@
 	let actionError = $state('');
 	let announcement = $state('');
 
+	/**
+	 * Outstanding first, because the section answers "what have they NOT done
+	 * yet". Within it: material waiting on the organizer outranks a speaker who
+	 * is late, which outranks quiet not-due work — ordered by whose move it is.
+	 * Settled rows are one press away rather than gone: this is not a ceremony
+	 * surface, and the archive reading (every settled row with its material)
+	 * stays intact behind the disclosure.
+	 */
+	const OUTSTANDING_ORDER: Record<string, number> = { received: 0, overdue: 1, quiet: 2 };
+	const outstanding = $derived(
+		views
+			.filter((view) => view.tone !== 'settled')
+			.toSorted((a, b) => (OUTSTANDING_ORDER[a.tone] ?? 3) - (OUTSTANDING_ORDER[b.tone] ?? 3))
+	);
+	const settled = $derived(views.filter((view) => view.tone === 'settled'));
+	let settledOpen = $state(false);
+
 	async function accept(view: DeliverableView) {
 		if (busyId) return;
 		busyId = view.def.id;
@@ -65,6 +82,7 @@
 					await onchanged();
 				}
 			});
+			settledOpen = true;
 			announcement = `${view.def.name} accepted as complete for ${engagement.name}.`;
 			await onchanged();
 		} finally {
@@ -120,9 +138,39 @@
 			<a href="/app/tasks">Assign speaker tasks</a>
 		</p>
 	{:else}
+		{#if outstanding.length === 0}
+			<p class="calm">Everything asked of {engagement.name} is settled.</p>
+		{/if}
 		<ul class="rows">
-			{#each views as view (view.def.id)}
-				{@const badge = view.tone === 'overdue' ? overdueBadge : assignmentStateBadge[view.state]}
+			{#each outstanding as view (view.def.id)}
+				{@render deliverableRow(view)}
+			{/each}
+		</ul>
+
+		{#if settled.length > 0}
+			<!-- Settled work is archive, not attention: one press away, never gone.
+			     The count keeps the denominator honest while closed. -->
+			<div class="settled">
+				<button
+					type="button"
+					class="ui-button ui-button--ghost ui-button--sm"
+					aria-expanded={settledOpen}
+					onclick={() => (settledOpen = !settledOpen)}
+					>{settledOpen ? 'Hide settled' : `Settled · ${settled.length}`}</button>
+				{#if settledOpen}
+					<ul class="rows">
+						{#each settled as view (view.def.id)}
+							{@render deliverableRow(view)}
+						{/each}
+					</ul>
+				{/if}
+			</div>
+		{/if}
+	{/if}
+</section>
+
+{#snippet deliverableRow(view: DeliverableView)}
+	{@const badge = view.tone === 'overdue' ? overdueBadge : assignmentStateBadge[view.state]}
 				{@const State = badge.icon}
 				<li class="row" class:row--waiting={view.tone === 'received'}>
 					<div class="row__head">
@@ -206,13 +254,16 @@
 							</p>
 						{/if}
 					{/if}
-				</li>
-			{/each}
-		</ul>
-	{/if}
-</section>
+	</li>
+{/snippet}
 
 <style>
+	.settled {
+		display: grid;
+		gap: var(--je-space-3);
+		justify-items: start;
+	}
+
 	.section {
 		display: grid;
 		gap: var(--je-space-3);

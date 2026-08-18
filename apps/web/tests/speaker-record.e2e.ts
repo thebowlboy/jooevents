@@ -45,14 +45,15 @@ test('the record route renders one person whole, in the design’s fixed order',
 	// `Name <address>` as display punctuation; copy still carries the raw email.
 	await expect(surface).toContainText('Lukas Brandt <lukas@perfpanel.se>');
 
-	// Seven sections, in the order the record design fixes.
+	// The alert band leads the work column; the sections follow in the reworked
+	// order — what they have not done first, the paper trail last.
+	await expect(surface.getByRole('region', { name: 'Needs attention' })).toBeVisible();
 	const headings = surface.getByRole('heading', { level: 3 });
 	await expect(headings).toHaveText([
-		'Needs attention',
-		'Speaking commitments',
 		'Deliverables',
+		'Speaking commitments',
+		'Proposals',
 		'Communications',
-		'Program content',
 		'History'
 	]);
 
@@ -71,7 +72,7 @@ test('the header cue composes standing, when, where — each arm only when its f
 	await expect(surface).toContainText('confirmed', { timeout: 15000 });
 	// Placed on the grid, so the slot arms render; the flight scenario has no
 	// published release, so the publication arm does not.
-	await expect(surface).toContainText('Main Stage');
+	await expect(surface).toContainText('Breakout Stage A');
 	await expect(surface).not.toContainText('public since release');
 
 	// Provenance, in the attribution grammar, always present.
@@ -124,8 +125,11 @@ test('accepting commits through the shared act, leaves a receipt, and undoes exa
 	await expect(surface).toContainText('Severe walnut allergy');
 
 	await page.getByRole('button', { name: /Undo/ }).click();
-	await expect(surface.getByRole('button', { name: 'Accept as complete' }).first()).toBeEnabled();
-	await expect(surface).not.toContainText('Accepted by you');
+	const travelRow = surface.locator('.row', { hasText: 'Travel details' }).first();
+	await expect(travelRow.getByRole('button', { name: 'Accept as complete' })).toBeEnabled();
+	// Scoped to the row the act touched: Lukas's authored archive keeps its own
+	// earlier acceptances, and the undo must not be judged against those.
+	await expect(travelRow).not.toContainText('Accepted by you');
 });
 
 test('no accept control renders above unviewable content', async ({ page }) => {
@@ -155,8 +159,8 @@ test('a cancellation request leads the record, and its one remedy is the walk', 
 	const surface = record(page);
 	await expect(surface).toContainText('Maya Lindqvist asked to cancel.', { timeout: 15000 });
 
-	// Leading: it is the first attention row on the page.
-	const rows = surface.locator('.attention__row');
+	// Leading: it is the first strip in the alert band.
+	const rows = surface.locator('.strip');
 	await expect(rows.first()).toContainText('asked to cancel');
 	await expect(surface).toContainText('client emergency', { ignoreCase: true });
 
@@ -180,9 +184,11 @@ test('a bounced address, overdue work, and an unsent result rank by consequence'
 }) => {
 	await page.goto('/app/speakers/spk-7');
 	const surface = record(page);
-	await expect(surface).toContainText('Needs attention', { timeout: 15000 });
+	await expect(surface.getByRole('region', { name: 'Needs attention' })).toBeVisible({
+		timeout: 15000
+	});
 
-	const titles = surface.locator('.attention__title');
+	const titles = surface.locator('.strip__title');
 	await expect(titles.first()).toContainText('never received');
 	await expect(surface).toContainText('3 tasks are past their due date.');
 	await expect(
@@ -224,6 +230,7 @@ test('a terminal engagement is an archive: no attention, material intact', async
 test('a waived deliverable says who waived it and when, and claims no content', async ({ page }) => {
 	await page.goto('/app/speakers/spk-8');
 	const surface = record(page);
+	await surface.getByRole('button', { name: /^Settled/ }).click();
 	await expect(surface).toContainText('Waived', { timeout: 15000 });
 	await expect(surface).toContainText('Waived by you');
 });
@@ -258,20 +265,19 @@ test('the thread is the whole thread, newest first, with each entry’s own outc
 test('published profile renders as the public roster renders it, TBA included', async ({ page }) => {
 	await page.goto('/app/speakers/spk-6');
 	const surface = record(page);
-	await expect(surface).toContainText('Published profile', { timeout: 15000 });
-	// Ravi is on the lineup with nothing approved: the record says so rather than
+	// Ravi is on the lineup with nothing approved: the rail says so rather than
 	// inventing a biography.
-	await expect(surface).toContainText('without a biography');
+	await expect(surface).toContainText('Shows as TBA', { timeout: 15000 });
 
 	await page.goto('/app/speakers/spk-5');
-	await expect(record(page)).toContainText('not on the public lineup', { timeout: 15000 });
+	await expect(record(page)).toContainText('Not on the public lineup', { timeout: 15000 });
 });
 
 test('history renders its absence as itself, never an invented timeline', async ({ page }) => {
 	await page.goto('/app/speakers/spk-5');
 	const surface = record(page);
 	await expect(surface).toContainText('History', { timeout: 15000 });
-	await expect(surface).toContainText('A per-person history is not');
+	await expect(surface).toContainText('No person-linked changes have been recorded');
 	await expect(surface.getByRole('link', { name: 'Pulse' })).toBeVisible();
 });
 
@@ -285,16 +291,30 @@ test('an address that names no engagement is answered as itself', async ({ page 
 });
 
 test('every person-shaped door resolves to the one record URL', async ({ page }) => {
-	// The roster row expansion.
+	// The roster: a press on the person opens the whole record over the pass,
+	// addressed in the URL; the per-row control is the focusable same door.
 	await page.goto('/app/speakers');
 	const roster = page.getByRole('region', { name: 'Speaker roster' });
-	await roster
-		.getByRole('button', { name: 'Details for Maya Lindqvist' })
-		.filter({ visible: true })
-		.click();
 	await expect(
-		roster.getByRole('link', { name: 'Open record' }).filter({ visible: true }).first()
+		roster
+			.getByRole('link', { name: "Open Maya Lindqvist's record" })
+			.filter({ visible: true })
+			.first()
 	).toHaveAttribute('href', '/app/speakers/spk-1');
+	// Pressed at the avatar corner: at phone width the email copy control's hit
+	// area overlaps the name itself (recorded as a roster-card touch defect).
+	await roster
+		.locator('[data-speaker="spk-1"]')
+		.filter({ visible: true })
+		.first()
+		.click({ position: { x: 12, y: 12 } });
+	const overlay = page.getByRole('dialog', { name: 'Maya Lindqvist' });
+	await expect(overlay).toBeVisible();
+	await expect(page).toHaveURL(/record=spk-1/);
+	await expect(overlay.getByRole('region', { name: 'Needs attention' })).toBeVisible();
+	await page.keyboard.press('Escape');
+	await expect(overlay).not.toBeVisible();
+	await expect(page).not.toHaveURL(/record=/);
 
 	// The Tasks matrix speaker name's peek keeps working, and its door moved too.
 	await page.goto('/app/tasks');
