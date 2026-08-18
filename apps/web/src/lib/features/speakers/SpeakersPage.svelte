@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
-	import { ChevronRight, TriangleAlert } from 'lucide-svelte';
+	import { ChevronRight, Search, TriangleAlert } from 'lucide-svelte';
 	import {
 		CopyValue,
+		createSettler,
 		Modal,
 		revealTarget,
 		shouldIgnoreRowPress,
@@ -21,6 +22,7 @@
 	import type { SpeakerRecordPort } from '$lib/api/speaker-record-port';
 	import { goto } from '$app/navigation';
 	import type { SpeakerRow, TaskAssignment, TaskDef } from '$lib/api/types';
+	import { speakerMatchesSearch } from './speaker-search';
 
 	interface Props {
 		port: SpeakersPagePort;
@@ -52,7 +54,7 @@
 		// and a single-speaker arrival both belong to the roster view.
 		void applyParams({
 			view: next === 'roster' ? null : next,
-			...(next === 'lineup' ? { filter: null, speaker: null } : {})
+			...(next === 'lineup' ? { filter: null, search: null, speaker: null } : {})
 		});
 	}
 
@@ -74,6 +76,21 @@
 
 	/** The roster's filter is shareable state, so it lives in the address. */
 	const filter = $derived(paramIn('filter', filterKeys, 'all'));
+	const search = $derived(param('search') ?? '');
+	let searchDraft = $state<string | null>(null);
+	const typedSearch = $derived(searchDraft ?? search);
+	const searchSettler = createSettler();
+	$effect(() => () => searchSettler.cancel());
+
+	function queueSearch(value: string) {
+		searchDraft = value;
+		searchSettler.schedule(() => void commitSearch(value));
+	}
+
+	async function commitSearch(value: string) {
+		await applyParams({ search: value.trim() || null, speaker: null });
+		if (searchDraft === value) searchDraft = null;
+	}
 
 	const filters: { key: FilterKey; label: string; sub?: string }[] = [
 		{ key: 'all', label: 'All' },
@@ -105,7 +122,9 @@
 	}
 
 	const rows = $derived(speakers ?? []);
-	const filtered = $derived(rows.filter((row) => matchesFilter(row, filter)));
+	const filtered = $derived(rows.filter(
+		(row) => matchesFilter(row, filter) && speakerMatchesSearch(row, search)
+	));
 	const counts = $derived<Record<FilterKey, number>>({
 		all: rows.length,
 		confirmed: rows.filter((row) => row.state === 'confirmed').length,
@@ -235,7 +254,9 @@
 	async function showRow(row: SpeakerRow) {
 		// A filter the link never asked for can hide the row it did ask for, so the
 		// roster widens to the full list rather than landing on an empty state.
-		if (!matchesFilter(row, filter)) await applyParams({ filter: null });
+		if (!matchesFilter(row, filter) || !speakerMatchesSearch(row, search)) {
+			await applyParams({ filter: null, search: null });
+		}
 		await tick();
 		// The roster renders twice — a table and, below a breakpoint, cards — and
 		// only one of the two is laid out. Scrolling to the hidden one would move
@@ -429,6 +450,21 @@
 			</button>
 		{/each}
 	</nav>
+	<div class="ui-input-wrap ui-input-wrap--leading head__search">
+		<span class="ui-input-wrap__icon" aria-hidden="true"><Search size={14} /></span>
+		<input
+			class="ui-control"
+			type="search"
+			placeholder="Search name or address"
+			aria-label="Search speakers by name or address"
+			value={typedSearch}
+			oninput={(event) => queueSearch(event.currentTarget.value)}
+			onkeydown={(event) => {
+				if (event.key !== 'Enter') return;
+				event.preventDefault();
+				searchSettler.flush();
+			}} />
+	</div>
 	<button type="button" class="ui-button ui-button--secondary ui-button--sm head__add">
 		Add a speaker directly
 	</button>
@@ -436,6 +472,12 @@
 		Nothing reaches a public surface until a speaker is confirmed and their content is approved.
 	</p>
 </div>
+
+{#if search && speakers}
+	<p class="search-result" role="status">
+		{filtered.length} {filtered.length === 1 ? 'speaker' : 'speakers'} match “{search}” in this filter.
+	</p>
+{/if}
 
 {#if port.profileReview && speakers}
 	<SpeakerProfileReviewQueue port={port.profileReview} {speakers} onchanged={load} />
@@ -471,6 +513,14 @@
 					replacement, add a speaker directly instead.
 				</p>
 				<a class="ui-button ui-button--secondary ui-button--sm" href="/app/decisions">Review decisions</a>
+			{:else if search}
+				{@const Situation = situationIcon.filteredEmpty}
+				<span class="panel__mark" aria-hidden="true"><Situation size={22} /></span>
+				<p class="panel__title">No speakers match “{search}”</p>
+				<p class="panel__copy">Try another name or address, or clear the search.</p>
+				<button type="button" class="ui-button ui-button--secondary ui-button--sm" onclick={() => applyParams({ search: null })}>
+					Clear search
+				</button>
 			{:else if filter === 'attention'}
 				{@const Situation = situationIcon.allClear}
 				<span class="panel__mark panel__mark--clear" aria-hidden="true"><Situation size={22} /></span>
@@ -687,7 +737,7 @@
 
 	.head {
 		display: grid;
-		grid-template-columns: minmax(0, 1fr) auto;
+		grid-template-columns: minmax(0, 1fr) minmax(14rem, 22rem) auto;
 		align-items: center;
 		gap: var(--je-space-2) var(--je-space-4);
 	}
@@ -700,6 +750,16 @@
 
 	.head__add {
 		justify-self: end;
+	}
+
+	.head__search {
+		inline-size: 100%;
+	}
+
+	.search-result {
+		margin: var(--je-space-3) 0 0;
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-text-muted);
 	}
 
 	.chips__tab {

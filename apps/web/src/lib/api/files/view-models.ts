@@ -189,6 +189,22 @@ const EXTENSION_CONTENT_TYPES: Readonly<Record<string, FileContentType>> = Objec
 	zip: 'application/zip'
 });
 
+/**
+ * Picker presentation derives from the same closed extension map used by
+ * client admission. The byte values mirror the server defaults and are locked
+ * to that enforcement source by the focused view-model test.
+ */
+export const FILE_UPLOAD_ACCEPT = Object.freeze(
+	Object.keys(EXTENSION_CONTENT_TYPES).map((extension) => `.${extension}`).join(',')
+);
+export const FILE_UPLOAD_TYPES_LABEL =
+	'PDF, PNG, JPG/JPEG, WebP, PowerPoint (.pptx), Keynote (.key), or ZIP';
+export const SPEAKER_UPLOAD_MAXIMUM_BYTES = 100 * 1024 * 1024;
+export const ORGANIZER_UPLOAD_MAXIMUM_BYTES = 250 * 1024 * 1024;
+const uploadMaximumLabel = (bytes: number) => `${bytes / (1024 * 1024)} MB`;
+export const SPEAKER_UPLOAD_MAXIMUM_LABEL = uploadMaximumLabel(SPEAKER_UPLOAD_MAXIMUM_BYTES);
+export const ORGANIZER_UPLOAD_MAXIMUM_LABEL = uploadMaximumLabel(ORGANIZER_UPLOAD_MAXIMUM_BYTES);
+
 const VIDEO_EXTENSIONS = new Set(['mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi', 'wmv']);
 
 /**

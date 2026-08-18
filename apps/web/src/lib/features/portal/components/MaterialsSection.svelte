@@ -13,7 +13,13 @@
 	import type { FileLinkProvider } from '@jooevents/contracts/files';
 	import { usePortalFilesPort, type UploadSourceFile } from '$lib/api/files/portal-files-port';
 	import type { PortalFilesRefusalReason } from '$lib/api/files/portal-files-port';
-	import type { PortalMaterialsView, PortalFileRequestView } from '$lib/api/files/view-models';
+	import {
+		FILE_UPLOAD_ACCEPT,
+		FILE_UPLOAD_TYPES_LABEL,
+		SPEAKER_UPLOAD_MAXIMUM_LABEL,
+		type PortalMaterialsView,
+		type PortalFileRequestView
+	} from '$lib/api/files/view-models';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
 	import { materialsCopy, materialsRefusalSentence, materialsScanLabel } from '../materials-copy';
 	import RefusalNote from './RefusalNote.svelte';
@@ -245,11 +251,14 @@
 				bind:this={fileInput}
 				class="materials__file-input"
 				type="file"
-				accept=".pdf,.png,.jpg,.jpeg,.webp,.pptx,.key,.zip"
+				accept={FILE_UPLOAD_ACCEPT}
 				tabindex="-1"
 				aria-hidden="true"
 				onchange={onFilePicked}
 			/>
+			<p class="materials__constraints">
+				Files: {FILE_UPLOAD_TYPES_LABEL}. Maximum {SPEAKER_UPLOAD_MAXIMUM_LABEL} each.
+			</p>
 
 			{#if busy === 'upload'}
 				<div class="materials__progress">
@@ -431,6 +440,13 @@
 
 	.materials__file-input {
 		display: none;
+	}
+
+	.materials__constraints {
+		margin: calc(var(--je-space-2) * -1) 0 0;
+		font-size: var(--je-font-size-xs);
+		line-height: var(--je-leading-normal);
+		color: var(--je-color-text-muted);
 	}
 
 	.asks {

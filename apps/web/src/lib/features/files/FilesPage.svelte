@@ -8,16 +8,24 @@
 	 * in place, every commit leaves a receipt, and a detach carries its undo —
 	 * blobs are refcounted, so recovery is honest.
 	 */
-	import { ChevronDown, ChevronRight } from 'lucide-svelte';
+	import { ChevronDown, ChevronRight, Search } from 'lucide-svelte';
 	import { DATE_CLASS, formatDate } from '@jooevents/contracts';
-	import { Badge, Field, PENDING_MIN_VISIBLE_MS, Progress, trackPending } from '$lib/ui';
+	import { Badge, createSettler, Field, PENDING_MIN_VISIBLE_MS, Progress, trackPending } from '$lib/ui';
 	import type { FilesPagePort } from '$lib/api/files/files-page-port';
 	import type { FileLinkProvider } from '@jooevents/contracts/files';
-	import type { OrganizerFilesView, OrganizerShareView } from '$lib/api/files/view-models';
+	import {
+		FILE_UPLOAD_ACCEPT,
+		FILE_UPLOAD_TYPES_LABEL,
+		ORGANIZER_UPLOAD_MAXIMUM_LABEL,
+		type OrganizerFilesView,
+		type OrganizerShareView
+	} from '$lib/api/files/view-models';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
 	import { filesRefusalSentence } from './copy';
 	import FilesPanel from './FilesPanel.svelte';
+	import { applyParams, param } from '$lib/features/workspace/url-state.svelte';
+	import { filterReceivedFiles, receivedSessionChoices } from './received-files-filter';
 
 	let { port }: { port: FilesPagePort } = $props();
 
@@ -25,6 +33,27 @@
 	let failed = $state(false);
 	let reloading = $state(false);
 	let readTicket = 0;
+	const receivedFileSearch = $derived(param('file') ?? '');
+	const receivedSession = $derived(param('session') ?? '');
+	let receivedFileDraft = $state<string | null>(null);
+	const typedReceivedFile = $derived(receivedFileDraft ?? receivedFileSearch);
+	const receivedSearchSettler = createSettler();
+	$effect(() => () => receivedSearchSettler.cancel());
+	const filteredReceived = $derived(filterReceivedFiles(view?.received ?? [], {
+		file: receivedFileSearch,
+		session: receivedSession
+	}));
+	const receivedSessions = $derived(receivedSessionChoices(view?.received ?? []));
+
+	function queueReceivedFileSearch(value: string): void {
+		receivedFileDraft = value;
+		receivedSearchSettler.schedule(() => void commitReceivedFileSearch(value));
+	}
+
+	async function commitReceivedFileSearch(value: string): Promise<void> {
+		await applyParams({ file: value.trim() || null });
+		if (receivedFileDraft === value) receivedFileDraft = null;
+	}
 
 	const waiting = trackPending(() => view === null && !failed, {
 		minVisibleMs: PENDING_MIN_VISIBLE_MS
@@ -461,10 +490,42 @@
 		</section>
 
 		<section class="section" aria-labelledby="files-received-heading">
-			<h2 class="section__title" id="files-received-heading">Received from speakers</h2>
+			<header class="section__head">
+				<h2 class="section__title" id="files-received-heading">Received from speakers</h2>
+				{#if view.received.length > 0}
+					<div class="received-filters" aria-label="Received file filters">
+						<div class="ui-input-wrap ui-input-wrap--leading received-filters__file">
+							<span class="ui-input-wrap__icon" aria-hidden="true"><Search size={14} /></span>
+							<input
+								class="ui-control"
+								type="search"
+								placeholder="Find a file"
+								aria-label="Filter received files by name"
+								value={typedReceivedFile}
+								oninput={(event) => queueReceivedFileSearch(event.currentTarget.value)}
+								onkeydown={(event) => {
+									if (event.key !== 'Enter') return;
+									event.preventDefault();
+									receivedSearchSettler.flush();
+								}} />
+						</div>
+						<select
+							class="ui-select received-filters__session"
+							aria-label="Filter received files by session"
+							value={receivedSession}
+							onchange={(event) => applyParams({ session: event.currentTarget.value || null })}>
+							<option value="">All sessions</option>
+							{#each receivedSessions as session (session)}
+								<option value={session}>{session}</option>
+							{/each}
+						</select>
+					</div>
+				{/if}
+			</header>
 			{#if view.received.length > 0}
+				{#if filteredReceived.length > 0}
 				<ul class="groups">
-					{#each view.received as group (group.engagementId)}
+					{#each filteredReceived as group (group.engagementId)}
 						{@const expanded = expandedEngagementId === group.engagementId}
 						<li class="group" class:group--open={expanded}>
 							<button
@@ -495,6 +556,14 @@
 						</li>
 					{/each}
 				</ul>
+				{:else}
+					<div class="received-empty">
+						<p class="section__empty">No received files match these filters.</p>
+						<button type="button" class="ui-button ui-button--secondary ui-button--sm" onclick={() => applyParams({ file: null, session: null })}>
+							Clear filters
+						</button>
+					</div>
+				{/if}
 			{:else}
 				<p class="section__empty">Nothing received yet. Files speakers upload land here.</p>
 			{/if}
@@ -567,11 +636,14 @@
 				bind:this={shareFileInput}
 				class="page__file-input"
 				type="file"
-				accept=".pdf,.png,.jpg,.jpeg,.webp,.pptx,.key,.zip"
+				accept={FILE_UPLOAD_ACCEPT}
 				tabindex="-1"
 				aria-hidden="true"
 				onchange={onShareFilePicked}
 			/>
+			<p class="upload-constraints">
+				Files: {FILE_UPLOAD_TYPES_LABEL}. Maximum {ORGANIZER_UPLOAD_MAXIMUM_LABEL} each.
+			</p>
 
 			{#if view.shares.length > 0}
 				<ul class="shares">
@@ -751,6 +823,34 @@
 		margin: 0;
 		color: var(--je-color-text-muted);
 		max-inline-size: 62ch;
+	}
+
+	.received-filters {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: var(--je-space-2);
+	}
+
+	.received-filters__file {
+		inline-size: min(18rem, 100%);
+	}
+
+	.received-filters__session {
+		max-inline-size: min(20rem, 100%);
+	}
+
+	.received-empty {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: var(--je-space-3);
+	}
+
+	.upload-constraints {
+		margin: 0;
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
 	}
 
 	.composer {
@@ -949,5 +1049,33 @@
 
 	.page__fill--short {
 		inline-size: min(14rem, 60%);
+	}
+
+	@media (max-width: 768px) {
+		.section__head,
+		.received-filters {
+			align-items: stretch;
+		}
+
+		.received-filters,
+		.received-filters__file,
+		.received-filters__session {
+			inline-size: 100%;
+			max-inline-size: none;
+		}
+
+		.group__row {
+			display: grid;
+			grid-template-columns: auto minmax(0, 1fr) auto;
+			min-block-size: 2.75rem;
+		}
+
+		.group__chevron {
+			grid-row: 1 / span 2;
+		}
+
+		.group__session {
+			grid-column: 2 / 4;
+		}
 	}
 </style>
