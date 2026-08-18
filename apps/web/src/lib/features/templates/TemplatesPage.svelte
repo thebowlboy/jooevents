@@ -1124,7 +1124,12 @@
 				<!-- One reserved row: the copy's identity on the left, and — only while a
 				     draft is under review — the Before/After switch on the right. Its
 				     height fits the segmented control in every state, so the toggle's
-				     arrival repaints the row without moving the preview below it. -->
+				     arrival repaints the row without moving the preview below it.
+				     This line states the edit capability of the artifact below it, both
+				     halves of it: a read-only view says so, and an editable one says how
+				     to edit. The claim tracks `inlineEnabled` rather than the branch, so
+				     a streaming round or the draft's read-only Before side never offers
+				     an edit that would be refused. -->
 				<div class="editor__top">
 					<p class="editor__state">
 						{#if viewedRevision !== null}
@@ -1132,9 +1137,10 @@
 						{:else if draft && draftSide === 'before'}
 							<span class="ui-badge ui-badge--neutral">Current</span> Revision {current.revision}.
 						{:else if draft}
-							<span class="ui-badge ui-badge--info">Draft</span> Not applied yet.
+							<span class="ui-badge ui-badge--info">Draft</span> Not applied yet.{#if inlineEnabled}
+								Click any text to edit it.{/if}
 						{:else}
-							Current · revision {current.revision}
+							Current · revision {current.revision}{#if inlineEnabled} · click any text to edit it.{/if}
 						{/if}
 					</p>
 					{#if draft && viewedRevision === null}
@@ -1212,12 +1218,6 @@
 						</div>
 					{/if}
 				</div>
-				<!-- The one standing hint for the direct lane. Visibility, not
-				     existence, tracks editability, so the card's geometry never
-				     moves when a read-only view makes the line momentarily untrue. -->
-				<p class="editor__hint" class:editor__hint--off={!inlineEnabled}>
-					Click any text to edit it directly.
-				</p>
 				{#if inlineUnit && inlineAnchor}
 					{#key `${inlineUnit.type}:${inlineUnit.path}`}
 						<InlineEditor
@@ -1780,18 +1780,6 @@
 
 	.editor__nobody p {
 		margin: 0;
-	}
-
-	/* The quiet one-line hint under the preview. Hidden — never removed — while
-	   the preview is inert, so the card's height holds. */
-	.editor__hint {
-		margin: 0;
-		font-size: var(--je-font-size-xs);
-		color: var(--je-color-text-muted);
-	}
-
-	.editor__hint--off {
-		visibility: hidden;
 	}
 
 	.editor__nobody-sub {
