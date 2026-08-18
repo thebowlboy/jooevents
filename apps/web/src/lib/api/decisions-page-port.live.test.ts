@@ -723,7 +723,20 @@ describe('live tuned Decisions page port', () => {
 		expect(await port.review.myQueue()).toEqual([]);
 		expect(await port.review.accoladeDefs()).toEqual([]);
 		expect(await port.review.plans()).toEqual([]);
-		expect(await port.templates.list()).toEqual({ messages: [] });
+		expect(await port.templates.list()).toEqual({
+			messages: [{
+				id: id(72),
+				key: 'decision.accepted',
+				name: 'Acceptance notice',
+				purpose: 'decision_notification',
+				subject: 'Your submission decision',
+				blocks: [],
+				mergeFields: [],
+				revision: 1,
+				revisions: [],
+				usedBy: ['Decisions']
+			}]
+		});
 		expect(await port.speakers.profile('a@example.test')).toBeNull();
 		expect(await port.settings.get()).toBeNull();
 		expect(port.workspace.decisionAttentionExpectedSnapshot()).toBeNull();

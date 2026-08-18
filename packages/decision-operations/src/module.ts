@@ -72,6 +72,15 @@ export interface DecisionStateReadSource {
     scope: DecisionScopeDto,
     submissionIds: readonly string[]
   ): ReadonlyMap<string, string>;
+  /**
+   * Optional cross-lane projection of provider acceptance for the current
+   * Decision heads. Implementations must exclude releases authored before a
+   * correction, so old mail never marks a corrected result as notified.
+   */
+  readNotificationAcceptedInstants?(
+    scope: DecisionScopeDto,
+    submissionIds: readonly string[]
+  ): ReadonlyMap<string, string>;
 }
 
 function ref(key: string): VersionedDefinitionRef {
@@ -284,6 +293,11 @@ export function createDecisionOperationModule(
             scope,
             query.submissionIds
           ) ?? new Map<string, string>();
+          const notificationAcceptedInstants =
+            input.decisions.readNotificationAcceptedInstants?.(
+              scope,
+              query.submissionIds
+            );
           // Undecided submissions serve a null head; absence is never a state.
           return Object.freeze({
             kind: 'success' as const,
@@ -299,7 +313,14 @@ export function createDecisionOperationModule(
                     ? null
                     : head.version === 1
                       ? head.decidedAt
-                      : firstDecisionInstants.get(submissionId) ?? null
+                      : firstDecisionInstants.get(submissionId) ?? null,
+                  ...(notificationAcceptedInstants === undefined
+                    ? {}
+                    : {
+                        notificationAcceptedAt: head === null
+                          ? null
+                          : notificationAcceptedInstants.get(submissionId) ?? null
+                      })
                 };
               })
             })

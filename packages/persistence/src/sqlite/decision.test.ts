@@ -59,6 +59,17 @@ function fixture(environment?: DecisionEnvironmentSource) {
       operation_version INTEGER NOT NULL, workspace_id TEXT NOT NULL,
       event_id TEXT, occurred_at_ms INTEGER NOT NULL, result_json TEXT NOT NULL
     ) STRICT;
+    CREATE TABLE communication_message_releases (
+      release_id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL,
+      event_id TEXT NOT NULL, batch_id TEXT NOT NULL,
+      recipient_ref_id TEXT NOT NULL, purpose_key TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    ) STRICT;
+    CREATE TABLE communication_outbound_delivery_heads (
+      workspace_id TEXT NOT NULL, event_id TEXT NOT NULL,
+      release_id TEXT PRIMARY KEY, state TEXT NOT NULL,
+      updated_at_ms INTEGER NOT NULL
+    ) STRICT;
   `);
   installEventSpineSchema(sqlite);
   installProgramVocabularySchema(sqlite);
@@ -192,6 +203,84 @@ function acceptPlan(fx: ReturnType<typeof fixture>, graduation: Record<string, u
 }
 
 describe('disposable SQLite Decision repository', () => {
+  test('projects only provider acceptance authored for the current decision head', () => {
+    const fx = fixture();
+    try {
+      fx.candidates.set(submissionId, candidate());
+      const initial = planDecisionMutation({
+        planningInput: {
+          action: 'decide', scope, actorUserId: userId, occurredAt: now,
+          decisions: [{
+            submissionId, state: 'declined',
+            expectedDecisionVersion: null, expectedDecisionDigestSha256: null,
+            graduation: null
+          }]
+        },
+        environment: { decisions: fx.decisions, sessions: fx.decisions }
+      });
+      fx.sqlite.exec('BEGIN IMMEDIATE;');
+      fx.decisions.applyDecisionPlan(initial);
+      fx.sqlite.exec('COMMIT;');
+
+      const firstAcceptedAt = Date.parse('2026-08-13T08:02:00.000Z');
+      fx.sqlite.query(`
+        INSERT INTO communication_message_releases (
+          release_id, workspace_id, event_id, batch_id,
+          recipient_ref_id, purpose_key, created_at
+        ) VALUES ('release-1', ?, ?, 'batch-1', ?, 'decision_notification', ?)
+      `).run(workspaceId, eventId, submissionId, '2026-08-13T08:01:00.000Z');
+      fx.sqlite.query(`
+        INSERT INTO communication_outbound_delivery_heads (
+          workspace_id, event_id, release_id, state, updated_at_ms
+        ) VALUES (?, ?, 'release-1', 'accepted', ?)
+      `).run(workspaceId, eventId, firstAcceptedAt);
+      expect(fx.decisions.readNotificationAcceptedInstants(scope, [submissionId]))
+        .toEqual(new Map([[submissionId, '2026-08-13T08:02:00.000Z']]));
+
+      const head = fx.decisions.readDecisionHead(scope, submissionId)!;
+      const correctionInput = resolveDecisionMutationPlanningInput({
+        authorInput: {
+          action: 'decide',
+          decisions: [{
+            submissionId, state: 'accepted',
+            expectedDecisionVersion: head.version,
+            expectedDecisionDigestSha256: head.digestSha256
+          }]
+        } as never,
+        scope,
+        actorUserId: userId,
+        occurredAt: later,
+        environment: { decisions: fx.decisions, sessions: fx.decisions },
+        newSessionId: () => sessionId
+      });
+      const correction = planDecisionMutation({
+        planningInput: correctionInput,
+        environment: { decisions: fx.decisions, sessions: fx.decisions }
+      });
+      fx.sqlite.exec('BEGIN IMMEDIATE;');
+      fx.decisions.applySessionGraduation(correction.rows[0]!.graduation!);
+      fx.decisions.applyDecisionPlan(correction);
+      fx.sqlite.exec('COMMIT;');
+      expect(fx.decisions.readNotificationAcceptedInstants(scope, [submissionId]).size).toBe(0);
+
+      fx.sqlite.query(`
+        INSERT INTO communication_message_releases (
+          release_id, workspace_id, event_id, batch_id,
+          recipient_ref_id, purpose_key, created_at
+        ) VALUES ('release-2', ?, ?, 'batch-2', ?, 'decision_notification', ?)
+      `).run(workspaceId, eventId, submissionId, '2026-08-13T08:06:00.000Z');
+      fx.sqlite.query(`
+        INSERT INTO communication_outbound_delivery_heads (
+          workspace_id, event_id, release_id, state, updated_at_ms
+        ) VALUES (?, ?, 'release-2', 'accepted', ?)
+      `).run(workspaceId, eventId, Date.parse('2026-08-13T08:07:00.000Z'));
+      expect(fx.decisions.readNotificationAcceptedInstants(scope, [submissionId]))
+        .toEqual(new Map([[submissionId, '2026-08-13T08:07:00.000Z']]));
+    } finally {
+      fx.sqlite.close();
+    }
+  });
+
   test('retains the first decision instant after the mutable head advances', () => {
     const fx = fixture();
     try {

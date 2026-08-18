@@ -26,8 +26,11 @@
 		templates: MessageTemplate[] | null
 	): { href: string; name: string } | null {
 		if (!label || !templates) return null;
-		const key = templateKeyByLabel[label.split(' @ ')[0] ?? ''];
-		const match = key ? templates.find((template) => template.key === key) : undefined;
+		const statedName = label.split(' @ ')[0] ?? '';
+		const key = templateKeyByLabel[statedName];
+		const match = key
+			? templates.find((template) => template.key === key)
+			: templates.find((template) => template.name === statedName);
 		return match ? { href: `/app/templates?template=${match.id}`, name: match.name } : null;
 	}
 </script>

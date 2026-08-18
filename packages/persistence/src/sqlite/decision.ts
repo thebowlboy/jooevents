@@ -153,6 +153,11 @@ interface OriginRow { readonly origin_json: string }
 interface ScopeRow { readonly event_id: string }
 interface CountRow { readonly count: number }
 interface DecisionOperationLogRow { readonly result_json: string }
+interface AcceptedDecisionNotificationRow {
+  readonly submission_id: string;
+  readonly created_at: string;
+  readonly accepted_at_ms: number;
+}
 
 /**
  * Canonical Decision persistence plus the Session graduation collaboration
@@ -252,6 +257,58 @@ export class SQLiteDecisionRepository implements DecisionTransactionPort,
       if (error instanceof SQLiteDecisionError) throw error;
       throw new SQLiteDecisionError('data_corrupt', error);
     }
+  }
+
+  /**
+   * Joins the immutable per-recipient release to its current outbound head.
+   * `recipient_ref_id` is the decision audience's submission reference. Only
+   * provider-accepted releases authored at or after the current Decision head
+   * count, so amending a decision makes the earlier notification inapplicable
+   * without mutating either history.
+   */
+  readNotificationAcceptedInstants(
+    scope: DecisionScopeDto,
+    submissionIds: readonly string[]
+  ): ReadonlyMap<string, string> {
+    if (!this.scopeExists(scope) || submissionIds.length === 0) return new Map();
+    const requested = [...new Set(submissionIds)];
+    const placeholders = requested.map(() => '?').join(', ');
+    const rows = this.input.sqlite.query<
+      AcceptedDecisionNotificationRow,
+      string[]
+    >(`
+      SELECT r.recipient_ref_id AS submission_id,
+             r.created_at AS created_at,
+             h.updated_at_ms AS accepted_at_ms
+        FROM communication_message_releases r
+        JOIN communication_outbound_delivery_heads h
+          ON h.workspace_id = r.workspace_id
+         AND h.event_id = r.event_id
+         AND h.release_id = r.release_id
+       WHERE r.workspace_id = ? AND r.event_id = ?
+         AND r.purpose_key = 'decision_notification'
+         AND h.state = 'accepted'
+         AND r.recipient_ref_id IN (${placeholders})
+       ORDER BY r.recipient_ref_id, h.updated_at_ms
+    `).all(scope.workspaceId, scope.eventId, ...requested);
+    const heads = new Map(requested.map((submissionId) => [
+      submissionId,
+      this.readDecisionHead(scope, submissionId)
+    ]));
+    const accepted = new Map<string, string>();
+    for (const row of rows) {
+      if (accepted.has(row.submission_id)) continue;
+      const head = heads.get(row.submission_id);
+      if (head === undefined) continue;
+      const createdAtMs = Date.parse(row.created_at);
+      const decidedAtMs = Date.parse(head.decidedAt);
+      if (!Number.isFinite(createdAtMs) || !Number.isFinite(decidedAtMs)) {
+        throw new SQLiteDecisionError('data_corrupt');
+      }
+      if (createdAtMs < decidedAtMs || row.accepted_at_ms < decidedAtMs) continue;
+      accepted.set(row.submission_id, new Date(row.accepted_at_ms).toISOString());
+    }
+    return accepted;
   }
 
   listSessionOrigins(

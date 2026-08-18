@@ -463,7 +463,12 @@ describe('live tuned Submissions page port', () => {
 		const port = composePort({
 			triage: fakeTriage({ page }),
 			decisions: decisionState([
-				{ submissionId: id(22), head: decidedHead(id(22), 'accepted'), origin: null }
+				{
+					submissionId: id(22),
+					head: decidedHead(id(22), 'accepted'),
+					origin: null,
+					notificationAcceptedAt: '2026-08-13T11:03:00.000Z'
+				}
 			]),
 			review: reviewCore({
 				standings: {
@@ -507,6 +512,7 @@ describe('live tuned Submissions page port', () => {
 			tray: 'set-aside',
 			decision: 'accepted',
 			decidedAt: '2026-08-13T11:00:00.000Z',
+			notified: true,
 			reviewCount: 3,
 			reviewAverage: 4.2,
 			// Registered-run set-aside attribution surfaces its policy identity.

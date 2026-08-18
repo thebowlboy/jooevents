@@ -242,15 +242,10 @@ const REQUIRED_MAPPINGS = Object.freeze([
  * - `speakers` states the one served participant: the disclosed display name
  *   with the undisclosed address kept as the empty value — contact stays its
  *   own permission-gated capability and is never invented here.
- * - `notified` is false on decided rows as the delivery-state derivation:
- *   the flag means "the current decision was communicated", whose evidence is
- *   a provider-accepted delivery for this submission's person at or after the
- *   decision revision. The composed outbound lane records every delivery
- *   terminally not-delivered (no provider is activated, BLOCKED-2), so false
- *   is the recomputed truth for every row — committed send batches included —
- *   and the wire's history projection carries batch counts, not the
- *   per-recipient rows a positive per-submission join would need. Provider
- *   activation is the wave that adds that evidence.
+ * - `notified` is true only when the canonical Decision snapshot carries a
+ *   provider acceptance for this submission from a release authored at or
+ *   after the current Decision head. Correcting a decision therefore clears
+ *   the old notification until the corrected result is accepted too.
  * - `signals` is empty because no signal owner exists — no signal records
  *   exist to report.
  * - `visits.previous()` resolves null: no visit owner records operator
@@ -369,7 +364,7 @@ export function createLiveSubmissionsPagePort(input: {
 				: {}),
 			decision: head === null ? 'undecided' : head.state,
 			...(head !== null ? { decidedAt: head.decidedAt } : {}),
-			notified: false,
+			notified: decision?.notificationAcceptedAt != null,
 			signals: [],
 			...(standing !== undefined ? { reviewAverage: standing.value } : {}),
 			// An absent standing is the canonical served absence: no committed

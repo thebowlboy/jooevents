@@ -28,6 +28,7 @@ import type {
 	EmailReadiness,
 	EventSettings,
 	MessageReview,
+	MessageTemplate,
 	MyReviewItem,
 	NotificationDispatch,
 	RecipientRow,
@@ -749,9 +750,34 @@ export function createLiveDecisionsPagePort(input: {
 			}
 		}),
 		templates: Object.freeze({
-			/** No stored-template owner is mounted; no message templates exist. */
-			async list() {
-				return { messages: [] };
+			/**
+			 * The tuned page needs safe identity for the template door, not the
+			 * classified authoring payload. Canonical summaries carry exactly that
+			 * identity plus the current subject preview and revision.
+			 */
+			async list(): Promise<{ readonly messages: MessageTemplate[] }> {
+				const result = await input.communications.listTemplates({ lifecycle: 'active' });
+				if (result.kind !== 'success') {
+					throw new DecisionsPageLiveError(readFailure(result, 'message template list'));
+				}
+				return {
+					messages: result.data.rows.map((row) => ({
+						id: row.revision.templateId,
+						key: row.key,
+						name: row.name,
+						purpose: row.purposeRevision.purposeKey,
+						subject: row.subjectPreview,
+						// Summary reads intentionally do not open template content or
+						// authoring history; the template workspace owns those details.
+						blocks: [],
+						mergeFields: [],
+						revision: row.revision.revisionNumber,
+						revisions: [],
+						usedBy: row.purposeRevision.purposeKey === 'decision_notification'
+							? ['Decisions']
+							: []
+					}))
+				};
 			}
 		}),
 		speakers: Object.freeze({

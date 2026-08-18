@@ -311,7 +311,17 @@ export const decisionStateRowSchema = z.strictObject({
    * adapter returns null only when no decision exists or the retained evidence
    * cannot be established.
    */
-  firstDecidedAt: canonicalInstantSchema.nullable().optional()
+  firstDecidedAt: canonicalInstantSchema.nullable().optional(),
+  /**
+   * Earliest provider acceptance for a decision-notification release created
+   * at or after the current Decision head. A correction therefore clears old
+   * notification evidence until the corrected result is accepted too.
+   *
+   * Optional keeps additive compatibility with Decision sources that do not
+   * compose the communications ledger. Null is the retained, read-supported
+   * absence of an accepted notification for the current head.
+   */
+  notificationAcceptedAt: canonicalInstantSchema.nullable().optional()
 });
 
 export const decisionStateSnapshotSchema = z.strictObject({
