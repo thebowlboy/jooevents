@@ -408,7 +408,13 @@ export const reviewPlanProjectionSchema = z.strictObject({
   reviewers: z.array(z.strictObject({
     reviewerId: reviewIdSchema, displayName: z.string().optional(), assigned: z.number().int().nonnegative(),
     done: z.number().int().nonnegative(), steppedBack: z.number().int().nonnegative(),
-    awaitingReassignment: z.number().int().nonnegative()
+    awaitingReassignment: z.number().int().nonnegative(),
+    /** Organizer-only detail behind each uncovered count; identity and contact stay absent. */
+    uncovered: z.array(z.strictObject({
+      submissionId: reviewIdSchema,
+      title: z.string().trim().min(1).max(500),
+      remainingReviewers: z.number().int().nonnegative().safe()
+    })).optional()
   }))
 });
 

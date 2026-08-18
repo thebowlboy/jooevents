@@ -82,7 +82,29 @@ export function projectReviewPlans(input: {
     const reviewerIds = [...new Set(assignments.map((assignment) => assignment.reviewerId))].sort();
     const allReviewers = reviewerIds.map((reviewerId) => {
       const own = assignments.filter((assignment) => assignment.reviewerId === reviewerId);
-      const steppedBack = own.filter((assignment) => assignment.state === 'stepped_back').length;
+      const steppedBackAssignments = own
+        .filter((assignment) => assignment.state === 'stepped_back')
+        .sort((left, right) => compareText(left.id, right.id));
+      const uncovered = input.viewer.kind === 'organizer'
+        ? steppedBackAssignments.map((assignment) => {
+            const candidate = input.environment.candidateDisplay.readReviewCandidateDisplay({
+              scope,
+              roundId: round.id,
+              submissionId: assignment.submissionId,
+              reviewerId,
+              includeSpeakerIdentity: false
+            });
+            if (!candidate) throw new TypeError('review_projection_candidate_display_missing');
+            return {
+              submissionId: assignment.submissionId,
+              title: parseReviewCandidateDisplay(candidate).title,
+              remainingReviewers: assignments.filter((other) =>
+                other.submissionId === assignment.submissionId && other.state === 'assigned'
+              ).length
+            };
+          })
+        : undefined;
+      const steppedBack = steppedBackAssignments.length;
       return {
         reviewerId,
         ...(rosterById.get(reviewerId)?.displayName === undefined
@@ -97,7 +119,8 @@ export function projectReviewPlans(input: {
         ).length,
         steppedBack,
         // Replacement mechanics are not in this packet, so every step-back remains uncovered.
-        awaitingReassignment: steppedBack
+        awaitingReassignment: steppedBack,
+        ...(uncovered === undefined || uncovered.length === 0 ? {} : { uncovered })
       };
     });
     const done = allReviewers.reduce((sum, reviewer) => sum + reviewer.done, 0);

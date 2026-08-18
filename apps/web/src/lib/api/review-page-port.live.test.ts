@@ -8,7 +8,7 @@ import {
 import { mapReviewSnapshot } from './mappers/review';
 import type { ProgramVocabularySettingsPort } from './program-vocabulary-settings-adapter';
 import type { ReviewCorePort } from './review-core-port';
-import { createLiveReviewPagePort } from './review-page-port.live';
+import { createLiveReviewPagePort, mapLiveReviewPlans } from './review-page-port.live';
 
 const id = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
 const correlationId = id(90); const scope = { workspaceId: id(80), eventId: id(81) };
@@ -119,6 +119,32 @@ function core(input: { committed?: boolean; anonymized?: boolean; comparable?: b
 }
 
 describe('direct live Review page port', () => {
+	test('carries organizer-served uncovered review detail into the roster load', () => {
+		const served = reviewSnapshotSchema.parse({
+			schemaVersion: 1,
+			viewer: { kind: 'organizer' },
+			plans: [{
+				...round,
+				reviewers: [{
+					reviewerId,
+					displayName: 'Ada',
+					assigned: 1,
+					done: 0,
+					steppedBack: 1,
+					awaitingReassignment: 1,
+					uncovered: [{ submissionId, title: 'Talk', remainingReviewers: 0 }]
+				}]
+			}],
+			standings: {}
+		});
+		const [plan] = mapLiveReviewPlans(served.plans, Date.parse('2027-03-01T00:00:00Z'));
+		expect(plan?.reviewers[0]?.uncovered).toEqual([{
+			submissionId,
+			title: 'Talk',
+			remainingReviewers: 0
+		}]);
+	});
+
 	test('uses one caller key for round, evaluation, and step-back actions with no review choreography', async () => {
 		const keys: string[] = []; const actions: string[] = []; let next = 0;
 		const page = createLiveReviewPagePort({ review: core({ keys, actions }), vocabulary, schedule,

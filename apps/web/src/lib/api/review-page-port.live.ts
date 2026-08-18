@@ -198,7 +198,10 @@ export function mapLiveReviewPlans(
 				assigned: row.assigned,
 				done: row.done,
 				steppedBack: row.steppedBack,
-				awaitingReassignment: row.awaitingReassignment
+				awaitingReassignment: row.awaitingReassignment,
+				...(row.uncovered === undefined ? {} : {
+					uncovered: row.uncovered.map((entry) => ({ ...entry }))
+				})
 			})),
 			antiAnchoring: plan.antiAnchoring
 		});

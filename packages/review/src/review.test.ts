@@ -392,6 +392,27 @@ describe('review core', () => {
     }, { repository: store, sources: store });
     applyReviewMutationPlan({ plan: stepBack, transaction: store, sources: store });
     expect(store.drafts.get(assignment.id)).toEqual(draft);
+    const organizer = projectReviewSnapshot({
+      scope, viewer: { kind: 'organizer' },
+      environment: { repository: store, sources: store, candidateDisplay: store }
+    });
+    expect(organizer.plans[0]?.reviewers.find((row) =>
+      row.reviewerId === reviewerGeneralist
+    )?.uncovered).toEqual([{
+      submissionId: candidateB,
+      title: 'A second proposal',
+      remainingReviewers: 0
+    }]);
+    const reviewer = projectReviewSnapshot({
+      scope, viewer: { kind: 'reviewer', reviewerId: reviewerGeneralist },
+      environment: { repository: store, sources: store, candidateDisplay: store }
+    });
+    expect(reviewer.plans[0]?.reviewers[0]).toMatchObject({
+      reviewerId: reviewerGeneralist,
+      steppedBack: 1,
+      awaitingReassignment: 1
+    });
+    expect(reviewer.plans[0]?.reviewers[0]).not.toHaveProperty('uncovered');
     expect(() => planReviewMutation({
       action: 'discard_empty_round', scope, roundId, expectedRoundVersion: 1,
       attributedByUserId: actorUserId, attributedAt: at(4)
