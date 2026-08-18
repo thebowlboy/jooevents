@@ -19,9 +19,19 @@ if (!existsSync(clientManifestPath) || !existsSync(routeManifestPath)) {
 
 const clientManifest = JSON.parse(readFileSync(clientManifestPath, 'utf8')) as Record<string, ClientBuildManifestEntry>;
 const { manifest: routeManifest } = await import(pathToFileURL(routeManifestPath).href);
+const routes = routeManifest._.routes as readonly ApplicationRouteManifestEntry[];
+const internalRoute = routes.find((route) =>
+	!route.id.startsWith('/(entry)')
+	&& !route.id.startsWith('/(operator)')
+	&& !route.id.startsWith('/(participant)')
+	&& !route.id.startsWith('/(public)')
+);
+if (internalRoute) {
+	throw new TypeError(`Live build contains an internal route: ${internalRoute.id}`);
+}
 
 proveAndWriteLiveBuildIdentity({
 	buildDirectory,
 	clientManifest,
-	routes: routeManifest._.routes as readonly ApplicationRouteManifestEntry[]
+	routes
 });

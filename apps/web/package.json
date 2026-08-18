@@ -8,7 +8,7 @@
     "dev": "vite dev",
     "dev:live": "vite dev --mode live",
     "build": "vite build",
-    "build:live": "JOOEVENTS_WEB_BUILD_KIND=live vite build --mode live && bun scripts/assert-live-build.ts",
+    "build:live": "bun scripts/prepare-live-routes.ts && JOOEVENTS_WEB_BUILD_KIND=live vite build --mode live && bun scripts/assert-live-build.ts",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "test:e2e": "playwright test",

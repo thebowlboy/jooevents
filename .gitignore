@@ -17,6 +17,7 @@ test-results/
 # symlinks at these paths for local development.
 /apps/web/build
 /apps/web/build-live
+/apps/web/src/.live-routes
 /apps/cloudflare-worker/.generated
 /apps/web/static/reviews
 /apps/web/tests/private
