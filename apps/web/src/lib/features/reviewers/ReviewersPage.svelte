@@ -30,7 +30,8 @@
 		ReviewerStatus,
 		ScopeRef,
 		SessionItem,
-		Track
+		Track,
+		UncoveredReview
 	} from '$lib/api/types';
 	import CoveragePanel from './CoveragePanel.svelte';
 	import InviteReviewersModal from './InviteReviewersModal.svelte';
@@ -376,6 +377,34 @@
 		return `${reviews} nobody is covering. ${row.name} stepped back from ${row.steppedBack} because of a conflict of interest — they know or work with the submitter.${carried} Uncovered reviews stay in their assigned count until someone picks them up.`;
 	}
 
+	/**
+	 * What one uncovered review costs the submission it came off. A vacancy on a
+	 * submission other reviewers still hold is behind plan; a submission holding
+	 * nobody has stopped, and that is the fact worth ranking first.
+	 *
+	 * An absent count claims neither: the composition did not count remaining
+	 * coverage, so the title stands on its own rather than borrowing a zero.
+	 */
+	function uncoveredConsequence(entry: UncoveredReview): string {
+		const remaining = entry.remainingReviewers;
+		if (remaining === undefined) return '';
+		if (remaining === 0) return 'has nobody else reviewing it — review of this submission has stopped';
+		return `still has ${remaining} other ${remaining === 1 ? 'reviewer' : 'reviewers'} on it`;
+	}
+
+	/**
+	 * The spoken form of the same panel: the gap sentence, then every named
+	 * review with its consequence, so the sharp fact reaches the live region on
+	 * the press that reveals it rather than only the eye.
+	 */
+	function coverageAnnouncement(row: Reviewer): string {
+		const named = (row.uncovered ?? []).map((entry) => {
+			const consequence = uncoveredConsequence(entry);
+			return consequence ? `“${entry.title}” ${consequence}.` : `“${entry.title}”.`;
+		});
+		return [coverageGap(row), ...named].join(' ');
+	}
+
 	function isBehind(row: Reviewer): boolean {
 		return row.status === 'active' && row.assigned > 0 && row.done / row.assigned < 0.5;
 	}
@@ -407,6 +436,29 @@
 	<ScopeChips entries={resolveScope(row.scope, entities)} {allLabel} />
 {/snippet}
 
+{#snippet coverageWhy(row: Reviewer)}
+	<!-- The chair's order kept: what is uncovered and why it came free, then
+	     which reviews those are. The list is the part the count cannot carry —
+	     a submission nobody is reviewing reads differently from one that is
+	     merely a slot short, so it inks rather than sharing the muted voice. -->
+	<p class="load__why">{coverageGap(row)}</p>
+	{#if row.uncovered && row.uncovered.length > 0}
+		<ul class="gap">
+			{#each row.uncovered as entry (entry.submissionId)}
+				{@const consequence = uncoveredConsequence(entry)}
+				<li class="gap__item">
+					<span class="gap__title">{entry.title}</span>
+					{#if consequence}
+						<span class="gap__said" class:gap__said--stopped={entry.remainingReviewers === 0}>
+							{consequence}
+						</span>
+					{/if}
+				</li>
+			{/each}
+		</ul>
+	{/if}
+{/snippet}
+
 {#snippet loadCell(row: Reviewer)}
 	{#if row.assigned > 0}
 		<span class="load__count">{row.done} / {row.assigned}</span>
@@ -420,14 +472,14 @@
 			<span class="load__gap">
 				<Popover
 					label="{row.awaitingReassignment} need another reviewer — why"
-					onreveal={() => (announcement = coverageGap(row))}>
+					onreveal={() => (announcement = coverageAnnouncement(row))}>
 					{#snippet trigger()}
 						<Badge tone="warning" icon={statusIcon.needsReviewer}>
 							{row.awaitingReassignment} need another reviewer
 						</Badge>
 					{/snippet}
 					{#snippet children()}
-						<p class="load__why">{coverageGap(row)}</p>
+						{@render coverageWhy(row)}
 					{/snippet}
 				</Popover>
 			</span>
@@ -771,9 +823,21 @@
 									<span class="card__load">Nothing assigned</span>
 								{/if}
 								{#if row.awaitingReassignment > 0}
-									<Badge tone="warning" icon={statusIcon.needsReviewer}>
-										{row.awaitingReassignment} need another reviewer
-									</Badge>
+									<!-- The same disclosure as the table, not a plain badge: the
+									     named reviews are the point, and a card is exactly where a
+									     press is the only way in. -->
+									<Popover
+										label="{row.awaitingReassignment} need another reviewer — why"
+										onreveal={() => (announcement = coverageAnnouncement(row))}>
+										{#snippet trigger()}
+											<Badge tone="warning" icon={statusIcon.needsReviewer}>
+												{row.awaitingReassignment} need another reviewer
+											</Badge>
+										{/snippet}
+										{#snippet children()}
+											{@render coverageWhy(row)}
+										{/snippet}
+									</Popover>
 								{/if}
 								{#if remindedIds.includes(row.id)}
 									<span class="load__sent">Reminder sent</span>
@@ -1016,6 +1080,36 @@
 
 	.load__why {
 		margin: 0;
+	}
+
+	/* The named reviews under the gap sentence: title, then what the vacancy
+	   costs that submission. Stopped review takes the danger voice because it
+	   is a different state, not a louder one. */
+	.gap {
+		margin: var(--je-space-3) 0 0;
+		padding: var(--je-space-3) 0 0;
+		border-block-start: 1px solid var(--je-color-border);
+		list-style: none;
+		display: grid;
+		gap: var(--je-space-2);
+	}
+
+	.gap__title {
+		display: block;
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-text);
+	}
+
+	.gap__said {
+		display: block;
+		font-size: var(--je-font-size-xs);
+		line-height: var(--je-leading-normal);
+		color: var(--je-color-text-muted);
+	}
+
+	.gap__said--stopped {
+		font-weight: 600;
+		color: var(--je-color-danger);
 	}
 
 	.load__none {

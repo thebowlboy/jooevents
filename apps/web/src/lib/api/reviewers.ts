@@ -11,6 +11,7 @@ import type {
 	ScopeRef,
 	ScopeRefKind,
 	SessionItem,
+	UncoveredReview,
 	VocabStatus
 } from './types';
 
@@ -86,12 +87,18 @@ export function scopeRefCount(
  * the roster's numbers are these sums, never authored a second time. An
  * uncovered review stays inside `assigned`, so denominators do not move when
  * someone steps back.
+ *
+ * The named uncovered reviews concatenate the same way the counts add, and the
+ * key is omitted when no plan named any: absent means "not named here", which
+ * is a different claim from an empty list, and the roster falls back to the
+ * count rather than rendering "no uncovered reviews" over a gap it can see.
  */
 export function planLoad(
 	reviewerId: string,
 	plans: readonly ReviewPlan[]
-): Pick<Reviewer, 'assigned' | 'done' | 'steppedBack' | 'awaitingReassignment'> {
+): Pick<Reviewer, 'assigned' | 'done' | 'steppedBack' | 'awaitingReassignment' | 'uncovered'> {
 	const load = { assigned: 0, done: 0, steppedBack: 0, awaitingReassignment: 0 };
+	const uncovered: UncoveredReview[] = [];
 	for (const plan of plans) {
 		for (const row of plan.reviewers) {
 			if (row.id !== reviewerId) continue;
@@ -99,9 +106,10 @@ export function planLoad(
 			load.done += row.done;
 			load.steppedBack += row.steppedBack;
 			load.awaitingReassignment += row.awaitingReassignment;
+			if (row.uncovered) uncovered.push(...row.uncovered.map((entry) => ({ ...entry })));
 		}
 	}
-	return load;
+	return uncovered.length > 0 ? { ...load, uncovered } : load;
 }
 
 /** The records a coverage projection is computed from. */

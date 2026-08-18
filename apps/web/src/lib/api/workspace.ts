@@ -2383,6 +2383,15 @@ export const api = {
 		 * stays where it was, so the plan's denominator never moves when someone
 		 * steps back. A committed review refuses — the score is already in the
 		 * round, and withdrawing it is the chair's call, not a queue action.
+		 *
+		 * The submission is also named in the plan row's `uncovered` list, so the
+		 * roster can say which review came free and not only how many. Its
+		 * `remainingReviewers` is deliberately omitted: opening a round freezes
+		 * the scope hand-out into per-reviewer totals and keeps no per-submission
+		 * assignment record, so nothing here knows how many others still hold
+		 * this submission. Absent states that; a recomputed scope match would
+		 * describe a fresh hand-out rather than this round's, and a number is
+		 * exactly the wrong thing to guess when 0 is the sharp fact.
 		 */
 		async stepBack(submissionId: string, reviewerId: string): Promise<MutationOutcome> {
 			await latency();
@@ -2399,6 +2408,10 @@ export const api = {
 				if (!row) continue;
 				row.steppedBack += 1;
 				row.awaitingReassignment += 1;
+				row.uncovered = [
+					...(row.uncovered ?? []),
+					{ submissionId, title: submissionTitle(submissionId) }
+				];
 				break;
 			}
 			return { ok: true };

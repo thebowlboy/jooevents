@@ -58,6 +58,30 @@ describe('a reviewer stepping back', () => {
 		expect(planAfter.done).toBe(planBefore.done);
 	});
 
+	test('the freed review is named, and claims no remaining coverage it cannot count', async () => {
+		const api = await freshApi();
+		const open = (await api.review.myQueue()).find((item) => !item.committed);
+		if (!open) throw new Error('the sample queue carries no open review');
+		const submission = await api.submissions.get(open.submissionId);
+		const { row: before } = await rosterRow(api, REVIEWER);
+		const namedBefore = before.uncovered?.length ?? 0;
+
+		expect((await api.review.stepBack(open.submissionId, REVIEWER)).ok).toBe(true);
+
+		const { row: after } = await rosterRow(api, REVIEWER);
+		// One name per awaiting review: the roster list and the badge count are
+		// the same fact.
+		expect(after.uncovered).toHaveLength(namedBefore + 1);
+		expect(after.uncovered).toHaveLength(after.awaitingReassignment);
+		const named = after.uncovered!.at(-1)!;
+		expect(named.submissionId).toBe(open.submissionId);
+		expect(named.title).toBe(submission!.title);
+		// Opening a round freezes per-reviewer totals and keeps no per-submission
+		// assignment record, so this seam cannot know who else still holds the
+		// submission — and says nothing rather than guessing a number.
+		expect(named.remainingReviewers).toBeUndefined();
+	});
+
 	test('a committed review refuses, in the sentence the card shows first', async () => {
 		const api = await freshApi();
 		const committed = (await api.review.myQueue()).find((item) => item.committed);

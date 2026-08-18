@@ -110,8 +110,16 @@ const flight: WorkspaceDataset = {
 				// The 3 is the sum of `awaitingReassignment` across this plan's
 				// reviewers, which is what the roster badges add up to.
 				title: '3 reviews need another reviewer',
-				detail: 'Their reviewer stepped back over a conflict of interest and nobody has picked them up.',
-				action: 'Reassign'
+				// The vacancy, then the one consequence that outranks it: a slot
+				// short is behind plan, a submission nobody is reviewing has
+				// stopped. Named here because the count cannot carry it.
+				detail:
+					'Their reviewer stepped back over a conflict of interest and nobody has picked them up. One of them — “Sandboxing Tool Calls: What We Learned in Production” — has nobody else reviewing it.',
+				// The roster is where uncovered reviews are visible; no reassign
+				// operation exists yet, so the verb promises the filter it performs
+				// and nothing more.
+				action: 'Filter uncovered',
+				href: '/app/reviewers?filter=needs-cover'
 			},
 			{
 				id: 'bounced',
@@ -542,11 +550,49 @@ const flight: WorkspaceDataset = {
 			// done (224) and total (360) — the meter and the roster tell one
 			// story. Priya Nair is invited but has not arrived, so she holds
 			// no row yet.
+			// `uncovered` names one submission per awaiting review — the count and
+			// the list are one fact — and states what each vacancy costs that
+			// submission, which is the part no count can carry.
 			reviewers: [
 				{ id: 'mem-2', name: 'Sofia Berg', assigned: 72, done: 68, steppedBack: 0, awaitingReassignment: 0 },
-				{ id: 'mem-3', name: 'Jonas Weber', assigned: 72, done: 55, steppedBack: 1, awaitingReassignment: 1 },
+				{
+					id: 'mem-3',
+					name: 'Jonas Weber',
+					assigned: 72,
+					done: 55,
+					steppedBack: 1,
+					awaitingReassignment: 1,
+					// He is the submitter of sub-106, so the scope hand-out handed him
+					// his own talk; its other two reviewers had already scored it.
+					uncovered: [
+						{ submissionId: 'sub-106', title: 'The Inference Bill Nobody Read', remainingReviewers: 2 }
+					]
+				},
 				{ id: 'mem-6', name: 'Tomás Rivera', assigned: 72, done: 46, steppedBack: 0, awaitingReassignment: 0 },
-				{ id: 'mem-7', name: 'Elif Aydın', assigned: 72, done: 30, steppedBack: 2, awaitingReassignment: 2 },
+				{
+					id: 'mem-7',
+					name: 'Elif Aydın',
+					assigned: 72,
+					done: 30,
+					steppedBack: 2,
+					awaitingReassignment: 2,
+					// sub-105 is her own workshop and keeps its other two reviewers.
+					// sub-111 arrived after the screening pass and went to her alone,
+					// so her step-back left it with nobody: it carries no committed
+					// review and no remaining reviewer, and that is the sharp one.
+					uncovered: [
+						{
+							submissionId: 'sub-105',
+							title: 'Hands-on: AI Interface Audits That Stick',
+							remainingReviewers: 2
+						},
+						{
+							submissionId: 'sub-111',
+							title: 'Sandboxing Tool Calls: What We Learned in Production',
+							remainingReviewers: 0
+						}
+					]
+				},
 				{ id: 'mem-8', name: 'Marc Dubois', assigned: 72, done: 25, steppedBack: 0, awaitingReassignment: 0 }
 			]
 		}

@@ -465,6 +465,25 @@ export interface SubmissionPage {
 // ---------------------------------------------------------------------------
 // Review
 
+/**
+ * One review left without a reviewer, named rather than counted. The count
+ * alone says work came free; this says which submission it was and what the
+ * vacancy costs that submission.
+ *
+ * `remainingReviewers` is that cost: how many other reviewers still hold this
+ * submission. 0 is the sharp one — nobody is reviewing it at all, so review of
+ * it has stopped, which outranks a submission that is merely short a slot.
+ * Absent means the composition could not count remaining coverage and states
+ * none; a missing count is not a zero, and a consumer renders no consequence
+ * rather than inventing one. Authored per scenario in sample data until the
+ * real computation lands.
+ */
+export interface UncoveredReview {
+	submissionId: string;
+	title: string;
+	remainingReviewers?: number;
+}
+
 export interface ReviewerProgress {
 	id: string;
 	name: string;
@@ -486,6 +505,12 @@ export interface ReviewerProgress {
 	 * exists, it is simply nobody's yet.
 	 */
 	awaitingReassignment: number;
+	/**
+	 * Which reviews those are, when the composition can name them: one entry per
+	 * uncovered review, so `uncovered.length` equals `awaitingReassignment`.
+	 * Absent leaves the count as the only claim.
+	 */
+	uncovered?: UncoveredReview[];
 }
 
 export interface ReviewPlan {
@@ -709,6 +734,13 @@ export interface Reviewer {
 	done: number;
 	steppedBack: number;
 	awaitingReassignment: number;
+	/**
+	 * The uncovered reviews behind `awaitingReassignment`, concatenated across
+	 * every plan that names them. Absent when no plan named them, which is why
+	 * a consumer falls back to the count rather than reading an empty list as
+	 * "none".
+	 */
+	uncovered?: UncoveredReview[];
 }
 
 /**

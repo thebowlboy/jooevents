@@ -156,6 +156,68 @@ describe('load numbers', () => {
 			awaitingReassignment: 0
 		});
 	});
+
+	test('named uncovered reviews concatenate across plans, and stay absent when no plan names them', () => {
+		const plans: ReviewPlan[] = [
+			{
+				id: 'p1',
+				name: 'Round 1',
+				scaleMax: 5,
+				deadlineRelative: 'closed',
+				anonymized: true,
+				done: 0,
+				total: 2,
+				antiAnchoring: true,
+				reviewers: [
+					{
+						id: 'mem-a',
+						name: 'A',
+						assigned: 1,
+						done: 0,
+						steppedBack: 1,
+						awaitingReassignment: 1,
+						uncovered: [{ submissionId: 'sub-1', title: 'One', remainingReviewers: 2 }]
+					},
+					{ id: 'mem-b', name: 'B', assigned: 1, done: 0, steppedBack: 1, awaitingReassignment: 1 }
+				]
+			},
+			{
+				id: 'p2',
+				name: 'Round 2',
+				scaleMax: 5,
+				deadlineRelative: 'open',
+				anonymized: false,
+				done: 0,
+				total: 1,
+				antiAnchoring: true,
+				reviewers: [
+					{
+						id: 'mem-a',
+						name: 'A',
+						assigned: 1,
+						done: 0,
+						steppedBack: 1,
+						awaitingReassignment: 1,
+						// No remaining count: the plan named the review without
+						// claiming what it costs.
+						uncovered: [{ submissionId: 'sub-2', title: 'Two' }]
+					}
+				]
+			}
+		];
+		expect(planLoad('mem-a', plans).uncovered).toEqual([
+			{ submissionId: 'sub-1', title: 'One', remainingReviewers: 2 },
+			{ submissionId: 'sub-2', title: 'Two' }
+		]);
+		// Absent, not empty: a plan that never named its uncovered reviews makes
+		// no claim about them, and the roster falls back to the count.
+		expect(planLoad('mem-b', plans)).toEqual({
+			assigned: 1,
+			done: 0,
+			steppedBack: 1,
+			awaitingReassignment: 1
+		});
+	});
 });
 
 describe('coverage projection', () => {
@@ -353,6 +415,50 @@ describe('scenario coherence', () => {
 		expect(flight.summary.attention.find((item) => item.id === 'needs-reviewer')?.title).toBe(
 			`${awaiting} reviews need another reviewer`
 		);
+	});
+
+	test('a named uncovered review names one existing submission per awaiting review', () => {
+		for (const scenario of scenarios) {
+			const titleById = new Map(scenario.submissions.map((row) => [row.id, row.title]));
+			for (const plan of scenario.reviewPlans) {
+				for (const row of plan.reviewers) {
+					// Naming is optional; naming a different number than the count is
+					// not — the list and the badge are one fact.
+					if (!row.uncovered) continue;
+					expect(row.uncovered.length).toBe(row.awaitingReassignment);
+					for (const entry of row.uncovered) {
+						// A named review points at a submission the scenario actually
+						// holds, and carries that submission's own title.
+						expect(titleById.get(entry.submissionId)).toBe(entry.title);
+						if (entry.remainingReviewers !== undefined) {
+							expect(entry.remainingReviewers).toBeGreaterThanOrEqual(0);
+						}
+					}
+				}
+			}
+		}
+	});
+
+	// The consequence the overview leads with has to be the one the roster can
+	// show: exactly one flight review is left with nobody on it, and the
+	// attention detail quotes that submission by name.
+	test('the flight overview names the uncovered review that has nobody left on it', () => {
+		const stopped = flight.reviewPlans
+			.flatMap((plan) => plan.reviewers)
+			.flatMap((row) => row.uncovered ?? [])
+			.filter((entry) => entry.remainingReviewers === 0);
+		expect(stopped).toHaveLength(1);
+		const detail = flight.summary.attention.find((item) => item.id === 'needs-reviewer')?.detail;
+		expect(detail).toContain(stopped[0]!.title);
+	});
+
+	// The item's door has to be a surface that can act on it. The roster's
+	// uncovered filter is that surface; the area root is not.
+	test('the flight uncovered item opens the roster filtered to the gap', () => {
+		const item = flight.summary.attention.find((entry) => entry.id === 'needs-reviewer');
+		expect(item?.href).toBe('/app/reviewers?filter=needs-cover');
+		// No reassign operation exists yet, so the verb never promises one.
+		expect(item?.action).toBe('Filter uncovered');
 	});
 
 	// A collecting session may hold a planned slot on the grid (placement is
