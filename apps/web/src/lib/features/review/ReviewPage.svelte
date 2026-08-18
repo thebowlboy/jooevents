@@ -15,7 +15,8 @@
 		type Scope
 	} from '$lib/ui';
 	import type { IconComponent } from '$lib/ui';
-	import type { ReviewPagePort } from '$lib/api/review-page-port';
+	import type { ReviewPagePort, ReviewResultRow } from '$lib/api/review-page-port';
+	import { REVIEW_STATUS_CSV_FILENAME, reviewStatusCsv } from './review-export-csv';
 	import { composeCapRefusal } from '$lib/api/accolades';
 	import { composeStepBackRefusal } from '$lib/api/reviewers';
 	import ResourceList from '$lib/features/workspace/components/ResourceList.svelte';
@@ -55,9 +56,14 @@
 	/**
 	 * Whose surface this is. Review is the queue for both roles; only round setup
 	 * and the review-policy brief vary here. Reviewer management and reminders
-	 * live on Reviewers rather than becoming a second job on this page.
+	 * stay on Reviewers; results and export stay on this page so the organizer
+	 * does not learn a second navigation concept.
 	 */
 	const reviewerView = $derived(viewer.kind === 'reviewer');
+	const ORGANIZER_VIEWS = ['queue', 'results'] as const;
+	const organizerView = $derived(
+		reviewerView ? 'queue' : paramIn('view', ORGANIZER_VIEWS, 'queue')
+	);
 
 	interface QueueRow {
 		item: MyReviewItem;
@@ -243,6 +249,54 @@
 	function switchScope(next: string) {
 		// The default scope stays out of the address, so an unscoped link is clean.
 		applyParams({ scope: next === 'to-review' ? null : next });
+	}
+
+	function switchOrganizerView(next: (typeof ORGANIZER_VIEWS)[number]) {
+		applyParams({ view: next === 'queue' ? null : next });
+	}
+
+	let resultRows = $state<ReviewResultRow[] | null>(null);
+	let resultsError = $state('');
+	let resultsLoading = $state(false);
+	let exporting = $state(false);
+
+	async function loadResults() {
+		if (resultsLoading) return;
+		resultsLoading = true;
+		resultsError = '';
+		try {
+			resultRows = await api.review.results();
+		} catch (error) {
+			resultsError =
+				error instanceof Error ? error.message : 'Review results could not be loaded.';
+			resultRows = [];
+		} finally {
+			resultsLoading = false;
+		}
+	}
+
+	$effect(() => {
+		if (!loaded || reviewerView || organizerView !== 'results') return;
+		if (resultRows !== null || resultsLoading) return;
+		void loadResults();
+	});
+
+	function downloadResults() {
+		if (!resultRows || exporting) return;
+		exporting = true;
+		try {
+			const href = URL.createObjectURL(
+				new Blob([reviewStatusCsv(resultRows)], { type: 'text/csv;charset=utf-8' })
+			);
+			const link = document.createElement('a');
+			link.href = href;
+			link.download = REVIEW_STATUS_CSV_FILENAME;
+			link.click();
+			URL.revokeObjectURL(href);
+			status = 'Downloaded review status.';
+		} finally {
+			exporting = false;
+		}
 	}
 
 	/**
@@ -838,7 +892,17 @@
 			<p class="plan__meta">
 				Reviews {plan.deadlineRelative}
 				{#if !reviewerView}
-					<span aria-hidden="true">·</span> <a href="/app/reviewers">Reviewer progress and reminders</a>
+					<span aria-hidden="true">·</span>
+					<a href="/app/reviewers">Reviewer progress and reminders</a>
+					<span aria-hidden="true">·</span>
+					{#if organizerView === 'results'}
+						<span>Results</span>
+					{:else}
+						<button
+							type="button"
+							class="plan__link"
+							onclick={() => switchOrganizerView('results')}>Results</button>
+					{/if}
 				{/if}
 				<!-- The badge is the whole statement of the blinding policy, and
 				     whether a candid comment is safe to write depends on which
@@ -890,6 +954,95 @@
 		</section>
 	{/if}
 
+	{#if organizerView === 'results'}
+		<section class="column" aria-labelledby="results-heading">
+			<div class="column__head">
+				<h2 class="column__title" id="results-heading">Results</h2>
+				<div class="column__scopes">
+					<button
+						type="button"
+						class="ui-button ui-button--ghost ui-button--sm"
+						onclick={() => switchOrganizerView('queue')}>
+						Back to queue
+					</button>
+					<button
+						type="button"
+						class="ui-button ui-button--secondary ui-button--sm"
+						disabled={resultsLoading || !resultRows || resultRows.length === 0}
+						aria-busy={exporting || undefined}
+						onclick={downloadResults}>
+						Download review status
+					</button>
+				</div>
+			</div>
+			{#if resultsLoading && resultRows === null}
+				<p class="zone-note" role="status">Loading current scores…</p>
+			{:else if resultsError}
+				<div class="queue-empty" role="status">
+					<p class="queue-empty__title">Results are not available</p>
+					<p class="queue-empty__hint">{resultsError}</p>
+				</div>
+			{:else if resultRows && resultRows.length === 0}
+				<div class="queue-empty">
+					<p class="queue-empty__title">No scored submissions yet</p>
+					<p class="queue-empty__hint">
+						Results appear here as reviews are committed. Progress and reminders stay on
+						<a href="/app/reviewers">Reviewers</a>.
+					</p>
+				</div>
+			{:else if resultRows}
+				<p class="zone-note">
+					Sorted by current aggregate. A small cohort keeps the number and does not invent a rank.
+				</p>
+				<div class="ui-table-wrap">
+					<table class="ui-table ui-table--multiline">
+						<thead>
+							<tr>
+								<th>Submission</th>
+								<th class="ui-table__number">Aggregate</th>
+								<th class="ui-table__number">Reviews</th>
+								<th>Standing</th>
+								<th>Status</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each resultRows as row (row.submissionId)}
+								<tr>
+									<td>
+										<span class="ui-table__primary">{row.title}</span>
+									</td>
+									<td class="ui-table__number">
+										{#if row.standing}
+											{row.standing.value}
+										{:else}
+											<span class="verdict__none">No score yet</span>
+										{/if}
+									</td>
+									<td class="ui-table__number">{row.reviews}</td>
+									<td>
+										{#if row.standing}
+											<StandingMark standing={row.standing} form="both" quiet context={row.title} />
+										{:else}
+											<span class="verdict__none">Too early to rank</span>
+										{/if}
+									</td>
+									<td>
+										{#if row.status === 'scored'}
+											Scored
+										{:else if row.status === 'in_review'}
+											In review
+										{:else}
+											Not scored
+										{/if}
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			{/if}
+		</section>
+	{:else}
 	<section class="column column--queue" aria-labelledby="queue-heading">
 		<!-- Two intents, two zones: working the pass, and consulting what it
 		     produced. The scopes carry the counts, so no second count line; the
@@ -1285,6 +1438,7 @@
 			</ul>
 		{/if}
 	</section>
+	{/if}
 {/if}
 
 <!-- The comparison, over the queue it belongs to. It mounts with the address and
@@ -1390,6 +1544,16 @@
 		margin: var(--je-space-1) 0 0;
 		font-size: var(--je-font-size-sm);
 		color: var(--je-color-text-muted);
+	}
+
+	.plan__link {
+		padding: 0;
+		border: 0;
+		background: transparent;
+		font: inherit;
+		color: inherit;
+		text-decoration: underline;
+		cursor: pointer;
 	}
 
 	.plan__means {

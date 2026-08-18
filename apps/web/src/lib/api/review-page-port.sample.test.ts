@@ -22,4 +22,19 @@ describe('sample tuned Review page port', () => {
 		expect(tracks.length).toBeGreaterThan(0);
 		expect(formats.length).toBeGreaterThan(0);
 	});
+
+	test('sorts organizer results by current aggregate without reviewer identity', async () => {
+		const port = createSampleReviewPagePort(
+			sampleWorkspaceGateway.api,
+			{ kind: 'organizer' }
+		);
+		const rows = await port.review.results();
+		expect(rows.length).toBeGreaterThan(0);
+		const scored = rows.filter((row) => row.standing);
+		for (let index = 1; index < scored.length; index += 1) {
+			expect(scored[index - 1]!.standing!.value).toBeGreaterThanOrEqual(scored[index]!.standing!.value);
+		}
+		expect(JSON.stringify(rows)).not.toContain('sofia@');
+		expect(rows[0]?.criteria.every((criterion) => criterion.key === 'overall')).toBe(true);
+	});
 });

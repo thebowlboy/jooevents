@@ -292,6 +292,8 @@ export function createLiveReviewersPagePort(input: {
 	readonly now?: () => number;
 	readonly newAttemptKey?: () => string;
 	readonly newReviewerId?: () => string;
+	/** Optional already-wired reminder lane; absent stays an honest refusal. */
+	readonly remind?: (reviewerIds: readonly string[], subject: string) => Promise<unknown>;
 }): ReviewersPagePort {
 	if (
 		input.roster.source.kind !== 'live'
@@ -620,8 +622,9 @@ export function createLiveReviewersPagePort(input: {
 			}
 		}),
 		tasks: Object.freeze({
-			async remind(): Promise<never> {
-				throw unmounted('reviewer_reminders');
+			async remind(reviewerIds: string[], subject: string): Promise<unknown> {
+				if (!input.remind) throw unmounted('reviewer_reminders');
+				return input.remind(reviewerIds, subject);
 			}
 		})
 	} satisfies ReviewersPagePort);

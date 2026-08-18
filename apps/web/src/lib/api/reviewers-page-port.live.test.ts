@@ -314,4 +314,23 @@ describe('direct live Reviewer page port', () => {
 			reviews: [{ kind: 'track', id: trackId }]
 		});
 	});
+
+	test('reuses a composed reminder lane and refuses when that lane is absent', async () => {
+		const sent: { ids: string[]; subject: string }[] = [];
+		const wired = createLiveReviewersPagePort({
+			roster: rosterPort([]), review, team, vocabulary,
+			remind: async (ids, subject) => {
+				sent.push({ ids: [...ids], subject });
+			}
+		});
+		await wired.tasks.remind([reviewerId], 'Review reminder');
+		expect(sent).toEqual([{ ids: [reviewerId], subject: 'Review reminder' }]);
+
+		const unmounted = createLiveReviewersPagePort({
+			roster: rosterPort([]), review, team, vocabulary
+		});
+		await expect(unmounted.tasks.remind([reviewerId], 'Review reminder')).rejects.toMatchObject({
+			code: 'reviewer_reminders'
+		});
+	});
 });

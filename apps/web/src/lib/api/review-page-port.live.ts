@@ -4,7 +4,8 @@ import type { SafeApiError } from './client';
 import type { OperatorHttpBindingUnavailableReason } from './operations/operator-http-binding';
 import type { ProgramVocabularySettingsPort } from './program-vocabulary-settings-adapter';
 import type { ReviewCoreEffectResult, ReviewCorePort } from './review-core-port';
-import type { ReviewPagePort, ReviewPageViewer } from './review-page-port';
+import { assembleReviewResults, type ReviewResultCandidate } from '../features/review/review-results';
+import type { ReviewPagePort, ReviewPageViewer, ReviewResultRow } from './review-page-port';
 import type {
 	ComparableCard,
 	Format,
@@ -33,7 +34,8 @@ import type { ProgramFormatView, ProgramTrackView } from './view-models/program-
  */
 export type ReviewPageLiveUnmountedCapability =
 	| 'reviewer_scope'
-	| 'reviewer_reminders';
+	| 'reviewer_reminders'
+	| 'review_results';
 
 type AdapterFailure = Readonly<{ code: string; reason: string }>;
 
@@ -52,7 +54,9 @@ const UNMOUNTED_COPY: Readonly<Record<ReviewPageLiveUnmountedCapability, string>
 	reviewer_scope:
 		'This reviewer scope is not available in this live workspace.',
 	reviewer_reminders:
-		'Reviewer reminders are not available in this live workspace yet.'
+		'Reviewer reminders are not available in this live workspace yet.',
+	review_results:
+		'Review results are not available in this live workspace yet.'
 });
 
 function unmounted(capability: ReviewPageLiveUnmountedCapability): ReviewPageLiveError {
@@ -338,6 +342,13 @@ export function createLiveReviewPagePort(input: {
 	readonly now?: () => number;
 	/** Mints one idempotency anchor per user-visible attempt. */
 	readonly newAttemptKey?: () => string;
+	/**
+	 * Organizer-authorized candidates for results/export. Absent keeps the
+	 * results read unmounted rather than inventing a second classified list.
+	 */
+	readonly results?: { list(): Promise<readonly ReviewResultCandidate[]> };
+	/** Optional already-wired reminder lane; absent stays an honest refusal. */
+	readonly remind?: (reviewerIds: readonly string[], subject: string) => Promise<unknown>;
 }): ReviewPagePort {
 	if (input.review.source.kind !== 'live' || input.vocabulary.source.kind !== 'live') {
 		throw new TypeError('live_review_source_required');
@@ -355,6 +366,19 @@ export function createLiveReviewPagePort(input: {
 		}
 		latestSnapshot = result.data;
 		return latestSnapshot;
+	}
+
+	async function readStandings(submissionIds: readonly string[]): Promise<Record<string, ScoreStanding>> {
+		const distinct = [...new Set(submissionIds)];
+		if (distinct.length === 0) return {};
+		const merged: Record<string, ScoreStanding> = {};
+		for (const chunk of chunked(distinct, STANDINGS_READ_CHUNK)) {
+			const snapshot = await readSnapshot({ standingSubmissionIds: [...chunk] });
+			for (const [submissionId, standing] of Object.entries(snapshot.standings)) {
+				merged[submissionId] = standingView(standing);
+			}
+		}
+		return merged;
 	}
 
 	function queueItem(
@@ -608,16 +632,18 @@ export function createLiveReviewPagePort(input: {
 			 * never a silently truncated single request.
 			 */
 			async standings(submissionIds: string[]): Promise<Record<string, ScoreStanding>> {
-				const distinct = [...new Set(submissionIds)];
-				if (distinct.length === 0) return {};
-				const merged: Record<string, ScoreStanding> = {};
-				for (const chunk of chunked(distinct, STANDINGS_READ_CHUNK)) {
-					const snapshot = await readSnapshot({ standingSubmissionIds: [...chunk] });
-					for (const [submissionId, standing] of Object.entries(snapshot.standings)) {
-						merged[submissionId] = standingView(standing);
-					}
+				return readStandings(submissionIds);
+			},
+			async results(): Promise<ReviewResultRow[]> {
+				if (input.viewer.kind !== 'organizer') {
+					throw new ReviewPageLiveError({
+						code: 'review_results_organizer_only',
+						reason: 'Review results are available to the people running this round.'
+					});
 				}
-				return merged;
+				if (!input.results) throw unmounted('review_results');
+				const candidates = await input.results.list();
+				return assembleReviewResults(candidates, await readStandings(candidates.map((row) => row.submissionId)));
 			},
 			async amend(submissionId: string, score: number, comment: string): Promise<MyReviewItem | null> {
 				const snapshot = await readSnapshot();
@@ -780,8 +806,9 @@ export function createLiveReviewPagePort(input: {
 			}
 		}),
 		tasks: Object.freeze({
-			async remind(): Promise<never> {
-				throw unmounted('reviewer_reminders');
+			async remind(reviewerIds: string[], subject: string): Promise<unknown> {
+				if (!input.remind) throw unmounted('reviewer_reminders');
+				return input.remind(reviewerIds, subject);
 			}
 		}),
 		schedule: Object.freeze({

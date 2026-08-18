@@ -20,6 +20,30 @@ export type ReviewPageViewer =
 	| { readonly kind: 'organizer' }
 	| { readonly kind: 'reviewer'; readonly reviewerId: string };
 
+/** How far committed review has gone on one submission in the results view. */
+export type ReviewResultStatus = 'unscored' | 'in_review' | 'scored';
+
+/** One authorized scoring criterion the export may name. */
+export interface ReviewResultCriterion {
+	readonly key: string;
+	readonly label: string;
+	readonly value: number;
+}
+
+/**
+ * One organizer result row. Standing and criterion values come from the same
+ * authorized read; reviewer identity never belongs here.
+ */
+export interface ReviewResultRow {
+	readonly submissionId: string;
+	readonly title: string;
+	readonly trackId?: string;
+	readonly status: ReviewResultStatus;
+	readonly reviews: number;
+	readonly standing: ScoreStanding | null;
+	readonly criteria: readonly ReviewResultCriterion[];
+}
+
 /**
  * The factual capabilities consumed by the tuned Review surface.
  *
@@ -51,6 +75,8 @@ export interface ReviewPagePort {
 		commitReview(submissionId: string): Promise<MyReviewItem | null>;
 		standing(submissionId: string): Promise<ScoreStanding | null>;
 		standings(submissionIds: string[]): Promise<Record<string, ScoreStanding>>;
+		/** Organizer results over the current round, sorted by aggregate score. */
+		results(): Promise<ReviewResultRow[]>;
 		amend(submissionId: string, score: number, comment: string): Promise<MyReviewItem | null>;
 		revertAmend(submissionId: string): Promise<MyReviewItem | null>;
 		comparables(submissionId: string, slice: 'track' | 'all'): Promise<ComparableCard[]>;

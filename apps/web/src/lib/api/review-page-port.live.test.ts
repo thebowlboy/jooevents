@@ -325,4 +325,64 @@ describe('direct live Review page port', () => {
 			reason: 'Top pick is capped at 3 and already on “Talk” and “Second talk” — unpin one first.'
 		});
 	});
+
+	test('refuses results until an authorized candidate list is composed', async () => {
+		const reviewer = createLiveReviewPagePort({
+			review: core({ keys: [], actions: [] }),
+			vocabulary,
+			schedule,
+			viewer: { kind: 'reviewer', reviewerId }
+		});
+		await expect(reviewer.review.results()).rejects.toMatchObject({
+			code: 'review_results_organizer_only'
+		});
+
+		const organizer = createLiveReviewPagePort({
+			review: core({ keys: [], actions: [] }),
+			vocabulary,
+			schedule,
+			viewer: { kind: 'organizer' }
+		});
+		await expect(organizer.review.results()).rejects.toMatchObject({ code: 'review_results' });
+	});
+
+	test('joins authorized candidates with standings for organizer results', async () => {
+		const page = createLiveReviewPagePort({
+			review: core({ comparable: true, keys: [], actions: [] }),
+			vocabulary,
+			schedule,
+			viewer: { kind: 'organizer' },
+			results: {
+				async list() {
+					return [
+						{ submissionId: id(14), title: 'Second talk', trackId: id(10), reviews: 1 },
+						{ submissionId, title: 'Talk', trackId: id(10) }
+					];
+				}
+			}
+		});
+		expect(await page.review.results()).toEqual([
+			{
+				submissionId: id(14),
+				title: 'Second talk',
+				trackId: id(10),
+				status: 'scored',
+				reviews: 1,
+				standing: {
+					value: 3, scaleMax: 5, reviews: 1, n: 1, median: 3, band: 'few',
+					phrase: 'Not enough reviews to rank.', slice: { label: 'Track' }, points: []
+				},
+				criteria: [{ key: 'overall', label: 'Overall', value: 3 }]
+			},
+			{
+				submissionId,
+				title: 'Talk',
+				trackId: id(10),
+				status: 'unscored',
+				reviews: 0,
+				standing: null,
+				criteria: []
+			}
+		]);
+	});
 });

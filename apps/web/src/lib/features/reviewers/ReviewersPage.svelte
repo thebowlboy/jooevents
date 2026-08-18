@@ -43,6 +43,7 @@
 	import ScopeChips from './ScopeChips.svelte';
 	import ScopePicker from './ScopePicker.svelte';
 	import { parseScopeParam, resolveRef, resolveScope, scopeKey } from './scope-display';
+	import { reviewReminderBatch } from './reminder-batch';
 
 	interface Props {
 		port: ReviewersPagePort;
@@ -112,6 +113,7 @@
 	let announcement = $state('');
 	let remindingId = $state<string | null>(null);
 	let remindedIds = $state<string[]>([]);
+	let selectedIds = $state<string[]>([]);
 	let replacementOpen = $state(false);
 	let acceptCoverageOpen = $state(false);
 	let vacancyTarget = $state<UncoveredReview | null>(null);
@@ -178,10 +180,46 @@
 		'needs-cover': scoped.filter((row) => row.awaitingReassignment > 0).length
 	});
 	const activeCount = $derived(reviewers.filter((row) => row.status === 'active').length);
+	const visibleIds = $derived(filtered.map((row) => row.id));
+	const selectedRows = $derived(
+		reviewers.filter((row) => selectedIds.includes(row.id))
+	);
+	const allVisibleSelected = $derived(
+		visibleIds.length > 0 && visibleIds.every((id) => selectedIds.includes(id))
+	);
 
 	/** Re-read after a write: always a fresh request, and the newest one wins. */
 	async function load() {
 		await rosterRead.refresh();
+		pruneSelection();
+	}
+
+	function pruneSelection() {
+		const known = new Set(reviewers.map((row) => row.id));
+		selectedIds = selectedIds.filter((id) => known.has(id));
+	}
+
+	function isSelected(id: string): boolean {
+		return selectedIds.includes(id);
+	}
+
+	function toggleSelected(id: string, chosen: boolean) {
+		selectedIds = chosen
+			? [...new Set([...selectedIds, id])]
+			: selectedIds.filter((entry) => entry !== id);
+	}
+
+	function toggleAllVisible() {
+		if (allVisibleSelected) {
+			const hidden = new Set(visibleIds);
+			selectedIds = selectedIds.filter((id) => !hidden.has(id));
+			return;
+		}
+		selectedIds = [...new Set([...selectedIds, ...visibleIds])];
+	}
+
+	function clearSelection() {
+		selectedIds = [];
 	}
 
 	let retryingRoster = $state(false);
@@ -512,17 +550,20 @@
 	 */
 	const REMINDER_SUBJECT = 'Review reminder';
 
-	let remindTarget = $state<Reviewer | null>(null);
+	let remindTargets = $state<Reviewer[]>([]);
 	let remindOpen = $state(false);
 	let remindSubject = $state(REMINDER_SUBJECT);
 	let remindPreview = $state.raw<ReminderPreview | null>(null);
+	let remindError = $state('');
 	let theme = $state.raw<EventTheme | null>(null);
+	const remindBatch = $derived(reviewReminderBatch(remindTargets));
 
-	function openRemind(row: Reviewer) {
-		if (remindingId) return;
-		remindTarget = row;
+	function openRemind(rows: Reviewer[]) {
+		if (remindingId || rows.length === 0) return;
+		remindTargets = rows;
 		remindSubject = REMINDER_SUBJECT;
 		remindPreview = null;
+		remindError = '';
 		remindOpen = true;
 		// Asked of the sending lane, so the words on screen are the words it mails.
 		void api.tasks.reminderPreview?.().then(
@@ -536,16 +577,26 @@
 	}
 
 	async function confirmRemind() {
-		const row = remindTarget;
-		if (!row || remindingId) return;
-		remindingId = row.id;
+		const recipients = remindBatch.included.map((entry) => entry.reviewer);
+		if (recipients.length === 0 || remindingId) return;
+		remindingId = recipients[0]!.id;
+		remindError = '';
 		try {
-			await api.tasks.remind([row.id], remindSubject.trim() || REMINDER_SUBJECT);
-			remindedIds = [...remindedIds, row.id];
-			announcement = `Review reminder sent to ${row.name}.`;
+			await api.tasks.remind(
+				recipients.map((row) => row.id),
+				remindSubject.trim() || REMINDER_SUBJECT
+			);
+			remindedIds = [...new Set([...remindedIds, ...recipients.map((row) => row.id)])];
+			announcement =
+				recipients.length === 1
+					? `Review reminder sent to ${recipients[0]!.name}.`
+					: `Review reminder sent to ${recipients.length} reviewers.`;
 			remindOpen = false;
+			if (selectedIds.length > 0) selectedIds = [];
 		} catch (error) {
-			announcement = error instanceof Error ? error.message : 'The review reminder could not be sent.';
+			remindError =
+				error instanceof Error ? error.message : 'The review reminder could not be sent.';
+			announcement = remindError;
 		} finally {
 			remindingId = null;
 		}
@@ -636,7 +687,7 @@
 			class="ui-button ui-button--secondary ui-button--sm load__remind"
 			disabled={remindingId !== null}
 			aria-busy={remindingId === row.id}
-			onclick={() => openRemind(row)}>Remind</button>
+			onclick={() => openRemind([row])}>Remind</button>
 	{/if}
 {/snippet}
 
@@ -833,6 +884,14 @@
 			<table class="ui-table ui-table--multiline">
 				<thead>
 					<tr>
+						<th class="col-select">
+							<input
+								type="checkbox"
+								aria-label="Select all shown reviewers"
+								disabled={!roster || visibleIds.length === 0}
+								checked={allVisibleSelected}
+								onchange={toggleAllVisible} />
+						</th>
 						<th class="col-reviewer">Reviewer</th>
 						<th class="col-status">Status</th>
 						<th>Reviews</th>
@@ -846,6 +905,7 @@
 							<!-- Mirrors the resolved multiline row cell-for-cell, so the row
 							     height is set by the same table metrics as real rows. -->
 							<tr aria-hidden="true">
+								<td class="col-select"><span class="ui-skeleton skeleton-action--icon"></span></td>
 								<td class="col-reviewer">
 									<span class="ui-table__primary"><span class="ui-skeleton skeleton-line" style="inline-size: 8rem"></span></span>
 									<span class="ui-table__secondary"><span class="ui-skeleton skeleton-line" style="inline-size: 11rem"></span></span>
@@ -873,6 +933,13 @@
 								class:is-open={expandedId === row.id}
 								data-arrival-host
 								onclick={(event) => onRowPress(event, row.id)}>
+								<td class="col-select">
+									<input
+										type="checkbox"
+										aria-label={`Select ${row.name}`}
+										checked={isSelected(row.id)}
+										onchange={(event) => toggleSelected(row.id, event.currentTarget.checked)} />
+								</td>
 								<td class="col-reviewer">
 									<!-- The arrival anchor for `?reviewer=`: the scroll and the caret
 									     stop on the name, so a table scrolled sideways still opens on
@@ -904,7 +971,7 @@
 							</tr>
 							{#if expandedId === row.id}
 								<tr class="detail-row">
-									<td colspan="5">{@render detail(row)}</td>
+									<td colspan="6">{@render detail(row)}</td>
 								</tr>
 							{/if}
 						{/each}
@@ -941,6 +1008,13 @@
 						<!-- svelte-ignore a11y_click_events_have_key_events -->
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
 						<div class="card__head card__head--door" onclick={(event) => onRowPress(event, row.id)}>
+							<label class="card__pick">
+								<input
+									type="checkbox"
+									aria-label={`Select ${row.name}`}
+									checked={isSelected(row.id)}
+									onchange={(event) => toggleSelected(row.id, event.currentTarget.checked)} />
+							</label>
 							<span class="card__copy">
 								<span class="card__name">{row.name}</span>
 								{#if row.email}
@@ -990,7 +1064,7 @@
 										class="ui-button ui-button--secondary ui-button--sm"
 										disabled={remindingId !== null}
 										aria-busy={remindingId === row.id}
-										onclick={() => openRemind(row)}>Remind</button>
+										onclick={() => openRemind([row])}>Remind</button>
 								{/if}
 							</span>
 							<!-- Cards have no column header, so the words carry the whole
@@ -1006,6 +1080,22 @@
 		</ul>
 	{/if}
 </section>
+
+{#if selectedIds.length > 0}
+	<div class="bulkbar" role="toolbar" aria-label="Selected reviewers">
+		<span class="bulkbar__count">{selectedIds.length} selected</span>
+		<button
+			type="button"
+			class="ui-button ui-button--primary ui-button--sm"
+			disabled={remindingId !== null}
+			onclick={() => openRemind(selectedRows)}>
+			Remind selected
+		</button>
+		<button type="button" class="ui-button ui-button--ghost ui-button--sm" onclick={clearSelection}>
+			Clear
+		</button>
+	</div>
+{/if}
 
 {#if roster && reviewers.length > 0}
 	<CoveragePanel
@@ -1098,9 +1188,12 @@
 <!-- A reminder is an email to a person, so it is reviewed before it is sent:
      who receives it, the subject as it will read, and the body itself. -->
 <Modal bind:open={remindOpen} title="Send review reminder">
-	{#if remindTarget}
+	{#if remindTargets.length > 0}
 		<p class="modal__copy">
-			{remindTarget.name} receives one email. Nothing is sent until you commit it here.
+			{remindBatch.included.length}
+			{remindBatch.included.length === 1 ? 'reviewer receives' : 'reviewers receive'}
+			this email. Excluded people stay listed with the reason. Nothing is sent until you commit it
+			here.
 		</p>
 		<Field id="remind-subject" label="Subject" required>
 			{#snippet children({ id, describedBy })}
@@ -1112,13 +1205,16 @@
 					bind:value={remindSubject} />
 			{/snippet}
 		</Field>
+		{#if remindError}
+			<p class="modal__error" role="alert">{remindError}</p>
+		{/if}
 		{#if remindPreview?.kind === 'template' && theme}
 			<RecipientEmailPeek
 				template={remindPreview.template}
 				{theme}
 				eventName=""
 				eventMeta=""
-				recipient={{ name: remindTarget.name }}
+				recipient={{ name: remindBatch.included[0]?.reviewer.name ?? 'each reviewer' }}
 				subject={remindSubject}
 				hint="Reviewer reminders ride the speaker-task reminder lane, so this is that lane’s copy." />
 		{:else if remindPreview?.kind === 'plain'}
@@ -1127,6 +1223,28 @@
 				body={remindPreview.body}
 				note="Reviewer reminders ride the speaker-task reminder lane, so this is that lane’s copy." />
 		{/if}
+		<ul class="remind-roster">
+			{#each remindBatch.roster as entry (entry.reviewer.id)}
+				<li class="remind-roster__row" class:remind-roster__row--out={Boolean(entry.reason)}>
+					<span class="remind-roster__who">
+						<span class="remind-roster__name">{entry.reviewer.name}</span>
+						{#if entry.reviewer.email}
+							<span class="remind-roster__mail">
+								<CopyValue value={entry.reviewer.email} label="email address" />
+							</span>
+						{/if}
+					</span>
+					{#if entry.reason}
+						<span class="ui-badge ui-badge--warning ui-badge--solid">Excluded</span>
+						<span class="remind-roster__reason">{entry.reason}</span>
+					{:else}
+						<span class="remind-roster__detail">
+							{entry.reviewer.done} of {entry.reviewer.assigned} reviews are in
+						</span>
+					{/if}
+				</li>
+			{/each}
+		</ul>
 	{/if}
 	{#snippet footer(close)}
 		<button type="button" class="ui-button ui-button--ghost" disabled={remindingId !== null} onclick={close}>
@@ -1135,10 +1253,11 @@
 		<button
 			type="button"
 			class="ui-button ui-button--primary"
-			disabled={remindingId !== null || !remindSubject.trim()}
+			disabled={remindingId !== null || !remindSubject.trim() || remindBatch.included.length === 0}
 			aria-busy={remindingId !== null || undefined}
 			onclick={confirmRemind}>
-			Send 1 reminder email
+			Send {remindBatch.included.length}
+			{remindBatch.included.length === 1 ? 'reminder email' : 'reminder emails'}
 		</button>
 	{/snippet}
 </Modal>
@@ -1288,6 +1407,10 @@
 	.who {
 		display: grid;
 		min-inline-size: 0;
+	}
+
+	.col-select {
+		inline-size: 2.25rem;
 	}
 
 	.col-reviewer {
@@ -1585,14 +1708,20 @@
 
 	.card__head {
 		display: grid;
-		grid-template-columns: minmax(0, 1fr) auto;
+		grid-template-columns: auto minmax(0, 1fr) auto;
 		grid-template-areas:
-			'copy toggle'
-			'tags tags'
-			'scope scope';
+			'pick copy toggle'
+			'pick tags tags'
+			'pick scope scope';
 		column-gap: var(--je-space-3);
 		row-gap: var(--je-space-2);
 		align-items: center;
+	}
+
+	.card__pick {
+		grid-area: pick;
+		align-self: start;
+		margin-block-start: 0.2rem;
 	}
 
 	/* The card's summary is the table row's door in the narrow composition; a
@@ -1647,6 +1776,62 @@
 		margin-block-start: var(--je-space-3);
 		padding-block-start: var(--je-space-3);
 		border-block-start: 1px solid var(--je-color-border);
+	}
+
+	.bulkbar {
+		position: sticky;
+		inset-block-end: var(--je-space-4);
+		margin-inline: auto;
+		width: fit-content;
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--je-space-2);
+		padding: var(--je-space-2) var(--je-space-4);
+		background: var(--je-color-surface);
+		border: 1px solid var(--je-color-border-strong);
+		border-radius: var(--je-radius-round);
+		box-shadow: var(--je-shadow-md);
+	}
+
+	.bulkbar__count {
+		font-size: var(--je-font-size-sm);
+		font-weight: 600;
+		margin-inline-end: var(--je-space-2);
+		font-variant-numeric: tabular-nums;
+	}
+
+	.remind-roster {
+		display: grid;
+		gap: var(--je-space-2);
+		margin: var(--je-space-4) 0 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	.remind-roster__row {
+		display: grid;
+		gap: var(--je-space-1);
+		padding: var(--je-space-3);
+		border: 1px solid var(--je-color-border);
+		border-radius: var(--je-radius-control);
+	}
+
+	.remind-roster__row--out {
+		background: var(--je-color-surface-sunken);
+	}
+
+	.remind-roster__who,
+	.remind-roster__name {
+		display: grid;
+		min-inline-size: 0;
+	}
+
+	.remind-roster__mail,
+	.remind-roster__detail,
+	.remind-roster__reason {
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
 	}
 
 	@media (max-width: 920px) {
