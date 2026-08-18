@@ -612,7 +612,7 @@ describe('organizer communication pagination and schema identities', () => {
     })).toThrow();
   });
 
-  test('publishes stable exact refs without a direct-send or bounce operation', () => {
+  test('publishes stable exact refs with the controlled delivery retry operation', () => {
     const refs = ORGANIZER_COMMUNICATION_OPERATION_SCHEMA_REFS;
     expect(Object.keys(refs)).toEqual([
       'listPurposes',
@@ -629,6 +629,7 @@ describe('organizer communication pagination and schema identities', () => {
       'discardDraft',
       'previewBatch',
       'sendMessages',
+      'retryDelivery',
       'prepareBatchPreview',
       'getPreview',
       'listPreviewRecipients',

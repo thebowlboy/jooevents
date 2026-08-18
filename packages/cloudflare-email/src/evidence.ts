@@ -5,7 +5,7 @@ import {
   type SafeEvidenceCatalog
 } from '@jooevents/communications';
 
-export type CloudflareEmailTransportKind = 'bun_rest' | 'workers_binding';
+export type CloudflareEmailTransportKind = 'bun_rest' | 'graphql_analytics' | 'workers_binding';
 
 export const CLOUDFLARE_EMAIL_EVIDENCE_CODES = Object.freeze({
   accepted: 'cloudflare.email.accepted',
@@ -70,6 +70,7 @@ export const CLOUDFLARE_EMAIL_OBSERVATIONS = Object.freeze([
   'connection_lost',
   'daily_limit_exceeded',
   'delivery_failed',
+  'delivery_confirmed',
   'domain_not_enabled',
   'inbound_not_enabled',
   'invalid_request',
@@ -128,7 +129,7 @@ export const CLOUDFLARE_EMAIL_SAFE_EVIDENCE_CATALOG: SafeEvidenceCatalog =
         key: 'cloudflare.transport',
         schemaVersion: 1,
         valueKind: 'enum',
-        allowedValues: ['bun_rest', 'workers_binding']
+        allowedValues: ['bun_rest', 'graphql_analytics', 'workers_binding']
       }
     ],
     codes: Object.values(CLOUDFLARE_EMAIL_EVIDENCE_CODES).map((code) => ({

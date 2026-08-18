@@ -58,9 +58,11 @@ import {
   intakeIdInputSchema,
   intakeIdSchema,
   readOperationResultSchema,
+  organizerMessageTemplateDetailSchema,
   workspaceTeamSnapshotSchema,
   type AgentActionBatchView,
   type EffectfulOperationResult,
+  type TemplateArtifactDocumentDto,
   type ReadOperationResult,
   type WorkspaceTeamSnapshot
 } from '@jooevents/contracts';
@@ -127,6 +129,7 @@ import {
   createHmacOrganizerPreviewOpaqueTokenCodec,
   createOrganizerMergeRegistryRelease,
   createOrganizerPlainTextRenderStrategyPort,
+  parseEmailAddress,
   type InstallationMailSenderIdentity,
   type OrganizerMergeValueSource
 } from '@jooevents/communications';
@@ -440,6 +443,9 @@ import {
   createSQLiteMailSenderPresentationResolver
 } from '@jooevents/persistence/workspace-sender-identity';
 import { SQLiteOutboundEmailDeliveryLedger } from '@jooevents/persistence/outbound-email-delivery';
+import {
+  SQLiteCommunicationDeliveryObservationRepository
+} from '@jooevents/persistence/communication-delivery-observations';
 import {
   createSQLiteOutboundEmailDeliveryEffectDomainRegistration
 } from '@jooevents/persistence/outbound-email-delivery-effect-domain';
@@ -2307,19 +2313,23 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
     // Live decision-set audience source over the same decision heads and
     // classified intake contacts the mounted Decision and Submissions
     // surfaces serve; identity is personId-bearing evidence, never email.
-    const decisionAudienceSource = cryptoProfiles.withPersistentHmacKeySelection(
+    const communicationAddressFingerprint = cryptoProfiles.withPersistentHmacKeySelection(
       'security.communication-address-fingerprint',
-      (selection) => createSQLiteDecisionAudienceSource({
-        sqlite: database.sqlite,
-        contacts: intakeRepository,
-        submissions: submissionTriageSource,
-        addressFingerprintKeyBytes: selection.active.keyBytes,
-        addressFingerprintProfile: Object.freeze({
+      (selection) => Object.freeze({
+        keyBytes: Uint8Array.from(selection.active.keyBytes),
+        profile: Object.freeze({
           key: 'communication.address-fingerprint.hmac-sha256',
           version: selection.active.reference.version
         })
       })
     );
+    const decisionAudienceSource = createSQLiteDecisionAudienceSource({
+        sqlite: database.sqlite,
+        contacts: intakeRepository,
+        submissions: submissionTriageSource,
+        addressFingerprintKeyBytes: communicationAddressFingerprint.keyBytes,
+        addressFingerprintProfile: communicationAddressFingerprint.profile
+      });
     const taskReminderAudienceSource = createSQLiteTaskReminderAudienceSource({
       sqlite: database.sqlite,
       tasks: taskRepository,
@@ -2421,19 +2431,129 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
         newHistoryId: () => crypto.randomUUID()
       })
     );
+    const communicationDeliveryObservations =
+      new SQLiteCommunicationDeliveryObservationRepository(database.sqlite);
+    const releaseEnvelopeResolver = createSQLiteOutboundEmailEnvelopeResolver(
+      communicationMessageReleases
+    );
     const outboundDispatch = createOutboundDispatchLoop({
       sqlite: database.sqlite,
       ledger: outboundEmailDeliveryLedger,
       // The one composed dispatch adapter: the activated registration's real
       // delivery adapter, or the deterministic fake in the inert posture.
       provider: providerRuntime.registration?.delivery ?? fakeEmailProvider.delivery,
-      envelopes: createSQLiteOutboundEmailEnvelopeResolver(communicationMessageReleases),
+      envelopes: Object.freeze({
+        resolve: releaseEnvelopeResolver.resolve.bind(releaseEnvelopeResolver),
+        resolveMarkedResendRecipient({ deliveryId }: { readonly deliveryId: string }) {
+          const rows = database.sqlite.query<{
+            readonly workspace_id: string;
+            readonly event_id: string;
+            readonly contact_ref_id: string;
+            readonly channel_address_id: string;
+            readonly channel_address_version: number;
+            readonly address_lookup_fingerprint_sha256: string;
+          }, [string]>(`
+            SELECT h.workspace_id,h.event_id,r.contact_ref_id,h.channel_address_id,
+                   h.channel_address_version,h.address_lookup_fingerprint_sha256
+              FROM communication_outbound_delivery_heads h
+              JOIN communication_message_releases r ON r.release_id=h.release_id
+             WHERE h.delivery_id=?
+             LIMIT 2
+          `).all(deliveryId);
+          if (rows.length !== 1
+              || communicationDeliveryObservations.currentDisposition(deliveryId)?.kind
+                !== 'permanent_bounce') return undefined;
+          const row = rows[0]!;
+          const current = organizerCommunicationPreview.readCurrentAddress({
+            scope: {
+              workspaceId: parseWorkspaceId(row.workspace_id),
+              eventId: parseEventId(row.event_id)
+            },
+            contactRefId: row.contact_ref_id
+          });
+          if (current === undefined
+              || (current.addressRefId === row.channel_address_id
+                && current.addressVersion === row.channel_address_version
+                && current.lookupFingerprint.keyedValue
+                  === row.address_lookup_fingerprint_sha256)) {
+            return undefined;
+          }
+          return Object.freeze({
+            address: parseEmailAddress(current.classifiedValue.value),
+            channelAddressId: current.addressRefId,
+            channelAddressVersion: current.addressVersion,
+            addressLookupFingerprintProfile: current.lookupFingerprint.profile,
+            addressLookupFingerprintVersion: current.lookupFingerprint.version,
+            addressLookupFingerprintSha256: current.lookupFingerprint.keyedValue
+          });
+        }
+      }),
       ids: Object.freeze({
         newAttemptId: () => crypto.randomUUID(),
         newClaimId: () => crypto.randomUUID()
       }),
       clock: Object.freeze({ now: () => new Date().toISOString() })
     });
+    const reconcileCloudflareDeliveryObservations = async (): Promise<void> => {
+      const lookup = providerRuntime.deliveryLookup;
+      if (lookup === null) return;
+      const nowMs = Date.parse(clock.now());
+      const candidates = database.sqlite.query<{
+        readonly workspace_id: string;
+        readonly event_id: string;
+        readonly delivery_id: string;
+        readonly attempt_id: string;
+        readonly provider_connection_revision_id: string;
+        readonly adapter_key: string;
+        readonly provider_message_id: string;
+        readonly completed_at_ms: number;
+      }, [number]>(`
+        SELECT h.workspace_id,h.event_id,h.delivery_id,a.attempt_id,
+               h.provider_connection_revision_id,a.adapter_key,a.provider_message_id,
+               a.completed_at_ms
+          FROM communication_outbound_delivery_heads h
+          JOIN communication_outbound_delivery_attempts a
+            ON a.attempt_id=h.current_attempt_id AND a.delivery_id=h.delivery_id
+         WHERE a.state='accepted' AND a.provider_message_id IS NOT NULL
+           AND a.completed_at_ms>=?
+           AND NOT EXISTS (
+             SELECT 1 FROM communication_delivery_observations o
+              WHERE o.attempt_id=a.attempt_id
+                AND o.observation_kind IN ('delivered','permanent_bounce','delivery_failed')
+           )
+         ORDER BY a.completed_at_ms,a.attempt_id
+         LIMIT 50
+      `).all(nowMs - 31 * 24 * 60 * 60 * 1_000);
+      for (const candidate of candidates) {
+        const found = await lookup.lookup({
+          providerMessageId: candidate.provider_message_id,
+          start: new Date(Math.max(
+            candidate.completed_at_ms - 5 * 60 * 1_000,
+            nowMs - 31 * 24 * 60 * 60 * 1_000
+          )).toISOString(),
+          end: new Date(nowMs).toISOString()
+        });
+        if (found.kind !== 'found') continue;
+        database.sqlite.transaction(() => {
+          communicationDeliveryObservations.append({
+            workspaceId: candidate.workspace_id,
+            eventId: candidate.event_id,
+            deliveryId: candidate.delivery_id,
+            attemptId: candidate.attempt_id,
+            providerConnectionRevisionId: candidate.provider_connection_revision_id,
+            adapterKey: candidate.adapter_key,
+            providerMessageId: found.providerMessageId,
+            providerEventKey: found.providerEventKey,
+            kind: found.disposition,
+            source: 'provider_lookup',
+            quality: 'provider_conclusive',
+            providerObservedAt: found.providerObservedAt,
+            ingestedAt: clock.now(),
+            safeEvidence: found.safeEvidence
+          });
+        }).immediate();
+      }
+    };
     const communications = createCommunicationSendLane({
       sqlite: database.sqlite,
       workspaceId,
@@ -2466,6 +2586,8 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       classifiedStore: organizerCommunicationClassifiedStore,
       releases: communicationMessageReleases,
       clock,
+      addressFingerprintKeyBytes: communicationAddressFingerprint.keyBytes,
+      addressFingerprintProfile: communicationAddressFingerprint.profile,
       dispatchAfterCommit: async () => {
         await outboundDispatch.runOnce();
       },
@@ -2473,6 +2595,7 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
         ? {}
         : { deliveryRoute: communicationDeliveryRoute })
     });
+    communicationAddressFingerprint.keyBytes.fill(0);
     const submissionTriageDirectDomain =
       createSQLiteSubmissionTriageDirectEffectDomainRegistration({
         sqlite: database.sqlite,
@@ -3407,6 +3530,7 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
 		crypto: organizerCommunicationCrypto,
 		enabledOperations: [
 			'store_communication_authoring_payload',
+			'message_template.create',
 			'create_message_draft',
 			'revise_message_batch',
 			'discard_message_draft'
@@ -3478,6 +3602,7 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       currentAuthority,
       currentEvent: organizerCommunicationCurrentEvent,
       read: createSQLiteCommunicationAttentionSource({
+        sqlite: database.sqlite,
         authoring: organizerCommunicationAuthoring,
         readiness: emailProviderReadiness,
         history: communicationDeliveryHistory
@@ -4526,6 +4651,78 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
         eventRelationships,
         ids: Object.freeze({
           newTimelineId: () => crypto.randomUUID()
+        }),
+        templateArtifactBridge: Object.freeze({
+          create({ workspaceId: bridgeWorkspaceId, eventId, templateId, createdByUserId, createdAt }) {
+            const detailResult = organizerCommunicationAuthoring.getTemplate({
+              workspaceId: parseWorkspaceId(bridgeWorkspaceId),
+              eventId: parseEventId(eventId)
+            }, { templateId, revisionNumber: 1 });
+            if (detailResult.kind !== 'success') {
+              throw new TypeError('communication_template_artifact_bridge_read_failed');
+            }
+            const detail = organizerMessageTemplateDetailSchema.parse(detailResult.data);
+            const inlineText = (nodes: readonly ({
+              readonly kind: 'text' | 'merge_field';
+              readonly value?: string;
+              readonly fieldKey?: string;
+            })[]) => nodes.map((node) => node.kind === 'merge_field'
+              ? `{{${node.fieldKey}}}` : node.value ?? '').join('');
+            if (detail.content.body.mode !== 'composed') {
+              throw new TypeError('communication_template_artifact_bridge_mode_unsupported');
+            }
+            const blocks: Extract<TemplateArtifactDocumentDto, {
+              readonly kind: 'message';
+            }>['blocks'][number][] = [];
+            for (const block of detail.content.body.blocks) {
+              switch (block.kind) {
+                case 'heading': blocks.push({ type: 'heading', text: inlineText(block.content) }); break;
+                case 'paragraph': blocks.push({ type: 'paragraph', text: inlineText(block.content) }); break;
+                case 'detail_rows': blocks.push({
+                  type: 'details' as const,
+                  rows: block.rows.map((row) => ({
+                    label: inlineText(row.label), value: inlineText(row.value)
+                  }))
+                }); break;
+                case 'action_link': blocks.push({
+                  type: 'button' as const,
+                  label: inlineText(block.label), href: block.hrefFieldKey
+                }); break;
+                case 'list': blocks.push({
+                  type: 'paragraph' as const,
+                  text: block.items.map((item, index) =>
+                    `${block.style === 'ordered' ? `${index + 1}.` : '•'} ${inlineText(item)}`
+                  ).join('\n')
+                }); break;
+              }
+            }
+            const document: TemplateArtifactDocumentDto = {
+              kind: 'message',
+              key: `message-${templateId.replaceAll('-', '')}`,
+              name: detail.name,
+              purpose: detail.purposeRevision.purposeKey,
+              subject: inlineText(detail.content.subject),
+              blocks,
+              mergeFields: detail.fieldBindings.map((binding) => ({
+                key: binding.fieldKey,
+                label: binding.fieldKey.replaceAll(/[._-]+/gu, ' '),
+                sample: ''
+              })),
+              usedBy: []
+            };
+            templateAuthoringRepository.createArtifact({
+              scope: {
+                workspaceId: parseWorkspaceId(bridgeWorkspaceId),
+                eventId: parseEventId(eventId)
+              },
+              artifactId: templateId,
+              revisionId: crypto.randomUUID(),
+              document,
+              createdByUserId,
+              createdAt,
+              note: `Created “${detail.name}”.`
+            });
+          }
         })
       });
     const outboundEmailDeliveryDomain = createSQLiteOutboundEmailDeliveryEffectDomainRegistration({
@@ -5622,6 +5819,16 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
               }
             }]
           : []),
+        ...(providerRuntime.deliveryLookup === null
+          ? []
+          : [{
+              name: 'cloudflare_delivery_observations',
+              intervalMs: 60_000,
+              runOnStart: true,
+              async run() {
+                await requestSerialization.run(reconcileCloudflareDeliveryObservations);
+              }
+            }]),
         {
           name: 'approved_agent_actions',
           intervalMs: 1_000,

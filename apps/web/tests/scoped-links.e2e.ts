@@ -124,19 +124,15 @@ test('a received task is accepted from its own cell and the receipt takes it bac
 // system is mounted), so this link lands on the unavailable page there — the
 // live roster's own behavior is covered in speakers.joined-live.ts, and this
 // spec must not be ported into the joined suite as-is.
-test('a speaker row opens the task matrix already scoped to that speaker', async ({ page }) => {
+test('a speaker record opens the task matrix already scoped to that speaker', async ({ page }) => {
 	await page.goto('/app/speakers');
 
-	// One composition is on screen per width: the table at desktop, the cards on
-	// touch. Both carry the same expansion, so the visible one is the subject.
+	// The roster's one person-shaped door now resolves to the person's record;
+	// that record owns the consequence-specific walk into Tasks.
 	const roster = page.getByRole('region', { name: 'Speaker roster' });
 	await expect(roster).toContainText('Elena Petrova', { timeout: 15000 });
-	const disclosure = roster.getByRole('button', { name: 'Details for Elena Petrova' });
-	await disclosure.click();
-
-	// The expansion answers "which ones", and the rail answers "now deal with them".
-	await expect(roster.getByText('AV requirements form').filter({ visible: true })).toBeVisible();
-	await roster.getByRole('link', { name: 'Open in Tasks' }).click();
+	await roster.getByRole('link', { name: "Open Elena Petrova's record" }).click();
+	await page.getByRole('link', { name: 'Send a reminder' }).click();
 
 	await expect(page).toHaveURL(/\/app\/tasks\?speaker=spk-4&filter=overdue$/);
 	await expect(page.getByText('Overdue · Elena Petrova')).toBeVisible({ timeout: 15000 });

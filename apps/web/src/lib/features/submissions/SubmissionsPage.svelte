@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { ChevronDown, Search } from 'lucide-svelte';
 	import type { SubmissionsPagePort } from '$lib/api/submissions-page-port';
 	import { describePortFailure, type PortFailureView } from '$lib/api/port-failure';
@@ -9,6 +9,7 @@
 		Marked,
 		Popover,
 		ScopeFilter,
+		revealTarget,
 		TrackChip,
 		badgeFor,
 		createSettler,
@@ -418,6 +419,43 @@
 		ids.forEach((id, index) => (next[id] = found[index] ?? null));
 		origins = next;
 	}
+
+	/**
+	 * Arriving from elsewhere: `?submission=` lands on that row — its tray
+	 * selected, hiding filters cleared, the row open, scrolled to, and marked —
+	 * so a link handed over by a speaker record or an agent keeps its promise.
+	 */
+	const askedSubmission = $derived(param('submission'));
+	// Outside the graph on purpose: remembers which arrival was answered.
+	let revealedSubmission: string | null = null;
+
+	$effect(() => {
+		const id = askedSubmission;
+		const ready = data?.rows;
+		if (!ready || !id) {
+			revealedSubmission = null;
+			return;
+		}
+		if (revealedSubmission === id) return;
+		revealedSubmission = id;
+		const row = ready.find((entry) => entry.id === id);
+		if (!row) return;
+		void (async () => {
+			await applyParams({
+				search: null,
+				trackId: null,
+				formatId: null,
+				tray: row.tray === 'inbox' ? null : row.tray
+			});
+			openRow(id);
+			announcement = `“${row.title}” — its row is open.`;
+			await tick();
+			const shown = Array.from(
+				document.querySelectorAll<HTMLElement>(`[data-submission="${id}"]`)
+			).find((element) => element.offsetWidth > 0);
+			revealTarget(shown ?? null);
+		})();
+	});
 
 	function openRow(id: string | null) {
 		expandedId = id;
@@ -893,6 +931,8 @@
 						<tr
 							class="row"
 							class:is-open={expandedId === row.id}
+							data-arrival-host
+							data-submission={row.id}
 							onclick={(event) => onRowPress(event, row.id)}>
 							<!-- The pick zone is the whole cell, so selecting never competes
 							     with the row's own press. -->

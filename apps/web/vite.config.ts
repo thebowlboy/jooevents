@@ -134,7 +134,13 @@ export default defineConfig(({ mode }) => {
       port: 5176,
       strictPort: true,
       ...hostPolicy,
-      proxy: createBackendProxyConfig()
+      proxy: createBackendProxyConfig(),
+      watch: {
+        // Build output and browser-test artifacts land inside this tree while
+        // the dev server runs (release gates, e2e). Watching them storms the
+        // module graph into reload loops; they are outputs, never sources.
+        ignored: ['**/build/**', '**/build-live/**', '**/test-results/**']
+      }
     },
     preview: {
       host: '0.0.0.0',

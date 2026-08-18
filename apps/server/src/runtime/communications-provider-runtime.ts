@@ -1,8 +1,10 @@
 import {
   createCloudflareRestEmailProvider,
+  createCloudflareEmailDeliveryLookup,
   createCloudflareWorkersEmailProvider,
   type CloudflareApiTokenLease,
   type CloudflareEmailReadinessProbe,
+  type CloudflareEmailDeliveryLookupResult,
   type CloudflareEmailSendingBinding,
   type CloudflareFetch
 } from '@jooevents/cloudflare-email';
@@ -79,6 +81,13 @@ export type CommunicationsProviderRuntime = Readonly<{
   registry: OutboundEmailProviderRegistry;
   selected: OutboundEmailProviderSelector | null;
   registration: OutboundEmailProviderRegistration | null;
+  deliveryLookup: Readonly<{
+    lookup(candidate: Readonly<{
+      providerMessageId: string;
+      start: string;
+      end: string;
+    }>): Promise<CloudflareEmailDeliveryLookupResult>;
+  }> | null;
   activation: CommunicationsProviderRuntimeActivation;
 }>;
 
@@ -117,11 +126,13 @@ export function createCommunicationsProviderRuntime(input: Readonly<{
       registry: createOutboundEmailProviderRegistry([]),
       selected: null,
       registration: null,
+      deliveryLookup: null,
       activation: inertActivation
     });
   }
 
   let registration: OutboundEmailProviderRegistration;
+  let deliveryLookup: CommunicationsProviderRuntime['deliveryLookup'] = null;
   if (input.config.mode === 'cloudflare_workers') {
     const binding = input.workersBindings?.[input.config.bindingName];
     if (binding === undefined) {
@@ -138,14 +149,20 @@ export function createCommunicationsProviderRuntime(input: Readonly<{
     if (input.fetch === undefined) {
       throw new CommunicationsProviderRuntimeConfigurationError('rest_fetch_unavailable');
     }
+    const tokenLease = createCloudflareApiTokenLease({
+      reference: input.config.apiTokenSecret,
+      resolver: input.secretResolver
+    });
     registration = createCloudflareRestEmailProvider({
       accountId: input.config.accountId,
-      tokenLease: createCloudflareApiTokenLease({
-        reference: input.config.apiTokenSecret,
-        resolver: input.secretResolver
-      }),
+      tokenLease,
       fetch: input.fetch,
       ...(input.readinessProbe === undefined ? {} : { readinessProbe: input.readinessProbe })
+    });
+    deliveryLookup = createCloudflareEmailDeliveryLookup({
+      zoneId: input.config.zoneId,
+      tokenLease,
+      fetch: input.fetch
     });
   }
   const registry = createOutboundEmailProviderRegistry([registration]);
@@ -163,5 +180,5 @@ export function createCommunicationsProviderRuntime(input: Readonly<{
     callbacks: 'not_supported',
     inbound: 'not_enabled'
   });
-  return Object.freeze({ registry, selected, registration, activation });
+  return Object.freeze({ registry, selected, registration, deliveryLookup, activation });
 }

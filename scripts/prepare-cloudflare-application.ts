@@ -189,6 +189,15 @@ function adaptCanonicalMigrationForD1(entry: SQLiteMigrationManifestEntry, sql: 
   }
   adapted = adapted.replaceAll('temp.e2_0002_submission_triage_spam_rows', 'e2_0002_submission_triage_spam_rows');
   adapted = adapted.replaceAll('temp.e2_0004_api_key_prefix_guard', 'e2_0004_api_key_prefix_guard');
+  if (entry.migrationId === 'e2_0013_communication_delivery_observations') {
+    // D1 has no TEMP migration state. This verifier is created, populated,
+    // asserted through CHECK constraints, and dropped inside this one
+    // migration, so an ordinary table preserves the same bounded lifetime.
+    adapted = adapted.replace(
+      'CREATE TEMP TABLE e2_0013_receipt_rebuild_validation',
+      'CREATE TABLE e2_0013_receipt_rebuild_validation'
+    );
+  }
   if (/\b(?:TEMP\s+TABLE|temp\.e2_)/i.test(adapted)) {
     throw new TypeError(`Canonical migration ${entry.migrationId} contains an unaudited TEMP dependency.`);
   }

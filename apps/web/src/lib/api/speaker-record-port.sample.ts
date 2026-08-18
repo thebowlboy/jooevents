@@ -221,7 +221,8 @@ export function createSampleSpeakerRecordPort(api: WorkspaceApi): SpeakerRecordP
 	return Object.freeze({
 		record: Object.freeze({ read }),
 		engagement: Object.freeze({
-			recordConfirmation: (engagementId: string) => api.speakers.recordConfirmation(engagementId)
+			recordConfirmation: (engagementId: string) => api.speakers.recordConfirmation(engagementId),
+			acceptCancellation: (engagementId: string) => api.speakers.acceptCancellation(engagementId)
 		}),
 		profile: Object.freeze({
 			async update() {

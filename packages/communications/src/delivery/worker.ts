@@ -104,6 +104,8 @@ export interface OutboundEmailDeliveryLedger {
     readonly leaseMs: number;
     readonly attemptId: string;
     readonly attemptKind: OutboundEmailDeliveryAttemptKind;
+    /** Present only after the explicit permanent-bounce correction ceremony. */
+    readonly authorizedMarkedResend?: boolean;
     /**
      * Digest of the derived marked-resend envelope actually being submitted.
      * Required for a `marked_resend` attempt and forbidden otherwise; the head's
@@ -141,6 +143,18 @@ export interface OutboundEmailEnvelopeResolver {
     readonly templateRevisionRefId: string;
     readonly contentRefId: string;
   }): ImmutableEmailEnvelope | Promise<ImmutableEmailEnvelope>;
+  resolveMarkedResendRecipient?(input: {
+    readonly deliveryId: string;
+    readonly releaseId: string;
+    readonly recipientRefId: string;
+  }): MaybePromise<Readonly<{
+    address: ImmutableEmailEnvelope['to']['address'];
+    channelAddressId: string;
+    channelAddressVersion: number;
+    addressLookupFingerprintProfile: string;
+    addressLookupFingerprintVersion: number;
+    addressLookupFingerprintSha256: string;
+  }> | undefined>;
 }
 
 export interface OutboundEmailDeliveryWorkerIds {
@@ -192,7 +206,14 @@ function immutableSubmission(
   head: OutboundEmailDeliveryHead,
   attemptId: string,
   envelope: ImmutableEmailEnvelope,
-  reviewedEnvelopeDigestSha256: string
+  reviewedEnvelopeDigestSha256: string,
+  correctedRecipient?: Readonly<{
+    channelAddressId: string;
+    channelAddressVersion: number;
+    addressLookupFingerprintProfile: string;
+    addressLookupFingerprintVersion: number;
+    addressLookupFingerprintSha256: string;
+  }>
 ): ImmutableEmailSubmission {
   return Object.freeze({
     contractVersion: 1,
@@ -203,11 +224,14 @@ function immutableSubmission(
     senderPresentationContractKey: head.senderPresentationContractKey,
     senderPresentationContractVersion: head.senderPresentationContractVersion,
     senderPresentationDigestSha256: head.senderPresentationDigestSha256,
-    channelAddressId: head.channelAddressId,
-    channelAddressVersion: head.channelAddressVersion,
-    addressLookupFingerprintProfile: head.addressLookupFingerprintProfile,
-    addressLookupFingerprintVersion: head.addressLookupFingerprintVersion,
-    addressLookupFingerprintSha256: head.addressLookupFingerprintSha256,
+    channelAddressId: correctedRecipient?.channelAddressId ?? head.channelAddressId,
+    channelAddressVersion: correctedRecipient?.channelAddressVersion ?? head.channelAddressVersion,
+    addressLookupFingerprintProfile: correctedRecipient?.addressLookupFingerprintProfile
+      ?? head.addressLookupFingerprintProfile,
+    addressLookupFingerprintVersion: correctedRecipient?.addressLookupFingerprintVersion
+      ?? head.addressLookupFingerprintVersion,
+    addressLookupFingerprintSha256: correctedRecipient?.addressLookupFingerprintSha256
+      ?? head.addressLookupFingerprintSha256,
     reviewedEnvelopeDigestSha256,
     envelope
   });
@@ -324,7 +348,8 @@ export function createOutboundEmailDeliveryWorker(input: {
       }
 
       const attemptId = input.ids.newAttemptId();
-      const attemptKind = requiredOutboundEmailAttemptKind(head, input.provider.capabilities);
+      let attemptKind = requiredOutboundEmailAttemptKind(head, input.provider.capabilities);
+      let authorizedMarkedResend = false;
       /* A lease can lapse between the claim and the attempt registration if this
          process stalled. The ledger refuses the write, and that refusal is the
          same contention as any other — a typed skip, not a raw persistence
@@ -346,14 +371,35 @@ export function createOutboundEmailDeliveryWorker(input: {
         ) {
           throw new OutboundEmailDeliveryWorkerError('reviewed_envelope_changed');
         }
+        const correctedRecipient = attemptKind === 'original'
+            && head.state === 'known_rejected_safe_retryable'
+            && input.envelopes.resolveMarkedResendRecipient !== undefined
+          ? await input.envelopes.resolveMarkedResendRecipient({
+              deliveryId: head.deliveryId,
+              releaseId: head.releaseId,
+              recipientRefId: head.recipientRefId
+            })
+          : undefined;
+        if (correctedRecipient !== undefined) {
+          attemptKind = 'marked_resend';
+          authorizedMarkedResend = true;
+        }
+        const resendBase = correctedRecipient === undefined
+          ? reviewedEnvelope
+          : Object.freeze({
+              ...reviewedEnvelope,
+              to: Object.freeze({ address: correctedRecipient.address })
+            });
         const envelope = attemptKind === 'marked_resend'
-          ? deriveMarkedResendEmailEnvelope(reviewedEnvelope)
+          ? deriveMarkedResendEmailEnvelope(resendBase)
           : reviewedEnvelope;
         const submittedEnvelopeDigestSha256 = attemptKind === 'marked_resend'
           ? computeReviewedEmailEnvelopeDigestSha256(envelope)
           : head.reviewedEnvelopeDigestSha256;
         prepared = input.provider.prepare(
-          immutableSubmission(head, attemptId, envelope, submittedEnvelopeDigestSha256)
+          immutableSubmission(
+            head, attemptId, envelope, submittedEnvelopeDigestSha256, correctedRecipient
+          )
         );
         if (prepared.reviewedEnvelopeDigestSha256 !== submittedEnvelopeDigestSha256) {
           throw new OutboundEmailDeliveryWorkerError('reviewed_envelope_changed');
@@ -365,6 +411,7 @@ export function createOutboundEmailDeliveryWorker(input: {
           leaseMs: OUTBOUND_EMAIL_DELIVERY_LEASE_MS,
           attemptId,
           attemptKind,
+          ...(authorizedMarkedResend ? { authorizedMarkedResend: true } : {}),
           ...(attemptKind === 'marked_resend'
             ? { resendEnvelopeDigestSha256: submittedEnvelopeDigestSha256 }
             : {}),

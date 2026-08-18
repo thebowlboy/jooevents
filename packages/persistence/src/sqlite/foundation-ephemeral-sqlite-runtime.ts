@@ -34,7 +34,7 @@ import {
   SQLITE_COMMUNICATION_RELEASE_SQL
 } from './communications/message-release-effect-domain';
 import { SQLITE_ORGANIZER_COMMUNICATION_AUTHORING_SQL } from './communications/organizer-authoring';
-import { SQLITE_ORGANIZER_COMMUNICATION_AUTHORING_EFFECT_SQL } from './communications/organizer-authoring-effect-domain';
+import { SQLITE_ORGANIZER_COMMUNICATION_AUTHORING_EFFECT_E2_0001_SQL } from './communications/organizer-authoring-effect-domain';
 import { SQLITE_EMAIL_PROVIDER_CONFIGURATION_SQL } from './communications/provider-configuration';
 import { SQLITE_WORKSPACE_SENDER_IDENTITY_SQL } from './communications/workspace-sender-identity';
 import { SQLITE_OUTBOUND_EMAIL_DELIVERY_SQL } from './outbound-email-delivery';
@@ -90,7 +90,7 @@ export const FOUNDATION_SCHEMA_AUTHORING_ARTIFACTS: readonly EphemeralSQLiteSche
     schemaArtifact('communication-organizer-authoring', SQLITE_ORGANIZER_COMMUNICATION_AUTHORING_SQL),
     schemaArtifact(
       'communication-organizer-authoring-effect',
-      SQLITE_ORGANIZER_COMMUNICATION_AUTHORING_EFFECT_SQL
+      SQLITE_ORGANIZER_COMMUNICATION_AUTHORING_EFFECT_E2_0001_SQL
     ),
     schemaArtifact('communication-organizer-audience-preview', SQLITE_ORGANIZER_AUDIENCE_PREVIEW_SQL),
     schemaArtifact('communication-email-provider-configuration', SQLITE_EMAIL_PROVIDER_CONFIGURATION_SQL),

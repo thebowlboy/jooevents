@@ -497,7 +497,7 @@ function audienceInput() {
 }
 
 describe('SQLite organizer communication authoring effect domain', () => {
-  test('binds all four exact capabilities and executes operator/model authoring with replay-safe evidence', async () => {
+  test('binds all five exact capabilities and executes operator/model authoring with replay-safe evidence', async () => {
     const fixture = openFixture();
     const operationNames = Object.values(ORGANIZER_COMMUNICATION_MUTATION_OPERATIONS)
       .map((operation) => operation.name);

@@ -305,6 +305,7 @@
 		speakers: { list: () => speakers.speakers.list() },
 		forms: { list: () => forms.forms.list() },
 		fields,
+		communications: communicationsAuthoring,
 		publication: createTemplatePublicationLivePort({
 			artifacts: templateArtifacts,
 			release: releaseClient,

@@ -577,6 +577,7 @@ export class SQLiteOutboundEmailDeliveryLedger implements OutboundEmailDeliveryL
     readonly leaseMs: number;
     readonly attemptId: string;
     readonly attemptKind: OutboundEmailDeliveryAttemptKind;
+    readonly authorizedMarkedResend?: boolean;
     readonly resendEnvelopeDigestSha256?: string;
     readonly adapterKey: string;
     readonly adapterVersion: string;
@@ -616,7 +617,59 @@ export class SQLiteOutboundEmailDeliveryLedger implements OutboundEmailDeliveryL
         && !(registration.state === 'acceptance_unknown' && registration.marked_resend_exhausted === 0)) {
         throw new TypeError('outbound_delivery_not_dispatchable');
       }
-      if (attemptKind !== requiredOutboundEmailAttemptKind(
+      const authorizedMarkedResend = input.authorizedMarkedResend === true;
+      if (input.authorizedMarkedResend !== undefined
+          && input.authorizedMarkedResend !== true) {
+        throw new TypeError('outbound_delivery_marked_resend_authorization_invalid');
+      }
+      if (authorizedMarkedResend) {
+        if (attemptKind !== 'marked_resend'
+            || registration.state !== 'known_rejected_safe_retryable') {
+          throw new TypeError('outbound_delivery_marked_resend_authorization_invalid');
+        }
+        const eligible = this.sqlite.query<{ readonly eligible: number }, [string]>(`
+          SELECT 1 AS eligible
+            FROM communication_outbound_delivery_heads h
+            JOIN communication_message_releases r ON r.release_id=h.release_id
+            JOIN communication_current_channel_addresses c
+              ON c.workspace_id=h.workspace_id AND c.event_id=h.event_id
+             AND c.contact_ref_id=r.contact_ref_id
+            JOIN communication_channel_address_versions a
+              ON a.workspace_id=c.workspace_id AND a.event_id=c.event_id
+             AND a.address_ref_id=c.address_ref_id AND a.address_version=c.address_version
+           WHERE h.delivery_id=?
+             AND (
+               EXISTS (
+                 SELECT 1 FROM communication_delivery_observations o
+                  WHERE o.delivery_id=h.delivery_id AND o.observation_kind='permanent_bounce'
+               )
+               OR EXISTS (
+                 SELECT 1
+                   FROM communication_outbound_delivery_attempts prior,
+                        json_each(prior.safe_evidence_json, '$.registeredFacts') fact
+                  WHERE prior.delivery_id=h.delivery_id
+                    AND json_extract(fact.value, '$.factKey')='cloudflare.observation'
+                    AND json_extract(fact.value, '$.valueKind')='enum'
+                    AND json_extract(fact.value, '$.enumValue')='accepted_permanent_bounce'
+               )
+             )
+             AND (a.address_ref_id<>h.channel_address_id
+               OR a.address_version<>h.channel_address_version
+               OR a.lookup_keyed_value<>h.address_lookup_fingerprint_sha256)
+             AND NOT EXISTS (
+               SELECT 1 FROM communication_current_address_suppressions s
+                WHERE s.workspace_id=h.workspace_id
+                  AND s.lookup_profile=a.lookup_profile
+                  AND s.lookup_version=a.lookup_version
+                  AND s.lookup_keyed_value=a.lookup_keyed_value
+                  AND s.state='suppressed'
+             )
+        `).get(deliveryId);
+        if (eligible === undefined) {
+          throw new TypeError('outbound_delivery_marked_resend_authorization_invalid');
+        }
+      }
+      if (!authorizedMarkedResend && attemptKind !== requiredOutboundEmailAttemptKind(
         { unknownAttemptCount: registration.unknown_attempt_count },
         capabilities
       )) {
@@ -726,12 +779,19 @@ export class SQLiteOutboundEmailDeliveryLedger implements OutboundEmailDeliveryL
         readonly root_history_id: string;
         readonly workspace_id: string;
         readonly event_id: string;
+        readonly channel_address_id: string;
+        readonly channel_address_version: number;
+        readonly address_lookup_fingerprint_profile: string;
+        readonly address_lookup_fingerprint_version: number;
+        readonly address_lookup_fingerprint_sha256: string;
         readonly state: string;
         readonly current_attempt_id: string | null;
         readonly lease_claim_id: string | null;
       }, [string]>(`
         SELECT receipt_id, root_fact_id, history_thread_id, root_history_id,
-               workspace_id, event_id, state, current_attempt_id, lease_claim_id
+               workspace_id, event_id, channel_address_id, channel_address_version,
+               address_lookup_fingerprint_profile,address_lookup_fingerprint_version,
+               address_lookup_fingerprint_sha256,state,current_attempt_id,lease_claim_id
           FROM communication_outbound_delivery_heads WHERE delivery_id = ?
       `).get(deliveryId);
       if (!anchor || anchor.receipt_id === null) {
@@ -819,6 +879,44 @@ export class SQLiteOutboundEmailDeliveryLedger implements OutboundEmailDeliveryL
         claimId
       );
       if (changedHead.changes !== 1) throw new TypeError('outbound_delivery_attempt_conflict');
+
+      const synchronousPermanentBounce = input.safeEvidence?.registeredFacts.some((fact) =>
+        fact.factKey === 'cloudflare.observation'
+          && fact.valueKind === 'enum'
+          && fact.enumValue === 'accepted_permanent_bounce'
+      ) === true;
+      if (synchronousPermanentBounce && input.safeEvidence !== null) {
+        const suppressionFactId = providerOpaqueIdSchema.parse(this.#ids.newFactId());
+        this.sqlite.query(`
+          INSERT INTO communication_address_suppression_facts (
+            suppression_fact_id,workspace_id,source_event_id,address_ref_id,address_version,
+            lookup_profile,lookup_version,lookup_keyed_value,state,reason,attempt_id,
+            occurred_at_ms,safe_evidence_json
+          ) VALUES (?,?,?,?,?,?,?,?,'suppressed','provider_permanent_bounce',?,?,?)
+        `).run(
+          suppressionFactId, anchor.workspace_id, anchor.event_id,
+          anchor.channel_address_id, anchor.channel_address_version,
+          anchor.address_lookup_fingerprint_profile,
+          anchor.address_lookup_fingerprint_version,
+          anchor.address_lookup_fingerprint_sha256,
+          attemptId, completedAtMs, canonicalJsonText(input.safeEvidence)
+        );
+        this.sqlite.query(`
+          INSERT INTO communication_current_address_suppressions (
+            workspace_id,lookup_profile,lookup_version,lookup_keyed_value,
+            current_fact_id,state,version,updated_at_ms
+          ) VALUES (?,?,?,?,?,'suppressed',1,?)
+          ON CONFLICT(workspace_id,lookup_profile,lookup_version,lookup_keyed_value)
+          DO UPDATE SET current_fact_id=excluded.current_fact_id,state='suppressed',
+                        version=communication_current_address_suppressions.version+1,
+                        updated_at_ms=max(communication_current_address_suppressions.updated_at_ms,
+                                          excluded.updated_at_ms)
+        `).run(
+          anchor.workspace_id, anchor.address_lookup_fingerprint_profile,
+          anchor.address_lookup_fingerprint_version,
+          anchor.address_lookup_fingerprint_sha256,suppressionFactId,completedAtMs
+        );
+      }
 
       const payload = input.safeEvidence === null
         ? {

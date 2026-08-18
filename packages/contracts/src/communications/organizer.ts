@@ -994,6 +994,12 @@ export const organizerCommunicationHistoryItemSchema = z.strictObject({
   actor: organizerCommunicationActorSchema,
   cause: organizerCommunicationCauseSchema,
   counts: organizerCommunicationDeliveryCountsSchema,
+  bounces: z.array(z.strictObject({
+    deliveryId: organizerCommunicationOpaqueIdSchema,
+    deliveryVersion: organizerCommunicationVersionSchema,
+    safeLabel: canonicalSingleLine(240),
+    reasonCode: organizerCommunicationStableKeySchema
+  })).max(ORGANIZER_COMMUNICATION_PAGE_LIMIT).optional(),
   authorizedAt: organizerCommunicationInstantSchema,
   requestedFor: organizerCommunicationInstantSchema.optional(),
   lastObservedAt: organizerCommunicationInstantSchema.optional(),
@@ -1059,6 +1065,7 @@ export const organizerCommunicationThreadEntrySchema = z.strictObject({
   purposeRevision: organizerCommunicationPurposeRevisionRefSchema,
   subject: canonicalSingleLine(998),
   state: organizerCommunicationHistoryStateSchema,
+  deliveryDisposition: z.enum(['delivered', 'permanent_bounce', 'delivery_failed']).optional(),
   actor: organizerCommunicationActorSchema
 });
 
@@ -1109,7 +1116,10 @@ export const organizerCommunicationTimelineFactSchema = z.strictObject({
       'accepted',
       'known_rejected_safe_retryable',
       'known_rejected_terminal',
-      'acceptance_unknown'
+      'acceptance_unknown',
+      'delivered',
+      'permanent_bounce',
+      'delivery_failed'
     ])
   }).optional(),
   attempt: z.strictObject({
@@ -1188,6 +1198,22 @@ export const organizerSendMessagesResultSchema = z.strictObject({
   }
 });
 
+/** One deliberate, address-correcting resend of a permanently bounced delivery. */
+export const organizerRetryMessageDeliveryInputSchema = z.strictObject({
+  deliveryId: organizerCommunicationOpaqueIdSchema,
+  expectedDeliveryVersion: organizerCommunicationVersionSchema,
+  correctedEmail: z.email().max(320)
+});
+
+/** Receipt-safe result: the classified address itself is intentionally absent. */
+export const organizerRetryMessageDeliveryResultSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  deliveryId: organizerCommunicationOpaqueIdSchema,
+  addressRefId: organizerCommunicationOpaqueIdSchema,
+  addressVersion: organizerCommunicationVersionSchema,
+  state: z.literal('dispatch_requested')
+});
+
 // Canonical handler results (without transport execution metadata).
 export const organizerCommunicationPurposePageCanonicalResultSchema =
   canonicalResultSchema(organizerCommunicationPurposePageSchema);
@@ -1227,6 +1253,8 @@ export const organizerEmailReadinessCanonicalResultSchema =
   canonicalResultSchema(organizerEmailReadinessProjectionSchema);
 export const organizerSendMessagesCanonicalResultSchema =
   canonicalResultSchema(organizerSendMessagesResultSchema);
+export const organizerRetryMessageDeliveryCanonicalResultSchema =
+  canonicalResultSchema(organizerRetryMessageDeliveryResultSchema);
 export const organizerPrepareMessagePreviewCanonicalResultSchema =
   canonicalResultSchema(organizerPrepareMessagePreviewResultSchema);
 
@@ -1269,6 +1297,8 @@ export const organizerEmailReadinessOperationResultSchema =
   createReadOperationResultSchema(organizerEmailReadinessProjectionSchema);
 export const organizerSendMessagesOperationResultSchema =
   createEffectfulOperationResultSchema(organizerSendMessagesResultSchema);
+export const organizerRetryMessageDeliveryOperationResultSchema =
+  createEffectfulOperationResultSchema(organizerRetryMessageDeliveryResultSchema);
 export const organizerPrepareMessagePreviewOperationResultSchema =
   createReadOperationResultSchema(organizerPrepareMessagePreviewResultSchema);
 
@@ -1356,6 +1386,12 @@ export const ORGANIZER_COMMUNICATION_OPERATION_SCHEMA_REFS = Object.freeze({
     inputSchema: organizerSendMessagesInputSchema,
     resultKey: 'schema.communication.organizer.send-messages.operator-result',
     resultSchema: organizerSendMessagesOperationResultSchema
+  }),
+  retryDelivery: createOperationSchemaManifestRefs({
+    inputKey: 'schema.communication.organizer.retry-message-delivery.input',
+    inputSchema: organizerRetryMessageDeliveryInputSchema,
+    resultKey: 'schema.communication.organizer.retry-message-delivery.operator-result',
+    resultSchema: organizerRetryMessageDeliveryOperationResultSchema
   }),
   prepareBatchPreview: createOperationSchemaManifestRefs({
     inputKey: 'schema.communication.organizer.prepare-message-preview.input',
@@ -1483,6 +1519,12 @@ export type OrganizerCommunicationHistoryPage = z.infer<
 >;
 export type OrganizerSendMessagesInput = z.infer<typeof organizerSendMessagesInputSchema>;
 export type OrganizerSendMessagesResult = z.infer<typeof organizerSendMessagesResultSchema>;
+export type OrganizerRetryMessageDeliveryInput = z.infer<
+  typeof organizerRetryMessageDeliveryInputSchema
+>;
+export type OrganizerRetryMessageDeliveryResult = z.infer<
+  typeof organizerRetryMessageDeliveryResultSchema
+>;
 export type OrganizerPrepareMessagePreviewResult = z.infer<
   typeof organizerPrepareMessagePreviewResultSchema
 >;

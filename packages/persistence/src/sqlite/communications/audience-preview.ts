@@ -59,6 +59,7 @@ import {
   type OrganizerAudienceScope,
   type OrganizerAudienceSourcePort,
   type OrganizerAudienceSourceSnapshot,
+  type OrganizerClassifiedEmailAddress,
   type OrganizerMessagePreviewSourceVersion,
   type OrganizerPreparedMessageBatchPreview,
   type OrganizerPreviewDigestProfile,
@@ -1217,6 +1218,16 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
     this.#bumpScopeState(selected);
   }
 
+  readCurrentAddress(input: {
+    readonly scope: OrganizerCommunicationScope;
+    readonly contactRefId: string;
+  }): OrganizerClassifiedEmailAddress | undefined {
+    const selected = scope(input.scope);
+    const contactRefId = organizerCommunicationSubjectRefIdSchema.parse(input.contactRefId);
+    const row = this.#currentAddressRow(selected, contactRefId);
+    return row === undefined ? undefined : this.#openAddress(selected, row);
+  }
+
   #addressRow(
     selected: OrganizerAudienceScope,
     addressRefId: string,
@@ -1363,12 +1374,56 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
     const purposeRevision = organizerCommunicationPurposeRevisionRefSchema.parse(rawPurpose);
     for (const delegate of this.#registeredSources.values()) {
       if (delegate.ownsContactRef(candidate.contactRefId)) {
-        return organizerAddressPolicyResolutionSchema.parse(delegate.resolveEmail({
+        const delegated = organizerAddressPolicyResolutionSchema.parse(delegate.resolveEmail({
           scope: selected,
           purposeRevision,
           candidate,
           asOf: rawAsOf
         }));
+        if (delegated.kind === 'no_eligible_address') return delegated;
+        const current = this.#currentAddressRow(selected, candidate.contactRefId);
+        const address = current === undefined
+          ? delegated.address
+          : this.#openAddress(selected, current);
+        let suppression: { readonly state: 'suppressed' | 'clear' } | undefined;
+        try {
+          suppression = this.sqlite.query<{ readonly state: 'suppressed' | 'clear' }, [
+            string, string, number, string
+          ]>(`
+            SELECT state FROM communication_current_address_suppressions
+             WHERE workspace_id=? AND lookup_profile=? AND lookup_version=? AND lookup_keyed_value=?
+          `).get(
+            selected.workspaceId, address.lookupFingerprint.profile,
+            address.lookupFingerprint.version, address.lookupFingerprint.keyedValue
+          ) ?? undefined;
+        } catch (error) {
+          if (!(error instanceof Error)
+              || !error.message.includes('no such table: communication_current_address_suppressions')) {
+            throw error;
+          }
+        }
+        return organizerAddressPolicyResolutionSchema.parse({
+          ...delegated,
+          address,
+          ...(suppression?.state !== 'suppressed' ? {} : {
+            suppression: {
+              state: 'suppressed',
+              evidence: {
+                evidenceRefId: `evi1_${digest({
+                  workspaceId: selected.workspaceId,
+                  lookup: address.lookupFingerprint,
+                  state: 'suppressed'
+                }).slice(0, 40)}`,
+                evidenceVersion: 1,
+                evidenceDigestSha256: digest({
+                  kind: 'communication.address.workspace_suppression',
+                  workspaceId: selected.workspaceId,
+                  lookup: address.lookupFingerprint
+                })
+              }
+            }
+          })
+        });
       }
     }
     const rows = this.sqlite.query<{

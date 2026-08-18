@@ -31,6 +31,10 @@ import {
   organizerPreviewMessageBatchInputSchema,
   organizerPreviewMessageBatchOperationResultSchema,
   organizerPreviewMessageBatchResultSchema,
+  organizerRetryMessageDeliveryCanonicalResultSchema,
+  organizerRetryMessageDeliveryInputSchema,
+  organizerRetryMessageDeliveryOperationResultSchema,
+  organizerRetryMessageDeliveryResultSchema,
   organizerSendMessagesCanonicalResultSchema,
   organizerSendMessagesInputSchema,
   organizerSendMessagesOperationResultSchema,
@@ -87,7 +91,8 @@ import {
  */
 export const COMMUNICATION_SEND_LANE_OPERATIONS = Object.freeze({
   previewBatch: Object.freeze({ name: 'preview_message_batch', version: 1 }),
-  sendMessages: SEND_MESSAGES_OPERATION
+  sendMessages: SEND_MESSAGES_OPERATION,
+  retryDelivery: Object.freeze({ name: 'retry_message_delivery', version: 1 })
 });
 
 export const PREPARE_MESSAGE_BATCH_PREVIEW_OPERATION = Object.freeze({
@@ -95,9 +100,12 @@ export const PREPARE_MESSAGE_BATCH_PREVIEW_OPERATION = Object.freeze({
   version: 1
 });
 
-export type CommunicationSendLaneOperationName = 'preview_message_batch' | 'send_messages';
+export type CommunicationSendLaneOperationName =
+  | 'preview_message_batch'
+  | 'send_messages'
+  | 'retry_message_delivery';
 
-/** Exact persistence/runtime seam for the two send-lane effect operations. */
+/** Exact persistence/runtime seam for the send-lane effect operations. */
 export const COMMUNICATION_SEND_LANE_HANDLER_CAPABILITY_BY_OPERATION = Object.freeze({
   preview_message_batch: Object.freeze({
     key: 'capability.communication.organizer.preview_message_batch',
@@ -105,6 +113,10 @@ export const COMMUNICATION_SEND_LANE_HANDLER_CAPABILITY_BY_OPERATION = Object.fr
   }),
   send_messages: Object.freeze({
     key: 'capability.communication.organizer.send_messages',
+    version: 1
+  }),
+  retry_message_delivery: Object.freeze({
+    key: 'capability.communication.organizer.retry_message_delivery',
     version: 1
   })
 } satisfies Readonly<Record<CommunicationSendLaneOperationName, VersionedDefinitionRef>>);
@@ -148,12 +160,27 @@ export const communicationSendLaneDomainContributionSchema = z.discriminatedUnio
     releaseCount: z.number().int().positive().safe(),
     deliveryCount: z.number().int().positive().safe(),
     occurredAt: z.iso.datetime({ offset: true })
+  }),
+  z.strictObject({
+    kind: z.literal('communication_delivery_retry_requested'),
+    workspaceId: z.uuid(),
+    eventId: z.uuid(),
+    deliveryId: canonicalIdSchema,
+    expectedDeliveryVersion: z.number().int().positive().safe(),
+    addressRefId: canonicalIdSchema,
+    addressVersion: z.number().int().positive().safe(),
+    classifiedPayloadRefId: canonicalIdSchema,
+    lookupProfile: z.string().min(1).max(160),
+    lookupVersion: z.number().int().positive().safe(),
+    lookupKeyedValue: z.string().regex(/^[a-f0-9]{64}$/u),
+    occurredAt: z.iso.datetime({ offset: true })
   })
 ]);
 
 const sendLaneSuccessDataSchema = z.union([
   organizerPreviewMessageBatchResultSchema,
-  organizerSendMessagesResultSchema
+  organizerSendMessagesResultSchema,
+  organizerRetryMessageDeliveryResultSchema
 ]);
 
 export const communicationSendLaneContributionSchema = z.union([
@@ -178,14 +205,25 @@ export const communicationSendLaneContributionSchema = z.union([
       }
       return;
     }
-    if (isSummary
+    if (domain.kind === 'communication_send_committed' && (!('batchId' in data)
         || data.batchId !== domain.batchId
         || data.releaseCommitId !== domain.releaseCommitId
         || data.releaseCount !== domain.releaseCount
-        || data.deliveryCount !== domain.deliveryCount) {
+        || data.deliveryCount !== domain.deliveryCount)) {
       context.addIssue({
         code: 'custom',
         message: 'Send evidence does not bind the committed release batch.'
+      });
+      return;
+    }
+    if (domain.kind === 'communication_delivery_retry_requested'
+        && (!('deliveryId' in data)
+          || data.deliveryId !== domain.deliveryId
+          || data.addressRefId !== domain.addressRefId
+          || data.addressVersion !== domain.addressVersion)) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Retry evidence does not bind the corrected delivery request.'
       });
     }
   }),
@@ -424,6 +462,17 @@ export function createCommunicationSendOperationModule(input: {
       path: '/api/events/current/communications/messages/send',
       consequenceTag: 'communication-messages-sent',
       summary: 'Commit one adopted, reviewed preview as an irreversible release batch.'
+    }),
+    retryDelivery: Object.freeze({
+      policy: input.sendPolicy,
+      effect: 'commit' as const,
+      refs: ORGANIZER_COMMUNICATION_OPERATION_SCHEMA_REFS.retryDelivery,
+      inputSchema: organizerRetryMessageDeliveryInputSchema,
+      canonicalSchema: organizerRetryMessageDeliveryCanonicalResultSchema,
+      projectedSchema: organizerRetryMessageDeliveryOperationResultSchema,
+      path: '/api/events/current/communications/deliveries/retry',
+      consequenceTag: 'communication-delivery-retried',
+      summary: 'Correct one permanently bounced address and deliberately resend one email.'
     })
   });
 

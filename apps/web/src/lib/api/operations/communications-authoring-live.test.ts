@@ -14,9 +14,11 @@ import {
 	organizerMessageBatchPreviewDetailOperationResultSchema,
 	organizerMessagePreviewRecipientPageOperationResultSchema,
 	organizerMessageTemplateDetailOperationResultSchema,
+	organizerMessageTemplateMutationOperationResultSchema,
 	organizerMessageTemplatePageOperationResultSchema,
 	organizerPrepareMessagePreviewOperationResultSchema,
 	organizerPreviewMessageBatchOperationResultSchema,
+	organizerRetryMessageDeliveryOperationResultSchema,
 	organizerSendMessagesOperationResultSchema,
 	safeOperationManifestSchema,
 	type OperationEffect,
@@ -43,6 +45,7 @@ const paths = Object.freeze({
 	listDrafts: '/api/events/current/communications/drafts',
 	getDraft: '/api/events/current/communications/drafts/detail',
 	storeAuthoringPayload: '/api/events/current/communications/authoring-payloads',
+	createTemplate: '/api/events/current/communications/templates/create',
 	createDraft: '/api/events/current/communications/drafts/create',
 	reviseDraft: '/api/events/current/communications/drafts/revise',
 	discardDraft: '/api/events/current/communications/drafts/discard',
@@ -52,6 +55,7 @@ const paths = Object.freeze({
 	prepareBatchPreview: '/api/events/current/communications/previews/prepare',
 	adoptBatchPreview: '/api/events/current/communications/previews/adopt',
 	sendMessages: '/api/events/current/communications/messages/send',
+	retryDelivery: '/api/events/current/communications/deliveries/retry',
 	getDeliveryHistory: '/api/events/current/communications/deliveries/history',
 	listAttentionItems: '/api/events/current/communications/attention',
 	getPersonThread: '/api/events/current/communications/thread',
@@ -156,6 +160,20 @@ const audiencePayload = Object.freeze({
 	schemaKey: 'communication.message-audience-draft',
 	schemaVersion: 1,
 	classification: 'classified.message-audience'
+});
+const templateContentPayload = Object.freeze({
+	...contentPayload,
+	payloadRefId: 'payload-template-content-1',
+	payloadKind: 'template_content' as const,
+	schemaKey: 'communication.template-content',
+	classification: 'classified.template-content'
+});
+const templateFieldBindingsPayload = Object.freeze({
+	...contentPayload,
+	payloadRefId: 'payload-template-bindings-1',
+	payloadKind: 'template_field_bindings' as const,
+	schemaKey: 'communication.template-field-bindings',
+	classification: 'classified.template-field-bindings'
 });
 const content = Object.freeze({
 	kind: 'email/v1' as const,
@@ -353,6 +371,9 @@ function successPayloads(): Readonly<Record<string, unknown>> {
 		[paths.storeAuthoringPayload]: organizerCommunicationAuthoringPayloadOperationResultSchema.parse(
 			effectSuccess('store_communication_authoring_payload', 901, contentPayload)
 		),
+		[paths.createTemplate]: organizerMessageTemplateMutationOperationResultSchema.parse(
+			effectSuccess('message_template.create', 905, templateSummary)
+		),
 		[paths.createDraft]: organizerCommunicationDraftMutationOperationResultSchema.parse(
 			effectSuccess('create_message_draft', 902, mutationResult(1, 'active'))
 		),
@@ -385,6 +406,15 @@ function successPayloads(): Readonly<Record<string, unknown>> {
 				dispatchGeneration: 1,
 				releaseCount: 1,
 				deliveryCount: 1
+			})
+		),
+		[paths.retryDelivery]: organizerRetryMessageDeliveryOperationResultSchema.parse(
+			effectSuccess('retry_message_delivery', 906, {
+				schemaVersion: 1,
+				deliveryId: 'delivery-1',
+				addressRefId: 'address-ref-2',
+				addressVersion: 2,
+				state: 'dispatch_requested'
 			})
 		),
 		[paths.getDeliveryHistory]: organizerCommunicationHistoryPageOperationResultSchema.parse(
@@ -473,6 +503,15 @@ describe('pure-live Communications authoring browser port', () => {
 			schemaVersion: 1,
 			value: content
 		}, 'store-content-1');
+		const createdTemplate = await port.createTemplate({
+			templateKey: templateSummary.key,
+			templateName: templateSummary.name,
+			purposeRevision,
+			contentPayload: templateContentPayload,
+			fieldBindingsPayload: templateFieldBindingsPayload,
+			renderer,
+			mergeRegistry
+		}, 'create-template-1');
 		const created = await port.createDraft({
 			channel: 'email',
 			purposeRevision,
@@ -502,6 +541,11 @@ describe('pure-live Communications authoring browser port', () => {
 			subject: 'Your submission decision',
 			audienceLabel: 'Accepted submissions'
 		}, 'send-messages-1');
+		const retried = await port.retryDelivery({
+			deliveryId: 'delivery-1',
+			expectedDeliveryVersion: 1,
+			correctedEmail: 'ada.corrected@example.test'
+		}, 'retry-delivery-1');
 		const history = await port.getDeliveryHistory({ messageRefId: 'batch-1' });
 		const attention = await port.listAttentionItems();
 		const thread = await port.getPersonThread({ personRefId: 'person-1' });
@@ -527,6 +571,9 @@ describe('pure-live Communications authoring browser port', () => {
 		expect(stored).toMatchObject({
 			kind: 'success', data: contentPayload,
 			receipt: { operationName: 'store_communication_authoring_payload' }
+		});
+		expect(createdTemplate).toMatchObject({
+			kind: 'success', data: { key: templateSummary.key, revision: { revisionNumber: 1 } }
 		});
 		expect(created).toMatchObject({
 			kind: 'success', data: { state: 'active', authoring: { state: 'ready' } }
@@ -560,6 +607,9 @@ describe('pure-live Communications authoring browser port', () => {
 			data: { batchId: 'batch-1', dispatchGeneration: 1, releaseCount: 1, deliveryCount: 1 },
 			receipt: { operationName: 'send_messages' }
 		});
+		expect(retried).toMatchObject({
+			kind: 'success', data: { deliveryId: 'delivery-1', state: 'dispatch_requested' }
+		});
 		// History is the ledger truth: the batch is committed and honestly not
 		// delivered — provider acceptance zero, delivery evidence unsupported.
 		expect(history).toMatchObject({
@@ -591,8 +641,8 @@ describe('pure-live Communications authoring browser port', () => {
 		expect(previewQuery.get('previewDigestSha256')).toBe(previewIdentity.previewDigestSha256);
 		expect(calls.filter((call) => call.method === 'POST').map((call) => call.idempotencyKey))
 			.toEqual([
-				'store-content-1', 'create-draft-1', 'revise-draft-1', 'discard-draft-1',
-				'adopt-preview-1', 'send-messages-1'
+				'store-content-1', 'create-template-1', 'create-draft-1', 'revise-draft-1',
+				'discard-draft-1', 'adopt-preview-1', 'send-messages-1', 'retry-delivery-1'
 			]);
 		expect(JSON.stringify(calls.map(({ path, method, body, idempotencyKey }) => ({
 			path, method, body, idempotencyKey
@@ -602,7 +652,9 @@ describe('pure-live Communications authoring browser port', () => {
 			.map((operation) => operation.name)
 			.filter((name) => name.includes('send') || name.includes('delivery'))
 			.sort()
-		).toEqual(['get_delivery_history', 'get_delivery_timeline', 'send_messages']);
+		).toEqual([
+			'get_delivery_history', 'get_delivery_timeline', 'retry_message_delivery', 'send_messages'
+		]);
 	});
 
 	test('preserves structured nonterminal outcomes and rejects a mismatched preview tuple', async () => {

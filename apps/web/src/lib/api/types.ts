@@ -1230,7 +1230,7 @@ export interface CommunicationMessage {
 	heldReason?: string;
 	deliveredCount?: number;
 	bouncedCount?: number;
-	bounces?: { email: string; reason: string }[];
+	bounces?: { deliveryId?: string; deliveryVersion?: number; email: string; reason: string }[];
 	/** Provider evidence available on a live batch; no field implies no such fact. */
 	deliveryEvidence?: {
 		materialized?: number;
@@ -1296,9 +1296,10 @@ export interface CommunicationThread {
 
 export interface CommunicationDeliveryTimelineEntry {
 	id: string;
+	deliveryId: string;
 	recipient: string;
 	actor: CommunicationActor;
-	state: 'pending' | 'attempting' | 'accepted' | 'acceptance_unknown' | 'failed';
+	state: 'pending' | 'attempting' | 'accepted' | 'delivered' | 'bounced' | 'acceptance_unknown' | 'failed';
 	at: string;
 	attemptNumber?: number;
 	attemptKind?: 'original' | 'marked_resend';

@@ -12,7 +12,8 @@ import {
 } from '@jooevents/application';
 import {
   organizerCommunicationAuthoringPayloadOperationResultSchema,
-  organizerCommunicationDraftMutationOperationResultSchema
+  organizerCommunicationDraftMutationOperationResultSchema,
+  organizerMessageTemplateMutationOperationResultSchema
 } from '@jooevents/contracts/communications/organizer';
 import {
   ORGANIZER_COMMUNICATION_DRAFT_ACCESS_POLICY,
@@ -53,12 +54,14 @@ CREATE TABLE organizer_communication_authoring_receipt_links (
   operation_name TEXT NOT NULL CHECK(operation_name IN (
     'store_communication_authoring_payload',
     'create_message_draft',
+    'message_template.create',
     'revise_message_batch',
     'discard_message_draft'
   )),
   operation_version INTEGER NOT NULL CHECK(operation_version = 1),
   payload_ref_id TEXT,
   draft_id TEXT,
+  template_id TEXT,
   entity_version INTEGER NOT NULL CHECK(entity_version > 0),
   request_hash TEXT NOT NULL CHECK(
     length(request_hash) = 64 AND request_hash NOT GLOB '*[^0-9a-f]*'
@@ -66,10 +69,15 @@ CREATE TABLE organizer_communication_authoring_receipt_links (
   occurred_at_ms INTEGER NOT NULL CHECK(occurred_at_ms BETWEEN 0 AND 8640000000000000),
   CHECK(
     (operation_name = 'store_communication_authoring_payload'
-      AND payload_ref_id IS NOT NULL AND draft_id IS NULL AND entity_version = 1)
+      AND payload_ref_id IS NOT NULL AND draft_id IS NULL AND template_id IS NULL
+      AND entity_version = 1)
     OR
     (operation_name IN ('create_message_draft','revise_message_batch','discard_message_draft')
-      AND payload_ref_id IS NULL AND draft_id IS NOT NULL)
+      AND payload_ref_id IS NULL AND draft_id IS NOT NULL AND template_id IS NULL)
+    OR
+    (operation_name = 'message_template.create'
+      AND payload_ref_id IS NULL AND draft_id IS NULL AND template_id IS NOT NULL
+      AND entity_version = 1)
   ),
   FOREIGN KEY(receipt_id)
     REFERENCES operation_log(id)
@@ -83,8 +91,12 @@ CREATE TABLE organizer_communication_authoring_receipt_links (
   FOREIGN KEY(workspace_id,event_id,draft_id)
     REFERENCES communication_drafts(workspace_id,event_id,draft_id)
     ON UPDATE RESTRICT ON DELETE RESTRICT,
+  FOREIGN KEY(workspace_id,event_id,template_id)
+    REFERENCES message_templates(workspace_id,event_id,template_id)
+    ON UPDATE RESTRICT ON DELETE RESTRICT,
   UNIQUE(payload_ref_id),
   UNIQUE(workspace_id,event_id,draft_id,entity_version),
+  UNIQUE(workspace_id,event_id,template_id,entity_version),
   UNIQUE(receipt_id,workspace_id,event_id,operation_name,entity_version)
 ) STRICT, WITHOUT ROWID;
 
@@ -121,6 +133,16 @@ WHEN NEW.draft_id IS NOT NULL AND NOT EXISTS (
 )
 BEGIN SELECT RAISE(ABORT, 'organizer communication draft receipt scope mismatch'); END;
 
+CREATE TRIGGER organizer_communication_authoring_receipt_template_scope_guard
+BEFORE INSERT ON organizer_communication_authoring_receipt_links
+WHEN NEW.template_id IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM message_templates t
+   WHERE t.workspace_id = NEW.workspace_id
+     AND t.event_id = NEW.event_id
+     AND t.template_id = NEW.template_id
+)
+BEGIN SELECT RAISE(ABORT, 'organizer communication template receipt scope mismatch'); END;
+
 CREATE TRIGGER organizer_communication_authoring_receipt_links_no_update
 BEFORE UPDATE ON organizer_communication_authoring_receipt_links
 BEGIN SELECT RAISE(ABORT, 'organizer communication authoring receipt links are immutable'); END;
@@ -134,6 +156,29 @@ CREATE TRIGGER organizer_communication_authoring_timeline_no_delete
 BEFORE DELETE ON organizer_communication_authoring_timeline
 BEGIN SELECT RAISE(ABORT, 'organizer communication authoring timeline is immutable'); END;
 `;
+
+/** Exact immutable schema contribution accepted into the epoch-2 sequence-1 baseline. */
+export const SQLITE_ORGANIZER_COMMUNICATION_AUTHORING_EFFECT_E2_0001_SQL =
+  SQLITE_ORGANIZER_COMMUNICATION_AUTHORING_EFFECT_SQL
+    .replace("    'message_template.create',\n", '')
+    .replace('  template_id TEXT,\n', '')
+    .replace(
+      '      AND payload_ref_id IS NOT NULL AND draft_id IS NULL AND template_id IS NULL\n      AND entity_version = 1)',
+      '      AND payload_ref_id IS NOT NULL AND draft_id IS NULL AND entity_version = 1)'
+    )
+    .replace(
+      "    (operation_name IN ('create_message_draft','revise_message_batch','discard_message_draft')\n      AND payload_ref_id IS NULL AND draft_id IS NOT NULL AND template_id IS NULL)\n    OR\n    (operation_name = 'message_template.create'\n      AND payload_ref_id IS NULL AND draft_id IS NULL AND template_id IS NOT NULL\n      AND entity_version = 1)",
+      "    (operation_name IN ('create_message_draft','revise_message_batch','discard_message_draft')\n      AND payload_ref_id IS NULL AND draft_id IS NOT NULL)"
+    )
+    .replace(
+      '  FOREIGN KEY(workspace_id,event_id,template_id)\n    REFERENCES message_templates(workspace_id,event_id,template_id)\n    ON UPDATE RESTRICT ON DELETE RESTRICT,\n',
+      ''
+    )
+    .replace('  UNIQUE(workspace_id,event_id,template_id,entity_version),\n', '')
+    .replace(
+      "CREATE TRIGGER organizer_communication_authoring_receipt_template_scope_guard\nBEFORE INSERT ON organizer_communication_authoring_receipt_links\nWHEN NEW.template_id IS NOT NULL AND NOT EXISTS (\n  SELECT 1 FROM message_templates t\n   WHERE t.workspace_id = NEW.workspace_id\n     AND t.event_id = NEW.event_id\n     AND t.template_id = NEW.template_id\n)\nBEGIN SELECT RAISE(ABORT, 'organizer communication template receipt scope mismatch'); END;\n\n",
+      ''
+    );
 
 export function installSQLiteOrganizerCommunicationAuthoringEffectSchema(sqlite: Database): void {
   if (sqlite.inTransaction) {
@@ -155,6 +200,15 @@ export interface SQLiteOrganizerCommunicationAuthoringEffectDomainInput {
   readonly eventRelationships: SQLiteOperatorEventRelationshipSource;
   readonly ids: SQLiteOrganizerCommunicationAuthoringEffectIds;
   readonly provenanceResolver?: OrganizerCommunicationDraftProvenanceResolver;
+  readonly templateArtifactBridge?: Readonly<{
+    create(input: Readonly<{
+      workspaceId: string;
+      eventId: string;
+      templateId: string;
+      createdByUserId: string;
+      createdAt: string;
+    }>): void;
+  }>;
 }
 
 type MutationContribution = ReturnType<
@@ -232,12 +286,14 @@ function expectedReceiptSuccess(
 ): ExpectedReceiptSuccess | undefined {
   const parsed = operationName === 'store_communication_authoring_payload'
     ? organizerCommunicationAuthoringPayloadOperationResultSchema.safeParse(value)
-    : organizerCommunicationDraftMutationOperationResultSchema.safeParse(value);
+    : operationName === 'message_template.create'
+      ? organizerMessageTemplateMutationOperationResultSchema.safeParse(value)
+      : organizerCommunicationDraftMutationOperationResultSchema.safeParse(value);
   return parsed.success && parsed.data.kind === 'success' ? parsed.data : undefined;
 }
 
 /**
- * Executes the four inert organizer-authoring mutations on the Foundation-owned
+ * Executes the five inert organizer-authoring mutations on the Foundation-owned
  * SQLite transaction. It owns no transaction, transport binding, or provider work.
  */
 export class SQLiteOrganizerCommunicationAuthoringEffectDomainAdapter
@@ -423,6 +479,19 @@ implements SQLiteEffectDomainAdapter {
         || !this.#persistedEntityMatches(prepared)) {
       throw new TypeError('organizer_communication_authoring_effect_preparation_invalid');
     }
+    if (prepared.operationName === 'message_template.create'
+        && this.input.templateArtifactBridge !== undefined) {
+      if (prepared.context.actor.kind !== 'workspace_user') {
+        throw new TypeError('organizer_communication_template_artifact_actor_invalid');
+      }
+      this.input.templateArtifactBridge.create({
+        workspaceId: parsed.workspaceId,
+        eventId: parsed.eventId,
+        templateId: parsed.entityId,
+        createdByUserId: prepared.context.actor.userId,
+        createdAt: parsed.occurredAt
+      });
+    }
     this.#prepared = undefined;
     prepared.phase = 'applied';
     this.#active = prepared;
@@ -452,18 +521,18 @@ implements SQLiteEffectDomainAdapter {
     const payloadRefId = active.operationName === 'store_communication_authoring_payload'
       ? domain.entityId
       : null;
+    const templateId = active.operationName === 'message_template.create' ? domain.entityId : null;
     const draftId = active.operationName === 'store_communication_authoring_payload'
-      ? null
-      : domain.entityId;
+        || active.operationName === 'message_template.create' ? null : domain.entityId;
     this.input.sqlite.query<never, [
       string, string, string, string, string, number, string | null, string | null,
-      number, string, number
+      string | null, number, string, number
     ]>(`
       INSERT INTO organizer_communication_authoring_receipt_links (
         receipt_id,workspace_id,event_id,authority_principal_key,
-        operation_name,operation_version,payload_ref_id,draft_id,
+        operation_name,operation_version,payload_ref_id,draft_id,template_id,
         entity_version,request_hash,occurred_at_ms
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(
       receiptId,
       domain.workspaceId,
@@ -473,6 +542,7 @@ implements SQLiteEffectDomainAdapter {
       active.context.operation.version,
       payloadRefId,
       draftId,
+      templateId,
       domain.entityVersion,
       receipt.requestHash,
       Date.parse(parseInstant(domain.occurredAt))
@@ -538,6 +608,27 @@ implements SQLiteEffectDomainAdapter {
         && rows[0].event_id === domain.eventId
         && rows[0].owner_key === prepared.context.authorityPrincipalKey
         && domain.entityVersion === 1;
+    }
+    if (prepared.operationName === 'message_template.create') {
+      const rows = this.input.sqlite.query<{
+        readonly current_revision_id: string;
+        readonly revision_number: number;
+      }, [string, string, string]>(`
+        SELECT t.current_revision_id,r.revision_number
+          FROM message_templates t
+          JOIN message_template_revisions r
+            ON r.workspace_id=t.workspace_id AND r.event_id=t.event_id
+           AND r.template_revision_id=t.current_revision_id
+         WHERE t.workspace_id=? AND t.event_id=? AND t.template_id=? LIMIT 2
+      `).all(domain.workspaceId, domain.eventId, domain.entityId);
+      const data = prepared.contribution.result.data as {
+        readonly revision?: { readonly templateId?: string; readonly revisionNumber?: number };
+      };
+      return rows.length === 1
+        && domain.entityVersion === 1
+        && rows[0]?.revision_number === 1
+        && data.revision?.templateId === domain.entityId
+        && data.revision.revisionNumber === 1;
     }
     const rows = this.input.sqlite.query<{
       readonly owner_key: string;

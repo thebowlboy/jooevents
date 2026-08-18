@@ -557,7 +557,9 @@
 	}
 
 	function timelineStateLabel(state: CommunicationDeliveryTimeline['entries'][number]['state']) {
-		return state === 'accepted' ? 'Accepted'
+		return state === 'delivered' ? 'Delivered'
+			: state === 'bounced' ? 'Bounced'
+				: state === 'accepted' ? 'Accepted'
 			: state === 'acceptance_unknown' ? 'Acceptance unknown'
 				: state === 'failed' ? 'Failed'
 					: state === 'attempting' ? 'Sending' : 'Pending';

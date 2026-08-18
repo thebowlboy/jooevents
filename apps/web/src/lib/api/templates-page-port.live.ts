@@ -1,6 +1,8 @@
 import type { TemplateArtifactDocumentDto, TemplateArtifactSnapshotDto } from '@jooevents/contracts';
 import { projectApplicationForm } from './fields';
 import type { TemplatesPagePort } from './templates-page-port';
+import type { CommunicationsAuthoringPort } from './communications-authoring-port';
+import { createLiveMessageTemplateMint } from './communications-page-port.live';
 import type {
 	AnyTemplate,
 	EditClassification,
@@ -149,7 +151,11 @@ export function createLiveTemplatesPagePort(input: {
 		remove(id: string): Promise<MutationOutcome>;
 	};
 	readonly publication?: NonNullable<TemplatesPagePort['publication']>;
+	readonly communications?: CommunicationsAuthoringPort;
 }): TemplatesPagePort {
+	const mintMessageTemplate = input.communications === undefined
+		? undefined
+		: createLiveMessageTemplateMint({ communications: input.communications });
 	async function readArtifacts(): Promise<readonly TemplateArtifactSnapshotDto[]> {
 		const result = await input.artifacts.list();
 		if (result.kind === 'success') return result.data;
@@ -183,6 +189,7 @@ export function createLiveTemplatesPagePort(input: {
 	return Object.freeze({
 		templates: Object.freeze({
 			list,
+			...(mintMessageTemplate === undefined ? {} : { create: mintMessageTemplate }),
 			modelChoices: () => input.model.choices(),
 			classify: (id: string, instruction: string, modelId?: string) =>
 				input.model.classify(id, instruction, modelId),

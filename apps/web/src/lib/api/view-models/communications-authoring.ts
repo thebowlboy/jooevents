@@ -16,9 +16,11 @@ import type {
 	OrganizerMessagePreviewIdentity,
 	organizerMessagePreviewSummarySchema,
 	OrganizerMessageTemplateDetail,
+	OrganizerMessageTemplateSummary,
 	organizerMessageTemplatePageSchema,
 	OrganizerMessageTemplateRevisionRef,
 	OrganizerPrepareMessagePreviewResult,
+	OrganizerRetryMessageDeliveryResult,
 	OrganizerSendMessagesResult
 } from '@jooevents/contracts';
 import type { z } from 'zod';
@@ -50,6 +52,7 @@ export type MessageTemplatePageView = CommunicationView<
 	z.infer<typeof organizerMessageTemplatePageSchema>
 >;
 export type MessageTemplateDetailView = CommunicationView<OrganizerMessageTemplateDetail>;
+export type MessageTemplateMutationView = CommunicationView<OrganizerMessageTemplateSummary>;
 
 export type CommunicationAudienceOptionPageView = CommunicationView<
 	z.infer<typeof organizerCommunicationAudienceOptionPageSchema>
@@ -85,6 +88,8 @@ export type MessagePreviewSummaryView = CommunicationView<
 >;
 /** Receipt-safe send commit result: counts and identity only, never an address. */
 export type SendMessagesResultView = CommunicationView<OrganizerSendMessagesResult>;
+export type RetryMessageDeliveryResultView =
+	CommunicationView<OrganizerRetryMessageDeliveryResult>;
 /** Per-batch delivery history with live ledger-derived state counts. */
 export type CommunicationDeliveryHistoryPageView =
 	CommunicationView<OrganizerCommunicationHistoryPage>;

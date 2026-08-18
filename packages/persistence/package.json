@@ -29,6 +29,7 @@
     "./workspace-sender-identity": "./src/sqlite/communications/workspace-sender-identity.ts",
     "./organizer-authoring": "./src/sqlite/communications/organizer-authoring.ts",
     "./organizer-authoring-effect-domain": "./src/sqlite/communications/organizer-authoring-effect-domain.ts",
+    "./communication-delivery-observations": "./src/sqlite/communications/delivery-observations.ts",
     "./organizer-audience-preview": "./src/sqlite/communications/audience-preview.ts",
     "./sqlite-effect-unit-of-work": "./src/sqlite/sqlite-effect-unit-of-work.ts",
     "./sqlite-read-immutable-audit": "./src/sqlite/sqlite-read-immutable-audit.ts",

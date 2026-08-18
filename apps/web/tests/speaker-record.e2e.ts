@@ -53,6 +53,7 @@ test('the record route renders one person whole, in the design’s fixed order',
 		'Deliverables',
 		'Speaking commitments',
 		'Proposals',
+		'Speaker profile',
 		'Communications',
 		'History'
 	]);
@@ -154,29 +155,30 @@ test('a portal draft is never rendered; the row says not yet submitted', async (
 	await expect(surface).not.toContainText('Aug 12, 22:41');
 });
 
-test('a cancellation request leads the record, and its one remedy is the walk', async ({ page }) => {
+test('a cancellation request leads the record, and its remedy is the real act', async ({ page }) => {
 	await page.goto('/app/speakers/spk-1');
 	const surface = record(page);
 	await expect(surface).toContainText('Maya Lindqvist asked to cancel.', { timeout: 15000 });
 
-	// Leading: it is the first strip in the alert band.
+	// Leading: it is the first strip in the alert band, and the strip carries
+	// the direct audited act itself — the guided walk (record 24) replaces this
+	// door when it exists; a dead address never renders.
 	const rows = surface.locator('.strip');
 	await expect(rows.first()).toContainText('asked to cancel');
 	await expect(surface).toContainText('client emergency', { ignoreCase: true });
-
-	// The door is the walk's URL, and the page carries exactly one of it — the
-	// header's one primary action. The record never re-implements a walk step,
-	// so no accept-cancellation control exists here.
-	const door = surface.getByRole('link', { name: 'Review cancellation…' });
-	await expect(door).toHaveCount(1);
-	await expect(door).toHaveAttribute('href', '/app/speakers?panel=cancellation&engagement=spk-1');
-	await expect(surface.getByRole('button', { name: /Accept cancellation/ })).toHaveCount(0);
+	const act = surface.getByRole('button', { name: 'Accept cancellation' });
+	await expect(act).toHaveCount(1);
 
 	// And the request's own words are stated once, on the row that owns them.
 	await expect(surface.getByText(/client emergency/i)).toHaveCount(1);
 
 	// The outbound guard renders beside the compose door.
 	await expect(surface).toContainText('Nothing goes out to Maya Lindqvist until');
+
+	// The act commits: the record becomes the archive, nothing sent.
+	await act.click();
+	await expect(surface).toContainText('This record is kept as it stands.', { timeout: 15000 });
+	await expect(surface.getByRole('button', { name: 'Accept cancellation' })).toHaveCount(0);
 });
 
 test('a bounced address, overdue work, and an unsent result rank by consequence', async ({
@@ -315,6 +317,17 @@ test('every person-shaped door resolves to the one record URL', async ({ page })
 	await page.keyboard.press('Escape');
 	await expect(overlay).not.toBeVisible();
 	await expect(page).not.toHaveURL(/record=/);
+
+	// A proposal named on the record lands on the submissions row itself —
+	// tray selected, row open and marked — not on an unfiltered page.
+	await page.goto('/app/speakers/spk-5');
+	await record(page)
+		.locator('.proposal__title', { hasText: 'Panel: Who Owns Agent Reliability?' })
+		.first()
+		.click();
+	await expect(page).toHaveURL(/\/app\/submissions\?/);
+	const opened = page.locator('tr.is-open');
+	await expect(opened).toContainText('Panel: Who Owns Agent Reliability?', { timeout: 15000 });
 
 	// The Tasks matrix speaker name's peek keeps working, and its door moved too.
 	await page.goto('/app/tasks');

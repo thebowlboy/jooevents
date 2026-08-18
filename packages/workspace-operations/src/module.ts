@@ -155,16 +155,21 @@ export const DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG: WorkspaceOverviewAreaCatal
         'discard_message_draft',
         'get_communication_purpose',
         'get_delivery_history',
+        'get_delivery_timeline',
         'get_message_batch_preview',
         'get_message_draft',
         'get_message_template',
+        'get_person_thread',
         'list_audience_options',
         'list_communication_purposes',
+        'list_message_attention_items',
         'list_message_drafts',
         'list_message_preview_recipients',
         'list_message_templates',
+        'message_template.create',
         'prepare_message_batch_preview',
         'preview_message_batch',
+        'retry_message_delivery',
         'revise_message_batch',
         'send_messages',
         'store_communication_authoring_payload'
@@ -173,7 +178,19 @@ export const DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG: WorkspaceOverviewAreaCatal
         'create_email_provider_connection_draft'
       ]
     },
-    { area: 'templates', status: 'unavailable', reason: 'not_implemented' },
+    {
+      area: 'templates',
+      status: 'available',
+      capabilities: [
+        'template.artifact.change',
+        'template.artifact.change.draft',
+        'template.artifact.get',
+        'template.artifact.list',
+        'template.edit.classify',
+        'template.edit.model_choices.list',
+        'template.edit.revise'
+      ]
+    },
     {
       area: 'forms',
       status: 'partial',

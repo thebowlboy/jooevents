@@ -8,6 +8,8 @@ import {
   type OrganizerCommunicationHistoryItem
 } from '@jooevents/contracts/communications/organizer';
 import { sendMessagesAuthorInputSchema } from '@jooevents/communication-operations';
+import { SQLiteCommunicationDeliveryObservationRepository }
+  from '@jooevents/persistence/communication-delivery-observations';
 import {
   parseSubmissionConfirmationReleasePlan,
   type SubmissionConfirmationReleasePlan
@@ -72,6 +74,14 @@ interface HeadStateRow {
   readonly last_updated_at_ms: number;
 }
 
+interface DeliveryStateRow {
+  readonly delivery_id: string;
+  readonly version: number;
+  readonly state: HeadStateRow['state'];
+  readonly updated_at_ms: number;
+  readonly safe_label: string | null;
+}
+
 const CURSOR_PREFIX = 'cur1_';
 
 function encodeCursor(row: CommitLinkRow): string {
@@ -125,6 +135,7 @@ export function createSQLiteCommunicationDeliveryHistorySource(input: {
   readonly sqlite: Database;
 }) {
   const { sqlite } = input;
+  const observations = new SQLiteCommunicationDeliveryObservationRepository(sqlite);
 
   function batchDeliveryStates(scope: { workspaceId: string; eventId: string }, batchId: string) {
     return sqlite.query<HeadStateRow, [string, string, string]>(`
@@ -133,6 +144,19 @@ export function createSQLiteCommunicationDeliveryHistorySource(input: {
         JOIN communication_message_releases r ON r.release_id = h.release_id
        WHERE h.workspace_id = ? AND h.event_id = ? AND r.batch_id = ?
        GROUP BY h.state
+    `).all(scope.workspaceId, scope.eventId, batchId);
+  }
+
+  function batchDeliveries(scope: { workspaceId: string; eventId: string }, batchId: string) {
+    return sqlite.query<DeliveryStateRow, [string, string, string]>(`
+      SELECT h.delivery_id,h.version,h.state,h.updated_at_ms,c.safe_label
+        FROM communication_outbound_delivery_heads h
+        JOIN communication_message_releases r ON r.release_id=h.release_id
+        LEFT JOIN communication_current_audience_contacts c
+          ON c.workspace_id=r.workspace_id AND c.event_id=r.event_id
+         AND c.person_ref_id=r.person_ref_id AND c.contact_ref_id=r.contact_ref_id
+       WHERE h.workspace_id=? AND h.event_id=? AND r.batch_id=?
+       ORDER BY h.delivery_id
     `).all(scope.workspaceId, scope.eventId, batchId);
   }
 
@@ -193,29 +217,56 @@ export function createSQLiteCommunicationDeliveryHistorySource(input: {
        WHERE workspace_id = ? AND event_id = ? AND batch_id = ?
     `).get(scope.workspaceId, scope.eventId, link.batch_id)?.total ?? 0;
 
+    const deliveries = batchDeliveries(scope, link.batch_id);
     const states = batchDeliveryStates(scope, link.batch_id);
     const byState = new Map(states.map((row) => [row.state, row.total]));
-    const accepted = byState.get('accepted') ?? 0;
-    const acceptanceUnknown = byState.get('acceptance_unknown') ?? 0;
-    const knownFailed = (byState.get('known_rejected_terminal') ?? 0)
-      + (byState.get('known_rejected_safe_retryable') ?? 0);
-    const lastObservedAtMs = states.reduce(
-      (latest, row) => Math.max(latest, row.last_updated_at_ms),
-      0
+    const dispositions = deliveries.map((delivery) => ({
+      delivery,
+      disposition: observations.currentDisposition(delivery.delivery_id)
+    }));
+    const delivered = dispositions.filter((row) => row.disposition?.kind === 'delivered').length;
+    const observedFailed = dispositions.filter((row) =>
+      row.disposition?.kind === 'delivery_failed' || row.disposition?.kind === 'permanent_bounce'
+    ).length;
+    const bounces = dispositions.flatMap((row) =>
+      row.disposition?.kind === 'permanent_bounce' && row.delivery.safe_label !== null
+        ? [{
+            deliveryId: row.delivery.delivery_id,
+            deliveryVersion: row.delivery.version,
+            safeLabel: clampLabel(row.delivery.safe_label, 240),
+            reasonCode: 'provider_permanent_bounce'
+          }]
+        : []
     );
+    const accepted = dispositions.filter((row) =>
+      row.delivery.state === 'accepted'
+      && row.disposition?.kind !== 'delivery_failed'
+      && row.disposition?.kind !== 'permanent_bounce'
+    ).length;
+    const acceptanceUnknown = byState.get('acceptance_unknown') ?? 0;
+    const knownFailed = dispositions.filter((row) =>
+      row.delivery.state === 'known_rejected_terminal'
+      || row.delivery.state === 'known_rejected_safe_retryable'
+      || row.disposition?.kind === 'delivery_failed'
+      || row.disposition?.kind === 'permanent_bounce'
+    ).length;
+    const lastObservedAtMs = dispositions.reduce((latest, row) => Math.max(
+      latest,
+      row.delivery.updated_at_ms,
+      row.disposition === undefined ? 0 : Date.parse(row.disposition.observedAt)
+    ), 0);
 
-    // Deterministic batch state from the ledger heads. `delivered` is
-    // deliberately unreachable in v1: acceptance is the strongest provider
-    // evidence the ledger records, and no delivery-confirmation stream exists.
     const state = (byState.get('request_started') ?? 0) > 0
       ? 'attempting' as const
       : (byState.get('pending') ?? 0) > 0
         ? 'materialized' as const
         : acceptanceUnknown > 0
           ? 'acceptance_unknown' as const
-          : accepted > 0
-            ? 'accepted' as const
-            : 'known_failed' as const;
+          : delivered === deliveries.length && deliveries.length > 0
+            ? 'delivered' as const
+            : accepted + delivered > 0
+              ? 'accepted' as const
+              : 'known_failed' as const;
     const stateReasonCode = state === 'known_failed'
       ? batchFailureReasonCode(scope, link.batch_id)
       : undefined;
@@ -267,16 +318,17 @@ export function createSQLiteCommunicationDeliveryHistorySource(input: {
           ? sendPlan!.releases.length : 1 },
         materialized: { knowledge: 'known', value: materialized },
         accepted: { knowledge: 'known', value: accepted },
-        // Provider acceptance is the strongest evidence the ledger records;
-        // no delivery-confirmation stream exists, so a delivered count is
-        // honestly not supported rather than a fabricated zero.
-        delivered: { knowledge: 'not_supported' },
+        delivered: delivered > 0
+          ? { knowledge: 'known', value: delivered }
+          : { knowledge: 'not_supported' },
         acceptanceUnknown: { knowledge: 'known', value: acceptanceUnknown },
         knownFailed: { knowledge: 'known', value: knownFailed }
       },
+      ...(bounces.length === 0 ? {} : { bounces }),
       authorizedAt: instant(link.occurred_at_ms),
       ...(lastObservedAtMs > 0 ? { lastObservedAt: instant(lastObservedAtMs) } : {}),
-      availableActions: state === 'known_failed' ? ['continue_provider_setup'] : []
+      availableActions: state === 'known_failed' && observedFailed === 0
+        ? ['continue_provider_setup'] : ['open_timeline']
     };
   }
 

@@ -203,6 +203,53 @@ export class SQLiteTemplateAuthoringRepository implements TemplateArtifactTransa
     }));
   }
 
+  createArtifact(input: {
+    readonly scope: TemplateArtifactScopeDto;
+    readonly artifactId: string;
+    readonly revisionId: string;
+    readonly document: Parameters<typeof createInitialTemplateArtifact>[0]['document'];
+    readonly createdByUserId: string;
+    readonly createdAt: string;
+    readonly note: string;
+  }): TemplateArtifactSnapshotDto {
+    requireTransaction(this.sqlite);
+    const scope = templateArtifactScopeSchema.parse(input.scope);
+    if (this.head(scope, input.artifactId) !== undefined) {
+      throw new SQLiteTemplateAuthoringError('artifact_conflict');
+    }
+    const snapshot = createInitialTemplateArtifact({
+      scope,
+      artifactId: input.artifactId,
+      revisionId: input.revisionId,
+      document: input.document,
+      createdByUserId: input.createdByUserId,
+      createdAt: input.createdAt,
+      note: input.note
+    });
+    const revision = snapshot.current;
+    this.sqlite.query(`
+      INSERT INTO template_artifact_heads (
+        workspace_id,event_id,artifact_id,artifact_kind,current_revision_id,
+        current_revision_number,version
+      ) VALUES (?,?,?,?,?,1,1)
+    `).run(
+      scope.workspaceId, scope.eventId, snapshot.head.artifactId,
+      snapshot.head.artifactKind, snapshot.head.currentRevisionId
+    );
+    this.sqlite.query(`
+      INSERT INTO template_artifact_revisions (
+        workspace_id,event_id,artifact_id,revision_id,revision_number,
+        predecessor_revision_id,predecessor_digest_sha256,artifact_kind,
+        revision_json,digest_sha256,created_at_ms
+      ) VALUES (?,?,?,?,1,NULL,NULL,?,?,?,?)
+    `).run(
+      scope.workspaceId, scope.eventId, revision.artifactId, revision.revisionId,
+      revision.document.kind, JSON.stringify(revision), revision.digestSha256,
+      Date.parse(revision.createdAt)
+    );
+    return snapshot;
+  }
+
   initializeCreatedEvent(input: {
     readonly scope: TemplateArtifactScopeDto;
     readonly createdByUserId: string;

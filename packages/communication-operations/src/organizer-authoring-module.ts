@@ -108,7 +108,7 @@ export const ORGANIZER_COMMUNICATION_READ_OPERATIONS = Object.freeze({
 
 export const ORGANIZER_COMMUNICATION_MUTATION_OPERATIONS = Object.freeze({
   storeAuthoringPayload: Object.freeze({ name: 'store_communication_authoring_payload', version: 1 }),
-	createTemplate: Object.freeze({ name: 'message_template.create', version: 1 }),
+  createTemplate: Object.freeze({ name: 'message_template.create', version: 1 }),
   createDraft: Object.freeze({ name: 'create_message_draft', version: 1 }),
   reviseDraft: Object.freeze({ name: 'revise_message_batch', version: 1 }),
   discardDraft: Object.freeze({ name: 'discard_message_draft', version: 1 })
@@ -223,13 +223,13 @@ function ref(key: string): VersionedDefinitionRef {
   return Object.freeze({ key, version: 1 });
 }
 
-/** Exact persistence/runtime seam for the four organizer authoring mutations. */
+/** Exact persistence/runtime seam for the five organizer authoring mutations. */
 export const ORGANIZER_COMMUNICATION_MUTATION_HANDLER_CAPABILITY_BY_OPERATION = Object.freeze({
   store_communication_authoring_payload: ref(
     'capability.communication.organizer.store_communication_authoring_payload'
   ),
+  'message_template.create': ref('capability.communication.organizer.message_template.create'),
   create_message_draft: ref('capability.communication.organizer.create_message_draft'),
-	'message_template.create': ref('capability.communication.organizer.message_template.create'),
   revise_message_batch: ref('capability.communication.organizer.revise_message_batch'),
   discard_message_draft: ref('capability.communication.organizer.discard_message_draft')
 } satisfies Readonly<Record<

@@ -22,6 +22,7 @@ import {
 	organizerCommunicationPurposeListInputSchema,
 	organizerCommunicationPurposePageOperationResultSchema,
 	organizerCreateCommunicationDraftInputSchema,
+	organizerCreateMessageTemplateInputSchema,
 	organizerDiscardCommunicationDraftInputSchema,
 	organizerMessageBatchPreviewDetailOperationResultSchema,
 	organizerMessageBatchPreviewGetInputSchema,
@@ -31,9 +32,12 @@ import {
 	organizerMessageTemplateGetInputSchema,
 	organizerMessageTemplateListInputSchema,
 	organizerMessageTemplatePageOperationResultSchema,
+	organizerMessageTemplateMutationOperationResultSchema,
 	organizerPrepareMessagePreviewOperationResultSchema,
 	organizerPreviewMessageBatchInputSchema,
 	organizerPreviewMessageBatchOperationResultSchema,
+	organizerRetryMessageDeliveryInputSchema,
+	organizerRetryMessageDeliveryOperationResultSchema,
 	organizerReviseCommunicationDraftInputSchema,
 	organizerSendMessagesInputSchema,
 	organizerSendMessagesOperationResultSchema,
@@ -67,7 +71,9 @@ import {
 	mapMessagePreviewRecipientPage,
 	mapMessagePreviewSummary,
 	mapMessageTemplateDetail,
+	mapMessageTemplateMutation,
 	mapMessageTemplatePage,
+	mapRetryMessageDeliveryResult,
 	mapSendMessagesResult
 } from '../mappers/communications-authoring';
 import {
@@ -111,6 +117,11 @@ export const COMMUNICATIONS_AUTHORING_OPERATIONS = Object.freeze({
 		name: 'store_communication_authoring_payload', version: 1,
 		effect: 'draft', method: 'POST', input: 'body', idempotencyRequired: true,
 		...ORGANIZER_COMMUNICATION_OPERATION_SCHEMA_REFS.storeAuthoringPayload
+	},
+	createTemplate: {
+		name: 'message_template.create', version: 1,
+		effect: 'draft', method: 'POST', input: 'body', idempotencyRequired: true,
+		...ORGANIZER_COMMUNICATION_OPERATION_SCHEMA_REFS.createTemplate
 	},
 	createDraft: {
 		name: 'create_message_draft', version: 1,
@@ -156,6 +167,11 @@ export const COMMUNICATIONS_AUTHORING_OPERATIONS = Object.freeze({
 		name: 'send_messages', version: 1,
 		effect: 'commit', method: 'POST', input: 'body', idempotencyRequired: true,
 		...ORGANIZER_COMMUNICATION_OPERATION_SCHEMA_REFS.sendMessages
+	},
+	retryDelivery: {
+		name: 'retry_message_delivery', version: 1,
+		effect: 'commit', method: 'POST', input: 'body', idempotencyRequired: true,
+		...ORGANIZER_COMMUNICATION_OPERATION_SCHEMA_REFS.retryDelivery
 	},
 	getDeliveryHistory: {
 		name: 'get_delivery_history', version: 1,
@@ -525,6 +541,26 @@ export function createCommunicationsAuthoringLivePort(input: {
 			});
 		},
 
+		createTemplate(raw, idempotencyKey, options = {}) {
+			const parsed = organizerCreateMessageTemplateInputSchema.safeParse(raw);
+			if (!parsed.success) return Promise.resolve(invalidRequest());
+			const operation = COMMUNICATIONS_AUTHORING_OPERATIONS.createTemplate;
+			return requestEffect({
+				binding: bindings.createTemplate,
+				operation: operation.name,
+				operationIdentity: operation,
+				body: parsed.data,
+				idempotencyKey,
+				request,
+				resultSchema: organizerMessageTemplateMutationOperationResultSchema,
+				map: mapMessageTemplateMutation,
+				guard: (template) => template.key === parsed.data.templateKey
+					&& template.name === parsed.data.templateName
+					&& template.revision.revisionNumber === 1,
+				...(options.signal ? { signal: options.signal } : {})
+			});
+		},
+
 		createDraft(raw, idempotencyKey, options = {}) {
 			const parsed = organizerCreateCommunicationDraftInputSchema.safeParse(raw);
 			if (!parsed.success) return Promise.resolve(invalidRequest());
@@ -700,6 +736,24 @@ export function createCommunicationsAuthoringLivePort(input: {
 				map: mapSendMessagesResult,
 				guard: (result) => result.batchId === parsed.data.batchId
 					&& result.dispatchGeneration === 1,
+				...(options.signal ? { signal: options.signal } : {})
+			});
+		},
+
+		retryDelivery(raw, idempotencyKey, options = {}) {
+			const parsed = organizerRetryMessageDeliveryInputSchema.safeParse(raw);
+			if (!parsed.success) return Promise.resolve(invalidRequest());
+			const operation = COMMUNICATIONS_AUTHORING_OPERATIONS.retryDelivery;
+			return requestEffect({
+				binding: bindings.retryDelivery,
+				operation: operation.name,
+				operationIdentity: operation,
+				body: parsed.data,
+				idempotencyKey,
+				request,
+				resultSchema: organizerRetryMessageDeliveryOperationResultSchema,
+				map: mapRetryMessageDeliveryResult,
+				guard: (result) => result.deliveryId === parsed.data.deliveryId,
 				...(options.signal ? { signal: options.signal } : {})
 			});
 		},

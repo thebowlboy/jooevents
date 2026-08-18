@@ -1,4 +1,5 @@
 import type { Database } from 'bun:sqlite';
+import { createHash, createHmac } from 'node:crypto';
 import {
   resolveEffectInvocationAuthorityRecheckAttribution,
   type EffectHandlerSnapshot,
@@ -22,11 +23,14 @@ import {
   organizerPrepareMessagePreviewResultSchema,
   organizerPreviewMessageBatchInputSchema,
   organizerPreviewMessageBatchResultSchema,
+  organizerRetryMessageDeliveryInputSchema,
+  organizerRetryMessageDeliveryResultSchema,
   organizerSendMessagesInputSchema,
   organizerSendMessagesResultSchema,
   structuredOutcomeSchema,
   type StructuredOutcome
 } from '@jooevents/contracts';
+import { organizerClassifiedEmailAddressSchema } from '@jooevents/communications';
 import {
   canonicalJsonText,
   parseEventId,
@@ -42,6 +46,8 @@ import {
 import type {
   SQLiteCommunicationMessageReleaseStore
 } from '@jooevents/persistence/message-releases';
+import { SQLiteCommunicationDeliveryObservationRepository } from
+  '@jooevents/persistence/communication-delivery-observations';
 import {
   CommunicationReleasePlanningError,
   commitSendMessagesRelease
@@ -58,13 +64,13 @@ import {
 
 /**
  * Runtime seam for the operator send lane (`prepare_message_batch_preview`,
- * `preview_message_batch`, `send_messages`).
+ * `preview_message_batch`, `send_messages`, `retry_message_delivery`).
  *
  * The module in `@jooevents/communication-operations` compiles the operations;
  * this file supplies what only the composed runtime owns: the adoption
  * preparer behind the compute-only prepare read (asynchronous audience
  * resolution and per-recipient render, no writes, parked per draft revision)
- * and the two Foundation effect-domain adapters whose sealed synchronous
+ * and the Foundation effect-domain adapters whose sealed synchronous
  * steps run inside the one unit-of-work transaction — adopting the parked
  * preparation, or committing the owner-native release and delivery records.
  *
@@ -170,6 +176,8 @@ export interface CommunicationSendOperationRuntimeInput {
   readonly classifiedStore: SynchronousClassifiedPayloadStore;
   readonly releases: SQLiteCommunicationMessageReleaseStore;
   readonly clock: { now(): string };
+  readonly addressFingerprintKeyBytes: Uint8Array;
+  readonly addressFingerprintProfile: Readonly<{ key: string; version: number }>;
   /**
    * Runs one outbound dispatch pass after a send commit has durably landed.
    * Provider I/O stays strictly outside the unit-of-work transaction; the
@@ -195,6 +203,14 @@ export function createCommunicationSendOperationRuntime(
   input: CommunicationSendOperationRuntimeInput
 ): CommunicationSendOperationRuntime {
   const workspaceId = parseWorkspaceId(input.workspaceId);
+  if (!(input.addressFingerprintKeyBytes instanceof Uint8Array)
+      || input.addressFingerprintKeyBytes.byteLength < 32
+      || input.addressFingerprintProfile.key.length === 0
+      || !Number.isSafeInteger(input.addressFingerprintProfile.version)
+      || input.addressFingerprintProfile.version < 1) {
+    throw new TypeError('communication_send_address_fingerprint_profile_invalid');
+  }
+  const addressFingerprintKeyBytes = Uint8Array.from(input.addressFingerprintKeyBytes);
   /**
    * Parked, one-shot prepared previews keyed by exact draft revision.
    * Latest-wins per key (the replaced handle is disposed so its plaintext
@@ -336,7 +352,7 @@ export function createCommunicationSendOperationRuntime(
     readonly remember: (domain: unknown) => void;
   }) => CommunicationSendLanePreparedContribution) {
     const capability = COMMUNICATION_SEND_LANE_HANDLER_CAPABILITY_BY_OPERATION[operationName];
-    const effect = operationName === 'send_messages' ? 'commit' as const : 'draft' as const;
+    const effect = operationName === 'preview_message_batch' ? 'draft' as const : 'commit' as const;
     let prepared: PreparedApplication | undefined;
     let applied: PreparedApplication | undefined;
     const adapter = {
@@ -427,7 +443,7 @@ export function createCommunicationSendOperationRuntime(
         applied = undefined;
       }
     };
-    if (operationName !== 'send_messages') {
+    if (operationName === 'preview_message_batch') {
       return Object.freeze({ capability, adapter });
     }
     return Object.freeze({
@@ -614,8 +630,142 @@ export function createCommunicationSendOperationRuntime(
     }
   );
 
+  const retryDomain = createAdapter(
+    'retry_message_delivery',
+    ({ context, scope, businessInput, remember }) => {
+      const parsed = organizerRetryMessageDeliveryInputSchema.safeParse(businessInput);
+      if (!parsed.success) return refusalContribution(previewInvalid());
+      const heads = input.sqlite.query<{
+        readonly version: number;
+        readonly state: string;
+        readonly contact_ref_id: string;
+      }, [string, string, string]>(`
+        SELECT h.version,h.state,r.contact_ref_id
+          FROM communication_outbound_delivery_heads h
+          JOIN communication_message_releases r ON r.release_id=h.release_id
+         WHERE h.workspace_id=? AND h.event_id=? AND h.delivery_id=? LIMIT 2
+      `).all(scope.workspaceId, scope.eventId, parsed.data.deliveryId);
+      if (heads.length === 0) return refusalContribution(notFound());
+      if (heads.length !== 1) throw new TypeError('communication_retry_delivery_data_corrupt');
+      const head = heads[0]!;
+      if (head.version !== parsed.data.expectedDeliveryVersion) {
+        return refusalContribution(revisionChanged());
+      }
+      const disposition = new SQLiteCommunicationDeliveryObservationRepository(input.sqlite)
+        .currentDisposition(parsed.data.deliveryId);
+      if (disposition?.kind !== 'permanent_bounce' || head.state === 'request_started') {
+        return refusalContribution(previewInvalid());
+      }
+      const current = input.previewRepository.readCurrentAddress({
+        scope,
+        contactRefId: head.contact_ref_id
+      });
+      if (current === undefined) return refusalContribution(notFound());
+      const addressVersion = current.addressVersion + 1;
+      const lookupKeyedValue = createHmac('sha256', addressFingerprintKeyBytes)
+        .update(parsed.data.correctedEmail, 'utf8')
+        .digest('hex');
+      const suppression = input.sqlite.query<{
+        readonly state: string;
+      }, [string, string, number, string]>(`
+        SELECT state FROM communication_current_address_suppressions
+         WHERE workspace_id=? AND lookup_profile=? AND lookup_version=?
+           AND lookup_keyed_value=? LIMIT 1
+      `).get(
+        scope.workspaceId,
+        input.addressFingerprintProfile.key,
+        input.addressFingerprintProfile.version,
+        lookupKeyedValue
+      );
+      if (suppression?.state === 'suppressed') return refusalContribution(previewInvalid());
+      const occurredAt = input.clock.now();
+      const classifiedPayloadRefId = crypto.randomUUID();
+      const lifecycleMaterial = canonicalJsonText({
+        schemaVersion: 1,
+        kind: 'organizer_corrected_after_permanent_bounce',
+        deliveryId: parsed.data.deliveryId,
+        priorAddressRefId: current.addressRefId,
+        priorAddressVersion: current.addressVersion,
+        addressVersion,
+        occurredAt
+      });
+      const correctedAddress = organizerClassifiedEmailAddressSchema.parse({
+        addressRefId: current.addressRefId,
+        addressVersion,
+        contactRefId: current.contactRefId,
+        channel: 'email',
+        lifecycle: 'active',
+        lifecycleEvidence: {
+          evidenceRefId: `address-correction:${parsed.data.deliveryId}:${addressVersion}`,
+          evidenceVersion: 1,
+          evidenceDigestSha256: createHash('sha256').update(lifecycleMaterial).digest('hex')
+        },
+        lookupFingerprint: {
+          profile: input.addressFingerprintProfile.key,
+          version: input.addressFingerprintProfile.version,
+          keyedValue: lookupKeyedValue
+        },
+        classifiedValue: {
+          payloadRefId: classifiedPayloadRefId,
+          payloadRefVersion: 1,
+          classification: 'communication.contact.email',
+          value: parsed.data.correctedEmail
+        }
+      });
+      input.previewRepository.putCurrentAddress({
+        scope,
+        address: correctedAddress,
+        createdAt: occurredAt
+      });
+      const updated = input.sqlite.query(`
+        UPDATE communication_outbound_delivery_heads
+           SET state='known_rejected_safe_retryable',version=version+1,
+               lease_claim_id=NULL,lease_acquired_at_ms=NULL,lease_expires_at_ms=NULL,
+               updated_at_ms=?
+         WHERE workspace_id=? AND event_id=? AND delivery_id=? AND version=?
+           AND state<>'request_started'
+      `).run(
+        Date.parse(occurredAt), scope.workspaceId, scope.eventId,
+        parsed.data.deliveryId, parsed.data.expectedDeliveryVersion
+      );
+      if (updated.changes !== 1) {
+        // The corrected address was written in this same unit of work. Abort
+        // instead of returning a refusal so the transaction cannot retain a
+        // correction whose resend authorization lost its version race.
+        throw new TypeError('communication_retry_delivery_version_race');
+      }
+      const data = organizerRetryMessageDeliveryResultSchema.parse({
+        schemaVersion: 1,
+        deliveryId: parsed.data.deliveryId,
+        addressRefId: correctedAddress.addressRefId,
+        addressVersion: correctedAddress.addressVersion,
+        state: 'dispatch_requested'
+      });
+      const domain = Object.freeze({
+        kind: 'communication_delivery_retry_requested' as const,
+        workspaceId: scope.workspaceId,
+        eventId: scope.eventId,
+        deliveryId: parsed.data.deliveryId,
+        expectedDeliveryVersion: parsed.data.expectedDeliveryVersion,
+        addressRefId: correctedAddress.addressRefId,
+        addressVersion: correctedAddress.addressVersion,
+        classifiedPayloadRefId,
+        lookupProfile: correctedAddress.lookupFingerprint.profile,
+        lookupVersion: correctedAddress.lookupFingerprint.version,
+        lookupKeyedValue,
+        occurredAt: context.receivedAt
+      });
+      remember(domain);
+      return Object.freeze({
+        result: Object.freeze({ kind: 'success' as const, data }),
+        domain,
+        effectContributions: Object.freeze([])
+      });
+    }
+  );
+
   return Object.freeze({
     adoptionPreparer,
-    effectDomains: Object.freeze([previewDomain, sendDomain])
+    effectDomains: Object.freeze([previewDomain, sendDomain, retryDomain])
   });
 }

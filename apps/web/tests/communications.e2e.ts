@@ -189,10 +189,10 @@ test('“See the addresses” lands on the bounce evidence, in view, and the row
 	await expect(queue).toContainText('1 address bounced');
 });
 
-test('the roster expansion carries the speaker’s communications tail and a scoped compose door', async ({ page }) => {
-	await page.goto('/app/speakers?speaker=spk-1');
+test('the speaker record carries the communications tail and a scoped compose door', async ({ page }) => {
+	await page.goto('/app/speakers/spk-1');
 
-	// The arrival opens Maya's row; her tail lists what she was sent.
+	// The record opens on Maya; her tail lists what she was sent.
 	await expect(page.getByRole('heading', { level: 3, name: 'Communications' })).toBeVisible({
 		timeout: 15000
 	});
@@ -203,7 +203,7 @@ test('the roster expansion carries the speaker’s communications tail and a sco
 
 	const door = page.getByRole('link', { name: 'Open in Communications' });
 	await expect(door).toHaveAttribute('href', '/app/messages?person=spk-1');
-	const compose = page.getByRole('link', { name: 'Compose email' });
+	const compose = page.getByRole('link', { name: 'Write to Maya Lindqvist' });
 	await expect(compose).toHaveAttribute('href', '/app/messages?compose=1&person=spk-1');
 });
 

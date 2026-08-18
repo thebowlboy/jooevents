@@ -12,12 +12,14 @@ import type {
 	organizerCommunicationPurposeGetInputSchema,
 	organizerCommunicationPurposeListInputSchema,
 	organizerCreateCommunicationDraftInputSchema,
+	organizerCreateMessageTemplateInputSchema,
 	organizerDiscardCommunicationDraftInputSchema,
 	organizerMessageBatchPreviewGetInputSchema,
 	organizerMessagePreviewRecipientListInputSchema,
 	organizerMessageTemplateGetInputSchema,
 	organizerMessageTemplateListInputSchema,
 	organizerPreviewMessageBatchInputSchema,
+	organizerRetryMessageDeliveryInputSchema,
 	organizerReviseCommunicationDraftInputSchema,
 	organizerSendMessagesInputSchema,
 	StructuredOutcome
@@ -42,7 +44,9 @@ import type {
 	MessagePreviewRecipientPageView,
 	MessagePreviewSummaryView,
 	MessageTemplateDetailView,
+	MessageTemplateMutationView,
 	MessageTemplatePageView,
+	RetryMessageDeliveryResultView,
 	SendMessagesResultView
 } from './view-models/communications-authoring';
 
@@ -69,6 +73,7 @@ export type MessagePreviewPrepareRequest = z.input<
 	typeof organizerPreviewMessageBatchInputSchema
 >;
 export type SendMessagesRequest = z.input<typeof organizerSendMessagesInputSchema>;
+export type RetryMessageDeliveryRequest = z.input<typeof organizerRetryMessageDeliveryInputSchema>;
 export type DeliveryHistoryListRequest = z.input<
 	typeof organizerCommunicationHistoryListInputSchema
 >;
@@ -80,6 +85,7 @@ export type CommunicationTimelineGetRequest = z.input<typeof organizerCommunicat
 export type CommunicationDraftCreateRequest = z.input<
 	typeof organizerCreateCommunicationDraftInputSchema
 >;
+export type MessageTemplateCreateRequest = z.input<typeof organizerCreateMessageTemplateInputSchema>;
 export type CommunicationDraftReviseRequest = z.input<
 	typeof organizerReviseCommunicationDraftInputSchema
 >;
@@ -96,6 +102,7 @@ export type CommunicationAuthoringOperation =
 	| 'list_message_drafts'
 	| 'get_message_draft'
 	| 'store_communication_authoring_payload'
+	| 'message_template.create'
 	| 'create_message_draft'
 	| 'revise_message_batch'
 	| 'discard_message_draft'
@@ -105,6 +112,7 @@ export type CommunicationAuthoringOperation =
 	| 'prepare_message_batch_preview'
 	| 'preview_message_batch'
 	| 'send_messages'
+	| 'retry_message_delivery'
 	| 'get_delivery_history'
 	| 'list_message_attention_items'
 	| 'get_person_thread'
@@ -178,6 +186,11 @@ export interface CommunicationsAuthoringPort {
 		idempotencyKey: CommunicationIdempotencyKey,
 		options?: { readonly signal?: AbortSignal }
 	): Promise<CommunicationEffectResult<CommunicationAuthoringPayloadRefView>>;
+	createTemplate(
+		input: MessageTemplateCreateRequest,
+		idempotencyKey: CommunicationIdempotencyKey,
+		options?: { readonly signal?: AbortSignal }
+	): Promise<CommunicationEffectResult<MessageTemplateMutationView>>;
 	createDraft(
 		input: CommunicationDraftCreateRequest,
 		idempotencyKey: CommunicationIdempotencyKey,
@@ -234,6 +247,11 @@ export interface CommunicationsAuthoringPort {
 		idempotencyKey: CommunicationIdempotencyKey,
 		options?: { readonly signal?: AbortSignal }
 	): Promise<CommunicationEffectResult<SendMessagesResultView>>;
+	retryDelivery(
+		input: RetryMessageDeliveryRequest,
+		idempotencyKey: CommunicationIdempotencyKey,
+		options?: { readonly signal?: AbortSignal }
+	): Promise<CommunicationEffectResult<RetryMessageDeliveryResultView>>;
 	/**
 	 * Per-batch send evidence with live per-recipient delivery-state counts
 	 * recomputed from the outbound ledger on every read — never a fire-once

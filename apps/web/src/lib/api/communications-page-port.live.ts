@@ -1,4 +1,5 @@
 import type {
+	OrganizerCommunicationAuthoringPayloadInput,
 	OrganizerCommunicationPurposeRevisionRef,
 	OrganizerMessageTemplateRevisionRef,
 	StructuredOutcome
@@ -21,6 +22,7 @@ import type {
 	RenderedEmailPreview,
 	TemplateBlock
 } from './types';
+import { templateKind } from './template-kinds';
 import type {
 	CommunicationAudienceOptionPageView,
 	CommunicationPurposePageView,
@@ -102,6 +104,7 @@ function actor(value: {
 
 function messageState(value: string): CommunicationState {
 	switch (value) {
+		case 'delivered': return 'sent';
 		case 'accepted': return 'accepted';
 		case 'acceptance_unknown': return 'acceptance_unknown';
 		case 'known_failed': return 'failed';
@@ -186,6 +189,131 @@ function plainText(document: MessageTemplate): string {
 	}).join('\n\n').trim();
 }
 
+function inlineNodes(value: string) {
+	const nodes: Array<
+		{ readonly kind: 'text'; readonly value: string }
+		| { readonly kind: 'merge_field'; readonly fieldKey: string }
+	> = [];
+	let offset = 0;
+	for (const match of value.matchAll(/\{\{([a-z][a-z0-9]*(?:[._-][a-z0-9]+)*)\}\}/gu)) {
+		const index = match.index ?? 0;
+		if (index > offset) nodes.push({ kind: 'text', value: value.slice(offset, index) });
+		nodes.push({ kind: 'merge_field', fieldKey: match[1]! });
+		offset = index + match[0].length;
+	}
+	if (offset < value.length) nodes.push({ kind: 'text', value: value.slice(offset) });
+	return nodes;
+}
+
+type OrganizerTemplateContent = Extract<
+	OrganizerCommunicationAuthoringPayloadInput,
+	{ readonly payloadKind: 'template_content' }
+>['value'];
+
+function authoredTemplateContent(document: MessageTemplate): OrganizerTemplateContent {
+	return {
+		kind: 'email/v1' as const,
+		subject: inlineNodes(document.subject),
+		body: {
+			mode: 'composed' as const,
+			blocks: document.blocks.flatMap((block): Extract<
+				OrganizerTemplateContent['body'], { readonly mode: 'composed' }
+			>['blocks'] => {
+				switch (block.type) {
+					case 'heading': return [{
+						kind: 'heading' as const, level: 2 as const, content: inlineNodes(block.text)
+					}];
+					case 'paragraph': return [{ kind: 'paragraph' as const, content: inlineNodes(block.text) }];
+					case 'details': return [{
+						kind: 'detail_rows' as const,
+						rows: block.rows.map((row) => ({
+							label: inlineNodes(row.label), value: inlineNodes(row.value)
+						}))
+					}];
+					case 'button': return [{
+						kind: 'action_link' as const,
+						label: inlineNodes(block.label),
+						hrefFieldKey: block.href
+					}];
+					case 'divider': return [];
+				}
+			})
+		},
+		plainTextPolicy: 'derive_v1' as const,
+		attachmentSlotKeys: []
+	};
+}
+
+function stableTemplateKey(name: string, kind: string): string {
+	const stem = name.toLocaleLowerCase('en-US').replaceAll(/[^a-z0-9]+/gu, '.').replaceAll(/^\.|\.$/gu, '')
+		.slice(0, 80) || kind;
+	return `custom.${stem}.${crypto.randomUUID().replaceAll('-', '').slice(0, 12)}`;
+}
+
+/** One live message-template mint used by both the composer and Templates doors. */
+export function createLiveMessageTemplateMint(input: {
+	readonly communications: CommunicationsAuthoringPort;
+	readonly newIdempotencyKey?: (stage: string) => string;
+	readonly onDetail?: (detail: MessageTemplateDetailView) => void;
+}) {
+	const mutationKey = input.newIdempotencyKey ?? idempotencyKey;
+	return async (value: { name: string; kind: string }): Promise<MessageTemplate> => {
+		const scaffold = templateKind(value.kind);
+		if (!scaffold) throw new CommunicationsPageLiveError(
+			'communication_template_kind_invalid',
+			'This template starting point is no longer available.'
+		);
+		const available = requireSuccess(
+			await input.communications.listTemplates({ channel: 'email', lifecycle: 'active' }),
+			'Message templates'
+		);
+		const baseRow = available.rows[0];
+		if (!baseRow) throw new CommunicationsPageLiveError(
+			'communication_template_definition_unavailable',
+			'A renderer definition must be available before creating a template.'
+		);
+		const base = requireSuccess(await input.communications.getTemplate({
+			templateId: baseRow.revision.templateId,
+			revisionNumber: baseRow.revision.revisionNumber
+		}), 'Message template');
+		const document: MessageTemplate = {
+			id: 'pending', key: stableTemplateKey(value.name, value.kind), name: value.name.trim(),
+			purpose: scaffold.purpose, subject: scaffold.subject,
+			blocks: structuredClone(scaffold.blocks), mergeFields: structuredClone(scaffold.mergeFields),
+			revision: 1, revisions: [], usedBy: []
+		};
+		const content = requireSuccess(await input.communications.storeAuthoringPayload({
+			payloadKind: 'template_content', schemaVersion: 1,
+			value: authoredTemplateContent(document)
+		}, mutationKey('template-content')), 'Template content', 'change');
+		const fieldKeys = new Set(document.mergeFields.map((field) => field.key));
+		for (const block of document.blocks) if (block.type === 'button') fieldKeys.add(block.href);
+		const bindings = requireSuccess(await input.communications.storeAuthoringPayload({
+			payloadKind: 'template_field_bindings', schemaVersion: 1,
+			value: [...fieldKeys].sort().map((fieldKey) => ({
+				fieldKey, requirement: 'optional' as const, fallback: { kind: 'none' as const }
+			}))
+		}, mutationKey('template-bindings')), 'Template fields', 'change');
+		const created = requireSuccess(await input.communications.createTemplate({
+			templateKey: document.key,
+			templateName: document.name,
+			purposeRevision: base.purposeRevision,
+			contentPayload: content as typeof content & { readonly payloadKind: 'template_content' },
+			fieldBindingsPayload: bindings as typeof bindings & {
+				readonly payloadKind: 'template_field_bindings'
+			},
+			renderer: base.renderer,
+			mergeRegistry: base.mergeRegistry
+		}, mutationKey('template-create')), 'Message template', 'change');
+		const detail = requireSuccess(await input.communications.getTemplate({
+			templateId: created.revision.templateId,
+			revisionNumber: created.revision.revisionNumber
+		}), 'Message template');
+		input.onDetail?.(detail);
+		return messageTemplate(detail);
+	};
+}
+
 type AudienceRecord = CommunicationAudienceOptionPageView['rows'][number];
 
 type PendingDraft = Readonly<{
@@ -212,6 +340,11 @@ export function createLiveCommunicationsPagePort(input: {
 	const pendingDrafts = new Map<string, PendingDraft>();
 	const previewIdentityByRecipient = new Map<string, MessagePreviewIdentityView>();
 	let purposesCache: CommunicationPurposePageView | null = null;
+	const mintTemplate = createLiveMessageTemplateMint({
+		communications: input.communications,
+		newIdempotencyKey: key,
+		onDetail: (detail) => templateDetails.set(detail.revision.templateId, detail)
+	});
 
 	async function purposes() {
 		if (purposesCache) return purposesCache;
@@ -316,7 +449,16 @@ export function createLiveCommunicationsPagePort(input: {
 					? {} : { acceptanceUnknown: count(row.counts.acceptanceUnknown) }),
 				...(count(row.counts.knownFailed) === undefined ? {} : { knownFailed: count(row.counts.knownFailed) }),
 				...(row.stateReasonCode ? { stateReason: row.stateReasonCode } : {})
-			}
+			},
+			...(row.bounces === undefined ? {} : {
+				bouncedCount: row.bounces.length,
+				bounces: row.bounces.map((bounce) => ({
+					deliveryId: bounce.deliveryId,
+					deliveryVersion: bounce.deliveryVersion,
+					email: bounce.safeLabel,
+					reason: 'The provider reported a permanent bounce for this address.'
+				}))
+			})
 		}));
 		return [...draftRows, ...historyRows];
 	}
@@ -362,7 +504,9 @@ export function createLiveCommunicationsPagePort(input: {
 				at: row.occurredAt,
 				purpose: labels.get(row.purposeRevision.revisionId) ?? row.purposeRevision.purposeKey,
 				subject: row.subject,
-				outcome: row.state === 'accepted' ? 'accepted'
+				outcome: row.deliveryDisposition === 'delivered' ? 'delivered'
+					: row.deliveryDisposition === 'permanent_bounce' ? 'bounced'
+					: row.state === 'accepted' ? 'accepted'
 					: row.state === 'acceptance_unknown' ? 'acceptance_unknown'
 						: row.state === 'known_failed' ? 'failed'
 							: row.state === 'attempting' ? 'attempting' : 'scheduled',
@@ -379,11 +523,14 @@ export function createLiveCommunicationsPagePort(input: {
 			messageId,
 			entries: page.rows.flatMap((row) => row.recipient ? [{
 				id: row.factId,
+				deliveryId: row.recipient.deliveryId,
 				recipient: row.recipient.safeLabel,
 				actor: actor(row.actor),
 				state: row.recipient.state === 'pending' ? 'pending' as const
 					: row.recipient.state === 'request_started' ? 'attempting' as const
 						: row.recipient.state === 'accepted' ? 'accepted' as const
+							: row.recipient.state === 'delivered' ? 'delivered' as const
+								: row.recipient.state === 'permanent_bounce' ? 'bounced' as const
 							: row.recipient.state === 'acceptance_unknown' ? 'acceptance_unknown' as const
 								: 'failed' as const,
 				at: row.attempt?.completedAt ?? row.attempt?.startedAt ?? row.occurredAt,
@@ -656,16 +803,35 @@ export function createLiveCommunicationsPagePort(input: {
 			reviewDraft,
 			send,
 			previewRecipient,
-			async resendBounced(): Promise<MutationOutcome> {
-				return { ok: false, reason: 'Per-recipient resend is not available.' };
+			async resendBounced(
+				messageId: string,
+				safeLabel: string,
+				correctedEmail: string
+			): Promise<MutationOutcome> {
+				const history = await input.communications.getDeliveryHistory();
+				if (history.kind !== 'success') {
+					return { ok: false, reason: failure(history as never, 'Delivery history', 'read').message };
+				}
+				const row = history.data.rows.find((entry) => entry.historyItemId === messageId);
+				const matches = row?.bounces?.filter((bounce) => bounce.safeLabel === safeLabel) ?? [];
+				if (matches.length !== 1) {
+					return { ok: false, reason: 'This bounced recipient changed. Reload and review the current delivery.' };
+				}
+				const bounce = matches[0]!;
+				const retried = await input.communications.retryDelivery({
+					deliveryId: bounce.deliveryId,
+					expectedDeliveryVersion: bounce.deliveryVersion,
+					correctedEmail: correctedEmail.trim()
+				}, key('retry-delivery'));
+				if (retried.kind !== 'success') {
+					return { ok: false, reason: failure(retried as never, 'Delivery retry', 'change').message };
+				}
+				return { ok: true };
 			}
 		}),
 		templates: Object.freeze({
 			async list() { return { messages: await templates() }; },
-			async create(): Promise<MessageTemplate> {
-				throw new CommunicationsPageLiveError('communication_template_authoring_unavailable',
-					'Create message templates is not available in this workspace.');
-			},
+			create: mintTemplate,
 			async commitInline(): Promise<MutationOutcome> {
 				return { ok: false, reason: 'Editing message templates is not available in this workspace.' };
 			}

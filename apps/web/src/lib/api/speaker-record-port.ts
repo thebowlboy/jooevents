@@ -179,6 +179,12 @@ export interface SpeakerRecordPort {
 	};
 	readonly engagement: {
 		recordConfirmation(engagementId: string): Promise<MutationOutcome>;
+		/**
+		 * Accepts a recorded cancellation request — the direct audited act.
+		 * Optional: a composition whose engagement lane cannot serve it renders
+		 * the strip's door disabled with its reason instead of a dead press.
+		 */
+		acceptCancellation?(engagementId: string): Promise<MutationOutcome>;
 	};
 	readonly profile: {
 		update(input: SpeakerProfileUpdateInput): Promise<MutationOutcome>;

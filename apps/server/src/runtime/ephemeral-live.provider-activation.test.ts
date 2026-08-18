@@ -47,6 +47,7 @@ async function activatedRuntime(fetchStub: (url: string) => Response | Promise<R
       provider: loadCommunicationsProviderConfig({
         JOOEVENTS_EMAIL_PROVIDER_MODE: 'cloudflare_rest',
         JOOEVENTS_CLOUDFLARE_EMAIL_ACCOUNT_ID: 'account_123',
+        JOOEVENTS_CLOUDFLARE_EMAIL_ZONE_ID: 'zone_123',
         JOOEVENTS_CLOUDFLARE_EMAIL_API_TOKEN_SECRET_STORE: 'deployment.secret',
         JOOEVENTS_CLOUDFLARE_EMAIL_API_TOKEN_SECRET_REFERENCE: 'cloudflare-email-token'
       }),
@@ -176,6 +177,7 @@ describe('ephemeral live provider activation composition', () => {
         provider: loadCommunicationsProviderConfig({
           JOOEVENTS_EMAIL_PROVIDER_MODE: 'cloudflare_rest',
           JOOEVENTS_CLOUDFLARE_EMAIL_ACCOUNT_ID: 'account_123',
+          JOOEVENTS_CLOUDFLARE_EMAIL_ZONE_ID: 'zone_123',
           JOOEVENTS_CLOUDFLARE_EMAIL_API_TOKEN_SECRET_STORE: 'deployment.secret',
           JOOEVENTS_CLOUDFLARE_EMAIL_API_TOKEN_SECRET_REFERENCE: 'cloudflare-email-token'
         }),
@@ -243,6 +245,7 @@ describe('ephemeral live provider activation composition', () => {
         provider: loadCommunicationsProviderConfig({
           JOOEVENTS_EMAIL_PROVIDER_MODE: 'cloudflare_rest',
           JOOEVENTS_CLOUDFLARE_EMAIL_ACCOUNT_ID: 'account_123',
+          JOOEVENTS_CLOUDFLARE_EMAIL_ZONE_ID: 'zone_123',
           JOOEVENTS_CLOUDFLARE_EMAIL_API_TOKEN_SECRET_STORE: 'deployment.secret',
           JOOEVENTS_CLOUDFLARE_EMAIL_API_TOKEN_SECRET_REFERENCE: 'cloudflare-email-token'
         }),

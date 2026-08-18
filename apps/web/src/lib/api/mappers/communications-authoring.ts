@@ -15,8 +15,10 @@ import type {
 	OrganizerMessagePreviewIdentity,
 	organizerMessagePreviewSummarySchema,
 	OrganizerMessageTemplateDetail,
+	OrganizerMessageTemplateSummary,
 	organizerMessageTemplatePageSchema,
 	OrganizerPrepareMessagePreviewResult,
+	OrganizerRetryMessageDeliveryResult,
 	OrganizerSendMessagesResult
 } from '@jooevents/contracts';
 import type { z } from 'zod';
@@ -39,7 +41,9 @@ import type {
 	MessagePreviewRecipientPageView,
 	MessagePreviewSummaryView,
 	MessageTemplateDetailView,
+	MessageTemplateMutationView,
 	MessageTemplatePageView,
+	RetryMessageDeliveryResultView,
 	SendMessagesResultView
 } from '../view-models/communications-authoring';
 
@@ -83,6 +87,12 @@ export function mapMessageTemplatePage(value: TemplatePage): MessageTemplatePage
 export function mapMessageTemplateDetail(
 	value: OrganizerMessageTemplateDetail
 ): MessageTemplateDetailView {
+	return immutableCopy(value);
+}
+
+export function mapMessageTemplateMutation(
+	value: OrganizerMessageTemplateSummary
+): MessageTemplateMutationView {
 	return immutableCopy(value);
 }
 
@@ -143,6 +153,12 @@ export function mapMessagePreviewSummary(value: PreviewSummary): MessagePreviewS
 }
 
 export function mapSendMessagesResult(value: OrganizerSendMessagesResult): SendMessagesResultView {
+	return immutableCopy(value);
+}
+
+export function mapRetryMessageDeliveryResult(
+	value: OrganizerRetryMessageDeliveryResult
+): RetryMessageDeliveryResultView {
 	return immutableCopy(value);
 }
 

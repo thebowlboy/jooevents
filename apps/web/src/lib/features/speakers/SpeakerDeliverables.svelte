@@ -170,39 +170,32 @@
 </section>
 
 {#snippet deliverableRow(view: DeliverableView)}
-	{@const badge = view.tone === 'overdue' ? overdueBadge : assignmentStateBadge[view.state]}
-				{@const State = badge.icon}
 				<li class="row" class:row--waiting={view.tone === 'received'}>
-					<div class="row__head">
-						<!-- Subject: what was asked. Neutral ink, strongest local
-						     weight — every other value on the row is read relative
-						     to it. -->
-						<span class="row__name">{view.def.name}</span>
-						<!-- State: the row's scan key, in the closed badge vocabulary.
-						     Overdue outranks the assignment's own state because being
-						     late is what changes what the reader does next. -->
-						<span class="ui-badge ui-badge--{badge.tone}" class:ui-badge--solid={badge.solid}
-							><State class="ui-badge__icon" aria-hidden="true" />{badge.label}</span>
-						{#if !view.def.required}
-							<span class="row__optional">Optional</span>
-						{/if}
-						{#if view.due}
-							<!-- Time: due date takes the quiet time hue and tabular
-							     figures — whether it has passed is half the judgment.
-							     Absent where the state already carries the timing. -->
-							<span class="row__due"><span class="ui-sr-only">Due </span>{view.due}</span>
-						{/if}
+					<!-- Four aligned columns, shared down the list through the grid the
+					     list owns: what was asked · state · due · the row's one small act.
+					     The old free-wrap head put these anywhere the widths fell. -->
+					<span class="row__name"
+						>{view.def.name}{#if !view.def.required}<span class="row__optional"> · Optional</span
+							>{/if}</span>
+					<span class="row__state">
+						{#if true}{@const badge = view.tone === 'overdue' ? overdueBadge : assignmentStateBadge[view.state]}{@const State = badge.icon}<span
+								class="ui-badge ui-badge--{badge.tone}"
+								class:ui-badge--solid={badge.solid}
+								><State class="ui-badge__icon" aria-hidden="true" />{badge.label}</span>{/if}
+					</span>
+					<span class="row__due">
+						{#if view.due}<span class="ui-sr-only">Due </span>{view.due}{/if}
+					</span>
+					<span class="row__act">
 						{#if view.waivable && !view.acceptable && !view.acceptRefusal}
-							<!-- The only act this row offers rides the head instead of renting a
-							     whole row: one small door, right-aligned, same operation. -->
 							<button
 								type="button"
-								class="ui-button ui-button--ghost ui-button--sm row__waive"
+								class="ui-button ui-button--ghost ui-button--sm"
 								disabled={busyId !== null}
 								aria-busy={busyId === view.def.id}
 								onclick={() => waive(view)}>Mark waived</button>
 						{/if}
-					</div>
+					</span>
 
 					{#if view.notYetSubmitted}
 						<!-- A portal autosave is the speaker's own workspace. The
@@ -268,10 +261,6 @@
 {/snippet}
 
 <style>
-	.row__waive {
-		margin-inline-start: auto;
-	}
-
 	.settled {
 		display: grid;
 		gap: var(--je-space-3);
@@ -306,19 +295,40 @@
 		font-size: var(--je-font-size-sm);
 	}
 
+	/* The list owns the columns; every row aligns to them through subgrid, so
+	   name, state, due, and act sit in real columns down the whole section. */
 	.rows {
 		display: grid;
-		gap: var(--je-space-4);
+		grid-template-columns: minmax(0, 1fr) max-content max-content max-content;
+		row-gap: var(--je-space-3);
+		column-gap: var(--je-space-3);
 		margin: 0;
 		padding: 0;
 		list-style: none;
 	}
 
 	.row {
+		grid-column: 1 / -1;
 		display: grid;
-		gap: var(--je-space-2);
-		padding: var(--je-space-3) 0 0;
+		grid-template-columns: subgrid;
+		align-items: center;
+		row-gap: var(--je-space-2);
+		padding: var(--je-space-2) 0 0;
 		border-block-start: 1px solid var(--je-color-border-subtle);
+	}
+
+	/* Everything below the head line spans the row. */
+	.row > :global(:not(.row__name):not(.row__state):not(.row__due):not(.row__act)) {
+		grid-column: 1 / -1;
+	}
+
+	.row__state {
+		justify-self: start;
+	}
+
+	.row__act {
+		justify-self: end;
+		min-block-size: 1px;
 	}
 
 	.row:first-child {
@@ -355,10 +365,11 @@
 	}
 
 	.row__due {
-		margin-inline-start: auto;
+		justify-self: end;
 		font-size: var(--je-font-size-sm);
 		color: var(--je-color-recognition-time);
 		font-variant-numeric: tabular-nums;
+		white-space: nowrap;
 	}
 
 	.row__none,
@@ -389,9 +400,25 @@
 	   takes its own line under the name, so the state badge is never crushed
 	   between two things competing for the same inline space. */
 	@media (max-width: 47.99rem) {
+		/* Two aligned columns at phone width: name beside state, due beside the
+		   act on the line below — still columns, never a free wrap. */
+		.rows {
+			grid-template-columns: minmax(0, 1fr) max-content;
+		}
+
 		.row__due {
-			margin-inline-start: 0;
-			flex-basis: 100%;
+			grid-column: 1;
+			grid-row: 2;
+			justify-self: start;
+		}
+
+		.row__act {
+			grid-column: 2;
+			grid-row: 2;
+		}
+
+		.row > :global(:not(.row__name):not(.row__state):not(.row__due):not(.row__act)) {
+			grid-row: auto;
 		}
 	}
 </style>

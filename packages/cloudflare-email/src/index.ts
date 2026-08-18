@@ -1,4 +1,5 @@
 export * from './constants';
+export * from './analytics';
 export * from './deliverability';
 export * from './evidence';
 export * from './message';

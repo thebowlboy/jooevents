@@ -287,7 +287,7 @@ describe('disposable SQLite organizer audience and preview packet', () => {
       kind: 'success',
       data: {
         schemaVersion: 1,
-        rows: [{ label: 'Accepted speakers', recipientEstimate: { knowledge: 'known', value: 3 } }]
+        rows: [{ label: 'Accepted speakers', recipientEstimate: { knowledge: 'known', value: 1 } }]
       }
     });
     const snapshot = target.repository.resolveCurrentSnapshot({ scope: ids, audience });

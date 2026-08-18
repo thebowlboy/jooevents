@@ -24,6 +24,7 @@ export type CommunicationsProviderConfig =
   | Readonly<{
       mode: 'cloudflare_rest';
       accountId: string;
+      zoneId: string;
       apiTokenSecret: Readonly<{ storeKey: string; reference: string }>;
       callbacks: 'not_supported';
       inbound: 'not_enabled';
@@ -96,6 +97,7 @@ export function loadCommunicationsProviderConfig(
   }
 
   const parsedAccount = accountId.safeParse(environment.JOOEVENTS_CLOUDFLARE_EMAIL_ACCOUNT_ID);
+  const parsedZone = accountId.safeParse(environment.JOOEVENTS_CLOUDFLARE_EMAIL_ZONE_ID);
   const parsedStore = boundedIdentity.safeParse(
     environment.JOOEVENTS_CLOUDFLARE_EMAIL_API_TOKEN_SECRET_STORE
   );
@@ -105,18 +107,23 @@ export function loadCommunicationsProviderConfig(
   if (!parsedAccount.success) issues.push(
     'JOOEVENTS_CLOUDFLARE_EMAIL_ACCOUNT_ID is required for cloudflare_rest'
   );
+  if (!parsedZone.success) issues.push(
+    'JOOEVENTS_CLOUDFLARE_EMAIL_ZONE_ID is required for cloudflare_rest delivery observations'
+  );
   if (!parsedStore.success) issues.push(
     'JOOEVENTS_CLOUDFLARE_EMAIL_API_TOKEN_SECRET_STORE is required for cloudflare_rest'
   );
   if (!parsedReference.success) issues.push(
     'JOOEVENTS_CLOUDFLARE_EMAIL_API_TOKEN_SECRET_REFERENCE is required for cloudflare_rest'
   );
-  if (issues.length > 0 || !parsedAccount.success || !parsedStore.success || !parsedReference.success) {
+  if (issues.length > 0 || !parsedAccount.success || !parsedZone.success
+      || !parsedStore.success || !parsedReference.success) {
     throw new CommunicationsProviderConfigurationError(issues);
   }
   return Object.freeze({
     mode: mode.data,
     accountId: parsedAccount.data,
+    zoneId: parsedZone.data,
     apiTokenSecret: Object.freeze({
       storeKey: parsedStore.data,
       reference: parsedReference.data

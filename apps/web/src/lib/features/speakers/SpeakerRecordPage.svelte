@@ -95,6 +95,25 @@
 		attention.some((row) => row.detail === snapshot?.engagement.note)
 	);
 
+	async function acceptCancellation() {
+		if (!snapshot || busy || !api.engagement.acceptCancellation) return;
+		busy = true;
+		actionError = '';
+		try {
+			const outcome = await api.engagement.acceptCancellation(snapshot.engagement.id);
+			if (!outcome.ok) {
+				actionError = outcome.reason;
+				await reread();
+				return;
+			}
+			announcement = `${snapshot.engagement.name}'s cancellation is recorded. Nothing has been sent.`;
+			await reread();
+			await tick();
+		} finally {
+			busy = false;
+		}
+	}
+
 	async function confirm() {
 		if (!snapshot || busy) return;
 		busy = true;
@@ -282,8 +301,21 @@
 									<strong class="strip__title">{row.title}</strong
 									>{#if row.detail}<span class="strip__detail"> — {row.detail}</span>{/if}
 								</p>
-								{#if row.reason === 'cancel_requested' && step?.href && step.tone === 'danger'}
-									<a class="ui-button ui-button--danger ui-button--sm" href={step.href}>{step.label}</a>
+								{#if row.reason === 'cancel_requested'}
+									{#if api.engagement.acceptCancellation}
+										<!-- The direct audited act, here on the strip itself. The
+										     guided walk (record 24) replaces this door when it is
+										     built; until then a real act beats a dead address. -->
+										<button
+											type="button"
+											class="ui-button ui-button--danger ui-button--sm"
+											disabled={busy}
+											aria-busy={busy}
+											onclick={acceptCancellation}>Accept cancellation</button>
+									{:else}
+										<button type="button" class="ui-button ui-button--danger ui-button--sm" aria-disabled="true"
+											>Accept cancellation</button>
+									{/if}
 								{:else if row.door}
 									<a class="ui-button ui-button--secondary ui-button--sm" href={row.door.href}
 										>{row.door.label}</a>
@@ -292,20 +324,12 @@
 						{/each}
 					</ul>
 				{/if}
+				{#if attention.some((row) => row.reason === 'cancel_requested') && !api.engagement.acceptCancellation}
+					<p class="alerts__why">Accepting a cancellation is not served in this workspace yet.</p>
+				{/if}
 				{#if gap}<p class="strip strip--note" role="note">{gap}</p>{/if}
 			</section>
 
-		<!-- Reusable profile and event-specific approval ──────────────── -->
-		<section class="section" aria-labelledby="record-profile">
-			<h3 class="section__title" id="record-profile">Speaker profile</h3>
-			{#key `${snapshot.profile.personId}:${snapshot.profile.profile?.version ?? 0}:${snapshot.profile.approvals.map((entry) => entry.id).join(',')}`}
-				<SpeakerProfileEditor
-					view={snapshot.profile}
-					personName={person.name}
-					{port}
-					onchanged={reread} />
-			{/key}
-		</section>
 
 		<!-- Deliverables, with their content ───────────────────────────── -->
 		<SpeakerDeliverables views={deliverables} engagement={person} {port} onchanged={reread} />
@@ -372,6 +396,18 @@
 			{/if}
 
 		</section>
+		<!-- Reusable profile and event-specific approval ──────────────── -->
+		<section class="section" aria-labelledby="record-profile">
+			<h3 class="section__title" id="record-profile">Speaker profile</h3>
+			{#key `${snapshot.profile.personId}:${snapshot.profile.profile?.version ?? 0}:${snapshot.profile.approvals.map((entry) => entry.id).join(',')}`}
+				<SpeakerProfileEditor
+					view={snapshot.profile}
+					personName={person.name}
+					{port}
+					onchanged={reread} />
+			{/key}
+		</section>
+
 		<!-- Communications ─────────────────────────────────────────────── -->
 		<section class="section" aria-labelledby="record-communications">
 			<div class="section__head">
@@ -545,6 +581,12 @@
 
 	.strip__title {
 		font-weight: 600;
+	}
+
+	.alerts__why {
+		margin: 0;
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
 	}
 
 	.strip__detail {
