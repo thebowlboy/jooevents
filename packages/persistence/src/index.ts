@@ -6,6 +6,7 @@ export * from './sqlite/foundation-ephemeral-sqlite-runtime';
 export * from './sqlite/sqlite-effect-unit-of-work';
 export * from './sqlite/sqlite-read-immutable-audit';
 export * from './sqlite/operation-history';
+export * from './sqlite/speaker-person-history';
 export * from './sqlite/workspace-shell-summary';
 export * from './sqlite/event-spine';
 export * from './sqlite/event-effect-domain';

@@ -50,6 +50,7 @@ import {
   organizerFormDetailSchema,
   organizerSubmissionContactSchema,
   organizerPersonSubmissionPageReadResultSchema,
+  speakerPersonHistoryReadResultSchema,
   portalEngagementRespondResultSchema,
   portalSnapshotReadResultSchema,
   programReleaseSchema,
@@ -1240,6 +1241,10 @@ describe('ephemeral live Foundation server composition', () => {
       {
         name: 'speaker-lineup.snapshot.read', version: 1, effect: 'read',
         bindings: ['GET /api/events/current/speaker-lineup']
+      },
+      {
+        name: 'speaker.person-history.read', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/speakers/person-history']
       },
       {
         name: 'store_communication_authoring_payload', version: 1, effect: 'draft',
@@ -6063,6 +6068,17 @@ describe('ephemeral live Foundation server composition', () => {
         rows: [{ id: submissionId, title: speakerTitle }],
         nextAfterSubmissionId: null
       }
+    });
+
+    const personHistoryResponse = await runtime.app.request(
+      `/api/events/current/speakers/person-history?personId=${contact.personId}`,
+      { headers: eventHeaders({ session, correlationId: crypto.randomUUID() }) }
+    );
+    expect(personHistoryResponse.status).toBe(200);
+    expect(speakerPersonHistoryReadResultSchema.parse(
+      await personHistoryResponse.json()
+    )).toMatchObject({
+      kind: 'success', data: { schemaVersion: 1, next: null }
     });
 
     // The submit transaction registered exactly one non-security confirmation

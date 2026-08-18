@@ -6,7 +6,9 @@ import {
   engagementSeedPlanSchema,
   engagementSeedReversalPlanSchema,
   engagementSnapshotSchema,
-  engagementStateSchema
+  engagementStateSchema,
+  speakerPersonHistoryInputSchema,
+  speakerPersonHistoryPageSchema
 } from './engagements';
 
 const scope = Object.freeze({
@@ -265,6 +267,29 @@ describe('engagement contracts', () => {
     }).success).toBe(false);
     expect(engagementSnapshotSchema.safeParse({
       schemaVersion: 1, scope, engagements: [invitedHead(), invitedHead()]
+    }).success).toBe(false);
+  });
+
+  test('person history pages bind a truthful reverse-chronological cursor', () => {
+    const entries = Array.from({ length: 100 }, (_, index) => ({
+      id: `task:019c1df7-86b5-7${String(index).padStart(3, '0')}-8ba4-5f7097bfa401`,
+      occurredAt: new Date(Date.parse(later) - index * 1_000).toISOString(),
+      actor: 'organizer' as const,
+      summary: 'Changed a speaker task'
+    }));
+    const last = entries.at(-1)!;
+    expect(speakerPersonHistoryPageSchema.parse({
+      schemaVersion: 1, entries, next: { occurredAt: last.occurredAt, id: last.id }
+    }).entries).toHaveLength(100);
+    expect(speakerPersonHistoryPageSchema.safeParse({
+      schemaVersion: 1, entries: entries.slice(0, 2),
+      next: { occurredAt: entries[1]!.occurredAt, id: entries[1]!.id }
+    }).success).toBe(false);
+    expect(speakerPersonHistoryPageSchema.safeParse({
+      schemaVersion: 1, entries: [entries[1], entries[0]], next: null
+    }).success).toBe(false);
+    expect(speakerPersonHistoryInputSchema.safeParse({
+      personId, beforeOccurredAt: last.occurredAt
     }).success).toBe(false);
   });
 });

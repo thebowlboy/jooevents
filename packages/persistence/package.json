@@ -18,6 +18,7 @@
     "./workspace-overview": "./src/sqlite/workspace-overview.ts",
     "./workspace-shell-summary": "./src/sqlite/workspace-shell-summary.ts",
     "./operation-history": "./src/sqlite/operation-history.ts",
+    "./speaker-person-history": "./src/sqlite/speaker-person-history.ts",
     "./sqlite/workspace-team": "./src/sqlite/workspace-team.ts",
     "./sqlite/workspace-team-direct-effect-domain": "./src/sqlite/workspace-team-direct-effect-domain.ts",
     "./field-registry": "./src/sqlite/field-registry.ts",

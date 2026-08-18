@@ -7,7 +7,7 @@ import {
 	type TaskBoardSnapshotDto
 } from '@jooevents/contracts';
 import type { DecisionsLiveClient } from './operations/decisions-live';
-import type { EngagementsLiveClient } from './operations/engagements-live';
+import type { EngagementsWithPersonHistoryLiveClient } from './operations/engagements-live';
 import type { TaskLiveClient } from './operations/tasks-live';
 import type { FilesPagePort } from './files/files-page-port';
 import type { MaterialFileView } from './files/view-models';
@@ -183,7 +183,7 @@ async function taskSubmission(
  */
 export function createLiveSpeakerRecordPort(input: {
 	readonly speakers: SpeakersPagePort;
-	readonly engagements: Pick<EngagementsLiveClient, 'readSnapshot'>;
+	readonly engagements: Pick<EngagementsWithPersonHistoryLiveClient, 'readSnapshot' | 'readPersonHistory'>;
 	readonly tasks: Pick<TaskLiveClient, 'readBoard'>;
 	readonly taskActions: TasksPagePort;
 	readonly schedule: Pick<SchedulePagePort, 'schedule'>;
@@ -213,8 +213,13 @@ export function createLiveSpeakerRecordPort(input: {
 		if (!engagement || engagement.personId !== head.personId || !engagement.name.trim() || !engagement.email.trim()) {
 			return unavailable('speaker_record_identity_unavailable', 'speaker identity');
 		}
-
-		const personSubmissions = await input.intake.listForPerson(head.personId);
+		const [personHistory, personSubmissions] = await Promise.all([
+			input.engagements.readPersonHistory(head.personId),
+			input.intake.listForPerson(head.personId)
+		]);
+		if (personHistory.kind !== 'success') {
+			return unavailable('speaker_record_history_unavailable', 'speaker history');
+		}
 		if (personSubmissions.kind !== 'success') {
 			unavailable('speaker_record_submission_unavailable', 'speaker proposals');
 		}
@@ -311,10 +316,12 @@ export function createLiveSpeakerRecordPort(input: {
 				? { links: [], provisional: !engagement.contentApproved }
 				: null,
 			profile: null,
-			// The event operation log does not yet key every task/engagement row
-			// to this person. Filtering summaries or display names would invent
-			// attribution, so the page renders its existing typed absence.
-			history: []
+			history: personHistory.data.map((entry) => ({
+				id: entry.id,
+				at: displayInstant(entry.occurredAt),
+				actor: entry.actor,
+				text: entry.summary
+			}))
 		};
 	}
 

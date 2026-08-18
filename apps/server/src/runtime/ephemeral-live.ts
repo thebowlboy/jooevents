@@ -155,6 +155,7 @@ import {
   PORTAL_PARTICIPANT_READ_ACCESS_POLICY,
   createEngagementDirectOperationModule,
   createEngagementOperationModule,
+  createSpeakerPersonHistoryOperationModule,
   createSpeakerLineupDirectOperationModule,
   createParticipantCurrentAuthorityResolver,
   createParticipantPortalOperationModule
@@ -573,6 +574,7 @@ import {
   createSQLiteWorkspaceShellSummaryProjection
 } from '@jooevents/persistence/workspace-shell-summary';
 import { createSQLiteOperationHistoryReader } from '@jooevents/persistence/operation-history';
+import { createSQLiteSpeakerPersonHistoryReader } from '@jooevents/persistence/speaker-person-history';
 import {
   createWorkspaceTeamProvisioningSynchronizationPort,
   SQLiteWorkspaceTeamRepository,
@@ -4219,6 +4221,18 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       idempotencyCredentialProfile: engagementProfiles.idempotencyCredential,
       idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(engagementProfiles.idempotencyCredential)
     });
+    const speakerPersonHistoryOperations = createSpeakerPersonHistoryOperationModule({
+      workspaceId,
+      readPolicy: ENGAGEMENT_READ_ACCESS_POLICY,
+      currentAuthority,
+      currentEvent,
+      read: createSQLiteSpeakerPersonHistoryReader(database.sqlite),
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      authorityPrincipalKeyProfile: engagementProfiles.authorityPrincipal,
+      scopePartitionProfile: engagementProfiles.scopePartition,
+      requestCanonicalizationProfile: engagementProfiles.requestCanonicalization
+    });
     const speakerLineupDirectOperations = createSpeakerLineupDirectOperationModule({
       workspaceId,
       managePolicy: SPEAKER_LINEUP_MANAGE_ACCESS_POLICY,
@@ -4868,6 +4882,7 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       decisionOperations,
       decisionDirectOperations,
       engagementOperations,
+      speakerPersonHistoryOperations,
       engagementDirectOperations,
       speakerLineupDirectOperations,
       taskBoardOperations,

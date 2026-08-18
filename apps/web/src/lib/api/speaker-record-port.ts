@@ -130,21 +130,20 @@ export interface SpeakerPublicCard {
 	readonly provisional: boolean;
 }
 
-/** One line of the readable operation log, scoped to this person. */
+/** One retained history line whose canonical relationship resolves to this Person. */
 export interface SpeakerHistoryEntry {
 	readonly id: string;
 	readonly at: string;
-	readonly actor: 'you' | 'person' | 'agent';
+	readonly actor: 'organizer' | 'person' | 'agent' | 'system';
 	readonly text: string;
 }
 
 /**
  * The whole answer for one engagement.
  *
- * `history` may legitimately be empty while the rest is full: a per-person slice
- * of the operation log is a named live increment that nothing serves yet, and
- * the page renders that absence as itself rather than filling it with rows from
- * a workspace-wide feed that were never keyed to this person.
+ * `history` may legitimately be empty while the rest is full: the live projection
+ * joins only ledgers with an exact Person relationship and never filters prose,
+ * display names, or addresses to manufacture a match.
  */
 export interface SpeakerRecordSnapshot {
 	readonly engagement: SpeakerRow;

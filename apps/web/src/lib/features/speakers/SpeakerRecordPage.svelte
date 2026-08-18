@@ -426,12 +426,9 @@
 		<section class="section" aria-labelledby="record-history">
 			<h3 class="section__title" id="record-history">History</h3>
 			{#if snapshot.history.length === 0}
-				<!-- The absence is typed and says why. A workspace-wide activity feed
-				     filtered by display name would attribute rows to a person nothing
-				     ever keyed to them, and an invented timeline is worse than none. -->
 				<p class="calm">
-					This page does not yet collect every change about {person.name} in one history.
-					Messages are above, and event-wide activity is on <a href="/app/pulse">Pulse</a>.
+					No person-linked changes have been recorded for {person.name}. Messages are above,
+					and event-wide activity is on <a href="/app/pulse">Pulse</a>.
 				</p>
 			{:else}
 				<ul class="history">

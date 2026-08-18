@@ -158,6 +158,15 @@ function compose(overrides: Record<string, unknown> = {}) {
 							})
 					]
 				}
+			}),
+			readPersonHistory: async () => ({
+				kind: 'success', correlationId: id(66),
+				data: [{
+					id: `task:${id(67)}`,
+					occurredAt: '2026-08-16T09:00:00.000Z',
+					actor: 'organizer',
+					summary: 'Accepted Travel details'
+				}]
 			})
 		} as never,
 		tasks: { readBoard: async () => ({ kind: 'success', data: taskBoard(), correlationId: id(62) }) } as never,
@@ -232,7 +241,12 @@ describe('live Speaker Record port', () => {
 			]
 		});
 		expect(record?.thread?.entries).toHaveLength(1);
-		expect(record?.history).toEqual([]);
+		expect(record?.history).toEqual([{
+			id: `task:${id(67)}`,
+			at: '16 Aug 2026 · 09:00 UTC',
+			actor: 'organizer',
+			text: 'Accepted Travel details'
+		}]);
 	});
 
 	test('refuses an incomplete Decision projection instead of calling a linked result undecided', async () => {

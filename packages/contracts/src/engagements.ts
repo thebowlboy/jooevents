@@ -648,6 +648,58 @@ export const speakerLineupChangeDataSchema = z.strictObject({
 export const speakerLineupSnapshotReadInputSchema = z.strictObject({});
 export const speakerLineupSnapshotReadResultSchema =
   createReadOperationResultSchema(speakerLineupSnapshotSchema);
+
+export const SPEAKER_PERSON_HISTORY_PAGE_SIZE = 100;
+const speakerPersonHistoryRowIdSchema = z.string().regex(
+  /^(operation|portal|task):[0-9a-f]{8}-[0-9a-f]{4}-[47][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+);
+export const speakerPersonHistoryInputSchema = z.strictObject({
+  personId: engagementIdSchema,
+  beforeOccurredAt: canonicalInstantSchema.optional(),
+  beforeId: speakerPersonHistoryRowIdSchema.optional()
+}).superRefine((input, context) => {
+  if ((input.beforeOccurredAt === undefined) !== (input.beforeId === undefined)) {
+    context.addIssue({ code: 'custom', message: 'history cursor time and id must be supplied together' });
+  }
+});
+export const speakerPersonHistoryEntrySchema = z.strictObject({
+  id: speakerPersonHistoryRowIdSchema,
+  occurredAt: canonicalInstantSchema,
+  actor: z.enum(['organizer', 'person', 'agent', 'system']),
+  summary: z.string().min(1).max(1000)
+});
+export const speakerPersonHistoryPageSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  entries: z.array(speakerPersonHistoryEntrySchema).max(SPEAKER_PERSON_HISTORY_PAGE_SIZE),
+  next: z.strictObject({
+    occurredAt: canonicalInstantSchema,
+    id: speakerPersonHistoryRowIdSchema
+  }).nullable()
+}).superRefine((page, context) => {
+  for (let index = 1; index < page.entries.length; index += 1) {
+    const previous = page.entries[index - 1]!;
+    const current = page.entries[index]!;
+    if (previous.occurredAt < current.occurredAt
+        || (previous.occurredAt === current.occurredAt && previous.id <= current.id)) {
+      context.addIssue({
+        code: 'custom', path: ['entries', index],
+        message: 'history entries must be unique in reverse chronological order'
+      });
+    }
+  }
+  const last = page.entries.at(-1);
+  if (page.next !== null
+      && (page.entries.length !== SPEAKER_PERSON_HISTORY_PAGE_SIZE
+        || last?.occurredAt !== page.next.occurredAt
+        || last.id !== page.next.id)) {
+    context.addIssue({
+      code: 'custom', path: ['next'],
+      message: 'continuation must name the final row of a full page'
+    });
+  }
+});
+export const speakerPersonHistoryReadResultSchema =
+  createReadOperationResultSchema(speakerPersonHistoryPageSchema);
 export const speakerLineupChangeCanonicalResultSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('success'), data: speakerLineupChangeDataSchema }),
   z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
@@ -673,6 +725,12 @@ export const ENGAGEMENT_OPERATION_SCHEMA_REFS = Object.freeze({
     inputSchema: speakerLineupSnapshotReadInputSchema,
     resultKey: 'schema.speaker-lineup.snapshot-read.operator-result',
     resultSchema: speakerLineupSnapshotReadResultSchema
+  }),
+  personHistoryRead: createOperationSchemaManifestRefs({
+    inputKey: 'schema.speaker.person-history-read.input',
+    inputSchema: speakerPersonHistoryInputSchema,
+    resultKey: 'schema.speaker.person-history-read.operator-result',
+    resultSchema: speakerPersonHistoryReadResultSchema
   }),
   lineupChange: createOperationSchemaManifestRefs({
     inputKey: 'schema.speaker-lineup.change.input',
@@ -712,3 +770,4 @@ export type SpeakerLineupAction = z.infer<typeof speakerLineupActionSchema>;
 export type SpeakerLineupPlanningInput = z.infer<typeof speakerLineupPlanningInputSchema>;
 export type SpeakerLineupMutationPlanDto = z.infer<typeof speakerLineupMutationPlanSchema>;
 export type SpeakerLineupChangeData = z.infer<typeof speakerLineupChangeDataSchema>;
+export type SpeakerPersonHistoryPageDto = z.infer<typeof speakerPersonHistoryPageSchema>;
