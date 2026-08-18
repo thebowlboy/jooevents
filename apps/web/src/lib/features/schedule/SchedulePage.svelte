@@ -22,7 +22,12 @@
 		SchedulePublicationReview
 	} from '$lib/api/schedule-page-port';
 	import { presentProgramRoomCapacity } from '$lib/api/program-vocabulary-presentation';
-	import { scheduleClockLabel, scheduleRangeLabel } from '$lib/api/session-placement';
+	import {
+		scheduleClockLabel,
+		scheduleDayLabel,
+		scheduleRangeLabel,
+		scheduleRoomName
+	} from '$lib/api/session-placement';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
 	import { applyParams, clearParams, param } from '$lib/features/workspace/url-state.svelte';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
@@ -1222,11 +1227,11 @@
 	}
 
 	function roomName(id: string): string {
-		return rooms.find((room) => room.id === id)?.name ?? id;
+		return scheduleRoomName(rooms, id) ?? id;
 	}
 
 	function dayLabel(key: string): string {
-		return days.find((day) => day.key === key)?.label ?? key;
+		return scheduleDayLabel(days, key) ?? key;
 	}
 
 	/**

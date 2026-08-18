@@ -33,6 +33,22 @@ export interface PlacementDisplaySource {
 	}[];
 }
 
+/** Resolve a schedule day key to its human label without printing the key as prose. */
+export function scheduleDayLabel(
+	days: PlacementDisplaySource['days'],
+	key: string
+): string | undefined {
+	return days.find((entry) => entry.key === key)?.label;
+}
+
+/** Resolve a schedule room id to its human name without printing the id as prose. */
+export function scheduleRoomName(
+	rooms: PlacementDisplaySource['rooms'],
+	id: string
+): string | undefined {
+	return rooms.find((entry) => entry.id === id)?.name;
+}
+
 /** Minutes past midnight for an `HH:MM` day start; an unparseable one is midnight. */
 function dayStartMinutes(dayStart: string): number {
 	const [hour = 0, minute = 0] = dayStart.split(':').map(Number);
@@ -78,12 +94,12 @@ export function sessionPlacementDisplay(
 	if (!placement) return undefined;
 	const session = schedule.sessions.find((entry) => entry.id === sessionId);
 	if (!session) return undefined;
-	const day = schedule.days.find((entry) => entry.key === placement.dayKey);
-	const room = schedule.rooms.find((entry) => entry.id === placement.roomId);
+	const day = scheduleDayLabel(schedule.days, placement.dayKey);
+	const room = scheduleRoomName(schedule.rooms, placement.roomId);
 	if (!day || !room) return undefined;
 	return {
-		day: day.label,
+		day,
 		time: scheduleRangeLabel(schedule.dayStart, placement.startMin, session.durationMin),
-		room: room.name
+		room
 	};
 }
