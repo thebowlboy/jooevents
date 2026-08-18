@@ -6946,6 +6946,16 @@ describe('ephemeral live Foundation server composition', () => {
       kind: 'transport_error', code: 'invalid_request', retryable: false
     });
 
+    // A valid participant session is not operator authority. The portal cookie
+    // cannot enter an organizer route, even for the same Event and Person.
+    const operatorThroughPortal = await runtime.app.request('/api/events/current/engagements', {
+      headers: { cookie: petraCookie, 'x-correlation-id': crypto.randomUUID() }
+    });
+    expect(operatorThroughPortal.status).toBe(401);
+    expect(await operatorThroughPortal.json()).toMatchObject({
+      kind: 'transport_error', code: 'unauthenticated', retryable: false
+    });
+
     // Confirming as self through the participant lane: no attribution claim
     // crosses the wire — the server derives it from the authenticated person.
     const respondResponse = await portalPost(
