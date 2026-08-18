@@ -397,14 +397,29 @@
 	 * a newer one already wrote.
 	 */
 	async function loadProfiles(landed: Submission[], seq: number) {
-		const emails = [
-			...new Set(landed.flatMap((row) => row.speakers.map((speaker) => speaker.email)))
-		].filter((email) => !(email in profiles));
-		if (emails.length === 0) return;
-		const found = await Promise.all(emails.map((email) => api.speakers.profile(email)));
+		const speakers = new Map(landed.flatMap((row) => row.speakers.map((speaker) => [
+			speaker.personId ?? speaker.email, speaker
+		] as const)));
+		const keys = [...speakers.keys()].filter((key) => key && !(key in profiles));
+		if (keys.length === 0) return;
+		const counts = new Map<string, number>();
+		for (const row of landed) for (const speaker of row.speakers) {
+			const key = speaker.personId ?? speaker.email;
+			if (!key) continue;
+			counts.set(key, (counts.get(key) ?? 0) + 1);
+		}
+		const batch = api.speakers.profiles
+			? await api.speakers.profiles(keys.map((key) => ({
+					key, personId: speakers.get(key)?.personId, email: speakers.get(key)?.email ?? '',
+					submissionCount: counts.get(key) ?? 0
+				})))
+			: null;
+		const found = batch
+			? keys.map((key) => batch[key] ?? null)
+			: await Promise.all(keys.map((key) => api.speakers.profile(speakers.get(key)!.email)));
 		if (seq !== loadSeq) return;
 		const next = { ...profiles };
-		emails.forEach((email, index) => (next[email] = found[index]));
+		keys.forEach((key, index) => (next[key] = found[index]));
 		profiles = next;
 	}
 
@@ -450,12 +465,16 @@
 			}
 			// The standing marks and the submitter profiles are two independent reads
 			// of the same landed rows, so neither waits on the other.
-			const [marks] = await Promise.all([
-				api.review.standings(landed.map((row) => row.id)),
+			const carried = Object.fromEntries(
+				landed.flatMap((row) => row.standing ? [[row.id, row.standing]] as const : [])
+			);
+			const missing = landed.filter((row) => !row.standing).map((row) => row.id);
+			const [fetched] = await Promise.all([
+				missing.length === 0 ? Promise.resolve({} as Record<string, ScoreStanding>) : api.review.standings(missing),
 				loadProfiles(landed, seq)
 			]);
 			if (seq !== loadSeq) return;
-			standings = marks;
+			standings = { ...carried, ...fetched };
 			standingsRead = true;
 		} catch (error) {
 			// The failure becomes surfaced state, never an unhandled rejection: an
@@ -1406,7 +1425,7 @@
 								     never claimed to be one. -->
 								<span class="ui-table__secondary scan"
 									>{#each row.speakers as speaker, index (speaker.email)}{@const profile =
-										profiles[speaker.email]}{#if index > 0}{', '}{/if}{#if profile}<ProfilePeek
+										profiles[speaker.personId ?? speaker.email]}{#if index > 0}{', '}{/if}{#if profile}<ProfilePeek
 											{profile} />{:else}{speaker.name}{/if}{/each}</span>
 							</td>
 							<!-- A category, not a state: a squared chip in its own hue, so an

@@ -25,6 +25,8 @@ import type {
 	ReviewStandingView
 } from './view-models/review';
 import type { ProgramFormatView, ProgramTrackView } from './view-models/program-vocabulary';
+import { createInFlightSlot, shareInFlight } from './in-flight';
+import type { SpeakerProfileBatchSource } from './speaker-profile-directory.live';
 
 /**
  * The tuned page capabilities this deliberately partial live mount cannot
@@ -358,16 +360,28 @@ export function createLiveReviewPagePort(input: {
 	const now = input.now ?? Date.now;
 	const newAttemptKey = input.newAttemptKey ?? (() => crypto.randomUUID());
 	let latestSnapshot: ReviewSnapshotView | undefined;
+	const snapshotSlots = new Map<string, { current: Promise<ReviewSnapshotView> | null }>();
 
 	async function readSnapshot(
 		request: { standingSubmissionIds?: string[]; standingSlice?: 'track' | 'all' } = {}
 	): Promise<ReviewSnapshotView> {
-		const result = await input.review.readSnapshot(request);
-		if (result.kind !== 'success') {
-			throw new ReviewPageLiveError(readFailure(result, 'review snapshot'));
+		const key = JSON.stringify({
+			ids: request.standingSubmissionIds ?? [],
+			slice: request.standingSlice ?? null
+		});
+		let slot = snapshotSlots.get(key);
+		if (!slot) {
+			slot = createInFlightSlot<ReviewSnapshotView>();
+			snapshotSlots.set(key, slot);
 		}
-		latestSnapshot = result.data;
-		return latestSnapshot;
+		return shareInFlight(slot, async () => {
+			const result = await input.review.readSnapshot(request);
+			if (result.kind !== 'success') {
+				throw new ReviewPageLiveError(readFailure(result, 'review snapshot'));
+			}
+			latestSnapshot = result.data;
+			return latestSnapshot;
+		});
 	}
 
 	async function readStandings(submissionIds: readonly string[]): Promise<Record<string, ScoreStanding>> {

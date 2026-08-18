@@ -8,6 +8,7 @@ import type {
 	TaskAssignment,
 	TaskDef
 } from './types';
+import type { SpeakerProfileBatchSource } from './speaker-profile-directory.live';
 
 export interface CreateTaskDefinitionInput {
 	readonly name: string;
@@ -57,8 +58,7 @@ export interface TasksPagePort {
 	readonly speakers: {
 		list(): Promise<SpeakerRow[]>;
 		profile(email: string): Promise<SpeakerProfile | null>;
-		profiles?(requests: readonly { readonly key: string; readonly personId?: string; readonly email: string; readonly submissionCount: number }[]):
-			Promise<Record<string, SpeakerProfile | null>>;
+		profiles?: SpeakerProfileBatchSource['profiles'];
 	};
 	readonly templates: {
 		list(): Promise<{ readonly messages: MessageTemplate[] }>;

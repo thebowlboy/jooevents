@@ -61,6 +61,74 @@ describe('live tuned Forms page adapter', () => {
 		} as unknown as ReleaseOverviewDto)).toEqual({ kind: 'none' });
 	});
 
+	test('opening a form shares one detail snapshot between summary and fields', async () => {
+		let details = 0;
+		const gate = Promise.withResolvers<void>();
+		const started = Promise.withResolvers<void>();
+		const sample = liveForms();
+		const forms = {
+			...sample,
+			async readDetail(formId: string) {
+				details += 1;
+				started.resolve();
+				await gate.promise;
+				return sample.readDetail(formId);
+			}
+		};
+		const adapter = port(forms);
+		const summary = adapter.forms.get(intakeFormsFixtureIds.openForm);
+		await started.promise;
+		const rows = adapter.forms.fields(intakeFormsFixtureIds.openForm);
+		expect(details).toBe(1);
+		gate.resolve();
+		expect((await summary)?.id).toBe(intakeFormsFixtureIds.openForm);
+		expect((await rows)?.length).toBeGreaterThan(0);
+		await adapter.forms.get(intakeFormsFixtureIds.openForm);
+		expect(details).toBe(2);
+	});
+
+	test('two forms do not share an editor snapshot', async () => {
+		const requested: string[] = [];
+		const sample = liveForms();
+		const forms = {
+			...sample,
+			async readDetail(formId: string) {
+				requested.push(formId);
+				return sample.readDetail(formId);
+			}
+		};
+		const adapter = port(forms);
+		await Promise.all([
+			adapter.forms.get(intakeFormsFixtureIds.openForm),
+			adapter.forms.get(intakeFormsFixtureIds.draftForm)
+		]);
+		expect(new Set(requested)).toEqual(new Set([
+			intakeFormsFixtureIds.draftForm,
+			intakeFormsFixtureIds.openForm
+		]));
+	});
+
+	test('a missing form answers null for summary and fields from one detail read', async () => {
+		let details = 0;
+		const sample = liveForms();
+		const missing = crypto.randomUUID();
+		const forms = {
+			...sample,
+			async readDetail(formId: string) {
+				details += 1;
+				return sample.readDetail(formId);
+			}
+		};
+		const adapter = port(forms);
+		const [summary, rows] = await Promise.all([
+			adapter.forms.get(missing),
+			adapter.forms.fields(missing)
+		]);
+		expect(details).toBe(1);
+		expect(summary).toBeNull();
+		expect(rows).toBeNull();
+	});
+
 	test('projects catalog, joined rows, vocabulary, and capability absence', async () => {
 		const adapter = port();
 		const [forms, rows, tracks, formats, sessions] = await Promise.all([adapter.forms.list(),

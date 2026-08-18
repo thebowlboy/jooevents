@@ -26,6 +26,7 @@ export interface OrganizerSubmissionSummaryView {
 	readonly target: OrganizerSubmissionTargetView;
 	readonly title: string;
 	readonly primaryParticipantName: string | null;
+	readonly primaryParticipantId?: string;
 	readonly submittedAt: string;
 	readonly submittedAtLabel: string;
 }
@@ -83,7 +84,7 @@ export interface OrganizerSubmissionContactView {
 	readonly email: string;
 }
 
-export type OrganizerSubmissionOperation = 'list' | 'person_list' | 'detail' | 'contact';
+export type OrganizerSubmissionOperation = 'list' | 'person_list' | 'detail' | 'contact' | 'contact_list';
 
 export type OrganizerSubmissionUnavailableReason =
 	| 'invalid_operation_manifest'
@@ -134,6 +135,10 @@ export type OrganizerSubmissionContactPort =
 				submissionId: string,
 				options?: { readonly signal?: AbortSignal }
 			): Promise<OrganizerSubmissionReadResult<OrganizerSubmissionContactView>>;
+			readMany(
+				submissionIds: readonly string[],
+				options?: { readonly signal?: AbortSignal }
+			): Promise<OrganizerSubmissionReadResult<readonly OrganizerSubmissionContactView[]>>;
 	  }
 	| {
 			readonly kind: 'unavailable';

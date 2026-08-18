@@ -14,16 +14,19 @@ import type { WorkspaceFieldsApi } from './field-registry-workspace-adapter';
 import type { ProgramVocabularySettingsPort } from './program-vocabulary-settings-adapter';
 import type {
 	FormComposition,
+	FormFieldRow,
 	FormSummary,
 	FormTarget,
 	MutationOutcome
 } from './types';
 import type {
+	OrganizerFormDetailView,
 	OrganizerFormSummaryView,
 	OrganizerFormsPort,
 	OrganizerFormsResult,
 	OrganizerFormWriteView
 } from './view-models/intake-forms';
+import { createInFlightSlot, shareInFlight } from './in-flight';
 
 type AdapterFailure = Readonly<{ code: string; reason: string }>;
 
@@ -194,6 +197,10 @@ export function createLiveFormsPagePort(input: {
 	if (input.forms.source.kind !== 'live') throw new TypeError('forms_page_live_source_required');
 	const newIdempotencyKey = input.newIdempotencyKey ?? defaultIdempotencyKey;
 	const publishKeys = new Map<string, string>();
+	const editorSlots = new Map<string, { current: Promise<{
+		readonly summary: FormSummary;
+		readonly fields: FormFieldRow[];
+	} | null> | null }>();
 
 	async function catalog() {
 		const result = await input.forms.list();
@@ -206,6 +213,36 @@ export function createLiveFormsPagePort(input: {
 		if (result.kind === 'success') return result.data;
 		if (isMissing(result)) return null;
 		throw new FormsPageLiveAdapterError(resultFailure(result));
+	}
+
+	function summaryFromDetail(current: OrganizerFormDetailView): FormSummary {
+		return {
+			id: current.form.id,
+			name: current.form.name,
+			target: tunedTarget(current.form.target),
+			status: current.form.status,
+			currentPublishedVersionId: current.form.currentPublishedVersionId,
+			version: current.form.version,
+			submissionCount: 0,
+			fieldCount: current.fields.length,
+			composition: canonicalComposition(current.form.definition.composition)
+		};
+	}
+
+	async function editor(formId: string) {
+		let slot = editorSlots.get(formId);
+		if (!slot) {
+			slot = createInFlightSlot();
+			editorSlots.set(formId, slot);
+		}
+		return shareInFlight(slot, async () => {
+			const current = await detail(formId);
+			if (!current) return null;
+			return {
+				summary: summaryFromDetail(current),
+				fields: current.fields.map((row) => structuredClone(row))
+			};
+		});
 	}
 
 	async function write(
@@ -322,11 +359,10 @@ export function createLiveFormsPagePort(input: {
 				return (await catalog()).forms.map(tunedSummary);
 			},
 			async get(formId) {
-				const summary = (await catalog()).forms.find((form) => form.id === formId);
-				return summary ? tunedSummary(summary) : null;
+				return (await editor(formId))?.summary ?? null;
 			},
 			async fields(formId) {
-				return (await detail(formId))?.fields.map((row) => structuredClone(row)) ?? null;
+				return (await editor(formId))?.fields ?? null;
 			},
 			async ruleOptions(formId) {
 				return (await detail(formId))?.ruleOptions.map((entry) => structuredClone(entry)) ?? null;

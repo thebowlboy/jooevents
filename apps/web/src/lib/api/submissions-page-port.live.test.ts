@@ -46,6 +46,7 @@ function triageRowDto(input: {
 	readonly source?: 'public_form' | 'direct_entry';
 	readonly sessionId?: string;
 	readonly version?: number;
+	readonly primaryParticipantId?: string;
 }) {
 	const submissionId = id(input.value);
 	const submittedAt = '2026-08-13T09:00:00.000Z';
@@ -66,6 +67,8 @@ function triageRowDto(input: {
 					: { kind: 'general_pool' },
 				title: 'Streaming agents',
 				primaryParticipantName: 'Noor Haddad',
+				...(input.primaryParticipantId
+					? { primaryParticipantId: input.primaryParticipantId } : {}),
 				submittedAt
 			},
 			detail: {
@@ -459,7 +462,9 @@ function composePort(overrides: Partial<Parameters<typeof createLiveSubmissionsP
 describe('live tuned Submissions page port', () => {
 	test('joins triage rows with decision heads and standings, never inventing facts', async () => {
 		const undecided = triageRowDto({ value: 21, source: 'direct_entry' });
-		const decided = triageRowDto({ value: 22, state: 'set_aside' });
+		const decided = triageRowDto({
+			value: 22, state: 'set_aside', primaryParticipantId: id(80)
+		});
 		const page = triagePage([undecided, decided], {
 			inbox: 1, set_aside: 1, late: 0, spam: 0
 		});
@@ -520,6 +525,12 @@ describe('live tuned Submissions page port', () => {
 			reviewAverage: 4.2,
 			// Registered-run set-aside attribution surfaces its policy identity.
 			setAsideBy: 'policy.triage.scout'
+		});
+		expect(second.speakers).toEqual([{
+			name: 'Noor Haddad', email: '', personId: id(80)
+		}]);
+		expect(second.standing).toMatchObject({
+			value: 4.2, reviews: 3, band: 'upper', phrase: 'Higher than most'
 		});
 	});
 
@@ -727,5 +738,98 @@ describe('live tuned Submissions page port', () => {
 		});
 		expect(await port.schedule.originOf(id(23))).toBeNull();
 		expect(await port.forms.openCount()).toBe(0);
+	});
+
+	test('originsOf reads decision state and the session catalogue once for a set of ids', async () => {
+		let decisionReads = 0;
+		let catalogReads = 0;
+		const baseDecisions = decisionState([
+			{
+				submissionId: id(22),
+				head: decidedHead(id(22), 'accepted'),
+				origin: {
+					schemaVersion: 1,
+					scope: { workspaceId, eventId },
+					submissionId: id(22),
+					sessionId: id(71),
+					kind: 'spawned',
+					linkedByUserId: id(31),
+					linkedAt: '2026-08-13T11:00:00.000Z'
+				}
+			}
+		]);
+		const baseSessions = fakeSessions([
+			{ id: id(70), title: 'Panel: agents', lifecycle: 'collecting' },
+			{ id: id(71), title: 'Keynote', lifecycle: 'programmed' }
+		]);
+		const port = composePort({
+			sessions: {
+				...baseSessions,
+				async readCatalog() {
+					catalogReads += 1;
+					return baseSessions.readCatalog();
+				}
+			},
+			decisions: {
+				async readState(ids) {
+					decisionReads += 1;
+					return baseDecisions.readState(ids);
+				}
+			}
+		});
+		expect(port.schedule.originsOf).toBeDefined();
+		expect(await port.schedule.originsOf!([id(22), id(23), id(22)])).toEqual({
+			[id(22)]: { sessionId: id(71), title: 'Keynote', kind: 'spawn' },
+			[id(23)]: null
+		});
+		expect(decisionReads).toBe(1);
+		expect(catalogReads).toBe(1);
+	});
+
+	test('originsOf of an empty set reads nothing', async () => {
+		let decisionReads = 0;
+		let catalogReads = 0;
+		const baseSessions = fakeSessions([]);
+		const port = composePort({
+			sessions: {
+				...baseSessions,
+				async readCatalog() {
+					catalogReads += 1;
+					return baseSessions.readCatalog();
+				}
+			},
+			decisions: {
+				async readState(ids) {
+					decisionReads += 1;
+					return decisionState([]).readState(ids);
+				}
+			}
+		});
+		expect(await port.schedule.originsOf!([])).toEqual({});
+		expect(decisionReads).toBe(0);
+		expect(catalogReads).toBe(0);
+	});
+
+	test('originsOf refuses when the origin session is not in the catalogue', async () => {
+		const port = composePort({
+			sessions: fakeSessions([]),
+			decisions: decisionState([{
+				submissionId: id(22),
+				head: decidedHead(id(22), 'accepted'),
+				origin: {
+					schemaVersion: 1,
+					scope: { workspaceId, eventId },
+					submissionId: id(22),
+					sessionId: id(71),
+					kind: 'spawned',
+					linkedByUserId: id(31),
+					linkedAt: '2026-08-13T11:00:00.000Z'
+				}
+			}])
+		});
+		await expect(port.schedule.originsOf!([id(22)])).rejects.toMatchObject({
+			name: 'SubmissionsPageLiveError',
+			code: 'origin_session_missing'
+		});
 	});
 });

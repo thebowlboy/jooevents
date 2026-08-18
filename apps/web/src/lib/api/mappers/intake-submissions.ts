@@ -158,6 +158,8 @@ export function mapOrganizerSubmissionSummary(
 		target: mapTarget(summary.target),
 		title: summary.title ?? 'Untitled submission',
 		primaryParticipantName: summary.primaryParticipantName,
+		...(summary.primaryParticipantId
+			? { primaryParticipantId: summary.primaryParticipantId } : {}),
 		submittedAt: summary.submittedAt,
 		submittedAtLabel: submittedAtLabel(summary.submittedAt)
 	});

@@ -164,4 +164,103 @@ describe('live Communications page port', () => {
 		expect(await port.communications.send(draft.id)).toEqual({ ok: true });
 		expect(calls).toEqual(['store:message_content', 'store:message_audience_draft', 'create', 'prepare', 'adopt', 'recipients', 'send']);
 	});
+
+	function templateRow(input: {
+		readonly id: string;
+		readonly name: string;
+		readonly withDocument?: boolean;
+	}) {
+		const revision = {
+			templateId: input.id, templateRevisionId: `${input.id}-rev`,
+			revisionNumber: 1, digestSha256: digest('t')
+		};
+		const summary = {
+			schemaVersion: 1 as const,
+			revision, key: input.id, name: input.name,
+			purposeRevision, channel: 'email' as const, lifecycle: 'active' as const,
+			bodyMode: 'composed' as const, subjectPreview: input.name
+		};
+		if (!input.withDocument) return summary;
+		return {
+			...summary,
+			content: {
+				kind: 'email/v1' as const,
+				subject: [{ kind: 'text' as const, value: input.name }],
+				body: {
+					mode: 'composed' as const,
+					blocks: [{ kind: 'paragraph' as const, content: [{ kind: 'text' as const, value: 'Hello' }] }]
+				},
+				plainTextPolicy: 'derive_v1' as const,
+				attachmentSlotKeys: []
+			},
+			fieldBindings: [],
+			renderer: { reference: { key: 'email-v1', version: 1 }, definitionDigestSha256: digest('r') },
+			mergeRegistry: { reference: { key: 'merge', version: 1 }, definitionDigestSha256: digest('m') }
+		};
+	}
+
+	function templatesPort(input: {
+		readonly rows: readonly ReturnType<typeof templateRow>[];
+		readonly onList?: () => void;
+		readonly onGet?: (id: string) => void;
+	}) {
+		return createLiveCommunicationsPagePort({
+			communications: {
+				source: { kind: 'live' as const },
+				async listTemplates() {
+					input.onList?.();
+					return success({ schemaVersion: 1, rows: input.rows, page: { hasMore: false } });
+				},
+				async getTemplate(request: { readonly templateId: string }) {
+					input.onGet?.(request.templateId);
+					const row = input.rows.find((entry) => entry.revision.templateId === request.templateId);
+					return success(templateRow({
+						id: request.templateId,
+						name: row?.name ?? request.templateId,
+						withDocument: true
+					}));
+				}
+			} as never,
+			readiness: {
+				source: { kind: 'live' as const },
+				async read() {
+					return {
+						kind: 'success' as const,
+						data: { provider: null, outbound: { state: 'not_configured' } },
+						correlationId: 'correlation-1'
+					} as never;
+				}
+			},
+			presentation: {
+				theme: { async get() { return { accent: '#000' } as never; } },
+				workspace: { async summary() { return { event: null }; } }
+			}
+		});
+	}
+
+	test('uses the current authoring document from the template list instead of one detail read per row', async () => {
+		const calls: string[] = [];
+		const port = templatesPort({
+			rows: [templateRow({ id: 'template-1', name: 'Decision notice', withDocument: true })],
+			onList: () => calls.push('listTemplates'),
+			onGet: () => calls.push('getTemplate')
+		});
+		const { messages } = await port.templates.list();
+		expect(messages[0]).toMatchObject({ id: 'template-1', name: 'Decision notice', subject: 'Decision notice' });
+		expect(calls).toEqual(['listTemplates']);
+	});
+
+	test('fetches only the templates whose list row omitted the authoring document', async () => {
+		const fetched: string[] = [];
+		const port = templatesPort({
+			rows: [
+				templateRow({ id: 'hydrated', name: 'Hydrated', withDocument: true }),
+				templateRow({ id: 'summary-only', name: 'Summary only' })
+			],
+			onGet: (id) => fetched.push(id)
+		});
+		const { messages } = await port.templates.list();
+		expect(messages.map((entry) => entry.id).sort()).toEqual(['hydrated', 'summary-only']);
+		expect(fetched).toEqual(['summary-only']);
+	});
 });

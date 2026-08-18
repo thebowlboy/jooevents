@@ -158,6 +158,60 @@ function core(input: { committed?: boolean; anonymized?: boolean; comparable?: b
 }
 
 describe('direct live Review page port', () => {
+	test('joins concurrent plan, queue, and accolade reads onto one snapshot and re-reads after it settles', async () => {
+		let snapshots = 0;
+		const gate = Promise.withResolvers<void>();
+		const started = Promise.withResolvers<void>();
+		const review = core({ keys: [], actions: [] });
+		const page = createLiveReviewPagePort({
+			review: {
+				...review,
+				async readSnapshot(request) {
+					snapshots += 1;
+					started.resolve();
+					await gate.promise;
+					return review.readSnapshot(request);
+				}
+			},
+			vocabulary, schedule, viewer: { kind: 'reviewer', reviewerId }
+		});
+		const plans = page.review.plans();
+		await started.promise;
+		const queue = page.review.myQueue();
+		const defs = page.review.accoladeDefs();
+		expect(snapshots).toBe(1);
+		gate.resolve();
+		expect((await plans).at(-1)?.id).toBe(roundId);
+		expect(await queue).toHaveLength(1);
+		expect(await defs).toEqual([]);
+		await page.review.plans();
+		expect(snapshots).toBe(2);
+	});
+
+	test('a standings read does not join the empty page snapshot', async () => {
+		const requests: unknown[] = [];
+		const review = core({ keys: [], actions: [] });
+		const page = createLiveReviewPagePort({
+			review: {
+				...review,
+				async readSnapshot(request) {
+					requests.push(request ?? {});
+					return review.readSnapshot(request);
+				}
+			},
+			vocabulary, schedule, viewer: { kind: 'reviewer', reviewerId }
+		});
+		await Promise.all([
+			page.review.plans(),
+			page.review.standings([submissionId])
+		]);
+		expect(requests).toHaveLength(2);
+		expect(requests).toEqual(expect.arrayContaining([
+			{},
+			{ standingSubmissionIds: [submissionId] }
+		]));
+	});
+
 	test('carries organizer-served uncovered review detail into the roster load', () => {
 		const served = reviewSnapshotSchema.parse({
 			schemaVersion: 1,

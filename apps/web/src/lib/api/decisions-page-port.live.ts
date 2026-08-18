@@ -23,6 +23,8 @@ import type {
 import type { ProgramVocabularySettingsPort } from './program-vocabulary-settings-adapter';
 import { mapLiveReviewPlans } from './review-page-port.live';
 import type { ReviewCorePort } from './review-core-port';
+import { createInFlightSlot, shareInFlight } from './in-flight';
+import type { SpeakerProfileBatchSource } from './speaker-profile-directory.live';
 import type {
 	AccoladeDef,
 	DecisionState,
@@ -294,6 +296,7 @@ export function createLiveDecisionsPagePort(input: {
 	readonly readiness: Pick<CommunicationsReadinessPagePort, 'read'>;
 	readonly newIdempotencyKey?: () => string;
 	readonly now?: () => number;
+	readonly profileBatch?: SpeakerProfileBatchSource;
 }): DecisionsPagePort {
 	if (
 		input.review.source.kind !== 'live'
@@ -304,15 +307,24 @@ export function createLiveDecisionsPagePort(input: {
 	}
 	const newIdempotencyKey = input.newIdempotencyKey ?? defaultIdempotencyKey;
 	const now = input.now ?? Date.now;
+	const snapshotSlots = new Map<string, { current: Promise<ReviewSnapshotView> | null }>();
 
 	async function readSnapshot(
 		request: { standingSubmissionIds?: string[] } = {}
 	): Promise<ReviewSnapshotView> {
-		const result = await input.review.readSnapshot(request);
-		if (result.kind !== 'success') {
-			throw new DecisionsPageLiveError(readFailure(result, 'review snapshot'));
+		const key = JSON.stringify({ ids: request.standingSubmissionIds ?? [] });
+		let slot = snapshotSlots.get(key);
+		if (!slot) {
+			slot = createInFlightSlot();
+			snapshotSlots.set(key, slot);
 		}
-		return result.data;
+		return shareInFlight(slot, async () => {
+			const result = await input.review.readSnapshot(request);
+			if (result.kind !== 'success') {
+				throw new DecisionsPageLiveError(readFailure(result, 'review snapshot'));
+			}
+			return result.data;
+		});
 	}
 
 	async function readDecisionRows(
@@ -812,7 +824,8 @@ export function createLiveDecisionsPagePort(input: {
 			/** Null is the port's own typed absence for an unknown profile. */
 			async profile() {
 				return null;
-			}
+			},
+			...(input.profileBatch ? { profiles: input.profileBatch.profiles } : {})
 		}),
 		schedule: Object.freeze({
 			state: () => input.schedule.state()

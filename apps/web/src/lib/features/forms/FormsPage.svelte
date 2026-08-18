@@ -385,8 +385,10 @@
 	});
 
 	async function reloadForm(id: string, options: { resetDraft?: boolean } = {}) {
+		const listed = forms?.find((entry) => entry.id === id) ?? null;
 		const [summary, fieldRows, formRules, fetchedRuleOptions] = await Promise.all([
-			port.forms.get(id), port.forms.fields(id), port.forms.rules(id), port.forms.ruleOptions(id)
+			listed ? Promise.resolve(listed) : port.forms.get(id),
+			port.forms.fields(id), port.forms.rules(id), port.forms.ruleOptions(id)
 		]);
 		if (id !== formId) return;
 		form = summary;

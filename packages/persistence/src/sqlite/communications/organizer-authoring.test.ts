@@ -406,7 +406,16 @@ describe('SQLite organizer communication authoring repository', () => {
       kind: 'success', data: { allowedAudienceSources: [] }
     });
     expect(input.repository.listTemplates(ids, {})).toMatchObject({
-      kind: 'success', data: { rows: [{ subjectPreview: 'Speaker update' }] }
+      kind: 'success',
+      data: {
+        rows: [{
+          subjectPreview: 'Speaker update',
+          content: { kind: 'email/v1', body: { mode: 'composed' } },
+          fieldBindings: [],
+          renderer: { reference: { key: 'renderer.email-v1', version: 1 } },
+          mergeRegistry: { reference: { key: 'merge.registry-v1', version: 1 } }
+        }]
+      }
     });
     expect(input.repository.getTemplate(ids, { templateId: ids.templateId })).toMatchObject({
       kind: 'success',

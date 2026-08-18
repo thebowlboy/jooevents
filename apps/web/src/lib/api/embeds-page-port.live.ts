@@ -8,6 +8,7 @@ import type { EmbedsPagePort } from './embeds-page-port';
 import { ReleaseWorkspaceError, type ReleaseWorkspacePort } from './release-workspace-adapter';
 import type { TemplatesPagePort } from './templates-page-port';
 import type { EmbedTarget, MutationOutcome, SurfaceKind } from './types';
+import { createInFlightSlot, shareInFlight } from './in-flight';
 
 export class EmbedsPageLiveError extends ReleaseWorkspaceError {}
 
@@ -33,8 +34,15 @@ export function createLiveEmbedsPagePort(input: {
 	readonly release: ReleaseWorkspacePort;
 	readonly templates: TemplatesPagePort;
 }): EmbedsPagePort {
+	const overviewSlot = createInFlightSlot<ReleaseOverviewDto>();
+	const librarySlot = createInFlightSlot<Awaited<ReturnType<TemplatesPagePort['templates']['list']>>>();
+
 	async function overview(): Promise<ReleaseOverviewDto> {
-		return input.release.overview();
+		return shareInFlight(overviewSlot, () => input.release.overview());
+	}
+
+	async function library() {
+		return shareInFlight(librarySlot, () => input.templates.templates.list());
 	}
 
 	function releasedSpeakerCards(program: ProgramReleaseDto) {
@@ -57,14 +65,14 @@ export function createLiveEmbedsPagePort(input: {
 	}
 
 	async function targets(): Promise<EmbedTarget[]> {
-		const [state, library, forms] = await Promise.all([
+		const [state, listed, forms] = await Promise.all([
 			overview(),
-			input.templates.templates.list(),
+			library(),
 			input.templates.forms.list()
 		]);
 		const targets: EmbedTarget[] = [];
 		const surfaceFor = (kind: SurfaceKind) =>
-			library.surfaces.find((surface) => surface.kind === kind);
+			listed.surfaces.find((surface) => surface.kind === kind);
 
 		const program = state.currentProgramRelease;
 		const scheduleHead = head(state, 'schedule');
@@ -144,13 +152,13 @@ export function createLiveEmbedsPagePort(input: {
 		embeds: Object.freeze({
 			targets,
 			async speakerTargets(): Promise<EmbedTarget[]> {
-				const [state, library] = await Promise.all([
+				const [state, listed] = await Promise.all([
 					overview(),
-					input.templates.templates.list()
+					library()
 				]);
 				const program = state.currentProgramRelease;
 				const speakersHead = head(state, 'speakers');
-				const surface = library.surfaces.find((entry) => entry.kind === 'speaker-roster');
+				const surface = listed.surfaces.find((entry) => entry.kind === 'speaker-roster');
 				if (!program || !speakersHead || !surface) return [];
 				return releasedSpeakerCards(program).map((card) => ({
 					key: `${surface.id}:speaker:${card.id}`,
@@ -171,8 +179,8 @@ export function createLiveEmbedsPagePort(input: {
 		}),
 		templates: Object.freeze({
 			async list() {
-				const library = await input.templates.templates.list();
-				return { surfaces: library.surfaces };
+				const listed = await library();
+				return { surfaces: listed.surfaces };
 			}
 		}),
 		theme: input.templates.theme,

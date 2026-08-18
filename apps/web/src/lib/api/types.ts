@@ -405,6 +405,8 @@ export interface Submission {
 	resources?: SubmissionResource[];
 	reviewAverage?: number;
 	reviewCount: number;
+	/** Full standing when the list already paid for it; Decisions must not re-read. */
+	standing?: ScoreStanding;
 	appealCount?: number;
 }
 

@@ -28,7 +28,8 @@ import type {
 	CommunicationPurposePageView,
 	MessagePreviewIdentityView,
 	MessagePreviewRecipientPageView,
-	MessageTemplateDetailView
+	MessageTemplateDetailView,
+	MessageTemplatePageView
 } from './view-models/communications-authoring';
 
 export class CommunicationsPageLiveError extends Error {
@@ -355,18 +356,36 @@ export function createLiveCommunicationsPagePort(input: {
 		return purposesCache;
 	}
 
+	function listedTemplateDetail(
+		row: MessageTemplatePageView['rows'][number]
+	): MessageTemplateDetailView | null {
+		if (
+			row.content === undefined
+			|| row.fieldBindings === undefined
+			|| row.renderer === undefined
+			|| row.mergeRegistry === undefined
+		) {
+			return null;
+		}
+		return row as MessageTemplateDetailView;
+	}
+
 	async function templates(): Promise<MessageTemplate[]> {
 		const page = requireSuccess(
 			await input.communications.listTemplates({ channel: 'email', lifecycle: 'active' }),
 			'Message templates'
 		);
-		const details = await Promise.all(page.rows.map(async (row) => requireSuccess(
-			await input.communications.getTemplate({
-				templateId: row.revision.templateId,
-				revisionNumber: row.revision.revisionNumber
-			}),
-			'Message template'
-		)));
+		const details = await Promise.all(page.rows.map(async (row) => {
+			const listed = listedTemplateDetail(row);
+			if (listed) return listed;
+			return requireSuccess(
+				await input.communications.getTemplate({
+					templateId: row.revision.templateId,
+					revisionNumber: row.revision.revisionNumber
+				}),
+				'Message template'
+			);
+		}));
 		for (const detail of details) templateDetails.set(detail.revision.templateId, detail);
 		return details.map(messageTemplate);
 	}

@@ -260,6 +260,43 @@ describe('live Speaker Record port', () => {
 		}]);
 	});
 
+	test('two form deliverables for the same evidence share one detail read', async () => {
+		let details = 0;
+		const board = taskBoard();
+		const extra = { ...board.assignments[0]!, id: id(90) };
+		const record = await compose({
+			tasks: {
+				readBoard: async () => ({
+					kind: 'success',
+					data: { ...board, assignments: [...board.assignments, extra] },
+					correlationId: id(62)
+				})
+			},
+			intake: {
+				listForPerson: async () => ({
+					kind: 'success', correlationId: id(63),
+					data: [{ id: submissionId, title: 'Reliable agents' }]
+				}),
+				readDetail: async () => {
+					details += 1;
+					return {
+						kind: 'success', correlationId: id(65),
+						data: {
+							submissionId: taskSubmissionId,
+							submittedAtLabel: '16 Aug 2026 · 09:00 UTC',
+							answers: [
+								{ type: 'text', fieldId: id(70), fieldLabel: 'Arrival', value: 'Monday evening' }
+							]
+						}
+					};
+				}
+			}
+		}).record.read(engagementId);
+		expect(details).toBe(1);
+		expect(record?.deliverables).toHaveLength(2);
+		expect(record?.deliverables.every((entry) => entry.submission?.kind === 'form')).toBe(true);
+	});
+
 	test('refuses an incomplete Decision projection instead of calling a linked result undecided', async () => {
 		const port = compose({
 			decisions: {

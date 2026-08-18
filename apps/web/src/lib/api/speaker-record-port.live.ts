@@ -110,11 +110,11 @@ function provenance(head: EngagementHeadDto, title: string | undefined): Speaker
 
 async function formSubmission(
 	assignment: TaskAssignmentDto,
-	intake: Pick<OrganizerSubmissionsPort, 'readDetail'>
+	readDetail: OrganizerSubmissionsPort['readDetail']
 ): Promise<TaskSubmission | null> {
 	const evidence = assignment.completionEvidence;
 	if (evidence?.kind !== 'form') return null;
-	const result = await intake.readDetail(evidence.submissionId);
+	const result = await readDetail(evidence.submissionId);
 	if (result.kind !== 'success') return null;
 	const answers: SubmittedAnswer[] = result.data.answers.map((answer) => ({
 		fieldId: answer.fieldId,
@@ -165,7 +165,7 @@ async function taskSubmission(
 ): Promise<TaskSubmission | null> {
 	const evidence = assignment.completionEvidence;
 	if (evidence === null) return null;
-	if (evidence.kind === 'form') return formSubmission(assignment, input.intake);
+	if (evidence.kind === 'form') return formSubmission(assignment, input.intake.readDetail);
 	if (evidence.kind === 'file') return fileSubmission(assignment, input.files, input.downloadPath);
 	if (evidence.kind === 'acknowledged') {
 		return {
@@ -300,6 +300,14 @@ export function createLiveSpeakerRecordPort(input: {
 		}
 		const definitions = new Map(taskBoard.definitions.map((entry) => [entry.head.id, entry]));
 		const assignments = taskBoard.assignments.filter((entry) => entry.engagementId === engagementId);
+		const formDetailById = new Map<string, ReturnType<OrganizerSubmissionsPort['readDetail']>>();
+		const readFormDetail: OrganizerSubmissionsPort['readDetail'] = (submissionId) => {
+			const pending = formDetailById.get(submissionId);
+			if (pending) return pending;
+			const next = input.intake.readDetail(submissionId);
+			formDetailById.set(submissionId, next);
+			return next;
+		};
 		const deliverables: SpeakerDeliverable[] = await Promise.all(assignments.map(async (assignment) => {
 			const definition = definitions.get(assignment.taskDefinitionId);
 			if (!definition) unavailable('speaker_record_task_definition_missing', 'task definition');
@@ -307,7 +315,7 @@ export function createLiveSpeakerRecordPort(input: {
 				def: taskDefinitionView(definition),
 				assignment: taskAssignmentView(assignment),
 				submission: await taskSubmission(assignment, {
-					intake: input.intake,
+					intake: { readDetail: readFormDetail },
 					files: fileRows,
 					downloadPath: input.files.downloadPath
 				})

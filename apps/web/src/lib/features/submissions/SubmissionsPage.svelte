@@ -184,16 +184,18 @@
 		const speakers = new Map(rows.flatMap((row) => row.speakers.map((speaker) => [
 			speaker.personId ?? speaker.email, speaker
 		] as const)));
-		const keys = [...speakers.keys()].filter((key) => !(key in profiles));
+		const keys = [...speakers.keys()].filter((key) => key && !(key in profiles));
 		if (keys.length === 0) return;
 		const counts = new Map<string, number>();
 		for (const row of rows) for (const speaker of row.speakers) {
 			const key = speaker.personId ?? speaker.email;
+			if (!key) continue;
 			counts.set(key, (counts.get(key) ?? 0) + 1);
 		}
 		const batch = port.speakers.profiles
 			? await port.speakers.profiles(keys.map((key) => ({
-					key, ...speakers.get(key)!, submissionCount: counts.get(key) ?? 0
+					key, personId: speakers.get(key)?.personId, email: speakers.get(key)?.email ?? '',
+					submissionCount: counts.get(key) ?? 0
 				})))
 			: null;
 		const found = batch
@@ -426,11 +428,13 @@
 			.filter((row) => row.decision === 'accepted' && !(row.id in origins))
 			.map((row) => row.id);
 		if (ids.length === 0) return;
-		const found = await Promise.all(ids.map((id) => port.schedule.originOf(id)));
+		const found = port.schedule.originsOf
+			? await port.schedule.originsOf(ids)
+			: Object.fromEntries(
+				await Promise.all(ids.map(async (id) => [id, await port.schedule.originOf(id)] as const))
+			);
 		if (ticket !== request) return;
-		const next = { ...origins };
-		ids.forEach((id, index) => (next[id] = found[index] ?? null));
-		origins = next;
+		origins = { ...origins, ...Object.fromEntries(ids.map((id) => [id, found[id] ?? null])) };
 	}
 
 	/**
@@ -979,7 +983,7 @@
 									     never claimed to be one. -->
 									<span class="scan"
 										>{#each row.speakers as speaker, index (speaker.email)}{@const profile =
-										profiles[speaker.personId ?? speaker.email]}{@const nameRanges = rangesFor(
+							profiles[speaker.personId ?? speaker.email]}{@const nameRanges = rangesFor(
 											row.id,
 											submissionSpeakerNameField(index)
 										)}{#if index > 0}{', '}{/if}{#if profile}<ProfilePeek

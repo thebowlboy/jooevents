@@ -192,18 +192,22 @@
 	 * no address is ever asked about twice.
 	 */
 	async function loadProfiles(roster: SpeakerRow[]) {
-		const emails = [...new Set(roster.map((speaker) => speaker.email))];
-		if (emails.length === 0) return;
+		const keys = roster.map((speaker) => speaker.personId ?? speaker.email).filter(Boolean);
+		if (keys.length === 0) return;
+		const byKey = new Map(roster.map((speaker) => [speaker.personId ?? speaker.email, speaker] as const));
 		const batch = api.speakers.profiles
-			? await api.speakers.profiles(roster.map((speaker) => ({
-					key: speaker.email, personId: speaker.personId, email: speaker.email, submissionCount: 1
-				})))
+			? await api.speakers.profiles(keys.map((key) => {
+					const speaker = byKey.get(key)!;
+					return {
+						key, personId: speaker.personId, email: speaker.email, submissionCount: 1
+					};
+				}))
 			: null;
 		const found = batch
-			? emails.map((email) => batch[email] ?? null)
-			: await Promise.all(emails.map((email) => api.speakers.profile(email)));
+			? keys.map((key) => batch[key] ?? null)
+			: await Promise.all(keys.map((key) => api.speakers.profile(byKey.get(key)!.email)));
 		const next: Record<string, SpeakerProfile | null> = {};
-		emails.forEach((email, index) => (next[email] = found[index]));
+		keys.forEach((key, index) => (next[key] = found[index]));
 		profiles = next;
 	}
 
@@ -766,7 +770,7 @@
 					{:else if defs}
 						{#each visibleRows as row (row.speaker.id)}
 							{@const Engagement = engagementIcon[row.speaker.state]}
-							{@const profile = profiles[row.speaker.email]}
+							{@const profile = profiles[row.speaker.personId ?? row.speaker.email]}
 							<tr data-selected={selected.includes(row.speaker.id) ? 'true' : undefined}>
 								<td class="matrix__pick">
 									{#if row.outstanding > 0}
@@ -868,7 +872,7 @@
 			{:else if defs}
 				{#each visibleRows as row (row.speaker.id)}
 					{@const Engagement = engagementIcon[row.speaker.state]}
-					{@const profile = profiles[row.speaker.email]}
+					{@const profile = profiles[row.speaker.personId ?? row.speaker.email]}
 					<article class="card" data-selected={selected.includes(row.speaker.id) ? 'true' : undefined}>
 						<div class="card__head">
 							{#if row.outstanding > 0}

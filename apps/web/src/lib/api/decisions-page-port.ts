@@ -53,6 +53,12 @@ export interface DecisionsPagePort {
 	};
 	readonly speakers: {
 		profile(email: string): Promise<SpeakerProfile | null>;
+		profiles?(requests: readonly {
+			readonly key: string;
+			readonly personId?: string;
+			readonly email: string;
+			readonly submissionCount: number;
+		}[]): Promise<Record<string, SpeakerProfile | null>>;
 	};
 	readonly schedule: {
 		state(): Promise<ScheduleState>;

@@ -266,6 +266,7 @@ export function createLiveSubmissionsPagePort(input: {
 	readonly profileBatch?: SpeakerProfileBatchSource;
 	readonly newIdempotencyKey?: () => string;
 	readonly now?: () => number;
+	readonly profileBatch?: import('./speaker-profile-directory.live').SpeakerProfileBatchSource;
 }): SubmissionsPagePort {
 	if (
 		input.review.source.kind !== 'live'
@@ -370,7 +371,7 @@ export function createLiveSubmissionsPagePort(input: {
 			...(head !== null ? { decidedAt: head.decidedAt } : {}),
 			notified: decision?.notificationAcceptedAt != null,
 			signals: [],
-			...(standing !== undefined ? { reviewAverage: standing.value } : {}),
+			...(standing !== undefined ? { reviewAverage: standing.value, standing } : {}),
 			// An absent standing is the canonical served absence: no committed
 			// scored review exists for this submission, so zero is the truth.
 			reviewCount: standing?.reviews ?? 0
@@ -752,23 +753,38 @@ export function createLiveSubmissionsPagePort(input: {
 			 * the door never invents an identity the program does not hold.
 			 */
 			async originOf(submissionId: string): Promise<SubmissionOrigin | null> {
-				const decisions = await readDecisionRows([submissionId]);
-				const origin = decisions.get(submissionId)?.origin ?? null;
-				if (origin === null) return null;
-				const session = (await readSessionHeads())
-					.find((head) => head.id === origin.sessionId);
-				if (!session) {
-					throw new SubmissionsPageLiveError({
-						code: 'origin_session_missing',
-						reason: 'The session this submission graduated into could not be read. Try again.',
-						retryable: true
-					});
+				return (await this.originsOf([submissionId]))[submissionId] ?? null;
+			},
+			async originsOf(
+				submissionIds: readonly string[]
+			): Promise<Readonly<Record<string, SubmissionOrigin | null>>> {
+				const ids = [...new Set(submissionIds)];
+				const origins: Record<string, SubmissionOrigin | null> = {};
+				for (const id of ids) origins[id] = null;
+				if (ids.length === 0) return origins;
+				const [decisions, sessions] = await Promise.all([
+					readDecisionRows(ids),
+					readSessionHeads()
+				]);
+				const sessionsById = new Map(sessions.map((session) => [session.id, session]));
+				for (const id of ids) {
+					const origin = decisions.get(id)?.origin ?? null;
+					if (origin === null) continue;
+					const session = sessionsById.get(origin.sessionId);
+					if (!session) {
+						throw new SubmissionsPageLiveError({
+							code: 'origin_session_missing',
+							reason: 'The session this submission graduated into could not be read. Try again.',
+							retryable: true
+						});
+					}
+					origins[id] = {
+						sessionId: origin.sessionId,
+						title: session.title,
+						kind: origin.kind === 'spawned' ? 'spawn' : 'attach'
+					};
 				}
-				return {
-					sessionId: origin.sessionId,
-					title: session.title,
-					kind: origin.kind === 'spawned' ? 'spawn' : 'attach'
-				};
+				return origins;
 			}
 		}),
 		forms: Object.freeze({

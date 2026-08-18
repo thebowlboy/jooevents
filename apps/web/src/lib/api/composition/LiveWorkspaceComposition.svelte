@@ -283,6 +283,10 @@
 	// and whole-slice standings, plus the direct-entry door through the same
 	// registered operation. The tuned Decisions surface consumes the same list
 	// so both tables state one truth.
+	const profileBatch = createSpeakerProfileBatchLiveSource({
+		roster: { list: () => speakers.speakers.list() },
+		schedule: { state: () => schedule.schedule.state() }
+	});
 	const submissions = createLiveSubmissionsPagePort({
 		triage,
 		directEntry: createDirectEntryLiveClient({ manifest: initial.manifest }),
@@ -301,7 +305,8 @@
 		schedule: { state: () => schedule.schedule.state() },
 		submissions: { list: (query) => submissions.submissions.list(query) },
 		communications: communicationsAuthoring,
-		readiness: communicationsReadiness
+		readiness: communicationsReadiness,
+		profileBatch
 	});
 	// The tuned Speakers surface: the engagement snapshot joined with the same
 	// canonical Session catalog and triage clients the other surfaces share,

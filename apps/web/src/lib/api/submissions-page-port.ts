@@ -34,8 +34,12 @@ export interface SubmissionsPagePort {
 	};
 	readonly speakers: {
 		profile(email: string): Promise<SpeakerProfile | null>;
-		profiles?(requests: readonly { readonly key: string; readonly personId?: string; readonly email: string; readonly submissionCount: number }[]):
-			Promise<Record<string, SpeakerProfile | null>>;
+		profiles?(requests: readonly {
+			readonly key: string;
+			readonly personId?: string;
+			readonly email: string;
+			readonly submissionCount: number;
+		}[]): Promise<Record<string, SpeakerProfile | null>>;
 	};
 	readonly review: {
 		standings(submissionIds: readonly string[]): Promise<Record<string, ScoreStanding>>;
@@ -81,6 +85,11 @@ export interface SubmissionsPagePort {
 		 * rows that never graduated or whose graduation was reversed.
 		 */
 		originOf(submissionId: string): Promise<SubmissionOrigin | null>;
+		/**
+		 * One decision batch and one Session catalogue for a set of accepted
+		 * rows. Absent from sample ports that only expose `originOf`.
+		 */
+		originsOf?(submissionIds: readonly string[]): Promise<Readonly<Record<string, SubmissionOrigin | null>>>;
 	};
 	readonly forms: {
 		/**

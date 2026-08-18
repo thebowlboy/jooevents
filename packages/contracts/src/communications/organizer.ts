@@ -302,7 +302,15 @@ export const organizerMessageTemplateSummarySchema = z.strictObject({
   channel: z.literal('email'),
   lifecycle: z.enum(['draft', 'active', 'archived']),
   bodyMode: z.enum(['composed', 'open_canvas']),
-  subjectPreview: canonicalSingleLine(998, true)
+  subjectPreview: canonicalSingleLine(998, true),
+  /**
+   * Present when the list hydrates the current authoring document so a page
+   * load does not follow the list with one detail read per template.
+   */
+  content: organizerEmailTemplateContentSchema.optional(),
+  fieldBindings: z.array(organizerMessageTemplateFieldBindingSchema).max(500).optional(),
+  renderer: organizerCommunicationDefinitionRefSchema.optional(),
+  mergeRegistry: organizerCommunicationDefinitionRefSchema.optional()
 });
 
 export const organizerMessageTemplateDetailSchema = organizerMessageTemplateSummarySchema.extend({

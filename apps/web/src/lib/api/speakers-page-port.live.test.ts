@@ -332,22 +332,140 @@ describe('live tuned Speakers page port', () => {
 		expect(reads).toBe(0);
 	});
 
-	test('joins concurrent roster reads onto one projection', async () => {
+	test('joins concurrent roster reads onto one projection and re-reads after it settles', async () => {
 		let snapshots = 0;
+		const gate = Promise.withResolvers<void>();
+		const started = Promise.withResolvers<void>();
 		const engagements = fakeEngagements({ served: snapshot([invitedHead()]) });
 		const port = composePort({
 			engagements: {
 				...engagements,
 				async readSnapshot() {
 					snapshots += 1;
-					await Promise.resolve();
+					started.resolve();
+					await gate.promise;
 					return { kind: 'success', data: snapshot([invitedHead()]), correlationId };
 				}
 			}
 		});
-		const [first, second] = await Promise.all([port.speakers.list(), port.speakers.list()]);
+		const first = port.speakers.list();
+		await started.promise;
+		const second = port.speakers.list();
 		expect(snapshots).toBe(1);
-		expect(first).toEqual(second);
+		gate.resolve();
+		expect(await first).toEqual(await second);
+		await port.speakers.list();
+		expect(snapshots).toBe(2);
+	});
+
+	test('two submission-backed rows still pay one triage list and no per-id name reads', async () => {
+		const otherSubmission = id(31);
+		const otherEngagement = id(41);
+		const otherPerson = id(21);
+		let lists = 0;
+		let reads = 0;
+		const port = composePort({
+			engagements: fakeEngagements({
+				served: snapshot([
+					invitedHead(),
+					invitedHead({
+						id: otherEngagement,
+						personId: otherPerson,
+						submissionId: otherSubmission,
+						source: { kind: 'submission', id: otherSubmission, version: 1 }
+					})
+				]),
+				lineup: lineupSnapshot({
+					entries: [
+						{ personId, position: 0, categoryId: null, publiclyVisible: true, version: 1 },
+						{ personId: otherPerson, position: 1, categoryId: null, publiclyVisible: true, version: 1 }
+					]
+				})
+			}),
+			triage: {
+				async list() {
+					lists += 1;
+					return {
+						kind: 'success',
+						data: {
+							rows: [
+								{ source: { id: submissionId, primaryParticipantName: 'Amina Diallo' } },
+								{ source: { id: otherSubmission, primaryParticipantName: 'Bea Okonkwo' } }
+							]
+						} as never,
+						correlationId
+					};
+				},
+				async read() {
+					reads += 1;
+					throw new Error('must not read per submission');
+				}
+			},
+			contacts: fakeContacts({
+				emails: {
+					[submissionId]: 'amina@example.org',
+					[otherSubmission]: 'bea@example.org'
+				}
+			})
+		});
+		const rows = await port.speakers.list();
+		expect(lists).toBe(1);
+		expect(reads).toBe(0);
+		expect(rows.map((row) => row.name).sort()).toEqual(['Amina Diallo', 'Bea Okonkwo']);
+	});
+
+	test('a name the list does not carry is the only per-id read', async () => {
+		const otherSubmission = id(31);
+		const otherEngagement = id(41);
+		const otherPerson = id(21);
+		const reads: string[] = [];
+		const port = composePort({
+			engagements: fakeEngagements({
+				served: snapshot([
+					invitedHead(),
+					invitedHead({
+						id: otherEngagement,
+						personId: otherPerson,
+						submissionId: otherSubmission,
+						source: { kind: 'submission', id: otherSubmission, version: 1 }
+					})
+				]),
+				lineup: lineupSnapshot({
+					entries: [
+						{ personId, position: 0, categoryId: null, publiclyVisible: true, version: 1 },
+						{ personId: otherPerson, position: 1, categoryId: null, publiclyVisible: true, version: 1 }
+					]
+				})
+			}),
+			triage: {
+				async list() {
+					return {
+						kind: 'success',
+						data: {
+							rows: [{ source: { id: submissionId, primaryParticipantName: 'Amina Diallo' } }]
+						} as never,
+						correlationId
+					};
+				},
+				async read(readId) {
+					reads.push(readId);
+					return {
+						kind: 'success',
+						data: { source: { id: readId, primaryParticipantName: 'Bea Okonkwo' } } as never,
+						correlationId
+					};
+				}
+			},
+			contacts: fakeContacts({
+				emails: {
+					[submissionId]: 'amina@example.org',
+					[otherSubmission]: 'bea@example.org'
+				}
+			})
+		});
+		const rows = await port.speakers.list();
+		expect(reads).toEqual([otherSubmission]);
+		expect(rows.map((row) => row.name).sort()).toEqual(['Amina Diallo', 'Bea Okonkwo']);
 	});
 
 	test('serves one row per engagement joined with session, name, and disclosed address', async () => {
@@ -467,13 +585,16 @@ describe('live tuned Speakers page port', () => {
 		expect(await port.tasks.assignments()).toHaveLength(2);
 	});
 
-	test('joins concurrent task-board reads onto one snapshot', async () => {
+	test('joins concurrent task-board reads onto one snapshot and re-reads after it settles', async () => {
 		let boards = 0;
+		const gate = Promise.withResolvers<void>();
+		const started = Promise.withResolvers<void>();
 		const port = composePort({
 			tasks: {
 				async readBoard() {
 					boards += 1;
-					await Promise.resolve();
+					started.resolve();
+					await gate.promise;
 					return {
 						kind: 'success', correlationId,
 						data: {
@@ -485,10 +606,15 @@ describe('live tuned Speakers page port', () => {
 				}
 			} as never
 		});
-		const [defs, assignments] = await Promise.all([port.tasks.defs(), port.tasks.assignments()]);
+		const defs = port.tasks.defs();
+		await started.promise;
+		const assignments = port.tasks.assignments();
 		expect(boards).toBe(1);
-		expect(defs).toEqual([]);
-		expect(assignments).toEqual([]);
+		gate.resolve();
+		expect(await defs).toEqual([]);
+		expect(await assignments).toEqual([]);
+		await port.tasks.defs();
+		expect(boards).toBe(2);
 	});
 
 	test('projects a stored cancellation request as cancel_requested and serves its note', async () => {

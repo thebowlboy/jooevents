@@ -24,6 +24,7 @@ import type {
 	TemplateArtifactLiveClient,
 	TemplateArtifactLiveResult
 } from './operations/template-artifacts-live';
+import { createInFlightSlot, shareInFlight } from './in-flight';
 
 export interface TemplateModelDraftPort {
 	choices(): Promise<ModelChoice[]>;
@@ -156,10 +157,13 @@ export function createLiveTemplatesPagePort(input: {
 	const mintMessageTemplate = input.communications === undefined
 		? undefined
 		: createLiveMessageTemplateMint({ communications: input.communications });
+	const artifactsSlot = createInFlightSlot<readonly TemplateArtifactSnapshotDto[]>();
 	async function readArtifacts(): Promise<readonly TemplateArtifactSnapshotDto[]> {
-		const result = await input.artifacts.list();
-		if (result.kind === 'success') return result.data;
-		throw new TemplatesPageLiveError(failure(result));
+		return shareInFlight(artifactsSlot, async () => {
+			const result = await input.artifacts.list();
+			if (result.kind === 'success') return result.data;
+			throw new TemplatesPageLiveError(failure(result));
+		});
 	}
 
 	async function list() {

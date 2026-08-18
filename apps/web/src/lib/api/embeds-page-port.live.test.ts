@@ -97,6 +97,55 @@ function releaseState(): ReleaseOverviewDto {
 }
 
 describe('live Embeds page adapter', () => {
+	test('targets, speaker targets, and the template list share one overview and one library read', async () => {
+		let overviews = 0;
+		let libraries = 0;
+		const overviewGate = Promise.withResolvers<void>();
+		const libraryGate = Promise.withResolvers<void>();
+		const overviewStarted = Promise.withResolvers<void>();
+		const libraryStarted = Promise.withResolvers<void>();
+		const release: ReleaseLiveClient = {
+			...unreviewed,
+			async overview() {
+				overviews += 1;
+				overviewStarted.resolve();
+				await overviewGate.promise;
+				return { kind: 'success', data: releaseState(), correlationId: 'overview-correlation' };
+			},
+			async mutate() { throw new Error('unused'); }
+		};
+		const sample = createSampleTemplatesPagePort(sampleWorkspaceGateway.api);
+		const templates = {
+			...sample,
+			templates: {
+				...sample.templates,
+				async list() {
+					libraries += 1;
+					libraryStarted.resolve();
+					await libraryGate.promise;
+					return sample.templates.list();
+				}
+			}
+		};
+		const port = createLiveEmbedsPagePort({
+			release: createReleaseWorkspacePort(release),
+			templates
+		});
+		const targets = port.embeds.targets();
+		const speakers = port.embeds.speakerTargets();
+		const library = port.templates.list();
+		await Promise.all([overviewStarted.promise, libraryStarted.promise]);
+		expect(overviews).toBe(1);
+		expect(libraries).toBe(1);
+		overviewGate.resolve();
+		libraryGate.resolve();
+		expect((await targets).length).toBeGreaterThan(0);
+		expect((await speakers).length).toBeGreaterThan(0);
+		expect((await library).surfaces.length).toBeGreaterThan(0);
+		expect(overviews).toBe(1);
+		expect(libraries).toBe(1);
+	});
+
 	test('catalogues only released facts and commits the surface-head allowlist', async () => {
 		let state = releaseState();
 		const mutations: ReleaseAuthorInput[] = [];

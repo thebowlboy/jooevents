@@ -1424,6 +1424,50 @@ export class SQLiteOrganizerCommunicationAuthoringRepository implements Organize
     };
   }
 
+  private templateListProjection(row: {
+    readonly template_id: string;
+    readonly template_key: string;
+    readonly template_name: string;
+    readonly lifecycle: 'draft' | 'active' | 'archived';
+    readonly purpose_revision_id: string;
+    readonly template_revision_id: string;
+    readonly revision_number: number;
+    readonly digest_sha256: string;
+    readonly content_payload_ref_id: string;
+    readonly field_bindings_payload_ref_id: string;
+    readonly renderer_key: string;
+    readonly renderer_version: number;
+    readonly renderer_digest_sha256: string;
+    readonly merge_registry_key: string;
+    readonly merge_registry_version: number;
+    readonly merge_registry_digest_sha256: string;
+  }, scope: OrganizerCommunicationScope) {
+    const summary = this.templateProjection(row, scope);
+    const contentEnvelope = this.openPayload({
+      scope, payloadRefId: row.content_payload_ref_id, kind: 'template_content'
+    });
+    const bindingEnvelope = this.openPayload({
+      scope, payloadRefId: row.field_bindings_payload_ref_id, kind: 'template_field_bindings'
+    });
+    if (contentEnvelope.payloadKind !== 'template_content'
+        || bindingEnvelope.payloadKind !== 'template_field_bindings') {
+      throw new SQLiteOrganizerCommunicationAuthoringError('data_corrupt');
+    }
+    return {
+      ...summary,
+      content: contentEnvelope.value,
+      fieldBindings: bindingEnvelope.value,
+      renderer: {
+        reference: { key: row.renderer_key, version: row.renderer_version },
+        definitionDigestSha256: row.renderer_digest_sha256
+      },
+      mergeRegistry: {
+        reference: { key: row.merge_registry_key, version: row.merge_registry_version },
+        definitionDigestSha256: row.merge_registry_digest_sha256
+      }
+    };
+  }
+
   listTemplates(scope: OrganizerCommunicationScope, rawInput: unknown): OrganizerCommunicationCanonicalResult {
     let input: ReturnType<typeof organizerMessageTemplateListInputSchema.parse>;
     let after: string | undefined;
@@ -1437,7 +1481,10 @@ export class SQLiteOrganizerCommunicationAuthoringRepository implements Organize
     const values: Array<string | number> = [scope.workspaceId, scope.eventId];
     let sql = `
       SELECT t.template_id,t.template_key,t.template_name,t.lifecycle,t.purpose_revision_id,
-             r.template_revision_id,r.revision_number,r.digest_sha256,r.content_payload_ref_id
+             r.template_revision_id,r.revision_number,r.digest_sha256,r.content_payload_ref_id,
+             r.field_bindings_payload_ref_id,r.renderer_key,r.renderer_version,
+             r.renderer_digest_sha256,r.merge_registry_key,r.merge_registry_version,
+             r.merge_registry_digest_sha256
         FROM message_templates t
         JOIN message_template_revisions r
           ON r.workspace_id=t.workspace_id AND r.event_id=t.event_id
@@ -1465,12 +1512,19 @@ export class SQLiteOrganizerCommunicationAuthoringRepository implements Organize
       revision_number: number;
       digest_sha256: string;
       content_payload_ref_id: string;
+      field_bindings_payload_ref_id: string;
+      renderer_key: string;
+      renderer_version: number;
+      renderer_digest_sha256: string;
+      merge_registry_key: string;
+      merge_registry_version: number;
+      merge_registry_digest_sha256: string;
     }, any[]>(sql).all(...values);
     const hasMore = rows.length > limit;
     const selected = rows.slice(0, limit);
     const page = organizerMessageTemplatePageSchema.parse({
       schemaVersion: 1,
-      rows: selected.map((row) => this.templateProjection(row, scope)),
+      rows: selected.map((row) => this.templateListProjection(row, scope)),
       page: hasMore
         ? { hasMore: true, nextCursor: encodeCursor('templates', selected.at(-1)!.template_id) }
         : { hasMore: false }

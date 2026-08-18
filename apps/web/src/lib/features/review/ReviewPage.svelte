@@ -356,7 +356,7 @@
 		const speakers = new Map(rows.flatMap((row) => row.submission.speakers.map((speaker) => [
 			speaker.id ?? speaker.email ?? speaker.name, speaker
 		] as const)));
-		const keys = [...speakers.keys()];
+		const keys = [...speakers.keys()].filter(Boolean);
 		if (keys.length === 0) return;
 		const counts = new Map<string, number>();
 		for (const row of rows) for (const speaker of row.submission.speakers) {
@@ -373,7 +373,7 @@
 			? keys.map((key) => batch[key] ?? null)
 			: await Promise.all(keys.map((key) => {
 					const email = speakers.get(key)?.email;
-					return email ? api.speakers.profile(email) : null;
+					return email ? api.speakers.profile(email) : Promise.resolve(null);
 				}));
 		const next: Record<string, SpeakerProfile | null> = {};
 		keys.forEach((key, index) => (next[key] = found[index]));
