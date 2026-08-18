@@ -1,10 +1,12 @@
 <script lang="ts">
   let {
     busy = false,
+    disabled = false,
+    disabledReason,
     label,
     quiet = false,
     onclick
-  }: { busy?: boolean; label: string; quiet?: boolean; onclick: () => void } = $props();
+  }: { busy?: boolean; disabled?: boolean; disabledReason?: string; label: string; quiet?: boolean; onclick: () => void } = $props();
 </script>
 
 <!-- One control, two weights (owner revision 2026-08-15). On the resting card
@@ -15,7 +17,8 @@
   class="google-button"
   class:google-button--quiet={quiet}
   type="button"
-  disabled={busy}
+  disabled={busy || disabled}
+  title={disabledReason}
   aria-busy={busy}
   {onclick}>
   <span class="google-button__icon" aria-hidden="true">

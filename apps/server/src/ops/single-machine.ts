@@ -34,7 +34,7 @@ export interface SingleMachineInstallResult {
   readonly databaseStatus: 'created' | 'current';
   readonly environmentFile: string;
   readonly serviceFile: string;
-  readonly callbackUrl: string;
+  readonly callbackUrl: string | null;
   readonly nextAction: string | null;
 }
 
@@ -199,7 +199,9 @@ function generatedEnvironment(input: {
   readonly logDirectory: string;
   readonly baseUrl: string;
   readonly ownerEmail: string;
-  readonly googleClientId: string;
+  readonly operatorAuthMode: 'magic_link' | 'google_and_magic_link';
+  readonly reviewEntryMode: 'disabled' | 'organizer';
+  readonly googleClientId?: string;
   readonly admissionMode: 'pending' | 'workspace_domain' | 'reservation_only';
   readonly googleHostedDomain?: string;
   readonly port: number;
@@ -215,9 +217,13 @@ function generatedEnvironment(input: {
     JOOEVENTS_IDEMPOTENCY_KEYS: `1:${key()}`,
     JOOEVENTS_CLASSIFIED_PAYLOAD_KEYS: `1:${key()}`,
     JOOEVENTS_PERSISTENT_HMAC_KEYS: `1:${key()}`,
-    JOOEVENTS_GOOGLE_CLIENT_ID: input.googleClientId,
-    JOOEVENTS_GOOGLE_CLIENT_SECRET: PLACEHOLDER,
-    JOOEVENTS_GOOGLE_CALLBACK_VERIFIED: 'false',
+    JOOEVENTS_OPERATOR_AUTH_MODE: input.operatorAuthMode,
+    JOOEVENTS_REVIEW_ENTRY_MODE: input.reviewEntryMode,
+    ...(input.operatorAuthMode === 'google_and_magic_link' ? {
+      JOOEVENTS_GOOGLE_CLIENT_ID: input.googleClientId!,
+      JOOEVENTS_GOOGLE_CLIENT_SECRET: PLACEHOLDER,
+      JOOEVENTS_GOOGLE_CALLBACK_VERIFIED: 'false'
+    } : {}),
     JOOEVENTS_ADMISSION_MODE: input.admissionMode,
     ...(input.googleHostedDomain ? { JOOEVENTS_GOOGLE_HOSTED_DOMAIN: input.googleHostedDomain } : {}),
     JOOEVENTS_BOOTSTRAP_OWNER_EMAIL: input.ownerEmail,
@@ -328,7 +334,9 @@ function environmentMatchesInstall(environment: Readonly<Record<string, string>>
   readonly logDirectory: string;
   readonly baseUrl: string;
   readonly ownerEmail: string;
-  readonly googleClientId: string;
+  readonly operatorAuthMode: 'magic_link' | 'google_and_magic_link';
+  readonly reviewEntryMode: 'disabled' | 'organizer';
+  readonly googleClientId?: string;
   readonly admissionMode: string;
   readonly googleHostedDomain?: string;
   readonly port: number;
@@ -339,6 +347,8 @@ function environmentMatchesInstall(environment: Readonly<Record<string, string>>
     && environment.JOOEVENTS_LOG_DIRECTORY === input.logDirectory
     && environment.JOOEVENTS_BASE_URL === input.baseUrl
     && environment.JOOEVENTS_BOOTSTRAP_OWNER_EMAIL === input.ownerEmail
+    && environment.JOOEVENTS_OPERATOR_AUTH_MODE === input.operatorAuthMode
+    && environment.JOOEVENTS_REVIEW_ENTRY_MODE === input.reviewEntryMode
     && environment.JOOEVENTS_GOOGLE_CLIENT_ID === input.googleClientId
     && environment.JOOEVENTS_ADMISSION_MODE === input.admissionMode
     && environment.JOOEVENTS_GOOGLE_HOSTED_DOMAIN === input.googleHostedDomain
@@ -359,7 +369,9 @@ export function installSingleMachine(input: {
   readonly bunExecutable: string;
   readonly baseUrl: string;
   readonly ownerEmail: string;
-  readonly googleClientId: string;
+  readonly operatorAuthMode?: 'magic_link' | 'google_and_magic_link';
+  readonly reviewEntryMode?: 'disabled' | 'organizer';
+  readonly googleClientId?: string;
   readonly admissionMode: 'pending' | 'workspace_domain' | 'reservation_only';
   readonly googleHostedDomain?: string;
   readonly port: number;
@@ -383,6 +395,11 @@ export function installSingleMachine(input: {
   const baseUrl = new URL(input.baseUrl);
   if (baseUrl.origin !== input.baseUrl) throw new TypeError('Base URL must be one canonical origin.');
   if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65_535) throw new TypeError('Port is invalid.');
+  const operatorAuthMode = input.operatorAuthMode ?? 'google_and_magic_link';
+  const reviewEntryMode = input.reviewEntryMode ?? 'disabled';
+  if (operatorAuthMode === 'google_and_magic_link' && !input.googleClientId) {
+    throw new TypeError('Google client ID is required when Google sign-in is enabled.');
+  }
 
   const desiredEnvironment = generatedEnvironment({
     dataDirectory,
@@ -390,7 +407,9 @@ export function installSingleMachine(input: {
     logDirectory,
     baseUrl: input.baseUrl,
     ownerEmail: input.ownerEmail,
-    googleClientId: input.googleClientId,
+    operatorAuthMode,
+    reviewEntryMode,
+    ...(input.googleClientId ? { googleClientId: input.googleClientId } : {}),
     admissionMode: input.admissionMode,
     ...(input.googleHostedDomain ? { googleHostedDomain: input.googleHostedDomain } : {}),
     port: input.port
@@ -413,7 +432,7 @@ export function installSingleMachine(input: {
   let existing = false;
   if (existsSync(input.environmentFile)) {
     const environment = readSingleMachineEnvironmentFile(input.environmentFile);
-    if (!environmentMatchesInstall(environment, input)) {
+    if (!environmentMatchesInstall(environment, { ...input, operatorAuthMode, reviewEntryMode })) {
       throw new TypeError('The existing environment file belongs to a different installation request.');
     }
     existing = true;
@@ -459,8 +478,11 @@ export function installSingleMachine(input: {
     databaseStatus,
     environmentFile: input.environmentFile,
     serviceFile: input.serviceFile,
-    callbackUrl: `${input.baseUrl}/api/auth/callback/google`,
-    nextAction: readSingleMachineEnvironmentFile(input.environmentFile).JOOEVENTS_GOOGLE_CLIENT_SECRET === PLACEHOLDER
+    callbackUrl: operatorAuthMode === 'google_and_magic_link'
+      ? `${input.baseUrl}/api/auth/callback/google`
+      : null,
+    nextAction: operatorAuthMode === 'google_and_magic_link'
+      && readSingleMachineEnvironmentFile(input.environmentFile).JOOEVENTS_GOOGLE_CLIENT_SECRET === PLACEHOLDER
       ? 'Set JOOEVENTS_GOOGLE_CLIENT_SECRET directly in the owner-only environment file.'
       : null
   });
@@ -628,15 +650,25 @@ export function doctorSingleMachine(input: {
         && status.migration.migrationId === terminal.migrationId ? 'passed' : 'failed',
       summary: 'The SQLite database is at the supported frozen release floor.'
     });
-    checks.push({
-      id: 'auth.google_callback',
-      status: placeholders.includes('JOOEVENTS_GOOGLE_CLIENT_SECRET')
-        || environment.JOOEVENTS_GOOGLE_CALLBACK_VERIFIED !== 'true' ? 'action_required' : 'passed',
-      summary: environment.JOOEVENTS_GOOGLE_CALLBACK_VERIFIED === 'true'
-        ? 'Google callback configuration is locally recorded as provider-verified.'
-        : 'Google callback configuration needs provider-console confirmation.',
-      detail: `${config.baseUrl}/api/auth/callback/google`
-    });
+    if (config.operatorAuthMode === 'google_and_magic_link') {
+      checks.push({
+        id: 'auth.google_callback',
+        status: placeholders.includes('JOOEVENTS_GOOGLE_CLIENT_SECRET')
+          || environment.JOOEVENTS_GOOGLE_CALLBACK_VERIFIED !== 'true' ? 'action_required' : 'passed',
+        summary: environment.JOOEVENTS_GOOGLE_CALLBACK_VERIFIED === 'true'
+          ? 'Google callback configuration is locally recorded as provider-verified.'
+          : 'Google callback configuration needs provider-console confirmation.',
+        detail: `${config.baseUrl}/api/auth/callback/google`
+      });
+    } else {
+      checks.push({
+        id: 'auth.operator_entry',
+        status: 'passed',
+        summary: config.reviewEntryMode === 'organizer'
+          ? 'Magic-link auth and explicit organizer evaluation entry are configured.'
+          : 'Magic-link auth is configured without Google.'
+      });
+    }
     checks.push({
       id: 'email.provider',
       status: environment.JOOEVENTS_EMAIL_PROVIDER_MODE === 'disabled' ? 'passed' : 'action_required',

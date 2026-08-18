@@ -243,6 +243,17 @@
     gap: var(--je-space-3);
     text-align: start;
   }
+
+  .entry-state .entry-review {
+    display: grid;
+    gap: var(--je-space-2);
+    padding: var(--je-space-4);
+    border: 1px solid var(--je-color-border);
+    border-radius: var(--je-radius-md);
+    background: var(--je-color-action-soft);
+  }
+  .entry-state .entry-review .ui-button { justify-content: center; }
+  .entry-state .entry-review p { margin: 0; color: var(--je-color-text-muted); font-size: var(--je-font-size-sm); }
   .entry-state .entry-link .ui-button { justify-content: center; }
 
   /* Title and helper belong to each other, so they sit tighter than the group's
@@ -402,7 +413,8 @@
     .google-button:active:not(:disabled) { transform: translateY(0); }
   }
   .google-button:focus-visible { outline: 3px solid var(--je-color-focus); outline-offset: 3px; }
-  .google-button:disabled { cursor: wait; opacity: .72; box-shadow: none; }
+  .google-button:disabled { cursor: not-allowed; opacity: .58; box-shadow: none; }
+  .google-button[aria-busy="true"]:disabled { cursor: wait; opacity: .72; }
   .google-button__icon { position: absolute; left: .9rem; display: grid; width: 1.125rem; height: 1.125rem; }
   .google-button svg { width: 100%; height: 100%; }
   .google-button__spinner { position: absolute; right: 1rem; width: 1rem; height: 1rem; border: 2px solid #dadce0; border-top-color: #4285f4; border-radius: 50%; animation: je-spin var(--je-duration-spin) linear infinite; }

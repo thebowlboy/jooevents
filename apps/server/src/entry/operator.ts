@@ -20,7 +20,7 @@ function flag(arguments_: readonly string[], name: string): string | undefined {
 function usage(): never {
   process.stderr.write([
     'Usage:',
-    '  jooevents-operator install --data-directory ABS --backup-directory ABS --log-directory ABS --environment-file ABS --service-file ABS --service-kind systemd|launchd --base-url ORIGIN --owner-email EMAIL --google-client-id ID [--admission-mode pending|workspace_domain|reservation_only] [--google-hosted-domain DOMAIN] [--port N] [--service-user USER --service-group GROUP] [--allow-rehearsal]',
+    '  jooevents-operator install --data-directory ABS --backup-directory ABS --log-directory ABS --environment-file ABS --service-file ABS --service-kind systemd|launchd --base-url ORIGIN --owner-email EMAIL [--operator-auth-mode magic_link|google_and_magic_link] [--review-entry-mode disabled|organizer] [--google-client-id ID] [--admission-mode pending|workspace_domain|reservation_only] [--google-hosted-domain DOMAIN] [--port N] [--service-user USER --service-group GROUP] [--allow-rehearsal]',
     '  jooevents-operator doctor --environment-file ABS [--allow-rehearsal]',
     '  jooevents-operator verify --environment-file ABS [--allow-rehearsal]',
     '  jooevents-operator upgrade --environment-file ABS --expected-database-id ID --max-backup-bytes N [--allow-rehearsal]',
@@ -46,6 +46,8 @@ if (command === 'install') {
   const baseUrl = flag(arguments_, '--base-url');
   const ownerEmail = flag(arguments_, '--owner-email');
   const googleClientId = flag(arguments_, '--google-client-id');
+  const operatorAuthMode = flag(arguments_, '--operator-auth-mode') ?? 'google_and_magic_link';
+  const reviewEntryMode = flag(arguments_, '--review-entry-mode') ?? 'disabled';
   const admissionMode = flag(arguments_, '--admission-mode') ?? 'reservation_only';
   const googleHostedDomain = flag(arguments_, '--google-hosted-domain');
   const port = Number(flag(arguments_, '--port') ?? '5176');
@@ -53,8 +55,11 @@ if (command === 'install') {
   const serviceGroup = flag(arguments_, '--service-group');
   if (
     !dataDirectory || !backupDirectory || !logDirectory || !environmentFile || !serviceFile ||
-    !baseUrl || !ownerEmail || !googleClientId || !['systemd', 'launchd'].includes(serviceKind ?? '') ||
-    !['pending', 'workspace_domain', 'reservation_only'].includes(admissionMode)
+    !baseUrl || !ownerEmail || !['systemd', 'launchd'].includes(serviceKind ?? '') ||
+    !['pending', 'workspace_domain', 'reservation_only'].includes(admissionMode) ||
+    !['magic_link', 'google_and_magic_link'].includes(operatorAuthMode) ||
+    !['disabled', 'organizer'].includes(reviewEntryMode) ||
+    (operatorAuthMode === 'google_and_magic_link' && !googleClientId)
   ) usage();
   const result = installSingleMachine({
     releaseRoot,
@@ -67,7 +72,9 @@ if (command === 'install') {
     bunExecutable: process.execPath,
     baseUrl,
     ownerEmail,
-    googleClientId,
+    operatorAuthMode: operatorAuthMode as 'magic_link' | 'google_and_magic_link',
+    reviewEntryMode: reviewEntryMode as 'disabled' | 'organizer',
+    ...(googleClientId ? { googleClientId } : {}),
     admissionMode: admissionMode as 'pending' | 'workspace_domain' | 'reservation_only',
     ...(googleHostedDomain ? { googleHostedDomain } : {}),
     port,

@@ -19,6 +19,7 @@ export interface OperatorEntryDependencies {
 		readonly provider: 'google';
 		readonly returnTo: string;
 	}) => Promise<ApiResult<{ readonly redirecting: true }>>;
+	readonly startReviewOrganizer?: () => Promise<ApiResult<{ readonly redirecting: true }>>;
 	readonly signOut: () => Promise<ApiResult<{ readonly signedOut: true }>>;
 	/** Registered addresses only; the acknowledgement is identical either way. */
 	readonly requestSignInLink: (input: {

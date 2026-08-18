@@ -13,8 +13,10 @@ const environmentSchema = z.object({
   JOOEVENTS_IDEMPOTENCY_KEYS: z.string().optional(),
   JOOEVENTS_CLASSIFIED_PAYLOAD_KEYS: z.string().optional(),
   JOOEVENTS_PERSISTENT_HMAC_KEYS: z.string().optional(),
-  JOOEVENTS_GOOGLE_CLIENT_ID: z.string().min(1),
-  JOOEVENTS_GOOGLE_CLIENT_SECRET: z.string().min(1),
+  JOOEVENTS_OPERATOR_AUTH_MODE: z.enum(['magic_link', 'google_and_magic_link']).default('google_and_magic_link'),
+  JOOEVENTS_REVIEW_ENTRY_MODE: z.enum(['disabled', 'organizer']).default('disabled'),
+  JOOEVENTS_GOOGLE_CLIENT_ID: z.string().min(1).optional(),
+  JOOEVENTS_GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),
   JOOEVENTS_ADMISSION_MODE: z.enum(['pending', 'workspace_domain', 'reservation_only']),
   JOOEVENTS_GOOGLE_HOSTED_DOMAIN: z.string().min(1).optional(),
   JOOEVENTS_BOOTSTRAP_OWNER_EMAIL: z.email(),
@@ -49,8 +51,10 @@ export interface ServerConfig {
   readonly authSecrets: readonly AuthSecret[];
   /** Present only for configured retained runtimes; contains no enumerable key material. */
   readonly durableCryptoProfiles?: DurableCryptoProfileComposition;
-  readonly googleClientId: string;
-  readonly googleClientSecret: string;
+  readonly operatorAuthMode: 'magic_link' | 'google_and_magic_link';
+  readonly reviewEntryMode: 'disabled' | 'organizer';
+  readonly googleClientId?: string;
+  readonly googleClientSecret?: string;
   readonly admissionMode: 'pending' | 'workspace_domain' | 'reservation_only';
   readonly googleHostedDomain?: string;
   readonly bootstrapOwnerEmail: string;
@@ -154,6 +158,21 @@ function parseConfig(
   if (env.JOOEVENTS_ADMISSION_MODE === 'workspace_domain' && !env.JOOEVENTS_GOOGLE_HOSTED_DOMAIN) {
     issues.push('JOOEVENTS_GOOGLE_HOSTED_DOMAIN is required for workspace_domain admission');
   }
+  if (env.JOOEVENTS_OPERATOR_AUTH_MODE === 'google_and_magic_link'
+      && (!env.JOOEVENTS_GOOGLE_CLIENT_ID || !env.JOOEVENTS_GOOGLE_CLIENT_SECRET)) {
+    issues.push('JOOEVENTS_GOOGLE_CLIENT_ID and JOOEVENTS_GOOGLE_CLIENT_SECRET are required when Google sign-in is enabled');
+  }
+  if (env.JOOEVENTS_OPERATOR_AUTH_MODE === 'magic_link'
+      && (env.JOOEVENTS_GOOGLE_CLIENT_ID || env.JOOEVENTS_GOOGLE_CLIENT_SECRET || env.JOOEVENTS_GOOGLE_HOSTED_DOMAIN)) {
+    issues.push('Google provider settings must be omitted in magic_link operator auth mode');
+  }
+  if (env.JOOEVENTS_ADMISSION_MODE === 'workspace_domain' && env.JOOEVENTS_OPERATOR_AUTH_MODE !== 'google_and_magic_link') {
+    issues.push('workspace_domain admission requires Google sign-in');
+  }
+  if (env.JOOEVENTS_REVIEW_ENTRY_MODE === 'organizer'
+      && (env.JOOEVENTS_OPERATOR_AUTH_MODE !== 'magic_link' || env.JOOEVENTS_ADMISSION_MODE !== 'reservation_only')) {
+    issues.push('organizer review entry requires magic_link auth with reservation_only admission');
+  }
   if (env.JOOEVENTS_API_KEY_DEFAULT_TTL_DAYS > env.JOOEVENTS_API_KEY_MAX_TTL_DAYS) {
     issues.push('JOOEVENTS_API_KEY_DEFAULT_TTL_DAYS cannot exceed JOOEVENTS_API_KEY_MAX_TTL_DAYS');
   }
@@ -176,8 +195,10 @@ function parseConfig(
     trustedOrigins,
     authSecrets: secrets,
     ...(durableCryptoProfiles === undefined ? {} : { durableCryptoProfiles }),
-    googleClientId: env.JOOEVENTS_GOOGLE_CLIENT_ID,
-    googleClientSecret: env.JOOEVENTS_GOOGLE_CLIENT_SECRET,
+    operatorAuthMode: env.JOOEVENTS_OPERATOR_AUTH_MODE,
+    reviewEntryMode: env.JOOEVENTS_REVIEW_ENTRY_MODE,
+    ...(env.JOOEVENTS_GOOGLE_CLIENT_ID ? { googleClientId: env.JOOEVENTS_GOOGLE_CLIENT_ID } : {}),
+    ...(env.JOOEVENTS_GOOGLE_CLIENT_SECRET ? { googleClientSecret: env.JOOEVENTS_GOOGLE_CLIENT_SECRET } : {}),
     admissionMode: env.JOOEVENTS_ADMISSION_MODE,
     ...(env.JOOEVENTS_GOOGLE_HOSTED_DOMAIN ? { googleHostedDomain: env.JOOEVENTS_GOOGLE_HOSTED_DOMAIN } : {}),
     bootstrapOwnerEmail: env.JOOEVENTS_BOOTSTRAP_OWNER_EMAIL,

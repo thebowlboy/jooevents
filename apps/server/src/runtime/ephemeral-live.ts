@@ -1816,9 +1816,14 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
           readonly token: string;
         }) => Promise<void>)
       | null = null;
+    let reviewOrganizerIssuedUrl: string | undefined;
     const auth = createAuth(input.config, createSQLiteBetterAuthDatabase(database.sqlite), {
       magicLink: {
         deliver: async (link) => {
+          if (input.config.reviewEntryMode === 'organizer'
+              && link.email.trim().toLowerCase() === input.config.bootstrapOwnerEmail.trim().toLowerCase()) {
+            reviewOrganizerIssuedUrl = link.url;
+          }
           if (workspaceSignInLinkDeliver !== null) await workspaceSignInLinkDeliver(link);
         }
       }
@@ -5613,11 +5618,38 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
         });
       }
     });
+    const resolveWorkspaceIssuedLink = (email: string): string | undefined => {
+      const row = database.sqlite.query<{ readonly release_id: string }, [string, string]>(`
+        SELECT release_id FROM communication_outbound_delivery_heads
+         WHERE template_revision_ref_id = ? AND address_lookup_fingerprint_sha256 = ?
+         ORDER BY rowid DESC LIMIT 1
+      `).get(
+        WORKSPACE_SIGN_IN_LINK_TEMPLATE_REVISION_REF_ID,
+        workspaceSignInLinkAddressFingerprint(email)
+      );
+      const release = row ? communicationMessageReleases.read(row.release_id) : undefined;
+      return release
+        ? /(https?:\/\/\S+\/a\/[A-Za-z0-9_-]+)/.exec(release.envelope.textBody)?.[1]
+        : undefined;
+    };
     const app = createHttpApp({
       auth,
       accessContext,
       workspaceId,
       baseUrl: input.config.baseUrl,
+      operatorSignInMethods: input.config.operatorAuthMode === 'magic_link'
+        ? ['magic_link']
+        : ['magic_link', 'google'],
+      ...(input.config.reviewEntryMode === 'organizer' ? {
+        reviewOrganizerEntry: {
+          email: input.config.bootstrapOwnerEmail,
+          resolveIssuedUrl: () => {
+            const url = reviewOrganizerIssuedUrl;
+            reviewOrganizerIssuedUrl = undefined;
+            return url;
+          }
+        }
+      } : {}),
       operatorOperations: { operations, evidence },
       acceleventsExportDownload: Object.freeze({
         async download(downloadInput: {
@@ -7093,23 +7125,9 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
         try { payload = await context.req.json(); } catch { payload = undefined; }
         const email = (payload as { readonly email?: unknown } | undefined)?.email;
         if (typeof email !== 'string') return context.json({ kind: 'none' as const });
-        const row = database.sqlite.query<{
-          readonly release_id: string;
-        }, [string, string]>(`
-          SELECT release_id FROM communication_outbound_delivery_heads
-           WHERE template_revision_ref_id = ? AND address_lookup_fingerprint_sha256 = ?
-           ORDER BY rowid DESC LIMIT 1
-        `).get(
-          WORKSPACE_SIGN_IN_LINK_TEMPLATE_REVISION_REF_ID,
-          workspaceSignInLinkAddressFingerprint(email)
-        );
-        const release = row ? communicationMessageReleases.read(row.release_id) : undefined;
-        // The emailed naked link is the short `${origin}/a/<token>` form.
-        const match = release
-          ? /(https?:\/\/\S+\/a\/[A-Za-z0-9_-]+)/.exec(release.envelope.textBody)
-          : null;
-        if (!match) return context.json({ kind: 'none' as const });
-        return context.json({ kind: 'issued' as const, url: match[1]! });
+        const url = resolveWorkspaceIssuedLink(email);
+        if (!url) return context.json({ kind: 'none' as const });
+        return context.json({ kind: 'issued' as const, url });
       });
     }
     // Owner-lane external-effect executors (runbook §4): mounted ONLY when a

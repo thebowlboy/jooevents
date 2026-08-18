@@ -26,7 +26,7 @@
 
   const title = $derived(state.kind === 'link_requested'
     ? 'Check your email · JooEvents'
-    : state.kind === 'anonymous' || state.kind === 'starting_google'
+    : state.kind === 'anonymous' || state.kind === 'starting_google' || state.kind === 'starting_review'
     ? 'Sign in · JooEvents'
     : state.kind === 'provisioning' ? 'Preparing your workspace · JooEvents'
     : state.kind === 'pending_review' ? 'Access under review · JooEvents'
@@ -60,7 +60,7 @@
     const unsubscribe = controller.subscribe(async (next) => {
       state = next;
       const target = focusNext;
-      if (!target || next.kind === 'resolving' || next.kind === 'starting_google') return;
+      if (!target || next.kind === 'resolving' || next.kind === 'starting_google' || next.kind === 'starting_review') return;
       // Returning to the card puts the caret back in the field; a rejected
       // address returns focus to the field to correct; every other transition
       // speaks through its new heading. Failures announce as alerts instead.
@@ -104,6 +104,7 @@
   <EntryState
     {state}
     onGoogle={() => userAction(() => controller.startGoogle())}
+    onReviewOrganizer={() => userAction(() => controller.startReviewOrganizer())}
     onRetry={() => userAction(() => controller.resolve())}
     onCheck={() => void controller.checkStatus()}
     onSignOut={() => userAction(() => controller.signOut())}

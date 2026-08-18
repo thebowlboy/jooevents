@@ -21,7 +21,13 @@ export const safeWorkspaceSchema = z.object({
 });
 
 export const accessContextSchema = z.discriminatedUnion('state', [
-  z.strictObject({ state: z.literal('anonymous') }),
+  z.strictObject({
+    state: z.literal('anonymous'),
+    /** Omitted only by retained/older servers; current servers name available entry methods. */
+    signInMethods: z.array(z.enum(['magic_link', 'google'])).min(1).max(2).optional(),
+    /** Explicit evaluator-only entry; absent on ordinary installations. */
+    reviewOrganizerEntry: z.boolean().optional()
+  }),
   z.strictObject({
     state: z.literal('provisioning'),
     retryAfterSeconds: z.number().int().positive(),

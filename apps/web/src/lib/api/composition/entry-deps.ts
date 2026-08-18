@@ -92,6 +92,12 @@ export const entryDependencies: EntryDependencies = {
 			assign(input.returnTo);
 			return { kind: 'success', data: { redirecting: true } };
 		},
+		async startReviewOrganizer(): Promise<ApiResult<{ readonly redirecting: true }>> {
+			await latency();
+			remember(() => setOperatorEntryAuthCookie('active'));
+			assign('/app');
+			return { kind: 'success', data: { redirecting: true } };
+		},
 		async signOut(): Promise<ApiResult<{ readonly signedOut: true }>> {
 			await latency();
 			remember(() => setOperatorEntryAuthCookie('anonymous'));

@@ -11,6 +11,7 @@
   let {
     state,
     onGoogle,
+    onReviewOrganizer = () => undefined,
     onRetry,
     onCheck,
     onSignOut,
@@ -20,6 +21,7 @@
   }: {
     state: AccessEntryState;
     onGoogle: () => void;
+    onReviewOrganizer?: () => void;
     onRetry: () => void;
     onCheck: () => void;
     onSignOut: () => void;
@@ -32,7 +34,7 @@
      address or a previous failure does not vanish mid-attempt. */
   function surfaceView(value: AccessEntryState): EntrySurfaceState | undefined {
     if (value.kind === 'anonymous' || value.kind === 'link_requested') return value;
-    return value.kind === 'starting_google' ? value.previous : undefined;
+    return value.kind === 'starting_google' || value.kind === 'starting_review' ? value.previous : undefined;
   }
 
   function pendingView(value: AccessEntryState): PendingState | undefined {
@@ -94,6 +96,14 @@
     {/if}
     {#if surface.kind === 'anonymous'}
       {@const open = surface}
+      {#if open.reviewOrganizerEntry}
+        <div class="entry-review">
+          <Button size="lg" loading={state.kind === 'starting_review'} onclick={onReviewOrganizer}>
+            Log in as organizer
+          </Button>
+          <p>This evaluation entry opens the real organizer workspace and SQLite data.</p>
+        </div>
+      {/if}
       <!-- The magic link owns the card: a titled method group and its coral
            action, then a divider handing off to the quiet provider alternative
            (owner revision 2026-08-15, superseding the co-equal presentation). The method is
@@ -133,18 +143,22 @@
           </div>
         {/key}
       {/if}
-      <div class="entry-or"><span>{linkRequestCopy.divider}</span></div>
+      {#if open.googleAvailable !== false || open.reviewOrganizerEntry}<div class="entry-or"><span>{linkRequestCopy.divider}</span></div>{/if}
     {:else}
       <p>{linkRequestCopy.confirmationBody}</p>
       <p class="entry-echo">{surface.email}</p>
     {/if}
-    <GoogleSignInButton
-      busy={state.kind === 'starting_google'}
-      label={surface.kind === 'anonymous'
-        ? linkRequestCopy.googleChoice
-        : linkRequestCopy.googleAlternative}
-      quiet={surface.kind !== 'anonymous'}
-      onclick={onGoogle} />
+    {#if surface.googleAvailable !== false || surface.reviewOrganizerEntry}
+      <GoogleSignInButton
+        busy={state.kind === 'starting_google'}
+        disabled={surface.googleAvailable === false}
+        disabledReason={surface.googleAvailable === false ? 'Disabled for evaluation mode' : undefined}
+        label={surface.kind === 'anonymous'
+          ? linkRequestCopy.googleChoice
+          : linkRequestCopy.googleAlternative}
+        quiet={surface.kind !== 'anonymous'}
+        onclick={onGoogle} />
+    {/if}
     {#if surface.actionError}
       {#key surface.actionError}
         <div class="entry-error" role="alert">

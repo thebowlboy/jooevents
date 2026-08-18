@@ -230,6 +230,44 @@ async function completeShortLink(
 }
 
 describe('workspace magic-link sign-in', () => {
+  test('explicit review mode offers one-click organizer entry through a real session', async () => {
+    const reviewConfig = loadEphemeralLiveConfig({
+      JOOEVENTS_BASE_URL: 'http://localhost:5176',
+      JOOEVENTS_TRUSTED_ORIGINS: '',
+      JOOEVENTS_AUTH_SECRETS: '1:Q7m!2vK9#pL4@xR8%tN5&cW3*zF6$hJ1',
+      JOOEVENTS_OPERATOR_AUTH_MODE: 'magic_link',
+      JOOEVENTS_REVIEW_ENTRY_MODE: 'organizer',
+      JOOEVENTS_ADMISSION_MODE: 'reservation_only',
+      JOOEVENTS_BOOTSTRAP_OWNER_EMAIL: 'review-owner@example.test',
+      JOOEVENTS_DATABASE_DRIVER: 'sqlite',
+      JOOEVENTS_BLOB_DRIVER: 'filesystem'
+    });
+    const runtime = await createEphemeralLiveRuntime({ config: reviewConfig });
+    runtimes.push(runtime);
+
+    const anonymous = await runtime.app.request('/api/me/access-context');
+    expect(await anonymous.json()).toEqual({
+      state: 'anonymous',
+      signInMethods: ['magic_link'],
+      reviewOrganizerEntry: true
+    });
+    const started = await runtime.app.request('/api/entry/review-organizer', {
+      method: 'POST',
+      headers: { origin: reviewConfig.baseUrl, 'content-type': 'application/json' }
+    });
+    expect(started.status).toBe(200);
+    const issued = await started.json() as { readonly url: string };
+    expect(issued.url).toContain('/api/auth/magic-link/verify?token=');
+
+    const verified = await runtime.app.request(issued.url);
+    expect([302, 307]).toContain(verified.status);
+    const cookie = sessionCookieFrom(verified);
+    const active = await runtime.app.request('/api/me/access-context', {
+      headers: { cookie, 'x-correlation-id': crypto.randomUUID() }
+    });
+    expect(await active.json()).toMatchObject({ state: 'active' });
+  });
+
   test('a reserved address completes a FIRST sign-in and lands admitted; the link works once', async () => {
     const runtime = await createEphemeralLiveRuntime({ config, devFixtures: true });
     runtimes.push(runtime);

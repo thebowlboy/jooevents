@@ -6,6 +6,15 @@ test('access context is a closed discriminated union', () => {
   expect(accessContextSchema.safeParse({ state: 'active', permissions: ['*'] }).success).toBe(false);
 });
 
+test('anonymous context can advertise a magic-link-only review entry compatibly', () => {
+  expect(accessContextSchema.parse({ state: 'anonymous' })).toEqual({ state: 'anonymous' });
+  expect(accessContextSchema.parse({
+    state: 'anonymous',
+    signInMethods: ['magic_link'],
+    reviewOrganizerEntry: true
+  })).toEqual({ state: 'anonymous', signInMethods: ['magic_link'], reviewOrganizerEntry: true });
+});
+
 test('pending review includes the safe workspace and cannot claim another status', () => {
   const base = {
     state: 'pending_review',

@@ -40,9 +40,26 @@ describe('loadConfig', () => {
       expect(error).toBeInstanceOf(ConfigurationError);
       const message = String(error);
       expect(message).toContain('JOOEVENTS_BASE_URL');
-      expect(message).toContain('JOOEVENTS_GOOGLE_CLIENT_ID');
+      expect(message).toContain('JOOEVENTS_DATABASE_DRIVER');
       expect(message).toContain('JOOEVENTS_DATABASE_DRIVER');
     }
+  });
+
+  test('supports an explicit magic-link-only reviewer installation', () => {
+    const {
+      JOOEVENTS_GOOGLE_CLIENT_ID: _clientId,
+      JOOEVENTS_GOOGLE_CLIENT_SECRET: _clientSecret,
+      ...withoutGoogle
+    } = valid;
+    const config = loadConfig({
+      ...withoutGoogle,
+      JOOEVENTS_OPERATOR_AUTH_MODE: 'magic_link',
+      JOOEVENTS_REVIEW_ENTRY_MODE: 'organizer',
+      JOOEVENTS_ADMISSION_MODE: 'reservation_only'
+    });
+    expect(config.operatorAuthMode).toBe('magic_link');
+    expect(config.reviewEntryMode).toBe('organizer');
+    expect(config.googleClientId).toBeUndefined();
   });
 
   test('requires an hd claim setting for domain admission', () => {

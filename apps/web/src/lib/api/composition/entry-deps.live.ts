@@ -1,7 +1,7 @@
 import '../../crypto-uuid-fallback';
 import { signInLinkRequestResultSchema } from '@jooevents/contracts';
 import { getAccessContext } from '../access';
-import { signOut, startExternalSignIn } from '../auth';
+import { signOut, startExternalSignIn, startReviewOrganizerSignIn } from '../auth';
 import { requestJson } from '../client';
 import { createParticipantEntryLiveClient } from '../portal/live/entry-client';
 import type { EntryDependencies } from './entry-dependencies';
@@ -18,6 +18,7 @@ export const entryDependencies: EntryDependencies = {
 	operator: {
 		getContext: getAccessContext,
 		startGoogle: startExternalSignIn,
+		startReviewOrganizer: startReviewOrganizerSignIn,
 		signOut,
 		requestSignInLink: (input) =>
 			requestJson({

@@ -24,12 +24,14 @@ export type AnonymousState = {
   readonly email: string;
   readonly busy: boolean;
   readonly invalid: boolean;
+  readonly googleAvailable?: boolean;
+  readonly reviewOrganizerEntry?: boolean;
   readonly notice?: EntryNotice;
   readonly actionError?: SafeApiError;
   readonly requestError?: SafeApiError;
 };
 /** One acknowledgement for every address, matched or not. */
-export type LinkRequestedState = { readonly kind: 'link_requested'; readonly email: string; readonly actionError?: SafeApiError };
+export type LinkRequestedState = { readonly kind: 'link_requested'; readonly email: string; readonly googleAvailable?: boolean; readonly reviewOrganizerEntry?: boolean; readonly actionError?: SafeApiError };
 export type EntrySurfaceState = AnonymousState | LinkRequestedState;
 
 export type AccessEntryState =
@@ -43,6 +45,7 @@ export type AccessEntryState =
      the typed address — so nothing disappears during the attempt; only success
      (navigation) or a new failure ends it. */
   | { readonly kind: 'starting_google'; readonly previous: EntrySurfaceState }
+  | { readonly kind: 'starting_review'; readonly previous: EntrySurfaceState }
   | { readonly kind: 'provisioning'; readonly retryAfterSeconds: number; readonly correlationId: string; readonly delayed: boolean }
   | PendingState
   | BlockedState
@@ -213,6 +216,15 @@ export class AccessEntryController {
     if (result.kind === 'error') this.#set(withActionError(previous, result.error));
   }
 
+  async startReviewOrganizer() {
+    const previous = this.#state;
+    if (previous.kind !== 'anonymous' || previous.busy || !previous.reviewOrganizerEntry) return;
+    if (!this.dependencies.startReviewOrganizer) return;
+    this.#set({ kind: 'starting_review', previous });
+    const result = await this.dependencies.startReviewOrganizer();
+    if (result.kind === 'error') this.#set(withActionError(previous, result.error));
+  }
+
   setLinkEmail(email: string) {
     const current = this.#state;
     if (current.kind !== 'anonymous' || current.busy) return;
@@ -235,13 +247,25 @@ export class AccessEntryController {
       this.#set({ ...pending, busy: false, requestError: result.error });
       return;
     }
-    this.#set({ kind: 'link_requested', email });
+    this.#set({
+      kind: 'link_requested',
+      email,
+      googleAvailable: pending.googleAvailable,
+      reviewOrganizerEntry: pending.reviewOrganizerEntry
+    });
   }
 
   useDifferentAddress() {
     const current = this.#state;
     if (current.kind !== 'link_requested') return;
-    this.#set({ kind: 'anonymous', email: current.email, busy: false, invalid: false });
+    this.#set({
+      kind: 'anonymous',
+      email: current.email,
+      busy: false,
+      invalid: false,
+      googleAvailable: current.googleAvailable,
+      reviewOrganizerEntry: current.reviewOrganizerEntry
+    });
   }
 
   async signOut() {
@@ -253,7 +277,7 @@ export class AccessEntryController {
       return;
     }
     await this.dependencies.navigate('/sign-in?notice=signed_out', false);
-    this.#set({ kind: 'anonymous', email: '', busy: false, invalid: false, notice: 'signed_out' });
+    this.#set({ kind: 'anonymous', email: '', busy: false, invalid: false, googleAvailable: true, notice: 'signed_out' });
   }
 
   async checkStatus() {
@@ -295,7 +319,15 @@ export class AccessEntryController {
     switch (context.state) {
       case 'anonymous':
         this.#endAdmission();
-        this.#set({ kind: 'anonymous', email: '', busy: false, invalid: false, ...(this.#notice ? { notice: this.#notice } : {}) });
+        this.#set({
+          kind: 'anonymous',
+          email: '',
+          busy: false,
+          invalid: false,
+          googleAvailable: context.signInMethods?.includes('google') ?? true,
+          reviewOrganizerEntry: context.reviewOrganizerEntry === true,
+          ...(this.#notice ? { notice: this.#notice } : {})
+        });
         if (this.#currentPath !== '/sign-in') await this.dependencies.navigate('/sign-in', true);
         return;
       case 'active':

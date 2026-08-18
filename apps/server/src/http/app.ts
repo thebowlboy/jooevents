@@ -52,6 +52,11 @@ export function createHttpApp(input: {
   readonly accessContext: AccessContextService;
   readonly workspaceId: string;
   readonly baseUrl: string;
+  readonly operatorSignInMethods?: readonly ('magic_link' | 'google')[];
+  readonly reviewOrganizerEntry?: {
+    readonly email: string;
+    readonly resolveIssuedUrl: () => string | undefined;
+  };
   readonly operatorOperations?: OperatorOperationsHttpRuntime;
   readonly participantEntry?: ParticipantEntryRuntime;
   readonly participantOperations?: ParticipantOperationsHttpRuntime;
@@ -62,6 +67,8 @@ export function createHttpApp(input: {
   readonly health?: RuntimeHealthSource;
 }) {
   const app = new OpenAPIHono();
+  const operatorSignInMethods = input.operatorSignInMethods ?? ['magic_link', 'google'];
+  const googleSignInEnabled = operatorSignInMethods.includes('google');
 
   app.use('*', async (context, next) => {
     const incoming = correlationIdSchema.safeParse(context.req.header('x-correlation-id'));
@@ -144,6 +151,14 @@ export function createHttpApp(input: {
   };
 
   app.post('/api/entry/google/start', async (context) => {
+    if (!googleSignInEnabled) {
+      return context.json({
+        code: 'provider_unavailable',
+        message: 'Google sign-in is not available for this installation.',
+        retryable: false,
+        correlationId: correlation(context)
+      }, 404);
+    }
     let payload: unknown;
     try { payload = await context.req.json(); } catch { payload = undefined; }
     const parsed = startSchema.safeParse(payload);
@@ -204,6 +219,35 @@ export function createHttpApp(input: {
     return context.json({ outcome: 'link_requested' as const });
   });
 
+  if (input.reviewOrganizerEntry) {
+    app.post('/api/entry/review-organizer', async (context) => {
+      const response = await input.auth.handler(authRequest(context, '/api/auth/sign-in/magic-link', {
+        email: input.reviewOrganizerEntry!.email,
+        name: 'Evaluation organizer',
+        callbackURL: SIGN_IN_LINK_CALLBACK_PATH,
+        errorCallbackURL: SIGN_IN_LINK_ERROR_CALLBACK_PATH
+      }));
+      if (!response.ok) {
+        return context.json({
+          code: 'review_entry_failed',
+          message: 'Organizer review entry could not start.',
+          retryable: response.status >= 500,
+          correlationId: correlation(context)
+        }, response.status >= 500 ? 502 : 400);
+      }
+      const url = input.reviewOrganizerEntry!.resolveIssuedUrl();
+      if (!url) {
+        return context.json({
+          code: 'review_entry_failed',
+          message: 'Organizer review entry could not start.',
+          retryable: true,
+          correlationId: correlation(context)
+        }, 502);
+      }
+      return context.json({ url });
+    });
+  }
+
   app.post('/api/entry/sign-out', async (context) => {
     const response = await input.auth.handler(authRequest(context, '/api/auth/sign-out', {}));
     forwardAuthCookies(context, response);
@@ -251,7 +295,11 @@ export function createHttpApp(input: {
 
   app.openapi(accessContextRoute, async (context) => {
     const session = await input.auth.api.getSession({ headers: context.req.raw.headers });
-    if (!session) return context.json(accessContextSchema.parse({ state: 'anonymous' }));
+    if (!session) return context.json(accessContextSchema.parse({
+      state: 'anonymous',
+      ...(input.operatorSignInMethods ? { signInMethods: operatorSignInMethods } : {}),
+      ...(input.reviewOrganizerEntry ? { reviewOrganizerEntry: true } : {})
+    }));
 
     const correlationId = context.res.headers.get('x-correlation-id') ?? crypto.randomUUID();
     const result = await input.accessContext.ensureAuthPrincipalProvisioned({

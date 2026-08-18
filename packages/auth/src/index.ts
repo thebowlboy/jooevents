@@ -15,8 +15,8 @@ export interface JooEventsAuthConfiguration {
   readonly baseUrl: string;
   readonly trustedOrigins: readonly string[];
   readonly authSecrets: readonly AuthSecret[];
-  readonly googleClientId: string;
-  readonly googleClientSecret: string;
+  readonly googleClientId?: string;
+  readonly googleClientSecret?: string;
   readonly admissionMode: 'pending' | 'workspace_domain' | 'reservation_only';
   readonly googleHostedDomain?: string;
 }
@@ -72,7 +72,7 @@ export function createJooEventsAuth(
       storage: 'database',
       modelName: 'auth_rate_limits'
     },
-    socialProviders: {
+    socialProviders: config.googleClientId && config.googleClientSecret ? {
       google: {
         clientId: config.googleClientId,
         clientSecret: config.googleClientSecret,
@@ -83,7 +83,7 @@ export function createJooEventsAuth(
           ? { hd: config.googleHostedDomain }
           : {})
       }
-    },
+    } : {},
     advanced: {
       disableCSRFCheck: false,
       disableOriginCheck: false,
