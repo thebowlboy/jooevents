@@ -208,6 +208,9 @@ test('a workspace without an event shows the start panel alone — no fields sec
 	]);
 
 	await page.goto('/app/settings/program');
-	await expect(page.getByRole('region', { name: 'No event yet' })).toBeVisible({ timeout: 15000 });
+	const start = page.getByRole('region', { name: 'No event yet' });
+	await expect(start).toBeVisible({ timeout: 15000 });
+	await expect(start.getByRole('link', { name: 'Create event' })).toHaveAttribute('href', '/app');
+	await expect(start.getByRole('button')).toHaveCount(0);
 	await expect(panelOf(page)).toHaveCount(0);
 });

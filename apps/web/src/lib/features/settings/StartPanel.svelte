@@ -17,27 +17,17 @@
 		</p>
 		<div class="start__actions">
 			<span class="ui-skeleton skeleton-action"></span>
-			<span class="ui-skeleton skeleton-action"></span>
 		</div>
-		<p class="start__hint"><span class="ui-skeleton skeleton-line" style="inline-size: 14rem"></span></p>
 	</section>
 {:else}
 	<section class="panel start" aria-label="No event yet">
 		<h2 class="start__title">No event yet</h2>
 		<p class="start__copy">
-			An event holds the name, dates, location, timezone, and venue note every other screen reads.
-			Describe the event in your own words and the setup is drafted for you, or fill the fields in
-			yourself.
+			Create your first event to set its name, dates, location, timezone, and schedule hours.
 		</p>
 		<div class="start__actions">
-			<button type="button" class="ui-button ui-button--primary ui-button--sm" disabled>
-				Describe the event
-			</button>
-			<button type="button" class="ui-button ui-button--secondary ui-button--sm" disabled>
-				Fill in the fields myself
-			</button>
+			<a class="ui-button ui-button--primary ui-button--sm" href="/app">Create event</a>
 		</div>
-		<p class="start__hint">Event creation arrives with the setup slice</p>
 	</section>
 {/if}
 
@@ -98,12 +88,6 @@
 		display: flex;
 		flex-wrap: wrap;
 		gap: var(--je-space-2);
-	}
-
-	.start__hint {
-		margin: 0;
-		font-size: var(--je-font-size-xs);
-		color: var(--je-color-text-muted);
 	}
 
 	@media (max-width: 920px) {
