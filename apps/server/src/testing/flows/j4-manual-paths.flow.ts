@@ -38,9 +38,11 @@ type Catalog = {
     readonly digestSha256: string;
     readonly title: string;
     readonly programTarget: { readonly format: { readonly id: string } };
-    readonly roster: { readonly participants: readonly {
+    readonly roster: { readonly version: number; readonly participants: readonly {
       readonly personId: string;
       readonly source: { readonly kind: string; readonly id: string; readonly version: number };
+      readonly role: 'speaker' | 'moderator' | 'host' | 'panelist';
+      readonly position: number;
       readonly publiclyVisible: boolean;
     }[] };
   }[];
@@ -249,6 +251,30 @@ export async function runJ4ManualPaths(world: FlowWorld): Promise<void> {
   });
   await organizer.expectLog('Restored a participant to a session');
   expect(restoredMembership.data.session?.roster.participants).toEqual([removedParticipant]);
+
+  let beforeRoleChange!: Catalog;
+  await organizer.expectRead('session.catalog.read', (projection) => {
+    beforeRoleChange = projection as Catalog;
+    return beforeRoleChange.sessions.some((session) => session.id === hiddenSession.id);
+  });
+  const beforeRoleHead = required(
+    beforeRoleChange.sessions.find((session) => session.id === hiddenSession.id),
+    'participant role session head'
+  );
+  const beforeRoleParticipant = required(
+    beforeRoleHead.roster.participants.find((entry) => entry.personId === participant.personId),
+    'participant role evidence'
+  );
+  const changedRole = await organizer.do<SessionChange>('session.change', {
+    action: 'roster_role', expectedCatalogVersion: beforeRoleChange.version,
+    expectedCatalogDigestSha256: beforeRoleChange.digestSha256,
+    sessionId: beforeRoleHead.id, expectedSessionVersion: beforeRoleHead.version,
+    expectedSessionDigestSha256: beforeRoleHead.digestSha256,
+    expectedRosterVersion: beforeRoleHead.roster.version,
+    expectedParticipant: beforeRoleParticipant, role: 'moderator'
+  });
+  await organizer.expectLog("Changed a participant's session role");
+  expect(changedRole.data.session?.roster.participants[0]?.role).toBe('moderator');
 
   let freshCatalog!: Catalog;
   await organizer.expectRead('session.catalog.read', (projection) => {

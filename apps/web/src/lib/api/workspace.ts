@@ -3183,15 +3183,33 @@ export const api = {
 			}
 			session.speakers = session.speakers.filter((speaker) => speaker.email !== email);
 			dropSessionFromRosterRow(email, sessionId);
-			// An origin link exists to explain people on the roster. One that no
-			// longer contributes anyone is provenance for nothing: it would keep
-			// its submission out of the attach candidates and misattribute a
-			// later re-add. The submission itself remains a durable record.
-			const remaining = new Set(session.speakers.map((speaker) => speaker.email));
-			session.originSubmissionIds = (session.originSubmissionIds ?? []).filter((id) => {
-				const origin = db.submissions.find((entry) => entry.id === id);
-				return origin ? origin.speakers.some((speaker) => remaining.has(speaker.email)) : false;
-			});
+			programChanged();
+			return { ok: true };
+		},
+		async changeParticipantRole(
+			sessionId: string,
+			email: string,
+			role: 'speaker' | 'moderator' | 'host' | 'panelist'
+		): Promise<MutationOutcome> {
+			await latency();
+			const session = db.schedule.sessions.find((entry) => entry.id === sessionId);
+			const participant = session?.speakers.find((speaker) => speaker.email === email);
+			if (!session || !participant) return { ok: false, reason: 'This person is not on the session' };
+			participant.role = role;
+			programChanged();
+			return { ok: true };
+		},
+		async reorderParticipants(sessionId: string, emails: string[]): Promise<MutationOutcome> {
+			await latency();
+			const session = db.schedule.sessions.find((entry) => entry.id === sessionId);
+			if (!session || emails.length !== session.speakers.length || new Set(emails).size !== emails.length) {
+				return { ok: false, reason: 'The participant order changed' };
+			}
+			const byEmail = new Map(session.speakers.map((speaker) => [speaker.email, speaker]));
+			if (emails.some((email) => !byEmail.has(email))) {
+				return { ok: false, reason: 'The participant order changed' };
+			}
+			session.speakers = emails.map((email, position) => ({ ...byEmail.get(email)!, position }));
 			programChanged();
 			return { ok: true };
 		},

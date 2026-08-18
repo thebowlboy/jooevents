@@ -1019,6 +1019,8 @@ export interface SessionSpeaker {
 	personId?: string;
 	name: string;
 	email: string;
+	role?: 'speaker' | 'moderator' | 'host' | 'panelist';
+	position?: number;
 }
 
 export interface SessionItem {

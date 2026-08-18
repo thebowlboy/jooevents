@@ -516,7 +516,13 @@ function sessionItem(
 				reason: 'A person on this Session cannot be resolved from the current speaker roster.'
 			});
 		}
-		return { personId: participant.personId, name: person.name, email: person.email };
+		return {
+			personId: participant.personId,
+			name: person.name,
+			email: person.email,
+			role: participant.role,
+			position: participant.position
+		};
 	});
 	return {
 		id: head.id,
@@ -666,6 +672,14 @@ export function createLiveSchedulePagePort(input: {
 		expectedSession: SessionHeadView;
 	}>>();
 	const participantRecoveryKey = (sessionId: string, personId: string) => `${sessionId}:${personId}`;
+	const roleRecoveries = new Map<string, Readonly<{
+		role: SessionParticipantRefDto['role'];
+		expectedSession: SessionHeadView;
+	}>>();
+	const orderRecoveries = new Map<string, Readonly<{
+		personIds: readonly string[];
+		expectedSession: SessionHeadView;
+	}>>();
 
 	async function readCatalog() {
 		const result = await input.sessions.readCatalog();
@@ -1256,6 +1270,87 @@ export function createLiveSchedulePagePort(input: {
 					participant,
 					expectedSession: applied.data.session
 				});
+				return { ok: true };
+			},
+			async changeParticipantRole(sessionId, email, role): Promise<MutationOutcome> {
+				const catalog = await readCatalog();
+				const session = catalog.sessions.find((head) => head.id === sessionId);
+				if (!session) return { ok: false, reason: 'This session no longer exists.' };
+				const matches = (await input.speakers.list())
+					.filter((row) => row.email === email && row.personId !== undefined);
+				const personIds = [...new Set(matches.map((row) => row.personId!))];
+				if (personIds.length !== 1) {
+					return { ok: false, reason: 'This participant identity is no longer unambiguous.' };
+				}
+				const participant = session.roster.participants.find((row) => row.personId === personIds[0]);
+				if (!participant) return { ok: false, reason: 'This person is no longer on the session.' };
+				const key = participantRecoveryKey(sessionId, participant.personId);
+				const recovery = roleRecoveries.get(key);
+				if (recovery?.role === role && (
+					session.version !== recovery.expectedSession.version
+					|| session.digestSha256 !== recovery.expectedSession.digestSha256
+				)) return { ok: false, reason: 'This role receipt is no longer current.' };
+				const applied = await input.sessions.applyChange({
+					action: 'roster_role', expectedCatalogVersion: catalog.version,
+					expectedCatalogDigestSha256: catalog.digestSha256, sessionId,
+					expectedSessionVersion: session.version,
+					expectedSessionDigestSha256: session.digestSha256,
+					expectedRosterVersion: session.roster.version,
+					expectedParticipant: participant, role
+				}, newIdempotencyKey());
+				if (applied.kind !== 'success' || applied.data.action !== 'roster_role'
+					|| applied.data.session === null) {
+					return applied.kind === 'success'
+						? { ok: false, reason: 'The participant role result was incomplete.' }
+						: { ok: false, reason: applyFailure(applied, 'session participant').reason };
+				}
+				if (recovery?.role === role) roleRecoveries.delete(key);
+				else roleRecoveries.set(key, { role: participant.role, expectedSession: applied.data.session });
+				return { ok: true };
+			},
+			async reorderParticipants(sessionId, emails): Promise<MutationOutcome> {
+				const catalog = await readCatalog();
+				const session = catalog.sessions.find((head) => head.id === sessionId);
+				if (!session) return { ok: false, reason: 'This session no longer exists.' };
+				const rows = await input.speakers.list();
+				const byEmail = new Map<string, Set<string>>();
+				for (const row of rows) {
+					if (row.personId === undefined) continue;
+					const personIds = byEmail.get(row.email) ?? new Set<string>();
+					personIds.add(row.personId);
+					byEmail.set(row.email, personIds);
+				}
+				const matches = emails.map((email) => [...(byEmail.get(email) ?? [])]);
+				if (matches.some((personIds) => personIds.length !== 1)) {
+					return { ok: false, reason: 'A participant identity is no longer unambiguous.' };
+				}
+				const exactPersonIds = matches.map((personIds) => personIds[0]!);
+				const recovery = orderRecoveries.get(sessionId);
+				if (recovery && recovery.personIds.join(':') === exactPersonIds.join(':') && (
+					session.version !== recovery.expectedSession.version
+					|| session.digestSha256 !== recovery.expectedSession.digestSha256
+				)) return { ok: false, reason: 'This order receipt is no longer current.' };
+				const applied = await input.sessions.applyChange({
+					action: 'roster_reorder', expectedCatalogVersion: catalog.version,
+					expectedCatalogDigestSha256: catalog.digestSha256, sessionId,
+					expectedSessionVersion: session.version,
+					expectedSessionDigestSha256: session.digestSha256,
+					expectedRosterVersion: session.roster.version, personIds: exactPersonIds
+				}, newIdempotencyKey());
+				if (applied.kind !== 'success' || applied.data.action !== 'roster_reorder'
+					|| applied.data.session === null) {
+					return applied.kind === 'success'
+						? { ok: false, reason: 'The participant order result was incomplete.' }
+						: { ok: false, reason: applyFailure(applied, 'session participant order').reason };
+				}
+				if (recovery && recovery.personIds.join(':') === exactPersonIds.join(':')) {
+					orderRecoveries.delete(sessionId);
+				} else {
+					orderRecoveries.set(sessionId, {
+						personIds: session.roster.participants.map((participant) => participant.personId),
+						expectedSession: applied.data.session
+					});
+				}
 				return { ok: true };
 			}
 		}),

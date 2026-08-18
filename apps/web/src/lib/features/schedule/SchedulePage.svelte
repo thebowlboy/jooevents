@@ -1207,6 +1207,56 @@
 		await afterAttribution(session.id);
 	}
 
+	type SessionParticipantRole = NonNullable<SessionSpeaker['role']>;
+
+	async function changeParticipantRole(
+		session: SessionItem,
+		speaker: SessionSpeaker,
+		role: SessionParticipantRole
+	) {
+		const previous = speaker.role ?? 'speaker';
+		if (attributing || previous === role) return;
+		attributing = true;
+		const outcome = await api.schedule.changeParticipantRole(session.id, speaker.email, role);
+		if (outcome.ok) {
+			recordAction({
+				area: 'schedule',
+				label: `Changed ${speaker.name} to ${role}`,
+				undo: async () => {
+					await api.schedule.changeParticipantRole(session.id, speaker.email, previous);
+				}
+			});
+		} else {
+			announcement = outcome.reason;
+		}
+		await afterAttribution(session.id);
+	}
+
+	async function moveParticipant(session: SessionItem, index: number, direction: -1 | 1) {
+		if (attributing) return;
+		const destination = index + direction;
+		if (destination < 0 || destination >= session.speakers.length) return;
+		const before = session.speakers.map((speaker) => speaker.email);
+		const after = [...before];
+		const [moved] = after.splice(index, 1);
+		if (!moved) return;
+		after.splice(destination, 0, moved);
+		attributing = true;
+		const outcome = await api.schedule.reorderParticipants(session.id, after);
+		if (outcome.ok) {
+			recordAction({
+				area: 'schedule',
+				label: `Reordered speakers on “${session.title}”`,
+				undo: async () => {
+					await api.schedule.reorderParticipants(session.id, before);
+				}
+			});
+		} else {
+			announcement = outcome.reason;
+		}
+		await afterAttribution(session.id);
+	}
+
 	interface ConflictRow {
 		key: string;
 		placement: Placement;
@@ -2318,7 +2368,7 @@
 			{:else}
 				<h3 class="speakers__group">On this session</h3>
 				<ul class="speakers">
-					{#each session.speakers as speaker (speaker.email)}
+					{#each session.speakers as speaker, index (speaker.email)}
 						<li class="speakers__row">
 							<div class="speakers__copy">
 								<p class="speakers__name">{speaker.name}</p>
@@ -2326,6 +2376,33 @@
 								     here, not a hover secret. -->
 								<p class="speakers__provenance">{provenanceOf(speaker)}</p>
 							</div>
+							<div class="speakers__edits">
+								<label class="ui-sr-only" for={`speaker-role-${index}`}>Role for {speaker.name}</label>
+								<select
+									id={`speaker-role-${index}`}
+									class="ui-control speakers__role"
+									disabled={attributing}
+									value={speaker.role ?? 'speaker'}
+									onchange={(event) => changeParticipantRole(
+										session,
+										speaker,
+										(event.currentTarget.value as SessionParticipantRole)
+									)}>
+									<option value="speaker">Speaker</option>
+									<option value="moderator">Moderator</option>
+									<option value="host">Host</option>
+									<option value="panelist">Panelist</option>
+								</select>
+								{#if session.speakers.length > 1}
+									<button type="button" class="ui-button ui-button--quiet ui-button--sm"
+										disabled={attributing || index === 0}
+										aria-label={`Move ${speaker.name} earlier`}
+										onclick={() => moveParticipant(session, index, -1)}>Up</button>
+									<button type="button" class="ui-button ui-button--quiet ui-button--sm"
+										disabled={attributing || index === session.speakers.length - 1}
+										aria-label={`Move ${speaker.name} later`}
+										onclick={() => moveParticipant(session, index, 1)}>Down</button>
+								{/if}
 							{#if armedParticipant === speaker.email}
 								<button
 									type="button"
@@ -2344,6 +2421,7 @@
 									aria-label={`Remove ${speaker.name} from “${session.title}”`}
 									onclick={() => armParticipant(speaker.email)}>Remove</button>
 							{/if}
+							</div>
 						</li>
 					{/each}
 				</ul>
@@ -4255,6 +4333,19 @@
 
 	.speakers__copy {
 		min-inline-size: 0;
+	}
+
+	.speakers__edits {
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		gap: var(--je-space-1);
+		flex-wrap: wrap;
+	}
+
+	.speakers__role {
+		inline-size: auto;
+		min-inline-size: 8rem;
 	}
 
 	.speakers__name {

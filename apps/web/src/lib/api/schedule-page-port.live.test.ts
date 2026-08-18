@@ -185,7 +185,7 @@ describe('live Schedule page correction boundary', () => {
 				kind: 'success', data: { sessions: [{
 					id: id(42), title: 'Opening', plannedDurationMinutes: 30,
 					lifecycle: 'programmed', programTarget: { format: { id: id(43) }, track: null },
-					roster: { participants: [{ personId }] }
+					roster: { participants: [{ personId, role: 'moderator', position: 2 }] }
 				}] }
 			}) } as never,
 			vocabulary: { source: { kind: 'live' }, rooms: async () => [] } as never,
@@ -204,7 +204,7 @@ describe('live Schedule page correction boundary', () => {
 
 		const state = await port.schedule.state();
 		expect(state.sessions[0]?.speakers).toEqual([
-			{ personId, name: 'Ada Lovelace', email: 'ada@example.test' }
+			{ personId, name: 'Ada Lovelace', email: 'ada@example.test', role: 'moderator', position: 2 }
 		]);
 	});
 
@@ -408,6 +408,129 @@ describe('live Schedule page correction boundary', () => {
 				expectedCatalogDigestSha256: 'c'.repeat(64), sessionId,
 				expectedSessionVersion: 3, expectedSessionDigestSha256: 'd'.repeat(64),
 				expectedRosterVersion: 3, participant
+			}
+		]);
+	});
+
+	test('changes a participant role and restores only against the exact resulting Session', async () => {
+		const sessionId = id(91);
+		const personId = id(92);
+		const speakerId = id(93);
+		const beforeParticipant = {
+			personId, role: 'speaker', position: 0, publiclyVisible: true,
+			source: { kind: 'submission', id: id(94), version: 1 }
+		};
+		const afterParticipant = { ...beforeParticipant, role: 'moderator' };
+		let catalog = {
+			version: 10, digestSha256: 'a'.repeat(64), sessions: [{
+				id: sessionId, version: 4, digestSha256: 'b'.repeat(64),
+				roster: { version: 4, participants: [beforeParticipant] }
+			}]
+		};
+		const writes: unknown[] = [];
+		const port = createLiveSchedulePagePort({
+			...base,
+			placements: { source: { kind: 'live' } } as never,
+			sessions: {
+				source: { kind: 'live' }, readCatalog: async () => ({ kind: 'success', data: catalog }),
+				applyChange: async (request: any) => {
+					writes.push(request);
+					const participant = { ...beforeParticipant, role: request.role };
+					const session = {
+						id: sessionId, version: catalog.sessions[0]!.version + 1,
+						digestSha256: (request.role === 'moderator' ? 'd' : 'f').repeat(64),
+						roster: { version: catalog.sessions[0]!.roster.version + 1, participants: [participant] }
+					};
+					catalog = {
+						version: catalog.version + 1,
+						digestSha256: (request.role === 'moderator' ? 'c' : 'e').repeat(64), sessions: [session]
+					};
+					return { kind: 'success', data: { action: 'roster_role', catalogVersion: catalog.version, session } };
+				}
+			} as never,
+			speakers: { list: async () => [{
+				id: speakerId, personId, name: 'Ada', email: 'ada@example.test', state: 'confirmed',
+				sessions: [], tasksDone: 0, tasksTotal: 0, overdueTasks: 0,
+				publiclyVisible: true, contentApproved: true, position: 0
+			}], profile: async () => null } as never,
+			newIdempotencyKey: () => 'participant-role'
+		} as never);
+
+		expect(await port.schedule.changeParticipantRole(sessionId, 'ada@example.test', 'moderator')).toEqual({ ok: true });
+		expect(await port.schedule.changeParticipantRole(sessionId, 'ada@example.test', 'speaker')).toEqual({ ok: true });
+		expect(writes).toEqual([
+			{
+				action: 'roster_role', expectedCatalogVersion: 10,
+				expectedCatalogDigestSha256: 'a'.repeat(64), sessionId,
+				expectedSessionVersion: 4, expectedSessionDigestSha256: 'b'.repeat(64),
+				expectedRosterVersion: 4, expectedParticipant: beforeParticipant, role: 'moderator'
+			},
+			{
+				action: 'roster_role', expectedCatalogVersion: 11,
+				expectedCatalogDigestSha256: 'c'.repeat(64), sessionId,
+				expectedSessionVersion: 5, expectedSessionDigestSha256: 'd'.repeat(64),
+				expectedRosterVersion: 5, expectedParticipant: afterParticipant, role: 'speaker'
+			}
+		]);
+	});
+
+	test('reorders the complete roster and restores the prior order from its exact receipt', async () => {
+		const sessionId = id(101);
+		const personA = id(102);
+		const personB = id(103);
+		const participantA = { personId: personA, role: 'speaker', position: 0, publiclyVisible: true };
+		const participantB = { personId: personB, role: 'host', position: 1, publiclyVisible: true };
+		let catalog = {
+			version: 20, digestSha256: '1'.repeat(64), sessions: [{
+				id: sessionId, version: 7, digestSha256: '2'.repeat(64),
+				roster: { version: 7, participants: [participantA, participantB] }
+			}]
+		};
+		const writes: unknown[] = [];
+		const port = createLiveSchedulePagePort({
+			...base,
+			placements: { source: { kind: 'live' } } as never,
+			sessions: {
+				source: { kind: 'live' }, readCatalog: async () => ({ kind: 'success', data: catalog }),
+				applyChange: async (request: any) => {
+					writes.push(request);
+					const participants = request.personIds.map((candidate: string, position: number) => ({
+						...(candidate === personA ? participantA : participantB), position
+					}));
+					const restoring = request.personIds[0] === personA;
+					const session = {
+						id: sessionId, version: catalog.sessions[0]!.version + 1,
+						digestSha256: (restoring ? '6' : '4').repeat(64),
+						roster: { version: catalog.sessions[0]!.roster.version + 1, participants }
+					};
+					catalog = {
+						version: catalog.version + 1,
+						digestSha256: (restoring ? '5' : '3').repeat(64), sessions: [session]
+					};
+					return { kind: 'success', data: { action: 'roster_reorder', catalogVersion: catalog.version, session } };
+				}
+			} as never,
+			speakers: { list: async () => [
+				{ id: id(104), personId: personA, name: 'Ada', email: 'ada@example.test' },
+				{ id: id(105), personId: personB, name: 'Grace', email: 'grace@example.test' }
+			], profile: async () => null } as never,
+			newIdempotencyKey: () => 'participant-order'
+		} as never);
+
+		expect(await port.schedule.reorderParticipants(sessionId, ['grace@example.test', 'ada@example.test'])).toEqual({ ok: true });
+		expect(await port.schedule.reorderParticipants(sessionId, ['ada@example.test', 'grace@example.test'])).toEqual({ ok: true });
+		expect(writes).toEqual([
+			{
+				action: 'roster_reorder', expectedCatalogVersion: 20,
+				expectedCatalogDigestSha256: '1'.repeat(64), sessionId,
+				expectedSessionVersion: 7, expectedSessionDigestSha256: '2'.repeat(64),
+				expectedRosterVersion: 7, personIds: [personB, personA]
+			},
+			{
+				action: 'roster_reorder', expectedCatalogVersion: 21,
+				expectedCatalogDigestSha256: '3'.repeat(64), sessionId,
+				expectedSessionVersion: 8, expectedSessionDigestSha256: '4'.repeat(64),
+				expectedRosterVersion: 8, personIds: [personA, personB]
 			}
 		]);
 	});

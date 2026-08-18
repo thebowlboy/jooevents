@@ -78,6 +78,12 @@ export interface SchedulePagePort {
 		): Promise<MutationOutcome>;
 		addParticipantFromRoster(sessionId: string, speakerId: string): Promise<MutationOutcome>;
 		removeParticipant(sessionId: string, email: string): Promise<MutationOutcome>;
+		changeParticipantRole(
+			sessionId: string,
+			email: string,
+			role: 'speaker' | 'moderator' | 'host' | 'panelist'
+		): Promise<MutationOutcome>;
+		reorderParticipants(sessionId: string, emails: string[]): Promise<MutationOutcome>;
 	};
 	readonly vocab: {
 		tracks(): Promise<Track[]>;
