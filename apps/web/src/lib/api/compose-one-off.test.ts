@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { audiencePreviewRows, unionAudienceGroups } from './audience-union';
 import { templateKind } from './template-kinds';
+import {
+	withInsertedBlock,
+	withRemovedBlock
+} from '../features/templates/inline-edit';
 import type { MessageTemplate, RecipientRow } from './types';
 
 /**
@@ -66,6 +70,47 @@ describe('a blank compose', () => {
 			document: edited
 		});
 		expect((draft.document!.blocks[0] as { text: string }).text).toBe('We have moved rooms');
+	});
+
+	/**
+	 * The one-off is a document, not a fixed pair of blocks: sections added in
+	 * the composer land in composer state and freeze with everything else, so
+	 * what the review renders is the shape the operator actually built.
+	 */
+	test('freezes the sections added to it, in the order they were added', async () => {
+		const api = await freshApi();
+		let built = seedOneOff();
+		built = withInsertedBlock(built, built.blocks.length, 'button');
+		built = withInsertedBlock(built, 1, 'details');
+
+		const draft = await api.communications.compose({
+			subject: 'Room change',
+			audienceIds: ['confirmed-speakers'],
+			document: built
+		});
+		expect(draft.document?.blocks.map((block) => block.type)).toEqual([
+			'heading',
+			'details',
+			'paragraph',
+			'button'
+		]);
+	});
+
+	test('freezes a one-off that has been emptied down and rebuilt', async () => {
+		const api = await freshApi();
+		let built = seedOneOff();
+		// Everything removable is removable, including the last block.
+		built = withRemovedBlock(built, 0);
+		built = withRemovedBlock(built, 0);
+		expect(built.blocks).toEqual([]);
+		built = withInsertedBlock(built, 0, 'paragraph');
+
+		const draft = await api.communications.compose({
+			subject: 'Room change',
+			audienceIds: ['confirmed-speakers'],
+			document: built
+		});
+		expect(draft.document?.blocks.map((block) => block.type)).toEqual(['paragraph']);
 	});
 
 	test('the frozen body is a copy: editing the compose afterwards cannot rewrite a sent draft', async () => {

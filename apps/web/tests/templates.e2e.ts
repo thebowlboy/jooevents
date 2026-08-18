@@ -359,7 +359,11 @@ test('the end control is the always-findable entry, and a read-only view has non
  * them.
  */
 test('a surface template offers no message-section insertion', async ({ page }) => {
-	await page.goto('/app/templates?template=srf-schedule');
-	await expect(page.getByRole('heading', { name: /Schedule/ })).toBeVisible({ timeout: 15000 });
+	await page.goto('/app/templates?tab=surfaces&template=srf-schedule');
+	await expect(page.getByRole('heading', { name: 'Public schedule' })).toBeVisible({
+		timeout: 15000
+	});
+	const preview = page.getByRole('region', { name: 'Surface preview' });
+	await expect(preview).toContainText('AI Engineer NYC 2026 schedule', { timeout: 15000 });
 	await expect(page.getByRole('button', { name: '+ Add section' })).toHaveCount(0);
 });

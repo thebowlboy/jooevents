@@ -4,18 +4,25 @@
 	import type { CommunicationsPagePort } from '$lib/api/communications-page-port';
 	import { LiveRead, type LiveReadState } from '$lib/api/live-read';
 	import { reachSentence } from '$lib/api/audience-union';
-	import { templateKind, templateKinds } from '$lib/api/template-kinds';
+	import { templateKind, templateKinds, type SectionKind } from '$lib/api/template-kinds';
 	import EmailRender from '$lib/features/templates/EmailRender.svelte';
 	import ProfilePeek from '$lib/features/workspace/components/ProfilePeek.svelte';
 	import InlineEditor from '$lib/features/templates/InlineEditor.svelte';
 	import {
+		blockKind,
 		editableUnits,
 		inlineEditNote,
+		insertedUnitPath,
 		messageInlineDoc,
 		resolveUnit,
+		sectionEditNote,
+		unitBlockIndex,
+		withInsertedBlock,
+		withRemovedBlock,
 		type InlineEditResult,
 		type InlineUnit
 	} from '$lib/features/templates/inline-edit';
+	import SectionAddMenu from '$lib/features/templates/SectionAddMenu.svelte';
 	import type {
 		AudienceOption,
 		AudiencePreview,
@@ -355,6 +362,93 @@
 		closeInline();
 	}
 
+	// ------------------------------------------------------------- sections
+
+	/** The open add menu: where a section would land, and what to anchor it to. */
+	let addMenu = $state<{ index: number; anchor: HTMLElement } | null>(null);
+
+	function openAddMenu(index: number, anchor: HTMLElement) {
+		if (!inlineEnabled) return;
+		// One floating panel at a time: the section being added is the new subject.
+		closeInline();
+		addMenu = { index, anchor };
+	}
+
+	/** The insertion path that needs no hover — the same one touch and keyboard use. */
+	function addBesideOpenUnit(side: 'above' | 'below', anchor: HTMLElement) {
+		const at = inlineUnit ? unitBlockIndex(inlineUnit) : null;
+		if (at === null) return;
+		openAddMenu(side === 'above' ? at : at + 1, anchor);
+	}
+
+	/**
+	 * One structural write, branching exactly where `applyInline` branches: a
+	 * one-off has no library record to revise, so it lands in composer state and
+	 * freezes into the draft on Create; a named template earns a revision through
+	 * the same organizer-lane write the Templates editor makes.
+	 *
+	 * Returns the committed document so the caller can re-derive paths from it
+	 * rather than from the copy it computed before the write.
+	 */
+	async function commitStructure(
+		next: MessageTemplate,
+		note: string
+	): Promise<MessageTemplate | null> {
+		if (!template) {
+			oneOff = next;
+			return next;
+		}
+		inlineBusy = true;
+		const outcome = await api.templates.commitInline(template.id, next, note);
+		if (!outcome.ok) {
+			createError = outcome.reason;
+			inlineBusy = false;
+			return null;
+		}
+		await onTemplatesChanged();
+		inlineBusy = false;
+		return next;
+	}
+
+	/**
+	 * Inserts the chosen section and opens its editor — insert-then-type is one
+	 * gesture. Paths are re-derived from the committed document and the anchor is
+	 * re-queried from the live DOM, never carried across the write.
+	 */
+	async function insertSection(kind: SectionKind) {
+		const menu = addMenu;
+		addMenu = null;
+		if (!menu) return;
+		const at = menu.index;
+		const written = await commitStructure(
+			withInsertedBlock($state.snapshot(document_) as MessageTemplate, at, kind),
+			sectionEditNote('add', kind)
+		);
+		if (!written) return;
+
+		const path = insertedUnitPath(kind, at);
+		// A divider has no words, so nothing opens — the honest answer, not a failure.
+		if (!path) return;
+		await tick();
+		const unit = resolveUnit(document_, path);
+		const el = reserveEl?.querySelector<HTMLElement>(`[data-edit="${path}"]`);
+		if (!unit || !el) return;
+		inlineUnit = unit;
+		inlineAnchor = el;
+	}
+
+	/** Removes the section whose editor is open; an emptied document is honest. */
+	async function removeOpenSection() {
+		const at = inlineUnit ? unitBlockIndex(inlineUnit) : null;
+		if (at === null) return;
+		const block = document_.blocks[at];
+		if (!block) return;
+		const next = withRemovedBlock($state.snapshot(document_) as MessageTemplate, at);
+		const note = sectionEditNote('remove', blockKind(block));
+		closeInline();
+		await commitStructure(next, note);
+	}
+
 	/**
 	 * The preview renders exactly what will send: the stored template with the
 	 * live subject line on top. An operator's rewritten subject is theirs and
@@ -585,12 +679,15 @@
 			</p>
 			{#if previewTemplate && theme}
 				<div bind:this={reserveEl} use:editableUnits={{ enabled: inlineEnabled, onPress: onUnitPress }}>
+					<!-- Insertion rides the same gate as editing: where the live lane
+					     turns inline editing off, nothing structural is offered either. -->
 					<EmailRender
 						template={previewTemplate}
 						{theme}
 						{eventName}
 						{eventMeta}
-						editable={inlineEnabled} />
+						editable={inlineEnabled}
+						onInsert={inlineEnabled ? openAddMenu : undefined} />
 				</div>
 				{#if inlineUnit && inlineAnchor}
 					{#key `${inlineUnit.type}:${inlineUnit.path}`}
@@ -601,8 +698,16 @@
 							busy={inlineBusy}
 							onchange={previewInline}
 							oncommit={applyInline}
-							oncancel={closeInline} />
+							oncancel={closeInline}
+							onAddSection={inlineEnabled ? addBesideOpenUnit : undefined}
+							onRemoveSection={inlineEnabled ? removeOpenSection : undefined} />
 					{/key}
+				{/if}
+				{#if addMenu}
+					<SectionAddMenu
+						anchor={addMenu.anchor}
+						onpick={insertSection}
+						oncancel={() => (addMenu = null)} />
 				{/if}
 			{:else}
 				<!-- There is always a document now, so the only thing this can be

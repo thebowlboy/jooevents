@@ -206,3 +206,49 @@ test('the roster expansion carries the speaker’s communications tail and a sco
 	const compose = page.getByRole('link', { name: 'Compose email' });
 	await expect(compose).toHaveAttribute('href', '/app/messages?compose=1&person=spk-1');
 });
+
+/**
+ * A blank compose is a document that can grow. The end control is the entry a
+ * first-time author finds; the section it adds renders immediately and freezes
+ * into the draft, so the send ceremony shows the shape actually built.
+ */
+test('a blank compose can gain a section, and it freezes into the draft', async ({ page }) => {
+	await page.goto('/app/messages?compose=1');
+	const dialog = page.getByRole('dialog', { name: 'Compose message' });
+	await expect(dialog).toBeVisible();
+	await expect(dialog).toContainText('Your headline goes here');
+
+	// The persistent entry, not a hover-revealed one.
+	await dialog.getByRole('button', { name: '+ Add section' }).click();
+	const menu = page.getByRole('menu', { name: 'Add a section' });
+	await expect(menu).toBeVisible();
+	await menu.getByRole('menuitem', { name: 'Button' }).click();
+
+	// A one-off has no library record, so the section lands in composer state
+	// and shows up in the preview at once.
+	await expect(dialog.locator('.email__button')).toHaveText('Read more');
+	// Insert-then-type is one gesture: the new section's editor is already open.
+	const editor = page.locator('.ied');
+	await expect(editor).toBeVisible();
+	// Dismissed by its own control: Escape is the composer modal's too, and the
+	// section is already committed to composer state either way.
+	await editor.getByRole('button', { name: 'Cancel' }).click();
+	await expect(editor).toBeHidden();
+
+	await dialog.getByLabel('Subject').fill('We have moved rooms');
+	await dialog.getByRole('button', { name: 'Create draft' }).click();
+	await expect(dialog).toBeHidden();
+
+	// The frozen body is what the review renders — including the added section.
+	const queue = page.getByRole('region', { name: 'Needs attention' });
+	await expect(queue).toContainText('We have moved rooms', { timeout: 15000 });
+	await queue
+		.locator('li', { hasText: 'We have moved rooms' })
+		.getByRole('button', { name: 'Review & send' })
+		.first()
+		.click();
+	const review = page.getByRole('dialog', { name: 'Review & send' });
+	await expect(review).toBeVisible();
+	await expect(review).toContainText('One-off message');
+	await expect(review.locator('.email__button')).toHaveText('Read more');
+});
