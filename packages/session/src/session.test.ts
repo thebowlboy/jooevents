@@ -499,6 +499,72 @@ describe('canonical Session foundation', () => {
     })).toThrow('stale_session');
   });
 
+  test('retires one exact roster membership, compacts order, and restores the prior head', () => {
+    const empty = createEmptySessionCatalog(scope);
+    const source = { kind: 'submission', id: sessionId, version: 1 };
+    const created = applySessionMutationPlan({
+      catalog: empty,
+      vocabulary: vocabulary(),
+      plan: planSessionMutation({
+        catalog: empty,
+        vocabulary: vocabulary(),
+        planningInput: {
+          action: 'create', scope, sessionId, actorUserId: userId, occurredAt: now,
+          expectedCatalogVersion: empty.version,
+          expectedCatalogDigestSha256: empty.digestSha256,
+          title: 'Membership Panel', plannedDurationMinutes: 60,
+          lifecycle: 'programmed', formatId, trackId,
+          participants: [
+            { personId: personA, role: 'speaker', publiclyVisible: true, source },
+            { personId: personB, role: 'panelist', publiclyVisible: false, source }
+          ]
+        }
+      })
+    }).catalog;
+    const current = findSession(created, sessionId)!;
+    const expectedParticipant = current.roster.participants[0]!;
+    const removal = planSessionMutation({
+      catalog: created,
+      vocabulary: vocabulary({ setVersion: 2 }),
+      planningInput: {
+        action: 'roster_remove', scope, sessionId, actorUserId: userId, occurredAt: later,
+        expectedCatalogVersion: created.version,
+        expectedCatalogDigestSha256: created.digestSha256,
+        expectedSessionVersion: current.version,
+        expectedSessionDigestSha256: current.digestSha256,
+        expectedRosterVersion: current.roster.version,
+        expectedParticipant
+      }
+    });
+    expect(removal.after.roster.participants).toEqual([
+      { personId: personB, role: 'panelist', position: 0, publiclyVisible: false, source }
+    ]);
+    expect(removal.after.programTarget).toEqual(current.programTarget);
+
+    expect(() => planSessionMutation({
+      catalog: created,
+      vocabulary: vocabulary(),
+      planningInput: {
+        action: 'roster_remove', scope, sessionId, actorUserId: userId, occurredAt: later,
+        expectedCatalogVersion: created.version,
+        expectedCatalogDigestSha256: created.digestSha256,
+        expectedSessionVersion: current.version,
+        expectedSessionDigestSha256: current.digestSha256,
+        expectedRosterVersion: current.roster.version,
+        expectedParticipant: { ...expectedParticipant, publiclyVisible: false }
+      }
+    })).toThrow('participant_changed');
+
+    const removed = applySessionMutationPlan({
+      catalog: created, vocabulary: vocabulary({ setVersion: 2 }), plan: removal
+    }).catalog;
+    const restore = planSessionCompensation({
+      original: removal, catalog: removed, actorUserId: userId, occurredAt: later
+    });
+    const restored = applySessionRestorePlan({ catalog: removed, plan: restore }).catalog;
+    expect(findSession(restored, sessionId)!.roster).toEqual(current.roster);
+  });
+
   test('graduation collaboration plans spawn and attach, pins the applied head, and reverses', () => {
     const empty = createEmptySessionCatalog(scope);
     const source = { kind: 'submission', id: sessionId, version: 3 };

@@ -220,6 +220,22 @@ export const sessionRosterVisibilityInputSchema = z.strictObject({
   publiclyVisible: z.boolean()
 });
 
+/**
+ * Retires one exact current Session membership while leaving the person's
+ * Engagement and every Submission origin untouched. The complete participant
+ * image and roster version make the removal stale-safe and preserve the exact
+ * evidence needed by a guarded receipt restore.
+ */
+export const sessionRosterRemoveInputSchema = z.strictObject({
+  action: z.literal('roster_remove'),
+  ...catalogGuardFields,
+  sessionId: sessionIdInputSchema,
+  expectedSessionVersion: sessionVersionSchema,
+  expectedSessionDigestSha256: digestSchema,
+  expectedRosterVersion: sessionVersionSchema,
+  expectedParticipant: sessionParticipantRefSchema
+});
+
 export const sessionRemoveNewInputSchema = z.strictObject({
   action: z.literal('remove_new_session'),
   ...catalogGuardFields,
@@ -261,7 +277,8 @@ export const sessionPlanningInputSchema = z.discriminatedUnion('action', [
   sessionTransitionInputSchema.extend(planningAttribution),
   sessionRetargetInputSchema.extend(planningAttribution),
   sessionRosterAppendInputSchema.extend(planningAttribution),
-  sessionRosterVisibilityInputSchema.extend(planningAttribution)
+  sessionRosterVisibilityInputSchema.extend(planningAttribution),
+  sessionRosterRemoveInputSchema.extend(planningAttribution)
 ]);
 
 export const sessionMutationPlanSchema = z.strictObject({
@@ -307,13 +324,13 @@ export const sessionRemoveNewPlanSchema = z.strictObject({
 });
 
 export const sessionSafeDiffSchema = z.strictObject({
-  action: z.enum(['create', 'transition', 'retarget', 'roster_append', 'roster_visibility', 'restore']),
+  action: z.enum(['create', 'transition', 'retarget', 'roster_append', 'roster_visibility', 'roster_remove', 'restore']),
   before: sessionHeadSchema.nullable(),
   after: sessionHeadSchema.nullable()
 });
 
 export const sessionMutationResultSchema = z.strictObject({
-  action: z.enum(['create', 'remove_new_session', 'transition', 'retarget', 'roster_append', 'roster_visibility', 'restore']),
+  action: z.enum(['create', 'remove_new_session', 'transition', 'retarget', 'roster_append', 'roster_visibility', 'roster_remove', 'restore']),
   catalogVersion: sessionVersionSchema,
   session: sessionHeadSchema.nullable()
 });

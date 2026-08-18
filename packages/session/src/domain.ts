@@ -45,6 +45,7 @@ export type SessionPlanningErrorCode =
   | 'track_retired'
   | 'track_required'
   | 'participant_missing'
+  | 'participant_changed'
   | 'invalid_transition'
   | 'invalid_plan';
 
@@ -168,6 +169,34 @@ export function planSessionMutation(input: {
       updatedAt: planningInput.occurredAt
     };
     after = parseSessionHead({ ...unsigned, digestSha256: sessionHeadDigest(unsigned) });
+  } else if (planningInput.action === 'roster_remove') {
+    if (!existing) throw new SessionPlanningError('session_missing');
+    if (existing.version !== planningInput.expectedSessionVersion
+        || existing.digestSha256 !== planningInput.expectedSessionDigestSha256) {
+      throw new SessionPlanningError('stale_session');
+    }
+    if (existing.roster.version !== planningInput.expectedRosterVersion) {
+      throw new SessionPlanningError('participant_changed');
+    }
+    before = existing;
+    const participants = removedRosterParticipant(
+      existing.roster.participants,
+      planningInput.expectedParticipant
+    );
+    const rosterUnsigned = {
+      version: existing.roster.version + 1,
+      participants
+    };
+    const roster = { ...rosterUnsigned, digestSha256: sessionRosterDigest(rosterUnsigned) };
+    const { digestSha256: _digest, ...unsignedBefore } = existing;
+    const unsigned = {
+      ...unsignedBefore,
+      roster,
+      version: existing.version + 1,
+      updatedByUserId: planningInput.actorUserId,
+      updatedAt: planningInput.occurredAt
+    };
+    after = parseSessionHead({ ...unsigned, digestSha256: sessionHeadDigest(unsigned) });
   } else if (planningInput.action === 'retarget') {
     if (!existing) throw new SessionPlanningError('session_missing');
     if (existing.version !== planningInput.expectedSessionVersion
@@ -214,6 +243,20 @@ export function planSessionMutation(input: {
     after = parseSessionHead({ ...unsigned, digestSha256: sessionHeadDigest(unsigned) });
   }
   return buildMutationPlan(planningInput, input.catalog, before, after);
+}
+
+function removedRosterParticipant(
+  current: readonly SessionParticipantRefDto[],
+  expected: SessionParticipantRefDto
+): readonly SessionParticipantRefDto[] {
+  const participant = current.find((candidate) => candidate.personId === expected.personId);
+  if (!participant) throw new SessionPlanningError('participant_missing');
+  if (canonical(participant) !== canonical(expected)) {
+    throw new SessionPlanningError('participant_changed');
+  }
+  return current
+    .filter((candidate) => candidate.personId !== expected.personId)
+    .map((candidate, position) => ({ ...candidate, position }));
 }
 
 /**
