@@ -392,21 +392,32 @@
 			{#if entries.length === 0}
 				<p class="calm">Nothing has been sent to {person.name}.</p>
 			{:else}
-				<ul class="thread">
+				<!-- A vertical timeline: one rail, newest at the top wearing the
+				     filled dot, each entry's time on the row's far edge in the time
+				     hue — the series reads as a series, and the width earns its keep. -->
+				<ol class="timeline">
 					{#each entries as entry (entry.id)}
 						{@const outcome = deliveryOutcomeBadge[entry.outcome]}
 						{@const Outcome = outcome.icon}
-						<li class="thread__entry">
-							<span class="ui-badge ui-badge--{outcome.tone}" class:ui-badge--solid={outcome.solid}
-								><Outcome class="ui-badge__icon" aria-hidden="true" />{outcome.label}</span>
-							<span class="thread__what">
-								<span class="thread__subject">{entry.subject}</span>
-								<span class="thread__meta"
-									>{entry.purpose} · <time>{entry.at}</time></span>
-							</span>
+						<li class="tl">
+							<span class="tl__dot" aria-hidden="true"></span>
+							<div class="tl__body">
+								<p class="tl__head">
+									<span class="tl__subject">{entry.subject}</span>
+									<time class="tl__at">{entry.at}</time>
+								</p>
+								<p class="tl__meta">
+									<span
+										class="ui-badge ui-badge--{outcome.tone}"
+										class:ui-badge--solid={outcome.solid}
+										><Outcome class="ui-badge__icon" aria-hidden="true" />{outcome.label}</span>
+									<span>{entry.purpose}</span>
+								</p>
+							</div>
 						</li>
 					{/each}
-				</ul>
+				</ol>
+				<p class="ui-sr-only">Newest first.</p>
 			{/if}
 
 			<!-- A GET opens the composer scoped to one person; the send stays an
@@ -740,31 +751,104 @@
 		font-size: var(--je-font-size-sm);
 	}
 
-	.thread__entry {
-		display: flex;
-		align-items: flex-start;
-		gap: var(--je-space-3);
+	.history__entry time {
+		color: var(--je-color-recognition-time);
+		font-variant-numeric: tabular-nums;
 	}
 
-	.thread__what {
+	.sessions,
+	.proposals {
+		display: grid;
+		gap: var(--je-space-2);
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	/* The walk door never squeezes: the sentence yields, the act does not. */
+	.strip > a {
+		flex: 0 0 auto;
+	}
+
+	.timeline {
+		position: relative;
+		display: grid;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	/* One continuous rail, trimmed shy of both ends so it reads as connecting
+	   the dots rather than escaping the list. */
+	.timeline::before {
+		content: '';
+		position: absolute;
+		inset-inline-start: calc(0.375rem - 1px);
+		inset-block-start: 0.9rem;
+		inset-block-end: 0.9rem;
+		inline-size: 2px;
+		background: var(--je-color-border);
+	}
+
+	.tl {
+		position: relative;
+		display: grid;
+		grid-template-columns: 0.75rem minmax(0, 1fr);
+		column-gap: var(--je-space-3);
+		padding-block: var(--je-space-2);
+	}
+
+	.tl__dot {
+		position: relative;
+		z-index: 1;
+		inline-size: 0.75rem;
+		block-size: 0.75rem;
+		margin-block-start: 0.3rem;
+		border: 2px solid var(--je-color-border-strong);
+		border-radius: 50%;
+		background: var(--je-color-surface);
+	}
+
+	/* The newest entry is the filled dot: later is solid, earlier is hollow. */
+	.tl:first-child .tl__dot {
+		background: var(--je-color-border-strong);
+	}
+
+	.tl__body {
 		display: grid;
 		gap: 2px;
 		min-inline-size: 0;
 	}
 
-	.thread__subject {
+	.tl__head {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		flex-wrap: wrap;
+		gap: var(--je-space-1) var(--je-space-3);
+		margin: 0;
+	}
+
+	.tl__subject {
+		min-inline-size: 0;
 		overflow-wrap: anywhere;
 	}
 
-	.thread__meta {
-		font-size: var(--je-font-size-sm);
-		color: var(--je-color-text-muted);
-	}
-
-	.thread__meta time,
-	.history__entry time {
+	.tl__at {
 		color: var(--je-color-recognition-time);
 		font-variant-numeric: tabular-nums;
+		font-size: var(--je-font-size-sm);
+		white-space: nowrap;
+	}
+
+	.tl__meta {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: var(--je-space-2);
+		margin: 0;
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-text-muted);
 	}
 
 	.guard {

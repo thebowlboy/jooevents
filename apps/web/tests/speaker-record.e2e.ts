@@ -251,7 +251,7 @@ test('the thread is the whole thread, newest first, with each entry’s own outc
 	const surface = record(page);
 	await expect(surface).toContainText('Communications', { timeout: 15000 });
 
-	const entries = surface.locator('.thread__entry');
+	const entries = surface.locator('.tl');
 	await expect(entries).toHaveCount(2);
 	await expect(entries.first()).toContainText('Speaker onboarding — what happens next');
 	await expect(entries.first()).toContainText('Delivered');

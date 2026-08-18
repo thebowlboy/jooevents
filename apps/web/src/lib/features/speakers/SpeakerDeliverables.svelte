@@ -192,6 +192,16 @@
 							     Absent where the state already carries the timing. -->
 							<span class="row__due"><span class="ui-sr-only">Due </span>{view.due}</span>
 						{/if}
+						{#if view.waivable && !view.acceptable && !view.acceptRefusal}
+							<!-- The only act this row offers rides the head instead of renting a
+							     whole row: one small door, right-aligned, same operation. -->
+							<button
+								type="button"
+								class="ui-button ui-button--ghost ui-button--sm row__waive"
+								disabled={busyId !== null}
+								aria-busy={busyId === view.def.id}
+								onclick={() => waive(view)}>Mark waived</button>
+						{/if}
 					</div>
 
 					{#if view.notYetSubmitted}
@@ -210,7 +220,7 @@
 						</p>
 					{/if}
 
-					{#if view.acceptable || view.acceptRefusal || view.waivable}
+					{#if view.acceptable || view.acceptRefusal}
 						<div class="row__acts">
 							{#if view.acceptable}
 								<button
@@ -234,7 +244,7 @@
 									>Send back</button>
 							{/if}
 
-							{#if view.waivable}
+							{#if view.waivable && (view.acceptable || view.acceptRefusal)}
 								<button
 									type="button"
 									class="ui-button ui-button--ghost ui-button--sm"
@@ -258,6 +268,10 @@
 {/snippet}
 
 <style>
+	.row__waive {
+		margin-inline-start: auto;
+	}
+
 	.settled {
 		display: grid;
 		gap: var(--je-space-3);
