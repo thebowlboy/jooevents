@@ -64,9 +64,9 @@ export const sessionChangedDetailSchema = z.strictObject({
   code: z.enum([
     'wrong_scope', 'stale_catalog', 'session_exists', 'session_missing', 'stale_session',
     'format_missing', 'format_retired', 'track_missing', 'track_retired', 'track_required',
-    'participant_missing', 'session_placed', 'invalid_transition', 'invalid_plan'
+    'participant_missing', 'participant_changed', 'session_placed', 'invalid_transition', 'invalid_plan'
   ]),
-  action: z.enum(['create', 'remove_new_session', 'transition', 'retarget', 'roster_visibility']),
+  action: z.enum(['create', 'remove_new_session', 'transition', 'retarget', 'roster_visibility', 'roster_remove', 'roster_restore']),
   sessionId: z.uuid()
 });
 export const SESSION_CHANGED_DETAIL_SCHEMA_VERSION = 1;
@@ -298,7 +298,9 @@ export function createSessionDirectOperationModule(
               remove_new_session: 'Removed a new session',
               transition: "Changed a session's stage",
               retarget: "Changed a session's format or track",
-              roster_visibility: "Changed a participant's public visibility"
+              roster_visibility: "Changed a participant's public visibility",
+              roster_remove: 'Removed a participant from a session',
+              roster_restore: 'Restored a participant to a session'
             })
           } },
         bindings: [{ surface: 'operator_http' as const, method: 'POST' as const,

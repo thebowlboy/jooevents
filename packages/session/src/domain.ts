@@ -197,6 +197,34 @@ export function planSessionMutation(input: {
       updatedAt: planningInput.occurredAt
     };
     after = parseSessionHead({ ...unsigned, digestSha256: sessionHeadDigest(unsigned) });
+  } else if (planningInput.action === 'roster_restore') {
+    if (!existing) throw new SessionPlanningError('session_missing');
+    if (existing.version !== planningInput.expectedSessionVersion
+        || existing.digestSha256 !== planningInput.expectedSessionDigestSha256) {
+      throw new SessionPlanningError('stale_session');
+    }
+    if (existing.roster.version !== planningInput.expectedRosterVersion) {
+      throw new SessionPlanningError('participant_changed');
+    }
+    before = existing;
+    const participants = restoredRosterParticipant(
+      existing.roster.participants,
+      planningInput.participant
+    );
+    const rosterUnsigned = {
+      version: existing.roster.version + 1,
+      participants
+    };
+    const roster = { ...rosterUnsigned, digestSha256: sessionRosterDigest(rosterUnsigned) };
+    const { digestSha256: _digest, ...unsignedBefore } = existing;
+    const unsigned = {
+      ...unsignedBefore,
+      roster,
+      version: existing.version + 1,
+      updatedByUserId: planningInput.actorUserId,
+      updatedAt: planningInput.occurredAt
+    };
+    after = parseSessionHead({ ...unsigned, digestSha256: sessionHeadDigest(unsigned) });
   } else if (planningInput.action === 'retarget') {
     if (!existing) throw new SessionPlanningError('session_missing');
     if (existing.version !== planningInput.expectedSessionVersion
@@ -257,6 +285,19 @@ function removedRosterParticipant(
   return current
     .filter((candidate) => candidate.personId !== expected.personId)
     .map((candidate, position) => ({ ...candidate, position }));
+}
+
+function restoredRosterParticipant(
+  current: readonly SessionParticipantRefDto[],
+  participant: SessionParticipantRefDto
+): readonly SessionParticipantRefDto[] {
+  if (current.some((candidate) => candidate.personId === participant.personId)) {
+    throw new SessionPlanningError('participant_changed');
+  }
+  if (participant.position > current.length) throw new SessionPlanningError('invalid_plan');
+  const restored = [...current];
+  restored.splice(participant.position, 0, participant);
+  return restored.map((candidate, position) => ({ ...candidate, position }));
 }
 
 /**

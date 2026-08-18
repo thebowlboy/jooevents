@@ -558,6 +558,23 @@ describe('canonical Session foundation', () => {
     const removed = applySessionMutationPlan({
       catalog: created, vocabulary: vocabulary({ setVersion: 2 }), plan: removal
     }).catalog;
+    const removedHead = findSession(removed, sessionId)!;
+    const receiptRestore = planSessionMutation({
+      catalog: removed,
+      vocabulary: vocabulary({ setVersion: 3 }),
+      planningInput: {
+        action: 'roster_restore', scope, sessionId, actorUserId: userId, occurredAt: later,
+        expectedCatalogVersion: removed.version,
+        expectedCatalogDigestSha256: removed.digestSha256,
+        expectedSessionVersion: removedHead.version,
+        expectedSessionDigestSha256: removedHead.digestSha256,
+        expectedRosterVersion: removedHead.roster.version,
+        participant: expectedParticipant
+      }
+    });
+    expect(receiptRestore.after.roster.participants).toEqual(current.roster.participants);
+    expect(receiptRestore.after.programTarget).toEqual(current.programTarget);
+
     const restore = planSessionCompensation({
       original: removal, catalog: removed, actorUserId: userId, occurredAt: later
     });

@@ -205,6 +205,51 @@ export async function runJ4ManualPaths(world: FlowWorld): Promise<void> {
   const hiddenSession = required(hidden.data.session, 'hidden manual session');
   expect(hiddenSession.roster.participants[0]?.publiclyVisible).toBe(false);
 
+  let beforeParticipantRemoval!: Catalog;
+  await organizer.expectRead('session.catalog.read', (projection) => {
+    beforeParticipantRemoval = projection as Catalog;
+    return beforeParticipantRemoval.sessions.some((session) => session.id === hiddenSession.id);
+  });
+  const beforeRemovalHead = required(
+    beforeParticipantRemoval.sessions.find((session) => session.id === hiddenSession.id),
+    'participant removal session head'
+  );
+  const removedParticipant = required(
+    beforeRemovalHead.roster.participants.find((entry) => entry.personId === participant.personId),
+    'participant removal evidence'
+  );
+  const removedMembership = await organizer.do<SessionChange>('session.change', {
+    action: 'roster_remove', expectedCatalogVersion: beforeParticipantRemoval.version,
+    expectedCatalogDigestSha256: beforeParticipantRemoval.digestSha256,
+    sessionId: beforeRemovalHead.id, expectedSessionVersion: beforeRemovalHead.version,
+    expectedSessionDigestSha256: beforeRemovalHead.digestSha256,
+    expectedRosterVersion: beforeRemovalHead.roster.version,
+    expectedParticipant: removedParticipant
+  });
+  await organizer.expectLog('Removed a participant from a session');
+  const withoutParticipant = required(removedMembership.data.session, 'removed participant session');
+  expect(withoutParticipant.roster.participants).toEqual([]);
+
+  let beforeParticipantRestore!: Catalog;
+  await organizer.expectRead('session.catalog.read', (projection) => {
+    beforeParticipantRestore = projection as Catalog;
+    return beforeParticipantRestore.sessions.some((session) => session.id === hiddenSession.id);
+  });
+  const beforeRestoreHead = required(
+    beforeParticipantRestore.sessions.find((session) => session.id === hiddenSession.id),
+    'participant restore session head'
+  );
+  const restoredMembership = await organizer.do<SessionChange>('session.change', {
+    action: 'roster_restore', expectedCatalogVersion: beforeParticipantRestore.version,
+    expectedCatalogDigestSha256: beforeParticipantRestore.digestSha256,
+    sessionId: beforeRestoreHead.id, expectedSessionVersion: beforeRestoreHead.version,
+    expectedSessionDigestSha256: beforeRestoreHead.digestSha256,
+    expectedRosterVersion: beforeRestoreHead.roster.version,
+    participant: removedParticipant
+  });
+  await organizer.expectLog('Restored a participant to a session');
+  expect(restoredMembership.data.session?.roster.participants).toEqual([removedParticipant]);
+
   let freshCatalog!: Catalog;
   await organizer.expectRead('session.catalog.read', (projection) => {
     freshCatalog = projection as Catalog;

@@ -1,4 +1,4 @@
-import type { StructuredOutcome } from '@jooevents/contracts';
+import type { SessionParticipantRefDto, StructuredOutcome } from '@jooevents/contracts';
 import type { ReleaseWorkspacePort } from './release-workspace-adapter';
 import type { SafeApiError } from './client';
 import type {
@@ -661,6 +661,11 @@ export function createLiveSchedulePagePort(input: {
 	/** Exact attach plans retained only for the receipt's immediate guarded restore. */
 	const attachRecoveries = new Map<string, import('@jooevents/contracts').SessionSubmissionAttachPlanDto>();
 	const attachRecoveryKey = (sessionId: string, submissionId: string) => `${sessionId}:${submissionId}`;
+	const participantRecoveries = new Map<string, Readonly<{
+		participant: SessionParticipantRefDto;
+		expectedSession: SessionHeadView;
+	}>>();
+	const participantRecoveryKey = (sessionId: string, personId: string) => `${sessionId}:${personId}`;
 
 	async function readCatalog() {
 		const result = await input.sessions.readCatalog();
@@ -1185,11 +1190,73 @@ export function createLiveSchedulePagePort(input: {
 			async addDirectParticipant(): Promise<MutationOutcome> {
 				return refusal('session_participants');
 			},
-			async addParticipantFromRoster(): Promise<MutationOutcome> {
-				return refusal('session_participants');
+			async addParticipantFromRoster(sessionId: string, speakerId: string): Promise<MutationOutcome> {
+				const candidates = (await input.speakers.list()).filter((row) => row.id === speakerId);
+				if (candidates.length !== 1 || candidates[0]!.personId === undefined) {
+					return refusal('session_participants');
+				}
+				const personId = candidates[0]!.personId;
+				const key = participantRecoveryKey(sessionId, personId);
+				const recovery = participantRecoveries.get(key);
+				if (!recovery) return refusal('session_participants');
+				const catalog = await readCatalog();
+				const session = catalog.sessions.find((head) => head.id === sessionId);
+				if (!session) return { ok: false, reason: 'This session no longer exists.' };
+				if (session.version !== recovery.expectedSession.version
+					|| session.digestSha256 !== recovery.expectedSession.digestSha256) {
+					return { ok: false, reason: 'This removal receipt is no longer current.' };
+				}
+				const applied = await input.sessions.applyChange({
+					action: 'roster_restore',
+					expectedCatalogVersion: catalog.version,
+					expectedCatalogDigestSha256: catalog.digestSha256,
+					sessionId,
+					expectedSessionVersion: session.version,
+					expectedSessionDigestSha256: session.digestSha256,
+					expectedRosterVersion: session.roster.version,
+					participant: recovery.participant
+				}, newIdempotencyKey());
+				if (applied.kind !== 'success' || applied.data.action !== 'roster_restore') {
+					return applied.kind === 'success'
+						? { ok: false, reason: 'The participant restore result was incomplete.' }
+						: { ok: false, reason: applyFailure(applied, 'session participant').reason };
+				}
+				participantRecoveries.delete(key);
+				return { ok: true };
 			},
-			async removeParticipant(): Promise<MutationOutcome> {
-				return refusal('session_participants');
+			async removeParticipant(sessionId: string, email: string): Promise<MutationOutcome> {
+				const catalog = await readCatalog();
+				const session = catalog.sessions.find((head) => head.id === sessionId);
+				if (!session) return { ok: false, reason: 'This session no longer exists.' };
+				const matches = (await input.speakers.list())
+					.filter((row) => row.email === email && row.personId !== undefined);
+				const personIds = [...new Set(matches.map((row) => row.personId!))];
+				if (personIds.length !== 1) {
+					return { ok: false, reason: 'This participant identity is no longer unambiguous.' };
+				}
+				const participant = session.roster.participants.find((row) => row.personId === personIds[0]);
+				if (!participant) return { ok: false, reason: 'This person is no longer on the session.' };
+				const applied = await input.sessions.applyChange({
+					action: 'roster_remove',
+					expectedCatalogVersion: catalog.version,
+					expectedCatalogDigestSha256: catalog.digestSha256,
+					sessionId,
+					expectedSessionVersion: session.version,
+					expectedSessionDigestSha256: session.digestSha256,
+					expectedRosterVersion: session.roster.version,
+					expectedParticipant: participant
+				}, newIdempotencyKey());
+				if (applied.kind !== 'success' || applied.data.action !== 'roster_remove'
+					|| applied.data.session === null) {
+					return applied.kind === 'success'
+						? { ok: false, reason: 'The participant removal result was incomplete.' }
+						: { ok: false, reason: applyFailure(applied, 'session participant').reason };
+				}
+				participantRecoveries.set(participantRecoveryKey(sessionId, participant.personId), {
+					participant,
+					expectedSession: applied.data.session
+				});
+				return { ok: true };
 			}
 		}),
 		vocab: Object.freeze({

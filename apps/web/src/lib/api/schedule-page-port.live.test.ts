@@ -344,4 +344,71 @@ describe('live Schedule page correction boundary', () => {
 			}
 		]);
 	});
+
+	test('removes one exact Session membership and uses only its current receipt to restore', async () => {
+		const sessionId = id(81);
+		const personId = id(82);
+		const speakerId = id(83);
+		const participant = {
+			personId, role: 'speaker', position: 0, publiclyVisible: true,
+			source: { kind: 'submission', id: id(84), version: 4 }
+		};
+		const writes: unknown[] = [];
+		let reads = 0;
+		const removedSession = {
+			id: sessionId, version: 3, digestSha256: 'd'.repeat(64),
+			roster: { version: 3, participants: [] }
+		};
+		const port = createLiveSchedulePagePort({
+			...base,
+			placements: { source: { kind: 'live' } } as never,
+			sessions: {
+				source: { kind: 'live' },
+				readCatalog: async () => {
+					reads += 1;
+					return { kind: 'success', data: reads === 1
+						? {
+							version: 5, digestSha256: 'a'.repeat(64), sessions: [{
+								id: sessionId, version: 2, digestSha256: 'b'.repeat(64),
+								roster: { version: 2, participants: [participant] }
+							}]
+						}
+						: { version: 6, digestSha256: 'c'.repeat(64), sessions: [removedSession] } };
+				},
+				applyChange: async (request: any) => {
+					writes.push(request);
+					return { kind: 'success', data: {
+						action: request.action,
+						catalogVersion: request.action === 'roster_remove' ? 6 : 7,
+						session: request.action === 'roster_remove'
+							? removedSession
+							: { ...removedSession, version: 4, roster: { version: 4, participants: [participant] } }
+					} };
+				}
+			} as never,
+			speakers: { list: async () => [{
+				id: speakerId, personId, name: 'Ada', email: 'ada@example.test', state: 'confirmed',
+				sessions: [], tasksDone: 0, tasksTotal: 0, overdueTasks: 0,
+				publiclyVisible: true, contentApproved: true, position: 0
+			}], profile: async () => null } as never,
+			newIdempotencyKey: () => 'participant-change'
+		} as never);
+
+		expect(await port.schedule.removeParticipant(sessionId, 'ada@example.test')).toEqual({ ok: true });
+		expect(await port.schedule.addParticipantFromRoster(sessionId, speakerId)).toEqual({ ok: true });
+		expect(writes).toEqual([
+			{
+				action: 'roster_remove', expectedCatalogVersion: 5,
+				expectedCatalogDigestSha256: 'a'.repeat(64), sessionId,
+				expectedSessionVersion: 2, expectedSessionDigestSha256: 'b'.repeat(64),
+				expectedRosterVersion: 2, expectedParticipant: participant
+			},
+			{
+				action: 'roster_restore', expectedCatalogVersion: 6,
+				expectedCatalogDigestSha256: 'c'.repeat(64), sessionId,
+				expectedSessionVersion: 3, expectedSessionDigestSha256: 'd'.repeat(64),
+				expectedRosterVersion: 3, participant
+			}
+		]);
+	});
 });

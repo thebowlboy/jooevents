@@ -69,7 +69,7 @@ export type SessionCatalogCoreSource =
  *
  * It deliberately carries just what the backend owns today: the catalog read
  * and one direct audited change (`create` | `remove_new_session` | `retarget` |
- * forward-only `transition` | roster visibility).
+ * forward-only `transition` | roster visibility | exact membership remove/receipt restore).
  * Rosters with resolvable people, submission attachment, per-session proposal
  * counts, breaks, and publication have no canonical owner here; a live source
  * never fills those gaps with sample behavior or inferred facts, and `restore`
