@@ -159,15 +159,18 @@
 				lineup = { roster, categories };
 			} else {
 				const application = api.application;
-				if (application && scope.kind === 'form') {
+				const summaries = await api.forms.list();
+				forms = summaries;
+				// The live port returns only the form pinned by the active apply
+				// presentation. That makes the bare hosted address the canonical
+				// answering door, while an explicit form scope remains a stable deep
+				// link. Ports without the application capability stay preview-only.
+				const servedFormId = scope.kind === 'form' ? scope.formId : summaries[0]?.id;
+				if (application && servedFormId) {
 					// The served DTO carries what answering needs — field constraints
 					// and option identities — which the flattened template pool does
 					// not; both reads resolve from the one in-flight served answer.
-					const [summaries, availability] = await Promise.all([
-						api.forms.list(),
-						application.served({ formId: scope.formId })
-					]);
-					forms = summaries;
+					const availability = await application.served({ formId: servedFormId });
 					if (availability.kind === 'open') {
 						const served = availability.form;
 						liveApply = {
@@ -178,8 +181,6 @@
 						applyClosed = true;
 						missing = false;
 					}
-				} else {
-					forms = await api.forms.list();
 				}
 			}
 		} catch {

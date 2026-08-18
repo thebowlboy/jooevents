@@ -15,6 +15,9 @@ const submissionId = '018f6f00-0000-7000-8000-0000000000f9';
 const titleFieldId = '018f6f00-0000-7000-8000-0000000000a1';
 const emailFieldId = '018f6f00-0000-7000-8000-0000000000a2';
 const abstractFieldId = '018f6f00-0000-7000-8000-0000000000a3';
+const demoFieldId = '018f6f00-0000-7000-8000-0000000000a4';
+const showAbstractRuleId = '018f6f00-0000-7000-8000-0000000000b1';
+const requireAbstractRuleId = '018f6f00-0000-7000-8000-0000000000b2';
 const continuation = `gsr_${'a'.repeat(43)}`;
 
 const servedForm = {
@@ -48,17 +51,39 @@ const servedForm = {
 			maximumLength: 320
 		},
 		{
-			kind: 'textarea',
-			id: abstractFieldId,
-			label: 'Abstract',
-			help: 'A paragraph is plenty.',
+			kind: 'checkbox',
+			id: demoFieldId,
+			label: 'Will your session include a live demo?',
+			help: null,
 			required: false,
 			initiallyVisible: true,
-			position: 2,
+			position: 2
+		},
+		{
+			kind: 'textarea',
+			id: abstractFieldId,
+			label: 'What should attendees be able to try?',
+			help: 'A paragraph is plenty.',
+			required: false,
+			initiallyVisible: false,
+			position: 3,
 			maximumLength: 10_000
 		}
 	],
-	rules: []
+	rules: [
+		{
+			id: showAbstractRuleId,
+			position: 0,
+			condition: { kind: 'checked_is', sourceFieldId: demoFieldId, value: true },
+			effect: { kind: 'show', targetFieldIds: [abstractFieldId] }
+		},
+		{
+			id: requireAbstractRuleId,
+			position: 1,
+			condition: { kind: 'checked_is', sourceFieldId: demoFieldId, value: true },
+			effect: { kind: 'require', targetFieldIds: [abstractFieldId] }
+		}
+	]
 };
 
 interface CeremonyLog {
@@ -127,6 +152,7 @@ async function mockCeremony(
 				data: {
 					schemaVersion: 1,
 					surfaceKind: 'apply',
+					formRef: { formId, formVersionId },
 					surfaceReleaseNumber: 2,
 					manifest: { schemaVersion: 1, heading: 'Speak at the Summit', intro: null },
 					styleSetReleaseNumber: 1,
@@ -232,6 +258,27 @@ async function openApply(page: Page): Promise<void> {
 		timeout: 15000
 	});
 }
+
+async function openBareApply(page: Page): Promise<void> {
+	await page.goto('/s/apply');
+	await expect(page.locator('.apply__title')).toContainText('Speak at the Summit', {
+		timeout: 15000
+	});
+}
+
+test('the bare released call mounts live conditional answering', async ({ page }) => {
+	await mockCeremony(page);
+	await openBareApply(page);
+
+	await expect(page.locator('.public__notice')).toHaveCount(0);
+	const demo = page.getByLabel('Will your session include a live demo?');
+	await expect(demo).toBeEnabled();
+	await expect(page.getByLabel(/What should attendees be able to try/)).toHaveCount(0);
+	await demo.check();
+	const detail = page.getByLabel(/What should attendees be able to try/);
+	await expect(detail).toBeVisible();
+	await expect(detail).toHaveAttribute('aria-required', 'true');
+});
 
 test('the served call takes answers, autosaving quietly', async ({ page }) => {
 	const log = await mockCeremony(page);
