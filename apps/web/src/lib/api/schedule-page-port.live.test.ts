@@ -235,7 +235,7 @@ describe('live Schedule page correction boundary', () => {
 		});
 	});
 
-	test('serves Decision-owned origins and only accepted unrouted attach candidates', async () => {
+	test('serves Decision-owned origins and accepted attach-or-move candidates', async () => {
 		const sessionId = id(61);
 		const personId = id(62);
 		const routedId = id(63);
@@ -304,6 +304,12 @@ describe('live Schedule page correction boundary', () => {
 					} };
 				}
 			} as never,
+			attribution: { source: { kind: 'live' }, read: async () => ({
+				kind: 'success', data: [{
+					id: submissionId, title: 'Accepted talk', primaryParticipantName: 'Ada',
+					source: 'cfp', decision: 'accepted', origin: null
+				}]
+			}) } as never,
 			attributionMutations: {
 				source: { kind: 'live' },
 				apply: async (request: any, key: string) => {
@@ -341,6 +347,77 @@ describe('live Schedule page correction boundary', () => {
 					expectedSessionDigestSha256: 'd'.repeat(64),
 					original: recovery
 				}
+			}
+		]);
+	});
+
+	test('moves an already-routed accepted Submission and restores its exact move receipt', async () => {
+		const sourceSessionId = id(73);
+		const targetSessionId = id(74);
+		const submissionId = id(75);
+		const writes: any[] = [];
+		let reads = 0;
+		const recovery = {
+			sourceSession: { after: { id: sourceSessionId } },
+			targetSession: { after: { id: targetSessionId } }
+		} as never;
+		const port = createLiveSchedulePagePort({
+			...base,
+			placements: { source: { kind: 'live' } } as never,
+			sessions: { source: { kind: 'live' }, readCatalog: async () => {
+				reads += 1;
+				return { kind: 'success', data: {
+					version: reads === 1 ? 9 : 11,
+					digestSha256: (reads === 1 ? 'a' : 'f').repeat(64),
+					sessions: [
+						{ id: sourceSessionId, title: 'Original', version: reads === 1 ? 2 : 3,
+							digestSha256: (reads === 1 ? 'b' : 'c').repeat(64) },
+						{ id: targetSessionId, title: 'Destination', version: reads === 1 ? 4 : 5,
+							digestSha256: (reads === 1 ? 'd' : 'e').repeat(64) }
+					]
+				} };
+			} } as never,
+			attribution: { source: { kind: 'live' }, read: async () => ({
+				kind: 'success', data: [{
+					id: submissionId, title: 'Routed talk', primaryParticipantName: 'Ada',
+					source: 'cfp', decision: 'accepted',
+					origin: { sessionId: sourceSessionId, kind: 'spawned' }
+				}]
+			}) } as never,
+			attributionMutations: { source: { kind: 'live' }, apply: async (request: any) => {
+				writes.push(request);
+				return request.action === 'move'
+					? { kind: 'success', data: { action: 'move', recovery } }
+					: { kind: 'success', data: { action: 'restore_move', recovery: null } };
+			} } as never,
+			newIdempotencyKey: () => `move-${writes.length + 1}`
+		} as never);
+
+		expect(await port.schedule.attachCandidates(targetSessionId)).toEqual([{
+			id: submissionId, title: 'Routed talk', speakers: [{ name: 'Ada' }],
+			moveFrom: { sessionId: sourceSessionId, sessionTitle: 'Original' }
+		}]);
+		// Candidate loading consumed the first catalog; the write deliberately rereads.
+		reads = 0;
+		expect(await port.schedule.attachSubmission(targetSessionId, submissionId)).toEqual({ ok: true });
+		expect(await port.schedule.detachSubmission(targetSessionId, submissionId)).toEqual({ ok: true });
+		expect(writes).toEqual([
+			{
+				action: 'move', expectedCatalogVersion: 9,
+				expectedCatalogDigestSha256: 'a'.repeat(64), submissionId,
+				sourceSessionId, expectedSourceSessionVersion: 2,
+				expectedSourceSessionDigestSha256: 'b'.repeat(64),
+				targetSessionId, expectedTargetSessionVersion: 4,
+				expectedTargetSessionDigestSha256: 'd'.repeat(64)
+			},
+			{
+				action: 'restore_move', expectedCatalogVersion: 11,
+				expectedCatalogDigestSha256: 'f'.repeat(64),
+				expectedSourceSessionVersion: 3,
+				expectedSourceSessionDigestSha256: 'c'.repeat(64),
+				expectedTargetSessionVersion: 5,
+				expectedTargetSessionDigestSha256: 'e'.repeat(64),
+				original: recovery
 			}
 		]);
 	});

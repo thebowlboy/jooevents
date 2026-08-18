@@ -19,7 +19,7 @@ function usage(): never {
     'Usage:',
     '  jooevents-db status --database /absolute/path.sqlite',
     '  jooevents-db migrate --database /absolute/path.sqlite [--class retained_development|frozen_release]',
-    '  jooevents-db promote-release --database /absolute/path.sqlite --expected-database-id ID [--release-floor sqlite-e2-s15]',
+    '  jooevents-db promote-release --database /absolute/path.sqlite --expected-database-id ID [--release-floor sqlite-e2-s16]',
     '  jooevents-db backup --database /absolute/path.sqlite --backup /absolute/path.backup.sqlite [--expected-database-id ID] --class retained_development|frozen_release --max-bytes N',
     '  jooevents-db restore-rehearsal --backup /absolute/path.backup.sqlite --candidate /absolute/restored.sqlite [--expected-database-id ID] --expected-sha256 SHA256 --class retained_development|frozen_release --max-bytes N',
     ''

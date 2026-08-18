@@ -8,6 +8,8 @@ import {
 } from '@jooevents/application';
 import {
   sessionSubmissionAttachPlanSchema,
+  sessionSubmissionMovePlanSchema,
+  sessionSubmissionMoveRestorePlanSchema,
   sessionSubmissionRestorePlanBundleSchema,
   sessionSubmissionRouteContributionSchema,
   sessionSubmissionRouteInputSchema
@@ -19,6 +21,8 @@ import {
 import { parseUserId, parseWorkspaceId, type WorkspaceId } from '@jooevents/kernel';
 import {
   planSessionSubmissionAttach,
+  planSessionSubmissionMove,
+  planSessionSubmissionMoveRestore,
   planSessionSubmissionRestore,
   SessionSubmissionRoutePlanningError
 } from '@jooevents/session';
@@ -37,6 +41,7 @@ import type {
 } from './foundation-trial-uow';
 import type { SQLiteOperatorEventRelationshipSource } from './operator-authority-repositories';
 import type { SQLiteSessionRepository } from './session';
+import type { SQLiteSessionParticipantSupportRepository } from './session-participant-support';
 
 const same = (
   left: { readonly key: string; readonly version: number },
@@ -61,6 +66,7 @@ implements SQLiteEffectDomainAdapter {
     readonly workspaceId: WorkspaceId;
     readonly sessions: SQLiteSessionRepository;
     readonly decisions: SQLiteDecisionRepository;
+    readonly supports: SQLiteSessionParticipantSupportRepository;
     readonly eventRelationships: SQLiteOperatorEventRelationshipSource;
   }) {
     this.#workspaceId = parseWorkspaceId(input.workspaceId);
@@ -114,7 +120,8 @@ implements SQLiteEffectDomainAdapter {
     const environment = {
       sessions: this.input.sessions,
       decisions: this.input.decisions,
-      engagements: this.input.decisions.engagements
+      engagements: this.input.decisions.engagements,
+      supports: this.input.supports
     };
     return sealSessionDirectPreparation({
       capability,
@@ -142,6 +149,48 @@ implements SQLiteEffectDomainAdapter {
                 recovery: plan
               } },
               domain: { kind: 'session_submission_attach', plan },
+              effectContributions: []
+            });
+          }
+          if (author.action === 'move') {
+            const plan = planSessionSubmissionMove({
+              scope,
+              actorUserId,
+              occurredAt,
+              author,
+              environment
+            });
+            return sessionSubmissionRouteContributionSchema.parse({
+              result: { kind: 'success', data: {
+                action: 'move',
+                catalogVersion: plan.catalogVersion.after,
+                sourceSession: plan.sourceSession.after,
+                targetSession: plan.targetSession.after,
+                origin: plan.originAfter,
+                recovery: plan
+              } },
+              domain: { kind: 'session_submission_move', plan },
+              effectContributions: []
+            });
+          }
+          if (author.action === 'restore_move') {
+            const plan = planSessionSubmissionMoveRestore({
+              scope,
+              actorUserId,
+              occurredAt,
+              author,
+              environment
+            });
+            return sessionSubmissionRouteContributionSchema.parse({
+              result: { kind: 'success', data: {
+                action: 'restore_move',
+                catalogVersion: plan.catalogVersion.after,
+                sourceSession: plan.sourceSession,
+                targetSession: plan.targetSession,
+                origin: plan.originAfter,
+                recovery: null
+              } },
+              domain: { kind: 'session_submission_move_restore', plan },
               effectContributions: []
             });
           }
@@ -195,12 +244,39 @@ implements SQLiteEffectDomainAdapter {
       this.input.sessions.applySessionPlan(plan.sessionPlan);
       this.input.decisions.insertSubmissionSessionOrigin(plan.origin);
       applyEngagementSeedFrom(this.input.decisions.engagements, plan.engagementSeed);
+      this.input.supports.applyParticipantSupportChanges({
+        remove: [], insert: plan.supportInserts
+      });
       return;
     }
     if (candidate.kind === 'session_submission_restore') {
       const plan = sessionSubmissionRestorePlanBundleSchema.parse(candidate.plan);
       this.input.sessions.applySessionPlan(plan.sessionPlan);
       this.input.decisions.deleteSubmissionSessionOrigin(plan.origin);
+      applyEngagementSeedReversalFrom(
+        this.input.decisions.engagements,
+        plan.engagementSeedReversal
+      );
+      this.input.supports.applyParticipantSupportChanges({
+        remove: plan.supportRemovals, insert: []
+      });
+      return;
+    }
+    if (candidate.kind === 'session_submission_move') {
+      const plan = sessionSubmissionMovePlanSchema.parse(candidate.plan);
+      for (const sessionPlan of plan.sessionPlans) this.input.sessions.applySessionPlan(sessionPlan);
+      this.input.decisions.deleteSubmissionSessionOrigin(plan.originBefore);
+      this.input.decisions.insertSubmissionSessionOrigin(plan.originAfter);
+      this.input.supports.applyParticipantSupportChanges(plan.supportChanges);
+      applyEngagementSeedFrom(this.input.decisions.engagements, plan.engagementSeed);
+      return;
+    }
+    if (candidate.kind === 'session_submission_move_restore') {
+      const plan = sessionSubmissionMoveRestorePlanSchema.parse(candidate.plan);
+      for (const sessionPlan of plan.sessionPlans) this.input.sessions.applySessionPlan(sessionPlan);
+      this.input.decisions.deleteSubmissionSessionOrigin(plan.originBefore);
+      this.input.decisions.insertSubmissionSessionOrigin(plan.originAfter);
+      this.input.supports.applyParticipantSupportChanges(plan.supportChanges);
       applyEngagementSeedReversalFrom(
         this.input.decisions.engagements,
         plan.engagementSeedReversal

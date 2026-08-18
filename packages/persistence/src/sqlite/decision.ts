@@ -56,6 +56,7 @@ import type {
 } from '@jooevents/contracts/sessions';
 import type { SubmissionTriageSourcePort } from '@jooevents/submission-triage';
 import type { SQLiteSessionRepository } from './session';
+import { SQLiteSessionParticipantSupportRepository } from './session-participant-support';
 
 /** This schema contributes to the accepted epoch-2 baseline and may also serve isolated fixtures. */
 export const DECISION_SQL = `
@@ -178,6 +179,7 @@ export class SQLiteDecisionRepository implements DecisionTransactionPort,
   SessionGraduationValidationPort,
   SessionGraduationTransactionPort {
   readonly engagements: SQLiteEngagementRepository;
+  readonly supports: SQLiteSessionParticipantSupportRepository;
 
   constructor(private readonly input: {
     readonly sqlite: Database;
@@ -186,6 +188,7 @@ export class SQLiteDecisionRepository implements DecisionTransactionPort,
     readonly lineups?: Pick<SQLiteSpeakerLineupRepository, 'ensureEntries' | 'removeOrphanedEntries'>;
   }) {
     this.engagements = new SQLiteEngagementRepository(input.sqlite, input.lineups);
+    this.supports = new SQLiteSessionParticipantSupportRepository(input.sqlite);
   }
 
   readDecisionHead(scope: DecisionScopeDto, submissionId: string): DecisionHeadDto | undefined {
@@ -399,6 +402,7 @@ export class SQLiteDecisionRepository implements DecisionTransactionPort,
       else this.updateHead(scope, row.before, row.after);
       if (row.origin !== null) this.insertOrigin(scope, row.origin);
       this.seedEngagements(scope, row, parsed.input.occurredAt);
+      this.seedParticipantSupports(scope, row);
     }
     return decisionMutationResultFromPlan(parsed);
   }
@@ -442,6 +446,25 @@ export class SQLiteDecisionRepository implements DecisionTransactionPort,
       invitedAt: occurredAt,
       respondBy: null
     }));
+  }
+
+  private seedParticipantSupports(scope: DecisionScopeDto, row: DecisionRowPlanDto): void {
+    if (row.graduation === null || row.origin === null) return;
+    const personIds = [...new Set(
+      graduationParticipants(row.graduation).map((participant) => participant.personId)
+    )].sort();
+    if (personIds.length === 0) return;
+    this.supports.applyParticipantSupportChanges({
+      remove: [],
+      insert: personIds.map((personId) => ({
+        schemaVersion: 1,
+        scope,
+        sessionId: row.origin!.sessionId,
+        personId,
+        kind: 'submission',
+        submissionId: row.submissionId
+      }))
+    });
   }
 
   private scopeExists(scope: DecisionScopeDto): boolean {

@@ -95,10 +95,10 @@ function seedDeliverable(path: string, options: { duplicateRoster?: boolean; wro
   sqlite.query(`INSERT INTO session_catalogs(workspace_id,event_id,version,digest_sha256)
     VALUES (?,?,2,?)`).run(W, E, D);
   const participants = [
-    { personId: P1, role: 'speaker', position: 0, publiclyVisible: true, source: { kind: 'submission', id: 'one', version: 1 } },
-    { personId: P2, role: 'speaker', position: 1, publiclyVisible: true, source: { kind: 'submission', id: 'two', version: 1 } },
+    { personId: P1, role: 'speaker', position: 0, publiclyVisible: true, source: { kind: 'organizer', id: U, version: 1 } },
+    { personId: P2, role: 'speaker', position: 1, publiclyVisible: true, source: { kind: 'organizer', id: U, version: 1 } },
     ...(options.duplicateRoster
-      ? [{ personId: P1, role: 'panelist', position: 2, publiclyVisible: true, source: { kind: 'submission', id: 'dup', version: 1 } }]
+      ? [{ personId: P1, role: 'panelist', position: 2, publiclyVisible: true, source: { kind: 'organizer', id: U, version: 1 } }]
       : [])
   ];
   const roster = { version: 1, digestSha256: D, participants };
@@ -155,7 +155,7 @@ describe('calendar canonical-state migration', () => {
       const migrated = openSQLite(path, { migrationPolicy: 'apply' });
       opened.push(migrated);
       expect(migrated.migration).toMatchObject({
-        migrationId: 'e2_0015_calendar_canonical_state', coordinate: { schemaEpoch: 2, sequence: 15 }
+        migrationId: 'e2_0016_session_participant_support', coordinate: { schemaEpoch: 2, sequence: 16 }
       });
       expect(migrated.sqlite.query<{ source_kind: string; count: number }, []>(`
         SELECT source_kind,count(*) AS count FROM calendar_commitment_source_heads

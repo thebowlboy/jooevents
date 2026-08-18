@@ -269,6 +269,30 @@ export const sessionRosterReorderInputSchema = z.strictObject({
 });
 
 /**
+ * Internal cross-owner reconciliation of one complete roster image. It is not
+ * exposed on the operator wire; route planners use it when support changes may
+ * remove members or replace stale displayed provenance in one atomic move.
+ */
+export const sessionRosterReconcileInputSchema = z.strictObject({
+  action: z.literal('roster_reconcile'),
+  ...catalogGuardFields,
+  sessionId: sessionIdInputSchema,
+  expectedSessionVersion: sessionVersionSchema,
+  expectedSessionDigestSha256: digestSchema,
+  expectedRosterVersion: sessionVersionSchema,
+  participants: z.array(sessionParticipantRefSchema).max(500)
+}).superRefine((input, context) => {
+  const roster = sessionRosterEvidenceSchema.safeParse({
+    version: 1,
+    digestSha256: '0'.repeat(64),
+    participants: input.participants
+  });
+  if (!roster.success) {
+    context.addIssue({ code: 'custom', path: ['participants'], message: 'reconciled participants must use one canonical roster order' });
+  }
+});
+
+/**
  * Browser-safe request to place one already-engaged event person on another
  * Session. The server derives roster/Engagement provenance; callers cannot
  * claim a Submission, Decision, source reference, actor, scope, or time.
@@ -340,7 +364,8 @@ export const sessionPlanningInputSchema = z.discriminatedUnion('action', [
   sessionRosterRemoveInputSchema.extend(planningAttribution),
   sessionRosterRestoreInputSchema.extend(planningAttribution),
   sessionRosterRoleInputSchema.extend(planningAttribution),
-  sessionRosterReorderInputSchema.extend(planningAttribution)
+  sessionRosterReorderInputSchema.extend(planningAttribution),
+  sessionRosterReconcileInputSchema.extend(planningAttribution)
 ]);
 
 export const sessionMutationPlanSchema = z.strictObject({
@@ -386,13 +411,13 @@ export const sessionRemoveNewPlanSchema = z.strictObject({
 });
 
 export const sessionSafeDiffSchema = z.strictObject({
-  action: z.enum(['create', 'transition', 'retarget', 'roster_append', 'roster_visibility', 'roster_remove', 'roster_restore', 'roster_role', 'roster_reorder', 'restore']),
+  action: z.enum(['create', 'transition', 'retarget', 'roster_append', 'roster_visibility', 'roster_remove', 'roster_restore', 'roster_role', 'roster_reorder', 'roster_reconcile', 'restore']),
   before: sessionHeadSchema.nullable(),
   after: sessionHeadSchema.nullable()
 });
 
 export const sessionMutationResultSchema = z.strictObject({
-  action: z.enum(['create', 'remove_new_session', 'transition', 'retarget', 'roster_append', 'roster_visibility', 'roster_remove', 'roster_restore', 'roster_role', 'roster_reorder', 'restore']),
+  action: z.enum(['create', 'remove_new_session', 'transition', 'retarget', 'roster_append', 'roster_visibility', 'roster_remove', 'roster_restore', 'roster_role', 'roster_reorder', 'roster_reconcile', 'restore']),
   catalogVersion: sessionVersionSchema,
   session: sessionHeadSchema.nullable()
 });
@@ -425,6 +450,7 @@ export type SessionScopeDto = z.infer<typeof sessionScopeSchema>;
 export type SessionLifecycle = z.infer<typeof sessionLifecycleSchema>;
 export type PlaceableSessionLifecycle = z.infer<typeof placeableSessionLifecycleSchema>;
 export type SessionProgramTargetEvidenceDto = z.infer<typeof sessionProgramTargetEvidenceSchema>;
+export type SessionRosterSourceRefDto = z.infer<typeof sessionRosterSourceRefSchema>;
 export type SessionParticipantRefDto = z.infer<typeof sessionParticipantRefSchema>;
 export type SessionRosterParticipantInput = z.infer<typeof sessionRosterParticipantInputSchema>;
 export type SessionRosterAppendInput = z.infer<typeof sessionRosterAppendInputSchema>;

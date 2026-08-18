@@ -13,6 +13,7 @@ import {
   fingerprintSQLiteSchema,
   type SQLiteSchemaSnapshot
 } from './schema-snapshot';
+import { assertSessionParticipantSupportBackfillSafe } from './session-participant-support';
 
 export type SQLiteMigrationPolicy = 'apply' | 'validate' | 'none';
 export type SQLiteDatabaseClass = 'ephemeral' | 'retained_development' | 'frozen_release';
@@ -152,6 +153,10 @@ interface SubmissionTriageSpamRow {
 
 /** Prepare deterministic transformed values that SQLite cannot hash itself. */
 function prepareMigration(database: Database, migration: SQLiteMigrationManifestEntry): void {
+  if (migration.migrationId === 'e2_0016_session_participant_support') {
+    assertSessionParticipantSupportBackfillSafe(database);
+    return;
+  }
   if (migration.migrationId === 'e2_0004_api_key_prefix') {
     const existing = database.query<{ count: number }, []>(
       'SELECT count(*) AS count FROM api_keys'
