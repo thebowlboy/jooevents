@@ -41,13 +41,14 @@ function times(runtime: EphemeralLiveRuntime, query: string): number[] {
 
 describe('AI Engineer reviewer seed', () => {
   test('builds its real-operation corpus across nine weeks and restores wall time', async () => {
-    const anchor = new Date('2027-08-20T12:00:00.000Z');
+    const anchor = new Date('2026-08-19T12:00:00.000Z');
     const clock = createDevFixtureClock(anchor);
     const runtime = await createEphemeralLiveRuntime({ config, devFixtureClock: clock });
     runtimes.push(runtime);
 
     const summary = await seedAIEngineerReviewer({ runtime, config, clock, anchor: anchor.toISOString() });
     expect(summary).toMatchObject({
+      eventName: 'AI Engineer Summit 2026',
       submissions: 20,
       forms: { open: 1, closed: 4 },
       committedReviews: 108,
@@ -59,11 +60,27 @@ describe('AI Engineer reviewer seed', () => {
       speakerProfiles: 10,
       multiSpeakerSessions: 1,
       confirmedEngagements: 8,
-      taskDefinitions: 3,
-      taskAssignments: 24,
+      taskDefinitions: 6,
+      taskAssignments: 48,
       conditionalRules: 2,
       sessionFiles: 3
     });
+    const taskDueDates = runtime.database.sqlite.query<
+      { readonly display_date: string }, []
+    >(`
+      SELECT display_date
+        FROM deadlines
+       WHERE kind = 'task_due' AND status = 'active'
+       ORDER BY display_date
+    `).all().map((row) => row.display_date);
+    expect(taskDueDates).toEqual([
+      '2026-08-09',
+      '2026-08-18',
+      '2026-08-19',
+      '2026-08-20',
+      '2026-08-26',
+      '2026-09-09'
+    ]);
     const operationCountBeforeRerun = runtime.database.sqlite.query<
       { readonly count: number }, []
     >('SELECT count(*) AS count FROM operation_log').get()?.count ?? 0;

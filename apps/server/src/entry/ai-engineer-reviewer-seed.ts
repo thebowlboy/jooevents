@@ -114,10 +114,8 @@ const OPERATOR_PERMISSION_GRANTS = Object.freeze([
 ] as const);
 
 const EVENT = Object.freeze({
-  name: 'AI Engineer Summit 2027',
-  timezone: 'America/Los_Angeles',
-  startDate: '2027-10-12',
-  endDate: '2027-10-14'
+  name: 'AI Engineer Summit 2026',
+  timezone: 'America/Los_Angeles'
 });
 
 const EVENT_SETTINGS_TEXT = Object.freeze({
@@ -125,8 +123,71 @@ const EVENT_SETTINGS_TEXT = Object.freeze({
   venueNote: 'Registration opens in the Atrium at 08:00. Workshop labs open 30 minutes before their first session.'
 });
 
-/** Review round due date, inside the event window. */
-const REVIEW_DUE_DATE = '2027-08-22';
+const DAY_MS = 86_400_000;
+
+interface SeedDates {
+  readonly eventStartDate: string;
+  readonly eventEndDate: string;
+  readonly reviewDueDate: string;
+  readonly openFormClosesAt: string;
+  readonly scheduleRangeStart: string;
+  readonly scheduleRangeEnd: string;
+  readonly placements: readonly SeedPlacement[];
+  readonly speakerTasks: readonly SpeakerTask[];
+  readonly unplacedOpeningDate: string;
+}
+
+interface SeedPlacement {
+  readonly submissionKey: string;
+  readonly roomKey: RoomKey;
+  readonly startAt: string;
+  readonly endAt: string;
+}
+
+interface SpeakerTask {
+  readonly key: string;
+  readonly name: string;
+  readonly description: string;
+  readonly completionMode: 'acknowledge' | 'file_upload';
+  readonly required: boolean;
+  readonly dueOn: string;
+}
+
+function seedDate(anchorMs: number, days: number): string {
+  return new Date(anchorMs + (days * DAY_MS)).toISOString().slice(0, 10);
+}
+
+function buildSeedDates(anchor: string): SeedDates {
+  const anchorMs = Date.parse(anchor);
+  if (!Number.isFinite(anchorMs)) throw new TypeError('AI Engineer seed anchor must be an ISO timestamp.');
+  const eventStartDate = seedDate(anchorMs, 54);
+  const eventEndDate = seedDate(anchorMs, 56);
+  const task = (key: string, name: string, description: string,
+    completionMode: SpeakerTask['completionMode'], required: boolean, offset: number): SpeakerTask =>
+    Object.freeze({ key, name, description, completionMode, required, dueOn: seedDate(anchorMs, offset) });
+  return Object.freeze({
+    eventStartDate,
+    eventEndDate,
+    reviewDueDate: seedDate(anchorMs, 1),
+    openFormClosesAt: seedDate(anchorMs, 3),
+    scheduleRangeStart: `${eventStartDate}T00:00:00.000Z`,
+    scheduleRangeEnd: `${seedDate(anchorMs, 57)}T00:00:00.000Z`,
+    placements: Object.freeze(PLACEMENT_TEMPLATES.map((placement) => Object.freeze({
+      ...placement,
+      startAt: `${seedDate(anchorMs, placement.dayOffset)}T${placement.startTime}.000Z`,
+      endAt: `${seedDate(anchorMs, placement.dayOffset)}T${placement.endTime}.000Z`
+    }))),
+    speakerTasks: Object.freeze([
+      task('bio', 'Confirm speaker bio', 'Review the biography that will accompany the published speaker profile.', 'acknowledge', true, -10),
+      task('travel', 'Confirm travel details', 'Confirm arrival plans and any accessibility or travel support needed.', 'acknowledge', true, -1),
+      task('profile', 'Approve public profile', 'Check the public name, headline, and biography before publication.', 'acknowledge', true, 0),
+      task('headshot', 'Upload headshot', 'Provide a high-resolution headshot for the event programme.', 'file_upload', true, 1),
+      task('av', 'Confirm AV requirements', 'Tell the programme team which microphones, adapters, or demo connections are required.', 'acknowledge', false, 7),
+      task('slides', 'Upload slide draft', 'Send the first slide deck for the programme team to check.', 'file_upload', false, 21)
+    ]),
+    unplacedOpeningDate: eventEndDate
+  });
+}
 
 /**
  * One monotone nine-week story. All offsets are relative to process start and
@@ -207,42 +268,40 @@ const GENERAL_SUBMISSIONS: readonly SubmissionSpec[] = Object.freeze([
   Object.freeze({ key: 'rossi', name: 'Giulia Rossi', email: 'giulia.rossi@example.test', title: 'Accessibility for Generative Interfaces', abstract: 'Patterns for focus, streaming updates, correction, and alternate input in interfaces whose content and timing cannot be known in advance.' })
 ]);
 
-const PLACEMENTS = Object.freeze([
+const PLACEMENT_TEMPLATES = Object.freeze([
   Object.freeze({
     submissionKey: 'rivera',
     roomKey: 'main_stage' as RoomKey,
-    startAt: '2027-10-12T16:00:00.000Z',
-    endAt: '2027-10-12T16:45:00.000Z'
+    dayOffset: 54, startTime: '16:00:00', endTime: '16:45:00'
   }),
   Object.freeze({
     submissionKey: 'okafor',
     roomKey: 'studio' as RoomKey,
-    startAt: '2027-10-12T17:00:00.000Z',
-    endAt: '2027-10-12T17:45:00.000Z'
+    dayOffset: 54, startTime: '17:00:00', endTime: '17:45:00'
   }),
   Object.freeze({
     submissionKey: 'sato', roomKey: 'workshop_loft' as RoomKey,
-    startAt: '2027-10-12T18:00:00.000Z', endAt: '2027-10-12T19:30:00.000Z'
+    dayOffset: 54, startTime: '18:00:00', endTime: '19:30:00'
   }),
   Object.freeze({
     submissionKey: 'mensah', roomKey: 'main_stage' as RoomKey,
-    startAt: '2027-10-13T16:00:00.000Z', endAt: '2027-10-13T17:00:00.000Z'
+    dayOffset: 55, startTime: '16:00:00', endTime: '17:00:00'
   }),
   Object.freeze({
     submissionKey: 'novak', roomKey: 'studio' as RoomKey,
-    startAt: '2027-10-13T17:15:00.000Z', endAt: '2027-10-13T18:00:00.000Z'
+    dayOffset: 55, startTime: '17:15:00', endTime: '18:00:00'
   }),
   Object.freeze({
     submissionKey: 'hassan', roomKey: 'product_room' as RoomKey,
-    startAt: '2027-10-13T18:15:00.000Z', endAt: '2027-10-13T18:35:00.000Z'
+    dayOffset: 55, startTime: '18:15:00', endTime: '18:35:00'
   }),
   Object.freeze({
     submissionKey: 'berg', roomKey: 'main_stage' as RoomKey,
-    startAt: '2027-10-14T16:00:00.000Z', endAt: '2027-10-14T16:45:00.000Z'
+    dayOffset: 56, startTime: '16:00:00', endTime: '16:45:00'
   }),
   Object.freeze({
     submissionKey: 'adebayo', roomKey: 'workshop_loft' as RoomKey,
-    startAt: '2027-10-14T17:00:00.000Z', endAt: '2027-10-14T18:30:00.000Z'
+    dayOffset: 56, startTime: '17:00:00', endTime: '18:30:00'
   })
 ] as const);
 
@@ -269,33 +328,6 @@ const SESSION_FILE_LINKS = Object.freeze([
     title: 'Designing Honest Confidence',
     label: 'Product critique worksheet.pdf',
     url: 'https://assets.example.test/ai-engineer-summit/honest-confidence-worksheet.pdf'
-  })
-] as const);
-
-const SPEAKER_TASKS = Object.freeze([
-  Object.freeze({
-    key: 'bio',
-    name: 'Confirm speaker bio',
-    description: 'Review the biography that will accompany the published speaker profile.',
-    completionMode: 'acknowledge' as const,
-    required: true,
-    dueOn: '2027-08-18'
-  }),
-  Object.freeze({
-    key: 'headshot',
-    name: 'Upload headshot',
-    description: 'Provide a high-resolution headshot for the event programme.',
-    completionMode: 'file_upload' as const,
-    required: true,
-    dueOn: '2027-08-24'
-  }),
-  Object.freeze({
-    key: 'slides',
-    name: 'Upload slide draft',
-    description: 'Send the first slide deck for the programme team to check.',
-    completionMode: 'file_upload' as const,
-    required: false,
-    dueOn: '2027-09-30'
   })
 ] as const);
 
@@ -592,10 +624,10 @@ async function readWorkspaceTeam(context: SeedContext) {
   )), 'workspace_team_read').data;
 }
 
-async function readSchedule(context: SeedContext) {
+async function readSchedule(context: SeedContext, dates: SeedDates) {
   const range = new URLSearchParams({
-    startAt: '2027-09-14T00:00:00.000Z',
-    endAt: '2027-09-18T00:00:00.000Z',
+    startAt: dates.scheduleRangeStart,
+    endAt: dates.scheduleRangeEnd,
     limit: '200'
   });
   return requireSuccess(schedulePlacementSnapshotReadResultSchema.parse(await read(
@@ -603,12 +635,17 @@ async function readSchedule(context: SeedContext) {
   )), 'schedule_read').data;
 }
 
-async function createEvent(context: SeedContext): Promise<string> {
+async function createEvent(context: SeedContext, dates: SeedDates): Promise<string> {
   const created = requireSuccess(eventCreateOperationResultSchema.parse(await effect({
     context,
     path: '/api/events',
     key: 'ai-engineer-event-create',
-    body: { expectedEventSetVersion: 1, ...EVENT },
+    body: {
+      expectedEventSetVersion: 1,
+      ...EVENT,
+      startDate: dates.eventStartDate,
+      endDate: dates.eventEndDate
+    },
     parse: (value) => value
   })), 'event_create');
   return created.data.event.id;
@@ -1005,12 +1042,12 @@ async function registerReviewer(input: {
   return reviewerId;
 }
 
-async function openReviewRound(context: SeedContext): Promise<number> {
+async function openReviewRound(context: SeedContext, dates: SeedDates): Promise<number> {
   const mutation = requireSuccess(reviewDirectOperationResultSchema.parse(await effect({
     context,
     path: '/api/events/current/review/rounds',
     key: 'ai-engineer-review-open-round',
-    body: { action: 'open_round', deadlineDate: REVIEW_DUE_DATE, anonymized: true },
+    body: { action: 'open_round', deadlineDate: dates.reviewDueDate, anonymized: true },
     parse: (value) => value
   })), 'review_open_round');
   if (mutation.data.action !== 'open_round') fail('review_open_round_action', mutation.data.action);
@@ -1118,17 +1155,18 @@ async function commitDecisions(
 
 async function placeSessions(input: {
   readonly context: SeedContext;
+  readonly dates: SeedDates;
   readonly sessionIdByTitle: ReadonlyMap<string, string>;
   readonly vocabulary: Readonly<Record<VocabularyKey, string>>;
   readonly titleBySubmissionKey: ReadonlyMap<string, string>;
 }): Promise<number> {
   const { context } = input;
   let placed = 0;
-  for (const placement of PLACEMENTS) {
+  for (const placement of input.dates.placements) {
     const title = input.titleBySubmissionKey.get(placement.submissionKey);
     const sessionId = title === undefined ? undefined : input.sessionIdByTitle.get(title);
     if (!sessionId) fail('placement_session_missing', placement.submissionKey);
-    const schedule = await readSchedule(context);
+    const schedule = await readSchedule(context, input.dates);
     requireSuccess(schedulePlacementOperationResultSchema.parse(await effect({
       context,
       path: '/api/events/current/schedule/placements',
@@ -1356,8 +1394,8 @@ async function confirmEngagements(input: {
   return confirmed;
 }
 
-async function createSpeakerTasks(context: SeedContext): Promise<number> {
-  for (const task of SPEAKER_TASKS) {
+async function createSpeakerTasks(context: SeedContext, dates: SeedDates): Promise<number> {
+  for (const task of dates.speakerTasks) {
     requireSuccess(taskMutationOperationResultSchema.parse(await effect({
       context,
       path: '/api/events/current/tasks',
@@ -1373,7 +1411,7 @@ async function createSpeakerTasks(context: SeedContext): Promise<number> {
       parse: (value) => value
     })), `task_${task.key}`);
   }
-  return SPEAKER_TASKS.length;
+  return dates.speakerTasks.length;
 }
 
 async function prepareReviewerReminder(input: {
@@ -1629,6 +1667,7 @@ export async function seedAIEngineerReviewer(input: {
   readonly speakerEmailOverride?: string;
 }): Promise<AIEngineerReviewerSeedSummary> {
   const { runtime, config } = input;
+  const dates = buildSeedDates(input.anchor);
   const existingEventCount = runtime.database.sqlite.query<{ readonly count: number }, []>(
     'SELECT count(*) AS count FROM event_spine_heads'
   ).get()?.count ?? 0;
@@ -1665,7 +1704,7 @@ export async function seedAIEngineerReviewer(input: {
       runtime, config, cookie: principal.cookie, clock: input.clock
     }));
 
-    const eventId = await createEvent(context);
+    const eventId = await createEvent(context, dates);
     await updateEventSettings(context);
     const vocabulary = await createVocabulary(context);
 
@@ -1674,9 +1713,9 @@ export async function seedAIEngineerReviewer(input: {
     const generalFormId = await createOpenForm({
       context,
       key: 'general',
-      closesAt: '2027-09-01',
+      closesAt: dates.openFormClosesAt,
       definition: cfpDefinition({
-        name: 'AI Engineer Summit 2027 Late-breaking Demos',
+        name: `${EVENT.name} Late-breaking Demos`,
         target: { kind: 'general_pool' },
         confirmation: 'Thanks — your proposal is in. The program team reviews everything in one batch after the deadline.',
         fields,
@@ -1689,7 +1728,7 @@ export async function seedAIEngineerReviewer(input: {
         context,
         key: `main-${format.key}`,
         definition: cfpDefinition({
-          name: `AI Engineer Summit 2027 ${format.name} CFP`,
+          name: `${EVENT.name} ${format.name} CFP`,
           target: { kind: 'category', category: { kind: 'format', id: vocabulary[format.key] } },
           confirmation: 'Received. The programme committee will share a decision after review.',
           fields
@@ -1740,7 +1779,7 @@ export async function seedAIEngineerReviewer(input: {
     }
 
     input.clock.moveToDaysBeforeAnchor(SEED_TIMELINE.reviewRoundDaysBeforeAnchor);
-    const reviewAssignments = await openReviewRound(context);
+    const reviewAssignments = await openReviewRound(context, dates);
     const rivera = featuredSpecs.find((spec) => spec.key === 'rivera');
     if (!rivera) fail('late_entry_spec_missing', 'rivera');
     const lateEntry = await createDirectEntries({
@@ -1807,7 +1846,7 @@ export async function seedAIEngineerReviewer(input: {
       FEATURED_SUBMISSIONS.map((spec) => [spec.key, spec.title] as const)
     );
     const placements = await placeSessions({
-      context, sessionIdByTitle, vocabulary, titleBySubmissionKey
+      context, dates, sessionIdByTitle, vocabulary, titleBySubmissionKey
     });
     const multiSpeakerSessions = await addPanelCoSpeaker({
       context,
@@ -1821,7 +1860,7 @@ export async function seedAIEngineerReviewer(input: {
     const confirmedEngagements = multiSpeakerSessions
       + await confirmEngagements({ context, submissionIdByKey });
     const speakerProfiles = await curateSpeakerProfiles({ context, submissionIdByKey });
-    const taskDefinitions = await createSpeakerTasks(context);
+    const taskDefinitions = await createSpeakerTasks(context, dates);
     const releaseNumber = await publishSchedule(context);
     await publishPublicPresentations({ context, applyFormId: generalFormId });
     const reminder = await prepareReviewerReminder({ context, reviewerIds });
@@ -1867,16 +1906,16 @@ export async function seedAIEngineerReviewer(input: {
           title: 'MCP in the Real World',
           safeOpening: Object.freeze({
             room: 'Foundation Stage',
-            startAt: '2027-10-14T19:00:00.000Z',
-            endAt: '2027-10-14T20:00:00.000Z'
+            startAt: `${dates.unplacedOpeningDate}T19:00:00.000Z`,
+            endAt: `${dates.unplacedOpeningDate}T20:00:00.000Z`
           })
         }),
         Object.freeze({
           title: 'What We Learned Migrating a Vector Index Live',
           safeOpening: Object.freeze({
             room: 'Reliability Theater',
-            startAt: '2027-10-14T19:00:00.000Z',
-            endAt: '2027-10-14T19:45:00.000Z'
+            startAt: `${dates.unplacedOpeningDate}T19:00:00.000Z`,
+            endAt: `${dates.unplacedOpeningDate}T19:45:00.000Z`
           })
         })
       ]),
