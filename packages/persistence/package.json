@@ -87,6 +87,7 @@
     "./speaker-profile-direct-effect-domain": "./src/sqlite/speaker-profile-direct-effect-domain.ts",
     "./organizer-decision-audience": "./src/sqlite/communications/decision-audience.ts",
     "./organizer-task-reminder-audience": "./src/sqlite/communications/task-reminder-audience.ts",
+    "./organizer-reviewer-reminder-audience": "./src/sqlite/communications/reviewer-reminder-audience.ts",
     "./message-releases": "./src/sqlite/communications/message-releases.ts",
     "./message-release-effect-domain": "./src/sqlite/communications/message-release-effect-domain.ts",
     "./submission-confirmation-delivery": "./src/sqlite/communications/submission-confirmation-delivery.ts",

@@ -1241,7 +1241,7 @@
 			<VerbatimBodyPeek
 				subject={remindSubject.trim() || 'Review reminder'}
 				body={remindPreview.body}
-				note="Reviewer reminders ride the speaker-task reminder lane, so this is that lane’s copy." />
+				note="This is the fixed reviewer reminder body that will be sent." />
 		{/if}
 		<ul class="remind-roster">
 			{#each remindBatch.roster as entry (entry.reviewer.id)}

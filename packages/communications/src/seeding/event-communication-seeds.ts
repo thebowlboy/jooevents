@@ -16,6 +16,7 @@ import {
   SUBMISSION_CONFIRMATION_TEMPLATE_REVISION_REF_ID
 } from '../rendering/submission-confirmation';
 import { TASK_REMINDER_PURPOSE_KEY } from '../rendering/task-reminder';
+import { REVIEWER_REMINDER_PURPOSE_KEY } from '../rendering/reviewer-reminder';
 import {
   CALENDAR_NOTICE_PURPOSE_KEY,
   CALENDAR_NOTICE_STANDING_POLICY,
@@ -73,6 +74,7 @@ export interface EventCommunicationPurposeSeedPlan {
   readonly purposes: readonly EventCommunicationPurposeSeed[];
   readonly decisionPurpose: EventCommunicationPurposeSeed;
   readonly taskReminderPurpose: EventCommunicationPurposeSeed;
+  readonly reviewerReminderPurpose: EventCommunicationPurposeSeed;
   readonly submissionConfirmationPurpose: EventCommunicationPurposeSeed;
   readonly calendarNoticePurpose: EventCommunicationPurposeSeed;
 }
@@ -325,6 +327,22 @@ export function createEventCommunicationPurposeSeedPlan(
     },
     allowedAudienceSources: []
   });
+  const reviewerPurpose = purposeSeed({
+    selected,
+    purposeKey: REVIEWER_REMINDER_PURPOSE_KEY,
+    namespace: 'reviewer-reminder',
+    variant: 'a',
+    label: 'Reviewer reminders',
+    description: 'Organizer-reviewed reminders for active reviewers with unfinished assignments.',
+    policyMaterial: {
+      schemaVersion: 1,
+      purposeKey: REVIEWER_REMINDER_PURPOSE_KEY,
+      communicationClass: 'transactional',
+      consent: 'not_required',
+      audience: 'explicit_reviewers_with_unfinished_assignments@1'
+    },
+    allowedAudienceSources: []
+  });
   const submissionPurpose = purposeSeed({
     selected,
     purposeKey: SUBMISSION_CONFIRMATION_PURPOSE_KEY,
@@ -358,9 +376,12 @@ export function createEventCommunicationPurposeSeedPlan(
   });
   return Object.freeze({
     scope: selected,
-    purposes: Object.freeze([decisionPurpose, taskPurpose, submissionPurpose, calendarPurpose]),
+    purposes: Object.freeze([
+      decisionPurpose, taskPurpose, reviewerPurpose, submissionPurpose, calendarPurpose
+    ]),
     decisionPurpose,
     taskReminderPurpose: taskPurpose,
+    reviewerReminderPurpose: reviewerPurpose,
     submissionConfirmationPurpose: submissionPurpose,
     calendarNoticePurpose: calendarPurpose
   });

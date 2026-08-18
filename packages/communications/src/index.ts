@@ -23,3 +23,4 @@ export * from './rendering/submission-confirmation';
 export * from './rendering/calendar-notice';
 export * from './rendering/transactional-email';
 export * from './rendering/task-reminder';
+export * from './rendering/reviewer-reminder';

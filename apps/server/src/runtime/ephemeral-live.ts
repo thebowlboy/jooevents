@@ -452,6 +452,10 @@ import {
   seedTaskReminderPurpose
 } from '@jooevents/persistence/organizer-task-reminder-audience';
 import {
+  createSQLiteReviewerReminderAudienceSource,
+  seedReviewerReminderPurpose
+} from '@jooevents/persistence/organizer-reviewer-reminder-audience';
+import {
   SQLiteCommunicationMessageReleaseStore,
   createSQLiteOutboundEmailEnvelopeResolver
 } from '@jooevents/persistence/message-releases';
@@ -2379,6 +2383,13 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       submissions: submissionTriageSource,
       submissionAddresses: decisionAudienceSource
     });
+    const reviewerReminderAudienceSource = createSQLiteReviewerReminderAudienceSource({
+      sqlite: database.sqlite,
+      roster: reviewerRosterRepository,
+      reviews: reviewRepository,
+      addressFingerprintKeyBytes: communicationAddressFingerprint.keyBytes,
+      addressFingerprintProfile: communicationAddressFingerprint.profile
+    });
     const organizerCommunicationPreview = cryptoProfiles.withPersistentHmacKeySelection(
       'security.communication-audience-cursor',
       (cursorSelection) => new SQLiteOrganizerAudiencePreviewRepository(
@@ -2411,9 +2422,13 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
           }),
           values: Object.freeze({
             resolveMergeValues(value: Parameters<OrganizerMergeValueSource['resolveMergeValues']>[0]) {
-              return value.candidate.contactRefId.startsWith('task-engagement:')
-                ? taskReminderAudienceSource.resolveMergeValues(value)
-                : decisionAudienceSource.resolveMergeValues(value);
+              if (taskReminderAudienceSource.ownsContactRef(value.candidate.contactRefId)) {
+                return taskReminderAudienceSource.resolveMergeValues(value);
+              }
+              if (reviewerReminderAudienceSource.ownsContactRef(value.candidate.contactRefId)) {
+                return reviewerReminderAudienceSource.resolveMergeValues(value);
+              }
+              return decisionAudienceSource.resolveMergeValues(value);
             }
           })
         }),
@@ -2424,7 +2439,8 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
         ),
         registeredSources: [
           ...decisionAudienceDelegates(decisionAudienceSource),
-          taskReminderAudienceSource
+          taskReminderAudienceSource,
+          reviewerReminderAudienceSource
         ]
         })
       )
@@ -2458,6 +2474,7 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
         purposeRevision: seeded.purposeRevision
       });
       seedTaskReminderPurpose({ sqlite: database.sqlite, scope });
+      seedReviewerReminderPurpose({ sqlite: database.sqlite, scope });
       seedSubmissionConfirmationPurpose({ sqlite: database.sqlite, scope });
       seedCalendarNoticePurpose({ sqlite: database.sqlite, scope });
     };

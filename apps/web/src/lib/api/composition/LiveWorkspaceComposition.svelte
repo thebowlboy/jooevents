@@ -52,6 +52,7 @@
 	import { createTasksLiveClient } from '$lib/api/operations/tasks-live';
 	import { createLiveTasksPagePort } from '$lib/api/tasks-page-port.live';
 	import { createTaskReminderLiveSender } from '$lib/api/task-reminder-live';
+	import { createReviewerReminderLiveSender } from '$lib/api/reviewer-reminder-live';
 	import { createReleaseWorkspacePort } from '$lib/api/release-workspace-adapter';
 	import { createLiveTemplatesPagePort } from '$lib/api/templates-page-port.live';
 	import { createTemplatePublicationLivePort } from '$lib/api/template-publication-live';
@@ -266,7 +267,8 @@
 		review: reviewCore,
 		team: workspaceTeam,
 		vocabulary,
-		schedule: { state: () => schedule.schedule.state() }
+		schedule: { state: () => schedule.schedule.state() },
+		remind: createReviewerReminderLiveSender({ communications: communicationsAuthoring })
 	});
 	// The tuned Submissions surface: triage rows joined with decision heads
 	// and whole-slice standings, plus the direct-entry door through the same

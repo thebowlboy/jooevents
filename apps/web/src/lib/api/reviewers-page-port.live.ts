@@ -27,6 +27,7 @@ import type {
 	ReviewerRosterSnapshotView
 } from './view-models/reviewer-roster';
 import type { WorkspaceTeamMemberView } from './view-models/workspace-team';
+import { REVIEWER_REMINDER_BODY } from './reviewer-reminder-copy';
 
 /**
  * The tuned page capabilities this deliberately partial live mount cannot
@@ -631,6 +632,9 @@ export function createLiveReviewersPagePort(input: {
 			async remind(reviewerIds: string[], subject: string): Promise<unknown> {
 				if (!input.remind) throw unmounted('reviewer_reminders');
 				return input.remind(reviewerIds, subject);
+			},
+			async reminderPreview() {
+				return { kind: 'plain' as const, subject: '', body: REVIEWER_REMINDER_BODY };
 			}
 		})
 	} satisfies ReviewersPagePort);

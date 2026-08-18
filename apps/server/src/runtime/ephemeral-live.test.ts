@@ -50,6 +50,7 @@ import {
   organizerMessageTemplatePageOperationResultSchema,
   organizerMessageTemplateDetailOperationResultSchema,
   organizerMessageTemplateMutationOperationResultSchema,
+  organizerMessagePreviewRecipientPageOperationResultSchema,
   organizerPrepareMessagePreviewOperationResultSchema,
   organizerPreviewMessageBatchOperationResultSchema,
   organizerRetryMessageDeliveryOperationResultSchema,
@@ -3663,7 +3664,7 @@ describe('ephemeral live Foundation server composition', () => {
     });
     // Created events are seeded with the recorded decision-notification
     // defaults (BLOCKED-4/BLOCKED-5/BLOCKED-12): decision notifications,
-    // Task reminders, the submission-confirmation receipt, calendar notices, two active decision
+    // Task and reviewer reminders, the submission-confirmation receipt, calendar notices, two active decision
     // templates, and the two immutable decision-set audience recipes. Drafts
     // remain empty — nothing authors messages by default.
     const read = async <Value>(path: string, schema: { parse(value: unknown): Value }) =>
@@ -3685,7 +3686,10 @@ describe('ephemeral live Foundation server composition', () => {
     });
     if (purposes.kind !== 'success') throw new Error('purposes_read_failed');
     expect(purposes.data.rows.map((row) => row.revision.purposeKey).sort())
-      .toEqual(['calendar_notice', 'decision_notification', 'submission_confirmation', 'task_reminder']);
+      .toEqual([
+        'calendar_notice', 'decision_notification', 'reviewer_reminder',
+        'submission_confirmation', 'task_reminder'
+      ]);
     const templates = await read(
       '/api/events/current/communications/templates',
       organizerMessageTemplatePageOperationResultSchema
@@ -5201,6 +5205,257 @@ describe('ephemeral live Foundation server composition', () => {
     expect(runtime.database.sqlite.query<Record<string, unknown>, []>(
       'PRAGMA foreign_key_check'
     ).all()).toEqual([]);
+  });
+
+  test('sends selected outstanding reviewers through the joined Communications HTTP lane', async () => {
+    const runtime = await createEphemeralLiveRuntime({ config });
+    runtimes.push(runtime);
+    const session = await createOwnerSession(runtime);
+    const ownerUserId = await provisionOwner(runtime, session);
+    await createEventDirect({ runtime, session, key: 'reviewer-reminder-event' });
+
+    const { titleFieldId, nameFieldId, emailFieldId, openForm } =
+      await createFormatTargetOpenForm({
+        runtime, session, key: 'reviewer-reminder', formName: 'Reviewer reminder CFP'
+      });
+    const entry = submissionDirectEntryOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/submissions/direct-entry',
+      key: 'reviewer-reminder-entry',
+      body: {
+        formId: openForm.id,
+        expectedFormDefinitionVersion: openForm.version,
+        answers: [
+          { kind: 'text', fieldId: titleFieldId, value: 'Reminder candidate' },
+          { kind: 'text', fieldId: nameFieldId, value: 'Synthetic Candidate' },
+          { kind: 'email', fieldId: emailFieldId, value: 'candidate@example.test' }
+        ]
+      },
+      parse: (value) => value
+    }));
+    if (entry.kind !== 'success') throw new Error('reviewer reminder entry failed');
+
+    const reviewerRole = runtime.database.sqlite.query<{ readonly id: string }, [string]>(`
+      SELECT id FROM roles
+       WHERE workspace_id = ? AND source_preset_key = 'speaker_reviewer'
+         AND archived_at IS NULL LIMIT 1
+    `).get(runtime.workspaceId);
+    if (!reviewerRole) throw new Error('reviewer role missing');
+    const seededAt = Date.parse('2026-08-19T01:00:00.000Z');
+    const reviewers = ['River', 'Sage'].map((name, index) => ({
+      name,
+      reviewerId: crypto.randomUUID(),
+      userId: crypto.randomUUID(),
+      membershipId: crypto.randomUUID(),
+      email: `reviewer.${index + 1}@example.test`
+    }));
+    runtime.database.sqlite.transaction(() => {
+      for (const reviewer of reviewers) {
+        runtime.database.sqlite.query(`
+          INSERT INTO users (id,status,display_name,created_at,updated_at,version)
+          VALUES (?,'active',?,?,?,1)
+        `).run(reviewer.userId, reviewer.name, seededAt, seededAt);
+        runtime.database.sqlite.query(`
+          INSERT INTO user_emails (
+            id,user_id,normalized_email,display_email,verified,source,
+            is_primary,verified_at,created_at
+          ) VALUES (?,?,?,?,1,'admin',1,?,?)
+        `).run(
+          crypto.randomUUID(), reviewer.userId, reviewer.email, reviewer.email,
+          seededAt, seededAt
+        );
+        runtime.database.sqlite.query(`
+          INSERT INTO workspace_memberships (
+            id,workspace_id,user_id,status,approved_by_user_id,approved_at,
+            created_at,updated_at,version
+          ) VALUES (?,?,?,'active',?,?,?,?,1)
+        `).run(
+          reviewer.membershipId, runtime.workspaceId, reviewer.userId,
+          ownerUserId, seededAt, seededAt, seededAt
+        );
+        runtime.database.sqlite.query(`
+          INSERT INTO role_assignments (
+            id,user_id,role_id,workspace_id,scope_kind,event_id,
+            assigned_by_user_id,assigned_at,version
+          ) VALUES (?,?,?,?,'workspace',NULL,?,?,1)
+        `).run(
+          crypto.randomUUID(), reviewer.userId, reviewerRole.id,
+          runtime.workspaceId, ownerUserId, seededAt
+        );
+      }
+    }).immediate();
+
+    let roster = reviewerRosterSnapshotReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/reviewer-roster', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (roster.kind !== 'success') throw new Error('reviewer roster unavailable');
+    for (const [index, reviewer] of reviewers.entries()) {
+      const registered = reviewerRosterDirectOperationResultSchema.parse(await effect({
+        runtime,
+        session,
+        path: '/api/events/current/reviewer-roster/changes',
+        key: `reviewer-reminder-register-${index}`,
+        body: {
+          action: 'register',
+          reviewerId: reviewer.reviewerId,
+          accessSubject: {
+            kind: 'workspace_membership', id: reviewer.membershipId, version: 1
+          },
+          reviews: [],
+          expectedRosterVersion: roster.data.rosterVersion,
+          expectedRosterDigestSha256: roster.data.rosterDigestSha256
+        },
+        parse: (value) => value
+      }));
+      if (registered.kind !== 'success') throw new Error('reviewer registration failed');
+      roster = reviewerRosterSnapshotReadResultSchema.parse(await (
+        await runtime.app.request('/api/events/current/reviewer-roster', {
+          headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+        })
+      ).json());
+      if (roster.kind !== 'success') throw new Error('reviewer roster refresh failed');
+    }
+
+    const opened = reviewDirectOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/review/rounds',
+      key: 'reviewer-reminder-open-round',
+      body: { action: 'open_round', deadlineDate: '2027-06-11', anonymized: true },
+      parse: (value) => value
+    }));
+    expect(opened).toMatchObject({
+      kind: 'success', data: { action: 'open_round', assignmentCount: 2 }
+    });
+
+    const purposes = organizerCommunicationPurposePageOperationResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/communications/purposes?channel=email&lifecycle=active', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (purposes.kind !== 'success') throw new Error('reviewer reminder purposes unavailable');
+    const purpose = purposes.data.rows.find((row) =>
+      row.revision.purposeKey === 'reviewer_reminder'
+    )?.revision;
+    if (!purpose) throw new Error('reviewer reminder purpose missing');
+    const storePayload = async (label: string, payload: unknown) => {
+      const stored = organizerCommunicationAuthoringPayloadOperationResultSchema.parse(await effect({
+        runtime,
+        session,
+        path: '/api/events/current/communications/authoring-payloads',
+        key: `reviewer-reminder-payload-${label}`,
+        body: { payload },
+        parse: (value) => value
+      }));
+      if (stored.kind !== 'success') throw new Error(`reviewer reminder payload ${label} failed`);
+      return stored.data;
+    };
+    const contentPayload = await storePayload('content', {
+      payloadKind: 'message_content',
+      schemaVersion: 1,
+      value: {
+        kind: 'email/v1',
+        subject: 'Reviews still need your attention',
+        body: {
+          kind: 'plain_text/v1',
+          text: 'You have one or more reviews still to complete. Open your JooEvents review queue to finish them.'
+        }
+      }
+    });
+    const contactRefIds = reviewers.map((reviewer) => `reviewer:${reviewer.reviewerId}`).sort();
+    const audiencePayload = await storePayload('audience', {
+      payloadKind: 'message_audience_draft',
+      schemaVersion: 1,
+      value: {
+        schemaVersion: 1,
+        binding: 'current_snapshot',
+        purposeRevision: purpose,
+        source: { kind: 'explicit_contacts', contactRefIds }
+      }
+    });
+    const draft = organizerCommunicationDraftMutationOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/communications/drafts/create',
+      key: 'reviewer-reminder-draft',
+      body: {
+        channel: 'email',
+        purposeRevision: purpose,
+        initial: { kind: 'adopted_payload_refs', contentPayload, audiencePayload }
+      },
+      parse: (value) => value
+    }));
+    if (draft.kind !== 'success') throw new Error('reviewer reminder draft failed');
+    const prepared = organizerPrepareMessagePreviewOperationResultSchema.parse(await (
+      await runtime.app.request(
+        '/api/events/current/communications/previews/prepare'
+          + `?draftId=${encodeURIComponent(draft.data.draftId)}`
+          + `&expectedDraftVersion=${draft.data.version}`,
+        { headers: eventHeaders({ session, correlationId: crypto.randomUUID() }) }
+      )
+    ).json());
+    expect(prepared).toMatchObject({ kind: 'success', data: { state: 'prepared' } });
+    const adopted = organizerPreviewMessageBatchOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/communications/previews/adopt',
+      key: 'reviewer-reminder-adopt',
+      body: {
+        draftId: draft.data.draftId, expectedDraftVersion: draft.data.version
+      },
+      parse: (value) => value
+    }));
+    if (adopted.kind !== 'success') throw new Error('reviewer reminder adopt failed');
+    expect(adopted.data.counts).toMatchObject({ visibleCandidateCount: 2, includedCount: 2 });
+
+    const recipientQuery = new URLSearchParams(Object.entries(adopted.data.identity)
+      .map(([key, value]) => [key, String(value)]));
+    const recipients = organizerMessagePreviewRecipientPageOperationResultSchema.parse(await (
+      await runtime.app.request(
+        `/api/events/current/communications/previews/recipients?${recipientQuery}`,
+        { headers: eventHeaders({ session, correlationId: crypto.randomUUID() }) }
+      )
+    ).json());
+    if (recipients.kind !== 'success') throw new Error('reviewer reminder recipients failed');
+    expect(recipients.data.rows).toHaveLength(2);
+    expect(recipients.data.rows.every((row) => row.state === 'included')).toBe(true);
+    const resolvedContacts = runtime.database.sqlite.query<{
+      readonly contact_ref_id: string;
+      readonly person_ref_id: string;
+    }, []>(`
+      SELECT contact_ref_id,person_ref_id
+        FROM communication_current_audience_contacts
+       WHERE contact_ref_id LIKE 'reviewer:%'
+       ORDER BY contact_ref_id COLLATE BINARY
+    `).all();
+    expect(resolvedContacts.map((row) => row.contact_ref_id)).toEqual(contactRefIds);
+    expect(new Set(resolvedContacts.map((row) => row.person_ref_id)).size).toBe(2);
+
+    const sent = organizerSendMessagesOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/communications/messages/send',
+      key: 'reviewer-reminder-send',
+      body: {
+        audienceSpecId: adopted.data.identity.audienceSpecId,
+        batchId: 'batch.http.reviewer-reminder',
+        subject: 'Reviews still need your attention',
+        audienceLabel: 'Selected reviewers with outstanding reviews'
+      },
+      parse: (value) => value
+    }));
+    expect(sent).toMatchObject({
+      kind: 'success',
+      data: { releaseCount: 2, deliveryCount: 2 },
+      receipt: { operationName: 'send_messages', operationVersion: 1 }
+    });
+    expect(count(runtime, 'communication_message_releases')).toBe(2);
+    expect(count(runtime, 'communication_outbound_delivery_heads')).toBe(2);
+    expect(count(runtime, 'communication_outbound_delivery_attempts',
+      "WHERE adapter_key = 'fake.email'")).toBe(2);
   });
 
   test('serves the send lane over operator HTTP: prepare, adopt, send with auto-dispatch, delivery history, replay, and wire currency refusal', async () => {
