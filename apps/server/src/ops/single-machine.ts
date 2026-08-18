@@ -237,8 +237,24 @@ function generatedEnvironment(input: {
   });
 }
 
-function quoteSystemd(value: string): string {
-  return `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
+function escapeSystemdWord(value: string, escapeEnvironmentReferences = false): string {
+  let escaped = '';
+  for (const character of value) {
+    const codePoint = character.codePointAt(0)!;
+    if (codePoint < 0x20 || codePoint === 0x7f) {
+      throw new TypeError('systemd service paths cannot contain control characters.');
+    }
+    if (character === '%') {
+      escaped += '%%';
+    } else if (character === '$' && escapeEnvironmentReferences) {
+      escaped += '$$';
+    } else if (character === ' ' || character === '"' || character === "'" || character === '\\') {
+      escaped += `\\x${codePoint.toString(16).padStart(2, '0')}`;
+    } else {
+      escaped += character;
+    }
+  }
+  return escaped;
 }
 
 function xml(value: string): string {
@@ -276,9 +292,9 @@ export function renderSingleMachineService(input: {
       'Type=simple',
       `User=${input.serviceUser}`,
       `Group=${input.serviceGroup}`,
-      `WorkingDirectory=${quoteSystemd(input.releaseRoot)}`,
-      `EnvironmentFile=${quoteSystemd(input.environmentFile)}`,
-      `ExecStart=${quoteSystemd(input.bunExecutable)} ${quoteSystemd(entry)}`,
+      `WorkingDirectory=${escapeSystemdWord(input.releaseRoot)}`,
+      `EnvironmentFile=${escapeSystemdWord(input.environmentFile)}`,
+      `ExecStart=${escapeSystemdWord(input.bunExecutable, true)} ${escapeSystemdWord(entry, true)}`,
       'Restart=on-failure',
       'RestartSec=5s',
       'TimeoutStopSec=45s',
@@ -286,11 +302,11 @@ export function renderSingleMachineService(input: {
       'NoNewPrivileges=true',
       'PrivateTmp=true',
       'ProtectSystem=strict',
-      'ProtectHome=true',
+      'ProtectHome=read-only',
       'LimitNOFILE=65536',
       'TasksMax=512',
       'MemoryMax=2G',
-      `ReadWritePaths=${quoteSystemd(input.dataDirectory)} ${quoteSystemd(input.backupDirectory)} ${quoteSystemd(input.logDirectory)}`,
+      `ReadWritePaths=${escapeSystemdWord(input.dataDirectory)} ${escapeSystemdWord(input.backupDirectory)} ${escapeSystemdWord(input.logDirectory)}`,
       'UMask=0077',
       '',
       '[Install]',

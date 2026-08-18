@@ -49,13 +49,51 @@ describe('single-machine operator contracts', () => {
       serviceGroup: 'jooevents'
     });
     expect(service).toContain('User=jooevents');
-    expect(service).toContain('EnvironmentFile="/etc/jooevents/jooevents.env"');
+    expect(service).toContain('WorkingDirectory=/opt/jooevents/current');
+    expect(service).toContain('EnvironmentFile=/etc/jooevents/jooevents.env');
+    expect(service).toContain('ExecStart=/usr/local/bin/bun /opt/jooevents/current/apps/server/src/entry/bun.ts');
     expect(service).toContain('KillSignal=SIGTERM');
     expect(service).toContain('TimeoutStopSec=45s');
     expect(service).toContain('ProtectSystem=strict');
+    expect(service).toContain('ProtectHome=read-only');
+    expect(service).toContain('ReadWritePaths=/var/lib/jooevents /var/backups/jooevents /var/log/jooevents');
     expect(service).toContain('LimitNOFILE=65536');
     expect(service).toContain('MemoryMax=2G');
     expect(service).toContain('UMask=0077');
+  });
+
+  test('escapes systemd path words without turning absolute paths into quoted literals', () => {
+    const service = renderSingleMachineService({
+      kind: 'systemd',
+      releaseRoot: '/opt/Joo Events/100% ready',
+      environmentFile: '/etc/Joo Events/jooevents.env',
+      dataDirectory: '/var/lib/Joo Events',
+      backupDirectory: '/var/backups/Joo Events',
+      logDirectory: '/var/log/Joo Events',
+      bunExecutable: '/opt/Bun $runtime/bin/bun',
+      serviceUser: 'jooevents',
+      serviceGroup: 'jooevents'
+    });
+    expect(service).toContain('WorkingDirectory=/opt/Joo\\x20Events/100%%\\x20ready');
+    expect(service).toContain('EnvironmentFile=/etc/Joo\\x20Events/jooevents.env');
+    expect(service).toContain('ExecStart=/opt/Bun\\x20$$runtime/bin/bun /opt/Joo\\x20Events/100%%\\x20ready/apps/server/src/entry/bun.ts');
+    expect(service).toContain('ReadWritePaths=/var/lib/Joo\\x20Events /var/backups/Joo\\x20Events /var/log/Joo\\x20Events');
+    expect(service).not.toContain('WorkingDirectory="');
+    expect(service).not.toContain('EnvironmentFile="');
+  });
+
+  test('refuses control characters in systemd paths', () => {
+    expect(() => renderSingleMachineService({
+      kind: 'systemd',
+      releaseRoot: '/opt/jooevents/current\nreplacement',
+      environmentFile: '/etc/jooevents/jooevents.env',
+      dataDirectory: '/var/lib/jooevents',
+      backupDirectory: '/var/backups/jooevents',
+      logDirectory: '/var/log/jooevents',
+      bunExecutable: '/usr/local/bin/bun',
+      serviceUser: 'jooevents',
+      serviceGroup: 'jooevents'
+    })).toThrow('control characters');
   });
 
   test('renders launchd with an environment file, private umask, logs, and keepalive', () => {
