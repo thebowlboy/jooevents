@@ -40,7 +40,7 @@ describe('Schedule Placement direct live port', () => {
 			}) };
 		} });
 		const key = 'schedule-unplace-attempt-00000001';
-		expect(await port.placeOrMove({ action: 'unplace', expectedScheduleVersion: 7,
+		expect(await port.applyChange({ action: 'unplace', expectedScheduleVersion: 7,
 			occurrenceId: id(2), expectedOccurrenceVersion: 3 } as never, key)).toMatchObject({
 			kind: 'success', data: { action: 'unplace', occurrence: null }
 		});
@@ -53,7 +53,7 @@ describe('Schedule Placement direct live port', () => {
 		const port = createSchedulePlacementLivePort({ manifest, request: async () => {
 			called = true; throw new Error('unexpected');
 		} });
-		expect(await port.placeOrMove({ action: 'unplace' } as never, '')).toMatchObject({
+		expect(await port.applyChange({ action: 'unplace' } as never, '')).toMatchObject({
 			kind: 'transport_error', error: { code: 'invalid_request' }
 		});
 		expect(called).toBe(false);

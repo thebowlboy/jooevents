@@ -1732,6 +1732,9 @@ function syncDraftFields(draft: SurfaceTemplate): void {
 	}
 }
 
+/** Retained sample heads so the tuned undo receipt restores exact identities. */
+const removedScheduleBreaks = new Map<string, BreakBlock>();
+
 export const api = {
 	/**
 	 * The per-operator surface-visit rotation (Q41), reduced to the one read a
@@ -3195,22 +3198,47 @@ export const api = {
 		async addBreak(input: {
 			label: string;
 			dayKey: string;
-			roomId: string;
+			roomIds: string[];
 			startMin: number;
 			durationMin: number;
-		}): Promise<BreakBlock> {
+		}): Promise<BreakBlock[]> {
 			await latency();
-			const brk: BreakBlock = { id: mintId('brk'), ...input };
-			db.schedule.breaks.push(brk);
+			const breaks = input.roomIds.map((roomId): BreakBlock => ({
+				id: mintId('brk'),
+				label: input.label,
+				dayKey: input.dayKey,
+				roomId,
+				startMin: input.startMin,
+				durationMin: input.durationMin
+			}));
+			db.schedule.breaks.push(...breaks);
 			recomputeAllConflicts();
 			syncScheduleCounters();
-			return brk;
+			return breaks;
 		},
-		async removeBreak(id: string): Promise<void> {
+		async removeBreaks(ids: string[]): Promise<void> {
 			await latency();
-			db.schedule.breaks = db.schedule.breaks.filter((brk) => brk.id !== id);
+			const selected = new Set(ids);
+			for (const brk of db.schedule.breaks) {
+				if (selected.has(brk.id)) removedScheduleBreaks.set(brk.id, { ...brk });
+			}
+			db.schedule.breaks = db.schedule.breaks.filter((brk) => !selected.has(brk.id));
 			recomputeAllConflicts();
 			syncScheduleCounters();
+		},
+		async restoreBreaks(ids: string[]): Promise<BreakBlock[]> {
+			await latency();
+			const restored: BreakBlock[] = [];
+			for (const id of ids) {
+				const brk = removedScheduleBreaks.get(id);
+				if (!brk) continue;
+				db.schedule.breaks.push({ ...brk });
+				removedScheduleBreaks.delete(id);
+				restored.push({ ...brk });
+			}
+			recomputeAllConflicts();
+			syncScheduleCounters();
+			return restored;
 		},
 		/**
 		 * The same two-press ceremony the live release lane serves, so the

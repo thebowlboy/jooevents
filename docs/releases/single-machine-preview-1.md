@@ -20,8 +20,8 @@ event data until a later release note explicitly removes that restriction.
 ## Compatibility
 
 - Release series: `single-machine-preview-1`.
-- SQLite compatibility floor: `sqlite-e2-s11`, migration runner version 2, terminal
-  migration sequence 11. This floor identifier is a database compatibility contract,
+- SQLite compatibility floor: `sqlite-e2-s12`, migration runner version 2, terminal
+  migration sequence 12. This floor identifier is a database compatibility contract,
   not a product semantic version.
 - Runtime: Bun 1.3.6 or newer on Linux or macOS, x64 or arm64. Release bundles are
   platform- and architecture-specific.

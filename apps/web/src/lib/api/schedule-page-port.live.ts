@@ -7,6 +7,7 @@ import type {
 	ProgramTrackView
 } from './view-models/program-vocabulary';
 import type { SchedulePlacementOccurrenceView } from './view-models/schedule-placement';
+import type { ScheduleBreakHeadView } from './view-models/schedule-placement';
 import type { SessionHeadView } from './view-models/session';
 import type { ProgramVocabularySettingsPort } from './program-vocabulary-settings-adapter';
 import type { SchedulePagePort } from './schedule-page-port';
@@ -22,6 +23,7 @@ import type {
 } from './session-catalog-port';
 import type {
 	EventSettings,
+	BreakBlock,
 	Format,
 	MutationOutcome,
 	Placement,
@@ -39,7 +41,6 @@ import type {
  */
 export type SchedulePageLiveUnmountedCapability =
 	| 'schedule_unplace'
-	| 'schedule_breaks'
 	| 'session_remove'
 	| 'session_attach'
 	| 'session_detach'
@@ -94,7 +95,6 @@ export class SchedulePageLiveError extends Error {
 const UNMOUNTED_COPY: Readonly<Record<SchedulePageLiveUnmountedCapability, string>> = Object.freeze({
 	schedule_unplace:
 		'Removing a session from the schedule is not available in this live workspace yet.',
-	schedule_breaks: 'Breaks are not available in this live workspace yet.',
 	session_remove: 'Removing a session is not available in this live workspace yet.',
 	session_attach: 'Attaching submissions is not available in this live workspace yet.',
 	session_detach: 'Detaching submissions is not available in this live workspace yet.',
@@ -485,6 +485,17 @@ function sessionItem(head: SessionHeadView): SessionItem {
 	};
 }
 
+function liveBreak(head: ScheduleBreakHeadView): BreakBlock {
+	return {
+		id: head.id,
+		label: head.label,
+		dayKey: head.dayKey,
+		roomId: head.roomId,
+		startMin: head.startMin,
+		durationMin: head.endMin - head.startMin
+	};
+}
+
 /**
  * Forward-only lifecycle order. A target below the current canonical head is
  * not a refusable request — no operation exists that could ever satisfy it.
@@ -597,6 +608,8 @@ export function createLiveSchedulePagePort(input: {
 	 * out a slot, so `place` refuses typed instead of guessing a basis.
 	 */
 	let servedGeometry: DerivedScheduleGeometry | null = null;
+	/** Includes removed heads returned by this port so receipts can restore exact ids. */
+	const knownBreakHeads = new Map<string, ScheduleBreakHeadView>();
 
 	async function readCatalog() {
 		const result = await input.sessions.readCatalog();
@@ -611,6 +624,7 @@ export function createLiveSchedulePagePort(input: {
 		if (result.kind !== 'success') {
 			throw new SchedulePageLiveError(readFailure(result, 'schedule'));
 		}
+		for (const head of result.data.breaks ?? []) knownBreakHeads.set(head.id, head);
 		return result.data;
 	}
 
@@ -649,8 +663,7 @@ export function createLiveSchedulePagePort(input: {
 					placements: placements.occurrences.map((occurrence) =>
 						occurrencePlacement(occurrence, geometry.dayStartMin, geometry.timeZone)
 					),
-					// No canonical break owner exists, so none can exist to report.
-					breaks: [],
+					breaks: (placements.breaks ?? []).map(liveBreak),
 					published: publication.currentProgramRelease !== null
 						&& publication.surfaceHeads.some((head) => head.kind === 'schedule')
 				};
@@ -742,7 +755,7 @@ export function createLiveSchedulePagePort(input: {
 				}
 				const endAt = addMinutes(startAt, head.plannedDurationMinutes);
 				const current = existing[0];
-				const applied = await input.placements.placeOrMove(
+				const applied = await input.placements.applyChange(
 					current
 						? {
 								action: 'move',
@@ -766,7 +779,7 @@ export function createLiveSchedulePagePort(input: {
 				if (applied.kind !== 'success') {
 					throw new SchedulePageLiveError(applyFailure(applied, 'placement'));
 				}
-				if (applied.data.occurrence === null) {
+				if (!('occurrence' in applied.data) || applied.data.occurrence === null) {
 					throw new SchedulePageLiveError({
 						code: 'invalid_contract', reason: 'The placement result was incomplete.'
 					});
@@ -781,17 +794,87 @@ export function createLiveSchedulePagePort(input: {
 				const snapshot = await readPlacements();
 				const current = snapshot.occurrences.find((entry) => entry.sessionId === sessionId);
 				if (!current) return;
-				const applied = await input.placements.placeOrMove({
+				const applied = await input.placements.applyChange({
 					action: 'unplace', expectedScheduleVersion: snapshot.scheduleVersion,
 					occurrenceId: current.id, expectedOccurrenceVersion: current.version
 				} as never, newIdempotencyKey());
 				if (applied.kind !== 'success') throw new SchedulePageLiveError(applyFailure(applied, 'placement'));
 			},
-			async addBreak(): Promise<never> {
-				throw unmounted('schedule_breaks');
+			async addBreak(create): Promise<BreakBlock[]> {
+				const geometry = servedGeometry;
+				if (geometry === null || !geometry.localCalendarReady
+					|| !geometry.days.some((day) => day.key === create.dayKey)
+					|| !Number.isInteger(create.startMin)
+					|| !Number.isInteger(create.durationMin)
+					|| create.startMin < 0
+					|| create.durationMin <= 0
+					|| create.startMin + create.durationMin > geometry.slotsPerDay * geometry.slotMinutes) {
+					throw new SchedulePageLiveError({
+						code: 'invalid_break_geometry',
+						reason: 'This break no longer fits the served schedule day. Reload and try again.'
+					});
+				}
+				const snapshot = await readPlacements();
+				const applied = await input.placements.applyChange({
+					action: 'break_add',
+					expectedScheduleVersion: snapshot.scheduleVersion,
+					label: create.label.trim(),
+					dayKey: create.dayKey,
+					roomIds: create.roomIds,
+					startMin: create.startMin,
+					endMin: create.startMin + create.durationMin
+				}, newIdempotencyKey());
+				if (applied.kind !== 'success') {
+					throw new SchedulePageLiveError(applyFailure(applied, 'schedule break'));
+				}
+				if (applied.data.action !== 'break_add') {
+					throw new SchedulePageLiveError({ code: 'invalid_contract', reason: 'The break result was incomplete.' });
+				}
+				for (const head of applied.data.breaks) knownBreakHeads.set(head.id, head);
+				return applied.data.breaks.map(liveBreak);
 			},
-			async removeBreak(): Promise<never> {
-				throw unmounted('schedule_breaks');
+			async removeBreaks(ids): Promise<void> {
+				const snapshot = await readPlacements();
+				const selected = ids.map((id) => snapshot.breaks.find((head) => head.id === id));
+				if (selected.some((head) => head === undefined)) {
+					throw new SchedulePageLiveError({
+						code: 'break_missing', reason: 'A selected break changed while you were working. Reload and try again.'
+					});
+				}
+				const applied = await input.placements.applyChange({
+					action: 'break_remove',
+					expectedScheduleVersion: snapshot.scheduleVersion,
+					breaks: selected.map((head) => ({ id: head!.id, expectedVersion: head!.version }))
+				}, newIdempotencyKey());
+				if (applied.kind !== 'success') {
+					throw new SchedulePageLiveError(applyFailure(applied, 'schedule break'));
+				}
+				if (applied.data.action !== 'break_remove') {
+					throw new SchedulePageLiveError({ code: 'invalid_contract', reason: 'The break result was incomplete.' });
+				}
+				for (const head of applied.data.breaks) knownBreakHeads.set(head.id, head);
+			},
+			async restoreBreaks(ids): Promise<BreakBlock[]> {
+				const snapshot = await readPlacements();
+				const selected = ids.map((id) => knownBreakHeads.get(id));
+				if (selected.some((head) => head?.status !== 'removed')) {
+					throw new SchedulePageLiveError({
+						code: 'break_missing', reason: 'This break can no longer be restored. Reload and try again.'
+					});
+				}
+				const applied = await input.placements.applyChange({
+					action: 'break_restore',
+					expectedScheduleVersion: snapshot.scheduleVersion,
+					breaks: selected.map((head) => ({ id: head!.id, expectedVersion: head!.version }))
+				}, newIdempotencyKey());
+				if (applied.kind !== 'success') {
+					throw new SchedulePageLiveError(applyFailure(applied, 'schedule break'));
+				}
+				if (applied.data.action !== 'break_restore') {
+					throw new SchedulePageLiveError({ code: 'invalid_contract', reason: 'The break result was incomplete.' });
+				}
+				for (const head of applied.data.breaks) knownBreakHeads.set(head.id, head);
+				return applied.data.breaks.map(liveBreak);
 			},
 			/**
 			 * The reviewed lane, exactly as the Release owner serves it: one

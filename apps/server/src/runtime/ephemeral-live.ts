@@ -2470,7 +2470,8 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
         sessions: placeableSessions,
         vocabulary: vocabularyRead,
         eventRelationships,
-        newOccurrenceId: () => crypto.randomUUID()
+        newOccurrenceId: () => crypto.randomUUID(),
+        newBreakId: () => crypto.randomUUID()
       });
     const sessionDirectDomain = createSQLiteSessionDirectEffectDomainRegistration({
       sqlite: database.sqlite,

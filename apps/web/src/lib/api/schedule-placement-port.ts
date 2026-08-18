@@ -4,7 +4,7 @@ import type {
 	StructuredOutcome
 } from '@jooevents/contracts';
 import type {
-	schedulePlacementInputSchema,
+	schedulePlacementAuthorInputSchema,
 	schedulePlacementReadInputSchema
 } from '@jooevents/contracts/schedule-placement';
 import type { z } from 'zod';
@@ -16,7 +16,7 @@ import type {
 } from './view-models/schedule-placement';
 
 export type SchedulePlacementReadRange = z.input<typeof schedulePlacementReadInputSchema>;
-export type SchedulePlacementMutationRequest = z.input<typeof schedulePlacementInputSchema>;
+export type SchedulePlacementMutationRequest = z.input<typeof schedulePlacementAuthorInputSchema>;
 export type SchedulePlacementIdempotencyKey = z.input<typeof operationHttpIdempotencyKeySchema>;
 
 export type SchedulePlacementCoreOperation = 'snapshot' | 'mutation';
@@ -81,7 +81,7 @@ export interface SchedulePlacementCorePort {
 		options?: { readonly signal?: AbortSignal }
 	): Promise<SchedulePlacementReadResult>;
 
-	placeOrMove(
+	applyChange(
 		request: SchedulePlacementMutationRequest,
 		idempotencyKey: SchedulePlacementIdempotencyKey,
 		options?: { readonly signal?: AbortSignal }

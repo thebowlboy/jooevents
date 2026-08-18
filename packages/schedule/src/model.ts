@@ -4,7 +4,8 @@ import {
   schedulePlacementScopeSchema,
   schedulePlacementSnapshotSchema,
   type SchedulePlacementOccurrenceDto,
-  type SchedulePlacementSnapshotDto
+  type SchedulePlacementSnapshotDto,
+  type ScheduleBreakHeadDto
 } from '@jooevents/contracts';
 import {
   parseAggregateVersion,
@@ -39,6 +40,7 @@ export interface SchedulePlacementState {
   readonly scope: SchedulePlacementScope;
   readonly scheduleVersion: AggregateVersion;
   readonly occurrences: readonly SchedulePlacementOccurrence[];
+  readonly breaks: readonly ScheduleBreakHeadDto[];
 }
 
 export interface PlaceableSessionIdentity {
@@ -120,7 +122,8 @@ export function parseSchedulePlacementState(value: unknown): SchedulePlacementSt
   return deepFreeze({
     scope: parseSchedulePlacementScope(state.scope),
     scheduleVersion: parseAggregateVersion(state.scheduleVersion),
-    occurrences: state.occurrences.map(parseSchedulePlacementOccurrence)
+    occurrences: state.occurrences.map(parseSchedulePlacementOccurrence),
+    breaks: state.breaks.map((head) => Object.freeze({ ...head }))
   });
 }
 
@@ -129,7 +132,8 @@ export function projectSchedulePlacementState(state: SchedulePlacementState): Sc
     schemaVersion: 1,
     scope: state.scope,
     scheduleVersion: state.scheduleVersion,
-    occurrences: state.occurrences.map(projectSchedulePlacementOccurrence)
+    occurrences: state.occurrences.map(projectSchedulePlacementOccurrence),
+    breaks: state.breaks
   });
 }
 

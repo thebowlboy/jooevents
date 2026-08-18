@@ -2,11 +2,11 @@ import { createHash } from 'node:crypto';
 import {
   schedulePlacementPlanningInputSchema,
   schedulePlacementPlanSchema,
-  schedulePlacementResultSchema,
+  scheduleOccurrencePlacementResultSchema,
   type SchedulePlacementPlanningInput,
   type SchedulePlacementConflictDetail,
   type SchedulePlacementPlanDto,
-  type SchedulePlacementResult
+  type ScheduleOccurrencePlacementResult
 } from '@jooevents/contracts';
 import { encodeCanonicalJson, parseAggregateVersion } from '@jooevents/kernel';
 import {
@@ -58,7 +58,7 @@ export interface SchedulePlacementRepository extends PlaceableSessionIdentityPor
 }
 
 export interface SchedulePlacementTransactionRepository extends SchedulePlacementRepository {
-  applyPlacementPlan(plan: SchedulePlacementPlanDto): SchedulePlacementResult;
+  applyPlacementPlan(plan: SchedulePlacementPlanDto): ScheduleOccurrencePlacementResult;
 }
 
 export function schedulePlacementGuardId(eventId: string): string {
@@ -73,7 +73,8 @@ export function schedulePlacementStateDigest(state: SchedulePlacementState): str
   return sha256({
     scope: state.scope,
     scheduleVersion: state.scheduleVersion,
-    occurrences: state.occurrences.map(projectSchedulePlacementOccurrence)
+    occurrences: state.occurrences.map(projectSchedulePlacementOccurrence),
+    breaks: state.breaks
   });
 }
 
@@ -224,7 +225,7 @@ export function applySchedulePlacementPlan(input: {
   readonly sessions: PlaceableSessionIdentityPort;
   readonly vocabulary: ProgramVocabularyState;
   readonly plan: SchedulePlacementPlanDto;
-}): { readonly state: SchedulePlacementState; readonly result: SchedulePlacementResult } {
+}): { readonly state: SchedulePlacementState; readonly result: ScheduleOccurrencePlacementResult } {
   const refusal = validateSchedulePlacementPlan(input);
   if (refusal) throw new SchedulePlacementPlanningError(refusal);
   const occurrences = input.state.occurrences.filter((occurrence) => occurrence.id !== input.plan.input.occurrenceId);
@@ -233,11 +234,12 @@ export function applySchedulePlacementPlan(input: {
   const state: SchedulePlacementState = deepFreeze({
     scope: input.state.scope,
     scheduleVersion: parseAggregateVersion(input.plan.scheduleVersion.after),
-    occurrences
+    occurrences,
+    breaks: input.state.breaks
   });
   return Object.freeze({
     state,
-    result: schedulePlacementResultSchema.parse({
+    result: scheduleOccurrencePlacementResultSchema.parse({
       action: input.plan.input.action,
       scheduleVersion: state.scheduleVersion,
       occurrence: input.plan.after

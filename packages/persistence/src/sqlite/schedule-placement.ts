@@ -15,8 +15,11 @@ import {
   type ProgramVocabularyState
 } from '@jooevents/program';
 import type {
+  ScheduleBreakHeadDto,
+  ScheduleBreakPlanDto,
+  ScheduleBreakResult,
   SchedulePlacementPlanDto,
-  SchedulePlacementResult
+  ScheduleOccurrencePlacementResult
 } from '@jooevents/contracts';
 import type {
   ProgramVocabularyMutationAttribution,
@@ -26,6 +29,8 @@ import type {
 } from './program-vocabulary';
 import {
   applySchedulePlacementPlan,
+  applyScheduleBreakPlan,
+  compareBreakHeads,
   compareScheduleOccurrences,
   parseScheduleOccurrenceId,
   parseSchedulePlacementOccurrence,
@@ -39,7 +44,9 @@ import {
   type ProgrammedSessionIdentity,
   type SchedulePlacementScope,
   type SchedulePlacementState,
-  type SchedulePlacementTransactionRepository
+  type SchedulePlacementTransactionRepository,
+  type ScheduleBreakState,
+  type ScheduleBreakTransactionRepository
 } from '@jooevents/schedule';
 import { createHash } from 'node:crypto';
 
@@ -99,6 +106,61 @@ BEGIN
 END;
 `;
 
+export const SCHEDULE_BREAK_SQL = `
+CREATE TABLE schedule_breaks (
+  workspace_id TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  id TEXT NOT NULL CHECK(length(id) = 36),
+  label TEXT NOT NULL CHECK(length(label) BETWEEN 1 AND 80 AND label = trim(label)),
+  day_key TEXT NOT NULL CHECK(
+    length(day_key) = 10
+    AND day_key GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
+    AND date(day_key, '+0 days') = day_key
+  ),
+  room_id TEXT NOT NULL CHECK(length(room_id) = 36),
+  start_min INTEGER NOT NULL CHECK(start_min BETWEEN 0 AND 1439),
+  end_min INTEGER NOT NULL CHECK(end_min BETWEEN 1 AND 1440),
+  status TEXT NOT NULL CHECK(status IN ('active', 'removed')),
+  version INTEGER NOT NULL CHECK(version > 0),
+  updated_by_user_id TEXT NOT NULL CHECK(length(updated_by_user_id) = 36),
+  updated_at_ms INTEGER NOT NULL CHECK(updated_at_ms BETWEEN 0 AND 8640000000000000),
+  PRIMARY KEY (workspace_id, event_id, id),
+  CHECK(start_min < end_min),
+  FOREIGN KEY (workspace_id, event_id)
+    REFERENCES schedule_placement_sets(workspace_id, event_id)
+    ON UPDATE RESTRICT ON DELETE RESTRICT,
+  FOREIGN KEY (workspace_id, event_id, room_id)
+    REFERENCES program_vocabulary_rooms(workspace_id, event_id, id)
+    ON UPDATE RESTRICT ON DELETE RESTRICT,
+  FOREIGN KEY (updated_by_user_id) REFERENCES users(id)
+    ON UPDATE RESTRICT ON DELETE RESTRICT
+) STRICT, WITHOUT ROWID;
+
+CREATE INDEX schedule_breaks_current_grid
+  ON schedule_breaks(workspace_id, event_id, day_key, room_id, start_min, end_min, id)
+  WHERE status = 'active';
+
+CREATE TRIGGER schedule_breaks_definition_immutable
+BEFORE UPDATE OF workspace_id, event_id, id, label, day_key, room_id, start_min, end_min
+ON schedule_breaks
+BEGIN
+  SELECT RAISE(ABORT, 'schedule break definition is immutable');
+END;
+
+CREATE TRIGGER schedule_breaks_version_advances_once
+BEFORE UPDATE ON schedule_breaks
+WHEN NEW.version != OLD.version + 1
+BEGIN
+  SELECT RAISE(ABORT, 'schedule break version must advance once');
+END;
+
+CREATE TRIGGER schedule_breaks_no_delete
+BEFORE DELETE ON schedule_breaks
+BEGIN
+  SELECT RAISE(ABORT, 'schedule break heads are retained');
+END;
+`;
+
 export const SCHEDULE_PLACEMENT_ROOM_CONTRIBUTOR = Object.freeze({
   key: 'schedule.occurrences',
   version: 1
@@ -116,6 +178,7 @@ export class SQLiteSchedulePlacementError extends Error {
     | 'data_corrupt'
     | 'stale_schedule'
     | 'stale_occurrence'
+    | 'stale_break'
     | 'stale_reference'
   , cause?: unknown) {
     super(code, cause === undefined ? undefined : { cause });
@@ -125,6 +188,11 @@ export class SQLiteSchedulePlacementError extends Error {
 
 interface SetRow { readonly schedule_version: number }
 interface EventRootRow { readonly event_id: string }
+interface EventHeadRow {
+  readonly version: number;
+  readonly start_date: string;
+  readonly end_date: string;
+}
 interface OccurrenceRow {
   readonly id: string;
   readonly session_id: string;
@@ -133,14 +201,26 @@ interface OccurrenceRow {
   readonly end_at_ms: number;
   readonly version: number;
 }
+interface BreakRow {
+  readonly id: string;
+  readonly label: string;
+  readonly day_key: string;
+  readonly room_id: string;
+  readonly start_min: number;
+  readonly end_min: number;
+  readonly status: 'active' | 'removed';
+  readonly version: number;
+}
 
 export function installSchedulePlacementSchema(sqlite: Database): void {
   if (sqlite.inTransaction) throw new SQLiteSchedulePlacementError('transaction_required');
   sqlite.exec('PRAGMA foreign_keys = ON;');
   sqlite.exec(SCHEDULE_PLACEMENT_SQL);
+  sqlite.exec(SCHEDULE_BREAK_SQL);
 }
 
-export class SQLiteSchedulePlacementRepository implements SchedulePlacementTransactionRepository {
+export class SQLiteSchedulePlacementRepository
+implements SchedulePlacementTransactionRepository, ScheduleBreakTransactionRepository {
   constructor(
     private readonly sqlite: Database,
     private readonly sessions: PlaceableSessionIdentityPort,
@@ -164,12 +244,43 @@ export class SQLiteSchedulePlacementRepository implements SchedulePlacementTrans
     `).all(scope.workspaceId, scope.eventId);
     if (sets.length > 1) throw new SQLiteSchedulePlacementError('data_corrupt');
     const occurrences = this.readOccurrenceRows(scope);
-    if (!sets[0] && occurrences.length > 0) throw new SQLiteSchedulePlacementError('data_corrupt');
+    const breaks = this.readBreakRows(scope);
+    if (!sets[0] && (occurrences.length > 0 || breaks.length > 0)) {
+      throw new SQLiteSchedulePlacementError('data_corrupt');
+    }
     return parseSchedulePlacementState({
       schemaVersion: 1,
       scope,
       scheduleVersion: sets[0]?.schedule_version ?? 1,
-      occurrences: occurrences.map(parseOccurrenceRow)
+      occurrences: occurrences.map(parseOccurrenceRow),
+      breaks: breaks.filter((row) => row.status === 'active').map(parseBreakRow)
+    });
+  }
+
+  readBreakState(scopeInput: SchedulePlacementScope): ScheduleBreakState | undefined {
+    const scope = parseSchedulePlacementScope(scopeInput);
+    const schedule = this.readSchedule(scope);
+    if (!schedule) return undefined;
+    const event = this.sqlite.query<EventHeadRow, [string, string]>(`
+      SELECT version, start_date, end_date
+        FROM event_spine_heads
+       WHERE workspace_id = ? AND id = ?
+       LIMIT 2
+    `).all(scope.workspaceId, scope.eventId);
+    if (event.length !== 1) throw new SQLiteSchedulePlacementError('data_corrupt');
+    const head = event[0]!;
+    if (!Number.isSafeInteger(head.version) || head.version <= 0) {
+      throw new SQLiteSchedulePlacementError('data_corrupt');
+    }
+    return Object.freeze({
+      scope,
+      scheduleVersion: schedule.scheduleVersion,
+      breaks: Object.freeze(this.readBreakRows(scope).map(parseBreakRow).sort(compareBreakHeads)),
+      event: Object.freeze({
+        version: head.version,
+        startDate: head.start_date,
+        endDate: head.end_date
+      })
     });
   }
 
@@ -226,7 +337,7 @@ export class SQLiteSchedulePlacementRepository implements SchedulePlacementTrans
     return this.vocabulary.readVocabulary(parseSchedulePlacementScope(scope));
   }
 
-  applyPlacementPlan(plan: SchedulePlacementPlanDto): SchedulePlacementResult {
+  applyPlacementPlan(plan: SchedulePlacementPlanDto): ScheduleOccurrencePlacementResult {
     if (!this.sqlite.inTransaction) throw new SQLiteSchedulePlacementError('transaction_required');
     const scope = parseSchedulePlacementScope(plan.input.scope);
     const state = this.readSchedule(scope);
@@ -307,12 +418,92 @@ export class SQLiteSchedulePlacementRepository implements SchedulePlacementTrans
     return applied.result;
   }
 
+  applyBreakPlan(plan: ScheduleBreakPlanDto): ScheduleBreakResult {
+    if (!this.sqlite.inTransaction) throw new SQLiteSchedulePlacementError('transaction_required');
+    const scope = parseSchedulePlacementScope(plan.input.scope);
+    const state = this.readBreakState(scope);
+    const vocabulary = this.readVocabulary(scope);
+    if (!state || !vocabulary) throw new SQLiteSchedulePlacementError('scope_corrupt');
+    const applied = applyScheduleBreakPlan({ state, vocabulary, plan });
+    const attribution = parseAttribution(this.attribution());
+
+    if (plan.scheduleVersion.before === 1) {
+      changedExactlyOnce(this.sqlite.query<never, [string, string, number, string, number, string, string, string, string]>(`
+        INSERT INTO schedule_placement_sets (
+          workspace_id, event_id, schedule_version, updated_by_user_id, updated_at_ms
+        ) SELECT ?, ?, ?, ?, ?
+          FROM event_spine_scope_roots
+         WHERE workspace_id = ? AND event_id = ?
+           AND NOT EXISTS (
+             SELECT 1 FROM schedule_placement_sets WHERE workspace_id = ? AND event_id = ?
+           )
+      `).run(
+        scope.workspaceId, scope.eventId, plan.scheduleVersion.after,
+        attribution.actorUserId, attribution.occurredAtMs,
+        scope.workspaceId, scope.eventId, scope.workspaceId, scope.eventId
+      ), 'stale_schedule');
+    }
+
+    if (plan.input.action === 'break_add') {
+      for (const after of plan.after) {
+        changedExactlyOnce(this.sqlite.query<never, [string, string, string, string, string, string, number, number, string, number, string, number]>(`
+          INSERT INTO schedule_breaks (
+            workspace_id, event_id, id, label, day_key, room_id,
+            start_min, end_min, status, version, updated_by_user_id, updated_at_ms
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          scope.workspaceId, scope.eventId, after.id, after.label, after.dayKey, after.roomId,
+          after.startMin, after.endMin, after.status, after.version,
+          attribution.actorUserId, attribution.occurredAtMs
+        ), 'stale_break');
+      }
+    } else {
+      for (let index = 0; index < plan.before.length; index += 1) {
+        const before = plan.before[index]!;
+        const after = plan.after[index]!;
+        changedExactlyOnce(this.sqlite.query<never, [string, number, string, number, string, string, string, string, number]>(`
+          UPDATE schedule_breaks
+             SET status = ?, version = ?, updated_by_user_id = ?, updated_at_ms = ?
+           WHERE workspace_id = ? AND event_id = ? AND id = ?
+             AND status = ? AND version = ?
+        `).run(
+          after.status, after.version, attribution.actorUserId, attribution.occurredAtMs,
+          scope.workspaceId, scope.eventId, before.id, before.status, before.version
+        ), 'stale_break');
+      }
+    }
+
+    if (plan.scheduleVersion.before !== 1) {
+      changedExactlyOnce(this.sqlite.query<never, [number, string, number, string, string, number]>(`
+        UPDATE schedule_placement_sets
+           SET schedule_version = ?, updated_by_user_id = ?, updated_at_ms = ?
+         WHERE workspace_id = ? AND event_id = ? AND schedule_version = ?
+      `).run(
+        plan.scheduleVersion.after, attribution.actorUserId, attribution.occurredAtMs,
+        scope.workspaceId, scope.eventId, plan.scheduleVersion.before
+      ), 'stale_schedule');
+    }
+    if (canonicalJsonText(this.readBreakState(scope)) !== canonicalJsonText(applied.state)) {
+      throw new SQLiteSchedulePlacementError('data_corrupt');
+    }
+    return applied.result;
+  }
+
   private readOccurrenceRows(scope: SchedulePlacementScope): readonly OccurrenceRow[] {
     return this.sqlite.query<OccurrenceRow, [string, string]>(`
       SELECT id, session_id, room_id, start_at_ms, end_at_ms, version
         FROM schedule_occurrences
        WHERE workspace_id = ? AND event_id = ?
        ORDER BY start_at_ms, end_at_ms, id COLLATE BINARY
+    `).all(scope.workspaceId, scope.eventId);
+  }
+
+  private readBreakRows(scope: SchedulePlacementScope): readonly BreakRow[] {
+    return this.sqlite.query<BreakRow, [string, string]>(`
+      SELECT id, label, day_key, room_id, start_min, end_min, status, version
+        FROM schedule_breaks
+       WHERE workspace_id = ? AND event_id = ?
+       ORDER BY day_key, start_min, room_id COLLATE BINARY, id COLLATE BINARY
     `).all(scope.workspaceId, scope.eventId);
   }
 }
@@ -359,21 +550,36 @@ export function createSQLiteScheduleRoomReferenceAdapter(input: {
             || currentReference.item.kind !== 'room'
             || repoint.from.kind !== 'room' || repoint.to.kind !== 'room'
             || currentReference.item.id !== repoint.from.id
-            || currentReference.destination.kind !== 'schedule.occurrence'
+            || (currentReference.destination.kind !== 'schedule.occurrence'
+              && currentReference.destination.kind !== 'schedule.break')
             || currentReference.destination.id !== repoint.destination.id) {
           throw new ProgramVocabularyPlanningError('stale_reference');
         }
-        changedExactlyOnce(input.sqlite.query<never, [string, number, string, number, string, string, string, string, number, string]>(`
-          UPDATE schedule_occurrences
-             SET room_id = ?, version = ?, updated_by_user_id = ?, updated_at_ms = ?
-           WHERE workspace_id = ? AND event_id = ? AND id = ?
-             AND room_id = ? AND version = ? AND id = ?
-        `).run(
-          repoint.to.id, repoint.expectedVersion + 1,
-          parsedAttribution.actorUserId, parsedAttribution.occurredAtMs,
-          scheduleScope.workspaceId, scheduleScope.eventId, repoint.destination.id,
-          repoint.from.id, repoint.expectedVersion, repoint.destination.id
-        ), 'stale_reference');
+        if (currentReference.destination.kind === 'schedule.occurrence') {
+          changedExactlyOnce(input.sqlite.query<never, [string, number, string, number, string, string, string, string, number, string]>(`
+            UPDATE schedule_occurrences
+               SET room_id = ?, version = ?, updated_by_user_id = ?, updated_at_ms = ?
+             WHERE workspace_id = ? AND event_id = ? AND id = ?
+               AND room_id = ? AND version = ? AND id = ?
+          `).run(
+            repoint.to.id, repoint.expectedVersion + 1,
+            parsedAttribution.actorUserId, parsedAttribution.occurredAtMs,
+            scheduleScope.workspaceId, scheduleScope.eventId, repoint.destination.id,
+            repoint.from.id, repoint.expectedVersion, repoint.destination.id
+          ), 'stale_reference');
+        } else {
+          changedExactlyOnce(input.sqlite.query<never, [string, number, string, number, string, string, string, string, number, string]>(`
+            UPDATE schedule_breaks
+               SET room_id = ?, version = ?, updated_by_user_id = ?, updated_at_ms = ?
+             WHERE workspace_id = ? AND event_id = ? AND id = ?
+               AND room_id = ? AND version = ? AND id = ? AND status = 'active'
+          `).run(
+            repoint.to.id, repoint.expectedVersion + 1,
+            parsedAttribution.actorUserId, parsedAttribution.occurredAtMs,
+            scheduleScope.workspaceId, scheduleScope.eventId, repoint.destination.id,
+            repoint.from.id, repoint.expectedVersion, repoint.destination.id
+          ), 'stale_reference');
+        }
       }
       changedExactlyOnce(input.sqlite.query<never, [number, string, number, string, string, number]>(`
         UPDATE schedule_placement_sets
@@ -404,15 +610,29 @@ function readScheduleReferenceSnapshot(
      WHERE workspace_id = ? AND event_id = ?
      ORDER BY id COLLATE BINARY
   `).all(scheduleScope.workspaceId, scheduleScope.eventId);
-  if (!set[0] && rows.length > 0) throw new SQLiteSchedulePlacementError('data_corrupt');
+  const breaks = sqlite.query<BreakRow, [string, string]>(`
+    SELECT id, label, day_key, room_id, start_min, end_min, status, version
+      FROM schedule_breaks
+     WHERE workspace_id = ? AND event_id = ?
+     ORDER BY id COLLATE BINARY
+  `).all(scheduleScope.workspaceId, scheduleScope.eventId);
+  if (!set[0] && (rows.length > 0 || breaks.length > 0)) {
+    throw new SQLiteSchedulePlacementError('data_corrupt');
+  }
   const guardVersion = parseAggregateVersion(set[0]?.schedule_version ?? 1);
-  const references = rows.map((row) => ({
+  const references = [...rows.map((row) => ({
     referenceKey: referenceKey(row.id),
     version: parseAggregateVersion(row.version),
     item: { kind: 'room' as const, id: row.room_id },
     mode: 'current' as const,
     destination: { kind: 'schedule.occurrence', id: row.id }
-  }));
+  })), ...breaks.map((row) => ({
+    referenceKey: breakReferenceKey(row.id),
+    version: parseAggregateVersion(row.version),
+    item: { kind: 'room' as const, id: row.room_id },
+    mode: row.status === 'active' ? 'current' as const : 'historical' as const,
+    destination: { kind: 'schedule.break', id: row.id }
+  }))].sort((left, right) => left.referenceKey < right.referenceKey ? -1 : left.referenceKey > right.referenceKey ? 1 : 0);
   const contributor = SCHEDULE_PLACEMENT_ROOM_CONTRIBUTOR;
   const snapshot: ProgramReferenceContributorSnapshot = {
     contributor,
@@ -440,6 +660,21 @@ function parseOccurrenceRow(row: OccurrenceRow) {
   });
 }
 
+function parseBreakRow(row: BreakRow): ScheduleBreakHeadDto {
+  if (!Number.isSafeInteger(row.start_min) || !Number.isSafeInteger(row.end_min)
+      || !Number.isSafeInteger(row.version)) throw new SQLiteSchedulePlacementError('data_corrupt');
+  return {
+    id: row.id,
+    label: row.label,
+    dayKey: row.day_key,
+    roomId: row.room_id,
+    startMin: row.start_min,
+    endMin: row.end_min,
+    status: row.status,
+    version: row.version
+  };
+}
+
 function parseAttribution(input: SchedulePlacementMutationAttribution) {
   const actorUserId = parseUserId(input.actorUserId);
   const occurredAt = parseInstant(input.occurredAt);
@@ -455,6 +690,10 @@ function changedExactlyOnce(
 
 function referenceKey(occurrenceId: string): string {
   return `schedule_occurrence:${occurrenceId}:room`;
+}
+
+function breakReferenceKey(breakId: string): string {
+  return `schedule_break:${breakId}:room`;
 }
 
 function referenceDigest(

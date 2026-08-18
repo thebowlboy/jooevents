@@ -17,6 +17,7 @@ import {
 } from '@jooevents/kernel';
 import {
   planSchedulePlacementMutation,
+  planScheduleBreakMutation,
   parseSchedulePlacementScope,
   parseScheduleSessionId,
   type ProgrammedSessionIdentityPort,
@@ -45,6 +46,8 @@ const sourceRoomId = '019c1df7-86b5-769b-bba4-5f7097bfa301';
 const targetRoomId = '019c1df7-86b5-769b-bba4-5f7097bfa302';
 const occurrenceId = '019c1df7-86b5-769b-bba4-5f7097bfa401';
 const occurrence2Id = '019c1df7-86b5-769b-bba4-5f7097bfa402';
+const breakId = '019c1df7-86b5-769b-bba4-5f7097bfa403';
+const break2Id = '019c1df7-86b5-769b-bba4-5f7097bfa404';
 const sessionId = '019c1df7-86b5-769b-bba4-5f7097bfa501';
 const session2Id = '019c1df7-86b5-769b-bba4-5f7097bfa502';
 const now = parseInstant('2026-08-12T09:00:00.000Z');
@@ -106,6 +109,71 @@ function setup() {
 }
 
 describe('SQLite schedule placement', () => {
+  test('adds multiple break heads atomically and retains exact remove/restore state', () => {
+    const h = setup();
+    const state = h.schedule.readBreakState(h.scope)!;
+    const vocabulary = h.schedule.readVocabulary(h.scope)!;
+    const add = planScheduleBreakMutation({
+      state,
+      vocabulary,
+      planningInput: {
+        action: 'break_add', scope: h.scope, expectedScheduleVersion: 1,
+        label: 'Lunch', dayKey: '2026-11-01', startMin: 180, endMin: 240,
+        breaks: [
+          { id: breakId, roomId: sourceRoomId },
+          { id: break2Id, roomId: targetRoomId }
+        ]
+      }
+    });
+    transaction(h.sqlite, () => h.schedule.applyBreakPlan(add));
+    expect(h.schedule.readSchedule(h.scope)).toMatchObject({
+      scheduleVersion: 2,
+      breaks: [
+        { id: breakId, status: 'active', version: 1 },
+        { id: break2Id, status: 'active', version: 1 }
+      ]
+    });
+
+    const current = h.schedule.readBreakState(h.scope)!;
+    const remove = planScheduleBreakMutation({
+      state: current,
+      vocabulary: h.schedule.readVocabulary(h.scope)!,
+      planningInput: {
+        action: 'break_remove', scope: h.scope, expectedScheduleVersion: 2,
+        breaks: current.breaks.map((head) => ({ id: head.id, expectedVersion: head.version }))
+      }
+    });
+    transaction(h.sqlite, () => h.schedule.applyBreakPlan(remove));
+    expect(h.schedule.readSchedule(h.scope)?.breaks).toEqual([]);
+    expect(h.sqlite.query<{ id: string; status: string; version: number }, []>(`
+      SELECT id,status,version FROM schedule_breaks ORDER BY id
+    `).all()).toEqual([
+      { id: breakId, status: 'removed', version: 2 },
+      { id: break2Id, status: 'removed', version: 2 }
+    ]);
+    expect(() => h.sqlite.query(`DELETE FROM schedule_breaks WHERE id = ?`).run(breakId))
+      .toThrow('schedule break heads are retained');
+    expect(() => h.sqlite.query(`
+      UPDATE schedule_breaks
+         SET label = 'Late lunch', version = version + 1
+       WHERE id = ?
+    `).run(breakId)).toThrow('schedule break definition is immutable');
+
+    const removed = h.schedule.readBreakState(h.scope)!;
+    const restore = planScheduleBreakMutation({
+      state: removed,
+      vocabulary: h.schedule.readVocabulary(h.scope)!,
+      planningInput: {
+        action: 'break_restore', scope: h.scope, expectedScheduleVersion: 3,
+        breaks: removed.breaks.map((head) => ({ id: head.id, expectedVersion: head.version }))
+      }
+    });
+    transaction(h.sqlite, () => h.schedule.applyBreakPlan(restore));
+    expect(h.schedule.readSchedule(h.scope)?.breaks.map((head) => [head.id, head.version]))
+      .toEqual([[breakId, 3], [break2Id, 3]]);
+    h.sqlite.close();
+  });
+
   test('places through an exact transaction and blocks an overlapping room interval', () => {
     const h = setup();
     const plan = placementPlan(h, {

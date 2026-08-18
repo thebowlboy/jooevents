@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   SCHEDULE_PLACEMENT_OPERATION_SCHEMA_REFS,
   schedulePlacementOperationResultSchema,
+  schedulePlacementAuthorInputSchema,
   schedulePlacementOccurrenceSchema,
   schedulePlacementInputSchema,
   schedulePlacementReadInputSchema,
@@ -118,5 +119,32 @@ describe('Schedule placement contracts', () => {
     expect(schedulePlacementSnapshotSchema.safeParse({ ...base, occurrences: [occurrence, later] }).success).toBe(true);
     expect(schedulePlacementSnapshotSchema.safeParse({ ...base, occurrences: [later, occurrence] }).success).toBe(false);
     expect(schedulePlacementSnapshotSchema.safeParse({ ...base, occurrences: [occurrence, occurrence] }).success).toBe(false);
+  });
+
+  test('accepts one atomic multi-room break action and projects only active retained heads', () => {
+    expect(schedulePlacementAuthorInputSchema.parse({
+      action: 'break_add',
+      expectedScheduleVersion: 3,
+      label: 'Lunch',
+      dayKey: '2026-09-01',
+      startMin: 180,
+      endMin: 240,
+      roomIds: [ids.room, '01890f47-9abc-7def-8123-456789abcdee']
+    }).action).toBe('break_add');
+    expect(schedulePlacementAuthorInputSchema.safeParse({
+      action: 'break_add', expectedScheduleVersion: 3, label: 'Lunch',
+      dayKey: '2026-09-01', startMin: 180, endMin: 240,
+      roomIds: [ids.room, ids.room]
+    }).success).toBe(false);
+    expect(schedulePlacementSnapshotSchema.parse({
+      schemaVersion: 1,
+      scope: { workspaceId: ids.workspace, eventId: ids.event },
+      scheduleVersion: 3,
+      occurrences: [],
+      breaks: [{
+        id: ids.occurrence, label: 'Lunch', dayKey: '2026-09-01', roomId: ids.room,
+        startMin: 180, endMin: 240, status: 'active', version: 1
+      }]
+    }).breaks).toHaveLength(1);
   });
 });

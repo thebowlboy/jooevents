@@ -31,11 +31,12 @@ export interface SchedulePagePort {
 		addBreak(input: {
 			label: string;
 			dayKey: string;
-			roomId: string;
+			roomIds: string[];
 			startMin: number;
 			durationMin: number;
-		}): Promise<BreakBlock>;
-		removeBreak(id: string): Promise<void>;
+		}): Promise<BreakBlock[]>;
+		removeBreaks(ids: string[]): Promise<void>;
+		restoreBreaks(ids: string[]): Promise<BreakBlock[]>;
 		/**
 		 * First press: draft the next programme release and return what the
 		 * second press would make public. Nothing reaches public state here —

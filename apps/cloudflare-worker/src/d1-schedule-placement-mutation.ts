@@ -213,6 +213,28 @@ implements D1EffectDomainAdapter {
       prepare: ({ businessInput, context: received }) => {
         if (received !== context) throw new TypeError('d1_schedule_direct_context_substitution');
         const wire = schedulePlacementAuthorInputSchema.parse(businessInput);
+        if (wire.action === 'break_add'
+            || wire.action === 'break_remove'
+            || wire.action === 'break_restore') {
+          return schedulePlacementDirectContributionSchema.parse({
+            result: { kind: 'outcome', outcome: {
+              class: 'conflict',
+              kind: 'schedule_break_unavailable',
+              retryable: false,
+              subjects: [],
+              detail: {
+                code: 'storage_adapter_unavailable',
+                action: wire.action,
+                breakIds: wire.action === 'break_add'
+                  ? wire.roomIds
+                  : wire.breaks.map((entry) => entry.id)
+              },
+              detailSchemaVersion: 1
+            } },
+            domain: null,
+            effectContributions: []
+          });
+        }
         const planningInput = wire.action === 'place'
           ? { ...wire, scope, occurrenceId: parseScheduleOccurrenceId(
               applicationUuid(this.input.newOccurrenceId())) }

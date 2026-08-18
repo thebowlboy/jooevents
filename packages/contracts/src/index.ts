@@ -31,6 +31,7 @@ export * from './program-vocabulary';
 export * from './releases';
 export * from './route-namespaces';
 export * from './schedule-placement';
+export * from './schedule-breaks';
 export * from './signals';
 export * from './sessions';
 export * from './submissions';

@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Page, type Route } from '@playwright/test';
 
 /**
  * Focused joined smoke for the live Schedule aggregate (session.catalog.read +
@@ -113,6 +113,72 @@ test('live schedule renders the settings-derived grid, publication state, and a 
 	// empty list, or this existing surface becomes an unreachable feature.
 	await expect(page.getByRole('link', { name: 'Public schedule template — Templates' }))
 		.toHaveAttribute('href', /\/app\/templates\?tab=surfaces&template=.+/);
+
+	// First-class breaks: create a second room so “every room” is exercised as
+	// one atomic Schedule operation, prove the retained heads survive a reload,
+	// then remove and restore one exact identity through the receipt.
+	const breakLabel = `Joined break (${testInfo.project.name})`;
+	await page.getByRole('button', { name: 'Add room…' }).click();
+	await page.getByLabel('Room name').fill(`Break room ${testInfo.project.name}`);
+	await page.getByLabel('Seats').fill('40');
+	await page.getByRole('button', { name: 'Add room', exact: true }).click();
+	await page.getByRole('button', { name: 'Dismiss confirmation' }).click();
+	await page.getByRole('button', { name: 'Add break…' }).click();
+	const breakDialog = page.getByRole('dialog', { name: 'Add break' });
+	await breakDialog.getByRole('textbox', { name: 'Label' }).fill(breakLabel);
+	await breakDialog.getByLabel('Starts').fill('16:00');
+	await breakDialog.getByLabel('Length').selectOption('30');
+	const selectedRooms = breakDialog.getByRole('checkbox');
+	const selectedRoomCount = await selectedRooms.count();
+	expect(selectedRoomCount).toBeGreaterThanOrEqual(2);
+	for (let roomIndex = 0; roomIndex < selectedRoomCount; roomIndex += 1) {
+		await expect(selectedRooms.nth(roomIndex)).toBeChecked();
+	}
+	const scheduleMutationPath = '**/api/events/current/schedule/placements';
+	const failBreakMutation = async (route: Route) => {
+		if (route.request().method() === 'POST') await route.abort('failed');
+		else await route.continue();
+	};
+	await page.route(scheduleMutationPath, failBreakMutation);
+	await breakDialog.getByRole('button', { name: 'Add break', exact: true }).click();
+	await expect(breakDialog.getByRole('alert')).toContainText('The break wasn’t added.');
+	await expect(breakDialog.getByRole('button', { name: 'Add break', exact: true })).toBeEnabled();
+	await page.unroute(scheduleMutationPath, failBreakMutation);
+	await breakDialog.getByRole('button', { name: 'Add break', exact: true }).click();
+	await expect(breakDialog).not.toBeVisible();
+	const breakCopies = grid.getByText(breakLabel, { exact: true });
+	await expect(breakCopies).toHaveCount(selectedRoomCount);
+	const createdCount = selectedRoomCount;
+
+	await page.reload();
+	await expect(page.getByRole('group', { name: 'Schedule day' })).toBeVisible();
+	await expect(page.locator('section[aria-label="Schedule grid"]')
+		.getByText(breakLabel, { exact: true })).toHaveCount(createdCount);
+	const escapedBreakLabel = breakLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const removeBreak = page.getByRole('button', { name: new RegExp(`^Remove “${escapedBreakLabel}” —`) });
+	const armFirstBreak = async () => {
+		const firstBreak = page.locator('section[aria-label="Schedule grid"] .brk')
+			.filter({ hasText: breakLabel }).first();
+		const firstRemove = removeBreak.first();
+		if (!(await firstRemove.isVisible())) await firstBreak.hover();
+		await firstRemove.click();
+	};
+	await armFirstBreak();
+	await page.getByRole('button', { name: `Remove “${breakLabel}” — confirm` }).click();
+	await expect(page.locator('section[aria-label="Schedule grid"]')
+		.getByText(breakLabel, { exact: true })).toHaveCount(createdCount - 1);
+	await page.getByRole('button', { name: 'Undo', exact: true }).click();
+	await expect(page.locator('section[aria-label="Schedule grid"]')
+		.getByText(breakLabel, { exact: true })).toHaveCount(createdCount);
+
+	// Leave the shared joined world clean for the placement path below and for
+	// later projects. Each removal remains its own guarded retained transition.
+	for (let remaining = createdCount; remaining > 0; remaining -= 1) {
+		await armFirstBreak();
+		await page.getByRole('button', { name: `Remove “${breakLabel}” — confirm` }).click();
+		await expect(page.locator('section[aria-label="Schedule grid"]')
+			.getByText(breakLabel, { exact: true })).toHaveCount(remaining - 1);
+	}
 
 	// The joined runtime is shared across specs, so the board arrives either
 	// unpublished or already carrying the canonical release read's Published

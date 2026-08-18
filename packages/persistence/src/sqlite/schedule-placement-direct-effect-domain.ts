@@ -7,6 +7,7 @@ import {
   type SealedEffectAuthorityRecheckResult
 } from '@jooevents/application';
 import {
+  scheduleBreakPlanSchema,
   schedulePlacementAuthorInputSchema,
   schedulePlacementPlanSchema,
   schedulePlacementResultSchema
@@ -21,7 +22,9 @@ import {
 } from '@jooevents/kernel';
 import {
   parseScheduleOccurrenceId,
+  planScheduleBreakMutation,
   planSchedulePlacementMutation,
+  ScheduleBreakPlanningError,
   SchedulePlacementPlanningError,
   type PlaceableSessionIdentityPort
 } from '@jooevents/schedule';
@@ -69,6 +72,7 @@ implements SQLiteEffectDomainAdapter {
     readonly vocabulary: SQLiteProgramVocabularyRepository;
     readonly eventRelationships: SQLiteOperatorEventRelationshipSource;
     readonly newOccurrenceId: () => string;
+    readonly newBreakId: () => string;
   }) {
     this.#workspaceId = parseWorkspaceId(input.workspaceId);
     const readRepository = this.repository(
@@ -135,12 +139,71 @@ implements SQLiteEffectDomainAdapter {
           throw new TypeError('schedule_direct_context_substitution');
         }
         const wire = schedulePlacementAuthorInputSchema.parse(businessInput);
-        const planningInput = wire.action === 'place'
-          ? { ...wire, scope, occurrenceId: parseScheduleOccurrenceId(this.input.newOccurrenceId()) }
-          : { ...wire, scope };
         const state = repository.readSchedule(scope);
         const vocabulary = repository.readVocabulary(scope);
         if (!state || !vocabulary) throw new TypeError('schedule_direct_scope_missing');
+        if (wire.action === 'break_add'
+            || wire.action === 'break_remove'
+            || wire.action === 'break_restore') {
+          const breakState = repository.readBreakState(scope);
+          if (!breakState) throw new TypeError('schedule_direct_scope_missing');
+          const planningInput = wire.action === 'break_add'
+            ? {
+                action: wire.action,
+                scope,
+                expectedScheduleVersion: wire.expectedScheduleVersion,
+                label: wire.label,
+                dayKey: wire.dayKey,
+                startMin: wire.startMin,
+                endMin: wire.endMin,
+                breaks: wire.roomIds.map((roomId) => ({ id: this.input.newBreakId(), roomId }))
+              }
+            : { ...wire, scope };
+          try {
+            const plan = planScheduleBreakMutation({ planningInput, state: breakState, vocabulary });
+            return schedulePlacementDirectContributionSchema.parse({
+              result: {
+                kind: 'success',
+                data: {
+                  action: plan.input.action,
+                  scheduleVersion: plan.scheduleVersion.after,
+                  breaks: plan.after
+                }
+              },
+              domain: {
+                kind: 'schedule_break_direct',
+                plan,
+                actorUserId,
+                occurredAt: evaluatedAt
+              },
+              effectContributions: []
+            });
+          } catch (error) {
+            if (!(error instanceof ScheduleBreakPlanningError)) throw error;
+            return schedulePlacementDirectContributionSchema.parse({
+              result: {
+                kind: 'outcome',
+                outcome: {
+                  class: 'stale_revision',
+                  kind: 'schedule_break_changed',
+                  retryable: false,
+                  subjects: [],
+                  detail: {
+                    code: error.code,
+                    action: wire.action,
+                    breakIds: planningInput.breaks.map((entry) => entry.id)
+                  },
+                  detailSchemaVersion: 1
+                }
+              },
+              domain: null,
+              effectContributions: []
+            });
+          }
+        }
+        const planningInput = wire.action === 'place'
+          ? { ...wire, scope, occurrenceId: parseScheduleOccurrenceId(this.input.newOccurrenceId()) }
+          : { ...wire, scope };
         try {
           const plan = planSchedulePlacementMutation({
             planningInput,
@@ -197,7 +260,9 @@ implements SQLiteEffectDomainAdapter {
 
   applyDomainContribution(contribution: unknown): void {
     if (!this.input.sqlite.inTransaction
-        || (contribution as { readonly kind?: unknown })?.kind !== 'schedule_placement_direct') {
+        || !['schedule_placement_direct', 'schedule_break_direct'].includes(
+          String((contribution as { readonly kind?: unknown })?.kind)
+        )) {
       throw new TypeError('schedule_direct_contribution_invalid');
     }
     const candidate = contribution as {
@@ -205,10 +270,15 @@ implements SQLiteEffectDomainAdapter {
       readonly actorUserId?: unknown;
       readonly occurredAt?: unknown;
     };
-    this.repository(
+    const repository = this.repository(
       parseUserId(candidate.actorUserId),
       parseInstant(candidate.occurredAt)
-    ).applyPlacementPlan(schedulePlacementPlanSchema.parse(candidate.plan));
+    );
+    if ((contribution as { readonly kind: string }).kind === 'schedule_break_direct') {
+      repository.applyBreakPlan(scheduleBreakPlanSchema.parse(candidate.plan));
+    } else {
+      repository.applyPlacementPlan(schedulePlacementPlanSchema.parse(candidate.plan));
+    }
   }
 
   private repository(actorUserId: UserId, occurredAt: Instant): SQLiteSchedulePlacementRepository {

@@ -74,13 +74,13 @@ function createSyntheticRelease(root: string): void {
   write(join(root, 'jooevents-release.json'), JSON.stringify({
     formatVersion: 1,
     kind: 'jooevents-single-machine',
-		releaseId: 'sqlite-e2-s11-test',
+		releaseId: 'sqlite-e2-s12-test',
     sourceRevision: '0'.repeat(40),
     sourceDirty: false,
     bunVersion: Bun.version,
     platform: process.platform,
     architecture: process.arch,
-		sqliteReleaseFloor: 'sqlite-e2-s11',
+		sqliteReleaseFloor: 'sqlite-e2-s12',
     liveBuildDigestSha256: live.digestSha256,
     sourceFiles,
     sourceDigestSha256: sha256(JSON.stringify(sourceFiles))

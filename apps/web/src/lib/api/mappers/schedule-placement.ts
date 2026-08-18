@@ -4,8 +4,10 @@ import type {
 	SchedulePlacementResult,
 	SchedulePlacementSnapshotDto
 } from '@jooevents/contracts/schedule-placement';
+import type { ScheduleBreakHeadDto } from '@jooevents/contracts';
 import type {
 	SchedulePlacementCommittedView,
+	ScheduleBreakHeadView,
 	SchedulePlacementOccurrenceView,
 	SchedulePlacementPlanInputView,
 	SchedulePlacementPlanView,
@@ -45,7 +47,8 @@ export function mapSchedulePlacementSnapshot(
 		scope: mapScope(snapshot.scope),
 		scheduleVersion: snapshot.scheduleVersion,
 		timeBasis: UTC_ONLY_TIME_BASIS,
-		occurrences: Object.freeze(snapshot.occurrences.map(mapSchedulePlacementOccurrence))
+		occurrences: Object.freeze(snapshot.occurrences.map(mapSchedulePlacementOccurrence)),
+		breaks: Object.freeze(snapshot.breaks.map(mapScheduleBreakHead))
 	});
 }
 
@@ -99,9 +102,31 @@ export function mapSchedulePlacementPlan(plan: SchedulePlacementPlanDto): Schedu
 export function mapSchedulePlacementResult(
 	result: SchedulePlacementResult
 ): SchedulePlacementCommittedView {
+	if ('breaks' in result) {
+		return Object.freeze({
+			action: result.action,
+			scheduleVersion: result.scheduleVersion,
+			breaks: Object.freeze(result.breaks.map(mapScheduleBreakHead))
+		});
+	}
 	return Object.freeze({
 		action: result.action,
 		scheduleVersion: result.scheduleVersion,
 		occurrence: result.occurrence ? mapSchedulePlacementOccurrence(result.occurrence) : null
+	});
+}
+
+export function mapScheduleBreakHead(
+	head: ScheduleBreakHeadDto
+): ScheduleBreakHeadView {
+	return Object.freeze({
+		id: head.id,
+		label: head.label,
+		dayKey: head.dayKey,
+		roomId: head.roomId,
+		startMin: head.startMin,
+		endMin: head.endMin,
+		status: head.status,
+		version: head.version
 	});
 }

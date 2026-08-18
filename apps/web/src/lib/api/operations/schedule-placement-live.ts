@@ -92,7 +92,7 @@ export function createSchedulePlacementLivePort(input: {
 			try { return { kind: 'success' as const, data: mapSchedulePlacementSnapshot(parsed.data.data),
 				correlationId: parsed.data.correlationId }; } catch { return invalidReadContract(); }
 		},
-		async placeOrMove(rawInput, rawAttemptKey, options = {}) {
+		async applyChange(rawInput, rawAttemptKey, options = {}) {
 			const author = schedulePlacementAuthorInputSchema.safeParse(rawInput);
 			if (!author.success || !operationHttpIdempotencyKeySchema.safeParse(rawAttemptKey).success) return invalidRequest();
 			if (mutationBinding.kind === 'unavailable') return unavailable('mutation', mutationBinding.reason);

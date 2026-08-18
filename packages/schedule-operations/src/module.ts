@@ -88,15 +88,27 @@ const schedulePlacementDirectCanonicalResultSchema = z.discriminatedUnion('kind'
   z.strictObject({ kind: z.literal('success'), data: schedulePlacementResultSchema }),
   z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
 ]);
-const schedulePlacementDirectStaleDetailSchema = z.strictObject({
-  code: z.enum([
-    'wrong_scope', 'stale_schedule', 'occurrence_exists', 'occurrence_missing',
-    'stale_occurrence', 'session_missing', 'room_missing', 'room_retired',
-    'session_track_required', 'stale_room_query', 'invalid_plan'
-  ]),
-  action: z.enum(['place', 'move', 'unplace']),
-  occurrenceId: applicationIdSchema
-});
+const schedulePlacementDirectStaleDetailSchema = z.union([
+  z.strictObject({
+    code: z.enum([
+      'wrong_scope', 'stale_schedule', 'occurrence_exists', 'occurrence_missing',
+      'stale_occurrence', 'session_missing', 'room_missing', 'room_retired',
+      'session_track_required', 'stale_room_query', 'invalid_plan'
+    ]),
+    action: z.enum(['place', 'move', 'unplace']),
+    occurrenceId: applicationIdSchema
+  }),
+  z.strictObject({
+    code: z.enum([
+      'wrong_scope', 'stale_schedule', 'stale_vocabulary', 'stale_event',
+      'break_exists', 'break_missing', 'stale_break', 'break_not_active',
+      'break_not_removed', 'room_missing', 'room_retired', 'day_outside_event',
+      'storage_adapter_unavailable', 'invalid_plan'
+    ]),
+    action: z.enum(['break_add', 'break_remove', 'break_restore']),
+    breakIds: z.array(applicationIdSchema).min(1).max(100)
+  })
+]);
 
 function ref(key: string): VersionedDefinitionRef {
   return Object.freeze({ key, version: 1 });
@@ -293,7 +305,8 @@ export function createSchedulePlacementOperationModule(
               schemaVersion: 1, scope: state.scope, scheduleVersion: state.scheduleVersion,
               occurrences: state.occurrences
                 .filter((occurrence) => occurrence.startAt < query.endAt && query.startAt < occurrence.endAt)
-                .slice(0, query.limit)
+                .slice(0, query.limit),
+              breaks: state.breaks.slice(0, query.limit)
             })
           };
         }
@@ -436,7 +449,7 @@ export function createSchedulePlacementDirectOperationModule(
       operationAuditRecordProfiles: [{ reference: refs.record, kind: 'canonical_json' as const, maximumBytes: 262_144 }],
       effectContextBuilders: [context], effectHandlers: [handler], effectOperations: [{
         ...SCHEDULE_PLACEMENT_OPERATION, lifecycle: { status: 'active' as const },
-        summary: 'Place, move, or remove a Session in the schedule.', effect: 'commit' as const,
+        summary: 'Place or remove a Session, or add, remove, or restore Schedule breaks.', effect: 'commit' as const,
         maxRisk: 'low' as const, autonomyPolicy: refs.autonomy,
         consequenceTags: ['schedule-placement-changed'], inputSchema: schemas.input,
         agentAction: { eligible: true as const, displayLabel: 'Change a schedule placement', consequences: ['A session may be placed, moved, or removed from the schedule.'], externalEffect: 'none' as const },
@@ -447,6 +460,8 @@ export function createSchedulePlacementDirectOperationModule(
           { class: 'conflict' as const, kind: 'schedule.event_required', retryable: false, detailSchema: schemas.null },
           { class: 'conflict' as const, kind: 'schedule_room_overlap', retryable: false, detailSchema: schemas.overlap },
           { class: 'stale_revision' as const, kind: 'schedule_placement_changed', retryable: false, detailSchema: schemas.stale },
+          { class: 'stale_revision' as const, kind: 'schedule_break_changed', retryable: false, detailSchema: schemas.stale },
+          { class: 'conflict' as const, kind: 'schedule_break_unavailable', retryable: false, detailSchema: schemas.stale },
           { class: 'conflict' as const, kind: 'operation.in_progress', retryable: true, detailSchema: schemas.null },
           ...autonomyInterventionOutcomeDeclarations(schemas.null)
         ],
@@ -462,7 +477,10 @@ export function createSchedulePlacementDirectOperationModule(
           history: { summariesByAction: Object.freeze({
             place: 'Placed a session on the schedule',
             move: 'Moved a session on the schedule',
-            unplace: 'Removed a session from the schedule'
+            unplace: 'Removed a session from the schedule',
+            break_add: 'Added a break to the schedule',
+            break_remove: 'Removed a break from the schedule',
+            break_restore: 'Restored a break to the schedule'
           }) } },
         bindings: [{ surface: 'operator_http' as const, method: 'POST' as const,
           path: '/api/events/current/schedule/placements', input: 'body' as const,

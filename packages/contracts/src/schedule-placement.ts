@@ -6,6 +6,11 @@ import {
   createReadOperationResultSchema
 } from './operations';
 import { programVocabularyIdSchema, programVocabularyScopeSchema } from './program-vocabulary';
+import {
+  scheduleBreakActiveHeadSchema,
+  scheduleBreakAuthorInputSchema,
+  scheduleBreakResultSchema
+} from './schedule-breaks';
 
 export const schedulePlacementVersionSchema = z.number().int().positive().safe();
 export const schedulePlacementIdSchema = programVocabularyIdSchema;
@@ -37,7 +42,8 @@ export const schedulePlacementSnapshotSchema = z.strictObject({
   schemaVersion: z.literal(1),
   scope: schedulePlacementScopeSchema,
   scheduleVersion: schedulePlacementVersionSchema,
-  occurrences: z.array(schedulePlacementOccurrenceSchema).max(2_000)
+  occurrences: z.array(schedulePlacementOccurrenceSchema).max(2_000),
+  breaks: z.array(scheduleBreakActiveHeadSchema).max(2_000).default([])
 }).superRefine((snapshot, context) => {
   const ids = new Set<string>();
   for (const [index, occurrence] of snapshot.occurrences.entries()) {
@@ -95,7 +101,8 @@ export const schedulePlacementUnplaceInputSchema = z.strictObject({
 
 export const schedulePlacementAuthorInputSchema = z.union([
   schedulePlacementInputSchema,
-  schedulePlacementUnplaceInputSchema
+  schedulePlacementUnplaceInputSchema,
+  scheduleBreakAuthorInputSchema
 ]);
 
 /** Server-enriched input frozen into a plan after current scope is resolved. */
@@ -149,11 +156,16 @@ export const schedulePlacementPlanSchema = z.strictObject({
   if (!coherent) context.addIssue({ code: 'custom', message: 'plan images must match its action' });
 });
 
-export const schedulePlacementResultSchema = z.strictObject({
+export const scheduleOccurrencePlacementResultSchema = z.strictObject({
   action: z.enum(['place', 'move', 'unplace']),
   scheduleVersion: schedulePlacementVersionSchema,
   occurrence: schedulePlacementOccurrenceSchema.nullable()
 });
+
+export const schedulePlacementResultSchema = z.union([
+  scheduleOccurrencePlacementResultSchema,
+  scheduleBreakResultSchema
+]);
 
 export const schedulePlacementConflictDetailSchema = z.strictObject({
   severity: z.literal('block'),
@@ -199,6 +211,7 @@ export type SchedulePlacementAuthorInput = z.infer<typeof schedulePlacementAutho
 export type SchedulePlacementPlanningInput = z.infer<typeof schedulePlacementPlanningInputSchema>;
 export type SchedulePlacementPlanDto = z.infer<typeof schedulePlacementPlanSchema>;
 export type SchedulePlacementResult = z.infer<typeof schedulePlacementResultSchema>;
+export type ScheduleOccurrencePlacementResult = z.infer<typeof scheduleOccurrencePlacementResultSchema>;
 export type SchedulePlacementConflictDetail = z.infer<typeof schedulePlacementConflictDetailSchema>;
 
 function compareOccurrence(

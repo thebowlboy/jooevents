@@ -1,5 +1,6 @@
 import type { EffectHandlerRegistration, EffectHandlerSnapshot, EffectInvocationContext } from '@jooevents/application';
 import {
+  scheduleBreakPlanSchema,
   schedulePlacementPlanSchema,
   schedulePlacementResultSchema,
   structuredOutcomeSchema,
@@ -10,12 +11,20 @@ import { z } from 'zod';
 export const schedulePlacementDirectContributionSchema = z.union([
   z.strictObject({
     result: z.strictObject({ kind: z.literal('success'), data: schedulePlacementResultSchema }),
-    domain: z.strictObject({
-      kind: z.literal('schedule_placement_direct'),
-      plan: schedulePlacementPlanSchema,
-      actorUserId: z.uuid(),
-      occurredAt: z.iso.datetime({ offset: true })
-    }),
+    domain: z.union([
+      z.strictObject({
+        kind: z.literal('schedule_placement_direct'),
+        plan: schedulePlacementPlanSchema,
+        actorUserId: z.uuid(),
+        occurredAt: z.iso.datetime({ offset: true })
+      }),
+      z.strictObject({
+        kind: z.literal('schedule_break_direct'),
+        plan: scheduleBreakPlanSchema,
+        actorUserId: z.uuid(),
+        occurredAt: z.iso.datetime({ offset: true })
+      })
+    ]),
     effectContributions: z.tuple([])
   }),
   z.strictObject({

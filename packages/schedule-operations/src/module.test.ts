@@ -93,7 +93,16 @@ describe('Schedule placement operation module', () => {
 			operation: `${binding.operationName}@${binding.operationVersion}`, path: binding.path
 		}))).toEqual([{ operation: `${SCHEDULE_PLACEMENT_OPERATION.name}@1`,
 			path: '/api/events/current/schedule/placements' }]);
-		expect(directModule().source.effectOperations?.[0]?.execution).toMatchObject({ profile: 'direct_audited' });
+		const execution = directModule().source.effectOperations?.[0]?.execution;
+		expect(execution).toMatchObject({ profile: 'direct_audited' });
+		if (!execution || !('history' in execution)) throw new TypeError('schedule history missing');
+		if (!('summariesByAction' in execution.history)) throw new TypeError('schedule action history missing');
+		expect(execution.history.summariesByAction)
+			.toMatchObject({
+				break_add: 'Added a break to the schedule',
+				break_remove: 'Removed a break from the schedule',
+				break_restore: 'Restored a break to the schedule'
+			});
 	});
   test('registers only the placement read path in the read module', async () => {
     const registry = await createOperationRegistry(module().source);

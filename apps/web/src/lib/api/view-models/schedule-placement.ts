@@ -22,12 +22,24 @@ export interface SchedulePlacementOccurrenceView {
 	readonly version: number;
 }
 
+export interface ScheduleBreakHeadView {
+	readonly id: string;
+	readonly label: string;
+	readonly dayKey: string;
+	readonly roomId: string;
+	readonly startMin: number;
+	readonly endMin: number;
+	readonly status: 'active' | 'removed';
+	readonly version: number;
+}
+
 export interface SchedulePlacementSnapshotView {
 	readonly schemaVersion: 1;
 	readonly scope: SchedulePlacementScopeView;
 	readonly scheduleVersion: number;
 	readonly timeBasis: SchedulePlacementUtcOnlyTimeBasisView;
 	readonly occurrences: readonly SchedulePlacementOccurrenceView[];
+	readonly breaks: readonly ScheduleBreakHeadView[];
 }
 
 export type SchedulePlacementPlanInputView =
@@ -76,8 +88,18 @@ export interface SchedulePlacementPlanView {
 	readonly timeBasis: SchedulePlacementUtcOnlyTimeBasisView;
 }
 
-export interface SchedulePlacementCommittedView {
+export interface ScheduleOccurrencePlacementCommittedView {
 	readonly action: 'place' | 'move' | 'unplace';
 	readonly scheduleVersion: number;
 	readonly occurrence: SchedulePlacementOccurrenceView | null;
 }
+
+export interface ScheduleBreakCommittedView {
+	readonly action: 'break_add' | 'break_remove' | 'break_restore';
+	readonly scheduleVersion: number;
+	readonly breaks: readonly ScheduleBreakHeadView[];
+}
+
+export type SchedulePlacementCommittedView =
+	| ScheduleOccurrencePlacementCommittedView
+	| ScheduleBreakCommittedView;

@@ -21,6 +21,7 @@
 		SchedulePagePort,
 		SchedulePublicationReview
 	} from '$lib/api/schedule-page-port';
+	import { describePortFailure } from '$lib/api/port-failure';
 	import { presentProgramRoomCapacity } from '$lib/api/program-vocabulary-presentation';
 	import {
 		scheduleClockLabel,
@@ -91,6 +92,8 @@
 	/** The drafted release a person is reading, between the two presses. */
 	let publishReview = $state<SchedulePublicationReview | null>(null);
 	let announcement = $state('');
+	let breakModalError = $state('');
+	let breakActionError = $state('');
 	let conflictsPanel = $state<HTMLElement>();
 	let programPanel = $state<HTMLElement>();
 	const activeTracks = $derived(tracks.filter((track) => track.status === 'active'));
@@ -556,6 +559,7 @@
 	let breakRooms = $state<Record<string, boolean>>({});
 
 	function openAddBreak() {
+		breakModalError = '';
 		breakLabel = 'Break';
 		breakDay = dayKey;
 		breakStartClock = clockLabel(Math.min(Math.max(dayLength - 60, 0), 180));
@@ -585,32 +589,33 @@
 		const label = breakLabel.trim();
 		const chosen = activeRooms.filter((room) => breakRooms[room.id]);
 		addingBreak = true;
-		const created: BreakBlock[] = [];
-		for (const room of chosen) {
-			created.push(
-				await api.schedule.addBreak({
-					label,
-					dayKey: breakDay,
-					roomId: room.id,
-					startMin: offset,
-					durationMin: duration
-				})
-			);
+		breakModalError = '';
+		try {
+			const created = await api.schedule.addBreak({
+				label,
+				dayKey: breakDay,
+				roomIds: chosen.map((room) => room.id),
+				startMin: offset,
+				durationMin: duration
+			});
+			recordAction({
+				area: 'schedule',
+				label: `Added “${label}” — ${dayLabel(breakDay)} ${clockLabel(offset)}, ${
+					created.length === 1 ? roomName(created[0].roomId) : `${created.length} rooms`
+				}`,
+				undo: async () => api.schedule.removeBreaks(created.map((brk) => brk.id))
+			});
+			breakOpen = false;
+			await applyParams({ day: breakDay });
+			publishReason = '';
+			await load();
+		} catch (error) {
+			const failure = describePortFailure(error, 'The break could not be added. Try again.');
+			breakModalError = `The break wasn’t added. ${failure.message}`;
+			announcement = breakModalError;
+		} finally {
+			addingBreak = false;
 		}
-		recordAction({
-			area: 'schedule',
-			label: `Added “${label}” — ${dayLabel(breakDay)} ${clockLabel(offset)}, ${
-				created.length === 1 ? roomName(created[0].roomId) : `${created.length} rooms`
-			}`,
-			undo: async () => {
-				for (const brk of created) await api.schedule.removeBreak(brk.id);
-			}
-		});
-		breakOpen = false;
-		await applyParams({ day: breakDay });
-		publishReason = '';
-		await load();
-		addingBreak = false;
 	}
 
 	// A break removal arms exactly like a session removal: the armed state veils
@@ -640,23 +645,25 @@
 	async function removeBreakNow(brk: BreakBlock) {
 		if (busy) return;
 		busy = true;
-		await api.schedule.removeBreak(brk.id);
-		recordAction({
-			area: 'schedule',
-			label: `Removed “${brk.label}” from ${dayLabel(brk.dayKey)} ${clockLabel(brk.startMin)}, ${roomName(brk.roomId)}`,
-			undo: async () => {
-				await api.schedule.addBreak({
-					label: brk.label,
-					dayKey: brk.dayKey,
-					roomId: brk.roomId,
-					startMin: brk.startMin,
-					durationMin: brk.durationMin
-				});
-			}
-		});
-		publishReason = '';
-		await load();
-		busy = false;
+		breakActionError = '';
+		try {
+			await api.schedule.removeBreaks([brk.id]);
+			recordAction({
+				area: 'schedule',
+				label: `Removed “${brk.label}” from ${dayLabel(brk.dayKey)} ${clockLabel(brk.startMin)}, ${roomName(brk.roomId)}`,
+				undo: async () => {
+					await api.schedule.restoreBreaks([brk.id]);
+				}
+			});
+			publishReason = '';
+			await load();
+		} catch (error) {
+			const failure = describePortFailure(error, 'The break could not be removed. Try again.');
+			breakActionError = `The break wasn’t removed. ${failure.message}`;
+			announcement = breakActionError;
+		} finally {
+			busy = false;
+		}
 	}
 
 	// ------------------------------------------------------------------
@@ -1647,6 +1654,9 @@
 			{/if}
 		</div>
 	</div>
+	{#if breakActionError}
+		<p class="ui-notice ui-notice--danger" role="alert">{breakActionError}</p>
+	{/if}
 
 	{#if publishReview}
 		<!-- The reviewed lane's one screen: what this release carries, and which
@@ -2971,6 +2981,9 @@
 <!-- Typed reservation, no aiming: label, day, rooms, exact time. Its edges
      become the flush anchors later placements snap against. -->
 <Modal bind:open={breakOpen} title="Add break">
+	{#if breakModalError}
+		<p class="ui-notice ui-notice--danger" role="alert">{breakModalError}</p>
+	{/if}
 	<form id="board-break-form" class="break-form" onsubmit={addBreakSubmit}>
 		<Field id="break-label" label="Label">
 			{#snippet children({ id, describedBy })}
