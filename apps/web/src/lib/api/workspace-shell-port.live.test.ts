@@ -154,6 +154,9 @@ describe('the nameplate reads its own operation', () => {
 		// An Event exists, so nothing is locked — and the metrics were never asked for.
 		expect(result.data.lockedAreas).toEqual([]);
 		expect(overviewReads).toBe(0);
+		expect(port.summary.refreshCounts).toBeDefined();
+		await port.summary.refreshCounts?.();
+		expect(overviewReads).toBe(1);
 	});
 
 	test('with no event, states every area locked — the only lock reason there is', async () => {

@@ -72,6 +72,19 @@
 		if (result.kind === 'success') {
 			summary = result.data;
 			summaryMessage = '';
+			if (port.summary.refreshCounts) {
+				void port.summary.refreshCounts()
+					.then((enriched) => {
+						if (request !== summaryRequest || enriched.kind !== 'success' || !summary) return;
+						// Identity already painted from the lightweight read. Only the badges
+						// join late, so a slow metric read cannot replace newer shell identity.
+						summary = { ...summary, navCounts: enriched.data.navCounts };
+					})
+					.catch(() => {
+						// The fast shell is already usable; a failed enrichment leaves its
+						// truthful count-free state in place until the next navigation retries.
+					});
+			}
 			return;
 		}
 		summaryMessage = result.message;

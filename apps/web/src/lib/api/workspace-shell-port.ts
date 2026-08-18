@@ -56,6 +56,8 @@ export interface WorkspaceShellPort {
 	readonly summary: {
 		snapshot(): WorkspaceShellSummary | null;
 		read(): Promise<WorkspaceShellSummaryResult>;
+		/** Optional richer read whose counts may arrive after the shell's fast identity paint. */
+		refreshCounts?(): Promise<WorkspaceShellSummaryResult>;
 	};
 	readonly account: WorkspaceShellAccountPort;
 	readonly events?: WorkspaceShellEventCollectionPort;

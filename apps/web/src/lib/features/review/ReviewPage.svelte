@@ -731,11 +731,11 @@
 	<CommitReceipt />
 {/if}
 
-{#if !loaded && !expectPlan}
-	{#if known}
-		<!-- Evidence says no review plan exists yet, so the no-plan panel is the
-		     composition that holds this screen's space. -->
-		<section class="opening" aria-label="Loading review plan">
+{#if !loaded && known && !expectPlan}
+	<!-- Evidence says no review plan exists yet, so the no-plan panel is the
+	     composition that holds this screen's space. When the expectation itself
+	     is unresolved, the fuller plan skeleton below supplies immediate feedback. -->
+	<section class="opening" aria-label="Loading review plan">
 			<p class="opening__title sk-head"><span class="ui-skeleton skeleton-line" style="inline-size: 12rem"></span></p>
 			<p class="opening__copy">
 				<span class="ui-skeleton skeleton-line" style="inline-size: 100%"></span>
@@ -755,8 +755,7 @@
 					<span class="ui-skeleton skeleton-action skeleton-action--lg"></span>
 				</div>
 			{/if}
-		</section>
-	{/if}
+	</section>
 {:else if !loaded}
 	<!-- Every placeholder here is the resolved composition's own markup holding
 	     skeleton fills, so the plan header, the reviewer rows, and the queue

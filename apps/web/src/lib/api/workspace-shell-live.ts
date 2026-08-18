@@ -207,7 +207,10 @@ export function createLiveWorkspaceShellPort(input: {
 				return result.kind === 'success'
 					? { kind: 'success', data: shellSummary(result, knownCounts()) }
 					: { kind: 'unavailable', message: summaryUnavailable(result) };
-			}
+			},
+			// The nameplate stays fast. Badge metrics take the richer registered
+			// Overview read independently and may settle after the shell is usable.
+			refreshCounts: overviewSummary
 		}),
 		account: Object.freeze({
 			async current() {
