@@ -149,11 +149,9 @@
       <p>{linkRequestCopy.confirmationBody}</p>
       <p class="entry-echo">{surface.email}</p>
     {/if}
-    {#if surface.googleAvailable !== false || surface.reviewOrganizerEntry}
+    {#if surface.googleAvailable !== false}
       <GoogleSignInButton
         busy={state.kind === 'starting_google'}
-        disabled={surface.googleAvailable === false}
-        disabledReason={surface.googleAvailable === false ? 'Disabled for evaluation mode' : undefined}
         label={surface.kind === 'anonymous'
           ? linkRequestCopy.googleChoice
           : linkRequestCopy.googleAlternative}
