@@ -381,7 +381,25 @@
 				review: reviewCore,
 				vocabulary,
 				schedule: { state: () => schedule.schedule.state() },
-				viewer: snapshot.data.viewer
+				viewer: snapshot.data.viewer,
+				...(snapshot.data.viewer.kind === 'organizer'
+					? {
+							results: {
+								async list() {
+									const [inbox, late] = await Promise.all([
+										submissions.submissions.list({ tray: 'inbox' }),
+										submissions.submissions.list({ tray: 'late' })
+									]);
+									return [...inbox.rows, ...late.rows].map((row) => ({
+										submissionId: row.id,
+										title: row.title,
+										...(row.trackId ? { trackId: row.trackId } : {}),
+										reviews: row.reviewCount
+									}));
+								}
+							}
+						}
+					: {})
 			});
 		})().catch((error: unknown) => {
 			// Unexpected throws (a construction defect, an aborted request that
