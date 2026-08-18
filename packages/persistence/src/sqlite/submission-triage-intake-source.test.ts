@@ -360,7 +360,8 @@ describe('SQLite Intake submission-triage source adapter', () => {
           id: submissionId,
           formVersionId,
           title: 'Canonical Intake proposal',
-          primaryParticipantName: 'José Sørensen'
+          primaryParticipantName: 'José Sørensen',
+          primaryParticipantId: personId
         },
         abstract: 'Immutable version labels survive later changes.',
         track: { id: trackId, label: 'Historical Data & AI' },

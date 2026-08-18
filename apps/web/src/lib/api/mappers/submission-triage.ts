@@ -21,6 +21,7 @@ export interface SubmissionTriageSourceView {
 	readonly target: SubmissionTriageProjectionDto['source']['summary']['target'];
 	readonly title: string;
 	readonly primaryParticipantName: string | null;
+	readonly primaryParticipantId?: string;
 	readonly submittedAt: string;
 	readonly source: SubmissionTriageProjectionDto['source']['source'];
 	readonly abstract: string | null;
@@ -76,6 +77,8 @@ function mapSource(row: SubmissionTriageProjectionDto): SubmissionTriageSourceVi
 		target: structuredClone(row.source.summary.target),
 		title: row.source.summary.title ?? 'Untitled submission',
 		primaryParticipantName: row.source.summary.primaryParticipantName,
+		...(row.source.summary.primaryParticipantId
+			? { primaryParticipantId: row.source.summary.primaryParticipantId } : {}),
 		submittedAt: row.source.summary.submittedAt,
 		source: row.source.source,
 		// Nullable canonical facts remain nullable. This layer never replaces an

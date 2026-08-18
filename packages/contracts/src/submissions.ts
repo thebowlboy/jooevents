@@ -547,6 +547,7 @@ export const organizerSubmissionSummarySchema = z.strictObject({
     && normalizeAnswer(value, false) === value
     && value.length > 0
   ).nullable(),
+  primaryParticipantId: intakeIdSchema.optional(),
   submittedAt: intakeInstantSchema
 });
 

@@ -222,6 +222,26 @@ export const speakerProfileReviewQueueSchema = z.strictObject({
   }
 });
 
+export const speakerProfileDirectorySchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  workspaceId: speakerProfileIdSchema,
+  eventId: speakerProfileIdSchema,
+  profiles: z.array(speakerProfileViewSchema).max(10_000)
+}).superRefine((directory, context) => {
+  const people = new Set<string>();
+  for (const [index, view] of directory.profiles.entries()) {
+    if (view.workspaceId !== directory.workspaceId
+        || view.eventId !== directory.eventId
+        || people.has(view.personId)) {
+      context.addIssue({
+        code: 'custom', path: ['profiles', index],
+        message: 'directory profiles must be unique and match the directory scope'
+      });
+    }
+    people.add(view.personId);
+  }
+});
+
 export const speakerProfileUpdatePlanningInputSchema = z.strictObject({
   scope: speakerProfileScopeSchema,
   actorUserId: speakerProfileIdSchema,
@@ -320,6 +340,9 @@ export const speakerProfileReviewPolicyUpdatePlanSchema = z.strictObject({
 });
 
 export const speakerProfileReadResultSchema = createReadOperationResultSchema(speakerProfileViewSchema);
+export const speakerProfileDirectoryReadInputSchema = z.strictObject({});
+export const speakerProfileDirectoryReadResultSchema =
+  createReadOperationResultSchema(speakerProfileDirectorySchema);
 export const speakerProfileReviewQueueReadInputSchema = z.strictObject({});
 export const speakerProfileReviewQueueReadResultSchema =
   createReadOperationResultSchema(speakerProfileReviewQueueSchema);
@@ -334,6 +357,12 @@ export const SPEAKER_PROFILE_OPERATION_SCHEMA_REFS = Object.freeze({
     inputSchema: speakerProfileReadInputSchema,
     resultKey: 'schema.speaker.profile-read.operator-result',
     resultSchema: speakerProfileReadResultSchema
+  }),
+  directoryRead: createOperationSchemaManifestRefs({
+    inputKey: 'schema.speaker.profile-directory-read.input',
+    inputSchema: speakerProfileDirectoryReadInputSchema,
+    resultKey: 'schema.speaker.profile-directory-read.operator-result',
+    resultSchema: speakerProfileDirectoryReadResultSchema
   }),
   reviewQueueRead: createOperationSchemaManifestRefs({
     inputKey: 'schema.speaker.profile-review-queue-read.input',
@@ -371,6 +400,7 @@ export type SpeakerProfileReviewQueueEntryDto = z.infer<
   typeof speakerProfileReviewQueueEntrySchema
 >;
 export type SpeakerProfileReviewQueueDto = z.infer<typeof speakerProfileReviewQueueSchema>;
+export type SpeakerProfileDirectoryDto = z.infer<typeof speakerProfileDirectorySchema>;
 export type SpeakerProfileViewDto = z.infer<typeof speakerProfileViewSchema>;
 export type SpeakerProfileReadInput = z.infer<typeof speakerProfileReadInputSchema>;
 export type SpeakerProfileUpdateInput = z.infer<typeof speakerProfileUpdateInputSchema>;

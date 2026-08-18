@@ -34,6 +34,8 @@ export interface SubmissionsPagePort {
 	};
 	readonly speakers: {
 		profile(email: string): Promise<SpeakerProfile | null>;
+		profiles?(requests: readonly { readonly key: string; readonly personId?: string; readonly email: string; readonly submissionCount: number }[]):
+			Promise<Record<string, SpeakerProfile | null>>;
 	};
 	readonly review: {
 		standings(submissionIds: readonly string[]): Promise<Record<string, ScoreStanding>>;

@@ -274,6 +274,7 @@ describe('tuned Settings page source seam', () => {
 		};
 		const profiles: SpeakerProfilesLiveClient = {
 			async read() { throw new Error('unexpected profile read'); },
+			async readDirectory() { throw new Error('unexpected profile directory read'); },
 			async readReviewQueue() {
 				return {
 					kind: 'success',

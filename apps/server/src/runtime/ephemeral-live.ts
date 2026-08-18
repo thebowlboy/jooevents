@@ -173,6 +173,7 @@ import {
   createSpeakerPersonHistoryOperationModule,
   createSpeakerLineupDirectOperationModule,
   createSpeakerProfileDirectOperationModule,
+  createSpeakerProfileDirectoryReadOperationModule,
   createSpeakerProfileReviewQueueReadOperationModule,
   createSpeakerProfileReadOperationModule,
   createParticipantCurrentAuthorityResolver,
@@ -4556,6 +4557,18 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       scopePartitionProfile: speakerProfileProfiles.scopePartition,
       requestCanonicalizationProfile: speakerProfileProfiles.requestCanonicalization
     });
+    const speakerProfileDirectoryReadOperations = createSpeakerProfileDirectoryReadOperationModule({
+      workspaceId,
+      readPolicy: ENGAGEMENT_READ_ACCESS_POLICY,
+      currentAuthority,
+      currentEvent,
+      profiles: speakerProfiles,
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      authorityPrincipalKeyProfile: speakerProfileProfiles.authorityPrincipal,
+      scopePartitionProfile: speakerProfileProfiles.scopePartition,
+      requestCanonicalizationProfile: speakerProfileProfiles.requestCanonicalization
+    });
     const speakerProfileReviewQueueReadOperations =
       createSpeakerProfileReviewQueueReadOperationModule({
         workspaceId,
@@ -5363,6 +5376,7 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       engagementDirectOperations,
       speakerLineupDirectOperations,
       speakerProfileReadOperations,
+      speakerProfileDirectoryReadOperations,
       speakerProfileReviewQueueReadOperations,
       speakerProfileDirectOperations,
       taskBoardOperations,

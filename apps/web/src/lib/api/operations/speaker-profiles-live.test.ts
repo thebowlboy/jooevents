@@ -3,6 +3,7 @@ import {
 	SPEAKER_PROFILE_OPERATION_SCHEMA_REFS,
 	safeOperationManifestSchema,
 	speakerProfileReviewPolicyUpdateResultSchema,
+	speakerProfileDirectoryReadResultSchema,
 	speakerProfileReviewQueueReadResultSchema,
 	type OperationEffect,
 	type SafeOperationManifestEntry
@@ -27,6 +28,15 @@ const policy = {
 };
 
 const expected = {
+	directory: {
+		...SPEAKER_PROFILE_LIVE_OPERATIONS.directoryRead,
+		effect: 'read' as const,
+		method: 'GET' as const,
+		input: 'query' as const,
+		idempotencyRequired: false,
+		...SPEAKER_PROFILE_OPERATION_SCHEMA_REFS.directoryRead,
+		path: '/api/events/current/speakers/profiles'
+	},
 	queue: {
 		...SPEAKER_PROFILE_LIVE_OPERATIONS.reviewQueueRead,
 		effect: 'read' as const,
@@ -91,7 +101,7 @@ function operation(key: keyof typeof expected): SafeOperationManifestEntry {
 const manifest = safeOperationManifestSchema.parse({
 	schemaVersion: 1,
 	registryDigestSha256: 'f'.repeat(64),
-	operations: [operation('queue'), operation('policy')]
+	operations: [operation('directory'), operation('queue'), operation('policy')]
 });
 
 describe('speaker-profile policy live client', () => {
@@ -101,6 +111,11 @@ describe('speaker-profile policy live client', () => {
 			manifest,
 			request: async (request) => {
 				calls.push(request);
+				if (request.path === expected.directory.path) {
+					return { kind: 'success', data: speakerProfileDirectoryReadResultSchema.parse({
+						kind: 'success', data: { schemaVersion: 1, workspaceId, eventId, profiles: [] }, correlationId
+					}) };
+				}
 				if (request.method === 'GET') {
 					return { kind: 'success', data: speakerProfileReviewQueueReadResultSchema.parse({
 						kind: 'success', data: { schemaVersion: 1, policy, profiles: [] }, correlationId
@@ -121,6 +136,9 @@ describe('speaker-profile policy live client', () => {
 		expect(await client.readReviewQueue()).toMatchObject({
 			kind: 'success', data: { policy: { reviewRequired: false } }
 		});
+		expect(await client.readDirectory()).toMatchObject({
+			kind: 'success', data: { workspaceId, eventId, profiles: [] }
+		});
 		expect(await client.updateReviewPolicy(
 			{ expectedEventVersion: 7, reviewRequired: true },
 			'speaker-profile-policy-01'
@@ -131,6 +149,7 @@ describe('speaker-profile policy live client', () => {
 			expect.objectContaining({
 				path: expected.queue.path, method: 'GET'
 			}),
+			expect.objectContaining({ path: expected.directory.path, method: 'GET' }),
 			expect.objectContaining({
 				path: expected.policy.path, method: 'POST',
 				body: { expectedEventVersion: 7, reviewRequired: true },

@@ -24,6 +24,7 @@ import {
   speakerLineupChangeOperationResultSchema,
   speakerLineupSnapshotReadResultSchema,
   speakerProfileApproveResultSchema,
+  speakerProfileDirectoryReadResultSchema,
   speakerProfileReadResultSchema,
   speakerProfileReviewPolicyUpdateResultSchema,
   speakerProfileUpdateResultSchema,
@@ -1289,6 +1290,10 @@ describe('ephemeral live Foundation server composition', () => {
       {
         name: 'speaker.profile.approve', version: 1, effect: 'commit',
         bindings: ['POST /api/events/current/speakers/profile/approve']
+      },
+      {
+        name: 'speaker.profile.directory.read', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/speakers/profiles']
       },
       {
         name: 'speaker.profile.read', version: 1, effect: 'read',
@@ -6333,6 +6338,16 @@ describe('ephemeral live Foundation server composition', () => {
     expect(reread.data.profile?.version).toBe(2);
     expect(reread.data.approvals.map((entry) => entry.field))
       .toEqual(['biography', 'location', 'links']);
+    const directoryResponse = await runtime.app.request(
+      '/api/events/current/speakers/profiles',
+      { headers: eventHeaders({ session, correlationId: crypto.randomUUID() }) }
+    );
+    expect(directoryResponse.status).toBe(200);
+    expect(speakerProfileDirectoryReadResultSchema.parse(await directoryResponse.json()))
+      .toMatchObject({
+        kind: 'success',
+        data: { profiles: [{ personId: speaker.personId, profile: { version: 2 } }] }
+      });
 
     const stale = speakerProfileUpdateResultSchema.parse(await effect({
       runtime, session, path: '/api/events/current/speakers/profile',

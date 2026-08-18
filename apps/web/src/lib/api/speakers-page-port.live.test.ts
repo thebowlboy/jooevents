@@ -263,6 +263,7 @@ function fakeProfiles(input: {
 	};
 	return {
 		async read() { throw new Error('unexpected profile read'); },
+		async readDirectory() { throw new Error('unexpected profile directory read'); },
 		async readReviewQueue() { return { kind: 'success', data: queue, correlationId }; },
 		async update() { throw new Error('unexpected profile update'); },
 		async approve(authorInput) {

@@ -1,6 +1,7 @@
 import type { TaskBoardSnapshotDto } from '@jooevents/contracts';
 import type { SpeakersPagePort } from './speakers-page-port';
 import type { TemplatesPagePort } from './templates-page-port';
+import type { SpeakerProfileBatchSource } from './speaker-profile-directory.live';
 import type { CreateTaskDefinitionInput, ReminderPreview, TasksPagePort } from './tasks-page-port';
 import { TASK_REMINDER_BODY } from './task-reminder-copy';
 import type { CommittedTaskMutation, TaskLiveClient, TaskLiveResult } from './operations/tasks-live';
@@ -58,6 +59,7 @@ export function createLiveTasksPagePort(input: {
 	readonly templates: TemplatesPagePort;
 	readonly schedule: { state(): Promise<ScheduleState> };
 	readonly remind: (speakerIds: readonly string[], subject: string) => Promise<unknown>;
+	readonly profileBatch?: SpeakerProfileBatchSource;
 }): TasksPagePort {
 	let boardRead: Promise<TaskBoardSnapshotDto> | null = null;
 
@@ -169,7 +171,8 @@ export function createLiveTasksPagePort(input: {
 					}),
 					speakerId: speaker.id
 				} : null;
-			}
+			},
+			...(input.profileBatch ? { profiles: input.profileBatch.profiles } : {})
 		}),
 		templates: Object.freeze({
 			async list(): Promise<{ readonly messages: MessageTemplate[] }> {

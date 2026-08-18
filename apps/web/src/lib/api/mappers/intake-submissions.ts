@@ -22,6 +22,7 @@ type HandledSummaryKey =
 	| 'target'
 	| 'title'
 	| 'primaryParticipantName'
+	| 'primaryParticipantId'
 	| 'submittedAt';
 const unhandledSummaryKeys: Record<
 	Exclude<keyof OrganizerSubmissionSummaryDto, HandledSummaryKey>,

@@ -57,6 +57,8 @@ export interface TasksPagePort {
 	readonly speakers: {
 		list(): Promise<SpeakerRow[]>;
 		profile(email: string): Promise<SpeakerProfile | null>;
+		profiles?(requests: readonly { readonly key: string; readonly personId?: string; readonly email: string; readonly submissionCount: number }[]):
+			Promise<Record<string, SpeakerProfile | null>>;
 	};
 	readonly templates: {
 		list(): Promise<{ readonly messages: MessageTemplate[] }>;

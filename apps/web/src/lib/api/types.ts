@@ -323,6 +323,7 @@ export interface SignalChip {
 export interface SubmissionSpeaker {
 	name: string;
 	email: string;
+	personId?: string;
 }
 
 export interface SubmissionResource {

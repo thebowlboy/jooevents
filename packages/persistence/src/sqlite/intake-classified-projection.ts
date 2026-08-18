@@ -141,6 +141,7 @@ function projectVerifiedSummary(input:
     schemaVersion: 1, id: head.id, formId: head.formId, formVersionId: head.formVersionId,
     target: version.definition.target, title: title?.kind === 'text' ? title.value : null,
     primaryParticipantName: name?.kind === 'text' && name.value.length > 0 ? name.value : null,
+    primaryParticipantId: head.primaryPersonId,
     submittedAt: head.submittedAt
   });
 }
@@ -220,6 +221,7 @@ function projectVerifiedDirectEntrySummary(input:
     schemaVersion: 1, id: head.id, formId: head.formId, formVersionId: head.formVersionId,
     target: version.definition.target, title: title?.kind === 'text' ? title.value : null,
     primaryParticipantName: name?.kind === 'text' && name.value.length > 0 ? name.value : null,
+    primaryParticipantId: head.primaryPersonId,
     submittedAt: head.submittedAt
   });
 }

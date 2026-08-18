@@ -88,6 +88,8 @@ export interface ReviewPagePort {
 	};
 	readonly speakers: {
 		profile(email: string): Promise<SpeakerProfile | null>;
+		profiles?(requests: readonly { readonly key: string; readonly personId?: string; readonly email: string; readonly submissionCount: number }[]):
+			Promise<Record<string, SpeakerProfile | null>>;
 	};
 	readonly tasks: {
 		remind(reviewerIds: string[], subject: string): Promise<unknown>;

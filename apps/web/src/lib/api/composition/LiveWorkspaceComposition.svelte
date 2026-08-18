@@ -18,6 +18,7 @@
 	import { createDirectEntryLiveClient } from '$lib/api/operations/direct-entry-live';
 	import { createEngagementsLiveClient } from '$lib/api/operations/engagements-live';
 	import { createSpeakerProfilesLiveClient } from '$lib/api/operations/speaker-profiles-live';
+	import { createSpeakerProfileBatchLiveSource } from '$lib/api/speaker-profile-directory.live';
 	import { createIntakeSubmissionsLivePort } from '$lib/api/operations/intake-submissions-live';
 	import { createLiveDecisionsPagePort } from '$lib/api/decisions-page-port.live';
 	import { createLiveSubmissionsPagePort } from '$lib/api/submissions-page-port.live';
@@ -270,6 +271,11 @@
 		schedule: { state: () => schedule.schedule.state() },
 		remind: createReviewerReminderLiveSender({ communications: communicationsAuthoring })
 	});
+	const profileBatch = createSpeakerProfileBatchLiveSource({
+		roster: { list: () => speakers.speakers.list() },
+		profiles: speakerProfilesClient,
+		schedule: { state: () => schedule.schedule.state() }
+	});
 	// The tuned Submissions surface: triage rows joined with decision heads
 	// and whole-slice standings, plus the direct-entry door through the same
 	// registered operation. The tuned Decisions surface consumes the same list
@@ -281,7 +287,8 @@
 		review: reviewCore,
 		vocabulary,
 		forms: canonicalForms,
-		sessions: sessionCatalog
+		sessions: sessionCatalog,
+		profileBatch
 	});
 	const decisions = createLiveDecisionsPagePort({
 		decisions: decisionsClient,
@@ -329,7 +336,8 @@
 		speakers,
 		templates,
 		schedule: { state: () => schedule.schedule.state() },
-		remind: createTaskReminderLiveSender({ communications: communicationsAuthoring })
+		remind: createTaskReminderLiveSender({ communications: communicationsAuthoring }),
+		profileBatch
 	});
 	// The Files surface joins the canonical roster (names for received
 	// material) and the vocabulary (track names for share audiences); both
@@ -384,6 +392,7 @@
 				vocabulary,
 				schedule: { state: () => schedule.schedule.state() },
 				viewer: snapshot.data.viewer,
+				profileBatch,
 				...(snapshot.data.viewer.kind === 'organizer'
 					? {
 							results: {

@@ -353,13 +353,30 @@
 	 */
 	async function loadProfiles() {
 		if (!plan || plan.anonymized) return;
-		const emails = [...new Set(rows.flatMap((row) =>
-			row.submission.speakers.flatMap((speaker) => speaker.email ? [speaker.email] : [])
-		))];
-		if (emails.length === 0) return;
-		const found = await Promise.all(emails.map((email) => api.speakers.profile(email)));
+		const speakers = new Map(rows.flatMap((row) => row.submission.speakers.map((speaker) => [
+			speaker.id ?? speaker.email ?? speaker.name, speaker
+		] as const)));
+		const keys = [...speakers.keys()];
+		if (keys.length === 0) return;
+		const counts = new Map<string, number>();
+		for (const row of rows) for (const speaker of row.submission.speakers) {
+			const key = speaker.id ?? speaker.email ?? speaker.name;
+			counts.set(key, (counts.get(key) ?? 0) + 1);
+		}
+		const batch = api.speakers.profiles
+			? await api.speakers.profiles(keys.map((key) => ({
+					key, personId: speakers.get(key)?.id, email: speakers.get(key)?.email ?? '',
+					submissionCount: counts.get(key) ?? 0
+				})))
+			: null;
+		const found = batch
+			? keys.map((key) => batch[key] ?? null)
+			: await Promise.all(keys.map((key) => {
+					const email = speakers.get(key)?.email;
+					return email ? api.speakers.profile(email) : null;
+				}));
 		const next: Record<string, SpeakerProfile | null> = {};
-		emails.forEach((email, index) => (next[email] = found[index]));
+		keys.forEach((key, index) => (next[key] = found[index]));
 		profiles = next;
 	}
 
@@ -1150,7 +1167,7 @@
 								     the submitter at all, so it cannot gain a way to look them up. -->
 								<p class="card__by"
 									>{#each row.submission.speakers as speaker, index (speaker.id ?? speaker.email ?? speaker.name)}{@const profile =
-										speaker.email ? profiles[speaker.email] : undefined}{#if index > 0}{', '}{/if}{#if profile}<ProfilePeek
+										profiles[speaker.id ?? speaker.email ?? speaker.name]}{#if index > 0}{', '}{/if}{#if profile}<ProfilePeek
 										{profile} />{:else}{speaker.name}{/if}{/each}</p>
 								{/if}
 						</div>

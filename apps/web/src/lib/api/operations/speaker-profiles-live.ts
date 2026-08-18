@@ -3,6 +3,8 @@ import {
 	operationHttpIdempotencyKeySchema,
 	speakerProfileApproveInputSchema,
 	speakerProfileApproveResultSchema,
+	speakerProfileDirectoryReadInputSchema,
+	speakerProfileDirectoryReadResultSchema,
 	speakerProfileReviewPolicyUpdateInputSchema,
 	speakerProfileReviewPolicyUpdateResultSchema,
 	speakerProfileReviewQueueReadInputSchema,
@@ -13,6 +15,7 @@ import {
 	speakerProfileUpdateResultSchema,
 	type OperationReceiptRef,
 	type SpeakerProfileApproveInput,
+	type SpeakerProfileDirectoryDto,
 	type SpeakerProfileReviewPolicyDto,
 	type SpeakerProfileReviewPolicyUpdateInput,
 	type SpeakerProfileReviewQueueDto,
@@ -30,6 +33,7 @@ import {
 
 export const SPEAKER_PROFILE_LIVE_OPERATIONS = Object.freeze({
 	read: { name: 'speaker.profile.read', version: 1 },
+	directoryRead: { name: 'speaker.profile.directory.read', version: 1 },
 	reviewQueueRead: { name: 'speaker.profile.review_queue.read', version: 1 },
 	update: { name: 'speaker.profile.update', version: 1 },
 	approve: { name: 'speaker.profile.approve', version: 1 },
@@ -41,6 +45,11 @@ const EXPECTED = Object.freeze({
 		...SPEAKER_PROFILE_LIVE_OPERATIONS.read,
 		effect: 'read', method: 'GET', input: 'query', idempotencyRequired: false,
 		...SPEAKER_PROFILE_OPERATION_SCHEMA_REFS.read
+	},
+	directoryRead: {
+		...SPEAKER_PROFILE_LIVE_OPERATIONS.directoryRead,
+		effect: 'read', method: 'GET', input: 'query', idempotencyRequired: false,
+		...SPEAKER_PROFILE_OPERATION_SCHEMA_REFS.directoryRead
 	},
 	reviewQueueRead: {
 		...SPEAKER_PROFILE_LIVE_OPERATIONS.reviewQueueRead,
@@ -80,6 +89,11 @@ export type SpeakerProfileReviewQueueLiveReadResult =
 	| { readonly kind: 'outcome'; readonly outcome: StructuredOutcome; readonly correlationId: string }
 	| { readonly kind: 'transport_error'; readonly error: SafeApiError }
 	| Unavailable;
+export type SpeakerProfileDirectoryLiveReadResult =
+	| { readonly kind: 'success'; readonly data: SpeakerProfileDirectoryDto; readonly correlationId: string }
+	| { readonly kind: 'outcome'; readonly outcome: StructuredOutcome; readonly correlationId: string }
+	| { readonly kind: 'transport_error'; readonly error: SafeApiError }
+	| Unavailable;
 export type SpeakerProfileLiveMutationResult =
 	| { readonly kind: 'success'; readonly data: SpeakerProfileViewDto; readonly receipt: OperationReceiptRef; readonly correlationId: string }
 	| { readonly kind: 'outcome'; readonly outcome: StructuredOutcome; readonly terminal: boolean; readonly receipt?: OperationReceiptRef; readonly correlationId: string }
@@ -93,6 +107,7 @@ export type SpeakerProfileReviewPolicyLiveMutationResult =
 
 export interface SpeakerProfilesLiveClient {
 	read(personId: string, options?: { readonly signal?: AbortSignal }): Promise<SpeakerProfileLiveReadResult>;
+	readDirectory(options?: { readonly signal?: AbortSignal }): Promise<SpeakerProfileDirectoryLiveReadResult>;
 	readReviewQueue(options?: { readonly signal?: AbortSignal }): Promise<SpeakerProfileReviewQueueLiveReadResult>;
 	update(input: SpeakerProfileUpdateInput, idempotencyKey: string, options?: { readonly signal?: AbortSignal }): Promise<SpeakerProfileLiveMutationResult>;
 	approve(input: SpeakerProfileApproveInput, idempotencyKey: string, options?: { readonly signal?: AbortSignal }): Promise<SpeakerProfileLiveMutationResult>;
@@ -121,6 +136,9 @@ export function createSpeakerProfilesLiveClient(input: {
 }): SpeakerProfilesLiveClient {
 	const request = input.request ?? ((value: SpeakerProfileLiveRequestInput) => requestJson(value));
 	const read = resolveOperatorHttpBinding({ manifest: input.manifest, expected: EXPECTED.read });
+	const directoryRead = resolveOperatorHttpBinding({
+		manifest: input.manifest, expected: EXPECTED.directoryRead
+	});
 	const reviewQueueRead = resolveOperatorHttpBinding({
 		manifest: input.manifest, expected: EXPECTED.reviewQueueRead
 	});
@@ -205,6 +223,23 @@ export function createSpeakerProfilesLiveClient(input: {
 				return { kind: 'transport_error' as const, error: response.error };
 			}
 			const parsed = speakerProfileReviewQueueReadResultSchema.safeParse(response.data);
+			if (!parsed.success) return invalidContract();
+			return parsed.data.kind === 'success'
+				? { kind: 'success' as const, data: parsed.data.data, correlationId: parsed.data.correlationId }
+				: { kind: 'outcome' as const, outcome: parsed.data.outcome, correlationId: parsed.data.correlationId };
+		},
+		async readDirectory(options: { readonly signal?: AbortSignal } = {}) {
+			const businessInput = speakerProfileDirectoryReadInputSchema.parse({});
+			if (directoryRead.kind === 'unavailable') {
+				return { kind: 'unavailable' as const, operation: 'directoryRead' as const, reason: directoryRead.reason };
+			}
+			const response = await request({
+				path: directoryRead.path, method: 'GET', schema: speakerProfileDirectoryReadResultSchema,
+				...(Object.keys(businessInput).length === 0 ? {} : { body: businessInput }),
+				...(options.signal ? { signal: options.signal } : {})
+			});
+			if (response.kind === 'error') return { kind: 'transport_error' as const, error: response.error };
+			const parsed = speakerProfileDirectoryReadResultSchema.safeParse(response.data);
 			if (!parsed.success) return invalidContract();
 			return parsed.data.kind === 'success'
 				? { kind: 'success' as const, data: parsed.data.data, correlationId: parsed.data.correlationId }

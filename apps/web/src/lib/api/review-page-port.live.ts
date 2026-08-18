@@ -4,6 +4,7 @@ import type { SafeApiError } from './client';
 import type { OperatorHttpBindingUnavailableReason } from './operations/operator-http-binding';
 import type { ProgramVocabularySettingsPort } from './program-vocabulary-settings-adapter';
 import type { ReviewCoreEffectResult, ReviewCorePort } from './review-core-port';
+import type { SpeakerProfileBatchSource } from './speaker-profile-directory.live';
 import { assembleReviewResults, type ReviewResultCandidate } from '../features/review/review-results';
 import type { ReviewPagePort, ReviewPageViewer, ReviewResultRow } from './review-page-port';
 import type {
@@ -349,6 +350,7 @@ export function createLiveReviewPagePort(input: {
 	readonly results?: { list(): Promise<readonly ReviewResultCandidate[]> };
 	/** Optional already-wired reminder lane; absent stays an honest refusal. */
 	readonly remind?: (reviewerIds: readonly string[], subject: string) => Promise<unknown>;
+	readonly profileBatch?: SpeakerProfileBatchSource;
 }): ReviewPagePort {
 	if (input.review.source.kind !== 'live' || input.vocabulary.source.kind !== 'live') {
 		throw new TypeError('live_review_source_required');
@@ -803,7 +805,8 @@ export function createLiveReviewPagePort(input: {
 			/** Null is the port's own typed absence for an unknown profile. */
 			async profile() {
 				return null;
-			}
+			},
+			...(input.profileBatch ? { profiles: input.profileBatch.profiles } : {})
 		}),
 		tasks: Object.freeze({
 			async remind(reviewerIds: string[], subject: string): Promise<unknown> {

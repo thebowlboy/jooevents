@@ -181,14 +181,27 @@
 	 * through the trays costs nothing.
 	 */
 	async function loadProfiles(rows: Submission[], ticket: number) {
-		const emails = [
-			...new Set(rows.flatMap((row) => row.speakers.map((speaker) => speaker.email)))
-		].filter((email) => !(email in profiles));
-		if (emails.length === 0) return;
-		const found = await Promise.all(emails.map((email) => port.speakers.profile(email)));
+		const speakers = new Map(rows.flatMap((row) => row.speakers.map((speaker) => [
+			speaker.personId ?? speaker.email, speaker
+		] as const)));
+		const keys = [...speakers.keys()].filter((key) => !(key in profiles));
+		if (keys.length === 0) return;
+		const counts = new Map<string, number>();
+		for (const row of rows) for (const speaker of row.speakers) {
+			const key = speaker.personId ?? speaker.email;
+			counts.set(key, (counts.get(key) ?? 0) + 1);
+		}
+		const batch = port.speakers.profiles
+			? await port.speakers.profiles(keys.map((key) => ({
+					key, ...speakers.get(key)!, submissionCount: counts.get(key) ?? 0
+				})))
+			: null;
+		const found = batch
+			? keys.map((key) => batch[key] ?? null)
+			: await Promise.all(keys.map((key) => port.speakers.profile(speakers.get(key)!.email)));
 		if (ticket !== request) return;
 		const next = { ...profiles };
-		emails.forEach((email, index) => (next[email] = found[index]));
+		keys.forEach((key, index) => (next[key] = found[index]));
 		profiles = next;
 	}
 
@@ -966,7 +979,7 @@
 									     never claimed to be one. -->
 									<span class="scan"
 										>{#each row.speakers as speaker, index (speaker.email)}{@const profile =
-											profiles[speaker.email]}{@const nameRanges = rangesFor(
+										profiles[speaker.personId ?? speaker.email]}{@const nameRanges = rangesFor(
 											row.id,
 											submissionSpeakerNameField(index)
 										)}{#if index > 0}{', '}{/if}{#if profile}<ProfilePeek

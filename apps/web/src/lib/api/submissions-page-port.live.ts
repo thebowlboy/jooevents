@@ -21,6 +21,7 @@ import type { ProgramVocabularySettingsPort } from './program-vocabulary-setting
 import { mapLiveReviewPlans } from './review-page-port.live';
 import type { ReviewCorePort } from './review-core-port';
 import type { SessionCatalogCorePort } from './session-catalog-port';
+import type { SpeakerProfileBatchSource } from './speaker-profile-directory.live';
 import type { SubmissionsPagePort } from './submissions-page-port';
 import type {
 	DirectEntryInput,
@@ -262,6 +263,7 @@ export function createLiveSubmissionsPagePort(input: {
 	>;
 	readonly forms: Pick<OrganizerFormsPort, 'source' | 'list' | 'readDetail'>;
 	readonly sessions: SessionCatalogCorePort;
+	readonly profileBatch?: SpeakerProfileBatchSource;
 	readonly newIdempotencyKey?: () => string;
 	readonly now?: () => number;
 }): SubmissionsPagePort {
@@ -347,6 +349,8 @@ export function createLiveSubmissionsPagePort(input: {
 			abstract: row.source.abstract ?? '',
 			speakers: [{
 				name: row.source.primaryParticipantName ?? '',
+				...(row.source.primaryParticipantId
+					? { personId: row.source.primaryParticipantId } : {}),
 				// The address is a separately permission-gated disclosure; the
 				// empty value carries its absence, never an invented contact.
 				email: ''
@@ -657,7 +661,8 @@ export function createLiveSubmissionsPagePort(input: {
 			/** Null is the port's own typed absence for an unknown profile. */
 			async profile(): Promise<null> {
 				return null;
-			}
+			},
+			...(input.profileBatch ? { profiles: input.profileBatch.profiles } : {})
 		}),
 		review: Object.freeze({
 			async standings(submissionIds: readonly string[]): Promise<Record<string, ScoreStanding>> {

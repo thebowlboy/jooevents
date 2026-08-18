@@ -153,6 +153,26 @@ describe('SQLite speaker profile repository', () => {
     })).toBe(false);
   });
 
+  test('reads every event profile as one directory projection', () => {
+    const fx = fixture(false);
+    update(fx, {
+      expectedProfileVersion: null,
+      patch: { headline: 'Engineer', location: 'Singapore' }
+    }, '2026-08-18T07:00:00.000Z');
+    const directory = fx.profiles.readSpeakerProfileDirectory(scope);
+    expect(directory).toMatchObject({
+      workspaceId, eventId,
+      profiles: [{
+        personId,
+        profile: {
+          headline: { value: 'Engineer' },
+          location: { value: 'Singapore' }
+        }
+      }]
+    });
+    expect(directory.profiles[0]?.approvals).toHaveLength(2);
+  });
+
   test('mints honest policy evidence with an automatic profile edit', () => {
     const fx = fixture(false);
     const saved = update(fx, {

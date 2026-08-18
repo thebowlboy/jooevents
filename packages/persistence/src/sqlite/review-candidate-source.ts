@@ -202,7 +202,7 @@ function speakersFromRow(row: SubmissionTriageSourceRowDto): readonly {
   const name = row.summary.primaryParticipantName;
   if (name === null || name.length > REVIEW_SPEAKER_DISPLAY_NAME_MAX_LENGTH) return [];
   return [{
-    speakerId: surrogatePrimarySpeakerId(row.summary.id),
+    speakerId: row.summary.primaryParticipantId ?? surrogatePrimarySpeakerId(row.summary.id),
     displayName: name
   }];
 }

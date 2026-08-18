@@ -1,6 +1,7 @@
 import type { Database } from 'bun:sqlite';
 import {
   speakerProfileApprovePlanSchema,
+  speakerProfileDirectorySchema,
   speakerProfilePolicyApprovalCandidateSchema,
   speakerProfileReviewPolicyUpdatePlanSchema,
   speakerProfileReviewQueueSchema,
@@ -12,6 +13,7 @@ import {
   type SpeakerProfileFieldKey,
   type SpeakerProfilePolicyApprovalCandidateDto,
   type SpeakerProfileReviewPolicyDto,
+  type SpeakerProfileDirectoryDto,
   type SpeakerProfileReviewQueueDto,
   type SpeakerProfileReviewPolicyUpdatePlanDto,
   type SpeakerProfileUpdatePlanDto,
@@ -66,6 +68,16 @@ interface ReviewQueueFieldRow {
   readonly field_key: SpeakerProfileFieldKey;
   readonly is_present: number;
   readonly is_approved: number;
+}
+
+interface DirectoryFieldRow extends FieldRow {
+  readonly person_id: string;
+  readonly profile_version: number;
+  readonly updated_at_ms: number;
+}
+
+interface DirectoryApprovalRow extends ApprovalRow {
+  readonly person_id: string;
 }
 
 interface CountRow { readonly count: number }
@@ -290,6 +302,124 @@ export class SQLiteSpeakerProfileRepository implements SpeakerProfilePlanningRep
       if (error instanceof SQLiteSpeakerProfileError) throw error;
       throw new SQLiteSpeakerProfileError('data_corrupt', error);
     }
+  }
+
+  readSpeakerProfileDirectory(input: {
+    readonly workspaceId: string;
+    readonly eventId: string;
+  }): SpeakerProfileDirectoryDto {
+    const reviewPolicy = this.readReviewPolicy(input);
+    const fields = this.sqlite.query<DirectoryFieldRow, [string, string, string, string, string]>(`
+      WITH exact_event_people AS (
+        SELECT person_id FROM engagement_heads WHERE workspace_id = ? AND event_id = ?
+        UNION
+        SELECT person_id FROM speaker_lineup_entries WHERE workspace_id = ? AND event_id = ?
+      )
+      SELECT ph.person_id,ph.version AS profile_version,ph.updated_at_ms,
+             fh.field_key,fh.current_revision,fh.current_digest_sha256,r.value_json
+        FROM exact_event_people p
+        JOIN speaker_profile_heads ph
+          ON ph.workspace_id = ? AND ph.person_id = p.person_id
+        JOIN speaker_profile_field_heads fh
+          ON fh.workspace_id = ph.workspace_id AND fh.person_id = ph.person_id
+        JOIN speaker_profile_field_revisions r
+          ON r.workspace_id = fh.workspace_id AND r.person_id = fh.person_id
+         AND r.field_key = fh.field_key AND r.revision = fh.current_revision
+         AND r.digest_sha256 = fh.current_digest_sha256
+       ORDER BY ph.person_id,CASE fh.field_key
+         WHEN 'headline' THEN 0 WHEN 'biography' THEN 1
+         WHEN 'location' THEN 2 WHEN 'links' THEN 3 END
+    `).all(
+      input.workspaceId, input.eventId, input.workspaceId, input.eventId, input.workspaceId
+    );
+    const approvals = this.sqlite.query<DirectoryApprovalRow, [
+      string, string, string, string, string, string, number
+    ]>(`
+      WITH exact_event_people AS (
+        SELECT person_id FROM engagement_heads WHERE workspace_id = ? AND event_id = ?
+        UNION
+        SELECT person_id FROM speaker_lineup_entries WHERE workspace_id = ? AND event_id = ?
+      ), ranked AS (
+        SELECT a.person_id,a.id,a.field_key,a.field_revision,a.field_digest_sha256,
+               a.actor_kind,a.approved_by_user_id,a.policy_key,a.policy_version,
+               a.initiated_by_user_id,a.approved_at_ms,
+               row_number() OVER (
+                 PARTITION BY a.person_id,a.field_key
+                 ORDER BY CASE a.actor_kind WHEN 'user' THEN 0 ELSE 1 END,a.id
+               ) AS preference
+          FROM exact_event_people p
+          JOIN content_approvals a ON a.person_id = p.person_id
+          JOIN speaker_profile_field_heads h
+            ON h.workspace_id = a.workspace_id AND h.person_id = a.person_id
+           AND h.field_key = a.field_key AND h.current_revision = a.field_revision
+           AND h.current_digest_sha256 = a.field_digest_sha256
+         WHERE a.workspace_id = ? AND a.event_id = ?
+           AND (? = 0 OR a.actor_kind = 'user')
+      )
+      SELECT person_id,id,field_key,field_revision,field_digest_sha256,
+             actor_kind,approved_by_user_id,policy_key,policy_version,
+             initiated_by_user_id,approved_at_ms
+        FROM ranked WHERE preference = 1
+       ORDER BY person_id,CASE field_key
+         WHEN 'headline' THEN 0 WHEN 'biography' THEN 1
+         WHEN 'location' THEN 2 WHEN 'links' THEN 3 END
+    `).all(
+      input.workspaceId, input.eventId, input.workspaceId, input.eventId,
+      input.workspaceId, input.eventId,
+      reviewPolicy.reviewRequired ? 1 : 0
+    );
+    const byPerson = new Map<string, DirectoryFieldRow[]>();
+    for (const row of fields) {
+      byPerson.set(row.person_id, [...(byPerson.get(row.person_id) ?? []), row]);
+    }
+    const approvalsByPerson = new Map<string, DirectoryApprovalRow[]>();
+    for (const row of approvals) {
+      approvalsByPerson.set(row.person_id, [...(approvalsByPerson.get(row.person_id) ?? []), row]);
+    }
+    const profiles = [...byPerson.entries()].map(([personId, rows]) => {
+      if (rows.length !== SPEAKER_PROFILE_FIELDS.length
+          || new Set(rows.map((row) => row.field_key)).size !== SPEAKER_PROFILE_FIELDS.length) {
+        throw new SQLiteSpeakerProfileError('data_corrupt');
+      }
+      const byKey = new Map(rows.map((row) => [row.field_key, row]));
+      const field = (key: SpeakerProfileFieldKey) => {
+        const row = byKey.get(key);
+        if (!row) throw new SQLiteSpeakerProfileError('data_corrupt');
+        return {
+          revision: row.current_revision,
+          digestSha256: row.current_digest_sha256,
+          value: JSON.parse(row.value_json) as unknown
+        };
+      };
+      const head = rows[0]!;
+      const profile: SpeakerProfileDto = {
+        schemaVersion: 1, workspaceId: input.workspaceId, personId,
+        version: head.profile_version,
+        headline: field('headline') as SpeakerProfileDto['headline'],
+        biography: field('biography') as SpeakerProfileDto['biography'],
+        location: field('location') as SpeakerProfileDto['location'],
+        links: field('links') as SpeakerProfileDto['links'],
+        updatedAt: instant(head.updated_at_ms)
+      };
+      const currentApprovals: SpeakerProfileApprovalDto[] = (approvalsByPerson.get(personId) ?? [])
+        .map((row) => ({
+          id: row.id, workspaceId: input.workspaceId, eventId: input.eventId, personId,
+          field: row.field_key, fieldRevision: row.field_revision,
+          fieldDigestSha256: row.field_digest_sha256,
+          actor: row.actor_kind === 'user'
+            ? { kind: 'user' as const, userId: row.approved_by_user_id! }
+            : {
+                kind: 'policy' as const, policyKey: row.policy_key!, policyVersion: 1 as const,
+                initiatedByUserId: row.initiated_by_user_id
+              },
+          approvedAt: instant(row.approved_at_ms)
+        }));
+      return speakerProfileViewSchema.parse({
+        schemaVersion: 1, ...input, personId, reviewPolicy,
+        profile, approvals: currentApprovals
+      });
+    });
+    return speakerProfileDirectorySchema.parse({ schemaVersion: 1, ...input, profiles });
   }
 
   readReviewQueue(input: {
