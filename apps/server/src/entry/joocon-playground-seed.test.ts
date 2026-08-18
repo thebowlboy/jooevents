@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test';
+import {
+  createReadOperationResultSchema,
+  servedPublicFormSchema,
+  servedPublicScheduleSchema
+} from '@jooevents/contracts';
 import { loadEphemeralLiveConfig } from '../config';
 import { createDevFixtureClock } from '../runtime/dev-fixture-clock';
 import { createEphemeralLiveRuntime, type EphemeralLiveRuntime } from '../runtime/ephemeral-live';
@@ -6,6 +11,9 @@ import { seedJooConPlayground } from './joocon-playground-seed';
 
 const DAY_MS = 86_400_000;
 const runtimes: EphemeralLiveRuntime[] = [];
+const servedPublicFormReadResultSchema = createReadOperationResultSchema(servedPublicFormSchema);
+const servedPublicScheduleReadResultSchema =
+  createReadOperationResultSchema(servedPublicScheduleSchema);
 const config = loadEphemeralLiveConfig({
   JOOEVENTS_BASE_URL: 'http://localhost:5176',
   JOOEVENTS_TRUSTED_ORIGINS: '',
@@ -42,7 +50,9 @@ describe('JooCon playground seed timeline', () => {
       committedReviews: 6,
       accepted: 5,
       waitlisted: 1,
-      declined: 1
+      declined: 1,
+      conditionalRules: 2,
+      sessionFiles: 2
     });
 
     for (const kind of ['schedule', 'speakers', 'forms'] as const) {
@@ -57,10 +67,35 @@ describe('JooCon playground seed timeline', () => {
       `/api/public/forms/current?formId=${encodeURIComponent(summary.applyFormId)}`
     );
     expect(publicForm.status).toBe(200);
-    expect(await publicForm.json()).toMatchObject({
+    const servedForm = servedPublicFormReadResultSchema.parse(await publicForm.json());
+    expect(servedForm).toMatchObject({
       kind: 'success',
       data: { formId: summary.applyFormId, formVersionNumber: 1 }
     });
+    if (servedForm.kind !== 'success') throw new Error('Public form was not served.');
+    expect(servedForm.data.rules).toHaveLength(2);
+    expect(servedForm.data.rules.map((rule) => rule.effect.kind).sort())
+      .toEqual(['require', 'show']);
+    expect(servedForm.data.rules.every((rule) => rule.condition.kind === 'checked_is'))
+      .toBe(true);
+
+    const publicSchedule = servedPublicScheduleReadResultSchema.parse(await (
+      await runtime.app.request('/api/public/schedule/current')
+    ).json());
+    if (publicSchedule.kind !== 'success') throw new Error('Public schedule was not served.');
+    expect(publicSchedule.data.sessions.find(
+      (session) => session.title === 'Agents That Ask Before They Act'
+    )?.description).toBe(
+      'A practical tour of approval-bound agents: typed operations, visible plans, and the refusal paths that keep effective state under human control.'
+    );
+
+    const sessionFileLinks = runtime.database.sqlite.query<
+      { readonly count: number }, []
+    >(`
+      SELECT count(*) AS count FROM operation_log
+       WHERE operation_name = 'file.attachment.link'
+    `).get()?.count ?? 0;
+    expect(sessionFileLinks).toBe(2);
 
     const arrivals = times(runtime, `
       SELECT submitted_at_ms AS at FROM submission_arrival_facts ORDER BY submitted_at_ms

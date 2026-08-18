@@ -1,6 +1,7 @@
 import { makeSignature } from 'better-auth/crypto';
 import {
   accessContextSchema,
+  createEffectfulOperationResultSchema,
   createReadOperationResultSchema,
   currentEventSettingsReadResultSchema,
   decisionDecideOperationResultSchema,
@@ -9,6 +10,7 @@ import {
   eventCreateOperationResultSchema,
   eventSettingsUpdateOperationResultSchema,
   fieldRegistrySnapshotReadResultSchema,
+  fieldRegistryDirectOperationResultSchema,
   intakeFormDirectOperationResultSchema,
   intakeFormVersionPublishOperationResultSchema,
   intakeFormVersionReviewDraftOperationResultSchema,
@@ -24,6 +26,7 @@ import {
   type FormDefinitionCreateAuthorInput,
   type FormTarget
 } from '@jooevents/contracts';
+import { fileAttachmentSchema } from '@jooevents/contracts/files';
 import {
   reviewerRosterDirectOperationResultSchema,
   reviewerRosterSnapshotReadResultSchema
@@ -33,7 +36,10 @@ import {
   reviewDraftSaveOperationResultSchema,
   reviewSnapshotReadResultSchema
 } from '@jooevents/contracts/reviews';
-import { sessionCatalogReadResultSchema } from '@jooevents/contracts/sessions';
+import {
+  sessionCatalogReadResultSchema,
+  sessionDirectOperationResultSchema
+} from '@jooevents/contracts/sessions';
 import {
   workspaceTeamMutationOperationResultSchema,
   workspaceTeamMembersReadResultSchema
@@ -44,12 +50,20 @@ import { schedulePlacementSnapshotReadResultSchema } from '@jooevents/schedule-o
 import type { ServerConfig } from '../config';
 import type { DevFixtureClock } from '../runtime/dev-fixture-clock';
 import type { EphemeralLiveRuntime } from '../runtime/ephemeral-live';
+import { z } from 'zod';
 
 const organizerFormCatalogReadResultSchema = createReadOperationResultSchema(
   organizerFormCatalogSchema
 );
 const organizerFormDetailReadResultSchema = createReadOperationResultSchema(
   organizerFormDetailSchema
+);
+const fileLinkAttachOperationResultSchema = createEffectfulOperationResultSchema(
+  z.strictObject({
+    action: z.literal('attachment.link'),
+    attachment: fileAttachmentSchema,
+    idempotent: z.boolean()
+  })
 );
 
 /**
@@ -249,6 +263,22 @@ const CONFIRMED_SUBMISSION_KEYS: readonly string[] = Object.freeze([
   'okonkwo', 'lindqvist', 'raghunathan'
 ]);
 
+const CANONICAL_SESSION_DESCRIPTION =
+  'A practical tour of approval-bound agents: typed operations, visible plans, and the refusal paths that keep effective state under human control.';
+
+const SESSION_FILE_LINKS = Object.freeze([
+  Object.freeze({
+    title: 'Agents That Ask Before They Act',
+    label: 'Agent approval runbook.pdf',
+    url: 'https://assets.example.test/joocon/agent-approval-runbook.pdf'
+  }),
+  Object.freeze({
+    title: 'The Deadline That Kept Its Promise',
+    label: 'Timezone edge-case checklist.pdf',
+    url: 'https://assets.example.test/joocon/timezone-edge-case-checklist.pdf'
+  })
+] as const);
+
 const SPEAKER_TASKS = Object.freeze([
   Object.freeze({
     key: 'bio',
@@ -305,6 +335,8 @@ export interface PlaygroundSeedSummary {
   readonly placements: number;
   readonly confirmedEngagements: number;
   readonly taskDefinitions: number;
+  readonly conditionalRules: number;
+  readonly sessionFiles: number;
   readonly releaseNumber: number;
   readonly applyFormId: string;
 }
@@ -654,7 +686,64 @@ interface CfpFields {
   readonly emailFieldId: string;
   readonly titleFieldId: string;
   readonly abstractFieldId: string;
+  readonly liveDemoFieldId: string;
+  readonly demoPlanFieldId: string;
   readonly excludedFieldIds: readonly string[];
+}
+
+async function createConditionalCfpFields(context: SeedContext): Promise<{
+  readonly liveDemoFieldId: string;
+  readonly demoPlanFieldId: string;
+}> {
+  const specs = [
+    {
+      key: 'live-demo',
+      field: {
+        kind: 'checkbox' as const,
+        label: 'Will your session include a live demo?',
+        help: 'Choose this when attendees will see or try a working system.',
+        answerOwner: 'talk' as const,
+        scope: { kind: 'shared' as const },
+        contexts: {
+          apply: { visible: true, required: false },
+          onboard: { visible: false, required: false },
+          profile: { visible: false, required: false }
+        },
+        options: { kind: 'none' as const }
+      }
+    },
+    {
+      key: 'demo-plan',
+      field: {
+        kind: 'textarea' as const,
+        label: 'What should attendees be able to try?',
+        help: 'Describe the working path and any setup the room needs.',
+        answerOwner: 'talk' as const,
+        scope: { kind: 'shared' as const },
+        contexts: {
+          apply: { visible: true, required: false },
+          onboard: { visible: false, required: false },
+          profile: { visible: false, required: false }
+        },
+        options: { kind: 'none' as const }
+      }
+    }
+  ] as const;
+  const ids: string[] = [];
+  for (const spec of specs) {
+    const registry = await readFieldRegistry(context);
+    const added = requireSuccess(fieldRegistryDirectOperationResultSchema.parse(await effect({
+      context,
+      path: '/api/events/current/field-registry/add',
+      key: `joocon-field-${spec.key}-add`,
+      body: { expectedRegistryVersion: registry.version, field: spec.field },
+      parse: (value) => value
+    })), `field_${spec.key}_add`);
+    ids.push(added.data.mutation.fieldId);
+  }
+  const [liveDemoFieldId, demoPlanFieldId] = ids;
+  if (!liveDemoFieldId || !demoPlanFieldId) fail('conditional_field_ids_missing', ids);
+  return Object.freeze({ liveDemoFieldId, demoPlanFieldId });
 }
 
 /**
@@ -662,7 +751,10 @@ interface CfpFields {
  * exact shared apply-visible field ids the CFP composition excludes, so each
  * committed direct entry answers exactly the form it was authored against.
  */
-async function resolveCfpFields(context: SeedContext): Promise<CfpFields> {
+async function resolveCfpFields(
+  context: SeedContext,
+  conditional: { readonly liveDemoFieldId: string; readonly demoPlanFieldId: string }
+): Promise<CfpFields> {
   const registry = await readFieldRegistry(context);
   const fieldId = (mapsTo: string, kind: string): string => {
     const field = registry.fields.find(
@@ -675,12 +767,16 @@ async function resolveCfpFields(context: SeedContext): Promise<CfpFields> {
   const emailFieldId = fieldId('person.email', 'email');
   const titleFieldId = fieldId('talk.title', 'text');
   const abstractFieldId = fieldId('talk.abstract', 'textarea');
-  const included = new Set([nameFieldId, emailFieldId, titleFieldId, abstractFieldId]);
+  const included = new Set([
+    nameFieldId, emailFieldId, titleFieldId, abstractFieldId,
+    conditional.liveDemoFieldId, conditional.demoPlanFieldId
+  ]);
   return Object.freeze({
     nameFieldId,
     emailFieldId,
     titleFieldId,
     abstractFieldId,
+    ...conditional,
     excludedFieldIds: Object.freeze(registry.fields
       .filter((field) => field.scope.kind === 'shared'
         && field.contexts.apply.visible
@@ -695,7 +791,9 @@ function cfpDefinition(input: {
   readonly target: FormTarget;
   readonly confirmation: string;
   readonly fields: CfpFields;
+  readonly conditionalDemo?: boolean;
 }): FormDefinitionCreateAuthorInput {
+  const conditionalDemo = input.conditionalDemo === true;
   return {
     kind: 'cfp',
     name: input.name,
@@ -703,11 +801,29 @@ function cfpDefinition(input: {
     availability: { kind: 'evergreen' },
     confirmation: input.confirmation,
     composition: {
-      excludedFieldIds: [...input.fields.excludedFieldIds],
+      excludedFieldIds: [
+        ...input.fields.excludedFieldIds,
+        ...(conditionalDemo ? [] : [input.fields.liveDemoFieldId, input.fields.demoPlanFieldId])
+      ].sort(),
       requiredOverrides: {},
       optionExposure: {}
     },
-    rules: []
+    rules: conditionalDemo ? [
+      {
+        key: 'show-demo-plan',
+        condition: {
+          kind: 'checked_is', sourceFieldId: input.fields.liveDemoFieldId, value: true
+        },
+        effect: { kind: 'show', targetFieldIds: [input.fields.demoPlanFieldId] }
+      },
+      {
+        key: 'require-demo-plan',
+        condition: {
+          kind: 'checked_is', sourceFieldId: input.fields.liveDemoFieldId, value: true
+        },
+        effect: { kind: 'require', targetFieldIds: [input.fields.demoPlanFieldId] }
+      }
+    ] : []
   };
 }
 
@@ -1006,6 +1122,60 @@ async function placeSessions(input: {
   return placed;
 }
 
+async function addCanonicalSessionDescription(input: {
+  readonly context: SeedContext;
+  readonly sessionId: string;
+}): Promise<void> {
+  const catalog = await readSessionCatalog(input.context);
+  const session = catalog.sessions.find((candidate) => candidate.id === input.sessionId);
+  if (!session) fail('description_session_missing', input.sessionId);
+  const updated = requireSuccess(sessionDirectOperationResultSchema.parse(await effect({
+    context: input.context,
+    path: '/api/events/current/sessions',
+    key: 'joocon-session-agents-description',
+    body: {
+      action: 'content_update',
+      expectedCatalogVersion: catalog.version,
+      expectedCatalogDigestSha256: catalog.digestSha256,
+      sessionId: session.id,
+      expectedSessionVersion: session.version,
+      expectedSessionDigestSha256: session.digestSha256,
+      description: CANONICAL_SESSION_DESCRIPTION
+    },
+    parse: (value) => value
+  })), 'session_description');
+  if (updated.data.action !== 'content_update') {
+    fail('session_description_action', updated.data.action);
+  }
+}
+
+async function createSessionFileLinks(input: {
+  readonly context: SeedContext;
+  readonly sessionIdByTitle: ReadonlyMap<string, string>;
+}): Promise<number> {
+  let created = 0;
+  for (const [index, file] of SESSION_FILE_LINKS.entries()) {
+    const sessionId = input.sessionIdByTitle.get(file.title);
+    if (!sessionId) fail('file_session_missing', file.title);
+    const result = requireSuccess(fileLinkAttachOperationResultSchema.parse(await effect({
+      context: input.context,
+      path: '/api/events/current/files/attachments/link',
+      key: `joocon-session-file-${index + 1}`,
+      body: {
+        attachmentId: crypto.randomUUID(),
+        subject: { kind: 'session', sessionId },
+        link: { provider: 'url', label: file.label, url: file.url }
+      },
+      parse: (value) => value
+    })), `session_file_${index + 1}`);
+    if (result.data.action !== 'attachment.link') {
+      fail(`session_file_${index + 1}_action`, result.data.action);
+    }
+    created += 1;
+  }
+  return created;
+}
+
 async function confirmEngagements(input: {
   readonly context: SeedContext;
   readonly submissionIdByKey: ReadonlyMap<string, string>;
@@ -1263,7 +1433,8 @@ export async function seedJooConPlayground(input: {
     await updateEventSettings(context);
     const vocabulary = await createVocabulary(context);
 
-    const fields = await resolveCfpFields(context);
+    const conditionalFields = await createConditionalCfpFields(context);
+    const fields = await resolveCfpFields(context, conditionalFields);
     const generalFormId = await createOpenForm({
       context,
       key: 'general',
@@ -1271,7 +1442,8 @@ export async function seedJooConPlayground(input: {
         name: 'JooCon 2027 Call for Sessions',
         target: { kind: 'general_pool' },
         confirmation: 'Thanks — your proposal is in. The program team reviews everything in one batch after the deadline.',
-        fields
+        fields,
+        conditionalDemo: true
       })
     });
     const featuredFormId = await createOpenForm({
@@ -1371,6 +1543,10 @@ export async function seedJooConPlayground(input: {
     const placements = await placeSessions({
       context, sessionIdByTitle, vocabulary, titleBySubmissionKey
     });
+    const describedSessionId = sessionIdByTitle.get('Agents That Ask Before They Act');
+    if (!describedSessionId) fail('described_session_missing', null);
+    await addCanonicalSessionDescription({ context, sessionId: describedSessionId });
+    const sessionFiles = await createSessionFileLinks({ context, sessionIdByTitle });
     const confirmedEngagements = await confirmEngagements({ context, submissionIdByKey });
     const taskDefinitions = await createSpeakerTasks(context);
     const releaseNumber = await publishSchedule(context);
@@ -1405,6 +1581,8 @@ export async function seedJooConPlayground(input: {
       placements,
       confirmedEngagements,
       taskDefinitions,
+      conditionalRules: 2,
+      sessionFiles,
       releaseNumber,
       applyFormId: generalFormId
     });
