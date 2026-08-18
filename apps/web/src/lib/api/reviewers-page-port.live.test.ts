@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { workspaceTeamSnapshotSchema } from '@jooevents/contracts';
+import { reviewMutationResultSchema } from '@jooevents/contracts/reviews';
 import {
 	reviewerCoveragePopulationSchema,
 	reviewerRosterMutationResultSchema,
@@ -114,6 +115,67 @@ describe('direct live Reviewer page port', () => {
 			expectedReviewerVersion: 2, expectedRosterVersion: 2 });
 		expect(restored).not.toHaveProperty('before');
 		expect(restored).not.toHaveProperty('reviews');
+	});
+
+	test('commits replacement and accepted coverage through the canonical Review vacancy operation', async () => {
+		const calls: { input: unknown; key: string }[] = [];
+		let next = 0;
+		const vacancyReview: ReviewCorePort = {
+			...review,
+			async changeVacancy(input, key) {
+				calls.push({ input, key });
+				const data = input.action === 'assign_replacement'
+					? reviewMutationResultSchema.parse({
+						action: input.action,
+						resolution: {
+							schemaVersion: 1, scope, kind: 'replacement',
+							vacatedAssignmentId: input.assignmentId,
+							replacementAssignmentId: id(71),
+							replacementReviewerId: input.replacementReviewerId,
+							resolvedByUserId: id(72), resolvedAt: '2027-03-03T00:00:00.000Z'
+						},
+						replacement: {
+							schemaVersion: 1, scope, id: id(71), roundId: id(73), submissionId: id(74),
+							reviewerId: input.replacementReviewerId, version: 1, state: 'assigned',
+							assignedAt: '2027-03-03T00:00:00.000Z'
+						}
+					})
+					: reviewMutationResultSchema.parse({
+						action: input.action,
+						resolution: {
+							schemaVersion: 1, scope, kind: 'coverage_accepted',
+							vacatedAssignmentId: input.assignmentId,
+							resolvedByUserId: id(72), resolvedAt: '2027-03-03T00:00:00.000Z'
+						}
+					});
+				return {
+					kind: 'success' as const,
+					data,
+					receipt: { id: id(75), operationName: 'review.assignment.vacancy.change', operationVersion: 1 },
+					correlationId
+				};
+			}
+		};
+		const page = createLiveReviewersPagePort({
+			roster: rosterPort([]), review: vacancyReview, team, vocabulary,
+			newAttemptKey: () => `vacancy-key-${++next}`
+		});
+		expect(await page.reviewers.assignReplacement({
+			assignmentId: id(70), expectedAssignmentVersion: 2, reviewerId
+		})).toEqual({ ok: true });
+		expect(await page.reviewers.acceptCoverage({
+			assignmentId: id(76), expectedAssignmentVersion: 3
+		})).toEqual({ ok: true });
+		expect(calls).toEqual([
+			{
+				input: { action: 'assign_replacement', assignmentId: id(70), expectedAssignmentVersion: 2, replacementReviewerId: reviewerId },
+				key: 'vacancy-key-1'
+			},
+			{
+				input: { action: 'accept_coverage', assignmentId: id(76), expectedAssignmentVersion: 3 },
+				key: 'vacancy-key-2'
+			}
+		]);
 	});
 
 	test('serves exact track, format, and collecting-session coverage from canonical counts', async () => {

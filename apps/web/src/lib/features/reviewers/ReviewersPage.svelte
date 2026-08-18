@@ -107,6 +107,12 @@
 	let announcement = $state('');
 	let remindingId = $state<string | null>(null);
 	let remindedIds = $state<string[]>([]);
+	let replacementOpen = $state(false);
+	let acceptCoverageOpen = $state(false);
+	let vacancyTarget = $state<UncoveredReview | null>(null);
+	let replacementReviewerId = $state('');
+	let vacancyBusy = $state(false);
+	let vacancyError = $state('');
 
 	const filterKeys = ['all', 'invited', 'needs-cover'] as const;
 
@@ -374,7 +380,74 @@
 		const covered = row.steppedBack - gap;
 		const reviews = `${gap} ${gap === 1 ? 'review' : 'reviews'}`;
 		const carried = covered > 0 ? ` The other ${covered} already moved to another reviewer.` : '';
-		return `${reviews} nobody is covering. ${row.name} stepped back from ${row.steppedBack} because of a conflict of interest — they know or work with the submitter.${carried} Uncovered reviews stay in their assigned count until someone picks them up.`;
+		return `${reviews} nobody is covering. ${row.name} stepped back from ${row.steppedBack} because of a conflict of interest — they know or work with the submitter.${carried} Uncovered reviews stay in their assigned count until someone picks them up or you accept the current coverage.`;
+	}
+
+	function replacementName(reviewerId: string): string {
+		return reviewers.find((reviewer) => reviewer.id === reviewerId)?.name ?? reviewerId;
+	}
+
+	function openReplacement(entry: UncoveredReview) {
+		vacancyTarget = entry;
+		replacementReviewerId = entry.replacementCandidates?.find((candidate) => candidate.scopeMatch)?.reviewerId ?? '';
+		vacancyError = '';
+		replacementOpen = true;
+	}
+
+	function openAcceptCoverage(entry: UncoveredReview) {
+		vacancyTarget = entry;
+		vacancyError = '';
+		acceptCoverageOpen = true;
+	}
+
+	async function confirmReplacement() {
+		const target = vacancyTarget;
+		if (!target?.assignmentId || target.assignmentVersion === undefined || !replacementReviewerId) return;
+		vacancyBusy = true;
+		vacancyError = '';
+		try {
+			const outcome = await api.reviewers.assignReplacement({
+				assignmentId: target.assignmentId,
+				expectedAssignmentVersion: target.assignmentVersion,
+				reviewerId: replacementReviewerId
+			});
+			if (!outcome.ok) {
+				vacancyError = outcome.reason;
+				return;
+			}
+			const name = replacementName(replacementReviewerId);
+			recordAction({ label: `Assigned ${name} to “${target.title}”`, area: 'Reviewers' });
+			replacementOpen = false;
+			await load();
+			announcement = `${name} now covers “${target.title}”.`;
+			vacancyTarget = null;
+		} finally {
+			vacancyBusy = false;
+		}
+	}
+
+	async function confirmAcceptCoverage() {
+		const target = vacancyTarget;
+		if (!target?.assignmentId || target.assignmentVersion === undefined) return;
+		vacancyBusy = true;
+		vacancyError = '';
+		try {
+			const outcome = await api.reviewers.acceptCoverage({
+				assignmentId: target.assignmentId,
+				expectedAssignmentVersion: target.assignmentVersion
+			});
+			if (!outcome.ok) {
+				vacancyError = outcome.reason;
+				return;
+			}
+			recordAction({ label: `Accepted current review coverage for “${target.title}”`, area: 'Reviewers' });
+			acceptCoverageOpen = false;
+			await load();
+			announcement = `Current review coverage accepted for “${target.title}”.`;
+			vacancyTarget = null;
+		} finally {
+			vacancyBusy = false;
+		}
 	}
 
 	/**
@@ -468,6 +541,18 @@
 					{#if consequence}
 						<span class="gap__said" class:gap__said--stopped={entry.remainingReviewers === 0}>
 							{consequence}
+						</span>
+					{/if}
+					{#if entry.assignmentId && entry.assignmentVersion !== undefined}
+						<span class="gap__actions">
+							<button
+								type="button"
+								class="ui-button ui-button--secondary ui-button--sm"
+								onclick={() => openReplacement(entry)}>Assign reviewer</button>
+							<button
+								type="button"
+								class="ui-button ui-button--ghost ui-button--sm"
+								onclick={() => openAcceptCoverage(entry)}>Accept coverage</button>
 						</span>
 					{/if}
 				</li>
@@ -843,18 +928,20 @@
 									<!-- The same disclosure as the table, not a plain badge: the
 									     named reviews are the point, and a card is exactly where a
 									     press is the only way in. -->
-									<Popover
-										label="{row.awaitingReassignment} need another reviewer — why"
-										onreveal={() => (announcement = coverageAnnouncement(row))}>
-										{#snippet trigger()}
-											<Badge tone="warning" icon={statusIcon.needsReviewer}>
-												{row.awaitingReassignment} need another reviewer
-											</Badge>
-										{/snippet}
-										{#snippet children()}
-											{@render coverageWhy(row)}
-										{/snippet}
-									</Popover>
+									<span class="load__gap">
+										<Popover
+											label="{row.awaitingReassignment} need another reviewer — why"
+											onreveal={() => (announcement = coverageAnnouncement(row))}>
+											{#snippet trigger()}
+												<Badge tone="warning" icon={statusIcon.needsReviewer}>
+													{row.awaitingReassignment} need another reviewer
+												</Badge>
+											{/snippet}
+											{#snippet children()}
+												{@render coverageWhy(row)}
+											{/snippet}
+										</Popover>
+									</span>
 								{/if}
 								{#if remindedIds.includes(row.id)}
 									<span class="load__sent">Reminder sent</span>
@@ -891,6 +978,67 @@
 {/if}
 
 <InviteReviewersModal {port} bind:open={inviteOpen} {tracks} {formats} {sessions} oninvited={onInvited} />
+
+<Modal bind:open={replacementOpen} title="Assign a replacement reviewer">
+	{#if vacancyTarget}
+		<p class="modal__copy">
+			Choose who should pick up “{vacancyTarget.title}”. Reviewers in scope come first, then
+			lowest current load.
+		</p>
+		{#if vacancyTarget.replacementCandidates && vacancyTarget.replacementCandidates.length > 0}
+			<fieldset class="replacement">
+				<legend class="ui-sr-only">Replacement reviewer</legend>
+				{#each vacancyTarget.replacementCandidates as candidate (candidate.reviewerId)}
+					<label class="replacement__row" class:replacement__row--blocked={!candidate.scopeMatch}>
+						<input
+							type="radio"
+							name="replacement-reviewer"
+							value={candidate.reviewerId}
+							bind:group={replacementReviewerId}
+							disabled={!candidate.scopeMatch || vacancyBusy} />
+						<span class="replacement__copy">
+							<strong>{replacementName(candidate.reviewerId)}</strong>
+							<span>{candidate.assigned} current {candidate.assigned === 1 ? 'review' : 'reviews'}</span>
+							{#if candidate.conflict}<span class="replacement__conflict">{candidate.conflict}</span>{/if}
+						</span>
+					</label>
+				{/each}
+			</fieldset>
+		{:else}
+			<p class="modal__copy">No other active reviewer is available for this submission.</p>
+		{/if}
+		{#if vacancyError}<p class="modal__error" role="alert">{vacancyError}</p>{/if}
+	{/if}
+	{#snippet footer(close)}
+		<button type="button" class="ui-button ui-button--ghost" disabled={vacancyBusy} onclick={close}>Cancel</button>
+		<button
+			type="button"
+			class="ui-button ui-button--primary"
+			disabled={!replacementReviewerId || vacancyBusy}
+			aria-busy={vacancyBusy}
+			onclick={confirmReplacement}>Assign reviewer</button>
+	{/snippet}
+</Modal>
+
+<Modal bind:open={acceptCoverageOpen} title="Accept the current coverage?">
+	{#if vacancyTarget}
+		<p class="modal__copy">
+			“{vacancyTarget.title}” will continue with {vacancyTarget.remainingReviewers ?? 'its current'}
+			{vacancyTarget.remainingReviewers === 1 ? ' reviewer' : ' reviewers'}. This retires the open
+			review slot; it does not claim another review was completed.
+		</p>
+		{#if vacancyError}<p class="modal__error" role="alert">{vacancyError}</p>{/if}
+	{/if}
+	{#snippet footer(close)}
+		<button type="button" class="ui-button ui-button--ghost" disabled={vacancyBusy} onclick={close}>Keep slot open</button>
+		<button
+			type="button"
+			class="ui-button ui-button--secondary"
+			disabled={vacancyBusy}
+			aria-busy={vacancyBusy}
+			onclick={confirmAcceptCoverage}>Accept coverage</button>
+	{/snippet}
+</Modal>
 
 <Modal bind:open={removeOpen} title="Remove this reviewer?">
 	{#if removeTarget}
@@ -1129,6 +1277,13 @@
 		color: var(--je-color-danger);
 	}
 
+	.gap__actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--je-space-2);
+		margin-block-start: var(--je-space-2);
+	}
+
 	.load__none {
 		font-size: var(--je-font-size-xs);
 		color: var(--je-color-text-muted);
@@ -1270,6 +1425,57 @@
 		color: var(--je-color-text-muted);
 	}
 
+	.modal__error {
+		margin: var(--je-space-3) 0 0;
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-danger);
+	}
+
+	.replacement {
+		display: grid;
+		gap: var(--je-space-2);
+		margin: var(--je-space-4) 0 0;
+		padding: 0;
+		border: 0;
+	}
+
+	.replacement__row {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr);
+		align-items: start;
+		gap: var(--je-space-3);
+		min-block-size: var(--je-control-height);
+		padding: var(--je-space-3);
+		border: 1px solid var(--je-color-border);
+		border-radius: var(--je-radius-control);
+		cursor: pointer;
+	}
+
+	.replacement__row--blocked {
+		cursor: not-allowed;
+		background: var(--je-color-surface-sunken);
+		color: var(--je-color-text-muted);
+	}
+
+	.replacement__row input {
+		margin-block-start: 0.2rem;
+	}
+
+	.replacement__copy {
+		display: grid;
+		gap: var(--je-space-1);
+		font-size: var(--je-font-size-sm);
+	}
+
+	.replacement__copy span {
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
+	}
+
+	.replacement__row .replacement__conflict {
+		color: var(--je-color-warning);
+	}
+
 	/* Narrow cards */
 	.roster__cards {
 		display: none;
@@ -1400,6 +1606,25 @@
 
 		.detail {
 			padding: 0;
+		}
+	}
+
+	@media (max-width: 768px) {
+		/* The badge keeps its compact visual weight while the button owns a full
+		   phone target. The pseudo-element expands hit-testing without making the
+		   status mark look like a primary action or shifting the card around it. */
+		.load__gap :global(.ui-popover__trigger) {
+			position: relative;
+		}
+
+		.load__gap :global(.ui-popover__trigger)::after {
+			content: '';
+			position: absolute;
+			z-index: 1;
+			inset-inline: -0.25rem;
+			inset-block-start: 50%;
+			block-size: 2.75rem;
+			transform: translateY(-50%);
 		}
 	}
 </style>

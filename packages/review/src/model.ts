@@ -11,6 +11,7 @@ import {
   reviewRosterMemberSnapshotSchema,
   reviewRoundSchema,
   reviewScopeSchema,
+  reviewVacancyResolutionSchema,
   type ReviewAssignmentDto,
   type ReviewCandidateDisplayDto,
   type ReviewCandidateSnapshotDto,
@@ -21,7 +22,8 @@ import {
   type ReviewRevisionDto,
   type ReviewRosterMemberSnapshotDto,
   type ReviewRoundDto,
-  type ReviewScopeDto
+  type ReviewScopeDto,
+  type ReviewVacancyResolutionDto
 } from '@jooevents/contracts/reviews';
 
 export interface ReviewQueryGuard {
@@ -70,6 +72,10 @@ export interface ReviewRepository {
   readRound(scope: ReviewScopeDto, roundId: string): ReviewRoundDto | undefined;
   listAssignments(scope: ReviewScopeDto, roundId: string): readonly ReviewAssignmentDto[];
   readAssignment(scope: ReviewScopeDto, assignmentId: string): ReviewAssignmentDto | undefined;
+  readVacancyResolution?(
+    scope: ReviewScopeDto,
+    vacatedAssignmentId: string
+  ): ReviewVacancyResolutionDto | undefined;
   readDraft(scope: ReviewScopeDto, assignmentId: string): ReviewDraftDto | undefined;
   readReviewHead(scope: ReviewScopeDto, assignmentId: string): ReviewHeadDto | undefined;
   readRevision(scope: ReviewScopeDto, revisionId: string): ReviewRevisionDto | undefined;
@@ -87,6 +93,10 @@ export interface ReviewTransactionRepository extends ReviewRepository {
   updateAssignment(input: {
     readonly before: ReviewAssignmentDto;
     readonly after: ReviewAssignmentDto;
+  }): void;
+  resolveVacancy?(input: {
+    readonly resolution: ReviewVacancyResolutionDto;
+    readonly replacement?: ReviewAssignmentDto;
   }): void;
   saveDraft(input: {
     readonly expectedVersion: number | null;
@@ -117,6 +127,10 @@ export function parseReviewRound(value: unknown): ReviewRoundDto {
 
 export function parseReviewAssignment(value: unknown): ReviewAssignmentDto {
   return deepFreeze(reviewAssignmentSchema.parse(value));
+}
+
+export function parseReviewVacancyResolution(value: unknown): ReviewVacancyResolutionDto {
+  return deepFreeze(reviewVacancyResolutionSchema.parse(value));
 }
 
 export function parseReviewDraft(value: unknown): ReviewDraftDto {

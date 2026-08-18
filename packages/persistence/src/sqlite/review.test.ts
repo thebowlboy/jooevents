@@ -43,6 +43,7 @@ const userId = applicationId('019c1df8-86b5-769b-bba4-5f7097bfa221');
 const reviewerUserId = applicationId('019c1df8-86b5-769b-bba4-5f7097bfa222');
 const membershipId = applicationId('019c1df8-86b5-769b-bba4-5f7097bfa223');
 const reviewerId = applicationId('019c1df8-86b5-769b-bba4-5f7097bfa224');
+const replacementReviewerId = applicationId('019c1df8-86b5-769b-bba4-5f7097bfa225');
 const submissionId = applicationId('019c1df8-86b5-769b-bba4-5f7097bfa301');
 const formId = applicationId('019c1df8-86b5-769b-bba4-5f7097bfa302');
 const formVersionId = applicationId('019c1df8-86b5-769b-bba4-5f7097bfa303');
@@ -51,6 +52,7 @@ const roundId = applicationId('019c1df8-86b5-769b-bba4-5f7097bfa401');
 const deadlineId = applicationId('019c1df8-86b5-769b-bba4-5f7097bfa402');
 const criterionId = applicationId('019c1df8-86b5-769b-bba4-5f7097bfa403');
 const assignmentId = applicationId('019c1df8-86b5-769b-bba4-5f7097bfa404');
+const replacementAssignmentId = applicationId('019c1df8-86b5-769b-bba4-5f7097bfa408');
 const reviewRevisionId = applicationId('019c1df8-86b5-769b-bba4-5f7097bfa405');
 const amendRevisionId = applicationId('019c1df8-86b5-769b-bba4-5f7097bfa406');
 const strayId = applicationId('019c1df8-86b5-769b-bba4-5f7097bfa407');
@@ -270,6 +272,23 @@ function openRound(fixture: ReturnType<typeof setup>) {
   return plan;
 }
 
+function stepBack(fixture: ReturnType<typeof setup>) {
+  const plan = planReviewMutation(reviewMutationPlanningInputSchema.parse({
+    action: 'step_back',
+    scope,
+    assignmentId,
+    expectedAssignmentVersion: 1,
+    reviewerId,
+    attributedByUserId: reviewerUserId,
+    attributedAt: now
+  }), { repository: fixture.reviews, sources: fixture.reviews });
+  transaction(fixture.sqlite, () => applyReviewMutationPlan({
+    plan,
+    transaction: fixture.reviews,
+    sources: fixture.reviews
+  }));
+}
+
 describe('SQLiteReviewRepository', () => {
   test('opens a round with its review_due Deadline through the composed planning sources', () => {
     const fixture = setup();
@@ -453,6 +472,100 @@ describe('SQLiteReviewRepository', () => {
       expect(() => fixture.sqlite.exec(
         `UPDATE review_rounds SET ordinal = 9 WHERE id = '${roundId}'`
       )).toThrow('review round identity and pins are immutable');
+    } finally {
+      fixture.close();
+    }
+  });
+
+  test('retains a coherent replacement resolution and makes the resolution immutable', () => {
+    const fixture = setup();
+    try {
+      openRound(fixture);
+      stepBack(fixture);
+      transaction(fixture.sqlite, () => fixture.reviews.resolveVacancy({
+        replacement: {
+          schemaVersion: 1,
+          scope,
+          id: replacementAssignmentId,
+          roundId,
+          submissionId,
+          reviewerId: replacementReviewerId,
+          version: 1,
+          state: 'assigned',
+          assignedAt: now
+        },
+        resolution: {
+          schemaVersion: 1,
+          scope,
+          kind: 'replacement',
+          vacatedAssignmentId: assignmentId,
+          replacementAssignmentId,
+          replacementReviewerId,
+          resolvedByUserId: userId,
+          resolvedAt: now
+        }
+      }));
+      expect(fixture.reviews.readVacancyResolution(scope, assignmentId)).toEqual({
+        schemaVersion: 1,
+        scope,
+        kind: 'replacement',
+        vacatedAssignmentId: assignmentId,
+        replacementAssignmentId,
+        replacementReviewerId,
+        resolvedByUserId: userId,
+        resolvedAt: now
+      });
+      expect(fixture.reviews.readAssignment(scope, replacementAssignmentId)).toMatchObject({
+        reviewerId: replacementReviewerId,
+        submissionId,
+        state: 'assigned'
+      });
+      expect(fixture.sqlite.query<Record<string, unknown>, []>('PRAGMA foreign_key_check').all())
+        .toEqual([]);
+      expect(() => fixture.sqlite.exec(`
+        UPDATE review_assignment_vacancy_resolutions
+           SET resolved_at_ms = resolved_at_ms + 1
+         WHERE vacated_assignment_id = '${assignmentId}'
+      `)).toThrow('review vacancy resolutions are immutable');
+      expect(() => fixture.sqlite.exec(`
+        DELETE FROM review_assignment_vacancy_resolutions
+         WHERE vacated_assignment_id = '${assignmentId}'
+      `)).toThrow('review vacancy resolutions are retained');
+    } finally {
+      fixture.close();
+    }
+  });
+
+  test('retires only the stepped-back slot when thinner coverage is accepted', () => {
+    const fixture = setup();
+    try {
+      openRound(fixture);
+      stepBack(fixture);
+      transaction(fixture.sqlite, () => fixture.reviews.resolveVacancy({
+        resolution: {
+          schemaVersion: 1,
+          scope,
+          kind: 'coverage_accepted',
+          vacatedAssignmentId: assignmentId,
+          resolvedByUserId: userId,
+          resolvedAt: now
+        }
+      }));
+      expect(fixture.reviews.readVacancyResolution(scope, assignmentId)).toEqual({
+        schemaVersion: 1,
+        scope,
+        kind: 'coverage_accepted',
+        vacatedAssignmentId: assignmentId,
+        resolvedByUserId: userId,
+        resolvedAt: now
+      });
+      expect(fixture.reviews.listAssignments(scope, roundId)).toMatchObject([{
+        id: assignmentId,
+        state: 'stepped_back',
+        version: 2
+      }]);
+      expect(fixture.sqlite.query<Record<string, unknown>, []>('PRAGMA foreign_key_check').all())
+        .toEqual([]);
     } finally {
       fixture.close();
     }

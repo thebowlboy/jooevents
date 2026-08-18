@@ -12,6 +12,7 @@ import {
   reviewMutationResultSchema,
   reviewRoundChangeDraftInputSchema,
   reviewStepBackChangeDraftInputSchema,
+  reviewVacancyChangeDraftInputSchema,
   type ReviewCriterionDto,
   type ReviewMutationPlanDto,
   type ReviewMutationResult,
@@ -39,6 +40,7 @@ import {
 } from '@jooevents/review';
 import {
   REVIEW_ASSIGNMENT_STEP_BACK_OPERATION,
+  REVIEW_ASSIGNMENT_VACANCY_CHANGE_OPERATION,
   REVIEW_DIRECT_HANDLER_CAPABILITY,
   REVIEW_EVALUATE_ACCESS_POLICY,
   REVIEW_EVALUATE_PERMISSION_IDS,
@@ -90,6 +92,14 @@ const OPERATION_SPECS = Object.freeze([
     needsReviewer: true,
     actions: Object.freeze(['step_back'] as const),
     parse: (value: unknown) => reviewStepBackChangeDraftInputSchema.parse(value)
+  }),
+  Object.freeze({
+    operation: REVIEW_ASSIGNMENT_VACANCY_CHANGE_OPERATION,
+    policy: REVIEW_MANAGE_ACCESS_POLICY,
+    permissions: REVIEW_MANAGE_PERMISSION_IDS,
+    needsReviewer: false,
+    actions: Object.freeze(['assign_replacement', 'accept_coverage'] as const),
+    parse: (value: unknown) => reviewVacancyChangeDraftInputSchema.parse(value)
   }),
   Object.freeze({
     operation: REVIEW_EVALUATION_CHANGE_OPERATION,
@@ -147,7 +157,7 @@ function planningRefusal(
 ) {
   const subjectType = action === 'open_round' || action === 'discard_empty_round'
     ? 'review_round'
-    : action === 'step_back'
+    : action === 'step_back' || action === 'assign_replacement' || action === 'accept_coverage'
       ? 'review_assignment'
       : 'review';
   return reviewDirectContributionSchema.parse({
@@ -178,6 +188,16 @@ function resultFor(plan: ReviewMutationPlanDto): ReviewMutationResult {
   }
   if (plan.action === 'step_back') {
     return reviewMutationResultSchema.parse({ action: plan.action, assignment: plan.after });
+  }
+  if (plan.action === 'assign_replacement') {
+    return reviewMutationResultSchema.parse({
+      action: plan.action,
+      resolution: plan.resolution,
+      replacement: plan.replacement
+    });
+  }
+  if (plan.action === 'accept_coverage') {
+    return reviewMutationResultSchema.parse({ action: plan.action, resolution: plan.resolution });
   }
   return reviewMutationResultSchema.parse({
     action: plan.action,
@@ -354,6 +374,24 @@ export class SQLiteReviewDirectEffectDomainAdapter implements SQLiteEffectDomain
       const wire = reviewStepBackChangeDraftInputSchema.parse(input.businessInput);
       const { action: _action, ...change } = wire;
       authorValue = { action: input.action, scope, ...change, reviewerId, ...attribution };
+      subjectId = wire.assignmentId;
+    } else if (input.action === 'assign_replacement') {
+      const wire = reviewVacancyChangeDraftInputSchema.parse(input.businessInput);
+      if (wire.action !== 'assign_replacement') throw new TypeError('review_direct_action_mismatch');
+      const { action: _action, ...change } = wire;
+      authorValue = {
+        action: input.action,
+        scope,
+        ...change,
+        replacementAssignmentId: this.nextId('newAssignmentId'),
+        ...attribution
+      };
+      subjectId = wire.assignmentId;
+    } else if (input.action === 'accept_coverage') {
+      const wire = reviewVacancyChangeDraftInputSchema.parse(input.businessInput);
+      if (wire.action !== 'accept_coverage') throw new TypeError('review_direct_action_mismatch');
+      const { action: _action, ...change } = wire;
+      authorValue = { action: input.action, scope, ...change, ...attribution };
       subjectId = wire.assignmentId;
     } else if (input.action === 'commit_review') {
       const wire = reviewEvaluationChangeDraftInputSchema.parse(input.businessInput);

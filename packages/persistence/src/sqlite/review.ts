@@ -19,7 +19,8 @@ import type {
   ReviewHeadDto,
   ReviewRevisionDto,
   ReviewRoundDto,
-  ReviewScopeDto
+  ReviewScopeDto,
+  ReviewVacancyResolutionDto
 } from '@jooevents/contracts/reviews';
 import {
   reviewDeadlinePinFromReference,
@@ -41,6 +42,7 @@ import {
   parseReviewRevision,
   parseReviewRound,
   parseReviewScope,
+  parseReviewVacancyResolution,
   type ReviewCandidateDisplaySource,
   type ReviewCandidateSet,
   type ReviewPlanningSource,
@@ -246,6 +248,44 @@ CREATE TRIGGER review_heads_retained BEFORE DELETE ON review_heads
 BEGIN SELECT RAISE(ABORT, 'review heads are retained'); END;
 `;
 
+/** Sequence-10 additive schema for isolated repository fixtures only. */
+export const REVIEW_VACANCY_RESOLUTION_SQL = `
+CREATE TABLE review_assignment_vacancy_resolutions (
+  workspace_id TEXT NOT NULL,
+  event_id TEXT NOT NULL,
+  vacated_assignment_id TEXT NOT NULL CHECK(length(vacated_assignment_id) = 36),
+  kind TEXT NOT NULL CHECK(kind IN ('replacement', 'coverage_accepted')),
+  replacement_assignment_id TEXT CHECK(replacement_assignment_id IS NULL OR length(replacement_assignment_id) = 36),
+  replacement_reviewer_id TEXT CHECK(replacement_reviewer_id IS NULL OR length(replacement_reviewer_id) = 36),
+  resolved_by_user_id TEXT NOT NULL CHECK(length(resolved_by_user_id) = 36),
+  resolved_at_ms INTEGER NOT NULL CHECK(resolved_at_ms BETWEEN 0 AND 8640000000000000),
+  PRIMARY KEY (workspace_id, event_id, vacated_assignment_id),
+  UNIQUE (workspace_id, event_id, replacement_assignment_id),
+  FOREIGN KEY (workspace_id, event_id, vacated_assignment_id)
+    REFERENCES review_assignments(workspace_id, event_id, id)
+    ON UPDATE RESTRICT ON DELETE RESTRICT,
+  FOREIGN KEY (
+    workspace_id, event_id, replacement_assignment_id, replacement_reviewer_id
+  ) REFERENCES review_assignments(workspace_id, event_id, id, reviewer_id)
+    ON UPDATE RESTRICT ON DELETE RESTRICT,
+  CHECK(
+    (kind = 'replacement' AND replacement_assignment_id IS NOT NULL AND replacement_reviewer_id IS NOT NULL)
+    OR (kind = 'coverage_accepted' AND replacement_assignment_id IS NULL AND replacement_reviewer_id IS NULL)
+  )
+) STRICT, WITHOUT ROWID;
+
+CREATE UNIQUE INDEX review_assignments_vacancy_resolution_reference
+  ON review_assignments(workspace_id, event_id, id, reviewer_id);
+
+CREATE TRIGGER review_assignment_vacancy_resolutions_immutable
+BEFORE UPDATE ON review_assignment_vacancy_resolutions
+BEGIN SELECT RAISE(ABORT, 'review vacancy resolutions are immutable'); END;
+
+CREATE TRIGGER review_assignment_vacancy_resolutions_retained
+BEFORE DELETE ON review_assignment_vacancy_resolutions
+BEGIN SELECT RAISE(ABORT, 'review vacancy resolutions are retained'); END;
+`;
+
 export type SQLiteReviewErrorCode =
   | 'transaction_required'
   | 'data_corrupt'
@@ -290,6 +330,14 @@ interface AssignmentRow {
   readonly assigned_at_ms: number; readonly stepped_back_at_ms: number | null;
   readonly stepped_back_by_user_id: string | null;
 }
+interface VacancyResolutionRow {
+  readonly workspace_id: string; readonly event_id: string;
+  readonly vacated_assignment_id: string;
+  readonly kind: 'replacement' | 'coverage_accepted';
+  readonly replacement_assignment_id: string | null;
+  readonly replacement_reviewer_id: string | null;
+  readonly resolved_by_user_id: string; readonly resolved_at_ms: number;
+}
 interface DraftRow {
   readonly workspace_id: string; readonly event_id: string; readonly assignment_id: string;
   readonly version: number; readonly scores_json: string; readonly comment: string;
@@ -314,6 +362,7 @@ export function installReviewSchema(sqlite: Database): void {
   if (sqlite.inTransaction) throw new SQLiteReviewError('transaction_required');
   sqlite.exec('PRAGMA foreign_keys = ON;');
   sqlite.exec(REVIEW_SQL);
+  sqlite.exec(REVIEW_VACANCY_RESOLUTION_SQL);
 }
 
 /** Imported lower-owner sources the composed Review repository joins over. */
@@ -515,6 +564,19 @@ export class SQLiteReviewRepository implements
     return rows[0] ? assignmentFromRow(rows[0]) : undefined;
   }
 
+  readVacancyResolution(
+    scopeInput: ReviewScopeDto,
+    vacatedAssignmentId: string
+  ): ReviewVacancyResolutionDto | undefined {
+    const scope = parseReviewScope(scopeInput);
+    const rows = this.sqlite.query<VacancyResolutionRow, [string, string, string]>(`
+      SELECT * FROM review_assignment_vacancy_resolutions
+       WHERE workspace_id = ? AND event_id = ? AND vacated_assignment_id = ? LIMIT 2
+    `).all(scope.workspaceId, scope.eventId, vacatedAssignmentId);
+    if (rows.length > 1) throw new SQLiteReviewError('data_corrupt');
+    return rows[0] ? vacancyResolutionFromRow(rows[0]) : undefined;
+  }
+
   readDraft(scopeInput: ReviewScopeDto, assignmentId: string): ReviewDraftDto | undefined {
     const scope = parseReviewScope(scopeInput);
     const rows = this.sqlite.query<DraftRow, [string, string, string]>(`
@@ -678,6 +740,47 @@ export class SQLiteReviewRepository implements
       before.scope.workspaceId, before.scope.eventId, before.id,
       before.version, before.state
     ), 'stale_assignment');
+  }
+
+  resolveVacancy(input: {
+    readonly resolution: ReviewVacancyResolutionDto;
+    readonly replacement?: ReviewAssignmentDto;
+  }): void {
+    this.requireTransaction();
+    const resolution = parseReviewVacancyResolution(input.resolution);
+    const replacement = input.replacement === undefined
+      ? undefined
+      : parseReviewAssignment(input.replacement);
+    const coherent = resolution.kind === 'replacement'
+      ? replacement !== undefined
+        && replacement.id === resolution.replacementAssignmentId
+        && replacement.reviewerId === resolution.replacementReviewerId
+        && replacement.scope.workspaceId === resolution.scope.workspaceId
+        && replacement.scope.eventId === resolution.scope.eventId
+      : replacement === undefined;
+    if (!coherent) throw new SQLiteReviewError('data_corrupt');
+    try {
+      if (replacement) this.insertAssignments([replacement]);
+      changedExactlyOnce(this.sqlite.query<never, [string, string, string, string, string | null, string | null, string, number]>(`
+        INSERT INTO review_assignment_vacancy_resolutions (
+          workspace_id, event_id, vacated_assignment_id, kind,
+          replacement_assignment_id, replacement_reviewer_id,
+          resolved_by_user_id, resolved_at_ms
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        resolution.scope.workspaceId,
+        resolution.scope.eventId,
+        resolution.vacatedAssignmentId,
+        resolution.kind,
+        resolution.kind === 'replacement' ? resolution.replacementAssignmentId : null,
+        resolution.kind === 'replacement' ? resolution.replacementReviewerId : null,
+        resolution.resolvedByUserId,
+        Date.parse(resolution.resolvedAt)
+      ), 'identity_collision');
+    } catch (error) {
+      if (error instanceof SQLiteReviewError) throw error;
+      throw new SQLiteReviewError('identity_collision', error);
+    }
   }
 
   saveDraft(input: { readonly expectedVersion: number | null; readonly draft: ReviewDraftDto }): void {
@@ -930,6 +1033,24 @@ function assignmentFromRow(row: AssignmentRow): ReviewAssignmentDto {
         steppedBackAt: row.stepped_back_at_ms === null ? null : instant(row.stepped_back_at_ms),
         steppedBackByUserId: row.stepped_back_by_user_id
       }));
+}
+
+function vacancyResolutionFromRow(row: VacancyResolutionRow): ReviewVacancyResolutionDto {
+  const common = {
+    schemaVersion: 1 as const,
+    scope: { workspaceId: row.workspace_id, eventId: row.event_id },
+    vacatedAssignmentId: row.vacated_assignment_id,
+    resolvedByUserId: row.resolved_by_user_id,
+    resolvedAt: instant(row.resolved_at_ms)
+  };
+  return guarded(() => row.kind === 'replacement'
+    ? parseReviewVacancyResolution({
+        ...common,
+        kind: row.kind,
+        replacementAssignmentId: row.replacement_assignment_id,
+        replacementReviewerId: row.replacement_reviewer_id
+      })
+    : parseReviewVacancyResolution({ ...common, kind: row.kind }));
 }
 
 function draftFromRow(row: DraftRow): ReviewDraftDto {

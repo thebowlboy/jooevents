@@ -10,7 +10,8 @@ import type {
   ReviewRevisionDto,
   ReviewRosterMemberSnapshotDto,
   ReviewRoundDto,
-  ReviewScopeDto
+  ReviewScopeDto,
+  ReviewVacancyResolutionDto
 } from '@jooevents/contracts/reviews';
 import {
   applyReviewMutationPlan,
@@ -106,6 +107,7 @@ class MemoryReviewStore implements
   readonly drafts = new Map<string, ReviewDraftDto>();
   readonly heads = new Map<string, ReviewHeadDto>();
   readonly revisions = new Map<string, ReviewRevisionDto>();
+  readonly vacancyResolutions = new Map<string, ReviewVacancyResolutionDto>();
 
   readCatalog(requested: ReviewScopeDto) { return sameScope(requested) ? this.catalog : undefined; }
   readRound(requested: ReviewScopeDto, idValue: string) { return sameScope(requested) ? this.rounds.get(idValue) : undefined; }
@@ -115,6 +117,9 @@ class MemoryReviewStore implements
       : [];
   }
   readAssignment(requested: ReviewScopeDto, idValue: string) { return sameScope(requested) ? this.assignments.get(idValue) : undefined; }
+  readVacancyResolution(requested: ReviewScopeDto, assignmentId: string) {
+    return sameScope(requested) ? this.vacancyResolutions.get(assignmentId) : undefined;
+  }
   readDraft(requested: ReviewScopeDto, assignmentId: string) { return sameScope(requested) ? this.drafts.get(assignmentId) : undefined; }
   readReviewHead(requested: ReviewScopeDto, assignmentId: string) { return sameScope(requested) ? this.heads.get(assignmentId) : undefined; }
   readRevision(requested: ReviewScopeDto, revisionId: string) { return sameScope(requested) ? this.revisions.get(revisionId) : undefined; }
@@ -170,6 +175,14 @@ class MemoryReviewStore implements
   updateAssignment(input: { before: ReviewAssignmentDto; after: ReviewAssignmentDto }) {
     expect(this.assignments.get(input.before.id)?.version).toBe(input.before.version);
     this.assignments.set(input.after.id, input.after);
+  }
+  resolveVacancy(input: {
+    resolution: ReviewVacancyResolutionDto;
+    replacement?: ReviewAssignmentDto;
+  }) {
+    expect(this.vacancyResolutions.has(input.resolution.vacatedAssignmentId)).toBe(false);
+    if (input.replacement) this.assignments.set(input.replacement.id, input.replacement);
+    this.vacancyResolutions.set(input.resolution.vacatedAssignmentId, input.resolution);
   }
   saveDraft(input: { expectedVersion: number | null; draft: ReviewDraftDto }) {
     expect(this.drafts.get(input.draft.assignmentId)?.version ?? null).toBe(input.expectedVersion);
@@ -398,10 +411,20 @@ describe('review core', () => {
     });
     expect(organizer.plans[0]?.reviewers.find((row) =>
       row.reviewerId === reviewerGeneralist
-    )?.uncovered).toEqual([{
+    )?.uncovered).toMatchObject([{
+      assignmentId: assignment.id,
+      assignmentVersion: 2,
+      roundId,
       submissionId: candidateB,
       title: 'A second proposal',
-      remainingReviewers: 0
+      remainingReviewers: 0,
+      replacementCandidates: [{
+        reviewerId: reviewerTrack,
+        displayName: 'Track reviewer',
+        assigned: 1,
+        scopeMatch: false,
+        conflict: 'Outside this reviewer’s current scope'
+      }]
     }]);
     const reviewer = projectReviewSnapshot({
       scope, viewer: { kind: 'reviewer', reviewerId: reviewerGeneralist },
@@ -417,5 +440,91 @@ describe('review core', () => {
       action: 'discard_empty_round', scope, roundId, expectedRoundVersion: 1,
       attributedByUserId: actorUserId, attributedAt: at(4)
     }, { repository: store, sources: store })).toThrow('round_has_work');
+  });
+
+  test('resolves one stepped-back slot by replacement without changing the round denominator', () => {
+    const store = new MemoryReviewStore();
+    openRound(store);
+    const vacancy = assignmentFor(store, reviewerGeneralist, candidateB);
+    const stepped = planReviewMutation({
+      action: 'step_back', scope, assignmentId: vacancy.id,
+      expectedAssignmentVersion: vacancy.version, reviewerId: reviewerGeneralist,
+      attributedByUserId: actorUserId, attributedAt: at(2)
+    }, { repository: store, sources: store });
+    applyReviewMutationPlan({ plan: stepped, transaction: store, sources: store });
+
+    const replacementReviewerId = id(23);
+    store.rosterSet = {
+      version: 3,
+      reviewers: [...reviewers, {
+        reviewerId: replacementReviewerId,
+        version: 1,
+        status: 'active',
+        displayName: 'Low load reviewer',
+        scope: []
+      }]
+    };
+    const replacement = planReviewMutation({
+      action: 'assign_replacement', scope, assignmentId: vacancy.id,
+      expectedAssignmentVersion: 2,
+      replacementAssignmentId: id(250),
+      replacementReviewerId,
+      attributedByUserId: actorUserId,
+      attributedAt: at(3)
+    }, { repository: store, sources: store });
+    expect(projectReviewSafeDiff(replacement)).toEqual({
+      action: 'assign_replacement',
+      assignmentId: vacancy.id,
+      submissionId: candidateB,
+      replacementReviewerId
+    });
+    applyReviewMutationPlan({ plan: replacement, transaction: store, sources: store });
+
+    const snapshot = projectReviewSnapshot({
+      scope, viewer: { kind: 'organizer' },
+      environment: { repository: store, sources: store, candidateDisplay: store }
+    });
+    expect(snapshot.plans[0]).toMatchObject({ done: 0, total: 3 });
+    expect(snapshot.plans[0]?.reviewers.find((row) => row.reviewerId === reviewerGeneralist))
+      .toMatchObject({ assigned: 1, steppedBack: 1, awaitingReassignment: 0 });
+    expect(snapshot.plans[0]?.reviewers.find((row) => row.reviewerId === replacementReviewerId))
+      .toMatchObject({ assigned: 1, steppedBack: 0, awaitingReassignment: 0 });
+    expect(() => planReviewMutation({
+      action: 'accept_coverage', scope, assignmentId: vacancy.id,
+      expectedAssignmentVersion: 2,
+      attributedByUserId: actorUserId,
+      attributedAt: at(4)
+    }, { repository: store, sources: store })).toThrow('vacancy_resolved');
+  });
+
+  test('accepts thin coverage as an explicit retained act and retires only that slot', () => {
+    const store = new MemoryReviewStore();
+    openRound(store);
+    const vacancy = assignmentFor(store, reviewerTrack, candidateA);
+    const stepped = planReviewMutation({
+      action: 'step_back', scope, assignmentId: vacancy.id,
+      expectedAssignmentVersion: vacancy.version, reviewerId: reviewerTrack,
+      attributedByUserId: actorUserId, attributedAt: at(2)
+    }, { repository: store, sources: store });
+    applyReviewMutationPlan({ plan: stepped, transaction: store, sources: store });
+    const accepted = planReviewMutation({
+      action: 'accept_coverage', scope, assignmentId: vacancy.id,
+      expectedAssignmentVersion: 2,
+      attributedByUserId: actorUserId,
+      attributedAt: at(3)
+    }, { repository: store, sources: store });
+    applyReviewMutationPlan({ plan: accepted, transaction: store, sources: store });
+    expect(store.vacancyResolutions.get(vacancy.id)).toMatchObject({
+      kind: 'coverage_accepted',
+      vacatedAssignmentId: vacancy.id,
+      resolvedByUserId: actorUserId
+    });
+    const snapshot = projectReviewSnapshot({
+      scope, viewer: { kind: 'organizer' },
+      environment: { repository: store, sources: store, candidateDisplay: store }
+    });
+    expect(snapshot.plans[0]).toMatchObject({ done: 0, total: 2 });
+    expect(snapshot.plans[0]?.reviewers.find((row) => row.reviewerId === reviewerTrack))
+      .toMatchObject({ assigned: 0, steppedBack: 1, awaitingReassignment: 0 });
   });
 });

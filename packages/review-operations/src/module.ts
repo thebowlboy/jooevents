@@ -161,13 +161,17 @@ export const reviewCanonicalChangedDetailSchema = z.strictObject({
     'wrong_scope', 'stale_catalog', 'open_round_exists', 'no_assignments',
     'assignment_seed_mismatch', 'deadline_missing', 'round_missing', 'stale_round',
     'round_not_open', 'round_has_work', 'assignment_missing', 'stale_assignment',
-    'assignment_not_active', 'not_assigned_reviewer', 'draft_missing', 'stale_draft',
+    'assignment_not_active', 'not_assigned_reviewer', 'vacancy_resolved',
+    'replacement_reviewer_missing', 'replacement_reviewer_not_active',
+    'replacement_reviewer_out_of_scope', 'replacement_reviewer_already_assigned',
+    'draft_missing', 'stale_draft',
     'review_exists', 'review_missing', 'stale_review', 'revision_missing',
     'invalid_scores', 'candidate_query_changed', 'reviewer_query_changed',
     'deadline_changed', 'invalid_plan'
   ]),
   action: z.enum([
-    'open_round', 'discard_empty_round', 'step_back', 'commit_review', 'amend_review'
+    'open_round', 'discard_empty_round', 'step_back', 'assign_replacement',
+    'accept_coverage', 'commit_review', 'amend_review'
   ]),
   subjectId: z.string().trim().min(1).max(512)
 });

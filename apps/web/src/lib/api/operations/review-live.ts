@@ -14,6 +14,7 @@ import {
 	reviewSnapshotReadInputSchema,
 	reviewSnapshotReadResultSchema,
 	reviewStepBackChangeDraftInputSchema,
+	reviewVacancyChangeDraftInputSchema,
 	type ReviewDraftSaveResult,
 	type ReviewMutationResult,
 	type ReviewRoundSetupProjection,
@@ -36,7 +37,8 @@ import type {
 	ReviewIdempotencyKey,
 	ReviewRoundChangeRequest,
 	ReviewSnapshotRequest,
-	ReviewStepBackRequest
+	ReviewStepBackRequest,
+	ReviewVacancyChangeRequest
 } from '../review-core-port';
 import type {
 	ReviewDraftSaveView,
@@ -90,6 +92,15 @@ export const REVIEW_LIVE_OPERATIONS = Object.freeze({
 		idempotencyRequired: true,
 		path: '/api/events/current/review/assignments/step-back'
 	} as const),
+	vacancy_change: Object.freeze({
+		name: 'review.assignment.vacancy.change',
+		version: 1,
+		effect: 'commit',
+		method: 'POST',
+		input: 'body',
+		idempotencyRequired: true,
+		path: '/api/events/current/review/assignments/vacancy'
+	} as const),
 	evaluation_change: Object.freeze({
 		name: 'review.evaluation.change',
 		version: 1,
@@ -129,6 +140,10 @@ const EXPECTED_OPERATIONS = Object.freeze({
 	step_back: Object.freeze({
 		...REVIEW_LIVE_OPERATIONS.step_back,
 		...REVIEW_OPERATION_SCHEMA_REFS.stepBack
+	}),
+	vacancy_change: Object.freeze({
+		...REVIEW_LIVE_OPERATIONS.vacancy_change,
+		...REVIEW_OPERATION_SCHEMA_REFS.vacancyChange
 	}),
 	evaluation_change: Object.freeze({
 		...REVIEW_LIVE_OPERATIONS.evaluation_change,
@@ -199,6 +214,7 @@ function resolveBindings(manifest: unknown): Bindings {
 		round_setup: resolveExactBinding(manifest, EXPECTED_OPERATIONS.round_setup),
 		round_change: resolveExactBinding(manifest, EXPECTED_OPERATIONS.round_change),
 		step_back: resolveExactBinding(manifest, EXPECTED_OPERATIONS.step_back),
+		vacancy_change: resolveExactBinding(manifest, EXPECTED_OPERATIONS.vacancy_change),
 		evaluation_change: resolveExactBinding(manifest, EXPECTED_OPERATIONS.evaluation_change),
 		evaluation_draft_save: resolveExactBinding(manifest, EXPECTED_OPERATIONS.evaluation_draft_save)
 	});
@@ -302,7 +318,7 @@ export function createReviewLivePort(input: {
 
 	async function effect<Input, Data, View>(options: {
 		readonly operation: Extract<ReviewCoreOperation,
-			'round_change' | 'step_back' | 'evaluation_change' | 'evaluation_draft_save'>;
+			'round_change' | 'step_back' | 'vacancy_change' | 'evaluation_change' | 'evaluation_draft_save'>;
 		readonly rawInput: Input;
 		readonly inputSchema: z.ZodType;
 		readonly idempotencyKey: ReviewIdempotencyKey;
@@ -411,6 +427,23 @@ export function createReviewLivePort(input: {
 				operation: 'step_back',
 				rawInput,
 				inputSchema: reviewStepBackChangeDraftInputSchema,
+				idempotencyKey,
+				resultSchema: reviewDirectOperationResultSchema,
+				expectedAction: rawInput.action,
+				map: (data) => data,
+				...(options.signal ? { signal: options.signal } : {})
+			});
+		},
+
+		changeVacancy(
+			rawInput: ReviewVacancyChangeRequest,
+			idempotencyKey: ReviewIdempotencyKey,
+			options: { readonly signal?: AbortSignal } = {}
+		): Promise<ReviewCoreEffectResult<ReviewMutationResult>> {
+			return effect<ReviewVacancyChangeRequest, ReviewMutationResult, ReviewMutationResult>({
+				operation: 'vacancy_change',
+				rawInput,
+				inputSchema: reviewVacancyChangeDraftInputSchema,
 				idempotencyKey,
 				resultSchema: reviewDirectOperationResultSchema,
 				expectedAction: rawInput.action,

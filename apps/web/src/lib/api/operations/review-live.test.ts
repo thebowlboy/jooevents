@@ -11,7 +11,8 @@ const criterion = { id: id(5), key: 'overall', label: 'Overall', position: 0,
 	weightBps: 10_000, scaleMin: 1, scaleMax: 5 };
 const refs = Object.freeze({ snapshot: REVIEW_OPERATION_SCHEMA_REFS.snapshotRead,
 	round_setup: REVIEW_OPERATION_SCHEMA_REFS.roundSetupRead, round_change: REVIEW_OPERATION_SCHEMA_REFS.roundChange,
-	step_back: REVIEW_OPERATION_SCHEMA_REFS.stepBack, evaluation_change: REVIEW_OPERATION_SCHEMA_REFS.evaluationChange,
+	step_back: REVIEW_OPERATION_SCHEMA_REFS.stepBack, vacancy_change: REVIEW_OPERATION_SCHEMA_REFS.vacancyChange,
+	evaluation_change: REVIEW_OPERATION_SCHEMA_REFS.evaluationChange,
 	evaluation_draft_save: REVIEW_OPERATION_SCHEMA_REFS.draftSave });
 type Key = keyof typeof REVIEW_LIVE_OPERATIONS;
 function entry(key: Key): SafeOperationManifestEntry {
@@ -48,14 +49,27 @@ const head = { schemaVersion: 1, scope, assignmentId: id(20), version: 1, curren
 const revision = { schemaVersion: 1, scope, id: id(30), assignmentId: id(20), revisionNumber: 1,
 	scores: [{ criterionId: id(5), score: 4 }], weightedScore: 4, comment: 'Good',
 	committedByReviewerId: id(22), committedByUserId: id(22), committedAt: '2027-03-02T00:00:00.000Z', postUnlock: false };
-function direct(action: 'open_round' | 'discard_empty_round' | 'step_back' | 'commit_review' | 'amend_review') {
+const replacement = { ...assignment, id: id(23), reviewerId: id(24), version: 1,
+	state: 'assigned' as const, assignedAt: '2027-03-03T00:00:00.000Z' };
+delete (replacement as { steppedBackAt?: string }).steppedBackAt;
+delete (replacement as { steppedBackByUserId?: string }).steppedBackByUserId;
+const replacementResolution = { schemaVersion: 1, scope, kind: 'replacement' as const,
+	vacatedAssignmentId: id(20), replacementAssignmentId: id(23), replacementReviewerId: id(24),
+	resolvedByUserId: id(12), resolvedAt: '2027-03-03T00:00:00.000Z' };
+const acceptedResolution = { schemaVersion: 1, scope, kind: 'coverage_accepted' as const,
+	vacatedAssignmentId: id(20), resolvedByUserId: id(12), resolvedAt: '2027-03-03T00:00:00.000Z' };
+function direct(action: 'open_round' | 'discard_empty_round' | 'step_back' | 'assign_replacement' | 'accept_coverage' | 'commit_review' | 'amend_review') {
 	const data = action === 'open_round' ? { action, round: round('open'), assignmentCount: 2 }
 		: action === 'discard_empty_round' ? { action, round: round('discarded') }
 			: action === 'step_back' ? { action, assignment }
+				: action === 'assign_replacement' ? { action, resolution: replacementResolution, replacement }
+					: action === 'accept_coverage' ? { action, resolution: acceptedResolution }
 				: { action, head, revision };
 	return reviewDirectOperationResultSchema.parse({ kind: 'success', data,
 		receipt: { id: id(40), operationName: action === 'open_round' || action === 'discard_empty_round'
-			? 'review.round.change' : action === 'step_back' ? 'review.assignment.step_back' : 'review.evaluation.change',
+			? 'review.round.change' : action === 'step_back' ? 'review.assignment.step_back'
+				: action === 'assign_replacement' || action === 'accept_coverage'
+					? 'review.assignment.vacancy.change' : 'review.evaluation.change',
 			operationVersion: 1 }, correlationId });
 }
 
@@ -66,6 +80,7 @@ describe('Review direct live port', () => {
 			if (typeof input.body !== 'object' || input.body === null || !('action' in input.body)) throw new Error('action_missing');
 			const action = input.body.action;
 			if (action !== 'open_round' && action !== 'discard_empty_round' && action !== 'step_back'
+				&& action !== 'assign_replacement' && action !== 'accept_coverage'
 				&& action !== 'commit_review' && action !== 'amend_review') throw new Error('action_invalid');
 			return { kind: 'success', data: direct(action) }; };
 		const port = createReviewLivePort({ manifest: manifest(), request });
@@ -73,6 +88,9 @@ describe('Review direct live port', () => {
 			port.changeRound({ action: 'open_round', deadlineDate: '2027-03-20', anonymized: true }, 'review-open-key'),
 			port.changeRound({ action: 'discard_empty_round', roundId: id(10), expectedRoundVersion: 2 }, 'review-discard-key'),
 			port.stepBack({ action: 'step_back', assignmentId: id(20), expectedAssignmentVersion: 2 }, 'review-step-key'),
+			port.changeVacancy!({ action: 'assign_replacement', assignmentId: id(20), expectedAssignmentVersion: 3,
+				replacementReviewerId: id(24) }, 'review-replace-key'),
+			port.changeVacancy!({ action: 'accept_coverage', assignmentId: id(20), expectedAssignmentVersion: 3 }, 'review-accept-key'),
 			port.changeEvaluation({ action: 'commit_review', assignmentId: id(20), expectedAssignmentVersion: 2,
 				expectedDraftVersion: 1 }, 'review-commit-key'),
 			port.changeEvaluation({ action: 'amend_review', assignmentId: id(20), expectedAssignmentVersion: 2,
@@ -85,6 +103,8 @@ describe('Review direct live port', () => {
 			{ path: '/api/events/current/review/rounds', idempotencyKey: 'review-open-key' },
 			{ path: '/api/events/current/review/rounds', idempotencyKey: 'review-discard-key' },
 			{ path: '/api/events/current/review/assignments/step-back', idempotencyKey: 'review-step-key' },
+			{ path: '/api/events/current/review/assignments/vacancy', idempotencyKey: 'review-replace-key' },
+			{ path: '/api/events/current/review/assignments/vacancy', idempotencyKey: 'review-accept-key' },
 			{ path: '/api/events/current/review/evaluations', idempotencyKey: 'review-commit-key' },
 			{ path: '/api/events/current/review/evaluations', idempotencyKey: 'review-amend-key' }
 		]);

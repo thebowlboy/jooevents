@@ -479,9 +479,13 @@ export interface SubmissionPage {
  * real computation lands.
  */
 export interface UncoveredReview {
+	assignmentId?: string;
+	assignmentVersion?: number;
+	roundId?: string;
 	submissionId: string;
 	title: string;
 	remainingReviewers?: number;
+	replacementCandidates?: readonly ReviewReplacementCandidate[];
 	/**
 	 * How much reviewing the submission has actually banked: `committed` reviews
 	 * in, out of the `planned` reviewers it was handed to, the vacated slot
@@ -494,6 +498,14 @@ export interface UncoveredReview {
 	 * claim rather than implying the submission has nothing in.
 	 */
 	reviewsIn?: { committed: number; planned: number };
+}
+
+export interface ReviewReplacementCandidate {
+	reviewerId: string;
+	displayName?: string;
+	assigned: number;
+	scopeMatch: boolean;
+	conflict?: string;
 }
 
 export interface ReviewerProgress {

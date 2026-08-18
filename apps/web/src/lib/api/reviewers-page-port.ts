@@ -17,6 +17,15 @@ export interface ReviewersPagePort {
 			scope?: ScopeRef[]
 		): Promise<ReviewerInviteLine[]>;
 		setScope(id: string, scope: ScopeRef[]): Promise<MutationOutcome>;
+		assignReplacement(input: {
+			assignmentId: string;
+			expectedAssignmentVersion: number;
+			reviewerId: string;
+		}): Promise<MutationOutcome>;
+		acceptCoverage(input: {
+			assignmentId: string;
+			expectedAssignmentVersion: number;
+		}): Promise<MutationOutcome>;
 		remove(id: string): Promise<MutationOutcome>;
 		restore(id: string): Promise<void>;
 	};

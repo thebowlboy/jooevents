@@ -9,6 +9,8 @@ import {
 } from '@jooevents/kernel';
 import {
   REVIEW_DRAFT_SAVE_REQUEST_HASH_PROFILE,
+  REVIEW_ASSIGNMENT_VACANCY_CHANGE_OPERATION,
+  REVIEW_DIRECT_REQUEST_HASH_PROFILE,
   REVIEW_EVALUATE_ACCESS_POLICY,
   REVIEW_EVALUATION_DRAFT_SAVE_OPERATION,
   REVIEW_MANAGE_ACCESS_POLICY,
@@ -16,6 +18,7 @@ import {
   REVIEW_SNAPSHOT_ACCESS_POLICY,
   REVIEW_SNAPSHOT_READ_OPERATION,
   REVIEW_STEP_BACK_ACCESS_POLICY,
+  createReviewDirectOperationModule,
   createReviewOperationModule,
   reviewOpenRoundVisibilityPolicy,
   reviewSnapshotCanonicalResultSchema
@@ -99,6 +102,57 @@ describe('Review operation module', () => {
     expect(registry.operatorHttpEffectBindings.map((binding) => binding.path)).toEqual([
       '/api/events/current/review/evaluation-draft'
     ]);
+  });
+
+  test('registers the organizer vacancy operation as a direct audited POST', async () => {
+    const module = createReviewDirectOperationModule({
+      workspaceId,
+      policies: {
+        manage: REVIEW_MANAGE_ACCESS_POLICY,
+        stepBack: REVIEW_STEP_BACK_ACCESS_POLICY,
+        evaluate: REVIEW_EVALUATE_ACCESS_POLICY
+      },
+      currentAuthority: {
+        resolve: () => Object.freeze({ kind: 'denied' as const, reason: 'missing' as const })
+      },
+      currentEvent: { resolveCurrentEvent: () => ({ evidenceIds: ['event.none'] }) },
+      clock: { now: () => parseInstant('2026-08-13T12:00:00.000Z') },
+      ids: { newInvocationId: () => parseInvocationId(crypto.randomUUID()) },
+      authorityPrincipalKeyProfile: profile,
+      scopePartitionProfile: profile,
+      requestCanonicalizationProfile: profile,
+      requestHashSealer: createHmacRequestHashSealer({
+        profile: REVIEW_DIRECT_REQUEST_HASH_PROFILE,
+        keyBytes: new Uint8Array(32).fill(0x73)
+      }),
+      idempotencyCredentialProfile: profile,
+      idempotencyCredentialSealer: {
+        seal(raw) {
+          return {
+            verifierProfile: profile,
+            verifierSha256: createHash('sha256').update(`review-direct:${raw}`).digest('hex')
+          };
+        }
+      }
+    });
+    const registry = await createOperationRegistry(module.source);
+    expect(registry.operatorHttpEffectBindings.find(
+      (binding) => binding.operationName === REVIEW_ASSIGNMENT_VACANCY_CHANGE_OPERATION.name
+    )).toMatchObject({
+      operationName: REVIEW_ASSIGNMENT_VACANCY_CHANGE_OPERATION.name,
+      operationVersion: 1,
+      method: 'POST',
+      path: '/api/events/current/review/assignments/vacancy',
+      input: 'body'
+    });
+    expect(module.source.effectOperations?.find(
+      (operation) => operation.name === REVIEW_ASSIGNMENT_VACANCY_CHANGE_OPERATION.name
+    )).toMatchObject({
+      effect: 'commit',
+      consequenceTags: ['review-changed'],
+      execution: { profile: 'direct_audited' },
+      audit: { mode: 'required' }
+    });
   });
 
   test('expands anonymized to the canonical visibility axes', () => {

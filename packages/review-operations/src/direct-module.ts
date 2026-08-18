@@ -12,7 +12,8 @@ import { createSafeSchemaManifestRef, structuredOutcomeSchema, type StructuredOu
 import {
   REVIEW_OPERATION_SCHEMA_REFS, reviewDirectCanonicalResultSchema, reviewDirectOperationResultSchema,
   reviewEvaluationChangeDraftInputSchema, reviewMutationPlanSchema, reviewMutationResultSchema,
-  reviewRoundChangeDraftInputSchema, reviewStepBackChangeDraftInputSchema
+  reviewRoundChangeDraftInputSchema, reviewStepBackChangeDraftInputSchema,
+  reviewVacancyChangeDraftInputSchema
 } from '@jooevents/contracts/reviews';
 import {
   CURRENT_AUTHORITY_DENIAL_REASONS, parseOperationAccessLane,
@@ -25,12 +26,13 @@ import { createReviewDirectHandler, type ReviewDirectAction } from './direct-pre
 
 export const REVIEW_ROUND_CHANGE_OPERATION = Object.freeze({ name: 'review.round.change', version: 1 });
 export const REVIEW_ASSIGNMENT_STEP_BACK_OPERATION = Object.freeze({ name: 'review.assignment.step_back', version: 1 });
+export const REVIEW_ASSIGNMENT_VACANCY_CHANGE_OPERATION = Object.freeze({ name: 'review.assignment.vacancy.change', version: 1 });
 export const REVIEW_EVALUATION_CHANGE_OPERATION = Object.freeze({ name: 'review.evaluation.change', version: 1 });
 export const REVIEW_DIRECT_HANDLER_CAPABILITY = ref('capability.review.direct');
 export const REVIEW_DIRECT_REQUEST_HASH_PROFILE = ref('request-hash.review.direct');
 
 const nullSchema = z.null();
-const staleSchema = z.strictObject({ code: z.string().trim().min(1).max(80), action: z.enum(['open_round', 'discard_empty_round', 'step_back', 'commit_review', 'amend_review']), subjectId: z.string().trim().min(1).max(512) });
+const staleSchema = z.strictObject({ code: z.string().trim().min(1).max(80), action: z.enum(['open_round', 'discard_empty_round', 'step_back', 'assign_replacement', 'accept_coverage', 'commit_review', 'amend_review']), subjectId: z.string().trim().min(1).max(512) });
 export const reviewDirectContributionSchema = z.union([
   z.strictObject({ result: z.strictObject({ kind: z.literal('success'), data: reviewMutationResultSchema }), domain: z.strictObject({ kind: z.literal('review_direct_change'), plan: reviewMutationPlanSchema }), effectContributions: z.tuple([]) }).superRefine((value, context) => {
     if (value.result.data.action !== value.domain.plan.action) context.addIssue({ code: 'custom', message: 'Review action mismatch.' });
@@ -53,6 +55,7 @@ const refs = {
 const specs = Object.freeze([
   { key: 'round' as const, operation: REVIEW_ROUND_CHANGE_OPERATION, input: reviewRoundChangeDraftInputSchema, inputRef: REVIEW_OPERATION_SCHEMA_REFS.roundChange.inputSchema, path: '/api/events/current/review/rounds', policy: 'manage' as const, permissions: ['event.manage'] as readonly PermissionId[], actions: ['open_round', 'discard_empty_round'] as readonly ReviewDirectAction[] },
   { key: 'assignment' as const, operation: REVIEW_ASSIGNMENT_STEP_BACK_OPERATION, input: reviewStepBackChangeDraftInputSchema, inputRef: REVIEW_OPERATION_SCHEMA_REFS.stepBack.inputSchema, path: '/api/events/current/review/assignments/step-back', policy: 'stepBack' as const, permissions: ['submission.score'] as readonly PermissionId[], actions: ['step_back'] as readonly ReviewDirectAction[] },
+  { key: 'vacancy' as const, operation: REVIEW_ASSIGNMENT_VACANCY_CHANGE_OPERATION, input: reviewVacancyChangeDraftInputSchema, inputRef: REVIEW_OPERATION_SCHEMA_REFS.vacancyChange.inputSchema, path: '/api/events/current/review/assignments/vacancy', policy: 'manage' as const, permissions: ['event.manage'] as readonly PermissionId[], actions: ['assign_replacement', 'accept_coverage'] as readonly ReviewDirectAction[] },
   { key: 'evaluation' as const, operation: REVIEW_EVALUATION_CHANGE_OPERATION, input: reviewEvaluationChangeDraftInputSchema, inputRef: REVIEW_OPERATION_SCHEMA_REFS.evaluationChange.inputSchema, path: '/api/events/current/review/evaluations', policy: 'evaluate' as const, permissions: ['submission.comment', 'submission.score'] as readonly PermissionId[], actions: ['commit_review', 'amend_review'] as readonly ReviewDirectAction[] }
 ]);
 
@@ -93,7 +96,7 @@ export function createReviewDirectOperationModule(input: CreateReviewDirectOpera
     return { spec, local, lane, context, family, terminal, phase, autonomy, risk, evidence, approval, preflight };
   });
   const handler = createReviewDirectHandler({ reference: refs.handler, handlerCapability: REVIEW_DIRECT_HANDLER_CAPABILITY, contributionSchema: refs.contribution, canonicalResultSchema: refs.canonical, actionForOperation(name, version, businessInput) { const spec = specs.find((candidate) => candidate.operation.name === name && candidate.operation.version === version); if (!spec) return undefined; const action = (businessInput as { action?: unknown })?.action; return typeof action === 'string' && spec.actions.includes(action as ReviewDirectAction) ? action as ReviewDirectAction : undefined; } });
-  const history = Object.freeze({ open_round: 'Opened a review round', discard_empty_round: 'Discarded an empty review round', step_back: 'Stepped back a review assignment', commit_review: 'Submitted a review', amend_review: 'Amended a review' });
+  const history = Object.freeze({ open_round: 'Opened a review round', discard_empty_round: 'Discarded an empty review round', step_back: 'Stepped back a review assignment', assign_replacement: 'Assigned a replacement reviewer', accept_coverage: 'Accepted current review coverage', commit_review: 'Submitted a review', amend_review: 'Amended a review' });
   return Object.freeze({ id: 'review.direct-operations', source: Object.freeze({
     contextBuilders: Object.freeze([]), readCapabilities: Object.freeze([]), handlers: Object.freeze([]), operations: Object.freeze([]),
     effectExecutionFamilies: Object.freeze(built.map((v) => v.family)), effectPhases: Object.freeze(built.map((v) => v.phase)), terminalizationResolvers: Object.freeze(built.map((v) => v.terminal)), riskResolvers: Object.freeze(built.map((v) => v.risk)), autonomyEvidenceResolvers: Object.freeze(built.map((v) => v.evidence)), renewedApprovalResolvers: Object.freeze(built.map((v) => v.approval)), autonomyPreflights: Object.freeze(built.map((v) => v.preflight)), autonomyPolicies: Object.freeze(built.map((v) => v.autonomy)),

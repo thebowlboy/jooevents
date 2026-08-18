@@ -190,6 +190,29 @@ export const reviewAssignmentSchema = z.discriminatedUnion('state', [
   })
 ]);
 
+const vacancyResolutionCommon = {
+  schemaVersion: z.literal(1),
+  scope: reviewScopeSchema,
+  vacatedAssignmentId: reviewIdSchema,
+  resolvedByUserId: reviewIdSchema,
+  resolvedAt: reviewInstantSchema
+} as const;
+
+/**
+ * One immutable answer to one stepped-back review slot. Replacement creates a
+ * new assignment while retaining the vacated assignment; accepting coverage
+ * retires the slot without pretending that another review was committed.
+ */
+export const reviewVacancyResolutionSchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    ...vacancyResolutionCommon,
+    kind: z.literal('replacement'),
+    replacementAssignmentId: reviewIdSchema,
+    replacementReviewerId: reviewIdSchema
+  }),
+  z.strictObject({ ...vacancyResolutionCommon, kind: z.literal('coverage_accepted') })
+]);
+
 export const reviewDraftSchema = z.strictObject({
   schemaVersion: z.literal(1),
   scope: reviewScopeSchema,
@@ -286,10 +309,23 @@ export const reviewAmendPlanningInputSchema = z.strictObject({
   scores: reviewCriterionScoresSchema, comment: z.string().max(20_000),
   ...attributionFields
 });
+export const reviewAssignReplacementPlanningInputSchema = z.strictObject({
+  action: z.literal('assign_replacement'), scope: reviewScopeSchema,
+  assignmentId: reviewIdSchema, expectedAssignmentVersion: reviewVersionSchema,
+  replacementAssignmentId: reviewIdSchema, replacementReviewerId: reviewIdSchema,
+  ...attributionFields
+});
+export const reviewAcceptCoveragePlanningInputSchema = z.strictObject({
+  action: z.literal('accept_coverage'), scope: reviewScopeSchema,
+  assignmentId: reviewIdSchema, expectedAssignmentVersion: reviewVersionSchema,
+  ...attributionFields
+});
 export const reviewMutationPlanningInputSchema = z.discriminatedUnion('action', [
   reviewOpenRoundPlanningInputSchema,
   reviewDiscardRoundPlanningInputSchema,
   reviewStepBackPlanningInputSchema,
+  reviewAssignReplacementPlanningInputSchema,
+  reviewAcceptCoveragePlanningInputSchema,
   reviewCommitPlanningInputSchema,
   reviewAmendPlanningInputSchema
 ]);
@@ -335,6 +371,19 @@ export const reviewStepBackPlanSchema = z.strictObject({
   action: z.literal('step_back'), input: reviewStepBackPlanningInputSchema,
   before: reviewAssignmentSchema, after: reviewAssignmentSchema
 });
+export const reviewAssignReplacementPlanSchema = z.strictObject({
+  action: z.literal('assign_replacement'), input: reviewAssignReplacementPlanningInputSchema,
+  before: reviewAssignmentSchema,
+  resolution: reviewVacancyResolutionSchema,
+  replacement: reviewAssignmentSchema,
+  candidateGuard: reviewQueryGuardSchema,
+  reviewerGuard: reviewQueryGuardSchema
+});
+export const reviewAcceptCoveragePlanSchema = z.strictObject({
+  action: z.literal('accept_coverage'), input: reviewAcceptCoveragePlanningInputSchema,
+  before: reviewAssignmentSchema,
+  resolution: reviewVacancyResolutionSchema
+});
 export const reviewCommitPlanSchema = z.strictObject({
   action: z.literal('commit_review'), input: reviewCommitPlanningInputSchema,
   assignment: reviewAssignmentSchema, draft: reviewDraftSchema,
@@ -349,6 +398,8 @@ export const reviewMutationPlanSchema = z.discriminatedUnion('action', [
   reviewOpenRoundPlanSchema,
   reviewDiscardRoundPlanSchema,
   reviewStepBackPlanSchema,
+  reviewAssignReplacementPlanSchema,
+  reviewAcceptCoveragePlanSchema,
   reviewCommitPlanSchema,
   reviewAmendPlanSchema
 ]);
@@ -364,6 +415,11 @@ export const reviewSafeDiffSchema = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('discard_empty_round'), roundId: reviewIdSchema, roundName: z.string() }),
   z.strictObject({ action: z.literal('step_back'), assignmentId: reviewIdSchema, submissionId: reviewIdSchema }),
   z.strictObject({
+    action: z.literal('assign_replacement'), assignmentId: reviewIdSchema,
+    submissionId: reviewIdSchema, replacementReviewerId: reviewIdSchema
+  }),
+  z.strictObject({ action: z.literal('accept_coverage'), assignmentId: reviewIdSchema, submissionId: reviewIdSchema }),
+  z.strictObject({
     action: z.literal('commit_review'), assignmentId: reviewIdSchema, submissionId: reviewIdSchema,
     weightedScore: z.number().min(1).max(5), commentPresent: z.boolean()
   }),
@@ -378,6 +434,11 @@ export const reviewMutationResultSchema = z.discriminatedUnion('action', [
   z.strictObject({ action: z.literal('open_round'), round: reviewRoundSchema, assignmentCount: z.number().int().nonnegative() }),
   z.strictObject({ action: z.literal('discard_empty_round'), round: reviewRoundSchema }),
   z.strictObject({ action: z.literal('step_back'), assignment: reviewAssignmentSchema }),
+  z.strictObject({
+    action: z.literal('assign_replacement'), resolution: reviewVacancyResolutionSchema,
+    replacement: reviewAssignmentSchema
+  }),
+  z.strictObject({ action: z.literal('accept_coverage'), resolution: reviewVacancyResolutionSchema }),
   z.strictObject({ action: z.literal('commit_review'), head: reviewHeadSchema, revision: reviewRevisionSchema }),
   z.strictObject({ action: z.literal('amend_review'), head: reviewHeadSchema, revision: reviewRevisionSchema })
 ]);
@@ -411,9 +472,19 @@ export const reviewPlanProjectionSchema = z.strictObject({
     awaitingReassignment: z.number().int().nonnegative(),
     /** Organizer-only detail behind each uncovered count; identity and contact stay absent. */
     uncovered: z.array(z.strictObject({
+      assignmentId: reviewIdSchema,
+      assignmentVersion: reviewVersionSchema,
+      roundId: reviewIdSchema,
       submissionId: reviewIdSchema,
       title: z.string().trim().min(1).max(500),
-      remainingReviewers: z.number().int().nonnegative().safe()
+      remainingReviewers: z.number().int().nonnegative().safe(),
+      replacementCandidates: z.array(z.strictObject({
+        reviewerId: reviewIdSchema,
+        displayName: z.string().trim().min(1).max(160).optional(),
+        assigned: z.number().int().nonnegative().safe(),
+        scopeMatch: z.boolean(),
+        conflict: z.string().trim().min(1).max(240).optional()
+      })).max(500)
     })).optional()
   }))
 });
@@ -494,6 +565,14 @@ export const reviewStepBackChangeDraftInputSchema = z.strictObject({
   action: z.literal('step_back'), assignmentId: reviewIdSchema,
   expectedAssignmentVersion: reviewVersionSchema
 });
+export const reviewAssignReplacementChangeDraftInputSchema = z.strictObject({
+  action: z.literal('assign_replacement'), assignmentId: reviewIdSchema,
+  expectedAssignmentVersion: reviewVersionSchema, replacementReviewerId: reviewIdSchema
+});
+export const reviewAcceptCoverageChangeDraftInputSchema = z.strictObject({
+  action: z.literal('accept_coverage'), assignmentId: reviewIdSchema,
+  expectedAssignmentVersion: reviewVersionSchema
+});
 export const reviewCommitChangeDraftInputSchema = z.strictObject({
   action: z.literal('commit_review'), assignmentId: reviewIdSchema,
   expectedAssignmentVersion: reviewVersionSchema, expectedDraftVersion: reviewVersionSchema
@@ -508,6 +587,8 @@ export const reviewChangeDraftInputSchema = z.discriminatedUnion('action', [
   reviewOpenRoundChangeDraftInputSchema,
   reviewDiscardRoundChangeDraftInputSchema,
   reviewStepBackChangeDraftInputSchema,
+  reviewAssignReplacementChangeDraftInputSchema,
+  reviewAcceptCoverageChangeDraftInputSchema,
   reviewCommitChangeDraftInputSchema,
   reviewAmendChangeDraftInputSchema
 ]);
@@ -518,6 +599,10 @@ export const reviewRoundChangeDraftInputSchema = z.discriminatedUnion('action', 
 export const reviewEvaluationChangeDraftInputSchema = z.discriminatedUnion('action', [
   reviewCommitChangeDraftInputSchema,
   reviewAmendChangeDraftInputSchema
+]);
+export const reviewVacancyChangeDraftInputSchema = z.discriminatedUnion('action', [
+  reviewAssignReplacementChangeDraftInputSchema,
+  reviewAcceptCoverageChangeDraftInputSchema
 ]);
 
 export const reviewDraftSaveInputSchema = z.strictObject({
@@ -574,6 +659,12 @@ export const REVIEW_OPERATION_SCHEMA_REFS = Object.freeze({
     resultKey: 'schema.review.direct.operator-result',
     resultSchema: reviewDirectOperationResultSchema
   }),
+  vacancyChange: createOperationSchemaManifestRefs({
+    inputKey: 'schema.review.vacancy-change.input',
+    inputSchema: reviewVacancyChangeDraftInputSchema,
+    resultKey: 'schema.review.direct.operator-result',
+    resultSchema: reviewDirectOperationResultSchema
+  }),
   evaluationChange: createOperationSchemaManifestRefs({
     inputKey: 'schema.review.evaluation-change.input',
     inputSchema: reviewEvaluationChangeDraftInputSchema,
@@ -594,6 +685,7 @@ export type ReviewCandidateSnapshotDto = z.infer<typeof reviewCandidateSnapshotS
 export type ReviewCandidateDisplayDto = z.infer<typeof reviewCandidateDisplaySchema>;
 export type ReviewRosterMemberSnapshotDto = z.infer<typeof reviewRosterMemberSnapshotSchema>;
 export type ReviewAssignmentDto = z.infer<typeof reviewAssignmentSchema>;
+export type ReviewVacancyResolutionDto = z.infer<typeof reviewVacancyResolutionSchema>;
 export type ReviewDraftDto = z.infer<typeof reviewDraftSchema>;
 export type ReviewRevisionDto = z.infer<typeof reviewRevisionSchema>;
 export type ReviewHeadDto = z.infer<typeof reviewHeadSchema>;

@@ -261,8 +261,8 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
     opened.push(upgraded);
     expect(upgraded.migration).toMatchObject({
       status: 'applied',
-      migrationId: 'e2_0009_speaker_lineup',
-      coordinate: { schemaEpoch: 2, sequence: 9 }
+      migrationId: 'e2_0010_review_vacancy_resolutions',
+      coordinate: { schemaEpoch: 2, sequence: 10 }
     });
     expect(upgraded.sqlite.query<{ slot_kind: string; item_id: string; version: number }, []>(`
       SELECT slot_kind,item_id,version FROM session_program_reference_slots
@@ -428,8 +428,8 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
     const migrated = openSQLite(path, { migrationPolicy: 'apply' });
     opened.push(migrated);
     expect(migrated.migration).toMatchObject({
-      status: 'applied', migrationId: 'e2_0009_speaker_lineup',
-      coordinate: { schemaEpoch: 2, sequence: 9 }
+      status: 'applied', migrationId: 'e2_0010_review_vacancy_resolutions',
+      coordinate: { schemaEpoch: 2, sequence: 10 }
     });
     expect(migrated.sqlite.query<{ readonly expires_at_ms: number | null }, [string]>(
       'SELECT expires_at_ms FROM api_keys WHERE api_key_id = ?'

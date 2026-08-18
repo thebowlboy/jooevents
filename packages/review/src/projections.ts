@@ -17,6 +17,7 @@ import {
 } from '@jooevents/contracts/reviews';
 import {
   expectedReviewAssignmentPairs,
+  reviewerCoversCandidate,
   weightedReviewScore
 } from './domain';
 import {
@@ -79,6 +80,17 @@ export function projectReviewPlans(input: {
   const rosterById = new Map(roster.reviewers.map((reviewer) => [reviewer.reviewerId, reviewer]));
   return Object.freeze(catalog.rounds.filter((round) => round.state !== 'discarded').map((round) => {
     const assignments = input.environment.repository.listAssignments(scope, round.id);
+    const resolutionByAssignment = new Map(assignments.map((assignment) => [
+      assignment.id,
+      input.environment.repository.readVacancyResolution?.(scope, assignment.id)
+    ]));
+    const isUnresolved = (assignment: (typeof assignments)[number]) =>
+      assignment.state === 'stepped_back' && resolutionByAssignment.get(assignment.id) === undefined;
+    const isEffective = (assignment: (typeof assignments)[number]) =>
+      assignment.state === 'assigned' || isUnresolved(assignment);
+    const effectiveLoad = (reviewerId: string) => assignments.filter((assignment) =>
+      assignment.reviewerId === reviewerId && isEffective(assignment)
+    ).length;
     const reviewerIds = [...new Set(assignments.map((assignment) => assignment.reviewerId))].sort();
     const allReviewers = reviewerIds.map((reviewerId) => {
       const own = assignments.filter((assignment) => assignment.reviewerId === reviewerId);
@@ -86,7 +98,7 @@ export function projectReviewPlans(input: {
         .filter((assignment) => assignment.state === 'stepped_back')
         .sort((left, right) => compareText(left.id, right.id));
       const uncovered = input.viewer.kind === 'organizer'
-        ? steppedBackAssignments.map((assignment) => {
+        ? steppedBackAssignments.filter(isUnresolved).map((assignment) => {
             const candidate = input.environment.candidateDisplay.readReviewCandidateDisplay({
               scope,
               roundId: round.id,
@@ -95,12 +107,37 @@ export function projectReviewPlans(input: {
               includeSpeakerIdentity: false
             });
             if (!candidate) throw new TypeError('review_projection_candidate_display_missing');
+            const candidateScope = input.environment.sources.readCandidate(scope, assignment.submissionId);
+            if (!candidateScope) throw new TypeError('review_projection_candidate_missing');
+            const alreadyAssigned = new Set(assignments.filter((other) =>
+              other.submissionId === assignment.submissionId
+            ).map((other) => other.reviewerId));
+            const replacementCandidates = roster.reviewers
+              .filter((reviewer) => reviewer.status === 'active' && !alreadyAssigned.has(reviewer.reviewerId))
+              .map((reviewer) => {
+                const scopeMatch = reviewerCoversCandidate(reviewer, candidateScope);
+                return {
+                  reviewerId: reviewer.reviewerId,
+                  ...(reviewer.displayName === undefined ? {} : { displayName: reviewer.displayName }),
+                  assigned: effectiveLoad(reviewer.reviewerId),
+                  scopeMatch,
+                  ...(scopeMatch ? {} : { conflict: 'Outside this reviewer’s current scope' })
+                };
+              })
+              .sort((left, right) => Number(right.scopeMatch) - Number(left.scopeMatch)
+                || left.assigned - right.assigned
+                || compareText(left.displayName ?? left.reviewerId, right.displayName ?? right.reviewerId)
+                || compareText(left.reviewerId, right.reviewerId));
             return {
+              assignmentId: assignment.id,
+              assignmentVersion: assignment.version,
+              roundId: assignment.roundId,
               submissionId: assignment.submissionId,
               title: parseReviewCandidateDisplay(candidate).title,
               remainingReviewers: assignments.filter((other) =>
                 other.submissionId === assignment.submissionId && other.state === 'assigned'
-              ).length
+              ).length,
+              replacementCandidates
             };
           })
         : undefined;
@@ -113,17 +150,18 @@ export function projectReviewPlans(input: {
             && round.visibility.peerReviewerIdentity === 'hidden')
           ? {}
           : { displayName: rosterById.get(reviewerId)!.displayName }),
-        assigned: own.length,
+        assigned: own.filter(isEffective).length,
         done: own.filter((assignment) =>
           input.environment.repository.readReviewHead(scope, assignment.id) !== undefined
         ).length,
         steppedBack,
-        // Replacement mechanics are not in this packet, so every step-back remains uncovered.
-        awaitingReassignment: steppedBack,
+        awaitingReassignment: own.filter(isUnresolved).length,
         ...(uncovered === undefined || uncovered.length === 0 ? {} : { uncovered })
       };
     });
-    const done = allReviewers.reduce((sum, reviewer) => sum + reviewer.done, 0);
+    const done = assignments.filter((assignment) => assignment.state === 'assigned'
+      && input.environment.repository.readReviewHead(scope, assignment.id) !== undefined).length;
+    const total = assignments.filter(isEffective).length;
     const viewerReviewerId = input.viewer.kind === 'reviewer'
       ? input.viewer.reviewerId
       : undefined;
@@ -145,7 +183,7 @@ export function projectReviewPlans(input: {
       anonymized: round.visibility.participantIdentity === 'hidden',
       antiAnchoring: round.visibility.peerContentUnlock === 'after_own_commit',
       done,
-      total: assignments.length,
+      total,
       reviewers
     });
   }));

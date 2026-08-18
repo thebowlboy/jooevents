@@ -2,7 +2,7 @@ import { workspaceTeamCanonicalEmailSchema, type StructuredOutcome } from '@jooe
 import type { SafeApiError } from './client';
 import type { OperatorHttpBindingUnavailableReason } from './operations/operator-http-binding';
 import type { ProgramVocabularySettingsPort } from './program-vocabulary-settings-adapter';
-import type { ReviewCorePort } from './review-core-port';
+import type { ReviewCoreEffectResult, ReviewCorePort } from './review-core-port';
 import { mapLiveReviewPlans } from './review-page-port.live';
 import type { ReviewerRosterCorePort } from './reviewer-roster-core-port';
 import { coverageRows, coverageRowsFromCounts, isGeneralist, planLoad } from './reviewers';
@@ -148,6 +148,28 @@ function changeFailure(
 				? `The ${subject} change could not reach JooEvents. Try again.`
 				: `This ${subject} change is not valid.`,
 			retryable: result.error.retryable };
+	}
+	return { code: result.outcome.kind, reason: outcomeCopy(result.outcome, subject) };
+}
+
+function reviewChangeFailure(
+	result: Exclude<ReviewCoreEffectResult<unknown>, { readonly kind: 'success' }>,
+	subject: string
+): AdapterFailure {
+	if (result.kind === 'unavailable') {
+		return { code: result.reason, reason: `The ${subject} change is not available in this live workspace.`, retryable: false };
+	}
+	if (result.kind === 'transport_error') {
+		return {
+			code: result.error.code,
+			reason: result.error.retryable
+				? `The ${subject} change could not reach JooEvents. Try again.`
+				: `This ${subject} change is not valid.`,
+			retryable: result.error.retryable
+		};
+	}
+	if (result.outcome.class === 'access_denied') {
+		return { code: result.outcome.kind, reason: `You no longer have permission to change ${subject}.` };
 	}
 	return { code: result.outcome.kind, reason: outcomeCopy(result.outcome, subject) };
 }
@@ -542,6 +564,37 @@ export function createLiveReviewersPagePort(input: {
 					if (error instanceof ReviewersPageLiveError) return { ok: false, reason: error.message };
 					throw error;
 				}
+			},
+			async assignReplacement(change): Promise<MutationOutcome> {
+				const changeVacancy = input.review.changeVacancy;
+				if (!changeVacancy) return { ok: false, reason: 'Review coverage changes are not available in this live workspace.' };
+				const result = await changeVacancy({
+					action: 'assign_replacement',
+					assignmentId: change.assignmentId,
+					expectedAssignmentVersion: change.expectedAssignmentVersion,
+					replacementReviewerId: change.reviewerId
+				}, newAttemptKey());
+				if (result.kind !== 'success') {
+					return { ok: false, reason: reviewChangeFailure(result, 'review coverage').reason };
+				}
+				return result.data.action === 'assign_replacement'
+					? { ok: true }
+					: { ok: false, reason: 'The review coverage response was not valid. Reload and try again.' };
+			},
+			async acceptCoverage(change): Promise<MutationOutcome> {
+				const changeVacancy = input.review.changeVacancy;
+				if (!changeVacancy) return { ok: false, reason: 'Review coverage changes are not available in this live workspace.' };
+				const result = await changeVacancy({
+					action: 'accept_coverage',
+					assignmentId: change.assignmentId,
+					expectedAssignmentVersion: change.expectedAssignmentVersion
+				}, newAttemptKey());
+				if (result.kind !== 'success') {
+					return { ok: false, reason: reviewChangeFailure(result, 'review coverage').reason };
+				}
+				return result.data.action === 'accept_coverage'
+					? { ok: true }
+					: { ok: false, reason: 'The review coverage response was not valid. Reload and try again.' };
 			},
 			async remove(id: string): Promise<MutationOutcome> {
 				try {

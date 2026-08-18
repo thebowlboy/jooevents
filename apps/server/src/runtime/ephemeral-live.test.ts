@@ -1115,6 +1115,10 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['POST /api/events/current/review/assignments/step-back']
       },
       {
+        name: 'review.assignment.vacancy.change', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/review/assignments/vacancy']
+      },
+      {
         name: 'review.evaluation.change', version: 1, effect: 'commit',
         bindings: ['POST /api/events/current/review/evaluations']
       },
@@ -1298,8 +1302,8 @@ describe('ephemeral live Foundation server composition', () => {
     expect(runtime.database.installedSchemaArtifacts).toEqual([]);
     expect(runtime.database.retainedBaseline).toMatchObject({
       status: 'current',
-      coordinate: { schemaEpoch: 2, sequence: 9 },
-      migrationId: 'e2_0009_speaker_lineup',
+	  coordinate: { schemaEpoch: 2, sequence: 10 },
+	  migrationId: 'e2_0010_review_vacancy_resolutions',
       databaseClass: 'ephemeral'
     });
     expect(runtime.database.sqlite.query<{ readonly name: string }, []>(`
@@ -3704,20 +3708,87 @@ describe('ephemeral live Foundation server composition', () => {
     if (entryResult.kind !== 'success') throw new Error('Direct entry failed.');
     const submissionId = entryResult.data.submissionId;
 
-    const membership = runtime.database.sqlite.query<
-      { readonly id: string; readonly version: number },
-      [string, string]
+    const replacementUserId = crypto.randomUUID();
+    const replacementMembershipId = crypto.randomUUID();
+    const candidateUserId = crypto.randomUUID();
+    const candidateMembershipId = crypto.randomUUID();
+    const speakerReviewerRole = runtime.database.sqlite.query<
+      { readonly id: string },
+      [string]
     >(`
-      SELECT id, version FROM workspace_memberships
-       WHERE workspace_id = ? AND user_id = ? AND status = 'active'
-    `).get(runtime.workspaceId, appUserId);
-    if (!membership) throw new Error('owner membership missing');
+      SELECT id FROM roles
+       WHERE workspace_id = ?
+         AND source_preset_key = 'speaker_reviewer'
+         AND archived_at IS NULL
+       LIMIT 1
+    `).get(runtime.workspaceId);
+    if (!speakerReviewerRole) throw new Error('speaker reviewer role missing');
+    const seededAt = Date.parse('2026-08-18T04:00:00.000Z');
+    runtime.database.sqlite.transaction(() => {
+      runtime.database.sqlite.query(`
+        INSERT INTO users (id,status,display_name,created_at,updated_at,version)
+        VALUES (?,'active','Morgan Lee',?,?,1)
+      `).run(replacementUserId, seededAt, seededAt);
+      runtime.database.sqlite.query(`
+        INSERT INTO users (id,status,display_name,created_at,updated_at,version)
+        VALUES (?,'active','Avery Stone',?,?,1)
+      `).run(candidateUserId, seededAt, seededAt);
+      runtime.database.sqlite.query(`
+        INSERT INTO user_emails (
+          id,user_id,normalized_email,display_email,verified,source,
+          is_primary,verified_at,created_at
+        ) VALUES (?,?,'morgan.lee@example.test','morgan.lee@example.test',1,'admin',1,?,?)
+      `).run(crypto.randomUUID(), replacementUserId, seededAt, seededAt);
+      runtime.database.sqlite.query(`
+        INSERT INTO user_emails (
+          id,user_id,normalized_email,display_email,verified,source,
+          is_primary,verified_at,created_at
+        ) VALUES (?,?,'avery.stone@example.test','avery.stone@example.test',1,'admin',1,?,?)
+      `).run(crypto.randomUUID(), candidateUserId, seededAt, seededAt);
+      runtime.database.sqlite.query(`
+        INSERT INTO workspace_memberships (
+          id,workspace_id,user_id,status,approved_by_user_id,approved_at,
+          created_at,updated_at,version
+        ) VALUES (?,?,?,'active',?,?,?,?,1)
+      `).run(
+        replacementMembershipId, runtime.workspaceId, replacementUserId,
+        appUserId, seededAt, seededAt, seededAt
+      );
+      runtime.database.sqlite.query(`
+        INSERT INTO workspace_memberships (
+          id,workspace_id,user_id,status,approved_by_user_id,approved_at,
+          created_at,updated_at,version
+        ) VALUES (?,?,?,'active',?,?,?,?,1)
+      `).run(
+        candidateMembershipId, runtime.workspaceId, candidateUserId,
+        appUserId, seededAt, seededAt, seededAt
+      );
+      runtime.database.sqlite.query(`
+        INSERT INTO role_assignments (
+          id,user_id,role_id,workspace_id,scope_kind,event_id,
+          assigned_by_user_id,assigned_at,version
+        ) VALUES (?,?,?,?,'workspace',NULL,?,?,1)
+      `).run(
+        crypto.randomUUID(), replacementUserId, speakerReviewerRole.id,
+        runtime.workspaceId, appUserId, seededAt
+      );
+      runtime.database.sqlite.query(`
+        INSERT INTO role_assignments (
+          id,user_id,role_id,workspace_id,scope_kind,event_id,
+          assigned_by_user_id,assigned_at,version
+        ) VALUES (?,?,?,?,'workspace',NULL,?,?,1)
+      `).run(
+        crypto.randomUUID(), candidateUserId, speakerReviewerRole.id,
+        runtime.workspaceId, appUserId, seededAt
+      );
+    }).immediate();
     const roster = reviewerRosterSnapshotReadResultSchema.parse(await (
       await runtime.app.request('/api/events/current/reviewer-roster', {
         headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
       })
     ).json());
     if (roster.kind !== 'success') throw new Error('roster snapshot unavailable');
+    const vacatedReviewerId = crypto.randomUUID();
     const registerResult = reviewerRosterDirectOperationResultSchema.parse(await effect({
       runtime,
       session,
@@ -3725,11 +3796,11 @@ describe('ephemeral live Foundation server composition', () => {
       key: 'decision-loop-register',
       body: {
         action: 'register',
-        reviewerId: crypto.randomUUID(),
+        reviewerId: vacatedReviewerId,
         accessSubject: {
           kind: 'workspace_membership',
-          id: membership.id,
-          version: membership.version
+          id: replacementMembershipId,
+          version: 1
         },
         reviews: [],
         expectedRosterVersion: roster.data.rosterVersion,
@@ -3810,6 +3881,120 @@ describe('ephemeral live Foundation server composition', () => {
       SELECT summary FROM operation_log
        WHERE operation_name = 'review.round.change'
     `).all()).toEqual([{ summary: 'Opened a review round' }]);
+
+    const vacatedAssignment = runtime.database.sqlite.query<
+      { readonly id: string; readonly version: number },
+      [string]
+    >(`
+      SELECT id,version FROM review_assignments
+       WHERE reviewer_id = ? AND state = 'assigned'
+       LIMIT 1
+    `).get(vacatedReviewerId);
+    if (!vacatedAssignment) throw new Error('review assignment missing');
+    expect(vacatedAssignment.version).toBe(1);
+    runtime.database.sqlite.query<never, [number, string, string]>(`
+      UPDATE review_assignments
+         SET state = 'stepped_back', version = version + 1,
+             stepped_back_at_ms = ?, stepped_back_by_user_id = ?
+       WHERE id = ? AND state = 'assigned'
+    `).run(seededAt, appUserId, vacatedAssignment.id);
+
+    const rosterAfterStepBack = reviewerRosterSnapshotReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/reviewer-roster', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (rosterAfterStepBack.kind !== 'success') throw new Error('roster refresh unavailable');
+    const replacementReviewerId = crypto.randomUUID();
+    const replacementRegistered = reviewerRosterDirectOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/reviewer-roster/changes',
+      key: 'decision-loop-register-replacement',
+      body: {
+        action: 'register',
+        reviewerId: replacementReviewerId,
+        accessSubject: {
+          kind: 'workspace_membership',
+          id: candidateMembershipId,
+          version: 1
+        },
+        reviews: [],
+        expectedRosterVersion: rosterAfterStepBack.data.rosterVersion,
+        expectedRosterDigestSha256: rosterAfterStepBack.data.rosterDigestSha256
+      },
+      parse: (value) => value
+    }));
+    expect(replacementRegistered).toMatchObject({
+      kind: 'success',
+      data: { action: 'register', reviewer: { reviewerId: replacementReviewerId } }
+    });
+
+    const vacancySnapshot = reviewSnapshotReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/review/snapshot', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (vacancySnapshot.kind !== 'success') throw new Error('vacancy snapshot unavailable');
+    expect(vacancySnapshot.data.plans[0]).toMatchObject({
+      total: 1,
+      reviewers: [expect.objectContaining({
+        reviewerId: vacatedReviewerId,
+        assigned: 1,
+        awaitingReassignment: 1,
+        uncovered: [expect.objectContaining({
+          assignmentId: vacatedAssignment.id,
+          replacementCandidates: [expect.objectContaining({
+            reviewerId: replacementReviewerId,
+            displayName: 'Avery Stone',
+            assigned: 0,
+            scopeMatch: true
+          })]
+        })]
+      })]
+    });
+    const replacementResult = reviewDirectOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/review/assignments/vacancy',
+      key: 'decision-loop-assign-replacement',
+      body: {
+        action: 'assign_replacement',
+        assignmentId: vacatedAssignment.id,
+        expectedAssignmentVersion: 2,
+        replacementReviewerId
+      },
+      parse: (value) => value
+    }));
+    expect(replacementResult).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'assign_replacement',
+        resolution: {
+          kind: 'replacement',
+          vacatedAssignmentId: vacatedAssignment.id,
+          replacementReviewerId
+        },
+        replacement: { reviewerId: replacementReviewerId, state: 'assigned' }
+      },
+      receipt: { operationName: 'review.assignment.vacancy.change', operationVersion: 1 }
+    });
+    expect(count(runtime, 'review_assignment_vacancy_resolutions')).toBe(1);
+    expect(count(runtime, 'review_assignments')).toBe(2);
+    const resolvedSnapshot = reviewSnapshotReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/review/snapshot', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (resolvedSnapshot.kind !== 'success') throw new Error('resolved review snapshot unavailable');
+    expect(resolvedSnapshot.data.plans[0]).toMatchObject({ total: 1 });
+    expect(resolvedSnapshot.data.plans[0]?.reviewers.find(
+      (reviewer) => reviewer.reviewerId === vacatedReviewerId
+    )).toMatchObject({ assigned: 0, steppedBack: 1, awaitingReassignment: 0 });
+    expect(runtime.database.sqlite.query<{ readonly summary: string }, []>(`
+      SELECT summary FROM operation_log
+       WHERE operation_name = 'review.assignment.vacancy.change'
+    `).all()).toEqual([{ summary: 'Assigned a replacement reviewer' }]);
     const deadlines = deadlineListReadResultSchema.parse(await (
       await runtime.app.request('/api/events/current/deadlines', {
         headers: eventHeaders({ session, correlationId: crypto.randomUUID() })

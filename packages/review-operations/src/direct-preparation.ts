@@ -1,7 +1,14 @@
 import type { EffectHandlerRegistration, EffectHandlerSnapshot, EffectInvocationContext } from '@jooevents/application';
 import type { VersionedDefinitionRef } from '@jooevents/contracts';
 
-export type ReviewDirectAction = 'open_round' | 'discard_empty_round' | 'step_back' | 'commit_review' | 'amend_review';
+export type ReviewDirectAction =
+  | 'open_round'
+  | 'discard_empty_round'
+  | 'step_back'
+  | 'assign_replacement'
+  | 'accept_coverage'
+  | 'commit_review'
+  | 'amend_review';
 
 export interface ReviewDirectPreparation {
   prepare(input: { readonly action: ReviewDirectAction; readonly businessInput: unknown; readonly context: EffectInvocationContext }): {

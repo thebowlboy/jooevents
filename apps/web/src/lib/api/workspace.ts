@@ -2597,6 +2597,14 @@ export const api = {
 			reviewer.scope = scope.map((ref) => ({ ...ref }));
 			return { ok: true };
 		},
+		async assignReplacement(): Promise<MutationOutcome> {
+			await latency();
+			return { ok: false, reason: 'Replacement assignments are available in a live workspace.' };
+		},
+		async acceptCoverage(): Promise<MutationOutcome> {
+			await latency();
+			return { ok: false, reason: 'Coverage acceptance is available in a live workspace.' };
+		},
 		/**
 		 * Takes a reviewer off the roster. Their rows in each plan's roster
 		 * stay — an uncovered review remains in the original reviewer's

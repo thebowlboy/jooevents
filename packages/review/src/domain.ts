@@ -22,7 +22,8 @@ import {
   type ReviewRosterMemberSnapshotDto,
   type ReviewRoundDto,
   type ReviewSafeDiff,
-  type ReviewScopeDto
+  type ReviewScopeDto,
+  type ReviewVacancyResolutionDto
 } from '@jooevents/contracts/reviews';
 import {
   planReviewDueDeadlineChangeFrom,
@@ -47,6 +48,7 @@ import {
   parseReviewRosterMember,
   parseReviewRound,
   parseReviewScope,
+  parseReviewVacancyResolution,
   sameReviewScope,
   type ReviewPlanningSource,
   type ReviewRepository,
@@ -68,6 +70,11 @@ export type ReviewPlanningErrorCode =
   | 'stale_assignment'
   | 'assignment_not_active'
   | 'not_assigned_reviewer'
+  | 'vacancy_resolved'
+  | 'replacement_reviewer_missing'
+  | 'replacement_reviewer_not_active'
+  | 'replacement_reviewer_out_of_scope'
+  | 'replacement_reviewer_already_assigned'
   | 'draft_missing'
   | 'stale_draft'
   | 'review_exists'
@@ -235,6 +242,8 @@ function planMutation(
   }
   if (input.action === 'discard_empty_round') return planDiscardRound(input, catalog, environment.repository);
   if (input.action === 'step_back') return planStepBack(input, environment.repository);
+  if (input.action === 'assign_replacement') return planAssignReplacement(input, environment);
+  if (input.action === 'accept_coverage') return planAcceptCoverage(input, environment.repository);
   if (input.action === 'commit_review') return planCommitReview(input, environment.repository);
   return planAmendReview(input, environment.repository);
 }
@@ -246,7 +255,7 @@ export function validateReviewMutationPlan(
   let plan: ReviewMutationPlanDto;
   try {
     plan = reviewMutationPlanSchema.parse(planInput);
-    if (plan.action === 'open_round') {
+    if (plan.action === 'open_round' || plan.action === 'assign_replacement') {
       const candidates = environment.sources.readCandidates(plan.input.scope);
       const reviewers = environment.sources.readReviewerRoster(plan.input.scope);
       if (!candidates || reviewCandidateSetDigest(candidates.candidates) !== plan.candidateGuard.digestSha256
@@ -305,6 +314,23 @@ export function applyReviewMutationPlan(input: {
     input.transaction.updateAssignment({ before: plan.before, after: plan.after });
     return reviewMutationResultSchema.parse({ action: plan.action, assignment: plan.after });
   }
+  if (plan.action === 'assign_replacement') {
+    if (!input.transaction.resolveVacancy) throw new TypeError('review_vacancy_resolution_not_supported');
+    input.transaction.resolveVacancy({
+      resolution: plan.resolution,
+      replacement: plan.replacement
+    });
+    return reviewMutationResultSchema.parse({
+      action: plan.action,
+      resolution: plan.resolution,
+      replacement: plan.replacement
+    });
+  }
+  if (plan.action === 'accept_coverage') {
+    if (!input.transaction.resolveVacancy) throw new TypeError('review_vacancy_resolution_not_supported');
+    input.transaction.resolveVacancy({ resolution: plan.resolution });
+    return reviewMutationResultSchema.parse({ action: plan.action, resolution: plan.resolution });
+  }
   if (plan.action === 'commit_review') {
     input.transaction.insertFirstReview({ head: plan.after, revision: plan.revision });
     return reviewMutationResultSchema.parse({
@@ -355,6 +381,21 @@ export function projectReviewSafeDiff(planInput: ReviewMutationPlanDto): ReviewS
       submissionId: plan.after.submissionId
     });
   }
+  if (plan.action === 'assign_replacement') {
+    return reviewSafeDiffSchema.parse({
+      action: plan.action,
+      assignmentId: plan.before.id,
+      submissionId: plan.before.submissionId,
+      replacementReviewerId: plan.replacement.reviewerId
+    });
+  }
+  if (plan.action === 'accept_coverage') {
+    return reviewSafeDiffSchema.parse({
+      action: plan.action,
+      assignmentId: plan.before.id,
+      submissionId: plan.before.submissionId
+    });
+  }
   if (plan.action === 'commit_review') {
     return reviewSafeDiffSchema.parse({
       action: plan.action,
@@ -392,6 +433,18 @@ export function reviewMutationFact(planInput: ReviewMutationPlanDto): {
   if (plan.action === 'step_back') return Object.freeze({
     kind: 'review_assignment_stepped_back', version: 1,
     payload: canonicalJsonValue({ assignmentId: plan.after.id, version: plan.after.version })
+  });
+  if (plan.action === 'assign_replacement') return Object.freeze({
+    kind: 'review_assignment_replaced', version: 1,
+    payload: canonicalJsonValue({
+      vacatedAssignmentId: plan.before.id,
+      replacementAssignmentId: plan.replacement.id,
+      replacementReviewerId: plan.replacement.reviewerId
+    })
+  });
+  if (plan.action === 'accept_coverage') return Object.freeze({
+    kind: 'review_assignment_coverage_accepted', version: 1,
+    payload: canonicalJsonValue({ vacatedAssignmentId: plan.before.id })
   });
   return Object.freeze({
     kind: plan.action === 'commit_review' ? 'review_committed' : 'review_amended',
@@ -642,6 +695,136 @@ function planStepBack(
     steppedBackByUserId: input.attributedByUserId
   });
   return reviewMutationPlanSchema.parse({ action: input.action, input, before, after });
+}
+
+function unresolvedVacancy(
+  scope: ReviewScopeDto,
+  assignmentId: string,
+  expectedAssignmentVersion: number,
+  repository: ReviewRepository
+): ReviewAssignmentDto {
+  const before = requiredAssignment(scope, assignmentId, repository);
+  if (before.version !== expectedAssignmentVersion) throw new ReviewPlanningError('stale_assignment');
+  if (before.state !== 'stepped_back') throw new ReviewPlanningError('assignment_not_active');
+  requiredOpenRound(scope, before.roundId, repository);
+  if (repository.readVacancyResolution?.(scope, before.id)) {
+    throw new ReviewPlanningError('vacancy_resolved');
+  }
+  return before;
+}
+
+function vacancyResolution(input: {
+  readonly scope: ReviewScopeDto;
+  readonly before: ReviewAssignmentDto;
+  readonly attributedByUserId: string;
+  readonly attributedAt: string;
+  readonly replacement?: ReviewAssignmentDto;
+}): ReviewVacancyResolutionDto {
+  return parseReviewVacancyResolution(input.replacement === undefined
+    ? {
+        schemaVersion: 1,
+        scope: input.scope,
+        kind: 'coverage_accepted',
+        vacatedAssignmentId: input.before.id,
+        resolvedByUserId: input.attributedByUserId,
+        resolvedAt: input.attributedAt
+      }
+    : {
+        schemaVersion: 1,
+        scope: input.scope,
+        kind: 'replacement',
+        vacatedAssignmentId: input.before.id,
+        replacementAssignmentId: input.replacement.id,
+        replacementReviewerId: input.replacement.reviewerId,
+        resolvedByUserId: input.attributedByUserId,
+        resolvedAt: input.attributedAt
+      });
+}
+
+function planAssignReplacement(
+  input: Extract<ReviewMutationPlanningInput, { action: 'assign_replacement' }>,
+  environment: ReviewMutationEnvironment
+): ReviewMutationPlanDto {
+  const before = unresolvedVacancy(
+    input.scope,
+    input.assignmentId,
+    input.expectedAssignmentVersion,
+    environment.repository
+  );
+  const candidates = environment.sources.readCandidates(input.scope);
+  const reviewers = environment.sources.readReviewerRoster(input.scope);
+  if (!candidates || !reviewers) throw new ReviewPlanningError('wrong_scope');
+  const candidate = candidates.candidates.find((row) => row.submissionId === before.submissionId);
+  if (!candidate) throw new ReviewPlanningError('candidate_query_changed');
+  const reviewer = reviewers.reviewers.find((row) => row.reviewerId === input.replacementReviewerId);
+  if (!reviewer) throw new ReviewPlanningError('replacement_reviewer_missing');
+  if (reviewer.status !== 'active') throw new ReviewPlanningError('replacement_reviewer_not_active');
+  if (!reviewerCoversCandidate(reviewer, candidate)) {
+    throw new ReviewPlanningError('replacement_reviewer_out_of_scope');
+  }
+  if (environment.repository.listAssignments(input.scope, before.roundId).some((assignment) =>
+    assignment.submissionId === before.submissionId
+      && assignment.reviewerId === reviewer.reviewerId
+  )) {
+    throw new ReviewPlanningError('replacement_reviewer_already_assigned');
+  }
+  const replacement = parseReviewAssignment({
+    schemaVersion: 1,
+    scope: input.scope,
+    id: input.replacementAssignmentId,
+    roundId: before.roundId,
+    submissionId: before.submissionId,
+    reviewerId: reviewer.reviewerId,
+    version: 1,
+    state: 'assigned',
+    assignedAt: input.attributedAt
+  });
+  return reviewMutationPlanSchema.parse({
+    action: input.action,
+    input,
+    before,
+    resolution: vacancyResolution({
+      scope: input.scope,
+      before,
+      attributedByUserId: input.attributedByUserId,
+      attributedAt: input.attributedAt,
+      replacement
+    }),
+    replacement,
+    candidateGuard: {
+      id: reviewCandidateQueryGuardId(input.scope.eventId),
+      version: candidates.version,
+      digestSha256: reviewCandidateSetDigest(candidates.candidates)
+    },
+    reviewerGuard: {
+      id: reviewReviewerQueryGuardId(input.scope.eventId),
+      version: reviewers.version,
+      digestSha256: reviewRosterSetDigest(reviewers.reviewers)
+    }
+  });
+}
+
+function planAcceptCoverage(
+  input: Extract<ReviewMutationPlanningInput, { action: 'accept_coverage' }>,
+  repository: ReviewRepository
+): ReviewMutationPlanDto {
+  const before = unresolvedVacancy(
+    input.scope,
+    input.assignmentId,
+    input.expectedAssignmentVersion,
+    repository
+  );
+  return reviewMutationPlanSchema.parse({
+    action: input.action,
+    input,
+    before,
+    resolution: vacancyResolution({
+      scope: input.scope,
+      before,
+      attributedByUserId: input.attributedByUserId,
+      attributedAt: input.attributedAt
+    })
+  });
 }
 
 function planCommitReview(

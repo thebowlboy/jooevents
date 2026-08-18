@@ -9,6 +9,7 @@ import type {
 	reviewRoundChangeDraftInputSchema,
 	reviewSnapshotReadInputSchema,
 	reviewStepBackChangeDraftInputSchema,
+	reviewVacancyChangeDraftInputSchema,
 	ReviewMutationResult
 } from '@jooevents/contracts/reviews';
 import type { z } from 'zod';
@@ -24,6 +25,7 @@ import type {
 export type ReviewSnapshotRequest = z.input<typeof reviewSnapshotReadInputSchema>;
 export type ReviewRoundChangeRequest = z.input<typeof reviewRoundChangeDraftInputSchema>;
 export type ReviewStepBackRequest = z.input<typeof reviewStepBackChangeDraftInputSchema>;
+export type ReviewVacancyChangeRequest = z.input<typeof reviewVacancyChangeDraftInputSchema>;
 export type ReviewEvaluationChangeRequest = z.input<
 	typeof reviewEvaluationChangeDraftInputSchema
 >;
@@ -36,6 +38,7 @@ export type ReviewCoreOperation =
 	| 'round_setup'
 	| 'round_change'
 	| 'step_back'
+	| 'vacancy_change'
 	| 'evaluation_change'
 	| 'evaluation_draft_save';
 
@@ -111,6 +114,11 @@ export interface ReviewCorePort {
 	): Promise<ReviewCoreEffectResult<ReviewMutationView>>;
 	stepBack(
 		input: ReviewStepBackRequest,
+		idempotencyKey: ReviewIdempotencyKey,
+		options?: { readonly signal?: AbortSignal }
+	): Promise<ReviewCoreEffectResult<ReviewMutationView>>;
+	changeVacancy?(
+		input: ReviewVacancyChangeRequest,
 		idempotencyKey: ReviewIdempotencyKey,
 		options?: { readonly signal?: AbortSignal }
 	): Promise<ReviewCoreEffectResult<ReviewMutationView>>;

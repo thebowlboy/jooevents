@@ -132,16 +132,38 @@ describe('direct live Review page port', () => {
 					done: 0,
 					steppedBack: 1,
 					awaitingReassignment: 1,
-					uncovered: [{ submissionId, title: 'Talk', remainingReviewers: 0 }]
+					uncovered: [{
+						assignmentId,
+						assignmentVersion: 2,
+						roundId: round.id,
+						submissionId,
+						title: 'Talk',
+						remainingReviewers: 0,
+						replacementCandidates: [{
+							reviewerId: id(60),
+							displayName: 'Morgan',
+							assigned: 0,
+							scopeMatch: true
+						}]
+					}]
 				}]
 			}],
 			standings: {}
 		});
 		const [plan] = mapLiveReviewPlans(served.plans, Date.parse('2027-03-01T00:00:00Z'));
 		expect(plan?.reviewers[0]?.uncovered).toEqual([{
+			assignmentId,
+			assignmentVersion: 2,
+			roundId: round.id,
 			submissionId,
 			title: 'Talk',
-			remainingReviewers: 0
+			remainingReviewers: 0,
+			replacementCandidates: [{
+				reviewerId: id(60),
+				displayName: 'Morgan',
+				assigned: 0,
+				scopeMatch: true
+			}]
 		}]);
 	});
 
