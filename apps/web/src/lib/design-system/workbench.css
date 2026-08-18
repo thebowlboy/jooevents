@@ -888,6 +888,84 @@
   .access-card,
   .submission-card { display: grid; gap: 1rem; }
 
+  /* Section insertion: the affordance is invisible at rest and fades in over
+     the gap, so revealing it moves nothing. The menu is shown open beside the
+     document because a workbench has to show the state, not wait for a hover. */
+  .ds-insert { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1.5rem; align-items: start; }
+  .ds-insert__doc {
+    padding: 1rem 1.25rem;
+    border: 1px solid var(--je-color-border);
+    border-radius: var(--je-radius-surface);
+    background: var(--je-color-surface);
+  }
+  .ds-insert__section { position: relative; }
+  .ds-insert__heading { margin: 0.75rem 0; font-size: var(--je-font-size-lg); font-weight: 600; }
+  .ds-insert__para { margin: 0.75rem 0; font-size: var(--je-font-size-sm); color: var(--je-color-text-muted); }
+  .ds-insert__edge {
+    position: absolute;
+    inset-inline: 0;
+    display: grid;
+    place-items: center;
+    block-size: 1rem;
+    margin: 0; padding: 0; border: 0; background: none;
+    opacity: 0;
+    cursor: pointer;
+    transition: opacity var(--je-duration-fast) var(--je-ease);
+  }
+  .ds-insert__edge--above { inset-block-start: -0.5rem; }
+  .ds-insert__edge--below { inset-block-end: -0.5rem; }
+  .ds-insert__edge::before {
+    content: '';
+    position: absolute;
+    inset-inline: 0;
+    inset-block-start: 50%;
+    border-block-start: 1px dashed var(--je-color-text-muted);
+  }
+  .ds-insert__edge span {
+    position: relative;
+    display: grid; place-items: center;
+    inline-size: 1rem; block-size: 1rem;
+    border-radius: var(--je-radius-round);
+    background: var(--je-color-surface);
+    color: var(--je-color-text-muted);
+    font-size: var(--je-font-size-sm); line-height: 1;
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .ds-insert__section:hover .ds-insert__edge { opacity: 1; }
+  }
+  .ds-insert__add { margin: 1rem 0 0; text-align: center; }
+  .ds-insert__add-control {
+    padding: 0.4rem 0.7rem;
+    border: 1px dashed var(--je-color-border-strong);
+    border-radius: var(--je-radius-control);
+    background: none;
+    color: var(--je-color-text-muted);
+    font: inherit; font-size: var(--je-font-size-sm);
+    cursor: pointer;
+  }
+  .ds-insert__menu {
+    display: grid; gap: 1px;
+    min-inline-size: 12rem;
+    padding: 0.25rem;
+    border: 1px solid var(--je-color-border);
+    border-radius: var(--je-radius-surface);
+    background: var(--je-color-surface);
+    box-shadow: var(--je-shadow-md);
+  }
+  .ds-insert__item {
+    display: grid; gap: 0.1rem;
+    padding: 0.45rem 0.65rem;
+    border: 0; border-radius: var(--je-radius-control);
+    background: none; font: inherit; text-align: start; cursor: pointer;
+  }
+  .ds-insert__item:hover { background: var(--je-color-surface-sunken); }
+  .ds-insert__item span { font-size: var(--je-font-size-sm); }
+  .ds-insert__item small { font-size: var(--je-font-size-xs); color: var(--je-color-text-muted); }
+
+  @media (max-width: 720px) {
+    .ds-insert { grid-template-columns: minmax(0, 1fr); }
+  }
+
   .access-card__person,
   .inspector-person {
     display: grid;

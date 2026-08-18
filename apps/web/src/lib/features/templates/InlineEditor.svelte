@@ -43,6 +43,14 @@
 		onchange?: (result: InlineEditResult) => void;
 		oncommit: (result: InlineEditResult) => void;
 		oncancel: () => void;
+		/**
+		 * Insert a section beside this one. Present only where the host mounts
+		 * insertion — message templates — so a surface template's editor is
+		 * unchanged. Hands back the element to anchor the add menu to.
+		 */
+		onAddSection?: (side: 'above' | 'below', anchor: HTMLElement) => void;
+		/** Remove the section this editor belongs to; armed in place before it fires. */
+		onRemoveSection?: () => void;
 	}
 
 	let {
@@ -53,10 +61,15 @@
 		busy = false,
 		onchange,
 		oncommit,
-		oncancel
+		oncancel,
+		onAddSection,
+		onRemoveSection
 	}: Props = $props();
 
 	const uid = $props.id();
+
+	/** Disarms on blur, so a remove never waits armed for a later stray press. */
+	let removeArmed = $state(false);
 
 	/* The same presentation split ProfilePeek established: a coarse pointer, or
 	   a viewport too narrow to hold a panel beside the unit, gets the sheet.
@@ -743,6 +756,43 @@
 				Cancel
 			</Button>
 		</div>
+
+		{#if onAddSection || onRemoveSection}
+			<!-- The structural half of editing this section, and the whole of the
+			     touch and keyboard path to it: whoever can open this editor can
+			     insert and remove without a hover anywhere. -->
+			<div class="ied__structure">
+				{#if onAddSection}
+					<button
+						type="button"
+						class="ied__struct"
+						disabled={busy}
+						onclick={(event) => onAddSection?.('above', event.currentTarget)}>
+						Add above
+					</button>
+					<button
+						type="button"
+						class="ied__struct"
+						disabled={busy}
+						onclick={(event) => onAddSection?.('below', event.currentTarget)}>
+						Add below
+					</button>
+				{/if}
+				{#if onRemoveSection}
+					<!-- Armed in place rather than behind a dialog: bounded and
+					     undoable, so the second press is the whole ceremony it needs. -->
+					<button
+						type="button"
+						class="ied__struct ied__struct--remove"
+						class:ied__struct--armed={removeArmed}
+						disabled={busy}
+						onclick={() => (removeArmed ? onRemoveSection?.() : (removeArmed = true))}
+						onblur={() => (removeArmed = false)}>
+						{removeArmed ? 'Remove?' : 'Remove section'}
+					</button>
+				{/if}
+			</div>
+		{/if}
 	</form>
 </div>
 
@@ -846,6 +896,53 @@
 	.ied__actions {
 		display: flex;
 		gap: var(--je-space-2);
+	}
+
+	/* Structural actions sit below the commit row and read quieter than it:
+	   they are about the document, not about the words being typed. */
+	.ied__structure {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--je-space-3);
+		margin-block-start: var(--je-space-3);
+		padding-block-start: var(--je-space-2);
+		border-block-start: 1px solid var(--je-color-border);
+	}
+
+	.ied__struct {
+		margin: 0;
+		padding: 0;
+		border: 0;
+		background: none;
+		font: inherit;
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
+		text-decoration: underline;
+		cursor: pointer;
+	}
+
+	.ied__struct:hover {
+		color: var(--je-color-text);
+	}
+
+	.ied__struct:focus-visible {
+		outline: none;
+		box-shadow: var(--je-focus-ring);
+		border-radius: var(--je-radius-control);
+	}
+
+	.ied__struct--remove:hover,
+	.ied__struct--armed {
+		color: var(--je-color-danger);
+	}
+
+	.ied__struct--armed {
+		font-weight: 600;
+	}
+
+	.ied__struct:disabled {
+		opacity: 0.48;
+		cursor: not-allowed;
 	}
 
 	/* Variables: suggested chips and the whole set share one quiet row. */

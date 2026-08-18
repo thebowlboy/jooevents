@@ -15,11 +15,17 @@
 	import InlineEditor from './InlineEditor.svelte';
 	import { diffAnyTemplate, type TemplateDiffEntry } from './template-diff';
 	import {
+		blockKind,
 		editableUnits,
 		inlineEditNote,
+		insertedUnitPath,
 		messageInlineDoc,
 		resolveUnit,
+		sectionEditNote,
+		unitBlockIndex,
+		withInsertedBlock,
 		withMergeEdit,
+		withRemovedBlock,
 		withRosterKnobs,
 		withScheduleKnobs,
 		withTextStyle,
@@ -27,6 +33,8 @@
 		type InlineEditResult,
 		type InlineUnit
 	} from './inline-edit';
+	import SectionAddMenu from './SectionAddMenu.svelte';
+	import type { SectionKind } from '$lib/api/template-kinds';
 	import { sameTextStyle } from './text-style';
 	import { applyFormLens } from '$lib/api/fields';
 	import { isSurfaceTemplate } from '$lib/api/types';
@@ -611,6 +619,113 @@
 		});
 	}
 
+	// ------------------------------------------------------- sections
+
+	/**
+	 * Structural editing belongs to message templates. A surface template's
+	 * blocks are a different vocabulary with their own knob editors, and this
+	 * menu has no seeds that would describe them.
+	 */
+	const sectionsEditable = $derived(inlineEnabled && current !== null && !currentIsSurface);
+
+	/** The open add menu: where a section would land, and what to anchor to. */
+	let addMenu = $state<{ index: number; anchor: HTMLElement } | null>(null);
+
+	function openAddMenu(index: number, anchor: HTMLElement) {
+		if (!sectionsEditable) return;
+		// The menu replaces whatever editor was open: one floating panel at a
+		// time, and the section being added is the new subject.
+		closeInline(false);
+		addMenu = { index, anchor };
+	}
+
+	/** The editor's own path to insertion — the one that needs no hover. */
+	function addBesideOpenUnit(side: 'above' | 'below', anchor: HTMLElement) {
+		const at = inlineUnit ? unitBlockIndex(inlineUnit) : null;
+		if (at === null) return;
+		openAddMenu(side === 'above' ? at : at + 1, anchor);
+	}
+
+	/**
+	 * Inserts the chosen section and opens its editor.
+	 *
+	 * Paths are re-derived, never carried: the commit writes a fresh document,
+	 * `reload()` re-reads it, and the new unit is resolved from that stored copy
+	 * by the index the insert used — so the editor opens on the block that
+	 * actually exists rather than on a path computed before the write.
+	 */
+	async function insertSection(kind: SectionKind) {
+		const menu = addMenu;
+		const doc = current;
+		addMenu = null;
+		if (!menu || !doc || isSurfaceTemplate(doc)) return;
+		const at = menu.index;
+		const next = withInsertedBlock($state.snapshot(doc) as MessageTemplate, at, kind);
+		const note = sectionEditNote('add', kind);
+		const committed = await commitStructure(doc, next, note);
+		if (!committed) return;
+
+		const path = insertedUnitPath(kind, at);
+		if (!path) return;
+		// The stored document after the write is the one the paths belong to.
+		await tick();
+		const stored = current;
+		if (!stored) return;
+		const unit = resolveUnit(stored, path);
+		const el = reserveEl?.querySelector<HTMLElement>(`[data-edit="${path}"]`);
+		if (!unit || !el) return;
+		inlineField = null;
+		inlineUnit = unit;
+		inlineAnchor = el;
+	}
+
+	/** Removes the section whose editor is open; an emptied document is honest. */
+	async function removeOpenSection() {
+		const doc = current;
+		const at = inlineUnit ? unitBlockIndex(inlineUnit) : null;
+		if (at === null || !doc || isSurfaceTemplate(doc)) return;
+		const block = doc.blocks[at];
+		if (!block) return;
+		const next = withRemovedBlock($state.snapshot(doc) as MessageTemplate, at);
+		const note = sectionEditNote('remove', blockKind(block));
+		closeInline(false);
+		await commitStructure(doc, next, note);
+	}
+
+	/**
+	 * One structural write, recorded exactly as a wording edit is: a revision
+	 * with its own note and an undo that reverts to the revision before it.
+	 */
+	async function commitStructure(
+		doc: AnyTemplate,
+		next: MessageTemplate,
+		note: string
+	): Promise<boolean> {
+		const id = doc.id;
+		const name = doc.name;
+		const prior = doc.revision;
+		const replaced = contentOf(doc);
+		inlineBusy = true;
+		const outcome = await api.templates.commitInline(id, next, note);
+		if (!outcome.ok) {
+			error = outcome.reason;
+			inlineBusy = false;
+			return false;
+		}
+		rememberBody(id, prior, replaced);
+		await reload();
+		recordAction({
+			area: 'templates',
+			label: `${note} in “${name}”`,
+			undo: async () => {
+				await api.templates.revertTo(id, prior);
+				await reload();
+			}
+		});
+		inlineBusy = false;
+		return true;
+	}
+
 	async function applyInline(result: InlineEditResult) {
 		const unit = inlineUnit;
 		if (!unit || !current) return;
@@ -1189,7 +1304,16 @@
 									editable={inlineEnabled} />
 							{/if}
 						{:else}
-							<EmailRender template={shown} {theme} {eventName} {eventMeta} editable={inlineEnabled} />
+							<!-- Insertion is mounted for message templates only: a surface
+							     template's specialised blocks keep their knob editors, and
+							     this vocabulary does not describe them. -->
+							<EmailRender
+								template={shown}
+								{theme}
+								{eventName}
+								{eventMeta}
+								editable={inlineEnabled}
+								onInsert={inlineEnabled ? openAddMenu : undefined} />
 						{/if}
 					{:else}
 						<div class="editor__nobody">
@@ -1208,8 +1332,16 @@
 							busy={inlineBusy}
 							onchange={previewInline}
 							oncommit={applyInline}
-							oncancel={() => closeInline()} />
+							oncancel={() => closeInline()}
+							onAddSection={sectionsEditable ? addBesideOpenUnit : undefined}
+							onRemoveSection={sectionsEditable ? removeOpenSection : undefined} />
 					{/key}
+				{/if}
+				{#if addMenu}
+					<SectionAddMenu
+						anchor={addMenu.anchor}
+						onpick={insertSection}
+						oncancel={() => (addMenu = null)} />
 				{/if}
 			</section>
 

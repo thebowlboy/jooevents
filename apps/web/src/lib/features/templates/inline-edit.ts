@@ -1,5 +1,13 @@
-import type { AnyTemplate, MessageTemplate, RegistryField, SurfaceTemplate, TextStyle } from '$lib/api/types';
+import type {
+	AnyTemplate,
+	MessageTemplate,
+	RegistryField,
+	SurfaceTemplate,
+	TemplateBlock,
+	TextStyle
+} from '$lib/api/types';
 import { isSurfaceTemplate } from '$lib/api/types';
+import { sectionKind, type SectionKind } from '$lib/api/template-kinds';
 import { declaredTokens } from './merge-fields';
 import { normalizeTextStyle, styleChangeSummary, type StyleUnitKind } from './text-style';
 
@@ -338,6 +346,93 @@ export function messageInlineDoc(
 		});
 	}
 	return null;
+}
+
+// ------------------------------------------------------- adding and removing
+
+/**
+ * The document with one fresh section inserted at `index`.
+ *
+ * The seed comes from the shared section registry, so the add menu and the
+ * wizard mint the same vocabulary. Its `suggestedVars` are filtered against
+ * what this document actually declares: a hint pointing at a token the template
+ * has no field for would offer an insert that renders as its own braces, and a
+ * section must be addable to any document without dragging a token in with it.
+ *
+ * `index` is clamped rather than refused — start, between any pair, and end are
+ * all legitimate, and an out-of-range index means the caller counted from a
+ * document that has since changed, where the honest answer is the nearest end.
+ */
+export function withInsertedBlock(
+	template: MessageTemplate,
+	index: number,
+	kind: SectionKind
+): MessageTemplate {
+	const def = sectionKind(kind);
+	if (!def) return template;
+	const declared = new Set(template.mergeFields.map((field) => field.key));
+	const seed = def.seed();
+	if ('suggestedVars' in seed && seed.suggestedVars) {
+		const kept = seed.suggestedVars.filter((key) => declared.has(key));
+		if (kept.length > 0) seed.suggestedVars = kept;
+		else delete seed.suggestedVars;
+	}
+	const at = Math.max(0, Math.min(Math.trunc(index), template.blocks.length));
+	const blocks = [...template.blocks];
+	blocks.splice(at, 0, seed);
+	return { ...template, blocks };
+}
+
+/**
+ * The document with the section at `index` removed. An index naming no block
+ * returns the document unchanged; removing the last one is allowed, and leaves
+ * an empty document that the editor renders as its add control alone.
+ */
+export function withRemovedBlock(template: MessageTemplate, index: number): MessageTemplate {
+	if (!template.blocks[index]) return template;
+	return { ...template, blocks: template.blocks.filter((_, at) => at !== index) };
+}
+
+/**
+ * Where the editor should open after a section is added: the new block's first
+ * editable unit, so insert-then-type is one gesture. A divider has no words, so
+ * it has no unit and nothing opens — which is the honest answer, not a failure.
+ */
+export function insertedUnitPath(kind: SectionKind, index: number): string | null {
+	if (kind === 'heading' || kind === 'paragraph') return `blocks.${index}.text`;
+	if (kind === 'button') return `blocks.${index}.label`;
+	if (kind === 'details') return `blocks.${index}.rows.0.label`;
+	return null;
+}
+
+/**
+ * The receipt a structural change earns, in the same vocabulary as
+ * `inlineEditNote` — one history whether a section was reworded, added, or
+ * taken out.
+ */
+export function sectionEditNote(action: 'add' | 'remove', kind: SectionKind): string {
+	const noun = sectionKind(kind)?.label.toLowerCase() ?? 'section';
+	return action === 'add' ? `Added a ${noun}` : `Removed the ${noun}`;
+}
+
+/**
+ * Which block a unit belongs to, read from its own path.
+ *
+ * A text unit carries no index of its own — its path is the address — so this
+ * is the one place that parses it, and it is why insertion and removal can act
+ * from whatever editor happens to be open. Null for a unit that is not a
+ * block's (a form's submit label, a registry question).
+ */
+export function unitBlockIndex(unit: InlineUnit): number | null {
+	const parts = unit.path.split('.');
+	if (parts[0] !== 'blocks') return null;
+	const index = Number(parts[1]);
+	return Number.isInteger(index) && index >= 0 ? index : null;
+}
+
+/** The section kind a stored block is, for naming it in a receipt. */
+export function blockKind(block: TemplateBlock): SectionKind {
+	return block.type as SectionKind;
 }
 
 /** Short visible words for a unit's accessible name: `Edit: {excerpt}`. */

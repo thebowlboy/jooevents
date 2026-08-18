@@ -1128,6 +1128,37 @@
           </div>
         </ShowcaseCard>
 
+        <ShowcaseCard
+          title="Section insertion"
+          eyebrow="Template editing"
+          description="Insertion points render nothing at rest. Hover a section on a fine pointer and its top and bottom edges fade in; the same insertion lives in the block editor as Add above / Add below, so touch and keyboard never depend on hover. The end control is always there — the entry a first-time author finds.">
+          <div class="ds-insert">
+            <div class="ds-insert__doc">
+              <div class="ds-insert__section">
+                <button type="button" class="ds-insert__edge ds-insert__edge--above" tabindex="-1" aria-label="Add a section above this one"><span aria-hidden="true">+</span></button>
+                <p class="ds-insert__heading">Your headline goes here</p>
+                <button type="button" class="ds-insert__edge ds-insert__edge--below" tabindex="-1" aria-label="Add a section below this one"><span aria-hidden="true">+</span></button>
+              </div>
+              <div class="ds-insert__section">
+                <button type="button" class="ds-insert__edge ds-insert__edge--above" tabindex="-1" aria-label="Add a section above this one"><span aria-hidden="true">+</span></button>
+                <p class="ds-insert__para">Write the message here. Say the one thing that changed and what it means for them.</p>
+                <button type="button" class="ds-insert__edge ds-insert__edge--below" tabindex="-1" aria-label="Add a section below this one"><span aria-hidden="true">+</span></button>
+              </div>
+              <p class="ds-insert__add"><button type="button" class="ds-insert__add-control">+ Add section</button></p>
+            </div>
+            <!-- The menu offers the vocabulary and nothing else: the block kinds
+                 are the ceiling that keeps every email decent, so there is no
+                 free-form escape from them. -->
+            <div class="ds-insert__menu" role="menu" aria-label="Add a section" tabindex="-1">
+              <button type="button" class="ds-insert__item" role="menuitem"><span>Heading</span></button>
+              <button type="button" class="ds-insert__item" role="menuitem"><span>Paragraph</span></button>
+              <button type="button" class="ds-insert__item" role="menuitem"><span>Details list</span><small>Label and value rows</small></button>
+              <button type="button" class="ds-insert__item" role="menuitem"><span>Button</span></button>
+              <button type="button" class="ds-insert__item" role="menuitem"><span>Divider</span><small>A rule between sections</small></button>
+            </div>
+          </div>
+        </ShowcaseCard>
+
         <ShowcaseCard title="Submission editor" eyebrow="Organizer pattern" description="A clear editing path with status and consequence separated from field entry.">
           <div class="submission-card">
             <div class="submission-card__status"><div><Badge tone="info" dot>In review</Badge><span>Autosaved 24s ago</span></div><Button variant="ghost" size="sm"><MoreHorizontal /> More</Button></div>

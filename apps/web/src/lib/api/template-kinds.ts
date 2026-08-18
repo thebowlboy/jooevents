@@ -101,3 +101,82 @@ export const templateKinds: TemplateKindDef[] = [
 export function templateKind(id: string): TemplateKindDef | undefined {
 	return templateKinds.find((kind) => kind.id === id);
 }
+
+// ---------------------------------------------------------------- sections
+
+/** The block kinds a person may add to a message document, by name. */
+export type SectionKind = 'heading' | 'paragraph' | 'details' | 'button' | 'divider';
+
+export interface SectionKindDef {
+	kind: SectionKind;
+	/** The plain name the add menu lists it under. */
+	label: string;
+	/** One line of secondary copy, only where the name does not carry it alone. */
+	hint?: string;
+	/** A fresh single section, seeded in the scaffold voice. */
+	seed: () => TemplateBlock;
+}
+
+/**
+ * What "add a section" can add, and what each one arrives saying.
+ *
+ * One registry, two consumers: the wizard mints whole documents from the kinds
+ * above, the insert menu mints one section from these, and both draw on the
+ * same vocabulary — which is what lets a Blank document be built up by hand
+ * into an Announcement-shaped one.
+ *
+ * Every seed speaks the scaffold voice: it says what belongs in that place and
+ * never addresses the person editing it, because placeholder text that survives
+ * to send is text a recipient reads. `suggestedVars` are hints only; the insert
+ * builder filters them against whatever the target document actually declares,
+ * so a section can be added to any template without minting an undefined token.
+ */
+export const sectionKinds: SectionKindDef[] = [
+	{
+		kind: 'heading',
+		label: 'Heading',
+		seed: () => ({
+			type: 'heading',
+			text: 'Your headline goes here',
+			suggestedVars: ['event.name']
+		})
+	},
+	{
+		kind: 'paragraph',
+		label: 'Paragraph',
+		seed: () => ({
+			type: 'paragraph',
+			text: 'Write the message here. Say the one thing that changed and what it means for them.',
+			suggestedVars: ['speaker.name', 'event.name']
+		})
+	},
+	{
+		kind: 'details',
+		label: 'Details list',
+		hint: 'Label and value rows',
+		seed: () => ({
+			type: 'details',
+			rows: [
+				{ label: 'When', value: 'The date and time' },
+				{ label: 'Where', value: 'The place' }
+			],
+			suggestedVars: ['event.dates', 'event.location']
+		})
+	},
+	{
+		kind: 'button',
+		label: 'Button',
+		seed: () => ({ type: 'button', label: 'Read more', href: 'event.schedule' })
+	},
+	{
+		kind: 'divider',
+		label: 'Divider',
+		hint: 'A rule between sections',
+		seed: () => ({ type: 'divider' })
+	}
+];
+
+/** One insertable kind by name, or undefined for a kind this vocabulary has no seed for. */
+export function sectionKind(kind: string): SectionKindDef | undefined {
+	return sectionKinds.find((entry) => entry.kind === kind);
+}

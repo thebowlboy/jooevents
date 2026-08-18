@@ -266,3 +266,92 @@ test('before an event exists, Templates sits locked in the navigation', async ({
 	// Locked means not a link: there is nothing to follow yet.
 	await expect(nav.getByRole('link', { name: 'Templates' })).toHaveCount(0);
 });
+
+/**
+ * Section insertion and removal, reached without a pointer.
+ *
+ * The edge affordances are a fine-pointer accelerator and are deliberately out
+ * of the tab order, so the keyboard's whole path runs through the block editor
+ * it can already reach: open a section, Add below, choose a kind, and the new
+ * section's editor is already open to type into.
+ */
+test('a section can be added and removed from the keyboard alone', async ({ page }, testInfo) => {
+	test.skip(testInfo.project.name !== 'desktop', 'keyboard-path contract');
+
+	await page.goto('/app/templates?template=tpl-schedule-announcement');
+	await expect(page.getByRole('heading', { name: 'Schedule announcement' })).toBeVisible({
+		timeout: 15000
+	});
+	const preview = page.getByRole('region', { name: 'Message preview' });
+	await expect(preview).toContainText('The schedule is out', { timeout: 15000 });
+
+	// The teaching line only claims editability where a press is answered.
+	await expect(page.locator('.editor__state')).toContainText('click any text to edit it.');
+
+	// Open the first section's editor with the keyboard, not a click.
+	await page.locator('[data-edit="blocks.0.text"]').focus();
+	await page.keyboard.press('Enter');
+	const editor = page.locator('.ied');
+	await expect(editor).toBeVisible();
+
+	// The insertion path that needs no hover.
+	await editor.getByRole('button', { name: 'Add below' }).click();
+	const menu = page.getByRole('menu', { name: 'Add a section' });
+	await expect(menu).toBeVisible();
+	// Focus is already in the menu, so the choice is one Enter away.
+	await expect(menu.getByRole('menuitem', { name: 'Heading' })).toBeFocused();
+	await page.keyboard.press('ArrowDown');
+	await expect(menu.getByRole('menuitem', { name: 'Paragraph' })).toBeFocused();
+	await page.keyboard.press('Enter');
+
+	// The new section is committed as its own revision, and its editor opened
+	// on it — insert-then-type is one gesture.
+	await expect(
+		page.getByRole('status').filter({ hasText: /Added a paragraph in “Schedule announcement”/ })
+	).toBeVisible({ timeout: 10000 });
+	await expect(preview).toContainText('Write the message here');
+	await expect(page.locator('.ied')).toBeVisible();
+
+	// Removal arms in place inside the same editor: the second press is the
+	// whole ceremony a bounded, undoable change needs.
+	const remove = page.locator('.ied').getByRole('button', { name: 'Remove section' });
+	await remove.click();
+	await expect(page.locator('.ied').getByRole('button', { name: 'Remove?' })).toBeVisible();
+	await page.locator('.ied').getByRole('button', { name: 'Remove?' }).click();
+	await expect(
+		page.getByRole('status').filter({ hasText: /Removed the paragraph in “Schedule announcement”/ })
+	).toBeVisible({ timeout: 10000 });
+	await expect(preview).not.toContainText('Write the message here');
+});
+
+/**
+ * The artifact stays the artifact at rest: insertion controls exist only while
+ * the preview is editable, and the hover affordances never carry meaning alone.
+ */
+test('the end control is the always-findable entry, and a read-only view has none', async ({
+	page
+}) => {
+	await page.goto('/app/templates?template=tpl-schedule-announcement');
+	const preview = page.getByRole('region', { name: 'Message preview' });
+	await expect(preview).toContainText('The schedule is out', { timeout: 15000 });
+
+	// Persistent, not hover-revealed — what a first-time author actually finds.
+	await expect(preview.getByRole('button', { name: '+ Add section' })).toBeVisible();
+
+	// A revision read is inert: no insertion anywhere on it.
+	await page.getByLabel('Revision history').selectOption('1');
+	await expect(page.locator('.editor__state')).toContainText('read only');
+	await expect(preview.getByRole('button', { name: '+ Add section' })).toHaveCount(0);
+	await expect(preview.locator('.email__insert')).toHaveCount(0);
+});
+
+/**
+ * Surface templates keep their own vocabulary: their specialised blocks are
+ * edited through knob editors, and the message-section menu does not describe
+ * them.
+ */
+test('a surface template offers no message-section insertion', async ({ page }) => {
+	await page.goto('/app/templates?template=srf-schedule');
+	await expect(page.getByRole('heading', { name: /Schedule/ })).toBeVisible({ timeout: 15000 });
+	await expect(page.getByRole('button', { name: '+ Add section' })).toHaveCount(0);
+});

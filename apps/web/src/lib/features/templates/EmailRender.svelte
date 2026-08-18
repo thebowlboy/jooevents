@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { themeStyleProperties } from '$lib/theme/theme-contract';
-	import type { EventTheme, MessageTemplate } from '$lib/api/types';
+	import type { EventTheme, MessageTemplate, TemplateBlock } from '$lib/api/types';
 	import { segmentMergeText, type MergeSegment } from './merge-fields';
 	import { excerpt, unitAttributes } from './inline-edit';
 	import { compileTextStyle } from './text-style';
@@ -17,9 +17,28 @@
 		 * consumer of this preview stays inert.
 		 */
 		editable?: boolean;
+		/**
+		 * Mounts section insertion over this preview: the rest-invisible edge
+		 * affordances and the persistent end control, both reporting the index a
+		 * new section would take and the element the add menu should anchor to.
+		 *
+		 * Optional and off by default, so a preview that only edits wording — or
+		 * one that is purely an artifact — renders exactly as it did.
+		 */
+		onInsert?: (index: number, anchor: HTMLElement) => void;
 	}
 
-	let { template, theme, eventName, eventMeta, editable = false }: Props = $props();
+	let {
+		template,
+		theme,
+		eventName,
+		eventMeta,
+		editable = false,
+		onInsert
+	}: Props = $props();
+
+	/** Insertion is an editable-mode affordance, and only where a host wants it. */
+	const insertable = $derived(editable && onInsert !== undefined);
 
 	/** Segments with each merge chip's ordinal, the index its `data-edit` path addresses. */
 	function segmentsOf(text: string): { segment: MergeSegment; mergeIndex: number }[] {
@@ -75,7 +94,64 @@
 		<p class="email__subject">{@render mergeText(template.subject)}</p>
 
 		{#each template.blocks as block, index (index)}
-			{#if block.type === 'heading'}
+			{#if insertable}
+				<!-- The section wrapper exists only while insertion is mounted. It
+				     carries no box of its own — no border, no padding, no margin —
+				     so the blocks inside keep the exact spacing they collapse to
+				     without it, and the affordances hang off it absolutely. -->
+				<div class="email__section">
+					{@render edge(index, 'above')}
+					{@render body(block, index)}
+					{@render edge(index + 1, 'below')}
+				</div>
+			{:else}
+				{@render body(block, index)}
+			{/if}
+		{/each}
+
+		{#if insertable}
+			<!-- The entry a first-time author actually finds. Persistent rather
+			     than hover-revealed, and rendered only while the preview is
+			     editable — the same discipline the teaching line follows, so the
+			     artifact at rest is still exactly the email. -->
+			<p class="email__add">
+				<button
+					type="button"
+					class="email__add-control"
+					onclick={(event) => onInsert?.(template.blocks.length, event.currentTarget)}>
+					+ Add section
+				</button>
+			</p>
+		{/if}
+
+		<footer class="email__footer">
+			<p class="email__footer-event">{eventName}</p>
+			{#if eventMeta}<p class="email__footer-meta">{eventMeta}</p>{/if}
+			<p class="email__footer-note">
+				You’re receiving this as a speaker/submitter of {eventName}.
+			</p>
+		</footer>
+	</article>
+</div>
+
+{#snippet edge(at: number, side: 'above' | 'below')}
+	<!-- Rest-invisible, fading in on a fine pointer over its own block. It is
+	     out of the tab order on purpose: the keyboard path to insertion is the
+	     block editor's own Add above/Add below, and 2N tab stops across a
+	     document would be a worse answer than one reachable pair. -->
+	<button
+		type="button"
+		class="email__insert email__insert--{side}"
+		tabindex="-1"
+		aria-label={`Add a section ${side} this one`}
+		onclick={(event) => onInsert?.(at, event.currentTarget)}>
+		<span class="email__insert-mark" aria-hidden="true">+</span>
+	</button>
+{/snippet}
+
+{#snippet body(block: TemplateBlock, index: number)}
+	{#if true}
+		{#if block.type === 'heading'}
 				<p
 					{...unitAttributes(editable, 'email__heading', `blocks.${index}.text`, excerptOf(block.text))}
 					style={compileTextStyle('heading', block.style)}>
@@ -112,17 +188,8 @@
 			{:else if block.type === 'divider'}
 				<hr class="email__divider" />
 			{/if}
-		{/each}
-
-		<footer class="email__footer">
-			<p class="email__footer-event">{eventName}</p>
-			{#if eventMeta}<p class="email__footer-meta">{eventMeta}</p>{/if}
-			<p class="email__footer-note">
-				You’re receiving this as a speaker/submitter of {eventName}.
-			</p>
-		</footer>
-	</article>
-</div>
+	{/if}
+{/snippet}
 
 <style>
 	/* The muted backdrop reads as an email client's viewport around the message,
@@ -305,6 +372,109 @@
 		margin: var(--je-space-1) 0;
 		border: 0;
 		border-block-start: 1px solid var(--je-color-border);
+	}
+
+	/* ------------------------------------------------------------- insertion */
+
+	/* No box of its own, so the blocks inside keep the spacing they had before
+	   the wrapper existed; it is here only to be the affordances' containing
+	   block. */
+	.email__section {
+		position: relative;
+		margin: 0;
+		padding: 0;
+		border: 0;
+	}
+
+	/* Invisible at rest — the artifact is the email, not a workbench — and
+	   absolutely positioned over the gap so fading in moves nothing. */
+	.email__insert {
+		position: absolute;
+		inset-inline: 0;
+		display: grid;
+		place-items: center;
+		block-size: 1rem;
+		margin: 0;
+		padding: 0;
+		border: 0;
+		background: none;
+		opacity: 0;
+		cursor: pointer;
+		transition: opacity var(--je-duration-fast) var(--je-ease);
+	}
+
+	.email__insert--above {
+		inset-block-start: -0.5rem;
+	}
+
+	.email__insert--below {
+		inset-block-end: -0.5rem;
+	}
+
+	/* The hairline it sits on, in the muted ink the editable outline uses. */
+	.email__insert::before {
+		content: '';
+		position: absolute;
+		inset-inline: 0;
+		inset-block-start: 50%;
+		border-block-start: 1px dashed var(--je-color-text-muted);
+	}
+
+	.email__insert-mark {
+		position: relative;
+		display: grid;
+		place-items: center;
+		inline-size: 1rem;
+		block-size: 1rem;
+		border-radius: var(--je-radius-round);
+		background: var(--je-color-surface);
+		color: var(--je-color-text-muted);
+		font-size: var(--je-font-size-sm);
+		line-height: 1;
+	}
+
+	/* A fine pointer only. On touch the same insertion lives in the block
+	   editor's own Add above/Add below, so nothing here is the sole carrier. */
+	@media (hover: hover) and (pointer: fine) {
+		.email__section:hover .email__insert {
+			opacity: 1;
+		}
+	}
+
+	.email__insert:focus-visible {
+		opacity: 1;
+		outline: none;
+		box-shadow: var(--je-focus-ring);
+		border-radius: var(--je-radius-xs);
+	}
+
+	/* The persistent end control: a ghost inside the editable surface, quiet
+	   enough not to read as part of the message. */
+	.email__add {
+		margin: var(--je-space-4) 0 0;
+		text-align: center;
+	}
+
+	.email__add-control {
+		margin: 0;
+		padding: var(--je-space-2) var(--je-space-3);
+		border: 1px dashed var(--je-color-border-strong);
+		border-radius: var(--je-radius-control);
+		background: none;
+		color: var(--je-color-text-muted);
+		font: inherit;
+		font-size: var(--je-font-size-sm);
+		cursor: pointer;
+	}
+
+	.email__add-control:hover {
+		border-color: var(--je-color-text-muted);
+		color: var(--je-color-text);
+	}
+
+	.email__add-control:focus-visible {
+		outline: none;
+		box-shadow: var(--je-focus-ring);
 	}
 
 	.email__footer {
