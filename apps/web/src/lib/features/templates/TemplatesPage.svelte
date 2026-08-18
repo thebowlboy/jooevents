@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
 	import { ArrowLeft, Bot, CodeXml, Sparkles } from 'lucide-svelte';
-	import { Button } from '$lib/ui';
+	import { Button, Modal } from '$lib/ui';
+	import NewTemplateWizard from './NewTemplateWizard.svelte';
 	import type { TemplatesPagePort } from '$lib/api/templates-page-port';
 	import { describePortFailure, type PortFailureView } from '$lib/api/port-failure';
 	import { applyParams, clearParams, param, paramIn } from '$lib/features/workspace/url-state.svelte';
@@ -316,6 +317,39 @@
 		if (tab === next) return;
 		// One navigation: the tab changes and any open editor scope leaves with it.
 		void applyParams({ tab: next === 'messages' ? null : next, template: null });
+	}
+
+	// ---------------------------------------------------------- new template
+
+	/**
+	 * Creating is a served capability, not an assumption. Where the composition
+	 * cannot mint a template the door still renders — disabled, with the reason
+	 * in place of a promise — because a control that quietly disappears leaves
+	 * someone hunting for a feature nobody told them was unavailable.
+	 */
+	const canCreate = $derived(api.templates.create !== undefined);
+	const createUnavailable = 'Creating templates is not yet available in this live workspace.';
+
+	let createOpen = $state(false);
+	let createBusy = $state(false);
+	let canCreateTemplate = $state(false);
+	let wizard = $state<ReturnType<typeof NewTemplateWizard> | null>(null);
+
+	function openCreate() {
+		if (!canCreate) return;
+		createOpen = true;
+		void tick().then(() => wizard?.reset());
+	}
+
+	/**
+	 * Create-then-edit is one gesture, like insert-then-type: the new template is
+	 * selected and its editor opens on the scaffold it was minted with, so the
+	 * next thing a person does is rewrite the words rather than go find it.
+	 */
+	async function onTemplateCreated(made: MessageTemplate) {
+		createOpen = false;
+		await reload();
+		openTemplate(made.id);
 	}
 
 	function openTemplate(id: string) {
@@ -1543,11 +1577,23 @@
 {:else if library.messages.length === 0}
 	<section class="card missing" aria-label="Message templates">
 		<p class="missing__title">No templates yet.</p>
-		<p class="missing__copy">Your starter set arrives with your first event.</p>
+		{#if canCreate}
+			<!-- The sentence a create belongs in: the starter set is still coming,
+			     and making one now is a real answer rather than a wait. -->
+			<p class="missing__copy">
+				Your starter set arrives with your first event. You can write one now either way.
+			</p>
+			<p class="missing__action">{@render newTemplateControl()}</p>
+		{:else}
+			<p class="missing__copy">Your starter set arrives with your first event.</p>
+		{/if}
 	</section>
 {:else}
 	<section class="card" aria-label="Message templates">
-		<header class="card__head"><h2 class="card__title">Message templates</h2></header>
+		<header class="card__head">
+			<h2 class="card__title">Message templates</h2>
+			{@render newTemplateControl()}
+		</header>
 		<ul class="tpl-rows">
 			{#each library.messages as template (template.id)}
 				{@render templateRow(template)}
@@ -1555,6 +1601,42 @@
 		</ul>
 	</section>
 {/if}
+
+{#snippet newTemplateControl()}
+	{#if canCreate}
+		<Button variant="secondary" size="sm" onclick={openCreate}>New template…</Button>
+	{:else}
+		<!-- Rendered, not hidden: the reason takes the control's place so the
+		     absence is answerable instead of merely puzzling. -->
+		<span class="head__blocked">
+			<Button variant="secondary" size="sm" disabled>New template…</Button>
+			<span class="head__reason">{createUnavailable}</span>
+		</span>
+	{/if}
+{/snippet}
+
+<!-- The library's own dialog: nothing is open behind it here, so the shared
+     Modal is the page's idiom rather than a stacked-dialog invention. -->
+<Modal bind:open={createOpen} title="New template">
+	{#if api.templates.create}
+		<NewTemplateWizard
+			bind:this={wizard}
+			bind:busy={createBusy}
+			bind:canCreate={canCreateTemplate}
+			create={api.templates.create}
+			oncreated={onTemplateCreated} />
+	{/if}
+	{#snippet footer(close)}
+		<Button variant="ghost" size="sm" disabled={createBusy} onclick={close}>Cancel</Button>
+		<Button
+			size="sm"
+			loading={createBusy}
+			disabled={!canCreateTemplate}
+			onclick={() => void wizard?.submit()}>
+			Create
+		</Button>
+	{/snippet}
+</Modal>
 
 <CommitReceipt onUndone={reload} />
 
@@ -1605,6 +1687,28 @@
 		gap: var(--je-space-2);
 		min-block-size: var(--je-control-height-sm);
 		margin-block-end: var(--je-space-2);
+	}
+
+	/* The create door sits at the end of the header row, away from the title. */
+	.card__head :global(> :last-child) {
+		margin-inline-start: auto;
+	}
+
+	/* A refused capability states itself beside its own disabled control. */
+	.head__blocked {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--je-space-2);
+		margin-inline-start: auto;
+	}
+
+	.head__reason {
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
+	}
+
+	.missing__action {
+		margin: var(--je-space-3) 0 0;
 	}
 
 	.card__title {

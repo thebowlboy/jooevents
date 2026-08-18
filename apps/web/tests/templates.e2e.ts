@@ -367,3 +367,43 @@ test('a surface template offers no message-section insertion', async ({ page }) 
 	await expect(preview).toContainText('AI Engineer NYC 2026 schedule', { timeout: 15000 });
 	await expect(page.getByRole('button', { name: '+ Add section' })).toHaveCount(0);
 });
+
+/**
+ * The library's own create door. Create-then-edit is one gesture: the new
+ * template is selected and its editor opens on the scaffold it was minted with,
+ * so the next thing to do is rewrite the words.
+ */
+test('the library header creates a template and opens it ready to edit', async ({ page }) => {
+	await page.goto('/app/templates');
+	const library = page.getByRole('region', { name: 'Message templates' });
+	await expect(library).toBeVisible({ timeout: 15000 });
+
+	await library.getByRole('button', { name: 'New template…' }).click();
+	const dialog = page.getByRole('dialog', { name: 'New template' });
+	await expect(dialog).toBeVisible();
+
+	// Create has nothing to act on until the template is named.
+	const create = dialog.getByRole('button', { name: 'Create', exact: true });
+	await expect(create).toBeDisabled();
+	await dialog.getByLabel('Name').fill('Venue change');
+	// Announcement is the recommended kind and arrives picked.
+	await expect(dialog.getByText('A clean content email in your event’s look')).toBeVisible();
+	await expect(create).toBeEnabled();
+	await create.click();
+	await expect(dialog).toBeHidden();
+
+	// Selected and open, with the kind's scaffold and its seeded subject.
+	await expect(page.getByRole('heading', { name: 'Venue change' })).toBeVisible({ timeout: 15000 });
+	const preview = page.getByRole('region', { name: 'Message preview' });
+	await expect(preview).toContainText('Your headline goes here');
+	await expect(preview.locator('.email__subject')).toContainText('News from');
+	// Click-to-edit ready, exactly as any stored template is.
+	await expect(page.locator('.editor__state')).toContainText('click any text to edit it.');
+	await expect(preview.getByRole('button', { name: '+ Add section' })).toBeVisible();
+
+	// And it is in the library it was made from.
+	await page.getByRole('button', { name: /All templates/ }).click();
+	await expect(page.getByRole('region', { name: 'Message templates' })).toContainText(
+		'Venue change'
+	);
+});

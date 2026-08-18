@@ -23,6 +23,7 @@
 		type InlineUnit
 	} from '$lib/features/templates/inline-edit';
 	import SectionAddMenu from '$lib/features/templates/SectionAddMenu.svelte';
+	import NewTemplateWizard from '$lib/features/templates/NewTemplateWizard.svelte';
 	import type {
 		AudienceOption,
 		AudiencePreview,
@@ -201,35 +202,24 @@
 	 * owns. Cancel returns to the fields exactly as they were left.
 	 */
 	let step = $state<'compose' | 'new-template'>('compose');
-	let newName = $state('');
-	let newKind = $state(templateKinds[0]!.id);
 	let creating = $state(false);
+	let canCreateTemplate = $state(false);
+	/** Refusals from this surface's own writes: an inline commit, a draft prepare. */
 	let createError = $state('');
+	let wizard = $state<ReturnType<typeof NewTemplateWizard> | null>(null);
 
 	function openNewTemplate() {
-		newName = '';
-		newKind = templateKinds[0]!.id;
-		createError = '';
 		step = 'new-template';
+		// The component owns the fields; opening asks it for a fresh sheet.
+		void tick().then(() => wizard?.reset());
 	}
 
-	async function createTemplate() {
-		const name = newName.trim();
-		if (!name || creating) return;
-		creating = true;
-		createError = '';
-		try {
-			const made = await api.templates.create({ name, kind: newKind });
-			await onTemplatesChanged();
-			// Selected the way any other pick selects, so the subject seeds from
-			// the new template exactly as it would from a starter.
-			pickTemplate(made.id, made);
-			step = 'compose';
-		} catch (error) {
-			createError = error instanceof Error ? error.message : 'The template could not be created.';
-		} finally {
-			creating = false;
-		}
+	/** The wizard minted one: select it here exactly as any other pick selects. */
+	async function onWizardCreated(made: MessageTemplate) {
+		await onTemplatesChanged();
+		// The subject seeds from the new template exactly as it would from a starter.
+		pickTemplate(made.id, made);
+		step = 'compose';
 	}
 
 	// ------------------------------------------------------- edit in the preview
@@ -504,40 +494,14 @@
 	title={step === 'new-template' ? 'New template' : 'Compose message'}
 	size="lg">
 	{#if step === 'new-template'}
-		<!-- One step, not a ceremony: a name and what kind of thing it is. The
-		     composer's own fields are untouched behind it, so Cancel is a return
-		     rather than a restart. -->
-		<div class="wizard">
-			<Field id="new-template-name" label="Name" required description="What you’ll pick it by later.">
-				{#snippet children({ id, describedBy, invalid })}
-					<input
-						class="ui-control"
-						type="text"
-						{id}
-						aria-describedby={describedBy}
-						aria-invalid={invalid}
-						placeholder="Venue change"
-						bind:value={newName} />
-				{/snippet}
-			</Field>
-			<fieldset class="kinds">
-				<legend class="kinds__legend">What kind</legend>
-				{#each templateKinds as kind (kind.id)}
-					<label class="kind" class:kind--picked={newKind === kind.id}>
-						<input
-							type="radio"
-							name="new-template-kind"
-							class="ui-sr-only"
-							value={kind.id}
-							checked={newKind === kind.id}
-							onchange={() => (newKind = kind.id)} />
-						<span class="kind__label">{kind.label}</span>
-						<span class="kind__description">{kind.description}</span>
-					</label>
-				{/each}
-			</fieldset>
-			{#if createError}<p class="wizard__error" role="alert">{createError}</p>{/if}
-		</div>
+		<!-- The composer's own fields are untouched behind it, so Cancel is a
+		     return rather than a restart. -->
+		<NewTemplateWizard
+			bind:this={wizard}
+			bind:busy={creating}
+			bind:canCreate={canCreateTemplate}
+			create={(input) => api.templates.create(input)}
+			oncreated={onWizardCreated} />
 	{:else}
 	<div class="compose">
 		<div class="compose__fields">
@@ -734,9 +698,9 @@
 			<button
 				type="button"
 				class="ui-button ui-button--primary"
-				disabled={creating || !newName.trim()}
+				disabled={creating || !canCreateTemplate}
 				aria-busy={creating || undefined}
-				onclick={createTemplate}>
+				onclick={() => void wizard?.submit()}>
 				{#if creating}<span class="ui-spinner" aria-hidden="true"></span>{/if}
 				Create
 			</button>
@@ -841,68 +805,6 @@
 		outline: none;
 		box-shadow: var(--je-focus-ring);
 		border-radius: var(--je-radius-control);
-	}
-
-	.wizard {
-		display: grid;
-		gap: var(--je-space-4);
-		max-inline-size: 34rem;
-	}
-
-	.kinds {
-		display: grid;
-		gap: var(--je-space-2);
-		margin: 0;
-		padding: 0;
-		border: 0;
-	}
-
-	.kinds__legend {
-		padding: 0;
-		margin-block-end: var(--je-space-2);
-		font-size: var(--je-font-size-sm);
-		font-weight: 600;
-	}
-
-	/* Marking, not action: a picked card takes the mark surface every selected
-	   thing in this product takes, never the action colour. */
-	.kind {
-		display: grid;
-		gap: var(--je-space-1);
-		padding: var(--je-space-3);
-		border: 1px solid var(--je-color-border);
-		border-radius: var(--je-radius-surface);
-		background: var(--je-color-surface);
-		cursor: pointer;
-	}
-
-	.kind:hover {
-		border-color: var(--je-color-border-strong);
-	}
-
-	.kind--picked {
-		border-color: var(--je-color-mark-border);
-		background: var(--je-color-mark-surface);
-	}
-
-	.kind:has(input:focus-visible) {
-		outline: none;
-		box-shadow: var(--je-focus-ring);
-	}
-
-	.kind__label {
-		font-weight: 600;
-	}
-
-	.kind__description {
-		font-size: var(--je-font-size-sm);
-		color: var(--je-color-text-muted);
-	}
-
-	.wizard__error {
-		margin: 0;
-		font-size: var(--je-font-size-sm);
-		color: var(--je-color-danger);
 	}
 
 	.tpl__edit {

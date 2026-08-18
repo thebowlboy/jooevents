@@ -19,6 +19,14 @@ import type {
 export interface TemplatesPagePort {
 	readonly templates: {
 		list(): Promise<{ messages: MessageTemplate[]; surfaces: SurfaceTemplate[] }>;
+		/**
+		 * Mints a hand-made template from one of the offered kinds.
+		 *
+		 * Optional, and the surface renders on its absence rather than around it:
+		 * a composition that cannot create says so in place of the control, so
+		 * the door is never a promise the lane cannot keep.
+		 */
+		create?(input: { name: string; kind: string }): Promise<MessageTemplate>;
 		modelChoices(): Promise<ModelChoice[]>;
 		classify(id: string, instruction: string, modelId?: string): Promise<EditClassification>;
 		revise(
