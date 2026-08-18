@@ -256,31 +256,29 @@ describe('workspace magic-link sign-in', () => {
       headers: { origin: reviewConfig.baseUrl, 'content-type': 'application/json' }
     });
     expect(started.status).toBe(200);
-    const issued = await started.json() as { readonly url: string };
-    expect(issued.url).toContain('/api/auth/magic-link/verify?token=');
-
-    const verified = await runtime.app.request(issued.url);
-    expect([302, 307]).toContain(verified.status);
-    const cookie = sessionCookieFrom(verified);
-    const active = await runtime.app.request('/api/me/access-context', {
-      headers: { cookie, 'x-correlation-id': crypto.randomUUID() }
-    });
-    expect(await active.json()).toMatchObject({ state: 'active' });
-
-    const startedAgain = await runtime.app.request('/api/entry/review-organizer', {
-      method: 'POST',
-      headers: { origin: reviewConfig.baseUrl, 'content-type': 'application/json' }
-    });
-    expect(startedAgain.status).toBe(200);
-    const issuedAgain = await startedAgain.json() as { readonly url: string };
-    const verifiedAgain = await runtime.app.request(issuedAgain.url);
-    expect([302, 307]).toContain(verifiedAgain.status);
-    const secondCookie = sessionCookieFrom(verifiedAgain);
-    expect(secondCookie).not.toBe(cookie);
-    const activeAgain = await runtime.app.request('/api/me/access-context', {
-      headers: { cookie: secondCookie, 'x-correlation-id': crypto.randomUUID() }
-    });
-    expect(await activeAgain.json()).toMatchObject({ state: 'active' });
+    const cookies = new Set<string>();
+    for (let entry = 0; entry < 7; entry += 1) {
+      const response = entry === 0 ? started : await runtime.app.request(
+        '/api/entry/review-organizer',
+        {
+          method: 'POST',
+          headers: { origin: reviewConfig.baseUrl, 'content-type': 'application/json' }
+        }
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ url: '/auth/complete?returnTo=/app' });
+      const cookie = sessionCookieFrom(response);
+      expect(cookies.has(cookie)).toBe(false);
+      cookies.add(cookie);
+      const active = await runtime.app.request('/api/me/access-context', {
+        headers: { cookie, 'x-correlation-id': crypto.randomUUID() }
+      });
+      expect(await active.json()).toMatchObject({ state: 'active' });
+    }
+    expect(cookies.size).toBe(7);
+    expect(runtime.database.sqlite.query<{ readonly count: number }, []>(
+      'SELECT COUNT(*) AS count FROM auth_verifications'
+    ).get()?.count).toBe(0);
 
     // Review entry does not consume or widen the ordinary public request
     // bucket: its existing five-per-minute Better Auth policy is unchanged.

@@ -254,7 +254,46 @@ export function createHttpApp(input: {
           correlationId: correlation(context)
         }, 502);
       }
-      return context.json({ url });
+      let token: string | null = null;
+      try {
+        const issued = new URL(url);
+        if (issued.origin === new URL(input.baseUrl).origin
+            && issued.pathname === '/api/auth/magic-link/verify') {
+          token = issued.searchParams.get('token');
+        }
+      } catch {
+        token = null;
+      }
+      if (!token) {
+        return context.json({
+          code: 'review_entry_failed',
+          message: 'Organizer review entry could not start.',
+          retryable: true,
+          correlationId: correlation(context)
+        }, 502);
+      }
+      try {
+        // Consume the exact one-use, hash-at-rest credential through Better
+        // Auth as part of this evaluation-only endpoint. Calling its internal
+        // verifier preserves credential consumption, principal/session
+        // creation, and secure cookie policy without crossing the ordinary
+        // public verify endpoint's anti-abuse bucket.
+        const verified = await input.auth.api.magicLinkVerify({
+          headers: context.req.raw.headers,
+          query: { token },
+          asResponse: true
+        });
+        if (!verified.ok) throw new TypeError('review_entry_verify_failed');
+        forwardAuthCookies(context, verified);
+      } catch {
+        return context.json({
+          code: 'review_entry_failed',
+          message: 'Organizer review entry could not start.',
+          retryable: true,
+          correlationId: correlation(context)
+        }, 502);
+      }
+      return context.json({ url: SIGN_IN_LINK_CALLBACK_PATH });
     });
   }
 
