@@ -1153,17 +1153,24 @@ async function createSessionFileLinks(input: {
   readonly context: SeedContext;
   readonly sessionIdByTitle: ReadonlyMap<string, string>;
 }): Promise<number> {
+  const engagements = await readEngagements(input.context);
   let created = 0;
   for (const [index, file] of SESSION_FILE_LINKS.entries()) {
     const sessionId = input.sessionIdByTitle.get(file.title);
     if (!sessionId) fail('file_session_missing', file.title);
+    const engagement = engagements.engagements.find(
+      (candidate) => candidate.sessionId === sessionId
+    );
+    if (!engagement) fail('file_engagement_missing', file.title);
     const result = requireSuccess(fileLinkAttachOperationResultSchema.parse(await effect({
       context: input.context,
       path: '/api/events/current/files/attachments/link',
       key: `joocon-session-file-${index + 1}`,
       body: {
         attachmentId: crypto.randomUUID(),
-        subject: { kind: 'session', sessionId },
+        // The organizer Files surface groups received material by speaker
+        // engagement and derives the Session label from that canonical join.
+        subject: { kind: 'engagement', engagementId: engagement.id },
         link: { provider: 'url', label: file.label, url: file.url }
       },
       parse: (value) => value

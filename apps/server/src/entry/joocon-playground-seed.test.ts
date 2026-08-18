@@ -90,12 +90,14 @@ describe('JooCon playground seed timeline', () => {
     );
 
     const sessionFileLinks = runtime.database.sqlite.query<
-      { readonly count: number }, []
+      { readonly count: number; readonly engagement_count: number }, []
     >(`
-      SELECT count(*) AS count FROM operation_log
-       WHERE operation_name = 'file.attachment.link'
-    `).get()?.count ?? 0;
-    expect(sessionFileLinks).toBe(2);
+      SELECT count(*) AS count,
+             sum(CASE WHEN subject_kind = 'engagement' THEN 1 ELSE 0 END) AS engagement_count
+        FROM file_attachments
+       WHERE state = 'attached'
+    `).get();
+    expect(sessionFileLinks).toEqual({ count: 2, engagement_count: 2 });
 
     const arrivals = times(runtime, `
       SELECT submitted_at_ms AS at FROM submission_arrival_facts ORDER BY submitted_at_ms
