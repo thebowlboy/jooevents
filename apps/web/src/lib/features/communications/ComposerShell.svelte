@@ -99,6 +99,8 @@
 	 * chips (which would count anyone in two groups twice).
 	 */
 	let preview = $state<AudiencePreview | null>(null);
+	let previewError = $state('');
+	let previewRetry = $state(0);
 	let showWho = $state(false);
 	// A plain let, deliberately outside the graph: it records which request is
 	// newest, so a slow answer for a selection nobody is on any more cannot
@@ -106,11 +108,15 @@
 	let previewToken = 0;
 
 	$effect(() => {
+		// A retry changes no audience fact; it only asks the same exact question
+		// again after a transport or availability failure.
+		void previewRetry;
 		const ids = [...audienceIds];
 		const token = ++previewToken;
 		// The list belongs to the selection that produced it; a changed selection
 		// closes it rather than leaving other people's names on screen.
 		showWho = false;
+		previewError = '';
 		if (ids.length === 0) {
 			preview = null;
 			return;
@@ -118,7 +124,10 @@
 		void api.communications.previewRecipients(ids).then((next) => {
 			if (token === previewToken) preview = next;
 		}).catch(() => {
-			if (token === previewToken) preview = null;
+			if (token === previewToken) {
+				preview = null;
+				previewError = 'This audience could not be counted. Try again before reviewing the draft.';
+			}
 		});
 	});
 
@@ -525,17 +534,15 @@
 						<!-- A control, not an option: an <option> that opens a dialog is a
 						     trap on keyboard and touch, where choosing it in order to read
 						     it is the same act as committing to it. -->
-						{#if !live}
-							<button type="button" class="tpl__new" onclick={openNewTemplate}>New template…</button>
-						{/if}
+						<button type="button" class="tpl__new" onclick={openNewTemplate}>New template…</button>
 						{#if template}
 							<!-- One fact, one door: the chosen template links to its editor. -->
-							{#if !live}<a
+							<a
 								class="tpl__edit"
 								href={`/app/templates?template=${template.id}`}
 								aria-label={`Edit template — ${template.name}`}>
 								Edit template
-							</a>{/if}
+							</a>
 						{/if}
 					</div>
 				{/snippet}
@@ -580,6 +587,12 @@
 							{/if}
 						{:else if audienceIds.length === 0}
 							Pick at least one audience.
+						{:else if previewError}
+							<span class="audience-failure" role="alert">{previewError}</span>
+							<button
+								type="button"
+								class="ui-button ui-button--ghost ui-button--sm"
+								onclick={() => (previewRetry += 1)}>Try again</button>
 						{:else}
 							Counting who this reaches…
 						{/if}

@@ -52,6 +52,19 @@ function canonicalMultiline(maximum: number, allowEmpty = false): z.ZodType<stri
   }, { message: 'Expected canonical control-free multiline text.' });
 }
 
+/**
+ * Inline nodes are concatenated around merge fields, so boundary whitespace is
+ * content rather than input noise. `Hello {{person.name}}` deliberately stores
+ * `Hello ` before the merge node; trimming that fragment either corrupts the
+ * rendered sentence or rejects ordinary authored prose. Keep the exact NFC
+ * text while retaining the same control-character and size boundary.
+ */
+function canonicalInlineText(maximum: number): z.ZodType<string> {
+  return z.string().min(1).max(maximum).refine((value) => {
+    return value.normalize('NFC') === value && !CONTROL.test(value);
+  }, { message: 'Expected canonical control-free inline text.' });
+}
+
 function normalizedSingleLineInput(maximum: number, allowEmpty = false): z.ZodType<string> {
   return z.string().max(maximum).overwrite(normalizeSingleLine).refine((value) => {
     return (allowEmpty || value.length > 0) && !CONTROL.test(value);
@@ -191,7 +204,7 @@ export const organizerCommunicationPurposePageSchema = z.strictObject({
 export const organizerMessageInlineNodeSchema = z.discriminatedUnion('kind', [
   z.strictObject({
     kind: z.literal('text'),
-    value: canonicalSingleLine(4_000, true),
+    value: canonicalInlineText(4_000),
     emphasis: z.enum(['none', 'strong', 'emphasis']).optional()
   }),
   z.strictObject({

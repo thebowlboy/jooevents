@@ -266,12 +266,19 @@ function resolveBindings(manifest: unknown): Bindings {
 
 function queryPath(path: string, input: object): string {
 	const query = new URLSearchParams();
-	for (const [key, value] of Object.entries(input)) {
-		if (value === undefined) continue;
+	const append = (key: string, value: unknown) => {
 		if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
 			throw new TypeError(`Unsupported operator query value for ${key}.`);
 		}
 		query.append(key, String(value));
+	};
+	for (const [key, value] of Object.entries(input)) {
+		if (value === undefined) continue;
+		if (Array.isArray(value)) {
+			for (const item of value) append(key, item);
+			continue;
+		}
+		append(key, value);
 	}
 	const encoded = query.toString();
 	return encoded.length === 0 ? path : `${path}?${encoded}`;

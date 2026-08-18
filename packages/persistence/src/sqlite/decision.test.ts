@@ -20,6 +20,7 @@ import {
 } from './program-vocabulary';
 import { installSchedulePlacementSchema } from './schedule-placement';
 import { installSessionSchema, SQLiteSessionRepository } from './session';
+import { SESSION_PARTICIPANT_SUPPORT_SQL } from './session-participant-support';
 import { SQLiteReviewCandidateSourceAdapter } from './review-candidate-source';
 import {
   installDecisionSchema,
@@ -74,6 +75,7 @@ function fixture(environment?: DecisionEnvironmentSource) {
   installEventSpineSchema(sqlite);
   installProgramVocabularySchema(sqlite);
   installSessionSchema(sqlite);
+  sqlite.exec(SESSION_PARTICIPANT_SUPPORT_SQL);
   installSchedulePlacementSchema(sqlite);
   installDecisionSchema(sqlite);
   installEngagementSchema(sqlite);

@@ -317,3 +317,70 @@ test('decisions carries the entry through accept-with-spawn into the program poo
 		page.getByRole('region', { name: 'Program' }).getByText(entryTitle, { exact: true })
 	).toBeVisible();
 });
+
+test('communications composes, reviews, sends, and exposes retained delivery and person history', async ({
+	page,
+	baseURL
+}, testInfo) => {
+	test.setTimeout(60_000);
+	if (!baseURL) throw new TypeError('Joined live browser base URL is required.');
+	const project = testInfo.project.name;
+	const speakerName = `Speaker ${project}`;
+	const subject = `Joined organizer update (${project})`;
+	const templateName = `Joined announcement ${project}`;
+
+	await page.goto('/app/messages?compose=1');
+	const compose = page.getByRole('dialog', { name: 'Compose message' });
+	await expect(compose).toBeVisible();
+
+	// The live composer exposes the same template-mint operation as the library.
+	// Creating here returns to the in-progress compose and selects the new root.
+	await compose.getByRole('button', { name: 'New template…' }).click();
+	const templateDialog = page.getByRole('dialog', { name: 'New template' });
+	await expect(templateDialog).toBeVisible();
+	await templateDialog.getByLabel('Name').fill(templateName);
+	await templateDialog.getByRole('button', { name: 'Create', exact: true }).click();
+	await expect(page.getByRole('dialog', { name: 'Compose message' })).toBeVisible();
+	await expect(compose.getByLabel('Template', { exact: true })).toHaveValue(/.+/);
+	await expect(compose.getByRole('link', { name: `Edit template — ${templateName}` })).toBeVisible();
+
+	await compose.getByLabel('Subject').fill(subject);
+	await expect(compose.getByRole('checkbox').first()).toBeChecked();
+	await expect(compose.getByText(/Reaches \d+ (?:person|people)/)).toBeVisible();
+	await compose.getByRole('button', { name: 'Create draft' }).click();
+	await expect(compose).not.toBeVisible();
+
+	// The draft is not an optimistic local row: the server-derived attention
+	// projection finds it, prepares the current audience, and opens exact review.
+	const attention = page.getByRole('region', { name: 'Needs attention' });
+	const draftAttention = attention.getByRole('listitem').filter({ hasText: subject });
+	await expect(draftAttention).toBeVisible();
+	await draftAttention.getByRole('button', { name: 'Review draft' }).click();
+	const review = page.getByRole('dialog', { name: 'Review & send' });
+	await expect(review.getByLabel('Subject')).toHaveValue(subject);
+	await expect(review.getByText(/What .* receives/)).toBeVisible();
+	await review.getByRole('button', { name: /^Send \d+ emails?$/ }).click();
+	await expect(review).not.toBeVisible();
+
+	// No provider is active in the joined fixture, so the retained result is a
+	// terminal failed attempt—not a false delivered claim—and its timeline opens.
+	const history = page.getByRole('region', { name: 'History' });
+	const sentRow = history.getByRole('listitem').filter({ hasText: subject });
+	await expect(sentRow).toBeVisible();
+	await expect(sentRow).toContainText(/failed/i);
+	await sentRow.getByRole('button', { name: `Delivery evidence for “${subject}”` }).click();
+	await expect(sentRow.getByRole('region', { name: 'Per-recipient delivery attempts' })).toBeVisible();
+
+	// The same retained release is reachable through the speaker-shaped door.
+	// Remove only the compose flag from its URL so the person scope itself stays.
+	await page.goto('/app/speakers');
+	await page.getByRole('link', { name: `Open ${speakerName}'s record` }).click();
+	const write = page.getByRole('link', { name: `Write to ${speakerName}` });
+	const href = await write.getAttribute('href');
+	if (!href) throw new TypeError('Speaker-scoped compose address missing.');
+	const threadUrl = new URL(href, baseURL);
+	threadUrl.searchParams.delete('compose');
+	await page.goto(`${threadUrl.pathname}${threadUrl.search}`);
+	await expect(page.getByRole('region', { name: 'History' })).toContainText(speakerName);
+	await expect(page.getByRole('region', { name: 'History' })).toContainText(subject);
+});

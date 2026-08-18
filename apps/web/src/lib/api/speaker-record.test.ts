@@ -5,11 +5,13 @@ import {
 	cueSlotLabel,
 	deliverableView,
 	deliverableViews,
+	composeHref,
 	nextStep,
 	provenanceSentence,
 	quietSentence,
 	scopedAttention,
-	speakerRecordHref
+	speakerRecordHref,
+	threadHref
 } from './speaker-record';
 import type { SpeakerDeliverable, SpeakerRecordSnapshot } from './speaker-record-port';
 import type { AssignmentState, EngagementState, SpeakerRow, TaskDef } from './types';
@@ -94,6 +96,23 @@ const assignment = (state: AssignmentState, overdue = false) => ({
 });
 
 describe('scoped attention', () => {
+	test('communications links are scoped by canonical person identity, not engagement identity', () => {
+		expect(composeHref('person-5')).toBe('/app/messages?compose=1&person=person-5');
+		expect(threadHref('person-5')).toBe('/app/messages?person=person-5');
+		const rows = scopedAttention(snapshot({
+			engagement: row({ id: 'engagement-5', personId: 'person-5' }),
+			thread: {
+				personId: 'person-5',
+				personName: 'Lukas Brandt',
+				entries: [{
+					id: 'thr-1', at: 'Yesterday', purpose: 'Onboarding',
+					subject: 'Onboarding', outcome: 'bounced', actor: 'you'
+				}]
+			}
+		}));
+		expect(rows[0]?.door?.href).toBe('/app/messages?person=person-5');
+	});
+
 	test('a cancellation request leads, and its one remedy is the walk', () => {
 		const rows = scopedAttention(
 			snapshot({

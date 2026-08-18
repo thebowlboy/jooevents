@@ -527,7 +527,10 @@ describe('pure-live Communications authoring browser port', () => {
 		const discarded = await port.discardDraft({
 			draftId: 'draft-1', expectedVersion: 1, reasonCode: 'author.cancelled'
 		}, 'discard-draft-1');
-		const audiences = await port.listAudienceOptions({ purposeId: 'purpose-1' });
+		const audiences = await port.listAudienceOptions({
+			purposeId: 'purpose-1',
+			selectionOptionIds: ['audience-1', 'audience-2']
+		});
 		const preview = await port.getPreview(previewIdentity);
 		const recipients = await port.listPreviewRecipients({ ...previewIdentity, state: 'included' });
 		const prepared = await port.prepareBatchPreview({ draftId: 'draft-1', expectedDraftVersion: 1 });
@@ -639,6 +642,10 @@ describe('pure-live Communications authoring browser port', () => {
 		expect(previewQuery.get('draftVersion')).toBe('1');
 		expect(previewQuery.get('previewGeneration')).toBe('2');
 		expect(previewQuery.get('previewDigestSha256')).toBe(previewIdentity.previewDigestSha256);
+		const audienceCall = calls.find((call) => call.path.startsWith(`${paths.listAudienceOptions}?`));
+		expect(audienceCall).toBeDefined();
+		const audienceQuery = new URL(audienceCall!.path, 'https://jooevents.invalid').searchParams;
+		expect(audienceQuery.getAll('selectionOptionIds')).toEqual(['audience-1', 'audience-2']);
 		expect(calls.filter((call) => call.method === 'POST').map((call) => call.idempotencyKey))
 			.toEqual([
 				'store-content-1', 'create-template-1', 'create-draft-1', 'revise-draft-1',

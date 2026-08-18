@@ -253,7 +253,7 @@
 						{#if view.acceptable || view.acceptRefusal}
 							<p class="row__reason">
 								Sending it back is not built yet — ask for a correction in a message instead.
-								<a href={composeHref(engagement.id)}>Write to {engagement.name}</a>
+								<a href={composeHref(engagement.personId ?? engagement.id)}>Write to {engagement.name}</a>
 							</p>
 						{/if}
 					{/if}

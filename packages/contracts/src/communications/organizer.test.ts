@@ -18,6 +18,7 @@ import {
   organizerCommunicationTimelinePageSchema,
   organizerCreateCommunicationDraftInputSchema,
   organizerEmailReadinessProjectionSchema,
+  organizerEmailTemplateContentSchema,
   organizerMessageBatchPreviewDetailSchema,
   organizerMessagePreviewRecipientPageSchema,
   organizerMessagePreviewRecipientRowSchema,
@@ -145,6 +146,36 @@ function historyItem(state: OrganizerCommunicationHistoryItem['state']): Organiz
 }
 
 describe('organizer communication authoring contracts', () => {
+
+  test('preserves safe boundary spaces around merge fields', () => {
+    const content = {
+      kind: 'email/v1' as const,
+      subject: [
+        { kind: 'text' as const, value: 'News from ' },
+        { kind: 'merge_field' as const, fieldKey: 'event.name' }
+      ],
+      body: {
+        mode: 'composed' as const,
+        blocks: [{
+          kind: 'paragraph' as const,
+          content: [
+            { kind: 'merge_field' as const, fieldKey: 'person.first_name' },
+            { kind: 'text' as const, value: ' ' },
+            { kind: 'merge_field' as const, fieldKey: 'person.last_name' }
+          ]
+        }]
+      },
+      plainTextPolicy: 'derive_v1' as const,
+      attachmentSlotKeys: []
+    };
+
+    expect(organizerEmailTemplateContentSchema.parse(content)).toEqual(content);
+    expect(() => organizerEmailTemplateContentSchema.parse({
+      ...content,
+      subject: [{ kind: 'text', value: 'Unsafe\ttext' }]
+    })).toThrow();
+  });
+
   test('requires an exact purpose revision and explicit registered empty refs', () => {
     const valid = {
       channel: 'email' as const,

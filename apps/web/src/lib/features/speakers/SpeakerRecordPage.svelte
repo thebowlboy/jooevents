@@ -413,7 +413,7 @@
 			<div class="section__head">
 				<h3 class="section__title" id="record-communications">Communications</h3>
 				{#if entries.length > 0}
-					<a class="ui-button ui-button--soft ui-button--sm" href={threadHref(person.id)}
+					<a class="ui-button ui-button--soft ui-button--sm" href={threadHref(person.personId ?? person.id)}
 						>Open in Communications</a>
 				{/if}
 			</div>
@@ -458,7 +458,7 @@
 
 			<!-- A GET opens the composer scoped to one person; the send stays an
 			     explicit command with its own review. -->
-			<a class="ui-button ui-button--secondary ui-button--sm compose" href={composeHref(person.id)}
+			<a class="ui-button ui-button--secondary ui-button--sm compose" href={composeHref(person.personId ?? person.id)}
 				>Write to {person.name}</a>
 		</section>
 		<!-- History ────────────────────────────────────────────────────── -->

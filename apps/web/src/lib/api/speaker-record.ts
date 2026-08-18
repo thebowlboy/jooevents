@@ -65,14 +65,14 @@ export function tasksHref(engagementId: string, overdue: boolean): string {
 	return `/app/tasks?speaker=${engagementId}${overdue ? '&filter=overdue' : ''}`;
 }
 
-/** The compose dialog, scoped to one person. A GET never sends anything. */
-export function composeHref(engagementId: string): string {
-	return `/app/messages?compose=1&person=${engagementId}`;
+/** The compose dialog, scoped to one canonical person. A GET never sends anything. */
+export function composeHref(personId: string): string {
+	return `/app/messages?compose=1&person=${personId}`;
 }
 
 /** This person's whole thread on the Communications page. */
-export function threadHref(engagementId: string): string {
-	return `/app/messages?person=${engagementId}`;
+export function threadHref(personId: string): string {
+	return `/app/messages?person=${personId}`;
 }
 
 /** The one record URL every person-shaped door in the product resolves to. */
@@ -138,7 +138,7 @@ export function scopedAttention(snapshot: SpeakerRecordSnapshot): AttentionRow[]
 			tone: 'danger',
 			title: `${name} never received “${first.subject}” — their address rejected it.`,
 			detail: `Every later message goes to the same address until it is fixed.`,
-			door: { label: 'Fix the address', href: threadHref(engagement.id) }
+			door: { label: 'Fix the address', href: threadHref(engagement.personId ?? engagement.id) }
 		});
 	}
 

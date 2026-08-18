@@ -60,12 +60,9 @@ describe('the kind registry', () => {
 			'heading',
 			'paragraph',
 			'paragraph',
-			'button',
 			'divider'
 		]);
-		// A symbolic product reference, never a raw URL.
-		const button = announcement.blocks.find((block) => block.type === 'button');
-		expect(button).toEqual({ type: 'button', label: 'Read more', href: 'event.schedule' });
+		expect(announcement.mergeFields.map((field) => field.key)).toEqual(['person.name']);
 	});
 
 	// Placeholder copy is text that can still be sent, so it must not address
@@ -109,12 +106,11 @@ describe('minting a template from a kind', () => {
 		expect(made.name).toBe('Venue change');
 		expect(made.key).toBe('custom-venue-change');
 		expect(made.purpose).toBe('Announcements and general updates.');
-		expect(made.subject).toBe('News from {{event.name}}');
+		expect(made.subject).toBe('Event update');
 		expect(made.blocks.map((block) => block.type)).toEqual([
 			'heading',
 			'paragraph',
 			'paragraph',
-			'button',
 			'divider'
 		]);
 		// Attributed to the operator exactly as an inline edit attributes them,
@@ -189,7 +185,7 @@ describe('minting a template from a kind', () => {
 		const api = await freshApi();
 		const made = await api.templates.create({ name: 'Venue change', kind: 'announcement' });
 		const listed = (await api.templates.list()).messages.find((entry) => entry.id === made.id);
-		expect(listed?.subject).toBe('News from {{event.name}}');
+		expect(listed?.subject).toBe('Event update');
 	});
 
 	test('an edit made from the composer lands as the next revision of the same template', async () => {

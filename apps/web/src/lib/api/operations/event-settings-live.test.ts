@@ -46,7 +46,8 @@ const after = Object.freeze({
 	venueNote: updateInput.venueNote,
 	dayStart: updateInput.dayStart,
 	dayEnd: updateInput.dayEnd,
-	slotMinutes: updateInput.slotMinutes
+	slotMinutes: updateInput.slotMinutes,
+	profileContentReview: false
 });
 
 const expected = {

@@ -7,8 +7,8 @@
  * store both.
  *
  * The scaffolds speak the starters' voice: a short heading, a paragraph that
- * opens by name, a second that carries the detail, one symbolic button, and the
- * divider every starter closes on. Their copy is written to be replaced — it
+ * opens by name, a second that carries the detail, and the divider the
+ * announcement closes on. Their copy is written to be replaced — it
  * says what belongs in each place rather than pretending to be finished prose —
  * and it never mentions the editor, because unreplaced placeholder text is text
  * that can still be sent.
@@ -30,17 +30,14 @@ export interface TemplateKindDef {
 }
 
 /**
- * The tokens a hand-made template may use: the event and the person, the four
- * the starters share. Submission and task tokens are deliberately absent — they
- * belong to the flows that own those records, and a token with nothing behind
- * it renders as its own braces.
+ * The token a hand-made announcement may use under the currently mounted
+ * communication purpose. A starter must stay inside that purpose's merge
+ * registry: offering event-shaped placeholders here used to mint a template
+ * successfully and then block every recipient at exact preview.
  */
 function standardMergeFields(): MergeFieldDef[] {
 	return [
-		{ key: 'speaker.name', label: 'Speaker name', sample: 'Maya Lindqvist' },
-		{ key: 'event.name', label: 'Event name', sample: 'AI Engineer NYC 2026' },
-		{ key: 'event.dates', label: 'Event dates', sample: 'Oct 12–14, 2026' },
-		{ key: 'event.location', label: 'Event location', sample: 'New York City' }
+		{ key: 'person.name', label: 'Recipient name', sample: 'Maya Lindqvist' }
 	];
 }
 
@@ -48,23 +45,20 @@ export const templateKinds: TemplateKindDef[] = [
 	{
 		id: 'announcement',
 		label: 'Announcement',
-		description:
-			'A clean content email in your event’s look — headline, message, optional button.',
+		description: 'A clean content email in your event’s look — headline and message.',
 		purpose: 'Announcements and general updates.',
-		subject: 'News from {{event.name}}',
+		subject: 'Event update',
 		blocks: [
-			{ type: 'heading', text: 'Your headline goes here', suggestedVars: ['event.name'] },
+			{ type: 'heading', text: 'Your headline goes here' },
 			{
 				type: 'paragraph',
-				text: '{{speaker.name}}, open with the one thing that changed and why it matters to them. Two sentences is usually enough — the detail can follow underneath.',
-				suggestedVars: ['speaker.name', 'event.name']
+				text: '{{person.name}}, open with the one thing that changed and why it matters to them. Two sentences is usually enough — the detail can follow underneath.',
+				suggestedVars: ['person.name']
 			},
 			{
 				type: 'paragraph',
-				text: 'Put the detail here: dates, what to do next, anything they need before the day. Delete this paragraph if the headline already said it.',
-				suggestedVars: ['event.dates', 'event.location']
+				text: 'Put the detail here: dates, what to do next, anything they need before the day. Delete this paragraph if the headline already said it.'
 			},
-			{ type: 'button', label: 'Read more', href: 'event.schedule' },
 			{ type: 'divider' }
 		],
 		mergeFields: standardMergeFields()

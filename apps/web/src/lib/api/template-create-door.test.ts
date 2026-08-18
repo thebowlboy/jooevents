@@ -72,7 +72,7 @@ describe('the create capability', () => {
 		const made = await port.templates.create!({ name: 'Venue change', kind: 'announcement' });
 		expect(made.id.length).toBeGreaterThan(0);
 		const opened = (await port.templates.list()).messages.find((entry) => entry.id === made.id);
-		expect(opened?.subject).toBe('News from {{event.name}}');
+		expect(opened?.subject).toBe('Event update');
 	});
 });
 

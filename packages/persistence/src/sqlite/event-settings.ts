@@ -37,7 +37,6 @@ CREATE TABLE event_settings_companions (
     OR day_end GLOB '2[0-3]:[0-5][0-9]'
   ),
   slot_minutes INTEGER CHECK(slot_minutes IS NULL OR slot_minutes IN (5, 10, 15, 20, 30, 60)),
-  profile_content_review INTEGER NOT NULL DEFAULT 0 CHECK(profile_content_review IN (0, 1)),
   CHECK((day_start IS NULL) = (day_end IS NULL) AND (day_start IS NULL) = (slot_minutes IS NULL)),
   CHECK(day_start IS NULL OR day_end > day_start),
   CHECK(
@@ -71,6 +70,13 @@ BEFORE DELETE ON event_settings_companions
 BEGIN
   SELECT RAISE(ABORT, 'event settings companions are retained with the Event root');
 END;
+`;
+
+/** Forward schema contribution introduced by e2_0017. */
+export const EVENT_SETTINGS_PROFILE_REVIEW_POLICY_SQL = `
+ALTER TABLE event_settings_companions
+  ADD COLUMN profile_content_review INTEGER NOT NULL DEFAULT 0
+  CHECK(profile_content_review IN (0, 1));
 `;
 
 export type SQLiteEventSettingsErrorCode =
@@ -139,6 +145,7 @@ export function installEventSettingsSchema(sqlite: Database): void {
   if (sqlite.inTransaction) throw new SQLiteEventSettingsError('transaction_required');
   sqlite.exec('PRAGMA foreign_keys = ON;');
   sqlite.exec(EVENT_SETTINGS_SQL);
+  sqlite.exec(EVENT_SETTINGS_PROFILE_REVIEW_POLICY_SQL);
 }
 
 export interface CreatedEventSettingsInitializer {
