@@ -9,12 +9,20 @@ describe('live speaker profile directory', () => {
 		const source = createSpeakerProfileBatchLiveSource({
 			roster: {
 				async list() {
-					return [{
-						id: id(4), personId: id(5), name: 'Ada', email: 'ada@example.test',
-						state: 'confirmed' as const, sessions: [{ id: id(6), title: 'Opening' }],
-						tasksDone: 0, tasksTotal: 0, overdueTasks: 0,
-						publiclyVisible: true, contentApproved: true, position: 0
-					}];
+					return [
+						{
+							id: id(4), personId: id(5), name: 'Ada', email: 'ada@example.test',
+							state: 'confirmed' as const, sessions: [{ id: id(6), title: 'Opening' }],
+							tasksDone: 0, tasksTotal: 0, overdueTasks: 0,
+							publiclyVisible: true, contentApproved: true, position: 0
+						},
+						{
+							id: id(7), personId: id(5), name: '', email: '',
+							state: 'confirmed' as const, sessions: [{ id: id(10), title: 'Panel' }],
+							tasksDone: 0, tasksTotal: 0, overdueTasks: 0,
+							publiclyVisible: true, contentApproved: true, position: 1
+						}
+					];
 				}
 			},
 			profiles: {
@@ -57,7 +65,10 @@ describe('live speaker profile directory', () => {
 		expect(directoryReads).toBe(1);
 		expect(profiles[id(5)]).toMatchObject({
 			name: 'Ada', headline: 'Engineer', location: 'Singapore', submissionCount: 3,
-			speakerId: id(4), sessions: [{ id: id(6), title: 'Opening' }]
+			speakerId: id(4), sessions: [
+				{ id: id(6), title: 'Opening' },
+				{ id: id(10), title: 'Panel' }
+			]
 		});
 		expect(profiles[id(8)]).toBeNull();
 	});

@@ -28,9 +28,23 @@ export function createSpeakerProfileBatchLiveSource(input: {
 				throw new Error('The current speaker profile directory could not be read.');
 			}
 			const views = new Map(directory.data.profiles.map((view) => [view.personId, view]));
-			const rowsByPerson = new Map(roster.flatMap((row) =>
-				row.personId ? [[row.personId, row] as const] : []
-			));
+			const rowsByPerson = new Map<string, SpeakerRow>();
+			for (const row of roster) {
+				if (!row.personId) continue;
+				const current = rowsByPerson.get(row.personId);
+				if (!current) {
+					rowsByPerson.set(row.personId, row);
+					continue;
+				}
+				const sessions = new Map(current.sessions.map((session) => [session.id, session]));
+				for (const session of row.sessions) sessions.set(session.id, session);
+				rowsByPerson.set(row.personId, {
+					...current,
+					name: current.name || row.name,
+					email: current.email || row.email,
+					sessions: [...sessions.values()]
+				});
+			}
 			const result: Record<string, SpeakerProfile | null> = {};
 			for (const request of requests) {
 				const row = request.personId ? rowsByPerson.get(request.personId) : undefined;
