@@ -400,6 +400,13 @@ describe('rich ephemeral live SQLite fixture', () => {
           // is not an Event operation.
           operations: { kind: 'exact', total: expected.operationLogs - 1 },
           triage: { kind: 'exact', arrived: expected.submissions, sorted: 0 },
+          arrivals: {
+            kind: 'exact',
+            submittedAt: expect.any(Array),
+            inbox: expected.submissions,
+            setAside: 0,
+            spam: 0
+          },
           reviews: { kind: 'exact', rounds: 0, assignments: 0, committed: 0 },
           reviewers: { kind: 'exact', total: 0 },
           decisions: { kind: 'exact', decided: 0, undecided: 0 },

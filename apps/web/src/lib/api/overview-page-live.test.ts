@@ -46,6 +46,7 @@ function projection(overrides: Record<string, unknown> = {}) {
 			},
 			operations: { kind: 'exact', total: 9 },
 			triage: { kind: 'exact', arrived: 12, sorted: 4 },
+			arrivals: { kind: 'exact', submittedAt: [], inbox: 0, setAside: 0, spam: 0 },
 			reviews: { kind: 'exact', rounds: 1, assignments: 8, committed: 3 },
 			reviewers: { kind: 'exact', total: 6 },
 			decisions: { kind: 'exact', decided: 2, undecided: 10 },
@@ -130,10 +131,24 @@ describe('live Overview page port', () => {
 					submissions: '12', review: '38%', speakers: '4', reviewers: '6', templates: '7'
 				},
 				stats: [
-					{ label: 'Forms', value: '5', sub: '2 open · 1 draft · 2 closed' },
-					{ label: 'Submissions', value: '12', sub: '12 recorded submissions' },
-					{ label: 'Program vocabulary', value: '13', sub: '9 active · 4 retired' },
-					{ label: 'Changes', value: '9', sub: '9 recorded changes' }
+					{
+						label: 'Reviews',
+						value: '38%',
+						sub: '3 of 8 reviews are in',
+						progress: { done: 3, required: 8 }
+					},
+					{
+						label: 'Decided',
+						value: '2 of 12',
+						sub: '10 waiting for your answer',
+						progress: { done: 2, required: 12 }
+					},
+					{
+						label: 'Placed',
+						value: '2 of 6',
+						sub: 'on the grid',
+						progress: { done: 2, required: 6 }
+					}
 				],
 				attention: [],
 				deadlines: [],
@@ -462,6 +477,52 @@ describe('live Overview page port', () => {
 		expect(lane(data, 'decide').sub).toBe('Every submission has an answer');
 		expect(lane(data, 'schedule').sub).toBe('Every session has a time and a room');
 		expect(lane(data, 'comms').sub).toBe('Every message has been sent');
+		expect(data.stats).toEqual([
+			{
+				label: 'Reviews',
+				value: '38%',
+				sub: '3 of 8 reviews are in',
+				progress: { done: 3, required: 8 }
+			},
+			{
+				label: 'Decided',
+				value: '12 of 12',
+				sub: 'Every submission has an answer',
+				progress: { done: 12, required: 12 }
+			},
+			{
+				label: 'Placed',
+				value: '6 of 6',
+				sub: 'Every session has a time and a room',
+				progress: { done: 6, required: 6 }
+			}
+		]);
+		expect(data.stats.every((tile) => tile.health === undefined)).toBe(true);
+	});
+
+	test('dashes KPI tiles that have not begun and draws the arrivals pulse from instants', async () => {
+		const submittedAt = new Date().toISOString();
+		const data = await readMounted({
+			reviews: { kind: 'exact', rounds: 0, assignments: 0, committed: 0 },
+			decisions: { kind: 'exact', decided: 0, undecided: 0 },
+			sessions: { kind: 'exact', total: 0, placed: 0 },
+			arrivals: {
+				kind: 'exact',
+				submittedAt: [submittedAt],
+				inbox: 1,
+				setAside: 0,
+				spam: 2
+			}
+		});
+		expect(data.stats).toEqual([
+			{ label: 'Reviews', value: '\u2014', sub: 'No review plan yet' },
+			{ label: 'Decided', value: '\u2014', sub: 'Nothing to decide yet' },
+			{ label: 'Placed', value: '\u2014', sub: 'No sessions on the grid yet' }
+		]);
+		expect(data.arrivals?.pulse.total).toBe(1);
+		expect(data.arrivals?.pulse.weeks.length).toBe(12);
+		expect(data.arrivals?.held).toEqual({ inbox: 1, setAside: 0, late: 0 });
+		expect(data.arrivals?.spam).toBe(2);
 	});
 
 	test('an unavailable metric locks nothing — an absent count is not a proof', async () => {
@@ -470,6 +531,7 @@ describe('live Overview page port', () => {
 			forms: reason,
 			submissions: reason,
 			triage: reason,
+			arrivals: reason,
 			reviews: reason,
 			decisions: reason,
 			engagements: reason,
@@ -486,7 +548,7 @@ describe('live Overview page port', () => {
 			event: { schemaVersion: 1, kind: 'no_event', eventSetVersion: 11 },
 			metrics: Object.fromEntries([
 				'forms', 'submissions', 'programVocabulary', 'operations', 'triage',
-				'reviews', 'reviewers', 'decisions', 'engagements', 'sessions',
+				'arrivals', 'reviews', 'reviewers', 'decisions', 'engagements', 'sessions',
 				'communications', 'templates'
 			].map((metric) => [metric, { kind: 'unavailable', reason: 'event_required' }]))
 		});

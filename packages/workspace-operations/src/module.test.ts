@@ -53,6 +53,7 @@ const projection: WorkspaceOverviewProjection = {
     programVocabulary: { kind: 'unavailable', reason: 'event_required' },
     operations: { kind: 'unavailable', reason: 'event_required' },
     triage: { kind: 'unavailable', reason: 'event_required' },
+    arrivals: { kind: 'unavailable', reason: 'event_required' },
     reviews: { kind: 'unavailable', reason: 'event_required' },
     reviewers: { kind: 'unavailable', reason: 'event_required' },
     decisions: { kind: 'unavailable', reason: 'event_required' },

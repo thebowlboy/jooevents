@@ -539,6 +539,7 @@ export function createD1WorkspaceOverviewReadSource(input: {
           programVocabulary: unavailable,
           operations: unavailable,
           triage: unavailable,
+          arrivals: unavailable,
           reviews: unavailable,
           reviewers: unavailable,
           decisions: unavailable,
@@ -605,6 +606,7 @@ export function createD1WorkspaceOverviewReadSource(input: {
           programVocabulary: { kind: 'exact', rooms, tracks, formats },
           operations: { kind: 'exact', total: safeCount(operations.total) },
           triage: { kind: 'exact', ...triage },
+          arrivals: { kind: 'unavailable' as const, reason: 'not_implemented' as const },
           reviews: { kind: 'exact', ...reviewCounts },
           reviewers: { kind: 'exact', total: safeCount(reviewers.total) },
           decisions: {

@@ -363,6 +363,9 @@ describe('SQLite workspace overview projection', () => {
     expect(overview.metrics.forms).toEqual({ kind: 'exact', total: 0, draft: 0, open: 0, closed: 0 });
     expect(overview.metrics.operations).toEqual({ kind: 'exact', total: 1 });
     expect(overview.metrics.triage).toEqual({ kind: 'exact', arrived: 0, sorted: 0 });
+    expect(overview.metrics.arrivals).toEqual({
+      kind: 'exact', submittedAt: [], inbox: 0, setAside: 0, spam: 0
+    });
     expect(overview.metrics.reviews).toEqual({
       kind: 'exact', rounds: 0, assignments: 0, committed: 0
     });
@@ -379,6 +382,13 @@ describe('SQLite workspace overview projection', () => {
 
     const metrics = projection(runtime.sqlite).readOverview(workspaceId).metrics;
     expect(metrics.triage).toEqual({ kind: 'exact', arrived: 3, sorted: 2 });
+    expect(metrics.arrivals).toEqual({
+      kind: 'exact',
+      submittedAt: [createdAt, createdAt],
+      inbox: 1,
+      setAside: 1,
+      spam: 1
+    });
     expect(metrics.reviews).toEqual({ kind: 'exact', rounds: 1, assignments: 2, committed: 1 });
     expect(metrics.decisions).toEqual({ kind: 'exact', decided: 2, undecided: 1 });
     expect(metrics.engagements).toEqual({ kind: 'exact', total: 2, confirmed: 1 });

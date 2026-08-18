@@ -158,6 +158,28 @@ export const workspaceOverviewTriageMetricSchema = z.union([
   unavailableMetricSchema
 ]);
 
+/** Cap on arrival instants carried by one Overview read. */
+export const WORKSPACE_OVERVIEW_ARRIVAL_INSTANTS_MAX = 10_000;
+
+/**
+ * Per-submission arrival instants for the Overview pulse, excluding spam.
+ * `inbox + setAside` is that held population; `spam` is counted beside it
+ * and never mixed into the timestamps.
+ */
+export const workspaceOverviewArrivalsMetricSchema = z.union([
+  z.strictObject({
+    kind: z.literal('exact'),
+    submittedAt: z.array(z.iso.datetime({ offset: true }))
+      .max(WORKSPACE_OVERVIEW_ARRIVAL_INSTANTS_MAX),
+    inbox: safeCountSchema,
+    setAside: safeCountSchema,
+    spam: safeCountSchema
+  }).refine((value) => value.inbox + value.setAside === value.submittedAt.length, {
+    message: 'Held arrival instants must equal inbox plus set-aside counts.'
+  }),
+  unavailableMetricSchema
+]);
+
 export const workspaceOverviewReviewsMetricSchema = z.union([
   z.strictObject({
     kind: z.literal('exact'),
@@ -232,6 +254,7 @@ export const workspaceOverviewMetricsSchema = z.strictObject({
   programVocabulary: workspaceOverviewProgramVocabularyMetricSchema,
   operations: workspaceOverviewOperationsMetricSchema,
   triage: workspaceOverviewTriageMetricSchema,
+  arrivals: workspaceOverviewArrivalsMetricSchema,
   reviews: workspaceOverviewReviewsMetricSchema,
   reviewers: workspaceOverviewReviewersMetricSchema,
   decisions: workspaceOverviewDecisionsMetricSchema,

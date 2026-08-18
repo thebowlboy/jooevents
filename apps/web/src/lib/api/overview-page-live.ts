@@ -10,7 +10,11 @@ import type { EventProgramPort } from './event-program/port';
 import type { DeadlineCatalogLivePort } from './operations/deadline-catalog-live';
 import type { TaskLiveClient } from './operations/tasks-live';
 import type { WorkspaceOverviewPort } from './operations/workspace-overview-live';
-import { EMAIL_READINESS_CURRENCY_REASON_CODES, formatDateRange } from '@jooevents/contracts';
+import {
+	EMAIL_READINESS_CURRENCY_REASON_CODES,
+	formatDateRange,
+	summarizeArrivals
+} from '@jooevents/contracts';
 import type {
 	ActivityItem,
 	AreaKey,
@@ -18,7 +22,8 @@ import type {
 	DeadlineItem,
 	EventInfo,
 	MutationOutcome,
-	StatItem
+	StatItem,
+	SubmissionArrivals
 } from './types';
 import {
 	overviewAvailable,
@@ -137,46 +142,91 @@ function eventInfo(projection: WorkspaceOverviewProjection['event']): EventInfo 
 	};
 }
 
+function percent(done: number, required: number): number {
+	if (required <= 0) return 0;
+	return Math.max(0, Math.min(100, Math.round((done / required) * 100)));
+}
+
+function dash(label: string, sub: string): StatItem {
+	return { label, value: '\u2014', sub };
+}
+
+/**
+ * The mock band's three progress tiles, from counts this projection already
+ * carries. No health: a tone is a judgment against a deadline or a vacancy
+ * this read does not have, so the meters stay neutral.
+ */
 function stats(projection: WorkspaceOverviewProjection): StatItem[] {
-	const forms = projection.metrics.forms;
-	const submissions = projection.metrics.submissions;
-	const vocabulary = projection.metrics.programVocabulary;
-	const operations = projection.metrics.operations;
+	const reviews = projection.metrics.reviews;
+	const decisions = projection.metrics.decisions;
+	const sessions = projection.metrics.sessions;
 	return [
-		forms.kind === 'exact'
-			? {
-					label: 'Forms',
-					value: String(forms.total),
-					sub: `${forms.open} open · ${forms.draft} draft · ${forms.closed} closed`
-				}
-			: { label: 'Forms', value: '—', sub: metricUnavailableReason() },
-		submissions.kind === 'exact'
-			? {
-					label: 'Submissions',
-					value: String(submissions.total),
-					sub: submissions.total === 1 ? '1 recorded submission' : `${submissions.total} recorded submissions`
-				}
-			: { label: 'Submissions', value: '—', sub: metricUnavailableReason() },
-		vocabulary.kind === 'exact'
-			? (() => {
-					const total = vocabulary.rooms.total + vocabulary.tracks.total + vocabulary.formats.total;
-					const active = vocabulary.rooms.active + vocabulary.tracks.active + vocabulary.formats.active;
-					const retired = vocabulary.rooms.retired + vocabulary.tracks.retired + vocabulary.formats.retired;
+		reviews.kind !== 'exact'
+			? dash('Reviews', metricUnavailableReason())
+			: reviews.rounds === 0
+				? dash('Reviews', 'No review plan yet')
+				: reviews.assignments === 0
+					? dash('Reviews', 'No reviews assigned yet')
+					: {
+							label: 'Reviews',
+							value: `${percent(reviews.committed, reviews.assignments)}%`,
+							sub: reviews.committed === reviews.assignments
+								? 'Every assigned review is in'
+								: `${reviews.committed} of ${reviews.assignments} reviews are in`,
+							progress: { done: reviews.committed, required: reviews.assignments }
+						},
+		decisions.kind !== 'exact'
+			? dash('Decided', metricUnavailableReason())
+			: (() => {
+					const population = decisions.decided + decisions.undecided;
+					if (population === 0) return dash('Decided', 'Nothing to decide yet');
 					return {
-						label: 'Program vocabulary',
-						value: String(total),
-						sub: `${active} active · ${retired} retired`
+						label: 'Decided',
+						value: `${decisions.decided} of ${population}`,
+						sub: decisions.undecided === 0
+							? 'Every submission has an answer'
+							: `${decisions.undecided} waiting for your answer`,
+						progress: { done: decisions.decided, required: population }
 					};
-				})()
-			: { label: 'Program vocabulary', value: '—', sub: metricUnavailableReason() },
-		operations.kind === 'exact'
-			? {
-					label: 'Changes',
-					value: String(operations.total),
-					sub: operations.total === 1 ? '1 recorded change' : `${operations.total} recorded changes`
-				}
-			: { label: 'Changes', value: '—', sub: metricUnavailableReason() }
+				})(),
+		sessions.kind !== 'exact'
+			? dash('Placed', metricUnavailableReason())
+			: sessions.total === 0
+				? dash('Placed', 'No sessions on the grid yet')
+				: {
+						label: 'Placed',
+						value: `${sessions.placed} of ${sessions.total}`,
+						sub: sessions.placed === sessions.total
+							? 'Every session has a time and a room'
+							: 'on the grid',
+						progress: { done: sessions.placed, required: sessions.total }
+					}
 	];
+}
+
+/**
+ * The Submissions sparkline. Visit history is not recorded live, so the
+ * shared engine falls back to the calendar window. Late is not a live tray.
+ */
+function liveArrivals(
+	projection: WorkspaceOverviewProjection,
+	timezone: string
+): SubmissionArrivals | null {
+	if (timezone === '') return null;
+	const metric = projection.metrics.arrivals;
+	if (metric.kind !== 'exact' || metric.submittedAt.length === 0) return null;
+	const pulse = summarizeArrivals({
+		arrivals: metric.submittedAt,
+		visits: [],
+		timezone,
+		now: Date.now()
+	});
+	if (pulse === null) return null;
+	return {
+		pulse,
+		held: { inbox: metric.inbox, setAside: metric.setAside, late: 0 },
+		spam: metric.spam
+	};
 }
 
 /**
@@ -610,8 +660,9 @@ function mapLiveSummary(
 	const engagements = projection.metrics.engagements;
 	const templates = projection.metrics.templates;
 	const activity = historyActivity(projection.history.threads);
+	const event = eventInfo(projection.event);
 	return {
-		event: eventInfo(projection.event),
+		event,
 		lockedAreas: lockedAreas(projection),
 		navCounts: {
 			...(submissions.kind === 'exact' ? { submissions: String(submissions.total) } : {}),
@@ -622,10 +673,7 @@ function mapLiveSummary(
 			...(reviewers.kind === 'exact' ? { reviewers: String(reviewers.total) } : {}),
 			...(templates.kind === 'exact' ? { templates: String(templates.total) } : {})
 		},
-		// The arrival window needs per-submission instants and the operator's own
-		// visit rotation; the overview projection carries neither yet, so the tile
-		// stays absent rather than being fabricated from a total.
-		arrivals: null,
+		arrivals: liveArrivals(projection, event?.timezone ?? ''),
 		stats: stats(projection),
 		attention: attention.items,
 		pipeline: pipelineStages(projection),

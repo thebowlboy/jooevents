@@ -6,6 +6,7 @@ import {
   type OperationSurface
 } from '@jooevents/contracts';
 import {
+  WORKSPACE_OVERVIEW_ARRIVAL_INSTANTS_MAX,
   workspaceOverviewAreaCatalogSchema,
   workspaceOverviewHistoryThreadSchema,
   workspaceOverviewProjectionSchema,
@@ -89,6 +90,7 @@ interface AttentionCountRow {
   readonly sessions_missing_speakers: number;
 }
 interface DeliveryIdRow { readonly delivery_id: string; readonly state: string; }
+interface ArrivalRow { readonly submitted_at_ms: number; readonly state: string; }
 interface HistoryRow {
   readonly id: string;
   readonly domain: WorkspaceOverviewHistoryDomain;
@@ -133,6 +135,35 @@ function vocabularyCounts(row: VocabularyCountRow | null): VocabularyCountRow {
   }
   return parsed;
 }
+function arrivalsMetric(rows: readonly ArrivalRow[]): {
+  readonly submittedAt: readonly string[];
+  readonly inbox: number;
+  readonly setAside: number;
+  readonly spam: number;
+} {
+  const submittedAt: string[] = [];
+  let inbox = 0;
+  let setAside = 0;
+  let spam = 0;
+  for (const row of rows) {
+    if (!Number.isSafeInteger(row.submitted_at_ms) || row.submitted_at_ms < 0) {
+      throw new SQLiteWorkspaceOverviewError('count_evidence_corrupt');
+    }
+    if (row.state === 'spam') {
+      spam += 1;
+      continue;
+    }
+    if (row.state === 'set_aside') setAside += 1;
+    else if (row.state === 'inbox') inbox += 1;
+    else throw new SQLiteWorkspaceOverviewError('count_evidence_corrupt');
+    submittedAt.push(new Date(row.submitted_at_ms).toISOString());
+  }
+  if (submittedAt.length > WORKSPACE_OVERVIEW_ARRIVAL_INSTANTS_MAX) {
+    throw new SQLiteWorkspaceOverviewError('count_evidence_corrupt');
+  }
+  return { submittedAt, inbox, setAside, spam };
+}
+
 function subsetCounts<TotalKey extends string, SubsetKey extends string>(
   row: Record<TotalKey | SubsetKey, unknown> | null,
   totalKey: TotalKey,
@@ -303,6 +334,7 @@ export class SQLiteWorkspaceOverviewProjection {
       programVocabulary: { kind: 'unavailable' as const, reason: 'event_required' as const },
       operations: { kind: 'unavailable' as const, reason: 'event_required' as const },
       triage: { kind: 'unavailable' as const, reason: 'event_required' as const },
+      arrivals: { kind: 'unavailable' as const, reason: 'event_required' as const },
       reviews: { kind: 'unavailable' as const, reason: 'event_required' as const },
       reviewers: { kind: 'unavailable' as const, reason: 'event_required' as const },
       decisions: { kind: 'unavailable' as const, reason: 'event_required' as const },
@@ -548,6 +580,19 @@ export class SQLiteWorkspaceOverviewProjection {
        WHERE workspace_id = ? AND event_id = ?
     `).get(workspaceId, eventId);
     if (!templates) throw new SQLiteWorkspaceOverviewError('count_evidence_corrupt');
+    const arrivals = arrivalsMetric(
+      this.input.sqlite.query<ArrivalRow, [WorkspaceId, string]>(`
+        SELECT arrival.submitted_at_ms AS submitted_at_ms,
+               COALESCE(triage.state, 'inbox') AS state
+          FROM submission_arrival_facts AS arrival
+          LEFT JOIN submission_triage_heads AS triage
+            ON triage.workspace_id = arrival.workspace_id
+           AND triage.event_id = arrival.event_id
+           AND triage.submission_id = arrival.submission_id
+         WHERE arrival.workspace_id = ? AND arrival.event_id = ?
+         ORDER BY arrival.submitted_at_ms ASC, arrival.submission_id ASC
+      `).all(workspaceId, eventId)
+    );
     return {
       forms: { kind: 'exact' as const, ...forms },
       submissions: { kind: 'exact' as const, total: safeCount(submissions.total) },
@@ -555,6 +600,7 @@ export class SQLiteWorkspaceOverviewProjection {
         tracks: vocabulary('tracks'), formats: vocabulary('formats') },
       operations: { kind: 'exact' as const, total: safeCount(operations.total) },
       triage: { kind: 'exact' as const, ...triage },
+      arrivals: { kind: 'exact' as const, ...arrivals },
       reviews: { kind: 'exact' as const, ...reviewCounts },
       reviewers: { kind: 'exact' as const, total: safeCount(reviewers.total) },
       decisions: {
