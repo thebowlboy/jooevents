@@ -984,6 +984,8 @@ export interface TaskDef {
 	required: boolean;
 	dueAbsolute: string;
 	dueRelative: string;
+	/** Canonical deadline state; optional only for retained sample adapters. */
+	overdue?: boolean;
 }
 
 export type AssignmentState = 'todo' | 'received' | 'complete' | 'late-complete' | 'waived';

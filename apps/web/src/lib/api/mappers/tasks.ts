@@ -2,6 +2,11 @@ import type {
 	TaskAssignmentDto,
 	TaskDefinitionSnapshotDto
 } from '@jooevents/contracts';
+import {
+	describeCalendarDeadline,
+	formatDate,
+	formatRelative
+} from '@jooevents/contracts';
 import type { AssignmentState, TaskAssignment, TaskDef } from '../types';
 
 const completionKind: Readonly<Record<
@@ -21,34 +26,33 @@ const assignmentState: Readonly<Record<TaskAssignmentDto['state'], AssignmentSta
 	waived: 'waived'
 });
 
-function dueText(effectiveAt: string, now: number): string {
-	const days = Math.ceil((Date.parse(effectiveAt) - now) / 86_400_000);
-	if (days < 0) return `${Math.abs(days)} day${days === -1 ? '' : 's'} overdue`;
-	if (days === 0) return 'due today';
-	return `in ${days} day${days === 1 ? '' : 's'}`;
-}
-
-function absoluteDate(displayDate: string): string {
-	const parsed = new Date(`${displayDate}T12:00:00Z`);
-	return Number.isNaN(parsed.getTime())
-		? displayDate
-		: new Intl.DateTimeFormat('en-US', {
-				month: 'short', day: 'numeric', year: 'numeric'
-			}).format(parsed);
-}
-
 /** One canonical Task definition projection shared by every tuned page. */
 export function taskDefinitionView(
 	snapshot: TaskDefinitionSnapshotDto,
 	now: number = Date.now()
 ): TaskDef {
+	const reference = snapshot.current.deadline.reference;
+	const deadline = reference.eventTimezone === undefined
+		? null
+		: describeCalendarDeadline({
+				displayDate: reference.displayDate,
+				effectiveAt: reference.effectiveAt,
+				timezone: reference.eventTimezone,
+				now,
+				weekday: false,
+				showTime: false
+			});
 	return {
 		id: snapshot.head.id,
 		name: snapshot.current.name,
 		kind: completionKind[snapshot.current.completionMode],
 		required: snapshot.current.required,
-		dueAbsolute: absoluteDate(snapshot.current.deadline.reference.displayDate),
-		dueRelative: dueText(snapshot.current.deadline.reference.effectiveAt, now)
+		dueAbsolute: deadline?.absolute ?? formatDate(reference.displayDate),
+		// Retained pins created before event-zone projection cannot truthfully
+		// claim whose today or tomorrow they mean, so the shared vocabulary
+		// deliberately keeps their relative distance numeric.
+		dueRelative: deadline?.relative ?? formatRelative(reference.effectiveAt, now),
+		overdue: deadline?.state === 'overdue'
 	};
 }
 

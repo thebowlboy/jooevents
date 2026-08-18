@@ -929,6 +929,16 @@ function awayFromZero(value: number): number {
   return (value < 0 ? -1 : 1) * Math.max(1, rounded);
 }
 
+function formatDayDistance(distance: number, calendarWords: boolean): string {
+  const magnitude = Math.abs(distance);
+  if (magnitude < 7) {
+    return (calendarWords ? relativeAuto : relativeAlways).format(distance, 'day');
+  }
+  if (magnitude < 28) return relativeAlways.format(awayFromZero(distance / 7), 'week');
+  if (magnitude < 365) return relativeAlways.format(awayFromZero(distance / 30), 'month');
+  return relativeAlways.format(awayFromZero(distance / 365), 'year');
+}
+
 /**
  * `in 3 days`, `today`, `2 weeks ago`, `40 minutes ago`, `just now`.
  *
@@ -963,15 +973,11 @@ export function formatRelative(instant: unknown, now: number, options: RelativeO
     if (target !== null && today !== null) days = target - today;
   }
   const distance = days ?? awayFromZero(difference / DAY_MS);
-  const magnitude = Math.abs(distance);
 
   // `today`, `tomorrow`, and `yesterday` are claims about a particular
   // midnight, so they are only sayable once a zone has named whose. Every
   // coarser unit stays numeric: `next week` is vaguer than the fact it hides.
-  if (magnitude < 7) return (days === null ? relativeAlways : relativeAuto).format(distance, 'day');
-  if (magnitude < 28) return relativeAlways.format(awayFromZero(distance / 7), 'week');
-  if (magnitude < 365) return relativeAlways.format(awayFromZero(distance / 30), 'month');
-  return relativeAlways.format(awayFromZero(distance / 365), 'year');
+  return formatDayDistance(distance, days !== null);
 }
 
 // ---------------------------------------------------------------------------
@@ -1286,15 +1292,14 @@ export function describeCalendarDeadline(
     absolute = withSuffix(dayLine, suffix.short);
     complete = withSuffix(dayLine, suffix.complete);
   }
-  // The relative half is measured to the deadline's LAST ACTIONABLE MINUTE,
-  // not to the end-exclusive boundary. Measuring to the boundary makes a
-  // deadline due today read "tomorrow" beside an absolute that says today —
-  // the two halves of one line disagreeing about the same instant.
-  const relative = formatRelative(
-    new Date(boundary - MINUTE_MS).toISOString(),
-    input.now,
-    { timezone: input.timezone }
-  );
+  // This deadline was authored as a calendar date, so its relative half uses
+  // that same event-calendar day. Measuring clock distance to 23:59 makes a
+  // due-today deadline read "in 19 hours" at breakfast and "5 hours ago" just
+  // after midnight, hiding the day vocabulary the organizer actually set.
+  const today = zonedDayNumber(input.now, input.timezone);
+  if (today === null) return null;
+  const deadlineDay = Math.floor(Date.UTC(day.year, day.month - 1, day.day) / DAY_MS);
+  const relative = formatDayDistance(deadlineDay - today, true);
   return composeDeadline(
     absolute,
     complete,

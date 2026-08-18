@@ -257,8 +257,8 @@
 	const isOutstanding = (state: AssignmentState) => state === 'todo' || state === 'received';
 	const plural = (count: number, one: string, many: string) => (count === 1 ? one : many);
 
-	/** A definition whose own due text reads as past due is called out in the column header. */
-	const isDefOverdue = (def: TaskDef) => /overdue/i.test(def.dueRelative);
+	/** A definition whose canonical boundary has passed is called out in the column header. */
+	const isDefOverdue = (def: TaskDef) => def.overdue ?? /overdue/i.test(def.dueRelative);
 
 	const byCell = $derived(
 		new Map(assignments.map((assignment) => [cellKey(assignment.taskId, assignment.speakerId), assignment]))

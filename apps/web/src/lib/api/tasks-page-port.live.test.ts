@@ -3,6 +3,7 @@ import type { TaskBoardSnapshotDto } from '@jooevents/contracts';
 import type { TaskLiveClient } from './operations/tasks-live';
 import { createLiveTasksPagePort } from './tasks-page-port.live';
 import type { ScheduleState } from './types';
+import { taskDefinitionView } from './mappers/tasks';
 
 const id = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
 const digest = 'a'.repeat(64);
@@ -33,6 +34,7 @@ function board(): TaskBoardSnapshotDto {
 		reference: {
 			id: id(8), version: 1, digestSha256: digest,
 			displayDate: '2027-05-31', effectiveAt: '2027-05-31T15:59:59.999Z',
+			eventTimezone: 'America/Los_Angeles',
 			gracePolicy: 'soft' as const
 		}
 	};
@@ -64,6 +66,40 @@ function board(): TaskBoardSnapshotDto {
 }
 
 describe('live tuned Tasks page port', () => {
+	test('projects task due dates in the event calendar around today', () => {
+		const template = board().definitions[0]!;
+		const at = Date.parse('2026-08-19T12:00:00.000Z');
+		const deadlines = [
+			['2026-08-09', '2026-08-10T07:00:00.000Z', '1 week ago'],
+			['2026-08-18', '2026-08-19T07:00:00.000Z', 'yesterday'],
+			['2026-08-19', '2026-08-20T07:00:00.000Z', 'today'],
+			['2026-08-20', '2026-08-21T07:00:00.000Z', 'tomorrow'],
+			['2026-08-26', '2026-08-27T07:00:00.000Z', 'in 1 week'],
+			['2026-09-09', '2026-09-10T07:00:00.000Z', 'in 3 weeks']
+		] as const;
+
+		const projected = deadlines.map(([displayDate, effectiveAt]) => taskDefinitionView({
+			...template,
+			current: {
+				...template.current,
+				deadline: {
+					...template.current.deadline,
+					reference: {
+						...template.current.deadline.reference,
+						displayDate,
+						effectiveAt
+					}
+				}
+			}
+		}, at));
+		expect(projected.map((deadline) => deadline.dueRelative))
+			.toEqual(deadlines.map(([, , relative]) => relative));
+		expect(projected.map((deadline) => deadline.overdue))
+			.toEqual([true, true, false, false, false, false]);
+
+		expect(taskDefinitionView(template, at).dueAbsolute).toBe('31\u00a0May\u00a02027');
+	});
+
 	test('projects the canonical board and restores through a fresh direct mutation', async () => {
 		const mutations: unknown[] = [];
 		const client = {

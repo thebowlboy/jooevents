@@ -1014,6 +1014,24 @@ describe('describeCalendarDeadline — the catalog shape, end-exclusive', () => 
     expect(described?.absolute).toBe(span('20 Aug 2027'));
   });
 
+  test('relative copy follows the authored event-calendar day, not hours to its last minute', () => {
+    const at = Date.parse('2026-08-19T12:00:00.000Z');
+    const cases = [
+      ['2026-08-18', '2026-08-19T07:00:00.000Z', 'yesterday'],
+      ['2026-08-19', '2026-08-20T07:00:00.000Z', 'today'],
+      ['2026-08-20', '2026-08-21T07:00:00.000Z', 'tomorrow']
+    ] as const;
+
+    for (const [displayDate, effectiveAt, expected] of cases) {
+      expect(describeCalendarDeadline({
+        displayDate,
+        effectiveAt,
+        timezone: 'America/Los_Angeles',
+        now: at
+      })?.relative).toBe(expected);
+    }
+  });
+
   test('a leap-day deadline keeps its day', () => {
     const described = describeCalendarDeadline({
       displayDate: '2028-02-29',
