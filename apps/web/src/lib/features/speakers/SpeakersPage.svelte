@@ -430,7 +430,7 @@
 				</ul>
 			{/if}
 
-			<SpeakerCommunications {port} speakerId={row.communicationPersonId ?? row.id} />
+			<SpeakerCommunications {port} speakerId={row.personId ?? row.id} />
 
 			{#if row.note}
 				<h3 class="detail__heading detail__heading--spaced">Note</h3>

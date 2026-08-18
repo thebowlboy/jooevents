@@ -243,7 +243,7 @@ describe('live tuned Speakers page port', () => {
 
 		expect(rows).toEqual([{
 			id: engagementId,
-			communicationPersonId: personId,
+			personId,
 			name: 'Amina Diallo',
 			email: 'amina@example.org',
 			state: 'invited',

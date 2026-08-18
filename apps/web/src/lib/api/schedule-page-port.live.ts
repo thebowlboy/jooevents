@@ -10,7 +10,7 @@ import type { SchedulePlacementOccurrenceView } from './view-models/schedule-pla
 import type { ScheduleBreakHeadView } from './view-models/schedule-placement';
 import type { SessionHeadView } from './view-models/session';
 import type { ProgramVocabularySettingsPort } from './program-vocabulary-settings-adapter';
-import type { SchedulePagePort } from './schedule-page-port';
+import type { ScheduleAttachCandidate, SchedulePagePort } from './schedule-page-port';
 import type {
 	SchedulePlacementApplyResult,
 	SchedulePlacementCorePort,
@@ -31,8 +31,35 @@ import type {
 	ScheduleDayInfo,
 	ScheduleState,
 	SessionItem,
+	SpeakerRow,
 	Track
 } from './types';
+
+export interface ScheduleAttributionSubmission {
+	readonly id: string;
+	readonly title: string;
+	readonly primaryParticipantName: string;
+	readonly source: 'cfp' | 'direct_entry' | 'import';
+	readonly decision: 'accepted' | 'waitlisted' | 'declined' | 'withdrawn' | null;
+	readonly origin: Readonly<{
+		readonly sessionId: string;
+		readonly kind: 'spawned' | 'attached';
+	}> | null;
+}
+
+export type ScheduleAttributionReadResult =
+	| { readonly kind: 'success'; readonly data: readonly ScheduleAttributionSubmission[] }
+	| { readonly kind: 'outcome'; readonly outcome: StructuredOutcome; readonly correlationId: string }
+	| { readonly kind: 'transport_error'; readonly error: SafeApiError }
+	| { readonly kind: 'unavailable'; readonly reason: string };
+
+/** Whole-population accepted-submission routing facts used by the speaker drawer. */
+export interface ScheduleAttributionSource {
+	readonly source:
+		| { readonly kind: 'live' }
+		| { readonly kind: 'sample'; readonly label: string };
+	read(): Promise<ScheduleAttributionReadResult>;
+}
 
 /**
  * The tuned page capabilities this deliberately partial live mount cannot
@@ -121,7 +148,10 @@ function outcomeCopy(outcome: StructuredOutcome, subject: string): string {
 
 function readFailure(
 	result: Exclude<
-		SessionCatalogReadResult | SchedulePlacementReadResult | ScheduleProposalCountsReadResult,
+		SessionCatalogReadResult
+		| SchedulePlacementReadResult
+		| ScheduleProposalCountsReadResult
+		| ScheduleAttributionReadResult,
 		{ readonly kind: 'success' }
 	>,
 	subject: string
@@ -468,16 +498,29 @@ function addMinutes(instant: string, minutes: number): string {
 /**
  * Canonical Session identity only: every row comes from the Session catalog
  * head, never from an occurrence, a form label, or a submission title. Roster
- * participants are typed person references without a name/address projection
- * owner, so the tuned `speakers` list stays empty rather than inventing
- * people; `originSubmissionIds` stays absent because the canonical head
- * carries no submission provenance.
+ * participants are resolved through the joined engagement/person projection;
+ * the canonical Person id stays on every live row. `originSubmissionIds`
+ * stays absent because provenance is read from the Decision owner, not copied
+ * into the Session head.
  */
-function sessionItem(head: SessionHeadView): SessionItem {
+function sessionItem(
+	head: SessionHeadView,
+	peopleById: ReadonlyMap<string, SpeakerRow>
+): SessionItem {
+	const speakers = head.roster.participants.map((participant) => {
+		const person = peopleById.get(participant.personId);
+		if (!person || person.name.trim() === '' || person.email.trim() === '') {
+			throw new SchedulePageLiveError({
+				code: 'session_participant_projection_unavailable',
+				reason: 'A person on this Session cannot be resolved from the current speaker roster.'
+			});
+		}
+		return { personId: participant.personId, name: person.name, email: person.email };
+	});
 	return {
 		id: head.id,
 		title: head.title,
-		speakers: [],
+		speakers,
 		trackId: head.programTarget.track?.id ?? '',
 		formatId: head.programTarget.format.id,
 		durationMin: head.plannedDurationMinutes,
@@ -581,6 +624,7 @@ export function createLiveSchedulePagePort(input: {
 	readonly sessions: SessionCatalogCorePort;
 	readonly vocabulary: ProgramVocabularySettingsPort;
 	readonly proposals: ScheduleProposalCountsSource;
+	readonly attribution: ScheduleAttributionSource;
 	readonly settings: ScheduleGeometrySettingsSource;
 	readonly publication: Pick<ReleaseWorkspacePort, 'overview' | 'draftSchedulePublication' | 'publishSchedule'>;
 	readonly speakers: SchedulePagePort['speakers'];
@@ -592,6 +636,7 @@ export function createLiveSchedulePagePort(input: {
 		|| input.sessions.source.kind !== 'live'
 		|| input.vocabulary.source.kind !== 'live'
 		|| input.proposals.source.kind !== 'live'
+		|| input.attribution.source.kind !== 'live'
 	) {
 		throw new TypeError('live_schedule_source_required');
 	}
@@ -628,6 +673,29 @@ export function createLiveSchedulePagePort(input: {
 		return result.data;
 	}
 
+	async function readPeopleById(): Promise<ReadonlyMap<string, SpeakerRow>> {
+		const peopleById = new Map<string, SpeakerRow>();
+		for (const person of await input.speakers.list()) {
+			if (person.personId === undefined) continue;
+			if (peopleById.has(person.personId)) {
+				throw new SchedulePageLiveError({
+					code: 'session_participant_projection_ambiguous',
+					reason: 'The current speaker roster contains more than one row for the same person.'
+				});
+			}
+			peopleById.set(person.personId, person);
+		}
+		return peopleById;
+	}
+
+	async function readAttribution(): Promise<readonly ScheduleAttributionSubmission[]> {
+		const result = await input.attribution.read();
+		if (result.kind !== 'success') {
+			throw new SchedulePageLiveError(readFailure(result, 'session attribution'));
+		}
+		return result.data;
+	}
+
 	return Object.freeze({
 		workspace: Object.freeze({
 			/** No live workspace summary is composed here; null is "not read yet". */
@@ -637,12 +705,13 @@ export function createLiveSchedulePagePort(input: {
 		}),
 		schedule: Object.freeze({
 			async state(): Promise<ScheduleState> {
-				const [catalog, placements, rooms, settings, publication] = await Promise.all([
+				const [catalog, placements, rooms, settings, publication, peopleById] = await Promise.all([
 					readCatalog(),
 					readPlacements(),
 					input.vocabulary.rooms(),
 					input.settings.get(),
-					input.publication.overview()
+					input.publication.overview(),
+					readPeopleById()
 				]);
 				// Geometry is a served derivation, never a guess: the grid draws
 				// exactly when the settings trio and every placement reconcile
@@ -659,7 +728,7 @@ export function createLiveSchedulePagePort(input: {
 					dayStart: geometry.dayStart,
 					slotMinutes: geometry.slotMinutes,
 					slotsPerDay: geometry.slotsPerDay,
-					sessions: catalog.sessions.map(sessionItem),
+					sessions: catalog.sessions.map((head) => sessionItem(head, peopleById)),
 					placements: placements.occurrences.map((occurrence) =>
 						occurrencePlacement(occurrence, geometry.dayStartMin, geometry.timeZone)
 					),
@@ -920,7 +989,7 @@ export function createLiveSchedulePagePort(input: {
 						code: 'invalid_contract', reason: 'The session result was incomplete.'
 					});
 				}
-				return sessionItem(applied.data.session);
+				return sessionItem(applied.data.session, await readPeopleById());
 			},
 			async retargetSession(
 				id: string,
@@ -955,7 +1024,7 @@ export function createLiveSchedulePagePort(input: {
 					throw new SchedulePageLiveError(applyFailure(applied, 'session'));
 				}
 				if (applied.data.session === null) throw new TypeError('session_retarget_result_missing');
-				return sessionItem(applied.data.session);
+				return sessionItem(applied.data.session, await readPeopleById());
 			},
 			async removeSession(id: string): Promise<MutationOutcome> {
 				const catalog = await readCatalog();
@@ -1019,12 +1088,7 @@ export function createLiveSchedulePagePort(input: {
 					? { ok: true }
 					: { ok: false, reason: applyFailure(applied, 'session').reason };
 			},
-			/**
-			 * The canonical Session head carries no submission provenance at all,
-			 * so no session can have origins yet; the empty list is the true state,
-			 * which the page reads as "purely editorial".
-			 */
-			async sessionOrigins(): Promise<
+			async sessionOrigins(sessionId: string): Promise<
 				{
 					id: string;
 					title: string;
@@ -1032,12 +1096,37 @@ export function createLiveSchedulePagePort(input: {
 					speakerEmails: string[];
 				}[]
 			> {
-				return [];
+				const [catalog, attribution, peopleById] = await Promise.all([
+					readCatalog(), readAttribution(), readPeopleById()
+				]);
+				const session = catalog.sessions.find((head) => head.id === sessionId);
+				if (!session) return [];
+				return attribution
+					.filter((row) => row.origin?.sessionId === sessionId)
+					.map((row) => ({
+						id: row.id,
+						title: row.title,
+						source: row.source,
+						speakerEmails: session.roster.participants
+							.filter((participant) =>
+								participant.source.kind === 'submission'
+								&& participant.source.id === row.id
+							)
+							.map((participant) => peopleById.get(participant.personId)?.email)
+							.filter((email): email is string => email !== undefined)
+					}));
 			},
-			async attachCandidates(): Promise<never> {
-				// Submissions exist canonically, but no attach owner is mounted; an
-				// empty list would falsely claim "nothing to attach", so refuse.
-				throw unmounted('session_attach');
+			async attachCandidates(): Promise<ScheduleAttachCandidate[]> {
+				// One submission has at most one current origin. The drawer offers
+				// only accepted, currently-unrouted submissions; moving an existing
+				// origin is a distinct guarded operation, never a second attachment.
+				return (await readAttribution())
+					.filter((row) => row.decision === 'accepted' && row.origin === null)
+					.map((row) => ({
+						id: row.id,
+						title: row.title,
+						speakers: [{ name: row.primaryParticipantName }]
+					}));
 			},
 			async attachSubmission(): Promise<MutationOutcome> {
 				return refusal('session_attach');

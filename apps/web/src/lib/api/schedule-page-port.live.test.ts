@@ -5,7 +5,8 @@ import type { SpeakerRow, SurfaceTemplate } from './types';
 const id = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
 const base = {
 	vocabulary: { source: { kind: 'live' } }, proposals: { source: { kind: 'live' } },
-	settings: {}, publication: {}, speakers: {}, templates: {}
+	attribution: { source: { kind: 'live' }, read: async () => ({ kind: 'success', data: [] }) },
+	settings: {}, publication: {}, speakers: { list: async () => [] }, templates: {}
 } as const;
 
 describe('live Schedule page correction boundary', () => {
@@ -16,6 +17,7 @@ describe('live Schedule page correction boundary', () => {
 			sessions: { source: { kind: 'live' }, readCatalog: async () => ({ kind: 'success', data: { sessions: [] } }) } as never,
 			vocabulary: { source: { kind: 'live' } } as never,
 			proposals: { source: { kind: 'live' } } as never,
+			attribution: { source: { kind: 'live' } } as never,
 			settings: {} as never, publication: {} as never,
 			speakers: {} as never, templates: {} as never,
 			newIdempotencyKey: () => { writes += 1; return 'schedule-direct-attempt'; }
@@ -89,12 +91,13 @@ describe('live Schedule page correction boundary', () => {
 				}))
 			} as never,
 			proposals: { source: { kind: 'live' } } as never,
+			attribution: { source: { kind: 'live' }, read: async () => ({ kind: 'success', data: [] }) } as never,
 			settings: { get: async () => ({
 				startDate: '2026-11-01', endDate: '2026-11-01', timezone: 'UTC',
 				dayStart: '09:00', dayEnd: '17:00', slotMinutes: 30
 			}) } as never,
 			publication: { overview: async () => ({ currentProgramRelease: null, surfaceHeads: [] }) } as never,
-			speakers: {} as never,
+			speakers: { list: async () => [] } as never,
 			templates: {} as never,
 			newIdempotencyKey: () => `schedule-break-attempt-${++key}`
 		});
@@ -146,7 +149,7 @@ describe('live Schedule page correction boundary', () => {
 
 	test('delegates roster and surface-template reads to the joined live owners', async () => {
 		const roster: SpeakerRow[] = [{
-			id: id(4), name: 'Ada', email: 'ada@example.test', state: 'confirmed', sessions: [],
+			id: id(4), personId: id(6), name: 'Ada', email: 'ada@example.test', state: 'confirmed', sessions: [],
 			tasksDone: 0, tasksTotal: 0, overdueTasks: 0, publiclyVisible: true,
 			contentApproved: true, position: 0
 		}];
@@ -167,5 +170,108 @@ describe('live Schedule page correction boundary', () => {
 
 		expect(await port.speakers.list()).toBe(roster);
 		expect(await port.templates.list()).toEqual({ surfaces });
+	});
+
+	test('projects canonical Session participants through person-keyed live roster rows', async () => {
+		const personId = id(41);
+		const port = createLiveSchedulePagePort({
+			placements: { source: { kind: 'live' }, readPlacements: async () => ({
+				kind: 'success', data: { scheduleVersion: 1, occurrences: [], breaks: [] }
+			}) } as never,
+			sessions: { source: { kind: 'live' }, readCatalog: async () => ({
+				kind: 'success', data: { sessions: [{
+					id: id(42), title: 'Opening', plannedDurationMinutes: 30,
+					lifecycle: 'programmed', programTarget: { format: { id: id(43) }, track: null },
+					roster: { participants: [{ personId }] }
+				}] }
+			}) } as never,
+			vocabulary: { source: { kind: 'live' }, rooms: async () => [] } as never,
+			proposals: { source: { kind: 'live' } } as never,
+			attribution: { source: { kind: 'live' }, read: async () => ({ kind: 'success', data: [] }) } as never,
+			settings: { get: async () => ({}) } as never,
+			publication: { overview: async () => ({ currentProgramRelease: null, surfaceHeads: [] }) } as never,
+			speakers: { list: async () => [{
+				id: id(44), personId, name: 'Ada Lovelace', email: 'ada@example.test',
+				state: 'confirmed', sessions: [], tasksDone: 0, tasksTotal: 0, overdueTasks: 0,
+				publiclyVisible: true, contentApproved: false, position: 0
+			}], profile: async () => null } as never,
+			templates: {} as never
+		});
+
+		const state = await port.schedule.state();
+		expect(state.sessions[0]?.speakers).toEqual([
+			{ personId, name: 'Ada Lovelace', email: 'ada@example.test' }
+		]);
+	});
+
+	test('refuses an unresolved canonical Session participant instead of rendering an empty roster', async () => {
+		const port = createLiveSchedulePagePort({
+			placements: { source: { kind: 'live' }, readPlacements: async () => ({
+				kind: 'success', data: { scheduleVersion: 1, occurrences: [], breaks: [] }
+			}) } as never,
+			sessions: { source: { kind: 'live' }, readCatalog: async () => ({
+				kind: 'success', data: { sessions: [{
+					id: id(52), title: 'Opening', plannedDurationMinutes: 30,
+					lifecycle: 'programmed', programTarget: { format: { id: id(53) }, track: null },
+					roster: { participants: [{ personId: id(51) }] }
+				}] }
+			}) } as never,
+			vocabulary: { source: { kind: 'live' }, rooms: async () => [] } as never,
+			proposals: { source: { kind: 'live' } } as never,
+			attribution: { source: { kind: 'live' }, read: async () => ({ kind: 'success', data: [] }) } as never,
+			settings: { get: async () => ({}) } as never,
+			publication: { overview: async () => ({ currentProgramRelease: null, surfaceHeads: [] }) } as never,
+			speakers: { list: async () => [], profile: async () => null } as never,
+			templates: {} as never
+		});
+
+		await expect(port.schedule.state()).rejects.toMatchObject({
+			code: 'session_participant_projection_unavailable'
+		});
+	});
+
+	test('serves Decision-owned origins and only accepted unrouted attach candidates', async () => {
+		const sessionId = id(61);
+		const personId = id(62);
+		const routedId = id(63);
+		const unroutedId = id(64);
+		const port = createLiveSchedulePagePort({
+			...base,
+			placements: { source: { kind: 'live' } } as never,
+			sessions: { source: { kind: 'live' }, readCatalog: async () => ({
+				kind: 'success', data: { sessions: [{
+					id: sessionId,
+					roster: { participants: [{
+						personId, source: { kind: 'submission', id: routedId, version: 1 }
+					}] }
+				}] }
+			}) } as never,
+			attribution: { source: { kind: 'live' }, read: async () => ({ kind: 'success', data: [
+				{
+					id: routedId, title: 'Routed talk', primaryParticipantName: 'Ada',
+					source: 'cfp', decision: 'accepted', origin: { sessionId, kind: 'attached' }
+				},
+				{
+					id: unroutedId, title: 'Unrouted talk', primaryParticipantName: 'Grace',
+					source: 'cfp', decision: 'accepted', origin: null
+				},
+				{
+					id: id(65), title: 'Waitlisted talk', primaryParticipantName: 'Linus',
+					source: 'cfp', decision: 'waitlisted', origin: null
+				}
+			] }) } as never,
+			speakers: { list: async () => [{
+				id: id(66), personId, name: 'Ada', email: 'ada@example.test', state: 'confirmed',
+				sessions: [], tasksDone: 0, tasksTotal: 0, overdueTasks: 0,
+				publiclyVisible: true, contentApproved: true, position: 0
+			}], profile: async () => null } as never
+		} as never);
+
+		expect(await port.schedule.sessionOrigins(sessionId)).toEqual([{
+			id: routedId, title: 'Routed talk', source: 'cfp', speakerEmails: ['ada@example.test']
+		}]);
+		expect(await port.schedule.attachCandidates(sessionId)).toEqual([{
+			id: unroutedId, title: 'Unrouted talk', speakers: [{ name: 'Grace' }]
+		}]);
 	});
 });

@@ -17,6 +17,13 @@ import type { SchedulePublicationReview } from './release-workspace-adapter';
 
 export type { SchedulePublicationReview };
 
+/** Least-disclosure accepted submission the Schedule drawer can route. */
+export interface ScheduleAttachCandidate {
+	readonly id: string;
+	readonly title: string;
+	readonly speakers: readonly { readonly name: string }[];
+}
+
 /** Factual capabilities consumed by the tuned schedule board and session drawers. */
 export interface SchedulePagePort {
 	readonly workspace: {
@@ -62,7 +69,7 @@ export interface SchedulePagePort {
 			source: Submission['source'];
 			speakerEmails: string[];
 		}[]>;
-		attachCandidates(sessionId: string): Promise<Submission[]>;
+		attachCandidates(sessionId: string): Promise<ScheduleAttachCandidate[]>;
 		attachSubmission(sessionId: string, submissionId: string): Promise<MutationOutcome>;
 		detachSubmission(sessionId: string, submissionId: string): Promise<MutationOutcome>;
 		addDirectParticipant(

@@ -39,6 +39,7 @@
 	import { createLiveFilesPagePort } from '$lib/api/files/files-page-port.live';
 	import type { ReviewPagePort } from '$lib/api/review-page-port';
 	import { createLiveScheduleProposalCountsSource } from './schedule-proposal-counts.live';
+	import { createLiveScheduleAttributionSource } from './schedule-attribution.live';
 	import { createEventSettingsLiveClient } from '$lib/api/operations/event-settings-live';
 	import { createFieldRegistryLiveClient } from '$lib/api/operations/field-registry-live';
 	import { createTemplateArtifactLiveClient } from '$lib/api/operations/template-artifacts-live';
@@ -229,6 +230,10 @@
 		sessions: sessionCatalog,
 		vocabulary,
 		proposals: createLiveScheduleProposalCountsSource({
+			list: (query, options) => triage.list(query, options),
+			decisions: { readState: (ids, options) => decisionsClient.readState(ids, options) }
+		}),
+		attribution: createLiveScheduleAttributionSource({
 			list: (query, options) => triage.list(query, options),
 			decisions: { readState: (ids, options) => decisionsClient.readState(ids, options) }
 		}),

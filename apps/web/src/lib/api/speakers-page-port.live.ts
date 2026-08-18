@@ -283,7 +283,7 @@ export function createLiveSpeakersPagePort(input: {
 			const assigned = taskAssignments.filter((entry) => entry.speakerId === head.id);
 			return {
 				id: head.id,
-				communicationPersonId: head.personId,
+				personId: head.personId,
 				// The empty value is the typed absence for a row without a mounted
 				// name or address owner — never an invented person.
 				name: (head.submissionId !== null ? names.get(head.submissionId) : undefined) ?? '',

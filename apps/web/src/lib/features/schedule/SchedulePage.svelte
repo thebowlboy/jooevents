@@ -18,6 +18,7 @@
 		trackPending
 	} from '$lib/ui';
 	import type {
+		ScheduleAttachCandidate,
 		SchedulePagePort,
 		SchedulePublicationReview
 	} from '$lib/api/schedule-page-port';
@@ -1016,7 +1017,7 @@
 
 	/** Provenance per origin submission, loaded with the panel. */
 	let origins = $state.raw<{ id: string; title: string; source: Submission['source']; speakerEmails: string[] }[]>([]);
-	let attachable = $state.raw<Submission[]>([]);
+	let attachable = $state.raw<ScheduleAttachCandidate[]>([]);
 	let originsSeq = 0;
 
 	async function loadSpeakersPanel(sessionId: string) {
@@ -1111,7 +1112,7 @@
 		attributing = false;
 	}
 
-	async function attach(session: SessionItem, submission: Submission) {
+	async function attach(session: SessionItem, submission: ScheduleAttachCandidate) {
 		if (attributing) return;
 		attributing = true;
 		const outcome = await api.schedule.attachSubmission(session.id, submission.id);

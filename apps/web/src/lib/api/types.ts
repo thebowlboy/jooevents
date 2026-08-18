@@ -861,8 +861,13 @@ export interface SpeakerSession {
 
 export interface SpeakerRow {
 	id: string;
-	/** Canonical person identity used by cross-feature person-scoped reads. */
-	communicationPersonId?: string;
+	/**
+	 * Canonical Person identity when the row comes from a retained live
+	 * projection. `id` remains the engagement/roster-row address used by the
+	 * Speakers surface; consumers joining Session roster refs must use this
+	 * person key and must not infer identity from an email address.
+	 */
+	personId?: string;
 	name: string;
 	email: string;
 	state: EngagementState;
@@ -1006,13 +1011,10 @@ export interface ScheduleDayInfo {
  */
 export type SessionState = 'draft' | 'collecting' | 'programmed';
 
-/**
- * One person on a session's roster. Email-keyed deliberately: the address is
- * the identity that survives graduation from a submission, joins the roster
- * row it belongs to, and keeps two people who spell their names alike from
- * ever being conflated by conflict checks or profile lookups.
- */
+/** One person on a session roster; retained live rows carry canonical Person identity. */
 export interface SessionSpeaker {
+	/** Optional only for sample/legacy page data; live Session projections always set it. */
+	personId?: string;
 	name: string;
 	email: string;
 }
