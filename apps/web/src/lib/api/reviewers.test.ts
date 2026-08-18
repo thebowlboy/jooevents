@@ -408,12 +408,36 @@ describe('scenario coherence', () => {
 		}
 	});
 
-	test('an uncovered review stays in assigned: the flight badge counts awaiting reassignment, denominators unmoved', () => {
+	test('an uncovered review stays in assigned: the flight roster badges sum to 3, denominators unmoved', () => {
 		const plan = flight.reviewPlans[0];
 		const awaiting = plan.reviewers.reduce((sum, row) => sum + row.awaitingReassignment, 0);
 		expect(awaiting).toBe(3);
+		expect(plan.total).toBe(plan.reviewers.reduce((sum, row) => sum + row.assigned, 0));
+	});
+
+	/**
+	 * The counting rule the live wiring implements. Attention counts a vacancy
+	 * only while it still costs the submission something — nobody reviewing it,
+	 * or committed reviews still missing. A slot open on a submission every
+	 * other assigned reviewer has already reviewed stays on the roster and out
+	 * of the headline, which is why the two numbers differ on purpose.
+	 */
+	test('the flight headline counts only vacancies still costing their submission something', () => {
+		const named = flight.reviewPlans
+			.flatMap((plan) => plan.reviewers)
+			.flatMap((row) => row.uncovered ?? []);
+		const settled = named.filter(
+			(entry) =>
+				entry.remainingReviewers !== 0 &&
+				entry.reviewsIn !== undefined &&
+				entry.reviewsIn.committed === entry.reviewsIn.planned - 1
+		);
+		const actionable = named.length - settled.length;
+		expect(named).toHaveLength(3);
+		expect(settled).toHaveLength(1);
+		expect(actionable).toBe(2);
 		expect(flight.summary.attention.find((item) => item.id === 'needs-reviewer')?.title).toBe(
-			`${awaiting} reviews need another reviewer`
+			`${actionable} reviews need another reviewer`
 		);
 	});
 
@@ -432,6 +456,15 @@ describe('scenario coherence', () => {
 						expect(titleById.get(entry.submissionId)).toBe(entry.title);
 						if (entry.remainingReviewers !== undefined) {
 							expect(entry.remainingReviewers).toBeGreaterThanOrEqual(0);
+						}
+						if (!entry.reviewsIn) continue;
+						// Committed reviews cannot exceed the reviewers the submission
+						// was handed to, and the reviewers still holding it cannot
+						// exceed that hand-out minus the slot that was vacated. The two
+						// fields describe one submission and may not contradict.
+						expect(entry.reviewsIn.committed).toBeLessThanOrEqual(entry.reviewsIn.planned);
+						if (entry.remainingReviewers !== undefined) {
+							expect(entry.remainingReviewers).toBeLessThanOrEqual(entry.reviewsIn.planned - 1);
 						}
 					}
 				}

@@ -482,6 +482,18 @@ export interface UncoveredReview {
 	submissionId: string;
 	title: string;
 	remainingReviewers?: number;
+	/**
+	 * How much reviewing the submission has actually banked: `committed` reviews
+	 * in, out of the `planned` reviewers it was handed to, the vacated slot
+	 * included. It grades the vacancy that `remainingReviewers` alone overstates
+	 * — when every other assigned review is already committed, the submission is
+	 * effectively read and the open slot is information rather than attention.
+	 *
+	 * Absent means the composition did not count committed reviews and states
+	 * none; a missing count is not a zero, and a consumer renders no "N of M"
+	 * claim rather than implying the submission has nothing in.
+	 */
+	reviewsIn?: { committed: number; planned: number };
 }
 
 export interface ReviewerProgress {

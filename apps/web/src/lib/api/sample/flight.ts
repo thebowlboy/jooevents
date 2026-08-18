@@ -107,14 +107,22 @@ const flight: WorkspaceDataset = {
 				id: 'needs-reviewer',
 				severity: 'soon',
 				area: 'review',
-				// The 3 is the sum of `awaitingReassignment` across this plan's
-				// reviewers, which is what the roster badges add up to.
-				title: '3 reviews need another reviewer',
+				// The counting rule, and it is the rule the live wiring implements —
+				// not the roster badge sum. Attention counts a vacancy only while it
+				// still costs the submission something: a review nobody is doing at
+				// all, or one whose submission is still short of committed reviews. A
+				// slot left open on a submission every other assigned reviewer has
+				// already reviewed is real, and the roster keeps showing it, but the
+				// submission is read and nothing is owed — so it never raises
+				// attention. That is why this says 2 while `awaitingReassignment`
+				// sums to 3: the two counts answer different questions.
+				title: '2 reviews need another reviewer',
 				// The vacancy, then the one consequence that outranks it: a slot
 				// short is behind plan, a submission nobody is reviewing has
-				// stopped. Named here because the count cannot carry it.
+				// stopped. The third slot is named too, so the roster's larger badge
+				// count is explained here rather than read as a contradiction.
 				detail:
-					'Their reviewer stepped back over a conflict of interest and nobody has picked them up. One of them — “Sandboxing Tool Calls: What We Learned in Production” — has nobody else reviewing it.',
+					'Their reviewer stepped back over a conflict of interest and nobody has picked them up. One of them — “Sandboxing Tool Calls: What We Learned in Production” — has nobody else reviewing it. A third slot is open on a talk already reviewed by everyone else; the roster shows it, this count does not.',
 				// The roster is where uncovered reviews are visible; no reassign
 				// operation exists yet, so the verb promises the filter it performs
 				// and nothing more.
@@ -563,9 +571,16 @@ const flight: WorkspaceDataset = {
 					steppedBack: 1,
 					awaitingReassignment: 1,
 					// He is the submitter of sub-106, so the scope hand-out handed him
-					// his own talk; its other two reviewers had already scored it.
+					// his own talk. Its other two reviewers have both committed
+					// (matching its `reviewCount`), so the submission is read and the
+					// slot he vacated costs it nothing.
 					uncovered: [
-						{ submissionId: 'sub-106', title: 'The Inference Bill Nobody Read', remainingReviewers: 2 }
+						{
+							submissionId: 'sub-106',
+							title: 'The Inference Bill Nobody Read',
+							remainingReviewers: 2,
+							reviewsIn: { committed: 2, planned: 3 }
+						}
 					]
 				},
 				{ id: 'mem-6', name: 'Tomás Rivera', assigned: 72, done: 46, steppedBack: 0, awaitingReassignment: 0 },
@@ -576,20 +591,24 @@ const flight: WorkspaceDataset = {
 					done: 30,
 					steppedBack: 2,
 					awaitingReassignment: 2,
-					// sub-105 is her own workshop and keeps its other two reviewers.
+					// sub-107 still has two reviewers holding it and only one review
+					// in — one of the two is the open item in `myQueue`, which is why
+					// it reads as moving but thin rather than settled.
 					// sub-111 arrived after the screening pass and went to her alone,
-					// so her step-back left it with nobody: it carries no committed
-					// review and no remaining reviewer, and that is the sharp one.
+					// so her step-back left it with nobody: nothing committed, nobody
+					// remaining, and that is the sharp one.
 					uncovered: [
 						{
-							submissionId: 'sub-105',
-							title: 'Hands-on: AI Interface Audits That Stick',
-							remainingReviewers: 2
+							submissionId: 'sub-107',
+							title: 'Streaming Agent UIs Without a State Machine Meltdown',
+							remainingReviewers: 2,
+							reviewsIn: { committed: 1, planned: 3 }
 						},
 						{
 							submissionId: 'sub-111',
 							title: 'Sandboxing Tool Calls: What We Learned in Production',
-							remainingReviewers: 0
+							remainingReviewers: 0,
+							reviewsIn: { committed: 0, planned: 1 }
 						}
 					]
 				},

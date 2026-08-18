@@ -378,18 +378,34 @@
 	}
 
 	/**
-	 * What one uncovered review costs the submission it came off. A vacancy on a
-	 * submission other reviewers still hold is behind plan; a submission holding
-	 * nobody has stopped, and that is the fact worth ranking first.
+	 * What one uncovered review costs the submission it came off, graded by the
+	 * evidence the entry carries. Three states, in the order a chair ranks them:
 	 *
-	 * An absent count claims neither: the composition did not count remaining
-	 * coverage, so the title stands on its own rather than borrowing a zero.
+	 * - nobody else holds it, so review of it has stopped — the sharp one;
+	 * - every other assigned review is already committed, so the submission is
+	 *   read and the open slot is information, not a problem;
+	 * - otherwise it is still moving but short, and the committed count says how
+	 *   short.
+	 *
+	 * Stopped is tested first: a submission handed to one reviewer alone also
+	 * satisfies "every other review is in" arithmetically, and reading that as
+	 * settled would announce a stalled submission as fine.
+	 *
+	 * An absent remaining count claims none of them — the composition did not
+	 * count coverage, so the title stands on its own rather than borrowing a zero.
 	 */
 	function uncoveredConsequence(entry: UncoveredReview): string {
 		const remaining = entry.remainingReviewers;
 		if (remaining === undefined) return '';
 		if (remaining === 0) return 'has nobody else reviewing it — review of this submission has stopped';
-		return `still has ${remaining} other ${remaining === 1 ? 'reviewer' : 'reviewers'} on it`;
+		const reviews = entry.reviewsIn;
+		if (reviews && reviews.committed === reviews.planned - 1) {
+			return `${reviews.committed} of ${reviews.planned} reviews are in — only this slot is open`;
+		}
+		const held = `still has ${remaining} other ${remaining === 1 ? 'reviewer' : 'reviewers'} on it`;
+		if (!reviews) return held;
+		if (reviews.committed === 0) return `${held} — none committed yet`;
+		return `${held} — ${reviews.committed} ${reviews.committed === 1 ? 'review' : 'reviews'} in`;
 	}
 
 	/**
@@ -438,9 +454,10 @@
 
 {#snippet coverageWhy(row: Reviewer)}
 	<!-- The chair's order kept: what is uncovered and why it came free, then
-	     which reviews those are. The list is the part the count cannot carry —
-	     a submission nobody is reviewing reads differently from one that is
-	     merely a slot short, so it inks rather than sharing the muted voice. -->
+	     which reviews those are. The list is the part the count cannot carry.
+	     Only a stopped submission inks — a slot open on one every other reviewer
+	     has already reviewed is information, and a warning voice there would
+	     spend attention on something nothing is owed on. -->
 	<p class="load__why">{coverageGap(row)}</p>
 	{#if row.uncovered && row.uncovered.length > 0}
 		<ul class="gap">
