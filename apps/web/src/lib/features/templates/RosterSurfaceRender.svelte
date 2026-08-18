@@ -200,6 +200,7 @@
 						{card.provisional ? provisionalLine : (card.headline ?? '')}
 					</p>
 				{/if}
+				{#if card.biography}<p class="roster__biography">{card.biography}</p>{/if}
 				{#if card.location}<p class="roster__location">{card.location}</p>{/if}
 				{#if block.showSessions}{@render sessions(card)}{/if}
 				{#if block.showLinks}{@render links(card)}{/if}
@@ -667,6 +668,14 @@
 		margin: 0;
 		font-size: 0.8125em;
 		color: var(--je-color-text-muted);
+	}
+
+	.roster__biography {
+		margin: 0;
+		white-space: pre-line;
+		line-height: var(--je-leading-relaxed);
+		color: var(--je-color-text);
+		overflow-wrap: anywhere;
 	}
 
 	.roster__sessions {

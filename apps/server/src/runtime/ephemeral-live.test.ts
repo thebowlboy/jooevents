@@ -23,6 +23,9 @@ import {
   engagementSnapshotReadResultSchema,
   speakerLineupChangeOperationResultSchema,
   speakerLineupSnapshotReadResultSchema,
+  speakerProfileApproveResultSchema,
+  speakerProfileReadResultSchema,
+  speakerProfileUpdateResultSchema,
   emailProviderReadinessReadOperationResultSchema,
   eventCreateOperationResultSchema,
   eventListReadResultSchema,
@@ -1247,6 +1250,18 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['GET /api/events/current/speakers/person-history']
       },
       {
+        name: 'speaker.profile.approve', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/speakers/profile/approve']
+      },
+      {
+        name: 'speaker.profile.read', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/speakers/profile']
+      },
+      {
+        name: 'speaker.profile.update', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/speakers/profile']
+      },
+      {
         name: 'store_communication_authoring_payload', version: 1, effect: 'draft',
         bindings: ['POST /api/events/current/communications/authoring-payloads']
       },
@@ -1374,8 +1389,8 @@ describe('ephemeral live Foundation server composition', () => {
     expect(runtime.database.installedSchemaArtifacts).toEqual([]);
     expect(runtime.database.retainedBaseline).toMatchObject({
       status: 'current',
-	  coordinate: { schemaEpoch: 2, sequence: 12 },
-	  migrationId: 'e2_0012_schedule_breaks',
+	  coordinate: { schemaEpoch: 2, sequence: 13 },
+	  migrationId: 'e2_0013_speaker_profiles',
       databaseClass: 'ephemeral'
     });
     expect(runtime.database.sqlite.query<{ readonly name: string }, []>(`
@@ -5338,6 +5353,113 @@ describe('ephemeral live Foundation server composition', () => {
     expect(count(runtime, 'event_spine_heads')).toBe(0);
   });
 
+  test('joins exact speaker profile edits and per-field approvals through direct audited execution', async () => {
+    const runtime = await createEphemeralLiveRuntime({ config });
+    runtimes.push(runtime);
+    const session = await createOwnerSession(runtime);
+    await provisionOwner(runtime, session);
+    const [speaker] = await seedAcceptedSpeakers({
+      runtime,
+      session,
+      key: 'profile-loop',
+      speakers: [{
+        key: 'speaker', title: 'Profile contracts',
+        name: 'Ada Profile', email: 'ada.profile@example.test'
+      }]
+    });
+    if (!speaker) throw new Error('Seeded profile speaker missing.');
+
+    const read = async () => {
+      const response = await runtime.app.request(
+        `/api/events/current/speakers/profile?personId=${speaker.personId}`,
+        { headers: eventHeaders({ session, correlationId: crypto.randomUUID() }) }
+      );
+      expect(response.status).toBe(200);
+      return speakerProfileReadResultSchema.parse(await response.json());
+    };
+    expect(await read()).toMatchObject({
+      kind: 'success', data: { personId: speaker.personId, profile: null, approvals: [] }
+    });
+
+    const created = speakerProfileUpdateResultSchema.parse(await effect({
+      runtime, session, path: '/api/events/current/speakers/profile',
+      key: 'profile-loop-create',
+      body: {
+        personId: speaker.personId,
+        expectedProfileVersion: null,
+        patch: {
+          headline: 'Principal engineer',
+          biography: 'Builds dependable event systems.',
+          location: 'Singapore',
+          links: [{ kind: 'website', label: 'Work', href: 'https://example.test/ada' }]
+        }
+      },
+      parse: (value) => value
+    }));
+    if (created.kind !== 'success') throw new Error('Speaker profile create failed.');
+    expect(created.data.profile).toMatchObject({
+      version: 1,
+      headline: { revision: 1, value: 'Principal engineer' },
+      biography: { revision: 1, value: 'Builds dependable event systems.' },
+      location: { revision: 1, value: 'Singapore' }
+    });
+
+    const approved = speakerProfileApproveResultSchema.parse(await effect({
+      runtime, session, path: '/api/events/current/speakers/profile/approve',
+      key: 'profile-loop-approve',
+      body: {
+        personId: speaker.personId,
+        expectedProfileVersion: 1,
+        fields: ['headline', 'biography', 'location', 'links']
+      },
+      parse: (value) => value
+    }));
+    if (approved.kind !== 'success') throw new Error('Speaker profile approval failed.');
+    expect(approved.data.approvals.map((entry) => entry.field))
+      .toEqual(['headline', 'biography', 'location', 'links']);
+
+    const edited = speakerProfileUpdateResultSchema.parse(await effect({
+      runtime, session, path: '/api/events/current/speakers/profile',
+      key: 'profile-loop-edit',
+      body: {
+        personId: speaker.personId,
+        expectedProfileVersion: 1,
+        patch: { headline: 'Distinguished engineer' }
+      },
+      parse: (value) => value
+    }));
+    if (edited.kind !== 'success') throw new Error('Speaker profile edit failed.');
+    expect(edited.data.profile).toMatchObject({
+      version: 2, headline: { revision: 2, value: 'Distinguished engineer' }
+    });
+    expect(edited.data.approvals.map((entry) => entry.field))
+      .toEqual(['biography', 'location', 'links']);
+    const reread = await read();
+    if (reread.kind !== 'success') throw new Error('Speaker profile re-read failed.');
+    expect(reread.data.profile?.version).toBe(2);
+    expect(reread.data.approvals.map((entry) => entry.field))
+      .toEqual(['biography', 'location', 'links']);
+
+    const stale = speakerProfileUpdateResultSchema.parse(await effect({
+      runtime, session, path: '/api/events/current/speakers/profile',
+      key: 'profile-loop-stale',
+      body: {
+        personId: speaker.personId,
+        expectedProfileVersion: 1,
+        patch: { location: 'Tokyo' }
+      },
+      parse: (value) => value
+    }));
+    expect(stale).toMatchObject({
+      kind: 'outcome',
+      outcome: { kind: 'speaker.profile.changed', detail: { code: 'stale_profile' } }
+    });
+    expect(count(runtime, 'operation_log', "WHERE operation_name LIKE 'speaker.profile.%'"))
+      .toBe(3);
+    expect(count(runtime, 'content_approvals')).toBe(4);
+    expect(count(runtime, 'speaker_profile_field_revisions')).toBe(5);
+  });
+
   test('publishes confirmed-and-visible program data to the public reads, re-gates rollback, and frames embeds from the surface allowlist', async () => {
     const runtime = await createEphemeralLiveRuntime({ config });
     runtimes.push(runtime);
@@ -5509,6 +5631,38 @@ describe('ephemeral live Foundation server composition', () => {
       });
     }
 
+    const adaProfile = speakerProfileUpdateResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/speakers/profile',
+      key: 'publication-loop-profile-create',
+      body: {
+        personId: ada.personId,
+        expectedProfileVersion: null,
+        patch: {
+          headline: 'Systems engineer',
+          biography: 'Builds reliable event platforms.',
+          location: 'Singapore',
+          links: [{ kind: 'website', label: 'Website', href: 'https://example.test/ada' }]
+        }
+      },
+      parse: (value) => value
+    }));
+    if (adaProfile.kind !== 'success') throw new Error('Publication profile create failed.');
+    const adaApproval = speakerProfileApproveResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/speakers/profile/approve',
+      key: 'publication-loop-profile-approve',
+      body: {
+        personId: ada.personId,
+        expectedProfileVersion: 1,
+        fields: ['headline', 'biography', 'location', 'links']
+      },
+      parse: (value) => value
+    }));
+    if (adaApproval.kind !== 'success') throw new Error('Publication profile approval failed.');
+
     // Release 1: both confirmed speakers visible. The reviewed diff carries
     // the audited name declassifications the commit copies into public state.
     const publishOne = releaseReviewDraftOperationResultSchema.parse(await effect({
@@ -5529,6 +5683,13 @@ describe('ephemeral live Foundation server composition', () => {
     expect(diffOne.rollbackSuppressions).toBeNull();
     expect(diffOne.nameDeclassifications.map((entry) => entry.displayName).sort())
       .toEqual(['Ada Alpha', 'Bram Beta']);
+    expect(diffOne.speakerProfiles?.profiles).toEqual([{
+      personId: ada.personId,
+      headline: adaApproval.data.profile!.headline,
+      biography: adaApproval.data.profile!.biography,
+      location: adaApproval.data.profile!.location,
+      links: adaApproval.data.profile!.links
+    }]);
     const releaseOneId = diffOne.after.releaseId;
     await publishReleaseDraft({
       runtime, session, key: 'publication-loop-publish-1', draft: publishOne
@@ -5570,6 +5731,13 @@ describe('ephemeral live Foundation server composition', () => {
     expect(rosterOneResult.data.speakers.every((speaker) =>
       speaker.id !== undefined
       && ![ada.personId, bram.personId, cleo.personId].includes(speaker.id))).toBe(true);
+    expect(rosterOneResult.data.speakers.find((speaker) => speaker.name === 'Ada Alpha'))
+      .toMatchObject({
+        headline: 'Systems engineer',
+        biography: 'Builds reliable event platforms.',
+        location: 'Singapore',
+        links: [{ kind: 'website', label: 'Website', href: 'https://example.test/ada' }]
+      });
     for (const text of [scheduleOne.text, rosterOne.text]) {
       // Response bytes: no unconfirmed name, no non-programmed content, no
       // contact data, no person key, no workspace scope.
@@ -5599,6 +5767,20 @@ describe('ephemeral live Foundation server composition', () => {
     }));
     if (hidden.kind !== 'success') throw new Error('Lineup visibility change failed.');
 
+    const editedProfile = speakerProfileUpdateResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/speakers/profile',
+      key: 'publication-loop-profile-edit',
+      body: {
+        personId: ada.personId,
+        expectedProfileVersion: 1,
+        patch: { headline: 'Distinguished systems engineer' }
+      },
+      parse: (value) => value
+    }));
+    if (editedProfile.kind !== 'success') throw new Error('Publication profile edit failed.');
+
     const publishTwo = releaseReviewDraftOperationResultSchema.parse(await effect({
       runtime,
       session,
@@ -5613,6 +5795,13 @@ describe('ephemeral live Foundation server composition', () => {
     expect(diffTwo.after.number).toBe(2);
     expect(diffTwo.nameDeclassifications.map((entry) => entry.displayName).sort())
       .toEqual(['Ada Alpha', 'Bram Beta']);
+    expect(diffTwo.speakerProfiles?.profiles[0]).toMatchObject({
+      personId: ada.personId,
+      biography: adaApproval.data.profile!.biography,
+      location: adaApproval.data.profile!.location,
+      links: adaApproval.data.profile!.links
+    });
+    expect(diffTwo.speakerProfiles?.profiles[0]?.headline).toBeUndefined();
     await publishReleaseDraft({
       runtime, session, key: 'publication-loop-publish-2', draft: publishTwo
     });
@@ -5656,6 +5845,9 @@ describe('ephemeral live Foundation server composition', () => {
     expect(diffRollback.rollbackSuppressions).toEqual([]);
     expect(diffRollback.nameDeclassifications.map((entry) => entry.displayName).sort())
       .toEqual(['Ada Alpha', 'Bram Beta']);
+    expect(diffRollback.speakerProfiles?.profiles[0]?.headline).toBeUndefined();
+    expect(diffRollback.speakerProfiles?.profiles[0]?.biography?.value)
+      .toBe('Builds reliable event platforms.');
     await publishReleaseDraft({
       runtime, session, key: 'publication-loop-rollback', draft: rollback
     });
@@ -5675,6 +5867,11 @@ describe('ephemeral live Foundation server composition', () => {
     const rosterThreeResult = servedRosterResultSchema.parse(rosterThree.body);
     if (rosterThreeResult.kind !== 'success') throw new Error('Rollback roster read failed.');
     expect(rosterThreeResult.data.speakers.map((speaker) => speaker.name)).toEqual(['Ada Alpha']);
+    expect(rosterThreeResult.data.speakers[0]).toMatchObject({
+      biography: 'Builds reliable event platforms.',
+      location: 'Singapore'
+    });
+    expect(rosterThreeResult.data.speakers[0]?.headline).toBeUndefined();
 
     // Embed delivery: the Bun request handler serves `/embed/<kind>` HTML
     // with exactly the surface head's stored allowlist and everything else

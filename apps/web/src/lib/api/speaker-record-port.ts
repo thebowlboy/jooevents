@@ -15,6 +15,11 @@
  */
 
 import type {
+	SpeakerProfileApproveInput,
+	SpeakerProfileUpdateInput,
+	SpeakerProfileViewDto
+} from '@jooevents/contracts';
+import type {
 	AssignmentState,
 	CommunicationThread,
 	DecisionState,
@@ -22,7 +27,6 @@ import type {
 	MutationOutcome,
 	SessionPlacementDisplay,
 	SpeakerLink,
-	SpeakerProfile,
 	SpeakerRow,
 	TaskAssignment,
 	TaskDef
@@ -162,8 +166,8 @@ export interface SpeakerRecordSnapshot {
 	readonly submissionCoverage?: 'complete' | 'linked_only';
 	/** Present only while they are on the public lineup. */
 	readonly publicCard: SpeakerPublicCard | null;
-	/** What they say about themselves; null when no profile carries their address. */
-	readonly profile: SpeakerProfile | null;
+	/** Exact reusable Person profile plus approvals for this event. */
+	readonly profile: SpeakerProfileViewDto;
 	readonly history: readonly SpeakerHistoryEntry[];
 }
 
@@ -175,6 +179,10 @@ export interface SpeakerRecordPort {
 	};
 	readonly engagement: {
 		recordConfirmation(engagementId: string): Promise<MutationOutcome>;
+	};
+	readonly profile: {
+		update(input: SpeakerProfileUpdateInput): Promise<MutationOutcome>;
+		approve(input: SpeakerProfileApproveInput): Promise<MutationOutcome>;
 	};
 	/**
 	 * The same registered acts the Tasks matrix commits through, so accepting a

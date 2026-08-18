@@ -9,6 +9,10 @@ import {
 import type { DecisionsLiveClient } from './operations/decisions-live';
 import type { EngagementsWithPersonHistoryLiveClient } from './operations/engagements-live';
 import type { TaskLiveClient } from './operations/tasks-live';
+import type {
+	SpeakerProfileLiveMutationResult,
+	SpeakerProfilesLiveClient
+} from './operations/speaker-profiles-live';
 import type { FilesPagePort } from './files/files-page-port';
 import type { MaterialFileView } from './files/view-models';
 import type {
@@ -190,7 +194,32 @@ export function createLiveSpeakerRecordPort(input: {
 	readonly decisions: Pick<DecisionsLiveClient, 'readState'>;
 	readonly intake: Pick<LiveOrganizerSubmissionsPort, 'readDetail' | 'listForPerson'>;
 	readonly files: Pick<FilesPagePort, 'read' | 'downloadPath'>;
+	readonly profiles: SpeakerProfilesLiveClient;
+	readonly newIdempotencyKey?: () => string;
 }): SpeakerRecordPort {
+	const newIdempotencyKey = input.newIdempotencyKey ?? (() =>
+		`je.speaker-record.profile.${globalThis.crypto.randomUUID()}`);
+
+	function profileMutationOutcome(result: SpeakerProfileLiveMutationResult) {
+		if (result.kind === 'success') return { ok: true as const };
+		if (result.kind === 'unavailable') {
+			return { ok: false as const, reason: 'Speaker profile editing is not available in this workspace.' };
+		}
+		if (result.kind === 'transport_error') {
+			return {
+				ok: false as const,
+				reason: result.error.retryable
+					? 'The speaker profile could not reach JooEvents. Try again.'
+					: 'This speaker profile change is not valid.'
+			};
+		}
+		return {
+			ok: false as const,
+			reason: result.outcome.class === 'access_denied'
+				? 'You no longer have permission to change speaker profiles.'
+				: 'The speaker profile changed while you were working. Review the latest values and try again.'
+		};
+	}
 	async function board(): Promise<TaskBoardSnapshotDto> {
 		const result = await input.tasks.readBoard();
 		if (result.kind !== 'success') unavailable('speaker_record_task_board_unavailable', 'task board');
@@ -213,15 +242,19 @@ export function createLiveSpeakerRecordPort(input: {
 		if (!engagement || engagement.personId !== head.personId || !engagement.name.trim() || !engagement.email.trim()) {
 			return unavailable('speaker_record_identity_unavailable', 'speaker identity');
 		}
-		const [personHistory, personSubmissions] = await Promise.all([
+		const [personHistory, personSubmissions, profileResult] = await Promise.all([
 			input.engagements.readPersonHistory(head.personId),
-			input.intake.listForPerson(head.personId)
+			input.intake.listForPerson(head.personId),
+			input.profiles.read(head.personId)
 		]);
 		if (personHistory.kind !== 'success') {
 			return unavailable('speaker_record_history_unavailable', 'speaker history');
 		}
 		if (personSubmissions.kind !== 'success') {
 			unavailable('speaker_record_submission_unavailable', 'speaker proposals');
+		}
+		if (profileResult.kind !== 'success') {
+			unavailable('speaker_record_profile_unavailable', 'speaker profile');
 		}
 		const submissionRows = personSubmissions.data;
 		const submissionIds = submissionRows.map((row) => row.id);
@@ -315,7 +348,7 @@ export function createLiveSpeakerRecordPort(input: {
 			publicCard: engagement.publiclyVisible
 				? { links: [], provisional: !engagement.contentApproved }
 				: null,
-			profile: null,
+			profile: profileResult.data,
 			history: personHistory.data.map((entry) => ({
 				id: entry.id,
 				at: displayInstant(entry.occurredAt),
@@ -330,6 +363,18 @@ export function createLiveSpeakerRecordPort(input: {
 		engagement: Object.freeze({
 			recordConfirmation: (engagementId: string) =>
 				input.speakers.speakers.recordConfirmation(engagementId)
+		}),
+		profile: Object.freeze({
+			async update(profileInput) {
+				return profileMutationOutcome(await input.profiles.update(
+					profileInput, newIdempotencyKey()
+				));
+			},
+			async approve(profileInput) {
+				return profileMutationOutcome(await input.profiles.approve(
+					profileInput, newIdempotencyKey()
+				));
+			}
 		}),
 		deliverables: Object.freeze({
 			accept: (taskId: string, speakerId: string) =>

@@ -150,6 +150,8 @@ import {
   ENGAGEMENT_READ_ACCESS_POLICY,
   SPEAKER_LINEUP_MANAGE_ACCESS_POLICY,
   SPEAKER_LINEUP_REQUEST_HASH_PROFILE,
+  SPEAKER_PROFILE_DIRECT_REQUEST_HASH_PROFILE,
+  SPEAKER_PROFILE_MANAGE_ACCESS_POLICY,
   PORTAL_ENGAGEMENT_RESPOND_REQUEST_HASH_PROFILE,
   PORTAL_PARTICIPANT_ACT_ACCESS_POLICY,
   PORTAL_PARTICIPANT_READ_ACCESS_POLICY,
@@ -157,6 +159,8 @@ import {
   createEngagementOperationModule,
   createSpeakerPersonHistoryOperationModule,
   createSpeakerLineupDirectOperationModule,
+  createSpeakerProfileDirectOperationModule,
+  createSpeakerProfileReadOperationModule,
   createParticipantCurrentAuthorityResolver,
   createParticipantPortalOperationModule
 } from '@jooevents/engagement-operations';
@@ -372,6 +376,8 @@ import {
   createSQLiteEngagementDirectEffectDomainRegistration,
   createSQLiteSpeakerLineupDirectEffectDomainRegistration,
   SQLiteSpeakerLineupRepository,
+  createSQLiteSpeakerProfileDirectEffectDomainRegistration,
+  SQLiteSpeakerProfileRepository,
   createSQLiteEventEffectDomainRegistration,
   createSQLiteEventSelectEffectDomainRegistration,
   createSQLiteEventSettingsDirectEffectDomainRegistration,
@@ -847,6 +853,25 @@ const speakerLineupProfiles = Object.freeze({
   }),
   idempotencyCredential: Object.freeze({
     key: 'key-profile.speaker-lineup.idempotency-credential',
+    version: parseContractVersion(1)
+  })
+});
+
+const speakerProfileProfiles = Object.freeze({
+  authorityPrincipal: Object.freeze({
+    key: 'key-profile.speaker-profile.operator-principal',
+    version: parseContractVersion(1)
+  }),
+  scopePartition: Object.freeze({
+    key: 'key-profile.speaker-profile.current-event-scope',
+    version: parseContractVersion(1)
+  }),
+  requestCanonicalization: Object.freeze({
+    key: 'key-profile.speaker-profile.request-canonicalization',
+    version: parseContractVersion(1)
+  }),
+  idempotencyCredential: Object.freeze({
+    key: 'key-profile.speaker-profile.idempotency-credential',
     version: parseContractVersion(1)
   })
 });
@@ -2522,6 +2547,12 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       eventRelationships,
       newCategoryId: () => crypto.randomUUID()
     });
+    const speakerProfileDirectDomain = createSQLiteSpeakerProfileDirectEffectDomainRegistration({
+      sqlite: database.sqlite,
+      workspaceId,
+      eventRelationships,
+      newApprovalId: () => crypto.randomUUID()
+    });
     const taskDirectDomain = createSQLiteTaskDirectEffectDomainRegistration({
       sqlite: database.sqlite,
       workspaceId,
@@ -2625,6 +2656,7 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       schedule: schedulePlacementDirectDomain.scheduleRead,
       engagements: engagementReadRepository,
       lineups: new SQLiteSpeakerLineupRepository(database.sqlite),
+      profiles: new SQLiteSpeakerProfileRepository(database.sqlite),
       vocabulary: vocabularyRead,
       eventSettings: eventSettingsRepository,
       names: releaseParticipantNames,
@@ -2874,6 +2906,10 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
         Object.freeze({
           policy: SPEAKER_LINEUP_MANAGE_ACCESS_POLICY,
           permissionId: 'event.manage' as const
+        }),
+        Object.freeze({
+          policy: SPEAKER_PROFILE_MANAGE_ACCESS_POLICY,
+          permissionId: 'speaker.profile.manage' as const
         }),
         Object.freeze({
           policy: RELEASE_DRAFT_ACCESS_POLICY,
@@ -4249,6 +4285,37 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
         speakerLineupProfiles.idempotencyCredential
       )
     });
+    const speakerProfiles = new SQLiteSpeakerProfileRepository(database.sqlite);
+    const speakerProfileReadOperations = createSpeakerProfileReadOperationModule({
+      workspaceId,
+      readPolicy: ENGAGEMENT_READ_ACCESS_POLICY,
+      currentAuthority,
+      currentEvent,
+      profiles: speakerProfiles,
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      authorityPrincipalKeyProfile: speakerProfileProfiles.authorityPrincipal,
+      scopePartitionProfile: speakerProfileProfiles.scopePartition,
+      requestCanonicalizationProfile: speakerProfileProfiles.requestCanonicalization
+    });
+    const speakerProfileDirectOperations = createSpeakerProfileDirectOperationModule({
+      workspaceId,
+      managePolicy: SPEAKER_PROFILE_MANAGE_ACCESS_POLICY,
+      currentAuthority,
+      currentEvent,
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      authorityPrincipalKeyProfile: speakerProfileProfiles.authorityPrincipal,
+      scopePartitionProfile: speakerProfileProfiles.scopePartition,
+      requestCanonicalizationProfile: speakerProfileProfiles.requestCanonicalization,
+      requestHashSealer: cryptoProfiles.requestHashSealer(
+        SPEAKER_PROFILE_DIRECT_REQUEST_HASH_PROFILE
+      ),
+      idempotencyCredentialProfile: speakerProfileProfiles.idempotencyCredential,
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(
+        speakerProfileProfiles.idempotencyCredential
+      )
+    });
     const taskBoardOperations = createTaskBoardReadOperationModule({
       workspaceId,
       readPolicy: EVENT_READ_ACCESS_POLICY,
@@ -4803,6 +4870,7 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       decisionDirectDomain,
       engagementDirectDomain,
       speakerLineupDirectDomain,
+      speakerProfileDirectDomain,
       taskDirectDomain,
       ...releaseNativeDomains,
       participantPortalDomain,
@@ -4885,6 +4953,8 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       speakerPersonHistoryOperations,
       engagementDirectOperations,
       speakerLineupDirectOperations,
+      speakerProfileReadOperations,
+      speakerProfileDirectOperations,
       taskBoardOperations,
       taskMutationOperations,
       releaseNativeOperations,

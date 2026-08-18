@@ -113,6 +113,10 @@ function lineupRoster(): ServedPublicRosterDto {
 			id: ids.speaker,
 			name: 'Ada Alpha',
 			categoryId: ids.category,
+			headline: 'Engineer',
+			biography: 'Builds dependable systems.',
+			location: 'Singapore',
+			links: [{ kind: 'website', label: 'Website', href: 'https://example.com/ada' }],
 			sessions: []
 		}]
 	};
@@ -218,7 +222,7 @@ describe('live public-surface port', () => {
 
 		const roster = await port.speakers.publicRoster();
 		expect(roster).toHaveLength(1);
-		expect(roster[0]).toMatchObject({ name: 'Ada Alpha', provisional: false, links: [] });
+		expect(roster[0]).toMatchObject({ name: 'Ada Alpha', provisional: true, links: [] });
 		expect(roster[0]?.sessions).toEqual([{ id: ids.sessionA, title: 'Agent Product Craft' }]);
 		// No person key survives the mapping: the card id is positional.
 		expect(JSON.stringify(roster)).not.toContain('personId');
@@ -286,6 +290,11 @@ describe('live public-surface port', () => {
 		expect(mapServedRoster(lineupRoster())[0]).toMatchObject({
 			id: ids.speaker,
 			categoryId: ids.category,
+			headline: 'Engineer',
+			biography: 'Builds dependable systems.',
+			location: 'Singapore',
+			links: [{ kind: 'website', label: 'Website', href: 'https://example.com/ada' }],
+			provisional: false,
 			sessions: []
 		});
 		expect(mapServedSpeakerCategories(lineupRoster())).toEqual([{

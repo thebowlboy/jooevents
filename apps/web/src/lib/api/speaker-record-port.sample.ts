@@ -84,7 +84,7 @@ export function createSampleSpeakerRecordPort(api: WorkspaceApi): SpeakerRecordP
 		// rendering a person-shaped frame with no person in it.
 		if (!engagement) return null;
 
-		const [schedule, defs, assignments, thread, submissionPage, publicRoster, profile] =
+		const [schedule, defs, assignments, thread, submissionPage, publicRoster, sampleProfile] =
 			await Promise.all([
 				api.schedule.state(),
 				api.tasks.defs(),
@@ -149,6 +149,29 @@ export function createSampleSpeakerRecordPort(api: WorkspaceApi): SpeakerRecordP
 		});
 
 		const card = publicRoster.find((entry) => entry.id === engagement.id) ?? null;
+		const profilePersonId = engagement.personId ?? engagement.id;
+		const textField = (value: string) => ({
+			revision: 1, digestSha256: 'a'.repeat(64), value
+		});
+		const links = sampleProfile?.links ?? [];
+		const profile = {
+			schemaVersion: 1 as const,
+			workspaceId: '00000000-0000-4000-8000-000000000001',
+			eventId: '00000000-0000-4000-8000-000000000002',
+			personId: profilePersonId,
+			profile: sampleProfile ? {
+				schemaVersion: 1 as const,
+				workspaceId: '00000000-0000-4000-8000-000000000001',
+				personId: profilePersonId,
+				version: 1,
+				headline: textField(sampleProfile.headline),
+				biography: textField(''),
+				location: textField(sampleProfile.location ?? ''),
+				links: { revision: 1, digestSha256: 'a'.repeat(64), value: links },
+				updatedAt: '2026-08-18T00:00:00.000Z'
+			} : null,
+			approvals: []
+		};
 
 		const otherEngagements: SpeakerOtherEngagement[] = roster
 			.filter((row) => row.id !== engagement.id && sameAddress(row.email, engagement.email))
@@ -199,6 +222,14 @@ export function createSampleSpeakerRecordPort(api: WorkspaceApi): SpeakerRecordP
 		record: Object.freeze({ read }),
 		engagement: Object.freeze({
 			recordConfirmation: (engagementId: string) => api.speakers.recordConfirmation(engagementId)
+		}),
+		profile: Object.freeze({
+			async update() {
+				return { ok: false as const, reason: 'Profile editing is available in a connected workspace.' };
+			},
+			async approve() {
+				return { ok: false as const, reason: 'Profile approval is available in a connected workspace.' };
+			}
 		}),
 		deliverables: Object.freeze({
 			async accept(taskId: string, speakerId: string) {

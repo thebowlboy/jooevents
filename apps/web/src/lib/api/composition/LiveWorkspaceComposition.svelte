@@ -17,6 +17,7 @@
 	import { createDecisionsLiveClient } from '$lib/api/operations/decisions-live';
 	import { createDirectEntryLiveClient } from '$lib/api/operations/direct-entry-live';
 	import { createEngagementsLiveClient } from '$lib/api/operations/engagements-live';
+	import { createSpeakerProfilesLiveClient } from '$lib/api/operations/speaker-profiles-live';
 	import { createIntakeSubmissionsLivePort } from '$lib/api/operations/intake-submissions-live';
 	import { createLiveDecisionsPagePort } from '$lib/api/decisions-page-port.live';
 	import { createLiveSubmissionsPagePort } from '$lib/api/submissions-page-port.live';
@@ -200,6 +201,7 @@
 	const sessionCatalog = createSessionCatalogLivePort({ manifest: initial.manifest });
 	const decisionsClient = createDecisionsLiveClient({ manifest: initial.manifest });
 	const engagementsClient = createEngagementsLiveClient({ manifest: initial.manifest });
+	const speakerProfilesClient = createSpeakerProfilesLiveClient({ manifest: initial.manifest });
 	const taskClient = createTasksLiveClient({ manifest: initial.manifest });
 	// Build the canonical roster before Schedule so the board's attribution
 	// doors consume the same people as the Speakers surface. Profile enrichment
@@ -336,7 +338,8 @@
 		schedule,
 		decisions: decisionsClient,
 		intake: intakeSubmissions,
-		files
+		files,
+		profiles: speakerProfilesClient
 	});
 	const pulse = createLivePulsePagePort({
 		sources: {

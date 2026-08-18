@@ -23,6 +23,7 @@ import {
   type SurfaceReleaseDto,
   type ReleaseSurfaceSuccessorPlanDto,
   type ReleaseTemplateRevisionPinDto,
+  type SpeakerProfileViewDto,
   type SpeakerLineupSnapshotDto,
   type TemplateArtifactDocumentDto
 } from '@jooevents/contracts';
@@ -120,6 +121,9 @@ export function projectServedPublicSchedule(release: ProgramRelease): ServedPubl
 export function projectServedPublicRoster(release: ProgramRelease): ServedPublicRosterDto {
   const verified = parseProgramRelease(release);
   if (verified.speakerLineup !== undefined) {
+    const profilesByPerson = new Map(
+      (verified.speakerProfiles?.profiles ?? []).map((profile) => [profile.personId, profile])
+    );
     const sessionsByPerson = new Map<string, Map<string, string>>();
     for (const session of verified.sessions) {
       for (const participant of session.participants) {
@@ -134,14 +138,21 @@ export function projectServedPublicRoster(release: ProgramRelease): ServedPublic
       categories: verified.speakerLineup.categories.map((category) => ({ ...category })),
       speakers: verified.speakerLineup.entries
         .filter((entry) => entry.displayName !== null)
-        .map((entry) => ({
-          id: entry.speakerId,
-          name: entry.displayName!,
-          categoryId: entry.categoryId,
-          sessions: [...(sessionsByPerson.get(entry.personId)?.entries() ?? [])]
-            .sort(([left], [right]) => left < right ? -1 : 1)
-            .map(([sessionId, title]) => ({ sessionId, title }))
-        }))
+        .map((entry) => {
+          const profile = profilesByPerson.get(entry.personId);
+          return {
+            id: entry.speakerId,
+            name: entry.displayName!,
+            categoryId: entry.categoryId,
+            ...(profile?.headline === undefined ? {} : { headline: profile.headline.value }),
+            ...(profile?.biography === undefined ? {} : { biography: profile.biography.value }),
+            ...(profile?.location === undefined ? {} : { location: profile.location.value }),
+            ...(profile?.links === undefined ? {} : { links: profile.links.value }),
+            sessions: [...(sessionsByPerson.get(entry.personId)?.entries() ?? [])]
+              .sort(([left], [right]) => left < right ? -1 : 1)
+              .map(([sessionId, title]) => ({ sessionId, title }))
+          };
+        })
     }));
   }
   const byPerson = new Map<string, {
@@ -242,6 +253,11 @@ export interface ReleaseReadPort {
   /** Current block-severity conflict sweep from the schedule domain; any entry refuses publish. */
   readReleaseScheduleConflicts(scope: ReleaseScope): readonly ReleaseScheduleConflictDto[];
   readReleaseParticipantDisplayName(scope: ReleaseScope, personId: string): string | undefined;
+  /** Exact current profile and event-specific approvals used by the release gate. */
+  readReleaseSpeakerProfileView?(
+    scope: ReleaseScope,
+    personId: string
+  ): SpeakerProfileViewDto;
   /** The republished-form pin source: the form's current published version, if any. */
   readReleasePublishedFormVersionId(scope: ReleaseScope, formId: string): string | undefined;
   /** Canonical current Template snapshot used to verify and derive presentation releases. */

@@ -67,7 +67,14 @@ const snapshot = (over: Partial<SpeakerRecordSnapshot> = {}): SpeakerRecordSnaps
 	thread: null,
 	submissions: [],
 	publicCard: null,
-	profile: null,
+	profile: {
+		schemaVersion: 1,
+		workspaceId: '00000000-0000-4000-8000-000000000001',
+		eventId: '00000000-0000-4000-8000-000000000002',
+		personId: '00000000-0000-4000-8000-000000000003',
+		profile: null,
+		approvals: []
+	},
 	history: [],
 	...over
 });

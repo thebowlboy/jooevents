@@ -919,6 +919,8 @@ export interface PublicSpeakerCard {
 	name: string;
 	/** Their own one-line description. Absent while nothing is approved to show. */
 	headline?: string;
+	/** Their approved longer introduction, shown by the single-person profile layout. */
+	biography?: string;
 	location?: string;
 	links: SpeakerLink[];
 	sessions: SpeakerSession[];

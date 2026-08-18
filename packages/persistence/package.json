@@ -79,6 +79,8 @@
     "./engagement-direct-effect-domain": "./src/sqlite/engagement-direct-effect-domain.ts",
     "./speaker-lineup": "./src/sqlite/speaker-lineup.ts",
     "./speaker-lineup-direct-effect-domain": "./src/sqlite/speaker-lineup-direct-effect-domain.ts",
+    "./speaker-profile": "./src/sqlite/speaker-profile.ts",
+    "./speaker-profile-direct-effect-domain": "./src/sqlite/speaker-profile-direct-effect-domain.ts",
     "./organizer-decision-audience": "./src/sqlite/communications/decision-audience.ts",
     "./organizer-task-reminder-audience": "./src/sqlite/communications/task-reminder-audience.ts",
     "./message-releases": "./src/sqlite/communications/message-releases.ts",

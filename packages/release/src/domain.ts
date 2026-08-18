@@ -35,7 +35,11 @@ import {
   type ReleaseSurfaceSuccessorInputDto,
   type ReleaseSurfaceSuccessorPlanDto,
   type ReleasedRoomDto,
+  type ReleasedSpeakerProfileDto,
+  type ReleasedSpeakerProfileSnapshotDto,
   type ReleasedSpeakerLineupSnapshotDto,
+  type SpeakerProfileFieldKey,
+  type SpeakerProfileViewDto,
   type ReleasedSessionDto,
   type SessionHeadDto,
   type StyleSetRecipeDto,
@@ -148,7 +152,37 @@ interface MaterializedProgramContent {
   readonly rooms: readonly ReleasedRoomDto[];
   readonly sessions: readonly ReleasedSessionDto[];
   readonly speakerLineup: ReleasedSpeakerLineupSnapshotDto;
+  readonly speakerProfiles?: ReleasedSpeakerProfileSnapshotDto;
   readonly nameDeclassifications: readonly ReleaseNameDeclassificationDto[];
+}
+
+const PROFILE_FIELDS = Object.freeze([
+  'headline', 'biography', 'location', 'links'
+] as const satisfies readonly SpeakerProfileFieldKey[]);
+
+function releasedProfileFrom(view: SpeakerProfileViewDto): ReleasedSpeakerProfileDto | undefined {
+  const profile = view.profile;
+  if (!profile) return undefined;
+  const approvals = new Map(view.approvals.map((approval) => [approval.field, approval]));
+  const row: Record<string, unknown> = { personId: view.personId };
+  for (const field of PROFILE_FIELDS) {
+    const value = profile[field];
+    const approval = approvals.get(field);
+    const exact = approval?.fieldRevision === value.revision
+      && approval.fieldDigestSha256 === value.digestSha256;
+    const nonempty = field === 'links'
+      ? profile.links.value.length > 0
+      : profile[field].value.length > 0;
+    if (exact && nonempty) row[field] = value;
+  }
+  return Object.keys(row).length === 1 ? undefined : row as ReleasedSpeakerProfileDto;
+}
+
+function releasedProfileSnapshot(
+  profiles: readonly ReleasedSpeakerProfileDto[]
+): ReleasedSpeakerProfileSnapshotDto {
+  const unsigned = { schemaVersion: 1 as const, profiles: [...profiles] };
+  return Object.freeze({ ...unsigned, digestSha256: canonicalJsonSha256(unsigned) });
 }
 
 /**
@@ -267,6 +301,16 @@ export function materializeProgramContent(
     })
   };
 
+  const speakerProfiles = port.readReleaseSpeakerProfileView === undefined
+    ? undefined
+    : releasedProfileSnapshot(releasedLineup.entries
+        .filter((entry) => entry.displayName !== null)
+        .map((entry) => releasedProfileFrom(
+          port.readReleaseSpeakerProfileView!(scope, entry.personId)
+        ))
+        .filter((profile): profile is ReleasedSpeakerProfileDto => profile !== undefined)
+        .sort((left, right) => left.personId < right.personId ? -1 : 1));
+
   return Object.freeze({
     pins: Object.freeze({
       sessionCatalog: Object.freeze({
@@ -280,11 +324,15 @@ export function materializeProgramContent(
         digestSha256: vocabulary.setDigestSha256
       }),
       eventSettingsVersion,
-      speakerLineupDigestSha256: lineup.digestSha256
+      speakerLineupDigestSha256: lineup.digestSha256,
+      ...(speakerProfiles === undefined
+        ? {}
+        : { speakerProfilesDigestSha256: speakerProfiles.digestSha256 })
     }),
     rooms: Object.freeze(rooms),
     sessions: Object.freeze(sessions),
     speakerLineup: Object.freeze(releasedLineup),
+    ...(speakerProfiles === undefined ? {} : { speakerProfiles }),
     nameDeclassifications: Object.freeze(
       [...releasedNames.keys()].sort().map((personId) => Object.freeze({
         personId,
@@ -353,6 +401,7 @@ function releasedSessionFrom(input: {
 interface GatedRestoredProgramContent {
   readonly sessions: readonly ReleasedSessionDto[];
   readonly speakerLineup: ReleasedSpeakerLineupSnapshotDto | undefined;
+  readonly speakerProfiles: ReleasedSpeakerProfileSnapshotDto | undefined;
   readonly nameDeclassifications: readonly ReleaseNameDeclassificationDto[];
   readonly suppressions: readonly { readonly sessionId: string; readonly personId: string }[];
 }
@@ -437,12 +486,35 @@ function gateRestoredProgramContent(
       };
     })
   };
+  const speakerProfiles = target.speakerProfiles === undefined
+    ? undefined
+    : releasedProfileSnapshot(target.speakerProfiles.profiles.flatMap((profile) => {
+        if (!retained.has(profile.personId) || port.readReleaseSpeakerProfileView === undefined) {
+          return [];
+        }
+        const current = port.readReleaseSpeakerProfileView(scope, profile.personId);
+        const currentReleased = releasedProfileFrom(current);
+        if (!currentReleased) return [];
+        const restored: Record<string, unknown> = { personId: profile.personId };
+        for (const field of PROFILE_FIELDS) {
+          const targetField = profile[field];
+          const currentField = currentReleased[field];
+          if (targetField !== undefined && currentField !== undefined
+              && targetField.revision === currentField.revision
+              && targetField.digestSha256 === currentField.digestSha256) {
+            restored[field] = targetField;
+          }
+        }
+        return Object.keys(restored).length === 1
+          ? [] : [restored as ReleasedSpeakerProfileDto];
+      }));
   suppressions.sort((left, right) =>
     `${left.sessionId}:${left.personId}` < `${right.sessionId}:${right.personId}` ? -1 : 1
   );
   return Object.freeze({
     sessions,
     speakerLineup,
+    speakerProfiles,
     nameDeclassifications: target.nameDeclassifications
       .filter((entry) => retained.has(entry.personId)),
     suppressions
@@ -571,12 +643,20 @@ export function planReleaseMutation(input: {
           number: current.number + 1,
           origin: { kind: 'rollback', restoredFromReleaseId: target.id },
           predecessor: predecessorRef(current),
-          pins: target.pins,
+          pins: {
+            ...target.pins,
+            ...(gated.speakerProfiles === undefined
+              ? {}
+              : { speakerProfilesDigestSha256: gated.speakerProfiles.digestSha256 })
+          },
           rooms: target.rooms,
           sessions: gated.sessions,
           ...(gated.speakerLineup === undefined
             ? {}
             : { speakerLineup: gated.speakerLineup }),
+          ...(gated.speakerProfiles === undefined
+            ? {}
+            : { speakerProfiles: gated.speakerProfiles }),
           nameDeclassifications: gated.nameDeclassifications,
           releasedByUserId: planningInput.actorUserId,
           releasedAt: planningInput.occurredAt
@@ -738,6 +818,9 @@ export function projectReleaseSafeDiff(plan: ReleaseMutationPlanDto): ReleaseSaf
               categoryId: entry.categoryId
             }))
         }
+      }),
+      ...(plan.release.speakerProfiles === undefined ? {} : {
+        speakerProfiles: plan.release.speakerProfiles
       }),
       rollbackSuppressions: plan.rollbackSuppressions
     };
@@ -1027,6 +1110,7 @@ function signedProgramRelease(unsigned: {
   readonly rooms: readonly ReleasedRoomDto[];
   readonly sessions: readonly ReleasedSessionDto[];
   readonly speakerLineup?: ReleasedSpeakerLineupSnapshotDto;
+  readonly speakerProfiles?: ReleasedSpeakerProfileSnapshotDto;
   readonly nameDeclassifications: readonly ReleaseNameDeclassificationDto[];
   readonly releasedByUserId: string;
   readonly releasedAt: string;

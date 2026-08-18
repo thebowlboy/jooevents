@@ -17,6 +17,7 @@ import {
 import { schedulePlacementInstantSchema } from './schedule-placement';
 import { sessionParticipantRoleSchema, sessionPlannedDurationMinutesSchema } from './sessions';
 import { speakerLineupAccentSchema, speakerLineupCategoryNameSchema } from './engagements';
+import { speakerProfileLinksSchema } from './speaker-profiles';
 
 const digestSchema = z.string().regex(/^[a-f0-9]{64}$/);
 const canonicalInstantSchema = z.iso.datetime({ offset: true }).refine(
@@ -90,7 +91,9 @@ export const programReleaseEvidencePinsSchema = z.strictObject({
   }),
   eventSettingsVersion: releaseVersionSchema,
   /** Added with lineup publication; absent only on releases created before that capability. */
-  speakerLineupDigestSha256: digestSchema.optional()
+  speakerLineupDigestSha256: digestSchema.optional(),
+  /** Added with approved speaker-profile publication; absent on earlier releases. */
+  speakerProfilesDigestSha256: digestSchema.optional()
 });
 
 /**
@@ -252,6 +255,48 @@ export const releasedSpeakerLineupSnapshotSchema = z.strictObject({
   }
 });
 
+const releasedSpeakerProfileFieldBase = {
+  revision: releaseVersionSchema,
+  digestSha256: digestSchema
+} as const;
+
+export const releasedSpeakerProfileTextFieldSchema = z.strictObject({
+  ...releasedSpeakerProfileFieldBase,
+  value: z.string().min(1)
+});
+
+export const releasedSpeakerProfileLinksFieldSchema = z.strictObject({
+  ...releasedSpeakerProfileFieldBase,
+  value: speakerProfileLinksSchema.min(1)
+});
+
+/** Only fields whose exact current revision was approved for this event. */
+export const releasedSpeakerProfileSchema = z.strictObject({
+  personId: releaseIdSchema,
+  headline: releasedSpeakerProfileTextFieldSchema.optional(),
+  biography: releasedSpeakerProfileTextFieldSchema.optional(),
+  location: releasedSpeakerProfileTextFieldSchema.optional(),
+  links: releasedSpeakerProfileLinksFieldSchema.optional()
+}).refine((profile) =>
+  profile.headline !== undefined || profile.biography !== undefined
+    || profile.location !== undefined || profile.links !== undefined,
+{ message: 'a released speaker profile must carry at least one approved field' });
+
+export const releasedSpeakerProfileSnapshotSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  digestSha256: digestSchema,
+  profiles: z.array(releasedSpeakerProfileSchema).max(10_000)
+}).superRefine((snapshot, context) => {
+  for (const [index, profile] of snapshot.profiles.entries()) {
+    if (index > 0 && snapshot.profiles[index - 1]!.personId >= profile.personId) {
+      context.addIssue({
+        code: 'custom', path: ['profiles', index],
+        message: 'released speaker profiles must use canonical unique Person order'
+      });
+    }
+  }
+});
+
 /**
  * Immutable program-data release. `publish_schedule` creates one; committed
  * changes create successors; rollback creates a restorative successor. The
@@ -270,6 +315,8 @@ export const programReleaseSchema = z.strictObject({
   sessions: z.array(releasedSessionSchema).max(5_000),
   /** Absent only on immutable releases created before lineup publication. */
   speakerLineup: releasedSpeakerLineupSnapshotSchema.optional(),
+  /** Absent only on immutable releases created before approved profile publication. */
+  speakerProfiles: releasedSpeakerProfileSnapshotSchema.optional(),
   nameDeclassifications: z.array(releaseNameDeclassificationSchema).max(10_000),
   releasedByUserId: releaseIdSchema,
   releasedAt: canonicalInstantSchema,
@@ -298,6 +345,19 @@ export const programReleaseSchema = z.strictObject({
     context.addIssue({
       code: 'custom', path: ['pins', 'speakerLineupDigestSha256'],
       message: 'the released lineup must match its evidence pin'
+    });
+  }
+  if ((release.speakerProfiles === undefined)
+      !== (release.pins.speakerProfilesDigestSha256 === undefined)) {
+    context.addIssue({
+      code: 'custom', path: ['speakerProfiles'],
+      message: 'released speaker profiles and their evidence pin must appear together'
+    });
+  } else if (release.speakerProfiles !== undefined
+      && release.pins.speakerProfilesDigestSha256 !== release.speakerProfiles.digestSha256) {
+    context.addIssue({
+      code: 'custom', path: ['pins', 'speakerProfilesDigestSha256'],
+      message: 'released speaker profiles must match their evidence pin'
     });
   }
   for (const [index, room] of release.rooms.entries()) {
@@ -369,6 +429,14 @@ export const programReleaseSchema = z.strictObject({
       code: 'custom', path: ['nameDeclassifications'],
       message: 'name declassifications must record exactly the released display names'
     });
+  }
+  for (const [index, profile] of (release.speakerProfiles?.profiles ?? []).entries()) {
+    if (!releasedNames.has(profile.personId)) {
+      context.addIssue({
+        code: 'custom', path: ['speakerProfiles', 'profiles', index, 'personId'],
+        message: 'a released speaker profile must belong to a publicly released Person'
+      });
+    }
   }
 });
 
@@ -969,6 +1037,8 @@ export const releaseSafeDiffSchema = z.discriminatedUnion('action', [
     nameDeclassifications: z.array(releaseNameDeclassificationSchema).max(10_000),
     /** Absent only when reviewing a pre-lineup immutable release. */
     speakerLineup: releaseLineupSafeDiffSchema.optional(),
+    /** Exact approved profile fields that this immutable release will publish. */
+    speakerProfiles: releasedSpeakerProfileSnapshotSchema.optional(),
     /**
      * Rollback-only revocation evidence, surfaced beside the full name list so
      * an approver restoring a prior release sees exactly which appearances the
@@ -1247,6 +1317,10 @@ export const servedPublicSpeakerCardSchema = z.strictObject({
   id: releaseIdSchema.optional(),
   name: canonicalText(300),
   categoryId: releaseIdSchema.nullable().optional(),
+  headline: z.string().min(1).optional(),
+  biography: z.string().min(1).optional(),
+  location: z.string().min(1).optional(),
+  links: speakerProfileLinksSchema.optional(),
   sessions: z.array(servedPublicSpeakerSessionSchema).max(200)
 });
 
@@ -1390,6 +1464,8 @@ export type ServedPublicScheduleSessionDto = z.infer<typeof servedPublicSchedule
 export type ServedPublicScheduleDto = z.infer<typeof servedPublicScheduleSchema>;
 export type ServedPublicSpeakerSessionDto = z.infer<typeof servedPublicSpeakerSessionSchema>;
 export type ServedPublicSpeakerCardDto = z.infer<typeof servedPublicSpeakerCardSchema>;
+export type ReleasedSpeakerProfileDto = z.infer<typeof releasedSpeakerProfileSchema>;
+export type ReleasedSpeakerProfileSnapshotDto = z.infer<typeof releasedSpeakerProfileSnapshotSchema>;
 export type ServedPublicSpeakerCategoryDto = z.infer<typeof servedPublicSpeakerCategorySchema>;
 export type ServedPublicRosterDto = z.infer<typeof servedPublicRosterSchema>;
 export type ServedPublicPresentationDto = z.infer<typeof servedPublicPresentationSchema>;

@@ -24,6 +24,8 @@ export * from './sqlite/decision-direct-effect-domain';
 export * from './sqlite/engagement-direct-effect-domain';
 export * from './sqlite/speaker-lineup';
 export * from './sqlite/speaker-lineup-direct-effect-domain';
+export * from './sqlite/speaker-profile';
+export * from './sqlite/speaker-profile-direct-effect-domain';
 export * from './sqlite/template-authoring';
 export * from './sqlite/template-artifact-native-effect-domain';
 export * from './sqlite/tasks';

@@ -5,6 +5,8 @@ import type {
   ReleasePlanningInput,
   ReleaseScheduleConflictDto,
   SchedulePlacementSnapshotDto,
+  SpeakerProfileFieldKey,
+  SpeakerProfileViewDto,
   SpeakerLineupSnapshotDto,
   SessionCatalogDto,
   SessionHeadDto
@@ -68,6 +70,7 @@ const speakersArtifactId = '019c1df7-86b5-769b-bba4-5f7097bfa712';
 const applyArtifactId = '019c1df7-86b5-769b-bba4-5f7097bfa713';
 const templateRevisionId = '019c1df7-86b5-769b-bba4-5f7097bfa714';
 const templateDigest = 'd'.repeat(64);
+const profileApprovalId = '019c1df7-86b5-769b-bba4-5f7097bfa405';
 const recipe = {
   name: 'Warm default', canvas: '#faf8f5', surface: '#ffffff',
   text: '#2a2522', action: '#b05a4f', radius: 6, controlHeight: 36
@@ -190,6 +193,52 @@ function lineupSnapshot(
       categoryId: null,
       publiclyVisible: personId !== personC,
       version: 1
+    }))
+  };
+}
+
+function profileView(input: {
+  readonly revision?: number;
+  readonly approved?: readonly SpeakerProfileFieldKey[];
+} = {}): SpeakerProfileViewDto {
+  const revision = input.revision ?? 1;
+  const digests = {
+    headline: '1'.repeat(64),
+    biography: '2'.repeat(64),
+    location: '3'.repeat(64),
+    links: '4'.repeat(64)
+  };
+  const fields = {
+    headline: { revision, digestSha256: digests.headline, value: 'Computing pioneer' },
+    biography: { revision, digestSha256: digests.biography, value: 'Private until approved.' },
+    location: { revision, digestSha256: digests.location, value: 'London' },
+    links: {
+      revision,
+      digestSha256: digests.links,
+      value: [{ kind: 'website' as const, label: 'Notes', href: 'https://example.com/ada' }]
+    }
+  };
+  return {
+    schemaVersion: 1,
+    ...scope,
+    personId: personA,
+    profile: {
+      schemaVersion: 1,
+      workspaceId: scope.workspaceId,
+      personId: personA,
+      version: revision,
+      ...fields,
+      updatedAt: now
+    },
+    approvals: (input.approved ?? []).map((field, index) => ({
+      id: index === 0 ? profileApprovalId : deterministicReleaseId(scope, 'profile_approval', { index }),
+      ...scope,
+      personId: personA,
+      field,
+      fieldRevision: fields[field].revision,
+      fieldDigestSha256: fields[field].digestSha256,
+      approvedByUserId: userId,
+      approvedAt: now
     }))
   };
 }
@@ -1138,6 +1187,81 @@ describe('served public projections', () => {
       expect(bytes).not.toContain(collectingSessionId);
       expect(bytes).not.toContain(draftSessionId);
     }
+  });
+
+  test('publishes only exact approved profile fields from the immutable release', () => {
+    const { state, port } = fixture();
+    const approved = profileView({ approved: ['headline', 'location', 'links'] });
+    const release = publishedRelease(state, {
+      ...port,
+      readReleaseSpeakerProfileView: (_scope, personId) => personId === personA
+        ? approved
+        : { schemaVersion: 1, ...scope, personId, profile: null, approvals: [] }
+    }, releaseId1, null);
+
+    expect(release.speakerProfiles?.profiles).toEqual([{
+      personId: personA,
+      headline: approved.profile!.headline,
+      location: approved.profile!.location,
+      links: approved.profile!.links
+    }]);
+    const roster = projectServedPublicRoster(release);
+    expect(roster.speakers).toEqual([{
+      id: expect.any(String),
+      name: 'Ada Lovelace',
+      categoryId: null,
+      headline: 'Computing pioneer',
+      location: 'London',
+      links: [{ kind: 'website', label: 'Notes', href: 'https://example.com/ada' }],
+      sessions: [{ sessionId: programmedSessionId, title: 'Opening Keynote' }]
+    }]);
+    const bytes = canonicalJsonText(roster);
+    expect(bytes).not.toContain('Private until approved.');
+    expect(bytes).not.toContain(personA);
+    expect(bytes).not.toContain('personId');
+
+    const plan = planReleaseMutation({
+      planningInput: publishInput(releaseId2, 1),
+      port: {
+        ...port,
+        readReleaseSpeakerProfileView: () => approved
+      }
+    });
+    if (!isProgramPlan(plan)) throw new Error('wrong plan');
+    const diff = projectReleaseSafeDiff(plan);
+    if (diff.action !== 'publish_schedule') throw new Error('wrong diff');
+    expect(diff.speakerProfiles).toEqual(plan.release.speakerProfiles);
+  });
+
+  test('rollback withholds a profile field whose current approval was revoked', () => {
+    const { state, port } = fixture();
+    let currentProfile = profileView({ approved: ['headline'] });
+    const profilePort: ReleaseReadPort = {
+      ...port,
+      readReleaseSpeakerProfileView: (_scope, personId) => personId === personA
+        ? currentProfile
+        : { schemaVersion: 1, ...scope, personId, profile: null, approvals: [] }
+    };
+    const first = publishedRelease(state, profilePort, releaseId1, null);
+    expect(projectServedPublicRoster(first).speakers[0]!.headline).toBe('Computing pioneer');
+    currentProfile = profileView({ revision: 2, approved: [] });
+    publishedRelease(state, profilePort, releaseId2, 1);
+
+    const rollback = planReleaseMutation({
+      planningInput: {
+        action: 'program_rollback',
+        scope,
+        actorUserId: userId,
+        occurredAt: later,
+        releaseId: releaseId3,
+        targetReleaseId: first.id,
+        expectedCurrentReleaseNumber: 2
+      },
+      port: profilePort
+    });
+    if (!isProgramPlan(rollback)) throw new Error('wrong plan');
+    expect(rollback.release.speakerProfiles?.profiles).toEqual([]);
+    expect(projectServedPublicRoster(rollback.release).speakers[0]!.headline).toBeUndefined();
   });
 
   test('the roster is the union of visible appearances, one card per released person', () => {

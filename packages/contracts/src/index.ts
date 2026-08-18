@@ -33,6 +33,7 @@ export * from './route-namespaces';
 export * from './schedule-placement';
 export * from './schedule-breaks';
 export * from './signals';
+export * from './speaker-profiles';
 export * from './sessions';
 export * from './submissions';
 export * from './template-authoring';

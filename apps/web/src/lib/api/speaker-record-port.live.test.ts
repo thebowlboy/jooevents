@@ -210,6 +210,17 @@ function compose(overrides: Record<string, unknown> = {}) {
 			})
 		} as never,
 		files: { read: async () => ({ received: [] }), downloadPath: () => null } as never,
+		profiles: {
+			read: async () => ({
+				kind: 'success', correlationId: id(68),
+				data: {
+					schemaVersion: 1, workspaceId, eventId, personId,
+					profile: null, approvals: []
+				}
+			}),
+			update: async () => ({ kind: 'transport_error', error: { code: 'unused', retryable: false } }),
+			approve: async () => ({ kind: 'transport_error', error: { code: 'unused', retryable: false } })
+		} as never,
 		...overrides
 	} as never);
 }

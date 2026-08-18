@@ -244,16 +244,23 @@ export function mapServedTracks(served: ServedPublicScheduleDto): Track[] {
 
 /** Released speaker cards. New releases carry a stable opaque public id. */
 export function mapServedRoster(served: ServedPublicRosterDto): PublicSpeakerCard[] {
-	return served.speakers.map((speaker, index) => ({
-		id: speaker.id ?? `released-speaker:${index}`,
-		name: speaker.name,
-		links: [],
-		sessions: speaker.sessions.map((session) => ({ id: session.sessionId, title: session.title })),
-		...(speaker.categoryId === undefined || speaker.categoryId === null
-			? {}
-			: { categoryId: speaker.categoryId }),
-		provisional: false
-	}));
+	return served.speakers.map((speaker, index) => {
+		const links = speaker.links?.map((link) => ({ ...link })) ?? [];
+		return {
+			id: speaker.id ?? `released-speaker:${index}`,
+			name: speaker.name,
+			...(speaker.headline === undefined ? {} : { headline: speaker.headline }),
+			...(speaker.biography === undefined ? {} : { biography: speaker.biography }),
+			...(speaker.location === undefined ? {} : { location: speaker.location }),
+			links,
+			sessions: speaker.sessions.map((session) => ({ id: session.sessionId, title: session.title })),
+			...(speaker.categoryId === undefined || speaker.categoryId === null
+				? {}
+				: { categoryId: speaker.categoryId }),
+			provisional: speaker.headline === undefined && speaker.biography === undefined
+				&& speaker.location === undefined && links.length === 0
+		};
+	});
 }
 
 export function mapServedSpeakerCategories(served: ServedPublicRosterDto): SpeakerCategory[] {

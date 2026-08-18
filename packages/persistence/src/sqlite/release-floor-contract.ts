@@ -102,3 +102,16 @@ export const SQLITE_E2_S12_RELEASE_FLOOR: SQLiteReleaseFloor = Object.freeze({
   expectedFullFingerprint: '1f7ab9821aca36773b5f6e84d13b2570b38681e32371c04f7fe461b6e4235364',
   minimumRunnerVersion: 2
 });
+
+/** Current terminal floor; sequences 6 through 12 remain supported predecessors. */
+export const SQLITE_E2_S13_RELEASE_FLOOR: SQLiteReleaseFloor = Object.freeze({
+  releaseFloorId: 'sqlite-e2-s13',
+  terminalMigration: Object.freeze({
+    migrationId: 'e2_0013_speaker_profiles',
+    schemaEpoch: 2,
+    sequence: 13
+  }),
+  expectedApplicationFingerprint: '9736ab6b751b4d35f4be77f2e0e0059cd1887c67e9143c166ad273615d42d32e',
+  expectedFullFingerprint: '70370395491758d3fb53aeda10a4425f88bcf6bce18952e136cab05ba3f32868',
+  minimumRunnerVersion: 2
+});

@@ -38,6 +38,7 @@
 	import { LiveRead, type LiveReadState } from '$lib/api/live-read';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
 	import SpeakerDeliverables from './SpeakerDeliverables.svelte';
+	import SpeakerProfileEditor from './SpeakerProfileEditor.svelte';
 	import { deliveryOutcomeBadge, engagementStateBadge } from './engagement-vocabulary';
 	import {
 		afterGapStatement,
@@ -293,6 +294,18 @@
 				{/if}
 				{#if gap}<p class="strip strip--note" role="note">{gap}</p>{/if}
 			</section>
+
+		<!-- Reusable profile and event-specific approval ──────────────── -->
+		<section class="section" aria-labelledby="record-profile">
+			<h3 class="section__title" id="record-profile">Speaker profile</h3>
+			{#key `${snapshot.profile.personId}:${snapshot.profile.profile?.version ?? 0}:${snapshot.profile.approvals.map((entry) => entry.id).join(',')}`}
+				<SpeakerProfileEditor
+					view={snapshot.profile}
+					personName={person.name}
+					{port}
+					onchanged={reread} />
+			{/key}
+		</section>
 
 		<!-- Deliverables, with their content ───────────────────────────── -->
 		<SpeakerDeliverables views={deliverables} engagement={person} {port} onchanged={reread} />

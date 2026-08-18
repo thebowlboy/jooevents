@@ -10,6 +10,7 @@ import {
   type ReleaseSurfaceSuccessorPlanDto,
   type SchedulePlacementSnapshotDto,
   type SpeakerLineupSnapshotDto,
+  type SpeakerProfileViewDto,
   type ServedPublicRosterDto,
   type ServedPublicPresentationDto,
   type ServedPublicScheduleDto,
@@ -62,6 +63,7 @@ import { SQLiteEngagementRepository } from './engagement';
 import type { SQLiteProgramVocabularyRepository } from './program-vocabulary';
 import type { SQLiteSessionRepository } from './session';
 import type { SQLiteSpeakerLineupRepository } from './speaker-lineup';
+import type { SQLiteSpeakerProfileRepository } from './speaker-profile';
 
 /**
  * This schema contributes to the accepted epoch-2 baseline and may also serve
@@ -347,6 +349,7 @@ export interface SQLiteReleaseUpstreamSources {
   };
   readonly engagements: Pick<SQLiteEngagementRepository, 'readEngagementSnapshot'>;
   readonly lineups: Pick<SQLiteSpeakerLineupRepository, 'readSpeakerLineupSnapshot'>;
+  readonly profiles?: Pick<SQLiteSpeakerProfileRepository, 'readSpeakerProfileView'>;
   readonly vocabulary: Pick<SQLiteProgramVocabularyRepository, 'readVocabulary'>;
   readonly eventSettings: Pick<SQLiteEventSettingsRepository, 'readEventSettings'>;
   readonly names: SQLiteReleaseParticipantNameSource;
@@ -373,10 +376,20 @@ interface ScopeRow { readonly event_id: string }
  */
 export class SQLiteReleaseRepository
 implements ReleaseTransactionPort, ReleaseSurfaceSuccessorTransactionPort {
+  readonly readReleaseSpeakerProfileView?: (
+    scope: ReleaseScopeDto,
+    personId: string
+  ) => SpeakerProfileViewDto;
+
   constructor(
     private readonly sqlite: Database,
     private readonly sources: SQLiteReleaseUpstreamSources
-  ) {}
+  ) {
+    if (sources.profiles !== undefined) {
+      this.readReleaseSpeakerProfileView = (scope, personId) =>
+        sources.profiles!.readSpeakerProfileView({ ...scope, personId });
+    }
+  }
 
   readCurrentProgramRelease(scope: ReleaseScopeDto): ProgramRelease | undefined {
     if (!this.scopeExists(scope)) return undefined;
