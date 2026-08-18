@@ -439,6 +439,10 @@
 
 	function onWindowKeydown(event: KeyboardEvent) {
 		if (event.key !== 'Escape') return;
+		/* Native dialog cancellation is a separate default action from event
+		   bubbling. Stop both so this layer alone consumes the press; after the
+		   editor unmounts, the next Escape is free to dismiss its host modal. */
+		event.preventDefault();
 		event.stopPropagation();
 		// Layered: the first Escape closes the picker, the next the editor.
 		if (sizeOpen) {
