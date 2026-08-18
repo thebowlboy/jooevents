@@ -1212,10 +1212,29 @@ export function createLiveSchedulePagePort(input: {
 				const personId = candidates[0]!.personId;
 				const key = participantRecoveryKey(sessionId, personId);
 				const recovery = participantRecoveries.get(key);
-				if (!recovery) return refusal('session_participants');
 				const catalog = await readCatalog();
 				const session = catalog.sessions.find((head) => head.id === sessionId);
 				if (!session) return { ok: false, reason: 'This session no longer exists.' };
+				if (!recovery) {
+					const applied = await input.sessions.applyChange({
+						action: 'roster_add_existing',
+						expectedCatalogVersion: catalog.version,
+						expectedCatalogDigestSha256: catalog.digestSha256,
+						sessionId,
+						expectedSessionVersion: session.version,
+						expectedSessionDigestSha256: session.digestSha256,
+						expectedRosterVersion: session.roster.version,
+						personId,
+						role: 'speaker',
+						publiclyVisible: true
+					}, newIdempotencyKey());
+					if (applied.kind !== 'success' || applied.data.action !== 'roster_add_existing') {
+						return applied.kind === 'success'
+							? { ok: false, reason: 'The participant addition result was incomplete.' }
+							: { ok: false, reason: applyFailure(applied, 'session participant').reason };
+					}
+					return { ok: true };
+				}
 				if (session.version !== recovery.expectedSession.version
 					|| session.digestSha256 !== recovery.expectedSession.digestSha256) {
 					return { ok: false, reason: 'This removal receipt is no longer current.' };

@@ -8,10 +8,12 @@ import {
   type InvocationEvidence
 } from '@jooevents/application';
 import {
+  applyEngagementRosterInviteFrom,
   applyEngagementSeedFrom,
   applyEngagementSeedReversalFrom,
   deterministicEngagementId,
   planEngagementMutation,
+  planEngagementRosterInviteFrom,
   planEngagementSeedFrom,
   planEngagementSeedReversalFrom,
   validateEngagementSeedReversalFrom,
@@ -331,6 +333,35 @@ function applySeed(fx: ReturnType<typeof fixture>, overrides: Record<string, unk
 }
 
 describe('disposable SQLite engagement repository', () => {
+  test('creates or preserves an organizer roster invitation under the caller transaction', () => {
+    const fx = fixture();
+    try {
+      const personId = uuid(0xc01);
+      const source = { kind: 'organizer', id: userId, version: 1 };
+      const plan = planEngagementRosterInviteFrom(fx.engagements, {
+        scope, sessionId, personId, source, invitedAt: now, respondBy: null
+      });
+      expect(() => applyEngagementRosterInviteFrom(fx.engagements, plan))
+        .toThrow('transaction_required');
+      fx.sqlite.exec('BEGIN IMMEDIATE;');
+      const created = applyEngagementRosterInviteFrom(fx.engagements, plan);
+      fx.sqlite.exec('COMMIT;');
+      expect(created).toMatchObject({
+        sessionId, personId, source, state: 'invited',
+        submissionId: null, seededByDecision: null, version: 1
+      });
+
+      const preserve = planEngagementRosterInviteFrom(fx.engagements, plan.input);
+      fx.sqlite.exec('BEGIN IMMEDIATE;');
+      expect(applyEngagementRosterInviteFrom(fx.engagements, preserve)).toEqual(created);
+      fx.sqlite.exec('COMMIT;');
+      expect(fx.sqlite.query('SELECT count(*) AS count FROM engagement_heads').get())
+        .toEqual({ count: 1 });
+    } finally {
+      fx.sqlite.close();
+    }
+  });
+
   test('seeds invited rows transactionally with guarded inserts and typed replay refusals', () => {
     const fx = fixture();
     try {

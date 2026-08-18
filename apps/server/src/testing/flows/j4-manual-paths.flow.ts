@@ -24,6 +24,8 @@ type Decision = {
 type Engagements = {
   readonly engagements: readonly {
     readonly id: string;
+    readonly sessionId: string;
+    readonly personId: string;
     readonly submissionId: string | null;
     readonly version: number;
     readonly state: string;
@@ -169,8 +171,7 @@ export async function runJ4ManualPaths(world: FlowWorld): Promise<void> {
   const manual = await organizer.do<SessionChange>('session.change', {
     action: 'create', expectedCatalogVersion: catalog.version, expectedCatalogDigestSha256: catalog.digestSha256,
     title: 'Organizer-created workshop', plannedDurationMinutes: 45, lifecycle: 'programmed',
-    formatId: spine.formatId, trackId: null,
-    participants: [{ personId: participant.personId, role: 'speaker', publiclyVisible: true, source: participant.source }]
+    formatId: spine.formatId, trackId: null
   });
   await organizer.expectLog('Created a session');
   const manualSession = required(manual.data.session, 'manual session');
@@ -180,11 +181,44 @@ export async function runJ4ManualPaths(world: FlowWorld): Promise<void> {
     return afterManual.sessions.some((session) => session.id === manualSession.id);
   });
   const manualHead = required(afterManual.sessions.find((session) => session.id === manualSession.id), 'manual session head');
-  const retargeted = await organizer.do<SessionChange>('session.change', {
-    action: 'retarget', expectedCatalogVersion: afterManual.version,
+  const addedParticipant = await organizer.do<SessionChange>('session.change', {
+    action: 'roster_add_existing', expectedCatalogVersion: afterManual.version,
     expectedCatalogDigestSha256: afterManual.digestSha256,
     sessionId: manualHead.id, expectedSessionVersion: manualHead.version,
-    expectedSessionDigestSha256: manualHead.digestSha256, formatId: alternateFormatId, trackId: null
+    expectedSessionDigestSha256: manualHead.digestSha256,
+    expectedRosterVersion: manualHead.roster.version,
+    personId: participant.personId, role: 'speaker', publiclyVisible: true
+  });
+  await organizer.expectLog('Added an existing participant to a session');
+  expect(addedParticipant.data.session?.roster.participants).toMatchObject([{
+    personId: participant.personId,
+    role: 'speaker',
+    publiclyVisible: true,
+    source: { kind: 'organizer' }
+  }]);
+  await organizer.expectRead('engagement.snapshot.read', (projection) => {
+    const engagements = projection as Engagements;
+    return engagements.engagements.some((engagement) =>
+      engagement.sessionId === manualHead.id
+      && engagement.personId === participant.personId
+      && engagement.submissionId === null
+      && engagement.state === 'invited'
+    );
+  });
+  let afterParticipantAdd!: Catalog;
+  await organizer.expectRead('session.catalog.read', (projection) => {
+    afterParticipantAdd = projection as Catalog;
+    return afterParticipantAdd.sessions.some((session) => session.id === manualSession.id);
+  });
+  const addedHead = required(
+    afterParticipantAdd.sessions.find((session) => session.id === manualSession.id),
+    'participant-added manual session head'
+  );
+  const retargeted = await organizer.do<SessionChange>('session.change', {
+    action: 'retarget', expectedCatalogVersion: afterParticipantAdd.version,
+    expectedCatalogDigestSha256: afterParticipantAdd.digestSha256,
+    sessionId: addedHead.id, expectedSessionVersion: addedHead.version,
+    expectedSessionDigestSha256: addedHead.digestSha256, formatId: alternateFormatId, trackId: null
   });
   await organizer.expectLog("Changed a session's format or track");
   const retargetedSession = required(retargeted.data.session, 'retargeted manual session');

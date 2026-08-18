@@ -420,6 +420,55 @@ export const engagementSeedInputSchema = z.strictObject({
   }
 });
 
+/**
+ * One organizer-authored Session addition either preserves the exact existing
+ * Session/person Engagement or creates one invitation without pretending a
+ * Submission acceptance caused it. The source is shared with the roster
+ * membership written by the hosting Session operation.
+ */
+export const engagementRosterInviteInputSchema = z.strictObject({
+  scope: engagementScopeSchema,
+  sessionId: engagementIdSchema,
+  personId: engagementIdSchema,
+  source: sessionRosterSourceRefSchema,
+  invitedAt: canonicalInstantSchema,
+  respondBy: canonicalInstantSchema.nullable()
+});
+
+export const engagementRosterInvitePlanSchema = z.strictObject({
+  input: engagementRosterInviteInputSchema,
+  existing: engagementHeadSchema.nullable(),
+  create: engagementHeadSchema.nullable()
+}).superRefine((plan, context) => {
+  if ((plan.existing === null) === (plan.create === null)) {
+    context.addIssue({ code: 'custom', message: 'an invite plan preserves or creates exactly one engagement' });
+    return;
+  }
+  const head = plan.existing ?? plan.create!;
+  if (head.scope.workspaceId !== plan.input.scope.workspaceId
+      || head.scope.eventId !== plan.input.scope.eventId
+      || head.sessionId !== plan.input.sessionId
+      || head.personId !== plan.input.personId
+      || head.source.kind !== plan.input.source.kind
+      || head.source.id !== plan.input.source.id
+      || head.source.version !== plan.input.source.version) {
+    context.addIssue({ code: 'custom', message: 'an invite plan and its engagement must share scope, identity, and source' });
+  }
+  if (plan.create !== null && (
+    plan.create.submissionId !== null
+    || plan.create.seededByDecision !== null
+    || plan.create.state !== 'invited'
+    || plan.create.invitedAt !== plan.input.invitedAt
+    || plan.create.respondBy !== plan.input.respondBy
+    || plan.create.confirmation !== null
+    || plan.create.cancellationRequest !== null
+    || plan.create.cancelledAt !== null
+    || plan.create.version !== 1
+  )) {
+    context.addIssue({ code: 'custom', path: ['create'], message: 'an organizer roster invite creates one exact unseeded invitation' });
+  }
+});
+
 /** Exact seed plan: the new `invited` rows beside the skipped existing pairs. */
 export const engagementSeedPlanSchema = z.strictObject({
   input: engagementSeedInputSchema,
@@ -759,6 +808,8 @@ export type EngagementSeedInputDto = z.infer<typeof engagementSeedInputSchema>;
 export type EngagementSeedPlanDto = z.infer<typeof engagementSeedPlanSchema>;
 export type EngagementSeedReversalPlanDto = z.infer<typeof engagementSeedReversalPlanSchema>;
 export type EngagementSeedResultDto = z.infer<typeof engagementSeedResultSchema>;
+export type EngagementRosterInviteInputDto = z.infer<typeof engagementRosterInviteInputSchema>;
+export type EngagementRosterInvitePlanDto = z.infer<typeof engagementRosterInvitePlanSchema>;
 export type EngagementChangeData = z.infer<typeof engagementChangeDataSchema>;
 export type SpeakerLineupAccent = z.infer<typeof speakerLineupAccentSchema>;
 export type SpeakerLineupCategoryStatus = z.infer<typeof speakerLineupCategoryStatusSchema>;

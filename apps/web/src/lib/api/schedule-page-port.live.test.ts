@@ -412,6 +412,48 @@ describe('live Schedule page correction boundary', () => {
 		]);
 	});
 
+	test('adds an existing roster person through the joined Session and Engagement action', async () => {
+		const sessionId = id(86);
+		const personId = id(87);
+		const speakerId = id(88);
+		const writes: unknown[] = [];
+		const port = createLiveSchedulePagePort({
+			...base,
+			placements: { source: { kind: 'live' } } as never,
+			sessions: {
+				source: { kind: 'live' },
+				readCatalog: async () => ({ kind: 'success', data: {
+					version: 8, digestSha256: 'a'.repeat(64), sessions: [{
+						id: sessionId, version: 3, digestSha256: 'b'.repeat(64),
+						roster: { version: 3, participants: [] }
+					}]
+				} }),
+				applyChange: async (request: any) => {
+					writes.push(request);
+					return { kind: 'success', data: {
+						action: 'roster_add_existing', catalogVersion: 9,
+						session: { id: sessionId, version: 4, digestSha256: 'c'.repeat(64),
+							roster: { version: 4, participants: [] } }
+					} };
+				}
+			} as never,
+			speakers: { list: async () => [{
+				id: speakerId, personId, name: 'Grace', email: 'grace@example.test', state: 'confirmed',
+				sessions: [], tasksDone: 0, tasksTotal: 0, overdueTasks: 0,
+				publiclyVisible: true, contentApproved: true, position: 0
+			}], profile: async () => null } as never,
+			newIdempotencyKey: () => 'participant-add-existing'
+		} as never);
+
+		expect(await port.schedule.addParticipantFromRoster(sessionId, speakerId)).toEqual({ ok: true });
+		expect(writes).toEqual([{
+			action: 'roster_add_existing', expectedCatalogVersion: 8,
+			expectedCatalogDigestSha256: 'a'.repeat(64), sessionId,
+			expectedSessionVersion: 3, expectedSessionDigestSha256: 'b'.repeat(64),
+			expectedRosterVersion: 3, personId, role: 'speaker', publiclyVisible: true
+		}]);
+	});
+
 	test('changes a participant role and restores only against the exact resulting Session', async () => {
 		const sessionId = id(91);
 		const personId = id(92);

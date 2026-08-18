@@ -1,11 +1,13 @@
 import type { Database } from 'bun:sqlite';
 import {
   engagementMutationPlanSchema,
+  engagementRosterInvitePlanSchema,
   engagementSeedPlanSchema,
   engagementSeedReversalPlanSchema,
   type EngagementHeadDto,
   type EngagementMutationPlanDto,
   type EngagementMutationResult,
+  type EngagementRosterInvitePlanDto,
   type EngagementScopeDto,
   type EngagementSeedPlanDto,
   type EngagementSeedResultDto,
@@ -19,6 +21,7 @@ import {
   parseEngagementHead,
   parseEngagementSnapshot,
   type EngagementReadPort,
+  type EngagementRosterInviteTransactionPort,
   type EngagementSeedTransactionPort
 } from '@jooevents/engagement';
 import { canonicalJsonText } from '@jooevents/kernel';
@@ -116,7 +119,7 @@ interface CountRow { readonly count: number }
  * racing duplicate seed is a conflict, never a second row.
  */
 export class SQLiteEngagementRepository
-implements EngagementReadPort, EngagementSeedTransactionPort {
+implements EngagementReadPort, EngagementSeedTransactionPort, EngagementRosterInviteTransactionPort {
   constructor(
     private readonly sqlite: Database,
     private readonly lineups?: Pick<SQLiteSpeakerLineupRepository, 'ensureEntries' | 'removeOrphanedEntries'>
@@ -192,6 +195,26 @@ implements EngagementReadPort, EngagementSeedTransactionPort {
       parsed.rows.map((row) => row.personId)
     );
     return engagementSeedResultFromPlan(parsed);
+  }
+
+  applyEngagementRosterInvite(planInput: EngagementRosterInvitePlanDto): EngagementHeadDto {
+    if (!this.sqlite.inTransaction) throw new SQLiteEngagementError('transaction_required');
+    const plan = engagementRosterInvitePlanSchema.parse(planInput);
+    const current = this.readSessionPersonEngagement(
+      plan.input.scope,
+      plan.input.sessionId,
+      plan.input.personId
+    );
+    if (plan.existing !== null) {
+      if (!current || canonicalJsonText(current) !== canonicalJsonText(plan.existing)) {
+        throw new SQLiteEngagementError('seed_conflict');
+      }
+      return current;
+    }
+    if (current || plan.create === null) throw new SQLiteEngagementError('seed_conflict');
+    this.insertHead(plan.input.scope, plan.create);
+    this.lineups?.ensureEntries(plan.input.scope, [plan.input.personId]);
+    return plan.create;
   }
 
   applyEngagementSeedReversal(plan: EngagementSeedReversalPlanDto): EngagementSeedResultDto {

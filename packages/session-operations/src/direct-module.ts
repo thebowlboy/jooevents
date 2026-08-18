@@ -23,6 +23,7 @@ import {
   sessionDirectOperationResultSchema,
   sessionDirectResultSchema,
   sessionMutationPlanSchema,
+  sessionParticipantAddExistingPlanSchema,
   sessionRemoveNewPlanSchema,
   structuredOutcomeSchema,
   type SafeSchemaManifestRef,
@@ -66,7 +67,7 @@ export const sessionChangedDetailSchema = z.strictObject({
     'format_missing', 'format_retired', 'track_missing', 'track_retired', 'track_required',
     'participant_missing', 'participant_changed', 'session_placed', 'invalid_transition', 'invalid_plan'
   ]),
-  action: z.enum(['create', 'remove_new_session', 'transition', 'retarget', 'roster_visibility', 'roster_remove', 'roster_restore', 'roster_role', 'roster_reorder']),
+  action: z.enum(['create', 'remove_new_session', 'transition', 'retarget', 'roster_visibility', 'roster_remove', 'roster_restore', 'roster_role', 'roster_reorder', 'roster_add_existing']),
   sessionId: z.uuid()
 });
 export const SESSION_CHANGED_DETAIL_SCHEMA_VERSION = 1;
@@ -80,6 +81,14 @@ export const sessionDirectContributionSchema = z.union([
     domain: z.strictObject({
       kind: z.literal('session_direct_change'),
       plan: z.union([sessionMutationPlanSchema, sessionRemoveNewPlanSchema])
+    }),
+    effectContributions: z.tuple([])
+  }),
+  z.strictObject({
+    result: z.strictObject({ kind: z.literal('success'), data: sessionDirectResultSchema }),
+    domain: z.strictObject({
+      kind: z.literal('session_participant_add_existing'),
+      plan: sessionParticipantAddExistingPlanSchema
     }),
     effectContributions: z.tuple([])
   }),
@@ -275,7 +284,7 @@ export function createSessionDirectOperationModule(
         ...SESSION_CHANGE_OPERATION, lifecycle: { status: 'active' as const },
         summary: 'Create or change a Session.', effect: 'commit' as const, maxRisk: 'low' as const,
         autonomyPolicy: refs.autonomy, consequenceTags: ['session-changed'], inputSchema: schemas.input,
-        agentAction: { eligible: true as const, displayLabel: 'Change a session', consequences: ['Session details, stage, track, or participant visibility may change.'], externalEffect: 'none' as const },
+        agentAction: { eligible: true as const, displayLabel: 'Change a session', consequences: ['Session details, stage, track, or participant membership may change.'], externalEffect: 'none' as const },
         contributionSchema: schemas.contribution, canonicalResultSchema: schemas.canonical,
         outcomes: [
           { class: 'idempotency_conflict' as const, kind: 'operation.request_changed', retryable: false, detailSchema: schemas.null },
@@ -302,7 +311,8 @@ export function createSessionDirectOperationModule(
               roster_remove: 'Removed a participant from a session',
               roster_restore: 'Restored a participant to a session',
               roster_role: "Changed a participant's session role",
-              roster_reorder: 'Reordered session participants'
+              roster_reorder: 'Reordered session participants',
+              roster_add_existing: 'Added an existing participant to a session'
             })
           } },
         bindings: [{ surface: 'operator_http' as const, method: 'POST' as const,

@@ -2516,6 +2516,8 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       sqlite: database.sqlite,
       workspaceId,
       repository: sessionRepository,
+      engagements: decisionRepository.engagements,
+      lineups: new SQLiteSpeakerLineupRepository(database.sqlite),
       eventRelationships,
       newSessionId: () => crypto.randomUUID()
     });

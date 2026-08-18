@@ -1,13 +1,16 @@
 import type { Database } from 'bun:sqlite';
 import { resolveEffectInvocationAuthorityRecheckAttribution, resolveEffectInvocationCurrentAuthorityRecheckTime, type EffectHandlerSnapshot, type EffectInvocationContext, type SealedEffectAuthorityRecheckResult } from '@jooevents/application';
-import { sessionDirectInputSchema, sessionMutationPlanSchema, sessionRemoveNewPlanSchema } from '@jooevents/contracts';
+import { sessionDirectInputSchema, sessionMutationPlanSchema, sessionParticipantAddExistingPlanSchema, sessionRemoveNewPlanSchema } from '@jooevents/contracts';
+import { applyEngagementRosterInviteFrom, planEngagementRosterInviteFrom } from '@jooevents/engagement';
 import { parseUserId, parseWorkspaceId, type WorkspaceId } from '@jooevents/kernel';
 import { planNewSessionRemoval, planSessionMutation, SessionPlanningError } from '@jooevents/session';
 import { SESSION_CHANGE_OPERATION, SESSION_DIRECT_HANDLER_CAPABILITY, SESSION_MANAGE_ACCESS_POLICY, sealSessionDirectPreparation, sessionChangedOutcome, sessionDirectContributionSchema } from '@jooevents/session-operations';
 import type { SQLiteEffectDomainAdapter, SQLiteEffectDomainAdapterRegistration } from './foundation-trial-uow';
 import { SQLiteEventSpineRepository } from './event-spine';
 import type { SQLiteOperatorEventRelationshipSource } from './operator-authority-repositories';
+import type { SQLiteEngagementRepository } from './engagement';
 import type { SQLiteSessionRepository } from './session';
+import type { SQLiteSpeakerLineupRepository } from './speaker-lineup';
 
 const same = (a: { readonly key: string; readonly version: number }, b: { readonly key: string; readonly version: number }) => a.key === b.key && a.version === b.version;
 const exact = (context: EffectInvocationContext) => context.scope.eventId !== undefined && context.scope.subjects.length === 2
@@ -20,6 +23,8 @@ export class SQLiteSessionDirectEffectDomainAdapter implements SQLiteEffectDomai
     readonly sqlite: Database;
     readonly workspaceId: WorkspaceId;
     readonly repository: SQLiteSessionRepository;
+    readonly engagements: SQLiteEngagementRepository;
+    readonly lineups: SQLiteSpeakerLineupRepository;
     readonly eventRelationships: SQLiteOperatorEventRelationshipSource;
     readonly newSessionId: () => string;
   }) {
@@ -55,6 +60,65 @@ export class SQLiteSessionDirectEffectDomainAdapter implements SQLiteEffectDomai
       const catalog = this.input.repository.readSessionCatalog(scope);
       if (!catalog) throw new TypeError('session_direct_catalog_missing');
       try {
+        if (wire.action === 'roster_add_existing') {
+          const target = catalog.sessions.find((session) => session.id === wire.sessionId);
+          if (!target) throw new SessionPlanningError('session_missing');
+          if (target.roster.version !== wire.expectedRosterVersion
+              || target.roster.participants.some((entry) => entry.personId === wire.personId)) {
+            throw new SessionPlanningError('participant_changed');
+          }
+          const lineup = this.input.lineups.readSpeakerLineupSnapshot(scope);
+          if (!lineup?.entries.some((entry) => entry.personId === wire.personId)) {
+            throw new SessionPlanningError('participant_missing');
+          }
+          const existing = this.input.engagements.readSessionPersonEngagement(
+            scope,
+            target.id,
+            wire.personId
+          );
+          const source = existing?.source ?? Object.freeze({
+            kind: 'organizer', id: actorUserId, version: 1
+          });
+          const engagementInvite = planEngagementRosterInviteFrom(this.input.engagements, {
+            scope,
+            sessionId: target.id,
+            personId: wire.personId,
+            source,
+            invitedAt: occurredAt,
+            respondBy: null
+          });
+          const sessionPlan = planSessionMutation({
+            planningInput: {
+              action: 'roster_append',
+              scope,
+              actorUserId,
+              occurredAt,
+              expectedCatalogVersion: wire.expectedCatalogVersion,
+              expectedCatalogDigestSha256: wire.expectedCatalogDigestSha256,
+              sessionId: target.id,
+              expectedSessionVersion: wire.expectedSessionVersion,
+              expectedSessionDigestSha256: wire.expectedSessionDigestSha256,
+              participants: [{
+                personId: wire.personId,
+                role: wire.role,
+                publiclyVisible: wire.publiclyVisible,
+                source
+              }]
+            },
+            catalog,
+            vocabulary: this.input.repository.readSessionVocabulary(scope)!
+          });
+          const plan = sessionParticipantAddExistingPlanSchema.parse({ sessionPlan, engagementInvite });
+          return sessionDirectContributionSchema.parse({
+            result: { kind: 'success', data: {
+              action: 'roster_add_existing',
+              catalogVersion: sessionPlan.catalogVersion.after,
+              session: sessionPlan.after
+            } },
+            domain: { kind: 'session_participant_add_existing', plan },
+            effectContributions: []
+          });
+        }
         const plan = wire.action === 'remove_new_session'
           ? (() => {
               const current = catalog.sessions.find((session) => session.id === wire.sessionId);
@@ -99,7 +163,14 @@ export class SQLiteSessionDirectEffectDomainAdapter implements SQLiteEffectDomai
     } } });
   }
   applyDomainContribution(contribution: unknown): void {
-    if (!this.input.sqlite.inTransaction || (contribution as any)?.kind !== 'session_direct_change') throw new TypeError('session_direct_contribution_invalid');
+    if (!this.input.sqlite.inTransaction) throw new TypeError('session_direct_contribution_invalid');
+    if ((contribution as any)?.kind === 'session_participant_add_existing') {
+      const plan = sessionParticipantAddExistingPlanSchema.parse((contribution as any).plan);
+      this.input.repository.applySessionPlan(plan.sessionPlan);
+      applyEngagementRosterInviteFrom(this.input.engagements, plan.engagementInvite);
+      return;
+    }
+    if ((contribution as any)?.kind !== 'session_direct_change') throw new TypeError('session_direct_contribution_invalid');
     const candidate = (contribution as any).plan;
     const mutation = sessionMutationPlanSchema.safeParse(candidate);
     this.input.repository.applySessionPlan(mutation.success ? mutation.data : sessionRemoveNewPlanSchema.parse(candidate));

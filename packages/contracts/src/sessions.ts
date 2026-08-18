@@ -268,6 +268,23 @@ export const sessionRosterReorderInputSchema = z.strictObject({
   personIds: z.array(sessionIdInputSchema).max(500)
 });
 
+/**
+ * Browser-safe request to place one already-engaged event person on another
+ * Session. The server derives roster/Engagement provenance; callers cannot
+ * claim a Submission, Decision, source reference, actor, scope, or time.
+ */
+export const sessionRosterAddExistingInputSchema = z.strictObject({
+  action: z.literal('roster_add_existing'),
+  ...catalogGuardFields,
+  sessionId: sessionIdInputSchema,
+  expectedSessionVersion: sessionVersionSchema,
+  expectedSessionDigestSha256: digestSchema,
+  expectedRosterVersion: sessionVersionSchema,
+  personId: sessionIdInputSchema,
+  role: sessionParticipantRoleSchema,
+  publiclyVisible: z.boolean()
+});
+
 export const sessionRemoveNewInputSchema = z.strictObject({
   action: z.literal('remove_new_session'),
   ...catalogGuardFields,
@@ -277,11 +294,11 @@ export const sessionRemoveNewInputSchema = z.strictObject({
 });
 
 /**
- * Operator wire surface for the mounted Session draft/mutate operations:
- * create, format/track retargeting, lifecycle transition, and the roster visibility off-switch — the
- * organizer gesture that must stay reachable so a person can be hidden before
- * any publish and after a revocation. Roster appends remain authored only
- * through the hosting Decision operation, never from a browser.
+ * Operator wire surface for the mounted Session draft/mutate operations.
+ * Accepted-Submission attachment still enters through the hosting Decision
+ * collaboration. An organizer may also add an already-known lineup person by
+ * identity; the server then derives and commits the Session/Engagement
+ * provenance instead of accepting it from the browser.
  */
 export const sessionAuthorInputSchema = z.discriminatedUnion('action', [
   sessionCreateInputSchema,
@@ -291,7 +308,8 @@ export const sessionAuthorInputSchema = z.discriminatedUnion('action', [
   sessionRosterRemoveInputSchema,
   sessionRosterRestoreInputSchema,
   sessionRosterRoleInputSchema,
-  sessionRosterReorderInputSchema
+  sessionRosterReorderInputSchema,
+  sessionRosterAddExistingInputSchema
 ]);
 
 export const sessionDirectInputSchema = z.discriminatedUnion('action', [
@@ -303,7 +321,8 @@ export const sessionDirectInputSchema = z.discriminatedUnion('action', [
   sessionRosterRemoveInputSchema,
   sessionRosterRestoreInputSchema,
   sessionRosterRoleInputSchema,
-  sessionRosterReorderInputSchema
+  sessionRosterReorderInputSchema,
+  sessionRosterAddExistingInputSchema
 ]);
 
 const planningAttribution = {
@@ -379,7 +398,7 @@ export const sessionMutationResultSchema = z.strictObject({
 });
 
 export const sessionDirectResultSchema = z.strictObject({
-  action: z.enum(['create', 'remove_new_session', 'transition', 'retarget', 'roster_visibility', 'roster_remove', 'roster_restore', 'roster_role', 'roster_reorder']),
+  action: z.enum(['create', 'remove_new_session', 'transition', 'retarget', 'roster_visibility', 'roster_remove', 'roster_restore', 'roster_role', 'roster_reorder', 'roster_add_existing']),
   catalogVersion: sessionVersionSchema,
   session: sessionHeadSchema.nullable()
 });
@@ -409,6 +428,7 @@ export type SessionProgramTargetEvidenceDto = z.infer<typeof sessionProgramTarge
 export type SessionParticipantRefDto = z.infer<typeof sessionParticipantRefSchema>;
 export type SessionRosterParticipantInput = z.infer<typeof sessionRosterParticipantInputSchema>;
 export type SessionRosterAppendInput = z.infer<typeof sessionRosterAppendInputSchema>;
+export type SessionRosterAddExistingInput = z.infer<typeof sessionRosterAddExistingInputSchema>;
 export type SessionRosterVisibilityInput = z.infer<typeof sessionRosterVisibilityInputSchema>;
 export type SessionRosterEvidenceDto = z.infer<typeof sessionRosterEvidenceSchema>;
 export type SessionHeadDto = z.infer<typeof sessionHeadSchema>;

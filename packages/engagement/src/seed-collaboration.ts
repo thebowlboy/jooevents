@@ -1,9 +1,13 @@
 import {
+  engagementRosterInvitePlanSchema,
   engagementSeedInputSchema,
   engagementSeedPlanSchema,
   engagementSeedProvenanceSchema,
   engagementSeedResultSchema,
   engagementSeedReversalPlanSchema,
+  type EngagementHeadDto,
+  type EngagementRosterInviteInputDto,
+  type EngagementRosterInvitePlanDto,
   type EngagementSeedInputDto,
   type EngagementSeedPlanDto,
   type EngagementSeedProvenanceDto,
@@ -87,6 +91,71 @@ export interface EngagementSeedValidationPort extends EngagementReadPort {
 export interface EngagementSeedTransactionPort extends EngagementReadPort {
   applyEngagementSeed(contribution: EngagementSeedContribution): EngagementSeedResultDto;
   applyEngagementSeedReversal(plan: EngagementSeedReversalPlanDto): EngagementSeedResultDto;
+}
+
+export interface EngagementRosterInviteTransactionPort extends EngagementReadPort {
+  applyEngagementRosterInvite(plan: EngagementRosterInvitePlanDto): EngagementHeadDto;
+}
+
+/**
+ * Plans the Engagement half of an organizer adding an already-known person to
+ * a Session. A retained pair is pinned and preserved exactly; an absent pair
+ * receives an unseeded invitation whose provenance is the same typed source
+ * carried by the Session roster membership.
+ */
+export function planEngagementRosterInviteFrom(
+  port: EngagementReadPort,
+  input: EngagementRosterInviteInputDto
+): EngagementRosterInvitePlanDto {
+  const parsed = engagementRosterInvitePlanSchema.shape.input.parse(input);
+  const existing = port.readSessionPersonEngagement(
+    parsed.scope,
+    parsed.sessionId,
+    parsed.personId
+  );
+  if (existing) {
+    return engagementRosterInvitePlanSchema.parse({ input: parsed, existing, create: null });
+  }
+  const create = parseEngagementHead({
+    schemaVersion: 1,
+    id: deterministicEngagementId(parsed.scope, parsed.sessionId, parsed.personId),
+    scope: parsed.scope,
+    sessionId: parsed.sessionId,
+    personId: parsed.personId,
+    submissionId: null,
+    seededByDecision: null,
+    state: 'invited',
+    invitedAt: parsed.invitedAt,
+    respondBy: parsed.respondBy,
+    confirmation: null,
+    cancellationRequest: null,
+    cancelledAt: null,
+    source: parsed.source,
+    version: 1
+  });
+  return engagementRosterInvitePlanSchema.parse({ input: parsed, existing: null, create });
+}
+
+export function validateEngagementRosterInviteFrom(
+  port: EngagementReadPort,
+  planInput: EngagementRosterInvitePlanDto
+): EngagementSeedValidation {
+  try {
+    const plan = engagementRosterInvitePlanSchema.parse(planInput);
+    const rebuilt = planEngagementRosterInviteFrom(port, plan.input);
+    return canonical(rebuilt) === canonical(plan)
+      ? Object.freeze({ kind: 'ready' })
+      : Object.freeze({ kind: 'refused', code: 'seed_stale' });
+  } catch {
+    return Object.freeze({ kind: 'refused', code: 'invalid_plan' });
+  }
+}
+
+export function applyEngagementRosterInviteFrom(
+  port: EngagementRosterInviteTransactionPort,
+  plan: EngagementRosterInvitePlanDto
+): EngagementHeadDto {
+  return port.applyEngagementRosterInvite(engagementRosterInvitePlanSchema.parse(plan));
 }
 
 /**

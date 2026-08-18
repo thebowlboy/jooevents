@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { encodeCanonicalJson } from '@jooevents/kernel';
 import type { EngagementHeadDto, EngagementMutationPlanningInput } from '@jooevents/contracts';
 import {
+  applyEngagementRosterInviteFrom,
   applyEngagementSeedFrom,
   applyEngagementSeedReversalFrom,
   deterministicEngagementId,
@@ -12,13 +13,16 @@ import {
   EngagementSeedError,
   isCancellationRequested,
   planEngagementMutation,
+  planEngagementRosterInviteFrom,
   planEngagementSeedFrom,
   planEngagementSeedReversalFrom,
   resolveEngagementMutationPlanningInput,
   validateEngagementMutationPlan,
+  validateEngagementRosterInviteFrom,
   validateEngagementSeedFrom,
   validateEngagementSeedReversalFrom,
   type EngagementReadPort,
+  type EngagementRosterInviteTransactionPort,
   type EngagementSeedTransactionPort
 } from './index';
 
@@ -43,7 +47,7 @@ interface MemoryWorld {
   readonly heads: Map<string, EngagementHeadDto>;
 }
 
-type WorldPort = EngagementReadPort & EngagementSeedTransactionPort & {
+type WorldPort = EngagementReadPort & EngagementSeedTransactionPort & EngagementRosterInviteTransactionPort & {
   applyEngagementPlan(plan: import('@jooevents/contracts').EngagementMutationPlanDto):
     import('@jooevents/contracts').EngagementMutationResult;
 };
@@ -77,6 +81,11 @@ function worldPort(world: MemoryWorld): WorldPort {
         skippedPersonIds: [],
         removedPersonIds: plan.rows.map((row) => row.personId)
       };
+    },
+    applyEngagementRosterInvite(plan) {
+      if (plan.existing) return plan.existing;
+      world.heads.set(plan.create!.id, plan.create!);
+      return plan.create!;
     }
   };
 }
@@ -128,6 +137,30 @@ describe('engagement identity', () => {
 });
 
 describe('engagement seed collaboration', () => {
+  test('an organizer roster invite creates no acceptance provenance and then preserves the exact pair', () => {
+    const world: MemoryWorld = { heads: new Map() };
+    const port = worldPort(world);
+    const source = { kind: 'organizer', id: userId, version: 1 };
+    const planned = planEngagementRosterInviteFrom(port, {
+      scope, sessionId, personId: personA, source, invitedAt: now, respondBy: null
+    });
+    expect(planned).toMatchObject({
+      existing: null,
+      create: {
+        sessionId, personId: personA, source,
+        state: 'invited', submissionId: null, seededByDecision: null, version: 1
+      }
+    });
+    expect(validateEngagementRosterInviteFrom(port, planned)).toEqual({ kind: 'ready' });
+    applyEngagementRosterInviteFrom(port, planned);
+
+    const replay = planEngagementRosterInviteFrom(port, planned.input);
+    expect(replay.create).toBeNull();
+    expect(replay.existing).toEqual(planned.create);
+    expect(validateEngagementRosterInviteFrom(port, planned))
+      .toEqual({ kind: 'refused', code: 'seed_stale' });
+  });
+
   test('seeds one invited row per person and is idempotent under replay', () => {
     const { port } = seedWorld();
     expect(headOf(port, personA)).toMatchObject({

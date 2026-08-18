@@ -6,6 +6,7 @@ import {
 } from './operations';
 import { submissionSessionOriginSchema } from './decisions';
 import {
+  engagementRosterInvitePlanSchema,
   engagementSeedPlanSchema,
   engagementSeedReversalPlanSchema
 } from './engagements';
@@ -25,6 +26,29 @@ const routeGuardFields = {
   expectedSessionVersion: sessionVersionSchema,
   expectedSessionDigestSha256: digestSchema
 } as const;
+
+/** Atomic Session + Engagement plan for adding one already-known person. */
+export const sessionParticipantAddExistingPlanSchema = z.strictObject({
+  sessionPlan: sessionMutationPlanSchema.refine(
+    (plan) => plan.input.action === 'roster_append' && plan.input.participants.length === 1,
+    'an existing-person addition carries one roster append'
+  ),
+  engagementInvite: engagementRosterInvitePlanSchema
+}).superRefine((plan, context) => {
+  const input = plan.sessionPlan.input;
+  if (input.action !== 'roster_append') return;
+  const participant = input.participants[0];
+  if (!participant
+      || input.scope.workspaceId !== plan.engagementInvite.input.scope.workspaceId
+      || input.scope.eventId !== plan.engagementInvite.input.scope.eventId
+      || input.sessionId !== plan.engagementInvite.input.sessionId
+      || participant.personId !== plan.engagementInvite.input.personId
+      || participant.source.kind !== plan.engagementInvite.input.source.kind
+      || participant.source.id !== plan.engagementInvite.input.source.id
+      || participant.source.version !== plan.engagementInvite.input.source.version) {
+    context.addIssue({ code: 'custom', message: 'participant addition contributions must share scope, identity, and source' });
+  }
+});
 
 /**
  * Exact cross-owner plan for attaching one already-accepted, currently
@@ -154,6 +178,7 @@ export const SESSION_SUBMISSION_ROUTE_SCHEMA_REFS = Object.freeze(
 );
 
 export type SessionSubmissionAttachPlanDto = z.infer<typeof sessionSubmissionAttachPlanSchema>;
+export type SessionParticipantAddExistingPlanDto = z.infer<typeof sessionParticipantAddExistingPlanSchema>;
 export type SessionSubmissionRouteInput = z.infer<typeof sessionSubmissionRouteInputSchema>;
 export type SessionSubmissionRestorePlanBundleDto = z.infer<typeof sessionSubmissionRestorePlanBundleSchema>;
 export type SessionSubmissionRouteResultData = z.infer<typeof sessionSubmissionRouteResultDataSchema>;
