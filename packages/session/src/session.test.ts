@@ -88,6 +88,48 @@ function createPlan(catalog: SessionCatalog, lifecycle: 'draft' | 'collecting' |
 }
 
 describe('canonical Session foundation', () => {
+  test('stores organizer-authored public copy, updates or clears it under guards, and compensates exactly', () => {
+    const empty = createEmptySessionCatalog(scope);
+    const create = planSessionMutation({
+      catalog: empty,
+      vocabulary: vocabulary(),
+      planningInput: {
+        action: 'create', scope, sessionId, actorUserId: userId, occurredAt: now,
+        expectedCatalogVersion: empty.version,
+        expectedCatalogDigestSha256: empty.digestSha256,
+        title: 'Described Session',
+        description: '  A practical\n\n  session about dependable systems.  ',
+        plannedDurationMinutes: 45, lifecycle: 'programmed', formatId, trackId
+      }
+    });
+    const created = applySessionMutationPlan({ catalog: empty, vocabulary: vocabulary(), plan: create }).catalog;
+    const original = findSession(created, sessionId)!;
+    expect(original.description).toBe('A practical\n\nsession about dependable systems.');
+
+    const clear = planSessionMutation({
+      catalog: created,
+      vocabulary: vocabulary(),
+      planningInput: {
+        action: 'content_update', scope, sessionId, actorUserId: userId, occurredAt: later,
+        expectedCatalogVersion: created.version,
+        expectedCatalogDigestSha256: created.digestSha256,
+        expectedSessionVersion: original.version,
+        expectedSessionDigestSha256: original.digestSha256,
+        title: 'Updated Session',
+        description: null
+      }
+    });
+    const cleared = applySessionMutationPlan({ catalog: created, vocabulary: vocabulary(), plan: clear }).catalog;
+    expect(findSession(cleared, sessionId)?.title).toBe('Updated Session');
+    expect(findSession(cleared, sessionId)?.description).toBeUndefined();
+
+    const compensation = planSessionCompensation({
+      original: clear, catalog: cleared, actorUserId: userId, occurredAt: later
+    });
+    const restored = applySessionRestorePlan({ catalog: cleared, plan: compensation }).catalog;
+    expect(findSession(restored, sessionId)?.description).toBe(original.description);
+  });
+
   test('makes track omission safe at the lifecycle boundary and repairs legacy heads', () => {
     const empty = createEmptySessionCatalog(scope);
     const baseInput = {

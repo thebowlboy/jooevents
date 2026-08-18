@@ -67,7 +67,7 @@ export const sessionChangedDetailSchema = z.strictObject({
     'format_missing', 'format_retired', 'track_missing', 'track_retired', 'track_required',
     'participant_missing', 'participant_changed', 'session_placed', 'invalid_transition', 'invalid_plan'
   ]),
-  action: z.enum(['create', 'remove_new_session', 'transition', 'retarget', 'roster_visibility', 'roster_remove', 'roster_restore', 'roster_role', 'roster_reorder', 'roster_add_existing']),
+  action: z.enum(['create', 'remove_new_session', 'content_update', 'transition', 'retarget', 'roster_visibility', 'roster_remove', 'roster_restore', 'roster_role', 'roster_reorder', 'roster_add_existing']),
   sessionId: z.uuid()
 });
 export const SESSION_CHANGED_DETAIL_SCHEMA_VERSION = 1;
@@ -305,6 +305,7 @@ export function createSessionDirectOperationModule(
             summariesByAction: Object.freeze({
               create: 'Created a session',
               remove_new_session: 'Removed a new session',
+              content_update: "Updated a session's title or description",
               transition: "Changed a session's stage",
               retarget: "Changed a session's format or track",
               roster_visibility: "Changed a participant's public visibility",

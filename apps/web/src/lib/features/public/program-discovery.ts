@@ -70,7 +70,9 @@ export interface SessionDetailView {
 	readonly timeLabel: string | null;
 	readonly roomName: string | null;
 	readonly durationMin: number;
-	readonly description: { readonly kind: 'missing'; readonly message: string };
+	readonly description:
+		| { readonly kind: 'published'; readonly text: string }
+		| { readonly kind: 'missing'; readonly message: string };
 }
 
 export function parseSchedulePresentation(value: string | null): SchedulePresentation {
@@ -342,10 +344,9 @@ export function sessionDetailView(
 			? (schedule.rooms.find((room) => room.id === placement.roomId)?.name ?? null)
 			: null,
 		durationMin: session.durationMin,
-		description: {
-			kind: 'missing',
-			message: 'A description has not been published yet.'
-		}
+		description: session.description
+			? { kind: 'published', text: session.description }
+			: { kind: 'missing', message: 'A description has not been published yet.' }
 	};
 }
 

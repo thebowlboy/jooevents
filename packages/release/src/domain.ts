@@ -383,6 +383,7 @@ function releasedSessionFrom(input: {
   return releasedSessionSchema.parse({
     sessionId: input.session.id,
     title: input.session.title,
+    ...(input.session.description === undefined ? {} : { description: input.session.description }),
     plannedDurationMinutes: input.session.plannedDurationMinutes,
     format: Object.freeze({
       id: input.session.programTarget.format.id,

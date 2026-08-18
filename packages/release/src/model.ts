@@ -101,6 +101,7 @@ export function projectServedPublicSchedule(release: ProgramRelease): ServedPubl
     sessions: verified.sessions.map((session) => ({
       sessionId: session.sessionId,
       title: session.title,
+      ...(session.description === undefined ? {} : { description: session.description }),
       plannedDurationMinutes: session.plannedDurationMinutes,
       format: session.format.name,
       track: session.track === null

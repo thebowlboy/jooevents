@@ -181,6 +181,7 @@ export function mapServedScheduleState(served: ServedPublicScheduleDto): Schedul
 		sessions.push({
 			id: session.sessionId,
 			title: session.title,
+			...(session.description === undefined ? {} : { description: session.description }),
 			// The public schedule names people; it never keys or addresses them.
 			speakers: session.speakers.map((name) => ({ name, email: '' })),
 			trackId: session.track ? trackIdFor(session.track) : 'released-track:none',

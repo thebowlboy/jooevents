@@ -63,6 +63,7 @@ function servedSchedule(): ServedPublicScheduleDto {
 			{
 				sessionId: ids.sessionA,
 				title: 'Agent Product Craft',
+				description: 'How agents become dependable product collaborators.',
 				plannedDurationMinutes: 45,
 				format: 'Talk',
 				track: { name: 'Craft', accent: 'sea' },
@@ -198,6 +199,9 @@ describe('live public-surface port', () => {
 		expect(state.published).toBe(true);
 		expect(state.sessions.map((session) => session.id)).toEqual([ids.sessionA, ids.sessionB]);
 		expect(state.sessions[0]?.speakers).toEqual([{ name: 'Ada Alpha', email: '' }]);
+		expect(state.sessions[0]?.description).toBe(
+			'How agents become dependable product collaborators.'
+		);
 		expect(state.sessions[0]?.state).toBe('programmed');
 		expect(state.placements).toHaveLength(1);
 		const placement = state.placements[0];

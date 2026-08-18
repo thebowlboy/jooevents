@@ -1026,6 +1026,7 @@ export interface SessionSpeaker {
 export interface SessionItem {
 	id: string;
 	title: string;
+	description?: string;
 	speakers: SessionSpeaker[];
 	trackId: string;
 	formatId: string;

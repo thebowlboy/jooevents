@@ -131,6 +131,7 @@ export const releasedRoomSchema = z.strictObject({
 export const releasedSessionSchema = z.strictObject({
   sessionId: releaseIdSchema,
   title: canonicalText(300),
+  description: canonicalText(5_000).optional(),
   plannedDurationMinutes: sessionPlannedDurationMinutesSchema,
   format: z.strictObject({ id: releaseIdSchema, name: programVocabularyNameSchema }),
   track: z.strictObject({
@@ -1239,6 +1240,7 @@ export const releasePublicReadInputSchema = z.strictObject({});
 export const servedPublicScheduleSessionSchema = z.strictObject({
   sessionId: releaseIdSchema,
   title: canonicalText(300),
+  description: canonicalText(5_000).optional(),
   plannedDurationMinutes: sessionPlannedDurationMinutesSchema,
   format: programVocabularyNameSchema,
   track: z.strictObject({

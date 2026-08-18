@@ -94,6 +94,7 @@ function participant(personId: string, position: number, publiclyVisible: boolea
 function sessionHead(input: {
   readonly id: string;
   readonly title: string;
+  readonly description?: string;
   readonly lifecycle: 'draft' | 'collecting' | 'programmed';
   readonly participants?: readonly ReturnType<typeof participant>[];
 }): SessionHeadDto {
@@ -104,6 +105,7 @@ function sessionHead(input: {
     scope,
     id: input.id,
     title: input.title,
+    ...(input.description === undefined ? {} : { description: input.description }),
     plannedDurationMinutes: 60,
     lifecycle: input.lifecycle,
     programTarget: {
@@ -426,6 +428,25 @@ describe('program release materialization', () => {
     expect(bytes).not.toContain('Grace Hopper');
     expect(bytes).not.toContain('Alan Turing');
     expect(bytes).not.toContain('email');
+  });
+
+  test('copies only canonical session copy into the immutable public release', () => {
+    const { state, port } = fixture();
+    const current = state.catalog.sessions.find((session) => session.id === programmedSessionId)!;
+    const described = sessionHead({
+      id: current.id,
+      title: current.title,
+      description: 'Published session description.',
+      lifecycle: 'programmed',
+      participants: current.roster.participants
+    });
+    state.catalog = catalogWith(state.catalog.sessions.map((session) =>
+      session.id === programmedSessionId ? described : session
+    ));
+
+    const content = materializeProgramContent(scope, port);
+    const released = content.sessions.find((session) => session.sessionId === programmedSessionId)!;
+    expect(released.description).toBe('Published session description.');
   });
 
   test('a placed collecting session never enters a release, state not placement', () => {
@@ -1169,6 +1190,7 @@ describe('served public projections', () => {
     const keynote = schedule.sessions.find((session) => session.sessionId === programmedSessionId)!;
     expect(keynote.speakers).toEqual(['Ada Lovelace']);
     expect(keynote.format).toBe('Talk');
+    expect(keynote.description).toBeUndefined();
     expect(schedule.rooms).toEqual([{ id: roomId, name: 'Main Hall' }]);
 
     const roster = projectServedPublicRoster(release);

@@ -301,6 +301,15 @@ describe('session detail', () => {
 	test('refuses collecting sessions instead of projecting them', () => {
 		expect(sessionDetailView(schedule(), tracks, 's-draft')).toBeNull();
 	});
+
+	test('renders immutable published session copy when the release carries it', () => {
+		const source = schedule();
+		source.sessions[1] = { ...source.sessions[1]!, description: 'A released description.' };
+		expect(sessionDetailView(source, tracks, 's-ops')?.description).toEqual({
+			kind: 'published',
+			text: 'A released description.'
+		});
+	});
 });
 
 describe('joined discovery slice', () => {

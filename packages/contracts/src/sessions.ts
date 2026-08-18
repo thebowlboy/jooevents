@@ -32,6 +32,19 @@ export const sessionTitleInputSchema = z.string().refine((value) => {
   return normalized.length > 0 && normalized.length <= 300;
 }).overwrite((value) => value.normalize('NFC').trim().replace(/\s+/gu, ' '));
 export const sessionTitleSchema = canonicalText(300);
+const normalizeDescription = (value: string) => value.normalize('NFC')
+  .replace(/\r\n?/gu, '\n')
+  .split('\n')
+  .map((line) => line.trim().replace(/[ \t]+/gu, ' '))
+  .join('\n')
+  .trim()
+  .replace(/\n{3,}/gu, '\n\n');
+export const sessionDescriptionInputSchema = z.string().refine((value) => {
+  const normalized = normalizeDescription(value);
+  return normalized.length > 0 && normalized.length <= 5_000;
+}).overwrite(normalizeDescription);
+export const sessionDescriptionSchema = z.string().min(1).max(5_000)
+  .refine((value) => normalizeDescription(value) === value);
 export const sessionPlannedDurationMinutesSchema = z.number().int().min(5).max(1_440)
   .refine((value) => value % 5 === 0, 'planned duration must use five-minute increments');
 
@@ -116,6 +129,7 @@ export const sessionHeadSchema = z.strictObject({
   scope: sessionScopeSchema,
   id: sessionIdSchema,
   title: sessionTitleSchema,
+  description: sessionDescriptionSchema.optional(),
   plannedDurationMinutes: sessionPlannedDurationMinutesSchema,
   lifecycle: sessionLifecycleSchema,
   programTarget: sessionProgramTargetEvidenceSchema,
@@ -154,6 +168,7 @@ export const sessionCreateInputSchema = z.strictObject({
   action: z.literal('create'),
   ...catalogGuardFields,
   title: sessionTitleInputSchema,
+  description: sessionDescriptionInputSchema.optional(),
   plannedDurationMinutes: sessionPlannedDurationMinutesSchema,
   lifecycle: sessionLifecycleSchema,
   formatId: sessionIdInputSchema,
@@ -168,6 +183,19 @@ export const sessionTransitionInputSchema = z.strictObject({
   expectedSessionVersion: sessionVersionSchema,
   expectedSessionDigestSha256: digestSchema,
   to: placeableSessionLifecycleSchema
+});
+
+/** Guarded editorial content update; null deliberately removes public-ready copy. */
+export const sessionContentUpdateInputSchema = z.strictObject({
+  action: z.literal('content_update'),
+  ...catalogGuardFields,
+  sessionId: sessionIdInputSchema,
+  expectedSessionVersion: sessionVersionSchema,
+  expectedSessionDigestSha256: digestSchema,
+  title: sessionTitleInputSchema.optional(),
+  description: sessionDescriptionInputSchema.nullable().optional()
+}).refine((input) => input.title !== undefined || input.description !== undefined, {
+  message: 'a content update must change title or description'
 });
 
 /**
@@ -326,6 +354,7 @@ export const sessionRemoveNewInputSchema = z.strictObject({
  */
 export const sessionAuthorInputSchema = z.discriminatedUnion('action', [
   sessionCreateInputSchema,
+  sessionContentUpdateInputSchema,
   sessionTransitionInputSchema,
   sessionRetargetInputSchema,
   sessionRosterVisibilityInputSchema,
@@ -338,6 +367,7 @@ export const sessionAuthorInputSchema = z.discriminatedUnion('action', [
 
 export const sessionDirectInputSchema = z.discriminatedUnion('action', [
   sessionCreateInputSchema,
+  sessionContentUpdateInputSchema,
   sessionRemoveNewInputSchema,
   sessionTransitionInputSchema,
   sessionRetargetInputSchema,
@@ -357,6 +387,7 @@ const planningAttribution = {
 
 export const sessionPlanningInputSchema = z.discriminatedUnion('action', [
   sessionCreateInputSchema.extend({ ...planningAttribution, sessionId: sessionIdSchema }),
+  sessionContentUpdateInputSchema.extend(planningAttribution),
   sessionTransitionInputSchema.extend(planningAttribution),
   sessionRetargetInputSchema.extend(planningAttribution),
   sessionRosterAppendInputSchema.extend(planningAttribution),
@@ -411,19 +442,19 @@ export const sessionRemoveNewPlanSchema = z.strictObject({
 });
 
 export const sessionSafeDiffSchema = z.strictObject({
-  action: z.enum(['create', 'transition', 'retarget', 'roster_append', 'roster_visibility', 'roster_remove', 'roster_restore', 'roster_role', 'roster_reorder', 'roster_reconcile', 'restore']),
+  action: z.enum(['create', 'content_update', 'transition', 'retarget', 'roster_append', 'roster_visibility', 'roster_remove', 'roster_restore', 'roster_role', 'roster_reorder', 'roster_reconcile', 'restore']),
   before: sessionHeadSchema.nullable(),
   after: sessionHeadSchema.nullable()
 });
 
 export const sessionMutationResultSchema = z.strictObject({
-  action: z.enum(['create', 'remove_new_session', 'transition', 'retarget', 'roster_append', 'roster_visibility', 'roster_remove', 'roster_restore', 'roster_role', 'roster_reorder', 'roster_reconcile', 'restore']),
+  action: z.enum(['create', 'remove_new_session', 'content_update', 'transition', 'retarget', 'roster_append', 'roster_visibility', 'roster_remove', 'roster_restore', 'roster_role', 'roster_reorder', 'roster_reconcile', 'restore']),
   catalogVersion: sessionVersionSchema,
   session: sessionHeadSchema.nullable()
 });
 
 export const sessionDirectResultSchema = z.strictObject({
-  action: z.enum(['create', 'remove_new_session', 'transition', 'retarget', 'roster_visibility', 'roster_remove', 'roster_restore', 'roster_role', 'roster_reorder', 'roster_add_existing']),
+  action: z.enum(['create', 'remove_new_session', 'content_update', 'transition', 'retarget', 'roster_visibility', 'roster_remove', 'roster_restore', 'roster_role', 'roster_reorder', 'roster_add_existing']),
   catalogVersion: sessionVersionSchema,
   session: sessionHeadSchema.nullable()
 });

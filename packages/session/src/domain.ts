@@ -96,6 +96,7 @@ export function planSessionMutation(input: {
       scope,
       id: planningInput.sessionId,
       title: planningInput.title,
+      ...(planningInput.description === undefined ? {} : { description: planningInput.description }),
       plannedDurationMinutes: planningInput.plannedDurationMinutes,
       lifecycle: planningInput.lifecycle,
       programTarget: target,
@@ -103,6 +104,26 @@ export function planSessionMutation(input: {
       version: 1,
       createdByUserId: planningInput.actorUserId,
       createdAt: planningInput.occurredAt,
+      updatedByUserId: planningInput.actorUserId,
+      updatedAt: planningInput.occurredAt
+    };
+    after = parseSessionHead({ ...unsigned, digestSha256: sessionHeadDigest(unsigned) });
+  } else if (planningInput.action === 'content_update') {
+    if (!existing) throw new SessionPlanningError('session_missing');
+    if (existing.version !== planningInput.expectedSessionVersion
+        || existing.digestSha256 !== planningInput.expectedSessionDigestSha256) {
+      throw new SessionPlanningError('stale_session');
+    }
+    before = existing;
+    const { digestSha256: _digest, description: currentDescription, ...unsignedBefore } = existing;
+    const description = planningInput.description === undefined
+      ? currentDescription
+      : planningInput.description ?? undefined;
+    const unsigned = {
+      ...unsignedBefore,
+      title: planningInput.title ?? existing.title,
+      ...(description === undefined ? {} : { description }),
+      version: existing.version + 1,
       updatedByUserId: planningInput.actorUserId,
       updatedAt: planningInput.occurredAt
     };

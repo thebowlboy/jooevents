@@ -70,7 +70,11 @@
 
 	<div class="detail__description">
 		<h3 class="detail__subtitle">Description</h3>
-		<p class="detail__missing">{detail.description.message}</p>
+		{#if detail.description.kind === 'published'}
+			<p>{detail.description.text}</p>
+		{:else}
+			<p class="detail__missing">{detail.description.message}</p>
+		{/if}
 	</div>
 </section>
 
