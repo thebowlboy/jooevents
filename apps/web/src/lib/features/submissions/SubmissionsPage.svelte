@@ -242,16 +242,24 @@
 				standingsRead = true;
 				return;
 			}
-			// The standing marks, the submitter profiles, and the accepted rows'
-			// schedule landings are independent reads of the same landed rows, so
-			// none waits on another.
-			const [marks] = await Promise.all([
-				port.review.standings(landed.map((row) => row.id)),
+			// List already joined standings onto each scored row. Re-reading the
+			// whole slice here used to fire a second review snapshot for the same
+			// ids. Only rows that arrived without a mark, yet claim reviews, ask
+			// again; profiles and origins stay independent of that payload.
+			const carried = Object.fromEntries(
+				landed.flatMap((row) => row.standing ? [[row.id, row.standing]] as const : [])
+			);
+			const missing = landed.filter((row) => !row.standing && row.reviewCount > 0)
+				.map((row) => row.id);
+			const [fetched] = await Promise.all([
+				missing.length === 0
+					? Promise.resolve({} as Record<string, ScoreStanding>)
+					: port.review.standings(missing),
 				loadProfiles(landed, ticket),
 				loadOrigins(landed, ticket)
 			]);
 			if (ticket !== request) return;
-			standings = marks;
+			standings = { ...carried, ...fetched };
 			standingsRead = true;
 		} catch (error) {
 			// The failure becomes surfaced state, never an unhandled rejection: an

@@ -616,6 +616,63 @@ export class SQLiteReviewRepository implements
     `).all(scope.workspaceId, scope.eventId, assignmentId).map(revisionFromRow));
   }
 
+  listReviewHeadsForRound(
+    scopeInput: ReviewScopeDto,
+    roundId: string
+  ): readonly ReviewHeadDto[] {
+    const scope = parseReviewScope(scopeInput);
+    return Object.freeze(this.sqlite.query<HeadRow, [string, string, string]>(`
+      SELECT h.workspace_id, h.event_id, h.assignment_id, h.version,
+             h.current_revision_id, h.first_committed_at_ms, h.peer_unlocked_at_ms
+        FROM review_heads h
+        JOIN review_assignments a
+          ON a.workspace_id = h.workspace_id
+         AND a.event_id = h.event_id
+         AND a.id = h.assignment_id
+       WHERE a.workspace_id = ? AND a.event_id = ? AND a.round_id = ?
+       ORDER BY h.assignment_id COLLATE BINARY
+    `).all(scope.workspaceId, scope.eventId, roundId).map(headFromRow));
+  }
+
+  listRevisionsForRound(
+    scopeInput: ReviewScopeDto,
+    roundId: string
+  ): readonly ReviewRevisionDto[] {
+    const scope = parseReviewScope(scopeInput);
+    return Object.freeze(this.sqlite.query<RevisionRow, [string, string, string]>(`
+      SELECT r.workspace_id, r.event_id, r.id, r.assignment_id, r.revision_number,
+             r.scores_json, r.weighted_score, r.comment,
+             r.committed_by_reviewer_id, r.committed_by_user_id, r.committed_at_ms,
+             r.post_unlock, r.correction_of_revision_id
+        FROM review_revisions r
+        JOIN review_assignments a
+          ON a.workspace_id = r.workspace_id
+         AND a.event_id = r.event_id
+         AND a.id = r.assignment_id
+       WHERE a.workspace_id = ? AND a.event_id = ? AND a.round_id = ?
+       ORDER BY r.assignment_id COLLATE BINARY, r.revision_number, r.id COLLATE BINARY
+    `).all(scope.workspaceId, scope.eventId, roundId).map(revisionFromRow));
+  }
+
+  listVacancyResolutionsForRound(
+    scopeInput: ReviewScopeDto,
+    roundId: string
+  ): readonly ReviewVacancyResolutionDto[] {
+    const scope = parseReviewScope(scopeInput);
+    return Object.freeze(this.sqlite.query<VacancyResolutionRow, [string, string, string]>(`
+      SELECT r.workspace_id, r.event_id, r.vacated_assignment_id, r.kind,
+             r.replacement_assignment_id, r.replacement_reviewer_id,
+             r.resolved_by_user_id, r.resolved_at_ms
+        FROM review_assignment_vacancy_resolutions r
+        JOIN review_assignments a
+          ON a.workspace_id = r.workspace_id
+         AND a.event_id = r.event_id
+         AND a.id = r.vacated_assignment_id
+       WHERE a.workspace_id = ? AND a.event_id = ? AND a.round_id = ?
+       ORDER BY r.vacated_assignment_id COLLATE BINARY
+    `).all(scope.workspaceId, scope.eventId, roundId).map(vacancyResolutionFromRow));
+  }
+
   // ---- ReviewTransactionRepository ----------------------------------------
 
   applyCatalog(input: { readonly before: ReviewCatalogDto; readonly after: ReviewCatalogDto }): void {

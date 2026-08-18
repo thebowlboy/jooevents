@@ -459,6 +459,12 @@ describe('SQLiteReviewRepository', () => {
         version: 2, currentRevisionId: amendRevisionId
       });
       expect(fixture.reviews.listRevisions(scope, assignmentId)).toHaveLength(2);
+      const head = fixture.reviews.readReviewHead(scope, assignmentId);
+      if (!head) throw new TypeError('review_test_head_missing');
+      expect(fixture.reviews.listReviewHeadsForRound(scope, roundId)).toEqual([head]);
+      expect(fixture.reviews.listRevisionsForRound(scope, roundId)).toEqual(
+        fixture.reviews.listRevisions(scope, assignmentId)
+      );
 
       expect(() => fixture.sqlite.exec(
         `UPDATE review_revisions SET comment = 'tampered' WHERE id = '${reviewRevisionId}'`

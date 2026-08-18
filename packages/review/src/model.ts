@@ -92,10 +92,20 @@ export interface ReviewRepository {
     scope: ReviewScopeDto,
     vacatedAssignmentId: string
   ): ReviewVacancyResolutionDto | undefined;
+  /**
+   * Optional round-scoped batch. A snapshot projection prefers these over
+   * per-assignment head/revision/vacancy reads when the adapter supplies them.
+   */
+  listVacancyResolutionsForRound?(
+    scope: ReviewScopeDto,
+    roundId: string
+  ): readonly ReviewVacancyResolutionDto[];
   readDraft(scope: ReviewScopeDto, assignmentId: string): ReviewDraftDto | undefined;
   readReviewHead(scope: ReviewScopeDto, assignmentId: string): ReviewHeadDto | undefined;
+  listReviewHeadsForRound?(scope: ReviewScopeDto, roundId: string): readonly ReviewHeadDto[];
   readRevision(scope: ReviewScopeDto, revisionId: string): ReviewRevisionDto | undefined;
   listRevisions(scope: ReviewScopeDto, assignmentId: string): readonly ReviewRevisionDto[];
+  listRevisionsForRound?(scope: ReviewScopeDto, roundId: string): readonly ReviewRevisionDto[];
 }
 
 export interface ReviewTransactionRepository extends ReviewRepository {

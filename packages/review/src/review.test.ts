@@ -33,6 +33,7 @@ import type {
   ReviewRosterSet,
   ReviewTransactionRepository
 } from './model';
+import { memoizeReviewProjectionEnvironment } from './projection-cache';
 import { projectReviewSnapshot } from './projections';
 import { parseApplicationId } from '@jooevents/kernel';
 import {
@@ -608,5 +609,84 @@ describe('review core', () => {
     expect(snapshot.plans[0]).toMatchObject({ done: 0, total: 2 });
     expect(snapshot.plans[0]?.reviewers.find((row) => row.reviewerId === reviewerTrack))
       .toMatchObject({ assigned: 0, steppedBack: 1, awaitingReassignment: 0 });
+  });
+
+  test('computes both standing slices from one assignment and candidate pass', () => {
+    const store = new MemoryReviewStore();
+    openRound(store);
+    const generalist = assignmentFor(store, reviewerGeneralist, candidateA);
+    const track = assignmentFor(store, reviewerTrack, candidateA);
+    const generalistDraft = saveDraft(store, generalist, reviewerGeneralist, 5, 4, 2);
+    applyReviewMutationPlan({
+      plan: planReviewMutation({
+        action: 'commit_review', scope, assignmentId: generalist.id,
+        expectedAssignmentVersion: generalist.version,
+        expectedDraftVersion: generalistDraft.version,
+        revisionId: id(260), reviewerId: reviewerGeneralist,
+        attributedByUserId: actorUserId, attributedAt: at(3)
+      }, { repository: store, sources: store }),
+      transaction: store,
+      sources: store
+    });
+    const trackDraft = saveDraft(store, track, reviewerTrack, 3, 4, 4);
+    applyReviewMutationPlan({
+      plan: planReviewMutation({
+        action: 'commit_review', scope, assignmentId: track.id,
+        expectedAssignmentVersion: track.version,
+        expectedDraftVersion: trackDraft.version,
+        revisionId: id(261), reviewerId: reviewerTrack,
+        attributedByUserId: actorUserId, attributedAt: at(5)
+      }, { repository: store, sources: store }),
+      transaction: store,
+      sources: store
+    });
+
+    let assignmentReads = 0;
+    let headReads = 0;
+    let candidateReads = 0;
+    let candidateSetReads = 0;
+    const listAssignments = store.listAssignments.bind(store);
+    const readReviewHead = store.readReviewHead.bind(store);
+    const readCandidate = store.readCandidate.bind(store);
+    const readCandidates = store.readCandidates.bind(store);
+    store.listAssignments = (requested, requestedRoundId) => {
+      assignmentReads += 1;
+      return listAssignments(requested, requestedRoundId);
+    };
+    store.readReviewHead = (requested, assignmentId) => {
+      headReads += 1;
+      return readReviewHead(requested, assignmentId);
+    };
+    store.readCandidate = (requested, submissionId) => {
+      candidateReads += 1;
+      return readCandidate(requested, submissionId);
+    };
+    store.readCandidates = (requested) => {
+      candidateSetReads += 1;
+      return readCandidates(requested);
+    };
+
+    const environment = memoizeReviewProjectionEnvironment({
+      repository: store, sources: store, candidateDisplay: store, accolades: noAccolades
+    });
+    const trackSlice = projectReviewSnapshot({
+      scope, viewer: { kind: 'organizer' },
+      standingSubmissionIds: [candidateA, candidateB],
+      standingSlice: 'track',
+      environment
+    });
+    const allSlice = projectReviewSnapshot({
+      scope, viewer: { kind: 'organizer' },
+      standingSubmissionIds: [candidateA, candidateB],
+      standingSlice: 'all',
+      environment
+    });
+
+    expect(trackSlice.standings[candidateA]?.reviews).toBe(2);
+    expect(allSlice.standings[candidateA]?.reviews).toBe(2);
+    expect(assignmentReads).toBe(1);
+    expect(headReads).toBe(store.assignments.size);
+    expect(candidateSetReads).toBe(1);
+    expect(candidateReads).toBe(0);
   });
 });

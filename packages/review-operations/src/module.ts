@@ -65,6 +65,7 @@ import {
   type WorkspaceId
 } from '@jooevents/kernel';
 import {
+  memoizeReviewProjectionEnvironment,
   projectReviewRoundSetup,
   projectReviewSnapshot,
   type ReviewCandidateDisplaySource,
@@ -350,15 +351,16 @@ export function createReviewOperationModule(
       const submissionIds = [...new Set(catalog.rounds.flatMap((round) =>
         input.repository.listAssignments(scope, round.id).map((assignment) => assignment.submissionId)
       ))].sort();
+      const shared = memoizeReviewProjectionEnvironment(environment);
       return Object.freeze({
         kind: 'snapshot',
         track: projectReviewSnapshot({
           scope, viewer: resolved.viewer, standingSubmissionIds: submissionIds,
-          standingSlice: 'track', environment
+          standingSlice: 'track', environment: shared
         }),
         all: projectReviewSnapshot({
           scope, viewer: resolved.viewer, standingSubmissionIds: submissionIds,
-          standingSlice: 'all', environment
+          standingSlice: 'all', environment: shared
         })
       });
     }

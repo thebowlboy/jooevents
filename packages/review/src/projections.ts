@@ -35,6 +35,7 @@ import {
   type ReviewAccoladeSource,
   type ReviewRepository
 } from './model';
+import { memoizeReviewProjectionEnvironment } from './projection-cache';
 
 export type ReviewProjectionViewer =
   | { readonly kind: 'organizer' }
@@ -111,16 +112,17 @@ export function projectReviewPlans(input: {
   readonly viewer: ReviewProjectionViewer;
   readonly environment: ReviewProjectionEnvironment;
 }): readonly ReviewPlanProjection[] {
+  const environment = memoizeReviewProjectionEnvironment(input.environment);
   const scope = parseReviewScope(input.scope);
-  const catalog = input.environment.repository.readCatalog(scope);
-  const roster = input.environment.sources.readReviewerRoster(scope);
+  const catalog = environment.repository.readCatalog(scope);
+  const roster = environment.sources.readReviewerRoster(scope);
   if (!catalog || !roster) throw new TypeError('review_projection_scope_missing');
   const rosterById = new Map(roster.reviewers.map((reviewer) => [reviewer.reviewerId, reviewer]));
   return Object.freeze(catalog.rounds.filter((round) => round.state !== 'discarded').map((round) => {
-    const assignments = input.environment.repository.listAssignments(scope, round.id);
+    const assignments = environment.repository.listAssignments(scope, round.id);
     const resolutionByAssignment = new Map(assignments.map((assignment) => [
       assignment.id,
-      input.environment.repository.readVacancyResolution?.(scope, assignment.id)
+      environment.repository.readVacancyResolution?.(scope, assignment.id)
     ]));
     const isUnresolved = (assignment: (typeof assignments)[number]) =>
       assignment.state === 'stepped_back' && resolutionByAssignment.get(assignment.id) === undefined;
@@ -137,7 +139,7 @@ export function projectReviewPlans(input: {
         .sort((left, right) => compareText(left.id, right.id));
       const uncovered = input.viewer.kind === 'organizer'
         ? steppedBackAssignments.filter(isUnresolved).map((assignment) => {
-            const candidate = input.environment.candidateDisplay.readReviewCandidateDisplay({
+            const candidate = environment.candidateDisplay.readReviewCandidateDisplay({
               scope,
               roundId: round.id,
               submissionId: assignment.submissionId,
@@ -145,7 +147,7 @@ export function projectReviewPlans(input: {
               includeSpeakerIdentity: false
             });
             if (!candidate) throw new TypeError('review_projection_candidate_display_missing');
-            const candidateScope = input.environment.sources.readCandidate(scope, assignment.submissionId);
+            const candidateScope = environment.sources.readCandidate(scope, assignment.submissionId);
             if (!candidateScope) throw new TypeError('review_projection_candidate_missing');
             const alreadyAssigned = new Set(assignments.filter((other) =>
               other.submissionId === assignment.submissionId
@@ -190,7 +192,7 @@ export function projectReviewPlans(input: {
           : { displayName: rosterById.get(reviewerId)!.displayName }),
         assigned: own.filter(isEffective).length,
         done: own.filter((assignment) =>
-          input.environment.repository.readReviewHead(scope, assignment.id) !== undefined
+          environment.repository.readReviewHead(scope, assignment.id) !== undefined
         ).length,
         steppedBack,
         awaitingReassignment: own.filter(isUnresolved).length,
@@ -198,7 +200,7 @@ export function projectReviewPlans(input: {
       };
     });
     const done = assignments.filter((assignment) => assignment.state === 'assigned'
-      && input.environment.repository.readReviewHead(scope, assignment.id) !== undefined).length;
+      && environment.repository.readReviewHead(scope, assignment.id) !== undefined).length;
     const total = assignments.filter(isEffective).length;
     const viewerReviewerId = input.viewer.kind === 'reviewer'
       ? input.viewer.reviewerId
@@ -232,22 +234,23 @@ export function projectReviewerQueue(input: {
   readonly reviewerId: string;
   readonly environment: ReviewProjectionEnvironment;
 }): readonly ReviewQueueItemProjection[] {
+  const environment = memoizeReviewProjectionEnvironment(input.environment);
   const scope = parseReviewScope(input.scope);
-  const catalog = input.environment.repository.readCatalog(scope);
+  const catalog = environment.repository.readCatalog(scope);
   if (!catalog) throw new TypeError('review_projection_scope_missing');
   const openRounds = catalog.rounds.filter((round) => round.state === 'open');
   const rows: ReviewQueueItemProjection[] = [];
   for (const round of openRounds) {
-    const assignments = input.environment.repository.listAssignments(scope, round.id);
-    const accoladePins = input.environment.accolades.listCurrentHumanFlags({
+    const assignments = environment.repository.listAssignments(scope, round.id);
+    const accoladePins = environment.accolades.listCurrentHumanFlags({
       scope,
       actorReviewerId: input.reviewerId,
       reviewPlanId: round.id
     });
     for (const assignment of assignments) {
       if (assignment.reviewerId !== input.reviewerId || assignment.state !== 'assigned') continue;
-      const draft = input.environment.repository.readDraft(scope, assignment.id);
-      const joinedCandidate = input.environment.candidateDisplay.readReviewCandidateDisplay({
+      const draft = environment.repository.readDraft(scope, assignment.id);
+      const joinedCandidate = environment.candidateDisplay.readReviewCandidateDisplay({
         scope,
         roundId: round.id,
         submissionId: assignment.submissionId,
@@ -256,7 +259,7 @@ export function projectReviewerQueue(input: {
       });
       if (!joinedCandidate) throw new TypeError('review_projection_candidate_display_missing');
       const parsedCandidate = parseReviewCandidateDisplay(joinedCandidate);
-      const assignmentCandidate = input.environment.sources.readCandidate(
+      const assignmentCandidate = environment.sources.readCandidate(
         scope,
         assignment.submissionId
       );
@@ -276,8 +279,8 @@ export function projectReviewerQueue(input: {
         const { speakers: _withheldSpeakers, ...blindCandidate } = parsedCandidate;
         return parseReviewCandidateDisplay(blindCandidate);
       })();
-      const head = input.environment.repository.readReviewHead(scope, assignment.id);
-      const revisions = input.environment.repository.listRevisions(scope, assignment.id)
+      const head = environment.repository.readReviewHead(scope, assignment.id);
+      const revisions = environment.repository.listRevisions(scope, assignment.id)
         .slice().sort(compareRevisions);
       const current = head
         ? revisions.find((revision) => revision.id === head.currentRevisionId)
@@ -299,7 +302,7 @@ export function projectReviewerQueue(input: {
             scope,
             round,
             submissionId: assignment.submissionId,
-            repository: input.environment.repository,
+            repository: environment.repository,
             excludingAssignmentId: assignment.id
           }).map((entry) => entry.score)
         : undefined;
@@ -344,39 +347,72 @@ export function projectReviewStandings(input: {
   readonly slice: 'track' | 'all';
   readonly environment: ReviewProjectionEnvironment;
 }): Readonly<Record<string, ReviewStanding>> {
+  const environment = memoizeReviewProjectionEnvironment(input.environment);
   const scope = parseReviewScope(input.scope);
-  const catalog = input.environment.repository.readCatalog(scope);
+  const catalog = environment.repository.readCatalog(scope);
   if (!catalog) throw new TypeError('review_projection_scope_missing');
   const round = [...catalog.rounds].reverse().find((candidate) => candidate.state !== 'discarded');
   if (!round) return Object.freeze({});
-  const assignments = input.environment.repository.listAssignments(scope, round.id);
+  const assignments = environment.repository.listAssignments(scope, round.id);
+  const candidateSet = environment.sources.readCandidates(scope);
   const candidateById = new Map<string, ReviewCandidateSnapshotDto>();
+  if (candidateSet) {
+    for (const candidate of candidateSet.candidates) {
+      candidateById.set(candidate.submissionId, parseReviewCandidate(candidate));
+    }
+  }
   for (const assignment of assignments) {
-    const candidate = input.environment.sources.readCandidate(scope, assignment.submissionId);
+    if (candidateById.has(assignment.submissionId)) continue;
+    const candidate = environment.sources.readCandidate(scope, assignment.submissionId);
     if (candidate) candidateById.set(candidate.submissionId, parseReviewCandidate(candidate));
+  }
+  const scoresBySubmission = new Map<string, { assignmentId: string; score: number }[]>();
+  for (const assignment of assignments) {
+    const head = environment.repository.readReviewHead(scope, assignment.id);
+    if (!head) continue;
+    const revision = environment.repository.readRevision(scope, head.currentRevisionId);
+    if (!revision || revision.assignmentId !== assignment.id) {
+      throw new TypeError('review_projection_current_revision_missing');
+    }
+    const bucket = scoresBySubmission.get(assignment.submissionId) ?? [];
+    bucket.push({ assignmentId: assignment.id, score: revision.weightedScore });
+    scoresBySubmission.set(assignment.submissionId, bucket);
+  }
+  const averages = new Map<string, { readonly submissionId: string; readonly average: number; readonly reviews: number }>();
+  for (const [submissionId, scores] of scoresBySubmission) {
+    averages.set(submissionId, {
+      submissionId,
+      average: rounded(scores.reduce((sum, entry) => sum + entry.score, 0) / scores.length),
+      reviews: scores.length
+    });
+  }
+  const populations = new Map<string, readonly {
+    readonly submissionId: string;
+    readonly average: number;
+    readonly reviews: number;
+  }[]>();
+  function populationFor(trackId: string | undefined) {
+    const key = input.slice === 'all' ? 'all' : `track:${trackId ?? ''}`;
+    const cached = populations.get(key);
+    if (cached) return cached;
+    const population = [...averages.values()]
+      .filter((entry) => input.slice === 'all'
+        || candidateById.get(entry.submissionId)?.trackId === trackId)
+      .sort((left, right) => left.average - right.average || compareText(left.submissionId, right.submissionId));
+    populations.set(key, population);
+    return population;
   }
   const result: Record<string, ReviewStanding> = {};
   for (const submissionId of [...new Set(input.submissionIds)].sort()) {
-    if (!mayReadStanding({ viewer: input.viewer, round, submissionId, assignments, repository: input.environment.repository, scope })) {
+    if (!mayReadStanding({
+      viewer: input.viewer, round, submissionId, assignments,
+      repository: environment.repository, scope
+    })) {
       continue;
     }
     const focusCandidate = candidateById.get(submissionId);
     if (!focusCandidate) continue;
-    const populationIds = [...new Set(assignments.map((assignment) => assignment.submissionId))]
-      .filter((candidateId) => input.slice === 'all'
-        || candidateById.get(candidateId)?.trackId === focusCandidate.trackId);
-    const population = populationIds.map((candidateId) => {
-      const scores = currentScoresForSubmission({
-        scope, round, submissionId: candidateId, repository: input.environment.repository
-      });
-      if (scores.length === 0) return undefined;
-      return {
-        submissionId: candidateId,
-        average: rounded(scores.reduce((sum, entry) => sum + entry.score, 0) / scores.length),
-        reviews: scores.length
-      };
-    }).filter((entry): entry is NonNullable<typeof entry> => entry !== undefined)
-      .sort((left, right) => left.average - right.average || compareText(left.submissionId, right.submissionId));
+    const population = populationFor(focusCandidate.trackId);
     const focus = population.find((entry) => entry.submissionId === submissionId);
     if (!focus) continue;
     result[submissionId] = standingFor({
@@ -398,19 +434,20 @@ export function projectReviewSnapshot(input: {
   readonly standingSlice?: 'track' | 'all';
   readonly environment: ReviewProjectionEnvironment;
 }): ReviewSnapshot {
+  const environment = memoizeReviewProjectionEnvironment(input.environment);
   const scope = parseReviewScope(input.scope);
   const plans = projectReviewPlans({
     scope,
     viewer: input.viewer,
-    environment: input.environment
+    environment
   });
-  const catalog = input.environment.repository.readCatalog(scope);
+  const catalog = environment.repository.readCatalog(scope);
   if (!catalog) throw new TypeError('review_projection_scope_missing');
   const viewerReviewerId = input.viewer.kind === 'reviewer'
     ? input.viewer.reviewerId
     : undefined;
   const reviewer = viewerReviewerId !== undefined
-    ? input.environment.sources.readReviewerRoster(scope)?.reviewers
+    ? environment.sources.readReviewerRoster(scope)?.reviewers
       .find((candidate) => candidate.reviewerId === viewerReviewerId)
     : undefined;
   if (input.viewer.kind === 'reviewer' && reviewer?.status !== 'active') {
@@ -420,16 +457,16 @@ export function projectReviewSnapshot(input: {
     schemaVersion: 1,
     viewer: input.viewer,
     plans,
-    accoladeDefinitions: projectReviewAccoladeDefinitions({ scope, accolades: input.environment.accolades }),
+    accoladeDefinitions: projectReviewAccoladeDefinitions({ scope, accolades: environment.accolades }),
     ...(input.viewer.kind === 'organizer' && !catalog.rounds.some((round) => round.state === 'open')
-      ? { roundSetup: projectReviewRoundSetup({ scope, sources: input.environment.sources }) }
+      ? { roundSetup: projectReviewRoundSetup({ scope, sources: environment.sources }) }
       : {}),
     ...(reviewer === undefined ? {} : { reviewerScope: reviewer.scope }),
     ...(input.viewer.kind === 'reviewer' ? {
       queue: projectReviewerQueue({
         scope,
         reviewerId: viewerReviewerId!,
-        environment: input.environment
+        environment
       })
     } : {}),
     standings: projectReviewStandings({
@@ -437,7 +474,7 @@ export function projectReviewSnapshot(input: {
       viewer: input.viewer,
       submissionIds: input.standingSubmissionIds ?? [],
       slice: input.standingSlice ?? 'track',
-      environment: input.environment
+      environment
     })
   });
 }
