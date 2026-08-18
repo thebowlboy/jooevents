@@ -68,11 +68,12 @@ const roles = [
 	{ key: 'communications_coordinator', name: 'Communications Coordinator', version: 1 },
 	{ key: 'viewer', name: 'Viewer', version: 1 }
 ] as const;
-const team: Pick<WorkspaceTeamSettingsPort, 'source' | 'members'> = {
+const team: Pick<WorkspaceTeamSettingsPort, 'source' | 'members' | 'invite'> = {
 	source: { kind: 'live' }, async members() { return { kind: 'success', correlationId,
 		data: mapWorkspaceTeamSnapshot(workspaceTeamSnapshotSchema.parse({
 			schemaVersion: 1, version: 1, digestSha256: 'e'.repeat(64), roles, members: []
-		})) }; }
+		})) }; },
+	async invite() { throw new Error('unused'); }
 };
 
 describe('direct live Reviewer page port', () => {
@@ -101,11 +102,95 @@ describe('direct live Reviewer page port', () => {
 		expect(restored).not.toHaveProperty('reviews');
 	});
 
-	test('keeps email invite on its separate refused reservation workflow', async () => {
-		const page = createLiveReviewersPagePort({ roster: rosterPort([]), review, team, vocabulary });
-		expect(await page.reviewers.invite([{ email: 'ada@example.test' }])).toEqual([{
-			email: 'ada@example.test', ok: false,
-			reason: 'Inviting reviewers by email is not available in this live workspace yet. Reviewer access is reserved through workspace member admission.'
+	test('reserves workspace access, then registers that exact reservation as reviewer authority', async () => {
+		const reservationId = id(51);
+		const invitedSnapshot = mapWorkspaceTeamSnapshot(workspaceTeamSnapshotSchema.parse({
+			schemaVersion: 1, version: 2, digestSha256: 'f'.repeat(64), roles,
+			members: [{
+				id: reservationId, kind: 'invitation', name: 'ada', email: 'ada@example.test',
+				role: roles[3], status: 'invited', delivery: 'awaiting_activation', version: 1,
+				hasAdditionalAccess: false
+			}]
+		}));
+		let invited = false;
+		const invitingTeam: Pick<WorkspaceTeamSettingsPort, 'source' | 'members' | 'invite'> = {
+			source: { kind: 'live' },
+			async members() {
+				return { kind: 'success', correlationId,
+					data: invited ? invitedSnapshot : mapWorkspaceTeamSnapshot(workspaceTeamSnapshotSchema.parse({
+						schemaVersion: 1, version: 1, digestSha256: 'e'.repeat(64), roles, members: []
+					})) };
+			},
+			async invite(email, role) {
+				expect({ email, role }).toEqual({ email: 'ada@example.test', role: 'Speaker Reviewer' });
+				invited = true;
+				return {
+					kind: 'success', correlationId,
+					receipt: { id: id(52), operationName: 'workspace.team.apply', operationVersion: 1 },
+					data: {
+						committed: {
+							action: 'invite', teamVersion: 2,
+							change: {
+								action: 'invite', recipientHint: 'a…@example.test', role: roles[3],
+								invitationStatus: 'recorded', delivery: 'awaiting_activation'
+							}
+						},
+						team: invitedSnapshot,
+						effect: {
+							action: 'invite', invitationStatus: 'recorded', delivery: 'awaiting_activation',
+							recipientHint: 'a…@example.test', currentInvitation: invitedSnapshot.members[0]!
+						}
+					}
+				};
+			}
+		};
+		const rosterCalls: ReviewerRosterChangeRequest[] = [];
+		const emptyRoster: ReviewerRosterCorePort = {
+			source: { kind: 'live' },
+			async readSnapshot() {
+				return { kind: 'success', correlationId, data: mapReviewerRosterSnapshot(
+					reviewerRosterSnapshotSchema.parse({
+						schemaVersion: 1, scope, version: 1, digestSha256: 'a'.repeat(64),
+						rosterVersion: 1, rosterDigestSha256: 'b'.repeat(64), authorityVersion: 1,
+						authorityDigestSha256: 'c'.repeat(64), reviewers: []
+					})
+				) };
+			},
+			async change(input) {
+				rosterCalls.push(input);
+				if (input.action !== 'register') throw new Error('expected_register');
+				const result = reviewerRosterMutationResultSchema.parse({
+					schemaVersion: 1, action: 'register', rosterVersion: 2,
+					rosterDigestSha256: 'd'.repeat(64),
+					reviewer: {
+						schemaVersion: 1, scope, reviewerId: input.reviewerId, version: 1,
+						accessSubject: input.accessSubject, reviews: input.reviews,
+						addedByUserId: id(4), addedAt: '2027-03-01T00:00:00.000Z', state: 'included'
+					}
+				});
+				return { kind: 'success', data: result,
+					receipt: { id: id(53), operationName: 'reviewer_roster.change', operationVersion: 1 },
+					correlationId };
+			}
+		};
+		const page = createLiveReviewersPagePort({
+			roster: emptyRoster, review, team: invitingTeam, vocabulary,
+			newReviewerId: () => id(54), newAttemptKey: () => 'reviewer-invite-key'
+		});
+		expect(await page.reviewers.invite(
+			[{ email: 'ADA@example.test' }], [{ kind: 'track', id: trackId }]
+		)).toEqual([{
+			email: 'ADA@example.test', ok: true,
+			reviewer: {
+				id: id(54), name: 'ada', email: 'ada@example.test', status: 'invited',
+				scope: [{ kind: 'track', id: trackId }], assigned: 0, done: 0,
+				steppedBack: 0, awaitingReassignment: 0
+			}
 		}]);
+		expect(rosterCalls[0]).toMatchObject({
+			action: 'register', reviewerId: id(54),
+			accessSubject: { kind: 'access_reservation', id: reservationId, version: 1 },
+			reviews: [{ kind: 'track', id: trackId }]
+		});
 	});
 });

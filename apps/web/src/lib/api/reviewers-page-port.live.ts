@@ -1,4 +1,4 @@
-import type { StructuredOutcome } from '@jooevents/contracts';
+import { workspaceTeamCanonicalEmailSchema, type StructuredOutcome } from '@jooevents/contracts';
 import type { SafeApiError } from './client';
 import type { OperatorHttpBindingUnavailableReason } from './operations/operator-http-binding';
 import type { ProgramVocabularySettingsPort } from './program-vocabulary-settings-adapter';
@@ -7,7 +7,10 @@ import { mapLiveReviewPlans } from './review-page-port.live';
 import type { ReviewerRosterCorePort } from './reviewer-roster-core-port';
 import { coverageRows, isGeneralist, planLoad } from './reviewers';
 import type { ReviewersPagePort } from './reviewers-page-port';
-import type { WorkspaceTeamSettingsPort } from './workspace-team-settings-adapter';
+import type {
+	WorkspaceTeamSettingsMutationResult,
+	WorkspaceTeamSettingsPort
+} from './workspace-team-settings-adapter';
 import type {
 	Format,
 	MutationOutcome,
@@ -28,7 +31,6 @@ import type { WorkspaceTeamMemberView } from './view-models/workspace-team';
  * exactly which owner has not joined.
  */
 export type ReviewersPageLiveUnmountedCapability =
-	| 'reviewer_invite'
 	| 'reviewer_scope_targets'
 	| 'reviewer_coverage'
 	| 'reviewer_reminders';
@@ -59,9 +61,6 @@ export class ReviewersPageLiveError extends Error {
 
 const UNMOUNTED_COPY: Readonly<Record<ReviewersPageLiveUnmountedCapability, string>> =
 	Object.freeze({
-		reviewer_invite:
-			'Inviting reviewers by email is not available in this live workspace yet. '
-			+ 'Reviewer access is reserved through workspace member admission.',
 		reviewer_scope_targets:
 			'Session scope targets are not available in this live workspace yet.',
 		reviewer_coverage:
@@ -184,6 +183,38 @@ function present(value: string | null | undefined): string | undefined {
 	return value && value.trim().length > 0 ? value : undefined;
 }
 
+function normalizeEmail(email: string): string | null {
+	const normalized = email.trim().normalize('NFKC').toLocaleLowerCase('en-US');
+	return workspaceTeamCanonicalEmailSchema.safeParse(normalized).success ? normalized : null;
+}
+
+function teamInviteFailure(result: Exclude<
+	WorkspaceTeamSettingsMutationResult,
+	{ readonly kind: 'success' }
+>): string {
+	if (result.kind === 'refused') return result.reason;
+	if (result.kind === 'prepare_read_failed') {
+		return readFailure(result.result, 'workspace team').reason;
+	}
+	if (result.kind === 'committed_refresh_failed') {
+		return 'Workspace access was reserved, but reviewer registration is waiting for a team refresh. Reload and try again.';
+	}
+	if (result.kind === 'committed_projection_mismatch') {
+		return 'Workspace access was reserved, but the reviewer reservation could not be verified. Reload and try again.';
+	}
+	return readFailure(result, 'workspace invitation').reason;
+}
+
+function rosterAccessSubjectKey(member: ReviewerRosterMemberView): string {
+	return `${member.accessSubject.kind}:${member.accessSubject.id}`;
+}
+
+function teamRosterSubject(member: WorkspaceTeamMemberView) {
+	return member.subject.kind === 'member'
+		? { kind: 'workspace_membership' as const, id: member.subject.membershipId, version: member.subject.version }
+		: { kind: 'access_reservation' as const, id: member.subject.reservationId, version: member.subject.version };
+}
+
 /**
  * Live tuned Reviewers page port over the deliberately partial canonical
  * mount: the access-subject-keyed Reviewer Roster snapshot, the
@@ -228,7 +259,7 @@ function present(value: string | null | undefined): string | undefined {
 export function createLiveReviewersPagePort(input: {
 	readonly roster: ReviewerRosterCorePort;
 	readonly review: ReviewCorePort;
-	readonly team: Pick<WorkspaceTeamSettingsPort, 'source' | 'members'>;
+	readonly team: Pick<WorkspaceTeamSettingsPort, 'source' | 'members' | 'invite'>;
 	readonly vocabulary: Pick<ProgramVocabularySettingsPort, 'source' | 'tracks' | 'formats'>;
 	/**
 	 * The one schedule read the tuned page performs, delegated to the live
@@ -241,6 +272,7 @@ export function createLiveReviewersPagePort(input: {
 	readonly schedule?: { state(): Promise<ScheduleState> };
 	readonly now?: () => number;
 	readonly newAttemptKey?: () => string;
+	readonly newReviewerId?: () => string;
 }): ReviewersPagePort {
 	if (
 		input.roster.source.kind !== 'live'
@@ -252,6 +284,7 @@ export function createLiveReviewersPagePort(input: {
 	}
 	const now = input.now ?? Date.now;
 	const newAttemptKey = input.newAttemptKey ?? (() => crypto.randomUUID());
+	const newReviewerId = input.newReviewerId ?? (() => crypto.randomUUID());
 
 	async function currentRoster() {
 		const result = await input.roster.readSnapshot();
@@ -331,6 +364,100 @@ export function createLiveReviewersPagePort(input: {
 		return { kind: 'served', rows: [] };
 	}
 
+	async function inviteReviewer(
+		entry: { readonly email: string; readonly name?: string },
+		reviews: ScopeRef[]
+	): Promise<ReviewerInviteLine> {
+		const normalized = normalizeEmail(entry.email);
+		if (normalized === null) {
+			return { email: entry.email, ok: false, reason: 'Enter a valid email address.' };
+		}
+		const teamResult = await input.team.members();
+		if (teamResult.kind !== 'success') {
+			return {
+				email: entry.email,
+				ok: false,
+				reason: readFailure(teamResult, 'workspace team').reason
+			};
+		}
+		let member = teamResult.data.members.find((candidate) =>
+			normalizeEmail(candidate.email) === normalized
+		);
+		let reservedNow = false;
+		if (!member) {
+			const invitation = await input.team.invite(normalized, 'Speaker Reviewer', {
+				idempotencyKey: newAttemptKey()
+			});
+			if (invitation.kind !== 'success') {
+				return { email: entry.email, ok: false, reason: teamInviteFailure(invitation) };
+			}
+			member = invitation.data.effect.action === 'invite'
+				? invitation.data.effect.currentInvitation ?? undefined
+				: undefined;
+			reservedNow = true;
+			if (!member) {
+				return {
+					email: entry.email,
+					ok: false,
+					reason: 'Workspace access was reserved, but the reviewer reservation could not be verified. Reload and try again.'
+				};
+			}
+		}
+		if (member.role.key !== 'speaker_reviewer') {
+			return {
+				email: entry.email,
+				ok: false,
+				reason: `${member.email} already has the ${member.role.name} workspace role. Change their role in Settings before adding them as a reviewer.`
+			};
+		}
+		const accessSubject = teamRosterSubject(member);
+		const roster = await currentRoster();
+		const subjectKey = `${accessSubject.kind}:${accessSubject.id}`;
+		if (roster.reviewers.some((candidate) => rosterAccessSubjectKey(candidate) === subjectKey)) {
+			return { email: entry.email, ok: false, reason: 'Already on the reviewer roster.' };
+		}
+		const reviewerId = newReviewerId();
+		const changed = await input.roster.change({
+			action: 'register',
+			reviewerId,
+			accessSubject,
+			reviews,
+			expectedRosterVersion: roster.rosterVersion,
+			expectedRosterDigestSha256: roster.rosterDigestSha256
+		}, newAttemptKey());
+		if (changed.kind !== 'success') {
+			const reason = changeFailure(changed, 'reviewer roster').reason;
+			return {
+				email: entry.email,
+				ok: false,
+				reason: reservedNow ? `Workspace access was reserved, but ${reason}` : reason
+			};
+		}
+		if (changed.data.action !== 'register'
+			|| changed.data.reviewer.reviewerId !== reviewerId) {
+			return {
+				email: entry.email,
+				ok: false,
+				reason: 'Workspace access was reserved, but the reviewer registration response was not valid. Reload and try again.'
+			};
+		}
+		return {
+			email: entry.email,
+			ok: true,
+			reviewer: {
+				id: reviewerId,
+				name: present(member.name) ?? present(entry.name) ?? normalized,
+				email: normalized,
+				status: member.kind === 'invitation' ? 'invited' : 'active',
+				scope: reviews.map((review) => ({ ...review })),
+				assigned: 0,
+				done: 0,
+				steppedBack: 0,
+				awaitingReassignment: 0
+			}
+		};
+	}
+
 	return Object.freeze({
 		reviewers: Object.freeze({
 			async list() {
@@ -390,25 +517,16 @@ export function createLiveReviewersPagePort(input: {
 					coverage: await provenEmptyCoverage(reviewers)
 				};
 			},
-			/**
-			 * Refused per line, permanently and by design: the canonical roster
-			 * operation registers reviewers by access subject (a workspace
-			 * membership or access reservation), and email-keyed authority is
-			 * forbidden, so an address can never be mapped to a roster subject
-			 * here. The reservation/admission path — inviting the person as a
-			 * workspace member, which mints the access reservation this roster
-			 * then registers — owns turning an email address into an access
-			 * subject; this port deliberately does not invent an email → subject
-			 * resolution. No operation is invoked.
-			 */
 			async invite(
-				entries: { readonly email: string; readonly name?: string }[]
+				entries: { readonly email: string; readonly name?: string }[],
+				scope: ScopeRef[] = []
 			): Promise<ReviewerInviteLine[]> {
-				return entries.map((entry) => ({
-					email: entry.email,
-					ok: false,
-					reason: UNMOUNTED_COPY.reviewer_invite
-				}));
+				// Sequential by design: each reservation and roster registration
+				// advances an optimistic aggregate guard. Every line still reports
+				// independently, and no email string is ever used as roster authority.
+				const lines: ReviewerInviteLine[] = [];
+				for (const entry of entries) lines.push(await inviteReviewer(entry, scope));
+				return lines;
 			},
 			async setScope(id: string, scope: ScopeRef[]): Promise<MutationOutcome> {
 				try {

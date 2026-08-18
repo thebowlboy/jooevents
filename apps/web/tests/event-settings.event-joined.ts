@@ -110,11 +110,31 @@ test('first Event joins the tuned live Settings interactions through registered 
 	await expect(page.getByText(/Mid-flight|Decision crunch|All clear/)).toHaveCount(0);
 	await expect(page.locator('[data-je-scenario]')).toHaveCount(0);
 
+	// Reviewer invitation composes the existing access reservation with the
+	// access-subject-keyed roster registration; the email itself is never roster
+	// authority.
+	await page.goto('/app/reviewers');
+	await expect(page.getByRole('region', { name: 'Reviewer roster' })).toBeVisible();
+	await page.getByRole('button', { name: 'Invite reviewers' }).first().click();
+	const reviewerInvite = page.getByRole('dialog', { name: 'Invite reviewers' });
+	await reviewerInvite.getByLabel('Email addresses').fill('joined-roster@example.test');
+	await reviewerInvite.getByRole('button', { name: 'Record invitations' }).click();
+	await expect(reviewerInvite.getByRole('status')).toContainText('1 recorded');
+	await reviewerInvite.getByRole('button', { name: 'Done' }).click();
+	await expect(page.getByRole('region', { name: 'Reviewer roster' })
+		.getByText('joined-roster@example.test', { exact: true }).first()).toBeVisible();
+	await page.setViewportSize({ width: 390, height: 844 });
+	await expect(page.getByRole('region', { name: 'Reviewer roster' })
+		.getByText('joined-roster@example.test', { exact: true }).last()).toBeVisible();
+	expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
 	expect(posts).toEqual([
 		'/api/events',
 		'/api/events/current/settings',
 		'/api/events/current/program-vocabulary/create',
-		'/api/workspace/team/invitations'
+		'/api/workspace/team/invitations',
+		'/api/workspace/team/invitations',
+		'/api/events/current/reviewer-roster/changes'
 	]);
 	expect(posts).not.toContain('/api/changesets/commits');
 	expect(await page.evaluate(() => ({
