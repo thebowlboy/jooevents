@@ -11,6 +11,7 @@ import type {
 	ReviewPlan,
 	ReviewRoundSetup,
 	ReviewSubmissionDisplay,
+	ScheduleState,
 	ScopeRef,
 	ScoreStanding,
 	Track
@@ -34,8 +35,7 @@ export type ReviewPageLiveUnmountedCapability =
 	| 'review_comparison'
 	| 'review_accolade_change'
 	| 'reviewer_scope'
-	| 'reviewer_reminders'
-	| 'review_schedule_state';
+	| 'reviewer_reminders';
 
 type AdapterFailure = Readonly<{ code: string; reason: string }>;
 
@@ -60,9 +60,7 @@ const UNMOUNTED_COPY: Readonly<Record<ReviewPageLiveUnmountedCapability, string>
 	reviewer_scope:
 		'This reviewer scope is not available in this live workspace.',
 	reviewer_reminders:
-		'Reviewer reminders are not available in this live workspace yet.',
-	review_schedule_state:
-		'The schedule is not available on this live Review surface yet.'
+		'Reviewer reminders are not available in this live workspace yet.'
 });
 
 function unmounted(capability: ReviewPageLiveUnmountedCapability): ReviewPageLiveError {
@@ -340,6 +338,7 @@ function chunked<Value>(values: readonly Value[], size: number): readonly (reado
 export function createLiveReviewPagePort(input: {
 	readonly review: ReviewCorePort;
 	readonly vocabulary: Pick<ProgramVocabularySettingsPort, 'source' | 'tracks' | 'formats'>;
+	readonly schedule: { state(): Promise<ScheduleState> };
 	readonly viewer: ReviewPageViewer;
 	readonly now?: () => number;
 	/** Mints one idempotency anchor per user-visible attempt. */
@@ -686,14 +685,8 @@ export function createLiveReviewPagePort(input: {
 			}
 		}),
 		schedule: Object.freeze({
-			/**
-			 * Neither the Review core port nor the vocabulary owns schedule state,
-			 * and a zeroed ScheduleState would claim no days, rooms, or sessions
-			 * exist; the read refuses until the schedule owner is composed.
-			 */
-			async state(): Promise<never> {
-				throw unmounted('review_schedule_state');
-			}
+			/** Session scope resolves through the same canonical Schedule projection. */
+			state: () => input.schedule.state()
 		})
 	} satisfies ReviewPagePort);
 }

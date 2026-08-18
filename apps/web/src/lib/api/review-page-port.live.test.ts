@@ -39,6 +39,9 @@ function snapshot(input: { committed?: boolean; revisions?: number; anonymized?:
 const vocabulary: Pick<ProgramVocabularySettingsPort, 'source' | 'tracks' | 'formats'> = {
 	source: { kind: 'live' }, async tracks() { return []; }, async formats() { return []; }
 };
+const scheduleState = { days: [], rooms: [], dayStart: '09:00', slotMinutes: 30,
+	slotsPerDay: 0, sessions: [], placements: [], breaks: [], published: false };
+const schedule = { async state() { return scheduleState; } };
 function mutation(action: ReviewMutationResult['action']): ReviewMutationResult {
 	if (action === 'open_round' || action === 'discard_empty_round') {
 		const canonicalRound = { schemaVersion: 1 as const, scope, id: roundId, ordinal: 1, name: 'Round 1', version: 1,
@@ -91,7 +94,7 @@ function core(input: { committed?: boolean; anonymized?: boolean; keys: string[]
 describe('direct live Review page port', () => {
 	test('uses one caller key for round, evaluation, and step-back actions with no review choreography', async () => {
 		const keys: string[] = []; const actions: string[] = []; let next = 0;
-		const page = createLiveReviewPagePort({ review: core({ keys, actions }), vocabulary,
+		const page = createLiveReviewPagePort({ review: core({ keys, actions }), vocabulary, schedule,
 			viewer: { kind: 'reviewer', reviewerId }, now: () => Date.parse('2027-03-01T00:00:00Z'),
 			newAttemptKey: () => `review-page-key-${++next}` });
 		expect((await page.review.openRound({ deadlineIso: '2027-03-20', anonymized: true })).id).toBe(roundId);
@@ -106,7 +109,7 @@ describe('direct live Review page port', () => {
 
 	test('amends forward from retained current revision and returns the reread item', async () => {
 		const keys: string[] = []; const actions: string[] = [];
-		const page = createLiveReviewPagePort({ review: core({ committed: true, keys, actions }), vocabulary,
+		const page = createLiveReviewPagePort({ review: core({ committed: true, keys, actions }), vocabulary, schedule,
 			viewer: { kind: 'reviewer', reviewerId }, newAttemptKey: () => 'review-amend-key' });
 		expect(await page.review.amend(submissionId, 5, 'Better')).toMatchObject({ committed: true });
 		expect(actions).toEqual(['amend_review']);
@@ -114,7 +117,7 @@ describe('direct live Review page port', () => {
 	});
 
 	test('serves the reviewer-safe candidate already joined to the queue', async () => {
-		const blind = createLiveReviewPagePort({ review: core({ keys: [], actions: [] }), vocabulary,
+		const blind = createLiveReviewPagePort({ review: core({ keys: [], actions: [] }), vocabulary, schedule,
 			viewer: { kind: 'reviewer', reviewerId } });
 		await blind.review.myQueue();
 		expect(await blind.submissions.get(submissionId)).toEqual({
@@ -129,11 +132,13 @@ describe('direct live Review page port', () => {
 		const shown = createLiveReviewPagePort({
 			review: core({ anonymized: false, keys: [], actions: [] }),
 			vocabulary,
+			schedule,
 			viewer: { kind: 'reviewer', reviewerId }
 		});
 		expect(await shown.submissions.get(submissionId)).toMatchObject({
 			speakers: [{ id: id(9), name: 'Ada Speaker' }]
 		});
 		expect(await shown.submissions.get(id(999))).toBeNull();
+		expect(await shown.schedule.state()).toEqual(scheduleState);
 	});
 });

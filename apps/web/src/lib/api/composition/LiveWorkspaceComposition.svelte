@@ -337,6 +337,7 @@
 			return createLiveReviewPagePort({
 				review: reviewCore,
 				vocabulary,
+				schedule: { state: () => schedule.schedule.state() },
 				viewer: snapshot.data.viewer
 			});
 		})().catch((error: unknown) => {

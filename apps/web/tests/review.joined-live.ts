@@ -145,7 +145,7 @@ test('live review paints assigned candidate evidence from the reviewer-safe snap
 						steppedBack: 0, awaitingReassignment: 0
 					}]
 				}],
-				reviewerScope: [],
+				reviewerScope: [{ kind: 'session', id: id(207) }],
 				queue: [{
 					assignmentId: id(205),
 					roundId,
@@ -177,6 +177,7 @@ test('live review paints assigned candidate evidence from the reviewer-safe snap
 		'Reviewers can judge this candidate without entering the organizer inbox.'
 	)).toBeVisible();
 	await expect(page.getByText('Proposal deck')).toBeVisible();
+	await expect(page.getByText(id(207), { exact: true })).toBeVisible();
 	await expect(page.getByText('Reviewer A')).toHaveCount(0);
 	await expect(page.getByText('Nothing is assigned to you.')).toHaveCount(0);
 	await expectNoDocumentOverflow(page);
