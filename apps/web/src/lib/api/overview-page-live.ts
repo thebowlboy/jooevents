@@ -8,6 +8,7 @@ import type {
 import type { CommunicationsReadinessPagePort } from './communications-readiness-page-port';
 import type { EventProgramPort } from './event-program/port';
 import type { DeadlineCatalogLivePort } from './operations/deadline-catalog-live';
+import type { TaskLiveClient } from './operations/tasks-live';
 import type { WorkspaceOverviewPort } from './operations/workspace-overview-live';
 import { EMAIL_READINESS_CURRENCY_REASON_CODES, formatDateRange } from '@jooevents/contracts';
 import type {
@@ -401,18 +402,33 @@ interface DeadlineRead {
 
 async function readDeadlines(
 	deadlines: Pick<DeadlineCatalogLivePort, 'read'> | undefined,
+	tasks: Pick<TaskLiveClient, 'readBoard'> | undefined,
 	options: { readonly signal?: AbortSignal }
 ): Promise<DeadlineRead> {
 	if (deadlines === undefined) return { items: [], available: false };
 	try {
-		const result = await deadlines.read(options);
+		const [result, taskResult] = await Promise.all([
+			deadlines.read(options),
+			tasks?.readBoard(options).catch(() => null) ?? null
+		]);
 		if (result.kind !== 'success') return { items: [], available: false };
+		const taskLabels = new Map<string, string>();
+		if (taskResult?.kind === 'success') {
+			for (const definition of taskResult.data.definitions) {
+				taskLabels.set(
+					definition.current.deadline.reference.id,
+					definition.current.name
+				);
+			}
+		}
 		return {
 			available: true,
 			items: result.data.deadlines
 				.filter((deadline) => deadline.status === 'active')
 				.map((deadline) => ({
-					label: deadlineLabel[deadline.kind],
+					label: deadline.kind === 'task_due'
+						? (taskLabels.get(deadline.id) ?? deadlineLabel.task_due)
+						: deadlineLabel[deadline.kind],
 					displayDate: deadline.displayDate,
 					effectiveAt: deadline.effectiveAt
 				}))
@@ -610,6 +626,7 @@ export function createLiveOverviewPagePort(input: {
 	readonly event: EventProgramPort['event'];
 	readonly readiness?: Pick<CommunicationsReadinessPagePort, 'read'>;
 	readonly deadlines?: Pick<DeadlineCatalogLivePort, 'read'>;
+	readonly tasks?: Pick<TaskLiveClient, 'readBoard'>;
 }): OverviewPagePort {
 	let snapshot: OverviewPageSummary | null = null;
 	let eventSetVersion: number | null = null;
@@ -620,7 +637,7 @@ export function createLiveOverviewPagePort(input: {
 			const [result, emailAttention, deadlines] = await Promise.all([
 				input.overview.read(options),
 				emailSetupAttention(input.readiness, options),
-				readDeadlines(input.deadlines, options)
+				readDeadlines(input.deadlines, input.tasks, options)
 			]);
 			if (result.kind !== 'success') return readUnavailable(result);
 			eventSetVersion = result.data.event.eventSetVersion;

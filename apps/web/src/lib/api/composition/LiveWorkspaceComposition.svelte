@@ -99,6 +99,7 @@
 	const initial = untrack(() => ready);
 	const overviewRead = createWorkspaceOverviewLivePort({ manifest: initial.manifest });
 	const eventProgram = setEventProgramPort(createLiveEventProgramPort({ manifest: initial.manifest }));
+	const taskClient = createTasksLiveClient({ manifest: initial.manifest });
 	const communicationsReadiness = createLiveCommunicationsReadinessPagePort({
 		provider: createCommunicationsProviderReadLivePort({ manifest: initial.manifest })
 	});
@@ -108,7 +109,8 @@
 		overview: overviewRead,
 		event: eventProgram.event,
 		readiness: communicationsReadiness,
-		deadlines: createDeadlineCatalogLivePort({ manifest: initial.manifest })
+		deadlines: createDeadlineCatalogLivePort({ manifest: initial.manifest }),
+		tasks: taskClient
 	});
 	const shellEvents = createEventLiveClient({ manifest: initial.manifest });
 	const workspaceShellSummary = createWorkspaceShellSummaryLivePort({ manifest: initial.manifest });
@@ -207,7 +209,6 @@
 	const sessionCatalog = createSessionCatalogLivePort({ manifest: initial.manifest });
 	const decisionsClient = createDecisionsLiveClient({ manifest: initial.manifest });
 	const engagementsClient = createEngagementsLiveClient({ manifest: initial.manifest });
-	const taskClient = createTasksLiveClient({ manifest: initial.manifest });
 	// Build the canonical roster before Schedule so the board's attribution
 	// doors consume the same people as the Speakers surface. Profile enrichment
 	// remains absent until its own canonical projection exists; the roster itself

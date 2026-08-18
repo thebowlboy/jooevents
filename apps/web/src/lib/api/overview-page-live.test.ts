@@ -6,6 +6,7 @@ import {
 import type { EventProgramPort } from './event-program/port';
 import type { WorkspaceOverviewPort } from './operations/workspace-overview-live';
 import type { DeadlineCatalogLivePort } from './operations/deadline-catalog-live';
+import type { TaskLiveClient } from './operations/tasks-live';
 import { formatDateRange } from '@jooevents/contracts';
 import { createLiveOverviewPagePort } from './overview-page-live';
 import type { OverviewPageSummary } from './overview-page-port';
@@ -346,6 +347,62 @@ describe('live Overview page port', () => {
 			effectiveAt: '2027-06-09T16:00:00.000Z'
 		}]);
 		expect(result.data.sections.deadlines).toEqual({ kind: 'available' });
+	});
+
+	test('names a task deadline from the canonical task definition that pins it', async () => {
+		const deadlineId = id(40);
+		const deadlines: DeadlineCatalogLivePort = {
+			async read() {
+				return {
+					kind: 'success', correlationId: id(41), data: {
+						schemaVersion: 1,
+						scope: { workspaceId: id(31), eventId: id(1) },
+						version: 1,
+						digestSha256: 'a'.repeat(64),
+						deadlines: [{
+							schemaVersion: 1, id: deadlineId,
+							scope: { workspaceId: id(31), eventId: id(1) },
+							kind: 'task_due', version: 1, digestSha256: 'b'.repeat(64),
+							gracePolicy: 'soft', status: 'active', displayDate: '2026-08-20',
+							effectiveAt: '2026-08-21T07:00:00.000Z',
+							boundary: {
+								profile: { key: 'deadline.calendar-date.event-local-end-exclusive', version: 1, digestSha256: 'c'.repeat(64) },
+								eventTimezone: 'America/Los_Angeles', eventVersion: 1, localBoundaryDate: '2026-08-20'
+							},
+							createdByUserId: id(42), createdAt: '2026-08-18T12:00:00.000Z',
+							updatedByUserId: id(42), updatedAt: '2026-08-18T12:00:00.000Z'
+						}]
+					}
+				};
+			}
+		};
+		const tasks = {
+			async readBoard() {
+				return {
+					kind: 'success', correlationId: id(43), data: {
+						definitions: [{
+							current: {
+								name: 'Upload headshot',
+								deadline: { reference: { id: deadlineId } }
+							}
+						}]
+					}
+				};
+			}
+		} as unknown as Pick<TaskLiveClient, 'readBoard'>;
+
+		const result = await createLiveOverviewPagePort({
+			overview: overviewPort(projection({ areas: mountedAreas })),
+			event: eventPort([]),
+			deadlines,
+			tasks
+		}).read();
+		if (result.kind !== 'success') throw new Error('expected_success');
+		expect(result.data.deadlines).toEqual([{
+			label: 'Upload headshot',
+			displayDate: '2026-08-20',
+			effectiveAt: '2026-08-21T07:00:00.000Z'
+		}]);
 	});
 
 	test('separates the two different reasons reviewing has not begun', async () => {
