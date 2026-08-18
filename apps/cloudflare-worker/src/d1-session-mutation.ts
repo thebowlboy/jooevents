@@ -233,6 +233,14 @@ export class D1SessionDirectEffectDomainAdapter implements D1EffectDomainAdapter
         const generatedSessionId = wire.action === 'create'
           ? applicationUuid(this.input.newSessionId()) : undefined;
         try {
+          if (wire.action === 'roster_add_existing') {
+            // The SQLite runtime composes this action as a session-plan plus
+            // engagement-invite pair over lineup and engagement reads this
+            // adapter does not hold. The Worker/D1 program is paused; until its
+            // parity slice exists, the action refuses as an invalid plan here
+            // rather than pretending to compose it.
+            throw new SessionPlanningError('invalid_plan');
+          }
           const plan: SessionPlan = wire.action === 'remove_new_session'
             ? (() => {
                 const current = catalog.sessions.find((session) => session.id === wire.sessionId);
