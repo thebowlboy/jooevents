@@ -400,7 +400,7 @@
 		{:else if listItems.length === 0}
 			<!-- A live zero: the watch ran and found nothing, and the check in
 			     neutral ink says so before the sentence is read. -->
-			<p class="panel__calm panel__situation"><span class="panel__situation-mark" aria-hidden="true"><AllClearMark size={15} /></span>Nothing is waiting on you right now.</p>
+			<p class="panel__calm panel__situation"><span class="panel__situation-mark" aria-hidden="true"><AllClearMark size={15} /></span>No issues were found in the checks running here.</p>
 		{:else}
 			<ul class="attention">
 				{#each listItems as item (item.id)}
@@ -441,7 +441,7 @@
 			<p class="panel__calm panel__situation"><span class="panel__situation-mark" aria-hidden="true"><DormantMark size={15} /></span>No event deadlines are recorded.</p>
 		{:else}
 			<ul class="dates">
-				{#each current.deadlines as deadline (deadline.label)}
+				{#each current.deadlines as deadline, index (`${deadline.label}:${deadline.displayDate}:${index}`)}
 					{@const described = panelDeadline(deadline)}
 					<li class="dates__row" class:dates__row--quiet={described?.ink === 'quiet'}>
 						<span class="dates__label {DATE_CLASS.label}">{deadline.label}</span>
@@ -985,9 +985,13 @@
 		</div>
 
 		<div class="columns__aside">
-			{@render deadlinesPanel(summary)}
+			{#if summary.sections.deadlines.kind !== 'unavailable'}
+				{@render deadlinesPanel(summary)}
+			{/if}
 			{@render activityPanel(summary)}
-			{@render traysPanel(summary)}
+			{#if summary.sections.trays.kind !== 'unavailable'}
+				{@render traysPanel(summary)}
+			{/if}
 		</div>
 	</div>
 {/if}

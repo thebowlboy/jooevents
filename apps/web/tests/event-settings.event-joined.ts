@@ -51,9 +51,17 @@ test('first Event joins the tuned live Settings interactions through registered 
 	await newEvent.locator('#new-event-end').press('Enter');
 	await newEvent.getByRole('button', { name: 'Create event' }).click();
 	await expect(page.getByRole('region', { name: 'Pipeline' })).toBeVisible();
-	await expect(page.getByText('No form is open, so nothing has arrived yet.').first()).toBeVisible();
+	await expect(page.getByText('Collecting starts when your call for proposals (CFP) opens.'))
+		.toBeVisible();
 	await expect(page.getByRole('region', { name: 'Needs attention' })
-		.getByText('JooEvents does not yet watch this event for things that need you.')).toBeVisible();
+		.getByText('Email is not set up')).toBeVisible();
+	await expect(page.getByRole('region', { name: 'Deadlines' })).toHaveCount(0);
+	await expect(page.getByRole('region', { name: 'Holding areas' })).toHaveCount(0);
+	await page.setViewportSize({ width: 390, height: 844 });
+	await expect(page.getByRole('region', { name: 'Needs attention' })
+		.getByText('Email is not set up')).toBeVisible();
+	expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+	await page.setViewportSize({ width: 1440, height: 1000 });
 
 	// Settings is a group of sections, each its own address; the group address
 	// opens on the first of them.

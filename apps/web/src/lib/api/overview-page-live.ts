@@ -7,12 +7,14 @@ import type {
 } from '@jooevents/contracts/workspace-overview';
 import type { CommunicationsReadinessPagePort } from './communications-readiness-page-port';
 import type { EventProgramPort } from './event-program/port';
+import type { DeadlineCatalogLivePort } from './operations/deadline-catalog-live';
 import type { WorkspaceOverviewPort } from './operations/workspace-overview-live';
 import { EMAIL_READINESS_CURRENCY_REASON_CODES, formatDateRange } from '@jooevents/contracts';
 import type {
 	ActivityItem,
 	AreaKey,
 	AttentionItem,
+	DeadlineItem,
 	EventInfo,
 	MutationOutcome,
 	StatItem
@@ -386,6 +388,41 @@ function deadlinesSection(projection: WorkspaceOverviewProjection): OverviewSect
 	return forms.kind === 'exact' && forms.total === 0 ? lockedDeadlines : unavailableDeadlines;
 }
 
+const deadlineLabel = Object.freeze({
+	cfp_close: 'CFP closes',
+	review_due: 'Reviews due',
+	task_due: 'Task due'
+});
+
+interface DeadlineRead {
+	readonly items: DeadlineItem[];
+	readonly available: boolean;
+}
+
+async function readDeadlines(
+	deadlines: Pick<DeadlineCatalogLivePort, 'read'> | undefined,
+	options: { readonly signal?: AbortSignal }
+): Promise<DeadlineRead> {
+	if (deadlines === undefined) return { items: [], available: false };
+	try {
+		const result = await deadlines.read(options);
+		if (result.kind !== 'success') return { items: [], available: false };
+		return {
+			available: true,
+			items: result.data.deadlines
+				.filter((deadline) => deadline.status === 'active')
+				.map((deadline) => ({
+					label: deadlineLabel[deadline.kind],
+					displayDate: deadline.displayDate,
+					effectiveAt: deadline.effectiveAt
+				}))
+				.sort((left, right) => left.effectiveAt.localeCompare(right.effectiveAt))
+		};
+	} catch {
+		return { items: [], available: false };
+	}
+}
+
 function lockedAreas(projection: WorkspaceOverviewProjection): AreaKey[] {
 	return projection.areas
 		.filter((entry) => entry.status === 'locked')
@@ -399,16 +436,21 @@ function lockedAreas(projection: WorkspaceOverviewProjection): AreaKey[] {
  * a fabricated calm. Severity stays `soon` for now: escalating to `now`
  * belongs to a blocked-send count this surface cannot read yet.
  */
+interface AttentionRead {
+	readonly items: AttentionItem[];
+	readonly checked: boolean;
+}
+
 async function emailSetupAttention(
 	readiness: Pick<CommunicationsReadinessPagePort, 'read'> | undefined,
 	options: { readonly signal?: AbortSignal }
-): Promise<AttentionItem[]> {
-	if (readiness === undefined) return [];
+): Promise<AttentionRead> {
+	if (readiness === undefined) return { items: [], checked: false };
 	try {
 		const result = await readiness.read(options);
-		if (result.kind !== 'success') return [];
+		if (result.kind !== 'success') return { items: [], checked: false };
 		const outbound = result.data.outbound;
-		if (outbound.state === 'ready') return [];
+		if (outbound.state === 'ready') return { items: [], checked: true };
 		// Passed readiness evidence expires within minutes by design, so a
 		// healthy configured install spends most of its life at "expired" or
 		// "not checked yet". That is evidence currency, not a setup defect, and
@@ -419,14 +461,14 @@ async function emailSetupAttention(
 			outbound.state === 'action_required'
 			&& (EMAIL_READINESS_CURRENCY_REASON_CODES as readonly string[]).includes(outbound.reasonCode)
 		) {
-			return [];
+			return { items: [], checked: true };
 		}
 		// Two different facts, two different sentences: no provider at all
 		// (`unknown`) versus a configured provider that is not ready to send.
 		// One title for both had this row claiming "not set up" while the
 		// Settings panel said the connection exists — two diagnoses of one fact.
 		const configured = outbound.state !== 'unknown';
-		return [{
+		return { checked: true, items: [{
 			id: 'email-setup',
 			severity: 'soon',
 			area: 'settings',
@@ -436,15 +478,57 @@ async function emailSetupAttention(
 				: 'Sign-in links, invitations, and decisions cannot be emailed until outbound email is configured and verified.',
 			action: configured ? 'Open email settings' : 'Finish email setup',
 			href: '/app/settings/email'
-		}];
+		}] };
 	} catch {
-		return [];
+		return { items: [], checked: false };
 	}
+}
+
+/**
+ * Attention facts already present in the canonical Overview projection. These
+ * are counts of the exact queues the destination opens, not guesses from a
+ * neighbouring total.
+ */
+function workflowAttention(projection: WorkspaceOverviewProjection): AttentionRead {
+	const items: AttentionItem[] = [];
+	let checked = false;
+	if (areaStatus(projection, 'submissions') !== 'unavailable'
+		&& projection.metrics.triage.kind === 'exact') {
+		checked = true;
+		const waiting = projection.metrics.triage.arrived - projection.metrics.triage.sorted;
+		if (waiting > 0) {
+			items.push({
+				id: 'submissions-inbox',
+				severity: 'soon',
+				area: 'submissions',
+				title: `${waiting} ${plural(waiting, 'submission needs', 'submissions need')} triage`,
+				detail: `${plural(waiting, 'It has', 'They have')} arrived but ${plural(waiting, 'has', 'have')} not been sorted yet.`,
+				action: 'Open submissions'
+			});
+		}
+	}
+	if (areaStatus(projection, 'decisions') !== 'unavailable'
+		&& projection.metrics.decisions.kind === 'exact') {
+		checked = true;
+		const waiting = projection.metrics.decisions.undecided;
+		if (waiting > 0) {
+			items.push({
+				id: 'undecided-submissions',
+				severity: 'soon',
+				area: 'decisions',
+				title: `${waiting} ${plural(waiting, 'submission is', 'submissions are')} waiting for your answer`,
+				detail: `${plural(waiting, 'It has', 'They have')} not received an accept or reject decision yet.`,
+				action: 'Open decision board'
+			});
+		}
+	}
+	return { items, checked };
 }
 
 function mapLiveSummary(
 	projection: WorkspaceOverviewProjection,
-	attention: AttentionItem[]
+	attention: AttentionRead,
+	deadlines: DeadlineRead
 ): OverviewPageSummary {
 	const submissions = projection.metrics.submissions;
 	const activity = historyActivity(projection.history.threads);
@@ -457,19 +541,19 @@ function mapLiveSummary(
 		// stays absent rather than being fabricated from a total.
 		arrivals: null,
 		stats: stats(projection),
-		attention,
+		attention: attention.items,
 		pipeline: pipelineStages(projection),
-		deadlines: [],
+		deadlines: deadlines.items,
 		activity,
 		trays: [],
 		sections: {
-			// With a real row the section is running; with none it still refuses
-			// to claim a watched calm, because only email setup is derived here.
-			attention: attention.length > 0 ? overviewAvailable : unavailableAttention,
+			// A checked source can prove the bounded calm rendered by the panel;
+			// without one, absence of rows remains an absence of measurement.
+			attention: attention.checked ? overviewAvailable : unavailableAttention,
 			// The lanes now state their own truth, so the section carries no
 			// apology of its own.
 			pipeline: overviewAvailable,
-			deadlines: deadlinesSection(projection),
+			deadlines: deadlines.available ? overviewAvailable : deadlinesSection(projection),
 			activity: overviewAvailable,
 			trays: unavailableTrays
 		}
@@ -525,6 +609,7 @@ export function createLiveOverviewPagePort(input: {
 	readonly overview: WorkspaceOverviewPort;
 	readonly event: EventProgramPort['event'];
 	readonly readiness?: Pick<CommunicationsReadinessPagePort, 'read'>;
+	readonly deadlines?: Pick<DeadlineCatalogLivePort, 'read'>;
 }): OverviewPagePort {
 	let snapshot: OverviewPageSummary | null = null;
 	let eventSetVersion: number | null = null;
@@ -532,13 +617,18 @@ export function createLiveOverviewPagePort(input: {
 		source: Object.freeze({ kind: 'live' as const }),
 		snapshot: () => snapshot,
 		async read(options = {}) {
-			const [result, attention] = await Promise.all([
+			const [result, emailAttention, deadlines] = await Promise.all([
 				input.overview.read(options),
-				emailSetupAttention(input.readiness, options)
+				emailSetupAttention(input.readiness, options),
+				readDeadlines(input.deadlines, options)
 			]);
 			if (result.kind !== 'success') return readUnavailable(result);
 			eventSetVersion = result.data.event.eventSetVersion;
-			snapshot = mapLiveSummary(result.data, attention);
+			const workflow = workflowAttention(result.data);
+			snapshot = mapLiveSummary(result.data, {
+				checked: workflow.checked || emailAttention.checked,
+				items: [...workflow.items, ...emailAttention.items]
+			}, deadlines);
 			return { kind: 'success' as const, data: snapshot };
 		},
 		async createEvent(event) {

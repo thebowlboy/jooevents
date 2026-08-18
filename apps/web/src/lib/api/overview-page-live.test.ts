@@ -5,6 +5,7 @@ import {
 } from '@jooevents/contracts/workspace-overview';
 import type { EventProgramPort } from './event-program/port';
 import type { WorkspaceOverviewPort } from './operations/workspace-overview-live';
+import type { DeadlineCatalogLivePort } from './operations/deadline-catalog-live';
 import { formatDateRange } from '@jooevents/contracts';
 import { createLiveOverviewPagePort } from './overview-page-live';
 import type { OverviewPageSummary } from './overview-page-port';
@@ -271,6 +272,21 @@ describe('live Overview page port', () => {
 		expect(lane(data, 'triage')).toMatchObject({
 			headline: '8', sub: 'of 12 submissions are in the inbox', state: 'ok'
 		});
+		expect(data.attention).toEqual([
+			{
+				id: 'submissions-inbox', severity: 'soon', area: 'submissions',
+				title: '8 submissions need triage',
+				detail: 'They have arrived but have not been sorted yet.',
+				action: 'Open submissions'
+			},
+			{
+				id: 'undecided-submissions', severity: 'soon', area: 'decisions',
+				title: '10 submissions are waiting for your answer',
+				detail: 'They have not received an accept or reject decision yet.',
+				action: 'Open decision board'
+			}
+		]);
+		expect(data.sections.attention).toEqual({ kind: 'available' });
 
 		// No lane draws a bar. A meter's job is the tone, a tone is a judgment
 		// against a deadline, and this projection carries no deadline at all.
@@ -279,6 +295,57 @@ describe('live Overview page port', () => {
 		// Every lane answered from its own unit of work, so no dash is rendered
 		// anywhere and the footnote that explains dashes has nothing to explain.
 		expect(data.pipeline.some((stage) => stage.availability.kind === 'unavailable')).toBe(false);
+	});
+
+	test('joins the canonical active deadline catalog and ignores cleared heads', async () => {
+		const deadlines: DeadlineCatalogLivePort = {
+			async read() {
+				return {
+					kind: 'success', correlationId: id(30), data: {
+						schemaVersion: 1,
+						scope: { workspaceId: id(31), eventId: id(1) },
+						version: 4,
+						digestSha256: 'a'.repeat(64),
+						deadlines: [
+							{
+								schemaVersion: 1, id: id(32),
+								scope: { workspaceId: id(31), eventId: id(1) },
+								kind: 'review_due', version: 2, digestSha256: 'b'.repeat(64),
+								gracePolicy: 'soft', status: 'active', displayDate: '2027-06-09',
+								effectiveAt: '2027-06-09T16:00:00.000Z',
+								boundary: {
+									profile: { key: 'deadline.calendar-date.event-local-end-exclusive', version: 1, digestSha256: 'c'.repeat(64) },
+									eventTimezone: 'Asia/Singapore', eventVersion: 3, localBoundaryDate: '2027-06-09'
+								},
+								createdByUserId: id(33), createdAt: '2026-08-13T02:50:00.000Z',
+								updatedByUserId: id(33), updatedAt: '2026-08-13T02:55:00.000Z'
+							},
+							{
+								schemaVersion: 1, id: id(34),
+								scope: { workspaceId: id(31), eventId: id(1) },
+								kind: 'cfp_close', version: 2, digestSha256: 'd'.repeat(64),
+								gracePolicy: 'soft', status: 'cleared', displayDate: null,
+								effectiveAt: null, boundary: null,
+								createdByUserId: id(33), createdAt: '2026-08-13T02:50:00.000Z',
+								updatedByUserId: id(33), updatedAt: '2026-08-13T02:55:00.000Z'
+							}
+						]
+					}
+				};
+			}
+		};
+		const result = await createLiveOverviewPagePort({
+			overview: overviewPort(projection({ areas: mountedAreas })),
+			event: eventPort([]),
+			deadlines
+		}).read();
+		if (result.kind !== 'success') throw new Error('expected_success');
+		expect(result.data.deadlines).toEqual([{
+			label: 'Reviews due',
+			displayDate: '2027-06-09',
+			effectiveAt: '2027-06-09T16:00:00.000Z'
+		}]);
+		expect(result.data.sections.deadlines).toEqual({ kind: 'available' });
 	});
 
 	test('separates the two different reasons reviewing has not begun', async () => {

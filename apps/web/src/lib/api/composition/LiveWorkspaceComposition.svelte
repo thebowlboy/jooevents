@@ -24,6 +24,7 @@
 	import { createSessionCatalogLivePort } from '$lib/api/operations/session-catalog-live';
 	import { createSubmissionTriageLiveClient } from '$lib/api/operations/submission-triage-live';
 	import { createWorkspaceOverviewLivePort } from '$lib/api/operations/workspace-overview-live';
+	import { createDeadlineCatalogLivePort } from '$lib/api/operations/deadline-catalog-live';
 	import { createLiveOverviewPagePort } from '$lib/api/overview-page-live';
 	import { createLiveReviewPagePort } from '$lib/api/review-page-port.live';
 	import {
@@ -92,12 +93,13 @@
 	const communicationsReadiness = createLiveCommunicationsReadinessPagePort({
 		provider: createCommunicationsProviderReadLivePort({ manifest: initial.manifest })
 	});
-	// The overview derives its one live attention row — email setup — from the
-	// same canonical readiness read the Communications surface consumes.
+	// The overview joins canonical workflow counts, deadlines, and the same
+	// readiness read the Communications surface consumes.
 	const overview = createLiveOverviewPagePort({
 		overview: overviewRead,
 		event: eventProgram.event,
-		readiness: communicationsReadiness
+		readiness: communicationsReadiness,
+		deadlines: createDeadlineCatalogLivePort({ manifest: initial.manifest })
 	});
 	const shellEvents = createEventLiveClient({ manifest: initial.manifest });
 	const shell = createLiveWorkspaceShellPort({

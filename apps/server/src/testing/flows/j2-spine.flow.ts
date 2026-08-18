@@ -98,6 +98,12 @@ type Decision = {
     readonly origin: { readonly sessionId: string };
   }[];
 };
+type DecisionState = {
+  readonly rows: readonly {
+    readonly submissionId: string;
+    readonly firstDecidedAt?: string | null;
+  }[];
+};
 type EngagementSnapshot = {
   readonly engagements: readonly {
     readonly id: string;
@@ -416,6 +422,12 @@ export async function runJ2Spine(
   });
   await organizer.expectLog('Recorded submission decisions');
   const accepted = required(decision.data.rows.find((row) => row.submissionId === submissionId), 'accepted decision');
+  const firstDecidedAt: { value: string | null } = { value: null };
+  await organizer.expectRead('decision.state.read', { submissionIds: [submissionId] }, (projection) => {
+    const state = projection as DecisionState;
+    firstDecidedAt.value = state.rows.find((row) => row.submissionId === submissionId)?.firstDecidedAt ?? null;
+    return firstDecidedAt.value !== null;
+  });
 
   let engagements!: EngagementSnapshot;
   await organizer.expectRead('engagement.snapshot.read', (projection) => {
@@ -473,7 +485,7 @@ export async function runJ2Spine(
     decision: {
       version: accepted.head.version,
       digestSha256: accepted.head.digestSha256,
-      decidedAt: accepted.head.decidedAt
+      decidedAt: required(firstDecidedAt.value, 'first decision instant')
     },
     sessionId: accepted.origin.sessionId,
     placement
