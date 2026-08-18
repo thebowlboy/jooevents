@@ -7,6 +7,7 @@ type DecisionState = {
     readonly submissionId: string;
     readonly head: { readonly state: string; readonly version: number; readonly digestSha256: string } | null;
     readonly origin: { readonly sessionId: string } | null;
+    readonly firstDecidedAt?: string | null;
   }[];
 };
 
@@ -73,7 +74,10 @@ export async function runJ7ForwardCorrections(world: FlowWorld): Promise<void> {
   await organizer.expectRead('decision.state.read', { submissionIds: [spine.submissionId] }, (projection) => {
     const state = projection as DecisionState;
     const row = state.rows.find((candidate) => candidate.submissionId === spine.submissionId);
-    return row?.head?.state === 'declined' && row.origin?.sessionId === spine.sessionId;
+    return row?.head?.state === 'declined'
+      && row.head.version === 2
+      && row.firstDecidedAt === spine.decision.decidedAt
+      && row.origin?.sessionId === spine.sessionId;
   });
 
   let schedule!: ScheduleSnapshot;

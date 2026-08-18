@@ -138,7 +138,11 @@ export interface J2SpineResult {
   readonly formId: string;
   readonly submissionId: string;
   readonly reviewerId: string;
-  readonly decision: { readonly version: number; readonly digestSha256: string };
+  readonly decision: {
+    readonly version: number;
+    readonly digestSha256: string;
+    readonly decidedAt: string;
+  };
   readonly sessionId: string;
   readonly placement: NonNullable<Placement['occurrence']>;
 }
@@ -468,7 +472,8 @@ export async function runJ2Spine(
     reviewerId: registration.data.reviewer.reviewerId,
     decision: {
       version: accepted.head.version,
-      digestSha256: accepted.head.digestSha256
+      digestSha256: accepted.head.digestSha256,
+      decidedAt: accepted.head.decidedAt
     },
     sessionId: accepted.origin.sessionId,
     placement

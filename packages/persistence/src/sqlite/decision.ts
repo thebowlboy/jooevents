@@ -2,6 +2,7 @@ import { canonicalJsonSha256 } from '@jooevents/kernel';
 import type { Database } from 'bun:sqlite';
 
 import {
+  decisionDecideOperationResultSchema,
   decisionMutationPlanSchema,
   type DecisionHeadDto,
   type DecisionMutationPlanDto,
@@ -151,6 +152,7 @@ interface HeadRow { readonly head_json: string }
 interface OriginRow { readonly origin_json: string }
 interface ScopeRow { readonly event_id: string }
 interface CountRow { readonly count: number }
+interface DecisionOperationLogRow { readonly result_json: string }
 
 /**
  * Canonical Decision persistence plus the Session graduation collaboration
@@ -208,6 +210,46 @@ export class SQLiteDecisionRepository implements DecisionTransactionPort,
     try {
       return parseSubmissionSessionOrigin(JSON.parse(row.origin_json));
     } catch (error) {
+      throw new SQLiteDecisionError('data_corrupt', error);
+    }
+  }
+
+  /**
+   * Projects the immutable first-decision instant from the direct operation
+   * log. Decision heads are deliberately current mutable state rather than a
+   * revision family; the retained terminal result is therefore the existing
+   * truthful source for the version-1 flow instant needed by Pulse.
+   */
+  readFirstDecisionInstants(
+    scope: DecisionScopeDto,
+    submissionIds: readonly string[]
+  ): ReadonlyMap<string, string> {
+    if (!this.scopeExists(scope) || submissionIds.length === 0) return new Map();
+    const requested = new Set(submissionIds);
+    const first = new Map<string, string>();
+    const rows = this.input.sqlite.query<DecisionOperationLogRow, [string, string]>(`
+      SELECT result_json
+        FROM operation_log
+       WHERE workspace_id = ? AND event_id = ?
+         AND operation_name = 'decision.decide' AND operation_version = 1
+       ORDER BY occurred_at_ms, id
+    `).all(scope.workspaceId, scope.eventId);
+    try {
+      for (const row of rows) {
+        const result = decisionDecideOperationResultSchema.parse(JSON.parse(row.result_json));
+        if (result.kind !== 'success') continue;
+        for (const decision of result.data.rows) {
+          const head = decision.head;
+          if (head === null || head.version !== 1 || !requested.has(decision.submissionId)) continue;
+          if (head.scope.workspaceId !== scope.workspaceId || head.scope.eventId !== scope.eventId) {
+            throw new SQLiteDecisionError('data_corrupt');
+          }
+          if (!first.has(decision.submissionId)) first.set(decision.submissionId, head.decidedAt);
+        }
+      }
+      return first;
+    } catch (error) {
+      if (error instanceof SQLiteDecisionError) throw error;
       throw new SQLiteDecisionError('data_corrupt', error);
     }
   }

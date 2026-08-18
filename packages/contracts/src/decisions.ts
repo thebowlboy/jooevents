@@ -301,7 +301,17 @@ export const decisionStateReadInputSchema = z.strictObject({
 export const decisionStateRowSchema = z.strictObject({
   submissionId: decisionIdSchema,
   head: decisionHeadSchema.nullable(),
-  origin: submissionSessionOriginSchema.nullable()
+  origin: submissionSessionOriginSchema.nullable(),
+  /**
+   * The first transition out of undecided. Current heads advance in place, so
+   * amended decisions need this retained projection to chart the original
+   * decision flow without treating the amendment as the first answer.
+   *
+   * Optional keeps the additive read compatible with older adapters. A current
+   * adapter returns null only when no decision exists or the retained evidence
+   * cannot be established.
+   */
+  firstDecidedAt: canonicalInstantSchema.nullable().optional()
 });
 
 export const decisionStateSnapshotSchema = z.strictObject({

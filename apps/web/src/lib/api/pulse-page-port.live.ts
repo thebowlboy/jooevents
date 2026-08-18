@@ -555,21 +555,28 @@ export function createLivePulsePagePort(input: {
 				row.head?.state ?? 'undecided'
 			]));
 			const proposalInstants = parseInstants(triageResult.data.rows.map((row) => row.source.submittedAt));
-			const currentDecisionHeads = decisionResult.data.rows.flatMap((row) => row.head ? [row.head] : []);
-			// Version one is the first transition out of undecided, so its head
-			// instant is also the product-defined decision-flow instant. A later
-			// head does not expose that first instant; refuse the aggregate instead
-			// of quietly charting the amendment as though it were the first answer.
-			if (currentDecisionHeads.some((head) => head.version !== 1)) return incompletePopulation();
-			const decisionInstants = parseInstants(currentDecisionHeads.map((head) => head.decidedAt));
-			const acceptedInstants = parseInstants(currentDecisionHeads
-				.filter((head) => head.state === 'accepted').map((head) => head.decidedAt));
+			const currentDecisions = decisionResult.data.rows.flatMap((row) => row.head
+				? [{ head: row.head, firstDecidedAt: row.firstDecidedAt }]
+				: []);
+			// The decisions series is a first-transition flow, while the accepted
+			// series answers when each currently accepted submission entered that
+			// state. An amendment therefore keeps the original decision instant but
+			// uses its current head instant if it newly became accepted.
+			const firstDecisionValues: string[] = [];
+			for (const { head, firstDecidedAt } of currentDecisions) {
+				const value = firstDecidedAt ?? (head.version === 1 ? head.decidedAt : null);
+				if (value === null) return incompletePopulation();
+				firstDecisionValues.push(value);
+			}
+			const decisionInstants = parseInstants(firstDecisionValues);
+			const acceptedInstants = parseInstants(currentDecisions
+				.filter(({ head }) => head.state === 'accepted').map(({ head }) => head.decidedAt));
 			const reviewInstants = parseInstants(historyResult.data
 				.filter((entry) => entry.operation.name === 'review.evaluation.change'
 					&& entry.operation.version === 1 && entry.summary === 'Submitted a review')
 				.map((entry) => entry.occurredAt));
 			if (proposalInstants.length !== triageResult.data.rows.length
-				|| decisionInstants.length !== currentDecisionHeads.length) return incompletePopulation();
+				|| decisionInstants.length !== currentDecisions.length) return incompletePopulation();
 			const currentNow = now();
 			const starts = weekStarts(currentNow, event.timezone);
 			if (starts.length !== VISIBLE_WEEKS) return incompletePopulation();

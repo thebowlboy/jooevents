@@ -63,6 +63,15 @@ export interface DecisionStateReadSource {
     scope: DecisionScopeDto,
     submissionId: string
   ): SubmissionSessionOriginDto | undefined;
+  /**
+   * Optional additive projection for adapters that retain direct-operation
+   * results. It returns the immutable version-1 decision instant for each
+   * requested submission whose current head may since have advanced.
+   */
+  readFirstDecisionInstants?(
+    scope: DecisionScopeDto,
+    submissionIds: readonly string[]
+  ): ReadonlyMap<string, string>;
 }
 
 function ref(key: string): VersionedDefinitionRef {
@@ -267,16 +276,32 @@ export function createDecisionOperationModule(
           }
           const query = decisionStateReadInputSchema.parse(businessInput);
           const scope = snapshot.scope as DecisionScopeDto;
+          const heads = new Map(query.submissionIds.map((submissionId) => [
+            submissionId,
+            input.decisions.readDecisionHead(scope, submissionId) ?? null
+          ]));
+          const firstDecisionInstants = input.decisions.readFirstDecisionInstants?.(
+            scope,
+            query.submissionIds
+          ) ?? new Map<string, string>();
           // Undecided submissions serve a null head; absence is never a state.
           return Object.freeze({
             kind: 'success' as const,
             data: decisionStateSnapshotSchema.parse({
               schemaVersion: 1,
-              rows: query.submissionIds.map((submissionId) => ({
-                submissionId,
-                head: input.decisions.readDecisionHead(scope, submissionId) ?? null,
-                origin: input.decisions.readSubmissionSessionOrigin(scope, submissionId) ?? null
-              }))
+              rows: query.submissionIds.map((submissionId) => {
+                const head = heads.get(submissionId) ?? null;
+                return {
+                  submissionId,
+                  head,
+                  origin: input.decisions.readSubmissionSessionOrigin(scope, submissionId) ?? null,
+                  firstDecidedAt: head === null
+                    ? null
+                    : head.version === 1
+                      ? head.decidedAt
+                      : firstDecisionInstants.get(submissionId) ?? null
+                };
+              })
             })
           });
         }
@@ -300,7 +325,7 @@ export function createDecisionOperationModule(
       operations: Object.freeze([{
         ...DECISION_STATE_READ_OPERATION,
         lifecycle: { status: 'active' as const },
-        summary: 'Read Decision heads and Session origin links for a submission-id set.',
+        summary: 'Read Decision heads, first-decision instants, and Session origin links for a submission-id set.',
         effect: 'read' as const,
         maxRisk: 'low' as const,
         autonomyPolicy: refs.autonomy,

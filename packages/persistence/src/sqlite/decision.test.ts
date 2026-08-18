@@ -56,7 +56,8 @@ function fixture(environment?: DecisionEnvironmentSource) {
     ) STRICT;
     CREATE TABLE operation_log (
       id TEXT PRIMARY KEY, operation_name TEXT NOT NULL,
-      operation_version INTEGER NOT NULL, result_json TEXT NOT NULL
+      operation_version INTEGER NOT NULL, workspace_id TEXT NOT NULL,
+      event_id TEXT, occurred_at_ms INTEGER NOT NULL, result_json TEXT NOT NULL
     ) STRICT;
   `);
   installEventSpineSchema(sqlite);
@@ -191,6 +192,76 @@ function acceptPlan(fx: ReturnType<typeof fixture>, graduation: Record<string, u
 }
 
 describe('disposable SQLite Decision repository', () => {
+  test('retains the first decision instant after the mutable head advances', () => {
+    const fx = fixture();
+    try {
+      fx.candidates.set(submissionId, candidate());
+      const initial = planDecisionMutation({
+        planningInput: {
+          action: 'decide', scope, actorUserId: userId, occurredAt: now,
+          decisions: [{
+            submissionId, state: 'waitlisted',
+            expectedDecisionVersion: null, expectedDecisionDigestSha256: null,
+            graduation: null
+          }]
+        },
+        environment: { decisions: fx.decisions, sessions: fx.decisions }
+      });
+      fx.sqlite.exec('BEGIN IMMEDIATE;');
+      const initialResult = fx.decisions.applyDecisionPlan(initial);
+      const receiptId = '019c1df7-0000-7000-8000-000000000001';
+      fx.sqlite.query(`
+        INSERT INTO operation_log (
+          id, operation_name, operation_version, workspace_id, event_id,
+          occurred_at_ms, result_json
+        ) VALUES (?, 'decision.decide', 1, ?, ?, ?, ?)
+      `).run(
+        receiptId,
+        workspaceId,
+        eventId,
+        Date.parse(now),
+        JSON.stringify({
+          kind: 'success',
+          data: initialResult,
+          receipt: {
+            id: receiptId,
+            operationName: 'decision.decide',
+            operationVersion: 1
+          },
+          correlationId: '019c1df7-0000-7000-8000-000000000002'
+        })
+      );
+      fx.sqlite.exec('COMMIT;');
+
+      const before = fx.decisions.readDecisionHead(scope, submissionId)!;
+      const correction = planDecisionMutation({
+        planningInput: {
+          action: 'decide', scope, actorUserId: userId, occurredAt: later,
+          decisions: [{
+            submissionId, state: 'declined',
+            expectedDecisionVersion: before.version,
+            expectedDecisionDigestSha256: before.digestSha256,
+            graduation: null
+          }]
+        },
+        environment: { decisions: fx.decisions, sessions: fx.decisions }
+      });
+      fx.sqlite.exec('BEGIN IMMEDIATE;');
+      fx.decisions.applyDecisionPlan(correction);
+      fx.sqlite.exec('COMMIT;');
+
+      expect(fx.decisions.readDecisionHead(scope, submissionId)).toMatchObject({
+        version: 2,
+        state: 'declined',
+        decidedAt: later
+      });
+      expect(fx.decisions.readFirstDecisionInstants(scope, [submissionId]).get(submissionId))
+        .toBe(now);
+    } finally {
+      fx.sqlite.close();
+    }
+  });
+
   test('commits head, origin, and graduation together with guarded writes and typed replay refusals', () => {
     const fx = fixture();
     try {

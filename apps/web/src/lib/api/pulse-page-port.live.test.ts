@@ -180,9 +180,13 @@ function sources(input: {
 	const calls = input.calls ?? [];
 	const decisionById = new Map([
 		[id(30), { head: decisionHead(id(30), 'accepted', '2026-08-15T09:00:00.000Z', input.decisionVersion),
+			firstDecidedAt: input.decisionVersion === 2
+				? '2026-07-25T09:00:00.000Z'
+				: '2026-08-15T09:00:00.000Z',
 			origin: { schemaVersion: 1 as const, scope: { workspaceId, eventId }, submissionId: id(30), sessionId: sessionA,
 				kind: 'spawned' as const, linkedByUserId: userId, linkedAt: '2026-08-15T09:00:00.000Z' } }],
-		[id(31), { head: decisionHead(id(31), 'declined', '2026-08-04T09:00:00.000Z'), origin: null }]
+		[id(31), { head: decisionHead(id(31), 'declined', '2026-08-04T09:00:00.000Z'),
+			firstDecidedAt: '2026-08-04T09:00:00.000Z', origin: null }]
 	]);
 	return {
 		event: {
@@ -326,14 +330,16 @@ describe('live Pulse page port', () => {
 		});
 	});
 
-	test('refuses an amended decision head whose first-transition instant is not readable', async () => {
+	test('keeps Pulse available after an amendment and charts the retained first decision instant', async () => {
 		const port = createLivePulsePagePort({
 			sources: sources({ decisionVersion: 2 }),
 			now: () => NOW
 		});
-		expect(await port.read()).toEqual({
-			kind: 'unavailable', message: 'The complete event pulse is not available in this live workspace.'
-		});
+		const result = await port.read();
+		if (result.kind !== 'success') throw new Error('expected_success');
+		const decisions = result.data.series.find((series) => series.key === 'decisions');
+		expect(decisions).toMatchObject({ total: 2, windowCount: 1 });
+		expect(result.data.hero.figures).toContainEqual({ label: 'Accepted', value: '1' });
 	});
 });
 
