@@ -96,7 +96,7 @@ function sessionHead(input: {
   readonly title: string;
   readonly description?: string;
   readonly lifecycle: 'draft' | 'collecting' | 'programmed';
-  readonly participants?: readonly ReturnType<typeof participant>[];
+  readonly participants?: SessionHeadDto['roster']['participants'];
 }): SessionHeadDto {
   const rosterUnsigned = { version: 1, participants: input.participants ?? [] };
   const roster = { ...rosterUnsigned, digestSha256: sessionRosterDigest(rosterUnsigned) };
