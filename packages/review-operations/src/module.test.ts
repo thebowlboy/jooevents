@@ -10,6 +10,7 @@ import {
 import {
   REVIEW_DRAFT_SAVE_REQUEST_HASH_PROFILE,
   REVIEW_ASSIGNMENT_VACANCY_CHANGE_OPERATION,
+  REVIEW_ACCOLADE_CHANGE_OPERATION,
   REVIEW_DIRECT_REQUEST_HASH_PROFILE,
   REVIEW_EVALUATE_ACCESS_POLICY,
   REVIEW_EVALUATION_DRAFT_SAVE_OPERATION,
@@ -58,6 +59,7 @@ function operationModule() {
       resolveReviewDeadline: () => undefined
     },
     candidateDisplay: { readReviewCandidateDisplay: () => undefined },
+    accolades: { listDefinitions: () => [], listCurrentHumanFlags: () => [] },
     clock: { now: () => parseInstant('2026-08-13T12:00:00.000Z') },
     ids: { newInvocationId: () => parseInvocationId(crypto.randomUUID()) },
     authorityPrincipalKeyProfile: profile,
@@ -153,6 +155,9 @@ describe('Review operation module', () => {
       execution: { profile: 'direct_audited' },
       audit: { mode: 'required' }
     });
+    expect(module.source.effectOperations?.find(
+      (operation) => operation.name === REVIEW_ACCOLADE_CHANGE_OPERATION.name
+    )?.agentAction).toBeUndefined();
   });
 
   test('expands anonymized to the canonical visibility axes', () => {
@@ -193,6 +198,7 @@ describe('Review operation module', () => {
         schemaVersion: 1,
         viewer: { kind: 'organizer' },
         plans: [planValue],
+        accoladeDefinitions: [],
         standings: {}
       }
     });

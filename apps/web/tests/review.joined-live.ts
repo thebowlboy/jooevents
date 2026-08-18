@@ -145,6 +145,7 @@ test('live review paints assigned candidate evidence from the reviewer-safe snap
 						steppedBack: 0, awaitingReassignment: 0
 					}]
 				}],
+				accoladeDefinitions: [],
 				reviewerScope: [{ kind: 'session', id: id(207) }],
 				queue: [{
 					assignmentId: id(205),
@@ -180,5 +181,82 @@ test('live review paints assigned candidate evidence from the reviewer-safe snap
 	await expect(page.getByText(id(207), { exact: true })).toBeVisible();
 	await expect(page.getByText('Reviewer A')).toHaveCount(0);
 	await expect(page.getByText('Nothing is assigned to you.')).toHaveCount(0);
+	await expectNoDocumentOverflow(page);
+});
+
+test('live review toggles a retained accolade through the mounted operation', async ({ page }) => {
+	await ensureEvent(page);
+	const id = (value: number) =>
+		`00000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
+	const reviewerId = id(301);
+	const roundId = id(302);
+	const assignmentId = id(303);
+	const submissionId = id(304);
+	const observationId = id(305);
+	let pinned = false;
+
+	await page.route('**/api/events/current/review/snapshot*', async (route) => {
+		const response = await route.fetch();
+		const envelope = await response.json();
+		await route.fulfill({ response, json: {
+			...envelope,
+			data: {
+				schemaVersion: 1,
+				viewer: { kind: 'reviewer', reviewerId },
+				plans: [{
+					id: roundId, ordinal: 1, name: 'Round 1', state: 'open', version: 1,
+					scaleMax: 5, deadlineEffectiveAt: '2027-05-03T23:59:59.000Z',
+					criteria: [{ id: id(306), key: 'overall', label: 'Overall', position: 0,
+						weightBps: 10_000, scaleMin: 1, scaleMax: 5 }],
+					anonymized: true, antiAnchoring: true, done: 1, total: 1,
+					reviewers: [{ reviewerId, assigned: 1, done: 1, steppedBack: 0,
+						awaitingReassignment: 0 }]
+				}],
+				accoladeDefinitions: [{
+					key: 'accolade.top_pick', version: 1, label: 'Top pick',
+					description: 'One of this reviewer’s strongest choices.', icon: 'star', cap: 3
+				}],
+				reviewerScope: [],
+				queue: [{
+					assignmentId, roundId, submissionId, assignmentVersion: 1,
+					candidate: { submissionId, version: 1, title: 'A program-defining session',
+						abstract: 'A committed candidate ready for an accolade.',
+						submittedAt: '2027-04-20T09:00:00.000Z', resources: [] },
+					committed: true,
+					current: { revisionId: id(307), score: 5, comment: 'Excellent.',
+						at: '2027-04-21T09:00:00.000Z', postUnlock: false },
+					revisions: [{ revisionId: id(307), score: 5, comment: 'Excellent.',
+						at: '2027-04-21T09:00:00.000Z', postUnlock: false }],
+					...(pinned ? { accolades: [{ key: 'accolade.top_pick',
+						definitionVersion: 1, observationId }] } : {})
+				}],
+				standings: {}
+			}
+		} });
+	});
+	await page.route('**/api/events/current/review/accolades', async (route) => {
+		const body = route.request().postDataJSON() as { action: 'pin_accolade' | 'unpin_accolade' };
+		pinned = body.action === 'pin_accolade';
+		await route.fulfill({ status: 200, contentType: 'application/json', json: {
+			kind: 'success',
+			data: {
+				action: body.action, key: 'accolade.top_pick', submissionId,
+				definitionVersion: 1, observationId, pinned
+			},
+			receipt: { id: id(308), operationName: 'review.accolade.change', operationVersion: 1 },
+			correlationId: id(309)
+		} });
+	});
+
+	await page.goto('/app/review');
+	await page.getByText('Completed', { exact: true }).click();
+	const topPick = page.getByRole('button', { name: 'Top pick' });
+	await expect(topPick).toBeVisible();
+	await expect(topPick).toHaveAttribute('aria-pressed', 'false');
+	await topPick.click();
+	await expect(topPick).toHaveAttribute('aria-pressed', 'true');
+	await expect(page.getByText('Pinned Top pick on “A program-defining session”')).toBeVisible();
+	await topPick.click();
+	await expect(topPick).toHaveAttribute('aria-pressed', 'false');
 	await expectNoDocumentOverflow(page);
 });

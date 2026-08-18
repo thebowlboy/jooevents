@@ -17,6 +17,7 @@
     "./reviewer-roster": "./src/reviewer-roster.ts",
     "./reviews": "./src/reviews.ts",
     "./schedule-placement": "./src/schedule-placement.ts",
+    "./signals": "./src/signals.ts",
     "./sessions": "./src/sessions.ts",
     "./submission-triage": "./src/submission-triage.ts",
     "./workspace-team": "./src/workspace-team.ts",

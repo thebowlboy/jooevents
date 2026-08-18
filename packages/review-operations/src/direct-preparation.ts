@@ -8,7 +8,9 @@ export type ReviewDirectAction =
   | 'assign_replacement'
   | 'accept_coverage'
   | 'commit_review'
-  | 'amend_review';
+  | 'amend_review'
+  | 'pin_accolade'
+  | 'unpin_accolade';
 
 export interface ReviewDirectPreparation {
   prepare(input: { readonly action: ReviewDirectAction; readonly businessInput: unknown; readonly context: EffectInvocationContext }): {

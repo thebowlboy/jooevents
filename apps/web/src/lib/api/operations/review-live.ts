@@ -6,6 +6,8 @@ import {
 import {
 	REVIEW_OPERATION_SCHEMA_REFS,
 	reviewDirectOperationResultSchema,
+	reviewAccoladeChangeDraftInputSchema,
+	reviewAccoladeChangeOperationResultSchema,
 	reviewDraftSaveInputSchema,
 	reviewDraftSaveOperationResultSchema,
 	reviewEvaluationChangeDraftInputSchema,
@@ -16,6 +18,7 @@ import {
 	reviewStepBackChangeDraftInputSchema,
 	reviewVacancyChangeDraftInputSchema,
 	type ReviewDraftSaveResult,
+	type ReviewAccoladeChangeResult,
 	type ReviewMutationResult,
 	type ReviewRoundSetupProjection,
 	type ReviewSnapshot
@@ -32,6 +35,7 @@ import type {
 	ReviewCoreOperation,
 	ReviewCorePort,
 	ReviewCoreReadResult,
+	ReviewAccoladeChangeRequest,
 	ReviewEvaluationChangeRequest,
 	ReviewEvaluationDraftSaveRequest,
 	ReviewIdempotencyKey,
@@ -110,6 +114,15 @@ export const REVIEW_LIVE_OPERATIONS = Object.freeze({
 		idempotencyRequired: true,
 		path: '/api/events/current/review/evaluations'
 	} as const),
+	accolade_change: Object.freeze({
+		name: 'review.accolade.change',
+		version: 1,
+		effect: 'commit',
+		method: 'POST',
+		input: 'body',
+		idempotencyRequired: true,
+		path: '/api/events/current/review/accolades'
+	} as const),
 	evaluation_draft_save: Object.freeze({
 		name: 'review.evaluation.draft.save',
 		version: 1,
@@ -148,6 +161,10 @@ const EXPECTED_OPERATIONS = Object.freeze({
 	evaluation_change: Object.freeze({
 		...REVIEW_LIVE_OPERATIONS.evaluation_change,
 		...REVIEW_OPERATION_SCHEMA_REFS.evaluationChange
+	}),
+	accolade_change: Object.freeze({
+		...REVIEW_LIVE_OPERATIONS.accolade_change,
+		...REVIEW_OPERATION_SCHEMA_REFS.accoladeChange
 	}),
 	evaluation_draft_save: Object.freeze({
 		...REVIEW_LIVE_OPERATIONS.evaluation_draft_save,
@@ -216,6 +233,7 @@ function resolveBindings(manifest: unknown): Bindings {
 		step_back: resolveExactBinding(manifest, EXPECTED_OPERATIONS.step_back),
 		vacancy_change: resolveExactBinding(manifest, EXPECTED_OPERATIONS.vacancy_change),
 		evaluation_change: resolveExactBinding(manifest, EXPECTED_OPERATIONS.evaluation_change),
+		accolade_change: resolveExactBinding(manifest, EXPECTED_OPERATIONS.accolade_change),
 		evaluation_draft_save: resolveExactBinding(manifest, EXPECTED_OPERATIONS.evaluation_draft_save)
 	});
 }
@@ -318,7 +336,7 @@ export function createReviewLivePort(input: {
 
 	async function effect<Input, Data, View>(options: {
 		readonly operation: Extract<ReviewCoreOperation,
-			'round_change' | 'step_back' | 'vacancy_change' | 'evaluation_change' | 'evaluation_draft_save'>;
+			'round_change' | 'step_back' | 'vacancy_change' | 'evaluation_change' | 'accolade_change' | 'evaluation_draft_save'>;
 		readonly rawInput: Input;
 		readonly inputSchema: z.ZodType;
 		readonly idempotencyKey: ReviewIdempotencyKey;
@@ -467,6 +485,27 @@ export function createReviewLivePort(input: {
 				inputSchema: reviewEvaluationChangeDraftInputSchema,
 				idempotencyKey,
 				resultSchema: reviewDirectOperationResultSchema,
+				expectedAction: rawInput.action,
+				map: (data) => data,
+				...(options.signal ? { signal: options.signal } : {})
+			});
+		},
+
+		changeAccolade(
+			rawInput: ReviewAccoladeChangeRequest,
+			idempotencyKey: ReviewIdempotencyKey,
+			options: { readonly signal?: AbortSignal } = {}
+		): Promise<ReviewCoreEffectResult<ReviewAccoladeChangeResult>> {
+			return effect<
+				ReviewAccoladeChangeRequest,
+				ReviewAccoladeChangeResult,
+				ReviewAccoladeChangeResult
+			>({
+				operation: 'accolade_change',
+				rawInput,
+				inputSchema: reviewAccoladeChangeDraftInputSchema,
+				idempotencyKey,
+				resultSchema: reviewAccoladeChangeOperationResultSchema,
 				expectedAction: rawInput.action,
 				map: (data) => data,
 				...(options.signal ? { signal: options.signal } : {})

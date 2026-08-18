@@ -51,11 +51,13 @@ describe('review contracts', () => {
       schemaVersion: 1,
       viewer: { kind: 'organizer' },
       plans: [],
+      accoladeDefinitions: [],
       standings: {}
     })).toEqual({
       schemaVersion: 1,
       viewer: { kind: 'organizer' },
       plans: [],
+      accoladeDefinitions: [],
       standings: {}
     });
   });

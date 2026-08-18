@@ -1,4 +1,15 @@
 import type { AccoladeDef, AccoladeKey } from './types';
+import type { ReviewAccoladeKeyDto } from '@jooevents/contracts/reviews';
+
+const ACCOLADE_WIRE_PREFIX = 'accolade.';
+
+export function accoladePortKey(key: ReviewAccoladeKeyDto): AccoladeKey {
+	return key.slice(ACCOLADE_WIRE_PREFIX.length) as AccoladeKey;
+}
+
+export function accoladeWireKey(key: AccoladeKey): ReviewAccoladeKeyDto {
+	return `${ACCOLADE_WIRE_PREFIX}${key}` as ReviewAccoladeKeyDto;
+}
 
 /**
  * The accolades a reviewer may pin. Two of them are capped, because a mark

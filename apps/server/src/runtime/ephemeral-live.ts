@@ -530,6 +530,7 @@ import {
   createSQLiteSessionProgramReferenceAdapter
 } from '@jooevents/persistence/session';
 import { SQLiteReviewRepository } from '@jooevents/persistence/review';
+import { SQLiteSignalRepository } from '@jooevents/persistence/signals';
 import {
   createSQLiteReviewDirectEffectDomainRegistration
 } from '@jooevents/persistence/review-direct-effect-domain';
@@ -2240,6 +2241,7 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       triage: submissionTriageRepository,
       roster: reviewerRosterSources
     });
+    const signalRepository = new SQLiteSignalRepository(database.sqlite);
     // Decision candidates and review basis are projections over the same
     // effective sources the mounted triage and Review surfaces serve; nothing
     // here reads a second copy of any effective state.
@@ -2251,7 +2253,8 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       reviewBasis: new SQLiteDecisionReviewBasisSourceAdapter(Object.freeze({
         repository: reviewRepository,
         sources: reviewRepository,
-        candidateDisplay: reviewRepository
+        candidateDisplay: reviewRepository,
+        accolades: signalRepository
       }))
     });
     const decisionRepository = new SQLiteDecisionRepository({
@@ -4054,6 +4057,7 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       repository: reviewRepository,
       sources: reviewRepository,
       candidateDisplay: reviewRepository,
+      accolades: signalRepository,
       clock,
       ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
       authorityPrincipalKeyProfile: reviewProfiles.authorityPrincipal,
@@ -4309,13 +4313,15 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       sqlite: database.sqlite,
       workspaceId,
       repository: reviewRepository,
+      signals: signalRepository,
       eventRelationships,
       ids: Object.freeze({
         newRoundId: () => crypto.randomUUID(),
         newDeadlineId: () => crypto.randomUUID(),
         newCriterionId: () => crypto.randomUUID(),
         newAssignmentId: () => crypto.randomUUID(),
-        newReviewRevisionId: () => crypto.randomUUID()
+        newReviewRevisionId: () => crypto.randomUUID(),
+        newSignalObservationId: () => crypto.randomUUID()
       })
     });
     const reviewEvaluationDraftSaveDomain =

@@ -67,9 +67,10 @@ function rosterPort(calls: { input: ReviewerRosterChangeRequest; key: string }[]
 }
 const review: ReviewCorePort = { source: { kind: 'live' },
 	async readSnapshot() { return { kind: 'success', correlationId,
-		data: { schemaVersion: 1, viewer: { kind: 'organizer' }, plans: [], standings: {} } }; },
+		data: { schemaVersion: 1, viewer: { kind: 'organizer' }, plans: [], accoladeDefinitions: [], standings: {} } }; },
 	async readRoundSetup() { throw new Error('unused'); }, async changeRound() { throw new Error('unused'); },
 	async stepBack() { throw new Error('unused'); }, async changeEvaluation() { throw new Error('unused'); },
+	async changeAccolade() { throw new Error('unused'); },
 	async saveEvaluationDraft() { throw new Error('unused'); } };
 const vocabulary: Pick<ProgramVocabularySettingsPort, 'source' | 'tracks' | 'formats'> = {
 	source: { kind: 'live' }, async tracks() { return []; }, async formats() { return []; }

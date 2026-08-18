@@ -5,6 +5,7 @@ import {
 	type StructuredOutcome
 } from '@jooevents/contracts';
 import type { SafeApiError } from './client';
+import { accoladePortKey } from './accolades';
 import type {
 	CommunicationAuthoringPayloadRefView,
 	CommunicationAudienceOptionPageView,
@@ -723,9 +724,12 @@ export function createLiveDecisionsPagePort(input: {
 					retryable: false
 				});
 			},
-			/** No accolade owner exists canonically, so no defs exist to offer. */
 			async accoladeDefs(): Promise<AccoladeDef[]> {
-				return [];
+				return (await readSnapshot()).accoladeDefinitions.map((definition) => ({
+					key: accoladePortKey(definition.key),
+					label: definition.label,
+					...(definition.cap === undefined ? {} : { cap: definition.cap })
+				}));
 			},
 			async plans(): Promise<ReviewPlan[]> {
 				return mapLiveReviewPlans((await readSnapshot()).plans, now());

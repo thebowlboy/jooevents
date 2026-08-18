@@ -79,7 +79,9 @@ import {
   workspaceTeamMembersReadResultSchema
 } from '@jooevents/contracts/workspace-team';
 import {
+  reviewAccoladeChangeOperationResultSchema,
   reviewDirectOperationResultSchema,
+  reviewDraftSaveOperationResultSchema,
   reviewSnapshotReadResultSchema
 } from '@jooevents/contracts/reviews';
 import {
@@ -210,6 +212,47 @@ async function createOwnerSession(runtime: EphemeralLiveRuntime): Promise<Browse
     authUserId,
     sessionId,
     cookie: `better-auth.session_token=${rawToken}.${signature}`
+  });
+}
+
+async function createLinkedSession(input: {
+  readonly runtime: EphemeralLiveRuntime;
+  readonly appUserId: string;
+  readonly email: string;
+  readonly name: string;
+}): Promise<BrowserSession> {
+  const now = Date.now();
+  const authUserId = crypto.randomUUID();
+  const sessionId = crypto.randomUUID();
+  const rawToken = crypto.randomUUID();
+  input.runtime.database.sqlite.transaction(() => {
+    input.runtime.database.sqlite.query(`
+      INSERT INTO auth_users (
+        id,name,email,email_verified,image,created_at,updated_at
+      ) VALUES (?,?,?,1,NULL,?,?)
+    `).run(authUserId, input.name, input.email, now, now);
+    input.runtime.database.sqlite.query(`
+      INSERT INTO auth_accounts (
+        id,account_id,provider_id,user_id,created_at,updated_at
+      ) VALUES (?,?,'google',?,?,?)
+    `).run(crypto.randomUUID(), `google-${crypto.randomUUID()}`, authUserId, now, now);
+    input.runtime.database.sqlite.query(`
+      INSERT INTO auth_sessions (
+        id,token,user_id,expires_at,created_at,updated_at
+      ) VALUES (?,?,?,?,?,?)
+    `).run(sessionId, rawToken, authUserId, now + 60 * 60 * 1000, now, now);
+    input.runtime.database.sqlite.query(`
+      INSERT INTO auth_user_links (
+        auth_user_id,user_id,provisioning_state,last_error_code,attempts,created_at,updated_at
+      ) VALUES (?,?,'ready',NULL,0,?,?)
+    `).run(authUserId, input.appUserId, now, now);
+  }).immediate();
+  const secret = config.authSecrets[0]?.value;
+  if (!secret) throw new Error('test auth secret missing');
+  return Object.freeze({
+    authUserId,
+    sessionId,
+    cookie: `better-auth.session_token=${rawToken}.${await makeSignature(rawToken, secret)}`
   });
 }
 
@@ -1111,6 +1154,10 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['POST /api/events/current/releases/publish']
       },
       {
+        name: 'review.accolade.change', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/review/accolades']
+      },
+      {
         name: 'review.assignment.step_back', version: 1, effect: 'commit',
         bindings: ['POST /api/events/current/review/assignments/step-back']
       },
@@ -1302,8 +1349,8 @@ describe('ephemeral live Foundation server composition', () => {
     expect(runtime.database.installedSchemaArtifacts).toEqual([]);
     expect(runtime.database.retainedBaseline).toMatchObject({
       status: 'current',
-	  coordinate: { schemaEpoch: 2, sequence: 10 },
-	  migrationId: 'e2_0010_review_vacancy_resolutions',
+	  coordinate: { schemaEpoch: 2, sequence: 11 },
+	  migrationId: 'e2_0011_signal_accolades',
       databaseClass: 'ephemeral'
     });
     expect(runtime.database.sqlite.query<{ readonly name: string }, []>(`
@@ -3995,6 +4042,145 @@ describe('ephemeral live Foundation server composition', () => {
       SELECT summary FROM operation_log
        WHERE operation_name = 'review.assignment.vacancy.change'
     `).all()).toEqual([{ summary: 'Assigned a replacement reviewer' }]);
+
+    // The replacement reviewer completes their own review and then records
+    // an accolade through the same live server composition. The observation
+    // is retained, reviewer-scoped, and visible again after a fresh read.
+    const reviewerSession = await createLinkedSession({
+      runtime,
+      appUserId: candidateUserId,
+      email: 'avery.stone@example.test',
+      name: 'Avery Stone'
+    });
+    if (replacementResult.kind !== 'success'
+        || replacementResult.data.action !== 'assign_replacement') {
+      throw new Error('replacement result unavailable');
+    }
+    const replacementAssignment = replacementResult.data.replacement;
+    if (roundResult.kind !== 'success' || roundResult.data.action !== 'open_round') {
+      throw new Error('round result unavailable');
+    }
+    const criterion = roundResult.data.round.criteria[0];
+    if (!criterion) throw new Error('review criterion unavailable');
+    const draftResult = reviewDraftSaveOperationResultSchema.parse(await effect({
+      runtime,
+      session: reviewerSession,
+      path: '/api/events/current/review/evaluation-draft',
+      key: 'decision-loop-review-draft',
+      body: {
+        assignmentId: replacementAssignment.id,
+        expectedDraftVersion: null,
+        scores: [{ criterionId: criterion.id, score: 4 }],
+        comment: 'Strong program fit.'
+      },
+      parse: (value) => value
+    }));
+    expect(draftResult).toMatchObject({
+      kind: 'success',
+      data: { draft: { assignmentId: replacementAssignment.id, version: 1 } }
+    });
+    if (draftResult.kind !== 'success') throw new Error('review draft failed');
+    const commitResult = reviewDirectOperationResultSchema.parse(await effect({
+      runtime,
+      session: reviewerSession,
+      path: '/api/events/current/review/evaluations',
+      key: 'decision-loop-review-commit',
+      body: {
+        action: 'commit_review',
+        assignmentId: replacementAssignment.id,
+        expectedAssignmentVersion: replacementAssignment.version,
+        expectedDraftVersion: draftResult.data.draft.version
+      },
+      parse: (value) => value
+    }));
+    expect(commitResult).toMatchObject({
+      kind: 'success', data: { action: 'commit_review' },
+      receipt: { operationName: 'review.evaluation.change', operationVersion: 1 }
+    });
+
+    const reviewerSnapshotBefore = reviewSnapshotReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/review/snapshot', {
+        headers: eventHeaders({ session: reviewerSession, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (reviewerSnapshotBefore.kind !== 'success') throw new Error('reviewer snapshot unavailable');
+    expect(reviewerSnapshotBefore.data).toMatchObject({
+      viewer: { kind: 'reviewer', reviewerId: replacementReviewerId },
+      accoladeDefinitions: [
+        { key: 'accolade.top_pick', version: 1, label: 'Top pick', cap: 3 },
+        { key: 'accolade.hidden_gem', version: 1, label: 'Hidden gem', cap: 3 },
+        { key: 'accolade.crowd_draw', version: 1, label: 'Crowd draw' },
+        { key: 'accolade.bold_bet', version: 1, label: 'Bold bet' }
+      ]
+    });
+    const pinResult = reviewAccoladeChangeOperationResultSchema.parse(await effect({
+      runtime,
+      session: reviewerSession,
+      path: '/api/events/current/review/accolades',
+      key: 'decision-loop-accolade-pin',
+      body: {
+        action: 'pin_accolade',
+        assignmentId: replacementAssignment.id,
+        expectedAssignmentVersion: replacementAssignment.version,
+        key: 'accolade.top_pick',
+        expectedDefinitionVersion: 1
+      },
+      parse: (value) => value
+    }));
+    expect(pinResult).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'pin_accolade', key: 'accolade.top_pick',
+        submissionId, pinned: true
+      },
+      receipt: { operationName: 'review.accolade.change', operationVersion: 1 }
+    });
+    if (pinResult.kind !== 'success') throw new Error('accolade pin failed');
+    const reviewerSnapshotPinned = reviewSnapshotReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/review/snapshot', {
+        headers: eventHeaders({ session: reviewerSession, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (reviewerSnapshotPinned.kind !== 'success') throw new Error('pinned snapshot unavailable');
+    expect(reviewerSnapshotPinned.data.queue?.[0]?.accolades).toEqual([{
+      key: 'accolade.top_pick',
+      definitionVersion: 1,
+      observationId: pinResult.data.observationId
+    }]);
+
+    const unpinResult = reviewAccoladeChangeOperationResultSchema.parse(await effect({
+      runtime,
+      session: reviewerSession,
+      path: '/api/events/current/review/accolades',
+      key: 'decision-loop-accolade-unpin',
+      body: {
+        action: 'unpin_accolade',
+        assignmentId: replacementAssignment.id,
+        expectedAssignmentVersion: replacementAssignment.version,
+        key: 'accolade.top_pick',
+        expectedDefinitionVersion: 1,
+        expectedObservationId: pinResult.data.observationId
+      },
+      parse: (value) => value
+    }));
+    expect(unpinResult).toMatchObject({
+      kind: 'success', data: { action: 'unpin_accolade', pinned: false }
+    });
+    const reviewerSnapshotUnpinned = reviewSnapshotReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/review/snapshot', {
+        headers: eventHeaders({ session: reviewerSession, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (reviewerSnapshotUnpinned.kind !== 'success') throw new Error('unpinned snapshot unavailable');
+    expect(reviewerSnapshotUnpinned.data.queue?.[0]?.accolades).toBeUndefined();
+    expect(runtime.database.sqlite.query<{ readonly summary: string }, []>(`
+      SELECT summary FROM operation_log
+       WHERE operation_name = 'review.accolade.change'
+       ORDER BY occurred_at_ms,id
+    `).all()).toEqual([
+      { summary: 'Pinned a review accolade' },
+      { summary: 'Unpinned a review accolade' }
+    ]);
     const deadlines = deadlineListReadResultSchema.parse(await (
       await runtime.app.request('/api/events/current/deadlines', {
         headers: eventHeaders({ session, correlationId: crypto.randomUUID() })

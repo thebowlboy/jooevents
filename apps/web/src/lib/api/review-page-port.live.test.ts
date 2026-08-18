@@ -1,8 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import {
 	reviewDraftSaveResultSchema,
+	reviewAccoladeChangeResultSchema,
+	reviewAccoladePinProjectionSchema,
 	reviewMutationResultSchema,
 	reviewSnapshotSchema,
+	type ReviewAccoladeDefinitionProjection,
+	type ReviewAccoladePinProjection,
 	type ReviewMutationResult
 } from '@jooevents/contracts/reviews';
 import { mapReviewSnapshot } from './mappers/review';
@@ -21,7 +25,9 @@ const round = { id: roundId, ordinal: 1, name: 'Round 1', state: 'open' as const
 	anonymized: true, antiAnchoring: true, done: 0, total: 1,
 	reviewers: [{ reviewerId, displayName: 'Ada', assigned: 1, done: 0, steppedBack: 0, awaitingReassignment: 0 }] };
 function snapshot(input: { committed?: boolean; revisions?: { score: number; comment: string }[];
-	anonymized?: boolean; comparable?: boolean; standingSlice?: 'track' | 'all' } = {}) {
+	anonymized?: boolean; comparable?: boolean; standingSlice?: 'track' | 'all';
+	definitions?: readonly ReviewAccoladeDefinitionProjection[];
+	accolades?: readonly ReviewAccoladePinProjection[] } = {}) {
 	const committed = input.committed ?? false;
 	const revisions = input.revisions ?? (committed ? [{ score: 4, comment: 'Good' }] : []);
 	const revisionCount = revisions.length;
@@ -34,6 +40,8 @@ function snapshot(input: { committed?: boolean; revisions?: { score: number; com
 			submittedAt: '2027-03-01T00:00:00.000Z',
 			resources: [{ resourceId: id(8), name: 'Deck', kind: 'slides' as const, detail: 'PDF' }],
 			...(!anonymized ? { speakers: [{ speakerId: id(9), displayName: 'Ada Speaker' }] } : {}) },
+		...(input.accolades === undefined || input.accolades.length === 0
+			? {} : { accolades: input.accolades }),
 		...(committed ? { committed: true as const, current, revisions: revisions.map((value, index) => ({
 			...current, ...value, revisionId: id(7 + index), postUnlock: index > 0,
 			...(index > 0 ? { correctionOfRevisionId: id(6 + index) } : {}) })) }
@@ -54,6 +62,7 @@ function snapshot(input: { committed?: boolean; revisions?: { score: number; com
 		slice: { label: input.standingSlice === 'all' ? 'All submissions' : 'Track' }, points: [] };
 	return mapReviewSnapshot(reviewSnapshotSchema.parse({ schemaVersion: 1,
 		viewer: { kind: 'reviewer', reviewerId }, plans: [{ ...round, anonymized }],
+		accoladeDefinitions: input.definitions ?? [],
 		standings: input.comparable ? { [comparableSubmissionId]: standing } : {}, reviewerScope: [],
 		queue: input.comparable ? [primary, comparable] : [primary] }));
 }
@@ -89,13 +98,17 @@ function mutation(action: ReviewMutationResult['action']): ReviewMutationResult 
 	return reviewMutationResultSchema.parse({ action, head, revision });
 }
 function core(input: { committed?: boolean; anonymized?: boolean; comparable?: boolean;
-	keys: string[]; actions: string[] }): ReviewCorePort {
+	keys: string[]; actions: string[];
+	definitions?: readonly ReviewAccoladeDefinitionProjection[];
+	accolades?: readonly ReviewAccoladePinProjection[];
+	capHolderSubmissionIds?: readonly string[] }): ReviewCorePort {
 	let committed = input.committed ?? false;
 	const revisions = committed ? [{ score: 4, comment: 'Good' }] : [];
+	let accolades = [...(input.accolades ?? [])];
 	return { source: { kind: 'live' },
 		async readSnapshot(request) { return { kind: 'success', data: snapshot({ committed,
 			revisions, anonymized: input.anonymized, comparable: input.comparable,
-			standingSlice: request?.standingSlice }), correlationId }; },
+			standingSlice: request?.standingSlice, definitions: input.definitions, accolades }), correlationId }; },
 		async readRoundSetup() { return { kind: 'success', data: { activeReviewers: 1, invitedReviewers: 0,
 			submissions: 1, expectedReviews: 1, perReviewer: [] }, correlationId }; },
 		async changeRound(value, key) { input.keys.push(key); input.actions.push(value.action);
@@ -110,6 +123,32 @@ function core(input: { committed?: boolean; anonymized?: boolean; comparable?: b
 			committed = true;
 			return { kind: 'success', data: mutation(value.action),
 				receipt: { id: id(42), operationName: 'review.evaluation.change', operationVersion: 1 }, correlationId }; },
+		async changeAccolade(value, key) { input.keys.push(key); input.actions.push(value.action);
+			if (value.action === 'pin_accolade' && input.capHolderSubmissionIds) {
+				return { kind: 'outcome', terminal: false as const, correlationId, outcome: {
+					class: 'policy_violation' as const,
+					kind: 'review.accolade_cap_exceeded', retryable: false,
+					subjects: [{ type: 'review', id: submissionId }],
+					detail: { code: 'write_cap_exceeded', action: value.action,
+						subjectId: submissionId,
+						holderSubmissionIds: [...input.capHolderSubmissionIds] },
+					detailSchemaVersion: 1
+				} };
+			}
+			const observationId = value.action === 'pin_accolade' ? id(44) : value.expectedObservationId;
+			if (value.action === 'pin_accolade') {
+				accolades = [...accolades, reviewAccoladePinProjectionSchema.parse({
+					key: value.key, definitionVersion: value.expectedDefinitionVersion, observationId
+				})];
+			} else {
+				accolades = accolades.filter((pin) => pin.observationId !== value.expectedObservationId);
+			}
+			return { kind: 'success', data: reviewAccoladeChangeResultSchema.parse({
+				action: value.action, key: value.key, submissionId,
+				definitionVersion: value.expectedDefinitionVersion,
+				observationId,
+				pinned: value.action === 'pin_accolade'
+			}), receipt: { id: id(45), operationName: 'review.accolade.change', operationVersion: 1 }, correlationId }; },
 		async saveEvaluationDraft(_value, key) { input.keys.push(key); input.actions.push('save_draft');
 			return { kind: 'success', data: reviewDraftSaveResultSchema.parse({ draft: { schemaVersion: 1, scope, assignmentId, version: 2,
 				scores: [{ criterionId, score: 4 }], comment: 'Notes', updatedByReviewerId: reviewerId,
@@ -148,6 +187,7 @@ describe('direct live Review page port', () => {
 					}]
 				}]
 			}],
+			accoladeDefinitions: [],
 			standings: {}
 		});
 		const [plan] = mapLiveReviewPlans(served.plans, Date.parse('2027-03-01T00:00:00Z'));
@@ -245,5 +285,44 @@ describe('direct live Review page port', () => {
 				phrase: 'Not enough reviews to rank.', slice: { label: 'Track' }, points: []
 			}
 		}]);
+	});
+
+	test('maps the retained accolade catalog and pins then unpins through one operation each', async () => {
+		const keys: string[] = []; const actions: string[] = [];
+		const definitions: ReviewAccoladeDefinitionProjection[] = [{
+			key: 'accolade.top_pick', version: 1, label: 'Top pick',
+			description: 'One of this reviewer’s strongest choices.', icon: 'star', cap: 3
+		}];
+		const page = createLiveReviewPagePort({
+			review: core({ committed: true, keys, actions, definitions }), vocabulary, schedule,
+			viewer: { kind: 'reviewer', reviewerId }, newAttemptKey: () => `accolade-${keys.length + 1}`
+		});
+		expect(await page.review.accoladeDefs()).toEqual([
+			{ key: 'top_pick', label: 'Top pick', cap: 3 }
+		]);
+		expect(await page.review.pinAccolade(submissionId, 'top_pick')).toEqual({ ok: true });
+		expect((await page.review.myQueue())[0]?.accolades).toEqual(['top_pick']);
+		expect(await page.review.unpinAccolade(submissionId, 'top_pick')).toEqual({ ok: true });
+		expect((await page.review.myQueue())[0]?.accolades).toBeUndefined();
+		expect(actions).toEqual(['pin_accolade', 'unpin_accolade']);
+		expect(keys).toEqual(['accolade-1', 'accolade-2']);
+	});
+
+	test('turns a canonical cap refusal into a named actionable sentence', async () => {
+		const definitions: ReviewAccoladeDefinitionProjection[] = [{
+			key: 'accolade.top_pick', version: 1, label: 'Top pick',
+			description: 'One of this reviewer’s strongest choices.', icon: 'star', cap: 3
+		}];
+		const page = createLiveReviewPagePort({
+			review: core({
+				committed: true, comparable: true, keys: [], actions: [], definitions,
+				capHolderSubmissionIds: [submissionId, id(14)]
+			}),
+			vocabulary, schedule, viewer: { kind: 'reviewer', reviewerId }
+		});
+		expect(await page.review.pinAccolade(submissionId, 'top_pick')).toEqual({
+			ok: false,
+			reason: 'Top pick is capped at 3 and already on “Talk” and “Second talk” — unpin one first.'
+		});
 	});
 });

@@ -76,6 +76,7 @@ function reviewCore(snapshot: Partial<ReviewSnapshotView> = {}): ReviewCorePort 
 		schemaVersion: 1,
 		viewer: { kind: 'organizer' },
 		plans: [],
+		accoladeDefinitions: [],
 		standings: {},
 		...snapshot
 	} as ReviewSnapshotView;
@@ -95,6 +96,9 @@ function reviewCore(snapshot: Partial<ReviewSnapshotView> = {}): ReviewCorePort 
 		},
 		async changeEvaluation() {
 			throw new Error('unexpected draft');
+		},
+		async changeAccolade() {
+			throw new Error('unexpected accolade change');
 		},
 		async saveEvaluationDraft() {
 			throw new Error('unexpected save');
@@ -740,5 +744,20 @@ describe('live tuned Decisions page port', () => {
 		expect(await port.speakers.profile('a@example.test')).toBeNull();
 		expect(await port.settings.get()).toBeNull();
 		expect(port.workspace.decisionAttentionExpectedSnapshot()).toBeNull();
+	});
+
+	test('maps the canonical accolade definitions used by decision-row labels', async () => {
+		const port = composePort({
+			review: reviewCore({
+				accoladeDefinitions: [{
+					key: 'accolade.hidden_gem', version: 1, label: 'Hidden gem',
+					description: 'An easy-to-miss submission worth attention.',
+					icon: 'gem', cap: 3
+				}]
+			})
+		});
+		expect(await port.review.accoladeDefs()).toEqual([
+			{ key: 'hidden_gem', label: 'Hidden gem', cap: 3 }
+		]);
 	});
 });

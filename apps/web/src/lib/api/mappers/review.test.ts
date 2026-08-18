@@ -44,6 +44,7 @@ function snapshot(): ReviewSnapshot {
 				awaitingReassignment: 0
 			}]
 		}],
+		accoladeDefinitions: [],
 		reviewerScope: [{ kind: 'track', id: id(11) }],
 		queue: [{
 			assignmentId: firstAssignmentId,

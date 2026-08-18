@@ -11,6 +11,8 @@ import {
 import { createSafeSchemaManifestRef, structuredOutcomeSchema, type StructuredOutcome, type VersionedDefinitionRef } from '@jooevents/contracts';
 import {
   REVIEW_OPERATION_SCHEMA_REFS, reviewDirectCanonicalResultSchema, reviewDirectOperationResultSchema,
+  reviewAccoladeChangeDraftInputSchema, reviewAccoladeChangePlanSchema,
+  reviewAccoladeChangeOperationResultSchema, reviewAccoladeChangeResultSchema,
   reviewEvaluationChangeDraftInputSchema, reviewMutationPlanSchema, reviewMutationResultSchema,
   reviewRoundChangeDraftInputSchema, reviewStepBackChangeDraftInputSchema,
   reviewVacancyChangeDraftInputSchema
@@ -28,14 +30,31 @@ export const REVIEW_ROUND_CHANGE_OPERATION = Object.freeze({ name: 'review.round
 export const REVIEW_ASSIGNMENT_STEP_BACK_OPERATION = Object.freeze({ name: 'review.assignment.step_back', version: 1 });
 export const REVIEW_ASSIGNMENT_VACANCY_CHANGE_OPERATION = Object.freeze({ name: 'review.assignment.vacancy.change', version: 1 });
 export const REVIEW_EVALUATION_CHANGE_OPERATION = Object.freeze({ name: 'review.evaluation.change', version: 1 });
+export const REVIEW_ACCOLADE_CHANGE_OPERATION = Object.freeze({ name: 'review.accolade.change', version: 1 });
 export const REVIEW_DIRECT_HANDLER_CAPABILITY = ref('capability.review.direct');
 export const REVIEW_DIRECT_REQUEST_HASH_PROFILE = ref('request-hash.review.direct');
 
 const nullSchema = z.null();
-const staleSchema = z.strictObject({ code: z.string().trim().min(1).max(80), action: z.enum(['open_round', 'discard_empty_round', 'step_back', 'assign_replacement', 'accept_coverage', 'commit_review', 'amend_review']), subjectId: z.string().trim().min(1).max(512) });
+const staleSchema = z.strictObject({
+  code: z.string().trim().min(1).max(80),
+  action: z.enum([
+    'open_round', 'discard_empty_round', 'step_back', 'assign_replacement',
+    'accept_coverage', 'commit_review', 'amend_review', 'pin_accolade', 'unpin_accolade'
+  ]),
+  subjectId: z.string().trim().min(1).max(512),
+  holderSubmissionIds: z.array(z.string().trim().min(1).max(512)).max(100).optional()
+});
 export const reviewDirectContributionSchema = z.union([
   z.strictObject({ result: z.strictObject({ kind: z.literal('success'), data: reviewMutationResultSchema }), domain: z.strictObject({ kind: z.literal('review_direct_change'), plan: reviewMutationPlanSchema }), effectContributions: z.tuple([]) }).superRefine((value, context) => {
     if (value.result.data.action !== value.domain.plan.action) context.addIssue({ code: 'custom', message: 'Review action mismatch.' });
+  }),
+  z.strictObject({
+    result: z.strictObject({ kind: z.literal('success'), data: reviewAccoladeChangeResultSchema }),
+    domain: z.strictObject({
+      kind: z.literal('review_accolade_change'),
+      plan: reviewAccoladeChangePlanSchema
+    }),
+    effectContributions: z.tuple([])
   }),
   z.strictObject({ result: z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema }), domain: z.null(), effectContributions: z.tuple([]) })
 ]);
@@ -45,9 +64,11 @@ const refs = {
   contribution: createSafeSchemaManifestRef('schema.review.direct.contribution', reviewDirectContributionSchema),
   canonical: createSafeSchemaManifestRef('schema.review.direct.canonical-result', reviewDirectCanonicalResultSchema),
   projected: REVIEW_OPERATION_SCHEMA_REFS.roundChange.resultSchema,
+  accoladeProjected: REVIEW_OPERATION_SCHEMA_REFS.accoladeChange.resultSchema,
   null: createSafeSchemaManifestRef('schema.review.direct.null-detail', nullSchema),
   stale: createSafeSchemaManifestRef('schema.review.direct.stale-detail', staleSchema),
   handler: ref('handler.review.direct'), projection: ref('projection.review.direct.operator'),
+  accoladeProjection: ref('projection.review.accolade-change.operator'),
   audit: ref('audit.review.direct'), auditProfile: ref('record-profile.review.direct-audit'),
   keySource: ref('idempotency.operator-header')
 };
@@ -56,8 +77,23 @@ const specs = Object.freeze([
   { key: 'round' as const, operation: REVIEW_ROUND_CHANGE_OPERATION, input: reviewRoundChangeDraftInputSchema, inputRef: REVIEW_OPERATION_SCHEMA_REFS.roundChange.inputSchema, path: '/api/events/current/review/rounds', policy: 'manage' as const, permissions: ['event.manage'] as readonly PermissionId[], actions: ['open_round', 'discard_empty_round'] as readonly ReviewDirectAction[] },
   { key: 'assignment' as const, operation: REVIEW_ASSIGNMENT_STEP_BACK_OPERATION, input: reviewStepBackChangeDraftInputSchema, inputRef: REVIEW_OPERATION_SCHEMA_REFS.stepBack.inputSchema, path: '/api/events/current/review/assignments/step-back', policy: 'stepBack' as const, permissions: ['submission.score'] as readonly PermissionId[], actions: ['step_back'] as readonly ReviewDirectAction[] },
   { key: 'vacancy' as const, operation: REVIEW_ASSIGNMENT_VACANCY_CHANGE_OPERATION, input: reviewVacancyChangeDraftInputSchema, inputRef: REVIEW_OPERATION_SCHEMA_REFS.vacancyChange.inputSchema, path: '/api/events/current/review/assignments/vacancy', policy: 'manage' as const, permissions: ['event.manage'] as readonly PermissionId[], actions: ['assign_replacement', 'accept_coverage'] as readonly ReviewDirectAction[] },
-  { key: 'evaluation' as const, operation: REVIEW_EVALUATION_CHANGE_OPERATION, input: reviewEvaluationChangeDraftInputSchema, inputRef: REVIEW_OPERATION_SCHEMA_REFS.evaluationChange.inputSchema, path: '/api/events/current/review/evaluations', policy: 'evaluate' as const, permissions: ['submission.comment', 'submission.score'] as readonly PermissionId[], actions: ['commit_review', 'amend_review'] as readonly ReviewDirectAction[] }
+  { key: 'evaluation' as const, operation: REVIEW_EVALUATION_CHANGE_OPERATION, input: reviewEvaluationChangeDraftInputSchema, inputRef: REVIEW_OPERATION_SCHEMA_REFS.evaluationChange.inputSchema, path: '/api/events/current/review/evaluations', policy: 'evaluate' as const, permissions: ['submission.comment', 'submission.score'] as readonly PermissionId[], actions: ['commit_review', 'amend_review'] as readonly ReviewDirectAction[] },
+  { key: 'accolade' as const, operation: REVIEW_ACCOLADE_CHANGE_OPERATION, input: reviewAccoladeChangeDraftInputSchema, inputRef: REVIEW_OPERATION_SCHEMA_REFS.accoladeChange.inputSchema, path: '/api/events/current/review/accolades', policy: 'evaluate' as const, permissions: ['submission.comment', 'submission.score'] as readonly PermissionId[], actions: ['pin_accolade', 'unpin_accolade'] as readonly ReviewDirectAction[] }
 ]);
+
+function agentActionFor(spec: (typeof specs)[number]) {
+  // Accolades are explicitly human-provenance reviewer judgment. Keeping the
+  // operation out of the approved action-run catalog prevents an agent step
+  // from being recorded dishonestly as a human mark.
+  return spec.key === 'accolade' ? {} : {
+    agentAction: {
+      eligible: true as const,
+      displayLabel: `Change review ${spec.key.replaceAll('_', ' ')}`,
+      consequences: ['Review workflow or evaluation state may change.'],
+      externalEffect: 'none' as const
+    }
+  };
+}
 
 export interface ReviewDirectCurrentEventSource { resolveCurrentEvent(workspaceId: WorkspaceId): { readonly eventId?: string; readonly evidenceIds: readonly string[] } | Promise<{ readonly eventId?: string; readonly evidenceIds: readonly string[] }> }
 export interface CreateReviewDirectOperationModuleInput {
@@ -96,12 +132,15 @@ export function createReviewDirectOperationModule(input: CreateReviewDirectOpera
     return { spec, local, lane, context, family, terminal, phase, autonomy, risk, evidence, approval, preflight };
   });
   const handler = createReviewDirectHandler({ reference: refs.handler, handlerCapability: REVIEW_DIRECT_HANDLER_CAPABILITY, contributionSchema: refs.contribution, canonicalResultSchema: refs.canonical, actionForOperation(name, version, businessInput) { const spec = specs.find((candidate) => candidate.operation.name === name && candidate.operation.version === version); if (!spec) return undefined; const action = (businessInput as { action?: unknown })?.action; return typeof action === 'string' && spec.actions.includes(action as ReviewDirectAction) ? action as ReviewDirectAction : undefined; } });
-  const history = Object.freeze({ open_round: 'Opened a review round', discard_empty_round: 'Discarded an empty review round', step_back: 'Stepped back a review assignment', assign_replacement: 'Assigned a replacement reviewer', accept_coverage: 'Accepted current review coverage', commit_review: 'Submitted a review', amend_review: 'Amended a review' });
+  const history = Object.freeze({ open_round: 'Opened a review round', discard_empty_round: 'Discarded an empty review round', step_back: 'Stepped back a review assignment', assign_replacement: 'Assigned a replacement reviewer', accept_coverage: 'Accepted current review coverage', commit_review: 'Submitted a review', amend_review: 'Amended a review', pin_accolade: 'Pinned a review accolade', unpin_accolade: 'Unpinned a review accolade' });
   return Object.freeze({ id: 'review.direct-operations', source: Object.freeze({
     contextBuilders: Object.freeze([]), readCapabilities: Object.freeze([]), handlers: Object.freeze([]), operations: Object.freeze([]),
     effectExecutionFamilies: Object.freeze(built.map((v) => v.family)), effectPhases: Object.freeze(built.map((v) => v.phase)), terminalizationResolvers: Object.freeze(built.map((v) => v.terminal)), riskResolvers: Object.freeze(built.map((v) => v.risk)), autonomyEvidenceResolvers: Object.freeze(built.map((v) => v.evidence)), renewedApprovalResolvers: Object.freeze(built.map((v) => v.approval)), autonomyPreflights: Object.freeze(built.map((v) => v.preflight)), autonomyPolicies: Object.freeze(built.map((v) => v.autonomy)),
-    schemas: Object.freeze([...specs.map((spec) => ({ reference: spec.inputRef, schema: spec.input })), { reference: refs.contribution, schema: reviewDirectContributionSchema }, { reference: refs.canonical, schema: reviewDirectCanonicalResultSchema }, { reference: refs.projected, schema: reviewDirectOperationResultSchema }, { reference: refs.null, schema: nullSchema }, { reference: refs.stale, schema: staleSchema }]),
-    effectContextBuilders: Object.freeze(built.map((v) => v.context)), effectHandlers: Object.freeze([handler]), projections: Object.freeze([{ reference: refs.projection, canonicalResultSchema: refs.canonical, projectedResultSchema: refs.projected, project: (candidate: unknown) => reviewDirectCanonicalResultSchema.parse(candidate) }]), operationAuditTargets: Object.freeze([{ reference: refs.audit, kind: 'operation_audit_record' as const, recordProfile: refs.auditProfile }]), operationAuditRecordProfiles: Object.freeze([{ reference: refs.auditProfile, kind: 'canonical_json' as const, maximumBytes: 65_536 }]),
-    effectOperations: Object.freeze(built.map(({ spec, local, lane }) => ({ ...spec.operation, lifecycle: { status: 'active' as const }, summary: `Change Review ${spec.key} state.`, effect: 'commit' as const, maxRisk: 'normal' as const, autonomyPolicy: local.autonomy, consequenceTags: ['review-changed'], agentAction: { eligible: true as const, displayLabel: `Change review ${spec.key.replaceAll('_', ' ')}`, consequences: ['Review workflow or evaluation state may change.'], externalEffect: 'none' as const }, inputSchema: spec.inputRef, contributionSchema: refs.contribution, canonicalResultSchema: refs.canonical, outcomes: [{ class: 'idempotency_conflict' as const, kind: 'operation.request_changed', retryable: false, detailSchema: refs.null }, ...access, { class: 'conflict' as const, kind: 'review.event_required', retryable: false, detailSchema: refs.null }, { class: 'conflict' as const, kind: 'review.viewer_required', retryable: false, detailSchema: refs.null }, { class: 'stale_revision' as const, kind: 'review.canonical_changed', retryable: false, detailSchema: refs.stale }, { class: 'conflict' as const, kind: 'operation.in_progress', retryable: true, detailSchema: refs.null }, ...autonomyInterventionOutcomeDeclarations(refs.null)], accessLanes: [lane], contextBuilder: local.context, handlerCapability: REVIEW_DIRECT_HANDLER_CAPABILITY, handler: refs.handler, audit: { mode: 'required' as const, target: refs.audit }, idempotency: { keySource: refs.keySource, credentialVerifierProfile: input.idempotencyCredentialProfile, requestHashProfile: REVIEW_DIRECT_REQUEST_HASH_PROFILE }, concurrency: local.concurrency, execution: { kind: 'single_unit_of_work' as const, profile: 'direct_audited' as const, family: local.family, phase: local.phase, terminalization: local.terminal, autonomyPreflight: local.preflight, history: { summariesByAction: history } }, bindings: [{ surface: 'operator_http' as const, method: 'POST' as const, path: spec.path, input: 'body' as const, browserResumption: { kind: 'none' as const }, projection: refs.projection }] })))
+    schemas: Object.freeze([...specs.map((spec) => ({ reference: spec.inputRef, schema: spec.input })), { reference: refs.contribution, schema: reviewDirectContributionSchema }, { reference: refs.canonical, schema: reviewDirectCanonicalResultSchema }, { reference: refs.projected, schema: reviewDirectOperationResultSchema }, { reference: refs.accoladeProjected, schema: reviewAccoladeChangeOperationResultSchema }, { reference: refs.null, schema: nullSchema }, { reference: refs.stale, schema: staleSchema }]),
+    effectContextBuilders: Object.freeze(built.map((v) => v.context)), effectHandlers: Object.freeze([handler]), projections: Object.freeze([
+      { reference: refs.projection, canonicalResultSchema: refs.canonical, projectedResultSchema: refs.projected, project: (candidate: unknown) => reviewDirectCanonicalResultSchema.parse(candidate) },
+      { reference: refs.accoladeProjection, canonicalResultSchema: refs.canonical, projectedResultSchema: refs.accoladeProjected, project: (candidate: unknown) => reviewDirectCanonicalResultSchema.parse(candidate) }
+    ]), operationAuditTargets: Object.freeze([{ reference: refs.audit, kind: 'operation_audit_record' as const, recordProfile: refs.auditProfile }]), operationAuditRecordProfiles: Object.freeze([{ reference: refs.auditProfile, kind: 'canonical_json' as const, maximumBytes: 65_536 }]),
+    effectOperations: Object.freeze(built.map(({ spec, local, lane }) => ({ ...spec.operation, lifecycle: { status: 'active' as const }, summary: `Change Review ${spec.key} state.`, effect: 'commit' as const, maxRisk: 'normal' as const, autonomyPolicy: local.autonomy, consequenceTags: ['review-changed'], ...agentActionFor(spec), inputSchema: spec.inputRef, contributionSchema: refs.contribution, canonicalResultSchema: refs.canonical, outcomes: [{ class: 'idempotency_conflict' as const, kind: 'operation.request_changed', retryable: false, detailSchema: refs.null }, ...access, { class: 'conflict' as const, kind: 'review.event_required', retryable: false, detailSchema: refs.null }, { class: 'conflict' as const, kind: 'review.viewer_required', retryable: false, detailSchema: refs.null }, { class: 'stale_revision' as const, kind: 'review.canonical_changed', retryable: false, detailSchema: refs.stale }, ...(spec.key === 'accolade' ? [{ class: 'stale_revision' as const, kind: 'review.accolade_changed', retryable: false, detailSchema: refs.stale }, { class: 'policy_violation' as const, kind: 'review.accolade_cap_exceeded', retryable: false, detailSchema: refs.stale }] : []), { class: 'conflict' as const, kind: 'operation.in_progress', retryable: true, detailSchema: refs.null }, ...autonomyInterventionOutcomeDeclarations(refs.null)], accessLanes: [lane], contextBuilder: local.context, handlerCapability: REVIEW_DIRECT_HANDLER_CAPABILITY, handler: refs.handler, audit: { mode: 'required' as const, target: refs.audit }, idempotency: { keySource: refs.keySource, credentialVerifierProfile: input.idempotencyCredentialProfile, requestHashProfile: REVIEW_DIRECT_REQUEST_HASH_PROFILE }, concurrency: local.concurrency, execution: { kind: 'single_unit_of_work' as const, profile: 'direct_audited' as const, family: local.family, phase: local.phase, terminalization: local.terminal, autonomyPreflight: local.preflight, history: { summariesByAction: history } }, bindings: [{ surface: 'operator_http' as const, method: 'POST' as const, path: spec.path, input: 'body' as const, browserResumption: { kind: 'none' as const }, projection: spec.key === 'accolade' ? refs.accoladeProjection : refs.projection }] })))
   }) });
 }

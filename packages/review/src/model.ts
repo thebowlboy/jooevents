@@ -25,6 +25,11 @@ import {
   type ReviewScopeDto,
   type ReviewVacancyResolutionDto
 } from '@jooevents/contracts/reviews';
+import type {
+  SignalDefinitionDto,
+  SignalObservationDto,
+  SignalScopeDto
+} from '@jooevents/contracts/signals';
 
 export interface ReviewQueryGuard {
   readonly id: string;
@@ -65,6 +70,17 @@ export interface ReviewCandidateDisplaySource {
     readonly reviewerId: string;
     readonly includeSpeakerIdentity: boolean;
   }): ReviewCandidateDisplayDto | undefined;
+}
+
+/** Generic Signal read seam narrowed to the human accolade projection Review needs. */
+export interface ReviewAccoladeSource {
+  listDefinitions(scope: SignalScopeDto): readonly SignalDefinitionDto[];
+  listCurrentHumanFlags(input: {
+    readonly scope: SignalScopeDto;
+    readonly definitionKey?: string;
+    readonly actorReviewerId: string;
+    readonly reviewPlanId?: string;
+  }): readonly SignalObservationDto[];
 }
 
 export interface ReviewRepository {

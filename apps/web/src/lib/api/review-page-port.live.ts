@@ -1,4 +1,5 @@
 import type { StructuredOutcome } from '@jooevents/contracts';
+import { accoladePortKey, accoladeWireKey, composeCapRefusal } from './accolades';
 import type { SafeApiError } from './client';
 import type { OperatorHttpBindingUnavailableReason } from './operations/operator-http-binding';
 import type { ProgramVocabularySettingsPort } from './program-vocabulary-settings-adapter';
@@ -27,12 +28,10 @@ import type { ProgramFormatView, ProgramTrackView } from './view-models/program-
  * The tuned page capabilities this deliberately partial live mount cannot
  * truthfully serve yet, each refused with its own name so a failure states
  * exactly which owner has not joined. The recorded Review core boundary
- * (review-core-port.ts) deliberately carries no profile, reminder, accolade,
- * or comparison capability; everything below stays refused until its own
- * canonical owner exists.
+ * (review-core-port.ts) carries the canonical Review reads and writes. Only
+ * capabilities without a mounted owner remain refused below.
  */
 export type ReviewPageLiveUnmountedCapability =
-	| 'review_accolade_change'
 	| 'reviewer_scope'
 	| 'reviewer_reminders';
 
@@ -50,8 +49,6 @@ export class ReviewPageLiveError extends Error {
 }
 
 const UNMOUNTED_COPY: Readonly<Record<ReviewPageLiveUnmountedCapability, string>> = Object.freeze({
-	review_accolade_change:
-		'Accolades are not available in this live workspace yet.',
 	reviewer_scope:
 		'This reviewer scope is not available in this live workspace.',
 	reviewer_reminders:
@@ -60,10 +57,6 @@ const UNMOUNTED_COPY: Readonly<Record<ReviewPageLiveUnmountedCapability, string>
 
 function unmounted(capability: ReviewPageLiveUnmountedCapability): ReviewPageLiveError {
 	return new ReviewPageLiveError({ code: capability, reason: UNMOUNTED_COPY[capability] });
-}
-
-function refusal(capability: ReviewPageLiveUnmountedCapability): MutationOutcome {
-	return { ok: false, reason: UNMOUNTED_COPY[capability] };
 }
 
 function outcomeCopy(
@@ -231,9 +224,10 @@ function myReviewItem(item: NonNullable<ReviewSnapshotView['queue']>[number]): M
 						postUnlock: revision.postUnlock
 					}))
 				}
-			: {})
-		// `accolades` stays absent: no canonical accolade owner exists, so no
-		// pinned marks exist to report.
+			: {}),
+		...(item.accolades === undefined || item.accolades.length === 0
+			? {}
+			: { accolades: item.accolades.map((pin) => accoladePortKey(pin.key)) })
 	};
 }
 
@@ -673,15 +667,69 @@ export function createLiveReviewPagePort(input: {
 					}))
 					.sort((left, right) => (right.item.myScore ?? 0) - (left.item.myScore ?? 0));
 			},
-			/** No accolade owner exists canonically, so no defs exist to offer. */
 			async accoladeDefs() {
-				return [];
+				const snapshot = await readSnapshot();
+				return snapshot.accoladeDefinitions.map((definition) => ({
+					key: accoladePortKey(definition.key),
+					label: definition.label,
+					...(definition.cap === undefined ? {} : { cap: definition.cap })
+				}));
 			},
-			async pinAccolade(): Promise<MutationOutcome> {
-				return refusal('review_accolade_change');
+			async pinAccolade(submissionId, key): Promise<MutationOutcome> {
+				return asOutcome(async () => {
+					const snapshot = await readSnapshot();
+					const item = queueItem(snapshot, submissionId);
+					const wireKey = accoladeWireKey(key);
+					const definition = snapshot.accoladeDefinitions.find((entry) => entry.key === wireKey);
+					if (!definition) return { ok: false, reason: 'This accolade is not available.' };
+					const changed = await input.review.changeAccolade({
+						action: 'pin_accolade',
+						assignmentId: item.assignmentId,
+						expectedAssignmentVersion: item.assignmentVersion,
+						key: wireKey,
+						expectedDefinitionVersion: definition.version
+					}, newAttemptKey());
+					if (changed.kind === 'success') return { ok: true };
+					if (changed.kind === 'outcome'
+						&& changed.outcome.kind === 'review.accolade_cap_exceeded') {
+						const detail = changed.outcome.detail as { holderSubmissionIds?: unknown } | null;
+						const holders = Array.isArray(detail?.holderSubmissionIds)
+							? detail.holderSubmissionIds.filter((id): id is string => typeof id === 'string')
+							: [];
+						const titles = holders.map((id) => snapshot.queue?.find((row) => row.submissionId === id)
+							?.candidate.title ?? 'another submission');
+						return {
+							ok: false,
+							reason: composeCapRefusal({
+								key,
+								label: definition.label,
+								...(definition.cap === undefined ? {} : { cap: definition.cap })
+							}, titles)
+						};
+					}
+					return { ok: false, reason: effectFailure(changed, 'review accolade').reason };
+				});
 			},
-			async unpinAccolade(): Promise<MutationOutcome> {
-				return refusal('review_accolade_change');
+			async unpinAccolade(submissionId, key): Promise<MutationOutcome> {
+				return asOutcome(async () => {
+					const snapshot = await readSnapshot();
+					const item = queueItem(snapshot, submissionId);
+					const wireKey = accoladeWireKey(key);
+					const definition = snapshot.accoladeDefinitions.find((entry) => entry.key === wireKey);
+					const pin = item.accolades?.find((entry) => entry.key === wireKey);
+					if (!definition || !pin) return { ok: false, reason: 'This accolade is no longer pinned.' };
+					const changed = await input.review.changeAccolade({
+						action: 'unpin_accolade',
+						assignmentId: item.assignmentId,
+						expectedAssignmentVersion: item.assignmentVersion,
+						key: wireKey,
+						expectedDefinitionVersion: definition.version,
+						expectedObservationId: pin.observationId
+					}, newAttemptKey());
+					return changed.kind === 'success'
+						? { ok: true }
+						: { ok: false, reason: effectFailure(changed, 'review accolade').reason };
+				});
 			},
 			/**
 			 * The snapshot serves only the viewer's own scope; any other subject's

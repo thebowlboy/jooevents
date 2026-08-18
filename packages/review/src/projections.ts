@@ -1,10 +1,12 @@
 import {
   reviewPlanProjectionSchema,
+  reviewAccoladeDefinitionProjectionSchema,
   reviewQueueItemProjectionSchema,
   reviewRoundSetupProjectionSchema,
   reviewSnapshotSchema,
   reviewStandingSchema,
   type ReviewCandidateSnapshotDto,
+  type ReviewAccoladeDefinitionProjection,
   type ReviewPlanProjection,
   type ReviewQueueItemProjection,
   type ReviewRevisionDto,
@@ -30,6 +32,7 @@ import {
   parseReviewScope,
   type ReviewPlanningSource,
   type ReviewCandidateDisplaySource,
+  type ReviewAccoladeSource,
   type ReviewRepository
 } from './model';
 
@@ -41,6 +44,41 @@ export interface ReviewProjectionEnvironment {
   readonly repository: ReviewRepository;
   readonly sources: ReviewPlanningSource;
   readonly candidateDisplay: ReviewCandidateDisplaySource;
+  readonly accolades: ReviewAccoladeSource;
+}
+
+const REVIEW_ACCOLADE_KEYS = Object.freeze(new Set([
+  'accolade.top_pick', 'accolade.hidden_gem',
+  'accolade.crowd_draw', 'accolade.bold_bet'
+]));
+
+export function projectReviewAccoladeDefinitions(input: {
+  readonly scope: ReviewScopeDto;
+  readonly accolades: ReviewAccoladeSource;
+}): readonly ReviewAccoladeDefinitionProjection[] {
+  const scope = parseReviewScope(input.scope);
+  return Object.freeze(input.accolades.listDefinitions(scope)
+    .filter((definition) =>
+      REVIEW_ACCOLADE_KEYS.has(definition.key)
+      && definition.status === 'active'
+      && definition.shown
+      && definition.family === 'quality'
+      && definition.valueKind === 'flag'
+      && definition.visibility === 'reviewer'
+      && definition.subjects.includes('submission')
+      && definition.allowedProvenance.includes('human')
+    )
+    .sort((left, right) => left.position - right.position || compareText(left.key, right.key))
+    .map((definition) => reviewAccoladeDefinitionProjectionSchema.parse({
+      key: definition.key,
+      version: definition.version,
+      label: definition.label,
+      description: definition.description,
+      icon: definition.display.icon,
+      ...(definition.writeCaps?.perActorPerPlan === undefined
+        ? {}
+        : { cap: definition.writeCaps.perActorPerPlan })
+    })));
 }
 
 export function projectReviewRoundSetup(input: {
@@ -201,6 +239,11 @@ export function projectReviewerQueue(input: {
   const rows: ReviewQueueItemProjection[] = [];
   for (const round of openRounds) {
     const assignments = input.environment.repository.listAssignments(scope, round.id);
+    const accoladePins = input.environment.accolades.listCurrentHumanFlags({
+      scope,
+      actorReviewerId: input.reviewerId,
+      reviewPlanId: round.id
+    });
     for (const assignment of assignments) {
       if (assignment.reviewerId !== input.reviewerId || assignment.state !== 'assigned') continue;
       const draft = input.environment.repository.readDraft(scope, assignment.id);
@@ -240,6 +283,17 @@ export function projectReviewerQueue(input: {
         ? revisions.find((revision) => revision.id === head.currentRevisionId)
         : undefined;
       if (head && !current) throw new TypeError('review_projection_current_revision_missing');
+      const ownAccolades = accoladePins.filter((observation) =>
+        REVIEW_ACCOLADE_KEYS.has(observation.definitionKey)
+        &&
+        observation.subject.kind === 'submission'
+        && observation.subject.id === assignment.submissionId
+        && observation.provenance.kind === 'human'
+        && observation.value === true
+      );
+      if (ownAccolades.length > 0 && head === undefined) {
+        throw new TypeError('review_projection_accolade_without_review');
+      }
       const peerScores = peerContentUnlocked(round, head !== undefined)
         ? currentScoresForSubmission({
             scope,
@@ -265,7 +319,14 @@ export function projectReviewerQueue(input: {
         committed: head !== undefined,
         ...(current === undefined ? {} : { current: projectRevision(current) }),
         revisions: revisions.map(projectRevision),
-        ...(peerScores === undefined ? {} : { peerScores })
+        ...(peerScores === undefined ? {} : { peerScores }),
+        ...(ownAccolades.length === 0 ? {} : {
+          accolades: ownAccolades.map((observation) => ({
+            key: observation.definitionKey,
+            definitionVersion: observation.definitionVersion,
+            observationId: observation.id
+          }))
+        })
       }));
     }
   }
@@ -359,6 +420,7 @@ export function projectReviewSnapshot(input: {
     schemaVersion: 1,
     viewer: input.viewer,
     plans,
+    accoladeDefinitions: projectReviewAccoladeDefinitions({ scope, accolades: input.environment.accolades }),
     ...(input.viewer.kind === 'organizer' && !catalog.rounds.some((round) => round.state === 'open')
       ? { roundSetup: projectReviewRoundSetup({ scope, sources: input.environment.sources }) }
       : {}),

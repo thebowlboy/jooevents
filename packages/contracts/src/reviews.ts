@@ -1,6 +1,7 @@
 import { isApplicationId, parseInstant } from '@jooevents/kernel';
 import { z } from 'zod';
 import { deadlineMutationPlanSchema, deadlineSafeDiffSchema } from './deadlines';
+import { signalHumanFlagPlanSchema } from './signals';
 import {
   createEffectfulOperationResultSchema,
   createOperationSchemaManifestRefs,
@@ -212,6 +213,30 @@ export const reviewVacancyResolutionSchema = z.discriminatedUnion('kind', [
   }),
   z.strictObject({ ...vacancyResolutionCommon, kind: z.literal('coverage_accepted') })
 ]);
+
+export const reviewAccoladeKeySchema = z.enum([
+  'accolade.top_pick',
+  'accolade.hidden_gem',
+  'accolade.crowd_draw',
+  'accolade.bold_bet'
+]);
+
+/** Least-disclosure definition data taught on the reviewer surface. */
+export const reviewAccoladeDefinitionProjectionSchema = z.strictObject({
+  key: reviewAccoladeKeySchema,
+  version: reviewVersionSchema,
+  label: z.string().trim().min(1).max(120),
+  description: z.string().trim().min(1).max(500),
+  icon: z.enum(['star', 'gem', 'flame', 'zap']),
+  cap: z.number().int().positive().safe().optional()
+});
+
+/** Current human observation reference; its value is always the flag `true`. */
+export const reviewAccoladePinProjectionSchema = z.strictObject({
+  key: reviewAccoladeKeySchema,
+  definitionVersion: reviewVersionSchema,
+  observationId: reviewIdSchema
+});
 
 export const reviewDraftSchema = z.strictObject({
   schemaVersion: z.literal(1),
@@ -500,7 +525,8 @@ export const reviewQueueItemProjectionSchema = z.strictObject({
   draft: z.strictObject({ version: reviewVersionSchema, score: z.number().min(1).max(5), comment: z.string().max(20_000) }).optional(),
   committed: z.boolean(), current: reviewRevisionProjectionSchema.optional(),
   revisions: z.array(reviewRevisionProjectionSchema),
-  peerScores: z.array(z.number().min(1).max(5)).optional()
+  peerScores: z.array(z.number().min(1).max(5)).optional(),
+  accolades: z.array(reviewAccoladePinProjectionSchema).max(100).optional()
 }).superRefine((item, context) => {
   if (item.submissionId !== item.candidate.submissionId) {
     context.addIssue({
@@ -539,6 +565,7 @@ export const reviewSnapshotSchema = z.strictObject({
     z.strictObject({ kind: z.literal('reviewer'), reviewerId: reviewIdSchema })
   ]),
   plans: z.array(reviewPlanProjectionSchema),
+  accoladeDefinitions: z.array(reviewAccoladeDefinitionProjectionSchema).max(100),
   roundSetup: reviewRoundSetupProjectionSchema.optional(),
   reviewerScope: z.array(reviewScopeRefSchema).optional(),
   queue: z.array(reviewQueueItemProjectionSchema).optional(),
@@ -605,6 +632,52 @@ export const reviewVacancyChangeDraftInputSchema = z.discriminatedUnion('action'
   reviewAcceptCoverageChangeDraftInputSchema
 ]);
 
+export const reviewPinAccoladeChangeDraftInputSchema = z.strictObject({
+  action: z.literal('pin_accolade'),
+  assignmentId: reviewIdSchema,
+  expectedAssignmentVersion: reviewVersionSchema,
+  key: reviewAccoladeKeySchema,
+  expectedDefinitionVersion: reviewVersionSchema
+});
+export const reviewUnpinAccoladeChangeDraftInputSchema = z.strictObject({
+  action: z.literal('unpin_accolade'),
+  assignmentId: reviewIdSchema,
+  expectedAssignmentVersion: reviewVersionSchema,
+  key: reviewAccoladeKeySchema,
+  expectedDefinitionVersion: reviewVersionSchema,
+  expectedObservationId: reviewIdSchema
+});
+export const reviewAccoladeChangeDraftInputSchema = z.discriminatedUnion('action', [
+  reviewPinAccoladeChangeDraftInputSchema,
+  reviewUnpinAccoladeChangeDraftInputSchema
+]);
+
+export const reviewAccoladeChangePlanSchema = z.strictObject({
+  action: z.enum(['pin_accolade', 'unpin_accolade']),
+  assignment: reviewAssignmentSchema,
+  signal: signalHumanFlagPlanSchema
+}).superRefine((plan, context) => {
+  if ((plan.action === 'pin_accolade') !== (plan.signal.action === 'record_human_flag')
+      || plan.assignment.submissionId !== plan.signal.input.subjectId
+      || plan.assignment.roundId !== plan.signal.input.reviewPlanId
+      || plan.assignment.reviewerId !== plan.signal.input.actorReviewerId) {
+    context.addIssue({ code: 'custom', message: 'Review accolade plan is incoherent.' });
+  }
+});
+
+export const reviewAccoladeChangeResultSchema = z.strictObject({
+  action: z.enum(['pin_accolade', 'unpin_accolade']),
+  key: reviewAccoladeKeySchema,
+  submissionId: reviewIdSchema,
+  definitionVersion: reviewVersionSchema,
+  observationId: reviewIdSchema,
+  pinned: z.boolean()
+}).superRefine((result, context) => {
+  if ((result.action === 'pin_accolade') !== result.pinned) {
+    context.addIssue({ code: 'custom', message: 'Review accolade result state is incoherent.' });
+  }
+});
+
 export const reviewDraftSaveInputSchema = z.strictObject({
   assignmentId: reviewIdSchema,
   expectedDraftVersion: reviewVersionSchema.nullable(),
@@ -621,11 +694,16 @@ export const reviewDraftSaveCanonicalResultSchema = z.discriminatedUnion('kind',
 export const reviewSnapshotReadResultSchema = createReadOperationResultSchema(reviewSnapshotSchema);
 export const reviewRoundSetupReadResultSchema = createReadOperationResultSchema(reviewRoundSetupProjectionSchema);
 export const reviewDirectCanonicalResultSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('success'), data: reviewMutationResultSchema }),
+  z.strictObject({
+    kind: z.literal('success'),
+    data: z.union([reviewMutationResultSchema, reviewAccoladeChangeResultSchema])
+  }),
   z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
 ]);
 export const reviewDirectOperationResultSchema =
   createEffectfulOperationResultSchema(reviewMutationResultSchema);
+export const reviewAccoladeChangeOperationResultSchema =
+  createEffectfulOperationResultSchema(reviewAccoladeChangeResultSchema);
 export const reviewDraftSaveOperationResultSchema = createEffectfulOperationResultSchema(reviewDraftSaveResultSchema);
 
 export const REVIEW_OPERATION_SCHEMA_REFS = Object.freeze({
@@ -670,6 +748,12 @@ export const REVIEW_OPERATION_SCHEMA_REFS = Object.freeze({
     inputSchema: reviewEvaluationChangeDraftInputSchema,
     resultKey: 'schema.review.direct.operator-result',
     resultSchema: reviewDirectOperationResultSchema
+  }),
+  accoladeChange: createOperationSchemaManifestRefs({
+    inputKey: 'schema.review.accolade-change.input',
+    inputSchema: reviewAccoladeChangeDraftInputSchema,
+    resultKey: 'schema.review.accolade-change.operator-result',
+    resultSchema: reviewAccoladeChangeOperationResultSchema
   })
 });
 
@@ -686,6 +770,9 @@ export type ReviewCandidateDisplayDto = z.infer<typeof reviewCandidateDisplaySch
 export type ReviewRosterMemberSnapshotDto = z.infer<typeof reviewRosterMemberSnapshotSchema>;
 export type ReviewAssignmentDto = z.infer<typeof reviewAssignmentSchema>;
 export type ReviewVacancyResolutionDto = z.infer<typeof reviewVacancyResolutionSchema>;
+export type ReviewAccoladeKeyDto = z.infer<typeof reviewAccoladeKeySchema>;
+export type ReviewAccoladeDefinitionProjection = z.infer<typeof reviewAccoladeDefinitionProjectionSchema>;
+export type ReviewAccoladePinProjection = z.infer<typeof reviewAccoladePinProjectionSchema>;
 export type ReviewDraftDto = z.infer<typeof reviewDraftSchema>;
 export type ReviewRevisionDto = z.infer<typeof reviewRevisionSchema>;
 export type ReviewHeadDto = z.infer<typeof reviewHeadSchema>;
@@ -700,6 +787,9 @@ export type ReviewQueueItemProjection = z.infer<typeof reviewQueueItemProjection
 export type ReviewStanding = z.infer<typeof reviewStandingSchema>;
 export type ReviewSnapshot = z.infer<typeof reviewSnapshotSchema>;
 export type ReviewChangeDraftInput = z.infer<typeof reviewChangeDraftInputSchema>;
+export type ReviewAccoladeChangeDraftInput = z.infer<typeof reviewAccoladeChangeDraftInputSchema>;
+export type ReviewAccoladeChangePlanDto = z.infer<typeof reviewAccoladeChangePlanSchema>;
+export type ReviewAccoladeChangeResult = z.infer<typeof reviewAccoladeChangeResultSchema>;
 export type ReviewDraftSaveInput = z.infer<typeof reviewDraftSaveInputSchema>;
 export type ReviewDraftSaveResult = z.infer<typeof reviewDraftSaveResultSchema>;
 

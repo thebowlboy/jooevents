@@ -68,6 +68,7 @@ import {
   projectReviewRoundSetup,
   projectReviewSnapshot,
   type ReviewCandidateDisplaySource,
+  type ReviewAccoladeSource,
   type ReviewPlanningSource,
   type ReviewProjectionViewer,
   type ReviewRepository
@@ -278,6 +279,7 @@ export interface CreateReviewOperationModuleInput {
   readonly repository: ReviewRepository;
   readonly sources: ReviewPlanningSource;
   readonly candidateDisplay: ReviewCandidateDisplaySource;
+  readonly accolades: ReviewAccoladeSource;
   readonly clock: Clock;
   readonly ids: { newInvocationId(): InvocationId };
   readonly authorityPrincipalKeyProfile: VersionedKeyProfileRef;
@@ -306,7 +308,8 @@ export function createReviewOperationModule(
   const environment = {
     repository: input.repository,
     sources: input.sources,
-    candidateDisplay: input.candidateDisplay
+    candidateDisplay: input.candidateDisplay,
+    accolades: input.accolades
   };
 
   const snapshotRefs = operationRefs('review.snapshot-read');

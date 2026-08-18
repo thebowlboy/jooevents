@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { safeOperationManifestSchema, type OperationEffect, type SafeOperationManifestEntry } from '@jooevents/contracts';
 import { REVIEW_OPERATION_SCHEMA_REFS, reviewDirectOperationResultSchema,
-	reviewDraftSaveOperationResultSchema } from '@jooevents/contracts/reviews';
+	reviewAccoladeChangeOperationResultSchema, reviewDraftSaveOperationResultSchema } from '@jooevents/contracts/reviews';
 import { createReviewLivePort, REVIEW_LIVE_OPERATIONS, type ReviewRequester } from './review-live';
 
 const id = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
@@ -13,6 +13,7 @@ const refs = Object.freeze({ snapshot: REVIEW_OPERATION_SCHEMA_REFS.snapshotRead
 	round_setup: REVIEW_OPERATION_SCHEMA_REFS.roundSetupRead, round_change: REVIEW_OPERATION_SCHEMA_REFS.roundChange,
 	step_back: REVIEW_OPERATION_SCHEMA_REFS.stepBack, vacancy_change: REVIEW_OPERATION_SCHEMA_REFS.vacancyChange,
 	evaluation_change: REVIEW_OPERATION_SCHEMA_REFS.evaluationChange,
+	accolade_change: REVIEW_OPERATION_SCHEMA_REFS.accoladeChange,
 	evaluation_draft_save: REVIEW_OPERATION_SCHEMA_REFS.draftSave });
 type Key = keyof typeof REVIEW_LIVE_OPERATIONS;
 function entry(key: Key): SafeOperationManifestEntry {
@@ -123,6 +124,38 @@ describe('Review direct live port', () => {
 			scores: [{ criterionId: id(5), score: 4 }], comment: 'Notes' }, 'review-save-key'))
 			.toMatchObject({ kind: 'success', receipt: { operationName: 'review.evaluation.draft.save' } });
 		expect(calls).toHaveLength(1);
+	});
+
+	test('sends pin and unpin to the exact accolade binding with the caller key unchanged', async () => {
+		const calls: { path: string; idempotencyKey?: string; body?: unknown }[] = [];
+		const port = createReviewLivePort({ manifest: manifest(), request: async (input) => {
+			calls.push(input);
+			const body = input.body as { action: 'pin_accolade' | 'unpin_accolade';
+				key: 'accolade.top_pick'; expectedDefinitionVersion: number;
+				expectedObservationId?: string };
+			return { kind: 'success', data: reviewAccoladeChangeOperationResultSchema.parse({
+				kind: 'success', correlationId,
+				receipt: { id: id(60), operationName: 'review.accolade.change', operationVersion: 1 },
+				data: {
+					action: body.action, key: body.key, submissionId: id(21),
+					definitionVersion: body.expectedDefinitionVersion,
+					observationId: body.action === 'pin_accolade' ? id(61) : body.expectedObservationId,
+					pinned: body.action === 'pin_accolade'
+				}
+			}) };
+		} });
+		expect(await port.changeAccolade({
+			action: 'pin_accolade', assignmentId: id(20), expectedAssignmentVersion: 2,
+			key: 'accolade.top_pick', expectedDefinitionVersion: 1
+		}, 'review-pin-key')).toMatchObject({ kind: 'success', data: { pinned: true } });
+		expect(await port.changeAccolade({
+			action: 'unpin_accolade', assignmentId: id(20), expectedAssignmentVersion: 2,
+			key: 'accolade.top_pick', expectedDefinitionVersion: 1, expectedObservationId: id(61)
+		}, 'review-unpin-key')).toMatchObject({ kind: 'success', data: { pinned: false } });
+		expect(calls.map(({ path, idempotencyKey }) => ({ path, idempotencyKey }))).toEqual([
+			{ path: '/api/events/current/review/accolades', idempotencyKey: 'review-pin-key' },
+			{ path: '/api/events/current/review/accolades', idempotencyKey: 'review-unpin-key' }
+		]);
 	});
 
 	test('fails malformed and action-mismatched direct results closed', async () => {

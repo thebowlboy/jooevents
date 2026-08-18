@@ -144,9 +144,9 @@ describe('retained SQLite backup and restore rehearsal', () => {
       formatVersion: 1,
       databaseId: source.databaseId,
       databaseClass: 'retained_development',
-      migrationId: 'e2_0010_review_vacancy_resolutions',
+      migrationId: 'e2_0011_signal_accolades',
       schemaEpoch: 2,
-      sequence: 10
+      sequence: 11
     });
     expect(backup.bytes).toBeGreaterThan(0);
     expect(backup.sha256).toMatch(/^[0-9a-f]{64}$/);

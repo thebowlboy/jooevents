@@ -250,6 +250,9 @@ function reviewCore(snapshot: Partial<ReviewSnapshotView> = {}): ReviewCorePort 
 		async changeEvaluation() {
 			throw new Error('unexpected draft');
 		},
+		async changeAccolade() {
+			throw new Error('unexpected accolade change');
+		},
 		async saveEvaluationDraft() {
 			throw new Error('unexpected save');
 		}

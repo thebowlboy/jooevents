@@ -29,6 +29,7 @@ import type {
   ReviewCandidateSet,
   ReviewCandidateDisplaySource,
   ReviewPlanningSource,
+  ReviewAccoladeSource,
   ReviewRosterSet,
   ReviewTransactionRepository
 } from './model';
@@ -73,6 +74,10 @@ const reviewers: readonly ReviewRosterMemberSnapshotDto[] = Object.freeze([
   { reviewerId: reviewerInvited, version: 1, status: 'invited', scope: [] }
 ]);
 const deadlineDate = '2026-08-30';
+const noAccolades = Object.freeze({
+  listDefinitions: () => [],
+  listCurrentHumanFlags: () => []
+});
 
 /** In-memory Deadline collaborator: an empty catalog plus a stable event time basis. */
 class MemoryDeadlineCollaborator implements DeadlineRepository, DeadlineEventTimeSource {
@@ -331,7 +336,7 @@ describe('review core', () => {
     const locked = projectReviewSnapshot({
       scope, viewer: { kind: 'reviewer', reviewerId: reviewerTrack },
       standingSubmissionIds: [candidateA],
-      environment: { repository: store, sources: store, candidateDisplay: store }
+      environment: { repository: store, sources: store, candidateDisplay: store, accolades: noAccolades }
     });
     expect(locked.queue?.find((item) => item.assignmentId === track.id)?.peerScores).toBeUndefined();
     expect(locked.queue?.find((item) => item.assignmentId === track.id)?.candidate.speakers)
@@ -363,7 +368,7 @@ describe('review core', () => {
     const unlocked = projectReviewSnapshot({
       scope, viewer: { kind: 'reviewer', reviewerId: reviewerTrack },
       standingSubmissionIds: [candidateA],
-      environment: { repository: store, sources: store, candidateDisplay: store }
+      environment: { repository: store, sources: store, candidateDisplay: store, accolades: noAccolades }
     });
     expect(unlocked.queue?.find((item) => item.assignmentId === track.id)?.peerScores).toEqual([4.6]);
     expect(unlocked.queue?.find((item) => item.assignmentId === track.id)?.draft).toBeUndefined();
@@ -392,6 +397,83 @@ describe('review core', () => {
     expect(store.revisions.get(id(201))).toBeDefined();
   });
 
+  test('projects only supported accolade definitions and the reviewer own committed pins', () => {
+    const store = new MemoryReviewStore();
+    openRound(store);
+    const assignment = assignmentFor(store, reviewerGeneralist, candidateA);
+    const draft = saveDraft(store, assignment, reviewerGeneralist, 5, 4, 2);
+    const commit = planReviewMutation({
+      action: 'commit_review', scope, assignmentId: assignment.id,
+      expectedAssignmentVersion: assignment.version,
+      expectedDraftVersion: draft.version,
+      revisionId: id(210), reviewerId: reviewerGeneralist,
+      attributedByUserId: actorUserId, attributedAt: at(3)
+    }, { repository: store, sources: store });
+    applyReviewMutationPlan({ plan: commit, transaction: store, sources: store });
+    const baseDefinition = {
+      schemaVersion: 1 as const,
+      workspaceId: scope.workspaceId,
+      eventId: scope.eventId,
+      version: 1,
+      shortLabel: 'Top',
+      description: 'One of this reviewer’s strongest choices.',
+      subjects: ['submission' as const],
+      family: 'quality' as const,
+      valueKind: 'flag' as const,
+      direction: 'neutral' as const,
+      display: { format: 'Top pick', icon: 'star' },
+      visibility: 'reviewer' as const,
+      allowedProvenance: ['human' as const],
+      policyEligible: false,
+      createdBy: { kind: 'system_seed' as const },
+      createdAt: at(0),
+      status: 'active' as const,
+      shown: true,
+      position: 0
+    };
+    const observation = {
+      schemaVersion: 1 as const,
+      id: id(211),
+      workspaceId: scope.workspaceId,
+      eventId: scope.eventId,
+      subject: { kind: 'submission' as const, id: candidateA },
+      definitionKey: 'accolade.top_pick',
+      definitionVersion: 1,
+      value: true,
+      provenance: {
+        kind: 'human' as const,
+        actorReviewerId: reviewerGeneralist,
+        actorUserId,
+        reviewPlanId: roundId
+      },
+      computedAt: at(4),
+      inputVersions: { definition: 1 }
+    };
+    const accolades: ReviewAccoladeSource = {
+      listDefinitions: () => [
+        { ...baseDefinition, key: 'accolade.top_pick', label: 'Top pick', writeCaps: { perActorPerPlan: 3 } },
+        { ...baseDefinition, key: 'custom.follow_up', label: 'Follow up', position: 1 }
+      ],
+      listCurrentHumanFlags: () => [
+        observation,
+        { ...observation, id: id(212), definitionKey: 'custom.follow_up' }
+      ]
+    };
+    const snapshot = projectReviewSnapshot({
+      scope,
+      viewer: { kind: 'reviewer', reviewerId: reviewerGeneralist },
+      environment: { repository: store, sources: store, candidateDisplay: store, accolades }
+    });
+    expect(snapshot.accoladeDefinitions).toEqual([{
+      key: 'accolade.top_pick', version: 1, label: 'Top pick',
+      description: 'One of this reviewer’s strongest choices.', icon: 'star', cap: 3
+    }]);
+    expect(snapshot.queue?.find((item) => item.assignmentId === assignment.id)?.accolades)
+      .toEqual([{
+        key: 'accolade.top_pick', definitionVersion: 1, observationId: id(211)
+      }]);
+  });
+
   test('keeps a draft when its owner steps back and refuses destructive round discard', () => {
     const store = new MemoryReviewStore();
     openRound(store);
@@ -407,7 +489,7 @@ describe('review core', () => {
     expect(store.drafts.get(assignment.id)).toEqual(draft);
     const organizer = projectReviewSnapshot({
       scope, viewer: { kind: 'organizer' },
-      environment: { repository: store, sources: store, candidateDisplay: store }
+      environment: { repository: store, sources: store, candidateDisplay: store, accolades: noAccolades }
     });
     expect(organizer.plans[0]?.reviewers.find((row) =>
       row.reviewerId === reviewerGeneralist
@@ -428,7 +510,7 @@ describe('review core', () => {
     }]);
     const reviewer = projectReviewSnapshot({
       scope, viewer: { kind: 'reviewer', reviewerId: reviewerGeneralist },
-      environment: { repository: store, sources: store, candidateDisplay: store }
+      environment: { repository: store, sources: store, candidateDisplay: store, accolades: noAccolades }
     });
     expect(reviewer.plans[0]?.reviewers[0]).toMatchObject({
       reviewerId: reviewerGeneralist,
@@ -482,7 +564,7 @@ describe('review core', () => {
 
     const snapshot = projectReviewSnapshot({
       scope, viewer: { kind: 'organizer' },
-      environment: { repository: store, sources: store, candidateDisplay: store }
+      environment: { repository: store, sources: store, candidateDisplay: store, accolades: noAccolades }
     });
     expect(snapshot.plans[0]).toMatchObject({ done: 0, total: 3 });
     expect(snapshot.plans[0]?.reviewers.find((row) => row.reviewerId === reviewerGeneralist))
@@ -521,7 +603,7 @@ describe('review core', () => {
     });
     const snapshot = projectReviewSnapshot({
       scope, viewer: { kind: 'organizer' },
-      environment: { repository: store, sources: store, candidateDisplay: store }
+      environment: { repository: store, sources: store, candidateDisplay: store, accolades: noAccolades }
     });
     expect(snapshot.plans[0]).toMatchObject({ done: 0, total: 2 });
     expect(snapshot.plans[0]?.reviewers.find((row) => row.reviewerId === reviewerTrack))

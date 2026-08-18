@@ -261,8 +261,8 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
     opened.push(upgraded);
     expect(upgraded.migration).toMatchObject({
       status: 'applied',
-      migrationId: 'e2_0010_review_vacancy_resolutions',
-      coordinate: { schemaEpoch: 2, sequence: 10 }
+      migrationId: 'e2_0011_signal_accolades',
+      coordinate: { schemaEpoch: 2, sequence: 11 }
     });
     expect(upgraded.sqlite.query<{ slot_kind: string; item_id: string; version: number }, []>(`
       SELECT slot_kind,item_id,version FROM session_program_reference_slots
@@ -283,6 +283,16 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
     `).all()).toEqual([
       { person_id: personA, position: 0, category_id: null, publicly_visible: 1, version: 1 },
       { person_id: personB, position: 1, category_id: null, publicly_visible: 0, version: 1 }
+    ]);
+    expect(upgraded.sqlite.query<{ key: string; position: number }, []>(`
+      SELECT key,position FROM signal_definition_heads
+       WHERE workspace_id = '${workspaceId}' AND event_id = '${eventId}'
+       ORDER BY position
+    `).all()).toEqual([
+      { key: 'accolade.top_pick', position: 0 },
+      { key: 'accolade.hidden_gem', position: 1 },
+      { key: 'accolade.crowd_draw', position: 2 },
+      { key: 'accolade.bold_bet', position: 3 }
     ]);
     const registry = createProgramReferenceContributorRegistry({
       expected: [SESSION_PROGRAM_VOCABULARY_CONTRIBUTOR],
@@ -428,8 +438,8 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
     const migrated = openSQLite(path, { migrationPolicy: 'apply' });
     opened.push(migrated);
     expect(migrated.migration).toMatchObject({
-      status: 'applied', migrationId: 'e2_0010_review_vacancy_resolutions',
-      coordinate: { schemaEpoch: 2, sequence: 10 }
+      status: 'applied', migrationId: 'e2_0011_signal_accolades',
+      coordinate: { schemaEpoch: 2, sequence: 11 }
     });
     expect(migrated.sqlite.query<{ readonly expires_at_ms: number | null }, [string]>(
       'SELECT expires_at_ms FROM api_keys WHERE api_key_id = ?'

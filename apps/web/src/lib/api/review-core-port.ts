@@ -5,12 +5,14 @@ import type {
 } from '@jooevents/contracts';
 import type {
 	reviewDraftSaveInputSchema,
+	reviewAccoladeChangeDraftInputSchema,
 	reviewEvaluationChangeDraftInputSchema,
 	reviewRoundChangeDraftInputSchema,
 	reviewSnapshotReadInputSchema,
 	reviewStepBackChangeDraftInputSchema,
 	reviewVacancyChangeDraftInputSchema,
-	ReviewMutationResult
+	ReviewMutationResult,
+	ReviewAccoladeChangeResult
 } from '@jooevents/contracts/reviews';
 import type { z } from 'zod';
 import type { SafeApiError } from './client';
@@ -29,6 +31,7 @@ export type ReviewVacancyChangeRequest = z.input<typeof reviewVacancyChangeDraft
 export type ReviewEvaluationChangeRequest = z.input<
 	typeof reviewEvaluationChangeDraftInputSchema
 >;
+export type ReviewAccoladeChangeRequest = z.input<typeof reviewAccoladeChangeDraftInputSchema>;
 export type ReviewMutationView = ReviewView<ReviewMutationResult>;
 export type ReviewEvaluationDraftSaveRequest = z.input<typeof reviewDraftSaveInputSchema>;
 export type ReviewIdempotencyKey = z.input<typeof operationHttpIdempotencyKeySchema>;
@@ -40,6 +43,7 @@ export type ReviewCoreOperation =
 	| 'step_back'
 	| 'vacancy_change'
 	| 'evaluation_change'
+	| 'accolade_change'
 	| 'evaluation_draft_save';
 
 export type ReviewCoreUnavailableResult = {
@@ -92,10 +96,9 @@ export type ReviewCoreSource =
 /**
  * Source-neutral boundary over the Review capabilities the backend currently owns.
  *
- * There are deliberately no profile, reminder, accolade, comparison, or direct
- * commit methods here. Those tuned-screen capabilities are mounted only after their
- * own canonical operations exist; a live Review source never fills them with sample
- * behavior or inferred facts.
+ * Only canonical Review operations belong here. Profile and reminder capabilities
+ * remain outside this boundary; evaluation and accolade commits are mounted because
+ * they now resolve registered operations rather than sample behavior or inferred facts.
  */
 export interface ReviewCorePort {
 	readonly source: ReviewCoreSource;
@@ -127,6 +130,11 @@ export interface ReviewCorePort {
 		idempotencyKey: ReviewIdempotencyKey,
 		options?: { readonly signal?: AbortSignal }
 	): Promise<ReviewCoreEffectResult<ReviewMutationView>>;
+	changeAccolade(
+		input: ReviewAccoladeChangeRequest,
+		idempotencyKey: ReviewIdempotencyKey,
+		options?: { readonly signal?: AbortSignal }
+	): Promise<ReviewCoreEffectResult<ReviewAccoladeChangeResult>>;
 	saveEvaluationDraft(
 		input: ReviewEvaluationDraftSaveRequest,
 		idempotencyKey: ReviewIdempotencyKey,

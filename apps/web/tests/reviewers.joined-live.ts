@@ -201,7 +201,13 @@ async function mountVacancyScenario(page: Page) {
 	await page.route('**/api/events/current/review/snapshot', (route) => route.fulfill({
 		json: {
 			...reviewPayload,
-			data: { schemaVersion: 1, viewer: { kind: 'organizer' }, plans: [plan()], standings: {} }
+			data: {
+				schemaVersion: 1,
+				viewer: { kind: 'organizer' },
+				plans: [plan()],
+				accoladeDefinitions: [],
+				standings: {}
+			}
 		}
 	}));
 	await page.route('**/api/events/current/review/assignments/vacancy', async (route) => {

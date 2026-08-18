@@ -15,6 +15,8 @@
       "dependencies": {
         "@jooevents/application": "workspace:*",
         "@jooevents/auth": "workspace:*",
+        "@jooevents/cloudflare-email": "workspace:*",
+        "@jooevents/communication-operations": "workspace:*",
         "@jooevents/communications": "workspace:*",
         "@jooevents/contracts": "workspace:*",
         "@jooevents/deadline": "workspace:*",
@@ -27,7 +29,14 @@
         "@jooevents/http-operation-adapters": "workspace:*",
         "@jooevents/identity-access": "workspace:*",
         "@jooevents/kernel": "workspace:*",
+        "@jooevents/mcp": "workspace:*",
         "@jooevents/persistence": "workspace:*",
+        "@jooevents/program": "workspace:*",
+        "@jooevents/program-operations": "workspace:*",
+        "@jooevents/schedule": "workspace:*",
+        "@jooevents/schedule-operations": "workspace:*",
+        "@jooevents/session": "workspace:*",
+        "@jooevents/session-operations": "workspace:*",
         "@jooevents/task-operations": "workspace:*",
         "@jooevents/tasks": "workspace:*",
         "@jooevents/template-authoring": "workspace:*",
@@ -430,6 +439,7 @@
       "dependencies": {
         "@jooevents/application": "workspace:*",
         "@jooevents/contracts": "workspace:*",
+        "@jooevents/deadline": "workspace:*",
         "@jooevents/files": "workspace:*",
         "@jooevents/identity-access": "workspace:*",
         "@jooevents/kernel": "workspace:*",
@@ -447,7 +457,9 @@
         "@jooevents/application": "workspace:*",
         "@jooevents/contracts": "workspace:*",
         "@jooevents/kernel": "workspace:*",
+        "@jooevents/mcp": "workspace:*",
         "hono": "4.13.1",
+        "zod": "4.4.3",
       },
       "devDependencies": {
         "bun-types": "1.3.6",
@@ -569,6 +581,7 @@
         "@jooevents/schedule-operations": "workspace:*",
         "@jooevents/session": "workspace:*",
         "@jooevents/session-operations": "workspace:*",
+        "@jooevents/signals": "workspace:*",
         "@jooevents/submission-triage": "workspace:*",
         "@jooevents/task-operations": "workspace:*",
         "@jooevents/tasks": "workspace:*",
@@ -769,6 +782,18 @@
         "@jooevents/kernel": "workspace:*",
         "@jooevents/session": "workspace:*",
         "zod": "4.4.3",
+      },
+      "devDependencies": {
+        "bun-types": "1.3.6",
+        "typescript": "6.0.3",
+      },
+    },
+    "packages/signals": {
+      "name": "@jooevents/signals",
+      "version": "0.0.0",
+      "dependencies": {
+        "@jooevents/contracts": "workspace:*",
+        "@jooevents/kernel": "workspace:*",
       },
       "devDependencies": {
         "bun-types": "1.3.6",
@@ -1135,6 +1160,8 @@
     "@jooevents/session-operations": ["@jooevents/session-operations@workspace:packages/session-operations"],
 
     "@jooevents/setup-cli": ["@jooevents/setup-cli@workspace:apps/setup-cli"],
+
+    "@jooevents/signals": ["@jooevents/signals@workspace:packages/signals"],
 
     "@jooevents/splash-worker": ["@jooevents/splash-worker@workspace:apps/splash-worker"],
 
