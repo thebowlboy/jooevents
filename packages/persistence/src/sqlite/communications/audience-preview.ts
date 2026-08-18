@@ -12,10 +12,12 @@ import {
 } from '@jooevents/application/synchronous-classified-payload-store';
 import {
   ORGANIZER_COMMUNICATION_AUDIENCE_MEMBER_LIMIT,
+  ORGANIZER_COMMUNICATION_PAGE_LIMIT,
   organizerCommunicationAudienceDraftSchema,
   organizerCommunicationAudienceOptionListInputSchema,
   organizerCommunicationAudienceOptionPageSchema,
   organizerCommunicationAudienceOptionSchema,
+	organizerCommunicationAudienceSelectionPreviewSchema,
   organizerCommunicationDefinitionRefSchema,
   organizerCommunicationDigestSchema,
   organizerCommunicationDraftProjectionSchema,
@@ -973,6 +975,9 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
         audience.source.recipeId, audience.source.recipeVersion
       );
     }
+    if (audience.source.kind !== 'explicit_contacts') {
+      throw new OrganizerAudienceResolutionError('source_contract_mismatch');
+    }
     if (audience.source.contactRefIds.length === 0) return [];
     const placeholders = audience.source.contactRefIds.map(() => '?').join(',');
     return this.sqlite.query<CandidateRow, Array<string>>(`
@@ -995,6 +1000,31 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
     } catch (error) {
       throw new OrganizerAudienceResolutionError('source_contract_mismatch');
     }
+    if (audience.source.kind === 'composite') {
+      const candidates: OrganizerAudienceCandidate[] = [];
+      const versions = new Map<string, OrganizerMessagePreviewSourceVersion>();
+      for (const group of audience.source.groups) {
+        const snapshot = this.resolveCurrentSnapshot({
+          scope: selected,
+          audience: { ...audience, source: group.source }
+        });
+        candidates.push(...snapshot.candidates);
+        for (const version of snapshot.sourceVersions) {
+          const prior = versions.get(version.sourceKey);
+          if (prior !== undefined && !exactJson(prior, version)) {
+            throw new OrganizerAudienceResolutionError('source_contract_mismatch');
+          }
+          versions.set(version.sourceKey, version);
+        }
+      }
+      return Object.freeze({
+        source: audience.source,
+        candidates: Object.freeze(candidates),
+        sourceVersions: Object.freeze([...versions.values()].sort((left, right) =>
+          left.sourceKey.localeCompare(right.sourceKey)
+        ))
+      });
+    }
     if (audience.source.kind === 'registered_query') {
       // A minted immutable recipe row remains the authorization to resolve; a
       // registered live delegate then serves the recipe's current snapshot.
@@ -1014,9 +1044,12 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
     if (audience.source.kind === 'explicit_contacts') {
       const grouped = new Map<SQLiteRegisteredAudienceSourceDelegate, string[]>();
       for (const contactRefId of audience.source.contactRefIds) {
-        const owners = [...this.#registeredSources.values()].filter((delegate) =>
+        const matching = [...this.#registeredSources.values()].filter((delegate) =>
           delegate.resolveExplicitContacts !== undefined && delegate.ownsContactRef(contactRefId)
         );
+		const owners = matching.filter((delegate, index) => matching.findIndex((candidate) =>
+			candidate.resolveExplicitContacts === delegate.resolveExplicitContacts
+		) === index);
         if (owners.length > 1) {
           throw new OrganizerAudienceResolutionError('source_contract_mismatch');
         }
@@ -1083,7 +1116,7 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
         sourceVersion: row.source_version,
         digestSha256: row.digest_sha256
       }));
-    } else {
+    } else if (audience.source.kind === 'explicit_contacts') {
       const state = this.sqlite.query<{ state_version: number }, [string, string]>(`
         SELECT state_version FROM communication_audience_scope_state
          WHERE workspace_id=? AND event_id=? LIMIT 2
@@ -1094,6 +1127,8 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
         sourceVersion: state[0]?.state_version ?? 1,
         digestSha256: digest({ candidates })
       })];
+    } else {
+      throw new OrganizerAudienceResolutionError('source_contract_mismatch');
     }
     return Object.freeze({ source: audience.source, candidates, sourceVersions });
   }
@@ -1438,6 +1473,123 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
     return offset;
   }
 
+	#recipientEstimate(
+		selected: OrganizerAudienceScope,
+		audience: OrganizerCommunicationAudienceDraft
+	): number {
+		const snapshot = this.resolveCurrentSnapshot({ scope: selected, audience });
+		const byAddress = new Map<string, boolean>();
+		for (const candidate of snapshot.candidates) {
+			const resolution = this.resolveEmail({
+				scope: selected,
+				purposeRevision: audience.purposeRevision,
+				candidate,
+				asOf: new Date().toISOString()
+			});
+			if (resolution.kind === 'no_eligible_address') continue;
+			const key = resolution.address.classifiedValue.value.trim().toLocaleLowerCase('en-US');
+			const eligible = resolution.address.lifecycle === 'active'
+				&& resolution.purposeBasis.state === 'allowed'
+				&& (resolution.consent.state === 'not_required' || resolution.consent.state === 'granted')
+				&& resolution.suppression.state === 'clear'
+				&& resolution.doNotContact.state === 'clear';
+			byAddress.set(key, (byAddress.get(key) ?? true) && eligible);
+		}
+		return [...byAddress.values()].filter(Boolean).length;
+	}
+
+	#selectionPreview(
+		selected: OrganizerAudienceScope,
+		options: readonly OrganizerCommunicationAudienceOption[],
+		optionIds: readonly string[]
+	) {
+		if (options.length !== optionIds.length) {
+			throw new SQLiteOrganizerAudiencePreviewError('not_found');
+		}
+		const purpose = options[0]!.audienceDraft.purposeRevision;
+		if (options.some((option) => option.audienceDraft.purposeRevision.revisionId
+			!== purpose.revisionId)) {
+			throw new SQLiteOrganizerAudiencePreviewError('invalid_input');
+		}
+		type Row = {
+			personRefId: string;
+			safeLabel: string;
+			state: 'included' | 'excluded';
+			reasonCode?: string;
+			via?: string;
+		};
+		const rows: Row[] = [];
+		const byAddress = new Map<string, number>();
+		const groupCounts = new Map<string, number>();
+		options.forEach((option, groupIndex) => {
+			const seenInGroup = new Set<string>();
+			const snapshot = this.resolveCurrentSnapshot({ scope: selected, audience: option.audienceDraft });
+			snapshot.candidates.forEach((candidate, candidateIndex) => {
+				const resolution = this.resolveEmail({
+					scope: selected,
+					purposeRevision: purpose,
+					candidate,
+					asOf: new Date().toISOString()
+				});
+				let included = false;
+				let reasonCode = 'address.no_eligible';
+				let addressKey = `\u0000unkeyed:${groupIndex}:${candidateIndex}`;
+				if (resolution.kind === 'evaluated') {
+					addressKey = resolution.address.classifiedValue.value.trim().toLocaleLowerCase('en-US');
+					if (resolution.address.lifecycle === 'revoked') reasonCode = 'address.revoked';
+					else if (resolution.purposeBasis.state === 'denied') reasonCode = 'purpose.not_allowed';
+					else if (resolution.consent.state === 'missing') reasonCode = 'purpose.consent_missing';
+					else if (resolution.consent.state === 'withdrawn') reasonCode = 'purpose.consent_withdrawn';
+					else if (resolution.doNotContact.state === 'active') reasonCode = 'person.do_not_contact';
+					else if (resolution.suppression.state === 'suppressed') reasonCode = 'address.suppressed';
+					else included = true;
+				}
+				const priorIndex = byAddress.get(addressKey);
+				if (priorIndex === undefined) {
+					byAddress.set(addressKey, rows.length);
+					rows.push({
+						personRefId: candidate.personRefId,
+						safeLabel: candidate.safeLabel,
+						state: included ? 'included' : 'excluded',
+						...(included ? {} : { reasonCode }),
+						...(options.length > 1 ? { via: option.label } : {})
+					});
+				} else if (!included && rows[priorIndex]!.state === 'included') {
+					rows[priorIndex] = { ...rows[priorIndex]!, state: 'excluded', reasonCode };
+				}
+				if (!seenInGroup.has(addressKey)) {
+					seenInGroup.add(addressKey);
+					groupCounts.set(addressKey, (groupCounts.get(addressKey) ?? 0) + 1);
+				}
+			});
+		});
+		const audienceDraft: OrganizerCommunicationAudienceDraft = {
+			schemaVersion: 1,
+			binding: 'current_snapshot',
+			purposeRevision: purpose,
+			source: options.length === 1
+				? options[0]!.audienceDraft.source
+				: {
+					kind: 'composite',
+					groups: options.map((option) => ({
+						label: option.label,
+						source: option.audienceDraft.source.kind === 'composite'
+							? (() => { throw new SQLiteOrganizerAudiencePreviewError('invalid_input'); })()
+							: option.audienceDraft.source
+					}))
+				}
+		};
+		return organizerCommunicationAudienceSelectionPreviewSchema.parse({
+			schemaVersion: 1,
+			optionIds,
+			label: options.map((option) => option.label).join(' + '),
+			reach: rows.filter((row) => row.state === 'included').length,
+			overlap: [...groupCounts.values()].filter((count) => count > 1).length,
+			rows,
+			audienceDraft
+		});
+	}
+
   listAudienceOptions(
     rawScope: OrganizerCommunicationScope,
     authorityPrincipalKey: string,
@@ -1454,7 +1606,8 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
         schemaVersion: 1,
         scope: selected,
         personRefId: input.personRefId ?? null,
-        purposeId: input.purposeId ?? null
+        purposeId: input.purposeId ?? null,
+		selectionOptionIds: input.selectionOptionIds ?? null
       });
       offset = this.#readAudienceCursor(bindingDigestSha256, input.cursor);
     } catch {
@@ -1478,40 +1631,99 @@ export class SQLiteOrganizerAudiencePreviewRepository implements
       sql += ' AND r.purpose_id=?';
       values.push(input.purposeId);
     }
-    if (input.personRefId !== undefined) {
-      sql += ` AND EXISTS (
-        SELECT 1 FROM communication_registered_audience_members m
-        JOIN communication_current_audience_contacts c
-          ON c.workspace_id=m.workspace_id AND c.event_id=m.event_id
-         AND c.subject_ref_id=m.subject_ref_id
-        WHERE m.workspace_id=r.workspace_id AND m.event_id=r.event_id
-          AND m.recipe_id=r.recipe_id AND m.recipe_version=r.recipe_version
-          AND c.person_ref_id=?
-      )`;
-      values.push(input.personRefId);
-    }
+	if (input.selectionOptionIds !== undefined && input.personRefId === undefined) {
+		sql += ` AND r.option_id IN (${input.selectionOptionIds.map(() => '?').join(',')})`;
+		values.push(...input.selectionOptionIds);
+	}
+    // A scoped compose needs an explicit one-person audience. Registered live
+    // delegates deliberately do not mirror their memberships into the generic
+    // tables, so an SQL membership filter would return no option for those
+    // sources. Read the minted recipes and let their owning delegates resolve
+    // the current person-bearing candidate below.
     sql += ' ORDER BY r.option_id,r.option_version LIMIT ? OFFSET ?';
-    values.push(limit + 1, offset);
+	const selectionOptionIds = input.selectionOptionIds;
+	const selectedOnly = selectionOptionIds !== undefined && input.personRefId === undefined;
+	values.push(selectedOnly ? selectionOptionIds!.length + 1
+		: input.personRefId === undefined ? limit + 1 : ORGANIZER_COMMUNICATION_PAGE_LIMIT + 1,
+		selectedOnly ? 0 : input.personRefId === undefined ? offset : 0);
     let rows: RecipeRow[];
     try {
       rows = this.sqlite.query<RecipeRow, Array<string | number>>(sql).all(...values);
     } catch (error) {
       throw new SQLiteOrganizerAudiencePreviewError('data_corrupt', error);
     }
-    const hasMore = rows.length > limit;
-    const chosen = rows.slice(0, limit);
+    let projected = rows.map((row) => organizerCommunicationAudienceOptionSchema.parse(
+      parsedJson(row.option_json)
+    ));
+    if (input.personRefId !== undefined) {
+	  const ordinary = projected;
+      const scoped = projected.flatMap((option) => {
+        if (option.audienceDraft.source.kind !== 'registered_query') return [];
+        const delegate = this.#registeredSources.get(
+          option.audienceDraft.source.sourceDefinition.reference.key
+        );
+        if (delegate === undefined) return [];
+        const candidate = delegate.resolveCurrentSnapshot({
+          scope: selected,
+          audience: option.audienceDraft
+        }).candidates.find((entry) => entry.personRefId === input.personRefId);
+        if (candidate === undefined) return [];
+        const audienceDraft = organizerCommunicationAudienceDraftSchema.parse({
+          schemaVersion: 1,
+          binding: 'current_snapshot',
+          purposeRevision: option.audienceDraft.purposeRevision,
+          source: { kind: 'explicit_contacts', contactRefIds: [candidate.contactRefId] }
+        });
+        const material = {
+          recipeOptionId: option.optionId,
+          personRefId: input.personRefId,
+          contactRefId: candidate.contactRefId,
+          audienceDraft
+        };
+        return [organizerCommunicationAudienceOptionSchema.parse({
+          schemaVersion: 1,
+          optionId: `person.${digest(material).slice(0, 40)}`,
+          optionVersion: option.optionVersion,
+          optionDigestSha256: digest(material),
+          label: candidate.safeLabel,
+          recipientEstimate: { knowledge: 'unknown', reasonCode: 'audience.resolved_at_preview' },
+          audienceDraft
+        })];
+	  });
+	  projected = input.selectionOptionIds === undefined ? scoped : [...ordinary, ...scoped];
+    }
+	if (input.selectionOptionIds !== undefined) {
+		const byId = new Map(projected.map((option) => [option.optionId, option]));
+		projected = input.selectionOptionIds.flatMap((optionId) => {
+			const option = byId.get(optionId);
+			return option ? [option] : [];
+		});
+		if (projected.length !== input.selectionOptionIds.length) {
+			return outcome('conflict', 'communication.not_found');
+		}
+	}
+	projected = projected.map((option) => organizerCommunicationAudienceOptionSchema.parse({
+		...option,
+		recipientEstimate: {
+			knowledge: 'known',
+			value: this.#recipientEstimate(selected, option.audienceDraft)
+		}
+	}));
+    const pageRows = projected.slice(offset, offset + limit);
+    const hasMore = offset + pageRows.length < projected.length;
     try {
       const page = organizerCommunicationAudienceOptionPageSchema.parse({
         schemaVersion: 1,
-        rows: chosen.map((row) => organizerCommunicationAudienceOptionSchema.parse(
-          parsedJson(row.option_json)
-        )),
+        rows: pageRows,
         page: hasMore
           ? {
               hasMore: true,
-              nextCursor: this.#issueAudienceCursor(bindingDigestSha256, offset + chosen.length)
+              nextCursor: this.#issueAudienceCursor(bindingDigestSha256, offset + pageRows.length)
             }
-          : { hasMore: false }
+		  : { hasMore: false },
+		...(input.selectionOptionIds === undefined ? {} : {
+			selectionPreview: this.#selectionPreview(selected, projected, input.selectionOptionIds)
+		})
       });
       return Object.freeze({ kind: 'success', data: page });
     } catch (error) {

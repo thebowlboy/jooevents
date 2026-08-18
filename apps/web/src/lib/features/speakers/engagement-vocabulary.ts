@@ -60,6 +60,12 @@ export const deliveryOutcomeBadge: Readonly<
 > = Object.freeze({
 	delivered: { label: 'Delivered', tone: 'success', icon: statusIcon.delivered },
 	sent: { label: 'Sent', tone: 'success', icon: statusIcon.sent },
+	accepted: { label: 'Accepted', tone: 'success', icon: statusIcon.delivered },
+	acceptance_unknown: {
+		label: 'Acceptance unknown', tone: 'warning', solid: true, icon: statusIcon.held
+	},
+	failed: { label: 'Failed', tone: 'danger', solid: true, icon: statusIcon.bounced },
+	attempting: { label: 'Sending', tone: 'info', icon: statusIcon.sending },
 	bounced: { label: 'Bounced', tone: 'danger', solid: true, icon: statusIcon.bounced },
 	scheduled: { label: 'Scheduled', tone: 'info', icon: statusIcon.scheduled }
 });

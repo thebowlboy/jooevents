@@ -9,7 +9,10 @@ import {
   createOrganizerPlainTextRenderStrategyPort
 } from '@jooevents/communications';
 import { sendMessagesAuthorInputSchema } from '@jooevents/communication-operations';
-import type { OrganizerMessagePreviewSummary } from '@jooevents/contracts/communications/organizer';
+import {
+	organizerCommunicationAudienceOptionPageSchema,
+	type OrganizerMessagePreviewSummary
+} from '@jooevents/contracts/communications/organizer';
 import { submissionTriageSourceRowSchema } from '@jooevents/contracts/submission-triage';
 import type { OrganizerSubmissionContactDto } from '@jooevents/contracts';
 import { canonicalJsonText, parseEventId, parseInstant, parseWorkspaceId } from '@jooevents/kernel';
@@ -413,16 +416,46 @@ describe('decision-set audience over decision heads', () => {
         rows: [
           {
             label: 'Accepted submissions',
-            recipientEstimate: { knowledge: 'unknown', reasonCode: 'audience.resolved_at_preview' }
+            recipientEstimate: { knowledge: 'known', value: 1 }
           },
           {
             label: 'Declined submissions',
-            recipientEstimate: { knowledge: 'unknown' }
+            recipientEstimate: { knowledge: 'known', value: 1 }
           }
         ],
         page: { hasMore: false }
       }
     });
+		const scoped = input.repository.listAudienceOptions(scope, ownerKey, { personRefId: personA });
+		expect(scoped).toMatchObject({
+			kind: 'success',
+			data: {
+				rows: [{
+					label: 'Ada Lovelace',
+					recipientEstimate: { knowledge: 'known', value: 1 },
+					audienceDraft: {
+						source: { kind: 'explicit_contacts', contactRefIds: [`submission-contact:${submissionAccepted}`] }
+					}
+				}],
+				page: { hasMore: false }
+			}
+		});
+		if (listed.kind !== 'success') throw new Error('Audience options missing.');
+		const listedPage = organizerCommunicationAudienceOptionPageSchema.parse(listed.data);
+		const selected = input.repository.listAudienceOptions(scope, ownerKey, {
+			selectionOptionIds: listedPage.rows.map((row) => row.optionId)
+		});
+		expect(selected).toMatchObject({
+			kind: 'success',
+			data: {
+				selectionPreview: {
+					label: 'Accepted submissions + Declined submissions',
+					reach: 2,
+					overlap: 0,
+					audienceDraft: { source: { kind: 'composite', groups: [{}, {}] } }
+				}
+			}
+		});
     expect(() => input.sqlite.query(
       `UPDATE communication_registered_audience_recipes SET option_version = 2`
     ).run()).toThrow('registered audience recipes are immutable');

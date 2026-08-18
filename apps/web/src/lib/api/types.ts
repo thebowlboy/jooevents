@@ -861,6 +861,8 @@ export interface SpeakerSession {
 
 export interface SpeakerRow {
 	id: string;
+	/** Canonical person identity used by cross-feature person-scoped reads. */
+	communicationPersonId?: string;
 	name: string;
 	email: string;
 	state: EngagementState;
@@ -1083,14 +1085,26 @@ export interface SlotSuggestion {
 // ---------------------------------------------------------------------------
 // Communications
 
-export type CommunicationState = 'draft' | 'scheduled' | 'sending' | 'sent' | 'held';
+export type CommunicationState =
+	| 'draft'
+	| 'scheduled'
+	| 'sending'
+	| 'sent'
+	| 'held'
+	| 'accepted'
+	| 'acceptance_unknown'
+	| 'failed';
 
 /**
  * Who authorized a send: the operator, an agent draft the operator committed,
  * or a standing policy acting on a recorded rule. Attribution renders in the
  * established vocabulary (lavender marks agents; policy reads as automatic).
  */
-export type CommunicationActor = 'you' | 'agent' | 'policy';
+export type CommunicationActor =
+	| 'you'
+	| 'agent'
+	| 'policy'
+	| { readonly kind: 'human'; readonly displayLabel: string };
 
 export interface RecipientRow {
 	name: string;
@@ -1158,8 +1172,8 @@ export interface MessageReview {
 	audienceLabel: string;
 	binding: 'current_snapshot';
 	recipients: RecipientRow[];
-	sender: string;
-	replyModel: string;
+	sender?: string;
+	replyModel?: string;
 	irreversibleNote: string;
 }
 
@@ -1180,9 +1194,11 @@ export interface NotificationDispatch {
 
 export interface CommunicationMessage {
 	id: string;
+	/** The release batch reference used by the live delivery timeline. */
+	messageRefId?: string;
 	subject: string;
 	audience: string;
-	audienceCount: number;
+	audienceCount?: number;
 	state: CommunicationState;
 	/** Registered purpose the send is authorized under — the row's scan key. */
 	purpose: string;
@@ -1193,9 +1209,6 @@ export interface CommunicationMessage {
 	actor: CommunicationActor;
 	/** The stored template the content came from, when one was used. */
 	templateId?: string;
-	sentAt?: string;
-	/** Present while held: the reason and next remedy (e.g. provider not ready). */
-	heldReason?: string;
 	/**
 	 * The message's own body when it came from no stored template — a one-off
 	 * written in the composer and frozen onto the send.
@@ -1206,9 +1219,21 @@ export interface CommunicationMessage {
 	 * exactly when `templateId` is absent and the operator wrote something.
 	 */
 	document?: MessageTemplate;
-	deliveredCount: number;
-	bouncedCount: number;
-	bounces: { email: string; reason: string }[];
+	sentAt?: string;
+	/** Present while held: the reason and next remedy (e.g. provider not ready). */
+	heldReason?: string;
+	deliveredCount?: number;
+	bouncedCount?: number;
+	bounces?: { email: string; reason: string }[];
+	/** Provider evidence available on a live batch; no field implies no such fact. */
+	deliveryEvidence?: {
+		materialized?: number;
+		accepted?: number;
+		delivered?: number;
+		acceptanceUnknown?: number;
+		knownFailed?: number;
+		stateReason?: string;
+	};
 	/** Present on drafts: the reviewable batch projection. */
 	review?: MessageReview;
 }
@@ -1244,7 +1269,15 @@ export interface CommunicationThreadEntry {
 	at: string;
 	purpose: string;
 	subject: string;
-	outcome: 'delivered' | 'sent' | 'bounced' | 'scheduled';
+	outcome:
+		| 'delivered'
+		| 'sent'
+		| 'bounced'
+		| 'scheduled'
+		| 'accepted'
+		| 'acceptance_unknown'
+		| 'failed'
+		| 'attempting';
 	actor: CommunicationActor;
 }
 
@@ -1255,11 +1288,28 @@ export interface CommunicationThread {
 	entries: CommunicationThreadEntry[];
 }
 
+export interface CommunicationDeliveryTimelineEntry {
+	id: string;
+	recipient: string;
+	actor: CommunicationActor;
+	state: 'pending' | 'attempting' | 'accepted' | 'acceptance_unknown' | 'failed';
+	at: string;
+	attemptNumber?: number;
+	attemptKind?: 'original' | 'marked_resend';
+	reason?: string;
+}
+
+export interface CommunicationDeliveryTimeline {
+	messageId: string;
+	entries: CommunicationDeliveryTimelineEntry[];
+}
+
 /** A sendable audience, resolved and counted by the API from current records. */
 export interface AudienceOption {
 	id: string;
 	label: string;
-	count: number;
+	/** Absent until the authoritative preview resolves the live audience. */
+	count?: number;
 	/** Present when the audience is one person (a scoped compose). */
 	personId?: string;
 }
@@ -1277,6 +1327,21 @@ export interface AudiencePreviewRow {
 	state: RecipientRow['state'];
 	/** Present on exclusions and blocks: why this person is not being sent to. */
 	reason?: string;
+	/**
+	 * The roster id of the person this row resolved to, when they are on it.
+	 * It opens the same profile disclosure their name opens everywhere else —
+	 * one person, one door, asked for one at a time. It widens nothing: the list
+	 * still carries no addresses, and the peek is the app's ordinary
+	 * individual-disclosure surface rather than a bulk read.
+	 */
+	speakerId?: string;
+	/**
+	 * Which selected group put them in this send — the first one that claimed
+	 * them, which is the group whose copy they receive under the union's
+	 * first-claim rule. Absent when only one group is selected, where naming it
+	 * would only repeat the single chip above.
+	 */
+	via?: string;
 }
 
 /**

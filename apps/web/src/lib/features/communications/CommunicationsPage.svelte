@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, tick } from 'svelte';
+	import { onDestroy, onMount, tick } from 'svelte';
 	import { ChevronDown, X } from 'lucide-svelte';
 	import { CopyValue, Field, Modal, revealTarget, statusIcon, trackPending } from '$lib/ui';
 	import type { IconComponent } from '$lib/ui';
@@ -14,9 +14,12 @@
 	import type { CommunicationsPagePort } from '$lib/api/communications-page-port';
 	import { LiveRead, type LiveReadState } from '$lib/api/live-read';
 	import RecipientEmailPeek from '$lib/features/workspace/components/RecipientEmailPeek.svelte';
+	import VerbatimBodyPeek from '$lib/features/workspace/components/VerbatimBodyPeek.svelte';
 	import ComposerShell from './ComposerShell.svelte';
+	import { deliveryOutcomeBadge } from '$lib/features/speakers/engagement-vocabulary';
 	import type {
 		CommunicationAttentionItem,
+		CommunicationDeliveryTimeline,
 		CommunicationMessage,
 		CommunicationState,
 		CommunicationThread,
@@ -24,7 +27,8 @@
 		EventTheme,
 		MessageTemplate,
 		ReadinessState,
-		RecipientRow
+		RecipientRow,
+		RenderedEmailPreview
 	} from '$lib/api/types';
 
 	interface Props {
@@ -33,6 +37,7 @@
 
 	let { port }: Props = $props();
 	const api = $derived(port);
+	const live = $derived(api.source.kind === 'live');
 
 	/**
 	 * The queue's one read. Its three parts arrive together and fail together,
@@ -102,17 +107,10 @@
 		scheduled: { label: 'Scheduled', tone: 'info', icon: statusIcon.scheduled },
 		sending: { label: 'Sending', tone: 'info', icon: statusIcon.sending },
 		sent: { label: 'Sent', tone: 'success', icon: statusIcon.sent },
+		accepted: { label: 'Accepted', tone: 'success', icon: statusIcon.delivered },
+		acceptance_unknown: { label: 'Acceptance unknown', tone: 'warning', solid: true, icon: statusIcon.held },
+		failed: { label: 'Failed', tone: 'danger', solid: true, icon: statusIcon.bounced },
 		held: { label: 'Held', tone: 'warning', solid: true, icon: statusIcon.held }
-	};
-
-	const outcomeBadge: Record<
-		CommunicationThread['entries'][number]['outcome'],
-		{ label: string; tone: string; solid?: boolean; icon: IconComponent }
-	> = {
-		delivered: { label: 'Delivered', tone: 'success', icon: statusIcon.delivered },
-		sent: { label: 'Sent', tone: 'success', icon: statusIcon.sent },
-		bounced: { label: 'Bounced', tone: 'danger', solid: true, icon: statusIcon.bounced },
-		scheduled: { label: 'Scheduled', tone: 'info', icon: statusIcon.scheduled }
 	};
 
 	/** Same words and tones as the Overview queue: one severity, one name. */
@@ -143,7 +141,7 @@
 		return list.map((message) => ({
 			...message,
 			subject: subjectEdits[message.id] ?? message.subject,
-			bounces: message.bounces.map((bounce) => ({ ...bounce }))
+			bounces: (message.bounces ?? []).map((bounce) => ({ ...bounce }))
 		}));
 	}
 
@@ -189,6 +187,36 @@
 			refreshing = false;
 		}
 	}
+
+	let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+	let pollingStartedAt = 0;
+	$effect(() => {
+		if (!live) return;
+		const unsettled = (messages ?? []).some((message) =>
+			message.state === 'scheduled' || message.state === 'sending' || message.state === 'acceptance_unknown'
+		);
+		if (refreshTimer) {
+			clearTimeout(refreshTimer);
+			refreshTimer = null;
+		}
+		if (!unsettled) {
+			pollingStartedAt = 0;
+			return;
+		}
+		if (pollingStartedAt === 0) pollingStartedAt = Date.now();
+		if (Date.now() - pollingStartedAt > 60_000) return;
+		const delay = Date.now() - pollingStartedAt < 20_000 ? 4_000 : 10_000;
+		refreshTimer = setTimeout(() => void load(), delay);
+	});
+
+	function refreshOnFocus() {
+		if (document.visibilityState === 'visible') void load();
+	}
+	onMount(() => document.addEventListener('visibilitychange', refreshOnFocus));
+	onDestroy(() => {
+		if (refreshTimer) clearTimeout(refreshTimer);
+		document.removeEventListener('visibilitychange', refreshOnFocus);
+	});
 
 	// A plain let, deliberately outside the graph: the initial load and every
 	// person-scope change share one read path without double-fetching on mount.
@@ -282,6 +310,8 @@
 	 * no body to render, and the one-line sample stays the evidence.
 	 */
 	let previewEmail = $state<string | null>(null);
+	let renderedPreview = $state<RenderedEmailPreview | null>(null);
+	let renderedPreviewError = $state('');
 	/**
 	 * The body this draft renders from: its stored template, or — for a message
 	 * written from a blank start — the one-off frozen onto it. Every draft has
@@ -306,13 +336,25 @@
 	const previewedTemplate = $derived(reviewTemplate && previewRecipient ? reviewTemplate : null);
 
 	/** Pressing a row switches whose copy is shown; the panel itself stays. */
-	function selectPreview(recipient: RecipientRow) {
+	async function selectPreview(recipient: RecipientRow) {
 		previewEmail = recipient.email;
+		renderedPreview = null;
+		renderedPreviewError = '';
+		if (!recipient.recipientResolutionId || !api.communications.previewRecipient) return;
+		try {
+			renderedPreview = await api.communications.previewRecipient(recipient.recipientResolutionId);
+		} catch (error) {
+			renderedPreviewError = error instanceof Error ? error.message : 'This copy could not be loaded.';
+		}
 	}
 
 	// Leaving the dialog leaves the preview behind: reopening reviews fresh.
 	$effect(() => {
-		if (!reviewOpen) previewEmail = null;
+		if (!reviewOpen) {
+			previewEmail = null;
+			renderedPreview = null;
+			renderedPreviewError = '';
+		}
 	});
 
 	/**
@@ -339,12 +381,33 @@
 	}
 
 	function metaLine(message: CommunicationMessage) {
-		return [message.audience, plural(message.audienceCount, 'recipient'), message.sentAt]
+		return [message.audience, message.audienceCount === undefined ? null : plural(message.audienceCount, 'recipient'), message.sentAt]
 			.filter(Boolean)
 			.join(' · ');
 	}
 
-	function openReview(message: CommunicationMessage) {
+	async function openReview(message: CommunicationMessage) {
+		if (live && !message.review && api.communications.reviewDraft) {
+			busy = true;
+			try {
+				const prepared = await api.communications.reviewDraft(message.id);
+				if (queue) {
+					queueState = {
+						kind: 'resolved',
+						value: {
+							...queue,
+							messages: queue.messages.map((row) => row.id === prepared.id ? prepared : row)
+						}
+					};
+				}
+				message = prepared;
+			} catch (error) {
+				sendNotice = error instanceof Error ? error.message : 'The draft could not be prepared for review.';
+				return;
+			} finally {
+				busy = false;
+			}
+		}
 		reviewId = message.id;
 		reviewSubject = message.subject;
 		sendNotice = '';
@@ -376,10 +439,10 @@
 		busy = true;
 		subjectEdits = { ...subjectEdits, [id]: reviewSubject };
 		sendingIds = [...sendingIds, id];
-		const outcome = await api.communications.send(id);
-		await load();
-		sendingIds = sendingIds.filter((entry) => entry !== id);
-		if (outcome.ok) {
+		try {
+			const outcome = await api.communications.send(id);
+			await load();
+			if (outcome.ok) {
 			// The receipt is the visible acknowledgement and announces itself, so
 			// the sr-only line stays for the refusal case only.
 			sendNotice = '';
@@ -388,12 +451,17 @@
 				label: `Sent “${reviewSubject}” to ${plural(count, 'recipient')}`,
 				notUndoableReason: 'Email cannot be recalled after the provider accepts it.'
 			});
-		} else {
-			sendNotice = `“${reviewSubject}” is held: ${outcome.reason}`;
+			} else {
+				sendNotice = `“${reviewSubject}” is held: ${outcome.reason}`;
+			}
+		} catch (error) {
+			sendNotice = error instanceof Error ? error.message : 'The message could not be sent.';
+		} finally {
+			sendingIds = sendingIds.filter((entry) => entry !== id);
+			busy = false;
+			reviewOpen = false;
+			reviewId = null;
 		}
-		busy = false;
-		reviewOpen = false;
-		reviewId = null;
 	}
 
 	// A link may open the composer — `/app/messages?compose=1` — because a GET
@@ -456,11 +524,31 @@
 		revealedMessage = id;
 		if (!ready.some((entry) => entry.id === id)) return;
 		expandedId = id;
+		const message = ready.find((entry) => entry.id === id);
+		if (message) void loadTimeline(message);
 		void tick().then(() => reveal(document.querySelector<HTMLElement>(`[data-message="${id}"]`)));
 	});
 
-	function toggleRow(id: string) {
+	let timelines = $state<Record<string, CommunicationDeliveryTimeline | null>>({});
+	let timelineLoading = $state<string[]>([]);
+	let timelineErrors = $state<Record<string, string>>({});
+
+	async function loadTimeline(message: CommunicationMessage) {
+		if (!live || !message.messageRefId || message.id in timelines || timelineLoading.includes(message.id)) return;
+		timelineLoading = [...timelineLoading, message.id];
+		try {
+			timelines = { ...timelines, [message.id]: await api.communications.timeline(message.messageRefId) };
+		} catch (error) {
+			timelineErrors = { ...timelineErrors, [message.id]: error instanceof Error ? error.message : 'Delivery evidence could not be loaded.' };
+		} finally {
+			timelineLoading = timelineLoading.filter((id) => id !== message.id);
+		}
+	}
+
+	function toggleRow(message: CommunicationMessage) {
+		const id = message.id;
 		expandedId = expandedId === id ? null : id;
+		if (expandedId === id) void loadTimeline(message);
 		// The address named one send; the moment the operator opens or closes a
 		// row themselves, what is showing is theirs rather than the link's.
 		if (askedMessage && askedMessage !== expandedId) {
@@ -468,12 +556,19 @@
 		}
 	}
 
+	function timelineStateLabel(state: CommunicationDeliveryTimeline['entries'][number]['state']) {
+		return state === 'accepted' ? 'Accepted'
+			: state === 'acceptance_unknown' ? 'Acceptance unknown'
+				: state === 'failed' ? 'Failed'
+					: state === 'attempting' ? 'Sending' : 'Pending';
+	}
+
 	let deliveryCard = $state<HTMLElement | null>(null);
 
 	function onAttention(item: CommunicationAttentionItem) {
 		if (item.action.kind === 'review' && item.messageId) {
 			const message = messages?.find((entry) => entry.id === item.messageId);
-			if (message) openReview(message);
+			if (message) void openReview(message);
 			return;
 		}
 		if (item.action.kind === 'open-message' && item.messageId) {
@@ -543,10 +638,14 @@
 </script>
 
 {#snippet actorMark(actor: CommunicationMessage['actor'])}
-	{#if actor === 'agent'}
+	{#if typeof actor === 'object'}
+		<span class="ui-badge ui-badge--neutral">{actor.displayLabel}</span>
+	{:else if actor === 'agent'}
 		<span class="ui-badge ui-badge--lavender">Agent-drafted</span>
 	{:else if actor === 'policy'}
 		<span class="ui-badge ui-badge--neutral">Automatic</span>
+	{:else}
+		<span class="ui-badge ui-badge--neutral">Workspace operator</span>
 	{/if}
 {/snippet}
 
@@ -616,35 +715,46 @@
 			<p class="row__meta">{metaLine(message)}</p>
 			{#if message.state === 'held' && message.heldReason}
 				<p class="row__held">{message.heldReason}</p>
+			{:else if live && message.state === 'failed'}
+				<p class="row__held">The provider did not accept one or more recipient attempts.</p>
+			{:else if live && message.state === 'acceptance_unknown'}
+				<p class="row__held">The provider result is inconclusive. JooEvents will not assume this was accepted.</p>
 			{/if}
 		</div>
-		{#if message.state === 'sent'}
+		{#if message.deliveryEvidence}
+			<p class="row__metrics">
+				{#if message.deliveryEvidence.delivered !== undefined}<span>{message.deliveryEvidence.delivered} delivered</span>{/if}
+				{#if message.deliveryEvidence.accepted !== undefined}<span>{message.deliveryEvidence.accepted} accepted</span>{/if}
+				{#if message.deliveryEvidence.acceptanceUnknown}<span>{message.deliveryEvidence.acceptanceUnknown} unknown</span>{/if}
+				{#if message.deliveryEvidence.knownFailed}<span class="row__bounced">{message.deliveryEvidence.knownFailed} failed</span>{/if}
+			</p>
+		{:else if message.state === 'sent' && message.deliveredCount !== undefined}
 			<p class="row__metrics">
 				<span>{message.deliveredCount} delivered</span>
-				{#if message.bouncedCount > 0}
+				{#if (message.bouncedCount ?? 0) > 0}
 					<span class="row__bounced">{message.bouncedCount} bounced</span>
 				{/if}
 			</p>
 		{/if}
 		<div class="row__actions">
-			{#if message.bounces.length > 0}
+			{#if (message.bounces?.length ?? 0) > 0 || (live && message.messageRefId)}
 				<button
 					type="button"
 					class="ui-button ui-button--ghost ui-button--icon ui-button--sm row__expand"
 					class:row__expand--open={open}
 					aria-expanded={open}
-					aria-controls={`bounces-${message.id}`}
-					aria-label={`Bounces for “${message.subject}”`}
-					onclick={() => toggleRow(message.id)}>
+					aria-controls={`evidence-${message.id}`}
+					aria-label={`Delivery evidence for “${message.subject}”`}
+					onclick={() => toggleRow(message)}>
 					<ChevronDown size={15} />
 				</button>
 			{/if}
 		</div>
-		{#if open && message.bounces.length > 0}
-			<div class="bounces" id={`bounces-${message.id}`}>
-				<h4 class="bounces__title">{plural(message.bounces.length, 'address', 'addresses')} to fix</h4>
+		{#if open && (message.bounces?.length ?? 0) > 0}
+			<div class="bounces" id={`evidence-${message.id}`}>
+				<h4 class="bounces__title">{plural(message.bounces?.length ?? 0, 'address', 'addresses')} to fix</h4>
 				<ul class="bounces__list">
-					{#each message.bounces as bounce (bounce.email)}
+					{#each message.bounces ?? [] as bounce (bounce.email)}
 						{@const editing =
 							editingBounce?.messageId === message.id && editingBounce.email === bounce.email
 								? editingBounce
@@ -709,6 +819,34 @@
 					{/each}
 				</ul>
 			</div>
+		{:else if open && live}
+			<div class="bounces" id={`evidence-${message.id}`}>
+				<h4 class="bounces__title">Per-recipient delivery evidence</h4>
+				{#if timelineLoading.includes(message.id)}
+					<p class="calm" role="status">Loading delivery evidence…</p>
+				{:else if timelineErrors[message.id]}
+					<p class="fix__refusal" role="alert">{timelineErrors[message.id]}</p>
+				{:else if (timelines[message.id]?.entries.length ?? 0) === 0}
+					<p class="calm">No per-recipient attempts have been recorded yet.</p>
+				{:else}
+					<div class="timeline-wrap" role="region" aria-label="Per-recipient delivery attempts">
+						<table class="timeline">
+							<thead><tr><th>Recipient</th><th>State</th><th>Attempt</th><th>Reason</th><th>Time</th></tr></thead>
+							<tbody>
+								{#each timelines[message.id]?.entries ?? [] as entry (entry.id)}
+									<tr>
+										<td><span>{entry.recipient}</span> {@render actorMark(entry.actor)}</td>
+										<td>{timelineStateLabel(entry.state)}</td>
+										<td>{entry.attemptNumber ? `${entry.attemptKind === 'marked_resend' ? 'Resend' : 'Original'} ${entry.attemptNumber}` : 'Not started'}</td>
+										<td>{entry.reason ?? '—'}</td>
+										<td>{entry.at}</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				{/if}
+			</div>
 		{/if}
 	</li>
 {/snippet}
@@ -722,7 +860,7 @@
 	{:else}
 		<ul class="rows">
 			{#each current.entries as entry (entry.id)}
-				{@const badge = outcomeBadge[entry.outcome]}
+				{@const badge = deliveryOutcomeBadge[entry.outcome]}
 				{@const Outcome = badge.icon}
 				<li class="row row--thread">
 					<span class="ui-badge ui-badge--{badge.tone} row__state" class:ui-badge--solid={badge.solid}>
@@ -839,12 +977,12 @@
 						<span class="check__quiet">Not set up</span>
 					{/if}
 					{#if check.state === 'action_required'}
-						<button
-							type="button"
+						<a
+							href="/app/settings/email"
 							class="ui-button ui-button--secondary ui-button--sm check__action"
 							aria-label={`Continue setup for ${check.label.toLowerCase()}`}>
 							Continue setup
-						</button>
+						</a>
 					{/if}
 				</li>
 			{/each}
@@ -936,9 +1074,9 @@
 <CommitReceipt onUndone={load} />
 
 {#snippet subjectField()}
-	<Field id="review-subject" label="Subject" description="The line every recipient sees first.">
+	<Field id="review-subject" label="Subject" description={live ? 'Frozen with this prepared preview.' : 'The line every recipient sees first.'}>
 		{#snippet children({ id, describedBy })}
-			<input class="ui-control" type="text" {id} aria-describedby={describedBy} bind:value={reviewSubject} />
+			<input class="ui-control" type="text" {id} aria-describedby={describedBy} readonly={live} bind:value={reviewSubject} />
 		{/snippet}
 	</Field>
 {/snippet}
@@ -950,9 +1088,17 @@
 			{readiness}
 			subject={subjectField}
 			templateDoor={reviewDoor}
-			onPreview={reviewTemplate && theme ? selectPreview : undefined}
+			onPreview={(api.communications.previewRecipient || (reviewTemplate && theme)) ? selectPreview : undefined}
 			previewingEmail={previewEmail} />
-		{#if previewedTemplate && theme && previewRecipient}
+		{#if renderedPreview && previewRecipient}
+			<VerbatimBodyPeek
+				subject={renderedPreview.subject}
+				body={renderedPreview.plainText}
+				warningCodes={renderedPreview.warningCodes}
+				note={`What ${previewRecipient.name} receives — press any included recipient’s line above to see their copy.`} />
+		{:else if renderedPreviewError}
+			<p class="fix__refusal" role="alert">{renderedPreviewError}</p>
+		{:else if previewedTemplate && theme && previewRecipient}
 			<RecipientEmailPeek
 					template={previewedTemplate}
 					{theme}
@@ -972,7 +1118,7 @@
 			<div class="pair">
 				<span class="pair__label">Audience</span>
 				<span class="pair__value"
-					>{reviewMessage.audience} · {plural(reviewMessage.audienceCount, 'recipient')}</span>
+					>{reviewMessage.audience}{#if reviewMessage.audienceCount !== undefined} · {plural(reviewMessage.audienceCount, 'recipient')}{/if}</span>
 			</div>
 			<div class="pair">
 				<span class="pair__label">Provider readiness</span>
@@ -1072,6 +1218,27 @@
 
 	.card__action {
 		margin-inline-start: auto;
+	}
+
+	.timeline-wrap {
+		max-inline-size: 100%;
+		overflow-x: auto;
+		border: 1px solid var(--je-color-border);
+		border-radius: var(--je-radius-control);
+	}
+
+	.timeline {
+		inline-size: 100%;
+		border-collapse: collapse;
+		font-size: var(--je-font-size-sm);
+	}
+
+	.timeline th,
+	.timeline td {
+		padding: var(--je-space-2) var(--je-space-3);
+		border-block-end: 1px solid var(--je-color-border);
+		text-align: start;
+		white-space: nowrap;
 	}
 
 	.card__note {

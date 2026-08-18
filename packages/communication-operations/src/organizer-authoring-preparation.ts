@@ -7,6 +7,7 @@ import type { VersionedDefinitionRef } from '@jooevents/contracts';
 
 export type OrganizerCommunicationMutationOperationName =
   | 'store_communication_authoring_payload'
+	| 'message_template.create'
   | 'create_message_draft'
   | 'revise_message_batch'
   | 'discard_message_draft';

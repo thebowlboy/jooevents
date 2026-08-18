@@ -559,8 +559,10 @@ describe('organizer communication history and readiness truth', () => {
       currentState: 'accepted' as const,
       rows: [
         { factId: 'fact-1', sequence: 1, occurredAt: instant, kind: 'attempt_started' as const,
+          actor: { kind: 'human' as const, displayLabel: 'Organizer' },
           summaryCode: 'attempt.started' },
         { factId: 'fact-2', sequence: 2, occurredAt: instant, kind: 'provider_accepted' as const,
+          actor: { kind: 'human' as const, displayLabel: 'Organizer' },
           summaryCode: 'provider.accepted', evidenceDigestSha256: digest('f') }
       ],
       page: { hasMore: false as const }
@@ -622,6 +624,7 @@ describe('organizer communication pagination and schema identities', () => {
       'getDraft',
       'storeAuthoringPayload',
       'createDraft',
+      'createTemplate',
       'reviseDraft',
       'discardDraft',
       'previewBatch',

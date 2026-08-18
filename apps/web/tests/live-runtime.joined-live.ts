@@ -22,6 +22,23 @@ async function expectNoDocumentOverflow(page: Page): Promise<void> {
 	}))).toEqual({ document: false, body: false });
 }
 
+async function ensureEvent(page: Page): Promise<void> {
+	await page.goto('/app');
+	const firstRun = page.getByRole('button', { name: 'Fill in details myself' });
+	const pipeline = page.getByRole('region', { name: 'Pipeline' });
+	await expect(firstRun.or(pipeline).first()).toBeVisible();
+	if (await pipeline.isVisible()) return;
+	await firstRun.click();
+	const dialog = page.getByRole('dialog', { name: 'New event' });
+	await dialog.getByRole('textbox', { name: 'Name', exact: true }).fill('Joined Live Event');
+	await dialog.locator('#new-event-start').fill('2027-06-10');
+	await dialog.locator('#new-event-start').press('Enter');
+	await dialog.locator('#new-event-end').fill('2027-06-12');
+	await dialog.locator('#new-event-end').press('Enter');
+	await dialog.getByRole('button', { name: 'Create event' }).click();
+	await expect(pipeline).toBeVisible();
+}
+
 test.beforeEach(async ({ context, baseURL }) => {
 	if (!baseURL) throw new TypeError('Joined live browser base URL is required.');
 	const origin = new URL(baseURL);
@@ -54,16 +71,19 @@ test('real same-origin runtime exposes live data and no sample fallback', async 
 	}
 	await expect(page.getByText(/Mid-flight|Decision crunch|All clear/)).toHaveCount(0);
 	await expect(page.locator('[data-je-scenario]')).toHaveCount(0);
+	await ensureEvent(page);
 
-	// Communications now mounts the live readiness page: the shell titles it
-	// and the page reports provider readiness honestly instead of the old
-	// blanket "not enabled" gate.
+	// Communications mounts the complete live page: all three regions resolve
+	// through registered reads and none falls back to the sample scenario.
 	if ((page.viewportSize()?.width ?? 0) < 720) {
 		await page.getByRole('button', { name: 'Open navigation' }).click();
 	}
 	await page.getByRole('link', { name: 'Communications', exact: true }).click();
 	await expect(page.getByRole('heading', { level: 1, name: 'Communications' })).toBeVisible();
+	await expect(page.getByRole('region', { name: 'Needs attention' })).toBeVisible();
+	await expect(page.getByRole('region', { name: 'History' })).toBeVisible();
 	await expect(page.getByRole('heading', { level: 2, name: 'Email delivery' })).toBeVisible();
+	await expect(page.getByText(/\bdelivered\b/i)).toHaveCount(0);
 
 	await expectNoDocumentOverflow(page);
 });

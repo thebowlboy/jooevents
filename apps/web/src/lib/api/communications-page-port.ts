@@ -3,22 +3,25 @@ import type {
 	AudienceOption,
 	AudiencePreview,
 	CommunicationAttentionItem,
+	CommunicationDeliveryTimeline,
 	CommunicationMessage,
 	CommunicationThread,
 	EmailReadiness,
 	EventTheme,
 	MessageTemplate,
-	MutationOutcome,
-	SpeakerProfile
+	SpeakerProfile,
+	MutationOutcome
 } from './types';
 
 /** Factual capabilities consumed by the tuned organizer Communications surface. */
 export interface CommunicationsPagePort {
+	readonly source: { readonly kind: 'sample' | 'live' };
 	readonly communications: {
 		list(): Promise<CommunicationMessage[]>;
 		readiness(): Promise<EmailReadiness>;
 		attention(): Promise<CommunicationAttentionItem[]>;
 		thread(personId: string): Promise<CommunicationThread | null>;
+		timeline(messageId: string): Promise<CommunicationDeliveryTimeline | null>;
 		audiences(personId?: string): Promise<AudienceOption[]>;
 		/**
 		 * What a combination of audiences comes to, before anything is drafted:
@@ -44,7 +47,11 @@ export interface CommunicationsPagePort {
 			 */
 			document?: MessageTemplate;
 		}): Promise<CommunicationMessage>;
+		/** Rebuilds the current frozen review for a previously saved live draft. */
+		reviewDraft?(id: string): Promise<CommunicationMessage>;
 		send(id: string): Promise<MutationOutcome>;
+		/** Server-rendered copy for a live adopted preview. */
+		previewRecipient?(recipientResolutionId: string): Promise<import('./types').RenderedEmailPreview>;
 		resendBounced(id: string, email: string, correctedEmail: string): Promise<MutationOutcome>;
 	};
 	/**
@@ -72,15 +79,6 @@ export interface CommunicationsPagePort {
 	readonly theme: {
 		get(): Promise<EventTheme>;
 	};
-	readonly workspace: {
-		summary(): Promise<{
-			readonly event: null | {
-				readonly name: string;
-				readonly dates: string;
-				readonly location: string;
-			};
-		}>;
-	};
 	/**
 	 * The individual-disclosure door behind a name in the audience preview.
 	 * Optional: a composition that cannot serve profiles renders the names as
@@ -93,5 +91,14 @@ export interface CommunicationsPagePort {
 		 * hold and the composition resolves the person.
 		 */
 		profileById(speakerId: string): Promise<SpeakerProfile | null>;
+	};
+	readonly workspace: {
+		summary(): Promise<{
+			readonly event: null | {
+				readonly name: string;
+				readonly dates: string;
+				readonly location: string;
+			};
+		}>;
 	};
 }

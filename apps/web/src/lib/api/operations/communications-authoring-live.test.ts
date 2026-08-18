@@ -6,6 +6,9 @@ import {
 	organizerCommunicationDraftOperationResultSchema,
 	organizerCommunicationDraftPageOperationResultSchema,
 	organizerCommunicationHistoryPageOperationResultSchema,
+	organizerCommunicationAttentionPageOperationResultSchema,
+	organizerCommunicationThreadPageOperationResultSchema,
+	organizerCommunicationTimelinePageOperationResultSchema,
 	organizerCommunicationPurposeDetailOperationResultSchema,
 	organizerCommunicationPurposePageOperationResultSchema,
 	organizerMessageBatchPreviewDetailOperationResultSchema,
@@ -49,7 +52,10 @@ const paths = Object.freeze({
 	prepareBatchPreview: '/api/events/current/communications/previews/prepare',
 	adoptBatchPreview: '/api/events/current/communications/previews/adopt',
 	sendMessages: '/api/events/current/communications/messages/send',
-	getDeliveryHistory: '/api/events/current/communications/deliveries/history'
+	getDeliveryHistory: '/api/events/current/communications/deliveries/history',
+	listAttentionItems: '/api/events/current/communications/attention',
+	getPersonThread: '/api/events/current/communications/thread',
+	getDeliveryTimeline: '/api/events/current/communications/timeline'
 } as const);
 
 const purposeRevision = Object.freeze({
@@ -415,6 +421,21 @@ function successPayloads(): Readonly<Record<string, unknown>> {
 				}],
 				page: { hasMore: false }
 			})
+		),
+		[paths.listAttentionItems]: organizerCommunicationAttentionPageOperationResultSchema.parse(
+			readSuccess({ schemaVersion: 1, visibility: 'organizer_non_security', rows: [], page: { hasMore: false } })
+		),
+		[paths.getPersonThread]: organizerCommunicationThreadPageOperationResultSchema.parse(
+			readSuccess({
+				schemaVersion: 1, visibility: 'organizer_non_security', personRefId: 'person-1',
+				personLabel: 'Ada Speaker', rows: [], page: { hasMore: false }
+			})
+		),
+		[paths.getDeliveryTimeline]: organizerCommunicationTimelinePageOperationResultSchema.parse(
+			readSuccess({
+				schemaVersion: 1, visibility: 'organizer_non_security', deliveryId: 'batch-1',
+				currentState: 'known_failed', rows: [], page: { hasMore: false }
+			})
 		)
 	});
 }
@@ -482,6 +503,9 @@ describe('pure-live Communications authoring browser port', () => {
 			audienceLabel: 'Accepted submissions'
 		}, 'send-messages-1');
 		const history = await port.getDeliveryHistory({ messageRefId: 'batch-1' });
+		const attention = await port.listAttentionItems();
+		const thread = await port.getPersonThread({ personRefId: 'person-1' });
+		const timeline = await port.getDeliveryTimeline({ deliveryId: 'batch-1' });
 
 		expect(port.source).toEqual({ kind: 'live' });
 		expect(purposes).toMatchObject({
@@ -552,6 +576,9 @@ describe('pure-live Communications authoring browser port', () => {
 				}]
 			}
 		});
+		expect(attention).toMatchObject({ kind: 'success', data: { rows: [] } });
+		expect(thread).toMatchObject({ kind: 'success', data: { personLabel: 'Ada Speaker' } });
+		expect(timeline).toMatchObject({ kind: 'success', data: { currentState: 'known_failed' } });
 
 		expect(calls.map((call) => call.path.split('?')[0])).toEqual(Object.values(paths));
 		const purposeQuery = new URL(calls[0]!.path, 'https://jooevents.invalid').searchParams;
@@ -575,7 +602,7 @@ describe('pure-live Communications authoring browser port', () => {
 			.map((operation) => operation.name)
 			.filter((name) => name.includes('send') || name.includes('delivery'))
 			.sort()
-		).toEqual(['get_delivery_history', 'send_messages']);
+		).toEqual(['get_delivery_history', 'get_delivery_timeline', 'send_messages']);
 	});
 
 	test('preserves structured nonterminal outcomes and rejects a mismatched preview tuple', async () => {

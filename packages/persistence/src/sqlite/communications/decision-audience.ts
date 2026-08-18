@@ -286,6 +286,36 @@ export function createSQLiteDecisionAudienceSource(input: {
       return contactRefId.startsWith(CONTACT_REF_PREFIX);
     },
 
+	resolveExplicitContacts({ scope: rawScope, audience, contactRefIds }: {
+		readonly scope: OrganizerAudienceScope;
+		readonly audience: OrganizerCommunicationAudienceDraft;
+		readonly contactRefIds: readonly string[];
+	}): OrganizerAudienceSourceSnapshot {
+		const selected = scope(rawScope);
+		const parsed = organizerCommunicationAudienceDraftSchema.parse(audience);
+		if (parsed.source.kind !== 'explicit_contacts') {
+			throw new OrganizerAudienceResolutionError('source_contract_mismatch');
+		}
+		const heads = contactRefIds.map((contactRefId) => {
+			if (!contactRefId.startsWith(CONTACT_REF_PREFIX)) {
+				throw new OrganizerAudienceResolutionError('source_contract_mismatch');
+			}
+			const row = headRow(selected, contactRefId.slice(CONTACT_REF_PREFIX.length));
+			if (!row) throw new OrganizerAudienceResolutionError('source_not_registered');
+			return row;
+		});
+		const material = heads.map((row) => ({ submissionId: row.submission_id, version: row.version }));
+		return Object.freeze({
+			source: parsed.source,
+			candidates: Object.freeze(heads.map((row) => candidateFor(selected, row))),
+			sourceVersions: Object.freeze([organizerMessagePreviewSourceVersionSchema.parse({
+				sourceKey: `decision-contact.${digest(material).slice(0, 32)}`,
+				sourceVersion: 1 + heads.reduce((sum, row) => sum + row.version, 0),
+				digestSha256: digest({ schemaVersion: 1, contacts: material })
+			})])
+		});
+	},
+
     resolveCurrentSnapshot({ scope: rawScope, audience }: {
       readonly scope: OrganizerAudienceScope;
       readonly audience: OrganizerCommunicationAudienceDraft;
@@ -483,6 +513,8 @@ export function decisionAudienceDelegates(
   return Object.freeze(source.sourceDefinitionKeys.map((key) => Object.freeze({
     sourceDefinitionKey: key,
     ownsContactRef: source.ownsContactRef,
+	...(source.resolveExplicitContacts === undefined
+		? {} : { resolveExplicitContacts: source.resolveExplicitContacts }),
     resolveCurrentSnapshot: source.resolveCurrentSnapshot,
     resolveEmail: source.resolveEmail
   })));

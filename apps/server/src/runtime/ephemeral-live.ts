@@ -101,7 +101,10 @@ import {
   OUTBOUND_EMAIL_DISPATCH_ACCESS_POLICY,
   SEND_MESSAGES_DRAFT_ACCESS_POLICY,
   composeOrganizerCommunicationAuthoringOperationModules,
+  createCommunicationAttentionReadOperationModule,
   createCommunicationDeliveryHistoryReadOperationModule,
+  createCommunicationThreadReadOperationModule,
+  createCommunicationTimelineReadOperationModule,
   createCommunicationSendOperationModule,
   createOrganizerAudiencePreviewReadOperationModule,
   createOrganizerCommunicationMutationOperationModule,
@@ -642,6 +645,11 @@ import { createDohTxtResolver, DOH_TXT_RESOLVER_KEY } from './doh-txt-resolver';
 import {
   createSQLiteCommunicationDeliveryHistorySource
 } from './communication-delivery-history';
+import {
+  createSQLiteCommunicationAttentionSource,
+  createSQLiteCommunicationThreadSource,
+  createSQLiteCommunicationTimelineSource
+} from './communication-organizer-projections';
 import { createCommunicationSendOperationRuntime } from './communication-send-operations';
 import { createOutboundDispatchLoop, type OutboundDispatchLoop } from './outbound-dispatch-loop';
 import { createFilesLiveComposition, type FilesLiveComposition } from './files-live';
@@ -3340,7 +3348,13 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
         currentEvent: organizerCommunicationCurrentEvent,
         clock,
         ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
-        crypto: organizerCommunicationCrypto
+		crypto: organizerCommunicationCrypto,
+		enabledOperations: [
+			'store_communication_authoring_payload',
+			'create_message_draft',
+			'revise_message_batch',
+			'discard_message_draft'
+		]
       });
     const organizerCommunicationAuthoringOperations =
       composeOrganizerCommunicationAuthoringOperationModules({
@@ -3388,17 +3402,60 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
         )
       })
     });
+    const communicationDeliveryHistory = createSQLiteCommunicationDeliveryHistorySource({
+      sqlite: database.sqlite
+    });
     const communicationDeliveryHistoryOperations =
       createCommunicationDeliveryHistoryReadOperationModule({
         workspaceId,
         policy: ORGANIZER_COMMUNICATION_DRAFT_ACCESS_POLICY,
         currentAuthority,
         currentEvent: organizerCommunicationCurrentEvent,
-        read: createSQLiteCommunicationDeliveryHistorySource({ sqlite: database.sqlite }),
+        read: communicationDeliveryHistory,
         clock,
         ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
         crypto: organizerCommunicationCrypto
       });
+    const communicationAttentionOperations = createCommunicationAttentionReadOperationModule({
+      workspaceId,
+      policy: ORGANIZER_COMMUNICATION_DRAFT_ACCESS_POLICY,
+      currentAuthority,
+      currentEvent: organizerCommunicationCurrentEvent,
+      read: createSQLiteCommunicationAttentionSource({
+        authoring: organizerCommunicationAuthoring,
+        readiness: emailProviderReadiness,
+        history: communicationDeliveryHistory
+      }),
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      crypto: organizerCommunicationCrypto
+    });
+    const communicationThreadOperations = createCommunicationThreadReadOperationModule({
+      workspaceId,
+      policy: ORGANIZER_COMMUNICATION_DRAFT_ACCESS_POLICY,
+      currentAuthority,
+      currentEvent: organizerCommunicationCurrentEvent,
+      read: createSQLiteCommunicationThreadSource({
+        sqlite: database.sqlite,
+        previews: organizerCommunicationPreview
+      }),
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      crypto: organizerCommunicationCrypto
+    });
+    const communicationTimelineOperations = createCommunicationTimelineReadOperationModule({
+      workspaceId,
+      policy: ORGANIZER_COMMUNICATION_DRAFT_ACCESS_POLICY,
+      currentAuthority: organizerCommunicationPreviewAuthority,
+      currentEvent: organizerCommunicationCurrentEvent,
+      read: createSQLiteCommunicationTimelineSource({
+        sqlite: database.sqlite,
+        previews: organizerCommunicationPreview
+      }),
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      crypto: organizerCommunicationCrypto
+    });
     const outboundDispatchJobIdentity = Object.freeze({
       jobId: parseJobId(crypto.randomUUID()),
       capabilityRevisionId: parseCapabilityRevisionId(crypto.randomUUID()),
@@ -4825,6 +4882,9 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       senderIdentityOperations,
       communicationSendOperations,
       communicationDeliveryHistoryOperations,
+      communicationAttentionOperations,
+      communicationThreadOperations,
+      communicationTimelineOperations,
       outboundEmailDispatchOperations
     ]);
     const operations = await createApplicationOperationRuntime({

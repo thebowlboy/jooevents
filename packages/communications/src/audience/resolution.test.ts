@@ -195,6 +195,67 @@ describe('organizer audience resolution', () => {
     });
   });
 
+	test('composite sources dedupe a mailbox, keep the first group context, and escalate exclusion', async () => {
+		const first = candidate(1);
+		const second = candidate(2);
+		const secondSource = {
+			...registeredSource,
+			recipeId: 'recipe-reviewers',
+			recipeDigestSha256: hex(12),
+			sourceDefinition: {
+				reference: { key: 'audience.reviewers', version: 1 },
+				definitionDigestSha256: hex(13)
+			}
+		};
+		const source = {
+			resolveCurrentSnapshot({ audience }: { audience: OrganizerCommunicationAudienceDraft }) {
+				if (audience.source.kind !== 'registered_query') {
+					throw new OrganizerAudienceResolutionError('source_not_registered');
+				}
+				const member = audience.source.recipeId === registeredSource.recipeId ? first : second;
+				return {
+					source: audience.source,
+					candidates: [member],
+					sourceVersions: [{
+						sourceKey: `source.${audience.source.recipeId}`,
+						sourceVersion: 1,
+						digestSha256: audience.source.recipeDigestSha256
+					}]
+				};
+			}
+		};
+		const audience: OrganizerCommunicationAudienceDraft = {
+			schemaVersion: 1,
+			binding: 'current_snapshot',
+			purposeRevision,
+			source: {
+				kind: 'composite',
+				groups: [
+					{ label: 'Confirmed speakers', source: registeredSource },
+					{ label: 'Reviewers', source: secondSource }
+				]
+			}
+		};
+		const snapshot = await resolveOrganizerAudience({
+			scope,
+			audience,
+			asOf,
+			source,
+			addressPolicy: createInMemoryOrganizerAddressPolicyPort([
+				{ scope, contactRefId: first.contactRefId, result: evaluatedAddress(first, 1, { email: 'same@example.test' }) },
+				{ scope, contactRefId: second.contactRefId, result: evaluatedAddress(second, 2, {
+					email: 'SAME@example.test', suppression: 'suppressed'
+				}) }
+			])
+		});
+		expect(snapshot.members).toHaveLength(1);
+		expect(snapshot.members[0]).toMatchObject({
+			state: 'excluded',
+			reasonCode: ORGANIZER_AUDIENCE_EXCLUSION_REASONS.suppressed,
+			candidate: { personRefId: first.personRefId, safeLabel: first.safeLabel }
+		});
+	});
+
   test('explicit contacts omit cross-scope refs without leaking a hidden row or count', async () => {
     const visible = candidate(1);
     const hidden = candidate(2);

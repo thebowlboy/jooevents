@@ -167,6 +167,9 @@ export function createLiveSpeakersPagePort(input: {
 	readonly triage: Pick<SubmissionTriageLiveClient, 'read'>;
 	readonly contacts: Pick<OrganizerSubmissionsPort, 'source' | 'contact'>;
 	readonly tasks?: Pick<TaskLiveClient, 'readBoard'>;
+	readonly communications?: {
+		thread(personId: string): Promise<CommunicationThread | null>;
+	};
 	readonly newIdempotencyKey?: () => string;
 }): SpeakersPagePort {
 	if (input.sessions.source.kind !== 'live' || input.contacts.source.kind !== 'live') {
@@ -280,6 +283,7 @@ export function createLiveSpeakersPagePort(input: {
 			const assigned = taskAssignments.filter((entry) => entry.speakerId === head.id);
 			return {
 				id: head.id,
+				communicationPersonId: head.personId,
 				// The empty value is the typed absence for a row without a mounted
 				// name or address owner — never an invented person.
 				name: (head.submissionId !== null ? names.get(head.submissionId) : undefined) ?? '',
@@ -461,18 +465,8 @@ export function createLiveSpeakersPagePort(input: {
 			}
 		}),
 		communications: Object.freeze({
-			/**
-			 * Null is the typed absence the page renders as "nothing has been
-			 * sent". The send wave's delivery history is mounted, but a
-			 * per-person thread entry must state one of the view model's four
-			 * outcomes (delivered/sent/bounced/scheduled) and the composed
-			 * lane's only terminal state — not-delivered because no provider
-			 * is activated — is none of them; projecting it onto "bounced"
-			 * would fabricate a provider event. The thread joins when the
-			 * outcome vocabulary can carry that state honestly.
-			 */
-			async thread(): Promise<CommunicationThread | null> {
-				return null;
+			async thread(personId: string): Promise<CommunicationThread | null> {
+				return input.communications?.thread(personId) ?? null;
 			}
 		}),
 		vocab: Object.freeze({

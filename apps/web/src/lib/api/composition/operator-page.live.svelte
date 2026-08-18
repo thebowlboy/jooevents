@@ -1,6 +1,6 @@
 <script lang="ts">
 	import LiveUnavailablePage from '$lib/features/workspace/components/LiveUnavailablePage.svelte';
-	import CommunicationsReadinessPage from '$lib/features/communications/CommunicationsReadinessPage.svelte';
+	import CommunicationsPage from '$lib/features/communications/CommunicationsPage.svelte';
 	import DecisionsPage from '$lib/features/decisions/DecisionsPage.svelte';
 	import EmbedsPage from '$lib/features/embeds/EmbedsPage.svelte';
 	import FilesPage from '$lib/features/files/FilesPage.svelte';
@@ -149,7 +149,7 @@
 {:else if area === 'embeds'}
 	<EmbedsPage port={ports.embeds} />
 {:else if area === 'communications'}
-	<CommunicationsReadinessPage port={ports.communicationsReadiness} />
+	<CommunicationsPage port={ports.communications} />
 {:else if area === 'approvals'}
 	<AgentActionsPage port={ports.agentActions} />
 {:else if area === 'integrations' || area === 'integrations_airtable'}

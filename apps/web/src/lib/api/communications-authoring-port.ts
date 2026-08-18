@@ -2,10 +2,13 @@ import type {
 	operationHttpIdempotencyKeySchema,
 	OperationReceiptRef,
 	organizerCommunicationAudienceOptionListInputSchema,
+	organizerCommunicationAttentionListInputSchema,
 	OrganizerCommunicationAuthoringPayloadInput,
 	organizerCommunicationDraftGetInputSchema,
 	organizerCommunicationDraftListInputSchema,
 	organizerCommunicationHistoryListInputSchema,
+	organizerCommunicationThreadGetInputSchema,
+	organizerCommunicationTimelineGetInputSchema,
 	organizerCommunicationPurposeGetInputSchema,
 	organizerCommunicationPurposeListInputSchema,
 	organizerCreateCommunicationDraftInputSchema,
@@ -24,6 +27,7 @@ import type { SafeApiError } from './client';
 import type { OperatorHttpBindingUnavailableReason } from './operations/operator-http-binding';
 import type {
 	CommunicationAudienceOptionPageView,
+	CommunicationAttentionPageView,
 	CommunicationAuthoringPayloadRefView,
 	CommunicationDeliveryHistoryPageView,
 	CommunicationDraftMutationView,
@@ -31,6 +35,8 @@ import type {
 	CommunicationDraftView,
 	CommunicationPurposeDetailView,
 	CommunicationPurposePageView,
+	CommunicationThreadPageView,
+	CommunicationTimelinePageView,
 	MessageBatchPreviewDetailView,
 	MessagePreviewPrepareView,
 	MessagePreviewRecipientPageView,
@@ -66,6 +72,11 @@ export type SendMessagesRequest = z.input<typeof organizerSendMessagesInputSchem
 export type DeliveryHistoryListRequest = z.input<
 	typeof organizerCommunicationHistoryListInputSchema
 >;
+export type CommunicationAttentionListRequest = z.input<
+	typeof organizerCommunicationAttentionListInputSchema
+>;
+export type CommunicationThreadGetRequest = z.input<typeof organizerCommunicationThreadGetInputSchema>;
+export type CommunicationTimelineGetRequest = z.input<typeof organizerCommunicationTimelineGetInputSchema>;
 export type CommunicationDraftCreateRequest = z.input<
 	typeof organizerCreateCommunicationDraftInputSchema
 >;
@@ -94,7 +105,10 @@ export type CommunicationAuthoringOperation =
 	| 'prepare_message_batch_preview'
 	| 'preview_message_batch'
 	| 'send_messages'
-	| 'get_delivery_history';
+	| 'get_delivery_history'
+	| 'list_message_attention_items'
+	| 'get_person_thread'
+	| 'get_delivery_timeline';
 
 export type CommunicationUnavailableResult = {
 	readonly kind: 'unavailable';
@@ -229,4 +243,16 @@ export interface CommunicationsAuthoringPort {
 		input?: DeliveryHistoryListRequest,
 		options?: { readonly signal?: AbortSignal }
 	): Promise<CommunicationReadResult<CommunicationDeliveryHistoryPageView>>;
+	listAttentionItems(
+		input?: CommunicationAttentionListRequest,
+		options?: { readonly signal?: AbortSignal }
+	): Promise<CommunicationReadResult<CommunicationAttentionPageView>>;
+	getPersonThread(
+		input: CommunicationThreadGetRequest,
+		options?: { readonly signal?: AbortSignal }
+	): Promise<CommunicationReadResult<CommunicationThreadPageView>>;
+	getDeliveryTimeline(
+		input: CommunicationTimelineGetRequest,
+		options?: { readonly signal?: AbortSignal }
+	): Promise<CommunicationReadResult<CommunicationTimelinePageView>>;
 }

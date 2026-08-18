@@ -3,8 +3,11 @@ import type {
 	OrganizerCommunicationAuthoringPayloadRef,
 	OrganizerCommunicationDraftMutationResult,
 	OrganizerCommunicationDraftProjection,
+	OrganizerCommunicationAttentionItem,
 	organizerCommunicationDraftPageSchema,
 	OrganizerCommunicationHistoryPage,
+	OrganizerCommunicationThreadPage,
+	OrganizerCommunicationTimelinePage,
 	OrganizerCommunicationPurposeDetail,
 	organizerCommunicationPurposePageSchema,
 	OrganizerCommunicationPurposeRevisionRef,
@@ -85,3 +88,11 @@ export type SendMessagesResultView = CommunicationView<OrganizerSendMessagesResu
 /** Per-batch delivery history with live ledger-derived state counts. */
 export type CommunicationDeliveryHistoryPageView =
 	CommunicationView<OrganizerCommunicationHistoryPage>;
+export type CommunicationAttentionPageView = CommunicationView<{
+	readonly schemaVersion: 1;
+	readonly visibility: 'organizer_non_security';
+	readonly rows: readonly OrganizerCommunicationAttentionItem[];
+	readonly page: { readonly hasMore: boolean; readonly nextCursor?: string };
+}>;
+export type CommunicationThreadPageView = CommunicationView<OrganizerCommunicationThreadPage>;
+export type CommunicationTimelinePageView = CommunicationView<OrganizerCommunicationTimelinePage>;

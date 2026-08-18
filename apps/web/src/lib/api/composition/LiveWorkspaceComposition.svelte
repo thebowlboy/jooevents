@@ -4,6 +4,8 @@
 	import { createLiveEventProgramPort } from '$lib/api/event-program/live';
 	import { createLiveCommunicationsReadinessPagePort } from '$lib/api/communications-readiness-page-live';
 	import { createCommunicationsAuthoringLivePort } from '$lib/api/operations/communications-authoring-live';
+	import { createLiveCommunicationsPagePort } from '$lib/api/communications-page-port.live';
+	import type { CommunicationsPagePort } from '$lib/api/communications-page-port';
 	import { createCommunicationsProviderReadLivePort } from '$lib/api/operations/communications-provider-read-live';
 	import { createCommunicationsProviderSetupLivePort } from '$lib/api/operations/communications-provider-setup-live';
 	import { setOrganizerFormsPort } from '$lib/api/intake-forms-context';
@@ -102,10 +104,11 @@
 		deadlines: createDeadlineCatalogLivePort({ manifest: initial.manifest })
 	});
 	const shellEvents = createEventLiveClient({ manifest: initial.manifest });
+	const workspaceShellSummary = createWorkspaceShellSummaryLivePort({ manifest: initial.manifest });
 	const shell = createLiveWorkspaceShellPort({
 		user: initial.user,
 		overview,
-		shellSummary: createWorkspaceShellSummaryLivePort({ manifest: initial.manifest }),
+		shellSummary: workspaceShellSummary,
 		events: createLiveWorkspaceEventCollection({
 			events: shellEvents,
 			// The same guarded create the first-run panel uses, so one Event is
@@ -200,6 +203,7 @@
 	// doors consume the same people as the Speakers surface. Profile enrichment
 	// remains absent until its own canonical projection exists; the roster itself
 	// must never be replaced by an invented empty list.
+	let communicationsPage: CommunicationsPagePort | null = null;
 	const speakers = createLiveSpeakersPagePort({
 		engagements: engagementsClient,
 		sessions: sessionCatalog,
@@ -208,7 +212,13 @@
 			manifest: initial.manifest,
 			contactCapability: { kind: 'available' }
 		}),
-		tasks: taskClient
+		tasks: taskClient,
+		communications: {
+			thread(personId) {
+				if (communicationsPage === null) throw new Error('The Communications page is not ready.');
+				return communicationsPage.communications.thread(personId);
+			}
+		}
 	});
 	// Templates depends on Schedule for previews, while Schedule needs the
 	// template catalog for its public-surface door. Construction is synchronous;
@@ -290,6 +300,11 @@
 			forms: canonicalForms
 		})
 	});
+	communicationsPage = createLiveCommunicationsPagePort({
+		communications: communicationsAuthoring,
+		readiness: communicationsReadiness,
+		presentation: templates
+	});
 	const embeds = createLiveEmbedsPagePort({ release, templates });
 	const tasks = createLiveTasksPagePort({
 		tasks: taskClient,
@@ -358,6 +373,7 @@
 		pulse,
 		eventProgram,
 		communicationsReadiness,
+		communications: communicationsPage,
 		forms,
 		submissions,
 		decisions,

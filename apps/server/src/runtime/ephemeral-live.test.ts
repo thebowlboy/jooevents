@@ -38,6 +38,9 @@ import {
   organizerCommunicationDraftMutationOperationResultSchema,
   organizerCommunicationDraftPageOperationResultSchema,
   organizerCommunicationHistoryPageOperationResultSchema,
+	organizerCommunicationAttentionPageOperationResultSchema,
+	organizerCommunicationThreadPageOperationResultSchema,
+	organizerCommunicationTimelinePageOperationResultSchema,
   organizerCommunicationPurposePageOperationResultSchema,
   organizerMessageTemplatePageOperationResultSchema,
   organizerPrepareMessagePreviewOperationResultSchema,
@@ -1042,6 +1045,10 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['GET /api/events/current/communications/deliveries/history']
       },
       {
+        name: 'get_delivery_timeline', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/communications/timeline']
+      },
+      {
         name: 'get_message_batch_preview', version: 1, effect: 'read',
         bindings: ['GET /api/events/current/communications/previews/detail']
       },
@@ -1054,12 +1061,20 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['GET /api/events/current/communications/templates/detail']
       },
       {
+        name: 'get_person_thread', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/communications/thread']
+      },
+      {
         name: 'list_audience_options', version: 1, effect: 'read',
         bindings: ['GET /api/events/current/communications/audiences/options']
       },
       {
         name: 'list_communication_purposes', version: 1, effect: 'read',
         bindings: ['GET /api/events/current/communications/purposes']
+      },
+      {
+        name: 'list_message_attention_items', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/communications/attention']
       },
       {
         name: 'list_message_drafts', version: 1, effect: 'read',
@@ -4891,7 +4906,7 @@ describe('ephemeral live Foundation server composition', () => {
       // not an assumption about the composition: the fake resolves a
       // non-scenario external key as a terminal known rejection.
       stateReasonCode: 'delivery.rejected_terminal',
-      actor: { kind: 'human', displayLabel: 'Workspace operator' },
+      actor: { kind: 'human', displayLabel: 'Ephemeral Owner' },
       cause: expect.objectContaining({
         subjectKind: 'communication_preview',
         subjectRefId: summaryOne.identity.audienceSpecId
@@ -4907,6 +4922,54 @@ describe('ephemeral live Foundation server composition', () => {
       availableActions: ['continue_provider_setup']
     })]);
     expect(history.data.page).toEqual({ hasMore: false });
+
+		const attentionResponse = await runtime.app.request('/api/events/current/communications/attention', {
+				headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+			});
+		expect(attentionResponse.status, await attentionResponse.clone().text()).toBe(200);
+		const attentionWire = await attentionResponse.json();
+		expect(attentionWire).toHaveProperty('kind');
+		const attention = organizerCommunicationAttentionPageOperationResultSchema.parse(attentionWire);
+		if (attention.kind !== 'success') throw new Error('Communication attention read failed.');
+		expect(new Set(attention.data.rows.map((row) => row.reasonCode))).toEqual(new Set([
+			'draft_awaiting_review', 'provider_action_required', 'batch_known_failed'
+		]));
+
+		const person = runtime.database.sqlite.query<{ readonly person_ref_id: string }, [string]>(`
+			SELECT person_ref_id FROM communication_message_releases WHERE batch_id=? LIMIT 1
+		`).get(sendBody.batchId);
+		if (!person) throw new Error('Sent communication person missing.');
+		const threadResponse = await runtime.app.request(
+				`/api/events/current/communications/thread?personRefId=${encodeURIComponent(person.person_ref_id)}`,
+				{ headers: eventHeaders({ session, correlationId: crypto.randomUUID() }) }
+			);
+		expect(threadResponse.status, await threadResponse.clone().text()).toBe(200);
+		const threadWire = await threadResponse.json();
+		expect(threadWire).toHaveProperty('kind');
+		const thread = organizerCommunicationThreadPageOperationResultSchema.parse(threadWire);
+		if (thread.kind !== 'success') throw new Error('Communication thread read failed.');
+		expect(thread.data.rows).toEqual([expect.objectContaining({
+			historyItemId: history.data.rows[0]!.historyItemId,
+			subject: sendBody.subject,
+			state: 'known_failed'
+		})]);
+		expect(JSON.stringify(thread)).not.toContain('http.send.one@example.test');
+
+		const timelineResponse = await runtime.app.request(
+				`/api/events/current/communications/timeline?deliveryId=${encodeURIComponent(sendBody.batchId)}`,
+				{ headers: eventHeaders({ session, correlationId: crypto.randomUUID() }) }
+			);
+		expect(timelineResponse.status, await timelineResponse.clone().text()).toBe(200);
+		const timelineWire = await timelineResponse.json();
+		expect(timelineWire).toHaveProperty('kind');
+		const timeline = organizerCommunicationTimelinePageOperationResultSchema.parse(timelineWire);
+		if (timeline.kind !== 'success') throw new Error('Communication timeline read failed.');
+		expect(timeline.data.rows).toEqual([expect.objectContaining({
+			actor: { kind: 'human', displayLabel: 'Ephemeral Owner' },
+			recipient: expect.objectContaining({ state: 'known_rejected_terminal' }),
+			attempt: expect.objectContaining({ attemptNumber: 1, attemptKind: 'original' })
+		})]);
+		expect(JSON.stringify(timeline)).not.toContain('http.send.one@example.test');
     // Derived, not assumed: the projected reason is exactly the outcome code
     // the deciding attempt recorded in the ledger.
     expect(history.data.rows[0]!.stateReasonCode).toBe(

@@ -28,8 +28,8 @@ export function createSampleDecisionsPagePort(api: WorkspaceApi): DecisionsPageP
 			async notify(ids: string[], subject: string): Promise<NotificationDispatch> {
 				const message = await api.decisions.notify(ids, subject);
 				return {
-					committed: message.audienceCount,
-					sent: message.deliveredCount,
+					committed: message.audienceCount ?? 0,
+					sent: message.deliveredCount ?? null,
 					note: 'Delivery state per recipient is tracked in Communications. Result not sent clears once delivery evidence lands.'
 				};
 			}

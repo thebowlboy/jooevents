@@ -3,8 +3,11 @@ import type {
 	OrganizerCommunicationAuthoringPayloadRef,
 	OrganizerCommunicationDraftMutationResult,
 	OrganizerCommunicationDraftProjection,
+	OrganizerCommunicationAttentionItem,
 	organizerCommunicationDraftPageSchema,
 	OrganizerCommunicationHistoryPage,
+	OrganizerCommunicationThreadPage,
+	OrganizerCommunicationTimelinePage,
 	OrganizerCommunicationPurposeDetail,
 	organizerCommunicationPurposePageSchema,
 	OrganizerMessageBatchPreviewDetail,
@@ -19,6 +22,7 @@ import type {
 import type { z } from 'zod';
 import type {
 	CommunicationAudienceOptionPageView,
+	CommunicationAttentionPageView,
 	CommunicationAuthoringPayloadRefView,
 	CommunicationDeliveryHistoryPageView,
 	CommunicationDraftMutationView,
@@ -26,6 +30,8 @@ import type {
 	CommunicationDraftView,
 	CommunicationPurposeDetailView,
 	CommunicationPurposePageView,
+	CommunicationThreadPageView,
+	CommunicationTimelinePageView,
 	CommunicationView,
 	MessageBatchPreviewDetailView,
 	MessagePreviewIdentityView,
@@ -143,5 +149,26 @@ export function mapSendMessagesResult(value: OrganizerSendMessagesResult): SendM
 export function mapCommunicationDeliveryHistoryPage(
 	value: OrganizerCommunicationHistoryPage
 ): CommunicationDeliveryHistoryPageView {
+	return immutableCopy(value);
+}
+
+export function mapCommunicationAttentionPage(value: {
+	readonly schemaVersion: 1;
+	readonly visibility: 'organizer_non_security';
+	readonly rows: readonly OrganizerCommunicationAttentionItem[];
+	readonly page: { readonly hasMore: boolean; readonly nextCursor?: string };
+}): CommunicationAttentionPageView {
+	return immutableCopy(value);
+}
+
+export function mapCommunicationThreadPage(
+	value: OrganizerCommunicationThreadPage
+): CommunicationThreadPageView {
+	return immutableCopy(value);
+}
+
+export function mapCommunicationTimelinePage(
+	value: OrganizerCommunicationTimelinePage
+): CommunicationTimelinePageView {
 	return immutableCopy(value);
 }

@@ -4,8 +4,9 @@
 	import type { CommunicationsPagePort } from '$lib/api/communications-page-port';
 	import { LiveRead, type LiveReadState } from '$lib/api/live-read';
 	import { reachSentence } from '$lib/api/audience-union';
-	import { templateKinds } from '$lib/api/template-kinds';
+	import { templateKind, templateKinds } from '$lib/api/template-kinds';
 	import EmailRender from '$lib/features/templates/EmailRender.svelte';
+	import ProfilePeek from '$lib/features/workspace/components/ProfilePeek.svelte';
 	import InlineEditor from '$lib/features/templates/InlineEditor.svelte';
 	import {
 		editableUnits,
@@ -19,7 +20,8 @@
 		AudienceOption,
 		AudiencePreview,
 		EventTheme,
-		MessageTemplate
+		MessageTemplate,
+		SpeakerProfile
 	} from '$lib/api/types';
 
 	interface Props {
@@ -55,6 +57,7 @@
 	}: Props = $props();
 
 	const api = $derived(port);
+	const live = $derived(api.source.kind === 'live');
 
 	let subject = $state('');
 	/** Empty string is the blank start; otherwise the chosen template's id. */
@@ -106,6 +109,32 @@
 		}
 		void api.communications.previewRecipients(ids).then((next) => {
 			if (token === previewToken) preview = next;
+		}).catch(() => {
+			if (token === previewToken) preview = null;
+		});
+	});
+
+	/**
+	 * Profiles for the named rows, keyed by roster id.
+	 *
+	 * Read only when the list is actually opened, and only for rows the roster
+	 * holds: the preview payload itself carries no addresses, and this is the
+	 * ordinary individual-disclosure door rather than a standing read of
+	 * everyone's contact details.
+	 */
+	let whoProfiles = $state<Record<string, SpeakerProfile | null>>({});
+
+	$effect(() => {
+		const ask = api.speakers?.profileById;
+		const rows = showWho ? (preview?.rows ?? []) : [];
+		const ids = rows.map((row) => row.speakerId).filter((id): id is string => id !== undefined);
+		if (!ask || ids.length === 0) return;
+		const wanted = ids.filter((id) => !(id in whoProfiles));
+		if (wanted.length === 0) return;
+		void Promise.all(wanted.map((id) => ask(id).catch(() => null))).then((found) => {
+			const next = { ...whoProfiles };
+			wanted.forEach((id, index) => (next[id] = found[index] ?? null));
+			whoProfiles = next;
 		});
 	});
 
@@ -141,8 +170,10 @@
 		openedFor = scope;
 		subject = '';
 		templateId = '';
-		// A composer is a fresh sheet, and so is the step it opens on.
+		// A composer is a fresh sheet, and so is the step it opens on and the
+		// one-off it starts from — last compose's words are not this one's.
 		step = 'compose';
+		oneOff = seedOneOff();
 		closeInline();
 		// A fresh request per scope, and the newest one wins: reopening the
 		// composer on another person while the first count is still in flight
@@ -197,11 +228,46 @@
 	// ------------------------------------------------------- edit in the preview
 
 	/**
-	 * The preview is editable whenever a stored template is on screen and nothing
-	 * is mid-commit. The teaching line follows this same value rather than the
-	 * branch, so the composer never offers a press it would refuse.
+	 * The body of a compose that named no template.
+	 *
+	 * A blank start is still a document. Without one the composer had nothing to
+	 * preview, nothing to edit, and minted a draft whose review could only
+	 * announce that it had no body — a message you could send but never read.
+	 * The one-off is seeded from the registry's bare-start scaffold, edited in
+	 * place like any template, and frozen onto the message on Create.
+	 *
+	 * It is anonymous on purpose: it belongs to this compose, is listed nowhere,
+	 * and its edits commit to local state rather than to a library revision,
+	 * because there is no library record to revise.
 	 */
-	const inlineEnabled = $derived(template !== null && !busy && step === 'compose');
+	function seedOneOff(): MessageTemplate {
+		const bare = templateKind('blank') ?? templateKinds[templateKinds.length - 1]!;
+		return {
+			id: 'one-off',
+			key: 'one-off',
+			name: 'One-off message',
+			purpose: bare.purpose,
+			subject: bare.subject,
+			blocks: structuredClone(bare.blocks),
+			mergeFields: structuredClone(bare.mergeFields),
+			revision: 1,
+			revisions: [],
+			usedBy: []
+		};
+	}
+
+	let oneOff = $state<MessageTemplate>(seedOneOff());
+
+	/** What the preview renders and Create freezes: the stored template, or the one-off. */
+	const document_ = $derived(template ?? oneOff);
+
+	/**
+	 * The preview is editable whenever a body is on screen and nothing is
+	 * mid-commit — which is always, now that a blank start has one. The teaching
+	 * line follows this same value rather than the branch, so the composer never
+	 * offers a press it would refuse.
+	 */
+	const inlineEnabled = $derived(!busy && step === 'compose' && (!live || !template));
 
 	let inlineUnit = $state<InlineUnit | null>(null);
 	let inlineAnchor = $state<HTMLElement | null>(null);
@@ -230,10 +296,10 @@
 	}
 
 	function onUnitPress(path: string, el: HTMLElement) {
-		if (!template || !inlineEnabled) return;
+		if (!inlineEnabled) return;
 		if (inlineUnit?.path === path) return;
 		inlinePreview = null;
-		const unit = resolveUnit(template, path);
+		const unit = resolveUnit(document_, path);
 		if (!unit) return;
 		inlineUnit = unit;
 		inlineAnchor = el;
@@ -242,8 +308,8 @@
 	/** Live-to-view: every change in the open editor re-renders the preview. */
 	function previewInline(result: InlineEditResult) {
 		const unit = inlineUnit;
-		if (!unit || !template) return;
-		inlinePreview = messageInlineDoc($state.snapshot(template) as MessageTemplate, unit, result);
+		if (!unit) return;
+		inlinePreview = messageInlineDoc($state.snapshot(document_) as MessageTemplate, unit, result);
 		// The re-render can replace the annotated element the editor anchors to;
 		// anchoring is by path, so a replaced element is re-resolved.
 		void tick().then(() => {
@@ -260,9 +326,17 @@
 	 */
 	async function applyInline(result: InlineEditResult) {
 		const unit = inlineUnit;
-		if (!unit || !template) return;
-		const next = messageInlineDoc($state.snapshot(template) as MessageTemplate, unit, result);
+		if (!unit) return;
+		const next = messageInlineDoc($state.snapshot(document_) as MessageTemplate, unit, result);
 		if (!next) {
+			closeInline();
+			return;
+		}
+		// A one-off has no library record to revise, so its edit lands in the
+		// composer's own state. Nothing is written to the template store, and
+		// nothing needs to be re-read.
+		if (!template) {
+			oneOff = next;
 			closeInline();
 			return;
 		}
@@ -302,22 +376,32 @@
 	// The open editor's pending copy wins over the stored one, so the preview
 	// shows the edit as it is typed; the subject stays the composer's own field.
 	const previewTemplate = $derived.by(() => {
-		const base = inlinePreview ?? template;
-		return base ? { ...base, subject: subject.trim() === '' ? base.subject : subject } : null;
+		const base = inlinePreview ?? document_;
+		return { ...base, subject: subject.trim() === '' ? base.subject : subject };
 	});
 
 	async function createDraft() {
 		const line = subject.trim();
 		if (!line || audienceIds.length === 0 || busy) return;
 		busy = true;
-		await api.communications.compose({
-			subject: line,
-			audienceIds,
-			...(templateId ? { templateId } : {})
-		});
-		await onCreated();
-		busy = false;
-		open = false;
+		createError = '';
+		try {
+			await api.communications.compose({
+				subject: line,
+				audienceIds,
+				// One or the other, never both: a named template is the body, and a
+				// blank start freezes the one-off as written at this moment.
+				...(templateId
+					? { templateId }
+					: { document: $state.snapshot(oneOff) as MessageTemplate })
+			});
+			await onCreated();
+			open = false;
+		} catch (error) {
+			createError = error instanceof Error ? error.message : 'The draft could not be prepared.';
+		} finally {
+			busy = false;
+		}
 	}
 </script>
 
@@ -383,15 +467,17 @@
 						<!-- A control, not an option: an <option> that opens a dialog is a
 						     trap on keyboard and touch, where choosing it in order to read
 						     it is the same act as committing to it. -->
-						<button type="button" class="tpl__new" onclick={openNewTemplate}>New template…</button>
+						{#if !live}
+							<button type="button" class="tpl__new" onclick={openNewTemplate}>New template…</button>
+						{/if}
 						{#if template}
 							<!-- One fact, one door: the chosen template links to its editor. -->
-							<a
+							{#if !live}<a
 								class="tpl__edit"
 								href={`/app/templates?template=${template.id}`}
 								aria-label={`Edit template — ${template.name}`}>
 								Edit template
-							</a>
+							</a>{/if}
 						{/if}
 					</div>
 				{/snippet}
@@ -408,16 +494,14 @@
 						bind:value={subject} />
 				{/snippet}
 			</Field>
-			<!-- Audiences combine, so the control is a set of choices rather than a
-			     list of alternatives: a dropdown could only ever say "instead of",
-			     and the question here is "as well as". Marking, not the action
-			     colour — the checkbox primitive already carries that. -->
+			<!-- Every lane resolves the same ordered union server-side before a
+			     live draft freezes it; chip counts are facts, never added together. -->
 			<div class="audience">
 				{#if audiences}
 					<ChoiceGroup legend="Audience">
 						{#each audiences as option (option.id)}
 							<Checkbox
-								label={`${option.label} · ${option.count}`}
+								label={option.count === undefined ? option.label : `${option.label} · ${option.count}`}
 								checked={audienceIds.includes(option.id)}
 								onchange={() => toggleAudience(option.id)} />
 						{/each}
@@ -449,9 +533,20 @@
 						<ul class="who" id="compose-who">
 							{#each preview.rows as person, index (index)}
 								{@const badge = recipientBadge[person.state]}
+								{@const profile = person.speakerId ? whoProfiles[person.speakerId] : null}
 								<li class="who__row">
-									<span class="who__name">{person.name}</span>
+									<!-- A name on the roster opens the profile every other name in
+									     the product opens — one person, asked for by press. Anyone
+									     the roster does not hold stays plain text. -->
+									<span class="who__name">
+										{#if profile}<ProfilePeek {profile} />{:else}{person.name}{/if}
+									</span>
 									<span class="ui-badge ui-badge--{badge.tone}">{badge.label}</span>
+									{#if person.via}
+										<!-- Which chip put them here: the first group that claimed
+										     them, which is whose copy they receive. -->
+										<span class="who__via">via {person.via}</span>
+									{/if}
 									{#if person.reason}<span class="who__reason">{person.reason}</span>{/if}
 								</li>
 							{/each}
@@ -479,6 +574,7 @@
 				This creates a draft in the queue. Nothing sends until you review it — the review shows
 				every recipient and what each one gets.
 			</p>
+			{#if createError}<p class="audience-failure" role="alert">{createError}</p>{/if}
 		</div>
 		<div class="compose__preview">
 			<!-- The caption states the preview's edit capability, both halves of it:
@@ -501,7 +597,7 @@
 						<InlineEditor
 							unit={inlineUnit}
 							anchor={inlineAnchor}
-							mergeFields={template?.mergeFields ?? []}
+							mergeFields={document_.mergeFields}
 							busy={inlineBusy}
 							onchange={previewInline}
 							oncommit={applyInline}
@@ -509,15 +605,14 @@
 					{/key}
 				{/if}
 			{:else}
-				<!-- Same footprint as a rendered email, so choosing a template never
-				     jolts the dialog. -->
+				<!-- There is always a document now, so the only thing this can be
+				     waiting on is the brand. Same footprint as a rendered email, so
+				     its arrival never jolts the dialog. -->
 				<div class="compose__placeholder">
-					<p class="compose__placeholder-title">
-						{template ? 'Preparing the preview…' : 'No template chosen'}
-					</p>
+					<p class="compose__placeholder-title">Preparing the preview…</p>
 					<p class="compose__placeholder-hint">
-						Pick a template to see the email exactly as recipients get it, with merge fields
-						filled from their records. A blank message sends the subject with a plain body.
+						The email appears here exactly as recipients get it, with merge fields filled from
+						their records.
 					</p>
 				</div>
 			{/if}
@@ -777,7 +872,8 @@
 		min-inline-size: 0;
 	}
 
-	.who__reason {
+	.who__reason,
+	.who__via {
 		font-size: var(--je-font-size-xs);
 		color: var(--je-color-text-muted);
 	}

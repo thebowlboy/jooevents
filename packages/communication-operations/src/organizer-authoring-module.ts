@@ -47,6 +47,7 @@ import {
   organizerCommunicationPurposePageCanonicalResultSchema,
   organizerCommunicationPurposePageOperationResultSchema,
   organizerCommunicationPurposePageSchema,
+	organizerCreateMessageTemplateInputSchema,
   organizerCreateCommunicationDraftInputSchema,
   organizerDiscardCommunicationDraftInputSchema,
   organizerMessageTemplateDetailCanonicalResultSchema,
@@ -57,6 +58,9 @@ import {
   organizerMessageTemplatePageCanonicalResultSchema,
   organizerMessageTemplatePageOperationResultSchema,
   organizerMessageTemplatePageSchema,
+	organizerMessageTemplateMutationCanonicalResultSchema,
+	organizerMessageTemplateMutationOperationResultSchema,
+	organizerMessageTemplateSummarySchema,
   organizerReviseCommunicationDraftInputSchema,
   organizerStoreAuthoringPayloadInputSchema,
   structuredOutcomeSchema,
@@ -104,6 +108,7 @@ export const ORGANIZER_COMMUNICATION_READ_OPERATIONS = Object.freeze({
 
 export const ORGANIZER_COMMUNICATION_MUTATION_OPERATIONS = Object.freeze({
   storeAuthoringPayload: Object.freeze({ name: 'store_communication_authoring_payload', version: 1 }),
+	createTemplate: Object.freeze({ name: 'message_template.create', version: 1 }),
   createDraft: Object.freeze({ name: 'create_message_draft', version: 1 }),
   reviseDraft: Object.freeze({ name: 'revise_message_batch', version: 1 }),
   discardDraft: Object.freeze({ name: 'discard_message_draft', version: 1 })
@@ -122,6 +127,7 @@ export const organizerCommunicationMutationDomainContributionSchema = z.strictOb
   kind: z.literal('organizer_communication_authoring'),
   operationName: z.enum([
     'store_communication_authoring_payload',
+	'message_template.create',
     'create_message_draft',
     'revise_message_batch',
     'discard_message_draft'
@@ -135,6 +141,7 @@ export const organizerCommunicationMutationDomainContributionSchema = z.strictOb
 
 const mutationSuccessDataSchema = z.union([
   organizerCommunicationAuthoringPayloadRefSchema,
+	organizerMessageTemplateSummarySchema,
   organizerCommunicationDraftMutationResultSchema
 ]);
 
@@ -145,10 +152,15 @@ export const organizerCommunicationMutationContributionSchema = z.union([
     effectContributions: z.tuple([])
   }).superRefine((contribution, context) => {
     const data = contribution.result.data;
-    const isPayload = 'payloadRefId' in data;
+	const isPayload = 'payloadRefId' in data;
+	const isTemplate = 'revision' in data;
+	const expectedId = isPayload ? data.payloadRefId : isTemplate ? data.revision.templateId : data.draftId;
+	const expectedVersion = isPayload ? data.payloadRefVersion
+		: isTemplate ? data.revision.revisionNumber : data.version;
     if ((contribution.domain.operationName === 'store_communication_authoring_payload') !== isPayload
-        || contribution.domain.entityId !== (isPayload ? data.payloadRefId : data.draftId)
-        || contribution.domain.entityVersion !== (isPayload ? data.payloadRefVersion : data.version)) {
+		|| (contribution.domain.operationName === 'message_template.create') !== isTemplate
+		|| contribution.domain.entityId !== expectedId
+		|| contribution.domain.entityVersion !== expectedVersion) {
       context.addIssue({ code: 'custom', message: 'Organizer communication mutation evidence is incoherent.' });
     }
   }),
@@ -217,6 +229,7 @@ export const ORGANIZER_COMMUNICATION_MUTATION_HANDLER_CAPABILITY_BY_OPERATION = 
     'capability.communication.organizer.store_communication_authoring_payload'
   ),
   create_message_draft: ref('capability.communication.organizer.create_message_draft'),
+	'message_template.create': ref('capability.communication.organizer.message_template.create'),
   revise_message_batch: ref('capability.communication.organizer.revise_message_batch'),
   discard_message_draft: ref('capability.communication.organizer.discard_message_draft')
 } satisfies Readonly<Record<
@@ -596,6 +609,14 @@ const mutationCatalog: Readonly<Record<MutationKey, {
     path: '/api/events/current/communications/authoring-payloads',
     consequenceTag: 'communication-authoring-payload-stored'
   }),
+	createTemplate: Object.freeze({
+		refs: ORGANIZER_COMMUNICATION_OPERATION_SCHEMA_REFS.createTemplate,
+		inputSchema: organizerCreateMessageTemplateInputSchema,
+		canonicalSchema: organizerMessageTemplateMutationCanonicalResultSchema,
+		projectedSchema: organizerMessageTemplateMutationOperationResultSchema,
+		path: '/api/events/current/communications/templates/create',
+		consequenceTag: 'communication-template-created'
+	}),
   createDraft: Object.freeze({
     refs: ORGANIZER_COMMUNICATION_OPERATION_SCHEMA_REFS.createDraft,
     inputSchema: organizerCreateCommunicationDraftInputSchema,

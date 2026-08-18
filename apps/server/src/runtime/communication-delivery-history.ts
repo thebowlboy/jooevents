@@ -45,6 +45,19 @@ interface CommitLinkRow {
   readonly batch_id: string;
   readonly plan_json: string;
   readonly occurred_at_ms: number;
+  readonly actor_json: string | null;
+  readonly actor_display_name: string | null;
+}
+
+function humanActor(link: CommitLinkRow) {
+  if (link.actor_json !== null) {
+    const actor = z.strictObject({ kind: z.literal('workspace_user'), userId: z.string() })
+      .safeParse(JSON.parse(link.actor_json));
+    if (actor.success && link.actor_display_name !== null) {
+      return { kind: 'human' as const, displayLabel: clampLabel(link.actor_display_name, 120) };
+    }
+  }
+  return { kind: 'human' as const, displayLabel: 'Workspace operator' };
 }
 
 interface HeadStateRow {
@@ -221,8 +234,8 @@ export function createSQLiteCommunicationDeliveryHistorySource(input: {
       audienceLabel: clampLabel(plan.audienceLabel, 200),
       state,
       ...(stateReasonCode === undefined ? {} : { stateReasonCode }),
-      // The commit ceremony records principal keys, not display identities;
-      // the generic human label is the honest v1 projection of that evidence.
+      // Human operations join the committing principal to its current display
+      // identity; policy sends keep their policy-native attribution.
       actor: submissionPlan !== undefined
         ? {
             kind: 'standing_policy',
@@ -235,7 +248,7 @@ export function createSQLiteCommunicationDeliveryHistorySource(input: {
               definitionDigestSha256: submissionPlan.policy.digestSha256
             }
           }
-        : { kind: 'human', displayLabel: 'Workspace operator' },
+        : humanActor(link),
       cause: submissionPlan !== undefined
         ? {
             summary: 'Registered after the public application was received.',
@@ -306,8 +319,13 @@ export function createSQLiteCommunicationDeliveryHistorySource(input: {
       }
 
       const links = sqlite.query<CommitLinkRow, (string | number)[]>(`
-        SELECT l.commit_id AS receipt_id, l.batch_id, l.plan_json, l.occurred_at_ms
+        SELECT l.commit_id AS receipt_id, l.batch_id, l.plan_json, l.occurred_at_ms,
+               o.actor_json,u.display_name AS actor_display_name
           FROM communication_release_commits l
+          LEFT JOIN operation_log o
+            ON o.operation_name='send_messages'
+           AND json_extract(o.result_json,'$.data.releaseCommitId')=l.commit_id
+          LEFT JOIN users u ON u.id=json_extract(o.actor_json,'$.userId')
          WHERE ${conditions.join(' AND ')}
          ORDER BY l.occurred_at_ms DESC, l.commit_id ASC
          LIMIT ${limit + 1}

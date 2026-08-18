@@ -111,7 +111,7 @@ describe('organizer communication authoring operation modules', () => {
     expect(registry.safeManifest.operations).toHaveLength(6);
   });
 
-  test('registers only four inert draft mutations and no send/provider operation', async () => {
+  test('registers the five inert authoring mutations and no send/provider operation', async () => {
     const module = createOrganizerCommunicationMutationOperationModule({
       workspaceId,
       policy: ORGANIZER_COMMUNICATION_DRAFT_ACCESS_POLICY,
@@ -128,8 +128,8 @@ describe('organizer communication authoring operation modules', () => {
       operation.name.includes('send') || operation.name.includes('provider')
     )).toBe(false);
     const registry = await createOperationRegistry(module.source);
-    expect(registry.operatorHttpEffectBindings).toHaveLength(4);
-    expect(registry.appModelEffectBindings).toHaveLength(4);
+    expect(registry.operatorHttpEffectBindings).toHaveLength(5);
+    expect(registry.appModelEffectBindings).toHaveLength(5);
   });
 
   test('can mount an explicitly complete mutation subset without advertising siblings', async () => {

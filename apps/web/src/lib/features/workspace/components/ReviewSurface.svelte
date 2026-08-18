@@ -243,8 +243,13 @@
 			<div class="pair">
 				<dt class="pair__label">Sender</dt>
 				<dd class="pair__value">
-					<CopyValue value={review.sender} label="sender address" />
-					<span class="pair__note">{review.replyModel}</span>
+					{#if review.sender}
+						<CopyValue value={review.sender} label="sender address" />
+						{#if review.replyModel}<span class="pair__note">{review.replyModel}</span>{/if}
+					{:else}
+						The configured workspace sender
+						<span class="pair__note">The send operation checks the current sender identity again.</span>
+					{/if}
 				</dd>
 			</div>
 			<div class="pair">

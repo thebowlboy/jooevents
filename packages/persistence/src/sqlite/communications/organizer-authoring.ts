@@ -23,6 +23,7 @@ import {
   organizerCommunicationPurposeGetInputSchema,
   organizerCommunicationPurposeListInputSchema,
   organizerCommunicationPurposePageSchema,
+	organizerCreateMessageTemplateInputSchema,
   organizerCreateCommunicationDraftInputSchema,
   organizerDiscardCommunicationDraftInputSchema,
   organizerEmailMessageContentSchema,
@@ -30,6 +31,7 @@ import {
   organizerMessageTemplateGetInputSchema,
   organizerMessageTemplateListInputSchema,
   organizerMessageTemplatePageSchema,
+	organizerMessageTemplateSummarySchema,
   organizerReviseCommunicationDraftInputSchema,
   organizerStoreAuthoringPayloadInputSchema,
   type OrganizerCommunicationDraftProvenance
@@ -1268,6 +1270,111 @@ export class SQLiteOrganizerCommunicationAuthoringRepository implements Organize
     }
   }
 
+	createTemplate(input: {
+		readonly scope: OrganizerCommunicationScope;
+		readonly ownerKey: string;
+		readonly templateId: string;
+		readonly businessInput: unknown;
+	}): ReturnType<typeof organizerMessageTemplateSummarySchema.parse> {
+		requireTransaction(this.sqlite);
+		const parsed = organizerCreateMessageTemplateInputSchema.safeParse(input.businessInput);
+		if (!parsed.success) throw new SQLiteOrganizerCommunicationAuthoringError('invalid_input');
+		const value = parsed.data;
+		this.exactPurposeRevision(input.scope, value.purposeRevision);
+		const contentMetadata = this.exactMetadata({
+			scope: input.scope, ownerKey: input.ownerKey,
+			payloadRefId: value.contentPayload.payloadRefId, kind: 'template_content'
+		});
+		const bindingMetadata = this.exactMetadata({
+			scope: input.scope, ownerKey: input.ownerKey,
+			payloadRefId: value.fieldBindingsPayload.payloadRefId, kind: 'template_field_bindings'
+		});
+		const contentEnvelope = this.openPayload({
+			scope: input.scope, ownerKey: input.ownerKey,
+			payloadRefId: value.contentPayload.payloadRefId, kind: 'template_content'
+		});
+		const bindingEnvelope = this.openPayload({
+			scope: input.scope, ownerKey: input.ownerKey,
+			payloadRefId: value.fieldBindingsPayload.payloadRefId, kind: 'template_field_bindings'
+		});
+		if (contentEnvelope.payloadKind !== 'template_content'
+			|| bindingEnvelope.payloadKind !== 'template_field_bindings') {
+			throw new SQLiteOrganizerCommunicationAuthoringError('payload_ref_invalid');
+		}
+		const definition = this.sqlite.query<{ readonly total: number }, [string, string, string, number, string, string, number, string]>(`
+			SELECT count(*) AS total FROM message_template_revisions
+			 WHERE workspace_id=? AND event_id=?
+			   AND renderer_key=? AND renderer_version=? AND renderer_digest_sha256=?
+			   AND merge_registry_key=? AND merge_registry_version=? AND merge_registry_digest_sha256=?
+		`).get(
+			input.scope.workspaceId, input.scope.eventId,
+			value.renderer.reference.key, value.renderer.reference.version,
+			value.renderer.definitionDigestSha256,
+			value.mergeRegistry.reference.key, value.mergeRegistry.reference.version,
+			value.mergeRegistry.definitionDigestSha256
+		)?.total ?? 0;
+		if (definition === 0) throw new SQLiteOrganizerCommunicationAuthoringError('template_unavailable');
+		if (this.sqlite.query<{ readonly total: number }, [string, string, string]>(`
+			SELECT count(*) AS total FROM message_templates
+			 WHERE workspace_id=? AND event_id=? AND template_key=?
+		`).get(input.scope.workspaceId, input.scope.eventId, value.templateKey)?.total) {
+			throw new SQLiteOrganizerCommunicationAuthoringError('invalid_input');
+		}
+		const revisionNumber = 1;
+		const templateRevisionId = deterministicUuid(
+			'communication.message-template.revision',
+			canonicalJsonText({ templateId: input.templateId, revisionNumber })
+		);
+		const digestSha256 = digest({
+			schemaVersion: 1,
+			templateId: input.templateId,
+			templateRevisionId,
+			revisionNumber,
+			purposeRevision: value.purposeRevision,
+			contentDigestSha256: contentMetadata.digest_sha256,
+			fieldBindingsDigestSha256: bindingMetadata.digest_sha256,
+			renderer: value.renderer,
+			mergeRegistry: value.mergeRegistry
+		});
+		this.sqlite.query(`
+			INSERT INTO message_templates (
+				workspace_id,event_id,template_id,template_key,template_name,lifecycle,
+				purpose_revision_id,current_revision_id
+			) VALUES (?,?,?,?,?,'active',?,?)
+		`).run(
+			input.scope.workspaceId, input.scope.eventId, input.templateId,
+			value.templateKey, value.templateName, value.purposeRevision.revisionId,
+			templateRevisionId
+		);
+		this.sqlite.query(`
+			INSERT INTO message_template_revisions (
+				workspace_id,event_id,template_id,template_revision_id,revision_number,
+				digest_sha256,content_payload_ref_id,field_bindings_payload_ref_id,
+				renderer_key,renderer_version,renderer_digest_sha256,
+				merge_registry_key,merge_registry_version,merge_registry_digest_sha256
+			) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		`).run(
+			input.scope.workspaceId, input.scope.eventId, input.templateId, templateRevisionId,
+			revisionNumber, digestSha256, value.contentPayload.payloadRefId,
+			value.fieldBindingsPayload.payloadRefId,
+			value.renderer.reference.key, value.renderer.reference.version,
+			value.renderer.definitionDigestSha256,
+			value.mergeRegistry.reference.key, value.mergeRegistry.reference.version,
+			value.mergeRegistry.definitionDigestSha256
+		);
+		return organizerMessageTemplateSummarySchema.parse(this.templateProjection({
+			template_id: input.templateId,
+			template_key: value.templateKey,
+			template_name: value.templateName,
+			lifecycle: 'active',
+			purpose_revision_id: value.purposeRevision.revisionId,
+			template_revision_id: templateRevisionId,
+			revision_number: revisionNumber,
+			digest_sha256: digestSha256,
+			content_payload_ref_id: value.contentPayload.payloadRefId
+		}, input.scope));
+	}
+
   private templateProjection(row: {
     readonly template_id: string;
     readonly template_key: string;
@@ -1668,8 +1775,10 @@ function mutationSuccess(input: {
     readonly payloadRefVersion?: number;
     readonly draftId?: string;
     readonly version?: number;
+	readonly revision?: { readonly templateId: string; readonly revisionNumber: number };
   };
   const isPayload = input.operationName === 'store_communication_authoring_payload';
+	const isTemplate = input.operationName === 'message_template.create';
   return organizerCommunicationMutationContributionSchema.parse({
     result: { kind: 'success', data: input.data },
     domain: {
@@ -1677,8 +1786,8 @@ function mutationSuccess(input: {
       operationName: input.operationName,
       workspaceId: input.scope.workspaceId,
       eventId: input.scope.eventId,
-      entityId: isPayload ? parsed.payloadRefId : parsed.draftId,
-      entityVersion: isPayload ? parsed.payloadRefVersion : parsed.version,
+	  entityId: isPayload ? parsed.payloadRefId : isTemplate ? parsed.revision?.templateId : parsed.draftId,
+	  entityVersion: isPayload ? parsed.payloadRefVersion : isTemplate ? parsed.revision?.revisionNumber : parsed.version,
       occurredAt: input.occurredAt
     },
     effectContributions: []
@@ -1721,6 +1830,14 @@ export function createSQLiteOrganizerCommunicationMutationPreparation(input: {
             });
             break;
           }
+		  case 'message_template.create':
+			data = input.repository.createTemplate({
+				scope,
+				ownerKey: context.authorityPrincipalKey,
+				templateId: mutationId,
+				businessInput
+			});
+			break;
           case 'create_message_draft': {
             let provenance: OrganizerCommunicationDraftProvenance;
             if (context.provenance.kind === 'operator') {

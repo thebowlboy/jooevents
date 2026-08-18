@@ -2,6 +2,7 @@ import type { SafeOperationManifest, SafeUser, SafeWorkspace } from '@jooevents/
 import { createContext } from 'svelte';
 import type { EventProgramPort } from '../event-program/port';
 import type { CommunicationsReadinessPagePort } from '../communications-readiness-page-port';
+import type { CommunicationsPagePort } from '../communications-page-port';
 import type { DecisionsPagePort } from '../decisions-page-port';
 import type { EmbedsPagePort } from '../embeds-page-port';
 import type { FilesPagePort } from '../files/files-page-port';
@@ -32,6 +33,7 @@ export interface LiveWorkspacePorts {
 	readonly pulse: PulsePagePort;
 	readonly eventProgram: EventProgramPort;
 	readonly communicationsReadiness: CommunicationsReadinessPagePort;
+	readonly communications: CommunicationsPagePort;
 	readonly forms: FormsPagePort;
 	/** The tuned Submissions surface over the live triage/decision/review joins. */
 	readonly submissions: SubmissionsPagePort;

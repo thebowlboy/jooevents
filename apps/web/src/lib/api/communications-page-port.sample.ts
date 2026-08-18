@@ -5,7 +5,11 @@ import type { WorkspaceApi } from './workspace-gateway';
 /** Adapts the resettable workspace fixture without changing its behavior. */
 export function createSampleCommunicationsPagePort(api: WorkspaceApi): CommunicationsPagePort {
 	return Object.freeze({
-		communications: api.communications,
+		source: Object.freeze({ kind: 'sample' as const }),
+		communications: Object.freeze({
+			...api.communications,
+			timeline: async () => null
+		}),
 		templates: api.templates,
 		theme: api.theme,
 		workspace: api.workspace,

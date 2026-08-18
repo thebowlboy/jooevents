@@ -1,6 +1,8 @@
 import {
 	ORGANIZER_COMMUNICATION_OPERATION_SCHEMA_REFS,
 	operationHttpIdempotencyKeySchema,
+	organizerCommunicationAttentionListInputSchema,
+	organizerCommunicationAttentionPageOperationResultSchema,
 	organizerCommunicationAudienceOptionListInputSchema,
 	organizerCommunicationAudienceOptionPageOperationResultSchema,
 	organizerCommunicationAuthoringPayloadOperationResultSchema,
@@ -11,6 +13,10 @@ import {
 	organizerCommunicationDraftPageOperationResultSchema,
 	organizerCommunicationHistoryListInputSchema,
 	organizerCommunicationHistoryPageOperationResultSchema,
+	organizerCommunicationThreadGetInputSchema,
+	organizerCommunicationThreadPageOperationResultSchema,
+	organizerCommunicationTimelineGetInputSchema,
+	organizerCommunicationTimelinePageOperationResultSchema,
 	organizerCommunicationPurposeDetailOperationResultSchema,
 	organizerCommunicationPurposeGetInputSchema,
 	organizerCommunicationPurposeListInputSchema,
@@ -46,6 +52,7 @@ import type {
 import { requestJson, type ApiResult } from '../client';
 import {
 	mapCommunicationAudienceOptionPage,
+	mapCommunicationAttentionPage,
 	mapCommunicationAuthoringPayloadRef,
 	mapCommunicationDeliveryHistoryPage,
 	mapCommunicationDraft,
@@ -53,6 +60,8 @@ import {
 	mapCommunicationDraftPage,
 	mapCommunicationPurposeDetail,
 	mapCommunicationPurposePage,
+	mapCommunicationThreadPage,
+	mapCommunicationTimelinePage,
 	mapMessageBatchPreviewDetail,
 	mapMessagePreviewPrepare,
 	mapMessagePreviewRecipientPage,
@@ -152,6 +161,21 @@ export const COMMUNICATIONS_AUTHORING_OPERATIONS = Object.freeze({
 		name: 'get_delivery_history', version: 1,
 		effect: 'read', method: 'GET', input: 'query', idempotencyRequired: false,
 		...ORGANIZER_COMMUNICATION_OPERATION_SCHEMA_REFS.getHistory
+	},
+	listAttentionItems: {
+		name: 'list_message_attention_items', version: 1,
+		effect: 'read', method: 'GET', input: 'query', idempotencyRequired: false,
+		...ORGANIZER_COMMUNICATION_OPERATION_SCHEMA_REFS.listAttention
+	},
+	getPersonThread: {
+		name: 'get_person_thread', version: 1,
+		effect: 'read', method: 'GET', input: 'query', idempotencyRequired: false,
+		...ORGANIZER_COMMUNICATION_OPERATION_SCHEMA_REFS.getThread
+	},
+	getDeliveryTimeline: {
+		name: 'get_delivery_timeline', version: 1,
+		effect: 'read', method: 'GET', input: 'query', idempotencyRequired: false,
+		...ORGANIZER_COMMUNICATION_OPERATION_SCHEMA_REFS.getTimeline
 	}
 } as const satisfies Readonly<Record<string, ExpectedOperatorHttpOperation>>);
 
@@ -694,6 +718,53 @@ export function createCommunicationsAuthoringLivePort(input: {
 					(parsed.data.state === undefined || row.state === parsed.data.state)
 					&& (parsed.data.messageRefId === undefined
 						|| row.messageRefId === parsed.data.messageRefId)),
+				...(options.signal ? { signal: options.signal } : {})
+			});
+		},
+
+		listAttentionItems(raw = {}, options = {}) {
+			const parsed = organizerCommunicationAttentionListInputSchema.safeParse(raw);
+			if (!parsed.success) return Promise.resolve(invalidRequest());
+			return requestRead({
+				binding: bindings.listAttentionItems,
+				operation: 'list_message_attention_items',
+				query: parsed.data,
+				request,
+				resultSchema: organizerCommunicationAttentionPageOperationResultSchema,
+				map: mapCommunicationAttentionPage,
+				guard: (page) => page.rows.every((row) =>
+					(parsed.data.severity === undefined || row.severity === parsed.data.severity)
+					&& (parsed.data.reasonCode === undefined || row.reasonCode === parsed.data.reasonCode)),
+				...(options.signal ? { signal: options.signal } : {})
+			});
+		},
+
+		getPersonThread(raw, options = {}) {
+			const parsed = organizerCommunicationThreadGetInputSchema.safeParse(raw);
+			if (!parsed.success) return Promise.resolve(invalidRequest());
+			return requestRead({
+				binding: bindings.getPersonThread,
+				operation: 'get_person_thread',
+				query: parsed.data,
+				request,
+				resultSchema: organizerCommunicationThreadPageOperationResultSchema,
+				map: mapCommunicationThreadPage,
+				guard: (page) => page.personRefId === parsed.data.personRefId,
+				...(options.signal ? { signal: options.signal } : {})
+			});
+		},
+
+		getDeliveryTimeline(raw, options = {}) {
+			const parsed = organizerCommunicationTimelineGetInputSchema.safeParse(raw);
+			if (!parsed.success) return Promise.resolve(invalidRequest());
+			return requestRead({
+				binding: bindings.getDeliveryTimeline,
+				operation: 'get_delivery_timeline',
+				query: parsed.data,
+				request,
+				resultSchema: organizerCommunicationTimelinePageOperationResultSchema,
+				map: mapCommunicationTimelinePage,
+				guard: (page) => page.deliveryId === parsed.data.deliveryId,
 				...(options.signal ? { signal: options.signal } : {})
 			});
 		}

@@ -324,7 +324,7 @@ export const organizerMessageTemplatePageSchema = z.strictObject({
 });
 
 // Authoring values are inert. Effective templates/releases are produced only by trusted code.
-export const organizerCommunicationAudienceSourceSchema = z.discriminatedUnion('kind', [
+export const organizerCommunicationAudienceAtomicSourceSchema = z.discriminatedUnion('kind', [
   z.strictObject({
     kind: z.literal('explicit_contacts'),
     contactRefIds: z.array(organizerCommunicationSubjectRefIdSchema)
@@ -341,6 +341,22 @@ export const organizerCommunicationAudienceSourceSchema = z.discriminatedUnion('
     recipeDigestSha256: organizerCommunicationDigestSchema,
     sourceDefinition: organizerCommunicationDefinitionRefSchema
   })
+]);
+
+/**
+ * A server-resolved union of audience sources in organizer-selected order.
+ * Labels are frozen with the source so the review can state which groups were
+ * combined without trusting browser-authored prose at send time.
+ */
+export const organizerCommunicationAudienceSourceSchema = z.discriminatedUnion('kind', [
+	...organizerCommunicationAudienceAtomicSourceSchema.options,
+	z.strictObject({
+		kind: z.literal('composite'),
+		groups: z.array(z.strictObject({
+			label: canonicalSingleLine(200),
+			source: organizerCommunicationAudienceAtomicSourceSchema
+		})).min(2).max(20)
+	})
 ]);
 
 export const organizerCommunicationAudienceDraftSchema = z.strictObject({
@@ -363,14 +379,35 @@ export const organizerCommunicationAudienceOptionSchema = z.strictObject({
 export const organizerCommunicationAudienceOptionListInputSchema = z.strictObject({
   personRefId: organizerCommunicationSubjectRefIdSchema.optional(),
   purposeId: organizerCommunicationOpaqueIdSchema.optional(),
+	selectionOptionIds: z.array(organizerCommunicationOpaqueIdSchema).min(1).max(20)
+		.refine((values) => new Set(values).size === values.length, {
+			message: 'Audience option references must be unique.'
+		}).optional(),
   ...paginationInputFields
+});
+
+export const organizerCommunicationAudienceSelectionPreviewSchema = z.strictObject({
+	schemaVersion: z.literal(1),
+	optionIds: z.array(organizerCommunicationOpaqueIdSchema).min(1).max(20),
+	label: canonicalSingleLine(4_000),
+	reach: z.number().int().nonnegative().max(ORGANIZER_COMMUNICATION_AUDIENCE_MEMBER_LIMIT),
+	overlap: z.number().int().nonnegative().max(ORGANIZER_COMMUNICATION_AUDIENCE_MEMBER_LIMIT),
+	rows: z.array(z.strictObject({
+		personRefId: organizerCommunicationSubjectRefIdSchema,
+		safeLabel: canonicalSingleLine(240),
+		state: z.enum(['included', 'excluded']),
+		reasonCode: organizerCommunicationStableKeySchema.optional(),
+		via: canonicalSingleLine(200).optional()
+	})).max(ORGANIZER_COMMUNICATION_AUDIENCE_MEMBER_LIMIT),
+	audienceDraft: organizerCommunicationAudienceDraftSchema
 });
 
 export const organizerCommunicationAudienceOptionPageSchema = z.strictObject({
   schemaVersion: z.literal(1),
   rows: z.array(organizerCommunicationAudienceOptionSchema)
     .max(ORGANIZER_COMMUNICATION_PAGE_LIMIT),
-  page: organizerCommunicationPageInfoSchema
+  page: organizerCommunicationPageInfoSchema,
+	selectionPreview: organizerCommunicationAudienceSelectionPreviewSchema.optional()
 });
 
 export const organizerEmailMessageContentInputSchema = z.strictObject({
@@ -459,9 +496,23 @@ export const organizerMessageContentPayloadRefSchema = organizerCommunicationAut
   .extend({ payloadKind: z.literal('message_content') });
 export const organizerMessageAudiencePayloadRefSchema = organizerCommunicationAuthoringPayloadRefSchema
   .extend({ payloadKind: z.literal('message_audience_draft') });
+export const organizerTemplateContentPayloadRefSchema = organizerCommunicationAuthoringPayloadRefSchema
+  .extend({ payloadKind: z.literal('template_content') });
+export const organizerTemplateFieldBindingsPayloadRefSchema = organizerCommunicationAuthoringPayloadRefSchema
+  .extend({ payloadKind: z.literal('template_field_bindings') });
 
 export const organizerStoreAuthoringPayloadInputSchema = z.strictObject({
   payload: organizerCommunicationAuthoringPayloadInputSchema
+});
+
+export const organizerCreateMessageTemplateInputSchema = z.strictObject({
+	templateKey: organizerCommunicationStableKeySchema,
+	templateName: normalizedSingleLineInput(160),
+	purposeRevision: organizerCommunicationPurposeRevisionRefSchema,
+	contentPayload: organizerTemplateContentPayloadRefSchema,
+	fieldBindingsPayload: organizerTemplateFieldBindingsPayloadRefSchema,
+	renderer: organizerCommunicationDefinitionRefSchema,
+	mergeRegistry: organizerCommunicationDefinitionRefSchema
 });
 
 export const organizerCommunicationDraftStateSchema = z.enum(['active', 'proposed', 'discarded']);
@@ -1041,7 +1092,41 @@ export const organizerCommunicationTimelineFactSchema = z.strictObject({
     'reconciled'
   ]),
   summaryCode: organizerCommunicationStableKeySchema,
-  evidenceDigestSha256: organizerCommunicationDigestSchema.optional()
+  actor: organizerCommunicationActorSchema,
+  evidenceDigestSha256: organizerCommunicationDigestSchema.optional(),
+  /**
+   * Present on the live batch timeline. The delivery id is opaque and the
+   * label is the organizer-safe contact label; address bytes never ride this
+   * projection. Kept optional so previously recorded generic timeline facts
+   * remain valid while the read grows per-recipient evidence.
+   */
+  recipient: z.strictObject({
+    deliveryId: organizerCommunicationOpaqueIdSchema,
+    safeLabel: canonicalSingleLine(240),
+    state: z.enum([
+      'pending',
+      'request_started',
+      'accepted',
+      'known_rejected_safe_retryable',
+      'known_rejected_terminal',
+      'acceptance_unknown'
+    ])
+  }).optional(),
+  attempt: z.strictObject({
+    attemptNumber: organizerCommunicationVersionSchema,
+    attemptKind: z.enum(['original', 'marked_resend']),
+    state: z.enum([
+      'request_started',
+      'accepted',
+      'known_rejected_safe_retryable',
+      'known_rejected_terminal',
+      'acceptance_unknown'
+    ]),
+    providerOutcomeReason: canonicalSingleLine(500).optional(),
+    recoveryCode: z.enum(['worker_result_lost', 'provider_boundary_failure']).optional(),
+    startedAt: organizerCommunicationInstantSchema,
+    completedAt: organizerCommunicationInstantSchema.optional()
+  }).optional()
 });
 
 export const organizerCommunicationTimelineGetInputSchema = z.strictObject({
@@ -1120,6 +1205,8 @@ export const organizerCommunicationDraftCanonicalResultSchema =
   canonicalResultSchema(organizerCommunicationDraftProjectionSchema);
 export const organizerCommunicationAuthoringPayloadCanonicalResultSchema =
   canonicalResultSchema(organizerCommunicationAuthoringPayloadRefSchema);
+export const organizerMessageTemplateMutationCanonicalResultSchema =
+	canonicalResultSchema(organizerMessageTemplateSummarySchema);
 export const organizerCommunicationDraftMutationCanonicalResultSchema =
   canonicalResultSchema(organizerCommunicationDraftMutationResultSchema);
 export const organizerMessagePreviewCanonicalResultSchema =
@@ -1160,6 +1247,8 @@ export const organizerCommunicationDraftOperationResultSchema =
   createReadOperationResultSchema(organizerCommunicationDraftProjectionSchema);
 export const organizerCommunicationAuthoringPayloadOperationResultSchema =
   createEffectfulOperationResultSchema(organizerCommunicationAuthoringPayloadRefSchema);
+export const organizerMessageTemplateMutationOperationResultSchema =
+	createEffectfulOperationResultSchema(organizerMessageTemplateSummarySchema);
 export const organizerCommunicationDraftMutationOperationResultSchema =
   createEffectfulOperationResultSchema(organizerCommunicationDraftMutationResultSchema);
 export const organizerPreviewMessageBatchOperationResultSchema =
@@ -1238,6 +1327,12 @@ export const ORGANIZER_COMMUNICATION_OPERATION_SCHEMA_REFS = Object.freeze({
     resultKey: 'schema.communication.organizer.message-draft-mutation.operator-result',
     resultSchema: organizerCommunicationDraftMutationOperationResultSchema
   }),
+	createTemplate: createOperationSchemaManifestRefs({
+		inputKey: 'schema.communication.organizer.create-message-template.input',
+		inputSchema: organizerCreateMessageTemplateInputSchema,
+		resultKey: 'schema.communication.organizer.message-template-mutation.operator-result',
+		resultSchema: organizerMessageTemplateMutationOperationResultSchema
+	}),
   reviseDraft: createOperationSchemaManifestRefs({
     inputKey: 'schema.communication.organizer.revise-message-batch.input',
     inputSchema: organizerReviseCommunicationDraftInputSchema,

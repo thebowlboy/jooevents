@@ -398,6 +398,73 @@ export async function resolveOrganizerAudience(input: {
     throw new OrganizerAudienceResolutionError('invalid_input');
   }
   const scope = canonicalScope(input.scope);
+
+	if (audience.source.kind === 'composite') {
+		const resolvedGroups = await Promise.all(audience.source.groups.map((group) =>
+			resolveOrganizerAudience({
+				...input,
+				scope,
+				audience: {
+					...audience,
+					source: group.source
+				}
+			})
+		));
+		const members: OrganizerResolvedAudienceMember[] = [];
+		const indexByAddress = new Map<string, number>();
+		for (const resolved of resolvedGroups) {
+			for (const member of resolved.members) {
+				const address = member.address?.classifiedValue.value.trim().toLocaleLowerCase('en-US');
+				if (!address) {
+					members.push(member);
+					continue;
+				}
+				const existingIndex = indexByAddress.get(address);
+				if (existingIndex === undefined) {
+					indexByAddress.set(address, members.length);
+					members.push(member);
+					continue;
+				}
+				// Exclusion is the more careful state, while the first group still
+				// owns the rendered context. Policy evidence from the excluding
+				// membership applies to the same normalized mailbox; the combined
+				// evidence retains both membership chains without swapping the person
+				// whose copy was selected.
+				const first = members[existingIndex]!;
+				if (first.state === 'eligible' && member.state === 'excluded') {
+					members[existingIndex] = Object.freeze({
+						...first,
+						state: 'excluded' as const,
+						reasonCode: member.reasonCode,
+						evidence: canonicalEvidence([...first.evidence, ...member.evidence]),
+						policyEvidence: member.policyEvidence
+					});
+				}
+			}
+		}
+		const versions = new Map<string, OrganizerMessagePreviewSourceVersion>();
+		for (const resolved of resolvedGroups) {
+			for (const version of resolved.sourceVersions) {
+				const prior = versions.get(version.sourceKey);
+				if (prior && !sameJson(prior, version)) {
+					throw new OrganizerAudienceResolutionError('source_contract_mismatch');
+				}
+				versions.set(version.sourceKey, version);
+			}
+		}
+		return Object.freeze({
+			scope,
+			audience: Object.freeze({
+				...audience,
+				purposeRevision: Object.freeze({ ...audience.purposeRevision }),
+				source: audience.source
+			}),
+			sourceVersions: Object.freeze([...versions.values()].sort((left, right) =>
+				compareText(left.sourceKey, right.sourceKey)
+			)),
+			members: Object.freeze(members)
+		});
+	}
   let rawSource: OrganizerAudienceSourceSnapshot;
   try {
     rawSource = await input.source.resolveCurrentSnapshot({ scope, audience });
@@ -532,7 +599,10 @@ export function createInMemoryOrganizerAudienceSourcePort(
           sourceVersions: fixture.sourceVersions
         });
       }
-      const requested = new Set(audience.source.contactRefIds);
+      if (audience.source.kind !== 'explicit_contacts') {
+		throw new OrganizerAudienceResolutionError('source_contract_mismatch');
+	  }
+	  const requested = new Set(audience.source.contactRefIds);
       // Missing refs remain wholly absent: neither a hidden row nor a hidden count is returned.
       const visible = fixture.candidates.filter((candidate) => requested.has(candidate.contactRefId));
       return Object.freeze({

@@ -129,8 +129,10 @@ test('compose previews the chosen template as the recipients get it', async ({ p
 	const dialog = page.getByRole('dialog', { name: 'Compose message' });
 	await expect(dialog).toBeVisible();
 
-	// Blank start states there is nothing to preview yet, in the same footprint.
-	await expect(dialog).toContainText('No template chosen');
+	// A blank start is still a document: the one-off scaffold renders straight
+	// away, so there is always something to read and something to edit.
+	await expect(dialog).toContainText('Your headline goes here');
+	await expect(dialog).not.toContainText('No template chosen');
 
 	await dialog.getByLabel('Template').selectOption({ label: 'Decision — accepted' });
 	// The rendered artifact appears: subject seeded from the template, merge
