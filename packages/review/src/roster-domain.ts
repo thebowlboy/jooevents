@@ -1,12 +1,14 @@
 import { canonicalJsonSha256 } from '@jooevents/kernel';
 import {
   REVIEWER_CAPABILITY_IDS,
+  compareScopeRef,
   reviewerRosterMutationInputSchema,
   reviewerRosterMutationPlanSchema,
   reviewerRosterMutationResultSchema,
   reviewerRosterSafeDiffSchema,
   reviewerRosterSnapshotSchema,
   type ReviewerAuthoritySetDto,
+  type ReviewerCoveragePopulationDto,
   type ReviewerEligibilityFactDto,
   type ReviewerRosterGuardDto,
   type ReviewerRosterMutationInput,
@@ -20,7 +22,7 @@ import {
   type ReviewerScopeRefDto,
   type ReviewerScopeTargetSetDto
 } from '@jooevents/contracts/reviewer-roster';
-import type { ReviewRosterSet } from './model';
+import type { ReviewCandidateSet, ReviewRosterSet } from './model';
 
 import {
   parseReviewerAuthoritySet,
@@ -145,6 +147,10 @@ export function projectReviewerRosterSnapshot(
   if (!roster || !authority) return undefined;
   const currentRoster = assertRosterState(roster, scope);
   const currentAuthority = assertAuthoritySet(authority, scope);
+  const candidateSet = input.candidatePopulation?.readCandidates(scope);
+  const coveragePopulation = candidateSet === undefined
+    ? undefined
+    : projectReviewerCoveragePopulation(candidateSet);
   const bySubject = authorityFactsBySubject(currentAuthority);
   const reviewers = currentRoster.reviewers.map((record) => {
     const fact = bySubject.get(authoritySubjectKey(record.accessSubject))
@@ -166,7 +172,17 @@ export function projectReviewerRosterSnapshot(
       reviews: record.reviews
     };
   });
-  const version = pairSafePositiveIntegers(currentRoster.version, currentAuthority.version);
+  const rosterAuthorityVersion = pairSafePositiveIntegers(
+    currentRoster.version,
+    currentAuthority.version
+  );
+  const version = coveragePopulation === undefined
+    ? rosterAuthorityVersion
+    : digestSafePositiveInteger({
+        rosterVersion: currentRoster.version,
+        authorityVersion: currentAuthority.version,
+        candidateVersion: coveragePopulation.candidateVersion
+      });
   return reviewerRosterSnapshotSchema.parse({
     schemaVersion: 1,
     scope,
@@ -177,14 +193,55 @@ export function projectReviewerRosterSnapshot(
       version,
       rosterDigestSha256: currentRoster.digestSha256,
       authorityDigestSha256: currentAuthority.digestSha256,
+      ...(coveragePopulation === undefined ? {} : { coveragePopulation }),
       reviewers
     }),
     rosterVersion: currentRoster.version,
     rosterDigestSha256: currentRoster.digestSha256,
     authorityVersion: currentAuthority.version,
     authorityDigestSha256: currentAuthority.digestSha256,
+    ...(coveragePopulation === undefined ? {} : { coveragePopulation }),
     reviewers
   });
+}
+
+function projectReviewerCoveragePopulation(
+  candidateSet: ReviewCandidateSet
+): ReviewerCoveragePopulationDto {
+  const counts = new Map<string, { ref: ReviewerScopeRefDto; submissions: number }>();
+  const increment = (ref: ReviewerScopeRefDto): void => {
+    const key = `${ref.kind}:${ref.id}`;
+    const current = counts.get(key);
+    if (current) {
+      current.submissions += 1;
+      return;
+    }
+    counts.set(key, { ref, submissions: 1 });
+  };
+  for (const candidate of candidateSet.candidates) {
+    if (candidate.trackId !== undefined) increment({ kind: 'track', id: candidate.trackId });
+    if (candidate.formatId !== undefined) increment({ kind: 'format', id: candidate.formatId });
+    if (candidate.targetSessionId !== undefined) {
+      increment({ kind: 'session', id: candidate.targetSessionId });
+    }
+  }
+  const canonicalCounts = [...counts.values()]
+    .sort((left, right) => compareScopeRef(left.ref, right.ref));
+  const body = {
+    schemaVersion: 1 as const,
+    candidateVersion: candidateSet.version,
+    candidateCount: candidateSet.candidates.length,
+    counts: canonicalCounts
+  };
+  return Object.freeze({
+    ...body,
+    digestSha256: canonicalJsonSha256(body)
+  });
+}
+
+/** Reduces canonical projection evidence to a positive 48-bit safe integer. */
+function digestSafePositiveInteger(value: unknown): number {
+  return Number.parseInt(canonicalJsonSha256(value).slice(0, 12), 16) + 1;
 }
 
 /** Adapter consumed by the frozen Review core; revoked/lost-authority rows are omitted. */

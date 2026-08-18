@@ -78,6 +78,52 @@ describe('reviewer roster domain', () => {
     expect(JSON.stringify(snapshot)).not.toContain('@');
   });
 
+  test('projects exact canonical scope counts from the full Review candidate population', () => {
+    const roster = rosterState([]);
+    const authority = authoritySet([], 5);
+    const repository = new MemoryRosterPort(roster, authority, targetSet());
+    const withoutPopulation = projectReviewerRosterSnapshot({
+      scope,
+      repository,
+      authority: repository
+    })!;
+    const snapshot = projectReviewerRosterSnapshot({
+      scope,
+      repository,
+      authority: repository,
+      candidatePopulation: {
+        readCandidates(requestedScope) {
+          expect(requestedScope).toEqual(scope);
+          return {
+            version: 17,
+            candidates: [
+              {
+                submissionId: id('40'), version: 1, trackId: trackRetired,
+                formatId: formatActive, targetSessionId: sessionActive
+              },
+              { submissionId: id('41'), version: 1, trackId: trackRetired },
+              { submissionId: id('42'), version: 1 }
+            ]
+          };
+        }
+      }
+    })!;
+
+    expect(snapshot.coveragePopulation).toMatchObject({
+      schemaVersion: 1,
+      candidateVersion: 17,
+      candidateCount: 3,
+      counts: [
+        { ref: { kind: 'track', id: trackRetired }, submissions: 2 },
+        { ref: { kind: 'format', id: formatActive }, submissions: 1 },
+        { ref: { kind: 'session', id: sessionActive }, submissions: 1 }
+      ]
+    });
+    expect(snapshot.coveragePopulation?.digestSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(snapshot.version).not.toBe(withoutPopulation.version);
+    expect(snapshot.digestSha256).not.toBe(withoutPopulation.digestSha256);
+  });
+
   test('binds Review hand-out versions to exact authority evidence', () => {
     const roster = rosterState([
       record(reviewerTwo, { kind: 'workspace_membership', id: membershipTwo, version: 3 }, [])

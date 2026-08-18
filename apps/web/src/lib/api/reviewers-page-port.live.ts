@@ -5,7 +5,7 @@ import type { ProgramVocabularySettingsPort } from './program-vocabulary-setting
 import type { ReviewCorePort } from './review-core-port';
 import { mapLiveReviewPlans } from './review-page-port.live';
 import type { ReviewerRosterCorePort } from './reviewer-roster-core-port';
-import { coverageRows, isGeneralist, planLoad } from './reviewers';
+import { coverageRows, coverageRowsFromCounts, isGeneralist, planLoad } from './reviewers';
 import type { ReviewersPagePort } from './reviewers-page-port';
 import type {
 	WorkspaceTeamSettingsMutationResult,
@@ -22,7 +22,10 @@ import type {
 	Track
 } from './types';
 import type { ProgramFormatView, ProgramTrackView } from './view-models/program-vocabulary';
-import type { ReviewerRosterMemberView } from './view-models/reviewer-roster';
+import type {
+	ReviewerRosterMemberView,
+	ReviewerRosterSnapshotView
+} from './view-models/reviewer-roster';
 import type { WorkspaceTeamMemberView } from './view-models/workspace-team';
 
 /**
@@ -245,16 +248,10 @@ function teamRosterSubject(member: WorkspaceTeamMemberView) {
  * roster's removed records ("removal takes the record off the roster") and
  * are omitted.
  *
- * The `coverage` projection is served only as its provably empty population:
- * the frozen contract reads `coverage: []` as the positive claim that no
- * active track, format, or collecting-session target exists — the tuned
- * panel renders that claim as prose — so an empty list may not stand in for
- * "not composed". When the live vocabulary, the roster's scopes, or the
- * composed schedule prove any target exists, the read refuses instead: a
- * CoverageRow cannot exist without its required `submissions` count, the
- * submission → scope-target join has no live owner, and emitting rows with
- * `submissions: 0` would be exactly the fabricated zero this boundary
- * forbids. Rows return when the canonical join owner lands.
+ * The `coverage` projection joins live target names and schedule state to the
+ * roster snapshot's exact, full Review-candidate counts. Older compositions
+ * without that additive evidence can still serve only a provably empty target
+ * population; they never translate an absent join into zero submissions.
  */
 export function createLiveReviewersPagePort(input: {
 	readonly roster: ReviewerRosterCorePort;
@@ -325,20 +322,14 @@ export function createLiveReviewersPagePort(input: {
 	}
 
 	/**
-	 * `coverage: []` only as a proven claim. The proof reuses the one recorded
-	 * coverage projection (`coverageRows` in ./reviewers) over the live
-	 * vocabulary, the tuned roster rows, and the composed schedule's sessions,
-	 * so target existence — active entries, retired entries still named in a
-	 * kept scope, collecting sessions — is counted exactly the way the real
-	 * panel would count it. The probe's placeholder submissions list only
-	 * fills per-row counts, never row existence, and the probe rows are
-	 * discarded, so no fabricated per-target zero can escape it. Any populated
-	 * target set declines (its rows' required `submissions` count has no live
-	 * owner), and with no schedule delegate the collecting-session population
-	 * is unknowable, so the empty claim is unprovable and the projection
-	 * declines the same way. A composed delegate's own read failure propagates
-	 * as itself: its typed error names the failing owner more precisely than a
-	 * re-wrap.
+	 * Exact candidate counts come from the roster snapshot's canonical
+	 * full-population join; target names and collecting state stay with their
+	 * live vocabulary/schedule owners. When an older composition omits the
+	 * additive population, this can still serve `coverage: []` only after the
+	 * same projection proves no target row exists. A populated target without
+	 * population evidence declines instead of fabricating zeros. With no
+	 * schedule delegate, target existence is unknowable and declines too. A
+	 * delegate read failure propagates as itself so the failure names its owner.
 	 *
 	 * A decline is a returned `unavailable` rather than a throw. Coverage is one
 	 * panel; the roster is the surface. Throwing here failed `list()` outright,
@@ -346,20 +337,35 @@ export function createLiveReviewersPagePort(input: {
 	 * skeleton rows forever — the page waiting on an answer the port had already
 	 * decided it would never give.
 	 */
-	async function provenEmptyCoverage(reviewers: readonly Reviewer[]): Promise<ReviewerCoverage> {
+	async function liveCoverage(
+		reviewers: readonly Reviewer[],
+		population: ReviewerRosterSnapshotView['coveragePopulation']
+	): Promise<ReviewerCoverage> {
 		if (!input.schedule) return { kind: 'unavailable', reason: UNMOUNTED_COPY.reviewer_coverage };
 		const [tracks, formats, scheduleState] = await Promise.all([
 			input.vocabulary.tracks(),
 			input.vocabulary.formats(),
 			input.schedule.state()
 		]);
-		const probe = coverageRows({
+		const targets = {
 			tracks: tracks.map(liveTrack),
 			formats: formats.map(liveFormat),
 			sessions: scheduleState.sessions,
-			submissions: [],
 			reviewers
-		});
+		};
+		if (population !== undefined) {
+			return {
+				kind: 'served',
+				rows: coverageRowsFromCounts({
+					...targets,
+					submissionCounts: population.counts.map((entry) => ({
+						ref: { ...entry.ref },
+						submissions: entry.submissions
+					}))
+				})
+			};
+		}
+		const probe = coverageRows({ ...targets, submissions: [] });
 		if (probe.length > 0) return { kind: 'unavailable', reason: UNMOUNTED_COPY.reviewer_coverage };
 		return { kind: 'served', rows: [] };
 	}
@@ -514,7 +520,7 @@ export function createLiveReviewersPagePort(input: {
 					generalists: reviewers.filter(
 						(reviewer) => reviewer.status === 'active' && isGeneralist(reviewer)
 					).length,
-					coverage: await provenEmptyCoverage(reviewers)
+					coverage: await liveCoverage(reviewers, rosterResult.data.coveragePopulation)
 				};
 			},
 			async invite(

@@ -26,20 +26,18 @@ export function isGeneralist(reviewer: { scope: readonly ScopeRef[] }): boolean 
  * generalist default that matches everything.
  *
  * A session ref names the submissions whose effective target is that session.
- * The seam carries no submission→target link yet, so a session ref matches no
- * submission here; the shape is the contract, and the join arrives with the
- * real transport.
+ * Callers that do not carry a target omit `targetSessionId`; absence never
+ * guesses a match.
  */
 export function scopeMatches(
 	scope: readonly ScopeRef[],
-	submission: { trackId: string; formatId: string }
+	submission: { trackId: string; formatId: string; targetSessionId?: string }
 ): boolean {
 	if (scope.length === 0) return true;
 	return scope.some((ref) => {
 		if (ref.kind === 'track') return submission.trackId === ref.id;
 		if (ref.kind === 'format') return submission.formatId === ref.id;
-		// Session target link: seam gap, see the doc comment above.
-		return false;
+		return submission.targetSessionId === ref.id;
 	});
 }
 
@@ -117,9 +115,14 @@ export interface CoverageSource {
 	tracks: readonly { id: string; name: string; status?: VocabStatus }[];
 	formats: readonly { id: string; name: string; status?: VocabStatus }[];
 	sessions: readonly SessionItem[];
-	submissions: readonly { trackId: string; formatId: string }[];
+	submissions: readonly { trackId: string; formatId: string; targetSessionId?: string }[];
 	reviewers: readonly Pick<Reviewer, 'status' | 'scope'>[];
 }
+
+/** Exact full-population counts carried by a canonical server projection. */
+export type CountedCoverageSource = Omit<CoverageSource, 'submissions'> & {
+	submissionCounts: readonly { ref: ScopeRef; submissions: number }[];
+};
 
 /**
  * The coverage projection: one row per active track and format, plus every
@@ -134,13 +137,35 @@ export interface CoverageSource {
  * session rows count via `sessionCoveredBy`, so a track- or format-scoped
  * reviewer shows up on the sessions carrying that track or format. The stored
  * scope stays minimal — implied coverage is what makes these counts honest.
- * Session rows count 0 submissions until the submission→target link exists
- * (the seam gap `scopeMatches` documents).
+ * Session rows count submissions whose effective target is that session.
  */
 export function coverageRows(source: CoverageSource): CoverageRow[] {
+	return projectCoverageRows(source, (ref) => source.submissions.filter((submission) => {
+		if (ref.kind === 'track') return submission.trackId === ref.id;
+		if (ref.kind === 'format') return submission.formatId === ref.id;
+		return submission.targetSessionId === ref.id;
+	}).length);
+}
+
+/**
+ * The same coverage projection over an exact server-counted population. A
+ * missing ref is a proven zero only because the source projection states it
+ * covers the full Review candidate population.
+ */
+export function coverageRowsFromCounts(source: CountedCoverageSource): CoverageRow[] {
+	const counts = new Map(
+		source.submissionCounts.map((entry) => [`${entry.ref.kind}:${entry.ref.id}`, entry.submissions])
+	);
+	return projectCoverageRows(source, (ref) => counts.get(`${ref.kind}:${ref.id}`) ?? 0);
+}
+
+function projectCoverageRows(
+	source: Omit<CoverageSource, 'submissions'>,
+	submissionCount: (ref: ScopeRef) => number
+): CoverageRow[] {
 	const active = source.reviewers.filter((reviewer) => reviewer.status === 'active');
 	const rows: CoverageRow[] = [];
-	const push = (ref: ScopeRef, label: string, retired: boolean, submissions: number) => {
+	const push = (ref: ScopeRef, label: string, retired: boolean) => {
 		rows.push({
 			ref,
 			label,
@@ -148,7 +173,7 @@ export function coverageRows(source: CoverageSource): CoverageRow[] {
 			reviewers: active.filter((reviewer) =>
 				reviewer.scope.some((entry) => entry.kind === ref.kind && entry.id === ref.id)
 			).length,
-			submissions
+			submissions: submissionCount(ref)
 		});
 	};
 	for (const track of source.tracks) {
@@ -157,8 +182,7 @@ export function coverageRows(source: CoverageSource): CoverageRow[] {
 		push(
 			{ kind: 'track', id: track.id },
 			track.name,
-			retired,
-			source.submissions.filter((submission) => submission.trackId === track.id).length
+			retired
 		);
 	}
 	for (const format of source.formats) {
@@ -167,8 +191,7 @@ export function coverageRows(source: CoverageSource): CoverageRow[] {
 		push(
 			{ kind: 'format', id: format.id },
 			format.name,
-			retired,
-			source.submissions.filter((submission) => submission.formatId === format.id).length
+			retired
 		);
 	}
 	for (const session of source.sessions) {
@@ -177,7 +200,7 @@ export function coverageRows(source: CoverageSource): CoverageRow[] {
 			ref: { kind: 'session', id: session.id },
 			label: session.title,
 			reviewers: active.filter((reviewer) => sessionCoveredBy(reviewer.scope, session)).length,
-			submissions: 0
+			submissions: submissionCount({ kind: 'session', id: session.id })
 		});
 	}
 	return rows;

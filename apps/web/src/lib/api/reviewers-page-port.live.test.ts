@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { workspaceTeamSnapshotSchema } from '@jooevents/contracts';
 import {
+	reviewerCoveragePopulationSchema,
 	reviewerRosterMutationResultSchema,
 	reviewerRosterSnapshotSchema,
 	type ReviewerRosterMutationResult
@@ -16,7 +17,19 @@ import type { WorkspaceTeamSettingsPort } from './workspace-team-settings-adapte
 const id = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
 const correlationId = id(90); const scope = { workspaceId: id(80), eventId: id(81) };
 const reviewerId = id(1); const membershipId = id(2); const trackId = id(3);
+const formatId = id(5); const sessionId = id(6);
 const subject = { kind: 'workspace_membership' as const, id: membershipId, version: 1 };
+const coveragePopulation = reviewerCoveragePopulationSchema.parse({
+	schemaVersion: 1,
+	candidateVersion: 11,
+	candidateCount: 7,
+	digestSha256: '9'.repeat(64),
+	counts: [
+		{ ref: { kind: 'track', id: trackId }, submissions: 7 },
+		{ ref: { kind: 'format', id: formatId }, submissions: 5 },
+		{ ref: { kind: 'session', id: sessionId }, submissions: 3 }
+	]
+});
 function mutation(action: ReviewerRosterMutationResult['action'], revoked: boolean): ReviewerRosterMutationResult {
 	return reviewerRosterMutationResultSchema.parse({ schemaVersion: 1, action, rosterVersion: 2, rosterDigestSha256: 'b'.repeat(64),
 		reviewer: { schemaVersion: 1, scope, reviewerId, version: 2, accessSubject: subject,
@@ -31,7 +44,8 @@ function rosterPort(calls: { input: ReviewerRosterChangeRequest; key: string }[]
 			return { kind: 'success', correlationId, data: mapReviewerRosterSnapshot(reviewerRosterSnapshotSchema.parse({
 				schemaVersion: 1, scope, version: rosterVersion, digestSha256: 'a'.repeat(64),
 				rosterVersion, rosterDigestSha256: 'b'.repeat(64), authorityVersion: 1,
-				authorityDigestSha256: 'c'.repeat(64), reviewers: [{ reviewerId, recordVersion,
+				authorityDigestSha256: 'c'.repeat(64), coveragePopulation,
+				reviewers: [{ reviewerId, recordVersion,
 					projectionVersion: recordVersion, status: revoked ? 'revoked' : 'active', accessSubject: subject,
 					authority: { schemaVersion: 1, scope, rosterSubject: subject,
 						...(revoked ? {} : { currentSubject: subject }), state: revoked ? 'unavailable' : 'active',
@@ -100,6 +114,50 @@ describe('direct live Reviewer page port', () => {
 			expectedReviewerVersion: 2, expectedRosterVersion: 2 });
 		expect(restored).not.toHaveProperty('before');
 		expect(restored).not.toHaveProperty('reviews');
+	});
+
+	test('serves exact track, format, and collecting-session coverage from canonical counts', async () => {
+		const countedVocabulary: Pick<ProgramVocabularySettingsPort, 'source' | 'tracks' | 'formats'> = {
+			source: { kind: 'live' },
+			async tracks() {
+				return [{
+					kind: 'track', id: trackId, name: 'Systems', accent: 'sea', status: 'active',
+					version: 1, usage: { currentReferences: 7, historicalPins: 0 },
+					deleteAvailability: { kind: 'unavailable', currentReferences: 7, historicalPins: 0 }
+				}];
+			},
+			async formats() {
+				return [{
+					kind: 'format', id: formatId, name: 'Talk', status: 'active', version: 1,
+					usage: { currentReferences: 5, historicalPins: 0 },
+					deleteAvailability: { kind: 'unavailable', currentReferences: 5, historicalPins: 0 }
+				}];
+			}
+		};
+		const page = createLiveReviewersPagePort({
+			roster: rosterPort([]), review, team, vocabulary: countedVocabulary,
+			schedule: {
+				async state() {
+					return {
+						days: [], rooms: [], dayStart: '09:00', slotMinutes: 30, slotsPerDay: 0,
+						sessions: [{
+							id: sessionId, title: 'Agents clinic', speakers: [], trackId, formatId,
+							durationMin: 45, state: 'collecting' as const
+						}],
+						placements: [], breaks: [], published: false
+					};
+				}
+			}
+		});
+		const roster = await page.reviewers.list();
+		expect(roster.coverage).toEqual({
+			kind: 'served',
+			rows: [
+				{ ref: { kind: 'track', id: trackId }, label: 'Systems', reviewers: 1, submissions: 7 },
+				{ ref: { kind: 'format', id: formatId }, label: 'Talk', reviewers: 0, submissions: 5 },
+				{ ref: { kind: 'session', id: sessionId }, label: 'Agents clinic', reviewers: 1, submissions: 3 }
+			]
+		});
 	});
 
 	test('reserves workspace access, then registers that exact reservation as reviewer authority', async () => {

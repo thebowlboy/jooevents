@@ -1236,64 +1236,108 @@ export class SQLiteIntakeRepository {
   }
 
   listSubmissions(scopeInput: SQLiteIntakeScopeInput): readonly OrganizerSubmissionSummaryDto[] {
+    return this.listSubmissionSummaries(scopeInput, true);
+  }
+
+  /**
+   * Application-internal source projection. Unlike the organizer list read,
+   * this returns the complete retained population for joined operations such
+   * as triage and Review; it is never mounted as a browser list endpoint.
+   */
+  listAllSubmissionSummaries(
+    scopeInput: SQLiteIntakeScopeInput
+  ): readonly OrganizerSubmissionSummaryDto[] {
+    return this.listSubmissionSummaries(scopeInput, false);
+  }
+
+  /** Exact application-internal lookup; it does not scan the capped organizer list. */
+  readSubmissionSummary(
+    scopeInput: SQLiteIntakeScopeInput,
+    submissionId: string
+  ): OrganizerSubmissionSummaryDto | undefined {
     const currentScope = scope(scopeInput);
-    return Object.freeze(this.sqlite.query<SubmissionHeadRow, [string, string]>(`
+    const rows = this.sqlite.query<SubmissionHeadRow, [string, string, string]>(`
+      SELECT workspace_id, event_id, submission_id, form_id, form_version_id,
+             draft_id, submit_evidence_id, person_id, submitted_at_ms,
+             head_json AS value_json, head_digest_sha256 AS value_digest
+        FROM intake_submission_heads
+       WHERE workspace_id = ? AND event_id = ? AND submission_id = ? LIMIT 2
+    `).all(currentScope.workspaceId, currentScope.eventId, submissionId);
+    if (rows.length === 0) return undefined;
+    if (rows.length !== 1) throw new SQLiteIntakeError('data_corrupt');
+    return this.projectSubmissionSummary(currentScope, rows[0]!);
+  }
+
+  private listSubmissionSummaries(
+    scopeInput: SQLiteIntakeScopeInput,
+    bounded: boolean
+  ): readonly OrganizerSubmissionSummaryDto[] {
+    const currentScope = scope(scopeInput);
+    const select = `
       SELECT workspace_id, event_id, submission_id, form_id, form_version_id,
              draft_id, submit_evidence_id, person_id, submitted_at_ms,
              head_json AS value_json, head_digest_sha256 AS value_digest
         FROM intake_submission_heads
        WHERE workspace_id = ? AND event_id = ?
-       ORDER BY submission_id COLLATE BINARY LIMIT 500
-    `).all(currentScope.workspaceId, currentScope.eventId).map((row) => {
-      const head = parseStored(row, parseSubmissionHead);
-      if (!head || row.workspace_id !== currentScope.workspaceId
-          || row.event_id !== currentScope.eventId || row.submission_id !== head.id
-          || head.scope.workspaceId !== currentScope.workspaceId
-          || head.scope.eventId !== currentScope.eventId || head.formId !== row.form_id
-          || head.formVersionId !== row.form_version_id
-          || head.submitEvidenceId !== row.submit_evidence_id
-          || head.primaryPersonId !== row.person_id
-          || !exactInstant(head.submittedAt, row.submitted_at_ms)) {
+       ORDER BY submission_id COLLATE BINARY${bounded ? ' LIMIT 500' : ''}
+    `;
+    const rows = this.sqlite.query<SubmissionHeadRow, [string, string]>(select)
+      .all(currentScope.workspaceId, currentScope.eventId);
+    return Object.freeze(rows.map((row) => this.projectSubmissionSummary(currentScope, row)));
+  }
+
+  private projectSubmissionSummary(
+    currentScope: Scope,
+    row: SubmissionHeadRow
+  ): OrganizerSubmissionSummaryDto {
+    const head = parseStored(row, parseSubmissionHead);
+    if (!head || row.workspace_id !== currentScope.workspaceId
+        || row.event_id !== currentScope.eventId || row.submission_id !== head.id
+        || head.scope.workspaceId !== currentScope.workspaceId
+        || head.scope.eventId !== currentScope.eventId || head.formId !== row.form_id
+        || head.formVersionId !== row.form_version_id
+        || head.submitEvidenceId !== row.submit_evidence_id
+        || head.primaryPersonId !== row.person_id
+        || !exactInstant(head.submittedAt, row.submitted_at_ms)) {
+      throw new SQLiteIntakeError('data_corrupt');
+    }
+    const version = this.readFormVersion(currentScope, head.formVersionId);
+    if (!version || !this.submissionProjection) throw new SQLiteIntakeError('data_corrupt');
+    if (head.source === 'direct_entry') {
+      const entryEvidence = this.readDirectEntryEvidence(currentScope, head.id);
+      if (!entryEvidence || row.draft_id !== null
+          || entryEvidence.id !== row.submit_evidence_id
+          || entryEvidence.submissionId !== row.submission_id
+          || entryEvidence.formVersionId !== row.form_version_id
+          || entryEvidence.submittedAt !== head.submittedAt) {
         throw new SQLiteIntakeError('data_corrupt');
       }
-      const version = this.readFormVersion(currentScope, head.formVersionId);
-      if (!version || !this.submissionProjection) throw new SQLiteIntakeError('data_corrupt');
-      if (head.source === 'direct_entry') {
-        const entryEvidence = this.readDirectEntryEvidence(currentScope, head.id);
-        if (!entryEvidence || row.draft_id !== null
-            || entryEvidence.id !== row.submit_evidence_id
-            || entryEvidence.submissionId !== row.submission_id
-            || entryEvidence.formVersionId !== row.form_version_id
-            || entryEvidence.submittedAt !== head.submittedAt) {
-          throw new SQLiteIntakeError('data_corrupt');
-        }
-        return this.submissionProjection.projectDirectEntrySummary({
-          head, entryEvidence, version
-        });
-      }
-      const evidence = this.readSubmitEvidence(currentScope, head.id);
-      if (!evidence
-          || evidence.id !== row.submit_evidence_id
-          || evidence.submissionId !== row.submission_id
-          || evidence.draftId !== row.draft_id
-          || evidence.formVersionId !== row.form_version_id
-          || evidence.submittedAt !== head.submittedAt) {
-        throw new SQLiteIntakeError('data_corrupt');
-      }
-      const draft = this.readDraft(currentScope, evidence.draftId);
-      if (!draft || draft.head.status !== 'submitted'
-          || draft.head.submittedSubmissionId !== head.id
-          || draft.revision.id !== evidence.draftRevisionId) {
-        throw new SQLiteIntakeError('data_corrupt');
-      }
-      return this.submissionProjection.projectSummary({
-        head,
-        submitEvidence: evidence,
-        version,
-        draftHead: draft.head,
-        sourceRevision: draft.revision
+      return this.submissionProjection.projectDirectEntrySummary({
+        head, entryEvidence, version
       });
-    }));
+    }
+    const evidence = this.readSubmitEvidence(currentScope, head.id);
+    if (!evidence
+        || evidence.id !== row.submit_evidence_id
+        || evidence.submissionId !== row.submission_id
+        || evidence.draftId !== row.draft_id
+        || evidence.formVersionId !== row.form_version_id
+        || evidence.submittedAt !== head.submittedAt) {
+      throw new SQLiteIntakeError('data_corrupt');
+    }
+    const draft = this.readDraft(currentScope, evidence.draftId);
+    if (!draft || draft.head.status !== 'submitted'
+        || draft.head.submittedSubmissionId !== head.id
+        || draft.revision.id !== evidence.draftRevisionId) {
+      throw new SQLiteIntakeError('data_corrupt');
+    }
+    return this.submissionProjection.projectSummary({
+      head,
+      submitEvidence: evidence,
+      version,
+      draftHead: draft.head,
+      sourceRevision: draft.revision
+    });
   }
 
   readSubmissionDetail(scopeInput: SQLiteIntakeScopeInput, submissionId: string): OrganizerSubmissionDetailDto | undefined {

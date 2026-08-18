@@ -344,6 +344,15 @@ describe('SQLite Intake submission-triage source adapter', () => {
       const source = new SQLiteIntakeSubmissionTriageSourceAdapter(intake);
       const rows = source.listSourceRows({ workspaceId, eventId });
       expect(rows).toHaveLength(1);
+
+      // The browser-facing organizer list may remain bounded, while joined
+      // Review/triage sources use the complete population and an exact lookup.
+      expect(intake.listAllSubmissionSummaries({ workspaceId, eventId }))
+        .toEqual(intake.listSubmissions({ workspaceId, eventId }));
+      expect(intake.readSubmissionSummary({ workspaceId, eventId }, submissionId))
+        .toEqual(intake.listSubmissions({ workspaceId, eventId })[0]);
+      expect(source.readSourceRow({ workspaceId, eventId }, submissionId)).toEqual(rows[0]);
+      expect(source.readSourceRow({ workspaceId, eventId }, id(999))).toBeUndefined();
       expect(rows[0]).toMatchObject({
         scope: { workspaceId, eventId },
         source: 'public_form',

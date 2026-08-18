@@ -253,6 +253,34 @@ export const reviewerRosterMemberProjectionSchema = z.strictObject({
   reviews: reviewerScopeRefsSchema
 });
 
+export const reviewerCoveragePopulationCountSchema = z.strictObject({
+  ref: reviewerScopeRefSchema,
+  submissions: z.number().int().nonnegative().safe()
+});
+
+/**
+ * Exact, full-population Review candidate counts by scope ref. The source
+ * candidate version and digest keep a zero distinguishable from an absent or
+ * partial join; rows omit zero-count refs and use canonical kind/id order.
+ */
+export const reviewerCoveragePopulationSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  candidateVersion: reviewVersionSchema,
+  candidateCount: z.number().int().nonnegative().safe(),
+  digestSha256: reviewSha256Schema,
+  counts: z.array(reviewerCoveragePopulationCountSchema).max(50_000)
+}).superRefine((population, context) => {
+  for (let index = 1; index < population.counts.length; index += 1) {
+    if (compareScopeRef(population.counts[index - 1]!.ref, population.counts[index]!.ref) >= 0) {
+      context.addIssue({
+        code: 'custom',
+        path: ['counts', index, 'ref'],
+        message: 'Coverage population counts must use unique canonical ref order.'
+      });
+    }
+  }
+});
+
 export const reviewerRosterSnapshotSchema = z.strictObject({
   schemaVersion: z.literal(1),
   scope: reviewerRosterScopeSchema,
@@ -262,6 +290,7 @@ export const reviewerRosterSnapshotSchema = z.strictObject({
   rosterDigestSha256: reviewSha256Schema,
   authorityVersion: reviewVersionSchema,
   authorityDigestSha256: reviewSha256Schema,
+  coveragePopulation: reviewerCoveragePopulationSchema.optional(),
   reviewers: z.array(reviewerRosterMemberProjectionSchema).max(10_000)
 });
 
@@ -426,6 +455,9 @@ export type ReviewerRosterStateDto = z.infer<typeof reviewerRosterStateSchema>;
 export type ReviewerScopeTargetFactDto = z.infer<typeof reviewerScopeTargetFactSchema>;
 export type ReviewerScopeTargetSetDto = z.infer<typeof reviewerScopeTargetSetSchema>;
 export type ReviewerRosterMemberProjectionDto = z.infer<typeof reviewerRosterMemberProjectionSchema>;
+export type ReviewerCoveragePopulationCountDto =
+  z.infer<typeof reviewerCoveragePopulationCountSchema>;
+export type ReviewerCoveragePopulationDto = z.infer<typeof reviewerCoveragePopulationSchema>;
 export type ReviewerRosterSnapshotDto = z.infer<typeof reviewerRosterSnapshotSchema>;
 export type ReviewerRosterMutationInput = z.infer<typeof reviewerRosterMutationInputSchema>;
 export type ReviewerRosterGuardDto = z.infer<typeof reviewerRosterGuardSchema>;

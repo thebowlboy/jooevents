@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { api } from './workspace';
 import {
 	coverageRows,
+	coverageRowsFromCounts,
 	isGeneralist,
 	planLoad,
 	scopeMatches,
@@ -56,8 +57,12 @@ describe('scope matching', () => {
 		expect(isGeneralist({ scope: [{ kind: 'track', id: 'trk-a' }] })).toBe(false);
 	});
 
-	test('a session ref matches no submission while the seam carries no target link', () => {
+	test('a session ref matches only the submission effective target when carried', () => {
 		expect(scopeMatches([{ kind: 'session', id: 'ses-1' }], submission)).toBe(false);
+		expect(scopeMatches(
+			[{ kind: 'session', id: 'ses-1' }],
+			{ ...submission, targetSessionId: 'ses-1' }
+		)).toBe(true);
 	});
 });
 
@@ -250,7 +255,7 @@ describe('coverage projection', () => {
 				}
 			],
 			submissions: [
-				{ trackId: 'trk-a', formatId: 'fmt-a' },
+				{ trackId: 'trk-a', formatId: 'fmt-a', targetSessionId: 'ses-open' },
 				{ trackId: 'trk-a', formatId: 'fmt-other' },
 				{ trackId: 'trk-old', formatId: 'fmt-a' }
 			],
@@ -284,15 +289,35 @@ describe('coverage projection', () => {
 		// The collecting session is a row; the programmed one is not. Its
 		// reviewer count includes implied coverage — the active trk-a holder
 		// covers this trk-a session — while the invited holder and the
-		// generalist stay out. Its submission count stays 0 until the
-		// submission→target link exists.
+		// generalist stay out. One submission carries this effective target.
 		expect(byId.get('ses-open')).toEqual({
 			ref: { kind: 'session', id: 'ses-open' },
 			label: 'Collecting panel',
 			reviewers: 1,
-			submissions: 0
+			submissions: 1
 		});
 		expect(byId.has('ses-set')).toBe(false);
+	});
+
+	test('accepts exact full-population counts without reconstructing submission rows', () => {
+		const source = fixture();
+		const rows = coverageRowsFromCounts({
+			tracks: source.tracks,
+			formats: source.formats,
+			sessions: source.sessions,
+			reviewers: source.reviewers,
+			submissionCounts: [
+				{ ref: { kind: 'track', id: 'trk-a' }, submissions: 19 },
+				{ ref: { kind: 'format', id: 'fmt-a' }, submissions: 17 },
+				{ ref: { kind: 'session', id: 'ses-open' }, submissions: 4 }
+			]
+		});
+		const byId = new Map(rows.map((row) => [row.ref.id, row.submissions]));
+		expect(byId.get('trk-a')).toBe(19);
+		expect(byId.get('fmt-a')).toBe(17);
+		expect(byId.get('ses-open')).toBe(4);
+		// A retained scoped target omitted from a complete count projection is a proven zero.
+		expect(byId.get('trk-old')).toBe(0);
 	});
 
 	test('session rows count implied coverage across the seeded scenarios', () => {
@@ -539,7 +564,11 @@ describe('reviewers namespace', () => {
 
 		const collecting = servedCoverage.filter((row) => row.ref.kind === 'session');
 		expect(collecting.map((row) => row.ref.id).sort()).toEqual(['ses-11', 'ses-12']);
-		expect(collecting.every((row) => row.submissions === 0)).toBe(true);
+		for (const row of collecting) {
+			expect(row.submissions).toBe(
+				flight.submissions.filter((submission) => submission.targetSessionId === row.ref.id).length
+			);
+		}
 		// The door numbers carry implied coverage: track-scoped Jonas and Tomás
 		// cover the infrastructure panel; the lightning slot's only implying
 		// holder is invited, so it stays 0.

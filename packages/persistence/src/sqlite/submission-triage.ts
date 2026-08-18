@@ -524,7 +524,7 @@ implements SubmissionTriageSourcePort {
 
   listSourceRows(scopeInput: SubmissionTriageScope): readonly SubmissionTriageSourceRowDto[] {
     const currentScope = scope(scopeInput);
-    return Object.freeze(this.intake.listSubmissions(currentScope)
+    return Object.freeze(this.intake.listAllSubmissionSummaries(currentScope)
       .map((summary) => this.project(currentScope, summary)));
   }
 
@@ -533,8 +533,7 @@ implements SubmissionTriageSourcePort {
     submissionId: string
   ): SubmissionTriageSourceRowDto | undefined {
     const currentScope = scope(scopeInput);
-    const summary = this.intake.listSubmissions(currentScope)
-      .find((candidate) => candidate.id === submissionId);
+    const summary = this.intake.readSubmissionSummary(currentScope, submissionId);
     return summary ? this.project(currentScope, summary) : undefined;
   }
 

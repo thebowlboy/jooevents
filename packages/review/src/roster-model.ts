@@ -15,6 +15,7 @@ import {
   type ReviewerRosterStateDto,
   type ReviewerScopeTargetSetDto
 } from '@jooevents/contracts/reviewer-roster';
+import type { ReviewCandidateSet } from './model';
 
 export interface ReviewerRosterRepository {
   readReviewerRoster(scope: ReviewerRosterScopeDto): ReviewerRosterStateDto | undefined;
@@ -37,9 +38,15 @@ export interface ReviewerScopeTargetSource {
 export interface ReviewerRosterPlanningSource
   extends ReviewerAuthoritySource, ReviewerScopeTargetSource {}
 
+/** Full Review candidate population used only to derive organizer coverage counts. */
+export interface ReviewerCoverageCandidateSource {
+  readCandidates(scope: ReviewerRosterScopeDto): ReviewCandidateSet | undefined;
+}
+
 export interface ReviewerRosterReadEnvironment {
   readonly repository: ReviewerRosterRepository;
   readonly authority: ReviewerAuthoritySource;
+  readonly candidatePopulation?: ReviewerCoverageCandidateSource;
 }
 
 export interface ReviewerRosterMutationEnvironment {

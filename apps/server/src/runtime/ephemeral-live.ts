@@ -4088,7 +4088,8 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       currentEvent,
       rosterRead: Object.freeze({
         repository: reviewerRosterRepository,
-        authority: reviewerAuthoritySource
+        authority: reviewerAuthoritySource,
+        candidatePopulation: reviewRepository
       }),
       clock,
       ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
