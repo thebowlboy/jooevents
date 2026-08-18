@@ -295,6 +295,7 @@
 		tasks: taskClient,
 		speakers,
 		templates,
+		schedule: { state: () => schedule.schedule.state() },
 		remind: createTaskReminderLiveSender({ communications: communicationsAuthoring })
 	});
 	// The Files surface joins the canonical roster (names for received

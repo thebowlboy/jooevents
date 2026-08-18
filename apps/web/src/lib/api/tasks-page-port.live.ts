@@ -9,10 +9,12 @@ import type {
 	MutationOutcome,
 	SpeakerProfile,
 	SpeakerRow,
+	ScheduleState,
 	TaskAssignment,
 	TaskDef
 } from './types';
 import { taskAssignmentView, taskDefinitionView } from './mappers/tasks';
+import { sessionPlacementDisplay } from './session-placement';
 
 type Failure = Readonly<{ code: string; reason: string }>;
 export class TasksPageLiveError extends Error {
@@ -53,6 +55,7 @@ export function createLiveTasksPagePort(input: {
 	readonly tasks: TaskLiveClient;
 	readonly speakers: SpeakersPagePort;
 	readonly templates: TemplatesPagePort;
+	readonly schedule: { state(): Promise<ScheduleState> };
 	readonly remind: (speakerIds: readonly string[], subject: string) => Promise<unknown>;
 }): TasksPagePort {
 	let boardRead: Promise<TaskBoardSnapshotDto> | null = null;
@@ -137,13 +140,20 @@ export function createLiveTasksPagePort(input: {
 		speakers: Object.freeze({
 			list: () => input.speakers.speakers.list(),
 			async profile(email: string): Promise<SpeakerProfile | null> {
-				const speaker = (await input.speakers.speakers.list()).find((entry) => entry.email === email);
+				const [roster, schedule] = await Promise.all([
+					input.speakers.speakers.list(),
+					input.schedule.state()
+				]);
+				const speaker = roster.find((entry) => entry.email === email);
 				return speaker ? {
 					name: speaker.name,
 					email: speaker.email,
 					headline: '',
 					submissionCount: 1,
-					sessions: speaker.sessions,
+					sessions: speaker.sessions.map((session) => {
+						const placement = sessionPlacementDisplay(schedule, session.id);
+						return { ...session, ...(placement ? { placement } : {}) };
+					}),
 					speakerId: speaker.id
 				} : null;
 			}

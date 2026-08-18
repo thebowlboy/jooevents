@@ -2,9 +2,29 @@ import { describe, expect, test } from 'bun:test';
 import type { TaskBoardSnapshotDto } from '@jooevents/contracts';
 import type { TaskLiveClient } from './operations/tasks-live';
 import { createLiveTasksPagePort } from './tasks-page-port.live';
+import type { ScheduleState } from './types';
 
 const id = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
 const digest = 'a'.repeat(64);
+
+function schedule(): ScheduleState {
+	return {
+		days: [{ key: 'day-1', label: 'Monday, 7 June' }],
+		rooms: [{
+			id: id(21), name: 'Studio', capacity: 80, status: 'active',
+			usage: { currentReferences: 1, historicalPins: 0 }
+		}],
+		dayStart: '09:00', slotMinutes: 30, slotsPerDay: 16,
+		sessions: [{
+			id: id(20), title: 'Typed systems', speakers: [], trackId: id(22),
+			formatId: id(23), durationMin: 45, state: 'programmed'
+		}],
+		placements: [{
+			sessionId: id(20), dayKey: 'day-1', roomId: id(21), startMin: 75, conflicts: []
+		}],
+		breaks: [], published: false
+	};
+}
 
 function board(): TaskBoardSnapshotDto {
 	const scope = { workspaceId: id(1), eventId: id(2) };
@@ -57,6 +77,7 @@ describe('live tuned Tasks page port', () => {
 			tasks: client,
 			speakers: { speakers: { list: async () => [] } } as never,
 			templates: { templates: { list: async () => ({ messages: [] }) } } as never,
+			schedule: { state: async () => schedule() },
 			remind: async () => undefined
 		});
 		expect(await port.tasks.defs()).toMatchObject([{
@@ -79,5 +100,38 @@ describe('live tuned Tasks page port', () => {
 		});
 		expect(created).toEqual({ ok: true });
 		expect(mutations.at(-1)).toMatchObject({ action: 'create_definition', name: 'Slides' });
+	});
+
+	test('joins the canonical placed slot into the speaker profile without storing a copy', async () => {
+		let placed = true;
+		const speaker = {
+			id: id(30), name: 'Ada', email: 'ada@example.test', state: 'confirmed',
+			sessions: [{ id: id(20), title: 'Typed systems' }], provisional: false
+		};
+		const port = createLiveTasksPagePort({
+			tasks: {} as TaskLiveClient,
+			speakers: { speakers: { list: async () => [speaker] } } as never,
+			templates: { templates: { list: async () => ({ messages: [] }) } } as never,
+			schedule: {
+				async state() {
+					const current = schedule();
+					return { ...current, placements: placed ? current.placements : [] };
+				}
+			},
+			remind: async () => undefined
+		});
+
+		expect(await port.speakers.profile('ada@example.test')).toMatchObject({
+			name: 'Ada',
+			sessions: [{
+				id: id(20), title: 'Typed systems',
+				placement: { day: 'Monday, 7 June', time: '10:15–11:00', room: 'Studio' }
+			}]
+		});
+		placed = false;
+		expect((await port.speakers.profile('ada@example.test'))?.sessions).toEqual([
+			{ id: id(20), title: 'Typed systems' }
+		]);
+		expect(await port.speakers.profile('missing@example.test')).toBeNull();
 	});
 });

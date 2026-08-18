@@ -22,6 +22,7 @@
 		SchedulePublicationReview
 	} from '$lib/api/schedule-page-port';
 	import { presentProgramRoomCapacity } from '$lib/api/program-vocabulary-presentation';
+	import { scheduleClockLabel, scheduleRangeLabel } from '$lib/api/session-placement';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
 	import { applyParams, clearParams, param } from '$lib/features/workspace/url-state.svelte';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
@@ -1274,14 +1275,11 @@
 	}
 
 	function clockLabel(offsetMin: number): string {
-		const total = dayStartMin + offsetMin;
-		const hours = Math.floor(total / 60) % 24;
-		const minutes = total % 60;
-		return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+		return scheduleClockLabel(schedule?.dayStart ?? '00:00', offsetMin);
 	}
 
 	function rangeLabel(startMin: number, durationMin: number): string {
-		return `${clockLabel(startMin)}–${clockLabel(startMin + durationMin)}`;
+		return scheduleRangeLabel(schedule?.dayStart ?? '00:00', startMin, durationMin);
 	}
 
 	function reasonsFor(placement: Placement, severity: PlacementConflict['severity']): string {

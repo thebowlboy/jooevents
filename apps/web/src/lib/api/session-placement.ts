@@ -40,11 +40,23 @@ function dayStartMinutes(dayStart: string): number {
 }
 
 /** One clock reading, `HH:MM`, from an offset into the event's day. */
-function clockLabel(dayStartMin: number, offsetMin: number): string {
-	const total = dayStartMin + offsetMin;
+export function scheduleClockLabel(dayStart: string, offsetMin: number): string {
+	const total = dayStartMinutes(dayStart) + offsetMin;
 	const hours = Math.floor(total / 60) % 24;
 	const minutes = total % 60;
 	return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+}
+
+/** One event-clock range from a start offset and duration. */
+export function scheduleRangeLabel(
+	dayStart: string,
+	startMin: number,
+	durationMin: number
+): string {
+	return `${scheduleClockLabel(dayStart, startMin)}–${scheduleClockLabel(
+		dayStart,
+		startMin + durationMin
+	)}`;
 }
 
 /**
@@ -69,13 +81,9 @@ export function sessionPlacementDisplay(
 	const day = schedule.days.find((entry) => entry.key === placement.dayKey);
 	const room = schedule.rooms.find((entry) => entry.id === placement.roomId);
 	if (!day || !room) return undefined;
-	const dayStartMin = dayStartMinutes(schedule.dayStart);
 	return {
 		day: day.label,
-		time: `${clockLabel(dayStartMin, placement.startMin)}–${clockLabel(
-			dayStartMin,
-			placement.startMin + session.durationMin
-		)}`,
+		time: scheduleRangeLabel(schedule.dayStart, placement.startMin, session.durationMin),
 		room: room.name
 	};
 }
