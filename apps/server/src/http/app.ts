@@ -221,19 +221,29 @@ export function createHttpApp(input: {
 
   if (input.reviewOrganizerEntry) {
     app.post('/api/entry/review-organizer', async (context) => {
-      const response = await input.auth.handler(authRequest(context, '/api/auth/sign-in/magic-link', {
-        email: input.reviewOrganizerEntry!.email,
-        name: 'Evaluation organizer',
-        callbackURL: SIGN_IN_LINK_CALLBACK_PATH,
-        errorCallbackURL: SIGN_IN_LINK_ERROR_CALLBACK_PATH
-      }));
-      if (!response.ok) {
+      try {
+        // This route exists only in explicit organizer review mode. Invoke the
+        // same Better Auth endpoint internally so repeated evaluator entry does
+        // not consume the public magic-link request bucket. The ordinary
+        // `/api/entry/sign-in-link` path still crosses Better Auth's HTTP rate
+        // limiter unchanged, while this call retains the endpoint's origin/CSRF
+        // middleware and issues the same one-use, hashed-at-rest credential.
+        await input.auth.api.signInMagicLink({
+          headers: context.req.raw.headers,
+          body: {
+            email: input.reviewOrganizerEntry!.email,
+            name: 'Evaluation organizer',
+            callbackURL: SIGN_IN_LINK_CALLBACK_PATH,
+            errorCallbackURL: SIGN_IN_LINK_ERROR_CALLBACK_PATH
+          }
+        });
+      } catch {
         return context.json({
           code: 'review_entry_failed',
           message: 'Organizer review entry could not start.',
-          retryable: response.status >= 500,
+          retryable: true,
           correlationId: correlation(context)
-        }, response.status >= 500 ? 502 : 400);
+        }, 502);
       }
       const url = input.reviewOrganizerEntry!.resolveIssuedUrl();
       if (!url) {

@@ -266,6 +266,28 @@ describe('workspace magic-link sign-in', () => {
       headers: { cookie, 'x-correlation-id': crypto.randomUUID() }
     });
     expect(await active.json()).toMatchObject({ state: 'active' });
+
+    const startedAgain = await runtime.app.request('/api/entry/review-organizer', {
+      method: 'POST',
+      headers: { origin: reviewConfig.baseUrl, 'content-type': 'application/json' }
+    });
+    expect(startedAgain.status).toBe(200);
+    const issuedAgain = await startedAgain.json() as { readonly url: string };
+    const verifiedAgain = await runtime.app.request(issuedAgain.url);
+    expect([302, 307]).toContain(verifiedAgain.status);
+    const secondCookie = sessionCookieFrom(verifiedAgain);
+    expect(secondCookie).not.toBe(cookie);
+    const activeAgain = await runtime.app.request('/api/me/access-context', {
+      headers: { cookie: secondCookie, 'x-correlation-id': crypto.randomUUID() }
+    });
+    expect(await activeAgain.json()).toMatchObject({ state: 'active' });
+
+    // Review entry does not consume or widen the ordinary public request
+    // bucket: its existing five-per-minute Better Auth policy is unchanged.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      expect((await requestLink(runtime, reviewConfig.bootstrapOwnerEmail)).status).toBe(200);
+    }
+    expect((await requestLink(runtime, reviewConfig.bootstrapOwnerEmail)).status).toBe(429);
   });
 
   test('a reserved address completes a FIRST sign-in and lands admitted; the link works once', async () => {
