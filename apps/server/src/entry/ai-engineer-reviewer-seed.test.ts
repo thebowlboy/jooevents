@@ -65,6 +65,22 @@ describe('AI Engineer reviewer seed', () => {
       conditionalRules: 2,
       sessionFiles: 3
     });
+    const proposalTracks = runtime.database.sqlite.query<
+      { readonly label: string; readonly count: number }, []
+    >(`
+      SELECT json_extract(pin.value, '$.label') AS label, count(*) AS count
+        FROM intake_submission_direct_entry_evidence AS evidence,
+             json_each(evidence.evidence_json, '$.programVocabularyAnswerPins') AS pin
+       WHERE json_extract(pin.value, '$.source') = 'tracks'
+       GROUP BY label
+       ORDER BY label
+    `).all();
+    expect(proposalTracks).toEqual([
+      { label: 'AI Product & UX', count: 5 },
+      { label: 'Agents & Applied AI', count: 5 },
+      { label: 'Evals & Reliability', count: 5 },
+      { label: 'Models & Infrastructure', count: 5 }
+    ]);
     const taskDueDates = runtime.database.sqlite.query<
       { readonly display_date: string }, []
     >(`

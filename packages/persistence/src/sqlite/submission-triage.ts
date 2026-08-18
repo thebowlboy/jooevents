@@ -571,8 +571,16 @@ implements SubmissionTriageSourcePort {
       throw new SQLiteSubmissionTriageError('data_corrupt');
     }
     const pinned = version.targetPin;
+    const trackField = version.definition.fields.find((field) => field.mapsTo === 'talk.track');
+    const trackAnswer = trackField
+      ? detail.answers.find((answer) => answer.fieldId === trackField.id)
+      : undefined;
+    if (trackAnswer !== undefined && trackAnswer.kind !== 'select') {
+      throw new SQLiteSubmissionTriageError('data_corrupt');
+    }
     const track = pinned?.kind === 'category' && pinned.categoryKind === 'track'
-      ? { id: pinned.id, label: pinned.name } : null;
+      ? { id: pinned.id, label: pinned.name }
+      : trackAnswer?.choice ?? null;
     const format = pinned?.kind === 'category' && pinned.categoryKind === 'format'
       ? { id: pinned.id, label: pinned.name } : null;
     return submissionTriageSourceRowSchema.parse({

@@ -234,7 +234,7 @@ interface SubmissionSpec {
   readonly email: string;
   readonly title: string;
   readonly abstract: string;
-  readonly trackKey?: TrackKey;
+  readonly trackKey: TrackKey;
   readonly formatKey?: FormatKey;
 }
 
@@ -256,16 +256,16 @@ const FEATURED_SUBMISSIONS: readonly SubmissionSpec[] = Object.freeze([
 ]);
 
 const GENERAL_SUBMISSIONS: readonly SubmissionSpec[] = Object.freeze([
-  Object.freeze({ key: 'ali', name: 'Farah Ali', email: 'farah.ali@example.test', title: 'Synthetic Users Are Not Your Users', abstract: 'A careful comparison of simulated user research and observed behavior, with a practical boundary for when generated feedback helps and when it merely agrees with the prompt.' }),
-  Object.freeze({ key: 'morgan', name: 'Elliot Morgan', email: 'elliot.morgan@example.test', title: 'The Retrieval Checklist We Use Before Launch', abstract: 'A compact operating checklist for corpus ownership, chunking, freshness, access control, citations, evaluation, and the inevitable first incident.' }),
-  Object.freeze({ key: 'silva', name: 'Camila Silva', email: 'camila.silva@example.test', title: 'A Field Guide to Model Fallbacks', abstract: 'How fallback trees fail under correlated outages, and how to test degraded behavior without turning every provider into an accidental single point of failure.' }),
-  Object.freeze({ key: 'williams', name: 'Marcus Williams', email: 'marcus.williams@example.test', title: 'Prompt Review Is Code Review', abstract: 'A proposal for reviewing prompts with ownership, fixtures, versioned inputs, and rollback discipline while preserving the iteration speed that made prompts attractive.' }),
-  Object.freeze({ key: 'nguyen', name: 'Linh Nguyen', email: 'linh.nguyen@example.test', title: 'From Prototype to Permission Model', abstract: 'The missing middle between a tool-calling demo and a product that can explain who was allowed to do what, to which data, and why.' }),
-  Object.freeze({ key: 'davis', name: 'Avery Davis', email: 'avery.davis@example.test', title: 'Why Our AI Search Failed the Support Team', abstract: 'A frank postmortem of stale sources, hidden permissions, and unhelpful abstentions, plus the fixes that rebuilt trust with the people using search all day.' }),
-  Object.freeze({ key: 'kowalski', name: 'Marta Kowalski', email: 'marta.kowalski@example.test', title: 'Token Counts Are Not Cost Controls', abstract: 'Budget enforcement across retries, tool calls, cached context, and human escalation, with examples of controls that remain legible to product owners.' }),
-  Object.freeze({ key: 'johnson', name: 'Theo Johnson', email: 'theo.johnson@example.test', title: 'The Case Against One Giant Agent', abstract: 'A deliberately provocative argument for small operation-specific automations, evaluated against debuggability, permission scope, and user comprehension.' }),
-  Object.freeze({ key: 'park', name: 'Jisoo Park', email: 'jisoo.park@example.test', title: 'Benchmark Archaeology', abstract: 'What old benchmark failures reveal about current model claims, and a reproducible method for deciding which historical tests still deserve attention.' }),
-  Object.freeze({ key: 'rossi', name: 'Giulia Rossi', email: 'giulia.rossi@example.test', title: 'Accessibility for Generative Interfaces', abstract: 'Patterns for focus, streaming updates, correction, and alternate input in interfaces whose content and timing cannot be known in advance.' })
+  Object.freeze({ key: 'ali', name: 'Farah Ali', email: 'farah.ali@example.test', trackKey: 'organizer_craft', title: 'Synthetic Users Are Not Your Users', abstract: 'A careful comparison of simulated user research and observed behavior, with a practical boundary for when generated feedback helps and when it merely agrees with the prompt.' }),
+  Object.freeze({ key: 'morgan', name: 'Elliot Morgan', email: 'elliot.morgan@example.test', trackKey: 'models_infrastructure', title: 'The Retrieval Checklist We Use Before Launch', abstract: 'A compact operating checklist for corpus ownership, chunking, freshness, access control, citations, evaluation, and the inevitable first incident.' }),
+  Object.freeze({ key: 'silva', name: 'Camila Silva', email: 'camila.silva@example.test', trackKey: 'platform_reliability', title: 'A Field Guide to Model Fallbacks', abstract: 'How fallback trees fail under correlated outages, and how to test degraded behavior without turning every provider into an accidental single point of failure.' }),
+  Object.freeze({ key: 'williams', name: 'Marcus Williams', email: 'marcus.williams@example.test', trackKey: 'organizer_craft', title: 'Prompt Review Is Code Review', abstract: 'A proposal for reviewing prompts with ownership, fixtures, versioned inputs, and rollback discipline while preserving the iteration speed that made prompts attractive.' }),
+  Object.freeze({ key: 'nguyen', name: 'Linh Nguyen', email: 'linh.nguyen@example.test', trackKey: 'agent_systems', title: 'From Prototype to Permission Model', abstract: 'The missing middle between a tool-calling demo and a product that can explain who was allowed to do what, to which data, and why.' }),
+  Object.freeze({ key: 'davis', name: 'Avery Davis', email: 'avery.davis@example.test', trackKey: 'platform_reliability', title: 'Why Our AI Search Failed the Support Team', abstract: 'A frank postmortem of stale sources, hidden permissions, and unhelpful abstentions, plus the fixes that rebuilt trust with the people using search all day.' }),
+  Object.freeze({ key: 'kowalski', name: 'Marta Kowalski', email: 'marta.kowalski@example.test', trackKey: 'platform_reliability', title: 'Token Counts Are Not Cost Controls', abstract: 'Budget enforcement across retries, tool calls, cached context, and human escalation, with examples of controls that remain legible to product owners.' }),
+  Object.freeze({ key: 'johnson', name: 'Theo Johnson', email: 'theo.johnson@example.test', trackKey: 'agent_systems', title: 'The Case Against One Giant Agent', abstract: 'A deliberately provocative argument for small operation-specific automations, evaluated against debuggability, permission scope, and user comprehension.' }),
+  Object.freeze({ key: 'park', name: 'Jisoo Park', email: 'jisoo.park@example.test', trackKey: 'models_infrastructure', title: 'Benchmark Archaeology', abstract: 'What old benchmark failures reveal about current model claims, and a reproducible method for deciding which historical tests still deserve attention.' }),
+  Object.freeze({ key: 'rossi', name: 'Giulia Rossi', email: 'giulia.rossi@example.test', trackKey: 'organizer_craft', title: 'Accessibility for Generative Interfaces', abstract: 'Patterns for focus, streaming updates, correction, and alternate input in interfaces whose content and timing cannot be known in advance.' })
 ]);
 
 const PLACEMENT_TEMPLATES = Object.freeze([
@@ -719,6 +719,7 @@ interface CfpFields {
   readonly emailFieldId: string;
   readonly titleFieldId: string;
   readonly abstractFieldId: string;
+  readonly trackFieldId: string;
   readonly liveDemoFieldId: string;
   readonly demoPlanFieldId: string;
   readonly excludedFieldIds: readonly string[];
@@ -780,7 +781,7 @@ async function createConditionalCfpFields(context: SeedContext): Promise<{
 }
 
 /**
- * Resolves the four registry fields every seeded application answers and the
+ * Resolves the five registry fields every seeded application answers and the
  * exact shared apply-visible field ids the CFP composition excludes, so each
  * committed direct entry answers exactly the form it was authored against.
  */
@@ -800,8 +801,9 @@ async function resolveCfpFields(
   const emailFieldId = fieldId('person.email', 'email');
   const titleFieldId = fieldId('talk.title', 'text');
   const abstractFieldId = fieldId('talk.abstract', 'textarea');
+  const trackFieldId = fieldId('talk.track', 'select');
   const included = new Set([
-    nameFieldId, emailFieldId, titleFieldId, abstractFieldId,
+    nameFieldId, emailFieldId, titleFieldId, abstractFieldId, trackFieldId,
     conditional.liveDemoFieldId, conditional.demoPlanFieldId
   ]);
   return Object.freeze({
@@ -809,6 +811,7 @@ async function resolveCfpFields(
     emailFieldId,
     titleFieldId,
     abstractFieldId,
+    trackFieldId,
     ...conditional,
     excludedFieldIds: Object.freeze(registry.fields
       .filter((field) => field.scope.kind === 'shared'
@@ -942,6 +945,7 @@ async function createDirectEntries(input: {
   readonly context: SeedContext;
   readonly formId: string;
   readonly fields: CfpFields;
+  readonly trackIdByKey: Readonly<Record<TrackKey, string>>;
   readonly specs: readonly SubmissionSpec[];
   readonly daysBeforeAnchor: readonly number[];
 }): Promise<ReadonlyMap<string, string>> {
@@ -971,8 +975,9 @@ async function createDirectEntries(input: {
           { kind: 'text', fieldId: fields.nameFieldId, value: spec.name },
           { kind: 'email', fieldId: fields.emailFieldId, value: spec.email },
           { kind: 'text', fieldId: fields.titleFieldId, value: spec.title },
-          { kind: 'textarea', fieldId: fields.abstractFieldId, value: spec.abstract }
-        ]
+          { kind: 'textarea', fieldId: fields.abstractFieldId, value: spec.abstract },
+          { kind: 'select', fieldId: fields.trackFieldId, choiceId: input.trackIdByKey[spec.trackKey] }
+        ].sort((left, right) => left.fieldId < right.fieldId ? -1 : 1)
       },
       parse: (value) => value
     })), `entry_${spec.key}`);
@@ -1755,7 +1760,7 @@ export async function seedAIEngineerReviewer(input: {
       const formId = formByFormat.get(spec.formatKey);
       if (!formId) fail('entry_form_missing', spec.formatKey);
       const created = await createDirectEntries({
-        context, formId, fields, specs: [spec],
+        context, formId, fields, trackIdByKey: vocabulary, specs: [spec],
         daysBeforeAnchor: [SEED_TIMELINE.arrivalDaysBeforeAnchor[index]!]
       });
       featuredIds.set(spec.key, created.get(spec.key)!);
@@ -1764,6 +1769,7 @@ export async function seedAIEngineerReviewer(input: {
       context,
       formId: generalFormId,
       fields,
+      trackIdByKey: vocabulary,
       specs: GENERAL_SUBMISSIONS,
       daysBeforeAnchor: SEED_TIMELINE.arrivalDaysBeforeAnchor.slice(featuredSpecs.length)
     });
@@ -1786,6 +1792,7 @@ export async function seedAIEngineerReviewer(input: {
       context,
       formId: formByFormat.get('talk')!,
       fields,
+      trackIdByKey: vocabulary,
       specs: [rivera],
       daysBeforeAnchor: [35]
     });

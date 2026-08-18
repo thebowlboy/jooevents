@@ -410,6 +410,8 @@ describe('SQLite direct-entry direct effect domain', () => {
           arrival: { source: 'direct_entry', classification: 'on_time' },
           head: { state: 'inbox', version: 1 }
         });
+      expect(fixture.triageRepository.listSourceRows({ workspaceId, eventId })[0]?.track)
+        .toEqual({ id: trackChoiceId, label: 'Applied AI' });
       const committedCounts = durableCounts(fixture);
       expect(committedCounts).toMatchObject({
         submissions: 1, entryEvidence: 1, participants: 1, arrivals: 1, triageHeads: 1,
