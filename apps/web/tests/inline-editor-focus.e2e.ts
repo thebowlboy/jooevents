@@ -21,12 +21,18 @@ test('the composer preview focuses its field on open, add-section included', asy
 	await expect(dialog.getByText('Your headline goes here')).toBeVisible({ timeout: 15000 });
 	await dialog.locator('[data-edit="blocks.0.text"]').first().click();
 	await expect(page.locator('.ied').getByRole('textbox').first()).toBeFocused();
-	// Escape would close the whole composer (the recorded layering defect),
-	// so the editor is dismissed by its own control.
-	await page.locator('.ied').getByRole('button', { name: 'Cancel' }).click();
+	await page.keyboard.press('Escape');
+	// The inline layer consumes its own dismissal; its host stays mounted.
+	await expect(page.locator('.ied')).toHaveCount(0);
+	await expect(dialog).toBeVisible();
 
 	// Insert-then-type is one gesture only when the new section's field is live.
 	await dialog.getByRole('button', { name: '+ Add section' }).click();
 	await page.getByRole('menuitem', { name: 'Paragraph' }).click();
 	await expect(page.locator('.ied').getByRole('textbox').first()).toBeFocused();
+	await page.keyboard.press('Escape');
+	await expect(page.locator('.ied')).toHaveCount(0);
+	await expect(dialog).toBeVisible();
+	await page.keyboard.press('Escape');
+	await expect(dialog).toHaveCount(0);
 });

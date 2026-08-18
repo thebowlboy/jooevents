@@ -1010,6 +1010,12 @@
 	}
 
 	.card__email {
+		display: flex;
+		align-items: center;
+		/* The coarse-pointer copy target is one small-control row tall. Giving
+		   that target a real row keeps its invisible hit area out of the name
+		   above instead of letting a tap on the person copy their address. */
+		min-block-size: var(--je-control-height-sm);
 		font-size: var(--je-font-size-xs);
 		color: var(--je-color-text-muted);
 		overflow-wrap: anywhere;
