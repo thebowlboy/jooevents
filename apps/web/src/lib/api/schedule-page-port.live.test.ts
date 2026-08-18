@@ -150,6 +150,46 @@ describe('live Schedule page correction boundary', () => {
 		} }]);
 	});
 
+	test('updates a Session description through one guarded content_update', async () => {
+		const sessionId = id(72);
+		const catalogDigest = 'a'.repeat(64);
+		const sessionDigest = 'b'.repeat(64);
+		const writes: unknown[] = [];
+		const head = {
+			id: sessionId, title: 'Opening', description: 'Before', plannedDurationMinutes: 30,
+			lifecycle: 'programmed', version: 4, digestSha256: sessionDigest,
+			programTarget: { format: { id: id(73) }, track: null }, roster: { participants: [] }
+		};
+		const port = createLiveSchedulePagePort({
+			...base,
+			placements: { source: { kind: 'live' } } as never,
+			sessions: {
+				source: { kind: 'live' },
+				readCatalog: async () => ({ kind: 'success', data: {
+					version: 8, digestSha256: catalogDigest, sessions: [head]
+				} }),
+				applyChange: async (request: unknown, key: string) => {
+					writes.push({ request, key });
+					return { kind: 'success', data: {
+						action: 'content_update', catalogVersion: 9,
+						session: { ...head, description: 'After', version: 5, digestSha256: 'c'.repeat(64) }
+					} };
+				}
+			} as never,
+			newIdempotencyKey: () => 'session-content-attempt-00000001'
+		} as never);
+
+		expect(await port.schedule.updateSessionDescription(sessionId, 'After')).toMatchObject({
+			id: sessionId, description: 'After'
+		});
+		expect(writes).toEqual([{ key: 'session-content-attempt-00000001', request: {
+			action: 'content_update', expectedCatalogVersion: 8,
+			expectedCatalogDigestSha256: catalogDigest, sessionId,
+			expectedSessionVersion: 4, expectedSessionDigestSha256: sessionDigest,
+			description: 'After'
+		} }]);
+	});
+
 	test('delegates roster and surface-template reads to the joined live owners', async () => {
 		const roster: SpeakerRow[] = [{
 			id: id(4), personId: id(6), name: 'Ada', email: 'ada@example.test', state: 'confirmed', sessions: [],

@@ -1433,6 +1433,59 @@
 	 * addressing, unlike the speakers dialog beside it.
 	 */
 	let detailId = $state<string | null>(null);
+	let descriptionEditingId = $state<string | null>(null);
+	let descriptionDraft = $state('');
+	let descriptionSaving = $state(false);
+	let descriptionError = $state('');
+
+	function toggleSessionDetail(session: SessionItem) {
+		if (detailId === session.id) {
+			detailId = null;
+			descriptionEditingId = null;
+			descriptionError = '';
+			return;
+		}
+		detailId = session.id;
+		descriptionEditingId = null;
+		descriptionError = '';
+	}
+
+	function editSessionDescription(session: SessionItem) {
+		descriptionEditingId = session.id;
+		descriptionDraft = session.description ?? '';
+		descriptionError = '';
+	}
+
+	async function saveSessionDescription(session: SessionItem, remove = false) {
+		if (descriptionSaving) return;
+		const description = remove ? null : descriptionDraft.trim();
+		// Empty text never quietly means deletion: the named Remove action below
+		// is the only way an existing public description is cleared.
+		if (!remove && description === '') return;
+		if (!remove && description === (session.description ?? null)) {
+			descriptionEditingId = null;
+			return;
+		}
+		descriptionSaving = true;
+		descriptionError = '';
+		try {
+			const updated = await api.schedule.updateSessionDescription(session.id, description);
+			recordAction({
+				area: 'schedule',
+				label: description === null
+					? `Removed the description from “${updated.title}”`
+					: `Updated the description of “${updated.title}”`
+			});
+			descriptionEditingId = null;
+			await load();
+		} catch (error) {
+			descriptionError = error instanceof Error
+				? error.message
+				: 'The description could not be saved. Try again.';
+		} finally {
+			descriptionSaving = false;
+		}
+	}
 
 	/**
 	 * A format's own label may already carry its nominal length, so only the
@@ -3057,11 +3110,11 @@
 				class="ui-button ui-button--ghost ui-button--sm pool__detail-door"
 				aria-expanded={open}
 				aria-label={open ? `Hide details of “${session.title}”` : `Details of “${session.title}”`}
-				onclick={() => (detailId = open ? null : session.id)}>{open ? 'Hide' : 'Details'}</button>
+				onclick={() => toggleSessionDetail(session)}>{open ? 'Hide' : 'Details'}</button>
 		</div>
 		{#if open}
 			<div class="pool__detail">
-				<RecordDetail title={session.title} onclose={() => (detailId = null)}>
+				<RecordDetail title={session.title} onclose={() => toggleSessionDetail(session)}>
 					{#snippet fields()}
 						<!-- Field order mirrors the row's own reading order. -->
 						<RecordField label="Length">{session.durationMin} min</RecordField>
@@ -3093,6 +3146,69 @@
 								No speakers yet
 							{/if}
 						</RecordField>
+					{/snippet}
+					{#snippet blocks()}
+						<div class="session-description">
+							{#if descriptionEditingId === session.id}
+								<form
+									class="session-description__form"
+									onsubmit={(event) => {
+										event.preventDefault();
+										void saveSessionDescription(session);
+									}}>
+									<Field
+										id={`session-description-${session.id}`}
+										label="Description"
+										description="Shown on the public session page after the program is published."
+										meta={`${descriptionDraft.length}/5000`}>
+										{#snippet children({ id, describedBy })}
+											<textarea
+												class="ui-control session-description__input"
+												{id}
+												aria-describedby={describedBy}
+												maxlength="5000"
+												rows="5"
+												disabled={descriptionSaving}
+												bind:value={descriptionDraft}></textarea>
+										{/snippet}
+									</Field>
+									{#if descriptionError}
+										<p class="session-description__error" role="alert">{descriptionError}</p>
+									{/if}
+									<div class="session-description__actions">
+										<Button
+											type="submit"
+											size="sm"
+											disabled={descriptionDraft.trim().length === 0}
+											loading={descriptionSaving}>Save description</Button>
+										<Button
+											type="button"
+											size="sm"
+											variant="secondary"
+											disabled={descriptionSaving}
+											onclick={() => {
+												descriptionEditingId = null;
+												descriptionError = '';
+											}}>Cancel</Button>
+										{#if session.description}
+											<Button
+												type="button"
+												size="sm"
+												variant="ghost"
+												disabled={descriptionSaving}
+												onclick={() => void saveSessionDescription(session, true)}>Remove description</Button>
+										{/if}
+									</div>
+								</form>
+							{:else}
+								<p class:session-description__empty={!session.description}>
+									{session.description ?? 'No description yet.'}
+								</p>
+								<Button size="sm" variant="secondary" onclick={() => editSessionDescription(session)}>
+									{session.description ? 'Edit description' : 'Add description'}
+								</Button>
+							{/if}
+						</div>
 					{/snippet}
 				</RecordDetail>
 			</div>
@@ -4514,6 +4630,48 @@
 		padding-block-start: var(--je-space-3);
 		padding-inline-end: var(--je-space-3);
 		border-block-start: 1px solid var(--je-color-border);
+	}
+
+	.session-description {
+		display: grid;
+		gap: var(--je-space-2);
+		margin-block-start: var(--je-space-3);
+		padding-block-start: var(--je-space-3);
+		padding-inline-end: var(--je-space-3);
+		border-block-start: 1px solid var(--je-color-border);
+	}
+
+	.session-description > p {
+		max-inline-size: 68ch;
+		margin: 0;
+		white-space: pre-wrap;
+		color: var(--je-color-text);
+	}
+
+	.session-description > .session-description__empty {
+		color: var(--je-color-text-muted);
+	}
+
+	.session-description__form {
+		display: grid;
+		gap: var(--je-space-2);
+	}
+
+	.session-description__input {
+		min-block-size: 8rem;
+		resize: vertical;
+	}
+
+	.session-description__actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--je-space-2);
+	}
+
+	.session-description__error {
+		margin: 0;
+		font-size: var(--je-font-size-sm);
+		color: var(--je-color-danger);
 	}
 
 	/* An expansion is part of what opened it: the open row keeps the marked

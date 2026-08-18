@@ -2954,6 +2954,16 @@ export const api = {
 			programChanged();
 			return session;
 		},
+		async updateSessionDescription(id: string, description: string | null): Promise<SessionItem> {
+			await latency();
+			const session = db.schedule.sessions.find((entry) => entry.id === id);
+			if (!session) throw new Error('This session no longer exists');
+			const normalized = description?.trim();
+			if (normalized) session.description = normalized;
+			else delete session.description;
+			programChanged();
+			return { ...session, speakers: [...session.speakers] };
+		},
 		async retargetSession(id: string, formatId: string, trackId: string): Promise<SessionItem> {
 			await latency();
 			const session = db.schedule.sessions.find((entry) => entry.id === id);

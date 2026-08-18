@@ -18,4 +18,18 @@ describe('sample tuned Schedule page port', () => {
 		expect(speakers.length).toBeGreaterThan(0);
 		expect(templates.surfaces.some((surface) => surface.kind === 'schedule')).toBe(true);
 	});
+
+	test('adds and explicitly removes a Session description in the sample workspace', async () => {
+		const port = createSampleSchedulePagePort(sampleWorkspaceGateway.api);
+		const session = (await port.schedule.state()).sessions[0]!;
+		const original = session.description ?? null;
+		try {
+			expect(await port.schedule.updateSessionDescription(session.id, 'A public summary.')).toMatchObject({
+				description: 'A public summary.'
+			});
+			expect((await port.schedule.updateSessionDescription(session.id, null)).description).toBeUndefined();
+		} finally {
+			await port.schedule.updateSessionDescription(session.id, original);
+		}
+	});
 });

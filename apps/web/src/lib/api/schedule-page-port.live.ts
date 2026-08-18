@@ -528,6 +528,7 @@ function sessionItem(
 	return {
 		id: head.id,
 		title: head.title,
+		...(head.description === undefined ? {} : { description: head.description }),
 		speakers,
 		trackId: head.programTarget.track?.id ?? '',
 		formatId: head.programTarget.format.id,
@@ -1043,6 +1044,40 @@ export function createLiveSchedulePagePort(input: {
 				);
 				if (applied.kind !== 'success') {
 					throw new SchedulePageLiveError(applyFailure(applied, 'session'));
+				}
+				if (applied.data.session === null) {
+					throw new SchedulePageLiveError({
+						code: 'invalid_contract', reason: 'The session result was incomplete.'
+					});
+				}
+				return sessionItem(applied.data.session, await readPeopleById());
+			},
+			async updateSessionDescription(id: string, description: string | null): Promise<SessionItem> {
+				const catalogResult = await input.sessions.readCatalog();
+				if (catalogResult.kind !== 'success') {
+					throw new SchedulePageLiveError(readFailure(catalogResult, 'session catalog'));
+				}
+				const head = catalogResult.data.sessions.find((session) => session.id === id);
+				if (!head) {
+					throw new SchedulePageLiveError({
+						code: 'session_missing',
+						reason: 'This session no longer exists. Reload and try again.'
+					});
+				}
+				const applied = await input.sessions.applyChange(
+					{
+						action: 'content_update',
+						expectedCatalogVersion: catalogResult.data.version,
+						expectedCatalogDigestSha256: catalogResult.data.digestSha256,
+						sessionId: id,
+						expectedSessionVersion: head.version,
+						expectedSessionDigestSha256: head.digestSha256,
+						description
+					},
+					newIdempotencyKey()
+				);
+				if (applied.kind !== 'success') {
+					throw new SchedulePageLiveError(applyFailure(applied, 'session description'));
 				}
 				if (applied.data.session === null) {
 					throw new SchedulePageLiveError({
