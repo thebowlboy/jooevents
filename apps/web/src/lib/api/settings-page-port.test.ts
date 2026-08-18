@@ -4,6 +4,7 @@ import { createSampleEventProgramPort } from './event-program/sample';
 import { configuredEventProgramFixture } from './event-program/fixtures';
 import { createProgramVocabularySettingsAdapter } from './program-vocabulary-settings-adapter';
 import type { WorkspaceTeamLiveReadResult } from './operations/workspace-team-live';
+import type { SpeakerProfilesLiveClient } from './operations/speaker-profiles-live';
 import { sampleWorkspaceGateway } from './sample/gateway';
 import {
 	createLiveSettingsPagePort,
@@ -159,7 +160,10 @@ const senderIdentity: SettingsPageSenderIdentityPort = createSampleSenderIdentit
 	sampleWorkspaceGateway.api.communications.senderIdentity
 );
 
-function createLivePort(team: WorkspaceTeamSettingsPort = teamPort()) {
+function createLivePort(
+	team: WorkspaceTeamSettingsPort = teamPort(),
+	profiles?: SpeakerProfilesLiveClient
+) {
 	return createLiveSettingsPagePort({
 		event: {
 			get: sampleWorkspaceGateway.api.settings.get,
@@ -168,6 +172,7 @@ function createLivePort(team: WorkspaceTeamSettingsPort = teamPort()) {
 		team,
 		vocab: vocabulary('live'),
 		fields: sampleWorkspaceGateway.api.fields,
+		...(profiles ? { profiles } : {}),
 		senderIdentity
 	});
 }
@@ -256,5 +261,44 @@ describe('tuned Settings page source seam', () => {
 			committed: true,
 			message: 'The team change was committed. Refresh to reconcile the latest team list.'
 		});
+	});
+
+	test('changes profile review through its exact policy operation, outside ordinary event settings', async () => {
+		const updates: unknown[] = [];
+		const policy = {
+			schemaVersion: 1 as const,
+			workspaceId: id(30),
+			eventId: id(31),
+			eventVersion: 7,
+			reviewRequired: false
+		};
+		const profiles: SpeakerProfilesLiveClient = {
+			async read() { throw new Error('unexpected profile read'); },
+			async readReviewQueue() {
+				return {
+					kind: 'success',
+					data: { schemaVersion: 1, policy, profiles: [] },
+					correlationId: id(32)
+				};
+			},
+			async update() { throw new Error('unexpected profile update'); },
+			async approve() { throw new Error('unexpected profile approval'); },
+			async updateReviewPolicy(input) {
+				updates.push(input);
+				return {
+					kind: 'success',
+					data: { ...policy, eventVersion: 8, reviewRequired: true },
+					receipt: {
+						id: id(33),
+						operationName: 'speaker.profile.review_policy.update',
+						operationVersion: 1
+					},
+					correlationId: id(34)
+				};
+			}
+		};
+		const port = createLivePort(teamPort(), profiles);
+		expect(await port.profileReview!.update(true)).toEqual({ ok: true });
+		expect(updates).toEqual([{ expectedEventVersion: 7, reviewRequired: true }]);
 	});
 });

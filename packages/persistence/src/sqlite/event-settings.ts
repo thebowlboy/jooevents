@@ -37,6 +37,7 @@ CREATE TABLE event_settings_companions (
     OR day_end GLOB '2[0-3]:[0-5][0-9]'
   ),
   slot_minutes INTEGER CHECK(slot_minutes IS NULL OR slot_minutes IN (5, 10, 15, 20, 30, 60)),
+  profile_content_review INTEGER NOT NULL DEFAULT 0 CHECK(profile_content_review IN (0, 1)),
   CHECK((day_start IS NULL) = (day_end IS NULL) AND (day_start IS NULL) = (slot_minutes IS NULL)),
   CHECK(day_start IS NULL OR day_end > day_start),
   CHECK(
@@ -97,6 +98,7 @@ interface CompanionRow {
   readonly day_start: string | null;
   readonly day_end: string | null;
   readonly slot_minutes: number | null;
+  readonly profile_content_review: number;
 }
 
 function requireTransaction(sqlite: Database): void {
@@ -118,7 +120,8 @@ function parseCompanion(row: CompanionRow) {
       venueNote: row.venue_note,
       dayStart: row.day_start,
       dayEnd: row.day_end,
-      slotMinutes: row.slot_minutes
+      slotMinutes: row.slot_minutes,
+      profileContentReview: row.profile_content_review === 1
     });
   } catch (error) {
     throw new SQLiteEventSettingsError('settings_data_corrupt', error);
@@ -155,7 +158,7 @@ export class SQLiteEventSettingsRepository implements EventSettingsTransactionPo
     const eventId = parseEventId(scope.eventId);
     const row = oneOrNone(this.sqlite.query<CompanionRow, [WorkspaceId, EventId]>(`
       SELECT workspace_id, event_id, event_version, location, venue_note,
-             day_start, day_end, slot_minutes
+             day_start, day_end, slot_minutes, profile_content_review
         FROM event_settings_companions
        WHERE workspace_id = ? AND event_id = ?
        ORDER BY workspace_id, event_id
@@ -222,7 +225,8 @@ export class SQLiteEventSettingsRepository implements EventSettingsTransactionPo
           || existing.venueNote !== initialCompanion.venueNote
           || existing.dayStart !== initialCompanion.dayStart
           || existing.dayEnd !== initialCompanion.dayEnd
-          || existing.slotMinutes !== initialCompanion.slotMinutes) {
+          || existing.slotMinutes !== initialCompanion.slotMinutes
+          || existing.profileContentReview !== initialCompanion.profileContentReview) {
         throw new SQLiteEventSettingsError('settings_companion_conflict');
       }
       return this.requireEventSettings(scope);
@@ -311,7 +315,7 @@ export class SQLiteEventSettingsRepository implements EventSettingsTransactionPo
       changedExactlyOnce(this.sqlite.query<never, [
         number, string, string, string | null, string | null, number | null,
         WorkspaceId, EventId, number, string, string,
-        string | null, string | null, number | null
+        string | null, string | null, number | null, number
       ]>(`
         UPDATE event_settings_companions
            SET event_version = ?, location = ?, venue_note = ?,
@@ -319,6 +323,7 @@ export class SQLiteEventSettingsRepository implements EventSettingsTransactionPo
          WHERE workspace_id = ? AND event_id = ? AND event_version = ?
            AND location = ? AND venue_note = ?
            AND day_start IS ? AND day_end IS ? AND slot_minutes IS ?
+           AND profile_content_review = ?
       `).run(
         plan.resultingEventVersion,
         plan.after.location,
@@ -333,7 +338,8 @@ export class SQLiteEventSettingsRepository implements EventSettingsTransactionPo
         plan.before.venueNote,
         plan.before.dayStart,
         plan.before.dayEnd,
-        plan.before.slotMinutes
+        plan.before.slotMinutes,
+        plan.before.profileContentReview ? 1 : 0
       ), 'stale_settings');
       this.sqlite.exec('RELEASE SAVEPOINT event_settings_apply');
     } catch (error) {

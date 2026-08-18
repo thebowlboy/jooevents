@@ -19,6 +19,7 @@ import type {
 import type { WorkspaceTeamSettingsMutationResult, WorkspaceTeamSettingsPort } from './workspace-team-settings-adapter';
 import type { WorkspaceTeamLiveReadResult } from './operations/workspace-team-live';
 import type { ProgramVocabularySettingsPort } from './program-vocabulary-settings-adapter';
+import type { SpeakerProfilesLiveClient } from './operations/speaker-profiles-live';
 import type { PlacementSuggestion } from './placement';
 import type {
 	EventSettings,
@@ -58,6 +59,10 @@ export interface SettingsPageFieldsPort {
 	restore(field: RegistryField, index: number): Promise<void>;
 }
 
+export interface SettingsPageProfileReviewPort {
+	update(reviewRequired: boolean): Promise<MutationOutcome>;
+}
+
 export interface SettingsPageVocabularyPort {
 	rooms(): Promise<Room[]>;
 	tracks(): Promise<Track[]>;
@@ -88,6 +93,8 @@ export interface SampleSettingsPageSource {
 	};
 	readonly vocab: SettingsPageVocabularyPort;
 	readonly fields: SettingsPageFieldsPort;
+	/** Absent where canonical profile policy operations are not mounted. */
+	readonly profileReview?: SettingsPageProfileReviewPort;
 	readonly communications: { readonly senderIdentity: SampleSenderIdentitySource };
 }
 
@@ -145,6 +152,8 @@ export interface SettingsPagePort {
 	readonly team: SettingsPageTeamPort;
 	readonly vocab: SettingsPageVocabularyPort;
 	readonly fields: SettingsPageFieldsPort;
+	/** Absent where canonical profile-policy operations are not mounted. */
+	readonly profileReview?: SettingsPageProfileReviewPort;
 	/**
 	 * Workspace-scoped, not event-scoped: the Email section answers before any
 	 * event exists, so this seam is not gated on `event.get()`.
@@ -253,6 +262,7 @@ export function createLiveSettingsPagePort(input: {
 	readonly team: WorkspaceTeamSettingsPort;
 	readonly vocab: ProgramVocabularySettingsPort;
 	readonly fields: SettingsPageFieldsPort;
+	readonly profiles?: SpeakerProfilesLiveClient;
 	readonly senderIdentity: SettingsPageSenderIdentityPort;
 	readonly emailDelivery?: SettingsEmailDeliveryPort;
 	readonly apiKeys?: ApiKeysPagePort;
@@ -331,6 +341,35 @@ export function createLiveSettingsPagePort(input: {
 			restoreFormat: (id: string) => vocabularyOutcome(input.vocab.restoreFormat(id))
 		}),
 		fields: input.fields,
+		...(input.profiles === undefined ? {} : {
+			profileReview: Object.freeze({
+				async update(reviewRequired: boolean): Promise<MutationOutcome> {
+					const current = await input.profiles!.readReviewQueue();
+					if (current.kind !== 'success') {
+						return {
+							ok: false,
+							reason: current.kind === 'outcome' && current.outcome.class === 'access_denied'
+								? 'You no longer have permission to change speaker profile review.'
+								: 'Speaker profile review settings could not be loaded. Try again.'
+						};
+					}
+					if (current.data.policy.reviewRequired === reviewRequired) return { ok: true };
+					const result = await input.profiles!.updateReviewPolicy({
+						expectedEventVersion: current.data.policy.eventVersion,
+						reviewRequired
+					}, `je.speaker-profile.review-policy.${globalThis.crypto.randomUUID()}`);
+					if (result.kind === 'success') return { ok: true };
+					return {
+						ok: false,
+						reason: result.kind === 'outcome' && result.outcome.class === 'access_denied'
+							? 'You no longer have permission to change speaker profile review.'
+							: result.kind === 'outcome' && result.outcome.class === 'stale_revision'
+								? 'Speaker profile review changed while you were working. Reload and try again.'
+								: 'Speaker profile review could not be changed. Try again.'
+					};
+				}
+			})
+		}),
 		senderIdentity: input.senderIdentity,
 		...(input.emailDelivery === undefined ? {} : { emailDelivery: input.emailDelivery }),
 		...(input.apiKeys === undefined ? {} : { apiKeys: input.apiKeys })

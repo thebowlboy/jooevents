@@ -1,4 +1,8 @@
 import type {
+	SpeakerProfileApproveInput,
+	SpeakerProfileReviewQueueDto
+} from '@jooevents/contracts';
+import type {
 	CommunicationThread,
 	MutationOutcome,
 	SpeakerCategory,
@@ -8,8 +12,15 @@ import type {
 	TaskDef
 } from './types';
 
+export interface SpeakerProfileReviewPort {
+	read(): Promise<SpeakerProfileReviewQueueDto>;
+	approve(input: SpeakerProfileApproveInput): Promise<MutationOutcome>;
+}
+
 /** Factual capabilities consumed by the tuned Speakers roster and lineup. */
 export interface SpeakersPagePort {
+	/** Absent in sample/unmounted compositions; live owns one event review queue. */
+	readonly profileReview?: SpeakerProfileReviewPort;
 	readonly speakers: {
 		list(): Promise<SpeakerRow[]>;
 		/**

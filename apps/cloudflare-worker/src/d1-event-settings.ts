@@ -99,7 +99,11 @@ async function readSettingsState(
     venueNote: row.venue_note,
     dayStart: row.day_start,
     dayEnd: row.day_end,
-    slotMinutes: row.slot_minutes
+    slotMinutes: row.slot_minutes,
+    // Worker/D1 parity is paused for the single-machine release. Preserve the
+    // legacy adapter's observable default without promoting the SQLite-only
+    // review-policy migration into D1 by accident.
+    profileContentReview: false
   });
   return parseEventSettingsState({ eventSet, event, companion });
 }

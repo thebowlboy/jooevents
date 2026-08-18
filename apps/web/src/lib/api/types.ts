@@ -1956,6 +1956,8 @@ export interface EventSettings {
 	dayStart?: string | null;
 	dayEnd?: string | null;
 	slotMinutes?: number | null;
+	/** Off by default: profile revisions become publication-eligible automatically. */
+	profileContentReview?: boolean;
 	/**
 	 * Whether the hosted public pages ask to be indexed by search engines.
 	 *

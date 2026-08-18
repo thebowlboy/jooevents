@@ -102,6 +102,7 @@ function workspaceSettings(view: EventSettingsView): EventSettings {
 		location: view.location,
 		timezone: view.timezone,
 		venueNote: view.venueNote,
+		profileContentReview: view.profileContentReview,
 		dayStart: view.dayStart,
 		dayEnd: view.dayEnd,
 		slotMinutes: view.slotMinutes

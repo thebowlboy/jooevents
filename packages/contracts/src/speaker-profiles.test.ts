@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import {
   speakerProfileApproveInputSchema,
+  speakerProfileApprovalSchema,
   speakerProfileLinkSchema,
+  speakerProfileReviewPolicyUpdateInputSchema,
   speakerProfileUpdateInputSchema,
   speakerProfileViewSchema
 } from './speaker-profiles';
@@ -59,12 +61,45 @@ describe('speaker profile contracts', () => {
     };
     const approval = {
       id: id('4'), workspaceId, eventId, personId, field: 'headline' as const,
-      fieldRevision: 1, fieldDigestSha256: digest, approvedByUserId: id('5'),
+      fieldRevision: 1, fieldDigestSha256: digest,
+      actor: { kind: 'user' as const, userId: id('5') },
       approvedAt: '2026-08-18T00:01:00.000Z'
     };
     expect(speakerProfileViewSchema.safeParse({
-      schemaVersion: 1, workspaceId, eventId, personId, profile,
+      schemaVersion: 1, workspaceId, eventId, personId,
+      reviewPolicy: { schemaVersion: 1, workspaceId, eventId, eventVersion: 1, reviewRequired: true },
+      profile,
       approvals: [approval, { ...approval, id: id('6') }]
+    }).success).toBe(false);
+  });
+
+  test('distinguishes a human approval from policy-minted evidence', () => {
+    const common = {
+      id: id('4'), workspaceId: id('1'), eventId: id('2'), personId: id('3'),
+      field: 'headline' as const, fieldRevision: 1, fieldDigestSha256: digest,
+      approvedAt: '2026-08-18T00:01:00.000Z'
+    };
+    expect(speakerProfileApprovalSchema.parse({
+      ...common, actor: { kind: 'user', userId: id('5') }
+    }).actor).toEqual({ kind: 'user', userId: id('5') });
+    expect(speakerProfileApprovalSchema.parse({
+      ...common,
+      actor: {
+        kind: 'policy', policyKey: 'profile_content_review', policyVersion: 1,
+        initiatedByUserId: null
+      }
+    }).actor).toEqual({
+      kind: 'policy', policyKey: 'profile_content_review', policyVersion: 1,
+      initiatedByUserId: null
+    });
+  });
+
+  test('review policy updates carry an exact event-version guard', () => {
+    expect(speakerProfileReviewPolicyUpdateInputSchema.parse({
+      expectedEventVersion: 3, reviewRequired: true
+    })).toEqual({ expectedEventVersion: 3, reviewRequired: true });
+    expect(speakerProfileReviewPolicyUpdateInputSchema.safeParse({
+      expectedEventVersion: 0, reviewRequired: true
     }).success).toBe(false);
   });
 });

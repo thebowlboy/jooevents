@@ -159,6 +159,13 @@ export function createSampleSpeakerRecordPort(api: WorkspaceApi): SpeakerRecordP
 			workspaceId: '00000000-0000-4000-8000-000000000001',
 			eventId: '00000000-0000-4000-8000-000000000002',
 			personId: profilePersonId,
+			reviewPolicy: {
+				schemaVersion: 1 as const,
+				workspaceId: '00000000-0000-4000-8000-000000000001',
+				eventId: '00000000-0000-4000-8000-000000000002',
+				eventVersion: 1,
+				reviewRequired: true
+			},
 			profile: sampleProfile ? {
 				schemaVersion: 1 as const,
 				workspaceId: '00000000-0000-4000-8000-000000000001',

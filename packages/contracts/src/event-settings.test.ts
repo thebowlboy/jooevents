@@ -18,6 +18,7 @@ const before = {
   eventId,
   eventSetVersion: 2,
   eventVersion: 4,
+  profileContentReview: false,
   name: 'JooConf 2027',
   timezone: 'Asia/Singapore',
   startDate: '2027-04-16',
@@ -49,7 +50,7 @@ describe('Event settings wire contracts', () => {
     }).success).toBe(false);
   });
 
-  test('projects exactly the nine tuned settings fields plus current guards', () => {
+  test('projects the tuned settings and profile-review policy plus current guards', () => {
     expect(eventSettingsSchema.parse(before)).toEqual(before);
     expect(eventSettingsSchema.safeParse({ ...before, publicIndexing: true }).success).toBe(false);
     expect(eventSettingsSchema.safeParse({ ...before, endDate: '2027-04-15' }).success).toBe(false);

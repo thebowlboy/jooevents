@@ -6,6 +6,7 @@ type HandledEventSettingsKey =
 	| 'eventId'
 	| 'eventSetVersion'
 	| 'eventVersion'
+	| 'profileContentReview'
 	| 'name'
 	| 'timezone'
 	| 'startDate'
@@ -40,6 +41,7 @@ export function mapEventSettings(settings: EventSettingsDto): EventSettingsView 
 		eventId: settings.eventId,
 		eventSetVersion: settings.eventSetVersion,
 		eventVersion: settings.eventVersion,
+		profileContentReview: settings.profileContentReview,
 		name: settings.name,
 		timezone: settings.timezone,
 		startDate: settings.startDate,

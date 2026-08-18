@@ -24,6 +24,10 @@ import {
   speakerProfileApproveInputSchema,
   speakerProfileApprovePlanSchema,
   speakerProfileApproveResultSchema,
+  speakerProfileReviewPolicySchema,
+  speakerProfileReviewPolicyUpdateInputSchema,
+  speakerProfileReviewPolicyUpdatePlanSchema,
+  speakerProfileReviewPolicyUpdateResultSchema,
   speakerProfileUpdateInputSchema,
   speakerProfileUpdatePlanSchema,
   speakerProfileUpdateResultSchema,
@@ -62,6 +66,9 @@ export const SPEAKER_PROFILE_UPDATE_OPERATION = Object.freeze({
 export const SPEAKER_PROFILE_APPROVE_OPERATION = Object.freeze({
   name: 'speaker.profile.approve', version: 1
 });
+export const SPEAKER_PROFILE_REVIEW_POLICY_UPDATE_OPERATION = Object.freeze({
+  name: 'speaker.profile.review_policy.update', version: 1
+});
 export const SPEAKER_PROFILE_MANAGE_ACCESS_POLICY: VersionedAccessPolicyRef = Object.freeze({
   key: 'authority.speaker-profile.manage', version: parseContractVersion(1)
 });
@@ -75,7 +82,10 @@ export const speakerProfileChangedDetailSchema = z.strictObject({
   field: z.enum(['headline', 'biography', 'location', 'links']).nullable()
 });
 export const speakerProfileDirectCanonicalResultSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('success'), data: speakerProfileViewSchema }),
+  z.strictObject({
+    kind: z.literal('success'),
+    data: z.union([speakerProfileViewSchema, speakerProfileReviewPolicySchema])
+  }),
   z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
 ]);
 export const speakerProfileDirectContributionSchema = z.union([
@@ -84,6 +94,14 @@ export const speakerProfileDirectContributionSchema = z.union([
     domain: z.strictObject({
       kind: z.literal('speaker_profile_update_direct'),
       plan: speakerProfileUpdatePlanSchema
+    }),
+    effectContributions: z.tuple([])
+  }),
+  z.strictObject({
+    result: z.strictObject({ kind: z.literal('success'), data: speakerProfileReviewPolicySchema }),
+    domain: z.strictObject({
+      kind: z.literal('speaker_profile_review_policy_update_direct'),
+      plan: speakerProfileReviewPolicyUpdatePlanSchema
     }),
     effectContributions: z.tuple([])
   }),
@@ -149,6 +167,19 @@ const specs = Object.freeze([
     history: 'Approved speaker profile fields',
     displayLabel: 'Approve speaker profile fields',
     consequence: 'Approved values may appear in the next published speaker card.'
+  },
+  {
+    key: 'review-policy-update' as const,
+    operation: SPEAKER_PROFILE_REVIEW_POLICY_UPDATE_OPERATION,
+    input: speakerProfileReviewPolicyUpdateInputSchema,
+    inputRef: SPEAKER_PROFILE_OPERATION_SCHEMA_REFS.reviewPolicyUpdate.inputSchema,
+    result: speakerProfileReviewPolicyUpdateResultSchema,
+    resultRef: SPEAKER_PROFILE_OPERATION_SCHEMA_REFS.reviewPolicyUpdate.resultSchema,
+    path: '/api/events/current/speakers/profile-review-policy',
+    summary: 'Choose whether speaker profile changes require human review for this event.',
+    history: 'Changed speaker profile review policy',
+    displayLabel: 'Change speaker profile review policy',
+    consequence: 'This changes which exact profile revisions may enter the next public release.'
   }
 ]);
 

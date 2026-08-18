@@ -15,8 +15,16 @@ import {
   ENGAGEMENT_READ_ACCESS_POLICY,
   ENGAGEMENT_SNAPSHOT_READ_OPERATION,
   SPEAKER_LINEUP_SNAPSHOT_READ_OPERATION,
+  SPEAKER_PROFILE_APPROVE_OPERATION,
+  SPEAKER_PROFILE_DIRECT_REQUEST_HASH_PROFILE,
+  SPEAKER_PROFILE_MANAGE_ACCESS_POLICY,
+  SPEAKER_PROFILE_REVIEW_POLICY_UPDATE_OPERATION,
+  SPEAKER_PROFILE_REVIEW_QUEUE_READ_OPERATION,
+  SPEAKER_PROFILE_UPDATE_OPERATION,
   createEngagementDirectOperationModule,
   createEngagementOperationModule,
+  createSpeakerProfileDirectOperationModule,
+  createSpeakerProfileReviewQueueReadOperationModule,
   engagementDirectContributionSchema
 } from '.';
 
@@ -166,6 +174,90 @@ describe('Engagement operation modules', () => {
     expect(engagementDirectContributionSchema.safeParse(outcome(
       'engagement.notify', null
     )).success).toBe(false);
+  });
+
+  test('registers profile edit, approval, policy, and the one event review queue', async () => {
+    const currentAuthority = {
+      resolve: () => Object.freeze({ kind: 'denied' as const, reason: 'missing' as const })
+    };
+    const currentEvent = {
+      resolveCurrentEvent: () => Object.freeze({
+        eventId: scope.eventId,
+        evidenceIds: Object.freeze(['event.current.selection'])
+      })
+    };
+    const common = {
+      workspaceId: scope.workspaceId,
+      currentAuthority,
+      currentEvent,
+      clock: { now: () => parseInstant('2026-08-18T12:00:00.000Z') },
+      ids: { newInvocationId: () => parseInvocationId(crypto.randomUUID()) },
+      authorityPrincipalKeyProfile: profile,
+      scopePartitionProfile: profile,
+      requestCanonicalizationProfile: profile
+    };
+    const direct = createSpeakerProfileDirectOperationModule({
+      ...common,
+      managePolicy: SPEAKER_PROFILE_MANAGE_ACCESS_POLICY,
+      requestHashSealer: {
+        seal: () => Object.freeze({
+          profile: SPEAKER_PROFILE_DIRECT_REQUEST_HASH_PROFILE,
+          requestHashSha256: 'a'.repeat(64)
+        })
+      } as never,
+      idempotencyCredentialProfile: profile,
+      idempotencyCredentialSealer: {
+        seal: (raw: string) => Object.freeze({
+          verifierProfile: profile,
+          verifierSha256: createHash('sha256').update(`profile-key:${raw}`).digest('hex')
+        })
+      }
+    });
+    const directRegistry = await createOperationRegistry(direct.source);
+    const directBindings = directRegistry.operatorHttpEffectBindings.map((binding) => ({
+      operation: binding.operationName,
+      path: binding.path
+    }));
+    expect(directBindings).toHaveLength(3);
+    expect(directBindings).toEqual(expect.arrayContaining([
+      {
+        operation: SPEAKER_PROFILE_UPDATE_OPERATION.name,
+        path: '/api/events/current/speakers/profile'
+      },
+      {
+        operation: SPEAKER_PROFILE_APPROVE_OPERATION.name,
+        path: '/api/events/current/speakers/profile/approve'
+      },
+      {
+        operation: SPEAKER_PROFILE_REVIEW_POLICY_UPDATE_OPERATION.name,
+        path: '/api/events/current/speakers/profile-review-policy'
+      }
+    ]));
+
+    const queue = createSpeakerProfileReviewQueueReadOperationModule({
+      ...common,
+      readPolicy: ENGAGEMENT_READ_ACCESS_POLICY,
+      profiles: {
+        readReviewQueue: () => ({
+          schemaVersion: 1,
+          policy: {
+            schemaVersion: 1, workspaceId: scope.workspaceId, eventId: scope.eventId,
+            eventVersion: 1, reviewRequired: false
+          },
+          profiles: []
+        })
+      }
+    });
+    const queueRegistry = await createOperationRegistry(queue.source);
+    expect(queueRegistry.operatorHttpBindings.map((binding) => ({
+      operation: binding.operationName,
+      method: binding.method,
+      path: binding.path
+    }))).toEqual([{
+      operation: SPEAKER_PROFILE_REVIEW_QUEUE_READ_OPERATION.name,
+      method: 'GET',
+      path: '/api/events/current/speakers/profile-review'
+    }]);
   });
 
 });

@@ -55,6 +55,7 @@ export interface EventSettingsCompanion {
   readonly dayStart: string | null;
   readonly dayEnd: string | null;
   readonly slotMinutes: EventSettingsSlotMinutes | null;
+  readonly profileContentReview: boolean;
 }
 
 export interface EventSettingsCompanionInput {
@@ -66,6 +67,7 @@ export interface EventSettingsCompanionInput {
   readonly dayStart: string | null;
   readonly dayEnd: string | null;
   readonly slotMinutes: number | null;
+  readonly profileContentReview: boolean;
 }
 
 export interface EventSettingsState {
@@ -79,7 +81,8 @@ export const CREATED_EVENT_SETTINGS_DEFAULTS = Object.freeze({
   venueNote: '',
   dayStart: '09:00',
   dayEnd: '18:00',
-  slotMinutes: 15
+  slotMinutes: 15,
+  profileContentReview: false
 } as const);
 
 /** Canonical settings companion installed atomically with every new Event root. */
@@ -134,6 +137,9 @@ export function parseEventSettingsCompanion(
       dayEnd: input.dayEnd,
       slotMinutes: input.slotMinutes
     });
+    if (typeof input.profileContentReview !== 'boolean') {
+      throw new TypeError('invalid_profile_content_review_policy');
+    }
     const companion = Object.freeze({
       workspaceId: parseWorkspaceId(input.workspaceId),
       eventId: parseEventId(input.eventId),
@@ -142,7 +148,8 @@ export function parseEventSettingsCompanion(
       venueNote,
       dayStart: geometry.dayStart,
       dayEnd: geometry.dayEnd,
-      slotMinutes: geometry.slotMinutes
+      slotMinutes: geometry.slotMinutes,
+      profileContentReview: input.profileContentReview
     });
     if (companion.workspaceId !== input.workspaceId
         || companion.eventId !== input.eventId
@@ -151,7 +158,8 @@ export function parseEventSettingsCompanion(
         || companion.venueNote !== input.venueNote
         || companion.dayStart !== input.dayStart
         || companion.dayEnd !== input.dayEnd
-        || companion.slotMinutes !== input.slotMinutes) {
+        || companion.slotMinutes !== input.slotMinutes
+        || companion.profileContentReview !== input.profileContentReview) {
       throw new TypeError('event_settings_companion_not_canonical');
     }
     return companion;
@@ -195,6 +203,7 @@ export function projectEventSettings(state: EventSettingsState): EventSettingsDt
     eventId: current.event.id,
     eventSetVersion: current.eventSet.version,
     eventVersion: current.event.version,
+    profileContentReview: current.companion.profileContentReview,
     name: current.event.name,
     timezone: current.event.timezone,
     startDate: current.event.startDate,
@@ -244,6 +253,7 @@ function projectedAfter(
     eventId: event.id,
     eventSetVersion: state.eventSet.version,
     eventVersion: event.version,
+    profileContentReview: state.companion.profileContentReview,
     name: event.name,
     timezone: event.timezone,
     startDate: event.startDate,

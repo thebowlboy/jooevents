@@ -1,5 +1,6 @@
 import {
   speakerProfileApprovePlanSchema,
+  speakerProfileReviewPolicyUpdatePlanSchema,
   speakerProfileUpdatePlanSchema,
   speakerProfileViewSchema,
   type SpeakerProfileApprovalDto,
@@ -7,6 +8,10 @@ import {
   type SpeakerProfileApprovePlanningInput,
   type SpeakerProfileDto,
   type SpeakerProfileFieldKey,
+  type SpeakerProfilePolicyApprovalCandidateDto,
+  type SpeakerProfileReviewPolicyDto,
+  type SpeakerProfileReviewPolicyUpdatePlanDto,
+  type SpeakerProfileReviewPolicyUpdatePlanningInput,
   type SpeakerProfileUpdatePlanDto,
   type SpeakerProfileUpdatePlanningInput,
   type SpeakerProfileViewDto
@@ -19,7 +24,8 @@ export const SPEAKER_PROFILE_FIELDS = Object.freeze([
 
 export const SPEAKER_PROFILE_PLANNING_ERROR_CODES = Object.freeze([
   'person_out_of_scope', 'stale_profile', 'profile_missing', 'profile_no_change',
-  'profile_field_empty', 'profile_field_already_approved'
+  'profile_field_empty', 'profile_field_already_approved', 'profile_review_not_required',
+  'profile_policy_no_change'
 ] as const);
 export type SpeakerProfilePlanningErrorCode = typeof SPEAKER_PROFILE_PLANNING_ERROR_CODES[number];
 
@@ -44,6 +50,14 @@ export interface SpeakerProfilePlanningRepository {
     readonly eventId: string;
     readonly personId: string;
   }): SpeakerProfileViewDto;
+  readReviewPolicy(input: {
+    readonly workspaceId: string;
+    readonly eventId: string;
+  }): SpeakerProfileReviewPolicyDto;
+  readPolicyApprovalCandidates(input: {
+    readonly workspaceId: string;
+    readonly eventId: string;
+  }): readonly SpeakerProfilePolicyApprovalCandidateDto[];
 }
 
 function digest(value: unknown): string {
@@ -125,12 +139,39 @@ export function planSpeakerProfileUpdate(input: {
   if (changedFields.length === 0) throw new SpeakerProfilePlanningError('profile_no_change');
 
   const changed = new Set(changedFields);
+  const retainedApprovals = before.approvals.filter((approval) => !changed.has(approval.field));
+  const insertedApprovals: SpeakerProfileApprovalDto[] = before.reviewPolicy.reviewRequired
+    ? []
+    : changedFields.map((field, index) => {
+        const value = afterProfile[field];
+        return {
+          id: planning.autoApprovalIds[index]!,
+          workspaceId: planning.scope.workspaceId,
+          eventId: planning.scope.eventId,
+          personId: planning.authorInput.personId,
+          field,
+          fieldRevision: value.revision,
+          fieldDigestSha256: value.digestSha256,
+          actor: {
+            kind: 'policy' as const,
+            policyKey: 'profile_content_review' as const,
+            policyVersion: 1 as const,
+            initiatedByUserId: planning.actorUserId
+          },
+          approvedAt: planning.occurredAt
+        };
+      });
   const after = {
     ...before,
     profile: afterProfile,
-    approvals: before.approvals.filter((approval) => !changed.has(approval.field))
+    approvals: SPEAKER_PROFILE_FIELDS
+      .map((field) => [...retainedApprovals, ...insertedApprovals]
+        .find((approval) => approval.field === field))
+      .filter((approval): approval is SpeakerProfileApprovalDto => approval !== undefined)
   };
-  return speakerProfileUpdatePlanSchema.parse({ input: planning, before, after, changedFields });
+  return speakerProfileUpdatePlanSchema.parse({
+    input: planning, before, after, changedFields, insertedApprovals
+  });
 }
 
 export function planSpeakerProfileApproval(input: {
@@ -143,6 +184,9 @@ export function planSpeakerProfileApproval(input: {
     throw new SpeakerProfilePlanningError('person_out_of_scope');
   }
   const before = speakerProfileViewSchema.parse(input.profiles.readSpeakerProfileView(scope));
+  if (!before.reviewPolicy.reviewRequired) {
+    throw new SpeakerProfilePlanningError('profile_review_not_required');
+  }
   const profile = before.profile;
   if (!profile) throw new SpeakerProfilePlanningError('profile_missing');
   if (profile.version !== planning.authorInput.expectedProfileVersion) {
@@ -166,7 +210,7 @@ export function planSpeakerProfileApproval(input: {
       field,
       fieldRevision: value.revision,
       fieldDigestSha256: value.digestSha256,
-      approvedByUserId: planning.actorUserId,
+      actor: { kind: 'user', userId: planning.actorUserId },
       approvedAt: planning.occurredAt
     };
   });
@@ -178,4 +222,48 @@ export function planSpeakerProfileApproval(input: {
       .filter((approval): approval is SpeakerProfileApprovalDto => approval !== undefined)
   };
   return speakerProfileApprovePlanSchema.parse({ input: planning, before, after, inserted });
+}
+
+export function planSpeakerProfileReviewPolicyUpdate(input: {
+  readonly planningInput: SpeakerProfileReviewPolicyUpdatePlanningInput;
+  readonly profiles: SpeakerProfilePlanningRepository;
+}): SpeakerProfileReviewPolicyUpdatePlanDto {
+  const planning = input.planningInput;
+  const before = input.profiles.readReviewPolicy(planning.scope);
+  if (before.eventVersion !== planning.authorInput.expectedEventVersion) {
+    throw new SpeakerProfilePlanningError('stale_profile');
+  }
+  if (before.reviewRequired === planning.authorInput.reviewRequired) {
+    throw new SpeakerProfilePlanningError('profile_policy_no_change');
+  }
+  const candidates = planning.authorInput.reviewRequired
+    ? []
+    : [...input.profiles.readPolicyApprovalCandidates(planning.scope)];
+  if (planning.approvalIds.length !== candidates.length) {
+    throw new TypeError('profile_policy_approval_ids_inconsistent');
+  }
+  const insertedApprovals: SpeakerProfileApprovalDto[] = candidates.map((candidate, index) => ({
+    id: planning.approvalIds[index]!,
+    workspaceId: planning.scope.workspaceId,
+    eventId: planning.scope.eventId,
+    personId: candidate.personId,
+    field: candidate.field,
+    fieldRevision: candidate.fieldRevision,
+    fieldDigestSha256: candidate.fieldDigestSha256,
+    actor: {
+      kind: 'policy',
+      policyKey: 'profile_content_review',
+      policyVersion: 1,
+      initiatedByUserId: planning.actorUserId
+    },
+    approvedAt: planning.occurredAt
+  }));
+  const after: SpeakerProfileReviewPolicyDto = {
+    ...before,
+    eventVersion: before.eventVersion + 1,
+    reviewRequired: planning.authorInput.reviewRequired
+  };
+  return speakerProfileReviewPolicyUpdatePlanSchema.parse({
+    input: planning, before, after, insertedApprovals
+  });
 }
