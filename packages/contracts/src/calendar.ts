@@ -1,4 +1,10 @@
 import { z } from 'zod';
+import {
+  createEffectfulOperationResultSchema,
+  createOperationSchemaManifestRefs,
+  createReadOperationResultSchema,
+  structuredOutcomeSchema
+} from './operations';
 import { engagementHeadSchema } from './engagements';
 import { deadlineChangedFactPayloadSchema } from './deadlines';
 import { schedulePlacementOccurrenceSchema } from './schedule-placement';
@@ -158,6 +164,72 @@ export const calendarCommitmentFactSchema = z.strictObject({
   }
 });
 
+export const calendarNoticeGenerationSchema = z.strictObject({
+  generationId: applicationIdSchema,
+  personId: applicationIdSchema,
+  generationNumber: z.number().int().positive().safe(),
+  state: z.enum(['open', 'sealed', 'released']),
+  openedAt: canonicalInstantSchema,
+  sealAt: canonicalInstantSchema,
+  held: z.boolean(),
+  sealReason: z.enum(['window_expired', 'near_event_bypass', 'manual_release']).nullable(),
+  sealedAt: canonicalInstantSchema.nullable(),
+  communicationReleaseId: z.string().min(1).max(500).nullable(),
+  version: z.number().int().positive().safe(),
+  pendingUpdateCount: z.number().int().nonnegative().safe()
+});
+
+export const calendarNoticeGenerationListInputSchema = z.strictObject({});
+export const calendarNoticeGenerationListDataSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  rows: z.array(calendarNoticeGenerationSchema).max(10_000)
+});
+export const calendarNoticeGenerationControlInputSchema = z.discriminatedUnion('action', [
+  z.strictObject({
+    action: z.literal('set_hold'),
+    generationId: applicationIdSchema,
+    expectedVersion: z.number().int().positive().safe(),
+    held: z.boolean()
+  }),
+  z.strictObject({
+    action: z.literal('release_now'),
+    generationId: applicationIdSchema,
+    expectedVersion: z.number().int().positive().safe()
+  })
+]);
+export const calendarNoticeGenerationControlDataSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  action: z.enum(['set_hold', 'release_now']),
+  generation: calendarNoticeGenerationSchema
+});
+export const calendarNoticeGenerationListCanonicalResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success'), data: calendarNoticeGenerationListDataSchema }),
+  z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
+]);
+export const calendarNoticeGenerationControlCanonicalResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success'), data: calendarNoticeGenerationControlDataSchema }),
+  z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
+]);
+export const calendarNoticeGenerationListOperationResultSchema =
+  createReadOperationResultSchema(calendarNoticeGenerationListDataSchema);
+export const calendarNoticeGenerationControlOperationResultSchema =
+  createEffectfulOperationResultSchema(calendarNoticeGenerationControlDataSchema);
+
+export const CALENDAR_NOTICE_OPERATION_SCHEMA_REFS = Object.freeze({
+  list: createOperationSchemaManifestRefs({
+    inputKey: 'schema.calendar.notice-generation.list.input',
+    inputSchema: calendarNoticeGenerationListInputSchema,
+    resultKey: 'schema.calendar.notice-generation.list.operator-result',
+    resultSchema: calendarNoticeGenerationListOperationResultSchema
+  }),
+  control: createOperationSchemaManifestRefs({
+    inputKey: 'schema.calendar.notice-generation.control.input',
+    inputSchema: calendarNoticeGenerationControlInputSchema,
+    resultKey: 'schema.calendar.notice-generation.control.operator-result',
+    resultSchema: calendarNoticeGenerationControlOperationResultSchema
+  })
+});
+
 export type CalendarScope = z.infer<typeof calendarScopeSchema>;
 export type CalendarOccurrenceChangedFactPayload =
   z.infer<typeof calendarOccurrenceChangedFactPayloadSchema>;
@@ -169,3 +241,6 @@ export type CalendarRoomChangedFactPayload = z.infer<typeof calendarRoomChangedF
 export type CalendarCommitmentFactPayload = z.infer<typeof calendarCommitmentFactPayloadSchema>;
 export type CalendarOperationFactBatch = z.infer<typeof calendarOperationFactBatchSchema>;
 export type CalendarCommitmentFact = z.infer<typeof calendarCommitmentFactSchema>;
+export type CalendarNoticeGenerationDto = z.infer<typeof calendarNoticeGenerationSchema>;
+export type CalendarNoticeGenerationControlInput =
+  z.infer<typeof calendarNoticeGenerationControlInputSchema>;

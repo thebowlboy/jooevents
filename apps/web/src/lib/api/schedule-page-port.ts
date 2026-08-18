@@ -14,6 +14,7 @@ import type {
 	Track
 } from './types';
 import type { SchedulePublicationReview } from './release-workspace-adapter';
+import type { CalendarNoticeGenerationDto } from '@jooevents/contracts/calendar';
 
 export type { SchedulePublicationReview };
 
@@ -85,6 +86,11 @@ export interface SchedulePagePort {
 			role: 'speaker' | 'moderator' | 'host' | 'panelist'
 		): Promise<MutationOutcome>;
 		reorderParticipants(sessionId: string, emails: string[]): Promise<MutationOutcome>;
+	};
+	readonly calendar?: {
+		listNotices(): Promise<readonly CalendarNoticeGenerationDto[]>;
+		setNoticeHold(generationId: string, expectedVersion: number, held: boolean): Promise<void>;
+		releaseNotice(generationId: string, expectedVersion: number): Promise<void>;
 	};
 	readonly vocab: {
 		tracks(): Promise<Track[]>;

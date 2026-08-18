@@ -109,6 +109,33 @@ describe('calendar notice generation projector', () => {
     ]);
   });
 
+  test('an explicit hold takes precedence over the automatic near-event bypass', () => {
+    let projection = applyCalendarNoticeChange({
+      projection: createCalendarNoticeGenerationProjection(scope),
+      change: change({ newStartAt: '2026-09-01T01:00:00.000Z' }),
+      windowMilliseconds: 3_600_000,
+      nearEventMilliseconds: 1_000,
+      identities
+    });
+    projection = setCalendarNoticeGenerationHold({
+      projection, generationId: 'generation-1', held: true
+    });
+    projection = applyCalendarNoticeChange({
+      projection,
+      change: change({
+        intakePosition: 2,
+        occurredAt: '2026-08-18T01:01:00.000Z',
+        priorStartAt: '2026-08-19T01:00:00.000Z',
+        newStartAt: '2026-08-19T02:00:00.000Z',
+        sequence: 1
+      }),
+      windowMilliseconds: 3_600_000,
+      nearEventMilliseconds: 172_800_000,
+      identities
+    });
+    expect(projection.generations[0]).toMatchObject({ state: 'open', held: true });
+  });
+
   test('release recording is idempotent and rejects a changed release identity', () => {
     let projection = applyCalendarNoticeChange({
       projection: createCalendarNoticeGenerationProjection(scope),

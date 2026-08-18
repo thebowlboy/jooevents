@@ -143,6 +143,14 @@ import {
   createDeadlineOperationModule
 } from '@jooevents/deadline-operations';
 import {
+  CALENDAR_NOTICE_CONTROL_REQUEST_HASH_PROFILE,
+  CALENDAR_NOTICE_MANAGE_ACCESS_POLICY,
+  CALENDAR_NOTICE_OPERATION_KEY_PROFILES,
+  CALENDAR_NOTICE_READ_ACCESS_POLICY,
+  createCalendarCommitmentFactContributor,
+  createCalendarNoticeGenerationOperationModule
+} from '@jooevents/calendar-operations';
+import {
   DECISION_MANAGE_ACCESS_POLICY,
   DECISION_REQUEST_HASH_PROFILE,
   DECISION_READ_ACCESS_POLICY,
@@ -415,6 +423,10 @@ import {
   SQLiteExternalApiIdempotencyStore,
   SQLiteExternalApiRateLimiter,
   SQLiteAirtableProjectionContributionAdapter,
+  SQLiteCalendarCanonicalStateRepository,
+  SQLiteCalendarNoticeArtifactStore,
+  SQLITE_CALENDAR_COMMITMENT_FACT_CONTRIBUTOR,
+  createSQLiteCalendarNoticeControlEffectDomainRegistration,
   createSQLiteOperationFeatureContributionAdapterRegistry,
   createSQLiteApiKeyEffectDomainRegistration,
   type EphemeralSQLiteRuntime
@@ -478,6 +490,8 @@ import {
   seedSubmissionConfirmationPurpose,
   type SubmissionConfirmationRegistrationPort
 } from '@jooevents/persistence/submission-confirmation-delivery';
+import { seedCalendarNoticePurpose } from '@jooevents/persistence/calendar-notice-delivery';
+import { createSQLiteCalendarNoticeProducer } from '@jooevents/persistence/calendar-notice-delivery';
 import {
   createSQLiteWorkspaceSignInLinkDelivery,
   decideWorkspaceSignInLinkEligibility,
@@ -1895,6 +1909,20 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
         ...classifiedStoreOptions('encryption.communication-organizer-payload')
       }
     );
+    const calendarCanonicalState = new SQLiteCalendarCanonicalStateRepository(database.sqlite);
+    const calendarNoticeArtifacts = new SQLiteCalendarNoticeArtifactStore(
+      database.sqlite,
+      organizerCommunicationClassifiedStore
+    );
+    const calendarNoticeControlDomain =
+      createSQLiteCalendarNoticeControlEffectDomainRegistration({
+        sqlite: database.sqlite,
+        workspaceId,
+        eventRelationships,
+        kick: () => {
+          void backgroundSupervisor?.runNow('calendar_notice_dispatch');
+        }
+      });
     const organizerCommunicationAuthoring =
       new SQLiteOrganizerCommunicationAuthoringRepository(
         database.sqlite,
@@ -1922,6 +1950,11 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
     }
     const providerRuntime = createCommunicationsProviderRuntime({
       config: communicationsProviderConfig,
+      contentResolver: Object.freeze({
+        resolveContentBytes: (contentBytesRef: string) => Promise.resolve(
+          calendarNoticeArtifacts.resolveContentBytes(contentBytesRef)
+        )
+      }),
       ...(communicationsProviderConfig.mode === 'cloudflare_rest'
         ? (() => {
             const secretResolver = input.communications?.secretResolver
@@ -2421,6 +2454,7 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       });
       seedTaskReminderPurpose({ sqlite: database.sqlite, scope });
       seedSubmissionConfirmationPurpose({ sqlite: database.sqlite, scope });
+      seedCalendarNoticePurpose({ sqlite: database.sqlite, scope });
     };
     const communicationMessageReleases = new SQLiteCommunicationMessageReleaseStore(
       database.sqlite,
@@ -2939,6 +2973,14 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
         }),
         Object.freeze({
           policy: DEADLINE_MANAGE_ACCESS_POLICY,
+          permissionId: 'event.manage' as const
+        }),
+        Object.freeze({
+          policy: CALENDAR_NOTICE_READ_ACCESS_POLICY,
+          permissionId: 'event.read' as const
+        }),
+        Object.freeze({
+          policy: CALENDAR_NOTICE_MANAGE_ACCESS_POLICY,
           permissionId: 'event.manage' as const
         }),
         Object.freeze({
@@ -3612,7 +3654,9 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
         sqlite: database.sqlite,
         authoring: organizerCommunicationAuthoring,
         readiness: emailProviderReadiness,
-        history: communicationDeliveryHistory
+        history: communicationDeliveryHistory,
+        calendar: calendarCanonicalState,
+        calendarProducer: () => calendarNoticeProducer
       }),
       clock,
       ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
@@ -3753,6 +3797,24 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       idempotencyCredentialProfile: DEADLINE_OPERATION_KEY_PROFILES.idempotencyCredential,
       idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(
         DEADLINE_OPERATION_KEY_PROFILES.idempotencyCredential
+      )
+    });
+    const calendarNoticeOperations = createCalendarNoticeGenerationOperationModule({
+      workspaceId,
+      currentAuthority,
+      currentEvent,
+      read: calendarNoticeControlDomain.read,
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      authorityPrincipalKeyProfile: CALENDAR_NOTICE_OPERATION_KEY_PROFILES.authorityPrincipal,
+      scopePartitionProfile: CALENDAR_NOTICE_OPERATION_KEY_PROFILES.scopePartition,
+      requestCanonicalizationProfile: CALENDAR_NOTICE_OPERATION_KEY_PROFILES.requestCanonicalization,
+      requestHashSealer: cryptoProfiles.requestHashSealer(
+        CALENDAR_NOTICE_CONTROL_REQUEST_HASH_PROFILE
+      ),
+      idempotencyCredentialProfile: CALENDAR_NOTICE_OPERATION_KEY_PROFILES.idempotencyCredential,
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(
+        CALENDAR_NOTICE_OPERATION_KEY_PROFILES.idempotencyCredential
       )
     });
     // Public intake surface: `public_open` evidence is honored only against a
@@ -4860,6 +4922,43 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
             })
       })
     );
+    const calendarNoticePolicySetting = process.env.JOOEVENTS_CALENDAR_NOTICES;
+    if (calendarNoticePolicySetting !== undefined
+        && calendarNoticePolicySetting !== 'on'
+        && calendarNoticePolicySetting !== 'off') {
+      throw new TypeError('JOOEVENTS_CALENDAR_NOTICES must be on or off');
+    }
+    const calendarNoticeProducer = cryptoProfiles.withPersistentHmacKeySelection(
+      'security.communication-address-fingerprint',
+      (selection) => createSQLiteCalendarNoticeProducer({
+        sqlite: database.sqlite,
+        calendar: calendarCanonicalState,
+        intake: intakeRepository,
+        submissions: submissionTriageSource,
+        releases: communicationMessageReleases,
+        artifacts: calendarNoticeArtifacts,
+        senderResolver: submissionConfirmationSenderResolver,
+        purposeRevision: (scope) => seedCalendarNoticePurpose({ sqlite: database.sqlite, scope }),
+        addressFingerprint: Object.freeze({
+          keyBytes: selection.active.keyBytes,
+          version: selection.active.reference.version
+        }),
+        policyActive: calendarNoticePolicySetting === 'on',
+        portalOrigin: input.config.baseUrl,
+        ...(communicationDeliveryRoute === undefined || providerRuntime.registration === null
+          ? {}
+          : {
+              providerRoute: Object.freeze({
+                providerConnectionRevisionId:
+                  communicationDeliveryRoute.providerConnectionRevisionId,
+                calendarMimeReady:
+                  providerRuntime.registration.delivery.capabilities.calendarMime,
+                attachmentsReady:
+                  providerRuntime.registration.delivery.capabilities.attachments
+              })
+            })
+      })
+    );
     const participantDelivery = createSQLiteParticipantChallengeDelivery({
       sqlite: database.sqlite,
       releases: communicationMessageReleases,
@@ -5109,6 +5208,7 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       ...templateArtifactNativeDomains,
       templateEditDomain,
       deadlineDirectDomain,
+      calendarNoticeControlDomain,
       programVocabularyDirectDomain,
       ...programVocabularyMergeDomains,
       schedulePlacementDirectDomain,
@@ -5162,10 +5262,31 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
         async publish(wake: { readonly connectionId: string }) { airtableLive?.wake(wake.connectionId); }
       })
     );
-    const featureContributionAdapters = createSQLiteOperationFeatureContributionAdapterRegistry([{
-      contributor: AIRTABLE_PROJECTION_FEATURE_CONTRIBUTOR,
-      adapter: airtableProjectionContribution
-    }]);
+    let calendarContributionPending = false;
+    const calendarContributionAdapter = calendarCanonicalState.createContributionAdapter();
+    const featureContributionAdapters = createSQLiteOperationFeatureContributionAdapterRegistry([
+      {
+        contributor: AIRTABLE_PROJECTION_FEATURE_CONTRIBUTOR,
+        adapter: airtableProjectionContribution
+      },
+      {
+        contributor: SQLITE_CALENDAR_COMMITMENT_FACT_CONTRIBUTOR,
+        adapter: Object.freeze({
+          apply(contribution: Parameters<typeof calendarContributionAdapter.apply>[0]) {
+            calendarContributionAdapter.apply(contribution);
+            calendarContributionPending = true;
+          },
+          afterUnitOfWorkCommitted() {
+            if (calendarContributionPending) {
+              void backgroundSupervisor?.runNow('calendar_notice_dispatch');
+            }
+          },
+          afterUnitOfWorkFinished() {
+            calendarContributionPending = false;
+          }
+        })
+      }
+    ]);
     const unitOfWork = new SQLiteEffectUnitOfWorkPort(
       database.sqlite,
       domains,
@@ -5189,6 +5310,7 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       templateArtifactNativeOperations,
       templateEditOperations,
       deadlineOperations,
+      calendarNoticeOperations,
       programVocabularyOperations,
       programVocabularyDirectOperations,
       programVocabularyMergeOperations,
@@ -5244,7 +5366,8 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       },
       unitOfWork,
       directFeatureContributors: createDirectOperationFeatureContributorRegistry([
-        createAirtableDirectFeatureContributor()
+        createAirtableDirectFeatureContributor(),
+        createCalendarCommitmentFactContributor()
       ])
     });
     // ONE public registry behind ONE adapter: the gated intake form read,
@@ -5825,9 +5948,52 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       now: () => at ?? new Date().toISOString(),
       leaseDurationMs: 60_000
     });
+    const runCalendarNoticeDispatch = async (): Promise<void> => {
+      const current = events.readCurrentEventState(workspaceId)?.currentEvent;
+      if (!current) return;
+      const scope = Object.freeze({ workspaceId, eventId: current.id });
+      for (let batch = 0; batch < 100; batch += 1) {
+        const projected = calendarCanonicalState.projectNextBatch(scope, 1_000);
+        if (projected.remaining === 0) break;
+        if (batch === 99) {
+          calendarCanonicalState.markCursorStalled(scope, clock.now());
+          throw new Error('calendar_projection_stalled_cursor');
+        }
+      }
+      database.sqlite.exec('BEGIN IMMEDIATE;');
+      try {
+        calendarCanonicalState.sealDueGenerations(scope, clock.now());
+        database.sqlite.exec('COMMIT;');
+      } catch (error) {
+        if (database.sqlite.inTransaction) database.sqlite.exec('ROLLBACK;');
+        throw error;
+      }
+      let registered = false;
+      for (const generation of calendarCanonicalState.listNoticeGenerations(scope, 'sealed')) {
+        database.sqlite.exec('BEGIN IMMEDIATE;');
+        try {
+          const outcome = calendarNoticeProducer.processWithinTransaction({
+            scope,
+            generationId: generation.generationId
+          });
+          database.sqlite.exec('COMMIT;');
+          if (outcome.kind === 'registered') registered = true;
+        } catch (error) {
+          if (database.sqlite.inTransaction) database.sqlite.exec('ROLLBACK;');
+          throw error;
+        }
+      }
+      if (registered) void backgroundSupervisor?.runNow('outbound_email_dispatch');
+    };
     const actionWorkerId = `agent-action:${crypto.randomUUID()}`;
     backgroundSupervisor = createBackgroundSupervisor({
       jobs: Object.freeze([
+        {
+          name: 'calendar_notice_dispatch',
+          intervalMs: 2_000,
+          runOnStart: true,
+          run: () => requestSerialization.run(runCalendarNoticeDispatch).then(() => {})
+        },
         ...(providerRuntime.registration?.delivery
           ? [{
               name: 'outbound_email_dispatch',

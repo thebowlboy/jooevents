@@ -1,4 +1,5 @@
 import type { SessionParticipantRefDto, StructuredOutcome } from '@jooevents/contracts';
+import type { CalendarNoticesLiveClient } from './operations/calendar-notices-live';
 import type { ReleaseWorkspacePort } from './release-workspace-adapter';
 import type { SafeApiError } from './client';
 import type {
@@ -637,6 +638,7 @@ export function createLiveSchedulePagePort(input: {
 	readonly publication: Pick<ReleaseWorkspacePort, 'overview' | 'draftSchedulePublication' | 'publishSchedule'>;
 	readonly speakers: SchedulePagePort['speakers'];
 	readonly templates: SchedulePagePort['templates'];
+	readonly calendar?: CalendarNoticesLiveClient;
 	readonly newIdempotencyKey?: () => string;
 }): SchedulePagePort {
 	if (
@@ -731,6 +733,36 @@ export function createLiveSchedulePagePort(input: {
 				return null;
 			}
 		}),
+		...(input.calendar ? { calendar: Object.freeze({
+			async listNotices() {
+				const result = await input.calendar!.list();
+				if (result.kind !== 'success') {
+					throw new SchedulePageLiveError({
+						code: result.kind === 'outcome' ? result.outcome.kind : result.kind,
+						reason: 'Pending calendar updates could not be loaded.'
+					});
+				}
+				return result.data;
+			},
+			async setNoticeHold(generationId, expectedVersion, held) {
+				const result = await input.calendar!.control({
+					action: 'set_hold', generationId, expectedVersion, held
+				});
+				if (result.kind !== 'success') throw new SchedulePageLiveError({
+					code: result.kind === 'outcome' ? result.outcome.kind : result.kind,
+					reason: 'The calendar hold could not be changed. Reload and try again.'
+				});
+			},
+			async releaseNotice(generationId, expectedVersion) {
+				const result = await input.calendar!.control({
+					action: 'release_now', generationId, expectedVersion
+				});
+				if (result.kind !== 'success') throw new SchedulePageLiveError({
+					code: result.kind === 'outcome' ? result.outcome.kind : result.kind,
+					reason: 'The calendar updates could not be released. Reload and try again.'
+				});
+			}
+		}) } : {}),
 		schedule: Object.freeze({
 			async state(): Promise<ScheduleState> {
 				const [catalog, placements, rooms, settings, publication, peopleById] = await Promise.all([

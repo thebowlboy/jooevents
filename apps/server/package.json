@@ -18,6 +18,7 @@
     "@jooevents/airtable": "workspace:*",
     "@jooevents/airtable-sync": "workspace:*",
     "@jooevents/cloudflare-email": "workspace:*",
+    "@jooevents/calendar-operations": "workspace:*",
     "@jooevents/communication-operations": "workspace:*",
     "@jooevents/communications": "workspace:*",
     "@jooevents/contracts": "workspace:*",

@@ -481,6 +481,12 @@ export function createLiveCommunicationsPagePort(input: {
 				messageId: recommended.historyItemId,
 				action: { label: 'Open delivery evidence', kind: 'open-message' as const }
 			};
+			if (recommended.kind === 'open_schedule') return {
+				id: row.attentionItemId, severity: row.severity, reason: row.summary,
+				detail: row.detail, ...(count(row.affectedCount ?? { knowledge: 'not_supported' }) === undefined
+					? {} : { count: count(row.affectedCount!) }),
+				action: { label: 'Open Schedule', kind: 'open-schedule' as const }
+			};
 			return {
 				id: row.attentionItemId, severity: row.severity, reason: row.summary,
 				detail: row.detail,

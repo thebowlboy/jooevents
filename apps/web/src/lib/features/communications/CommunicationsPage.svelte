@@ -677,13 +677,18 @@
 							<p class="queue__reason">{item.reason}</p>
 							<p class="queue__detail">{item.detail}</p>
 						</div>
-						<button
-							type="button"
-							class="ui-button ui-button--secondary ui-button--sm queue__action"
-							disabled={busy}
-							onclick={() => onAttention(item)}>
-							{item.action.label}
-						</button>
+						{#if item.action.kind === 'open-schedule'}
+							<a class="ui-button ui-button--secondary ui-button--sm queue__action"
+								href="/app/schedule?calendar=attention">{item.action.label}</a>
+						{:else}
+							<button
+								type="button"
+								class="ui-button ui-button--secondary ui-button--sm queue__action"
+								disabled={busy}
+								onclick={() => onAttention(item)}>
+								{item.action.label}
+							</button>
+						{/if}
 					</li>
 				{/each}
 			</ul>

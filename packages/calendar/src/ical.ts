@@ -165,26 +165,17 @@ function timezoneLines(definition: IcalendarTimezoneDefinition): readonly string
   return lines;
 }
 
-/** Deterministic RFC 5545/5546 rendering. All bytes derive only from the input. */
-export function renderIcalendar(input: IcalendarEventInput): Uint8Array {
+function eventLines(input: IcalendarEventInput): readonly string[] {
   assertSafeScalar(input.uid, 'calendar_ical_uid_invalid');
   if (!Number.isSafeInteger(input.sequence) || input.sequence < 0) {
     throw new TypeError('calendar_ical_sequence_invalid');
   }
   const lines: string[] = [
-    'BEGIN:VCALENDAR',
-    'PRODID:-//JooEvents//Calendar Delivery//EN',
-    'VERSION:2.0',
-    'CALSCALE:GREGORIAN',
-    `METHOD:${input.method}`
-  ];
-  if (input.timing === 'timed') lines.push(...timezoneLines(input.timezone));
-  lines.push(
     'BEGIN:VEVENT',
     `UID:${input.uid}`,
     `SEQUENCE:${input.sequence}`,
     `DTSTAMP:${utcDateTime(input.dtstamp)}`
-  );
+  ];
   if (input.timing === 'timed') {
     if (input.startAt >= input.endAt) throw new TypeError('calendar_ical_time_range_invalid');
     lines.push(
@@ -205,8 +196,42 @@ export function renderIcalendar(input: IcalendarEventInput): Uint8Array {
     `ORGANIZER;CN=${parameterText(input.organizer.commonName)}:${mailbox(input.organizer.email)}`,
     `ATTENDEE;CN=${parameterText(input.attendee.commonName)};ROLE=REQ-PARTICIPANT;PARTSTAT=ACCEPTED;RSVP=FALSE:${mailbox(input.attendee.email)}`,
     `STATUS:${input.method === 'CANCEL' ? 'CANCELLED' : 'CONFIRMED'}`,
-    'END:VEVENT',
-    'END:VCALENDAR'
+    'END:VEVENT'
   );
+  return lines;
+}
+
+/** One method-partitioned VCALENDAR containing a stable ordered set of events. */
+export function renderIcalendarBatch(input: {
+  readonly method: IcalendarMethod;
+  readonly events: readonly IcalendarEventInput[];
+}): Uint8Array {
+  if (input.events.length === 0) throw new TypeError('calendar_ical_events_required');
+  if (input.events.some((event) => event.method !== input.method)) {
+    throw new TypeError('calendar_ical_method_partition_invalid');
+  }
+  const timed = input.events.filter((event) => event.timing === 'timed');
+  const timezone = timed[0]?.timezone;
+  if (timezone !== undefined) {
+    const canonical = JSON.stringify(timezone);
+    if (timed.some((event) => JSON.stringify(event.timezone) !== canonical)) {
+      throw new TypeError('calendar_ical_timezone_partition_invalid');
+    }
+  }
+  const lines: string[] = [
+    'BEGIN:VCALENDAR',
+    'PRODID:-//JooEvents//Calendar Delivery//EN',
+    'VERSION:2.0',
+    'CALSCALE:GREGORIAN',
+    `METHOD:${input.method}`
+  ];
+  if (timezone !== undefined) lines.push(...timezoneLines(timezone));
+  for (const event of input.events) lines.push(...eventLines(event));
+  lines.push('END:VCALENDAR');
   return new TextEncoder().encode(`${lines.map(foldLine).join('\r\n')}\r\n`);
+}
+
+/** Deterministic RFC 5545/5546 rendering. All bytes derive only from the input. */
+export function renderIcalendar(input: IcalendarEventInput): Uint8Array {
+  return renderIcalendarBatch({ method: input.method, events: [input] });
 }

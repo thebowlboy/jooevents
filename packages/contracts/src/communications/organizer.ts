@@ -1042,7 +1042,8 @@ export const organizerCommunicationAttentionActionSchema = z.discriminatedUnion(
   z.strictObject({ kind: z.literal('review_draft'), draftId: organizerCommunicationOpaqueIdSchema }),
   z.strictObject({ kind: z.literal('open_history'), historyItemId: organizerCommunicationOpaqueIdSchema }),
   z.strictObject({ kind: z.literal('continue_provider_setup') }),
-  z.strictObject({ kind: z.literal('wait_for_evidence'), deliveryId: organizerCommunicationOpaqueIdSchema })
+  z.strictObject({ kind: z.literal('wait_for_evidence'), deliveryId: organizerCommunicationOpaqueIdSchema }),
+  z.strictObject({ kind: z.literal('open_schedule') })
 ]);
 
 export const organizerCommunicationAttentionItemSchema = z.strictObject({

@@ -13,9 +13,12 @@
     "@jooevents/decision-operations": "workspace:*",
     "@jooevents/deadline-operations": "workspace:*",
     "@jooevents/engagement-operations": "workspace:*",
+    "@jooevents/identity-access": "workspace:*",
+    "@jooevents/kernel": "workspace:*",
     "@jooevents/program-operations": "workspace:*",
     "@jooevents/schedule-operations": "workspace:*",
-    "@jooevents/session-operations": "workspace:*"
+    "@jooevents/session-operations": "workspace:*",
+    "zod": "4.4.3"
   },
   "devDependencies": { "bun-types": "1.3.6", "typescript": "6.0.3" }
 }
