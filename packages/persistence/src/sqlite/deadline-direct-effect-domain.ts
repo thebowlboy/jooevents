@@ -15,6 +15,7 @@ import {
   type DeadlineMutationPlanningInput
 } from '@jooevents/contracts/deadlines';
 import {
+  deadlineReferencePin,
   DeadlinePlanningError,
   planDeadlineMutation
 } from '@jooevents/deadline';
@@ -136,11 +137,7 @@ export class SQLiteDeadlineDirectEffectDomainAdapter implements SQLiteEffectDoma
               action: plan.input.action,
               catalogVersion: plan.catalog.afterVersion,
               deadline: plan.after,
-              pin: plan.after.status === 'active' ? {
-                id: plan.after.id, version: plan.after.version, digestSha256: plan.after.digestSha256,
-                effectiveAt: plan.after.effectiveAt, displayDate: plan.after.displayDate,
-                gracePolicy: plan.after.gracePolicy
-              } : null
+              pin: deadlineReferencePin(plan.after) ?? null
             }) },
             domain: { kind: 'deadline_direct_change', plan },
             effectContributions: []

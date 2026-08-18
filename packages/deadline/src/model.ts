@@ -71,6 +71,7 @@ export function deadlineReferencePin(head: DeadlineHeadDto): DeadlineReferencePi
     digestSha256: parsed.digestSha256,
     effectiveAt: parsed.effectiveAt,
     displayDate: parsed.displayDate,
+    eventTimezone: parsed.boundary.eventTimezone,
     gracePolicy: parsed.gracePolicy
   }));
 }

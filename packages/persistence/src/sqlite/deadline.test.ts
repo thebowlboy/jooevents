@@ -78,7 +78,10 @@ describe('trial SQLite canonical Deadline repository', () => {
         effectiveAt: '2026-11-02T05:00:00.000Z'
       });
       const applied = transaction(h.sqlite, () => h.deadlines.applyFormCloseDeadline(contribution));
-      expect(applied.pin).toMatchObject({ id: deadlineId, version: 1, displayDate: '2026-11-01' });
+      expect(applied.pin).toMatchObject({
+        id: deadlineId, version: 1, displayDate: '2026-11-01',
+        eventTimezone: 'America/New_York'
+      });
       expect(applied.facts).toEqual([{
         kind: 'deadline_changed', version: 1,
         payload: {

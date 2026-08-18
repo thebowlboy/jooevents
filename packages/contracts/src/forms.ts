@@ -1,6 +1,6 @@
 import { encodeCanonicalJson, parseInstant } from '@jooevents/kernel';
 import { z } from 'zod';
-import { deadlineReferencePinSchema } from './deadlines';
+import { deadlineReferencePinSchema, deadlineTimezoneSchema } from './deadlines';
 import {
   fieldRegistryAnswerOwnerSchema,
   fieldRegistryConstraintsSchema,
@@ -677,6 +677,8 @@ export const servedPublicFormAvailabilitySchema = z.discriminatedUnion('kind', [
   z.strictObject({
     kind: z.literal('closes'),
     effectiveAt: intakeInstantSchema,
+    /** Absent only on retained published Forms whose Deadline pin predates it. */
+    eventTimezone: deadlineTimezoneSchema.optional(),
     gracePolicy: z.literal('soft')
   })
 ]);

@@ -197,6 +197,19 @@ describe('Forms contract boundary', () => {
       rules: []
     };
     expect(servedPublicFormSchema.safeParse(served).success).toBe(true);
+    const retainedClose = {
+      ...served,
+      availability: {
+        kind: 'closes' as const,
+        effectiveAt: '2026-11-02T05:00:00.000Z',
+        gracePolicy: 'soft' as const
+      }
+    };
+    expect(servedPublicFormSchema.safeParse(retainedClose).success).toBe(true);
+    expect(servedPublicFormSchema.parse({
+      ...retainedClose,
+      availability: { ...retainedClose.availability, eventTimezone: 'America/New_York' }
+    }).availability).toMatchObject({ eventTimezone: 'America/New_York' });
     expect(servedPublicFormSchema.safeParse({
       ...served,
       fields: [{ ...served.fields[0], mapsTo: 'person.email', sourceFieldVersion: 2 }]

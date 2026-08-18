@@ -265,6 +265,7 @@ describe('live references and immutable answer evidence', () => {
       digestSha256: 'd'.repeat(64),
       effectiveAt: '2026-09-01T16:00:00.000Z',
       displayDate: '2026-09-01',
+      eventTimezone: 'America/New_York',
       gracePolicy: 'soft'
     };
     const version: FormVersionDto = {
@@ -285,8 +286,27 @@ describe('live references and immutable answer evidence', () => {
       resolveCurrentDeadline() { return { ...deadlinePin, version: 4, digestSha256: 'e'.repeat(64) }; }
     };
     expect(projectServedPublicForm({ version, optionSource: live, references: live }).availability)
-      .toMatchObject({ kind: 'closes', effectiveAt: '2026-09-01T16:00:00.000Z' });
+      .toEqual({
+        kind: 'closes', effectiveAt: '2026-09-01T16:00:00.000Z',
+        eventTimezone: 'America/New_York', gracePolicy: 'soft'
+      });
     expect(version.deadlinePin).toEqual(deadlinePin);
+
+    const retained = {
+      ...version,
+      deadlinePin: Object.fromEntries(
+        Object.entries(deadlinePin).filter(([key]) => key !== 'eventTimezone')
+      ) as FormDeadlineReferencePinDto
+    };
+    const retainedLive: ApplicationCollectionSource = {
+      ...fixtureCollection,
+      resolveCurrentDeadline() { return retained.deadlinePin!; }
+    };
+    expect(projectServedPublicForm({
+      version: retained, optionSource: retainedLive, references: retainedLive
+    }).availability).toEqual({
+      kind: 'closes', effectiveAt: '2026-09-01T16:00:00.000Z', gracePolicy: 'soft'
+    });
   });
 });
 

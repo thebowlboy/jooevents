@@ -4,6 +4,7 @@ import {
 	PUBLIC_APPLICATION_REQUIRED_CHECKBOX_MESSAGE,
 	PUBLIC_APPLICATION_REQUIRED_MESSAGE,
 	publicApplicationControlValue,
+	publicApplicationCloseView,
 	publicApplicationFieldInput,
 	publicApplicationFieldStates,
 	publicApplicationSaveStatusView,
@@ -61,6 +62,26 @@ function servedForm(overrides: Partial<ServedPublicFormDto> = {}): ServedPublicF
 		...overrides
 	} as ServedPublicFormDto;
 }
+
+describe('published close presentation', () => {
+	test('uses the pinned event timezone and names it explicitly', () => {
+		const view = publicApplicationCloseView({
+			kind: 'closes', effectiveAt: '2026-11-02T05:00:00.000Z',
+			eventTimezone: 'America/New_York', gracePolicy: 'soft'
+		});
+		expect(view?.closeLabel).toContain('EST');
+		expect(view?.timezoneLabel).toBe('Event timezone: America/New_York');
+	});
+
+	test('retained closes never mislabel UTC or the browser as the event timezone', () => {
+		const view = publicApplicationCloseView({
+			kind: 'closes', effectiveAt: '2026-11-02T05:00:00.000Z', gracePolicy: 'soft'
+		});
+		expect(view?.closeLabel).toContain('UTC');
+		expect(view?.timezoneLabel).toBe('This published form did not record the event timezone.');
+		expect(publicApplicationCloseView({ kind: 'evergreen' })).toBeNull();
+	});
+});
 
 describe('field input mapping', () => {
 	test('an accepted text answer arrives contract-normalized', () => {

@@ -483,7 +483,13 @@ export function projectServedPublicForm(input: {
           ? { kind: 'session', sessionId: targetPin.id, title: targetPin.title }
           : { kind: 'general_pool' },
     availability: deadlinePin
-      ? { kind: 'closes', effectiveAt: deadlinePin.effectiveAt, gracePolicy: deadlinePin.gracePolicy }
+      ? {
+          kind: 'closes', effectiveAt: deadlinePin.effectiveAt,
+          ...(deadlinePin.eventTimezone === undefined
+            ? {}
+            : { eventTimezone: deadlinePin.eventTimezone }),
+          gracePolicy: deadlinePin.gracePolicy
+        }
       : { kind: 'evergreen' },
     fields,
     rules: version.definition.rules.map((rule) => ({

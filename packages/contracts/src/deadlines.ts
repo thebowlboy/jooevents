@@ -100,6 +100,8 @@ export const deadlineReferencePinSchema = z.strictObject({
   digestSha256: deadlineDigestSchema,
   effectiveAt: deadlineInstantSchema,
   displayDate: deadlineDisplayDateSchema,
+  /** Absent only on retained pins created before the event-zone projection. */
+  eventTimezone: deadlineTimezoneSchema.optional(),
   gracePolicy: deadlineGracePolicySchema
 });
 

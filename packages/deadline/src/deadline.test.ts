@@ -90,6 +90,7 @@ describe('Deadline exact plans', () => {
     };
     expect(resolveCurrentDeadlineFrom(repository, scope, { deadlineId: ids.deadline }))
       .toEqual(deadlineReferencePin(plan.after));
+    expect(deadlineReferencePin(plan.after)?.eventTimezone).toBe('America/New_York');
     expect(() => createPlan(applied.catalog)).toThrow('deadline_exists');
   });
 
@@ -154,4 +155,3 @@ describe('Deadline exact plans', () => {
     }
   });
 });
-

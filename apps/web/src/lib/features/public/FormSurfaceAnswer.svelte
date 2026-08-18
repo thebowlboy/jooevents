@@ -12,6 +12,7 @@
 	} from '$lib/api/public-application-session';
 	import {
 		publicApplicationControlValue,
+		publicApplicationCloseView,
 		publicApplicationFieldInput,
 		publicApplicationFieldStates,
 		publicApplicationSaveStatusView,
@@ -141,6 +142,7 @@
 		snapshot.phase === 'starting' || (snapshot.phase === 'idle' && snapshot.transport === null)
 	);
 	const saveStatus = $derived(publicApplicationSaveStatusView(snapshot));
+	const closeView = $derived(publicApplicationCloseView(form.availability));
 
 	const refusal = $derived(snapshot.refusal);
 	const terminalRefusal = $derived(stopped ? refusal : null);
@@ -349,6 +351,12 @@
 			<form class="apply__body" aria-label={form.name} novalidate onsubmit={submit}>
 				<div class="apply__hero">
 					<p class="apply__title">{form.name}</p>
+					{#if closeView}
+						<div class="apply__close" aria-label="Application close time">
+							<p class="apply__close-time">{closeView.closeLabel}</p>
+							<p class="apply__close-zone">{closeView.timezoneLabel}</p>
+						</div>
+					{/if}
 				</div>
 
 				{#if terminalRefusal && terminalRefusal.kind !== 'target_no_longer_collecting'}
@@ -616,6 +624,28 @@
 	.apply__hero {
 		display: grid;
 		gap: var(--je-space-2);
+	}
+
+	.apply__close {
+		display: grid;
+		gap: var(--je-space-1);
+		margin-block-start: var(--je-space-3);
+		padding: var(--je-space-3) var(--je-space-4);
+		border-inline-start: 3px solid var(--je-color-action);
+		background: var(--je-color-surface-subtle);
+	}
+
+	.apply__close p {
+		margin: 0;
+	}
+
+	.apply__close-time {
+		font-weight: 700;
+	}
+
+	.apply__close-zone {
+		color: var(--je-color-text-muted);
+		font-size: 0.875rem;
 	}
 
 	.apply__title {

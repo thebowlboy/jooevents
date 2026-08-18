@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import { deadlineHeadSchema, deadlineMutationPlanSchema } from './deadlines';
+import {
+  deadlineHeadSchema,
+  deadlineMutationPlanSchema,
+  deadlineReferencePinSchema
+} from './deadlines';
 
 const id = (tail: string) => `00000000-0000-4000-8000-${tail.padStart(12, '0')}`;
 const digest = 'a'.repeat(64);
@@ -46,5 +50,15 @@ describe('Deadline contracts', () => {
       ...candidate, catalog: { ...candidate.catalog, afterVersion: 3 }
     }).success).toBe(false);
   });
-});
 
+  test('retains old reference pins while accepting the pinned event timezone', () => {
+    const legacy = {
+      id: active.id, version: 1, digestSha256: digest,
+      effectiveAt: active.effectiveAt, displayDate: active.displayDate, gracePolicy: 'soft' as const
+    };
+    expect(deadlineReferencePinSchema.parse(legacy)).toEqual(legacy);
+    expect(deadlineReferencePinSchema.parse({
+      ...legacy, eventTimezone: 'America/New_York'
+    }).eventTimezone).toBe('America/New_York');
+  });
+});

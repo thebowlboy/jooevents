@@ -1,4 +1,5 @@
 import {
+	formatInstant,
 	transientApplicationAnswerInputSchema,
 	type ServedPublicFormDto,
 	type ServedPublicFormFieldDto,
@@ -17,6 +18,43 @@ import type { PublicApplicationSessionSnapshot } from '../public-application-ses
  * reviewed sentences, so the draft never carries an answer the contract would
  * refuse at the boundary.
  */
+
+// ---------------------------------------------------------------------------
+// Published close presentation
+
+export interface PublicApplicationCloseView {
+	readonly closeLabel: string;
+	readonly timezoneLabel: string;
+}
+
+/**
+ * Public copy from the immutable served Deadline pin. This reports a close; it
+ * never decides whether controls remain usable. Retained Forms without the new
+ * zone byte are explicit about that absence instead of borrowing the browser's
+ * clock or calling UTC the event timezone.
+ */
+export function publicApplicationCloseView(
+	availability: ServedPublicFormDto['availability']
+): PublicApplicationCloseView | null {
+	if (availability.kind === 'evergreen') return null;
+	const timezone = availability.eventTimezone;
+	if (timezone === undefined) {
+		return {
+			closeLabel: `Closes ${formatInstant(availability.effectiveAt, 'UTC', {
+				zone: true,
+				fallback: availability.effectiveAt
+			})}`,
+			timezoneLabel: 'This published form did not record the event timezone.'
+		};
+	}
+	return {
+		closeLabel: `Closes ${formatInstant(availability.effectiveAt, timezone, {
+			zone: true,
+			fallback: availability.effectiveAt
+		})}`,
+		timezoneLabel: `Event timezone: ${timezone}`
+	};
+}
 
 // ---------------------------------------------------------------------------
 // Visibility and requiredness under the served rules
