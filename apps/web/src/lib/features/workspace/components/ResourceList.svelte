@@ -11,7 +11,7 @@
 	let {
 		resources = [],
 		density = 'default'
-	}: { resources?: SubmissionResource[]; density?: 'default' | 'compact' } = $props();
+	}: { resources?: readonly SubmissionResource[]; density?: 'default' | 'compact' } = $props();
 </script>
 
 {#if resources.length === 0}

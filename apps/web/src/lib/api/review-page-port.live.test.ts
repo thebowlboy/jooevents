@@ -20,14 +20,17 @@ const round = { id: roundId, ordinal: 1, name: 'Round 1', state: 'open' as const
 	scaleMax: 5 as const, deadlineEffectiveAt: '2027-03-20T23:59:59.000Z', criteria: [criterion],
 	anonymized: true, antiAnchoring: true, done: 0, total: 1,
 	reviewers: [{ reviewerId, displayName: 'Ada', assigned: 1, done: 0, steppedBack: 0, awaitingReassignment: 0 }] };
-function snapshot(input: { committed?: boolean; revisions?: number } = {}) {
+function snapshot(input: { committed?: boolean; revisions?: number; anonymized?: boolean } = {}) {
 	const committed = input.committed ?? false; const revisionCount = input.revisions ?? (committed ? 1 : 0);
+	const anonymized = input.anonymized ?? true;
 	const current = { revisionId, score: 4, comment: 'Good', at: '2027-03-02T00:00:00.000Z', postUnlock: false };
 	return mapReviewSnapshot(reviewSnapshotSchema.parse({ schemaVersion: 1,
-		viewer: { kind: 'reviewer', reviewerId }, plans: [round], standings: {}, reviewerScope: [],
+		viewer: { kind: 'reviewer', reviewerId }, plans: [{ ...round, anonymized }], standings: {}, reviewerScope: [],
 		queue: [{ assignmentId, roundId, submissionId, assignmentVersion: 2,
 			candidate: { submissionId, version: 1, title: 'Talk', abstract: 'Abstract',
-				submittedAt: '2027-03-01T00:00:00.000Z', resources: [] },
+				submittedAt: '2027-03-01T00:00:00.000Z',
+				resources: [{ resourceId: id(8), name: 'Deck', kind: 'slides', detail: 'PDF' }],
+				...(!anonymized ? { speakers: [{ speakerId: id(9), displayName: 'Ada Speaker' }] } : {}) },
 			...(committed ? { committed: true, current, revisions: Array.from({ length: revisionCount }, (_, index) => ({
 				...current, revisionId: id(7 + index), postUnlock: index > 0,
 				...(index > 0 ? { correctionOfRevisionId: id(6 + index) } : {}) })) }
@@ -61,10 +64,11 @@ function mutation(action: ReviewMutationResult['action']): ReviewMutationResult 
 		...(action === 'amend_review' ? { correctionOfRevisionId: id(6) } : {}) };
 	return reviewMutationResultSchema.parse({ action, head, revision });
 }
-function core(input: { committed?: boolean; keys: string[]; actions: string[] }): ReviewCorePort {
+function core(input: { committed?: boolean; anonymized?: boolean; keys: string[]; actions: string[] }): ReviewCorePort {
 	let committed = input.committed ?? false;
 	return { source: { kind: 'live' },
-		async readSnapshot() { return { kind: 'success', data: snapshot({ committed, revisions: committed ? 1 : 0 }), correlationId }; },
+		async readSnapshot() { return { kind: 'success', data: snapshot({ committed,
+			revisions: committed ? 1 : 0, anonymized: input.anonymized }), correlationId }; },
 		async readRoundSetup() { return { kind: 'success', data: { activeReviewers: 1, invitedReviewers: 0,
 			submissions: 1, expectedReviews: 1, perReviewer: [] }, correlationId }; },
 		async changeRound(value, key) { input.keys.push(key); input.actions.push(value.action);
@@ -107,5 +111,29 @@ describe('direct live Review page port', () => {
 		expect(await page.review.amend(submissionId, 5, 'Better')).toMatchObject({ committed: true });
 		expect(actions).toEqual(['amend_review']);
 		expect(keys).toEqual(['review-amend-key']);
+	});
+
+	test('serves the reviewer-safe candidate already joined to the queue', async () => {
+		const blind = createLiveReviewPagePort({ review: core({ keys: [], actions: [] }), vocabulary,
+			viewer: { kind: 'reviewer', reviewerId } });
+		await blind.review.myQueue();
+		expect(await blind.submissions.get(submissionId)).toEqual({
+			id: submissionId,
+			title: 'Talk',
+			abstract: 'Abstract',
+			speakers: [],
+			submittedAt: '2027-03-01T00:00:00.000Z',
+			resources: [{ name: 'Deck', kind: 'slides', detail: 'PDF' }]
+		});
+
+		const shown = createLiveReviewPagePort({
+			review: core({ anonymized: false, keys: [], actions: [] }),
+			vocabulary,
+			viewer: { kind: 'reviewer', reviewerId }
+		});
+		expect(await shown.submissions.get(submissionId)).toMatchObject({
+			speakers: [{ id: id(9), name: 'Ada Speaker' }]
+		});
+		expect(await shown.submissions.get(id(999))).toBeNull();
 	});
 });

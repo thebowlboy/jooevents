@@ -332,6 +332,31 @@ export interface SubmissionResource {
 	detail: string;
 }
 
+/**
+ * The least-disclosure submission evidence served to an assigned reviewer.
+ *
+ * This is deliberately narrower than the organizer's Intake submission: a
+ * Review queue needs candidate content, not tray/decision state or contact
+ * authority. `speakers` is empty when the round withholds participant identity;
+ * a sample source may additionally carry an email so its profile treatment can
+ * remain demonstrable, but the retained live projection does not disclose one.
+ */
+export interface ReviewSubmissionDisplay {
+	id: string;
+	title: string;
+	abstract: string;
+	speakers: {
+		id?: string;
+		name: string;
+		email?: string;
+	}[];
+	trackId?: string;
+	formatId?: string;
+	targetSessionId?: string;
+	submittedAt: string;
+	resources?: SubmissionResource[];
+}
+
 export interface Submission {
 	id: string;
 	title: string;
@@ -607,7 +632,7 @@ export interface ScoreStanding {
 /** A reviewer's own committed review beside the submission it belongs to. */
 export interface ComparableCard {
 	item: MyReviewItem;
-	submission: Submission;
+	submission: ReviewSubmissionDisplay;
 	standing: ScoreStanding | null;
 }
 

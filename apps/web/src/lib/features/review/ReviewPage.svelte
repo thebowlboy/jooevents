@@ -38,10 +38,10 @@
 		MyReviewItem,
 		ReviewPlan,
 		ReviewRoundSetup,
+		ReviewSubmissionDisplay,
 		ScopeRef,
 		ScoreStanding,
-		SpeakerProfile,
-		Submission
+		SpeakerProfile
 	} from '$lib/api/types';
 
 	interface Props {
@@ -61,7 +61,7 @@
 
 	interface QueueRow {
 		item: MyReviewItem;
-		submission: Submission;
+		submission: ReviewSubmissionDisplay;
 	}
 
 	interface Draft {
@@ -298,9 +298,9 @@
 	 */
 	async function loadProfiles() {
 		if (!plan || plan.anonymized) return;
-		const emails = [
-			...new Set(rows.flatMap((row) => row.submission.speakers.map((speaker) => speaker.email)))
-		];
+		const emails = [...new Set(rows.flatMap((row) =>
+			row.submission.speakers.flatMap((speaker) => speaker.email ? [speaker.email] : [])
+		))];
 		if (emails.length === 0) return;
 		const found = await Promise.all(emails.map((email) => api.speakers.profile(email)));
 		const next: Record<string, SpeakerProfile | null> = {};
@@ -995,8 +995,8 @@
 								<!-- Only inside the open-review branch: a blind plan never renders
 								     the submitter at all, so it cannot gain a way to look them up. -->
 								<p class="card__by"
-									>{#each row.submission.speakers as speaker, index (speaker.email)}{@const profile =
-										profiles[speaker.email]}{#if index > 0}{', '}{/if}{#if profile}<ProfilePeek
+									>{#each row.submission.speakers as speaker, index (speaker.id ?? speaker.email ?? speaker.name)}{@const profile =
+										speaker.email ? profiles[speaker.email] : undefined}{#if index > 0}{', '}{/if}{#if profile}<ProfilePeek
 										{profile} />{:else}{speaker.name}{/if}{/each}</p>
 								{/if}
 						</div>

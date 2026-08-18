@@ -7,11 +7,11 @@ import type {
 	MyReviewItem,
 	ReviewPlan,
 	ReviewRoundSetup,
+	ReviewSubmissionDisplay,
 	ScheduleState,
 	ScopeRef,
 	ScoreStanding,
 	SpeakerProfile,
-	Submission,
 	Track
 } from './types';
 
@@ -39,7 +39,7 @@ export interface ReviewPagePort {
 		formats(): Promise<Format[]>;
 	};
 	readonly submissions: {
-		get(id: string): Promise<Submission | null>;
+		get(id: string): Promise<ReviewSubmissionDisplay | null>;
 	};
 	readonly review: {
 		plans(): Promise<ReviewPlan[]>;

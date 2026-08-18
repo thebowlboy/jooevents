@@ -10,6 +10,7 @@ import type {
 	MyReviewItem,
 	ReviewPlan,
 	ReviewRoundSetup,
+	ReviewSubmissionDisplay,
 	ScopeRef,
 	ScoreStanding,
 	Track
@@ -29,7 +30,6 @@ import type { ProgramFormatView, ProgramTrackView } from './view-models/program-
  * canonical owner exists.
  */
 export type ReviewPageLiveUnmountedCapability =
-	| 'submission_detail'
 	| 'review_evaluation_revert'
 	| 'review_comparison'
 	| 'review_accolade_change'
@@ -51,12 +51,8 @@ export class ReviewPageLiveError extends Error {
 }
 
 const UNMOUNTED_COPY: Readonly<Record<ReviewPageLiveUnmountedCapability, string>> = Object.freeze({
-	submission_detail:
-		'Submission details are not available in this live workspace yet.',
 	review_evaluation_revert:
 		'Reverting an amendment is not available in this live workspace yet.',
-	review_step_back:
-		'Stepping back from a review is not available in this live workspace yet.',
 	review_comparison:
 		'Committed-review comparison is not available in this live workspace yet.',
 	review_accolade_change:
@@ -243,6 +239,36 @@ function myReviewItem(item: NonNullable<ReviewSnapshotView['queue']>[number]): M
 }
 
 /**
+ * Maps only the candidate display already authorized by Review. It never
+ * consults Intake's organizer projection and never fabricates the wider
+ * submission lifecycle fields that a reviewer is not entitled to read.
+ */
+function reviewSubmission(
+	item: NonNullable<ReviewSnapshotView['queue']>[number]
+): ReviewSubmissionDisplay {
+	return {
+		id: item.candidate.submissionId,
+		title: item.candidate.title,
+		abstract: item.candidate.abstract,
+		speakers: (item.candidate.speakers ?? []).map((speaker) => ({
+			id: speaker.speakerId,
+			name: speaker.displayName
+		})),
+		...(item.candidate.trackId !== undefined ? { trackId: item.candidate.trackId } : {}),
+		...(item.candidate.formatId !== undefined ? { formatId: item.candidate.formatId } : {}),
+		...(item.candidate.targetSessionId !== undefined
+			? { targetSessionId: item.candidate.targetSessionId }
+			: {}),
+		submittedAt: item.candidate.submittedAt,
+		resources: item.candidate.resources.map((resource) => ({
+			name: resource.name,
+			kind: resource.kind,
+			detail: resource.detail
+		}))
+	};
+}
+
+/**
  * Canonical standing projected into the tuned shape. The canonical slice
  * label is optional disclosure; its absence is carried as the tuned string's
  * empty value, never replaced with an invented slice name.
@@ -324,6 +350,7 @@ export function createLiveReviewPagePort(input: {
 	}
 	const now = input.now ?? Date.now;
 	const newAttemptKey = input.newAttemptKey ?? (() => crypto.randomUUID());
+	let latestSnapshot: ReviewSnapshotView | undefined;
 
 	async function readSnapshot(
 		request: { standingSubmissionIds?: string[]; standingSlice?: 'track' | 'all' } = {}
@@ -332,7 +359,8 @@ export function createLiveReviewPagePort(input: {
 		if (result.kind !== 'success') {
 			throw new ReviewPageLiveError(readFailure(result, 'review snapshot'));
 		}
-		return result.data;
+		latestSnapshot = result.data;
+		return latestSnapshot;
 	}
 
 	function queueItem(
@@ -373,12 +401,16 @@ export function createLiveReviewPagePort(input: {
 		}),
 		submissions: Object.freeze({
 			/**
-			 * Submissions exist canonically in Intake, but no candidate-display
-			 * join is composed at this seam; resolving null would falsely claim
-			 * the submission does not exist, so the read refuses instead.
+			 * The canonical Review snapshot has already joined and redacted the
+			 * candidate for this viewer. Use that exact record; do not cross into
+			 * the organizer's wider Intake projection just to paint the queue.
 			 */
-			async get(): Promise<never> {
-				throw unmounted('submission_detail');
+			async get(id: string): Promise<ReviewSubmissionDisplay | null> {
+				const cached = latestSnapshot?.queue?.find((item) => item.submissionId === id);
+				if (cached) return reviewSubmission(cached);
+				const snapshot = await readSnapshot();
+				const item = snapshot.queue?.find((candidate) => candidate.submissionId === id);
+				return item ? reviewSubmission(item) : null;
 			}
 		}),
 		review: Object.freeze({

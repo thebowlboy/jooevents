@@ -180,8 +180,8 @@
 	const ready = $derived(vocabLoaded && anchorResolved);
 	const missingAnchor = $derived(ready && anchor === null);
 
-	function trackName(trackId: string): string {
-		return trackNames[trackId] ?? 'Unassigned track';
+	function trackName(trackId?: string): string | null {
+		return trackId ? (trackNames[trackId] ?? 'Unassigned track') : null;
 	}
 
 	/** A revision is only meaningful as a pair, so the card says one happened. */
@@ -429,7 +429,7 @@
 							<p class="panel__title">Nothing else committed in this track</p>
 							<p class="panel__copy">
 								This is your only committed review in {anchor
-									? trackName(anchor.submission.trackId)
+									? (trackName(anchor.submission.trackId) ?? 'this track')
 									: 'this track'}. Widen the slice to read it against everything you have scored.
 							</p>
 							<button
