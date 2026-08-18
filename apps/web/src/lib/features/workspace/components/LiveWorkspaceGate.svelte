@@ -83,7 +83,12 @@
 </svelte:head>
 
 {#if state.kind === 'ready' && state.manifest.operations.length > 0 && children}
-	{@render children({ user: state.user, workspace: state.workspace, manifest: state.manifest })}
+	{@render children({
+		user: state.user,
+		workspace: state.workspace,
+		manifest: state.manifest,
+		...(state.reviewEmailRestriction ? { reviewEmailRestriction: state.reviewEmailRestriction } : {})
+	})}
 {:else}
 	<main class="live-gate">
 		<section class="live-gate__panel" aria-busy={state.kind === 'loading' || state.kind === 'redirecting'}>
