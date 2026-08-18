@@ -25,6 +25,7 @@
 	import { createReviewerRosterLivePort } from '$lib/api/operations/reviewer-roster-live';
 	import { createSchedulePlacementLivePort } from '$lib/api/operations/schedule-placement-live';
 	import { createSessionCatalogLivePort } from '$lib/api/operations/session-catalog-live';
+	import { createSessionSubmissionRouteLivePort } from '$lib/api/operations/session-submission-route-live';
 	import { createSubmissionTriageLiveClient } from '$lib/api/operations/submission-triage-live';
 	import { createWorkspaceOverviewLivePort } from '$lib/api/operations/workspace-overview-live';
 	import { createDeadlineCatalogLivePort } from '$lib/api/operations/deadline-catalog-live';
@@ -241,6 +242,7 @@
 			list: (query, options) => triage.list(query, options),
 			decisions: { readState: (ids, options) => decisionsClient.readState(ids, options) }
 		}),
+		attributionMutations: createSessionSubmissionRouteLivePort({ manifest: initial.manifest }),
 		settings: eventSettings,
 		publication: release,
 		speakers: {

@@ -26,6 +26,7 @@ import {
   speakerProfileApproveResultSchema,
   speakerProfileReadResultSchema,
   speakerProfileUpdateResultSchema,
+  sessionSubmissionRouteOperationResultSchema,
   emailProviderReadinessReadOperationResultSchema,
   eventCreateOperationResultSchema,
   eventListReadResultSchema,
@@ -1238,6 +1239,10 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['POST /api/events/current/sessions']
       },
       {
+        name: 'session.submission.route', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/session-submission-routes']
+      },
+      {
         name: 'speaker-lineup.change', version: 1, effect: 'commit',
         bindings: ['POST /api/events/current/speaker-lineup']
       },
@@ -1472,6 +1477,110 @@ describe('ephemeral live Foundation server composition', () => {
       headers: { 'content-type': 'application/json', origin: config.baseUrl },
       body: '{}'
     })).status).toBe(404);
+  });
+
+  test('attaches an accepted unlinked Submission and restores the exact prior Session', async () => {
+    const runtime = await createEphemeralLiveRuntime({ config });
+    runtimes.push(runtime);
+    const session = await createOwnerSession(runtime);
+    await provisionOwner(runtime, session);
+    const seeded = await seedAcceptedSpeakers({
+      runtime,
+      session,
+      key: 'session-route',
+      speakers: [
+        { key: 'target', title: 'Target panel', name: 'Ada', email: 'ada@example.test' },
+        { key: 'repair', title: 'Repair talk', name: 'Grace', email: 'grace@example.test' }
+      ]
+    });
+    const target = seeded[0]!;
+    const repair = seeded[1]!;
+    const unlinked = runtime.database.sqlite.query(`
+      DELETE FROM submission_session_origins
+       WHERE submission_id = ?
+    `).run(repair.submissionId);
+    expect(unlinked.changes).toBe(1);
+
+    const beforeRead = sessionCatalogReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/sessions', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (beforeRead.kind !== 'success') throw new Error('Session catalog read failed.');
+    const before = beforeRead.data.sessions.find((head) => head.id === target.sessionId)!;
+
+    const attached = sessionSubmissionRouteOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/session-submission-routes',
+      key: 'session-route-attach',
+      body: {
+        action: 'attach_unlinked',
+        expectedCatalogVersion: beforeRead.data.version,
+        expectedCatalogDigestSha256: beforeRead.data.digestSha256,
+        expectedSessionVersion: before.version,
+        expectedSessionDigestSha256: before.digestSha256,
+        targetSessionId: target.sessionId,
+        submissionId: repair.submissionId
+      },
+      parse: (value) => value
+    }));
+    expect(attached).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'attach_unlinked',
+        session: { id: target.sessionId, roster: { participants: [
+          { personId: target.personId }, { personId: repair.personId }
+        ] } },
+        origin: { submissionId: repair.submissionId, sessionId: target.sessionId, kind: 'attached' }
+      },
+      receipt: { operationName: 'session.submission.route', operationVersion: 1 }
+    });
+    if (attached.kind !== 'success' || attached.data.action !== 'attach_unlinked') {
+      throw new Error('Attach route failed.');
+    }
+    expect(runtime.database.sqlite.query<{ readonly count: number }, [string, string]>(`
+      SELECT count(*) AS count FROM engagement_heads WHERE session_id = ? AND person_id = ?
+    `).get(target.sessionId, repair.personId)?.count).toBe(1);
+
+    const currentRead = sessionCatalogReadResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/sessions', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (currentRead.kind !== 'success') throw new Error('Session catalog reread failed.');
+    const current = currentRead.data.sessions.find((head) => head.id === target.sessionId)!;
+    const restored = sessionSubmissionRouteOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/session-submission-routes',
+      key: 'session-route-restore',
+      body: {
+        action: 'restore_route',
+        expectedCatalogVersion: currentRead.data.version,
+        expectedCatalogDigestSha256: currentRead.data.digestSha256,
+        expectedSessionVersion: current.version,
+        expectedSessionDigestSha256: current.digestSha256,
+        original: attached.data.recovery
+      },
+      parse: (value) => value
+    }));
+    expect(restored).toMatchObject({
+      kind: 'success',
+      data: {
+        action: 'restore_route',
+        session: { id: target.sessionId, roster: { participants: [{ personId: target.personId }] } },
+        origin: null,
+        recovery: null
+      },
+      receipt: { operationName: 'session.submission.route', operationVersion: 1 }
+    });
+    expect(runtime.database.sqlite.query<{ readonly count: number }, [string, string]>(`
+      SELECT count(*) AS count FROM engagement_heads WHERE session_id = ? AND person_id = ?
+    `).get(target.sessionId, repair.personId)?.count).toBe(0);
+    expect(runtime.database.sqlite.query<{ readonly count: number }, [string]>(`
+      SELECT count(*) AS count FROM submission_session_origins WHERE submission_id = ?
+    `).get(repair.submissionId)?.count).toBe(0);
   });
 
   test('configures and downloads an Accelevents package through the live one-way boundary', async () => {

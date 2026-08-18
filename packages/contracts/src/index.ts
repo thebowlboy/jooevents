@@ -35,6 +35,7 @@ export * from './schedule-breaks';
 export * from './signals';
 export * from './speaker-profiles';
 export * from './sessions';
+export * from './session-attribution';
 export * from './submissions';
 export * from './template-authoring';
 export * from './tasks';

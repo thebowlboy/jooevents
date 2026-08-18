@@ -6,6 +6,7 @@ const id = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(
 const base = {
 	vocabulary: { source: { kind: 'live' } }, proposals: { source: { kind: 'live' } },
 	attribution: { source: { kind: 'live' }, read: async () => ({ kind: 'success', data: [] }) },
+	attributionMutations: { source: { kind: 'live' } },
 	settings: {}, publication: {}, speakers: { list: async () => [] }, templates: {}
 } as const;
 
@@ -18,6 +19,7 @@ describe('live Schedule page correction boundary', () => {
 			vocabulary: { source: { kind: 'live' } } as never,
 			proposals: { source: { kind: 'live' } } as never,
 			attribution: { source: { kind: 'live' } } as never,
+			attributionMutations: { source: { kind: 'live' } } as never,
 			settings: {} as never, publication: {} as never,
 			speakers: {} as never, templates: {} as never,
 			newIdempotencyKey: () => { writes += 1; return 'schedule-direct-attempt'; }
@@ -92,6 +94,7 @@ describe('live Schedule page correction boundary', () => {
 			} as never,
 			proposals: { source: { kind: 'live' } } as never,
 			attribution: { source: { kind: 'live' }, read: async () => ({ kind: 'success', data: [] }) } as never,
+			attributionMutations: { source: { kind: 'live' } } as never,
 			settings: { get: async () => ({
 				startDate: '2026-11-01', endDate: '2026-11-01', timezone: 'UTC',
 				dayStart: '09:00', dayEnd: '17:00', slotMinutes: 30
@@ -188,6 +191,7 @@ describe('live Schedule page correction boundary', () => {
 			vocabulary: { source: { kind: 'live' }, rooms: async () => [] } as never,
 			proposals: { source: { kind: 'live' } } as never,
 			attribution: { source: { kind: 'live' }, read: async () => ({ kind: 'success', data: [] }) } as never,
+			attributionMutations: { source: { kind: 'live' } } as never,
 			settings: { get: async () => ({}) } as never,
 			publication: { overview: async () => ({ currentProgramRelease: null, surfaceHeads: [] }) } as never,
 			speakers: { list: async () => [{
@@ -219,6 +223,7 @@ describe('live Schedule page correction boundary', () => {
 			vocabulary: { source: { kind: 'live' }, rooms: async () => [] } as never,
 			proposals: { source: { kind: 'live' } } as never,
 			attribution: { source: { kind: 'live' }, read: async () => ({ kind: 'success', data: [] }) } as never,
+			attributionMutations: { source: { kind: 'live' } } as never,
 			settings: { get: async () => ({}) } as never,
 			publication: { overview: async () => ({ currentProgramRelease: null, surfaceHeads: [] }) } as never,
 			speakers: { list: async () => [], profile: async () => null } as never,
@@ -273,5 +278,70 @@ describe('live Schedule page correction boundary', () => {
 		expect(await port.schedule.attachCandidates(sessionId)).toEqual([{
 			id: unroutedId, title: 'Unrouted talk', speakers: [{ name: 'Grace' }]
 		}]);
+	});
+
+	test('attaches one accepted Submission and restores through its exact receipt evidence', async () => {
+		const sessionId = id(71);
+		const submissionId = id(72);
+		const recovery = { sessionPlan: { input: { action: 'roster_append' } } } as never;
+		const writes: { request: unknown; key: string }[] = [];
+		let reads = 0;
+		const port = createLiveSchedulePagePort({
+			...base,
+			placements: { source: { kind: 'live' } } as never,
+			sessions: {
+				source: { kind: 'live' },
+				readCatalog: async () => {
+					reads += 1;
+					return { kind: 'success', data: {
+						version: reads === 1 ? 5 : 6,
+						digestSha256: (reads === 1 ? 'a' : 'c').repeat(64),
+						sessions: [{
+							id: sessionId,
+							version: reads === 1 ? 2 : 3,
+							digestSha256: (reads === 1 ? 'b' : 'd').repeat(64)
+						}]
+					} };
+				}
+			} as never,
+			attributionMutations: {
+				source: { kind: 'live' },
+				apply: async (request: any, key: string) => {
+					writes.push({ request, key });
+					return request.action === 'attach_unlinked'
+						? { kind: 'success', data: { action: 'attach_unlinked', recovery } }
+						: { kind: 'success', data: { action: 'restore_route', recovery: null } };
+				}
+			} as never,
+			newIdempotencyKey: () => `session-route-${writes.length + 1}`
+		} as never);
+
+		expect(await port.schedule.attachSubmission(sessionId, submissionId)).toEqual({ ok: true });
+		expect(await port.schedule.detachSubmission(sessionId, submissionId)).toEqual({ ok: true });
+		expect(writes).toEqual([
+			{
+				key: 'session-route-1',
+				request: {
+					action: 'attach_unlinked',
+					expectedCatalogVersion: 5,
+					expectedCatalogDigestSha256: 'a'.repeat(64),
+					expectedSessionVersion: 2,
+					expectedSessionDigestSha256: 'b'.repeat(64),
+					targetSessionId: sessionId,
+					submissionId
+				}
+			},
+			{
+				key: 'session-route-2',
+				request: {
+					action: 'restore_route',
+					expectedCatalogVersion: 6,
+					expectedCatalogDigestSha256: 'c'.repeat(64),
+					expectedSessionVersion: 3,
+					expectedSessionDigestSha256: 'd'.repeat(64),
+					original: recovery
+				}
+			}
+		]);
 	});
 });

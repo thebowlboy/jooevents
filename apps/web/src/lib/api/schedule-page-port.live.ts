@@ -21,6 +21,7 @@ import type {
 	SessionCatalogReadResult,
 	SessionChangeApplyResult
 } from './session-catalog-port';
+import type { SessionSubmissionRoutePort } from './operations/session-submission-route-live';
 import type {
 	EventSettings,
 	BreakBlock,
@@ -625,6 +626,7 @@ export function createLiveSchedulePagePort(input: {
 	readonly vocabulary: ProgramVocabularySettingsPort;
 	readonly proposals: ScheduleProposalCountsSource;
 	readonly attribution: ScheduleAttributionSource;
+	readonly attributionMutations: SessionSubmissionRoutePort;
 	readonly settings: ScheduleGeometrySettingsSource;
 	readonly publication: Pick<ReleaseWorkspacePort, 'overview' | 'draftSchedulePublication' | 'publishSchedule'>;
 	readonly speakers: SchedulePagePort['speakers'];
@@ -637,6 +639,7 @@ export function createLiveSchedulePagePort(input: {
 		|| input.vocabulary.source.kind !== 'live'
 		|| input.proposals.source.kind !== 'live'
 		|| input.attribution.source.kind !== 'live'
+		|| input.attributionMutations.source.kind !== 'live'
 	) {
 		throw new TypeError('live_schedule_source_required');
 	}
@@ -655,6 +658,9 @@ export function createLiveSchedulePagePort(input: {
 	let servedGeometry: DerivedScheduleGeometry | null = null;
 	/** Includes removed heads returned by this port so receipts can restore exact ids. */
 	const knownBreakHeads = new Map<string, ScheduleBreakHeadView>();
+	/** Exact attach plans retained only for the receipt's immediate guarded restore. */
+	const attachRecoveries = new Map<string, import('@jooevents/contracts').SessionSubmissionAttachPlanDto>();
+	const attachRecoveryKey = (sessionId: string, submissionId: string) => `${sessionId}:${submissionId}`;
 
 	async function readCatalog() {
 		const result = await input.sessions.readCatalog();
@@ -1128,11 +1134,53 @@ export function createLiveSchedulePagePort(input: {
 						speakers: [{ name: row.primaryParticipantName }]
 					}));
 			},
-			async attachSubmission(): Promise<MutationOutcome> {
-				return refusal('session_attach');
+			async attachSubmission(sessionId: string, submissionId: string): Promise<MutationOutcome> {
+				const catalog = await readCatalog();
+				const session = catalog.sessions.find((head) => head.id === sessionId);
+				if (!session) return { ok: false, reason: 'This session no longer exists.' };
+				const applied = await input.attributionMutations.apply({
+					action: 'attach_unlinked',
+					expectedCatalogVersion: catalog.version,
+					expectedCatalogDigestSha256: catalog.digestSha256,
+					expectedSessionVersion: session.version,
+					expectedSessionDigestSha256: session.digestSha256,
+					targetSessionId: sessionId,
+					submissionId
+				}, newIdempotencyKey());
+				if (applied.kind !== 'success') {
+					return { ok: false, reason: applyFailure(applied as never, 'submission route').reason };
+				}
+				if (applied.data.action !== 'attach_unlinked') {
+					return { ok: false, reason: 'The submission route result was incomplete.' };
+				}
+				attachRecoveries.set(
+					attachRecoveryKey(sessionId, submissionId),
+					applied.data.recovery
+				);
+				return { ok: true };
 			},
-			async detachSubmission(): Promise<MutationOutcome> {
-				return refusal('session_detach');
+			async detachSubmission(sessionId: string, submissionId: string): Promise<MutationOutcome> {
+				const key = attachRecoveryKey(sessionId, submissionId);
+				const original = attachRecoveries.get(key);
+				if (!original) {
+					return { ok: false, reason: 'This attach receipt is no longer current.' };
+				}
+				const catalog = await readCatalog();
+				const session = catalog.sessions.find((head) => head.id === sessionId);
+				if (!session) return { ok: false, reason: 'This session no longer exists.' };
+				const applied = await input.attributionMutations.apply({
+					action: 'restore_route',
+					expectedCatalogVersion: catalog.version,
+					expectedCatalogDigestSha256: catalog.digestSha256,
+					expectedSessionVersion: session.version,
+					expectedSessionDigestSha256: session.digestSha256,
+					original
+				}, newIdempotencyKey());
+				if (applied.kind !== 'success') {
+					return { ok: false, reason: applyFailure(applied as never, 'submission route').reason };
+				}
+				attachRecoveries.delete(key);
+				return { ok: true };
 			},
 			async addDirectParticipant(): Promise<MutationOutcome> {
 				return refusal('session_participants');

@@ -44,6 +44,7 @@
     "./program-vocabulary-merge-effect-domain": "./src/sqlite/program-vocabulary-merge-effect-domain.ts",
     "./schedule-placement": "./src/sqlite/schedule-placement.ts",
     "./session": "./src/sqlite/session.ts",
+    "./session-submission-route-effect-domain": "./src/sqlite/session-submission-route-effect-domain.ts",
     "./review": "./src/sqlite/review.ts",
     "./signals": "./src/sqlite/signals.ts",
     "./review-direct-effect-domain": "./src/sqlite/review-direct-effect-domain.ts",

@@ -300,9 +300,12 @@ import {
 } from '@jooevents/session';
 import {
   SESSION_CHANGE_REQUEST_HASH_PROFILE,
+  SESSION_SUBMISSION_ROUTE_REQUEST_HASH_PROFILE,
+  SESSION_SUBMISSION_ROUTE_ACCESS_POLICY,
   SESSION_MANAGE_ACCESS_POLICY,
   SESSION_READ_ACCESS_POLICY,
   createSessionDirectOperationModule,
+  createSessionSubmissionRouteOperationModule,
   createSessionOperationModule
 } from '@jooevents/session-operations';
 import {
@@ -391,6 +394,7 @@ import {
   createSQLiteProvisioningStore,
   createSQLiteSchedulePlacementDirectEffectDomainRegistration,
   createSQLiteSessionDirectEffectDomainRegistration,
+  createSQLiteSessionSubmissionRouteEffectDomainRegistration,
   createSQLiteSubmissionTriageDirectEffectDomainRegistration,
   createSQLiteTaskDirectEffectDomainRegistration,
   createSQLiteIntakeDirectEntryEffectDomainRegistration,
@@ -2515,6 +2519,14 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       eventRelationships,
       newSessionId: () => crypto.randomUUID()
     });
+    const sessionSubmissionRouteDomain =
+      createSQLiteSessionSubmissionRouteEffectDomainRegistration({
+        sqlite: database.sqlite,
+        workspaceId,
+        sessions: sessionRepository,
+        decisions: decisionRepository,
+        eventRelationships
+      });
     const decisionDirectDomain = createSQLiteDecisionDirectEffectDomainRegistration({
       sqlite: database.sqlite,
       workspaceId,
@@ -2831,6 +2843,10 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
         }),
         Object.freeze({
           policy: SESSION_MANAGE_ACCESS_POLICY,
+          permissionId: 'schedule.manage' as const
+        }),
+        Object.freeze({
+          policy: SESSION_SUBMISSION_ROUTE_ACCESS_POLICY,
           permissionId: 'schedule.manage' as const
         }),
         Object.freeze({
@@ -3927,6 +3943,25 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       idempotencyCredentialProfile: sessionProfiles.idempotencyCredential,
       idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(sessionProfiles.idempotencyCredential)
     });
+    const sessionSubmissionRouteOperations = createSessionSubmissionRouteOperationModule({
+      workspaceId,
+      currentAuthority,
+      currentEvent,
+      clock,
+      ids: Object.freeze({
+        newInvocationId: () => parseInvocationId(crypto.randomUUID())
+      }),
+      authorityPrincipalKeyProfile: sessionProfiles.authorityPrincipal,
+      scopePartitionProfile: sessionProfiles.scopePartition,
+      requestCanonicalizationProfile: sessionProfiles.requestCanonicalization,
+      requestHashSealer: cryptoProfiles.requestHashSealer(
+        SESSION_SUBMISSION_ROUTE_REQUEST_HASH_PROFILE
+      ),
+      idempotencyCredentialProfile: sessionProfiles.idempotencyCredential,
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(
+        sessionProfiles.idempotencyCredential
+      )
+    });
     const fieldRegistryOperations = createFieldRegistryOperationModule({
       workspaceId,
       policies: Object.freeze({
@@ -4859,6 +4894,7 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       ...programVocabularyMergeDomains,
       schedulePlacementDirectDomain,
       sessionDirectDomain,
+      sessionSubmissionRouteDomain,
       ...intakeFormWriteDomains,
       fieldRegistryDirectDomain,
       submissionTriageDirectDomain,
@@ -4937,6 +4973,7 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       schedulePlacementDirectOperations,
       sessionOperations,
       sessionDirectOperations,
+      sessionSubmissionRouteOperations,
       fieldRegistryOperations,
       intakeReadOperations,
       intakeFormWriteOperations,

@@ -403,6 +403,18 @@ export class SQLiteDecisionRepository implements DecisionTransactionPort,
     return decisionMutationResultFromPlan(parsed);
   }
 
+  /** Cross-owner Session routing uses the same guarded origin writer as acceptance. */
+  insertSubmissionSessionOrigin(origin: SubmissionSessionOriginDto): void {
+    if (!this.input.sqlite.inTransaction) throw new SQLiteDecisionError('transaction_required');
+    this.insertOrigin(origin.scope, parseSubmissionSessionOrigin(origin));
+  }
+
+  /** Exact receipt recovery removes only the origin image that attach committed. */
+  deleteSubmissionSessionOrigin(origin: SubmissionSessionOriginDto): void {
+    if (!this.input.sqlite.inTransaction) throw new SQLiteDecisionError('transaction_required');
+    this.deleteOrigin(origin.scope, parseSubmissionSessionOrigin(origin));
+  }
+
   /**
    * Seeds `invited` engagements for one accepted row inside the hosting
    * transaction. The person set is the graduation's candidate participants;

@@ -8,6 +8,7 @@
   "scripts": { "check": "tsc --noEmit", "test": "bun test" },
   "dependencies": {
     "@jooevents/contracts": "workspace:*",
+    "@jooevents/engagement": "workspace:*",
     "@jooevents/intake": "workspace:*",
     "@jooevents/kernel": "workspace:*",
     "@jooevents/program": "workspace:*",
