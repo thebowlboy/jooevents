@@ -137,6 +137,16 @@ export const workspaceOverviewOperationsMetricSchema = z.union([
   unavailableMetricSchema
 ]);
 
+export const workspaceOverviewReviewersMetricSchema = z.union([
+  z.strictObject({ kind: z.literal('exact'), total: safeCountSchema }),
+  unavailableMetricSchema
+]);
+
+export const workspaceOverviewTemplatesMetricSchema = z.union([
+  z.strictObject({ kind: z.literal('exact'), total: safeCountSchema }),
+  unavailableMetricSchema
+]);
+
 export const workspaceOverviewTriageMetricSchema = z.union([
   z.strictObject({
     kind: z.literal('exact'),
@@ -223,12 +233,14 @@ export const workspaceOverviewMetricsSchema = z.strictObject({
   operations: workspaceOverviewOperationsMetricSchema,
   triage: workspaceOverviewTriageMetricSchema,
   reviews: workspaceOverviewReviewsMetricSchema,
+  reviewers: workspaceOverviewReviewersMetricSchema,
   decisions: workspaceOverviewDecisionsMetricSchema,
   engagements: workspaceOverviewEngagementsMetricSchema,
   sessions: workspaceOverviewSessionsMetricSchema,
   communications: workspaceOverviewCommunicationsMetricSchema,
   // Optional while older deployment adapters roll forward to this additive projection.
-  attention: workspaceOverviewAttentionMetricSchema.optional()
+  attention: workspaceOverviewAttentionMetricSchema.optional(),
+  templates: workspaceOverviewTemplatesMetricSchema
 });
 
 export const workspaceOverviewHistoryDomainSchema = z.enum([

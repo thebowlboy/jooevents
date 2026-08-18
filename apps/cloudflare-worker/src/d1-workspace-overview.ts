@@ -470,6 +470,9 @@ export function createD1WorkspaceOverviewReadSource(input: {
           (SELECT COUNT(*) ${selected('decision_heads')}) AS decided,
           (SELECT COUNT(*) ${selected('intake_submission_heads')}) AS submissions`)
           .bind(workspaceId, workspaceId, workspaceId, workspaceId),
+        input.database.prepare(`SELECT COUNT(*) AS total
+          ${selected('reviewer_roster_records')} AND state = 'included'`)
+          .bind(workspaceId, workspaceId),
         input.database.prepare(`SELECT COUNT(*) AS total,
           COALESCE(SUM(state = 'confirmed'),0) AS confirmed
           ${selected('engagement_heads')} AND state IN ('invited','confirmed')`)
@@ -488,6 +491,8 @@ export function createD1WorkspaceOverviewReadSource(input: {
               FROM event_spine_workspace_sets WHERE workspace_id = ?)
               AND delivery.state = 'accepted') AS sent`)
           .bind(workspaceId, workspaceId, workspaceId, workspaceId),
+        input.database.prepare(`SELECT COUNT(*) AS total
+          ${selected('template_artifact_heads')}`).bind(workspaceId, workspaceId),
         input.database.prepare(`WITH selected AS (
           SELECT current_event_id AS event_id FROM event_spine_workspace_sets
             WHERE workspace_id = ?
@@ -535,10 +540,12 @@ export function createD1WorkspaceOverviewReadSource(input: {
           operations: unavailable,
           triage: unavailable,
           reviews: unavailable,
+          reviewers: unavailable,
           decisions: unavailable,
           engagements: unavailable,
           sessions: unavailable,
-          communications: unavailable
+          communications: unavailable,
+          templates: unavailable
         };
       } else {
         const forms = statusCounts(one(
@@ -578,14 +585,20 @@ export function createD1WorkspaceOverviewReadSource(input: {
           throw new D1WorkspaceOverviewError('count_evidence_corrupt');
         }
         const engagements = subsetCounts(one(
-          results[11] as D1Result<EngagementCountRow>, 'count_evidence_corrupt'
+          results[12] as D1Result<EngagementCountRow>, 'count_evidence_corrupt'
         ), 'total', 'confirmed');
+        const reviewers = one(
+          results[11] as D1Result<TotalCountRow>, 'count_evidence_corrupt'
+        );
         const sessions = subsetCounts(one(
-          results[12] as D1Result<SessionCountRow>, 'count_evidence_corrupt'
+          results[13] as D1Result<SessionCountRow>, 'count_evidence_corrupt'
         ), 'total', 'placed');
         const communications = subsetCounts(one(
-          results[13] as D1Result<CommunicationCountRow>, 'count_evidence_corrupt'
+          results[14] as D1Result<CommunicationCountRow>, 'count_evidence_corrupt'
         ), 'recipients', 'sent');
+        const templates = one(
+          results[15] as D1Result<TotalCountRow>, 'count_evidence_corrupt'
+        );
         metrics = {
           forms: { kind: 'exact', ...forms },
           submissions: { kind: 'exact', total: safeCount(submissions.total) },
@@ -593,6 +606,7 @@ export function createD1WorkspaceOverviewReadSource(input: {
           operations: { kind: 'exact', total: safeCount(operations.total) },
           triage: { kind: 'exact', ...triage },
           reviews: { kind: 'exact', ...reviewCounts },
+          reviewers: { kind: 'exact', total: safeCount(reviewers.total) },
           decisions: {
             kind: 'exact',
             decided,
@@ -600,7 +614,8 @@ export function createD1WorkspaceOverviewReadSource(input: {
           },
           engagements: { kind: 'exact', ...engagements },
           sessions: { kind: 'exact', ...sessions },
-          communications: { kind: 'exact', ...communications }
+          communications: { kind: 'exact', ...communications },
+          templates: { kind: 'exact', total: safeCount(templates.total) }
         };
       }
       try {
@@ -610,7 +625,7 @@ export function createD1WorkspaceOverviewReadSource(input: {
           areas: eventId === null ? noEventAreaCatalog(areaCatalog) : areaCatalog,
           metrics,
           history: history(
-            (results[14] as D1Result<HistoryRow>).results,
+            (results[16] as D1Result<HistoryRow>).results,
             historyLimit
           )
         }));

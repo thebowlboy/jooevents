@@ -23,10 +23,12 @@ describe('workspace overview contract', () => {
         operations: { kind: 'unavailable', reason: 'event_required' },
         triage: { kind: 'unavailable', reason: 'event_required' },
         reviews: { kind: 'unavailable', reason: 'event_required' },
+        reviewers: { kind: 'unavailable', reason: 'event_required' },
         decisions: { kind: 'unavailable', reason: 'event_required' },
         engagements: { kind: 'unavailable', reason: 'event_required' },
         sessions: { kind: 'unavailable', reason: 'event_required' },
-        communications: { kind: 'unavailable', reason: 'event_required' }
+        communications: { kind: 'unavailable', reason: 'event_required' },
+        templates: { kind: 'unavailable', reason: 'event_required' }
       },
       history: { total: 0, truncated: false, threads: [] }
     }).event.kind).toBe('no_event');
@@ -44,10 +46,12 @@ describe('workspace overview contract', () => {
         operations: { kind: 'unavailable', reason: 'event_required' },
         triage: { kind: 'unavailable', reason: 'event_required' },
         reviews: { kind: 'unavailable', reason: 'event_required' },
+        reviewers: { kind: 'unavailable', reason: 'event_required' },
         decisions: { kind: 'unavailable', reason: 'event_required' },
         engagements: { kind: 'unavailable', reason: 'event_required' },
         sessions: { kind: 'unavailable', reason: 'event_required' },
-        communications: { kind: 'unavailable', reason: 'event_required' }
+        communications: { kind: 'unavailable', reason: 'event_required' },
+        templates: { kind: 'unavailable', reason: 'event_required' }
       },
       history: { total: 0, truncated: false, threads: [] }
     })).toThrow();
@@ -99,10 +103,12 @@ describe('workspace overview contract', () => {
         operations: { kind: 'unavailable', reason: 'event_required' },
         triage: { kind: 'unavailable', reason: 'event_required' },
         reviews: { kind: 'unavailable', reason: 'event_required' },
+        reviewers: { kind: 'unavailable', reason: 'event_required' },
         decisions: { kind: 'unavailable', reason: 'event_required' },
         engagements: { kind: 'unavailable', reason: 'event_required' },
         sessions: { kind: 'unavailable', reason: 'event_required' },
-        communications: { kind: 'unavailable', reason: 'event_required' }
+        communications: { kind: 'unavailable', reason: 'event_required' },
+        templates: { kind: 'unavailable', reason: 'event_required' }
       }
     } as const;
     expect(workspaceOverviewProjectionSchema.safeParse({
@@ -173,10 +179,12 @@ describe('workspace overview contract', () => {
       operations: { kind: 'exact', total: 0 },
       triage: { kind: 'exact', arrived: 1, sorted: 2 },
       reviews: { kind: 'exact', rounds: 1, assignments: 1, committed: 2 },
+      reviewers: { kind: 'exact', total: 0 },
       decisions: { kind: 'exact', decided: 0, undecided: 0 },
       engagements: { kind: 'exact', total: 1, confirmed: 2 },
       sessions: { kind: 'exact', total: 1, placed: 2 },
-      communications: { kind: 'exact', recipients: 1, sent: 2 }
+      communications: { kind: 'exact', recipients: 1, sent: 2 },
+      templates: { kind: 'exact', total: 0 }
     } as const;
     const candidate = {
       schemaVersion: 1,

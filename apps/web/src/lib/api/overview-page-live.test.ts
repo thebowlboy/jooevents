@@ -47,10 +47,12 @@ function projection(overrides: Record<string, unknown> = {}) {
 			operations: { kind: 'exact', total: 9 },
 			triage: { kind: 'exact', arrived: 12, sorted: 4 },
 			reviews: { kind: 'exact', rounds: 1, assignments: 8, committed: 3 },
+			reviewers: { kind: 'exact', total: 6 },
 			decisions: { kind: 'exact', decided: 2, undecided: 10 },
 			engagements: { kind: 'exact', total: 4, confirmed: 1 },
 			sessions: { kind: 'exact', total: 6, placed: 2 },
-			communications: { kind: 'exact', recipients: 5, sent: 4 }
+			communications: { kind: 'exact', recipients: 5, sent: 4 },
+			templates: { kind: 'exact', total: 7 }
 		},
 		history: {
 			total: 1,
@@ -124,7 +126,9 @@ describe('live Overview page port', () => {
 					timezone: 'Asia/Singapore'
 				},
 				arrivals: null,
-				navCounts: { submissions: '12' },
+				navCounts: {
+					submissions: '12', review: '38%', speakers: '4', reviewers: '6', templates: '7'
+				},
 				stats: [
 					{ label: 'Forms', value: '5', sub: '2 open · 1 draft · 2 closed' },
 					{ label: 'Submissions', value: '12', sub: '12 recorded submissions' },
@@ -482,7 +486,8 @@ describe('live Overview page port', () => {
 			event: { schemaVersion: 1, kind: 'no_event', eventSetVersion: 11 },
 			metrics: Object.fromEntries([
 				'forms', 'submissions', 'programVocabulary', 'operations', 'triage',
-				'reviews', 'decisions', 'engagements', 'sessions', 'communications'
+				'reviews', 'reviewers', 'decisions', 'engagements', 'sessions',
+				'communications', 'templates'
 			].map((metric) => [metric, { kind: 'unavailable', reason: 'event_required' }]))
 		});
 		const port = createLiveOverviewPagePort({

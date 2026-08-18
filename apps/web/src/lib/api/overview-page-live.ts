@@ -605,11 +605,23 @@ function mapLiveSummary(
 	deadlines: DeadlineRead
 ): OverviewPageSummary {
 	const submissions = projection.metrics.submissions;
+	const reviews = projection.metrics.reviews;
+	const reviewers = projection.metrics.reviewers;
+	const engagements = projection.metrics.engagements;
+	const templates = projection.metrics.templates;
 	const activity = historyActivity(projection.history.threads);
 	return {
 		event: eventInfo(projection.event),
 		lockedAreas: lockedAreas(projection),
-		navCounts: submissions.kind === 'exact' ? { submissions: String(submissions.total) } : {},
+		navCounts: {
+			...(submissions.kind === 'exact' ? { submissions: String(submissions.total) } : {}),
+			...(reviews.kind === 'exact' && reviews.assignments > 0
+				? { review: `${Math.round((reviews.committed / reviews.assignments) * 100)}%` }
+				: {}),
+			...(engagements.kind === 'exact' ? { speakers: String(engagements.total) } : {}),
+			...(reviewers.kind === 'exact' ? { reviewers: String(reviewers.total) } : {}),
+			...(templates.kind === 'exact' ? { templates: String(templates.total) } : {})
+		},
 		// The arrival window needs per-submission instants and the operator's own
 		// visit rotation; the overview projection carries neither yet, so the tile
 		// stays absent rather than being fabricated from a total.

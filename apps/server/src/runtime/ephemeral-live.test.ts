@@ -2266,10 +2266,12 @@ describe('ephemeral live Foundation server composition', () => {
           operations: { kind: 'unavailable', reason: 'event_required' },
           triage: { kind: 'unavailable', reason: 'event_required' },
           reviews: { kind: 'unavailable', reason: 'event_required' },
+          reviewers: { kind: 'unavailable', reason: 'event_required' },
           decisions: { kind: 'unavailable', reason: 'event_required' },
           engagements: { kind: 'unavailable', reason: 'event_required' },
           sessions: { kind: 'unavailable', reason: 'event_required' },
-          communications: { kind: 'unavailable', reason: 'event_required' }
+          communications: { kind: 'unavailable', reason: 'event_required' },
+          templates: { kind: 'unavailable', reason: 'event_required' }
         }
       },
       correlationId: noEventOverviewCorrelation
@@ -2645,6 +2647,7 @@ describe('ephemeral live Foundation server composition', () => {
           operations: { kind: 'exact', total: expect.any(Number) },
           triage: { kind: 'exact', arrived: 0, sorted: 0 },
           reviews: { kind: 'exact', rounds: 0, assignments: 0, committed: 0 },
+          reviewers: { kind: 'exact', total: 0 },
           decisions: { kind: 'exact', decided: 0, undecided: 0 },
           engagements: { kind: 'exact', total: 0, confirmed: 0 },
           sessions: { kind: 'exact', total: 0, placed: 0 },
@@ -2653,7 +2656,8 @@ describe('ephemeral live Foundation server composition', () => {
             kind: 'exact', resultsNotSent: 0, overdueSpeakerTasks: 0,
             uncoveredReviews: 0, sessionsAwaitingPlacement: 0,
             sessionsMissingSpeakers: 0, failedDeliveries: 0
-          }
+          },
+          templates: { kind: 'exact', total: 0 }
         },
         history: {
           total: 1,

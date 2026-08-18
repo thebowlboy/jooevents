@@ -304,10 +304,12 @@ export class SQLiteWorkspaceOverviewProjection {
       operations: { kind: 'unavailable' as const, reason: 'event_required' as const },
       triage: { kind: 'unavailable' as const, reason: 'event_required' as const },
       reviews: { kind: 'unavailable' as const, reason: 'event_required' as const },
+      reviewers: { kind: 'unavailable' as const, reason: 'event_required' as const },
       decisions: { kind: 'unavailable' as const, reason: 'event_required' as const },
       engagements: { kind: 'unavailable' as const, reason: 'event_required' as const },
       sessions: { kind: 'unavailable' as const, reason: 'event_required' as const },
-      communications: { kind: 'unavailable' as const, reason: 'event_required' as const }
+      communications: { kind: 'unavailable' as const, reason: 'event_required' as const },
+      templates: { kind: 'unavailable' as const, reason: 'event_required' as const }
     } : this.#readMetrics(workspaceId, eventId, this.input.now?.() ?? new Date().toISOString());
     const rows = this.input.sqlite.query<HistoryRow,
       [WorkspaceId, string | null, string | null, string | null, string | null]>(HISTORY_SQL)
@@ -389,6 +391,11 @@ export class SQLiteWorkspaceOverviewProjection {
       rounds: safeCount(reviews.rounds),
       ...subsetCounts(reviews, 'assignments', 'committed')
     };
+    const reviewers = this.input.sqlite.query<TotalCountRow, [WorkspaceId, string]>(`
+      SELECT COUNT(*) AS total FROM reviewer_roster_records
+       WHERE workspace_id = ? AND event_id = ? AND state = 'included'
+    `).get(workspaceId, eventId);
+    if (!reviewers) throw new SQLiteWorkspaceOverviewError('count_evidence_corrupt');
     const decisions = this.input.sqlite.query<DecisionCountRow,
       [WorkspaceId, string, WorkspaceId, string]>(`
       SELECT
@@ -536,6 +543,11 @@ export class SQLiteWorkspaceOverviewProjection {
         || disposition === 'permanent_bounce'
         || disposition === 'delivery_failed';
     }).length;
+    const templates = this.input.sqlite.query<TotalCountRow, [WorkspaceId, string]>(`
+      SELECT COUNT(*) AS total FROM template_artifact_heads
+       WHERE workspace_id = ? AND event_id = ?
+    `).get(workspaceId, eventId);
+    if (!templates) throw new SQLiteWorkspaceOverviewError('count_evidence_corrupt');
     return {
       forms: { kind: 'exact' as const, ...forms },
       submissions: { kind: 'exact' as const, total: safeCount(submissions.total) },
@@ -544,6 +556,7 @@ export class SQLiteWorkspaceOverviewProjection {
       operations: { kind: 'exact' as const, total: safeCount(operations.total) },
       triage: { kind: 'exact' as const, ...triage },
       reviews: { kind: 'exact' as const, ...reviewCounts },
+      reviewers: { kind: 'exact' as const, total: safeCount(reviewers.total) },
       decisions: {
         kind: 'exact' as const,
         decided,
@@ -560,7 +573,8 @@ export class SQLiteWorkspaceOverviewProjection {
         sessionsAwaitingPlacement: safeCount(attention.sessions_awaiting_placement),
         sessionsMissingSpeakers: safeCount(attention.sessions_missing_speakers),
         failedDeliveries: safeCount(failedDeliveries)
-      }
+      },
+      templates: { kind: 'exact' as const, total: safeCount(templates.total) }
     };
   }
 }
