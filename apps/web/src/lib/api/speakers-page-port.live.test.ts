@@ -309,6 +309,31 @@ describe('live tuned Speakers page port', () => {
 		}]);
 	});
 
+	test('carries one canonical person identity across an existing-roster engagement', async () => {
+		const secondEngagementId = id(41);
+		const port = composePort({
+			engagements: fakeEngagements({
+				served: snapshot([
+					invitedHead(),
+					invitedHead({
+						id: secondEngagementId,
+						sessionId: id(11),
+						submissionId: null,
+						seededByDecision: null,
+						source: { kind: 'organizer', id: id(81), version: 1 }
+					})
+				])
+			})
+		});
+
+		const rows = await port.speakers.list();
+		expect(rows.map((row) => ({ id: row.id, personId: row.personId, name: row.name, email: row.email })))
+			.toEqual([
+				{ id: engagementId, personId, name: 'Amina Diallo', email: 'amina@example.org' },
+				{ id: secondEngagementId, personId, name: 'Amina Diallo', email: 'amina@example.org' }
+			]);
+	});
+
 	test('derives public-content release from the event profile policy and exact approvals', async () => {
 		const automatic = composePort({ profiles: fakeProfiles({ reviewRequired: false }) });
 		expect((await automatic.speakers.list())[0]?.contentApproved).toBe(true);

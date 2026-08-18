@@ -306,6 +306,30 @@ export function createLiveSpeakersPagePort(input: {
 			readNames(submissionIds),
 			readEmails(submissionIds)
 		]);
+		const namesByPerson = new Map<string, Set<string>>();
+		const emailsByPerson = new Map<string, Set<string>>();
+		for (const head of snapshot.engagements) {
+			if (head.submissionId === null) continue;
+			const name = names.get(head.submissionId);
+			if (name !== undefined) {
+				const values = namesByPerson.get(head.personId) ?? new Set<string>();
+				values.add(name);
+				namesByPerson.set(head.personId, values);
+			}
+			const email = emails.get(head.submissionId);
+			if (email !== undefined) {
+				const values = emailsByPerson.get(head.personId) ?? new Set<string>();
+				values.add(email);
+				emailsByPerson.set(head.personId, values);
+			}
+		}
+		const onePersonFact = (
+			facts: ReadonlyMap<string, ReadonlySet<string>>,
+			personId: string
+		): string | undefined => {
+			const values = facts.get(personId);
+			return values?.size === 1 ? values.values().next().value : undefined;
+		};
 		const sessionsById = new Map(catalog.sessions.map((session) => [session.id, session]));
 		const lineupByPerson = new Map(lineup.entries.map((entry) => [entry.personId, entry]));
 		const taskAssignments = taskBoard?.assignments.map((entry) => taskAssignmentView(entry)) ?? [];
@@ -318,10 +342,16 @@ export function createLiveSpeakersPagePort(input: {
 			return {
 				id: head.id,
 				personId: head.personId,
-				// The empty value is the typed absence for a row without a mounted
-				// name or address owner — never an invented person.
-				name: (head.submissionId !== null ? names.get(head.submissionId) : undefined) ?? '',
-				email: (head.submissionId !== null ? emails.get(head.submissionId) : undefined) ?? '',
+				// A person may have more than one session engagement. An engagement
+				// added from the existing roster has no Submission of its own, so it
+				// inherits a fact only when this viewer can resolve exactly one value
+				// from another engagement for the same canonical person.
+				name: (head.submissionId !== null ? names.get(head.submissionId) : undefined)
+					?? onePersonFact(namesByPerson, head.personId)
+					?? '',
+				email: (head.submissionId !== null ? emails.get(head.submissionId) : undefined)
+					?? onePersonFact(emailsByPerson, head.personId)
+					?? '',
 				state: webEngagementState(head),
 				sessions,
 				tasksDone: assigned.filter((entry) =>

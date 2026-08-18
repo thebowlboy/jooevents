@@ -708,13 +708,28 @@ export function createLiveSchedulePagePort(input: {
 		const peopleById = new Map<string, SpeakerRow>();
 		for (const person of await input.speakers.list()) {
 			if (person.personId === undefined) continue;
-			if (peopleById.has(person.personId)) {
+			const current = peopleById.get(person.personId);
+			if (current === undefined) {
+				peopleById.set(person.personId, person);
+				continue;
+			}
+			if (
+				(current.name !== '' && person.name !== '' && current.name !== person.name)
+				|| (current.email !== '' && person.email !== '' && current.email !== person.email)
+			) {
 				throw new SchedulePageLiveError({
 					code: 'session_participant_projection_ambiguous',
-					reason: 'The current speaker roster contains more than one row for the same person.'
+					reason: 'The current speaker roster contains conflicting identity details for the same person.'
 				});
 			}
-			peopleById.set(person.personId, person);
+			const sessions = new Map(current.sessions.map((session) => [session.id, session]));
+			for (const session of person.sessions) sessions.set(session.id, session);
+			peopleById.set(person.personId, {
+				...current,
+				name: current.name || person.name,
+				email: current.email || person.email,
+				sessions: [...sessions.values()]
+			});
 		}
 		return peopleById;
 	}

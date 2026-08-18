@@ -234,11 +234,20 @@ describe('live Schedule page correction boundary', () => {
 			attributionMutations: { source: { kind: 'live' } } as never,
 			settings: { get: async () => ({}) } as never,
 			publication: { overview: async () => ({ currentProgramRelease: null, surfaceHeads: [] }) } as never,
-			speakers: { list: async () => [{
-				id: id(44), personId, name: 'Ada Lovelace', email: 'ada@example.test',
-				state: 'confirmed', sessions: [], tasksDone: 0, tasksTotal: 0, overdueTasks: 0,
-				publiclyVisible: true, contentApproved: false, position: 0
-			}], profile: async () => null } as never,
+			speakers: { list: async () => [
+				{
+					id: id(44), personId, name: 'Ada Lovelace', email: 'ada@example.test',
+					state: 'confirmed', sessions: [{ id: id(42), title: 'Opening' }],
+					tasksDone: 0, tasksTotal: 0, overdueTasks: 0,
+					publiclyVisible: true, contentApproved: false, position: 0
+				},
+				{
+					id: id(45), personId, name: '', email: '', state: 'confirmed',
+					sessions: [{ id: id(46), title: 'Panel' }],
+					tasksDone: 0, tasksTotal: 0, overdueTasks: 0,
+					publiclyVisible: true, contentApproved: false, position: 1
+				}
+			], profile: async () => null } as never,
 			templates: {} as never
 		});
 
