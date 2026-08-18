@@ -25,13 +25,26 @@
 		label: string | undefined,
 		templates: MessageTemplate[] | null
 	): { href: string; name: string } | null {
+		const match = templateFor(label, templates);
+		return match ? { href: `/app/templates?template=${match.id}`, name: match.name } : null;
+	}
+
+	/**
+	 * The stored template a review label names, or null when nothing matches.
+	 * The door and the rendered body resolve through this one lookup, so a
+	 * ceremony can never link to one template while rendering another.
+	 */
+	export function templateFor(
+		label: string | undefined,
+		templates: MessageTemplate[] | null
+	): MessageTemplate | null {
 		if (!label || !templates) return null;
 		const statedName = label.split(' @ ')[0] ?? '';
 		const key = templateKeyByLabel[statedName];
 		const match = key
 			? templates.find((template) => template.key === key)
 			: templates.find((template) => template.name === statedName);
-		return match ? { href: `/app/templates?template=${match.id}`, name: match.name } : null;
+		return match ?? null;
 	}
 </script>
 

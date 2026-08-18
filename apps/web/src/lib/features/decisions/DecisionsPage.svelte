@@ -24,8 +24,11 @@
 	import ProfilePeek from '$lib/features/workspace/components/ProfilePeek.svelte';
 	import ReviewSurface, {
 		includedCount,
-		templateDoor
+		templateDoor,
+		templateFor
 	} from '$lib/features/workspace/components/ReviewSurface.svelte';
+	import RecipientEmailPeek from '$lib/features/workspace/components/RecipientEmailPeek.svelte';
+	import VerbatimBodyPeek from '$lib/features/workspace/components/VerbatimBodyPeek.svelte';
 	import ScopeChip from '$lib/features/workspace/components/ScopeChip.svelte';
 	import StandingMark from '$lib/features/workspace/components/StandingMark.svelte';
 	import SubmissionRecordDetail from '$lib/features/submissions/SubmissionRecordDetail.svelte';
@@ -49,9 +52,12 @@
 		AccoladeKey,
 		DecisionState,
 		EmailReadiness,
+		EventTheme,
 		MessageReview,
 		MessageTemplate,
 		NotificationDispatch,
+		RecipientRow,
+		RenderedEmailPreview,
 		ScoreStanding,
 		SpeakerProfile,
 		Submission,
@@ -251,6 +257,76 @@
 	// to the stored template it renders from (see `templateDoor`).
 	const notifyDoor = $derived(templateDoor(notifyReview?.templateLabel, templates));
 
+	// --------------------------------------------------- what this actually sends
+
+	/**
+	 * The send ceremony shows the outgoing email as one real recipient receives
+	 * it, from the moment the review resolves — a verdict is authorized by
+	 * reading the thing being sent, not by trusting a template's name.
+	 *
+	 * Two bodies of evidence, in order of fidelity: the stored template rendered
+	 * with this person's own resolved values, and — where the lane renders
+	 * server-side instead — the copy the sender itself produced.
+	 */
+	let previewEmail = $state<string | null>(null);
+	let theme = $state.raw<EventTheme | null>(null);
+	let rendered = $state.raw<RenderedEmailPreview | null>(null);
+	let renderedFor: string | null = null;
+
+	/** The event's own name, for the rendered email's masthead and footer. */
+	let eventName = $state('');
+	/**
+	 * The template the *selected* person's copy renders from. A decision batch
+	 * mails an acceptance to one speaker and a waitlist notice to another, so the
+	 * row's own key wins over the batch's single stated template; the stated one
+	 * is the fallback for a send where everyone gets the same letter.
+	 */
+	const notifyTemplate = $derived.by(() => {
+		const key = previewRecipient?.templateKey;
+		const own = key ? (templates?.find((entry) => entry.key === key) ?? null) : null;
+		return own ?? templateFor(notifyReview?.templateLabel, templates);
+	});
+	const previewRecipient = $derived(
+		notifyReview?.recipients.find(
+			(recipient) => recipient.email === previewEmail && recipient.state === 'included'
+		) ?? null
+	);
+
+	/** Pressing a row switches whose copy is shown; the panel itself stays. */
+	function selectPreview(recipient: RecipientRow) {
+		previewEmail = recipient.email;
+	}
+
+	// Reactive rather than set on open, so a review that resolves after the
+	// dialog is already up still gets its default preview.
+	$effect(() => {
+		if (!notifyOpen || previewEmail) return;
+		const first = notifyReview?.recipients.find((recipient) => recipient.state === 'included');
+		if (first) previewEmail = first.email;
+	});
+
+	// The server-rendered copy for whoever is selected, when this composition
+	// renders bodies server-side. Keyed by resolution id so switching recipients
+	// re-asks and re-selecting the same one does not.
+	$effect(() => {
+		const ask = port.decisions.previewRecipient;
+		const id = previewRecipient?.recipientResolutionId;
+		if (!ask || !id) {
+			if (!id) rendered = null;
+			return;
+		}
+		if (renderedFor === id) return;
+		renderedFor = id;
+		void ask(id).then(
+			(next) => {
+				if (renderedFor === id) rendered = next;
+			},
+			() => {
+				if (renderedFor === id) rendered = null;
+			}
+		);
+	});
+
 	const uid = $props.id();
 
 	// Evidence from the already-fetched workspace summary decides whether the
@@ -414,7 +490,16 @@
 			hasPlan = planList.length > 0;
 			plansRead = true;
 			scaleMax = planList[0]?.scaleMax ?? 5;
-			if (settings) subject = `Your submission decision — ${settings.name}`;
+			if (settings) {
+				subject = `Your submission decision — ${settings.name}`;
+				eventName = settings.name;
+			}
+			// The brand behind the rendered preview. Optional on the port, so a
+			// composition without one simply has no template-rendered body to show.
+			void port.theme?.get().then(
+				(brand) => (theme = brand),
+				() => (theme = null)
+			);
 			accoladeDefs = defs;
 			myCommitted = queue.filter((item) => item.committed).map((item) => item.submissionId);
 			myAccolades = Object.fromEntries(
@@ -1619,7 +1704,29 @@
 				readiness={notifyReadiness}
 				previewLabel="Their decision line"
 				subject={subjectField}
-				templateDoor={notifyDoor} />
+				templateDoor={notifyDoor}
+				onPreview={selectPreview}
+				previewingEmail={previewEmail} />
+			{#if notifyTemplate && theme && previewRecipient}
+				<!-- The stored template as this person receives it: their own
+				     resolved values, under the subject as it now reads. -->
+				<RecipientEmailPeek
+					template={notifyTemplate}
+					{theme}
+					{eventName}
+					eventMeta=""
+					recipient={previewRecipient}
+					{subject}
+					hint="Press any included recipient’s line above to see their copy." />
+			{:else if rendered && previewRecipient}
+				<!-- This lane renders server-side, so the ceremony shows the copy the
+				     sender itself produced rather than re-deriving one. -->
+				<VerbatimBodyPeek
+					subject={rendered.subject}
+					body={rendered.plainText}
+					warningCodes={rendered.warningCodes}
+					note={`What ${previewRecipient.name} receives — press any included recipient’s line above to see their copy.`} />
+			{/if}
 		{/if}
 	{:else}
 		<!-- The committed send stated as the port recorded it: what a provider

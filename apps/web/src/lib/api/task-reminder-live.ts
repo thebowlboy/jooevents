@@ -1,4 +1,5 @@
 import type { CommunicationsAuthoringPort } from './communications-authoring-port';
+import { TASK_REMINDER_BODY } from './task-reminder-copy';
 
 const PURPOSE_KEY = 'task_reminder';
 const CONTACT_PREFIX = 'task-engagement:';
@@ -44,10 +45,7 @@ export function createTaskReminderLiveSender(input: {
 				payloadKind: 'message_content', schemaVersion: 1,
 				value: {
 					kind: 'email/v1', subject,
-					body: {
-						kind: 'plain_text/v1',
-						text: 'You have one or more outstanding speaker tasks. Open your JooEvents speaker checklist to review and complete them.'
-					}
+					body: { kind: 'plain_text/v1', text: TASK_REMINDER_BODY }
 				}
 			}, actionKey('content')),
 			'content'

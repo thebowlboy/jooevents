@@ -2116,18 +2116,35 @@ export const api = {
 				waitlisted: 'Waitlisted',
 				declined: 'Declined'
 			};
+			// One send, three outcomes: an acceptance and a waitlist notice are
+			// different letters, so each row names the template its own copy
+			// renders from and carries the values that resolve it. The ceremony
+			// shows exactly that letter rather than the batch's headline one.
+			const templateKeyByDecision: Record<string, string> = {
+				accepted: 'decision-accepted',
+				waitlisted: 'decision-waitlisted',
+				declined: 'decision-declined'
+			};
 			return {
 				templateLabel: 'decision-notice @ revision 2',
 				audienceLabel: 'Selected decided submissions (current snapshot)',
 				binding: 'current_snapshot',
-				recipients: rows.flatMap((submission) =>
-					submission.speakers.map((speaker) => ({
+				recipients: rows.flatMap((submission) => {
+					const format = db.formats.find((entry) => entry.id === submission.formatId);
+					return submission.speakers.map((speaker) => ({
 						name: speaker.name,
 						email: speaker.email,
 						state: 'included' as const,
-						mergeSample: `${decisionWord[submission.decision] ?? submission.decision} — “${submission.title}”`
-					}))
-				),
+						mergeSample: `${decisionWord[submission.decision] ?? submission.decision} — “${submission.title}”`,
+						...(templateKeyByDecision[submission.decision]
+							? { templateKey: templateKeyByDecision[submission.decision] }
+							: {}),
+						mergeValues: {
+							'submission.title': submission.title,
+							...(format ? { 'submission.format': format.name } : {})
+						}
+					}));
+				}),
 				sender: 'AI Engineer <program@aie-demo.example>',
 				replyModel: 'Replies go to the organizer inbox',
 				irreversibleNote: 'Email cannot be recalled after the provider accepts it.'

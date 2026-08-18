@@ -1,4 +1,6 @@
+import type { ReminderPreview } from './tasks-page-port';
 import type {
+	EventTheme,
 	Format,
 	MutationOutcome,
 	ReviewerInviteLine,
@@ -38,5 +40,19 @@ export interface ReviewersPagePort {
 	};
 	readonly tasks: {
 		remind(reviewerIds: string[], subject: string): Promise<unknown>;
+		/**
+		 * What a reminder actually sends, so the ceremony can show it first.
+		 * Reviewer reminders ride the speaker-task reminder lane, so this is that
+		 * lane's own copy — which is why the ceremony states whose words they are
+		 * rather than implying they were written for reviewers.
+		 *
+		 * Optional: a composition that cannot answer shows no body, which is a
+		 * visible gap rather than a false promise.
+		 */
+		reminderPreview?(): Promise<ReminderPreview>;
+	};
+	/** The event brand the rendered reminder is drawn in, where one is served. */
+	readonly theme?: {
+		get(): Promise<EventTheme>;
 	};
 }

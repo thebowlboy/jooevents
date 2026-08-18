@@ -13,7 +13,7 @@
 	import { destinationLabel } from '$lib/features/workspace/navigation';
 	import type { CommunicationsPagePort } from '$lib/api/communications-page-port';
 	import { LiveRead, type LiveReadState } from '$lib/api/live-read';
-	import EmailRender from '$lib/features/templates/EmailRender.svelte';
+	import RecipientEmailPeek from '$lib/features/workspace/components/RecipientEmailPeek.svelte';
 	import ComposerShell from './ComposerShell.svelte';
 	import type {
 		CommunicationAttentionItem,
@@ -292,25 +292,11 @@
 	);
 
 	/**
-	 * One recipient's exact artifact: their name resolves `speaker.name`, their
-	 * own resolved values override the declared samples, and the live subject
-	 * line rides on top so an edit above is reflected below.
+	 * Whether there is a body to render at all. Resolving whose copy it is —
+	 * the merge overlay — belongs to the shared peek, so every send ceremony
+	 * resolves a recipient's artifact the same way.
 	 */
-	const previewedTemplate = $derived.by(() => {
-		if (!reviewTemplate || !previewRecipient) return null;
-		const values: Record<string, string> = {
-			'speaker.name': previewRecipient.name,
-			...(previewRecipient.mergeValues ?? {})
-		};
-		return {
-			...reviewTemplate,
-			subject: reviewSubject.trim() === '' ? reviewTemplate.subject : reviewSubject,
-			mergeFields: reviewTemplate.mergeFields.map((field) => ({
-				...field,
-				sample: values[field.key] ?? field.sample
-			}))
-		};
-	});
+	const previewedTemplate = $derived(reviewTemplate && previewRecipient ? reviewTemplate : null);
 
 	/** Pressing a row switches whose copy is shown; the panel itself stays. */
 	function selectPreview(recipient: RecipientRow) {
@@ -960,13 +946,14 @@
 			onPreview={reviewTemplate && theme ? selectPreview : undefined}
 			previewingEmail={previewEmail} />
 		{#if previewedTemplate && theme && previewRecipient}
-			<section class="peek" aria-label={`Email preview for ${previewRecipient.name}`}>
-				<header class="peek__head">
-					<h3 class="peek__title">What {previewRecipient.name} receives</h3>
-					<p class="peek__hint">Press any included recipient’s line above to see their copy.</p>
-				</header>
-				<EmailRender template={previewedTemplate} {theme} {eventName} {eventMeta} />
-			</section>
+			<RecipientEmailPeek
+					template={previewedTemplate}
+					{theme}
+					{eventName}
+					{eventMeta}
+					recipient={previewRecipient}
+					subject={reviewSubject}
+					hint="Press any included recipient’s line above to see their copy." />
 		{/if}
 		<p class="note note--spaced">
 			This draft has not been sent. Sending is the deliberate step: delivery starts the moment
@@ -1526,34 +1513,6 @@
 
 	.note--spaced {
 		margin-block-start: var(--je-space-4);
-	}
-
-	/* The opened recipient's artifact, below the evidence table it came from. */
-	.peek {
-		margin-block-start: var(--je-space-5);
-	}
-
-	.peek__head {
-		display: flex;
-		align-items: baseline;
-		flex-wrap: wrap;
-		gap: var(--je-space-1) var(--je-space-3);
-		margin-block-end: var(--je-space-2);
-	}
-
-	.peek__title {
-		margin: 0;
-		font-size: var(--je-font-size-xs);
-		font-weight: 600;
-		text-transform: uppercase;
-		letter-spacing: var(--je-tracking-caps);
-		color: var(--je-color-text-muted);
-	}
-
-	.peek__hint {
-		margin: 0;
-		font-size: var(--je-font-size-xs);
-		color: var(--je-color-text-subtle);
 	}
 
 	/* Narrow widths restructure: the state and its counts share the first line,

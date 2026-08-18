@@ -1113,6 +1113,39 @@ export interface RecipientRow {
 	 * `speaker.name` implicitly, so only values beyond it need stating.
 	 */
 	mergeValues?: Record<string, string>;
+	/**
+	 * The server's own handle for this person's resolved copy, when the lane
+	 * renders server-side. It is what a rendered-preview read is asked for, so a
+	 * ceremony can show the exact artifact rather than re-deriving one. Absent
+	 * wherever the body is composed from a stored template in the browser.
+	 */
+	recipientResolutionId?: string;
+	/**
+	 * The stored template this person's copy renders from, by template key, when
+	 * one send does not give everyone the same one — a decision batch mails an
+	 * acceptance to one speaker and a waitlist notice to another. Absent means
+	 * the review's single stated template covers every row.
+	 */
+	templateKey?: string;
+}
+
+/**
+ * One recipient's email as the server rendered it — the artifact itself, not a
+ * description of it.
+ *
+ * `plainText` is what a ceremony shows. The rendered HTML is deliberately not
+ * carried here: nothing in this application renders server-produced markup, and
+ * introducing the first such sink is a decision with its own review, not a
+ * side-effect of showing someone what they are about to send.
+ *
+ * `warningCodes` are the renderer's own reservations about this copy. They are
+ * surfaced rather than swallowed: a warning nobody sees is a warning that did
+ * not happen.
+ */
+export interface RenderedEmailPreview {
+	subject: string;
+	plainText: string;
+	warningCodes: string[];
 }
 
 /**
