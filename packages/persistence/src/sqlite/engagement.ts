@@ -22,6 +22,7 @@ import {
   type EngagementSeedTransactionPort
 } from '@jooevents/engagement';
 import { canonicalJsonText } from '@jooevents/kernel';
+import { SQLiteSpeakerLineupRepository } from './speaker-lineup';
 
 /** This schema contributes to the accepted epoch-2 baseline and may also serve isolated fixtures. */
 export const SQLITE_ENGAGEMENT_SQL = `
@@ -116,7 +117,10 @@ interface CountRow { readonly count: number }
  */
 export class SQLiteEngagementRepository
 implements EngagementReadPort, EngagementSeedTransactionPort {
-  constructor(private readonly sqlite: Database) {}
+  constructor(
+    private readonly sqlite: Database,
+    private readonly lineups?: Pick<SQLiteSpeakerLineupRepository, 'ensureEntries' | 'removeOrphanedEntries'>
+  ) {}
 
   readEngagementHead(scope: EngagementScopeDto, engagementId: string): EngagementHeadDto | undefined {
     if (!this.scopeExists(scope)) return undefined;
@@ -183,6 +187,10 @@ implements EngagementReadPort, EngagementSeedTransactionPort {
     if (!this.sqlite.inTransaction) throw new SQLiteEngagementError('transaction_required');
     const parsed = engagementSeedPlanSchema.parse(contribution);
     for (const row of parsed.rows) this.insertHead(parsed.input.scope, row.head);
+    this.lineups?.ensureEntries(
+      parsed.input.scope,
+      parsed.rows.map((row) => row.personId)
+    );
     return engagementSeedResultFromPlan(parsed);
   }
 
@@ -190,6 +198,10 @@ implements EngagementReadPort, EngagementSeedTransactionPort {
     if (!this.sqlite.inTransaction) throw new SQLiteEngagementError('transaction_required');
     const parsed = engagementSeedReversalPlanSchema.parse(plan);
     for (const row of parsed.rows) this.deleteSeededHead(parsed.scope, row.expectedCurrent);
+    this.lineups?.removeOrphanedEntries(
+      parsed.scope,
+      parsed.rows.map((row) => row.personId)
+    );
     return engagementSeedResultFromReversal(parsed);
   }
 

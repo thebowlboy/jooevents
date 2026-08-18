@@ -1651,7 +1651,32 @@
 					<dt>Placements</dt>
 					<dd>{publishReview.occurrences}</dd>
 				</div>
+				<div>
+					<dt>Public speakers</dt>
+					<dd>{publishReview.lineupNames.length}</dd>
+				</div>
+				<div>
+					<dt>Speaker groups</dt>
+					<dd>{publishReview.speakerGroups.length}</dd>
+				</div>
 			</dl>
+			<div class="publish-review__names">
+				<h3>Public lineup order</h3>
+				{#if publishReview.lineupNames.length === 0}
+					<p class="publish-review__none">The public lineup is empty.</p>
+				{:else}
+					<ol>
+						{#each publishReview.lineupNames as name (name)}
+							<li>{name}</li>
+						{/each}
+					</ol>
+				{/if}
+				{#if publishReview.speakerGroups.length > 0}
+					<p class="publish-review__none">
+						Groups: {publishReview.speakerGroups.join(', ')}
+					</p>
+				{/if}
+			</div>
 			<div class="publish-review__names">
 				<h3>
 					{publishReview.declassifiedNames.length === 1
@@ -3051,7 +3076,8 @@
 		font-weight: 600;
 	}
 
-	.publish-review__names ul {
+	.publish-review__names ul,
+	.publish-review__names ol {
 		display: flex;
 		flex-wrap: wrap;
 		gap: var(--je-space-1) var(--je-space-3);

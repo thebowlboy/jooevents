@@ -3136,7 +3136,14 @@ export const api = {
 				releaseNumber: (db.schedule.published ? 1 : 0) + 1,
 				sessions: sessions.size,
 				occurrences: placed,
-				declassifiedNames: names
+				declassifiedNames: names,
+				lineupNames: db.speakers
+					.filter((speaker) => speaker.publiclyVisible)
+					.sort((left, right) => left.position - right.position)
+					.map((speaker) => speaker.name),
+				speakerGroups: db.speakerCategories
+					.filter((category) => (category.status ?? 'active') === 'active')
+					.map((category) => category.name)
 				// No server draft behind the fixture, so no continuation to carry.
 			};
 		},

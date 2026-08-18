@@ -113,6 +113,7 @@ function fixture() {
     sessions: { readSessionCatalog: never },
     schedule: { readSchedule: never },
     engagements: { readEngagementSnapshot: never },
+    lineups: { readSpeakerLineupSnapshot: never },
     vocabulary: { readVocabulary: never },
     eventSettings: { readEventSettings: never },
     names: { readParticipantDisplayName: never },

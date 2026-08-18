@@ -14,6 +14,7 @@ import {
   ENGAGEMENT_REQUEST_HASH_PROFILE,
   ENGAGEMENT_READ_ACCESS_POLICY,
   ENGAGEMENT_SNAPSHOT_READ_OPERATION,
+  SPEAKER_LINEUP_SNAPSHOT_READ_OPERATION,
   createEngagementDirectOperationModule,
   createEngagementOperationModule,
   engagementDirectContributionSchema
@@ -45,18 +46,26 @@ describe('Engagement operation modules', () => {
       authorityPrincipalKeyProfile: profile,
       scopePartitionProfile: profile,
       requestCanonicalizationProfile: profile,
-      engagements: { readEngagementSnapshot: () => undefined }
+      engagements: { readEngagementSnapshot: () => undefined },
+      lineups: { readSpeakerLineupSnapshot: () => undefined }
     });
     const registry = await createOperationRegistry(module.source);
     expect(registry.operatorHttpBindings.map((binding) => ({
       operation: `${binding.operationName}@${binding.operationVersion}`,
       method: binding.method,
       path: binding.path
-    }))).toEqual([{
-      operation: `${ENGAGEMENT_SNAPSHOT_READ_OPERATION.name}@1`,
-      method: 'GET',
-      path: '/api/events/current/engagements'
-    }]);
+    }))).toEqual([
+      {
+        operation: `${ENGAGEMENT_SNAPSHOT_READ_OPERATION.name}@1`,
+        method: 'GET',
+        path: '/api/events/current/engagements'
+      },
+      {
+        operation: `${SPEAKER_LINEUP_SNAPSHOT_READ_OPERATION.name}@1`,
+        method: 'GET',
+        path: '/api/events/current/speaker-lineup'
+      }
+    ]);
     expect(registry.safeManifest.operations[0]).toMatchObject({
       effect: 'read', maxRisk: 'low', consequenceTags: []
     });

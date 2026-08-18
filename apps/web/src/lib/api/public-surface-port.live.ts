@@ -21,6 +21,7 @@ import type {
 	FormSummary,
 	PublicSpeakerCard,
 	ScheduleState,
+	SpeakerCategory,
 	SurfaceTemplate,
 	Track
 } from './types';
@@ -241,18 +242,27 @@ export function mapServedTracks(served: ServedPublicScheduleDto): Track[] {
 	return [...tracks.values()];
 }
 
-/**
- * Released speaker cards. A served card carries no person identifier at all,
- * so the card id is positional within this response — stable for one render,
- * never an address for a person.
- */
+/** Released speaker cards. New releases carry a stable opaque public id. */
 export function mapServedRoster(served: ServedPublicRosterDto): PublicSpeakerCard[] {
 	return served.speakers.map((speaker, index) => ({
-		id: `released-speaker:${index}`,
+		id: speaker.id ?? `released-speaker:${index}`,
 		name: speaker.name,
 		links: [],
 		sessions: speaker.sessions.map((session) => ({ id: session.sessionId, title: session.title })),
+		...(speaker.categoryId === undefined || speaker.categoryId === null
+			? {}
+			: { categoryId: speaker.categoryId }),
 		provisional: false
+	}));
+}
+
+export function mapServedSpeakerCategories(served: ServedPublicRosterDto): SpeakerCategory[] {
+	return (served.categories ?? []).map((category) => ({
+		id: category.id,
+		name: category.name,
+		accent: category.accent,
+		status: 'active',
+		speakerCount: served.speakers.filter((speaker) => speaker.categoryId === category.id).length
 	}));
 }
 
@@ -521,7 +531,10 @@ export function createLivePublicSurfacePort(
 				const served = await schedule();
 				return served === null ? [] : mapServedTracks(served);
 			},
-			speakerCategories: async () => []
+			speakerCategories: async () => {
+				const served = await roster();
+				return served === null ? [] : mapServedSpeakerCategories(served);
+			}
 		},
 		speakers: {
 			publicRoster: async () => {

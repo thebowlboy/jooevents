@@ -145,11 +145,14 @@ import {
   ENGAGEMENT_MANAGE_ACCESS_POLICY,
   ENGAGEMENT_REQUEST_HASH_PROFILE,
   ENGAGEMENT_READ_ACCESS_POLICY,
+  SPEAKER_LINEUP_MANAGE_ACCESS_POLICY,
+  SPEAKER_LINEUP_REQUEST_HASH_PROFILE,
   PORTAL_ENGAGEMENT_RESPOND_REQUEST_HASH_PROFILE,
   PORTAL_PARTICIPANT_ACT_ACCESS_POLICY,
   PORTAL_PARTICIPANT_READ_ACCESS_POLICY,
   createEngagementDirectOperationModule,
   createEngagementOperationModule,
+  createSpeakerLineupDirectOperationModule,
   createParticipantCurrentAuthorityResolver,
   createParticipantPortalOperationModule
 } from '@jooevents/engagement-operations';
@@ -363,6 +366,8 @@ import {
   createSQLiteDeadlineDirectEffectDomainRegistration,
   createSQLiteDecisionDirectEffectDomainRegistration,
   createSQLiteEngagementDirectEffectDomainRegistration,
+  createSQLiteSpeakerLineupDirectEffectDomainRegistration,
+  SQLiteSpeakerLineupRepository,
   createSQLiteEventEffectDomainRegistration,
   createSQLiteEventSelectEffectDomainRegistration,
   createSQLiteEventSettingsDirectEffectDomainRegistration,
@@ -812,6 +817,25 @@ const engagementProfiles = Object.freeze({
   }),
   idempotencyCredential: Object.freeze({
     key: 'key-profile.engagement.idempotency-credential',
+    version: parseContractVersion(1)
+  })
+});
+
+const speakerLineupProfiles = Object.freeze({
+  authorityPrincipal: Object.freeze({
+    key: 'key-profile.speaker-lineup.operator-principal',
+    version: parseContractVersion(1)
+  }),
+  scopePartition: Object.freeze({
+    key: 'key-profile.speaker-lineup.current-event-scope',
+    version: parseContractVersion(1)
+  }),
+  requestCanonicalization: Object.freeze({
+    key: 'key-profile.speaker-lineup.request-canonicalization',
+    version: parseContractVersion(1)
+  }),
+  idempotencyCredential: Object.freeze({
+    key: 'key-profile.speaker-lineup.idempotency-credential',
     version: parseContractVersion(1)
   })
 });
@@ -2233,7 +2257,8 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
     const decisionRepository = new SQLiteDecisionRepository({
       sqlite: database.sqlite,
       sessions: sessionRepository,
-      environment: decisionEnvironment
+      environment: decisionEnvironment,
+      lineups: new SQLiteSpeakerLineupRepository(database.sqlite)
     });
     const taskRepository = new SQLiteTaskRepository(database.sqlite);
     const taskDeadlineRepository = new SQLiteDeadlineRepository(database.sqlite, events);
@@ -2477,6 +2502,12 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       eventRelationships,
       verifiedInboxAttribution: airtableVerifiedInboxAttribution
     });
+    const speakerLineupDirectDomain = createSQLiteSpeakerLineupDirectEffectDomainRegistration({
+      sqlite: database.sqlite,
+      workspaceId,
+      eventRelationships,
+      newCategoryId: () => crypto.randomUUID()
+    });
     const taskDirectDomain = createSQLiteTaskDirectEffectDomainRegistration({
       sqlite: database.sqlite,
       workspaceId,
@@ -2579,6 +2610,7 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       sessions: sessionRepository,
       schedule: schedulePlacementDirectDomain.scheduleRead,
       engagements: engagementReadRepository,
+      lineups: new SQLiteSpeakerLineupRepository(database.sqlite),
       vocabulary: vocabularyRead,
       eventSettings: eventSettingsRepository,
       names: releaseParticipantNames,
@@ -2823,6 +2855,10 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
         }),
         Object.freeze({
           policy: ENGAGEMENT_MANAGE_ACCESS_POLICY,
+          permissionId: 'event.manage' as const
+        }),
+        Object.freeze({
+          policy: SPEAKER_LINEUP_MANAGE_ACCESS_POLICY,
           permissionId: 'event.manage' as const
         }),
         Object.freeze({
@@ -4101,7 +4137,8 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       requestCanonicalizationProfile: engagementProfiles.requestCanonicalization,
       // The same repository instance the decision transaction seeds through;
       // nothing here reads a second copy of engagement state.
-      engagements: decisionRepository.engagements
+      engagements: decisionRepository.engagements,
+      lineups: new SQLiteSpeakerLineupRepository(database.sqlite)
     });
     const engagementDirectOperations = createEngagementDirectOperationModule({
       workspaceId,
@@ -4117,6 +4154,22 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       requestHashSealer: cryptoProfiles.requestHashSealer(ENGAGEMENT_REQUEST_HASH_PROFILE),
       idempotencyCredentialProfile: engagementProfiles.idempotencyCredential,
       idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(engagementProfiles.idempotencyCredential)
+    });
+    const speakerLineupDirectOperations = createSpeakerLineupDirectOperationModule({
+      workspaceId,
+      managePolicy: SPEAKER_LINEUP_MANAGE_ACCESS_POLICY,
+      currentAuthority,
+      currentEvent,
+      clock,
+      ids: Object.freeze({ newInvocationId: () => parseInvocationId(crypto.randomUUID()) }),
+      authorityPrincipalKeyProfile: speakerLineupProfiles.authorityPrincipal,
+      scopePartitionProfile: speakerLineupProfiles.scopePartition,
+      requestCanonicalizationProfile: speakerLineupProfiles.requestCanonicalization,
+      requestHashSealer: cryptoProfiles.requestHashSealer(SPEAKER_LINEUP_REQUEST_HASH_PROFILE),
+      idempotencyCredentialProfile: speakerLineupProfiles.idempotencyCredential,
+      idempotencyCredentialSealer: cryptoProfiles.idempotencyCredentialSealer(
+        speakerLineupProfiles.idempotencyCredential
+      )
     });
     const taskBoardOperations = createTaskBoardReadOperationModule({
       workspaceId,
@@ -4669,6 +4722,7 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       reviewerRosterDirectDomain,
       decisionDirectDomain,
       engagementDirectDomain,
+      speakerLineupDirectDomain,
       taskDirectDomain,
       ...releaseNativeDomains,
       participantPortalDomain,
@@ -4749,6 +4803,7 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
       decisionDirectOperations,
       engagementOperations,
       engagementDirectOperations,
+      speakerLineupDirectOperations,
       taskBoardOperations,
       taskMutationOperations,
       releaseNativeOperations,

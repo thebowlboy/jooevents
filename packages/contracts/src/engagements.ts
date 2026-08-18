@@ -528,6 +528,133 @@ export const engagementChangeCanonicalResultSchema = z.discriminatedUnion('kind'
 export const engagementChangeOperationResultSchema =
   createEffectfulOperationResultSchema(engagementChangeDataSchema);
 
+/**
+ * Event-wide public speaker-lineup state. This is deliberately person-level:
+ * an engagement remains one session/person workflow record, while one person
+ * accepted onto several sessions has one lineup entry and one public card.
+ */
+export const speakerLineupAccentSchema = z.enum(['lavender', 'sea', 'neutral']);
+export const speakerLineupCategoryStatusSchema = z.enum(['active', 'retired']);
+export const speakerLineupCategoryNameSchema = canonicalText(32);
+export const speakerLineupCategorySchema = z.strictObject({
+  id: engagementIdSchema,
+  name: speakerLineupCategoryNameSchema,
+  accent: speakerLineupAccentSchema,
+  status: speakerLineupCategoryStatusSchema,
+  position: z.number().int().nonnegative().safe(),
+  version: engagementVersionSchema
+});
+export const speakerLineupEntrySchema = z.strictObject({
+  personId: engagementIdSchema,
+  position: z.number().int().nonnegative().safe(),
+  categoryId: engagementIdSchema.nullable(),
+  publiclyVisible: z.boolean(),
+  version: engagementVersionSchema
+});
+export const speakerLineupSnapshotSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  scope: engagementScopeSchema,
+  version: engagementVersionSchema,
+  digestSha256: digestSchema,
+  categories: z.array(speakerLineupCategorySchema).max(500),
+  entries: z.array(speakerLineupEntrySchema).max(ENGAGEMENT_SNAPSHOT_MAX)
+}).superRefine((snapshot, context) => {
+  const categoryIds = new Set<string>();
+  for (const [index, category] of snapshot.categories.entries()) {
+    if (categoryIds.has(category.id) || category.position !== index) {
+      context.addIssue({
+        code: 'custom', path: ['categories', index],
+        message: 'lineup categories must be unique and densely ordered'
+      });
+    }
+    categoryIds.add(category.id);
+  }
+  const personIds = new Set<string>();
+  for (const [index, entry] of snapshot.entries.entries()) {
+    if (personIds.has(entry.personId) || entry.position !== index) {
+      context.addIssue({
+        code: 'custom', path: ['entries', index],
+        message: 'lineup entries must be unique and densely ordered'
+      });
+    }
+    if (entry.categoryId !== null && !categoryIds.has(entry.categoryId)) {
+      context.addIssue({
+        code: 'custom', path: ['entries', index, 'categoryId'],
+        message: 'lineup entries must reference a category in the same snapshot'
+      });
+    }
+    personIds.add(entry.personId);
+  }
+});
+
+const speakerLineupExpectedVersion = {
+  expectedLineupVersion: engagementVersionSchema
+} as const;
+
+export const speakerLineupAuthorInputSchema = z.discriminatedUnion('action', [
+  z.strictObject({
+    action: z.literal('reorder'),
+    ...speakerLineupExpectedVersion,
+    personIds: z.array(engagementIdInputSchema).max(ENGAGEMENT_SNAPSHOT_MAX)
+  }),
+  z.strictObject({
+    action: z.literal('set_category'),
+    ...speakerLineupExpectedVersion,
+    personId: engagementIdInputSchema,
+    categoryId: engagementIdInputSchema.nullable()
+  }),
+  z.strictObject({
+    action: z.literal('set_visibility'),
+    ...speakerLineupExpectedVersion,
+    personId: engagementIdInputSchema,
+    publiclyVisible: z.boolean()
+  }),
+  z.strictObject({
+    action: z.literal('add_category'),
+    ...speakerLineupExpectedVersion,
+    name: speakerLineupCategoryNameSchema
+  })
+]);
+export const speakerLineupActionSchema = z.enum([
+  'reorder', 'set_category', 'set_visibility', 'add_category'
+]);
+export const speakerLineupPlanningInputSchema = z.strictObject({
+  scope: engagementScopeSchema,
+  actorUserId: engagementIdSchema,
+  occurredAt: canonicalInstantSchema,
+  categoryId: engagementIdSchema.nullable(),
+  authorInput: speakerLineupAuthorInputSchema
+});
+export const speakerLineupMutationPlanSchema = z.strictObject({
+  input: speakerLineupPlanningInputSchema,
+  before: speakerLineupSnapshotSchema,
+  after: speakerLineupSnapshotSchema
+}).superRefine((plan, context) => {
+  if (plan.before.scope.workspaceId !== plan.input.scope.workspaceId
+      || plan.before.scope.eventId !== plan.input.scope.eventId
+      || plan.after.scope.workspaceId !== plan.input.scope.workspaceId
+      || plan.after.scope.eventId !== plan.input.scope.eventId
+      || plan.before.version !== plan.input.authorInput.expectedLineupVersion
+      || plan.after.version !== plan.before.version + 1) {
+    context.addIssue({ code: 'custom', message: 'lineup plan scope and version must advance once' });
+  }
+});
+export const speakerLineupChangeDataSchema = z.strictObject({
+  action: speakerLineupActionSchema,
+  lineupVersion: engagementVersionSchema,
+  entry: speakerLineupEntrySchema.nullable(),
+  category: speakerLineupCategorySchema.nullable()
+});
+export const speakerLineupSnapshotReadInputSchema = z.strictObject({});
+export const speakerLineupSnapshotReadResultSchema =
+  createReadOperationResultSchema(speakerLineupSnapshotSchema);
+export const speakerLineupChangeCanonicalResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success'), data: speakerLineupChangeDataSchema }),
+  z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
+]);
+export const speakerLineupChangeOperationResultSchema =
+  createEffectfulOperationResultSchema(speakerLineupChangeDataSchema);
+
 export const ENGAGEMENT_OPERATION_SCHEMA_REFS = Object.freeze({
   snapshotRead: createOperationSchemaManifestRefs({
     inputKey: 'schema.engagement.snapshot-read.input',
@@ -540,6 +667,18 @@ export const ENGAGEMENT_OPERATION_SCHEMA_REFS = Object.freeze({
     inputSchema: engagementAuthorInputSchema,
     resultKey: 'schema.engagement.change.operator-result',
     resultSchema: engagementChangeOperationResultSchema
+  }),
+  lineupSnapshotRead: createOperationSchemaManifestRefs({
+    inputKey: 'schema.speaker-lineup.snapshot-read.input',
+    inputSchema: speakerLineupSnapshotReadInputSchema,
+    resultKey: 'schema.speaker-lineup.snapshot-read.operator-result',
+    resultSchema: speakerLineupSnapshotReadResultSchema
+  }),
+  lineupChange: createOperationSchemaManifestRefs({
+    inputKey: 'schema.speaker-lineup.change.input',
+    inputSchema: speakerLineupAuthorInputSchema,
+    resultKey: 'schema.speaker-lineup.change.operator-result',
+    resultSchema: speakerLineupChangeOperationResultSchema
   })
 });
 
@@ -563,3 +702,13 @@ export type EngagementSeedPlanDto = z.infer<typeof engagementSeedPlanSchema>;
 export type EngagementSeedReversalPlanDto = z.infer<typeof engagementSeedReversalPlanSchema>;
 export type EngagementSeedResultDto = z.infer<typeof engagementSeedResultSchema>;
 export type EngagementChangeData = z.infer<typeof engagementChangeDataSchema>;
+export type SpeakerLineupAccent = z.infer<typeof speakerLineupAccentSchema>;
+export type SpeakerLineupCategoryStatus = z.infer<typeof speakerLineupCategoryStatusSchema>;
+export type SpeakerLineupCategoryDto = z.infer<typeof speakerLineupCategorySchema>;
+export type SpeakerLineupEntryDto = z.infer<typeof speakerLineupEntrySchema>;
+export type SpeakerLineupSnapshotDto = z.infer<typeof speakerLineupSnapshotSchema>;
+export type SpeakerLineupAuthorInput = z.infer<typeof speakerLineupAuthorInputSchema>;
+export type SpeakerLineupAction = z.infer<typeof speakerLineupActionSchema>;
+export type SpeakerLineupPlanningInput = z.infer<typeof speakerLineupPlanningInputSchema>;
+export type SpeakerLineupMutationPlanDto = z.infer<typeof speakerLineupMutationPlanSchema>;
+export type SpeakerLineupChangeData = z.infer<typeof speakerLineupChangeDataSchema>;

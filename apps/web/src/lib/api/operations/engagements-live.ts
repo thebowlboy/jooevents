@@ -3,10 +3,16 @@ import {
 	engagementAuthorInputSchema,
 	engagementChangeOperationResultSchema,
 	engagementSnapshotReadResultSchema,
+	speakerLineupAuthorInputSchema,
+	speakerLineupChangeOperationResultSchema,
+	speakerLineupSnapshotReadResultSchema,
 	operationHttpIdempotencyKeySchema,
 	type EngagementAuthorInput,
 	type EngagementChangeData,
 	type EngagementSnapshotDto,
+	type SpeakerLineupAuthorInput,
+	type SpeakerLineupChangeData,
+	type SpeakerLineupSnapshotDto,
 	type OperationReceiptRef,
 	type StructuredOutcome
 } from '@jooevents/contracts';
@@ -16,11 +22,15 @@ import { resolveOperatorHttpBinding, type ExpectedOperatorHttpOperation, type Op
 
 export const ENGAGEMENTS_LIVE_OPERATIONS = Object.freeze({
 	read: { name: 'engagement.snapshot.read', version: 1 },
-	change: { name: 'engagement.change', version: 1 }
+	change: { name: 'engagement.change', version: 1 },
+	lineupRead: { name: 'speaker-lineup.snapshot.read', version: 1 },
+	lineupChange: { name: 'speaker-lineup.change', version: 1 }
 } as const);
 const EXPECTED_OPERATIONS = Object.freeze({
 	read: { ...ENGAGEMENTS_LIVE_OPERATIONS.read, effect: 'read', method: 'GET', input: 'query', idempotencyRequired: false, ...ENGAGEMENT_OPERATION_SCHEMA_REFS.snapshotRead },
-	change: { ...ENGAGEMENTS_LIVE_OPERATIONS.change, effect: 'commit', method: 'POST', input: 'body', idempotencyRequired: true, ...ENGAGEMENT_OPERATION_SCHEMA_REFS.change }
+	change: { ...ENGAGEMENTS_LIVE_OPERATIONS.change, effect: 'commit', method: 'POST', input: 'body', idempotencyRequired: true, ...ENGAGEMENT_OPERATION_SCHEMA_REFS.change },
+	lineupRead: { ...ENGAGEMENTS_LIVE_OPERATIONS.lineupRead, effect: 'read', method: 'GET', input: 'query', idempotencyRequired: false, ...ENGAGEMENT_OPERATION_SCHEMA_REFS.lineupSnapshotRead },
+	lineupChange: { ...ENGAGEMENTS_LIVE_OPERATIONS.lineupChange, effect: 'commit', method: 'POST', input: 'body', idempotencyRequired: true, ...ENGAGEMENT_OPERATION_SCHEMA_REFS.lineupChange }
 } as const satisfies Record<string, ExpectedOperatorHttpOperation>);
 export type EngagementsLiveOperation = keyof typeof EXPECTED_OPERATIONS;
 type Unavailable = { readonly kind: 'unavailable'; readonly operation: EngagementsLiveOperation; readonly reason: OperatorHttpBindingUnavailableReason };
@@ -30,8 +40,14 @@ export type EngagementsLiveReadResult<Data> =
 	| { readonly kind: 'transport_error'; readonly error: SafeApiError }
 	| Unavailable;
 export type EngagementsCommittedResponse = EngagementChangeData;
+export type SpeakerLineupCommittedResponse = SpeakerLineupChangeData;
 export type EngagementsLiveRespondResult =
 	| { readonly kind: 'success'; readonly data: EngagementsCommittedResponse; readonly receipt: OperationReceiptRef; readonly correlationId: string }
+	| { readonly kind: 'outcome'; readonly outcome: StructuredOutcome; readonly terminal: boolean; readonly receipt?: OperationReceiptRef; readonly correlationId: string }
+	| { readonly kind: 'transport_error'; readonly error: SafeApiError }
+	| Unavailable;
+export type SpeakerLineupLiveChangeResult =
+	| { readonly kind: 'success'; readonly data: SpeakerLineupCommittedResponse; readonly receipt: OperationReceiptRef; readonly correlationId: string }
 	| { readonly kind: 'outcome'; readonly outcome: StructuredOutcome; readonly terminal: boolean; readonly receipt?: OperationReceiptRef; readonly correlationId: string }
 	| { readonly kind: 'transport_error'; readonly error: SafeApiError }
 	| Unavailable;
@@ -40,6 +56,8 @@ export type EngagementsLiveRequester = (input: EngagementsLiveRequestInput) => P
 export interface EngagementsLiveClient {
 	readSnapshot(options?: { readonly signal?: AbortSignal }): Promise<EngagementsLiveReadResult<EngagementSnapshotDto>>;
 	respond(input: EngagementAuthorInput, idempotencyKey: string, options?: { readonly signal?: AbortSignal }): Promise<EngagementsLiveRespondResult>;
+	readLineup(options?: { readonly signal?: AbortSignal }): Promise<EngagementsLiveReadResult<SpeakerLineupSnapshotDto>>;
+	changeLineup(input: SpeakerLineupAuthorInput, idempotencyKey: string, options?: { readonly signal?: AbortSignal }): Promise<SpeakerLineupLiveChangeResult>;
 }
 const invalidRequest = (): { readonly kind: 'transport_error'; readonly error: SafeApiError } => ({ kind: 'transport_error', error: { code: 'invalid_request', retryable: false } });
 const invalidContract = (): { readonly kind: 'transport_error'; readonly error: SafeApiError } => ({ kind: 'transport_error', error: { code: 'invalid_contract', retryable: true } });
@@ -48,6 +66,8 @@ export function createEngagementsLiveClient(input: { readonly manifest: unknown;
 	const request = input.request ?? ((value: EngagementsLiveRequestInput) => requestJson(value));
 	const read = resolveOperatorHttpBinding({ manifest: input.manifest, expected: EXPECTED_OPERATIONS.read });
 	const change = resolveOperatorHttpBinding({ manifest: input.manifest, expected: EXPECTED_OPERATIONS.change });
+	const lineupRead = resolveOperatorHttpBinding({ manifest: input.manifest, expected: EXPECTED_OPERATIONS.lineupRead });
+	const lineupChange = resolveOperatorHttpBinding({ manifest: input.manifest, expected: EXPECTED_OPERATIONS.lineupChange });
 	return Object.freeze({
 		async readSnapshot(options: { readonly signal?: AbortSignal } = {}): Promise<EngagementsLiveReadResult<EngagementSnapshotDto>> {
 			if (read.kind === 'unavailable') return { kind: 'unavailable', operation: 'read', reason: read.reason };
@@ -69,6 +89,28 @@ export function createEngagementsLiveClient(input: { readonly manifest: unknown;
 			if (!parsed.success) return invalidContract();
 			if (parsed.data.kind === 'outcome') return { kind: 'outcome', outcome: parsed.data.outcome, terminal: parsed.data.terminal, correlationId: parsed.data.correlationId, ...('receipt' in parsed.data ? { receipt: parsed.data.receipt } : {}) };
 			if (parsed.data.receipt.operationName !== ENGAGEMENTS_LIVE_OPERATIONS.change.name || parsed.data.data.action !== body.data.action) return invalidContract();
+			return { kind: 'success', data: parsed.data.data, receipt: parsed.data.receipt, correlationId: parsed.data.correlationId };
+		},
+		async readLineup(options: { readonly signal?: AbortSignal } = {}): Promise<EngagementsLiveReadResult<SpeakerLineupSnapshotDto>> {
+			if (lineupRead.kind === 'unavailable') return { kind: 'unavailable', operation: 'lineupRead', reason: lineupRead.reason };
+			const response = await request({ path: lineupRead.path, method: 'GET', schema: speakerLineupSnapshotReadResultSchema, ...(options.signal ? { signal: options.signal } : {}) });
+			if (response.kind === 'error') return { kind: 'transport_error', error: response.error };
+			const parsed = speakerLineupSnapshotReadResultSchema.safeParse(response.data);
+			if (!parsed.success) return invalidContract();
+			return parsed.data.kind === 'success'
+				? { kind: 'success', data: parsed.data.data, correlationId: parsed.data.correlationId }
+				: { kind: 'outcome', outcome: parsed.data.outcome, correlationId: parsed.data.correlationId };
+		},
+		async changeLineup(raw: SpeakerLineupAuthorInput, idempotencyKey: string, options: { readonly signal?: AbortSignal } = {}): Promise<SpeakerLineupLiveChangeResult> {
+			const body = speakerLineupAuthorInputSchema.safeParse(raw);
+			if (!body.success || !operationHttpIdempotencyKeySchema.safeParse(idempotencyKey).success) return invalidRequest();
+			if (lineupChange.kind === 'unavailable') return { kind: 'unavailable', operation: 'lineupChange', reason: lineupChange.reason };
+			const response = await request({ path: lineupChange.path, method: 'POST', schema: speakerLineupChangeOperationResultSchema, body: body.data, idempotencyKey, ...(options.signal ? { signal: options.signal } : {}) });
+			if (response.kind === 'error') return { kind: 'transport_error', error: response.error };
+			const parsed = speakerLineupChangeOperationResultSchema.safeParse(response.data);
+			if (!parsed.success) return invalidContract();
+			if (parsed.data.kind === 'outcome') return { kind: 'outcome', outcome: parsed.data.outcome, terminal: parsed.data.terminal, correlationId: parsed.data.correlationId, ...('receipt' in parsed.data ? { receipt: parsed.data.receipt } : {}) };
+			if (parsed.data.receipt.operationName !== ENGAGEMENTS_LIVE_OPERATIONS.lineupChange.name || parsed.data.data.action !== body.data.action) return invalidContract();
 			return { kind: 'success', data: parsed.data.data, receipt: parsed.data.receipt, correlationId: parsed.data.correlationId };
 		}
 	});

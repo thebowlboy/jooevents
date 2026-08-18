@@ -16,6 +16,7 @@ import {
 } from './program-vocabulary';
 import { schedulePlacementInstantSchema } from './schedule-placement';
 import { sessionParticipantRoleSchema, sessionPlannedDurationMinutesSchema } from './sessions';
+import { speakerLineupAccentSchema, speakerLineupCategoryNameSchema } from './engagements';
 
 const digestSchema = z.string().regex(/^[a-f0-9]{64}$/);
 const canonicalInstantSchema = z.iso.datetime({ offset: true }).refine(
@@ -87,7 +88,9 @@ export const programReleaseEvidencePinsSchema = z.strictObject({
     setVersion: releaseVersionSchema,
     digestSha256: digestSchema
   }),
-  eventSettingsVersion: releaseVersionSchema
+  eventSettingsVersion: releaseVersionSchema,
+  /** Added with lineup publication; absent only on releases created before that capability. */
+  speakerLineupDigestSha256: digestSchema.optional()
 });
 
 /**
@@ -182,6 +185,73 @@ export const releaseNameDeclassificationSchema = z.strictObject({
   displayName: canonicalText(300)
 });
 
+/** Immutable event-wide lineup vocabulary copied into a program release. */
+export const releasedSpeakerLineupCategorySchema = z.strictObject({
+  id: releaseIdSchema,
+  name: speakerLineupCategoryNameSchema,
+  accent: speakerLineupAccentSchema,
+  position: z.number().int().nonnegative().safe()
+});
+
+/**
+ * One person in the immutable lineup snapshot. `speakerId` is the opaque public
+ * identity; `personId` remains release-internal. A null name means the person
+ * did not pass the release-time public-and-confirmed gate.
+ */
+export const releasedSpeakerLineupEntrySchema = z.strictObject({
+  speakerId: releaseIdSchema,
+  personId: releaseIdSchema,
+  position: z.number().int().nonnegative().safe(),
+  categoryId: releaseIdSchema.nullable(),
+  publiclyVisible: z.boolean(),
+  displayName: canonicalText(300).nullable()
+});
+
+export const releasedSpeakerLineupSnapshotSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  version: releaseVersionSchema,
+  digestSha256: digestSchema,
+  categories: z.array(releasedSpeakerLineupCategorySchema).max(500),
+  entries: z.array(releasedSpeakerLineupEntrySchema).max(10_000)
+}).superRefine((lineup, context) => {
+  const categoryIds = new Set<string>();
+  for (const [index, category] of lineup.categories.entries()) {
+    if (categoryIds.has(category.id)
+        || category.position !== index) {
+      context.addIssue({
+        code: 'custom', path: ['categories', index],
+        message: 'released lineup categories must be unique and densely ordered'
+      });
+    }
+    categoryIds.add(category.id);
+  }
+  const personIds = new Set<string>();
+  const speakerIds = new Set<string>();
+  for (const [index, entry] of lineup.entries.entries()) {
+    if (personIds.has(entry.personId) || speakerIds.has(entry.speakerId)
+        || entry.position !== index) {
+      context.addIssue({
+        code: 'custom', path: ['entries', index],
+        message: 'released lineup entries must be unique and densely ordered'
+      });
+    }
+    if (entry.categoryId !== null && !categoryIds.has(entry.categoryId)) {
+      context.addIssue({
+        code: 'custom', path: ['entries', index, 'categoryId'],
+        message: 'released lineup entries must reference a released category'
+      });
+    }
+    if (!entry.publiclyVisible && entry.displayName !== null) {
+      context.addIssue({
+        code: 'custom', path: ['entries', index, 'displayName'],
+        message: 'a hidden lineup entry cannot carry a released display name'
+      });
+    }
+    personIds.add(entry.personId);
+    speakerIds.add(entry.speakerId);
+  }
+});
+
 /**
  * Immutable program-data release. `publish_schedule` creates one; committed
  * changes create successors; rollback creates a restorative successor. The
@@ -198,6 +268,8 @@ export const programReleaseSchema = z.strictObject({
   pins: programReleaseEvidencePinsSchema,
   rooms: z.array(releasedRoomSchema).max(500),
   sessions: z.array(releasedSessionSchema).max(5_000),
+  /** Absent only on immutable releases created before lineup publication. */
+  speakerLineup: releasedSpeakerLineupSnapshotSchema.optional(),
   nameDeclassifications: z.array(releaseNameDeclassificationSchema).max(10_000),
   releasedByUserId: releaseIdSchema,
   releasedAt: canonicalInstantSchema,
@@ -213,6 +285,19 @@ export const programReleaseSchema = z.strictObject({
     context.addIssue({
       code: 'custom', path: ['origin', 'restoredFromReleaseId'],
       message: 'a rollback release must restore a different release'
+    });
+  }
+  if ((release.speakerLineup === undefined)
+      !== (release.pins.speakerLineupDigestSha256 === undefined)) {
+    context.addIssue({
+      code: 'custom', path: ['speakerLineup'],
+      message: 'a released lineup and its evidence pin must appear together'
+    });
+  } else if (release.speakerLineup !== undefined
+      && release.pins.speakerLineupDigestSha256 !== release.speakerLineup.digestSha256) {
+    context.addIssue({
+      code: 'custom', path: ['pins', 'speakerLineupDigestSha256'],
+      message: 'the released lineup must match its evidence pin'
     });
   }
   for (const [index, room] of release.rooms.entries()) {
@@ -258,6 +343,17 @@ export const programReleaseSchema = z.strictObject({
       }
       releasedNames.set(participant.personId, participant.displayName);
     }
+  }
+  for (const [index, entry] of (release.speakerLineup?.entries ?? []).entries()) {
+    if (entry.displayName === null) continue;
+    const declared = releasedNames.get(entry.personId);
+    if (declared !== undefined && declared !== entry.displayName) {
+      context.addIssue({
+        code: 'custom', path: ['speakerLineup', 'entries', index, 'displayName'],
+        message: 'a released person carries one display name'
+      });
+    }
+    releasedNames.set(entry.personId, entry.displayName);
   }
   const declassified = new Map(
     release.nameDeclassifications.map((entry) => [entry.personId, entry.displayName])
@@ -687,6 +783,17 @@ export const releaseRollbackSuppressionSchema = z.strictObject({
   personId: releaseIdSchema
 });
 
+/** Public-safe lineup bytes shown in the reviewed program-release diff. */
+export const releaseLineupSafeDiffSchema = z.strictObject({
+  digestSha256: digestSchema,
+  categories: z.array(releasedSpeakerLineupCategorySchema).max(500),
+  publicSpeakers: z.array(z.strictObject({
+    speakerId: releaseIdSchema,
+    name: canonicalText(300),
+    categoryId: releaseIdSchema.nullable()
+  })).max(10_000)
+});
+
 export const releaseProgramPlanSchema = z.strictObject({
   input: z.discriminatedUnion('action', [
     releasePublishScheduleInputSchema.extend({ ...releaseAttribution, releaseId: releaseIdSchema }),
@@ -860,6 +967,8 @@ export const releaseSafeDiffSchema = z.discriminatedUnion('action', [
     releasedSessionCount: z.number().int().nonnegative().safe(),
     releasedOccurrenceCount: z.number().int().nonnegative().safe(),
     nameDeclassifications: z.array(releaseNameDeclassificationSchema).max(10_000),
+    /** Absent only when reviewing a pre-lineup immutable release. */
+    speakerLineup: releaseLineupSafeDiffSchema.optional(),
     /**
      * Rollback-only revocation evidence, surfaced beside the full name list so
      * an approver restoring a prior release sees exactly which appearances the
@@ -1128,32 +1237,66 @@ export const servedPublicSpeakerSessionSchema = z.strictObject({
 });
 
 /**
- * One person as the public roster shows them: the released display name and
- * the visible session appearances that put them there. A card exists only
- * through appearances, and it carries no person identifier at all — two cards
- * may even share a name.
+ * One person as the public roster shows them: an opaque public identity, the
+ * released display name and category, and any independently visible session
+ * appearances. Legacy releases have neither id nor category and require at
+ * least one appearance; lineup-backed releases may announce a confirmed
+ * speaker before their session is public.
  */
 export const servedPublicSpeakerCardSchema = z.strictObject({
+  id: releaseIdSchema.optional(),
   name: canonicalText(300),
-  sessions: z.array(servedPublicSpeakerSessionSchema).min(1).max(200)
+  categoryId: releaseIdSchema.nullable().optional(),
+  sessions: z.array(servedPublicSpeakerSessionSchema).max(200)
 });
 
+export const servedPublicSpeakerCategorySchema = releasedSpeakerLineupCategorySchema;
+
 /**
- * The public speakers page: the union of publicly visible session appearances
- * in one released program, ordered by display name.
+ * The public speakers page. Legacy releases are the name-ordered union of
+ * visible session appearances; lineup-backed releases preserve the immutable
+ * event-wide order and groups.
  */
 export const servedPublicRosterSchema = z.strictObject({
   schemaVersion: z.literal(1),
   releaseNumber: releaseVersionSchema,
+  categories: z.array(servedPublicSpeakerCategorySchema).max(500).optional(),
   speakers: z.array(servedPublicSpeakerCardSchema).max(10_000)
 }).superRefine((roster, context) => {
+  const categoryIds = new Set<string>();
+  for (const [index, category] of (roster.categories ?? []).entries()) {
+    if (categoryIds.has(category.id) || category.position !== index) {
+      context.addIssue({
+        code: 'custom', path: ['categories', index],
+        message: 'served speaker categories must be unique and densely ordered'
+      });
+    }
+    categoryIds.add(category.id);
+  }
+  const speakerIds = new Set<string>();
   for (const [index, speaker] of roster.speakers.entries()) {
-    if (index > 0 && roster.speakers[index - 1]!.name > speaker.name) {
+    const legacy = roster.categories === undefined;
+    if (legacy && speaker.sessions.length === 0) {
+      context.addIssue({
+        code: 'custom', path: ['speakers', index, 'sessions'],
+        message: 'legacy served speaker cards require a released session appearance'
+      });
+    }
+    if (legacy && index > 0 && roster.speakers[index - 1]!.name > speaker.name) {
       context.addIssue({
         code: 'custom', path: ['speakers', index],
         message: 'served speakers must use canonical name order'
       });
     }
+    if (!legacy && (speaker.id === undefined || speaker.categoryId === undefined
+        || speakerIds.has(speaker.id)
+        || (speaker.categoryId !== null && !categoryIds.has(speaker.categoryId)))) {
+      context.addIssue({
+        code: 'custom', path: ['speakers', index],
+        message: 'lineup-backed speaker cards require unique ids and valid categories'
+      });
+    }
+    if (speaker.id !== undefined) speakerIds.add(speaker.id);
     for (const [sessionIndex, session] of speaker.sessions.entries()) {
       if (sessionIndex > 0
           && speaker.sessions[sessionIndex - 1]!.sessionId >= session.sessionId) {
@@ -1212,6 +1355,9 @@ export type ReleasedOccurrenceDto = z.infer<typeof releasedOccurrenceSchema>;
 export type ReleasedRoomDto = z.infer<typeof releasedRoomSchema>;
 export type ReleasedSessionDto = z.infer<typeof releasedSessionSchema>;
 export type ReleaseNameDeclassificationDto = z.infer<typeof releaseNameDeclassificationSchema>;
+export type ReleasedSpeakerLineupCategoryDto = z.infer<typeof releasedSpeakerLineupCategorySchema>;
+export type ReleasedSpeakerLineupEntryDto = z.infer<typeof releasedSpeakerLineupEntrySchema>;
+export type ReleasedSpeakerLineupSnapshotDto = z.infer<typeof releasedSpeakerLineupSnapshotSchema>;
 export type ProgramReleaseDto = z.infer<typeof programReleaseSchema>;
 export type StyleSetRecipeDto = z.infer<typeof styleSetRecipeSchema>;
 export type PublicThemeTokenName = z.infer<typeof publicThemeTokenNameSchema>;
@@ -1222,6 +1368,7 @@ export type SurfaceReleaseDto = z.infer<typeof surfaceReleaseSchema>;
 export type SurfaceHeadDto = z.infer<typeof surfaceHeadSchema>;
 export type ReleaseScheduleConflictDto = z.infer<typeof releaseScheduleConflictSchema>;
 export type ReleaseRollbackSuppressionDto = z.infer<typeof releaseRollbackSuppressionSchema>;
+export type ReleaseLineupSafeDiffDto = z.infer<typeof releaseLineupSafeDiffSchema>;
 export type ReleasePlanningErrorCode = z.infer<typeof releasePlanningErrorCodeSchema>;
 export type ReleaseAction = z.infer<typeof releaseActionSchema>;
 export type ReleaseAuthorInput = z.infer<typeof releaseAuthorInputSchema>;
@@ -1243,5 +1390,6 @@ export type ServedPublicScheduleSessionDto = z.infer<typeof servedPublicSchedule
 export type ServedPublicScheduleDto = z.infer<typeof servedPublicScheduleSchema>;
 export type ServedPublicSpeakerSessionDto = z.infer<typeof servedPublicSpeakerSessionSchema>;
 export type ServedPublicSpeakerCardDto = z.infer<typeof servedPublicSpeakerCardSchema>;
+export type ServedPublicSpeakerCategoryDto = z.infer<typeof servedPublicSpeakerCategorySchema>;
 export type ServedPublicRosterDto = z.infer<typeof servedPublicRosterSchema>;
 export type ServedPublicPresentationDto = z.infer<typeof servedPublicPresentationSchema>;

@@ -16,6 +16,7 @@ import {
   createProgramReferenceContributorRegistry,
   planProgramVocabularyMutation
 } from '@jooevents/program';
+import { applyEngagementSeedFrom, planEngagementSeedFrom } from '@jooevents/engagement';
 import { planSessionMutation } from '@jooevents/session';
 import { openSQLite, type OpenSQLiteResult } from './database';
 import { SQLiteFoundationError } from './foundation-errors';
@@ -30,6 +31,7 @@ import {
   SQLiteSessionRepository,
   createSQLiteSessionProgramReferenceAdapter
 } from './session';
+import { SQLiteEngagementRepository } from './engagement';
 
 const temporaryDirectories: string[] = [];
 const opened: OpenSQLiteResult[] = [];
@@ -99,7 +101,7 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
     expect(database.sqlite.query('PRAGMA foreign_key_check').all()).toEqual([]);
   });
 
-  test('upgrades sequence 7 Sessions into independently versioned format and track slots', () => {
+  test('upgrades retained Sessions and backfills one lineup entry per person', () => {
     const path = temporaryDatabasePath();
     let schemaPass = 0;
     const held = new Database(path, { create: true, strict: true });
@@ -124,6 +126,11 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
     const formatId = '019c1df7-86b5-769b-bba4-600000000004';
     const trackId = '019c1df7-86b5-769b-bba4-600000000005';
     const sessionId = '019c1df7-86b5-769b-bba4-600000000006';
+    const secondSessionId = '019c1df7-86b5-769b-bba4-600000000007';
+    const personA = '019c1df7-86b5-769b-bba4-600000000008';
+    const personB = '019c1df7-86b5-769b-bba4-600000000009';
+    const submissionA = '019c1df7-86b5-769b-bba4-60000000000a';
+    const submissionB = '019c1df7-86b5-769b-bba4-60000000000b';
     const now = parseInstant('2026-08-18T01:00:00.000Z');
     const seed = new Database(path, { create: false, strict: true });
     seed.exec('PRAGMA foreign_keys = ON; BEGIN IMMEDIATE;');
@@ -188,12 +195,62 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
         expectedCatalogVersion: catalog.version,
         expectedCatalogDigestSha256: catalog.digestSha256,
         title: 'Retained Session', plannedDurationMinutes: 45,
-        lifecycle: 'collecting', formatId, trackId
+        lifecycle: 'collecting', formatId, trackId,
+        participants: [
+          {
+            personId: personA, role: 'speaker', publiclyVisible: true,
+            source: { kind: 'submission', id: submissionA, version: 1 }
+          },
+          {
+            personId: personB, role: 'speaker', publiclyVisible: false,
+            source: { kind: 'submission', id: submissionA, version: 1 }
+          }
+        ]
       }
     });
     seed.exec('BEGIN IMMEDIATE;');
     sessions.applySessionPlan(createSession);
     seed.exec('COMMIT;');
+    const nextCatalog = sessions.readSessionCatalog({ workspaceId, eventId })!;
+    const createSecondSession = planSessionMutation({
+      catalog: nextCatalog,
+      vocabulary: sessions.readSessionVocabulary({ workspaceId, eventId })!,
+      planningInput: {
+        action: 'create', scope: { workspaceId, eventId }, sessionId: secondSessionId,
+        actorUserId: userId, occurredAt: now,
+        expectedCatalogVersion: nextCatalog.version,
+        expectedCatalogDigestSha256: nextCatalog.digestSha256,
+        title: 'Second retained session', plannedDurationMinutes: 30,
+        lifecycle: 'collecting', formatId, trackId,
+        participants: [{
+          personId: personA, role: 'panelist', publiclyVisible: true,
+          source: { kind: 'submission', id: submissionB, version: 1 }
+        }]
+      }
+    });
+    seed.exec('BEGIN IMMEDIATE;');
+    sessions.applySessionPlan(createSecondSession);
+    seed.exec('COMMIT;');
+
+    const engagementRepository = new SQLiteEngagementRepository(seed);
+    for (const contribution of [
+      planEngagementSeedFrom(engagementRepository, {
+        scope: { workspaceId, eventId }, sessionId, submissionId: submissionA,
+        seededByDecision: { version: 1, digestSha256: 'e'.repeat(64) },
+        source: { kind: 'submission', id: submissionA, version: 1 },
+        personIds: [personA, personB], invitedAt: now, respondBy: null
+      }),
+      planEngagementSeedFrom(engagementRepository, {
+        scope: { workspaceId, eventId }, sessionId: secondSessionId, submissionId: submissionB,
+        seededByDecision: { version: 1, digestSha256: 'f'.repeat(64) },
+        source: { kind: 'submission', id: submissionB, version: 1 },
+        personIds: [personA], invitedAt: now, respondBy: null
+      })
+    ]) {
+      seed.exec('BEGIN IMMEDIATE;');
+      applyEngagementSeedFrom(engagementRepository, contribution);
+      seed.exec('COMMIT;');
+    }
     expect(seed.query<{ count: number }, []>(`
       SELECT count(*) AS count FROM sqlite_schema
        WHERE type = 'table' AND name = 'session_program_reference_slots'
@@ -204,8 +261,8 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
     opened.push(upgraded);
     expect(upgraded.migration).toMatchObject({
       status: 'applied',
-      migrationId: 'e2_0008_session_program_references',
-      coordinate: { schemaEpoch: 2, sequence: 8 }
+      migrationId: 'e2_0009_speaker_lineup',
+      coordinate: { schemaEpoch: 2, sequence: 9 }
     });
     expect(upgraded.sqlite.query<{ slot_kind: string; item_id: string; version: number }, []>(`
       SELECT slot_kind,item_id,version FROM session_program_reference_slots
@@ -214,6 +271,18 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
     `).all()).toEqual([
       { slot_kind: 'format', item_id: formatId, version: 1 },
       { slot_kind: 'track', item_id: trackId, version: 1 }
+    ]);
+    expect(upgraded.sqlite.query<{
+      person_id: string; position: number; category_id: string | null;
+      publicly_visible: number; version: number;
+    }, []>(`
+      SELECT person_id,position,category_id,publicly_visible,version
+        FROM speaker_lineup_entries
+       WHERE workspace_id = '${workspaceId}' AND event_id = '${eventId}'
+       ORDER BY position
+    `).all()).toEqual([
+      { person_id: personA, position: 0, category_id: null, publicly_visible: 1, version: 1 },
+      { person_id: personB, position: 1, category_id: null, publicly_visible: 0, version: 1 }
     ]);
     const registry = createProgramReferenceContributorRegistry({
       expected: [SESSION_PROGRAM_VOCABULARY_CONTRIBUTOR],
@@ -234,7 +303,7 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
       registry,
       scope: upgradedVocabulary.readVocabulary({ workspaceId, eventId })!.scope,
       source: upgradedVocabulary
-    }).contributors[0]?.references).toHaveLength(2);
+    }).contributors[0]?.references).toHaveLength(4);
     expect(upgraded.sqlite.query<Record<string, unknown>, []>('PRAGMA foreign_key_check').all())
       .toEqual([]);
   });
@@ -359,8 +428,8 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
     const migrated = openSQLite(path, { migrationPolicy: 'apply' });
     opened.push(migrated);
     expect(migrated.migration).toMatchObject({
-      status: 'applied', migrationId: 'e2_0008_session_program_references',
-      coordinate: { schemaEpoch: 2, sequence: 8 }
+      status: 'applied', migrationId: 'e2_0009_speaker_lineup',
+      coordinate: { schemaEpoch: 2, sequence: 9 }
     });
     expect(migrated.sqlite.query<{ readonly expires_at_ms: number | null }, [string]>(
       'SELECT expires_at_ms FROM api_keys WHERE api_key_id = ?'

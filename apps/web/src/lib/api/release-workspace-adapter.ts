@@ -60,6 +60,8 @@ export interface SchedulePublicationReview {
 	readonly sessions: number;
 	readonly occurrences: number;
 	readonly declassifiedNames: readonly string[];
+	readonly lineupNames: readonly string[];
+	readonly speakerGroups: readonly string[];
 	/**
 	 * Opaque continuation, handed straight back to `publishSchedule`. The port
 	 * that produced a review is the only thing that reads it, so a source with
@@ -131,6 +133,8 @@ export function createReleaseWorkspacePort(client: ReleaseLiveClient): ReleaseWo
 				sessions: diff.releasedSessionCount,
 				occurrences: diff.releasedOccurrenceCount,
 				declassifiedNames: diff.nameDeclassifications.map((entry) => entry.displayName),
+				lineupNames: diff.speakerLineup?.publicSpeakers.map((entry) => entry.name) ?? [],
+				speakerGroups: diff.speakerLineup?.categories.map((entry) => entry.name) ?? [],
 				continuation: drafted.data
 			};
 		},

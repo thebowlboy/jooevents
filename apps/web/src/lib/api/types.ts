@@ -779,6 +779,21 @@ export interface SpeakerRow {
 	categoryId?: string;
 }
 
+/** One event/person record in the organizer-owned public lineup editor. */
+export interface SpeakerLineupRow {
+	/** Canonical person identity inside the organizer surface. */
+	id: string;
+	/** One engagement row the roster view can open for this person. */
+	rosterId: string;
+	name: string;
+	state: EngagementState;
+	sessions: SpeakerSession[];
+	publiclyVisible: boolean;
+	contentApproved: boolean;
+	position: number;
+	categoryId?: string;
+}
+
 /**
  * One person as the public roster shows them: what they said about themselves
  * joined to what they are in this event, already ordered and already filtered

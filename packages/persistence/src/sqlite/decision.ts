@@ -47,6 +47,7 @@ import {
 } from '@jooevents/session';
 import type { DecisionRowPlanDto, SessionRosterParticipantInput } from '@jooevents/contracts';
 import { SQLiteEngagementRepository } from './engagement';
+import type { SQLiteSpeakerLineupRepository } from './speaker-lineup';
 import type {
   SessionMutationPlanDto,
   SessionMutationResult,
@@ -175,8 +176,9 @@ export class SQLiteDecisionRepository implements DecisionTransactionPort,
     readonly sqlite: Database;
     readonly sessions: SQLiteSessionRepository;
     readonly environment: DecisionEnvironmentSource;
+    readonly lineups?: Pick<SQLiteSpeakerLineupRepository, 'ensureEntries' | 'removeOrphanedEntries'>;
   }) {
-    this.engagements = new SQLiteEngagementRepository(input.sqlite);
+    this.engagements = new SQLiteEngagementRepository(input.sqlite, input.lineups);
   }
 
   readDecisionHead(scope: DecisionScopeDto, submissionId: string): DecisionHeadDto | undefined {

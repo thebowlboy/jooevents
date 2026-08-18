@@ -4,6 +4,7 @@ import type {
   EngagementSnapshotDto,
   ReleasePlanningInput,
   ReleaseScopeDto,
+  SpeakerLineupSnapshotDto,
   SessionCatalogDto,
   SessionHeadDto
 } from '@jooevents/contracts';
@@ -138,10 +139,28 @@ function engagements(): EngagementSnapshotDto {
   } as EngagementSnapshotDto;
 }
 
+function lineup(publiclyVisible = true): SpeakerLineupSnapshotDto {
+  return {
+    schemaVersion: 1,
+    scope,
+    version: 1,
+    digestSha256: 'c'.repeat(64),
+    categories: [],
+    entries: [{
+      personId: personA,
+      position: 0,
+      categoryId: null,
+      publiclyVisible,
+      version: 1
+    }]
+  };
+}
+
 interface FixtureControls {
   names: Map<string, string>;
   publishedFormVersions: Map<string, string>;
   visibleA: boolean;
+  lineupVisibleA: boolean;
   occurrences: {
     readonly id: string; readonly sessionId: string; readonly roomId: string;
     readonly startAt: string; readonly endAt: string; readonly version: number;
@@ -192,6 +211,7 @@ function fixture(): {
     names: new Map([[personA, 'Ada Lovelace']]),
     publishedFormVersions: new Map([[formId, formVersion1]]),
     visibleA: true,
+    lineupVisibleA: true,
     occurrences: [{
       id: '019c1df7-86b5-769b-bba4-5f7097bfc901',
       sessionId,
@@ -215,6 +235,7 @@ function fixture(): {
       })
     },
     engagements: { readEngagementSnapshot: () => engagements() },
+    lineups: { readSpeakerLineupSnapshot: () => lineup(controls.lineupVisibleA) },
     vocabulary: {
       readVocabulary: () => createProgramVocabularyState({
         scope,
@@ -642,7 +663,9 @@ describe('SQLite release persistence', () => {
     expect(schedule.sessions[0]!.speakers).toEqual(['Ada Lovelace']);
     expect(schedule.rooms).toEqual([{ id: roomId, name: 'Main Hall' }]);
     expect(roster.speakers).toEqual([{
+      id: expect.any(String),
       name: 'Ada Lovelace',
+      categoryId: null,
       sessions: [{ sessionId, title: 'Opening Keynote' }]
     }]);
     for (const bytes of [canonicalJsonText(schedule), canonicalJsonText(roster)]) {
@@ -656,6 +679,7 @@ describe('SQLite release persistence', () => {
     // Hiding the person and committing a successor removes them from what is
     // served immediately: read-only surfaces follow the newest release.
     controls.visibleA = false;
+    controls.lineupVisibleA = false;
     publishProgram(sqlite, repository, 1);
     const successorSchedule = repository.readServedSchedule(scope)!;
     const successorRoster = repository.readServedRoster(scope)!;

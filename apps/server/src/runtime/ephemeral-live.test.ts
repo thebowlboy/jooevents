@@ -21,6 +21,8 @@ import {
   emailProviderConfigurationReadOperationResultSchema,
   engagementChangeOperationResultSchema,
   engagementSnapshotReadResultSchema,
+  speakerLineupChangeOperationResultSchema,
+  speakerLineupSnapshotReadResultSchema,
   emailProviderReadinessReadOperationResultSchema,
   eventCreateOperationResultSchema,
   eventListReadResultSchema,
@@ -1165,6 +1167,14 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['POST /api/events/current/sessions']
       },
       {
+        name: 'speaker-lineup.change', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/speaker-lineup']
+      },
+      {
+        name: 'speaker-lineup.snapshot.read', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/speaker-lineup']
+      },
+      {
         name: 'store_communication_authoring_payload', version: 1, effect: 'draft',
         bindings: ['POST /api/events/current/communications/authoring-payloads']
       },
@@ -1288,8 +1298,8 @@ describe('ephemeral live Foundation server composition', () => {
     expect(runtime.database.installedSchemaArtifacts).toEqual([]);
     expect(runtime.database.retainedBaseline).toMatchObject({
       status: 'current',
-      coordinate: { schemaEpoch: 2, sequence: 8 },
-      migrationId: 'e2_0008_session_program_references',
+      coordinate: { schemaEpoch: 2, sequence: 9 },
+      migrationId: 'e2_0009_speaker_lineup',
       databaseClass: 'ephemeral'
     });
     expect(runtime.database.sqlite.query<{ readonly name: string }, []>(`
@@ -4953,6 +4963,60 @@ describe('ephemeral live Foundation server composition', () => {
       if (confirmResult.kind !== 'success') throw new Error('Confirmation failed.');
     }
 
+    // Acceptance created one event/person lineup row per accepted speaker.
+    // Curate that canonical lineup before publishing: one group, Bram filed
+    // into it, and a global order that differs from display-name order.
+    const readLineup = async () => {
+      const response = await runtime.app.request('/api/events/current/speaker-lineup', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      });
+      const result = speakerLineupSnapshotReadResultSchema.parse(await response.json());
+      if (result.kind !== 'success') throw new Error('Speaker lineup read failed.');
+      return result.data;
+    };
+    let lineup = await readLineup();
+    expect(lineup.entries.map((entry) => entry.personId).sort())
+      .toEqual([ada.personId, bram.personId, cleo.personId].sort());
+    expect(lineup.entries).toHaveLength(3);
+    const group = speakerLineupChangeOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/speaker-lineup',
+      key: 'publication-loop-lineup-group',
+      body: { action: 'add_category', expectedLineupVersion: lineup.version, name: 'Keynotes' },
+      parse: (value) => value
+    }));
+    if (group.kind !== 'success' || group.data.category === null) {
+      throw new Error('Speaker group create failed.');
+    }
+    const categoryId = group.data.category.id;
+    lineup = await readLineup();
+    const assigned = speakerLineupChangeOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/speaker-lineup',
+      key: 'publication-loop-lineup-assign',
+      body: {
+        action: 'set_category', expectedLineupVersion: lineup.version,
+        personId: bram.personId, categoryId
+      },
+      parse: (value) => value
+    }));
+    if (assigned.kind !== 'success') throw new Error('Speaker group assignment failed.');
+    lineup = await readLineup();
+    const reordered = speakerLineupChangeOperationResultSchema.parse(await effect({
+      runtime,
+      session,
+      path: '/api/events/current/speaker-lineup',
+      key: 'publication-loop-lineup-order',
+      body: {
+        action: 'reorder', expectedLineupVersion: lineup.version,
+        personIds: [bram.personId, ada.personId, cleo.personId]
+      },
+      parse: (value) => value
+    }));
+    if (reordered.kind !== 'success') throw new Error('Speaker lineup reorder failed.');
+
     // Non-programmed catalog content that must never enter a release: one
     // collecting Session (placeable, still never public) and one draft.
     const catalogForCreate = sessionCatalogReadResultSchema.parse(await (
@@ -5042,10 +5106,26 @@ describe('ephemeral live Foundation server composition', () => {
     const rosterOne = await readPublic('/api/public/speakers/current');
     const rosterOneResult = servedRosterResultSchema.parse(rosterOne.body);
     if (rosterOneResult.kind !== 'success') throw new Error('Published roster read failed.');
-    expect(rosterOneResult.data.speakers).toEqual([
-      { name: 'Ada Alpha', sessions: [{ sessionId: ada.sessionId, title: ada.title }] },
-      { name: 'Bram Beta', sessions: [{ sessionId: bram.sessionId, title: bram.title }] }
+    expect(rosterOneResult.data.categories).toEqual([{
+      id: categoryId, name: 'Keynotes', accent: 'lavender', position: 0
+    }]);
+    expect(rosterOneResult.data.speakers.map((speaker) => ({
+      name: speaker.name,
+      categoryId: speaker.categoryId,
+      sessions: speaker.sessions
+    }))).toEqual([
+      {
+        name: 'Bram Beta', categoryId,
+        sessions: [{ sessionId: bram.sessionId, title: bram.title }]
+      },
+      {
+        name: 'Ada Alpha', categoryId: null,
+        sessions: [{ sessionId: ada.sessionId, title: ada.title }]
+      }
     ]);
+    expect(rosterOneResult.data.speakers.every((speaker) =>
+      speaker.id !== undefined
+      && ![ada.personId, bram.personId, cleo.personId].includes(speaker.id))).toBe(true);
     for (const text of [scheduleOne.text, rosterOne.text]) {
       // Response bytes: no unconfirmed name, no non-programmed content, no
       // contact data, no person key, no workspace scope.
@@ -5058,36 +5138,22 @@ describe('ephemeral live Foundation server composition', () => {
       expect(text).not.toContain(runtime.workspaceId);
     }
 
-    // The organizer turns Bram's public visibility off through the mounted
-    // roster_visibility direct operation, then publishes the successor.
-    const catalogBeforeHide = sessionCatalogReadResultSchema.parse(await (
-      await runtime.app.request('/api/events/current/sessions', {
-        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
-      })
-    ).json());
-    if (catalogBeforeHide.kind !== 'success') throw new Error('Session catalog read failed.');
-    const bramSession = catalogBeforeHide.data.sessions.find(
-      (candidate) => candidate.id === bram.sessionId
-    );
-    if (!bramSession) throw new Error('Bram session missing from the catalog.');
-    const hidden = sessionDirectOperationResultSchema.parse(await effect({
+    // Lineup visibility is independent from the same person's schedule
+    // appearance: hide Bram from the roster, keep the confirmed session public.
+    lineup = await readLineup();
+    const hidden = speakerLineupChangeOperationResultSchema.parse(await effect({
       runtime,
       session,
-      path: '/api/events/current/sessions',
+      path: '/api/events/current/speaker-lineup',
       key: 'publication-loop-hide',
       body: {
-        action: 'roster_visibility',
-        expectedCatalogVersion: catalogBeforeHide.data.version,
-        expectedCatalogDigestSha256: catalogBeforeHide.data.digestSha256,
-        sessionId: bram.sessionId,
-        expectedSessionVersion: bramSession.version,
-        expectedSessionDigestSha256: bramSession.digestSha256,
+        action: 'set_visibility', expectedLineupVersion: lineup.version,
         personId: bram.personId,
         publiclyVisible: false
       },
       parse: (value) => value
     }));
-    if (hidden.kind !== 'success') throw new Error('Roster visibility change failed.');
+    if (hidden.kind !== 'success') throw new Error('Lineup visibility change failed.');
 
     const publishTwo = releaseReviewDraftOperationResultSchema.parse(await effect({
       runtime,
@@ -5101,8 +5167,8 @@ describe('ephemeral live Foundation server composition', () => {
     const diffTwo = publishTwo.data.safeDiff;
     if (diffTwo.action !== 'publish_schedule') throw new Error('Second publish diff wrong arm.');
     expect(diffTwo.after.number).toBe(2);
-    expect(diffTwo.nameDeclassifications.map((entry) => entry.displayName))
-      .toEqual(['Ada Alpha']);
+    expect(diffTwo.nameDeclassifications.map((entry) => entry.displayName).sort())
+      .toEqual(['Ada Alpha', 'Bram Beta']);
     await publishReleaseDraft({
       runtime, session, key: 'publication-loop-publish-2', draft: publishTwo
     });
@@ -5115,17 +5181,18 @@ describe('ephemeral live Foundation server composition', () => {
       (entry) => [entry.sessionId, entry.speakers]
     ));
     expect(speakersTwo.get(ada.sessionId)).toEqual(['Ada Alpha']);
-    expect(speakersTwo.get(bram.sessionId)).toEqual([]);
+    expect(speakersTwo.get(bram.sessionId)).toEqual(['Bram Beta']);
     const rosterTwo = await readPublic('/api/public/speakers/current');
     const rosterTwoResult = servedRosterResultSchema.parse(rosterTwo.body);
     if (rosterTwoResult.kind !== 'success') throw new Error('Successor roster read failed.');
     expect(rosterTwoResult.data.speakers.map((entry) => entry.name)).toEqual(['Ada Alpha']);
-    expect(scheduleTwo.text).not.toContain('Bram Beta');
+    expect(scheduleTwo.text).toContain('Bram Beta');
     expect(rosterTwo.text).not.toContain('Bram Beta');
 
     // Rolling back to release 1 restores the program but re-gates against
-    // CURRENT state: Bram is still hidden, so the restorative successor
-    // withholds the appearance and the reviewed diff says exactly which one.
+    // CURRENT state: Bram is still off the lineup, while the independent
+    // schedule appearance still qualifies. The rollback restores order/group
+    // bytes but cannot restore roster visibility.
     const rollback = releaseReviewDraftOperationResultSchema.parse(await effect({
       runtime,
       session,
@@ -5142,11 +5209,9 @@ describe('ephemeral live Foundation server composition', () => {
     const diffRollback = rollback.data.safeDiff;
     if (diffRollback.action !== 'program_rollback') throw new Error('Rollback diff wrong arm.');
     expect(diffRollback.after.number).toBe(3);
-    expect(diffRollback.rollbackSuppressions).toEqual([
-      { sessionId: bram.sessionId, personId: bram.personId }
-    ]);
-    expect(diffRollback.nameDeclassifications.map((entry) => entry.displayName))
-      .toEqual(['Ada Alpha']);
+    expect(diffRollback.rollbackSuppressions).toEqual([]);
+    expect(diffRollback.nameDeclassifications.map((entry) => entry.displayName).sort())
+      .toEqual(['Ada Alpha', 'Bram Beta']);
     await publishReleaseDraft({
       runtime, session, key: 'publication-loop-rollback', draft: rollback
     });
@@ -5159,9 +5224,13 @@ describe('ephemeral live Foundation server composition', () => {
       (entry) => [entry.sessionId, entry.speakers]
     ));
     expect(speakersThree.get(ada.sessionId)).toEqual(['Ada Alpha']);
-    expect(speakersThree.get(bram.sessionId)).toEqual([]);
-    expect(scheduleThree.text).not.toContain('Bram Beta');
+    expect(speakersThree.get(bram.sessionId)).toEqual(['Bram Beta']);
+    expect(scheduleThree.text).toContain('Bram Beta');
     expect(scheduleThree.text).not.toContain('Cleo Gamma');
+    const rosterThree = await readPublic('/api/public/speakers/current');
+    const rosterThreeResult = servedRosterResultSchema.parse(rosterThree.body);
+    if (rosterThreeResult.kind !== 'success') throw new Error('Rollback roster read failed.');
+    expect(rosterThreeResult.data.speakers.map((speaker) => speaker.name)).toEqual(['Ada Alpha']);
 
     // Embed delivery: the Bun request handler serves `/embed/<kind>` HTML
     // with exactly the surface head's stored allowlist and everything else

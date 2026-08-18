@@ -5,6 +5,7 @@ import type {
   ReleasePlanningInput,
   ReleaseScheduleConflictDto,
   SchedulePlacementSnapshotDto,
+  SpeakerLineupSnapshotDto,
   SessionCatalogDto,
   SessionHeadDto
 } from '@jooevents/contracts';
@@ -48,6 +49,7 @@ const roomId = '019c1df7-86b5-769b-bba4-5f7097bfa601';
 const personA = '019c1df7-86b5-769b-bba4-5f7097bfa401';
 const personB = '019c1df7-86b5-769b-bba4-5f7097bfa402';
 const personC = '019c1df7-86b5-769b-bba4-5f7097bfa403';
+const speakerCategoryId = '019c1df7-86b5-769b-bba4-5f7097bfa404';
 const programmedSessionId = '019c1df7-86b5-769b-bba4-5f7097bfa201';
 const collectingSessionId = '019c1df7-86b5-769b-bba4-5f7097bfa203';
 const draftSessionId = '019c1df7-86b5-769b-bba4-5f7097bfa204';
@@ -173,6 +175,25 @@ function scheduleSnapshot(
   } as SchedulePlacementSnapshotDto;
 }
 
+function lineupSnapshot(
+  people: readonly string[] = [personA, personB, personC]
+): SpeakerLineupSnapshotDto {
+  return {
+    schemaVersion: 1,
+    scope,
+    version: 1,
+    digestSha256: 'c'.repeat(64),
+    categories: [],
+    entries: people.map((personId, position) => ({
+      personId,
+      position,
+      categoryId: null,
+      publiclyVisible: personId !== personC,
+      version: 1
+    }))
+  };
+}
+
 interface FixtureState {
   currentProgram?: ProgramRelease;
   programs: Map<string, ProgramRelease>;
@@ -183,6 +204,7 @@ interface FixtureState {
   catalog: SessionCatalogDto;
   schedule: SchedulePlacementSnapshotDto;
   engagements: EngagementSnapshotDto;
+  lineup: SpeakerLineupSnapshotDto;
   conflicts: readonly ReleaseScheduleConflictDto[];
   names: Map<string, string>;
   publishedFormVersions: Map<string, string>;
@@ -231,6 +253,7 @@ function fixture(overrides: Partial<FixtureState> = {}): {
       engagement(programmedSessionId, personB, 'invited'),
       engagement(programmedSessionId, personC, 'confirmed')
     ]),
+    lineup: lineupSnapshot(),
     conflicts: [],
     names: new Map([
       [personA, 'Ada Lovelace'],
@@ -251,6 +274,7 @@ function fixture(overrides: Partial<FixtureState> = {}): {
     readReleaseSessionCatalog: () => state.catalog,
     readReleaseSchedule: () => state.schedule,
     readReleaseEngagementSnapshot: () => state.engagements,
+    readReleaseSpeakerLineupSnapshot: () => state.lineup,
     readReleaseVocabulary: () => ({
       scope,
       setVersion: 2,
@@ -563,6 +587,13 @@ describe('program rollback', () => {
         }),
         sessionHead({ id: unplacedSessionId, title: 'Unplaced Programmed Talk', lifecycle: 'programmed' })
       ]);
+      state.lineup = {
+        ...state.lineup,
+        digestSha256: 'd'.repeat(64),
+        entries: state.lineup.entries.map((entry) => entry.personId === personA
+          ? { ...entry, publiclyVisible: false, version: entry.version + 1 }
+          : entry)
+      };
     });
     expect(first.nameDeclassifications).toEqual([
       { personId: personA, displayName: 'Ada Lovelace' }
@@ -1090,7 +1121,9 @@ describe('served public projections', () => {
 
     const roster = projectServedPublicRoster(release);
     expect(roster.speakers).toEqual([{
+      id: expect.any(String),
       name: 'Ada Lovelace',
+      categoryId: null,
       sessions: [{ sessionId: programmedSessionId, title: 'Opening Keynote' }]
     }]);
 
@@ -1132,20 +1165,87 @@ describe('served public projections', () => {
     const roster = projectServedPublicRoster(publishedRelease(state, port, releaseId1, null));
     expect(roster.speakers).toEqual([
       {
+        id: expect.any(String),
         name: 'Ada Lovelace',
+        categoryId: null,
         sessions: [
           { sessionId: programmedSessionId, title: 'Opening Keynote' },
           { sessionId: unplacedSessionId, title: 'Unplaced Programmed Talk' }
         ]
       },
       {
+        id: expect.any(String),
         name: 'Grace Hopper',
+        categoryId: null,
         sessions: [{ sessionId: unplacedSessionId, title: 'Unplaced Programmed Talk' }]
       }
     ]);
   });
 
-  test('a person hidden in a successor release disappears from what is served', () => {
+  test('a lineup-backed roster preserves global order, category, and zero-session speakers', () => {
+    const { state, port } = fixture({
+      engagements: engagementSnapshot([
+        engagement(programmedSessionId, personA, 'confirmed'),
+        engagement(unplacedSessionId, personB, 'confirmed')
+      ]),
+      lineup: {
+        schemaVersion: 1,
+        scope,
+        version: 4,
+        digestSha256: 'e'.repeat(64),
+        categories: [{
+          id: speakerCategoryId,
+          name: 'Keynotes',
+          accent: 'lavender',
+          status: 'active',
+          position: 0,
+          version: 1
+        }],
+        entries: [
+          { personId: personB, position: 0, categoryId: speakerCategoryId, publiclyVisible: true, version: 2 },
+          { personId: personA, position: 1, categoryId: null, publiclyVisible: true, version: 1 }
+        ]
+      }
+    });
+    const roster = projectServedPublicRoster(publishedRelease(state, port, releaseId1, null));
+    expect(roster.categories).toEqual([{
+      id: speakerCategoryId,
+      name: 'Keynotes',
+      accent: 'lavender',
+      position: 0
+    }]);
+    expect(roster.speakers.map((speaker) => ({
+      name: speaker.name,
+      categoryId: speaker.categoryId,
+      sessions: speaker.sessions
+    }))).toEqual([
+      { name: 'Grace Hopper', categoryId: speakerCategoryId, sessions: [] },
+      {
+        name: 'Ada Lovelace',
+        categoryId: null,
+        sessions: [{ sessionId: programmedSessionId, title: 'Opening Keynote' }]
+      }
+    ]);
+    expect(roster.speakers.every((speaker) => speaker.id && ![personA, personB].includes(speaker.id)))
+      .toBe(true);
+  });
+
+  test('an immutable pre-lineup release retains the historical name-ordered projection', () => {
+    const { state, port } = fixture();
+    const current = publishedRelease(state, port, releaseId1, null);
+    const { speakerLineup: _lineup, digestSha256: _digest, pins, ...base } = current;
+    const { speakerLineupDigestSha256: _lineupPin, ...legacyPins } = pins;
+    const unsigned = { ...base, pins: legacyPins };
+    const legacy = { ...unsigned, digestSha256: releaseDigest(unsigned) } as ProgramRelease;
+    const roster = projectServedPublicRoster(legacy);
+    expect(roster.categories).toBeUndefined();
+    expect(roster.speakers).toEqual([{
+      name: 'Ada Lovelace',
+      sessions: [{ sessionId: programmedSessionId, title: 'Opening Keynote' }]
+    }]);
+  });
+
+  test('lineup visibility, not one session appearance, controls the public card', () => {
     const { state, port } = fixture();
     const first = publishedRelease(state, port, releaseId1, null);
     expect(projectServedPublicRoster(first).speakers).toHaveLength(1);
@@ -1164,9 +1264,24 @@ describe('served public projections', () => {
     const roster = projectServedPublicRoster(second);
     expect(schedule.releaseNumber).toBe(2);
     expect(schedule.sessions[0]!.speakers).toEqual([]);
-    expect(roster.speakers).toEqual([]);
+    expect(roster.speakers).toEqual([{
+      id: expect.any(String),
+      name: 'Ada Lovelace',
+      categoryId: null,
+      sessions: []
+    }]);
     expect(canonicalJsonText(schedule)).not.toContain('Ada Lovelace');
-    expect(canonicalJsonText(roster)).not.toContain('Ada Lovelace');
+    expect(canonicalJsonText(roster)).toContain('Ada Lovelace');
+
+    state.lineup = {
+      ...state.lineup,
+      digestSha256: 'd'.repeat(64),
+      entries: state.lineup.entries.map((entry) => entry.personId === personA
+        ? { ...entry, publiclyVisible: false, version: entry.version + 1 }
+        : entry)
+    };
+    const third = publishedRelease(state, port, releaseId3, 2);
+    expect(projectServedPublicRoster(third).speakers).toEqual([]);
   });
 
   test('a tampered release refuses to serve', () => {

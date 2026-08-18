@@ -5,7 +5,7 @@
 	import { Button, createRowDrag, motionMs, statusIcon } from '$lib/ui';
 	import type { SpeakersPagePort } from '$lib/api/speakers-page-port';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
-	import type { EngagementState, SpeakerCategory, SpeakerRow } from '$lib/api/types';
+	import type { EngagementState, SpeakerCategory, SpeakerLineupRow } from '$lib/api/types';
 
 	/**
 	 * The public lineup: who appears on the roster surface, in what order, under
@@ -26,25 +26,46 @@
 
 	interface Props {
 		port: SpeakersPagePort;
-		/** Reloads the roster the parent holds, after a commit or an undo. */
-		onChanged: () => Promise<void> | void;
-		speakers: SpeakerRow[] | null;
 	}
 
-	let { port, onChanged, speakers }: Props = $props();
+	let { port }: Props = $props();
 
 	const api = $derived(port);
 
 	let categories = $state<SpeakerCategory[] | null>(null);
+	let speakers = $state<SpeakerLineupRow[] | null>(null);
 	let pending = $state('');
 	let error = $state('');
+	let loadError = $state('');
+	let retrying = $state(false);
 	let announcement = $state('');
 
-	async function loadCategories() {
-		categories = await api.vocab.speakerCategories();
+	async function load() {
+		try {
+			const [nextSpeakers, nextCategories] = await Promise.all([
+				api.lineup.list(),
+				api.vocab.speakerCategories()
+			]);
+			speakers = nextSpeakers;
+			categories = nextCategories;
+			loadError = '';
+		} catch (cause) {
+			loadError = cause instanceof Error
+				? cause.message
+				: 'The public lineup could not be loaded.';
+		}
 	}
 
-	onMount(() => void loadCategories());
+	async function retry() {
+		retrying = true;
+		try {
+			await load();
+		} finally {
+			retrying = false;
+		}
+	}
+
+	onMount(() => void load());
 
 	const rows = $derived(speakers ?? []);
 	const shown = $derived(rows.filter((row) => row.publiclyVisible));
@@ -56,7 +77,11 @@
 	}
 
 	async function refresh() {
-		await Promise.all([onChanged(), loadCategories()]);
+		await load();
+	}
+
+	function failureCopy(cause: unknown, fallback: string): string {
+		return cause instanceof Error ? cause.message : fallback;
 	}
 
 	// -----------------------------------------------------------------------
@@ -83,77 +108,89 @@
 
 		pending = `move-${row.id}`;
 		error = '';
-		const outcome = await api.speakers.reorder(row.id, target);
-		if (!outcome.ok) {
-			error = outcome.reason;
-			pending = '';
-			return;
-		}
-		await refresh();
-		announcement = `${row.name} moved to position ${to + 1} of ${shown.length}.`;
-		recordAction({
-			area: 'speakers',
-			label: `Moved ${row.name} in the lineup`,
-			undo: async () => {
-				await api.speakers.reorder(row.id, wasAt);
-				await refresh();
+		try {
+			const outcome = await api.lineup.reorder(row.id, target);
+			if (!outcome.ok) {
+				error = outcome.reason;
+				return;
 			}
-		});
-		pending = '';
+			await refresh();
+			announcement = `${row.name} moved to position ${to + 1} of ${shown.length}.`;
+			recordAction({
+				area: 'speakers',
+				label: `Moved ${row.name} in the lineup`,
+				undo: async () => {
+					await api.lineup.reorder(row.id, wasAt);
+					await refresh();
+				}
+			});
+		} catch (cause) {
+			error = failureCopy(cause, 'The lineup order could not be changed.');
+		} finally {
+			pending = '';
+		}
 	}
 
 	// -----------------------------------------------------------------------
 	// Grouping and visibility: single-field edits on one record, so they commit
 	// in place, each with the receipt that carries them back.
 
-	async function assignCategory(row: SpeakerRow, next: string) {
+	async function assignCategory(row: SpeakerLineupRow, next: string) {
 		const before = row.categoryId ?? null;
 		const value = next || null;
 		if (before === value) return;
 		pending = `cat-${row.id}`;
 		error = '';
-		const outcome = await api.speakers.setCategory(row.id, value);
-		if (!outcome.ok) {
-			error = outcome.reason;
-			pending = '';
-			return;
-		}
-		await refresh();
-		recordAction({
-			area: 'speakers',
-			label: value
-				? `Filed ${row.name} under ${categoryName(value)}`
-				: `Removed ${row.name} from ${categoryName(before ?? undefined)}`,
-			undo: async () => {
-				await api.speakers.setCategory(row.id, before);
-				await refresh();
+		try {
+			const outcome = await api.lineup.setCategory(row.id, value);
+			if (!outcome.ok) {
+				error = outcome.reason;
+				return;
 			}
-		});
-		pending = '';
+			await refresh();
+			recordAction({
+				area: 'speakers',
+				label: value
+					? `Filed ${row.name} under ${categoryName(value)}`
+					: `Removed ${row.name} from ${categoryName(before ?? undefined)}`,
+				undo: async () => {
+					await api.lineup.setCategory(row.id, before);
+					await refresh();
+				}
+			});
+		} catch (cause) {
+			error = failureCopy(cause, 'The speaker group could not be changed.');
+		} finally {
+			pending = '';
+		}
 	}
 
-	async function setVisible(row: SpeakerRow, publiclyVisible: boolean) {
+	async function setVisible(row: SpeakerLineupRow, publiclyVisible: boolean) {
 		pending = `vis-${row.id}`;
 		error = '';
-		const outcome = await api.speakers.setVisibility(row.id, publiclyVisible);
-		if (!outcome.ok) {
-			error = outcome.reason;
-			pending = '';
-			return;
-		}
-		await refresh();
-		announcement = publiclyVisible
-			? `${row.name} is on the public lineup.`
-			: `${row.name} is off the public lineup.`;
-		recordAction({
-			area: 'speakers',
-			label: publiclyVisible ? `Published ${row.name}` : `Took ${row.name} off the lineup`,
-			undo: async () => {
-				await api.speakers.setVisibility(row.id, !publiclyVisible);
-				await refresh();
+		try {
+			const outcome = await api.lineup.setVisibility(row.id, publiclyVisible);
+			if (!outcome.ok) {
+				error = outcome.reason;
+				return;
 			}
-		});
-		pending = '';
+			await refresh();
+			announcement = publiclyVisible
+				? `${row.name} is on the public lineup.`
+				: `${row.name} is off the public lineup.`;
+			recordAction({
+				area: 'speakers',
+				label: publiclyVisible ? `Published ${row.name}` : `Took ${row.name} off the lineup`,
+				undo: async () => {
+					await api.lineup.setVisibility(row.id, !publiclyVisible);
+					await refresh();
+				}
+			});
+		} catch (cause) {
+			error = failureCopy(cause, 'The public lineup could not be changed.');
+		} finally {
+			pending = '';
+		}
 	}
 
 	// -----------------------------------------------------------------------
@@ -175,12 +212,17 @@
 		if (!name || pending) return;
 		pending = 'add-category';
 		error = '';
-		const created = await api.vocab.addSpeakerCategory(name);
-		await loadCategories();
-		newName = '';
-		addOpen = false;
-		announcement = `“${created.name}” is now a speaker group.`;
-		pending = '';
+		try {
+			const created = await api.vocab.addSpeakerCategory(name);
+			await load();
+			newName = '';
+			addOpen = false;
+			announcement = `“${created.name}” is now a speaker group.`;
+		} catch (cause) {
+			error = cause instanceof Error ? cause.message : 'The speaker group could not be added.';
+		} finally {
+			pending = '';
+		}
 	}
 
 	function initials(name: string): string {
@@ -206,8 +248,8 @@
 		<div class="lineup__intro">
 			<h2 class="lineup__title">Public lineup</h2>
 			<p class="lineup__copy">
-				Everyone here appears on your speaker page and in every embed of it, in this order. Drag to
-				change it; a page that groups by speaker group keeps this order inside each group.
+				People under “On the lineup” appear on your speaker page and in every embed, in this
+				order. Drag to change it; grouped pages keep this order inside each group.
 			</p>
 		</div>
 		<!-- The two doors out: what it looks like, and how it gets onto a site.
@@ -224,6 +266,14 @@
 	</header>
 
 	{#if error}<p class="lineup__error" role="alert">{error}</p>{/if}
+	{#if loadError}
+		<div class="lineup__load-error" role="alert">
+			<p>{loadError}</p>
+			<Button variant="secondary" size="sm" disabled={retrying} loading={retrying} onclick={retry}>
+				Try again
+			</Button>
+		</div>
+	{/if}
 	<p class="ui-sr-only" role="status">{announcement}</p>
 
 	<section class="card" aria-label="Speaker groups">
@@ -254,7 +304,7 @@
 				{/each}
 			</p>
 			<p class="groups__note">
-				Groups appear on the page in this order. Everyone in no group is listed after them.
+				Groups appear in the order you add them. Everyone in no group is listed after them.
 			</p>
 		{/if}
 		{#if addOpen}
@@ -311,7 +361,7 @@
 						<span class="lnrow__pos" aria-hidden="true">{index + 1}</span>
 						<span class="ui-avatar lnrow__mark" aria-hidden="true">{initials(row.name)}</span>
 						<span class="lnrow__who">
-							<a class="lnrow__name" href={`/app/speakers?speaker=${row.id}`}>{row.name}</a>
+							<a class="lnrow__name" href={`/app/speakers?speaker=${row.rosterId}`}>{row.name}</a>
 							{#if !row.contentApproved}
 								{@const Pending = statusIcon.draft}
 								<!-- The one fact about a published speaker that changes what a
@@ -342,11 +392,6 @@
 								</select>
 							</span>
 							<span class="lnrow__actions">
-									<a
-										class="ui-button ui-button--ghost ui-button--sm"
-										href={`/app/embeds?embed=srf-speaker-roster%3Aspeaker%3A${row.id}`}>
-										Embed
-									</a>
 									<Button
 										variant="ghost"
 										size="sm"
@@ -381,7 +426,7 @@
 						<span class="lnrow__pos" aria-hidden="true">—</span>
 						<span class="ui-avatar lnrow__mark" aria-hidden="true">{initials(row.name)}</span>
 						<span class="lnrow__who">
-							<a class="lnrow__name" href={`/app/speakers?speaker=${row.id}`}>{row.name}</a>
+							<a class="lnrow__name" href={`/app/speakers?speaker=${row.rosterId}`}>{row.name}</a>
 							<span class="lnrow__state">{engagementWords[row.state]}</span>
 						</span>
 						<span class="lnrow__tail">
@@ -414,6 +459,7 @@
 		align-items: flex-start;
 		justify-content: space-between;
 		gap: var(--je-space-3);
+		margin-block-end: var(--je-space-2);
 	}
 
 	.lineup__intro {
@@ -446,6 +492,24 @@
 		font-size: var(--je-font-size-sm);
 		font-weight: 600;
 		color: var(--je-color-danger);
+	}
+
+	.lineup__load-error {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		justify-content: space-between;
+		gap: var(--je-space-2);
+		padding: var(--je-space-3);
+		border: 1px solid var(--je-color-danger);
+		border-radius: var(--je-radius-control);
+		background: var(--je-color-danger-soft);
+		color: var(--je-color-danger);
+	}
+
+	.lineup__load-error p {
+		margin: 0;
+		font-size: var(--je-font-size-sm);
 	}
 
 	.card {
@@ -657,16 +721,35 @@
 		}
 
 		.lnrow__tail {
-			display: flex;
+			display: grid;
 			grid-area: tail;
+			grid-template-columns: minmax(0, 1fr) auto;
 			align-items: center;
-			justify-content: space-between;
 			gap: var(--je-space-2);
-			min-width: 0;
+			min-inline-size: 0;
+			max-inline-size: 100%;
+		}
+
+		.lnrow__group {
+			min-inline-size: 0;
+			overflow-wrap: anywhere;
 		}
 
 		.lnrow__pick {
+			inline-size: 100%;
 			min-inline-size: 0;
+			max-inline-size: 100%;
+			height: var(--je-control-height-sm);
+		}
+
+		.lnrow__actions {
+			flex-wrap: wrap;
+			justify-content: flex-end;
+			min-inline-size: 0;
+		}
+
+		.lnrow__actions :global(.ui-button) {
+			min-block-size: var(--je-control-height-sm);
 		}
 	}
 </style>

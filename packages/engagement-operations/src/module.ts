@@ -19,8 +19,12 @@ import {
   engagementSnapshotReadInputSchema,
   engagementSnapshotReadResultSchema,
   engagementSnapshotSchema,
+  speakerLineupSnapshotReadInputSchema,
+  speakerLineupSnapshotReadResultSchema,
+  speakerLineupSnapshotSchema,
   type EngagementScopeDto,
-  type EngagementSnapshotDto
+  type EngagementSnapshotDto,
+  type SpeakerLineupSnapshotDto
 } from '@jooevents/contracts';
 import {
   CURRENT_AUTHORITY_DENIAL_REASONS,
@@ -44,6 +48,9 @@ import { z } from 'zod';
 export const ENGAGEMENT_SNAPSHOT_READ_OPERATION = Object.freeze({
   name: 'engagement.snapshot.read', version: 1
 });
+export const SPEAKER_LINEUP_SNAPSHOT_READ_OPERATION = Object.freeze({
+  name: 'speaker-lineup.snapshot.read', version: 1
+});
 
 export const ENGAGEMENT_READ_ACCESS_POLICY: VersionedAccessPolicyRef = Object.freeze({
   key: 'authority.engagement.read', version: parseContractVersion(1)
@@ -52,6 +59,10 @@ export const ENGAGEMENT_READ_PERMISSION_ID: PermissionId = 'speaker.directory.re
 
 export const engagementSnapshotCanonicalResultSchema = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('success'), data: engagementSnapshotSchema }),
+  z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
+]);
+export const speakerLineupSnapshotCanonicalResultSchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('success'), data: speakerLineupSnapshotSchema }),
   z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
 ]);
 export { engagementSnapshotReadResultSchema };
@@ -63,6 +74,10 @@ export { engagementSnapshotReadResultSchema };
  */
 export interface EngagementSnapshotReadSource {
   readEngagementSnapshot(scope: EngagementScopeDto): EngagementSnapshotDto | undefined;
+}
+
+export interface SpeakerLineupSnapshotReadSource {
+  readSpeakerLineupSnapshot(scope: EngagementScopeDto): SpeakerLineupSnapshotDto | undefined;
 }
 
 function ref(key: string): VersionedDefinitionRef {
@@ -93,6 +108,25 @@ const refs = Object.freeze({
   recordProfile: ref('record-profile.engagement.read-operational-trace')
 });
 
+const lineupSchemas = Object.freeze({
+  input: ENGAGEMENT_OPERATION_SCHEMA_REFS.lineupSnapshotRead.inputSchema,
+  canonical: schemaRef(
+    'schema.speaker-lineup.snapshot-read.canonical-result',
+    speakerLineupSnapshotCanonicalResultSchema
+  ),
+  projected: ENGAGEMENT_OPERATION_SCHEMA_REFS.lineupSnapshotRead.resultSchema
+});
+
+const lineupRefs = Object.freeze({
+  context: ref('context.speaker-lineup.snapshot-read'),
+  autonomy: ref('autonomy.speaker-lineup.snapshot-read'),
+  capability: ref('capability.speaker-lineup.snapshot-read'),
+  handler: ref('handler.speaker-lineup.snapshot-read'),
+  projection: ref('projection.speaker-lineup.snapshot-read.operator'),
+  trace: ref('trace.speaker-lineup.snapshot-read'),
+  recordProfile: ref('record-profile.speaker-lineup.read-operational-trace')
+});
+
 export interface EngagementOperationIds {
   newInvocationId(): InvocationId;
 }
@@ -118,6 +152,7 @@ export interface CreateEngagementOperationModuleInput {
   readonly scopePartitionProfile: VersionedKeyProfileRef;
   readonly requestCanonicalizationProfile: VersionedKeyProfileRef;
   readonly engagements: EngagementSnapshotReadSource;
+  readonly lineups: SpeakerLineupSnapshotReadSource;
 }
 
 function authorityOutcome(reason: CurrentAuthorityDenialReason): StructuredOutcome {
@@ -198,9 +233,39 @@ export function createEngagementOperationModule(
     },
     requiresSeparateApproval: false
   });
+  const lineupAutonomy = createOperationAutonomyPolicy({
+    definition: lineupRefs.autonomy,
+    operation: SPEAKER_LINEUP_SNAPSHOT_READ_OPERATION,
+    riskFloor: 'low', unattendedRiskCeiling: 'low',
+    supportedDispositions: [
+      'proceed', 'safe_retry', 'reconcile', 'renewed_approval',
+      'replan', 'compensate', 'block', 'attention'
+    ],
+    triggerDispositions: {
+      authority_lost: 'block', unattended_bounds_exceeded: 'renewed_approval',
+      approval_required: 'renewed_approval', known_retryable_failure: 'safe_retry',
+      ambiguous_external_effect: 'reconcile', stale_plan: 'replan',
+      compensation_required: 'compensate', terminal_failure: 'attention'
+    },
+    requiresSeparateApproval: false
+  });
   const context = createReadInvocationContextBuilder({
     reference: refs.context,
     operation: ENGAGEMENT_SNAPSHOT_READ_OPERATION,
+    effect: 'read',
+    lanes: [lane],
+    scopeResolver: currentEventScopeResolver({ workspaceId, source: input.currentEvent }),
+    authorityResolver: input.currentAuthority,
+    clock: input.clock,
+    newInvocationId: input.ids.newInvocationId,
+    authorityPrincipalKeyProfile: input.authorityPrincipalKeyProfile,
+    scopePartitionProfile: input.scopePartitionProfile,
+    requestCanonicalizationProfile: input.requestCanonicalizationProfile,
+    deniedAuthorityOutcome: authorityOutcome
+  });
+  const lineupContext = createReadInvocationContextBuilder({
+    reference: lineupRefs.context,
+    operation: SPEAKER_LINEUP_SNAPSHOT_READ_OPERATION,
     effect: 'read',
     lanes: [lane],
     scopeResolver: currentEventScopeResolver({ workspaceId, source: input.currentEvent }),
@@ -228,6 +293,10 @@ export function createEngagementOperationModule(
     reference: refs.capability,
     openSnapshot
   });
+  const lineupCapability: ReadCapabilityRegistration = Object.freeze({
+    reference: lineupRefs.capability,
+    openSnapshot
+  });
   const accessOutcomes = CURRENT_AUTHORITY_DENIAL_REASONS.map((reason) => Object.freeze({
     class: 'access_denied' as const,
     kind: `authority.${reason}`,
@@ -238,15 +307,18 @@ export function createEngagementOperationModule(
   return Object.freeze({
     id: 'engagement.operations',
     source: Object.freeze({
-      autonomyPolicies: Object.freeze([autonomy]),
+      autonomyPolicies: Object.freeze([autonomy, lineupAutonomy]),
       schemas: Object.freeze([
         { reference: schemas.input, schema: engagementSnapshotReadInputSchema },
         { reference: schemas.canonical, schema: engagementSnapshotCanonicalResultSchema },
         { reference: schemas.projected, schema: engagementSnapshotReadResultSchema },
-        { reference: schemas.nullDetail, schema: z.null() }
+        { reference: schemas.nullDetail, schema: z.null() },
+        { reference: lineupSchemas.input, schema: speakerLineupSnapshotReadInputSchema },
+        { reference: lineupSchemas.canonical, schema: speakerLineupSnapshotCanonicalResultSchema },
+        { reference: lineupSchemas.projected, schema: speakerLineupSnapshotReadResultSchema }
       ]),
-      contextBuilders: Object.freeze([context]),
-      readCapabilities: Object.freeze([capability]),
+      contextBuilders: Object.freeze([context, lineupContext]),
+      readCapabilities: Object.freeze([capability, lineupCapability]),
       handlers: Object.freeze([{
         reference: refs.handler,
         readCapability: refs.capability,
@@ -279,20 +351,57 @@ export function createEngagementOperationModule(
             data: engagementSnapshotSchema.parse(served)
           });
         }
+      }, {
+        reference: lineupRefs.handler,
+        readCapability: lineupRefs.capability,
+        canonicalResultSchema: lineupSchemas.canonical,
+        handle: ({ businessInput, snapshot }: {
+          readonly businessInput: unknown;
+          readonly snapshot: Readonly<Record<string, unknown>>;
+        }) => {
+          if (snapshot.kind === 'event_required') {
+            return Object.freeze({
+              kind: 'outcome' as const,
+              outcome: Object.freeze({
+                class: 'conflict' as const,
+                kind: 'speaker-lineup.event_required',
+                retryable: false,
+                subjects: [], detail: null, detailSchemaVersion: 1
+              })
+            });
+          }
+          speakerLineupSnapshotReadInputSchema.parse(businessInput);
+          const served = input.lineups.readSpeakerLineupSnapshot(snapshot.scope as EngagementScopeDto);
+          if (served === undefined) throw new TypeError('speaker_lineup_snapshot_scope_missing');
+          return Object.freeze({ kind: 'success' as const, data: speakerLineupSnapshotSchema.parse(served) });
+        }
       }]),
       projections: Object.freeze([{
         reference: refs.projection,
         canonicalResultSchema: schemas.canonical,
         projectedResultSchema: schemas.projected,
         project: (candidate: unknown) => engagementSnapshotCanonicalResultSchema.parse(candidate)
+      }, {
+        reference: lineupRefs.projection,
+        canonicalResultSchema: lineupSchemas.canonical,
+        projectedResultSchema: lineupSchemas.projected,
+        project: (candidate: unknown) => speakerLineupSnapshotCanonicalResultSchema.parse(candidate)
       }]),
       readOperationalTraceTargets: Object.freeze([{
         reference: refs.trace,
         kind: 'read_operational_trace_record' as const,
         recordProfile: refs.recordProfile
+      }, {
+        reference: lineupRefs.trace,
+        kind: 'read_operational_trace_record' as const,
+        recordProfile: lineupRefs.recordProfile
       }]),
       operationAuditRecordProfiles: Object.freeze([{
         reference: refs.recordProfile,
+        kind: 'canonical_json' as const,
+        maximumBytes: 262_144
+      }, {
+        reference: lineupRefs.recordProfile,
         kind: 'canonical_json' as const,
         maximumBytes: 262_144
       }]),
@@ -330,6 +439,41 @@ export function createEngagementOperationModule(
           input: 'query' as const,
           browserResumption: { kind: 'none' as const },
           projection: refs.projection
+        }]
+      }, {
+        ...SPEAKER_LINEUP_SNAPSHOT_READ_OPERATION,
+        lifecycle: { status: 'active' as const },
+        summary: 'Read the person-level public speaker lineup for the current event.',
+        effect: 'read' as const,
+        maxRisk: 'low' as const,
+        autonomyPolicy: lineupRefs.autonomy,
+        consequenceTags: [],
+        inputSchema: lineupSchemas.input,
+        canonicalResultSchema: lineupSchemas.canonical,
+        outcomes: [
+          ...accessOutcomes,
+          {
+            class: 'conflict' as const,
+            kind: 'speaker-lineup.event_required',
+            retryable: false,
+            detailSchema: schemas.nullDetail
+          }
+        ],
+        accessLanes: [lane],
+        contextBuilder: lineupRefs.context,
+        readCapability: lineupRefs.capability,
+        handler: lineupRefs.handler,
+        observability: {
+          trace: { mode: 'required' as const, target: lineupRefs.trace },
+          immutableAudit: { mode: 'none' as const }
+        },
+        bindings: [{
+          surface: 'operator_http' as const,
+          method: 'GET' as const,
+          path: '/api/events/current/speaker-lineup',
+          input: 'query' as const,
+          browserResumption: { kind: 'none' as const },
+          projection: lineupRefs.projection
         }]
       }])
     })

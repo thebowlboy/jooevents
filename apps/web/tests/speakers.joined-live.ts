@@ -6,8 +6,8 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
  * speaker's `invited` engagement in the same commit, the live Speakers roster
  * serves it (name, disclosed address, session, state), `record_confirmation`
  * commits through `engagement.change@1` with
- * organizer attribution on the committed head, and a lineup mutation surfaces
- * its typed BLOCKED-13 refusal instead of pretending a lineup owner exists.
+ * organizer attribution on the committed head, and the person-level lineup
+ * commits visibility, grouping, and global order through its live owner.
  *
  * One shared ephemeral backend serves every project, so names carry the
  * project name and the vocabulary minted here is retired at the end. Rows
@@ -94,6 +94,38 @@ function rosterRecord(page: Page, speakerName: string): Locator {
 	return page
 		.getByRole('row', { name: new RegExp(speakerName) })
 		.or(page.getByRole('listitem').filter({ hasText: speakerName }));
+}
+
+/** Sends a genuine Chromium touch stream through the row handle. */
+async function touchDragUp(page: Page, handle: Locator, targetRow: Locator): Promise<void> {
+	// The joined run accumulates one tall mobile row per preceding project.
+	// Centre the destination before reading viewport-relative coordinates so the
+	// touch starts and ends inside the device viewport, not further down the page.
+	await targetRow.evaluate((row) => row.scrollIntoView({ block: 'center', inline: 'nearest' }));
+	await expect(handle).toBeInViewport();
+	await expect(targetRow).toBeInViewport();
+	const [handleBox, targetBox] = await Promise.all([
+		handle.boundingBox(),
+		targetRow.boundingBox()
+	]);
+	if (!handleBox || !targetBox) throw new TypeError('Visible lineup drag geometry is required.');
+	const client = await page.context().newCDPSession(page);
+	const x = handleBox.x + handleBox.width / 2;
+	const fromY = handleBox.y + handleBox.height / 2;
+	// The reorder contract divides a row at its midpoint. Aim inside the upper
+	// half instead of exactly on that boundary, where device-pixel rounding can
+	// resolve to either adjacent slot.
+	const toY = targetBox.y + targetBox.height / 4;
+	await client.send('Input.dispatchTouchEvent', {
+		type: 'touchStart',
+		touchPoints: [{ x, y: fromY }]
+	});
+	await client.send('Input.dispatchTouchEvent', {
+		type: 'touchMove',
+		touchPoints: [{ x, y: toY }]
+	});
+	await page.waitForTimeout(100);
+	await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
 }
 
 test.describe.configure({ mode: 'serial' });
@@ -271,22 +303,70 @@ test('record confirmation commits with organizer attribution and survives reload
 	expect(newlyConfirmed[0]?.confirmation?.recordedByUserId).not.toBeNull();
 });
 
-test('a lineup mutation surfaces its typed refusal', async ({ page }, testInfo) => {
+test('lineup visibility, grouping, and accessible order commit and survive reload', async ({
+	page
+}, testInfo) => {
 	const speakerName = `Roster Speaker ${testInfo.project.name}`;
+	const groupName = `Keynotes ${testInfo.project.name}`;
 
 	await page.goto('/app/speakers?view=lineup');
-	// The confirmed speaker's roster reference is publicly visible, so the row
-	// sits on the lineup; taking it off has no live owner and must refuse with
-	// the recorded copy — never silently no-op.
-	const lineupRow = page
-		.getByRole('region', { name: 'On the lineup' })
+	const onLineup = page.getByRole('region', { name: 'On the lineup' });
+	const offLineup = page.getByRole('region', { name: 'Not on the lineup' });
+	let lineupRow = onLineup
 		.getByRole('listitem')
 		.filter({ hasText: speakerName });
 	await expect(lineupRow).toBeVisible({ timeout: 15000 });
-	await lineupRow.getByRole('button', { name: 'Take off' }).click();
-	await expect(page.getByRole('alert')).toContainText(
-		'Changing who appears on the public lineup is not available in this live workspace yet.'
+
+	// Keyboard and touch both enter the same global-order operation. Mobile
+	// sends a real touch stream; the other reference widths exercise the
+	// keyboard-equal handle contract.
+	const visibleNames = async () => onLineup.getByRole('listitem').evaluateAll((rows) =>
+		rows.map((row) => row.querySelector('.lnrow__name')?.textContent?.trim() ?? '')
 	);
-	// The row stays exactly where it was: the refusal changed nothing.
-	await expect(lineupRow).toBeVisible();
+	const beforeOrder = await visibleNames();
+	const beforeIndex = beforeOrder.indexOf(speakerName);
+	if (beforeIndex > 0) {
+		const handle = lineupRow.getByRole('button', { name: new RegExp(`Reorder ${speakerName}`) });
+		if (testInfo.project.name === 'mobile') {
+			const box = await handle.boundingBox();
+			expect(box?.width ?? 0).toBeGreaterThanOrEqual(40);
+			expect(box?.height ?? 0).toBeGreaterThanOrEqual(40);
+			await touchDragUp(page, handle, onLineup.getByRole('listitem').nth(beforeIndex - 1));
+		} else {
+			await handle.press('ArrowUp');
+		}
+		await expect.poll(async () => (await visibleNames()).indexOf(speakerName))
+			.toBe(beforeIndex - 1);
+	}
+
+	// Add one group and file this person under it through the live vocabulary.
+	const groups = page.getByRole('region', { name: 'Speaker groups' });
+	if (await groups.getByText(groupName, { exact: true }).count() === 0) {
+		await groups.getByRole('button', { name: 'New group' }).click();
+		await groups.getByRole('textbox', { name: 'Group name' }).fill(groupName);
+		await groups.getByRole('button', { name: 'Add', exact: true }).click();
+	}
+	lineupRow = onLineup.getByRole('listitem').filter({ hasText: speakerName });
+	await lineupRow.getByRole('combobox', { name: `Speaker group for ${speakerName}` })
+		.selectOption({ label: groupName });
+	await expect(lineupRow.getByRole('combobox', { name: `Speaker group for ${speakerName}` }))
+		.toHaveValue(/.+/);
+
+	// Visibility moves the person between the two truthful sections and the
+	// committed state remains after a browser reload.
+	await lineupRow.getByRole('button', { name: 'Take off' }).click();
+	await expect(offLineup.getByRole('listitem').filter({ hasText: speakerName }))
+		.toBeVisible({ timeout: 15000 });
+	await page.reload();
+	const hiddenRow = page.getByRole('region', { name: 'Not on the lineup' })
+		.getByRole('listitem').filter({ hasText: speakerName });
+	await expect(hiddenRow).toBeVisible({ timeout: 15000 });
+	await hiddenRow.getByRole('button', { name: 'Put on the lineup' }).click();
+	await expect(page.getByRole('region', { name: 'On the lineup' })
+		.getByRole('listitem').filter({ hasText: speakerName })).toBeVisible({ timeout: 15000 });
+
+	expect(await page.evaluate(() => ({
+		document: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+		body: document.body.scrollWidth > document.body.clientWidth
+	}))).toEqual({ document: false, body: false });
 });

@@ -107,6 +107,14 @@ describe('Schedule publication, reviewed', () => {
 			{ personId: id(40), displayName: 'Ada Lovelace' },
 			{ personId: id(41), displayName: 'Grace Hopper' }
 		],
+		speakerLineup: {
+			digestSha256: digest('f'),
+			categories: [],
+			publicSpeakers: [
+				{ speakerId: id(60), name: 'Grace Hopper', categoryId: null },
+				{ speakerId: id(61), name: 'Ada Lovelace', categoryId: null }
+			]
+		},
 		rollbackSuppressions: null
 	});
 	const drafted = {
@@ -136,6 +144,8 @@ describe('Schedule publication, reviewed', () => {
 		expect(review.occurrences).toBe(6);
 		// The disclosure is the review: exactly the names the commit makes public.
 		expect(review.declassifiedNames).toEqual(['Ada Lovelace', 'Grace Hopper']);
+		expect(review.lineupNames).toEqual(['Grace Hopper', 'Ada Lovelace']);
+		expect(review.speakerGroups).toEqual([]);
 	});
 
 	test('publishes exactly the reviewed draft, under its own explicit key', async () => {
@@ -172,7 +182,8 @@ describe('Schedule publication, reviewed', () => {
 			async mutate() { throw new Error('mutate_not_used'); }
 		};
 		expect(await createReleaseWorkspacePort(client).publishSchedule({
-			releaseNumber: 1, sessions: 0, occurrences: 0, declassifiedNames: []
+			releaseNumber: 1, sessions: 0, occurrences: 0, declassifiedNames: [],
+			lineupNames: [], speakerGroups: []
 		})).toEqual({ ok: false, reason: 'Review this publication again before publishing it.' });
 	});
 

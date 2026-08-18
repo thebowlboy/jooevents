@@ -11,6 +11,7 @@ import {
 	mapServedFormSummary,
 	mapServedRoster,
 	mapServedScheduleState,
+	mapServedSpeakerCategories,
 	mapServedTracks
 } from './public-surface-port.live';
 
@@ -48,7 +49,9 @@ const ids = {
 	room: '018f6f00-0000-7000-8000-00000000000a',
 	sessionA: '018f6f00-0000-7000-8000-0000000000aa',
 	sessionB: '018f6f00-0000-7000-8000-0000000000ab',
-	occurrenceA: '018f6f00-0000-7000-8000-0000000000ba'
+	occurrenceA: '018f6f00-0000-7000-8000-0000000000ba',
+	speaker: '018f6f00-0000-7000-8000-0000000000ca',
+	category: '018f6f00-0000-7000-8000-0000000000da'
 } as const;
 
 function servedSchedule(): ServedPublicScheduleDto {
@@ -93,6 +96,25 @@ function servedRoster(): ServedPublicRosterDto {
 		speakers: [
 			{ name: 'Ada Alpha', sessions: [{ sessionId: ids.sessionA, title: 'Agent Product Craft' }] }
 		]
+	};
+}
+
+function lineupRoster(): ServedPublicRosterDto {
+	return {
+		schemaVersion: 1,
+		releaseNumber: 3,
+		categories: [{
+			id: ids.category,
+			name: 'Keynotes',
+			accent: 'lavender',
+			position: 0
+		}],
+		speakers: [{
+			id: ids.speaker,
+			name: 'Ada Alpha',
+			categoryId: ids.category,
+			sessions: []
+		}]
 	};
 }
 
@@ -261,6 +283,18 @@ describe('live public-surface port', () => {
 		expect(state.sessions[0]?.durationMin).toBe(45);
 		expect(mapServedTracks(servedSchedule()).map((track) => track.name)).toEqual(['Craft']);
 		expect(mapServedRoster(servedRoster())[0]?.id).toBe('released-speaker:0');
+		expect(mapServedRoster(lineupRoster())[0]).toMatchObject({
+			id: ids.speaker,
+			categoryId: ids.category,
+			sessions: []
+		});
+		expect(mapServedSpeakerCategories(lineupRoster())).toEqual([{
+			id: ids.category,
+			name: 'Keynotes',
+			accent: 'lavender',
+			status: 'active',
+			speakerCount: 1
+		}]);
 	});
 
 	test('the published form maps into an apply surface and summary', async () => {

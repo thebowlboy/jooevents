@@ -74,13 +74,13 @@ function createSyntheticRelease(root: string): void {
   write(join(root, 'jooevents-release.json'), JSON.stringify({
     formatVersion: 1,
     kind: 'jooevents-single-machine',
-    releaseId: 'sqlite-e2-s8-test',
+    releaseId: 'sqlite-e2-s9-test',
     sourceRevision: '0'.repeat(40),
     sourceDirty: false,
     bunVersion: Bun.version,
     platform: process.platform,
     architecture: process.arch,
-    sqliteReleaseFloor: 'sqlite-e2-s8',
+    sqliteReleaseFloor: 'sqlite-e2-s9',
     liveBuildDigestSha256: live.digestSha256,
     sourceFiles,
     sourceDigestSha256: sha256(JSON.stringify(sourceFiles))
@@ -264,6 +264,29 @@ describe('complete single-machine installation backup and recovery', () => {
     try {
       const result = await runJ2Spine(world);
       const organizer = world.as('organizer');
+	  let lineup!: {
+		readonly version: number;
+		readonly entries: readonly { readonly personId: string; readonly categoryId: string | null }[];
+	  };
+	  await organizer.expectRead('speaker-lineup.snapshot.read', (projection) => {
+		lineup = projection as typeof lineup;
+		return lineup.entries.length === 1;
+	  });
+	  const lineupPersonId = lineup.entries[0]!.personId;
+	  const category = await organizer.do<{
+		readonly lineupVersion: number;
+		readonly category: { readonly id: string };
+	  }>('speaker-lineup.change', {
+		action: 'add_category',
+		expectedLineupVersion: lineup.version,
+		name: 'Recovery group'
+	  });
+	  await organizer.do('speaker-lineup.change', {
+		action: 'set_category',
+		expectedLineupVersion: category.data.lineupVersion,
+		personId: lineupPersonId,
+		categoryId: category.data.category.id
+	  });
       const bytes = Buffer.from('%PDF-1.7\nrestored acceptance proof\n', 'utf8');
       const digest = sha256(bytes);
       const intentId = crypto.randomUUID();
@@ -331,6 +354,17 @@ describe('complete single-machine installation backup and recovery', () => {
       await organizer.expectRead('event.current.read', (projection) =>
         (projection as { readonly event?: { readonly id?: string } }).event?.id !== undefined
       );
+	  await organizer.expectRead('speaker-lineup.snapshot.read', (projection) => {
+		const restoredLineup = projection as {
+		  readonly categories: readonly { readonly id: string; readonly name: string }[];
+		  readonly entries: readonly { readonly personId: string; readonly categoryId: string | null }[];
+		};
+		return restoredLineup.categories.some((entry) =>
+			entry.id === category.data.category.id && entry.name === 'Recovery group'
+		) && restoredLineup.entries.some((entry) =>
+			entry.personId === lineupPersonId && entry.categoryId === category.data.category.id
+		);
+	  });
       await organizer.expectRead('file.overview.read', (projection) =>
         (projection as {
           readonly attachments: readonly {

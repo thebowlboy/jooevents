@@ -94,7 +94,9 @@ describe('engagement direct live client', () => {
 		})]);
 	});
 
-	test('exports only forward response correction', () => {
-		expect(Object.keys(ENGAGEMENTS_LIVE_OPERATIONS)).toEqual(['read', 'change']);
+	test('exports only engagement response and person-level lineup operations', () => {
+		expect(Object.keys(ENGAGEMENTS_LIVE_OPERATIONS)).toEqual([
+			'read', 'change', 'lineupRead', 'lineupChange'
+		]);
 	});
 });

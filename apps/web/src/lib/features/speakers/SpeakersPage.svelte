@@ -510,7 +510,7 @@
 </div>
 
 {#if view === 'lineup'}
-	<SpeakerLineup {port} {speakers} onChanged={load} />
+	<SpeakerLineup {port} />
 {:else}
 <div class="head">
 	<nav class="chips" aria-label="Speaker filters">

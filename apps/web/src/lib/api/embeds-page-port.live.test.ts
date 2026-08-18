@@ -36,7 +36,8 @@ function program() {
 			scheduleVersion: 3,
 			engagementSnapshotDigestSha256: digest,
 			vocabulary: { setVersion: 4, digestSha256: digest },
-			eventSettingsVersion: 5
+			eventSettingsVersion: 5,
+			speakerLineupDigestSha256: digest
 		},
 		rooms: [{ id: id(20), name: 'Main room' }],
 		sessions: [{
@@ -48,6 +49,16 @@ function program() {
 			}],
 			participants: [{ personId: id(40), role: 'speaker' as const, position: 0, displayName: 'Released Speaker' }]
 		}],
+		speakerLineup: {
+			schemaVersion: 1 as const,
+			version: 2,
+			digestSha256: digest,
+			categories: [{ id: id(41), name: 'Keynotes', accent: 'lavender' as const, position: 0 }],
+			entries: [{
+				speakerId: id(42), personId: id(40), position: 0, categoryId: id(41),
+				publiclyVisible: true, displayName: 'Released Speaker'
+			}]
+		},
 		nameDeclassifications: [{ personId: id(40), displayName: 'Released Speaker' }],
 		releasedByUserId: id(3), releasedAt: now, digestSha256: digest
 	};
@@ -128,12 +139,20 @@ describe('live Embeds page adapter', () => {
 		});
 
 		const initial = await port.embeds.targets();
-		expect(initial.map((entry) => [entry.kind, entry.count])).toEqual([
-			['schedule', 1],
-			['speaker-roster', 1]
+		expect(initial.map((entry) => [entry.scope.kind, entry.count])).toEqual([
+			['all', 1],
+			['all', 1],
+			['category', 1]
 		]);
 		expect(initial.every((entry) => entry.allowedOrigins.length === 0)).toBe(true);
-		expect(await port.embeds.speakerTargets()).toEqual([]);
+		expect(await port.embeds.speakerTargets()).toEqual([
+			expect.objectContaining({
+				key: expect.stringContaining(`:speaker:${id(42)}`),
+				scope: { kind: 'speaker', speakerId: id(42) },
+				name: 'Released Speaker',
+				count: 1
+			})
+		]);
 
 		expect(await port.embeds.setAllowedOrigins('speaker-roster', ['https://host.example'])).toEqual({ ok: true });
 		expect(mutations).toEqual([{

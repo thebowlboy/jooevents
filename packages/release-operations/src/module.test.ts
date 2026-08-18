@@ -287,7 +287,7 @@ describe('release public read operations', () => {
     expect(schedule.data).toEqual(servedSchedule(1, ['Ada Lovelace']));
     const roster = await execute(runtime, 'roster.public.read');
     if (roster.kind !== 'success') throw new Error('expected success');
-    expect(roster.data).toEqual(servedRoster(1, ['Ada Lovelace']));
+    expect(JSON.stringify(roster.data)).toBe(JSON.stringify(servedRoster(1, ['Ada Lovelace'])));
     const presentation = await execute(runtime, 'schedule.public.presentation.read');
     if (presentation.kind !== 'success') throw new Error('expected success');
     expect(presentation.data).toEqual(servedPresentation('schedule'));

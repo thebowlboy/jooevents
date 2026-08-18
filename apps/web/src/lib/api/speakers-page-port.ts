@@ -2,6 +2,7 @@ import type {
 	CommunicationThread,
 	MutationOutcome,
 	SpeakerCategory,
+	SpeakerLineupRow,
 	SpeakerRow,
 	TaskAssignment,
 	TaskDef
@@ -19,6 +20,9 @@ export interface SpeakersPagePort {
 		 */
 		recordConfirmation(id: string): Promise<MutationOutcome>;
 		acceptCancellation(id: string): Promise<MutationOutcome>;
+	};
+	readonly lineup: {
+		list(): Promise<SpeakerLineupRow[]>;
 		reorder(id: string, toIndex: number): Promise<MutationOutcome>;
 		setCategory(id: string, categoryId: string | null): Promise<MutationOutcome>;
 		setVisibility(id: string, publiclyVisible: boolean): Promise<MutationOutcome>;

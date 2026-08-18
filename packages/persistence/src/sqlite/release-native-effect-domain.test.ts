@@ -10,6 +10,7 @@ import {
 import type {
   EngagementSnapshotDto,
   ReleaseScopeDto,
+  SpeakerLineupSnapshotDto,
   SessionCatalogDto,
   SessionHeadDto
 } from '@jooevents/contracts';
@@ -146,6 +147,23 @@ function engagements(): EngagementSnapshotDto {
   } as EngagementSnapshotDto;
 }
 
+function lineup(): SpeakerLineupSnapshotDto {
+  return {
+    schemaVersion: 1,
+    scope,
+    version: 1,
+    digestSha256: 'c'.repeat(64),
+    categories: [],
+    entries: [{
+      personId,
+      position: 0,
+      categoryId: null,
+      publiclyVisible: true,
+      version: 1
+    }]
+  };
+}
+
 function openFixture() {
   const sqlite = new Database(':memory:', { create: true, strict: true });
   sqlite.exec('PRAGMA foreign_keys = ON;');
@@ -206,6 +224,7 @@ function openFixture() {
       })
     },
     engagements: { readEngagementSnapshot: () => engagements() },
+    lineups: { readSpeakerLineupSnapshot: () => lineup() },
     vocabulary: {
       readVocabulary: () => createProgramVocabularyState({
         scope,

@@ -9,6 +9,7 @@ import {
   type ReleaseScopeDto,
   type ReleaseSurfaceSuccessorPlanDto,
   type SchedulePlacementSnapshotDto,
+  type SpeakerLineupSnapshotDto,
   type ServedPublicRosterDto,
   type ServedPublicPresentationDto,
   type ServedPublicScheduleDto,
@@ -60,6 +61,7 @@ import type { SQLiteEventSettingsRepository } from './event-settings';
 import { SQLiteEngagementRepository } from './engagement';
 import type { SQLiteProgramVocabularyRepository } from './program-vocabulary';
 import type { SQLiteSessionRepository } from './session';
+import type { SQLiteSpeakerLineupRepository } from './speaker-lineup';
 
 /**
  * This schema contributes to the accepted epoch-2 baseline and may also serve
@@ -344,6 +346,7 @@ export interface SQLiteReleaseUpstreamSources {
     readSchedule(scope: ReleaseScopeDto): SchedulePlacementState | undefined;
   };
   readonly engagements: Pick<SQLiteEngagementRepository, 'readEngagementSnapshot'>;
+  readonly lineups: Pick<SQLiteSpeakerLineupRepository, 'readSpeakerLineupSnapshot'>;
   readonly vocabulary: Pick<SQLiteProgramVocabularyRepository, 'readVocabulary'>;
   readonly eventSettings: Pick<SQLiteEventSettingsRepository, 'readEventSettings'>;
   readonly names: SQLiteReleaseParticipantNameSource;
@@ -484,6 +487,10 @@ implements ReleaseTransactionPort, ReleaseSurfaceSuccessorTransactionPort {
 
   readReleaseEngagementSnapshot(scope: ReleaseScopeDto): EngagementSnapshotDto | undefined {
     return this.sources.engagements.readEngagementSnapshot(scope);
+  }
+
+  readReleaseSpeakerLineupSnapshot(scope: ReleaseScopeDto): SpeakerLineupSnapshotDto | undefined {
+    return this.sources.lineups.readSpeakerLineupSnapshot(scope);
   }
 
   readReleaseVocabulary(scope: ReleaseScopeDto): ReleaseVocabularyEvidence | undefined {

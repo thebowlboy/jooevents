@@ -1,4 +1,9 @@
-import type { ReleaseOverviewDto, SurfaceHeadDto, SurfaceKind as ReleaseSurfaceKind } from '@jooevents/contracts';
+import type {
+	ProgramReleaseDto,
+	ReleaseOverviewDto,
+	SurfaceHeadDto,
+	SurfaceKind as ReleaseSurfaceKind
+} from '@jooevents/contracts';
 import type { EmbedsPagePort } from './embeds-page-port';
 import { ReleaseWorkspaceError, type ReleaseWorkspacePort } from './release-workspace-adapter';
 import type { TemplatesPagePort } from './templates-page-port';
@@ -19,10 +24,10 @@ function head(overview: ReleaseOverviewDto, kind: ReleaseSurfaceKind): SurfaceHe
 /**
  * Release-backed adapter for the refined Embeds surface.
  *
- * The catalogue contains only active surface releases. Its counts come from
- * the immutable program/form pins those releases serve, never from a mutable
- * organizer table or from sample data. Individual and grouped speaker embeds
- * stay absent until their canonical public-lineup identity owner exists.
+ * The catalogue contains only active surface releases. Its counts, group
+ * scopes, and opaque individual-speaker scopes come from the immutable
+ * program/form pins those releases serve, never from a mutable organizer table
+ * or from sample data.
  */
 export function createLiveEmbedsPagePort(input: {
 	readonly release: ReleaseWorkspacePort;
@@ -30,6 +35,25 @@ export function createLiveEmbedsPagePort(input: {
 }): EmbedsPagePort {
 	async function overview(): Promise<ReleaseOverviewDto> {
 		return input.release.overview();
+	}
+
+	function releasedSpeakerCards(program: ProgramReleaseDto) {
+		const lineup = program.speakerLineup;
+		if (!lineup) return [];
+		return lineup.entries.flatMap((entry) => {
+			if (!entry.publiclyVisible || entry.displayName === null) return [];
+			const sessions = program.sessions.flatMap((session) =>
+				session.participants.some((participant) => participant.personId === entry.personId)
+					? [{ id: session.sessionId, title: session.title }]
+					: []
+			);
+			return [{
+				id: entry.speakerId,
+				name: entry.displayName,
+				categoryId: entry.categoryId,
+				sessions
+			}];
+		});
 	}
 
 	async function targets(): Promise<EmbedTarget[]> {
@@ -64,6 +88,7 @@ export function createLiveEmbedsPagePort(input: {
 		const speakersHead = head(state, 'speakers');
 		const speakersSurface = surfaceFor('speaker-roster');
 		if (program && speakersHead && speakersSurface) {
+			const cards = releasedSpeakerCards(program);
 			targets.push({
 				key: speakersSurface.id,
 				surfaceId: speakersSurface.id,
@@ -71,11 +96,25 @@ export function createLiveEmbedsPagePort(input: {
 				scope: { kind: 'all' },
 				name: 'The whole lineup',
 				purpose: 'Everyone named in the latest published programme, joined to their released sessions.',
-				count: program.nameDeclassifications.length,
+				count: cards.length,
 				countNoun: 'speaker',
 				acceptsSubmissions: false,
 				allowedOrigins: [...speakersHead.allowedFrameOrigins]
 			});
+			for (const category of program.speakerLineup?.categories ?? []) {
+				targets.push({
+					key: `${speakersSurface.id}:category:${category.id}`,
+					surfaceId: speakersSurface.id,
+					kind: 'speaker-roster',
+					scope: { kind: 'category', categoryId: category.id },
+					name: category.name,
+					purpose: `Only the people filed under ${category.name}.`,
+					count: cards.filter((card) => card.categoryId === category.id).length,
+					countNoun: 'speaker',
+					acceptsSubmissions: false,
+					allowedOrigins: [...speakersHead.allowedFrameOrigins]
+				});
+			}
 		}
 
 		const applyHead = head(state, 'apply');
@@ -105,10 +144,26 @@ export function createLiveEmbedsPagePort(input: {
 		embeds: Object.freeze({
 			targets,
 			async speakerTargets(): Promise<EmbedTarget[]> {
-				// A released public speaker card intentionally carries no person id.
-				// Until the lineup owner mints one, an individual address cannot be
-				// represented without leaking an organizer identity or inventing one.
-				return [];
+				const [state, library] = await Promise.all([
+					overview(),
+					input.templates.templates.list()
+				]);
+				const program = state.currentProgramRelease;
+				const speakersHead = head(state, 'speakers');
+				const surface = library.surfaces.find((entry) => entry.kind === 'speaker-roster');
+				if (!program || !speakersHead || !surface) return [];
+				return releasedSpeakerCards(program).map((card) => ({
+					key: `${surface.id}:speaker:${card.id}`,
+					surfaceId: surface.id,
+					kind: 'speaker-roster',
+					scope: { kind: 'speaker', speakerId: card.id },
+					name: card.name,
+					purpose: 'Their published lineup card and any released session appearances.',
+					count: card.sessions.length,
+					countNoun: 'session',
+					acceptsSubmissions: false,
+					allowedOrigins: [...speakersHead.allowedFrameOrigins]
+				}));
 			},
 			async setAllowedOrigins(kind: SurfaceKind, origins: readonly string[]): Promise<MutationOutcome> {
 				return input.release.setAllowedOrigins(RELEASE_KIND[kind], origins);

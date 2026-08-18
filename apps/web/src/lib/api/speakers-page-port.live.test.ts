@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test';
-import type { EngagementHeadDto, EngagementSnapshotDto } from '@jooevents/contracts';
+import type {
+	EngagementHeadDto,
+	EngagementSnapshotDto,
+	SpeakerLineupSnapshotDto
+} from '@jooevents/contracts';
 import type {
 	EngagementsLiveClient,
 	EngagementsLiveRespondResult
@@ -48,11 +52,31 @@ function snapshot(engagements: readonly EngagementHeadDto[]): EngagementSnapshot
 	return { schemaVersion: 1, scope: { workspaceId, eventId }, engagements: [...engagements] };
 }
 
+function lineupSnapshot(overrides: Partial<SpeakerLineupSnapshotDto> = {}): SpeakerLineupSnapshotDto {
+	return {
+		schemaVersion: 1,
+		scope: { workspaceId, eventId },
+		version: 1,
+		digestSha256: digest('b'),
+		categories: [],
+		entries: [{
+			personId,
+			position: 0,
+			categoryId: null,
+			publiclyVisible: true,
+			version: 1
+		}],
+		...overrides
+	};
+}
+
 function fakeEngagements(input: {
 	readonly served: EngagementSnapshotDto;
 	readonly responded?: unknown[];
 	readonly keys?: string[];
 	readonly result?: EngagementsLiveRespondResult;
+	readonly lineup?: SpeakerLineupSnapshotDto;
+	readonly lineupChanges?: unknown[];
 }): EngagementsLiveClient {
 	return {
 		async readSnapshot() {
@@ -68,6 +92,21 @@ function fakeEngagements(input: {
 					engagement: invitedHead()
 				},
 				receipt: { id: id(62), operationName: 'engagement.change', operationVersion: 1 },
+				correlationId
+			};
+		},
+		async readLineup() {
+			return { kind: 'success', data: input.lineup ?? lineupSnapshot(), correlationId };
+		},
+		async changeLineup(changeInput) {
+			input.lineupChanges?.push(changeInput);
+			const category = changeInput.action === 'add_category'
+				? { id: id(91), name: changeInput.name, accent: 'lavender' as const, status: 'active' as const, position: 0, version: 1 }
+				: null;
+			return {
+				kind: 'success',
+				data: { action: changeInput.action, lineupVersion: 2, entry: null, category },
+				receipt: { id: id(92), operationName: 'speaker-lineup.change', operationVersion: 1 },
 				correlationId
 			};
 		}
@@ -292,12 +331,29 @@ describe('live tuned Speakers page port', () => {
 		}
 	});
 
-	test('hides a person whose roster reference is not publicly visible', async () => {
+	test('keeps lineup visibility independent from one session appearance', async () => {
 		const port = composePort({
 			sessions: fakeSessions({ participants: [{ personId, publiclyVisible: false }] })
 		});
 		const [row] = await port.speakers.list();
-		expect(row?.publiclyVisible).toBe(false);
+		expect(row?.publiclyVisible).toBe(true);
+
+		const hiddenPort = composePort({
+			sessions: fakeSessions({ participants: [{ personId, publiclyVisible: true }] }),
+			engagements: fakeEngagements({
+				served: snapshot([invitedHead()]),
+				lineup: lineupSnapshot({
+					entries: [{
+						personId,
+						position: 0,
+						categoryId: null,
+						publiclyVisible: false,
+						version: 1
+					}]
+				})
+			})
+		});
+		expect((await hiddenPort.speakers.list())[0]?.publiclyVisible).toBe(false);
 	});
 
 	test('orders rows by invitation instant then name and states positions', async () => {
@@ -397,17 +453,32 @@ describe('live tuned Speakers page port', () => {
 		expect(await port.vocab.speakerCategories()).toEqual([]);
 	});
 
-	test('refuses every lineup mutation with its own name (BLOCKED-13)', async () => {
-		const port = composePort();
+	test('serves and changes the person-level lineup', async () => {
+		const lineupChanges: unknown[] = [];
+		const port = composePort({
+			engagements: fakeEngagements({ served: snapshot([invitedHead()]), lineupChanges })
+		});
+		expect(await port.lineup.list()).toEqual([{
+			id: personId,
+			rosterId: engagementId,
+			name: 'Amina Diallo',
+			state: 'invited',
+			sessions: [{ id: sessionId, title: 'Typed Tools in Anger' }],
+			publiclyVisible: true,
+			contentApproved: false,
+			position: 0
+		}]);
 		for (const outcome of [
-			await port.speakers.reorder(engagementId, 1),
-			await port.speakers.setCategory(engagementId, null),
-			await port.speakers.setVisibility(engagementId, true)
+			await port.lineup.reorder(personId, 0),
+			await port.lineup.setCategory(personId, null),
+			await port.lineup.setVisibility(personId, false)
 		]) {
-			expect(outcome.ok).toBe(false);
-			if (!outcome.ok) expect(outcome.reason).toContain('not available in this live workspace yet');
+			expect(outcome.ok).toBe(true);
 		}
-		await expect(port.vocab.addSpeakerCategory('Keynotes')).rejects.toThrow(SpeakersPageLiveError);
+		expect(await port.vocab.addSpeakerCategory('Keynotes')).toMatchObject({
+			name: 'Keynotes', speakerCount: 0
+		});
+		expect(lineupChanges).toHaveLength(4);
 	});
 
 	test('a failed roster read throws typed instead of serving an empty roster', async () => {
@@ -418,6 +489,12 @@ describe('live tuned Speakers page port', () => {
 				},
 				async respond() {
 					throw new Error('unexpected respond');
+				},
+				async readLineup() {
+					return { kind: 'transport_error', error: { code: 'network_unavailable', retryable: true } };
+				},
+				async changeLineup() {
+					throw new Error('unexpected lineup change');
 				}
 			}
 		});

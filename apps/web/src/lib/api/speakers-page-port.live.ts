@@ -19,6 +19,7 @@ import type {
 	EngagementState,
 	MutationOutcome,
 	SpeakerCategory,
+	SpeakerLineupRow,
 	SpeakerRow,
 	SpeakerSession,
 	TaskAssignment,
@@ -28,19 +29,7 @@ import type { OrganizerSubmissionsPort } from './view-models/intake-submissions'
 import type { TaskLiveClient, TaskLiveResult } from './operations/tasks-live';
 import { taskAssignmentView, taskDefinitionView } from './mappers/tasks';
 
-/**
- * The tuned page capabilities this deliberately partial live mount cannot
- * truthfully serve yet, each refused with its own name so a failure states
- * exactly which owner has not joined. The lineup family is the recorded
- * BLOCKED-13 posture: the roster view is live while lineup order, grouping,
- * and visibility have no canonical owner, so every lineup mutation refuses.
- */
-export type SpeakersPageLiveUnmountedCapability =
-	| 'speaker_lineup_reorder'
-	| 'speaker_lineup_category'
-	| 'speaker_lineup_visibility'
-	| 'speaker_categories';
-
+/** Failure translated at the live Speakers boundary into reviewed UI copy. */
 type AdapterFailure = Readonly<{ code: string; reason: string }>;
 
 /** Safe, reviewed-copy failure at the tuned Speakers boundary. */
@@ -52,25 +41,6 @@ export class SpeakersPageLiveError extends Error {
 		this.name = 'SpeakersPageLiveError';
 		this.code = failure.code;
 	}
-}
-
-const UNMOUNTED_COPY: Readonly<Record<SpeakersPageLiveUnmountedCapability, string>> =
-	Object.freeze({
-		speaker_lineup_reorder:
-			'Reordering the public lineup is not available in this live workspace yet.',
-		speaker_lineup_category:
-			'Speaker groups are not available in this live workspace yet.',
-		speaker_lineup_visibility:
-			'Changing who appears on the public lineup is not available in this live workspace yet.',
-		speaker_categories: 'Speaker groups are not available in this live workspace yet.'
-	});
-
-function unmounted(capability: SpeakersPageLiveUnmountedCapability): SpeakersPageLiveError {
-	return new SpeakersPageLiveError({ code: capability, reason: UNMOUNTED_COPY[capability] });
-}
-
-function refusal(capability: SpeakersPageLiveUnmountedCapability): MutationOutcome {
-	return { ok: false, reason: UNMOUNTED_COPY[capability] };
 }
 
 function outcomeCopy(outcome: StructuredOutcome, subject: string, channel: 'read' | 'change'): string {
@@ -131,6 +101,23 @@ function respondFailure(
 	return { code: result.outcome.kind, reason: outcomeCopy(result.outcome, 'engagement', 'change') };
 }
 
+function lineupFailure(
+	result: Exclude<Awaited<ReturnType<EngagementsLiveClient['changeLineup']>>, { readonly kind: 'success' }>
+): AdapterFailure {
+	if (result.kind === 'unavailable') {
+		return { code: result.reason, reason: 'Editing the public lineup is not available in this workspace.' };
+	}
+	if (result.kind === 'transport_error') {
+		return {
+			code: result.error.code,
+			reason: result.error.retryable
+				? 'The lineup change could not reach JooEvents. Try again.'
+				: 'This lineup change is not valid.'
+		};
+	}
+	return { code: result.outcome.kind, reason: outcomeCopy(result.outcome, 'public lineup', 'change') };
+}
+
 /**
  * The web projection of a canonical head: `cancel_requested` is a stored
  * request beside a non-cancelled state, never a fifth canonical state value.
@@ -169,11 +156,10 @@ function defaultIdempotencyKey(): string {
  *
  * Served truths this seam states deliberately, each at its site below:
  * task counts and task lists are projections of the same canonical Task board
- * used by the Tasks area; communication threads are null (nothing has ever been sent),
- * speaker categories are empty and every lineup mutation refuses typed
- * (BLOCKED-13), `position` is a derived stable order (invitedAt, then name)
- * because no lineup order owner exists, and `contentApproved` is false
- * because no content-approval record exists to read.
+ * used by the Tasks area; communication threads are null (nothing has ever been
+ * sent); category, order, and public-lineup visibility come from the canonical
+ * person-level lineup; and `contentApproved` is false because no
+ * content-approval record exists to read.
  */
 export function createLiveSpeakersPagePort(input: {
 	readonly engagements: EngagementsLiveClient;
@@ -200,6 +186,14 @@ export function createLiveSpeakersPagePort(input: {
 		const result = await input.sessions.readCatalog();
 		if (result.kind !== 'success') {
 			throw new SpeakersPageLiveError(readFailure(result, 'session catalog'));
+		}
+		return result.data;
+	}
+
+	async function readLineup() {
+		const result = await input.engagements.readLineup();
+		if (result.kind !== 'success') {
+			throw new SpeakersPageLiveError(readFailure(result, 'public lineup'));
 		}
 		return result.data;
 	}
@@ -257,9 +251,10 @@ export function createLiveSpeakersPagePort(input: {
 	}
 
 	async function listRows(): Promise<SpeakerRow[]> {
-		const [snapshot, catalog, taskBoard] = await Promise.all([
+		const [snapshot, catalog, lineup, taskBoard] = await Promise.all([
 			readSnapshot(),
 			readCatalog(),
+			readLineup(),
 			input.tasks?.readBoard().then((result) => {
 				if (result.kind !== 'success') {
 					throw new SpeakersPageLiveError(readFailure(result, 'task board'));
@@ -275,6 +270,7 @@ export function createLiveSpeakersPagePort(input: {
 			readEmails(submissionIds)
 		]);
 		const sessionsById = new Map(catalog.sessions.map((session) => [session.id, session]));
+		const lineupByPerson = new Map(lineup.entries.map((entry) => [entry.personId, entry]));
 		const taskAssignments = taskBoard?.assignments.map((entry) => taskAssignmentView(entry)) ?? [];
 		const rows = snapshot.engagements.map((head) => {
 			const session = sessionsById.get(head.sessionId);
@@ -298,11 +294,7 @@ export function createLiveSpeakersPagePort(input: {
 				// Roster visibility is the Session head's own roster reference for
 				// this person; an engagement whose person left every roster shows
 				// hidden, which is what the public composition would render.
-				publiclyVisible: session
-					? session.roster.participants.some(
-							(participant) => participant.personId === head.personId && participant.publiclyVisible
-						)
-					: false,
+				publiclyVisible: lineupByPerson.get(head.personId)?.publiclyVisible ?? false,
 				// No content-approval record exists canonically, so nothing can
 				// have been approved.
 				contentApproved: false,
@@ -311,9 +303,9 @@ export function createLiveSpeakersPagePort(input: {
 					: {})
 			};
 		});
-		// Derived lineup order (recorded BLOCKED-13): no canonical order owner
-		// exists, so position is a stable derivation — invitation instant, then
-		// name, then id — and the returned list is stated in that order.
+		// The engagement table remains one row per (session, person). Sort it
+		// deterministically, while carrying canonical person-level lineup
+		// positions for any UI that needs to relate a row to the public roster.
 		const order = rows
 			.map((row, index) => ({ row, head: snapshot.engagements[index]! }))
 			.sort((left, right) =>
@@ -321,7 +313,67 @@ export function createLiveSpeakersPagePort(input: {
 				|| left.row.name.localeCompare(right.row.name)
 				|| left.head.id.localeCompare(right.head.id)
 			);
-		return order.map((entry, index) => ({ ...entry.row, position: index }));
+		return order.map((entry, index) => ({
+			...entry.row,
+			position: lineupByPerson.get(entry.head.personId)?.position ?? index,
+			...(lineupByPerson.get(entry.head.personId)?.categoryId
+				? { categoryId: lineupByPerson.get(entry.head.personId)!.categoryId! }
+				: {})
+		}));
+	}
+
+	async function listLineupRows(): Promise<SpeakerLineupRow[]> {
+		const [lineup, snapshot, catalog] = await Promise.all([
+			readLineup(), readSnapshot(), readCatalog()
+		]);
+		const submissionIds = [...new Set(
+			snapshot.engagements.flatMap((head) => head.submissionId === null ? [] : [head.submissionId])
+		)];
+		const namesBySubmission = await readNames(submissionIds);
+		const sessionsById = new Map(catalog.sessions.map((session) => [session.id, session]));
+		const engagementsByPerson = new Map<string, typeof snapshot.engagements>();
+		for (const head of snapshot.engagements) {
+			const current = engagementsByPerson.get(head.personId) ?? [];
+			engagementsByPerson.set(head.personId, [...current, head]);
+		}
+		return lineup.entries.map((entry) => {
+			const engagements = engagementsByPerson.get(entry.personId) ?? [];
+			const primary = engagements[0];
+			const sessionRows = engagements.flatMap((head) => {
+				const session = sessionsById.get(head.sessionId);
+				return session ? [{ id: session.id, title: session.title }] : [];
+			});
+			const states = engagements.map(webEngagementState);
+			const state: EngagementState = states.includes('cancel_requested')
+				? 'cancel_requested'
+				: states.includes('confirmed')
+					? 'confirmed'
+					: states.includes('invited')
+						? 'invited'
+						: states.includes('declined') ? 'declined' : 'cancelled';
+			const submissionId = primary?.submissionId ?? null;
+			return {
+				id: entry.personId,
+				rosterId: primary?.id ?? entry.personId,
+				name: submissionId === null ? '' : namesBySubmission.get(submissionId) ?? '',
+				state,
+				sessions: sessionRows,
+				publiclyVisible: entry.publiclyVisible,
+				contentApproved: false,
+				position: entry.position,
+				...(entry.categoryId === null ? {} : { categoryId: entry.categoryId })
+			};
+		});
+	}
+
+	async function changeLineup(
+		build: (lineup: Awaited<ReturnType<typeof readLineup>>) => Parameters<EngagementsLiveClient['changeLineup']>[0]
+	): Promise<MutationOutcome> {
+		const lineup = await readLineup();
+		const result = await input.engagements.changeLineup(build(lineup), newIdempotencyKey());
+		return result.kind === 'success'
+			? { ok: true }
+			: { ok: false, reason: lineupFailure(result).reason };
 	}
 
 	/**
@@ -365,15 +417,33 @@ export function createLiveSpeakersPagePort(input: {
 		speakers: Object.freeze({
 			list: listRows,
 			recordConfirmation: (id: string) => respond(id, 'record_confirmation'),
-			acceptCancellation: (id: string) => respond(id, 'accept_cancellation'),
-			async reorder(): Promise<MutationOutcome> {
-				return refusal('speaker_lineup_reorder');
+			acceptCancellation: (id: string) => respond(id, 'accept_cancellation')
+		}),
+		lineup: Object.freeze({
+			list: listLineupRows,
+			reorder(id: string, toIndex: number): Promise<MutationOutcome> {
+				return changeLineup((lineup) => {
+					const personIds = lineup.entries.map((entry) => entry.personId);
+					const from = personIds.indexOf(id);
+					if (from < 0) return {
+						action: 'reorder', expectedLineupVersion: lineup.version, personIds
+					};
+					const [personId] = personIds.splice(from, 1);
+					personIds.splice(Math.max(0, Math.min(toIndex, personIds.length)), 0, personId!);
+					return { action: 'reorder', expectedLineupVersion: lineup.version, personIds };
+				});
 			},
-			async setCategory(): Promise<MutationOutcome> {
-				return refusal('speaker_lineup_category');
+			setCategory(id: string, categoryId: string | null): Promise<MutationOutcome> {
+				return changeLineup((lineup) => ({
+					action: 'set_category', expectedLineupVersion: lineup.version,
+					personId: id, categoryId
+				}));
 			},
-			async setVisibility(): Promise<MutationOutcome> {
-				return refusal('speaker_lineup_visibility');
+			setVisibility(id: string, publiclyVisible: boolean): Promise<MutationOutcome> {
+				return changeLineup((lineup) => ({
+					action: 'set_visibility', expectedLineupVersion: lineup.version,
+					personId: id, publiclyVisible
+				}));
 			}
 		}),
 		tasks: Object.freeze({
@@ -406,16 +476,33 @@ export function createLiveSpeakersPagePort(input: {
 			}
 		}),
 		vocab: Object.freeze({
-			/** No lineup grouping owner exists; no groups exist to list. */
 			async speakerCategories(): Promise<SpeakerCategory[]> {
-				return [];
+				const lineup = await readLineup();
+				return lineup.categories.map((category) => ({
+					id: category.id,
+					name: category.name,
+					accent: category.accent,
+					status: category.status,
+					speakerCount: lineup.entries.filter((entry) => entry.categoryId === category.id).length
+				}));
 			},
-			/**
-			 * The create has no outcome channel, so the refusal rejects typed
-			 * instead of resolving a category that was never created.
-			 */
-			async addSpeakerCategory(): Promise<SpeakerCategory> {
-				throw unmounted('speaker_categories');
+			async addSpeakerCategory(name: string): Promise<SpeakerCategory> {
+				const lineup = await readLineup();
+				const result = await input.engagements.changeLineup({
+					action: 'add_category', expectedLineupVersion: lineup.version, name
+				}, newIdempotencyKey());
+				if (result.kind !== 'success' || result.data.category === null) {
+					throw new SpeakersPageLiveError(lineupFailure(result.kind === 'success'
+						? { kind: 'transport_error', error: { code: 'invalid_contract', retryable: true } }
+						: result));
+				}
+				return {
+					id: result.data.category.id,
+					name: result.data.category.name,
+					accent: result.data.category.accent,
+					status: result.data.category.status,
+					speakerCount: 0
+				};
 			}
 		})
 	} satisfies SpeakersPagePort);

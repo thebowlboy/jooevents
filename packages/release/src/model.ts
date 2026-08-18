@@ -23,6 +23,7 @@ import {
   type SurfaceReleaseDto,
   type ReleaseSurfaceSuccessorPlanDto,
   type ReleaseTemplateRevisionPinDto,
+  type SpeakerLineupSnapshotDto,
   type TemplateArtifactDocumentDto
 } from '@jooevents/contracts';
 
@@ -35,6 +36,18 @@ export type SurfaceHead = SurfaceHeadDto;
 
 export function releaseDigest(unsigned: unknown): string {
   return canonicalJsonSha256(unsigned);
+}
+
+/** Stable opaque identity used only by anonymous speaker projections. */
+export function publicSpeakerId(scope: ReleaseScope, personId: string): string {
+  const hex = canonicalJsonSha256({
+    domain: 'public-speaker',
+    workspaceId: scope.workspaceId,
+    eventId: scope.eventId,
+    personId
+  });
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}`
+    + `-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
 export function parseReleaseScope(value: unknown): ReleaseScope {
@@ -99,14 +112,38 @@ export function projectServedPublicSchedule(release: ProgramRelease): ServedPubl
 }
 
 /**
- * The public speakers page as one immutable program release serves it: the
- * union of publicly visible session appearances, one card per released person,
- * ordered by display name. The released person key orders ties and groups
- * appearances internally but never enters the projection — a public card
- * carries a name and its appearances, not an identifier.
+ * The public speakers page as one immutable program release serves it. New
+ * releases use their snapshotted lineup order, categories, visibility gate,
+ * and opaque public speaker ids. Releases created before lineup publication
+ * retain the historical name-ordered appearance projection.
  */
 export function projectServedPublicRoster(release: ProgramRelease): ServedPublicRosterDto {
   const verified = parseProgramRelease(release);
+  if (verified.speakerLineup !== undefined) {
+    const sessionsByPerson = new Map<string, Map<string, string>>();
+    for (const session of verified.sessions) {
+      for (const participant of session.participants) {
+        const sessions = sessionsByPerson.get(participant.personId) ?? new Map<string, string>();
+        sessions.set(session.sessionId, session.title);
+        sessionsByPerson.set(participant.personId, sessions);
+      }
+    }
+    return deepFreeze(servedPublicRosterSchema.parse({
+      schemaVersion: 1,
+      releaseNumber: verified.number,
+      categories: verified.speakerLineup.categories.map((category) => ({ ...category })),
+      speakers: verified.speakerLineup.entries
+        .filter((entry) => entry.displayName !== null)
+        .map((entry) => ({
+          id: entry.speakerId,
+          name: entry.displayName!,
+          categoryId: entry.categoryId,
+          sessions: [...(sessionsByPerson.get(entry.personId)?.entries() ?? [])]
+            .sort(([left], [right]) => left < right ? -1 : 1)
+            .map(([sessionId, title]) => ({ sessionId, title }))
+        }))
+    }));
+  }
   const byPerson = new Map<string, {
     readonly name: string;
     readonly sessions: Map<string, string>;
@@ -199,6 +236,7 @@ export interface ReleaseReadPort {
   readReleaseSessionCatalog(scope: ReleaseScope): SessionCatalogDto | undefined;
   readReleaseSchedule(scope: ReleaseScope): SchedulePlacementSnapshotDto | undefined;
   readReleaseEngagementSnapshot(scope: ReleaseScope): EngagementSnapshotDto | undefined;
+  readReleaseSpeakerLineupSnapshot(scope: ReleaseScope): SpeakerLineupSnapshotDto | undefined;
   readReleaseVocabulary(scope: ReleaseScope): ReleaseVocabularyEvidence | undefined;
   readReleaseEventSettingsVersion(scope: ReleaseScope): number | undefined;
   /** Current block-severity conflict sweep from the schedule domain; any entry refuses publish. */

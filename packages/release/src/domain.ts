@@ -35,6 +35,7 @@ import {
   type ReleaseSurfaceSuccessorInputDto,
   type ReleaseSurfaceSuccessorPlanDto,
   type ReleasedRoomDto,
+  type ReleasedSpeakerLineupSnapshotDto,
   type ReleasedSessionDto,
   type SessionHeadDto,
   type StyleSetRecipeDto,
@@ -52,6 +53,7 @@ import {
   parseSurfaceHead,
   parseSurfaceRelease,
   releaseDigest,
+  publicSpeakerId,
   sameReleaseScope,
   type ProgramRelease,
   type ReleaseReadPort,
@@ -145,6 +147,7 @@ interface MaterializedProgramContent {
   readonly pins: ProgramReleaseDto['pins'];
   readonly rooms: readonly ReleasedRoomDto[];
   readonly sessions: readonly ReleasedSessionDto[];
+  readonly speakerLineup: ReleasedSpeakerLineupSnapshotDto;
   readonly nameDeclassifications: readonly ReleaseNameDeclassificationDto[];
 }
 
@@ -171,19 +174,23 @@ export function materializeProgramContent(
   const catalog = port.readReleaseSessionCatalog(scope);
   const schedule = port.readReleaseSchedule(scope);
   const engagements = port.readReleaseEngagementSnapshot(scope);
+  const lineup = port.readReleaseSpeakerLineupSnapshot(scope);
   const vocabulary = port.readReleaseVocabulary(scope);
   const eventSettingsVersion = port.readReleaseEventSettingsVersion(scope);
-  if (!catalog || !schedule || !engagements || !vocabulary || eventSettingsVersion === undefined
+  if (!catalog || !schedule || !engagements || !lineup || !vocabulary || eventSettingsVersion === undefined
       || !sameReleaseScope(catalog.scope, scope) || !sameReleaseScope(schedule.scope, scope)
       || !sameReleaseScope(engagements.scope, scope)
+      || !sameReleaseScope(lineup.scope, scope)
       || !sameReleaseScope(vocabulary.scope, scope)) {
     throw new ReleasePlanningError('wrong_scope');
   }
 
   const confirmed = new Set<string>();
+  const confirmedPeople = new Set<string>();
   for (const engagement of engagements.engagements) {
     if (engagement.state === 'confirmed') {
       confirmed.add(`${engagement.sessionId}:${engagement.personId}`);
+      confirmedPeople.add(engagement.personId);
     }
   }
 
@@ -226,6 +233,40 @@ export function materializeProgramContent(
     return Object.freeze({ id: roomId, name });
   });
 
+  const releasedLineup: ReleasedSpeakerLineupSnapshotDto = {
+    schemaVersion: 1,
+    version: lineup.version,
+    digestSha256: lineup.digestSha256,
+    categories: lineup.categories.map((category) => ({
+      id: category.id,
+      name: category.name,
+      accent: category.accent,
+      position: category.position
+    })),
+    entries: lineup.entries.map((entry) => {
+      const qualifies = entry.publiclyVisible && confirmedPeople.has(entry.personId);
+      const known = releasedNames.get(entry.personId);
+      const displayName = !qualifies ? null : (known
+        ?? declassifiedDisplayName(
+          port.readReleaseParticipantDisplayName(scope, entry.personId)
+        ));
+      if (qualifies && displayName === undefined) {
+        throw new ReleasePlanningError('participant_name_unavailable');
+      }
+      if (displayName !== null && displayName !== undefined) {
+        releasedNames.set(entry.personId, displayName);
+      }
+      return {
+        speakerId: publicSpeakerId(scope, entry.personId),
+        personId: entry.personId,
+        position: entry.position,
+        categoryId: entry.categoryId,
+        publiclyVisible: entry.publiclyVisible,
+        displayName: displayName ?? null
+      };
+    })
+  };
+
   return Object.freeze({
     pins: Object.freeze({
       sessionCatalog: Object.freeze({
@@ -238,10 +279,12 @@ export function materializeProgramContent(
         setVersion: vocabulary.setVersion,
         digestSha256: vocabulary.setDigestSha256
       }),
-      eventSettingsVersion
+      eventSettingsVersion,
+      speakerLineupDigestSha256: lineup.digestSha256
     }),
     rooms: Object.freeze(rooms),
     sessions: Object.freeze(sessions),
+    speakerLineup: Object.freeze(releasedLineup),
     nameDeclassifications: Object.freeze(
       [...releasedNames.keys()].sort().map((personId) => Object.freeze({
         personId,
@@ -309,6 +352,7 @@ function releasedSessionFrom(input: {
 
 interface GatedRestoredProgramContent {
   readonly sessions: readonly ReleasedSessionDto[];
+  readonly speakerLineup: ReleasedSpeakerLineupSnapshotDto | undefined;
   readonly nameDeclassifications: readonly ReleaseNameDeclassificationDto[];
   readonly suppressions: readonly { readonly sessionId: string; readonly personId: string }[];
 }
@@ -335,7 +379,8 @@ function gateRestoredProgramContent(
 ): GatedRestoredProgramContent {
   const catalog = port.readReleaseSessionCatalog(scope);
   const engagements = port.readReleaseEngagementSnapshot(scope);
-  if (!catalog || !engagements
+  const currentLineup = port.readReleaseSpeakerLineupSnapshot(scope);
+  if (!catalog || !engagements || !currentLineup
       || !sameReleaseScope(catalog.scope, scope) || !sameReleaseScope(engagements.scope, scope)) {
     throw new ReleasePlanningError('wrong_scope');
   }
@@ -368,11 +413,36 @@ function gateRestoredProgramContent(
   const retained = new Set(
     sessions.flatMap((session) => session.participants.map((entry) => entry.personId))
   );
+  const confirmedPeople = new Set(
+    engagements.engagements
+      .filter((engagement) => engagement.state === 'confirmed')
+      .map((engagement) => engagement.personId)
+  );
+  const currentVisible = new Map(
+    currentLineup.entries.map((entry) => [entry.personId, entry.publiclyVisible])
+  );
+  const targetNames = new Map(
+    target.nameDeclassifications.map((entry) => [entry.personId, entry.displayName])
+  );
+  const speakerLineup = target.speakerLineup === undefined ? undefined : {
+    ...target.speakerLineup,
+    entries: target.speakerLineup.entries.map((entry) => {
+      const qualifies = currentVisible.get(entry.personId) === true
+        && confirmedPeople.has(entry.personId);
+      if (qualifies) retained.add(entry.personId);
+      return {
+        ...entry,
+        publiclyVisible: currentVisible.get(entry.personId) ?? false,
+        displayName: qualifies ? (targetNames.get(entry.personId) ?? null) : null
+      };
+    })
+  };
   suppressions.sort((left, right) =>
     `${left.sessionId}:${left.personId}` < `${right.sessionId}:${right.personId}` ? -1 : 1
   );
   return Object.freeze({
     sessions,
+    speakerLineup,
     nameDeclassifications: target.nameDeclassifications
       .filter((entry) => retained.has(entry.personId)),
     suppressions
@@ -504,6 +574,9 @@ export function planReleaseMutation(input: {
           pins: target.pins,
           rooms: target.rooms,
           sessions: gated.sessions,
+          ...(gated.speakerLineup === undefined
+            ? {}
+            : { speakerLineup: gated.speakerLineup }),
           nameDeclassifications: gated.nameDeclassifications,
           releasedByUserId: planningInput.actorUserId,
           releasedAt: planningInput.occurredAt
@@ -653,6 +726,19 @@ export function projectReleaseSafeDiff(plan: ReleaseMutationPlanDto): ReleaseSaf
       releasedOccurrenceCount: plan.release.sessions
         .reduce((total, session) => total + session.occurrences.length, 0),
       nameDeclassifications: plan.release.nameDeclassifications,
+      ...(plan.release.speakerLineup === undefined ? {} : {
+        speakerLineup: {
+          digestSha256: plan.release.speakerLineup.digestSha256,
+          categories: plan.release.speakerLineup.categories,
+          publicSpeakers: plan.release.speakerLineup.entries
+            .filter((entry) => entry.displayName !== null)
+            .map((entry) => ({
+              speakerId: entry.speakerId,
+              name: entry.displayName!,
+              categoryId: entry.categoryId
+            }))
+        }
+      }),
       rollbackSuppressions: plan.rollbackSuppressions
     };
   }
@@ -940,6 +1026,7 @@ function signedProgramRelease(unsigned: {
   readonly pins: ProgramReleaseDto['pins'];
   readonly rooms: readonly ReleasedRoomDto[];
   readonly sessions: readonly ReleasedSessionDto[];
+  readonly speakerLineup?: ReleasedSpeakerLineupSnapshotDto;
   readonly nameDeclassifications: readonly ReleaseNameDeclassificationDto[];
   readonly releasedByUserId: string;
   readonly releasedAt: string;
