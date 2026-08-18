@@ -412,8 +412,10 @@
 				<Button type="submit" size="sm" loading={testSending}>Send test</Button>
 			</div>
 			<p class="test__note">
-				The one proof no check can give: the message lands in a real mailbox, and you see
-				whether it arrived in the inbox or in spam.
+				The subject is “JooEvents email diagnostic test”. The message says it is a one-time
+				diagnostic and includes its unique attempt reference and request time; it contains no
+				event or attendee information. Receiving it proves what no automated check can: whether
+				it reached the inbox or spam.
 			</p>
 			{#if testNotice}
 				<p class="notice" role="status">{testNotice}</p>
