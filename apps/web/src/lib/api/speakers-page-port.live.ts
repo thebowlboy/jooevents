@@ -302,17 +302,13 @@ export function createLiveSpeakersPagePort(input: {
 	): Promise<ReadonlyMap<string, string>> {
 		const emails = new Map<string, string>();
 		const contact = input.contacts.contact;
-		if (contact.kind === 'unavailable') return emails;
-		for (const batch of chunked(submissionIds, CONTACT_BATCH)) {
-			await Promise.all(batch.map(async (submissionId) => {
-				const result = await contact.read(submissionId);
-				if (result.kind === 'outcome') return;
-				if (result.kind !== 'success') {
-					throw new SpeakersPageLiveError(readFailure(result, 'speaker contact'));
-				}
-				emails.set(submissionId, result.data.email);
-			}));
+		if (contact.kind === 'unavailable' || submissionIds.length === 0) return emails;
+		const result = await contact.readMany(submissionIds);
+		if (result.kind === 'outcome') return emails;
+		if (result.kind !== 'success') {
+			throw new SpeakersPageLiveError(readFailure(result, 'speaker contact'));
 		}
+		for (const row of result.data) emails.set(row.submissionId, row.email);
 		return emails;
 	}
 

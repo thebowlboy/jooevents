@@ -232,6 +232,23 @@ function fakeContacts(input: {
 				return email === undefined
 					? { kind: 'transport_error', error: { code: 'http_404', retryable: false } }
 					: { kind: 'success', data: { submissionId: readId, email }, correlationId };
+			},
+			readMany: async (submissionIds: readonly string[]) => {
+				if (input.refuse) {
+					return {
+						kind: 'outcome',
+						outcome: {
+							class: 'access_denied', kind: 'authority.permission_missing',
+							retryable: false, message: 'no', detail: null, detailSchemaVersion: 1
+						} as never,
+						correlationId
+					};
+				}
+				const rows = submissionIds.flatMap((submissionId) => {
+					const email = input.emails?.[submissionId];
+					return email === undefined ? [] : [{ submissionId, email }];
+				});
+				return { kind: 'success', data: rows, correlationId };
 			}
 		}
 	} as never;
@@ -304,6 +321,31 @@ describe('live tuned Speakers page port', () => {
 				sessions: { ...fakeSessions({}), source: { kind: 'sample', label: 'Sample data', scenario: { key: 'k', name: 'n', description: 'd' } } } as never
 			})
 		).toThrow(TypeError);
+	});
+
+	test('discloses addresses from one contact list instead of per-submission reads', async () => {
+		let singles = 0;
+		const port = composePort({
+			contacts: {
+				source: { kind: 'live', workspaceId },
+				contact: {
+					kind: 'available',
+					read: async () => {
+						singles += 1;
+						throw new Error('must not read contact per submission');
+					},
+					readMany: async (submissionIds) => ({
+						kind: 'success',
+						data: submissionIds.map((submissionId) => ({
+							submissionId, email: 'amina@example.org'
+						})),
+						correlationId
+					})
+				}
+			} as never
+		});
+		expect((await port.speakers.list())[0]?.email).toBe('amina@example.org');
+		expect(singles).toBe(0);
 	});
 
 	test('reads names from one triage list instead of per-submission reads', async () => {

@@ -143,6 +143,7 @@ describe('workspace overview operation', () => {
       area: 'submissions',
       status: 'partial',
       availableCapabilities: [
+        'submission.contact.list',
         'submission.contact.read',
         'submission.direct_entry.create',
         'submission.list',

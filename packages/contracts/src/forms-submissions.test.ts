@@ -10,6 +10,8 @@ import {
   organizerFormCatalogSchema,
   organizerSubmissionAnswerSchema,
   organizerSubmissionContactSchema,
+  organizerSubmissionContactListSchema,
+  intakeSubmissionContactListInputSchema,
   organizerSubmissionDetailSchema,
   organizerPersonSubmissionPageSchema,
   organizerSubmissionSummarySchema,
@@ -304,6 +306,26 @@ describe('Submission transport contracts', () => {
       target: { kind: 'general_pool' }, title: null, primaryParticipantName: null,
       submittedAt: '2026-08-12T10:00:00.000Z'
     }).title).toBeNull();
+  });
+
+  test('batches contact rows without nesting email into the safe detail', () => {
+    const row = {
+      schemaVersion: 1 as const, submissionId: id(1), personId: id(2),
+      participantIdentityId: id(3), sourceFieldId: id(4), email: 'person@example.com'
+    };
+    expect(organizerSubmissionContactListSchema.parse({
+      schemaVersion: 1, rows: [row]
+    }).rows).toHaveLength(1);
+    expect(organizerSubmissionContactListSchema.safeParse({
+      schemaVersion: 1, rows: [row, row]
+    }).success).toBe(false);
+    expect(intakeSubmissionContactListInputSchema.safeParse({
+      submissionIds: [id(1), id(2)]
+    }).success).toBe(true);
+    expect(intakeSubmissionContactListInputSchema.safeParse({
+      submissionIds: [id(1), id(1)]
+    }).success).toBe(false);
+    expect(Object.hasOwn(organizerSubmissionDetailSchema.shape, 'email')).toBe(false);
   });
 
   test('person-scoped proposal pages require a truthful canonical continuation', () => {

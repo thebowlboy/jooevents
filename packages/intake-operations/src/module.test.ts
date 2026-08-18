@@ -219,7 +219,8 @@ describe('Intake operation modules', () => {
       { operation: 'submission.list@1', effect: 'read', method: 'GET', path: '/api/events/current/submissions', input: 'query', surface: 'operator_http' },
       { operation: 'submission.person.list@1', effect: 'read', method: 'GET', path: '/api/events/current/submissions/by-person', input: 'query', surface: 'operator_http' },
       { operation: 'submission.read@1', effect: 'read', method: 'GET', path: '/api/events/current/submissions/detail', input: 'query', surface: 'operator_http' },
-      { operation: 'submission.contact.read@1', effect: 'read', method: 'GET', path: '/api/events/current/submissions/contact', input: 'query', surface: 'operator_http' }
+      { operation: 'submission.contact.read@1', effect: 'read', method: 'GET', path: '/api/events/current/submissions/contact', input: 'query', surface: 'operator_http' },
+      { operation: 'submission.contact.list@1', effect: 'read', method: 'GET', path: '/api/events/current/submissions/contacts', input: 'query', surface: 'operator_http' }
     ]);
     const registry = await createOperationRegistry(operator.source);
     const formList = registry.safeManifest.operations.find(
@@ -235,6 +236,13 @@ describe('Intake operation modules', () => {
       .toEqual(INTAKE_OPERATION_SCHEMA_REFS.submissionContactRead.inputSchema);
     expect(submissionContact?.enabledBindings[0]?.resultSchema)
       .toEqual(INTAKE_OPERATION_SCHEMA_REFS.submissionContactRead.resultSchema);
+    const submissionContactList = registry.safeManifest.operations.find(
+      (operation) => operation.name === 'submission.contact.list'
+    );
+    expect(submissionContactList?.inputSchema)
+      .toEqual(INTAKE_OPERATION_SCHEMA_REFS.submissionContactList.inputSchema);
+    expect(submissionContactList?.enabledBindings[0]?.resultSchema)
+      .toEqual(INTAKE_OPERATION_SCHEMA_REFS.submissionContactList.resultSchema);
 
     const publicReads = createIntakePublicConformanceReadOperationModule({
       policies,
@@ -577,5 +585,56 @@ describe('Intake operation modules', () => {
       .toThrow('Operation execution failed during handler.');
     await expect(execute('submission.contact.read', { submissionId: draftId })).rejects
       .toThrow('Operation execution failed during handler.');
+    await expect(execute('submission.contact.list', { submissionIds: [draftId] })).rejects
+      .toThrow('Operation execution failed during handler.');
+  });
+
+  test('lists only found contacts under the same contact policy, omitting missing ids', async () => {
+    const foundId = '018f7d5a-4b3c-7abc-8def-012345678901';
+    const missingId = '018f7d5a-4b3c-7abc-8def-012345678902';
+    const contact = {
+      schemaVersion: 1 as const,
+      submissionId: foundId,
+      personId: foundId,
+      participantIdentityId: foundId,
+      sourceFieldId: foundId,
+      email: 'speaker@example.com'
+    };
+    const module = createIntakeReadOperationModule({
+      workspaceId,
+      policies,
+      currentAuthority: allowedAuthority,
+      currentEvent: { resolveCurrentEvent: () => ({ eventId, evidenceIds: ['event:current'] }) },
+      read: {
+        ...read,
+        readSubmissionContact: (_scope, submissionId) =>
+          submissionId === foundId ? contact : undefined
+      },
+      clock: { now: () => parseInstant('2026-08-12T12:00:00.000Z') },
+      ids,
+      crypto
+    });
+    const runtime = await createApplicationOperationRuntime({
+      source: module.source,
+      read: {
+        operationalTrace: { emit() {} },
+        immutableAudit: { append() {} },
+        clock: { now: () => parseInstant('2026-08-12T12:00:00.000Z') },
+        newInvocationId: ids.newInvocationId
+      },
+      unitOfWork: unusedUnitOfWork
+    });
+    const result = await runtime.readExecutor.execute({
+      operationName: 'submission.contact.list',
+      operationVersion: 1,
+      surface: 'operator_http',
+      correlationId: parseCorrelationId('018f7d5a-4b3c-7abc-8def-012345678908'),
+      businessInput: { submissionIds: [missingId, foundId] },
+      verifiedEvidence: operatorEvidence
+    });
+    expect(result).toMatchObject({
+      kind: 'success',
+      data: { schemaVersion: 1, rows: [contact] }
+    });
   });
 });

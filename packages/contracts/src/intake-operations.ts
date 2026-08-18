@@ -21,9 +21,11 @@ import {
   versionedDefinitionRefSchema
 } from './operations';
 import {
+  organizerSubmissionContactListSchema,
   organizerSubmissionContactSchema,
   organizerSubmissionDetailSchema,
-  organizerSubmissionSummarySchema
+  organizerSubmissionSummarySchema,
+  SUBMISSION_CONTACT_LIST_MAX
 } from './submissions';
 
 const canonicalUuid = z.uuid().refine((value) => value === value.toLowerCase());
@@ -190,6 +192,21 @@ export const intakeFormReadInputSchema = z.strictObject({ formId: intakeIdInputS
 export const intakeSubmissionReadInputSchema = z.strictObject({
   submissionId: intakeIdInputSchema
 });
+export const intakeSubmissionContactListInputSchema = z.strictObject({
+  submissionIds: z.array(intakeIdInputSchema).min(1).max(SUBMISSION_CONTACT_LIST_MAX)
+}).superRefine((input, context) => {
+  const seen = new Set<string>();
+  for (const [index, submissionId] of input.submissionIds.entries()) {
+    if (seen.has(submissionId)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['submissionIds', index],
+        message: 'submission ids must be unique'
+      });
+    }
+    seen.add(submissionId);
+  }
+});
 export const intakePersonSubmissionListInputSchema = z.strictObject({
   personId: intakeIdInputSchema,
   afterSubmissionId: intakeIdInputSchema.optional()
@@ -255,6 +272,8 @@ export const organizerSubmissionDetailReadResultSchema =
   createReadOperationResultSchema(organizerSubmissionDetailSchema);
 export const organizerSubmissionContactReadResultSchema =
   createReadOperationResultSchema(organizerSubmissionContactSchema);
+export const organizerSubmissionContactListReadResultSchema =
+  createReadOperationResultSchema(organizerSubmissionContactListSchema);
 
 /** Exact public schema identities projected into Intake operator bindings. */
 export const INTAKE_OPERATION_SCHEMA_REFS = Object.freeze({
@@ -293,6 +312,12 @@ export const INTAKE_OPERATION_SCHEMA_REFS = Object.freeze({
     inputSchema: intakeSubmissionReadInputSchema,
     resultKey: 'schema.submission.contact-read.projected-result',
     resultSchema: organizerSubmissionContactReadResultSchema
+  }),
+  submissionContactList: createOperationSchemaManifestRefs({
+    inputKey: 'schema.submission.contact-list.input',
+    inputSchema: intakeSubmissionContactListInputSchema,
+    resultKey: 'schema.submission.contact-list.projected-result',
+    resultSchema: organizerSubmissionContactListReadResultSchema
   }),
   formWrites: Object.freeze({
     create: createOperationSchemaManifestRefs({

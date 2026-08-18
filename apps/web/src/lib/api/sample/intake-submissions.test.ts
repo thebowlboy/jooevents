@@ -46,6 +46,14 @@ describe('sample organizer submissions adapter', () => {
 				email: opening.submissions[0]?.speakers[0]?.email
 			}
 		});
+		const batched = await common.contact.readMany([first.id, 'missing']);
+		expect(batched).toEqual({
+			kind: 'success',
+			data: [{
+				submissionId: first.id,
+				email: opening.submissions[0]?.speakers[0]?.email
+			}]
+		});
 	});
 
 	test('retains no contact projection or contact method in the no-contact branch', async () => {

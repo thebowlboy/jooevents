@@ -3,9 +3,11 @@ import {
 	intakeIdInputSchema,
 	intakePersonSubmissionListInputSchema,
 	organizerPersonSubmissionPageReadResultSchema,
+	organizerSubmissionContactListReadResultSchema,
 	organizerSubmissionContactReadResultSchema,
 	organizerSubmissionDetailReadResultSchema,
-	organizerSubmissionListReadResultSchema
+	organizerSubmissionListReadResultSchema,
+	SUBMISSION_CONTACT_LIST_MAX
 } from '@jooevents/contracts';
 import type { z } from 'zod';
 import { requestJson, type ApiResult } from '../client';
@@ -45,6 +47,10 @@ export const INTAKE_SUBMISSION_CONTACT_READ_OPERATION = Object.freeze({
 	name: 'submission.contact.read',
 	version: 1
 } as const);
+export const INTAKE_SUBMISSION_CONTACT_LIST_READ_OPERATION = Object.freeze({
+	name: 'submission.contact.list',
+	version: 1
+} as const);
 
 export {
 	organizerSubmissionContactReadResultSchema,
@@ -56,7 +62,8 @@ type OperationRef =
 	| typeof INTAKE_SUBMISSION_LIST_READ_OPERATION
 	| typeof INTAKE_PERSON_SUBMISSION_LIST_READ_OPERATION
 	| typeof INTAKE_SUBMISSION_DETAIL_READ_OPERATION
-	| typeof INTAKE_SUBMISSION_CONTACT_READ_OPERATION;
+	| typeof INTAKE_SUBMISSION_CONTACT_READ_OPERATION
+	| typeof INTAKE_SUBMISSION_CONTACT_LIST_READ_OPERATION;
 
 type BindingResolution = OperatorHttpBindingResolution;
 
@@ -257,6 +264,93 @@ async function readContact(
 	};
 }
 
+function pathForContactList(path: string, submissionIds: readonly string[]): string | null {
+	const query = new URLSearchParams();
+	for (const raw of submissionIds) {
+		const parsed = intakeIdInputSchema.safeParse(raw);
+		if (!parsed.success) return null;
+		query.append('submissionIds', parsed.data);
+	}
+	if (query.getAll('submissionIds').length === 0) return null;
+	return `${path}?${query.toString()}`;
+}
+
+function chunked<Value>(values: readonly Value[], size: number): readonly (readonly Value[])[] {
+	const chunks: Value[][] = [];
+	for (let index = 0; index < values.length; index += size) {
+		chunks.push(values.slice(index, index + size));
+	}
+	return chunks;
+}
+
+async function readContactList(
+	listBinding: BindingResolution,
+	singleBinding: BindingResolution,
+	request: IntakeSubmissionRequester,
+	submissionIds: readonly string[],
+	options: { readonly signal?: AbortSignal }
+): Promise<OrganizerSubmissionReadResult<readonly OrganizerSubmissionContactView[]>> {
+	const unique: string[] = [];
+	const seen = new Set<string>();
+	for (const submissionId of submissionIds) {
+		const parsed = intakeIdInputSchema.safeParse(submissionId);
+		if (!parsed.success) return invalidSubmissionId();
+		if (seen.has(parsed.data)) continue;
+		seen.add(parsed.data);
+		unique.push(parsed.data);
+	}
+	if (unique.length === 0) return { kind: 'success', data: Object.freeze([]) };
+
+	if (listBinding.kind !== 'unavailable') {
+		const rows: OrganizerSubmissionContactView[] = [];
+		let correlationId: string | undefined;
+		for (const batch of chunked(unique, SUBMISSION_CONTACT_LIST_MAX)) {
+			const path = pathForContactList(listBinding.path, batch);
+			if (!path) return invalidSubmissionId();
+			const transport = await request({
+				path,
+				method: 'GET',
+				schema: organizerSubmissionContactListReadResultSchema,
+				...(options.signal ? { signal: options.signal } : {})
+			});
+			if (transport.kind === 'error') return { kind: 'transport_error', error: transport.error };
+			const parsed = organizerSubmissionContactListReadResultSchema.safeParse(transport.data);
+			if (!parsed.success) return invalidContract();
+			if (parsed.data.kind === 'outcome') return parsed.data;
+			const allowed = new Set(batch);
+			for (const row of parsed.data.data.rows) {
+				if (!allowed.has(row.submissionId) || rows.some((entry) => entry.submissionId === row.submissionId)) {
+					return invalidContract();
+				}
+				rows.push(mapOrganizerSubmissionContact(row));
+			}
+			correlationId = parsed.data.correlationId;
+		}
+		return {
+			kind: 'success',
+			data: Object.freeze(rows),
+			...(correlationId ? { correlationId } : {})
+		};
+	}
+
+	const rows: OrganizerSubmissionContactView[] = [];
+	for (const batch of chunked(unique, 8)) {
+		const found = await Promise.all(
+			batch.map((submissionId) => readContact(singleBinding, request, submissionId, options))
+		);
+		for (const result of found) {
+			if (result.kind === 'outcome') {
+				if (result.outcome.kind === 'intake.not_found') continue;
+				return result;
+			}
+			if (result.kind === 'unavailable') return result;
+			if (result.kind === 'transport_error') return result;
+			rows.push(result.data);
+		}
+	}
+	return { kind: 'success', data: Object.freeze(rows) };
+}
+
 export type LiveSubmissionContactCapability =
 	| { readonly kind: 'available' }
 	| { readonly kind: 'unavailable'; readonly reason: 'not_enabled' | 'not_authorized' };
@@ -291,6 +385,11 @@ export function createIntakeSubmissionsLivePort(input: {
 		INTAKE_SUBMISSION_CONTACT_READ_OPERATION,
 		INTAKE_OPERATION_SCHEMA_REFS.submissionContactRead
 	);
+	const contactListBinding = resolveBinding(
+		input.manifest,
+		INTAKE_SUBMISSION_CONTACT_LIST_READ_OPERATION,
+		INTAKE_OPERATION_SCHEMA_REFS.submissionContactList
+	);
 	const request = input.request ?? defaultRequester;
 	const contact =
 		input.contactCapability.kind === 'unavailable'
@@ -301,7 +400,9 @@ export function createIntakeSubmissionsLivePort(input: {
 			: Object.freeze({
 					kind: 'available' as const,
 					read: (submissionId: string, options: { readonly signal?: AbortSignal } = {}) =>
-						readContact(contactBinding, request, submissionId, options)
+						readContact(contactBinding, request, submissionId, options),
+					readMany: (submissionIds: readonly string[], options: { readonly signal?: AbortSignal } = {}) =>
+						readContactList(contactListBinding, contactBinding, request, submissionIds, options)
 				});
 
 	return Object.freeze({

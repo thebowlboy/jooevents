@@ -650,6 +650,26 @@ export const organizerSubmissionContactSchema = z.strictObject({
   email: applicationEmailSchema
 });
 
+/** Same ceiling as `decision.state.read` — a named set, never an all-contacts dump. */
+export const SUBMISSION_CONTACT_LIST_MAX = 100;
+
+export const organizerSubmissionContactListSchema = z.strictObject({
+  schemaVersion: z.literal(1),
+  rows: z.array(organizerSubmissionContactSchema).max(SUBMISSION_CONTACT_LIST_MAX)
+}).superRefine((value, context) => {
+  const seen = new Set<string>();
+  for (const [index, row] of value.rows.entries()) {
+    if (seen.has(row.submissionId)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['rows', index, 'submissionId'],
+        message: 'contact rows must be unique by submission id'
+      });
+    }
+    seen.add(row.submissionId);
+  }
+});
+
 /**
  * Operator wire input for organizer direct entry. The record's identities,
  * source, and `submittedAt` are server-assigned inside the sealed invocation —
@@ -723,5 +743,6 @@ export type OrganizerSubmissionChoiceDto = z.infer<typeof organizerSubmissionCho
 export type OrganizerSubmissionAnswerDto = z.infer<typeof organizerSubmissionAnswerSchema>;
 export type OrganizerSubmissionDetailDto = z.infer<typeof organizerSubmissionDetailSchema>;
 export type OrganizerSubmissionContactDto = z.infer<typeof organizerSubmissionContactSchema>;
+export type OrganizerSubmissionContactListDto = z.infer<typeof organizerSubmissionContactListSchema>;
 export type SubmissionDirectEntryInput = z.infer<typeof submissionDirectEntryInputSchema>;
 export type SubmissionDirectEntryResultDto = z.infer<typeof submissionDirectEntryResultSchema>;

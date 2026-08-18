@@ -28,6 +28,7 @@ import {
   intakeEmptyReadInputSchema,
   intakeFormReadInputSchema,
   intakeSubmissionReadInputSchema,
+  intakeSubmissionContactListInputSchema,
   intakePersonSubmissionListInputSchema,
   intakeIdInputSchema,
   intakeIdSchema,
@@ -37,6 +38,8 @@ import {
   organizerFormDetailReadResultSchema,
   organizerSubmissionContactSchema,
   organizerSubmissionContactReadResultSchema,
+  organizerSubmissionContactListSchema,
+  organizerSubmissionContactListReadResultSchema,
   organizerSubmissionDetailSchema,
   organizerSubmissionDetailReadResultSchema,
   organizerSubmissionListReadResultSchema,
@@ -110,6 +113,9 @@ export const INTAKE_PERSON_SUBMISSION_LIST_OPERATION = Object.freeze({
 export const INTAKE_SUBMISSION_READ_OPERATION = Object.freeze({ name: 'submission.read', version: 1 });
 export const INTAKE_SUBMISSION_CONTACT_READ_OPERATION = Object.freeze({
   name: 'submission.contact.read', version: 1
+});
+export const INTAKE_SUBMISSION_CONTACT_LIST_OPERATION = Object.freeze({
+  name: 'submission.contact.list', version: 1
 });
 export const INTAKE_PUBLIC_MUTATE_OPERATION = Object.freeze({ name: 'application.public.mutate', version: 1 });
 export const INTAKE_PUBLIC_MUTATION_HANDLER_CAPABILITY = ref('capability.application.public.mutate');
@@ -523,6 +529,12 @@ const readCatalog = Object.freeze({
       projectedSchema: organizerSubmissionContactReadResultSchema
     }
   ),
+  submissionContactList: readSchemas(
+    'submission.contact-list', intakeSubmissionContactListInputSchema, organizerSubmissionContactListSchema, {
+      refs: INTAKE_OPERATION_SCHEMA_REFS.submissionContactList,
+      projectedSchema: organizerSubmissionContactListReadResultSchema
+    }
+  ),
   publicResume: readSchemas('application.public-resume', publicApplicationDraftReadInputSchema, publicApplicationDraftResumeSchema)
 });
 
@@ -830,6 +842,20 @@ export function createIntakeReadOperationModule(input: {
           throw new TypeError('intake_read_projection_id_mismatch');
         }
         return value;
+      } },
+      { operation: INTAKE_SUBMISSION_CONTACT_LIST_OPERATION, key: 'submissionContactList', path: '/api/events/current/submissions/contacts', lane: contactRead, scope: operatorScope, requiresEvent: true, read: (context, raw) => {
+        const currentScope = eventRequired(context);
+        const { submissionIds } = intakeSubmissionContactListInputSchema.parse(raw);
+        const rows = [];
+        for (const submissionId of submissionIds) {
+          const value = input.read.readSubmissionContact(currentScope, submissionId);
+          if (!value) continue;
+          if (value.submissionId !== submissionId) {
+            throw new TypeError('intake_read_projection_id_mismatch');
+          }
+          rows.push(value);
+        }
+        return Object.freeze({ schemaVersion: 1 as const, rows: Object.freeze(rows) });
       } }
     ]
   });

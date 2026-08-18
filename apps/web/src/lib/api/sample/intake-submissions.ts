@@ -137,6 +137,13 @@ export function createSampleIntakeSubmissionsPort(input: {
 					async read(submissionId: string) {
 						const value = records.find((record) => record.summary.id === submissionId)?.contact;
 						return value ? success(value) : missing<OrganizerSubmissionContactView>();
+					},
+					async readMany(submissionIds: readonly string[]) {
+						const rows = submissionIds.flatMap((submissionId) => {
+							const value = records.find((record) => record.summary.id === submissionId)?.contact;
+							return value ? [value] : [];
+						});
+						return success(Object.freeze(rows));
 					}
 				});
 

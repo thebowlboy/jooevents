@@ -9,6 +9,7 @@ import {
 import {
 	createIntakeSubmissionsLivePort,
 	INTAKE_PERSON_SUBMISSION_LIST_READ_OPERATION,
+	INTAKE_SUBMISSION_CONTACT_LIST_READ_OPERATION,
 	INTAKE_SUBMISSION_CONTACT_READ_OPERATION,
 	INTAKE_SUBMISSION_DETAIL_READ_OPERATION,
 	INTAKE_SUBMISSION_LIST_READ_OPERATION,
@@ -55,6 +56,15 @@ const bindings = {
 		input: 'query',
 		resultSchema: INTAKE_OPERATION_SCHEMA_REFS.submissionContactRead.resultSchema,
 		browserResumption: { kind: 'none' }
+	},
+	contactList: {
+		surface: 'operator_http',
+		protocol: 'http',
+		method: 'GET',
+		path: '/api/events/current/submissions/contacts',
+		input: 'query',
+		resultSchema: INTAKE_OPERATION_SCHEMA_REFS.submissionContactList.resultSchema,
+		browserResumption: { kind: 'none' }
 	}
 } as const satisfies Record<string, SafePublicOperationBinding>;
 
@@ -63,7 +73,8 @@ function operation(
 		| typeof INTAKE_SUBMISSION_LIST_READ_OPERATION
 		| typeof INTAKE_PERSON_SUBMISSION_LIST_READ_OPERATION
 		| typeof INTAKE_SUBMISSION_DETAIL_READ_OPERATION
-		| typeof INTAKE_SUBMISSION_CONTACT_READ_OPERATION,
+		| typeof INTAKE_SUBMISSION_CONTACT_READ_OPERATION
+		| typeof INTAKE_SUBMISSION_CONTACT_LIST_READ_OPERATION,
 	binding: SafePublicOperationBinding,
 	schemas: typeof INTAKE_OPERATION_SCHEMA_REFS.submissionList,
 	overrides: Partial<SafeOperationManifestEntry> = {}
@@ -107,7 +118,8 @@ function manifest(
 		operation(INTAKE_SUBMISSION_LIST_READ_OPERATION, bindings.list, INTAKE_OPERATION_SCHEMA_REFS.submissionList),
 		operation(INTAKE_PERSON_SUBMISSION_LIST_READ_OPERATION, bindings.personList, INTAKE_OPERATION_SCHEMA_REFS.personSubmissionList),
 		operation(INTAKE_SUBMISSION_DETAIL_READ_OPERATION, bindings.detail, INTAKE_OPERATION_SCHEMA_REFS.submissionRead),
-		operation(INTAKE_SUBMISSION_CONTACT_READ_OPERATION, bindings.contact, INTAKE_OPERATION_SCHEMA_REFS.submissionContactRead)
+		operation(INTAKE_SUBMISSION_CONTACT_READ_OPERATION, bindings.contact, INTAKE_OPERATION_SCHEMA_REFS.submissionContactRead),
+		operation(INTAKE_SUBMISSION_CONTACT_LIST_READ_OPERATION, bindings.contactList, INTAKE_OPERATION_SCHEMA_REFS.submissionContactList)
 	]
 ): SafeOperationManifest {
 	return safeOperationManifestSchema.parse({
@@ -223,6 +235,28 @@ describe('pure-live organizer submissions operation port', () => {
 			correlationId
 		});
 		expect(calls).toEqual([bindings.list.path, detailPath, contactPath]);
+	});
+
+	test('discloses a named contact batch in one request and omits missing rows', async () => {
+		const calls: string[] = [];
+		const listedPath = `${bindings.contactList.path}?submissionIds=${encodeURIComponent(id(1))}&submissionIds=${encodeURIComponent(id(2))}`;
+		const port = createIntakeSubmissionsLivePort({
+			manifest: manifest(),
+			contactCapability: { kind: 'available' },
+			request: requesterFor(
+				{
+					[listedPath]: success({ schemaVersion: 1, rows: [contact] })
+				},
+				calls
+			)
+		});
+		if (port.contact.kind !== 'available') throw new TypeError('contact capability expected');
+		expect(await port.contact.readMany([id(1), id(2)])).toEqual({
+			kind: 'success',
+			data: [{ submissionId: id(1), email: contact.email }],
+			correlationId
+		});
+		expect(calls).toEqual([listedPath]);
 	});
 
 	test('gives a no-contact composition no contact method even when the operation is registered', async () => {

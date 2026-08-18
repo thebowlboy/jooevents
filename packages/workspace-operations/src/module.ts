@@ -65,6 +65,7 @@ export const DEFAULT_WORKSPACE_OVERVIEW_AREA_CATALOG: WorkspaceOverviewAreaCatal
       area: 'submissions',
       status: 'partial',
       availableCapabilities: [
+        'submission.contact.list',
         'submission.contact.read',
         'submission.direct_entry.create',
         'submission.list',

@@ -1316,6 +1316,10 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['POST /api/events/current/communications/authoring-payloads']
       },
       {
+        name: 'submission.contact.list', version: 1, effect: 'read',
+        bindings: ['GET /api/events/current/submissions/contacts']
+      },
+      {
         name: 'submission.contact.read', version: 1, effect: 'read',
         bindings: ['GET /api/events/current/submissions/contact']
       },
