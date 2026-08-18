@@ -468,13 +468,31 @@
     cursor: not-allowed;
   }
 
+  /*
+   * The box centers on the label's FIRST line, at any type size, and keeps
+   * flex-start so a two-line label or a description still hangs below it.
+   *
+   * The offset is derived, not guessed: half the difference between the line
+   * box and the control. That means the control has to measure the line it sits
+   * beside, so it carries the copy's own type — `1lh` resolves against the
+   * element's own computed line-height, and this element would otherwise
+   * inherit the page's 1rem/1.5 and centre against a line that is nowhere on
+   * screen. The type is here for measurement only; everything drawn inside is
+   * sized in explicit rem.
+   *
+   * The result goes slightly negative under compact density, where the box is
+   * taller than the line — which is correct, and is exactly what a hardcoded
+   * positive nudge could never express.
+   */
   .ui-choice__control {
     display: grid;
     width: 1.05rem;
     height: 1.05rem;
     flex: 0 0 auto;
     place-items: center;
-    margin-top: 0.08rem;
+    font-size: var(--je-font-size-sm);
+    line-height: var(--je-leading-snug);
+    margin-block-start: calc((1lh - 1.05rem) / 2);
     border: 1px solid var(--je-color-border-strong);
     border-radius: 4px;
     background: var(--je-color-surface);
@@ -550,12 +568,17 @@
     opacity: 0;
   }
 
+  /* The same derivation as `.ui-choice__control`, and for the same reason: a
+     switch borrows `.ui-choice__copy`, so it must centre on the same line box —
+     stacks that mix switches and checkboxes align only if both derive it. */
   .ui-switch__track {
     position: relative;
     width: 2rem;
     height: 1.1rem;
     flex: 0 0 auto;
-    margin-top: 0.06rem;
+    font-size: var(--je-font-size-sm);
+    line-height: var(--je-leading-snug);
+    margin-block-start: calc((1lh - 1.1rem) / 2);
     border: 1px solid var(--je-color-border-strong);
     border-radius: var(--je-radius-round);
     background: var(--je-color-surface-sunken);

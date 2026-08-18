@@ -81,9 +81,12 @@ describe('the kind registry', () => {
 		}
 	});
 
-	test('blank is genuinely blank: a subject to write and no scaffold to delete', () => {
+	// A message with no blocks has no body: nothing to edit, and nothing for a
+	// send ceremony to show. The bare start is still a document.
+	test('blank is bare, not empty: a headline and one paragraph to replace', () => {
 		const blank = templateKind('blank')!;
-		expect(blank.blocks).toEqual([]);
+		expect(blank.blocks.map((block) => block.type)).toEqual(['heading', 'paragraph']);
+		// The subject is the operator's to write; only the body is scaffolded.
 		expect(blank.subject).toBe('');
 	});
 });
@@ -137,10 +140,10 @@ describe('minting a template from a kind', () => {
 		expect(await api.templates.get(made.id)).toEqual(made as never);
 	});
 
-	test('a blank template is subject-only, with nothing scaffolded to delete', async () => {
+	test('a blank template still arrives with a body to write into', async () => {
 		const api = await freshApi();
 		const made = await api.templates.create({ name: 'Quick note', kind: 'blank' });
-		expect(made.blocks).toEqual([]);
+		expect(made.blocks.map((block) => block.type)).toEqual(['heading', 'paragraph']);
 		expect(made.subject).toBe('');
 		expect(made.revisions[0]!.note).toBe('Created — Blank');
 	});

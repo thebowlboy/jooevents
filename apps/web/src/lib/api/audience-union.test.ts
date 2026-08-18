@@ -122,7 +122,7 @@ describe('unioning selected audiences', () => {
 
 	test('no groups is an empty union rather than a guess', () => {
 		const union = unionAudienceGroups([]);
-		expect(union).toEqual({ recipients: [], label: '', reach: 0, overlap: 0 });
+		expect(union).toEqual({ recipients: [], claimedBy: [], label: '', reach: 0, overlap: 0 });
 	});
 });
 
@@ -202,7 +202,11 @@ describe('the sample composer port', () => {
 		const preview = await api.communications.previewRecipients(['confirmed-speakers']);
 		expect(preview.rows.length).toBeGreaterThan(0);
 		for (const row of preview.rows) {
-			expect(Object.keys(row).sort()).toEqual(['name', 'state']);
+			// A row may carry a roster id — the door to the ordinary one-person
+			// profile disclosure — but never an address. The list is not a bulk
+			// read of everybody's contact details, whatever else it gains.
+			expect(Object.keys(row)).not.toContain('email');
+			expect(JSON.stringify(row)).not.toContain('@');
 		}
 	});
 

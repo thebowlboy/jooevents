@@ -1196,6 +1196,16 @@ export interface CommunicationMessage {
 	sentAt?: string;
 	/** Present while held: the reason and next remedy (e.g. provider not ready). */
 	heldReason?: string;
+	/**
+	 * The message's own body when it came from no stored template — a one-off
+	 * written in the composer and frozen onto the send.
+	 *
+	 * Template-shaped so the review ceremony renders it through the one email
+	 * rendering path, but it is not a library record: it is listed nowhere, has
+	 * no revisions worth keeping, and belongs to this message alone. Present
+	 * exactly when `templateId` is absent and the operator wrote something.
+	 */
+	document?: MessageTemplate;
 	deliveredCount: number;
 	bouncedCount: number;
 	bounces: { email: string; reason: string }[];

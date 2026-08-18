@@ -8,7 +8,8 @@ import type {
 	EmailReadiness,
 	EventTheme,
 	MessageTemplate,
-	MutationOutcome
+	MutationOutcome,
+	SpeakerProfile
 } from './types';
 
 /** Factual capabilities consumed by the tuned organizer Communications surface. */
@@ -36,6 +37,12 @@ export interface CommunicationsPagePort {
 			 */
 			audienceIds: readonly string[];
 			templateId?: string;
+			/**
+			 * The one-off body, when the compose started blank. Frozen onto the
+			 * message so the review renders what will actually be sent; a compose
+			 * that named a stored template sends that instead and passes none.
+			 */
+			document?: MessageTemplate;
 		}): Promise<CommunicationMessage>;
 		send(id: string): Promise<MutationOutcome>;
 		resendBounced(id: string, email: string, correctedEmail: string): Promise<MutationOutcome>;
@@ -73,5 +80,18 @@ export interface CommunicationsPagePort {
 				readonly location: string;
 			};
 		}>;
+	};
+	/**
+	 * The individual-disclosure door behind a name in the audience preview.
+	 * Optional: a composition that cannot serve profiles renders the names as
+	 * plain text, which is the same list minus one door — never a broken one.
+	 */
+	readonly speakers?: {
+		/**
+		 * Keyed by roster id, not address: the audience preview deliberately
+		 * carries no addresses, so the surface asks with the opaque id it does
+		 * hold and the composition resolves the person.
+		 */
+		profileById(speakerId: string): Promise<SpeakerProfile | null>;
 	};
 }

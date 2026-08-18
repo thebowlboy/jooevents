@@ -282,8 +282,15 @@
 	 * no body to render, and the one-line sample stays the evidence.
 	 */
 	let previewEmail = $state<string | null>(null);
+	/**
+	 * The body this draft renders from: its stored template, or — for a message
+	 * written from a blank start — the one-off frozen onto it. Every draft has
+	 * one of the two, so the review always has an artifact to show.
+	 */
 	const reviewTemplate = $derived(
-		templates?.find((template) => template.id === reviewMessage?.templateId) ?? null
+		templates?.find((template) => template.id === reviewMessage?.templateId) ??
+			reviewMessage?.document ??
+			null
 	);
 	const previewRecipient = $derived(
 		reviewMessage?.review?.recipients.find(

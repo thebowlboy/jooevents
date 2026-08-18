@@ -1012,7 +1012,7 @@ function communicationEntry(
 	audienceCount: number,
 	state: CommunicationMessage['state'],
 	provenance: Pick<CommunicationMessage, 'purpose' | 'cause' | 'actor'> &
-		Partial<Pick<CommunicationMessage, 'causeHref' | 'templateId' | 'review'>>
+		Partial<Pick<CommunicationMessage, 'causeHref' | 'templateId' | 'document' | 'review'>>
 ): CommunicationMessage {
 	const message: CommunicationMessage = {
 		id: mintId('msg'),
@@ -3307,7 +3307,7 @@ export const api = {
 						action: { label: 'Review & send', kind: 'review' }
 					});
 				}
-				if (message.bouncedCount > 0) {
+				if ((message.bouncedCount ?? 0) > 0) {
 					items.push({
 						id: `att-bounce-${message.id}`,
 						severity: 'action',
@@ -3380,7 +3380,14 @@ export const api = {
 			await latency();
 			const union = unionAudienceGroups(selectedAudienceGroups(audienceIds, undefined, ''));
 			return {
-				rows: audiencePreviewRows(union),
+				// Identity where the person is on the roster, so their name opens
+				// the same profile it opens everywhere else. Reviewers who are not
+				// speakers simply carry no door — an absent id, not a broken one.
+				rows: audiencePreviewRows(union, (row) => {
+					const key = row.email.trim().toLowerCase();
+					if (key === '') return undefined;
+					return db.speakers.find((entry) => entry.email.trim().toLowerCase() === key)?.id;
+				}),
 				reach: union.reach,
 				overlap: union.overlap,
 				label: union.label
@@ -3420,7 +3427,7 @@ export const api = {
 		): Promise<MutationOutcome> {
 			await latency();
 			const message = db.communications.find((entry) => entry.id === id);
-			const bounce = message?.bounces.find((entry) => entry.email === email);
+			const bounce = message?.bounces?.find((entry) => entry.email === email);
 			if (!message || !bounce) {
 				return { ok: false, reason: 'This bounce is no longer on the message' };
 			}
@@ -3431,9 +3438,9 @@ export const api = {
 			if (db.readiness.outbound !== 'ready') {
 				return { ok: false, reason: 'Outbound email is not ready — finish provider setup; the resend stays available.' };
 			}
-			message.bounces = message.bounces.filter((entry) => entry !== bounce);
+			message.bounces = (message.bounces ?? []).filter((entry) => entry !== bounce);
 			message.bouncedCount = message.bounces.length;
-			message.deliveredCount += 1;
+			message.deliveredCount = (message.deliveredCount ?? 0) + 1;
 			// Their copy went out again: the person's own thread records it. The
 			// roster row still carries the old address, so match either.
 			const threadEmail = [address, email].find((candidate) =>
@@ -3446,21 +3453,26 @@ export const api = {
 			subject: string;
 			audienceIds: readonly string[];
 			templateId?: string;
+			document?: MessageTemplate;
 		}): Promise<CommunicationMessage> {
 			await latency();
 			const template = input.templateId
 				? db.templates.find((entry) => entry.id === input.templateId)
 				: undefined;
+			// A compose that named no template still carries a body: the one-off
+			// the operator wrote, frozen here so the review renders the real
+			// artifact rather than announcing that there is none.
+			const document = template ? undefined : input.document;
 			// The draft freezes the union, not the groups: one row per person, so
 			// nobody in two of the selected audiences is written to twice.
 			const union = unionAudienceGroups(
-				selectedAudienceGroups(input.audienceIds, template, input.subject)
+				selectedAudienceGroups(input.audienceIds, template ?? document, input.subject)
 			);
 			const audienceLabel = union.label === '' ? 'No audience selected' : union.label;
 			const review: MessageReview = {
 				templateLabel: template
 					? `${template.key} @ revision ${template.revision}`
-					: 'No template — subject only',
+					: 'One-off message',
 				audienceLabel: `${audienceLabel} (current snapshot)`,
 				binding: 'current_snapshot',
 				recipients: union.recipients,
@@ -3475,6 +3487,7 @@ export const api = {
 					: 'Composed by you on the Communications page',
 				actor: 'you',
 				templateId: template?.id,
+				...(document ? { document: structuredClone(document) } : {}),
 				review
 			});
 		}

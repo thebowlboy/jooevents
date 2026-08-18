@@ -72,10 +72,27 @@ export const templateKinds: TemplateKindDef[] = [
 	{
 		id: 'blank',
 		label: 'Blank',
-		description: 'Subject only — no scaffold. Start from an empty message and write it yourself.',
+		description: 'A bare start — a headline and one paragraph to replace, and nothing else.',
 		purpose: 'A one-off message written from scratch.',
 		subject: '',
-		blocks: [],
+		/**
+		 * Not empty. A message with no blocks has no body, and a composition that
+		 * can only offer a subject is a dead end — there is nothing to edit and
+		 * nothing for a send ceremony to show. The bare start is still a
+		 * document: the least one that can be written into.
+		 *
+		 * The composer's own blank start seeds an anonymous one-off from exactly
+		 * this scaffold, so the shortest path to a message and the shortest
+		 * library template begin as the same thing.
+		 */
+		blocks: [
+			{ type: 'heading', text: 'Your headline goes here', suggestedVars: ['event.name'] },
+			{
+				type: 'paragraph',
+				text: 'Write the message here. Say the one thing that changed and what it means for them.',
+				suggestedVars: ['speaker.name', 'event.name']
+			}
+		],
 		mergeFields: standardMergeFields()
 	}
 ];
