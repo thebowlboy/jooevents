@@ -293,7 +293,7 @@ export function createHttpApp(input: {
           correlationId: correlation(context)
         }, 502);
       }
-      return context.json({ url: SIGN_IN_LINK_CALLBACK_PATH });
+      return context.json({ url: new URL(SIGN_IN_LINK_CALLBACK_PATH, input.baseUrl).toString() });
     });
   }
 

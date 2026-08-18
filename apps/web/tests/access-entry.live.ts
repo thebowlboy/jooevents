@@ -11,6 +11,47 @@ const pending = {
   workspace: { id: 'workspace_summit', name: 'Summit Operations' }
 };
 
+test('the organizer review response crosses the callback and reaches the active app', async ({ page }) => {
+  let entryStarted = false;
+  await page.route('**/api/operations/manifest', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({
+      schemaVersion: 1,
+      registryDigestSha256: 'a'.repeat(64),
+      operations: []
+    })
+  }));
+  await page.route('**/api/me/access-context', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify(entryStarted
+      ? {
+          state: 'active',
+          user: { id: 'user_reviewer', displayName: 'Evaluation organizer' },
+          workspace: { id: 'workspace_review', name: 'JooCon 2027' }
+        }
+      : {
+          state: 'anonymous',
+          signInMethods: ['magic_link'],
+          reviewOrganizerEntry: true
+        })
+  }));
+  await page.route('**/api/entry/review-organizer', (route) => {
+    entryStarted = true;
+    const origin = new URL(route.request().url()).origin;
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ url: `${origin}/auth/complete?returnTo=/app` })
+    });
+  });
+
+  await page.goto('/sign-in');
+  await page.getByRole('button', { name: 'Log in as organizer' }).click();
+  await expect(page).toHaveURL('/app');
+});
+
 test('a failed Google start shows reviewed copy beside the button and leaks no server text', async ({ page }) => {
   await page.route('**/api/me/access-context', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ state: 'anonymous' }) }));

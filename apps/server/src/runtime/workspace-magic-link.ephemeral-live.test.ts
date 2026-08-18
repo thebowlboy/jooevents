@@ -266,7 +266,9 @@ describe('workspace magic-link sign-in', () => {
         }
       );
       expect(response.status).toBe(200);
-      expect(await response.json()).toEqual({ url: '/auth/complete?returnTo=/app' });
+      expect(await response.json()).toEqual({
+        url: 'http://localhost:5176/auth/complete?returnTo=/app'
+      });
       const cookie = sessionCookieFrom(response);
       expect(cookies.has(cookie)).toBe(false);
       cookies.add(cookie);
