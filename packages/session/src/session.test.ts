@@ -582,6 +582,48 @@ describe('canonical Session foundation', () => {
     expect(findSession(restored, sessionId)!.roster).toEqual(current.roster);
   });
 
+  test('changes one exact participant role and writes a complete guarded roster order', () => {
+    const empty = createEmptySessionCatalog(scope);
+    const source = { kind: 'submission', id: sessionId, version: 1 };
+    let catalog = applySessionMutationPlan({
+      catalog: empty, vocabulary: vocabulary(),
+      plan: planSessionMutation({ catalog: empty, vocabulary: vocabulary(), planningInput: {
+        action: 'create', scope, sessionId, actorUserId: userId, occurredAt: now,
+        expectedCatalogVersion: empty.version, expectedCatalogDigestSha256: empty.digestSha256,
+        title: 'Ordered Panel', plannedDurationMinutes: 60, lifecycle: 'programmed',
+        formatId, trackId, participants: [
+          { personId: personA, role: 'speaker', publiclyVisible: true, source },
+          { personId: personB, role: 'panelist', publiclyVisible: false, source }
+        ]
+      } })
+    }).catalog;
+    let head = findSession(catalog, sessionId)!;
+    const rolePlan = planSessionMutation({ catalog, vocabulary: vocabulary(), planningInput: {
+      action: 'roster_role', scope, sessionId, actorUserId: userId, occurredAt: later,
+      expectedCatalogVersion: catalog.version, expectedCatalogDigestSha256: catalog.digestSha256,
+      expectedSessionVersion: head.version, expectedSessionDigestSha256: head.digestSha256,
+      expectedRosterVersion: head.roster.version, expectedParticipant: head.roster.participants[0]!,
+      role: 'moderator'
+    } });
+    expect(rolePlan.after.roster.participants[0]?.role).toBe('moderator');
+    catalog = applySessionMutationPlan({ catalog, vocabulary: vocabulary(), plan: rolePlan }).catalog;
+    head = findSession(catalog, sessionId)!;
+    const reorder = planSessionMutation({ catalog, vocabulary: vocabulary(), planningInput: {
+      action: 'roster_reorder', scope, sessionId, actorUserId: userId, occurredAt: later,
+      expectedCatalogVersion: catalog.version, expectedCatalogDigestSha256: catalog.digestSha256,
+      expectedSessionVersion: head.version, expectedSessionDigestSha256: head.digestSha256,
+      expectedRosterVersion: head.roster.version, personIds: [personB, personA]
+    } });
+    expect(reorder.after.roster.participants.map((entry) => [entry.personId, entry.position]))
+      .toEqual([[personB, 0], [personA, 1]]);
+    expect(() => planSessionMutation({ catalog, vocabulary: vocabulary(), planningInput: {
+      action: 'roster_reorder', scope, sessionId, actorUserId: userId, occurredAt: later,
+      expectedCatalogVersion: catalog.version, expectedCatalogDigestSha256: catalog.digestSha256,
+      expectedSessionVersion: head.version, expectedSessionDigestSha256: head.digestSha256,
+      expectedRosterVersion: head.roster.version, personIds: [personA]
+    } })).toThrow('invalid_plan');
+  });
+
   test('graduation collaboration plans spawn and attach, pins the applied head, and reverses', () => {
     const empty = createEmptySessionCatalog(scope);
     const source = { kind: 'submission', id: sessionId, version: 3 };

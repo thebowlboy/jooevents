@@ -225,6 +225,22 @@ export function planSessionMutation(input: {
       updatedAt: planningInput.occurredAt
     };
     after = parseSessionHead({ ...unsigned, digestSha256: sessionHeadDigest(unsigned) });
+  } else if (planningInput.action === 'roster_role') {
+    if (!existing) throw new SessionPlanningError('session_missing');
+    requireExactSessionAndRoster(existing, planningInput);
+    before = existing;
+    const participants = changedRosterParticipantRole(
+      existing.roster.participants,
+      planningInput.expectedParticipant,
+      planningInput.role
+    );
+    after = changedRosterHead(existing, participants, planningInput.actorUserId, planningInput.occurredAt);
+  } else if (planningInput.action === 'roster_reorder') {
+    if (!existing) throw new SessionPlanningError('session_missing');
+    requireExactSessionAndRoster(existing, planningInput);
+    before = existing;
+    const participants = reorderedRosterParticipants(existing.roster.participants, planningInput.personIds);
+    after = changedRosterHead(existing, participants, planningInput.actorUserId, planningInput.occurredAt);
   } else if (planningInput.action === 'retarget') {
     if (!existing) throw new SessionPlanningError('session_missing');
     if (existing.version !== planningInput.expectedSessionVersion
@@ -298,6 +314,71 @@ function restoredRosterParticipant(
   const restored = [...current];
   restored.splice(participant.position, 0, participant);
   return restored.map((candidate, position) => ({ ...candidate, position }));
+}
+
+function requireExactSessionAndRoster(
+  existing: SessionHead,
+  input: {
+    readonly expectedSessionVersion: number;
+    readonly expectedSessionDigestSha256: string;
+    readonly expectedRosterVersion: number;
+  }
+): void {
+  if (existing.version !== input.expectedSessionVersion
+      || existing.digestSha256 !== input.expectedSessionDigestSha256) {
+    throw new SessionPlanningError('stale_session');
+  }
+  if (existing.roster.version !== input.expectedRosterVersion) {
+    throw new SessionPlanningError('participant_changed');
+  }
+}
+
+function changedRosterParticipantRole(
+  current: readonly SessionParticipantRefDto[],
+  expected: SessionParticipantRefDto,
+  role: SessionParticipantRefDto['role']
+): readonly SessionParticipantRefDto[] {
+  const participant = current.find((candidate) => candidate.personId === expected.personId);
+  if (!participant) throw new SessionPlanningError('participant_missing');
+  if (canonical(participant) !== canonical(expected)) {
+    throw new SessionPlanningError('participant_changed');
+  }
+  return current.map((candidate) => candidate.personId === expected.personId
+    ? { ...candidate, role }
+    : candidate);
+}
+
+function reorderedRosterParticipants(
+  current: readonly SessionParticipantRefDto[],
+  personIds: readonly string[]
+): readonly SessionParticipantRefDto[] {
+  if (personIds.length !== current.length || new Set(personIds).size !== personIds.length) {
+    throw new SessionPlanningError('invalid_plan');
+  }
+  const byPerson = new Map(current.map((participant) => [participant.personId, participant]));
+  if (personIds.some((personId) => !byPerson.has(personId))) {
+    throw new SessionPlanningError('participant_changed');
+  }
+  return personIds.map((personId, position) => ({ ...byPerson.get(personId)!, position }));
+}
+
+function changedRosterHead(
+  existing: SessionHead,
+  participants: readonly SessionParticipantRefDto[],
+  actorUserId: string,
+  occurredAt: string
+): SessionHead {
+  const rosterUnsigned = { version: existing.roster.version + 1, participants };
+  const roster = { ...rosterUnsigned, digestSha256: sessionRosterDigest(rosterUnsigned) };
+  const { digestSha256: _digest, ...unsignedBefore } = existing;
+  const unsigned = {
+    ...unsignedBefore,
+    roster,
+    version: existing.version + 1,
+    updatedByUserId: actorUserId,
+    updatedAt: occurredAt
+  };
+  return parseSessionHead({ ...unsigned, digestSha256: sessionHeadDigest(unsigned) });
 }
 
 /**

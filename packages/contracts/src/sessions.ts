@@ -247,6 +247,27 @@ export const sessionRosterRestoreInputSchema = z.strictObject({
   participant: sessionParticipantRefSchema
 });
 
+export const sessionRosterRoleInputSchema = z.strictObject({
+  action: z.literal('roster_role'),
+  ...catalogGuardFields,
+  sessionId: sessionIdInputSchema,
+  expectedSessionVersion: sessionVersionSchema,
+  expectedSessionDigestSha256: digestSchema,
+  expectedRosterVersion: sessionVersionSchema,
+  expectedParticipant: sessionParticipantRefSchema,
+  role: sessionParticipantRoleSchema
+});
+
+export const sessionRosterReorderInputSchema = z.strictObject({
+  action: z.literal('roster_reorder'),
+  ...catalogGuardFields,
+  sessionId: sessionIdInputSchema,
+  expectedSessionVersion: sessionVersionSchema,
+  expectedSessionDigestSha256: digestSchema,
+  expectedRosterVersion: sessionVersionSchema,
+  personIds: z.array(sessionIdInputSchema).max(500)
+});
+
 export const sessionRemoveNewInputSchema = z.strictObject({
   action: z.literal('remove_new_session'),
   ...catalogGuardFields,
@@ -268,7 +289,9 @@ export const sessionAuthorInputSchema = z.discriminatedUnion('action', [
   sessionRetargetInputSchema,
   sessionRosterVisibilityInputSchema,
   sessionRosterRemoveInputSchema,
-  sessionRosterRestoreInputSchema
+  sessionRosterRestoreInputSchema,
+  sessionRosterRoleInputSchema,
+  sessionRosterReorderInputSchema
 ]);
 
 export const sessionDirectInputSchema = z.discriminatedUnion('action', [
@@ -278,7 +301,9 @@ export const sessionDirectInputSchema = z.discriminatedUnion('action', [
   sessionRetargetInputSchema,
   sessionRosterVisibilityInputSchema,
   sessionRosterRemoveInputSchema,
-  sessionRosterRestoreInputSchema
+  sessionRosterRestoreInputSchema,
+  sessionRosterRoleInputSchema,
+  sessionRosterReorderInputSchema
 ]);
 
 const planningAttribution = {
@@ -294,7 +319,9 @@ export const sessionPlanningInputSchema = z.discriminatedUnion('action', [
   sessionRosterAppendInputSchema.extend(planningAttribution),
   sessionRosterVisibilityInputSchema.extend(planningAttribution),
   sessionRosterRemoveInputSchema.extend(planningAttribution),
-  sessionRosterRestoreInputSchema.extend(planningAttribution)
+  sessionRosterRestoreInputSchema.extend(planningAttribution),
+  sessionRosterRoleInputSchema.extend(planningAttribution),
+  sessionRosterReorderInputSchema.extend(planningAttribution)
 ]);
 
 export const sessionMutationPlanSchema = z.strictObject({
@@ -340,19 +367,19 @@ export const sessionRemoveNewPlanSchema = z.strictObject({
 });
 
 export const sessionSafeDiffSchema = z.strictObject({
-  action: z.enum(['create', 'transition', 'retarget', 'roster_append', 'roster_visibility', 'roster_remove', 'roster_restore', 'restore']),
+  action: z.enum(['create', 'transition', 'retarget', 'roster_append', 'roster_visibility', 'roster_remove', 'roster_restore', 'roster_role', 'roster_reorder', 'restore']),
   before: sessionHeadSchema.nullable(),
   after: sessionHeadSchema.nullable()
 });
 
 export const sessionMutationResultSchema = z.strictObject({
-  action: z.enum(['create', 'remove_new_session', 'transition', 'retarget', 'roster_append', 'roster_visibility', 'roster_remove', 'roster_restore', 'restore']),
+  action: z.enum(['create', 'remove_new_session', 'transition', 'retarget', 'roster_append', 'roster_visibility', 'roster_remove', 'roster_restore', 'roster_role', 'roster_reorder', 'restore']),
   catalogVersion: sessionVersionSchema,
   session: sessionHeadSchema.nullable()
 });
 
 export const sessionDirectResultSchema = z.strictObject({
-  action: z.enum(['create', 'remove_new_session', 'transition', 'retarget', 'roster_visibility', 'roster_remove', 'roster_restore']),
+  action: z.enum(['create', 'remove_new_session', 'transition', 'retarget', 'roster_visibility', 'roster_remove', 'roster_restore', 'roster_role', 'roster_reorder']),
   catalogVersion: sessionVersionSchema,
   session: sessionHeadSchema.nullable()
 });
