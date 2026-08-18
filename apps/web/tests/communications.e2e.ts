@@ -143,10 +143,10 @@ test('compose previews the chosen template as the recipients get it', async ({ p
 	);
 
 	// Audiences combine, so the control is a checkable set rather than a list of
-	// alternatives. The count on each is served, not hardcoded: flight has 10
-	// confirmed speakers.
+	// alternatives. The count on each is served, not hardcoded: the flight
+	// scenario this suite runs against has 5 confirmed speakers (crunch has 10).
 	const audience = dialog.getByRole('group', { name: 'Audience' });
-	await expect(audience).toContainText('Confirmed speakers · 10');
+	await expect(audience).toContainText('Confirmed speakers · 5');
 	// The first audience arrives picked, so a draft is one subject away.
 	await expect(audience.getByRole('checkbox', { name: /Confirmed speakers/ })).toBeChecked();
 });
