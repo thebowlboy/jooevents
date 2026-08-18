@@ -4,6 +4,7 @@
 	import {
 		Badge,
 		CopyValue,
+		Field,
 		Modal,
 		Popover,
 		revealTarget,
@@ -12,6 +13,9 @@
 		statusIcon
 	} from '$lib/ui';
 	import type { ReviewersPagePort } from '$lib/api/reviewers-page-port';
+	import type { ReminderPreview } from '$lib/api/tasks-page-port';
+	import RecipientEmailPeek from '$lib/features/workspace/components/RecipientEmailPeek.svelte';
+	import VerbatimBodyPeek from '$lib/features/workspace/components/VerbatimBodyPeek.svelte';
 	import { LiveRead, type LiveReadState } from '$lib/api/live-read';
 	import {
 		applyParams,
@@ -24,6 +28,7 @@
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
 	import ScopeChip from '$lib/features/workspace/components/ScopeChip.svelte';
 	import type {
+		EventTheme,
 		Format,
 		Reviewer,
 		ReviewerRoster,
@@ -425,13 +430,47 @@
 		return row.status === 'active' && row.assigned > 0 && row.done / row.assigned < 0.5;
 	}
 
-	async function remind(row: Reviewer) {
+	// ------------------------------------------------------------ the reminder
+
+	/**
+	 * A reminder is an email to a person, so it gets a ceremony: who it goes to,
+	 * the subject as it will read, and the body itself before anything is sent.
+	 * A send that happened on one press was a send nobody had seen.
+	 */
+	const REMINDER_SUBJECT = 'Review reminder';
+
+	let remindTarget = $state<Reviewer | null>(null);
+	let remindOpen = $state(false);
+	let remindSubject = $state(REMINDER_SUBJECT);
+	let remindPreview = $state.raw<ReminderPreview | null>(null);
+	let theme = $state.raw<EventTheme | null>(null);
+
+	function openRemind(row: Reviewer) {
 		if (remindingId) return;
+		remindTarget = row;
+		remindSubject = REMINDER_SUBJECT;
+		remindPreview = null;
+		remindOpen = true;
+		// Asked of the sending lane, so the words on screen are the words it mails.
+		void api.tasks.reminderPreview?.().then(
+			(next) => (remindPreview = next),
+			() => (remindPreview = null)
+		);
+		void api.theme?.get().then(
+			(brand) => (theme = brand),
+			() => (theme = null)
+		);
+	}
+
+	async function confirmRemind() {
+		const row = remindTarget;
+		if (!row || remindingId) return;
 		remindingId = row.id;
 		try {
-			await api.tasks.remind([row.id], 'Review reminder');
+			await api.tasks.remind([row.id], remindSubject.trim() || REMINDER_SUBJECT);
 			remindedIds = [...remindedIds, row.id];
 			announcement = `Review reminder sent to ${row.name}.`;
+			remindOpen = false;
 		} catch (error) {
 			announcement = error instanceof Error ? error.message : 'The review reminder could not be sent.';
 		} finally {
@@ -512,7 +551,7 @@
 			class="ui-button ui-button--secondary ui-button--sm load__remind"
 			disabled={remindingId !== null}
 			aria-busy={remindingId === row.id}
-			onclick={() => remind(row)}>Remind</button>
+			onclick={() => openRemind(row)}>Remind</button>
 	{/if}
 {/snippet}
 
@@ -864,7 +903,7 @@
 										class="ui-button ui-button--secondary ui-button--sm"
 										disabled={remindingId !== null}
 										aria-busy={remindingId === row.id}
-										onclick={() => remind(row)}>Remind</button>
+										onclick={() => openRemind(row)}>Remind</button>
 								{/if}
 							</span>
 							<!-- Cards have no column header, so the words carry the whole
@@ -904,6 +943,54 @@
 		<button type="button" class="ui-button ui-button--ghost" onclick={close}>Keep reviewer</button>
 		<button type="button" class="ui-button ui-button--danger" onclick={confirmRemove}>
 			Remove reviewer
+		</button>
+	{/snippet}
+</Modal>
+
+<!-- A reminder is an email to a person, so it is reviewed before it is sent:
+     who receives it, the subject as it will read, and the body itself. -->
+<Modal bind:open={remindOpen} title="Send review reminder">
+	{#if remindTarget}
+		<p class="modal__copy">
+			{remindTarget.name} receives one email. Nothing is sent until you commit it here.
+		</p>
+		<Field id="remind-subject" label="Subject" required>
+			{#snippet children({ id, describedBy })}
+				<input
+					class="ui-control"
+					type="text"
+					{id}
+					aria-describedby={describedBy}
+					bind:value={remindSubject} />
+			{/snippet}
+		</Field>
+		{#if remindPreview?.kind === 'template' && theme}
+			<RecipientEmailPeek
+				template={remindPreview.template}
+				{theme}
+				eventName=""
+				eventMeta=""
+				recipient={{ name: remindTarget.name }}
+				subject={remindSubject}
+				hint="Reviewer reminders ride the speaker-task reminder lane, so this is that lane’s copy." />
+		{:else if remindPreview?.kind === 'plain'}
+			<VerbatimBodyPeek
+				subject={remindSubject.trim() || 'Review reminder'}
+				body={remindPreview.body}
+				note="Reviewer reminders ride the speaker-task reminder lane, so this is that lane’s copy." />
+		{/if}
+	{/if}
+	{#snippet footer(close)}
+		<button type="button" class="ui-button ui-button--ghost" disabled={remindingId !== null} onclick={close}>
+			Cancel
+		</button>
+		<button
+			type="button"
+			class="ui-button ui-button--primary"
+			disabled={remindingId !== null || !remindSubject.trim()}
+			aria-busy={remindingId !== null || undefined}
+			onclick={confirmRemind}>
+			Send 1 reminder email
 		</button>
 	{/snippet}
 </Modal>

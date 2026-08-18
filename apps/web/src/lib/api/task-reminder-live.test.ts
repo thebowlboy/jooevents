@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import type { CommunicationsAuthoringPort } from './communications-authoring-port';
 import { createTaskReminderLiveSender, TaskReminderLiveError } from './task-reminder-live';
+import { TASK_REMINDER_BODY } from './task-reminder-copy';
+import { createLiveTasksPagePort } from './tasks-page-port.live';
 
 const id = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
 const digest = 'a'.repeat(64);
@@ -61,6 +63,33 @@ describe('live Task reminder composition', () => {
 			`task-engagement:${id(4)}`, `task-engagement:${id(5)}`
 		]);
 		expect(calls.sends).toHaveLength(1);
+	});
+
+	/**
+	 * The send ceremony shows what this lane sends, and this lane mails a fixed
+	 * body rather than rendering a template. Both read one owner, so the words a
+	 * dialog promises and the bytes the sender stores cannot drift apart.
+	 */
+	test('puts the shared reminder body on the wire, which is what the ceremony previews', async () => {
+		const { calls, send } = fixture();
+		await send([id(4), id(5)], 'Outstanding tasks');
+		const content = calls.payloads[0] as {
+			value: { subject: string; body: { kind: string; text: string } };
+		};
+		expect(content.value.body).toEqual({ kind: 'plain_text/v1', text: TASK_REMINDER_BODY });
+		// The subject is the operator's; only the body is fixed.
+		expect(content.value.subject).toBe('Outstanding tasks');
+
+		// And the ceremony's preview is that same string, from the same owner.
+		const port = createLiveTasksPagePort({
+			tasks: { source: { kind: 'live' } } as never,
+			speakers: { speakers: { list: async () => [] } } as never,
+			templates: { list: async () => ({ messages: [] }) } as never,
+			schedule: { state: async () => ({}) } as never,
+			remind: async () => undefined
+		} as never);
+		const preview = await port.tasks.reminderPreview!();
+		expect(preview).toEqual({ kind: 'plain', subject: '', body: content.value.body.text });
 	});
 
 	test('refuses a changed eligibility set before the irreversible send', async () => {

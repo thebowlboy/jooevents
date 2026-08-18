@@ -1,7 +1,8 @@
 import type { TaskBoardSnapshotDto } from '@jooevents/contracts';
 import type { SpeakersPagePort } from './speakers-page-port';
 import type { TemplatesPagePort } from './templates-page-port';
-import type { CreateTaskDefinitionInput, TasksPagePort } from './tasks-page-port';
+import type { CreateTaskDefinitionInput, ReminderPreview, TasksPagePort } from './tasks-page-port';
+import { TASK_REMINDER_BODY } from './task-reminder-copy';
 import type { CommittedTaskMutation, TaskLiveClient, TaskLiveResult } from './operations/tasks-live';
 import type {
 	AssignmentState,
@@ -135,7 +136,19 @@ export function createLiveTasksPagePort(input: {
 				});
 				await mutate({ action: 'restore_assignment', assignmentId: current.id, expectedVersion: current.version });
 			},
-			remind: (speakerIds: string[], subject: string) => input.remind(speakerIds, subject)
+			remind: (speakerIds: string[], subject: string) => input.remind(speakerIds, subject),
+			/**
+			 * This lane mails a fixed plain body rather than rendering a stored
+			 * template, so the ceremony is told exactly that and shows the words
+			 * themselves. Both this and the sender read one owner, which is what
+			 * keeps the dialog from promising copy the mail does not carry.
+			 *
+			 * The subject is the operator's and is supplied by the dialog; what is
+			 * fixed — and therefore worth showing — is the body.
+			 */
+			async reminderPreview(): Promise<ReminderPreview> {
+				return { kind: 'plain', subject: '', body: TASK_REMINDER_BODY };
+			}
 		}),
 		speakers: Object.freeze({
 			list: () => input.speakers.speakers.list(),

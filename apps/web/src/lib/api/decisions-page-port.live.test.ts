@@ -357,6 +357,31 @@ function fakeCommunications(overrides: Partial<CommunicationsInput> = {}): {
 				correlationId
 			} as never;
 		},
+		async getPreview(request) {
+			calls.push({ name: 'getPreview', input: request });
+			const asked = (request as { selectedRecipientResolutionId?: string })
+				.selectedRecipientResolutionId;
+			return {
+				kind: 'success',
+				data: {
+					schemaVersion: 1,
+					summary: { identity: request },
+					selected: asked
+						? {
+								kind: 'rendered_email',
+								render: {
+									recipientResolutionId: asked,
+									subject: 'Your submission decision',
+									sanitizedHtml: '<p>Congratulations</p>',
+									plainText: 'Congratulations — your talk is in the programme.',
+									warningCodes: ['merge.fallback_used']
+								}
+							}
+						: { kind: 'none' }
+				},
+				correlationId
+			} as never;
+		},
 		async sendMessages(request) {
 			calls.push({ name: 'sendMessages', input: request });
 			const parsed = request as { batchId: string };
@@ -543,9 +568,22 @@ describe('live tuned Decisions page port', () => {
 		});
 		// Recipients are the audience truth: the disclosed label, the masked
 		// or absent address as served, and the exclusion reason kept as a row.
+		// Each also carries the server's handle for its own rendered copy, which
+		// is what lets the send ceremony show the email before it goes.
 		expect(review.recipients).toEqual([
-			{ name: 'Ada Lovelace', email: 'a•••@example.test', state: 'included' },
-			{ name: 'Grace Hopper', email: '', state: 'excluded', reason: 'address.no_eligible' }
+			{
+				name: 'Ada Lovelace',
+				email: 'a•••@example.test',
+				state: 'included',
+				recipientResolutionId: id(80)
+			},
+			{
+				name: 'Grace Hopper',
+				email: '',
+				state: 'excluded',
+				reason: 'address.no_eligible',
+				recipientResolutionId: id(82)
+			}
 		]);
 		// The review adopted one preview per notifiable outcome through the
 		// real lane: content + audience payloads, draft, prepare, adopt, rows.
@@ -589,6 +627,52 @@ describe('live tuned Decisions page port', () => {
 			code: 'decision_notification_review_required',
 			retryable: false
 		});
+	});
+
+	/**
+	 * The send ceremony's evidence: one recipient's email as this lane actually
+	 * rendered it, asked for against the adopted preview that resolved them.
+	 */
+	test('serves one recipient’s rendered copy, and refuses an id no current review resolved', async () => {
+		const communications = fakeCommunications();
+		const port = composePort({
+			decisions: fakeDecisions({
+				heads: [{
+					schemaVersion: 1,
+					submissionId: id(21),
+					head: { ...decidedHead(id(21)), state: 'accepted' }
+				} as never]
+			}),
+			communications: communications.port
+		});
+
+		// Before a review there is no adopted preview to ask against, so the
+		// ceremony is told to review rather than shown a guess.
+		await expect(port.decisions.previewRecipient!(id(80))).rejects.toMatchObject({
+			code: 'decision_notification_review_required',
+			retryable: false
+		});
+
+		const review = await port.decisions.reviewNotification([id(21)]);
+		const included = review.recipients.find((row) => row.state === 'included')!;
+		expect(included.recipientResolutionId).toBe(id(80));
+
+		const preview = await port.decisions.previewRecipient!(included.recipientResolutionId!);
+		expect(preview).toEqual({
+			subject: 'Your submission decision',
+			plainText: 'Congratulations — your talk is in the programme.',
+			warningCodes: ['merge.fallback_used']
+		});
+		// The read is pinned to that person inside the reviewed preview's own
+		// identity — never a fresh plan.
+		const asked = communications.calls.at(-1)!;
+		expect(asked.name).toBe('getPreview');
+		expect((asked.input as { selectedRecipientResolutionId: string }).selectedRecipientResolutionId).toBe(
+			id(80)
+		);
+		// The rendered HTML the server also returns is deliberately not carried:
+		// nothing in this application renders server-produced markup.
+		expect(Object.keys(preview).sort()).toEqual(['plainText', 'subject', 'warningCodes']);
 	});
 
 	test('states an accepted send as sent, and an unreadable delivery state as unknown', async () => {

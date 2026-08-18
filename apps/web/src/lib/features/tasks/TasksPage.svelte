@@ -3,7 +3,9 @@
 	import { Check } from 'lucide-svelte';
 	import { Button, CopyValue, Field, Meter, Modal, statusIcon, trackPending } from '$lib/ui';
 	import type { IconComponent } from '$lib/ui';
-	import type { TasksPagePort } from '$lib/api/tasks-page-port';
+	import type { ReminderPreview, TasksPagePort } from '$lib/api/tasks-page-port';
+	import RecipientEmailPeek from '$lib/features/workspace/components/RecipientEmailPeek.svelte';
+	import VerbatimBodyPeek from '$lib/features/workspace/components/VerbatimBodyPeek.svelte';
 	import { LiveRead, type LiveReadState } from '$lib/api/live-read';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
 	import ProfilePeek from '$lib/features/workspace/components/ProfilePeek.svelte';
@@ -13,6 +15,7 @@
 	import type {
 		AssignmentState,
 		EngagementState,
+		EventTheme,
 		MessageTemplate,
 		SpeakerProfile,
 		SpeakerRow,
@@ -153,8 +156,21 @@
 	// template, and the quiet link beside the action is the way to it. Resolved
 	// from the template list; without a match no door renders.
 	const templates = $derived<MessageTemplate[]>(board?.templates ?? []);
+	/**
+	 * What a reminder will actually contain, from the lane that sends it. The
+	 * ceremony shows this rather than the stored template it might not read: one
+	 * composition renders that template, another mails fixed words of its own,
+	 * and only the sending lane knows which.
+	 */
+	let reminderPreview = $state.raw<ReminderPreview | null>(null);
+	let theme = $state.raw<EventTheme | null>(null);
+
+	/**
+	 * The door renders only when the reminder really is that template. Where the
+	 * lane mails fixed copy there is nothing for it to open that would be true.
+	 */
 	const reminderTemplate = $derived(
-		templates.find((template) => template.key === 'task-reminder') ?? null
+		reminderPreview?.kind === 'template' ? reminderPreview.template : null
 	);
 
 	// Both scopes are shareable state: the segmented control expresses the filter,
@@ -414,6 +430,16 @@
 		reminderSubject = reminderSubjectDefault;
 		reminderError = '';
 		reminderOpen = true;
+		// Asked of the sending lane each time the ceremony opens, so the body on
+		// screen is the body this send would carry.
+		void api.tasks.reminderPreview?.().then(
+			(next) => (reminderPreview = next),
+			() => (reminderPreview = null)
+		);
+		void api.theme?.get().then(
+			(brand) => (theme = brand),
+			() => (theme = null)
+		);
 	}
 
 	async function sendReminder() {
@@ -978,6 +1004,24 @@
 		{/snippet}
 	</Field>
 	{#if reminderError}<p class="reminder__error" role="alert">{reminderError}</p>{/if}
+
+	<!-- What this actually sends, shown before it is sent. The template lane
+	     renders the stored copy; the fixed-copy lane shows its own words rather
+	     than naming a template it never reads. -->
+	{#if reminderPreview?.kind === 'template' && theme}
+		<RecipientEmailPeek
+			template={reminderPreview.template}
+			{theme}
+			eventName=""
+			eventMeta=""
+			recipient={{ name: 'each speaker' }}
+			subject={reminderSubject} />
+	{:else if reminderPreview?.kind === 'plain'}
+		<VerbatimBodyPeek
+			subject={reminderSubject.trim() || reminderSubjectDefault}
+			body={reminderPreview.body}
+			note="This reminder sends the same fixed message to everyone; only the subject is yours." />
+	{/if}
 
 	<!-- Who receives this, named; and who does not, with the reason on the row.
 	     A selection is not a permission to write to someone. -->

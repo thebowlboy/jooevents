@@ -34,6 +34,9 @@ export function createSampleDecisionsPagePort(api: WorkspaceApi): DecisionsPageP
 				};
 			}
 		}),
-		communications: api.communications
+		communications: api.communications,
+		// The send ceremony renders the decision email as one real recipient
+		// receives it, and it is drawn in the event's own brand.
+		theme: api.theme
 	});
 }

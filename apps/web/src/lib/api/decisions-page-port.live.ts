@@ -32,6 +32,7 @@ import type {
 	MyReviewItem,
 	NotificationDispatch,
 	RecipientRow,
+	RenderedEmailPreview,
 	ReviewPlan,
 	ScheduleState,
 	ScoreStanding,
@@ -282,6 +283,9 @@ export function createLiveDecisionsPagePort(input: {
 		| 'prepareBatchPreview'
 		| 'adoptBatchPreview'
 		| 'listPreviewRecipients'
+		// The send ceremony renders what it is about to send; this is the read
+		// that produces one recipient's actual rendered copy.
+		| 'getPreview'
 		| 'sendMessages'
 		| 'getDeliveryHistory'
 	>;
@@ -361,6 +365,14 @@ export function createLiveDecisionsPagePort(input: {
 	 */
 	let pendingNotification: { readonly key: string; segments: NotificationSegment[] } | null =
 		null;
+
+	/**
+	 * Which adopted preview each listed recipient belongs to. One notify batch
+	 * adopts a preview per decision outcome, so a recipient's rendered copy has
+	 * to be asked for against the identity that actually resolved them — the
+	 * acceptance preview cannot render a waitlisted person.
+	 */
+	const previewIdentityByRecipient = new Map<string, MessagePreviewSummaryView['identity']>();
 
 	function notificationKey(ids: readonly string[]): string {
 		return [...new Set(ids)].sort().join('\n');
@@ -460,7 +472,10 @@ export function createLiveDecisionsPagePort(input: {
 			name: row.safeLabel,
 			email,
 			state: row.state,
-			...(row.state === 'included' ? {} : { reason: row.reasonCode })
+			...(row.state === 'included' ? {} : { reason: row.reasonCode }),
+			// Carried so the ceremony can ask for this person's rendered copy;
+			// without it a row can be listed but never shown.
+			recipientResolutionId: row.recipientResolutionId
 		};
 	}
 
@@ -499,6 +514,9 @@ export function createLiveDecisionsPagePort(input: {
 		}
 		const segments: NotificationSegment[] = [];
 		const recipients: RecipientRow[] = [];
+		// A fresh review re-adopts its previews, so last review's resolution ids
+		// name identities that are no longer current.
+		previewIdentityByRecipient.clear();
 		for (const status of ['accepted', 'declined'] as const) {
 			if (!statuses.has(status)) continue;
 			const registered = NOTIFIABLE[status];
@@ -558,7 +576,13 @@ export function createLiveDecisionsPagePort(input: {
 			if (rows.kind !== 'success') {
 				throw new DecisionsPageLiveError(readFailure(rows, 'notification recipients'));
 			}
-			for (const row of rows.data.rows) recipients.push(recipientRow(row as never));
+			for (const row of rows.data.rows) {
+				const projected = recipientRow(row as never);
+				if (projected.recipientResolutionId) {
+					previewIdentityByRecipient.set(projected.recipientResolutionId, summary.identity);
+				}
+				recipients.push(projected);
+			}
 			segments.push({
 				status,
 				templateName: template.name,
@@ -839,6 +863,52 @@ export function createLiveDecisionsPagePort(input: {
 			 */
 			async reviewNotification(ids: string[]): Promise<MessageReview> {
 				return await buildNotificationReview(ids);
+			},
+			/**
+			 * One recipient's email exactly as this lane rendered it, so the send
+			 * ceremony can show the artifact rather than name a template.
+			 *
+			 * Asked against the adopted preview that resolved this person — a
+			 * batch adopts one preview per decision outcome — and refused rather
+			 * than guessed when the review that produced the id is no longer the
+			 * current one.
+			 *
+			 * The rendered HTML the server also returns is deliberately not
+			 * carried: nothing in this application renders server-produced
+			 * markup, and introducing the first such sink is its own reviewed
+			 * decision. The plain text is the same message.
+			 */
+			async previewRecipient(recipientResolutionId: string): Promise<RenderedEmailPreview> {
+				const identity = previewIdentityByRecipient.get(recipientResolutionId);
+				if (!identity) {
+					throw new DecisionsPageLiveError({
+						code: 'decision_notification_review_required',
+						reason:
+							'Review the notification before previewing. Reopen the dialog to load the current audience.',
+						retryable: false
+					});
+				}
+				const request = structuredClone(identity) as Parameters<
+					CommunicationsAuthoringPort['getPreview']
+				>[0];
+				request.selectedRecipientResolutionId = recipientResolutionId;
+				const detail = await input.communications.getPreview(request);
+				if (detail.kind !== 'success') {
+					throw new DecisionsPageLiveError(readFailure(detail, 'notification preview'));
+				}
+				const selected = detail.data.selected;
+				if (selected.kind !== 'rendered_email') {
+					throw new DecisionsPageLiveError({
+						code: 'decision_notification_preview_unavailable',
+						reason: 'This recipient has no rendered copy in the reviewed preview.',
+						retryable: false
+					});
+				}
+				return {
+					subject: selected.render.subject,
+					plainText: selected.render.plainText,
+					warningCodes: [...selected.render.warningCodes]
+				};
 			},
 			/**
 			 * Commits exactly the reviewed adoptions as irreversible release

@@ -2,10 +2,12 @@ import type {
 	AccoladeDef,
 	DecisionState,
 	EmailReadiness,
+	EventTheme,
 	MessageReview,
 	MessageTemplate,
 	MyReviewItem,
 	NotificationDispatch,
+	RenderedEmailPreview,
 	ReviewPlan,
 	ScheduleState,
 	ScoreStanding,
@@ -69,8 +71,25 @@ export interface DecisionsPagePort {
 		 * page renders this record rather than echoing the count it asked for.
 		 */
 		notify(ids: string[], subject: string): Promise<NotificationDispatch>;
+		/**
+		 * One recipient's email as the sending lane rendered it, for the send
+		 * ceremony to show before anything leaves. Optional because a composition
+		 * whose body is a stored template renders it in the browser instead and
+		 * has nothing server-side to ask for; a composition that offers neither
+		 * cannot state what it sends, which is the defect this member exists to
+		 * remove.
+		 */
+		previewRecipient?(recipientResolutionId: string): Promise<RenderedEmailPreview>;
 	};
 	readonly communications: {
 		readiness(): Promise<EmailReadiness>;
+	};
+	/**
+	 * The event brand the rendered preview is drawn in. Optional: a composition
+	 * that cannot supply it falls back to whatever body evidence it does have,
+	 * rather than the ceremony losing its preview entirely.
+	 */
+	readonly theme?: {
+		get(): Promise<EventTheme>;
 	};
 }
