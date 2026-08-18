@@ -39,6 +39,14 @@ export interface ReviewersPagePort {
 		state(): Promise<ScheduleState>;
 	};
 	readonly tasks: {
+		/**
+		 * Whether this composition owns a reviewer-recipient send path. The
+		 * absence is a served fact so the page can remove dead send controls before
+		 * a person prepares a batch that cannot commit.
+		 */
+		readonly reminderAvailability:
+			| { readonly kind: 'available' }
+			| { readonly kind: 'unavailable'; readonly reason: string };
 		remind(reviewerIds: string[], subject: string): Promise<unknown>;
 		/**
 		 * What a reminder actually sends, so the ceremony can show it first.

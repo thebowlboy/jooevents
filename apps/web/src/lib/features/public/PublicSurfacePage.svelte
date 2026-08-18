@@ -39,6 +39,7 @@
 		parseSpeakerOrder,
 		parseSpeakerPresentation,
 		presentRoster,
+		rosterInScope,
 		sessionDetailView,
 		type DiscoveryFacets
 	} from './program-discovery';
@@ -257,14 +258,19 @@
 		program ? adjacentDayKey(program.schedule.days, selectedDayKey, 1) : null
 	);
 
+	const scopedRoster = $derived(lineup ? rosterInScope(lineup.roster, scope) : null);
 	const visibleRoster = $derived(
-		lineup ? presentRoster(lineup.roster, searchQuery, speakerOrder) : null
+		scopedRoster
+			? scope.kind === 'speaker'
+				? scopedRoster
+				: presentRoster(scopedRoster, searchQuery, speakerOrder)
+			: null
 	);
 	const speakerResults = $derived(
-		lineup && searchQuery.trim()
+		scopedRoster && searchQuery.trim() && scope.kind !== 'speaker'
 			? describeSpeakerResults({
 					matched: visibleRoster?.length ?? 0,
-					scanned: lineup.roster.length,
+					scanned: scopedRoster.length,
 					query: searchQuery
 				})
 			: null

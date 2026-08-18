@@ -21,6 +21,7 @@ import {
 	parseSpeakerPresentation,
 	presentRoster,
 	publishedFormatName,
+	rosterInScope,
 	sessionDetailView,
 	sessionMatchesSearch,
 	speakerMatchesSearch
@@ -228,6 +229,23 @@ describe('speaker search and surname order', () => {
 		expect(speakerMatchesSearch(roster[0]!, 'bea')).toBe(true);
 		expect(speakerMatchesSearch(roster[0]!, 'alpha')).toBe(false);
 		expect(presentRoster(roster, 'alpha', 'lineup').map((entry) => entry.id)).toEqual(['1', '3']);
+	});
+
+	test('narrows category scope before search, count, and ordering', () => {
+		const categorized = [
+			card({ id: '2', name: 'Bea Alpha', categoryId: 'keynotes' }),
+			card({ id: '1', name: 'Ada Alpha', categoryId: 'workshops' }),
+			card({ id: '3', name: 'Cara Gamma', categoryId: 'keynotes' })
+		];
+		const scoped = rosterInScope(categorized, { kind: 'category', categoryId: 'keynotes' });
+		expect(scoped.map((entry) => entry.id)).toEqual(['2', '3']);
+		expect(presentRoster(scoped, 'alpha', 'surname').map((entry) => entry.id)).toEqual(['2']);
+	});
+
+	test('a speaker scope never widens or disappears behind stale search state', () => {
+		const scoped = rosterInScope(roster, { kind: 'speaker', speakerId: '2' });
+		expect(scoped.map((entry) => entry.id)).toEqual(['2']);
+		expect(rosterInScope(roster, { kind: 'speaker', speakerId: 'missing' })).toEqual([]);
 	});
 
 	test('surname order is a named presentation over a copy', () => {

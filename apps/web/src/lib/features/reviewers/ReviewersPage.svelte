@@ -51,6 +51,8 @@
 
 	let { port }: Props = $props();
 	const api = $derived(port);
+	const reminderAvailability = $derived(api.tasks.reminderAvailability);
+	const remindersAvailable = $derived(reminderAvailability.kind === 'available');
 
 	type FilterKey = 'all' | 'invited' | 'needs-cover';
 
@@ -180,7 +182,7 @@
 		'needs-cover': scoped.filter((row) => row.awaitingReassignment > 0).length
 	});
 	const activeCount = $derived(reviewers.filter((row) => row.status === 'active').length);
-	const visibleIds = $derived(filtered.map((row) => row.id));
+	const visibleIds = $derived(remindersAvailable ? filtered.map((row) => row.id) : []);
 	const selectedRows = $derived(
 		reviewers.filter((row) => selectedIds.includes(row.id))
 	);
@@ -559,7 +561,7 @@
 	const remindBatch = $derived(reviewReminderBatch(remindTargets));
 
 	function openRemind(rows: Reviewer[]) {
-		if (remindingId || rows.length === 0) return;
+		if (!remindersAvailable || remindingId || rows.length === 0) return;
 		remindTargets = rows;
 		remindSubject = REMINDER_SUBJECT;
 		remindPreview = null;
@@ -679,9 +681,9 @@
 	{:else}
 		<span class="load__none">Nothing assigned</span>
 	{/if}
-	{#if remindedIds.includes(row.id)}
+	{#if remindersAvailable && remindedIds.includes(row.id)}
 		<span class="load__sent">Reminder sent</span>
-	{:else if isBehind(row)}
+	{:else if remindersAvailable && isBehind(row)}
 		<button
 			type="button"
 			class="ui-button ui-button--secondary ui-button--sm load__remind"
@@ -795,6 +797,10 @@
 	<ScopeChip label={`Scoped to ${scopeLabel}`} onclear={clearScope} />
 {/if}
 
+{#if reminderAvailability.kind === 'unavailable'}
+	<p class="reminder-availability" role="status">{reminderAvailability.reason}</p>
+{/if}
+
 <section aria-label="Reviewer roster">
 	{#if rosterState.kind === 'unavailable' && rosterState.retryable}
 		<!-- The read answered, and its answer was "no". Skeleton rows here would
@@ -884,14 +890,16 @@
 			<table class="ui-table ui-table--multiline">
 				<thead>
 					<tr>
-						<th class="col-select">
-							<input
-								type="checkbox"
-								aria-label="Select all shown reviewers"
-								disabled={!roster || visibleIds.length === 0}
-								checked={allVisibleSelected}
-								onchange={toggleAllVisible} />
-						</th>
+						{#if remindersAvailable}
+							<th class="col-select">
+								<input
+									type="checkbox"
+									aria-label="Select all shown reviewers"
+									disabled={!roster || visibleIds.length === 0}
+									checked={allVisibleSelected}
+									onchange={toggleAllVisible} />
+							</th>
+						{/if}
 						<th class="col-reviewer">Reviewer</th>
 						<th class="col-status">Status</th>
 						<th>Reviews</th>
@@ -905,7 +913,9 @@
 							<!-- Mirrors the resolved multiline row cell-for-cell, so the row
 							     height is set by the same table metrics as real rows. -->
 							<tr aria-hidden="true">
-								<td class="col-select"><span class="ui-skeleton skeleton-action--icon"></span></td>
+								{#if remindersAvailable}
+									<td class="col-select"><span class="ui-skeleton skeleton-action--icon"></span></td>
+								{/if}
 								<td class="col-reviewer">
 									<span class="ui-table__primary"><span class="ui-skeleton skeleton-line" style="inline-size: 8rem"></span></span>
 									<span class="ui-table__secondary"><span class="ui-skeleton skeleton-line" style="inline-size: 11rem"></span></span>
@@ -933,13 +943,15 @@
 								class:is-open={expandedId === row.id}
 								data-arrival-host
 								onclick={(event) => onRowPress(event, row.id)}>
-								<td class="col-select">
-									<input
-										type="checkbox"
-										aria-label={`Select ${row.name}`}
-										checked={isSelected(row.id)}
-										onchange={(event) => toggleSelected(row.id, event.currentTarget.checked)} />
-								</td>
+								{#if remindersAvailable}
+									<td class="col-select">
+										<input
+											type="checkbox"
+											aria-label={`Select ${row.name}`}
+											checked={isSelected(row.id)}
+											onchange={(event) => toggleSelected(row.id, event.currentTarget.checked)} />
+									</td>
+								{/if}
 								<td class="col-reviewer">
 									<!-- The arrival anchor for `?reviewer=`: the scroll and the caret
 									     stop on the name, so a table scrolled sideways still opens on
@@ -971,7 +983,7 @@
 							</tr>
 							{#if expandedId === row.id}
 								<tr class="detail-row">
-									<td colspan="6">{@render detail(row)}</td>
+									<td colspan={remindersAvailable ? 6 : 5}>{@render detail(row)}</td>
 								</tr>
 							{/if}
 						{/each}
@@ -986,7 +998,10 @@
 			{#if !roster}
 				{#each Array(4) as _, index (index)}
 					<li class="card" aria-hidden="true">
-						<div class="card__head">
+						<div class="card__head" class:card__head--no-pick={!remindersAvailable}>
+							{#if remindersAvailable}
+								<span class="card__pick ui-skeleton skeleton-action--icon"></span>
+							{/if}
 							<span class="card__copy">
 								<span class="card__name"><span class="ui-skeleton skeleton-line" style="inline-size: 8rem"></span></span>
 								<span class="card__email"><span class="ui-skeleton skeleton-line" style="inline-size: 11rem"></span></span>
@@ -1007,14 +1022,19 @@
 						     which is why no role or tabindex is added here. -->
 						<!-- svelte-ignore a11y_click_events_have_key_events -->
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
-						<div class="card__head card__head--door" onclick={(event) => onRowPress(event, row.id)}>
-							<label class="card__pick">
-								<input
-									type="checkbox"
-									aria-label={`Select ${row.name}`}
-									checked={isSelected(row.id)}
-									onchange={(event) => toggleSelected(row.id, event.currentTarget.checked)} />
-							</label>
+						<div
+							class="card__head card__head--door"
+							class:card__head--no-pick={!remindersAvailable}
+							onclick={(event) => onRowPress(event, row.id)}>
+							{#if remindersAvailable}
+								<label class="card__pick">
+									<input
+										type="checkbox"
+										aria-label={`Select ${row.name}`}
+										checked={isSelected(row.id)}
+										onchange={(event) => toggleSelected(row.id, event.currentTarget.checked)} />
+								</label>
+							{/if}
 							<span class="card__copy">
 								<span class="card__name">{row.name}</span>
 								{#if row.email}
@@ -1056,9 +1076,9 @@
 										</Popover>
 									</span>
 								{/if}
-								{#if remindedIds.includes(row.id)}
+								{#if remindersAvailable && remindedIds.includes(row.id)}
 									<span class="load__sent">Reminder sent</span>
-								{:else if isBehind(row)}
+								{:else if remindersAvailable && isBehind(row)}
 									<button
 										type="button"
 										class="ui-button ui-button--secondary ui-button--sm"
@@ -1081,7 +1101,7 @@
 	{/if}
 </section>
 
-{#if selectedIds.length > 0}
+{#if remindersAvailable && selectedIds.length > 0}
 	<div class="bulkbar" role="toolbar" aria-label="Selected reviewers">
 		<span class="bulkbar__count">{selectedIds.length} selected</span>
 		<button
@@ -1413,6 +1433,12 @@
 		inline-size: 2.25rem;
 	}
 
+	.reminder-availability {
+		margin: 0;
+		font-size: var(--je-font-size-xs);
+		color: var(--je-color-text-muted);
+	}
+
 	.col-reviewer {
 		inline-size: 16rem;
 	}
@@ -1722,6 +1748,14 @@
 		grid-area: pick;
 		align-self: start;
 		margin-block-start: 0.2rem;
+	}
+
+	.card__head--no-pick {
+		grid-template-columns: minmax(0, 1fr) auto;
+		grid-template-areas:
+			'copy toggle'
+			'tags tags'
+			'scope scope';
 	}
 
 	/* The card's summary is the table row's door in the narrow composition; a

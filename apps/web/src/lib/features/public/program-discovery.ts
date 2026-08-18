@@ -10,6 +10,7 @@
 import { formatClock, formatClockRange, parseClockMinutes } from '@jooevents/contracts';
 import { matchFields, parseSearch, type SearchableField } from '$lib/api/search';
 import type {
+	EmbedScope,
 	Placement,
 	PublicSpeakerCard,
 	ScheduleState,
@@ -201,6 +202,25 @@ export function filterRoster(
 ): PublicSpeakerCard[] {
 	if (parseSearch(query).terms.length === 0) return [...roster];
 	return roster.filter((card) => speakerMatchesSearch(card, query));
+}
+
+/**
+ * The released roster population one public address names. Scope is applied
+ * before visitor search and ordering so the result count and rendered cards
+ * always describe the same people. A missing scoped person stays an honest
+ * empty population; it never widens back to the full lineup.
+ */
+export function rosterInScope(
+	roster: readonly PublicSpeakerCard[],
+	scope: EmbedScope
+): PublicSpeakerCard[] {
+	if (scope.kind === 'category') {
+		return roster.filter((card) => card.categoryId === scope.categoryId);
+	}
+	if (scope.kind === 'speaker') {
+		return roster.filter((card) => card.id === scope.speakerId);
+	}
+	return [...roster];
 }
 
 /**

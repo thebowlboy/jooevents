@@ -8,6 +8,7 @@
 		Modal,
 		Popover,
 		Progress,
+		recordTable,
 		ScopeFilter,
 		Term,
 		statusIcon,
@@ -995,7 +996,7 @@
 					Sorted by current aggregate. A small cohort keeps the number and does not invent a rank.
 				</p>
 				<div class="ui-table-wrap">
-					<table class="ui-table ui-table--multiline">
+					<table class="ui-table ui-table--multiline" {@attach recordTable()}>
 						<thead>
 							<tr>
 								<th>Submission</th>
@@ -1008,7 +1009,7 @@
 						<tbody>
 							{#each resultRows as row (row.submissionId)}
 								<tr>
-									<td>
+									<td class="ui-cell--lead">
 										<span class="ui-table__primary">{row.title}</span>
 									</td>
 									<td class="ui-table__number">
@@ -1026,7 +1027,7 @@
 											<span class="verdict__none">Too early to rank</span>
 										{/if}
 									</td>
-									<td>
+									<td class="ui-cell--state">
 										{#if row.status === 'scored'}
 											Scored
 										{:else if row.status === 'in_review'}

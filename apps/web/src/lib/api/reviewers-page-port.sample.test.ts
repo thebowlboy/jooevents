@@ -16,5 +16,6 @@ describe('sample tuned Reviewers page port', () => {
 		expect(tracks.length).toBeGreaterThan(0);
 		expect(formats.length).toBeGreaterThan(0);
 		expect(schedule.sessions.length).toBeGreaterThan(0);
+		expect(port.tasks.reminderAvailability).toEqual({ kind: 'available' });
 	});
 });

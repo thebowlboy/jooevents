@@ -622,6 +622,12 @@ export function createLiveReviewersPagePort(input: {
 			}
 		}),
 		tasks: Object.freeze({
+			reminderAvailability: input.remind
+				? Object.freeze({ kind: 'available' as const })
+				: Object.freeze({
+						kind: 'unavailable' as const,
+						reason: UNMOUNTED_COPY.reviewer_reminders
+					}),
 			async remind(reviewerIds: string[], subject: string): Promise<unknown> {
 				if (!input.remind) throw unmounted('reviewer_reminders');
 				return input.remind(reviewerIds, subject);

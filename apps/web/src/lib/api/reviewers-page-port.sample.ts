@@ -10,6 +10,7 @@ export function createSampleReviewersPagePort(api: WorkspaceApi): ReviewersPageP
 		schedule: api.schedule,
 		tasks: Object.freeze({
 			...api.tasks,
+			reminderAvailability: Object.freeze({ kind: 'available' as const }),
 			/**
 			 * A reviewer reminder rides the speaker-task reminder lane, so what it
 			 * sends is that lane's stored template — reported as it is, rather than

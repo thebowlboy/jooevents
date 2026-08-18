@@ -324,10 +324,15 @@ describe('direct live Reviewer page port', () => {
 			}
 		});
 		await wired.tasks.remind([reviewerId], 'Review reminder');
+		expect(wired.tasks.reminderAvailability).toEqual({ kind: 'available' });
 		expect(sent).toEqual([{ ids: [reviewerId], subject: 'Review reminder' }]);
 
 		const unmounted = createLiveReviewersPagePort({
 			roster: rosterPort([]), review, team, vocabulary
+		});
+		expect(unmounted.tasks.reminderAvailability).toEqual({
+			kind: 'unavailable',
+			reason: 'Reviewer reminders are not available in this live workspace yet.'
 		});
 		await expect(unmounted.tasks.remind([reviewerId], 'Review reminder')).rejects.toMatchObject({
 			code: 'reviewer_reminders'
