@@ -37,6 +37,7 @@
 	import InlineVocabAdd from '$lib/features/workspace/components/InlineVocabAdd.svelte';
 	import ProfilePeek from '$lib/features/workspace/components/ProfilePeek.svelte';
 	import {
+		bestOpening,
 		columnSegments,
 		dayLengthMin,
 		defaultStart,
@@ -46,6 +47,7 @@
 		snapStart,
 		type ColumnSegment,
 		type NeighborAnchors,
+		type QuickPick,
 		type SnapResult
 	} from './placement-engine';
 	import {
@@ -299,6 +301,7 @@
 
 	let placing = $state.raw<SessionItem | null>(null);
 	let placingOrigin = $state.raw<Placement | null>(null);
+	let placementEntry = $state<'manual' | 'suggestion' | null>(null);
 	let boardRegion = $state<HTMLElement>();
 
 	/**
@@ -378,6 +381,7 @@
 	async function enterPlacement(session: SessionItem, viaKeyboard = false) {
 		placing = session;
 		placingOrigin = schedule?.placements.find((entry) => entry.sessionId === session.id) ?? null;
+		placementEntry = 'manual';
 		aim = null;
 		const here = openingsPerDay.get(dayKey) ?? 0;
 		announcement = `${placingOrigin ? 'Moving' : 'Placing'} “${session.title}” — ${here} opening${here === 1 ? '' : 's'} highlighted on ${dayLabel(dayKey)}; the day buttons count the others. Choose an opening; Escape cancels.`;
@@ -408,6 +412,7 @@
 		const session = placing;
 		placing = null;
 		placingOrigin = null;
+		placementEntry = null;
 		aim = null;
 		confirmOpen = false;
 		if (session && returnFocus) {
@@ -418,6 +423,31 @@
 				home?.focus();
 			});
 		}
+	}
+
+	/**
+	 * The compact assist chooses geometry, not intent: one safe opening for the
+	 * session the organizer is already reading. It enters the same confirmation
+	 * and ordinary placement operation as manual aim; cancelling returns to the
+	 * row because there was no manual placement mode to resume.
+	 */
+	function reviewSuggestedPlacement(session: SessionItem, suggestion: QuickPick) {
+		if (!schedule || busy || placing) return;
+		placing = session;
+		placingOrigin = null;
+		placementEntry = 'suggestion';
+		aim = null;
+		openConfirm(suggestion.dayKey, suggestion.roomId, {
+			startMin: suggestion.startMin,
+			note: suggestion.note,
+			flush: null
+		});
+		announcement = `Suggested opening ready for “${session.title}”: ${dayLabel(suggestion.dayKey)} ${clockLabel(suggestion.startMin)}, ${roomName(suggestion.roomId)}.`;
+	}
+
+	function setConfirmOpen(value: boolean) {
+		confirmOpen = value;
+		if (!value && placementEntry === 'suggestion' && placing) exitPlacement(true);
 	}
 
 	function cancelPlacement() {
@@ -2903,6 +2933,9 @@
 	{@const session = row.session}
 	{@const placement = schedule?.placements.find((entry) => entry.sessionId === session.id)}
 	{@const track = tracks.find((entry) => entry.id === session.trackId)}
+	{@const suggestion = !placement && placeable(row) && canPlace && schedule
+		? bestOpening(schedule, session)
+		: null}
 	{@const open = detailId === session.id}
 	<!-- The record composition: a rail carrying the track accent, a primary line
 	     (title), the scan keys beneath it, and the trailing affordances. The
@@ -2951,6 +2984,20 @@
 				{/if}
 			{:else if row.trays.includes('needs-speakers')}
 				<p class="pool__fact">No speakers yet</p>
+			{/if}
+			{#if suggestion}
+				<div class="pool__suggestion">
+					<span class="pool__suggestion-fact">
+						Suggested opening · {dayLabel(suggestion.dayKey)}
+						{rangeLabel(suggestion.startMin, session.durationMin)} · {roomName(suggestion.roomId)}
+					</span>
+					<button
+						type="button"
+						class="ui-button ui-button--ghost ui-button--sm pool__suggestion-action"
+						aria-label={`Place “${session.title}” in the suggested opening`}
+						disabled={busy || placing !== null}
+						onclick={() => reviewSuggestedPlacement(session, suggestion)}>Place there…</button>
+				</div>
 			{/if}
 		</div>
 		<div class="pool__actions">
@@ -3111,7 +3158,9 @@
 <!-- The confirm step: the click chose an opening; committing the exact time is
      a deliberate act with the preflight rendered in place, so a misplacement is
      hard and precision is typed, never aimed. -->
-<Modal bind:open={confirmOpen} title={placingOrigin ? 'Move session' : 'Place session'}>
+<Modal
+	bind:open={() => confirmOpen, setConfirmOpen}
+	title={placingOrigin ? 'Move session' : 'Place session'}>
 	{#if placing}
 		<p class="confirm__session">{placing.title}</p>
 		<p class="confirm__where">
@@ -4408,6 +4457,28 @@
 		margin: var(--je-space-1) 0 0;
 		font-size: var(--je-font-size-xs);
 		color: var(--je-color-text-muted);
+	}
+
+	/* One recommendation, attached to the session facts rather than added to the
+	   trailing action rail. It spends no new surface, badge, icon, or accent;
+	   the named action is beside the exact opening it acts on and wraps as one
+	   compact group on touch widths. */
+	.pool__suggestion {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--je-space-1) var(--je-space-2);
+		margin-block-start: var(--je-space-1);
+	}
+
+	.pool__suggestion-fact {
+		font-size: var(--je-font-size-xs);
+		font-weight: 500;
+		color: var(--je-color-text-muted);
+	}
+
+	.pool__suggestion-action {
+		flex: none;
 	}
 
 	/* The trailing affordances: a wrapping row, never a column of stretched

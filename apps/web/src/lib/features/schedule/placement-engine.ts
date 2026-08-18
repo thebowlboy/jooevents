@@ -1,4 +1,10 @@
-import type { Placement, PlacementConflict, ScheduleState, SessionItem } from '$lib/api/types';
+import type {
+	Placement,
+	PlacementConflict,
+	ScheduleState,
+	SessionItem,
+	SessionSpeaker
+} from '$lib/api/types';
 
 /**
  * The aim model for manual placement, UI-free. This is the declared client
@@ -69,6 +75,12 @@ interface Occupant {
 const overlaps = (aStart: number, aEnd: number, bStart: number, bEnd: number) =>
 	aStart < bEnd && bStart < aEnd;
 
+/** Live rows compare canonical people; email is only the sample/legacy fallback. */
+function samePerson(left: SessionSpeaker, right: SessionSpeaker): boolean {
+	if (left.personId && right.personId) return left.personId === right.personId;
+	return left.email === right.email;
+}
+
 export function dayLengthMin(schedule: ScheduleState): number {
 	return schedule.slotsPerDay * schedule.slotMinutes;
 }
@@ -117,9 +129,8 @@ function speakerBusy(
 		if (placement.sessionId === session.id || placement.dayKey !== dayKey) continue;
 		const other = schedule.sessions.find((s) => s.id === placement.sessionId);
 		if (!other) continue;
-		// Email-keyed: the band belongs to a person, not to a spelling of them.
 		const shared = session.speakers.find((speaker) =>
-			other.speakers.some((entry) => entry.email === speaker.email)
+			other.speakers.some((entry) => samePerson(entry, speaker))
 		);
 		if (!shared) continue;
 		busy.push({
@@ -360,7 +371,7 @@ export function preflight(
 			});
 		} else {
 			const shared = session.speakers.find((speaker) =>
-				other.speakers.some((entry) => entry.email === speaker.email)
+				other.speakers.some((entry) => samePerson(entry, speaker))
 			);
 			if (shared) {
 				found.push({
@@ -384,32 +395,54 @@ export function preflight(
 	return found;
 }
 
+function openingNote(segment: ColumnSegment, exactFit: boolean): string {
+	if (exactFit && segment.prevLabel && segment.nextLabel) {
+		return `Fits exactly between “${segment.prevLabel}” and “${segment.nextLabel}”`;
+	}
+	if (exactFit && segment.prevLabel) return `Fits exactly after “${segment.prevLabel}”`;
+	if (exactFit && segment.nextLabel) return `Fits exactly before “${segment.nextLabel}”`;
+	if (segment.prevLabel) return `Right after “${segment.prevLabel}”`;
+	return segment.startMin === 0 ? 'Opens the day' : 'First clear opening';
+}
+
 /**
- * The ranked shortlist for the placement bar. Packing first: a start flush
- * after an existing occupant beats an isolated one, then earlier day, earlier
- * time, room order.
+ * The ranked shortlist for placement assistance. It only ranks openings the
+ * deterministic geometry already considers safe: active room, full duration,
+ * no room overlap, no speaker overlap, and no break. An exact fit beats a
+ * merely packed start; otherwise packing beats an isolated opening, then the
+ * smallest leftover gap and stable calendar order break ties.
+ *
+ * Room capacity is deliberately absent. Rooms know their capacity, but a
+ * session has no expected audience fact, so using capacity would manufacture a
+ * confidence the product does not possess.
  */
 export function quickPicks(
 	schedule: ScheduleState,
 	session: SessionItem,
 	limit = 3
 ): QuickPick[] {
-	const candidates: (QuickPick & { packed: boolean; dayIndex: number; roomIndex: number })[] = [];
+	const candidates: (QuickPick & {
+		exactFit: boolean;
+		packed: boolean;
+		remainingMin: number;
+		dayIndex: number;
+		roomIndex: number;
+	})[] = [];
 	schedule.days.forEach((day, dayIndex) => {
 		schedule.rooms.forEach((room, roomIndex) => {
 			if ((room.status ?? 'active') !== 'active') return;
 			for (const segment of columnSegments(schedule, session, day.key, room.id)) {
 				if (segment.kind !== 'open') continue;
+				const remainingMin = segment.endMin - segment.startMin - session.durationMin;
+				const exactFit = remainingMin === 0;
 				candidates.push({
 					dayKey: day.key,
 					roomId: room.id,
 					startMin: segment.startMin,
-					note: segment.prevLabel
-						? `Right after “${segment.prevLabel}”`
-						: segment.startMin === 0
-							? 'Opens the day'
-							: 'Free from here',
+					note: openingNote(segment, exactFit),
+					exactFit,
 					packed: segment.prevLabel !== undefined,
+					remainingMin,
 					dayIndex,
 					roomIndex
 				});
@@ -418,7 +451,9 @@ export function quickPicks(
 	});
 	candidates.sort(
 		(a, b) =>
+			Number(b.exactFit) - Number(a.exactFit) ||
 			Number(b.packed) - Number(a.packed) ||
+			a.remainingMin - b.remainingMin ||
 			a.dayIndex - b.dayIndex ||
 			a.startMin - b.startMin ||
 			a.roomIndex - b.roomIndex
@@ -429,4 +464,9 @@ export function quickPicks(
 		startMin,
 		note
 	}));
+}
+
+/** One explainable answer for the compact session-row assist. */
+export function bestOpening(schedule: ScheduleState, session: SessionItem): QuickPick | null {
+	return quickPicks(schedule, session, 1)[0] ?? null;
 }

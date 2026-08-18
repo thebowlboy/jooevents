@@ -3,6 +3,7 @@ import type { Placement, ScheduleState, SessionItem } from '$lib/api/types';
 import {
 	AIM_STEP_MIN,
 	ANCHOR_CAPTURE_MIN,
+	bestOpening,
 	columnSegments,
 	defaultStart,
 	landsOnOrigin,
@@ -235,14 +236,14 @@ describe('preflight (client mirror)', () => {
 });
 
 describe('quickPicks', () => {
-	test('packed starts rank first and carry their flush note', () => {
+	test('an exact packed opening ranks first and explains the fit', () => {
 		const { schedule, session } = fixture();
 		const picks = quickPicks(schedule, session);
 		expect(picks[0]).toEqual({
 			dayKey: 'day-1',
 			roomId: 'room-a',
 			startMin: 60,
-			note: 'Right after “Keynote”'
+			note: 'Fits exactly after “Keynote”'
 		});
 		expect(picks).toHaveLength(3);
 		// Every pick is genuinely placeable.
@@ -256,6 +257,61 @@ describe('quickPicks', () => {
 		const { schedule, session } = fixture();
 		schedule.rooms[1].status = 'retired';
 		expect(quickPicks(schedule, session, 10).some((pick) => pick.roomId === 'room-b')).toBe(false);
+	});
+
+	test('exact fit outranks a larger packed gap without pretending capacity predicts demand', () => {
+		const { schedule, session } = fixture();
+		const exactBoundary: SessionItem = {
+			id: 'ses-boundary',
+			title: 'Boundary',
+			speakers: [],
+			trackId: 'trk',
+			formatId: 'fmt',
+			durationMin: 30,
+			state: 'programmed'
+		};
+		schedule.sessions.push(exactBoundary);
+		schedule.placements.push({
+			sessionId: exactBoundary.id,
+			dayKey: 'day-2',
+			roomId: 'room-b',
+			startMin: 45,
+			conflicts: []
+		});
+		session.durationMin = 45;
+		// Capacity is context only: the smaller room still wins because its
+		// opening is the exact schedule fit and no audience estimate exists.
+		schedule.rooms[0].capacity = 1_000;
+		schedule.rooms[1].capacity = 10;
+
+		expect(bestOpening(schedule, session)).toEqual({
+			dayKey: 'day-2',
+			roomId: 'room-b',
+			startMin: 0,
+			note: 'Fits exactly before “Boundary”'
+		});
+	});
+
+	test('returns no recommendation when no safe opening can hold the duration', () => {
+		const { schedule, session } = fixture();
+		session.durationMin = 481;
+		expect(bestOpening(schedule, session)).toBeNull();
+	});
+
+	test('live speaker conflicts follow canonical person identity, not matching email alone', () => {
+		const { schedule, session } = fixture();
+		session.speakers = [{ personId: 'person-ada', name: 'Ada', email: 'shared@fixture.test' }];
+		const other = schedule.sessions.find((entry) => entry.id === 'ses-ada');
+		if (!other) throw new Error('fixture session missing');
+		other.speakers = [{ personId: 'person-other', name: 'Other', email: 'shared@fixture.test' }];
+
+		const pick = bestOpening(schedule, session);
+		expect(pick).not.toBeNull();
+		// Different canonical people may share an address without manufacturing
+		// a double-booking. Room occupancy still applies normally.
+		expect(columnSegments(schedule, session, 'day-1', 'room-a')).not.toContainEqual(
+			expect.objectContaining({ kind: 'blocked', reason: expect.stringContaining('speaking') })
+		);
 	});
 });
 
