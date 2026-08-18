@@ -1,6 +1,13 @@
 import { describe, expect, test } from 'bun:test';
+import {
+  createDirectOperationFeatureContributorRegistry,
+  resolveDirectOperationFeatureContributorRegistry
+} from '@jooevents/application';
 import { parseEventId, parseInstant, parseWorkspaceId } from '@jooevents/kernel';
-import { createAirtableDirectFeatureContributor } from './operation-contribution';
+import {
+  AIRTABLE_PROJECTION_FEATURE_CONTRIBUTOR,
+  createAirtableDirectFeatureContributor
+} from './operation-contribution';
 
 const workspaceId = parseWorkspaceId('018f0f64-4d6c-7b2f-8a1e-1234567890ac');
 const eventId = parseEventId('018f0f64-4d6c-7b2f-8a1e-1234567890ad');
@@ -8,6 +15,32 @@ const assignmentId = '018f0f64-4d6c-7b2f-8a1e-1234567890ae';
 const taskDefinitionId = '018f0f64-4d6c-7b2f-8a1e-1234567890af';
 
 describe('Airtable direct operation contribution', () => {
+  test('keeps Airtable bytes and first ordering unchanged inside the frozen composite registry', () => {
+    const contributor = createAirtableDirectFeatureContributor();
+    const operationInput = {
+      operation: { name: 'schedule.placement', version: 1 },
+      businessInput: {},
+      canonicalResult: { kind: 'success', data: {} },
+      scope: { workspaceId, eventId, subjects: [], resolutionEvidenceIds: [] },
+      occurredAt: parseInstant('2026-08-17T00:01:00.000Z')
+    } as const;
+    const before = contributor.contribute(operationInput);
+    const registry = createDirectOperationFeatureContributorRegistry([
+      Object.freeze({
+        reference: Object.freeze({ key: 'feature.calendar.commitment-facts', version: 1 }),
+        contribute: () => ({ schemaVersion: 1, facts: [] })
+      }),
+      contributor
+    ]);
+    const resolved = resolveDirectOperationFeatureContributorRegistry(registry, operationInput);
+    expect(resolved.map((item) => item.reference.key)).toEqual([
+      AIRTABLE_PROJECTION_FEATURE_CONTRIBUTOR.key,
+      'feature.calendar.commitment-facts'
+    ]);
+    expect(resolved[0]?.value).toEqual(before);
+    expect(JSON.stringify(resolved[0]?.value)).toBe(JSON.stringify(before));
+  });
+
   test('classifies the selected task mutation by stable assignment and current version', () => {
     const contributor = createAirtableDirectFeatureContributor();
     const value = contributor.contribute({

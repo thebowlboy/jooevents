@@ -46,6 +46,7 @@ import {
   createEffectOperationExecutor,
   resolveEffectAutonomyExecutionEvidence
 } from './effect-executor';
+import { createDirectOperationFeatureContributorRegistry } from './direct-feature-contributors';
 import { OperationExecutionError, OperationInputError } from './executor';
 import { createSingleUnitOfWorkConformanceFixture } from './phase-autonomy-fixture';
 import {
@@ -795,6 +796,7 @@ class InMemoryEffectUnitOfWork implements EffectUnitOfWorkPort {
     };
     try {
       const result = await work(unitOfWork);
+      this.fail('commit');
       this.state = working;
       this.commits += 1;
       this.trace.push('direct_commit');
@@ -828,6 +830,7 @@ async function harness(options: {
   readonly directAction?: string;
   readonly directSummariesByAction?: Readonly<Record<string, string>>;
   readonly directFeatureContributor?: DirectOperationFeatureContributor;
+  readonly directFeatureContributors?: readonly DirectOperationFeatureContributor[];
 } = {}) {
   const observed = tracker();
   const registry = await createOperationRegistry(fixture({
@@ -859,6 +862,13 @@ async function harness(options: {
       unitOfWork: port,
       ...(options.directFeatureContributor
         ? { directFeatureContributor: options.directFeatureContributor }
+        : {}),
+      ...(options.directFeatureContributors
+        ? {
+            directFeatureContributors: createDirectOperationFeatureContributorRegistry(
+              options.directFeatureContributors
+            )
+          }
         : {}),
       newOperationLogId: () => receiptIds[nextReceipt++] ?? crypto.randomUUID()
     })
@@ -2341,6 +2351,61 @@ describe('direct audited effect executor', () => {
         operation: { name: 'note.commit', version: 1 }
       })
     })]);
+  });
+
+  test('commits Airtable then calendar as distinct contributions in frozen reference order', async () => {
+    const direct = await harness({
+      effect: 'commit', handlerEffect: 'commit', directAudited: true,
+      directFeatureContributors: [
+        {
+          reference: { key: 'feature.calendar.commitment-facts', version: 1 },
+          contribute: () => ({ schemaVersion: 1, facts: [{ kind: 'session_changed' }] })
+        },
+        {
+          reference: { key: 'feature.airtable.projection-impact', version: 1 },
+          contribute: () => ({ schemaVersion: 2, impacts: [] })
+        }
+      ]
+    });
+    expect((await direct.executor.execute(await sealed({
+      builder: direct.builder, effect: 'commit', rawKey: 'composite-feature-key', value: 'alpha'
+    })))).toMatchObject({ kind: 'success' });
+    expect(direct.port.trace).toEqual([
+      'direct_log_preflight', 'direct_begin', 'authority_recheck', 'direct_log_recheck',
+      'snapshot', 'domain', 'direct_log',
+      'feature_contribution', 'feature_contribution', 'direct_commit'
+    ]);
+    expect(direct.port.storedFeatureContributions.map((item) => item.contributor)).toEqual([
+      { key: 'feature.airtable.projection-impact', version: 1 },
+      { key: 'feature.calendar.commitment-facts', version: 1 }
+    ]);
+    expect(new Set(direct.port.storedFeatureContributions.map((item) => item.operationLogId)))
+      .toEqual(new Set([receiptIds[0]]));
+  });
+
+  test('rolls back the domain, log, Airtable, and calendar contributions together', async () => {
+    const direct = await harness({
+      effect: 'commit', handlerEffect: 'commit', directAudited: true, failure: 'commit',
+      directFeatureContributors: [
+        {
+          reference: { key: 'feature.airtable.projection-impact', version: 1 },
+          contribute: () => ({ schemaVersion: 2, impacts: [] })
+        },
+        {
+          reference: { key: 'feature.calendar.commitment-facts', version: 1 },
+          contribute: () => ({ schemaVersion: 1, facts: [] })
+        }
+      ]
+    });
+    await expect(direct.executor.execute(await sealed({
+      builder: direct.builder, effect: 'commit', rawKey: 'composite-rollback-key', value: 'alpha'
+    }))).rejects.toMatchObject({ phase: 'unit_of_work' });
+    expect(direct.port.domainCount).toBe(0);
+    expect(direct.port.directLogCount).toBe(0);
+    expect(direct.port.storedFeatureContributions).toEqual([]);
+    expect(direct.port.trace.slice(-3)).toEqual([
+      'feature_contribution', 'feature_contribution', 'direct_rollback'
+    ]);
   });
 
   test('resolves a safe history summary from the committed action and rolls back an unmapped action', async () => {

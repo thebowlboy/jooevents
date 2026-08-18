@@ -24,6 +24,16 @@ import {
 import { canonicalJsonText } from '@jooevents/kernel';
 import { Database } from 'bun:sqlite';
 import { loadSQLiteFoundationArtifacts } from './migration-runner';
+import {
+  assertSQLiteOperationFeatureContributionAdapterRegistry,
+  type SQLiteOperationFeatureContributionAdapterRegistry
+} from './operation-feature-contribution-registry';
+export {
+  createSQLiteOperationFeatureContributionAdapterRegistry,
+  type SQLiteOperationFeatureContributionAdapter,
+  type SQLiteOperationFeatureContributionAdapterRegistration,
+  type SQLiteOperationFeatureContributionAdapterRegistry
+} from './operation-feature-contribution-registry';
 
 /**
  * This schema contributes to the accepted epoch-2 baseline and may also be used to
@@ -244,12 +254,6 @@ export type SQLiteTrialEffectAuditHooks = SQLiteEffectAuditHooks;
  * A feature-owned transaction contribution. `apply` runs inside the canonical
  * mutation transaction; post-commit wake publication belongs in the optional hook.
  */
-export interface SQLiteOperationFeatureContributionAdapter {
-  apply(contribution: DirectOperationFeatureContribution): void | Promise<void>;
-  afterUnitOfWorkCommitted?(): void | Promise<void>;
-  afterUnitOfWorkFinished?(outcome: { readonly committed: boolean }): void | Promise<void>;
-}
-
 interface ReceiptRow {
   readonly id: string;
   readonly scope_partition_key: string;
@@ -353,7 +357,7 @@ class SQLiteEffectUnitOfWorkBase implements EffectUnitOfWorkPort {
     private readonly resolveDomain: (capability: VersionedDefinitionRef) => SQLiteEffectDomainAdapter,
     authorityRecheck: EffectAuthorityRecheckSource,
     private readonly auditHooks: SQLiteEffectAuditHooks = {},
-    private readonly featureContribution?: SQLiteOperationFeatureContributionAdapter
+    private readonly featureContribution?: SQLiteOperationFeatureContributionAdapterRegistry
   ) {
     if (!authorityRecheck
       || typeof authorityRecheck.resolveAuthority !== 'function'
@@ -363,6 +367,7 @@ class SQLiteEffectUnitOfWorkBase implements EffectUnitOfWorkPort {
     const resolveAuthority = authorityRecheck.resolveAuthority.bind(authorityRecheck);
     const now = authorityRecheck.now.bind(authorityRecheck);
     this.#authorityRecheck = Object.freeze({ resolveAuthority, now });
+    if (featureContribution) assertSQLiteOperationFeatureContributionAdapterRegistry(featureContribution);
   }
 
   async executeApprovedAgentActionStep<Value>(input: {
@@ -681,7 +686,7 @@ export class SQLiteEffectUnitOfWorkPort extends SQLiteEffectUnitOfWorkBase {
     registry: SQLiteEffectDomainAdapterRegistry,
     authorityRecheck: EffectAuthorityRecheckSource,
     auditHooks: SQLiteEffectAuditHooks = {},
-    featureContribution?: SQLiteOperationFeatureContributionAdapter
+    featureContribution?: SQLiteOperationFeatureContributionAdapterRegistry
   ) {
     if (!registeredEffectDomains.has(registry)) {
       throw new TypeError('sqlite_effect_domain_adapter_registry_unsealed');
@@ -703,7 +708,7 @@ export class SQLiteTrialEffectUnitOfWorkPort extends SQLiteEffectUnitOfWorkBase 
     domain: SQLiteTrialEffectDomainAdapter,
     authorityRecheck: EffectAuthorityRecheckSource,
     auditHooks: SQLiteTrialEffectAuditHooks = {},
-    featureContribution?: SQLiteOperationFeatureContributionAdapter
+    featureContribution?: SQLiteOperationFeatureContributionAdapterRegistry
   ) {
     const boundDomain = bindDomainAdapter(domain);
     super(sqlite, () => boundDomain, authorityRecheck, auditHooks, featureContribution);

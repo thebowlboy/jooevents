@@ -94,6 +94,33 @@ function readinessInput(
 }
 
 describe('authenticated prepared email submissions', () => {
+  test('accepts the v2 attachment and calendar reference contract end to end', async () => {
+    const provider = createDeterministicFakeEmailProvider();
+    const base = envelope();
+    const v2 = Object.freeze({
+      ...base,
+      contractVersion: 2 as const,
+      attachments: Object.freeze([Object.freeze({
+        contentBytesRef: 'content/speaker-pack', filename: 'speaker-pack.pdf',
+        mediaType: 'application/pdf', byteLength: 12, contentSha256: digest,
+        disposition: 'attachment' as const
+      })]),
+      calendarPart: Object.freeze({
+        method: 'REQUEST' as const, filename: 'invite.ics',
+        contentBytesRef: 'calendar/slot-1', byteLength: 128, contentSha256: digest
+      })
+    });
+    const submission = createFakeOrdinarySubmission({
+      scenario: FAKE_PROVIDER_SCENARIO_KEYS.ordinary.acceptedWithId,
+      envelope: v2
+    });
+    expect(provider.delivery.capabilities).toMatchObject({
+      attachments: true, calendarMime: true
+    });
+    expect(await provider.delivery.submit(provider.delivery.prepare(submission)))
+      .toMatchObject({ kind: 'accepted' });
+  });
+
   test('freezes an immutable snapshot and rejects copied or changed prepared values', async () => {
     const provider = createDeterministicFakeEmailProvider();
     const submission = createFakeOrdinarySubmission({

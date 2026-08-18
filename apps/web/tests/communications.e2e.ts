@@ -197,9 +197,11 @@ test('the speaker record carries the communications tail and a scoped compose do
 		timeout: 15000
 	});
 	// The roster lays out twice (table and cards); only the visible tail counts.
-	await expect(
-		page.getByText('Speaker invitation · Jul 21, 14:05').filter({ visible: true })
-	).toBeVisible();
+	// The timeline splits purpose and time into their own columns; the row
+	// still carries both.
+	const invitationRow = page.locator('.tl', { hasText: 'Speaker invitation' }).first();
+	await expect(invitationRow).toBeVisible();
+	await expect(invitationRow).toContainText('Jul 21, 14:05');
 
 	const door = page.getByRole('link', { name: 'Open in Communications' });
 	await expect(door).toHaveAttribute('href', '/app/messages?person=spk-1');

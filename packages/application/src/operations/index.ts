@@ -2,6 +2,7 @@ export * from './audit';
 export * from './executor';
 export * from './effect-identity';
 export * from './effect-executor';
+export * from './direct-feature-contributors';
 export * from './autonomy-preflight';
 export * from './phase-contract';
 export * from './phase-autonomy-fixture';

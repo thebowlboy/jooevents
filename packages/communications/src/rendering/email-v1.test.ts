@@ -106,7 +106,8 @@ describe('organizer deterministic email renderer', () => {
       { fieldKey: 'event.url', value: { valueType: 'url', value: 'https://other.example.test/' } }
     ] })).toThrow(new OrganizerEmailRenderError('unsafe_url'));
     expect(() => render({ attachments: [{
-      slotKey: 'agenda', filename: 'agenda.pdf', mediaType: 'application/pdf', byteLength: 1,
+      slotKey: 'agenda', contentBytesRef: 'files/fixture/agenda',
+      filename: 'agenda.pdf', mediaType: 'application/pdf', byteLength: 1,
       contentSha256: 'e'.repeat(64), disposition: 'attachment'
     }] })).toThrow(new OrganizerEmailRenderError('attachment_mismatch'));
     expect(() => render({ template: {

@@ -140,10 +140,19 @@ function headFromRow(row: DeliveryHeadRow): OutboundEmailDeliveryHead {
 }
 
 function attemptFromRow(row: AttemptRow): OutboundEmailDeliveryAttempt {
+  const storedCapabilities = JSON.parse(row.callback_capabilities_json) as unknown;
   const capabilities = providerCapabilitiesSchema.parse({
     idempotency: row.idempotency_capability,
     reconciliation: row.reconciliation_capability,
-    callbacks: JSON.parse(row.callback_capabilities_json),
+    callbacks: Array.isArray(storedCapabilities)
+      ? storedCapabilities
+      : (storedCapabilities as { readonly callbacks?: unknown }).callbacks,
+    attachments: Array.isArray(storedCapabilities)
+      ? false
+      : (storedCapabilities as { readonly attachments?: unknown }).attachments,
+    calendarMime: Array.isArray(storedCapabilities)
+      ? false
+      : (storedCapabilities as { readonly calendarMime?: unknown }).calendarMime,
     inboundReplies: false
   });
   return Object.freeze({
@@ -377,7 +386,11 @@ export class D1OutboundEmailDeliveryLedger implements OutboundEmailDeliveryLedge
           adapter_version: adapterVersion,
           idempotency_capability: capabilities.idempotency,
           reconciliation_capability: capabilities.reconciliation,
-          callback_capabilities_json: canonicalJsonText(capabilities.callbacks),
+          callback_capabilities_json: canonicalJsonText({
+            callbacks: capabilities.callbacks,
+            attachments: capabilities.attachments,
+            calendarMime: capabilities.calendarMime
+          }),
           provider_request_digest_sha256: requestDigest,
           reviewed_message_digest_sha256: row.reviewed_message_digest_sha256,
           reviewed_envelope_digest_sha256: resendDigest ?? row.reviewed_envelope_digest_sha256,

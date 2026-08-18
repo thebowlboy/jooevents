@@ -351,6 +351,8 @@ describe('SQLite outbound email delivery ledger', () => {
         idempotency: 'none',
         reconciliation: 'none',
         callbacks: [],
+        attachments: false,
+        calendarMime: false,
         inboundReplies: false
       },
       prepare: (value) => {
@@ -454,6 +456,8 @@ describe('SQLite outbound email delivery ledger', () => {
         idempotency: 'none',
         reconciliation: 'none',
         callbacks: [],
+        attachments: false,
+        calendarMime: false,
         inboundReplies: false
       },
       prepare: (value) => fake.delivery.prepare(value) as ReturnType<EmailDeliveryAdapter['prepare']>,
@@ -515,6 +519,8 @@ describe('SQLite outbound email delivery ledger', () => {
       idempotency: 'none',
       reconciliation: 'none',
       callbacks: [],
+      attachments: false,
+      calendarMime: false,
       inboundReplies: false
     };
     const noRecoveryProvider: EmailDeliveryAdapter = {
@@ -590,6 +596,8 @@ describe('SQLite outbound email delivery ledger', () => {
         idempotency: 'none',
         reconciliation: 'none',
         callbacks: [],
+        attachments: false,
+        calendarMime: false,
         inboundReplies: false
       },
       prepare: (value) => fake.delivery.prepare(value) as ReturnType<EmailDeliveryAdapter['prepare']>,
@@ -646,6 +654,8 @@ describe('SQLite outbound email delivery ledger', () => {
         idempotency: 'native_key',
         reconciliation: 'none',
         callbacks: [],
+        attachments: false,
+        calendarMime: false,
         inboundReplies: false
       },
       prepare: (value) => {
@@ -687,6 +697,8 @@ describe('SQLite outbound email delivery ledger', () => {
       idempotency: 'none',
       reconciliation: 'none',
       callbacks: [],
+      attachments: false,
+      calendarMime: false,
       inboundReplies: false
     };
     const noRecoveryProvider: EmailDeliveryAdapter = {
@@ -942,6 +954,8 @@ describe('SQLite outbound email delivery ledger', () => {
         idempotency: 'none',
         reconciliation: 'none',
         callbacks: [],
+        attachments: false,
+        calendarMime: false,
         inboundReplies: false
       },
       prepare: (value) => {

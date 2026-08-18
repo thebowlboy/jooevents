@@ -12,6 +12,8 @@ const noRecovery: ProviderCapabilities = {
   idempotency: 'none',
   reconciliation: 'none',
   callbacks: [],
+  attachments: false,
+  calendarMime: false,
   inboundReplies: false
 };
 
@@ -62,17 +64,17 @@ describe('outbound delivery normalization', () => {
   test('provider recovery capabilities outrank the marked resend', () => {
     expect(outboundEmailFollowUp(
       { state: 'acceptance_unknown' },
-      { idempotency: 'native_key', reconciliation: 'none', callbacks: [], inboundReplies: false },
+      { idempotency: 'native_key', reconciliation: 'none', callbacks: [], attachments: false, calendarMime: false, inboundReplies: false },
       { markedResendExhausted: false }
     )).toBe('safe_retry');
     expect(outboundEmailFollowUp(
       { state: 'acceptance_unknown' },
-      { idempotency: 'provider_lookup', reconciliation: 'lookup', callbacks: [], inboundReplies: false },
+      { idempotency: 'provider_lookup', reconciliation: 'lookup', callbacks: [], attachments: false, calendarMime: false, inboundReplies: false },
       { markedResendExhausted: false }
     )).toBe('reconcile');
     expect(outboundEmailFollowUp(
       { state: 'acceptance_unknown' },
-      { idempotency: 'none', reconciliation: 'callback_only', callbacks: ['bounce'], inboundReplies: false },
+      { idempotency: 'none', reconciliation: 'callback_only', callbacks: ['bounce'], attachments: false, calendarMime: false, inboundReplies: false },
       { markedResendExhausted: false }
     )).toBe('await_callback');
   });
@@ -88,4 +90,3 @@ describe('outbound delivery normalization', () => {
       .toBe('original');
   });
 });
-

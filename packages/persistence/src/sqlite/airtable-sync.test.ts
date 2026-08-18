@@ -37,6 +37,9 @@ import {
   SQLiteAirtableOutboundJobRepository,
   SQLiteAirtableSyncRepository
 } from './airtable-sync';
+import {
+  createSQLiteOperationFeatureContributionAdapterRegistry
+} from './operation-feature-contribution-registry';
 
 const connectionId = '018f0f64-4d6c-7b2f-8a1e-1234567890ab';
 const workspaceId = '018f0f64-4d6c-7b2f-8a1e-1234567890ac';
@@ -1332,6 +1335,17 @@ describe('SQLite Airtable sync', () => {
       () => globalThis.crypto.randomUUID(),
       { async publish() {} }
     );
+    const composite = createSQLiteOperationFeatureContributionAdapterRegistry([
+      {
+        contributor: { key: 'feature.calendar.commitment-facts', version: 1 },
+        adapter: { apply() {} }
+      },
+      { contributor: AIRTABLE_PROJECTION_FEATURE_CONTRIBUTOR, adapter }
+    ]);
+    expect(composite.contributors.map((item) => item.key)).toEqual([
+      AIRTABLE_PROJECTION_FEATURE_CONTRIBUTOR.key,
+      'feature.calendar.commitment-facts'
+    ]);
     const contribution = {
       contributor: AIRTABLE_PROJECTION_FEATURE_CONTRIBUTOR,
       operationLogId: '018f0f64-4d6c-7b2f-8a1e-1234567890d0',
@@ -1360,14 +1374,14 @@ describe('SQLite Airtable sync', () => {
       }
     } as const;
     sqlite.exec('BEGIN IMMEDIATE;');
-    adapter.apply(contribution);
+    composite.apply(contribution);
     sqlite.exec('ROLLBACK;');
     expect(sqlite.query<{ readonly count: number }, []>(`
       SELECT count(*) AS count FROM airtable_sync_boundary_observations
     `).get()).toEqual({ count: 0 });
 
     sqlite.exec('BEGIN IMMEDIATE;');
-    adapter.apply(contribution);
+    composite.apply(contribution);
     sqlite.exec('COMMIT;');
     expect(sqlite.query<{
       readonly inbox_receipt_id: string;

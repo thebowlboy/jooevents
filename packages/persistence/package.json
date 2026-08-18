@@ -104,6 +104,8 @@
   },
   "dependencies": {
     "@jooevents/application": "workspace:*",
+    "@jooevents/calendar": "workspace:*",
+    "@jooevents/calendar-operations": "workspace:*",
     "@jooevents/airtable": "workspace:*",
     "@jooevents/airtable-sync": "workspace:*",
     "@jooevents/communication-operations": "workspace:*",

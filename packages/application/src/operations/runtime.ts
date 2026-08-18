@@ -9,6 +9,7 @@ import type {
   EffectOperationExecutor,
   EffectUnitOfWorkPort,
   DirectOperationFeatureContributor,
+  DirectOperationFeatureContributorRegistry,
   OperationRegistry,
   OperationRegistrySource,
   ReadOperationExecutor,
@@ -34,6 +35,7 @@ export interface CreateApplicationOperationRuntimeInput {
   readonly effectBuilder?: EffectInvocationBuilderOptions;
   readonly newOperationLogId?: () => string;
   readonly directFeatureContributor?: DirectOperationFeatureContributor;
+  readonly directFeatureContributors?: DirectOperationFeatureContributorRegistry;
 }
 
 const moduleIdPattern = /^[a-z][a-z0-9.-]{0,127}$/;
@@ -84,6 +86,9 @@ export function composeOperationRegistryModules(
 export async function createApplicationOperationRuntime(
   input: CreateApplicationOperationRuntimeInput
 ): Promise<ApplicationOperationRuntime> {
+  if (input.directFeatureContributor && input.directFeatureContributors) {
+    throw new TypeError('Direct feature contributor configuration is ambiguous.');
+  }
   const registry = await createOperationRegistry(input.source);
   return createTrustedApplicationOperationRuntime({
     registry,
@@ -93,6 +98,9 @@ export async function createApplicationOperationRuntime(
     ...(input.newOperationLogId ? { newOperationLogId: input.newOperationLogId } : {}),
     ...(input.directFeatureContributor
       ? { directFeatureContributor: input.directFeatureContributor }
+      : {}),
+    ...(input.directFeatureContributors
+      ? { directFeatureContributors: input.directFeatureContributors }
       : {})
   });
 }

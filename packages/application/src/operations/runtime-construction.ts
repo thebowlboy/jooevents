@@ -2,6 +2,7 @@ import { createEffectInvocationBuilder, createEffectOperationExecutor } from './
 import { createReadOperationExecutor } from './executor';
 import type {
   DirectOperationFeatureContributor,
+  DirectOperationFeatureContributorRegistry,
   EffectInvocationBuilderOptions,
   EffectUnitOfWorkPort,
   OperationRegistry,
@@ -16,6 +17,7 @@ export interface TrustedRuntimeConstructionInput {
   readonly effectBuilder?: EffectInvocationBuilderOptions;
   readonly newOperationLogId?: () => string;
   readonly directFeatureContributor?: DirectOperationFeatureContributor;
+  readonly directFeatureContributors?: DirectOperationFeatureContributorRegistry;
 }
 
 const trustedApplicationOperationRuntimes = new WeakSet<object>();
@@ -34,6 +36,9 @@ export function createTrustedApplicationOperationRuntime(
       ...(input.newOperationLogId ? { newOperationLogId: input.newOperationLogId } : {}),
       ...(input.directFeatureContributor
         ? { directFeatureContributor: input.directFeatureContributor }
+        : {}),
+      ...(input.directFeatureContributors
+        ? { directFeatureContributors: input.directFeatureContributors }
         : {})
     })
   });

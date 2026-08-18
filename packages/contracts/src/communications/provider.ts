@@ -162,6 +162,8 @@ export const providerCapabilitiesSchema = z.strictObject({
       }
     }
   }),
+  attachments: z.boolean(),
+  calendarMime: z.boolean(),
   inboundReplies: z.literal(false)
 });
 
@@ -321,6 +323,8 @@ export const providerUnknownReasonSchema = z.enum([
 
 export const providerReadinessCapabilitySchema = z.enum([
   'transactional_outbound',
+  'attachments',
+  'calendar_mime',
   'delivery_callbacks',
   'suppression_callbacks',
   'inbound_replies'
@@ -614,6 +618,8 @@ export function finalizeVerifiedProviderCallback(
 
 export const setupCapabilityStateSchema = z.strictObject({
   transactional_outbound: z.literal('supported'),
+  attachments: z.enum(['supported', 'not_supported']),
+  calendar_mime: z.enum(['supported', 'not_supported']),
   delivery_callbacks: z.enum(['supported', 'not_supported']),
   suppression_callbacks: z.enum(['supported', 'not_supported']),
   inbound_replies: z.literal('not_enabled')
@@ -660,6 +666,8 @@ const setupReadinessCheckSchema = z.strictObject({
   key: providerStableKeySchema,
   capability: z.enum([
     'transactional_outbound',
+    'attachments',
+    'calendar_mime',
     'delivery_callbacks',
     'suppression_callbacks'
   ]),

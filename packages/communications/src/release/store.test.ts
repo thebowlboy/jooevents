@@ -39,9 +39,31 @@ describe('communication message releases', () => {
     expect(release.reviewedEnvelopeDigestSha256)
       .toBe(computeReviewedEmailEnvelopeDigestSha256(release.envelope));
     expect(String(release.envelope.to.address)).toBe('ada@example.org');
+    expect(release.envelope.contractVersion).toBe(2);
     // Deterministic: the same inputs always produce the same reviewed digests.
     expect(buildCommunicationMessageRelease(base).reviewedEnvelopeDigestSha256)
       .toBe(release.reviewedEnvelopeDigestSha256);
+  });
+
+  test('v2 pins attachment and calendar byte references without embedding content bytes', () => {
+    const release = buildCommunicationMessageRelease({
+      ...base,
+      attachments: [{
+        contentBytesRef: 'files/reviewed/speaker-pack', filename: 'speaker-pack.pdf',
+        mediaType: 'application/pdf', byteLength: 42, contentSha256: 'e'.repeat(64),
+        disposition: 'attachment'
+      }],
+      calendarPart: {
+        method: 'REQUEST', filename: 'invite.ics', contentBytesRef: 'calendar/slot-1',
+        byteLength: 128, contentSha256: 'f'.repeat(64)
+      }
+    });
+    expect(release.envelope).toMatchObject({
+      contractVersion: 2,
+      attachments: [{ contentBytesRef: 'files/reviewed/speaker-pack' }],
+      calendarPart: { method: 'REQUEST', contentBytesRef: 'calendar/slot-1' }
+    });
+    expect(JSON.stringify(release.envelope)).not.toContain('contentBase64');
   });
 
   test('the reviewed envelope digest covers the optional HTML body', () => {

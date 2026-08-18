@@ -1,6 +1,7 @@
 export * from './access';
 export * from './agent-action-runs';
 export * from './api-keys';
+export * from './calendar';
 export * from './external-agent-api';
 export * from './airtable-integration';
 export * from './accelevents-export';

@@ -7,8 +7,12 @@ import {
 } from './constants';
 import { CLOUDFLARE_EMAIL_EVIDENCE_CODES } from './evidence';
 import {
-  buildCloudflareRestMessage,
-  type CloudflareRestEmailMessage
+  buildCloudflareRestPreparedMessage,
+  materializeCloudflareRestMessage,
+  type CloudflareEmailContentResolver,
+  type CloudflareRawEmailMessage,
+  type CloudflareRestEmailMessage,
+  type CloudflareRestPreparedMessage
 } from './message';
 import { createCloudflareEmailProvider, type CloudflareEmailProvider } from './provider';
 import type { CloudflareEmailReadinessProbe } from './setup';
@@ -263,18 +267,34 @@ function createRestTransport(input: Readonly<{
   accountId: string;
   tokenLease: CloudflareApiTokenLease;
   fetch: CloudflareFetch;
-}>): CloudflareSendTransport<CloudflareRestEmailMessage> {
+  contentResolver: CloudflareEmailContentResolver;
+}>): CloudflareSendTransport<CloudflareRestPreparedMessage> {
   if (!validAccountId(input.accountId)) {
     throw new TypeError('Cloudflare account ID has an invalid bounded shape');
   }
-  const endpoint = `${API_ROOT}/accounts/${encodeURIComponent(input.accountId)}/email/sending/send`;
+  const endpointRoot = `${API_ROOT}/accounts/${encodeURIComponent(input.accountId)}/email/sending`;
   const leaseResultBrand: unique symbol = Symbol('cloudflareApiTokenLeaseResult');
-  const transport: CloudflareSendTransport<CloudflareRestEmailMessage> = {
+  const transport: CloudflareSendTransport<CloudflareRestPreparedMessage> = {
     kind: 'bun_rest',
-    async send(message) {
+    async send(prepared) {
       let dispatched = false;
       let callbackUsed = false;
       try {
+        let message: CloudflareRestEmailMessage | CloudflareRawEmailMessage;
+        try {
+          message = await materializeCloudflareRestMessage(prepared, input.contentResolver);
+        } catch {
+          return Object.freeze({
+            kind: 'known_rejected',
+            retryClass: 'terminal',
+            code: CLOUDFLARE_EMAIL_EVIDENCE_CODES.providerNotReady,
+            observation: 'provider_not_ready',
+            requestDispatched: false
+          });
+        }
+        const raw = 'mime_message' in message;
+        const recipient = 'mime_message' in message ? message.recipients[0] : message.to;
+        const endpoint = `${endpointRoot}/${raw ? 'send_raw' : 'send'}`;
         const leased = await input.tokenLease.withApiToken(async (apiToken) => {
           if (callbackUsed) throw new TypeError('Cloudflare token lease callback may run once');
           callbackUsed = true;
@@ -344,7 +364,7 @@ function createRestTransport(input: Readonly<{
             httpStatus: response.status
           });
         }
-        return normalizeSuccessfulResponse(body.value, message.to, response.status);
+        return normalizeSuccessfulResponse(body.value, recipient, response.status);
       } catch (error) {
         if (!dispatched) {
           return Object.freeze({
@@ -372,14 +392,20 @@ export function createCloudflareRestEmailProvider(input: Readonly<{
   accountId: string;
   tokenLease: CloudflareApiTokenLease;
   fetch: CloudflareFetch;
+  contentResolver?: CloudflareEmailContentResolver;
   readinessProbe?: CloudflareEmailReadinessProbe;
-}>): CloudflareEmailProvider<CloudflareRestEmailMessage> {
+}>): CloudflareEmailProvider<CloudflareRestPreparedMessage> {
+  const contentResolver = input.contentResolver ?? Object.freeze({
+    async resolveContentBytes(): Promise<Uint8Array> {
+      throw new TypeError('Cloudflare email content resolver is unavailable');
+    }
+  });
   return createCloudflareEmailProvider({
     adapterKey: CLOUDFLARE_REST_EMAIL_ADAPTER_KEY,
     adapterVersion: CLOUDFLARE_EMAIL_ADAPTER_VERSION,
     manifest: CLOUDFLARE_REST_EMAIL_SETUP_MANIFEST,
-    transport: createRestTransport(input),
-    prepareEnvelope: buildCloudflareRestMessage,
+    transport: createRestTransport({ ...input, contentResolver }),
+    prepareEnvelope: buildCloudflareRestPreparedMessage,
     ...(input.readinessProbe === undefined ? {} : { readinessProbe: input.readinessProbe })
   });
 }

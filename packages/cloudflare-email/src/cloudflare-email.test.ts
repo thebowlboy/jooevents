@@ -1,9 +1,12 @@
 import { describe, expect, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import {
   computeReviewedEmailEnvelopeDigestSha256,
   parseEmailAddress,
   type ImmutableEmailDiagnosticSubmission,
   type ImmutableEmailEnvelope,
+  type ImmutableEmailEnvelopeV1,
+  type ImmutableEmailEnvelopeV2,
   type ImmutableEmailSubmission,
   type PreparedEmailSubmission
 } from '@jooevents/communications';
@@ -23,7 +26,7 @@ import {
 
 const shaA = 'a'.repeat(64);
 
-function envelope(overrides: Partial<ImmutableEmailEnvelope> = {}): ImmutableEmailEnvelope {
+function envelope(overrides: Partial<ImmutableEmailEnvelopeV1> = {}): ImmutableEmailEnvelopeV1 {
   return {
     contractVersion: 1,
     from: {
@@ -39,6 +42,22 @@ function envelope(overrides: Partial<ImmutableEmailEnvelope> = {}): ImmutableEma
     textBody: 'A bounded message body.',
     htmlBody: '<p>A bounded message body.</p>',
     headers: [{ name: 'X-Event-Key', value: 'event_1' }],
+    ...overrides
+  };
+}
+
+function digestBytes(bytes: Uint8Array): string {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+function envelopeV2(
+  overrides: Partial<ImmutableEmailEnvelopeV2> = {}
+): ImmutableEmailEnvelopeV2 {
+  const base = envelope();
+  return {
+    ...base,
+    contractVersion: 2,
+    attachments: [],
     ...overrides
   };
 }
@@ -136,11 +155,22 @@ function jsonResponse(value: unknown, status = 200, headers?: HeadersInit): Resp
   });
 }
 
-function restProvider(fetch: CloudflareFetch, apiToken = 'test-token-fragment') {
+function restProvider(
+  fetch: CloudflareFetch,
+  apiToken = 'test-token-fragment',
+  contents: Readonly<Record<string, Uint8Array>> = {}
+) {
   return createCloudflareRestEmailProvider({
     accountId: 'account_123',
     tokenLease: tokenLease(apiToken),
-    fetch
+    fetch,
+    contentResolver: Object.freeze({
+      async resolveContentBytes(contentBytesRef: string): Promise<Uint8Array> {
+        const bytes = contents[contentBytesRef];
+        if (bytes === undefined) throw new TypeError('missing test content');
+        return bytes;
+      }
+    })
   });
 }
 
@@ -150,6 +180,8 @@ function readinessInput(
     | typeof CLOUDFLARE_REST_EMAIL_SETUP_MANIFEST,
   capability:
     | 'transactional_outbound'
+    | 'attachments'
+    | 'calendar_mime'
     | 'delivery_callbacks'
     | 'suppression_callbacks'
     | 'inbound_replies' = 'transactional_outbound'
@@ -177,22 +209,35 @@ function readinessInput(
 
 describe('Cloudflare Email Sending package boundary', () => {
   test('advertises only outbound submission and explicitly disables inbound', () => {
-    for (const manifest of [
-      CLOUDFLARE_WORKERS_EMAIL_SETUP_MANIFEST,
-      CLOUDFLARE_REST_EMAIL_SETUP_MANIFEST
-    ]) {
-      expect(manifest.capabilities).toEqual({
+    expect(CLOUDFLARE_WORKERS_EMAIL_SETUP_MANIFEST.capabilities).toEqual({
         idempotency: 'none',
         reconciliation: 'none',
         callbacks: [],
+        attachments: false,
+        calendarMime: false,
         inboundReplies: false
       });
-      expect(manifest.capabilityStatus).toEqual({
+    expect(CLOUDFLARE_WORKERS_EMAIL_SETUP_MANIFEST.capabilityStatus).toEqual({
         transactional_outbound: 'supported',
+        attachments: 'not_supported',
+        calendar_mime: 'not_supported',
         delivery_callbacks: 'not_supported',
         suppression_callbacks: 'not_supported',
         inbound_replies: 'not_enabled'
       });
+    expect(CLOUDFLARE_REST_EMAIL_SETUP_MANIFEST.capabilities).toEqual({
+      idempotency: 'none', reconciliation: 'none', callbacks: [],
+      attachments: true, calendarMime: true, inboundReplies: false
+    });
+    expect(CLOUDFLARE_REST_EMAIL_SETUP_MANIFEST.capabilityStatus).toEqual({
+      transactional_outbound: 'supported', attachments: 'supported',
+      calendar_mime: 'supported', delivery_callbacks: 'not_supported',
+      suppression_callbacks: 'not_supported', inbound_replies: 'not_enabled'
+    });
+    for (const manifest of [
+      CLOUDFLARE_WORKERS_EMAIL_SETUP_MANIFEST,
+      CLOUDFLARE_REST_EMAIL_SETUP_MANIFEST
+    ]) {
       expect(manifest.callbacks).toEqual({ kind: 'disabled' });
     }
     const provider = createCloudflareWorkersEmailProvider({
@@ -244,6 +289,20 @@ describe('Cloudflare Email Sending package boundary', () => {
     });
     expect(() => provider.delivery.prepare(ordinary({ envelope: unsupportedHeaderEnvelope })))
       .toThrow('not supported');
+  });
+
+  test('an incapable Workers route refuses calendar MIME instead of downgrading it', () => {
+    const provider = createCloudflareWorkersEmailProvider({
+      binding: workersBinding(async () => ({ messageId: 'must_not_send' }))
+    });
+    const email = envelopeV2({ calendarPart: {
+      method: 'REQUEST', filename: 'invite.ics', contentBytesRef: 'calendar/slot-1',
+      byteLength: 1, contentSha256: shaA
+    } });
+    expect(() => provider.delivery.prepare(ordinary({
+      envelope: email,
+      reviewedEnvelopeDigestSha256: computeReviewedEmailEnvelopeDigestSha256(email)
+    }))).toThrow('does not support reviewed content parts');
   });
 });
 
@@ -338,6 +397,90 @@ describe('Cloudflare Workers binding transport', () => {
 });
 
 describe('Cloudflare REST transport', () => {
+  test('resolves reviewed attachments into the structured Cloudflare payload', async () => {
+    const bytes = new TextEncoder().encode('speaker pack');
+    let capturedUrl = '';
+    let capturedInit: RequestInit | undefined;
+    const provider = restProvider(async (request, init) => {
+      capturedUrl = String(request);
+      capturedInit = init;
+      return jsonResponse(responseBody());
+    }, 'test-token-fragment', { 'content/speaker-pack': bytes });
+    const email = envelopeV2({ attachments: [{
+      contentBytesRef: 'content/speaker-pack',
+      filename: 'speaker-pack.txt',
+      mediaType: 'text/plain',
+      byteLength: bytes.byteLength,
+      contentSha256: digestBytes(bytes),
+      disposition: 'attachment'
+    }] });
+    const outcome = await provider.delivery.submit(provider.delivery.prepare(ordinary({
+      envelope: email,
+      reviewedEnvelopeDigestSha256: computeReviewedEmailEnvelopeDigestSha256(email)
+    })));
+    expect(outcome.kind).toBe('accepted');
+    expect(capturedUrl.endsWith('/send')).toBe(true);
+    const payload = JSON.parse(String(capturedInit?.body)) as CloudflareRestEmailMessage;
+    expect(payload.attachments).toEqual([{
+      filename: 'speaker-pack.txt', type: 'text/plain', disposition: 'attachment',
+      content: 'c3BlYWtlciBwYWNr'
+    }]);
+  });
+
+  test('uses send_raw and emits a text/calendar method part for an invitation', async () => {
+    const calendar = new TextEncoder().encode([
+      'BEGIN:VCALENDAR', 'VERSION:2.0', 'METHOD:REQUEST', 'BEGIN:VEVENT',
+      'UID:slot-1@example.test', 'DTSTART:20260916T180000Z',
+      'DTEND:20260916T184500Z', 'SUMMARY:Signals in practice',
+      'END:VEVENT', 'END:VCALENDAR', ''
+    ].join('\r\n'));
+    let capturedUrl = '';
+    let capturedInit: RequestInit | undefined;
+    const provider = restProvider(async (request, init) => {
+      capturedUrl = String(request);
+      capturedInit = init;
+      return jsonResponse(responseBody());
+    }, 'test-token-fragment', { 'calendar/slot-1': calendar });
+    const email = envelopeV2({
+      calendarPart: {
+        method: 'REQUEST', filename: 'invite.ics', contentBytesRef: 'calendar/slot-1',
+        byteLength: calendar.byteLength, contentSha256: digestBytes(calendar)
+      }
+    });
+    const outcome = await provider.delivery.submit(provider.delivery.prepare(ordinary({
+      envelope: email,
+      reviewedEnvelopeDigestSha256: computeReviewedEmailEnvelopeDigestSha256(email)
+    })));
+    expect(outcome.kind).toBe('accepted');
+    expect(capturedUrl.endsWith('/send_raw')).toBe(true);
+    const payload = JSON.parse(String(capturedInit?.body)) as { mime_message: string };
+    expect(payload.mime_message).toContain('Content-Type: text/calendar; method=REQUEST');
+    expect(payload.mime_message).toContain('Content-Disposition: inline; filename="invite.ics"');
+    expect(payload.mime_message).toContain('multipart/alternative');
+  });
+
+  test('a missing reviewed content resolver blocks before provider dispatch', async () => {
+    const calendar = new TextEncoder().encode('BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n');
+    let calls = 0;
+    const provider = createCloudflareRestEmailProvider({
+      accountId: 'account_123', tokenLease: tokenLease('test-token-fragment'),
+      fetch: async () => { calls += 1; return jsonResponse(responseBody()); }
+    });
+    const email = envelopeV2({ calendarPart: {
+      method: 'REQUEST', filename: 'invite.ics', contentBytesRef: 'calendar/missing',
+      byteLength: calendar.byteLength, contentSha256: digestBytes(calendar)
+    } });
+    const outcome = await provider.delivery.submit(provider.delivery.prepare(ordinary({
+      envelope: email,
+      reviewedEnvelopeDigestSha256: computeReviewedEmailEnvelopeDigestSha256(email)
+    })));
+    expect(outcome).toMatchObject({
+      kind: 'known_rejected', retryClass: 'terminal',
+      code: 'cloudflare.email.rejected.provider_not_ready'
+    });
+    expect(calls).toBe(0);
+  });
+
   test.each([
     ['delivered', 'accepted_delivered'],
     ['permanent_bounces', 'accepted_permanent_bounce'],
@@ -551,6 +694,30 @@ describe('Cloudflare REST transport', () => {
 });
 
 describe('Cloudflare setup readiness', () => {
+  test('reports attachment and calendar readiness per route capability', async () => {
+    const workers = createCloudflareWorkersEmailProvider({
+      binding: workersBinding(async () => ({ messageId: 'unused' }))
+    });
+    expect(await workers.setup.checkReadiness({
+      ...readinessInput(CLOUDFLARE_WORKERS_EMAIL_SETUP_MANIFEST, 'calendar_mime'),
+      checkKey: 'cloudflare.calendar_mime'
+    })).toMatchObject({ kind: 'known_failed' });
+
+    const rest = createCloudflareRestEmailProvider({
+      accountId: 'account_123', tokenLease: tokenLease('test-token-fragment'),
+      fetch: async () => jsonResponse(responseBody()),
+      readinessProbe: Object.freeze({
+        async check() { return { kind: 'passed' as const, readiness: 'ready' as const, validUntil: 1_900_000_000_000 }; }
+      })
+    });
+    for (const capability of ['attachments', 'calendar_mime'] as const) {
+      expect(await rest.setup.checkReadiness({
+        ...readinessInput(CLOUDFLARE_REST_EMAIL_SETUP_MANIFEST, capability),
+        checkKey: `cloudflare.${capability}`
+      })).toMatchObject({ kind: 'passed', readiness: 'ready' });
+    }
+  });
+
   test('fails closed without a readiness probe and rejects unsupported/inbound capabilities', async () => {
     const provider = createCloudflareWorkersEmailProvider({
       binding: workersBinding(async () => ({ messageId: 'message_1' }))

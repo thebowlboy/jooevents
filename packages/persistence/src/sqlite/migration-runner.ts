@@ -163,6 +163,34 @@ function prepareMigration(database: Database, migration: SQLiteMigrationManifest
     }
     return;
   }
+  if (migration.migrationId === 'e2_0015_calendar_canonical_state') {
+    const duplicateRosterPeople = database.query<{ count: number }, []>(`
+      SELECT count(*) AS count FROM (
+        SELECT session.workspace_id,session.event_id,session.id,
+               json_extract(participant.value,'$.personId') AS person_id
+          FROM sessions session, json_each(session.roster_json,'$.participants') participant
+         GROUP BY session.workspace_id,session.event_id,session.id,person_id
+        HAVING count(*) > 1
+      )
+    `).get()?.count ?? 0;
+    const crossScopedImages = database.query<{ count: number }, []>(`
+      SELECT (
+        SELECT count(*) FROM sessions
+         WHERE json_extract(head_json,'$.scope.workspaceId') IS NOT workspace_id
+            OR json_extract(head_json,'$.scope.eventId') IS NOT event_id
+      ) + (
+        SELECT count(*) FROM engagement_heads
+         WHERE json_extract(head_json,'$.scope.workspaceId') IS NOT workspace_id
+            OR json_extract(head_json,'$.scope.eventId') IS NOT event_id
+      ) AS count
+    `).get()?.count ?? 0;
+    if (duplicateRosterPeople !== 0 || crossScopedImages !== 0) {
+      throw new Error(
+        `calendar migration source authority refused: duplicate_roster_people=${duplicateRosterPeople},cross_scoped_images=${crossScopedImages}`
+      );
+    }
+    return;
+  }
   if (migration.migrationId !== 'e2_0002_submission_triage_spam') return;
   database.exec(`
     CREATE TEMP TABLE e2_0002_submission_triage_spam_rows (

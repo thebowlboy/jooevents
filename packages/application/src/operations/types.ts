@@ -934,6 +934,14 @@ export interface DirectOperationFeatureContributor {
   }>): unknown | undefined;
 }
 
+/**
+ * An authentic, process-composed registry of feature contributors. The registry has
+ * no mutation API: registration is frozen before an executor can receive it.
+ */
+export interface DirectOperationFeatureContributorRegistry {
+  readonly references: readonly VersionedDefinitionRef[];
+}
+
 export interface DirectOperationFeatureContribution {
   readonly contributor: VersionedDefinitionRef;
   readonly operationLogId: string;

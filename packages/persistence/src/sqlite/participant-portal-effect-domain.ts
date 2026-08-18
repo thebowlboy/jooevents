@@ -20,6 +20,7 @@ import {
 } from '@jooevents/contracts';
 import {
   createParticipantPortalRespondPreparation,
+  participantEngagementRespondCanonicalResultSchema,
   participantEngagementResponseDomainContributionSchema,
   PORTAL_ENGAGEMENT_RESPOND_HANDLER_CAPABILITY,
   PORTAL_ENGAGEMENT_RESPOND_OPERATION,
@@ -617,15 +618,19 @@ export class SQLiteParticipantPortalEffectDomainAdapter implements SQLiteEffectD
   afterOperationLogInserted(receipt: TerminalEffectReceipt): void {
     const active = this.#active;
     const parsedResult = portalEngagementRespondResultSchema.safeParse(receipt.result);
+    const canonicalResult = active
+      ? participantEngagementRespondCanonicalResultSchema.safeParse(active.contribution.result)
+      : undefined;
     if (!this.input.sqlite.inTransaction || !active || active.phase !== 'applied'
         || !effectOperationIdentityMatchesContext(receipt.identity, active.context)
         || receipt.requestHash !== active.context.requestBinding.requestHashSha256
         || receipt.ref.operationName !== PORTAL_ENGAGEMENT_RESPOND_OPERATION.name
         || receipt.ref.operationVersion !== PORTAL_ENGAGEMENT_RESPOND_OPERATION.version
         || !parsedResult.success || parsedResult.data.kind !== 'success'
+        || !canonicalResult?.success || canonicalResult.data.kind !== 'success'
         || parsedResult.data.receipt.id !== receipt.ref.id
         || canonicalJsonText(parsedResult.data.data)
-          !== canonicalJsonText(active.contribution.result.data)) {
+          !== canonicalJsonText(canonicalResult.data.data.engagement)) {
       throw new TypeError('participant_portal_receipt_mismatch');
     }
     active.receiptId = receipt.ref.id;

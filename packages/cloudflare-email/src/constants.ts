@@ -5,44 +5,38 @@ import {
 
 export const CLOUDFLARE_WORKERS_EMAIL_ADAPTER_KEY = 'cloudflare.email.workers';
 export const CLOUDFLARE_REST_EMAIL_ADAPTER_KEY = 'cloudflare.email.rest';
-export const CLOUDFLARE_EMAIL_ADAPTER_VERSION = 'v1';
+export const CLOUDFLARE_EMAIL_ADAPTER_VERSION = 'v2';
 export const CLOUDFLARE_EMAIL_DIAGNOSTIC_FIXTURE_KEY = 'cloudflare.email.diagnostic';
 export const CLOUDFLARE_EMAIL_DIAGNOSTIC_FIXTURE_VERSION = 1;
 export const CLOUDFLARE_EMAIL_READINESS_EXTERNAL_CHECK_KEY = 'cloudflare.email.outbound_ready';
 
-export const CLOUDFLARE_EMAIL_CAPABILITIES: ProviderCapabilities = {
+export const CLOUDFLARE_WORKERS_EMAIL_CAPABILITIES: ProviderCapabilities = {
   idempotency: 'none',
   reconciliation: 'none',
   callbacks: [],
+  attachments: false,
+  calendarMime: false,
   inboundReplies: false
 };
-Object.freeze(CLOUDFLARE_EMAIL_CAPABILITIES.callbacks);
-Object.freeze(CLOUDFLARE_EMAIL_CAPABILITIES);
+Object.freeze(CLOUDFLARE_WORKERS_EMAIL_CAPABILITIES.callbacks);
+Object.freeze(CLOUDFLARE_WORKERS_EMAIL_CAPABILITIES);
+
+export const CLOUDFLARE_REST_EMAIL_CAPABILITIES: ProviderCapabilities = {
+  idempotency: 'none',
+  reconciliation: 'none',
+  callbacks: [],
+  attachments: true,
+  calendarMime: true,
+  inboundReplies: false
+};
+Object.freeze(CLOUDFLARE_REST_EMAIL_CAPABILITIES.callbacks);
+Object.freeze(CLOUDFLARE_REST_EMAIL_CAPABILITIES);
 
 const commonManifest = {
   contractVersion: 1 as const,
   schemaKey: 'je.communication.email-setup-manifest' as const,
   schemaVersion: 1 as const,
   manifestVersion: 1,
-  capabilities: CLOUDFLARE_EMAIL_CAPABILITIES,
-  capabilityStatus: {
-    transactional_outbound: 'supported' as const,
-    delivery_callbacks: 'not_supported' as const,
-    suppression_callbacks: 'not_supported' as const,
-    inbound_replies: 'not_enabled' as const
-  },
-  readinessChecks: [{
-    key: 'cloudflare.transactional_outbound',
-    capability: 'transactional_outbound' as const,
-    externalCheckKey: CLOUDFLARE_EMAIL_READINESS_EXTERNAL_CHECK_KEY,
-    observationSchemaVersion: 1,
-    normalizerVersion: 1,
-    maximumValidityMs: 300_000,
-    observableClaimKeys: [
-      'cloudflare.domain.enabled',
-      'cloudflare.transport.configured'
-    ]
-  }],
   senderRequirements: {
     verifiedDomainRequired: true,
     verifiedFromAddressRequired: false,
@@ -59,8 +53,34 @@ const commonManifest = {
   }
 };
 
+const outboundReadinessCheck = (key: string, capability:
+  'transactional_outbound' | 'attachments' | 'calendar_mime') => ({
+    key,
+    capability,
+    externalCheckKey: CLOUDFLARE_EMAIL_READINESS_EXTERNAL_CHECK_KEY,
+    observationSchemaVersion: 1,
+    normalizerVersion: 1,
+    maximumValidityMs: 300_000,
+    observableClaimKeys: [
+      'cloudflare.domain.enabled',
+      'cloudflare.transport.configured'
+    ]
+  });
+
 export const CLOUDFLARE_WORKERS_EMAIL_SETUP_MANIFEST = finalizeEmailSetupManifest({
   ...commonManifest,
+  capabilities: CLOUDFLARE_WORKERS_EMAIL_CAPABILITIES,
+  capabilityStatus: {
+    transactional_outbound: 'supported',
+    attachments: 'not_supported',
+    calendar_mime: 'not_supported',
+    delivery_callbacks: 'not_supported',
+    suppression_callbacks: 'not_supported',
+    inbound_replies: 'not_enabled'
+  },
+  readinessChecks: [outboundReadinessCheck(
+    'cloudflare.transactional_outbound', 'transactional_outbound'
+  )],
   manifestKey: 'cloudflare.email.workers.setup',
   adapterKey: CLOUDFLARE_WORKERS_EMAIL_ADAPTER_KEY,
   adapterVersion: CLOUDFLARE_EMAIL_ADAPTER_VERSION,
@@ -111,6 +131,20 @@ export const CLOUDFLARE_WORKERS_EMAIL_SETUP_MANIFEST = finalizeEmailSetupManifes
 
 export const CLOUDFLARE_REST_EMAIL_SETUP_MANIFEST = finalizeEmailSetupManifest({
   ...commonManifest,
+  capabilities: CLOUDFLARE_REST_EMAIL_CAPABILITIES,
+  capabilityStatus: {
+    transactional_outbound: 'supported',
+    attachments: 'supported',
+    calendar_mime: 'supported',
+    delivery_callbacks: 'not_supported',
+    suppression_callbacks: 'not_supported',
+    inbound_replies: 'not_enabled'
+  },
+  readinessChecks: [
+    outboundReadinessCheck('cloudflare.attachments', 'attachments'),
+    outboundReadinessCheck('cloudflare.calendar_mime', 'calendar_mime'),
+    outboundReadinessCheck('cloudflare.transactional_outbound', 'transactional_outbound')
+  ],
   manifestKey: 'cloudflare.email.rest.setup',
   adapterKey: CLOUDFLARE_REST_EMAIL_ADAPTER_KEY,
   adapterVersion: CLOUDFLARE_EMAIL_ADAPTER_VERSION,

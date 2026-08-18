@@ -47,6 +47,8 @@ import {
 	organizerCommunicationTimelinePageOperationResultSchema,
   organizerCommunicationPurposePageOperationResultSchema,
   organizerMessageTemplatePageOperationResultSchema,
+  organizerMessageTemplateDetailOperationResultSchema,
+  organizerMessageTemplateMutationOperationResultSchema,
   organizerPrepareMessagePreviewOperationResultSchema,
   organizerPreviewMessageBatchOperationResultSchema,
   organizerSendMessagesOperationResultSchema,
@@ -1095,6 +1097,10 @@ describe('ephemeral live Foundation server composition', () => {
         bindings: ['GET /api/events/current/communications/templates']
       },
       {
+        name: 'message_template.create', version: 1, effect: 'draft',
+        bindings: ['POST /api/events/current/communications/templates/create']
+      },
+      {
         name: 'operation.history.list', version: 1, effect: 'read',
         bindings: ['GET /api/workspace/history']
       },
@@ -1173,6 +1179,10 @@ describe('ephemeral live Foundation server composition', () => {
       {
         name: 'release.publish', version: 1, effect: 'commit',
         bindings: ['POST /api/events/current/releases/publish']
+      },
+      {
+        name: 'retry_message_delivery', version: 1, effect: 'commit',
+        bindings: ['POST /api/events/current/communications/deliveries/retry']
       },
       {
         name: 'review.accolade.change', version: 1, effect: 'commit',
@@ -1394,8 +1404,8 @@ describe('ephemeral live Foundation server composition', () => {
     expect(runtime.database.installedSchemaArtifacts).toEqual([]);
     expect(runtime.database.retainedBaseline).toMatchObject({
       status: 'current',
-	  coordinate: { schemaEpoch: 2, sequence: 13 },
-	  migrationId: 'e2_0013_speaker_profiles',
+	  coordinate: { schemaEpoch: 2, sequence: 15 },
+	  migrationId: 'e2_0015_calendar_canonical_state',
       databaseClass: 'ephemeral'
     });
     expect(runtime.database.sqlite.query<{ readonly name: string }, []>(`
@@ -4630,6 +4640,73 @@ describe('ephemeral live Foundation server composition', () => {
       if (stored.kind !== 'success') throw new Error(`Payload ${label} store failed.`);
       return stored.data;
     };
+    const templates = organizerMessageTemplatePageOperationResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/communications/templates', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (templates.kind !== 'success') throw new Error('Template list read failed.');
+    const acceptedTemplate = templates.data.rows.find((row) => row.key === 'decision.accepted');
+    if (!acceptedTemplate) throw new Error('Seeded acceptance template missing.');
+    const acceptedTemplateDetail = organizerMessageTemplateDetailOperationResultSchema.parse(
+      await (await runtime.app.request(
+        '/api/events/current/communications/templates/detail'
+          + `?templateId=${encodeURIComponent(acceptedTemplate.revision.templateId)}`,
+        { headers: eventHeaders({ session, correlationId: crypto.randomUUID() }) }
+      )).json()
+    );
+    if (acceptedTemplateDetail.kind !== 'success') {
+      throw new Error('Seeded template detail read failed.');
+    }
+    const authoredContent = await storePayload('template-content', {
+      payloadKind: 'template_content', schemaVersion: 1,
+      value: {
+        kind: 'email/v1',
+        subject: [{ kind: 'text', value: 'Venue update' }],
+        body: {
+          mode: 'composed',
+          blocks: [{ kind: 'paragraph', content: [{ kind: 'text', value: 'The venue changed.' }] }]
+        },
+        plainTextPolicy: 'derive_v1',
+        attachmentSlotKeys: []
+      }
+    });
+    const authoredBindings = await storePayload('template-bindings', {
+      payloadKind: 'template_field_bindings', schemaVersion: 1, value: []
+    });
+    const authoredTemplate = organizerMessageTemplateMutationOperationResultSchema.parse(
+      await effect({
+        runtime,
+        session,
+        path: '/api/events/current/communications/templates/create',
+        key: 'http-send-template-create',
+        body: {
+          templateKey: 'custom.venue-update',
+          templateName: 'Venue update',
+          purposeRevision: acceptedTemplateDetail.data.purposeRevision,
+          contentPayload: authoredContent,
+          fieldBindingsPayload: authoredBindings,
+          renderer: acceptedTemplateDetail.data.renderer,
+          mergeRegistry: acceptedTemplateDetail.data.mergeRegistry
+        },
+        parse: (value) => value
+      })
+    );
+    if (authoredTemplate.kind !== 'success') throw new Error('Template create failed.');
+    expect(authoredTemplate.receipt).toMatchObject({
+      operationName: 'message_template.create', operationVersion: 1
+    });
+    const artifactList = templateArtifactListOperationResultSchema.parse(await (
+      await runtime.app.request('/api/events/current/template-artifacts?kind=message', {
+        headers: eventHeaders({ session, correlationId: crypto.randomUUID() })
+      })
+    ).json());
+    if (artifactList.kind !== 'success') throw new Error('Template artifact list failed.');
+    expect(artifactList.data.artifacts.some((artifact) =>
+      artifact.head.artifactId === authoredTemplate.data.revision.templateId
+        && artifact.current.document.kind === 'message'
+        && artifact.current.document.name === 'Venue update'
+    )).toBe(true);
     const createReadyDraft = async (label: string) => {
       const contentPayload = await storePayload(`content-${label}`, {
         payloadKind: 'message_content',

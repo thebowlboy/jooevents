@@ -23,10 +23,13 @@ function cloudflareManifest(transport: 'workers' | 'rest') {
     adapterKey: `cloudflare.email.${transport}`,
     adapterVersion: 'v1',
     capabilities: {
-      idempotency: 'none', reconciliation: 'none', callbacks: [], inboundReplies: false
+      idempotency: 'none', reconciliation: 'none', callbacks: [],
+      attachments: false, calendarMime: false, inboundReplies: false
     },
     capabilityStatus: {
       transactional_outbound: 'supported',
+      attachments: 'not_supported',
+      calendar_mime: 'not_supported',
       delivery_callbacks: 'not_supported',
       suppression_callbacks: 'not_supported',
       inbound_replies: 'not_enabled'

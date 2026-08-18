@@ -20,9 +20,9 @@ const manifest = finalizeEmailSetupManifest({
   manifestVersion: 1,
   adapterKey: 'cloud.example.rest',
   adapterVersion: 'v1',
-  capabilities: { idempotency: 'none', reconciliation: 'none', callbacks: [], inboundReplies: false },
+  capabilities: { idempotency: 'none', reconciliation: 'none', callbacks: [], attachments: false, calendarMime: false, inboundReplies: false },
   capabilityStatus: {
-    transactional_outbound: 'supported', delivery_callbacks: 'not_supported',
+    transactional_outbound: 'supported', attachments: 'not_supported', calendar_mime: 'not_supported', delivery_callbacks: 'not_supported',
     suppression_callbacks: 'not_supported', inbound_replies: 'not_enabled'
   },
   nonSecretFields: [{ key: 'cloud.account_id', label: 'Account ID', valueKind: 'text', required: true }],

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeSignature } from 'better-auth/crypto';
 import {
+  AIRTABLE_PROJECTION_FEATURE_CONTRIBUTOR,
   createAirtableDirectFeatureContributor,
   createAirtableVerifiedInboxAuthorityResolver,
   RegisteredOperationAirtableInboundPort
@@ -25,6 +26,7 @@ import {
   getCompiledReadOperation,
   resolveOperatorAuthorityPermissionRequirement,
   createApplicationOperationRuntime,
+  createDirectOperationFeatureContributorRegistry,
   createRegisteredAgentActionEligibilityCatalog,
   createRegisteredAgentActionExecutor,
   OperationInputError,
@@ -412,6 +414,7 @@ import {
   SQLiteExternalApiIdempotencyStore,
   SQLiteExternalApiRateLimiter,
   SQLiteAirtableProjectionContributionAdapter,
+  createSQLiteOperationFeatureContributionAdapterRegistry,
   createSQLiteApiKeyEffectDomainRegistration,
   type EphemeralSQLiteRuntime
 } from '@jooevents/persistence';
@@ -5142,12 +5145,16 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
         async publish(wake: { readonly connectionId: string }) { airtableLive?.wake(wake.connectionId); }
       })
     );
+    const featureContributionAdapters = createSQLiteOperationFeatureContributionAdapterRegistry([{
+      contributor: AIRTABLE_PROJECTION_FEATURE_CONTRIBUTOR,
+      adapter: airtableProjectionContribution
+    }]);
     const unitOfWork = new SQLiteEffectUnitOfWorkPort(
       database.sqlite,
       domains,
       effectRecheckSource,
       {},
-      airtableProjectionContribution
+      featureContributionAdapters
     );
     const source = composeOperationRegistryModules([
       apiKeyOperations,
@@ -5218,7 +5225,9 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
         newInvocationId: () => parseInvocationId(crypto.randomUUID())
       },
       unitOfWork,
-      directFeatureContributor: createAirtableDirectFeatureContributor()
+      directFeatureContributors: createDirectOperationFeatureContributorRegistry([
+        createAirtableDirectFeatureContributor()
+      ])
     });
     // ONE public registry behind ONE adapter: the gated intake form read,
     // the ceremony resume read, the two release reads, and the one public

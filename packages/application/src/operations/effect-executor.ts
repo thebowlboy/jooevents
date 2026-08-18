@@ -3,7 +3,6 @@ import {
   effectfulOperationResultSchema,
   operationReceiptRefSchema,
   structuredOutcomeSchema,
-  versionedDefinitionRefSchema,
   type EffectfulOperationResult,
   type StructuredOutcome
 } from '@jooevents/contracts';
@@ -11,6 +10,11 @@ import { canonicalJsonText, encodeCanonicalJson, parseJobId } from '@jooevents/k
 import { z } from 'zod';
 import { OperationExecutionError, OperationInputError, type OperationExecutionPhase } from './executor';
 import { effectOperationIdentitiesEqual } from './effect-identity';
+import {
+  assertDirectOperationFeatureContributorRegistry,
+  createDirectOperationFeatureContributorRegistry,
+  resolveDirectOperationFeatureContributorRegistry
+} from './direct-feature-contributors';
 import {
   consumeAutonomyPreflightDecision,
   executeAutonomyPreflight,
@@ -42,6 +46,7 @@ import type {
   BuildRegisteredJobEffectInvocationInput,
   DirectOperationFeatureContribution,
   DirectOperationFeatureContributor,
+  DirectOperationFeatureContributorRegistry,
   EffectHandlerSnapshot,
   EffectInvocationBuilder,
   EffectInvocationBuilderOptions,
@@ -161,29 +166,15 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   return Boolean(value && (typeof value === 'object' || typeof value === 'function') && typeof (value as { then?: unknown }).then === 'function');
 }
 
-function bindDirectFeatureContributor(
-  candidate: DirectOperationFeatureContributor | undefined
-): DirectOperationFeatureContributor | undefined {
-  if (candidate === undefined) return undefined;
-  const reference = versionedDefinitionRefSchema.safeParse(candidate.reference);
-  if (!reference.success || typeof candidate.contribute !== 'function') {
-    throw new TypeError('direct_operation_feature_contributor_invalid');
-  }
-  return Object.freeze({
-    reference: Object.freeze({ ...reference.data }),
-    contribute: candidate.contribute.bind(candidate)
-  });
-}
-
-function resolveDirectFeatureContribution(input: Readonly<{
-  contributor: DirectOperationFeatureContributor | undefined;
+function resolveDirectFeatureContributions(input: Readonly<{
+  registry: DirectOperationFeatureContributorRegistry | undefined;
   invocation: InternalEffectInvocation;
   canonicalResult: unknown;
   operationLogId: string;
   featureContext?: unknown;
-}>): DirectOperationFeatureContribution | undefined {
-  if (!input.contributor) return undefined;
-  const candidate = input.contributor.contribute(Object.freeze({
+}>): readonly DirectOperationFeatureContribution[] {
+  if (!input.registry) return Object.freeze([]);
+  const candidates = resolveDirectOperationFeatureContributorRegistry(input.registry, Object.freeze({
     operation: Object.freeze({
       name: input.invocation.operation.definition.name,
       version: input.invocation.operation.definition.version
@@ -203,24 +194,22 @@ function resolveDirectFeatureContribution(input: Readonly<{
       ? {}
       : { featureContext: structuredClone(input.featureContext) })
   }));
-  if (isPromiseLike(candidate)) {
-    throw new TypeError('direct operation feature contributor returned a promise');
-  }
-  if (candidate === undefined) return undefined;
-  let canonicalText: string;
-  try {
-    canonicalText = canonicalJsonText(candidate);
-  } catch (error) {
-    throw new OperationExecutionError('contribution', error);
-  }
-  if (new TextEncoder().encode(canonicalText).byteLength > 262_144) {
-    throw new OperationExecutionError('contribution');
-  }
-  return deepFreeze({
-    contributor: { ...input.contributor.reference },
-    operationLogId: input.operationLogId,
-    value: JSON.parse(canonicalText) as unknown
-  });
+  return Object.freeze(candidates.map((candidate) => {
+    let canonicalText: string;
+    try {
+      canonicalText = canonicalJsonText(candidate.value);
+    } catch (error) {
+      throw new OperationExecutionError('contribution', error);
+    }
+    if (new TextEncoder().encode(canonicalText).byteLength > 262_144) {
+      throw new OperationExecutionError('contribution');
+    }
+    return deepFreeze({
+      contributor: { ...candidate.reference },
+      operationLogId: input.operationLogId,
+      value: JSON.parse(canonicalText) as unknown
+    });
+  }));
 }
 
 async function phase<Value>(name: OperationExecutionPhase, execute: () => Value | Promise<Value>): Promise<Value> {
@@ -580,7 +569,7 @@ async function executeDirectAudited(input: {
   readonly unitOfWork: EffectUnitOfWorkPort;
   readonly registryDigestSha256: string;
   readonly newOperationLogId: () => string;
-  readonly featureContributor: DirectOperationFeatureContributor | undefined;
+  readonly featureContributorRegistry: DirectOperationFeatureContributorRegistry | undefined;
   readonly featureContext?: unknown;
 }): Promise<EffectfulOperationResult> {
   const { invocation } = input;
@@ -717,9 +706,9 @@ async function executeDirectAudited(input: {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(logId)) {
       throw new OperationExecutionError('operation_log');
     }
-    const featureContribution = await phase('feature_contribution', () =>
-      resolveDirectFeatureContribution({
-        contributor: input.featureContributor,
+    const featureContributions = await phase('feature_contribution', () =>
+      resolveDirectFeatureContributions({
+        registry: input.featureContributorRegistry,
         invocation,
         canonicalResult: canonical,
         operationLogId: logId,
@@ -752,13 +741,15 @@ async function executeDirectAudited(input: {
       occurredAt: readyContext.context.receivedAt,
       correlationId: readyContext.context.correlationId
     })));
-    if (featureContribution) {
+    if (featureContributions.length > 0) {
       if (!unitOfWork.applyFeatureContribution) {
         throw new OperationExecutionError('feature_contribution');
       }
-      await phase('feature_contribution', () =>
-        unitOfWork.applyFeatureContribution!(featureContribution)
-      );
+      for (const featureContribution of featureContributions) {
+        await phase('feature_contribution', () =>
+          unitOfWork.applyFeatureContribution!(featureContribution)
+        );
+      }
     }
     return terminal.result;
   }));
@@ -792,9 +783,19 @@ export function createEffectOperationExecutor(input: {
   readonly unitOfWork: EffectUnitOfWorkPort;
   readonly newOperationLogId?: () => string;
   readonly directFeatureContributor?: DirectOperationFeatureContributor;
+  readonly directFeatureContributors?: DirectOperationFeatureContributorRegistry;
 }): EffectOperationExecutor {
   const newOperationLogId = input.newOperationLogId ?? newUuidV7;
-  const featureContributor = bindDirectFeatureContributor(input.directFeatureContributor);
+  if (input.directFeatureContributor && input.directFeatureContributors) {
+    throw new TypeError('direct_operation_feature_contributor_configuration_ambiguous');
+  }
+  const featureContributorRegistry = input.directFeatureContributors
+    ?? (input.directFeatureContributor
+      ? createDirectOperationFeatureContributorRegistry([input.directFeatureContributor])
+      : undefined);
+  if (featureContributorRegistry) {
+    assertDirectOperationFeatureContributorRegistry(featureContributorRegistry);
+  }
   return Object.freeze({
     async execute(sealed: SealedEffectInvocation) {
       const invocation = sealedInvocations.get(sealed);
@@ -813,7 +814,7 @@ export function createEffectOperationExecutor(input: {
             unitOfWork: input.unitOfWork,
             registryDigestSha256: input.registry.manifestDigestSha256,
             newOperationLogId,
-            featureContributor,
+            featureContributorRegistry,
             ...(directFeatureContexts.has(sealed)
               ? { featureContext: directFeatureContexts.get(sealed) }
               : {})

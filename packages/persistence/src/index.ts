@@ -49,6 +49,7 @@ export * from './sqlite/ephemeral-rebuild';
 export * from './sqlite/migration-artifact';
 export * from './sqlite/migration-manifest';
 export * from './sqlite/communications/delivery-observations';
+export * from './sqlite/calendar-canonical-state';
 export * from './sqlite/migration-runner';
 export * from './sqlite/release-floor';
 export * from './sqlite/schema-snapshot';

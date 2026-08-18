@@ -79,6 +79,36 @@ function applicationRows(database: Database, selectedTableNames?: readonly strin
 }
 
 describe('SQLite epoch-2 retained-baseline runner', () => {
+  test('pins indexed access plans for the five S13 communication capabilities', () => {
+    const database = openSQLite(':memory:');
+    opened.push(database);
+    const detail = (sql: string) => database.sqlite.query<{ detail: string }, []>(
+      `EXPLAIN QUERY PLAN ${sql}`
+    ).all().map((row) => row.detail).join('\n');
+    const plans = [
+      detail(`SELECT * FROM communication_delivery_observations
+        WHERE delivery_id='delivery' ORDER BY provider_observed_at_ms,ingested_at_ms,observation_id`),
+      detail(`SELECT observation_id FROM communication_delivery_observations
+        WHERE provider_connection_revision_id='connection' AND provider_event_key='event'`),
+      detail(`SELECT state FROM communication_current_address_suppressions
+        WHERE workspace_id='workspace' AND lookup_profile='profile'
+          AND lookup_version=1 AND lookup_keyed_value='fingerprint'`),
+      detail(`SELECT observation_id FROM communication_delivery_observations
+        WHERE workspace_id='workspace' AND event_id='event'
+          AND observation_kind='permanent_bounce'
+        ORDER BY ingested_at_ms DESC,observation_id DESC`),
+      detail(`SELECT receipt_id FROM organizer_communication_authoring_receipt_links
+        WHERE workspace_id='workspace' AND event_id='event'
+          AND template_id='template' AND entity_version=1`)
+    ];
+    expect(plans[0]).toContain('communication_delivery_observations_timeline');
+    expect(plans[1]).toContain('SEARCH communication_delivery_observations');
+    expect(plans[2]).toContain('SEARCH communication_current_address_suppressions');
+    expect(plans[3]).toContain('communication_delivery_observations_attention');
+    expect(plans[4]).toContain('SEARCH organizer_communication_authoring_receipt_links');
+    for (const plan of plans) expect(plan).not.toMatch(/\bSCAN\b/u);
+  });
+
   test('migrates an empty ephemeral database once with a terminal receipt', () => {
     const database = openSQLite(':memory:');
     opened.push(database);
@@ -99,6 +129,145 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
       checksum_sha256: migration.checksumSha256
     })));
     expect(database.sqlite.query('PRAGMA foreign_key_check').all()).toEqual([]);
+  });
+
+  test('rebuilds populated communication receipts without losing the inbound timeline join', () => {
+    const path = temporaryDatabasePath();
+    let schemaPass = 0;
+    const held = new Database(path, { create: true, strict: true });
+    held.exec('PRAGMA foreign_keys = ON;');
+    expectFoundationError(() => migrateOrValidateSQLite({
+      database: held,
+      artifacts: loadSQLiteFoundationArtifacts(),
+      policy: 'apply',
+      databaseClass: 'retained_development',
+      isMemory: false,
+      fault(point) {
+        if (point === 'after_schema_before_receipt' && (schemaPass += 1) === 13) {
+          throw new Error('hold_before_e2_0013_receipt');
+        }
+      }
+    }), 'migration_transaction_failed');
+    held.close();
+
+    const workspaceId = '019c1df7-86b5-769b-bba4-610000000001';
+    const eventId = '019c1df7-86b5-769b-bba4-610000000002';
+    const userId = '019c1df7-86b5-769b-bba4-610000000003';
+    const purposeId = '019c1df7-86b5-769b-bba4-610000000004';
+    const purposeRevisionId = '019c1df7-86b5-769b-bba4-610000000005';
+    const draftId = '019c1df7-86b5-769b-bba4-610000000006';
+    const receiptId = '019c1df7-86b5-769b-bba4-610000000007';
+    const timelineId = '019c1df7-86b5-769b-bba4-610000000008';
+    const principal = `workspace_user:${userId}`;
+    const seed = new Database(path, { create: false, strict: true });
+    seed.exec('PRAGMA foreign_keys = ON; BEGIN IMMEDIATE;');
+    seed.query(`INSERT INTO workspaces (id,name,state,created_at,updated_at,version)
+      VALUES (?,'Receipt rebuild workspace','active',0,0,1)`).run(workspaceId);
+    seed.query(`INSERT INTO users (id,status,display_name,created_at,updated_at,version)
+      VALUES (?,'active','Receipt rebuild owner',0,0,1)`).run(userId);
+    seed.query(`INSERT INTO event_spine_workspace_sets (workspace_id,version,current_event_id)
+      VALUES (?,1,NULL)`).run(workspaceId);
+    seed.query(`INSERT INTO event_spine_heads (
+      workspace_id,id,name,timezone,start_date,end_date,version,created_by_user_id,
+      created_at_ms,create_plan_digest_sha256
+    ) VALUES (?,?,'Receipt rebuild event','UTC','2026-09-01','2026-09-02',1,?,0,?)`)
+      .run(workspaceId, eventId, userId, '1'.repeat(64));
+    seed.query('INSERT INTO event_spine_scope_roots (workspace_id,event_id) VALUES (?,?)')
+      .run(workspaceId, eventId);
+    seed.query(`INSERT INTO communication_purposes (
+      workspace_id,event_id,purpose_id,purpose_key,lifecycle,current_revision_id
+    ) VALUES (?,?,?,'migration.receipt','active',?)`)
+      .run(workspaceId, eventId, purposeId, purposeRevisionId);
+    seed.query(`INSERT INTO communication_purpose_revisions (
+      workspace_id,event_id,purpose_id,purpose_key,revision_id,revision_number,
+      digest_sha256,label,communication_class,policy_digest_sha256,description,
+      allowed_audience_sources_json
+    ) VALUES (?,?,?,'migration.receipt',?,1,?,'Migration receipt','transactional',?,
+      'Migration receipt parity fixture','[]')`)
+      .run(workspaceId, eventId, purposeId, purposeRevisionId, '2'.repeat(64), '3'.repeat(64));
+    seed.query(`INSERT INTO communication_drafts (
+      workspace_id,event_id,draft_id,owner_key,version,state,channel,purpose_revision_id,
+      template_revision_id,authoring_state,content_payload_ref_id,audience_payload_ref_id,
+      subject,provenance_json,discard_reason_code,created_at,updated_at
+    ) VALUES (?,?,?, ?,1,'active','email',?,NULL,'uninitialized',
+      'je.communication.message-draft.empty-content/v1',
+      'je.communication.message-draft.empty-audience/v1',NULL,'{}',NULL,?,?)`)
+      .run(workspaceId, eventId, draftId, principal, purposeRevisionId,
+        '2026-08-18T00:00:00.000Z', '2026-08-18T00:00:00.000Z');
+    const result = canonicalJsonText({
+      kind: 'success', data: {}, receipt: {
+        id: receiptId, operationName: 'create_message_draft', operationVersion: 1
+      }
+    });
+    seed.query(`INSERT INTO operation_log (
+      id,operation_name,operation_version,registry_digest_sha256,surface,actor_json,
+      authority_principal_key,workspace_id,event_id,subjects_json,summary,occurred_at_ms,
+      correlation_id,scope_partition_key,idempotency_verifier_profile_key,
+      idempotency_verifier_profile_version,idempotency_key_verifier,request_hash,result_json
+    ) VALUES (?,'create_message_draft',1,?,'operator_http',?, ?,?,?,?,
+      'Created migration receipt fixture',0,?,?, 'test.idempotency',1,?,?,?)`)
+      .run(receiptId, '4'.repeat(64), canonicalJsonText({ kind: 'workspace_user', userId }),
+        principal, workspaceId, eventId,
+        canonicalJsonText([{ type: 'communication_draft', id: draftId }]),
+        '019c1df7-86b5-769b-bba4-610000000009', '5'.repeat(64),
+        '6'.repeat(64), '7'.repeat(64), result);
+    seed.query(`INSERT INTO organizer_communication_authoring_receipt_links (
+      receipt_id,workspace_id,event_id,authority_principal_key,operation_name,
+      operation_version,payload_ref_id,draft_id,entity_version,request_hash,occurred_at_ms
+    ) VALUES (?,?,?,?,'create_message_draft',1,NULL,?,1,?,0)`)
+      .run(receiptId, workspaceId, eventId, principal, draftId, '7'.repeat(64));
+    seed.query(`INSERT INTO organizer_communication_authoring_timeline (
+      timeline_id,receipt_id,occurred_at_ms,source_kind
+    ) VALUES (?,?,0,'operation_receipt')`).run(timelineId, receiptId);
+    seed.exec('COMMIT;');
+    seed.close();
+
+    const migrated = openSQLite(path, { migrationPolicy: 'apply' });
+    opened.push(migrated);
+    expect(migrated.sqlite.query<{
+      timeline_id: string; receipt_id: string; draft_id: string; template_id: string | null;
+    }, []>(`
+      SELECT t.timeline_id,t.receipt_id,r.draft_id,r.template_id
+        FROM organizer_communication_authoring_timeline t
+        JOIN organizer_communication_authoring_receipt_links r ON r.receipt_id=t.receipt_id
+    `).all()).toEqual([{ timeline_id: timelineId, receipt_id: receiptId, draft_id: draftId, template_id: null }]);
+    expect(migrated.sqlite.query('PRAGMA foreign_key_check').all()).toEqual([]);
+  });
+
+  test('upgrades every supported epoch-2 predecessor floor through S15', () => {
+    for (const sequence of [6, 7, 8, 9, 10, 11, 12] as const) {
+      const path = temporaryDatabasePath();
+      let schemaPass = 0;
+      const held = new Database(path, { create: true, strict: true });
+      held.exec('PRAGMA foreign_keys = ON;');
+      expectFoundationError(() => migrateOrValidateSQLite({
+        database: held,
+        artifacts: loadSQLiteFoundationArtifacts(),
+        policy: 'apply',
+        databaseClass: 'retained_development',
+        isMemory: false,
+        fault(point) {
+          if (point === 'after_schema_before_receipt' && (schemaPass += 1) === sequence + 1) {
+            throw new Error(`hold_after_e2_${String(sequence).padStart(4, '0')}`);
+          }
+        }
+      }), 'migration_transaction_failed');
+      held.close();
+
+      const upgraded = openSQLite(path, { migrationPolicy: 'apply' });
+      expect(upgraded.migration).toMatchObject({
+        status: 'applied',
+        migrationId: 'e2_0015_calendar_canonical_state',
+        coordinate: { schemaEpoch: 2, sequence: 15 }
+      });
+      expect(upgraded.sqlite.query<{ sequence: number }, []>(`
+        SELECT sequence FROM schema_migrations WHERE schema_epoch=2 ORDER BY sequence
+      `).all().map((row) => row.sequence)).toEqual(
+        SQLITE_MIGRATION_MANIFEST.migrations.map((migration) => migration.sequence)
+      );
+      expect(upgraded.sqlite.query('PRAGMA foreign_key_check').all()).toEqual([]);
+      upgraded.sqlite.close();
+    }
   });
 
   test('upgrades retained Sessions and backfills one lineup entry per person', () => {
@@ -261,8 +430,8 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
     opened.push(upgraded);
     expect(upgraded.migration).toMatchObject({
       status: 'applied',
-      migrationId: 'e2_0013_speaker_profiles',
-      coordinate: { schemaEpoch: 2, sequence: 13 }
+      migrationId: 'e2_0015_calendar_canonical_state',
+      coordinate: { schemaEpoch: 2, sequence: 15 }
     });
     expect(upgraded.sqlite.query<{ slot_kind: string; item_id: string; version: number }, []>(`
       SELECT slot_kind,item_id,version FROM session_program_reference_slots
@@ -438,8 +607,8 @@ describe('SQLite epoch-2 retained-baseline runner', () => {
     const migrated = openSQLite(path, { migrationPolicy: 'apply' });
     opened.push(migrated);
     expect(migrated.migration).toMatchObject({
-      status: 'applied', migrationId: 'e2_0013_speaker_profiles',
-      coordinate: { schemaEpoch: 2, sequence: 13 }
+      status: 'applied', migrationId: 'e2_0015_calendar_canonical_state',
+      coordinate: { schemaEpoch: 2, sequence: 15 }
     });
     expect(migrated.sqlite.query<{ readonly expires_at_ms: number | null }, [string]>(
       'SELECT expires_at_ms FROM api_keys WHERE api_key_id = ?'

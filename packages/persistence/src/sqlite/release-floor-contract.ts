@@ -90,7 +90,7 @@ export const SQLITE_E2_S11_RELEASE_FLOOR: SQLiteReleaseFloor = Object.freeze({
   minimumRunnerVersion: 2
 });
 
-/** Current terminal floor; sequences 6 through 11 remain supported predecessors. */
+/** Supported predecessor floor retained for forward upgrade compatibility. */
 export const SQLITE_E2_S12_RELEASE_FLOOR: SQLiteReleaseFloor = Object.freeze({
   releaseFloorId: 'sqlite-e2-s12',
   terminalMigration: Object.freeze({
@@ -103,7 +103,7 @@ export const SQLITE_E2_S12_RELEASE_FLOOR: SQLiteReleaseFloor = Object.freeze({
   minimumRunnerVersion: 2
 });
 
-/** Current terminal floor; sequences 6 through 12 remain supported predecessors. */
+/** Supported predecessor floor retained for forward upgrade compatibility. */
 export const SQLITE_E2_S13_RELEASE_FLOOR: SQLiteReleaseFloor = Object.freeze({
   releaseFloorId: 'sqlite-e2-s13',
   terminalMigration: Object.freeze({
@@ -113,5 +113,31 @@ export const SQLITE_E2_S13_RELEASE_FLOOR: SQLiteReleaseFloor = Object.freeze({
   }),
   expectedApplicationFingerprint: '9736ab6b751b4d35f4be77f2e0e0059cd1887c67e9143c166ad273615d42d32e',
   expectedFullFingerprint: '70370395491758d3fb53aeda10a4425f88bcf6bce18952e136cab05ba3f32868',
+  minimumRunnerVersion: 2
+});
+
+/** Supported predecessor floor retained for forward upgrade compatibility. */
+export const SQLITE_E2_S14_RELEASE_FLOOR: SQLiteReleaseFloor = Object.freeze({
+  releaseFloorId: 'sqlite-e2-s14',
+  terminalMigration: Object.freeze({
+    migrationId: 'e2_0014_communication_delivery_observations',
+    schemaEpoch: 2,
+    sequence: 14
+  }),
+  expectedApplicationFingerprint: '89aa1a3b29212ebb2a9b25a5cb10bd14da48a25ecccaa7296ec9a0d1f98fb5bc',
+  expectedFullFingerprint: 'e249e53eaabd0eb24369b8b2207b2d063ea114ff06fe118e441e656f24b51bcc',
+  minimumRunnerVersion: 2
+});
+
+/** Current terminal floor; sequences 6 through 14 remain supported predecessors. */
+export const SQLITE_E2_S15_RELEASE_FLOOR: SQLiteReleaseFloor = Object.freeze({
+  releaseFloorId: 'sqlite-e2-s15',
+  terminalMigration: Object.freeze({
+    migrationId: 'e2_0015_calendar_canonical_state',
+    schemaEpoch: 2,
+    sequence: 15
+  }),
+  expectedApplicationFingerprint: '997a47e2f33a8eeede0e9f502cda6122bf4301076eb54ccd1634c64629b6ef82',
+  expectedFullFingerprint: 'c984fa161ccd07ba46aeab843ffadfc2fb5f82a88daee873812518236c52a5e1',
   minimumRunnerVersion: 2
 });

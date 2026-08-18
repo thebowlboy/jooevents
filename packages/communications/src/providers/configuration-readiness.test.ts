@@ -27,7 +27,8 @@ import { createOutboundEmailProviderRegistry } from './registry';
 const digest = 'a'.repeat(64);
 const createdAt = '2026-08-13T09:00:00.000Z';
 const capabilities: ProviderCapabilities = {
-  idempotency: 'none', reconciliation: 'none', callbacks: [], inboundReplies: false
+  idempotency: 'none', reconciliation: 'none', callbacks: [],
+  attachments: false, calendarMime: false, inboundReplies: false
 };
 const manifest = finalizeEmailSetupManifest({
   contractVersion: 1,
@@ -40,6 +41,8 @@ const manifest = finalizeEmailSetupManifest({
   capabilities,
   capabilityStatus: {
     transactional_outbound: 'supported',
+    attachments: 'not_supported',
+    calendar_mime: 'not_supported',
     delivery_callbacks: 'not_supported',
     suppression_callbacks: 'not_supported',
     inbound_replies: 'not_enabled'

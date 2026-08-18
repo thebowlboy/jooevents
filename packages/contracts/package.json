@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./accelevents-export": "./src/accelevents-export.ts",
+    "./calendar": "./src/calendar.ts",
     "./communications/organizer": "./src/communications/organizer.ts",
     "./deadlines": "./src/deadlines.ts",
     "./field-registry": "./src/field-registry.ts",

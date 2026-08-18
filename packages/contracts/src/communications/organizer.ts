@@ -812,6 +812,7 @@ export const organizerMessagePreviewRecipientRowSchema = z.discriminatedUnion('s
 
 export const organizerRenderedAttachmentSchema = z.strictObject({
   slotKey: organizerCommunicationStableKeySchema,
+  contentBytesRef: organizerCommunicationOpaqueIdSchema,
   filename: canonicalSingleLine(512),
   mediaType: canonicalSingleLine(160),
   byteLength: z.number().int().nonnegative().safe(),

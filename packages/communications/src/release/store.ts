@@ -10,6 +10,8 @@ import type { OutboundEmailEnvelopeResolver } from '../delivery/worker';
 import {
   computeReviewedEmailEnvelopeDigestSha256,
   parseEmailAddress,
+  type ImmutableEmailAttachment,
+  type ImmutableEmailCalendarPart,
   type ImmutableEmailEnvelope
 } from '../providers/port';
 
@@ -22,8 +24,7 @@ const emailAddressSchema = z.string().transform((value, context) => {
   }
 });
 
-const envelopeSchema: z.ZodType<ImmutableEmailEnvelope> = z.strictObject({
-  contractVersion: z.literal(1),
+const envelopeBaseSchema = {
   from: z.strictObject({
     address: emailAddressSchema,
     displayName: z.string().min(1).max(200).optional()
@@ -40,7 +41,32 @@ const envelopeSchema: z.ZodType<ImmutableEmailEnvelope> = z.strictObject({
     name: z.string().min(1).max(64),
     value: z.string().max(16_384)
   })).max(128)
-}) as z.ZodType<ImmutableEmailEnvelope>;
+} as const;
+
+const contentReferenceSchema = z.strictObject({
+  contentBytesRef: providerOpaqueIdSchema,
+  filename: z.string().min(1).max(512),
+  byteLength: z.number().int().nonnegative().safe(),
+  contentSha256: providerSha256Schema
+});
+
+const attachmentSchema = contentReferenceSchema.extend({
+  mediaType: z.string().min(3).max(160),
+  disposition: z.enum(['attachment', 'inline']),
+  contentId: z.string().min(1).max(512).optional()
+});
+
+const envelopeSchema: z.ZodType<ImmutableEmailEnvelope> = z.discriminatedUnion('contractVersion', [
+  z.strictObject({ contractVersion: z.literal(1), ...envelopeBaseSchema }),
+  z.strictObject({
+    contractVersion: z.literal(2),
+    ...envelopeBaseSchema,
+    attachments: z.array(attachmentSchema).max(10),
+    calendarPart: contentReferenceSchema.extend({
+      method: z.enum(['REQUEST', 'CANCEL'])
+    }).optional()
+  })
+]) as z.ZodType<ImmutableEmailEnvelope>;
 
 /**
  * One immutable reviewed release per recipient. It is keyed by its opaque
@@ -129,7 +155,15 @@ function deepFreezeRelease(release: CommunicationMessageRelease): CommunicationM
       ...(release.envelope.replyTo === undefined
         ? {}
         : { replyTo: Object.freeze({ ...release.envelope.replyTo }) }),
-      headers: Object.freeze(release.envelope.headers.map((header) => Object.freeze({ ...header })))
+      headers: Object.freeze(release.envelope.headers.map((header) => Object.freeze({ ...header }))),
+      ...(release.envelope.contractVersion === 1 ? {} : {
+        attachments: Object.freeze(release.envelope.attachments.map((attachment) =>
+          Object.freeze({ ...attachment })
+        )),
+        ...(release.envelope.calendarPart === undefined ? {} : {
+          calendarPart: Object.freeze({ ...release.envelope.calendarPart })
+        })
+      })
     })
   });
 }
@@ -200,11 +234,13 @@ export function buildCommunicationMessageRelease(input: {
   readonly subject: string;
   readonly textBody: string;
   readonly htmlBody?: string;
+  readonly attachments?: readonly ImmutableEmailAttachment[];
+  readonly calendarPart?: ImmutableEmailCalendarPart;
   readonly createdAt: string;
 }): CommunicationMessageRelease {
   const sender = communicationSenderPresentationSchema.parse(input.sender);
   const envelope: ImmutableEmailEnvelope = Object.freeze({
-    contractVersion: 1,
+    contractVersion: 2,
     from: Object.freeze({
       address: sender.fromAddress,
       ...(sender.fromDisplayName === undefined ? {} : { displayName: sender.fromDisplayName })
@@ -216,7 +252,13 @@ export function buildCommunicationMessageRelease(input: {
     subject: input.subject,
     textBody: input.textBody,
     ...(input.htmlBody === undefined ? {} : { htmlBody: input.htmlBody }),
-    headers: Object.freeze([])
+    headers: Object.freeze([]),
+    attachments: Object.freeze((input.attachments ?? []).map((attachment) =>
+      Object.freeze({ ...attachment })
+    )),
+    ...(input.calendarPart === undefined ? {} : {
+      calendarPart: Object.freeze({ ...input.calendarPart })
+    })
   });
   return parseCommunicationMessageRelease({
     contractVersion: 1,

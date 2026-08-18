@@ -395,11 +395,20 @@ function headFromRow(row: DeliveryHeadRow): OutboundEmailDeliveryHead {
 }
 
 function attemptFromRow(row: AttemptRow): OutboundEmailDeliveryAttempt {
-  const callbacks = JSON.parse(row.callback_capabilities_json) as unknown;
+  const storedCapabilities = JSON.parse(row.callback_capabilities_json) as unknown;
+  const callbacks = Array.isArray(storedCapabilities)
+    ? storedCapabilities
+    : (storedCapabilities as { readonly callbacks?: unknown }).callbacks;
   const capabilities = providerCapabilitiesSchema.parse({
     idempotency: row.idempotency_capability,
     reconciliation: row.reconciliation_capability,
     callbacks,
+    attachments: Array.isArray(storedCapabilities)
+      ? false
+      : (storedCapabilities as { readonly attachments?: unknown }).attachments,
+    calendarMime: Array.isArray(storedCapabilities)
+      ? false
+      : (storedCapabilities as { readonly calendarMime?: unknown }).calendarMime,
     inboundReplies: false
   });
   const safeEvidence = row.safe_evidence_json === null
@@ -692,7 +701,11 @@ export class SQLiteOutboundEmailDeliveryLedger implements OutboundEmailDeliveryL
       `).run(
         attemptId, deliveryId, attemptNumber, attemptKind, adapterKey, adapterVersion,
         capabilities.idempotency, capabilities.reconciliation,
-        canonicalJsonText(capabilities.callbacks), requestDigest,
+        canonicalJsonText({
+          callbacks: capabilities.callbacks,
+          attachments: capabilities.attachments,
+          calendarMime: capabilities.calendarMime
+        }), requestDigest,
         registration.reviewed_message_digest_sha256,
         resendDigest ?? registration.reviewed_envelope_digest_sha256,
         startedAtMs

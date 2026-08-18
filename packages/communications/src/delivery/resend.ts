@@ -52,8 +52,7 @@ export function deriveMarkedResendEmailEnvelope(
   reviewed: ImmutableEmailEnvelope
 ): ImmutableEmailEnvelope {
   computeReviewedEmailEnvelopeDigestSha256(reviewed);
-  const derived: ImmutableEmailEnvelope = Object.freeze({
-    contractVersion: 1,
+  const common = {
     from: freezeParty(reviewed.from),
     to: freezeParty(reviewed.to),
     ...(reviewed.replyTo === undefined ? {} : { replyTo: freezeParty(reviewed.replyTo) }),
@@ -63,7 +62,19 @@ export function deriveMarkedResendEmailEnvelope(
       ? {}
       : { htmlBody: injectHtmlResendNote(reviewed.htmlBody) }),
     headers: Object.freeze(reviewed.headers.map((header) => Object.freeze({ ...header })))
-  });
+  };
+  const derived: ImmutableEmailEnvelope = reviewed.contractVersion === 1
+    ? Object.freeze({ contractVersion: 1, ...common })
+    : Object.freeze({
+      contractVersion: 2,
+      ...common,
+      attachments: Object.freeze(reviewed.attachments.map((attachment) =>
+        Object.freeze({ ...attachment })
+      )),
+      ...(reviewed.calendarPart === undefined ? {} : {
+        calendarPart: Object.freeze({ ...reviewed.calendarPart })
+      })
+    });
   computeReviewedEmailEnvelopeDigestSha256(derived);
   return derived;
 }

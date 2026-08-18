@@ -40,10 +40,14 @@ function setupManifestDraft(): EmailSetupManifestDraft {
       idempotency: 'none' as const,
       reconciliation: 'lookup' as const,
       callbacks: ['delivered', 'suppression'],
+      attachments: false,
+      calendarMime: false,
       inboundReplies: false as const
     },
     capabilityStatus: {
       transactional_outbound: 'supported' as const,
+      attachments: 'not_supported' as const,
+      calendar_mime: 'not_supported' as const,
       delivery_callbacks: 'supported' as const,
       suppression_callbacks: 'supported' as const,
       inbound_replies: 'not_enabled' as const

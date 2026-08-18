@@ -25,6 +25,7 @@ import {
 } from '@jooevents/application';
 import {
   createSafeSchemaManifestRef,
+  engagementHeadSchema,
   PARTICIPANT_PORTAL_OPERATION_SCHEMA_REFS,
   portalEngagementRespondInputSchema,
   portalEngagementRespondResultSchema,
@@ -715,11 +716,17 @@ export const participantEngagementResponseEffectContributionSchema = z.discrimin
 ]);
 
 const respondSuccessContributionSchema = z.strictObject({
-  result: z.strictObject({ kind: z.literal('success'), data: portalEngagementSchema }),
+  result: z.strictObject({
+    kind: z.literal('success'),
+    data: z.strictObject({
+      engagement: portalEngagementSchema,
+      changedEngagements: z.array(engagementHeadSchema).min(1).max(500)
+    })
+  }),
   domain: participantEngagementResponseDomainContributionSchema,
   effectContributions: z.array(participantEngagementResponseEffectContributionSchema).min(1).max(501)
 }).superRefine((contribution, context) => {
-  const data = contribution.result.data;
+  const data = contribution.result.data.engagement;
   const domain = contribution.domain;
   const responses = contribution.effectContributions.filter(
     (child) => child.kind === 'engagement_response'
@@ -733,6 +740,10 @@ const respondSuccessContributionSchema = z.strictObject({
     && domain.respondedEngagementIds.includes(data.id)
     && respondedIds.length === domain.respondedEngagementIds.length
     && respondedIds.every((id, index) => id === domain.respondedEngagementIds[index])
+    && contribution.result.data.changedEngagements.length === respondedIds.length
+    && contribution.result.data.changedEngagements.every(
+      (engagement, index) => engagement.id === respondedIds[index]
+    )
     && new Set(respondedIds).size === respondedIds.length
     && responses.every((child) => domain.response === 'decline'
       ? child.attribution === null
@@ -878,7 +889,13 @@ export function createParticipantPortalRespondPreparation(input: {
         }));
       }
       return Object.freeze({
-        result: Object.freeze({ kind: 'success', data: application.engagement }),
+        result: Object.freeze({
+          kind: 'success',
+          data: Object.freeze({
+            engagement: application.engagement,
+            changedEngagements: Object.freeze(plans.map((plan) => plan.after))
+          })
+        }),
         domain: Object.freeze({
           kind: 'participant_engagement_response',
           preparationHandle: input.ids.newPreparationHandle(),
@@ -987,7 +1004,13 @@ export const participantPortalSnapshotCanonicalResultSchema = z.discriminatedUni
 ]);
 
 export const participantEngagementRespondCanonicalResultSchema = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('success'), data: portalEngagementSchema }),
+  z.strictObject({
+    kind: z.literal('success'),
+    data: z.strictObject({
+      engagement: portalEngagementSchema,
+      changedEngagements: z.array(engagementHeadSchema).min(1).max(500)
+    })
+  }),
   z.strictObject({ kind: z.literal('outcome'), outcome: structuredOutcomeSchema })
 ]);
 
@@ -1374,8 +1397,12 @@ export function createParticipantPortalOperationModule(
           reference: refs.respondProjection,
           canonicalResultSchema: respondCanonical,
           projectedResultSchema: schemas.respondProjected,
-          project: (candidate: unknown) =>
-            participantEngagementRespondCanonicalResultSchema.parse(candidate)
+          project: (candidate: unknown) => {
+            const canonical = participantEngagementRespondCanonicalResultSchema.parse(candidate);
+            return canonical.kind === 'success'
+              ? { kind: 'success' as const, data: canonical.data.engagement }
+              : canonical;
+          }
         }
       ]),
       readOperationalTraceTargets: Object.freeze([{

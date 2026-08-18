@@ -375,6 +375,16 @@ export function materializeDecisionSendBatch(input: {
       toAddress: row.address.classifiedValue.value,
       subject: row.render.subject,
       textBody: row.render.plainText,
+      htmlBody: row.render.sanitizedHtml,
+      attachments: row.render.attachments.map((attachment) => Object.freeze({
+        contentBytesRef: attachment.contentBytesRef,
+        filename: attachment.filename,
+        mediaType: attachment.mediaType,
+        byteLength: attachment.byteLength,
+        contentSha256: attachment.contentSha256,
+        disposition: attachment.disposition,
+        ...(attachment.contentId === undefined ? {} : { contentId: attachment.contentId })
+      })),
       createdAt: input.now
     });
     materialized.push(release);

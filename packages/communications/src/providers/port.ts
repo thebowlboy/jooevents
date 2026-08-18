@@ -52,8 +52,7 @@ export function parseEmailAddress(value: unknown): EmailAddress {
 
 export type EmailHeader = Readonly<{ name: string; value: string }>;
 
-export type ImmutableEmailEnvelope = Readonly<{
-  contractVersion: 1;
+type ImmutableEmailEnvelopeBase = Readonly<{
   from: Readonly<{ address: EmailAddress; displayName?: string }>;
   to: Readonly<{ address: EmailAddress }>;
   replyTo?: Readonly<{ address: EmailAddress; displayName?: string }>;
@@ -62,6 +61,36 @@ export type ImmutableEmailEnvelope = Readonly<{
   htmlBody?: string;
   headers: readonly EmailHeader[];
 }>;
+
+export type ImmutableEmailAttachment = Readonly<{
+  contentBytesRef: string;
+  filename: string;
+  mediaType: string;
+  byteLength: number;
+  contentSha256: string;
+  disposition: 'attachment' | 'inline';
+  contentId?: string;
+}>;
+
+export type ImmutableEmailCalendarPart = Readonly<{
+  method: 'REQUEST' | 'CANCEL';
+  filename: string;
+  contentBytesRef: string;
+  byteLength: number;
+  contentSha256: string;
+}>;
+
+export type ImmutableEmailEnvelopeV1 = ImmutableEmailEnvelopeBase & Readonly<{
+  contractVersion: 1;
+}>;
+
+export type ImmutableEmailEnvelopeV2 = ImmutableEmailEnvelopeBase & Readonly<{
+  contractVersion: 2;
+  attachments: readonly ImmutableEmailAttachment[];
+  calendarPart?: ImmutableEmailCalendarPart;
+}>;
+
+export type ImmutableEmailEnvelope = ImmutableEmailEnvelopeV1 | ImmutableEmailEnvelopeV2;
 
 export type ImmutableEmailSubmission = Readonly<{
   contractVersion: 1;
@@ -307,8 +336,27 @@ function assertHeader(header: EmailHeader, previousName: string | undefined): vo
   }
 }
 
+function assertContentReference(input: Readonly<{
+  contentBytesRef: string;
+  filename: string;
+  byteLength: number;
+  contentSha256: string;
+}>): void {
+  providerOpaqueIdSchema.parse(input.contentBytesRef);
+  providerSha256Schema.parse(input.contentSha256);
+  if (!Number.isSafeInteger(input.byteLength) || input.byteLength < 0) {
+    throw new TypeError('email content byte length is invalid');
+  }
+  if (input.filename.length === 0 || input.filename.length > 512
+      || /[\r\n\u0000]/u.test(input.filename)) {
+    throw new TypeError('email content filename has an invalid bounded shape');
+  }
+}
+
 function validateEnvelope(envelope: ImmutableEmailEnvelope): void {
-  if (envelope.contractVersion !== 1) throw new TypeError('email envelope version is unsupported');
+  if (envelope.contractVersion !== 1 && envelope.contractVersion !== 2) {
+    throw new TypeError('email envelope version is unsupported');
+  }
   parseEmailAddress(envelope.from.address);
   parseEmailAddress(envelope.to.address);
   if (envelope.replyTo !== undefined) parseEmailAddress(envelope.replyTo.address);
@@ -348,6 +396,26 @@ function validateEnvelope(envelope: ImmutableEmailEnvelope): void {
     totalHeaderBytes += new TextEncoder().encode(`${header.name}:${header.value}\r\n`).byteLength;
   }
   if (totalHeaderBytes > 16_384) throw new TypeError('email headers exceed the bounded contract');
+  if (envelope.contractVersion === 2) {
+    if (envelope.attachments.length > 10) throw new TypeError('email envelope has too many attachments');
+    const contentIds = new Set<string>();
+    for (const attachment of envelope.attachments) {
+      assertContentReference(attachment);
+      if (attachment.mediaType.length === 0 || attachment.mediaType.length > 160
+          || !/^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/u.test(attachment.mediaType)) {
+        throw new TypeError('email attachment media type is invalid');
+      }
+      if (attachment.contentId !== undefined) {
+        if (attachment.contentId.length === 0 || attachment.contentId.length > 512
+            || /[<>\r\n\u0000]/u.test(attachment.contentId)
+            || contentIds.has(attachment.contentId)) {
+          throw new TypeError('email attachment content id is invalid');
+        }
+        contentIds.add(attachment.contentId);
+      }
+    }
+    if (envelope.calendarPart !== undefined) assertContentReference(envelope.calendarPart);
+  }
 }
 
 function validateSenderTuple(input: {

@@ -18,6 +18,8 @@ const capabilities: ProviderCapabilities = {
   idempotency: 'none',
   reconciliation: 'none',
   callbacks: [],
+  attachments: false,
+  calendarMime: false,
   inboundReplies: false
 };
 Object.freeze(capabilities.callbacks);
@@ -35,6 +37,8 @@ function registration(adapterKey = 'example.email'): OutboundEmailProviderRegist
     capabilities,
     capabilityStatus: {
       transactional_outbound: 'supported',
+      attachments: 'not_supported',
+      calendar_mime: 'not_supported',
       delivery_callbacks: 'not_supported',
       suppression_callbacks: 'not_supported',
       inbound_replies: 'not_enabled'

@@ -125,7 +125,11 @@ export function createCloudflareEmailSetupAdapter(input: Readonly<{
         });
       }
 
-      if (request.capability !== 'transactional_outbound') {
+      const contentCapability = request.capability === 'attachments'
+        || request.capability === 'calendar_mime';
+      const contentSupported = contentCapability
+        && input.manifest.capabilityStatus[request.capability] === 'supported';
+      if (request.capability !== 'transactional_outbound' && !contentSupported) {
         const code = CLOUDFLARE_EMAIL_EVIDENCE_CODES.readinessNotSupported;
         return providerReadinessAdapterObservationSchema.parse({
           contractVersion: 1,

@@ -335,10 +335,14 @@ export const FAKE_EMAIL_SETUP_MANIFEST = finalizeEmailSetupManifest({
     idempotency: 'provider_lookup',
     reconciliation: 'lookup',
     callbacks: ['delivered', 'delay', 'bounce', 'complaint', 'suppression'],
+    attachments: true,
+    calendarMime: true,
     inboundReplies: false
   },
   capabilityStatus: {
     transactional_outbound: 'supported',
+    attachments: 'supported',
+    calendar_mime: 'supported',
     delivery_callbacks: 'supported',
     suppression_callbacks: 'supported',
     inbound_replies: 'not_enabled'

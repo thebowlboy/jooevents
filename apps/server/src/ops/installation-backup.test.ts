@@ -19,7 +19,7 @@ import {
   LIVE_BUILD_IDENTITY_SCOPE,
   liveBuildIdentityDigestPayload
 } from '@jooevents/contracts/live-build-identity';
-import { openSQLite, statusSQLite } from '@jooevents/persistence';
+import { openSQLite, SQLITE_MIGRATION_MANIFEST, statusSQLite } from '@jooevents/persistence';
 import { loadConfig } from '../config';
 import { flowWorld } from '../testing/flows/flow-world';
 import { runJ2Spine } from '../testing/flows/j2-spine.flow';
@@ -45,6 +45,8 @@ function write(path: string, contents: string, mode = 0o600): void {
 }
 
 function createSyntheticRelease(root: string): void {
+  const currentFloor = SQLITE_MIGRATION_MANIFEST.releaseFloors.at(-1);
+  if (!currentFloor) throw new TypeError('fixture_release_floor_missing');
   const build = join(root, 'apps/web/build-live');
   const paths = [
     '_app/immutable/entry/app.fixture.js',
@@ -74,13 +76,13 @@ function createSyntheticRelease(root: string): void {
   write(join(root, 'jooevents-release.json'), JSON.stringify({
     formatVersion: 1,
     kind: 'jooevents-single-machine',
-		releaseId: 'sqlite-e2-s13-test',
+    releaseId: 'sqlite-current-test',
     sourceRevision: '0'.repeat(40),
     sourceDirty: false,
     bunVersion: Bun.version,
     platform: process.platform,
     architecture: process.arch,
-		sqliteReleaseFloor: 'sqlite-e2-s13',
+    sqliteReleaseFloor: currentFloor.releaseFloorId,
     liveBuildDigestSha256: live.digestSha256,
     sourceFiles,
     sourceDigestSha256: sha256(JSON.stringify(sourceFiles))

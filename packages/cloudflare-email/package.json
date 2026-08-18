@@ -8,7 +8,9 @@
   "scripts": { "check": "tsc --noEmit", "test": "bun test" },
   "dependencies": {
     "@jooevents/communications": "workspace:*",
-    "@jooevents/contracts": "workspace:*"
+    "@jooevents/contracts": "workspace:*",
+    "@jooevents/kernel": "workspace:*",
+    "@noble/hashes": "2.0.1"
   },
   "devDependencies": { "bun-types": "1.3.6", "typescript": "6.0.3" }
 }
