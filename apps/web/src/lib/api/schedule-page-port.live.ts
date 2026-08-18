@@ -9,7 +9,7 @@ import type {
 } from './view-models/program-vocabulary';
 import type { SchedulePlacementOccurrenceView } from './view-models/schedule-placement';
 import type { ScheduleBreakHeadView } from './view-models/schedule-placement';
-import type { SessionHeadView } from './view-models/session';
+import type { SessionCatalogView, SessionHeadView } from './view-models/session';
 import type { ProgramVocabularySettingsPort } from './program-vocabulary-settings-adapter';
 import type { ScheduleAttachCandidate, SchedulePagePort } from './schedule-page-port';
 import type {
@@ -687,12 +687,36 @@ export function createLiveSchedulePagePort(input: {
 		expectedSession: SessionHeadView;
 	}>>();
 
-	async function readCatalog() {
+	/**
+	 * Last successful page-payload slices. Session drawers look these up after
+	 * the board load has already fetched them; mutations keep calling the
+	 * network readers so version fences stay fresh.
+	 */
+	let lastCatalog: SessionCatalogView | null = null;
+	let lastPeopleById: ReadonlyMap<string, SpeakerRow> | null = null;
+	let lastAttribution: readonly ScheduleAttributionSubmission[] | null = null;
+	let catalogInflight: Promise<SessionCatalogView> | null = null;
+	let peopleInflight: Promise<ReadonlyMap<string, SpeakerRow>> | null = null;
+	let attributionInflight: Promise<readonly ScheduleAttributionSubmission[]> | null = null;
+
+	async function fetchCatalog(): Promise<SessionCatalogView> {
 		const result = await input.sessions.readCatalog();
 		if (result.kind !== 'success') {
 			throw new SchedulePageLiveError(readFailure(result, 'session catalog'));
 		}
 		return result.data;
+	}
+
+	async function readCatalog() {
+		if (catalogInflight) return catalogInflight;
+		const run = fetchCatalog().then((data) => {
+			lastCatalog = data;
+			return data;
+		}).finally(() => {
+			if (catalogInflight === run) catalogInflight = null;
+		});
+		catalogInflight = run;
+		return run;
 	}
 
 	async function readPlacements() {
@@ -704,7 +728,7 @@ export function createLiveSchedulePagePort(input: {
 		return result.data;
 	}
 
-	async function readPeopleById(): Promise<ReadonlyMap<string, SpeakerRow>> {
+	async function fetchPeopleById(): Promise<ReadonlyMap<string, SpeakerRow>> {
 		const peopleById = new Map<string, SpeakerRow>();
 		for (const person of await input.speakers.list()) {
 			if (person.personId === undefined) continue;
@@ -734,12 +758,52 @@ export function createLiveSchedulePagePort(input: {
 		return peopleById;
 	}
 
-	async function readAttribution(): Promise<readonly ScheduleAttributionSubmission[]> {
+	async function readPeopleById(): Promise<ReadonlyMap<string, SpeakerRow>> {
+		if (peopleInflight) return peopleInflight;
+		const run = fetchPeopleById().then((data) => {
+			lastPeopleById = data;
+			return data;
+		}).finally(() => {
+			if (peopleInflight === run) peopleInflight = null;
+		});
+		peopleInflight = run;
+		return run;
+	}
+
+	async function fetchAttribution(): Promise<readonly ScheduleAttributionSubmission[]> {
 		const result = await input.attribution.read();
 		if (result.kind !== 'success') {
 			throw new SchedulePageLiveError(readFailure(result, 'session attribution'));
 		}
 		return result.data;
+	}
+
+	async function readAttribution(): Promise<readonly ScheduleAttributionSubmission[]> {
+		if (attributionInflight) return attributionInflight;
+		const run = fetchAttribution().then((data) => {
+			lastAttribution = data;
+			return data;
+		}).finally(() => {
+			if (attributionInflight === run) attributionInflight = null;
+		});
+		attributionInflight = run;
+		return run;
+	}
+
+	function lookupCatalog() {
+		return lastCatalog ?? readCatalog();
+	}
+
+	function lookupPeopleById() {
+		return lastPeopleById ?? readPeopleById();
+	}
+
+	function lookupAttribution() {
+		return lastAttribution ?? readAttribution();
+	}
+
+	function invalidateAttribution() {
+		lastAttribution = null;
 	}
 
 	return Object.freeze({
@@ -787,7 +851,11 @@ export function createLiveSchedulePagePort(input: {
 					input.vocabulary.rooms(),
 					input.settings.get(),
 					input.publication.overview(),
-					readPeopleById()
+					readPeopleById(),
+					// Warm the attribution payload so the speakers drawer is a
+					// lookup against this same load, not a second whole-population
+					// list + Decision fold after the board is already on screen.
+					readAttribution()
 				]);
 				// Geometry is a served derivation, never a guess: the grid draws
 				// exactly when the settings trio and every placement reconcile
@@ -1207,7 +1275,7 @@ export function createLiveSchedulePagePort(input: {
 				}[]
 			> {
 				const [catalog, attribution, peopleById] = await Promise.all([
-					readCatalog(), readAttribution(), readPeopleById()
+					lookupCatalog(), lookupAttribution(), lookupPeopleById()
 				]);
 				const session = catalog.sessions.find((head) => head.id === sessionId);
 				if (!session) return [];
@@ -1227,7 +1295,9 @@ export function createLiveSchedulePagePort(input: {
 					}));
 			},
 			async attachCandidates(sessionId): Promise<ScheduleAttachCandidate[]> {
-				const [attribution, catalog] = await Promise.all([readAttribution(), readCatalog()]);
+				const [attribution, catalog] = await Promise.all([
+					lookupAttribution(), lookupCatalog()
+				]);
 				const sessionTitles = new Map(catalog.sessions.map((session) => [session.id, session.title]));
 				return attribution
 					.filter((row) => row.decision === 'accepted' && row.origin?.sessionId !== sessionId)
@@ -1272,6 +1342,7 @@ export function createLiveSchedulePagePort(input: {
 					attachRecoveries.set(attachRecoveryKey(sessionId, submissionId), {
 						kind: 'move', plan: applied.data.recovery
 					});
+					invalidateAttribution();
 					return { ok: true };
 				}
 				const applied = await input.attributionMutations.apply({
@@ -1293,6 +1364,7 @@ export function createLiveSchedulePagePort(input: {
 					attachRecoveryKey(sessionId, submissionId),
 					{ kind: 'attach', plan: applied.data.recovery }
 				);
+				invalidateAttribution();
 				return { ok: true };
 			},
 			async detachSubmission(sessionId: string, submissionId: string): Promise<MutationOutcome> {
@@ -1324,6 +1396,7 @@ export function createLiveSchedulePagePort(input: {
 							: { ok: false, reason: applyFailure(applied as never, 'submission move').reason };
 					}
 					attachRecoveries.delete(key);
+					invalidateAttribution();
 					return { ok: true };
 				}
 				const session = catalog.sessions.find((head) => head.id === sessionId);
@@ -1340,6 +1413,7 @@ export function createLiveSchedulePagePort(input: {
 					return { ok: false, reason: applyFailure(applied as never, 'submission route').reason };
 				}
 				attachRecoveries.delete(key);
+				invalidateAttribution();
 				return { ok: true };
 			},
 			async addDirectParticipant(): Promise<MutationOutcome> {

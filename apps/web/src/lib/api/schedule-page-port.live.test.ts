@@ -329,6 +329,56 @@ describe('live Schedule page correction boundary', () => {
 		}]);
 	});
 
+	test('session drawers look up the attribution payload warmed by the board load', async () => {
+		const sessionId = id(61);
+		const personId = id(62);
+		const routedId = id(63);
+		let attributionReads = 0;
+		const port = createLiveSchedulePagePort({
+			placements: { source: { kind: 'live' }, readPlacements: async () => ({
+				kind: 'success', data: { scheduleVersion: 1, occurrences: [], breaks: [] }
+			}) } as never,
+			sessions: { source: { kind: 'live' }, readCatalog: async () => ({
+				kind: 'success', data: { sessions: [{
+					id: sessionId, title: 'Opening', plannedDurationMinutes: 30,
+					lifecycle: 'programmed', programTarget: { format: { id: id(43) }, track: null },
+					roster: { participants: [{
+						personId, role: 'speaker', position: 0,
+						source: { kind: 'submission', id: routedId, version: 1 }
+					}] }
+				}] }
+			}) } as never,
+			vocabulary: { source: { kind: 'live' }, rooms: async () => [] } as never,
+			proposals: { source: { kind: 'live' } } as never,
+			attribution: { source: { kind: 'live' }, read: async () => {
+				attributionReads += 1;
+				return { kind: 'success', data: [
+					{
+						id: routedId, title: 'Routed talk', primaryParticipantName: 'Ada',
+						source: 'cfp', decision: 'accepted', origin: { sessionId, kind: 'attached' }
+					}
+				] };
+			} } as never,
+			attributionMutations: { source: { kind: 'live' } } as never,
+			settings: { get: async () => ({}) } as never,
+			publication: { overview: async () => ({ currentProgramRelease: null, surfaceHeads: [] }) } as never,
+			speakers: { list: async () => [{
+				id: id(66), personId, name: 'Ada', email: 'ada@example.test', state: 'confirmed',
+				sessions: [], tasksDone: 0, tasksTotal: 0, overdueTasks: 0,
+				publiclyVisible: true, contentApproved: true, position: 0
+			}], profile: async () => null } as never,
+			templates: {} as never
+		});
+
+		await port.schedule.state();
+		expect(attributionReads).toBe(1);
+		expect(await port.schedule.sessionOrigins(sessionId)).toEqual([{
+			id: routedId, title: 'Routed talk', source: 'cfp', speakerEmails: ['ada@example.test']
+		}]);
+		expect(await port.schedule.attachCandidates(sessionId)).toEqual([]);
+		expect(attributionReads).toBe(1);
+	});
+
 	test('attaches one accepted Submission and restores through its exact receipt evidence', async () => {
 		const sessionId = id(71);
 		const submissionId = id(72);

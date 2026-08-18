@@ -2,7 +2,8 @@ import type {
 	EngagementHeadDto,
 	SpeakerProfileApproveInput,
 	SpeakerProfileReviewQueueDto,
-	StructuredOutcome
+	StructuredOutcome,
+	TaskBoardSnapshotDto
 } from '@jooevents/contracts';
 import type { SafeApiError } from './client';
 import type {
@@ -29,6 +30,7 @@ import type {
 } from './types';
 import type { OrganizerSubmissionsPort } from './view-models/intake-submissions';
 import type { TaskLiveClient, TaskLiveResult } from './operations/tasks-live';
+import { createInFlightSlot, shareInFlight } from './in-flight';
 import { taskAssignmentView, taskDefinitionView } from './mappers/tasks';
 import type {
 	SpeakerProfileReviewQueueLiveReadResult,
@@ -184,7 +186,8 @@ function profileContentApproved(
 export function createLiveSpeakersPagePort(input: {
 	readonly engagements: EngagementsLiveClient;
 	readonly sessions: SessionCatalogCorePort;
-	readonly triage: Pick<SubmissionTriageLiveClient, 'read'>;
+	readonly triage: Pick<SubmissionTriageLiveClient, 'read'> &
+		Partial<Pick<SubmissionTriageLiveClient, 'list'>>;
 	readonly contacts: Pick<OrganizerSubmissionsPort, 'source' | 'contact'>;
 	readonly tasks?: Pick<TaskLiveClient, 'readBoard'>;
 	readonly communications?: {
@@ -197,6 +200,19 @@ export function createLiveSpeakersPagePort(input: {
 		throw new TypeError('live_speakers_source_required');
 	}
 	const newIdempotencyKey = input.newIdempotencyKey ?? defaultIdempotencyKey;
+	const rosterSlot = createInFlightSlot<SpeakerRow[]>();
+	const taskBoardSlot = createInFlightSlot<TaskBoardSnapshotDto>();
+
+	async function readTaskBoard() {
+		if (!input.tasks) return null;
+		return shareInFlight(taskBoardSlot, async () => {
+			const result = await input.tasks!.readBoard();
+			if (result.kind !== 'success') {
+				throw new SpeakersPageLiveError(readFailure(result, 'task board'));
+			}
+			return result.data;
+		});
+	}
 
 	async function readSnapshot() {
 		const result = await input.engagements.readSnapshot();
@@ -246,7 +262,21 @@ export function createLiveSpeakersPagePort(input: {
 		submissionIds: readonly string[]
 	): Promise<ReadonlyMap<string, string>> {
 		const names = new Map<string, string>();
-		for (const batch of chunked(submissionIds, CONTACT_BATCH)) {
+		if (submissionIds.length === 0) return names;
+		let missing = submissionIds;
+		const list = input.triage.list;
+		if (list) {
+			const listed = await list({});
+			if (listed.kind === 'success') {
+				for (const row of listed.data.rows) {
+					const name = row.source.primaryParticipantName;
+					if (name !== null) names.set(row.source.id, name);
+				}
+				missing = submissionIds.filter((submissionId) => !names.has(submissionId));
+				if (missing.length === 0) return names;
+			}
+		}
+		for (const batch of chunked(missing, CONTACT_BATCH)) {
 			await Promise.all(batch.map(async (submissionId) => {
 				const result = await input.triage.read(submissionId);
 				if (result.kind !== 'success') {
@@ -291,12 +321,7 @@ export function createLiveSpeakersPagePort(input: {
 			readSnapshot(),
 			readCatalog(),
 			readLineup(),
-			input.tasks?.readBoard().then((result) => {
-				if (result.kind !== 'success') {
-					throw new SpeakersPageLiveError(readFailure(result, 'task board'));
-				}
-				return result.data;
-			}) ?? Promise.resolve(null),
+			readTaskBoard(),
 			readProfileReview()
 		]);
 		const submissionIds = [...new Set(
@@ -506,7 +531,7 @@ export function createLiveSpeakersPagePort(input: {
 			})
 		}),
 		speakers: Object.freeze({
-			list: listRows,
+			list: () => shareInFlight(rosterSlot, listRows),
 			recordConfirmation: (id: string) => respond(id, 'record_confirmation'),
 			acceptCancellation: (id: string) => respond(id, 'accept_cancellation')
 		}),
@@ -539,16 +564,12 @@ export function createLiveSpeakersPagePort(input: {
 		}),
 		tasks: Object.freeze({
 			async defs(): Promise<TaskDef[]> {
-				if (!input.tasks) return [];
-				const result = await input.tasks.readBoard();
-				if (result.kind !== 'success') throw new SpeakersPageLiveError(readFailure(result, 'task board'));
-				return result.data.definitions.map((entry) => taskDefinitionView(entry));
+				const board = await readTaskBoard();
+				return board?.definitions.map((entry) => taskDefinitionView(entry)) ?? [];
 			},
 			async assignments(): Promise<TaskAssignment[]> {
-				if (!input.tasks) return [];
-				const result = await input.tasks.readBoard();
-				if (result.kind !== 'success') throw new SpeakersPageLiveError(readFailure(result, 'task board'));
-				return result.data.assignments.map((entry) => taskAssignmentView(entry));
+				const board = await readTaskBoard();
+				return board?.assignments.map((entry) => taskAssignmentView(entry)) ?? [];
 			}
 		}),
 		communications: Object.freeze({

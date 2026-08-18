@@ -173,9 +173,25 @@ function fakeSessions(input: {
 	};
 }
 
-function fakeTriage(names: Readonly<Record<string, string | null>>): Pick<SubmissionTriageLiveClient, 'read'> {
+function fakeTriage(
+	names: Readonly<Record<string, string | null>>,
+	counts: { list?: number; read?: number } = {}
+): Pick<SubmissionTriageLiveClient, 'list' | 'read'> {
 	return {
+		async list() {
+			counts.list = (counts.list ?? 0) + 1;
+			return {
+				kind: 'success',
+				data: {
+					rows: Object.entries(names).map(([rowId, name]) => ({
+						source: { id: rowId, primaryParticipantName: name }
+					}))
+				} as never,
+				correlationId
+			};
+		},
 		async read(readId) {
+			counts.read = (counts.read ?? 0) + 1;
 			if (!(readId in names)) return { kind: 'transport_error', error: { code: 'http_404', retryable: false } };
 			return {
 				kind: 'success',
@@ -288,6 +304,50 @@ describe('live tuned Speakers page port', () => {
 				sessions: { ...fakeSessions({}), source: { kind: 'sample', label: 'Sample data', scenario: { key: 'k', name: 'n', description: 'd' } } } as never
 			})
 		).toThrow(TypeError);
+	});
+
+	test('reads names from one triage list instead of per-submission reads', async () => {
+		let reads = 0;
+		const port = composePort({
+			triage: {
+				async list() {
+					return {
+						kind: 'success',
+						data: {
+							rows: [{
+								source: { id: submissionId, primaryParticipantName: 'Amina Diallo' }
+							}],
+							trayTotals: { inbox: 1, set_aside: 0, late: 0, spam: 0 }
+						},
+						correlationId
+					} as never;
+				},
+				async read() {
+					reads += 1;
+					throw new Error('must not read per submission');
+				}
+			}
+		});
+		expect((await port.speakers.list())[0]?.name).toBe('Amina Diallo');
+		expect(reads).toBe(0);
+	});
+
+	test('joins concurrent roster reads onto one projection', async () => {
+		let snapshots = 0;
+		const engagements = fakeEngagements({ served: snapshot([invitedHead()]) });
+		const port = composePort({
+			engagements: {
+				...engagements,
+				async readSnapshot() {
+					snapshots += 1;
+					await Promise.resolve();
+					return { kind: 'success', data: snapshot([invitedHead()]), correlationId };
+				}
+			}
+		});
+		const [first, second] = await Promise.all([port.speakers.list(), port.speakers.list()]);
+		expect(snapshots).toBe(1);
+		expect(first).toEqual(second);
 	});
 
 	test('serves one row per engagement joined with session, name, and disclosed address', async () => {
@@ -405,6 +465,30 @@ describe('live tuned Speakers page port', () => {
 		const [row] = await port.speakers.list();
 		expect(row).toMatchObject({ tasksDone: 1, tasksTotal: 2, overdueTasks: 1 });
 		expect(await port.tasks.assignments()).toHaveLength(2);
+	});
+
+	test('joins concurrent task-board reads onto one snapshot', async () => {
+		let boards = 0;
+		const port = composePort({
+			tasks: {
+				async readBoard() {
+					boards += 1;
+					await Promise.resolve();
+					return {
+						kind: 'success', correlationId,
+						data: {
+							schemaVersion: 1, scope: { workspaceId, eventId },
+							catalogVersion: 1, catalogDigestSha256: digest('a'),
+							definitions: [], assignments: []
+						} as never
+					};
+				}
+			} as never
+		});
+		const [defs, assignments] = await Promise.all([port.tasks.defs(), port.tasks.assignments()]);
+		expect(boards).toBe(1);
+		expect(defs).toEqual([]);
+		expect(assignments).toEqual([]);
 	});
 
 	test('projects a stored cancellation request as cancel_requested and serves its note', async () => {

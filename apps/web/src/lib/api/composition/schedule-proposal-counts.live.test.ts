@@ -6,6 +6,8 @@ import {
 import { mapSubmissionTriageList } from '../mappers/submission-triage';
 import type { SubmissionTriageLiveReadResult } from '../operations/submission-triage-live';
 import type { SubmissionTriagePageView } from '../mappers/submission-triage';
+import { createLiveScheduleAttributionSource } from './schedule-attribution.live';
+import { createScheduleTriagePopulationSource } from './schedule-page-population.live';
 import {
 	createLiveScheduleProposalCountsSource,
 	type DecisionStateReader
@@ -248,8 +250,9 @@ describe('live schedule proposal-counts source', () => {
 			kind: 'success',
 			data: { [sessionA]: 1 }
 		});
-		// Exactly the session-targeting, non-spam candidates were read.
-		expect(asked).toEqual([[id(21), id(22)]]);
+		// The shared population reads Decision heads for the whole proven
+		// page (including spam) so attribution can reuse the same payload.
+		expect(asked).toEqual([[id(21), id(22), id(24)]]);
 	});
 
 	test('a failed decision read makes the count unavailable, never a decided-inclusive number', async () => {
@@ -341,5 +344,50 @@ describe('live schedule proposal-counts source', () => {
 			kind: 'unavailable',
 			reason: 'operation_not_registered'
 		});
+	});
+
+	test('proposal counts and attribution share one list and one Decision fold', async () => {
+		const rows = [
+			row({ value: 21, state: 'inbox', sessionId: sessionA }),
+			row({ value: 22, state: 'set_aside', sessionId: sessionA })
+		];
+		let lists = 0;
+		let decisionReads = 0;
+		const population = createScheduleTriagePopulationSource({
+			list: async () => {
+				lists += 1;
+				await Promise.resolve();
+				return {
+					kind: 'success',
+					data: page(rows, { inbox: 1, set_aside: 1, late: 0, spam: 0 }),
+					correlationId
+				};
+			},
+			decisions: {
+				readState: async (ids) => {
+					decisionReads += 1;
+					return {
+						kind: 'success',
+						data: {
+							schemaVersion: 1,
+							rows: ids.map((submissionId) => ({
+								submissionId, head: null, origin: null
+							}))
+						},
+						correlationId
+					};
+				}
+			}
+		});
+		const counts = createLiveScheduleProposalCountsSource(population);
+		const attribution = createLiveScheduleAttributionSource(population);
+		const [countResult, originResult] = await Promise.all([
+			counts.readOpenProposalCounts(),
+			attribution.read()
+		]);
+		expect(lists).toBe(1);
+		expect(decisionReads).toBe(1);
+		expect(countResult).toEqual({ kind: 'success', data: { [sessionA]: 2 } });
+		expect(originResult.kind).toBe('success');
 	});
 });

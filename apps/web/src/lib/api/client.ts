@@ -42,6 +42,14 @@ function requestCorrelationId(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+/**
+ * Identical in-flight GETs join one fetch. The schedule page (and any other
+ * surface that composes overlapping reads) otherwise repeats the same catalog,
+ * vocabulary, and roster requests in one tick. POSTs, idempotent writes, and
+ * callers that passed an AbortSignal keep their own request.
+ */
+const inflightGets = new Map<string, Promise<ApiResult<unknown>>>();
+
 export async function requestJson<T>(input: {
   readonly path: string;
   readonly schema: z.ZodType<T>;
@@ -53,7 +61,35 @@ export async function requestJson<T>(input: {
   readonly timeoutMs?: number;
 }): Promise<ApiResult<T>> {
   input.signal?.throwIfAborted();
+  const method = input.method ?? 'GET';
+  const coalesce = method === 'GET'
+    && input.body === undefined
+    && input.signal === undefined
+    && input.idempotencyKey === undefined;
+  if (coalesce) {
+    const existing = inflightGets.get(input.path);
+    if (existing) return existing as Promise<ApiResult<T>>;
+  }
 
+  const run = performRequest(input);
+  if (coalesce) {
+    inflightGets.set(input.path, run as Promise<ApiResult<unknown>>);
+    void run.finally(() => {
+      if (inflightGets.get(input.path) === run) inflightGets.delete(input.path);
+    });
+  }
+  return run;
+}
+
+async function performRequest<T>(input: {
+  readonly path: string;
+  readonly schema: z.ZodType<T>;
+  readonly method?: 'GET' | 'POST';
+  readonly body?: unknown;
+  readonly idempotencyKey?: string;
+  readonly signal?: AbortSignal;
+  readonly timeoutMs?: number;
+}): Promise<ApiResult<T>> {
   const parsedIdempotencyKey = input.idempotencyKey === undefined
     ? undefined
     : operationHttpIdempotencyKeySchema.safeParse(input.idempotencyKey);

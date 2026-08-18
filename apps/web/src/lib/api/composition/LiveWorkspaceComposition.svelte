@@ -43,6 +43,7 @@
 	import { createLiveSpeakerRecordPort } from '$lib/api/speaker-record-port.live';
 	import { createLiveFilesPagePort } from '$lib/api/files/files-page-port.live';
 	import type { ReviewPagePort } from '$lib/api/review-page-port';
+	import { createScheduleTriagePopulationSource } from './schedule-page-population.live';
 	import { createLiveScheduleProposalCountsSource } from './schedule-proposal-counts.live';
 	import { createLiveScheduleAttributionSource } from './schedule-attribution.live';
 	import { createEventSettingsLiveClient } from '$lib/api/operations/event-settings-live';
@@ -236,19 +237,20 @@
 	// template catalog for its public-surface door. Construction is synchronous;
 	// the deferred owner is filled before any component can issue a read.
 	let templates: ReturnType<typeof createLiveTemplatesPagePort> | null = null;
+	// Proposal counts and the speaker-drawer attribution fold the same
+	// whole-population triage list and Decision heads. One source serves both
+	// so the schedule page does not list submissions or chunk decisions twice.
+	const schedulePopulation = createScheduleTriagePopulationSource({
+		list: (query, options) => triage.list(query, options),
+		decisions: { readState: (ids, options) => decisionsClient.readState(ids, options) }
+	});
 	const schedule = createLiveSchedulePagePort({
 		calendar: createCalendarNoticesLiveClient({ manifest: initial.manifest }),
 		placements: createSchedulePlacementLivePort({ manifest: initial.manifest }),
 		sessions: sessionCatalog,
 		vocabulary,
-		proposals: createLiveScheduleProposalCountsSource({
-			list: (query, options) => triage.list(query, options),
-			decisions: { readState: (ids, options) => decisionsClient.readState(ids, options) }
-		}),
-		attribution: createLiveScheduleAttributionSource({
-			list: (query, options) => triage.list(query, options),
-			decisions: { readState: (ids, options) => decisionsClient.readState(ids, options) }
-		}),
+		proposals: createLiveScheduleProposalCountsSource(schedulePopulation),
+		attribution: createLiveScheduleAttributionSource(schedulePopulation),
 		attributionMutations: createSessionSubmissionRouteLivePort({ manifest: initial.manifest }),
 		settings: eventSettings,
 		publication: release,

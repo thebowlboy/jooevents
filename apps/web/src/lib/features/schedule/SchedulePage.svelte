@@ -169,12 +169,12 @@
 					})
 				)
 				: Promise.resolve({ rows: [], error: '' });
-			const [next, targets, people, notices] = await Promise.all([
+			const [next, targets, people, nextTracks, nextFormats, notices] = await Promise.all([
 				api.schedule.state(),
 				api.schedule.proposalTargets(),
-				// Graduation and direct entry grow the roster from other surfaces,
-				// so the board's copy travels with every re-read.
 				api.speakers.list(),
+				api.vocab.tracks(),
+				api.vocab.formats(),
 				noticeRead
 			]);
 			// The page owns a snapshot of the returned state so a committed placement
@@ -182,6 +182,8 @@
 			schedule = { ...next, placements: [...next.placements], breaks: [...next.breaks] };
 			proposals = targets;
 			roster = people;
+			tracks = nextTracks;
+			formats = nextFormats;
 			calendarNotices = notices.rows;
 			calendarLoadError = notices.error;
 		} finally {
@@ -202,13 +204,6 @@
 		void api.templates.list().then(({ surfaces }) => {
 			scheduleSurfaceId = surfaces.find((surface) => surface.kind === 'schedule')?.id ?? null;
 		});
-		// The roster travels with the vocabularies: it is what turns a name printed
-		// on a card back into the person the profile belongs to.
-		[tracks, formats, roster] = await Promise.all([
-			api.vocab.tracks(),
-			api.vocab.formats(),
-			api.speakers.list()
-		]);
 		await load();
 	});
 

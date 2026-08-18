@@ -78,6 +78,40 @@ describe('typed API client transport errors', () => {
       .toEqual({ kind: 'error', error: { code: 'internal_error', retryable: false, correlationId } });
   });
 
+  test('joins identical in-flight GETs onto one fetch', async () => {
+    let calls = 0;
+    let release: ((response: Response) => void) | undefined;
+    const gate = new Promise<Response>((resolve) => {
+      release = resolve;
+    });
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { setTimeout, clearTimeout }
+    });
+    globalThis.fetch = Object.assign(async () => {
+      calls += 1;
+      return gate;
+    }, { preconnect: (_url: string | URL) => undefined });
+
+    const first = requestJson({
+      path: '/api/test/read',
+      schema: z.object({ accepted: z.literal(true) })
+    });
+    const second = requestJson({
+      path: '/api/test/read',
+      schema: z.object({ accepted: z.literal(true) })
+    });
+    release?.(new Response(JSON.stringify({ accepted: true }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' }
+    }));
+    expect(await Promise.all([first, second])).toEqual([
+      { kind: 'success', data: { accepted: true } },
+      { kind: 'success', data: { accepted: true } }
+    ]);
+    expect(calls).toBe(1);
+  });
+
   test('puts a validated idempotency credential only in the effect header', async () => {
     const key = 'browser-effect_01';
     let observedHeaders = new Headers();
