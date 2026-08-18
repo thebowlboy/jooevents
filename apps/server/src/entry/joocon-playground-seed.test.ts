@@ -45,6 +45,23 @@ describe('JooCon playground seed timeline', () => {
       declined: 1
     });
 
+    for (const kind of ['schedule', 'speakers', 'forms'] as const) {
+      const presentation = await runtime.app.request(`/api/public/${kind}/presentation`);
+      expect(presentation.status).toBe(200);
+      expect(await presentation.json()).toMatchObject({
+        kind: 'success',
+        data: { schemaVersion: 1, surfaceReleaseNumber: 1, styleSetReleaseNumber: 1 }
+      });
+    }
+    const publicForm = await runtime.app.request(
+      `/api/public/forms/current?formId=${encodeURIComponent(summary.applyFormId)}`
+    );
+    expect(publicForm.status).toBe(200);
+    expect(await publicForm.json()).toMatchObject({
+      kind: 'success',
+      data: { formId: summary.applyFormId, formVersionNumber: 1 }
+    });
+
     const arrivals = times(runtime, `
       SELECT submitted_at_ms AS at FROM submission_arrival_facts ORDER BY submitted_at_ms
     `);

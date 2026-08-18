@@ -20,6 +20,7 @@ import {
   schedulePlacementOperationResultSchema,
   submissionDirectEntryOperationResultSchema,
   taskMutationOperationResultSchema,
+  templateArtifactListOperationResultSchema,
   type FormDefinitionCreateAuthorInput,
   type FormTarget
 } from '@jooevents/contracts';
@@ -305,6 +306,7 @@ export interface PlaygroundSeedSummary {
   readonly confirmedEngagements: number;
   readonly taskDefinitions: number;
   readonly releaseNumber: number;
+  readonly applyFormId: string;
 }
 
 interface SeedPrincipal {
@@ -1070,6 +1072,141 @@ async function publishSchedule(context: SeedContext): Promise<number> {
   return diff.after.number;
 }
 
+async function publishSurface(input: {
+  readonly context: SeedContext;
+  readonly key: 'schedule' | 'speakers' | 'apply';
+  readonly sourceTemplateRevision: {
+    readonly artifactId: string;
+    readonly revisionId: string;
+    readonly revisionNumber: number;
+    readonly digestSha256: string;
+  };
+  readonly manifest: {
+    readonly schemaVersion: 1;
+    readonly heading: string | null;
+    readonly intro: string | null;
+  };
+  readonly styleSetReleaseId: string;
+  readonly formRef: null | { readonly formId: string; readonly formVersionId: string };
+}): Promise<void> {
+  const draft = requireSuccess(releaseReviewDraftOperationResultSchema.parse(await effect({
+    context: input.context,
+    path: '/api/events/current/releases/drafts',
+    key: `joocon-release-surface-${input.key}-draft`,
+    body: {
+      action: 'surface_publish',
+      kind: input.key,
+      sourceTemplateRevision: input.sourceTemplateRevision,
+      manifest: input.manifest,
+      styleSetReleaseId: input.styleSetReleaseId,
+      formRef: input.formRef,
+      expectedSurfaceHeadVersion: null
+    },
+    parse: (value) => value
+  })), `release_surface_${input.key}_draft`);
+  if (draft.data.safeDiff.action !== 'surface_publish') {
+    fail(`release_surface_${input.key}_diff`, draft.data.safeDiff.action);
+  }
+  await publishRelease(input.context, `joocon-release-surface-${input.key}`, draft);
+}
+
+/** Publishes the three stable public presentations through the Release lane. */
+async function publishPublicPresentations(input: {
+  readonly context: SeedContext;
+  readonly applyFormId: string;
+}): Promise<void> {
+  const artifacts = requireSuccess(templateArtifactListOperationResultSchema.parse(await read(
+    input.context,
+    '/api/events/current/template-artifacts',
+    (value) => value
+  )), 'release_template_artifacts_read').data.artifacts;
+  const theme = artifacts.find((artifact) => artifact.current.document.kind === 'theme');
+  if (!theme || theme.current.document.kind !== 'theme') {
+    fail('release_theme_template_missing', null);
+  }
+  const pin = (artifact: typeof theme) => ({
+    artifactId: artifact.head.artifactId,
+    revisionId: artifact.current.revisionId,
+    revisionNumber: artifact.current.number,
+    digestSha256: artifact.current.digestSha256
+  });
+  const surface = (kind: 'schedule' | 'speaker-roster' | 'application-form') => {
+    const artifact = artifacts.find((candidate) =>
+      candidate.current.document.kind === 'surface'
+        && candidate.current.document.surfaceKind === kind
+    );
+    if (!artifact || artifact.current.document.kind !== 'surface') {
+      fail('release_surface_template_missing', kind);
+    }
+    const hero = artifact.current.document.blocks.find((block) => block.type === 'hero');
+    const normalize = (value: string) => {
+      const text = value.normalize('NFC').trim().replace(/\s+/gu, ' ');
+      return text.length === 0 ? null : text;
+    };
+    return Object.freeze({
+      pin: pin(artifact as typeof theme),
+      manifest: Object.freeze({
+        schemaVersion: 1 as const,
+        heading: hero ? normalize(hero.title) : null,
+        intro: hero ? normalize(hero.intro) : null
+      })
+    });
+  };
+
+  const style = requireSuccess(releaseReviewDraftOperationResultSchema.parse(await effect({
+    context: input.context,
+    path: '/api/events/current/releases/drafts',
+    key: 'joocon-release-style-draft',
+    body: {
+      action: 'style_set_publish',
+      sourceTemplateRevision: pin(theme),
+      recipe: theme.current.document.recipe,
+      expectedCurrentStyleSetNumber: null
+    },
+    parse: (value) => value
+  })), 'release_style_draft');
+  if (style.data.safeDiff.action !== 'style_set_publish') {
+    fail('release_style_diff', style.data.safeDiff.action);
+  }
+  await publishRelease(input.context, 'joocon-release-style', style);
+  const styleSetReleaseId = style.data.safeDiff.after.releaseId;
+
+  const schedule = surface('schedule');
+  const speakers = surface('speaker-roster');
+  const apply = surface('application-form');
+  await publishSurface({
+    context: input.context,
+    key: 'schedule',
+    sourceTemplateRevision: schedule.pin,
+    manifest: schedule.manifest,
+    styleSetReleaseId,
+    formRef: null
+  });
+  await publishSurface({
+    context: input.context,
+    key: 'speakers',
+    sourceTemplateRevision: speakers.pin,
+    manifest: speakers.manifest,
+    styleSetReleaseId,
+    formRef: null
+  });
+  const form = await readFormDetail(input.context, input.applyFormId);
+  if (form.currentPublishedVersion === null) {
+    fail('release_apply_form_version_missing', input.applyFormId);
+  }
+  await publishSurface({
+    context: input.context,
+    key: 'apply',
+    sourceTemplateRevision: apply.pin,
+    manifest: apply.manifest,
+    styleSetReleaseId,
+    formRef: {
+      formId: input.applyFormId,
+      formVersionId: form.currentPublishedVersion.id
+    }
+  });
+}
+
 /**
  * Fills a freshly booted ephemeral live runtime with one believable fictional
  * conference. Everything past the two admission seams is written through the
@@ -1237,6 +1374,7 @@ export async function seedJooConPlayground(input: {
     const confirmedEngagements = await confirmEngagements({ context, submissionIdByKey });
     const taskDefinitions = await createSpeakerTasks(context);
     const releaseNumber = await publishSchedule(context);
+    await publishPublicPresentations({ context, applyFormId: generalFormId });
 
     const bootstrapReservation = runtime.database.sqlite.query<
       { readonly status: string }, [string, string]
@@ -1267,7 +1405,8 @@ export async function seedJooConPlayground(input: {
       placements,
       confirmedEngagements,
       taskDefinitions,
-      releaseNumber
+      releaseNumber,
+      applyFormId: generalFormId
     });
   } finally {
     // Failed seeds also relinquish the process-local fixture clock before the
