@@ -17,9 +17,11 @@ import {
 } from '@jooevents/persistence';
 import { safeOperationManifestSchema } from '@jooevents/contracts';
 import { newFileStorageKey } from '@jooevents/files';
+import { parseInstant } from '@jooevents/kernel';
 import { loadConfig, type ConfiguredServerConfig } from '../config';
 import {
   createConfiguredSQLiteLiveRuntime,
+  createConfiguredSQLiteLiveRuntimeForTesting,
   type ConfiguredSQLiteLiveRuntime
 } from './configured-sqlite-live-runtime';
 
@@ -157,6 +159,48 @@ async function drain(bytes: AsyncIterable<Uint8Array>): Promise<Uint8Array> {
 }
 
 describe('configured SQLite live runtime', () => {
+  test('forwards the explicit fixture clock into retained registered operations', async () => {
+    const dataDirectory = directory();
+    initializeDatabase(join(dataDirectory, 'jooevents.sqlite'));
+    const config = configFor(dataDirectory);
+    const occurredAt = '2026-06-15T12:34:56.000Z';
+    const runtime = await createConfiguredSQLiteLiveRuntimeForTesting({
+      config,
+      devFixtureClock: Object.freeze({ now: () => parseInstant(occurredAt) })
+    });
+    runtimes.push(runtime);
+    const owner = await createBrowserSession({
+      runtime,
+      config,
+      email: config.bootstrapOwnerEmail
+    });
+    expect(await provision(runtime, owner)).toMatchObject({ state: 'active' });
+
+    const response = await runtime.app.request('/api/events', {
+      method: 'POST',
+      headers: jsonHeaders({
+        config,
+        cookie: owner.cookie,
+        idempotencyKey: 'fixture-clock-event'
+      }),
+      body: JSON.stringify({
+        expectedEventSetVersion: 1,
+        name: 'Fixture Clock Summit',
+        timezone: 'UTC',
+        startDate: '2026-09-01',
+        endDate: '2026-09-02'
+      })
+    });
+    expect(response.status).toBe(200);
+    expect(runtime.database.sqlite.query<
+      { readonly occurred_at_ms: number }, [string]
+    >(`
+      SELECT occurred_at_ms FROM operation_log
+       WHERE operation_name = ?
+       ORDER BY occurred_at_ms DESC LIMIT 1
+    `).get('event.create')?.occurred_at_ms).toBe(Date.parse(occurredAt));
+  });
+
   test('mounts the complete joined application and preserves retained roots across restart', async () => {
     const dataDirectory = directory();
     const databasePath = join(dataDirectory, 'jooevents.sqlite');

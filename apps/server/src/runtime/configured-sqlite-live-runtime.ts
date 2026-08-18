@@ -1,6 +1,7 @@
 import { lstatSync, mkdirSync, realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { openSQLite, type OpenSQLiteResult } from '@jooevents/persistence';
+import type { Clock } from '@jooevents/kernel';
 import type { ConfiguredServerConfig } from '../config';
 import {
   createRetainedJoinedLiveRuntime,
@@ -43,7 +44,9 @@ function resolveContainedPath(input: {
  * listener; this function owns the opened database after handoff.
  */
 async function createConfiguredSQLiteLiveRuntimeInternal(
-  input: { readonly config: ConfiguredServerConfig } & OptionalConfiguredIntegrations,
+  input: { readonly config: ConfiguredServerConfig } & OptionalConfiguredIntegrations & {
+    readonly devFixtureClock?: Clock;
+  },
   testFixtures: boolean
 ): Promise<ConfiguredSQLiteLiveRuntime> {
   const { config } = input;
@@ -103,7 +106,11 @@ async function createConfiguredSQLiteLiveRuntimeInternal(
     ...(input.airtable === undefined ? {} : { airtable: input.airtable })
   };
   const runtime = testFixtures
-    ? await createRetainedJoinedLiveRuntimeForTesting({ ...composition, devFixtures: true })
+    ? await createRetainedJoinedLiveRuntimeForTesting({
+        ...composition,
+        devFixtures: true,
+        ...(input.devFixtureClock ? { devFixtureClock: input.devFixtureClock } : {})
+      })
     : await createRetainedJoinedLiveRuntime(composition);
   return Object.freeze({
     ...runtime,
@@ -120,7 +127,9 @@ export function createConfiguredSQLiteLiveRuntime(
 
 /** Test-only fixture surface; the production constructor above never enables it. */
 export function createConfiguredSQLiteLiveRuntimeForTesting(
-  input: { readonly config: ConfiguredServerConfig } & OptionalConfiguredIntegrations
+  input: { readonly config: ConfiguredServerConfig } & OptionalConfiguredIntegrations & {
+    readonly devFixtureClock?: Clock;
+  }
 ): Promise<ConfiguredSQLiteLiveRuntime> {
   return createConfiguredSQLiteLiveRuntimeInternal(input, true);
 }
