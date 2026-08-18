@@ -155,6 +155,12 @@ export interface SpeakerRecordSnapshot {
 	readonly deliverables: readonly SpeakerDeliverable[];
 	readonly thread: CommunicationThread | null;
 	readonly submissions: readonly SpeakerRecordSubmission[];
+	/**
+	 * `linked_only` means the live projection can prove the proposals that
+	 * created this person's engagements, but the operator API does not yet
+	 * expose the person key needed to claim that no other proposals exist.
+	 */
+	readonly submissionCoverage?: 'complete' | 'linked_only';
 	/** Present only while they are on the public lineup. */
 	readonly publicCard: SpeakerPublicCard | null;
 	/** What they say about themselves; null when no profile carries their address. */

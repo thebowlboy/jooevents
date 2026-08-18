@@ -36,6 +36,7 @@
 	import { createLiveReviewersPagePort } from '$lib/api/reviewers-page-port.live';
 	import { createLiveSchedulePagePort } from '$lib/api/schedule-page-port.live';
 	import { createLiveSpeakersPagePort } from '$lib/api/speakers-page-port.live';
+	import { createLiveSpeakerRecordPort } from '$lib/api/speaker-record-port.live';
 	import { createLiveFilesPagePort } from '$lib/api/files/files-page-port.live';
 	import type { ReviewPagePort } from '$lib/api/review-page-port';
 	import { createLiveScheduleProposalCountsSource } from './schedule-proposal-counts.live';
@@ -205,14 +206,15 @@
 	// remains absent until its own canonical projection exists; the roster itself
 	// must never be replaced by an invented empty list.
 	let communicationsPage: CommunicationsPagePort | null = null;
+	const intakeSubmissions = createIntakeSubmissionsLivePort({
+		manifest: initial.manifest,
+		contactCapability: { kind: 'available' }
+	});
 	const speakers = createLiveSpeakersPagePort({
 		engagements: engagementsClient,
 		sessions: sessionCatalog,
 		triage,
-		contacts: createIntakeSubmissionsLivePort({
-			manifest: initial.manifest,
-			contactCapability: { kind: 'available' }
-		}),
+		contacts: intakeSubmissions,
 		tasks: taskClient,
 		communications: {
 			thread(personId) {
@@ -326,6 +328,17 @@
 		roster: { list: () => speakers.speakers.list() },
 		vocabulary: { tracks: () => vocabulary.tracks() }
 	});
+	const speakerRecord = createLiveSpeakerRecordPort({
+		speakers,
+		engagements: engagementsClient,
+		tasks: taskClient,
+		taskActions: tasks,
+		schedule,
+		triage,
+		decisions: decisionsClient,
+		intake: intakeSubmissions,
+		files
+	});
 	const pulse = createLivePulsePagePort({
 		sources: {
 			event: eventProgram.event,
@@ -388,6 +401,7 @@
 		reviewers,
 		schedule,
 		speakers,
+		speakerRecord,
 		files,
 		templates,
 		tasks,

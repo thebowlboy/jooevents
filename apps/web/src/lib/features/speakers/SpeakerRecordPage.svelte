@@ -359,7 +359,11 @@
 			<h3 class="section__title" id="record-program">Program content</h3>
 
 			{#if snapshot.submissions.length === 0}
-				<p class="calm">No proposal on this event carries {person.name}’s address.</p>
+				<p class="calm">
+					{snapshot.submissionCoverage === 'linked_only'
+						? `No accepted proposal is linked to this engagement.`
+						: `No proposal on this event carries ${person.name}’s address.`}
+				</p>
 			{:else}
 				<ul class="proposals">
 					{#each snapshot.submissions as proposal (proposal.id)}
@@ -378,6 +382,13 @@
 						</li>
 					{/each}
 				</ul>
+			{/if}
+			{#if snapshot.submissionCoverage === 'linked_only'}
+				<p class="calm">
+					This record knows which proposals created {person.name}’s speaking commitments.
+					Open <a href="/app/submissions">Submissions</a> to check for any other proposals
+					from this person.
+				</p>
 			{/if}
 
 			<h4 class="section__subtitle">Published profile</h4>
@@ -419,9 +430,8 @@
 				     filtered by display name would attribute rows to a person nothing
 				     ever keyed to them, and an invented timeline is worse than none. -->
 				<p class="calm">
-					Nothing about {person.name} is recorded here yet. A per-person history is not
-					served — what has been sent to them is above, and what the whole event has been
-					doing is on <a href="/app/pulse">Pulse</a>.
+					This page does not yet collect every change about {person.name} in one history.
+					Messages are above, and event-wide activity is on <a href="/app/pulse">Pulse</a>.
 				</p>
 			{:else}
 				<ul class="history">

@@ -14,6 +14,7 @@
 	import SchedulePage from '$lib/features/schedule/SchedulePage.svelte';
 	import SettingsPage from '$lib/features/settings/SettingsPage.svelte';
 	import SpeakersPage from '$lib/features/speakers/SpeakersPage.svelte';
+	import SpeakerRecordPage from '$lib/features/speakers/SpeakerRecordPage.svelte';
 	import TemplatesPage from '$lib/features/templates/TemplatesPage.svelte';
 	import TasksPage from '$lib/features/tasks/TasksPage.svelte';
 	import AgentActionsPage from '$lib/features/agent-actions/AgentActionsPage.svelte';
@@ -23,12 +24,10 @@
 	import { ReviewResolutionError } from './review-resolution';
 	import { isSettingsPage, settingsSectionOf, type OperatorPageId } from './operator-pages';
 
-	/*
-	 * `engagementId` is accepted and unused: the record routes hand their path
-	 * parameter to the composition, and live has no record surface to give it
-	 * to yet. Declaring it keeps the two compositions' contracts identical.
-	 */
-	let { area }: { readonly area: OperatorPageId; readonly engagementId?: string } = $props();
+	let {
+		area,
+		engagementId
+	}: { readonly area: OperatorPageId; readonly engagementId?: string } = $props();
 	const ports = useLiveWorkspacePorts();
 
 	/**
@@ -51,13 +50,6 @@
 		review_lineup: 'Line-up',
 		decisions: 'Decisions',
 		speakers: 'Speakers',
-		/*
-		 * No branch below, deliberately: the record's per-assignment submission
-		 * content, per-person history slice, and scoped attention derivation are
-		 * named live increments that nothing serves yet. The area therefore falls
-		 * through to the typed unavailable page rather than rendering a record
-		 * whose sections would be silently empty.
-		 */
 		speaker_record: 'Speaker record',
 		reviewers: 'Reviewers',
 		tasks: 'Tasks',
@@ -129,11 +121,7 @@
 {:else if area === 'speakers'}
 	<SpeakersPage port={ports.speakers} />
 {:else if area === 'speaker_record'}
-	<!-- Visible-but-unavailable with its reason, never sample data and never a
-	     record whose sections would be quietly empty. -->
-	<LiveUnavailablePage
-		title={labels[area]}
-		detail="Nothing serves a speaker's submitted task material, per-person history, or scoped attention in the live workspace yet. Their roster row and engagement state are on Speakers." />
+	<SpeakerRecordPage port={ports.speakerRecord} engagementId={engagementId ?? ''} />
 {:else if area === 'tasks'}
 	<TasksPage port={ports.tasks} />
 {:else if area === 'files'}

@@ -36,6 +36,8 @@ export interface MaterialFileView {
 	readonly attachmentId: string;
 	readonly attachmentVersion: number;
 	readonly assetId: string;
+	/** The exact MediaAsset revision this read projected. */
+	readonly assetVersion: number;
 	readonly name: string;
 	readonly byteSize: number;
 	readonly sizeLabel: string;
@@ -263,6 +265,7 @@ function materialItem(view: FileAttachmentViewDto, origin: MaterialOrigin): Mate
 		attachmentId: attachment.id,
 		attachmentVersion: attachment.version,
 		assetId: asset.id,
+		assetVersion: asset.version,
 		name: asset.displayFilename,
 		byteSize: asset.byteSize,
 		sizeLabel: formatByteSize(asset.byteSize),

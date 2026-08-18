@@ -13,6 +13,7 @@ import type { ReviewersPagePort } from '../reviewers-page-port';
 import type { SchedulePagePort } from '../schedule-page-port';
 import type { SettingsPagePort } from '../settings-page-port';
 import type { SpeakersPagePort } from '../speakers-page-port';
+import type { SpeakerRecordPort } from '../speaker-record-port';
 import type { SubmissionsPagePort } from '../submissions-page-port';
 import type { TemplatesPagePort } from '../templates-page-port';
 import type { TasksPagePort } from '../tasks-page-port';
@@ -55,6 +56,8 @@ export interface LiveWorkspacePorts {
 	readonly schedule: SchedulePagePort;
 	/** The tuned Speakers surface over the live engagement vertical. */
 	readonly speakers: SpeakersPagePort;
+	/** One retained, person-scoped record assembled from the mounted live reads. */
+	readonly speakerRecord: SpeakerRecordPort;
 	/** The Files surface: received uploads, resource shares, and file requests. */
 	readonly files: FilesPagePort;
 	/** Canonical Template artifacts plus the inert assisted-draft loop. */

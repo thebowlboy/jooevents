@@ -45,6 +45,7 @@ function sampleFile(input: {
 		attachmentId: nextId(),
 		attachmentVersion: 1,
 		assetId: nextId(),
+		assetVersion: 1,
 		name: input.name,
 		byteSize: input.byteSize,
 		sizeLabel: formatByteSize(input.byteSize),
