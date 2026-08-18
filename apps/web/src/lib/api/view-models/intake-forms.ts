@@ -72,6 +72,11 @@ export interface OrganizerFormDetailView {
 	readonly form: OrganizerFormDefinitionView;
 	readonly registryPin: FormRegistryPinDto;
 	readonly fields: readonly FormFieldRow[];
+	/** Canonical option identities available to conditional-rule authoring. */
+	readonly ruleOptions: readonly {
+		readonly fieldId: string;
+		readonly options: readonly { readonly id: string; readonly name: string }[];
+	}[];
 	readonly configurationIssues: readonly FormConfigurationIssueDto[];
 	readonly createdAt: string;
 	readonly updatedAt: string;

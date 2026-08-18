@@ -21,4 +21,20 @@ describe('sample tuned Forms page port', () => {
 		expect(surfaceId).toBeTruthy();
 		expect(publication).toEqual({ kind: 'any' });
 	});
+
+	test('retains conditional rules across organizer edits', async () => {
+		const port = createSampleFormsPagePort(sampleWorkspaceGateway.api);
+		const form = (await port.forms.list())[0]!;
+		const rows = await port.forms.fields(form.id);
+		const source = rows?.find((row) => row.field.kind === 'checkbox');
+		const target = rows?.find((row) => row.field.id !== source?.field.id);
+		if (!source || !target) throw new Error('conditional_rule_fixture_missing');
+		const rules = [{
+			key: 'rule-consent-title',
+			condition: { kind: 'checked_is' as const, sourceFieldId: source.field.id, value: true },
+			effect: { kind: 'show' as const, targetFieldIds: [target.field.id] }
+		}];
+		expect(await port.forms.setRules(form.id, rules)).toEqual({ ok: true });
+		expect(await port.forms.rules(form.id)).toEqual(rules);
+	});
 });

@@ -1,9 +1,11 @@
 import type { WorkspaceApi } from './workspace-gateway';
+import type { FormRuleAuthorInput } from '@jooevents/contracts';
 import type { FormPublishPreparation, FormPublishReview, FormsPagePort } from './forms-page-port';
 
 /** Keeps the tuned Forms page on the resettable fixture without entering live's import graph. */
 export function createSampleFormsPagePort(api: WorkspaceApi): FormsPagePort {
 	const pending = new Map<string, FormPublishReview>();
+	const rules = new Map<string, FormRuleAuthorInput[]>();
 	return Object.freeze({
 		templates: Object.freeze({
 			async applicationFormSurfaceId(): Promise<string | null> {
@@ -34,8 +36,22 @@ export function createSampleFormsPagePort(api: WorkspaceApi): FormsPagePort {
 			list: api.forms.list,
 			get: api.forms.get,
 			fields: api.forms.fields,
+			async ruleOptions(id: string) {
+				const rows = await api.forms.fields(id);
+				return rows?.flatMap((row) => row.options?.length
+					? [{ fieldId: row.field.id, options: row.options.map((option) => ({
+						id: option.id, name: option.name
+					})) }]
+					: []) ?? null;
+			},
+			async rules(id: string) { return rules.get(id)?.map((rule) => structuredClone(rule)) ?? []; },
 			create: api.forms.create,
 			setComposition: api.forms.setComposition,
+			async setRules(id: string, next: readonly FormRuleAuthorInput[]) {
+				if (!await api.forms.get(id)) return { ok: false as const, reason: 'This form no longer exists.' };
+				rules.set(id, next.map((rule) => structuredClone(rule)));
+				return { ok: true as const };
+			},
 			setClosing: api.forms.setClosing,
 			setStatus: api.forms.setStatus,
 			async preparePublish(id: string): Promise<FormPublishPreparation> {

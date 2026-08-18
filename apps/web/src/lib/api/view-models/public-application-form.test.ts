@@ -252,6 +252,26 @@ describe('visibility and requiredness under served rules', () => {
 			{ fieldId: fieldIds.title, message: PUBLIC_APPLICATION_REQUIRED_MESSAGE }
 		]);
 	});
+
+	test('a hidden required field stops gating in the shared preview and answer evaluator', () => {
+		const form = servedForm({
+			fields: [
+				field({ kind: 'checkbox', id: fieldIds.remote, position: 0 }),
+				field({ kind: 'text', id: fieldIds.title, position: 1, required: true, maximumLength: 500 })
+			],
+			rules: [{
+				id: id('00c3'), position: 0,
+				condition: { kind: 'checked_is', sourceFieldId: fieldIds.remote, value: true },
+				effect: { kind: 'hide', targetFieldIds: [fieldIds.title] }
+			}]
+		} as Partial<ServedPublicFormDto>);
+		const answers = [{ kind: 'checkbox', fieldId: fieldIds.remote, checked: true } as const];
+		expect(publicApplicationFieldStates(form, answers).get(fieldIds.title)).toEqual({
+			visible: false,
+			required: false
+		});
+		expect(publicApplicationSubmitBlockers(form, answers)).toEqual([]);
+	});
 });
 
 describe('submit gating', () => {

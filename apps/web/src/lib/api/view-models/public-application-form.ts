@@ -43,6 +43,45 @@ function conditionHolds(
 	return checked === condition.value;
 }
 
+type EffectiveField = Pick<ServedPublicFormFieldDto, 'id' | 'initiallyVisible' | 'required'>;
+type EffectiveRule = Pick<ServedPublicFormDto['rules'][number], 'condition' | 'effect'>;
+
+/**
+ * The one bounded conditional-rule evaluator used by organizer previews and
+ * the public answer surface. Keeping the rule machine independent of Svelte
+ * prevents a preview from becoming a second, almost-equivalent form engine.
+ */
+export function effectiveFormFieldStates(
+	fields: readonly EffectiveField[],
+	rules: readonly EffectiveRule[],
+	answers: readonly TransientApplicationAnswerInput[]
+): ReadonlyMap<string, PublicApplicationFieldState> {
+	const answersByField = new Map(answers.map((answer) => [answer.fieldId, answer]));
+	const visible = new Set<string>();
+	const required = new Set<string>();
+	for (const field of fields) {
+		if (field.initiallyVisible) visible.add(field.id);
+		if (field.initiallyVisible && field.required) required.add(field.id);
+	}
+	for (const rule of rules) {
+		if (!conditionHolds(rule.condition, answersByField)) continue;
+		for (const target of rule.effect.targetFieldIds) {
+			if (rule.effect.kind === 'show') visible.add(target);
+			else if (rule.effect.kind === 'hide') {
+				visible.delete(target);
+				required.delete(target);
+			} else {
+				visible.add(target);
+				required.add(target);
+			}
+		}
+	}
+	return new Map(fields.map((field) => [field.id, {
+		visible: visible.has(field.id),
+		required: required.has(field.id)
+	}]));
+}
+
 /**
  * Every field's effective visibility and requiredness given the current
  * answers, from the served initial flags plus the served rules applied in
@@ -53,27 +92,7 @@ export function publicApplicationFieldStates(
 	form: ServedPublicFormDto,
 	answers: readonly TransientApplicationAnswerInput[]
 ): ReadonlyMap<string, PublicApplicationFieldState> {
-	const answersByField = new Map(answers.map((answer) => [answer.fieldId, answer]));
-	const visible = new Set<string>();
-	const required = new Set<string>();
-	for (const field of form.fields) {
-		if (field.initiallyVisible) visible.add(field.id);
-		if (field.required) required.add(field.id);
-	}
-	for (const rule of form.rules) {
-		if (!conditionHolds(rule.condition, answersByField)) continue;
-		for (const target of rule.effect.targetFieldIds) {
-			if (rule.effect.kind === 'show') visible.add(target);
-			else if (rule.effect.kind === 'hide') visible.delete(target);
-			else required.add(target);
-		}
-	}
-	return new Map(
-		form.fields.map((field) => [
-			field.id,
-			{ visible: visible.has(field.id), required: required.has(field.id) }
-		])
-	);
+	return effectiveFormFieldStates(form.fields, form.rules, answers);
 }
 
 // ---------------------------------------------------------------------------

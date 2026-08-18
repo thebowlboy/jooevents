@@ -176,6 +176,12 @@ export function mapOrganizerFormDetail(detail: OrganizerFormDetailDto): Organize
 					}),
 			exposureAll: row.exposureAll
 		}))),
+		ruleOptions: Object.freeze(detail.fields.flatMap((row) => {
+			const options = row.field.options.kind === 'custom'
+				? row.field.options.choices.map((choice) => ({ id: choice.id, name: choice.label }))
+				: row.field.resolvedOptions?.map((choice) => ({ id: choice.id, name: choice.label })) ?? [];
+			return options.length === 0 ? [] : [{ fieldId: row.field.id, options: Object.freeze(options) }];
+		})),
 		configurationIssues: Object.freeze(
 			detail.configurationIssues.map((issue) => Object.freeze({ ...issue }))
 		),

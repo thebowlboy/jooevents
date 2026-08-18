@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
+	import type { FormRuleAuthorInput } from '@jooevents/contracts';
 	import { flip } from 'svelte/animate';
 	import { ArrowLeft, GripVertical, Lock } from 'lucide-svelte';
 	import {
@@ -26,6 +27,7 @@
 	import { param, paramFlag, applyParams, clearParams } from '$lib/features/workspace/url-state.svelte';
 	import { recordAction } from '$lib/features/workspace/actions.svelte';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
+	import ConditionalRulesEditor from './ConditionalRulesEditor.svelte';
 	import type {
 		FieldGroup,
 		FieldKind,
@@ -337,6 +339,11 @@
 	let surfaceId = $state<string | null>(null);
 	let form = $state<FormSummary | null>(null);
 	let rows = $state<FormFieldRow[] | null>(null);
+	let ruleOptions = $state<readonly {
+		readonly fieldId: string;
+		readonly options: readonly { readonly id: string; readonly name: string }[];
+	}[] | null>(null);
+	let rules = $state<FormRuleAuthorInput[] | null>(null);
 	let missingForm = $state(false);
 	/**
 	 * The composition being edited: the stored truth plus every unapplied tick.
@@ -364,6 +371,8 @@
 		configuredFor = formId;
 		form = null;
 		rows = null;
+		ruleOptions = null;
+		rules = null;
 		missingForm = false;
 		pending = '';
 		refusals = {};
@@ -376,16 +385,38 @@
 	});
 
 	async function reloadForm(id: string, options: { resetDraft?: boolean } = {}) {
-		const [summary, fieldRows] = await Promise.all([port.forms.get(id), port.forms.fields(id)]);
+		const [summary, fieldRows, formRules, fetchedRuleOptions] = await Promise.all([
+			port.forms.get(id), port.forms.fields(id), port.forms.rules(id), port.forms.ruleOptions(id)
+		]);
 		if (id !== formId) return;
 		form = summary;
 		rows = fieldRows;
+		rules = formRules;
+		ruleOptions = fetchedRuleOptions;
 		missingForm = summary === null;
 		// A registry reload (adding a scoped question) keeps the unapplied ticks;
 		// a session start, an apply, or an apply-undo re-syncs to the stored truth.
 		if (options.resetDraft || draft === null) {
 			draft = summary ? (structuredClone($state.snapshot(summary.composition)) as FormComposition) : null;
 		}
+	}
+
+	async function saveRules(next: readonly FormRuleAuthorInput[]) {
+		if (!form || pending) return { ok: false, reason: 'Another form change is still finishing.' } as const;
+		const target = form;
+		begin('rules');
+		const outcome = await port.forms.setRules(target.id, next);
+		if (outcome.ok) {
+			await reloadAll({ resetDraft: true });
+			message = 'Updated the conditional questions.';
+			recordAction({
+				area: 'forms',
+				label: `Updated conditional questions for ${target.name}`,
+				notUndoableReason: 'Edit the current rules and save another change'
+			});
+		} else message = outcome.reason;
+		pending = '';
+		return outcome;
 	}
 
 	/** Re-reads the open form and the card list; also the refresh hook a receipt's undo calls. */
@@ -1328,6 +1359,15 @@
 							</Button>
 							<p class="applyrow__note">Nothing is asked differently until you apply.</p>
 						</div>
+					{/if}
+
+					{#if rules && ruleOptions}
+						<ConditionalRulesEditor
+							{rows}
+							{rules}
+							{ruleOptions}
+							disabled={pending !== ''}
+							onSave={saveRules} />
 					{/if}
 
 					<form class="composer" onsubmit={addScoped} aria-label="Add a question only this form asks">

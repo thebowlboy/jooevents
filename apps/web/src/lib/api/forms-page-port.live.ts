@@ -1,6 +1,7 @@
 import type {
 	FormDefinitionAuthorInput,
 	FormDefinitionCreateAuthorInput,
+	FormRuleAuthorInput,
 	ReleaseOverviewDto,
 	StructuredOutcome
 } from '@jooevents/contracts';
@@ -254,6 +255,26 @@ export function createLiveFormsPagePort(input: {
 		}
 	}
 
+	async function reviseRules(formId: string, rules: readonly FormRuleAuthorInput[]): Promise<void> {
+		const current = await detail(formId);
+		if (!current) {
+			throw new FormsPageLiveAdapterError({ code: 'form_missing', reason: 'This form no longer exists.' });
+		}
+		const definition: FormDefinitionAuthorInput = {
+			...current.form.definition,
+			rules: rules.map((rule) => structuredClone(rule))
+		};
+		const result = await write('revise', formId, (key) => input.forms.revise({
+			formId,
+			expectedDefinitionVersion: current.form.version,
+			expectedRegistryVersion: current.registryPin.version,
+			definition
+		}, key));
+		if (result.formDefinitionVersion !== current.form.version + 1) {
+			throw new FormsPageLiveAdapterError({ code: 'invalid_contract', reason: 'The updated Form version did not match.' });
+		}
+	}
+
 	const port: FormsPagePort = {
 		templates: Object.freeze({
 			async applicationFormSurfaceId() {
@@ -307,6 +328,12 @@ export function createLiveFormsPagePort(input: {
 			async fields(formId) {
 				return (await detail(formId))?.fields.map((row) => structuredClone(row)) ?? null;
 			},
+			async ruleOptions(formId) {
+				return (await detail(formId))?.ruleOptions.map((entry) => structuredClone(entry)) ?? null;
+			},
+			async rules(formId) {
+				return (await detail(formId))?.form.definition.rules.map((rule) => structuredClone(rule)) ?? null;
+			},
 			async create(createInput) {
 				const current = await catalog();
 				const definition: FormDefinitionCreateAuthorInput = {
@@ -339,6 +366,7 @@ export function createLiveFormsPagePort(input: {
 			setComposition: (formId, composition) => guardedMutation(
 				() => reviseComposition(formId, composition)
 			),
+			setRules: (formId, rules) => guardedMutation(() => reviseRules(formId, rules)),
 			setClosing: (formId, closesAt) => guardedMutation(async () => {
 				const current = await detail(formId);
 				if (!current) {

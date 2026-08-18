@@ -102,6 +102,27 @@ describe('live tuned Forms page adapter', () => {
 		expect(await adapter.forms.setStatus(created.id, 'open')).toEqual({ ok: true });
 	});
 
+	test('round-trips bounded conditional rules through one guarded Form revision', async () => {
+		const adapter = port();
+		const formId = intakeFormsFixtureIds.openForm;
+		const before = await adapter.forms.get(formId);
+		const rules = [{
+			key: 'rule-track-abstract',
+			condition: {
+				kind: 'selected_any' as const,
+				sourceFieldId: intakeFormsFixtureIds.trackField,
+				choiceIds: [intakeFormsFixtureIds.track]
+			},
+			effect: {
+				kind: 'require' as const,
+				targetFieldIds: [intakeFormsFixtureIds.abstractField]
+			}
+		}];
+		expect(await adapter.forms.setRules(formId, rules)).toEqual({ ok: true });
+		expect(await adapter.forms.rules(formId)).toEqual(rules);
+		expect((await adapter.forms.get(formId))?.version).toBe((before?.version ?? 0) + 1);
+	});
+
 	test('keeps publication inert until a second press with a distinct stable key', async () => {
 		const base = liveForms();
 		const calls: { stage: string; key: string }[] = [];

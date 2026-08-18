@@ -1,4 +1,5 @@
 import type { PlacementSuggestion } from './placement';
+import type { FormRuleAuthorInput } from '@jooevents/contracts';
 import type {
 	FieldContext,
 	FieldKind,
@@ -78,12 +79,18 @@ export interface FormsPagePort {
 		list(): Promise<FormSummary[]>;
 		get(id: string): Promise<FormSummary | null>;
 		fields(id: string): Promise<FormFieldRow[] | null>;
+		ruleOptions(id: string): Promise<readonly {
+			readonly fieldId: string;
+			readonly options: readonly { readonly id: string; readonly name: string }[];
+		}[] | null>;
+		rules(id: string): Promise<FormRuleAuthorInput[] | null>;
 		create(input: {
 			readonly name: string;
 			readonly target: FormTarget;
 			readonly closesAt?: string;
 		}): Promise<FormSummary>;
 		setComposition(id: string, composition: FormComposition): Promise<MutationOutcome>;
+		setRules(id: string, rules: readonly FormRuleAuthorInput[]): Promise<MutationOutcome>;
 		setClosing(id: string, closesAt: string | null): Promise<MutationOutcome>;
 		setStatus(id: string, status: 'open' | 'closed'): Promise<MutationOutcome>;
 		preparePublish(id: string): Promise<FormPublishPreparation>;
