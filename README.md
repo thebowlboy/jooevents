@@ -30,62 +30,23 @@ Agent-proposed consequential changes remain proposals until a person reviews and
 commits them. Ordinary controls remain available; using an agent is a choice, not an
 entrance fee.
 
-## Production direction
+## Deployment
 
-JooEvents is being completed first as a single-machine Bun and SQLite application. The
-production shape puts the web interface, HTTP API, authentication, application
-operations, database, files, and background work in one service on one origin.
-Cloudflare can provide DNS, HTTPS, WAF, and private Tunnel ingress in front of that
-persistent origin. The separate Worker/D1 application composition is paused; it is
-not required for the first production release.
+JooEvents ships as one self-contained service: a single Bun process serves the web
+interface and API on one origin and owns its SQLite database, uploaded files, and
+supervised background work. Running it means one machine, one service, and one data
+directory to back up; put your own HTTPS — any reverse proxy or tunnel — in front.
+The [single-machine operator guide](docs/operator/single-machine.md) documents the
+executable install, doctor, verify, upgrade, backup, and restore path.
 
-### Where the SQLite path stands
+The application core sits behind provider-neutral persistence, file, job, and mail
+boundaries, so alternative databases and storage providers are adapter work rather
+than rewrites. The one hard requirement is a persistent filesystem for the database
+and file root; serverless hosts with ephemeral disks cannot run it.
 
-The single-machine path is substantially implemented. The repository already contains:
-
-- a production-mode Bun server that serves the built application and reserved backend
-  routes on one origin;
-- a retained SQLite migration ledger with schema validation, process ownership, and
-  startup refusal when the database is not safe to open;
-- Google authentication, bootstrap-owner creation, admission, sessions, and current
-  access checks over retained SQLite;
-- a public-only release builder plus installer, doctor, service definitions, running
-  verification, and stopped upgrade commands;
-- verified complete-install backup and non-replacing restore-rehearsal commands for
-  SQLite, retained files, and redacted configuration; and
-- SQLite repositories and reviewed change operations across events, forms,
-  submissions, review, decisions, speakers, scheduling, publishing, and communications.
-
-The retained migration chain now contains the complete application schema as well as
-identity and admission, with a verified upgrade from the earlier identity/access
-database. The configured server mounts the joined event workflow over the retained
-database and filesystem, starts supervised background work after the listener, and
-drains it before storage closes. A frozen retained journey now crosses public
-submission, review, decision, speaker confirmation, tasks, scheduling, publication,
-participant entry, restart, and idempotent retry.
-
-The remaining line is release closure. A clean committed-checkout artifact has passed
-installation, running verification, stopped upgrade, complete backup, isolated
-restore, and accepted-data reads from the restored copy. Supported operating-system
-service activation and the HTTPS endpoint still need their final deployment receipt;
-one controlled outbound-email checkpoint and the final tagged-release audit must also
-close. The
-[single-machine operator guide](docs/operator/single-machine.md) now documents the
-executable install, doctor, verification, upgrade, backup, and restore-rehearsal path;
-it remains a pre-release guide until walked through from the tagged artifact. The
-[single-machine preview 1 notes](docs/releases/single-machine-preview-1.md) name the
-current compatibility floor, operating limits, and remaining non-claims.
-
-JooEvents is therefore pre-release and **not ready for production event data yet**. It
-is close enough that the SQLite production work is the main story here; it is not close
-enough to suggest putting an actual attendee list into it.
-
-The repository retains disabled, locally tested Worker/D1/R2/Queue adapters as
-portability evidence. They are not a deployable Cloudflare-native product and their
-parity backlog does not block the single-machine release. Cloudflare Workers and
-Containers do not provide a persistent filesystem for the Bun process's SQLite file;
-run that file on the persistent application host. R2 may be selected later through
-the file or off-site-backup boundary, but it is not a live SQLite filesystem.
+JooEvents is pre-release and **not ready for production event data yet**. The
+[preview release notes](docs/releases/single-machine-preview-1.md) name the current
+compatibility floor, operating limits, and remaining non-claims.
 
 ## Build and inspect
 
@@ -104,9 +65,8 @@ For local product development:
 bun run dev
 ```
 
-The ordinary development UI uses synthetic sample data for repeatable product
-inspection. The single-machine release builder produces the live application and
-serves it over the retained runtime; the sample is not its storage path.
+The development UI runs on synthetic sample data so the product can be inspected
+without a real database. It is not the production storage path.
 
 ## Demo
 
