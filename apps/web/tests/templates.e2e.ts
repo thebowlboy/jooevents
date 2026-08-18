@@ -338,6 +338,14 @@ test('the end control is the always-findable entry, and a read-only view has non
 	// Persistent, not hover-revealed — what a first-time author actually finds.
 	await expect(preview.getByRole('button', { name: '+ Add section' })).toBeVisible();
 
+	// A read-only view needs an earlier revision to read: mint revision 2 with
+	// one inline edit, exactly as the restore journey does.
+	await page.locator('[data-edit="blocks.0.text"]').click({ position: { x: 12, y: 12 } });
+	const editorPanel = page.locator('.ied');
+	await editorPanel.getByRole('textbox').fill('The schedule is live');
+	await editorPanel.getByRole('button', { name: 'Done' }).click();
+	await expect(page.getByLabel('Revision history')).toHaveValue('2', { timeout: 10000 });
+
 	// A revision read is inert: no insertion anywhere on it.
 	await page.getByLabel('Revision history').selectOption('1');
 	await expect(page.locator('.editor__state')).toContainText('read only');
