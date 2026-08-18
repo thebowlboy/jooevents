@@ -27,6 +27,7 @@
 	import { ExternalLink, GitBranch, Globe, Link2 } from 'lucide-svelte';
 	import { Marked, Modal, Popover } from '$lib/ui';
 	import type { IconComponent } from '$lib/ui';
+	import { speakerRecordHref } from '$lib/api/speaker-record';
 	import type { MatchRange } from '$lib/api/search';
 	import type { SpeakerLinkKind, SpeakerProfile } from '$lib/api/types';
 
@@ -192,16 +193,19 @@
 				</ul>
 			{/if}
 			{#if profile.speakerId}
-				<!-- Scoped, not merely aimed: the roster restores the speaker from the
-				     address, so the link lands on their row expanded and marked
-				     instead of on a list to search. -->
+				<!-- The peek is the glance; the record is the whole answer. This door
+				     lands on their own page — everything held on them, ranked by what
+				     needs somebody — rather than on a roster row that repeats what is
+				     already open here. Every person-shaped link in the product
+				     resolves to this one URL, so one fact never acquires two
+				     landings. -->
 				<a
 					class="ui-button ui-button--soft ui-button--sm peek__open"
-					href={`/app/speakers?speaker=${profile.speakerId}`}
+					href={speakerRecordHref(profile.speakerId)}
 					target="_blank"
 					rel="noopener"
-					aria-label="Open in Speakers — opens in new window">
-					Open in Speakers<ExternalLink size={13} aria-hidden="true" />
+					aria-label="Open record — opens in new window">
+					Open record<ExternalLink size={13} aria-hidden="true" />
 				</a>
 			{/if}
 		</div>

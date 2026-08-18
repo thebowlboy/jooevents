@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { statusIcon } from '$lib/ui';
-	import type { IconComponent } from '$lib/ui';
+	import { deliveryOutcomeBadge } from './engagement-vocabulary';
 	import type { SpeakersPagePort } from '$lib/api/speakers-page-port';
 	import { LiveRead, type LiveReadState } from '$lib/api/live-read';
 	import type { CommunicationThread } from '$lib/api/types';
@@ -39,15 +38,8 @@
 		void threadRead.read();
 	});
 
-	const outcomeBadge: Record<
-		CommunicationThread['entries'][number]['outcome'],
-		{ label: string; tone: string; solid?: boolean; icon: IconComponent }
-	> = {
-		delivered: { label: 'Delivered', tone: 'success', icon: statusIcon.delivered },
-		sent: { label: 'Sent', tone: 'success', icon: statusIcon.sent },
-		bounced: { label: 'Bounced', tone: 'danger', solid: true, icon: statusIcon.bounced },
-		scheduled: { label: 'Scheduled', tone: 'info', icon: statusIcon.scheduled }
-	};
+	/* One meaning, one badge: the record page reads the same vocabulary. */
+	const outcomeBadge = deliveryOutcomeBadge;
 
 	const entries = $derived(thread?.entries.slice(0, TAIL) ?? []);
 </script>

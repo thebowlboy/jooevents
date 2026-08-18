@@ -78,9 +78,9 @@ test('a profiled submitter opens beside the row, and Escape gives the name back'
 	// the question a cancellation makes urgent. Real text, so it is read out
 	// with the title rather than hidden in the link's name.
 	await expect(panel).toContainText('Tue Oct 13 · 10:30–11:00 · Main Stage');
-	const rosterLink = panel.getByRole('link', { name: 'Open in Speakers — opens in new window' });
-	await expect(rosterLink).toHaveAttribute('href', '/app/speakers?speaker=spk-1');
-	await expect(rosterLink).toHaveAttribute('target', '_blank');
+	const recordLink = panel.getByRole('link', { name: 'Open record — opens in new window' });
+	await expect(recordLink).toHaveAttribute('href', '/app/speakers/spk-1');
+	await expect(recordLink).toHaveAttribute('target', '_blank');
 
 	// The panel is painted over the row but still descends from it, so a press on
 	// its own words has to belong to the profile — not to the row's detail
@@ -94,10 +94,8 @@ test('a profiled submitter opens beside the row, and Escape gives the name back'
 	await expect(trigger).toBeFocused();
 });
 
-test('the way to the roster lands on that speaker’s row, already open', async ({
-	page
-}, testInfo) => {
-	test.skip(testInfo.project.name !== 'desktop', 'one viewport covers the scoped-arrival contract');
+test('the peek’s door lands on that speaker’s own record', async ({ page }, testInfo) => {
+	test.skip(testInfo.project.name !== 'desktop', 'one viewport covers the door contract');
 
 	await page.goto('/app/submissions');
 
@@ -108,36 +106,24 @@ test('the way to the roster lands on that speaker’s row, already open', async 
 	const panelId = await trigger.getAttribute('aria-controls');
 
 	// The door opens a new window, so the submissions table keeps its place; the
-	// scoped arrival is asserted in the window the door actually opened.
+	// arrival is asserted in the window the door actually opened.
 	const popupPromise = page.context().waitForEvent('page');
 	await page
 		.locator(`#${panelId}`)
-		.getByRole('link', { name: 'Open in Speakers — opens in new window' })
+		.getByRole('link', { name: 'Open record — opens in new window' })
 		.click();
-	const roster_page = await popupPromise;
+	const record_page = await popupPromise;
 
-	await expect(roster_page).toHaveURL(/\/app\/speakers\?speaker=spk-1$/);
+	await expect(record_page).toHaveURL(/\/app\/speakers\/spk-1$/);
 	await expect(page).toHaveURL(/\/app\/submissions$/);
 
-	// The scope is kept, not merely aimed: her row is open and the caret is on
-	// it — the whole record, not the name block inside it — so nobody has to
-	// find her again in a roster of alike rows.
-	const roster = roster_page.getByRole('region', { name: 'Speaker roster' });
-	const disclosure = roster
-		.getByRole('button', { name: 'Details for Maya Lindqvist' })
-		.filter({ visible: true });
-	await expect(disclosure).toHaveAttribute('aria-expanded', 'true', { timeout: 15000 });
-	await expect(
-		roster
-			.locator('tr[data-arrival-host]')
-			.filter({ has: roster_page.locator('[data-speaker="spk-1"]') })
-	).toBeFocused();
-
-	// That page dismisses by closing what it opened, and the scope leaves the
-	// address with it.
-	await disclosure.click();
-	await expect(roster_page).toHaveURL(/\/app\/speakers$/);
-	await expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+	// A record's own page is the whole answer, so nothing needs marking: the
+	// heading names her, and the record opens on what is wrong.
+	const record = record_page.getByRole('region', { name: 'Speaker record' });
+	await expect(record.getByRole('heading', { name: 'Maya Lindqvist', level: 2 })).toBeVisible({
+		timeout: 15000
+	});
+	await expect(record_page.getByText('Maya Lindqvist asked to cancel.')).toBeVisible();
 });
 
 test('a speaker address opens their row wherever the roster is a card', async ({

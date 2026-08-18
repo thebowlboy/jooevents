@@ -886,7 +886,7 @@ const flight: WorkspaceDataset = {
 		{ id: 'task-headshot', name: 'Headshot upload', kind: 'upload', required: true, dueAbsolute: 'Sep 11, 23:59 EDT', dueRelative: 'in 32 days' },
 		{ id: 'task-bio', name: 'Speaker bio', kind: 'form', required: true, dueAbsolute: 'Sep 11, 23:59 EDT', dueRelative: 'in 32 days' },
 		{ id: 'task-av', name: 'AV requirements form', kind: 'form', required: true, dueAbsolute: 'Aug 8, 23:59 EDT', dueRelative: '2 days overdue' },
-		{ id: 'task-travel', name: 'Confirm travel details', kind: 'confirm', required: true, dueAbsolute: 'Sep 18, 23:59 EDT', dueRelative: 'in 39 days' },
+		{ id: 'task-travel', name: 'Travel details', kind: 'form', required: true, dueAbsolute: 'Sep 18, 23:59 EDT', dueRelative: 'in 39 days' },
 		{ id: 'task-slides', name: 'Slides draft', kind: 'upload', required: false, dueAbsolute: 'Oct 1, 23:59 EDT', dueRelative: 'in 52 days' }
 	],
 	assignments: [
@@ -903,7 +903,7 @@ const flight: WorkspaceDataset = {
 		{ taskId: 'task-headshot', speakerId: 'spk-5', state: 'todo', overdue: true },
 		{ taskId: 'task-bio', speakerId: 'spk-5', state: 'complete', overdue: false },
 		{ taskId: 'task-av', speakerId: 'spk-5', state: 'todo', overdue: true },
-		{ taskId: 'task-travel', speakerId: 'spk-5', state: 'todo', overdue: false },
+		{ taskId: 'task-travel', speakerId: 'spk-5', state: 'received', overdue: false },
 		{ taskId: 'task-slides', speakerId: 'spk-5', state: 'complete', overdue: false },
 		{ taskId: 'task-headshot', speakerId: 'spk-6', state: 'received', overdue: false },
 		{ taskId: 'task-bio', speakerId: 'spk-6', state: 'complete', overdue: false },
@@ -914,12 +914,12 @@ const flight: WorkspaceDataset = {
 		{ taskId: 'task-bio', speakerId: 'spk-7', state: 'todo', overdue: true },
 		{ taskId: 'task-av', speakerId: 'spk-7', state: 'todo', overdue: true },
 		{ taskId: 'task-travel', speakerId: 'spk-7', state: 'complete', overdue: false },
-		{ taskId: 'task-slides', speakerId: 'spk-7', state: 'todo', overdue: false },
+		{ taskId: 'task-slides', speakerId: 'spk-7', state: 'received', overdue: false },
 		{ taskId: 'task-headshot', speakerId: 'spk-8', state: 'todo', overdue: true },
 		{ taskId: 'task-bio', speakerId: 'spk-8', state: 'complete', overdue: false },
 		{ taskId: 'task-av', speakerId: 'spk-8', state: 'todo', overdue: true },
 		{ taskId: 'task-travel', speakerId: 'spk-8', state: 'complete', overdue: false },
-		{ taskId: 'task-slides', speakerId: 'spk-8', state: 'todo', overdue: false }
+		{ taskId: 'task-slides', speakerId: 'spk-8', state: 'waived', overdue: false }
 	],
 
 	schedule: {

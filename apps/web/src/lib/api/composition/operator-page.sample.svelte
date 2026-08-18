@@ -10,6 +10,7 @@
 	import SchedulePage from '$lib/features/schedule/SchedulePage.svelte';
 	import SettingsPage from '$lib/features/settings/SettingsPage.svelte';
 	import SpeakersPage from '$lib/features/speakers/SpeakersPage.svelte';
+	import SpeakerRecordPage from '$lib/features/speakers/SpeakerRecordPage.svelte';
 	import SubmissionsPage from '$lib/features/submissions/SubmissionsPage.svelte';
 	import TasksPage from '$lib/features/tasks/TasksPage.svelte';
 	import AgentActionsPage from '$lib/features/agent-actions/AgentActionsPage.svelte';
@@ -28,6 +29,7 @@
 	import { createSampleReviewersPagePort } from '../reviewers-page-port.sample';
 	import { createSampleSchedulePagePort } from '../schedule-page-port.sample';
 	import { createSampleSpeakersPagePort } from '../speakers-page-port.sample';
+	import { createSampleSpeakerRecordPort } from '../speaker-record-port.sample';
 	import { createSampleTasksPagePort } from '../tasks-page-port.sample';
 	import { createSampleTemplatesPagePort } from '../templates-page-port.sample';
 	import { createSampleSettingsPagePort } from '../settings-page-port';
@@ -39,7 +41,10 @@
 	import AcceleventsExportPage from '$lib/features/integrations/AcceleventsExportPage.svelte';
 	import { settingsSectionOf, type OperatorPageId } from './operator-pages';
 
-	let { area }: { readonly area: OperatorPageId } = $props();
+	let {
+		area,
+		engagementId
+	}: { readonly area: OperatorPageId; readonly engagementId?: string } = $props();
 	const { api, source, viewer } = useWorkspaceGateway();
 	const overview = createSampleOverviewPagePort({ api, scenario: source.scenario });
 	const pulse = createSamplePulsePagePort({ api, scenario: source.scenario });
@@ -51,6 +56,7 @@
 	const reviewers = createSampleReviewersPagePort(api);
 	const schedule = createSampleSchedulePagePort(api);
 	const speakers = createSampleSpeakersPagePort(api);
+	const speakerRecord = createSampleSpeakerRecordPort(api);
 	const tasks = createSampleTasksPagePort(api);
 	const templates = createSampleTemplatesPagePort(api);
 	const settings = createSampleSettingsPagePort(api);
@@ -75,6 +81,10 @@
 	<DecisionsPage port={decisions} lineupPort={review} />
 {:else if area === 'speakers'}
 	<SpeakersPage port={speakers} />
+{:else if area === 'speaker_record'}
+	<!-- The route always carries the parameter; an empty one resolves to no
+	     record and the page says so, rather than the composition guessing. -->
+	<SpeakerRecordPage port={speakerRecord} engagementId={engagementId ?? ''} />
 {:else if area === 'reviewers'}
 	<ReviewersPage port={reviewers} />
 {:else if area === 'tasks'}

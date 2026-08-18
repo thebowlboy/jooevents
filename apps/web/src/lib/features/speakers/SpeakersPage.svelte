@@ -8,20 +8,19 @@
 		situationIcon,
 		statusIcon
 	} from '$lib/ui';
-	import type { IconComponent } from '$lib/ui';
 	import type { SpeakersPagePort } from '$lib/api/speakers-page-port';
 	import { LiveRead, type LiveReadState } from '$lib/api/live-read';
 	import { applyParams, clearParams, param, paramIn } from '$lib/features/workspace/url-state.svelte';
 	import CommitReceipt from '$lib/features/workspace/components/CommitReceipt.svelte';
 	import SpeakerCommunications from './SpeakerCommunications.svelte';
 	import SpeakerLineup from './SpeakerLineup.svelte';
-	import type {
-		AssignmentState,
-		EngagementState,
-		SpeakerRow,
-		TaskAssignment,
-		TaskDef
-	} from '$lib/api/types';
+	import {
+		assignmentStateBadge,
+		engagementStateBadge,
+		overdueBadge
+	} from './engagement-vocabulary';
+	import { speakerRecordHref } from '$lib/api/speaker-record';
+	import type { SpeakerRow, TaskAssignment, TaskDef } from '$lib/api/types';
 
 	interface Props {
 		port: SpeakersPagePort;
@@ -86,21 +85,9 @@
 		{ key: 'incomplete', label: 'The naughty list', sub: 'tasks incomplete' }
 	];
 
-	const stateBadge: Record<
-		EngagementState,
-		{ label: string; tone: string; solid: boolean; icon: IconComponent }
-	> = {
-		invited: { label: 'Invited', tone: 'info', solid: false, icon: statusIcon.invited },
-		confirmed: { label: 'Confirmed', tone: 'success', solid: false, icon: statusIcon.confirmed },
-		cancel_requested: {
-			label: 'Cancellation requested',
-			tone: 'danger',
-			solid: true,
-			icon: statusIcon.cancelRequested
-		},
-		declined: { label: 'Declined', tone: 'neutral', solid: false, icon: statusIcon.declined },
-		cancelled: { label: 'Cancelled', tone: 'neutral', solid: false, icon: statusIcon.cancelled }
-	};
+	/* The shared vocabulary: one meaning, one badge, across the roster row, the
+	   record page, and the task matrix. */
+	const stateBadge = engagementStateBadge;
 
 	/** A speaker needs attention when they asked to cancel or hold overdue tasks. */
 	function needsAttention(row: SpeakerRow): boolean {
@@ -331,23 +318,7 @@
 	}
 
 	/* The same state vocabulary the task matrix uses: one meaning, one badge. */
-	const assignmentBadge: Record<
-		AssignmentState,
-		{ label: string; tone: string; solid?: boolean; icon: IconComponent }
-	> = {
-		todo: { label: 'Not started', tone: 'neutral', icon: statusIcon.notStarted },
-		received: { label: 'Received', tone: 'info', icon: statusIcon.received },
-		complete: { label: 'Complete', tone: 'success', icon: statusIcon.complete },
-		'late-complete': { label: 'Done late', tone: 'neutral', icon: statusIcon.lateComplete },
-		waived: { label: 'Waived', tone: 'neutral', icon: statusIcon.waived }
-	};
-
-	const overdueBadge = {
-		label: 'Overdue',
-		tone: 'warning',
-		solid: true,
-		icon: statusIcon.overdue
-	} as const;
+	const assignmentBadge = assignmentStateBadge;
 
 	/**
 	 * Where this speaker's outstanding work is worked. The scope travels in the
@@ -419,6 +390,12 @@
 	{@const tasks = tasksFor(row.id)}
 	<div class="detail" class:detail--single={!hasNextStep(row)}>
 		<div class="detail__main">
+			<!-- The expansion stays the in-pass summary; the record is the whole
+			     answer. A named control carries the exit so the pass is only left
+			     on purpose, and it is the same URL the profile peek and every
+			     other person-shaped link resolve to. -->
+			<a class="ui-button ui-button--soft ui-button--sm detail__record" href={speakerRecordHref(row.id)}
+				>Open record</a>
 			<h3 class="detail__heading">Sessions</h3>
 			{#if row.sessions.length > 0}
 				<ul class="detail__sessions">
@@ -1097,6 +1074,14 @@
 
 	.detail--single {
 		grid-template-columns: minmax(0, 1fr);
+	}
+
+	/* The exit from the pass, before the summary it summarises. It sits on its
+	   own line at the group-to-group tier so it belongs to the whole expansion
+	   rather than to the Sessions heading beneath it. */
+	.detail__record {
+		display: inline-flex;
+		margin-block-end: var(--je-space-4);
 	}
 
 	.detail__heading {

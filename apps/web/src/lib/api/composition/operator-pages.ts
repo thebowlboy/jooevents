@@ -15,6 +15,13 @@ export const operatorPageIds = Object.freeze([
 	'review_lineup',
 	'decisions',
 	'speakers',
+	/*
+	 * The first record route: `/app/speakers/{engagementId}`. It is a page under
+	 * the Speakers area rather than an area of its own — the rail row stays
+	 * selected while it is open, because a record belongs to the surface that
+	 * lists it — so it takes a page id without a nav item.
+	 */
+	'speaker_record',
 	'reviewers',
 	'tasks',
 	'files',
