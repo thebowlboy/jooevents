@@ -57,6 +57,10 @@ export function createHttpApp(input: {
     readonly email: string;
     readonly resolveIssuedUrl: () => string | undefined;
   };
+  readonly reviewEmailRestriction?: {
+    readonly enabled: true;
+    readonly allowedRecipientCount: number;
+  };
   readonly operatorOperations?: OperatorOperationsHttpRuntime;
   readonly participantEntry?: ParticipantEntryRuntime;
   readonly participantOperations?: ParticipantOperationsHttpRuntime;
@@ -357,7 +361,12 @@ export function createHttpApp(input: {
       correlationId,
       now: new Date().toISOString()
     });
-    if (result.kind === 'success') return context.json(accessContextSchema.parse(result.data));
+    if (result.kind === 'success') return context.json(accessContextSchema.parse({
+      ...result.data,
+      ...(result.data.state === 'active' && input.reviewEmailRestriction
+        ? { reviewEmailRestriction: input.reviewEmailRestriction }
+        : {})
+    }));
     if (result.kind === 'needs_confirmation') {
       return context.json(accessContextSchema.parse({ state: 'blocked', code: 'not_admitted' }));
     }

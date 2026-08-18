@@ -16,6 +16,7 @@
 		AreaKey,
 		WorkspaceEventOption
 	} from '$lib/api/types';
+	import type { ReviewEmailRestriction } from '@jooevents/contracts';
 	import AccountMenu from './AccountMenu.svelte';
 	import NewEventModal from './NewEventModal.svelte';
 	import {
@@ -31,6 +32,7 @@
 		title,
 		activePath,
 		onResetSample,
+		reviewEmailRestriction,
 		children
 	}: {
 		/** Source-neutral data and capabilities for this tuned shell. */
@@ -41,6 +43,7 @@
 		activePath?: string;
 		/** Sample composition reset; absent from live and design-reference shells. */
 		onResetSample?: () => void;
+		reviewEmailRestriction?: ReviewEmailRestriction;
 		children: Snippet;
 	} = $props();
 
@@ -531,6 +534,16 @@
 		</header>
 
 		<main class="content">
+			{#if reviewEmailRestriction}
+				<details class="review-email-boundary">
+					<summary>Email is limited for this review</summary>
+					<p>
+						Only {reviewEmailRestriction.allowedRecipientCount} approved evaluator
+						{reviewEmailRestriction.allowedRecipientCount === 1 ? 'address receives' : 'addresses receive'}
+						email. Everyone else is left out of each send without stopping email to the approved people.
+					</p>
+				</details>
+			{/if}
 			{#if handover.visible}
 				<!-- The destination, not yet resolved. Interim treatment: the chosen
 				     candidate from /design-system/loading replaces this composition,
@@ -975,6 +988,26 @@
 		inline-size: 100%;
 		max-inline-size: var(--je-page-max);
 		margin-inline: auto;
+	}
+
+	.review-email-boundary {
+		border: 1px solid var(--je-color-border);
+		border-radius: var(--je-radius-control);
+		background: var(--je-color-surface);
+		padding: var(--je-space-3) var(--je-space-4);
+		font-size: var(--je-font-size-sm);
+	}
+
+	.review-email-boundary summary {
+		cursor: pointer;
+		font-weight: 600;
+	}
+
+	.review-email-boundary p {
+		max-inline-size: 70ch;
+		margin: var(--je-space-2) 0 0;
+		color: var(--je-color-text-muted);
+		line-height: var(--je-leading-normal);
 	}
 
 	/* Holds the content region's ordinary footprint so handing over to the

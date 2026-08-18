@@ -481,6 +481,49 @@ describe('Cloudflare REST transport', () => {
     expect(calls).toBe(0);
   });
 
+  test('a review recipient boundary skips an unapproved address before secret or provider I/O', async () => {
+    let tokenLeases = 0;
+    let fetches = 0;
+    const provider = createCloudflareRestEmailProvider({
+      accountId: 'account_123',
+      allowedRecipients: ['approved@example.test'],
+      tokenLease: {
+        async withApiToken<Result>(use: (apiToken: string) => Promise<Result>): Promise<Result> {
+          tokenLeases += 1;
+          return use('test-token-fragment');
+        }
+      },
+      fetch: async () => {
+        fetches += 1;
+        return jsonResponse(responseBody());
+      }
+    });
+    const outcome = await provider.delivery.submit(provider.delivery.prepare(ordinary()));
+    expect(outcome).toMatchObject({
+      kind: 'known_rejected',
+      retryClass: 'terminal',
+      code: 'cloudflare.email.rejected.recipient_not_allowed'
+    });
+    expect(tokenLeases).toBe(0);
+    expect(fetches).toBe(0);
+  });
+
+  test('a review recipient boundary lets an approved address use the ordinary provider path', async () => {
+    let fetches = 0;
+    const provider = createCloudflareRestEmailProvider({
+      accountId: 'account_123',
+      allowedRecipients: ['SPEAKER@EXAMPLE.TEST'],
+      tokenLease: tokenLease('test-token-fragment'),
+      fetch: async () => {
+        fetches += 1;
+        return jsonResponse(responseBody());
+      }
+    });
+    const outcome = await provider.delivery.submit(provider.delivery.prepare(ordinary()));
+    expect(outcome.kind).toBe('accepted');
+    expect(fetches).toBe(1);
+  });
+
   test.each([
     ['delivered', 'accepted_delivered'],
     ['permanent_bounces', 'accepted_permanent_bounce'],

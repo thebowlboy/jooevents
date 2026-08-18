@@ -20,6 +20,11 @@ export const safeWorkspaceSchema = z.object({
   name: z.string().min(1)
 });
 
+export const reviewEmailRestrictionSchema = z.strictObject({
+  enabled: z.literal(true),
+  allowedRecipientCount: z.number().int().min(1).max(32)
+});
+
 export const accessContextSchema = z.discriminatedUnion('state', [
   z.strictObject({
     state: z.literal('anonymous'),
@@ -43,6 +48,8 @@ export const accessContextSchema = z.discriminatedUnion('state', [
     state: z.literal('active'),
     user: safeUserSchema,
     workspace: safeWorkspaceSchema,
+    /** Present only when an explicit organizer-review deployment limits outbound email. */
+    reviewEmailRestriction: reviewEmailRestrictionSchema.optional(),
     // Deployments without configured gateway key profiles omit this projection.
     // Browser persistence treats absence as unavailable and never derives a fallback.
     gatewayAuthority: gatewayAuthorityProjectionSchema.optional()
@@ -57,6 +64,7 @@ export type SafeUser = z.infer<typeof safeUserSchema>;
 export type SafeMembership = z.infer<typeof safeMembershipSchema>;
 export type SafeWorkspace = z.infer<typeof safeWorkspaceSchema>;
 export type AccessContext = z.infer<typeof accessContextSchema>;
+export type ReviewEmailRestriction = z.infer<typeof reviewEmailRestrictionSchema>;
 
 export const accessScopeSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('workspace') }),

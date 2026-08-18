@@ -440,6 +440,6 @@
 	}));
 </script>
 
-<WorkspaceShell port={shell}>
+<WorkspaceShell port={shell} reviewEmailRestriction={initial.reviewEmailRestriction}>
 	{@render children()}
 </WorkspaceShell>

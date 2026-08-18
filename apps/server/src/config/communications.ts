@@ -26,6 +26,8 @@ export type CommunicationsProviderConfig =
       accountId: string;
       zoneId: string;
       apiTokenSecret: Readonly<{ storeKey: string; reference: string }>;
+      /** Explicit evaluator-only delivery boundary; absent in ordinary deployments. */
+      reviewRecipientAllowlist?: readonly string[];
       callbacks: 'not_supported';
       inbound: 'not_enabled';
       readinessChecks: 'mounted';
@@ -72,11 +74,16 @@ export function loadCommunicationsProviderConfig(
   const mode = z.enum(['disabled', 'cloudflare_workers', 'cloudflare_rest'])
     .safeParse(environment.JOOEVENTS_EMAIL_PROVIDER_MODE ?? 'disabled');
   const issues: string[] = [];
+  const reviewMode = environment.JOOEVENTS_REVIEW_ENTRY_MODE ?? 'disabled';
+  const configuredAllowlist = trimmedOrUndefined(environment.JOOEVENTS_REVIEW_EMAIL_RECIPIENT_ALLOWLIST);
   if (!mode.success) issues.push(
     'JOOEVENTS_EMAIL_PROVIDER_MODE must be disabled, cloudflare_workers, or cloudflare_rest'
   );
   if (environment.JOOEVENTS_CLOUDFLARE_EMAIL_API_TOKEN !== undefined) {
     issues.push('JOOEVENTS_CLOUDFLARE_EMAIL_API_TOKEN is not accepted; configure an opaque secret reference');
+  }
+  if (configuredAllowlist !== undefined && reviewMode !== 'organizer') {
+    issues.push('JOOEVENTS_REVIEW_EMAIL_RECIPIENT_ALLOWLIST is accepted only with organizer review entry');
   }
   if (!mode.success) throw new CommunicationsProviderConfigurationError(issues);
   if (mode.data === 'disabled') {
@@ -104,6 +111,19 @@ export function loadCommunicationsProviderConfig(
   const parsedReference = boundedIdentity.safeParse(
     environment.JOOEVENTS_CLOUDFLARE_EMAIL_API_TOKEN_SECRET_REFERENCE
   );
+  const reviewRecipientAllowlist = configuredAllowlist === undefined
+    ? []
+    : configuredAllowlist.split(',').map((value) => value.trim().toLowerCase()).filter(Boolean);
+  if (reviewMode === 'organizer' && reviewRecipientAllowlist.length === 0) {
+    issues.push('JOOEVENTS_REVIEW_EMAIL_RECIPIENT_ALLOWLIST is required for cloudflare_rest in organizer review mode');
+  }
+  if (reviewRecipientAllowlist.length > 32
+      || reviewRecipientAllowlist.some((address) => !validMailAddress(address))) {
+    issues.push('JOOEVENTS_REVIEW_EMAIL_RECIPIENT_ALLOWLIST must contain 1 to 32 comma-separated email addresses');
+  }
+  if (new Set(reviewRecipientAllowlist).size !== reviewRecipientAllowlist.length) {
+    issues.push('JOOEVENTS_REVIEW_EMAIL_RECIPIENT_ALLOWLIST must not contain duplicate addresses');
+  }
   if (!parsedAccount.success) issues.push(
     'JOOEVENTS_CLOUDFLARE_EMAIL_ACCOUNT_ID is required for cloudflare_rest'
   );
@@ -128,6 +148,9 @@ export function loadCommunicationsProviderConfig(
       storeKey: parsedStore.data,
       reference: parsedReference.data
     }),
+    ...(reviewRecipientAllowlist.length === 0
+      ? {}
+      : { reviewRecipientAllowlist: Object.freeze(reviewRecipientAllowlist) }),
     ...restActivation
   });
 }

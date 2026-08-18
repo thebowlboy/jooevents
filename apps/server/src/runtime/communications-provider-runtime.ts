@@ -159,6 +159,9 @@ export function createCommunicationsProviderRuntime(input: Readonly<{
       accountId: input.config.accountId,
       tokenLease,
       fetch: input.fetch,
+      ...(input.config.reviewRecipientAllowlist === undefined
+        ? {}
+        : { allowedRecipients: input.config.reviewRecipientAllowlist }),
       ...(input.contentResolver === undefined ? {} : { contentResolver: input.contentResolver }),
       ...(input.readinessProbe === undefined ? {} : { readinessProbe: input.readinessProbe })
     });

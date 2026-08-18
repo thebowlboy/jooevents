@@ -43,6 +43,10 @@
 				await goto(access.path, { replaceState: true, noScroll: true, keepFocus: true });
 				return;
 			}
+			const reviewEmailRestriction = accessResult.kind === 'success'
+				&& accessResult.data.state === 'active'
+				? accessResult.data.reviewEmailRestriction
+				: undefined;
 			const manifest = await loadLiveOperationManifest({ signal: abort.signal });
 			if (abort.signal.aborted || current !== generation) return;
 			if (manifest.kind === 'transport_error') {
@@ -53,7 +57,10 @@
 				kind: 'ready',
 				user: access.user,
 				workspace: access.workspace,
-				manifest: manifest.manifest
+				manifest: manifest.manifest,
+				...(reviewEmailRestriction
+					? { reviewEmailRestriction }
+					: {})
 			};
 		} catch {
 			if (abort.signal.aborted || current !== generation) return;

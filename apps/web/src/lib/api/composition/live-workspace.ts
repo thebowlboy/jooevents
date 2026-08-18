@@ -1,4 +1,4 @@
-import type { SafeOperationManifest, SafeUser, SafeWorkspace } from '@jooevents/contracts';
+import type { ReviewEmailRestriction, SafeOperationManifest, SafeUser, SafeWorkspace } from '@jooevents/contracts';
 import { createContext } from 'svelte';
 import type { EventProgramPort } from '../event-program/port';
 import type { CommunicationsReadinessPagePort } from '../communications-readiness-page-port';
@@ -27,6 +27,7 @@ export interface LiveWorkspaceReady {
 	readonly user: SafeUser;
 	readonly workspace: SafeWorkspace;
 	readonly manifest: SafeOperationManifest;
+	readonly reviewEmailRestriction?: ReviewEmailRestriction;
 }
 
 export interface LiveWorkspacePorts {

@@ -102,6 +102,7 @@
             Log in as organizer
           </Button>
           <p>This evaluation entry opens the real organizer workspace and SQLite data.</p>
+		  <p>Email from this review installation goes only to approved evaluator addresses.</p>
         </div>
       {/if}
       <!-- The magic link owns the card: a titled method group and its coral

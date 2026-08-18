@@ -5667,6 +5667,15 @@ async function createJoinedLiveRuntime<DatabaseRuntime extends JoinedLiveDatabas
           }
         }
       } : {}),
+      ...(communicationsProviderConfig.mode === 'cloudflare_rest'
+          && communicationsProviderConfig.reviewRecipientAllowlist !== undefined
+        ? {
+            reviewEmailRestriction: {
+              enabled: true as const,
+              allowedRecipientCount: communicationsProviderConfig.reviewRecipientAllowlist.length
+            }
+          }
+        : {}),
       operatorOperations: { operations, evidence },
       acceleventsExportDownload: Object.freeze({
         async download(downloadInput: {

@@ -268,6 +268,7 @@ function createRestTransport(input: Readonly<{
   tokenLease: CloudflareApiTokenLease;
   fetch: CloudflareFetch;
   contentResolver: CloudflareEmailContentResolver;
+  allowedRecipients?: readonly string[];
 }>): CloudflareSendTransport<CloudflareRestPreparedMessage> {
   if (!validAccountId(input.accountId)) {
     throw new TypeError('Cloudflare account ID has an invalid bounded shape');
@@ -280,6 +281,17 @@ function createRestTransport(input: Readonly<{
       let dispatched = false;
       let callbackUsed = false;
       try {
+        const preparedRecipient = prepared.envelope.to.address.toLowerCase();
+        if (input.allowedRecipients !== undefined
+            && !input.allowedRecipients.some((address) => address.toLowerCase() === preparedRecipient)) {
+          return Object.freeze({
+            kind: 'known_rejected',
+            retryClass: 'terminal',
+            code: CLOUDFLARE_EMAIL_EVIDENCE_CODES.recipientNotAllowed,
+            observation: 'recipient_not_allowed',
+            requestDispatched: false
+          });
+        }
         let message: CloudflareRestEmailMessage | CloudflareRawEmailMessage;
         try {
           message = await materializeCloudflareRestMessage(prepared, input.contentResolver);
@@ -394,6 +406,7 @@ export function createCloudflareRestEmailProvider(input: Readonly<{
   fetch: CloudflareFetch;
   contentResolver?: CloudflareEmailContentResolver;
   readinessProbe?: CloudflareEmailReadinessProbe;
+  allowedRecipients?: readonly string[];
 }>): CloudflareEmailProvider<CloudflareRestPreparedMessage> {
   const contentResolver = input.contentResolver ?? Object.freeze({
     async resolveContentBytes(): Promise<Uint8Array> {

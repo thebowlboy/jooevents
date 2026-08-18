@@ -37,6 +37,38 @@ describe('communications provider configuration', () => {
     });
   });
 
+  test('loads an explicit review-only recipient boundary', () => {
+    expect(loadCommunicationsProviderConfig({
+      JOOEVENTS_REVIEW_ENTRY_MODE: 'organizer',
+      JOOEVENTS_REVIEW_EMAIL_RECIPIENT_ALLOWLIST: 'Reviewer@Example.Test, second@example.test',
+      JOOEVENTS_EMAIL_PROVIDER_MODE: 'cloudflare_rest',
+      JOOEVENTS_CLOUDFLARE_EMAIL_ACCOUNT_ID: 'account_123',
+      JOOEVENTS_CLOUDFLARE_EMAIL_ZONE_ID: 'zone_123',
+      JOOEVENTS_CLOUDFLARE_EMAIL_API_TOKEN_SECRET_STORE: 'deployment.secret',
+      JOOEVENTS_CLOUDFLARE_EMAIL_API_TOKEN_SECRET_REFERENCE: 'cloudflare-email-token'
+    })).toMatchObject({
+      mode: 'cloudflare_rest',
+      reviewRecipientAllowlist: ['reviewer@example.test', 'second@example.test']
+    });
+  });
+
+  test('never applies a review recipient boundary to an ordinary deployment', () => {
+    expect(() => loadCommunicationsProviderConfig({
+      JOOEVENTS_REVIEW_EMAIL_RECIPIENT_ALLOWLIST: 'reviewer@example.test'
+    })).toThrow('accepted only with organizer review entry');
+  });
+
+  test('requires a nonempty boundary for live email in organizer review mode', () => {
+    expect(() => loadCommunicationsProviderConfig({
+      JOOEVENTS_REVIEW_ENTRY_MODE: 'organizer',
+      JOOEVENTS_EMAIL_PROVIDER_MODE: 'cloudflare_rest',
+      JOOEVENTS_CLOUDFLARE_EMAIL_ACCOUNT_ID: 'account_123',
+      JOOEVENTS_CLOUDFLARE_EMAIL_ZONE_ID: 'zone_123',
+      JOOEVENTS_CLOUDFLARE_EMAIL_API_TOKEN_SECRET_STORE: 'deployment.secret',
+      JOOEVENTS_CLOUDFLARE_EMAIL_API_TOKEN_SECRET_REFERENCE: 'cloudflare-email-token'
+    })).toThrow('is required for cloudflare_rest in organizer review mode');
+  });
+
   test('rejects raw token configuration', () => {
     expect(() => loadCommunicationsProviderConfig({
       JOOEVENTS_EMAIL_PROVIDER_MODE: 'disabled',
