@@ -5,9 +5,12 @@
 	import FormSurfaceRender from '$lib/features/templates/FormSurfaceRender.svelte';
 	import RosterSurfaceRender from '$lib/features/templates/RosterSurfaceRender.svelte';
 	import FormSurfaceAnswer from './FormSurfaceAnswer.svelte';
+	import PublicDiscoveryChrome from './PublicDiscoveryChrome.svelte';
+	import SessionDetailPanel from './SessionDetailPanel.svelte';
 	import { usePublicSurfacePort } from '$lib/api/public-surface-port';
 	import { applyFormLens } from '$lib/api/fields';
-	import { parseScope } from '$lib/features/embeds/embed-snippet';
+	import { parseScope, serializeScope } from '$lib/features/embeds/embed-snippet';
+	import { applyParams, param } from '$lib/features/workspace/url-state.svelte';
 	import { themeStyleProperties } from '$lib/theme/theme-contract';
 	import type { ServedPublicFormDto } from '@jooevents/contracts';
 	import type { PublicApplicationSession } from '$lib/api/public-application-session';
@@ -22,6 +25,23 @@
 		SurfaceTemplate,
 		Track
 	} from '$lib/api/types';
+	import {
+		adjacentDayKey,
+		collectPublishedFacets,
+		describeSessionResults,
+		describeSpeakerResults,
+		discoveryIsActive,
+		facetsAreActive,
+		filterPlacedSessions,
+		hrefWithParams,
+		narrowSchedule,
+		parseSchedulePresentation,
+		parseSpeakerOrder,
+		parseSpeakerPresentation,
+		presentRoster,
+		sessionDetailView,
+		type DiscoveryFacets
+	} from './program-discovery';
 
 	/**
 	 * A hosted public page: the event's own programme, lineup, or call for
@@ -57,6 +77,25 @@
 
 	/** The slice this address shows, in the same closed vocabulary an embed uses. */
 	const scope = $derived<EmbedScope>(parseScope(page.url.searchParams.get('scope')));
+
+	/**
+	 * Visitor discovery state. Search, facets, presentation, and the open
+	 * session live on the address so Back restores them. They never change the
+	 * released projection — they only choose which published facts are in view.
+	 */
+	const searchQuery = $derived(param('q') ?? '');
+	const trackId = $derived(param('track'));
+	const formatId = $derived(param('format'));
+	const roomId = $derived(param('room'));
+	const sessionId = $derived(param('session'));
+	const facets = $derived<DiscoveryFacets>({ trackId, formatId, roomId });
+	const schedulePresentation = $derived(parseSchedulePresentation(param('view')));
+	const speakerPresentation = $derived(parseSpeakerPresentation(param('view')));
+	const speakerOrder = $derived(parseSpeakerOrder(param('order')));
+	const selectedDayKey = $derived(scope.kind === 'day' ? scope.dayKey : null);
+
+	/** The lineup scope to restore when a speaker profile is closed. */
+	let lineupScope = $state('all');
 
 	let surface = $state<SurfaceTemplate | null>(null);
 	let theme = $state<EventTheme | null>(null);
@@ -176,6 +215,117 @@
 		};
 	});
 
+	const publishedFacets = $derived(
+		program ? collectPublishedFacets(program.schedule, program.tracks) : { tracks: [], formats: [], rooms: [] }
+	);
+
+	const visibleSchedule = $derived(
+		shownSchedule ? narrowSchedule(shownSchedule, searchQuery, facets) : null
+	);
+
+	const scannedSessionCount = $derived(
+		shownSchedule ? filterPlacedSessions(shownSchedule, '', { trackId: null, formatId: null, roomId: null }).length : 0
+	);
+	const matchedSessionCount = $derived(
+		visibleSchedule
+			? filterPlacedSessions(visibleSchedule, '', { trackId: null, formatId: null, roomId: null }).length
+			: 0
+	);
+	const sessionResults = $derived(
+		shownSchedule && discoveryIsActive(searchQuery, facets)
+			? describeSessionResults({
+					matched: matchedSessionCount,
+					scanned: scannedSessionCount,
+					query: searchQuery,
+					hasFacets: facetsAreActive(facets)
+				})
+			: null
+	);
+	const sessionEmptyCopy = $derived(
+		sessionResults && matchedSessionCount === 0 ? sessionResults.headline : undefined
+	);
+	const openSession = $derived(
+		program && sessionId
+			? sessionDetailView(program.schedule, program.tracks, sessionId)
+			: null
+	);
+
+	const previousDayKey = $derived(
+		program ? adjacentDayKey(program.schedule.days, selectedDayKey, -1) : null
+	);
+	const nextDayKey = $derived(
+		program ? adjacentDayKey(program.schedule.days, selectedDayKey, 1) : null
+	);
+
+	const visibleRoster = $derived(
+		lineup ? presentRoster(lineup.roster, searchQuery, speakerOrder) : null
+	);
+	const speakerResults = $derived(
+		lineup && searchQuery.trim()
+			? describeSpeakerResults({
+					matched: visibleRoster?.length ?? 0,
+					scanned: lineup.roster.length,
+					query: searchQuery
+				})
+			: null
+	);
+	const speakerEmptyCopy = $derived(
+		speakerResults && (visibleRoster?.length ?? 0) === 0 ? speakerResults.headline : undefined
+	);
+	const speakerLayout = $derived(speakerPresentation === 'list' ? 'list' : 'grid');
+	const speakerBackHref = $derived(
+		scope.kind === 'speaker'
+			? hrefWithParams(page.url.pathname, page.url.search, {
+					scope: lineupScope === 'all' ? null : lineupScope
+				})
+			: null
+	);
+
+	function writeSearch(value: string) {
+		void applyParams({ q: value.trim() || null });
+	}
+
+	function writeFacet(key: 'track' | 'format' | 'room', value: string | null) {
+		void applyParams({ [key]: value });
+	}
+
+	function writeDay(dayKey: string | null) {
+		void applyParams({
+			scope: dayKey ? serializeScope({ kind: 'day', dayKey }) : null,
+			session: null
+		});
+	}
+
+	function writeSchedulePresentation(value: 'list' | 'agenda') {
+		void applyParams({ view: value === 'list' ? null : value });
+	}
+
+	function writeSpeakerPresentation(value: 'gallery' | 'list') {
+		void applyParams({ view: value === 'gallery' ? null : value });
+	}
+
+	function writeSpeakerOrder(value: 'lineup' | 'surname') {
+		void applyParams({ order: value === 'lineup' ? null : value });
+	}
+
+	$effect(() => {
+		if (scope.kind !== 'speaker') lineupScope = serializeScope(scope);
+	});
+
+	function sessionHref(id: string): string {
+		return hrefWithParams(page.url.pathname, page.url.search, { session: id });
+	}
+
+	function speakerHref(id: string): string {
+		return hrefWithParams(page.url.pathname, page.url.search, {
+			scope: serializeScope({ kind: 'speaker', speakerId: id })
+		});
+	}
+
+	function closeSession() {
+		void applyParams({ session: null });
+	}
+
 	/** The application surface as the one form this address serves. */
 	const shownForm = $derived.by<SurfaceTemplate | null>(() => {
 		if (!surface || kind !== 'application-form') return null;
@@ -245,24 +395,74 @@
 			<div class="public__state" aria-busy="true" aria-label="Loading">
 				<span class="ui-skeleton public__fill" aria-hidden="true"></span>
 			</div>
-		{:else if kind === 'schedule' && shownSchedule && surface && theme}
+		{:else if kind === 'schedule' && visibleSchedule && surface && theme}
+			<PublicDiscoveryChrome
+				kind="schedule"
+				search={searchQuery}
+				onSearch={writeSearch}
+				tracks={publishedFacets.tracks}
+				formats={publishedFacets.formats}
+				rooms={publishedFacets.rooms}
+				{trackId}
+				{formatId}
+				{roomId}
+				onFacet={writeFacet}
+				days={program?.schedule.days ?? []}
+				{selectedDayKey}
+				{previousDayKey}
+				{nextDayKey}
+				onDay={writeDay}
+				{schedulePresentation}
+				onSchedulePresentation={writeSchedulePresentation}
+				result={sessionResults} />
+			{#if sessionId}
+				{#if openSession}
+					<SessionDetailPanel detail={openSession} onClose={closeSession} />
+				{:else}
+					<section class="public__state" role="status">
+						<p class="public__state-title">This session is not on the published program.</p>
+						<p class="public__state-copy">It may have moved, or it was never released.</p>
+						<button type="button" class="ui-button ui-button--secondary" onclick={closeSession}>
+							Back to the program
+						</button>
+					</section>
+				{/if}
+			{/if}
 			<ScheduleSurfaceRender
 				template={surface}
 				{theme}
 				{eventName}
 				{eventMeta}
-				schedule={shownSchedule}
+				schedule={visibleSchedule}
 				tracks={program?.tracks ?? []}
+				presentation={schedulePresentation}
+				{sessionHref}
+				selectedSessionId={sessionId}
+				emptyCopy={sessionEmptyCopy}
 				frame="bare" />
-		{:else if kind === 'speaker-roster' && lineup && surface && theme}
+		{:else if kind === 'speaker-roster' && visibleRoster && lineup && surface && theme}
+			<PublicDiscoveryChrome
+				kind="speakers"
+				search={searchQuery}
+				onSearch={writeSearch}
+				{speakerPresentation}
+				{speakerOrder}
+				onSpeakerPresentation={writeSpeakerPresentation}
+				onSpeakerOrder={writeSpeakerOrder}
+				result={speakerResults}
+				backHref={speakerBackHref}
+				browse={scope.kind !== 'speaker'} />
 			<RosterSurfaceRender
 				template={surface}
 				{theme}
 				{eventName}
 				{eventMeta}
-				roster={lineup.roster}
+				roster={visibleRoster}
 				categories={lineup.categories}
 				{scope}
+				layoutOverride={scope.kind === 'speaker' ? undefined : speakerLayout}
+				speakerHref={scope.kind === 'speaker' ? undefined : speakerHref}
+				emptyCopy={speakerEmptyCopy}
 				frame="bare" />
 		{:else if liveApply && theme}
 			<!-- The port's application capability exists and this form serves:
@@ -318,12 +518,14 @@
 	}
 
 	.public__body {
+		container-type: inline-size;
 		max-inline-size: 900px;
 		margin-inline: auto;
 		padding: var(--je-space-8) var(--je-space-5) var(--je-space-10);
 		display: grid;
 		gap: var(--je-space-5);
 		min-inline-size: 0;
+		overflow-x: clip;
 	}
 
 	/* The honest line above a form that cannot yet take answers. */

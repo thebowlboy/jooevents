@@ -46,6 +46,17 @@
 		 * makes an embed look bolted on rather than part of the page.
 		 */
 		frame?: 'page' | 'bare';
+		/**
+		 * Visitor presentation over the same released program. `list` is the
+		 * chronological listing; `agenda` is the day/room grid. The published
+		 * template is not rewritten.
+		 */
+		presentation?: 'list' | 'agenda';
+		/** Address of one session's detail; absent keeps the listing inert. */
+		sessionHref?: (sessionId: string) => string;
+		selectedSessionId?: string | null;
+		/** Replaces the unpublished-program empty copy when discovery matched nothing. */
+		emptyCopy?: string;
 	}
 
 	let {
@@ -56,7 +67,11 @@
 		schedule,
 		tracks = [],
 		editable = false,
-		frame = 'page'
+		frame = 'page',
+		presentation = 'list',
+		sessionHref,
+		selectedSessionId = null,
+		emptyCopy
 	}: Props = $props();
 
 	// The event brand is applied as custom properties on this component's root
@@ -163,6 +178,29 @@
 		);
 	});
 
+	interface RoomColumn {
+		id: string;
+		label: string;
+		items: PlacedEntry[];
+	}
+
+	function roomsFor(group: SessionGroup): RoomColumn[] {
+		const order: string[] = [];
+		for (const room of schedule.rooms) {
+			if (group.items.some((entry) => entry.placement.roomId === room.id)) order.push(room.id);
+		}
+		for (const entry of group.items) {
+			if (!order.includes(entry.placement.roomId)) order.push(entry.placement.roomId);
+		}
+		return order.map((id) => ({
+			id,
+			label: roomName(id),
+			items: group.items
+				.filter((entry) => entry.placement.roomId === id)
+				.sort(byProgramOrder)
+		}));
+	}
+
 	/** The compact card's single meta line: day (when track-grouped) · time · room · speakers. */
 	function compactMeta(entry: PlacedEntry, block: ScheduleDaysBlock, withDay: boolean): string {
 		const parts = [
@@ -181,13 +219,28 @@
 	<span class="schedule__chip schedule__chip--{trackAccent(trackId)}">{trackName(trackId)}</span>
 {/snippet}
 
+{#snippet sessionTitle(entry: PlacedEntry)}
+	{@const href = sessionHref?.(entry.session.id)}
+	{@const current = selectedSessionId === entry.session.id}
+	{#if href}
+		<a
+			class="schedule__session-title schedule__session-title--link"
+			href={href}
+			aria-current={current ? 'page' : undefined}>
+			{entry.session.title}
+		</a>
+	{:else}
+		<p class="schedule__session-title">{entry.session.title}</p>
+	{/if}
+{/snippet}
+
 {#snippet sessionCard(entry: PlacedEntry, block: ScheduleDaysBlock, withDay: boolean)}
 	<!-- When grouped by track, the group heading already names the track, so the
 	     per-card chip is suppressed and the card gains its day instead. -->
 	{@const showChip = block.showTrack && !withDay}
 	{#if block.density === 'compact'}
 		<article class="schedule__session schedule__session--compact">
-			<p class="schedule__session-title">{entry.session.title}</p>
+			{@render sessionTitle(entry)}
 			<p class="schedule__session-meta">
 				<span>{compactMeta(entry, block, withDay)}</span>
 				{#if showChip}{@render trackChip(entry.session.trackId)}{/if}
@@ -201,7 +254,7 @@
 				<span class="schedule__when-time">{rangeLabel(entry)}</span>
 			</p>
 			<div class="schedule__session-body">
-				<p class="schedule__session-title">{entry.session.title}</p>
+				{@render sessionTitle(entry)}
 				{#if block.showRoom || showChip}
 					<p class="schedule__session-meta">
 						{#if block.showRoom}<span>{roomName(entry.placement.roomId)}</span>{/if}
@@ -245,13 +298,15 @@
 					{/if}
 				</div>
 			{:else if block.type === 'schedule-days'}
-				{@const groups = block.grouping === 'track' ? trackGroups : dayGroups}
+				{@const groups = presentation === 'agenda' || block.grouping !== 'track' ? dayGroups : trackGroups}
 				{@const daysClass = `schedule__days${block.density === 'compact' ? ' schedule__days--compact' : ''}`}
 				<!-- One unit, the whole listing: a press edits its layout knobs
 				     (grouping, density, what each card shows), not any one card. -->
 				<div {...unitAttributes(editable, daysClass, `blocks.${index}`, 'Schedule layout', 'block')}>
 					{#if groups.length === 0}
-						<p class="schedule__empty">No sessions are on the published program yet.</p>
+						<p class="schedule__empty">
+							{emptyCopy ?? 'No sessions are on the published program yet.'}
+						</p>
 					{:else}
 						{#each groups as group (group.key)}
 							<div class="schedule__group">
@@ -263,11 +318,26 @@
 										{group.label}
 									{/if}
 								</p>
-								<div class="schedule__list">
-									{#each group.items as entry (entry.session.id)}
-										{@render sessionCard(entry, block, block.grouping === 'track')}
-									{/each}
-								</div>
+								{#if presentation === 'agenda'}
+									<div class="schedule__agenda">
+										{#each roomsFor(group) as column (column.id)}
+											<div class="schedule__room">
+												<p class="schedule__room-name">{column.label}</p>
+												<div class="schedule__list">
+													{#each column.items as entry (entry.session.id)}
+														{@render sessionCard(entry, block, false)}
+													{/each}
+												</div>
+											</div>
+										{/each}
+									</div>
+								{:else}
+									<div class="schedule__list">
+										{#each group.items as entry (entry.session.id)}
+											{@render sessionCard(entry, block, block.grouping === 'track')}
+										{/each}
+									</div>
+								{/if}
 							</div>
 						{/each}
 					{/if}
@@ -292,6 +362,7 @@
 	/* The muted backdrop reads as a browser viewport around the published page,
 	   tinted from the brand's own canvas so a wild recipe stays coherent. */
 	.schedule {
+		container-type: inline-size;
 		background: var(--je-color-surface-sunken);
 		border: 1px solid var(--je-color-border);
 		border-radius: var(--je-radius-surface);
@@ -464,6 +535,63 @@
 		font-weight: 650;
 		line-height: var(--je-leading-snug);
 		overflow-wrap: anywhere;
+	}
+
+	.schedule__session-title--link {
+		color: inherit;
+		text-decoration: none;
+		border-block-end: 1px solid color-mix(in srgb, currentColor 28%, transparent);
+	}
+
+	.schedule__session-title--link:hover {
+		border-block-end-color: currentColor;
+	}
+
+	.schedule__session-title--link[aria-current='page'] {
+		border-block-end-color: var(--je-color-action);
+		color: var(--je-color-action);
+	}
+
+	.schedule__session-title--link:focus-visible {
+		outline: none;
+		box-shadow: var(--je-focus-ring);
+	}
+
+	.schedule__agenda {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+		gap: var(--je-space-4);
+		min-inline-size: 0;
+	}
+
+	.schedule__room {
+		display: grid;
+		align-content: start;
+		gap: var(--je-space-2);
+		min-inline-size: 0;
+	}
+
+	.schedule__room-name {
+		margin: 0;
+		font-size: 0.8125em;
+		font-weight: 650;
+		color: var(--je-color-text-muted);
+	}
+
+	@container (min-width: 40rem) {
+		.schedule__agenda {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+
+		.schedule__agenda .schedule__session {
+			grid-template-columns: minmax(0, 1fr);
+		}
+	}
+
+	@container (min-width: 60rem) {
+		.schedule__agenda {
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+		}
 	}
 
 	.schedule__session--compact .schedule__session-title {

@@ -41,6 +41,15 @@
 	 * makes an embed look bolted on.
 	 */
 	frame?: 'page' | 'bare';
+		/**
+		 * Visitor presentation over the same released lineup. Does not rewrite
+		 * the published template; a speaker-scoped address still forces profile.
+		 */
+		layoutOverride?: RosterListBlock['layout'];
+		/** Address of one person's profile; absent keeps cards inert. */
+		speakerHref?: (speakerId: string) => string;
+		/** Replaces the unannounced-lineup empty copy when discovery matched nothing. */
+		emptyCopy?: string;
 	}
 
 	let {
@@ -52,7 +61,10 @@
 		categories = [],
 		scope = { kind: 'all' },
 		editable = false,
-		frame = 'page'
+		frame = 'page',
+		layoutOverride,
+		speakerHref,
+		emptyCopy
 	}: Props = $props();
 
 	// The event brand is applied as custom properties on this component's root
@@ -90,7 +102,8 @@
 	 * instead of the content.
 	 */
 	function effectiveLayout(block: RosterListBlock): RosterListBlock['layout'] {
-		return scope.kind === 'speaker' ? 'profile' : block.layout;
+		if (scope.kind === 'speaker') return 'profile';
+		return layoutOverride ?? block.layout;
 	}
 
 	/**
@@ -184,12 +197,28 @@
 	{/if}
 {/snippet}
 
+{#snippet personName(card: PublicSpeakerCard, className: string)}
+	{@const href = speakerHref?.(card.id)}
+	{#if href}
+		<a class="{className} roster__person-link" href={href}>{card.name}</a>
+	{:else}
+		<p class={className}>{card.name}</p>
+	{/if}
+{/snippet}
+
 {#snippet personCard(card: PublicSpeakerCard, block: RosterListBlock, layout: RosterListBlock['layout'])}
 	{#if layout === 'strip'}
-		<span class="roster__strip-item">
-			{@render avatar(card, 'sm')}
-			<span class="roster__strip-name">{card.name}</span>
-		</span>
+		{#if speakerHref}
+			<a class="roster__strip-item roster__strip-item--link" href={speakerHref(card.id)}>
+				{@render avatar(card, 'sm')}
+				<span class="roster__strip-name">{card.name}</span>
+			</a>
+		{:else}
+			<span class="roster__strip-item">
+				{@render avatar(card, 'sm')}
+				<span class="roster__strip-name">{card.name}</span>
+			</span>
+		{/if}
 	{:else if layout === 'profile'}
 		<article class="roster__profile">
 			{@render avatar(card, 'lg')}
@@ -207,23 +236,49 @@
 			</div>
 		</article>
 	{:else if layout === 'list'}
-		<article class="roster__row">
+		{#if speakerHref && !block.showLinks}
+			<a class="roster__row roster__row--link" href={speakerHref(card.id)}>
+				{@render avatar(card, 'md')}
+				<div class="roster__row-body">
+					<p class="roster__name">{card.name}</p>
+					{#if block.showHeadline}
+						<p class="roster__headline" class:roster__headline--tba={card.provisional}>
+							{card.provisional ? provisionalLine : (card.headline ?? '')}
+						</p>
+					{/if}
+					{#if block.showSessions}{@render sessions(card)}{/if}
+				</div>
+			</a>
+		{:else}
+			<article class="roster__row">
+				{@render avatar(card, 'md')}
+				<div class="roster__row-body">
+					{@render personName(card, 'roster__name')}
+					{#if block.showHeadline}
+						<p class="roster__headline" class:roster__headline--tba={card.provisional}>
+							{card.provisional ? provisionalLine : (card.headline ?? '')}
+						</p>
+					{/if}
+					{#if block.showSessions}{@render sessions(card)}{/if}
+					{#if block.showLinks}{@render links(card)}{/if}
+				</div>
+			</article>
+		{/if}
+	{:else if speakerHref && !block.showLinks}
+		<a class="roster__card roster__card--link" href={speakerHref(card.id)}>
 			{@render avatar(card, 'md')}
-			<div class="roster__row-body">
-				<p class="roster__name">{card.name}</p>
-				{#if block.showHeadline}
-					<p class="roster__headline" class:roster__headline--tba={card.provisional}>
-						{card.provisional ? provisionalLine : (card.headline ?? '')}
-					</p>
-				{/if}
-				{#if block.showSessions}{@render sessions(card)}{/if}
-				{#if block.showLinks}{@render links(card)}{/if}
-			</div>
-		</article>
+			<p class="roster__name">{card.name}</p>
+			{#if block.showHeadline}
+				<p class="roster__headline" class:roster__headline--tba={card.provisional}>
+					{card.provisional ? provisionalLine : (card.headline ?? '')}
+				</p>
+			{/if}
+			{#if block.showSessions}{@render sessions(card)}{/if}
+		</a>
 	{:else}
 		<article class="roster__card">
 			{@render avatar(card, 'md')}
-			<p class="roster__name">{card.name}</p>
+			{@render personName(card, 'roster__name')}
 			{#if block.showHeadline}
 				<p class="roster__headline" class:roster__headline--tba={card.provisional}>
 					{card.provisional ? provisionalLine : (card.headline ?? '')}
@@ -275,7 +330,9 @@
 				<div {...unitAttributes(editable, listClass, `blocks.${index}`, 'Roster layout', 'block')}>
 					{#if shown.length === 0}
 						<p class="roster__empty">
-							{#if scope.kind === 'speaker'}
+							{#if emptyCopy}
+								{emptyCopy}
+							{:else if scope.kind === 'speaker'}
 								This speaker is not on the published lineup.
 							{:else if scope.kind === 'category'}
 								Nobody is filed under this group yet.
@@ -648,6 +705,47 @@
 		font-weight: 650;
 		line-height: var(--je-leading-snug);
 		overflow-wrap: anywhere;
+	}
+
+	.roster__person-link {
+		color: inherit;
+		text-decoration: none;
+		border-block-end: 1px solid color-mix(in srgb, currentColor 28%, transparent);
+	}
+
+	.roster__person-link:hover,
+	.roster__strip-item--link:hover {
+		border-block-end-color: currentColor;
+	}
+
+	.roster__strip-item--link {
+		color: inherit;
+		text-decoration: none;
+	}
+
+	.roster__avatar-link {
+		color: inherit;
+		text-decoration: none;
+		border-radius: 999px;
+	}
+
+	.roster__card--link,
+	.roster__row--link {
+		color: inherit;
+		text-decoration: none;
+	}
+
+	.roster__card--link:hover,
+	.roster__row--link:hover {
+		border-color: color-mix(in srgb, var(--je-color-action) 45%, var(--je-color-border));
+	}
+
+	.roster__card--link:focus-visible,
+	.roster__row--link:focus-visible,
+	.roster__person-link:focus-visible,
+	.roster__strip-item--link:focus-visible {
+		outline: none;
+		box-shadow: var(--je-focus-ring);
 	}
 
 	.roster__headline {
