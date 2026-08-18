@@ -108,6 +108,11 @@ test('live schedule renders the settings-derived grid, publication state, and a 
 	await expect(grid.getByText('09:00', { exact: true }).first()).toBeVisible();
 	await expect(page.getByText(/Mid-flight|Decision crunch|All clear/)).toHaveCount(0);
 	await expect(page.locator('[data-je-scenario]')).toHaveCount(0);
+	// Schedule consumes the canonical surface-template catalog composed for the
+	// Templates page; a live catalog must not be replaced by the old invented
+	// empty list, or this existing surface becomes an unreachable feature.
+	await expect(page.getByRole('link', { name: 'Public schedule template — Templates' }))
+		.toHaveAttribute('href', /\/app\/templates\?tab=surfaces&template=.+/);
 
 	// The joined runtime is shared across specs, so the board arrives either
 	// unpublished or already carrying the canonical release read's Published

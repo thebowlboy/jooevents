@@ -572,6 +572,8 @@ export function createLiveSchedulePagePort(input: {
 	readonly proposals: ScheduleProposalCountsSource;
 	readonly settings: ScheduleGeometrySettingsSource;
 	readonly publication: Pick<ReleaseWorkspacePort, 'overview' | 'draftSchedulePublication' | 'publishSchedule'>;
+	readonly speakers: SchedulePagePort['speakers'];
+	readonly templates: SchedulePagePort['templates'];
 	readonly newIdempotencyKey?: () => string;
 }): SchedulePagePort {
 	if (
@@ -985,21 +987,10 @@ export function createLiveSchedulePagePort(input: {
 			addTrack: async (name: string) => liveTrack(await input.vocabulary.addTrack(name)),
 			addFormat: async (name: string) => liveFormat(await input.vocabulary.addFormat(name))
 		}),
-		speakers: Object.freeze({
-			/** No speaker-roster owner is mounted; nothing exists to list. */
-			async list() {
-				return [];
-			},
-			/** Null is the port's own typed absence for an unknown profile. */
-			async profile() {
-				return null;
-			}
-		}),
-		templates: Object.freeze({
-			/** No public-surface template owner is mounted; no surfaces exist. */
-			async list() {
-				return { surfaces: [] };
-			}
-		})
+		// These are joined owners, not local projections. Schedule consumes the
+		// same roster and surface-template catalogs as Speakers and Templates so
+		// a live empty list means genuinely empty rather than "not mounted".
+		speakers: input.speakers,
+		templates: input.templates
 	} satisfies SchedulePagePort);
 }

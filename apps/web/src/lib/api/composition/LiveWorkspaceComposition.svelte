@@ -193,6 +193,25 @@
 	const sessionCatalog = createSessionCatalogLivePort({ manifest: initial.manifest });
 	const decisionsClient = createDecisionsLiveClient({ manifest: initial.manifest });
 	const engagementsClient = createEngagementsLiveClient({ manifest: initial.manifest });
+	const taskClient = createTasksLiveClient({ manifest: initial.manifest });
+	// Build the canonical roster before Schedule so the board's attribution
+	// doors consume the same people as the Speakers surface. Profile enrichment
+	// remains absent until its own canonical projection exists; the roster itself
+	// must never be replaced by an invented empty list.
+	const speakers = createLiveSpeakersPagePort({
+		engagements: engagementsClient,
+		sessions: sessionCatalog,
+		triage,
+		contacts: createIntakeSubmissionsLivePort({
+			manifest: initial.manifest,
+			contactCapability: { kind: 'available' }
+		}),
+		tasks: taskClient
+	});
+	// Templates depends on Schedule for previews, while Schedule needs the
+	// template catalog for its public-surface door. Construction is synchronous;
+	// the deferred owner is filled before any component can issue a read.
+	let templates: ReturnType<typeof createLiveTemplatesPagePort> | null = null;
 	const schedule = createLiveSchedulePagePort({
 		placements: createSchedulePlacementLivePort({ manifest: initial.manifest }),
 		sessions: sessionCatalog,
@@ -202,7 +221,18 @@
 			decisions: { readState: (ids, options) => decisionsClient.readState(ids, options) }
 		}),
 		settings: eventSettings,
-		publication: release
+		publication: release,
+		speakers: {
+			list: () => speakers.speakers.list(),
+			profile: async () => null
+		},
+		templates: {
+			async list() {
+				if (templates === null) throw new Error('The surface Template catalog is not ready.');
+				const result = await templates.templates.list();
+				return { surfaces: result.surfaces };
+			}
+		}
 	});
 	const reviewers = createLiveReviewersPagePort({
 		roster: createReviewerRosterLivePort({ manifest: initial.manifest }),
@@ -240,18 +270,7 @@
 	// composed as attemptable — the server evaluates the exact permission on
 	// every read, and a refusal keeps the address an empty value; no browser
 	// role guess ever grants disclosure.
-	const taskClient = createTasksLiveClient({ manifest: initial.manifest });
-	const speakers = createLiveSpeakersPagePort({
-		engagements: engagementsClient,
-		sessions: sessionCatalog,
-		triage,
-		contacts: createIntakeSubmissionsLivePort({
-			manifest: initial.manifest,
-			contactCapability: { kind: 'available' }
-		}),
-		tasks: taskClient
-	});
-	const templates = createLiveTemplatesPagePort({
+	templates = createLiveTemplatesPagePort({
 		artifacts: templateArtifacts,
 		model: createTemplateEditLiveClient({ manifest: initial.manifest }),
 		event: eventSettings,

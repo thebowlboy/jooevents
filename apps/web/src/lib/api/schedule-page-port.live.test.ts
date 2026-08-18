@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import { createLiveSchedulePagePort, SchedulePageLiveError } from './schedule-page-port.live';
+import type { SpeakerRow, SurfaceTemplate } from './types';
 
 const id = (value: number) => `00000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
 const base = {
 	vocabulary: { source: { kind: 'live' } }, proposals: { source: { kind: 'live' } },
-	settings: {}, publication: {}
+	settings: {}, publication: {}, speakers: {}, templates: {}
 } as const;
 
 describe('live Schedule page correction boundary', () => {
@@ -16,6 +17,7 @@ describe('live Schedule page correction boundary', () => {
 			vocabulary: { source: { kind: 'live' } } as never,
 			proposals: { source: { kind: 'live' } } as never,
 			settings: {} as never, publication: {} as never,
+			speakers: {} as never, templates: {} as never,
 			newIdempotencyKey: () => { writes += 1; return 'schedule-direct-attempt'; }
 		});
 		await expect(port.schedule.transitionSession('00000000-0000-4000-8000-000000000001', 'draft')).rejects.toBeInstanceOf(SchedulePageLiveError);
@@ -59,5 +61,30 @@ describe('live Schedule page correction boundary', () => {
 			expectedCatalogDigestSha256: 'a'.repeat(64), sessionId: id(2),
 			expectedSessionVersion: 1, expectedSessionDigestSha256: 'b'.repeat(64)
 		} }]);
+	});
+
+	test('delegates roster and surface-template reads to the joined live owners', async () => {
+		const roster: SpeakerRow[] = [{
+			id: id(4), name: 'Ada', email: 'ada@example.test', state: 'confirmed', sessions: [],
+			tasksDone: 0, tasksTotal: 0, overdueTasks: 0, publiclyVisible: true,
+			contentApproved: true, position: 0
+		}];
+		const surfaces: SurfaceTemplate[] = [{
+			id: id(5), kind: 'schedule', name: 'Programme', purpose: 'Publish the programme.',
+			blocks: [], revision: 1, revisions: [], usedBy: ['schedule']
+		}];
+		const port = createLiveSchedulePagePort({
+			...base,
+			placements: { source: { kind: 'live' } } as never,
+			sessions: { source: { kind: 'live' } } as never,
+			speakers: {
+				list: async () => roster,
+				profile: async () => null
+			} as never,
+			templates: { list: async () => ({ surfaces }) } as never
+		} as never);
+
+		expect(await port.speakers.list()).toBe(roster);
+		expect(await port.templates.list()).toEqual({ surfaces });
 	});
 });
